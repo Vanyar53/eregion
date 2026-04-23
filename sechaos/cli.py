@@ -36,10 +36,10 @@ def validate(scenario: str):
     parser = ScenarioParser()
     result = parser.validate(scenario)
     if result.valid:
-        console.print(f"[green]✓[/green] {scenario} is valid")
+        console.print(f"[green]OK[/green] {scenario} is valid")
     else:
         for err in result.errors:
-            console.print(f"[red]✗[/red] {err}")
+            console.print(f"[red]FAIL[/red] {err}")
 
 
 @cli.command()

@@ -55,14 +55,14 @@ class Engine:
         # Steps
         T0 = time.time()
         for step in scenario.steps:
-            console.print(f"[cyan]→[/cyan] {step.get('name', step.get('action'))}")
+            console.print(f"[cyan]->[/cyan] {step.get('name', step.get('action'))}")
             self._execute_action(executor, step)
             if step.get("record") == "T0":
                 T0 = time.time()
 
         # Detection
         if scenario.detection:
-            console.print("[cyan]→[/cyan] Waiting for detection alert...")
+            console.print("[cyan]->[/cyan] Waiting for detection alert...")
             detection_time = collector.poll_alert(
                 query=scenario.detection["query"],
                 source=scenario.detection["source"],
@@ -81,7 +81,7 @@ class Engine:
 
         # Recovery
         if scenario.recovery:
-            console.print("[cyan]→[/cyan] Triggering recovery...")
+            console.print("[cyan]->[/cyan] Triggering recovery...")
             T2 = time.time()
             executor.trigger_recovery(scenario.recovery)
             recovery_time = time.time() - T0
@@ -114,9 +114,9 @@ class Engine:
         for i, step in enumerate(scenario.steps, 1):
             console.print(f"  {i}. [{step.get('action')}] {step.get('name', '')}")
         if scenario.detection:
-            console.print(f"  → Poll {scenario.detection['source']} for: {scenario.detection['query']}")
+            console.print(f"  -> Poll {scenario.detection['source']} for: {scenario.detection['query']}")
         if scenario.recovery:
-            console.print(f"  → Trigger recovery: {scenario.recovery.get('action')}")
+            console.print(f"  -> Trigger recovery: {scenario.recovery.get('action')}")
 
     def _get_executor_collector(self, scenario):
         target_type = scenario.target.get("type")

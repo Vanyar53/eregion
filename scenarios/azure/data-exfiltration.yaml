@@ -1,0 +1,36 @@
+name: azure-data-exfiltration
+description: Simulate large outbound data transfer, validate network anomaly detection
+mitre: T1041
+version: "1.0.0"
+
+target:
+  type: azure_vm
+  resource_group: rg-sechaos-test          # Must be tagged sechaos-test: "true"
+  vm_name: vm-sechaos-victim
+  log_analytics_workspace_id: ""           # Fill with your LAW workspace ID
+
+setup: []
+
+steps:
+  - name: exfiltrate_synthetic_data
+    action: run_script_on_vm
+    script: scripts/exfil_sim.sh
+    record: T0
+
+detection:
+  source: azure_monitor
+  query: |
+    AzureNetworkAnalytics_CL
+    | where FlowType_s == "ExternalPublic"
+    | where BytesSentInFlows_d > 104857600
+    | where TimeGenerated > ago(10m)
+  timeout: "300s"
+  record: T1
+
+# No recovery for exfiltration — detection only
+recovery: null
+
+thresholds:
+  detection_time_max: "120s"
+
+cleanup: []

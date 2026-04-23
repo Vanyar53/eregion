@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sechaos"
+version = "0.1.0"
+description = "Security Chaos Engineering — simulate attacks, measure real RTO/RPO"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+dependencies = [
+    "click>=8.1",
+    "pyyaml>=6.0",
+    "rich>=13.0",
+    "azure-mgmt-compute>=30.0",
+    "azure-mgmt-recoveryservicesbackup>=9.0",
+    "azure-monitor-query>=1.3",
+    "azure-identity>=1.15",
+    "azure-mgmt-resource>=23.0",
+]
+
+[project.scripts]
+sechaos = "sechaos.cli:cli"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov",
+    "ruff",
+    "mypy",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,6 +1,6 @@
 from pathlib import Path
 import pytest
-from sechaos.runner.parser import ScenarioParser
+from annatar.runner.parser import ScenarioParser
 
 SCENARIOS_DIR = Path(__file__).parent.parent.parent / "scenarios"
 

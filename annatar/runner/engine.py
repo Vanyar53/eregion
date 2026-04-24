@@ -6,9 +6,9 @@ from datetime import datetime, timezone
 from rich.console import Console
 from rich.prompt import Confirm
 
-from sechaos.runner.parser import ScenarioParser
-from sechaos.runner.report import RunReport
-from sechaos.safety.guard import check_resource_group
+from annatar.runner.parser import ScenarioParser
+from annatar.runner.report import RunReport
+from annatar.safety.guard import check_resource_group
 
 console = Console()
 
@@ -121,8 +121,8 @@ class Engine:
     def _get_executor_collector(self, scenario):
         target_type = scenario.target.get("type")
         if target_type == "azure_vm":
-            from sechaos.executors.azure_vm import AzureVMExecutor
-            from sechaos.collectors.azure_monitor import AzureMonitorCollector
+            from annatar.executors.azure_vm import AzureVMExecutor
+            from annatar.collectors.azure_monitor import AzureMonitorCollector
             executor = AzureVMExecutor(scenario.target)
             collector = AzureMonitorCollector(scenario.target)
             return executor, collector

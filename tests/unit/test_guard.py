@@ -1,4 +1,4 @@
-from sechaos.safety.guard import check_resource_group, check_vm
+from annatar.safety.guard import check_resource_group, check_vm
 
 
 def test_guard_allows_tagged_rg():

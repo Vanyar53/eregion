@@ -1,15 +1,27 @@
-# SecurityChaos — Contexte projet pour Claude
+# Eregion — Contexte projet pour Claude
 
 ## Concept
 
-Plateforme open-core de **Security Chaos Engineering** : simule des scénarios d'attaque réels (ransomware, exfiltration, lateral movement) sur l'infra de l'utilisateur en environnement contrôlé, mesure les temps de détection/isolation/recovery, et compare au RTO/RPO déclaré.
+**Eregion** est une plateforme open-core de résilience opérationnelle organisée en modules Tolkien.
+**Annatar** est le premier module — Security Chaos Engineering : simule des scénarios d'attaque réels (ransomware, exfiltration, lateral movement) sur l'infra en environnement contrôlé, mesure les temps de détection/isolation/recovery, et compare au RTO/RPO déclaré.
 
-> "Tu déclares un RTO de 4h et des alertes configurées. SecurityChaos te dit combien de temps ça prend vraiment — rapport d'audit inclus."
+> "Annatar est déjà dans ta forteresse. La question c'est : est-ce que tu le sais ?"
+
+## Naming
+
+| Module | Nom | Rôle |
+|---|---|---|
+| Chaos Engine | **Annatar** | Simule les attaques (ce repo) |
+| DR Coverage Scanner | **Celebrimbor** | Scanne les gaps de couverture DR (phase 2) |
+| Drift Monitor | **Thranduil** | Surveille la dérive RTO/RPO en continu (SaaS futur) |
+| Reports Pro | **Gil-galad** | Rapports PDF audit NIS2/DORA (SaaS futur) |
+| War Room | **Fingolfin** | Guidance d'incident (SaaS futur) |
+| Failover Canary | **Glorfindel** | Tests automatiques de failover (SaaS futur) |
 
 ## Stack technique
 
 - **Language** : Python 3.11+
-- **CLI** : Click
+- **CLI** : Click (commande : `annatar`)
 - **Azure SDK** : azure-mgmt-compute, azure-monitor-query, azure-mgmt-recoveryservicesbackup
 - **Parsing** : PyYAML
 - **Terminal** : rich
@@ -19,18 +31,18 @@ Plateforme open-core de **Security Chaos Engineering** : simule des scénarios d
 ## Architecture
 
 ```
-sechaos/
-├── scenarios/              # Scénarios YAML (MITRE ATT&CK mappés)
-│   ├── azure/              # MVP — cible principale
-│   └── k8s/                # Phase 2
-├── sechaos/                # Package Python principal
-│   ├── cli.py              # Entrypoint Click
-│   ├── runner/             # engine.py, parser.py, report.py
-│   ├── executors/          # azure_vm.py (MVP), kubernetes.py (phase 2)
-│   ├── collectors/         # azure_monitor.py, prometheus.py
-│   └── safety/             # guard.py — safety checks obligatoires
-├── infra/terraform/        # Provisioning env de test Azure
-├── scripts/                # Scripts exécutés sur les VMs de test
+eregion/                        # Racine du repo (encore nommé sechaos/ sur disque)
+├── scenarios/                  # Scénarios YAML (MITRE ATT&CK mappés)
+│   ├── azure/                  # MVP — cible principale
+│   └── k8s/                    # Phase 2
+├── annatar/                    # Package Python principal (module Chaos Engine)
+│   ├── cli.py                  # Entrypoint Click
+│   ├── runner/                 # engine.py, parser.py, report.py
+│   ├── executors/              # azure_vm.py (MVP), kubernetes.py (phase 2)
+│   ├── collectors/             # azure_monitor.py, prometheus.py
+│   └── safety/                 # guard.py — safety checks obligatoires
+├── infra/terraform/            # Provisioning env de test Azure
+├── scripts/                    # Scripts exécutés sur les VMs de test
 └── tests/
 ```
 
@@ -115,11 +127,11 @@ cleanup: []
 ## CLI
 
 ```bash
-sechaos run <scenario.yaml> [--dry-run] [--yes]
-sechaos list
-sechaos validate <scenario.yaml>
-sechaos report <run-id>
-sechaos init       # Crée l'env Azure de test via Terraform
+annatar run <scenario.yaml> [--dry-run] [--yes]
+annatar list
+annatar validate <scenario.yaml>
+annatar report <run-id>
+annatar init       # Crée l'env Azure de test via Terraform
 ```
 
 ## Ressources Azure de test
@@ -133,8 +145,8 @@ Toutes dans `rg-sechaos-test`, taguées `sechaos-test: "true"` :
 
 ## Modèle open-core
 
-- **Open source** : CLI, scénarios YAML, reporting JSON/Markdown — Apache 2.0
-- **SaaS payant** (futur) : orchestration continue, PDF audit, multi-env, multi-tenant MSP
+- **Open source** : CLI Annatar, scénarios YAML, reporting JSON/Markdown — Apache 2.0
+- **SaaS payant** (futur) : Thranduil (drift monitor), Gil-galad (PDF audit), Fingolfin (war room), Glorfindel (failover canary)
 
 ## Ce qu'on ne fait PAS en MVP
 
@@ -163,6 +175,6 @@ Toutes dans `rg-sechaos-test`, taguées `sechaos-test: "true"` :
 
 - 2 scénarios Azure bout en bout
 - Rapport JSON PASS/FAIL par seuil
-- `sechaos init` opérationnel en < 5 min
+- `annatar init` opérationnel en < 5 min
 - README : quelqu'un d'autre peut l'utiliser en 30 min
 - GitHub public, Apache 2.0

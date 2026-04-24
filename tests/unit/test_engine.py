@@ -1,4 +1,4 @@
-from sechaos.runner.engine import Engine
+from annatar.runner.engine import Engine
 
 
 def test_parse_duration_seconds():

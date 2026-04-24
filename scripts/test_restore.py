@@ -51,6 +51,12 @@ storage_id = (
     f"/providers/Microsoft.Storage/storageAccounts/stannatarexfil"
 )
 
+token = credential.get_token("https://management.azure.com/.default").token
+headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+container_enc = container_name.replace(";", "%3B")
+item_enc = item_name.replace(";", "%3B")
+
+# Exact payload matching portal DevTools capture
 payload = {
     "properties": {
         "objectType": "IaasVMRestoreRequest",
@@ -59,11 +65,39 @@ payload = {
         "sourceResourceId": vm.id,
         "storageAccountId": storage_id,
         "region": vm.location,
+        "affinityGroup": "",
         "createNewCloudService": False,
-        "originalStorageAccountOption": "Never",
-        "restoreDiskLunList": [],
+        "originalStorageAccountOption": False,
+        "skipPreOLRBackup": True,
+        "targetVirtualMachineId": None,
+        "targetResourceGroupId": None,
     }
 }
+
+url = (
+    f"https://management.azure.com/subscriptions/{sub_id}/resourceGroups/{rg}"
+    f"/providers/Microsoft.RecoveryServices/vaults/{vault_name}"
+    f"/backupFabrics/Azure/protectionContainers/{container_enc}"
+    f"/protectedItems/{item_enc}/recoveryPoints/{latest.name}/restore"
+    f"?api-version=2021-10-01"
+)
+
+import json as _json
+print("\n--- Deallocating VM ---")
+dealloc = compute.virtual_machines.begin_deallocate(rg, vm_name)
+dealloc.result()
+print("VM deallocated.")
+
+print(f"\n--- Payload ---")
+print(_json.dumps(payload, indent=2))
+
+r = requests.post(url, json=payload, headers=headers)
+print(f"\n--- Result → {r.status_code} ---")
+if r.status_code in (200, 202):
+    print(f"SUCCESS")
+    print(f"AsyncOperation: {r.headers.get('Azure-AsyncOperation', '')}")
+else:
+    print(r.text[:400])
 
 token = credential.get_token("https://management.azure.com/.default").token
 headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}

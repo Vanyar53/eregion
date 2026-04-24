@@ -91,13 +91,16 @@ class AzureVMExecutor:
                 source_resource_id=vm.id,
                 storage_account_id=storage_id,
                 region=vm.location,
+                affinity_group="",
                 create_new_cloud_service=False,
-                original_storage_account_option="Never",
-                restore_disk_lun_list=[],
+                original_storage_account_option=False,
             )
         )
 
-        console.print("  [dim]Stopping VM and triggering restore to original location...[/dim]")
+        console.print("  [dim]Deallocating VM before restore...[/dim]")
+        self._compute.virtual_machines.begin_deallocate(rg, self.vm_name).result()
+
+        console.print("  [dim]Triggering restore to original location...[/dim]")
         poller = client.restores.begin_trigger(
             vault_name, rg, fabric, container_name, item_name, latest.name, restore_req
         )

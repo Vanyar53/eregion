@@ -5,7 +5,7 @@ resource_group_name: rg-annatar-test
 location: francecentral
 
 # VM
-vm_size: Standard_B2s
+vm_size: Standard_D2s_v3
 admin_username: annatartest
 disk_size_gb: 32
 

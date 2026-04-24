@@ -18,7 +18,3 @@ output "log_analytics_workspace_id" {
 output "recovery_vault_name" {
   value = azurerm_recovery_services_vault.annatar.name
 }
-
-output "exfil_storage_account" {
-  value = azurerm_storage_account.exfil.name
-}

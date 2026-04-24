@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Quick standalone test for the Azure Backup OriginalLocation restore."""
+"""Standalone test for Azure Backup OriginalLocation restore."""
 
 import sys
 sys.path.insert(0, ".")
@@ -24,39 +24,26 @@ compute = ComputeManagementClient(credential, sub_id)
 backup = RecoveryServicesBackupClient(credential, sub_id)
 
 rps = list(backup.recovery_points.list(vault_name, rg, fabric, container_name, item_name))
+latest = rps[0]
 vm = compute.virtual_machines.get(rg, vm_name)
 
-print(f"\n--- Recovery points ---")
-for rp in rps:
-    tiers = getattr(rp.properties, "recovery_point_tier_details", []) or []
-    tier_summary = ", ".join(f"{t.type}:{t.status}" for t in tiers)
-    print(f"  {rp.name}  {getattr(rp.properties, 'recovery_point_time', '?')}  [{tier_summary}]")
-
-# Use first recovery point that has HardenedRP (Vault-Standard) tier valid
-latest = next(
-    (rp for rp in rps if any(
-        getattr(t, "type", "") == "HardenedRP" and getattr(t, "status", "") == "Valid"
-        for t in (getattr(rp.properties, "recovery_point_tier_details", []) or [])
-    )),
-    rps[0],
-)
-print(f"\nUsing: {latest.name}")
-
-print(f"\n--- VM ---")
-print(f"  id     : {vm.id}")
-print(f"  region : {vm.location}")
+print(f"Recovery point : {latest.name} ({getattr(latest.properties, 'recovery_point_time', '?')})")
+print(f"VM             : {vm.id}")
 
 storage_id = (
     f"/subscriptions/{sub_id}/resourceGroups/{rg}"
     f"/providers/Microsoft.Storage/storageAccounts/stannatarexfil"
 )
 
+print("\nDeallocating VM...")
+compute.virtual_machines.begin_deallocate(rg, vm_name).result()
+print("VM deallocated.")
+
 token = credential.get_token("https://management.azure.com/.default").token
 headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 container_enc = container_name.replace(";", "%3B")
 item_enc = item_name.replace(";", "%3B")
 
-# Exact payload matching portal DevTools capture
 payload = {
     "properties": {
         "objectType": "IaasVMRestoreRequest",
@@ -82,41 +69,11 @@ url = (
     f"?api-version=2021-10-01"
 )
 
-import json as _json
-print("\n--- Deallocating VM ---")
-dealloc = compute.virtual_machines.begin_deallocate(rg, vm_name)
-dealloc.result()
-print("VM deallocated.")
-
-print(f"\n--- Payload ---")
-print(_json.dumps(payload, indent=2))
-
 r = requests.post(url, json=payload, headers=headers)
-print(f"\n--- Result → {r.status_code} ---")
+print(f"\nResult → {r.status_code}")
 if r.status_code in (200, 202):
-    print(f"SUCCESS")
+    print("SUCCESS — restore triggered")
     print(f"AsyncOperation: {r.headers.get('Azure-AsyncOperation', '')}")
+    print("Polling (check Azure portal for job status)...")
 else:
     print(r.text[:400])
-
-token = credential.get_token("https://management.azure.com/.default").token
-headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-
-# Try different API versions
-for api_version in ["2023-04-01", "2023-02-01", "2021-12-01", "2021-01-01"]:
-    container_enc = container_name.replace(";", "%3B")
-    item_enc = item_name.replace(";", "%3B")
-    url = (
-        f"https://management.azure.com/subscriptions/{sub_id}/resourceGroups/{rg}"
-        f"/providers/Microsoft.RecoveryServices/vaults/{vault_name}"
-        f"/backupFabrics/Azure/protectionContainers/{container_enc}"
-        f"/protectedItems/{item_enc}/recoveryPoints/{latest.name}/restore"
-        f"?api-version={api_version}"
-    )
-    r = requests.post(url, json=payload, headers=headers)
-    print(f"\n--- REST {api_version} → {r.status_code} ---")
-    if r.status_code in (200, 202):
-        print(f"  SUCCESS: {r.headers.get('Azure-AsyncOperation', r.text[:200])}")
-        break
-    else:
-        print(f"  {r.json().get('error', {}).get('code', '?')}: {r.json().get('error', {}).get('message', '?')[:150]}")

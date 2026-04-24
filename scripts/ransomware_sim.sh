@@ -35,10 +35,10 @@ END_AT=$((START + DURATION))
 i=0
 while [ "$(date -u +%s)" -lt "$END_AT" ]; do
   dd if="$TARGET/seed.dat" bs=1M of="$TARGET/enc_$i.dat" conv=fsync 2>/dev/null
-  rm -f "$TARGET/enc_$((i-1)).dat" 2>/dev/null
   i=$((i+1))
 done
-rm -f "$TARGET/seed.dat" "$TARGET/enc_$((i-1)).dat"
 
 END=$(date -u +%s)
 echo "[annatar] ENCRYPTION_COMPLETE at $(date -u +%Y-%m-%dT%H:%M:%SZ) (${START}→${END})"
+echo "[annatar] Files left on disk — restore should clean these up:"
+ls "$TARGET"/enc_*.dat "$TARGET/seed.dat" 2>/dev/null | xargs -I{} basename {}

@@ -79,12 +79,21 @@ class AzureVMExecutor:
 
         vm = self._compute.virtual_machines.get(rg, self.vm_name)
 
+        storage_id = (
+            f"/subscriptions/{self._subscription_id}/resourceGroups/{rg}"
+            f"/providers/Microsoft.Storage/storageAccounts/stannatarexfil"
+        )
+
         restore_req = RestoreRequestResource(
             properties=IaasVMRestoreRequest(
-                recovery_point_id=latest.id,
+                recovery_point_id=latest.name,
                 recovery_type="OriginalLocation",
                 source_resource_id=vm.id,
+                storage_account_id=storage_id,
                 region=vm.location,
+                create_new_cloud_service=False,
+                original_storage_account_option="Never",
+                restore_disk_lun_list=[],
             )
         )
 

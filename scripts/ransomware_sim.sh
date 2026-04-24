@@ -19,7 +19,9 @@ if [ ! -f "$MARKER" ]; then
   exit 1
 fi
 
-rm -f "$TARGET"/enc_*.dat "$TARGET/seed.dat"
+if ls "$TARGET"/enc_*.dat "$TARGET/seed.dat" 2>/dev/null | grep -q .; then
+  echo "[annatar] WARNING: leftover files from previous run — previous restore may have failed"
+fi
 
 echo "[annatar] Generating test data on $TARGET..."
 dd if=/dev/urandom bs=1M count=512 of="$TARGET/seed.dat" 2>/dev/null

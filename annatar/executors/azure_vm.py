@@ -86,7 +86,6 @@ class AzureVMExecutor:
                 source_resource_id=vm.id,
                 region=vm.location,
                 create_new_cloud_service=False,
-                original_storage_account_option="Never",
             )
         )
 

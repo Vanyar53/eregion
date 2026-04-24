@@ -22,7 +22,7 @@ class Engine:
         scenario = self.parser.load(scenario_path)
         run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
-        console.rule(f"[bold cyan]SecurityChaos — {scenario.name}[/bold cyan]")
+        console.rule(f"[bold cyan]Annatar — {scenario.name}[/bold cyan]")
         console.print(f"  MITRE   : {scenario.mitre}")
         console.print(f"  Target  : {scenario.target.get('type')} / {scenario.target.get('resource_group')}")
         console.print(f"  Dry-run : {self.dry_run}\n")

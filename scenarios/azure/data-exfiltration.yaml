@@ -5,9 +5,9 @@ version: "1.0.0"
 
 target:
   type: azure_vm
-  resource_group: rg-annatar-test          # Must be tagged annatar-test: "true"
+  resource_group: annatar
   vm_name: vm-annatar-victim
-  log_analytics_workspace_id: ""           # Fill with your LAW workspace ID
+  log_analytics_workspace_id: "b451c51a-1cd0-4125-ac70-6aaf2c1dc209"
 
 setup: []
 

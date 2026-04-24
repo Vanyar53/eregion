@@ -70,12 +70,12 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "disk_write_anomaly" {
   auto_mitigation_enabled = false
 
   criteria {
-    query = <<-EOQ
+    query = <<-KQL
       Perf
       | where ObjectName == "Logical Disk" and CounterName == "Disk Write Bytes/sec"
       | where CounterValue > ${local.cfg.disk_write_alert_threshold_bytes}
       | summarize MaxWrite = max(CounterValue) by bin(TimeGenerated, 1m), Computer
-    EOQ
+    KQL
     time_aggregation_method = "Count"
     threshold               = 1
     operator                = "GreaterThan"

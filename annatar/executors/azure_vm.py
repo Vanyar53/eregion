@@ -52,18 +52,59 @@ class AzureVMExecutor:
             raise ValueError(f"Unsupported recovery action: {action}")
 
     def _trigger_backup_restore(self, config: dict) -> None:
-        """Trigger Azure Backup restore and wait for completion."""
+        """Trigger Azure Backup disk restore and poll until completion."""
         from azure.mgmt.recoveryservicesbackup import RecoveryServicesBackupClient
+        from azure.mgmt.recoveryservicesbackup.models import IaasVMRestoreRequest, RestoreRequestResource
 
         vault_name = config.get("vault", "rsv-annatar")
+        rg = self.resource_group
+        fabric = "Azure"
+        container_name = f"iaasvmcontainer;iaasvmcontainerv2;{rg};{self.vm_name}"
+        item_name = f"vm;iaasvmcontainerv2;{rg};{self.vm_name}"
+
         client = RecoveryServicesBackupClient(self._credential, self._subscription_id)
 
-        console.print(f"  [dim]Triggering restore from vault: {vault_name}[/dim]")
-        # Restore logic: find latest recovery point and trigger restore
-        # Full implementation depends on vault/policy config
-        # Placeholder — implement once infra is provisioned
-        time.sleep(2)
-        console.print("  [dim]Restore triggered (polling for completion...)[/dim]")
+        console.print(f"  [dim]Fetching recovery points from {vault_name}...[/dim]")
+        rps = list(client.recovery_points.list(vault_name, rg, fabric, container_name, item_name))
+        if not rps:
+            raise RuntimeError("No recovery points found — run 'az backup protection backup-now' first")
+
+        latest = rps[0]
+        rp_time = getattr(latest.properties, "recovery_point_time", "unknown")
+        console.print(f"  [dim]Latest recovery point: {latest.name} ({rp_time})[/dim]")
+
+        vm = self._compute.virtual_machines.get(rg, self.vm_name)
+        storage_id = (
+            f"/subscriptions/{self._subscription_id}/resourceGroups/{rg}"
+            f"/providers/Microsoft.Storage/storageAccounts/stannatarexfil"
+        )
+
+        restore_req = RestoreRequestResource(
+            properties=IaasVMRestoreRequest(
+                recovery_point_id=latest.id,
+                recovery_type="RestoreDisks",
+                source_resource_id=vm.id,
+                storage_account_id=storage_id,
+                region=vm.location,
+                create_new_cloud_service=False,
+                original_storage_account_option="Never",
+            )
+        )
+
+        console.print("  [dim]Triggering disk restore...[/dim]")
+        poller = client.restores.begin_trigger(
+            vault_name, rg, fabric, container_name, item_name, latest.name, restore_req
+        )
+
+        console.print("  [dim]Polling restore job (15-30 min expected)...[/dim]")
+        elapsed = 0
+        while not poller.done():
+            time.sleep(30)
+            elapsed += 30
+            console.print(f"  [dim]Still restoring... {elapsed}s elapsed[/dim]")
+
+        poller.result()
+        console.print("  [green]Restore completed.[/green]")
 
     def _get_subscription_id(self) -> str:
         from azure.mgmt.subscription import SubscriptionClient

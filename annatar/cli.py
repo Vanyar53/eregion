@@ -7,7 +7,7 @@ console = Console()
 @click.group()
 @click.version_option()
 def cli():
-    """SecurityChaos — simulate attacks, measure real RTO/RPO."""
+    """Annatar — simulate attacks, measure real RTO/RPO."""
 
 
 @cli.command()

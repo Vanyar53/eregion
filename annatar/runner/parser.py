@@ -11,7 +11,7 @@ from rich.table import Table
 
 console = Console()
 
-REQUIRED_FIELDS = ["name", "description", "mitre", "target", "steps", "thresholds"]
+REQUIRED_FIELDS = ["name", "description", "mitre", "target", "steps"]
 
 
 @dataclass
@@ -31,7 +31,6 @@ class Scenario:
     steps: list
     detection: dict
     recovery: dict | None
-    thresholds: dict
     cleanup: list
     raw: dict
 
@@ -55,7 +54,6 @@ class ScenarioParser:
             steps=data["steps"],
             detection=data.get("detection", {}),
             recovery=data.get("recovery"),
-            thresholds=data["thresholds"],
             cleanup=data.get("cleanup", []),
             raw=data,
         )

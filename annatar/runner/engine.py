@@ -69,13 +69,13 @@ class Engine:
                 timeout_s=self._parse_duration(scenario.detection.get("timeout", "300s")),
             )
             if detection_time is not None:
-                metrics["detection_time_s"] = round(detection_time)
-                threshold = self._parse_duration(scenario.thresholds.get("detection_time_max", "9999s"))
+                metrics["detection_s"] = round(detection_time)
+                threshold = self._parse_duration(scenario.detection.get("time_max", "9999s"))
                 ok = detection_time <= threshold
                 checks["detection"] = "PASS" if ok else f"FAIL — {round(detection_time)}s vs seuil {threshold}s"
                 console.print(f"  Detection: {checks['detection']}")
             else:
-                metrics["detection_time_s"] = None
+                metrics["detection_s"] = None
                 checks["detection"] = "FAIL — timeout, no alert fired"
                 console.print(f"  [red]Detection timeout[/red]")
 
@@ -85,8 +85,8 @@ class Engine:
             T2 = time.time()
             executor.trigger_recovery(scenario.recovery)
             recovery_time = time.time() - T0
-            metrics["recovery_time_s"] = round(recovery_time)
-            threshold = self._parse_duration(scenario.thresholds.get("recovery_time_max", "9999s"))
+            metrics["recovery_s"] = round(recovery_time)
+            threshold = self._parse_duration(scenario.recovery.get("time_max", "9999s"))
             ok = recovery_time <= threshold
             checks["recovery"] = "PASS" if ok else f"FAIL — {round(recovery_time/60)}min vs RTO {round(threshold/60)}min"
             console.print(f"  Recovery: {checks['recovery']}")
@@ -102,11 +102,14 @@ class Engine:
             mitre=scenario.mitre,
             result=overall,
             metrics=metrics,
-            thresholds={k: self._parse_duration(v) for k, v in scenario.thresholds.items()},
+            thresholds={
+                "detection_max_s": self._parse_duration(scenario.detection.get("time_max", "9999s")) if scenario.detection else None,
+                "recovery_max_s": self._parse_duration(scenario.recovery.get("time_max", "9999s")) if scenario.recovery else None,
+            },
             checks=checks,
         )
         path = report.save()
-        report.display()
+        report.render()
         console.print(f"\n[dim]Report saved: {path}[/dim]")
 
     def _dry_run_display(self, scenario):

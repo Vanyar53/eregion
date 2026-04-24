@@ -85,3 +85,9 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "disk_write_anomaly" {
     }
   }
 }
+
+resource "azurerm_role_assignment" "ama_dcr" {
+  scope                = azurerm_monitor_data_collection_rule.annatar.id
+  role_definition_name = "Monitoring Metrics Publisher"
+  principal_id         = azurerm_linux_virtual_machine.victim.identity[0].principal_id
+}

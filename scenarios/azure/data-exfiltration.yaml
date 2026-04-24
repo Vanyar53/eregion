@@ -25,12 +25,10 @@ detection:
     | where BytesSentInFlows_d > 104857600
     | where TimeGenerated > ago(10m)
   timeout: "300s"
+  time_max: "180s"
   record: T1
 
 # No recovery for exfiltration — detection only
 recovery: null
-
-thresholds:
-  detection_time_max: "120s"
 
 cleanup: []

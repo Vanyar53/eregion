@@ -29,7 +29,7 @@ class RunReport:
             json.dump(asdict(self), f, indent=2)
         return path
 
-    def display(self):
+    def render(self):
         color = "green" if self.result == "PASS" else "red"
         console.print(f"\n[bold]Run:[/bold] {self.run_id}")
         console.print(f"[bold]Scenario:[/bold] {self.scenario}  [bold]MITRE:[/bold] {self.mitre}")
@@ -63,4 +63,4 @@ class RunReport:
         with open(path) as f:
             data = json.load(f)
         r = RunReport(**data)
-        r.display()
+        r.render()

@@ -1,5 +1,6 @@
 name: azure-ransomware-vm
-description: Simulate ransomware file encryption on a test data volume, validate detection and RTO
+description: Simulate ransomware file encryption on a test data volume, validate
+  detection and RTO
 mitre: T1486
 version: "1.0.0"
 
@@ -26,15 +27,14 @@ detection:
     | where TimeGenerated > ago(10m)
     | summarize MaxWrite = max(CounterValue) by bin(TimeGenerated, 1m), Computer
   timeout: "300s"
+  # Azure Monitor : compter ~2-5 min de latence d'ingestion LAW.
+  time_max: "180s"
   record: T1
 
 recovery:
   action: azure_backup_restore
   vault: rsv-annatar
+  time_max: "1800s" # RTO déclaré = 30 minutes
   record: T3
-
-thresholds:
-  detection_time_max: "120s"
-  recovery_time_max: "1800s"     # RTO déclaré = 30 minutes
 
 cleanup: []

@@ -10,6 +10,10 @@ resource "azurerm_linux_virtual_machine" "victim" {
 
   network_interface_ids = [azurerm_network_interface.annatar_vm.id]
 
+  identity {
+    type = "SystemAssigned"
+  }
+
   admin_ssh_key {
     username   = local.cfg.admin_username
     public_key = var.admin_ssh_public_key
@@ -32,7 +36,7 @@ resource "azurerm_linux_virtual_machine" "victim" {
     mkfs.ext4 /dev/sdc
     mkdir -p /mnt/testdata
     mount /dev/sdc /mnt/testdata
-    echo "/dev/sdc /mnt/testdata ext4 defaults 0 0" >> /etc/fstab
+    echo "/dev/sdc /mnt/testdata ext4 defaults,nofail 0 0" >> /etc/fstab
     touch /mnt/testdata/.annatar_test_marker
     chmod 600 /mnt/testdata/.annatar_test_marker
   EOF

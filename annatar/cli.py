@@ -46,8 +46,8 @@ def validate(scenario: str):
 @click.argument("run_id")
 def report(run_id: str):
     """Display or export a run report."""
-    from annatar.runner.report import Report
-    Report.display(run_id)
+    from annatar.runner.report import RunReport
+    RunReport.display(run_id)
 
 
 @cli.command()

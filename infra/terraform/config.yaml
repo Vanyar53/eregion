@@ -25,5 +25,5 @@ vm_shutdown_email: fontaine.jonathan@proton.me
 
 # Monitoring
 log_retention_days: 30
-perf_sampling_frequency: 60
+perf_sampling_frequency: 10
 disk_write_alert_threshold_bytes: 52428800 # 50 MB/s

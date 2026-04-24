@@ -55,7 +55,7 @@ class AzureVMExecutor:
         """Trigger Azure Backup restore and wait for completion."""
         from azure.mgmt.recoveryservicesbackup import RecoveryServicesBackupClient
 
-        vault_name = config.get("vault", f"rsv-sechaos")
+        vault_name = config.get("vault", "rsv-annatar")
         client = RecoveryServicesBackupClient(self._credential, self._subscription_id)
 
         console.print(f"  [dim]Triggering restore from vault: {vault_name}[/dim]")

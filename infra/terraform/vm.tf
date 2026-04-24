@@ -1,17 +1,17 @@
 resource "azurerm_linux_virtual_machine" "victim" {
-  name                = "vm-sechaos-victim"
-  resource_group_name = azurerm_resource_group.sechaos.name
-  location            = azurerm_resource_group.sechaos.location
-  size                = var.vm_size
-  admin_username      = var.admin_username
-  tags = merge(azurerm_resource_group.sechaos.tags, {
-    "sechaos-test" = "true"
+  name                = "vm-annatar-victim"
+  resource_group_name = azurerm_resource_group.annatar.name
+  location            = azurerm_resource_group.annatar.location
+  size                = local.cfg.vm_size
+  admin_username      = local.cfg.admin_username
+  tags = merge(azurerm_resource_group.annatar.tags, {
+    "annatar-test" = "true"
   })
 
-  network_interface_ids = [azurerm_network_interface.sechaos_vm.id]
+  network_interface_ids = [azurerm_network_interface.annatar_vm.id]
 
   admin_ssh_key {
-    username   = var.admin_username
+    username   = local.cfg.admin_username
     public_key = var.admin_ssh_public_key
   }
 
@@ -27,27 +27,26 @@ resource "azurerm_linux_virtual_machine" "victim" {
     version   = "latest"
   }
 
-  # Prepare test data volume mount and safety marker
   custom_data = base64encode(<<-EOF
     #!/bin/bash
     mkfs.ext4 /dev/sdc
     mkdir -p /mnt/testdata
     mount /dev/sdc /mnt/testdata
     echo "/dev/sdc /mnt/testdata ext4 defaults 0 0" >> /etc/fstab
-    touch /mnt/testdata/.sechaos_test_marker
-    chmod 600 /mnt/testdata/.sechaos_test_marker
+    touch /mnt/testdata/.annatar_test_marker
+    chmod 600 /mnt/testdata/.annatar_test_marker
   EOF
   )
 }
 
 resource "azurerm_managed_disk" "testdata" {
-  name                 = "disk-sechaos-testdata"
-  location             = azurerm_resource_group.sechaos.location
-  resource_group_name  = azurerm_resource_group.sechaos.name
+  name                 = "disk-annatar-testdata"
+  location             = azurerm_resource_group.annatar.location
+  resource_group_name  = azurerm_resource_group.annatar.name
   storage_account_type = "Standard_LRS"
   create_option        = "Empty"
-  disk_size_gb         = 32
-  tags                 = azurerm_resource_group.sechaos.tags
+  disk_size_gb         = local.cfg.disk_size_gb
+  tags                 = azurerm_resource_group.annatar.tags
 }
 
 resource "azurerm_virtual_machine_data_disk_attachment" "testdata" {
@@ -57,7 +56,20 @@ resource "azurerm_virtual_machine_data_disk_attachment" "testdata" {
   caching            = "None"
 }
 
-# Azure Monitor Agent extension
+resource "azurerm_dev_test_global_vm_shutdown_schedule" "victim" {
+  virtual_machine_id = azurerm_linux_virtual_machine.victim.id
+  location           = azurerm_resource_group.annatar.location
+  enabled            = true
+  daily_recurrence_time = local.cfg.vm_shutdown_time
+  timezone           = "UTC"
+
+  notification_settings {
+    enabled         = true
+    time_in_minutes = 15
+    email           = local.cfg.vm_shutdown_email
+  }
+}
+
 resource "azurerm_virtual_machine_extension" "ama" {
   name                       = "AzureMonitorLinuxAgent"
   virtual_machine_id         = azurerm_linux_virtual_machine.victim.id

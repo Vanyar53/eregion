@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 
 
-REQUIRED_TAG_KEY = "sechaos-test"
+REQUIRED_TAG_KEY = "annatar-test"
 REQUIRED_TAG_VALUE = "true"
 
 

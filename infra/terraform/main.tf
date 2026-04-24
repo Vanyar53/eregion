@@ -2,7 +2,7 @@ terraform {
   required_providers {
     azurerm = {
       source  = "hashicorp/azurerm"
-      version = "~> 3.90"
+      version = "~> 4.0"
     }
   }
   required_version = ">= 1.5"
@@ -10,15 +10,16 @@ terraform {
 
 provider "azurerm" {
   features {}
+  subscription_id = "44a4dc83-3e79-4e4e-aa93-1b4f8e3ede80"
 }
 
-resource "azurerm_resource_group" "sechaos" {
-  name     = var.resource_group_name
-  location = var.location
+resource "azurerm_resource_group" "annatar" {
+  name     = local.cfg.resource_group_name
+  location = local.cfg.location
 
   tags = {
-    "sechaos-test" = "true"
-    "project"      = "sechaos"
+    "annatar-test" = "true"
+    "project"      = "annatar"
     "managed-by"   = "terraform"
   }
 }

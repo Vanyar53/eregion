@@ -2,14 +2,14 @@ from annatar.safety.guard import check_resource_group, check_vm
 
 
 def test_guard_allows_tagged_rg():
-    result = check_resource_group({"sechaos-test": "true", "env": "test"})
+    result = check_resource_group({"annatar-test": "true", "env": "test"})
     assert result.allowed
 
 
 def test_guard_blocks_untagged_rg():
     result = check_resource_group({"env": "production"})
     assert not result.allowed
-    assert "sechaos-test" in result.reason
+    assert "annatar-test" in result.reason
 
 
 def test_guard_blocks_empty_tags():
@@ -18,17 +18,17 @@ def test_guard_blocks_empty_tags():
 
 
 def test_guard_blocks_wrong_tag_value():
-    result = check_resource_group({"sechaos-test": "false"})
+    result = check_resource_group({"annatar-test": "false"})
     assert not result.allowed
 
 
 def test_guard_tag_value_case_insensitive():
-    result = check_resource_group({"sechaos-test": "True"})
+    result = check_resource_group({"annatar-test": "True"})
     assert result.allowed
 
 
 def test_guard_vm_allows_tagged():
-    result = check_vm({"sechaos-test": "true"})
+    result = check_vm({"annatar-test": "true"})
     assert result.allowed
 
 

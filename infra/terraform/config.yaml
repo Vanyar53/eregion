@@ -1,0 +1,29 @@
+# Annatar — Infrastructure configuration
+
+# Infrastructure
+resource_group_name: rg-annatar-test
+location: francecentral
+
+# VM
+vm_size: Standard_B2s
+admin_username: annatartest
+disk_size_gb: 32
+
+# Network
+vnet_address_space: 10.10.0.0/16
+subnet_address_prefix: 10.10.1.0/24
+
+# Backup
+vault_storage_mode: LocallyRedundant
+vault_immutability: Disabled
+backup_time: "02:00"
+backup_retention_days: 7
+
+# VM auto-shutdown (UTC — minuit Paris = 22:00 UTC été, 23:00 UTC hiver)
+vm_shutdown_time: "2300"        # format HHMM UTC, changer à 0000 ou 0100 si tu travailles tard
+vm_shutdown_email: fontaine.jonathan@proton.me
+
+# Monitoring
+log_retention_days: 30
+perf_sampling_frequency: 10
+disk_write_alert_threshold_bytes: 52428800  # 50 MB/s

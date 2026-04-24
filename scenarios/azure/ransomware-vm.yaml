@@ -5,8 +5,8 @@ version: "1.0.0"
 
 target:
   type: azure_vm
-  resource_group: rg-sechaos-test          # Must be tagged sechaos-test: "true"
-  vm_name: vm-sechaos-victim
+  resource_group: rg-annatar-test          # Must be tagged annatar-test: "true"
+  vm_name: vm-annatar-victim
   log_analytics_workspace_id: ""           # Fill with your LAW workspace ID
 
 setup: []
@@ -29,7 +29,7 @@ detection:
 
 recovery:
   action: azure_backup_restore
-  vault: rsv-sechaos
+  vault: rsv-annatar
   record: T3
 
 thresholds:

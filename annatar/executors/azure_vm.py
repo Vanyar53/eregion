@@ -52,7 +52,11 @@ class AzureVMExecutor:
             raise ValueError(f"Unsupported recovery action: {action}")
 
     def _trigger_backup_restore(self, config: dict) -> None:
-        """Trigger Azure Backup disk restore and poll until completion."""
+        """Trigger Azure Backup OriginalLocation restore and poll until completion.
+
+        Stops the VM, replaces disks with the latest restore point, restarts.
+        This is the actual RTO: time from trigger to VM back online.
+        """
         from azure.mgmt.recoveryservicesbackup import RecoveryServicesBackupClient
         from azure.mgmt.recoveryservicesbackup.models import IaasVMRestoreRequest, RestoreRequestResource
 
@@ -74,37 +78,32 @@ class AzureVMExecutor:
         console.print(f"  [dim]Latest recovery point: {latest.name} ({rp_time})[/dim]")
 
         vm = self._compute.virtual_machines.get(rg, self.vm_name)
-        storage_id = (
-            f"/subscriptions/{self._subscription_id}/resourceGroups/{rg}"
-            f"/providers/Microsoft.Storage/storageAccounts/stannatarexfil"
-        )
 
         restore_req = RestoreRequestResource(
             properties=IaasVMRestoreRequest(
                 recovery_point_id=latest.id,
-                recovery_type="RestoreDisks",
+                recovery_type="OriginalLocation",
                 source_resource_id=vm.id,
-                storage_account_id=storage_id,
                 region=vm.location,
                 create_new_cloud_service=False,
                 original_storage_account_option="Never",
             )
         )
 
-        console.print("  [dim]Triggering disk restore...[/dim]")
+        console.print("  [dim]Stopping VM and triggering restore to original location...[/dim]")
         poller = client.restores.begin_trigger(
             vault_name, rg, fabric, container_name, item_name, latest.name, restore_req
         )
 
-        console.print("  [dim]Polling restore job (15-30 min expected)...[/dim]")
+        console.print("  [dim]Polling restore job (30-60 min expected for full VM restore)...[/dim]")
         elapsed = 0
         while not poller.done():
-            time.sleep(30)
-            elapsed += 30
-            console.print(f"  [dim]Still restoring... {elapsed}s elapsed[/dim]")
+            time.sleep(60)
+            elapsed += 60
+            console.print(f"  [dim]Still restoring... {elapsed//60}min elapsed[/dim]")
 
         poller.result()
-        console.print("  [green]Restore completed.[/green]")
+        console.print("  [green]Restore completed — VM disks replaced with backup state.[/green]")
 
     def _get_subscription_id(self) -> str:
         from azure.mgmt.subscription import SubscriptionClient

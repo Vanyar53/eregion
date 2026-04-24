@@ -19,6 +19,8 @@ if [ ! -f "$MARKER" ]; then
   exit 1
 fi
 
+rm -f "$TARGET"/enc_*.dat "$TARGET/seed.dat"
+
 echo "[annatar] Generating test data on $TARGET..."
 dd if=/dev/urandom bs=1M count=512 of="$TARGET/seed.dat" 2>/dev/null
 

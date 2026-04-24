@@ -52,56 +52,68 @@ class AzureVMExecutor:
             raise ValueError(f"Unsupported recovery action: {action}")
 
     def _trigger_backup_restore(self, config: dict) -> None:
-        """Trigger Azure Backup OriginalLocation restore and poll until completion.
+        """Trigger Azure Backup OriginalLocation restore via az CLI and poll until completion.
 
         Stops the VM, replaces disks with the latest restore point, restarts.
         This is the actual RTO: time from trigger to VM back online.
         """
-        from azure.mgmt.recoveryservicesbackup import RecoveryServicesBackupClient
-        from azure.mgmt.recoveryservicesbackup.models import IaasVMRestoreRequest, RestoreRequestResource
+        import json
+        import subprocess
 
         vault_name = config.get("vault", "rsv-annatar")
         rg = self.resource_group
-        fabric = "Azure"
-        container_name = f"iaasvmcontainer;iaasvmcontainerv2;{rg};{self.vm_name}"
-        item_name = f"vm;iaasvmcontainerv2;{rg};{self.vm_name}"
-
-        client = RecoveryServicesBackupClient(self._credential, self._subscription_id)
+        container_name = f"IaasVMContainer;iaasvmcontainerv2;{rg};{self.vm_name}"
+        item_name = f"VM;iaasvmcontainerv2;{rg};{self.vm_name}"
 
         console.print(f"  [dim]Fetching recovery points from {vault_name}...[/dim]")
-        rps = list(client.recovery_points.list(vault_name, rg, fabric, container_name, item_name))
+        rps_out = subprocess.run(
+            ["az", "backup", "recoverypoint", "list",
+             "--resource-group", rg, "--vault-name", vault_name,
+             "--container-name", container_name, "--item-name", item_name,
+             "--output", "json"],
+            capture_output=True, text=True, check=True,
+        )
+        rps = json.loads(rps_out.stdout)
         if not rps:
             raise RuntimeError("No recovery points found — run 'az backup protection backup-now' first")
 
         latest = rps[0]
-        rp_time = getattr(latest.properties, "recovery_point_time", "unknown")
-        console.print(f"  [dim]Latest recovery point: {latest.name} ({rp_time})[/dim]")
-
-        vm = self._compute.virtual_machines.get(rg, self.vm_name)
-
-        restore_req = RestoreRequestResource(
-            properties=IaasVMRestoreRequest(
-                recovery_point_id=latest.id,
-                recovery_type="OriginalLocation",
-                source_resource_id=vm.id,
-                region=vm.location,
-                create_new_cloud_service=False,
-            )
-        )
+        rp_name = latest["name"]
+        rp_time = latest.get("properties", {}).get("recoveryPointTime", "unknown")
+        console.print(f"  [dim]Latest recovery point: {rp_name} ({rp_time})[/dim]")
 
         console.print("  [dim]Stopping VM and triggering restore to original location...[/dim]")
-        poller = client.restores.begin_trigger(
-            vault_name, rg, fabric, container_name, item_name, latest.name, restore_req
+        job_out = subprocess.run(
+            ["az", "backup", "restore", "restore-disks",
+             "--resource-group", rg, "--vault-name", vault_name,
+             "--container-name", container_name, "--item-name", item_name,
+             "--rp-name", rp_name,
+             "--restore-mode", "OriginalLocation",
+             "--rehydration-priority", "None",
+             "--output", "json"],
+            capture_output=True, text=True, check=True,
         )
+        job = json.loads(job_out.stdout)
+        job_name = job["name"]
+        console.print(f"  [dim]Job {job_name} started. Polling (30-60 min expected)...[/dim]")
 
-        console.print("  [dim]Polling restore job (30-60 min expected for full VM restore)...[/dim]")
         elapsed = 0
-        while not poller.done():
+        while True:
             time.sleep(60)
             elapsed += 60
-            console.print(f"  [dim]Still restoring... {elapsed//60}min elapsed[/dim]")
+            status_out = subprocess.run(
+                ["az", "backup", "job", "show",
+                 "--resource-group", rg, "--vault-name", vault_name,
+                 "--name", job_name, "--output", "json"],
+                capture_output=True, text=True, check=True,
+            )
+            job_status = json.loads(status_out.stdout).get("properties", {}).get("status", "Unknown")
+            console.print(f"  [dim]Still restoring... {elapsed//60}min elapsed — {job_status}[/dim]")
+            if job_status in ("Completed", "Failed", "Cancelled"):
+                break
 
-        poller.result()
+        if job_status != "Completed":
+            raise RuntimeError(f"Restore job ended with status: {job_status}")
         console.print("  [green]Restore completed — VM disks replaced with backup state.[/green]")
 
     def _get_subscription_id(self) -> str:

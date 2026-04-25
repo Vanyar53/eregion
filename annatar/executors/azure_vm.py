@@ -101,18 +101,34 @@ class AzureVMExecutor:
         self._compute.virtual_machines.begin_deallocate(rg, self.vm_name).result()
 
         console.print("  [dim]Triggering restore to original location...[/dim]")
-        poller = client.restores.begin_trigger(
+        client.restores.begin_trigger(
             vault_name, rg, fabric, container_name, item_name, latest.name, restore_req
         )
+        # begin_trigger poller only tracks the trigger operation (accepted ≠ completed).
+        # Poll the actual backup job instead.
+        time.sleep(15)
+        restore_job = next(
+            (j for j in client.backup_jobs.list(vault_name, rg)
+             if getattr(j.properties, "operation", "") == "Restore"
+             and getattr(j.properties, "status", "") == "InProgress"),
+            None,
+        )
+        if restore_job is None:
+            raise RuntimeError("Restore job not found — check Azure portal")
 
-        console.print("  [dim]Polling restore job (30-60 min expected for full VM restore)...[/dim]")
+        console.print(f"  [dim]Tracking job {restore_job.name} (30-60 min expected)...[/dim]")
         elapsed = 0
-        while not poller.done():
+        while True:
             time.sleep(60)
             elapsed += 60
-            console.print(f"  [dim]Still restoring... {elapsed//60}min elapsed[/dim]")
+            job = client.backup_jobs.get(vault_name, rg, restore_job.name)
+            status = getattr(job.properties, "status", "Unknown")
+            console.print(f"  [dim]Still restoring... {elapsed//60}min elapsed — {status}[/dim]")
+            if status in ("Completed", "Failed", "Cancelled"):
+                break
 
-        poller.result()
+        if status != "Completed":
+            raise RuntimeError(f"Restore job ended with status: {status}")
         console.print("  [green]Restore completed — VM disks replaced with backup state.[/green]")
 
         console.print("  [dim]Starting VM after restore...[/dim]")

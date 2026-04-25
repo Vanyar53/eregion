@@ -115,6 +115,10 @@ class AzureVMExecutor:
         poller.result()
         console.print("  [green]Restore completed — VM disks replaced with backup state.[/green]")
 
+        console.print("  [dim]Starting VM after restore...[/dim]")
+        self._compute.virtual_machines.begin_start(rg, self.vm_name).result()
+        console.print("  [dim]VM started.[/dim]")
+
     def verify_restore_integrity(self, script_path: str = "scripts/verify_restore.sh") -> bool:
         """Run the integrity check script on the VM. Returns True if PASS."""
         output = self.run_script(script_path)

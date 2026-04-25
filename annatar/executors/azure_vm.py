@@ -115,6 +115,17 @@ class AzureVMExecutor:
         poller.result()
         console.print("  [green]Restore completed — VM disks replaced with backup state.[/green]")
 
+    def verify_restore_integrity(self, script_path: str = "scripts/verify_restore.sh") -> bool:
+        """Run the integrity check script on the VM. Returns True if PASS."""
+        output = self.run_script(script_path)
+        passed = "INTEGRITY_PASS" in output
+        if passed:
+            console.print("  [green]Integrity check: PASS[/green]")
+        else:
+            console.print("  [red]Integrity check: FAIL[/red]")
+            console.print(f"  [dim]{output.strip()[-300:]}[/dim]")
+        return passed
+
     def _get_subscription_id(self) -> str:
         from azure.mgmt.subscription import SubscriptionClient
         client = SubscriptionClient(self._credential)

@@ -16,6 +16,38 @@ class AzureMonitorCollector:
         self._credential = DefaultAzureCredential()
         self._client = LogsQueryClient(self._credential)
 
+    def wait_for_heartbeat(self, vm_name: str, timeout_s: float, interval_s: float = 30.0) -> float | None:
+        """
+        Poll LAW until the VM sends a Heartbeat after restore.
+        Returns elapsed seconds, or None on timeout.
+        """
+        query = (
+            f"Heartbeat\n"
+            f"| where Computer startswith '{vm_name}'\n"
+            f"| where TimeGenerated > ago(3m)\n"
+            f"| summarize LastHeartbeat = max(TimeGenerated)"
+        )
+        start = time.time()
+        console.print(f"  [dim]Waiting for Heartbeat from {vm_name}...[/dim]")
+        while True:
+            elapsed = time.time() - start
+            if elapsed >= timeout_s:
+                return None
+            try:
+                response = self._client.query_workspace(
+                    workspace_id=self.workspace_id,
+                    query=query,
+                    timespan=timedelta(minutes=10),
+                )
+                if response.status == LogsQueryStatus.SUCCESS:
+                    for table in response.tables:
+                        if table.rows and table.rows[0][0] is not None:
+                            console.print(f"  [green]Heartbeat received[/green] after {round(elapsed)}s")
+                            return elapsed
+            except Exception as e:
+                console.print(f"  [dim]Heartbeat poll error: {e}[/dim]")
+            time.sleep(interval_s)
+
     def poll_alert(self, query: str, source: str, timeout_s: float, interval_s: float = 10.0) -> float | None:
         """
         Poll until the query returns results or timeout.

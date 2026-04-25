@@ -82,13 +82,39 @@ class Engine:
         # Recovery
         if scenario.recovery:
             console.print("[cyan]->[/cyan] Triggering recovery...")
-            T2 = time.time()
             executor.trigger_recovery(scenario.recovery)
+
+            # Wait for VM heartbeat — proves VM is back online
+            heartbeat_timeout = self._parse_duration(
+                scenario.recovery.get("heartbeat_timeout", "600s")
+            )
+            console.print("[cyan]->[/cyan] Waiting for VM heartbeat...")
+            heartbeat_elapsed = collector.wait_for_heartbeat(
+                vm_name=scenario.target["vm_name"],
+                timeout_s=heartbeat_timeout,
+            )
+
+            # Integrity check — proves data is in backup state
+            console.print("[cyan]->[/cyan] Verifying restore integrity...")
+            integrity_ok = executor.verify_restore_integrity()
+
             recovery_time = time.time() - T0
             metrics["recovery_s"] = round(recovery_time)
+            metrics["heartbeat_s"] = round(heartbeat_elapsed) if heartbeat_elapsed is not None else None
+
             threshold = self._parse_duration(scenario.recovery.get("time_max", "9999s"))
-            ok = recovery_time <= threshold
-            checks["recovery"] = "PASS" if ok else f"FAIL — {round(recovery_time/60)}min vs RTO {round(threshold/60)}min"
+            ok = recovery_time <= threshold and integrity_ok and heartbeat_elapsed is not None
+            if not ok:
+                reasons = []
+                if recovery_time > threshold:
+                    reasons.append(f"{round(recovery_time/60)}min vs RTO {round(threshold/60)}min")
+                if heartbeat_elapsed is None:
+                    reasons.append("heartbeat timeout")
+                if not integrity_ok:
+                    reasons.append("integrity check failed")
+                checks["recovery"] = "FAIL — " + ", ".join(reasons)
+            else:
+                checks["recovery"] = "PASS"
             console.print(f"  Recovery: {checks['recovery']}")
 
         # Cleanup

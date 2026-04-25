@@ -134,7 +134,7 @@ class AzureVMExecutor:
         while True:
             time.sleep(60)
             elapsed += 60
-            job = backup_client.backup_jobs.get(vault_name, rg, restore_job.name)
+            job = backup_client.job_details.get(vault_name, rg, restore_job.name)
             status = getattr(job.properties, "status", "Unknown")
             console.print(f"  [dim]Still restoring... {elapsed//60}min elapsed — {status}[/dim]")
             if status in ("Completed", "Failed", "Cancelled"):

@@ -33,10 +33,21 @@ resource "azurerm_linux_virtual_machine" "victim" {
 
   custom_data = base64encode(<<-EOF
     #!/bin/bash
-    mkfs.ext4 /dev/sdc
+    # Wait for the data disk to appear (udev may not have settled yet)
+    for i in $(seq 1 30); do
+      DATA_DISK=$(lsblk -dpno NAME,SIZE | awk '$2=="32G"{print $1}' | head -1)
+      [ -n "$DATA_DISK" ] && break
+      sleep 2
+    done
+    if [ -z "$DATA_DISK" ]; then
+      echo "ERROR: data disk not found after 60s" >&2
+      exit 1
+    fi
+    mkfs.ext4 "$DATA_DISK"
     mkdir -p /mnt/testdata
-    mount /dev/sdc /mnt/testdata
-    echo "/dev/sdc /mnt/testdata ext4 defaults,nofail 0 0" >> /etc/fstab
+    mount "$DATA_DISK" /mnt/testdata
+    DATA_UUID=$(blkid -o value -s UUID "$DATA_DISK")
+    echo "UUID=$DATA_UUID /mnt/testdata ext4 defaults,nofail 0 0" >> /etc/fstab
     touch /mnt/testdata/.annatar_test_marker
     chmod 600 /mnt/testdata/.annatar_test_marker
   EOF

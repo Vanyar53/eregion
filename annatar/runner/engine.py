@@ -57,9 +57,9 @@ class Engine:
             T0 = time.time()
             for step in scenario.steps:
                 console.print(f"[cyan]->[/cyan] {step.get('name', step.get('action'))}")
-                self._execute_action(executor, step)
                 if step.get("record") == "T0":
                     T0 = time.time()
+                self._execute_action(executor, step)
 
             # Detection
             if scenario.detection:

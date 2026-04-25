@@ -26,6 +26,12 @@ if [ ! -d "$TARGET" ]; then
   exit 1
 fi
 
+echo "=== disk diagnostic ==="
+lsblk -o NAME,SIZE,MOUNTPOINT,UUID
+echo "--- mounted at $TARGET ---"
+df -h "$TARGET" 2>/dev/null || echo "(not mounted)"
+echo "======================="
+
 # Marker must be present
 if [ -f "$MARKER" ]; then
   check "safety marker present" "ok"

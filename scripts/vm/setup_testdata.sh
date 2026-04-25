@@ -8,7 +8,13 @@ MARKER="$TARGET/.annatar_test_marker"
 set -euo pipefail
 
 if [ ! -d "$TARGET" ]; then
-  echo "[annatar] ERROR: $TARGET not mounted — attach and mount the test data disk first"
+  echo "[annatar] ERROR: $TARGET not found"
+  exit 1
+fi
+
+if ! mountpoint -q "$TARGET"; then
+  echo "[annatar] ERROR: $TARGET is not a mountpoint — data disk not mounted"
+  echo "[annatar] Check: lsblk and /etc/fstab (device naming issue after restore?)"
   exit 1
 fi
 

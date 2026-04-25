@@ -57,19 +57,19 @@ class AzureVMExecutor:
         Stops the VM, replaces disks with the latest restore point, restarts.
         This is the actual RTO: time from trigger to VM back online.
         """
+        import requests
         from azure.mgmt.recoveryservicesbackup import RecoveryServicesBackupClient
-        from azure.mgmt.recoveryservicesbackup.models import IaasVMRestoreRequest, RestoreRequestResource
 
         vault_name = config.get("vault", "rsv-annatar")
         rg = self.resource_group
-        fabric = "Azure"
         container_name = f"iaasvmcontainer;iaasvmcontainerv2;{rg};{self.vm_name}"
         item_name = f"vm;iaasvmcontainerv2;{rg};{self.vm_name}"
 
-        client = RecoveryServicesBackupClient(self._credential, self._subscription_id)
+        backup_client = RecoveryServicesBackupClient(self._credential, self._subscription_id)
 
         console.print(f"  [dim]Fetching recovery points from {vault_name}...[/dim]")
-        rps = list(client.recovery_points.list(vault_name, rg, fabric, container_name, item_name))
+        fabric = "Azure"
+        rps = list(backup_client.recovery_points.list(vault_name, rg, fabric, container_name, item_name))
         if not rps:
             raise RuntimeError("No recovery points found — run 'az backup protection backup-now' first")
 
@@ -78,50 +78,63 @@ class AzureVMExecutor:
         console.print(f"  [dim]Latest recovery point: {latest.name} ({rp_time})[/dim]")
 
         vm = self._compute.virtual_machines.get(rg, self.vm_name)
-
         storage_id = (
             f"/subscriptions/{self._subscription_id}/resourceGroups/{rg}"
             f"/providers/Microsoft.Storage/storageAccounts/stannatarexfil"
         )
 
-        restore_req = RestoreRequestResource(
-            properties=IaasVMRestoreRequest(
-                recovery_point_id=latest.name,
-                recovery_type="OriginalLocation",
-                source_resource_id=vm.id,
-                storage_account_id=storage_id,
-                region=vm.location,
-                affinity_group="",
-                create_new_cloud_service=False,
-                original_storage_account_option=False,
-            )
-        )
-
         console.print("  [dim]Deallocating VM before restore...[/dim]")
         self._compute.virtual_machines.begin_deallocate(rg, self.vm_name).result()
 
-        console.print("  [dim]Triggering restore to original location...[/dim]")
-        client.restores.begin_trigger(
-            vault_name, rg, fabric, container_name, item_name, latest.name, restore_req
+        token = self._credential.get_token("https://management.azure.com/.default").token
+        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+        container_enc = container_name.replace(";", "%3B")
+        item_enc = item_name.replace(";", "%3B")
+        url = (
+            f"https://management.azure.com/subscriptions/{self._subscription_id}"
+            f"/resourceGroups/{rg}/providers/Microsoft.RecoveryServices/vaults/{vault_name}"
+            f"/backupFabrics/Azure/protectionContainers/{container_enc}"
+            f"/protectedItems/{item_enc}/recoveryPoints/{latest.name}/restore"
+            f"?api-version=2021-10-01"
         )
-        # begin_trigger poller only tracks the trigger operation (accepted ≠ completed).
-        # Poll the actual backup job instead.
+        payload = {
+            "properties": {
+                "objectType": "IaasVMRestoreRequest",
+                "recoveryPointId": latest.name,
+                "recoveryType": "OriginalLocation",
+                "sourceResourceId": vm.id,
+                "storageAccountId": storage_id,
+                "region": vm.location,
+                "affinityGroup": "",
+                "createNewCloudService": False,
+                "originalStorageAccountOption": False,
+                "skipPreOLRBackup": True,
+                "targetVirtualMachineId": None,
+                "targetResourceGroupId": None,
+            }
+        }
+
+        console.print("  [dim]Triggering restore to original location...[/dim]")
+        r = requests.post(url, json=payload, headers=headers)
+        if r.status_code not in (200, 202):
+            raise RuntimeError(f"Restore trigger failed ({r.status_code}): {r.text[:300]}")
+
         time.sleep(15)
         restore_job = next(
-            (j for j in client.backup_jobs.list(vault_name, rg)
+            (j for j in backup_client.backup_jobs.list(vault_name, rg)
              if getattr(j.properties, "operation", "") == "Restore"
              and getattr(j.properties, "status", "") == "InProgress"),
             None,
         )
         if restore_job is None:
-            raise RuntimeError("Restore job not found — check Azure portal")
+            raise RuntimeError("Restore job not found after trigger — check Azure portal")
 
-        console.print(f"  [dim]Tracking job {restore_job.name} (30-60 min expected)...[/dim]")
+        console.print(f"  [dim]Tracking job {restore_job.name} (15-30 min expected)...[/dim]")
         elapsed = 0
         while True:
             time.sleep(60)
             elapsed += 60
-            job = client.backup_jobs.get(vault_name, rg, restore_job.name)
+            job = backup_client.backup_jobs.get(vault_name, rg, restore_job.name)
             status = getattr(job.properties, "status", "Unknown")
             console.print(f"  [dim]Still restoring... {elapsed//60}min elapsed — {status}[/dim]")
             if status in ("Completed", "Failed", "Cancelled"):

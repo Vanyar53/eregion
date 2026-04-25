@@ -14,7 +14,7 @@ setup: []
 steps:
   - name: exfiltrate_synthetic_data
     action: run_script_on_vm
-    script: scripts/exfil_sim.sh
+    script: scripts/vm/exfil_sim.sh
     record: T0
 
 detection:

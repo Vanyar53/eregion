@@ -73,6 +73,31 @@ make annatar-dry-run
 make annatar-run SCENARIO=scenarios/azure/ransomware-vm.yaml
 ```
 
+## Deployment model
+
+Annatar is **bring-your-own-monitoring**. It does not install an agent, deploy a SIEM, or create backup policies. It tests the monitoring and backup you already have.
+
+```
+YOUR INFRASTRUCTURE                    ANNATAR
+─────────────────────────────────────  ─────────────────────────────────
+Log Analytics Workspace ◄──── OMS ────  Test VM (provisioned by annatar init)
+Recovery Services Vault ◄── Backup ───  Test VM
+                                        │
+                                        ▼
+                                  Run attack script (T0)
+                                  Poll YOUR LAW for alert (T1)
+                                  Trigger YOUR RSV restore
+                                  Wait for Heartbeat in YOUR LAW (T3)
+                                  Verify disk integrity
+                                  Emit PASS/FAIL vs YOUR declared RTO
+```
+
+Two fields in the scenario YAML connect Annatar to your infrastructure:
+- `log_analytics_workspace_id` — your existing LAW workspace (Azure Portal → Log Analytics → Properties)
+- `recovery.vault` — the RSV vault that already protects your VM
+
+Everything else (NSG, backup policy, alert rules) stays in your environment, untouched. Annatar just measures it.
+
 ## Scenarios
 
 | Name | MITRE | What it tests |

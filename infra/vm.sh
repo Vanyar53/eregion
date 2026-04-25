@@ -1,7 +1,7 @@
 #!/bin/bash
 # Annatar — VM start/stop control
 
-RG="rg-annatar-test"
+RG="annatar"
 VM="vm-annatar-victim"
 
 usage() {

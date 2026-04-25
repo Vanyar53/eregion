@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from datetime import datetime, timezone
 
 from azure.identity import DefaultAzureCredential
 from azure.mgmt.compute import ComputeManagementClient
@@ -44,14 +45,14 @@ class AzureVMExecutor:
         console.print(f"  [dim]{output.strip()[-200:]}[/dim]")
         return output
 
-    def trigger_recovery(self, recovery_config: dict) -> None:
+    def trigger_recovery(self, recovery_config: dict, attack_time: float | None = None) -> None:
         action = recovery_config.get("action")
         if action == "azure_backup_restore":
-            self._trigger_backup_restore(recovery_config)
+            self._trigger_backup_restore(recovery_config, attack_time)
         else:
             raise ValueError(f"Unsupported recovery action: {action}")
 
-    def _trigger_backup_restore(self, config: dict) -> None:
+    def _trigger_backup_restore(self, config: dict, attack_time: float | None = None) -> None:
         """Trigger Azure Backup OriginalLocation restore and poll until completion.
 
         Stops the VM, replaces disks with the latest restore point, restarts.
@@ -71,11 +72,26 @@ class AzureVMExecutor:
         fabric = "Azure"
         rps = list(backup_client.recovery_points.list(vault_name, rg, fabric, container_name, item_name))
         if not rps:
-            raise RuntimeError("No recovery points found — run 'az backup protection backup-now' first")
+            raise RuntimeError("No recovery points found — run 'annatar init' first")
 
-        latest = rps[0]
+        if attack_time is not None:
+            attack_dt = datetime.fromtimestamp(attack_time, tz=timezone.utc)
+            clean_rps = [
+                rp for rp in rps
+                if getattr(rp.properties, "recovery_point_time", None) is not None
+                and rp.properties.recovery_point_time < attack_dt
+            ]
+            if not clean_rps:
+                raise RuntimeError(
+                    f"No clean recovery point found before attack time {attack_dt.isoformat()} — "
+                    "a backup may have run during the attack. Check the portal and re-run 'annatar init'."
+                )
+            latest = clean_rps[0]
+        else:
+            latest = rps[0]
+
         rp_time = getattr(latest.properties, "recovery_point_time", "unknown")
-        console.print(f"  [dim]Latest recovery point: {latest.name} ({rp_time})[/dim]")
+        console.print(f"  [dim]Recovery point: {latest.name} ({rp_time})[/dim]")
 
         vm = self._compute.virtual_machines.get(rg, self.vm_name)
         storage_id = (
@@ -148,7 +164,7 @@ class AzureVMExecutor:
         self._compute.virtual_machines.begin_start(rg, self.vm_name).result()
         console.print("  [dim]VM started.[/dim]")
 
-    def verify_restore_integrity(self, script_path: str = "scripts/verify_restore.sh") -> bool:
+    def verify_restore_integrity(self, script_path: str = "scripts/vm/verify_restore.sh") -> bool:
         """Run the integrity check script on the VM. Returns True if PASS."""
         output = self.run_script(script_path)
         passed = "INTEGRITY_PASS" in output

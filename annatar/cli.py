@@ -51,7 +51,23 @@ def report(run_id: str):
 
 
 @cli.command()
-def init():
-    """Initialize Azure test environment via Terraform."""
-    console.print("[yellow]→[/yellow] Initializing Azure test environment...")
-    console.print("  Run: cd infra/terraform && terraform init && terraform apply")
+@click.option("--yes", is_flag=True, help="Pass -auto-approve to terraform apply.")
+@click.argument("scenario", type=click.Path(exists=True), required=False)
+def init(yes: bool, scenario: str | None):
+    """Provision Azure test environment.
+
+    Optionally pass a SCENARIO path to also prepare the VM and create the
+    first clean backup in one step:
+
+        annatar init --yes scenarios/azure/ransomware-vm.yaml
+    """
+    from annatar.runner.initializer import InitRunner
+    InitRunner().run(auto_approve=yes, scenario_path=scenario)
+
+
+@cli.command()
+@click.argument("scenario", type=click.Path(exists=True))
+def snapshot(scenario: str):
+    """Clean the VM disk and take a fresh backup — use before re-running a scenario."""
+    from annatar.runner.initializer import InitRunner
+    InitRunner().snapshot(scenario)

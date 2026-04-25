@@ -5,7 +5,7 @@
 TARGET="/mnt/testdata"
 MARKER="$TARGET/.annatar_test_marker"
 
-set -euo pipefail
+set -uo pipefail
 
 PASS=0
 FAIL=0
@@ -34,7 +34,7 @@ else
 fi
 
 # No encryption artifacts
-enc_files=$(ls "$TARGET"/enc_*.dat 2>/dev/null | wc -l)
+enc_files=$(find "$TARGET" -maxdepth 1 -name "enc_*.dat" -type f | wc -l)
 if [ "$enc_files" -eq 0 ]; then
   check "no enc_*.dat files" "ok"
 else

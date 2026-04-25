@@ -52,91 +52,98 @@ class Engine:
         for action in scenario.setup:
             self._execute_action(executor, action)
 
-        # Steps
-        T0 = time.time()
-        for step in scenario.steps:
-            console.print(f"[cyan]->[/cyan] {step.get('name', step.get('action'))}")
-            self._execute_action(executor, step)
-            if step.get("record") == "T0":
-                T0 = time.time()
+        try:
+            # Steps
+            T0 = time.time()
+            for step in scenario.steps:
+                console.print(f"[cyan]->[/cyan] {step.get('name', step.get('action'))}")
+                self._execute_action(executor, step)
+                if step.get("record") == "T0":
+                    T0 = time.time()
 
-        # Detection
-        if scenario.detection:
-            console.print("[cyan]->[/cyan] Waiting for detection alert...")
-            detection_time = collector.poll_alert(
-                query=scenario.detection["query"],
-                source=scenario.detection["source"],
-                timeout_s=self._parse_duration(scenario.detection.get("timeout", "300s")),
+            # Detection
+            if scenario.detection:
+                console.print("[cyan]->[/cyan] Waiting for detection alert...")
+                detection_time = collector.poll_alert(
+                    query=scenario.detection["query"],
+                    source=scenario.detection["source"],
+                    timeout_s=self._parse_duration(scenario.detection.get("timeout", "300s")),
+                )
+                if detection_time is not None:
+                    metrics["detection_s"] = round(detection_time)
+                    threshold = self._parse_duration(scenario.detection.get("time_max", "9999s"))
+                    ok = detection_time <= threshold
+                    checks["detection"] = "PASS" if ok else f"FAIL — {round(detection_time)}s vs seuil {threshold}s"
+                    console.print(f"  Detection: {checks['detection']}")
+                else:
+                    metrics["detection_s"] = None
+                    checks["detection"] = "FAIL — timeout, no alert fired"
+                    console.print(f"  [red]Detection timeout[/red]")
+
+            # Recovery
+            if scenario.recovery:
+                console.print("[cyan]->[/cyan] Triggering recovery...")
+                executor.trigger_recovery(scenario.recovery, attack_time=T0)
+
+                # Wait for VM heartbeat — proves VM is back online
+                heartbeat_timeout = self._parse_duration(
+                    scenario.recovery.get("heartbeat_timeout", "600s")
+                )
+                console.print("[cyan]->[/cyan] Waiting for VM heartbeat...")
+                heartbeat_elapsed = collector.wait_for_heartbeat(
+                    vm_name=scenario.target["vm_name"],
+                    timeout_s=heartbeat_timeout,
+                )
+
+                # Integrity check — proves data is in backup state
+                console.print("[cyan]->[/cyan] Verifying restore integrity...")
+                integrity_ok = executor.verify_restore_integrity()
+
+                recovery_time = time.time() - T0
+                metrics["recovery_s"] = round(recovery_time)
+                metrics["heartbeat_s"] = round(heartbeat_elapsed) if heartbeat_elapsed is not None else None
+
+                threshold = self._parse_duration(scenario.recovery.get("time_max", "9999s"))
+                ok = recovery_time <= threshold and integrity_ok and heartbeat_elapsed is not None
+                if not ok:
+                    reasons = []
+                    if recovery_time > threshold:
+                        reasons.append(f"{round(recovery_time/60)}min vs RTO {round(threshold/60)}min")
+                    if heartbeat_elapsed is None:
+                        reasons.append("heartbeat timeout")
+                    if not integrity_ok:
+                        reasons.append("integrity check failed")
+                    checks["recovery"] = "FAIL — " + ", ".join(reasons)
+                else:
+                    checks["recovery"] = "PASS"
+                console.print(f"  Recovery: {checks['recovery']}")
+
+            overall = "PASS" if all("PASS" in v for v in checks.values()) else "FAIL"
+            report = RunReport(
+                scenario=scenario.name,
+                run_id=run_id,
+                mitre=scenario.mitre,
+                result=overall,
+                metrics=metrics,
+                thresholds={
+                    "detection_max_s": self._parse_duration(scenario.detection.get("time_max", "9999s")) if scenario.detection else None,
+                    "recovery_max_s": self._parse_duration(scenario.recovery.get("time_max", "9999s")) if scenario.recovery else None,
+                },
+                checks=checks,
             )
-            if detection_time is not None:
-                metrics["detection_s"] = round(detection_time)
-                threshold = self._parse_duration(scenario.detection.get("time_max", "9999s"))
-                ok = detection_time <= threshold
-                checks["detection"] = "PASS" if ok else f"FAIL — {round(detection_time)}s vs seuil {threshold}s"
-                console.print(f"  Detection: {checks['detection']}")
-            else:
-                metrics["detection_s"] = None
-                checks["detection"] = "FAIL — timeout, no alert fired"
-                console.print(f"  [red]Detection timeout[/red]")
+            path = report.save()
+            report.render()
+            console.print(f"\n[dim]Report saved: {path}[/dim]")
 
-        # Recovery
-        if scenario.recovery:
-            console.print("[cyan]->[/cyan] Triggering recovery...")
-            executor.trigger_recovery(scenario.recovery)
-
-            # Wait for VM heartbeat — proves VM is back online
-            heartbeat_timeout = self._parse_duration(
-                scenario.recovery.get("heartbeat_timeout", "600s")
-            )
-            console.print("[cyan]->[/cyan] Waiting for VM heartbeat...")
-            heartbeat_elapsed = collector.wait_for_heartbeat(
-                vm_name=scenario.target["vm_name"],
-                timeout_s=heartbeat_timeout,
-            )
-
-            # Integrity check — proves data is in backup state
-            console.print("[cyan]->[/cyan] Verifying restore integrity...")
-            integrity_ok = executor.verify_restore_integrity()
-
-            recovery_time = time.time() - T0
-            metrics["recovery_s"] = round(recovery_time)
-            metrics["heartbeat_s"] = round(heartbeat_elapsed) if heartbeat_elapsed is not None else None
-
-            threshold = self._parse_duration(scenario.recovery.get("time_max", "9999s"))
-            ok = recovery_time <= threshold and integrity_ok and heartbeat_elapsed is not None
-            if not ok:
-                reasons = []
-                if recovery_time > threshold:
-                    reasons.append(f"{round(recovery_time/60)}min vs RTO {round(threshold/60)}min")
-                if heartbeat_elapsed is None:
-                    reasons.append("heartbeat timeout")
-                if not integrity_ok:
-                    reasons.append("integrity check failed")
-                checks["recovery"] = "FAIL — " + ", ".join(reasons)
-            else:
-                checks["recovery"] = "PASS"
-            console.print(f"  Recovery: {checks['recovery']}")
-
-        # Cleanup
-        for action in scenario.cleanup:
-            self._execute_action(executor, action)
-
-        overall = "PASS" if all("PASS" in v for v in checks.values()) else "FAIL"
-        report = RunReport(
-            scenario=scenario.name,
-            run_id=run_id,
-            mitre=scenario.mitre,
-            result=overall,
-            metrics=metrics,
-            thresholds={
-                "detection_max_s": self._parse_duration(scenario.detection.get("time_max", "9999s")) if scenario.detection else None,
-                "recovery_max_s": self._parse_duration(scenario.recovery.get("time_max", "9999s")) if scenario.recovery else None,
-            },
-            checks=checks,
-        )
-        path = report.save()
-        report.render()
-        console.print(f"\n[dim]Report saved: {path}[/dim]")
+        finally:
+            # Cleanup always runs — even if the scenario crashes mid-way
+            if scenario.cleanup:
+                console.print("[cyan]->[/cyan] Running cleanup...")
+                for action in scenario.cleanup:
+                    try:
+                        self._execute_action(executor, action)
+                    except Exception as e:
+                        console.print(f"  [yellow]Cleanup warning:[/yellow] {e}")
 
     def _dry_run_display(self, scenario):
         console.print("[yellow]DRY RUN — no actions will be executed[/yellow]\n")

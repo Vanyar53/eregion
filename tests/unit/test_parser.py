@@ -24,8 +24,8 @@ def test_load_ransomware_scenario():
     assert s.mitre == "T1486"
     assert s.target["type"] == "azure_vm"
     assert len(s.steps) >= 1
-    assert s.thresholds["detection_time_max"] == "120s"
-    assert s.thresholds["recovery_time_max"] == "1800s"
+    assert s.detection["time_max"] == "180s"
+    assert s.recovery["time_max"] == "1800s"
 
 
 def test_load_exfil_scenario():

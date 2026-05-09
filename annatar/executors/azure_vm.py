@@ -24,8 +24,20 @@ class AzureVMExecutor:
         rg = client.resource_groups.get(rg_name)
         return rg.tags or {}
 
+    def _ensure_vm_running(self) -> None:
+        iv = self._compute.virtual_machines.get(
+            self.resource_group, self.vm_name, expand="instanceView"
+        ).instance_view
+        statuses = {s.code for s in (iv.statuses or [])}
+        if "PowerState/running" not in statuses:
+            console.print(f"  [dim]VM not running — starting {self.vm_name}...[/dim]")
+            self._compute.virtual_machines.begin_start(self.resource_group, self.vm_name).result()
+            console.print("  [dim]VM started.[/dim]")
+
     def run_script(self, script_path: str, params: list[str] | None = None) -> str:
         """Execute a shell script on the VM via Azure Run Command."""
+        self._ensure_vm_running()
+
         with open(script_path) as f:
             script_content = f.read()
 
@@ -74,6 +86,13 @@ class AzureVMExecutor:
         if not rps:
             raise RuntimeError("No recovery points found — run 'annatar init' first")
 
+        console.print(f"  [dim]{len(rps)} recovery point(s) available:[/dim]")
+        for rp in rps:
+            rp_t = getattr(rp.properties, "recovery_point_time", "?")
+            tiers = [t.type for t in (getattr(rp.properties, "recovery_point_tier_details", None) or []) if getattr(t, "status", "") == "Valid"]
+            tier_str = "+".join(tiers) if tiers else "unknown-tier"
+            console.print(f"    [dim]{rp.name}  {rp_t}  [{tier_str}][/dim]")
+
         if attack_time is not None:
             attack_dt = datetime.fromtimestamp(attack_time, tz=timezone.utc)
             clean_rps = [
@@ -91,7 +110,8 @@ class AzureVMExecutor:
             latest = rps[0]
 
         rp_time = getattr(latest.properties, "recovery_point_time", "unknown")
-        console.print(f"  [dim]Recovery point: {latest.name} ({rp_time})[/dim]")
+        tiers = [t.type for t in (getattr(latest.properties, "recovery_point_tier_details", None) or []) if getattr(t, "status", "") == "Valid"]
+        console.print(f"  [dim]Selected RP: {latest.name}  {rp_time}  [{'+'.join(tiers) if tiers else 'unknown-tier'}][/dim]")
 
         vm = self._compute.virtual_machines.get(rg, self.vm_name)
         storage_id = (

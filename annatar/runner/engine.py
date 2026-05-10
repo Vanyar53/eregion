@@ -68,6 +68,7 @@ class Engine:
                     query=scenario.detection["query"],
                     source=scenario.detection["source"],
                     timeout_s=self._parse_duration(scenario.detection.get("timeout", "300s")),
+                    since=T0,
                 )
                 if detection_time is not None:
                     metrics["detection_s"] = round(detection_time)
@@ -93,6 +94,7 @@ class Engine:
                 heartbeat_elapsed = collector.wait_for_heartbeat(
                     vm_name=scenario.target["vm_name"],
                     timeout_s=heartbeat_timeout,
+                    since=T0,
                 )
 
                 # Integrity check — proves data is in backup state

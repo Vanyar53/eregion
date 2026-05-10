@@ -212,6 +212,10 @@ class AzureVMExecutor:
         if snapshot_name:
             self._restore_data_disk_from_snapshot(rg, snapshot_name)
 
+        # Azure Backup OriginalLocation restore leaves the previous OS and data disks
+        # unattached in the resource group. Clean them up to avoid cost accumulation.
+        self._cleanup_orphan_backup_disks(rg)
+
     def _restore_data_disk_from_snapshot(self, rg: str, snapshot_name: str) -> None:
         """Restore the data disk to clean snapshot state while the VM is running.
 
@@ -318,6 +322,29 @@ echo "[annatar] DATA_DISK_RESTORED"
         self._compute.virtual_machines.begin_create_or_update(rg, self.vm_name, vm).result()
         self._compute.disks.begin_delete(rg, temp_disk_name).result()
         console.print(f"  [dim]Temp disk removed.[/dim]")
+
+    def _cleanup_orphan_backup_disks(self, rg: str) -> None:
+        """Delete unattached disks left behind by Azure Backup OriginalLocation restores.
+
+        Each restore creates a renamed copy of the previous OS+data disk. Without cleanup
+        these accumulate indefinitely. We identify them by the naming pattern Azure uses
+        and confirm they are unattached before deleting.
+        """
+        vm_prefix = self.vm_name.replace("-", "")
+        patterns = (f"{vm_prefix}-datadisk-", f"{vm_prefix}-osdisk-")
+        disks = self._compute.disks.list_by_resource_group(rg)
+        pollers = []
+        for disk in disks:
+            if disk.disk_state != "Unattached":
+                continue
+            name_lower = disk.name.lower()
+            if any(name_lower.startswith(p) for p in patterns):
+                console.print(f"  [dim]Deleting orphan disk {disk.name}...[/dim]")
+                pollers.append(self._compute.disks.begin_delete(rg, disk.name))
+        if pollers:
+            for p in pollers:
+                p.result()
+            console.print(f"  [dim]Cleaned up {len(pollers)} orphan backup disk(s).[/dim]")
 
     def verify_restore_integrity(self, script_path: str = "scripts/vm/verify_restore.sh") -> bool:
         """Run the integrity check script on the VM. Returns True if PASS."""

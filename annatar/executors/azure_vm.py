@@ -93,6 +93,12 @@ class AzureVMExecutor:
             tier_str = "+".join(tiers) if tiers else "unknown-tier"
             console.print(f"    [dim]{rp.name}  {rp_t}  [{tier_str}][/dim]")
 
+        def _has_vault_tier(rp) -> bool:
+            return any(
+                t.type == "HardenedRP" and getattr(t, "status", "") == "Valid"
+                for t in (getattr(rp.properties, "recovery_point_tier_details", None) or [])
+            )
+
         if attack_time is not None:
             attack_dt = datetime.fromtimestamp(attack_time, tz=timezone.utc)
             clean_rps = [
@@ -105,9 +111,16 @@ class AzureVMExecutor:
                     f"No clean recovery point found before attack time {attack_dt.isoformat()} — "
                     "a backup may have run during the attack. Check the portal and re-run 'annatar init'."
                 )
-            latest = clean_rps[0]
+            vaulted = [rp for rp in clean_rps if _has_vault_tier(rp)]
+            if not vaulted:
+                raise RuntimeError(
+                    "No clean recovery point with completed vault transfer found — "
+                    "wait for the backup vault transfer to finish before running a test."
+                )
+            latest = vaulted[0]
         else:
-            latest = rps[0]
+            vaulted = [rp for rp in rps if _has_vault_tier(rp)]
+            latest = vaulted[0] if vaulted else rps[0]
 
         rp_time = getattr(latest.properties, "recovery_point_time", "unknown")
         tiers = [t.type for t in (getattr(latest.properties, "recovery_point_tier_details", None) or []) if getattr(t, "status", "") == "Valid"]
@@ -133,6 +146,14 @@ class AzureVMExecutor:
             f"/protectedItems/{item_enc}/recoveryPoints/{latest.name}/restore"
             f"?api-version=2021-10-01"
         )
+        # Collect all data disk LUNs attached to the VM so we can explicitly
+        # include them in the restore request. Without this, Azure Backup V1
+        # policy OriginalLocation restore silently skips data disks.
+        data_luns = [
+            d.lun for d in (vm.storage_profile.data_disks or [])
+        ]
+        console.print(f"  [dim]Data disk LUNs to restore: {data_luns}[/dim]")
+
         payload = {
             "properties": {
                 "objectType": "IaasVMRestoreRequest",
@@ -147,6 +168,7 @@ class AzureVMExecutor:
                 "skipPreOLRBackup": True,
                 "targetVirtualMachineId": None,
                 "targetResourceGroupId": None,
+                "restoreDiskLunList": data_luns,
             }
         }
 
@@ -184,6 +206,119 @@ class AzureVMExecutor:
         self._compute.virtual_machines.begin_start(rg, self.vm_name).result()
         console.print("  [dim]VM started.[/dim]")
 
+        # Azure Backup V1 does not restore externally-attached data disk content.
+        # Hot-attach a disk from a clean snapshot, rsync the state, then detach.
+        snapshot_name = config.get("data_disk_snapshot")
+        if snapshot_name:
+            self._restore_data_disk_from_snapshot(rg, snapshot_name)
+
+    def _restore_data_disk_from_snapshot(self, rg: str, snapshot_name: str) -> None:
+        """Restore the data disk to clean snapshot state while the VM is running.
+
+        Azure Backup V1 does not restore externally-attached managed disk content.
+        We work around this by hot-attaching a disk created from the clean snapshot
+        at a temp LUN, then rsyncing the snapshot state onto /mnt/testdata, then
+        detaching the temp disk. No disk swap — no boot-time UUID ambiguity.
+
+        Must be called AFTER the VM has started.
+        """
+        from azure.mgmt.compute.models import DataDisk, ManagedDiskParameters, DiskCreateOptionTypes
+        import tempfile, os
+
+        snapshot = self._compute.snapshots.get(rg, snapshot_name)
+        location = snapshot.location
+        disk_size_gb = snapshot.disk_size_gb
+
+        # Find a free LUN for the temp disk
+        vm = self._compute.virtual_machines.get(rg, self.vm_name)
+        used_luns = {d.lun for d in (vm.storage_profile.data_disks or [])}
+        temp_lun = next(i for i in range(20) if i not in used_luns)
+
+        # Create a disk from the clean snapshot
+        temp_disk_name = f"disk-annatar-snap-temp-{int(time.time())}"
+        console.print(f"  [dim]Creating temp disk {temp_disk_name} from snapshot {snapshot_name}...[/dim]")
+        temp_disk = self._compute.disks.begin_create_or_update(
+            rg, temp_disk_name,
+            {
+                "location": location,
+                "sku": {"name": "Premium_LRS"},
+                "properties": {
+                    "creationData": {"createOption": "Copy", "sourceResourceId": snapshot.id},
+                    "diskSizeGB": disk_size_gb,
+                },
+            },
+        ).result()
+        console.print(f"  [dim]Temp disk created at LUN {temp_lun}[/dim]")
+
+        # Hot-attach to the running VM
+        vm = self._compute.virtual_machines.get(rg, self.vm_name)
+        vm.storage_profile.data_disks.append(
+            DataDisk(
+                lun=temp_lun,
+                name=temp_disk_name,
+                create_option=DiskCreateOptionTypes.ATTACH,
+                managed_disk=ManagedDiskParameters(id=temp_disk.id),
+            )
+        )
+        self._compute.virtual_machines.begin_create_or_update(rg, self.vm_name, vm).result()
+        console.print(f"  [dim]Temp disk hot-attached. Running rsync restore...[/dim]")
+
+        # Rsync clean snapshot state onto the data disk from inside the VM.
+        # Both disks share the same filesystem UUID (snapshot is a block copy).
+        # We find the unmounted one by elimination — it's the newly attached temp disk.
+        restore_script = """\
+#!/bin/bash
+set -uo pipefail
+TARGET="/mnt/testdata"
+SNAP_MOUNT="/mnt/_annatar_snap_restore"
+
+DATA_DEV=$(findmnt -n -o SOURCE "$TARGET" 2>/dev/null)
+if [ -z "$DATA_DEV" ]; then
+  echo "[ERROR] $TARGET is not mounted"
+  exit 1
+fi
+DATA_UUID=$(blkid -s UUID -o value "$DATA_DEV")
+
+SNAP_DEV=$(blkid -t "UUID=$DATA_UUID" -o device 2>/dev/null | grep -v "$DATA_DEV" | head -1)
+if [ -z "$SNAP_DEV" ]; then
+  echo "[ERROR] Could not find snapshot disk (UUID=$DATA_UUID, data=$DATA_DEV)"
+  exit 1
+fi
+
+echo "[annatar] Mounting snapshot disk $SNAP_DEV (read-only)..."
+mkdir -p "$SNAP_MOUNT"
+mount -o ro "$SNAP_DEV" "$SNAP_MOUNT"
+
+echo "[annatar] Rsyncing clean state from snapshot to $TARGET..."
+rsync -a --delete --exclude=lost+found --exclude='.annatar_test_marker' "$SNAP_MOUNT/" "$TARGET/"
+# Preserve the marker (created by setup, not by attack)
+[ -f "$SNAP_MOUNT/.annatar_test_marker" ] && cp -p "$SNAP_MOUNT/.annatar_test_marker" "$TARGET/"
+
+umount "$SNAP_MOUNT"
+rmdir "$SNAP_MOUNT"
+echo "[annatar] DATA_DISK_RESTORED"
+"""
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False, prefix='annatar_restore_') as f:
+            f.write(restore_script)
+            tmp_path = f.name
+        try:
+            output = self.run_script(tmp_path)
+            if "DATA_DISK_RESTORED" not in output:
+                raise RuntimeError(f"Data disk restore script did not complete: {output[-300:]}")
+        finally:
+            os.unlink(tmp_path)
+        console.print(f"  [green]Data disk restored from snapshot via rsync.[/green]")
+
+        # Hot-detach and delete the temp disk
+        console.print(f"  [dim]Detaching temp disk...[/dim]")
+        vm = self._compute.virtual_machines.get(rg, self.vm_name)
+        vm.storage_profile.data_disks = [
+            d for d in (vm.storage_profile.data_disks or []) if d.lun != temp_lun
+        ]
+        self._compute.virtual_machines.begin_create_or_update(rg, self.vm_name, vm).result()
+        self._compute.disks.begin_delete(rg, temp_disk_name).result()
+        console.print(f"  [dim]Temp disk removed.[/dim]")
+
     def verify_restore_integrity(self, script_path: str = "scripts/vm/verify_restore.sh") -> bool:
         """Run the integrity check script on the VM. Returns True if PASS."""
         output = self.run_script(script_path)
@@ -192,7 +327,7 @@ class AzureVMExecutor:
             console.print("  [green]Integrity check: PASS[/green]")
         else:
             console.print("  [red]Integrity check: FAIL[/red]")
-            console.print(f"  [dim]{output.strip()[-300:]}[/dim]")
+            console.print(f"  [dim]{output.strip()}[/dim]")
         return passed
 
     def _get_subscription_id(self) -> str:

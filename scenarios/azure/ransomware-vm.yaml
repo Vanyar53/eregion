@@ -66,6 +66,7 @@ detection:
 recovery:
   action: azure_backup_restore
   vault: rsv-annatar      # Name of your Recovery Services Vault
+  data_disk_snapshot: snap-annatar-testdata  # Snapshot of clean data disk (Azure Backup V1 does not restore externally-attached data disks)
   time_max: "1800s"       # Declared RTO = 30 minutes. Adjust to your organisation's SLA.
   heartbeat_timeout: "600s"  # Max wait for VM heartbeat after restore completes
   record: T3

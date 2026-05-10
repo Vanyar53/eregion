@@ -45,6 +45,10 @@ if [ "$enc_files" -eq 0 ]; then
   check "no enc_*.dat files" "ok"
 else
   check "no enc_*.dat files" "$enc_files file(s) found — restore did not clean up attack artifacts"
+  echo "  enc file timestamps (to distinguish backup data vs current attack):"
+  find "$TARGET" -maxdepth 1 -name "enc_*.dat" -o -name "seed.dat" 2>/dev/null | xargs -I{} stat --format="  %n  mtime=%y" {} 2>/dev/null | head -5
+  echo "  disk UUID: $(blkid -s UUID -o value $(df --output=source "$TARGET" | tail -1) 2>/dev/null)"
+  echo "  marker mtime: $(stat --format='%y' $MARKER 2>/dev/null)"
 fi
 
 seed_file="$TARGET/seed.dat"

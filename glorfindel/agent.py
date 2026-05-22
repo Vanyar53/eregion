@@ -45,8 +45,13 @@ _DECISION_TOOL = {
             },
             "action": {
                 "type": "string",
-                "description": "The single action to take.",
-                "enum": list(AUTONOMOUS_ACTIONS | HUMAN_APPROVAL_REQUIRED),
+                "description": (
+                    "The action to take. Use a known action if one fits: "
+                    f"autonomous={sorted(AUTONOMOUS_ACTIONS)}, "
+                    f"requires_approval={sorted(HUMAN_APPROVAL_REQUIRED)}. "
+                    "If none fit, propose a new action name (snake_case) and explain it "
+                    "in escalation_reason — it will always be escalated to a human."
+                ),
             },
             "reversible": {
                 "type": "boolean",
@@ -72,23 +77,25 @@ _DECISION_TOOL = {
     },
 }
 
-_SYSTEM_PROMPT = """\
+_SYSTEM_PROMPT = f"""\
 You are Glorfindel, a security response agent for cloud infrastructure.
 
 Your role: analyze threat signals produced by Annatar (a controlled attack simulation) \
 and decide how to respond.
 
 Autonomy rules — you MUST follow these without exception:
-- Reversible actions (isolate_vm, revoke_temp_access, snapshot_before_restore, block_suspicious_ip): \
-act autonomously, set escalate=false.
-- Destructive actions (delete_resource, modify_network_rule, escalate_permissions, wipe_storage): \
-ALWAYS set escalate=true. Never act alone on destructive actions.
+- Known autonomous actions {sorted(AUTONOMOUS_ACTIONS)}: act alone, set escalate=false.
+- Known destructive actions {sorted(HUMAN_APPROVAL_REQUIRED)}: ALWAYS escalate, set escalate=true.
+- Unknown/proposed actions: if no known action fits the situation, propose a new action name
+  (snake_case) and explain exactly what it should do in escalation_reason. Always set escalate=true
+  for proposed actions — a human will review, approve, and potentially codify it.
 
 When reasoning:
 1. Identify the TTP (MITRE ATT&CK) and what it means for this resource.
 2. Consider the severity and what the attacker likely achieved or is attempting.
-3. Select the minimum effective action (prefer isolation over deletion).
-4. If past cycles are available, use them to calibrate your confidence.
+3. Select the minimum effective action — prefer known reversible actions over proposing new ones.
+4. Only propose a new action if no known action adequately addresses the threat.
+5. If past cycles are available, use them to calibrate your confidence.
 
 You always call the security_decision tool — never respond in plain text.
 """
@@ -161,12 +168,21 @@ def execute_action(state: GlorfindelState, *, connector: CloudConnector) -> Glor
 
 def escalate_to_human(state: GlorfindelState) -> GlorfindelState:
     """Mark the decision as escalated — human must approve before any action."""
+    action = state["action"]
+    if action in HUMAN_APPROVAL_REQUIRED:
+        escalation_type = "destructive_action"
+    elif action not in AUTONOMOUS_ACTIONS:
+        escalation_type = "proposed_action"  # LLM invented a new action
+    else:
+        escalation_type = "low_confidence"
+
     return {
         **state,
         "outcome": {
             "status": "escalated",
+            "escalation_type": escalation_type,
             "reason": state["escalation_reason"],
-            "action_pending": state["action"],
+            "action_pending": action,
             "executed": False,
         },
     }
@@ -215,8 +231,13 @@ def _route_after_verify(state: GlorfindelState) -> str:
 
 
 def _route_after_decide(state: GlorfindelState) -> str:
-    if state["escalate"] or state["action"] in HUMAN_APPROVAL_REQUIRED:
+    action = state["action"]
+    if state["escalate"]:
         return "escalate_to_human"
+    if action in HUMAN_APPROVAL_REQUIRED:
+        return "escalate_to_human"
+    if action not in AUTONOMOUS_ACTIONS:
+        return "escalate_to_human"  # proposed unknown action — always escalate
     return "execute_action"
 
 

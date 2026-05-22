@@ -151,6 +151,44 @@ def test_route_escalates_when_llm_requests():
     assert _route_after_decide(state) == "escalate_to_human"
 
 
+def test_route_escalates_unknown_proposed_action():
+    from glorfindel.agent import _route_after_decide
+
+    state = {
+        "escalate": False,
+        "action": "revoke_service_principal_tokens",  # unknown — LLM proposed it
+        "signal": {},
+        "past_cycles": [],
+        "reasoning": "",
+        "confidence": 0.85,
+        "reversible": False,
+        "explanation": "",
+        "escalation_reason": "Revoke all tokens for the compromised SP — not in known action set",
+        "outcome": None,
+    }
+    assert _route_after_decide(state) == "escalate_to_human"
+
+
+def test_escalate_to_human_marks_proposed_action_type():
+    from glorfindel.agent import escalate_to_human
+
+    state = {
+        "escalate": False,
+        "action": "revoke_service_principal_tokens",
+        "signal": {},
+        "past_cycles": [],
+        "reasoning": "",
+        "confidence": 0.85,
+        "reversible": False,
+        "explanation": "",
+        "escalation_reason": "Revoke all tokens for the compromised SP",
+        "outcome": None,
+    }
+    result = escalate_to_human(state)
+    assert result["outcome"]["escalation_type"] == "proposed_action"
+    assert result["outcome"]["action_pending"] == "revoke_service_principal_tokens"
+
+
 # ── memory ────────────────────────────────────────────────────────────────────
 
 def test_memory_store_and_retrieve(tmp_path):

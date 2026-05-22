@@ -1,4 +1,4 @@
-IMAGE   := annatar
+IMAGE    := eregion
 SCENARIO ?= scenarios/azure/ransomware-vm.yaml
 
 AZURE_ENV := \
@@ -7,28 +7,50 @@ AZURE_ENV := \
 	-e AZURE_TENANT_ID \
 	-e AZURE_SUBSCRIPTION_ID
 
-DOCKER_RUN := docker run --rm $(AZURE_ENV) \
+COMMON_VOLS := \
 	-v $(PWD)/scenarios:/app/scenarios \
 	-v $(PWD)/scripts:/app/scripts \
-	$(IMAGE)
+	-v $(PWD)/runs:/app/runs
 
-.PHONY: annatar-build annatar-run annatar-dry-run annatar-validate annatar-list
+DOCKER_ANNATAR := docker run --rm $(AZURE_ENV) $(COMMON_VOLS) --entrypoint annatar $(IMAGE)
+DOCKER_GLORFINDEL := docker run --rm $(AZURE_ENV) $(COMMON_VOLS) \
+	-e ANTHROPIC_API_KEY \
+	--entrypoint glorfindel $(IMAGE)
 
-annatar-build:
+.PHONY: build \
+	annatar-run annatar-dry-run annatar-validate annatar-list \
+	glorfindel-respond glorfindel-dry-run glorfindel-release \
+	test
+
+build:
 	docker build -t $(IMAGE) .
 
-annatar-run: annatar-build
-	$(DOCKER_RUN) run $(SCENARIO) --yes
+# ── Annatar ───────────────────────────────────────────────────────────────────
 
-annatar-dry-run: annatar-build
-	$(DOCKER_RUN) run $(SCENARIO) --dry-run --yes
+annatar-run: build
+	$(DOCKER_ANNATAR) run $(SCENARIO) --yes
+
+annatar-dry-run: build
+	$(DOCKER_ANNATAR) run $(SCENARIO) --dry-run --yes
 
 annatar-validate:
-	docker run --rm \
-		-v $(PWD)/scenarios:/app/scenarios \
-		$(IMAGE) validate $(SCENARIO)
+	docker run --rm -v $(PWD)/scenarios:/app/scenarios --entrypoint annatar $(IMAGE) validate $(SCENARIO)
 
 annatar-list:
-	docker run --rm \
-		-v $(PWD)/scenarios:/app/scenarios \
-		$(IMAGE) list
+	docker run --rm -v $(PWD)/scenarios:/app/scenarios --entrypoint annatar $(IMAGE) list
+
+# ── Glorfindel ────────────────────────────────────────────────────────────────
+
+glorfindel-respond: build
+	$(DOCKER_GLORFINDEL) respond $(SIGNALS)
+
+glorfindel-dry-run: build
+	$(DOCKER_GLORFINDEL) respond $(SIGNALS) --dry-run
+
+glorfindel-release: build
+	$(DOCKER_GLORFINDEL) release $(RESOURCE_ID)
+
+# ── Dev ───────────────────────────────────────────────────────────────────────
+
+test:
+	python -m pytest tests/ -v

@@ -4,6 +4,7 @@ WORKDIR /app
 
 COPY pyproject.toml .
 COPY annatar/ annatar/
+COPY glorfindel/ glorfindel/
 COPY scenarios/ scenarios/
 COPY scripts/ scripts/
 

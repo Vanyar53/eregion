@@ -22,13 +22,16 @@ Pas de la détection passive. Pas de la compliance. Une boucle complète : simul
 
 **Entraînement** : connaissance structurée, pas ML — base MITRE ATT&CK + CVEs publics cloud.
 
-### Glorfindel — Agent Bleu (à construire)
-- Reçoit les signaux normalisés d'Annatar
-- Raisonne sur le contexte, décide de la réponse, explique le pourquoi
-- Agit seul sur actions réversibles, escalade à l'humain sur actions destructives
-- Vérifie que la menace est neutralisée après action
+### Glorfindel — Agent Bleu (MVP fonctionnel)
+- Reçoit les signaux normalisés d'Annatar (JSONL)
+- Raisonne via Claude API (tool use), décide de la réponse, explique le pourquoi
+- Agit seul sur actions réversibles, escalade à l'humain sur actions destructives ou inconnues
+- Vérifie que l'action a eu l'effet voulu (ex : règle NSG bien posée)
+- Propose des actions nouvelles si aucune action connue ne convient — l'humain valide
 
-**Entraînement** : apprentissage par la boucle — Annatar attaque → Glorfindel observe → décide → voit si ça a fonctionné → affine au cycle suivant.
+**Mode watch** : `glorfindel watch runs/` — poll toutes les 2s, répond en temps réel pendant qu'Annatar tourne.
+
+**Apprentissage** : chaque cycle `(signal → décision → action → outcome)` est stocké dans ChromaDB. Les 3 cycles les plus similaires sont injectés comme contexte à chaque décision.
 
 **Lien fondamental** : plus Annatar attaque, plus Glorfindel apprend.
 
@@ -83,8 +86,8 @@ HUMAN_APPROVAL_REQUIRED = [
 
 | Module | Nom | Rôle | Statut |
 |---|---|---|---|
-| Agent Rouge | **Annatar** | Simule les attaques — corrompt de l'intérieur | MVP Azure existant |
-| Agent Bleu | **Glorfindel** | Détecte, répond, rétablit — revient toujours | À construire |
+| Agent Rouge | **Annatar** | Simule les attaques — corrompt de l'intérieur | MVP Azure ✅ |
+| Agent Bleu | **Glorfindel** | Détecte, répond, rétablit — revient toujours | MVP fonctionnel ✅ |
 
 ---
 
@@ -106,21 +109,28 @@ HUMAN_APPROVAL_REQUIRED = [
 ## Architecture fichiers
 
 ```
-eregion/annatar/
-├── scenarios/          # Scénarios YAML MITRE ATT&CK (Annatar)
-│   └── azure/
-├── annatar/            # Package Agent Rouge
+eregion/
+├── scenarios/           # Scénarios YAML MITRE ATT&CK
+│   └── azure/           # ransomware-vm.yaml, data-exfiltration.yaml
+├── annatar/             # Package Agent Rouge
 │   ├── cli.py
-│   ├── runner/         # engine.py, parser.py, report.py
-│   ├── executors/      # azure_vm.py
-│   ├── collectors/     # azure_monitor.py
-│   └── safety/         # guard.py — safety checks obligatoires
-├── glorfindel/         # Package Agent Bleu (à créer)
-│   ├── agent.py        # Boucle de décision LLM
-│   ├── signals.py      # Normalisation des signaux entrants
-│   ├── actions.py      # Exécution des actions
-│   └── memory.py       # Capitalisation sur les cycles passés
+│   ├── runner/          # engine.py, parser.py, report.py
+│   ├── executors/       # azure_vm.py (resource_id property)
+│   ├── collectors/      # azure_monitor.py
+│   ├── safety/          # guard.py — safety checks obligatoires
+│   └── signals/         # schema.py (Signal, severity_for_ttp), emitter.py
+├── glorfindel/          # Package Agent Bleu
+│   ├── agent.py         # LangGraph : load_context→decide→execute→verify→store
+│   ├── signals.py       # load_signals(), load_latest_signals()
+│   ├── actions.py       # CloudConnector ABC, AzureConnector, AUTONOMOUS_ACTIONS
+│   ├── memory.py        # CycleMemory (ChromaDB)
+│   └── cli.py           # respond, watch, release, memory-stats
+├── scripts/
+│   └── simulate_annatar.py  # simulation locale sans Azure
+├── runs/                # Rapports JSON + signaux JSONL (gitignored)
 ├── infra/terraform/
+├── Dockerfile           # image eregion, entrypoint annatar ou glorfindel
+├── Makefile             # targets annatar-* et glorfindel-*
 └── tests/
 ```
 
@@ -130,16 +140,21 @@ eregion/annatar/
 
 ```python
 signal = {
+    "signal_id": "{run_id}_{event}",   # ex: 20260522T193434Z_detection
     "timestamp": "ISO8601",
     "provider": "azure",
-    "resource_id": "...",
+    "resource_id": "/subscriptions/.../virtualMachines/...",
     "resource_type": "vm|storage|network",
     "ttp": "T1486",
     "severity": "critical|high|medium|low",
+    "event": "detection|detection_timeout|recovery_complete|recovery_failed",
     "raw_signal": {},
-    "context": {}
+    "context": {"run_id": "...", "scenario": "..."}
 }
 ```
+
+Annatar écrit un fichier `runs/{run_id}_signals.jsonl` (une ligne JSON par événement).
+Glorfindel le lit via `glorfindel watch runs/` ou `glorfindel respond <file>`.
 
 ---
 
@@ -168,28 +183,40 @@ Toutes dans `rg-sechaos-test`, taguées `sechaos-test: "true"` :
 
 ## Prochaines tâches
 
-1. ✅ Normaliser les signaux produits par les scénarios Annatar existants (`annatar/signals/` — `Signal`, `SignalEmitter`, `severity_for_ttp`)
-2. ✅ Premier agent Glorfindel : input signal ransomware → décision expliquée + `isolate_vm`
-3. ✅ Fermer la boucle : Annatar attaque → Glorfindel répond → vérification post-action (`verify_isolation` → escalade si échec)
-4. `glorfindel release <resource_id>` — lever une isolation posée par Glorfindel (appel `release_isolation` + confirmation)
-5. Run réel Azure end-to-end — valider sans `--dry-run` sur `rg-sechaos-test`
-6. Scénario exfiltration câblé aux signaux — T1041 → `block_suspicious_ip`
+1. ✅ Normaliser les signaux Annatar (`annatar/signals/` — `Signal`, `SignalEmitter`, `severity_for_ttp`)
+2. ✅ Premier agent Glorfindel : signal ransomware → décision expliquée + `isolate_vm`
+3. ✅ Fermer la boucle : `verify_isolation` → escalade si échec, `store_cycle` en mémoire
+4. ✅ `glorfindel release <resource_id>` — lever une isolation avec garde de sécurité
+5. ✅ `glorfindel watch runs/` — deux agents concurrents, réponse en temps réel
+6. ✅ Action discovery — Glorfindel peut proposer des actions inconnues (escalade automatique)
+7. Run réel Azure end-to-end — valider sans `--dry-run` sur `rg-sechaos-test`
+8. Scénario exfiltration câblé aux signaux — T1041 → `block_suspicious_ip`
 
 ## Décisions techniques arrêtées
 
-### Format de décision Glorfindel (observabilité jour 1)
+### Format de décision Glorfindel
 
 ```python
 decision = {
     "signal_id": "...",
-    "reasoning": "...",        # chaîne de pensée LLM
+    "reasoning": "...",          # chaîne de pensée LLM
     "confidence": 0.0–1.0,
-    "action": "isolate_vm",
+    "action": "isolate_vm",      # action connue ou proposée (snake_case libre)
     "reversible": True,
-    "explanation": "...",      # version lisible pour l'humain
-    "outcome": None            # rempli après exécution
+    "explanation": "...",        # version lisible pour l'humain
+    "escalate": False,
+    "escalation_reason": "...",  # rempli si escalate=True ou action inconnue
+    "outcome": {                 # rempli après exécution
+        "status": "isolated|dry_run|escalated",
+        "verified": True,        # résultat de verify_action
+        "escalation_type": "destructive_action|proposed_action|low_confidence"
+    }
 }
 ```
+
+### Action discovery
+
+Glorfindel n'est pas contraint à une liste fixe. Si aucune action connue ne convient, il propose une action libre (snake_case) dans le champ `action` et explique dans `escalation_reason`. Le routing escalade automatiquement toute action hors de `AUTONOMOUS_ACTIONS`. L'humain approuve et potentiellement codifie l'action pour le prochain cycle.
 
 ### Apprentissage par la boucle (RAG sur cycles passés)
 

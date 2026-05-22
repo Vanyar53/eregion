@@ -2,21 +2,90 @@
 
 ## Concept
 
-**Eregion** est une plateforme open-core de résilience opérationnelle organisée en modules Tolkien.
-**Annatar** est le premier module — Security Chaos Engineering : simule des scénarios d'attaque réels (ransomware, exfiltration, lateral movement) sur l'infra en environnement contrôlé, mesure les temps de détection/isolation/recovery, et compare au RTO/RPO déclaré.
+**Eregion** est une plateforme de **défense active de l'infra cloud**.
 
-> "Annatar est déjà dans ta forteresse. La question c'est : est-ce que tu le sais ?"
+> "On simule ce que ferait un attaquant sur ton infra cloud. On te montre ce qui tombe. On ferme automatiquement ce qui peut l'être. Tu vois la différence avant et après."
+
+Pas de la détection passive. Pas de la compliance. Une boucle complète : simuler l'attaque → produire des signaux → répondre automatiquement → prouver que c'est fermé.
+
+**Stack** : Python 3.11+, Azure (provider initial), cloud agnostique par design.
+
+---
+
+## Les deux agents
+
+### Annatar — Agent Rouge (MVP Azure ~95%)
+- Chaos engine qui simule des attaques réelles (ransomware T1486, exfiltration)
+- Scénarios YAML mappés MITRE ATT&CK, bout en bout, rapport JSON PASS/FAIL
+- Produit des signaux normalisés indépendants du provider
+- Tourne **uniquement** sur ressources taguées `sechaos-test: "true"`
+
+**Entraînement** : connaissance structurée, pas ML — base MITRE ATT&CK + CVEs publics cloud.
+
+### Glorfindel — Agent Bleu (à construire)
+- Reçoit les signaux normalisés d'Annatar
+- Raisonne sur le contexte, décide de la réponse, explique le pourquoi
+- Agit seul sur actions réversibles, escalade à l'humain sur actions destructives
+- Vérifie que la menace est neutralisée après action
+
+**Entraînement** : apprentissage par la boucle — Annatar attaque → Glorfindel observe → décide → voit si ça a fonctionné → affine au cycle suivant.
+
+**Lien fondamental** : plus Annatar attaque, plus Glorfindel apprend.
+
+---
+
+## Architecture — Cloud agnostique
+
+Les TTPs des attaquants ne changent pas selon le cloud provider. Seuls les connecteurs changent.
+
+```
+Scénarios d'attaque (universels — MITRE ATT&CK)
+        ↓
+Connecteurs cloud (Azure existant / AWS et GCP à venir)
+        ↓
+Signaux normalisés
+        ↓
+Glorfindel (universel — raisonne + décide)
+        ↓
+Actions via connecteurs cloud
+        ↓
+Vérification
+```
+
+Modèle inspiré de Terraform : logique agnostique, providers interchangeables.
+
+---
+
+## Règles d'autonomie de Glorfindel
+
+```python
+# Réversible — Glorfindel agit seul
+AUTONOMOUS_ACTIONS = [
+    "isolate_vm",
+    "revoke_temp_access",
+    "snapshot_before_restore",
+    "block_suspicious_ip",
+]
+
+# Destructif — validation humaine obligatoire
+HUMAN_APPROVAL_REQUIRED = [
+    "delete_resource",
+    "modify_network_rule",
+    "escalate_permissions",
+    "wipe_storage",
+]
+```
+
+---
 
 ## Naming
 
-| Module | Nom | Rôle |
-|---|---|---|
-| Chaos Engine | **Annatar** | Simule les attaques (ce repo) |
-| DR Coverage Scanner | **Celebrimbor** | Scanne les gaps de couverture DR (phase 2) |
-| Drift Monitor | **Thranduil** | Surveille la dérive RTO/RPO en continu (SaaS futur) |
-| Reports Pro | **Gil-galad** | Rapports PDF audit NIS2/DORA (SaaS futur) |
-| War Room | **Fingolfin** | Guidance d'incident (SaaS futur) |
-| Failover Canary | **Glorfindel** | Tests automatiques de failover (SaaS futur) |
+| Module | Nom | Rôle | Statut |
+|---|---|---|---|
+| Agent Rouge | **Annatar** | Simule les attaques — corrompt de l'intérieur | MVP Azure existant |
+| Agent Bleu | **Glorfindel** | Détecte, répond, rétablit — revient toujours | À construire |
+
+---
 
 ## Stack technique
 
@@ -25,156 +94,143 @@
 - **Azure SDK** : azure-mgmt-compute, azure-monitor-query, azure-mgmt-recoveryservicesbackup
 - **Parsing** : PyYAML
 - **Terminal** : rich
-- **Infra test** : Terraform (dans `infra/terraform/`)
+- **Infra test** : Terraform (`infra/terraform/`)
 - **Tests** : pytest
+- **Agent framework** : LangGraph — boucle conditionnelle (autonome vs escalade) + human-in-the-loop natif + observabilité par state snapshots
+- **LLM** : Claude API (Anthropic) — raisonnement structuré, tool use natif, alignement sécurité
+- **Vector store** : ChromaDB local (fichier, zéro serveur) — OSS ; base collective sur serveur Eregion en SaaS
 
-## Architecture
+---
+
+## Architecture fichiers
 
 ```
-eregion/                        # Racine du repo (encore nommé sechaos/ sur disque)
-├── scenarios/                  # Scénarios YAML (MITRE ATT&CK mappés)
-│   ├── azure/                  # MVP — cible principale
-│   └── k8s/                    # Phase 2
-├── annatar/                    # Package Python principal (module Chaos Engine)
-│   ├── cli.py                  # Entrypoint Click
-│   ├── runner/                 # engine.py, parser.py, report.py
-│   ├── executors/              # azure_vm.py (MVP), kubernetes.py (phase 2)
-│   ├── collectors/             # azure_monitor.py, prometheus.py
-│   └── safety/                 # guard.py — safety checks obligatoires
-├── infra/terraform/            # Provisioning env de test Azure
-├── scripts/                    # Scripts exécutés sur les VMs de test
+eregion/annatar/
+├── scenarios/          # Scénarios YAML MITRE ATT&CK (Annatar)
+│   └── azure/
+├── annatar/            # Package Agent Rouge
+│   ├── cli.py
+│   ├── runner/         # engine.py, parser.py, report.py
+│   ├── executors/      # azure_vm.py
+│   ├── collectors/     # azure_monitor.py
+│   └── safety/         # guard.py — safety checks obligatoires
+├── glorfindel/         # Package Agent Bleu (à créer)
+│   ├── agent.py        # Boucle de décision LLM
+│   ├── signals.py      # Normalisation des signaux entrants
+│   ├── actions.py      # Exécution des actions
+│   └── memory.py       # Capitalisation sur les cycles passés
+├── infra/terraform/
 └── tests/
 ```
 
-## Décisions structurantes
+---
 
-- **Azure VM first** (pas K8s) : les ransomwares frappent des VMs, pas des clusters. Marché plus large.
-- K8s = phase 2, deuxième executor.
-- **Scénarios en YAML** mappés MITRE ATT&CK, lisibles et contributables par la communauté.
-- **Safety non négociable** : les scénarios ne tournent QUE sur des ressources taguées `sechaos-test: "true"`. Vérification dans `safety/guard.py` avant toute exécution.
-- **Dry-run obligatoire** en mode dev (`--dry-run` flag).
-- Rollback automatique sur erreur ou timeout.
+## Format signal normalisé (Annatar → Glorfindel)
 
-## MVP — 2 scénarios Azure
-
-### Scénario 1 : Ransomware VM
-```
-Script chiffre /mnt/testdata → Azure Monitor alerte sur pic I/O
-→ Azure Backup restore déclenché → RTO mesuré vs déclaré
-Métriques : detection_time_s, recovery_time_s
-```
-
-### Scénario 2 : Data exfiltration
-```
-Script transfère ~1GB vers storage account de test
-→ Azure Monitor / NSG Flow Logs alerte sur trafic sortant anormal
-Métriques : detection_time_s
-```
-
-## Format scénario YAML
-
-```yaml
-name: string
-description: string
-mitre: string                  # ATT&CK technique ID (ex: T1486)
-version: "1.0.0"
-target:
-  type: azure_vm
-  resource_group: string       # DOIT être tagué sechaos-test: "true"
-  vm_name: string
-setup: []                      # Actions de préparation
-steps:
-  - name: string
-    action: string             # run_script_on_vm | apply_manifest | etc.
-    record: T0                 # Timestamp de référence
-detection:
-  source: azure_monitor | prometheus
-  query: string
-  timeout: "300s"
-  record: T1
-recovery:
-  action: azure_backup_restore
-  record: T3
-thresholds:
-  detection_time_max: "120s"
-  recovery_time_max: "1800s"
-cleanup: []
-```
-
-## Output rapport JSON
-
-```json
-{
-  "scenario": "azure-ransomware-vm",
-  "run_id": "2026-04-23T14:32:00Z",
-  "mitre": "T1486",
-  "result": "FAIL",
-  "metrics": {
-    "detection_time_s": 87,
-    "recovery_time_s": 3240
-  },
-  "thresholds": {
-    "detection_time_max_s": 120,
-    "recovery_time_max_s": 1800
-  },
-  "checks": {
-    "detection": "PASS",
-    "recovery": "FAIL — 54min vs RTO déclaré 30min"
-  }
+```python
+signal = {
+    "timestamp": "ISO8601",
+    "provider": "azure",
+    "resource_id": "...",
+    "resource_type": "vm|storage|network",
+    "ttp": "T1486",
+    "severity": "critical|high|medium|low",
+    "raw_signal": {},
+    "context": {}
 }
 ```
 
-## CLI
-
-```bash
-annatar run <scenario.yaml> [--dry-run] [--yes]
-annatar list
-annatar validate <scenario.yaml>
-annatar report <run-id>
-annatar init       # Crée l'env Azure de test via Terraform
-```
+---
 
 ## Ressources Azure de test
 
 Toutes dans `rg-sechaos-test`, taguées `sechaos-test: "true"` :
-- `vm-sechaos-victim` : Ubuntu 22.04, Standard_B2s, disque data 32GB monté sur `/mnt/testdata`
+- `vm-sechaos-victim` : Ubuntu 22.04, Standard_B2s, 32GB sur `/mnt/testdata`
 - `law-sechaos` : Log Analytics Workspace
 - `rsv-sechaos` : Recovery Services Vault + backup policy
 - `st-sechaos-exfil` : Storage account cible exfiltration
 - NSG avec flow logs activés
 
-## Modèle open-core
+---
 
-- **Open source** : CLI Annatar, scénarios YAML, reporting JSON/Markdown — Apache 2.0
-- **SaaS payant** (futur) : Thranduil (drift monitor), Gil-galad (PDF audit), Fingolfin (war room), Glorfindel (failover canary)
+## Positionnement concurrentiel
 
-## Ce qu'on ne fait PAS en MVP
+| | Lupovis | CrowdStrike/Palo Alto | Eregion |
+|---|---|---|---|
+| Approche | Déception passive | Détection enterprise | Simulation active |
+| Boucle | Détection seulement | Détection + alerte | Rouge → Bleu complet |
+| Cible | Enterprise/OT | Enterprise | Mid-market DevOps |
+| Modèle | SaaS | SaaS cher | Open-core |
+| Réponse | Alerte + SIEM | Manuel | Agent IA automatisé |
 
-- Dashboard/UI (JSON + rich terminal suffisent)
-- K8s scenarios
-- PDF reports
-- Multi-tenant, auth, scheduler
-- IA/ML
-- Proxmox/vSphere/GCP
+---
 
-## Cibles commerciales
+## Prochaines tâches
 
-- DevOps/SRE lead (100-500 salariés)
-- RSSI PME/ETI — audits NIS2/ISO 27001
-- Secteur financier — DORA (en vigueur jan 2025)
-- MSP/MSSP
+1. ✅ Normaliser les signaux produits par les scénarios Annatar existants (`annatar/signals/` — `Signal`, `SignalEmitter`, `severity_for_ttp`)
+2. ✅ Premier agent Glorfindel : input signal ransomware → décision expliquée + `isolate_vm`
+3. ✅ Fermer la boucle : Annatar attaque → Glorfindel répond → vérification post-action (`verify_isolation` → escalade si échec)
+4. `glorfindel release <resource_id>` — lever une isolation posée par Glorfindel (appel `release_isolation` + confirmation)
+5. Run réel Azure end-to-end — valider sans `--dry-run` sur `rg-sechaos-test`
+6. Scénario exfiltration câblé aux signaux — T1041 → `block_suspicious_ip`
 
-## Concurrence clé
+## Décisions techniques arrêtées
 
-- **Gremlin** : a un scénario ransomware mais $1200+/mois, pas open-core, pas compliance-oriented
-- **Azure Chaos Studio** : chaos infra (pannes), pas sécurité — objection principale à démonter
-- **Veeam SureBackup** : teste les backups, pas les attaques
-- **BAS tools** (AttackIQ, Cymulate) : testent la détection, pas la recovery — $50-200k/an
+### Format de décision Glorfindel (observabilité jour 1)
 
-## Critère MVP done
+```python
+decision = {
+    "signal_id": "...",
+    "reasoning": "...",        # chaîne de pensée LLM
+    "confidence": 0.0–1.0,
+    "action": "isolate_vm",
+    "reversible": True,
+    "explanation": "...",      # version lisible pour l'humain
+    "outcome": None            # rempli après exécution
+}
+```
 
-- 2 scénarios Azure bout en bout
-- Rapport JSON PASS/FAIL par seuil
-- `annatar init` opérationnel en < 5 min
-- README : quelqu'un d'autre peut l'utiliser en 30 min
-- GitHub public, Apache 2.0
+### Apprentissage par la boucle (RAG sur cycles passés)
+
+Chaque cycle complet `(signal → décision → action → outcome)` est stocké dans un vecteur store.
+À chaque nouvelle décision, Glorfindel récupère les 3 cycles les plus similaires comme contexte.
+Pas de fine-tuning — le modèle de base reste stable. L'expérience s'accumule dans la base vectorielle.
+
+### Abstraction cloud (CloudConnector)
+
+```python
+class CloudConnector(ABC):
+    @abstractmethod
+    def isolate_vm(self, resource_id: str) -> dict: ...
+    @abstractmethod
+    def release_isolation(self, resource_id: str) -> dict: ...
+    @abstractmethod
+    def block_suspicious_ip(self, ip: str, resource_id: str) -> dict: ...
+    @abstractmethod
+    def snapshot(self, resource_id: str) -> str: ...
+    @abstractmethod
+    def verify_isolation(self, resource_id: str) -> dict: ...
+```
+
+`AzureConnector` implémente cette interface (`dry_run=True` pour les tests sans infra).
+`AwsConnector` et `GcpConnector` à brancher plus tard.
+
+### Open-core — ce qui est OSS vs SaaS
+
+| OSS (Apache 2.0) | SaaS payant |
+|---|---|
+| Framework Annatar + Glorfindel | Base vectorielle collective (cycles de tous les clients) |
+| Connecteurs cloud (Azure, AWS, GCP) | Scénarios avancés (lateral movement, privilege escalation) |
+| Scénarios de base (ransomware, exfiltration) | Déploiement managé multi-tenant |
+| CLI | Support + SLA |
+
+---
+
+## Ce qu'on ne fait PAS
+
+- Pas compliance-oriented (NIS2, DORA, etc.)
+- Pas d'agent en roue libre sur actions destructives
+- Pas de tests sur infra prod sans consentement explicite
+- Pas de scope creep vers SOC ou SIEM — rester sur la boucle rouge → bleu
+- Pas de dashboard/UI en MVP
+- Pas de multi-cloud avant que la boucle Azure soit solide

@@ -9,6 +9,7 @@ from rich.prompt import Confirm
 from annatar.runner.parser import ScenarioParser
 from annatar.runner.report import RunReport
 from annatar.safety.guard import check_resource_group
+from annatar.signals.emitter import SignalEmitter
 
 console = Console()
 
@@ -45,6 +46,14 @@ class Engine:
             console.print(f"[red]Safety check failed:[/red] {guard.reason}")
             return
 
+        emitter = SignalEmitter(
+            run_id=run_id,
+            scenario_name=scenario.name,
+            scenario_mitre=scenario.mitre,
+            target=scenario.target,
+            resource_id=executor.resource_id,
+        )
+
         metrics = {}
         checks = {}
 
@@ -76,10 +85,19 @@ class Engine:
                     ok = detection_time <= threshold
                     checks["detection"] = "PASS" if ok else f"FAIL — {round(detection_time)}s vs seuil {threshold}s"
                     console.print(f"  Detection: {checks['detection']}")
+                    emitter.emit(
+                        event="detection",
+                        raw_signal={"detection_time_s": round(detection_time), "passed": ok},
+                        metrics={"detection_s": metrics["detection_s"]},
+                    )
                 else:
                     metrics["detection_s"] = None
                     checks["detection"] = "FAIL — timeout, no alert fired"
                     console.print(f"  [red]Detection timeout[/red]")
+                    emitter.emit(
+                        event="detection_timeout",
+                        raw_signal={"passed": False},
+                    )
 
             # Recovery
             if scenario.recovery:
@@ -116,9 +134,30 @@ class Engine:
                     if not integrity_ok:
                         reasons.append("integrity check failed")
                     checks["recovery"] = "FAIL — " + ", ".join(reasons)
+                    emitter.emit(
+                        event="recovery_failed",
+                        raw_signal={"reasons": reasons, "passed": False},
+                        metrics={
+                            "recovery_s": metrics["recovery_s"],
+                            "heartbeat_s": metrics["heartbeat_s"],
+                        },
+                    )
                 else:
                     checks["recovery"] = "PASS"
                 console.print(f"  Recovery: {checks['recovery']}")
+                emitter.emit(
+                    event="recovery_complete",
+                    raw_signal={
+                        "recovery_time_s": round(recovery_time),
+                        "integrity_ok": integrity_ok,
+                        "heartbeat_elapsed_s": round(heartbeat_elapsed) if heartbeat_elapsed is not None else None,
+                        "passed": ok,
+                    },
+                    metrics={
+                        "recovery_s": metrics["recovery_s"],
+                        "heartbeat_s": metrics["heartbeat_s"],
+                    },
+                )
 
             overall = "PASS" if all("PASS" in v for v in checks.values()) else "FAIL"
             report = RunReport(

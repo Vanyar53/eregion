@@ -18,6 +18,14 @@ class AzureVMExecutor:
         self._subscription_id = target.get("subscription_id") or self._get_subscription_id()
         self._compute = ComputeManagementClient(self._credential, self._subscription_id)
 
+    @property
+    def resource_id(self) -> str:
+        return (
+            f"/subscriptions/{self._subscription_id}"
+            f"/resourceGroups/{self.resource_group}"
+            f"/providers/Microsoft.Compute/virtualMachines/{self.vm_name}"
+        )
+
     def get_resource_group_tags(self, rg_name: str) -> dict:
         from azure.mgmt.resource import ResourceManagementClient
         client = ResourceManagementClient(self._credential, self._subscription_id)

@@ -19,10 +19,15 @@ dependencies = [
     "azure-identity>=1.15",
     "azure-mgmt-resource>=23.0",
     "azure-mgmt-subscription>=3.0",
+    "azure-mgmt-network>=25.0",
+    "anthropic>=0.40",
+    "langgraph>=0.2",
+    "chromadb>=0.5",
 ]
 
 [project.scripts]
 annatar = "annatar.cli:cli"
+glorfindel = "glorfindel.cli:cli"
 
 [project.optional-dependencies]
 dev = [
@@ -31,6 +36,12 @@ dev = [
     "ruff",
     "mypy",
 ]
+
+[tool.hatch.build.targets.wheel]
+packages = ["annatar", "glorfindel"]
+
+[tool.hatch.build.targets.editable]
+packages = ["annatar", "glorfindel"]
 
 [tool.ruff]
 line-length = 100

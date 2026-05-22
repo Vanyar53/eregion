@@ -100,15 +100,17 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
     # path → byte offset of last read position
     tracked: dict[Path, int] = {}
 
-    def _init_existing(path: Path) -> None:
-        """Start tracking an existing file from its current end."""
+    # Files that existed at startup — skip their past content
+    existing_at_start = {p for p in Path(runs_dir).glob("*_signals.jsonl")}
+    for path in existing_at_start:
         tracked[path] = path.stat().st_size
+        console.print(f"[dim]Skipping existing {path.name}[/dim]")
 
     def _poll() -> None:
         for path in sorted(Path(runs_dir).glob("*_signals.jsonl")):
             if path not in tracked:
-                _init_existing(path)
-                console.print(f"[dim]Tracking {path.name}[/dim]")
+                tracked[path] = 0  # new file — read from beginning
+                console.print(f"[dim]New run: {path.name}[/dim]")
 
         for path in list(tracked):
             with open(path) as f:

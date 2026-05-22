@@ -18,7 +18,7 @@ Pas de la détection passive. Pas de la compliance. Une boucle complète : simul
 - Chaos engine qui simule des attaques réelles (ransomware T1486, exfiltration)
 - Scénarios YAML mappés MITRE ATT&CK, bout en bout, rapport JSON PASS/FAIL
 - Produit des signaux normalisés indépendants du provider
-- Tourne **uniquement** sur ressources taguées `sechaos-test: "true"`
+- Tourne **uniquement** sur ressources taguées `annatar-test: "true"`
 
 **Entraînement** : connaissance structurée, pas ML — base MITRE ATT&CK + CVEs publics cloud.
 
@@ -160,11 +160,11 @@ Glorfindel le lit via `glorfindel watch runs/` ou `glorfindel respond <file>`.
 
 ## Ressources Azure de test
 
-Toutes dans `rg-sechaos-test`, taguées `sechaos-test: "true"` :
-- `vm-sechaos-victim` : Ubuntu 22.04, Standard_B2s, 32GB sur `/mnt/testdata`
-- `law-sechaos` : Log Analytics Workspace
-- `rsv-sechaos` : Recovery Services Vault + backup policy
-- `st-sechaos-exfil` : Storage account cible exfiltration
+Toutes dans `rg: annatar`, taguées `annatar-test: "true"` (déployées via `infra/terraform/`) :
+- `vm-annatar-victim` : Ubuntu 22.04, Standard_D2as_v6, 32GB sur `/mnt/testdata`, IP: `135.236.1.221`
+- `law-annatar` : Log Analytics Workspace (`b451c51a-1cd0-4125-ac70-6aaf2c1dc209`)
+- `rsv-annatar` : Recovery Services Vault + backup policy
+- `stannatarexfil` : Storage account cible exfiltration
 - NSG avec flow logs activés
 
 ---
@@ -189,7 +189,7 @@ Toutes dans `rg-sechaos-test`, taguées `sechaos-test: "true"` :
 4. ✅ `glorfindel release <resource_id>` — lever une isolation avec garde de sécurité
 5. ✅ `glorfindel watch runs/` — deux agents concurrents, réponse en temps réel
 6. ✅ Action discovery — Glorfindel peut proposer des actions inconnues (escalade automatique)
-7. Run réel Azure end-to-end — valider sans `--dry-run` sur `rg-sechaos-test`
+7. Run réel Azure end-to-end — valider sans `--dry-run` sur `rg: annatar`
 8. Scénario exfiltration câblé aux signaux — T1041 → `block_suspicious_ip`
 
 ## Décisions techniques arrêtées

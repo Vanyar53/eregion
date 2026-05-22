@@ -20,13 +20,13 @@ RUN_ID = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 TARGET = {
     "type": "azure_vm",
-    "resource_group": "rg-sechaos-test",
-    "vm_name": "vm-sechaos-victim",
+    "resource_group": "annatar",
+    "vm_name": "vm-annatar-victim",
 }
 
 RESOURCE_ID = (
-    "/subscriptions/sub-sim-123/resourceGroups/rg-sechaos-test"
-    "/providers/Microsoft.Compute/virtualMachines/vm-sechaos-victim"
+    "/subscriptions/44a4dc83-3e79-4e4e-aa93-1b4f8e3ede80/resourceGroups/annatar"
+    "/providers/Microsoft.Compute/virtualMachines/vm-annatar-victim"
 )
 
 emitter = SignalEmitter(

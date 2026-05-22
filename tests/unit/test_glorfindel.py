@@ -233,6 +233,31 @@ def test_verify_action_unknown_action_returns_none():
     assert result["escalate"] is False  # None does not escalate
 
 
+def test_system_prompt_defines_detection_timeout_behavior():
+    from glorfindel.agent import _SYSTEM_PROMPT
+    assert "detection_timeout" in _SYSTEM_PROMPT
+    assert "snapshot" in _SYSTEM_PROMPT
+    assert "escalate=true" in _SYSTEM_PROMPT
+
+
+def test_store_cycle_includes_run_id(tmp_path):
+    from glorfindel.memory import CycleMemory
+    mem = CycleMemory(path=tmp_path / "cycles")
+    mem.store({
+        "signal_id": "20260101T000000Z_detection",
+        "run_id": "20260101T000000Z",
+        "ttp": "T1486",
+        "severity": "critical",
+        "resource_type": "vm",
+        "event": "detection",
+        "reasoning": "test",
+        "action": "isolate_vm",
+        "outcome": "isolated",
+    })
+    results = mem.retrieve_similar({"ttp": "T1486", "severity": "critical", "event": "detection"}, n=1)
+    assert results[0]["run_id"] == "20260101T000000Z"
+
+
 def test_route_escalates_unknown_proposed_action():
     from glorfindel.agent import _route_after_decide
 

@@ -90,6 +90,17 @@ Autonomy rules — you MUST follow these without exception:
   (snake_case) and explain exactly what it should do in escalation_reason. Always set escalate=true
   for proposed actions — a human will review, approve, and potentially codify it.
 
+Event-specific behavior — follow these rules before reasoning:
+- event=detection: active or recent attack confirmed. Act immediately with the minimum
+  effective reversible action (prefer isolate_vm to stop lateral spread).
+- event=detection_timeout: Azure Monitor did NOT fire during the attack — IDS gap confirmed.
+  ALWAYS: action=snapshot (preserve forensic state, non-disruptive), escalate=true,
+  escalation_reason must explain that the IDS missed the attack and name the TTP.
+  Never take a disruptive action on a detection_timeout — the attack may have ended.
+- event=recovery_complete: restore verified, VM back online. Consider snapshot to lock
+  in the clean state. No isolation needed unless new indicators are present.
+- event=recovery_failed: escalate to human with the failure reasons from raw_signal.
+
 When reasoning:
 1. Identify the TTP (MITRE ATT&CK) and what it means for this resource.
 2. Consider the severity and what the attacker likely achieved or is attempting.
@@ -229,6 +240,7 @@ def store_cycle(state: GlorfindelState, *, memory: CycleMemory) -> GlorfindelSta
     signal = state["signal"]
     memory.store({
         "signal_id": signal.get("signal_id", ""),
+        "run_id": signal.get("context", {}).get("run_id", ""),
         "ttp": signal.get("ttp", ""),
         "severity": signal.get("severity", ""),
         "resource_type": signal.get("resource_type", ""),

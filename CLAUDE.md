@@ -233,6 +233,17 @@ Glorfindel n'est pas contraint à une liste fixe. Si aucune action connue ne con
 `verified=None` → verification non implémentée, cycle stocké sans claim de succès.
 `verified=True` → action confirmée.
 
+### Comportement par type d'événement
+
+| Event | Posture | Action | Escalade |
+|---|---|---|---|
+| `detection` | Attaque confirmée | `isolate_vm` (minimum effectif) | Non (réversible) |
+| `detection_timeout` | Gap IDS — Monitor n'a pas détecté | `snapshot` (forensique non-disruptif) | Oui — expliquer le gap |
+| `recovery_complete` | Restore vérifié, VM en ligne | `snapshot` (figer l'état propre) | Non |
+| `recovery_failed` | Restore échoué | Escalade avec raisons | Oui |
+
+`detection_timeout` = posture non-disruptive dans le doute. L'attaque a peut-être cessé, on ne prend pas d'action bloquante mais on préserve l'état pour investigation et on alerte l'humain sur le gap de détection.
+
 ### Qui possède la vérification finale ?
 
 **Annatar** vérifie son propre restore (integrity check post-backup) — c'est son rôle de chaos testing, mesurer si l'infra tient ses SLAs.
@@ -247,7 +258,7 @@ Le poll loop est séquentiel dans chaque cycle : tous les nouveaux signaux d'un 
 
 ### State management inter-signaux
 
-Glorfindel traite chaque signal indépendamment. Le `run_id` est présent dans le contexte du signal mais pas utilisé pour construire un état explicite du run en cours. La mémoire RAG compense partiellement : le cycle précédent (`detection` → `isolate_vm`) est retrouvé par similarité et injecté comme contexte lors du signal suivant (`recovery_complete`). Limitation connue : deux runs simultanés sur la même ressource pourraient créer une confusion dans la RAG.
+Glorfindel traite chaque signal indépendamment. Le `run_id` est stocké comme métadonnée dans ChromaDB (accessible pour filtrage futur). La RAG compense partiellement : le cycle précédent (`detection` → `isolate_vm`) est retrouvé par similarité et injecté comme contexte pour `recovery_complete`. Limitation connue : deux runs simultanés sur la même ressource pourraient créer une confusion RAG — pas de filtrage par run_id aujourd'hui.
 
 ### Apprentissage par la boucle (RAG sur cycles passés)
 

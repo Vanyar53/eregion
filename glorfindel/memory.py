@@ -38,6 +38,8 @@ class CycleMemory:
                 "action": cycle.get("action", ""),
                 "outcome": str(cycle.get("outcome", "")),
                 "signal_id": cycle.get("signal_id", ""),
+                "run_id": cycle.get("run_id", ""),
+                "event": cycle.get("event", ""),
             }],
         )
 

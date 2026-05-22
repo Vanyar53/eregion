@@ -45,6 +45,39 @@ def respond(signals_file: str, dry_run: bool, model: str, memory_path: str | Non
 
 
 @cli.command()
+@click.argument("resource_id")
+@click.option("--dry-run", is_flag=True, help="Show what would be done without executing.")
+@click.option("--yes", is_flag=True, help="Skip confirmation prompt.")
+def release(resource_id: str, dry_run: bool, yes: bool):
+    """Release an isolation applied by Glorfindel on a VM."""
+    from glorfindel.actions import AzureConnector
+
+    connector = AzureConnector(dry_run=dry_run)
+
+    console.rule("[bold yellow]Glorfindel — Release Isolation[/bold yellow]")
+    console.print(f"  Resource : {resource_id}")
+    console.print(f"  Dry-run  : {dry_run}\n")
+
+    if not dry_run:
+        verification = connector.verify_isolation(resource_id)
+        if not verification.get("verified"):
+            console.print("[yellow]No active isolation found on this resource — nothing to release.[/yellow]")
+            return
+
+    if not dry_run and not yes:
+        if not click.confirm("Release isolation on this VM?", default=False):
+            console.print("Aborted.")
+            return
+
+    result = connector.release_isolation(resource_id)
+
+    if dry_run:
+        console.print("[yellow]DRY RUN — no changes made.[/yellow]")
+    else:
+        console.print(f"[green]✓ Isolation released.[/green]  ({result})")
+
+
+@cli.command()
 @click.option("--memory-path", default=None)
 def memory_stats(memory_path: str | None):
     """Show how many cycles are stored in memory."""

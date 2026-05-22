@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import time
+from pathlib import Path
 
 import click
 from rich.console import Console
@@ -75,6 +77,63 @@ def release(resource_id: str, dry_run: bool, yes: bool):
         console.print("[yellow]DRY RUN — no changes made.[/yellow]")
     else:
         console.print(f"[green]✓ Isolation released.[/green]  ({result})")
+
+
+@cli.command()
+@click.argument("runs_dir", type=click.Path(exists=True), default="runs")
+@click.option("--dry-run", is_flag=True)
+@click.option("--model", default="claude-sonnet-4-6", show_default=True)
+@click.option("--memory-path", default=None)
+@click.option("--interval", default=2, show_default=True, help="Poll interval in seconds.")
+def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, interval: int):
+    """Watch a runs/ directory and respond to signals as they arrive.
+
+    Start this before (or during) an Annatar run to get real-time responses.
+    Existing signal files are tracked from their current end — only new signals
+    are processed.
+    """
+    from annatar.signals.schema import Signal
+    from glorfindel.agent import GlorfindelAgent
+
+    agent = GlorfindelAgent(dry_run=dry_run, model=model, memory_path=memory_path)
+
+    # path → byte offset of last read position
+    tracked: dict[Path, int] = {}
+
+    def _init_existing(path: Path) -> None:
+        """Start tracking an existing file from its current end."""
+        tracked[path] = path.stat().st_size
+
+    def _poll() -> None:
+        for path in sorted(Path(runs_dir).glob("*_signals.jsonl")):
+            if path not in tracked:
+                _init_existing(path)
+                console.print(f"[dim]Tracking {path.name}[/dim]")
+
+        for path in list(tracked):
+            with open(path) as f:
+                f.seek(tracked[path])
+                for raw in f:
+                    raw = raw.strip()
+                    if not raw:
+                        continue
+                    data = json.loads(raw)
+                    sig = Signal(**data)
+                    console.rule(f"[bold cyan]Signal — {sig.signal_id}[/bold cyan]")
+                    console.print(f"  TTP      : {sig.ttp}  |  Severity: [red]{sig.severity}[/red]")
+                    console.print(f"  Event    : {sig.event}  |  Resource: {sig.resource_type}\n")
+                    state = agent.respond(data)
+                    _render_decision(state, dry_run)
+                    console.print()
+                tracked[path] = f.tell()
+
+    console.print(f"[bold]Glorfindel watching[/bold] [dim]{runs_dir}/[/dim]  (Ctrl+C to stop)\n")
+    try:
+        while True:
+            _poll()
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        console.print("\n[dim]Watch stopped.[/dim]")
 
 
 @cli.command()

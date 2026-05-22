@@ -150,7 +150,7 @@ def execute_action(state: GlorfindelState, *, connector: CloudConnector) -> Glor
     elif action == "block_suspicious_ip":
         ip = state["signal"].get("context", {}).get("suspicious_ip", "")
         outcome = connector.block_suspicious_ip(ip, resource_id)
-    elif action == "snapshot_before_restore":
+    elif action == "snapshot":
         snap_id = connector.snapshot(resource_id)
         outcome = {"snapshot_id": snap_id}
     else:

@@ -63,7 +63,7 @@ Modèle inspiré de Terraform : logique agnostique, providers interchangeables.
 AUTONOMOUS_ACTIONS = [
     "isolate_vm",
     "revoke_temp_access",
-    "snapshot_before_restore",
+    "snapshot",           # forensic snapshot of compromised state — réversible
     "block_suspicious_ip",
 ]
 
@@ -73,6 +73,7 @@ HUMAN_APPROVAL_REQUIRED = [
     "modify_network_rule",
     "escalate_permissions",
     "wipe_storage",
+    "restore_from_backup",  # remplace les disques — irréversible sans backup supplémentaire
 ]
 ```
 

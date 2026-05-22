@@ -240,6 +240,14 @@ def test_system_prompt_defines_detection_timeout_behavior():
     assert "escalate=true" in _SYSTEM_PROMPT
 
 
+def test_system_prompt_recovery_complete_mandates_snapshot():
+    from glorfindel.agent import _SYSTEM_PROMPT
+    # Must be deterministic: ALWAYS snapshot, reason is baseline (not forensic)
+    assert "recovery_complete" in _SYSTEM_PROMPT
+    assert "ALWAYS action=snapshot" in _SYSTEM_PROMPT
+    assert "baseline" in _SYSTEM_PROMPT
+
+
 def test_store_cycle_includes_run_id(tmp_path):
     from glorfindel.memory import CycleMemory
     mem = CycleMemory(path=tmp_path / "cycles")

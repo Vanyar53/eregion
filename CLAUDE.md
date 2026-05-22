@@ -239,7 +239,7 @@ Glorfindel n'est pas contraint à une liste fixe. Si aucune action connue ne con
 |---|---|---|---|
 | `detection` | Attaque confirmée | `isolate_vm` (minimum effectif) | Non (réversible) |
 | `detection_timeout` | Gap IDS — Monitor n'a pas détecté | `snapshot` (forensique non-disruptif) | Oui — expliquer le gap |
-| `recovery_complete` | Restore vérifié, VM en ligne | `snapshot` (figer l'état propre) | Non |
+| `recovery_complete` | Restore vérifié, VM en ligne | `snapshot` (baseline avant prochain run) | Non |
 | `recovery_failed` | Restore échoué | Escalade avec raisons | Oui |
 
 `detection_timeout` = posture non-disruptive dans le doute. L'attaque a peut-être cessé, on ne prend pas d'action bloquante mais on préserve l'état pour investigation et on alerte l'humain sur le gap de détection.
@@ -250,7 +250,7 @@ Glorfindel n'est pas contraint à une liste fixe. Si aucune action connue ne con
 
 **Glorfindel** vérifie ses propres actions (NSG rule, snapshot) — c'est son rôle de réponse, confirmer que la contention a fonctionné.
 
-Les deux périmètres ne se recoupent pas. `recovery_complete` vient d'Annatar et signifie "le restore Azure Backup a réussi". Ce n'est pas Glorfindel qui valide le restore — il le reçoit comme information et décide quoi faire ensuite (snapshot forensique du state propre).
+Les deux périmètres ne se recoupent pas. `recovery_complete` vient d'Annatar et signifie "le restore Azure Backup a réussi". Ce n'est pas Glorfindel qui valide le restore — il le reçoit comme information et décide quoi faire ensuite (snapshot de référence : checkpoint known-good avant le prochain run, pas un snapshot forensique — la VM est déjà propre par définition).
 
 ### Concurrence Glorfindel
 

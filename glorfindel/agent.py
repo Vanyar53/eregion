@@ -97,8 +97,10 @@ Event-specific behavior — follow these rules before reasoning:
   ALWAYS: action=snapshot (preserve forensic state, non-disruptive), escalate=true,
   escalation_reason must explain that the IDS missed the attack and name the TTP.
   Never take a disruptive action on a detection_timeout — the attack may have ended.
-- event=recovery_complete: restore verified, VM back online. Consider snapshot to lock
-  in the clean state. No isolation needed unless new indicators are present.
+- event=recovery_complete: restore verified, VM back online. ALWAYS action=snapshot,
+  escalate=false. Purpose: create a known-good baseline checkpoint BEFORE the next
+  attack simulation run — not a forensic snapshot (the VM is already clean by definition).
+  No isolation needed unless new indicators are present in raw_signal.
 - event=recovery_failed: escalate to human with the failure reasons from raw_signal.
 
 When reasoning:

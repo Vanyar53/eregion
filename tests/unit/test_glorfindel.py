@@ -55,6 +55,36 @@ def test_azure_connector_dry_run_release(tmp_path):
     assert result["status"] == "dry_run"
 
 
+def test_azure_connector_dry_run_verify_snapshot():
+    from glorfindel.actions import AzureConnector
+    connector = AzureConnector(dry_run=True)
+    result = connector.verify_snapshot("snap-dry-run-000")
+    assert result["verified"] is True
+    assert result["method"] == "dry_run"
+
+
+def test_azure_connector_verify_snapshot_no_id():
+    from glorfindel.actions import AzureConnector
+    connector = AzureConnector(dry_run=False)
+    result = connector.verify_snapshot("")
+    assert result["verified"] is None
+
+
+def test_azure_connector_dry_run_verify_block_ip():
+    from glorfindel.actions import AzureConnector
+    connector = AzureConnector(dry_run=True)
+    result = connector.verify_block_ip("1.2.3.4", "resource_id")
+    assert result["verified"] is True
+
+
+def test_azure_connector_verify_block_ip_not_implemented():
+    from glorfindel.actions import AzureConnector
+    connector = AzureConnector(dry_run=False)
+    result = connector.verify_block_ip("1.2.3.4", "resource_id")
+    assert result["verified"] is None
+    assert result["method"] == "not_implemented"
+
+
 # ── signals loader ────────────────────────────────────────────────────────────
 
 _SAMPLE_SIGNAL = Signal(
@@ -149,6 +179,58 @@ def test_route_escalates_when_llm_requests():
         "outcome": None,
     }
     assert _route_after_decide(state) == "escalate_to_human"
+
+
+def test_route_after_verify_false_escalates():
+    from glorfindel.agent import _route_after_verify
+    state = {"outcome": {"verified": False, "error": "rule not found"}, "escalate": False}
+    assert _route_after_verify(state) == "escalate_to_human"
+
+
+def test_route_after_verify_none_proceeds():
+    from glorfindel.agent import _route_after_verify
+    state = {"outcome": {"verified": None, "method": "not_implemented"}, "escalate": False}
+    assert _route_after_verify(state) == "store_cycle"
+
+
+def test_route_after_verify_true_proceeds():
+    from glorfindel.agent import _route_after_verify
+    state = {"outcome": {"verified": True, "method": "nsg_check"}, "escalate": False}
+    assert _route_after_verify(state) == "store_cycle"
+
+
+def test_verify_action_snapshot_calls_verify_snapshot():
+    from unittest.mock import MagicMock
+    from glorfindel.agent import verify_action
+    connector = MagicMock()
+    connector.verify_snapshot.return_value = {"verified": True, "method": "dry_run"}
+    state = {
+        "action": "snapshot",
+        "signal": {"resource_id": "res"},
+        "outcome": {"snapshot_id": "snap-001", "executed": True},
+        "escalate": False,
+        "escalation_reason": "",
+    }
+    result = verify_action(state, connector=connector)
+    connector.verify_snapshot.assert_called_once_with("snap-001")
+    assert result["outcome"]["verified"] is True
+
+
+def test_verify_action_unknown_action_returns_none():
+    from unittest.mock import MagicMock
+    from glorfindel.agent import verify_action
+    connector = MagicMock()
+    state = {
+        "action": "revoke_temp_access",
+        "signal": {"resource_id": "res"},
+        "outcome": {"executed": True},
+        "escalate": False,
+        "escalation_reason": "",
+    }
+    result = verify_action(state, connector=connector)
+    assert result["outcome"]["verified"] is None
+    assert result["outcome"]["method"] == "not_implemented"
+    assert result["escalate"] is False  # None does not escalate
 
 
 def test_route_escalates_unknown_proposed_action():

@@ -165,8 +165,13 @@ def _render_decision(state: dict, dry_run: bool) -> None:
     table.add_row("Decision", f"[bold]{action}[/bold]")
     table.add_row("Confidence", f"{confidence:.0%}")
     table.add_row("Status", f"[{status_color}]{status_label}[/{status_color}]")
-    if verified is not None and not escalated:
-        verified_label = "[green]✓ action confirmed[/green]" if verified else "[red]✗ action failed — check manually[/red]"
+    if "verified" in outcome and not escalated:
+        if verified is True:
+            verified_label = "[green]✓ action confirmed[/green]"
+        elif verified is False:
+            verified_label = "[red]✗ action failed — check manually[/red]"
+        else:
+            verified_label = "[yellow]⚠ verification not implemented[/yellow]"
         table.add_row("Verification", verified_label)
     table.add_row("Explanation", state.get("explanation", ""))
     if escalated:

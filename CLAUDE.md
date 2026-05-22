@@ -218,6 +218,37 @@ decision = {
 
 Glorfindel n'est pas contraint à une liste fixe. Si aucune action connue ne convient, il propose une action libre (snake_case) dans le champ `action` et explique dans `escalation_reason`. Le routing escalade automatiquement toute action hors de `AUTONOMOUS_ACTIONS`. L'humain approuve et potentiellement codifie l'action pour le prochain cycle.
 
+### Vérification post-action
+
+`verify_action` appelle la méthode de vérification correspondant à chaque action :
+
+| Action | Vérification | Méthode |
+|---|---|---|
+| `isolate_vm` | Règles NSG deny-all inbound+outbound | `verify_isolation` → Azure API |
+| `snapshot` | Snapshot existe dans Azure | `verify_snapshot` → Azure API |
+| `block_suspicious_ip` | Règle NSG pour l'IP | `verify_block_ip` → non implémenté |
+| Autre | — | `verified=None` |
+
+`verified=False` → escalade humaine (l'action n'a pas eu l'effet voulu).
+`verified=None` → verification non implémentée, cycle stocké sans claim de succès.
+`verified=True` → action confirmée.
+
+### Qui possède la vérification finale ?
+
+**Annatar** vérifie son propre restore (integrity check post-backup) — c'est son rôle de chaos testing, mesurer si l'infra tient ses SLAs.
+
+**Glorfindel** vérifie ses propres actions (NSG rule, snapshot) — c'est son rôle de réponse, confirmer que la contention a fonctionné.
+
+Les deux périmètres ne se recoupent pas. `recovery_complete` vient d'Annatar et signifie "le restore Azure Backup a réussi". Ce n'est pas Glorfindel qui valide le restore — il le reçoit comme information et décide quoi faire ensuite (snapshot forensique du state propre).
+
+### Concurrence Glorfindel
+
+Le poll loop est séquentiel dans chaque cycle : tous les nouveaux signaux d'un fichier sont traités l'un après l'autre avant de passer au fichier suivant. Deux signaux quasi-simultanés (`detection` + `detection_timeout`) sont traités séquentiellement, pas en parallèle. Pas de risque de décisions concurrentes sur la même ressource dans la version actuelle.
+
+### State management inter-signaux
+
+Glorfindel traite chaque signal indépendamment. Le `run_id` est présent dans le contexte du signal mais pas utilisé pour construire un état explicite du run en cours. La mémoire RAG compense partiellement : le cycle précédent (`detection` → `isolate_vm`) est retrouvé par similarité et injecté comme contexte lors du signal suivant (`recovery_complete`). Limitation connue : deux runs simultanés sur la même ressource pourraient créer une confusion dans la RAG.
+
 ### Apprentissage par la boucle (RAG sur cycles passés)
 
 Chaque cycle complet `(signal → décision → action → outcome)` est stocké dans un vecteur store.

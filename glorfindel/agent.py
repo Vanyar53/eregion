@@ -189,22 +189,39 @@ def escalate_to_human(state: GlorfindelState) -> GlorfindelState:
 
 
 def verify_action(state: GlorfindelState, *, connector: CloudConnector) -> GlorfindelState:
-    """Check that the executed action had the intended effect."""
+    """Check that the executed action had the intended effect.
+
+    verified=True  → action confirmed, proceed to store_cycle
+    verified=False → action failed, escalate to human
+    verified=None  → verification not implemented for this action, proceed without claim
+    """
     action = state["action"]
     resource_id = state["signal"].get("resource_id", "")
+    outcome = state.get("outcome") or {}
 
     if action == "isolate_vm":
         verification = connector.verify_isolation(resource_id)
+    elif action == "snapshot":
+        verification = connector.verify_snapshot(outcome.get("snapshot_id", ""))
+    elif action == "block_suspicious_ip":
+        ip = state["signal"].get("context", {}).get("suspicious_ip", "")
+        verification = connector.verify_block_ip(ip, resource_id)
     else:
-        verification = {"verified": True, "method": "no_check"}
+        verification = {"verified": None, "method": "not_implemented"}
 
-    outcome = {**(state.get("outcome") or {}), **verification}
+    verified = verification.get("verified")
+    escalate = verified is False
     escalation_reason = (
-        f"Action {action} executed but verification failed: {verification.get('error', 'rule not found')}"
-        if not verification.get("verified", True)
+        f"Action '{action}' executed but verification failed: {verification.get('error', 'check failed')}"
+        if escalate
         else state.get("escalation_reason", "")
     )
-    return {**state, "outcome": outcome, "escalate": not verification.get("verified", True), "escalation_reason": escalation_reason}
+    return {
+        **state,
+        "outcome": {**outcome, **verification},
+        "escalate": escalate,
+        "escalation_reason": escalation_reason,
+    }
 
 
 def store_cycle(state: GlorfindelState, *, memory: CycleMemory) -> GlorfindelState:
@@ -225,7 +242,8 @@ def store_cycle(state: GlorfindelState, *, memory: CycleMemory) -> GlorfindelSta
 
 def _route_after_verify(state: GlorfindelState) -> str:
     outcome = state.get("outcome") or {}
-    if not outcome.get("verified", True):
+    # Only escalate on explicit False — None (not implemented) proceeds to store
+    if outcome.get("verified") is False:
         return "escalate_to_human"
     return "store_cycle"
 

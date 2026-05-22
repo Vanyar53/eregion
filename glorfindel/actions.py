@@ -48,6 +48,16 @@ class CloudConnector(ABC):
         """Confirm that isolation rules are active on the VM's NSG."""
         ...
 
+    @abstractmethod
+    def verify_snapshot(self, snap_id: str) -> dict:
+        """Confirm that a snapshot was actually created."""
+        ...
+
+    @abstractmethod
+    def verify_block_ip(self, ip: str, resource_id: str) -> dict:
+        """Confirm that the deny rule for this IP is active on the NSG."""
+        ...
+
 
 class AzureConnector(CloudConnector):
     """Azure implementation of CloudConnector.
@@ -175,6 +185,28 @@ class AzureConnector(CloudConnector):
             return {"verified": True, "method": "nsg_check", "nsg": f"{nsg_rg}/{nsg_name}"}
         except Exception as e:
             return {"verified": False, "method": "nsg_check", "error": str(e)}
+
+    def verify_snapshot(self, snap_id: str) -> dict:
+        if self.dry_run:
+            return {"verified": True, "method": "dry_run"}
+        if not snap_id:
+            return {"verified": None, "method": "no_snap_id"}
+        self._ensure_clients()
+        try:
+            rg = snap_id.split("/resourceGroups/")[1].split("/")[0] if "/resourceGroups/" in snap_id else None
+            name = snap_id.split("/")[-1]
+            if rg:
+                self._compute.snapshots.get(rg, name)
+                return {"verified": True, "method": "snapshot_check", "snap_id": snap_id}
+            return {"verified": None, "method": "not_implemented", "note": "snap_id is not a full resource ID"}
+        except Exception as e:
+            return {"verified": False, "method": "snapshot_check", "error": str(e)}
+
+    def verify_block_ip(self, ip: str, resource_id: str) -> dict:
+        if self.dry_run:
+            return {"verified": True, "method": "dry_run"}
+        # Real NSG rule check not yet implemented — block_suspicious_ip itself is not implemented
+        return {"verified": None, "method": "not_implemented"}
 
     def _get_primary_nic_id(self, rg: str, vm_name: str) -> str:
         vm = self._compute.virtual_machines.get(rg, vm_name)

@@ -11,3 +11,10 @@ resource "azurerm_storage_container" "exfil" {
   name               = "exfil-target"
   storage_account_id = azurerm_storage_account.exfil.id
 }
+
+# VM managed identity needs to write blobs for exfil simulation
+resource "azurerm_role_assignment" "vm_storage_exfil" {
+  scope                = azurerm_storage_account.exfil.id
+  role_definition_name = "Storage Blob Data Contributor"
+  principal_id         = azurerm_linux_virtual_machine.victim.identity[0].principal_id
+}

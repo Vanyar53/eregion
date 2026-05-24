@@ -57,6 +57,17 @@ class Engine:
         metrics = {}
         checks = {}
 
+        # Pre-run integrity check — VM must be clean before attacking
+        # Also validates that the previous run's restore succeeded
+        console.print("[cyan]->[/cyan] Pre-run integrity check...")
+        if not executor.verify_restore_integrity():
+            console.print(
+                "[red]Pre-run integrity check FAILED — VM is not in a clean state.[/red]\n"
+                "  Previous run may not have been restored. Run:\n"
+                f"  [bold]glorfindel restore {executor.resource_id} --yes[/bold]"
+            )
+            return
+
         # Setup
         for action in scenario.setup:
             self._execute_action(executor, action)
@@ -99,74 +110,6 @@ class Engine:
                         raw_signal={"passed": False},
                     )
 
-            # Recovery — restore is triggered by Glorfindel (human-approved)
-            if scenario.recovery:
-                vault = scenario.recovery.get("vault", "rsv-annatar")
-                console.print(
-                    f"\n[yellow]  Restore is a human-approved action.[/yellow]\n"
-                    f"  Glorfindel will escalate — approve with:\n\n"
-                    f"  [bold]glorfindel restore {executor.resource_id} --vault {vault} --yes[/bold]\n"
-                )
-
-                # Wait for VM to be deallocated — confirms restore has started
-                heartbeat_timeout = self._parse_duration(
-                    scenario.recovery.get("heartbeat_timeout", "600s")
-                )
-                console.print("[cyan]->[/cyan] Waiting for restore to start (VM deallocation)...")
-                executor.wait_for_deallocation(timeout_s=heartbeat_timeout)
-                restore_started = time.time()
-
-                # Wait for VM heartbeat — proves restore completed
-                console.print("[cyan]->[/cyan] Waiting for VM heartbeat...")
-                heartbeat_elapsed = collector.wait_for_heartbeat(
-                    vm_name=scenario.target["vm_name"],
-                    timeout_s=heartbeat_timeout,
-                    since=restore_started,
-                )
-
-                # Integrity check — proves data is in backup state
-                console.print("[cyan]->[/cyan] Verifying restore integrity...")
-                integrity_ok = executor.verify_restore_integrity()
-
-                recovery_time = time.time() - T0
-                metrics["recovery_s"] = round(recovery_time)
-                metrics["heartbeat_s"] = round(heartbeat_elapsed) if heartbeat_elapsed is not None else None
-
-                threshold = self._parse_duration(scenario.recovery.get("time_max", "9999s"))
-                ok = recovery_time <= threshold and integrity_ok and heartbeat_elapsed is not None
-                if not ok:
-                    reasons = []
-                    if recovery_time > threshold:
-                        reasons.append(f"{round(recovery_time/60)}min vs RTO {round(threshold/60)}min")
-                    if heartbeat_elapsed is None:
-                        reasons.append("heartbeat timeout")
-                    if not integrity_ok:
-                        reasons.append("integrity check failed")
-                    checks["recovery"] = "FAIL — " + ", ".join(reasons)
-                    emitter.emit(
-                        event="recovery_failed",
-                        raw_signal={"reasons": reasons, "passed": False},
-                        metrics={
-                            "recovery_s": metrics["recovery_s"],
-                            "heartbeat_s": metrics["heartbeat_s"],
-                        },
-                    )
-                else:
-                    checks["recovery"] = "PASS"
-                console.print(f"  Recovery: {checks['recovery']}")
-                emitter.emit(
-                    event="recovery_complete",
-                    raw_signal={
-                        "recovery_time_s": round(recovery_time),
-                        "integrity_ok": integrity_ok,
-                        "heartbeat_elapsed_s": round(heartbeat_elapsed) if heartbeat_elapsed is not None else None,
-                        "passed": ok,
-                    },
-                    metrics={
-                        "recovery_s": metrics["recovery_s"],
-                        "heartbeat_s": metrics["heartbeat_s"],
-                    },
-                )
 
             overall = "PASS" if all("PASS" in v for v in checks.values()) else "FAIL"
             report = RunReport(

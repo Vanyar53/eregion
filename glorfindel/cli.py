@@ -162,14 +162,17 @@ def restore(resource_id: str, vault: str, dry_run: bool, yes: bool):
             console.print("Aborted.")
             return
 
+    import time as _time
     console.print("[cyan]->[/cyan] Triggering restore...")
+    t0 = _time.time()
     result = connector.restore_from_backup(resource_id, vault=vault)
+    rto_s = round(_time.time() - t0)
 
     if dry_run:
         console.print("[yellow]DRY RUN — no changes made.[/yellow]")
     else:
-        console.print(f"[green]✓ Restore complete.[/green]  RP: {result.get('recovery_point_time')}")
-        console.print("[dim]Annatar will detect the heartbeat and emit recovery_complete.[/dim]")
+        rto_label = f"{rto_s // 60}min {rto_s % 60}s"
+        console.print(f"[green]✓ Restore complete.[/green]  RTO: {rto_label}  RP: {result.get('recovery_point_time')}")
 
 
 @cli.command()

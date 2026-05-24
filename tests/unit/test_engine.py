@@ -92,35 +92,32 @@ def test_engine_emits_detection_timeout_signal(tmp_path, monkeypatch):
     assert json.loads(lines[0])["event"] == "detection_timeout"
 
 
-def test_engine_emits_recovery_complete_signal(tmp_path, monkeypatch):
-    """ransomware-vm: detection + recovery → two signals, recovery_complete."""
+def test_engine_emits_detection_only(tmp_path, monkeypatch):
+    """ransomware-vm: Annatar emits detection only — recovery is Glorfindel's."""
     monkeypatch.chdir(tmp_path)
     engine = Engine()
     executor = _make_executor()
-    collector = _make_collector(detection_time=10.0, heartbeat_time=300.0)
+    collector = _make_collector(detection_time=10.0)
 
     with patch.object(engine, "_get_executor_collector", return_value=(executor, collector)):
         engine.run(RANSOMWARE_YAML, skip_confirm=True)
 
     files = list((tmp_path / "runs").glob("*_signals.jsonl"))
     lines = files[0].read_text().strip().splitlines()
-    assert len(lines) == 2
-    events = [json.loads(l)["event"] for l in lines]
-    assert "detection" in events
-    assert "recovery_complete" in events
+    assert len(lines) == 1
+    assert json.loads(lines[0])["event"] == "detection"
 
 
-def test_engine_emits_recovery_failed_on_heartbeat_timeout(tmp_path, monkeypatch):
-    """Heartbeat timeout → recovery_failed event with reason."""
+def test_engine_aborts_if_precheck_fails(tmp_path, monkeypatch):
+    """Pre-run integrity check failure → engine aborts, no signals emitted."""
     monkeypatch.chdir(tmp_path)
     engine = Engine()
     executor = _make_executor()
-    collector = _make_collector(detection_time=10.0, heartbeat_time=None)
+    executor.verify_restore_integrity.return_value = False
+    collector = _make_collector(detection_time=10.0)
 
     with patch.object(engine, "_get_executor_collector", return_value=(executor, collector)):
         engine.run(RANSOMWARE_YAML, skip_confirm=True)
 
     files = list((tmp_path / "runs").glob("*_signals.jsonl"))
-    lines = files[0].read_text().strip().splitlines()
-    recovery_signal = next(json.loads(l) for l in lines if json.loads(l)["event"] == "recovery_failed")
-    assert "heartbeat timeout" in recovery_signal["raw_signal"]["reasons"]
+    assert files == []

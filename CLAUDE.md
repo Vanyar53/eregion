@@ -70,6 +70,8 @@ Humain
 
 RTO validé en réel (2026-05-24, run 2) : detect 50s + isolate 9s + restore 20min 20s + release 4s ≈ 21min 23s (hors décision humaine)
 
+T1041 validé en réel (2026-05-24, run 3) : detect 229s + isolate 10s (via StorageBlobLogs — near-realtime)
+
 ---
 
 ## Architecture — Cloud agnostique
@@ -212,8 +214,9 @@ Toutes dans `rg: annatar`, taguées `annatar-test: "true"` (déployées via `inf
 - `vm-annatar-victim` : Ubuntu 22.04, Standard_D2as_v6, 32GB sur `/mnt/testdata`
 - `law-annatar` : Log Analytics Workspace (`b451c51a-1cd0-4125-ac70-6aaf2c1dc209`)
 - `rsv-annatar` : Recovery Services Vault + backup policy
-- `stannatarexfil` : Storage account cible exfiltration
+- `stannatarexfil` : Storage account cible exfiltration — diagnostic settings activés (`StorageBlobLogs` → `law-annatar`)
 - `nsg-annatar` : NSG attaché au **subnet** (pas au NIC) — fallback implémenté dans `_get_nic_nsg`
+- VNet flow logs activés sur `vnet-annatar` → Traffic Analytics → `law-annatar` (10 min interval, peuple `AzureNetworkAnalytics_CL`)
 
 VM auto-shutdown 23h00 UTC — `az vm start -g annatar -n vm-annatar-victim` avant chaque run.
 
@@ -228,15 +231,21 @@ az vm start -g annatar -n vm-annatar-victim
 # 2. Lancer Glorfindel en watch (terminal 1)
 glorfindel watch runs/
 
-# 3. Lancer le scénario Annatar (terminal 2)
+# 3a. Scénario ransomware (terminal 2)
 annatar run scenarios/azure/ransomware-vm.yaml
+
+# 3b. Scénario exfiltration (terminal 2)
+annatar run scenarios/azure/data-exfiltration.yaml
+# �� détection via StorageBlobLogs (~229s) → isolate_vm autonome
 
 # 4. Attendre que Glorfindel isole la VM (automatique)
 
-# 5. Restore humain (terminal 3)
+# 5. Restore humain (terminal 3) — IMPORTANT: passer --before T0 de l'attaque
+#    pour éviter de restaurer un backup post-attaque
 glorfindel restore \
   /subscriptions/44a4dc83-3e79-4e4e-aa93-1b4f8e3ede80/resourceGroups/annatar/providers/Microsoft.Compute/virtualMachines/vm-annatar-victim \
-  --yes
+  --yes \
+  --before 2026-05-24T13:44:00+00:00   # timestamp T0 du run Annatar
 # → restore (~20 min) → recovery_complete → Glorfindel release_isolation
 
 # Mode forensique (garder la VM isolée après restore)
@@ -271,7 +280,11 @@ glorfindel restore ... --yes --keep-isolated
 9. ✅ `glorfindel restore` émet `recovery_complete` → Glorfindel `release_isolation` autonome (run 2 validé)
 10. ✅ `glorfindel pending` / `ack` — escalades persistées, webhook optionnel (`GLORFINDEL_WEBHOOK_URL`)
 11. ✅ `block_suspicious_ip` + `verify_block_ip` implémentés dans `AzureConnector`
-12. Scénario exfiltration T1041 — run réel + valider `block_suspicious_ip` end-to-end
+12. ✅ Scénario T1041 validé en réel — détection via `StorageBlobLogs` (229s), `isolate_vm` autonome, RAG cross-scénario
+13. ✅ Observabilité — `runs/{run_id}_debug.jsonl`, `confidence` + `past_cycles_used` dans ChromaDB, label self-reported
+14. ✅ `glorfindel restore --before ISO8601` — sélection recovery point pre-attaque
+15. ✅ Engine Annatar : setup avant integrity check — Annatar nettoie ses propres résidus
+16. Scénario lateral movement / privilege escalation — tester `block_suspicious_ip` sur IP externe
 
 ---
 
@@ -367,9 +380,14 @@ potentiellement codifie l'action (ex: `release_isolation` fut d'abord proposée,
 ### Apprentissage par la boucle (RAG)
 
 Chaque cycle `(signal → décision → action → outcome)` est stocké dans ChromaDB avec
-métadonnées : `ttp`, `action`, `event`, `run_id`, `detection_s`, `action_s`.
+métadonnées : `ttp`, `action`, `event`, `run_id`, `detection_s`, `action_s`, `confidence`, `past_cycles_used`.
 Les 3 cycles les plus similaires sont injectés à chaque décision. Le modèle de base
 reste stable — l'expérience s'accumule dans la base vectorielle.
+
+RAG cross-scénario validé : au run T1041, Glorfindel a référencé 2 cycles T1041 passés
+(detection_timeout) + 1 cycle T1486 (isolate_vm validé) pour calibrer sa décision.
+
+Chaque run produit `runs/{run_id}_debug.jsonl` — trace complète signal + past_cycles + reasoning + outcome.
 
 ### Abstraction cloud (CloudConnector)
 
@@ -381,9 +399,37 @@ class CloudConnector(ABC):
     def snapshot(self, resource_id: str) -> str: ...
     def verify_isolation(self, resource_id: str) -> dict: ...
     def verify_snapshot(self, snap_id: str) -> dict: ...
-    def restore_from_backup(self, resource_id: str, vault: str) -> dict: ...
+    def restore_from_backup(self, resource_id: str, vault: str, before_attack_time: str | None) -> dict: ...
     def verify_block_ip(self, ip: str, resource_id: str) -> dict: ...
 ```
+
+### Détection T1041 — StorageBlobLogs (décision arrêtée)
+
+`AzureNetworkAnalytics_CL` (Traffic Analytics) a une latence de 10-60 min — inutilisable pour
+un timeout de 300-900s. Détection T1041 via `StorageBlobLogs` sur `stannatarexfil` :
+- Latence : quelques secondes (diagnostic settings direct → Log Analytics)
+- `CallerIpAddress` dans les logs = IP de la source (interne si VM dans le VNet)
+- `OperationName == "PutBlob"` + `ObjectKey has "exfil-target"` = signature exfiltration
+
+Note : `CallerIpAddress` est l'IP **privée** de la VM (10.10.1.4) quand elle upload via MSI
+depuis le VNet. Glorfindel a correctement préféré `isolate_vm` à `block_suspicious_ip` car
+bloquer une IP interne au NSG périmétrique n'arrête pas l'exfiltration depuis la VM elle-même.
+`block_suspicious_ip` sera pertinent sur un scénario avec attaquant **externe**.
+
+### glorfindel restore — sélection pre-attaque
+
+Sans `--before`, Azure Backup sélectionne le recovery point le plus récent — qui peut être
+post-attaque si un backup a tourné pendant l'attaque. Toujours passer `--before <T0>` :
+```bash
+glorfindel restore <resource_id> --yes --before 2026-05-24T13:44:00+00:00
+```
+Le run_id Annatar encode l'heure du run (format `%Y%m%dT%H%M%SZ`) — T0 est extractible.
+
+### Annatar engine — ordre setup / integrity check
+
+Setup tourne **avant** l'integrity check (pas après). `setup_testdata.sh` supprime les
+résidus de l'attaque précédente. L'integrity check valide l'état post-setup. Si le check
+échoue après setup, le disque a un problème structurel (pas monté, marker manquant).
 
 ### Open-core — ce qui est OSS vs SaaS
 

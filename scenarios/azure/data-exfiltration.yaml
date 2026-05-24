@@ -27,10 +27,9 @@ detection:
     | where FlowType_s == "ExternalPublic"
     | where BytesSentInFlows_d > 104857600
     | where TimeGenerated > ago(10m)
-  # AzureNetworkAnalytics_CL has 10-60 min latency via Traffic Analytics.
-  # Detection will timeout on first run — Glorfindel will snapshot + escalate.
-  # Future: replace with near-realtime source (Sentinel alert, custom LA event).
-  timeout: "300s"
+  # AzureNetworkAnalytics_CL is populated by Traffic Analytics (10 min interval minimum).
+  # 900s gives Glorfindel at least one full interval to detect the flow anomaly.
+  timeout: "900s"
 
 # No recovery for exfiltration — detection only
 recovery: null

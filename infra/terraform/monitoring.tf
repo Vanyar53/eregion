@@ -91,3 +91,38 @@ resource "azurerm_role_assignment" "ama_dcr" {
   role_definition_name = "Monitoring Metrics Publisher"
   principal_id         = azurerm_linux_virtual_machine.victim.identity[0].principal_id
 }
+
+# Network Watcher — auto-created by Azure per region, reference as data source
+data "azurerm_network_watcher" "annatar" {
+  name                = "NetworkWatcher_${local.cfg.location}"
+  resource_group_name = "NetworkWatcherRG"
+}
+
+# NSG Flow Logs + Traffic Analytics — populates AzureNetworkAnalytics_CL in law-annatar.
+# Enables T1041 detection via outbound traffic anomaly queries.
+# Minimum interval is 10 min — detection timeout in data-exfiltration.yaml is set to 900s.
+resource "azurerm_network_watcher_flow_log" "annatar" {
+  network_watcher_name = data.azurerm_network_watcher.annatar.name
+  resource_group_name  = data.azurerm_network_watcher.annatar.resource_group_name
+  name                 = "flowlog-annatar"
+
+  # VNet flow logs (NSG flow logs retired June 2025 — target_resource_id replaces network_security_group_id)
+  target_resource_id = azurerm_virtual_network.annatar.id
+  storage_account_id = azurerm_storage_account.exfil.id
+  enabled            = true
+
+  traffic_analytics {
+    enabled               = true
+    workspace_id          = azurerm_log_analytics_workspace.annatar.workspace_id
+    workspace_region      = azurerm_resource_group.annatar.location
+    workspace_resource_id = azurerm_log_analytics_workspace.annatar.id
+    interval_in_minutes   = 10
+  }
+
+  retention_policy {
+    enabled = true
+    days    = 7
+  }
+
+  tags = azurerm_resource_group.annatar.tags
+}

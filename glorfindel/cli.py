@@ -194,14 +194,21 @@ def restore(resource_id: str, vault: str, dry_run: bool, yes: bool, keep_isolate
 
     # Emit recovery_complete and let Glorfindel decide (release_isolation)
     sig = _build_recovery_signal(resource_id, result, rto_s)
-    _write_signal(sig)
+    out = _write_signal(sig)
     console.rule("[bold cyan]Glorfindel — Recovery Response[/bold cyan]")
     console.print(f"  Event    : recovery_complete  |  Resource: {resource_id}\n")
 
-    from glorfindel.agent import GlorfindelAgent
-    agent = GlorfindelAgent(dry_run=dry_run, model=model, memory_path=memory_path)
-    state = agent.respond(sig)
-    _render_decision(state, dry_run)
+    try:
+        from glorfindel.agent import GlorfindelAgent
+        agent = GlorfindelAgent(dry_run=dry_run, model=model, memory_path=memory_path)
+        state = agent.respond(sig)
+        _render_decision(state, dry_run)
+    except Exception as e:
+        console.print(f"[red]Glorfindel agent error:[/red] {e}")
+        console.print(
+            f"[yellow]Signal saved to {out.name} — process manually:[/yellow]\n"
+            f"  glorfindel respond {out}"
+        )
 
 
 @cli.command()

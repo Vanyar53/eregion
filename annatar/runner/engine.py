@@ -108,15 +108,20 @@ class Engine:
                     f"  [bold]glorfindel restore {executor.resource_id} --vault {vault} --yes[/bold]\n"
                 )
 
-                # Wait for VM heartbeat — proves restore completed (whoever triggered it)
+                # Wait for VM to be deallocated — confirms restore has started
                 heartbeat_timeout = self._parse_duration(
                     scenario.recovery.get("heartbeat_timeout", "600s")
                 )
+                console.print("[cyan]->[/cyan] Waiting for restore to start (VM deallocation)...")
+                executor.wait_for_deallocation(timeout_s=heartbeat_timeout)
+                restore_started = time.time()
+
+                # Wait for VM heartbeat — proves restore completed
                 console.print("[cyan]->[/cyan] Waiting for VM heartbeat...")
                 heartbeat_elapsed = collector.wait_for_heartbeat(
                     vm_name=scenario.target["vm_name"],
                     timeout_s=heartbeat_timeout,
-                    since=T0,
+                    since=restore_started,
                 )
 
                 # Integrity check — proves data is in backup state

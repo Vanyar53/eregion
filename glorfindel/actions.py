@@ -327,10 +327,22 @@ class AzureConnector(CloudConnector):
     def _get_nic_nsg(self, nic_id: str) -> tuple[str, str]:
         nic_rg, nic_name = _parse_nic_resource_id(nic_id)
         nic = self._network.network_interfaces.get(nic_rg, nic_name)
-        if nic.network_security_group is None:
-            raise RuntimeError(f"NIC {nic_name} has no NSG — cannot isolate VM")
-        nsg_id = nic.network_security_group.id
-        return _parse_nsg_resource_id(nsg_id)
+
+        # NIC-level NSG (preferred)
+        if nic.network_security_group is not None:
+            return _parse_nsg_resource_id(nic.network_security_group.id)
+
+        # Fallback: subnet-level NSG
+        subnet_id = nic.ip_configurations[0].subnet.id
+        # /subscriptions/.../virtualNetworks/<vnet>/subnets/<subnet>
+        parts = subnet_id.split("/")
+        sub_rg = parts[parts.index("resourceGroups") + 1]
+        vnet = parts[parts.index("virtualNetworks") + 1]
+        subnet_name = parts[-1]
+        subnet = self._network.subnets.get(sub_rg, vnet, subnet_name)
+        if subnet.network_security_group is None:
+            raise RuntimeError(f"NIC {nic_name} and its subnet have no NSG — cannot isolate VM")
+        return _parse_nsg_resource_id(subnet.network_security_group.id)
 
 
 def _parse_vm_resource_id(resource_id: str) -> tuple[str, str]:

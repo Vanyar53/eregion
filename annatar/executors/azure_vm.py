@@ -51,19 +51,36 @@ class AzureVMExecutor:
 
         console.print(f"  [dim]RunCommand → {self.vm_name} : {script_path}[/dim]")
 
+        from azure.mgmt.compute.models import RunCommandInput, RunCommandInputParameter
         poller = self._compute.virtual_machines.begin_run_command(
             self.resource_group,
             self.vm_name,
-            {
-                "command_id": "RunShellScript",
-                "script": [script_content],
-                "parameters": [{"name": "arg", "value": p} for p in (params or [])],
-            },
+            RunCommandInput(
+                command_id="RunShellScript",
+                script=[script_content],
+                parameters=[RunCommandInputParameter(name="arg", value=p) for p in (params or [])],
+            ),
         )
         result = poller.result()
         output = result.value[0].message if result.value else ""
         console.print(f"  [dim]{output.strip()[-200:]}[/dim]")
         return output
+
+    def wait_for_deallocation(self, timeout_s: float = 600, interval_s: float = 15) -> None:
+        """Block until the VM is deallocated (restore has started) or timeout."""
+        import time
+        start = time.time()
+        while True:
+            iv = self._compute.virtual_machines.get(
+                self.resource_group, self.vm_name, expand="instanceView"
+            ).instance_view
+            statuses = {s.code for s in (iv.statuses or [])}
+            if "PowerState/running" not in statuses:
+                console.print(f"  [dim]VM deallocated — restore in progress.[/dim]")
+                return
+            if time.time() - start >= timeout_s:
+                raise RuntimeError("Timeout waiting for VM deallocation — was glorfindel restore run?")
+            time.sleep(interval_s)
 
     def trigger_recovery(self, recovery_config: dict, attack_time: float | None = None) -> None:
         action = recovery_config.get("action")

@@ -153,13 +153,14 @@ def poll_detection(state: GlorfindelState) -> GlorfindelState:
         return {**state, "signal": {**signal, "event": "detection_timeout"}}
 
     _console.print(f"[cyan]->[/cyan] Polling {source} (timeout={int(timeout_s)}s)...")
-    detection_s = detector.poll_alert(query, since=attack_time, timeout_s=timeout_s)
+    result = detector.poll_alert(query, since=attack_time, timeout_s=timeout_s)
 
-    if detection_s is not None:
+    if result is not None:
+        detection_s, detected_row = result
         updated_signal = {
             **signal,
             "event": "detection",
-            "raw_signal": {**raw, "detection_time_s": detection_s},
+            "raw_signal": {**raw, "detection_time_s": detection_s, "detected_data": detected_row},
         }
     else:
         _console.print(f"  [yellow]Detection timeout after {int(timeout_s)}s — IDS gap signal[/yellow]")
@@ -218,7 +219,15 @@ def execute_action(state: GlorfindelState, *, connector: CloudConnector) -> Glor
     elif action == "release_isolation":
         outcome = connector.release_isolation(resource_id)
     elif action == "block_suspicious_ip":
-        ip = state["signal"].get("context", {}).get("suspicious_ip", "")
+        raw = state["signal"].get("raw_signal", {})
+        detected = raw.get("detected_data", {})
+        ip = (
+            state["signal"].get("context", {}).get("suspicious_ip")
+            or detected.get("DestIP_s")
+            or detected.get("DestinationIp")
+            or detected.get("DestinationIPAddress")
+            or ""
+        )
         outcome = connector.block_suspicious_ip(ip, resource_id)
     elif action == "snapshot":
         snap_id = connector.snapshot(resource_id)
@@ -275,7 +284,15 @@ def verify_action(state: GlorfindelState, *, connector: CloudConnector) -> Glorf
     elif action == "snapshot":
         verification = connector.verify_snapshot(outcome.get("snapshot_id", ""))
     elif action == "block_suspicious_ip":
-        ip = state["signal"].get("context", {}).get("suspicious_ip", "")
+        raw_s = state["signal"].get("raw_signal", {})
+        detected_v = raw_s.get("detected_data", {})
+        ip = (
+            state["signal"].get("context", {}).get("suspicious_ip")
+            or detected_v.get("DestIP_s")
+            or detected_v.get("DestinationIp")
+            or detected_v.get("DestinationIPAddress")
+            or outcome.get("ip", "")
+        )
         verification = connector.verify_block_ip(ip, resource_id)
     else:
         verification = {"verified": None, "method": "not_implemented"}

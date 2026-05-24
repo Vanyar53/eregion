@@ -179,7 +179,41 @@ class AzureConnector(CloudConnector):
     def block_suspicious_ip(self, ip: str, resource_id: str) -> dict:
         if self.dry_run:
             return {"status": "dry_run", "action": "block_ip", "ip": ip}
-        raise NotImplementedError("block_suspicious_ip: not yet implemented")
+        if not ip:
+            raise ValueError("block_suspicious_ip: no IP address provided")
+
+        self._ensure_clients()
+        rg, vm_name = _parse_vm_resource_id(resource_id)
+        nic_id = self._get_primary_nic_id(rg, vm_name)
+        nsg_rg, nsg_name = self._get_nic_nsg(nic_id)
+
+        from azure.mgmt.network.models import SecurityRule
+
+        existing = list(self._network.security_rules.list(nsg_rg, nsg_name))
+        used_priorities = {r.priority for r in existing}
+        priority = next(p for p in range(200, 4000, 10) if p not in used_priorities)
+
+        rule_name = f"glorfindel-block-{ip.replace('.', '-').replace('/', '-')}"
+        for direction in ("Inbound", "Outbound"):
+            name = rule_name if direction == "Inbound" else f"{rule_name}-out"
+            self._network.security_rules.begin_create_or_update(
+                nsg_rg, nsg_name, name,
+                SecurityRule(
+                    name=name, protocol="*",
+                    source_port_range="*", destination_port_range="*",
+                    source_address_prefix=ip if direction == "Inbound" else "*",
+                    destination_address_prefix="*" if direction == "Inbound" else ip,
+                    access="Deny", priority=priority, direction=direction,
+                ),
+            ).result()
+
+        return {
+            "status": "blocked",
+            "ip": ip,
+            "nsg": f"{nsg_rg}/{nsg_name}",
+            "rule": rule_name,
+            "resource_id": resource_id,
+        }
 
     def snapshot(self, resource_id: str) -> str:
         if self.dry_run:
@@ -329,8 +363,20 @@ class AzureConnector(CloudConnector):
     def verify_block_ip(self, ip: str, resource_id: str) -> dict:
         if self.dry_run:
             return {"verified": True, "method": "dry_run"}
-        # Real NSG rule check not yet implemented — block_suspicious_ip itself is not implemented
-        return {"verified": None, "method": "not_implemented"}
+        if not ip:
+            return {"verified": False, "method": "nsg_check", "error": "no IP provided"}
+
+        self._ensure_clients()
+        rg, vm_name = _parse_vm_resource_id(resource_id)
+        nic_id = self._get_primary_nic_id(rg, vm_name)
+        nsg_rg, nsg_name = self._get_nic_nsg(nic_id)
+
+        rule_name = f"glorfindel-block-{ip.replace('.', '-').replace('/', '-')}"
+        try:
+            self._network.security_rules.get(nsg_rg, nsg_name, rule_name)
+            return {"verified": True, "method": "nsg_check", "rule": rule_name}
+        except Exception as e:
+            return {"verified": False, "method": "nsg_check", "error": str(e)}
 
     def _get_primary_nic_id(self, rg: str, vm_name: str) -> str:
         vm = self._compute.virtual_machines.get(rg, vm_name)

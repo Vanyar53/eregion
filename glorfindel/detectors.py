@@ -19,11 +19,12 @@ class DetectionConnector(ABC):
         since: float,
         timeout_s: float,
         interval_s: float = 10.0,
-    ) -> float | None:
+    ) -> tuple[float, dict] | None:
         """Poll until the query returns results or timeout expires.
 
         since: Unix timestamp — only match events after this time.
-        Returns elapsed seconds since polling started, or None on timeout.
+        Returns (elapsed_seconds, first_result_row_as_dict) or None on timeout.
+        The result dict maps column names to values from the first matching row.
         """
         ...
 
@@ -59,8 +60,9 @@ class AzureMonitorDetector(DetectionConnector):
                 if response.status == LogsQueryStatus.SUCCESS:
                     for table in response.tables:
                         if table.rows:
+                            row = dict(zip(table.columns, table.rows[0]))
                             _console.print(f"  [green]Alert detected[/green] after {round(elapsed)}s")
-                            return round(elapsed)
+                            return round(elapsed), row
             except Exception as e:
                 _console.print(f"  [dim]Poll error: {e}[/dim]")
             _console.print(f"  [dim]Still polling... {round(elapsed)}s elapsed[/dim]")

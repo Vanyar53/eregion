@@ -77,12 +77,12 @@ def test_azure_connector_dry_run_verify_block_ip():
     assert result["verified"] is True
 
 
-def test_azure_connector_verify_block_ip_not_implemented():
+def test_azure_connector_verify_block_ip_dry_run():
     from glorfindel.actions import AzureConnector
-    connector = AzureConnector(dry_run=False)
-    result = connector.verify_block_ip("1.2.3.4", "resource_id")
-    assert result["verified"] is None
-    assert result["method"] == "not_implemented"
+    connector = AzureConnector(dry_run=True)
+    result = connector.verify_block_ip("1.2.3.4", "any_resource_id")
+    assert result["verified"] is True
+    assert result["method"] == "dry_run"
 
 
 # ── signals loader ────────────────────────────────────────────────────────────

@@ -53,16 +53,13 @@ detection:
   record: T1
 
 # ─── Recovery ──────────────────────────────────────────────────────────────────
-# Annatar triggers an Azure Backup OriginalLocation restore, then:
-#   - Waits for a Heartbeat in LAW to confirm the VM is back online (T3)
-#   - Runs scripts/verify_restore.sh on the VM to confirm disk is in clean state
-# recovery_s = T3 − T0.  FAIL if recovery_s > time_max, or integrity check fails.
+# Recovery is owned by Glorfindel (human-approved action).
+# After receiving the detection signal, Glorfindel isolates the VM then escalates
+# restore_from_backup for human approval. The operator runs:
+#   glorfindel restore <resource_id> --vault <vault> --yes
 #
-# CLIENT SETUP:
-#   Replace vault with the name of the Recovery Services Vault that protects this VM.
-#   The vault must have at least one recovery point — run a backup before the test.
-#   time_max is your declared RTO. If recovery takes longer, the test fails.
-#   heartbeat_timeout is how long to wait for the VM to come back before giving up.
+# vault: Recovery Services Vault name
+# The recovery section is kept here for vault config reference only.
 recovery:
   action: azure_backup_restore
   vault: rsv-annatar      # Name of your Recovery Services Vault
@@ -71,7 +68,6 @@ recovery:
   heartbeat_timeout: "600s"  # Max wait for VM heartbeat after restore completes
   record: T3
 
-cleanup:
-  - name: remove_attack_artifacts
-    action: run_script_on_vm
-    script: scripts/vm/cleanup_testdata.sh  # Fallback if restore failed — removes enc_*.dat manually
+cleanup: []
+# Cleanup removed — restore is Glorfindel's responsibility.
+# If restore fails, Glorfindel escalates to human. No manual fallback.

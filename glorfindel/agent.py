@@ -241,13 +241,25 @@ def execute_action(state: GlorfindelState, *, connector: CloudConnector) -> Glor
 
 def escalate_to_human(state: GlorfindelState) -> GlorfindelState:
     """Mark the decision as escalated — human must approve before any action."""
+    from glorfindel import escalations
+
     action = state["action"]
     if action in HUMAN_APPROVAL_REQUIRED:
         escalation_type = "destructive_action"
     elif action not in AUTONOMOUS_ACTIONS:
-        escalation_type = "proposed_action"  # LLM invented a new action
+        escalation_type = "proposed_action"
     else:
         escalation_type = "low_confidence"
+
+    signal = state["signal"]
+    escalations.record(
+        signal_id=signal.get("signal_id", ""),
+        resource_id=signal.get("resource_id", ""),
+        action=action,
+        escalation_type=escalation_type,
+        reason=state.get("escalation_reason", ""),
+        run_id=signal.get("context", {}).get("run_id", ""),
+    )
 
     return {
         **state,

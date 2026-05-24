@@ -183,6 +183,11 @@ def restore(resource_id: str, vault: str, dry_run: bool, yes: bool, keep_isolate
     console.print(f"[green]✓ Restore complete.[/green]  restore_time: {restore_label}  RP: {result.get('recovery_point_time')}")
     console.print(f"[dim]RTO = detection_s + isolation_s + restore_time  (human decision time excluded)[/dim]\n")
 
+    from glorfindel import escalations as _esc
+    resolved = _esc.resolve_by_resource(resource_id, "restore_from_backup")
+    if resolved:
+        console.print(f"[dim]✓ {resolved} pending escalation(s) resolved.[/dim]\n")
+
     if keep_isolated:
         console.print("[yellow]--keep-isolated: VM stays isolated. Run 'glorfindel release' when ready.[/yellow]")
         return
@@ -197,6 +202,46 @@ def restore(resource_id: str, vault: str, dry_run: bool, yes: bool, keep_isolate
     agent = GlorfindelAgent(dry_run=dry_run, model=model, memory_path=memory_path)
     state = agent.respond(sig)
     _render_decision(state, dry_run)
+
+
+@cli.command()
+def pending():
+    """Show all pending escalations waiting for human action."""
+    from datetime import datetime, timezone
+    from glorfindel import escalations
+    from rich.table import Table
+
+    items = escalations.pending()
+    if not items:
+        console.print("[green]No pending escalations.[/green]")
+        return
+
+    console.rule(f"[bold yellow]Glorfindel — {len(items)} pending escalation(s)[/bold yellow]")
+    now = datetime.now(timezone.utc)
+
+    for e in items:
+        ts = datetime.fromisoformat(e["timestamp"])
+        age_m = int((now - ts).total_seconds() // 60)
+        resource_short = e["resource_id"].split("/")[-1]
+
+        table = Table(show_header=False, box=None, padding=(0, 1))
+        table.add_column(style="dim", width=18)
+        table.add_column()
+        table.add_row("Time", f"{ts.strftime('%H:%M')} ({age_m}m ago)")
+        table.add_row("Action", f"[bold yellow]{e['action']}[/bold yellow]")
+        table.add_row("Resource", resource_short)
+        table.add_row("Type", e["escalation_type"])
+        table.add_row("Reason", e["reason"][:120] + ("…" if len(e["reason"]) > 120 else ""))
+        table.add_row("Run", e["run_id"])
+        console.print(table)
+
+        if e["action"] == "restore_from_backup":
+            console.print(f"  [cyan]→[/cyan] glorfindel restore {e['resource_id']} --yes")
+        elif e["action"] == "release_isolation":
+            console.print(f"  [cyan]→[/cyan] glorfindel release {e['resource_id']} --yes")
+        else:
+            console.print(f"  [cyan]→[/cyan] [dim]Review and act manually on: {e['action']}[/dim]")
+        console.print()
 
 
 @cli.command()

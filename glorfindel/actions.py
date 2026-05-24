@@ -60,8 +60,17 @@ class CloudConnector(ABC):
         ...
 
     @abstractmethod
-    def restore_from_backup(self, resource_id: str, vault: str = "rsv-annatar") -> dict:
-        """Trigger an Azure Backup OriginalLocation restore. Human-approved action."""
+    def restore_from_backup(
+        self,
+        resource_id: str,
+        vault: str = "rsv-annatar",
+        before_attack_time: str | None = None,
+    ) -> dict:
+        """Trigger an Azure Backup OriginalLocation restore. Human-approved action.
+
+        before_attack_time: ISO8601 timestamp — selects the most recent recovery point
+        that predates the attack, avoiding restoration of a post-attack backup.
+        """
         ...
 
     @abstractmethod
@@ -252,7 +261,12 @@ class AzureConnector(CloudConnector):
         except Exception as e:
             return {"verified": False, "method": "snapshot_check", "error": str(e)}
 
-    def restore_from_backup(self, resource_id: str, vault: str = "rsv-annatar") -> dict:
+    def restore_from_backup(
+        self,
+        resource_id: str,
+        vault: str = "rsv-annatar",
+        before_attack_time: str | None = None,
+    ) -> dict:
         if self.dry_run:
             return {"status": "dry_run", "action": "restore_from_backup", "resource_id": resource_id}
 
@@ -280,9 +294,29 @@ class AzureConnector(CloudConnector):
                 for t in (getattr(rp.properties, "recovery_point_tier_details", None) or [])
             )
 
-        vaulted = [rp for rp in rps if _has_vault_tier(rp)]
-        latest = vaulted[0] if vaulted else rps[0]
+        # Select the most recent clean recovery point — must predate the attack
+        # to avoid restoring a backup that already contains attack artifacts.
+        if before_attack_time:
+            attack_dt = datetime.fromisoformat(before_attack_time).astimezone(timezone.utc)
+            pre_attack = [
+                rp for rp in rps
+                if getattr(rp.properties, "recovery_point_time", None) is not None
+                and rp.properties.recovery_point_time < attack_dt
+            ]
+            if not pre_attack:
+                raise RuntimeError(
+                    f"No recovery point found before attack time {before_attack_time}. "
+                    "A backup may have run during the attack. Check the portal."
+                )
+            candidate_pool = pre_attack
+        else:
+            candidate_pool = rps
+
+        vaulted = [rp for rp in candidate_pool if _has_vault_tier(rp)]
+        latest = vaulted[0] if vaulted else candidate_pool[0]
         rp_time = getattr(latest.properties, "recovery_point_time", "unknown")
+        if before_attack_time:
+            _console.print(f"  [dim]Using pre-attack recovery point: {rp_time}[/dim]")
 
         vm = self._compute.virtual_machines.get(rg, vm_name)
         storage_id = (

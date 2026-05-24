@@ -146,14 +146,21 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
 @click.option("--keep-isolated", is_flag=True, envvar="GLORFINDEL_KEEP_ISOLATED",
               help="Skip recovery_complete signal — VM stays isolated after restore. "
                    "Also honoured via GLORFINDEL_KEEP_ISOLATED=1.")
+@click.option("--before", default=None, metavar="ISO8601",
+              help="Select recovery point before this timestamp (ISO8601). "
+                   "Prevents restoring a backup taken after the attack. "
+                   "Example: 2026-05-24T13:44:00+00:00")
 @click.option("--model", default="claude-sonnet-4-6", show_default=True)
 @click.option("--memory-path", default=None)
-def restore(resource_id: str, vault: str, dry_run: bool, yes: bool, keep_isolated: bool, model: str, memory_path: str | None):
+def restore(resource_id: str, vault: str, dry_run: bool, yes: bool, keep_isolated: bool, before: str | None, model: str, memory_path: str | None):
     """Trigger an Azure Backup restore on a VM (human approval action).
 
     Run this after Glorfindel escalates a restore_from_backup recommendation.
     After a successful restore, emits a recovery_complete signal and lets
     Glorfindel decide the next action (release_isolation), unless --keep-isolated.
+
+    Use --before <ISO8601> to ensure the recovery point predates the attack.
+    Without it, Azure may restore a post-attack backup that still contains artifacts.
     """
     from glorfindel.actions import AzureConnector
 
@@ -162,6 +169,8 @@ def restore(resource_id: str, vault: str, dry_run: bool, yes: bool, keep_isolate
     console.rule("[bold yellow]Glorfindel — Restore from Backup[/bold yellow]")
     console.print(f"  Resource : {resource_id}")
     console.print(f"  Vault    : {vault}")
+    if before:
+        console.print(f"  Before   : {before}")
     console.print(f"  Dry-run  : {dry_run}\n")
 
     if not dry_run and not yes:
@@ -172,7 +181,7 @@ def restore(resource_id: str, vault: str, dry_run: bool, yes: bool, keep_isolate
     import time as _time
     console.print("[cyan]->[/cyan] Triggering restore...")
     t0 = _time.time()
-    result = connector.restore_from_backup(resource_id, vault=vault)
+    result = connector.restore_from_backup(resource_id, vault=vault, before_attack_time=before)
     rto_s = round(_time.time() - t0)
 
     if dry_run:

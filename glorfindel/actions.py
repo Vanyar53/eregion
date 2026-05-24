@@ -326,8 +326,14 @@ class AzureConnector(CloudConnector):
             iso_check = self.verify_isolation(resource_id)
             if iso_check.get("verified"):
                 _console.print("  [dim]Releasing isolation (disk clean after restore)...[/dim]")
-                self.release_isolation(resource_id)
-                isolation_released = True
+                try:
+                    self.release_isolation(resource_id)
+                    isolation_released = True
+                except Exception as e:
+                    _console.print(
+                        f"  [yellow]Restore succeeded but isolation release failed:[/yellow] {e}\n"
+                        f"  Run: [bold]glorfindel release {resource_id} --yes[/bold]"
+                    )
 
         return {
             "status": "restored",

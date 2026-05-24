@@ -3,6 +3,10 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from pathlib import Path
 
+from rich.console import Console
+
+_console = Console()
+
 # Actions Glorfindel peut exécuter seul (réversibles)
 AUTONOMOUS_ACTIONS = {
     "isolate_vm",
@@ -297,18 +301,21 @@ class AzureConnector(CloudConnector):
         if restore_job is None:
             raise RuntimeError("Restore job not found after trigger")
 
+        _console.print(f"  [dim]Tracking job {restore_job.name} (15-30 min expected)...[/dim]")
         elapsed = 0
         while True:
             time.sleep(60)
             elapsed += 60
             job = backup_client.job_details.get(vault, rg, restore_job.name)
             status = getattr(job.properties, "status", "Unknown")
+            _console.print(f"  [dim]Still restoring... {elapsed // 60}min elapsed — {status}[/dim]")
             if status in ("Completed", "Failed", "Cancelled"):
                 break
 
         if status != "Completed":
             raise RuntimeError(f"Restore ended with status: {status}")
 
+        _console.print("  [dim]Starting VM after restore...[/dim]")
         self._compute.virtual_machines.begin_start(rg, vm_name).result()
 
         return {

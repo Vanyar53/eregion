@@ -72,6 +72,8 @@ RTO validé en réel (2026-05-24, run 2) : detect 50s + isolate 9s + restore 20m
 
 T1041 validé en réel (2026-05-24, run 3) : detect 229s + isolate 10s (via StorageBlobLogs — near-realtime)
 
+T1110.001 validé en réel (2026-05-24, run 4) : detect 60s + block_suspicious_ip 7s = RTO 67s (via Syslog DCR — Tor exit node 185.220.101.1 bloqué au NSG, isolate_vm non requis)
+
 ---
 
 ## Architecture — Cloud agnostique
@@ -149,7 +151,7 @@ HUMAN_APPROVAL_REQUIRED = [
 ```
 eregion/
 ├── scenarios/           # Scénarios YAML MITRE ATT&CK
-│   └── azure/           # ransomware-vm.yaml, data-exfiltration.yaml
+│   └── azure/           # ransomware-vm.yaml, data-exfiltration.yaml, lateral-movement.yaml
 ├── annatar/             # Package Agent Rouge
 │   ├── cli.py
 │   ├── runner/          # engine.py, parser.py, report.py
@@ -228,6 +230,12 @@ VM auto-shutdown 23h00 UTC — `az vm start -g annatar -n vm-annatar-victim` ava
 # 1. Démarrer la VM si nécessaire
 az vm start -g annatar -n vm-annatar-victim
 
+# CRITIQUE — vérifier l'état d'isolation avant chaque run
+# Une isolation active bloque AMA (outbound deny-all) → syslog non uploadé → detection timeout
+az network nsg rule list -g annatar --nsg-name nsg-annatar -o table  # chercher glorfindel-isolation-*
+# Si la VM est encore isolée :
+echo y | glorfindel release /subscriptions/44a4dc83-3e79-4e4e-aa93-1b4f8e3ede80/resourceGroups/annatar/providers/Microsoft.Compute/virtualMachines/vm-annatar-victim
+
 # 2. Lancer Glorfindel en watch (terminal 1)
 glorfindel watch runs/
 
@@ -236,7 +244,11 @@ annatar run scenarios/azure/ransomware-vm.yaml
 
 # 3b. Scénario exfiltration (terminal 2)
 annatar run scenarios/azure/data-exfiltration.yaml
-# �� détection via StorageBlobLogs (~229s) → isolate_vm autonome
+# détection via StorageBlobLogs (~229s) → isolate_vm autonome
+
+# 3c. Scénario lateral movement SSH brute force (terminal 2)
+annatar run scenarios/azure/lateral-movement.yaml
+# détection via Syslog DCR (~60s) → block_suspicious_ip autonome (IP externe uniquement)
 
 # 4. Attendre que Glorfindel isole la VM (automatique)
 
@@ -284,7 +296,17 @@ glorfindel restore ... --yes --keep-isolated
 13. ✅ Observabilité — `runs/{run_id}_debug.jsonl`, `confidence` + `past_cycles_used` dans ChromaDB, label self-reported
 14. ✅ `glorfindel restore --before ISO8601` — sélection recovery point pre-attaque
 15. ✅ Engine Annatar : setup avant integrity check — Annatar nettoie ses propres résidus
-16. Scénario lateral movement / privilege escalation — tester `block_suspicious_ip` sur IP externe
+16. ✅ Scénario T1110.001 validé en réel — detect 60s + block_suspicious_ip 7s, Syslog DCR, IP externe Tor bloquée au NSG
+
+**Milestone : MVP Azure complet — 3 TTPs validés en réel, boucle rouge→bleu fonctionnelle**
+
+Prochaines priorités :
+17. `verify_block_ip` : tester la vérification sur le run T1110.001 (déjà confirmée ✓ mais ajouter test unitaire)
+18. Scénario privilege escalation (T1068 ou T1548) — tester une action post-compromise interne
+19. Pytest : couverture unitaire des nodes LangGraph (decide, verify, store_cycle) avec signaux mockés
+20. `glorfindel check-ttl` : intégrer en cron (crontab ou systemd timer) pour auto-release après 4h
+21. Packaging OSS : pyproject.toml, README, CONTRIBUTING, licence Apache 2.0
+22. AWS provider : `AwsConnector(CloudConnector)` — Security Groups pour isolate_vm, GuardDuty pour detection
 
 ---
 
@@ -339,7 +361,8 @@ decision = {
 | Event | Posture | Action | Escalade |
 |---|---|---|---|
 | `attack_started` | — | poll_detection (node, pas une action LLM) | — |
-| `detection` | Attaque confirmée | `isolate_vm` (minimum effectif) | Non |
+| `detection` (T1486/T1041 IP interne) | Attaque confirmée | `isolate_vm` | Non |
+| `detection` (T1110 IP externe) | Attaque périmètre | `block_suspicious_ip` | Non |
 | `detection_timeout` | Gap IDS | `snapshot` (forensique non-disruptif) | Oui — expliquer le gap |
 | `recovery_complete` | VM propre après restore | `release_isolation` (idempotent) | Non |
 | `recovery_failed` | Restore échoué | Escalade | Oui |
@@ -351,11 +374,13 @@ decision = {
 | `isolate_vm` | `verify_isolation` → Azure NSG API | règles deny-all présentes |
 | `release_isolation` | `verify_isolation` inverted | règles absentes |
 | `snapshot` | `verify_snapshot` → Azure Compute API | snapshot existe |
-| `block_suspicious_ip` | `verify_block_ip` | non implémenté |
+| `block_suspicious_ip` | `verify_block_ip` → Azure NSG API | règle deny entrante sur l'IP présente |
 | dry_run | court-circuit | `verified=None` |
 
 `verified=False` → escalade humaine.
 `verified=None` → non implémenté, cycle stocké sans claim.
+
+Statut : toutes les actions autonomes ont leur `verify_*` implémenté.
 
 ### NSG — détails Azure
 
@@ -424,6 +449,21 @@ post-attaque si un backup a tourné pendant l'attaque. Toujours passer `--before
 glorfindel restore <resource_id> --yes --before 2026-05-24T13:44:00+00:00
 ```
 Le run_id Annatar encode l'heure du run (format `%Y%m%dT%H%M%SZ`) — T0 est extractible.
+
+### Détection T1110.001 — Syslog DCR (décision arrêtée)
+
+Détection brute force SSH via `Syslog` table (facility `auth`, severity `warning`+) :
+- DCR `dcr-annatar` collecte `auth`, `syslog`, `daemon` au niveau `Warning`+
+- `logger -p auth.warning` → rsyslog → port 28330 → AMA → Log Analytics
+- Latence observée : ~60s (nettement mieux que les 2-3 min initialement attendus)
+- Seuil KQL : ≥10 tentatives échouées depuis une IP publique (filtre RFC1918 exclu)
+- Glorfindel choisit `block_suspicious_ip` (pas `isolate_vm`) — attaquant externe, VM non compromise
+
+**Pitfall critique : isolation bloque AMA**
+L'isolation NSG (deny-all outbound) empêche AMA de joindre `global.handler.control.monitor.azure.com`
+pour obtenir un GIG token d'ingestion. Les logs s'accumulent dans LevelDB local (auth.warning/,
+daemon.warning/) mais ne sont pas uploadés. Symptômes : `mdsd.err` plein de
+`Failed to get gig token` toutes les ~4 minutes. Fix : `glorfindel release` avant le run suivant.
 
 ### Annatar engine — ordre setup / integrity check
 

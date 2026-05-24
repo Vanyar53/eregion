@@ -34,7 +34,7 @@ detection:
     | where FailedAttempts >= 10
     | project SourceIP, FailedAttempts
   # Syslog is near-realtime via DCR (already active). 120s is ample.
-  timeout: "120s"
+  timeout: "300s"
 
 # No disk restore needed — no data was modified
 recovery: null

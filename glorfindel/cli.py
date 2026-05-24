@@ -252,6 +252,32 @@ def pending():
 
 
 @cli.command()
+@click.argument("escalation_id", required=False)
+@click.option("--all", "all_pending", is_flag=True, help="Acknowledge all pending escalations.")
+def ack(escalation_id: str | None, all_pending: bool):
+    """Acknowledge (resolve) a pending escalation.
+
+    Use 'glorfindel pending' to list escalation IDs.
+    Use --all to acknowledge everything at once.
+    """
+    from glorfindel import escalations
+
+    if all_pending:
+        items = escalations.pending()
+        for e in items:
+            escalations.resolve(e["id"])
+        console.print(f"[green]✓ {len(items)} escalation(s) acknowledged.[/green]")
+        return
+
+    if not escalation_id:
+        console.print("[red]Provide an escalation ID or use --all.[/red]")
+        return
+
+    escalations.resolve(escalation_id)
+    console.print(f"[green]✓ Escalation {escalation_id} acknowledged.[/green]")
+
+
+@cli.command()
 @click.option("--memory-path", default=None)
 def memory_stats(memory_path: str | None):
     """Show how many cycles are stored in memory."""
@@ -283,7 +309,8 @@ def _build_recovery_signal(resource_id: str, restore_result: dict, restore_time_
 
 def _write_signal(signal: dict, runs_dir: str = "runs") -> Path:
     from pathlib import Path
-    out = Path(runs_dir) / f"{signal['context']['run_id']}_signals.jsonl"
+    # Recovery signals go to runs/recovery/ — watch only monitors runs/*_signals.jsonl
+    out = Path(runs_dir) / "recovery" / f"{signal['context']['run_id']}_signals.jsonl"
     out.parent.mkdir(parents=True, exist_ok=True)
     with open(out, "a") as f:
         f.write(json.dumps(signal) + "\n")

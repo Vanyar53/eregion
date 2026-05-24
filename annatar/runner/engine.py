@@ -81,34 +81,22 @@ class Engine:
                     T0 = time.time()
                 self._execute_action(executor, step)
 
-            # Detection
+            checks["attack"] = "PASS"
+
+            # Emit attack_started — Glorfindel polls detection and owns the response cycle
             if scenario.detection:
-                console.print("[cyan]->[/cyan] Waiting for detection alert...")
-                detection_time = collector.poll_alert(
-                    query=scenario.detection["query"],
-                    source=scenario.detection["source"],
-                    timeout_s=self._parse_duration(scenario.detection.get("timeout", "300s")),
-                    since=T0,
+                emitter.emit(
+                    event="attack_started",
+                    raw_signal={
+                        "attack_time": T0,
+                        "detection_query": scenario.detection["query"],
+                        "detection_source": scenario.detection.get("source", "azure_monitor"),
+                        "detection_timeout_s": self._parse_duration(scenario.detection.get("timeout", "300s")),
+                        "detection_max_s": self._parse_duration(scenario.detection.get("time_max", "9999s")),
+                        "log_analytics_workspace_id": scenario.target.get("log_analytics_workspace_id"),
+                    },
                 )
-                if detection_time is not None:
-                    metrics["detection_s"] = round(detection_time)
-                    threshold = self._parse_duration(scenario.detection.get("time_max", "9999s"))
-                    ok = detection_time <= threshold
-                    checks["detection"] = "PASS" if ok else f"FAIL — {round(detection_time)}s vs seuil {threshold}s"
-                    console.print(f"  Detection: {checks['detection']}")
-                    emitter.emit(
-                        event="detection",
-                        raw_signal={"detection_time_s": round(detection_time), "passed": ok},
-                        metrics={"detection_s": metrics["detection_s"]},
-                    )
-                else:
-                    metrics["detection_s"] = None
-                    checks["detection"] = "FAIL — timeout, no alert fired"
-                    console.print(f"  [red]Detection timeout[/red]")
-                    emitter.emit(
-                        event="detection_timeout",
-                        raw_signal={"passed": False},
-                    )
+                console.print("[cyan]->[/cyan] Signal 'attack_started' emitted — Glorfindel takes over detection.")
 
 
             overall = "PASS" if all("PASS" in v for v in checks.values()) else "FAIL"

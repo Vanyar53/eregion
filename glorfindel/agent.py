@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import os
+import time
 from typing import TypedDict, Annotated
 
 from langgraph.graph import StateGraph, END
+from rich.console import Console
 
 from glorfindel.actions import AUTONOMOUS_ACTIONS, HUMAN_APPROVAL_REQUIRED, CloudConnector
 from glorfindel.memory import CycleMemory
+
+_console = Console()
 
 
 # ── State ─────────────────────────────────────────────────────────────────────
@@ -120,6 +124,74 @@ def load_context(state: GlorfindelState, *, memory: CycleMemory) -> GlorfindelSt
     """Retrieve past similar cycles from vector store."""
     past = memory.retrieve_similar(state["signal"], n=3)
     return {**state, "past_cycles": past}
+
+
+def poll_detection(state: GlorfindelState) -> GlorfindelState:
+    """Poll Azure Monitor when Annatar signals an attack_started.
+
+    No-op for all other events — passes through unchanged.
+    On detection: updates event to 'detection', adds detection_time_s to raw_signal.
+    On timeout: updates event to 'detection_timeout'.
+    """
+    signal = state["signal"]
+    if signal.get("event") != "attack_started":
+        return state
+
+    raw = signal.get("raw_signal", {})
+    workspace_id = raw.get("log_analytics_workspace_id")
+    query = raw.get("detection_query", "")
+    timeout_s = float(raw.get("detection_timeout_s", 300))
+    attack_time = float(raw.get("attack_time", time.time()))
+    source = raw.get("detection_source", "azure_monitor")
+
+    if source != "azure_monitor" or not workspace_id:
+        _console.print(f"[yellow]poll_detection: unsupported source '{source}' or no workspace_id — skipping[/yellow]")
+        updated_signal = {**signal, "event": "detection_timeout"}
+        return {**state, "signal": updated_signal}
+
+    from datetime import datetime, timedelta, timezone
+    from azure.identity import DefaultAzureCredential
+    from azure.monitor.query import LogsQueryClient, LogsQueryStatus
+
+    credential = DefaultAzureCredential()
+    client = LogsQueryClient(credential)
+    attack_dt = datetime.fromtimestamp(attack_time, tz=timezone.utc)
+
+    _console.print(f"[cyan]->[/cyan] Polling Azure Monitor (timeout={int(timeout_s)}s)...")
+    start = time.time()
+    detection_s: float | None = None
+
+    while True:
+        elapsed = time.time() - start
+        if elapsed >= timeout_s:
+            break
+        try:
+            timespan = (attack_dt, datetime.now(tz=timezone.utc) + timedelta(minutes=1))
+            response = client.query_workspace(workspace_id=workspace_id, query=query, timespan=timespan)
+            if response.status == LogsQueryStatus.SUCCESS:
+                for table in response.tables:
+                    if table.rows:
+                        detection_s = round(elapsed)
+                        _console.print(f"  [green]Alert detected[/green] after {detection_s}s")
+                        break
+            if detection_s is not None:
+                break
+        except Exception as e:
+            _console.print(f"  [dim]Poll error: {e}[/dim]")
+        _console.print(f"  [dim]Still polling... {round(elapsed)}s elapsed[/dim]")
+        time.sleep(10)
+
+    if detection_s is not None:
+        updated_signal = {
+            **signal,
+            "event": "detection",
+            "raw_signal": {**raw, "detection_time_s": detection_s},
+        }
+    else:
+        _console.print(f"  [yellow]Detection timeout after {int(timeout_s)}s — IDS gap signal[/yellow]")
+        updated_signal = {**signal, "event": "detection_timeout"}
+
+    return {**state, "signal": updated_signal}
 
 
 def decide(state: GlorfindelState, *, model: str) -> GlorfindelState:
@@ -285,6 +357,7 @@ def _build_graph(memory: CycleMemory, connector: CloudConnector, model: str):
     graph = StateGraph(GlorfindelState)
 
     graph.add_node("load_context", lambda s: load_context(s, memory=memory))
+    graph.add_node("poll_detection", poll_detection)
     graph.add_node("decide", lambda s: decide(s, model=model))
     graph.add_node("execute_action", lambda s: execute_action(s, connector=connector))
     graph.add_node("verify_action", lambda s: verify_action(s, connector=connector))
@@ -292,7 +365,8 @@ def _build_graph(memory: CycleMemory, connector: CloudConnector, model: str):
     graph.add_node("store_cycle", lambda s: store_cycle(s, memory=memory))
 
     graph.set_entry_point("load_context")
-    graph.add_edge("load_context", "decide")
+    graph.add_edge("load_context", "poll_detection")
+    graph.add_edge("poll_detection", "decide")
     graph.add_conditional_edges("decide", _route_after_decide)
     graph.add_edge("execute_action", "verify_action")
     graph.add_conditional_edges("verify_action", _route_after_verify)

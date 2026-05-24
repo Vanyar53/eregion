@@ -10,8 +10,9 @@ _console = Console()
 # Actions Glorfindel peut exécuter seul (réversibles)
 AUTONOMOUS_ACTIONS = {
     "isolate_vm",
+    "release_isolation",  # inverse of isolate_vm — safe to reverse autonomously
     "revoke_temp_access",
-    "snapshot",          # forensic snapshot of current (compromised) state
+    "snapshot",           # forensic snapshot of current (compromised) state
     "block_suspicious_ip",
 }
 

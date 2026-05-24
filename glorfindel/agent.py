@@ -242,6 +242,8 @@ def execute_action(state: GlorfindelState, *, connector: CloudConnector) -> Glor
     t_start = time.time()
     if action == "isolate_vm":
         outcome = connector.isolate_vm(resource_id)
+    elif action == "release_isolation":
+        outcome = connector.release_isolation(resource_id)
     elif action == "block_suspicious_ip":
         ip = state["signal"].get("context", {}).get("suspicious_ip", "")
         outcome = connector.block_suspicious_ip(ip, resource_id)
@@ -290,6 +292,10 @@ def verify_action(state: GlorfindelState, *, connector: CloudConnector) -> Glorf
 
     if action == "isolate_vm":
         verification = connector.verify_isolation(resource_id)
+    elif action == "release_isolation":
+        # verified=True means isolation is GONE (success), verified=False means still active (failure)
+        iso = connector.verify_isolation(resource_id)
+        verification = {"verified": not iso.get("verified", True), "method": iso.get("method")}
     elif action == "snapshot":
         verification = connector.verify_snapshot(outcome.get("snapshot_id", ""))
     elif action == "block_suspicious_ip":

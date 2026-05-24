@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from pathlib import Path
 
 # Actions Glorfindel peut exécuter seul (réversibles)
 AUTONOMOUS_ACTIONS = {
@@ -96,10 +97,10 @@ class AzureConnector(CloudConnector):
         self._compute = ComputeManagementClient(self._credential, self._subscription_id)
 
     def isolate_vm(self, resource_id: str) -> dict:
-        """Apply a deny-all NSG rule (priority 100) to the VM's primary NIC.
+        """Apply a deny-all NSG rule (priority 100) to the VM's NSG.
 
-        Tag: glorfindel-isolation-deny-all — used by release_isolation to find and remove it.
-        Safe: only the NSG rule is changed, VM stays running and observable.
+        If existing rules occupy priority 100, they are shifted +100 and saved
+        to ~/.glorfindel/isolation/<vm>.json for restoration on release.
         """
         if self.dry_run:
             return {"status": "dry_run", "action": "isolate_vm", "resource_id": resource_id}
@@ -111,35 +112,31 @@ class AzureConnector(CloudConnector):
 
         from azure.mgmt.network.models import SecurityRule
 
-        rule = SecurityRule(
-            name=self.ISOLATION_RULE_NAME,
-            protocol="*",
-            source_port_range="*",
-            destination_port_range="*",
-            source_address_prefix="*",
-            destination_address_prefix="*",
-            access="Deny",
-            priority=self.ISOLATION_PRIORITY,
-            direction="Inbound",
-        )
-        self._network.security_rules.begin_create_or_update(
-            nsg_rg, nsg_name, self.ISOLATION_RULE_NAME, rule
-        ).result()
+        # Shift any existing rules that conflict at ISOLATION_PRIORITY
+        existing = list(self._network.security_rules.list(nsg_rg, nsg_name))
+        bumped = []
+        for r in existing:
+            if r.priority == self.ISOLATION_PRIORITY and not r.name.startswith("glorfindel-"):
+                r.priority = self.ISOLATION_PRIORITY + 100
+                self._network.security_rules.begin_create_or_update(nsg_rg, nsg_name, r.name, r).result()
+                bumped.append({"name": r.name, "original_priority": self.ISOLATION_PRIORITY})
 
-        outbound_rule = SecurityRule(
-            name=f"{self.ISOLATION_RULE_NAME}-out",
-            protocol="*",
-            source_port_range="*",
-            destination_port_range="*",
-            source_address_prefix="*",
-            destination_address_prefix="*",
-            access="Deny",
-            priority=self.ISOLATION_PRIORITY,
-            direction="Outbound",
-        )
-        self._network.security_rules.begin_create_or_update(
-            nsg_rg, nsg_name, f"{self.ISOLATION_RULE_NAME}-out", outbound_rule
-        ).result()
+        if bumped:
+            _save_isolation_state(vm_name, {"nsg_rg": nsg_rg, "nsg_name": nsg_name, "bumped": bumped})
+
+        for direction, rule_name in [
+            ("Inbound", self.ISOLATION_RULE_NAME),
+            ("Outbound", f"{self.ISOLATION_RULE_NAME}-out"),
+        ]:
+            self._network.security_rules.begin_create_or_update(
+                nsg_rg, nsg_name, rule_name,
+                SecurityRule(
+                    name=rule_name, protocol="*",
+                    source_port_range="*", destination_port_range="*",
+                    source_address_prefix="*", destination_address_prefix="*",
+                    access="Deny", priority=self.ISOLATION_PRIORITY, direction=direction,
+                ),
+            ).result()
 
         return {
             "status": "isolated",
@@ -161,7 +158,16 @@ class AzureConnector(CloudConnector):
             try:
                 self._network.security_rules.begin_delete(nsg_rg, nsg_name, rule_name).result()
             except Exception:
-                pass  # rule may not exist — that's fine
+                pass
+
+        # Restore bumped rules to their original priorities
+        state = _load_isolation_state(vm_name)
+        if state:
+            for rule_info in state.get("bumped", []):
+                r = self._network.security_rules.get(nsg_rg, nsg_name, rule_info["name"])
+                r.priority = rule_info["original_priority"]
+                self._network.security_rules.begin_create_or_update(nsg_rg, nsg_name, r.name, r).result()
+            _clear_isolation_state(vm_name)
 
         return {"status": "released", "resource_id": resource_id}
 
@@ -343,6 +349,27 @@ class AzureConnector(CloudConnector):
         if subnet.network_security_group is None:
             raise RuntimeError(f"NIC {nic_name} and its subnet have no NSG — cannot isolate VM")
         return _parse_nsg_resource_id(subnet.network_security_group.id)
+
+
+_ISOLATION_STATE_DIR = Path.home() / ".glorfindel" / "isolation"
+
+
+def _save_isolation_state(vm_name: str, state: dict) -> None:
+    import json
+    _ISOLATION_STATE_DIR.mkdir(parents=True, exist_ok=True)
+    (_ISOLATION_STATE_DIR / f"{vm_name}.json").write_text(json.dumps(state))
+
+
+def _load_isolation_state(vm_name: str) -> dict | None:
+    import json
+    f = _ISOLATION_STATE_DIR / f"{vm_name}.json"
+    return json.loads(f.read_text()) if f.exists() else None
+
+
+def _clear_isolation_state(vm_name: str) -> None:
+    f = _ISOLATION_STATE_DIR / f"{vm_name}.json"
+    if f.exists():
+        f.unlink()
 
 
 def _parse_vm_resource_id(resource_id: str) -> tuple[str, str]:

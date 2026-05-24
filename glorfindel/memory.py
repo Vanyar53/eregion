@@ -40,6 +40,8 @@ class CycleMemory:
                 "signal_id": cycle.get("signal_id", ""),
                 "run_id": cycle.get("run_id", ""),
                 "event": cycle.get("event", ""),
+                "detection_s": cycle.get("detection_s", 0),
+                "action_s": cycle.get("action_s", 0),
             }],
         )
 

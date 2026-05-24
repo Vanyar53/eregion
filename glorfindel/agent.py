@@ -162,9 +162,11 @@ def decide(state: GlorfindelState, *, model: str) -> GlorfindelState:
 
 def execute_action(state: GlorfindelState, *, connector: CloudConnector) -> GlorfindelState:
     """Execute the autonomous action via the cloud connector."""
+    import time
     resource_id = state["signal"].get("resource_id", "unknown")
     action = state["action"]
 
+    t_start = time.time()
     if action == "isolate_vm":
         outcome = connector.isolate_vm(resource_id)
     elif action == "block_suspicious_ip":
@@ -175,8 +177,9 @@ def execute_action(state: GlorfindelState, *, connector: CloudConnector) -> Glor
         outcome = {"snapshot_id": snap_id}
     else:
         outcome = {"status": "no_op", "action": action}
+    action_s = round(time.time() - t_start)
 
-    return {**state, "outcome": {**outcome, "executed": True}}
+    return {**state, "outcome": {**outcome, "executed": True, "action_s": action_s}}
 
 
 def escalate_to_human(state: GlorfindelState) -> GlorfindelState:
@@ -240,6 +243,7 @@ def verify_action(state: GlorfindelState, *, connector: CloudConnector) -> Glorf
 def store_cycle(state: GlorfindelState, *, memory: CycleMemory) -> GlorfindelState:
     """Persist the completed cycle to vector store for future RAG retrieval."""
     signal = state["signal"]
+    outcome = state.get("outcome") or {}
     memory.store({
         "signal_id": signal.get("signal_id", ""),
         "run_id": signal.get("context", {}).get("run_id", ""),
@@ -249,7 +253,9 @@ def store_cycle(state: GlorfindelState, *, memory: CycleMemory) -> GlorfindelSta
         "event": signal.get("event", ""),
         "reasoning": state["reasoning"],
         "action": state["action"],
-        "outcome": str(state.get("outcome")),
+        "outcome": str(outcome),
+        "detection_s": signal.get("raw_signal", {}).get("detection_time_s", 0),
+        "action_s": outcome.get("action_s", 0),
     })
     return state
 

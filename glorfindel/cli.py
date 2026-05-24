@@ -171,8 +171,9 @@ def restore(resource_id: str, vault: str, dry_run: bool, yes: bool):
     if dry_run:
         console.print("[yellow]DRY RUN — no changes made.[/yellow]")
     else:
-        rto_label = f"{rto_s // 60}min {rto_s % 60}s"
-        console.print(f"[green]✓ Restore complete.[/green]  RTO: {rto_label}  RP: {result.get('recovery_point_time')}")
+        restore_label = f"{rto_s // 60}min {rto_s % 60}s"
+        console.print(f"[green]✓ Restore complete.[/green]  restore_time: {restore_label}  RP: {result.get('recovery_point_time')}")
+        console.print(f"[dim]RTO = detection_s + isolation_s + restore_time  (human decision time excluded)[/dim]")
 
 
 @cli.command()
@@ -202,6 +203,13 @@ def _render_decision(state: dict, dry_run: bool) -> None:
     table.add_row("Decision", f"[bold]{action}[/bold]")
     table.add_row("Confidence", f"{confidence:.0%}")
     table.add_row("Status", f"[{status_color}]{status_label}[/{status_color}]")
+    if "action_s" in outcome and not escalated and not dry_run:
+        detection_s = state.get("signal", {}).get("raw_signal", {}).get("detection_time_s")
+        action_s = outcome["action_s"]
+        timing = f"{action_s}s"
+        if detection_s:
+            timing = f"detect {detection_s}s + {action} {action_s}s"
+        table.add_row("Timing", f"[dim]{timing}[/dim]")
     if "verified" in outcome and not escalated:
         if verified is True:
             verified_label = "[green]✓ action confirmed[/green]"

@@ -48,6 +48,7 @@ class AzureMonitorDetector(DetectionConnector):
         since_dt = datetime.fromtimestamp(since, tz=timezone.utc)
 
         start = time.time()
+        last_error: str | None = None
         while True:
             elapsed = time.time() - start
             if elapsed >= timeout_s:
@@ -63,8 +64,12 @@ class AzureMonitorDetector(DetectionConnector):
                             row = dict(zip(table.columns, table.rows[0]))
                             _console.print(f"  [green]Alert detected[/green] after {round(elapsed)}s")
                             return round(elapsed), row
+                last_error = None  # clear on success (no rows is not an error)
             except Exception as e:
-                _console.print(f"  [dim]Poll error: {e}[/dim]")
+                err = str(e)
+                if err != last_error:
+                    _console.print(f"  [dim]Poll error: {e}[/dim]")
+                    last_error = err
             _console.print(f"  [dim]Still polling... {round(elapsed)}s elapsed[/dim]")
             time.sleep(interval_s)
 

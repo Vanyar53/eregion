@@ -33,41 +33,32 @@ steps:
     record: T0                         # Start the RTO clock here
 
 # ─── Detection ─────────────────────────────────────────────────────────────────
-# Annatar polls your Log Analytics Workspace until this KQL query returns results.
-# T1 = moment the alert fires. detection_s = T1 − T0.
+# Annatar emits attack_started with this query. Glorfindel polls the detection
+# source until the query returns results or timeout expires.
 #
 # CLIENT SETUP:
-#   Replace this query with whatever alert query your SOC / Azure Monitor rule uses.
+#   Replace this query with whatever alert query your SOC uses.
 #   The default detects a Disk Write spike > 50 MB/s — typical ransomware I/O pattern.
-#   time_max is your declared detection SLA. FAIL if the alert takes longer.
+#   time_max is your declared detection SLA, evaluated by Glorfindel.
 detection:
-  source: azure_monitor
+  source: azure_monitor          # DetectionConnector to use (azure_monitor, datadog, splunk…)
   query: |
     Perf
     | where ObjectName == "Logical Disk" and CounterName == "Disk Write Bytes/sec"
     | where CounterValue > 52428800
     | where TimeGenerated > ago(10m)
     | summarize MaxWrite = max(CounterValue) by bin(TimeGenerated, 1m), Computer
-  timeout: "300s"   # Give up polling after this duration (not a SLA — just a hard stop)
-  time_max: "180s"  # Declared detection SLA. FAIL if detection_s > time_max.
-  record: T1
+  timeout: "300s"   # Hard stop for Glorfindel's poll loop (not a SLA)
+  time_max: "180s"  # Declared detection SLA — reported in Glorfindel's RTO breakdown
 
 # ─── Recovery ──────────────────────────────────────────────────────────────────
-# Recovery is owned by Glorfindel (human-approved action).
-# After receiving the detection signal, Glorfindel isolates the VM then escalates
-# restore_from_backup for human approval. The operator runs:
+# Owned by Glorfindel + human approval. After isolating the VM, Glorfindel
+# escalates restore_from_backup. The operator runs:
 #   glorfindel restore <resource_id> --vault <vault> --yes
-#
-# vault: Recovery Services Vault name
-# The recovery section is kept here for vault config reference only.
+# On success, Glorfindel automatically releases isolation (recovery_complete signal).
 recovery:
-  action: azure_backup_restore
-  vault: rsv-annatar      # Name of your Recovery Services Vault
-  data_disk_snapshot: snap-annatar-testdata  # Snapshot of clean data disk (Azure Backup V1 does not restore externally-attached data disks)
-  time_max: "1800s"       # Declared RTO = 30 minutes. Adjust to your organisation's SLA.
-  heartbeat_timeout: "600s"  # Max wait for VM heartbeat after restore completes
-  record: T3
+  vault: rsv-annatar   # Recovery Services Vault name
+  time_max: "1800s"    # Declared RTO SLA = 30 minutes
 
 cleanup: []
 # Cleanup removed — restore is Glorfindel's responsibility.
-# If restore fails, Glorfindel escalates to human. No manual fallback.

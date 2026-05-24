@@ -9,7 +9,10 @@ target:
   vm_name: vm-annatar-victim
   log_analytics_workspace_id: "b451c51a-1cd0-4125-ac70-6aaf2c1dc209"
 
-setup: []
+setup:
+  - name: prepare_test_volume
+    action: run_script_on_vm
+    script: scripts/vm/setup_testdata.sh  # Cleans residuals from previous runs, ensures marker
 
 steps:
   - name: exfiltrate_synthetic_data

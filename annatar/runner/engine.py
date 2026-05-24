@@ -57,20 +57,20 @@ class Engine:
         metrics = {}
         checks = {}
 
-        # Pre-run integrity check — VM must be clean before attacking
-        # Also validates that the previous run's restore succeeded
+        # Setup runs first — cleans residuals from previous attack before we check state
+        for action in scenario.setup:
+            self._execute_action(executor, action)
+
+        # Integrity check after setup — validates the VM is clean and ready to attack
         console.print("[cyan]->[/cyan] Pre-run integrity check...")
         if not executor.verify_restore_integrity():
             console.print(
                 "[red]Pre-run integrity check FAILED — VM is not in a clean state.[/red]\n"
-                "  Previous run may not have been restored. Run:\n"
-                f"  [bold]glorfindel restore {executor.resource_id} --yes[/bold]"
+                "  Setup ran but disk still has artifacts. Check the data disk manually.\n"
+                f"  [bold]az vm run-command invoke -g annatar -n vm-annatar-victim "
+                f"--command-id RunShellScript --scripts 'lsblk && ls /mnt/testdata'[/bold]"
             )
             return
-
-        # Setup
-        for action in scenario.setup:
-            self._execute_action(executor, action)
 
         try:
             # Steps

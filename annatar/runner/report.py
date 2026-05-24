@@ -33,26 +33,8 @@ class RunReport:
         color = "green" if self.result == "PASS" else "red"
         console.print(f"\n[bold]Run:[/bold] {self.run_id}")
         console.print(f"[bold]Scenario:[/bold] {self.scenario}  [bold]MITRE:[/bold] {self.mitre}")
-        console.print(f"[bold]Result:[/bold] [{color}]{self.result}[/{color}]\n")
-
-        table = Table()
-        table.add_column("Check", style="cyan")
-        table.add_column("Measured", style="white")
-        table.add_column("Threshold", style="yellow")
-        table.add_column("Status", style="white")
-
-        for key, status in self.checks.items():
-            measured = self.metrics.get(f"{key}_s", "—")
-            threshold = self.thresholds.get(f"{key}_max_s", "—")
-            ok = "PASS" in status
-            table.add_row(
-                key,
-                f"{measured}s" if isinstance(measured, (int, float)) else str(measured),
-                f"{threshold}s" if isinstance(threshold, (int, float)) else str(threshold),
-                f"[green]PASS[/green]" if ok else f"[red]FAIL[/red]",
-            )
-
-        console.print(table)
+        console.print(f"[bold]Result:[/bold] [{color}]{self.result}[/{color}]")
+        console.print("[dim]Detection and RTO metrics are owned by Glorfindel.[/dim]")
 
     @staticmethod
     def display(run_id: str):

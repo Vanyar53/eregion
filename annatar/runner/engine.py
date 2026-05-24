@@ -106,10 +106,7 @@ class Engine:
                 mitre=scenario.mitre,
                 result=overall,
                 metrics=metrics,
-                thresholds={
-                    "detection_max_s": self._parse_duration(scenario.detection.get("time_max", "9999s")) if scenario.detection else None,
-                    "recovery_max_s": self._parse_duration(scenario.recovery.get("time_max", "9999s")) if scenario.recovery else None,
-                },
+                thresholds={},
                 checks=checks,
             )
             path = report.save()

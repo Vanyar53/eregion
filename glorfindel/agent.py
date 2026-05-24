@@ -290,6 +290,9 @@ def verify_action(state: GlorfindelState, *, connector: CloudConnector) -> Glorf
     resource_id = state["signal"].get("resource_id", "")
     outcome = state.get("outcome") or {}
 
+    if outcome.get("status") == "dry_run":
+        return {**state, "outcome": {**outcome, "verified": None}, "escalate": False, "escalation_reason": ""}
+
     if action == "isolate_vm":
         verification = connector.verify_isolation(resource_id)
     elif action == "release_isolation":

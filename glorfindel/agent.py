@@ -96,7 +96,14 @@ Autonomy rules — you MUST follow these without exception:
 
 Event-specific behavior — follow these rules before reasoning:
 - event=detection: active or recent attack confirmed. Act immediately with the minimum
-  effective reversible action (prefer isolate_vm to stop lateral spread).
+  effective reversible action. Choose based on the TTP:
+  * Ransomware / disk encryption (T1486): isolate_vm — stop lateral spread.
+  * Exfiltration from internal VM (T1041, internal CallerIpAddress): isolate_vm — cut
+    the outbound channel at the VM level. block_suspicious_ip on an internal IP is
+    ineffective at the NSG perimeter.
+  * Brute force / credential attack from external IP (T1110): block_suspicious_ip —
+    deny the attacker's IP at the NSG. Do NOT isolate_vm unless the VM is confirmed
+    compromised. The SourceIP field in detected_data contains the attacker IP.
 - event=detection_timeout: Azure Monitor did NOT fire during the attack — IDS gap confirmed.
   ALWAYS: action=snapshot (preserve forensic state, non-disruptive), escalate=true,
   escalation_reason must explain that the IDS missed the attack and name the TTP.
@@ -223,7 +230,8 @@ def execute_action(state: GlorfindelState, *, connector: CloudConnector) -> Glor
         detected = raw.get("detected_data", {})
         ip = (
             state["signal"].get("context", {}).get("suspicious_ip")
-            or detected.get("DestIP_s")
+            or detected.get("SourceIP")          # lateral movement / brute force
+            or detected.get("DestIP_s")          # exfil via Traffic Analytics
             or detected.get("DestinationIp")
             or detected.get("DestinationIPAddress")
             or ""
@@ -300,6 +308,7 @@ def verify_action(state: GlorfindelState, *, connector: CloudConnector) -> Glorf
         detected_v = raw_s.get("detected_data", {})
         ip = (
             state["signal"].get("context", {}).get("suspicious_ip")
+            or detected_v.get("SourceIP")
             or detected_v.get("DestIP_s")
             or detected_v.get("DestinationIp")
             or detected_v.get("DestinationIPAddress")

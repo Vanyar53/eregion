@@ -1,0 +1,42 @@
+name: azure-lateral-movement
+description: Simulate SSH brute force from external IP, validate network-level block response
+mitre: T1110.001
+version: "1.0.0"
+
+target:
+  type: azure_vm
+  resource_group: annatar
+  vm_name: vm-annatar-victim
+  log_analytics_workspace_id: "b451c51a-1cd0-4125-ac70-6aaf2c1dc209"
+
+setup:
+  - name: prepare_test_volume
+    action: run_script_on_vm
+    script: scripts/vm/setup_testdata.sh
+
+steps:
+  - name: simulate_ssh_brute_force
+    action: run_script_on_vm
+    script: scripts/vm/lateral_movement_sim.sh
+    record: T0
+
+detection:
+  source: azure_monitor
+  query: |
+    Syslog
+    | where Facility == "auth"
+    | where SyslogMessage has "Failed password" or SyslogMessage has "Invalid user"
+    | where TimeGenerated > ago(5m)
+    | extend SourceIP = extract(@"from (\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})", 1, SyslogMessage)
+    | where isnotempty(SourceIP)
+    | where not(SourceIP startswith "10.") and not(SourceIP startswith "192.168.") and not(SourceIP startswith "127.")
+    | summarize FailedAttempts = count() by SourceIP
+    | where FailedAttempts >= 10
+    | project SourceIP, FailedAttempts
+  # Syslog is near-realtime via DCR (already active). 120s is ample.
+  timeout: "120s"
+
+# No disk restore needed — no data was modified
+recovery: null
+
+cleanup: []

@@ -59,11 +59,8 @@ class CloudConnector(ABC):
         ...
 
     @abstractmethod
-    def restore_from_backup(self, resource_id: str, vault: str = "rsv-annatar", keep_isolated: bool = False) -> dict:
-        """Trigger an Azure Backup OriginalLocation restore. Human-approved action.
-
-        After the VM restarts, isolation is released automatically unless keep_isolated=True.
-        """
+    def restore_from_backup(self, resource_id: str, vault: str = "rsv-annatar") -> dict:
+        """Trigger an Azure Backup OriginalLocation restore. Human-approved action."""
         ...
 
     @abstractmethod
@@ -220,7 +217,7 @@ class AzureConnector(CloudConnector):
         except Exception as e:
             return {"verified": False, "method": "snapshot_check", "error": str(e)}
 
-    def restore_from_backup(self, resource_id: str, vault: str = "rsv-annatar", keep_isolated: bool = False) -> dict:
+    def restore_from_backup(self, resource_id: str, vault: str = "rsv-annatar") -> dict:
         if self.dry_run:
             return {"status": "dry_run", "action": "restore_from_backup", "resource_id": resource_id}
 
@@ -321,26 +318,11 @@ class AzureConnector(CloudConnector):
         _console.print("  [dim]Starting VM after restore...[/dim]")
         self._compute.virtual_machines.begin_start(rg, vm_name).result()
 
-        isolation_released = False
-        if not keep_isolated:
-            iso_check = self.verify_isolation(resource_id)
-            if iso_check.get("verified"):
-                _console.print("  [dim]Releasing isolation (disk clean after restore)...[/dim]")
-                try:
-                    self.release_isolation(resource_id)
-                    isolation_released = True
-                except Exception as e:
-                    _console.print(
-                        f"  [yellow]Restore succeeded but isolation release failed:[/yellow] {e}\n"
-                        f"  Run: [bold]glorfindel release {resource_id} --yes[/bold]"
-                    )
-
         return {
             "status": "restored",
             "recovery_point": latest.name,
             "recovery_point_time": str(rp_time),
             "resource_id": resource_id,
-            "isolation_released": isolation_released,
         }
 
     def verify_block_ip(self, ip: str, resource_id: str) -> dict:

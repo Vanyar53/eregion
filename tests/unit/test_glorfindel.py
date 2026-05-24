@@ -240,12 +240,12 @@ def test_system_prompt_defines_detection_timeout_behavior():
     assert "escalate=true" in _SYSTEM_PROMPT
 
 
-def test_system_prompt_recovery_complete_mandates_snapshot():
+def test_system_prompt_recovery_complete_mandates_release():
     from glorfindel.agent import _SYSTEM_PROMPT
-    # Must be deterministic: ALWAYS snapshot, reason is baseline (not forensic)
+    # Must be deterministic: ALWAYS release_isolation after restore
     assert "recovery_complete" in _SYSTEM_PROMPT
-    assert "ALWAYS action=snapshot" in _SYSTEM_PROMPT
-    assert "baseline" in _SYSTEM_PROMPT
+    assert "ALWAYS action=release_isolation" in _SYSTEM_PROMPT
+    assert "idempotent" in _SYSTEM_PROMPT
 
 
 def test_store_cycle_includes_run_id(tmp_path):

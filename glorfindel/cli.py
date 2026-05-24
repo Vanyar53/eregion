@@ -143,22 +143,23 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
 @click.option("--vault", default="rsv-annatar", show_default=True)
 @click.option("--dry-run", is_flag=True)
 @click.option("--yes", is_flag=True, help="Skip confirmation prompt.")
-@click.option("--keep-isolated", is_flag=True, help="Do not release NSG isolation after restore (forensic mode).")
-def restore(resource_id: str, vault: str, dry_run: bool, yes: bool, keep_isolated: bool):
+@click.option("--model", default="claude-sonnet-4-6", show_default=True)
+@click.option("--memory-path", default=None)
+def restore(resource_id: str, vault: str, dry_run: bool, yes: bool, model: str, memory_path: str | None):
     """Trigger an Azure Backup restore on a VM (human approval action).
 
     Run this after Glorfindel escalates a restore_from_backup recommendation.
-    Isolation is released automatically after a successful restore unless --keep-isolated.
+    After a successful restore, emits a recovery_complete signal and lets
+    Glorfindel decide the next action (release_isolation).
     """
     from glorfindel.actions import AzureConnector
 
     connector = AzureConnector(dry_run=dry_run)
 
     console.rule("[bold yellow]Glorfindel — Restore from Backup[/bold yellow]")
-    console.print(f"  Resource      : {resource_id}")
-    console.print(f"  Vault         : {vault}")
-    console.print(f"  Keep isolated : {keep_isolated}")
-    console.print(f"  Dry-run       : {dry_run}\n")
+    console.print(f"  Resource : {resource_id}")
+    console.print(f"  Vault    : {vault}")
+    console.print(f"  Dry-run  : {dry_run}\n")
 
     if not dry_run and not yes:
         if not click.confirm("Trigger Azure Backup restore on this VM?", default=False):
@@ -168,16 +169,27 @@ def restore(resource_id: str, vault: str, dry_run: bool, yes: bool, keep_isolate
     import time as _time
     console.print("[cyan]->[/cyan] Triggering restore...")
     t0 = _time.time()
-    result = connector.restore_from_backup(resource_id, vault=vault, keep_isolated=keep_isolated)
+    result = connector.restore_from_backup(resource_id, vault=vault)
     rto_s = round(_time.time() - t0)
 
     if dry_run:
         console.print("[yellow]DRY RUN — no changes made.[/yellow]")
-    else:
-        restore_label = f"{rto_s // 60}min {rto_s % 60}s"
-        iso_label = "[dim](isolation kept)[/dim]" if keep_isolated else "[green]✓ isolation released[/green]"
-        console.print(f"[green]✓ Restore complete.[/green]  restore_time: {restore_label}  RP: {result.get('recovery_point_time')}  {iso_label}")
-        console.print(f"[dim]RTO = detection_s + isolation_s + restore_time  (human decision time excluded)[/dim]")
+        return
+
+    restore_label = f"{rto_s // 60}min {rto_s % 60}s"
+    console.print(f"[green]✓ Restore complete.[/green]  restore_time: {restore_label}  RP: {result.get('recovery_point_time')}")
+    console.print(f"[dim]RTO = detection_s + isolation_s + restore_time  (human decision time excluded)[/dim]\n")
+
+    # Emit recovery_complete and let Glorfindel decide (release_isolation)
+    sig = _build_recovery_signal(resource_id, result, rto_s)
+    _write_signal(sig)
+    console.rule("[bold cyan]Glorfindel — Recovery Response[/bold cyan]")
+    console.print(f"  Event    : recovery_complete  |  Resource: {resource_id}\n")
+
+    from glorfindel.agent import GlorfindelAgent
+    agent = GlorfindelAgent(dry_run=dry_run, model=model, memory_path=memory_path)
+    state = agent.respond(sig)
+    _render_decision(state, dry_run)
 
 
 @cli.command()
@@ -187,6 +199,36 @@ def memory_stats(memory_path: str | None):
     from glorfindel.memory import CycleMemory
     m = CycleMemory(path=memory_path)
     console.print(f"Cycles in memory: [cyan]{m.count()}[/cyan]")
+
+
+def _build_recovery_signal(resource_id: str, restore_result: dict, restore_time_s: int) -> dict:
+    from datetime import datetime, timezone
+    ts = datetime.now(timezone.utc)
+    run_id = ts.strftime("%Y%m%dT%H%M%SZ")
+    return {
+        "signal_id": f"{run_id}_recovery_complete",
+        "timestamp": ts.isoformat(),
+        "provider": "azure",
+        "resource_id": resource_id,
+        "resource_type": "vm",
+        "ttp": "",
+        "severity": "low",
+        "event": "recovery_complete",
+        "raw_signal": {
+            "recovery_point_time": restore_result.get("recovery_point_time", ""),
+            "restore_time_s": restore_time_s,
+        },
+        "context": {"run_id": run_id},
+    }
+
+
+def _write_signal(signal: dict, runs_dir: str = "runs") -> Path:
+    from pathlib import Path
+    out = Path(runs_dir) / f"{signal['context']['run_id']}_signals.jsonl"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with open(out, "a") as f:
+        f.write(json.dumps(signal) + "\n")
+    return out
 
 
 def _render_decision(state: dict, dry_run: bool) -> None:

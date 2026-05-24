@@ -135,8 +135,14 @@ class AzureConnector(CloudConnector):
                 self._network.security_rules.begin_create_or_update(nsg_rg, nsg_name, r.name, r).result()
                 bumped.append({"name": r.name, "original_priority": self.ISOLATION_PRIORITY})
 
-        if bumped:
-            _save_isolation_state(vm_name, {"nsg_rg": nsg_rg, "nsg_name": nsg_name, "bumped": bumped})
+        from datetime import datetime, timezone
+        _save_isolation_state(vm_name, {
+            "nsg_rg": nsg_rg,
+            "nsg_name": nsg_name,
+            "bumped": bumped,
+            "resource_id": resource_id,
+            "isolated_at": datetime.now(timezone.utc).isoformat(),
+        })
 
         for direction, rule_name in [
             ("Inbound", self.ISOLATION_RULE_NAME),
@@ -458,6 +464,20 @@ def _clear_isolation_state(vm_name: str) -> None:
     f = _ISOLATION_STATE_DIR / f"{vm_name}.json"
     if f.exists():
         f.unlink()
+
+
+def active_isolations() -> list[dict]:
+    """Return all active isolation state files (VMs that Glorfindel has isolated)."""
+    import json
+    result = []
+    for f in _ISOLATION_STATE_DIR.glob("*.json"):
+        try:
+            state = json.loads(f.read_text())
+            if state.get("resource_id"):
+                result.append({**state, "vm_name": f.stem})
+        except Exception:
+            pass
+    return result
 
 
 def _parse_vm_resource_id(resource_id: str) -> tuple[str, str]:

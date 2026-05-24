@@ -129,10 +129,48 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
                     console.print()
                 tracked[path] = f.tell()
 
-    console.print(f"[bold]Glorfindel watching[/bold] [dim]{runs_dir}/[/dim]  (Ctrl+C to stop)\n")
+    import os
+    from datetime import datetime, timezone
+    from glorfindel.actions import AzureConnector, active_isolations
+
+    ttl_h = float(os.environ.get("GLORFINDEL_ISOLATION_TTL_H", "4"))
+    ttl_connector = AzureConnector(dry_run=dry_run)
+    _ttl_check_counter = 0
+
+    def _check_ttl() -> None:
+        now = datetime.now(timezone.utc)
+        for iso in active_isolations():
+            isolated_at_s = iso.get("isolated_at")
+            resource_id = iso.get("resource_id", "")
+            if not isolated_at_s or not resource_id:
+                continue
+            age_h = (now - datetime.fromisoformat(isolated_at_s)).total_seconds() / 3600
+            if age_h >= ttl_h:
+                vm_short = resource_id.split("/")[-1]
+                console.print(
+                    f"[yellow]⚠ TTL exceeded[/yellow] — {vm_short} isolated {age_h:.1f}h "
+                    f"(limit {ttl_h}h). {'DRY RUN' if dry_run else 'Auto-releasing...'}"
+                )
+                if not dry_run:
+                    ttl_connector.release_isolation(resource_id)
+                    from glorfindel import escalations as _esc
+                    _esc.record(
+                        signal_id="ttl-auto-release",
+                        resource_id=resource_id,
+                        action="release_isolation",
+                        escalation_type="ttl_exceeded",
+                        reason=f"Isolation TTL exceeded ({age_h:.1f}h > {ttl_h}h) — auto-released by watch",
+                    )
+                    console.print(f"  [green]✓ Released.[/green]")
+
+    console.print(f"[bold]Glorfindel watching[/bold] [dim]{runs_dir}/[/dim]  "
+                  f"(TTL={ttl_h}h, Ctrl+C to stop)\n")
     try:
         while True:
             _poll()
+            _ttl_check_counter += 1
+            if _ttl_check_counter % 30 == 0:  # check TTL every 30 polls (~1 min at 2s interval)
+                _check_ttl()
             time.sleep(interval)
     except KeyboardInterrupt:
         console.print("\n[dim]Watch stopped.[/dim]")
@@ -177,6 +215,14 @@ def restore(resource_id: str, vault: str, dry_run: bool, yes: bool, keep_isolate
         if not click.confirm("Trigger Azure Backup restore on this VM?", default=False):
             console.print("Aborted.")
             return
+
+    if not before and not dry_run:
+        before = _find_last_attack_time()
+        if before:
+            console.print(f"  [dim]Auto-detected attack time: {before} (from last attack_started signal)[/dim]")
+        else:
+            console.print("  [yellow]Warning: --before not set and no attack_started signal found in runs/. "
+                          "May restore a post-attack backup.[/yellow]")
 
     import time as _time
     console.print("[cyan]->[/cyan] Triggering restore...")
@@ -295,6 +341,59 @@ def memory_stats(memory_path: str | None):
     console.print(f"Cycles in memory: [cyan]{m.count()}[/cyan]")
 
 
+@cli.command("check-ttl")
+@click.option("--ttl", default=None, type=float, metavar="HOURS",
+              help="Max isolation age in hours before auto-release. "
+                   "Defaults to GLORFINDEL_ISOLATION_TTL_H env var or 4h.")
+@click.option("--dry-run", is_flag=True)
+def check_ttl(ttl: float | None, dry_run: bool):
+    """Release isolations that have exceeded the TTL.
+
+    Protects against false-positive isolations staying locked indefinitely.
+    Default TTL: 4h (override via --ttl or GLORFINDEL_ISOLATION_TTL_H).
+
+    Run this periodically (cron, watch loop) on any operator machine.
+    """
+    import os
+    from datetime import datetime, timezone
+    from glorfindel.actions import AzureConnector, active_isolations
+
+    ttl_h = ttl or float(os.environ.get("GLORFINDEL_ISOLATION_TTL_H", "4"))
+    connector = AzureConnector(dry_run=dry_run)
+    now = datetime.now(timezone.utc)
+    released = 0
+
+    for iso in active_isolations():
+        isolated_at_s = iso.get("isolated_at")
+        resource_id = iso.get("resource_id", "")
+        if not isolated_at_s or not resource_id:
+            continue
+        isolated_at = datetime.fromisoformat(isolated_at_s)
+        age_h = (now - isolated_at).total_seconds() / 3600
+        vm_short = resource_id.split("/")[-1]
+
+        if age_h >= ttl_h:
+            console.print(
+                f"[yellow]TTL exceeded[/yellow] — {vm_short} isolated for {age_h:.1f}h "
+                f"(limit {ttl_h}h). {'[dim]DRY RUN[/dim]' if dry_run else 'Releasing...'}"
+            )
+            if not dry_run:
+                connector.release_isolation(resource_id)
+                from glorfindel import escalations
+                escalations.record(
+                    signal_id="ttl-auto-release",
+                    resource_id=resource_id,
+                    action="release_isolation",
+                    escalation_type="ttl_exceeded",
+                    reason=f"Isolation TTL exceeded ({age_h:.1f}h > {ttl_h}h) — auto-released",
+                )
+                console.print(f"  [green]✓ Released.[/green]")
+            released += 1
+
+    if released == 0:
+        console.print(f"[green]No isolations older than {ttl_h}h.[/green]")
+
+
 def _build_recovery_signal(resource_id: str, restore_result: dict, restore_time_s: int) -> dict:
     from datetime import datetime, timezone
     ts = datetime.now(timezone.utc)
@@ -314,6 +413,26 @@ def _build_recovery_signal(resource_id: str, restore_result: dict, restore_time_
         },
         "context": {"run_id": run_id},
     }
+
+
+def _find_last_attack_time() -> str | None:
+    """Extract attack_time from the most recent attack_started signal in runs/."""
+    from datetime import datetime, timezone
+    candidates = sorted(Path("runs").glob("*_signals.jsonl"), reverse=True)
+    for path in candidates:
+        try:
+            for line in reversed(path.read_text().splitlines()):
+                if not line.strip():
+                    continue
+                sig = json.loads(line)
+                if sig.get("event") == "attack_started":
+                    attack_time = sig.get("raw_signal", {}).get("attack_time")
+                    if attack_time:
+                        dt = datetime.fromtimestamp(float(attack_time), tz=timezone.utc)
+                        return dt.isoformat()
+        except Exception:
+            continue
+    return None
 
 
 def _write_signal(signal: dict, runs_dir: str = "runs") -> Path:

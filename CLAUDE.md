@@ -68,7 +68,7 @@ Humain
   → store cycle
 ```
 
-RTO validé en réel (2026-05-24) : detect 49s + isolate 10s + restore 19min 50s ≈ 20min 49s
+RTO validé en réel (2026-05-24, run 2) : detect 50s + isolate 9s + restore 20min 20s + release 4s ≈ 21min 23s (hors décision humaine)
 
 ---
 
@@ -159,8 +159,10 @@ eregion/
 │   ├── agent.py         # LangGraph : load_context→poll_detection→decide→execute→verify→store
 │   ├── signals.py       # load_signals(), load_latest_signals()
 │   ├── actions.py       # CloudConnector ABC, AzureConnector, AUTONOMOUS_ACTIONS
+│   ├── detectors.py     # DetectionConnector ABC, AzureMonitorDetector, detector_for()
+│   ├── escalations.py   # record/resolve/pending — ~/.glorfindel/escalations.jsonl
 │   ├── memory.py        # CycleMemory (ChromaDB)
-│   └── cli.py           # respond, watch, restore, release, memory-stats
+│   └── cli.py           # respond, watch, restore, release, pending, ack, memory-stats
 ├── scripts/
 │   └── simulate_annatar.py  # simulation locale sans Azure
 ├── runs/                # Rapports JSON + signaux JSONL (gitignored)
@@ -194,13 +196,13 @@ signal = {
 | Event | Émis par | raw_signal clés |
 |---|---|---|
 | `attack_started` | Annatar | `attack_time`, `detection_query`, `detection_source`, `detection_timeout_s`, `detection_max_s`, `log_analytics_workspace_id` |
-| `detection` | Glorfindel (poll_detection) | `detection_time_s`, `passed` |
+| `detection` | Glorfindel (poll_detection) | `detection_time_s`, `detected_data` (première ligne résultat) |
 | `detection_timeout` | Glorfindel (poll_detection) | — |
 | `recovery_complete` | `glorfindel restore` CLI | `recovery_point_time`, `restore_time_s` |
 | `recovery_failed` | `glorfindel restore` CLI | `error`, `status` |
 
 Annatar écrit `runs/{run_id}_signals.jsonl`. Glorfindel le lit via `watch` ou `respond`.
-`recovery_complete` est écrit par le CLI restore puis traité inline (pas besoin que watch tourne).
+`recovery_complete` est écrit dans `runs/recovery/{run_id}_signals.jsonl` (hors portée de watch) puis traité inline.
 
 ---
 
@@ -265,9 +267,11 @@ glorfindel restore ... --yes --keep-isolated
 5. ✅ `glorfindel watch runs/` — deux agents concurrents, réponse en temps réel
 6. ✅ Action discovery — Glorfindel peut proposer des actions inconnues
 7. ✅ Run réel Azure end-to-end (2026-05-24) — RTO ~20min 49s validé
-8. ✅ Glorfindel poll détection (`poll_detection` node LangGraph) — Annatar émet `attack_started`
-9. ✅ `glorfindel restore` émet `recovery_complete` → Glorfindel `release_isolation` autonome
-10. Scénario exfiltration câblé aux signaux — T1041 → `block_suspicious_ip`
+8. ✅ Glorfindel poll détection (`poll_detection` + `DetectionConnector` ABC) — Annatar émet `attack_started`
+9. ✅ `glorfindel restore` émet `recovery_complete` → Glorfindel `release_isolation` autonome (run 2 validé)
+10. ✅ `glorfindel pending` / `ack` — escalades persistées, webhook optionnel (`GLORFINDEL_WEBHOOK_URL`)
+11. ✅ `block_suspicious_ip` + `verify_block_ip` implémentés dans `AzureConnector`
+12. Scénario exfiltration T1041 — run réel + valider `block_suspicious_ip` end-to-end
 
 ---
 

@@ -23,13 +23,16 @@ steps:
 detection:
   source: azure_monitor
   query: |
-    AzureNetworkAnalytics_CL
-    | where FlowType_s == "ExternalPublic"
-    | where BytesSentInFlows_d > 104857600
-    | where TimeGenerated > ago(10m)
-  # AzureNetworkAnalytics_CL is populated by Traffic Analytics (10 min interval minimum).
-  # 900s gives Glorfindel at least one full interval to detect the flow anomaly.
-  timeout: "900s"
+    StorageBlobLogs
+    | where AccountName == "stannatarexfil"
+    | where OperationName == "PutBlob"
+    | where ObjectKey has "exfil-target"
+    | where TimeGenerated > ago(5m)
+    | project TimeGenerated, CallerIpAddress, ObjectKey, ResponseBodySize
+  # StorageBlobLogs populated in seconds via diagnostic settings on stannatarexfil.
+  # CallerIpAddress = VM's public IP — passed to block_suspicious_ip.
+  # Requires: terraform apply -target=azurerm_monitor_diagnostic_setting.exfil_storage
+  timeout: "300s"
 
 # No recovery for exfiltration — detection only
 recovery: null

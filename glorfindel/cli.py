@@ -143,14 +143,17 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
 @click.option("--vault", default="rsv-annatar", show_default=True)
 @click.option("--dry-run", is_flag=True)
 @click.option("--yes", is_flag=True, help="Skip confirmation prompt.")
+@click.option("--keep-isolated", is_flag=True, envvar="GLORFINDEL_KEEP_ISOLATED",
+              help="Skip recovery_complete signal — VM stays isolated after restore. "
+                   "Also honoured via GLORFINDEL_KEEP_ISOLATED=1.")
 @click.option("--model", default="claude-sonnet-4-6", show_default=True)
 @click.option("--memory-path", default=None)
-def restore(resource_id: str, vault: str, dry_run: bool, yes: bool, model: str, memory_path: str | None):
+def restore(resource_id: str, vault: str, dry_run: bool, yes: bool, keep_isolated: bool, model: str, memory_path: str | None):
     """Trigger an Azure Backup restore on a VM (human approval action).
 
     Run this after Glorfindel escalates a restore_from_backup recommendation.
     After a successful restore, emits a recovery_complete signal and lets
-    Glorfindel decide the next action (release_isolation).
+    Glorfindel decide the next action (release_isolation), unless --keep-isolated.
     """
     from glorfindel.actions import AzureConnector
 
@@ -179,6 +182,10 @@ def restore(resource_id: str, vault: str, dry_run: bool, yes: bool, model: str, 
     restore_label = f"{rto_s // 60}min {rto_s % 60}s"
     console.print(f"[green]✓ Restore complete.[/green]  restore_time: {restore_label}  RP: {result.get('recovery_point_time')}")
     console.print(f"[dim]RTO = detection_s + isolation_s + restore_time  (human decision time excluded)[/dim]\n")
+
+    if keep_isolated:
+        console.print("[yellow]--keep-isolated: VM stays isolated. Run 'glorfindel release' when ready.[/yellow]")
+        return
 
     # Emit recovery_complete and let Glorfindel decide (release_isolation)
     sig = _build_recovery_signal(resource_id, result, rto_s)

@@ -42,6 +42,8 @@ class CycleMemory:
                 "event": cycle.get("event", ""),
                 "detection_s": cycle.get("detection_s", 0),
                 "action_s": cycle.get("action_s", 0),
+                "confidence": float(cycle.get("confidence", 0.0)),
+                "past_cycles_used": json.dumps(cycle.get("past_cycles_used", [])),
             }],
         )
 

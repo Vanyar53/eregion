@@ -333,7 +333,7 @@ def _render_decision(state: dict, dry_run: bool) -> None:
     table.add_column(style="dim", width=18)
     table.add_column()
     table.add_row("Decision", f"[bold]{action}[/bold]")
-    table.add_row("Confidence", f"{confidence:.0%}")
+    table.add_row("[dim]LLM confidence (self-reported)[/dim]", f"[dim]{confidence:.0%}[/dim]")
     table.add_row("Status", f"[{status_color}]{status_label}[/{status_color}]")
     if "action_s" in outcome and not escalated and not dry_run:
         detection_s = state.get("signal", {}).get("raw_signal", {}).get("detection_time_s")

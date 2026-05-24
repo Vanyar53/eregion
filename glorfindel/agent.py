@@ -325,22 +325,52 @@ def verify_action(state: GlorfindelState, *, connector: CloudConnector) -> Glorf
 
 
 def store_cycle(state: GlorfindelState, *, memory: CycleMemory) -> GlorfindelState:
-    """Persist the completed cycle to vector store for future RAG retrieval."""
+    """Persist the completed cycle to vector store and debug JSONL."""
+    import json
+    from datetime import datetime, timezone
+    from pathlib import Path
+
     signal = state["signal"]
     outcome = state.get("outcome") or {}
-    memory.store({
+    run_id = signal.get("context", {}).get("run_id", "")
+
+    cycle = {
         "signal_id": signal.get("signal_id", ""),
-        "run_id": signal.get("context", {}).get("run_id", ""),
+        "run_id": run_id,
         "ttp": signal.get("ttp", ""),
         "severity": signal.get("severity", ""),
         "resource_type": signal.get("resource_type", ""),
         "event": signal.get("event", ""),
         "reasoning": state["reasoning"],
+        "confidence": state["confidence"],
         "action": state["action"],
+        "escalate": state["escalate"],
+        "escalation_reason": state.get("escalation_reason", ""),
         "outcome": str(outcome),
         "detection_s": signal.get("raw_signal", {}).get("detection_time_s", 0),
         "action_s": outcome.get("action_s", 0),
-    })
+        "past_cycles_used": [c.get("summary", "") for c in state.get("past_cycles", [])],
+    }
+    memory.store(cycle)
+
+    # Debug JSONL — full trace for post-mortem analysis
+    if run_id:
+        debug_record = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "signal": signal,
+            "past_cycles": state.get("past_cycles", []),
+            "reasoning": state["reasoning"],
+            "confidence": state["confidence"],
+            "action": state["action"],
+            "escalate": state["escalate"],
+            "escalation_reason": state.get("escalation_reason", ""),
+            "outcome": outcome,
+        }
+        out = Path("runs") / f"{run_id}_debug.jsonl"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        with open(out, "a") as f:
+            f.write(json.dumps(debug_record, default=str) + "\n")
+
     return state
 
 

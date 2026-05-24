@@ -99,12 +99,16 @@ class Engine:
                         raw_signal={"passed": False},
                     )
 
-            # Recovery
+            # Recovery — restore is triggered by Glorfindel (human-approved)
             if scenario.recovery:
-                console.print("[cyan]->[/cyan] Triggering recovery...")
-                executor.trigger_recovery(scenario.recovery, attack_time=T0)
+                vault = scenario.recovery.get("vault", "rsv-annatar")
+                console.print(
+                    f"\n[yellow]  Restore is a human-approved action.[/yellow]\n"
+                    f"  Glorfindel will escalate — approve with:\n\n"
+                    f"  [bold]glorfindel restore {executor.resource_id} --vault {vault} --yes[/bold]\n"
+                )
 
-                # Wait for VM heartbeat — proves VM is back online
+                # Wait for VM heartbeat — proves restore completed (whoever triggered it)
                 heartbeat_timeout = self._parse_duration(
                     scenario.recovery.get("heartbeat_timeout", "600s")
                 )

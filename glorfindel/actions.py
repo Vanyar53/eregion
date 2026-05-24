@@ -54,6 +54,11 @@ class CloudConnector(ABC):
         ...
 
     @abstractmethod
+    def restore_from_backup(self, resource_id: str, vault: str = "rsv-annatar") -> dict:
+        """Trigger an Azure Backup OriginalLocation restore. Human-approved action."""
+        ...
+
+    @abstractmethod
     def verify_block_ip(self, ip: str, resource_id: str) -> dict:
         """Confirm that the deny rule for this IP is active on the NSG."""
         ...
@@ -201,6 +206,111 @@ class AzureConnector(CloudConnector):
             return {"verified": None, "method": "not_implemented", "note": "snap_id is not a full resource ID"}
         except Exception as e:
             return {"verified": False, "method": "snapshot_check", "error": str(e)}
+
+    def restore_from_backup(self, resource_id: str, vault: str = "rsv-annatar") -> dict:
+        if self.dry_run:
+            return {"status": "dry_run", "action": "restore_from_backup", "resource_id": resource_id}
+
+        import time
+        import requests
+        from datetime import datetime, timezone
+        from azure.mgmt.recoveryservicesbackup import RecoveryServicesBackupClient
+
+        self._ensure_clients()
+        rg, vm_name = _parse_vm_resource_id(resource_id)
+        sub = self._subscription_id
+        container_name = f"iaasvmcontainer;iaasvmcontainerv2;{rg};{vm_name}"
+        item_name = f"vm;iaasvmcontainerv2;{rg};{vm_name}"
+        fabric = "Azure"
+
+        backup_client = RecoveryServicesBackupClient(self._credential, sub)
+
+        rps = list(backup_client.recovery_points.list(vault, rg, fabric, container_name, item_name))
+        if not rps:
+            raise RuntimeError(f"No recovery points in vault {vault}")
+
+        def _has_vault_tier(rp) -> bool:
+            return any(
+                t.type == "HardenedRP" and getattr(t, "status", "") == "Valid"
+                for t in (getattr(rp.properties, "recovery_point_tier_details", None) or [])
+            )
+
+        vaulted = [rp for rp in rps if _has_vault_tier(rp)]
+        latest = vaulted[0] if vaulted else rps[0]
+        rp_time = getattr(latest.properties, "recovery_point_time", "unknown")
+
+        vm = self._compute.virtual_machines.get(rg, vm_name)
+        storage_id = (
+            f"/subscriptions/{sub}/resourceGroups/{rg}"
+            f"/providers/Microsoft.Storage/storageAccounts/stannatarexfil"
+        )
+
+        self._compute.virtual_machines.begin_deallocate(rg, vm_name).result()
+
+        token = self._credential.get_token("https://management.azure.com/.default").token
+        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+        container_enc = container_name.replace(";", "%3B")
+        item_enc = item_name.replace(";", "%3B")
+        url = (
+            f"https://management.azure.com/subscriptions/{sub}"
+            f"/resourceGroups/{rg}/providers/Microsoft.RecoveryServices/vaults/{vault}"
+            f"/backupFabrics/Azure/protectionContainers/{container_enc}"
+            f"/protectedItems/{item_enc}/recoveryPoints/{latest.name}/restore"
+            f"?api-version=2021-10-01"
+        )
+        data_luns = [d.lun for d in (vm.storage_profile.data_disks or [])]
+        payload = {
+            "properties": {
+                "objectType": "IaasVMRestoreRequest",
+                "recoveryPointId": latest.name,
+                "recoveryType": "OriginalLocation",
+                "sourceResourceId": vm.id,
+                "storageAccountId": storage_id,
+                "region": vm.location,
+                "affinityGroup": "",
+                "createNewCloudService": False,
+                "originalStorageAccountOption": False,
+                "skipPreOLRBackup": True,
+                "targetVirtualMachineId": None,
+                "targetResourceGroupId": None,
+                "restoreDiskLunList": data_luns,
+            }
+        }
+
+        r = requests.post(url, json=payload, headers=headers)
+        if r.status_code not in (200, 202):
+            raise RuntimeError(f"Restore trigger failed ({r.status_code}): {r.text[:300]}")
+
+        time.sleep(15)
+        restore_job = next(
+            (j for j in backup_client.backup_jobs.list(vault, rg)
+             if getattr(j.properties, "operation", "") == "Restore"
+             and getattr(j.properties, "status", "") == "InProgress"),
+            None,
+        )
+        if restore_job is None:
+            raise RuntimeError("Restore job not found after trigger")
+
+        elapsed = 0
+        while True:
+            time.sleep(60)
+            elapsed += 60
+            job = backup_client.job_details.get(vault, rg, restore_job.name)
+            status = getattr(job.properties, "status", "Unknown")
+            if status in ("Completed", "Failed", "Cancelled"):
+                break
+
+        if status != "Completed":
+            raise RuntimeError(f"Restore ended with status: {status}")
+
+        self._compute.virtual_machines.begin_start(rg, vm_name).result()
+
+        return {
+            "status": "restored",
+            "recovery_point": latest.name,
+            "recovery_point_time": str(rp_time),
+            "resource_id": resource_id,
+        }
 
     def verify_block_ip(self, ip: str, resource_id: str) -> dict:
         if self.dry_run:

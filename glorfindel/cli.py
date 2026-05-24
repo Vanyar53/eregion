@@ -139,6 +139,40 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
 
 
 @cli.command()
+@click.argument("resource_id")
+@click.option("--vault", default="rsv-annatar", show_default=True)
+@click.option("--dry-run", is_flag=True)
+@click.option("--yes", is_flag=True, help="Skip confirmation prompt.")
+def restore(resource_id: str, vault: str, dry_run: bool, yes: bool):
+    """Trigger an Azure Backup restore on a VM (human approval action).
+
+    Run this after Glorfindel escalates a restore_from_backup recommendation.
+    """
+    from glorfindel.actions import AzureConnector
+
+    connector = AzureConnector(dry_run=dry_run)
+
+    console.rule("[bold yellow]Glorfindel — Restore from Backup[/bold yellow]")
+    console.print(f"  Resource : {resource_id}")
+    console.print(f"  Vault    : {vault}")
+    console.print(f"  Dry-run  : {dry_run}\n")
+
+    if not dry_run and not yes:
+        if not click.confirm("Trigger Azure Backup restore on this VM?", default=False):
+            console.print("Aborted.")
+            return
+
+    console.print("[cyan]->[/cyan] Triggering restore...")
+    result = connector.restore_from_backup(resource_id, vault=vault)
+
+    if dry_run:
+        console.print("[yellow]DRY RUN — no changes made.[/yellow]")
+    else:
+        console.print(f"[green]✓ Restore complete.[/green]  RP: {result.get('recovery_point_time')}")
+        console.print("[dim]Annatar will detect the heartbeat and emit recovery_complete.[/dim]")
+
+
+@cli.command()
 @click.option("--memory-path", default=None)
 def memory_stats(memory_path: str | None):
     """Show how many cycles are stored in memory."""

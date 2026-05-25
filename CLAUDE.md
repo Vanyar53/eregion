@@ -256,7 +256,7 @@ glorfindel unblock 185.220.101.1 /subscriptions/44a4dc83-3e79-4e4e-aa93-1b4f8e3e
 
 # 3d. Scénario privilege escalation (terminal 2)
 annatar run scenarios/azure/privilege-escalation.yaml
-# détection via Syslog DCR (~70s) → isolate_vm autonome (compromission OS-level, pas d'IP externe)
+# détection via Syslog DCR (~40s) → isolate_vm autonome (compromission OS-level, pas d'IP externe)
 
 # 4. Attendre que Glorfindel isole la VM (automatique)
 
@@ -314,7 +314,7 @@ Prochaines priorités :
     - Detection : Syslog auth, sudo USER=root COMMAND= sans NOT in sudoers (~60s)
     - Action attendue : `isolate_vm` (compromission OS-level, pas d'IP externe à bloquer)
     - Severity : critical (racine de la chaîne post-compromise)
-19. ✅ Run réel T1548.003 en Azure — detect 70s + isolate_vm validé (2026-05-25)
+19. ✅ Run réel T1548.003 en Azure — detect 40s + isolate_vm validé (2026-05-25)
 20. Pytest : couverture T1548 (signal priv esc → isolate_vm)
 21. `glorfindel check-ttl` : intégrer en cron (crontab ou systemd timer) pour auto-release après 4h
 22. AWS provider : `AwsConnector(CloudConnector)` — Security Groups pour isolate_vm, GuardDuty pour detection

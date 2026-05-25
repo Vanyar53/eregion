@@ -233,6 +233,7 @@ class AzureConnector(CloudConnector):
                 ),
             ).result()
 
+        _save_block_state(vm_name, ip, resource_id)
         return {
             "status": "blocked",
             "ip": ip,
@@ -449,6 +450,7 @@ class AzureConnector(CloudConnector):
             except Exception:
                 pass
 
+        _clear_block_state(vm_name, ip)
         return {
             "status": "unblocked" if deleted else "not_found",
             "ip": ip,
@@ -484,6 +486,7 @@ class AzureConnector(CloudConnector):
 
 
 _ISOLATION_STATE_DIR = Path.home() / ".glorfindel" / "isolation"
+_BLOCK_STATE_DIR = Path.home() / ".glorfindel" / "blocks"
 
 
 def _save_isolation_state(vm_name: str, state: dict) -> None:
@@ -513,6 +516,45 @@ def active_isolations() -> list[dict]:
             state = json.loads(f.read_text())
             if state.get("resource_id"):
                 result.append({**state, "vm_name": f.stem})
+        except Exception:
+            pass
+    return result
+
+
+def _save_block_state(vm_name: str, ip: str, resource_id: str) -> None:
+    import json
+    from datetime import datetime, timezone
+    _BLOCK_STATE_DIR.mkdir(parents=True, exist_ok=True)
+    f = _BLOCK_STATE_DIR / f"{vm_name}.json"
+    entries = json.loads(f.read_text()) if f.exists() else []
+    if not any(e["ip"] == ip for e in entries):
+        entries.append({"ip": ip, "resource_id": resource_id,
+                        "blocked_at": datetime.now(timezone.utc).isoformat()})
+    f.write_text(json.dumps(entries))
+
+
+def _clear_block_state(vm_name: str, ip: str) -> None:
+    import json
+    f = _BLOCK_STATE_DIR / f"{vm_name}.json"
+    if not f.exists():
+        return
+    entries = [e for e in json.loads(f.read_text()) if e["ip"] != ip]
+    if entries:
+        f.write_text(json.dumps(entries))
+    else:
+        f.unlink()
+
+
+def active_blocks() -> list[dict]:
+    """Return all active IP blocks per VM ({vm_name, resource_id, ip, blocked_at})."""
+    import json
+    result = []
+    if not _BLOCK_STATE_DIR.exists():
+        return result
+    for f in _BLOCK_STATE_DIR.glob("*.json"):
+        try:
+            for entry in json.loads(f.read_text()):
+                result.append({**entry, "vm_name": f.stem})
         except Exception:
             pass
     return result

@@ -233,11 +233,12 @@ VM auto-shutdown 23h00 UTC — `az vm start -g annatar -n vm-annatar-victim` ava
 # 1. Démarrer la VM si nécessaire
 az vm start -g annatar -n vm-annatar-victim
 
-# CRITIQUE — vérifier l'état d'isolation avant chaque run
+# CRITIQUE — vérifier l'état d'isolation et des blocs avant chaque run
 # Une isolation active bloque AMA (outbound deny-all) → syslog non uploadé → detection timeout
-az network nsg rule list -g annatar --nsg-name nsg-annatar -o table  # chercher glorfindel-isolation-*
-# Si la VM est encore isolée :
-echo y | glorfindel release /subscriptions/44a4dc83-3e79-4e4e-aa93-1b4f8e3ede80/resourceGroups/annatar/providers/Microsoft.Compute/virtualMachines/vm-annatar-victim
+glorfindel isolated   # chercher les VMs isolées
+glorfindel blocked    # chercher les IPs bloquées
+# Pour tout nettoyer en une commande :
+glorfindel revert /subscriptions/44a4dc83-3e79-4e4e-aa93-1b4f8e3ede80/resourceGroups/annatar/providers/Microsoft.Compute/virtualMachines/vm-annatar-victim --yes
 
 # 2. Lancer Glorfindel en watch (terminal 1)
 glorfindel watch runs/
@@ -330,8 +331,10 @@ Prochaines priorités :
 31. ✅ `glorfindel isolated` — liste les VMs actuellement isolées avec leur âge et la commande `release` exacte à copier
 32. ✅ Fix RunCommand Conflict — retry avec backoff exponentiel (15s, 30s, 60s) dans `annatar/executors/azure_vm.py` ; deux attaques // sur la même VM ne se bloquent plus
 33. ✅ Watch poll parallèle — `attack_started` → thread `poll-<vm>-<id>` indépendant (polling // par resource), signal résolu → queue resource (decide+execute sérialisé) ; `resolve_attack_started()` extrait de `poll_detection` et partagé
-34. `glorfindel check-ttl` : intégrer en cron (crontab ou systemd timer) pour auto-release après 4h
-35. AWS provider : `AwsConnector(CloudConnector)` — Security Groups pour isolate_vm, GuardDuty pour detection
+34. ✅ `glorfindel blocked` — liste les IPs bloquées par VM avec timestamp + commande `unblock` exacte ; state persisté dans `~/.glorfindel/blocks/{vm}.json`
+35. ✅ `glorfindel revert <resource_id> --yes` — release isolation + unblock toutes les IPs en une commande ; reset NSG propre avant le run suivant
+36. `glorfindel check-ttl` : intégrer en cron (crontab ou systemd timer) pour auto-release après 4h
+37. AWS provider : `AwsConnector(CloudConnector)` — Security Groups pour isolate_vm, GuardDuty pour detection
 
 ## Convention de session
 

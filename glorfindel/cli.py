@@ -476,6 +476,76 @@ def isolated():
 
 
 @cli.command()
+def blocked():
+    """List all IPs currently blocked by Glorfindel."""
+    from datetime import datetime, timezone
+    from glorfindel.actions import active_blocks
+
+    items = active_blocks()
+    if not items:
+        console.print("[green]No active IP blocks.[/green]")
+        return
+
+    now = datetime.now(timezone.utc)
+    console.rule(f"[bold yellow]Glorfindel — {len(items)} active block(s)[/bold yellow]")
+    for block in items:
+        resource_id = block.get("resource_id", "")
+        vm_short = resource_id.split("/")[-1]
+        ip = block.get("ip", "?")
+        blocked_at_s = block.get("blocked_at", "")
+        age = ""
+        if blocked_at_s:
+            age_m = int((now - datetime.fromisoformat(blocked_at_s)).total_seconds() // 60)
+            age = f" ({age_m}m ago)"
+        age_str = f"{blocked_at_s[:19].replace('T', ' ')} UTC{age}" if blocked_at_s else ""
+        console.print(f"  [bold]{ip}[/bold]  on [cyan]{vm_short}[/cyan]  [dim]{age_str}[/dim]")
+        console.print(f"  [cyan]→[/cyan] glorfindel unblock {ip} {resource_id} --yes\n",
+                      soft_wrap=True)
+
+
+@cli.command()
+@click.argument("resource_id")
+@click.option("--yes", is_flag=True, help="Confirm revert (skip prompt)")
+@click.option("--dry-run", is_flag=True)
+def revert(resource_id: str, yes: bool, dry_run: bool):
+    """Release isolation and unblock all IPs on a VM in one command.
+
+    Useful between runs — resets the VM to a clean NSG state without having
+    to run isolated/blocked separately.
+    """
+    from glorfindel.actions import active_blocks, active_isolations, AzureConnector
+
+    isolations = [i for i in active_isolations() if i.get("resource_id") == resource_id]
+    blocks = [b for b in active_blocks() if b.get("resource_id") == resource_id]
+
+    if not isolations and not blocks:
+        console.print(f"[green]Nothing to revert on {resource_id.split('/')[-1]}.[/green]")
+        return
+
+    vm_short = resource_id.split("/")[-1]
+    console.rule(f"[bold yellow]Revert — {vm_short}[/bold yellow]")
+    if isolations:
+        console.print(f"  • Release isolation")
+    for b in blocks:
+        console.print(f"  • Unblock {b['ip']}")
+
+    if not yes and not dry_run:
+        click.confirm("\nProceed?", abort=True)
+
+    connector = AzureConnector(dry_run=dry_run)
+    if isolations:
+        r = connector.release_isolation(resource_id)
+        status = r.get("status", "?")
+        console.print(f"  [cyan]release_isolation[/cyan] → {status}")
+    for b in blocks:
+        r = connector.unblock_ip(b["ip"], resource_id)
+        status = r.get("status", "?")
+        console.print(f"  [cyan]unblock {b['ip']}[/cyan] → {status}")
+
+    console.print(f"\n[green]✓ Revert complete — {vm_short} is clean.[/green]")
+
+
+@cli.command()
 @click.option("--memory-path", default=None)
 def memory_stats(memory_path: str | None):
     """Show how many cycles are stored in memory."""

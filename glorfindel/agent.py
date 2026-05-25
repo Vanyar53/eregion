@@ -20,6 +20,7 @@ class GlorfindelState(TypedDict):
     signal: dict
     past_cycles: list[dict]
     incident: dict | None    # current incident context for this resource
+    dry_run: bool
     reasoning: str
     confidence: float
     action: str
@@ -279,8 +280,6 @@ def execute_action(
 
 def escalate_to_human(state: GlorfindelState) -> GlorfindelState:
     """Mark the decision as escalated — human must approve before any action."""
-    from glorfindel import escalations
-
     action = state["action"]
     if action in HUMAN_APPROVAL_REQUIRED:
         escalation_type = "destructive_action"
@@ -290,14 +289,16 @@ def escalate_to_human(state: GlorfindelState) -> GlorfindelState:
         escalation_type = "low_confidence"
 
     signal = state["signal"]
-    escalations.record(
-        signal_id=signal.get("signal_id", ""),
-        resource_id=signal.get("resource_id", ""),
-        action=action,
-        escalation_type=escalation_type,
-        reason=state.get("escalation_reason", ""),
-        run_id=signal.get("context", {}).get("run_id", ""),
-    )
+    if not state.get("dry_run", False):
+        from glorfindel import escalations
+        escalations.record(
+            signal_id=signal.get("signal_id", ""),
+            resource_id=signal.get("resource_id", ""),
+            action=action,
+            escalation_type=escalation_type,
+            reason=state.get("escalation_reason", ""),
+            run_id=signal.get("context", {}).get("run_id", ""),
+        )
 
     return {
         **state,
@@ -478,6 +479,7 @@ class GlorfindelAgent:
     ):
         from glorfindel.actions import AzureConnector
 
+        self.dry_run = dry_run
         self.memory = CycleMemory(path=memory_path)
         self.connector = connector or AzureConnector(dry_run=dry_run)
         self.incidents = IncidentRegistry(path=incidents_path)
@@ -490,6 +492,7 @@ class GlorfindelAgent:
             "signal": signal,
             "past_cycles": [],
             "incident": None,
+            "dry_run": self.dry_run,
             "reasoning": "",
             "confidence": 0.0,
             "action": "",

@@ -39,6 +39,7 @@ def _state(**overrides) -> dict:
         },
         "past_cycles": [],
         "incident": None,
+        "dry_run": False,
         "reasoning": "",
         "confidence": 0.0,
         "action": "",
@@ -443,6 +444,38 @@ def test_store_cycle_persists_to_memory(tmp_path, monkeypatch, tmp_memory):
     assert tmp_memory.count() == 1
 
 
+# ── escalate_to_human ─────────────────────────────────────────────────────────
+
+def test_escalate_to_human_dry_run_skips_record():
+    """dry_run=True must not write to the escalations file."""
+    from glorfindel.agent import escalate_to_human
+    from glorfindel import escalations as esc_module
+
+    state = _state(action="restore_from_backup")
+    state["dry_run"] = True
+    state["escalation_reason"] = "needs human approval"
+
+    with patch.object(esc_module, "record") as mock_record:
+        escalate_to_human(state)
+
+    mock_record.assert_not_called()
+
+
+def test_escalate_to_human_real_run_records():
+    """dry_run=False must persist the escalation."""
+    from glorfindel.agent import escalate_to_human
+    from glorfindel import escalations as esc_module
+
+    state = _state(action="restore_from_backup")
+    state["dry_run"] = False
+    state["escalation_reason"] = "needs human approval"
+
+    with patch.object(esc_module, "record") as mock_record:
+        escalate_to_human(state)
+
+    mock_record.assert_called_once()
+
+
 # ── Graph integration (LLM mocked) ───────────────────────────────────────────
 
 def _build(tmp_path, tmp_memory, dry_connector):
@@ -464,6 +497,8 @@ def _initial(event: str, ttp: str = "T1486", raw: dict | None = None) -> dict:
             "context": {"run_id": "run001"},
         },
         "past_cycles": [],
+        "incident": None,
+        "dry_run": False,
         "reasoning": "",
         "confidence": 0.0,
         "action": "",

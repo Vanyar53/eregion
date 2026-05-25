@@ -169,7 +169,7 @@ eregion/
 │   ├── incidents.py     # IncidentRegistry : regroupe signaux par resource_id + TTL (~/.glorfindel/incidents.jsonl)
 │   ├── escalations.py   # record/resolve/pending — ~/.glorfindel/escalations.jsonl
 │   ├── memory.py        # CycleMemory (ChromaDB)
-│   └── cli.py           # respond, watch (threaded), restore, release, pending, ack, memory-stats
+│   └── cli.py           # respond, watch (poll threads + resource queues), restore, release, isolated, pending, ack, memory-stats
 ├── scripts/
 │   └── simulate_annatar.py  # simulation locale sans Azure
 ├── runs/                # Rapports JSON + signaux JSONL (gitignored)
@@ -328,8 +328,10 @@ Prochaines priorités :
 29. ✅ Incident context dans le prompt LLM — `load_context` ouvre/met à jour l'incident, `_build_user_message` injecte actions déjà prises, `execute_action` enregistre chaque action
 30. ✅ Fix dry-run — `escalate_to_human` skippe `escalations.record()` quand `dry_run=True` dans le state ; plus d'accumulation parasite dans `~/.glorfindel/escalations.jsonl` (88 tests)
 31. ✅ `glorfindel isolated` — liste les VMs actuellement isolées avec leur âge et la commande `release` exacte à copier
-32. `glorfindel check-ttl` : intégrer en cron (crontab ou systemd timer) pour auto-release après 4h
-33. AWS provider : `AwsConnector(CloudConnector)` — Security Groups pour isolate_vm, GuardDuty pour detection
+32. ✅ Fix RunCommand Conflict — retry avec backoff exponentiel (15s, 30s, 60s) dans `annatar/executors/azure_vm.py` ; deux attaques // sur la même VM ne se bloquent plus
+33. ✅ Watch poll parallèle — `attack_started` → thread `poll-<vm>-<id>` indépendant (polling // par resource), signal résolu → queue resource (decide+execute sérialisé) ; `resolve_attack_started()` extrait de `poll_detection` et partagé
+34. `glorfindel check-ttl` : intégrer en cron (crontab ou systemd timer) pour auto-release après 4h
+35. AWS provider : `AwsConnector(CloudConnector)` — Security Groups pour isolate_vm, GuardDuty pour detection
 
 ## Convention de session
 
@@ -350,6 +352,12 @@ load_context → poll_detection → decide → execute_action → verify_action 
 `poll_detection` : no-op sauf si `event == attack_started`. Dans ce cas, poll Azure Monitor
 jusqu'à détection ou timeout, puis convertit l'event en `detection` (avec `detection_time_s`)
 ou `detection_timeout` avant que `decide` ne voie le signal.
+
+**Mode watch — parallélisme à deux niveaux** :
+- `attack_started` → thread `poll-<vm>-<signal_id[-6:]>` : poll en parallèle, N attaques simultanées sur la même VM détectent chacune indépendamment
+- Signal résolu (detection/timeout) → queue `resource_id` : decide+execute sérialisé par VM, incident context partagé
+- `resolve_attack_started(signal) -> signal` : extrait de `poll_detection`, utilisé par le node (mode respond) et les poll threads (mode watch)
+- Mode respond : `poll_detection` reste synchrone (sequential dans le graph)
 
 ### Responsabilités strictes
 

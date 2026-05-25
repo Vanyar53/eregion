@@ -15,7 +15,7 @@ Annatar attacks → JSONL signals → Glorfindel decides → action → verified
 
 Glorfindel uses a LangGraph graph + Claude API to reason about each signal and choose the minimum effective response. Actions are verified via Azure API. Every cycle is stored in ChromaDB for cross-scenario learning — no fine-tuning required.
 
-Signals from different resources are processed in parallel; signals from the same resource are serialized with shared incident context so Glorfindel never re-isolates a VM it already contained.
+Signals from different resources are processed in parallel; signals from the same resource are serialized with shared incident context so Glorfindel never re-isolates a VM it already contained. When an `attack_started` signal arrives, detection polling starts immediately in a dedicated thread — two simultaneous attacks on the same VM each poll their detection source in parallel, then make sequential decisions with shared incident context once detected.
 
 ## Validated TTPs (Azure, real runs)
 

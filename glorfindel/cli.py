@@ -141,10 +141,8 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
     _resource_queues: dict[str, _queue.Queue] = {}
     _output_lock = _threading.Lock()
 
-    def _dispatch(data: dict, sig: Signal) -> None:
-        """Route signal to its resource worker queue, starting the thread if needed."""
-        resource_id = data.get("resource_id", "unknown")
-
+    def _get_or_start_worker(resource_id: str) -> _queue.Queue:
+        """Return the resource queue, starting its worker thread if needed."""
         if resource_id not in _resource_queues:
             q: _queue.Queue = _queue.Queue()
             _resource_queues[resource_id] = q
@@ -183,8 +181,44 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
                 target=_worker, daemon=True, name=f"glorf-{vm_short}"
             )
             t.start()
+        return _resource_queues[resource_id]
 
-        _resource_queues[resource_id].put((data, sig))
+    def _dispatch(data: dict, sig: Signal) -> None:
+        """Route signal to its resource worker queue.
+
+        attack_started: spawns a poll thread immediately — polling runs in parallel
+        per resource, not serialized in the queue. When polling resolves, the
+        resulting detection/timeout signal is enqueued for decide+execute.
+
+        All other events go directly to the resource queue (serialized per resource).
+        """
+        from glorfindel.agent import resolve_attack_started
+
+        resource_id = data.get("resource_id", "unknown")
+
+        if data.get("event") == "attack_started":
+            def _poll_and_enqueue():
+                src = data.get("raw_signal", {}).get("detection_source", "azure_monitor")
+                with _output_lock:
+                    console.rule(f"[bold cyan]Signal — {sig.signal_id}[/bold cyan]")
+                    console.print(
+                        f"  TTP      : {sig.ttp}  |  Severity: [red]{sig.severity}[/red]"
+                    )
+                    console.print(f"  Event    : attack_started → polling {src}...\n")
+                resolved = resolve_attack_started(data)
+                resolved_sig = Signal(**{k: resolved.get(k, getattr(sig, k, ""))
+                                         for k in sig.__dataclass_fields__})
+                _get_or_start_worker(resource_id).put((resolved, resolved_sig))
+
+            vm_short = resource_id.split("/")[-1]
+            t = _threading.Thread(
+                target=_poll_and_enqueue, daemon=True,
+                name=f"poll-{vm_short}-{sig.signal_id[-6:]}",
+            )
+            t.start()
+            return
+
+        _get_or_start_worker(resource_id).put((data, sig))
 
     # Files that existed at startup — skip their past content
     existing_at_start = {p for p in Path(runs_dir).glob("*_signals.jsonl")}

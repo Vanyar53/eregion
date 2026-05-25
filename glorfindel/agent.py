@@ -152,18 +152,14 @@ def load_context(
     return {**state, "past_cycles": past, "incident": asdict(inc)}
 
 
-def poll_detection(state: GlorfindelState) -> GlorfindelState:
-    """Poll the detection source when Annatar signals an attack_started.
+def resolve_attack_started(signal: dict) -> dict:
+    """Poll the detection source for an attack_started signal and return the resolved signal.
 
-    No-op for all other events — passes through unchanged.
-    On detection: updates event to 'detection', adds detection_time_s to raw_signal.
-    On timeout: updates event to 'detection_timeout'.
+    Returns a signal with event='detection' (+ detection_time_s, detected_data) or
+    event='detection_timeout'. Called by poll_detection (respond mode) and by
+    watch poll threads (watch mode, so polling runs in parallel per resource).
     """
     from glorfindel.detectors import detector_for
-
-    signal = state["signal"]
-    if signal.get("event") != "attack_started":
-        return state
 
     raw = signal.get("raw_signal", {})
     source = raw.get("detection_source", "azure_monitor")
@@ -174,24 +170,35 @@ def poll_detection(state: GlorfindelState) -> GlorfindelState:
     try:
         detector = detector_for(source, workspace_id=raw.get("log_analytics_workspace_id", ""))
     except ValueError as e:
-        _console.print(f"[yellow]poll_detection: {e} — skipping[/yellow]")
-        return {**state, "signal": {**signal, "event": "detection_timeout"}}
+        _console.print(f"[yellow]poll: {e} — skipping[/yellow]")
+        return {**signal, "event": "detection_timeout"}
 
     _console.print(f"[cyan]->[/cyan] Polling {source} (timeout={int(timeout_s)}s)...")
     result = detector.poll_alert(query, since=attack_time, timeout_s=timeout_s)
 
     if result is not None:
         detection_s, detected_row = result
-        updated_signal = {
+        return {
             **signal,
             "event": "detection",
             "raw_signal": {**raw, "detection_time_s": detection_s, "detected_data": detected_row},
         }
-    else:
-        _console.print(f"  [yellow]Detection timeout after {int(timeout_s)}s — IDS gap signal[/yellow]")
-        updated_signal = {**signal, "event": "detection_timeout"}
 
-    return {**state, "signal": updated_signal}
+    _console.print(f"  [yellow]Detection timeout after {int(timeout_s)}s — IDS gap[/yellow]")
+    return {**signal, "event": "detection_timeout"}
+
+
+def poll_detection(state: GlorfindelState) -> GlorfindelState:
+    """Resolve attack_started → detection/timeout (respond mode).
+
+    No-op for all other events. In watch mode this node is never reached for
+    attack_started — the watch poll thread calls resolve_attack_started directly
+    and enqueues the resolved signal.
+    """
+    signal = state["signal"]
+    if signal.get("event") != "attack_started":
+        return state
+    return {**state, "signal": resolve_attack_started(signal)}
 
 
 def decide(state: GlorfindelState, *, model: str) -> GlorfindelState:

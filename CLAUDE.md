@@ -1,349 +1,61 @@
-# Eregion — Contexte projet pour Claude
+# Eregion — Contexte projet pour Claude Code
 
 ## Concept
+Plateforme OSS (Apache 2.0) de défense active cloud. Deux agents IA en boucle :
+- **Annatar** (rouge) simule des attaques réelles sur l'infra cloud (MITRE ATT&CK)
+- **Glorfindel** (bleu) détecte, répond de façon autonome, vérifie, apprend via ChromaDB
 
-**Eregion** est une plateforme de **défense active de l'infra cloud**.
-
-> "On simule ce que ferait un attaquant sur ton infra cloud. On te montre ce qui tombe. On ferme automatiquement ce qui peut l'être. Tu vois la différence avant et après."
-
-Pas de la détection passive. Pas de la compliance. Une boucle complète : simuler l'attaque → produire des signaux → répondre automatiquement → prouver que c'est fermé.
-
-**Stack** : Python 3.11+, Azure (provider initial), cloud agnostique par design.
-
----
-
-## Les deux agents
-
-### Annatar — Agent Rouge (MVP ✅)
-- Chaos engine qui simule des attaques réelles (ransomware T1486, exfiltration T1041)
-- Scénarios YAML mappés MITRE ATT&CK, bout en bout, rapport JSON PASS/FAIL
-- Produit des signaux normalisés indépendants du provider
-- Tourne **uniquement** sur ressources taguées `annatar-test: "true"`
-- **Rôle strict** : pre-check intégrité → attaque → émet `attack_started` → done
-- Ne poll pas la détection, ne restore pas la VM — ce sont les rôles de Glorfindel
-
-**Entraînement** : connaissance structurée, pas ML — base MITRE ATT&CK + CVEs publics cloud.
-
-### Glorfindel — Agent Bleu (MVP ✅ — run réel validé)
-- Reçoit les signaux normalisés d'Annatar (JSONL)
-- **Poll la détection** (Azure Monitor) quand `attack_started` arrive — calcule `detection_s`
-- Raisonne via Claude API (tool use), décide de la réponse, explique le pourquoi
-- Agit seul sur actions réversibles, escalade à l'humain sur actions destructives ou inconnues
-- Vérifie que l'action a eu l'effet voulu (ex : règle NSG bien posée)
-- Propose des actions nouvelles si aucune action connue ne convient — l'humain valide
-- **Possède le RTO complet** : detection_s + isolation_s + restore_time
-
-**Mode watch** : `glorfindel watch runs/` — poll toutes les 2s, répond en temps réel pendant qu'Annatar tourne.
-
-**Apprentissage** : chaque cycle `(signal → décision → action → outcome)` est stocké dans ChromaDB. Les 3 cycles les plus similaires sont injectés comme contexte à chaque décision.
-
-**Lien fondamental** : plus Annatar attaque, plus Glorfindel apprend.
+**Repo** : https://github.com/Vanyar53/eregion
+**Local** : `/home/jonathan/eregion/`, branch `main`, venv `.venv/`, `.envrc` charge `ANTHROPIC_API_KEY`
+**Stack** : Python 3.11, Azure SDK, LangGraph, Claude API (tool use), ChromaDB, Click, pytest
 
 ---
 
-## Boucle complète (état actuel)
+## TTPs validés en réel (2026-05-24/25)
+
+| TTP | Scénario | Détection | Temps | Action |
+|-----|----------|-----------|-------|--------|
+| T1486 | Ransomware VM | Perf disk write | 50s | `isolate_vm` → restore 21m23s |
+| T1041 | Data exfiltration | StorageBlobLogs | 229s | `isolate_vm` (IP interne) |
+| T1110.001 | SSH brute force | Syslog DCR | 60s | `block_suspicious_ip` (IP Tor) |
+| T1548.003 | Sudo priv esc | Syslog DCR | 40s | `isolate_vm` (root confirmé) |
+| T1110+T1548 | Run parallèle | — | 41s/59s | block → isolate (incident context) |
+
+Glorfindel choisit la bonne action sans règles per-TTP explicites — raisonnement depuis le contexte signal + incident.
+
+---
+
+## Architecture — boucle complète
 
 ```
 Annatar
-  pre-check intégrité VM (valide restore précédent)
-  → setup
-  → attaque (T0)
-  → émet attack_started {T0, detection_query, workspace_id}
-  → done
+  setup (nettoie résidus) → integrity check → attaque → attack_started {T0, query, workspace_id}
 
 Glorfindel (watch ou respond)
-  poll_detection : Azure Monitor toutes les 10s
-  → détecte (detection_s) ou timeout
-  → émet detection ou detection_timeout
-  → décide : isolate_vm (autonome)
-  → vérifie : règles NSG présentes
-  → store cycle (ChromaDB)
+  poll_detection Azure Monitor (10s) → detection ou detection_timeout
+  → decide (LangGraph + Claude API + RAG ChromaDB 3 cycles similaires)
+  → execute autonomous action (isolate_vm / block_suspicious_ip / snapshot)
+  → verify (Azure NSG API) → store_cycle (ChromaDB + debug.jsonl)
 
 Humain
-  glorfindel restore <resource_id> --yes   (human-approved)
-  → restore Azure Backup (~20 min)
-  → émet recovery_complete signal inline
-  → Glorfindel décide : release_isolation (autonome, idempotent)
-  → vérifie : isolation absente
-  → store cycle
-```
-
-RTO validé en réel (2026-05-24, run 2) : detect 50s + isolate 9s + restore 20min 20s + release 4s ≈ 21min 23s (hors décision humaine)
-
-T1041 validé en réel (2026-05-24, run 3) : detect 229s + isolate 10s (via StorageBlobLogs — near-realtime)
-
-T1110.001 validé en réel (2026-05-24, run 4) : detect 60s + block_suspicious_ip 7s = RTO 67s (via Syslog DCR — Tor exit node 185.220.101.1 bloqué au NSG, isolate_vm non requis)
-
-T1548.003 validé en réel (2026-05-25, run 5) : detect 40s + isolate_vm 9s (via Syslog DCR — sudo USER=root COMMAND= sans NOT in sudoers, compromission OS-level, confiance 95%)
-
----
-
-## Architecture — Cloud agnostique
-
-Les TTPs des attaquants ne changent pas selon le cloud provider. Seuls les connecteurs changent.
-
-```
-Scénarios d'attaque (universels — MITRE ATT&CK)
-        ↓
-Connecteurs cloud (Azure existant / AWS et GCP à venir)
-        ↓
-Signaux normalisés
-        ↓
-Glorfindel (universel — raisonne + décide)
-        ↓
-Actions via connecteurs cloud
-        ↓
-Vérification
-```
-
-Modèle inspiré de Terraform : logique agnostique, providers interchangeables.
-
----
-
-## Règles d'autonomie de Glorfindel
-
-```python
-# Réversible — Glorfindel agit seul
-AUTONOMOUS_ACTIONS = [
-    "isolate_vm",
-    "release_isolation",   # inverse de isolate_vm — autonome par symétrie
-    "revoke_temp_access",
-    "snapshot",            # forensic snapshot of compromised state
-    "block_suspicious_ip",
-]
-
-# Destructif — validation humaine obligatoire
-HUMAN_APPROVAL_REQUIRED = [
-    "delete_resource",
-    "modify_network_rule",
-    "escalate_permissions",
-    "wipe_storage",
-    "restore_from_backup",  # remplace les disques — irréversible sans backup supplémentaire
-]
+  glorfindel restore <resource_id> --yes   # --before auto-détecté depuis signals JSONL
+  → restore Azure Backup (~20min) → recovery_complete
+  → Glorfindel release_isolation (autonome) → verify → store
 ```
 
 ---
 
-## Naming
-
-| Module | Nom | Rôle | Statut |
-|---|---|---|---|
-| Agent Rouge | **Annatar** | Simule les attaques — corrompt de l'intérieur | MVP Azure ✅ |
-| Agent Bleu | **Glorfindel** | Détecte, répond, rétablit — revient toujours | MVP fonctionnel ✅ |
-
----
-
-## Stack technique
-
-- **Language** : Python 3.11+
-- **CLI** : Click (commandes : `annatar`, `glorfindel`)
-- **Azure SDK** : azure-mgmt-compute, azure-monitor-query, azure-mgmt-recoveryservicesbackup
-- **Parsing** : PyYAML
-- **Terminal** : rich
-- **Infra test** : Terraform (`infra/terraform/`)
-- **Tests** : pytest
-- **Agent framework** : LangGraph — `load_context → poll_detection → decide → execute_action → verify_action → store_cycle`
-- **LLM** : Claude API (Anthropic) — raisonnement structuré, tool use natif, alignement sécurité
-- **Vector store** : ChromaDB local (fichier, zéro serveur) — OSS ; base collective sur serveur Eregion en SaaS
-
----
-
-## Architecture fichiers
+## Architecture watch — parallèle + sérialisé
 
 ```
-eregion/
-├── scenarios/           # Scénarios YAML MITRE ATT&CK
-│   └── azure/           # ransomware-vm.yaml, data-exfiltration.yaml, lateral-movement.yaml
-├── annatar/             # Package Agent Rouge
-│   ├── cli.py
-│   ├── runner/          # engine.py, parser.py, report.py
-│   ├── executors/       # azure_vm.py (resource_id property)
-│   ├── collectors/      # azure_monitor.py (heartbeat + poll_alert)
-│   ├── safety/          # guard.py — safety checks obligatoires
-│   └── signals/         # schema.py (Signal, severity_for_ttp), emitter.py
-├── glorfindel/          # Package Agent Bleu
-│   ├── agent.py         # LangGraph : load_context→poll_detection→decide→execute→verify→store
-│   ├── signals.py       # load_signals(), load_latest_signals()
-│   ├── actions.py       # CloudConnector ABC, AzureConnector, AUTONOMOUS_ACTIONS
-│   ├── detectors.py     # DetectionConnector ABC, AzureMonitorDetector, detector_for()
-│   ├── incidents.py     # IncidentRegistry : regroupe signaux par resource_id + TTL (~/.glorfindel/incidents.jsonl)
-│   ├── escalations.py   # record/resolve/pending — ~/.glorfindel/escalations.jsonl
-│   ├── memory.py        # CycleMemory (ChromaDB)
-│   └── cli.py           # respond, watch (poll threads + resource queues), restore, release, isolated, pending, ack, memory-stats
-├── scripts/
-│   └── simulate_annatar.py  # simulation locale sans Azure
-├── runs/                # Rapports JSON + signaux JSONL (gitignored)
-├── infra/terraform/
-├── Dockerfile           # image eregion, entrypoint annatar ou glorfindel
-├── Makefile             # targets annatar-* et glorfindel-*
-└── tests/
+attack_started → thread poll-<vm>-<id>   (parallèle, N attaques × N threads)
+                      ↓ détecté
+               queue resource_id → decide+execute  (sérialisé, incident context partagé)
 ```
 
 ---
 
-## Format signal normalisé (Annatar → Glorfindel)
-
-```python
-signal = {
-    "signal_id": "{run_id}_{event}",
-    "timestamp": "ISO8601",
-    "provider": "azure",
-    "resource_id": "/subscriptions/.../virtualMachines/...",
-    "resource_type": "vm|storage|network",
-    "ttp": "T1486",
-    "severity": "critical|high|medium|low",
-    "event": "attack_started|detection|detection_timeout|recovery_complete|recovery_failed",
-    "raw_signal": {},
-    "context": {"run_id": "...", "scenario": "..."}
-}
-```
-
-### Événements et contenu raw_signal
-
-| Event | Émis par | raw_signal clés |
-|---|---|---|
-| `attack_started` | Annatar | `attack_time`, `detection_query`, `detection_source`, `detection_timeout_s`, `detection_max_s`, `log_analytics_workspace_id` |
-| `detection` | Glorfindel (poll_detection) | `detection_time_s`, `detected_data` (première ligne résultat) |
-| `detection_timeout` | Glorfindel (poll_detection) | — |
-| `recovery_complete` | `glorfindel restore` CLI | `recovery_point_time`, `restore_time_s` |
-| `recovery_failed` | `glorfindel restore` CLI | `error`, `status` |
-
-Annatar écrit `runs/{run_id}_signals.jsonl`. Glorfindel le lit via `watch` ou `respond`.
-`recovery_complete` est écrit dans `runs/recovery/{run_id}_signals.jsonl` (hors portée de watch) puis traité inline.
-
----
-
-## Ressources Azure de test
-
-Toutes dans `rg: annatar`, taguées `annatar-test: "true"` (déployées via `infra/terraform/`) :
-- `vm-annatar-victim` : Ubuntu 22.04, Standard_D2as_v6, 32GB sur `/mnt/testdata`
-- `law-annatar` : Log Analytics Workspace (`b451c51a-1cd0-4125-ac70-6aaf2c1dc209`)
-- `rsv-annatar` : Recovery Services Vault + backup policy
-- `stannatarexfil` : Storage account cible exfiltration — diagnostic settings activés (`StorageBlobLogs` → `law-annatar`)
-- `nsg-annatar` : NSG attaché au **subnet** (pas au NIC) — fallback implémenté dans `_get_nic_nsg`
-- VNet flow logs activés sur `vnet-annatar` → Traffic Analytics → `law-annatar` (10 min interval, peuple `AzureNetworkAnalytics_CL`)
-
-VM auto-shutdown 23h00 UTC — `az vm start -g annatar -n vm-annatar-victim` avant chaque run.
-
----
-
-## Runbook opérateur
-
-```bash
-# 1. Démarrer la VM si nécessaire
-az vm start -g annatar -n vm-annatar-victim
-
-# CRITIQUE — vérifier l'état d'isolation et des blocs avant chaque run
-# Une isolation active bloque AMA (outbound deny-all) → syslog non uploadé → detection timeout
-glorfindel list   # voir toutes les VMs avec actions actives (isolation + IPs bloquées)
-# Pour tout nettoyer en une commande :
-glorfindel revert /subscriptions/44a4dc83-3e79-4e4e-aa93-1b4f8e3ede80/resourceGroups/annatar/providers/Microsoft.Compute/virtualMachines/vm-annatar-victim --yes
-
-# 2. Lancer Glorfindel en watch (terminal 1)
-glorfindel watch runs/
-
-# 3a. Scénario ransomware (terminal 2)
-annatar run scenarios/azure/ransomware-vm.yaml
-
-# 3b. Scénario exfiltration (terminal 2)
-annatar run scenarios/azure/data-exfiltration.yaml
-# détection via StorageBlobLogs (~229s) → isolate_vm autonome
-
-# 3c. Scénario lateral movement SSH brute force (terminal 2)
-annatar run scenarios/azure/lateral-movement.yaml
-# détection via Syslog DCR (~60s) → block_suspicious_ip autonome (IP externe uniquement)
-# Nettoyage après run T1110 : supprimer la règle de bloc avant le run suivant
-glorfindel unblock 185.220.101.1 /subscriptions/44a4dc83-3e79-4e4e-aa93-1b4f8e3ede80/resourceGroups/annatar/providers/Microsoft.Compute/virtualMachines/vm-annatar-victim --yes
-
-# 3d. Scénario privilege escalation (terminal 2)
-annatar run scenarios/azure/privilege-escalation.yaml
-# détection via Syslog DCR (~40s) → isolate_vm autonome (compromission OS-level, pas d'IP externe)
-
-# 4. Attendre que Glorfindel isole la VM (automatique)
-
-# 5. Restore humain (terminal 3) — IMPORTANT: passer --before T0 de l'attaque
-#    pour éviter de restaurer un backup post-attaque
-glorfindel restore \
-  /subscriptions/44a4dc83-3e79-4e4e-aa93-1b4f8e3ede80/resourceGroups/annatar/providers/Microsoft.Compute/virtualMachines/vm-annatar-victim \
-  --yes \
-  --before 2026-05-24T13:44:00+00:00   # timestamp T0 du run Annatar
-# → restore (~20 min) → recovery_complete → Glorfindel release_isolation
-
-# Mode forensique (garder la VM isolée après restore)
-glorfindel restore ... --yes --keep-isolated
-# ou export GLORFINDEL_KEEP_ISOLATED=1
-```
-
----
-
-## Positionnement concurrentiel
-
-| | Lupovis | CrowdStrike/Palo Alto | Eregion |
-|---|---|---|---|
-| Approche | Déception passive | Détection enterprise | Simulation active |
-| Boucle | Détection seulement | Détection + alerte | Rouge → Bleu complet |
-| Cible | Enterprise/OT | Enterprise | Mid-market DevOps |
-| Modèle | SaaS | SaaS cher | Open-core |
-| Réponse | Alerte + SIEM | Manuel | Agent IA automatisé |
-
----
-
-## Prochaines tâches
-
-1. ✅ Normaliser les signaux Annatar (`annatar/signals/`)
-2. ✅ Premier agent Glorfindel : signal ransomware → décision expliquée + `isolate_vm`
-3. ✅ Fermer la boucle : `verify_isolation` → escalade si échec, `store_cycle` en mémoire
-4. ✅ `glorfindel release <resource_id>` — lever une isolation
-5. ✅ `glorfindel watch runs/` — deux agents concurrents, réponse en temps réel
-6. ✅ Action discovery — Glorfindel peut proposer des actions inconnues
-7. ✅ Run réel Azure end-to-end (2026-05-24) — RTO ~20min 49s validé
-8. ✅ Glorfindel poll détection (`poll_detection` + `DetectionConnector` ABC) — Annatar émet `attack_started`
-9. ✅ `glorfindel restore` émet `recovery_complete` → Glorfindel `release_isolation` autonome (run 2 validé)
-10. ✅ `glorfindel pending` / `ack` — escalades persistées, webhook optionnel (`GLORFINDEL_WEBHOOK_URL`)
-11. ✅ `block_suspicious_ip` + `verify_block_ip` implémentés dans `AzureConnector`
-12. ✅ Scénario T1041 validé en réel — détection via `StorageBlobLogs` (229s), `isolate_vm` autonome, RAG cross-scénario
-13. ✅ Observabilité — `runs/{run_id}_debug.jsonl`, `confidence` + `past_cycles_used` dans ChromaDB, label self-reported
-14. ✅ `glorfindel restore --before ISO8601` — sélection recovery point pre-attaque
-15. ✅ Engine Annatar : setup avant integrity check — Annatar nettoie ses propres résidus
-16. ✅ Scénario T1110.001 validé en réel — detect 60s + block_suspicious_ip 7s, Syslog DCR, IP externe Tor bloquée au NSG
-
-**Milestone : MVP Azure complet — 3 TTPs validés en réel, boucle rouge→bleu fonctionnelle**
-
-Prochaines priorités :
-17. `verify_block_ip` : tester la vérification sur le run T1110.001 (déjà confirmée ✓ mais ajouter test unitaire)
-18. ✅ Scénario T1548.003 (sudo abuse) — `scenarios/azure/privilege-escalation.yaml` + `scripts/vm/privilege_escalation_sim.sh`
-    - Detection : Syslog auth, sudo USER=root COMMAND= sans NOT in sudoers (~60s)
-    - Action attendue : `isolate_vm` (compromission OS-level, pas d'IP externe à bloquer)
-    - Severity : critical (racine de la chaîne post-compromise)
-19. ✅ Run réel T1548.003 en Azure — detect 40s + isolate_vm validé (2026-05-25)
-20. ✅ `glorfindel unblock <ip> <resource_id>` — symétrique de block_suspicious_ip, supprime règles NSG inbound+outbound
-21. ✅ Fix `isolate_vm` priority bump dynamique — évite conflit avec règles glorfindel-block-* existantes
-22. ✅ `prerequisites:` block dans tous les scénarios — KQL de vérification + instructions setup par scénario
-23. ✅ `workspace_id` déplacé de `target:` vers `detection:` — séparation claire ressource attaquée / infra détection
-24. ✅ JSON Schema `schemas/scenario.schema.json` + `.vscode/settings.json` — validation IDE des scénarios YAML
-25. ✅ Annotations "replace with yours" sur toutes les valeurs hardcodées dans les scénarios
-26. ✅ Pytest : couverture T1548 — `test_execute_action_isolate_vm_on_t1548_signal` + `test_graph_t1548_detection_isolates_vm` (86 tests total)
-27. ✅ `IncidentRegistry` — `glorfindel/incidents.py`, persist `~/.glorfindel/incidents.jsonl`, TTL via `GLORFINDEL_INCIDENT_TTL_S` (défaut 300s)
-28. ✅ `watch` threaded — une queue + thread par `resource_id`, signaux de resources différentes en `//`, même resource sérialisé, `_output_lock` pour console thread-safe
-29. ✅ Incident context dans le prompt LLM — `load_context` ouvre/met à jour l'incident, `_build_user_message` injecte actions déjà prises, `execute_action` enregistre chaque action
-30. ✅ Fix dry-run — `escalate_to_human` skippe `escalations.record()` quand `dry_run=True` dans le state ; plus d'accumulation parasite dans `~/.glorfindel/escalations.jsonl` (88 tests)
-31. ✅ `glorfindel list` — liste toutes les VMs avec des actions actives (isolation + IPs bloquées), groupées par VM avec les commandes exactes ; remplace `glorfindel isolated` + `glorfindel blocked`
-32. ✅ Fix RunCommand Conflict — retry avec backoff exponentiel (15s, 30s, 60s) dans `annatar/executors/azure_vm.py` ; deux attaques // sur la même VM ne se bloquent plus
-33. ✅ Watch poll parallèle — `attack_started` → thread `poll-<vm>-<id>` indépendant (polling // par resource), signal résolu → queue resource (decide+execute sérialisé) ; `resolve_attack_started()` extrait de `poll_detection` et partagé
-34. ✅ `glorfindel revert <resource_id> --yes` — release isolation + unblock toutes les IPs en une commande ; reset NSG propre avant le run suivant
-36. `glorfindel check-ttl` : intégrer en cron (crontab ou systemd timer) pour auto-release après 4h
-37. `glorfindel list --live` : interroger le NSG Azure en live pour détecter les règles `glorfindel-*` orphelines (pas dans le state local) — utile si le state a été perdu ou pour un bootstrap. Demande des credentials Azure. Bas priorité.
-38. AWS provider : `AwsConnector(CloudConnector)` — Security Groups pour isolate_vm, GuardDuty pour detection
-
-## Convention de session
-
-À chaque commit : mettre à jour README.md, CLAUDE.md et générer le résumé claude.ai.
-
----
-
-## Décisions techniques arrêtées
-
-### LangGraph — Graph Glorfindel
+## LangGraph — 6 nodes
 
 ```
 load_context → poll_detection → decide → execute_action → verify_action → store_cycle
@@ -351,186 +63,218 @@ load_context → poll_detection → decide → execute_action → verify_action 
                               escalate_to_human → store_cycle
 ```
 
-`poll_detection` : no-op sauf si `event == attack_started`. Dans ce cas, poll Azure Monitor
-jusqu'à détection ou timeout, puis convertit l'event en `detection` (avec `detection_time_s`)
-ou `detection_timeout` avant que `decide` ne voie le signal.
+- `poll_detection` : no-op sauf `attack_started` → poll Azure Monitor jusqu'à alerte ou timeout
+- `decide` : Claude API + RAG (3 cycles similaires) + incident context si multi-signal
+- `verify_action` : NSG check (isolate/release), Compute API (snapshot), NSG rule (block)
+- `store_cycle` : ChromaDB + `runs/{run_id}_debug.jsonl`
+- `dry_run: bool` dans `GlorfindelState` → skipe escalations.record() et actions réelles
 
-**Mode watch — parallélisme à deux niveaux** :
-- `attack_started` → thread `poll-<vm>-<signal_id[-6:]>` : poll en parallèle, N attaques simultanées sur la même VM détectent chacune indépendamment
-- Signal résolu (detection/timeout) → queue `resource_id` : decide+execute sérialisé par VM, incident context partagé
-- `resolve_attack_started(signal) -> signal` : extrait de `poll_detection`, utilisé par le node (mode respond) et les poll threads (mode watch)
-- Mode respond : `poll_detection` reste synchrone (sequential dans le graph)
+---
 
-### Responsabilités strictes
+## Routing TTP → action (_SYSTEM_PROMPT)
 
-| Périmètre | Annatar | Glorfindel | Humain |
-|---|---|---|---|
-| Pré-check intégrité VM | ✅ | | |
-| Simulation attaque | ✅ | | |
-| Poll détection Azure Monitor | | ✅ | |
-| Isolation NSG | | ✅ (autonome) | |
-| Release isolation | | ✅ (autonome) | |
-| Restore Azure Backup | | escalade → | ✅ |
-| Mesure RTO | | ✅ | |
-
-### Format de décision Glorfindel
-
-```python
-decision = {
-    "signal_id": "...",
-    "reasoning": "...",          # chaîne de pensée LLM
-    "confidence": 0.0–1.0,
-    "action": "isolate_vm",      # action connue ou proposée (snake_case libre)
-    "reversible": True,
-    "explanation": "...",        # version lisible pour l'humain
-    "escalate": False,
-    "escalation_reason": "...",  # rempli si escalate=True ou action inconnue
-    "outcome": {                 # rempli après exécution
-        "status": "isolated|dry_run|escalated",
-        "verified": True,        # résultat de verify_action
-        "escalation_type": "destructive_action|proposed_action|low_confidence"
-    }
-}
-```
-
-### Comportement par type d'événement
-
-| Event | Posture | Action | Escalade |
-|---|---|---|---|
-| `attack_started` | — | poll_detection (node, pas une action LLM) | — |
-| `detection` (T1486/T1041 IP interne) | Attaque confirmée | `isolate_vm` | Non |
-| `detection` (T1110 IP externe) | Attaque périmètre | `block_suspicious_ip` | Non |
-| `detection` (T1548 escalade root) | Compromission OS | `isolate_vm` | Non |
-| `detection_timeout` | Gap IDS | `snapshot` (forensique non-disruptif) | Oui — expliquer le gap |
-| `recovery_complete` | VM propre après restore | `release_isolation` (idempotent) | Non |
-| `recovery_failed` | Restore échoué | Escalade | Oui |
-
-### Vérification post-action
-
-| Action | Méthode | Succès = |
+| Situation | Action | Escalade |
 |---|---|---|
-| `isolate_vm` | `verify_isolation` → Azure NSG API | règles deny-all présentes |
-| `release_isolation` | `verify_isolation` inverted | règles absentes |
-| `snapshot` | `verify_snapshot` → Azure Compute API | snapshot existe |
-| `block_suspicious_ip` | `verify_block_ip` → Azure NSG API | règle deny entrante sur l'IP présente |
-| dry_run | court-circuit | `verified=None` |
+| `detection` + IP interne (T1486/T1041/T1548) | `isolate_vm` | Non |
+| `detection` + IP externe (T1110) | `block_suspicious_ip` | Non |
+| `detection_timeout` | `snapshot` forensique | Oui |
+| `recovery_complete` | `release_isolation` | Non |
+| `recovery_failed` | escalade | Oui |
 
-`verified=False` → escalade humaine.
-`verified=None` → non implémenté, cycle stocké sans claim.
+**Règle de sécurité** : action destructive sans `escalate=True` → bloquée par le graph, pas par confiance dans le LLM.
 
-Statut : toutes les actions autonomes ont leur `verify_*` implémenté.
+---
 
-### NSG — détails Azure
-
-Le NSG est attaché au **subnet** (pas au NIC). `_get_nic_nsg` remonte au subnet si le NIC
-n'a pas de NSG direct. Si une règle existante occupe la priorité 100 (ex: `allow-ssh`),
-elle est décalée au **premier slot libre ≥ 200** (pas +100 fixe — évite les conflits avec
-les règles `glorfindel-block-*` existantes) et sauvegardée dans `~/.glorfindel/isolation/<vm>.json`
-pour restauration au `release_isolation`.
-
-**Pitfall T1548 → T1110 (ou inverse)** : si `block_suspicious_ip` (priority 200) existe déjà
-et qu'`isolate_vm` tente de bumper `allow-ssh` à 200, conflit NSG. Fix : bump recherche
-dynamiquement le premier slot libre. Nettoyage entre runs avec `glorfindel unblock <ip> <resource_id>`.
-
-### recovery_complete — qui l'émet ?
-
-`glorfindel restore` CLI (commande humaine). Il écrit le signal dans `runs/` puis appelle
-`GlorfindelAgent.respond()` inline — pas besoin que `watch` soit actif. Si `--keep-isolated`
-(ou `GLORFINDEL_KEEP_ISOLATED=1`), le signal n'est pas émis et la VM reste isolée.
-
-### Action discovery
-
-Glorfindel n'est pas contraint à une liste fixe. Si aucune action connue ne convient,
-il propose une action libre (snake_case) et explique dans `escalation_reason`. Le routing
-escalade automatiquement toute action hors de `AUTONOMOUS_ACTIONS`. L'humain approuve et
-potentiellement codifie l'action (ex: `release_isolation` fut d'abord proposée, puis codifiée).
-
-### Apprentissage par la boucle (RAG)
-
-Chaque cycle `(signal → décision → action → outcome)` est stocké dans ChromaDB avec
-métadonnées : `ttp`, `action`, `event`, `run_id`, `detection_s`, `action_s`, `confidence`, `past_cycles_used`.
-Les 3 cycles les plus similaires sont injectés à chaque décision. Le modèle de base
-reste stable — l'expérience s'accumule dans la base vectorielle.
-
-RAG cross-scénario validé : au run T1041, Glorfindel a référencé 2 cycles T1041 passés
-(detection_timeout) + 1 cycle T1486 (isolate_vm validé) pour calibrer sa décision.
-
-Chaque run produit `runs/{run_id}_debug.jsonl` — trace complète signal + past_cycles + reasoning + outcome.
-
-### Abstraction cloud (CloudConnector)
+## Règles d'autonomie strictes
 
 ```python
-class CloudConnector(ABC):
-    def isolate_vm(self, resource_id: str) -> dict: ...
-    def release_isolation(self, resource_id: str) -> dict: ...
-    def block_suspicious_ip(self, ip: str, resource_id: str) -> dict: ...
-    def unblock_ip(self, ip: str, resource_id: str) -> dict: ...
-    def snapshot(self, resource_id: str) -> str: ...
-    def verify_isolation(self, resource_id: str) -> dict: ...
-    def verify_snapshot(self, snap_id: str) -> dict: ...
-    def restore_from_backup(self, resource_id: str, vault: str, before_attack_time: str | None) -> dict: ...
-    def verify_block_ip(self, ip: str, resource_id: str) -> dict: ...
+AUTONOMOUS_ACTIONS = ["isolate_vm", "release_isolation", "snapshot", "block_suspicious_ip", "revoke_temp_access"]
+HUMAN_APPROVAL_REQUIRED = ["restore_from_backup", "delete_resource", "wipe_storage", ...]
 ```
 
-### Détection T1041 — StorageBlobLogs (décision arrêtée)
+Actions inconnues proposées → escalade automatique, humain valide et codifie.
 
-`AzureNetworkAnalytics_CL` (Traffic Analytics) a une latence de 10-60 min — inutilisable pour
-un timeout de 300-900s. Détection T1041 via `StorageBlobLogs` sur `stannatarexfil` :
-- Latence : quelques secondes (diagnostic settings direct → Log Analytics)
-- `CallerIpAddress` dans les logs = IP de la source (interne si VM dans le VNet)
-- `OperationName == "PutBlob"` + `ObjectKey has "exfil-target"` = signature exfiltration
+---
 
-Note : `CallerIpAddress` est l'IP **privée** de la VM (10.10.1.4) quand elle upload via MSI
-depuis le VNet. Glorfindel a correctement préféré `isolate_vm` à `block_suspicious_ip` car
-bloquer une IP interne au NSG périmétrique n'arrête pas l'exfiltration depuis la VM elle-même.
-`block_suspicious_ip` sera pertinent sur un scénario avec attaquant **externe**.
+## Vérification post-action
 
-### glorfindel restore — sélection pre-attaque
+| Action | Vérification | État |
+|---|---|---|
+| `isolate_vm` | Règles NSG deny-all | ✅ |
+| `release_isolation` | Isolation absente confirmée | ✅ |
+| `snapshot` | Snapshot existe Azure | ✅ |
+| `block_suspicious_ip` | Règle NSG pour l'IP | ✅ |
 
-Sans `--before`, Azure Backup sélectionne le recovery point le plus récent — qui peut être
-post-attaque si un backup a tourné pendant l'attaque. Toujours passer `--before <T0>` :
+`verified=False` → escalade. `verified=None` → cycle stocké sans claim de succès.
+
+---
+
+## IncidentRegistry
+
+`glorfindel/incidents.py` → groupe signaux par `resource_id` dans TTL (défaut 300s, `GLORFINDEL_INCIDENT_TTL_S`).
+Persiste dans `~/.glorfindel/incidents.jsonl`. Thread-safe.
+Quand `signals_count > 1` ou `actions_taken` non vide → prompt injecte contexte incident.
+
+---
+
+## Fichiers clés
+
+```
+glorfindel/
+  agent.py        → LangGraph 6 nodes + system prompt
+  actions.py      → CloudConnector ABC + AzureConnector (isolate, release, block, unblock, snapshot, verify_*)
+  detectors.py    → DetectionConnector ABC + AzureMonitorDetector (poll 10s)
+  memory.py       → CycleMemory ChromaDB (confidence + past_cycles_used)
+  incidents.py    → IncidentRegistry (TTL, persist, thread-safe)
+  cli.py          → watch, respond, restore, release, unblock, revert, list, pending, ack, check-ttl
+  escalations.py  → ~/.glorfindel/escalations.jsonl
+
+annatar/
+  runner/engine.py    → setup AVANT integrity check → attack → emit attack_started
+  signals/schema.py   → Signal + severity_for_ttp (T1486/T1041/T1110/T1548)
+  signals/emitter.py  → signal normalisé JSONL
+
+scenarios/azure/
+  ransomware-vm.yaml          → T1486 (setup_testdata.sh ici uniquement)
+  data-exfiltration.yaml      → T1041
+  lateral-movement.yaml       → T1110.001
+  privilege-escalation.yaml   → T1548.003
+
+schemas/scenario.schema.json  → JSON Schema validation IDE
+terraform/                    → infra complète Azure (VM, NSG, LAW, Backup, DCR, StorageBlobLogs)
+
+~/.glorfindel/
+  escalations.jsonl           → escalades persistées
+  incidents.jsonl             → incidents actifs
+  isolation/<vm>.json         → état NSG isolation + TTL
+  blocks/<vm>.json            → IPs bloquées par VM
+```
+
+---
+
+## CLI — référence complète
+
 ```bash
-glorfindel restore <resource_id> --yes --before 2026-05-24T13:44:00+00:00
+# Workflow opérateur — 3 terminaux
+glorfindel watch runs/                       # terminal 1 — réponses automatiques
+annatar run scenarios/azure/ransomware-vm.yaml  # terminal 2 — attaque
+glorfindel pending --watch                   # terminal 3 — alerting (poll 2s, NEW ESCALATION)
+
+# État
+glorfindel list                              # toutes VMs : isolations + IPs bloquées
+glorfindel pending                           # escalades en attente
+glorfindel pending --watch                   # alerting temps réel
+
+# Actions
+glorfindel revert <resource_id> --yes        # reset complet : release + unblock toutes IPs
+glorfindel release <resource_id> --yes       # isolation seule
+glorfindel unblock <ip> <resource_id> --yes  # IP seule
+glorfindel restore <resource_id> --yes       # Azure Backup (--before auto-détecté)
+glorfindel ack <escalation_id>               # acquitter escalade
+glorfindel ack --all                         # acquitter toutes
+glorfindel check-ttl                         # libérer isolations expirées
+glorfindel memory-stats                      # ChromaDB cycle count
+glorfindel --version                         # 0.2.0
+
+# Annatar
+annatar run scenarios/azure/<scenario>.yaml  # --dry-run disponible
+
+# Simulation locale sans Azure
+python scripts/simulate_annatar.py
+python scripts/simulate_annatar.py --ids-gap
+
+# Variables d'environnement
+ANTHROPIC_API_KEY=...
+GLORFINDEL_WEBHOOK_URL=...          # Slack/Teams sur escalade
+GLORFINDEL_KEEP_ISOLATED=1          # mode forensique
+GLORFINDEL_ISOLATION_TTL_H=4        # TTL isolation (défaut 4h)
+GLORFINDEL_INCIDENT_TTL_S=300       # TTL fenêtre incident
 ```
-Le run_id Annatar encode l'heure du run (format `%Y%m%dT%H%M%SZ`) — T0 est extractible.
 
-### Détection T1110.001 — Syslog DCR (décision arrêtée)
+---
 
-Détection brute force SSH via `Syslog` table (facility `auth`, severity `warning`+) :
-- DCR `dcr-annatar` collecte `auth`, `syslog`, `daemon` au niveau `Warning`+
-- `logger -p auth.warning` → rsyslog → port 28330 → AMA → Log Analytics
-- Latence observée : ~60s (nettement mieux que les 2-3 min initialement attendus)
-- Seuil KQL : ≥10 tentatives échouées depuis une IP publique (filtre RFC1918 exclu)
-- Glorfindel choisit `block_suspicious_ip` (pas `isolate_vm`) — attaquant externe, VM non compromise
+## Tests
 
-**Pitfall critique : isolation bloque AMA**
-L'isolation NSG (deny-all outbound) empêche AMA de joindre `global.handler.control.monitor.azure.com`
-pour obtenir un GIG token d'ingestion. Les logs s'accumulent dans LevelDB local (auth.warning/,
-daemon.warning/) mais ne sont pas uploadés. Symptômes : `mdsd.err` plein de
-`Failed to get gig token` toutes les ~4 minutes. Fix : `glorfindel release` avant le run suivant.
+```bash
+pytest                    # 88 tests, 0 appel Azure, 0 appel Claude API
+pytest tests/unit/test_agent_nodes.py   # 30 tests LangGraph nodes
+pytest tests/unit/test_glorfindel.py    # 27 tests actions/routing/signals
+```
 
-### Annatar engine — ordre setup / integrity check
+---
 
-Setup tourne **avant** l'integrity check (pas après). `setup_testdata.sh` supprime les
-résidus de l'attaque précédente. L'integrity check valide l'état post-setup. Si le check
-échoue après setup, le disque a un problème structurel (pas monté, marker manquant).
+## Packaging
 
-### Open-core — ce qui est OSS vs SaaS
+```
+name = "eregion", version = "0.2.0", Apache 2.0 ✓
+entrypoints : annatar + glorfindel CLIs
+wheel : eregion-0.2.0-py3-none-any.whl ✓
+```
 
-| OSS (Apache 2.0) | SaaS payant |
-|---|---|
-| Framework Annatar + Glorfindel | Base vectorielle collective (cycles de tous les clients) |
-| Connecteurs cloud (Azure, AWS, GCP) | Scénarios avancés (lateral movement, privilege escalation) |
-| Scénarios de base (ransomware, exfiltration) | Déploiement managé multi-tenant |
-| CLI | Support + SLA |
+---
+
+## Coûts réels (West Europe)
+
+- **Infra existante** : Claude API uniquement, <$2/mois (~$0.05–0.10 par run)
+- **Sandbox Terraform** : ~$25–35/mois (VM ~6h/jour + disques + IP + backup + LAW). Désactivable entre runs.
+
+---
+
+## Détails Azure à connaître
+
+- NSG isolation = outbound deny-all → bloque AMA (`mdsd.err` : Failed to get gig token) → detection timeout sur run suivant. Toujours `glorfindel revert` avant le prochain run.
+- Règles block IP persistent entre runs → conflit priority si T1110 puis T1548. Nettoyage : `glorfindel revert`.
+- Priority bump `isolate_vm` : dynamique (premier slot libre ≥ 200) → fix bug conflit T1110 + T1548.
+- StorageBlobLogs : latence secondes. `AzureNetworkAnalytics_CL` inutilisable (10-60min).
+- Restore via REST API `IaasVMRestoreRequest OriginalLocation` → VM deallocated puis redémarrée.
+- VM auto-shutdown 23h UTC → `az vm start -g annatar -n vm-annatar-victim` avant chaque session.
+- Syslog latence ~60s nominal, timeout 300s dans les scénarios.
+
+---
+
+## Pitfalls opérateur
+
+```bash
+# Avant chaque run — vérifier état propre
+glorfindel list
+# Si isolations ou blocks présents :
+glorfindel revert <resource_id> --yes
+
+# Vérification NSG directe si besoin
+az network nsg rule list -g annatar --nsg-name nsg-annatar -o table
+```
+
+---
+
+## Conventions
+
+- **À chaque commit** : mettre à jour README + CLAUDE.md + générer résumé claude.ai
+- `target:` = ressource attaquée, `detection:` = infra surveillance (workspace_id ici)
+- `prerequisites:` = KQL vérification + instructions setup dans chaque scénario
+- `setup_testdata.sh` uniquement dans T1486
+- RunCommand : 5 retries (15s, 30s, 60s, 90s, 120s)
+- `dry_run=True` dans tous les tests — jamais d'appel Azure ou Claude API dans les tests
+
+---
+
+## Prochaines priorités (voir ROADMAP.md pour détail complet)
+
+1. **Utilisateur extérieur** — avant tout nouveau scénario ou provider
+2. **glorfindel check-ttl en cron** — crontab ou systemd timer
+3. **Entra ID / Service Principal** — vecteur #1 Azure 2025, `revoke_service_principal`
+4. **Schéma normalisé `first_result_row`** — prérequis tous connecteurs
+5. **AWS provider** — `AwsConnector` + CloudWatch/GuardDuty
+6. **Prometheus + Loki** — stack open source dominante
+7. **War Room UI** — après feedback premier utilisateur
 
 ---
 
 ## Ce qu'on ne fait PAS
 
-- Pas compliance-oriented (NIS2, DORA, etc.)
+- Pas compliance-oriented (NIS2, DORA)
 - Pas d'agent en roue libre sur actions destructives
 - Pas de tests sur infra prod sans consentement explicite
-- Pas de scope creep vers SOC ou SIEM — rester sur la boucle rouge → bleu
-- Pas de dashboard/UI en MVP
+- Pas de dashboard monitoring — ce n'est pas le rôle de Glorfindel
+- Pas de fine-tuning LLM — RAG ChromaDB suffit
 - Pas de multi-cloud avant que la boucle Azure soit solide
+- Pas de SaaS avant utilisateurs réels

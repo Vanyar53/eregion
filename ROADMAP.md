@@ -1,178 +1,246 @@
-# Roadmap — Eregion
+# Eregion — Roadmap & Priorités
 
-> "Tu déclares un RTO de 4h. On te dit combien de temps ça prend vraiment — en simulant l'attaque, en mesurant détection + recovery, et en sortant le rapport pour ton auditeur."
-
-> *"Annatar est déjà dans ta forteresse. La question c'est : est-ce que tu le sais ?"*
-
----
-
-## Naming
-
-**Plateforme : `Eregion`** — royaume des grands forgerons Elfes du Deuxième Âge. Là où les plus grandes choses ont été construites — et où Sauron trouva les failles.
-
-| Module | Nom | Rôle |
-|---|---|---|
-| Chaos Engine | **Annatar** | Sauron déguisé en "Seigneur des Dons" — l'attaque qui vient de l'intérieur |
-| DR Coverage Scanner | **Celebrimbor** | Le forgeron qui voit chaque faille dans chaque construction |
-| Drift Monitor | **Thranduil** | Vigie sur la Forêt Noire pendant 3000 ans — surveillance continue |
-| Reports Pro | **Gil-galad** | Documenta les avertissements que personne n'écouta — l'audit ignoré |
-| War Room | **Fingolfin** | Défia Morgoth seul quand tout semblait perdu — la réponse ultime |
-| Failover Canary | **Glorfindel** | Mourut, fut réincarné, revint plus fort — la recovery prouvée |
-
-Domaines cibles : `eregion.dev` / `eregion.io`
-Noms vérifiés disponibles : Eregion, Annatar, Celebrimbor, Thranduil, Gil-galad, Fingolfin, Glorfindel
+## Contexte produit
+Eregion est un SOAR IA open-core. Pas de playbooks — Glorfindel raisonne depuis le contexte du signal.
+Pitch : "Teste ton infra avant que les autres le fassent pour toi."
+Cible : DevOps leads mid-market (50-500 personnes), pas de SOC dédié, <$500/mois acceptable.
+Modèle : CLI open source gratuit, SaaS payant pour multi-tenant + connecteurs avancés + reporting.
 
 ---
 
-## Vision
+## État actuel (v0.2.0)
+- 4 TTPs validés en réel sur Azure : T1486, T1041, T1110.001, T1548.003
+- Run parallèle multi-signal validé avec IncidentRegistry
+- 88 tests, 0 appel Azure, 0 appel Claude API
+- Repo public : https://github.com/Vanyar53/eregion
+- Coût exploitation : <$2/mois Claude API sur infra existante
 
-Eregion est une plateforme modulaire open-core couvrant le cycle complet de la résilience opérationnelle :
+---
+
+## La kill chain Azure — où sont les VMs
+
+Les VMs sont rarement la cible finale. Elles sont le point d'entrée ou le pivot :
 
 ```
-Auditer la couverture → Tester sous attaque → Surveiller la dérive → Exécuter en incident
+Entra ID compromis → VM (pivot) → Storage / Key Vault (objectif final)
 ```
 
-Modèle : 2 modules open source (Apache 2.0) comme base de traction + modules SaaS payants construits dessus.
+Eregion couvre aujourd'hui le milieu de la kill chain. La roadmap ressources étend la couverture vers l'entrée (Entra ID) et la sortie (Key Vault, Storage).
 
 ---
 
-## Gap concurrentiel
+## Phase 1 — Validation utilisateur (MAINTENANT)
+**Objectif : prouver que quelqu'un d'autre peut l'utiliser.**
 
-| | BAS tools | DR/Backup tools | Cette plateforme |
-|---|---|---|---|
-| Simule l'attaque | Oui | Non | Oui |
-| Mesure RTO réel | Non | Partiel | Oui |
-| Rapport audit NIS2/DORA | Non | Non | Oui |
-| Open-core accessible | Non | Non | Oui |
+- [ ] Premier utilisateur externe sur son infra Azure
+- [ ] Collecter feedback brut — ce qui casse, ce qui manque, ce qui surprend
+- [ ] Ne rien construire de nouveau avant ce retour
 
-Objection principale : "Pourquoi pas Azure Chaos Studio ?" → Chaos Studio simule des pannes infra, pas des attaques. Pas de ransomware, pas de mesure RTO vs PRA.
+**Rien d'autre ne passe avant ça.**
 
 ---
 
-## Architecture modulaire
+## Phase 2 — Solidification (après premier utilisateur)
+**Objectif : robustesse hors contexte auteur.**
 
-### Open Source — Base (Apache 2.0)
-
-#### Module 1 : SecurityChaos (chaos-engine)
-**Statut : MVP 95% codé**
-
-Simule des scénarios d'attaque réels sur l'infra Azure, mesure les temps de détection et de recovery, compare au RTO/RPO déclaré.
-
-Scénarios MVP :
-- `ransomware-vm` — chiffrement + détection Azure Monitor + restore backup
-- `data-exfiltration` — transfert 1GB + détection NSG Flow Logs
-
-Output : rapport JSON `PASS/FAIL` par seuil, avec métriques `detection_time_s` / `recovery_time_s`.
-
-```bash
-sechaos run scenarios/azure/ransomware-vm.yaml --dry-run
-sechaos run scenarios/azure/ransomware-vm.yaml --yes
-sechaos report <run-id>
-```
-
-Ce qui reste à faire pour le MVP :
-- [ ] `terraform apply` — provisionner l'infra Azure de test
-- [ ] Renseigner `log_analytics_workspace_id` dans les YAML
-- [ ] Implémenter `_trigger_backup_restore` (placeholder actuel)
-- [ ] Tests d'intégration
-- [ ] README "utilisable en 30 min"
+- [ ] `glorfindel check-ttl` en cron — crontab ou systemd timer
+- [ ] Gestion d'erreur documentée — Azure Monitor en retard, NSG apply échoué, restore timeout
+- [ ] `glorfindel list --live` — détecter règles NSG orphelines
+- [ ] Deuxième type de ressource testé (voir Phase 3 ressources)
 
 ---
 
-#### Module 2 : DR Coverage Scanner (dr-scanner)
-**Statut : À construire (M+1)**
+## Phase 3 — Extension ressources Azure (priorité kill chain)
 
-Scanne l'infra cloud et répond : *"pour chaque ressource critique, peux-tu vraiment récupérer, et en combien de temps ?"*
+### Ordre basé sur les vecteurs d'attaque réels Azure 2025
+
+| Priorité | Ressource | Position kill chain | Nouvelles actions | Complexité |
+|---|---|---|---|---|
+| 1 | **Entra ID / Service Principal** | Entrée | `revoke_service_principal` | Moyenne |
+| 2 | **Storage Account** (misconfiguration) | Objectif | `lock_storage_public_access` | Faible |
+| 3 | **Key Vault** | Objectif final | `revoke_keyvault_access` | Faible |
+| 4 | **AKS** | Pivot avancé | `isolate_namespace`, `cordon_node` | Haute |
+| 5 | **App Service / Function App** | Entrée exposée | `isolate_app_service` | Moyenne |
+
+**Entra ID en premier** : 87% de surge des campagnes destructives Azure en 2025 via tokens volés et workload identities compromises. `revoke_temp_access` existe déjà — extension naturelle vers `revoke_service_principal`.
+
+**Storage et Key Vault avant AKS** : actions simples, impact élevé, faible complexité. AKS demande une nouvelle catégorie d'actions (namespace/node) — c'est un chantier à part entière.
+
+### TTPs associés par ressource
 
 ```
-vm-web-prod          RPO actuel: 6h23    Déclaré: 1h    ⚠ BREACH
-db-postgres-main     RPO actuel: 8min    Déclaré: 15min ✓
-storage-docs         Aucun backup                       ✗ CRITIQUE
+Entra ID     → T1528 (steal app token), T1098 (account manipulation)
+Storage      → T1530 (data from cloud storage), T1537 (transfer to cloud account)
+Key Vault    → T1555 (credentials from stores), T1552 (unsecured credentials)
+AKS          → T1610 (deploy container), T1613 (container discovery)
+App Service  → T1190 (exploit public-facing), T1078 (valid accounts)
 ```
 
-Fonctionnalités :
-- Scan Azure Resource Graph (puis AWS Config, phase 2)
-- RPO réel calculé par asset (âge du dernier backup)
-- Détection des single points of failure
-- Gap analysis NIS2/DORA basique
-- Output JSON + rich terminal
+---
+
+## Phase 4 — Extension connecteurs (priorité marché)
+
+### Prérequis absolu : schéma normalisé `first_result_row`
+
+Avant tout nouveau connecteur. Sans ça chaque connecteur retourne un format différent
+et le LLM se comporte de façon incohérente selon la source.
+
+```python
+# Schéma cible normalisé
+{
+    "source_ip": "...",      # CallerIpAddress (Azure), src_ip (Prometheus), network.client.ip (Datadog)
+    "resource_id": "...",    # resource_id (Azure), instance label (Prometheus), host (Datadog)
+    "alert_name": "...",     # signal type
+    "severity": "...",       # critical/high/medium/low
+    "raw": {}                # payload brut pour le LLM si besoin
+}
+```
+
+- [ ] Définir le schéma normalisé
+- [ ] Migrer `AzureMonitorDetector` vers ce schéma
+- [ ] Documenter le mapping dans `CONTRIBUTING.md`
+
+### Ordre connecteurs — basé sur adoption marché
+
+**1. AWS + CloudWatch/GuardDuty — 32% marché cloud**
+```python
+class AwsConnector(CloudConnector):
+    def isolate_vm(self, resource_id) -> dict:
+        # Security Group deny-all
+    def block_suspicious_ip(self, ip, resource_id) -> dict:
+        # Security Group inbound rule
+    def snapshot(self, resource_id) -> str:
+        # EBS snapshot
+
+class CloudWatchDetector(DetectionConnector):
+    def poll_alert(self) -> tuple[float, dict] | None:
+        # CloudWatch Alarms ou GuardDuty Findings (mappe bien MITRE ATT&CK)
+```
+
+**2. Prometheus + Alertmanager + Loki — stack open source dominante**
+
+Deux connecteurs séparés — même séparation qu'Azure Monitor (métriques) vs Syslog DCR (logs) :
+- `PrometheusDetector` — Alertmanager REST API `/api/v2/alerts` — T1486, T1041
+- `LokiDetector` — Loki query API LogQL — T1110.001, T1548.003
+
+Note : Alertmanager supporte les webhooks — option push si poll insuffisant.
+
+**3. Datadog — leader monitoring commercial mid-market**
+```python
+class DatadogDetector(DetectionConnector):
+    def poll_alert(self) -> tuple[float, dict] | None:
+        # Events API v2 ou Monitors API
+        # network.client.ip → source_ip dans schéma normalisé
+```
+
+**4. GCP — 11% marché cloud, croissance forte**
+- `GcpConnector` — VPC Firewall Rules + Disk snapshots
+- `SecurityCommandCenterDetector` — SCC Findings
 
 ---
 
-### Modules SaaS payants — Futur
+## Phase 5 — Nouveaux scénarios TTP
 
-> À construire uniquement après traction sur les modules OSS.
-
-| Module | Description | Déclencheur |
-|---|---|---|
-| **Drift Monitor** | Agent continu — alerte quand RTO/RPO réel dérive du déclaré | Premier revenu récurrent |
-| **Reports Pro** | PDF audit NIS2/DORA formatés pour auditeurs | Marché compliance |
-| **Canary Failover** | Tests automatiques hebdo des chemins de failover | Après feedback marché |
-| **DR War Room** | Guidance d'incident, exécution PRA step-by-step | Après feedback marché |
-| **Scenarios Pro** | Lateral movement, privilege escalation, etc. | Demande communauté |
-| **Multi-cloud** | Support AWS + GCP | Après traction Azure |
+| Priorité | TTP | Scénario | Action | Note |
+|---|---|---|---|---|
+| 1 | T1068 | Kernel privilege escalation | `isolate_vm` | Complément T1548 |
+| 2 | T1528 | Steal app access token (Entra) | `revoke_service_principal` | Nouveau type ressource |
+| 3 | T1078 | Valid accounts / credential abuse | `revoke_temp_access` | Déjà dans AUTONOMOUS |
+| 4 | T1190 | Exploit public-facing application | `isolate_app_service` | Nouveau type ressource |
+| 5 | T1562 | Impair defenses (disable logging) | `snapshot` + escalade | Détection complexe |
 
 ---
 
-## Phases
+## Phase 6 — War Room UI
 
-### Phase 1 — Maintenant
-**Objectif : SecurityChaos MVP fonctionnel bout en bout**
+**Pourquoi maintenant et pas au SaaS :**
+- Réduit la friction pour le premier utilisateur externe — un clic au lieu de 3 terminaux
+- Démontre la valeur en temps réel sans que l'utilisateur comprenne le CLI
+- C'est une interface sur ce qui existe déjà — pas de nouveau backend
 
-- Finir les 5 items restants (voir Module 1 ci-dessus)
-- GitHub public, Apache 2.0
-- README : quelqu'un d'autre peut l'utiliser en 30 min
-- Critère done : 2 scénarios Azure bout en bout, rapport JSON PASS/FAIL, `sechaos init` en < 5 min
+**Ce que c'est :**
+```
+┌──────────────────────────────────────────────┐
+│ EREGION — War Room                           │
+├────────────────┬─────────────────────────────┤
+│ Scénarios      │ Run en cours                │
+│ T1486 ▶        │ 14:32:51 Detection (50s)    │
+│ T1041 ▶        │ 14:32:53 isolate_vm ✓ ✓    │
+├────────────────┤ Incidents actifs            │
+│ vm-victim 🔴   │ ISOLATED  52m ago           │
+│                │ → revert ?                  │
+├────────────────┤ Escalades                   │
+│                │ restore_from_backup ▶        │
+└────────────────┴─────────────────────────────┘
+```
 
-### Phase 2 — M+1
-**Objectif : DR Coverage Scanner OSS**
+**Stack :** FastAPI + WebSocket (temps réel) + React ou HTML/JS simple. Thin layer sur `glorfindel watch` + `glorfindel list` + `glorfindel pending`.
 
-- Scan Azure Resource Graph
-- RPO réel par asset
-- Intégration dans la même CLI (`sechaos scan`)
-- Démo "scanne ton Azure en 2 minutes, voici tes gaps"
+**Ce que ce n'est pas :** dashboard de monitoring permanent, configurateur de scénarios, Grafana.
 
-### Phase 3 — M+2/M+3
-**Objectif : Premier revenu récurrent**
-
-- Drift Monitor en SaaS (agent continu)
-- Ou Reports Pro PDF (selon retours marché)
-- Premier client payant nommé
-
-### Phase 4+ — Selon traction
-- War Room, Canary Failover, Multi-cloud
-- Décisions basées sur retours réels, pas sur hypothèses
-
----
-
-## Cibles commerciales
-
-1. **DevOps/SRE lead** (100-500 salariés) — valider que ses alertes fonctionnent vraiment
-2. **RSSI PME/ETI** — preuve de résilience pour audit NIS2/ISO 27001
-3. **Secteur financier** — DORA impose des tests de résilience documentés (en vigueur jan 2025)
-4. **MSP/MSSP** — ajouter "test de résilience" à leur catalogue
-
-## Distribution
-
-GitHub public → traction communautés DevOps/sécu → premiers clients.
-La démo ransomware Azure VM doit provoquer un "wow" en 2 minutes.
+- [ ] Après le premier utilisateur externe — son feedback dicte ce qui va dans l'interface
+- [ ] API REST minimale sur les commandes CLI existantes
+- [ ] WebSocket pour le feed temps réel du run
 
 ---
 
-## Probabilités réalistes
+## Phase 7 — SaaS MVP
 
-- MVP fonctionnel : ~85%
-- Traction GitHub 500+ stars : ~45%
-- Premiers clients payants : ~30% si traction
-- Business récurrent : ~20%
+**Prérequis : 5+ utilisateurs externes actifs.**
+
+### Ce qui change architecturalement
+
+```
+Aujourd'hui                    SaaS
+───────────────────────────────────────────────
+~/.glorfindel/              →  state côté serveur (PostgreSQL)
+ChromaDB local              →  vectorDB multi-tenant (Pinecone / Weaviate)
+CLI autonome                →  CLI thin client + API REST backend
+LangGraph local             →  LangGraph côté serveur
+War Room local              →  War Room SaaS multi-tenant
+```
+
+### Modèle open-core
+- **Gratuit** : CLI + scénarios de base + connecteurs Azure/AWS/Prometheus
+- **Payant SaaS** : multi-tenant, RAG partagée, War Room hébergée, connecteurs avancés, reporting, support
+
+### Pricing indicatif
+- $200-500/mois par workspace
+- <$2/mois Claude API par workspace — marge confortable
+- Comparable PagerDuty (~$200/mois), Datadog (~$200/mois)
+
+### Ce qu'on ne fait PAS en SaaS MVP
+- Pas de dashboard monitoring — c'est Grafana/Datadog
+- Pas de white-label
+- Pas d'on-premise avant demande explicite
 
 ---
 
-## Ce qu'on ne fait PAS avant la Phase 3
+## Récapitulatif ordre de priorité global
 
-- Dashboard/UI
-- PDF reports
-- Multi-tenant, auth, scheduler
-- AWS/GCP/K8s
-- IA/ML
-- Proxmox/vSphere
+```
+1. Premier utilisateur externe              → MAINTENANT, bloque tout
+2. Solidification (erreurs, cron)           → après feedback
+3. Entra ID / Service Principal             → vecteur #1 Azure 2025
+4. Storage misconfiguration + Key Vault     → objectifs finaux kill chain
+5. Schéma normalisé first_result_row        → prérequis connecteurs
+6. AWS + CloudWatch/GuardDuty               → 32% marché cloud
+7. Prometheus + Loki                        → stack open source dominante
+8. War Room UI                              → après feedback premier utilisateur
+9. Datadog                                  → leader commercial mid-market
+10. AKS                                     → chantier complexe, après les autres
+11. Nouveaux scénarios TTP                  → selon demande utilisateurs
+12. GCP                                     → croissance forte, pas urgent
+13. SaaS MVP                                → après 5 utilisateurs externes
+```
+
+---
+
+## Ce qu'on ne fait PAS
+- Pas compliance-oriented (NIS2, DORA)
+- Pas d'agent en roue libre sur actions destructives
+- Pas de tests sur infra prod sans consentement explicite
+- Pas de dashboard monitoring — ce n'est pas le rôle de Glorfindel
+- Pas de fine-tuning LLM — la RAG ChromaDB suffit pour le MVP
+- Pas de multi-cloud avant que la boucle Azure soit solide
+- Pas de SaaS avant utilisateurs réels

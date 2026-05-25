@@ -74,6 +74,8 @@ T1041 validé en réel (2026-05-24, run 3) : detect 229s + isolate 10s (via Stor
 
 T1110.001 validé en réel (2026-05-24, run 4) : detect 60s + block_suspicious_ip 7s = RTO 67s (via Syslog DCR — Tor exit node 185.220.101.1 bloqué au NSG, isolate_vm non requis)
 
+T1548.003 validé en réel (2026-05-25, run 5) : detect 70s + isolate_vm (via Syslog DCR — sudo USER=root COMMAND= sans NOT in sudoers, compromission OS-level)
+
 ---
 
 ## Architecture — Cloud agnostique
@@ -249,6 +251,12 @@ annatar run scenarios/azure/data-exfiltration.yaml
 # 3c. Scénario lateral movement SSH brute force (terminal 2)
 annatar run scenarios/azure/lateral-movement.yaml
 # détection via Syslog DCR (~60s) → block_suspicious_ip autonome (IP externe uniquement)
+# Nettoyage après run T1110 : supprimer la règle de bloc avant le run suivant
+glorfindel unblock 185.220.101.1 /subscriptions/44a4dc83-3e79-4e4e-aa93-1b4f8e3ede80/resourceGroups/annatar/providers/Microsoft.Compute/virtualMachines/vm-annatar-victim --yes
+
+# 3d. Scénario privilege escalation (terminal 2)
+annatar run scenarios/azure/privilege-escalation.yaml
+# détection via Syslog DCR (~70s) → isolate_vm autonome (compromission OS-level, pas d'IP externe)
 
 # 4. Attendre que Glorfindel isole la VM (automatique)
 
@@ -306,7 +314,7 @@ Prochaines priorités :
     - Detection : Syslog auth, sudo USER=root COMMAND= sans NOT in sudoers (~60s)
     - Action attendue : `isolate_vm` (compromission OS-level, pas d'IP externe à bloquer)
     - Severity : critical (racine de la chaîne post-compromise)
-19. Run réel T1548.003 en Azure — valider detect + isolate_vm
+19. ✅ Run réel T1548.003 en Azure — detect 70s + isolate_vm validé (2026-05-25)
 20. Pytest : couverture T1548 (signal priv esc → isolate_vm)
 21. `glorfindel check-ttl` : intégrer en cron (crontab ou systemd timer) pour auto-release après 4h
 22. AWS provider : `AwsConnector(CloudConnector)` — Security Groups pour isolate_vm, GuardDuty pour detection
@@ -390,8 +398,13 @@ Statut : toutes les actions autonomes ont leur `verify_*` implémenté.
 
 Le NSG est attaché au **subnet** (pas au NIC). `_get_nic_nsg` remonte au subnet si le NIC
 n'a pas de NSG direct. Si une règle existante occupe la priorité 100 (ex: `allow-ssh`),
-elle est décalée +100 et sauvegardée dans `~/.glorfindel/isolation/<vm>.json` pour
-restauration au `release_isolation`.
+elle est décalée au **premier slot libre ≥ 200** (pas +100 fixe — évite les conflits avec
+les règles `glorfindel-block-*` existantes) et sauvegardée dans `~/.glorfindel/isolation/<vm>.json`
+pour restauration au `release_isolation`.
+
+**Pitfall T1548 → T1110 (ou inverse)** : si `block_suspicious_ip` (priority 200) existe déjà
+et qu'`isolate_vm` tente de bumper `allow-ssh` à 200, conflit NSG. Fix : bump recherche
+dynamiquement le premier slot libre. Nettoyage entre runs avec `glorfindel unblock <ip> <resource_id>`.
 
 ### recovery_complete — qui l'émet ?
 
@@ -425,6 +438,7 @@ class CloudConnector(ABC):
     def isolate_vm(self, resource_id: str) -> dict: ...
     def release_isolation(self, resource_id: str) -> dict: ...
     def block_suspicious_ip(self, ip: str, resource_id: str) -> dict: ...
+    def unblock_ip(self, ip: str, resource_id: str) -> dict: ...
     def snapshot(self, resource_id: str) -> str: ...
     def verify_isolation(self, resource_id: str) -> dict: ...
     def verify_snapshot(self, snap_id: str) -> dict: ...

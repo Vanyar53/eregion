@@ -12,6 +12,19 @@ target:
   vm_name: vm-annatar-victim
   log_analytics_workspace_id: "b451c51a-1cd0-4125-ac70-6aaf2c1dc209"
 
+prerequisites:
+  detection:
+    - name: syslog_dcr
+      table: Syslog
+      why: detection query reads auth facility — same DCR pipeline as T1110.001
+      verify: "Syslog | where Facility == 'auth' | where TimeGenerated > ago(1h) | where Computer == 'vm-annatar-victim' | limit 1"
+      setup: "Create a DCR with Syslog data source (facility: auth, level: Warning) and associate it with the VM"
+    - name: ama_heartbeat
+      table: Heartbeat
+      why: AMA must be running — NSG isolation from a previous run blocks AMA (outbound deny-all), causing detection timeout
+      verify: "Heartbeat | where TimeGenerated > ago(5m) | where Computer == 'vm-annatar-victim' | limit 1"
+      setup: "If AMA is silenced by a stale isolation: glorfindel release <resource_id> --yes, then wait ~2 min for AMA to reconnect"
+
 setup:
   - name: prepare_test_volume
     action: run_script_on_vm

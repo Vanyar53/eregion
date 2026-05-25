@@ -9,6 +9,18 @@ target:
   vm_name: vm-annatar-victim
   log_analytics_workspace_id: "b451c51a-1cd0-4125-ac70-6aaf2c1dc209"
 
+prerequisites:
+  detection:
+    - name: storage_blob_logs
+      table: StorageBlobLogs
+      why: detection query reads PutBlob operations — requires diagnostic settings on the storage account
+      verify: "StorageBlobLogs | where AccountName == 'stannatarexfil' | where TimeGenerated > ago(1h) | limit 1"
+      setup: "az monitor diagnostic-settings create --resource <storage_id> --workspace <workspace_id> --logs '[{\"category\":\"StorageBlobLogs\",\"enabled\":true}]'"
+    - name: vm_managed_identity
+      why: exfil_sim.sh uploads via MSI — VM needs Storage Blob Data Contributor on the storage account
+      verify: "az role assignment list --assignee <vm_principal_id> --scope <storage_id>"
+      setup: "az role assignment create --assignee <vm_principal_id> --role 'Storage Blob Data Contributor' --scope <storage_id>"
+
 setup:
   - name: prepare_test_volume
     action: run_script_on_vm

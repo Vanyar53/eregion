@@ -19,6 +19,26 @@ target:
   vm_name: vm-annatar-victim         # Name of the test VM
   log_analytics_workspace_id: "b451c51a-1cd0-4125-ac70-6aaf2c1dc209"
 
+prerequisites:
+  # Run these KQL queries in Log Analytics to verify before launching the scenario.
+  # If any returns no rows, the detection will time out.
+  detection:
+    - name: perf_disk_counters
+      table: Perf
+      why: detection query reads Disk Write Bytes/sec — must exceed 50 MB/s threshold
+      verify: "Perf | where ObjectName == 'Logical Disk' and CounterName == 'Disk Write Bytes/sec' | where TimeGenerated > ago(1h) | limit 1"
+      setup: "Enable VM Insights on the VM (installs AMA + DCR with Perf counters automatically)"
+    - name: ama_heartbeat
+      table: Heartbeat
+      why: AMA must be running to ship Perf data
+      verify: "Heartbeat | where TimeGenerated > ago(5m) | where Computer == 'vm-annatar-victim' | limit 1"
+      setup: "az vm extension set -g annatar --vm-name vm-annatar-victim --publisher Microsoft.Azure.Monitor --name AzureMonitorLinuxAgent"
+  recovery:
+    - name: backup_recovery_point
+      why: restore_from_backup requires at least one recovery point predating the attack
+      verify: "glorfindel restore <resource_id> --dry-run"
+      setup: "Enable Azure Backup on the VM and wait for the first backup job to complete"
+
 setup:
   - name: initialize_test_volume
     action: run_script_on_vm

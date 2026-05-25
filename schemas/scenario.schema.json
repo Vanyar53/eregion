@@ -1,0 +1,110 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Eregion Scenario",
+  "description": "Annatar attack scenario — MITRE ATT&CK mapped, Azure target",
+  "type": "object",
+  "required": ["name", "description", "mitre", "target", "steps"],
+  "additionalProperties": false,
+  "properties": {
+    "name": { "type": "string" },
+    "description": { "type": "string" },
+    "mitre": { "type": "string", "pattern": "^T\\d{4}(\\.\\d{3})?$" },
+    "version": { "type": "string" },
+    "target": {
+      "type": "object",
+      "required": ["type", "resource_group"],
+      "additionalProperties": true,
+      "properties": {
+        "type": { "type": "string", "enum": ["azure_vm"] },
+        "resource_group": { "type": "string" },
+        "vm_name": { "type": "string" },
+        "log_analytics_workspace_id": { "type": "string" }
+      }
+    },
+    "prerequisites": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "detection": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "why"],
+            "additionalProperties": true,
+            "properties": {
+              "name": { "type": "string" },
+              "table": { "type": "string" },
+              "why": { "type": "string" },
+              "verify": { "type": "string" },
+              "setup": { "type": "string" }
+            }
+          }
+        },
+        "recovery": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "why"],
+            "additionalProperties": true,
+            "properties": {
+              "name": { "type": "string" },
+              "why": { "type": "string" },
+              "verify": { "type": "string" },
+              "setup": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "setup": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "action"],
+        "properties": {
+          "name": { "type": "string" },
+          "action": { "type": "string" },
+          "script": { "type": "string" }
+        }
+      }
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "action"],
+        "properties": {
+          "name": { "type": "string" },
+          "action": { "type": "string" },
+          "script": { "type": "string" },
+          "record": { "type": "string" }
+        }
+      }
+    },
+    "detection": {
+      "type": "object",
+      "properties": {
+        "source": { "type": "string" },
+        "query": { "type": "string" },
+        "timeout": { "type": "string", "pattern": "^\\d+(s|m|h)$" },
+        "time_max": { "type": "string", "pattern": "^\\d+(s|m|h)$" }
+      }
+    },
+    "recovery": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "properties": {
+            "vault": { "type": "string" },
+            "time_max": { "type": "string" }
+          }
+        }
+      ]
+    },
+    "cleanup": {
+      "type": "array",
+      "items": { "type": "object" }
+    }
+  }
+}

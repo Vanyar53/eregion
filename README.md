@@ -107,6 +107,7 @@ glorfindel respond runs/<run_id>_signals.jsonl  # post-run processing
 glorfindel restore <resource_id> --yes          # trigger Azure Backup restore (--before auto-detected)
 glorfindel release <resource_id> --yes          # manually release an isolation
 glorfindel unblock <ip> <resource_id> --yes     # remove a block_suspicious_ip rule
+glorfindel isolated                             # list VMs currently isolated + exact release commands
 glorfindel pending                              # list pending escalations
 glorfindel ack <escalation_id>                  # acknowledge an escalation
 glorfindel check-ttl                            # release isolations older than TTL (default 4h)
@@ -214,7 +215,7 @@ glorfindel unblock <ip> <resource_id> --yes
 ```bash
 pip install eregion[dev]
 pytest
-# 86 tests — 0 Azure calls, 0 Claude API calls
+# 88 tests — 0 Azure calls, 0 Claude API calls
 ```
 
 Coverage: 6 LangGraph nodes, routing rules, signal schema, safety guard, YAML parser, ChromaDB memory, CLI escalation flow, T1548 privilege escalation detection.

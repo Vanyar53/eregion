@@ -326,8 +326,10 @@ Prochaines priorités :
 27. ✅ `IncidentRegistry` — `glorfindel/incidents.py`, persist `~/.glorfindel/incidents.jsonl`, TTL via `GLORFINDEL_INCIDENT_TTL_S` (défaut 300s)
 28. ✅ `watch` threaded — une queue + thread par `resource_id`, signaux de resources différentes en `//`, même resource sérialisé, `_output_lock` pour console thread-safe
 29. ✅ Incident context dans le prompt LLM — `load_context` ouvre/met à jour l'incident, `_build_user_message` injecte actions déjà prises, `execute_action` enregistre chaque action
-30. `glorfindel check-ttl` : intégrer en cron (crontab ou systemd timer) pour auto-release après 4h
-31. AWS provider : `AwsConnector(CloudConnector)` — Security Groups pour isolate_vm, GuardDuty pour detection
+30. ✅ Fix dry-run — `escalate_to_human` skippe `escalations.record()` quand `dry_run=True` dans le state ; plus d'accumulation parasite dans `~/.glorfindel/escalations.jsonl` (88 tests)
+31. ✅ `glorfindel isolated` — liste les VMs actuellement isolées avec leur âge et la commande `release` exacte à copier
+32. `glorfindel check-ttl` : intégrer en cron (crontab ou systemd timer) pour auto-release après 4h
+33. AWS provider : `AwsConnector(CloudConnector)` — Security Groups pour isolate_vm, GuardDuty pour detection
 
 ## Convention de session
 

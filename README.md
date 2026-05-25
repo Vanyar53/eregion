@@ -2,36 +2,73 @@
 
 Eregion is an open-core platform for active cloud defense. Two AI agents form a complete loop:
 
-- **Annatar** (red) simulates real attacks on your cloud infrastructure
-- **Glorfindel** (blue) detects signals from any source, responds autonomously, and verifies containment
+- **Annatar** (red) simulates real attacks on your Azure infrastructure using MITRE ATT&CK scenarios
+- **Glorfindel** (blue) detects signals from any source, responds autonomously, verifies containment, and learns from every cycle
 
 > "Test your infrastructure before others do it for you."
 
 ## How it works
 
 ```
-Annatar attacks → JSONL signals → Glorfindel decides → action → verified
+Annatar attacks → JSONL signals → Glorfindel decides → action → verified → stored
 ```
 
-Glorfindel uses a LangGraph graph + Claude API to reason about each signal and choose the minimum effective response. Actions are verified via Azure API. Every cycle is stored in ChromaDB for cross-scenario learning.
+Glorfindel uses a LangGraph graph + Claude API to reason about each signal and choose the minimum effective response. Actions are verified via Azure API. Every cycle is stored in ChromaDB for cross-scenario learning — no fine-tuning required.
 
-## Validated TTPs (Azure)
+## Validated TTPs (Azure, real runs)
 
-| TTP | Scenario | Detection | Response | RTO |
-|-----|----------|-----------|----------|-----|
-| T1486 | Ransomware VM | 50s (Perf disk write) | `isolate_vm` | 21m23s |
-| T1041 | Data exfiltration | 229s (StorageBlobLogs) | `isolate_vm` (internal IP) | — |
-| T1110.001 | SSH brute force | 60s (Syslog DCR) | `block_suspicious_ip` | — |
+| TTP | Scenario | Detection source | Detection time | Action | RTO |
+|-----|----------|-----------------|----------------|--------|-----|
+| T1486 | Ransomware VM | Perf disk write anomaly | 50s | `isolate_vm` | 21m23s |
+| T1041 | Data exfiltration | StorageBlobLogs (PutBlob) | 229s | `isolate_vm` (internal IP) | — |
+| T1110.001 | SSH brute force | Syslog DCR (auth facility) | 60s | `block_suspicious_ip` (Tor IP) | — |
 
-## Autonomy model
+Glorfindel chose the right action on all three without explicit per-TTP rules — it reasoned from signal context.
 
-Glorfindel operates under strict autonomy rules:
+## Getting started
 
-- **Autonomous** (reversible): `isolate_vm`, `release_isolation`, `snapshot`, `block_suspicious_ip`, `revoke_temp_access`
-- **Human required** (destructive): `restore_from_backup`, `delete_resource`, `wipe_storage`
-- **Proposed unknown**: Glorfindel proposes freely, escalates automatically — human validates and codifies
+### 1. Deploy the test infrastructure
 
-The graph is defensive by design: even if the LLM proposes a destructive action without `escalate=True`, the routing blocks it.
+Everything is provisioned by Terraform — Log Analytics Workspace, VM, NSG, Backup vault, Data Collection Rule, StorageBlobLogs diagnostic settings, and Managed Identity role assignment.
+
+```bash
+cd infra/terraform/
+terraform init
+terraform apply
+# → full test infrastructure in one command
+```
+
+### 2. Install Eregion
+
+```bash
+pip install eregion
+
+export ANTHROPIC_API_KEY=sk-ant-...
+export AZURE_SUBSCRIPTION_ID=...
+```
+
+### 3. Run your first attack/defense loop
+
+```bash
+az vm start -g annatar -n vm-annatar-victim   # VM auto-shuts down at 23:00 UTC
+
+glorfindel watch runs/                              # terminal 1 — Glorfindel watches for signals
+annatar run scenarios/azure/ransomware-vm.yaml      # terminal 2 — Annatar attacks
+
+# Glorfindel isolates the VM automatically within ~60s
+
+glorfindel pending                                  # see escalation: restore_from_backup required
+glorfindel restore /subscriptions/.../vm-annatar-victim --yes   # terminal 3
+
+# Glorfindel releases isolation automatically after restore
+```
+
+### 4. Simulate locally (no Azure required)
+
+```bash
+python scripts/simulate_annatar.py            # normal flow
+python scripts/simulate_annatar.py --ids-gap  # detection_timeout flow
+```
 
 ## Using Glorfindel standalone
 
@@ -39,61 +76,71 @@ Glorfindel doesn't require Annatar. Any valid JSONL signal triggers the response
 Annatar is only needed if you want to measure `detection_s` from a real attack baseline.
 
 ```bash
-# Simulate without Azure or Annatar
-python scripts/simulate_annatar.py
-python scripts/simulate_annatar.py --ids-gap
-
 # Or write a signal directly
 echo '{"event": "attack_started", ...}' >> runs/test_signals.jsonl
 glorfindel respond runs/test_signals.jsonl
 ```
 
-## Quickstart
+## Autonomy model
+
+Glorfindel operates under strict autonomy rules. The graph enforces them regardless of what the LLM proposes.
+
+**Autonomous** (reversible, no human approval):
+`isolate_vm`, `release_isolation`, `snapshot`, `block_suspicious_ip`, `revoke_temp_access`
+
+**Human required** (destructive):
+`restore_from_backup`, `delete_resource`, `wipe_storage`, `modify_network_rule`, `escalate_permissions`
+
+**Proposed unknown**: Glorfindel proposes freely in snake_case, escalates automatically — human validates and the action gets codified for future runs.
+
+> The graph is defensive by design: even if the LLM proposes a destructive action without `escalate=True`, the routing blocks it.
+
+## CLI reference
 
 ```bash
-pip install eregion
+# Glorfindel
+glorfindel watch runs/                          # real-time response during an Annatar run
+glorfindel respond runs/<run_id>_signals.jsonl  # post-run processing
+glorfindel restore <resource_id> --yes          # trigger Azure Backup restore (--before auto-detected)
+glorfindel release <resource_id> --yes          # manually release an isolation
+glorfindel pending                              # list pending escalations
+glorfindel ack <escalation_id>                  # acknowledge an escalation
+glorfindel check-ttl                            # release isolations older than TTL (default 4h)
+glorfindel memory-stats                         # ChromaDB cycle count
 
-# Set up Azure credentials
-export AZURE_SUBSCRIPTION_ID=...
-export AZURE_RESOURCE_GROUP=...
-export ANTHROPIC_API_KEY=...
+# Annatar
+annatar run scenarios/azure/ransomware-vm.yaml  # run a scenario (--dry-run available)
+annatar run scenarios/azure/lateral-movement.yaml
 
-# Simulate locally (no Azure required)
-python scripts/simulate_annatar.py
-python scripts/simulate_annatar.py --ids-gap
-
-# Run a real scenario (tagged resources only: annatar-test=true)
-az vm start -g annatar -n vm-annatar-victim
-glorfindel watch runs/                              # terminal 1
-annatar run scenarios/azure/ransomware-vm.yaml      # terminal 2
+# Environment variables
+ANTHROPIC_API_KEY=...
+GLORFINDEL_WEBHOOK_URL=...          # Slack/Teams notifications on escalation
+GLORFINDEL_KEEP_ISOLATED=1          # forensic mode — VM stays isolated after restore
+GLORFINDEL_ISOLATION_TTL_H=4        # auto-release timeout in hours (default: 4)
 ```
-
-## Requirements
-
-- Python 3.11+
-- Azure subscription with tagged test resources (`annatar-test: "true"`)
-- Anthropic API key
-- Azure Monitor workspace (for detection)
 
 ## Architecture
 
 ```
 glorfindel/
-  agent.py        → LangGraph graph (6 nodes)
+  agent.py        → LangGraph graph (6 nodes): load_context → poll_detection → decide
+                    → execute_action → verify_action → store_cycle
   actions.py      → CloudConnector ABC + AzureConnector
-  detectors.py    → DetectionConnector ABC + AzureMonitorDetector
-  memory.py       → ChromaDB cycle memory
+  detectors.py    → DetectionConnector ABC + AzureMonitorDetector (polls every 10s)
+  memory.py       → CycleMemory: ChromaDB with confidence + past_cycles_used metadata
   cli.py          → watch, respond, restore, release, pending, ack, check-ttl
-  escalations.py  → persistent escalation log
+  escalations.py  → persistent escalation log (~/.glorfindel/escalations.jsonl)
 
 annatar/
-  runner/engine.py    → pre-check + attack + emit
-  signals/emitter.py  → JSONL signal emitter
+  runner/engine.py    → setup → integrity check → attack → emit attack_started
+  signals/emitter.py  → normalized JSONL signal emitter
 
 scenarios/azure/
   ransomware-vm.yaml       → T1486
   data-exfiltration.yaml   → T1041
   lateral-movement.yaml    → T1110.001
+
+infra/terraform/           → full test infrastructure (VM, NSG, Log Analytics, Backup, DCR)
 ```
 
 ## Extending Glorfindel
@@ -115,12 +162,8 @@ def detector_for(source: str) -> DetectionConnector:
         return PrometheusDetector(...)
 ```
 
-`poll_alert()` is called every 10s by the `poll_detection` node.
-The result row is what the LLM sees to decide — include `CallerIpAddress`
-or `SourceIP` for internal/external IP routing to work correctly.
-
-Already have a SIEM? Implement a `SentinelDetector` or `SplunkDetector`
-that queries your SIEM alerts instead of raw sources. Everything else stays the same.
+`poll_alert()` is called every 10s by the `poll_detection` node. The result row is what the LLM
+sees to decide — include `CallerIpAddress` or `SourceIP` for internal/external IP routing to work correctly.
 
 ### Adding a cloud provider (AWS, GCP, ...)
 
@@ -133,12 +176,30 @@ class AwsConnector(CloudConnector):
 
 Adding AWS = one class. Agent logic, scenarios, and RAG memory don't change.
 
+## Operational notes
+
+**Before each run**, verify no stale isolation is active:
+```bash
+az network nsg rule list -g annatar --nsg-name nsg-annatar -o table
+# If glorfindel-isolation-* rules are present:
+echo y | glorfindel release <resource_id>
+```
+
+**NSG isolation blocks Azure Monitor Agent** (outbound deny-all). If the VM stays isolated, the next run will hit `detection_timeout` instead of `detection`. Always release before running the next scenario.
+
+**Syslog detection latency**: ~60s nominal. Scenario timeout set to 300s for margin (DCR ingestion can vary).
+
+**StorageBlobLogs**: near-realtime (seconds). `AzureNetworkAnalytics_CL` (Traffic Analytics) is unusable for detection — 10-60 min latency.
+
 ## Tests
 
 ```bash
 pip install eregion[dev]
-pytest  # 84 tests, 0 Azure calls, 0 Claude API calls
+pytest
+# 84 tests — 0 Azure calls, 0 Claude API calls
 ```
+
+Coverage: 6 LangGraph nodes, routing rules, signal schema, safety guard, YAML parser, ChromaDB memory, CLI escalation flow.
 
 ## License
 

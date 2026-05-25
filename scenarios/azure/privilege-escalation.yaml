@@ -25,11 +25,6 @@ prerequisites:
       verify: "Heartbeat | where TimeGenerated > ago(5m) | where Computer == '<vm_name>' | limit 1"
       setup: "If AMA is silenced by a stale isolation: glorfindel release <resource_id> --yes, then wait ~2 min for AMA to reconnect"
 
-setup:
-  - name: prepare_test_volume
-    action: run_script_on_vm
-    script: scripts/vm/setup_testdata.sh
-
 steps:
   - name: simulate_privilege_escalation
     action: run_script_on_vm

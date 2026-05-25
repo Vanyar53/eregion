@@ -63,7 +63,7 @@ class AzureVMExecutor:
             parameters=[RunCommandInputParameter(name="arg", value=p) for p in (params or [])],
         )
 
-        delays = [15, 30, 60]
+        delays = [15, 30, 60, 90, 120]
         for attempt, delay in enumerate(delays + [None], start=1):
             try:
                 poller = self._compute.virtual_machines.begin_run_command(

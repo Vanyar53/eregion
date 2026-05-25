@@ -332,7 +332,8 @@ Prochaines priorités :
 33. ✅ Watch poll parallèle — `attack_started` → thread `poll-<vm>-<id>` indépendant (polling // par resource), signal résolu → queue resource (decide+execute sérialisé) ; `resolve_attack_started()` extrait de `poll_detection` et partagé
 34. ✅ `glorfindel revert <resource_id> --yes` — release isolation + unblock toutes les IPs en une commande ; reset NSG propre avant le run suivant
 36. `glorfindel check-ttl` : intégrer en cron (crontab ou systemd timer) pour auto-release après 4h
-37. AWS provider : `AwsConnector(CloudConnector)` — Security Groups pour isolate_vm, GuardDuty pour detection
+37. `glorfindel list --live` : interroger le NSG Azure en live pour détecter les règles `glorfindel-*` orphelines (pas dans le state local) — utile si le state a été perdu ou pour un bootstrap. Demande des credentials Azure. Bas priorité.
+38. AWS provider : `AwsConnector(CloudConnector)` — Security Groups pour isolate_vm, GuardDuty pour detection
 
 ## Convention de session
 

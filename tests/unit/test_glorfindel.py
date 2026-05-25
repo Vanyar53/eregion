@@ -140,6 +140,7 @@ def test_route_autonomous_action():
         "reversible": True,
         "explanation": "",
         "escalation_reason": "",
+        "suggested_steps": [],
         "outcome": None,
     }
     assert _route_after_decide(state) == "execute_action"
@@ -158,6 +159,7 @@ def test_route_escalates_destructive_action():
         "reversible": False,
         "explanation": "",
         "escalation_reason": "",
+        "suggested_steps": [],
         "outcome": None,
     }
     assert _route_after_decide(state) == "escalate_to_human"
@@ -176,6 +178,7 @@ def test_route_escalates_when_llm_requests():
         "reversible": True,
         "explanation": "",
         "escalation_reason": "Confidence too low for autonomous action",
+        "suggested_steps": [],
         "outcome": None,
     }
     assert _route_after_decide(state) == "escalate_to_human"
@@ -279,6 +282,7 @@ def test_route_escalates_unknown_proposed_action():
         "reversible": False,
         "explanation": "",
         "escalation_reason": "Revoke all tokens for the compromised SP — not in known action set",
+        "suggested_steps": [],
         "outcome": None,
     }
     assert _route_after_decide(state) == "escalate_to_human"
@@ -297,6 +301,7 @@ def test_escalate_to_human_marks_proposed_action_type():
         "reversible": False,
         "explanation": "",
         "escalation_reason": "Revoke all tokens for the compromised SP",
+        "suggested_steps": [],
         "outcome": None,
     }
     result = escalate_to_human(state)

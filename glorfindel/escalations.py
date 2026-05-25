@@ -15,6 +15,7 @@ def record(
     escalation_type: str,
     reason: str,
     run_id: str = "",
+    suggested_steps: list[str] | None = None,
 ) -> str:
     """Append an escalation and return its id."""
     esc = {
@@ -26,6 +27,7 @@ def record(
         "escalation_type": escalation_type,
         "reason": reason,
         "run_id": run_id,
+        "suggested_steps": suggested_steps or [],
         "status": "pending",
         "resolved_at": None,
     }

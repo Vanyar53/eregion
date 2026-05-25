@@ -407,41 +407,45 @@ def _render_escalation(e: dict) -> None:
     console.print(f"  [dim]glorfindel ack {e['id']}[/dim]\n")
 
 
+
 def _render_next_steps(e: dict) -> None:
     rid = e["resource_id"]
     action = e["action"]
     esc_type = e["escalation_type"]
 
-    steps: list[str] = []
+    llm_steps = e.get("suggested_steps") or []
+    if llm_steps:
+        console.print("  [bold cyan]Next steps (Glorfindel):[/bold cyan]")
+        for i, step in enumerate(llm_steps, 1):
+            console.print(f"  [cyan]{i}.[/cyan] {step}")
+        return
 
+    # Fallback statique pour les escalades sans suggested_steps (anciennes ou dry-run)
     if esc_type == "low_confidence" and action == "snapshot":
         steps = [
-            f"Check VM state: [dim]az vm show -g <rg> -n {rid.split('/')[-1]} --query 'powerState'[/dim]",
-            f"If compromise confirmed: [bold]glorfindel restore {rid} --yes[/bold]",
-            f"If false positive: [bold]glorfindel ack {e['id']}[/bold] (no action needed)",
+            f"Check VM state: az vm show -g <rg> -n {rid.split('/')[-1]} --query powerState",
+            f"If compromise confirmed: glorfindel restore {rid} --yes",
+            f"If false positive: glorfindel ack {e['id']}",
         ]
     elif action == "restore_from_backup":
         steps = [
-            f"Trigger restore: [bold]glorfindel restore {rid} --yes[/bold]",
-            "[dim]Glorfindel will release isolation automatically after restore (~20 min)[/dim]",
+            f"glorfindel restore {rid} --yes",
+            "Glorfindel releases isolation automatically after restore (~20 min)",
         ]
     elif action == "release_isolation":
-        steps = [
-            f"Release manually: [bold]glorfindel release {rid} --yes[/bold]",
-        ]
+        steps = [f"glorfindel release {rid} --yes"]
     elif esc_type == "proposed_action":
         steps = [
-            f"Review proposed action: [bold]{action}[/bold]",
-            "If approved: implement manually and acknowledge",
-            "If rejected: acknowledge and document why",
+            f"Review proposed action: {action}",
+            "If approved: implement manually, then glorfindel ack",
         ]
     elif esc_type == "destructive_action":
         steps = [
-            f"Review then execute: [bold]glorfindel {action.replace('_', '-')} {rid} --yes[/bold]",
-            "This action requires explicit human approval — do not skip review",
+            f"glorfindel {action.replace('_', '-')} {rid} --yes",
+            "Requires explicit human approval — review before executing",
         ]
     else:
-        steps = [f"Review and act manually on: [bold]{action}[/bold]"]
+        steps = [f"Review and act manually on: {action}"]
 
     console.print("  [bold cyan]Next steps:[/bold cyan]")
     for i, step in enumerate(steps, 1):

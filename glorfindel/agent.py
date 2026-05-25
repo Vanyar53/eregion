@@ -28,6 +28,7 @@ class GlorfindelState(TypedDict):
     explanation: str
     escalate: bool
     escalation_reason: str
+    suggested_steps: list[str]
     outcome: dict | None
 
 
@@ -76,10 +77,19 @@ _DECISION_TOOL = {
                 "type": "string",
                 "description": "Why human approval is needed (empty string if escalate=false).",
             },
+            "suggested_steps": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "Concrete, context-aware next steps for the human operator "
+                    "(only when escalate=true). Reference the specific TTP, resource, "
+                    "and past cycle history. Empty list if escalate=false."
+                ),
+            },
         },
         "required": [
             "reasoning", "confidence", "action", "reversible",
-            "explanation", "escalate", "escalation_reason",
+            "explanation", "escalate", "escalation_reason", "suggested_steps",
         ],
     },
 }
@@ -236,6 +246,7 @@ def decide(state: GlorfindelState, *, model: str) -> GlorfindelState:
         "explanation": d["explanation"],
         "escalate": d["escalate"],
         "escalation_reason": d.get("escalation_reason", ""),
+        "suggested_steps": d.get("suggested_steps", []),
     }
 
 
@@ -305,6 +316,7 @@ def escalate_to_human(state: GlorfindelState) -> GlorfindelState:
             escalation_type=escalation_type,
             reason=state.get("escalation_reason", ""),
             run_id=signal.get("context", {}).get("run_id", ""),
+            suggested_steps=state.get("suggested_steps", []),
         )
 
     return {

@@ -66,6 +66,7 @@ def _mock_llm_response(action: str, escalate: bool = False, escalation_reason: s
         "explanation": f"Executing {action}.",
         "escalate": escalate,
         "escalation_reason": escalation_reason,
+        "suggested_steps": ["Check VM state", "Restore if needed"] if escalate else [],
     }
     mock_response = MagicMock()
     mock_response.content = [tool_block]
@@ -506,6 +507,7 @@ def _initial(event: str, ttp: str = "T1486", raw: dict | None = None) -> dict:
         "explanation": "",
         "escalate": False,
         "escalation_reason": "",
+        "suggested_steps": [],
         "outcome": None,
     }
 

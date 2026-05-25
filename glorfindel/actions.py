@@ -104,14 +104,16 @@ class AzureConnector(CloudConnector):
     def _ensure_clients(self) -> None:
         if self._network is not None:
             return
+        import os
         from azure.identity import DefaultAzureCredential
         from azure.mgmt.network import NetworkManagementClient
         from azure.mgmt.compute import ComputeManagementClient
-        from azure.mgmt.subscription import SubscriptionClient
 
+        sub_id = os.environ.get("AZURE_SUBSCRIPTION_ID")
+        if not sub_id:
+            raise RuntimeError("AZURE_SUBSCRIPTION_ID is not set")
         self._credential = DefaultAzureCredential()
-        sub_client = SubscriptionClient(self._credential)
-        self._subscription_id = next(sub_client.subscriptions.list()).subscription_id
+        self._subscription_id = sub_id
         self._network = NetworkManagementClient(self._credential, self._subscription_id)
         self._compute = ComputeManagementClient(self._credential, self._subscription_id)
 

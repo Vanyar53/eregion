@@ -144,12 +144,14 @@ class InitRunner:
 
     @staticmethod
     def _azure_clients():
+        import os
         from azure.identity import DefaultAzureCredential
         from azure.mgmt.recoveryservicesbackup import RecoveryServicesBackupClient
-        from azure.mgmt.subscription import SubscriptionClient
 
+        sub_id = os.environ.get("AZURE_SUBSCRIPTION_ID")
+        if not sub_id:
+            raise RuntimeError("AZURE_SUBSCRIPTION_ID is not set")
         credential = DefaultAzureCredential()
-        sub_id = list(SubscriptionClient(credential).subscriptions.list())[0].subscription_id
         backup_client = RecoveryServicesBackupClient(credential, sub_id)
         return credential, sub_id, backup_client
 

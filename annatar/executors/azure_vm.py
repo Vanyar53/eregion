@@ -385,9 +385,8 @@ echo "[annatar] DATA_DISK_RESTORED"
         return passed
 
     def _get_subscription_id(self) -> str:
-        from azure.mgmt.subscription import SubscriptionClient
-        client = SubscriptionClient(self._credential)
-        subs = list(client.subscriptions.list())
-        if not subs:
-            raise RuntimeError("No Azure subscriptions found")
-        return subs[0].subscription_id
+        import os
+        sub_id = os.environ.get("AZURE_SUBSCRIPTION_ID")
+        if not sub_id:
+            raise RuntimeError("AZURE_SUBSCRIPTION_ID is not set")
+        return sub_id

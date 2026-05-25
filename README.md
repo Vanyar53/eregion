@@ -32,6 +32,10 @@ Glorfindel chose the right action on all four without explicit per-TTP rules —
 
 ### 1. Deploy the test infrastructure
 
+> **Skip this step if you already have Azure VMs, a Log Analytics Workspace, and NSGs.**
+> The Terraform provisions a dedicated sandbox for running Annatar attack simulations safely.
+> Glorfindel works on any existing Azure infrastructure — the test infra is not a prerequisite.
+
 Everything is provisioned by Terraform — Log Analytics Workspace, VM, NSG, Backup vault, Data Collection Rule, StorageBlobLogs diagnostic settings, and Managed Identity role assignment.
 
 ```bash
@@ -56,7 +60,7 @@ terraform apply
 | NSG | — | Isolation + IP block |
 | Public IP | Standard Static | SSH access |
 
-**Cost estimate (West Europe, pay-as-you-go)**
+**Cost of the test sandbox** (West Europe, pay-as-you-go — only if you deploy the Terraform):
 
 | Item | Monthly cost |
 |---|---|
@@ -65,8 +69,9 @@ terraform apply
 | Azure Backup (daily, 7-day retention) | ~$5–10 |
 | Log Analytics (<1 GB/month for test runs) | <$3 |
 | Storage account | <$1 |
-| **Total Azure** | **~$25–35/month** |
-| Claude API (~$0.05–0.10 per run) | <$2/month |
+| **Total sandbox** | **~$25–35/month** |
+
+**Cost of running Glorfindel on existing infrastructure**: Claude API only — ~$0.05–0.10 per run (<$2/month for regular testing).
 
 > The VM auto-shuts down at 23:00 UTC daily. Start it before each run: `az vm start -g annatar -n vm-annatar-victim`. Compute is only billed when running.
 

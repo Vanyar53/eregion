@@ -6,12 +6,13 @@ Plateforme OSS (Apache 2.0) de défense active cloud. Deux agents IA en boucle :
 - **Glorfindel** (bleu) détecte, répond de façon autonome, vérifie, apprend via ChromaDB
 
 **Repo** : https://github.com/Vanyar53/eregion
-**Local** : `/home/jonathan/eregion/`, branch `main`, venv `.venv/`, `.envrc` charge `ANTHROPIC_API_KEY`
+**Local** : `/home/jonathan/eregion/`, branch `main`, venv `.venv/` (créé par `make install`), `.envrc` charge les creds
 **Stack** : Python 3.11, Azure SDK, LangGraph, Claude API (tool use), ChromaDB, Click, pytest
+**Docker** : `make build` → `eregion-annatar` + `eregion-glorfindel`. `make annatar-shell` (alias `ar`) / `make glorfindel-shell` (alias `gf`). State persisté dans `~/.annatar/` et `~/.glorfindel/`, cache ChromaDB dans `~/.cache/chroma/`.
 
 ---
 
-## TTPs validés en réel (2026-05-24/25)
+## TTPs validés en réel (2026-05-24/25/26)
 
 | TTP | Scénario | Détection | Temps | Action |
 |-----|----------|-----------|-------|--------|
@@ -148,6 +149,14 @@ terraform/                    → infra complète Azure (VM, NSG, LAW, Backup, D
   incidents.jsonl             → incidents actifs
   isolation/<vm>.json         → état NSG isolation + TTL
   blocks/<vm>.json            → IPs bloquées par VM
+  .bashrc                     → PS1 + HISTFILE + alias gf (chargé par make glorfindel-shell)
+  .bash_history               → historique bash persistant
+
+~/.annatar/
+  .bashrc                     → PS1 + HISTFILE + alias ar (chargé par make annatar-shell)
+  .bash_history               → historique bash persistant
+
+~/.cache/chroma/              → modèle ONNX ChromaDB (79MB, téléchargé une seule fois)
 ```
 
 ---
@@ -254,6 +263,7 @@ az network nsg rule list -g annatar --nsg-name nsg-annatar -o table
 - `setup_testdata.sh` uniquement dans T1486
 - RunCommand : 5 retries (15s, 30s, 60s, 90s, 120s)
 - `dry_run=True` dans tous les tests — jamais d'appel Azure ou Claude API dans les tests
+- `AZURE_SUBSCRIPTION_ID` obligatoire dans l'env (plus d'auto-détection via SubscriptionClient)
 
 ---
 

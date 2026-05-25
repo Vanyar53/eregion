@@ -77,12 +77,33 @@ terraform apply
 
 ### 2. Install Eregion
 
-```bash
-pip install eregion
+**Option A — local (dev)**
 
-export ANTHROPIC_API_KEY=sk-ant-...
-export AZURE_SUBSCRIPTION_ID=...
+```bash
+git clone https://github.com/Vanyar53/eregion && cd eregion
+make install          # creates .venv + installs all dependencies
+
+cp .envrc.example .envrc
+# edit .envrc — fill in ANTHROPIC_API_KEY and Azure credentials
+# direnv allow   (or source .envrc manually)
 ```
+
+Azure credentials require a Service Principal:
+```bash
+az ad sp create-for-rbac --name "eregion" --role Contributor \
+  --scopes /subscriptions/$(az account show --query id -o tsv)
+# → appId = AZURE_CLIENT_ID, password = AZURE_CLIENT_SECRET, tenant = AZURE_TENANT_ID
+```
+
+**Option B — Docker**
+
+```bash
+make build              # builds eregion-annatar + eregion-glorfindel images
+make annatar-shell      # 🔴 interactive shell — alias: ar
+make glorfindel-shell   # 🔵 interactive shell — alias: gf
+```
+
+State, history, and ChromaDB model cache are persisted on the host (`~/.glorfindel/`, `~/.annatar/`, `~/.cache/chroma/`).
 
 ### 3. Run your first attack/defense loop
 
@@ -156,13 +177,21 @@ annatar run scenarios/azure/data-exfiltration.yaml
 annatar run scenarios/azure/lateral-movement.yaml
 annatar run scenarios/azure/privilege-escalation.yaml
 
-# Environment variables
+# Required
 ANTHROPIC_API_KEY=...
+AZURE_CLIENT_ID=...                 # Service Principal app ID
+AZURE_CLIENT_SECRET=...             # Service Principal secret
+AZURE_TENANT_ID=...                 # Entra ID tenant
+AZURE_SUBSCRIPTION_ID=...           # Azure subscription ID
+
+# Optional
 GLORFINDEL_WEBHOOK_URL=...          # Slack/Teams notifications on escalation
 GLORFINDEL_KEEP_ISOLATED=1          # forensic mode — VM stays isolated after restore
 GLORFINDEL_ISOLATION_TTL_H=4        # auto-release timeout in hours (default: 4)
 GLORFINDEL_INCIDENT_TTL_S=300       # incident grouping window in seconds (default: 300)
 ```
+
+See [.envrc.example](.envrc.example) for a ready-to-fill template with credential setup instructions.
 
 ## Architecture
 

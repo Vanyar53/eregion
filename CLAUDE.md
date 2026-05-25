@@ -267,6 +267,16 @@ az network nsg rule list -g annatar --nsg-name nsg-annatar -o table
 
 ---
 
+## escalations — comportement
+
+`gf pending` affiche les escalades avec **next steps générés par le LLM** (`suggested_steps`), contextuels à l'historique ChromaDB. Fallback statique pour les anciennes escalades sans ce champ.
+
+Types d'escalade : `low_confidence` (detection_timeout + snapshot), `destructive_action` (HUMAN_APPROVAL_REQUIRED), `proposed_action` (action inconnue), `verification_failed`.
+
+`gf ack <id>` / `gf ack --all` → marque `resolved` dans `~/.glorfindel/escalations.jsonl`. Purement administratif — ne fait rien sur Azure. `restore_from_backup` auto-acquitte via `resolve_by_resource`.
+
+---
+
 ## Prochaines priorités (voir ROADMAP.md pour détail complet)
 
 1. **Utilisateur extérieur** — avant tout nouveau scénario ou provider

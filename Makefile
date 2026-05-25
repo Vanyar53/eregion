@@ -148,9 +148,7 @@ glorfindel-check-ttl: build
 annatar-shell: build-annatar
 	@mkdir -p $(HOME)/.annatar
 	docker run --rm -it $(AZURE_ENV) $(ANNATAR_VOLS) $(ANNATAR_STATE) \
-		-e 'PS1=🔴 annatar:\w\$$ ' \
-		-e 'HISTFILE=/root/.annatar/.bash_history' \
-		$(IMAGE_ANNATAR) bash --norc
+		$(IMAGE_ANNATAR) bash --init-file /root/.annatar/.bashrc
 
 glorfindel-shell: build-glorfindel
 	@mkdir -p $(HOME)/.glorfindel
@@ -160,9 +158,7 @@ glorfindel-shell: build-glorfindel
 		-e GLORFINDEL_ISOLATION_TTL_H \
 		-e GLORFINDEL_INCIDENT_TTL_S \
 		-e ORT_LOGGING_LEVEL_DEFAULT=3 \
-		-e 'PS1=🔵 glorfindel:\w\$$ ' \
-		-e 'HISTFILE=/root/.glorfindel/.bash_history' \
-		$(IMAGE_GLORFINDEL) bash --norc
+		$(IMAGE_GLORFINDEL) bash --init-file /root/.glorfindel/.bashrc
 
 # ── Dev ───────────────────────────────────────────────────────────────────
 

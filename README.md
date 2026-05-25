@@ -3,7 +3,7 @@
 Eregion is an open-core platform for active cloud defense. Two AI agents form a complete loop:
 
 - **Annatar** (red) simulates real attacks on your cloud infrastructure
-- **Glorfindel** (blue) detects, responds autonomously, and verifies containment
+- **Glorfindel** (blue) detects signals from any source, responds autonomously, and verifies containment
 
 > "Test your infrastructure before others do it for you."
 
@@ -32,6 +32,21 @@ Glorfindel operates under strict autonomy rules:
 - **Proposed unknown**: Glorfindel proposes freely, escalates automatically — human validates and codifies
 
 The graph is defensive by design: even if the LLM proposes a destructive action without `escalate=True`, the routing blocks it.
+
+## Using Glorfindel standalone
+
+Glorfindel doesn't require Annatar. Any valid JSONL signal triggers the response loop.
+Annatar is only needed if you want to measure `detection_s` from a real attack baseline.
+
+```bash
+# Simulate without Azure or Annatar
+python scripts/simulate_annatar.py
+python scripts/simulate_annatar.py --ids-gap
+
+# Or write a signal directly
+echo '{"event": "attack_started", ...}' >> runs/test_signals.jsonl
+glorfindel respond runs/test_signals.jsonl
+```
 
 ## Quickstart
 
@@ -81,24 +96,48 @@ scenarios/azure/
   lateral-movement.yaml    → T1110.001
 ```
 
-## Adding a new cloud provider
+## Extending Glorfindel
 
-Implement `CloudConnector` and `DetectionConnector` ABCs:
+### Adding a detection source (Prometheus, Datadog, Splunk, Sentinel, ...)
+
+Implement `DetectionConnector` and register it in the factory:
+
+```python
+class PrometheusDetector(DetectionConnector):
+    def poll_alert(self) -> tuple[float, dict] | None:
+        # Query Prometheus
+        # Return (detection_s, result_row) or None
+        ...
+
+# detectors.py — factory
+def detector_for(source: str) -> DetectionConnector:
+    if source == "prometheus":
+        return PrometheusDetector(...)
+```
+
+`poll_alert()` is called every 10s by the `poll_detection` node.
+The result row is what the LLM sees to decide — include `CallerIpAddress`
+or `SourceIP` for internal/external IP routing to work correctly.
+
+Already have a SIEM? Implement a `SentinelDetector` or `SplunkDetector`
+that queries your SIEM alerts instead of raw sources. Everything else stays the same.
+
+### Adding a cloud provider (AWS, GCP, ...)
 
 ```python
 class AwsConnector(CloudConnector):
     def isolate_vm(self, resource_id) -> dict: ...
     def block_suspicious_ip(self, ip, resource_id) -> dict: ...
-    # ...
+    def release_isolation(self, resource_id) -> dict: ...
 ```
 
-Adding AWS = one class. The agent logic doesn't change.
+Adding AWS = one class. Agent logic, scenarios, and RAG memory don't change.
 
 ## Tests
 
 ```bash
 pip install eregion[dev]
-pytest  # 57 tests, 0 Azure calls, 0 Claude API calls
+pytest  # 84 tests, 0 Azure calls, 0 Claude API calls
 ```
 
 ## License

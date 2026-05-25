@@ -7,20 +7,15 @@ version: "1.0.0"
 # ─── Target ────────────────────────────────────────────────────────────────────
 # The VM where the attack is simulated. Must be in a resource group tagged
 # annatar-test: "true" — Annatar refuses to run on untagged resources.
-#
-# CLIENT SETUP:
-#   1. Deploy the test VM via `annatar init` (or your own Terraform).
-#   2. Point log_analytics_workspace_id at your existing Log Analytics Workspace.
-#      The VM's OMS agent must be sending Perf/Heartbeat data to that workspace.
-#      Find the workspace ID: Azure Portal → Log Analytics → Properties → Workspace ID
 target:
   type: azure_vm
-  resource_group: annatar            # Resource group of the test VM
-  vm_name: vm-annatar-victim         # Name of the test VM
+  resource_group: annatar            # replace with your resource group
+  vm_name: vm-annatar-victim         # replace with your VM name
 
 prerequisites:
   # Run these KQL queries in Log Analytics to verify before launching the scenario.
   # If any returns no rows, the detection will time out.
+  # Adapt vm_name in the verify queries to match your target above.
   detection:
     - name: perf_disk_counters
       table: Perf
@@ -30,8 +25,8 @@ prerequisites:
     - name: ama_heartbeat
       table: Heartbeat
       why: AMA must be running to ship Perf data
-      verify: "Heartbeat | where TimeGenerated > ago(5m) | where Computer == 'vm-annatar-victim' | limit 1"
-      setup: "az vm extension set -g annatar --vm-name vm-annatar-victim --publisher Microsoft.Azure.Monitor --name AzureMonitorLinuxAgent"
+      verify: "Heartbeat | where TimeGenerated > ago(5m) | where Computer == '<vm_name>' | limit 1"
+      setup: "az vm extension set -g <resource_group> --vm-name <vm_name> --publisher Microsoft.Azure.Monitor --name AzureMonitorLinuxAgent"
   recovery:
     - name: backup_recovery_point
       why: restore_from_backup requires at least one recovery point predating the attack
@@ -77,7 +72,7 @@ detection:
 #   glorfindel restore <resource_id> --vault <vault> --yes
 # On success, Glorfindel automatically releases isolation (recovery_complete signal).
 recovery:
-  vault: rsv-annatar   # Recovery Services Vault name
+  vault: rsv-annatar   # replace with your Recovery Services Vault name
   time_max: "1800s"    # Declared RTO SLA = 30 minutes
 
 cleanup: []

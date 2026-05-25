@@ -5,15 +5,16 @@ version: "1.0.0"
 
 target:
   type: azure_vm
-  resource_group: annatar
-  vm_name: vm-annatar-victim
+  resource_group: annatar             # replace with your resource group
+  vm_name: vm-annatar-victim          # replace with your VM name
 
 prerequisites:
+  # Adapt storage account name and container in the verify queries to match your setup.
   detection:
     - name: storage_blob_logs
       table: StorageBlobLogs
       why: detection query reads PutBlob operations — requires diagnostic settings on the storage account
-      verify: "StorageBlobLogs | where AccountName == 'stannatarexfil' | where TimeGenerated > ago(1h) | limit 1"
+      verify: "StorageBlobLogs | where AccountName == '<storage_account>' | where TimeGenerated > ago(1h) | limit 1"
       setup: "az monitor diagnostic-settings create --resource <storage_id> --workspace <workspace_id> --logs '[{\"category\":\"StorageBlobLogs\",\"enabled\":true}]'"
     - name: vm_managed_identity
       why: exfil_sim.sh uploads via MSI — VM needs Storage Blob Data Contributor on the storage account
@@ -36,14 +37,14 @@ detection:
   workspace_id: "b451c51a-1cd0-4125-ac70-6aaf2c1dc209"  # Log Analytics Workspace ID — replace with yours
   query: |
     StorageBlobLogs
-    | where AccountName == "stannatarexfil"
+    | where AccountName == "stannatarexfil"    // replace with your storage account name
     | where OperationName == "PutBlob"
-    | where ObjectKey has "exfil-target"
+    | where ObjectKey has "exfil-target"       // replace with your container name — must match CONTAINER in scripts/vm/exfil_sim.sh
     | where TimeGenerated > ago(5m)
     | project TimeGenerated, CallerIpAddress, ObjectKey, ResponseBodySize
-  # StorageBlobLogs populated in seconds via diagnostic settings on stannatarexfil.
-  # CallerIpAddress = VM's public IP — passed to block_suspicious_ip.
-  # Requires: terraform apply -target=azurerm_monitor_diagnostic_setting.exfil_storage
+  # StorageBlobLogs: near-realtime via diagnostic settings (seconds).
+  # CallerIpAddress = VM private IP when uploading via MSI from within the VNet → Glorfindel chooses isolate_vm, not block_suspicious_ip.
+  # Requires diagnostic settings on the storage account sending StorageBlobLogs to the workspace.
   timeout: "300s"
 
 # No recovery for exfiltration — detection only

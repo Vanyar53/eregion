@@ -5,21 +5,22 @@ version: "1.0.0"
 
 target:
   type: azure_vm
-  resource_group: annatar
-  vm_name: vm-annatar-victim
+  resource_group: annatar             # replace with your resource group
+  vm_name: vm-annatar-victim          # replace with your VM name
 
 prerequisites:
+  # Adapt vm_name in the verify queries to match your target above.
   detection:
     - name: syslog_dcr
       table: Syslog
       why: detection query reads auth facility — requires a DCR collecting Syslog at Warning+ on the VM
-      verify: "Syslog | where Facility == 'auth' | where TimeGenerated > ago(1h) | where Computer == 'vm-annatar-victim' | limit 1"
+      verify: "Syslog | where Facility == 'auth' | where TimeGenerated > ago(1h) | where Computer == '<vm_name>' | limit 1"
       setup: "Create a DCR with Syslog data source (facility: auth, level: Warning) and associate it with the VM"
     - name: ama_heartbeat
       table: Heartbeat
       why: AMA must be installed for the DCR to collect and ship Syslog data
-      verify: "Heartbeat | where TimeGenerated > ago(5m) | where Computer == 'vm-annatar-victim' | limit 1"
-      setup: "az vm extension set -g annatar --vm-name vm-annatar-victim --publisher Microsoft.Azure.Monitor --name AzureMonitorLinuxAgent"
+      verify: "Heartbeat | where TimeGenerated > ago(5m) | where Computer == '<vm_name>' | limit 1"
+      setup: "az vm extension set -g <resource_group> --vm-name <vm_name> --publisher Microsoft.Azure.Monitor --name AzureMonitorLinuxAgent"
 
 setup:
   - name: prepare_test_volume

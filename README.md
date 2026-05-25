@@ -36,10 +36,39 @@ Everything is provisioned by Terraform — Log Analytics Workspace, VM, NSG, Bac
 
 ```bash
 cd infra/terraform/
+cp infra/terraform/terraform.tfvars.example infra/terraform/terraform.tfvars
+# edit terraform.tfvars — set your SSH public key and notification email
 terraform init
 terraform apply
-# → full test infrastructure in one command
+# → full test infrastructure in one command (~5 min)
 ```
+
+**What gets deployed** (all in one resource group, tagged `annatar-test: true`):
+
+| Resource | SKU | Purpose |
+|---|---|---|
+| Linux VM | Standard_D2as_v6 (2 vCPU, 8 GB) | Attack target |
+| Managed disk | Standard LRS 32 GB | Test data volume |
+| Log Analytics Workspace | PerGB2018 | Detection source |
+| Data Collection Rule | — | Perf + Syslog → LAW |
+| Recovery Services Vault | Standard LRS | VM backup for restore |
+| Storage account | Standard LRS | Exfiltration target (T1041) |
+| NSG | — | Isolation + IP block |
+| Public IP | Standard Static | SSH access |
+
+**Cost estimate (West Europe, pay-as-you-go)**
+
+| Item | Monthly cost |
+|---|---|
+| VM compute (~6h/day, auto-shutdown at 23:00 UTC) | ~$10–15 |
+| Disks + Public IP (always billed) | ~$7 |
+| Azure Backup (daily, 7-day retention) | ~$5–10 |
+| Log Analytics (<1 GB/month for test runs) | <$3 |
+| Storage account | <$1 |
+| **Total Azure** | **~$25–35/month** |
+| Claude API (~$0.05–0.10 per run) | <$2/month |
+
+> The VM auto-shuts down at 23:00 UTC daily. Start it before each run: `az vm start -g annatar -n vm-annatar-victim`. Compute is only billed when running.
 
 ### 2. Install Eregion
 

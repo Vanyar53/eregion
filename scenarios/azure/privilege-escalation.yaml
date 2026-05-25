@@ -10,7 +10,6 @@ target:
   type: azure_vm
   resource_group: annatar
   vm_name: vm-annatar-victim
-  log_analytics_workspace_id: "b451c51a-1cd0-4125-ac70-6aaf2c1dc209"
 
 prerequisites:
   detection:
@@ -38,6 +37,7 @@ steps:
 
 detection:
   source: azure_monitor
+  workspace_id: "b451c51a-1cd0-4125-ac70-6aaf2c1dc209"  # Log Analytics Workspace ID — replace with yours
   query: |
     Syslog
     | where Facility == "auth"

@@ -17,7 +17,6 @@ target:
   type: azure_vm
   resource_group: annatar            # Resource group of the test VM
   vm_name: vm-annatar-victim         # Name of the test VM
-  log_analytics_workspace_id: "b451c51a-1cd0-4125-ac70-6aaf2c1dc209"
 
 prerequisites:
   # Run these KQL queries in Log Analytics to verify before launching the scenario.
@@ -62,6 +61,7 @@ steps:
 #   time_max is your declared detection SLA, evaluated by Glorfindel.
 detection:
   source: azure_monitor          # DetectionConnector to use (azure_monitor, datadog, splunk…)
+  workspace_id: "b451c51a-1cd0-4125-ac70-6aaf2c1dc209"  # Log Analytics Workspace ID — replace with yours
   query: |
     Perf
     | where ObjectName == "Logical Disk" and CounterName == "Disk Write Bytes/sec"

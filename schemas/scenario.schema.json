@@ -17,8 +17,7 @@
       "properties": {
         "type": { "type": "string", "enum": ["azure_vm"] },
         "resource_group": { "type": "string" },
-        "vm_name": { "type": "string" },
-        "log_analytics_workspace_id": { "type": "string" }
+        "vm_name": { "type": "string" }
       }
     },
     "prerequisites": {
@@ -85,6 +84,7 @@
       "type": "object",
       "properties": {
         "source": { "type": "string" },
+        "workspace_id": { "type": "string" },
         "query": { "type": "string" },
         "timeout": { "type": "string", "pattern": "^\\d+(s|m|h)$" },
         "time_max": { "type": "string", "pattern": "^\\d+(s|m|h)$" }

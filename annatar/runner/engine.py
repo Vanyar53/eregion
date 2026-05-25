@@ -93,7 +93,7 @@ class Engine:
                         "detection_source": scenario.detection.get("source", "azure_monitor"),
                         "detection_timeout_s": self._parse_duration(scenario.detection.get("timeout", "300s")),
                         "detection_max_s": self._parse_duration(scenario.detection.get("time_max", "9999s")),
-                        "log_analytics_workspace_id": scenario.target.get("log_analytics_workspace_id"),
+                        "log_analytics_workspace_id": scenario.detection.get("workspace_id") or scenario.target.get("log_analytics_workspace_id"),
                     },
                 )
                 console.print("[cyan]->[/cyan] Signal 'attack_started' emitted — Glorfindel takes over detection.")

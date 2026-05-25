@@ -15,6 +15,9 @@ AZURE_ENV := \
 GLORFINDEL_STATE := \
 	-v $(HOME)/.glorfindel:/root/.glorfindel
 
+ANNATAR_STATE := \
+	-v $(HOME)/.annatar:/root/.annatar
+
 ANNATAR_VOLS := \
 	-v $(PWD)/scenarios:/app/scenarios \
 	-v $(PWD)/scripts:/app/scripts \
@@ -141,17 +144,21 @@ glorfindel-check-ttl: build
 # ── Shells ────────────────────────────────────────────────────────────────
 
 annatar-shell: build-annatar
-	docker run --rm -it $(AZURE_ENV) $(ANNATAR_VOLS) \
+	@mkdir -p $(HOME)/.annatar
+	docker run --rm -it $(AZURE_ENV) $(ANNATAR_VOLS) $(ANNATAR_STATE) \
 		-e 'PS1=🔴 annatar:\w\$$ ' \
+		-e 'HISTFILE=/root/.annatar/.bash_history' \
 		$(IMAGE_ANNATAR) bash --norc
 
 glorfindel-shell: build-glorfindel
+	@mkdir -p $(HOME)/.glorfindel
 	docker run --rm -it $(AZURE_ENV) $(GLORFINDEL_VOLS) $(GLORFINDEL_STATE) \
 		-e ANTHROPIC_API_KEY \
 		-e GLORFINDEL_WEBHOOK_URL \
 		-e GLORFINDEL_ISOLATION_TTL_H \
 		-e GLORFINDEL_INCIDENT_TTL_S \
 		-e 'PS1=🔵 glorfindel:\w\$$ ' \
+		-e 'HISTFILE=/root/.glorfindel/.bash_history' \
 		$(IMAGE_GLORFINDEL) bash --norc
 
 # ── Dev ───────────────────────────────────────────────────────────────────

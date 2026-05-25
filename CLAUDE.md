@@ -189,8 +189,8 @@ glorfindel --version                         # 0.2.0
 annatar run scenarios/azure/<scenario>.yaml  # --dry-run disponible
 
 # Simulation locale sans Azure
-python scripts/simulate_annatar.py
-python scripts/simulate_annatar.py --ids-gap
+make annatar-simulate
+make annatar-simulate-gap
 
 # Variables d'environnement
 ANTHROPIC_API_KEY=...

@@ -42,7 +42,7 @@ DOCKER_GLORFINDEL := docker run --rm $(AZURE_ENV) $(GLORFINDEL_VOLS) $(GLORFINDE
 	glorfindel-release glorfindel-revert glorfindel-list \
 	glorfindel-pending glorfindel-check-ttl \
 	annatar-shell glorfindel-shell \
-	venv install test test-unit lint simulate simulate-gap clean
+	venv install test test-unit lint annatar-simulate annatar-simulate-gap clean
 
 # ── Help ──────────────────────────────────────────────────────────────────
 
@@ -55,8 +55,8 @@ help:
 	@echo "  make install        Create .venv + install dev dependencies"
 	@echo "  make test           Run all tests (88, 0 Azure, 0 Claude API)"
 	@echo "  make lint           Ruff linter"
-	@echo "  make simulate       Simulate Annatar locally (no Azure)"
-	@echo "  make simulate-gap   Simulate detection_timeout flow"
+	@echo "  make annatar-simulate     Simulate Annatar locally (no Azure)"
+	@echo "  make annatar-simulate-gap Simulate detection_timeout flow"
 	@echo "  make clean          Remove build artifacts"
 	@echo ""
 	@echo "Build"
@@ -177,10 +177,10 @@ test-unit:
 lint:
 	.venv/bin/ruff check .
 
-simulate:
+annatar-simulate:
 	$(PYTHON) scripts/simulate_annatar.py
 
-simulate-gap:
+annatar-simulate-gap:
 	$(PYTHON) scripts/simulate_annatar.py --ids-gap
 
 clean:

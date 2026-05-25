@@ -139,7 +139,7 @@ glorfindel-check-ttl: build
 annatar-shell: build-annatar
 	docker run --rm -it $(AZURE_ENV) $(ANNATAR_VOLS) \
 		-e 'PS1=🔴 annatar:\w\$$ ' \
-		$(IMAGE_ANNATAR) bash
+		$(IMAGE_ANNATAR) bash --norc
 
 glorfindel-shell: build-glorfindel
 	docker run --rm -it $(AZURE_ENV) $(GLORFINDEL_VOLS) $(GLORFINDEL_STATE) \
@@ -148,7 +148,7 @@ glorfindel-shell: build-glorfindel
 		-e GLORFINDEL_ISOLATION_TTL_H \
 		-e GLORFINDEL_INCIDENT_TTL_S \
 		-e 'PS1=🔵 glorfindel:\w\$$ ' \
-		$(IMAGE_GLORFINDEL) bash
+		$(IMAGE_GLORFINDEL) bash --norc
 
 # ── Dev ───────────────────────────────────────────────────────────────────
 

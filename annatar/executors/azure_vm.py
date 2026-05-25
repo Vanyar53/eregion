@@ -43,7 +43,10 @@ class AzureVMExecutor:
             console.print("  [dim]VM started.[/dim]")
 
     def run_script(self, script_path: str, params: list[str] | None = None) -> str:
-        """Execute a shell script on the VM via Azure Run Command."""
+        """Execute a shell script on the VM via Azure Run Command.
+
+        Retries on Conflict (Run Command extension busy) with exponential backoff.
+        """
         self._ensure_vm_running()
 
         with open(script_path) as f:
@@ -51,20 +54,35 @@ class AzureVMExecutor:
 
         console.print(f"  [dim]RunCommand → {self.vm_name} : {script_path}[/dim]")
 
+        from azure.core.exceptions import HttpResponseError
         from azure.mgmt.compute.models import RunCommandInput, RunCommandInputParameter
-        poller = self._compute.virtual_machines.begin_run_command(
-            self.resource_group,
-            self.vm_name,
-            RunCommandInput(
-                command_id="RunShellScript",
-                script=[script_content],
-                parameters=[RunCommandInputParameter(name="arg", value=p) for p in (params or [])],
-            ),
+
+        cmd = RunCommandInput(
+            command_id="RunShellScript",
+            script=[script_content],
+            parameters=[RunCommandInputParameter(name="arg", value=p) for p in (params or [])],
         )
-        result = poller.result()
-        output = result.value[0].message if result.value else ""
-        console.print(f"  [dim]{output.strip()[-200:]}[/dim]")
-        return output
+
+        delays = [15, 30, 60]
+        for attempt, delay in enumerate(delays + [None], start=1):
+            try:
+                poller = self._compute.virtual_machines.begin_run_command(
+                    self.resource_group, self.vm_name, cmd,
+                )
+                result = poller.result()
+                output = result.value[0].message if result.value else ""
+                console.print(f"  [dim]{output.strip()[-200:]}[/dim]")
+                return output
+            except HttpResponseError as e:
+                if "Conflict" not in str(e) or delay is None:
+                    raise
+                console.print(
+                    f"  [yellow]RunCommand busy (attempt {attempt}/{len(delays)}) "
+                    f"— retrying in {delay}s...[/yellow]"
+                )
+                time.sleep(delay)
+
+        raise RuntimeError("RunCommand failed after all retries")
 
     def trigger_recovery(self, recovery_config: dict, attack_time: float | None = None) -> None:
         action = recovery_config.get("action")

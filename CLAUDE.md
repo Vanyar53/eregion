@@ -321,7 +321,7 @@ Prochaines priorités :
 23. ✅ `workspace_id` déplacé de `target:` vers `detection:` — séparation claire ressource attaquée / infra détection
 24. ✅ JSON Schema `schemas/scenario.schema.json` + `.vscode/settings.json` — validation IDE des scénarios YAML
 25. ✅ Annotations "replace with yours" sur toutes les valeurs hardcodées dans les scénarios
-26. Pytest : couverture T1548 (signal priv esc → isolate_vm)
+26. ✅ Pytest : couverture T1548 — `test_execute_action_isolate_vm_on_t1548_signal` + `test_graph_t1548_detection_isolates_vm` (86 tests total)
 27. `glorfindel check-ttl` : intégrer en cron (crontab ou systemd timer) pour auto-release après 4h
 28. AWS provider : `AwsConnector(CloudConnector)` — Security Groups pour isolate_vm, GuardDuty pour detection
 

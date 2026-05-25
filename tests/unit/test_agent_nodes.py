@@ -547,3 +547,52 @@ def test_graph_proposed_action_escalates(tmp_path, monkeypatch, dry_connector, t
     assert final["outcome"]["status"] == "escalated"
     assert final["outcome"]["escalation_type"] == "proposed_action"
     assert tmp_memory.count() == 1
+
+
+# ── T1548.003 — Sudo privilege escalation ─────────────────────────────────────
+
+_T1548_SYSLOG = (
+    "sudo[12011]:   svc-backup : TTY=pts/1 ; PWD=/tmp ;"
+    " USER=root ; COMMAND=/opt/scripts/backup.sh /dev/null"
+)
+
+
+def test_execute_action_isolate_vm_on_t1548_signal():
+    """T1548 detection has no external IP — isolate_vm called, block_suspicious_ip never."""
+    from glorfindel.agent import execute_action
+    connector = MagicMock()
+    connector.isolate_vm.return_value = {"status": "isolated"}
+    state = _state(action="isolate_vm")
+    state["signal"]["ttp"] = "T1548.003"
+    state["signal"]["raw_signal"] = {
+        "detection_time_s": 40,
+        "detected_data": {"SyslogMessage": _T1548_SYSLOG},
+    }
+
+    result = execute_action(state, connector=connector)
+
+    connector.isolate_vm.assert_called_once_with(_RESOURCE_ID)
+    connector.block_suspicious_ip.assert_not_called()
+    assert result["outcome"]["status"] == "isolated"
+
+
+def test_graph_t1548_detection_isolates_vm(tmp_path, monkeypatch, dry_connector, tmp_memory):
+    """Full graph: T1548 sudo escalation → isolate_vm, autonomous, verified, stored."""
+    monkeypatch.chdir(tmp_path)
+    graph = _build(tmp_path, tmp_memory, dry_connector)
+
+    with patch("anthropic.Anthropic") as mock_cls:
+        mock_cls.return_value.messages.create.return_value = _mock_llm_response("isolate_vm")
+        final = graph.invoke(_initial(
+            "detection",
+            ttp="T1548.003",
+            raw={
+                "detection_time_s": 40,
+                "detected_data": {"SyslogMessage": _T1548_SYSLOG},
+            },
+        ))
+
+    assert final["action"] == "isolate_vm"
+    assert final["outcome"]["status"] == "dry_run"
+    assert final["escalate"] is False
+    assert tmp_memory.count() == 1

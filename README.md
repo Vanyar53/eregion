@@ -210,10 +210,10 @@ glorfindel unblock <ip> <resource_id> --yes
 ```bash
 pip install eregion[dev]
 pytest
-# 84 tests — 0 Azure calls, 0 Claude API calls
+# 86 tests — 0 Azure calls, 0 Claude API calls
 ```
 
-Coverage: 6 LangGraph nodes, routing rules, signal schema, safety guard, YAML parser, ChromaDB memory, CLI escalation flow.
+Coverage: 6 LangGraph nodes, routing rules, signal schema, safety guard, YAML parser, ChromaDB memory, CLI escalation flow, T1548 privilege escalation detection.
 
 ## License
 

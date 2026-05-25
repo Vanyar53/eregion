@@ -115,6 +115,12 @@ annatar-validate:
 annatar-list:
 	docker run --rm -v $(PWD)/scenarios:/app/scenarios --entrypoint annatar $(IMAGE) list
 
+annatar-simulate:
+	$(PYTHON) scripts/simulate_annatar.py
+
+annatar-simulate-gap:
+	$(PYTHON) scripts/simulate_annatar.py --ids-gap
+
 # ── Glorfindel ────────────────────────────────────────────────────────────
 
 glorfindel-watch: build
@@ -176,12 +182,6 @@ test-unit:
 
 lint:
 	.venv/bin/ruff check .
-
-annatar-simulate:
-	$(PYTHON) scripts/simulate_annatar.py
-
-annatar-simulate-gap:
-	$(PYTHON) scripts/simulate_annatar.py --ids-gap
 
 clean:
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true

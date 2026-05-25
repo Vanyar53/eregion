@@ -74,7 +74,7 @@ T1041 validé en réel (2026-05-24, run 3) : detect 229s + isolate 10s (via Stor
 
 T1110.001 validé en réel (2026-05-24, run 4) : detect 60s + block_suspicious_ip 7s = RTO 67s (via Syslog DCR — Tor exit node 185.220.101.1 bloqué au NSG, isolate_vm non requis)
 
-T1548.003 validé en réel (2026-05-25, run 5) : detect 70s + isolate_vm (via Syslog DCR — sudo USER=root COMMAND= sans NOT in sudoers, compromission OS-level)
+T1548.003 validé en réel (2026-05-25, run 5) : detect 40s + isolate_vm 9s (via Syslog DCR — sudo USER=root COMMAND= sans NOT in sudoers, compromission OS-level, confiance 95%)
 
 ---
 

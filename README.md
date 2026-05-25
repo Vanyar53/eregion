@@ -22,7 +22,7 @@ Glorfindel uses a LangGraph graph + Claude API to reason about each signal and c
 | T1486 | Ransomware VM | Perf disk write anomaly | 50s | `isolate_vm` | 21m23s |
 | T1041 | Data exfiltration | StorageBlobLogs (PutBlob) | 229s | `isolate_vm` (internal IP) | — |
 | T1110.001 | SSH brute force | Syslog DCR (auth facility) | 60s | `block_suspicious_ip` (Tor IP) | — |
-| T1548.003 | Sudo privilege escalation | Syslog DCR (auth facility) | 70s | `isolate_vm` (OS-level compromise) | — |
+| T1548.003 | Sudo privilege escalation | Syslog DCR (auth facility) | 40s | `isolate_vm` (OS-level compromise) | — |
 
 Glorfindel chose the right action on all four without explicit per-TTP rules — it reasoned from signal context.
 

@@ -16,13 +16,13 @@ COMMON_VOLS := \
 	-v $(PWD)/scripts:/app/scripts \
 	-v $(PWD)/runs:/app/runs
 
-DOCKER_ANNATAR := docker run --rm $(AZURE_ENV) $(COMMON_VOLS) --entrypoint annatar $(IMAGE)
+DOCKER_ANNATAR := docker run --rm $(AZURE_ENV) $(COMMON_VOLS) $(IMAGE) annatar
 DOCKER_GLORFINDEL := docker run --rm $(AZURE_ENV) $(COMMON_VOLS) $(GLORFINDEL_STATE) \
 	-e ANTHROPIC_API_KEY \
 	-e GLORFINDEL_WEBHOOK_URL \
 	-e GLORFINDEL_ISOLATION_TTL_H \
 	-e GLORFINDEL_INCIDENT_TTL_S \
-	--entrypoint glorfindel $(IMAGE)
+	$(IMAGE) glorfindel
 
 .PHONY: help build \
 	annatar-run annatar-dry-run annatar-validate annatar-list \

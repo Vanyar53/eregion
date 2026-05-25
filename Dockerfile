@@ -10,4 +10,4 @@ COPY scripts/ scripts/
 
 RUN pip install --no-cache-dir -e .
 
-ENTRYPOINT ["annatar"]
+CMD ["annatar"]

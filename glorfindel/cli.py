@@ -447,59 +447,48 @@ def ack(escalation_id: str | None, all_pending: bool):
     console.print(f"[green]✓ Escalation {escalation_id} acknowledged.[/green]")
 
 
-@cli.command()
-def isolated():
-    """List all VMs currently isolated by Glorfindel."""
+@cli.command("list")
+def list_active():
+    """List all VMs with active Glorfindel actions (isolation, blocked IPs)."""
     from datetime import datetime, timezone
-    from glorfindel.actions import active_isolations
-
-    items = active_isolations()
-    if not items:
-        console.print("[green]No active isolations.[/green]")
-        return
+    from glorfindel.actions import active_blocks, active_isolations
 
     now = datetime.now(timezone.utc)
-    console.rule(f"[bold yellow]Glorfindel — {len(items)} active isolation(s)[/bold yellow]")
-    for iso in items:
-        resource_id = iso.get("resource_id", "")
-        vm_short = resource_id.split("/")[-1]
-        isolated_at_s = iso.get("isolated_at", "")
-        age = ""
-        if isolated_at_s:
-            age_m = int((now - datetime.fromisoformat(isolated_at_s)).total_seconds() // 60)
-            age = f" ({age_m}m ago)"
 
-        age_str = f"{isolated_at_s[:19].replace('T', ' ')} UTC{age}" if isolated_at_s else ""
-        console.print(f"  [bold]{vm_short}[/bold]  [dim]{age_str}[/dim]")
-        console.print(f"  [cyan]→[/cyan] glorfindel release {resource_id} --yes\n",
-                      soft_wrap=True)
+    def _age(ts: str) -> str:
+        if not ts:
+            return ""
+        age_m = int((now - datetime.fromisoformat(ts)).total_seconds() // 60)
+        return f"{ts[:19].replace('T', ' ')} UTC ({age_m}m ago)"
 
+    isolations = {i["resource_id"]: i for i in active_isolations()}
+    blocks: dict[str, list] = {}
+    for b in active_blocks():
+        blocks.setdefault(b["resource_id"], []).append(b)
 
-@cli.command()
-def blocked():
-    """List all IPs currently blocked by Glorfindel."""
-    from datetime import datetime, timezone
-    from glorfindel.actions import active_blocks
-
-    items = active_blocks()
-    if not items:
-        console.print("[green]No active IP blocks.[/green]")
+    all_ids = sorted(set(isolations) | set(blocks))
+    if not all_ids:
+        console.print("[green]No active actions — all VMs clean.[/green]")
         return
 
-    now = datetime.now(timezone.utc)
-    console.rule(f"[bold yellow]Glorfindel — {len(items)} active block(s)[/bold yellow]")
-    for block in items:
-        resource_id = block.get("resource_id", "")
+    console.rule(f"[bold yellow]Glorfindel — {len(all_ids)} VM(s) with active actions[/bold yellow]")
+    for resource_id in all_ids:
         vm_short = resource_id.split("/")[-1]
-        ip = block.get("ip", "?")
-        blocked_at_s = block.get("blocked_at", "")
-        age = ""
-        if blocked_at_s:
-            age_m = int((now - datetime.fromisoformat(blocked_at_s)).total_seconds() // 60)
-            age = f" ({age_m}m ago)"
-        age_str = f"{blocked_at_s[:19].replace('T', ' ')} UTC{age}" if blocked_at_s else ""
-        console.print(f"  [bold]{ip}[/bold]  on [cyan]{vm_short}[/cyan]  [dim]{age_str}[/dim]")
-        console.print(f"  [cyan]→[/cyan] glorfindel unblock {ip} {resource_id} --yes\n",
+        console.print(f"[bold]{vm_short}[/bold]")
+
+        if resource_id in isolations:
+            ts = isolations[resource_id].get("isolated_at", "")
+            console.print(f"  [red]ISOLATED[/red]  {_age(ts)}")
+            console.print(f"  [dim]→ glorfindel release {resource_id} --yes[/dim]",
+                          soft_wrap=True)
+
+        for b in blocks.get(resource_id, []):
+            ts = b.get("blocked_at", "")
+            console.print(f"  [yellow]BLOCKED[/yellow]   {b['ip']}  {_age(ts)}")
+            console.print(f"  [dim]→ glorfindel unblock {b['ip']} {resource_id} --yes[/dim]",
+                          soft_wrap=True)
+
+        console.print(f"  [dim]→ glorfindel revert {resource_id} --yes  (all at once)[/dim]\n",
                       soft_wrap=True)
 
 

@@ -107,8 +107,7 @@ glorfindel respond runs/<run_id>_signals.jsonl  # post-run processing
 glorfindel restore <resource_id> --yes          # trigger Azure Backup restore (--before auto-detected)
 glorfindel release <resource_id> --yes          # manually release an isolation
 glorfindel unblock <ip> <resource_id> --yes     # remove a block_suspicious_ip rule
-glorfindel isolated                             # list VMs currently isolated + exact release commands
-glorfindel blocked                              # list IPs currently blocked + exact unblock commands
+glorfindel list                                 # all VMs with active actions (isolation + blocked IPs)
 glorfindel revert <resource_id> --yes           # release isolation + unblock all IPs in one command
 glorfindel pending                              # list pending escalations
 glorfindel ack <escalation_id>                  # acknowledge an escalation

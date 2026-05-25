@@ -80,6 +80,37 @@ def release(resource_id: str, dry_run: bool, yes: bool):
 
 
 @cli.command()
+@click.argument("ip")
+@click.argument("resource_id")
+@click.option("--dry-run", is_flag=True)
+@click.option("--yes", is_flag=True, help="Skip confirmation prompt.")
+def unblock(ip: str, resource_id: str, dry_run: bool, yes: bool):
+    """Remove a block rule created by Glorfindel for a suspicious IP."""
+    from glorfindel.actions import AzureConnector
+
+    connector = AzureConnector(dry_run=dry_run)
+
+    console.rule("[bold yellow]Glorfindel — Unblock IP[/bold yellow]")
+    console.print(f"  IP       : {ip}")
+    console.print(f"  Resource : {resource_id}")
+    console.print(f"  Dry-run  : {dry_run}\n")
+
+    if not dry_run and not yes:
+        if not click.confirm(f"Remove block rules for {ip}?", default=False):
+            console.print("Aborted.")
+            return
+
+    result = connector.unblock_ip(ip, resource_id)
+
+    if dry_run:
+        console.print("[yellow]DRY RUN — no changes made.[/yellow]")
+    elif result["status"] == "not_found":
+        console.print(f"[yellow]No block rules found for {ip} — already removed?[/yellow]")
+    else:
+        console.print(f"[green]✓ Unblocked {ip}.[/green]  Deleted: {result['deleted_rules']}")
+
+
+@cli.command()
 @click.argument("runs_dir", type=click.Path(exists=True), default="runs")
 @click.option("--dry-run", is_flag=True)
 @click.option("--model", default="claude-sonnet-4-6", show_default=True)

@@ -78,6 +78,11 @@ class CloudConnector(ABC):
         """Confirm that the deny rule for this IP is active on the NSG."""
         ...
 
+    @abstractmethod
+    def unblock_ip(self, ip: str, resource_id: str) -> dict:
+        """Remove the deny rules created by block_suspicious_ip for this IP."""
+        ...
+
 
 class AzureConnector(CloudConnector):
     """Azure implementation of CloudConnector.
@@ -128,10 +133,16 @@ class AzureConnector(CloudConnector):
 
         # Shift any existing rules that conflict at ISOLATION_PRIORITY
         existing = list(self._network.security_rules.list(nsg_rg, nsg_name))
+        used_priorities = {r.priority for r in existing}
         bumped = []
         for r in existing:
             if r.priority == self.ISOLATION_PRIORITY and not r.name.startswith("glorfindel-"):
-                r.priority = self.ISOLATION_PRIORITY + 100
+                new_prio = next(
+                    p for p in range(self.ISOLATION_PRIORITY + 100, 4000, 100)
+                    if p not in used_priorities
+                )
+                used_priorities.add(new_prio)
+                r.priority = new_prio
                 self._network.security_rules.begin_create_or_update(nsg_rg, nsg_name, r.name, r).result()
                 bumped.append({"name": r.name, "original_priority": self.ISOLATION_PRIORITY})
 
@@ -417,6 +428,33 @@ class AzureConnector(CloudConnector):
             return {"verified": True, "method": "nsg_check", "rule": rule_name}
         except Exception as e:
             return {"verified": False, "method": "nsg_check", "error": str(e)}
+
+    def unblock_ip(self, ip: str, resource_id: str) -> dict:
+        if self.dry_run:
+            return {"status": "dry_run", "action": "unblock_ip", "ip": ip}
+        if not ip:
+            raise ValueError("unblock_ip: no IP address provided")
+
+        self._ensure_clients()
+        rg, vm_name = _parse_vm_resource_id(resource_id)
+        nic_id = self._get_primary_nic_id(rg, vm_name)
+        nsg_rg, nsg_name = self._get_nic_nsg(nic_id)
+
+        rule_name = f"glorfindel-block-{ip.replace('.', '-').replace('/', '-')}"
+        deleted = []
+        for name in (rule_name, f"{rule_name}-out"):
+            try:
+                self._network.security_rules.begin_delete(nsg_rg, nsg_name, name).result()
+                deleted.append(name)
+            except Exception:
+                pass
+
+        return {
+            "status": "unblocked" if deleted else "not_found",
+            "ip": ip,
+            "deleted_rules": deleted,
+            "nsg": f"{nsg_rg}/{nsg_name}",
+        }
 
     def _get_primary_nic_id(self, rg: str, vm_name: str) -> str:
         vm = self._compute.virtual_machines.get(rg, vm_name)

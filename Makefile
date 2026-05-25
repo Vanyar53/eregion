@@ -33,6 +33,7 @@ DOCKER_GLORFINDEL := docker run --rm $(AZURE_ENV) $(GLORFINDEL_VOLS) $(GLORFINDE
 	glorfindel-respond glorfindel-dry-run glorfindel-watch \
 	glorfindel-release glorfindel-revert glorfindel-list \
 	glorfindel-pending glorfindel-check-ttl \
+	annatar-shell glorfindel-shell \
 	test test-unit lint simulate simulate-gap clean
 
 # ── Help ──────────────────────────────────────────────────────────────────
@@ -69,6 +70,11 @@ help:
 	@echo "  make glorfindel-revert          RESOURCE_ID=... Release + unblock all"
 	@echo "  make glorfindel-release         RESOURCE_ID=... Release isolation only"
 	@echo "  make glorfindel-check-ttl       Release expired isolations (TTL)"
+	@echo "  make glorfindel-shell           Interactive shell in eregion-glorfindel"
+	@echo ""
+	@echo "Shells"
+	@echo "  make annatar-shell      🔴 Interactive shell in eregion-annatar"
+	@echo "  make glorfindel-shell   🔵 Interactive shell in eregion-glorfindel"
 	@echo ""
 	@echo "Variables"
 	@echo "  SCENARIO    Path to scenario YAML (default: $(SCENARIO))"
@@ -127,6 +133,22 @@ glorfindel-release: build
 
 glorfindel-check-ttl: build
 	$(DOCKER_GLORFINDEL) check-ttl
+
+# ── Shells ────────────────────────────────────────────────────────────────
+
+annatar-shell: build-annatar
+	docker run --rm -it $(AZURE_ENV) $(ANNATAR_VOLS) \
+		-e 'PS1=🔴 annatar:\w\$$ ' \
+		$(IMAGE_ANNATAR) bash
+
+glorfindel-shell: build-glorfindel
+	docker run --rm -it $(AZURE_ENV) $(GLORFINDEL_VOLS) $(GLORFINDEL_STATE) \
+		-e ANTHROPIC_API_KEY \
+		-e GLORFINDEL_WEBHOOK_URL \
+		-e GLORFINDEL_ISOLATION_TTL_H \
+		-e GLORFINDEL_INCIDENT_TTL_S \
+		-e 'PS1=🔵 glorfindel:\w\$$ ' \
+		$(IMAGE_GLORFINDEL) bash
 
 # ── Dev ───────────────────────────────────────────────────────────────────
 

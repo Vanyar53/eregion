@@ -111,7 +111,8 @@ glorfindel check-ttl                            # release isolations older than 
 glorfindel memory-stats                         # ChromaDB cycle count
 
 # Annatar
-annatar run scenarios/azure/ransomware-vm.yaml       # run a scenario (--dry-run available)
+annatar run scenarios/azure/ransomware-vm.yaml            # run a scenario (--dry-run available)
+annatar run scenarios/azure/data-exfiltration.yaml
 annatar run scenarios/azure/lateral-movement.yaml
 annatar run scenarios/azure/privilege-escalation.yaml
 
@@ -128,10 +129,10 @@ GLORFINDEL_ISOLATION_TTL_H=4        # auto-release timeout in hours (default: 4)
 glorfindel/
   agent.py        → LangGraph graph (6 nodes): load_context → poll_detection → decide
                     → execute_action → verify_action → store_cycle
-  actions.py      → CloudConnector ABC + AzureConnector
+  actions.py      → CloudConnector ABC + AzureConnector (isolate, release, block, unblock, snapshot, verify_*)
   detectors.py    → DetectionConnector ABC + AzureMonitorDetector (polls every 10s)
   memory.py       → CycleMemory: ChromaDB with confidence + past_cycles_used metadata
-  cli.py          → watch, respond, restore, release, pending, ack, check-ttl
+  cli.py          → watch, respond, restore, release, unblock, pending, ack, check-ttl
   escalations.py  → persistent escalation log (~/.glorfindel/escalations.jsonl)
 
 annatar/
@@ -139,9 +140,13 @@ annatar/
   signals/emitter.py  → normalized JSONL signal emitter
 
 scenarios/azure/
-  ransomware-vm.yaml       → T1486
-  data-exfiltration.yaml   → T1041
-  lateral-movement.yaml    → T1110.001
+  ransomware-vm.yaml          → T1486
+  data-exfiltration.yaml      → T1041
+  lateral-movement.yaml       → T1110.001
+  privilege-escalation.yaml   → T1548.003
+
+schemas/
+  scenario.schema.json → JSON Schema for IDE validation of scenario YAML files
 
 infra/terraform/           → full test infrastructure (VM, NSG, Log Analytics, Backup, DCR)
 ```
@@ -181,18 +186,24 @@ Adding AWS = one class. Agent logic, scenarios, and RAG memory don't change.
 
 ## Operational notes
 
-**Before each run**, verify no stale isolation is active:
+**Before each run**, verify no stale isolation or block rules are active:
 ```bash
-az network nsg rule list -g annatar --nsg-name nsg-annatar -o table
+az network nsg rule list -g <rg> --nsg-name <nsg> -o table
 # If glorfindel-isolation-* rules are present:
-echo y | glorfindel release <resource_id>
+glorfindel release <resource_id> --yes
+# If glorfindel-block-* rules are present (left over from a T1110 run):
+glorfindel unblock <ip> <resource_id> --yes
 ```
 
 **NSG isolation blocks Azure Monitor Agent** (outbound deny-all). If the VM stays isolated, the next run will hit `detection_timeout` instead of `detection`. Always release before running the next scenario.
 
-**Syslog detection latency**: ~60s nominal. Scenario timeout set to 300s for margin (DCR ingestion can vary).
+**Block IP rules persist** between runs. After a `block_suspicious_ip` action (T1110), the NSG rule stays until explicitly removed. Running `isolate_vm` on a VM with an existing block rule at priority 200 will conflict — always unblock between runs.
+
+**Syslog detection latency**: ~40-60s nominal. Scenario timeout set to 300s for margin (DCR ingestion can vary).
 
 **StorageBlobLogs**: near-realtime (seconds). `AzureNetworkAnalytics_CL` (Traffic Analytics) is unusable for detection — 10-60 min latency.
+
+**Each scenario declares its prerequisites** in a `prerequisites:` block with KQL verification queries. Run those queries in Log Analytics before launching — if any returns no rows, the detection will time out.
 
 ## Tests
 

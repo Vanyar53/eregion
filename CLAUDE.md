@@ -315,9 +315,19 @@ Prochaines priorités :
     - Action attendue : `isolate_vm` (compromission OS-level, pas d'IP externe à bloquer)
     - Severity : critical (racine de la chaîne post-compromise)
 19. ✅ Run réel T1548.003 en Azure — detect 40s + isolate_vm validé (2026-05-25)
-20. Pytest : couverture T1548 (signal priv esc → isolate_vm)
-21. `glorfindel check-ttl` : intégrer en cron (crontab ou systemd timer) pour auto-release après 4h
-22. AWS provider : `AwsConnector(CloudConnector)` — Security Groups pour isolate_vm, GuardDuty pour detection
+20. ✅ `glorfindel unblock <ip> <resource_id>` — symétrique de block_suspicious_ip, supprime règles NSG inbound+outbound
+21. ✅ Fix `isolate_vm` priority bump dynamique — évite conflit avec règles glorfindel-block-* existantes
+22. ✅ `prerequisites:` block dans tous les scénarios — KQL de vérification + instructions setup par scénario
+23. ✅ `workspace_id` déplacé de `target:` vers `detection:` — séparation claire ressource attaquée / infra détection
+24. ✅ JSON Schema `schemas/scenario.schema.json` + `.vscode/settings.json` — validation IDE des scénarios YAML
+25. ✅ Annotations "replace with yours" sur toutes les valeurs hardcodées dans les scénarios
+26. Pytest : couverture T1548 (signal priv esc → isolate_vm)
+27. `glorfindel check-ttl` : intégrer en cron (crontab ou systemd timer) pour auto-release après 4h
+28. AWS provider : `AwsConnector(CloudConnector)` — Security Groups pour isolate_vm, GuardDuty pour detection
+
+## Convention de session
+
+À chaque commit : mettre à jour README.md, CLAUDE.md et générer le résumé claude.ai.
 
 ---
 

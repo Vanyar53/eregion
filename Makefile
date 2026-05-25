@@ -1,3 +1,6 @@
+PYTHON := .venv/bin/python
+PIP    := .venv/bin/pip
+
 IMAGE_ANNATAR   := eregion-annatar
 IMAGE_GLORFINDEL := eregion-glorfindel
 SCENARIO ?= scenarios/azure/ransomware-vm.yaml
@@ -34,7 +37,7 @@ DOCKER_GLORFINDEL := docker run --rm $(AZURE_ENV) $(GLORFINDEL_VOLS) $(GLORFINDE
 	glorfindel-release glorfindel-revert glorfindel-list \
 	glorfindel-pending glorfindel-check-ttl \
 	annatar-shell glorfindel-shell \
-	test test-unit lint simulate simulate-gap clean
+	venv install test test-unit lint simulate simulate-gap clean
 
 # ── Help ──────────────────────────────────────────────────────────────────
 
@@ -43,7 +46,8 @@ help:
 	@echo "Eregion $(shell cat pyproject.toml | grep '^version' | cut -d'"' -f2)"
 	@echo ""
 	@echo "Dev (local, no Docker)"
-	@echo "  make install        Install with dev dependencies"
+	@echo "  make venv           Create .venv (python3 -m venv)"
+	@echo "  make install        Create .venv + install dev dependencies"
 	@echo "  make test           Run all tests (88, 0 Azure, 0 Claude API)"
 	@echo "  make lint           Ruff linter"
 	@echo "  make simulate       Simulate Annatar locally (no Azure)"
@@ -152,23 +156,26 @@ glorfindel-shell: build-glorfindel
 
 # ── Dev ───────────────────────────────────────────────────────────────────
 
-install:
-	pip install -e ".[dev]"
+venv:
+	python3 -m venv .venv
+
+install: venv
+	$(PIP) install -e ".[dev]"
 
 test:
-	python -m pytest tests/ -v
+	$(PYTHON) -m pytest tests/ -v
 
 test-unit:
-	python -m pytest tests/unit/ -v
+	$(PYTHON) -m pytest tests/unit/ -v
 
 lint:
-	ruff check .
+	.venv/bin/ruff check .
 
 simulate:
-	python scripts/simulate_annatar.py
+	$(PYTHON) scripts/simulate_annatar.py
 
 simulate-gap:
-	python scripts/simulate_annatar.py --ids-gap
+	$(PYTHON) scripts/simulate_annatar.py --ids-gap
 
 clean:
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true

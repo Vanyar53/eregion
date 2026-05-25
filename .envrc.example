@@ -30,6 +30,6 @@ export AZURE_SUBSCRIPTION_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 # Mode forensique — ne pas libérer automatiquement
 # export GLORFINDEL_KEEP_ISOLATED=1
 
-# ── direnv ────────────────────────────────────────────────────────────────────
-source "$(dirname "$0")/.venv/bin/activate"
+# ── Divers ────────────────────────────────────────────────────────────────────
+# Supprime les logs ONNX Runtime (ChromaDB)
 export ORT_LOGGING_LEVEL_DEFAULT=3

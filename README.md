@@ -110,7 +110,9 @@ glorfindel unblock <ip> <resource_id> --yes     # remove a block_suspicious_ip r
 glorfindel list                                 # all VMs with active actions (isolation + blocked IPs)
 glorfindel revert <resource_id> --yes           # release isolation + unblock all IPs in one command
 glorfindel pending                              # list pending escalations
+glorfindel pending --watch                      # stay running, print new escalations as they arrive
 glorfindel ack <escalation_id>                  # acknowledge an escalation
+glorfindel ack --all                            # acknowledge all pending escalations
 glorfindel check-ttl                            # release isolations older than TTL (default 4h)
 glorfindel memory-stats                         # ChromaDB cycle count
 

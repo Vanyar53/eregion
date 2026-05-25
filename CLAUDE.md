@@ -302,10 +302,13 @@ glorfindel restore ... --yes --keep-isolated
 
 Prochaines priorités :
 17. `verify_block_ip` : tester la vérification sur le run T1110.001 (déjà confirmée ✓ mais ajouter test unitaire)
-18. Scénario privilege escalation (T1068 ou T1548) — tester une action post-compromise interne
-19. Pytest : couverture unitaire des nodes LangGraph (decide, verify, store_cycle) avec signaux mockés
-20. `glorfindel check-ttl` : intégrer en cron (crontab ou systemd timer) pour auto-release après 4h
-21. Packaging OSS : pyproject.toml, README, CONTRIBUTING, licence Apache 2.0
+18. ✅ Scénario T1548.003 (sudo abuse) — `scenarios/azure/privilege-escalation.yaml` + `scripts/vm/privilege_escalation_sim.sh`
+    - Detection : Syslog auth, sudo USER=root COMMAND= sans NOT in sudoers (~60s)
+    - Action attendue : `isolate_vm` (compromission OS-level, pas d'IP externe à bloquer)
+    - Severity : critical (racine de la chaîne post-compromise)
+19. Run réel T1548.003 en Azure — valider detect + isolate_vm
+20. Pytest : couverture T1548 (signal priv esc → isolate_vm)
+21. `glorfindel check-ttl` : intégrer en cron (crontab ou systemd timer) pour auto-release après 4h
 22. AWS provider : `AwsConnector(CloudConnector)` — Security Groups pour isolate_vm, GuardDuty pour detection
 
 ---
@@ -363,6 +366,7 @@ decision = {
 | `attack_started` | — | poll_detection (node, pas une action LLM) | — |
 | `detection` (T1486/T1041 IP interne) | Attaque confirmée | `isolate_vm` | Non |
 | `detection` (T1110 IP externe) | Attaque périmètre | `block_suspicious_ip` | Non |
+| `detection` (T1548 escalade root) | Compromission OS | `isolate_vm` | Non |
 | `detection_timeout` | Gap IDS | `snapshot` (forensique non-disruptif) | Oui — expliquer le gap |
 | `recovery_complete` | VM propre après restore | `release_isolation` (idempotent) | Non |
 | `recovery_failed` | Restore échoué | Escalade | Oui |

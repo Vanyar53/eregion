@@ -3,12 +3,16 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 _TTP_SEVERITY: dict[str, str] = {
-    "T1486": "critical",   # Data Encrypted for Impact (ransomware)
-    "T1041": "high",       # Exfiltration Over C2 Channel
-    "T1537": "high",       # Transfer Data to Cloud Account
-    "T1055": "medium",     # Process Injection
-    "T1078": "high",       # Valid Accounts
-    "T1190": "critical",   # Exploit Public-Facing Application
+    "T1486": "critical",    # Data Encrypted for Impact (ransomware)
+    "T1041": "high",        # Exfiltration Over C2 Channel
+    "T1110": "high",        # Brute Force
+    "T1110.001": "high",    # Brute Force: Password Guessing
+    "T1548": "critical",    # Abuse Elevation Control Mechanism
+    "T1548.003": "critical", # Sudo and Sudo Caching
+    "T1537": "high",        # Transfer Data to Cloud Account
+    "T1055": "medium",      # Process Injection
+    "T1078": "high",        # Valid Accounts
+    "T1190": "critical",    # Exploit Public-Facing Application
 }
 
 

@@ -1,0 +1,46 @@
+name: azure-privilege-escalation
+description: >
+  Simulate T1548.003 — attacker with a foothold on the VM escalates to root via a
+  misconfigured sudoers wildcard entry. Validates that Glorfindel isolates the VM
+  on confirmed OS-level compromise.
+mitre: T1548.003
+version: "1.0.0"
+
+target:
+  type: azure_vm
+  resource_group: annatar
+  vm_name: vm-annatar-victim
+  log_analytics_workspace_id: "b451c51a-1cd0-4125-ac70-6aaf2c1dc209"
+
+setup:
+  - name: prepare_test_volume
+    action: run_script_on_vm
+    script: scripts/vm/setup_testdata.sh
+
+steps:
+  - name: simulate_privilege_escalation
+    action: run_script_on_vm
+    script: scripts/vm/privilege_escalation_sim.sh
+    record: T0
+
+detection:
+  source: azure_monitor
+  query: |
+    Syslog
+    | where Facility == "auth"
+    | where TimeGenerated > ago(5m)
+    | where SyslogMessage has "sudo"
+          and SyslogMessage has "USER=root"
+          and SyslogMessage has "COMMAND="
+    | where SyslogMessage !has "NOT in sudoers"
+          and SyslogMessage !has "authentication failure"
+    | project TimeGenerated, Computer, SyslogMessage
+    | limit 1
+  # Syslog DCR collects auth.warning — same pipeline as T1110.001 (~60s latency).
+  timeout: "300s"
+
+# No disk restore needed — no data files were modified, only syslog entries injected.
+# After isolation, the operator decides: forensic examination or restore_from_backup.
+recovery: null
+
+cleanup: []

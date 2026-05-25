@@ -104,6 +104,9 @@ Event-specific behavior — follow these rules before reasoning:
   * Brute force / credential attack from external IP (T1110): block_suspicious_ip —
     deny the attacker's IP at the NSG. Do NOT isolate_vm unless the VM is confirmed
     compromised. The SourceIP field in detected_data contains the attacker IP.
+  * Privilege escalation / confirmed root access (T1548): isolate_vm — the attacker has
+    OS-level control of the VM. There is no external IP to block (they are already inside).
+    Isolating the VM cuts their access and prevents lateral movement or further exfiltration.
 - event=detection_timeout: Azure Monitor did NOT fire during the attack — IDS gap confirmed.
   ALWAYS: action=snapshot (preserve forensic state, non-disruptive), escalate=true,
   escalation_reason must explain that the IDS missed the attack and name the TTP.

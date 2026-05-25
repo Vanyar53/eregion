@@ -403,13 +403,49 @@ def _render_escalation(e: dict) -> None:
     table.add_row("Run", e["run_id"])
     console.print(table)
 
-    if e["action"] == "restore_from_backup":
-        console.print(f"  [cyan]→[/cyan] glorfindel restore {e['resource_id']} --yes")
-    elif e["action"] == "release_isolation":
-        console.print(f"  [cyan]→[/cyan] glorfindel release {e['resource_id']} --yes")
-    else:
-        console.print(f"  [cyan]→[/cyan] [dim]Review and act manually on: {e['action']}[/dim]")
+    _render_next_steps(e)
     console.print(f"  [dim]glorfindel ack {e['id']}[/dim]\n")
+
+
+def _render_next_steps(e: dict) -> None:
+    rid = e["resource_id"]
+    action = e["action"]
+    esc_type = e["escalation_type"]
+
+    steps: list[str] = []
+
+    if esc_type == "low_confidence" and action == "snapshot":
+        steps = [
+            f"Check VM state: [dim]az vm show -g <rg> -n {rid.split('/')[-1]} --query 'powerState'[/dim]",
+            f"If compromise confirmed: [bold]glorfindel restore {rid} --yes[/bold]",
+            f"If false positive: [bold]glorfindel ack {e['id']}[/bold] (no action needed)",
+        ]
+    elif action == "restore_from_backup":
+        steps = [
+            f"Trigger restore: [bold]glorfindel restore {rid} --yes[/bold]",
+            "[dim]Glorfindel will release isolation automatically after restore (~20 min)[/dim]",
+        ]
+    elif action == "release_isolation":
+        steps = [
+            f"Release manually: [bold]glorfindel release {rid} --yes[/bold]",
+        ]
+    elif esc_type == "proposed_action":
+        steps = [
+            f"Review proposed action: [bold]{action}[/bold]",
+            "If approved: implement manually and acknowledge",
+            "If rejected: acknowledge and document why",
+        ]
+    elif esc_type == "destructive_action":
+        steps = [
+            f"Review then execute: [bold]glorfindel {action.replace('_', '-')} {rid} --yes[/bold]",
+            "This action requires explicit human approval — do not skip review",
+        ]
+    else:
+        steps = [f"Review and act manually on: [bold]{action}[/bold]"]
+
+    console.print("  [bold cyan]Next steps:[/bold cyan]")
+    for i, step in enumerate(steps, 1):
+        console.print(f"  [cyan]{i}.[/cyan] {step}")
 
 
 @cli.command()

@@ -1,4 +1,5 @@
-IMAGE    := eregion
+IMAGE_ANNATAR   := eregion-annatar
+IMAGE_GLORFINDEL := eregion-glorfindel
 SCENARIO ?= scenarios/azure/ransomware-vm.yaml
 SIGNALS  ?= $(shell ls runs/*_signals.jsonl 2>/dev/null | tail -1)
 
@@ -11,20 +12,23 @@ AZURE_ENV := \
 GLORFINDEL_STATE := \
 	-v $(HOME)/.glorfindel:/root/.glorfindel
 
-COMMON_VOLS := \
+ANNATAR_VOLS := \
 	-v $(PWD)/scenarios:/app/scenarios \
 	-v $(PWD)/scripts:/app/scripts \
 	-v $(PWD)/runs:/app/runs
 
-DOCKER_ANNATAR := docker run --rm $(AZURE_ENV) $(COMMON_VOLS) $(IMAGE) annatar
-DOCKER_GLORFINDEL := docker run --rm $(AZURE_ENV) $(COMMON_VOLS) $(GLORFINDEL_STATE) \
+GLORFINDEL_VOLS := \
+	-v $(PWD)/runs:/app/runs
+
+DOCKER_ANNATAR := docker run --rm $(AZURE_ENV) $(ANNATAR_VOLS) $(IMAGE_ANNATAR)
+DOCKER_GLORFINDEL := docker run --rm $(AZURE_ENV) $(GLORFINDEL_VOLS) $(GLORFINDEL_STATE) \
 	-e ANTHROPIC_API_KEY \
 	-e GLORFINDEL_WEBHOOK_URL \
 	-e GLORFINDEL_ISOLATION_TTL_H \
 	-e GLORFINDEL_INCIDENT_TTL_S \
-	$(IMAGE) glorfindel
+	$(IMAGE_GLORFINDEL)
 
-.PHONY: help build \
+.PHONY: help build build-annatar build-glorfindel \
 	annatar-run annatar-dry-run annatar-validate annatar-list \
 	glorfindel-respond glorfindel-dry-run glorfindel-watch \
 	glorfindel-release glorfindel-revert glorfindel-list \
@@ -46,7 +50,9 @@ help:
 	@echo "  make clean          Remove build artifacts"
 	@echo ""
 	@echo "Build"
-	@echo "  make build          Build Docker image"
+	@echo "  make build          Build both Docker images"
+	@echo "  make build-annatar  Build eregion-annatar image only"
+	@echo "  make build-glorfindel Build eregion-glorfindel image only"
 	@echo ""
 	@echo "Annatar (Docker)"
 	@echo "  make annatar-run    SCENARIO=... Run scenario (--yes)"
@@ -72,8 +78,13 @@ help:
 
 # ── Build ─────────────────────────────────────────────────────────────────
 
-build:
-	docker build -t $(IMAGE) .
+build: build-annatar build-glorfindel
+
+build-annatar:
+	docker build -f annatar/Dockerfile -t $(IMAGE_ANNATAR) .
+
+build-glorfindel:
+	docker build -f glorfindel/Dockerfile -t $(IMAGE_GLORFINDEL) .
 
 # ── Annatar ───────────────────────────────────────────────────────────────
 

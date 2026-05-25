@@ -1,0 +1,35 @@
+# Eregion — variables d'environnement
+# Copier ce fichier en .envrc et remplir les valeurs
+# cp .envrc.example .envrc
+
+# ── Anthropic ─────────────────────────────────────────────────────────────────
+# Créer une clé sur https://console.anthropic.com/settings/keys
+export ANTHROPIC_API_KEY=sk-ant-...
+
+# ── Azure — Service Principal ──────────────────────────────────────────────────
+# Créer avec : az ad sp create-for-rbac --name "eregion" --role Contributor \
+#              --scopes /subscriptions/<SUBSCRIPTION_ID>
+# Retourne : appId (CLIENT_ID), password (CLIENT_SECRET), tenant (TENANT_ID)
+export AZURE_CLIENT_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+export AZURE_CLIENT_SECRET=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+export AZURE_TENANT_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+
+# az account show --query id -o tsv
+export AZURE_SUBSCRIPTION_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+
+# ── Glorfindel — optionnel ────────────────────────────────────────────────────
+# Slack/Teams webhook pour les escalades
+# export GLORFINDEL_WEBHOOK_URL=https://hooks.slack.com/services/...
+
+# TTL isolation (défaut 4h) — mettre 0 pour désactiver
+# export GLORFINDEL_ISOLATION_TTL_H=4
+
+# Fenêtre incident multi-signal (défaut 300s)
+# export GLORFINDEL_INCIDENT_TTL_S=300
+
+# Mode forensique — ne pas libérer automatiquement
+# export GLORFINDEL_KEEP_ISOLATED=1
+
+# ── direnv ────────────────────────────────────────────────────────────────────
+source "$(dirname "$0")/.venv/bin/activate"
+export ORT_LOGGING_LEVEL_DEFAULT=3

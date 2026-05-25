@@ -414,6 +414,34 @@ def ack(escalation_id: str | None, all_pending: bool):
 
 
 @cli.command()
+def isolated():
+    """List all VMs currently isolated by Glorfindel."""
+    from datetime import datetime, timezone
+    from glorfindel.actions import active_isolations
+
+    items = active_isolations()
+    if not items:
+        console.print("[green]No active isolations.[/green]")
+        return
+
+    now = datetime.now(timezone.utc)
+    console.rule(f"[bold yellow]Glorfindel — {len(items)} active isolation(s)[/bold yellow]")
+    for iso in items:
+        resource_id = iso.get("resource_id", "")
+        vm_short = resource_id.split("/")[-1]
+        isolated_at_s = iso.get("isolated_at", "")
+        age = ""
+        if isolated_at_s:
+            age_m = int((now - datetime.fromisoformat(isolated_at_s)).total_seconds() // 60)
+            age = f" ({age_m}m ago)"
+
+        age_str = f"{isolated_at_s[:19].replace('T', ' ')} UTC{age}" if isolated_at_s else ""
+        console.print(f"  [bold]{vm_short}[/bold]  [dim]{age_str}[/dim]")
+        console.print(f"  [cyan]→[/cyan] glorfindel release {resource_id} --yes\n",
+                      soft_wrap=True)
+
+
+@cli.command()
 @click.option("--memory-path", default=None)
 def memory_stats(memory_path: str | None):
     """Show how many cycles are stored in memory."""

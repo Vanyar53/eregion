@@ -13,7 +13,8 @@ AZURE_ENV := \
 	-e AZURE_SUBSCRIPTION_ID
 
 GLORFINDEL_STATE := \
-	-v $(HOME)/.glorfindel:/root/.glorfindel
+	-v $(HOME)/.glorfindel:/root/.glorfindel \
+	-v $(HOME)/.cache/chroma:/root/.cache/chroma
 
 ANNATAR_STATE := \
 	-v $(HOME)/.annatar:/root/.annatar
@@ -32,6 +33,7 @@ DOCKER_GLORFINDEL := docker run --rm $(AZURE_ENV) $(GLORFINDEL_VOLS) $(GLORFINDE
 	-e GLORFINDEL_WEBHOOK_URL \
 	-e GLORFINDEL_ISOLATION_TTL_H \
 	-e GLORFINDEL_INCIDENT_TTL_S \
+	-e ORT_LOGGING_LEVEL_DEFAULT=3 \
 	$(IMAGE_GLORFINDEL)
 
 .PHONY: help build build-annatar build-glorfindel \
@@ -157,6 +159,7 @@ glorfindel-shell: build-glorfindel
 		-e GLORFINDEL_WEBHOOK_URL \
 		-e GLORFINDEL_ISOLATION_TTL_H \
 		-e GLORFINDEL_INCIDENT_TTL_S \
+		-e ORT_LOGGING_LEVEL_DEFAULT=3 \
 		-e 'PS1=🔵 glorfindel:\w\$$ ' \
 		-e 'HISTFILE=/root/.glorfindel/.bash_history' \
 		$(IMAGE_GLORFINDEL) bash --norc

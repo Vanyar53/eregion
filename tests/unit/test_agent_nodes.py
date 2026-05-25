@@ -38,6 +38,7 @@ def _state(**overrides) -> dict:
             "context": {"run_id": "run001"},
         },
         "past_cycles": [],
+        "incident": None,
         "reasoning": "",
         "confidence": 0.0,
         "action": "",
@@ -78,6 +79,12 @@ def dry_connector():
 @pytest.fixture()
 def tmp_memory(tmp_path):
     return CycleMemory(path=tmp_path / "cycles")
+
+
+@pytest.fixture()
+def tmp_incidents(tmp_path):
+    from glorfindel.incidents import IncidentRegistry
+    return IncidentRegistry(path=tmp_path / "incidents.jsonl")
 
 
 # ── poll_detection ─────────────────────────────────────────────────────────────
@@ -156,7 +163,7 @@ def test_poll_detection_unknown_source_falls_back_to_timeout():
 
 # ── load_context ──────────────────────────────────────────────────────────────
 
-def test_load_context_retrieves_past_cycles(tmp_path):
+def test_load_context_retrieves_past_cycles(tmp_path, tmp_incidents):
     from glorfindel.agent import load_context
     mem = CycleMemory(path=tmp_path / "cycles")
     mem.store({
@@ -170,56 +177,56 @@ def test_load_context_retrieves_past_cycles(tmp_path):
         "outcome": "isolated",
     })
 
-    result = load_context(_state(), memory=mem)
+    result = load_context(_state(), memory=mem, incidents=tmp_incidents)
 
     assert len(result["past_cycles"]) == 1
     assert result["past_cycles"][0]["action"] == "isolate_vm"
 
 
-def test_load_context_empty_memory_returns_empty_list(tmp_path):
+def test_load_context_empty_memory_returns_empty_list(tmp_path, tmp_incidents):
     from glorfindel.agent import load_context
     mem = CycleMemory(path=tmp_path / "cycles")
-    result = load_context(_state(), memory=mem)
+    result = load_context(_state(), memory=mem, incidents=tmp_incidents)
     assert result["past_cycles"] == []
 
 
-def test_load_context_does_not_mutate_other_state_fields(tmp_path):
+def test_load_context_does_not_mutate_other_state_fields(tmp_path, tmp_incidents):
     from glorfindel.agent import load_context
     mem = CycleMemory(path=tmp_path / "cycles")
     state = _state()
     state["reasoning"] = "preserved"
-    result = load_context(state, memory=mem)
+    result = load_context(state, memory=mem, incidents=tmp_incidents)
     assert result["reasoning"] == "preserved"
 
 
 # ── execute_action ────────────────────────────────────────────────────────────
 
-def test_execute_action_isolate_vm():
+def test_execute_action_isolate_vm(tmp_incidents):
     from glorfindel.agent import execute_action
     connector = MagicMock()
     connector.isolate_vm.return_value = {"status": "isolated"}
     state = _state(action="isolate_vm")
 
-    result = execute_action(state, connector=connector)
+    result = execute_action(state, connector=connector, incidents=tmp_incidents)
 
     connector.isolate_vm.assert_called_once_with(_RESOURCE_ID)
     assert result["outcome"]["status"] == "isolated"
     assert result["outcome"]["executed"] is True
 
 
-def test_execute_action_release_isolation():
+def test_execute_action_release_isolation(tmp_incidents):
     from glorfindel.agent import execute_action
     connector = MagicMock()
     connector.release_isolation.return_value = {"status": "released"}
     state = _state(action="release_isolation")
 
-    result = execute_action(state, connector=connector)
+    result = execute_action(state, connector=connector, incidents=tmp_incidents)
 
     connector.release_isolation.assert_called_once_with(_RESOURCE_ID)
     assert result["outcome"]["status"] == "released"
 
 
-def test_execute_action_block_ip_uses_source_ip_first():
+def test_execute_action_block_ip_uses_source_ip_first(tmp_incidents):
     """SourceIP (brute force) takes priority over DestIP_s (exfil)."""
     from glorfindel.agent import execute_action
     connector = MagicMock()
@@ -229,12 +236,12 @@ def test_execute_action_block_ip_uses_source_ip_first():
         "detected_data": {"SourceIP": "185.220.101.1", "DestIP_s": "10.0.0.5"},
     }
 
-    execute_action(state, connector=connector)
+    execute_action(state, connector=connector, incidents=tmp_incidents)
 
     connector.block_suspicious_ip.assert_called_once_with("185.220.101.1", _RESOURCE_ID)
 
 
-def test_execute_action_block_ip_falls_back_to_dest_ip():
+def test_execute_action_block_ip_falls_back_to_dest_ip(tmp_incidents):
     """Falls back to DestIP_s when SourceIP is absent."""
     from glorfindel.agent import execute_action
     connector = MagicMock()
@@ -244,29 +251,29 @@ def test_execute_action_block_ip_falls_back_to_dest_ip():
         "detected_data": {"DestIP_s": "203.0.113.5"},
     }
 
-    execute_action(state, connector=connector)
+    execute_action(state, connector=connector, incidents=tmp_incidents)
 
     connector.block_suspicious_ip.assert_called_once_with("203.0.113.5", _RESOURCE_ID)
 
 
-def test_execute_action_snapshot_returns_snapshot_id():
+def test_execute_action_snapshot_returns_snapshot_id(tmp_incidents):
     from glorfindel.agent import execute_action
     connector = MagicMock()
     connector.snapshot.return_value = "snap-20260524-001"
     state = _state(action="snapshot")
 
-    result = execute_action(state, connector=connector)
+    result = execute_action(state, connector=connector, incidents=tmp_incidents)
 
     connector.snapshot.assert_called_once_with(_RESOURCE_ID)
     assert result["outcome"]["snapshot_id"] == "snap-20260524-001"
 
 
-def test_execute_action_unknown_is_noop():
+def test_execute_action_unknown_is_noop(tmp_incidents):
     from glorfindel.agent import execute_action
     connector = MagicMock()
     state = _state(action="proposed_custom_action")
 
-    result = execute_action(state, connector=connector)
+    result = execute_action(state, connector=connector, incidents=tmp_incidents)
 
     connector.isolate_vm.assert_not_called()
     connector.block_suspicious_ip.assert_not_called()
@@ -274,11 +281,11 @@ def test_execute_action_unknown_is_noop():
     assert result["outcome"]["action"] == "proposed_custom_action"
 
 
-def test_execute_action_records_action_s():
+def test_execute_action_records_action_s(tmp_incidents):
     from glorfindel.agent import execute_action
     connector = MagicMock()
     connector.isolate_vm.return_value = {"status": "isolated"}
-    result = execute_action(_state(action="isolate_vm"), connector=connector)
+    result = execute_action(_state(action="isolate_vm"), connector=connector, incidents=tmp_incidents)
     assert "action_s" in result["outcome"]
     assert isinstance(result["outcome"]["action_s"], int)
 
@@ -557,7 +564,7 @@ _T1548_SYSLOG = (
 )
 
 
-def test_execute_action_isolate_vm_on_t1548_signal():
+def test_execute_action_isolate_vm_on_t1548_signal(tmp_incidents):
     """T1548 detection has no external IP — isolate_vm called, block_suspicious_ip never."""
     from glorfindel.agent import execute_action
     connector = MagicMock()
@@ -569,7 +576,7 @@ def test_execute_action_isolate_vm_on_t1548_signal():
         "detected_data": {"SyslogMessage": _T1548_SYSLOG},
     }
 
-    result = execute_action(state, connector=connector)
+    result = execute_action(state, connector=connector, incidents=tmp_incidents)
 
     connector.isolate_vm.assert_called_once_with(_RESOURCE_ID)
     connector.block_suspicious_ip.assert_not_called()

@@ -15,6 +15,8 @@ Annatar attacks → JSONL signals → Glorfindel decides → action → verified
 
 Glorfindel uses a LangGraph graph + Claude API to reason about each signal and choose the minimum effective response. Actions are verified via Azure API. Every cycle is stored in ChromaDB for cross-scenario learning — no fine-tuning required.
 
+Signals from different resources are processed in parallel; signals from the same resource are serialized with shared incident context so Glorfindel never re-isolates a VM it already contained.
+
 ## Validated TTPs (Azure, real runs)
 
 | TTP | Scenario | Detection source | Detection time | Action | RTO |
@@ -121,6 +123,7 @@ ANTHROPIC_API_KEY=...
 GLORFINDEL_WEBHOOK_URL=...          # Slack/Teams notifications on escalation
 GLORFINDEL_KEEP_ISOLATED=1          # forensic mode — VM stays isolated after restore
 GLORFINDEL_ISOLATION_TTL_H=4        # auto-release timeout in hours (default: 4)
+GLORFINDEL_INCIDENT_TTL_S=300       # incident grouping window in seconds (default: 300)
 ```
 
 ## Architecture
@@ -131,8 +134,9 @@ glorfindel/
                     → execute_action → verify_action → store_cycle
   actions.py      → CloudConnector ABC + AzureConnector (isolate, release, block, unblock, snapshot, verify_*)
   detectors.py    → DetectionConnector ABC + AzureMonitorDetector (polls every 10s)
+  incidents.py    → IncidentRegistry: groups signals by resource_id within a TTL window (~/.glorfindel/incidents.jsonl)
   memory.py       → CycleMemory: ChromaDB with confidence + past_cycles_used metadata
-  cli.py          → watch, respond, restore, release, unblock, pending, ack, check-ttl
+  cli.py          → watch (threaded, per-resource queues), respond, restore, release, unblock, pending, ack, check-ttl
   escalations.py  → persistent escalation log (~/.glorfindel/escalations.jsonl)
 
 annatar/

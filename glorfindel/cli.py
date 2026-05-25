@@ -122,7 +122,13 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
     Start this before (or during) an Annatar run to get real-time responses.
     Existing signal files are tracked from their current end — only new signals
     are processed.
+
+    Signals from different resource_ids are processed in parallel.
+    Signals from the same resource_id are serialized (queue per resource).
     """
+    import queue as _queue
+    import threading as _threading
+
     from annatar.signals.schema import Signal
     from glorfindel.agent import GlorfindelAgent
 
@@ -130,6 +136,55 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
 
     # path → byte offset of last read position
     tracked: dict[Path, int] = {}
+
+    # per-resource dispatch: resource_id → Queue
+    _resource_queues: dict[str, _queue.Queue] = {}
+    _output_lock = _threading.Lock()
+
+    def _dispatch(data: dict, sig: Signal) -> None:
+        """Route signal to its resource worker queue, starting the thread if needed."""
+        resource_id = data.get("resource_id", "unknown")
+
+        if resource_id not in _resource_queues:
+            q: _queue.Queue = _queue.Queue()
+            _resource_queues[resource_id] = q
+
+            def _worker(q=q):
+                while True:
+                    item = q.get()
+                    if item is None:
+                        break
+                    _data, _sig = item
+                    try:
+                        with _output_lock:
+                            console.rule(f"[bold cyan]Signal — {_sig.signal_id}[/bold cyan]")
+                            console.print(
+                                f"  TTP      : {_sig.ttp}  |  "
+                                f"Severity: [red]{_sig.severity}[/red]"
+                            )
+                            console.print(
+                                f"  Event    : {_sig.event}  |  "
+                                f"Resource: {_sig.resource_type}\n"
+                            )
+                        state = agent.respond(_data)
+                        with _output_lock:
+                            _render_decision(state, dry_run)
+                            console.print()
+                    except Exception as e:
+                        with _output_lock:
+                            console.print(
+                                f"[red]Error processing {_sig.signal_id}:[/red] {e}"
+                            )
+                    finally:
+                        q.task_done()
+
+            vm_short = resource_id.split("/")[-1]
+            t = _threading.Thread(
+                target=_worker, daemon=True, name=f"glorf-{vm_short}"
+            )
+            t.start()
+
+        _resource_queues[resource_id].put((data, sig))
 
     # Files that existed at startup — skip their past content
     existing_at_start = {p for p in Path(runs_dir).glob("*_signals.jsonl")}
@@ -152,12 +207,7 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
                         continue
                     data = json.loads(raw)
                     sig = Signal(**data)
-                    console.rule(f"[bold cyan]Signal — {sig.signal_id}[/bold cyan]")
-                    console.print(f"  TTP      : {sig.ttp}  |  Severity: [red]{sig.severity}[/red]")
-                    console.print(f"  Event    : {sig.event}  |  Resource: {sig.resource_type}\n")
-                    state = agent.respond(data)
-                    _render_decision(state, dry_run)
-                    console.print()
+                    _dispatch(data, sig)   # non-blocking — worker thread takes over
                 tracked[path] = f.tell()
 
     import os

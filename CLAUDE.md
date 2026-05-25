@@ -166,9 +166,10 @@ eregion/
 │   ├── signals.py       # load_signals(), load_latest_signals()
 │   ├── actions.py       # CloudConnector ABC, AzureConnector, AUTONOMOUS_ACTIONS
 │   ├── detectors.py     # DetectionConnector ABC, AzureMonitorDetector, detector_for()
+│   ├── incidents.py     # IncidentRegistry : regroupe signaux par resource_id + TTL (~/.glorfindel/incidents.jsonl)
 │   ├── escalations.py   # record/resolve/pending — ~/.glorfindel/escalations.jsonl
 │   ├── memory.py        # CycleMemory (ChromaDB)
-│   └── cli.py           # respond, watch, restore, release, pending, ack, memory-stats
+│   └── cli.py           # respond, watch (threaded), restore, release, pending, ack, memory-stats
 ├── scripts/
 │   └── simulate_annatar.py  # simulation locale sans Azure
 ├── runs/                # Rapports JSON + signaux JSONL (gitignored)
@@ -322,8 +323,11 @@ Prochaines priorités :
 24. ✅ JSON Schema `schemas/scenario.schema.json` + `.vscode/settings.json` — validation IDE des scénarios YAML
 25. ✅ Annotations "replace with yours" sur toutes les valeurs hardcodées dans les scénarios
 26. ✅ Pytest : couverture T1548 — `test_execute_action_isolate_vm_on_t1548_signal` + `test_graph_t1548_detection_isolates_vm` (86 tests total)
-27. `glorfindel check-ttl` : intégrer en cron (crontab ou systemd timer) pour auto-release après 4h
-28. AWS provider : `AwsConnector(CloudConnector)` — Security Groups pour isolate_vm, GuardDuty pour detection
+27. ✅ `IncidentRegistry` — `glorfindel/incidents.py`, persist `~/.glorfindel/incidents.jsonl`, TTL via `GLORFINDEL_INCIDENT_TTL_S` (défaut 300s)
+28. ✅ `watch` threaded — une queue + thread par `resource_id`, signaux de resources différentes en `//`, même resource sérialisé, `_output_lock` pour console thread-safe
+29. ✅ Incident context dans le prompt LLM — `load_context` ouvre/met à jour l'incident, `_build_user_message` injecte actions déjà prises, `execute_action` enregistre chaque action
+30. `glorfindel check-ttl` : intégrer en cron (crontab ou systemd timer) pour auto-release après 4h
+31. AWS provider : `AwsConnector(CloudConnector)` — Security Groups pour isolate_vm, GuardDuty pour detection
 
 ## Convention de session
 

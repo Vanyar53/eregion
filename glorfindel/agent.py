@@ -8,6 +8,7 @@ from langgraph.graph import StateGraph, END
 from rich.console import Console
 
 from glorfindel.actions import AUTONOMOUS_ACTIONS, HUMAN_APPROVAL_REQUIRED, CloudConnector
+from glorfindel.incidents import IncidentRegistry
 from glorfindel.memory import CycleMemory
 
 _console = Console()
@@ -18,6 +19,7 @@ _console = Console()
 class GlorfindelState(TypedDict):
     signal: dict
     past_cycles: list[dict]
+    incident: dict | None    # current incident context for this resource
     reasoning: str
     confidence: float
     action: str
@@ -131,10 +133,22 @@ You always call the security_decision tool — never respond in plain text.
 
 # ── Nodes ─────────────────────────────────────────────────────────────────────
 
-def load_context(state: GlorfindelState, *, memory: CycleMemory) -> GlorfindelState:
-    """Retrieve past similar cycles from vector store."""
+def load_context(
+    state: GlorfindelState,
+    *,
+    memory: CycleMemory,
+    incidents: IncidentRegistry,
+) -> GlorfindelState:
+    """Retrieve past cycles from vector store and open/update the incident record."""
+    from dataclasses import asdict
+
     past = memory.retrieve_similar(state["signal"], n=3)
-    return {**state, "past_cycles": past}
+    signal = state["signal"]
+    inc = incidents.get_or_create(
+        resource_id=signal.get("resource_id", ""),
+        ttp=signal.get("ttp", ""),
+    )
+    return {**state, "past_cycles": past, "incident": asdict(inc)}
 
 
 def poll_detection(state: GlorfindelState) -> GlorfindelState:
@@ -188,7 +202,7 @@ def decide(state: GlorfindelState, *, model: str) -> GlorfindelState:
     signal = state["signal"]
     past = state["past_cycles"]
 
-    user_content = _build_user_message(signal, past)
+    user_content = _build_user_message(signal, past, state.get("incident"))
 
     response = client.messages.create(
         model=model,
@@ -217,7 +231,12 @@ def decide(state: GlorfindelState, *, model: str) -> GlorfindelState:
     }
 
 
-def execute_action(state: GlorfindelState, *, connector: CloudConnector) -> GlorfindelState:
+def execute_action(
+    state: GlorfindelState,
+    *,
+    connector: CloudConnector,
+    incidents: IncidentRegistry,
+) -> GlorfindelState:
     """Execute the autonomous action via the cloud connector."""
     import time
     resource_id = state["signal"].get("resource_id", "unknown")
@@ -246,6 +265,14 @@ def execute_action(state: GlorfindelState, *, connector: CloudConnector) -> Glor
     else:
         outcome = {"status": "no_op", "action": action}
     action_s = round(time.time() - t_start)
+
+    incident = state.get("incident")
+    if incident:
+        incidents.record_action(
+            incident["incident_id"],
+            action,
+            outcome.get("status", "unknown"),
+        )
 
     return {**state, "outcome": {**outcome, "executed": True, "action_s": action_s}}
 
@@ -407,13 +434,21 @@ def _route_after_decide(state: GlorfindelState) -> str:
 
 # ── Graph builder ─────────────────────────────────────────────────────────────
 
-def _build_graph(memory: CycleMemory, connector: CloudConnector, model: str):
+def _build_graph(
+    memory: CycleMemory,
+    connector: CloudConnector,
+    model: str,
+    incidents: IncidentRegistry | None = None,
+):
+    if incidents is None:
+        incidents = IncidentRegistry(path=".glorfindel/incidents.jsonl")
+
     graph = StateGraph(GlorfindelState)
 
-    graph.add_node("load_context", lambda s: load_context(s, memory=memory))
+    graph.add_node("load_context", lambda s: load_context(s, memory=memory, incidents=incidents))
     graph.add_node("poll_detection", poll_detection)
     graph.add_node("decide", lambda s: decide(s, model=model))
-    graph.add_node("execute_action", lambda s: execute_action(s, connector=connector))
+    graph.add_node("execute_action", lambda s: execute_action(s, connector=connector, incidents=incidents))
     graph.add_node("verify_action", lambda s: verify_action(s, connector=connector))
     graph.add_node("escalate_to_human", escalate_to_human)
     graph.add_node("store_cycle", lambda s: store_cycle(s, memory=memory))
@@ -437,6 +472,7 @@ class GlorfindelAgent:
         self,
         connector: CloudConnector | None = None,
         memory_path: str | None = None,
+        incidents_path: str | None = None,
         model: str = "claude-sonnet-4-6",
         dry_run: bool = False,
     ):
@@ -444,14 +480,16 @@ class GlorfindelAgent:
 
         self.memory = CycleMemory(path=memory_path)
         self.connector = connector or AzureConnector(dry_run=dry_run)
+        self.incidents = IncidentRegistry(path=incidents_path)
         self.model = model
-        self._graph = _build_graph(self.memory, self.connector, self.model)
+        self._graph = _build_graph(self.memory, self.connector, self.model, self.incidents)
 
     def respond(self, signal: dict) -> GlorfindelState:
         """Process a single signal and return the final state."""
         initial: GlorfindelState = {
             "signal": signal,
             "past_cycles": [],
+            "incident": None,
             "reasoning": "",
             "confidence": 0.0,
             "action": "",
@@ -464,11 +502,34 @@ class GlorfindelAgent:
         return self._graph.invoke(initial)
 
 
-def _build_user_message(signal: dict, past_cycles: list[dict]) -> str:
-    lines = ["## Signal reçu\n", "```json"]
+def _build_user_message(
+    signal: dict,
+    past_cycles: list[dict],
+    incident: dict | None = None,
+) -> str:
     import json
+    lines = ["## Signal reçu\n", "```json"]
     lines.append(json.dumps(signal, indent=2, default=str))
     lines.append("```")
+
+    # Inject incident context when this is not the first signal for the resource
+    if incident and (incident.get("signals_count", 0) > 1 or incident.get("actions_taken")):
+        lines.append("\n## Incident en cours sur cette ressource\n")
+        lines.append(f"- Signaux reçus : {incident['signals_count']}")
+        ttps = incident.get("ttps", [])
+        if ttps:
+            lines.append(f"- TTPs observés : {', '.join(ttps)}")
+        actions = incident.get("actions_taken", [])
+        if actions:
+            lines.append("- Actions déjà exécutées :")
+            for a in actions:
+                lines.append(f"  * {a['action']} → {a['outcome_status']} ({a['timestamp']})")
+        else:
+            lines.append("- Aucune action encore exécutée sur cet incident.")
+        lines.append(
+            "\nTiens compte des actions déjà prises — évite de re-isoler une VM déjà isolée, "
+            "ou de bloquer une IP déjà bloquée."
+        )
 
     if past_cycles:
         lines.append("\n## Cycles passés similaires (contexte)\n")

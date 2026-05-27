@@ -23,6 +23,10 @@ export ANTHROPIC_API_KEY=sk-ant-...
 # export GLORFINDEL_LLM_MODEL=ollama/llama3.1
 # export GLORFINDEL_LLM_BASE_URL=http://localhost:11434
 #
+# Mistral AI (API cloud)
+# export GLORFINDEL_LLM_MODEL=mistral/mistral-large-latest
+# export MISTRAL_API_KEY=...
+#
 # Tout endpoint OpenAI-compatible (vLLM, LM Studio, Mistral self-hosted...)
 # export GLORFINDEL_LLM_MODEL=openai/mistral-7b
 # export GLORFINDEL_LLM_BASE_URL=http://my-server:8000

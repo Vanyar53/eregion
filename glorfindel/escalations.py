@@ -79,7 +79,7 @@ def resolve(escalation_id: str) -> None:
 
 
 def resolve_by_resource(resource_id: str, action: str) -> int:
-    """Resolve all pending escalations matching resource_id + action. Returns count."""
+    """Resolve all pending escalations matching resource_id + action."""
     if not _STORE.exists():
         return 0
     lines = _STORE.read_text().splitlines()
@@ -125,7 +125,7 @@ def notify_action(
     ttp: str = "",
     severity: str = "",
 ) -> None:
-    """POST an autonomous action notification to GLORFINDEL_WEBHOOK_URL if set."""
+    """POST an autonomous action notification to the webhook if set."""
     import os
     url = os.environ.get("GLORFINDEL_WEBHOOK_URL", "")
     if not url:
@@ -140,14 +140,13 @@ def notify_action(
             status = "⚠"
         else:
             status = "✗"
-        meta = " · ".join(
-            filter(None, [ttp, severity, f"{int(confidence * 100)}% confidence"])
-        )
+        pct = f"{int(confidence * 100)}% confidence"
+        meta = " · ".join(filter(None, [ttp, severity, pct]))
         requests.post(url, json={
             "text": (
                 f":robot_face: *{label}* {status}  |  `{resource_short}`\n"
                 f"`{action}` · {meta}\n"
-                f"> {explanation[:500]}\n"
+                f"> {explanation[:800]}\n"
                 f"`{run_id}`"
             )
         }, timeout=5)
@@ -168,9 +167,8 @@ def _notify(esc: dict) -> None:
         type_label = _ESCALATION_LABELS.get(
             esc["escalation_type"], esc["escalation_type"]
         )
-        meta = " · ".join(
-            filter(None, [esc.get("ttp", ""), esc.get("severity", ""), type_label])
-        )
+        parts = [esc.get("ttp", ""), esc.get("severity", ""), type_label]
+        meta = " · ".join(filter(None, parts))
         requests.post(url, json={
             "text": (
                 f":rotating_light: *{label}*  |  `{resource_short}`\n"

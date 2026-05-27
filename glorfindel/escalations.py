@@ -8,6 +8,19 @@ from pathlib import Path
 _STORE = Path.home() / ".glorfindel" / "escalations.jsonl"
 
 
+_ACTION_LABELS = {
+    "isolate_vm": "VM isolée du réseau",
+    "release_isolation": "Isolation levée",
+    "snapshot": "Snapshot forensique créé",
+    "block_suspicious_ip": "IP suspecte bloquée",
+    "revoke_temp_access": "Accès temporaire révoqué",
+    "restore_from_backup": "Restauration depuis backup",
+    "delete_resource": "Ressource supprimée",
+    "wipe_storage": "Stockage effacé",
+    "modify_network_rule": "Règle réseau modifiée",
+    "escalate_permissions": "Permissions élevées",
+}
+
 _ESCALATION_LABELS = {
     "low_confidence": "detection timeout",
     "destructive_action": "action destructive",
@@ -120,12 +133,20 @@ def notify_action(
     try:
         import requests
         resource_short = resource_id.split("/")[-1]
-        status = "✓ verified" if verified else ("⚠ unverified" if verified is None else "✗ failed")
-        meta = " · ".join(filter(None, [ttp, severity, f"{int(confidence * 100)}% confidence"]))
+        label = _ACTION_LABELS.get(action, action)
+        if verified:
+            status = "✓"
+        elif verified is None:
+            status = "⚠"
+        else:
+            status = "✗"
+        meta = " · ".join(
+            filter(None, [ttp, severity, f"{int(confidence * 100)}% confidence"])
+        )
         requests.post(url, json={
             "text": (
-                f":robot_face: *{action}* {status}  |  `{resource_short}`\n"
-                f"{meta}\n"
+                f":robot_face: *{label}* {status}  |  `{resource_short}`\n"
+                f"`{action}` · {meta}\n"
                 f"> {explanation[:500]}\n"
                 f"`{run_id}`"
             )
@@ -143,12 +164,17 @@ def _notify(esc: dict) -> None:
     try:
         import requests
         resource_short = esc["resource_id"].split("/")[-1]
-        type_label = _ESCALATION_LABELS.get(esc["escalation_type"], esc["escalation_type"])
-        meta = " · ".join(filter(None, [esc.get("ttp", ""), esc.get("severity", ""), type_label]))
+        label = _ACTION_LABELS.get(esc["action"], esc["action"])
+        type_label = _ESCALATION_LABELS.get(
+            esc["escalation_type"], esc["escalation_type"]
+        )
+        meta = " · ".join(
+            filter(None, [esc.get("ttp", ""), esc.get("severity", ""), type_label])
+        )
         requests.post(url, json={
             "text": (
-                f":rotating_light: *{esc['action']}*  |  `{resource_short}`\n"
-                f"{meta}\n"
+                f":rotating_light: *{label}*  |  `{resource_short}`\n"
+                f"`{esc['action']}` · {meta}\n"
                 f"> {esc['reason'][:500]}\n"
                 f"`{esc['run_id']}`"
             )

@@ -55,6 +55,7 @@ export AZURE_SUBSCRIPTION_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 # DISCORD_CHANNEL_ID : clic droit sur le channel → Copy Channel ID (activer Developer Mode)
 # export DISCORD_BOT_TOKEN=...
 # export DISCORD_CHANNEL_ID=...
+# export DISCORD_PING_ROLE=...    # ID du rôle à pinger à l'ouverture d'un fil (ex: @oncall)
 
 # TTL isolation (défaut 4h) — mettre 0 pour désactiver
 # export GLORFINDEL_ISOLATION_TTL_H=4

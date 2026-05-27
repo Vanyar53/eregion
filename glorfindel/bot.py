@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import sys
 from pathlib import Path
 
 import discord
@@ -64,11 +65,117 @@ def _cli_command(esc: dict) -> str:
     return f"glorfindel ack {esc_id}"
 
 
+def _glorfindel_bin() -> str:
+    """Find the glorfindel CLI binary next to the current Python interpreter."""
+    candidate = Path(sys.executable).parent / "glorfindel"
+    if candidate.exists():
+        return str(candidate)
+    return "glorfindel"  # fall back to PATH
+
+
+class _ExecuteButton(discord.ui.Button):
+    """A button that runs a glorfindel CLI command and reports the result."""
+
+    def __init__(
+        self,
+        esc: dict,
+        label: str,
+        style: discord.ButtonStyle,
+        cli_args: list[str],
+    ) -> None:
+        super().__init__(
+            label=label,
+            style=style,
+            custom_id=f"glorfindel_exec_{esc['id'][:8]}",
+            row=1,
+        )
+        self.esc = esc
+        self.cli_args = cli_args
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer()
+
+        # Disable all buttons immediately so nobody double-clicks
+        for item in self.view.children:  # type: ignore[union-attr]
+            item.disabled = True  # type: ignore[attr-defined]
+        await interaction.message.edit(view=self.view)  # type: ignore[union-attr]
+
+        cmd_display = "glorfindel " + " ".join(self.cli_args)
+        await interaction.channel.send(  # type: ignore[union-attr]
+            f"⚡ **{interaction.user.display_name}** → `{cmd_display}`"
+        )
+
+        # Auto-ack before executing so the escalation closes right away
+        esc_module.resolve(self.esc["id"])
+
+        channel = interaction.channel
+        asyncio.create_task(self._execute_and_report(channel))
+
+    async def _execute_and_report(self, channel: discord.abc.Messageable) -> None:
+        try:
+            loop = asyncio.get_running_loop()
+            output = await loop.run_in_executor(None, self._run)
+            short = output.strip()[:1800] or "(pas de sortie)"
+            await channel.send(f"```\n{short}\n```")
+            # Archive thread if no more pending escalations for this resource
+            remaining = [
+                e for e in esc_module.pending()
+                if e["resource_id"] == self.esc["resource_id"]
+            ]
+            if not remaining and isinstance(channel, discord.Thread):
+                await channel.edit(
+                    archived=True, reason="Toutes les escalades acquittées"
+                )
+        except Exception as exc:
+            await channel.send(f"✗ Erreur lors de l'exécution : {exc}")
+
+    def _run(self) -> str:
+        import subprocess
+        result = subprocess.run(
+            [_glorfindel_bin()] + self.cli_args,
+            capture_output=True,
+            text=True,
+            timeout=1800,  # 30 min max (restore ~20 min)
+        )
+        return (result.stdout + result.stderr).strip()
+
+
+def _make_action_button(esc: dict) -> _ExecuteButton | None:
+    """Return an execute button for this escalation, or None if not applicable."""
+    action = esc["action"]
+    esc_type = esc["escalation_type"]
+    rid = esc["resource_id"]
+
+    if action == "restore_from_backup":
+        return _ExecuteButton(
+            esc, "🔄 Restaurer",
+            discord.ButtonStyle.primary,
+            ["restore", rid, "--yes"],
+        )
+    if esc_type == "verification_failed":
+        return _ExecuteButton(
+            esc, "↩️ Rétablir",
+            discord.ButtonStyle.danger,
+            ["revert", rid, "--yes"],
+        )
+    if esc_type == "low_confidence":
+        # Detection timeout — snapshot already taken, operator may want to restore
+        return _ExecuteButton(
+            esc, "🔄 Restaurer",
+            discord.ButtonStyle.secondary,
+            ["restore", rid, "--yes"],
+        )
+    return None
+
+
 class EscalationView(discord.ui.View):
     def __init__(self, esc: dict):
         super().__init__(timeout=None)
         self.esc_id = esc["id"]
         self.esc = esc
+        btn = _make_action_button(esc)
+        if btn:
+            self.add_item(btn)
 
     @discord.ui.button(
         label="✓ Acquitter",
@@ -85,7 +192,6 @@ class EscalationView(discord.ui.View):
         await interaction.followup.send(
             f"✓ Acquittée par **{interaction.user.display_name}**"
         )
-        # Archive thread if no more pending escalations for this resource
         remaining = [
             e for e in esc_module.pending()
             if e["resource_id"] == self.esc["resource_id"]
@@ -147,7 +253,7 @@ class GlorfindelBot(discord.Client):
         await self.tree.sync()
 
     async def on_ready(self) -> None:
-        _console.print(  # noqa: E501
+        _console.print(
             f"[green]🔵 Glorfindel bot connecté : {self.user}[/green]"
         )
         channel = self.get_channel(self.channel_id)
@@ -180,7 +286,6 @@ class GlorfindelBot(discord.Client):
         if thread_id:
             thread = self.get_channel(thread_id)
             if isinstance(thread, discord.Thread):
-                # Unarchive if needed
                 if thread.archived:
                     await thread.edit(archived=False)
                 return thread

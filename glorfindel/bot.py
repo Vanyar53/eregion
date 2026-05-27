@@ -287,9 +287,15 @@ class GlorfindelBot(discord.Client):
         if thread_id:
             thread = self.get_channel(thread_id)
             if isinstance(thread, discord.Thread):
-                if thread.archived:
-                    await thread.edit(archived=False)
-                return thread
+                try:
+                    if thread.archived:
+                        await thread.edit(archived=False)
+                    return thread
+                except discord.NotFound:
+                    _console.print(
+                        f"[yellow]Thread {thread_id} deleted on Discord, "
+                        "creating new one[/yellow]"
+                    )
 
         thread = await channel.create_thread(
             name=f"🔴 {vm_name}",

@@ -8,6 +8,14 @@ from pathlib import Path
 _STORE = Path.home() / ".glorfindel" / "escalations.jsonl"
 
 
+_ESCALATION_LABELS = {
+    "low_confidence": "detection timeout",
+    "destructive_action": "action destructive",
+    "proposed_action": "action inconnue",
+    "verification_failed": "vérification échouée",
+}
+
+
 def record(
     signal_id: str,
     resource_id: str,
@@ -16,6 +24,8 @@ def record(
     reason: str,
     run_id: str = "",
     suggested_steps: list[str] | None = None,
+    ttp: str = "",
+    severity: str = "",
 ) -> str:
     """Append an escalation and return its id."""
     esc = {
@@ -28,6 +38,8 @@ def record(
         "reason": reason,
         "run_id": run_id,
         "suggested_steps": suggested_steps or [],
+        "ttp": ttp,
+        "severity": severity,
         "status": "pending",
         "resolved_at": None,
     }
@@ -97,6 +109,8 @@ def notify_action(
     confidence: float,
     explanation: str,
     verified: bool | None,
+    ttp: str = "",
+    severity: str = "",
 ) -> None:
     """POST an autonomous action notification to GLORFINDEL_WEBHOOK_URL if set."""
     import os
@@ -107,12 +121,13 @@ def notify_action(
         import requests
         resource_short = resource_id.split("/")[-1]
         status = "✓ verified" if verified else ("⚠ unverified" if verified is None else "✗ failed")
+        meta = " · ".join(filter(None, [ttp, severity, f"{int(confidence * 100)}% confidence"]))
         requests.post(url, json={
             "text": (
-                f":robot_face: *Glorfindel autonomous action* — `{action}` "
-                f"on `{resource_short}` {status}\n"
+                f":robot_face: *{action}* {status}  |  `{resource_short}`\n"
+                f"{meta}\n"
                 f"> {explanation[:500]}\n"
-                f"Confidence: {int(confidence * 100)}% | Run: `{run_id}`"
+                f"`{run_id}`"
             )
         }, timeout=5)
     except Exception:
@@ -128,12 +143,14 @@ def _notify(esc: dict) -> None:
     try:
         import requests
         resource_short = esc["resource_id"].split("/")[-1]
+        type_label = _ESCALATION_LABELS.get(esc["escalation_type"], esc["escalation_type"])
+        meta = " · ".join(filter(None, [esc.get("ttp", ""), esc.get("severity", ""), type_label]))
         requests.post(url, json={
             "text": (
-                f":rotating_light: *Glorfindel escalation* — `{esc['action']}` "
-                f"on `{resource_short}`\n"
+                f":rotating_light: *{esc['action']}*  |  `{resource_short}`\n"
+                f"{meta}\n"
                 f"> {esc['reason'][:500]}\n"
-                f"Run: `{esc['run_id']}`"
+                f"`{esc['run_id']}`"
             )
         }, timeout=5)
     except Exception:

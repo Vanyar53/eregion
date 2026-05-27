@@ -327,6 +327,8 @@ def escalate_to_human(state: GlorfindelState) -> GlorfindelState:
             reason=state.get("escalation_reason", ""),
             run_id=signal.get("context", {}).get("run_id", ""),
             suggested_steps=state.get("suggested_steps", []),
+            ttp=signal.get("ttp", ""),
+            severity=signal.get("severity", ""),
         )
 
     return {
@@ -438,6 +440,8 @@ def store_cycle(state: GlorfindelState, *, memory: CycleMemory) -> GlorfindelSta
             confidence=state["confidence"],
             explanation=state.get("explanation", ""),
             verified=outcome.get("verified"),
+            ttp=signal.get("ttp", ""),
+            severity=signal.get("severity", ""),
         )
 
     # Debug JSONL — full trace for post-mortem analysis

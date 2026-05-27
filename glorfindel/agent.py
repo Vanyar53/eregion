@@ -422,6 +422,24 @@ def store_cycle(state: GlorfindelState, *, memory: CycleMemory) -> GlorfindelSta
     }
     memory.store(cycle)
 
+    # Notify autonomous actions (not escalations, not dry-run)
+    if (
+        not state.get("dry_run")
+        and not state.get("escalate")
+        and outcome.get("executed")
+        and outcome.get("status") != "dry_run"
+        and outcome.get("verified") is not False
+    ):
+        from glorfindel.escalations import notify_action
+        notify_action(
+            action=state["action"],
+            resource_id=signal.get("resource_id", ""),
+            run_id=run_id,
+            confidence=state["confidence"],
+            explanation=state.get("explanation", ""),
+            verified=outcome.get("verified"),
+        )
+
     # Debug JSONL — full trace for post-mortem analysis
     if run_id:
         debug_record = {

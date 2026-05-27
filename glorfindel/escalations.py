@@ -90,8 +90,37 @@ def pending() -> list[dict]:
     return result
 
 
+def notify_action(
+    action: str,
+    resource_id: str,
+    run_id: str,
+    confidence: float,
+    explanation: str,
+    verified: bool | None,
+) -> None:
+    """POST an autonomous action notification to GLORFINDEL_WEBHOOK_URL if set."""
+    import os
+    url = os.environ.get("GLORFINDEL_WEBHOOK_URL", "")
+    if not url:
+        return
+    try:
+        import requests
+        resource_short = resource_id.split("/")[-1]
+        status = "✓ verified" if verified else ("⚠ unverified" if verified is None else "✗ failed")
+        requests.post(url, json={
+            "text": (
+                f":robot_face: *Glorfindel autonomous action* — `{action}` "
+                f"on `{resource_short}` {status}\n"
+                f"> {explanation[:200]}\n"
+                f"Confidence: {int(confidence * 100)}% | Run: `{run_id}`"
+            )
+        }, timeout=5)
+    except Exception:
+        pass  # notification failure must never block the agent
+
+
 def _notify(esc: dict) -> None:
-    """POST to GLORFINDEL_WEBHOOK_URL if set."""
+    """POST an escalation notification to GLORFINDEL_WEBHOOK_URL if set."""
     import os
     url = os.environ.get("GLORFINDEL_WEBHOOK_URL", "")
     if not url:

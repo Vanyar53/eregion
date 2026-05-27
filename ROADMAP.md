@@ -9,11 +9,14 @@ Modèle : CLI open source gratuit, SaaS payant pour multi-tenant + connecteurs a
 ---
 
 ## État actuel (v0.2.0)
-- 4 TTPs validés en réel sur Azure : T1486, T1041, T1110.001, T1548.003
+- 5 TTPs validés en réel sur Azure : T1486, T1041, T1110.001, T1548.003 + run parallèle T1110+T1548
 - Run parallèle multi-signal validé avec IncidentRegistry
-- 88 tests, 0 appel Azure, 0 appel Claude API
+- 88 tests, 0 appel Azure, 0 appel LLM
+- Support multi-provider LLM via LiteLLM : Anthropic (défaut), OpenAI, Azure OpenAI, Ollama, self-hosted
+- `gf pending` avec next steps contextuels générés par le LLM (ChromaDB history)
+- Alerting webhook sur décisions autonomes + escalades
 - Repo public : https://github.com/Vanyar53/eregion
-- Coût exploitation : <$2/mois Claude API sur infra existante
+- Coût exploitation : <$2/mois LLM API sur infra existante
 
 ---
 

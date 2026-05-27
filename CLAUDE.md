@@ -193,8 +193,10 @@ make annatar-simulate
 make annatar-simulate-gap
 
 # Variables d'environnement
-ANTHROPIC_API_KEY=...
-GLORFINDEL_WEBHOOK_URL=...          # Slack/Teams sur escalade
+ANTHROPIC_API_KEY=...               # requis si provider Anthropic (défaut)
+GLORFINDEL_LLM_MODEL=...            # ex: ollama/llama3.1, openai/gpt-4o, azure/gpt-4o (défaut: anthropic/claude-sonnet-4-6)
+GLORFINDEL_LLM_BASE_URL=...         # endpoint self-hosted/Ollama (ex: http://localhost:11434)
+GLORFINDEL_WEBHOOK_URL=...          # Slack/Teams — escalades ET actions autonomes
 GLORFINDEL_KEEP_ISOLATED=1          # mode forensique
 GLORFINDEL_ISOLATION_TTL_H=4        # TTL isolation (défaut 4h)
 GLORFINDEL_INCIDENT_TTL_S=300       # TTL fenêtre incident
@@ -275,6 +277,12 @@ Types d'escalade : `low_confidence` (detection_timeout + snapshot), `destructive
 
 `gf ack <id>` / `gf ack --all` → marque `resolved` dans `~/.glorfindel/escalations.jsonl`. Purement administratif — ne fait rien sur Azure. `restore_from_backup` auto-acquitte via `resolve_by_resource`.
 
+## alerting webhook
+
+`GLORFINDEL_WEBHOOK_URL` reçoit deux types de messages :
+- **Escalade** (`:rotating_light:`) — action humaine requise
+- **Action autonome** (`:robot_face:`) — `isolate_vm ✓`, `block_suspicious_ip ✓`, etc. — skippé en dry-run et si `verified=False`
+
 ---
 
 ## Prochaines priorités (voir ROADMAP.md pour détail complet)
@@ -282,10 +290,11 @@ Types d'escalade : `low_confidence` (detection_timeout + snapshot), `destructive
 1. **Utilisateur extérieur** — avant tout nouveau scénario ou provider
 2. **glorfindel check-ttl en cron** — crontab ou systemd timer
 3. **Entra ID / Service Principal** — vecteur #1 Azure 2025, `revoke_service_principal`
-4. **Schéma normalisé `first_result_row`** — prérequis tous connecteurs
-5. **AWS provider** — `AwsConnector` + CloudWatch/GuardDuty
-6. **Prometheus + Loki** — stack open source dominante
-7. **War Room UI** — après feedback premier utilisateur
+4. **Tests + scénarios MITRE** — T1068, T1528, T1078, T1190
+5. **Schéma normalisé `first_result_row`** — prérequis tous connecteurs
+6. **AWS provider** — `AwsConnector` + CloudWatch/GuardDuty
+7. **Prometheus + Loki** — stack open source dominante
+8. **War Room UI** — après feedback premier utilisateur
 
 ---
 

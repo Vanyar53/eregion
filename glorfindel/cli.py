@@ -226,7 +226,6 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
     existing_at_start = {p for p in Path(runs_dir).glob("*_signals.jsonl")}
     for path in existing_at_start:
         tracked[path] = path.stat().st_size
-        console.print(f"[dim]Skipping existing {path.name}[/dim]")
 
     def _poll() -> None:
         for path in sorted(Path(runs_dir).glob("*_signals.jsonl")):

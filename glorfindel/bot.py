@@ -306,21 +306,36 @@ class GlorfindelBot(discord.Client):
 
     async def _watch_escalations(self) -> None:
         channel: discord.TextChannel | None = None
+        _console.print("[dim]Watch loop started[/dim]")
         while True:
-            await asyncio.sleep(5)
-            if channel is None:
-                channel = self.get_channel(self.channel_id)  # type: ignore
+            try:
+                await asyncio.sleep(5)
                 if channel is None:
-                    continue
-            for esc in esc_module.pending():
-                if esc["id"] in self._posted:
-                    continue
-                try:
-                    await self._post_escalation(channel, esc)
-                    self._posted.add(esc["id"])
-                    _save_posted(self._posted)
-                except Exception as e:
-                    _console.print(f"[red]Bot post error: {e}[/red]")
+                    channel = self.get_channel(self.channel_id)  # type: ignore
+                    if channel is None:
+                        _console.print(
+                            f"[yellow]Watch: channel {self.channel_id} "
+                            "not in cache yet[/yellow]"
+                        )
+                        continue
+                    _console.print(
+                        f"[dim]Watch: channel #{channel.name} ready[/dim]"
+                    )
+                pending = esc_module.pending()
+                new = [e for e in pending if e["id"] not in self._posted]
+                if new:
+                    _console.print(
+                        f"[dim]Watch: {len(new)} new escalation(s)[/dim]"
+                    )
+                for esc in new:
+                    try:
+                        await self._post_escalation(channel, esc)
+                        self._posted.add(esc["id"])
+                        _save_posted(self._posted)
+                    except Exception as e:
+                        _console.print(f"[red]Bot post error: {e}[/red]")
+            except Exception as e:
+                _console.print(f"[red]Watch loop error: {e}[/red]")
 
     async def _post_escalation(
         self, channel: discord.TextChannel, esc: dict

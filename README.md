@@ -219,8 +219,12 @@ glorfindel/
   escalations.py  → persistent escalation log (~/.glorfindel/escalations.jsonl)
 
 annatar/
-  runner/engine.py    → setup → integrity check → attack → emit attack_started
+  runner/engine.py    → preflight → setup → integrity check → attack → emit attack_started
   signals/emitter.py  → normalized JSONL signal emitter
+
+> **Annatar never uses SSH.** Scripts are pushed to the VM via Azure Run Command (Azure VM Agent
+> over the Wire Protocol — control plane only). The VM needs no SSH access and no public IP for
+> Annatar to work. The only credential required is the Service Principal used for the Azure SDK.
 
 scenarios/azure/
   ransomware-vm.yaml          → T1486

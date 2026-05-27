@@ -264,7 +264,7 @@ az network nsg rule list -g annatar --nsg-name nsg-annatar -o table
 - `target:` = ressource attaquée, `detection:` = infra surveillance (workspace_id ici)
 - `prerequisites:` = KQL vérification + instructions setup dans chaque scénario
 - `setup_testdata.sh` uniquement dans T1486
-- RunCommand : 5 retries (15s, 30s, 60s, 90s, 120s)
+- RunCommand : 5 retries (15s, 30s, 60s, 90s, 120s) — pas de SSH, pas d'IP publique requise pour Annatar (Azure VM Agent via Wire Protocol)
 - `dry_run=True` dans tous les tests — jamais d'appel Azure ou LLM dans les tests
 - `AZURE_SUBSCRIPTION_ID` obligatoire dans l'env (plus d'auto-détection via SubscriptionClient)
 

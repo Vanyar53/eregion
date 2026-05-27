@@ -124,7 +124,7 @@ class _ExecuteButton(discord.ui.Button):
             ]
             if not remaining and isinstance(channel, discord.Thread):
                 await channel.edit(
-                    archived=True, reason="Toutes les escalades acquittées"
+                    archived=True, reason="All escalations acknowledged"
                 )
         except Exception as exc:
             await channel.send(f"✗ Erreur lors de l'exécution : {exc}")
@@ -148,20 +148,20 @@ def _make_action_button(esc: dict) -> _ExecuteButton | None:
 
     if action == "restore_from_backup":
         return _ExecuteButton(
-            esc, "🔄 Restaurer",
+            esc, "🔄 Restore",
             discord.ButtonStyle.primary,
             ["restore", rid, "--yes"],
         )
     if esc_type == "verification_failed":
         return _ExecuteButton(
-            esc, "↩️ Rétablir",
+            esc, "↩️ Revert",
             discord.ButtonStyle.danger,
             ["revert", rid, "--yes"],
         )
     if esc_type == "low_confidence":
         # Detection timeout — snapshot already taken, operator may want to restore
         return _ExecuteButton(
-            esc, "🔄 Restaurer",
+            esc, "🔄 Restore",
             discord.ButtonStyle.secondary,
             ["restore", rid, "--yes"],
         )
@@ -178,7 +178,7 @@ class EscalationView(discord.ui.View):
             self.add_item(btn)
 
     @discord.ui.button(
-        label="✓ Acquitter",
+        label="✓ Acknowledge",
         style=discord.ButtonStyle.green,
         custom_id="glorfindel_ack",
     )
@@ -190,7 +190,7 @@ class EscalationView(discord.ui.View):
             item.disabled = True  # type: ignore[attr-defined]
         await interaction.response.edit_message(view=self)
         await interaction.followup.send(
-            f"✓ Acquittée par **{interaction.user.display_name}**"
+            f"✓ Acknowledged by **{interaction.user.display_name}**"
         )
         remaining = [
             e for e in esc_module.pending()
@@ -198,11 +198,11 @@ class EscalationView(discord.ui.View):
         ]
         if not remaining and isinstance(interaction.channel, discord.Thread):
             await interaction.channel.edit(
-                archived=True, reason="Toutes les escalades acquittées"
+                archived=True, reason="All escalations acknowledged"
             )
 
     @discord.ui.button(
-        label="📋 Commande",
+        label="📋 Command",
         style=discord.ButtonStyle.secondary,
         custom_id="glorfindel_cmd",
     )
@@ -211,7 +211,7 @@ class EscalationView(discord.ui.View):
     ):
         cmds = _cli_command(self.esc)
         await interaction.response.send_message(
-            f"Commande à exécuter :\n```\n{cmds}\n```",
+            f"Command to run:\n```\n{cmds}\n```",
             ephemeral=True,
         )
 
@@ -273,7 +273,7 @@ class GlorfindelBot(discord.Client):
         if self._posted:
             _console.print(
                 f"[dim]  → {len(self._posted)} escalade(s) "
-                "existante(s) ignorée(s)[/dim]"
+                "existing escalation(s) ignored[/dim]"
             )
 
         self.bg_task = self.loop.create_task(self._watch_escalations())
@@ -299,7 +299,7 @@ class GlorfindelBot(discord.Client):
 
         if self.ping_role:
             await thread.send(
-                f"<@&{self.ping_role}> Incident ouvert sur `{vm_name}`"
+                f"<@&{self.ping_role}> Incident opened on `{vm_name}`"
             )
         return thread
 

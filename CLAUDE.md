@@ -215,7 +215,7 @@ GLORFINDEL_INCIDENT_TTL_S=300       # TTL fenêtre incident
 ## Tests
 
 ```bash
-pytest                    # 90 tests, 0 appel Azure, 0 appel LLM
+pytest                    # 90 tests, 0 appel Azure, 0 appel LLM, 0 écriture ~/.glorfindel/
 pytest tests/unit/test_agent_nodes.py   # 30 tests LangGraph nodes
 pytest tests/unit/test_glorfindel.py    # 27 tests actions/routing/signals
 ```
@@ -274,6 +274,7 @@ az network nsg rule list -g annatar --nsg-name nsg-annatar -o table
 - `setup_testdata.sh` uniquement dans T1486
 - RunCommand : 5 retries (15s, 30s, 60s, 90s, 120s) — pas de SSH, pas d'IP publique requise pour Annatar (Azure VM Agent via Wire Protocol)
 - `dry_run=True` dans tous les tests — jamais d'appel Azure ou LLM dans les tests
+- `tests/unit/conftest.py` : fixture `autouse` redirige `escalations._STORE` → `tmp_path/escalations.jsonl` (les tests n'écrivent jamais dans `~/.glorfindel/`)
 - `AZURE_SUBSCRIPTION_ID` obligatoire dans l'env (plus d'auto-détection via SubscriptionClient)
 
 ---
@@ -296,11 +297,15 @@ Types d'escalade : `low_confidence` (detection_timeout + snapshot), `destructive
 **Bot Discord** (`glorfindel bot`, `DISCORD_BOT_TOKEN`) — bidirectionnel :
 - Un fil Discord par `resource_id` (`🔴 vm-name`), créé à la première escalade pour la VM
 - Chaque escalade posée dans le fil comme embed structuré (action, ressource, TTP, prochaines étapes LLM)
-- Bouton **✓ Acquitter** → `escalations.resolve()` + archivage auto si plus d'escalades pour la VM
-- Bouton **📋 Commande** → commande CLI à exécuter (éphémère)
+- Bouton **✓ Acknowledge** → `escalations.resolve()` + archivage auto si plus d'escalades pour la VM
+- Bouton **📋 Command** → commande CLI à exécuter (éphémère)
+- Bouton **🔄 Restore** → exécute `glorfindel restore <rid> --yes` (`restore_from_backup`, `low_confidence`)
+- Bouton **↩️ Revert** → exécute `glorfindel revert <rid> --yes` (`verification_failed`)
 - `/pending` slash command → liste des escalades en attente
 - `DISCORD_PING_ROLE` → ping `@rôle` à l'ouverture d'un fil
 - `bot_posted.json` + `bot_threads.json` : persistance entre redémarrages (pas de doublons, même fil)
+- Si `DISCORD_BOT_TOKEN` set → webhook escalade supprimé (le bot gère dans les fils)
+- Thread supprimé sur Discord → bot recrée automatiquement (NotFound handling)
 
 ---
 

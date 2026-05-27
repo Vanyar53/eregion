@@ -157,7 +157,13 @@ When an escalation fires, `glorfindel pending` shows **context-aware next steps 
 
 `GLORFINDEL_WEBHOOK_URL` sends two distinct notifications: escalations (`:rotating_light:` — human action required) and autonomous actions (`:robot_face:` — `isolate_vm ✓`, `block_suspicious_ip ✓`, etc.).
 
-**Interactive Discord bot** (`glorfindel bot`): creates one thread per VM (`🔴 vm-name`) and posts escalations as structured embeds with **[✓ Ack]** and **[📋 Command]** buttons. Threads auto-archive when all escalations are acknowledged. A `/pending` slash command lists open escalations in-channel. Set `DISCORD_PING_ROLE` to notify an on-call role on thread creation.
+**Interactive Discord bot** (`glorfindel bot`): creates one thread per VM (`🔴 vm-name`) and posts escalations as structured embeds. Buttons:
+- **✓ Acknowledge** — marks escalation resolved, archives thread when done
+- **📋 Command** — shows the CLI command to run (ephemeral)
+- **🔄 Restore** — executes `glorfindel restore` directly from Discord (for `restore_from_backup` and `low_confidence` escalations)
+- **↩️ Revert** — executes `glorfindel revert` directly from Discord (for `verification_failed`)
+
+A `/pending` slash command lists open escalations. Set `DISCORD_PING_ROLE` to notify an on-call role on thread creation. When `DISCORD_BOT_TOKEN` is set, escalation webhook notifications are suppressed (bot handles them in threads).
 
 ## CLI reference
 

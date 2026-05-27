@@ -111,7 +111,7 @@ def notify_action(
             "text": (
                 f":robot_face: *Glorfindel autonomous action* — `{action}` "
                 f"on `{resource_short}` {status}\n"
-                f"> {explanation[:200]}\n"
+                f"> {explanation[:500]}\n"
                 f"Confidence: {int(confidence * 100)}% | Run: `{run_id}`"
             )
         }, timeout=5)
@@ -132,7 +132,7 @@ def _notify(esc: dict) -> None:
             "text": (
                 f":rotating_light: *Glorfindel escalation* — `{esc['action']}` "
                 f"on `{resource_short}`\n"
-                f"> {esc['reason'][:200]}\n"
+                f"> {esc['reason'][:500]}\n"
                 f"Run: `{esc['run_id']}`"
             )
         }, timeout=5)

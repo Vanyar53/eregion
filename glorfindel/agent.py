@@ -215,7 +215,14 @@ def decide(state: GlorfindelState, *, model: str) -> GlorfindelState:
     """Call Claude API to reason about the signal and produce a structured decision."""
     import anthropic
 
-    client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise RuntimeError(
+            "ANTHROPIC_API_KEY is not set. Glorfindel requires a Claude API key to reason "
+            "about signals. Get one at https://console.anthropic.com/settings/keys — "
+            "cost is ~$0.05-0.10 per run (<$2/month for regular testing)."
+        )
+    client = anthropic.Anthropic(api_key=api_key)
 
     signal = state["signal"]
     past = state["past_cycles"]

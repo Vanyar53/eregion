@@ -30,7 +30,8 @@ def _save_posted(ids: set[str]) -> None:
 
 def _load_threads() -> dict[str, int]:
     if _THREADS_STORE.exists():
-        return {k: int(v) for k, v in json.loads(_THREADS_STORE.read_text()).items()}
+        data = json.loads(_THREADS_STORE.read_text())
+        return {k: int(v) for k, v in data.items()}
     return {}
 
 
@@ -231,7 +232,7 @@ class GlorfindelBot(discord.Client):
         )
         embed = discord.Embed(
             title=f"🚨 {label}",
-            description=esc["reason"][:512],
+            description=esc["reason"][:2048],
             color=color,
         )
         embed.add_field(name="Action", value=f"`{esc['action']}`", inline=True)

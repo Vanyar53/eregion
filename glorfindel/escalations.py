@@ -155,8 +155,14 @@ def notify_action(
 
 
 def _notify(esc: dict) -> None:
-    """POST an escalation notification to GLORFINDEL_WEBHOOK_URL if set."""
+    """POST an escalation notification to GLORFINDEL_WEBHOOK_URL if set.
+
+    Skipped when DISCORD_BOT_TOKEN is set — the bot handles escalations in
+    per-VM threads, which is a better UX than a flat channel message.
+    """
     import os
+    if os.environ.get("DISCORD_BOT_TOKEN", ""):
+        return
     url = os.environ.get("GLORFINDEL_WEBHOOK_URL", "")
     if not url:
         return

@@ -60,7 +60,7 @@ help:
 	@echo "Dev (local, no Docker)"
 	@echo "  make venv           Create .venv (python3 -m venv)"
 	@echo "  make install        Create .venv + install dev dependencies"
-	@echo "  make test           Run all tests (88, 0 Azure, 0 LLM calls)"
+	@echo "  make test           Run all tests (90, 0 Azure, 0 LLM calls)"
 	@echo "  make lint           Ruff linter"
 	@echo "  make clean          Remove build artifacts"
 	@echo ""

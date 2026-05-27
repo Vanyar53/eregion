@@ -180,6 +180,7 @@ annatar run scenarios/azure/ransomware-vm.yaml            # run a scenario (--dr
 annatar run scenarios/azure/data-exfiltration.yaml
 annatar run scenarios/azure/lateral-movement.yaml
 annatar run scenarios/azure/privilege-escalation.yaml
+# annatar run ... --skip-preflight                        # bypass VM state check (power + isolation)
 
 # LLM provider — default: Anthropic Claude
 ANTHROPIC_API_KEY=...               # required for default Anthropic provider
@@ -268,13 +269,12 @@ Adding AWS = one class. Agent logic, scenarios, and RAG memory don't change.
 
 ## Operational notes
 
-**Before each run**, verify no stale isolation or block rules are active:
+**Before each run**, `annatar run` automatically checks that the VM is running and not isolated by Glorfindel. If either check fails, the run aborts with the exact fix command. Use `--skip-preflight` to bypass.
+
+To check manually:
 ```bash
-az network nsg rule list -g <rg> --nsg-name <nsg> -o table
-# If glorfindel-isolation-* rules are present:
-glorfindel release <resource_id> --yes
-# If glorfindel-block-* rules are present (left over from a T1110 run):
-glorfindel unblock <ip> <resource_id> --yes
+glorfindel list                            # active isolations + blocked IPs
+glorfindel revert <resource_id> --yes      # release isolation + unblock all IPs
 ```
 
 **NSG isolation blocks Azure Monitor Agent** (outbound deny-all). If the VM stays isolated, the next run will hit `detection_timeout` instead of `detection`. Always release before running the next scenario.
@@ -292,7 +292,7 @@ glorfindel unblock <ip> <resource_id> --yes
 ```bash
 pip install eregion[dev]
 pytest
-# 88 tests — 0 Azure calls, 0 LLM calls
+# 90 tests — 0 Azure calls, 0 LLM calls
 ```
 
 Coverage: 6 LangGraph nodes, routing rules, signal schema, safety guard, YAML parser, ChromaDB memory, CLI escalation flow, T1548 privilege escalation detection.

@@ -186,7 +186,7 @@ glorfindel memory-stats                      # ChromaDB cycle count
 glorfindel --version                         # 0.2.0
 
 # Annatar
-annatar run scenarios/azure/<scenario>.yaml  # --dry-run disponible
+annatar run scenarios/azure/<scenario>.yaml  # --dry-run disponible, --skip-preflight pour bypasser le check VM
 
 # Simulation locale sans Azure
 make annatar-simulate
@@ -207,7 +207,7 @@ GLORFINDEL_INCIDENT_TTL_S=300       # TTL fenêtre incident
 ## Tests
 
 ```bash
-pytest                    # 88 tests, 0 appel Azure, 0 appel LLM
+pytest                    # 90 tests, 0 appel Azure, 0 appel LLM
 pytest tests/unit/test_agent_nodes.py   # 30 tests LangGraph nodes
 pytest tests/unit/test_glorfindel.py    # 27 tests actions/routing/signals
 ```
@@ -245,11 +245,12 @@ wheel : eregion-0.2.0-py3-none-any.whl ✓
 
 ## Pitfalls opérateur
 
+`annatar run` fait un preflight check automatique (VM running + pas de règles `glorfindel-isolation-*`). Si ça échoue, le run s'arrête avec la commande exacte à lancer. `--skip-preflight` pour bypasser.
+
 ```bash
-# Avant chaque run — vérifier état propre
-glorfindel list
-# Si isolations ou blocks présents :
-glorfindel revert <resource_id> --yes
+# Si preflight échoue — commandes de fix
+glorfindel list                           # voir isolations + IPs bloquées
+glorfindel revert <resource_id> --yes     # reset complet
 
 # Vérification NSG directe si besoin
 az network nsg rule list -g annatar --nsg-name nsg-annatar -o table

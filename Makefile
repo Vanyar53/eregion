@@ -30,6 +30,12 @@ GLORFINDEL_VOLS := \
 DOCKER_ANNATAR := docker run --rm $(AZURE_ENV) $(ANNATAR_VOLS) $(IMAGE_ANNATAR)
 DOCKER_GLORFINDEL := docker run --rm $(AZURE_ENV) $(GLORFINDEL_VOLS) $(GLORFINDEL_STATE) \
 	-e ANTHROPIC_API_KEY \
+	-e GLORFINDEL_LLM_MODEL \
+	-e GLORFINDEL_LLM_BASE_URL \
+	-e OPENAI_API_KEY \
+	-e AZURE_API_KEY \
+	-e AZURE_API_BASE \
+	-e AZURE_API_VERSION \
 	-e GLORFINDEL_WEBHOOK_URL \
 	-e GLORFINDEL_ISOLATION_TTL_H \
 	-e GLORFINDEL_INCIDENT_TTL_S \
@@ -53,7 +59,7 @@ help:
 	@echo "Dev (local, no Docker)"
 	@echo "  make venv           Create .venv (python3 -m venv)"
 	@echo "  make install        Create .venv + install dev dependencies"
-	@echo "  make test           Run all tests (88, 0 Azure, 0 Claude API)"
+	@echo "  make test           Run all tests (88, 0 Azure, 0 LLM calls)"
 	@echo "  make lint           Ruff linter"
 	@echo "  make clean          Remove build artifacts"
 	@echo ""
@@ -160,6 +166,12 @@ glorfindel-shell: build-glorfindel
 	@mkdir -p $(HOME)/.glorfindel
 	docker run --rm -it $(AZURE_ENV) $(GLORFINDEL_VOLS) $(GLORFINDEL_STATE) \
 		-e ANTHROPIC_API_KEY \
+		-e GLORFINDEL_LLM_MODEL \
+		-e GLORFINDEL_LLM_BASE_URL \
+		-e OPENAI_API_KEY \
+		-e AZURE_API_KEY \
+		-e AZURE_API_BASE \
+		-e AZURE_API_VERSION \
 		-e GLORFINDEL_WEBHOOK_URL \
 		-e GLORFINDEL_ISOLATION_TTL_H \
 		-e GLORFINDEL_INCIDENT_TTL_S \

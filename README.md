@@ -13,7 +13,7 @@ Eregion is an open-core platform for active cloud defense. Two AI agents form a 
 Annatar attacks → JSONL signals → Glorfindel decides → action → verified → stored
 ```
 
-Glorfindel uses a LangGraph graph + Claude API to reason about each signal and choose the minimum effective response. Actions are verified via Azure API. Every cycle is stored in ChromaDB for cross-scenario learning — no fine-tuning required.
+Glorfindel uses a LangGraph graph + LLM via LiteLLM to reason about each signal and choose the minimum effective response. Actions are verified via Azure API. Every cycle is stored in ChromaDB for cross-scenario learning — no fine-tuning required.
 
 Signals from different resources are processed in parallel; signals from the same resource are serialized with shared incident context so Glorfindel never re-isolates a VM it already contained. When an `attack_started` signal arrives, detection polling starts immediately in a dedicated thread — two simultaneous attacks on the same VM each poll their detection source in parallel, then make sequential decisions with shared incident context once detected.
 
@@ -71,7 +71,7 @@ terraform apply
 | Storage account | <$1 |
 | **Total sandbox** | **~$25–35/month** |
 
-**Cost of running Glorfindel on existing infrastructure**: Claude API only — ~$0.05–0.10 per run (<$2/month for regular testing).
+**Cost of running Glorfindel on existing infrastructure**: LLM API only (Anthropic default) — ~$0.05–0.10 per run (<$2/month for regular testing). Free with a local Ollama model.
 
 > The VM auto-shuts down at 23:00 UTC daily. Start it before each run: `az vm start -g annatar -n vm-annatar-victim`. Compute is only billed when running.
 
@@ -292,7 +292,7 @@ glorfindel unblock <ip> <resource_id> --yes
 ```bash
 pip install eregion[dev]
 pytest
-# 88 tests — 0 Azure calls, 0 Claude API calls
+# 88 tests — 0 Azure calls, 0 LLM calls
 ```
 
 Coverage: 6 LangGraph nodes, routing rules, signal schema, safety guard, YAML parser, ChromaDB memory, CLI escalation flow, T1548 privilege escalation detection.

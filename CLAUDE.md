@@ -7,7 +7,7 @@ Plateforme OSS (Apache 2.0) de défense active cloud. Deux agents IA en boucle :
 
 **Repo** : https://github.com/Vanyar53/eregion
 **Local** : `/home/jonathan/eregion/`, branch `main`, venv `.venv/` (créé par `make install`), `.envrc` charge les creds
-**Stack** : Python 3.11, Azure SDK, LangGraph, Claude API (tool use), ChromaDB, Click, pytest
+**Stack** : Python 3.11, Azure SDK, LangGraph, LiteLLM (Anthropic défaut, OpenAI, Azure, Ollama, self-hosted), ChromaDB, Click, pytest
 **Docker** : `make build` → `eregion-annatar` + `eregion-glorfindel`. `make annatar-shell` (alias `ar`) / `make glorfindel-shell` (alias `gf`). State persisté dans `~/.annatar/` et `~/.glorfindel/`, cache ChromaDB dans `~/.cache/chroma/`.
 
 ---
@@ -34,7 +34,7 @@ Annatar
 
 Glorfindel (watch ou respond)
   poll_detection Azure Monitor (10s) → detection ou detection_timeout
-  → decide (LangGraph + Claude API + RAG ChromaDB 3 cycles similaires)
+  → decide (LangGraph + LLM via LiteLLM + RAG ChromaDB 3 cycles similaires)
   → execute autonomous action (isolate_vm / block_suspicious_ip / snapshot)
   → verify (Azure NSG API) → store_cycle (ChromaDB + debug.jsonl)
 
@@ -65,7 +65,7 @@ load_context → poll_detection → decide → execute_action → verify_action 
 ```
 
 - `poll_detection` : no-op sauf `attack_started` → poll Azure Monitor jusqu'à alerte ou timeout
-- `decide` : Claude API + RAG (3 cycles similaires) + incident context si multi-signal
+- `decide` : LLM via LiteLLM + RAG (3 cycles similaires) + incident context si multi-signal
 - `verify_action` : NSG check (isolate/release), Compute API (snapshot), NSG rule (block)
 - `store_cycle` : ChromaDB + `runs/{run_id}_debug.jsonl`
 - `dry_run: bool` dans `GlorfindelState` → skipe escalations.record() et actions réelles
@@ -207,7 +207,7 @@ GLORFINDEL_INCIDENT_TTL_S=300       # TTL fenêtre incident
 ## Tests
 
 ```bash
-pytest                    # 88 tests, 0 appel Azure, 0 appel Claude API
+pytest                    # 88 tests, 0 appel Azure, 0 appel LLM
 pytest tests/unit/test_agent_nodes.py   # 30 tests LangGraph nodes
 pytest tests/unit/test_glorfindel.py    # 27 tests actions/routing/signals
 ```
@@ -226,7 +226,7 @@ wheel : eregion-0.2.0-py3-none-any.whl ✓
 
 ## Coûts réels (West Europe)
 
-- **Infra existante** : Claude API uniquement, <$2/mois (~$0.05–0.10 par run)
+- **Infra existante** : LLM API uniquement (Anthropic défaut), <$2/mois (~$0.05–0.10 par run)
 - **Sandbox Terraform** : ~$25–35/mois (VM ~6h/jour + disques + IP + backup + LAW). Désactivable entre runs.
 
 ---
@@ -264,7 +264,7 @@ az network nsg rule list -g annatar --nsg-name nsg-annatar -o table
 - `prerequisites:` = KQL vérification + instructions setup dans chaque scénario
 - `setup_testdata.sh` uniquement dans T1486
 - RunCommand : 5 retries (15s, 30s, 60s, 90s, 120s)
-- `dry_run=True` dans tous les tests — jamais d'appel Azure ou Claude API dans les tests
+- `dry_run=True` dans tous les tests — jamais d'appel Azure ou LLM dans les tests
 - `AZURE_SUBSCRIPTION_ID` obligatoire dans l'env (plus d'auto-détection via SubscriptionClient)
 
 ---

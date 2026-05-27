@@ -209,7 +209,7 @@ War Room local              →  War Room SaaS multi-tenant
 
 ### Pricing indicatif
 - $200-500/mois par workspace
-- <$2/mois Claude API par workspace — marge confortable
+- <$2/mois LLM API par workspace (Anthropic défaut) — marge confortable
 - Comparable PagerDuty (~$200/mois), Datadog (~$200/mois)
 
 ### Ce qu'on ne fait PAS en SaaS MVP

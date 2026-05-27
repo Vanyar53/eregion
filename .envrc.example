@@ -43,11 +43,18 @@ export AZURE_TENANT_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 export AZURE_SUBSCRIPTION_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 
 # ── Glorfindel — optionnel ────────────────────────────────────────────────────
-# Slack / Teams / Discord webhook — escalades + actions autonomes
+# Slack / Teams / Discord webhook — actions autonomes (one-way)
 # Slack/Teams :
 # export GLORFINDEL_WEBHOOK_URL=https://hooks.slack.com/services/...
 # Discord (ajouter /slack à la fin de l'URL webhook Discord) :
 # export GLORFINDEL_WEBHOOK_URL=https://discord.com/api/webhooks/<id>/<token>/slack
+
+# Discord Bot — escalades interactives (boutons, /pending)
+# Créer sur https://discord.com/developers/applications → New Application → Bot
+# Inviter avec scopes: bot + applications.commands, permissions: Send Messages + Read Messages
+# DISCORD_CHANNEL_ID : clic droit sur le channel → Copy Channel ID (activer Developer Mode)
+# export DISCORD_BOT_TOKEN=...
+# export DISCORD_CHANNEL_ID=...
 
 # TTL isolation (défaut 4h) — mettre 0 pour désactiver
 # export GLORFINDEL_ISOLATION_TTL_H=4

@@ -764,3 +764,10 @@ def _render_decision(state: dict, dry_run: bool) -> None:
         border_style="dim",
         padding=(0, 1),
     ))
+
+
+@cli.command()
+def bot():
+    """Start the Discord bot — watches escalations and posts interactive embeds."""
+    from glorfindel.bot import run
+    run()

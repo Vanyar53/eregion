@@ -297,6 +297,10 @@ class GlorfindelBot(discord.Client):
         )
         self._threads[resource_id] = thread.id
         _save_threads(self._threads)
+        _console.print(
+            f"[cyan]New thread created: {thread.name} "
+            f"(id={thread.id})[/cyan]"
+        )
 
         if self.ping_role:
             await thread.send(
@@ -332,6 +336,10 @@ class GlorfindelBot(discord.Client):
                         await self._post_escalation(channel, esc)
                         self._posted.add(esc["id"])
                         _save_posted(self._posted)
+                        _console.print(
+                            f"[green]✓ Posted {esc['id'][:8]} "
+                            f"({esc['action']})[/green]"
+                        )
                     except Exception as e:
                         _console.print(f"[red]Bot post error: {e}[/red]")
             except Exception as e:

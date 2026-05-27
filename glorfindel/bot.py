@@ -28,7 +28,7 @@ def _save_posted(ids: set[str]) -> None:
 
 
 def _cli_command(esc: dict) -> str:
-    """Return the CLI command(s) the operator should run for this escalation."""
+    """Return CLI command(s) the operator should run for this escalation."""
     action = esc["action"]
     rid = esc["resource_id"]
     esc_id = esc["id"]
@@ -121,10 +121,19 @@ class GlorfindelBot(discord.Client):
             )
 
         await self.tree.sync()
-        self.bg_task = self.loop.create_task(self._watch_escalations())
 
     async def on_ready(self) -> None:
-        _console.print(f"[green]🔵 Glorfindel bot connecté : {self.user}[/green]")
+        _console.print(f"[green]🔵 Glorfindel bot connecté : {self.user}[/green]")  # noqa: E501
+        channel = self.get_channel(self.channel_id)
+        if channel is None:
+            _console.print(
+                f"[red]✗ Channel {self.channel_id} introuvable — "
+                "vérifie DISCORD_CHANNEL_ID et que le bot est bien invité "
+                "dans le serveur avec les bonnes permissions.[/red]"
+            )
+        else:
+            _console.print(f"[green]  → Channel : #{channel.name}[/green]")
+        self.bg_task = self.loop.create_task(self._watch_escalations())
 
     async def _watch_escalations(self) -> None:
         channel: discord.TextChannel | None = None

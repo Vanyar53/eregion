@@ -270,14 +270,10 @@ class GlorfindelBot(discord.Client):
         else:
             _console.print(f"[green]  → Channel : #{channel.name}[/green]")
 
-        # Seed existing escalations — only post new ones after startup
-        for esc in esc_module.pending():
-            self._posted.add(esc["id"])
-        _save_posted(self._posted)
         if self._posted:
             _console.print(
-                f"[dim]  → {len(self._posted)} escalade(s) "
-                "existing escalation(s) ignored[/dim]"
+                f"[dim]  → {len(self._posted)} escalation(s) "
+                "already posted (bot_posted.json)[/dim]"
             )
 
         self.bg_task = self.loop.create_task(self._watch_escalations())
@@ -319,10 +315,10 @@ class GlorfindelBot(discord.Client):
             for esc in esc_module.pending():
                 if esc["id"] in self._posted:
                     continue
-                self._posted.add(esc["id"])
-                _save_posted(self._posted)
                 try:
                     await self._post_escalation(channel, esc)
+                    self._posted.add(esc["id"])
+                    _save_posted(self._posted)
                 except Exception as e:
                     _console.print(f"[red]Bot post error: {e}[/red]")
 

@@ -66,7 +66,7 @@ def _cli_command(esc: dict) -> str:
 
 
 def _glorfindel_bin() -> str:
-    """Find the glorfindel CLI binary next to the current Python interpreter."""
+    """Find the glorfindel CLI binary next to the current Python."""
     candidate = Path(sys.executable).parent / "glorfindel"
     if candidate.exists():
         return str(candidate)
@@ -98,7 +98,9 @@ class _ExecuteButton(discord.ui.Button):
         # Disable all buttons immediately so nobody double-clicks
         for item in self.view.children:  # type: ignore[union-attr]
             item.disabled = True  # type: ignore[attr-defined]
-        await interaction.message.edit(view=self.view)  # type: ignore[union-attr]
+        await interaction.message.edit(  # type: ignore[union-attr]
+            view=self.view  # type: ignore[union-attr]
+        )
 
         cmd_display = "glorfindel " + " ".join(self.cli_args)
         await interaction.channel.send(  # type: ignore[union-attr]
@@ -111,7 +113,9 @@ class _ExecuteButton(discord.ui.Button):
         channel = interaction.channel
         asyncio.create_task(self._execute_and_report(channel))
 
-    async def _execute_and_report(self, channel: discord.abc.Messageable) -> None:
+    async def _execute_and_report(
+        self, channel: discord.abc.Messageable
+    ) -> None:
         try:
             loop = asyncio.get_running_loop()
             output = await loop.run_in_executor(None, self._run)
@@ -141,7 +145,7 @@ class _ExecuteButton(discord.ui.Button):
 
 
 def _make_action_button(esc: dict) -> _ExecuteButton | None:
-    """Return an execute button for this escalation, or None if not applicable."""
+    """Return an execute button for this escalation, or None."""
     action = esc["action"]
     esc_type = esc["escalation_type"]
     rid = esc["resource_id"]
@@ -159,7 +163,7 @@ def _make_action_button(esc: dict) -> _ExecuteButton | None:
             ["revert", rid, "--yes"],
         )
     if esc_type == "low_confidence":
-        # Detection timeout — snapshot already taken, operator may want to restore
+        # Detection timeout — snapshot taken, operator may want to restore
         return _ExecuteButton(
             esc, "🔄 Restore",
             discord.ButtonStyle.secondary,
@@ -281,7 +285,8 @@ class GlorfindelBot(discord.Client):
     async def _get_or_create_thread(
         self, channel: discord.TextChannel, resource_id: str
     ) -> discord.Thread:
-        vm_name = resource_id.split("/")[-1]
+        last = resource_id.split("/")[-1]
+        vm_name = last or resource_id.strip("/").split("/")[-1] or "unknown"
         thread_id = self._threads.get(resource_id)
         if thread_id:
             thread = self.get_channel(thread_id)

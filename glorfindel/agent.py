@@ -35,12 +35,14 @@ class GlorfindelState(TypedDict):
 # ── LLM decision tool schema ──────────────────────────────────────────────────
 
 _DECISION_TOOL = {
-    "name": "security_decision",
-    "description": (
-        "Output a structured security response decision for an infrastructure threat signal. "
-        "You must always call this tool — never respond in plain text."
-    ),
-    "input_schema": {
+    "type": "function",
+    "function": {
+        "name": "security_decision",
+        "description": (
+            "Output a structured security response decision for an infrastructure threat signal. "
+            "You must always call this tool — never respond in plain text."
+        ),
+        "parameters": {
         "type": "object",
         "properties": {
             "reasoning": {
@@ -91,6 +93,7 @@ _DECISION_TOOL = {
             "reasoning", "confidence", "action", "reversible",
             "explanation", "escalate", "escalation_reason", "suggested_steps",
         ],
+        },
     },
 }
 
@@ -212,37 +215,37 @@ def poll_detection(state: GlorfindelState) -> GlorfindelState:
 
 
 def decide(state: GlorfindelState, *, model: str) -> GlorfindelState:
-    """Call Claude API to reason about the signal and produce a structured decision."""
-    import anthropic
+    """Call LLM to reason about the signal and produce a structured decision.
 
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        raise RuntimeError(
-            "ANTHROPIC_API_KEY is not set. Glorfindel requires a Claude API key to reason "
-            "about signals. Get one at https://console.anthropic.com/settings/keys — "
-            "cost is ~$0.05-0.10 per run (<$2/month for regular testing)."
-        )
-    client = anthropic.Anthropic(api_key=api_key)
+    Supports any provider via LiteLLM: anthropic/claude-*, openai/gpt-*, ollama/*,
+    azure/*, or any OpenAI-compatible endpoint via GLORFINDEL_LLM_BASE_URL.
+    """
+    import json
+    import litellm
 
     signal = state["signal"]
     past = state["past_cycles"]
-
     user_content = _build_user_message(signal, past, state.get("incident"))
 
-    response = client.messages.create(
+    kwargs: dict = {}
+    base_url = os.environ.get("GLORFINDEL_LLM_BASE_URL")
+    if base_url:
+        kwargs["base_url"] = base_url
+
+    response = litellm.completion(
         model=model,
         max_tokens=2048,
-        system=_SYSTEM_PROMPT,
+        messages=[
+            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "user", "content": user_content},
+        ],
         tools=[_DECISION_TOOL],
-        tool_choice={"type": "tool", "name": "security_decision"},
-        messages=[{"role": "user", "content": user_content}],
+        tool_choice={"type": "function", "function": {"name": "security_decision"}},
+        **kwargs,
     )
 
-    tool_result = next(
-        block for block in response.content
-        if block.type == "tool_use" and block.name == "security_decision"
-    )
-    d = tool_result.input
+    tool_call = response.choices[0].message.tool_calls[0]
+    d = json.loads(tool_call.function.arguments)
 
     return {
         **state,
@@ -500,7 +503,7 @@ class GlorfindelAgent:
         connector: CloudConnector | None = None,
         memory_path: str | None = None,
         incidents_path: str | None = None,
-        model: str = "claude-sonnet-4-6",
+        model: str = "",
         dry_run: bool = False,
     ):
         from glorfindel.actions import AzureConnector
@@ -509,7 +512,7 @@ class GlorfindelAgent:
         self.memory = CycleMemory(path=memory_path)
         self.connector = connector or AzureConnector(dry_run=dry_run)
         self.incidents = IncidentRegistry(path=incidents_path)
-        self.model = model
+        self.model = model or os.environ.get("GLORFINDEL_LLM_MODEL", "anthropic/claude-sonnet-4-6")
         self._graph = _build_graph(self.memory, self.connector, self.model, self.incidents)
 
     def respond(self, signal: dict) -> GlorfindelState:

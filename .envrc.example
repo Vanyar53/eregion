@@ -2,9 +2,30 @@
 # Copier ce fichier en .envrc et remplir les valeurs
 # cp .envrc.example .envrc
 
-# ── Anthropic ─────────────────────────────────────────────────────────────────
-# Créer une clé sur https://console.anthropic.com/settings/keys
+# ── LLM provider ──────────────────────────────────────────────────────────────
+# Défaut : Anthropic Claude. Changer pour utiliser un autre provider.
+#
+# Anthropic (défaut)
 export ANTHROPIC_API_KEY=sk-ant-...
+# export GLORFINDEL_LLM_MODEL=anthropic/claude-sonnet-4-6
+#
+# OpenAI
+# export GLORFINDEL_LLM_MODEL=openai/gpt-4o
+# export OPENAI_API_KEY=sk-...
+#
+# Azure OpenAI
+# export GLORFINDEL_LLM_MODEL=azure/gpt-4o
+# export AZURE_API_KEY=...
+# export AZURE_API_BASE=https://<resource>.openai.azure.com
+# export AZURE_API_VERSION=2024-02-01
+#
+# Ollama (local / air-gap)
+# export GLORFINDEL_LLM_MODEL=ollama/llama3.1
+# export GLORFINDEL_LLM_BASE_URL=http://localhost:11434
+#
+# Tout endpoint OpenAI-compatible (vLLM, LM Studio, Mistral self-hosted...)
+# export GLORFINDEL_LLM_MODEL=openai/mistral-7b
+# export GLORFINDEL_LLM_BASE_URL=http://my-server:8000
 
 # ── Azure — Service Principal ──────────────────────────────────────────────────
 # Créer avec : az ad sp create-for-rbac --name "eregion" --role Contributor \

@@ -42,6 +42,7 @@ glorfindel = [
     "azure-mgmt-recoveryservicesbackup>=9.0",
     "langgraph>=0.1",
     "anthropic>=0.25",
+    "litellm>=1.0",
     "chromadb>=0.5",
     "requests>=2.31",
 ]

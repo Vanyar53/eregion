@@ -54,11 +54,9 @@ def _state(**overrides) -> dict:
 
 
 def _mock_llm_response(action: str, escalate: bool = False, escalation_reason: str = "") -> MagicMock:
-    """Build a mock Anthropic response that calls the security_decision tool."""
-    tool_block = MagicMock()
-    tool_block.type = "tool_use"
-    tool_block.name = "security_decision"
-    tool_block.input = {
+    """Build a mock LiteLLM response (OpenAI format) that calls the security_decision tool."""
+    import json
+    arguments = json.dumps({
         "reasoning": f"Identified threat. Action: {action}.",
         "confidence": 0.95,
         "action": action,
@@ -67,9 +65,15 @@ def _mock_llm_response(action: str, escalate: bool = False, escalation_reason: s
         "escalate": escalate,
         "escalation_reason": escalation_reason,
         "suggested_steps": ["Check VM state", "Restore if needed"] if escalate else [],
-    }
+    })
+    tool_call = MagicMock()
+    tool_call.function.arguments = arguments
+
+    message = MagicMock()
+    message.tool_calls = [tool_call]
+
     mock_response = MagicMock()
-    mock_response.content = [tool_block]
+    mock_response.choices = [MagicMock(message=message)]
     return mock_response
 
 
@@ -516,8 +520,8 @@ def test_graph_detection_isolate_vm(tmp_path, monkeypatch, dry_connector, tmp_me
     monkeypatch.chdir(tmp_path)
     graph = _build(tmp_path, tmp_memory, dry_connector)
 
-    with patch("anthropic.Anthropic") as mock_cls:
-        mock_cls.return_value.messages.create.return_value = _mock_llm_response("isolate_vm")
+    with patch("litellm.completion") as mock_cls:
+        mock_cls.return_value = _mock_llm_response("isolate_vm")
         final = graph.invoke(_initial("detection", raw={"detection_time_s": 50}))
 
     assert final["action"] == "isolate_vm"
@@ -530,8 +534,8 @@ def test_graph_detection_timeout_takes_snapshot_and_escalates(tmp_path, monkeypa
     monkeypatch.chdir(tmp_path)
     graph = _build(tmp_path, tmp_memory, dry_connector)
 
-    with patch("anthropic.Anthropic") as mock_cls:
-        mock_cls.return_value.messages.create.return_value = _mock_llm_response(
+    with patch("litellm.completion") as mock_cls:
+        mock_cls.return_value = _mock_llm_response(
             "snapshot", escalate=True, escalation_reason="IDS gap — T1486 missed"
         )
         final = graph.invoke(_initial("detection_timeout"))
@@ -547,8 +551,8 @@ def test_graph_recovery_complete_releases_isolation(tmp_path, monkeypatch, dry_c
     monkeypatch.chdir(tmp_path)
     graph = _build(tmp_path, tmp_memory, dry_connector)
 
-    with patch("anthropic.Anthropic") as mock_cls:
-        mock_cls.return_value.messages.create.return_value = _mock_llm_response("release_isolation")
+    with patch("litellm.completion") as mock_cls:
+        mock_cls.return_value = _mock_llm_response("release_isolation")
         final = graph.invoke(_initial(
             "recovery_complete",
             raw={"recovery_point_time": "2026-05-24T10:00:00Z", "restore_time_s": 1220},
@@ -565,8 +569,8 @@ def test_graph_destructive_action_always_escalates(tmp_path, monkeypatch, dry_co
     monkeypatch.chdir(tmp_path)
     graph = _build(tmp_path, tmp_memory, dry_connector)
 
-    with patch("anthropic.Anthropic") as mock_cls:
-        mock_cls.return_value.messages.create.return_value = _mock_llm_response(
+    with patch("litellm.completion") as mock_cls:
+        mock_cls.return_value = _mock_llm_response(
             "restore_from_backup", escalate=False  # LLM forgot to escalate — routing must catch it
         )
         final = graph.invoke(_initial("recovery_failed"))
@@ -581,8 +585,8 @@ def test_graph_proposed_action_escalates(tmp_path, monkeypatch, dry_connector, t
     monkeypatch.chdir(tmp_path)
     graph = _build(tmp_path, tmp_memory, dry_connector)
 
-    with patch("anthropic.Anthropic") as mock_cls:
-        mock_cls.return_value.messages.create.return_value = _mock_llm_response(
+    with patch("litellm.completion") as mock_cls:
+        mock_cls.return_value = _mock_llm_response(
             "revoke_managed_identity", escalate=False,
             escalation_reason="Revoke MSI to stop exfil",
         )
@@ -625,8 +629,8 @@ def test_graph_t1548_detection_isolates_vm(tmp_path, monkeypatch, dry_connector,
     monkeypatch.chdir(tmp_path)
     graph = _build(tmp_path, tmp_memory, dry_connector)
 
-    with patch("anthropic.Anthropic") as mock_cls:
-        mock_cls.return_value.messages.create.return_value = _mock_llm_response("isolate_vm")
+    with patch("litellm.completion") as mock_cls:
+        mock_cls.return_value = _mock_llm_response("isolate_vm")
         final = graph.invoke(_initial(
             "detection",
             ttp="T1548.003",

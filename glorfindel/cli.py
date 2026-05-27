@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 
@@ -21,7 +22,7 @@ def cli():
 @cli.command()
 @click.argument("signals_file", type=click.Path(exists=True))
 @click.option("--dry-run", is_flag=True, help="Reason and decide without executing actions.")
-@click.option("--model", default="claude-sonnet-4-6", show_default=True)
+@click.option("--model", default=lambda: os.environ.get("GLORFINDEL_LLM_MODEL", "anthropic/claude-sonnet-4-6"), show_default=True)
 @click.option("--memory-path", default=None, help="Override default ChromaDB path.")
 def respond(signals_file: str, dry_run: bool, model: str, memory_path: str | None):
     """Process all signals in a JSONL file and respond to each."""
@@ -114,7 +115,7 @@ def unblock(ip: str, resource_id: str, dry_run: bool, yes: bool):
 @cli.command()
 @click.argument("runs_dir", type=click.Path(exists=True), default="runs")
 @click.option("--dry-run", is_flag=True)
-@click.option("--model", default="claude-sonnet-4-6", show_default=True)
+@click.option("--model", default=lambda: os.environ.get("GLORFINDEL_LLM_MODEL", "anthropic/claude-sonnet-4-6"), show_default=True)
 @click.option("--memory-path", default=None)
 @click.option("--interval", default=2, show_default=True, help="Poll interval in seconds.")
 def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, interval: int):
@@ -304,7 +305,7 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
               help="Select recovery point before this timestamp (ISO8601). "
                    "Prevents restoring a backup taken after the attack. "
                    "Example: 2026-05-24T13:44:00+00:00")
-@click.option("--model", default="claude-sonnet-4-6", show_default=True)
+@click.option("--model", default=lambda: os.environ.get("GLORFINDEL_LLM_MODEL", "anthropic/claude-sonnet-4-6"), show_default=True)
 @click.option("--memory-path", default=None)
 def restore(resource_id: str, vault: str, dry_run: bool, yes: bool, keep_isolated: bool, before: str | None, model: str, memory_path: str | None):
     """Trigger an Azure Backup restore on a VM (human approval action).

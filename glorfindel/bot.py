@@ -133,6 +133,15 @@ class GlorfindelBot(discord.Client):
             )
         else:
             _console.print(f"[green]  → Channel : #{channel.name}[/green]")
+
+        # Seed existing escalations as already seen — only post new ones
+        for esc in esc_module.pending():
+            self._posted.add(esc["id"])
+        _save_posted(self._posted)
+        skipped = len(self._posted)
+        if skipped:
+            _console.print(f"[dim]  → {skipped} escalade(s) existante(s) ignorée(s)[/dim]")
+
         self.bg_task = self.loop.create_task(self._watch_escalations())
 
     async def _watch_escalations(self) -> None:

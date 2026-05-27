@@ -197,7 +197,8 @@ AZURE_TENANT_ID=...
 AZURE_SUBSCRIPTION_ID=...
 
 # Optional
-GLORFINDEL_WEBHOOK_URL=...          # Slack/Teams — escalations + autonomous actions
+GLORFINDEL_WEBHOOK_URL=...          # Slack / Teams / Discord — escalations + autonomous actions
+                                    # Discord: use https://discord.com/api/webhooks/<id>/<token>/slack
 GLORFINDEL_KEEP_ISOLATED=1          # forensic mode — VM stays isolated after restore
 GLORFINDEL_ISOLATION_TTL_H=4        # auto-release timeout in hours (default: 4)
 GLORFINDEL_INCIDENT_TTL_S=300       # incident grouping window in seconds (default: 300)

@@ -127,8 +127,9 @@ glorfindel/
   detectors.py    → DetectionConnector ABC + AzureMonitorDetector (poll 10s)
   memory.py       → CycleMemory ChromaDB (confidence + past_cycles_used)
   incidents.py    → IncidentRegistry (TTL, persist, thread-safe)
-  cli.py          → watch, respond, restore, release, unblock, revert, list, pending, ack, check-ttl
-  escalations.py  → ~/.glorfindel/escalations.jsonl
+  cli.py          → watch, respond, restore, release, unblock, revert, list, pending, ack, check-ttl, bot
+  escalations.py  → ~/.glorfindel/escalations.jsonl + _ACTION_LABELS + _ESCALATION_LABELS
+  bot.py          → Discord bot — un fil par VM, boutons Acquitter + Commande, /pending slash command
 
 annatar/
   runner/engine.py    → setup AVANT integrity check → attack → emit attack_started
@@ -149,6 +150,8 @@ terraform/                    → infra complète Azure (VM, NSG, LAW, Backup, D
   incidents.jsonl             → incidents actifs
   isolation/<vm>.json         → état NSG isolation + TTL
   blocks/<vm>.json            → IPs bloquées par VM
+  bot_posted.json             → IDs escalades déjà postées (évite doublons au redémarrage du bot)
+  bot_threads.json            → resource_id → thread_id Discord (persistance entre redémarrages)
   .bashrc                     → PS1 + HISTFILE + alias gf (chargé par make glorfindel-shell)
   .bash_history               → historique bash persistant
 
@@ -183,6 +186,7 @@ glorfindel ack <escalation_id>               # acquitter escalade
 glorfindel ack --all                         # acquitter toutes
 glorfindel check-ttl                         # libérer isolations expirées
 glorfindel memory-stats                      # ChromaDB cycle count
+glorfindel bot                               # démarrer le bot Discord interactif
 glorfindel --version                         # 0.2.0
 
 # Annatar
@@ -196,7 +200,11 @@ make annatar-simulate-gap
 ANTHROPIC_API_KEY=...               # requis si provider Anthropic (défaut)
 GLORFINDEL_LLM_MODEL=...            # ex: ollama/llama3.1, openai/gpt-4o, azure/gpt-4o (défaut: anthropic/claude-sonnet-4-6)
 GLORFINDEL_LLM_BASE_URL=...         # endpoint self-hosted/Ollama (ex: http://localhost:11434)
-GLORFINDEL_WEBHOOK_URL=...          # Slack/Teams — escalades ET actions autonomes
+GLORFINDEL_WEBHOOK_URL=...          # Slack/Teams/Discord webhook — escalades ET actions autonomes
+                                    # Discord : https://discord.com/api/webhooks/<id>/<token>/slack
+DISCORD_BOT_TOKEN=...               # Bot Discord interactif (fils par VM, boutons Acquitter/Commande)
+DISCORD_CHANNEL_ID=...              # ID du channel (clic droit → Copy Channel ID)
+DISCORD_PING_ROLE=...               # ID du rôle à pinger à l'ouverture d'un fil (optionnel)
 GLORFINDEL_KEEP_ISOLATED=1          # mode forensique
 GLORFINDEL_ISOLATION_TTL_H=4        # TTL isolation (défaut 4h)
 GLORFINDEL_INCIDENT_TTL_S=300       # TTL fenêtre incident
@@ -278,11 +286,21 @@ Types d'escalade : `low_confidence` (detection_timeout + snapshot), `destructive
 
 `gf ack <id>` / `gf ack --all` → marque `resolved` dans `~/.glorfindel/escalations.jsonl`. Purement administratif — ne fait rien sur Azure. `restore_from_backup` auto-acquitte via `resolve_by_resource`.
 
-## alerting webhook
+## alerting webhook + bot Discord
 
-`GLORFINDEL_WEBHOOK_URL` reçoit deux types de messages :
+**Webhook** (`GLORFINDEL_WEBHOOK_URL`) — one-way, Slack format :
 - **Escalade** (`:rotating_light:`) — action humaine requise
 - **Action autonome** (`:robot_face:`) — `isolate_vm ✓`, `block_suspicious_ip ✓`, etc. — skippé en dry-run et si `verified=False`
+- Discord : utiliser l'URL webhook Discord avec `/slack` à la fin
+
+**Bot Discord** (`glorfindel bot`, `DISCORD_BOT_TOKEN`) — bidirectionnel :
+- Un fil Discord par `resource_id` (`🔴 vm-name`), créé à la première escalade pour la VM
+- Chaque escalade posée dans le fil comme embed structuré (action, ressource, TTP, prochaines étapes LLM)
+- Bouton **✓ Acquitter** → `escalations.resolve()` + archivage auto si plus d'escalades pour la VM
+- Bouton **📋 Commande** → commande CLI à exécuter (éphémère)
+- `/pending` slash command → liste des escalades en attente
+- `DISCORD_PING_ROLE` → ping `@rôle` à l'ouverture d'un fil
+- `bot_posted.json` + `bot_threads.json` : persistance entre redémarrages (pas de doublons, même fil)
 
 ---
 

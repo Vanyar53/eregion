@@ -157,6 +157,8 @@ When an escalation fires, `glorfindel pending` shows **context-aware next steps 
 
 `GLORFINDEL_WEBHOOK_URL` sends two distinct notifications: escalations (`:rotating_light:` — human action required) and autonomous actions (`:robot_face:` — `isolate_vm ✓`, `block_suspicious_ip ✓`, etc.).
 
+**Interactive Discord bot** (`glorfindel bot`): creates one thread per VM (`🔴 vm-name`) and posts escalations as structured embeds with **[✓ Ack]** and **[📋 Command]** buttons. Threads auto-archive when all escalations are acknowledged. A `/pending` slash command lists open escalations in-channel. Set `DISCORD_PING_ROLE` to notify an on-call role on thread creation.
+
 ## CLI reference
 
 ```bash
@@ -174,6 +176,7 @@ glorfindel ack <escalation_id>                  # acknowledge an escalation
 glorfindel ack --all                            # acknowledge all pending escalations
 glorfindel check-ttl                            # release isolations older than TTL (default 4h)
 glorfindel memory-stats                         # ChromaDB cycle count
+glorfindel bot                                  # start the interactive Discord bot
 
 # Annatar
 annatar run scenarios/azure/ransomware-vm.yaml            # run a scenario (--dry-run available)
@@ -196,9 +199,15 @@ AZURE_CLIENT_SECRET=...
 AZURE_TENANT_ID=...
 AZURE_SUBSCRIPTION_ID=...
 
-# Optional
+# Optional — webhook (one-way)
 GLORFINDEL_WEBHOOK_URL=...          # Slack / Teams / Discord — escalations + autonomous actions
                                     # Discord: use https://discord.com/api/webhooks/<id>/<token>/slack
+
+# Optional — Discord bot (interactive, bidirectional)
+DISCORD_BOT_TOKEN=...               # Bot token from discord.com/developers/applications
+DISCORD_CHANNEL_ID=...              # Channel ID (right-click → Copy Channel ID, Developer Mode on)
+DISCORD_PING_ROLE=...               # Role ID to ping on new incident thread (optional)
+
 GLORFINDEL_KEEP_ISOLATED=1          # forensic mode — VM stays isolated after restore
 GLORFINDEL_ISOLATION_TTL_H=4        # auto-release timeout in hours (default: 4)
 GLORFINDEL_INCIDENT_TTL_S=300       # incident grouping window in seconds (default: 300)
@@ -216,8 +225,9 @@ glorfindel/
   detectors.py    → DetectionConnector ABC + AzureMonitorDetector (polls every 10s)
   incidents.py    → IncidentRegistry: groups signals by resource_id within a TTL window (~/.glorfindel/incidents.jsonl)
   memory.py       → CycleMemory: ChromaDB with confidence + past_cycles_used metadata
-  cli.py          → watch (threaded, per-resource queues), respond, restore, release, unblock, pending, ack, check-ttl
+  cli.py          → watch (threaded, per-resource queues), respond, restore, release, unblock, pending, ack, check-ttl, bot
   escalations.py  → persistent escalation log (~/.glorfindel/escalations.jsonl)
+  bot.py          → Discord bot: one thread per VM, interactive embeds, Ack/Command buttons, /pending slash command
 
 annatar/
   runner/engine.py    → preflight → setup → integrity check → attack → emit attack_started

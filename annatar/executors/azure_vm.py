@@ -373,6 +373,48 @@ echo "[annatar] DATA_DISK_RESTORED"
                 p.result()
             console.print(f"  [dim]Cleaned up {len(pollers)} orphan backup disk(s).[/dim]")
 
+    def check_preflight(self) -> list[str]:
+        """Check VM state before running a scenario. Returns a list of blocking issues."""
+        issues = []
+
+        # VM power state
+        try:
+            iv = self._compute.virtual_machines.get(
+                self.resource_group, self.vm_name, expand="instanceView"
+            ).instance_view
+            statuses = {s.code for s in (iv.statuses or [])}
+            if "PowerState/running" not in statuses:
+                state = next(
+                    (s.code for s in (iv.statuses or []) if s.code.startswith("PowerState/")),
+                    "PowerState/unknown",
+                )
+                issues.append(
+                    f"VM '{self.vm_name}' is not running ({state})\n"
+                    f"  → az vm start -g {self.resource_group} -n {self.vm_name}"
+                )
+        except Exception as e:
+            issues.append(f"Cannot check VM power state: {e}")
+
+        # Glorfindel isolation — scan NSGs in the resource group for isolation rules
+        try:
+            from azure.mgmt.network import NetworkManagementClient
+            network = NetworkManagementClient(self._credential, self._subscription_id)
+            for nsg in network.network_security_groups.list(self.resource_group):
+                isolation_rules = [
+                    r.name for r in (nsg.security_rules or [])
+                    if r.name.startswith("glorfindel-isolation-")
+                ]
+                if isolation_rules:
+                    issues.append(
+                        f"VM '{self.vm_name}' is isolated by Glorfindel "
+                        f"(NSG '{nsg.name}', {len(isolation_rules)} rule(s))\n"
+                        f"  → glorfindel revert {self.resource_id} --yes"
+                    )
+        except Exception as e:
+            console.print(f"  [dim yellow]Preflight NSG check skipped: {e}[/dim yellow]")
+
+        return issues
+
     def verify_restore_integrity(self, script_path: str = "scripts/vm/verify_restore.sh") -> bool:
         """Run the integrity check script on the VM. Returns True if PASS."""
         output = self.run_script(script_path)

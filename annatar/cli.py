@@ -14,10 +14,11 @@ def cli():
 @click.argument("scenario", type=click.Path(exists=True))
 @click.option("--dry-run", is_flag=True, help="Show what would happen without executing.")
 @click.option("--yes", is_flag=True, help="Skip confirmation prompt.")
-def run(scenario: str, dry_run: bool, yes: bool):
+@click.option("--skip-preflight", is_flag=True, help="Skip VM state checks (power + isolation).")
+def run(scenario: str, dry_run: bool, yes: bool, skip_preflight: bool):
     """Run a chaos scenario."""
     from annatar.runner.engine import Engine
-    engine = Engine(dry_run=dry_run)
+    engine = Engine(dry_run=dry_run, skip_preflight=skip_preflight)
     engine.run(scenario, skip_confirm=yes)
 
 

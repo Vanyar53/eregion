@@ -41,6 +41,7 @@ def _make_executor(tags=None):
     executor.resource_id = RESOURCE_ID
     executor.run_script.return_value = "INTEGRITY_PASS"
     executor.verify_restore_integrity.return_value = True
+    executor.check_preflight.return_value = []
     return executor
 
 
@@ -108,3 +109,38 @@ def test_engine_aborts_if_precheck_fails(tmp_path, monkeypatch):
 
     files = list((tmp_path / "runs").glob("*_signals.jsonl"))
     assert files == []
+
+
+def test_engine_aborts_if_preflight_fails(tmp_path, monkeypatch):
+    """Preflight issue (VM stopped or isolated) → engine aborts before setup."""
+    monkeypatch.chdir(tmp_path)
+    engine = Engine()
+    executor = _make_executor()
+    executor.check_preflight.return_value = [
+        "VM 'vm-annatar-victim' is not running (PowerState/deallocated)\n"
+        "  → az vm start -g annatar -n vm-annatar-victim"
+    ]
+    collector = _make_collector()
+
+    with patch.object(engine, "_get_executor_collector", return_value=(executor, collector)):
+        engine.run(RANSOMWARE_YAML, skip_confirm=True)
+
+    files = list((tmp_path / "runs").glob("*_signals.jsonl"))
+    assert files == []
+    executor.run_script.assert_not_called()
+
+
+def test_engine_skip_preflight_bypasses_check(tmp_path, monkeypatch):
+    """--skip-preflight lets the run proceed even if the VM would fail the check."""
+    monkeypatch.chdir(tmp_path)
+    engine = Engine(skip_preflight=True)
+    executor = _make_executor()
+    executor.check_preflight.return_value = ["VM is not running"]
+    collector = _make_collector()
+
+    with patch.object(engine, "_get_executor_collector", return_value=(executor, collector)):
+        engine.run(EXFIL_YAML, skip_confirm=True)
+
+    executor.check_preflight.assert_not_called()
+    files = list((tmp_path / "runs").glob("*_signals.jsonl"))
+    assert len(files) == 1

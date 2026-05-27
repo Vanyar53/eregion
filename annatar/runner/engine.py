@@ -15,8 +15,9 @@ console = Console()
 
 
 class Engine:
-    def __init__(self, dry_run: bool = False):
+    def __init__(self, dry_run: bool = False, skip_preflight: bool = False):
         self.dry_run = dry_run
+        self.skip_preflight = skip_preflight
         self.parser = ScenarioParser()
 
     def run(self, scenario_path: str, skip_confirm: bool = False):
@@ -45,6 +46,19 @@ class Engine:
         if not guard.allowed:
             console.print(f"[red]Safety check failed:[/red] {guard.reason}")
             return
+
+        # Preflight check — VM running + not isolated
+        if not self.skip_preflight:
+            console.print("[cyan]->[/cyan] Pre-flight check...")
+            issues = executor.check_preflight()
+            if issues:
+                for issue in issues:
+                    console.print(f"[red]✗[/red] {issue}")
+                console.print(
+                    "\n[red]Pre-flight check failed — fix the above before running.[/red]\n"
+                    "[dim]Use --skip-preflight to bypass.[/dim]"
+                )
+                return
 
         emitter = SignalEmitter(
             run_id=run_id,

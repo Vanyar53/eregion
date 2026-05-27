@@ -32,6 +32,7 @@ dependencies = [
 [project.optional-dependencies]
 annatar = [
     "azure-mgmt-compute>=30.0",
+    "azure-mgmt-network>=25.0",
     "azure-mgmt-resource>=23.0",
     "azure-monitor-query>=1.3",
 ]

@@ -437,26 +437,31 @@ function openModal(title, body, cmd, confirmLabel, confirmClass, onConfirm) {
   document.getElementById('modal').classList.add('open');
 }
 
-function openCommandModal(esc) {
+function openCommandModal(escId) {
+  const esc = _escById[escId];
+  if (!esc) return;
   const cmd = cliCommand(esc);
   const label = actionLabel(esc.action);
-  openModal(
-    '📋 ' + label,
-    'Commande CLI à exécuter pour cette escalade :',
-    cmd,
-    'Close',
-    'action',
-    () => {},
-  );
-  // Override confirm to just close
-  document.getElementById('modal-confirm').onclick = closeModal;
+  document.getElementById('modal-title').textContent = '📋 ' + label;
+  document.getElementById('modal-body').textContent = 'Commande CLI à exécuter pour cette escalade :';
+  const cmdEl = document.getElementById('modal-cmd');
+  cmdEl.textContent = cmd;
+  cmdEl.style.display = '';
   document.getElementById('modal-cancel').style.display = 'none';
+  const btn = document.getElementById('modal-confirm');
+  btn.textContent = 'Close';
+  btn.className = 'action';
+  btn.onclick = () => {
+    closeModal();
+    document.getElementById('modal-cancel').style.display = '';
+  };
   document.getElementById('modal').classList.add('open');
 }
 
 // ── State ──────────────────────────────────────────────────────────────────────
 
 let _state = { resources: [], escalations: [] };
+let _escById = {};   // id → escalation object, refreshed on each renderIncidents
 let _autoScroll = true;
 
 // ── Clock ──────────────────────────────────────────────────────────────────────
@@ -513,8 +518,10 @@ function renderIncidents() {
   const list = document.getElementById('incidents-list');
   const { resources, escalations } = _state;
 
+  _escById = {};
   const escByVm = {};
   escalations.forEach(e => {
+    _escById[e.id] = e;
     const vm = e.resource_id.split('/').pop();
     if (!escByVm[vm]) escByVm[vm] = [];
     escByVm[vm].push(e);
@@ -569,24 +576,21 @@ function renderIncidents() {
     const escItems = escs.map(e => {
       const label  = actionLabel(e.action);
       const ctx    = [e.ttp, e.severity, escLabel(e.escalation_type)].filter(Boolean).join(' · ');
-      const reason = e.reason.slice(0, 160) + (e.reason.length > 160 ? '…' : '');
       const steps  = (e.suggested_steps || []).slice(0, 3);
       const stepsHtml = steps.length ? `
         <div class="esc-steps">
           ${steps.map(s => `<div class="esc-step">• ${s}</div>`).join('')}
         </div>` : '';
 
-      // Inline buttons: Ack + Command
       const escId = e.id;
-      const escJson = JSON.stringify(e).replace(/'/g, "\\'");
       return `<div class="esc-item">
         <div class="esc-item-header">
           <span class="esc-action-label">🚨 ${label}</span>
           <button class="action" onclick="confirmAck('${escId}')" style="flex-shrink:0">✓ Ack</button>
-          <button class="action" onclick='openCommandModal(${JSON.stringify(e)})' style="flex-shrink:0">📋 Cmd</button>
+          <button class="action" onclick="openCommandModal('${escId}')" style="flex-shrink:0">📋 Cmd</button>
         </div>
         ${ctx ? `<div class="esc-context">${ctx}</div>` : ''}
-        <div class="esc-reason">${reason}</div>
+        <div class="esc-reason">${e.reason}</div>
         ${stepsHtml}
       </div>`;
     }).join('');

@@ -249,7 +249,7 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
     from datetime import datetime, timezone
     from glorfindel.actions import AzureConnector, active_isolations
 
-    ttl_h = float(os.environ.get("GLORFINDEL_ISOLATION_TTL_H", "4"))
+    ttl_h = float(os.environ.get("GLORFINDEL_ISOLATION_TTL_H") or "4")
     ttl_connector = AzureConnector(dry_run=dry_run)
     _ttl_check_counter = 0
 
@@ -277,18 +277,27 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
                         escalation_type="ttl_exceeded",
                         reason=f"Isolation TTL exceeded ({age_h:.1f}h > {ttl_h}h) — auto-released by watch",
                     )
-                    console.print(f"  [green]✓ Released.[/green]")
+                    console.print("  [green]✓ Released.[/green]")
+
+    _HEARTBEAT = Path.home() / ".glorfindel" / "watch_heartbeat"
+
+    def _write_heartbeat() -> None:
+        _HEARTBEAT.parent.mkdir(parents=True, exist_ok=True)
+        _HEARTBEAT.write_text(datetime.now(timezone.utc).isoformat())
 
     console.print(f"[bold]Glorfindel watching[/bold] [dim]{runs_dir}/[/dim]  "
                   f"(TTL={ttl_h}h, Ctrl+C to stop)\n")
+    _write_heartbeat()
     try:
         while True:
             _poll()
             _ttl_check_counter += 1
             if _ttl_check_counter % 30 == 0:  # check TTL every 30 polls (~1 min at 2s interval)
                 _check_ttl()
+                _write_heartbeat()
             time.sleep(interval)
     except KeyboardInterrupt:
+        _HEARTBEAT.unlink(missing_ok=True)
         console.print("\n[dim]Watch stopped.[/dim]")
 
 
@@ -352,7 +361,7 @@ def restore(resource_id: str, vault: str, dry_run: bool, yes: bool, keep_isolate
 
     restore_label = f"{rto_s // 60}min {rto_s % 60}s"
     console.print(f"[green]✓ Restore complete.[/green]  restore_time: {restore_label}  RP: {result.get('recovery_point_time')}")
-    console.print(f"[dim]RTO = detection_s + isolation_s + restore_time  (human decision time excluded)[/dim]\n")
+    console.print("[dim]RTO = detection_s + isolation_s + restore_time  (human decision time excluded)[/dim]\n")
 
     from glorfindel import escalations as _esc
     resolved = _esc.resolve_by_resource(resource_id, "restore_from_backup")
@@ -587,7 +596,7 @@ def revert(resource_id: str, yes: bool, dry_run: bool):
     vm_short = resource_id.split("/")[-1]
     console.rule(f"[bold yellow]Revert — {vm_short}[/bold yellow]")
     if isolations:
-        console.print(f"  • Release isolation")
+        console.print("  • Release isolation")
     for b in blocks:
         console.print(f"  • Unblock {b['ip']}")
 
@@ -633,7 +642,7 @@ def check_ttl(ttl: float | None, dry_run: bool):
     from datetime import datetime, timezone
     from glorfindel.actions import AzureConnector, active_isolations
 
-    ttl_h = ttl or float(os.environ.get("GLORFINDEL_ISOLATION_TTL_H", "4"))
+    ttl_h = ttl or float(os.environ.get("GLORFINDEL_ISOLATION_TTL_H") or "4")
     connector = AzureConnector(dry_run=dry_run)
     now = datetime.now(timezone.utc)
     released = 0
@@ -662,7 +671,7 @@ def check_ttl(ttl: float | None, dry_run: bool):
                     escalation_type="ttl_exceeded",
                     reason=f"Isolation TTL exceeded ({age_h:.1f}h > {ttl_h}h) — auto-released",
                 )
-                console.print(f"  [green]✓ Released.[/green]")
+                console.print("  [green]✓ Released.[/green]")
             released += 1
 
     if released == 0:
@@ -771,3 +780,27 @@ def bot():
     """Start the Discord bot — watches escalations and posts interactive embeds."""
     from glorfindel.bot import run
     run()
+
+
+@cli.command()
+def dashboard():
+    """Full-screen TUI: resources, live feed, and escalations in one view.
+
+    Refreshes every 2s. Reads active isolations/blocks from ~/.glorfindel/
+    and the most recent run from runs/. Press Ctrl+C to exit.
+    """
+    from glorfindel.tui import run
+    run()
+
+
+@cli.command("war-room")
+@click.option("--host", default="0.0.0.0", show_default=True)
+@click.option("--port", default=7007, show_default=True)
+def war_room(host: str, port: int):
+    """Start the War Room web UI (cards + live feed + action buttons).
+
+    Requires: pip install eregion[war-room]
+    Then open http://localhost:7007 in a browser.
+    """
+    from glorfindel.api import serve
+    serve(host=host, port=port)

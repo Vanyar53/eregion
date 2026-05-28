@@ -1,0 +1,74 @@
+# make glorfindel-start  →  watch + war-room sur http://localhost:7007
+
+x-env: &env
+  AZURE_CLIENT_ID: ${AZURE_CLIENT_ID:-}
+  AZURE_CLIENT_SECRET: ${AZURE_CLIENT_SECRET:-}
+  AZURE_TENANT_ID: ${AZURE_TENANT_ID:-}
+  AZURE_SUBSCRIPTION_ID: ${AZURE_SUBSCRIPTION_ID:-}
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  GLORFINDEL_LLM_MODEL: ${GLORFINDEL_LLM_MODEL:-}
+  GLORFINDEL_LLM_BASE_URL: ${GLORFINDEL_LLM_BASE_URL:-}
+  OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+  MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
+  AZURE_API_KEY: ${AZURE_API_KEY:-}
+  AZURE_API_BASE: ${AZURE_API_BASE:-}
+  AZURE_API_VERSION: ${AZURE_API_VERSION:-}
+  GLORFINDEL_WEBHOOK_URL: ${GLORFINDEL_WEBHOOK_URL:-}
+  DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
+  DISCORD_CHANNEL_ID: ${DISCORD_CHANNEL_ID:-}
+  DISCORD_PING_ROLE: ${DISCORD_PING_ROLE:-}
+  GLORFINDEL_ISOLATION_TTL_H: ${GLORFINDEL_ISOLATION_TTL_H:-}
+  GLORFINDEL_INCIDENT_TTL_S: ${GLORFINDEL_INCIDENT_TTL_S:-}
+  ORT_LOGGING_LEVEL_DEFAULT: "3"
+
+services:
+  watch:
+    image: eregion-glorfindel
+    container_name: eregion-watch
+    command: glorfindel watch /app/runs
+    restart: unless-stopped
+    environment:
+      <<: *env
+    volumes:
+      - ./runs:/app/runs
+      - ${HOME}/.glorfindel:/root/.glorfindel
+      - ${HOME}/.cache/chroma:/root/.cache/chroma
+    develop:
+      watch:
+        - action: rebuild
+          path: ./glorfindel
+          ignore:
+            - ./glorfindel/static
+        - action: rebuild
+          path: ./annatar
+        - action: rebuild
+          path: ./pyproject.toml
+
+  war-room:
+    image: eregion-glorfindel
+    container_name: eregion-war-room
+    command: glorfindel war-room --host 0.0.0.0 --port 7007
+    restart: unless-stopped
+    ports:
+      - "7007:7007"
+    environment:
+      <<: *env
+    volumes:
+      - ./runs:/app/runs
+      - ${HOME}/.glorfindel:/root/.glorfindel
+      - ${HOME}/.cache/chroma:/root/.cache/chroma
+    depends_on:
+      - watch
+    develop:
+      watch:
+        - action: sync
+          path: ./glorfindel/static
+          target: /app/glorfindel/static
+        - action: rebuild
+          path: ./glorfindel
+          ignore:
+            - ./glorfindel/static
+        - action: rebuild
+          path: ./annatar
+        - action: rebuild
+          path: ./pyproject.toml

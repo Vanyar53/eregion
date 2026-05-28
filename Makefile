@@ -51,6 +51,7 @@ DOCKER_GLORFINDEL := docker run --rm $(AZURE_ENV) $(GLORFINDEL_VOLS) $(GLORFINDE
 	glorfindel-respond glorfindel-dry-run glorfindel-watch \
 	glorfindel-release glorfindel-revert glorfindel-list \
 	glorfindel-pending glorfindel-check-ttl \
+	glorfindel-start glorfindel-stop glorfindel-restart glorfindel-dev glorfindel-logs \
 	annatar-shell glorfindel-shell \
 	venv install test test-unit lint annatar-simulate annatar-simulate-gap clean
 
@@ -81,7 +82,12 @@ help:
 	@echo "  make annatar-simulate-gap     Simulate detection_timeout flow"
 	@echo ""
 	@echo "Glorfindel (Docker)"
-	@echo "  make glorfindel-watch           Watch runs/ in real-time"
+	@echo "  make glorfindel-start           Start watch + war-room (http://localhost:7007)"
+	@echo "  make glorfindel-stop            Stop all services"
+	@echo "  make glorfindel-restart         Rebuild + restart all services"
+	@echo "  make glorfindel-dev             Start + watch files (auto-reload on change)"
+	@echo "  make glorfindel-logs            Tail service logs"
+	@echo "  make glorfindel-watch           Watch runs/ only (no web UI)"
 	@echo "  make glorfindel-respond         SIGNALS=... Process signal file"
 	@echo "  make glorfindel-dry-run         SIGNALS=... Dry-run (no actions)"
 	@echo "  make glorfindel-list            Show active isolations + blocks"
@@ -158,6 +164,32 @@ glorfindel-release: build
 
 glorfindel-check-ttl: build
 	$(DOCKER_GLORFINDEL) check-ttl
+
+glorfindel-start: build-glorfindel
+	mkdir -p $(HOME)/.glorfindel $(HOME)/.cache/chroma runs
+	docker compose up -d
+	@echo ""
+	@echo "  War Room  →  http://localhost:7007"
+	@echo "  Logs      →  make glorfindel-logs"
+	@echo "  Dev mode  →  make glorfindel-dev  (auto-reload on file change)"
+	@echo "  Stop      →  make glorfindel-stop"
+	@echo ""
+
+glorfindel-stop:
+	docker compose down
+
+glorfindel-restart: build-glorfindel
+	docker compose up -d --build --force-recreate
+	@echo "  War Room  →  http://localhost:7007"
+
+glorfindel-dev: build-glorfindel
+	mkdir -p $(HOME)/.glorfindel $(HOME)/.cache/chroma runs
+	docker compose up -d
+	@echo "  War Room  →  http://localhost:7007  (watching for changes…)"
+	docker compose watch
+
+glorfindel-logs:
+	docker compose logs -f
 
 # ── Shells ────────────────────────────────────────────────────────────────
 

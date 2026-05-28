@@ -1,0 +1,753 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Glorfindel — War Room</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:        #0d1117;
+    --bg1:       #161b22;
+    --bg2:       #21262d;
+    --border:    #30363d;
+    --text:      #e6edf3;
+    --dim:       #7d8590;
+    --green:     #3fb950;
+    --red:       #f85149;
+    --yellow:    #d29922;
+    --orange:    #e3b341;
+    --blue:      #58a6ff;
+    --cyan:      #39d353;
+    --purple:    #bc8cff;
+    --font:      ui-monospace, "Cascadia Code", "SF Mono", Consolas, monospace;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 13px;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* ── Header ── */
+  header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 10px 20px;
+    background: var(--bg1);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .logo { color: var(--blue); font-weight: 700; font-size: 15px; letter-spacing: 2px; }
+  .subtitle { color: var(--dim); font-size: 12px; }
+  #live-dot { color: var(--green); font-size: 10px; animation: pulse 2s infinite; }
+  #live-dot.disconnected { color: var(--red); animation: none; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+
+  .spacer { flex: 1; }
+
+  #clock { color: var(--dim); font-size: 11px; }
+
+  .scenario-row { display: flex; gap: 8px; align-items: center; }
+  select, button {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 12px;
+    padding: 5px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    outline: none;
+  }
+  select:hover, button:hover { border-color: var(--blue); }
+  button.primary { background: #1f6feb; border-color: #388bfd; color: #fff; }
+  button.primary:hover { background: #388bfd; }
+  button.danger  { background: #b62324; border-color: #f85149; color: #fff; }
+  button.danger:hover  { background: #f85149; }
+  button.action  { background: var(--bg2); border-color: var(--border); font-size: 11px; padding: 3px 8px; }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+
+  /* ── Main layout ── */
+  main {
+    display: flex;
+    gap: 0;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  /* ── Incidents column ── */
+  #incidents-col {
+    width: 360px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid var(--border);
+    overflow: hidden;
+  }
+  .col-header {
+    padding: 10px 16px 8px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    color: var(--dim);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  #incidents-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  /* ── VM Card ── */
+  .vm-card {
+    background: var(--bg1);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .vm-card-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px 8px;
+    border-bottom: 1px solid var(--border);
+  }
+  .vm-dot { font-size: 10px; }
+  .vm-name { font-weight: 700; font-size: 13px; flex: 1; }
+  .vm-age  { font-size: 10px; color: var(--dim); }
+
+  .vm-card-body { padding: 10px 14px; }
+
+  .state-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 0;
+    font-size: 12px;
+  }
+  .badge {
+    font-size: 10px;
+    font-weight: 700;
+    padding: 2px 7px;
+    border-radius: 4px;
+    letter-spacing: .5px;
+  }
+  .badge.isolated { background: #3d1a1a; color: var(--red); border: 1px solid #6d2c2c; }
+  .badge.blocked  { background: #3d2e00; color: var(--orange); border: 1px solid #6d5200; }
+  .state-detail   { color: var(--dim); font-size: 11px; }
+
+  .vm-escalations {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border);
+  }
+  .esc-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 5px 0;
+    font-size: 11px;
+    color: var(--orange);
+  }
+  .esc-icon { flex-shrink: 0; }
+  .esc-text { flex: 1; }
+  .esc-action-label { font-weight: 700; }
+  .esc-reason { color: var(--dim); font-size: 10px; margin-top: 2px; }
+
+  .vm-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 10px;
+    flex-wrap: wrap;
+  }
+
+  .empty-state {
+    text-align: center;
+    padding: 40px 20px;
+    color: var(--dim);
+  }
+  .empty-state .check { font-size: 24px; color: var(--green); margin-bottom: 8px; }
+
+  /* ── Feed column ── */
+  #feed-col {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    overflow: hidden;
+  }
+  #feed-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    scroll-behavior: smooth;
+  }
+  .feed-entry {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    padding: 3px 0;
+    font-size: 12px;
+    border-radius: 4px;
+    transition: background .1s;
+  }
+  .feed-entry:hover { background: var(--bg1); padding-left: 4px; padding-right: 4px; }
+  .feed-ts   { color: var(--dim); font-size: 11px; flex-shrink: 0; width: 148px; }
+  .feed-event{ flex-shrink: 0; width: 190px; font-weight: 600; }
+  .feed-meta { color: var(--dim); font-size: 11px; }
+  .feed-pct  { color: var(--dim); font-size: 10px; margin-left: 6px; }
+
+  .ev-attack_started    { color: var(--yellow); }
+  .ev-detection         { color: var(--green); }
+  .ev-detection_timeout { color: var(--orange); }
+  .ev-recovery_complete { color: var(--cyan); }
+  .ev-recovery_failed   { color: var(--red); }
+
+  .act-ok  { color: var(--green); }
+  .act-esc { color: var(--red); }
+  .act-run { color: var(--blue); }
+  .act-err { color: var(--red); }
+
+  /* ── Scrollbar ── */
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+  /* ── Toast ── */
+  #toast {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 16px;
+    font-size: 12px;
+    color: var(--text);
+    opacity: 0;
+    transition: opacity .3s;
+    pointer-events: none;
+    z-index: 100;
+    max-width: 320px;
+  }
+  #toast.show { opacity: 1; }
+
+  /* ── Modal ── */
+  .modal-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,.7);
+    z-index: 200;
+    align-items: center;
+    justify-content: center;
+  }
+  .modal-overlay.open { display: flex; }
+  .modal {
+    background: var(--bg1);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px 24px;
+    min-width: 360px;
+    max-width: 500px;
+  }
+  .modal-title { font-weight: 700; font-size: 14px; margin-bottom: 10px; }
+  .modal-body  { color: var(--dim); font-size: 12px; line-height: 1.6; margin-bottom: 16px; }
+  .modal-cmd   { background: var(--bg2); border: 1px solid var(--border); border-radius: 6px;
+                 padding: 8px 12px; font-family: var(--font); font-size: 11px; color: var(--cyan);
+                 white-space: pre-wrap; margin-bottom: 16px; }
+  .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+  .spinner {
+    display: inline-block;
+    width: 10px; height: 10px;
+    border: 2px solid var(--dim);
+    border-top-color: var(--blue);
+    border-radius: 50%;
+    animation: spin .7s linear infinite;
+    margin-right: 6px;
+    vertical-align: middle;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<header>
+  <span class="logo">GLORFINDEL</span>
+  <span class="subtitle">War Room</span>
+  <span id="watch-dot" style="font-size:10px;color:var(--dim)">●</span>
+  <span id="watch-label" style="color:var(--dim);font-size:11px">watch…</span>
+  <span style="color:var(--border);margin:0 4px">│</span>
+  <span id="live-dot">●</span>
+  <span id="live-label" style="color:var(--dim);font-size:11px">connecting…</span>
+
+  <div class="spacer"></div>
+
+  <div class="scenario-row">
+    <select id="scenario-select"><option value="">Run scenario…</option></select>
+    <button class="primary" id="run-btn" disabled>▶ Run</button>
+  </div>
+
+  <span id="clock" style="min-width:70px;text-align:right"></span>
+</header>
+
+<main>
+  <div id="incidents-col">
+    <div class="col-header">INCIDENTS</div>
+    <div id="incidents-list">
+      <div class="empty-state">
+        <div class="check">✓</div>
+        <div>All clear — no active incidents</div>
+        <div style="margin-top:6px;font-size:11px">Run a scenario to start</div>
+      </div>
+    </div>
+  </div>
+
+  <div id="feed-col">
+    <div class="col-header">LIVE FEED</div>
+    <div id="feed-list"></div>
+  </div>
+</main>
+
+<div id="toast"></div>
+
+<div class="modal-overlay" id="modal">
+  <div class="modal">
+    <div class="modal-title" id="modal-title"></div>
+    <div class="modal-body"  id="modal-body"></div>
+    <div class="modal-cmd"   id="modal-cmd" style="display:none"></div>
+    <div class="modal-actions">
+      <button id="modal-cancel" onclick="closeModal()">Cancel</button>
+      <button id="modal-confirm" class="primary"></button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── Utilities ──────────────────────────────────────────────────────────────
+
+function age(ts) {
+  if (!ts) return '';
+  const s = Math.floor((Date.now() - new Date(ts).getTime()) / 1000);
+  if (s < 60)   return s + 's ago';
+  if (s < 3600) return Math.floor(s / 60) + 'm ago';
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+  return h + 'h ' + m + 'm ago';
+}
+
+function fmtTime(ts) {
+  if (!ts) return '';
+  return new Date(ts).toISOString().slice(11, 19) + ' UTC';
+}
+
+function toast(msg, ms = 3000) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(el._t);
+  el._t = setTimeout(() => el.classList.remove('show'), ms);
+}
+
+function closeModal() {
+  document.getElementById('modal').classList.remove('open');
+}
+
+let _modalConfirm = null;
+function openModal(title, body, cmd, confirmLabel, confirmClass, onConfirm) {
+  document.getElementById('modal-title').textContent = title;
+  document.getElementById('modal-body').textContent = body;
+  const cmdEl = document.getElementById('modal-cmd');
+  if (cmd) { cmdEl.textContent = cmd; cmdEl.style.display = ''; }
+  else cmdEl.style.display = 'none';
+  const btn = document.getElementById('modal-confirm');
+  btn.textContent = confirmLabel;
+  btn.className = confirmClass;
+  _modalConfirm = onConfirm;
+  btn.onclick = () => { closeModal(); onConfirm(); };
+  document.getElementById('modal').classList.add('open');
+}
+
+// ── State ──────────────────────────────────────────────────────────────────
+
+let _state = { resources: [], escalations: [] };
+let _autoScroll = true;
+
+// ── Clock ──────────────────────────────────────────────────────────────────
+
+setInterval(() => {
+  document.getElementById('clock').textContent =
+    new Date().toISOString().slice(11, 19) + ' UTC';
+}, 1000);
+
+// ── Scenarios ──────────────────────────────────────────────────────────────
+
+async function loadScenarios() {
+  try {
+    const r = await fetch('/api/scenarios');
+    const data = await r.json();
+    const sel = document.getElementById('scenario-select');
+    data.scenarios.forEach(s => {
+      const opt = document.createElement('option');
+      opt.value = s.name;
+      opt.textContent = s.name;
+      sel.appendChild(opt);
+    });
+    sel.addEventListener('change', () => {
+      document.getElementById('run-btn').disabled = !sel.value;
+    });
+  } catch (e) {}
+}
+
+document.getElementById('run-btn').addEventListener('click', () => {
+  const name = document.getElementById('scenario-select').value;
+  if (!name) return;
+  openModal(
+    'Run scenario',
+    `This will launch annatar run scenarios/azure/${name}.yaml on the live Azure infrastructure.`,
+    `annatar run scenarios/azure/${name}.yaml`,
+    '▶ Run',
+    'primary',
+    () => runScenario(name),
+  );
+});
+
+async function runScenario(name) {
+  toast('⚡ Starting ' + name + '…');
+  try {
+    await fetch(`/api/run/${name}`, { method: 'POST' });
+  } catch (e) {
+    toast('✗ Failed to start scenario: ' + e.message);
+  }
+}
+
+// ── Render incidents ───────────────────────────────────────────────────────
+
+function renderIncidents() {
+  const list = document.getElementById('incidents-list');
+  const { resources, escalations } = _state;
+
+  // Map escalations by vm_name
+  const escByVm = {};
+  escalations.forEach(e => {
+    const vm = e.resource_id.split('/').pop();
+    if (!escByVm[vm]) escByVm[vm] = [];
+    escByVm[vm].push(e);
+  });
+
+  // Union: VMs with active state + VMs with pending escalations only
+  const resourceMap = {};
+  resources.forEach(r => { resourceMap[r.vm_name] = r; });
+  const escOnlyVms = Object.keys(escByVm).filter(vm => !resourceMap[vm]);
+  escOnlyVms.forEach(vm => {
+    // Synthetic resource entry for VMs that only have escalations
+    resourceMap[vm] = {
+      resource_id: escalations.find(e => e.resource_id.split('/').pop() === vm)?.resource_id || vm,
+      vm_name: vm,
+      states: [],
+    };
+  });
+
+  const allResources = Object.values(resourceMap);
+
+  if (!allResources.length) {
+    list.innerHTML = `
+      <div class="empty-state">
+        <div class="check">✓</div>
+        <div>All clear — no active incidents</div>
+        <div style="margin-top:6px;font-size:11px">Run a scenario to start</div>
+      </div>`;
+    return;
+  }
+
+  list.innerHTML = allResources.map(r => {
+    const { vm_name, states } = r;
+    const escs = escByVm[vm_name] || [];
+
+    const isIsolated = states.some(s => s.type === 'isolated');
+    const isBlocked  = states.some(s => s.type === 'blocked');
+    const hasEscOnly = !isIsolated && !isBlocked && escs.length > 0;
+    const dot = isIsolated ? '🔴' : isBlocked ? '🟡' : hasEscOnly ? '🟠' : '🟢';
+
+    const stateRows = states.map(s => {
+      if (s.type === 'isolated') {
+        return `<div class="state-row">
+          <span class="badge isolated">ISOLATED</span>
+          <span class="state-detail">${age(s.since)}</span>
+        </div>`;
+      }
+      return `<div class="state-row">
+        <span class="badge blocked">BLOCKED</span>
+        <span class="state-detail">${s.ip}  ${age(s.since)}</span>
+      </div>`;
+    }).join('');
+
+    const escRows = escs.map(e => {
+      const label = {
+        restore_from_backup: '🔄 Restore from backup required',
+        release_isolation:   '↩️ Release isolation',
+      }[e.action] || ('🚨 ' + e.action);
+      return `<div class="esc-row">
+        <span class="esc-text">
+          <span class="esc-action-label">${label}</span>
+          <div class="esc-reason">${e.reason.slice(0, 100)}${e.reason.length > 100 ? '…' : ''}</div>
+        </span>
+      </div>`;
+    }).join('');
+
+    const actions = [];
+    if (isIsolated || isBlocked) {
+      actions.push(
+        `<button class="action danger" onclick="confirmRevert('${vm_name}')">↩️ Revert</button>`
+      );
+    }
+    if (escs.some(e => e.action === 'restore_from_backup')) {
+      actions.push(
+        `<button class="action primary" onclick="confirmRestore('${vm_name}')">🔄 Restore</button>`
+      );
+    }
+    if (escs.length) {
+      escs.forEach(e => {
+        actions.push(
+          `<button class="action" onclick="confirmAck('${e.id}')">✓ Ack</button>`
+        );
+      });
+    }
+
+    return `<div class="vm-card">
+      <div class="vm-card-header">
+        <span class="vm-dot">${dot}</span>
+        <span class="vm-name">${vm_name}</span>
+      </div>
+      <div class="vm-card-body">
+        ${stateRows}
+        ${escs.length ? `<div class="vm-escalations">${escRows}</div>` : ''}
+        ${actions.length ? `<div class="vm-actions">${actions.join('')}</div>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ── Actions ────────────────────────────────────────────────────────────────
+
+function confirmRevert(vmName) {
+  openModal(
+    'Revert ' + vmName,
+    'Release isolation and unblock all IPs. The VM will be reconnected to the network.',
+    `glorfindel revert ${vmName} --yes`,
+    '↩️ Revert',
+    'danger',
+    () => doRevert(vmName),
+  );
+}
+
+function confirmRestore(vmName) {
+  openModal(
+    'Restore ' + vmName + ' from backup',
+    'This triggers an Azure Backup restore (~20 min). The VM will be offline during restore. Glorfindel will release isolation automatically after completion.',
+    `glorfindel restore ${vmName} --yes`,
+    '🔄 Restore',
+    'primary',
+    () => doRestore(vmName),
+  );
+}
+
+function confirmAck(escId) {
+  openModal(
+    'Acknowledge escalation',
+    'Mark this escalation as resolved. No action will be taken on Azure.',
+    `glorfindel ack ${escId.slice(0, 8)}`,
+    '✓ Acknowledge',
+    'action',
+    () => doAck(escId),
+  );
+}
+
+async function doRevert(vmName) {
+  toast('↩️ Reverting ' + vmName + '…');
+  try {
+    const r = await fetch(`/api/action/revert/${vmName}`, { method: 'POST' });
+    const d = await r.json();
+    if (d.ok) {
+      toast('✓ Revert complete — ' + vmName + ' is clean');
+      refreshState();
+    } else {
+      toast('✗ Revert failed: ' + (d.stderr || d.error || '?'));
+    }
+  } catch (e) {
+    toast('✗ ' + e.message);
+  }
+}
+
+async function doRestore(vmName) {
+  toast('🔄 Restore started for ' + vmName + ' (~20 min)…', 8000);
+  try {
+    await fetch(`/api/action/restore/${vmName}`, { method: 'POST' });
+  } catch (e) {
+    toast('✗ ' + e.message);
+  }
+}
+
+async function doAck(escId) {
+  try {
+    await fetch(`/api/action/ack/${escId}`, { method: 'POST' });
+    toast('✓ Acknowledged');
+    refreshState();
+  } catch (e) {
+    toast('✗ ' + e.message);
+  }
+}
+
+// ── Feed ───────────────────────────────────────────────────────────────────
+
+function appendFeedEntry(entry) {
+  const list = document.getElementById('feed-list');
+  const el = document.createElement('div');
+  el.className = 'feed-entry';
+
+  const ts = fmtTime(entry.timestamp);
+
+  if (entry.type === 'signal') {
+    const cls = 'ev-' + entry.event.replace(/_/g, '_');
+    const icons = {
+      attack_started: '▶',
+      detection: '✓',
+      detection_timeout: '⚠',
+      recovery_complete: '↺',
+      recovery_failed: '✗',
+    };
+    const icon = icons[entry.event] || '·';
+    el.innerHTML = `
+      <span class="feed-ts">${ts}</span>
+      <span class="feed-event ${cls}">${icon} ${entry.event}</span>
+      <span class="feed-meta">${entry.ttp || ''}&nbsp;&nbsp;${entry.vm || ''}</span>`;
+  } else {
+    const icon = entry.escalate ? '🚨' : entry.verified ? '✓' : entry.verified === false ? '✗' : '⚡';
+    const cls  = entry.escalate ? 'act-esc' : entry.verified ? 'act-ok' : entry.verified === false ? 'act-err' : 'act-run';
+    const label = entry.escalate ? 'escalate → ' + entry.action : entry.action;
+    const pct = entry.confidence ? Math.round(entry.confidence * 100) + '%' : '';
+    el.innerHTML = `
+      <span class="feed-ts">${ts}</span>
+      <span class="feed-event ${cls}">${icon} ${label}</span>
+      <span class="feed-meta">${entry.ttp || ''}&nbsp;&nbsp;${entry.vm || ''}</span>
+      <span class="feed-pct">${pct}</span>`;
+  }
+
+  list.appendChild(el);
+
+  if (_autoScroll) {
+    list.scrollTop = list.scrollHeight;
+  }
+}
+
+// Auto-scroll only when user is near the bottom
+document.getElementById('feed-list').addEventListener('scroll', function () {
+  const el = this;
+  _autoScroll = el.scrollTop + el.clientHeight >= el.scrollHeight - 40;
+});
+
+// ── State polling ──────────────────────────────────────────────────────────
+
+async function refreshState() {
+  try {
+    const r = await fetch('/api/state');
+    _state = await r.json();
+    renderIncidents();
+  } catch (e) {}
+}
+
+setInterval(refreshState, 5000);
+
+// ── WebSocket ──────────────────────────────────────────────────────────────
+
+let _ws = null;
+let _wsRetry = 1000;
+
+function connectWS() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  _ws = new WebSocket(`${proto}://${location.host}/api/feed`);
+
+  _ws.onopen = () => {
+    _wsRetry = 1000;
+    document.getElementById('live-dot').classList.remove('disconnected');
+    document.getElementById('live-label').textContent = 'live';
+  };
+
+  _ws.onmessage = (evt) => {
+    try {
+      const entry = JSON.parse(evt.data);
+      appendFeedEntry(entry);
+      // Refresh state on action/escalation events
+      if (entry.type === 'action' || entry.escalate) {
+        refreshState();
+      }
+    } catch (e) {}
+  };
+
+  _ws.onclose = () => {
+    document.getElementById('live-dot').classList.add('disconnected');
+    document.getElementById('live-label').textContent = 'reconnecting…';
+    setTimeout(connectWS, _wsRetry);
+    _wsRetry = Math.min(_wsRetry * 2, 10000);
+  };
+
+  _ws.onerror = () => _ws.close();
+}
+
+// ── Watch status ───────────────────────────────────────────────────────────
+
+async function refreshWatchStatus() {
+  try {
+    const r = await fetch('/api/watch/status');
+    const d = await r.json();
+    const dot   = document.getElementById('watch-dot');
+    const label = document.getElementById('watch-label');
+    if (d.status === 'running') {
+      dot.style.color   = 'var(--green)';
+      label.textContent = 'watch active';
+      label.style.color = 'var(--green)';
+    } else if (d.status === 'stale') {
+      dot.style.color   = 'var(--orange)';
+      label.textContent = 'watch stale';
+      label.style.color = 'var(--orange)';
+    } else if (d.status === 'stopped') {
+      dot.style.color   = 'var(--red)';
+      label.textContent = 'watch stopped';
+      label.style.color = 'var(--red)';
+    } else {
+      dot.style.color   = 'var(--dim)';
+      label.textContent = 'watch unknown';
+      label.style.color = 'var(--dim)';
+    }
+  } catch (e) {}
+}
+
+setInterval(refreshWatchStatus, 15000);
+
+// ── Init ───────────────────────────────────────────────────────────────────
+
+(async function init() {
+  await loadScenarios();
+  await refreshState();
+  await refreshWatchStatus();
+  connectWS();
+})();
+</script>
+</body>
+</html>

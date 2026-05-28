@@ -103,6 +103,15 @@ make annatar-shell      # 🔴 interactive shell — alias: ar
 make glorfindel-shell   # 🔵 interactive shell — alias: gf
 ```
 
+**Option C — Docker Compose (watch + War Room together)**
+
+```bash
+make glorfindel-start   # start watch + war-room → http://localhost:7007
+make glorfindel-logs    # tail service logs
+make glorfindel-dev     # auto-reload on code change (docker compose watch)
+make glorfindel-stop    # stop all services
+```
+
 State, history, and ChromaDB model cache are persisted on the host (`~/.glorfindel/`, `~/.annatar/`, `~/.cache/chroma/`).
 
 ### 3. Run your first attack/defense loop
@@ -183,6 +192,8 @@ glorfindel ack --all                            # acknowledge all pending escala
 glorfindel check-ttl                            # release isolations older than TTL (default 4h)
 glorfindel memory-stats                         # ChromaDB cycle count
 glorfindel bot                                  # start the interactive Discord bot
+glorfindel dashboard                            # full-screen TUI: resources + feed + escalations
+glorfindel war-room                             # web UI on http://localhost:7007 (pip install eregion[war-room])
 
 # Annatar
 annatar run scenarios/azure/ransomware-vm.yaml            # run a scenario (--dry-run available)
@@ -231,9 +242,12 @@ glorfindel/
   detectors.py    → DetectionConnector ABC + AzureMonitorDetector (polls every 10s)
   incidents.py    → IncidentRegistry: groups signals by resource_id within a TTL window (~/.glorfindel/incidents.jsonl)
   memory.py       → CycleMemory: ChromaDB with confidence + past_cycles_used metadata
-  cli.py          → watch (threaded, per-resource queues), respond, restore, release, unblock, pending, ack, check-ttl, bot
+  cli.py          → watch (threaded, per-resource queues), respond, restore, release, unblock, pending, ack, check-ttl, bot, dashboard, war-room
   escalations.py  → persistent escalation log (~/.glorfindel/escalations.jsonl)
   bot.py          → Discord bot: one thread per VM, interactive embeds, Ack/Command buttons, /pending slash command
+  tui.py          → Rich full-screen TUI dashboard: resources + live feed + escalations (glorfindel dashboard)
+  api.py          → FastAPI backend for War Room: /api/state, /api/feed (WebSocket), action endpoints
+  static/index.html → War Room web UI: VM incident cards, live feed, action buttons (glorfindel war-room)
 
 annatar/
   runner/engine.py    → preflight → setup → integrity check → attack → emit attack_started

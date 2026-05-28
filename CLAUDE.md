@@ -127,9 +127,12 @@ glorfindel/
   detectors.py    → DetectionConnector ABC + AzureMonitorDetector (poll 10s)
   memory.py       → CycleMemory ChromaDB (confidence + past_cycles_used)
   incidents.py    → IncidentRegistry (TTL, persist, thread-safe)
-  cli.py          → watch, respond, restore, release, unblock, revert, list, pending, ack, check-ttl, bot
+  cli.py          → watch, respond, restore, release, unblock, revert, list, pending, ack, check-ttl, bot, dashboard, war-room
   escalations.py  → ~/.glorfindel/escalations.jsonl + _ACTION_LABELS + _ESCALATION_LABELS
   bot.py          → Discord bot — un fil par VM, boutons Acquitter + Commande, /pending slash command
+  tui.py          → Rich TUI full-screen (glorfindel dashboard) : resources + feed + escalations, refresh 2s
+  api.py          → FastAPI War Room backend — /api/state, /api/feed (WebSocket), /api/action/{revert,restore,ack}
+  static/index.html → War Room web UI — cards VM, feed live, boutons Revert/Restore/Ack (glorfindel war-room)
 
 annatar/
   runner/engine.py    → setup AVANT integrity check → attack → emit attack_started
@@ -167,7 +170,13 @@ terraform/                    → infra complète Azure (VM, NSG, LAW, Backup, D
 ## CLI — référence complète
 
 ```bash
-# Workflow opérateur — 3 terminaux
+# Workflow opérateur — Docker Compose (recommandé)
+make glorfindel-start                        # lance watch + war-room → http://localhost:7007
+make glorfindel-logs                         # tail logs des deux services
+make glorfindel-dev                          # auto-reload sur modification de code (docker compose watch)
+make glorfindel-stop                         # arrêt
+
+# Workflow opérateur — 3 terminaux (local sans Docker Compose)
 glorfindel watch runs/                       # terminal 1 — réponses automatiques
 annatar run scenarios/azure/ransomware-vm.yaml  # terminal 2 — attaque
 glorfindel pending --watch                   # terminal 3 — alerting (poll 2s, NEW ESCALATION)
@@ -187,6 +196,8 @@ glorfindel ack --all                         # acquitter toutes
 glorfindel check-ttl                         # libérer isolations expirées
 glorfindel memory-stats                      # ChromaDB cycle count
 glorfindel bot                               # démarrer le bot Discord interactif
+glorfindel dashboard                         # TUI full-screen : resources + feed + escalations
+glorfindel war-room                          # War Room web sur http://localhost:7007 (pip install eregion[war-room])
 glorfindel --version                         # 0.2.0
 
 # Annatar

@@ -43,7 +43,7 @@ class IncidentRegistry:
         self._path = Path(path) if path else self._DEFAULT_PATH
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._ttl_s = ttl_s or int(
-            os.environ.get("GLORFINDEL_INCIDENT_TTL_S", self._DEFAULT_TTL_S)
+            os.environ.get("GLORFINDEL_INCIDENT_TTL_S") or self._DEFAULT_TTL_S
         )
         self._lock = threading.Lock()
 

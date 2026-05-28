@@ -242,6 +242,8 @@ glorfindel/
   actions.py      → CloudConnector ABC + AzureConnector (isolate, release, block, unblock, snapshot, verify_*)
   detectors.py          → DetectionConnector ABC + AzureMonitorDetector (polls every 10s)
   detection_rules.py    → DetectionRule dataclass + RulePoller: continuous rule-based polling (independent of Annatar)
+  rules/azure/
+    detection_rules.yaml → 4 continuous detection rules (T1486/T1041/T1110/T1548) — fill workspace_id + resource_id
   incidents.py    → IncidentRegistry: groups signals by resource_id within a TTL window (~/.glorfindel/incidents.jsonl)
   memory.py       → CycleMemory: ChromaDB with confidence + past_cycles_used metadata
   cli.py          → watch (threaded, per-resource queues), respond, restore, release, unblock, pending, ack, check-ttl, bot, dashboard, war-room
@@ -259,11 +261,12 @@ annatar/
 > over the Wire Protocol — control plane only). The VM needs no SSH access and no public IP for
 > Annatar to work. The only credential required is the Service Principal used for the Azure SDK.
 
-annatar/scenarios/azure/
-  ransomware-vm.yaml          → T1486
-  data-exfiltration.yaml      → T1041
-  lateral-movement.yaml       → T1110.001
-  privilege-escalation.yaml   → T1548.003
+annatar/
+  scenarios/azure/
+    ransomware-vm.yaml          → T1486
+    data-exfiltration.yaml      → T1041
+    lateral-movement.yaml       → T1110.001
+    privilege-escalation.yaml   → T1548.003
 
 schemas/
   scenario.schema.json → JSON Schema for IDE validation of scenario YAML files

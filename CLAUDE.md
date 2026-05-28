@@ -334,7 +334,18 @@ Types d'escalade : `low_confidence` (detection_timeout + snapshot), `destructive
 5. **Schéma normalisé `first_result_row`** — prérequis tous connecteurs
 6. **AWS provider** — `AwsConnector` + CloudWatch/GuardDuty
 7. **Prometheus + Loki** — stack open source dominante
-8. **War Room UI** — après feedback premier utilisateur
+8. **Apprentissage détection** — boucle de feedback sur les règles (voir ci-dessous)
+
+## Apprentissage — détection vs réaction
+
+**Réaction** : le LLM raisonne librement depuis signal + incident context + RAG ChromaDB. L'apprentissage est implicite et continu — plus ChromaDB accumule de cycles, plus le RAG est pertinent. Aucune règle explicite.
+
+**Détection** : les règles actuelles (`glorfindel/rules/azure/detection_rules.yaml`) sont statiques — seuils KQL figés, pas de feedback. C'est le vrai terrain d'apprentissage :
+- **Calibration des seuils** : `verified=False` après un match de règle = faux positif → seuil trop bas
+- **Amélioration des queries** : après `detection_timeout`, le LLM propose une query alternative à partir du contexte de l'attaque
+- **Découverte de nouvelles règles** : patterns non couverts suggérés post-incident
+
+Le ratio signal/bruit est le problème principal de la détection. ChromaDB stocke déjà `verified`, `confidence`, et `ttp` — il y a suffisamment de données pour une boucle de feedback.
 
 ---
 

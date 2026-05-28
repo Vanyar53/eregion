@@ -235,7 +235,7 @@ def decide(state: GlorfindelState, *, model: str) -> GlorfindelState:
 
     response = litellm.completion(
         model=model,
-        max_tokens=2048,
+        max_tokens=4096,
         messages=[
             {"role": "system", "content": _SYSTEM_PROMPT},
             {"role": "user", "content": user_content},

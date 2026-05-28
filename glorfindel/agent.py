@@ -83,9 +83,10 @@ _DECISION_TOOL = {
                 "type": "array",
                 "items": {"type": "string"},
                 "description": (
-                    "Concrete, context-aware next steps for the human operator "
-                    "(only when escalate=true). Reference the specific TTP, resource, "
-                    "and past cycle history. Empty list if escalate=false."
+                    "Concrete, context-aware next steps for the human operator. "
+                    "ALWAYS return a JSON array (never null). "
+                    "If escalate=true: 3-5 specific steps referencing the TTP, resource, "
+                    "and past cycle history. If escalate=false: empty array []."
                 ),
             },
         },
@@ -256,7 +257,7 @@ def decide(state: GlorfindelState, *, model: str) -> GlorfindelState:
         "explanation": d["explanation"],
         "escalate": d["escalate"],
         "escalation_reason": d.get("escalation_reason", ""),
-        "suggested_steps": d.get("suggested_steps", []),
+        "suggested_steps": d.get("suggested_steps") or [],
     }
 
 
@@ -326,7 +327,7 @@ def escalate_to_human(state: GlorfindelState) -> GlorfindelState:
             escalation_type=escalation_type,
             reason=state.get("escalation_reason", ""),
             run_id=signal.get("context", {}).get("run_id", ""),
-            suggested_steps=state.get("suggested_steps", []),
+            suggested_steps=state.get("suggested_steps") or [],
             ttp=signal.get("ttp", ""),
             severity=signal.get("severity", ""),
         )

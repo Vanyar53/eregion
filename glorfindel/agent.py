@@ -534,7 +534,7 @@ class GlorfindelAgent:
         self.memory = CycleMemory(path=memory_path)
         self.connector = connector or AzureConnector(dry_run=dry_run)
         self.incidents = IncidentRegistry(path=incidents_path)
-        self.model = model or os.environ.get("GLORFINDEL_LLM_MODEL", "anthropic/claude-sonnet-4-6")
+        self.model = model or os.environ.get("GLORFINDEL_LLM_MODEL") or "anthropic/claude-sonnet-4-6"
         self._graph = _build_graph(self.memory, self.connector, self.model, self.incidents)
 
     def respond(self, signal: dict) -> GlorfindelState:

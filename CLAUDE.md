@@ -122,17 +122,20 @@ Quand `signals_count > 1` ou `actions_taken` non vide → prompt injecte context
 
 ```
 glorfindel/
-  agent.py        → LangGraph 6 nodes + system prompt
-  actions.py      → CloudConnector ABC + AzureConnector (isolate, release, block, unblock, snapshot, verify_*)
-  detectors.py    → DetectionConnector ABC + AzureMonitorDetector (poll 10s)
-  memory.py       → CycleMemory ChromaDB (confidence + past_cycles_used)
-  incidents.py    → IncidentRegistry (TTL, persist, thread-safe)
-  cli.py          → watch, respond, restore, release, unblock, revert, list, pending, ack, check-ttl, bot, dashboard, war-room
-  escalations.py  → ~/.glorfindel/escalations.jsonl + _ACTION_LABELS + _ESCALATION_LABELS
-  bot.py          → Discord bot — un fil par VM, boutons Acquitter + Commande, /pending slash command
-  tui.py          → Rich TUI full-screen (glorfindel dashboard) : resources + feed + escalations, refresh 2s
-  api.py          → FastAPI War Room backend — /api/state, /api/feed (WebSocket), /api/action/{revert,restore,ack}
-  static/index.html → War Room web UI — cards VM, feed live, boutons Revert/Restore/Ack (glorfindel war-room)
+  agent.py              → LangGraph 6 nodes + system prompt
+  actions.py            → CloudConnector ABC + AzureConnector (isolate, release, block, unblock, snapshot, verify_*)
+  detectors.py          → DetectionConnector ABC + AzureMonitorDetector (poll 10s)
+  detection_rules.py    → DetectionRule dataclass + RulePoller (continuous polling, status persistence)
+  memory.py             → CycleMemory ChromaDB (confidence + past_cycles_used)
+  incidents.py          → IncidentRegistry (TTL, persist, thread-safe)
+  cli.py                → watch (+ --rules flag), respond, restore, release, unblock, revert, list, pending, ack, check-ttl, bot, dashboard, war-room
+  escalations.py        → ~/.glorfindel/escalations.jsonl + _ACTION_LABELS + _ESCALATION_LABELS
+  bot.py                → Discord bot — un fil par VM, boutons Acquitter + Commande, /pending slash command
+  tui.py                → Rich TUI full-screen (glorfindel dashboard) : resources + feed + escalations, refresh 2s, raccourcis a/r/v
+  api.py                → FastAPI War Room backend — /api/state, /api/feed (WebSocket), /api/config (rules+status), /api/action/*
+  static/index.html     → War Room web UI — cards VM, feed live, boutons Revert/Restore/Ack, panneau Config avec règles
+
+detection_rules.yaml    → Règles de détection continues (indépendant d'Annatar) — 4 règles Azure Monitor (T1486, T1041, T1110, T1548)
 
 annatar/
   runner/engine.py    → setup AVANT integrity check → attack → emit attack_started
@@ -155,6 +158,7 @@ terraform/                    → infra complète Azure (VM, NSG, LAW, Backup, D
   blocks/<vm>.json            → IPs bloquées par VM
   bot_posted.json             → IDs escalades déjà postées (évite doublons au redémarrage du bot)
   bot_threads.json            → resource_id → thread_id Discord (persistance entre redémarrages)
+  rule_status.json            → état de polling des règles (last_poll, last_match, match_count, last_error)
   .bashrc                     → PS1 + HISTFILE + alias gf (chargé par make glorfindel-shell)
   .bash_history               → historique bash persistant
 
@@ -226,9 +230,10 @@ GLORFINDEL_INCIDENT_TTL_S=300       # TTL fenêtre incident
 ## Tests
 
 ```bash
-pytest                    # 90 tests, 0 appel Azure, 0 appel LLM, 0 écriture ~/.glorfindel/
-pytest tests/unit/test_agent_nodes.py   # 30 tests LangGraph nodes
-pytest tests/unit/test_glorfindel.py    # 27 tests actions/routing/signals
+pytest                    # 104 tests, 0 appel Azure, 0 appel LLM, 0 écriture ~/.glorfindel/
+pytest tests/unit/test_agent_nodes.py        # 30 tests LangGraph nodes
+pytest tests/unit/test_glorfindel.py         # 27 tests actions/routing/signals
+pytest tests/unit/test_detection_rules.py    # 14 tests RulePoller + load_rules + status
 ```
 
 ---

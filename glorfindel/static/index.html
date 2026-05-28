@@ -257,6 +257,7 @@
   .cfg-badge.dim { background: var(--bg2); color: var(--dim); border: 1px solid var(--border); }
 
   .ttp-table { width: 100%; border-collapse: collapse; }
+  .ttp-table th { padding: 4px 8px; font-size: 10px; color: var(--dim); text-align: left; border-bottom: 1px solid var(--border); }
   .ttp-table td { padding: 5px 8px; font-size: 11px; border-bottom: 1px solid var(--bg2); }
   .ttp-table td:first-child { color: var(--blue); font-weight: 600; }
   .ttp-table td:last-child { text-align: right; }
@@ -878,6 +879,14 @@ function ttpStatus(c) {
   return ['— unknown', 'dim'];
 }
 
+function _relTime(iso) {
+  if (!iso) return '—';
+  const age = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+  if (age < 60) return `${age}s ago`;
+  if (age < 3600) return `${Math.floor(age / 60)}m ago`;
+  return `${Math.floor(age / 3600)}h ago`;
+}
+
 async function refreshConfig() {
   const panel = document.getElementById('config-panel');
   try {
@@ -938,6 +947,31 @@ async function refreshConfig() {
         <table class="ttp-table">
           <tbody>${ttpRows}</tbody>
         </table>
+      </div>
+
+      <div class="cfg-section">
+        <div class="cfg-section-title">Detection rules${det.rules_file ? ` <span style="color:var(--dim);font-weight:400">${det.rules_file}</span>` : ''}</div>
+        ${det.rules && det.rules.length ? `
+        <table class="ttp-table">
+          <thead><tr><th>Rule</th><th>TTP</th><th>Interval</th><th>Last poll</th><th>Last match</th><th>Status</th></tr></thead>
+          <tbody>${det.rules.map(r => {
+            const pollAge = r.last_poll ? _relTime(r.last_poll) : '—';
+            const matchAge = r.last_match ? _relTime(r.last_match) : '—';
+            const statusBadge = r.last_error
+              ? `<span class="cfg-badge err" title="${r.last_error}">✗ error</span>`
+              : r.last_poll
+                ? `<span class="cfg-badge ok">✓ polling</span>`
+                : `<span class="cfg-badge dim">⏸ idle</span>`;
+            return `<tr>
+              <td title="${r.description || ''}">${r.name}</td>
+              <td><span class="cfg-badge dim">${r.ttp || '—'}</span></td>
+              <td style="color:var(--dim)">${r.interval_s}s</td>
+              <td style="color:var(--dim)">${pollAge}</td>
+              <td style="color:${r.last_match ? 'var(--orange)' : 'var(--dim)'}">${matchAge}${r.match_count ? ` (×${r.match_count})` : ''}</td>
+              <td>${statusBadge}</td>
+            </tr>`;
+          }).join('')}</tbody>
+        </table>` : `<div class="cfg-row"><span class="cfg-val" style="color:var(--dim)">No detection_rules.yaml found</span></div>`}
       </div>
 
       <div class="cfg-section">

@@ -177,6 +177,34 @@ async def config() -> dict:
             except Exception:
                 pass
 
+    # Detection rules
+    rules_info: list[dict] = []
+    rules_candidates = [
+        Path("detection_rules.yaml"),
+        Path(__file__).parent.parent / "detection_rules.yaml",
+    ]
+    rules_path: Path | None = next((p for p in rules_candidates if p.exists()), None)
+    if rules_path:
+        try:
+            from glorfindel.detection_rules import _load_status, load_rules
+            rules = load_rules(rules_path)
+            status = _load_status()
+            for rule in rules:
+                s = status.get(rule.name, {})
+                rules_info.append({
+                    "name": rule.name,
+                    "ttp": rule.ttp,
+                    "source": rule.source,
+                    "description": rule.description,
+                    "interval_s": rule.interval_s,
+                    "last_poll": s.get("last_poll", ""),
+                    "last_match": s.get("last_match", ""),
+                    "last_error": s.get("last_error", ""),
+                    "match_count": s.get("match_count", 0),
+                })
+        except Exception:
+            pass
+
     return {
         "azure": {
             "subscription_id": subscription,
@@ -187,6 +215,8 @@ async def config() -> dict:
         "detection": {
             "workspaces": sorted(workspaces),
             "coverage": coverage,
+            "rules": rules_info,
+            "rules_file": str(rules_path) if rules_path else None,
         },
         "state": {
             "isolations": isolations,

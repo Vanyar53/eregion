@@ -13,6 +13,17 @@ from rich.table import Table
 console = Console()
 
 
+def _find_rules_file() -> str | None:
+    """Look for detection_rules.yaml in cwd, then project root."""
+    for candidate in (
+        Path("detection_rules.yaml"),
+        Path(__file__).parent.parent / "detection_rules.yaml",
+    ):
+        if candidate.exists():
+            return str(candidate)
+    return None
+
+
 @click.group()
 @click.version_option(version="0.2.0", prog_name="glorfindel")
 def cli():
@@ -118,7 +129,9 @@ def unblock(ip: str, resource_id: str, dry_run: bool, yes: bool):
 @click.option("--model", default=lambda: os.environ.get("GLORFINDEL_LLM_MODEL", "anthropic/claude-sonnet-4-6"), show_default=True)
 @click.option("--memory-path", default=None)
 @click.option("--interval", default=2, show_default=True, help="Poll interval in seconds.")
-def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, interval: int):
+@click.option("--rules", "rules_file", default=None, metavar="PATH",
+              help="Detection rules YAML (default: detection_rules.yaml in cwd or project root).")
+def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, interval: int, rules_file: str | None):
     """Watch a runs/ directory and respond to signals as they arrive.
 
     Start this before (or during) an Annatar run to get real-time responses.
@@ -138,6 +151,9 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
 
     # path → byte offset of last read position
     tracked: dict[Path, int] = {}
+
+    _rules_file = rules_file or _find_rules_file()
+    _rule_poller: "RulePoller | None" = None
 
     # per-resource dispatch: resource_id → Queue
     _resource_queues: dict[str, _queue.Queue] = {}
@@ -285,8 +301,30 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
         _HEARTBEAT.parent.mkdir(parents=True, exist_ok=True)
         _HEARTBEAT.write_text(datetime.now(timezone.utc).isoformat())
 
-    console.print(f"[bold]Glorfindel watching[/bold] [dim]{runs_dir}/[/dim]  "
-                  f"(TTL={ttl_h}h, Ctrl+C to stop)\n")
+    if _rules_file:
+        try:
+            from glorfindel.detection_rules import RulePoller, load_rules
+            rules = load_rules(_rules_file)
+            if rules:
+                def _rule_dispatch(signal_data: dict) -> None:
+                    from annatar.signals.schema import Signal as _Signal
+                    sig = _Signal(**{
+                        k: signal_data.get(k, "")
+                        for k in _Signal.__dataclass_fields__
+                    })
+                    _dispatch(signal_data, sig)
+
+                _rule_poller = RulePoller(rules, _rule_dispatch, dry_run=dry_run)
+                _rule_poller.start()
+                console.print(
+                    f"[dim]Detection rules:[/dim] {len(rules)} rule(s) "
+                    f"from [dim]{_rules_file}[/dim]"
+                )
+        except Exception as exc:
+            console.print(f"[yellow]⚠ Could not load rules: {exc}[/yellow]")
+
+    msg = f"[bold]Glorfindel watching[/bold] [dim]{runs_dir}/[/dim]  (TTL={ttl_h}h, Ctrl+C to stop)"
+    console.print(msg + "\n")
     _write_heartbeat()
     try:
         while True:
@@ -297,6 +335,8 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
                 _write_heartbeat()
             time.sleep(interval)
     except KeyboardInterrupt:
+        if _rule_poller:
+            _rule_poller.stop()
         _HEARTBEAT.unlink(missing_ok=True)
         console.print("\n[dim]Watch stopped.[/dim]")
 

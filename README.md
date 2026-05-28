@@ -179,6 +179,7 @@ A `/pending` slash command lists open escalations. Set `DISCORD_PING_ROLE` to no
 ```bash
 # Glorfindel
 glorfindel watch runs/                          # real-time response during an Annatar run
+glorfindel watch runs/ --rules detection_rules.yaml  # + continuous detection polling
 glorfindel respond runs/<run_id>_signals.jsonl  # post-run processing
 glorfindel restore <resource_id> --yes          # trigger Azure Backup restore (--before auto-detected)
 glorfindel release <resource_id> --yes          # manually release an isolation
@@ -239,7 +240,8 @@ glorfindel/
   agent.py        → LangGraph graph (6 nodes): load_context → poll_detection → decide
                     → execute_action → verify_action → store_cycle
   actions.py      → CloudConnector ABC + AzureConnector (isolate, release, block, unblock, snapshot, verify_*)
-  detectors.py    → DetectionConnector ABC + AzureMonitorDetector (polls every 10s)
+  detectors.py          → DetectionConnector ABC + AzureMonitorDetector (polls every 10s)
+  detection_rules.py    → DetectionRule dataclass + RulePoller: continuous rule-based polling (independent of Annatar)
   incidents.py    → IncidentRegistry: groups signals by resource_id within a TTL window (~/.glorfindel/incidents.jsonl)
   memory.py       → CycleMemory: ChromaDB with confidence + past_cycles_used metadata
   cli.py          → watch (threaded, per-resource queues), respond, restore, release, unblock, pending, ack, check-ttl, bot, dashboard, war-room
@@ -327,10 +329,10 @@ glorfindel revert <resource_id> --yes      # release isolation + unblock all IPs
 ```bash
 pip install eregion[dev]
 pytest
-# 90 tests — 0 Azure calls, 0 LLM calls
+# 104 tests — 0 Azure calls, 0 LLM calls
 ```
 
-Coverage: 6 LangGraph nodes, routing rules, signal schema, safety guard, YAML parser, ChromaDB memory, CLI escalation flow, T1548 privilege escalation detection.
+Coverage: 6 LangGraph nodes, routing rules, signal schema, safety guard, YAML parser, ChromaDB memory, CLI escalation flow, T1548 privilege escalation detection, detection rules (RulePoller, load_rules, status persistence).
 
 ## License
 

@@ -1,6 +1,11 @@
 from __future__ import annotations
 
 import json
+import queue
+import select
+import subprocess
+import sys
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -11,6 +16,8 @@ from rich.live import Live
 from rich.panel import Panel
 from rich.text import Text
 
+
+# ── Helpers ────────────────────────────────────────────────────────────────────
 
 def _age(ts: str, now: datetime) -> str:
     if not ts:
@@ -26,6 +33,75 @@ def _age(ts: str, now: datetime) -> str:
     except Exception:
         return ""
 
+
+def _bin() -> str:
+    c = Path(sys.executable).parent / "glorfindel"
+    return str(c) if c.exists() else "glorfindel"
+
+
+# ── Key reading (best-effort, requires tty) ────────────────────────────────────
+
+_key_q: queue.Queue[str] = queue.Queue()
+_stop_keys = threading.Event()
+
+
+def _start_key_reader() -> bool:
+    """Start background key reader. Returns True if interactive."""
+    if not sys.stdin.isatty():
+        return False
+    try:
+        import termios
+        import tty
+    except ImportError:
+        return False
+
+    def _reader() -> None:
+        fd = sys.stdin.fileno()
+        old = termios.tcgetattr(fd)
+        try:
+            tty.setcbreak(fd)
+            while not _stop_keys.is_set():
+                if select.select([sys.stdin], [], [], 0.1)[0]:
+                    ch = sys.stdin.read(1)
+                    if ch:
+                        _key_q.put(ch)
+        except Exception:
+            pass
+        finally:
+            try:
+                termios.tcsetattr(fd, termios.TCSADRAIN, old)
+            except Exception:
+                pass
+
+    threading.Thread(target=_reader, daemon=True).start()
+    return True
+
+
+# ── Action execution ───────────────────────────────────────────────────────────
+
+def _execute(pending: dict) -> None:
+    """Execute a confirmed action. Restore/revert run in a background thread."""
+    from glorfindel import escalations as esc_module
+
+    key = pending["key"]
+    esc = pending["esc"]
+
+    if key == "a":
+        esc_module.resolve(esc["id"])
+        return
+
+    cmd_arg = "restore" if key == "r" else "revert"
+    rid = esc["resource_id"]
+
+    threading.Thread(
+        target=lambda: subprocess.run(
+            [_bin(), cmd_arg, rid, "--yes"], capture_output=True
+        ),
+        daemon=True,
+    ).start()
+
+
+# ── Renderables ────────────────────────────────────────────────────────────────
 
 def _resources_renderable(now: datetime) -> Panel:
     from glorfindel.actions import active_blocks, active_isolations
@@ -70,7 +146,11 @@ def _resources_renderable(now: datetime) -> Panel:
     )
 
 
-def _escalations_renderable(now: datetime) -> Panel:
+def _escalations_renderable(
+    now: datetime,
+    pending: dict | None,
+    interactive: bool,
+) -> Panel:
     from glorfindel import escalations as esc_module
 
     items = esc_module.pending()
@@ -82,6 +162,16 @@ def _escalations_renderable(now: datetime) -> Panel:
         )
 
     lines = Text(overflow="fold")
+
+    if pending:
+        lines.append(f"\n  ⚡ {pending['label']}\n\n", style="bold yellow")
+        lines.append("  Confirm?   [y] Yes   [n] Cancel\n", style="cyan")
+        return Panel(
+            lines,
+            title="[bold white on red] CONFIRM ACTION [/bold white on red]",
+            border_style="red",
+        )
+
     for e in items[:4]:
         age = _age(e["timestamp"], now)
         vm_short = e["resource_id"].split("/")[-1]
@@ -93,26 +183,34 @@ def _escalations_renderable(now: datetime) -> Panel:
         lines.append(f"{action}", style="bold yellow")
         lines.append(f"  {vm_short}  {age} ago\n", style="dim")
 
+        for step in (e.get("suggested_steps") or [])[:2]:
+            lines.append(f"    • {step[:72]}\n", style="dim")
+
         if action == "restore_from_backup":
             lines.append(
-                f"    → glorfindel restore {vm_short} --yes\n",
-                style="dim cyan",
+                f"    → glorfindel restore {vm_short} --yes\n", style="dim cyan"
             )
         elif esc_type == "verification_failed":
             lines.append(
-                f"    → glorfindel revert {vm_short} --yes\n",
-                style="dim cyan",
+                f"    → glorfindel revert {vm_short} --yes\n", style="dim cyan"
             )
         else:
-            lines.append(
-                f"    → glorfindel ack {esc_id}\n", style="dim cyan"
-            )
+            lines.append(f"    → glorfindel ack {esc_id}\n", style="dim cyan")
 
     if len(items) > 4:
         lines.append(
-            f"\n  … {len(items) - 4} more  →  glorfindel pending\n",
-            style="dim",
+            f"\n  … {len(items) - 4} more  →  glorfindel pending\n", style="dim"
         )
+
+    if interactive:
+        first = items[0]
+        hints = ["[a] ack"]
+        if (first["action"] == "restore_from_backup"
+                or first.get("escalation_type") == "low_confidence"):
+            hints.append("[r] restore")
+        if first.get("escalation_type") == "verification_failed":
+            hints.append("[v] revert")
+        lines.append("\n  " + "   ".join(hints) + "\n", style="dim cyan")
 
     return Panel(
         lines,
@@ -231,13 +329,15 @@ def _current_run_label() -> str:
     return candidates[0].name.replace("_signals.jsonl", "")
 
 
+# ── Main ───────────────────────────────────────────────────────────────────────
+
 def run() -> None:
     """Launch the Rich full-screen TUI dashboard."""
     layout = Layout()
     layout.split_column(
         Layout(name="header", size=1),
         Layout(name="main", ratio=3),
-        Layout(name="escalations", size=10),
+        Layout(name="escalations", size=14),
     )
     layout["main"].split_row(
         Layout(name="resources", ratio=1, minimum_size=30),
@@ -247,6 +347,7 @@ def run() -> None:
     feed_lines: list[str] = ["[dim]Loading…[/dim]"]
     last_mtime: float = 0.0
     run_label = ""
+    pending: dict | None = None
 
     def _maybe_reload() -> None:
         nonlocal last_mtime, run_label
@@ -270,6 +371,8 @@ def run() -> None:
     _maybe_reload()
     run_label = _current_run_label()
 
+    interactive = _start_key_reader()
+
     console = Console()
 
     def _header() -> Text:
@@ -278,18 +381,73 @@ def run() -> None:
         t.append("GLORFINDEL  ", style="bold blue")
         t.append("dashboard", style="bold white")
         t.append(f"  ·  {now.strftime('%H:%M:%S')} UTC", style="dim")
-        t.append("   Ctrl+C to exit", style="dim")
+        hint = "   q:quit  a:ack  r:restore  v:revert" if interactive else "   Ctrl+C to exit"
+        t.append(hint, style="dim")
         return t
 
-    with Live(layout, console=console, refresh_per_second=0.5, screen=True):
+    with Live(
+        layout,
+        console=console,
+        refresh_per_second=4 if interactive else 0.5,
+        screen=True,
+    ):
         try:
             while True:
                 now = datetime.now(timezone.utc)
                 _maybe_reload()
+
+                while not _key_q.empty():
+                    key = _key_q.get_nowait()
+                    if pending:
+                        if key in ("y", "Y"):
+                            _execute(pending)
+                            pending = None
+                        elif key in ("n", "N", "q", "Q", "\x1b"):
+                            pending = None
+                    else:
+                        from glorfindel import escalations as esc_module
+                        escs = esc_module.pending()
+                        if key in ("q", "Q"):
+                            return
+                        elif key == "a" and escs:
+                            e = escs[0]
+                            vm = e["resource_id"].split("/")[-1]
+                            pending = {
+                                "key": "a",
+                                "esc": e,
+                                "label": f"ack [{e['id'][:8]}] on {vm}",
+                            }
+                        elif key == "r" and escs:
+                            e = escs[0]
+                            is_restore = (
+                                e["action"] == "restore_from_backup"
+                                or e.get("escalation_type") == "low_confidence"
+                            )
+                            if is_restore:
+                                vm = e["resource_id"].split("/")[-1]
+                                pending = {
+                                    "key": "r",
+                                    "esc": e,
+                                    "label": f"restore {vm} from backup (~20 min)",
+                                }
+                        elif key == "v" and escs:
+                            e = escs[0]
+                            if e.get("escalation_type") == "verification_failed":
+                                vm = e["resource_id"].split("/")[-1]
+                                pending = {
+                                    "key": "v",
+                                    "esc": e,
+                                    "label": f"revert {vm} (release + unblock all IPs)",
+                                }
+
                 layout["header"].update(_header())
                 layout["resources"].update(_resources_renderable(now))
                 layout["feed"].update(_feed_renderable(feed_lines, run_label))
-                layout["escalations"].update(_escalations_renderable(now))
-                time.sleep(2)
+                layout["escalations"].update(
+                    _escalations_renderable(now, pending, interactive)
+                )
+                time.sleep(0.1 if interactive else 2)
         except KeyboardInterrupt:
             pass
+        finally:
+            _stop_keys.set()

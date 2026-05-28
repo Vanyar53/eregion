@@ -166,6 +166,8 @@
   .esc-text { flex: 1; }
   .esc-action-label { font-weight: 700; }
   .esc-reason { color: var(--dim); font-size: 10px; margin-top: 2px; }
+  .esc-steps { margin-top: 5px; border-left: 2px solid var(--border); padding-left: 8px; }
+  .esc-step  { color: var(--dim); font-size: 10px; line-height: 1.5; }
 
   .vm-actions {
     display: flex;
@@ -503,10 +505,16 @@ function renderIncidents() {
         restore_from_backup: '🔄 Restore from backup required',
         release_isolation:   '↩️ Release isolation',
       }[e.action] || ('🚨 ' + e.action);
+      const steps = (e.suggested_steps || []).slice(0, 3);
+      const stepsHtml = steps.length ? `
+        <div class="esc-steps">
+          ${steps.map(s => `<div class="esc-step">• ${s}</div>`).join('')}
+        </div>` : '';
       return `<div class="esc-row">
         <span class="esc-text">
           <span class="esc-action-label">${label}</span>
-          <div class="esc-reason">${e.reason.slice(0, 100)}${e.reason.length > 100 ? '…' : ''}</div>
+          <div class="esc-reason">${e.reason.slice(0, 120)}${e.reason.length > 120 ? '…' : ''}</div>
+          ${stepsHtml}
         </span>
       </div>`;
     }).join('');

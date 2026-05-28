@@ -232,6 +232,37 @@
   }
   .empty-state .check { font-size: 24px; color: var(--green); margin-bottom: 8px; }
 
+  /* ── Config panel ── */
+  #config-panel { font-size: 12px; }
+  .cfg-section { margin-bottom: 4px; }
+  .cfg-section-title {
+    font-size: 10px; font-weight: 700; letter-spacing: 1px;
+    color: var(--dim); text-transform: uppercase;
+    margin-bottom: 8px; padding-bottom: 4px;
+    border-bottom: 1px solid var(--border);
+  }
+  .cfg-row {
+    display: flex; align-items: baseline; gap: 8px;
+    padding: 4px 0; border-bottom: 1px solid var(--bg2);
+  }
+  .cfg-key   { color: var(--dim); font-size: 11px; flex-shrink: 0; width: 130px; }
+  .cfg-val   { color: var(--text); font-size: 11px; word-break: break-all; }
+  .cfg-badge {
+    font-size: 10px; font-weight: 700; padding: 1px 6px;
+    border-radius: 4px; flex-shrink: 0;
+  }
+  .cfg-badge.ok  { background: #1a3a1a; color: var(--green); border: 1px solid #2d5a2d; }
+  .cfg-badge.warn{ background: #3d2e00; color: var(--orange); border: 1px solid #6d5200; }
+  .cfg-badge.err { background: #3d1a1a; color: var(--red); border: 1px solid #6d2c2c; }
+  .cfg-badge.dim { background: var(--bg2); color: var(--dim); border: 1px solid var(--border); }
+
+  .ttp-table { width: 100%; border-collapse: collapse; }
+  .ttp-table td { padding: 5px 8px; font-size: 11px; border-bottom: 1px solid var(--bg2); }
+  .ttp-table td:first-child { color: var(--blue); font-weight: 600; }
+  .ttp-table td:last-child { text-align: right; }
+
+  button#config-toggle.active { border-color: var(--blue); color: var(--blue); }
+
   /* ── Scrollbar ── */
   ::-webkit-scrollbar { width: 6px; }
   ::-webkit-scrollbar-track { background: transparent; }
@@ -313,6 +344,7 @@
     <button class="primary" id="run-btn" disabled>▶ Run</button>
   </div>
 
+  <button id="config-toggle" class="action" onclick="toggleConfig()" title="Azure configuration">⚙ Config</button>
   <span id="clock" style="min-width:70px;text-align:right"></span>
 </header>
 
@@ -323,9 +355,9 @@
     <div id="feed-list"></div>
   </div>
 
-  <!-- Incidents RIGHT -->
+  <!-- Incidents / Config RIGHT -->
   <div id="incidents-col">
-    <div class="col-header">INCIDENTS</div>
+    <div class="col-header" id="right-col-header">INCIDENTS</div>
     <div id="incidents-list">
       <div class="empty-state">
         <div class="check">✓</div>
@@ -333,6 +365,7 @@
         <div style="margin-top:6px;font-size:11px">Run a scenario to start</div>
       </div>
     </div>
+    <div id="config-panel" style="display:none;flex:1;overflow-y:auto;padding:16px;display:none;flex-direction:column;gap:16px;"></div>
   </div>
 </main>
 
@@ -818,6 +851,113 @@ async function refreshWatchStatus() {
 }
 
 setInterval(refreshWatchStatus, 15000);
+
+// ── Config panel ───────────────────────────────────────────────────────────────
+
+let _configMode = false;
+
+function toggleConfig() {
+  _configMode = !_configMode;
+  document.getElementById('config-toggle').classList.toggle('active', _configMode);
+  document.getElementById('incidents-list').style.display = _configMode ? 'none' : '';
+  const cfgPanel = document.getElementById('config-panel');
+  cfgPanel.style.display = _configMode ? 'flex' : 'none';
+  document.getElementById('right-col-header').textContent = _configMode ? 'CONFIGURATION' : 'INCIDENTS';
+  if (_configMode) refreshConfig();
+}
+
+function mask(s, keep = 8) {
+  if (!s) return '—';
+  return s.slice(0, keep) + '…' + s.slice(-4);
+}
+
+function ttpStatus(c) {
+  if (c.detected && c.timeout) return ['⚠ partial', 'warn'];
+  if (c.detected)  return ['✓ detected', 'ok'];
+  if (c.timeout)   return ['✗ timeout', 'err'];
+  return ['— unknown', 'dim'];
+}
+
+async function refreshConfig() {
+  const panel = document.getElementById('config-panel');
+  try {
+    const r = await fetch('/api/config');
+    const d = await r.json();
+    const az = d.azure;
+    const det = d.detection;
+
+    const azBadge = az.configured
+      ? '<span class="cfg-badge ok">✓ connected</span>'
+      : '<span class="cfg-badge err">✗ missing credentials</span>';
+
+    const wsRows = det.workspaces.length
+      ? det.workspaces.map(w => `<div class="cfg-row">
+          <span class="cfg-key">workspace</span>
+          <span class="cfg-val">${mask(w, 12)}</span>
+        </div>`).join('')
+      : `<div class="cfg-row"><span class="cfg-val" style="color:var(--dim)">No runs yet</span></div>`;
+
+    const ttpRows = Object.keys(det.coverage).length
+      ? Object.entries(det.coverage).map(([ttp, c]) => {
+          const [label, cls] = ttpStatus(c);
+          return `<tr>
+            <td>${ttp}</td>
+            <td><span class="cfg-badge ${cls}">${label}</span></td>
+          </tr>`;
+        }).join('')
+      : `<tr><td colspan="2" style="color:var(--dim)">No runs yet</td></tr>`;
+
+    panel.innerHTML = `
+      <div class="cfg-section">
+        <div class="cfg-section-title">Azure</div>
+        <div class="cfg-row">
+          <span class="cfg-key">status</span>
+          <span class="cfg-val">${azBadge}</span>
+        </div>
+        <div class="cfg-row">
+          <span class="cfg-key">subscription</span>
+          <span class="cfg-val">${mask(az.subscription_id)}</span>
+        </div>
+        <div class="cfg-row">
+          <span class="cfg-key">tenant</span>
+          <span class="cfg-val">${mask(az.tenant_id)}</span>
+        </div>
+        <div class="cfg-row">
+          <span class="cfg-key">client (SP)</span>
+          <span class="cfg-val">${mask(az.client_id)}</span>
+        </div>
+      </div>
+
+      <div class="cfg-section">
+        <div class="cfg-section-title">Detection sources</div>
+        ${wsRows}
+      </div>
+
+      <div class="cfg-section">
+        <div class="cfg-section-title">TTP coverage (last 10 runs)</div>
+        <table class="ttp-table">
+          <tbody>${ttpRows}</tbody>
+        </table>
+      </div>
+
+      <div class="cfg-section">
+        <div class="cfg-section-title">NSG state</div>
+        ${d.state.isolations.length
+          ? d.state.isolations.map(i => `<div class="cfg-row">
+              <span class="cfg-key">${i.vm}</span>
+              <span class="cfg-val"><span class="cfg-badge err">ISOLATED</span></span>
+            </div>`).join('')
+          : `<div class="cfg-row"><span class="cfg-val" style="color:var(--green)">✓ No active isolations</span></div>`
+        }
+        ${d.state.blocks.map(b => `<div class="cfg-row">
+          <span class="cfg-key">${b.vm}</span>
+          <span class="cfg-val"><span class="cfg-badge warn">BLOCKED</span> ${b.ip}</span>
+        </div>`).join('')}
+      </div>`;
+  } catch (e) {
+    panel.innerHTML = `<div style="color:var(--red);padding:16px">Failed to load config: ${e.message}</div>`;
+  }
+}
 
 // ── Init ───────────────────────────────────────────────────────────────────────
 

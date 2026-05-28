@@ -103,6 +103,98 @@ async def scenarios() -> dict:
     return {"scenarios": []}
 
 
+@app.get("/api/config")
+async def config() -> dict:
+    import os
+
+    subscription = os.environ.get("AZURE_SUBSCRIPTION_ID", "")
+    tenant = os.environ.get("AZURE_TENANT_ID", "")
+    client_id = os.environ.get("AZURE_CLIENT_ID", "")
+
+    # Detection history: workspaces + TTP coverage from recent signal files
+    workspaces: set[str] = set()
+    ttp_events: dict[str, set[str]] = {}
+    runs = Path("runs")
+    if runs.exists():
+        for f in sorted(
+            runs.glob("*_signals.jsonl"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )[:10]:
+            for line in f.read_text().splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    d = json.loads(line)
+                    ws = d.get("context", {}).get("workspace_id", "")
+                    if ws:
+                        workspaces.add(ws)
+                    ttp = d.get("ttp", "")
+                    event = d.get("event", "")
+                    if ttp and event in ("detection", "detection_timeout"):
+                        ttp_events.setdefault(ttp, set()).add(event)
+                except Exception:
+                    pass
+
+    coverage = {
+        ttp: {
+            "detected": "detection" in events,
+            "timeout": "detection_timeout" in events,
+        }
+        for ttp, events in sorted(ttp_events.items())
+    }
+
+    # Isolation files
+    iso_dir = Path.home() / ".glorfindel" / "isolation"
+    isolations = []
+    if iso_dir.exists():
+        for f in iso_dir.glob("*.json"):
+            try:
+                d = json.loads(f.read_text())
+                isolations.append({
+                    "vm": f.stem,
+                    "isolated_at": d.get("isolated_at", ""),
+                    "resource_id": d.get("resource_id", ""),
+                })
+            except Exception:
+                pass
+
+    # Block files
+    blk_dir = Path.home() / ".glorfindel" / "blocks"
+    blocks = []
+    if blk_dir.exists():
+        for f in blk_dir.glob("*.json"):
+            try:
+                entries = json.loads(f.read_text())
+                if not isinstance(entries, list):
+                    entries = [entries]
+                for entry in entries:
+                    blocks.append({
+                        "vm": f.stem,
+                        "ip": entry.get("ip", ""),
+                        "blocked_at": entry.get("blocked_at", ""),
+                    })
+            except Exception:
+                pass
+
+    return {
+        "azure": {
+            "subscription_id": subscription,
+            "tenant_id": tenant,
+            "client_id": client_id,
+            "configured": bool(subscription and tenant and client_id),
+        },
+        "detection": {
+            "workspaces": sorted(workspaces),
+            "coverage": coverage,
+        },
+        "state": {
+            "isolations": isolations,
+            "blocks": blocks,
+        },
+    }
+
+
 @app.get("/api/feed/history")
 async def feed_history() -> dict:
     return {"entries": _load_recent(40)}

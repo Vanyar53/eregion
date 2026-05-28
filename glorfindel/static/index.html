@@ -801,6 +801,7 @@ function connectWS() {
     _wsRetry = 1000;
     document.getElementById('live-dot').classList.remove('disconnected');
     document.getElementById('live-label').textContent = 'live';
+    document.getElementById('feed-list').innerHTML = '';
   };
 
   _ws.onmessage = (evt) => {

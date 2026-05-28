@@ -3,7 +3,7 @@ PIP    := .venv/bin/pip
 
 IMAGE_ANNATAR   := eregion-annatar
 IMAGE_GLORFINDEL := eregion-glorfindel
-SCENARIO ?= scenarios/azure/ransomware-vm.yaml
+SCENARIO ?= annatar/scenarios/azure/ransomware-vm.yaml
 SIGNALS  ?= $(shell ls runs/*_signals.jsonl 2>/dev/null | tail -1)
 
 AZURE_ENV := \
@@ -20,7 +20,7 @@ ANNATAR_STATE := \
 	-v $(HOME)/.annatar:/root/.annatar
 
 ANNATAR_VOLS := \
-	-v $(PWD)/scenarios:/app/scenarios \
+	-v $(PWD)/annatar/scenarios:/app/annatar/scenarios \
 	-v $(PWD)/scripts:/app/scripts \
 	-v $(PWD)/runs:/app/runs
 
@@ -64,7 +64,7 @@ help:
 	@echo "Dev (local, no Docker)"
 	@echo "  make venv           Create .venv (python3 -m venv)"
 	@echo "  make install        Create .venv + install dev dependencies"
-	@echo "  make test           Run all tests (90, 0 Azure, 0 LLM calls)"
+	@echo "  make test           Run all tests (104, 0 Azure, 0 LLM calls)"
 	@echo "  make lint           Ruff linter"
 	@echo "  make clean          Remove build artifacts"
 	@echo ""
@@ -126,10 +126,10 @@ annatar-dry-run: build
 	$(DOCKER_ANNATAR) run $(SCENARIO) --dry-run --yes
 
 annatar-validate:
-	docker run --rm -v $(PWD)/scenarios:/app/scenarios --entrypoint annatar $(IMAGE) validate $(SCENARIO)
+	docker run --rm -v $(PWD)/annatar/scenarios:/app/annatar/scenarios --entrypoint annatar $(IMAGE_ANNATAR) validate $(SCENARIO)
 
 annatar-list:
-	docker run --rm -v $(PWD)/scenarios:/app/scenarios --entrypoint annatar $(IMAGE) list
+	docker run --rm -v $(PWD)/annatar/scenarios:/app/annatar/scenarios --entrypoint annatar $(IMAGE_ANNATAR) list
 
 annatar-simulate:
 	$(PYTHON) scripts/simulate_annatar.py

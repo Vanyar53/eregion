@@ -14,10 +14,10 @@ console = Console()
 
 
 def _find_rules_file() -> str | None:
-    """Look for detection_rules.yaml in cwd, then project root."""
+    """Look for detection_rules.yaml in canonical locations."""
     for candidate in (
-        Path("detection_rules.yaml"),
-        Path(__file__).parent.parent / "detection_rules.yaml",
+        Path("glorfindel/rules/azure/detection_rules.yaml"),
+        Path(__file__).parent / "rules" / "azure" / "detection_rules.yaml",
     ):
         if candidate.exists():
             return str(candidate)

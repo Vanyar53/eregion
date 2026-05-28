@@ -120,7 +120,7 @@ State, history, and ChromaDB model cache are persisted on the host (`~/.glorfind
 az vm start -g annatar -n vm-annatar-victim   # VM auto-shuts down at 23:00 UTC
 
 glorfindel watch runs/                              # terminal 1 — Glorfindel watches for signals
-annatar run scenarios/azure/ransomware-vm.yaml      # terminal 2 — Annatar attacks
+annatar run annatar/scenarios/azure/ransomware-vm.yaml      # terminal 2 — Annatar attacks
 
 # Glorfindel isolates the VM automatically within ~60s
 
@@ -197,10 +197,10 @@ glorfindel dashboard                            # full-screen TUI: resources + f
 glorfindel war-room                             # web UI on http://localhost:7007 (pip install eregion[war-room])
 
 # Annatar
-annatar run scenarios/azure/ransomware-vm.yaml            # run a scenario (--dry-run available)
-annatar run scenarios/azure/data-exfiltration.yaml
-annatar run scenarios/azure/lateral-movement.yaml
-annatar run scenarios/azure/privilege-escalation.yaml
+annatar run annatar/scenarios/azure/ransomware-vm.yaml            # run a scenario (--dry-run available)
+annatar run annatar/scenarios/azure/data-exfiltration.yaml
+annatar run annatar/scenarios/azure/lateral-movement.yaml
+annatar run annatar/scenarios/azure/privilege-escalation.yaml
 # annatar run ... --skip-preflight                        # bypass VM state check (power + isolation)
 
 # LLM provider — default: Anthropic Claude
@@ -259,7 +259,7 @@ annatar/
 > over the Wire Protocol — control plane only). The VM needs no SSH access and no public IP for
 > Annatar to work. The only credential required is the Service Principal used for the Azure SDK.
 
-scenarios/azure/
+annatar/scenarios/azure/
   ransomware-vm.yaml          → T1486
   data-exfiltration.yaml      → T1041
   lateral-movement.yaml       → T1110.001

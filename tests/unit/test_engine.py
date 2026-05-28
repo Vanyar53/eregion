@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 from annatar.runner.engine import Engine
 
-_SCENARIOS = Path(__file__).parent.parent.parent / "scenarios" / "azure"
+_SCENARIOS = Path(__file__).parent.parent.parent / "annatar" / "scenarios" / "azure"
 EXFIL_YAML = str(_SCENARIOS / "data-exfiltration.yaml")
 RANSOMWARE_YAML = str(_SCENARIOS / "ransomware-vm.yaml")
 

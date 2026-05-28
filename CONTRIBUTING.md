@@ -50,7 +50,7 @@ The agent, scenarios, and RAG memory don't change — only the connector.
 
 ## How to add a scenario
 
-Create a YAML file in `scenarios/<provider>/`. The JSON Schema at `schemas/scenario.schema.json` validates it (IDE autocomplete if you use VS Code with the provided settings).
+Create a YAML file in `annatar/scenarios/<provider>/`. The JSON Schema at `schemas/scenario.schema.json` validates it (IDE autocomplete if you use VS Code with the provided settings).
 
 ```yaml
 name: my-scenario

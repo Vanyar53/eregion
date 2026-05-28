@@ -134,15 +134,15 @@ glorfindel/
   tui.py                → Rich TUI full-screen (glorfindel dashboard) : resources + feed + escalations, refresh 2s, raccourcis a/r/v
   api.py                → FastAPI War Room backend — /api/state, /api/feed (WebSocket), /api/config (rules+status), /api/action/*
   static/index.html     → War Room web UI — cards VM, feed live, boutons Revert/Restore/Ack, panneau Config avec règles
-
-detection_rules.yaml    → Règles de détection continues (indépendant d'Annatar) — 4 règles Azure Monitor (T1486, T1041, T1110, T1548)
+  rules/azure/
+    detection_rules.yaml → Règles de détection continues (indépendant d'Annatar) — 4 règles Azure Monitor (T1486, T1041, T1110, T1548)
 
 annatar/
   runner/engine.py    → setup AVANT integrity check → attack → emit attack_started
   signals/schema.py   → Signal + severity_for_ttp (T1486/T1041/T1110/T1548)
   signals/emitter.py  → signal normalisé JSONL
 
-scenarios/azure/
+annatar/scenarios/azure/
   ransomware-vm.yaml          → T1486 (setup_testdata.sh ici uniquement)
   data-exfiltration.yaml      → T1041
   lateral-movement.yaml       → T1110.001
@@ -182,7 +182,7 @@ make glorfindel-stop                         # arrêt
 
 # Workflow opérateur — 3 terminaux (local sans Docker Compose)
 glorfindel watch runs/                       # terminal 1 — réponses automatiques
-annatar run scenarios/azure/ransomware-vm.yaml  # terminal 2 — attaque
+annatar run annatar/scenarios/azure/ransomware-vm.yaml  # terminal 2 — attaque
 glorfindel pending --watch                   # terminal 3 — alerting (poll 2s, NEW ESCALATION)
 
 # État
@@ -205,7 +205,7 @@ glorfindel war-room                          # War Room web sur http://localhost
 glorfindel --version                         # 0.2.0
 
 # Annatar
-annatar run scenarios/azure/<scenario>.yaml  # --dry-run disponible, --skip-preflight pour bypasser le check VM
+annatar run annatar/scenarios/azure/<scenario>.yaml  # --dry-run disponible, --skip-preflight pour bypasser le check VM
 
 # Simulation locale sans Azure
 make annatar-simulate

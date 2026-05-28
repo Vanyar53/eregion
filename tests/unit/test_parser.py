@@ -2,7 +2,7 @@ from pathlib import Path
 import pytest
 from annatar.runner.parser import ScenarioParser
 
-SCENARIOS_DIR = Path(__file__).parent.parent.parent / "scenarios"
+SCENARIOS_DIR = Path(__file__).parent.parent.parent / "annatar" / "scenarios"
 
 
 def test_validate_ransomware_scenario():

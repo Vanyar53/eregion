@@ -82,7 +82,7 @@ class ScenarioParser:
 
 
 def list_available():
-    scenarios_dir = Path(__file__).parent.parent.parent / "scenarios"
+    scenarios_dir = Path(__file__).parent.parent / "scenarios"
     files = glob.glob(str(scenarios_dir / "**" / "*.yaml"), recursive=True)
 
     table = Table(title="Available Scenarios")

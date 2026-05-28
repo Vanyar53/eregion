@@ -89,8 +89,8 @@ async def watch_status() -> dict:
 @app.get("/api/scenarios")
 async def scenarios() -> dict:
     candidates = [
-        Path("scenarios/azure"),
-        Path(__file__).parent.parent / "scenarios" / "azure",
+        Path("annatar/scenarios/azure"),
+        Path(__file__).parent.parent / "annatar" / "scenarios" / "azure",
     ]
     for d in candidates:
         if d.exists():
@@ -180,8 +180,8 @@ async def config() -> dict:
     # Detection rules
     rules_info: list[dict] = []
     rules_candidates = [
-        Path("detection_rules.yaml"),
-        Path(__file__).parent.parent / "detection_rules.yaml",
+        Path("glorfindel/rules/azure/detection_rules.yaml"),
+        Path(__file__).parent / "rules" / "azure" / "detection_rules.yaml",
     ]
     rules_path: Path | None = next((p for p in rules_candidates if p.exists()), None)
     if rules_path:

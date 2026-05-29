@@ -13,6 +13,24 @@ from rich.table import Table
 console = Console()
 
 
+def _record_manual_action(action: str, resource_id: str, outcome: dict) -> None:
+    """Append a manual operator action to runs/manual_actions.jsonl for the live feed."""
+    import json as _json
+    from datetime import datetime, timezone as _tz
+    runs = Path("runs")
+    runs.mkdir(exist_ok=True)
+    record = {
+        "timestamp": datetime.now(_tz.utc).isoformat(),
+        "action": action,
+        "confidence": 1.0,
+        "escalate": False,
+        "signal": {"resource_id": resource_id, "ttp": "", "severity": ""},
+        "outcome": outcome,
+    }
+    with open(runs / "manual_actions.jsonl", "a") as f:
+        f.write(_json.dumps(record) + "\n")
+
+
 def _find_rules_file() -> str | None:
     """Look for detection_rules.yaml in canonical locations."""
     for candidate in (
@@ -90,6 +108,7 @@ def release(resource_id: str, dry_run: bool, yes: bool):
         console.print("[yellow]DRY RUN — no changes made.[/yellow]")
     else:
         console.print(f"[green]✓ Isolation released.[/green]  ({result})")
+        _record_manual_action("release_isolation", resource_id, result)
 
 
 @cli.command()
@@ -121,6 +140,7 @@ def unblock(ip: str, resource_id: str, dry_run: bool, yes: bool):
         console.print(f"[yellow]No block rules found for {ip} — already removed?[/yellow]")
     else:
         console.print(f"[green]✓ Unblocked {ip}.[/green]  Deleted: {result['deleted_rules']}")
+        _record_manual_action("unblock_ip", resource_id, {**result, "ip": ip})
 
 
 @cli.command()
@@ -716,6 +736,8 @@ def _do_reset(resource_id: str, yes: bool, dry_run: bool) -> None:
         console.print(f"  [cyan]unblock {b['ip']}[/cyan] → {r.get('status', '?')}")
 
     console.print(f"\n[green]✓ Reset complete — {vm_short} is clean.[/green]")
+    if not dry_run:
+        _record_manual_action("reset", resource_id, {"status": "clean", "vm": vm_short})
 
 
 @cli.command("reset")

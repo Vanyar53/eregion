@@ -241,7 +241,7 @@ async def feed_ws(ws: WebSocket) -> None:
     def _init() -> None:
         if not runs.exists():
             return
-        for pat in ("*_signals.jsonl", "*_debug.jsonl"):
+        for pat in ("*_signals.jsonl", "*_debug.jsonl", "manual_actions.jsonl"):
             for f in runs.glob(pat):
                 positions[str(f)] = f.stat().st_size
 
@@ -258,6 +258,7 @@ async def feed_ws(ws: WebSocket) -> None:
             for pat, kind in (
                 ("*_signals.jsonl", "signal"),
                 ("*_debug.jsonl", "action"),
+                ("manual_actions.jsonl", "action"),
             ):
                 for f in runs.glob(pat):
                     key = str(f)
@@ -293,6 +294,8 @@ async def action_release(vm_name: str) -> dict:
         [_bin(), "release", resource_id, "--yes"],
         capture_output=True, text=True, timeout=60,
     )
+    if result.returncode == 0:
+        _write_manual_feed("release_isolation", resource_id, {"status": "released"})
     return {
         "stdout": result.stdout,
         "stderr": result.stderr,
@@ -302,14 +305,16 @@ async def action_release(vm_name: str) -> dict:
 
 @app.post("/api/action/revert/{vm_name}")
 async def action_revert(vm_name: str) -> dict:
-    """Full reset — release isolation + unblock all IPs. Use between test runs."""
+    """Full reset — release isolation + unblock all IPs."""
     resource_id = _find_resource_id(vm_name)
     if not resource_id:
         return {"error": f"No active actions found for {vm_name}"}
     result = subprocess.run(
-        [_bin(), "revert", resource_id, "--yes"],
+        [_bin(), "reset", resource_id, "--yes"],
         capture_output=True, text=True, timeout=60,
     )
+    if result.returncode == 0:
+        _write_manual_feed("reset", resource_id, {"status": "clean"})
     return {
         "stdout": result.stdout,
         "stderr": result.stderr,
@@ -493,6 +498,22 @@ def _find_resource_id(vm_name: str) -> str | None:
     return None
 
 
+def _write_manual_feed(action: str, resource_id: str, outcome: dict) -> None:
+    """Write an operator action entry to runs/manual_actions.jsonl for the live feed."""
+    runs = Path("runs")
+    runs.mkdir(exist_ok=True)
+    entry = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "action": action,
+        "confidence": 1.0,
+        "escalate": False,
+        "signal": {"resource_id": resource_id, "ttp": "", "severity": ""},
+        "outcome": outcome,
+    }
+    with open(runs / "manual_actions.jsonl", "a") as f:
+        f.write(json.dumps(entry) + "\n")
+
+
 def _bin() -> str:
     c = Path(sys.executable).parent / "glorfindel"
     return str(c) if c.exists() else "glorfindel"
@@ -523,6 +544,7 @@ def _load_recent(n: int) -> list[dict]:
     for path, kind in [
         (runs / f"{prefix}_signals.jsonl", "signal"),
         (runs / f"{prefix}_debug.jsonl", "action"),
+        (runs / "manual_actions.jsonl", "action"),  # operator actions (release/unblock/reset)
     ]:
         if path.exists():
             for line in path.read_text().splitlines():

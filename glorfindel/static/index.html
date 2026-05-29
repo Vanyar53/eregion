@@ -183,6 +183,7 @@
     grid-template-columns: 1fr 1fr;
     grid-template-rows: auto auto auto;
     align-items: start;
+    align-content: start;
     gap: 10px;
     padding: 12px;
     flex: 1;
@@ -699,13 +700,16 @@ function _escFooter(escs) {
 
 function _decisionSummary(text) {
   if (!text) return '';
-  // Strip markdown bold/italic
   const clean = text.replace(/\*\*(.*?)\*\*/g, '$1').replace(/\*(.*?)\*/g, '$1');
-  // Skip preamble lines starting with step labels or boilerplate
-  const skip = /^(étape|step|l'événement|the event|dans le|in the|azure monitor|action choisie)/i;
-  const sentences = clean.split(/(?<=[.!?])\s+|\n+/).map(s => s.trim()).filter(s => s.length > 15);
-  const meaningful = sentences.find(s => !skip.test(s)) || sentences[0] || '';
-  return meaningful.slice(0, 90);
+  // Split on step markers (Étape N / Step N) to isolate the conclusion paragraph
+  const parts = clean.split(/(?:étape|step)\s+\d+\s*[–\-:]/i)
+    .map(p => p.trim()).filter(p => p.length > 20);
+  // Take the last chunk — usually the decision/conclusion
+  const chunk = parts.length > 1 ? parts[parts.length - 1] : (parts[0] || clean);
+  // Take the first sentence from that chunk
+  const first = chunk.split(/[.!?]\s+/)[0] || chunk;
+  const out = first.trim().slice(0, 90);
+  return out + (first.trim().length > 90 ? '…' : '');
 }
 
 function _dot(color) {

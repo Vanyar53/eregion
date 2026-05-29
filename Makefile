@@ -28,7 +28,7 @@ GLORFINDEL_VOLS := \
 	-v $(PWD)/runs:/app/runs
 
 DOCKER_ANNATAR := docker run --rm $(AZURE_ENV) $(ANNATAR_VOLS) $(IMAGE_ANNATAR)
-DOCKER_GLORFINDEL := docker run --rm $(AZURE_ENV) $(GLORFINDEL_VOLS) $(GLORFINDEL_STATE) \
+GLORFINDEL_ENV := \
 	-e AZURE_WORKSPACE_ID \
 	-e AZURE_VM_RESOURCE_ID \
 	-e ANTHROPIC_API_KEY \
@@ -45,7 +45,10 @@ DOCKER_GLORFINDEL := docker run --rm $(AZURE_ENV) $(GLORFINDEL_VOLS) $(GLORFINDE
 	-e DISCORD_PING_ROLE \
 	-e GLORFINDEL_ISOLATION_TTL_H \
 	-e GLORFINDEL_INCIDENT_TTL_S \
-	-e ORT_LOGGING_LEVEL_DEFAULT=3 \
+	-e ORT_LOGGING_LEVEL_DEFAULT=3
+
+DOCKER_GLORFINDEL := docker run --rm $(AZURE_ENV) $(GLORFINDEL_VOLS) $(GLORFINDEL_STATE) \
+	$(GLORFINDEL_ENV) \
 	$(IMAGE_GLORFINDEL)
 
 .PHONY: help build build-annatar build-glorfindel \
@@ -203,20 +206,7 @@ annatar-shell: build-annatar
 glorfindel-shell: build-glorfindel
 	@mkdir -p $(HOME)/.glorfindel
 	docker run --rm -it $(AZURE_ENV) $(GLORFINDEL_VOLS) $(GLORFINDEL_STATE) \
-		-e ANTHROPIC_API_KEY \
-		-e GLORFINDEL_LLM_MODEL \
-		-e GLORFINDEL_LLM_BASE_URL \
-		-e OPENAI_API_KEY \
-		-e MISTRAL_API_KEY \
-		-e AZURE_API_KEY \
-		-e AZURE_API_BASE \
-		-e AZURE_API_VERSION \
-		-e GLORFINDEL_WEBHOOK_URL \
-		-e DISCORD_BOT_TOKEN \
-		-e DISCORD_CHANNEL_ID \
-		-e GLORFINDEL_ISOLATION_TTL_H \
-		-e GLORFINDEL_INCIDENT_TTL_S \
-		-e ORT_LOGGING_LEVEL_DEFAULT=3 \
+		$(GLORFINDEL_ENV) \
 		$(IMAGE_GLORFINDEL) bash --init-file /root/.glorfindel/.bashrc
 
 # ── Dev ───────────────────────────────────────────────────────────────────

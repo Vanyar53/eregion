@@ -21,9 +21,13 @@ detection:
   prerequisites:
     - name: storage_blob_logs
       table: StorageBlobLogs
-      why: detection rule reads PutBlob operations — requires diagnostic settings on the storage account
-      verify: "StorageBlobLogs | where AccountName == '<storage_account>' | where TimeGenerated > ago(1h) | limit 1"
-      setup: "az monitor diagnostic-settings create --resource <storage_id> --workspace <workspace_id> --logs '[{\"category\":\"StorageBlobLogs\",\"enabled\":true}]'"
+      why: detection rule reads PutBlob (StorageWrite) operations — requires diagnostic settings on /blobServices/default
+      verify: "StorageBlobLogs | where AccountName == 'stannatarexfil' | where TimeGenerated > ago(1h) | limit 1"
+      setup: >
+        Managed by Terraform (storage.tf — azurerm_monitor_diagnostic_setting.exfil_storage).
+        If missing: cd infra/terraform && terraform apply.
+        Verify at the blob service level, not storage account:
+        az monitor diagnostic-settings list --resource <storage_id>/blobServices/default
     - name: vm_managed_identity
       why: exfil_sim.sh uploads via MSI — VM needs Storage Blob Data Contributor on the storage account
       verify: "az role assignment list --assignee <vm_principal_id> --scope <storage_id>"

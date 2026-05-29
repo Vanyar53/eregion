@@ -16,8 +16,8 @@ Plateforme OSS (Apache 2.0) de défense active cloud. Deux agents IA en boucle :
 
 | TTP | Scénario | Détection | Temps | Action |
 |-----|----------|-----------|-------|--------|
-| T1486 | Ransomware VM | Perf disk write | 50s | `isolate_vm` → restore 21m23s |
-| T1041 | Data exfiltration | StorageBlobLogs | 229s | `isolate_vm` (IP interne) |
+| T1486 | Ransomware VM | Perf disk write | ~71s | `restore_from_backup` (escalade) → 21m23s RTO |
+| T1041 | Data exfiltration | StorageBlobLogs (RFC-1918, PutBlob ≥ 1) | ~30s | `isolate_vm` (disk intact) |
 | T1110.001 | SSH brute force | Syslog DCR | 60s | `block_suspicious_ip` (IP Tor) |
 | T1548.003 | Sudo priv esc | Syslog DCR | 40s | `isolate_vm` (root confirmé) |
 | T1110+T1548 | Run parallèle | — | 41s/59s | block → isolate (incident context) |
@@ -74,13 +74,15 @@ load_context → poll_detection → decide → execute_action → verify_action 
 
 ## Routing TTP → action (_SYSTEM_PROMPT)
 
-| Situation | Action | Escalade |
-|---|---|---|
-| `detection` + IP interne (T1486/T1041/T1548) | `isolate_vm` | Non |
-| `detection` + IP externe (T1110) | `block_suspicious_ip` | Non |
-| `detection_timeout` | `snapshot` forensique | Oui |
-| `recovery_complete` | `release_isolation` | Non |
-| `recovery_failed` | escalade | Oui |
+| Situation | Action | Escalade | Rationale |
+|---|---|---|---|
+| `detection` T1486 (ransomware) | `restore_from_backup` | **Oui** | Disk chiffré — restore requis, isolation insuffisante |
+| `detection` T1041 (exfil interne) | `isolate_vm` | Non | Couper canal, disk intact — pas de restore |
+| `detection` T1548 (priv esc) | `isolate_vm` | Non | OS compromis, accès coupé |
+| `detection` T1110 (brute force ext.) | `block_suspicious_ip` | Non | Bloquer l'IP externe uniquement |
+| `detection_timeout` | `snapshot` forensique | Oui | IDS gap — préserver état |
+| `recovery_complete` | `release_isolation` | Non | VM propre après restore |
+| `recovery_failed` | escalade | Oui | |
 
 **Règle de sécurité** : action destructive sans `escalate=True` → bloquée par le graph, pas par confiance dans le LLM.
 

@@ -145,39 +145,6 @@ async def config() -> dict:
         for ttp, events in sorted(ttp_events.items())
     }
 
-    # Isolation files
-    iso_dir = Path.home() / ".glorfindel" / "isolation"
-    isolations = []
-    if iso_dir.exists():
-        for f in iso_dir.glob("*.json"):
-            try:
-                d = json.loads(f.read_text())
-                isolations.append({
-                    "vm": f.stem,
-                    "isolated_at": d.get("isolated_at", ""),
-                    "resource_id": d.get("resource_id", ""),
-                })
-            except Exception:
-                pass
-
-    # Block files
-    blk_dir = Path.home() / ".glorfindel" / "blocks"
-    blocks = []
-    if blk_dir.exists():
-        for f in blk_dir.glob("*.json"):
-            try:
-                entries = json.loads(f.read_text())
-                if not isinstance(entries, list):
-                    entries = [entries]
-                for entry in entries:
-                    blocks.append({
-                        "vm": f.stem,
-                        "ip": entry.get("ip", ""),
-                        "blocked_at": entry.get("blocked_at", ""),
-                    })
-            except Exception:
-                pass
-
     # Detection rules
     rules_info: list[dict] = []
     rules_candidates = [
@@ -206,6 +173,9 @@ async def config() -> dict:
         except Exception:
             pass
 
+    llm_model = os.environ.get("GLORFINDEL_LLM_MODEL", "anthropic/claude-sonnet-4-6")
+    llm_provider = llm_model.split("/")[0] if "/" in llm_model else llm_model
+
     return {
         "azure": {
             "subscription_id": subscription,
@@ -213,15 +183,16 @@ async def config() -> dict:
             "client_id": client_id,
             "configured": bool(subscription and tenant and client_id),
         },
+        "llm": {
+            "model": llm_model,
+            "provider": llm_provider,
+            "base_url": os.environ.get("GLORFINDEL_LLM_BASE_URL", ""),
+        },
         "detection": {
             "workspaces": sorted(workspaces),
             "coverage": coverage,
             "rules": rules_info,
             "rules_file": str(rules_path) if rules_path else None,
-        },
-        "state": {
-            "isolations": isolations,
-            "blocks": blocks,
         },
     }
 

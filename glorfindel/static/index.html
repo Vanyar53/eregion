@@ -144,6 +144,24 @@
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
   }
+  #rules-strip {
+    padding: 5px 12px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    font-size: 10px;
+    flex-shrink: 0;
+    min-height: 24px;
+    align-items: center;
+  }
+  .rule-pill {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--dim);
+  }
+  .rule-pill .rule-name { color: var(--text); }
   #incidents-list {
     flex: 1;
     overflow-y: auto;
@@ -365,6 +383,7 @@
   <!-- Incidents / Config RIGHT -->
   <div id="incidents-col">
     <div class="col-header" id="right-col-header">INCIDENTS</div>
+    <div id="rules-strip"></div>
     <div id="incidents-list">
       <div class="empty-state">
         <div class="check">✓</div>
@@ -1055,43 +1074,19 @@ async function refreshConfig() {
       </div>
 
       <div class="cfg-section">
-        <div class="cfg-section-title">Detection rules${det.rules_file ? ` <span style="color:var(--dim);font-weight:400">${det.rules_file}</span>` : ''}</div>
-        ${det.rules && det.rules.length ? `
-        <table class="ttp-table">
-          <thead><tr><th>Rule</th><th>TTP</th><th>Interval</th><th>Last poll</th><th>Last match</th><th>Status</th></tr></thead>
-          <tbody>${det.rules.map(r => {
-            const pollAge = r.last_poll ? _relTime(r.last_poll) : '—';
-            const matchAge = r.last_match ? _relTime(r.last_match) : '—';
-            const statusBadge = r.last_error
-              ? `<span class="cfg-badge err" title="${r.last_error}">✗ error</span>`
-              : r.last_poll
-                ? `<span class="cfg-badge ok">✓ polling</span>`
-                : `<span class="cfg-badge dim">⏸ idle</span>`;
-            return `<tr>
-              <td title="${r.description || ''}">${r.name}</td>
-              <td><span class="cfg-badge dim">${r.ttp || '—'}</span></td>
-              <td style="color:var(--dim)">${r.interval_s}s</td>
-              <td style="color:var(--dim)">${pollAge}</td>
-              <td style="color:${r.last_match ? 'var(--orange)' : 'var(--dim)'}">${matchAge}${r.match_count ? ` (×${r.match_count})` : ''}</td>
-              <td>${statusBadge}</td>
-            </tr>`;
-          }).join('')}</tbody>
-        </table>` : `<div class="cfg-row"><span class="cfg-val" style="color:var(--dim)">No detection_rules.yaml found</span></div>`}
-      </div>
-
-      <div class="cfg-section">
-        <div class="cfg-section-title">NSG state</div>
-        ${d.state.isolations.length
-          ? d.state.isolations.map(i => `<div class="cfg-row">
-              <span class="cfg-key">${i.vm}</span>
-              <span class="cfg-val"><span class="cfg-badge err">ISOLATED</span></span>
-            </div>`).join('')
-          : `<div class="cfg-row"><span class="cfg-val" style="color:var(--green)">✓ No active isolations</span></div>`
-        }
-        ${d.state.blocks.map(b => `<div class="cfg-row">
-          <span class="cfg-key">${b.vm}</span>
-          <span class="cfg-val"><span class="cfg-badge warn">BLOCKED</span> ${b.ip}</span>
-        </div>`).join('')}
+        <div class="cfg-section-title">LLM</div>
+        <div class="cfg-row">
+          <span class="cfg-key">provider</span>
+          <span class="cfg-val">${d.llm.provider}</span>
+        </div>
+        <div class="cfg-row">
+          <span class="cfg-key">model</span>
+          <span class="cfg-val">${d.llm.model}</span>
+        </div>
+        ${d.llm.base_url ? `<div class="cfg-row">
+          <span class="cfg-key">base_url</span>
+          <span class="cfg-val" style="color:var(--dim)">${d.llm.base_url}</span>
+        </div>` : ''}
       </div>
 
       <div class="cfg-section">
@@ -1144,6 +1139,35 @@ async function refreshAudit() {
 }
 
 
+// ── Detection rules strip ──────────────────────────────────────────────────────
+
+async function refreshRulesStrip() {
+  const strip = document.getElementById('rules-strip');
+  if (!strip) return;
+  try {
+    const r = await fetch('/api/config');
+    const d = await r.json();
+    const rules = d.detection?.rules || [];
+    if (!rules.length) { strip.innerHTML = ''; return; }
+    strip.innerHTML = rules.map(r => {
+      const dot = r.last_error
+        ? `<span style="color:var(--red)">✗</span>`
+        : r.last_poll
+          ? `<span style="color:var(--green)">●</span>`
+          : `<span style="color:var(--dim)">○</span>`;
+      const matchInfo = r.last_match
+        ? `<span style="color:var(--orange)">${_relTime(r.last_match)}</span>`
+        : '';
+      return `<span class="rule-pill" title="${r.description || r.name}">
+        ${dot}
+        <span class="rule-name">${r.name}</span>
+        <span class="cfg-badge dim" style="font-size:9px">${r.ttp || '—'}</span>
+        ${matchInfo}
+      </span>`;
+    }).join('<span style="color:var(--border)">│</span>');
+  } catch (e) {}
+}
+
 function showToast(msg, isError = false) {
   const t = document.createElement('div');
   t.style.cssText = `position:fixed;bottom:20px;right:20px;padding:10px 16px;border-radius:6px;
@@ -1161,6 +1185,8 @@ function showToast(msg, isError = false) {
   await refreshState();
   await refreshWatchStatus();
   connectWS();
+  refreshRulesStrip();
+  setInterval(refreshRulesStrip, 30000);
 })();
 </script>
 </body>

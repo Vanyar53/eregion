@@ -144,51 +144,26 @@
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
   }
-  #rules-strip {
-    padding: 5px 12px;
-    border-bottom: 1px solid var(--border);
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
+  .infra-label {
     font-size: 10px;
-    flex-shrink: 0;
-    min-height: 24px;
-    align-items: center;
-  }
-  .rule-pill {
-    display: flex;
-    align-items: center;
-    gap: 4px;
+    font-weight: 700;
+    letter-spacing: 0.8px;
     color: var(--dim);
+    flex: 1;
   }
-  .rule-pill .rule-name { color: var(--text); }
-  #readiness-strip {
-    padding: 6px 12px;
-    border-bottom: 1px solid var(--border);
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
+  .infra-sub {
     font-size: 10px;
-    flex-shrink: 0;
+    color: var(--dim);
+    font-weight: 400;
+    margin-left: auto;
   }
-  .readiness-row {
+  .readiness-inline {
     display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 3px 6px;
-    border-radius: 4px;
-    transition: background .2s;
+    gap: 10px;
+    margin-top: 6px;
+    font-size: 10px;
   }
-  .readiness-row.incident-active {
-    background: color-mix(in srgb, var(--red) 8%, transparent);
-    border-left: 2px solid var(--red);
-  }
-  .readiness-vm { color: var(--text); font-weight: 700; min-width: 120px; }
-  .readiness-badge {
-    display: flex; align-items: center; gap: 3px;
-    padding: 1px 5px; border-radius: 3px;
-    background: var(--bg2);
-  }
+  .readiness-inline span { color: var(--dim); }
   #incidents-list {
     flex: 1;
     overflow-y: auto;
@@ -407,11 +382,9 @@
     <div id="feed-list"></div>
   </div>
 
-  <!-- Incidents / Config RIGHT -->
+  <!-- Infrastructure / Config RIGHT -->
   <div id="incidents-col">
-    <div class="col-header" id="right-col-header">INCIDENTS</div>
-    <div id="rules-strip"></div>
-    <div id="readiness-strip"></div>
+    <div class="col-header" id="right-col-header">INFRASTRUCTURE</div>
     <div id="incidents-list">
       <div class="empty-state">
         <div class="check">✓</div>
@@ -550,7 +523,9 @@ function openCommandModal(escId) {
 // ── State ──────────────────────────────────────────────────────────────────────
 
 let _state = { resources: [], escalations: [] };
-let _escById = {};   // id → escalation object, refreshed on each renderIncidents
+let _escById   = {};
+let _cfgData   = null;
+let _auditData = null;
 let _autoScroll = true;
 
 // ── Clock ──────────────────────────────────────────────────────────────────────
@@ -601,149 +576,193 @@ async function runScenario(name) {
   }
 }
 
-// ── Render incidents ───────────────────────────────────────────────────────────
+// ── Infrastructure cards ───────────────────────────────────────────────────────
 
-function renderIncidents() {
-  const list = document.getElementById('incidents-list');
-  const { resources, escalations, restores = [] } = _state;
+function _renderEscItem(e) {
+  const label = actionLabel(e.action);
+  const ctx   = [e.ttp, e.severity, escLabel(e.escalation_type)].filter(Boolean).join(' · ');
+  const steps = (e.suggested_steps || []).slice(0, 3);
+  const stepsHtml = steps.length
+    ? `<div class="esc-steps">${steps.map(s => `<div class="esc-step">• ${s}</div>`).join('')}</div>` : '';
+  const escId = e.id;
+  const isRule = e.action === 'improve_detection' && e.proposal_id;
+  const queryHtml = isRule && e.proposed_query
+    ? `<pre class="esc-query">${e.proposed_query.trim()}</pre>` : '';
+  const ruleButtons = isRule ? `
+    <button class="action ok" onclick="doApproveRule('${e.proposal_id}','${escId}')" style="flex-shrink:0">✓ Approve</button>
+    <button class="action" onclick="doRejectRule('${e.proposal_id}','${escId}')" style="flex-shrink:0;color:var(--red)">✗ Reject</button>` : '';
+  return `<div class="esc-item">
+    <div class="esc-item-header">
+      <span class="esc-action-label">🚨 ${label}</span>
+      <button class="action" onclick="confirmAck('${escId}')" style="flex-shrink:0">✓ Ack</button>
+      <button class="action" onclick="openCommandModal('${escId}')" style="flex-shrink:0">📋 Cmd</button>
+      ${ruleButtons}
+    </div>
+    ${ctx ? `<div class="esc-context">${ctx}</div>` : ''}
+    <div class="esc-reason">${e.reason}</div>
+    ${queryHtml}${stepsHtml}
+  </div>`;
+}
 
-  const restoreByVm = {};
-  restores.forEach(r => { restoreByVm[r.vm_name] = r; });
+function _escFooter(escs) {
+  if (!escs.length) return '';
+  return `<div class="vm-escalations" style="margin:0;padding:8px 14px;border-top:1px solid var(--border)">
+    ${escs.map(_renderEscItem).join('')}
+  </div>`;
+}
 
-  _escById = {};
-  const escByVm = {};
-  escalations.forEach(e => {
-    _escById[e.id] = e;
-    const vm = e.resource_id.split('/').pop();
-    if (!escByVm[vm]) escByVm[vm] = [];
-    escByVm[vm].push(e);
-  });
+function _detectionCard(rules, escs) {
+  const hasError   = rules.some(r => r.last_error);
+  const allPolling = rules.length > 0 && rules.every(r => r.last_poll && !r.last_error);
+  const dot = hasError   ? `<span style="color:var(--red)">●</span>`
+            : allPolling ? `<span style="color:var(--green)">●</span>`
+            :              `<span style="color:var(--dim)">○</span>`;
+  const rulesHtml = rules.length
+    ? rules.map(r => {
+        const icon = r.last_error ? `<span style="color:var(--red)" title="${r.last_error}">✗</span>`
+                   : r.last_poll  ? `<span style="color:var(--green)">●</span>`
+                   :                `<span style="color:var(--dim)">○</span>`;
+        const match = r.last_match
+          ? ` · <span style="color:var(--orange)">${_relTime(r.last_match)}</span>` : '';
+        return `<div class="state-row">${icon}
+          <span style="color:var(--text);font-size:11px">${r.name}</span>
+          <span class="cfg-badge dim" style="font-size:9px">${r.ttp}</span>${match}</div>`;
+      }).join('')
+    : `<div class="state-detail" style="padding:4px 0">No rules — configure detection_rules.yaml</div>`;
+  return `<div class="vm-card">
+    <div class="vm-card-header">${dot}
+      <span class="infra-label">DETECTION</span>
+      <span class="infra-sub">Azure Monitor</span>
+    </div>
+    <div class="vm-card-body">${rulesHtml}</div>
+    ${_escFooter(escs)}
+  </div>`;
+}
 
-  const resourceMap = {};
-  resources.forEach(r => { resourceMap[r.vm_name] = r; });
-  const escOnlyVms = Object.keys(escByVm).filter(vm => !resourceMap[vm]);
-  escOnlyVms.forEach(vm => {
-    resourceMap[vm] = {
-      resource_id: escalations.find(e => e.resource_id.split('/').pop() === vm)?.resource_id || vm,
-      vm_name: vm,
-      states: [],
-    };
-  });
+function _vmCard(resource, vmEscs, restoreByVm) {
+  const { resource_id, vm_name, states = [] } = resource;
+  const isIsolated  = states.some(s => s.type === 'isolated');
+  const isBlocked   = states.some(s => s.type === 'blocked');
+  const myEscs      = vmEscs.filter(e =>
+    e.resource_id === resource_id || e.resource_id.split('/').pop() === vm_name);
+  const restoreInfo = restoreByVm[vm_name];
+  const dot = restoreInfo   ? `<span style="color:var(--blue)">●</span>`
+            : isIsolated    ? `<span style="color:var(--red)">●</span>`
+            : isBlocked     ? `<span style="color:var(--orange)">●</span>`
+            : myEscs.length ? `<span style="color:var(--orange)">●</span>`
+            :                 `<span style="color:var(--green)">●</span>`;
+  const auditEntry = (_auditData?.audits || []).find(a => a.resource_id === resource_id);
+  const readinessHtml = auditEntry
+    ? `<div class="readiness-inline">${ACTION_GROUPS.map(g => {
+        const st = _worstStatus(auditEntry.checks, g.actions);
+        const [ic, col] = st === 'ok' ? ['✓','var(--green)'] : st === 'warn' ? ['⚠','var(--orange)']
+                        : st === 'fail' ? ['✗','var(--red)'] : ['—','var(--dim)'];
+        return `<span><span style="color:${col}">${ic}</span> ${g.label}</span>`;
+      }).join('')}</div>` : '';
+  const stateRows = [
+    restoreInfo ? `<div class="state-row restore-progress"><span class="badge restoring">🔄 RESTORING</span>
+      <span class="state-detail">${restoreInfo.elapsed_label} elapsed</span></div>` : '',
+    ...states.map(s => s.type === 'isolated'
+      ? `<div class="state-row"><span class="badge isolated">ISOLATED</span><span class="state-detail">${age(s.since)}</span></div>`
+      : `<div class="state-row"><span class="badge blocked">BLOCKED</span><span class="state-detail">${s.ip}  ${age(s.since)}</span></div>`)
+  ].join('');
+  const clean = !isIsolated && !isBlocked && !restoreInfo && !myEscs.length;
+  const bodyHtml = clean
+    ? `<div class="state-detail" style="color:var(--green);padding:4px 0">✓ No active incidents</div>${readinessHtml}`
+    : `${stateRows}${readinessHtml}`;
+  const actions = [];
+  if (isIsolated) actions.push(`<button class="action danger" onclick="confirmRelease('${vm_name}')">↩️ Release</button>`);
+  if (isBlocked)  actions.push(`<button class="action danger" onclick="confirmUnblock('${vm_name}')">↩️ Unblock</button>`);
+  if (isIsolated && isBlocked) actions.push(`<button class="action danger" onclick="confirmReset('${vm_name}')">⟳ Reset</button>`);
+  if (!restoreInfo && myEscs.some(e => e.action === 'restore_from_backup'))
+    actions.push(`<button class="action primary" onclick="confirmRestore('${vm_name}')">🔄 Restore</button>`);
+  return `<div class="vm-card">
+    <div class="vm-card-header">${dot} <span class="vm-name">${vm_name}</span></div>
+    <div class="vm-card-body">${bodyHtml}
+      ${actions.length ? `<div class="vm-actions">${actions.join('')}</div>` : ''}
+    </div>
+    ${_escFooter(myEscs)}
+  </div>`;
+}
 
-  const allResources = Object.values(resourceMap);
-
-  if (!allResources.length) {
-    list.innerHTML = `
-      <div class="empty-state">
-        <div class="check">✓</div>
-        <div>All clear — no active incidents</div>
-        <div style="margin-top:6px;font-size:11px">Run a scenario to start</div>
-      </div>`;
-    return;
-  }
-
-  list.innerHTML = allResources.map(r => {
-    const { vm_name, states } = r;
-    const escs = escByVm[vm_name] || [];
-
-    const isIsolated = states.some(s => s.type === 'isolated');
-    const isBlocked  = states.some(s => s.type === 'blocked');
-    const hasEscOnly = !isIsolated && !isBlocked && escs.length > 0;
-    const dot = isIsolated ? '🔴' : isBlocked ? '🟡' : hasEscOnly ? '🟠' : '🟢';
-
-    const restoreInfo = restoreByVm[vm_name];
-    const restoreRow = restoreInfo ? `
-      <div class="state-row restore-progress">
-        <span class="badge restoring">🔄 RESTORING</span>
-        <span class="state-detail">${restoreInfo.elapsed_label} elapsed — Azure Backup in progress (~20 min)</span>
-      </div>` : '';
-
-    const stateRows = states.map(s => {
-      if (s.type === 'isolated') {
-        return `<div class="state-row">
-          <span class="badge isolated">ISOLATED</span>
-          <span class="state-detail">${age(s.since)}</span>
-        </div>`;
-      }
-      return `<div class="state-row">
-        <span class="badge blocked">BLOCKED</span>
-        <span class="state-detail">${s.ip}  ${age(s.since)}</span>
-      </div>`;
-    }).join('');
-
-    // Each escalation as its own structured block
-    const escItems = escs.map(e => {
-      const label  = actionLabel(e.action);
-      const ctx    = [e.ttp, e.severity, escLabel(e.escalation_type)].filter(Boolean).join(' · ');
-      const steps  = (e.suggested_steps || []).slice(0, 3);
-      const stepsHtml = steps.length ? `
-        <div class="esc-steps">
-          ${steps.map(s => `<div class="esc-step">• ${s}</div>`).join('')}
-        </div>` : '';
-
-      const escId = e.id;
-      const isRuleProposal = e.action === 'improve_detection' && e.proposal_id;
-      const queryHtml = isRuleProposal && e.proposed_query ? `
-        <pre class="esc-query">${e.proposed_query.trim()}</pre>` : '';
-      const approveBtn = isRuleProposal ? `
-        <button class="action ok" onclick="doApproveRule('${e.proposal_id}','${escId}')" style="flex-shrink:0">✓ Approve rule</button>
-        <button class="action" onclick="doRejectRule('${e.proposal_id}','${escId}')" style="flex-shrink:0;color:var(--red)">✗ Reject</button>` : '';
-      return `<div class="esc-item">
-        <div class="esc-item-header">
-          <span class="esc-action-label">🚨 ${label}</span>
-          <button class="action" onclick="confirmAck('${escId}')" style="flex-shrink:0">✓ Ack</button>
-          <button class="action" onclick="openCommandModal('${escId}')" style="flex-shrink:0">📋 Cmd</button>
-          ${approveBtn}
-        </div>
+function _rsvCard(rsvEscs, restores) {
+  const allAudits    = _auditData?.audits || [];
+  const vault        = allAudits[0]?.vault || 'rsv-annatar';
+  const backupChecks = allAudits.flatMap(a => (a.checks||[]).filter(c => c.action === 'restore_from_backup'));
+  const worst = backupChecks.some(c => c.status === 'fail') ? 'fail'
+              : backupChecks.some(c => c.status === 'warn') ? 'warn'
+              : backupChecks.length ? 'ok' : 'unknown';
+  const dot = worst === 'ok' ? `<span style="color:var(--green)">●</span>`
+            : worst === 'warn' ? `<span style="color:var(--orange)">●</span>`
+            : worst === 'fail' ? `<span style="color:var(--red)">●</span>`
+            : `<span style="color:var(--dim)">○</span>`;
+  const restoreRows = restores.map(r =>
+    `<div class="state-row restore-progress"><span class="badge restoring">🔄 RESTORING</span>
+     <span class="state-detail">${r.vm_name} — ${r.elapsed_label} elapsed</span></div>`).join('');
+  const backupRows = backupChecks.length
+    ? backupChecks.map(c => {
+        const col  = c.status === 'ok' ? 'var(--green)' : c.status === 'warn' ? 'var(--orange)' : 'var(--red)';
+        const icon = c.status === 'ok' ? '✓' : c.status === 'warn' ? '⚠' : '✗';
+        return `<div class="state-row"><span style="color:${col}">${icon}</span>
+          <span class="state-detail">${c.message}</span></div>`;
+      }).join('')
+    : `<div class="state-detail" style="padding:4px 0">Backup status loading…</div>`;
+  const rsvEscHtml = rsvEscs.length ? `<div class="vm-escalations" style="margin:0;padding:8px 14px;border-top:1px solid var(--border)">
+    ${rsvEscs.map(e => {
+      const vm = e.resource_id.split('/').pop();
+      const restoring = restores.some(r => r.vm_name === vm);
+      const restoreBtn = !restoring
+        ? `<button class="action primary" onclick="confirmRestore('${vm}')" style="flex-shrink:0">🔄 Restore</button>` : '';
+      const ctx = [e.ttp, e.severity, escLabel(e.escalation_type)].filter(Boolean).join(' · ');
+      return `<div class="esc-item"><div class="esc-item-header">
+        <span class="esc-action-label">🚨 restore_from_backup</span>
+        <button class="action" onclick="confirmAck('${e.id}')" style="flex-shrink:0">✓ Ack</button>
+        <button class="action" onclick="openCommandModal('${e.id}')" style="flex-shrink:0">📋 Cmd</button>
+        ${restoreBtn}</div>
         ${ctx ? `<div class="esc-context">${ctx}</div>` : ''}
         <div class="esc-reason">${e.reason}</div>
-        ${queryHtml}
-        ${stepsHtml}
       </div>`;
-    }).join('');
-
-    // Card-level actions (VM-wide)
-    // Release = lift isolation. Unblock = remove IP blocks. Reset = both at once.
-    const cardActions = [];
-    if (isIsolated) {
-      cardActions.push(
-        `<button class="action danger" onclick="confirmRelease('${vm_name}')">↩️ Release</button>`
-      );
-    }
-    if (isBlocked) {
-      cardActions.push(
-        `<button class="action danger" onclick="confirmUnblock('${vm_name}')">↩️ Unblock</button>`
-      );
-    }
-    if (isIsolated && isBlocked) {
-      cardActions.push(
-        `<button class="action danger" onclick="confirmReset('${vm_name}')">⟳ Reset</button>`
-      );
-    }
-    // Restore only on explicit restore_from_backup escalation from Glorfindel.
-    // Isolation alone is not sufficient — T1041 isolates but disk is clean (no restore needed).
-    // T1486 will generate a restore_from_backup escalation via the LLM decision.
-    const needsRestore = !restoreInfo && escs.some(e => e.action === 'restore_from_backup');
-    if (needsRestore) {
-      cardActions.push(
-        `<button class="action primary" onclick="confirmRestore('${vm_name}')">🔄 Restore</button>`
-      );
-    }
-
-    return `<div class="vm-card">
-      <div class="vm-card-header">
-        <span class="vm-dot">${dot}</span>
-        <span class="vm-name">${vm_name}</span>
-      </div>
-      <div class="vm-card-body">
-        ${restoreRow}
-        ${stateRows}
-        ${escs.length ? `<div class="vm-escalations">${escItems}</div>` : ''}
-        ${cardActions.length ? `<div class="vm-actions">${cardActions.join('')}</div>` : ''}
-      </div>
-    </div>`;
-  }).join('');
+    }).join('')}</div>` : '';
+  return `<div class="vm-card">
+    <div class="vm-card-header">${dot}
+      <span class="infra-label">BACKUP</span>
+      <span class="infra-sub">${vault}</span>
+    </div>
+    <div class="vm-card-body">${restoreRows}${backupRows}</div>
+    ${rsvEscHtml}
+  </div>`;
 }
+
+function renderInfra() {
+  if (_configMode) return;
+  const list = document.getElementById('incidents-list');
+  const rules          = _cfgData?.detection?.rules || [];
+  const knownResources = _cfgData?.known_resources  || [];
+  const { resources = [], escalations = [], restores = [] } = _state;
+  _escById = {};
+  escalations.forEach(e => { _escById[e.id] = e; });
+  const restoreByVm   = {};
+  restores.forEach(r => { restoreByVm[r.vm_name] = r; });
+  const detectionEscs = escalations.filter(e => e.action === 'improve_detection');
+  const rsvEscs       = escalations.filter(e => e.action === 'restore_from_backup');
+  const vmEscs        = escalations.filter(e => !['improve_detection','restore_from_backup'].includes(e.action));
+  const resourceMap   = new Map();
+  knownResources.forEach(r => resourceMap.set(r.resource_id, { ...r, states: [] }));
+  resources.forEach(r => {
+    if (resourceMap.has(r.resource_id)) resourceMap.get(r.resource_id).states = r.states;
+    else resourceMap.set(r.resource_id, r);
+  });
+  vmEscs.forEach(e => {
+    if (!resourceMap.has(e.resource_id))
+      resourceMap.set(e.resource_id, { resource_id: e.resource_id,
+        vm_name: e.resource_id.split('/').pop(), states: [] });
+  });
+  const vmCards = [...resourceMap.values()].map(r => _vmCard(r, vmEscs, restoreByVm)).join('');
+  list.innerHTML = _detectionCard(rules, detectionEscs) + vmCards + _rsvCard(rsvEscs, restores);
+}
+
+// legacy alias kept for WS onmessage calls — delegates to renderInfra
+function renderIncidents() { renderInfra(); }
 
 async function doApproveRule(proposalId, escId) {
   try {
@@ -933,16 +952,8 @@ async function refreshState() {
   try {
     const r = await fetch('/api/state');
     _state = await r.json();
-    renderIncidents();
-    _updateReadinessHighlight();
+    renderInfra();
   } catch (e) {}
-}
-
-function _updateReadinessHighlight() {
-  const activeIds = new Set((_state.resources || []).map(r => r.resource_id));
-  document.querySelectorAll('.readiness-row[data-rid]').forEach(row => {
-    row.classList.toggle('incident-active', activeIds.has(row.dataset.rid));
-  });
 }
 
 setInterval(refreshState, 5000);
@@ -1023,7 +1034,7 @@ function toggleConfig() {
   document.getElementById('incidents-list').style.display = _configMode ? 'none' : '';
   const cfgPanel = document.getElementById('config-panel');
   cfgPanel.style.display = _configMode ? 'flex' : 'none';
-  document.getElementById('right-col-header').textContent = _configMode ? 'CONFIGURATION' : 'INCIDENTS';
+  document.getElementById('right-col-header').textContent = _configMode ? 'CONFIGURATION' : 'INFRASTRUCTURE';
   if (_configMode) refreshConfig();
 }
 
@@ -1102,7 +1113,7 @@ async function refreshConfig() {
   }
 }
 
-// ── Readiness strip ────────────────────────────────────────────────────────────
+// ── Data constants (used by infra cards) ──────────────────────────────────────
 
 const ACTION_GROUPS = [
   { label: 'NSG',    actions: ['isolate_vm', 'block_suspicious_ip'] },
@@ -1120,76 +1131,21 @@ function _worstStatus(checks, actions) {
   return 'skip';
 }
 
-function _statusBadge(status, label) {
-  const [icon, col] = status === 'ok'   ? ['✓', 'var(--green)']
-                    : status === 'warn' ? ['⚠', 'var(--orange)']
-                    : status === 'fail' ? ['✗', 'var(--red)']
-                    :                    ['—', 'var(--dim)'];
-  return `<span class="readiness-badge" title="${label}">
-    <span style="color:${col}">${icon}</span>
-    <span style="color:var(--dim)">${label}</span>
-  </span>`;
-}
+// ── Config + audit data refresh ────────────────────────────────────────────────
 
-async function refreshReadiness() {
-  const strip = document.getElementById('readiness-strip');
-  if (!strip) return;
-  try {
-    const r = await fetch('/api/audit');
-    const d = await r.json();
-    const audits = d.audits || [];
-    if (!audits.length) { strip.innerHTML = ''; return; }
-
-    const activeResourceIds = new Set((_state.resources || []).map(r => r.resource_id));
-
-    strip.innerHTML = audits.map(a => {
-      const vm = a.resource_id.split('/').pop();
-      const isActive = activeResourceIds.has(a.resource_id);
-      const badges = ACTION_GROUPS.map(g =>
-        _statusBadge(_worstStatus(a.checks, g.actions), g.label)
-      ).join('');
-      const fixRows = a.checks
-        .filter(c => c.fix && c.status !== 'ok')
-        .map(c => `<span style="color:var(--dim);font-size:9px" title="${c.fix}">fix: ${c.fix.slice(0,60)}…</span>`)
-        .join('');
-      return `<div class="readiness-row${isActive ? ' incident-active' : ''}" data-rid="${a.resource_id}">
-        <span class="readiness-vm">${vm}</span>
-        ${badges}
-        ${fixRows}
-      </div>`;
-    }).join('');
-  } catch (e) {
-    strip.innerHTML = `<span style="color:var(--dim);font-size:10px;padding:4px 6px">Readiness unavailable (no Azure credentials)</span>`;
-  }
-}
-
-
-// ── Detection rules strip ──────────────────────────────────────────────────────
-
-async function refreshRulesStrip() {
-  const strip = document.getElementById('rules-strip');
-  if (!strip) return;
+async function refreshCfgData() {
   try {
     const r = await fetch('/api/config');
-    const d = await r.json();
-    const rules = d.detection?.rules || [];
-    if (!rules.length) { strip.innerHTML = ''; return; }
-    strip.innerHTML = rules.map(r => {
-      const dot = r.last_error
-        ? `<span style="color:var(--red)">✗</span>`
-        : r.last_poll
-          ? `<span style="color:var(--green)">●</span>`
-          : `<span style="color:var(--dim)">○</span>`;
-      const matchInfo = r.last_match
-        ? `<span style="color:var(--orange)">${_relTime(r.last_match)}</span>`
-        : '';
-      return `<span class="rule-pill" title="${r.description || r.name}">
-        ${dot}
-        <span class="rule-name">${r.name}</span>
-        <span class="cfg-badge dim" style="font-size:9px">${r.ttp || '—'}</span>
-        ${matchInfo}
-      </span>`;
-    }).join('<span style="color:var(--border)">│</span>');
+    _cfgData = await r.json();
+    renderInfra();
+  } catch (e) {}
+}
+
+async function refreshAuditData() {
+  try {
+    const r = await fetch('/api/audit');
+    _auditData = await r.json();
+    renderInfra();
   } catch (e) {}
 }
 
@@ -1207,13 +1163,13 @@ function showToast(msg, isError = false) {
 
 (async function init() {
   await loadScenarios();
-  await refreshState();
+  await refreshCfgData();     // detection rules + known resources → renderInfra
+  await refreshState();       // active incidents → renderInfra
   await refreshWatchStatus();
   connectWS();
-  refreshRulesStrip();
-  setInterval(refreshRulesStrip, 30000);
-  refreshReadiness();
-  setInterval(refreshReadiness, 300000);
+  setInterval(refreshCfgData,   30000);  // rules polling status
+  setInterval(refreshAuditData, 300000); // backup/compute readiness (slow, Azure API)
+  refreshAuditData();                    // first audit in background
 })();
 </script>
 </body>

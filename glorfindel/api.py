@@ -147,16 +147,20 @@ async def config() -> dict:
 
     # Detection rules
     rules_info: list[dict] = []
+    known_resources: list[dict] = []
     rules_candidates = [
         Path("glorfindel/rules/azure/detection_rules.yaml"),
         Path(__file__).parent / "rules" / "azure" / "detection_rules.yaml",
     ]
-    rules_path: Path | None = next((p for p in rules_candidates if p.exists()), None)
+    rules_path: Path | None = next(
+        (p for p in rules_candidates if p.exists()), None
+    )
     if rules_path:
         try:
             from glorfindel.detection_rules import _load_status, load_rules
             rules = load_rules(rules_path)
             status = _load_status()
+            seen_rids: set[str] = set()
             for rule in rules:
                 s = status.get(rule.name, {})
                 rules_info.append({
@@ -170,6 +174,13 @@ async def config() -> dict:
                     "last_error": s.get("last_error", ""),
                     "match_count": s.get("match_count", 0),
                 })
+                rid = rule.resource_id or ""
+                if rid and "${" not in rid and rid not in seen_rids:
+                    seen_rids.add(rid)
+                    known_resources.append({
+                        "resource_id": rid,
+                        "vm_name": rid.split("/")[-1],
+                    })
         except Exception:
             pass
 
@@ -191,11 +202,10 @@ async def config() -> dict:
             "base_url": os.environ.get("GLORFINDEL_LLM_BASE_URL", ""),
         },
         "detection": {
-            "workspaces": sorted(workspaces),
-            "coverage": coverage,
             "rules": rules_info,
             "rules_file": str(rules_path) if rules_path else None,
         },
+        "known_resources": known_resources,
     }
 
 
@@ -357,8 +367,11 @@ async def audit_all() -> dict:
         rid = rule.resource_id
         if rid and "${" not in rid and rid not in seen:
             seen.add(rid)
-            result = _audit.run(rid, connector)
-            audits.append(result.to_dict())
+            vault = os.environ.get("GLORFINDEL_BACKUP_VAULT", "rsv-annatar")
+            result = _audit.run(rid, connector, vault=vault)
+            d = result.to_dict()
+            d["vault"] = vault
+            audits.append(d)
     return {"audits": audits}
 
 

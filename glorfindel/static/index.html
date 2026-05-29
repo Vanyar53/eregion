@@ -372,6 +372,29 @@
   .cfg-badge.warn{ background: #3d2e00; color: var(--orange); border: 1px solid #6d5200; }
   .cfg-badge.err { background: #3d1a1a; color: var(--red); border: 1px solid #6d2c2c; }
   .cfg-badge.dim { background: var(--bg2); color: var(--dim); border: 1px solid var(--border); }
+  .rule-item {
+    display: flex; align-items: center; gap: 8px;
+    padding: 5px 6px; border-radius: 6px; cursor: pointer;
+    border-bottom: 1px solid var(--bg2);
+  }
+  .rule-item:hover { background: var(--bg2); }
+  .rule-dot { font-size: 9px; flex-shrink: 0; }
+  .rule-dot.ok   { color: var(--green); }
+  .rule-dot.err  { color: var(--red); }
+  .rule-dot.dim  { color: var(--dim); }
+  .rule-name { font-size: 11px; flex: 1; }
+  .rule-meta { font-size: 10px; color: var(--dim); display: flex; gap: 6px; flex-shrink: 0; }
+  .cfg-backend-header {
+    font-size: 10px; font-weight: 600; color: var(--blue);
+    margin: 8px 0 4px; letter-spacing: 0.5px;
+  }
+  .modal.wide { max-width: 680px; min-width: 500px; }
+  .modal-query {
+    background: var(--bg2); border: 1px solid var(--border); border-radius: 6px;
+    padding: 10px 12px; font-family: var(--font); font-size: 11px; color: var(--cyan);
+    white-space: pre; overflow-x: auto; margin-bottom: 16px; line-height: 1.5;
+    max-height: 220px; overflow-y: auto;
+  }
 
   .ttp-table { width: 100%; border-collapse: collapse; }
   .ttp-table th { padding: 4px 8px; font-size: 10px; color: var(--dim); text-align: left; border-bottom: 1px solid var(--border); }
@@ -575,6 +598,7 @@ function toast(msg, ms = 3000) {
 
 function closeModal() {
   document.getElementById('modal').classList.remove('open');
+  document.querySelector('.modal').classList.remove('wide');
 }
 
 function openModal(title, body, cmd, confirmLabel, confirmClass, onConfirm) {
@@ -1386,70 +1410,154 @@ function _relTime(iso) {
   return `${Math.floor(age / 3600)}h ago`;
 }
 
+function showRuleDetail(rule) {
+  const statusTxt = rule.last_error
+    ? `⚠ error: ${rule.last_error}`
+    : rule.last_match
+      ? `✓ last match ${_relTime(rule.last_match)} · ${rule.match_count} total`
+      : rule.last_poll
+        ? `polled ${_relTime(rule.last_poll)} · no match yet`
+        : 'not polled yet';
+
+  document.getElementById('modal-title').textContent =
+    `${rule.name}${rule.ttp ? '  ·  ' + rule.ttp : ''}`;
+
+  const bodyEl = document.getElementById('modal-body');
+  bodyEl.innerHTML = `
+    <div style="margin-bottom:8px;color:var(--text)">${rule.description || '—'}</div>
+    <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px">
+      <span class="cfg-badge dim">${rule.source}</span>
+      <span class="cfg-badge dim">backend: ${rule.monitoring_backend_name || '—'}</span>
+      <span class="cfg-badge dim">every ${rule.interval_s}s</span>
+      ${rule.last_error
+        ? '<span class="cfg-badge err">error</span>'
+        : rule.last_match
+          ? '<span class="cfg-badge ok">matched</span>'
+          : '<span class="cfg-badge dim">no match</span>'}
+    </div>
+    <div style="font-size:10px;color:var(--dim);margin-bottom:8px">${statusTxt}</div>
+    <div style="font-size:10px;color:var(--dim);margin-bottom:4px;text-transform:uppercase;letter-spacing:1px">Query</div>
+    <div class="modal-query">${(rule.query||'').trim()}</div>`;
+
+  document.getElementById('modal-cmd').style.display = 'none';
+  const btn = document.getElementById('modal-confirm');
+  btn.textContent = 'Close';
+  btn.className = 'action';
+  btn.onclick = closeModal;
+  document.querySelector('.modal').classList.add('wide');
+  document.getElementById('modal').classList.add('open');
+}
+
 async function refreshConfig() {
   const panel = document.getElementById('config-panel');
   try {
-    const r = await fetch('/api/config');
-    const d = await r.json();
-    const az = d.azure;
+    const [cfgResp, discResp] = await Promise.all([
+      fetch('/api/config'),
+      fetch('/api/discovered'),
+    ]);
+    const d    = await cfgResp.json();
+    const disc = (await discResp.json()).assets || [];
+    const az   = d.azure;
 
     const azBadge = az.configured
       ? '<span class="cfg-badge ok">✓ connected</span>'
       : '<span class="cfg-badge err">✗ missing credentials</span>';
 
-    const gCfg   = d.glorfindel_config || {};
-    const gMon   = gCfg.monitoring_backends || [];
-    const gAct   = gCfg.action_backends || [];
-    const excCnt = gCfg.exceptions_count || 0;
+    const backends     = d.monitoring_backends || [];
+    const actionBkds   = d.assets || [];
+    const rules        = d.detection?.rules || [];
+    const gCfg         = d.glorfindel_config || {};
+    const excCnt       = gCfg.exceptions_count || 0;
 
-    // Fetch discovered assets async
-    let discoveredHtml = `<div class="cfg-row"><span class="cfg-val" style="color:var(--dim)">Loading…</span></div>`;
-    try {
-      const dr = await fetch('/api/discovered');
-      const dd = await dr.json();
-      const disc = dd.assets || [];
-      discoveredHtml = disc.length
-        ? disc.map(a => `<div class="cfg-row">
+    // ── Monitoring backends + discovered assets ────────────────────────────
+    const discByBackend = {};
+    disc.forEach(a => {
+      (discByBackend[a.monitoring_backend] = discByBackend[a.monitoring_backend] || []).push(a);
+    });
+
+    const backendsHtml = backends.length ? backends.map(b => {
+      const discovered = discByBackend[b.name] || [];
+      const discRows = discovered.length
+        ? discovered.map(a => `<div class="cfg-row" style="padding-left:8px">
             <span class="cfg-key">${a.name}</span>
             <span class="cfg-val">
               <span class="cfg-badge ok" style="font-size:9px">✓ discovered</span>
-              <span class="cfg-badge dim" style="font-size:9px">${a.monitoring_backend}</span>
               <span style="color:var(--dim);font-size:9px">${a.source} · ${_relTime(a.last_seen)}</span>
             </span>
           </div>`).join('')
-        : `<div class="cfg-row"><span class="cfg-val" style="color:var(--dim)">None yet — discovery runs at startup</span></div>`;
-    } catch (e) {}
+        : `<div class="cfg-row" style="padding-left:8px">
+            <span class="cfg-val" style="color:var(--dim)">No assets yet — discovery runs at startup</span>
+          </div>`;
+      return `
+        <div class="cfg-row">
+          <span class="cfg-key">${b.name}</span>
+          <span class="cfg-val">
+            <span class="cfg-badge dim">${b.type}</span>
+            <span style="color:var(--dim);font-size:9px">${b.workspace_id ? mask(b.workspace_id, 6) : ''}</span>
+          </span>
+        </div>
+        ${discRows}`;
+    }).join('') : `<div class="cfg-row"><span class="cfg-val" style="color:var(--dim)">None — add monitoring_backends to glorfindel-config.yaml</span></div>`;
+
+    // ── Detection rules grouped by backend ─────────────────────────────────
+    const rulesByBackend = {};
+    rules.forEach(r => {
+      const key = r.monitoring_backend_name || '(no backend)';
+      (rulesByBackend[key] = rulesByBackend[key] || []).push(r);
+    });
+
+    const rulesHtml = Object.keys(rulesByBackend).length ? Object.entries(rulesByBackend).map(([bk, bRules]) => `
+      <div class="cfg-backend-header">${bk}</div>
+      ${bRules.map((r, i) => {
+        const dotCls = r.last_error ? 'err' : r.last_match ? 'ok' : 'dim';
+        const statusTip = r.last_error ? 'error' : r.last_match ? _relTime(r.last_match) : r.last_poll ? 'no match' : '—';
+        return `<div class="rule-item" onclick='showRuleDetail(${JSON.stringify(r)})'>
+          <span class="rule-dot ${dotCls}">●</span>
+          <span class="rule-name">${r.name}</span>
+          <span class="rule-meta">
+            ${r.ttp ? `<span class="cfg-badge dim" style="font-size:9px">${r.ttp}</span>` : ''}
+            <span>${r.interval_s}s</span>
+            <span style="color:${r.last_error ? 'var(--red)' : 'var(--dim)'}">${statusTip}</span>
+          </span>
+        </div>`;
+      }).join('')}`).join('')
+      : `<div class="cfg-row"><span class="cfg-val" style="color:var(--dim)">No rules loaded</span></div>`;
+
+    // ── Action backends (RSV…) ─────────────────────────────────────────────
+    const actionHtml = actionBkds.length ? actionBkds.map(b => `
+      <div class="cfg-row">
+        <span class="cfg-key">${b.name}</span>
+        <span class="cfg-val">
+          <span class="cfg-badge dim">${b.type}</span>
+          ${b.vault_name ? `<span style="color:var(--dim);font-size:10px">${b.vault_name} / ${b.resource_group}</span>` : ''}
+        </span>
+      </div>`).join('')
+      : `<div class="cfg-row"><span class="cfg-val" style="color:var(--dim)">None — add action_backends to glorfindel-config.yaml</span></div>`;
 
     panel.innerHTML = `
       <div class="cfg-section">
         <div class="cfg-section-title">Azure</div>
         <div class="cfg-row">
-          <span class="cfg-key">status</span>
-          <span class="cfg-val">${azBadge}</span>
+          <span class="cfg-key">status</span><span class="cfg-val">${azBadge}</span>
         </div>
         <div class="cfg-row">
-          <span class="cfg-key">subscription</span>
-          <span class="cfg-val">${mask(az.subscription_id)}</span>
+          <span class="cfg-key">subscription</span><span class="cfg-val">${mask(az.subscription_id)}</span>
         </div>
         <div class="cfg-row">
-          <span class="cfg-key">tenant</span>
-          <span class="cfg-val">${mask(az.tenant_id)}</span>
+          <span class="cfg-key">tenant</span><span class="cfg-val">${mask(az.tenant_id)}</span>
         </div>
         <div class="cfg-row">
-          <span class="cfg-key">client (SP)</span>
-          <span class="cfg-val">${mask(az.client_id)}</span>
+          <span class="cfg-key">client (SP)</span><span class="cfg-val">${mask(az.client_id)}</span>
         </div>
       </div>
 
       <div class="cfg-section">
         <div class="cfg-section-title">LLM</div>
         <div class="cfg-row">
-          <span class="cfg-key">provider</span>
-          <span class="cfg-val">${d.llm.provider}</span>
+          <span class="cfg-key">provider</span><span class="cfg-val">${d.llm.provider}</span>
         </div>
         <div class="cfg-row">
-          <span class="cfg-key">model</span>
-          <span class="cfg-val">${d.llm.model}</span>
+          <span class="cfg-key">model</span><span class="cfg-val">${d.llm.model}</span>
         </div>
         ${d.llm.base_url ? `<div class="cfg-row">
           <span class="cfg-key">base_url</span>
@@ -1463,11 +1571,18 @@ async function refreshConfig() {
       </div>
 
       <div class="cfg-section">
-        <div class="cfg-section-title">Assets</div>
-        ${assetsHtml}
+        <div class="cfg-section-title">Detection rules</div>
+        ${rulesHtml}
+        ${excCnt ? `<div class="cfg-row" style="margin-top:4px">
+          <span class="cfg-key">exceptions</span>
+          <span class="cfg-val" style="color:var(--dim)">${excCnt} pattern(s)</span>
+        </div>` : ''}
       </div>
 
-      `;
+      <div class="cfg-section">
+        <div class="cfg-section-title">Action backends</div>
+        ${actionHtml}
+      </div>`;
 
   } catch (e) {
     panel.innerHTML = `<div style="color:var(--red);padding:16px">Failed to load config: ${e.message}</div>`;

@@ -219,6 +219,7 @@ async def config() -> dict:
                     "ttp": rule.ttp,
                     "source": rule.source,
                     "description": rule.description,
+                    "query": rule.query,
                     "interval_s": rule.interval_s,
                     "asset_name": rule.asset_name,
                     "monitoring_backend_name": rule.monitoring_backend_name,

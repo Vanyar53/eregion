@@ -653,8 +653,14 @@ function renderIncidents() {
     }).join('');
 
     // Card-level actions (VM-wide)
+    // Release = isolation only (post-restore). Revert = isolation + all IP blocks (cleanup).
     const cardActions = [];
-    if (isIsolated || isBlocked) {
+    if (isIsolated) {
+      cardActions.push(
+        `<button class="action danger" onclick="confirmRelease('${vm_name}')">↩️ Release</button>`
+      );
+    }
+    if (isBlocked) {
       cardActions.push(
         `<button class="action danger" onclick="confirmRevert('${vm_name}')">↩️ Revert</button>`
       );
@@ -700,10 +706,37 @@ async function doApproveRule(proposalId, escId) {
 
 // ── Actions ────────────────────────────────────────────────────────────────────
 
+function confirmRelease(vmName) {
+  openModal(
+    'Release isolation — ' + vmName,
+    'Remove the NSG isolation rule. Use after restore when the VM is clean. IP blocks (if any) remain active.',
+    `glorfindel release ${vmName} --yes`,
+    '↩️ Release',
+    'danger',
+    () => doRelease(vmName),
+  );
+}
+
+async function doRelease(vmName) {
+  toast('↩️ Releasing isolation on ' + vmName + '…');
+  try {
+    const r = await fetch(`/api/action/release/${vmName}`, { method: 'POST' });
+    const d = await r.json();
+    if (d.ok) {
+      toast('✓ Isolation released — ' + vmName + ' is back online');
+      refreshState();
+    } else {
+      toast('✗ Release failed: ' + (d.stderr || d.error || '?'));
+    }
+  } catch (e) {
+    toast('✗ ' + e.message);
+  }
+}
+
 function confirmRevert(vmName) {
   openModal(
     'Revert ' + vmName,
-    'Release isolation and unblock all IPs. The VM will be reconnected to the network.',
+    'Full reset: release isolation AND unblock all IPs. Use between test runs.',
     `glorfindel revert ${vmName} --yes`,
     '↩️ Revert',
     'danger',

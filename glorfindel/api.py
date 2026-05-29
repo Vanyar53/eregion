@@ -283,8 +283,26 @@ async def feed_ws(ws: WebSocket) -> None:
         pass
 
 
+@app.post("/api/action/release/{vm_name}")
+async def action_release(vm_name: str) -> dict:
+    """Release isolation only — use after restore when the VM is clean."""
+    resource_id = _find_resource_id(vm_name)
+    if not resource_id:
+        return {"error": f"No active isolation found for {vm_name}"}
+    result = subprocess.run(
+        [_bin(), "release", resource_id, "--yes"],
+        capture_output=True, text=True, timeout=60,
+    )
+    return {
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+        "ok": result.returncode == 0,
+    }
+
+
 @app.post("/api/action/revert/{vm_name}")
 async def action_revert(vm_name: str) -> dict:
+    """Full reset — release isolation + unblock all IPs. Use between test runs."""
     resource_id = _find_resource_id(vm_name)
     if not resource_id:
         return {"error": f"No active actions found for {vm_name}"}

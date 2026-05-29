@@ -5,21 +5,16 @@ mitre: T1486
 version: "1.0.0"
 
 # ─── Target ────────────────────────────────────────────────────────────────────
-# The VM where the attack is simulated. Must be in a resource group tagged
-# annatar-test: "true" — Annatar refuses to run on untagged resources.
 target:
   type: azure_vm
   resource_group: annatar            # replace with your resource group
   vm_name: vm-annatar-victim         # replace with your VM name
 
 prerequisites:
-  # Run these KQL queries in Log Analytics to verify before launching the scenario.
-  # If any returns no rows, the detection will time out.
-  # Adapt vm_name in the verify queries to match your target above.
   detection:
     - name: perf_disk_counters
       table: Perf
-      why: detection query reads Disk Write Bytes/sec — must exceed 50 MB/s threshold
+      why: detection rule reads Disk Write Bytes/sec — must exceed 50 MB/s threshold
       verify: "Perf | where ObjectName == 'Logical Disk' and CounterName == 'Disk Write Bytes/sec' | where TimeGenerated > ago(1h) | limit 1"
       setup: "Enable VM Insights on the VM (installs AMA + DCR with Perf counters automatically)"
     - name: ama_heartbeat
@@ -36,51 +31,23 @@ prerequisites:
 setup:
   - name: initialize_test_volume
     action: run_script_on_vm
-    script: scripts/vm/setup_testdata.sh  # Creates marker, removes residuals from previous runs
+    script: scripts/vm/setup_testdata.sh
 
 # ─── Attack steps ──────────────────────────────────────────────────────────────
-# T0 is the moment the attack starts. All timings are measured from T0.
 steps:
   - name: mass_encrypt_data_volume
     action: run_script_on_vm
-    script: scripts/vm/ransomware_sim.sh  # Encrypts /mnt/testdata with openssl, leaves enc_*.dat artifacts
-    record: T0                         # Start the RTO clock here
+    script: scripts/vm/ransomware_sim.sh
+    record: T0
 
 # ─── Detection ─────────────────────────────────────────────────────────────────
-# Annatar emits attack_started with this query. Glorfindel polls the detection
-# source until the query returns results or timeout expires.
-#
-# CLIENT SETUP:
-#   Replace this query with whatever alert query your SOC uses.
-#   The default detects a Disk Write spike > 50 MB/s — typical ransomware I/O pattern.
-#   time_max is your declared detection SLA, evaluated by Glorfindel.
+# Detection config lives in glorfindel/rules/azure/detection_rules.yaml (T1486).
+# Only the timing contract stays here.
 detection:
-  source: azure_monitor          # DetectionConnector to use (azure_monitor, datadog, splunk…)
-  workspace_id: "b451c51a-1cd0-4125-ac70-6aaf2c1dc209"  # Log Analytics Workspace ID — replace with yours
-  query: |
-    Perf
-    | where ObjectName == "Logical Disk" and CounterName == "Disk Write Bytes/sec"
-    | where CounterValue > 52428800
-    | where TimeGenerated > ago(10m)
-    | summarize MaxWrite = max(CounterValue) by bin(TimeGenerated, 1m), Computer
-  timeout: "300s"   # Hard stop for Glorfindel's poll loop (not a SLA)
+  timeout: "300s"   # Annatar feedback watcher: declare detection_missed after this
   time_max: "180s"  # Declared detection SLA — reported in Glorfindel's RTO breakdown
 
-# ─── Recovery ──────────────────────────────────────────────────────────────────
-# Owned by Glorfindel + human approval. After isolating the VM, Glorfindel
-# escalates restore_from_backup. The operator runs:
-#   glorfindel restore <resource_id> --vault <vault> --yes
-# On success, Glorfindel automatically releases isolation (recovery_complete signal).
-recovery:
-  vault: rsv-annatar   # replace with your Recovery Services Vault name
-  time_max: "1800s"    # Declared RTO SLA = 30 minutes
-
-cleanup: []
-# Cleanup removed — restore is Glorfindel's responsibility.
-
 # ─── Detection hints (purple team feedback) ────────────────────────────────────
-# Annatar shares these with Glorfindel when detection times out so the LLM can
-# propose a better detection rule.
 detection_hints:
   log_source: Perf
   attack_commands_summary: >

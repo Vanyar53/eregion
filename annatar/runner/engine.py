@@ -99,7 +99,8 @@ class Engine:
 
             checks["attack"] = "PASS"
 
-            # Emit attack_started — Glorfindel polls detection and owns the response cycle
+            # Emit attack_started — Glorfindel looks up its own detection rule by TTP
+            # and owns the full detection + response cycle.
             detection_timeout_s = 0.0
             if scenario.detection:
                 detection_timeout_s = self._parse_duration(
@@ -109,21 +110,15 @@ class Engine:
                     event="attack_started",
                     raw_signal={
                         "attack_time": T0,
-                        "detection_query": scenario.detection["query"],
-                        "detection_source": scenario.detection.get("source", "azure_monitor"),
                         "detection_timeout_s": detection_timeout_s,
                         "detection_max_s": self._parse_duration(
                             scenario.detection.get("time_max", "9999s")
-                        ),
-                        "log_analytics_workspace_id": (
-                            scenario.detection.get("workspace_id")
-                            or scenario.target.get("log_analytics_workspace_id")
                         ),
                     },
                 )
                 console.print(
                     "[cyan]->[/cyan] Signal 'attack_started' emitted"
-                    " — Glorfindel takes over detection."
+                    " — Glorfindel will detect via detection_rules.yaml."
                 )
 
             overall = "PASS" if all("PASS" in v for v in checks.values()) else "FAIL"

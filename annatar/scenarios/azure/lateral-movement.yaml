@@ -9,11 +9,10 @@ target:
   vm_name: vm-annatar-victim          # replace with your VM name
 
 prerequisites:
-  # Adapt vm_name in the verify queries to match your target above.
   detection:
     - name: syslog_dcr
       table: Syslog
-      why: detection query reads auth facility — requires a DCR collecting Syslog at Warning+ on the VM
+      why: detection rule reads auth facility — requires a DCR collecting Syslog at Warning+ on the VM
       verify: "Syslog | where Facility == 'auth' | where TimeGenerated > ago(1h) | where Computer == '<vm_name>' | limit 1"
       setup: "Create a DCR with Syslog data source (facility: auth, level: Warning) and associate it with the VM"
     - name: ama_heartbeat
@@ -28,27 +27,11 @@ steps:
     script: scripts/vm/lateral_movement_sim.sh
     record: T0
 
+# ─── Detection ─────────────────────────────────────────────────────────────────
+# Detection config lives in glorfindel/rules/azure/detection_rules.yaml (T1110.001).
+# The rule extracts SourceIP so Glorfindel can block_suspicious_ip on the attacker's IP.
 detection:
-  source: azure_monitor
-  workspace_id: "b451c51a-1cd0-4125-ac70-6aaf2c1dc209"  # Log Analytics Workspace ID — replace with yours
-  query: |
-    Syslog
-    | where Facility == "auth"
-    | where SyslogMessage has "Failed password" or SyslogMessage has "Invalid user"
-    | where TimeGenerated > ago(5m)
-    | extend SourceIP = extract(@"from (\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})", 1, SyslogMessage)
-    | where isnotempty(SourceIP)
-    | where not(SourceIP startswith "10.") and not(SourceIP startswith "192.168.") and not(SourceIP startswith "127.")
-    | summarize FailedAttempts = count() by SourceIP
-    | where FailedAttempts >= 10
-    | project SourceIP, FailedAttempts
-  # Syslog is near-realtime via DCR (already active). 120s is ample.
   timeout: "300s"
-
-# No disk restore needed — no data was modified
-recovery: null
-
-cleanup: []
 
 detection_hints:
   log_source: Syslog

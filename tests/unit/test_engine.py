@@ -61,7 +61,7 @@ def test_engine_emits_attack_started_exfil(tmp_path, monkeypatch):
 
     files = list((tmp_path / "runs").glob("*_signals.jsonl"))
     assert len(files) == 1
-    signals = [json.loads(l) for l in files[0].read_text().strip().splitlines() if l.strip()]
+    signals = [json.loads(ln) for ln in files[0].read_text().strip().splitlines() if ln.strip()]
     signal = next(s for s in signals if s["event"] == "attack_started")
     assert signal["ttp"] == "T1041"
     assert signal["severity"] == "high"
@@ -69,8 +69,8 @@ def test_engine_emits_attack_started_exfil(tmp_path, monkeypatch):
     assert signal["resource_type"] == "vm"
     assert signal["resource_id"] == RESOURCE_ID
     assert "attack_time" in signal["raw_signal"]
-    assert "detection_query" in signal["raw_signal"]
     assert "detection_timeout_s" in signal["raw_signal"]
+    # detection_query removed — Glorfindel resolves via detection_rules.yaml by TTP
 
 
 def test_engine_emits_attack_started_ransomware(tmp_path, monkeypatch):
@@ -84,12 +84,13 @@ def test_engine_emits_attack_started_ransomware(tmp_path, monkeypatch):
         engine.run(RANSOMWARE_YAML, skip_confirm=True)
 
     files = list((tmp_path / "runs").glob("*_signals.jsonl"))
-    signals = [json.loads(l) for l in files[0].read_text().strip().splitlines() if l.strip()]
+    signals = [json.loads(ln) for ln in files[0].read_text().strip().splitlines() if ln.strip()]
     signal = next(s for s in signals if s["event"] == "attack_started")
     assert signal["ttp"] == "T1486"
     raw = signal["raw_signal"]
-    assert raw["detection_source"] == "azure_monitor"
-    assert raw["log_analytics_workspace_id"] == "b451c51a-1cd0-4125-ac70-6aaf2c1dc209"
+    assert "attack_time" in raw
+    assert "detection_timeout_s" in raw
+    # detection_source/workspace_id removed — Glorfindel resolves via detection_rules.yaml
 
 
 def test_engine_aborts_if_precheck_fails(tmp_path, monkeypatch):

@@ -12,11 +12,10 @@ target:
   vm_name: vm-annatar-victim          # replace with your VM name
 
 prerequisites:
-  # Adapt vm_name in the verify queries to match your target above.
   detection:
     - name: syslog_dcr
       table: Syslog
-      why: detection query reads auth facility — same DCR pipeline as T1110.001
+      why: detection rule reads auth facility — same DCR pipeline as T1110.001
       verify: "Syslog | where Facility == 'auth' | where TimeGenerated > ago(1h) | where Computer == '<vm_name>' | limit 1"
       setup: "Create a DCR with Syslog data source (facility: auth, level: Warning) and associate it with the VM"
     - name: ama_heartbeat
@@ -31,28 +30,11 @@ steps:
     script: scripts/vm/privilege_escalation_sim.sh
     record: T0
 
+# ─── Detection ─────────────────────────────────────────────────────────────────
+# Detection config lives in glorfindel/rules/azure/detection_rules.yaml (T1548.003).
+# Successful sudo to root → Glorfindel isolates the VM (OS-level compromise).
 detection:
-  source: azure_monitor
-  workspace_id: "b451c51a-1cd0-4125-ac70-6aaf2c1dc209"  # Log Analytics Workspace ID — replace with yours
-  query: |
-    Syslog
-    | where Facility == "auth"
-    | where TimeGenerated > ago(5m)
-    | where SyslogMessage has "sudo"
-          and SyslogMessage has "USER=root"
-          and SyslogMessage has "COMMAND="
-    | where SyslogMessage !has "NOT in sudoers"
-          and SyslogMessage !has "authentication failure"
-    | project TimeGenerated, Computer, SyslogMessage
-    | limit 1
-  # Syslog DCR collects auth.warning — same pipeline as T1110.001 (~60s latency).
   timeout: "300s"
-
-# No disk restore needed — no data files were modified, only syslog entries injected.
-# After isolation, the operator decides: forensic examination or restore_from_backup.
-recovery: null
-
-cleanup: []
 
 detection_hints:
   log_source: Syslog

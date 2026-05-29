@@ -1,5 +1,4 @@
 from pathlib import Path
-import pytest
 from annatar.runner.parser import ScenarioParser
 
 SCENARIOS_DIR = Path(__file__).parent.parent.parent / "annatar" / "scenarios"
@@ -25,7 +24,7 @@ def test_load_ransomware_scenario():
     assert s.target["type"] == "azure_vm"
     assert len(s.steps) >= 1
     assert s.detection["time_max"] == "180s"
-    assert s.recovery["time_max"] == "1800s"
+    assert s.recovery is None  # recovery removed from scenario — owned by Glorfindel
 
 
 def test_load_exfil_scenario():

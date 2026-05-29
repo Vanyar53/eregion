@@ -247,8 +247,31 @@ def load_context(
     return {**state, "past_cycles": past, "incident": asdict(inc)}
 
 
+def _find_rule_for_ttp(ttp: str):
+    """Look up the detection rule for a TTP from detection_rules.yaml.
+
+    Returns the first matching DetectionRule or None.
+    """
+    from pathlib import Path
+    from glorfindel.detection_rules import load_rules
+
+    for candidate in (
+        Path("glorfindel/rules/azure/detection_rules.yaml"),
+        Path(__file__).parent / "rules" / "azure" / "detection_rules.yaml",
+    ):
+        if candidate.exists():
+            for rule in load_rules(candidate):
+                if rule.ttp == ttp:
+                    return rule
+    return None
+
+
 def resolve_attack_started(signal: dict) -> dict:
     """Poll the detection source for an attack_started signal and return the resolved signal.
+
+    Detection config is resolved in priority order:
+    1. Fields in the signal's raw_signal (backward compat / explicit override)
+    2. Matching rule in glorfindel/rules/azure/detection_rules.yaml (primary source)
 
     Returns a signal with event='detection' (+ detection_time_s, detected_data) or
     event='detection_timeout'. Called by poll_detection (respond mode) and by
@@ -257,13 +280,34 @@ def resolve_attack_started(signal: dict) -> dict:
     from glorfindel.detectors import detector_for
 
     raw = signal.get("raw_signal", {})
-    source = raw.get("detection_source", "azure_monitor")
+    source = raw.get("detection_source", "")
     query = raw.get("detection_query", "")
+    workspace_id = raw.get("log_analytics_workspace_id", "")
     timeout_s = float(raw.get("detection_timeout_s", 300))
     attack_time = float(raw.get("attack_time", time.time()))
 
+    # Fall back to detection_rules.yaml when fields absent from signal
+    if not query:
+        rule = _find_rule_for_ttp(signal.get("ttp", ""))
+        if rule:
+            source = source or rule.source
+            query = rule.query
+            workspace_id = workspace_id or rule.workspace_id
+            _console.print(
+                f"  [dim]Using detection rule '{rule.name}' from detection_rules.yaml[/dim]"
+            )
+
+    if not query:
+        _console.print(
+            "  [yellow]No detection query found for this TTP"
+            " — detection_timeout[/yellow]"
+        )
+        return {**signal, "event": "detection_timeout"}
+
+    source = source or "azure_monitor"
+
     try:
-        detector = detector_for(source, workspace_id=raw.get("log_analytics_workspace_id", ""))
+        detector = detector_for(source, workspace_id=workspace_id)
     except ValueError as e:
         _console.print(f"[yellow]poll: {e} — skipping[/yellow]")
         return {**signal, "event": "detection_timeout"}

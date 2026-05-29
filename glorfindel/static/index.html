@@ -1395,6 +1395,32 @@ async function refreshConfig() {
       ? '<span class="cfg-badge ok">✓ connected</span>'
       : '<span class="cfg-badge err">✗ missing credentials</span>';
 
+    const backends = d.monitoring_backends || [];
+    const assets   = d.assets || [];
+
+    const backendsHtml = backends.length
+      ? backends.map(b => `
+        <div class="cfg-row">
+          <span class="cfg-key">${b.name}</span>
+          <span class="cfg-val">
+            <span class="cfg-badge dim">${b.type}</span>
+            <span style="color:var(--dim);font-size:10px">${mask(b.workspace_id || b.endpoint, 12)}</span>
+          </span>
+        </div>`).join('')
+      : `<div class="cfg-row"><span class="cfg-val" style="color:var(--dim)">No backends configured</span></div>`;
+
+    const assetsHtml = assets.length
+      ? assets.map(a => `
+        <div class="cfg-row">
+          <span class="cfg-key">${a.name}</span>
+          <span class="cfg-val">
+            <span class="cfg-badge dim">${a.type}</span>
+            <span style="color:var(--dim);font-size:10px">${mask(a.resource_id, 16)}</span>
+            ${a.monitoring_backends.map(b => `<span class="cfg-badge dim" style="font-size:9px">${b}</span>`).join('')}
+          </span>
+        </div>`).join('')
+      : `<div class="cfg-row"><span class="cfg-val" style="color:var(--dim)">No assets configured</span></div>`;
+
     panel.innerHTML = `
       <div class="cfg-section">
         <div class="cfg-section-title">Azure</div>
@@ -1430,6 +1456,16 @@ async function refreshConfig() {
           <span class="cfg-key">base_url</span>
           <span class="cfg-val" style="color:var(--dim)">${d.llm.base_url}</span>
         </div>` : ''}
+      </div>
+
+      <div class="cfg-section">
+        <div class="cfg-section-title">Monitoring backends</div>
+        ${backendsHtml}
+      </div>
+
+      <div class="cfg-section">
+        <div class="cfg-section-title">Assets</div>
+        ${assetsHtml}
       </div>
 
       `;

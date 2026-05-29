@@ -1,35 +1,52 @@
-# Glorfindel detection rules — single source of truth for detection config.
-# Glorfindel polls these continuously (independent of Annatar scenarios).
-# Annatar scenarios reference these rules by TTP — no query duplication.
+# Glorfindel detection configuration — source de vérité pour la détection.
 #
-# source:        detection system — determines the query language:
-#                  azure_monitor  → KQL (Kusto Query Language)
-#                  prometheus     → PromQL
-#                  splunk         → SPL (Splunk Processing Language)
-#                  datadog        → Datadog Query Language
-#                  loki           → LogQL
-#                  cloudwatch     → CloudWatch Logs Insights
-#                Extend detectors.py to add new sources.
-# query:         written in the language for the source above
-# workspace_id:  for azure_monitor: Log Analytics Workspace GUID (not the resource ID)
-#                  az monitor log-analytics workspace show -g <rg> -n <name> --query customerId -o tsv
-#                for prometheus: the Prometheus endpoint URL
-# resource_id:   full Azure resource ID of the protected VM
-#                  az vm show -g <rg> -n <vm> --query id -o tsv
-# interval_s:    polling period in seconds
-# enabled:       set to false to disable without deleting
+# Structure en 3 sections séparées :
 #
-# Tip: use ${AZURE_WORKSPACE_ID} and ${AZURE_VM_RESOURCE_ID} — resolved from .envrc at load time.
+#   monitoring_backends  →  moteurs de détection (LAW, Prometheus, Splunk...)
+#   assets               →  ressources surveillées (VMs, Storage accounts...)
+#   rules                →  requêtes de détection, associées à des assets
+#
+# Les rules ne contiennent plus de workspace_id ni de resource_id inline —
+# ces valeurs sont résolues depuis les backends et assets référencés.
+#
+# Variables d'environnement : ${VAR} est résolu depuis .envrc au chargement.
+# az monitor log-analytics workspace show -g <rg> -n <name> --query customerId -o tsv
+# az vm show -g <rg> -n <vm> --query id -o tsv
+
+# ── Monitoring backends ────────────────────────────────────────────────────────
+# Un backend = un moteur de détection avec ses paramètres de connexion.
+
+monitoring_backends:
+  - name: law-annatar
+    type: azure_monitor
+    workspace_id: "${AZURE_WORKSPACE_ID}"
+    # type: prometheus → workspace_id = endpoint URL (http://localhost:9090)
+    # type: splunk     → workspace_id = Splunk HEC endpoint
+
+# ── Assets ────────────────────────────────────────────────────────────────────
+# Un asset = une ressource protégée avec son resource_id Azure et les backends
+# qui la surveillent.
+
+assets:
+  - name: vm-annatar-victim
+    type: azure_vm
+    resource_id: "${AZURE_VM_RESOURCE_ID}"
+    monitoring_backends: [law-annatar]
+
+# ── Detection rules ────────────────────────────────────────────────────────────
+# Une rule référence des assets (résout resource_id) et hérite du backend
+# de l'asset (résout workspace_id + source/langage de query).
+#
+# interval_s  : période de polling en secondes
+# enabled     : mettre à false pour désactiver sans supprimer
 
 rules:
 
   - name: ransomware-disk-write
     description: "Sustained high disk write rate — T1486 ransomware file encryption"
     enabled: true
-    source: azure_monitor
-    workspace_id: "${AZURE_WORKSPACE_ID}"
     ttp: T1486
-    resource_id: "${AZURE_VM_RESOURCE_ID}"
+    assets: [vm-annatar-victim]
     interval_s: 30
     query: |
       Perf
@@ -43,10 +60,8 @@ rules:
   - name: data-exfiltration-blob
     description: "PutBlob from a VM private IP — T1041 exfiltration via MSI"
     enabled: true
-    source: azure_monitor
-    workspace_id: "${AZURE_WORKSPACE_ID}"
     ttp: T1041
-    resource_id: "${AZURE_VM_RESOURCE_ID}"
+    assets: [vm-annatar-victim]
     interval_s: 30
     query: |
       StorageBlobLogs
@@ -61,10 +76,8 @@ rules:
   - name: ssh-brute-force
     description: "Repeated SSH failures from an external IP — T1110.001"
     enabled: true
-    source: azure_monitor
-    workspace_id: "${AZURE_WORKSPACE_ID}"
     ttp: T1110.001
-    resource_id: "${AZURE_VM_RESOURCE_ID}"
+    assets: [vm-annatar-victim]
     interval_s: 30
     query: |
       Syslog
@@ -81,10 +94,8 @@ rules:
   - name: sudo-privilege-escalation
     description: "Successful sudo to root by a non-root user — T1548.003"
     enabled: true
-    source: azure_monitor
-    workspace_id: "${AZURE_WORKSPACE_ID}"
     ttp: T1548.003
-    resource_id: "${AZURE_VM_RESOURCE_ID}"
+    assets: [vm-annatar-victim]
     interval_s: 30
     query: |
       Syslog

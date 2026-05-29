@@ -145,9 +145,11 @@ async def config() -> dict:
         for ttp, events in sorted(ttp_events.items())
     }
 
-    # Detection rules
+    # Detection config (backends, assets, rules)
     rules_info: list[dict] = []
     known_resources: list[dict] = []
+    backends_info: list[dict] = []
+    assets_info: list[dict] = []
     rules_candidates = [
         Path("glorfindel/rules/azure/detection_rules.yaml"),
         Path(__file__).parent / "rules" / "azure" / "detection_rules.yaml",
@@ -157,11 +159,35 @@ async def config() -> dict:
     )
     if rules_path:
         try:
-            from glorfindel.detection_rules import _load_status, load_rules
-            rules = load_rules(rules_path)
+            from glorfindel.detection_rules import _load_status, load_config
+            cfg = load_config(rules_path)
             status = _load_status()
-            seen_rids: set[str] = set()
-            for rule in rules:
+
+            for b in cfg.backends:
+                backends_info.append({
+                    "name": b.name,
+                    "type": b.type,
+                    "workspace_id": b.workspace_id,
+                    "endpoint": b.endpoint,
+                })
+
+            for a in cfg.assets:
+                rid = a.resource_id or ""
+                backends = a.monitoring_backends
+                assets_info.append({
+                    "name": a.name,
+                    "type": a.type,
+                    "resource_id": rid,
+                    "monitoring_backends": backends,
+                })
+                if rid and "${" not in rid:
+                    known_resources.append({
+                        "resource_id": rid,
+                        "vm_name": rid.split("/")[-1],
+                        "asset_name": a.name,
+                    })
+
+            for rule in cfg.rules:
                 s = status.get(rule.name, {})
                 rules_info.append({
                     "name": rule.name,
@@ -169,18 +195,13 @@ async def config() -> dict:
                     "source": rule.source,
                     "description": rule.description,
                     "interval_s": rule.interval_s,
+                    "asset_name": rule.asset_name,
+                    "monitoring_backend_name": rule.monitoring_backend_name,
                     "last_poll": s.get("last_poll", ""),
                     "last_match": s.get("last_match", ""),
                     "last_error": s.get("last_error", ""),
                     "match_count": s.get("match_count", 0),
                 })
-                rid = rule.resource_id or ""
-                if rid and "${" not in rid and rid not in seen_rids:
-                    seen_rids.add(rid)
-                    known_resources.append({
-                        "resource_id": rid,
-                        "vm_name": rid.split("/")[-1],
-                    })
         except Exception:
             pass
 
@@ -205,6 +226,8 @@ async def config() -> dict:
             "rules": rules_info,
             "rules_file": str(rules_path) if rules_path else None,
         },
+        "monitoring_backends": backends_info,
+        "assets": assets_info,
         "known_resources": known_resources,
     }
 
@@ -332,10 +355,11 @@ async def audit_resource(vm_name: str) -> dict:
         ]
         rp = next((p for p in rules_candidates if p.exists()), None)
         if rp:
-            from glorfindel.detection_rules import load_rules
-            for rule in load_rules(rp):
-                if rule.resource_id.split("/")[-1] == vm_name:
-                    resource_id = rule.resource_id
+            from glorfindel.detection_rules import load_config
+            cfg = load_config(rp)
+            for asset in cfg.assets:
+                if asset.resource_id.split("/")[-1] == vm_name:
+                    resource_id = asset.resource_id
                     break
     if not resource_id:
         return {"error": f"resource_id not found for {vm_name}"}
@@ -347,10 +371,10 @@ async def audit_resource(vm_name: str) -> dict:
 
 @app.get("/api/audit")
 async def audit_all() -> dict:
-    """Remediation readiness audit for all resources in detection_rules.yaml."""
+    """Remediation readiness audit for all assets in detection_rules.yaml."""
     from glorfindel import audit as _audit
     from glorfindel.actions import AzureConnector
-    from glorfindel.detection_rules import load_rules
+    from glorfindel.detection_rules import load_config
 
     rules_candidates = [
         Path("glorfindel/rules/azure/detection_rules.yaml"),
@@ -360,18 +384,29 @@ async def audit_all() -> dict:
     if not rp:
         return {"audits": []}
 
+    cfg = load_config(rp)
     connector = AzureConnector(dry_run=False)
     seen: set[str] = set()
     audits = []
-    for rule in load_rules(rp):
-        rid = rule.resource_id
-        if rid and "${" not in rid and rid not in seen:
-            seen.add(rid)
-            vault = os.environ.get("GLORFINDEL_BACKUP_VAULT", "rsv-annatar")
-            result = _audit.run(rid, connector, vault=vault)
-            d = result.to_dict()
-            d["vault"] = vault
-            audits.append(d)
+    vault = os.environ.get("GLORFINDEL_BACKUP_VAULT", "rsv-annatar")
+
+    # Audit from assets (new format) or fall back to rules (legacy)
+    targets = [(a.resource_id, a.name) for a in cfg.assets if a.resource_id and "${" not in a.resource_id]
+    if not targets:
+        targets = [
+            (r.resource_id, r.asset_name or r.resource_id.split("/")[-1])
+            for r in cfg.rules
+            if r.resource_id and "${" not in r.resource_id
+        ]
+    for rid, asset_name in targets:
+        if rid in seen:
+            continue
+        seen.add(rid)
+        result = _audit.run(rid, connector, vault=vault)
+        d = result.to_dict()
+        d["vault"] = vault
+        d["asset_name"] = asset_name
+        audits.append(d)
     return {"audits": audits}
 
 

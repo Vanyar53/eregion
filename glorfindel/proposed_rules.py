@@ -113,23 +113,64 @@ def reject(proposal_id: str) -> dict:
 
 
 def _append_to_rules_yaml(proposal: dict, rules_path: Path) -> None:
+    """Append a proposed rule to detection_rules.yaml.
+
+    Writes the new format (assets reference) when possible by reverse-
+    looking up which asset matches the proposal's resource_id.
+    Falls back to inline workspace_id/resource_id for robustness.
+    """
+    from glorfindel.detection_rules import load_config
     indented_query = "".join(
         f"      {line}\n" for line in proposal["query"].splitlines()
     )
-    block = (
-        f"\n"
-        f"  - name: {proposal['rule_name']}\n"
-        f"    description: >\n"
-        f"      Auto-proposed by Glorfindel after detection_missed (TTP: {proposal['ttp']}).\n"
-        f"      {proposal['explanation'][:120]}\n"
-        f"    enabled: true\n"
-        f"    source: {proposal['source']}\n"
-        f"    workspace_id: \"{proposal['workspace_id']}\"\n"
-        f"    ttp: {proposal['ttp']}\n"
-        f"    resource_id: \"{proposal['resource_id']}\"\n"
-        f"    interval_s: {proposal['interval_s']}\n"
-        f"    query: |\n"
-        f"{indented_query}"
-    )
+
+    # Try to resolve asset and backend names from existing config
+    asset_name = proposal.get("asset_name", "")
+    backend_name = proposal.get("monitoring_backend_name", "")
+
+    if not asset_name:
+        try:
+            cfg = load_config(rules_path)
+            match = cfg.asset_for_resource(proposal.get("resource_id", ""))
+            if match:
+                asset_name = match.name
+                if match.monitoring_backends:
+                    backend_name = match.monitoring_backends[0]
+        except Exception:
+            pass
+
+    if asset_name:
+        # New format — no inline workspace_id / resource_id
+        block = (
+            f"\n"
+            f"  - name: {proposal['rule_name']}\n"
+            f"    description: >\n"
+            f"      Auto-proposed by Glorfindel after detection_missed (TTP: {proposal['ttp']}).\n"
+            f"      {proposal['explanation'][:120]}\n"
+            f"    enabled: true\n"
+            f"    ttp: {proposal['ttp']}\n"
+            f"    assets: [{asset_name}]\n"
+            f"    interval_s: {proposal['interval_s']}\n"
+            f"    query: |\n"
+            f"{indented_query}"
+        )
+    else:
+        # Legacy fallback — inline workspace_id / resource_id
+        block = (
+            f"\n"
+            f"  - name: {proposal['rule_name']}\n"
+            f"    description: >\n"
+            f"      Auto-proposed by Glorfindel after detection_missed (TTP: {proposal['ttp']}).\n"
+            f"      {proposal['explanation'][:120]}\n"
+            f"    enabled: true\n"
+            f"    source: {proposal['source']}\n"
+            f"    workspace_id: \"{proposal['workspace_id']}\"\n"
+            f"    ttp: {proposal['ttp']}\n"
+            f"    resource_id: \"{proposal['resource_id']}\"\n"
+            f"    interval_s: {proposal['interval_s']}\n"
+            f"    query: |\n"
+            f"{indented_query}"
+        )
+
     with open(rules_path, "a") as f:
         f.write(block)

@@ -7,14 +7,96 @@ from unittest.mock import MagicMock, patch
 
 from glorfindel.detection_rules import (
     DetectionRule,
+    DetectionConfig,
+    MonitoringBackend,
+    Asset,
     RulePoller,
     _load_status,
     _save_status,
     load_rules,
+    load_config,
 )
 
 
-# ── load_rules ──────────────────────────────────────────────────────────────────
+# ── load_config (new format) ────────────────────────────────────────────────────
+
+NEW_FORMAT_YAML = textwrap.dedent("""\
+    monitoring_backends:
+      - name: law-test
+        type: azure_monitor
+        workspace_id: ws-abc
+
+    assets:
+      - name: vm-test
+        type: azure_vm
+        resource_id: /subscriptions/sub/rg/providers/Microsoft.Compute/virtualMachines/vm1
+        monitoring_backends: [law-test]
+
+    rules:
+      - name: test-rule
+        ttp: T1486
+        assets: [vm-test]
+        interval_s: 30
+        enabled: true
+        description: Test rule new format
+        query: "Perf | limit 1"
+""")
+
+
+def test_load_config_new_format(tmp_path):
+    f = tmp_path / "rules.yaml"
+    f.write_text(NEW_FORMAT_YAML)
+    cfg = load_config(f)
+    assert len(cfg.backends) == 1
+    assert cfg.backends[0].name == "law-test"
+    assert cfg.backends[0].workspace_id == "ws-abc"
+    assert len(cfg.assets) == 1
+    assert cfg.assets[0].name == "vm-test"
+    assert cfg.assets[0].monitoring_backends == ["law-test"]
+    assert len(cfg.rules) == 1
+    r = cfg.rules[0]
+    assert r.workspace_id == "ws-abc"   # resolved from backend
+    assert r.resource_id == "/subscriptions/sub/rg/providers/Microsoft.Compute/virtualMachines/vm1"
+    assert r.source == "azure_monitor"  # resolved from backend type
+    assert r.asset_name == "vm-test"
+    assert r.monitoring_backend_name == "law-test"
+
+
+def test_load_config_backend_lookup(tmp_path):
+    f = tmp_path / "rules.yaml"
+    f.write_text(NEW_FORMAT_YAML)
+    cfg = load_config(f)
+    assert cfg.backend("law-test") is not None
+    assert cfg.backend("nonexistent") is None
+    assert cfg.asset("vm-test") is not None
+    assert cfg.asset_for_resource(
+        "/subscriptions/sub/rg/providers/Microsoft.Compute/virtualMachines/vm1"
+    ) is not None
+
+
+def test_load_config_empty_resolves_gracefully(tmp_path):
+    f = tmp_path / "rules.yaml"
+    f.write_text(textwrap.dedent("""\
+        monitoring_backends: []
+        assets: []
+        rules: []
+    """))
+    cfg = load_config(f)
+    assert cfg.backends == []
+    assert cfg.assets == []
+    assert cfg.rules == []
+
+
+def test_load_rules_new_format_backward_compat(tmp_path):
+    """load_rules() still works with new format."""
+    f = tmp_path / "rules.yaml"
+    f.write_text(NEW_FORMAT_YAML)
+    rules = load_rules(f)
+    assert len(rules) == 1
+    assert rules[0].workspace_id == "ws-abc"
+
+
+# ── load_rules (legacy format) ──────────────────────────────────────────────────
 
 VALID_YAML = textwrap.dedent("""\
     rules:

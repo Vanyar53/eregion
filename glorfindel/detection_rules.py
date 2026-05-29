@@ -4,7 +4,7 @@ import json
 import threading
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
@@ -19,52 +19,172 @@ from glorfindel.detectors import detector_for  # noqa: E402  (after optional dep
 _STATUS_FILE = Path.home() / ".glorfindel" / "rule_status.json"
 
 
+# ── Data model ─────────────────────────────────────────────────────────────────
+
+@dataclass
+class MonitoringBackend:
+    """A monitoring engine (LAW workspace, Prometheus endpoint, ...)."""
+    name: str
+    type: str                  # "azure_monitor", "prometheus", "splunk", ...
+    workspace_id: str = ""     # LAW workspace GUID or Prometheus endpoint URL
+    endpoint: str = ""         # generic endpoint for non-Azure backends
+
+
+@dataclass
+class Asset:
+    """A monitored infrastructure asset (VM, Storage account, ...)."""
+    name: str
+    type: str                              # "azure_vm", "azure_storage", ...
+    resource_id: str = ""                  # full Azure resource ID
+    monitoring_backends: list[str] = field(default_factory=list)  # backend names
+
+
 @dataclass
 class DetectionRule:
+    """A detection rule — query + metadata.
+
+    workspace_id and resource_id are resolved at load time from the
+    referenced asset and monitoring backend. Rules never hardcode them.
+    """
     name: str
-    source: str                    # "azure_monitor"
-    workspace_id: str
+    source: str                # "azure_monitor" | "prometheus" | ...
+    workspace_id: str          # resolved from MonitoringBackend
     query: str
     ttp: str
-    resource_id: str               # full Azure resource ID
-    interval_s: float = 30.0      # how often to poll (seconds)
+    resource_id: str           # resolved from Asset
+    interval_s: float = 30.0
     enabled: bool = True
     description: str = ""
+    # references (set at load time, empty for old-format rules)
+    asset_name: str = ""
+    monitoring_backend_name: str = ""
 
 
-def load_rules(path: str | Path) -> list[DetectionRule]:
-    """Load detection rules from a YAML file.
+@dataclass
+class DetectionConfig:
+    """Full detection configuration parsed from detection_rules.yaml."""
+    backends: list[MonitoringBackend]
+    assets: list[Asset]
+    rules: list[DetectionRule]
 
-    Values using ${VAR} syntax are expanded from environment variables
-    so workspace_id and resource_id can be set via .envrc without editing
-    the YAML directly.
+    def backend(self, name: str) -> MonitoringBackend | None:
+        return next((b for b in self.backends if b.name == name), None)
+
+    def asset(self, name: str) -> Asset | None:
+        return next((a for a in self.assets if a.name == name), None)
+
+    def asset_for_resource(self, resource_id: str) -> Asset | None:
+        return next((a for a in self.assets if a.resource_id == resource_id), None)
+
+
+# ── Loading ────────────────────────────────────────────────────────────────────
+
+def load_config(path: str | Path) -> DetectionConfig:
+    """Load detection configuration from YAML.
+
+    Supports two formats:
+    - New (recommended): monitoring_backends + assets + rules sections.
+      workspace_id and resource_id are resolved from the asset/backend graph.
+    - Legacy: rules with workspace_id and resource_id inline.
+      Backward-compatible so existing configs and tests continue to work.
     """
     import os
     if yaml is None:
         raise ImportError("PyYAML is required: pip install pyyaml")
     p = Path(path)
     if not p.exists():
-        return []
-    data = yaml.safe_load(os.path.expandvars(p.read_text()))
+        return DetectionConfig(backends=[], assets=[], rules=[])
+    raw = os.path.expandvars(p.read_text())
+    data = yaml.safe_load(raw)
     if not data or not isinstance(data, dict):
-        return []
-    rules = []
+        return DetectionConfig(backends=[], assets=[], rules=[])
+
+    # ── Parse backends ────────────────────────────────────────────────────────
+    backends: list[MonitoringBackend] = []
+    for b in data.get("monitoring_backends", []):
+        backends.append(MonitoringBackend(
+            name=b["name"],
+            type=b.get("type", "azure_monitor"),
+            workspace_id=b.get("workspace_id", ""),
+            endpoint=b.get("endpoint", ""),
+        ))
+
+    # ── Parse assets ──────────────────────────────────────────────────────────
+    assets: list[Asset] = []
+    for a in data.get("assets", []):
+        assets.append(Asset(
+            name=a["name"],
+            type=a.get("type", "azure_vm"),
+            resource_id=a.get("resource_id", ""),
+            monitoring_backends=a.get("monitoring_backends", []),
+        ))
+
+    backend_by_name = {b.name: b for b in backends}
+    asset_by_name   = {a.name: a  for a in assets}
+
+    # ── Parse rules ───────────────────────────────────────────────────────────
+    rules: list[DetectionRule] = []
     for item in data.get("rules", []):
         if not item.get("enabled", True):
             continue
+
+        rule_assets = item.get("assets", [])
+        rule_backends = item.get("monitoring_backends", [])
+
+        # New format: resolve workspace_id and resource_id from references
+        if rule_assets or rule_backends or backends or assets:
+            # Resolve the primary asset
+            primary_asset_name = rule_assets[0] if rule_assets else ""
+            primary_asset = asset_by_name.get(primary_asset_name)
+            resource_id = primary_asset.resource_id if primary_asset else item.get("resource_id", "")
+
+            # Resolve the primary backend (from rule override or from asset)
+            if rule_backends:
+                primary_backend_name = rule_backends[0]
+            elif primary_asset and primary_asset.monitoring_backends:
+                primary_backend_name = primary_asset.monitoring_backends[0]
+            else:
+                primary_backend_name = ""
+            primary_backend = backend_by_name.get(primary_backend_name)
+            workspace_id = (
+                primary_backend.workspace_id if primary_backend
+                else item.get("workspace_id", "")
+            )
+            source = (
+                primary_backend.type if primary_backend
+                else item.get("source", "azure_monitor")
+            )
+        else:
+            # Legacy format: workspace_id and resource_id are inline
+            workspace_id = item.get("workspace_id", "")
+            resource_id  = item.get("resource_id", "")
+            source       = item.get("source", "azure_monitor")
+            primary_asset_name   = ""
+            primary_backend_name = ""
+
         rules.append(DetectionRule(
             name=item["name"],
-            source=item.get("source", "azure_monitor"),
-            workspace_id=item["workspace_id"],
+            source=source,
+            workspace_id=workspace_id,
             query=item["query"],
             ttp=item.get("ttp", ""),
-            resource_id=item["resource_id"],
+            resource_id=resource_id,
             interval_s=float(item.get("interval_s", 30)),
             enabled=True,
             description=item.get("description", ""),
+            asset_name=primary_asset_name,
+            monitoring_backend_name=primary_backend_name,
         ))
-    return rules
 
+    return DetectionConfig(backends=backends, assets=assets, rules=rules)
+
+
+def load_rules(path: str | Path) -> list[DetectionRule]:
+    """Return only the rules from a detection config file. Backward-compatible."""
+    return load_config(path).rules
+
+
+# ── Status persistence ────────────────────────────────────────────────────────
 
 def _load_status() -> dict:
     try:
@@ -78,13 +198,10 @@ def _save_status(status: dict) -> None:
     _STATUS_FILE.write_text(json.dumps(status, indent=2))
 
 
-class RulePoller:
-    """Polls detection rules continuously and dispatches detection signals.
+# ── RulePoller ────────────────────────────────────────────────────────────────
 
-    Each rule runs on its own timer. When a rule matches, a synthetic
-    detection signal is dispatched via the provided callback so the
-    agent can decide and act.
-    """
+class RulePoller:
+    """Polls detection rules continuously and dispatches detection signals."""
 
     def __init__(
         self,
@@ -125,6 +242,8 @@ class RulePoller:
                     "source": rule.source,
                     "workspace_id": rule.workspace_id,
                     "resource_id": rule.resource_id,
+                    "asset_name": rule.asset_name,
+                    "monitoring_backend_name": rule.monitoring_backend_name,
                     "interval_s": rule.interval_s,
                     "description": rule.description,
                     "last_poll": s.get("last_poll", ""),
@@ -135,7 +254,6 @@ class RulePoller:
             return out
 
     def _poll_rule(self, rule: DetectionRule) -> None:
-
         while not self._stop.is_set():
             now_iso = datetime.now(timezone.utc).isoformat()
             try:
@@ -146,7 +264,7 @@ class RulePoller:
                     since=since,
                     timeout_s=rule.interval_s * 0.8,
                     interval_s=min(rule.interval_s * 0.8, 10.0),
-                    verbose=False,  # background polling — don't pollute watch output
+                    verbose=False,
                 )
                 with self._lock:
                     self._status.setdefault(rule.name, {})
@@ -174,6 +292,7 @@ class RulePoller:
                         "context": {
                             "workspace_id": rule.workspace_id,
                             "rule_name": rule.name,
+                            "asset_name": rule.asset_name,
                         },
                         "raw_signal": {
                             "detection_source": rule.source,

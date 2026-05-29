@@ -140,13 +140,16 @@ class Engine:
             report.render()
             console.print(f"\n[dim]Report saved: {path}[/dim]")
 
-            # Purple-team feedback: wait for Glorfindel's detection result,
-            # emit detection_missed if it timed out so Glorfindel can propose
-            # an improved detection rule.
+            # Purple-team feedback: monitor Glorfindel's detection result in
+            # background and emit detection_missed if it times out.
             if scenario.detection and detection_timeout_s > 0 and not self.dry_run:
-                self._wait_and_emit_feedback(
-                    run_id, emitter, scenario, detection_timeout_s
-                )
+                import threading as _threading
+                _threading.Thread(
+                    target=self._wait_and_emit_feedback,
+                    args=(run_id, emitter, scenario, detection_timeout_s),
+                    daemon=True,
+                    name=f"annatar-feedback-{run_id}",
+                ).start()
 
         finally:
             # Cleanup always runs — even if the scenario crashes mid-way

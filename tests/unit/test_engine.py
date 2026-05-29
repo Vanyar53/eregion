@@ -61,10 +61,8 @@ def test_engine_emits_attack_started_exfil(tmp_path, monkeypatch):
 
     files = list((tmp_path / "runs").glob("*_signals.jsonl"))
     assert len(files) == 1
-    lines = files[0].read_text().strip().splitlines()
-    assert len(lines) == 1
-    signal = json.loads(lines[0])
-    assert signal["event"] == "attack_started"
+    signals = [json.loads(l) for l in files[0].read_text().strip().splitlines() if l.strip()]
+    signal = next(s for s in signals if s["event"] == "attack_started")
     assert signal["ttp"] == "T1041"
     assert signal["severity"] == "high"
     assert signal["provider"] == "azure"
@@ -86,10 +84,8 @@ def test_engine_emits_attack_started_ransomware(tmp_path, monkeypatch):
         engine.run(RANSOMWARE_YAML, skip_confirm=True)
 
     files = list((tmp_path / "runs").glob("*_signals.jsonl"))
-    lines = files[0].read_text().strip().splitlines()
-    assert len(lines) == 1
-    signal = json.loads(lines[0])
-    assert signal["event"] == "attack_started"
+    signals = [json.loads(l) for l in files[0].read_text().strip().splitlines() if l.strip()]
+    signal = next(s for s in signals if s["event"] == "attack_started")
     assert signal["ttp"] == "T1486"
     raw = signal["raw_signal"]
     assert raw["detection_source"] == "azure_monitor"

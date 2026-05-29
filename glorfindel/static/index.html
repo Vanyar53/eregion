@@ -646,8 +646,10 @@ function renderIncidents() {
         `<button class="action danger" onclick="confirmRevert('${vm_name}')">↩️ Revert</button>`
       );
     }
-    const needsRestore = escs.some(e =>
-      e.action === 'restore_from_backup' || e.escalation_type === 'low_confidence'
+    // Restore only when VM is actually isolated AND there's an explicit restore escalation.
+    // low_confidence (detection_timeout) means IDS gap — not necessarily needing a restore.
+    const needsRestore = isIsolated && escs.some(e =>
+      e.action === 'restore_from_backup'
     );
     if (needsRestore) {
       cardActions.push(

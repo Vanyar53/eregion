@@ -146,6 +146,7 @@ class RulePoller:
                     since=since,
                     timeout_s=rule.interval_s * 0.8,
                     interval_s=min(rule.interval_s * 0.8, 10.0),
+                    verbose=False,  # background polling — don't pollute watch output
                 )
                 with self._lock:
                     self._status.setdefault(rule.name, {})

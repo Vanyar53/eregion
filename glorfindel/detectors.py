@@ -39,6 +39,7 @@ class AzureMonitorDetector(DetectionConnector):
         since: float,
         timeout_s: float,
         interval_s: float = 10.0,
+        verbose: bool = True,
     ) -> float | None:
         from azure.identity import DefaultAzureCredential
         from azure.monitor.query import LogsQueryClient, LogsQueryStatus
@@ -62,15 +63,19 @@ class AzureMonitorDetector(DetectionConnector):
                     for table in response.tables:
                         if table.rows:
                             row = dict(zip(table.columns, table.rows[0]))
-                            _console.print(f"  [green]Alert detected[/green] after {round(elapsed)}s")
+                            if verbose:
+                                _console.print(
+                                    f"  [green]Alert detected[/green] after {round(elapsed)}s"
+                                )
                             return round(elapsed), row
                 last_error = None  # clear on success (no rows is not an error)
             except Exception as e:
                 err = str(e)
-                if err != last_error:
+                if err != last_error and verbose:
                     _console.print(f"  [dim]Poll error: {e}[/dim]")
                     last_error = err
-            _console.print(f"  [dim]Still polling... {round(elapsed)}s elapsed[/dim]")
+            if verbose:
+                _console.print(f"  [dim]Still polling... {round(elapsed)}s elapsed[/dim]")
             time.sleep(interval_s)
 
 

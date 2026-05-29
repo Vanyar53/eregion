@@ -41,6 +41,8 @@ def record(
     suggested_steps: list[str] | None = None,
     ttp: str = "",
     severity: str = "",
+    proposal_id: str = "",
+    proposed_query: str = "",
 ) -> str:
     """Append an escalation and return its id."""
     esc = {
@@ -55,6 +57,8 @@ def record(
         "suggested_steps": suggested_steps or [],
         "ttp": ttp,
         "severity": severity,
+        "proposal_id": proposal_id,
+        "proposed_query": proposed_query,
         "status": "pending",
         "resolved_at": None,
     }

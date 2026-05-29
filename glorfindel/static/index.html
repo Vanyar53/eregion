@@ -217,6 +217,9 @@
   .esc-reason  { color: var(--dim); font-size: 11px; line-height: 1.5; margin-bottom: 4px; }
   .esc-steps { margin-top: 6px; border-left: 2px solid var(--border); padding-left: 8px; display: flex; flex-direction: column; gap: 3px; }
   .esc-step  { color: var(--dim); font-size: 10px; line-height: 1.5; }
+  .esc-query { background: var(--bg2); border-left: 2px solid var(--cyan); padding: 8px;
+               font-size: 10px; color: var(--blue); white-space: pre-wrap; overflow-x: auto;
+               margin: 6px 0; border-radius: 0 4px 4px 0; }
 
   .vm-actions {
     display: flex;
@@ -617,14 +620,21 @@ function renderIncidents() {
         </div>` : '';
 
       const escId = e.id;
+      const isRuleProposal = e.action === 'improve_detection' && e.proposal_id;
+      const queryHtml = isRuleProposal && e.proposed_query ? `
+        <pre class="esc-query">${e.proposed_query.trim()}</pre>` : '';
+      const approveBtn = isRuleProposal ? `
+        <button class="action ok" onclick="doApproveRule('${e.proposal_id}','${escId}')" style="flex-shrink:0">✓ Approve rule</button>` : '';
       return `<div class="esc-item">
         <div class="esc-item-header">
           <span class="esc-action-label">🚨 ${label}</span>
           <button class="action" onclick="confirmAck('${escId}')" style="flex-shrink:0">✓ Ack</button>
           <button class="action" onclick="openCommandModal('${escId}')" style="flex-shrink:0">📋 Cmd</button>
+          ${approveBtn}
         </div>
         ${ctx ? `<div class="esc-context">${ctx}</div>` : ''}
         <div class="esc-reason">${e.reason}</div>
+        ${queryHtml}
         ${stepsHtml}
       </div>`;
     }).join('');
@@ -657,6 +667,20 @@ function renderIncidents() {
       </div>
     </div>`;
   }).join('');
+}
+
+async function doApproveRule(proposalId, escId) {
+  try {
+    const r = await fetch(`/api/action/approve-rule/${proposalId}`, {method: 'POST'});
+    const d = await r.json();
+    if (d.ok) {
+      toast(`✓ Rule '${d.rule_name}' added to detection_rules.yaml — restart watch to activate`);
+      await doAck(escId);
+      refreshState();
+    } else {
+      toast('Error: ' + (d.error || 'unknown'), true);
+    }
+  } catch (e) { toast('Error: ' + e.message, true); }
 }
 
 // ── Actions ────────────────────────────────────────────────────────────────────

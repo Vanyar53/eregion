@@ -31,6 +31,7 @@ class GlorfindelState(TypedDict):
     suggested_steps: list[str]
     outcome: dict | None
     proposed_rule: dict | None  # set by propose_detection_rule for detection_missed signals
+    proposal_id: str            # UUID of the saved proposed rule (empty if not a rule proposal)
 
 
 # ── LLM decision tool schema ──────────────────────────────────────────────────
@@ -468,6 +469,8 @@ def escalate_to_human(state: GlorfindelState) -> GlorfindelState:
             suggested_steps=state.get("suggested_steps") or [],
             ttp=signal.get("ttp", ""),
             severity=signal.get("severity", ""),
+            proposal_id=state.get("proposal_id", ""),
+            proposed_query=(state.get("proposed_rule") or {}).get("query", ""),
         )
 
     return {
@@ -583,25 +586,6 @@ def store_cycle(state: GlorfindelState, *, memory: CycleMemory) -> GlorfindelSta
             severity=signal.get("severity", ""),
         )
 
-    # Persist proposed detection rule (detection_missed flow)
-    proposed = state.get("proposed_rule")
-    if proposed and not state.get("dry_run"):
-        from glorfindel import proposed_rules
-        proposed_rules.record(
-            run_id=run_id,
-            signal_id=signal.get("signal_id", ""),
-            ttp=signal.get("ttp", ""),
-            resource_id=signal.get("resource_id", ""),
-            rule_name=proposed["rule_name"],
-            source=proposed["source"],
-            workspace_id=proposed["workspace_id"],
-            query=proposed["query"],
-            interval_s=proposed["interval_s"],
-            explanation=proposed["explanation"],
-            confidence=proposed["confidence"],
-            analysis=proposed["analysis"],
-        )
-
     # Debug JSONL — full trace for post-mortem analysis
     if run_id:
         debug_record = {
@@ -695,6 +679,20 @@ Propose a better {query_lang} query that would have caught this attack."""
         "analysis": d["analysis"],
     }
 
+    # Save the proposed rule immediately so proposal_id is available for the
+    # escalation card (escalate_to_human runs before store_cycle).
+    pid = ""
+    if not state.get("dry_run"):
+        from glorfindel import proposed_rules as _pr
+        run_id = signal.get("context", {}).get("run_id", "")
+        pid = _pr.record(
+            run_id=run_id,
+            signal_id=signal.get("signal_id", ""),
+            ttp=signal.get("ttp", ""),
+            resource_id=signal.get("resource_id", ""),
+            **proposed_rule,
+        )
+
     return {
         **state,
         "reasoning": d["analysis"],
@@ -707,10 +705,11 @@ Propose a better {query_lang} query that would have caught this attack."""
         "suggested_steps": [
             f"Review the proposed query for {signal.get('ttp', '')}",
             "Test it in Log Analytics against recent data",
-            "Run: glorfindel approve-rule <id>  (or use War Room Config panel)",
+            f"glorfindel approve-rule {pid or '<id>'}  (or Approve in War Room Incidents)",
             "Re-run the scenario to validate detection",
         ],
         "proposed_rule": proposed_rule,
+        "proposal_id": pid,
         "outcome": None,
     }
 

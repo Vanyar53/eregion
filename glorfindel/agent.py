@@ -148,13 +148,26 @@ You always call the security_decision tool — never respond in plain text.
 
 # ── Rule-proposal tool (detection_missed events) ──────────────────────────────
 
+# Maps detection source identifiers to their query language names.
+# Used to give the LLM the right context when proposing detection rules.
+_SOURCE_LANGUAGES: dict[str, str] = {
+    "azure_monitor": "KQL (Kusto Query Language)",
+    "prometheus": "PromQL",
+    "splunk": "SPL (Splunk Processing Language)",
+    "datadog": "Datadog Query Language",
+    "elasticsearch": "EQL / Lucene",
+    "loki": "LogQL",
+    "cloudwatch": "CloudWatch Logs Insights",
+    "sentinel": "KQL (Microsoft Sentinel)",
+}
+
 _RULE_PROPOSAL_TOOL = {
     "type": "function",
     "function": {
         "name": "propose_detection_rule",
         "description": (
-            "Propose an improved Azure Monitor KQL detection rule after a missed attack. "
-            "You must always call this tool — never respond in plain text."
+            "Propose an improved detection query for the client's monitoring system "
+            "after a missed attack. You must always call this tool — never respond in plain text."
         ),
         "parameters": {
             "type": "object",
@@ -162,8 +175,8 @@ _RULE_PROPOSAL_TOOL = {
                 "analysis": {
                     "type": "string",
                     "description": (
-                        "Why the current detection failed: wrong table, threshold too high, "
-                        "time window too narrow, missing filter, etc."
+                        "Why the current detection failed: wrong table/metric, threshold too high, "
+                        "time window too narrow, missing filter, wrong query language constructs, etc."
                     ),
                 },
                 "rule_name": {
@@ -176,8 +189,9 @@ _RULE_PROPOSAL_TOOL = {
                 "proposed_query": {
                     "type": "string",
                     "description": (
-                        "The complete runnable KQL query. Must target the correct log table "
-                        "and use thresholds calibrated to the attack's observed behavior."
+                        "The complete runnable query in the source's language (see system prompt). "
+                        "Must target the correct data source and use thresholds calibrated to "
+                        "the observed attack behavior."
                     ),
                 },
                 "interval_s": {
@@ -207,20 +221,19 @@ _RULE_PROPOSAL_TOOL = {
 _RULE_PROPOSAL_SYSTEM_PROMPT = """\
 You are Glorfindel's detection engineering module.
 
-An attack was simulated by Annatar but your detection rules failed to fire \
-(detection_timeout). Your job: analyze the failure and propose a better KQL query \
-that would catch this attack in Azure Monitor.
+An attack was simulated but your detection rules failed to fire (detection_timeout). \
+Your job: analyze the failure and propose a better detection query for the client's \
+monitoring system.
 
-You have access to:
-- The MITRE TTP and what the attacker actually did (attack_commands_summary)
-- The log source and expected indicators from the attacker's own knowledge
-- The failed query (if any) and the detection timeout
+The query language depends on the source — it is specified in the user message. \
+Write the query in that language only (KQL for azure_monitor, PromQL for prometheus, \
+SPL for splunk, etc.).
 
-Rules for your proposal:
-- Target the correct Log Analytics table (Perf, Syslog, StorageBlobLogs, etc.)
-- Use thresholds that match the observed attack intensity, not arbitrary values
-- Keep the time window tight (ago(5m) or ago(10m)) to minimize false positives
-- Include only the filters that distinguish malicious from benign activity
+Rules:
+- Target the correct data source / table / metric for the monitoring system
+- Use thresholds calibrated to the observed attack intensity, not arbitrary values
+- Keep the time window tight to minimize false positives
+- Include only filters that distinguish malicious from benign activity
 - If the original query was close, fix only what was wrong; do not over-engineer
 
 You always call the propose_detection_rule tool — never respond in plain text.
@@ -626,15 +639,18 @@ def propose_detection_rule(state: GlorfindelState, *, model: str) -> GlorfindelS
 
     failed_query = ctx.get("failed_query") or raw.get("failed_query", "(unknown)")
     workspace_id = ctx.get("workspace_id", "")
+    source = raw.get("detection_source", "azure_monitor")
+    query_lang = _SOURCE_LANGUAGES.get(source, source)
 
     user_msg = f"""Detection missed for TTP: {signal.get('ttp', '?')}
 Resource: {signal.get('resource_id', '?')}
-Workspace: {workspace_id}
+Detection source: {source} — write your query in {query_lang}
+Workspace / endpoint: {workspace_id or '(not specified)'}
 
-== What Annatar executed ==
+== What the attacker executed ==
 {hints.get('attack_commands_summary', '(no attack summary provided)')}
 
-== Expected log source ==
+== Expected log source / table ==
 {hints.get('log_source', '(unknown)')}
 
 == Expected indicators ==
@@ -646,7 +662,7 @@ Workspace: {workspace_id}
 == Past detection history for this TTP ==
 {chr(10).join(c.get('summary', '') for c in state.get('past_cycles', [])) or '(no history)'}
 
-Propose a better KQL query that would have caught this attack."""
+Propose a better {query_lang} query that would have caught this attack."""
 
     kwargs: dict = {}
     base_url = os.environ.get("GLORFINDEL_LLM_BASE_URL")

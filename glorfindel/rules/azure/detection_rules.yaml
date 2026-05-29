@@ -2,9 +2,17 @@
 # Glorfindel polls these continuously (independent of Annatar scenarios).
 # Annatar scenarios reference these rules by TTP — no query duplication.
 #
-# source: azure_monitor (others: prometheus, datadog — extend detectors.py)
+# source:    detection system — determines the query language:
+#              azure_monitor  → KQL (Kusto Query Language)
+#              prometheus     → PromQL
+#              splunk         → SPL (Splunk Processing Language)
+#              datadog        → Datadog Query Language
+#              loki           → LogQL
+#              cloudwatch     → CloudWatch Logs Insights
+#            Extend detectors.py to add new sources.
+# query:     written in the language for the source above
 # interval_s: polling period in seconds
-# enabled: set to false to disable without deleting
+# enabled:   set to false to disable without deleting
 
 rules:
 

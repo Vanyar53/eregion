@@ -105,6 +105,23 @@
     "cleanup": {
       "type": "array",
       "items": { "type": "object" }
+    },
+    "detection_hints": {
+      "description": "Attack context shared with Glorfindel when detection times out — enables purple-team rule proposals",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "log_source": { "type": "string" },
+        "attack_commands_summary": { "type": "string" },
+        "expected_indicators": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "failure_candidates": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
     }
   }
 }

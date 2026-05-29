@@ -49,3 +49,18 @@ detection:
 recovery: null
 
 cleanup: []
+
+detection_hints:
+  log_source: Syslog
+  attack_commands_summary: >
+    Simulates rapid SSH authentication failures via sshpass to a random
+    external IP range. Generates 'Failed password' and 'Invalid user'
+    Syslog messages in the auth facility, visible via AMA + DCR pipeline.
+  expected_indicators:
+    - "Syslog: Facility='auth', SyslogMessage contains 'Failed password'"
+    - "10+ failures from a single SourceIP within 5 minutes"
+    - "SourceIP is an external (non-RFC1918) address"
+  failure_candidates:
+    - "FailedAttempts threshold too high (>= 10) — lower to >= 5 for faster detection"
+    - "SourceIP extraction regex may fail on IPv6 or alternate sshd log formats"
+    - "DCR Syslog minimum level may filter out info-level auth messages"

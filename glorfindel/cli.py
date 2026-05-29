@@ -431,6 +431,23 @@ def restore(resource_id: str, vault: str, dry_run: bool, yes: bool, keep_isolate
         )
 
 
+def _render_proposal(p: dict) -> None:
+    from rich.syntax import Syntax
+
+    vm = p["resource_id"].split("/")[-1]
+    conf_pct = int(p["confidence"] * 100)
+    console.print(
+        f"  [bold cyan]{p['rule_name']}[/bold cyan]  "
+        f"[dim]{p['ttp']}  {vm}  {conf_pct}% confidence[/dim]"
+    )
+    console.print(f"  Analysis  : [dim]{p['analysis'][:100]}…[/dim]")
+    console.print(f"  Why better: {p['explanation'][:100]}")
+    console.print(Syntax(p["query"].strip(), "sql", theme="monokai", line_numbers=False))
+    console.print(
+        f"  [dim]→ glorfindel approve-rule {p['id']}[/dim]\n"
+    )
+
+
 def _render_escalation(e: dict) -> None:
     from datetime import datetime, timezone
     from rich.table import Table
@@ -515,12 +532,21 @@ def pending(watch: bool):
     items = escalations.pending()
 
     if not watch:
-        if not items:
-            console.print("[green]No pending escalations.[/green]")
+        from glorfindel.proposed_rules import pending as pending_rules
+        proposals = pending_rules()
+        if not items and not proposals:
+            console.print("[green]No pending escalations or rule proposals.[/green]")
             return
-        console.rule(f"[bold yellow]Glorfindel — {len(items)} pending escalation(s)[/bold yellow]")
-        for e in items:
-            _render_escalation(e)
+        if items:
+            console.rule(
+                f"[bold yellow]Glorfindel — {len(items)} pending escalation(s)[/bold yellow]"
+            )
+            for e in items:
+                _render_escalation(e)
+        if proposals:
+            console.rule("[bold cyan]Proposed detection rules[/bold cyan]")
+            for p in proposals:
+                _render_proposal(p)
         return
 
     # Watch mode — poll every 2s, print new escalations as they arrive
@@ -813,6 +839,48 @@ def _render_decision(state: dict, dry_run: bool) -> None:
         border_style="dim",
         padding=(0, 1),
     ))
+
+
+@cli.command("approve-rule")
+@click.argument("proposal_id")
+@click.option(
+    "--rules",
+    "rules_file",
+    default=None,
+    metavar="PATH",
+    help="Path to detection_rules.yaml (default: auto-detected).",
+)
+def approve_rule(proposal_id: str, rules_file: str | None) -> None:
+    """Approve a proposed detection rule and append it to detection_rules.yaml.
+
+    PROPOSAL_ID is the UUID shown by 'glorfindel pending' for a proposed_rule
+    escalation. The rule is appended to detection_rules.yaml and the proposal
+    is marked approved in ~/.glorfindel/proposed_rules.jsonl.
+    """
+    from glorfindel.proposed_rules import approve
+
+    target = rules_file or _find_rules_file()
+    if not target:
+        console.print(
+            "[red]detection_rules.yaml not found.[/red] "
+            "Pass --rules PATH or run from the project root."
+        )
+        return
+
+    try:
+        proposal = approve(proposal_id, target)
+        vm = proposal["resource_id"].split("/")[-1]
+        console.print(
+            f"[green]✓ Rule '{proposal['rule_name']}' approved[/green] "
+            f"for {vm} ({proposal['ttp']})."
+        )
+        console.print(f"  Appended to [dim]{target}[/dim]")
+        console.print(
+            "  Restart 'glorfindel watch' to activate, "
+            "then re-run the scenario to validate."
+        )
+    except ValueError as e:
+        console.print(f"[red]Error:[/red] {e}")
 
 
 @cli.command()

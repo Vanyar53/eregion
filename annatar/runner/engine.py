@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 from rich.console import Console
 from rich.prompt import Confirm
@@ -81,8 +83,8 @@ class Engine:
             console.print(
                 "[red]Pre-run integrity check FAILED — VM is not in a clean state.[/red]\n"
                 "  Setup ran but disk still has artifacts. Check the data disk manually.\n"
-                f"  [bold]az vm run-command invoke -g annatar -n vm-annatar-victim "
-                f"--command-id RunShellScript --scripts 'lsblk && ls /mnt/testdata'[/bold]"
+                "  [bold]az vm run-command invoke -g annatar -n vm-annatar-victim "
+                "--command-id RunShellScript --scripts 'lsblk && ls /mnt/testdata'[/bold]"
             )
             return
 
@@ -98,20 +100,31 @@ class Engine:
             checks["attack"] = "PASS"
 
             # Emit attack_started — Glorfindel polls detection and owns the response cycle
+            detection_timeout_s = 0.0
             if scenario.detection:
+                detection_timeout_s = self._parse_duration(
+                    scenario.detection.get("timeout", "300s")
+                )
                 emitter.emit(
                     event="attack_started",
                     raw_signal={
                         "attack_time": T0,
                         "detection_query": scenario.detection["query"],
                         "detection_source": scenario.detection.get("source", "azure_monitor"),
-                        "detection_timeout_s": self._parse_duration(scenario.detection.get("timeout", "300s")),
-                        "detection_max_s": self._parse_duration(scenario.detection.get("time_max", "9999s")),
-                        "log_analytics_workspace_id": scenario.detection.get("workspace_id") or scenario.target.get("log_analytics_workspace_id"),
+                        "detection_timeout_s": detection_timeout_s,
+                        "detection_max_s": self._parse_duration(
+                            scenario.detection.get("time_max", "9999s")
+                        ),
+                        "log_analytics_workspace_id": (
+                            scenario.detection.get("workspace_id")
+                            or scenario.target.get("log_analytics_workspace_id")
+                        ),
                     },
                 )
-                console.print("[cyan]->[/cyan] Signal 'attack_started' emitted — Glorfindel takes over detection.")
-
+                console.print(
+                    "[cyan]->[/cyan] Signal 'attack_started' emitted"
+                    " — Glorfindel takes over detection."
+                )
 
             overall = "PASS" if all("PASS" in v for v in checks.values()) else "FAIL"
             report = RunReport(
@@ -126,6 +139,14 @@ class Engine:
             path = report.save()
             report.render()
             console.print(f"\n[dim]Report saved: {path}[/dim]")
+
+            # Purple-team feedback: wait for Glorfindel's detection result,
+            # emit detection_missed if it timed out so Glorfindel can propose
+            # an improved detection rule.
+            if scenario.detection and detection_timeout_s > 0 and not self.dry_run:
+                self._wait_and_emit_feedback(
+                    run_id, emitter, scenario, detection_timeout_s
+                )
 
         finally:
             # Cleanup always runs — even if the scenario crashes mid-way
@@ -173,3 +194,78 @@ class Engine:
         if value.endswith("h"):
             return float(value[:-1]) * 3600
         return float(value)
+
+    def _wait_and_emit_feedback(
+        self,
+        run_id: str,
+        emitter: SignalEmitter,
+        scenario: object,
+        detection_timeout_s: float,
+    ) -> None:
+        """Poll Glorfindel's debug.jsonl for the detection result.
+
+        If Glorfindel times out (detection_timeout event), emit a
+        detection_missed signal enriched with the scenario's detection_hints
+        so Glorfindel can propose an improved detection rule.
+        """
+        debug_path = Path("runs") / f"{run_id}_debug.jsonl"
+        wait_s = detection_timeout_s + 120
+        poll_interval = 5.0
+        deadline = time.time() + wait_s
+
+        console.print(
+            f"\n[dim]Purple team feedback: monitoring Glorfindel response "
+            f"(up to {int(wait_s)}s)…[/dim]"
+        )
+
+        result_event: str | None = None
+        while time.time() < deadline:
+            if debug_path.exists():
+                for line in debug_path.read_text().splitlines():
+                    if not line.strip():
+                        continue
+                    try:
+                        rec = json.loads(line)
+                        evt = rec.get("signal", {}).get("event", "")
+                        if evt in ("detection", "detection_timeout"):
+                            result_event = evt
+                            break
+                    except Exception:
+                        pass
+            if result_event:
+                break
+            time.sleep(poll_interval)
+
+        if result_event == "detection":
+            console.print("[green]✓ Glorfindel detected the attack — no feedback needed.[/green]")
+            return
+
+        if result_event == "detection_timeout":
+            console.print(
+                "[yellow]⚠ Detection timeout — emitting detection_missed "
+                "so Glorfindel can propose an improved rule.[/yellow]"
+            )
+        else:
+            console.print(
+                "[dim]No Glorfindel response observed. "
+                "Is 'glorfindel watch' running? Emitting detection_missed anyway.[/dim]"
+            )
+
+        det = scenario.detection or {}
+        emitter.emit(
+            event="detection_missed",
+            raw_signal={
+                "failed_query": det.get("query", ""),
+                "detection_source": det.get("source", "azure_monitor"),
+                "detection_hints": scenario.detection_hints,
+            },
+            metrics={
+                "workspace_id": det.get("workspace_id", ""),
+                "detection_timeout_s": int(detection_timeout_s),
+                "failed_query": det.get("query", ""),
+            },
+        )
+        console.print(
+            "[cyan]->[/cyan] Signal 'detection_missed' emitted"
+            " — Glorfindel will propose a detection rule."
+        )

@@ -53,3 +53,18 @@ detection:
 recovery: null
 
 cleanup: []
+
+detection_hints:
+  log_source: Syslog
+  attack_commands_summary: >
+    Configures a sudoers wildcard entry and executes a sudo command as a
+    non-privileged user, producing 'sudo: USER=root COMMAND=...' in the
+    auth Syslog facility. The command succeeds (no 'NOT in sudoers' error).
+  expected_indicators:
+    - "Syslog: Facility='auth', SyslogMessage contains 'sudo' and 'USER=root' and 'COMMAND='"
+    - "Successful sudo (no 'NOT in sudoers' or 'authentication failure' in the message)"
+    - "Same pipeline as T1110 — DCR auth facility must be active"
+  failure_candidates:
+    - "Query filters 'NOT in sudoers' but legitimate sudo also produces that — may drop valid alerts"
+    - "DCR level threshold may suppress info-level sudo log lines"
+    - "Time window ago(5m) may miss delayed AMA ingestion (nominal latency ~60s)"

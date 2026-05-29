@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import time
-from typing import TypedDict, Annotated
+from typing import TypedDict
 
 from langgraph.graph import StateGraph, END
 from rich.console import Console
@@ -30,6 +30,7 @@ class GlorfindelState(TypedDict):
     escalation_reason: str
     suggested_steps: list[str]
     outcome: dict | None
+    proposed_rule: dict | None  # set by propose_detection_rule for detection_missed signals
 
 
 # ── LLM decision tool schema ──────────────────────────────────────────────────
@@ -143,6 +144,86 @@ When reasoning:
 5. If past cycles are available, use them to calibrate your confidence.
 
 You always call the security_decision tool — never respond in plain text.
+"""
+
+# ── Rule-proposal tool (detection_missed events) ──────────────────────────────
+
+_RULE_PROPOSAL_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "propose_detection_rule",
+        "description": (
+            "Propose an improved Azure Monitor KQL detection rule after a missed attack. "
+            "You must always call this tool — never respond in plain text."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "analysis": {
+                    "type": "string",
+                    "description": (
+                        "Why the current detection failed: wrong table, threshold too high, "
+                        "time window too narrow, missing filter, etc."
+                    ),
+                },
+                "rule_name": {
+                    "type": "string",
+                    "description": (
+                        "Short kebab-case identifier for the rule, e.g. "
+                        "'ransomware-disk-write-v2'. Must be unique."
+                    ),
+                },
+                "proposed_query": {
+                    "type": "string",
+                    "description": (
+                        "The complete runnable KQL query. Must target the correct log table "
+                        "and use thresholds calibrated to the attack's observed behavior."
+                    ),
+                },
+                "interval_s": {
+                    "type": "number",
+                    "description": "Recommended polling interval in seconds (10–120).",
+                },
+                "explanation": {
+                    "type": "string",
+                    "description": (
+                        "One or two sentences: what the new query detects and why it "
+                        "improves on the previous one."
+                    ),
+                },
+                "confidence": {
+                    "type": "number",
+                    "description": "Confidence 0.0–1.0 that this query would catch the attack.",
+                },
+            },
+            "required": [
+                "analysis", "rule_name", "proposed_query",
+                "interval_s", "explanation", "confidence",
+            ],
+        },
+    },
+}
+
+_RULE_PROPOSAL_SYSTEM_PROMPT = """\
+You are Glorfindel's detection engineering module.
+
+An attack was simulated by Annatar but your detection rules failed to fire \
+(detection_timeout). Your job: analyze the failure and propose a better KQL query \
+that would catch this attack in Azure Monitor.
+
+You have access to:
+- The MITRE TTP and what the attacker actually did (attack_commands_summary)
+- The log source and expected indicators from the attacker's own knowledge
+- The failed query (if any) and the detection timeout
+
+Rules for your proposal:
+- Target the correct Log Analytics table (Perf, Syslog, StorageBlobLogs, etc.)
+- Use thresholds that match the observed attack intensity, not arbitrary values
+- Keep the time window tight (ago(5m) or ago(10m)) to minimize false positives
+- Include only the filters that distinguish malicious from benign activity
+- If the original query was close, fix only what was wrong; do not over-engineer
+
+You always call the propose_detection_rule tool — never respond in plain text.
 """
 
 
@@ -445,6 +526,25 @@ def store_cycle(state: GlorfindelState, *, memory: CycleMemory) -> GlorfindelSta
             severity=signal.get("severity", ""),
         )
 
+    # Persist proposed detection rule (detection_missed flow)
+    proposed = state.get("proposed_rule")
+    if proposed and not state.get("dry_run"):
+        from glorfindel import proposed_rules
+        proposed_rules.record(
+            run_id=run_id,
+            signal_id=signal.get("signal_id", ""),
+            ttp=signal.get("ttp", ""),
+            resource_id=signal.get("resource_id", ""),
+            rule_name=proposed["rule_name"],
+            source=proposed["source"],
+            workspace_id=proposed["workspace_id"],
+            query=proposed["query"],
+            interval_s=proposed["interval_s"],
+            explanation=proposed["explanation"],
+            confidence=proposed["confidence"],
+            analysis=proposed["analysis"],
+        )
+
     # Debug JSONL — full trace for post-mortem analysis
     if run_id:
         debug_record = {
@@ -466,12 +566,107 @@ def store_cycle(state: GlorfindelState, *, memory: CycleMemory) -> GlorfindelSta
     return state
 
 
+def propose_detection_rule(state: GlorfindelState, *, model: str) -> GlorfindelState:
+    """Call LLM to propose an improved detection rule after a detection_missed signal.
+
+    Uses a focused prompt distinct from the main security_decision flow.
+    The proposal is stored in state['proposed_rule'] and persisted by store_cycle.
+    """
+    import json
+    import litellm
+
+    signal = state["signal"]
+    raw = signal.get("raw_signal", {})
+    hints = raw.get("detection_hints", {})
+    ctx = signal.get("context", {})
+
+    failed_query = ctx.get("failed_query") or raw.get("failed_query", "(unknown)")
+    workspace_id = ctx.get("workspace_id", "")
+
+    user_msg = f"""Detection missed for TTP: {signal.get('ttp', '?')}
+Resource: {signal.get('resource_id', '?')}
+Workspace: {workspace_id}
+
+== What Annatar executed ==
+{hints.get('attack_commands_summary', '(no attack summary provided)')}
+
+== Expected log source ==
+{hints.get('log_source', '(unknown)')}
+
+== Expected indicators ==
+{chr(10).join('- ' + i for i in (hints.get('expected_indicators') or []))}
+
+== Query that failed (timed out after {ctx.get('detection_timeout_s', '?')}s) ==
+{failed_query}
+
+== Past detection history for this TTP ==
+{chr(10).join(c.get('summary', '') for c in state.get('past_cycles', [])) or '(no history)'}
+
+Propose a better KQL query that would have caught this attack."""
+
+    kwargs: dict = {}
+    base_url = os.environ.get("GLORFINDEL_LLM_BASE_URL")
+    if base_url:
+        kwargs["base_url"] = base_url
+
+    response = litellm.completion(
+        model=model,
+        max_tokens=2048,
+        messages=[
+            {"role": "system", "content": _RULE_PROPOSAL_SYSTEM_PROMPT},
+            {"role": "user", "content": user_msg},
+        ],
+        tools=[_RULE_PROPOSAL_TOOL],
+        tool_choice={"type": "function", "function": {"name": "propose_detection_rule"}},
+        **kwargs,
+    )
+
+    tool_call = response.choices[0].message.tool_calls[0]
+    d = json.loads(tool_call.function.arguments)
+
+    proposed_rule = {
+        "rule_name": d["rule_name"],
+        "source": signal.get("raw_signal", {}).get("detection_source", "azure_monitor"),
+        "workspace_id": workspace_id,
+        "query": d["proposed_query"],
+        "interval_s": float(d.get("interval_s", 30)),
+        "explanation": d["explanation"],
+        "confidence": float(d["confidence"]),
+        "analysis": d["analysis"],
+    }
+
+    return {
+        **state,
+        "reasoning": d["analysis"],
+        "confidence": d["confidence"],
+        "action": "improve_detection",
+        "reversible": True,
+        "explanation": d["explanation"],
+        "escalate": True,
+        "escalation_reason": d["analysis"],
+        "suggested_steps": [
+            f"Review the proposed query for {signal.get('ttp', '')}",
+            "Test it in Log Analytics against recent data",
+            "Run: glorfindel approve-rule <id>  (or use War Room Config panel)",
+            "Re-run the scenario to validate detection",
+        ],
+        "proposed_rule": proposed_rule,
+        "outcome": None,
+    }
+
+
 def _route_after_verify(state: GlorfindelState) -> str:
     outcome = state.get("outcome") or {}
     # Only escalate on explicit False — None (not implemented) proceeds to store
     if outcome.get("verified") is False:
         return "escalate_to_human"
     return "store_cycle"
+
+
+def _route_after_load_context(state: GlorfindelState) -> str:
+    if state["signal"].get("event") == "detection_missed":
+        return "propose_detection_rule"
+    return "poll_detection"
 
 
 def _route_after_decide(state: GlorfindelState) -> str:
@@ -505,13 +700,18 @@ def _build_graph(
     graph.add_node("verify_action", lambda s: verify_action(s, connector=connector))
     graph.add_node("escalate_to_human", escalate_to_human)
     graph.add_node("store_cycle", lambda s: store_cycle(s, memory=memory))
+    graph.add_node(
+        "propose_detection_rule",
+        lambda s: propose_detection_rule(s, model=model),
+    )
 
     graph.set_entry_point("load_context")
-    graph.add_edge("load_context", "poll_detection")
+    graph.add_conditional_edges("load_context", _route_after_load_context)
     graph.add_edge("poll_detection", "decide")
     graph.add_conditional_edges("decide", _route_after_decide)
     graph.add_edge("execute_action", "verify_action")
     graph.add_conditional_edges("verify_action", _route_after_verify)
+    graph.add_edge("propose_detection_rule", "escalate_to_human")
     graph.add_edge("escalate_to_human", "store_cycle")
     graph.add_edge("store_cycle", END)
 

@@ -19,6 +19,7 @@ _ACTION_LABELS = {
     "wipe_storage": "Stockage effacé",
     "modify_network_rule": "Règle réseau modifiée",
     "escalate_permissions": "Permissions élevées",
+    "improve_detection": "Règle de détection proposée",
 }
 
 _ESCALATION_LABELS = {
@@ -26,6 +27,7 @@ _ESCALATION_LABELS = {
     "destructive_action": "action destructive",
     "proposed_action": "action inconnue",
     "verification_failed": "vérification échouée",
+    "proposed_rule": "règle de détection proposée",
 }
 
 

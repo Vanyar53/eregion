@@ -33,6 +33,7 @@ class Scenario:
     recovery: dict | None
     cleanup: list
     prerequisites: dict
+    detection_hints: dict
     raw: dict
 
 
@@ -57,6 +58,7 @@ class ScenarioParser:
             recovery=data.get("recovery"),
             cleanup=data.get("cleanup", []),
             prerequisites=data.get("prerequisites", {}),
+            detection_hints=data.get("detection_hints", {}),
             raw=data,
         )
 

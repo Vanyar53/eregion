@@ -314,6 +314,29 @@ async def action_ack(esc_id: str) -> dict:
     return {"ok": True}
 
 
+@app.get("/api/pending/rules")
+async def pending_rules() -> dict:
+    from glorfindel.proposed_rules import pending
+    return {"proposals": pending()}
+
+
+@app.post("/api/action/approve-rule/{proposal_id}")
+async def approve_rule(proposal_id: str) -> dict:
+    rules_candidates = [
+        Path("glorfindel/rules/azure/detection_rules.yaml"),
+        Path(__file__).parent / "rules" / "azure" / "detection_rules.yaml",
+    ]
+    rules_path = next((p for p in rules_candidates if p.exists()), None)
+    if not rules_path:
+        return {"error": "detection_rules.yaml not found"}
+    try:
+        from glorfindel.proposed_rules import approve
+        proposal = approve(proposal_id, rules_path)
+        return {"ok": True, "rule_name": proposal["rule_name"]}
+    except ValueError as e:
+        return {"error": str(e)}
+
+
 async def _bg_restore(resource_id: str) -> None:
     loop = asyncio.get_running_loop()
     await loop.run_in_executor(

@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from rich.console import Console
-from rich.table import Table
 
 console = Console()
 RUNS_DIR = Path("runs")

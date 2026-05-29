@@ -612,7 +612,9 @@ def store_cycle(state: GlorfindelState, *, memory: CycleMemory) -> GlorfindelSta
     return state
 
 
-def propose_detection_rule(state: GlorfindelState, *, model: str) -> GlorfindelState:
+def propose_detection_rule(
+    state: GlorfindelState, *, model: str, incidents: IncidentRegistry | None = None
+) -> GlorfindelState:
     """Call LLM to propose an improved detection rule after a detection_missed signal.
 
     Uses a focused prompt distinct from the main security_decision flow.
@@ -630,6 +632,25 @@ def propose_detection_rule(state: GlorfindelState, *, model: str) -> GlorfindelS
     workspace_id = ctx.get("workspace_id", "")
     source = raw.get("detection_source", "azure_monitor")
     query_lang = _SOURCE_LANGUAGES.get(source, source)
+
+    # Check if an action was already taken on this VM — timeout may be caused by
+    # the action (e.g. isolate_vm cuts off AMA) rather than a bad detection rule.
+    incident_context = ""
+    if incidents is not None:
+        inc = incidents.get_active(signal.get("resource_id", ""))
+        if inc and inc.actions_taken:
+            actions_summary = ", ".join(
+                f"{a['action']} (at {a.get('timestamp', '?')})" for a in inc.actions_taken
+            )
+            incident_context = f"""
+== IMPORTANT: actions already taken on this resource ==
+{actions_summary}
+
+If one of these actions (e.g. isolate_vm) could have cut off the monitoring agent (AMA/syslog),
+the detection timeout may be caused by that action — not by a bad detection rule.
+In that case, note this in your analysis and set confidence accordingly.
+The existing rule may be correct and no change needed.
+"""
 
     user_msg = f"""Detection missed for TTP: {signal.get('ttp', '?')}
 Resource: {signal.get('resource_id', '?')}
@@ -650,7 +671,7 @@ Workspace / endpoint: {workspace_id or '(not specified)'}
 
 == Past detection history for this TTP ==
 {chr(10).join(c.get('summary', '') for c in state.get('past_cycles', [])) or '(no history)'}
-
+{incident_context}
 Propose a better {query_lang} query that would have caught this attack."""
 
     kwargs: dict = {}
@@ -766,7 +787,7 @@ def _build_graph(
     graph.add_node("store_cycle", lambda s: store_cycle(s, memory=memory))
     graph.add_node(
         "propose_detection_rule",
-        lambda s: propose_detection_rule(s, model=model),
+        lambda s: propose_detection_rule(s, model=model, incidents=incidents),
     )
 
     graph.set_entry_point("load_context")

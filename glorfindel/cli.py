@@ -682,31 +682,23 @@ def list_active():
             console.print(f"  [dim]→ glorfindel unblock {b['ip']} {resource_id} --yes[/dim]",
                           soft_wrap=True)
 
-        console.print(f"  [dim]→ glorfindel revert {resource_id} --yes  (all at once)[/dim]\n",
+        console.print(f"  [dim]→ glorfindel reset {resource_id} --yes  (all at once)[/dim]\n",
                       soft_wrap=True)
 
 
-@cli.command()
-@click.argument("resource_id")
-@click.option("--yes", is_flag=True, help="Confirm revert (skip prompt)")
-@click.option("--dry-run", is_flag=True)
-def revert(resource_id: str, yes: bool, dry_run: bool):
-    """Release isolation and unblock all IPs on a VM in one command.
-
-    Useful between runs — resets the VM to a clean NSG state without having
-    to run isolated/blocked separately.
-    """
+def _do_reset(resource_id: str, yes: bool, dry_run: bool) -> None:
+    """Shared implementation for reset/revert."""
     from glorfindel.actions import active_blocks, active_isolations, AzureConnector
 
     isolations = [i for i in active_isolations() if i.get("resource_id") == resource_id]
     blocks = [b for b in active_blocks() if b.get("resource_id") == resource_id]
 
     if not isolations and not blocks:
-        console.print(f"[green]Nothing to revert on {resource_id.split('/')[-1]}.[/green]")
+        console.print(f"[green]Nothing to reset on {resource_id.split('/')[-1]}.[/green]")
         return
 
     vm_short = resource_id.split("/")[-1]
-    console.rule(f"[bold yellow]Revert — {vm_short}[/bold yellow]")
+    console.rule(f"[bold yellow]Reset — {vm_short}[/bold yellow]")
     if isolations:
         console.print("  • Release isolation")
     for b in blocks:
@@ -718,14 +710,35 @@ def revert(resource_id: str, yes: bool, dry_run: bool):
     connector = AzureConnector(dry_run=dry_run)
     if isolations:
         r = connector.release_isolation(resource_id)
-        status = r.get("status", "?")
-        console.print(f"  [cyan]release_isolation[/cyan] → {status}")
+        console.print(f"  [cyan]release_isolation[/cyan] → {r.get('status', '?')}")
     for b in blocks:
         r = connector.unblock_ip(b["ip"], resource_id)
-        status = r.get("status", "?")
-        console.print(f"  [cyan]unblock {b['ip']}[/cyan] → {status}")
+        console.print(f"  [cyan]unblock {b['ip']}[/cyan] → {r.get('status', '?')}")
 
-    console.print(f"\n[green]✓ Revert complete — {vm_short} is clean.[/green]")
+    console.print(f"\n[green]✓ Reset complete — {vm_short} is clean.[/green]")
+
+
+@cli.command("reset")
+@click.argument("resource_id")
+@click.option("--yes", is_flag=True, help="Skip confirmation prompt.")
+@click.option("--dry-run", is_flag=True)
+def reset(resource_id: str, yes: bool, dry_run: bool):
+    """Reset a VM to clean state: release isolation + unblock all IPs.
+
+    Use when a VM has both isolation and IP blocks and you want to clear
+    everything in one command. For finer control use 'release' or 'unblock'.
+    """
+    _do_reset(resource_id, yes, dry_run)
+
+
+@cli.command("revert", hidden=True)
+@click.argument("resource_id")
+@click.option("--yes", is_flag=True)
+@click.option("--dry-run", is_flag=True)
+def revert(resource_id: str, yes: bool, dry_run: bool):
+    """Alias for 'reset' (deprecated name)."""
+    console.print("[dim]Note: 'revert' is an alias — prefer 'glorfindel reset'[/dim]")
+    _do_reset(resource_id, yes, dry_run)
 
 
 @cli.command()

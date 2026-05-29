@@ -198,7 +198,7 @@ When an escalation fires, `glorfindel pending` shows **context-aware next steps 
 - **✓ Acknowledge** — marks escalation resolved, archives thread when done
 - **📋 Command** — shows the CLI command to run (ephemeral)
 - **🔄 Restore** — executes `glorfindel restore` directly from Discord (for `restore_from_backup` and `low_confidence` escalations)
-- **↩️ Revert** — executes `glorfindel revert` directly from Discord (for `verification_failed`) — full reset (isolation + IP blocks)
+- **↩️ Revert** — executes `glorfindel reset` directly from Discord (for `verification_failed`) — full reset (isolation + IP blocks)
 
 A `/pending` slash command lists open escalations. Set `DISCORD_PING_ROLE` to notify an on-call role on thread creation. When `DISCORD_BOT_TOKEN` is set, escalation webhook notifications are suppressed (bot handles them in threads).
 
@@ -221,7 +221,7 @@ glorfindel respond runs/<run_id>_signals.jsonl  # post-run processing
 # Use the minimum scope:
 glorfindel release <resource_id> --yes          # lift isolation only (post-restore, VM back online)
 glorfindel unblock <ip> <resource_id> --yes     # remove one IP block (e.g. after T1110)
-glorfindel revert <resource_id> --yes           # reset: release isolation + unblock all IPs
+glorfindel reset <resource_id> --yes           # reset: release isolation + unblock all IPs
 glorfindel restore <resource_id> --yes          # trigger Azure Backup restore (--before auto-detected)
 glorfindel list                                 # all VMs with active actions (isolation + blocked IPs)
 #
@@ -383,7 +383,7 @@ Adding AWS = one class. Agent logic, scenarios, and RAG memory don't change.
 To check manually:
 ```bash
 glorfindel list                            # active isolations + blocked IPs
-glorfindel revert <resource_id> --yes      # release isolation + unblock all IPs
+glorfindel reset <resource_id> --yes      # release isolation + unblock all IPs
 ```
 
 **NSG isolation blocks Azure Monitor Agent** (outbound deny-all). If the VM stays isolated, the next run will hit `detection_timeout` instead of `detection`. Always release before running the next scenario.

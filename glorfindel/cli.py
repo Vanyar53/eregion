@@ -297,6 +297,23 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
 
     _HEARTBEAT = Path.home() / ".glorfindel" / "watch_heartbeat"
 
+    # Warn if another watch process appears to be running (shared ~/.glorfindel/)
+    if _HEARTBEAT.exists():
+        try:
+            ts = datetime.fromisoformat(_HEARTBEAT.read_text().strip())
+            age_s = (datetime.now(timezone.utc) - ts).total_seconds()
+            if age_s < 90:
+                console.print(
+                    "[yellow]⚠ Another glorfindel watch appears to be running "
+                    f"(heartbeat {int(age_s)}s ago).[/yellow]\n"
+                    "  Running two watch processes on the same runs/ directory "
+                    "will produce duplicate actions.\n"
+                    "  Stop the other process or use 'make glorfindel-stop' if "
+                    "using Docker Compose."
+                )
+        except Exception:
+            pass
+
     def _write_heartbeat() -> None:
         _HEARTBEAT.parent.mkdir(parents=True, exist_ok=True)
         _HEARTBEAT.write_text(datetime.now(timezone.utc).isoformat())

@@ -26,7 +26,8 @@ ANNATAR_VOLS := \
 	-v $(PWD)/runs:/app/runs
 
 GLORFINDEL_VOLS := \
-	-v $(PWD)/runs:/app/runs
+	-v $(PWD)/runs:/app/runs \
+	-v $(PWD)/glorfindel/rules:/app/glorfindel/rules
 
 DOCKER_ANNATAR := docker run --rm $(AZURE_ENV) $(ANNATAR_VOLS) $(IMAGE_ANNATAR)
 GLORFINDEL_ENV := \

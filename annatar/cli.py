@@ -11,15 +11,37 @@ def cli():
 
 
 @cli.command()
-@click.argument("scenario", type=click.Path(exists=True))
+@click.argument("scenario")
 @click.option("--dry-run", is_flag=True, help="Show what would happen without executing.")
 @click.option("--yes", is_flag=True, help="Skip confirmation prompt.")
 @click.option("--skip-preflight", is_flag=True, help="Skip VM state checks (power + isolation).")
 def run(scenario: str, dry_run: bool, yes: bool, skip_preflight: bool):
-    """Run a chaos scenario."""
+    """Run a chaos scenario (path or scenario name).
+
+    SCENARIO can be a file path or the scenario name as shown by 'annatar list'.
+
+    Examples:
+        annatar run azure-ransomware-vm
+        annatar run annatar/scenarios/azure/ransomware-vm.yaml
+    """
+    import os
     from annatar.runner.engine import Engine
+    from annatar.runner.parser import find_scenario_by_name
+
+    path = scenario
+    if not os.path.exists(path):
+        resolved = find_scenario_by_name(scenario)
+        if resolved:
+            path = resolved
+        else:
+            console.print(
+                f"[red]Scenario not found:[/red] '{scenario}'\n"
+                "  Pass a file path or a scenario name from 'annatar list'."
+            )
+            raise SystemExit(1)
+
     engine = Engine(dry_run=dry_run, skip_preflight=skip_preflight)
-    engine.run(scenario, skip_confirm=yes)
+    engine.run(path, skip_confirm=yes)
 
 
 @cli.command(name="list")
@@ -30,14 +52,60 @@ def list_scenarios():
 
 
 @cli.command()
-@click.argument("scenario", type=click.Path(exists=True))
-def validate(scenario: str):
-    """Validate a scenario YAML without running it."""
-    from annatar.runner.parser import ScenarioParser
+@click.argument("scenario", required=False)
+@click.option("--all", "validate_all", is_flag=True, help="Validate all available scenarios.")
+def validate(scenario: str | None, validate_all: bool):
+    """Validate one scenario YAML or all available scenarios.
+
+    Examples:
+        annatar validate annatar/scenarios/azure/ransomware-vm.yaml
+        annatar validate azure-ransomware-vm
+        annatar validate --all
+    """
+    import glob
+    import os
+    from annatar.runner.parser import ScenarioParser, scenarios_root, find_scenario_by_name
+
     parser = ScenarioParser()
-    result = parser.validate(scenario)
+
+    if validate_all or not scenario:
+        root = scenarios_root()
+        files = sorted(glob.glob(str(root / "**" / "*.yaml"), recursive=True))
+        if not files:
+            console.print("[yellow]No scenarios found.[/yellow]")
+            return
+        project_root = root.parent.parent
+        failed = 0
+        for f in files:
+            result = parser.validate(f)
+            rel = os.path.relpath(f, project_root)
+            if result.valid:
+                console.print(f"[green]OK[/green]   {rel}")
+            else:
+                failed += 1
+                console.print(f"[red]FAIL[/red] {rel}")
+                for err in result.errors:
+                    console.print(f"     [dim]{err}[/dim]")
+        summary = f"{len(files)} scenario(s)"
+        if failed:
+            console.print(f"\n[red]{failed} failed[/red] / {summary}")
+        else:
+            console.print(f"\n[green]All {summary} valid[/green]")
+        return
+
+    # Single scenario — resolve by name if needed
+    path = scenario
+    if not __import__("os").path.exists(path):
+        resolved = find_scenario_by_name(scenario)
+        if resolved:
+            path = resolved
+        else:
+            console.print(f"[red]Not found:[/red] '{scenario}'")
+            raise SystemExit(1)
+
+    result = parser.validate(path)
     if result.valid:
-        console.print(f"[green]OK[/green] {scenario} is valid")
+        console.print(f"[green]OK[/green] {path} is valid")
     else:
         for err in result.errors:
             console.print(f"[red]FAIL[/red] {err}")

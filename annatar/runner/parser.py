@@ -78,23 +78,46 @@ class ScenarioParser:
         return ValidationResult(valid=len(errors) == 0, errors=errors)
 
 
-def list_available():
-    scenarios_dir = Path(__file__).parent.parent / "scenarios"
-    files = glob.glob(str(scenarios_dir / "**" / "*.yaml"), recursive=True)
+def scenarios_root() -> Path:
+    """Return the annatar/scenarios/ directory."""
+    return Path(__file__).parent.parent / "scenarios"
 
-    table = Table(title="Available Scenarios")
-    table.add_column("Name", style="cyan")
-    table.add_column("MITRE", style="yellow")
-    table.add_column("Target", style="green")
-    table.add_column("Path", style="dim")
+
+def find_scenario_by_name(name: str) -> str | None:
+    """Find a scenario file by its YAML name field or stem. Returns the path or None."""
+    root = scenarios_root()
+    parser = ScenarioParser()
+    for f in sorted(glob.glob(str(root / "**" / "*.yaml"), recursive=True)):
+        # Fast check: stem matches before loading YAML
+        if Path(f).stem == name or Path(f).stem == name.replace(" ", "-"):
+            return f
+        try:
+            s = parser.load(f)
+            if s.name == name:
+                return f
+        except Exception:
+            pass
+    return None
+
+
+def list_available():
+    root = scenarios_root()
+    project_root = root.parent.parent
+    files = glob.glob(str(root / "**" / "*.yaml"), recursive=True)
+
+    table = Table(title="Available Scenarios", show_lines=False)
+    table.add_column("Name", style="cyan", no_wrap=True)
+    table.add_column("MITRE", style="yellow", width=10)
+    table.add_column("Target", style="green", width=10)
+    table.add_column("Path (annatar run <name or path>)", style="dim")
 
     parser = ScenarioParser()
     for f in sorted(files):
         try:
             s = parser.load(f)
-            rel = os.path.relpath(f, scenarios_dir.parent)
+            rel = os.path.relpath(f, project_root)
             table.add_row(s.name, s.mitre, s.target.get("type", "?"), rel)
         except Exception:
-            table.add_row("(invalid)", "", "", os.path.relpath(f))
+            table.add_row("(invalid)", "", "", os.path.relpath(f, project_root))
 
     console.print(table)

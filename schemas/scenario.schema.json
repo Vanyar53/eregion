@@ -83,43 +83,24 @@
     "detection": {
       "type": "object",
       "properties": {
-        "source": { "type": "string" },
-        "workspace_id": { "type": "string" },
-        "query": { "type": "string" },
         "timeout": { "type": "string", "pattern": "^\\d+(s|m|h)$" },
-        "time_max": { "type": "string", "pattern": "^\\d+(s|m|h)$" }
-      }
-    },
-    "recovery": {
-      "oneOf": [
-        { "type": "null" },
-        {
+        "time_max": { "type": "string", "pattern": "^\\d+(s|m|h)$" },
+        "hints": {
+          "description": "Attack context for Glorfindel's purple-team feedback loop",
           "type": "object",
+          "additionalProperties": false,
           "properties": {
-            "vault": { "type": "string" },
-            "time_max": { "type": "string" }
+            "log_source": { "type": "string" },
+            "attack_commands_summary": { "type": "string" },
+            "expected_indicators": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "failure_candidates": {
+              "type": "array",
+              "items": { "type": "string" }
+            }
           }
-        }
-      ]
-    },
-    "cleanup": {
-      "type": "array",
-      "items": { "type": "object" }
-    },
-    "detection_hints": {
-      "description": "Attack context shared with Glorfindel when detection times out — enables purple-team rule proposals",
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "log_source": { "type": "string" },
-        "attack_commands_summary": { "type": "string" },
-        "expected_indicators": {
-          "type": "array",
-          "items": { "type": "string" }
-        },
-        "failure_candidates": {
-          "type": "array",
-          "items": { "type": "string" }
         }
       }
     }

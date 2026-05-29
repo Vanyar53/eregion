@@ -46,19 +46,17 @@ steps:
 detection:
   timeout: "300s"   # Annatar feedback watcher: declare detection_missed after this
   time_max: "180s"  # Declared detection SLA — reported in Glorfindel's RTO breakdown
-
-# ─── Detection hints (purple team feedback) ────────────────────────────────────
-detection_hints:
-  log_source: Perf
-  attack_commands_summary: >
-    Encrypts all files in /mnt/testdata with openssl in a tight loop
-    (openssl enc -aes-256-cbc). Generates 100% CPU + sustained disk writes
-    of 50–200 MB/s for 30–120 seconds on the data volume.
-  expected_indicators:
-    - "Perf: ObjectName='Logical Disk', CounterName='Disk Write Bytes/sec' > 50MB/s"
-    - "Perf: ObjectName='Processor', CounterName='% Processor Time' > 80%"
-    - "AMA Heartbeat must be present — isolation from a prior run silences it"
-  failure_candidates:
-    - "Threshold too high: CounterValue > 52428800 (50 MB/s) may miss lower-intensity bursts"
-    - "Time window too short: query uses ago(10m), burst may have ended before poll fired"
-    - "Wrong ObjectName: 'Logical Disk' vs 'LogicalDisk' varies by AMA version"
+  hints:
+    log_source: Perf
+    attack_commands_summary: >
+      Encrypts all files in /mnt/testdata with openssl in a tight loop
+      (openssl enc -aes-256-cbc). Generates 100% CPU + sustained disk writes
+      of 50–200 MB/s for 30–120 seconds on the data volume.
+    expected_indicators:
+      - "Perf: ObjectName='Logical Disk', CounterName='Disk Write Bytes/sec' > 50MB/s"
+      - "Perf: ObjectName='Processor', CounterName='% Processor Time' > 80%"
+      - "AMA Heartbeat must be present — isolation from a prior run silences it"
+    failure_candidates:
+      - "Threshold too high: CounterValue > 52428800 (50 MB/s) may miss lower-intensity bursts"
+      - "Time window too short: query uses ago(10m), burst may have ended before poll fired"
+      - "Wrong ObjectName: 'Logical Disk' vs 'LogicalDisk' varies by AMA version"

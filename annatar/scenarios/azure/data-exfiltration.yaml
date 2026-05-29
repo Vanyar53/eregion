@@ -32,18 +32,17 @@ steps:
 # isolate_vm, not block_suspicious_ip.
 detection:
   timeout: "300s"
-
-detection_hints:
-  log_source: StorageBlobLogs
-  attack_commands_summary: >
-    Uploads synthetic test files to Azure Blob Storage using az storage blob
-    upload-batch via Managed Identity (MSI). Generates PutBlob entries in
-    StorageBlobLogs with the VM's private IP as CallerIpAddress.
-  expected_indicators:
-    - "StorageBlobLogs: OperationName='PutBlob', CallerIpAddress=VM private IP"
-    - "Multiple PutBlob operations within a short window (< 5 min)"
-    - "Diagnostic settings must be enabled on the storage account"
-  failure_candidates:
-    - "Wrong AccountName or container name filter in the query"
-    - "StorageBlobLogs diagnostic settings not enabled or LAW not linked"
-    - "Time window too narrow — uploads complete in < 60s"
+  hints:
+    log_source: StorageBlobLogs
+    attack_commands_summary: >
+      Uploads synthetic test files to Azure Blob Storage using az storage blob
+      upload-batch via Managed Identity (MSI). Generates PutBlob entries in
+      StorageBlobLogs with the VM's private IP as CallerIpAddress.
+    expected_indicators:
+      - "StorageBlobLogs: OperationName='PutBlob', CallerIpAddress=VM private IP"
+      - "Multiple PutBlob operations within a short window (< 5 min)"
+      - "Diagnostic settings must be enabled on the storage account"
+    failure_candidates:
+      - "Wrong AccountName or container name filter in the query"
+      - "StorageBlobLogs diagnostic settings not enabled or LAW not linked"
+      - "Time window too narrow — uploads complete in < 60s"

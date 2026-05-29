@@ -35,9 +35,10 @@ detection:
   hints:
     log_source: StorageBlobLogs
     attack_commands_summary: >
-      Uploads synthetic test files to Azure Blob Storage using az storage blob
-      upload-batch via Managed Identity (MSI). Generates PutBlob entries in
-      StorageBlobLogs with the VM's private IP as CallerIpAddress.
+      Uploads 1 synthetic binary file (~10 MB) to Azure Blob Storage using
+      az storage blob upload-batch via Managed Identity (MSI). Generates
+      exactly 1 PutBlob entry in StorageBlobLogs with the VM's private IP
+      as CallerIpAddress. Detection threshold must be >= 1, not > 5.
     expected_indicators:
       - "StorageBlobLogs: OperationName='PutBlob', CallerIpAddress=VM private IP"
       - "Multiple PutBlob operations within a short window (< 5 min)"

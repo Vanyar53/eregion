@@ -288,7 +288,7 @@ class RulePoller:
                 )
                 t = threading.Thread(
                     target=self._poll_rule,
-                    args=(concrete,),
+                    args=(concrete, registry),
                     daemon=True,
                     name=key,
                 )
@@ -333,8 +333,12 @@ class RulePoller:
                 })
             return out
 
-    def _poll_rule(self, rule: DetectionRule) -> None:
+    def _poll_rule(self, rule: DetectionRule, registry=None) -> None:
         while not self._stop.is_set():
+            # Self-evict: stop polling if this asset was removed from registry
+            if registry is not None and rule.asset_name:
+                if not any(a.name == rule.asset_name for a in registry.for_backend(rule.monitoring_backend_name)):
+                    return
             now_iso = datetime.now(timezone.utc).isoformat()
             try:
                 detector = detector_for(rule.source, workspace_id=rule.workspace_id)

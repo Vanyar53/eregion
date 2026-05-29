@@ -16,3 +16,10 @@ def isolated_escalations_store(tmp_path, monkeypatch):
     """
     import glorfindel.escalations as esc_module
     monkeypatch.setattr(esc_module, "_STORE", tmp_path / "escalations.jsonl")
+
+
+@pytest.fixture(autouse=True)
+def isolated_rule_status(tmp_path, monkeypatch):
+    """Redirect rule_status.json to a temp file — avoids root-owned Docker file."""
+    import glorfindel.detection_rules as dr_module
+    monkeypatch.setattr(dr_module, "_STATUS_FILE", tmp_path / "rule_status.json")

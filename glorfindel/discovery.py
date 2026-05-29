@@ -45,6 +45,17 @@ class AssetRegistry:
                 self._assets[a.name] = a
             self._persist()
 
+    def replace_for_backend(self, backend_name: str, assets: list[DiscoveredAsset]) -> None:
+        """Replace all assets for a backend — evicts VMs no longer in Heartbeat."""
+        with self._lock:
+            self._assets = {
+                name: a for name, a in self._assets.items()
+                if a.monitoring_backend != backend_name
+            }
+            for a in assets:
+                self._assets[a.name] = a
+            self._persist()
+
     def all(self) -> list[DiscoveredAsset]:
         with self._lock:
             return list(self._assets.values())
@@ -88,23 +99,16 @@ Heartbeat
 def _discover_from_azure_monitor(
     backend_name: str,
     workspace_id: str,
-) -> list[DiscoveredAsset]:
-    """Query LAW Heartbeat to find monitored VMs."""
+) -> list[DiscoveredAsset] | None:
+    """Query LAW Heartbeat to find monitored VMs.
+
+    Returns a list (possibly empty) on success, None on query failure.
+    Callers must treat None as "keep existing cache" — not as "zero assets".
+    """
     from glorfindel.detectors import detector_for
     now = time.time()
     try:
         detector = detector_for("azure_monitor", workspace_id=workspace_id)
-        result = detector.poll_alert(
-            query=_HEARTBEAT_QUERY.strip(),
-            since=now - 7200,
-            timeout_s=30,
-            interval_s=5,
-            verbose=False,
-        )
-        if result is None:
-            return []
-        # poll_alert returns first matching row — we need all rows
-        # Use the underlying detector to run a full query
         raw = detector.run_query(_HEARTBEAT_QUERY.strip())
         assets = []
         now_iso = datetime.now(timezone.utc).isoformat()
@@ -113,7 +117,6 @@ def _discover_from_azure_monitor(
             rid  = row.get("ResourceId") or row.get("resource_id", "")
             if not name:
                 continue
-            # Normalize VM name (remove FQDN suffix if any)
             short_name = name.split(".")[0]
             assets.append(DiscoveredAsset(
                 name=short_name,
@@ -125,14 +128,18 @@ def _discover_from_azure_monitor(
             ))
         return assets
     except Exception:
-        return []
+        return None  # query failed — caller keeps existing cache
 
 
-def _discover_from_backend(backend) -> list[DiscoveredAsset]:
-    """Dispatch discovery to the right function based on backend type."""
+def _discover_from_backend(backend) -> list[DiscoveredAsset] | None:
+    """Dispatch discovery to the right function based on backend type.
+
+    Returns None if the query failed (caller keeps existing cache).
+    Returns [] if the backend returned no results (valid empty state).
+    """
     if backend.type == "azure_monitor":
         return _discover_from_azure_monitor(backend.name, backend.workspace_id)
-    # Future: prometheus, splunk, cloudwatch...
+    # Unsupported backend — no results, not an error
     return []
 
 
@@ -198,8 +205,10 @@ class DiscoveryService:
             if not backend.discovery.enabled:
                 continue
             found = _discover_from_backend(backend)
-            if found:
-                self._registry.update(found)
+            if found is None:
+                # Query failed — keep existing cache, do not evict
+                continue
+            self._registry.replace_for_backend(backend.name, found)
 
 
 # ── Singleton helpers ─────────────────────────────────────────────────────────

@@ -16,10 +16,8 @@ from glorfindel.discovery import (
     DiscoveredAsset,
     DiscoveryService,
     _discover_from_azure_monitor,
+    _discover_from_backend,
 )
-
-_RID_A = "/subscriptions/sub/resourceGroups/rg/providers/vm-a"
-_RID_B = "/subscriptions/sub/resourceGroups/rg/providers/vm-b"
 
 
 def _asset(name, backend="law", rid=""):
@@ -31,13 +29,31 @@ def _asset(name, backend="law", rid=""):
     )
 
 
+def _mock_detector(rows):
+    m = MagicMock()
+    m.run_query.return_value = rows
+    return m
+
+
+def _law_cfg(interval_s=1800, enabled=True):
+    return GlorfindelConfig(
+        monitoring_backends=[
+            MonitoringBackendConfig(
+                name="law",
+                type="azure_monitor",
+                workspace_id="ws",
+                discovery=DiscoveryConfig(enabled=enabled, interval_s=interval_s),
+            )
+        ]
+    )
+
+
 # ── AssetRegistry ──────────────────────────────────────────────────────────────
 
 def test_registry_update_and_all(tmp_path):
     reg = AssetRegistry(path=tmp_path / "assets.json")
-    reg.update([_asset("vm-a", rid=_RID_A), _asset("vm-b", rid=_RID_B)])
-    names = {a.name for a in reg.all()}
-    assert names == {"vm-a", "vm-b"}
+    reg.update([_asset("vm-a"), _asset("vm-b")])
+    assert {a.name for a in reg.all()} == {"vm-a", "vm-b"}
 
 
 def test_registry_update_overwrites(tmp_path):
@@ -60,8 +76,7 @@ def test_registry_persists_to_disk(tmp_path):
     reg = AssetRegistry(path=path)
     reg.update([_asset("vm-a", rid="/r")])
     assert path.exists()
-    data = json.loads(path.read_text())
-    assert data[0]["name"] == "vm-a"
+    assert json.loads(path.read_text())[0]["name"] == "vm-a"
 
 
 def test_registry_loads_from_disk(tmp_path):
@@ -87,25 +102,46 @@ def test_registry_to_dicts(tmp_path):
     assert dicts[0]["name"] == "vm-a"
 
 
+# ── replace_for_backend ────────────────────────────────────────────────────────
+
+def test_replace_for_backend_evicts_removed(tmp_path):
+    reg = AssetRegistry(path=tmp_path / "assets.json")
+    reg.update([_asset("vm-a", backend="law"), _asset("vm-b", backend="law")])
+    reg.replace_for_backend("law", [_asset("vm-a", backend="law")])
+    names = {a.name for a in reg.all()}
+    assert "vm-a" in names
+    assert "vm-b" not in names
+
+
+def test_replace_for_backend_keeps_other_backends(tmp_path):
+    reg = AssetRegistry(path=tmp_path / "assets.json")
+    reg.update([_asset("vm-a", backend="law-1"), _asset("vm-b", backend="law-2")])
+    reg.replace_for_backend("law-1", [])
+    assert len(reg.for_backend("law-2")) == 1
+    assert reg.for_backend("law-2")[0].name == "vm-b"
+
+
+def test_replace_for_backend_empty_valid_evicts_all(tmp_path):
+    reg = AssetRegistry(path=tmp_path / "assets.json")
+    reg.update([_asset("vm-a", backend="law"), _asset("vm-b", backend="law")])
+    reg.replace_for_backend("law", [])
+    assert reg.for_backend("law") == []
+
+
 # ── _discover_from_azure_monitor ───────────────────────────────────────────────
-
-def _mock_detector(rows):
-    m = MagicMock()
-    m.run_query.return_value = rows
-    return m
-
 
 def test_discover_azure_monitor_returns_assets():
     rows = [
         {"Computer": "vm-victim", "ResourceId": "/sub/vm-victim"},
-        {"Computer": "vm-other.internal.corp", "ResourceId": "/sub/vm-other"},
+        {"Computer": "vm-other.corp", "ResourceId": "/sub/vm-other"},
     ]
-    with patch("glorfindel.detectors.detector_for", return_value=_mock_detector(rows)):
+    with patch(
+        "glorfindel.detectors.detector_for",
+        return_value=_mock_detector(rows),
+    ):
         assets = _discover_from_azure_monitor("law-test", "ws-guid")
     assert len(assets) == 2
-    names = {a.name for a in assets}
-    assert "vm-victim" in names
-    assert "vm-other" in names  # FQDN stripped
+    assert {a.name for a in assets} == {"vm-victim", "vm-other"}
 
 
 def test_discover_azure_monitor_strips_fqdn():
@@ -121,8 +157,8 @@ def test_discover_azure_monitor_strips_fqdn():
 
 def test_discover_azure_monitor_skips_empty_computer():
     rows = [
-        {"Computer": "", "ResourceId": "/sub/vm"},
-        {"Computer": None, "ResourceId": "/sub/vm2"},
+        {"Computer": "", "ResourceId": "/r"},
+        {"Computer": None, "ResourceId": "/r2"},
     ]
     with patch(
         "glorfindel.detectors.detector_for",
@@ -138,7 +174,7 @@ def test_discover_azure_monitor_handles_exception():
         side_effect=Exception("Azure error"),
     ):
         assets = _discover_from_azure_monitor("law-test", "ws-guid")
-    assert assets == []
+    assert assets is None  # failure → keep cache, not evict
 
 
 def test_discover_azure_monitor_empty_query_result():
@@ -147,34 +183,49 @@ def test_discover_azure_monitor_empty_query_result():
         return_value=_mock_detector([]),
     ):
         assets = _discover_from_azure_monitor("law-test", "ws-guid")
-    assert assets == []
+    assert assets == []  # valid empty — all VMs gone
+
+
+def test_discover_from_backend_unsupported_returns_empty():
+    """Unsupported backend → empty list (not None — not an error)."""
+    class FakeBackend:
+        type = "splunk"
+        name = "splunk-test"
+        workspace_id = ""
+    assert _discover_from_backend(FakeBackend()) == []
 
 
 # ── DiscoveryService ───────────────────────────────────────────────────────────
 
 def test_discovery_service_skips_start_in_dry_run(tmp_path):
-    cfg = GlorfindelConfig(
-        monitoring_backends=[
-            MonitoringBackendConfig(name="law", type="azure_monitor", workspace_id="ws")
-        ]
-    )
     reg = AssetRegistry(path=tmp_path / "assets.json")
-    svc = DiscoveryService(cfg, reg, dry_run=True)
+    svc = DiscoveryService(_law_cfg(), reg, dry_run=True)
     svc.start()
     assert svc._thread is None
 
 
-def test_discovery_service_run_once(tmp_path):
-    cfg = GlorfindelConfig(
-        monitoring_backends=[
-            MonitoringBackendConfig(name="law", type="azure_monitor", workspace_id="ws")
-        ]
-    )
+def test_discovery_service_run_once_uses_replace(tmp_path):
     reg = AssetRegistry(path=tmp_path / "assets.json")
-    svc = DiscoveryService(cfg, reg, dry_run=False)
+    reg.update([_asset("vm-old", backend="law")])
+    svc = DiscoveryService(_law_cfg(), reg, dry_run=False)
 
-    mock_assets = [_asset("vm-a", backend="law", rid="/r")]
-    with patch("glorfindel.discovery._discover_from_backend", return_value=mock_assets):
+    with patch(
+        "glorfindel.discovery._discover_from_backend",
+        return_value=[_asset("vm-new", backend="law", rid="/r")],
+    ):
+        svc.run_once()
+
+    names = {a.name for a in reg.all()}
+    assert "vm-new" in names
+    assert "vm-old" not in names  # evicted by replace
+
+
+def test_discovery_service_keeps_cache_on_error(tmp_path):
+    reg = AssetRegistry(path=tmp_path / "assets.json")
+    reg.update([_asset("vm-a", backend="law")])
+    svc = DiscoveryService(_law_cfg(), reg, dry_run=False)
+
+    with patch("glorfindel.discovery._discover_from_backend", return_value=None):
         svc.run_once()
 
     assert len(reg.all()) == 1
@@ -182,29 +233,21 @@ def test_discovery_service_run_once(tmp_path):
 
 
 def test_discovery_service_skips_disabled_backend(tmp_path):
-    cfg = GlorfindelConfig(
-        monitoring_backends=[
-            MonitoringBackendConfig(
-                name="law",
-                type="azure_monitor",
-                workspace_id="ws",
-                discovery=DiscoveryConfig(enabled=False),
-            )
-        ]
-    )
     reg = AssetRegistry(path=tmp_path / "assets.json")
-    svc = DiscoveryService(cfg, reg, dry_run=False)
+    svc = DiscoveryService(_law_cfg(enabled=False), reg, dry_run=False)
 
-    with patch("glorfindel.discovery._discover_from_backend", return_value=[]) as mock_disc:
+    with patch(
+        "glorfindel.discovery._discover_from_backend",
+        return_value=[],
+    ) as mock_disc:
         svc.run_once()
 
     mock_disc.assert_not_called()
-    assert reg.all() == []
 
 
 # ── expand_for_discovered (RulePoller integration) ────────────────────────────
 
-def _auto_rule():
+def _auto_rule(interval_s=30.0):
     return DetectionRule(
         name="disk-write",
         source="azure_monitor",
@@ -214,6 +257,7 @@ def _auto_rule():
         resource_id="",
         auto_apply=True,
         monitoring_backend_name="law",
+        interval_s=interval_s,
     )
 
 
@@ -225,8 +269,8 @@ def test_expand_for_discovered_starts_threads(tmp_path):
 
     reg = AssetRegistry(path=tmp_path / "assets.json")
     reg.update([_asset("vm-a", backend="law", rid="/sub/vm-a")])
-
     poller.expand_for_discovered(reg)
+
     assert any("vm-a" in t.name for t in poller._threads)
 
 
@@ -257,5 +301,30 @@ def test_expand_for_discovered_not_duplicate(tmp_path):
 
     poller.expand_for_discovered(reg)
     count_after_first = len(poller._threads)
-    poller.expand_for_discovered(reg)  # must not duplicate
+    poller.expand_for_discovered(reg)
     assert len(poller._threads) == count_after_first
+
+
+def test_poll_thread_self_evicts_when_asset_removed(tmp_path):
+    """Thread exits naturally when its asset disappears from the registry."""
+    from glorfindel.detection_rules import RulePoller
+
+    reg = AssetRegistry(path=tmp_path / "assets.json")
+    reg.update([_asset("vm-a", backend="law", rid="/sub/vm-a")])
+
+    # Mock Azure so the poll loop is near-instant (no real HTTP calls)
+    with patch(
+        "glorfindel.detection_rules.detector_for",
+        return_value=MagicMock(**{"poll_alert.return_value": None}),
+    ):
+        poller = RulePoller([_auto_rule(interval_s=0.05)], lambda s: None, dry_run=True)
+        poller.start()
+        poller.expand_for_discovered(reg)
+
+        thread = next(t for t in poller._threads if "vm-a" in t.name)
+
+        # Evict — thread exits at start of next poll cycle (<50ms away)
+        reg.replace_for_backend("law", [])
+        thread.join(timeout=2.0)
+
+    assert not thread.is_alive()

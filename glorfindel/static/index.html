@@ -653,16 +653,16 @@ function renderIncidents() {
     }).join('');
 
     // Card-level actions (VM-wide)
-    // Release = isolation only (post-restore). Revert = isolation + all IP blocks (cleanup).
+    // Release = VM back to normal (lifts isolation + all IP blocks).
+    // Unblock = remove IP blocks only (when VM is not isolated).
     const cardActions = [];
     if (isIsolated) {
       cardActions.push(
         `<button class="action danger" onclick="confirmRelease('${vm_name}')">↩️ Release</button>`
       );
-    }
-    if (isBlocked) {
+    } else if (isBlocked) {
       cardActions.push(
-        `<button class="action danger" onclick="confirmRevert('${vm_name}')">↩️ Revert</button>`
+        `<button class="action danger" onclick="confirmUnblock('${vm_name}')">↩️ Unblock</button>`
       );
     }
     // Restore when VM is isolated (operator decision) OR explicit restore_from_backup escalation.
@@ -708,35 +708,30 @@ async function doApproveRule(proposalId, escId) {
 
 function confirmRelease(vmName) {
   openModal(
-    'Release isolation — ' + vmName,
-    'Remove the NSG isolation rule. Use after restore when the VM is clean. IP blocks (if any) remain active.',
-    `glorfindel release ${vmName} --yes`,
+    'Release ' + vmName,
+    'Lift isolation and remove all IP blocks — VM back to normal network state.',
+    `glorfindel revert ${vmName} --yes`,
     '↩️ Release',
     'danger',
-    () => doRelease(vmName),
+    () => doRevert(vmName),
   );
 }
 
-async function doRelease(vmName) {
-  toast('↩️ Releasing isolation on ' + vmName + '…');
-  try {
-    const r = await fetch(`/api/action/release/${vmName}`, { method: 'POST' });
-    const d = await r.json();
-    if (d.ok) {
-      toast('✓ Isolation released — ' + vmName + ' is back online');
-      refreshState();
-    } else {
-      toast('✗ Release failed: ' + (d.stderr || d.error || '?'));
-    }
-  } catch (e) {
-    toast('✗ ' + e.message);
-  }
+function confirmUnblock(vmName) {
+  openModal(
+    'Unblock IPs — ' + vmName,
+    'Remove all NSG IP block rules on this VM.',
+    `glorfindel revert ${vmName} --yes`,
+    '↩️ Unblock',
+    'danger',
+    () => doRevert(vmName),
+  );
 }
 
 function confirmRevert(vmName) {
   openModal(
     'Revert ' + vmName,
-    'Full reset: release isolation AND unblock all IPs. Use between test runs.',
+    'Full reset: release isolation AND unblock all IPs.',
     `glorfindel revert ${vmName} --yes`,
     '↩️ Revert',
     'danger',

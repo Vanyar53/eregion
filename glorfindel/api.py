@@ -173,7 +173,9 @@ async def config() -> dict:
         except Exception:
             pass
 
-    llm_model = os.environ.get("GLORFINDEL_LLM_MODEL", "anthropic/claude-sonnet-4-6")
+    llm_model = (
+        os.environ.get("GLORFINDEL_LLM_MODEL") or "anthropic/claude-sonnet-4-6"
+    )
     llm_provider = llm_model.split("/")[0] if "/" in llm_model else llm_model
 
     return {
@@ -497,42 +499,44 @@ def _bin() -> str:
     return str(c) if c.exists() else "glorfindel"
 
 
-def _load_recent(n: int) -> list[dict]:
+def _load_recent(n: int, window_h: float = 4.0) -> list[dict]:
+    """Load recent feed entries across all runs in the last window_h hours."""
     runs = Path("runs")
     if not runs.exists():
         return []
 
-    sig_files = sorted(
-        runs.glob("*_signals.jsonl"),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    )
-    dbg_files = sorted(
-        runs.glob("*_debug.jsonl"),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    )
-    if not sig_files and not dbg_files:
-        return []
-
-    name = sig_files[0].name if sig_files else dbg_files[0].name
-    prefix = name.replace("_signals.jsonl", "").replace("_debug.jsonl", "")
+    import time as _time
+    cutoff = _time.time() - window_h * 3600
     entries: list[tuple[str, dict]] = []
 
-    for path, kind in [
-        (runs / f"{prefix}_signals.jsonl", "signal"),
-        (runs / f"{prefix}_debug.jsonl", "action"),
-        (runs / "manual_actions.jsonl", "action"),  # operator actions (release/unblock/reset)
+    for pat, kind in [
+        ("*_signals.jsonl", "signal"),
+        ("*_debug.jsonl", "action"),
     ]:
-        if path.exists():
-            for line in path.read_text().splitlines():
+        for f in runs.glob(pat):
+            if f.stat().st_mtime < cutoff:
+                continue
+            for line in f.read_text().splitlines():
                 if not line.strip():
                     continue
                 try:
                     d = json.loads(line)
-                    entries.append((d.get("timestamp", ""), _parse(d, kind)))
+                    entries.append(
+                        (d.get("timestamp", ""), _parse(d, kind))
+                    )
                 except Exception:
                     pass
+
+    manual = runs / "manual_actions.jsonl"
+    if manual.exists():
+        for line in manual.read_text().splitlines():
+            if not line.strip():
+                continue
+            try:
+                d = json.loads(line)
+                entries.append((d.get("timestamp", ""), _parse(d, "action")))
+            except Exception:
+                pass
 
     entries.sort(key=lambda x: x[0])
     return [e for _, e in entries[-n:]]

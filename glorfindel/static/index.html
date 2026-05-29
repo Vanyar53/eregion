@@ -1053,28 +1053,10 @@ async function refreshConfig() {
     const r = await fetch('/api/config');
     const d = await r.json();
     const az = d.azure;
-    const det = d.detection;
 
     const azBadge = az.configured
       ? '<span class="cfg-badge ok">✓ connected</span>'
       : '<span class="cfg-badge err">✗ missing credentials</span>';
-
-    const wsRows = det.workspaces.length
-      ? det.workspaces.map(w => `<div class="cfg-row">
-          <span class="cfg-key">workspace</span>
-          <span class="cfg-val">${mask(w, 12)}</span>
-        </div>`).join('')
-      : `<div class="cfg-row"><span class="cfg-val" style="color:var(--dim)">No runs yet</span></div>`;
-
-    const ttpRows = Object.keys(det.coverage).length
-      ? Object.entries(det.coverage).map(([ttp, c]) => {
-          const [label, cls] = ttpStatus(c);
-          return `<tr>
-            <td>${ttp}</td>
-            <td><span class="cfg-badge ${cls}">${label}</span></td>
-          </tr>`;
-        }).join('')
-      : `<tr><td colspan="2" style="color:var(--dim)">No runs yet</td></tr>`;
 
     panel.innerHTML = `
       <div class="cfg-section">
@@ -1095,18 +1077,6 @@ async function refreshConfig() {
           <span class="cfg-key">client (SP)</span>
           <span class="cfg-val">${mask(az.client_id)}</span>
         </div>
-      </div>
-
-      <div class="cfg-section">
-        <div class="cfg-section-title">Detection sources</div>
-        ${wsRows}
-      </div>
-
-      <div class="cfg-section">
-        <div class="cfg-section-title">TTP coverage (last 10 runs)</div>
-        <table class="ttp-table">
-          <tbody>${ttpRows}</tbody>
-        </table>
       </div>
 
       <div class="cfg-section">
@@ -1141,7 +1111,8 @@ const ACTION_GROUPS = [
 ];
 
 function _worstStatus(checks, actions) {
-  const relevant = checks.filter(c => actions.includes(c.action));
+  const relevant = checks.filter(c =>
+    actions.some(a => c.action.split(/,\s*/).includes(a)));
   if (!relevant.length) return 'skip';
   if (relevant.some(c => c.status === 'fail'))  return 'fail';
   if (relevant.some(c => c.status === 'warn'))  return 'warn';

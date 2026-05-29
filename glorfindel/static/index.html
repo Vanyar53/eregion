@@ -698,19 +698,6 @@ function _escFooter(escs) {
 
 // ── Map rendering ──────────────────────────────────────────────────────────────
 
-function _decisionSummary(text) {
-  if (!text) return '';
-  const clean = text.replace(/\*\*(.*?)\*\*/g, '$1').replace(/\*(.*?)\*/g, '$1');
-  // Split on step markers (Étape N / Step N) to isolate the conclusion paragraph
-  const parts = clean.split(/(?:étape|step)\s+\d+\s*[–\-:]/i)
-    .map(p => p.trim()).filter(p => p.length > 20);
-  // Take the last chunk — usually the decision/conclusion
-  const chunk = parts.length > 1 ? parts[parts.length - 1] : (parts[0] || clean);
-  // Take the first sentence from that chunk
-  const first = chunk.split(/[.!?]\s+/)[0] || chunk;
-  const out = first.trim().slice(0, 90);
-  return out + (first.trim().length > 90 ? '…' : '');
-}
 
 function _dot(color) {
   return `<span style="color:${color};font-size:10px">●</span>`;
@@ -824,15 +811,14 @@ function _computeZone(resourceMap, vmEscs, restoreByVm) {
         }).join('  ')
       : '';
 
-    // Last LLM decisions — strip markdown, extract conclusion
+    // Last LLM decisions (conclusion pre-extracted server-side)
     const reasonHtml = (cached?.actions || []).slice(0, 2).map(a => {
-      const pct  = a.confidence ? Math.round(a.confidence * 100) + '%' : '';
-      const text = _decisionSummary(a.reasoning);
+      const pct = a.confidence ? Math.round(a.confidence * 100) + '%' : '';
       return `<div class="dec-row">
         <span class="dec-action">${actionLabel(a.action)}</span>
         ${pct ? `<span class="dec-conf">${pct}</span>` : ''}
         ${a.ttp ? `<span class="dec-ttp">${a.ttp}</span>` : ''}
-        ${text ? `<span class="dec-text">↳ ${text}</span>` : ''}
+        ${a.reasoning ? `<span class="dec-text">↳ ${a.reasoning}</span>` : ''}
       </div>`;
     }).join('');
 

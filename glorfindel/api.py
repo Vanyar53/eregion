@@ -441,7 +441,7 @@ async def vm_actions(vm_name: str, limit: int = 5) -> dict:
                     continue
                 actions.append({
                     "action": action,
-                    "reasoning": (d.get("reasoning") or "")[:200],
+                    "reasoning": _extract_conclusion(d.get("reasoning") or ""),
                     "confidence": d.get("confidence"),
                     "timestamp": d.get("timestamp", ""),
                     "outcome": (d.get("outcome") or {}).get("status", ""),
@@ -588,6 +588,32 @@ def _write_manual_feed(action: str, resource_id: str, outcome: dict) -> None:
     }
     with open(runs / "manual_actions.jsonl", "a") as f:
         f.write(json.dumps(entry) + "\n")
+
+
+def _extract_conclusion(text: str, max_chars: int = 120) -> str:
+    """Extract the conclusion from a step-by-step LLM reasoning.
+
+    The reasoning is typically structured as:
+        Étape 1 – ... (preamble)
+        Étape 2 – ... (analysis)
+        Étape N – ... (conclusion / action decision)
+
+    We take the LAST step chunk since it contains the decision rationale,
+    not the first which is always the preamble.
+    """
+    import re
+    clean = re.sub(r'\*\*(.*?)\*\*', r'\1', text)
+    clean = re.sub(r'\*(.*?)\*', r'\1', clean)
+    # Split on step markers (Étape N / Step N) — any variant
+    parts = re.split(r'(?i)(?:étape|step)\s+\d+\s*[–\-:]', clean)
+    # Take the last non-trivial chunk (usually the conclusion)
+    chunk = next(
+        (p.strip() for p in reversed(parts) if len(p.strip()) > 20),
+        clean,
+    )
+    # First sentence of that chunk
+    sentence = re.split(r'[.!?]\s+', chunk)[0] or chunk
+    return sentence.strip()[:max_chars]
 
 
 def _bin() -> str:

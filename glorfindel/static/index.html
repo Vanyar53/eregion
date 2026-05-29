@@ -799,32 +799,67 @@ function _networkZone(resources, escalations) {
   </div>`;
 }
 
-function _monitoringZone(rules) {
-  const hasErr     = rules.some(r => r.last_error);
-  const allPoll    = rules.length > 0 && rules.every(r => r.last_poll && !r.last_error);
-  const dot = hasErr ? _dot('var(--red)') : allPoll ? _dot('var(--green)') : _dot('var(--dim)');
-  const status = hasErr ? 'alert' : 'ok';
+function _monitoringZone(rules, backends, discoveredAssets) {
+  const hasErr  = rules.some(r => r.last_error);
+  const allPoll = rules.length > 0 && rules.every(r => r.last_poll && !r.last_error);
+  const zoneStatus = hasErr ? 'alert' : 'ok';
 
-  const ruleRows = rules.map(r => {
-    const ic = r.last_error ? `<span style="color:var(--red)">✗</span>`
-             : r.last_poll  ? `<span style="color:var(--green)">●</span>`
-             : `<span style="color:var(--dim)">○</span>`;
-    const match = r.last_match ? ` · <span style="color:var(--orange)">${_relTime(r.last_match)}</span>` : '';
-    return `<div class="row">${ic}
-      <span>${r.name}</span>
-      <span class="cfg-badge dim" style="font-size:9px">${r.ttp}</span>${match}</div>`;
-  }).join('');
+  const discByBackend = {};
+  (discoveredAssets || []).forEach(a => {
+    (discByBackend[a.monitoring_backend] = discByBackend[a.monitoring_backend] || []).push(a);
+  });
 
-  return `<div class="map-zone zone-monitoring ${_zoneClass(status)}" id="zone-monitoring">
-    <div class="zone-label">MONITORING</div>
-    <div class="map-node">
-      <div class="map-node-header">${dot}<span class="map-node-name">law-annatar</span>
-        <span style="font-size:9px;color:var(--dim)">Azure Monitor</span>
+  const nodes = (backends || []).map(b => {
+    const bRules = rules.filter(r => r.monitoring_backend_name === b.name);
+    const bDisc  = discByBackend[b.name] || [];
+    const bErr   = bRules.some(r => r.last_error);
+    const bPoll  = bRules.length > 0 && bRules.every(r => r.last_poll && !r.last_error);
+    const dot    = bErr ? _dot('var(--red)') : bPoll ? _dot('var(--green)') : _dot('var(--dim)');
+
+    const discRows = bDisc.map(a =>
+      `<div class="row">
+        <span style="color:var(--green);font-size:9px">●</span>
+        <span style="font-size:11px">${a.name}</span>
+        <span style="color:var(--dim);font-size:9px;margin-left:auto">${_relTime(a.last_seen)}</span>
+      </div>`
+    ).join('') || `<div class="row"><span style="color:var(--dim);font-size:10px">No assets — discovery pending</span></div>`;
+
+    const ruleRows = bRules.map(r => {
+      const dotCls = r.last_error ? 'var(--red)' : r.last_poll ? 'var(--green)' : 'var(--dim)';
+      const match  = r.last_match ? `<span style="color:var(--orange);font-size:9px">${_relTime(r.last_match)}</span>` : '';
+      return `<div class="row rule-item" style="padding:3px 4px;border-radius:4px;cursor:pointer"
+          onclick='showRuleDetail(${JSON.stringify(r)})'>
+        <span style="color:${dotCls};font-size:9px">●</span>
+        <span style="font-size:11px;flex:1">${r.name}</span>
+        ${r.ttp ? `<span class="cfg-badge dim" style="font-size:9px">${r.ttp}</span>` : ''}
+        ${match}
+        <span style="color:var(--dim);font-size:9px">▸</span>
+      </div>`;
+    }).join('') || `<div class="row"><span style="color:var(--dim);font-size:10px">No rules for this backend</span></div>`;
+
+    return `<div class="map-node" style="margin-bottom:8px">
+      <div class="map-node-header">${dot}
+        <span class="map-node-name">${b.name}</span>
+        <span style="font-size:9px;color:var(--dim)">${b.type}</span>
       </div>
       <div class="map-node-body">
-        ${ruleRows || `<span style="color:var(--dim)">No rules configured</span>`}
+        <div style="font-size:9px;color:var(--dim);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px">Assets</div>
+        ${discRows}
+        <div style="font-size:9px;color:var(--dim);text-transform:uppercase;letter-spacing:1px;margin:8px 0 4px">Rules</div>
+        ${ruleRows}
       </div>
-    </div>
+    </div>`;
+  }).join('');
+
+  const emptyNode = backends && backends.length === 0
+    ? `<div class="map-node"><div class="map-node-body">
+        <span style="color:var(--dim)">No monitoring backends — add to glorfindel-config.yaml</span>
+      </div></div>`
+    : '';
+
+  return `<div class="map-zone zone-monitoring ${_zoneClass(zoneStatus)}" id="zone-monitoring">
+    <div class="zone-label">MONITORING</div>
+    ${nodes || emptyNode}
   </div>`;
 }
 
@@ -1065,8 +1100,10 @@ async function refreshActionsData() {
 function renderInfra() {
   if (_configMode) return;
   const list = document.getElementById('incidents-list');
-  const rules          = _cfgData?.detection?.rules || [];
-  const knownResources = _cfgData?.known_resources  || [];
+  const rules          = _cfgData?.detection?.rules     || [];
+  const backends       = _cfgData?.monitoring_backends  || [];
+  const discovered     = _state?.discovered_assets      || [];
+  const knownResources = _cfgData?.known_resources      || [];
   const { resources = [], escalations = [], restores = [] } = _state;
 
   _escById = {};
@@ -1099,7 +1136,7 @@ function renderInfra() {
   list.innerHTML = `<div class="infra-map" id="infra-map">
     <svg class="map-svg" id="map-svg"></svg>
     ${_networkZone(resources, escalations)}
-    ${_monitoringZone(rules)}
+    ${_monitoringZone(rules, backends, discovered)}
     ${_computeZone(resourceMap, vmEscs, restoreByVm)}
     ${hasRsv ? _backupZone(rsvEscs, restores) : ''}
   </div>
@@ -1451,88 +1488,13 @@ function showRuleDetail(rule) {
 async function refreshConfig() {
   const panel = document.getElementById('config-panel');
   try {
-    const [cfgResp, discResp] = await Promise.all([
-      fetch('/api/config'),
-      fetch('/api/discovered'),
-    ]);
-    const d    = await cfgResp.json();
-    const disc = (await discResp.json()).assets || [];
-    const az   = d.azure;
+    const cfgResp = await fetch('/api/config');
+    const d  = await cfgResp.json();
+    const az = d.azure;
 
     const azBadge = az.configured
       ? '<span class="cfg-badge ok">✓ connected</span>'
       : '<span class="cfg-badge err">✗ missing credentials</span>';
-
-    const backends     = d.monitoring_backends || [];
-    const actionBkds   = d.assets || [];
-    const rules        = d.detection?.rules || [];
-    const gCfg         = d.glorfindel_config || {};
-    const excCnt       = gCfg.exceptions_count || 0;
-
-    // ── Monitoring backends + discovered assets ────────────────────────────
-    const discByBackend = {};
-    disc.forEach(a => {
-      (discByBackend[a.monitoring_backend] = discByBackend[a.monitoring_backend] || []).push(a);
-    });
-
-    const backendsHtml = backends.length ? backends.map(b => {
-      const discovered = discByBackend[b.name] || [];
-      const discRows = discovered.length
-        ? discovered.map(a => `<div class="cfg-row" style="padding-left:8px">
-            <span class="cfg-key">${a.name}</span>
-            <span class="cfg-val">
-              <span class="cfg-badge ok" style="font-size:9px">✓ discovered</span>
-              <span style="color:var(--dim);font-size:9px">${a.source} · ${_relTime(a.last_seen)}</span>
-            </span>
-          </div>`).join('')
-        : `<div class="cfg-row" style="padding-left:8px">
-            <span class="cfg-val" style="color:var(--dim)">No assets yet — discovery runs at startup</span>
-          </div>`;
-      return `
-        <div class="cfg-row">
-          <span class="cfg-key">${b.name}</span>
-          <span class="cfg-val">
-            <span class="cfg-badge dim">${b.type}</span>
-            <span style="color:var(--dim);font-size:9px">${b.workspace_id ? mask(b.workspace_id, 6) : ''}</span>
-          </span>
-        </div>
-        ${discRows}`;
-    }).join('') : `<div class="cfg-row"><span class="cfg-val" style="color:var(--dim)">None — add monitoring_backends to glorfindel-config.yaml</span></div>`;
-
-    // ── Detection rules grouped by backend ─────────────────────────────────
-    const rulesByBackend = {};
-    rules.forEach(r => {
-      const key = r.monitoring_backend_name || '(no backend)';
-      (rulesByBackend[key] = rulesByBackend[key] || []).push(r);
-    });
-
-    const rulesHtml = Object.keys(rulesByBackend).length ? Object.entries(rulesByBackend).map(([bk, bRules]) => `
-      <div class="cfg-backend-header">${bk}</div>
-      ${bRules.map((r, i) => {
-        const dotCls = r.last_error ? 'err' : r.last_match ? 'ok' : 'dim';
-        const statusTip = r.last_error ? 'error' : r.last_match ? _relTime(r.last_match) : r.last_poll ? 'no match' : '—';
-        return `<div class="rule-item" onclick='showRuleDetail(${JSON.stringify(r)})'>
-          <span class="rule-dot ${dotCls}">●</span>
-          <span class="rule-name">${r.name}</span>
-          <span class="rule-meta">
-            ${r.ttp ? `<span class="cfg-badge dim" style="font-size:9px">${r.ttp}</span>` : ''}
-            <span>${r.interval_s}s</span>
-            <span style="color:${r.last_error ? 'var(--red)' : 'var(--dim)'}">${statusTip}</span>
-          </span>
-        </div>`;
-      }).join('')}`).join('')
-      : `<div class="cfg-row"><span class="cfg-val" style="color:var(--dim)">No rules loaded</span></div>`;
-
-    // ── Action backends (RSV…) ─────────────────────────────────────────────
-    const actionHtml = actionBkds.length ? actionBkds.map(b => `
-      <div class="cfg-row">
-        <span class="cfg-key">${b.name}</span>
-        <span class="cfg-val">
-          <span class="cfg-badge dim">${b.type}</span>
-          ${b.vault_name ? `<span style="color:var(--dim);font-size:10px">${b.vault_name} / ${b.resource_group}</span>` : ''}
-        </span>
-      </div>`).join('')
-      : `<div class="cfg-row"><span class="cfg-val" style="color:var(--dim)">None — add action_backends to glorfindel-config.yaml</span></div>`;
 
     panel.innerHTML = `
       <div class="cfg-section">
@@ -1565,23 +1527,8 @@ async function refreshConfig() {
         </div>` : ''}
       </div>
 
-      <div class="cfg-section">
-        <div class="cfg-section-title">Monitoring backends</div>
-        ${backendsHtml}
-      </div>
-
-      <div class="cfg-section">
-        <div class="cfg-section-title">Detection rules</div>
-        ${rulesHtml}
-        ${excCnt ? `<div class="cfg-row" style="margin-top:4px">
-          <span class="cfg-key">exceptions</span>
-          <span class="cfg-val" style="color:var(--dim)">${excCnt} pattern(s)</span>
-        </div>` : ''}
-      </div>
-
-      <div class="cfg-section">
-        <div class="cfg-section-title">Action backends</div>
-        ${actionHtml}
+      <div style="padding:12px 0 0;color:var(--dim);font-size:11px">
+        Monitoring backends, detection rules and action backends are visible on the main infrastructure map.
       </div>`;
 
   } catch (e) {

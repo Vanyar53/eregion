@@ -88,82 +88,70 @@ class Engine:
             )
             return
 
-        try:
-            # Steps
-            T0 = time.time()
-            for step in scenario.steps:
-                console.print(f"[cyan]->[/cyan] {step.get('name', step.get('action'))}")
-                if step.get("record") == "T0":
-                    T0 = time.time()
-                self._execute_action(executor, step)
+        # Steps
+        T0 = time.time()
+        for step in scenario.steps:
+            console.print(f"[cyan]->[/cyan] {step.get('name', step.get('action'))}")
+            if step.get("record") == "T0":
+                T0 = time.time()
+            self._execute_action(executor, step)
 
-            checks["attack"] = "PASS"
+        checks["attack"] = "PASS"
 
-            # Emit attack_started — Glorfindel looks up its own detection rule by TTP
-            # and owns the full detection + response cycle.
-            detection_timeout_s = 0.0
-            if scenario.detection:
-                detection_timeout_s = self._parse_duration(
-                    scenario.detection.get("timeout", "300s")
-                )
-                emitter.emit(
-                    event="attack_started",
-                    raw_signal={
-                        "attack_time": T0,
-                        "detection_timeout_s": detection_timeout_s,
-                        "detection_max_s": self._parse_duration(
-                            scenario.detection.get("time_max", "9999s")
-                        ),
-                    },
-                )
-                console.print(
-                    "[cyan]->[/cyan] Signal 'attack_started' emitted"
-                    " — Glorfindel will detect via detection_rules.yaml."
-                )
-
-            overall = "PASS" if all("PASS" in v for v in checks.values()) else "FAIL"
-            report = RunReport(
-                scenario=scenario.name,
-                run_id=run_id,
-                mitre=scenario.mitre,
-                result=overall,
-                metrics=metrics,
-                thresholds={},
-                checks=checks,
+        # Emit attack_started — Glorfindel looks up its own detection rule by TTP
+        # and owns the full detection + response cycle.
+        detection_timeout_s = 0.0
+        if scenario.detection:
+            detection_timeout_s = self._parse_duration(
+                scenario.detection.get("timeout", "300s")
             )
-            path = report.save()
-            report.render()
-            console.print(f"\n[dim]Report saved: {path}[/dim]")
+            emitter.emit(
+                event="attack_started",
+                raw_signal={
+                    "attack_time": T0,
+                    "detection_timeout_s": detection_timeout_s,
+                    "detection_max_s": self._parse_duration(
+                        scenario.detection.get("time_max", "9999s")
+                    ),
+                },
+            )
+            console.print(
+                "[cyan]->[/cyan] Signal 'attack_started' emitted"
+                " — Glorfindel will detect via detection_rules.yaml."
+            )
 
-            # Purple-team feedback: monitor Glorfindel's detection result in
-            # background and emit detection_missed if it times out.
-            if scenario.detection and detection_timeout_s > 0 and not self.dry_run:
-                import threading as _threading
-                _threading.Thread(
-                    target=self._wait_and_emit_feedback,
-                    args=(run_id, emitter, scenario, detection_timeout_s),
-                    daemon=True,
-                    name=f"annatar-feedback-{run_id}",
-                ).start()
+        overall = "PASS" if all("PASS" in v for v in checks.values()) else "FAIL"
+        report = RunReport(
+            scenario=scenario.name,
+            run_id=run_id,
+            mitre=scenario.mitre,
+            result=overall,
+            metrics=metrics,
+            thresholds={},
+            checks=checks,
+        )
+        path = report.save()
+        report.render()
+        console.print(f"\n[dim]Report saved: {path}[/dim]")
 
-        finally:
-            # Cleanup always runs — even if the scenario crashes mid-way
-            if scenario.cleanup:
-                console.print("[cyan]->[/cyan] Running cleanup...")
-                for action in scenario.cleanup:
-                    try:
-                        self._execute_action(executor, action)
-                    except Exception as e:
-                        console.print(f"  [yellow]Cleanup warning:[/yellow] {e}")
+        # Purple-team feedback: monitor Glorfindel's detection result in
+        # background and emit detection_missed if it times out.
+        if scenario.detection and detection_timeout_s > 0 and not self.dry_run:
+            import threading as _threading
+            _threading.Thread(
+                target=self._wait_and_emit_feedback,
+                args=(run_id, emitter, scenario, detection_timeout_s),
+                daemon=True,
+                name=f"annatar-feedback-{run_id}",
+            ).start()
 
     def _dry_run_display(self, scenario):
         console.print("[yellow]DRY RUN — no actions will be executed[/yellow]\n")
         for i, step in enumerate(scenario.steps, 1):
             console.print(f"  {i}. [{step.get('action')}] {step.get('name', '')}")
         if scenario.detection:
-            console.print(f"  -> Poll {scenario.detection['source']} for: {scenario.detection['query']}")
-        if scenario.recovery:
-            console.print(f"  -> Trigger recovery: {scenario.recovery.get('action')}")
+            timeout = scenario.detection.get("timeout", "?")
+            console.print(f"  -> Detection timeout: {timeout} — Glorfindel uses detection_rules.yaml")
 
     def _get_executor_collector(self, scenario):
         target_type = scenario.target.get("type")

@@ -11,8 +11,16 @@ target:
   resource_group: annatar             # replace with your resource group
   vm_name: vm-annatar-victim          # replace with your VM name
 
-prerequisites:
-  detection:
+steps:
+  - name: simulate_privilege_escalation
+    action: run_script_on_vm
+    script: scripts/vm/privilege_escalation_sim.sh
+    record: T0
+
+detection:
+  timeout: "300s"
+  # Successful sudo to root → Glorfindel isolates the VM (OS-level compromise).
+  prerequisites:
     - name: syslog_dcr
       table: Syslog
       why: detection rule reads auth facility — same DCR pipeline as T1110.001
@@ -23,18 +31,6 @@ prerequisites:
       why: AMA must be running — NSG isolation from a previous run blocks AMA (outbound deny-all), causing detection timeout
       verify: "Heartbeat | where TimeGenerated > ago(5m) | where Computer == '<vm_name>' | limit 1"
       setup: "If AMA is silenced by a stale isolation: glorfindel release <resource_id> --yes, then wait ~2 min for AMA to reconnect"
-
-steps:
-  - name: simulate_privilege_escalation
-    action: run_script_on_vm
-    script: scripts/vm/privilege_escalation_sim.sh
-    record: T0
-
-# ─── Detection ─────────────────────────────────────────────────────────────────
-# Detection config lives in glorfindel/rules/azure/detection_rules.yaml (T1548.003).
-# Successful sudo to root → Glorfindel isolates the VM (OS-level compromise).
-detection:
-  timeout: "300s"
   hints:
     log_source: Syslog
     attack_commands_summary: >

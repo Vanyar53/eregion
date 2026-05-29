@@ -8,8 +8,16 @@ target:
   resource_group: annatar             # replace with your resource group
   vm_name: vm-annatar-victim          # replace with your VM name
 
-prerequisites:
-  detection:
+steps:
+  - name: simulate_ssh_brute_force
+    action: run_script_on_vm
+    script: scripts/vm/lateral_movement_sim.sh
+    record: T0
+
+detection:
+  timeout: "300s"
+  # The rule extracts SourceIP so Glorfindel can block_suspicious_ip on the attacker's IP.
+  prerequisites:
     - name: syslog_dcr
       table: Syslog
       why: detection rule reads auth facility — requires a DCR collecting Syslog at Warning+ on the VM
@@ -20,18 +28,6 @@ prerequisites:
       why: AMA must be installed for the DCR to collect and ship Syslog data
       verify: "Heartbeat | where TimeGenerated > ago(5m) | where Computer == '<vm_name>' | limit 1"
       setup: "az vm extension set -g <resource_group> --vm-name <vm_name> --publisher Microsoft.Azure.Monitor --name AzureMonitorLinuxAgent"
-
-steps:
-  - name: simulate_ssh_brute_force
-    action: run_script_on_vm
-    script: scripts/vm/lateral_movement_sim.sh
-    record: T0
-
-# ─── Detection ─────────────────────────────────────────────────────────────────
-# Detection config lives in glorfindel/rules/azure/detection_rules.yaml (T1110.001).
-# The rule extracts SourceIP so Glorfindel can block_suspicious_ip on the attacker's IP.
-detection:
-  timeout: "300s"
   hints:
     log_source: Syslog
     attack_commands_summary: >

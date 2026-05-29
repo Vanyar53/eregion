@@ -24,7 +24,7 @@ def test_load_ransomware_scenario():
     assert s.target["type"] == "azure_vm"
     assert len(s.steps) >= 1
     assert s.detection["time_max"] == "180s"
-    assert s.recovery is None  # recovery removed from scenario — owned by Glorfindel
+    assert s.detection_hints["log_source"] == "Perf"
 
 
 def test_load_exfil_scenario():
@@ -32,7 +32,7 @@ def test_load_exfil_scenario():
     s = parser.load(str(SCENARIOS_DIR / "azure" / "data-exfiltration.yaml"))
     assert s.name == "azure-data-exfiltration"
     assert s.mitre == "T1041"
-    assert s.recovery is None
+    assert s.detection_hints["log_source"] == "StorageBlobLogs"
 
 
 def test_validate_missing_required_field(tmp_path):

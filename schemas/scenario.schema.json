@@ -20,41 +20,6 @@
         "vm_name": { "type": "string" }
       }
     },
-    "prerequisites": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "detection": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "required": ["name", "why"],
-            "additionalProperties": true,
-            "properties": {
-              "name": { "type": "string" },
-              "table": { "type": "string" },
-              "why": { "type": "string" },
-              "verify": { "type": "string" },
-              "setup": { "type": "string" }
-            }
-          }
-        },
-        "recovery": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "required": ["name", "why"],
-            "additionalProperties": true,
-            "properties": {
-              "name": { "type": "string" },
-              "why": { "type": "string" },
-              "verify": { "type": "string" },
-              "setup": { "type": "string" }
-            }
-          }
-        }
-      }
-    },
     "setup": {
       "type": "array",
       "items": {
@@ -85,6 +50,21 @@
       "properties": {
         "timeout": { "type": "string", "pattern": "^\\d+(s|m|h)$" },
         "time_max": { "type": "string", "pattern": "^\\d+(s|m|h)$" },
+        "prerequisites": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "why"],
+            "additionalProperties": true,
+            "properties": {
+              "name": { "type": "string" },
+              "table": { "type": "string" },
+              "why": { "type": "string" },
+              "verify": { "type": "string" },
+              "setup": { "type": "string" }
+            }
+          }
+        },
         "hints": {
           "description": "Attack context for Glorfindel's purple-team feedback loop",
           "type": "object",

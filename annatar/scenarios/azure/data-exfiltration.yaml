@@ -8,8 +8,17 @@ target:
   resource_group: annatar             # replace with your resource group
   vm_name: vm-annatar-victim          # replace with your VM name
 
-prerequisites:
-  detection:
+steps:
+  - name: exfiltrate_synthetic_data
+    action: run_script_on_vm
+    script: scripts/vm/exfil_sim.sh
+    record: T0
+
+detection:
+  timeout: "300s"
+  # CallerIpAddress = VM private IP when uploading via MSI → Glorfindel chooses
+  # isolate_vm, not block_suspicious_ip.
+  prerequisites:
     - name: storage_blob_logs
       table: StorageBlobLogs
       why: detection rule reads PutBlob operations — requires diagnostic settings on the storage account
@@ -19,19 +28,6 @@ prerequisites:
       why: exfil_sim.sh uploads via MSI — VM needs Storage Blob Data Contributor on the storage account
       verify: "az role assignment list --assignee <vm_principal_id> --scope <storage_id>"
       setup: "az role assignment create --assignee <vm_principal_id> --role 'Storage Blob Data Contributor' --scope <storage_id>"
-
-steps:
-  - name: exfiltrate_synthetic_data
-    action: run_script_on_vm
-    script: scripts/vm/exfil_sim.sh
-    record: T0
-
-# ─── Detection ─────────────────────────────────────────────────────────────────
-# Detection config lives in glorfindel/rules/azure/detection_rules.yaml (T1041).
-# CallerIpAddress = VM private IP when uploading via MSI → Glorfindel chooses
-# isolate_vm, not block_suspicious_ip.
-detection:
-  timeout: "300s"
   hints:
     log_source: StorageBlobLogs
     attack_commands_summary: >

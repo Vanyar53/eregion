@@ -29,11 +29,8 @@ class Scenario:
     target: dict
     setup: list
     steps: list
-    detection: dict
-    recovery: dict | None
-    cleanup: list
-    prerequisites: dict
-    detection_hints: dict
+    detection: dict       # timeout, time_max, prerequisites, hints
+    detection_hints: dict  # shortcut to detection["hints"] for engine convenience
     raw: dict
 
 
@@ -46,6 +43,7 @@ class ScenarioParser:
         with open(path) as f:
             data = yaml.safe_load(f)
 
+        det = data.get("detection", {})
         return Scenario(
             name=data["name"],
             description=data.get("description", ""),
@@ -54,11 +52,8 @@ class ScenarioParser:
             target=data["target"],
             setup=data.get("setup", []),
             steps=data["steps"],
-            detection=data.get("detection", {}),
-            recovery=data.get("recovery"),
-            cleanup=data.get("cleanup", []),
-            prerequisites=data.get("prerequisites", {}),
-            detection_hints=data.get("detection", {}).get("hints", {}),
+            detection=det,
+            detection_hints=det.get("hints", {}),
             raw=data,
         )
 

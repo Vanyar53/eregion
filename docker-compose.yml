@@ -62,6 +62,8 @@ services:
       - ./glorfindel/rules:/app/glorfindel/rules
       - ${HOME}/.glorfindel:/root/.glorfindel
       - ${HOME}/.cache/chroma:/root/.cache/chroma
+      # Optional: mount glorfindel-config.yaml if it exists
+      # - ./glorfindel-config.yaml:/app/glorfindel-config.yaml:ro
     depends_on:
       - watch
     develop:

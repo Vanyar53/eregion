@@ -340,8 +340,14 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
 
     if _rules_file:
         try:
-            from glorfindel.detection_rules import RulePoller, load_rules
-            rules = load_rules(_rules_file)
+            from glorfindel.config import load_glorfindel_config
+            from glorfindel.detection_rules import RulePoller, load_config as _load_det_cfg
+            from glorfindel.discovery import AssetRegistry, start_discovery
+
+            _glorfindel_cfg = load_glorfindel_config()
+            det_cfg = _load_det_cfg(_rules_file)
+            rules = det_cfg.rules
+
             if rules:
                 def _rule_dispatch(signal_data: dict) -> None:
                     from annatar.signals.schema import Signal as _Signal
@@ -353,9 +359,30 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
 
                 _rule_poller = RulePoller(rules, _rule_dispatch, dry_run=dry_run)
                 _rule_poller.start()
+
+                # Start discovery service (non-blocking background thread)
+                _registry = AssetRegistry()
+                if not dry_run and _glorfindel_cfg.monitoring_backends:
+                    _discovery_svc = start_discovery(_glorfindel_cfg, dry_run=dry_run)
+                    console.print(
+                        f"[dim]Discovery:[/dim] {len(_glorfindel_cfg.monitoring_backends)} "
+                        f"backend(s) — re-discovering every "
+                        f"{int(_glorfindel_cfg.monitoring_backends[0].discovery.interval_s / 60)}min"
+                    )
+
+                    # Expand auto-apply rules after a short delay for initial discovery
+                    import threading as _td
+                    def _expand_later() -> None:
+                        import time as _t
+                        _t.sleep(10)  # give discovery 10s head start
+                        _rule_poller.expand_for_discovered(_registry, _glorfindel_cfg)
+                    _td.Thread(target=_expand_later, daemon=True, name="expand-rules").start()
+
+                auto_count = sum(1 for r in rules if r.auto_apply)
+                static_count = len(rules) - auto_count
                 console.print(
-                    f"[dim]Detection rules:[/dim] {len(rules)} rule(s) "
-                    f"from [dim]{_rules_file}[/dim]"
+                    f"[dim]Detection rules:[/dim] {static_count} static, "
+                    f"{auto_count} auto-apply — from [dim]{_rules_file}[/dim]"
                 )
         except Exception as exc:
             console.print(f"[yellow]⚠ Could not load rules: {exc}[/yellow]")

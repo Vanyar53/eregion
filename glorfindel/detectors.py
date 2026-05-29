@@ -24,9 +24,16 @@ class DetectionConnector(ABC):
 
         since: Unix timestamp — only match events after this time.
         Returns (elapsed_seconds, first_result_row_as_dict) or None on timeout.
-        The result dict maps column names to values from the first matching row.
         """
         ...
+
+    def run_query(self, query: str) -> list[dict]:
+        """Run a query and return ALL result rows (not just the first).
+
+        Used for discovery queries (e.g. Heartbeat). Default implementation
+        returns an empty list — backends that support it override this.
+        """
+        return []
 
 
 class AzureMonitorDetector(DetectionConnector):
@@ -77,6 +84,30 @@ class AzureMonitorDetector(DetectionConnector):
             if verbose:
                 _console.print(f"  [dim]Still polling... {round(elapsed)}s elapsed[/dim]")
             time.sleep(interval_s)
+
+    def run_query(self, query: str) -> list[dict]:
+        """Run a query and return ALL result rows (no polling, one-shot)."""
+        from azure.identity import DefaultAzureCredential
+        from azure.monitor.query import LogsQueryClient, LogsQueryStatus
+        from datetime import timedelta
+
+        credential = DefaultAzureCredential()
+        client = LogsQueryClient(credential)
+        now = datetime.now(tz=timezone.utc)
+        timespan = (now - timedelta(hours=3), now + timedelta(minutes=1))
+        try:
+            response = client.query_workspace(
+                workspace_id=self.workspace_id, query=query, timespan=timespan
+            )
+            if response.status == LogsQueryStatus.SUCCESS:
+                rows = []
+                for table in response.tables:
+                    for row in table.rows:
+                        rows.append(dict(zip(table.columns, row)))
+                return rows
+        except Exception:
+            pass
+        return []
 
 
 _DETECTORS: dict[str, type[DetectionConnector]] = {

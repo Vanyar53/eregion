@@ -1397,31 +1397,28 @@ async function refreshConfig() {
       ? '<span class="cfg-badge ok">✓ connected</span>'
       : '<span class="cfg-badge err">✗ missing credentials</span>';
 
-    const backends = d.monitoring_backends || [];
-    const assets   = d.assets || [];
+    const gCfg   = d.glorfindel_config || {};
+    const gMon   = gCfg.monitoring_backends || [];
+    const gAct   = gCfg.action_backends || [];
+    const excCnt = gCfg.exceptions_count || 0;
 
-    const backendsHtml = backends.length
-      ? backends.map(b => `
-        <div class="cfg-row">
-          <span class="cfg-key">${b.name}</span>
-          <span class="cfg-val">
-            <span class="cfg-badge dim">${b.type}</span>
-            <span style="color:var(--dim);font-size:10px">${mask(b.workspace_id || b.endpoint, 12)}</span>
-          </span>
-        </div>`).join('')
-      : `<div class="cfg-row"><span class="cfg-val" style="color:var(--dim)">No backends configured</span></div>`;
-
-    const assetsHtml = assets.length
-      ? assets.map(a => `
-        <div class="cfg-row">
-          <span class="cfg-key">${a.name}</span>
-          <span class="cfg-val">
-            <span class="cfg-badge dim">${a.type}</span>
-            <span style="color:var(--dim);font-size:10px">${mask(a.resource_id, 16)}</span>
-            ${a.monitoring_backends.map(b => `<span class="cfg-badge dim" style="font-size:9px">${b}</span>`).join('')}
-          </span>
-        </div>`).join('')
-      : `<div class="cfg-row"><span class="cfg-val" style="color:var(--dim)">No assets configured</span></div>`;
+    // Fetch discovered assets async
+    let discoveredHtml = `<div class="cfg-row"><span class="cfg-val" style="color:var(--dim)">Loading…</span></div>`;
+    try {
+      const dr = await fetch('/api/discovered');
+      const dd = await dr.json();
+      const disc = dd.assets || [];
+      discoveredHtml = disc.length
+        ? disc.map(a => `<div class="cfg-row">
+            <span class="cfg-key">${a.name}</span>
+            <span class="cfg-val">
+              <span class="cfg-badge ok" style="font-size:9px">✓ discovered</span>
+              <span class="cfg-badge dim" style="font-size:9px">${a.monitoring_backend}</span>
+              <span style="color:var(--dim);font-size:9px">${a.source} · ${_relTime(a.last_seen)}</span>
+            </span>
+          </div>`).join('')
+        : `<div class="cfg-row"><span class="cfg-val" style="color:var(--dim)">None yet — discovery runs at startup</span></div>`;
+    } catch (e) {}
 
     panel.innerHTML = `
       <div class="cfg-section">

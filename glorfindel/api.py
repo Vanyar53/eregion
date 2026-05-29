@@ -59,10 +59,19 @@ async def state() -> dict:
             "states": states,
         })
 
+    # Discovered assets from background discovery service
+    discovered: list[dict] = []
+    try:
+        from glorfindel.discovery import get_registry
+        discovered = get_registry().to_dicts()
+    except Exception:
+        pass
+
     return {
         "resources": resources,
         "escalations": esc_module.pending(),
         "restores": _active_restores(),
+        "discovered_assets": discovered,
         "now": now.isoformat(),
     }
 
@@ -111,6 +120,27 @@ async def config() -> dict:
     subscription = os.environ.get("AZURE_SUBSCRIPTION_ID", "")
     tenant = os.environ.get("AZURE_TENANT_ID", "")
     client_id = os.environ.get("AZURE_CLIENT_ID", "")
+
+    # Load Glorfindel infra config (glorfindel-config.yaml)
+    try:
+        from glorfindel.config import load_glorfindel_config
+        glorfindel_cfg = load_glorfindel_config()
+        glorfindel_cfg_dict = {
+            "monitoring_backends": [
+                {"name": b.name, "type": b.type,
+                 "workspace_id": b.workspace_id[:8] + "…" if b.workspace_id else "",
+                 "discovery_enabled": b.discovery.enabled,
+                 "discovery_interval_s": b.discovery.interval_s}
+                for b in glorfindel_cfg.monitoring_backends
+            ],
+            "action_backends": [
+                {"name": b.name, "type": b.type, "vault_name": b.vault_name}
+                for b in glorfindel_cfg.action_backends
+            ],
+            "exceptions_count": len(glorfindel_cfg.exceptions),
+        }
+    except Exception:
+        glorfindel_cfg_dict = {"monitoring_backends": [], "action_backends": [], "exceptions_count": 0}
 
     # Detection history: workspaces + TTP coverage from recent signal files
     workspaces: set[str] = set()
@@ -230,6 +260,7 @@ async def config() -> dict:
         "monitoring_backends": backends_info,
         "assets": assets_info,
         "known_resources": known_resources,
+        "glorfindel_config": glorfindel_cfg_dict,
     }
 
 
@@ -471,6 +502,16 @@ async def vm_actions(vm_name: str, limit: int = 5) -> dict:
             break
 
     return {"actions": actions}
+
+
+@app.get("/api/discovered")
+async def discovered_assets() -> dict:
+    """Return assets discovered from monitoring backends."""
+    try:
+        from glorfindel.discovery import get_registry
+        return {"assets": get_registry().to_dicts()}
+    except Exception:
+        return {"assets": []}
 
 
 @app.get("/api/pending/rules")

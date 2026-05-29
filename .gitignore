@@ -18,6 +18,7 @@ build/
 *.tfvars
 !*.tfvars.example
 secrets.yaml
+glorfindel-config.yaml
 
 # Terraform
 infra/terraform/.terraform/

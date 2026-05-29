@@ -46,21 +46,24 @@ class Asset:
 class DetectionRule:
     """A detection rule — query + metadata.
 
-    workspace_id and resource_id are resolved at load time from the
-    referenced asset and monitoring backend. Rules never hardcode them.
+    workspace_id and resource_id are resolved at load time (from explicit
+    assets) or at runtime (from discovered assets when auto_apply=True).
     """
     name: str
     source: str                # "azure_monitor" | "prometheus" | ...
     workspace_id: str          # resolved from MonitoringBackend
     query: str
     ttp: str
-    resource_id: str           # resolved from Asset
+    resource_id: str           # resolved from Asset (empty if auto_apply)
     interval_s: float = 30.0
     enabled: bool = True
     description: str = ""
-    # references (set at load time, empty for old-format rules)
+    # references
     asset_name: str = ""
     monitoring_backend_name: str = ""
+    # auto_apply: True when no explicit assets — applies to all discovered
+    # assets for the monitoring_backend (filtered by GlorfindelConfig.exceptions)
+    auto_apply: bool = False
 
 
 @dataclass
@@ -133,39 +136,47 @@ def load_config(path: str | Path) -> DetectionConfig:
         if not item.get("enabled", True):
             continue
 
-        rule_assets = item.get("assets", [])
+        rule_assets  = item.get("assets", [])
         rule_backends = item.get("monitoring_backends", [])
 
-        # New format: resolve workspace_id and resource_id from references
-        if rule_assets or rule_backends or backends or assets:
-            # Resolve the primary asset
+        # Detect auto-apply: no explicit assets → apply to all discovered assets
+        auto_apply = not rule_assets or rule_assets == ["auto"]
+
+        # Resolve the primary backend
+        if rule_backends:
+            primary_backend_name = rule_backends[0]
+        elif item.get("monitoring_backend"):
+            primary_backend_name = item["monitoring_backend"]
+        else:
+            primary_backend_name = ""
+
+        primary_backend = backend_by_name.get(primary_backend_name)
+
+        if not auto_apply and (backends or assets):
+            # Explicit assets: resolve workspace_id and resource_id from graph
             primary_asset_name = rule_assets[0] if rule_assets else ""
             primary_asset = asset_by_name.get(primary_asset_name)
             resource_id = primary_asset.resource_id if primary_asset else item.get("resource_id", "")
-
-            # Resolve the primary backend (from rule override or from asset)
-            if rule_backends:
-                primary_backend_name = rule_backends[0]
-            elif primary_asset and primary_asset.monitoring_backends:
+            if not primary_backend_name and primary_asset and primary_asset.monitoring_backends:
                 primary_backend_name = primary_asset.monitoring_backends[0]
-            else:
-                primary_backend_name = ""
-            primary_backend = backend_by_name.get(primary_backend_name)
+                primary_backend = backend_by_name.get(primary_backend_name)
             workspace_id = (
                 primary_backend.workspace_id if primary_backend
                 else item.get("workspace_id", "")
             )
-            source = (
-                primary_backend.type if primary_backend
-                else item.get("source", "azure_monitor")
-            )
-        else:
-            # Legacy format: workspace_id and resource_id are inline
+            source = primary_backend.type if primary_backend else item.get("source", "azure_monitor")
+        elif not auto_apply:
+            # Legacy inline format
             workspace_id = item.get("workspace_id", "")
             resource_id  = item.get("resource_id", "")
             source       = item.get("source", "azure_monitor")
-            primary_asset_name   = ""
-            primary_backend_name = ""
+            primary_asset_name = ""
+        else:
+            # Auto-apply: workspace_id from backend, resource_id filled at runtime
+            workspace_id = primary_backend.workspace_id if primary_backend else item.get("workspace_id", "")
+            source       = primary_backend.type if primary_backend else item.get("source", "azure_monitor")
+            resource_id  = ""
+            primary_asset_name = ""
 
         rules.append(DetectionRule(
             name=item["name"],
@@ -179,6 +190,7 @@ def load_config(path: str | Path) -> DetectionConfig:
             description=item.get("description", ""),
             asset_name=primary_asset_name,
             monitoring_backend_name=primary_backend_name,
+            auto_apply=auto_apply,
         ))
 
     return DetectionConfig(backends=backends, assets=assets, rules=rules)
@@ -222,8 +234,57 @@ class RulePoller:
         self._status: dict = _load_status()
         self._lock = threading.Lock()
 
+    def expand_for_discovered(
+        self,
+        registry,              # AssetRegistry
+        glorfindel_cfg=None,   # GlorfindelConfig | None
+    ) -> None:
+        """Expand auto_apply rules against currently discovered assets.
+
+        Starts new poll threads for each (rule, asset) pair not yet running.
+        Safe to call multiple times — skips already-running combinations.
+        """
+        from glorfindel.discovery import AssetRegistry as _Reg
+        running_keys = {t.name for t in self._threads if t.is_alive()}
+
+        for rule in self._rules:
+            if not rule.auto_apply:
+                continue
+            discovered = registry.for_backend(rule.monitoring_backend_name)
+            for asset in discovered:
+                if glorfindel_cfg and glorfindel_cfg.is_excluded(asset.name, rule.name):
+                    continue
+                key = f"rule-{rule.name}@{asset.name}"
+                if key in running_keys:
+                    continue
+                # Materialise a concrete rule for this asset
+                concrete = DetectionRule(
+                    name=rule.name,
+                    source=rule.source,
+                    workspace_id=rule.workspace_id,
+                    query=rule.query,
+                    ttp=rule.ttp,
+                    resource_id=asset.resource_id,
+                    interval_s=rule.interval_s,
+                    enabled=True,
+                    description=rule.description,
+                    asset_name=asset.name,
+                    monitoring_backend_name=rule.monitoring_backend_name,
+                    auto_apply=False,
+                )
+                t = threading.Thread(
+                    target=self._poll_rule,
+                    args=(concrete,),
+                    daemon=True,
+                    name=key,
+                )
+                self._threads.append(t)
+                t.start()
+
     def start(self) -> None:
         for rule in self._rules:
+            if rule.auto_apply:
+                continue  # expanded later via expand_for_discovered()
             t = threading.Thread(
                 target=self._poll_rule,
                 args=(rule,),

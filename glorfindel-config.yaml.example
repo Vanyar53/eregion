@@ -1,0 +1,50 @@
+# Glorfindel infrastructure configuration
+# Copy to glorfindel-config.yaml and fill in your values.
+# This file is mounted as a Docker volume — edit directly, no ${VAR} needed.
+#
+# Credentials (AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, ANTHROPIC_API_KEY...)
+# stay in .envrc or environment variables — not here.
+
+# ── Monitoring backends ────────────────────────────────────────────────────────
+# Detection sources. Glorfindel will query these to detect attacks AND
+# discover which assets are protected (via Heartbeat/equivalent).
+
+monitoring_backends:
+  - name: law-annatar
+    type: azure_monitor
+    # az monitor log-analytics workspace show -g <rg> -n <name> --query customerId -o tsv
+    workspace_id: "YOUR_LAW_WORKSPACE_GUID"
+    discovery:
+      enabled: true
+      interval_s: 1800    # rediscover every 30 min
+
+  # Example: Prometheus backend (uncomment to enable)
+  # - name: prometheus-local
+  #   type: prometheus
+  #   workspace_id: "http://localhost:9090"
+  #   discovery:
+  #     enabled: false    # Prometheus discovery not yet implemented
+
+# ── Action backends ────────────────────────────────────────────────────────────
+# Targets for remediation actions (restore, backup checks...).
+# Not used for detection — no queries run against these.
+
+action_backends:
+  - name: rsv-annatar
+    type: azure_backup_vault
+    vault_name: "rsv-annatar"
+    resource_group: "annatar"
+
+# ── Exceptions ────────────────────────────────────────────────────────────────
+# Opt-out specific assets from auto-discovered monitoring.
+# Uses fnmatch patterns (*, ?, [...] supported).
+
+exceptions: []
+
+  # Example: exclude all dev VMs from all rules
+  # - asset_pattern: "vm-dev-*"
+  #   exclude_all: true
+
+  # Example: exclude a specific VM from one rule only
+  # - asset_pattern: "vm-staging"
+  #   exclude_rules: [ssh-brute-force]

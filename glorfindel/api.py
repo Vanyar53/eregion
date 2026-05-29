@@ -173,12 +173,13 @@ async def config() -> dict:
 
             for a in cfg.assets:
                 rid = a.resource_id or ""
-                backends = a.monitoring_backends
                 assets_info.append({
                     "name": a.name,
                     "type": a.type,
                     "resource_id": rid,
-                    "monitoring_backends": backends,
+                    "monitoring_backends": a.monitoring_backends,
+                    "vault_name": a.vault_name,
+                    "resource_group": a.resource_group,
                 })
                 if rid and "${" not in rid:
                     known_resources.append({
@@ -388,11 +389,19 @@ async def audit_all() -> dict:
     connector = AzureConnector(dry_run=False)
     seen: set[str] = set()
     audits = []
-    vault = os.environ.get("GLORFINDEL_BACKUP_VAULT", "rsv-annatar")
 
-    # Audit from assets (new format) or fall back to rules (legacy)
-    targets = [(a.resource_id, a.name) for a in cfg.assets if a.resource_id and "${" not in a.resource_id]
+    # Vault name: from azure_backup_vault asset, then env var fallback
+    rsv_asset = next((a for a in cfg.assets if a.type == "azure_backup_vault"), None)
+    vault = (
+        rsv_asset.vault_name if rsv_asset and rsv_asset.vault_name and "${" not in rsv_asset.vault_name
+        else os.environ.get("GLORFINDEL_BACKUP_VAULT", "rsv-annatar")
+    )
+
+    # Audit VM assets only (backup vault is an action target, not an auditable VM)
+    vm_assets = [a for a in cfg.assets if a.type == "azure_vm" and a.resource_id and "${" not in a.resource_id]
+    targets = [(a.resource_id, a.name) for a in vm_assets]
     if not targets:
+        # Legacy fallback: rules with inline resource_id
         targets = [
             (r.resource_id, r.asset_name or r.resource_id.split("/")[-1])
             for r in cfg.rules

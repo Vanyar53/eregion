@@ -32,11 +32,14 @@ class MonitoringBackend:
 
 @dataclass
 class Asset:
-    """A monitored infrastructure asset (VM, Storage account, ...)."""
+    """A monitored infrastructure asset (VM, backup vault, storage, ...)."""
     name: str
-    type: str                              # "azure_vm", "azure_storage", ...
-    resource_id: str = ""                  # full Azure resource ID
-    monitoring_backends: list[str] = field(default_factory=list)  # backend names
+    type: str                              # "azure_vm", "azure_backup_vault", ...
+    resource_id: str = ""                  # full Azure resource ID (VMs, storage)
+    monitoring_backends: list[str] = field(default_factory=list)
+    # Fields specific to azure_backup_vault
+    vault_name: str = ""                   # vault short name (rsv-annatar)
+    resource_group: str = ""               # resource group of the vault
 
 
 @dataclass
@@ -117,6 +120,8 @@ def load_config(path: str | Path) -> DetectionConfig:
             type=a.get("type", "azure_vm"),
             resource_id=a.get("resource_id", ""),
             monitoring_backends=a.get("monitoring_backends", []),
+            vault_name=a.get("vault_name", ""),
+            resource_group=a.get("resource_group", ""),
         ))
 
     backend_by_name = {b.name: b for b in backends}

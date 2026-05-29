@@ -179,7 +179,7 @@
     grid-template-areas:
       "network  monitoring"
       "compute  compute"
-      "backup   storage";
+      "backup   backup";
     grid-template-columns: 1fr 1fr;
     grid-template-rows: auto auto auto;
     align-items: start;
@@ -187,6 +187,11 @@
     gap: 10px;
     padding: 12px;
     flex: 1;
+  }
+  .infra-map.no-backup {
+    grid-template-areas:
+      "network  monitoring"
+      "compute  compute";
   }
   .map-svg {
     position: absolute;
@@ -888,7 +893,9 @@ function _computeZone(resourceMap, vmEscs, restoreByVm) {
 
 function _backupZone(rsvEscs, restores) {
   const allAudits    = _auditData?.audits || [];
-  const vault        = allAudits[0]?.vault || 'rsv-annatar';
+  // Vault name: from RSV asset config, then audit data, then fallback
+  const rsvAsset     = (_cfgData?.assets || []).find(a => a.type === 'azure_backup_vault');
+  const vault        = rsvAsset?.vault_name || allAudits[0]?.vault || 'rsv-annatar';
   const backupChecks = allAudits.flatMap(a => (a.checks||[]).filter(c => c.action === 'restore_from_backup'));
   const worst = backupChecks.some(c => c.status === 'fail') ? 'fail'
               : backupChecks.some(c => c.status === 'warn') ? 'warn'
@@ -938,27 +945,6 @@ function _backupZone(rsvEscs, restores) {
   </div>`;
 }
 
-function _storageZone() {
-  const rules      = _cfgData?.detection?.rules || [];
-  const exfilRule  = rules.find(r => r.ttp === 'T1041');
-  const lastMatch  = exfilRule?.last_match;
-  const recent     = lastMatch && (Date.now() - new Date(lastMatch).getTime()) < 10 * 60 * 1000;
-  const dot        = recent ? _dot('var(--orange)') : _dot('var(--green)');
-  const status     = recent ? 'warn' : 'ok';
-
-  return `<div class="map-zone zone-storage ${_zoneClass(status)}" id="zone-storage">
-    <div class="zone-label">STORAGE</div>
-    <div class="map-node">
-      <div class="map-node-header">${dot}<span class="map-node-name">stannatarexfil</span></div>
-      <div class="map-node-body">
-        ${lastMatch
-          ? `<div class="row"><span style="color:var(--orange)">T1041</span>
-             <span style="color:var(--dim)">last event ${_relTime(lastMatch)}</span></div>`
-          : `<div style="color:var(--green)">✓ No exfil detected</div>`}
-      </div>
-    </div>
-  </div>`;
-}
 
 function _drawConnections() {
   const svg = document.getElementById('map-svg');
@@ -985,20 +971,15 @@ function _drawConnections() {
   const mon = bbox('zone-monitoring');
   const cmp = bbox('zone-compute');
   const bkp = bbox('zone-backup');
-  const sto = bbox('zone-storage');
   if (!net || !cmp) return;
 
   const { resources = [] } = _state;
   const isIsolated = resources.some(r => r.states?.some(s => s.type === 'isolated'));
   const isBlocked  = resources.some(r => r.states?.some(s => s.type === 'blocked'));
   const hasDetErr  = (_cfgData?.detection?.rules || []).some(r => r.last_error);
-  const exfilRule  = (_cfgData?.detection?.rules || []).find(r => r.ttp === 'T1041');
-  const exfilRecent = exfilRule?.last_match &&
-    (Date.now() - new Date(exfilRule.last_match).getTime()) < 10 * 60 * 1000;
 
   const netColor = isIsolated ? '#e74c3c' : isBlocked ? '#f39c12' : '#556';
   const monColor = hasDetErr  ? '#e74c3c' : '#2ecc71';
-  const stoColor = exfilRecent ? '#f39c12' : '#556';
   const bkpColor = '#556';
 
   const defs = `<defs>
@@ -1032,12 +1013,8 @@ function _drawConnections() {
   // MONITORING → COMPUTE (enters right side)
   if (mon) lines.push(seg(mon.cx, mon.bottom + 2, mon.cx, cmp.top - 4, monColor, '4,3'));
 
-  // COMPUTE → BACKUP
+  // COMPUTE → BACKUP (only if RSV asset is configured)
   if (bkp) lines.push(seg(bkp.cx, cmp.bottom + 2, bkp.cx, bkp.top - 4, bkpColor));
-
-  // COMPUTE → STORAGE
-  if (sto) lines.push(seg(sto.cx, cmp.bottom + 2, sto.cx, sto.top - 4, stoColor,
-    exfilRecent ? '4,3' : ''));
 
   svg.innerHTML = lines.join('\n');
 }
@@ -1075,6 +1052,7 @@ function renderInfra() {
 
   const detectionEscs = escalations.filter(e => e.action === 'improve_detection');
   const rsvEscs       = escalations.filter(e => e.action === 'restore_from_backup');
+  const hasRsv        = (_cfgData?.assets || []).some(a => a.type === 'azure_backup_vault');
   const vmEscs        = escalations.filter(e => !['improve_detection','restore_from_backup'].includes(e.action));
 
   const resourceMap = new Map();
@@ -1099,10 +1077,13 @@ function renderInfra() {
     ${_networkZone(resources, escalations)}
     ${_monitoringZone(rules)}
     ${_computeZone(resourceMap, vmEscs, restoreByVm)}
-    ${_backupZone(rsvEscs, restores)}
-    ${_storageZone()}
+    ${hasRsv ? _backupZone(rsvEscs, restores) : ''}
   </div>
   ${lawEscHtml ? `<div style="padding:0 12px 12px">${lawEscHtml}</div>` : ''}`;
+
+  // Adjust grid layout based on whether RSV asset is configured
+  const mapEl = document.getElementById('infra-map');
+  if (mapEl) mapEl.classList.toggle('no-backup', !hasRsv);
 
   requestAnimationFrame(_drawConnections);
 }

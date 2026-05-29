@@ -179,7 +179,10 @@ A `/pending` slash command lists open escalations. Set `DISCORD_PING_ROLE` to no
 ```bash
 # Glorfindel
 glorfindel watch runs/                          # real-time response during an Annatar run
-glorfindel watch runs/ --rules detection_rules.yaml  # + continuous detection polling
+glorfindel watch runs/ --rules glorfindel/rules/azure/detection_rules.yaml  # + continuous detection polling
+glorfindel audit <resource_id>                  # remediation readiness: NSG, backup, IAM
+glorfindel audit --all                          # audit all resources in detection_rules.yaml
+glorfindel approve-rule <id>                    # apply a proposed detection rule to detection_rules.yaml
 glorfindel respond runs/<run_id>_signals.jsonl  # post-run processing
 glorfindel restore <resource_id> --yes          # trigger Azure Backup restore (--before auto-detected)
 glorfindel release <resource_id> --yes          # manually release an isolation
@@ -237,36 +240,38 @@ See [.envrc.example](.envrc.example) for a ready-to-fill template with provider 
 
 ```
 glorfindel/
-  agent.py        → LangGraph graph (6 nodes): load_context → poll_detection → decide
-                    → execute_action → verify_action → store_cycle
-  actions.py      → CloudConnector ABC + AzureConnector (isolate, release, block, unblock, snapshot, verify_*)
-  detectors.py          → DetectionConnector ABC + AzureMonitorDetector (polls every 10s)
-  detection_rules.py    → DetectionRule dataclass + RulePoller: continuous rule-based polling (independent of Annatar)
+  agent.py             → LangGraph graph (7 nodes): load_context → [poll_detection|propose_detection_rule]
+                         → decide → execute_action → verify_action → store_cycle
+  actions.py           → CloudConnector ABC + AzureConnector (isolate, release, block, unblock, snapshot, verify_*, audit checks)
+  detectors.py         → DetectionConnector ABC + AzureMonitorDetector
+  detection_rules.py   → DetectionRule dataclass + RulePoller: continuous polling, status persistence
+  audit.py             → AuditCheck, AuditResult, run(): NSG / backup / compute readiness checks
+  proposed_rules.py    → record/pending/approve(): detection rule proposal lifecycle
   rules/azure/
-    detection_rules.yaml → 4 continuous detection rules (T1486/T1041/T1110/T1548) — fill workspace_id + resource_id
-  incidents.py    → IncidentRegistry: groups signals by resource_id within a TTL window (~/.glorfindel/incidents.jsonl)
-  memory.py       → CycleMemory: ChromaDB with confidence + past_cycles_used metadata
-  cli.py          → watch (threaded, per-resource queues), respond, restore, release, unblock, pending, ack, check-ttl, bot, dashboard, war-room
-  escalations.py  → persistent escalation log (~/.glorfindel/escalations.jsonl)
-  bot.py          → Discord bot: one thread per VM, interactive embeds, Ack/Command buttons, /pending slash command
-  tui.py          → Rich full-screen TUI dashboard: resources + live feed + escalations (glorfindel dashboard)
-  api.py          → FastAPI backend for War Room: /api/state, /api/feed (WebSocket), action endpoints
-  static/index.html → War Room web UI: VM incident cards, live feed, action buttons (glorfindel war-room)
+    detection_rules.yaml → detection rules (source → query language: azure_monitor=KQL, prometheus=PromQL, …)
+  incidents.py         → IncidentRegistry: groups signals by resource_id within a TTL window
+  memory.py            → CycleMemory: ChromaDB with confidence + past_cycles_used metadata
+  cli.py               → watch, respond, restore, release, unblock, revert, list, pending, ack,
+                         audit, approve-rule, check-ttl, bot, dashboard, war-room
+  escalations.py       → persistent escalation log (~/.glorfindel/escalations.jsonl)
+  bot.py               → Discord bot: one thread per VM, Ack/Restore/Revert buttons, /pending command
+  tui.py               → Rich full-screen TUI: resources + feed + escalations, keyboard shortcuts a/r/v
+  api.py               → FastAPI War Room: /api/state, /api/feed (WS), /api/config, /api/audit,
+                         /api/pending/rules, /api/action/*
+  static/index.html    → War Room: incident cards, live feed, action buttons, Config panel (rules + audit)
 
 annatar/
-  runner/engine.py    → preflight → setup → integrity check → attack → emit attack_started
+  runner/engine.py    → setup → integrity check → attack → emit attack_started → purple-team feedback thread
   signals/emitter.py  → normalized JSONL signal emitter
+  scenarios/azure/
+    ransomware-vm.yaml          → T1486 (detection: timeout + prerequisites + hints)
+    data-exfiltration.yaml      → T1041
+    lateral-movement.yaml       → T1110.001
+    privilege-escalation.yaml   → T1548.003
 
 > **Annatar never uses SSH.** Scripts are pushed to the VM via Azure Run Command (Azure VM Agent
 > over the Wire Protocol — control plane only). The VM needs no SSH access and no public IP for
 > Annatar to work. The only credential required is the Service Principal used for the Azure SDK.
-
-annatar/
-  scenarios/azure/
-    ransomware-vm.yaml          → T1486
-    data-exfiltration.yaml      → T1041
-    lateral-movement.yaml       → T1110.001
-    privilege-escalation.yaml   → T1548.003
 
 schemas/
   scenario.schema.json → JSON Schema for IDE validation of scenario YAML files
@@ -325,17 +330,17 @@ glorfindel revert <resource_id> --yes      # release isolation + unblock all IPs
 
 **StorageBlobLogs**: near-realtime (seconds). `AzureNetworkAnalytics_CL` (Traffic Analytics) is unusable for detection — 10-60 min latency.
 
-**Each scenario declares its prerequisites** in a `prerequisites:` block with KQL verification queries. Run those queries in Log Analytics before launching — if any returns no rows, the detection will time out.
+**Each scenario's detection block** contains prerequisites (KQL verification queries) and hints (purple-team context for `detection_missed` feedback). Run the prerequisite queries in your monitoring system before launching — if any returns no rows, detection will time out.
 
 ## Tests
 
 ```bash
 pip install eregion[dev]
 pytest
-# 104 tests — 0 Azure calls, 0 LLM calls
+# 132 tests — 0 Azure calls, 0 LLM calls
 ```
 
-Coverage: 6 LangGraph nodes, routing rules, signal schema, safety guard, YAML parser, ChromaDB memory, CLI escalation flow, T1548 privilege escalation detection, detection rules (RulePoller, load_rules, status persistence).
+Coverage: 7 LangGraph nodes (incl. propose_detection_rule), routing rules, signal schema, safety guard, YAML parser, ChromaDB memory, CLI escalation flow, detection rules (RulePoller), proposed rules lifecycle, audit readiness checks (NSG/backup/compute/IAM).
 
 ## License
 

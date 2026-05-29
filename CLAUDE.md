@@ -122,33 +122,45 @@ Quand `signals_count > 1` ou `actions_taken` non vide → prompt injecte context
 
 ```
 glorfindel/
-  agent.py              → LangGraph 6 nodes + system prompt
-  actions.py            → CloudConnector ABC + AzureConnector (isolate, release, block, unblock, snapshot, verify_*)
+  agent.py              → LangGraph 7 nodes + _SOURCE_LANGUAGES map (source → query lang)
+                          load_context → [poll_detection | propose_detection_rule] → decide
+                          → execute_action → verify_action → store_cycle
+  actions.py            → CloudConnector ABC + AzureConnector + check_nsg_access/check_backup_points/check_compute_access
   detectors.py          → DetectionConnector ABC + AzureMonitorDetector (poll 10s)
   detection_rules.py    → DetectionRule dataclass + RulePoller (continuous polling, status persistence)
+  audit.py              → AuditCheck, AuditResult, run() — NSG/backup/compute readiness checks, IAM gap detection
+  proposed_rules.py     → record/pending/approve() — detection rule proposal lifecycle
   memory.py             → CycleMemory ChromaDB (confidence + past_cycles_used)
   incidents.py          → IncidentRegistry (TTL, persist, thread-safe)
-  cli.py                → watch (+ --rules flag), respond, restore, release, unblock, revert, list, pending, ack, check-ttl, bot, dashboard, war-room
-  escalations.py        → ~/.glorfindel/escalations.jsonl + _ACTION_LABELS + _ESCALATION_LABELS
+  cli.py                → watch, respond, restore, release, unblock, revert, list, pending, ack,
+                          audit (--all), approve-rule, check-ttl, bot, dashboard, war-room
+  escalations.py        → ~/.glorfindel/escalations.jsonl + labels (proposed_rule, improve_detection ajoutés)
   bot.py                → Discord bot — un fil par VM, boutons Acquitter + Commande, /pending slash command
-  tui.py                → Rich TUI full-screen (glorfindel dashboard) : resources + feed + escalations, refresh 2s, raccourcis a/r/v
-  api.py                → FastAPI War Room backend — /api/state, /api/feed (WebSocket), /api/config (rules+status), /api/action/*
-  static/index.html     → War Room web UI — cards VM, feed live, boutons Revert/Restore/Ack, panneau Config avec règles
+  tui.py                → Rich TUI full-screen (glorfindel dashboard) : resources + feed + escalations, raccourcis a/r/v
+  api.py                → FastAPI War Room — /api/state, /api/feed (WS), /api/config, /api/audit[/<vm>],
+                          /api/pending/rules, /api/action/{revert,restore,ack,approve-rule}
+  static/index.html     → War Room web UI — cards VM, feed live, boutons Revert/Restore/Ack,
+                          panneau Config (règles + audit remédiation + proposed rules)
   rules/azure/
-    detection_rules.yaml → Règles de détection continues (indépendant d'Annatar) — 4 règles Azure Monitor (T1486, T1041, T1110, T1548)
+    detection_rules.yaml → source de vérité detection — source détermine le langage de query
+                           (azure_monitor=KQL, prometheus=PromQL, splunk=SPL, etc.)
 
 annatar/
-  runner/engine.py    → setup AVANT integrity check → attack → emit attack_started
+  runner/engine.py    → setup → integrity check → attack → emit attack_started (sans query — Glorfindel résout via detection_rules.yaml)
+                        → thread daemon feedback: si detection_timeout → emit detection_missed
+  runner/parser.py    → Scenario dataclass simplifié (detection: timeout/prerequisites/hints)
   signals/schema.py   → Signal + severity_for_ttp (T1486/T1041/T1110/T1548)
   signals/emitter.py  → signal normalisé JSONL
 
 annatar/scenarios/azure/
-  ransomware-vm.yaml          → T1486 (setup_testdata.sh ici uniquement)
+  Structure: name, mitre, target, setup, steps, detection{timeout, prerequisites, hints}
+  ransomware-vm.yaml          → T1486
   data-exfiltration.yaml      → T1041
   lateral-movement.yaml       → T1110.001
   privilege-escalation.yaml   → T1548.003
+  (cleanup/recovery/source/query/workspace_id supprimés — appartiennent à Glorfindel)
 
-schemas/scenario.schema.json  → JSON Schema validation IDE
+schemas/scenario.schema.json  → JSON Schema validation IDE (mis à jour: prerequisites→detection.prerequisites)
 terraform/                    → infra complète Azure (VM, NSG, LAW, Backup, DCR, StorageBlobLogs)
 
 ~/.glorfindel/
@@ -156,6 +168,7 @@ terraform/                    → infra complète Azure (VM, NSG, LAW, Backup, D
   incidents.jsonl             → incidents actifs
   isolation/<vm>.json         → état NSG isolation + TTL
   blocks/<vm>.json            → IPs bloquées par VM
+  proposed_rules.jsonl        → règles de détection proposées (en attente d'approbation)
   bot_posted.json             → IDs escalades déjà postées (évite doublons au redémarrage du bot)
   bot_threads.json            → resource_id → thread_id Discord (persistance entre redémarrages)
   rule_status.json            → état de polling des règles (last_poll, last_match, match_count, last_error)
@@ -190,7 +203,7 @@ glorfindel list                              # toutes VMs : isolations + IPs blo
 glorfindel pending                           # escalades en attente
 glorfindel pending --watch                   # alerting temps réel
 
-# Actions
+# Actions remédiation
 glorfindel revert <resource_id> --yes        # reset complet : release + unblock toutes IPs
 glorfindel release <resource_id> --yes       # isolation seule
 glorfindel unblock <ip> <resource_id> --yes  # IP seule
@@ -198,6 +211,16 @@ glorfindel restore <resource_id> --yes       # Azure Backup (--before auto-déte
 glorfindel ack <escalation_id>               # acquitter escalade
 glorfindel ack --all                         # acquitter toutes
 glorfindel check-ttl                         # libérer isolations expirées
+
+# Audit remédiation — vérifier que Glorfindel peut agir avant l'incident
+glorfindel audit <resource_id>               # NSG / backup / compute / IAM
+glorfindel audit --all                       # toutes ressources de detection_rules.yaml
+glorfindel audit --all --vault <nom>         # vault non-défaut (défaut: rsv-annatar)
+
+# Boucle purple team — apprentissage détection
+glorfindel pending                           # voir les règles proposées (proposed_rule)
+glorfindel approve-rule <id>                 # appliquer la règle → detection_rules.yaml
+
 glorfindel memory-stats                      # ChromaDB cycle count
 glorfindel bot                               # démarrer le bot Discord interactif
 glorfindel dashboard                         # TUI full-screen : resources + feed + escalations
@@ -230,10 +253,12 @@ GLORFINDEL_INCIDENT_TTL_S=300       # TTL fenêtre incident
 ## Tests
 
 ```bash
-pytest                    # 104 tests, 0 appel Azure, 0 appel LLM, 0 écriture ~/.glorfindel/
+pytest                    # 132 tests, 0 appel Azure, 0 appel LLM, 0 écriture ~/.glorfindel/
 pytest tests/unit/test_agent_nodes.py        # 30 tests LangGraph nodes
 pytest tests/unit/test_glorfindel.py         # 27 tests actions/routing/signals
 pytest tests/unit/test_detection_rules.py    # 14 tests RulePoller + load_rules + status
+pytest tests/unit/test_proposed_rules.py     # 14 tests record/pending/approve + routing
+pytest tests/unit/test_audit.py              # 14 tests NSG/backup/compute/IAM readiness
 ```
 
 ---
@@ -299,7 +324,7 @@ az network nsg rule list -g annatar --nsg-name nsg-annatar -o table
 
 `gf pending` affiche les escalades avec **next steps générés par le LLM** (`suggested_steps`), contextuels à l'historique ChromaDB. Fallback statique pour les anciennes escalades sans ce champ.
 
-Types d'escalade : `low_confidence` (detection_timeout + snapshot), `destructive_action` (HUMAN_APPROVAL_REQUIRED), `proposed_action` (action inconnue), `verification_failed`.
+Types d'escalade : `low_confidence` (detection_timeout + snapshot), `destructive_action` (HUMAN_APPROVAL_REQUIRED), `proposed_action` (action inconnue), `verification_failed`, `proposed_rule` (règle de détection proposée après detection_missed).
 
 `gf ack <id>` / `gf ack --all` → marque `resolved` dans `~/.glorfindel/escalations.jsonl`. Purement administratif — ne fait rien sur Azure. `restore_from_backup` auto-acquitte via `resolve_by_resource`.
 
@@ -334,18 +359,56 @@ Types d'escalade : `low_confidence` (detection_timeout + snapshot), `destructive
 5. **Schéma normalisé `first_result_row`** — prérequis tous connecteurs
 6. **AWS provider** — `AwsConnector` + CloudWatch/GuardDuty
 7. **Prometheus + Loki** — stack open source dominante
-8. **Apprentissage détection** — boucle de feedback sur les règles (voir ci-dessous)
 
-## Apprentissage — détection vs réaction
+## Boucle purple team — implémentée
 
-**Réaction** : le LLM raisonne librement depuis signal + incident context + RAG ChromaDB. L'apprentissage est implicite et continu — plus ChromaDB accumule de cycles, plus le RAG est pertinent. Aucune règle explicite.
+**Détection manquée :**
+```
+Annatar attaque → detection_timeout
+  → thread daemon (_wait_and_emit_feedback) poll runs/<run_id>_debug.jsonl
+  → émet detection_missed {TTP, detection.hints, failed_query, source}
+  → Glorfindel: propose_detection_rule node (LLM)
+  → propose une query dans le bon langage (source → _SOURCE_LANGUAGES)
+  → ~/.glorfindel/proposed_rules.jsonl + escalation proposed_rule
+  → glorfindel pending / War Room ⚙ → Approve
+  → glorfindel approve-rule <id> → detection_rules.yaml
+  → restart watch → règle active au prochain run
+```
 
-**Détection** : les règles actuelles (`glorfindel/rules/azure/detection_rules.yaml`) sont statiques — seuils KQL figés, pas de feedback. C'est le vrai terrain d'apprentissage :
-- **Calibration des seuils** : `verified=False` après un match de règle = faux positif → seuil trop bas
-- **Amélioration des queries** : après `detection_timeout`, le LLM propose une query alternative à partir du contexte de l'attaque
-- **Découverte de nouvelles règles** : patterns non couverts suggérés post-incident
+**Remédiation non prête :**
+```
+glorfindel audit --all (ou watch startup)
+  → AuditCheck par action: NSG (isolate_vm/block), backup (restore), compute (snapshot)
+  → status: ok / warn (backup > 48h) / fail (IAM gap ou config manquante)
+  → fix: commande az exacte pour corriger le trou
+  → War Room ⚙ → section Remediation readiness par ressource
+```
 
-Le ratio signal/bruit est le problème principal de la détection. ChromaDB stocke déjà `verified`, `confidence`, et `ttp` — il y a suffisamment de données pour une boucle de feedback.
+**Deux asymétries intentionnelles :**
+- Réaction = LLM libre + RAG ChromaDB — apprentissage implicite, continu, aucune règle
+- Détection = règles explicites (`detection_rules.yaml`) — source de vérité, query language = fonction du `source`
+- Audit = vérification IAM + infra — détecte les trous *avant* l'incident
+
+## Conventions scénarios Annatar
+
+```yaml
+# Structure minimale après refactoring :
+detection:
+  timeout: "300s"       # Annatar feedback watcher
+  time_max: "180s"      # SLA déclaré (optionnel)
+  prerequisites:        # ce qu'il faut vérifier avant de lancer
+    - name: ...
+      why: ...
+      verify: "KQL ou commande az"
+  hints:                # contexte pour propose_detection_rule
+    log_source: Perf
+    attack_commands_summary: >
+      ...
+    expected_indicators: [...]
+    failure_candidates: [...]
+```
+
+Supprimés des scénarios : `cleanup`, `recovery`, `source`, `workspace_id`, `query` (tout dans Glorfindel).
 
 ---
 

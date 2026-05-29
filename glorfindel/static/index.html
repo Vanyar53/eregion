@@ -162,6 +162,33 @@
     color: var(--dim);
   }
   .rule-pill .rule-name { color: var(--text); }
+  #readiness-strip {
+    padding: 6px 12px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 10px;
+    flex-shrink: 0;
+  }
+  .readiness-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 3px 6px;
+    border-radius: 4px;
+    transition: background .2s;
+  }
+  .readiness-row.incident-active {
+    background: color-mix(in srgb, var(--red) 8%, transparent);
+    border-left: 2px solid var(--red);
+  }
+  .readiness-vm { color: var(--text); font-weight: 700; min-width: 120px; }
+  .readiness-badge {
+    display: flex; align-items: center; gap: 3px;
+    padding: 1px 5px; border-radius: 3px;
+    background: var(--bg2);
+  }
   #incidents-list {
     flex: 1;
     overflow-y: auto;
@@ -384,6 +411,7 @@
   <div id="incidents-col">
     <div class="col-header" id="right-col-header">INCIDENTS</div>
     <div id="rules-strip"></div>
+    <div id="readiness-strip"></div>
     <div id="incidents-list">
       <div class="empty-state">
         <div class="check">✓</div>
@@ -906,7 +934,15 @@ async function refreshState() {
     const r = await fetch('/api/state');
     _state = await r.json();
     renderIncidents();
+    _updateReadinessHighlight();
   } catch (e) {}
+}
+
+function _updateReadinessHighlight() {
+  const activeIds = new Set((_state.resources || []).map(r => r.resource_id));
+  document.querySelectorAll('.readiness-row[data-rid]').forEach(row => {
+    row.classList.toggle('incident-active', activeIds.has(row.dataset.rid));
+  });
 }
 
 setInterval(refreshState, 5000);
@@ -1089,52 +1125,70 @@ async function refreshConfig() {
         </div>` : ''}
       </div>
 
-      <div class="cfg-section">
-        <div class="cfg-section-title">Remediation readiness</div>
-        <div id="audit-content"><span style="color:var(--dim)">Loading…</span></div>
-      </div>`;
+      `;
 
-    refreshAudit();
   } catch (e) {
     panel.innerHTML = `<div style="color:var(--red);padding:16px">Failed to load config: ${e.message}</div>`;
   }
 }
 
-// ── Audit ──────────────────────────────────────────────────────────────────────
+// ── Readiness strip ────────────────────────────────────────────────────────────
 
-async function refreshAudit() {
-  const el = document.getElementById('audit-content');
-  if (!el) return;
+const ACTION_GROUPS = [
+  { label: 'NSG',    actions: ['isolate_vm', 'block_suspicious_ip'] },
+  { label: 'Backup', actions: ['restore_from_backup'] },
+  { label: 'Compute',actions: ['snapshot'] },
+];
+
+function _worstStatus(checks, actions) {
+  const relevant = checks.filter(c => actions.includes(c.action));
+  if (!relevant.length) return 'skip';
+  if (relevant.some(c => c.status === 'fail'))  return 'fail';
+  if (relevant.some(c => c.status === 'warn'))  return 'warn';
+  if (relevant.every(c => c.status === 'ok'))   return 'ok';
+  return 'skip';
+}
+
+function _statusBadge(status, label) {
+  const [icon, col] = status === 'ok'   ? ['✓', 'var(--green)']
+                    : status === 'warn' ? ['⚠', 'var(--orange)']
+                    : status === 'fail' ? ['✗', 'var(--red)']
+                    :                    ['—', 'var(--dim)'];
+  return `<span class="readiness-badge" title="${label}">
+    <span style="color:${col}">${icon}</span>
+    <span style="color:var(--dim)">${label}</span>
+  </span>`;
+}
+
+async function refreshReadiness() {
+  const strip = document.getElementById('readiness-strip');
+  if (!strip) return;
   try {
     const r = await fetch('/api/audit');
     const d = await r.json();
     const audits = d.audits || [];
-    if (!audits.length) {
-      el.innerHTML = `<div class="cfg-row"><span class="cfg-val" style="color:var(--dim)">No resources configured in detection_rules.yaml</span></div>`;
-      return;
-    }
-    el.innerHTML = audits.map(a => {
+    if (!audits.length) { strip.innerHTML = ''; return; }
+
+    const activeResourceIds = new Set((_state.resources || []).map(r => r.resource_id));
+
+    strip.innerHTML = audits.map(a => {
       const vm = a.resource_id.split('/').pop();
-      const allOk = a.ready;
-      const headerColor = allOk ? 'var(--green)' : 'var(--red)';
-      const icon = allOk ? '✓' : '✗';
-      const rows = a.checks.map(c => {
-        const col = c.status === 'ok' ? 'var(--green)' : c.status === 'warn' ? 'var(--orange)' : c.status === 'fail' ? 'var(--red)' : 'var(--dim)';
-        const badge = c.status === 'ok' ? '✓' : c.status === 'warn' ? '⚠' : c.status === 'fail' ? '✗' : '—';
-        return `<div class="cfg-row" style="padding-left:8px">
-          <span class="cfg-key" style="font-size:10px">${c.name}</span>
-          <span class="cfg-val" style="color:${col};font-size:10px">${badge} ${c.message}</span>
-        </div>
-        ${c.fix ? `<div class="cfg-row" style="padding-left:8px"><span class="cfg-val" style="color:var(--dim);font-size:10px">Fix: <code>${c.fix}</code></span></div>` : ''}`;
-      }).join('');
-      return `<div style="margin-bottom:10px">
-        <div style="color:${headerColor};font-weight:700;font-size:11px;margin-bottom:4px">${icon} ${vm}</div>
-        ${rows}
+      const isActive = activeResourceIds.has(a.resource_id);
+      const badges = ACTION_GROUPS.map(g =>
+        _statusBadge(_worstStatus(a.checks, g.actions), g.label)
+      ).join('');
+      const fixRows = a.checks
+        .filter(c => c.fix && c.status !== 'ok')
+        .map(c => `<span style="color:var(--dim);font-size:9px" title="${c.fix}">fix: ${c.fix.slice(0,60)}…</span>`)
+        .join('');
+      return `<div class="readiness-row${isActive ? ' incident-active' : ''}" data-rid="${a.resource_id}">
+        <span class="readiness-vm">${vm}</span>
+        ${badges}
+        ${fixRows}
       </div>`;
     }).join('');
   } catch (e) {
-    const el2 = document.getElementById('audit-content');
-    if (el2) el2.innerHTML = `<span style="color:var(--dim)">Audit unavailable (no Azure credentials)</span>`;
+    strip.innerHTML = `<span style="color:var(--dim);font-size:10px;padding:4px 6px">Readiness unavailable (no Azure credentials)</span>`;
   }
 }
 
@@ -1187,6 +1241,8 @@ function showToast(msg, isError = false) {
   connectWS();
   refreshRulesStrip();
   setInterval(refreshRulesStrip, 30000);
+  refreshReadiness();
+  setInterval(refreshReadiness, 300000);
 })();
 </script>
 </body>

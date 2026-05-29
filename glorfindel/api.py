@@ -412,6 +412,17 @@ async def approve_rule(proposal_id: str) -> dict:
         return {"error": str(e)}
 
 
+@app.post("/api/action/reject-rule/{proposal_id}")
+async def action_reject_rule(proposal_id: str) -> dict:
+    """Reject a proposed detection rule without adding it to detection_rules.yaml."""
+    try:
+        from glorfindel.proposed_rules import reject
+        proposal = reject(proposal_id)
+        return {"ok": True, "rule_name": proposal["rule_name"]}
+    except ValueError as e:
+        return {"error": str(e)}
+
+
 _RESTORE_TRACKING = Path.home() / ".glorfindel" / "restore_in_progress.json"
 
 

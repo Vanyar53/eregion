@@ -88,6 +88,30 @@ def approve(proposal_id: str, rules_yaml_path: str | Path) -> dict:
     return proposal
 
 
+def reject(proposal_id: str) -> dict:
+    """Mark a proposal as rejected without touching detection_rules.yaml."""
+    if not _STORE.exists():
+        raise ValueError(f"Proposal {proposal_id} not found")
+
+    lines = _STORE.read_text().splitlines()
+    proposal: dict | None = None
+    updated = []
+    for line in lines:
+        if not line.strip():
+            continue
+        p = json.loads(line)
+        if p["id"] == proposal_id and p["status"] == "pending":
+            p["status"] = "rejected"
+            proposal = p
+        updated.append(json.dumps(p))
+
+    if proposal is None:
+        raise ValueError(f"Proposal {proposal_id} not found or not pending")
+
+    _STORE.write_text("\n".join(updated) + "\n")
+    return proposal
+
+
 def _append_to_rules_yaml(proposal: dict, rules_path: Path) -> None:
     indented_query = "".join(
         f"      {line}\n" for line in proposal["query"].splitlines()

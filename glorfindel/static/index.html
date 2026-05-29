@@ -639,7 +639,8 @@ function renderIncidents() {
       const queryHtml = isRuleProposal && e.proposed_query ? `
         <pre class="esc-query">${e.proposed_query.trim()}</pre>` : '';
       const approveBtn = isRuleProposal ? `
-        <button class="action ok" onclick="doApproveRule('${e.proposal_id}','${escId}')" style="flex-shrink:0">✓ Approve rule</button>` : '';
+        <button class="action ok" onclick="doApproveRule('${e.proposal_id}','${escId}')" style="flex-shrink:0">✓ Approve rule</button>
+        <button class="action" onclick="doRejectRule('${e.proposal_id}','${escId}')" style="flex-shrink:0;color:var(--red)">✗ Reject</button>` : '';
       return `<div class="esc-item">
         <div class="esc-item-header">
           <span class="esc-action-label">🚨 ${label}</span>
@@ -703,6 +704,20 @@ async function doApproveRule(proposalId, escId) {
     const d = await r.json();
     if (d.ok) {
       toast(`✓ Rule '${d.rule_name}' added to detection_rules.yaml — restart watch to activate`);
+      await doAck(escId);
+      refreshState();
+    } else {
+      toast('Error: ' + (d.error || 'unknown'), true);
+    }
+  } catch (e) { toast('Error: ' + e.message, true); }
+}
+
+async function doRejectRule(proposalId, escId) {
+  try {
+    const r = await fetch(`/api/action/reject-rule/${proposalId}`, {method: 'POST'});
+    const d = await r.json();
+    if (d.ok) {
+      toast(`✗ Rule '${d.rule_name}' rejected`);
       await doAck(escId);
       refreshState();
     } else {
@@ -1064,11 +1079,6 @@ async function refreshConfig() {
         </table>` : `<div class="cfg-row"><span class="cfg-val" style="color:var(--dim)">No detection_rules.yaml found</span></div>`}
       </div>
 
-      <div class="cfg-section" id="proposed-rules-section" style="display:none">
-        <div class="cfg-section-title" style="color:var(--cyan)">⚡ Proposed detection rules</div>
-        <div id="proposed-rules-list"></div>
-      </div>
-
       <div class="cfg-section">
         <div class="cfg-section-title">NSG state</div>
         ${d.state.isolations.length
@@ -1089,7 +1099,6 @@ async function refreshConfig() {
         <div id="audit-content"><span style="color:var(--dim)">Loading…</span></div>
       </div>`;
 
-    await refreshProposedRules();
     refreshAudit();
   } catch (e) {
     panel.innerHTML = `<div style="color:var(--red);padding:16px">Failed to load config: ${e.message}</div>`;
@@ -1134,51 +1143,6 @@ async function refreshAudit() {
   }
 }
 
-// ── Proposed rules ─────────────────────────────────────────────────────────────
-
-async function refreshProposedRules() {
-  try {
-    const r = await fetch('/api/pending/rules');
-    const d = await r.json();
-    const proposals = d.proposals || [];
-    const section = document.getElementById('proposed-rules-section');
-    const list = document.getElementById('proposed-rules-list');
-    if (!proposals.length) { section.style.display = 'none'; return; }
-    section.style.display = '';
-    list.innerHTML = proposals.map(p => {
-      const vm = p.resource_id.split('/').pop();
-      const conf = Math.round(p.confidence * 100);
-      return `<div class="esc-item" style="border-left:2px solid var(--cyan);margin-bottom:12px">
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
-          <span style="color:var(--cyan);font-weight:700">${p.rule_name}</span>
-          <span class="cfg-badge dim">${p.ttp || '—'}</span>
-          <span class="cfg-badge dim">${vm}</span>
-          <span class="cfg-badge ${conf >= 70 ? 'ok' : 'warn'}">${conf}% confidence</span>
-        </div>
-        <div class="esc-reason" style="margin-bottom:4px">${p.analysis}</div>
-        <div class="esc-reason" style="color:var(--text);margin-bottom:6px">${p.explanation}</div>
-        <pre style="background:var(--bg2);padding:8px;border-radius:4px;font-size:10px;overflow-x:auto;white-space:pre-wrap;color:var(--blue);margin-bottom:8px">${p.query.trim()}</pre>
-        <div style="display:flex;gap:8px">
-          <button class="action ok" onclick="approveRule('${p.id}')">✓ Approve &amp; add to rules</button>
-        </div>
-      </div>`;
-    }).join('');
-  } catch (e) {}
-}
-
-async function approveRule(proposalId) {
-  try {
-    const r = await fetch(`/api/action/approve-rule/${proposalId}`, {method: 'POST'});
-    const d = await r.json();
-    if (d.ok) {
-      showToast(`Rule '${d.rule_name}' approved — restart watch to activate`);
-      refreshProposedRules();
-      refreshConfig();
-    } else {
-      showToast(`Error: ${d.error}`, true);
-    }
-  } catch (e) { showToast(`Error: ${e.message}`, true); }
-}
 
 function showToast(msg, isError = false) {
   const t = document.createElement('div');
@@ -1197,9 +1161,6 @@ function showToast(msg, isError = false) {
   await refreshState();
   await refreshWatchStatus();
   connectWS();
-  // Poll for proposed rules every 30s even when config panel is closed
-  refreshProposedRules();
-  setInterval(refreshProposedRules, 30000);
 })();
 </script>
 </body>

@@ -375,6 +375,54 @@ async def audit_all() -> dict:
     return {"audits": audits}
 
 
+@app.get("/api/actions/{vm_name}")
+async def vm_actions(vm_name: str, limit: int = 5) -> dict:
+    """Return recent Glorfindel decisions for a VM (reasoning + confidence)."""
+    import time as _time
+    runs = Path("runs")
+    if not runs.exists():
+        return {"actions": []}
+
+    cutoff = _time.time() - 24 * 3600
+    actions: list[dict] = []
+
+    for f in sorted(
+        runs.glob("*_debug.jsonl"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    ):
+        if f.stat().st_mtime < cutoff:
+            break
+        for line in reversed(f.read_text().splitlines()):
+            if not line.strip():
+                continue
+            try:
+                d = json.loads(line)
+                rid = (d.get("signal") or {}).get("resource_id", "")
+                if rid.split("/")[-1] != vm_name:
+                    continue
+                action = d.get("action", "")
+                if not action or action in ("snapshot",):
+                    continue
+                actions.append({
+                    "action": action,
+                    "reasoning": (d.get("reasoning") or "")[:200],
+                    "confidence": d.get("confidence"),
+                    "timestamp": d.get("timestamp", ""),
+                    "outcome": (d.get("outcome") or {}).get("status", ""),
+                    "ttp": (d.get("signal") or {}).get("ttp", ""),
+                    "escalate": d.get("escalate", False),
+                })
+                if len(actions) >= limit:
+                    break
+            except Exception:
+                pass
+        if len(actions) >= limit:
+            break
+
+    return {"actions": actions}
+
+
 @app.get("/api/pending/rules")
 async def pending_rules() -> dict:
     from glorfindel.proposed_rules import pending

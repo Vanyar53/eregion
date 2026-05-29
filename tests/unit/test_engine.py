@@ -56,7 +56,8 @@ def test_engine_emits_attack_started_exfil(tmp_path, monkeypatch):
     executor = _make_executor()
     collector = _make_collector()
 
-    with patch.object(engine, "_get_executor_collector", return_value=(executor, collector)):
+    with patch.object(engine, "_get_executor_collector", return_value=(executor, collector)), \
+         patch.object(engine, "_wait_and_emit_feedback"):
         engine.run(EXFIL_YAML, skip_confirm=True)
 
     files = list((tmp_path / "runs").glob("*_signals.jsonl"))
@@ -80,7 +81,8 @@ def test_engine_emits_attack_started_ransomware(tmp_path, monkeypatch):
     executor = _make_executor()
     collector = _make_collector()
 
-    with patch.object(engine, "_get_executor_collector", return_value=(executor, collector)):
+    with patch.object(engine, "_get_executor_collector", return_value=(executor, collector)), \
+         patch.object(engine, "_wait_and_emit_feedback"):
         engine.run(RANSOMWARE_YAML, skip_confirm=True)
 
     files = list((tmp_path / "runs").glob("*_signals.jsonl"))
@@ -135,7 +137,8 @@ def test_engine_skip_preflight_bypasses_check(tmp_path, monkeypatch):
     executor.check_preflight.return_value = ["VM is not running"]
     collector = _make_collector()
 
-    with patch.object(engine, "_get_executor_collector", return_value=(executor, collector)):
+    with patch.object(engine, "_get_executor_collector", return_value=(executor, collector)), \
+         patch.object(engine, "_wait_and_emit_feedback"):
         engine.run(EXFIL_YAML, skip_confirm=True)
 
     executor.check_preflight.assert_not_called()

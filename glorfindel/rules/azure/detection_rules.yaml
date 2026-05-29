@@ -19,24 +19,19 @@
 monitoring_backends:
   - name: law-annatar
     type: azure_monitor
-    workspace_id: "${AZURE_WORKSPACE_ID}"
+    workspace_id: "b451c51a-1cd0-4125-ac70-6aaf2c1dc209"
     # type: prometheus → workspace_id = endpoint URL (http://localhost:9090)
     # type: splunk     → workspace_id = Splunk HEC endpoint
 
 # ── Assets ────────────────────────────────────────────────────────────────────
-# Un asset = une ressource protégée avec son resource_id Azure et les backends
-# qui la surveillent.
+# Les VMs sont découvertes dynamiquement via glorfindel-config.yaml (Heartbeat).
+# Seuls les assets non-VM (RSV, storage...) sont déclarés ici.
 
 assets:
-  - name: vm-annatar-victim
-    type: azure_vm
-    resource_id: "${AZURE_VM_RESOURCE_ID}"
-    monitoring_backends: [law-annatar]
-
   - name: rsv-annatar
     type: azure_backup_vault
     # vault_name used by audit + restore actions (not a full Azure resource_id)
-    vault_name: "${GLORFINDEL_BACKUP_VAULT:-rsv-annatar}"
+    vault_name: "rsv-annatar"
     resource_group: "annatar"
     # No monitoring_backend — RSV is an action target, not a detection source
 
@@ -53,7 +48,7 @@ rules:
     description: "Sustained high disk write rate — T1486 ransomware file encryption"
     enabled: true
     ttp: T1486
-    assets: [vm-annatar-victim]
+    assets: [auto]
     interval_s: 30
     query: |
       Perf
@@ -68,7 +63,7 @@ rules:
     description: "PutBlob from a VM private IP — T1041 exfiltration via MSI"
     enabled: true
     ttp: T1041
-    assets: [vm-annatar-victim]
+    assets: [auto]
     interval_s: 30
     query: |
       StorageBlobLogs
@@ -84,7 +79,7 @@ rules:
     description: "Repeated SSH failures from an external IP — T1110.001"
     enabled: true
     ttp: T1110.001
-    assets: [vm-annatar-victim]
+    assets: [auto]
     interval_s: 30
     query: |
       Syslog
@@ -102,7 +97,7 @@ rules:
     description: "Successful sudo to root by a non-root user — T1548.003"
     enabled: true
     ttp: T1548.003
-    assets: [vm-annatar-victim]
+    assets: [auto]
     interval_s: 30
     query: |
       Syslog

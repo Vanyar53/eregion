@@ -1,24 +1,13 @@
 # Glorfindel detection configuration — source de vérité pour la détection.
 #
-# Structure en 2 sections :
+# Une seule section :
 #
-#   assets  →  ressources non-VM (RSV, storage...) — les VMs sont découvertes
-#              dynamiquement depuis glorfindel-config.yaml (Heartbeat)
-#   rules   →  requêtes de détection, référencent les backends par nom
-#              workspace_id et endpoint résolus depuis glorfindel-config.yaml
+#   rules  →  requêtes de détection, référencent les backends par nom
+#             workspace_id résolu depuis glorfindel-config.yaml (source unique)
 #
-# Les rules ne contiennent aucun workspace_id ni resource_id inline.
-# Toute la config de connexion est dans glorfindel-config.yaml.
-
-# ── Assets ────────────────────────────────────────────────────────────────────
-# Les VMs sont découvertes dynamiquement — seuls les assets non-VM sont déclarés.
-
-assets:
-  - name: rsv-annatar
-    type: azure_backup_vault
-    vault_name: "rsv-annatar"
-    resource_group: "annatar"
-    # No monitoring_backend — RSV is an action target, not a detection source
+# Assets (VMs, RSV...) entièrement dans glorfindel-config.yaml :
+#   monitoring_backends → VMs découvertes dynamiquement (Heartbeat)
+#   action_backends     → RSV et autres cibles de remédiation
 
 # ── Detection rules ────────────────────────────────────────────────────────────
 # monitoring_backends : référence le backend par nom (workspace_id dans glorfindel-config.yaml)

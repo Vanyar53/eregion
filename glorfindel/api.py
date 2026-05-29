@@ -190,7 +190,7 @@ async def config() -> dict:
     if rules_path:
         try:
             from glorfindel.detection_rules import _load_status, load_config
-            cfg = load_config(rules_path)
+            cfg = load_config(rules_path, glorfindel_cfg=glorfindel_cfg)
             status = _load_status()
 
             for b in cfg.backends:
@@ -201,22 +201,16 @@ async def config() -> dict:
                     "endpoint": b.endpoint,
                 })
 
-            for a in cfg.assets:
-                rid = a.resource_id or ""
+            # Action backends (RSV, storage...) from glorfindel-config.yaml
+            for b in glorfindel_cfg.action_backends:
                 assets_info.append({
-                    "name": a.name,
-                    "type": a.type,
-                    "resource_id": rid,
-                    "monitoring_backends": a.monitoring_backends,
-                    "vault_name": a.vault_name,
-                    "resource_group": a.resource_group,
+                    "name": b.name,
+                    "type": b.type,
+                    "resource_id": "",
+                    "monitoring_backends": [],
+                    "vault_name": b.vault_name,
+                    "resource_group": b.resource_group,
                 })
-                if rid and "${" not in rid:
-                    known_resources.append({
-                        "resource_id": rid,
-                        "vm_name": rid.split("/")[-1],
-                        "asset_name": a.name,
-                    })
 
             for rule in cfg.rules:
                 s = status.get(rule.name, {})
@@ -387,10 +381,9 @@ async def audit_resource(vm_name: str) -> dict:
         ]
         rp = next((p for p in rules_candidates if p.exists()), None)
         if rp:
-            from glorfindel.detection_rules import load_config
-            cfg = load_config(rp)
-            for asset in cfg.assets:
-                if asset.resource_id.split("/")[-1] == vm_name:
+            from glorfindel.discovery import get_registry
+            for asset in get_registry().all():
+                if asset.name == vm_name or asset.resource_id.split("/")[-1] == vm_name:
                     resource_id = asset.resource_id
                     break
     if not resource_id:
@@ -416,23 +409,22 @@ async def audit_all() -> dict:
     if not rp:
         return {"audits": []}
 
-    cfg = load_config(rp)
     connector = AzureConnector(dry_run=False)
     seen: set[str] = set()
     audits = []
 
-    # Vault name: from azure_backup_vault asset, then env var fallback
-    rsv_asset = next((a for a in cfg.assets if a.type == "azure_backup_vault"), None)
-    vault = (
-        rsv_asset.vault_name if rsv_asset and rsv_asset.vault_name and "${" not in rsv_asset.vault_name
-        else os.environ.get("GLORFINDEL_BACKUP_VAULT", "rsv-annatar")
-    )
+    # Vault name: from glorfindel-config.yaml action_backends (source of truth)
+    rsv = glorfindel_cfg.backup_vault()
+    vault = rsv.vault_name if rsv and rsv.vault_name else os.environ.get("GLORFINDEL_BACKUP_VAULT", "rsv-annatar")
 
-    # Audit VM assets only (backup vault is an action target, not an auditable VM)
-    vm_assets = [a for a in cfg.assets if a.type == "azure_vm" and a.resource_id and "${" not in a.resource_id]
-    targets = [(a.resource_id, a.name) for a in vm_assets]
+    # VM targets: discovered dynamically via Heartbeat
+    from glorfindel.discovery import get_registry
+    discovered = get_registry().all()
+    targets = [(a.resource_id, a.name) for a in discovered if a.resource_id]
     if not targets:
         # Legacy fallback: rules with inline resource_id
+        from glorfindel.detection_rules import load_config
+        cfg = load_config(rp, glorfindel_cfg=glorfindel_cfg)
         targets = [
             (r.resource_id, r.asset_name or r.resource_id.split("/")[-1])
             for r in cfg.rules

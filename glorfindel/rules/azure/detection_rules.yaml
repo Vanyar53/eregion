@@ -41,20 +41,22 @@ rules:
       | where MaxWrite > 50000000
 
   - name: data-exfiltration-blob
-    description: "PutBlob operations from a single IP in a short window — T1041"
+    description: "PutBlob from a VM private IP — T1041 exfiltration via MSI"
     enabled: true
     source: azure_monitor
     workspace_id: "${AZURE_WORKSPACE_ID}"
     ttp: T1041
     resource_id: "${AZURE_VM_RESOURCE_ID}"
-    interval_s: 60
+    interval_s: 30
     query: |
       StorageBlobLogs
       | where OperationName == "PutBlob"
       | where TimeGenerated > ago(5m)
-      | summarize count() by CallerIpAddress
-      | where count_ > 5
-      | project CallerIpAddress, count_
+      | where CallerIpAddress matches regex @"^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.)"
+      | summarize PutBlobCount = count(), EgressBytes = sum(ResponseBodySize)
+            by CallerIpAddress, AccountName
+      | where PutBlobCount >= 1
+      | project CallerIpAddress, AccountName, PutBlobCount, EgressBytes
 
   - name: ssh-brute-force
     description: "Repeated SSH failures from an external IP — T1110.001"

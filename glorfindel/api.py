@@ -314,6 +314,60 @@ async def action_ack(esc_id: str) -> dict:
     return {"ok": True}
 
 
+@app.get("/api/audit/{vm_name}")
+async def audit_resource(vm_name: str) -> dict:
+    """Remediation readiness audit for a single resource."""
+    from glorfindel import audit as _audit
+    from glorfindel.actions import AzureConnector
+
+    resource_id = _find_resource_id(vm_name)
+    if not resource_id:
+        rules_candidates = [
+            Path("glorfindel/rules/azure/detection_rules.yaml"),
+            Path(__file__).parent / "rules" / "azure" / "detection_rules.yaml",
+        ]
+        rp = next((p for p in rules_candidates if p.exists()), None)
+        if rp:
+            from glorfindel.detection_rules import load_rules
+            for rule in load_rules(rp):
+                if rule.resource_id.split("/")[-1] == vm_name:
+                    resource_id = rule.resource_id
+                    break
+    if not resource_id:
+        return {"error": f"resource_id not found for {vm_name}"}
+
+    connector = AzureConnector(dry_run=False)
+    result = _audit.run(resource_id, connector)
+    return result.to_dict()
+
+
+@app.get("/api/audit")
+async def audit_all() -> dict:
+    """Remediation readiness audit for all resources in detection_rules.yaml."""
+    from glorfindel import audit as _audit
+    from glorfindel.actions import AzureConnector
+    from glorfindel.detection_rules import load_rules
+
+    rules_candidates = [
+        Path("glorfindel/rules/azure/detection_rules.yaml"),
+        Path(__file__).parent / "rules" / "azure" / "detection_rules.yaml",
+    ]
+    rp = next((p for p in rules_candidates if p.exists()), None)
+    if not rp:
+        return {"audits": []}
+
+    connector = AzureConnector(dry_run=False)
+    seen: set[str] = set()
+    audits = []
+    for rule in load_rules(rp):
+        rid = rule.resource_id
+        if rid and "${" not in rid and rid not in seen:
+            seen.add(rid)
+            result = _audit.run(rid, connector)
+            audits.append(result.to_dict())
+    return {"audits": audits}
+
+
 @app.get("/api/pending/rules")
 async def pending_rules() -> dict:
     from glorfindel.proposed_rules import pending

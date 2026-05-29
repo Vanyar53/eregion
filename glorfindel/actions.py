@@ -460,6 +460,76 @@ class AzureConnector(CloudConnector):
             "nsg": f"{nsg_rg}/{nsg_name}",
         }
 
+    # ── Audit / readiness checks ───────────────────────────────────────────────
+
+    def check_nsg_access(self, resource_id: str) -> dict:
+        """Verify NSG read access — proxy for isolate_vm / block_suspicious_ip readiness."""
+        if self.dry_run:
+            return {"ok": True, "nsg": "dry_run"}
+        try:
+            self._ensure_clients()
+            rg, vm_name = _parse_vm_resource_id(resource_id)
+            nic_id = self._get_primary_nic_id(rg, vm_name)
+            nsg_rg, nsg_name = self._get_nic_nsg(nic_id)
+            rules = list(self._network.security_rules.list(nsg_rg, nsg_name))
+            return {"ok": True, "nsg": f"{nsg_rg}/{nsg_name}", "rules": len(rules)}
+        except Exception as e:
+            return {"ok": False, "iam": _is_iam_error(str(e)), "error": str(e)}
+
+    def check_backup_points(self, resource_id: str, vault: str = "rsv-annatar") -> dict:
+        """Verify vault + recent recovery point — restore_from_backup readiness."""
+        if self.dry_run:
+            return {"ok": True, "vault": vault, "dry_run": True}
+        try:
+            from datetime import datetime, timezone
+            from azure.mgmt.recoveryservicesbackup import RecoveryServicesBackupClient
+
+            self._ensure_clients()
+            rg, vm_name = _parse_vm_resource_id(resource_id)
+            client = RecoveryServicesBackupClient(self._credential, self._subscription_id)
+            container = f"iaasvmcontainer;iaasvmcontainerv2;{rg};{vm_name}"
+            item = f"vm;iaasvmcontainerv2;{rg};{vm_name}"
+            rps = list(client.recovery_points.list(vault, rg, "Azure", container, item))
+            if not rps:
+                return {
+                    "ok": False, "iam": False, "vault": vault,
+                    "error": f"No recovery points found for {vm_name} in vault '{vault}'",
+                }
+            times = [
+                getattr(rp.properties, "recovery_point_time", None) for rp in rps
+            ]
+            latest = max((t for t in times if t), default=None)
+            age_h = (
+                (datetime.now(timezone.utc) - latest).total_seconds() / 3600
+                if latest else 9999.0
+            )
+            return {
+                "ok": True, "vault": vault,
+                "points": len(rps), "latest_age_h": round(age_h, 1),
+            }
+        except Exception as e:
+            return {"ok": False, "iam": _is_iam_error(str(e)), "vault": vault, "error": str(e)}
+
+    def check_compute_access(self, resource_id: str) -> dict:
+        """Verify VM + disk read access — snapshot readiness."""
+        if self.dry_run:
+            return {"ok": True, "dry_run": True}
+        try:
+            self._ensure_clients()
+            rg, vm_name = _parse_vm_resource_id(resource_id)
+            vm = self._compute.virtual_machines.get(rg, vm_name)
+            disks = []
+            if vm.storage_profile.os_disk.managed_disk:
+                disks.append(vm.storage_profile.os_disk.managed_disk.id.split("/")[-1])
+            disks += [
+                d.managed_disk.id.split("/")[-1]
+                for d in vm.storage_profile.data_disks
+                if d.managed_disk
+            ]
+            return {"ok": True, "vm": vm_name, "disks": disks}
+        except Exception as e:
+            return {"ok": False, "iam": _is_iam_error(str(e)), "error": str(e)}
+
     def _get_primary_nic_id(self, rg: str, vm_name: str) -> str:
         vm = self._compute.virtual_machines.get(rg, vm_name)
         nics = vm.network_profile.network_interfaces
@@ -560,6 +630,12 @@ def active_blocks() -> list[dict]:
         except Exception:
             pass
     return result
+
+
+def _is_iam_error(err: str) -> bool:
+    """Return True if the error is an Azure authorization/permission failure."""
+    markers = ("AuthorizationFailed", "Forbidden", "403", "does not have authorization")
+    return any(m in err for m in markers)
 
 
 def _parse_vm_resource_id(resource_id: str) -> tuple[str, str]:

@@ -993,10 +993,55 @@ async function refreshConfig() {
           <span class="cfg-key">${b.vm}</span>
           <span class="cfg-val"><span class="cfg-badge warn">BLOCKED</span> ${b.ip}</span>
         </div>`).join('')}
+      </div>
+
+      <div class="cfg-section">
+        <div class="cfg-section-title">Remediation readiness</div>
+        <div id="audit-content"><span style="color:var(--dim)">Loading…</span></div>
       </div>`;
+
     await refreshProposedRules();
+    refreshAudit();
   } catch (e) {
     panel.innerHTML = `<div style="color:var(--red);padding:16px">Failed to load config: ${e.message}</div>`;
+  }
+}
+
+// ── Audit ──────────────────────────────────────────────────────────────────────
+
+async function refreshAudit() {
+  const el = document.getElementById('audit-content');
+  if (!el) return;
+  try {
+    const r = await fetch('/api/audit');
+    const d = await r.json();
+    const audits = d.audits || [];
+    if (!audits.length) {
+      el.innerHTML = `<div class="cfg-row"><span class="cfg-val" style="color:var(--dim)">No resources configured in detection_rules.yaml</span></div>`;
+      return;
+    }
+    el.innerHTML = audits.map(a => {
+      const vm = a.resource_id.split('/').pop();
+      const allOk = a.ready;
+      const headerColor = allOk ? 'var(--green)' : 'var(--red)';
+      const icon = allOk ? '✓' : '✗';
+      const rows = a.checks.map(c => {
+        const col = c.status === 'ok' ? 'var(--green)' : c.status === 'warn' ? 'var(--orange)' : c.status === 'fail' ? 'var(--red)' : 'var(--dim)';
+        const badge = c.status === 'ok' ? '✓' : c.status === 'warn' ? '⚠' : c.status === 'fail' ? '✗' : '—';
+        return `<div class="cfg-row" style="padding-left:8px">
+          <span class="cfg-key" style="font-size:10px">${c.name}</span>
+          <span class="cfg-val" style="color:${col};font-size:10px">${badge} ${c.message}</span>
+        </div>
+        ${c.fix ? `<div class="cfg-row" style="padding-left:8px"><span class="cfg-val" style="color:var(--dim);font-size:10px">Fix: <code>${c.fix}</code></span></div>` : ''}`;
+      }).join('');
+      return `<div style="margin-bottom:10px">
+        <div style="color:${headerColor};font-weight:700;font-size:11px;margin-bottom:4px">${icon} ${vm}</div>
+        ${rows}
+      </div>`;
+    }).join('');
+  } catch (e) {
+    const el2 = document.getElementById('audit-content');
+    if (el2) el2.innerHTML = `<span style="color:var(--dim)">Audit unavailable (no Azure credentials)</span>`;
   }
 }
 

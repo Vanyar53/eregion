@@ -323,6 +323,35 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
         except Exception as exc:
             console.print(f"[yellow]⚠ Could not load rules: {exc}[/yellow]")
 
+    # Non-blocking audit at startup — warn if remediation capabilities are missing
+    if not dry_run and _rules_file:
+        import threading as _threading
+
+        def _startup_audit() -> None:
+            try:
+                from glorfindel import audit as _audit
+                from glorfindel.actions import AzureConnector
+                from glorfindel.detection_rules import load_rules
+                connector = AzureConnector(dry_run=False)
+                seen: set[str] = set()
+                for rule in load_rules(_rules_file):
+                    rid = rule.resource_id
+                    if rid and "${" not in rid and rid not in seen:
+                        seen.add(rid)
+                        result = _audit.run(rid, connector)
+                        if not result.ready:
+                            vm = rid.split("/")[-1]
+                            gaps = [c for c in result.checks if c.status == "fail"]
+                            console.print(
+                                f"[yellow]⚠ Audit gap on {vm}:[/yellow] "
+                                + "; ".join(c.name for c in gaps)
+                                + " — run 'glorfindel audit' for details"
+                            )
+            except Exception:
+                pass
+
+        _threading.Thread(target=_startup_audit, daemon=True, name="audit-startup").start()
+
     msg = f"[bold]Glorfindel watching[/bold] [dim]{runs_dir}/[/dim]  (TTL={ttl_h}h, Ctrl+C to stop)"
     console.print(msg + "\n")
     _write_heartbeat()
@@ -881,6 +910,89 @@ def approve_rule(proposal_id: str, rules_file: str | None) -> None:
         )
     except ValueError as e:
         console.print(f"[red]Error:[/red] {e}")
+
+
+@cli.command()
+@click.argument("resource_id", required=False)
+@click.option("--all", "audit_all", is_flag=True,
+              help="Audit all resources from detection_rules.yaml.")
+@click.option("--vault", default="rsv-annatar", show_default=True)
+@click.option("--dry-run", is_flag=True)
+def audit(resource_id: str | None, audit_all: bool, vault: str, dry_run: bool):
+    """Check that Glorfindel can execute all remediation actions.
+
+    Verifies NSG access (isolate_vm / block_suspicious_ip), backup vault +
+    recovery points (restore_from_backup), and compute access (snapshot).
+    Surfaces IAM gaps and missing infrastructure with actionable fix commands.
+
+    With --all: audits every resource_id referenced in detection_rules.yaml.
+    """
+    from glorfindel import audit as _audit
+    from glorfindel.actions import AzureConnector
+
+    connector = AzureConnector(dry_run=dry_run)
+    targets: list[str] = []
+
+    if audit_all or not resource_id:
+        rules_file = _find_rules_file()
+        if rules_file:
+            from glorfindel.detection_rules import load_rules
+            for rule in load_rules(rules_file):
+                if rule.resource_id and "${" not in rule.resource_id:
+                    targets.append(rule.resource_id)
+        if not targets:
+            if resource_id:
+                targets = [resource_id]
+            else:
+                console.print(
+                    "[yellow]No resource_id provided and no resolved resources "
+                    "in detection_rules.yaml.[/yellow]"
+                )
+                return
+    else:
+        targets = [resource_id]
+
+    targets = list(dict.fromkeys(targets))  # deduplicate, preserve order
+
+    for rid in targets:
+        vm = rid.split("/")[-1]
+        console.rule(f"[bold cyan]Audit — {vm}[/bold cyan]")
+        result = _audit.run(rid, connector, vault=vault)
+        _render_audit(result)
+        console.print()
+
+
+def _render_audit(result) -> None:
+    from rich.table import Table
+
+    table = Table(show_header=True, box=None, padding=(0, 1))
+    table.add_column("Action", style="dim", width=36)
+    table.add_column("Check", width=22)
+    table.add_column("Status", width=8)
+    table.add_column("Details")
+
+    for c in result.checks:
+        if c.status == "ok":
+            badge = "[green]✓ ok[/green]"
+        elif c.status == "warn":
+            badge = "[yellow]⚠ warn[/yellow]"
+        elif c.status == "fail":
+            badge = "[red]✗ fail[/red]"
+        else:
+            badge = "[dim]— skip[/dim]"
+
+        table.add_row(c.action, c.name, badge, c.message)
+        if c.fix:
+            table.add_row("", "", "", f"[dim]Fix: {c.fix}[/dim]")
+
+    console.print(table)
+    if result.ready:
+        console.print("  [green]✓ All remediation capabilities confirmed.[/green]")
+    else:
+        fails = sum(1 for c in result.checks if c.status == "fail")
+        console.print(
+            f"  [red]✗ {fails} gap(s) detected — remediation may fail during an incident.[/red]"
+        )
 
 
 @cli.command()

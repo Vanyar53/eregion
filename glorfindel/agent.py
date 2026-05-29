@@ -454,6 +454,8 @@ def escalate_to_human(state: GlorfindelState) -> GlorfindelState:
     action = state["action"]
     if action in HUMAN_APPROVAL_REQUIRED:
         escalation_type = "destructive_action"
+    elif action == "improve_detection":
+        escalation_type = "proposed_rule"
     elif action not in AUTONOMOUS_ACTIONS:
         escalation_type = "proposed_action"
     else:

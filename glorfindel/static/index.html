@@ -187,9 +187,12 @@
     border-radius: 4px;
     letter-spacing: .5px;
   }
-  .badge.isolated { background: #3d1a1a; color: var(--red); border: 1px solid #6d2c2c; }
-  .badge.blocked  { background: #3d2e00; color: var(--orange); border: 1px solid #6d5200; }
-  .state-detail   { color: var(--dim); font-size: 11px; }
+  .badge.isolated  { background: #3d1a1a; color: var(--red); border: 1px solid #6d2c2c; }
+  .badge.blocked   { background: #3d2e00; color: var(--orange); border: 1px solid #6d5200; }
+  .badge.restoring { background: #0d2035; color: var(--blue); border: 1px solid #1a4060;
+                     animation: pulse 2s infinite; }
+  .restore-progress { background: #0a1a2a; border-radius: 4px; padding: 4px 6px; }
+  .state-detail    { color: var(--dim); font-size: 11px; }
 
   /* ── Escalation items ── */
   .vm-escalations {
@@ -553,7 +556,10 @@ async function runScenario(name) {
 
 function renderIncidents() {
   const list = document.getElementById('incidents-list');
-  const { resources, escalations } = _state;
+  const { resources, escalations, restores = [] } = _state;
+
+  const restoreByVm = {};
+  restores.forEach(r => { restoreByVm[r.vm_name] = r; });
 
   _escById = {};
   const escByVm = {};
@@ -595,6 +601,13 @@ function renderIncidents() {
     const isBlocked  = states.some(s => s.type === 'blocked');
     const hasEscOnly = !isIsolated && !isBlocked && escs.length > 0;
     const dot = isIsolated ? '🔴' : isBlocked ? '🟡' : hasEscOnly ? '🟠' : '🟢';
+
+    const restoreInfo = restoreByVm[vm_name];
+    const restoreRow = restoreInfo ? `
+      <div class="state-row restore-progress">
+        <span class="badge restoring">🔄 RESTORING</span>
+        <span class="state-detail">${restoreInfo.elapsed_label} elapsed — Azure Backup in progress (~20 min)</span>
+      </div>` : '';
 
     const stateRows = states.map(s => {
       if (s.type === 'isolated') {
@@ -648,7 +661,8 @@ function renderIncidents() {
     }
     // Restore when VM is isolated (operator decision) OR explicit restore_from_backup escalation.
     // NOT shown for low_confidence alone (detection_timeout without isolation).
-    const needsRestore = isIsolated || escs.some(e => e.action === 'restore_from_backup');
+    // Also hidden while restore is in progress.
+    const needsRestore = !restoreInfo && (isIsolated || escs.some(e => e.action === 'restore_from_backup'));
     if (needsRestore) {
       cardActions.push(
         `<button class="action primary" onclick="confirmRestore('${vm_name}')">🔄 Restore</button>`
@@ -661,6 +675,7 @@ function renderIncidents() {
         <span class="vm-name">${vm_name}</span>
       </div>
       <div class="vm-card-body">
+        ${restoreRow}
         ${stateRows}
         ${escs.length ? `<div class="vm-escalations">${escItems}</div>` : ''}
         ${cardActions.length ? `<div class="vm-actions">${cardActions.join('')}</div>` : ''}

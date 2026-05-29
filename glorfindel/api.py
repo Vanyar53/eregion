@@ -62,6 +62,7 @@ async def state() -> dict:
     return {
         "resources": resources,
         "escalations": esc_module.pending(),
+        "restores": _active_restores(),
         "now": now.isoformat(),
     }
 
@@ -303,7 +304,8 @@ async def action_restore(vm_name: str) -> dict:
     resource_id = _find_resource_id(vm_name)
     if not resource_id:
         return {"error": f"Resource ID not found for {vm_name}"}
-    asyncio.create_task(_bg_restore(resource_id))
+    _restore_start(vm_name, resource_id)
+    asyncio.create_task(_bg_restore(resource_id, vm_name))
     return {"status": "started", "resource_id": resource_id}
 
 
@@ -391,7 +393,64 @@ async def approve_rule(proposal_id: str) -> dict:
         return {"error": str(e)}
 
 
-async def _bg_restore(resource_id: str) -> None:
+_RESTORE_TRACKING = Path.home() / ".glorfindel" / "restore_in_progress.json"
+
+
+def _restore_start(vm_name: str, resource_id: str) -> None:
+    import json as _json
+    data: dict = {}
+    try:
+        if _RESTORE_TRACKING.exists():
+            data = _json.loads(_RESTORE_TRACKING.read_text())
+    except Exception:
+        pass
+    data[vm_name] = {
+        "resource_id": resource_id,
+        "started_at": datetime.now(timezone.utc).isoformat(),
+    }
+    _RESTORE_TRACKING.parent.mkdir(parents=True, exist_ok=True)
+    _RESTORE_TRACKING.write_text(_json.dumps(data))
+
+
+def _restore_done(vm_name: str) -> None:
+    import json as _json
+    try:
+        if not _RESTORE_TRACKING.exists():
+            return
+        data = _json.loads(_RESTORE_TRACKING.read_text())
+        data.pop(vm_name, None)
+        _RESTORE_TRACKING.write_text(_json.dumps(data))
+    except Exception:
+        pass
+
+
+def _active_restores() -> list[dict]:
+    import json as _json
+    try:
+        if not _RESTORE_TRACKING.exists():
+            return []
+        data = _json.loads(_RESTORE_TRACKING.read_text())
+        now = datetime.now(timezone.utc)
+        result = []
+        for vm_name, info in data.items():
+            started = datetime.fromisoformat(info["started_at"])
+            elapsed_s = int((now - started).total_seconds())
+            result.append({
+                "vm_name": vm_name,
+                "resource_id": info["resource_id"],
+                "started_at": info["started_at"],
+                "elapsed_s": elapsed_s,
+                "elapsed_label": (
+                    f"{elapsed_s // 60}m{elapsed_s % 60:02d}s"
+                    if elapsed_s >= 60 else f"{elapsed_s}s"
+                ),
+            })
+        return result
+    except Exception:
+        return []
+
+
+async def _bg_restore(resource_id: str, vm_name: str = "") -> None:
     loop = asyncio.get_running_loop()
     await loop.run_in_executor(
         None,
@@ -400,6 +459,8 @@ async def _bg_restore(resource_id: str) -> None:
             capture_output=True, text=True, timeout=1800,
         ),
     )
+    if vm_name:
+        _restore_done(vm_name)
 
 
 def _find_resource_id(vm_name: str) -> str | None:

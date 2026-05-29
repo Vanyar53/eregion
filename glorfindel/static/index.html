@@ -670,10 +670,10 @@ function renderIncidents() {
         `<button class="action danger" onclick="confirmReset('${vm_name}')">⟳ Reset</button>`
       );
     }
-    // Restore when VM is isolated (operator decision) OR explicit restore_from_backup escalation.
-    // NOT shown for low_confidence alone (detection_timeout without isolation).
-    // Also hidden while restore is in progress.
-    const needsRestore = !restoreInfo && (isIsolated || escs.some(e => e.action === 'restore_from_backup'));
+    // Restore only on explicit restore_from_backup escalation from Glorfindel.
+    // Isolation alone is not sufficient — T1041 isolates but disk is clean (no restore needed).
+    // T1486 will generate a restore_from_backup escalation via the LLM decision.
+    const needsRestore = !restoreInfo && escs.some(e => e.action === 'restore_from_backup');
     if (needsRestore) {
       cardActions.push(
         `<button class="action primary" onclick="confirmRestore('${vm_name}')">🔄 Restore</button>`

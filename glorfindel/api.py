@@ -439,9 +439,15 @@ async def vm_actions(vm_name: str, limit: int = 5) -> dict:
                 action = d.get("action", "")
                 if not action or action in ("snapshot",):
                     continue
+                import re as _re
+                full = d.get("reasoning") or ""
+                # Strip markdown for display
+                full_clean = _re.sub(r'\*\*(.*?)\*\*', r'\1', full)
+                full_clean = _re.sub(r'\*(.*?)\*', r'\1', full_clean).strip()
                 actions.append({
                     "action": action,
-                    "reasoning": _extract_conclusion(d.get("reasoning") or ""),
+                    "reasoning": _extract_conclusion(full),
+                    "full_reasoning": full_clean[:2000],
                     "confidence": d.get("confidence"),
                     "timestamp": d.get("timestamp", ""),
                     "outcome": (d.get("outcome") or {}).get("status", ""),

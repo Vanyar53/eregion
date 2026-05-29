@@ -255,6 +255,8 @@
   .map-decision .dec-conf   { color: var(--orange); }
   .map-decision .dec-ttp    { color: var(--dim); font-size: 9px; }
   .map-decision .dec-text   { color: var(--dim); font-size: 9px; display: block; padding-left: 2px; }
+  .map-decision .dec-clickable { cursor: pointer; border-radius: 3px; padding: 2px 4px; margin: -2px -4px; }
+  .map-decision .dec-clickable:hover { background: color-mix(in srgb, var(--blue) 10%, transparent); }
   .map-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
 
   /* ── VM Card ── */
@@ -583,6 +585,36 @@ function openModal(title, body, cmd, confirmLabel, confirmClass, onConfirm) {
   document.getElementById('modal').classList.add('open');
 }
 
+function showReasoning(vmName, idx) {
+  const cached = _actionsCache[vmName];
+  if (!cached) return;
+  const a = cached.actions[idx];
+  if (!a) return;
+
+  const pct  = a.confidence ? ` · ${Math.round(a.confidence * 100)}%` : '';
+  const title = `${actionLabel(a.action)}${pct} — ${a.ttp || ''} — ${a.timestamp ? new Date(a.timestamp).toISOString().slice(11,19) + ' UTC' : ''}`;
+  const text  = a.full_reasoning || a.reasoning || '(no reasoning available)';
+
+  document.getElementById('modal-title').textContent = title;
+  // Render reasoning with step headers highlighted
+  const formatted = text
+    .replace(/^(Étape\s+\d+\s*[–\-:].*)/gim, '\n$1\n')
+    .replace(/^(Step\s+\d+\s*[–\-:].*)/gim, '\n$1\n')
+    .trim();
+  const bodyEl = document.getElementById('modal-body');
+  bodyEl.textContent = formatted;
+
+  const cmdEl = document.getElementById('modal-cmd');
+  cmdEl.style.display = 'none';
+
+  const btn = document.getElementById('modal-confirm');
+  btn.textContent = 'Close';
+  btn.className = 'action';
+  btn.onclick = closeModal;
+
+  document.getElementById('modal').classList.add('open');
+}
+
 function openCommandModal(escId) {
   const esc = _escById[escId];
   if (!esc) return;
@@ -811,14 +843,17 @@ function _computeZone(resourceMap, vmEscs, restoreByVm) {
         }).join('  ')
       : '';
 
-    // Last LLM decisions (conclusion pre-extracted server-side)
-    const reasonHtml = (cached?.actions || []).slice(0, 2).map(a => {
+    // Last LLM decisions (conclusion pre-extracted server-side, full reasoning on click)
+    const reasonHtml = (cached?.actions || []).slice(0, 2).map((a, idx) => {
       const pct = a.confidence ? Math.round(a.confidence * 100) + '%' : '';
-      return `<div class="dec-row">
+      const hasDetail = !!a.full_reasoning;
+      return `<div class="dec-row ${hasDetail ? 'dec-clickable' : ''}"
+        ${hasDetail ? `onclick="showReasoning('${vm_name}',${idx})" title="Click to see full reasoning"` : ''}>
         <span class="dec-action">${actionLabel(a.action)}</span>
         ${pct ? `<span class="dec-conf">${pct}</span>` : ''}
         ${a.ttp ? `<span class="dec-ttp">${a.ttp}</span>` : ''}
         ${a.reasoning ? `<span class="dec-text">↳ ${a.reasoning}</span>` : ''}
+        ${hasDetail ? `<span style="color:var(--dim);font-size:9px;margin-left:auto">▸ detail</span>` : ''}
       </div>`;
     }).join('');
 

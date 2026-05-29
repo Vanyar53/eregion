@@ -90,7 +90,7 @@ def _execute(pending: dict) -> None:
         esc_module.resolve(esc["id"])
         return
 
-    cmd_arg = "restore" if key == "r" else "revert"
+    cmd_arg = {"r": "restore", "x": "release", "u": "revert", "v": "revert"}.get(key, "revert")
     rid = esc["resource_id"]
 
     threading.Thread(
@@ -209,7 +209,7 @@ def _escalations_renderable(
                 or first.get("escalation_type") == "low_confidence"):
             hints.append("[r] restore")
         if first.get("escalation_type") == "verification_failed":
-            hints.append("[v] revert")
+            hints.append("[x] release   [u] unblock   [v] reset")
         lines.append("\n  " + "   ".join(hints) + "\n", style="dim cyan")
 
     return Panel(
@@ -381,7 +381,7 @@ def run() -> None:
         t.append("GLORFINDEL  ", style="bold blue")
         t.append("dashboard", style="bold white")
         t.append(f"  ·  {now.strftime('%H:%M:%S')} UTC", style="dim")
-        hint = "   q:quit  a:ack  r:restore  v:revert" if interactive else "   Ctrl+C to exit"
+        hint = "   q:quit  a:ack  r:restore  x:release  u:unblock  v:reset" if interactive else "   Ctrl+C to exit"
         t.append(hint, style="dim")
         return t
 
@@ -430,6 +430,24 @@ def run() -> None:
                                     "esc": e,
                                     "label": f"restore {vm} from backup (~20 min)",
                                 }
+                        elif key == "x" and escs:
+                            e = escs[0]
+                            if e.get("escalation_type") == "verification_failed":
+                                vm = e["resource_id"].split("/")[-1]
+                                pending = {
+                                    "key": "x",
+                                    "esc": e,
+                                    "label": f"release {vm} (isolation only)",
+                                }
+                        elif key == "u" and escs:
+                            e = escs[0]
+                            if e.get("escalation_type") == "verification_failed":
+                                vm = e["resource_id"].split("/")[-1]
+                                pending = {
+                                    "key": "u",
+                                    "esc": e,
+                                    "label": f"unblock {vm} (IP blocks only)",
+                                }
                         elif key == "v" and escs:
                             e = escs[0]
                             if e.get("escalation_type") == "verification_failed":
@@ -437,7 +455,7 @@ def run() -> None:
                                 pending = {
                                     "key": "v",
                                     "esc": e,
-                                    "label": f"revert {vm} (release + unblock all IPs)",
+                                    "label": f"reset {vm} (release + unblock all IPs)",
                                 }
 
                 layout["header"].update(_header())

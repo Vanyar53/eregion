@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
-import pytest
 
 from annatar.signals.schema import Signal, severity_for_ttp
 from annatar.signals.emitter import SignalEmitter, _provider, _resource_type
@@ -60,7 +58,7 @@ def test_emit_writes_jsonl(tmp_path, monkeypatch):
         target=TARGET,
         resource_id=RESOURCE_ID,
     )
-    signal = emitter.emit(
+    emitter.emit(
         event="detection",
         raw_signal={"detection_time_s": 42, "passed": True},
         metrics={"detection_s": 42},

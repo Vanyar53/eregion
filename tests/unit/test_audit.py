@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-import pytest
 
-from glorfindel.audit import AuditCheck, AuditResult, run, _check_nsg, _check_backup, _check_compute
+from glorfindel.audit import AuditCheck, AuditResult, run
 
 
 # ── Fixtures ────────────────────────────────────────────────────────────────────

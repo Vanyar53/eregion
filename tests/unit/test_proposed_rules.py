@@ -1,9 +1,6 @@
 from __future__ import annotations
 
 import json
-import textwrap
-from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -62,7 +59,7 @@ def test_record_multiple(tmp_path):
     _sample_proposal(rule_name="rule-a")
     _sample_proposal(rule_name="rule-b")
     store = tmp_path / "proposed_rules.jsonl"
-    lines = [l for l in store.read_text().splitlines() if l.strip()]
+    lines = [ln for ln in store.read_text().splitlines() if ln.strip()]
     assert len(lines) == 2
 
 

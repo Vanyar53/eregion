@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
-import pytest
 
 from annatar.signals.schema import Signal
 from glorfindel.actions import (
@@ -203,7 +201,6 @@ def test_route_after_verify_true_proceeds():
 
 
 def test_verify_action_snapshot_calls_verify_snapshot():
-    from unittest.mock import MagicMock
     from glorfindel.agent import verify_action
     connector = MagicMock()
     connector.verify_snapshot.return_value = {"verified": True, "method": "dry_run"}
@@ -220,7 +217,6 @@ def test_verify_action_snapshot_calls_verify_snapshot():
 
 
 def test_verify_action_unknown_action_returns_none():
-    from unittest.mock import MagicMock
     from glorfindel.agent import verify_action
     connector = MagicMock()
     state = {

@@ -10,12 +10,25 @@ Eregion is an open-core platform for active cloud defense. Two AI agents form a 
 ## How it works
 
 ```
-Annatar attacks → JSONL signals → Glorfindel decides → action → verified → stored
+┌─────────────────────────────── Red ────────────────────────────────┐
+│  Annatar attacks → attack_started signal → Glorfindel detects       │
+│                                          (via detection_rules.yaml) │
+└─────────────────────────────────────────────────────────────────────┘
+          │ detection                        │ detection_timeout
+          ▼                                  ▼
+  Glorfindel decides → action         LLM proposes improved rule
+  → verified → stored (ChromaDB)      → human approves → rules updated
 ```
 
-Glorfindel uses a LangGraph graph + LLM via LiteLLM to reason about each signal and choose the minimum effective response. Actions are verified via Azure API. Every cycle is stored in ChromaDB for cross-scenario learning — no fine-tuning required.
+**Reaction loop** — Glorfindel uses LangGraph + LLM (via LiteLLM) to reason about each signal and choose the minimum effective response. Actions are verified via Azure API. Every cycle is stored in ChromaDB for cross-scenario learning — no fine-tuning required.
 
-Signals from different resources are processed in parallel; signals from the same resource are serialized with shared incident context so Glorfindel never re-isolates a VM it already contained. When an `attack_started` signal arrives, detection polling starts immediately in a dedicated thread — two simultaneous attacks on the same VM each poll their detection source in parallel, then make sequential decisions with shared incident context once detected.
+**Detection loop** — `glorfindel/rules/azure/detection_rules.yaml` defines continuous polling rules. Glorfindel polls independently of Annatar; when Annatar runs it looks up the matching rule by TTP. The query language depends on the source (`azure_monitor` → KQL, `prometheus` → PromQL, `splunk` → SPL, etc.).
+
+**Purple team loop** — if detection fails (`detection_timeout`), Annatar emits `detection_missed` with full attack context. Glorfindel's LLM proposes an improved query. `glorfindel approve-rule <id>` applies it to `detection_rules.yaml`.
+
+**Remediation audit** — `glorfindel audit` verifies before an incident that Glorfindel can execute all its actions: NSG writable (`isolate_vm`), backup vault + recovery point (`restore_from_backup`), compute access (`snapshot`). Surfaces IAM gaps with exact `az` fix commands.
+
+Signals from different resources are processed in parallel; signals from the same resource are serialized with shared incident context so Glorfindel never re-isolates a VM it already contained.
 
 ## Validated TTPs (Azure, real runs)
 
@@ -139,14 +152,29 @@ python scripts/simulate_annatar.py --ids-gap  # detection_timeout flow
 
 ## Using Glorfindel standalone
 
-Glorfindel doesn't require Annatar. Any valid JSONL signal triggers the response loop.
-Annatar is only needed if you want to measure `detection_s` from a real attack baseline.
+Glorfindel doesn't require Annatar. Two standalone modes:
 
+**Continuous detection** — fill in `workspace_id` and `resource_id` in `glorfindel/rules/azure/detection_rules.yaml`, then:
 ```bash
-# Or write a signal directly
-echo '{"event": "attack_started", ...}' >> runs/test_signals.jsonl
+glorfindel watch runs/   # polls your rules continuously, responds on match
+```
+
+**Manual signal injection** — write a `detection` signal directly:
+```bash
+echo '{
+  "signal_id": "test-001", "event": "detection", "ttp": "T1486",
+  "severity": "critical", "resource_id": "/subscriptions/.../vm-name",
+  "resource_type": "vm", "provider": "azure", "timestamp": "2026-01-01T00:00:00Z",
+  "raw_signal": {}, "context": {"run_id": "test"}
+}' >> runs/test_signals.jsonl
 glorfindel respond runs/test_signals.jsonl
 ```
+
+**Pre-deployment audit** — before going live, verify that Glorfindel can act:
+```bash
+glorfindel audit --all   # checks NSG access, backup vault, compute permissions
+```
+Annatar is only needed if you want to run controlled attack scenarios and measure detection time against a real attack baseline.
 
 ## Autonomy model
 
@@ -262,6 +290,8 @@ glorfindel/
 
 annatar/
   runner/engine.py    → setup → integrity check → attack → emit attack_started → purple-team feedback thread
+  runner/parser.py    → Scenario dataclass (detection: timeout + prerequisites + hints)
+  signals/schema.py   → Signal dataclass + severity_for_ttp
   signals/emitter.py  → normalized JSONL signal emitter
   scenarios/azure/
     ransomware-vm.yaml          → T1486 (detection: timeout + prerequisites + hints)
@@ -283,23 +313,47 @@ infra/terraform/           → full test infrastructure (VM, NSG, Log Analytics,
 
 ### Adding a detection source (Prometheus, Datadog, Splunk, Sentinel, ...)
 
-Implement `DetectionConnector` and register it in the factory:
+**1. Implement `DetectionConnector` and register it in the factory:**
 
 ```python
+# glorfindel/detectors.py
 class PrometheusDetector(DetectionConnector):
-    def poll_alert(self) -> tuple[float, dict] | None:
-        # Query Prometheus
-        # Return (detection_s, result_row) or None
+    def __init__(self, workspace_id: str):   # workspace_id = Prometheus endpoint
+        self.endpoint = workspace_id
+
+    def poll_alert(
+        self, query: str, since: float, timeout_s: float, interval_s: float = 10.0
+    ) -> tuple[float, dict] | None:
+        # Poll until the query returns results or timeout_s expires
+        # Return (elapsed_seconds, first_result_row) or None
         ...
 
-# detectors.py — factory
-def detector_for(source: str) -> DetectionConnector:
-    if source == "prometheus":
-        return PrometheusDetector(...)
+_DETECTORS["prometheus"] = PrometheusDetector
 ```
 
-`poll_alert()` is called every 10s by the `poll_detection` node. The result row is what the LLM
-sees to decide — include `CallerIpAddress` or `SourceIP` for internal/external IP routing to work correctly.
+The result row is what the LLM sees to decide — include `CallerIpAddress` or `SourceIP` for internal/external IP routing to work correctly. The `RulePoller` uses `interval_s` from each rule; `poll_detection` uses a tight 10s loop for `attack_started` signals.
+
+**2. Add the query language to `agent.py`:**
+
+```python
+# glorfindel/agent.py — _SOURCE_LANGUAGES
+_SOURCE_LANGUAGES["prometheus"] = "PromQL"
+```
+
+This ensures the LLM proposes queries in the right language when `detection_missed` fires.
+
+**3. Add a rule in `detection_rules.yaml`:**
+
+```yaml
+- name: high-cpu-prometheus
+  source: prometheus
+  workspace_id: "http://prometheus:9090"
+  ttp: T1486
+  resource_id: "/vm/my-vm"
+  interval_s: 30
+  query: |
+    rate(node_cpu_seconds_total{mode!="idle"}[5m]) > 0.9
+```
 
 ### Adding a cloud provider (AWS, GCP, ...)
 
@@ -330,7 +384,14 @@ glorfindel revert <resource_id> --yes      # release isolation + unblock all IPs
 
 **StorageBlobLogs**: near-realtime (seconds). `AzureNetworkAnalytics_CL` (Traffic Analytics) is unusable for detection — 10-60 min latency.
 
-**Each scenario's detection block** contains prerequisites (KQL verification queries) and hints (purple-team context for `detection_missed` feedback). Run the prerequisite queries in your monitoring system before launching — if any returns no rows, detection will time out.
+**Each scenario's `detection` block** contains `prerequisites` (verification queries to run before launching), `hints` (purple-team context sent to Glorfindel on `detection_missed`), `timeout` (hard stop for the feedback watcher), and optionally `time_max` (declared SLA). Detection queries and configuration live in `detection_rules.yaml` — not in the scenario.
+
+**Before each run, run the prerequisite queries** in your monitoring system. If any returns no rows, detection will time out.
+
+**Before deploying Glorfindel**, verify remediation readiness:
+```bash
+glorfindel audit --all   # NSG / backup vault / compute — surfaces IAM gaps with fix commands
+```
 
 ## Tests
 

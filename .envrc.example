@@ -42,6 +42,18 @@ export AZURE_TENANT_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 # az account show --query id -o tsv
 export AZURE_SUBSCRIPTION_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 
+# ── Glorfindel — détection continue (detection_rules.yaml) ───────────────────
+# Ces variables résolvent les placeholders ${...} dans detection_rules.yaml.
+# Elles ne sont nécessaires que si tu utilises glorfindel/rules/azure/detection_rules.yaml.
+#
+# AZURE_WORKSPACE_ID : GUID du Log Analytics Workspace (pas le resource ID complet)
+#   az monitor log-analytics workspace show -g <rg> -n <workspace> --query customerId -o tsv
+export AZURE_WORKSPACE_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+#
+# AZURE_VM_RESOURCE_ID : resource ID complet de la VM cible
+#   az vm show -g <rg> -n <vm> --query id -o tsv
+export AZURE_VM_RESOURCE_ID=/subscriptions/<SUBSCRIPTION_ID>/resourceGroups/<RG>/providers/Microsoft.Compute/virtualMachines/<VM_NAME>
+
 # ── Glorfindel — optionnel ────────────────────────────────────────────────────
 # Slack / Teams / Discord webhook — actions autonomes (one-way)
 # Slack/Teams :

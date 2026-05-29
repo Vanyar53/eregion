@@ -2,17 +2,24 @@
 # Glorfindel polls these continuously (independent of Annatar scenarios).
 # Annatar scenarios reference these rules by TTP — no query duplication.
 #
-# source:    detection system — determines the query language:
-#              azure_monitor  → KQL (Kusto Query Language)
-#              prometheus     → PromQL
-#              splunk         → SPL (Splunk Processing Language)
-#              datadog        → Datadog Query Language
-#              loki           → LogQL
-#              cloudwatch     → CloudWatch Logs Insights
-#            Extend detectors.py to add new sources.
-# query:     written in the language for the source above
-# interval_s: polling period in seconds
-# enabled:   set to false to disable without deleting
+# source:        detection system — determines the query language:
+#                  azure_monitor  → KQL (Kusto Query Language)
+#                  prometheus     → PromQL
+#                  splunk         → SPL (Splunk Processing Language)
+#                  datadog        → Datadog Query Language
+#                  loki           → LogQL
+#                  cloudwatch     → CloudWatch Logs Insights
+#                Extend detectors.py to add new sources.
+# query:         written in the language for the source above
+# workspace_id:  for azure_monitor: Log Analytics Workspace GUID (not the resource ID)
+#                  az monitor log-analytics workspace show -g <rg> -n <name> --query customerId -o tsv
+#                for prometheus: the Prometheus endpoint URL
+# resource_id:   full Azure resource ID of the protected VM
+#                  az vm show -g <rg> -n <vm> --query id -o tsv
+# interval_s:    polling period in seconds
+# enabled:       set to false to disable without deleting
+#
+# Tip: use ${AZURE_WORKSPACE_ID} and ${AZURE_VM_RESOURCE_ID} — resolved from .envrc at load time.
 
 rules:
 

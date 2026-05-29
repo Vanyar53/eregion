@@ -85,12 +85,15 @@ class DetectionConfig:
 
 # ── Loading ────────────────────────────────────────────────────────────────────
 
-def load_config(path: str | Path) -> DetectionConfig:
+def load_config(path: str | Path, glorfindel_cfg=None) -> DetectionConfig:
     """Load detection configuration from YAML.
 
+    glorfindel_cfg (GlorfindelConfig | None): when provided, monitoring backend
+    workspace_id and endpoint are resolved from it — detection_rules.yaml only
+    needs backend names, not connection details (single source of truth).
+
     Supports two formats:
-    - New (recommended): monitoring_backends + assets + rules sections.
-      workspace_id and resource_id are resolved from the asset/backend graph.
+    - New (recommended): assets + rules sections, backends from glorfindel_cfg.
     - Legacy: rules with workspace_id and resource_id inline.
       Backward-compatible so existing configs and tests continue to work.
     """
@@ -105,15 +108,27 @@ def load_config(path: str | Path) -> DetectionConfig:
     if not data or not isinstance(data, dict):
         return DetectionConfig(backends=[], assets=[], rules=[])
 
-    # ── Parse backends ────────────────────────────────────────────────────────
-    backends: list[MonitoringBackend] = []
+    # ── Build backend lookup ──────────────────────────────────────────────────
+    # glorfindel_cfg is the source of truth for connection details (workspace_id,
+    # endpoint). YAML monitoring_backends (if present) supplement for legacy configs.
+    backend_by_name: dict[str, MonitoringBackend] = {}
+    if glorfindel_cfg:
+        for b in glorfindel_cfg.monitoring_backends:
+            backend_by_name[b.name] = MonitoringBackend(
+                name=b.name,
+                type=b.type,
+                workspace_id=b.workspace_id,
+                endpoint=b.endpoint,
+            )
     for b in data.get("monitoring_backends", []):
-        backends.append(MonitoringBackend(
-            name=b["name"],
-            type=b.get("type", "azure_monitor"),
-            workspace_id=b.get("workspace_id", ""),
-            endpoint=b.get("endpoint", ""),
-        ))
+        if b["name"] not in backend_by_name:
+            backend_by_name[b["name"]] = MonitoringBackend(
+                name=b["name"],
+                type=b.get("type", "azure_monitor"),
+                workspace_id=b.get("workspace_id", ""),
+                endpoint=b.get("endpoint", ""),
+            )
+    backends = list(backend_by_name.values())
 
     # ── Parse assets ──────────────────────────────────────────────────────────
     assets: list[Asset] = []
@@ -127,8 +142,7 @@ def load_config(path: str | Path) -> DetectionConfig:
             resource_group=a.get("resource_group", ""),
         ))
 
-    backend_by_name = {b.name: b for b in backends}
-    asset_by_name   = {a.name: a  for a in assets}
+    asset_by_name = {a.name: a for a in assets}
 
     # ── Parse rules ───────────────────────────────────────────────────────────
     rules: list[DetectionRule] = []
@@ -196,9 +210,9 @@ def load_config(path: str | Path) -> DetectionConfig:
     return DetectionConfig(backends=backends, assets=assets, rules=rules)
 
 
-def load_rules(path: str | Path) -> list[DetectionRule]:
+def load_rules(path: str | Path, glorfindel_cfg=None) -> list[DetectionRule]:
     """Return only the rules from a detection config file. Backward-compatible."""
-    return load_config(path).rules
+    return load_config(path, glorfindel_cfg=glorfindel_cfg).rules
 
 
 # ── Status persistence ────────────────────────────────────────────────────────

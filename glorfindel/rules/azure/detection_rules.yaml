@@ -1,46 +1,30 @@
 # Glorfindel detection configuration — source de vérité pour la détection.
 #
-# Structure en 3 sections séparées :
+# Structure en 2 sections :
 #
-#   monitoring_backends  →  moteurs de détection (LAW, Prometheus, Splunk...)
-#   assets               →  ressources surveillées (VMs, Storage accounts...)
-#   rules                →  requêtes de détection, associées à des assets
+#   assets  →  ressources non-VM (RSV, storage...) — les VMs sont découvertes
+#              dynamiquement depuis glorfindel-config.yaml (Heartbeat)
+#   rules   →  requêtes de détection, référencent les backends par nom
+#              workspace_id et endpoint résolus depuis glorfindel-config.yaml
 #
-# Les rules ne contiennent plus de workspace_id ni de resource_id inline —
-# ces valeurs sont résolues depuis les backends et assets référencés.
-#
-# Variables d'environnement : ${VAR} est résolu depuis .envrc au chargement.
-# az monitor log-analytics workspace show -g <rg> -n <name> --query customerId -o tsv
-# az vm show -g <rg> -n <vm> --query id -o tsv
-
-# ── Monitoring backends ────────────────────────────────────────────────────────
-# Un backend = un moteur de détection avec ses paramètres de connexion.
-
-monitoring_backends:
-  - name: law-annatar
-    type: azure_monitor
-    workspace_id: "b451c51a-1cd0-4125-ac70-6aaf2c1dc209"
-    # type: prometheus → workspace_id = endpoint URL (http://localhost:9090)
-    # type: splunk     → workspace_id = Splunk HEC endpoint
+# Les rules ne contiennent aucun workspace_id ni resource_id inline.
+# Toute la config de connexion est dans glorfindel-config.yaml.
 
 # ── Assets ────────────────────────────────────────────────────────────────────
-# Les VMs sont découvertes dynamiquement via glorfindel-config.yaml (Heartbeat).
-# Seuls les assets non-VM (RSV, storage...) sont déclarés ici.
+# Les VMs sont découvertes dynamiquement — seuls les assets non-VM sont déclarés.
 
 assets:
   - name: rsv-annatar
     type: azure_backup_vault
-    # vault_name used by audit + restore actions (not a full Azure resource_id)
     vault_name: "rsv-annatar"
     resource_group: "annatar"
     # No monitoring_backend — RSV is an action target, not a detection source
 
 # ── Detection rules ────────────────────────────────────────────────────────────
-# Une rule référence des assets (résout resource_id) et hérite du backend
-# de l'asset (résout workspace_id + source/langage de query).
-#
-# interval_s  : période de polling en secondes
-# enabled     : mettre à false pour désactiver sans supprimer
+# monitoring_backends : référence le backend par nom (workspace_id dans glorfindel-config.yaml)
+# assets: [auto]      : s'applique à toutes les VMs découvertes par ce backend
+# interval_s          : période de polling en secondes
+# enabled             : mettre à false pour désactiver sans supprimer
 
 rules:
 
@@ -48,6 +32,7 @@ rules:
     description: "Sustained high disk write rate — T1486 ransomware file encryption"
     enabled: true
     ttp: T1486
+    monitoring_backends: [law-annatar]
     assets: [auto]
     interval_s: 30
     query: |
@@ -63,6 +48,7 @@ rules:
     description: "PutBlob from a VM private IP — T1041 exfiltration via MSI"
     enabled: true
     ttp: T1041
+    monitoring_backends: [law-annatar]
     assets: [auto]
     interval_s: 30
     query: |
@@ -79,6 +65,7 @@ rules:
     description: "Repeated SSH failures from an external IP — T1110.001"
     enabled: true
     ttp: T1110.001
+    monitoring_backends: [law-annatar]
     assets: [auto]
     interval_s: 30
     query: |
@@ -97,6 +84,7 @@ rules:
     description: "Successful sudo to root by a non-root user — T1548.003"
     enabled: true
     ttp: T1548.003
+    monitoring_backends: [law-annatar]
     assets: [auto]
     interval_s: 30
     query: |

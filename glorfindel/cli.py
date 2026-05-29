@@ -345,7 +345,7 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
             from glorfindel.discovery import AssetRegistry, start_discovery
 
             _glorfindel_cfg = load_glorfindel_config()
-            det_cfg = _load_det_cfg(_rules_file)
+            det_cfg = _load_det_cfg(_rules_file, glorfindel_cfg=_glorfindel_cfg)
             rules = det_cfg.rules
 
             if rules:

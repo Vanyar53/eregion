@@ -33,13 +33,19 @@ class DetectionRule:
 
 
 def load_rules(path: str | Path) -> list[DetectionRule]:
-    """Load detection rules from a YAML file."""
+    """Load detection rules from a YAML file.
+
+    Values using ${VAR} syntax are expanded from environment variables
+    so workspace_id and resource_id can be set via .envrc without editing
+    the YAML directly.
+    """
+    import os
     if yaml is None:
         raise ImportError("PyYAML is required: pip install pyyaml")
     p = Path(path)
     if not p.exists():
         return []
-    data = yaml.safe_load(p.read_text())
+    data = yaml.safe_load(os.path.expandvars(p.read_text()))
     if not data or not isinstance(data, dict):
         return []
     rules = []

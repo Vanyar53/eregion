@@ -156,10 +156,19 @@ python scripts/simulate_annatar.py --ids-gap  # detection_timeout flow
 
 Glorfindel doesn't require Annatar. Two standalone modes:
 
-**Continuous detection** — fill in `workspace_id` and `resource_id` in `glorfindel/rules/azure/detection_rules.yaml`, then:
+**Continuous detection** — configure your Log Analytics Workspace in `glorfindel-config.yaml`, then:
 ```bash
-glorfindel watch runs/   # polls your rules continuously, responds on match
+cp glorfindel-config.yaml.example glorfindel-config.yaml
+# edit: fill in workspace_id (LAW GUID) and vault_name (RSV)
+glorfindel watch runs/   # polls rules continuously, auto-discovers VMs via Heartbeat
 ```
+
+`glorfindel-config.yaml` is the single source of truth for infrastructure connection details:
+- `monitoring_backends` — LAW workspace IDs, Prometheus endpoints, etc.
+- `action_backends` — Recovery Services Vault for restore
+- `exceptions` — fnmatch patterns to opt specific VMs out of auto-discovered rules
+
+`detection_rules.yaml` contains only detection rules (KQL queries, TTPs, backend references). VMs are discovered dynamically via LAW Heartbeat — no `resource_id` or `workspace_id` needed inline.
 
 **Manual signal injection** — write a `detection` signal directly:
 ```bash

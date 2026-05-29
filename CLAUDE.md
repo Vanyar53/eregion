@@ -123,13 +123,29 @@ Quand `signals_count > 1` ou `actions_taken` non vide → prompt injecte context
 ## Fichiers clés
 
 ```
+glorfindel-config.yaml          → source unique pour la config infra (NE PAS confondre avec detection_rules.yaml)
+                                   monitoring_backends: workspace_id LAW, endpoint Prometheus...
+                                   action_backends: RSV vault_name + resource_group
+                                   exceptions: fnmatch patterns opt-out par VM et/ou par règle
+                                   (fichier non versionné — monté en Docker volume ou présent localement)
+
 glorfindel/
+  config.py             → GlorfindelConfig + load_glorfindel_config() — charge glorfindel-config.yaml
+                          ExceptionConfig.is_excluded(asset_name, rule_name) — opt-out fnmatch
+  discovery.py          → AssetRegistry (thread-safe, persist ~/.glorfindel/discovered_assets.json)
+                          DiscoveryService — thread daemon, découverte au démarrage + périodique
+                          _discover_from_azure_monitor() → LAW Heartbeat query → liste VMs actives
+                          replace_for_backend() : remplace (pas merge) — évince les VMs supprimées
+                          None sur erreur query → cache conservé (pas d'éviction sur panne)
   agent.py              → LangGraph 7 nodes + _SOURCE_LANGUAGES map (source → query lang)
                           load_context → [poll_detection | propose_detection_rule] → decide
                           → execute_action → verify_action → store_cycle
   actions.py            → CloudConnector ABC + AzureConnector + check_nsg_access/check_backup_points/check_compute_access
-  detectors.py          → DetectionConnector ABC + AzureMonitorDetector (poll 10s)
+  detectors.py          → DetectionConnector ABC + AzureMonitorDetector (poll 10s) + run_query()
   detection_rules.py    → DetectionRule dataclass + RulePoller (continuous polling, status persistence)
+                          load_config(path, glorfindel_cfg=None) — workspace_id résolu depuis glorfindel_cfg
+                          RulePoller.expand_for_discovered(registry, glorfindel_cfg) — démarre threads
+                          par (règle auto_apply, asset découvert), thread s'arrête si asset évincé
   audit.py              → AuditCheck, AuditResult, run() — NSG/backup/compute readiness checks, IAM gap detection
   proposed_rules.py     → record/pending/approve() — detection rule proposal lifecycle
   memory.py             → CycleMemory ChromaDB (confidence + past_cycles_used)
@@ -141,12 +157,16 @@ glorfindel/
   tui.py                → Rich TUI full-screen (glorfindel dashboard) : resources + feed + escalations, raccourcis a/r/x/u/v
   api.py                → FastAPI War Room — /api/state, /api/feed (WS), /api/config, /api/audit[/<vm>],
                           /api/pending/rules, /api/action/{release,revert,restore,ack,approve-rule}
+                          /api/discovered — assets découverts (registry)
   static/index.html     → War Room web UI — cards VM, feed live,
                           boutons ↩️ Release (isolated) | ↩️ Unblock (blocked IP) | ⟳ Reset (les deux) | 🔄 Restore
-                          panneau Config (règles + audit remédiation + proposed rules)
+                          carte MONITORING : backends + assets découverts + règles cliquables (modal query)
+                          panneau ⚙ Config : Azure credentials + LLM uniquement
   rules/azure/
-    detection_rules.yaml → source de vérité detection — source détermine le langage de query
-                           (azure_monitor=KQL, prometheus=PromQL, splunk=SPL, etc.)
+    detection_rules.yaml → rules UNIQUEMENT — queries KQL, TTPs, noms de backends
+                           PAS de workspace_id, resource_id, ni section assets
+                           assets: [auto] → s'applique aux VMs découvertes par le backend
+                           monitoring_backends: [law-annatar] dans chaque rule → nom du backend
 
 annatar/
   runner/engine.py    → setup → integrity check → attack → emit attack_started (sans query — Glorfindel résout via detection_rules.yaml)
@@ -175,6 +195,7 @@ terraform/                    → infra complète Azure (VM, NSG, LAW, Backup, D
   bot_posted.json             → IDs escalades déjà postées (évite doublons au redémarrage du bot)
   bot_threads.json            → resource_id → thread_id Discord (persistance entre redémarrages)
   rule_status.json            → état de polling des règles (last_poll, last_match, match_count, last_error)
+  discovered_assets.json      → cache assets découverts (AssetRegistry) — survit aux redémarrages
   .bashrc                     → PS1 + HISTFILE + alias gf (chargé par make glorfindel-shell)
   .bash_history               → historique bash persistant
 
@@ -265,12 +286,14 @@ GLORFINDEL_INCIDENT_TTL_S=300       # TTL fenêtre incident
 ## Tests
 
 ```bash
-pytest                    # 132 tests, 0 appel Azure, 0 appel LLM, 0 écriture ~/.glorfindel/
+pytest                    # 171 tests, 0 appel Azure, 0 appel LLM, 0 écriture ~/.glorfindel/
 pytest tests/unit/test_agent_nodes.py        # 30 tests LangGraph nodes
 pytest tests/unit/test_glorfindel.py         # 27 tests actions/routing/signals
 pytest tests/unit/test_detection_rules.py    # 14 tests RulePoller + load_rules + status
 pytest tests/unit/test_proposed_rules.py     # 14 tests record/pending/approve + routing
 pytest tests/unit/test_audit.py              # 14 tests NSG/backup/compute/IAM readiness
+pytest tests/unit/test_config.py             # 11 tests GlorfindelConfig + ExceptionConfig
+pytest tests/unit/test_discovery.py          # 24 tests AssetRegistry + DiscoveryService + eviction
 ```
 
 ---

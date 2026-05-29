@@ -198,7 +198,7 @@ When an escalation fires, `glorfindel pending` shows **context-aware next steps 
 - **✓ Acknowledge** — marks escalation resolved, archives thread when done
 - **📋 Command** — shows the CLI command to run (ephemeral)
 - **🔄 Restore** — executes `glorfindel restore` directly from Discord (for `restore_from_backup` and `low_confidence` escalations)
-- **↩️ Revert** — executes `glorfindel revert` directly from Discord (for `verification_failed`)
+- **↩️ Revert** — executes `glorfindel revert` directly from Discord (for `verification_failed`) — full reset (isolation + IP blocks)
 
 A `/pending` slash command lists open escalations. Set `DISCORD_PING_ROLE` to notify an on-call role on thread creation. When `DISCORD_BOT_TOKEN` is set, escalation webhook notifications are suppressed (bot handles them in threads).
 
@@ -212,11 +212,21 @@ glorfindel audit <resource_id>                  # remediation readiness: NSG, ba
 glorfindel audit --all                          # audit all resources in detection_rules.yaml
 glorfindel approve-rule <id>                    # apply a proposed detection rule to detection_rules.yaml
 glorfindel respond runs/<run_id>_signals.jsonl  # post-run processing
+# ── Remediation actions — choose the right scope ─────────────────────────────
+#
+# VM state after an incident:
+#   isolated  = NSG deny-all rule applied (isolate_vm)
+#   blocked   = NSG deny rule for a specific IP (block_suspicious_ip)
+#
+# Use the minimum scope:
+glorfindel release <resource_id> --yes          # lift isolation only (post-restore, VM back online)
+glorfindel unblock <ip> <resource_id> --yes     # remove one IP block (e.g. after T1110)
+glorfindel revert <resource_id> --yes           # reset: release isolation + unblock all IPs
 glorfindel restore <resource_id> --yes          # trigger Azure Backup restore (--before auto-detected)
-glorfindel release <resource_id> --yes          # manually release an isolation
-glorfindel unblock <ip> <resource_id> --yes     # remove a block_suspicious_ip rule
 glorfindel list                                 # all VMs with active actions (isolation + blocked IPs)
-glorfindel revert <resource_id> --yes           # release isolation + unblock all IPs in one command
+#
+# War Room buttons:   ↩️ Release (isolated) | ↩️ Unblock (blocked IP) | ⟳ Reset (both)
+# TUI keyboard:       x:release  u:unblock  v:reset  r:restore
 glorfindel pending                              # list pending escalations
 glorfindel pending --watch                      # stay running, print new escalations as they arrive
 glorfindel ack <escalation_id>                  # acknowledge an escalation

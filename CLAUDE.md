@@ -138,8 +138,9 @@ glorfindel/
   bot.py                → Discord bot — un fil par VM, boutons Acquitter + Commande, /pending slash command
   tui.py                → Rich TUI full-screen (glorfindel dashboard) : resources + feed + escalations, raccourcis a/r/v
   api.py                → FastAPI War Room — /api/state, /api/feed (WS), /api/config, /api/audit[/<vm>],
-                          /api/pending/rules, /api/action/{revert,restore,ack,approve-rule}
-  static/index.html     → War Room web UI — cards VM, feed live, boutons Revert/Restore/Ack,
+                          /api/pending/rules, /api/action/{release,revert,restore,ack,approve-rule}
+  static/index.html     → War Room web UI — cards VM, feed live,
+                          boutons ↩️ Release (isolated) | ↩️ Unblock (blocked IP) | ⟳ Reset (les deux) | 🔄 Restore
                           panneau Config (règles + audit remédiation + proposed rules)
   rules/azure/
     detection_rules.yaml → source de vérité detection — source détermine le langage de query
@@ -203,10 +204,19 @@ glorfindel list                              # toutes VMs : isolations + IPs blo
 glorfindel pending                           # escalades en attente
 glorfindel pending --watch                   # alerting temps réel
 
-# Actions remédiation
+# Actions remédiation — choisir le bon périmètre
+#
+# Sémantique :
+#   isolated = règle NSG deny-all sur la VM  → glorfindel release (lever l'isolation)
+#   blocked  = règle NSG deny sur une IP     → glorfindel unblock (dé-bloquer l'IP)
+#   les deux → glorfindel revert (reset complet)
+#
+# War Room :  ↩️ Release (isolated) | ↩️ Unblock (blocked IP) | ⟳ Reset (les deux)
+# TUI :       x:release  u:unblock  v:reset  r:restore
+#
+glorfindel release <resource_id> --yes       # lever isolation NSG (post-restore, VM de retour)
+glorfindel unblock <ip> <resource_id> --yes  # supprimer une règle block IP
 glorfindel revert <resource_id> --yes        # reset complet : release + unblock toutes IPs
-glorfindel release <resource_id> --yes       # isolation seule
-glorfindel unblock <ip> <resource_id> --yes  # IP seule
 glorfindel restore <resource_id> --yes       # Azure Backup (--before auto-détecté)
 glorfindel ack <escalation_id>               # acquitter escalade
 glorfindel ack --all                         # acquitter toutes
@@ -341,7 +351,7 @@ Types d'escalade : `low_confidence` (detection_timeout + snapshot), `destructive
 - Bouton **✓ Acknowledge** → `escalations.resolve()` + archivage auto si plus d'escalades pour la VM
 - Bouton **📋 Command** → commande CLI à exécuter (éphémère)
 - Bouton **🔄 Restore** → exécute `glorfindel restore <rid> --yes` (`restore_from_backup`, `low_confidence`)
-- Bouton **↩️ Revert** → exécute `glorfindel revert <rid> --yes` (`verification_failed`)
+- Bouton **↩️ Revert** → exécute `glorfindel revert <rid> --yes` (`verification_failed`) = reset complet (isolation + blocs IP)
 - `/pending` slash command → liste des escalades en attente
 - `DISCORD_PING_ROLE` → ping `@rôle` à l'ouverture d'un fil
 - `bot_posted.json` + `bot_threads.json` : persistance entre redémarrages (pas de doublons, même fil)

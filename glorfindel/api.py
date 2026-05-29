@@ -294,8 +294,6 @@ async def action_release(vm_name: str) -> dict:
         [_bin(), "release", resource_id, "--yes"],
         capture_output=True, text=True, timeout=60,
     )
-    if result.returncode == 0:
-        _write_manual_feed("release_isolation", resource_id, {"status": "released"})
     return {
         "stdout": result.stdout,
         "stderr": result.stderr,
@@ -313,8 +311,6 @@ async def action_revert(vm_name: str) -> dict:
         [_bin(), "reset", resource_id, "--yes"],
         capture_output=True, text=True, timeout=60,
     )
-    if result.returncode == 0:
-        _write_manual_feed("reset", resource_id, {"status": "clean"})
     return {
         "stdout": result.stdout,
         "stderr": result.stderr,

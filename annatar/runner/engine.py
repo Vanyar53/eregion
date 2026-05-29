@@ -135,15 +135,19 @@ class Engine:
         console.print(f"\n[dim]Report saved: {path}[/dim]")
 
         # Purple-team feedback: monitor Glorfindel's detection result in
-        # background and emit detection_missed if it times out.
+        # Wait for Glorfindel's detection result and emit feedback if needed.
+        # Non-daemon so the process stays alive until the result is known.
+        # Short-circuits immediately if no glorfindel watch appears to be running.
         if scenario.detection and detection_timeout_s > 0 and not self.dry_run:
             import threading as _threading
-            _threading.Thread(
+            t = _threading.Thread(
                 target=self._wait_and_emit_feedback,
                 args=(run_id, emitter, scenario, detection_timeout_s),
-                daemon=True,
+                daemon=False,
                 name=f"annatar-feedback-{run_id}",
-            ).start()
+            )
+            t.start()
+            t.join()
 
     def _dry_run_display(self, scenario):
         console.print("[yellow]DRY RUN — no actions will be executed[/yellow]\n")
@@ -195,6 +199,35 @@ class Engine:
         so Glorfindel can propose an improved detection rule.
         """
         debug_path = Path("runs") / f"{run_id}_debug.jsonl"
+        heartbeat = Path.home() / ".glorfindel" / "watch_heartbeat"
+
+        # Short-circuit: skip if no active glorfindel watch.
+        # Retry up to 30s to account for a watch that just started.
+        def _watch_active() -> bool:
+            if debug_path.exists():
+                return True  # watch already responded
+            if not heartbeat.exists():
+                return False
+            try:
+                ts = datetime.fromisoformat(heartbeat.read_text().strip())
+                return (time.time() - ts.timestamp()) < 90
+            except Exception:
+                return False
+
+        if not _watch_active():
+            # Retry for up to 30s in case the watch just started
+            deadline_check = time.time() + 30
+            while time.time() < deadline_check:
+                time.sleep(5)
+                if _watch_active():
+                    break
+            else:
+                console.print(
+                    "[dim]Purple team feedback: no active glorfindel watch detected"
+                    " — skipping.[/dim]"
+                )
+                return
+
         wait_s = detection_timeout_s + 120
         poll_interval = 5.0
         deadline = time.time() + wait_s

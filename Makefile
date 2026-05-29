@@ -17,7 +17,8 @@ GLORFINDEL_STATE := \
 	-v $(HOME)/.cache/chroma:/root/.cache/chroma
 
 ANNATAR_STATE := \
-	-v $(HOME)/.annatar:/root/.annatar
+	-v $(HOME)/.annatar:/root/.annatar \
+	-v $(HOME)/.glorfindel:/root/.glorfindel:ro
 
 ANNATAR_VOLS := \
 	-v $(PWD)/annatar/scenarios:/app/annatar/scenarios \

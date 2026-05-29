@@ -77,16 +77,17 @@ class Engine:
         for action in scenario.setup:
             self._execute_action(executor, action)
 
-        # Integrity check after setup — validates the VM is clean and ready to attack
-        console.print("[cyan]->[/cyan] Pre-run integrity check...")
-        if not executor.verify_restore_integrity():
-            console.print(
-                "[red]Pre-run integrity check FAILED — VM is not in a clean state.[/red]\n"
-                "  Setup ran but disk still has artifacts. Check the data disk manually.\n"
-                "  [bold]az vm run-command invoke -g annatar -n vm-annatar-victim "
-                "--command-id RunShellScript --scripts 'lsblk && ls /mnt/testdata'[/bold]"
-            )
-            return
+        # Integrity check — only for scenarios with setup (e.g. T1486 ransomware testdata disk)
+        if scenario.setup:
+            console.print("[cyan]->[/cyan] Pre-run integrity check...")
+            if not executor.verify_restore_integrity():
+                console.print(
+                    "[red]Pre-run integrity check FAILED — VM is not in a clean state.[/red]\n"
+                    "  Setup ran but disk still has artifacts. Check the data disk manually.\n"
+                    "  [bold]az vm run-command invoke -g annatar -n vm-annatar-victim "
+                    "--command-id RunShellScript --scripts 'lsblk && ls /mnt/testdata'[/bold]"
+                )
+                return
 
         # Steps
         T0 = time.time()

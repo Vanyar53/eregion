@@ -513,8 +513,14 @@ def investigate(state: GlorfindelState) -> GlorfindelState:
         first_row.get("Computer")
         or first_row.get("computer")
         or first_row.get("host")
-        or signal.get("resource_id", "").split("/")[-1]
     )
+    if not vm:
+        vm = signal.get("resource_id", "").split("/")[-1]
+        _console.print(
+            f"  [dim]investigate: Computer absent from signal — "
+            f"using ARM name '{vm}' as hostname fallback "
+            f"(queries may return empty if OS hostname differs)[/dim]"
+        )
 
     ctx: dict[str, list[dict]] = {}
 
@@ -545,6 +551,12 @@ def investigate(state: GlorfindelState) -> GlorfindelState:
 
     if not ctx:
         return state
+
+    if all(len(v) == 0 for v in ctx.values()):
+        _console.print(
+            f"  [yellow]investigate: all queries returned empty for {vm} "
+            f"— enrichment inconclusive (hostname mismatch? data not yet ingested?)[/yellow]"
+        )
 
     enriched = {
         **signal,

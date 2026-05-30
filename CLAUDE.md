@@ -56,33 +56,39 @@ attack_started → thread poll-<vm>-<id>   (parallèle, N attaques × N threads)
 
 ---
 
-## LangGraph — 6 nodes
+## LangGraph — 8 nodes
 
 ```
-load_context → poll_detection → decide → execute_action → verify_action → store_cycle
-                                    ↓ (escalate)
-                              escalate_to_human → store_cycle
+load_context → poll_detection → investigate → decide → execute_action → verify_action → store_cycle
+                                                  ↓ (escalate)
+                                            escalate_to_human → store_cycle
 ```
 
 - `poll_detection` : no-op sauf `attack_started` → poll Azure Monitor jusqu'à alerte ou timeout
-- `decide` : LLM via LiteLLM + RAG (3 cycles similaires) + incident context si multi-signal
+- `investigate` : requêtes KQL post-détection selon contenu du signal (pas le TTP label)
+  - MaxWrite présent → top_write_processes + backup_agent_check (ransomware vs backup légitime)
+  - FailedAttempts+SourceIP → successful_auth_from_ip (brute force a-t-il réussi ?)
+  - USER=root dans syslog → root_commands + disk_write_after_escalation
+  - Résultats dans `raw_signal.investigative_context` — le LLM les voit avant decide
+  - No-op si pas de workspace_id ou dry_run
+- `decide` : LLM via LiteLLM + few-shot anchors + RAG (3 cycles) + incident context + investigative_context
 - `verify_action` : NSG check (isolate/release), Compute API (snapshot), NSG rule (block)
 - `store_cycle` : ChromaDB + `runs/{run_id}_debug.jsonl`
 - `dry_run: bool` dans `GlorfindelState` → skipe escalations.record() et actions réelles
 
 ---
 
-## Routing TTP → action (_SYSTEM_PROMPT)
+## Raisonnement LLM — few-shot + signal enrichi
 
-| Situation | Action | Escalade | Rationale |
-|---|---|---|---|
-| `detection` T1486 (ransomware) | `restore_from_backup` | **Oui** | Disk chiffré — restore requis, isolation insuffisante |
-| `detection` T1041 (exfil interne) | `isolate_vm` | Non | Couper canal, disk intact — pas de restore |
-| `detection` T1548 (priv esc) | `isolate_vm` | Non | OS compromis, accès coupé |
-| `detection` T1110 (brute force ext.) | `block_suspicious_ip` | Non | Bloquer l'IP externe uniquement |
-| `detection_timeout` | `snapshot` forensique | Oui | IDS gap — préserver état |
-| `recovery_complete` | `release_isolation` | Non | VM propre après restore |
-| `recovery_failed` | escalade | Oui | |
+Le LLM ne suit pas de routing table TTP→action. Il raisonne depuis :
+1. Les indicateurs bruts du signal (`first_result_row`)
+2. Le contexte investigatif (`investigative_context`) collecté par le noeud `investigate`
+3. Les exemples few-shot validés en prod dans `_SYSTEM_PROMPT`
+4. Les cycles passés ChromaDB + l'incident context multi-signal
+
+Exemples few-shot : 4 chaînes de raisonnement complètes (MaxWrite → encryption → restore ;
+CallerIP RFC-1918 → exfil, disk intact → isolate ; etc.). Le LLM peut dévier sur les cas
+ambigus — les exemples ancrent les cas validés.
 
 **Règle de sécurité** : action destructive sans `escalate=True` → bloquée par le graph, pas par confiance dans le LLM.
 
@@ -137,9 +143,9 @@ glorfindel/
                           _discover_from_azure_monitor() → LAW Heartbeat query → liste VMs actives
                           replace_for_backend() : remplace (pas merge) — évince les VMs supprimées
                           None sur erreur query → cache conservé (pas d'éviction sur panne)
-  agent.py              → LangGraph 7 nodes + _SOURCE_LANGUAGES map (source → query lang)
-                          load_context → [poll_detection | propose_detection_rule] → decide
-                          → execute_action → verify_action → store_cycle
+  agent.py              → LangGraph 8 nodes + _SOURCE_LANGUAGES map (source → query lang)
+                          load_context → [poll_detection | propose_detection_rule]
+                          → investigate → decide → execute_action → verify_action → store_cycle
   actions.py            → CloudConnector ABC + AzureConnector + check_nsg_access/check_backup_points/check_compute_access
   detectors.py          → DetectionConnector ABC + AzureMonitorDetector (poll 10s) + run_query()
   detection_rules.py    → DetectionRule dataclass + RulePoller (continuous polling, status persistence)
@@ -286,8 +292,8 @@ GLORFINDEL_INCIDENT_TTL_S=300       # TTL fenêtre incident
 ## Tests
 
 ```bash
-pytest                    # 171 tests, 0 appel Azure, 0 appel LLM, 0 écriture ~/.glorfindel/
-pytest tests/unit/test_agent_nodes.py        # 30 tests LangGraph nodes
+pytest                    # 193 tests, 0 appel Azure, 0 appel LLM, 0 écriture ~/.glorfindel/
+pytest tests/unit/test_agent_nodes.py        # 43 tests LangGraph nodes (incl. investigate)
 pytest tests/unit/test_glorfindel.py         # 27 tests actions/routing/signals
 pytest tests/unit/test_detection_rules.py    # 14 tests RulePoller + load_rules + status
 pytest tests/unit/test_proposed_rules.py     # 14 tests record/pending/approve + routing

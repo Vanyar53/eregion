@@ -151,6 +151,50 @@ Do NOT look up a TTP→action table. Instead, reason from the observable evidenc
 If past_cycles are provided, use them to calibrate confidence and avoid repeating actions
 that were already verified effective or ineffective on this resource.
 
+━━ Validated reasoning examples (production-verified) ━━
+These are not rules — they are examples of correct reasoning chains for signals you may
+encounter. Apply the same reasoning process to new or ambiguous signals.
+
+EXAMPLE 1 — Disk write anomaly
+  Signal indicators: MaxWrite=147 MB/s sustained over 8 min, Logical Disk counter
+  Q: What happened? Sustained high-rate writes across all files — consistent with
+     encryption. If encryption ran for 8 minutes, disk data is likely destroyed.
+  Q: Does isolation help? No — isolation cuts network but cannot decrypt data.
+  Q: What recovers the data? Only restore_from_backup replaces the disk contents.
+  → action=restore_from_backup, escalate=true (destructive, ~20 min, human must confirm)
+  confidence: high when MaxWrite is sustained and anomalous vs. baseline
+
+EXAMPLE 2 — Outbound blob upload from private IP
+  Signal indicators: PutBlob, CallerIpAddress=10.x.x.x (RFC-1918), AccountName=storage-prod
+  Q: What happened? A VM used its managed identity to upload data to blob storage.
+     Data left the perimeter. Disk on the VM is intact.
+  Q: What stops further leakage? Cutting the VM's network (isolate_vm). The data
+     already uploaded cannot be recalled, but the channel is severed.
+  Q: Is block_suspicious_ip appropriate? No — the source is an internal IP, not an
+     external attacker IP. NSG perimeter rules don't filter internal→internal traffic.
+  → action=isolate_vm, escalate=false (reversible, disk intact, no data destruction)
+  confidence: high when CallerIpAddress is RFC-1918 and PutBlob count is anomalous
+
+EXAMPLE 3 — SSH brute force from external IP
+  Signal indicators: FailedAttempts=47, SourceIP=185.x.x.x (Tor exit node), auth facility
+  Q: What happened? External IP attempted repeated SSH logins. No success confirmed.
+     The VM is likely uncompromised — the attacker is still outside.
+  Q: What contains the threat? Deny the attacker's IP at the NSG perimeter.
+  Q: Should we isolate? No — isolation disrupts the VM for all users. The VM itself
+     is not compromised. Use the minimum effective action.
+  → action=block_suspicious_ip, escalate=false (reversible, VM stays online)
+  confidence: high when FailedAttempts≥10 and SourceIP is external (non-RFC-1918)
+
+EXAMPLE 4 — Confirmed privilege escalation
+  Signal indicators: sudo COMMAND=..., USER=root, SyslogMessage confirms success
+  Q: What happened? A user successfully escalated to root. Attacker has OS-level control.
+  Q: What is the blast radius? With root, attacker can read/destroy data, install
+     persistence, pivot. But disk data is likely still intact.
+  Q: What contains the threat? Isolate the VM — cuts their remote foothold immediately.
+     Restore is not warranted unless forensics confirm data destruction.
+  → action=isolate_vm, escalate=false (reversible, OS compromised but disk intact)
+  confidence: high when sudo success to USER=root is confirmed in syslog
+
 You always call the security_decision tool — never respond in plain text.
 """
 

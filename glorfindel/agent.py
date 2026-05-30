@@ -423,15 +423,16 @@ Perf
 | top 5 by MaxWriteMBs desc
 """
 
-# Known backup/legitimate high-write processes — presence makes ransomware less likely
+# Identifiable backup agents only — generic POSIX tools (rsync, cp, tar, gzip)
+# are NOT included: a ransomware archiving before encryption would match them,
+# producing a false-negative "legitimate backup" conclusion.
 _IQ_BACKUP_AGENT = """
 Perf
 | where TimeGenerated > ago(10m)
 | where Computer == "{vm}"
 | where ObjectName == "Process"
 | where CounterName == "IO Write Bytes/sec"
-| where InstanceName in~ ("waagent", "WALinuxAgent", "azure-backup",
-                          "snapd", "rsync", "cp", "tar", "gzip")
+| where InstanceName in~ ("waagent", "WALinuxAgent", "azure-backup", "snapd")
 | summarize MaxWriteMBs = round(max(CounterValue) / 1048576, 1) by InstanceName
 """
 
@@ -445,9 +446,12 @@ Syslog
 | limit 3
 """
 
+# ago(10m) rather than ago(5m): privilege escalation takes ~40s, root commands
+# follow immediately — a 5m window risks missing activity that started before
+# the detection signal was processed.
 _IQ_ROOT_COMMANDS = """
 Syslog
-| where TimeGenerated > ago(5m)
+| where TimeGenerated > ago(10m)
 | where Computer == "{vm}"
 | where Facility == "auth"
 | where SyslogMessage has "sudo" and SyslogMessage has "USER=root"
@@ -458,7 +462,7 @@ Syslog
 
 _IQ_DISK_AFTER_ESC = """
 Perf
-| where TimeGenerated > ago(5m)
+| where TimeGenerated > ago(10m)
 | where Computer == "{vm}"
 | where ObjectName in ("Logical Disk", "LogicalDisk")
 | where CounterName == "Disk Write Bytes/sec"
@@ -501,8 +505,14 @@ def investigate(state: GlorfindelState) -> GlorfindelState:
 
     first_row = raw.get("detected_data") or raw.get("first_result_row") or {}
     syslog_msg = str(first_row.get("SyslogMessage", ""))
+
+    # Prefer the OS hostname from the query result (Computer field in LAW tables).
+    # The ARM resource name (.split("/")[-1]) is a fallback only — it may differ
+    # from the OS hostname, in which case Perf/Syslog queries return empty silently.
     vm = (
         first_row.get("Computer")
+        or first_row.get("computer")
+        or first_row.get("host")
         or signal.get("resource_id", "").split("/")[-1]
     )
 

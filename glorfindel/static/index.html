@@ -799,7 +799,7 @@ function _networkZone(resources, escalations) {
   </div>`;
 }
 
-function _monitoringZone(rules, backends, discoveredAssets) {
+function _monitoringZone(rules, backends, discoveredAssets, postureGaps) {
   const hasErr  = rules.some(r => r.last_error);
   const allPoll = rules.length > 0 && rules.every(r => r.last_poll && !r.last_error);
   const zoneStatus = hasErr ? 'alert' : 'ok';
@@ -807,6 +807,10 @@ function _monitoringZone(rules, backends, discoveredAssets) {
   const discByBackend = {};
   (discoveredAssets || []).forEach(a => {
     (discByBackend[a.monitoring_backend] = discByBackend[a.monitoring_backend] || []).push(a);
+  });
+  const gapsByVm = {};
+  (postureGaps || []).forEach(g => {
+    (gapsByVm[g.vm_name] = gapsByVm[g.vm_name] || []).push(g);
   });
 
   const nodes = (backends || []).map(b => {
@@ -816,13 +820,24 @@ function _monitoringZone(rules, backends, discoveredAssets) {
     const bPoll  = bRules.length > 0 && bRules.every(r => r.last_poll && !r.last_error);
     const dot    = bErr ? _dot('var(--red)') : bPoll ? _dot('var(--green)') : _dot('var(--dim)');
 
-    const discRows = bDisc.map(a =>
-      `<div class="row">
-        <span style="color:var(--green);font-size:9px">●</span>
+    const discRows = bDisc.map(a => {
+      const vmGaps = gapsByVm[a.name] || [];
+      const gapRows = vmGaps.map(g => {
+        const col = g.severity === 'critical' ? 'var(--red)' : 'var(--orange)';
+        const icon = g.severity === 'critical' ? '✗' : '⚠';
+        return `<div class="row" style="padding-left:16px">
+          <span style="color:${col};font-size:9px">${icon}</span>
+          <span style="color:${col};font-size:10px">${g.check}</span>
+          <span style="color:var(--dim);font-size:9px;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"
+                title="${g.message}">${g.message}</span>
+        </div>`;
+      }).join('');
+      return `<div class="row">
+        <span style="color:${vmGaps.length ? (vmGaps.some(g=>g.severity==='critical') ? 'var(--red)' : 'var(--orange)') : 'var(--green)'};font-size:9px">●</span>
         <span style="font-size:11px">${a.name}</span>
         <span style="color:var(--dim);font-size:9px;margin-left:auto">${_relTime(a.last_seen)}</span>
-      </div>`
-    ).join('') || `<div class="row"><span style="color:var(--dim);font-size:10px">No assets — discovery pending</span></div>`;
+      </div>${gapRows}`;
+    }).join('') || `<div class="row"><span style="color:var(--dim);font-size:10px">No assets — discovery pending</span></div>`;
 
     const ruleRows = bRules.map(r => {
       const dotCls = r.last_error ? 'var(--red)' : r.last_poll ? 'var(--green)' : 'var(--dim)';
@@ -1103,6 +1118,7 @@ function renderInfra() {
   const rules          = _cfgData?.detection?.rules     || [];
   const backends       = _cfgData?.monitoring_backends  || [];
   const discovered     = _state?.discovered_assets      || [];
+  const postureGaps    = _state?.posture_gaps            || [];
   const knownResources = _cfgData?.known_resources      || [];
   const { resources = [], escalations = [], restores = [] } = _state;
 
@@ -1136,7 +1152,7 @@ function renderInfra() {
   list.innerHTML = `<div class="infra-map" id="infra-map">
     <svg class="map-svg" id="map-svg"></svg>
     ${_networkZone(resources, escalations)}
-    ${_monitoringZone(rules, backends, discovered)}
+    ${_monitoringZone(rules, backends, discovered, postureGaps)}
     ${_computeZone(resourceMap, vmEscs, restoreByVm)}
     ${hasRsv ? _backupZone(rsvEscs, restores) : ''}
   </div>

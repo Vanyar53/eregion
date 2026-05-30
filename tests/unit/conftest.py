@@ -23,3 +23,10 @@ def isolated_rule_status(tmp_path, monkeypatch):
     """Redirect rule_status.json to a temp file — avoids root-owned Docker file."""
     import glorfindel.detection_rules as dr_module
     monkeypatch.setattr(dr_module, "_STATUS_FILE", tmp_path / "rule_status.json")
+
+
+@pytest.fixture(autouse=True)
+def isolated_posture_state(tmp_path, monkeypatch):
+    """Redirect posture_state.json to a temp file."""
+    import glorfindel.posture as posture_module
+    monkeypatch.setattr(posture_module, "_STATE_FILE", tmp_path / "posture_state.json")

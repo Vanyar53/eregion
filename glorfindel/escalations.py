@@ -28,6 +28,7 @@ _ESCALATION_LABELS = {
     "proposed_action": "action inconnue",
     "verification_failed": "vérification échouée",
     "proposed_rule": "règle de détection proposée",
+    "posture_gap": "gap de posture",
 }
 
 

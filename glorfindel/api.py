@@ -67,11 +67,23 @@ async def state() -> dict:
     except Exception:
         pass
 
+    # Posture gaps (infrastructure readiness issues)
+    posture_gaps: list[dict] = []
+    try:
+        from glorfindel.posture import PostureChecker
+        from glorfindel.config import load_glorfindel_config
+        _gcfg = load_glorfindel_config()
+        _pc = PostureChecker(_gcfg, None, dry_run=True)
+        posture_gaps = _pc.active_gaps()
+    except Exception:
+        pass
+
     return {
         "resources": resources,
         "escalations": esc_module.pending(),
         "restores": _active_restores(),
         "discovered_assets": discovered,
+        "posture_gaps": posture_gaps,
         "now": now.isoformat(),
     }
 

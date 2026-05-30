@@ -363,11 +363,24 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
                 # Start discovery service (non-blocking background thread)
                 _registry = AssetRegistry()
                 if not dry_run and _glorfindel_cfg.monitoring_backends:
-                    _discovery_svc = start_discovery(_glorfindel_cfg, dry_run=dry_run)
+                    from glorfindel.actions import AzureConnector
+                    from glorfindel.posture import PostureChecker
+                    _posture = PostureChecker(
+                        _glorfindel_cfg, AzureConnector(dry_run=False)
+                    )
+                    _discovery_svc = start_discovery(
+                        _glorfindel_cfg,
+                        dry_run=dry_run,
+                        posture_checker=_posture,
+                    )
+                    interval_min = int(
+                        _glorfindel_cfg.monitoring_backends[0].discovery.interval_s / 60
+                    )
                     console.print(
-                        f"[dim]Discovery:[/dim] {len(_glorfindel_cfg.monitoring_backends)} "
-                        f"backend(s) — re-discovering every "
-                        f"{int(_glorfindel_cfg.monitoring_backends[0].discovery.interval_s / 60)}min"
+                        f"[dim]Discovery:[/dim] "
+                        f"{len(_glorfindel_cfg.monitoring_backends)} backend(s) "
+                        f"— re-discovering every {interval_min}min"
+                        f" + posture checks"
                     )
 
                     # Expand auto-apply rules after a short delay for initial discovery

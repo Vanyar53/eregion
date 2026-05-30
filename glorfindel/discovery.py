@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import threading
-import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,11 +18,11 @@ _CACHE_FILE = Path.home() / ".glorfindel" / "discovered_assets.json"
 @dataclass
 class DiscoveredAsset:
     """An asset discovered from a monitoring backend."""
-    name: str                   # short name (VM hostname)
-    resource_id: str            # full Azure resource ID (if resolvable)
-    monitoring_backend: str     # backend that discovered this asset
-    last_seen: str              # ISO timestamp
-    source: str = "heartbeat"   # "heartbeat", "rsv", ...
+    name: str               # short name (VM hostname)
+    resource_id: str        # full Azure resource ID (if resolvable)
+    monitoring_backend: str # backend that discovered this asset
+    last_seen: str          # ISO timestamp
+    source: str = "heartbeat"  # "heartbeat", "rsv", ...
     extra: dict = field(default_factory=dict)  # backend-specific data
 
 
@@ -45,7 +44,9 @@ class AssetRegistry:
                 self._assets[a.name] = a
             self._persist()
 
-    def replace_for_backend(self, backend_name: str, assets: list[DiscoveredAsset]) -> None:
+    def replace_for_backend(
+        self, backend_name: str, assets: list[DiscoveredAsset]
+    ) -> None:
         """Replace all assets for a backend — evicts VMs no longer in Heartbeat."""
         with self._lock:
             self._assets = {
@@ -62,7 +63,10 @@ class AssetRegistry:
 
     def for_backend(self, backend_name: str) -> list[DiscoveredAsset]:
         with self._lock:
-            return [a for a in self._assets.values() if a.monitoring_backend == backend_name]
+            return [
+                a for a in self._assets.values()
+                if a.monitoring_backend == backend_name
+            ]
 
     def to_dicts(self) -> list[dict]:
         with self._lock:
@@ -106,7 +110,6 @@ def _discover_from_azure_monitor(
     Callers must treat None as "keep existing cache" — not as "zero assets".
     """
     from glorfindel.detectors import detector_for
-    now = time.time()
     try:
         detector = detector_for("azure_monitor", workspace_id=workspace_id)
         raw = detector.run_query(_HEARTBEAT_QUERY.strip())
@@ -114,7 +117,7 @@ def _discover_from_azure_monitor(
         now_iso = datetime.now(timezone.utc).isoformat()
         for row in (raw or []):
             name = row.get("Computer") or row.get("computer", "")
-            rid  = row.get("ResourceId") or row.get("resource_id", "")
+            rid = row.get("ResourceId") or row.get("resource_id", "")
             if not name:
                 continue
             short_name = name.split(".")[0]
@@ -157,14 +160,16 @@ class DiscoveryService:
 
     def __init__(
         self,
-        config,                     # GlorfindelConfig
+        config,                    # GlorfindelConfig
         registry: AssetRegistry,
         dry_run: bool = False,
+        posture_checker=None,      # PostureChecker | None
     ) -> None:
-        self._config  = config
+        self._config = config
         self._registry = registry
-        self._dry_run  = dry_run
-        self._stop     = threading.Event()
+        self._dry_run = dry_run
+        self._posture_checker = posture_checker
+        self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
     def start(self) -> None:
@@ -189,12 +194,9 @@ class DiscoveryService:
 
     def _run(self) -> None:
         """Main discovery loop."""
-        # Immediate first discovery at startup
         self._discover_all()
 
-        # Then run on each backend's configured interval
         while not self._stop.is_set():
-            # Sleep in small increments so stop() is responsive
             self._stop.wait(60)
             if self._stop.is_set():
                 break
@@ -210,6 +212,13 @@ class DiscoveryService:
                 continue
             self._registry.replace_for_backend(backend.name, found)
 
+        # Posture check after each discovery cycle
+        if self._posture_checker is not None:
+            try:
+                self._posture_checker.check_and_escalate(self._registry.all())
+            except Exception:
+                pass
+
 
 # ── Singleton helpers ─────────────────────────────────────────────────────────
 
@@ -224,11 +233,15 @@ def get_registry() -> AssetRegistry:
     return _registry
 
 
-def start_discovery(config, dry_run: bool = False) -> DiscoveryService:
+def start_discovery(
+    config, dry_run: bool = False, posture_checker=None
+) -> DiscoveryService:
     """Create and start the discovery service. Returns the service instance."""
     global _service, _registry
     _registry = AssetRegistry()
-    svc = DiscoveryService(config, _registry, dry_run=dry_run)
+    svc = DiscoveryService(
+        config, _registry, dry_run=dry_run, posture_checker=posture_checker
+    )
     svc.start()
     _service = svc
     return svc

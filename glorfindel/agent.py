@@ -509,13 +509,15 @@ def investigate(state: GlorfindelState) -> GlorfindelState:
     # Prefer the OS hostname from the query result (Computer field in LAW tables).
     # The ARM resource name (.split("/")[-1]) is a fallback only — it may differ
     # from the OS hostname, in which case Perf/Syslog queries return empty silently.
-    vm = (
+    hostname_from_signal = (
         first_row.get("Computer")
         or first_row.get("computer")
         or first_row.get("host")
     )
-    if not vm:
-        vm = signal.get("resource_id", "").split("/")[-1]
+    using_arm_fallback = not hostname_from_signal
+    vm = hostname_from_signal or signal.get("resource_id", "").split("/")[-1]
+
+    if using_arm_fallback:
         _console.print(
             f"  [dim]investigate: Computer absent from signal — "
             f"using ARM name '{vm}' as hostname fallback "
@@ -553,10 +555,16 @@ def investigate(state: GlorfindelState) -> GlorfindelState:
         return state
 
     if all(len(v) == 0 for v in ctx.values()):
-        _console.print(
-            f"  [yellow]investigate: all queries returned empty for {vm} "
-            f"— enrichment inconclusive (hostname mismatch? data not yet ingested?)[/yellow]"
-        )
+        if using_arm_fallback:
+            _console.print(
+                f"  [yellow]investigate: all queries empty for '{vm}' (ARM fallback) "
+                f"— likely hostname mismatch, check OS hostname vs ARM name[/yellow]"
+            )
+        else:
+            _console.print(
+                f"  [dim]investigate: all queries empty for '{vm}' "
+                f"— data not yet ingested (LAW latency ~60s, normal)[/dim]"
+            )
 
     enriched = {
         **signal,

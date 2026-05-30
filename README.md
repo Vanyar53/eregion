@@ -1,11 +1,11 @@
-# Eregion — Active Cloud Defense
+# Eregion — Automated Incident Response
 
-Eregion is an open-core platform for active cloud defense. Two AI agents form a complete loop:
+Eregion is an open-source automated incident response platform for cloud infrastructure. Two AI agents form a closed loop:
 
 - **Annatar** (red) simulates real attacks on your Azure infrastructure using MITRE ATT&CK scenarios
-- **Glorfindel** (blue) detects signals from any source, responds autonomously, verifies containment, and learns from every cycle
+- **Glorfindel** (blue) detects signals continuously, responds autonomously, verifies containment, and learns from every cycle
 
-> "Test your infrastructure before others do it for you."
+> Autonomous SOC for teams that don't have one.
 
 ## How it works
 
@@ -20,15 +20,17 @@ Eregion is an open-core platform for active cloud defense. Two AI agents form a 
   → verified → stored (ChromaDB)      → human approves → rules updated
 ```
 
-**Reaction loop** — Glorfindel uses LangGraph + LLM (via LiteLLM) to reason about each signal and choose the minimum effective response. Actions are verified via Azure API. Every cycle is stored in ChromaDB for cross-scenario learning — no fine-tuning required.
+**Response loop** — on a detection, Glorfindel reasons about the signal (raw indicators, past cycles from ChromaDB, current incident context) and chooses the minimum effective response. Actions are verified via Azure API. Every cycle is stored in ChromaDB — no fine-tuning required.
 
-**Detection loop** — `glorfindel/rules/azure/detection_rules.yaml` defines continuous polling rules. Glorfindel polls independently of Annatar; when Annatar runs it looks up the matching rule by TTP. The query language depends on the source (`azure_monitor` → KQL, `prometheus` → PromQL, `splunk` → SPL, etc.).
+**Detection loop** — `detection_rules.yaml` defines continuous polling rules (KQL, PromQL, SPL…). VMs are auto-discovered via LAW Heartbeat — no `resource_id` to maintain. Glorfindel polls independently of any attack simulation.
 
-**Purple team loop** — if detection fails (`detection_timeout`), Annatar emits `detection_missed` with full attack context. Glorfindel's LLM proposes an improved query. `glorfindel approve-rule <id>` applies it to `detection_rules.yaml`.
+**Purple team loop** — if detection fails, Glorfindel's LLM proposes an improved query. `glorfindel approve-rule <id>` applies it. The rules get better with each missed detection.
 
-**Remediation audit** — `glorfindel audit` verifies before an incident that Glorfindel can execute all its actions: NSG writable (`isolate_vm`), backup vault + recovery point (`restore_from_backup`), compute access (`snapshot`). Surfaces IAM gaps with exact `az` fix commands.
+**Posture loop** — after each discovery cycle, Glorfindel checks that it can actually defend each VM: backup linked and recent, NSG accessible. Missing capabilities are escalated immediately with the exact `az` command to fix them — before an incident, not during.
 
-Signals from different resources are processed in parallel; signals from the same resource are serialized with shared incident context so Glorfindel never re-isolates a VM it already contained.
+**Autonomy boundary** — destructive actions (restore, delete) always require human approval. The graph enforces this regardless of LLM output. Reversible actions (isolate, block, snapshot) run autonomously and are verified via Azure API.
+
+Signals from different resources run in parallel threads; signals from the same resource are serialized with shared incident context.
 
 ## Validated TTPs (Azure, real runs)
 

@@ -644,3 +644,119 @@ def test_graph_t1548_detection_isolates_vm(tmp_path, monkeypatch, dry_connector,
     assert final["outcome"]["status"] == "dry_run"
     assert final["escalate"] is False
     assert tmp_memory.count() == 1
+
+
+# ── investigate node ──────────────────────────────────────────────────────────
+
+from glorfindel.agent import investigate
+
+
+def _inv_state(event="detection", first_row=None, workspace_id="ws-test", dry_run=False):
+    return {
+        "signal": {
+            "signal_id": "inv-test",
+            "event": event,
+            "resource_id": _RESOURCE_ID,
+            "ttp": "T1486",
+            "severity": "critical",
+            "raw_signal": {
+                "log_analytics_workspace_id": workspace_id,
+                "first_result_row": first_row or {},
+            },
+            "context": {"run_id": "test"},
+        },
+        "past_cycles": [],
+        "incident": None,
+        "dry_run": dry_run,
+        "reasoning": "", "confidence": 0.0, "action": "", "reversible": True,
+        "explanation": "", "escalate": False, "escalation_reason": "",
+        "suggested_steps": [], "outcome": None,
+        "proposed_rule": None, "proposal_id": "",
+    }
+
+
+def test_investigate_skips_non_detection():
+    state = _inv_state(event="detection_timeout")
+    result = investigate(state)
+    assert "investigative_context" not in result["signal"].get("raw_signal", {})
+
+
+def test_investigate_skips_no_workspace():
+    state = _inv_state(workspace_id="")
+    result = investigate(state)
+    assert "investigative_context" not in result["signal"].get("raw_signal", {})
+
+
+def test_investigate_skips_dry_run():
+    state = _inv_state(first_row={"MaxWrite": 147000000}, dry_run=True)
+    result = investigate(state)
+    assert "investigative_context" not in result["signal"].get("raw_signal", {})
+
+
+def test_investigate_disk_write_runs_two_queries():
+    state = _inv_state(first_row={"Computer": "vm-test", "MaxWrite": 147000000})
+    mock_det = MagicMock()
+    mock_det.run_query.return_value = [{"InstanceName": "crypt", "MaxWriteMBs": 140}]
+    with patch("glorfindel.detectors.detector_for", return_value=mock_det):
+        result = investigate(state)
+    ctx = result["signal"]["raw_signal"]["investigative_context"]
+    assert "top_write_processes" in ctx
+    assert "backup_agent_check" in ctx
+    assert mock_det.run_query.call_count == 2
+
+
+def test_investigate_backup_agent_found_appears_in_context():
+    state = _inv_state(first_row={"Computer": "vm-test", "MaxWrite": 80000000})
+    mock_det = MagicMock()
+    mock_det.run_query.side_effect = [
+        [{"InstanceName": "crypt", "MaxWriteMBs": 78}],
+        [{"InstanceName": "azure-backup", "MaxWriteMBs": 75}],  # backup present
+    ]
+    with patch("glorfindel.detectors.detector_for", return_value=mock_det):
+        result = investigate(state)
+    ctx = result["signal"]["raw_signal"]["investigative_context"]
+    assert any(
+        r.get("InstanceName") == "azure-backup"
+        for r in ctx["backup_agent_check"]
+    )
+
+
+def test_investigate_brute_force_checks_successful_auth():
+    state = _inv_state(first_row={"SourceIP": "185.1.2.3", "FailedAttempts": 47})
+    mock_det = MagicMock()
+    mock_det.run_query.return_value = []
+    with patch("glorfindel.detectors.detector_for", return_value=mock_det):
+        result = investigate(state)
+    ctx = result["signal"]["raw_signal"]["investigative_context"]
+    assert "successful_auth_from_ip" in ctx
+
+
+def test_investigate_priv_esc_runs_root_and_disk_queries():
+    syslog = "sudo: user1 : TTY=pts/0 ; USER=root ; COMMAND=/bin/bash"
+    state = _inv_state(first_row={"Computer": "vm-test", "SyslogMessage": syslog})
+    mock_det = MagicMock()
+    mock_det.run_query.return_value = []
+    with patch("glorfindel.detectors.detector_for", return_value=mock_det):
+        result = investigate(state)
+    ctx = result["signal"]["raw_signal"]["investigative_context"]
+    assert "root_commands" in ctx
+    assert "disk_write_after_escalation" in ctx
+
+
+def test_investigate_handles_detector_exception():
+    state = _inv_state(first_row={"Computer": "vm-test", "MaxWrite": 147000000})
+    with patch("glorfindel.detectors.detector_for", side_effect=Exception("Azure down")):
+        result = investigate(state)
+    # Exception swallowed — context present but empty (LLM sees "no results")
+    ctx = result["signal"]["raw_signal"].get("investigative_context", {})
+    assert ctx.get("top_write_processes") == []
+    assert ctx.get("backup_agent_check") == []
+
+
+def test_investigate_no_matching_fields_returns_unchanged():
+    state = _inv_state(first_row={"Computer": "vm-test", "UnrelatedField": "value"})
+    mock_det = MagicMock()
+    with patch("glorfindel.detectors.detector_for", return_value=mock_det):
+        result = investigate(state)
+    assert result["signal"] is state["signal"]
+    mock_det.run_query.assert_not_called()

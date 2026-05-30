@@ -405,6 +405,144 @@ def poll_detection(state: GlorfindelState) -> GlorfindelState:
     return {**state, "signal": resolve_attack_started(signal)}
 
 
+# ── Investigative queries (post-detection enrichment) ─────────────────────────
+
+# Query templates — {vm} is replaced at runtime with the VM hostname.
+# All queries use ago(5m) to stay within the detection window.
+# Kept short: investigate must complete in <15s total.
+
+_IQ_DISK_PROCESSES = """
+Perf
+| where TimeGenerated > ago(5m)
+| where Computer == "{vm}"
+| where ObjectName == "Process"
+| where CounterName == "IO Write Bytes/sec"
+| where InstanceName !in ("_Total", "Idle", "System")
+| where CounterValue > 1000000
+| summarize MaxWriteMBs = round(max(CounterValue) / 1048576, 1) by InstanceName
+| top 5 by MaxWriteMBs desc
+"""
+
+# Known backup/legitimate high-write processes — presence makes ransomware less likely
+_IQ_BACKUP_AGENT = """
+Perf
+| where TimeGenerated > ago(10m)
+| where Computer == "{vm}"
+| where ObjectName == "Process"
+| where CounterName == "IO Write Bytes/sec"
+| where InstanceName in~ ("waagent", "WALinuxAgent", "azure-backup",
+                          "snapd", "rsync", "cp", "tar", "gzip")
+| summarize MaxWriteMBs = round(max(CounterValue) / 1048576, 1) by InstanceName
+"""
+
+_IQ_SUCCESS_AUTH = """
+Syslog
+| where TimeGenerated > ago(5m)
+| where Computer == "{vm}"
+| where Facility == "auth"
+| where SyslogMessage has "Accepted" and SyslogMessage has "{ip}"
+| project TimeGenerated, SyslogMessage
+| limit 3
+"""
+
+_IQ_ROOT_COMMANDS = """
+Syslog
+| where TimeGenerated > ago(5m)
+| where Computer == "{vm}"
+| where Facility == "auth"
+| where SyslogMessage has "sudo" and SyslogMessage has "USER=root"
+    and SyslogMessage has "COMMAND="
+| project TimeGenerated, SyslogMessage
+| limit 10
+"""
+
+_IQ_DISK_AFTER_ESC = """
+Perf
+| where TimeGenerated > ago(5m)
+| where Computer == "{vm}"
+| where ObjectName in ("Logical Disk", "LogicalDisk")
+| where CounterName == "Disk Write Bytes/sec"
+| summarize MaxWriteMBs = round(max(CounterValue) / 1048576, 1),
+            AvgWriteMBs = round(avg(CounterValue) / 1048576, 1)
+"""
+
+
+def _run_investigative_query(workspace_id: str, query: str) -> list[dict]:
+    """Run a single investigative query. Returns [] on any failure."""
+    try:
+        from glorfindel.detectors import detector_for
+        det = detector_for("azure_monitor", workspace_id=workspace_id)
+        return det.run_query(query.strip()) or []
+    except Exception:
+        return []
+
+
+def investigate(state: GlorfindelState) -> GlorfindelState:
+    """Enrich the signal with targeted investigative queries before decide.
+
+    Only runs on event=detection with a resolvable workspace_id.
+    Queries are chosen based on signal content (not TTP label).
+    Results land in raw_signal.investigative_context — the LLM sees them.
+    Failures are silently swallowed: investigation is best-effort.
+    """
+    signal = state["signal"]
+
+    if signal.get("event") != "detection":
+        return state
+
+    raw = signal.get("raw_signal", {})
+    workspace_id = (
+        raw.get("log_analytics_workspace_id")
+        or signal.get("context", {}).get("workspace_id", "")
+    )
+
+    if not workspace_id or state.get("dry_run"):
+        return state
+
+    first_row = raw.get("detected_data") or raw.get("first_result_row") or {}
+    syslog_msg = str(first_row.get("SyslogMessage", ""))
+    vm = (
+        first_row.get("Computer")
+        or signal.get("resource_id", "").split("/")[-1]
+    )
+
+    ctx: dict[str, list[dict]] = {}
+
+    # ── Disk write anomaly → which process is writing? backup agent present?
+    if "MaxWrite" in first_row or "DiskWrite" in first_row:
+        ctx["top_write_processes"] = _run_investigative_query(
+            workspace_id, _IQ_DISK_PROCESSES.format(vm=vm)
+        )
+        ctx["backup_agent_check"] = _run_investigative_query(
+            workspace_id, _IQ_BACKUP_AGENT.format(vm=vm)
+        )
+
+    # ── Brute force → did any attempt succeed from this IP?
+    source_ip = first_row.get("SourceIP", "")
+    if "FailedAttempts" in first_row and source_ip:
+        ctx["successful_auth_from_ip"] = _run_investigative_query(
+            workspace_id, _IQ_SUCCESS_AUTH.format(vm=vm, ip=source_ip)
+        )
+
+    # ── Privilege escalation → what ran as root after? disk writes?
+    if "USER=root" in syslog_msg and "COMMAND=" in syslog_msg:
+        ctx["root_commands"] = _run_investigative_query(
+            workspace_id, _IQ_ROOT_COMMANDS.format(vm=vm)
+        )
+        ctx["disk_write_after_escalation"] = _run_investigative_query(
+            workspace_id, _IQ_DISK_AFTER_ESC.format(vm=vm)
+        )
+
+    if not ctx:
+        return state
+
+    enriched = {
+        **signal,
+        "raw_signal": {**raw, "investigative_context": ctx},
+    }
+    return {**state, "signal": enriched}
+
+
 def decide(state: GlorfindelState, *, model: str) -> GlorfindelState:
     """Call LLM to reason about the signal and produce a structured decision.
 
@@ -828,6 +966,7 @@ def _build_graph(
 
     graph.add_node("load_context", lambda s: load_context(s, memory=memory, incidents=incidents))
     graph.add_node("poll_detection", poll_detection)
+    graph.add_node("investigate", investigate)
     graph.add_node("decide", lambda s: decide(s, model=model))
     graph.add_node("execute_action", lambda s: execute_action(s, connector=connector, incidents=incidents))
     graph.add_node("verify_action", lambda s: verify_action(s, connector=connector))
@@ -840,7 +979,8 @@ def _build_graph(
 
     graph.set_entry_point("load_context")
     graph.add_conditional_edges("load_context", _route_after_load_context)
-    graph.add_edge("poll_detection", "decide")
+    graph.add_edge("poll_detection", "investigate")
+    graph.add_edge("investigate", "decide")
     graph.add_conditional_edges("decide", _route_after_decide)
     graph.add_edge("execute_action", "verify_action")
     graph.add_conditional_edges("verify_action", _route_after_verify)
@@ -899,6 +1039,23 @@ def _build_user_message(
     lines = ["## Signal reçu\n", "```json"]
     lines.append(json.dumps(signal, indent=2, default=str))
     lines.append("```")
+
+    inv_ctx = signal.get("raw_signal", {}).get("investigative_context")
+    if inv_ctx:
+        lines.append("\n## Contexte investigatif (requêtes post-détection)\n")
+        lines.append(
+            "Ces données ont été collectées automatiquement après la détection "
+            "pour enrichir ton raisonnement. Utilise-les pour affiner ta décision.\n"
+        )
+        for key, rows in inv_ctx.items():
+            label = key.replace("_", " ")
+            if rows:
+                lines.append(f"**{label}** ({len(rows)} résultat(s)) :")
+                lines.append("```json")
+                lines.append(json.dumps(rows, indent=2, default=str))
+                lines.append("```")
+            else:
+                lines.append(f"**{label}** : aucun résultat (requête vide ou données absentes)")
 
     # Inject incident context when this is not the first signal for the resource
     if incident and (incident.get("signals_count", 0) > 1 or incident.get("actions_taken")):

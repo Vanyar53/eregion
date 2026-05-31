@@ -367,9 +367,9 @@ az network nsg rule list -g annatar --nsg-name nsg-annatar -o table
 
 | Session | Fichier de rôle | Périmètre |
 |---------|----------------|-----------|
-| Glorfindel | `CLAUDE_GLORFINDEL.md` | `glorfindel/`, `rules/azure/`, tests Glorfindel |
-| Annatar | `CLAUDE_ANNATAR.md` | `annatar/`, `annatar/scenarios/` |
-| Tests | `CLAUDE_TESTS.md` | `tests/`, `Makefile`, rapports |
+| Glorfindel | `CLAUDE_GLORFINDEL.md` | `glorfindel/`, `rules/azure/`, tests unitaires Glorfindel |
+| Annatar | `CLAUDE_ANNATAR.md` | `annatar/`, `annatar/scenarios/`, tests unitaires Annatar |
+| Tests | `CLAUDE_TESTS.md` | Chef d'orchestre — tests fonctionnels bout en bout sur Azure réel |
 
 **Démarrer une session :**
 ```
@@ -380,7 +380,7 @@ az network nsg rule list -g annatar --nsg-name nsg-annatar -o table
 "Lis CLAUDE_ANNATAR.md pour tes instructions de session, puis commence par ton inbox."
 
 # Session Tests
-"Lis CLAUDE_TESTS.md pour tes instructions de session, puis lance pytest et rapporte."
+"Lis CLAUDE_TESTS.md pour tes instructions de session, puis commence par ton inbox."
 ```
 
 **Protocole :** chaque session lit son inbox (`collab/inbox_<role>.md`) en début de tâche, met à jour son status (`collab/<role>_status.md`) après chaque changement significatif, et écrit dans l'inbox de l'autre si un changement a un impact cross-cutting.

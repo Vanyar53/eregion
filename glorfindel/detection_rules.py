@@ -364,6 +364,11 @@ class RulePoller:
 
                 if result is not None:
                     _elapsed, row = result
+                    # Synthetic run_id so store_cycle writes a debug JSONL
+                    # and War Room can display the decision (isolate_vm, block…).
+                    # Format: watch-{rule}-{ts} to distinguish from Annatar runs.
+                    ts_compact = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+                    watch_run_id = f"watch-{rule.name}-{ts_compact}"
                     signal = {
                         "signal_id": f"rule-{rule.name}-{uuid.uuid4().hex[:8]}",
                         "event": "detection",
@@ -377,6 +382,7 @@ class RulePoller:
                             "workspace_id": rule.workspace_id,
                             "rule_name": rule.name,
                             "asset_name": rule.asset_name,
+                            "run_id": watch_run_id,
                         },
                         "raw_signal": {
                             "detection_source": rule.source,

@@ -247,6 +247,8 @@ class RulePoller:
         self._threads: list[threading.Thread] = []
         self._status: dict = _load_status()
         self._lock = threading.Lock()
+        # Dedup: key = f"{rule.name}@{resource_id}", value = last dispatched row TimeGenerated
+        self._last_dispatch_row: dict[str, str] = {}
 
     def expand_for_discovered(
         self,
@@ -364,6 +366,22 @@ class RulePoller:
 
                 if result is not None:
                     _elapsed, row = result
+
+                    # Deduplication: KQL queries use ago(5m) windows, so the same
+                    # event row reappears across multiple poll cycles. Skip dispatch
+                    # if TimeGenerated is identical to the last dispatched row for
+                    # this (rule, resource_id) pair.
+                    dedup_key = f"{rule.name}@{rule.resource_id}"
+                    row_ts = str(row.get("TimeGenerated", ""))
+                    with self._lock:
+                        last_ts = self._last_dispatch_row.get(dedup_key, "")
+                    if row_ts and row_ts == last_ts:
+                        self._stop.wait(rule.interval_s)
+                        continue
+
+                    with self._lock:
+                        self._last_dispatch_row[dedup_key] = row_ts
+
                     # Synthetic run_id so store_cycle writes a debug JSONL
                     # and War Room can display the decision (isolate_vm, block…).
                     # Format: watch-{rule}-{ts} to distinguish from Annatar runs.

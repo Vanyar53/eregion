@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from glorfindel.proposed_rules import _append_to_rules_yaml, approve, pending, record
+from glorfindel.proposed_rules import _append_to_rules_yaml, approve, pending, record, reject
 
 
 # ── Fixtures ────────────────────────────────────────────────────────────────────
@@ -142,6 +142,35 @@ def test_approve_removes_from_pending(tmp_path):
     assert len(pending()) == 1
     approve(pid, rules_file)
     assert pending() == []
+
+
+# ── reject ───────────────────────────────────────────────────────────────────────
+
+def test_reject_marks_status():
+    pid = _sample_proposal()
+    proposal = reject(pid)
+    assert proposal["status"] == "rejected"
+
+
+def test_reject_removes_from_pending():
+    pid = _sample_proposal()
+    assert len(pending()) == 1
+    reject(pid)
+    assert pending() == []
+
+
+def test_reject_unknown_id_raises():
+    with pytest.raises(ValueError):
+        reject("not-a-real-id")
+
+
+def test_reject_already_approved_raises(tmp_path):
+    pid = _sample_proposal()
+    rules_file = tmp_path / "detection_rules.yaml"
+    rules_file.write_text("rules:\n")
+    approve(pid, rules_file)
+    with pytest.raises(ValueError):
+        reject(pid)
 
 
 # ── _append_to_rules_yaml ────────────────────────────────────────────────────────

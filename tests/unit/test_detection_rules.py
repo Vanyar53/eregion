@@ -370,3 +370,59 @@ def test_poller_multiple_rules(tmp_path, monkeypatch):
     ttps = {s["ttp"] for s in dispatched}
     assert "T1486" in ttps
     assert "T1041" in ttps
+
+
+def test_poller_deduplicates_same_row(tmp_path, monkeypatch):
+    """Same TimeGenerated row across polls must produce only one dispatch."""
+    monkeypatch.setattr(
+        "glorfindel.detection_rules._STATUS_FILE",
+        tmp_path / "status.json",
+    )
+    dispatched = []
+    mock_detector = MagicMock()
+    # Return the same row (same TimeGenerated) on every poll
+    same_row = {"TimeGenerated": "2026-05-31T19:13:29Z", "Computer": "vm1"}
+    mock_detector.poll_alert.return_value = (1.0, same_row)
+
+    with patch("glorfindel.detection_rules.detector_for", return_value=mock_detector):
+        rule = _make_rule(interval_s=0.05)
+        poller = RulePoller([rule], dispatched.append, dry_run=False)
+        poller.start()
+        time.sleep(0.4)
+        poller.stop()
+
+    assert len(dispatched) == 1, (
+        f"Same event row should only dispatch once, got {len(dispatched)}"
+    )
+
+
+def test_poller_dispatches_new_row_after_dedup(tmp_path, monkeypatch):
+    """Different TimeGenerated rows should each produce a dispatch."""
+    monkeypatch.setattr(
+        "glorfindel.detection_rules._STATUS_FILE",
+        tmp_path / "status.json",
+    )
+    dispatched = []
+    mock_detector = MagicMock()
+    rows = [
+        {"TimeGenerated": "2026-05-31T19:13:29Z", "Computer": "vm1"},
+        {"TimeGenerated": "2026-05-31T19:14:30Z", "Computer": "vm1"},
+    ]
+    # Alternate between two distinct rows
+    call_count = [0]
+    def _poll_side_effect(**kwargs):
+        idx = min(call_count[0], len(rows) - 1)
+        call_count[0] += 1
+        return (1.0, rows[idx])
+    mock_detector.poll_alert.side_effect = _poll_side_effect
+
+    with patch("glorfindel.detection_rules.detector_for", return_value=mock_detector):
+        rule = _make_rule(interval_s=0.05)
+        poller = RulePoller([rule], dispatched.append, dry_run=False)
+        poller.start()
+        time.sleep(0.4)
+        poller.stop()
+
+    assert len(dispatched) == 2, (
+        f"Two distinct rows should produce two dispatches, got {len(dispatched)}"
+    )

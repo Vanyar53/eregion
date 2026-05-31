@@ -550,7 +550,10 @@ def _render_proposal(p: dict) -> None:
     console.print(f"  Why better: {p['explanation'][:100]}")
     console.print(Syntax(p["query"].strip(), "sql", theme="monokai", line_numbers=False))
     console.print(
-        f"  [dim]→ glorfindel approve-rule {p['id']}[/dim]\n"
+        f"  [dim]→ approve: glorfindel approve-rule {p['id']}[/dim]"
+    )
+    console.print(
+        f"  [dim]→ dismiss: glorfindel reject-rule {p['id']}[/dim]\n"
     )
 
 
@@ -999,6 +1002,27 @@ def approve_rule(proposal_id: str, rules_file: str | None) -> None:
         console.print(
             "  Restart 'glorfindel watch' to activate, "
             "then re-run the scenario to validate."
+        )
+    except ValueError as e:
+        console.print(f"[red]Error:[/red] {e}")
+
+
+@cli.command("reject-rule")
+@click.argument("proposal_id")
+def reject_rule(proposal_id: str) -> None:
+    """Dismiss a proposed detection rule without adding it to detection_rules.yaml.
+
+    PROPOSAL_ID is the UUID shown by 'glorfindel pending'.
+    The proposal is marked rejected in ~/.glorfindel/proposed_rules.jsonl
+    and will no longer appear in 'glorfindel pending'.
+    """
+    from glorfindel.proposed_rules import reject
+
+    try:
+        proposal = reject(proposal_id)
+        console.print(
+            f"[yellow]✗ Rule '{proposal['rule_name']}' rejected[/yellow] "
+            f"({proposal['ttp']}) — removed from pending."
         )
     except ValueError as e:
         console.print(f"[red]Error:[/red] {e}")

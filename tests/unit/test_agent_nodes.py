@@ -167,6 +167,97 @@ def test_poll_detection_unknown_source_falls_back_to_timeout():
     assert result["signal"]["event"] == "detection_timeout"
 
 
+# ── _find_rule_for_ttp / resolve_attack_started ───────────────────────────────
+
+def test_find_rule_for_ttp_with_glorfindel_cfg_resolves_workspace_id(tmp_path):
+    """Bug fix: _find_rule_for_ttp must pass glorfindel_cfg to load_rules so
+    workspace_id is resolved from the backend config for auto_apply rules."""
+    import yaml
+    from glorfindel.config import GlorfindelConfig, MonitoringBackendConfig
+    from glorfindel.detection_rules import load_rules
+
+    rules_file = tmp_path / "detection_rules.yaml"
+    rules_file.write_text(yaml.dump({
+        "rules": [{
+            "name": "test-rule",
+            "ttp": "T1548.003",
+            "query": "Syslog | where ...",
+            "monitoring_backends": ["law-annatar"],
+            "assets": ["auto"],
+        }]
+    }))
+
+    cfg = GlorfindelConfig(monitoring_backends=[
+        MonitoringBackendConfig(name="law-annatar", type="azure_monitor", workspace_id="ws-test-123")
+    ])
+    rules = load_rules(rules_file, glorfindel_cfg=cfg)
+
+    assert len(rules) == 1
+    assert rules[0].workspace_id == "ws-test-123"
+
+
+def test_find_rule_for_ttp_without_glorfindel_cfg_has_empty_workspace_id(tmp_path):
+    """Without glorfindel_cfg, auto_apply rules get empty workspace_id (the bug)."""
+    import yaml
+    from glorfindel.detection_rules import load_rules
+
+    rules_file = tmp_path / "detection_rules.yaml"
+    rules_file.write_text(yaml.dump({
+        "rules": [{
+            "name": "test-rule",
+            "ttp": "T1548.003",
+            "query": "Syslog | where ...",
+            "monitoring_backends": ["law-annatar"],
+            "assets": ["auto"],
+        }]
+    }))
+
+    rules = load_rules(rules_file, glorfindel_cfg=None)
+    assert len(rules) == 1
+    assert rules[0].workspace_id == ""  # empty without cfg — the bug
+
+
+def test_resolve_attack_started_passes_glorfindel_cfg_to_find_rule(tmp_path):
+    """resolve_attack_started must call _find_rule_for_ttp with glorfindel_cfg
+    so auto_apply rules get a workspace_id and detection doesn't timeout."""
+    from glorfindel.agent import resolve_attack_started
+    from glorfindel.config import GlorfindelConfig, MonitoringBackendConfig
+    from glorfindel.detection_rules import DetectionRule
+
+    signal = {
+        "ttp": "T1548.003",
+        "raw_signal": {
+            "detection_timeout_s": 1,
+            "attack_time": 0.0,
+        },
+    }
+    cfg = GlorfindelConfig(monitoring_backends=[
+        MonitoringBackendConfig(name="law-annatar", type="azure_monitor", workspace_id="ws-resolved")
+    ])
+    rule = DetectionRule(
+        name="test", source="azure_monitor", workspace_id="ws-resolved",
+        query="Syslog | where ...", ttp="T1548.003", resource_id="",
+    )
+
+    captured_cfg = {}
+
+    def fake_find_rule(ttp, glorfindel_cfg=None):
+        captured_cfg["cfg"] = glorfindel_cfg
+        return rule
+
+    mock_detector = MagicMock()
+    mock_detector.poll_alert.return_value = None  # timeout — we just want to check cfg
+
+    with patch("glorfindel.agent._find_rule_for_ttp", side_effect=fake_find_rule), \
+         patch("glorfindel.agent.load_glorfindel_config", return_value=cfg), \
+         patch("glorfindel.detectors.detector_for", return_value=mock_detector):
+        resolve_attack_started(signal)
+
+    assert captured_cfg.get("cfg") is cfg, (
+        "_find_rule_for_ttp must receive glorfindel_cfg from load_glorfindel_config()"
+    )
+
+
 # ── load_context ──────────────────────────────────────────────────────────────
 
 def test_load_context_retrieves_past_cycles(tmp_path, tmp_incidents):

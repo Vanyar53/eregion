@@ -8,6 +8,7 @@ from langgraph.graph import StateGraph, END
 from rich.console import Console
 
 from glorfindel.actions import AUTONOMOUS_ACTIONS, HUMAN_APPROVAL_REQUIRED, CloudConnector
+from glorfindel.config import load_glorfindel_config
 from glorfindel.incidents import IncidentRegistry
 from glorfindel.memory import CycleMemory
 
@@ -312,7 +313,7 @@ def load_context(
     return {**state, "past_cycles": past, "incident": asdict(inc)}
 
 
-def _find_rule_for_ttp(ttp: str):
+def _find_rule_for_ttp(ttp: str, glorfindel_cfg=None):
     """Look up the detection rule for a TTP from detection_rules.yaml.
 
     Returns the first matching DetectionRule or None.
@@ -325,7 +326,7 @@ def _find_rule_for_ttp(ttp: str):
         Path(__file__).parent / "rules" / "azure" / "detection_rules.yaml",
     ):
         if candidate.exists():
-            for rule in load_rules(candidate):
+            for rule in load_rules(candidate, glorfindel_cfg=glorfindel_cfg):
                 if rule.ttp == ttp:
                     return rule
     return None
@@ -353,7 +354,7 @@ def resolve_attack_started(signal: dict) -> dict:
 
     # Fall back to detection_rules.yaml when fields absent from signal
     if not query:
-        rule = _find_rule_for_ttp(signal.get("ttp", ""))
+        rule = _find_rule_for_ttp(signal.get("ttp", ""), glorfindel_cfg=load_glorfindel_config())
         if rule:
             source = source or rule.source
             query = rule.query

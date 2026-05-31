@@ -361,6 +361,32 @@ az network nsg rule list -g annatar --nsg-name nsg-annatar -o table
 
 ---
 
+## Sessions Claude spécialisées (multi-agents)
+
+3 sessions en parallèle sur le même repo, coordonnées via `collab/`.
+
+| Session | Fichier de rôle | Périmètre |
+|---------|----------------|-----------|
+| Glorfindel | `CLAUDE_GLORFINDEL.md` | `glorfindel/`, `rules/azure/`, tests Glorfindel |
+| Annatar | `CLAUDE_ANNATAR.md` | `annatar/`, `annatar/scenarios/` |
+| Tests | `CLAUDE_TESTS.md` | `tests/`, `Makefile`, rapports |
+
+**Démarrer une session :**
+```
+# Session Glorfindel
+"Lis CLAUDE_GLORFINDEL.md pour tes instructions de session, puis commence par ton inbox."
+
+# Session Annatar
+"Lis CLAUDE_ANNATAR.md pour tes instructions de session, puis commence par ton inbox."
+
+# Session Tests
+"Lis CLAUDE_TESTS.md pour tes instructions de session, puis lance pytest et rapporte."
+```
+
+**Protocole :** chaque session lit son inbox (`collab/inbox_<role>.md`) en début de tâche, met à jour son status (`collab/<role>_status.md`) après chaque changement significatif, et écrit dans l'inbox de l'autre si un changement a un impact cross-cutting.
+
+---
+
 ## escalations — comportement
 
 `gf pending` affiche les escalades avec **next steps générés par le LLM** (`suggested_steps`), contextuels à l'historique ChromaDB. Fallback statique pour les anciennes escalades sans ce champ.

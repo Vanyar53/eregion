@@ -30,6 +30,9 @@ infra/terraform/*.tfplan
 # Rapports de run (non versionnés)
 runs/
 
+# Coordination inter-sessions (éphémère, pas dans l'historique)
+collab/
+
 # VS Code
 .vscode/settings.json
 

@@ -86,9 +86,11 @@ Mets à jour `collab/test_results.md` avec :
 | TTP | Scénario | SLA détection | Action attendue |
 |-----|----------|--------------|-----------------|
 | T1486 | ransomware-vm | ~71s | escalade `restore_from_backup` |
-| T1041 | data-exfiltration | ~30s | `isolate_vm` |
-| T1110.001 | lateral-movement | ~89s | `block_suspicious_ip` |
+| T1041 | data-exfiltration | ~79s* | `isolate_vm` |
+| T1110.001 | lateral-movement | ~58s | `block_suspicious_ip` |
 | T1548.003 | privilege-escalation | ~40s | `isolate_vm` |
+
+\* T1041 : latence StorageBlobLogs variable côté Azure. Considérer en alerte si >120s.
 
 ## Ce que tu surveilles
 

@@ -12,15 +12,17 @@ Plateforme OSS (Apache 2.0) de défense active cloud. Deux agents IA en boucle :
 
 ---
 
-## TTPs validés en réel (2026-05-24/25/26)
+## TTPs validés en réel (nouvelle architecture RulePoller — 2026-05-31)
 
 | TTP | Scénario | Détection | Temps | Action |
 |-----|----------|-----------|-------|--------|
 | T1486 | Ransomware VM | Perf disk write | ~71s | `restore_from_backup` (escalade) → 21m23s RTO |
-| T1041 | Data exfiltration | StorageBlobLogs (RFC-1918, PutBlob ≥ 1) | ~30s | `isolate_vm` (disk intact) |
-| T1110.001 | SSH brute force | Syslog DCR | 60s | `block_suspicious_ip` (IP Tor) |
+| T1041 | Data exfiltration | StorageBlobLogs (RFC-1918, PutBlob ≥ 1) | ~79s* | `isolate_vm` (disk intact) |
+| T1110.001 | SSH brute force | Syslog DCR | 58s | `block_suspicious_ip` |
 | T1548.003 | Sudo priv esc | Syslog DCR | 40s | `isolate_vm` (root confirmé) |
 | T1110+T1548 | Run parallèle | — | 41s/59s | block → isolate (incident context) |
+
+\* T1041 : latence StorageBlobLogs variable (ingestion Azure, pas la query). SLA fonctionnel, à surveiller.
 
 Glorfindel choisit la bonne action sans règles per-TTP explicites — raisonnement depuis le contexte signal + incident.
 
@@ -30,7 +32,7 @@ Glorfindel choisit la bonne action sans règles per-TTP explicites — raisonnem
 
 ```
 Annatar
-  setup (nettoie résidus) → integrity check → attaque → attack_started {T0, query, workspace_id}
+  setup (nettoie résidus) → integrity check → attaque → attack_started {T0}
 
 Glorfindel (watch ou respond)
   poll_detection Azure Monitor (10s) → detection ou detection_timeout
@@ -153,11 +155,11 @@ glorfindel/
                           RulePoller.expand_for_discovered(registry, glorfindel_cfg) — démarre threads
                           par (règle auto_apply, asset découvert), thread s'arrête si asset évincé
   audit.py              → AuditCheck, AuditResult, run() — NSG/backup/compute readiness checks, IAM gap detection
-  proposed_rules.py     → record/pending/approve() — detection rule proposal lifecycle
+  proposed_rules.py     → record/pending/approve()/reject() — detection rule proposal lifecycle
   memory.py             → CycleMemory ChromaDB (confidence + past_cycles_used)
   incidents.py          → IncidentRegistry (TTL, persist, thread-safe)
   cli.py                → watch, respond, restore, release, unblock, reset (revert=alias), list, pending, ack,
-                          audit (--all), approve-rule, check-ttl, bot, dashboard, war-room
+                          audit (--all), approve-rule, reject-rule, check-ttl, bot, dashboard, war-room
   escalations.py        → ~/.glorfindel/escalations.jsonl + labels (proposed_rule, improve_detection ajoutés)
   bot.py                → Discord bot — un fil par VM, boutons Acquitter + Commande, /pending slash command
   tui.py                → Rich TUI full-screen (glorfindel dashboard) : resources + feed + escalations, raccourcis a/r/x/u/v
@@ -259,6 +261,7 @@ glorfindel audit --all --vault <nom>         # vault non-défaut (défaut: rsv-a
 # Boucle purple team — apprentissage détection
 glorfindel pending                           # voir les règles proposées (proposed_rule)
 glorfindel approve-rule <id>                 # appliquer la règle → detection_rules.yaml
+glorfindel reject-rule <id>                  # écarter la règle sans l'approuver
 
 glorfindel memory-stats                      # ChromaDB cycle count
 glorfindel bot                               # démarrer le bot Discord interactif

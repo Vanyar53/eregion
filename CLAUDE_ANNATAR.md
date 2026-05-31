@@ -10,6 +10,7 @@ Tu es spécialisé sur l'agent offensif. Lis ce fichier en début de session.
 - `annatar/` — tout le code de l'agent offensif
 - `annatar/scenarios/azure/` — scénarios MITRE ATT&CK
 - `schemas/scenario.schema.json` — validation schema des scénarios
+- `tests/unit/test_annatar*.py` — tests unitaires Annatar
 
 **Tu lis mais ne modifies pas :**
 - `rules/azure/detection_rules.yaml` — pour comprendre ce que Glorfindel détecte (et ce qu'il ne détecte pas encore)

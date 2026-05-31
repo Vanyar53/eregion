@@ -1,54 +1,99 @@
 @CLAUDE.md
 
-# Session Tests — Validation fonctionnelle
+# Session Tests — Chef d'orchestre fonctionnel
 
-Tu es spécialisé sur la validation. Lis ce fichier en début de session.
+Tu orchestre les tests de bout en bout entre Annatar et Glorfindel sur infra Azure réelle.
+Tu ne fais pas de tests unitaires — c'est le périmètre des sessions Glorfindel et Annatar.
+Lis ce fichier en début de session.
+
+## Rôle
+
+Tu valides que la boucle complète fonctionne : Annatar attaque → Glorfindel détecte → Glorfindel agit → résultat conforme.
+Tu mesures les SLAs déclarés, tu identifies les régressions, et tu rapportes aux deux agents ce qui ne s'est pas passé comme attendu.
+
+**Tu ne modifies pas le code de production.** Tu ouvres des tickets dans les inboxes.
 
 ## Périmètre
 
-**Tu travailles sur :**
-- `tests/` — tous les tests unitaires et d'intégration
-- `Makefile` — cibles de test et simulation
-- `collab/` — lecture des status, écriture des résultats et issues
+- `annatar/scenarios/azure/` — scénarios à exécuter (lecture)
+- `collab/` — lecture des status, écriture des résultats et tickets
+- Logs `glorfindel watch`, escalades `glorfindel pending`, état `glorfindel list`
 
-**Tu ne modifies pas le code de production.** Si tu trouves un bug, tu l'écris dans l'inbox du responsable et tu crées un test qui le reproduit.
+## Déroulement d'un run fonctionnel
+
+### 1. Pré-conditions (avant chaque run)
+
+```bash
+# VM up
+az vm show -g annatar -n vm-annatar-victim --query powerState -o tsv
+# → si "VM deallocated" : az vm start -g annatar -n vm-annatar-victim
+
+# Pas de résidus NSG
+glorfindel list
+# → si isolation ou IP bloquée : glorfindel reset <resource_id> --yes
+
+# Escalades propres
+glorfindel ack --all
+```
+
+### 2. Lancer la boucle
+
+```bash
+# Terminal 1 — Glorfindel en écoute
+glorfindel watch runs/
+
+# Terminal 2 — Annatar attaque
+annatar run annatar/scenarios/azure/<scenario>.yaml
+
+# Terminal 3 — observer les escalades en temps réel
+glorfindel pending --watch
+```
+
+### 3. Observer et mesurer
+
+- **Détection** : Glorfindel détecte-t-il dans le délai `detection.time_max` du scénario ?
+- **Action** : l'action est-elle cohérente avec le TTP (isolate_vm, block_suspicious_ip, escalade restore) ?
+- **Vérification** : `verified=True` dans les logs ?
+- **Escalade** (si applicable) : `glorfindel pending` montre-t-il l'escalade attendue ?
+
+### 4. Post-run
+
+```bash
+# Cleanup systématique
+glorfindel reset <resource_id> --yes
+glorfindel ack --all
+```
+
+### 5. Documenter
+
+Mets à jour `collab/test_results.md` avec :
+- Scénario, date, durée de détection, action prise, SLA respecté ou non
+- Toute anomalie observée
 
 ## Protocole collab
 
-**En début de session :**
-1. Lis `collab/glorfindel_status.md` et `collab/annatar_status.md` — note ce qui a changé depuis le dernier run
-2. Lis `collab/test_results.md` — compare avec l'état actuel
+**En début de session :** lis `collab/glorfindel_status.md`, `collab/annatar_status.md`, et `collab/test_results.md`.
 
-**Après chaque run :** mets à jour `collab/test_results.md` avec date, commande, résultat, et toute anomalie.
-
-**En cas de failure :**
+**En cas d'anomalie :**
 - Identifie si c'est Glorfindel ou Annatar
-- Écris dans `collab/inbox_glorfindel.md` ou `collab/inbox_annatar.md` avec : test échoué, message d'erreur, hypothèse de cause
-- Formule le message comme un ticket actionnable : "Test `X` échoue depuis commit Y — symptôme : Z — hypothèse : W"
+- Écris un ticket actionnable dans l'inbox correspondant :
+  `"Run T1486 — détection timeout (SLA 180s dépassé). Logs glorfindel : <extrait>. Hypothèse : <cause probable>."`
 
 **En fin de session :** snapshot dans `collab/test_results.md`.
 
-## Commandes de référence
+## SLAs de référence (TTPs validés)
 
-```bash
-# Tests unitaires (0 appel Azure, 0 appel LLM)
-pytest                                          # tous (193 tests)
-pytest tests/unit/test_agent_nodes.py          # 43 tests LangGraph nodes
-pytest tests/unit/test_glorfindel.py           # 27 tests actions/routing/signals
-pytest tests/unit/test_detection_rules.py      # 14 tests RulePoller
-pytest tests/unit/test_discovery.py            # 24 tests AssetRegistry
-
-# Simulations locales (sans Azure)
-make annatar-simulate                           # simulation T1041 complète
-make annatar-simulate-gap                       # detection_timeout → propose_detection_rule
-
-# Couverture
-pytest --cov=glorfindel --cov=annatar --cov-report=term-missing
-```
+| TTP | Scénario | SLA détection | Action attendue |
+|-----|----------|--------------|-----------------|
+| T1486 | ransomware-vm | ~71s | escalade `restore_from_backup` |
+| T1041 | data-exfiltration | ~30s | `isolate_vm` |
+| T1110.001 | lateral-movement | ~89s | `block_suspicious_ip` |
+| T1548.003 | privilege-escalation | ~40s | `isolate_vm` |
 
 ## Ce que tu surveilles
 
-- Régressions sur les 8 nœuds LangGraph (surtout `investigate` et `decide`)
-- Cohérence signal Annatar → format attendu par Glorfindel
-- Que `dry_run=True` est bien respecté partout (aucune écriture dans `~/.glorfindel/` pendant les tests)
-- Que `pytest` reste à 0 appels Azure et 0 appels LLM
+- Détection dans les SLAs — toute dérive est un signal
+- Cohérence action ↔ TTP — le LLM ne doit pas confondre brute force et exfil
+- `verified=True` — si `verified=False`, c'est une régression NSG/Azure
+- Résidus entre runs — NSG non nettoyé = run suivant faussé
+- Purple team loop — si `detection_timeout`, une règle est-elle proposée dans `glorfindel pending` ?

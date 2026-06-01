@@ -58,7 +58,7 @@ DOCKER_GLORFINDEL := docker run --rm $(AZURE_ENV) $(GLORFINDEL_VOLS) $(GLORFINDE
 	glorfindel-respond glorfindel-dry-run glorfindel-watch \
 	glorfindel-release glorfindel-revert glorfindel-list \
 	glorfindel-pending glorfindel-check-ttl \
-	glorfindel-start glorfindel-stop glorfindel-restart glorfindel-dev glorfindel-logs \
+	glorfindel-start glorfindel-stop glorfindel-restart glorfindel-dev glorfindel-logs glorfindel-ui \
 	annatar-shell glorfindel-shell \
 	venv install test test-unit lint annatar-simulate annatar-simulate-gap clean
 
@@ -93,6 +93,7 @@ help:
 	@echo "  make glorfindel-stop            Stop all services"
 	@echo "  make glorfindel-restart         Rebuild + restart all services"
 	@echo "  make glorfindel-dev             Start + watch files (auto-reload on change)"
+	@echo "  make glorfindel-ui              Rebuild + restart war-room only (watch untouched)"
 	@echo "  make glorfindel-logs            Tail service logs"
 	@echo "  make glorfindel-watch           Watch runs/ only (no web UI)"
 	@echo "  make glorfindel-respond         SIGNALS=... Process signal file"
@@ -197,6 +198,10 @@ glorfindel-dev: build-glorfindel
 
 glorfindel-logs:
 	docker compose logs -f
+
+glorfindel-ui: build-glorfindel
+	docker compose up -d --no-deps war-room
+	@echo "  War Room  →  http://localhost:7007  (watch untouched)"
 
 # ── Shells ────────────────────────────────────────────────────────────────
 

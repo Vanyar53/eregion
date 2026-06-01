@@ -53,12 +53,17 @@ def _state(**overrides) -> dict:
     return base
 
 
-def _mock_llm_response(action: str, escalate: bool = False, escalation_reason: str = "") -> MagicMock:
+def _mock_llm_response(
+    action: str,
+    escalate: bool = False,
+    escalation_reason: str = "",
+    confidence: float = 0.95,
+) -> MagicMock:
     """Build a mock LiteLLM response (OpenAI format) that calls the security_decision tool."""
     import json
     arguments = json.dumps({
         "reasoning": f"Identified threat. Action: {action}.",
-        "confidence": 0.95,
+        "confidence": confidence,
         "action": action,
         "reversible": True,
         "explanation": f"Executing {action}.",
@@ -570,6 +575,62 @@ def test_escalate_to_human_real_run_records():
         escalate_to_human(state)
 
     mock_record.assert_called_once()
+
+
+# ── decide — confidence gate ──────────────────────────────────────────────────
+
+def test_decide_confidence_gate_forces_escalation():
+    """Low confidence + autonomous action → escalate forced even if LLM said False."""
+    from glorfindel.agent import decide
+
+    state = _state()
+    with patch("litellm.completion",
+               return_value=_mock_llm_response("isolate_vm", escalate=False, confidence=0.5)):
+        result = decide(state, model="claude-test")
+
+    assert result["escalate"] is True
+    assert "50%" in result["escalation_reason"]
+    assert "Low confidence" in result["escalation_reason"]
+
+
+def test_decide_confidence_gate_above_threshold_no_override():
+    """Confidence above threshold → LLM decision respected, no forced escalation."""
+    from glorfindel.agent import decide
+
+    state = _state()
+    with patch("litellm.completion",
+               return_value=_mock_llm_response("isolate_vm", escalate=False, confidence=0.8)):
+        result = decide(state, model="claude-test")
+
+    assert result["escalate"] is False
+
+
+def test_decide_confidence_gate_non_autonomous_not_overridden():
+    """Low confidence on a non-autonomous action (human-required) is not overridden."""
+    from glorfindel.agent import decide
+
+    state = _state()
+    with patch("litellm.completion",
+               return_value=_mock_llm_response("restore_from_backup", escalate=False, confidence=0.4)):
+        result = decide(state, model="claude-test")
+
+    # restore_from_backup is not in AUTONOMOUS_ACTIONS — gate does not apply
+    assert result["escalate"] is False
+
+
+def test_decide_confidence_gate_env_threshold(monkeypatch):
+    """GLORFINDEL_CONFIDENCE_THRESHOLD env var changes the gate threshold."""
+    from glorfindel.agent import decide
+
+    monkeypatch.setenv("GLORFINDEL_CONFIDENCE_THRESHOLD", "0.9")
+    state = _state()
+    # confidence=0.85 is above default 0.7 but below custom 0.9
+    with patch("litellm.completion",
+               return_value=_mock_llm_response("isolate_vm", escalate=False, confidence=0.85)):
+        result = decide(state, model="claude-test")
+
+    assert result["escalate"] is True
+    assert "85%" in result["escalation_reason"]
 
 
 # ── Graph integration (LLM mocked) ───────────────────────────────────────────

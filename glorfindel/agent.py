@@ -596,7 +596,11 @@ def decide(state: GlorfindelState, *, model: str) -> GlorfindelState:
         model=model,
         max_tokens=4096,
         messages=[
-            {"role": "system", "content": _SYSTEM_PROMPT},
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": _SYSTEM_PROMPT,
+                              "cache_control": {"type": "ephemeral"}}],
+            },
             {"role": "user", "content": user_content},
         ],
         tools=[_DECISION_TOOL],
@@ -606,6 +610,15 @@ def decide(state: GlorfindelState, *, model: str) -> GlorfindelState:
 
     tool_call = response.choices[0].message.tool_calls[0]
     d = json.loads(tool_call.function.arguments)
+
+    # Confidence gate: override LLM if confidence below threshold on autonomous actions
+    confidence = d["confidence"]
+    _threshold = float(os.environ.get("GLORFINDEL_CONFIDENCE_THRESHOLD", "0.7"))
+    if not d["escalate"] and d["action"] in AUTONOMOUS_ACTIONS and confidence < _threshold:
+        d["escalate"] = True
+        d["escalation_reason"] = (
+            f"Low confidence ({confidence:.0%}) — human review required"
+        )
 
     return {
         **state,
@@ -900,7 +913,11 @@ Propose a better {query_lang} query that would have caught this attack."""
         model=model,
         max_tokens=2048,
         messages=[
-            {"role": "system", "content": _RULE_PROPOSAL_SYSTEM_PROMPT},
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": _RULE_PROPOSAL_SYSTEM_PROMPT,
+                              "cache_control": {"type": "ephemeral"}}],
+            },
             {"role": "user", "content": user_msg},
         ],
         tools=[_RULE_PROPOSAL_TOOL],

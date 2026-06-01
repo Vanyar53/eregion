@@ -898,10 +898,13 @@ def propose_detection_rule(
     # Skip if RulePoller already detected this TTP recently — detection_missed
     # is a false negative from Annatar's feedback watcher not finding the watch file
     # fast enough. No new rule needed.
+    # detection_timeout_s is in context (Annatar puts metrics there), not raw_signal.
+    # Annatar waits detection_timeout_s + 120s before emitting detection_missed, so
+    # the RulePoller match could be up to (timeout + 180s) old when we get here.
     ttp = signal.get("ttp", "")
-    detection_timeout_s = float(raw.get("detection_timeout_s", 300))
+    detection_timeout_s = float(ctx.get("detection_timeout_s", 300))
     from glorfindel.detection_rules import rulepoller_recently_matched
-    if rulepoller_recently_matched(ttp, detection_timeout_s):
+    if rulepoller_recently_matched(ttp, detection_timeout_s + 180):
         _console.print(
             f"  [dim]propose_detection_rule: RulePoller matched '{ttp}' recently "
             f"— detection_missed is a false negative, skipping proposal[/dim]"

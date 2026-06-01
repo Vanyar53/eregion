@@ -33,6 +33,7 @@ class GlorfindelState(TypedDict):
     outcome: dict | None
     proposed_rule: dict | None  # set by propose_detection_rule for detection_missed signals
     proposal_id: str            # UUID of the saved proposed rule (empty if not a rule proposal)
+    llm_usage: dict | None      # LLM token usage from last litellm.completion call (P1 observability)
 
 
 # ── LLM decision tool schema ──────────────────────────────────────────────────
@@ -626,6 +627,16 @@ def decide(state: GlorfindelState, *, model: str) -> GlorfindelState:
             f"Low confidence ({confidence:.0%}) — human review required"
         )
 
+    usage = getattr(response, "usage", None)
+    llm_usage: dict | None = None
+    if usage is not None:
+        llm_usage = {
+            "input_tokens": getattr(usage, "prompt_tokens", 0),
+            "output_tokens": getattr(usage, "completion_tokens", 0),
+            "cache_read_input_tokens": getattr(usage, "cache_read_input_tokens", 0),
+            "cache_creation_input_tokens": getattr(usage, "cache_creation_input_tokens", 0),
+        }
+
     return {
         **state,
         "reasoning": d["reasoning"],
@@ -636,6 +647,7 @@ def decide(state: GlorfindelState, *, model: str) -> GlorfindelState:
         "escalate": d["escalate"],
         "escalation_reason": d.get("escalation_reason", ""),
         "suggested_steps": d.get("suggested_steps") or [],
+        "llm_usage": llm_usage,
     }
 
 
@@ -676,10 +688,12 @@ def execute_action(
 
     incident = state.get("incident")
     if incident:
+        inv_ctx = state["signal"].get("raw_signal", {}).get("investigative_context")
         incidents.record_action(
             incident["incident_id"],
             action,
             outcome.get("status", "unknown"),
+            investigative_context=inv_ctx or None,
         )
 
     return {**state, "outcome": {**outcome, "executed": True, "action_s": action_s}}
@@ -839,6 +853,7 @@ def store_cycle(state: GlorfindelState, *, memory: CycleMemory) -> GlorfindelSta
             "escalate": state["escalate"],
             "escalation_reason": state.get("escalation_reason", ""),
             "outcome": outcome,
+            "llm_usage": state.get("llm_usage"),
         }
         out = Path("runs") / f"{run_id}_debug.jsonl"
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -1130,6 +1145,14 @@ def _build_user_message(
             lines.append("- Actions déjà exécutées :")
             for a in actions:
                 lines.append(f"  * {a['action']} → {a['outcome_status']} ({a['timestamp']})")
+                inv = a.get("investigative_context", {})
+                for key, rows in inv.items():
+                    label = key.replace("_", " ")
+                    if rows:
+                        lines.append(f"    Contexte — {label} ({len(rows)} résultat(s)) :")
+                        lines.append(f"    {json.dumps(rows[0], default=str)}")
+                    else:
+                        lines.append(f"    Contexte — {label} : aucun résultat")
         else:
             lines.append("- Aucune action encore exécutée sur cet incident.")
         lines.append(

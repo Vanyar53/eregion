@@ -73,18 +73,30 @@ class IncidentRegistry:
             return inc
 
     def record_action(
-        self, incident_id: str, action: str, outcome_status: str
+        self,
+        incident_id: str,
+        action: str,
+        outcome_status: str,
+        investigative_context: dict | None = None,
     ) -> None:
-        """Append an action record to the incident."""
+        """Append an action record to the incident.
+
+        investigative_context: the raw_signal.investigative_context dict from the
+        cycle that triggered this action — stored so subsequent LLM cycles can see
+        what was investigated before the action was taken.
+        """
         with self._lock:
             rows = self._load_all()
             for inc in rows:
                 if inc.incident_id == incident_id:
-                    inc.actions_taken.append({
+                    entry: dict = {
                         "action": action,
                         "timestamp": _now_iso(),
                         "outcome_status": outcome_status,
-                    })
+                    }
+                    if investigative_context:
+                        entry["investigative_context"] = investigative_context
+                    inc.actions_taken.append(entry)
                     break
             self._write_all(rows)
 

@@ -392,6 +392,54 @@ def test_execute_action_records_action_s(tmp_incidents):
     assert isinstance(result["outcome"]["action_s"], int)
 
 
+# ── execute_action — investigative_context propagation ───────────────────────
+
+def test_execute_action_stores_investigative_context_in_incident(tmp_incidents):
+    """investigative_context from raw_signal must be stored in the incident action record."""
+    from glorfindel.agent import execute_action
+
+    connector = MagicMock()
+    connector.isolate_vm.return_value = {"status": "isolated", "nsg": "rg/nsg", "rule": "r"}
+    state = _state(action="isolate_vm")
+    state["signal"]["raw_signal"] = {
+        "detected_data": {"SourceIP": "1.2.3.4"},
+        "investigative_context": {
+            "successful_auth_from_ip": [{"TimeGenerated": "2026-06-01", "Computer": "vm1"}]
+        },
+    }
+    # Pre-create incident and wire its ID into state["incident"]
+    inc = tmp_incidents.get_or_create(resource_id=_RESOURCE_ID, ttp="T1110.001")
+    state["incident"] = {"incident_id": inc.incident_id}
+
+    execute_action(state, connector=connector, incidents=tmp_incidents)
+
+    updated = tmp_incidents.get_active(_RESOURCE_ID)
+    assert updated is not None
+    action_record = updated.actions_taken[-1]
+    assert action_record["action"] == "isolate_vm"
+    inv = action_record.get("investigative_context", {})
+    assert "successful_auth_from_ip" in inv
+    assert len(inv["successful_auth_from_ip"]) == 1
+
+
+def test_execute_action_no_investigative_context_omits_key(tmp_incidents):
+    """When no investigative_context, the key must be absent from the action record."""
+    from glorfindel.agent import execute_action
+
+    connector = MagicMock()
+    connector.isolate_vm.return_value = {"status": "isolated", "nsg": "rg/nsg", "rule": "r"}
+    state = _state(action="isolate_vm")
+    state["signal"]["raw_signal"] = {}
+    inc = tmp_incidents.get_or_create(resource_id=_RESOURCE_ID, ttp="T1548.003")
+    state["incident"] = {"incident_id": inc.incident_id}
+
+    execute_action(state, connector=connector, incidents=tmp_incidents)
+
+    updated = tmp_incidents.get_active(_RESOURCE_ID)
+    action_record = updated.actions_taken[-1]
+    assert "investigative_context" not in action_record
+
+
 # ── verify_action ─────────────────────────────────────────────────────────────
 
 def test_verify_action_isolate_vm_success():

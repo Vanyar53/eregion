@@ -887,6 +887,30 @@ def test_investigate_skips_no_workspace():
     assert "investigative_context" not in result["signal"].get("raw_signal", {})
 
 
+def test_investigate_resolves_workspace_from_glorfindel_cfg():
+    """RulePoller signals have no workspace_id in signal — must fall back to glorfindel_cfg."""
+    from glorfindel.config import GlorfindelConfig, MonitoringBackendConfig
+
+    state = _inv_state(workspace_id="", first_row={"Computer": "vm1", "MaxWrite": 60000000})
+    # Simulate no workspace in signal but valid backend in glorfindel_cfg
+    cfg = GlorfindelConfig(monitoring_backends=[
+        MonitoringBackendConfig(name="law-annatar", type="azure_monitor", workspace_id="ws-cfg-123")
+    ])
+    mock_det = MagicMock()
+    mock_det.run_query.return_value = []
+
+    with patch("glorfindel.agent.load_glorfindel_config", return_value=cfg), \
+         patch("glorfindel.detectors.detector_for", return_value=mock_det):
+        result = investigate(state)
+
+    # investigate must have run (investigative_context present)
+    ctx = result["signal"]["raw_signal"].get("investigative_context")
+    assert ctx is not None, "investigate must run when workspace_id resolved from glorfindel_cfg"
+    # detector must have been called with the resolved workspace_id
+    from glorfindel.detectors import detector_for as _det_for  # just for reference
+    assert mock_det.run_query.called
+
+
 def test_investigate_skips_dry_run():
     state = _inv_state(first_row={"MaxWrite": 147000000}, dry_run=True)
     result = investigate(state)

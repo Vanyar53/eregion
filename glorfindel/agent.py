@@ -508,6 +508,14 @@ def investigate(state: GlorfindelState) -> GlorfindelState:
         or signal.get("context", {}).get("workspace_id", "")
     )
 
+    # RulePoller signals don't embed workspace_id — resolve from config
+    if not workspace_id:
+        cfg = load_glorfindel_config()
+        for b in cfg.monitoring_backends:
+            if b.workspace_id:
+                workspace_id = b.workspace_id
+                break
+
     if not workspace_id or state.get("dry_run"):
         return state
 

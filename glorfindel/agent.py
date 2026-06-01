@@ -383,10 +383,16 @@ def resolve_attack_started(signal: dict) -> dict:
 
     if result is not None:
         detection_s, detected_row = result
+        from glorfindel.detection_rules import normalize_row
         return {
             **signal,
             "event": "detection",
-            "raw_signal": {**raw, "detection_time_s": detection_s, "detected_data": detected_row},
+            "raw_signal": {
+                **raw,
+                "detection_time_s": detection_s,
+                "detected_data": detected_row,
+                "normalized_signal": normalize_row(detected_row, ttp=signal.get("ttp", "")),
+            },
         }
 
     _console.print(f"  [yellow]Detection timeout after {int(timeout_s)}s — IDS gap[/yellow]")
@@ -1087,6 +1093,13 @@ def _build_user_message(
     lines = ["## Signal reçu\n", "```json"]
     lines.append(json.dumps(signal, indent=2, default=str))
     lines.append("```")
+
+    norm = signal.get("raw_signal", {}).get("normalized_signal", {})
+    if norm and norm.get("indicator_key", "unknown") != "unknown":
+        lines.append(
+            f"\n**Indicateur principal** : `{norm['indicator_key']}` = "
+            f"`{norm['indicator_value']}` (ressource : `{norm['resource']}`)"
+        )
 
     inv_ctx = signal.get("raw_signal", {}).get("investigative_context")
     if inv_ctx:

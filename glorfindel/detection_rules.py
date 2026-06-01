@@ -83,6 +83,52 @@ class DetectionConfig:
         return next((a for a in self.assets if a.resource_id == resource_id), None)
 
 
+# ── Row normalisation ──────────────────────────────────────────────────────────
+
+# Priority-ordered list of (column_name, semantic_label).
+# First match wins. Columns absent from a row are skipped.
+_INDICATOR_COLUMNS: list[tuple[str, str]] = [
+    ("MaxWrite",        "disk_write_rate_bps"),
+    ("FailedAttempts",  "failed_auth_count"),
+    ("SourceIP",        "source_ip"),
+    ("CallerIpAddress", "caller_ip"),
+    ("PutBlobCount",    "blob_upload_count"),
+    ("EgressBytes",     "egress_bytes"),
+    ("SyslogMessage",   "syslog_event"),   # may be overridden below
+]
+
+_RESOURCE_COLUMNS = ("Computer", "computer", "AccountName", "StorageAccountName")
+_SKIP_GENERIC = frozenset({"TimeGenerated", "_ResourceId", "TenantId", "Type"})
+
+
+def normalize_row(row: dict, ttp: str = "") -> dict:
+    """Map a raw KQL result row to a concise indicator dict for the LLM.
+
+    Returns {"resource": str, "indicator_key": str, "indicator_value": Any}.
+    Preserves the full row in raw_signal.first_result_row — this function only
+    adds a normalised summary so the LLM can identify the primary threat signal
+    without parsing opaque column names.
+    Falls back gracefully when the row has no recognised columns.
+    """
+    resource = next((row[c] for c in _RESOURCE_COLUMNS if c in row), "")
+
+    for col, label in _INDICATOR_COLUMNS:
+        if col not in row:
+            continue
+        value = row[col]
+        # SyslogMessage containing USER=root → more specific label
+        if col == "SyslogMessage" and "USER=root" in str(value):
+            label = "privilege_escalation"
+        return {"resource": resource, "indicator_key": label, "indicator_value": value}
+
+    # Generic fallback: first non-metadata key
+    for col, value in row.items():
+        if col not in _SKIP_GENERIC:
+            return {"resource": resource, "indicator_key": col.lower(), "indicator_value": value}
+
+    return {"resource": resource, "indicator_key": "unknown", "indicator_value": None}
+
+
 # ── Loading ────────────────────────────────────────────────────────────────────
 
 def load_config(path: str | Path, glorfindel_cfg=None) -> DetectionConfig:
@@ -405,6 +451,7 @@ class RulePoller:
                         "raw_signal": {
                             "detection_source": rule.source,
                             "first_result_row": row,
+                            "normalized_signal": normalize_row(row, ttp=rule.ttp),
                         },
                     }
                     if not self._dry_run:

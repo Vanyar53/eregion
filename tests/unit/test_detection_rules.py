@@ -15,6 +15,7 @@ from glorfindel.detection_rules import (
     _save_status,
     load_rules,
     load_config,
+    normalize_row,
 )
 
 
@@ -197,6 +198,81 @@ def test_load_status_missing_file(tmp_path, monkeypatch):
         tmp_path / "nonexistent.json",
     )
     assert _load_status() == {}
+
+
+# ── normalize_row ────────────────────────────────────────────────────────────────
+
+def test_normalize_row_disk_write():
+    row = {"Computer": "vm1", "MaxWrite": 52428800, "TimeGenerated": "2026-05-31T19:00:00Z"}
+    n = normalize_row(row, ttp="T1486")
+    assert n["indicator_key"] == "disk_write_rate_bps"
+    assert n["indicator_value"] == 52428800
+    assert n["resource"] == "vm1"
+
+
+def test_normalize_row_failed_auth():
+    row = {"Computer": "vm1", "SourceIP": "185.220.101.1", "FailedAttempts": "34"}
+    n = normalize_row(row, ttp="T1110.001")
+    assert n["indicator_key"] == "failed_auth_count"
+    assert n["indicator_value"] == "34"
+
+
+def test_normalize_row_privilege_escalation():
+    row = {"Computer": "vm1", "SyslogMessage": "sudo[12009]: USER=root COMMAND=/bin/bash"}
+    n = normalize_row(row, ttp="T1548.003")
+    assert n["indicator_key"] == "privilege_escalation"
+    assert "USER=root" in str(n["indicator_value"])
+
+
+def test_normalize_row_syslog_generic():
+    row = {"Computer": "vm1", "SyslogMessage": "sshd: Accepted password for user"}
+    n = normalize_row(row)
+    assert n["indicator_key"] == "syslog_event"
+
+
+def test_normalize_row_blob_exfil():
+    row = {"AccountName": "storageannatar", "CallerIpAddress": "1.2.3.4", "PutBlobCount": 5}
+    n = normalize_row(row, ttp="T1041")
+    assert n["indicator_key"] == "caller_ip"
+    assert n["resource"] == "storageannatar"
+
+
+def test_normalize_row_unknown_fallback():
+    row = {"TimeGenerated": "2026-01-01", "_ResourceId": "/sub/rg/vm"}
+    n = normalize_row(row)
+    assert n["indicator_key"] == "unknown"
+    assert n["indicator_value"] is None
+
+
+def test_normalize_row_generic_fallback():
+    row = {"TimeGenerated": "2026-01-01", "MyCustomMetric": 42}
+    n = normalize_row(row)
+    assert n["indicator_key"] == "mycustommetric"
+    assert n["indicator_value"] == 42
+
+
+def test_poller_signal_contains_normalized_signal(tmp_path, monkeypatch):
+    """Dispatched signals must include raw_signal.normalized_signal."""
+    monkeypatch.setattr(
+        "glorfindel.detection_rules._STATUS_FILE",
+        tmp_path / "status.json",
+    )
+    dispatched = []
+    mock_detector = MagicMock()
+    row = {"TimeGenerated": "2026-05-31T19:13:29Z", "Computer": "vm1", "MaxWrite": 60000000}
+    mock_detector.poll_alert.return_value = (1.0, row)
+
+    with patch("glorfindel.detection_rules.detector_for", return_value=mock_detector):
+        rule = _make_rule(interval_s=0.05, ttp="T1486")
+        poller = RulePoller([rule], dispatched.append, dry_run=False)
+        poller.start()
+        time.sleep(0.3)
+        poller.stop()
+
+    assert len(dispatched) >= 1
+    norm = dispatched[0]["raw_signal"].get("normalized_signal", {})
+    assert norm["indicator_key"] == "disk_write_rate_bps"
+    assert norm["resource"] == "vm1"
 
 
 # ── RulePoller ───────────────────────────────────────────────────────────────────

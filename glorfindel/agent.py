@@ -827,29 +827,37 @@ def store_cycle(state: GlorfindelState, *, memory: CycleMemory) -> GlorfindelSta
         "action_s": outcome.get("action_s", 0),
         "past_cycles_used": [c.get("summary", "") for c in state.get("past_cycles", [])],
     }
-    memory.store(cycle)
+    # ChromaDB write — non-fatal: debug JSONL must still be written on failure
+    try:
+        memory.store(cycle)
+    except Exception as exc:
+        _console.print(f"[yellow]store_cycle: ChromaDB write failed: {exc}[/yellow]")
 
     # Notify autonomous actions (not escalations, not dry-run)
-    if (
-        not state.get("dry_run")
-        and not state.get("escalate")
-        and outcome.get("executed")
-        and outcome.get("status") != "dry_run"
-        and outcome.get("verified") is not False
-    ):
-        from glorfindel.escalations import notify_action
-        notify_action(
-            action=state["action"],
-            resource_id=signal.get("resource_id", ""),
-            run_id=run_id,
-            confidence=state["confidence"],
-            explanation=state.get("explanation", ""),
-            verified=outcome.get("verified"),
-            ttp=signal.get("ttp", ""),
-            severity=signal.get("severity", ""),
-        )
+    # Non-fatal: webhook/notification failure must not suppress the debug file
+    try:
+        if (
+            not state.get("dry_run")
+            and not state.get("escalate")
+            and outcome.get("executed")
+            and outcome.get("status") != "dry_run"
+            and outcome.get("verified") is not False
+        ):
+            from glorfindel.escalations import notify_action
+            notify_action(
+                action=state["action"],
+                resource_id=signal.get("resource_id", ""),
+                run_id=run_id,
+                confidence=state["confidence"],
+                explanation=state.get("explanation", ""),
+                verified=outcome.get("verified"),
+                ttp=signal.get("ttp", ""),
+                severity=signal.get("severity", ""),
+            )
+    except Exception as exc:
+        _console.print(f"[yellow]store_cycle: notify_action failed: {exc}[/yellow]")
 
-    # Debug JSONL — full trace for post-mortem analysis
+    # Debug JSONL — always written, even if ChromaDB or webhook failed
     if run_id:
         debug_record = {
             "timestamp": datetime.now(timezone.utc).isoformat(),

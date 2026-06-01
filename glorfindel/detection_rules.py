@@ -275,6 +275,32 @@ def _save_status(status: dict) -> None:
     _STATUS_FILE.write_text(json.dumps(status, indent=2))
 
 
+def rulepoller_recently_matched(ttp: str, within_s: float) -> bool:
+    """Return True if a RulePoller rule for this TTP had a match within `within_s` seconds.
+
+    Used by propose_detection_rule to suppress false-positive proposals when the
+    RulePoller detected the attack but Annatar's feedback watcher timed out before
+    finding the watch file.
+    """
+    from datetime import datetime, timezone
+
+    status = _load_status()
+    now = datetime.now(timezone.utc)
+    for entry in status.values():
+        if entry.get("ttp") != ttp:
+            continue
+        last_match = entry.get("last_match")
+        if not last_match:
+            continue
+        try:
+            age_s = (now - datetime.fromisoformat(last_match)).total_seconds()
+            if 0 <= age_s <= within_s:
+                return True
+        except Exception:
+            pass
+    return False
+
+
 # ── RulePoller ────────────────────────────────────────────────────────────────
 
 class RulePoller:
@@ -405,6 +431,7 @@ class RulePoller:
                     if result is not None:
                         _elapsed, row = result
                         self._status[rule.name]["last_match"] = now_iso
+                        self._status[rule.name]["ttp"] = rule.ttp
                         self._status[rule.name]["match_count"] = (
                             self._status[rule.name].get("match_count", 0) + 1
                         )

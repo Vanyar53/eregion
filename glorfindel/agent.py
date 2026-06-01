@@ -895,6 +895,19 @@ def propose_detection_rule(
     hints = raw.get("detection_hints", {})
     ctx = signal.get("context", {})
 
+    # Skip if RulePoller already detected this TTP recently — detection_missed
+    # is a false negative from Annatar's feedback watcher not finding the watch file
+    # fast enough. No new rule needed.
+    ttp = signal.get("ttp", "")
+    detection_timeout_s = float(raw.get("detection_timeout_s", 300))
+    from glorfindel.detection_rules import rulepoller_recently_matched
+    if rulepoller_recently_matched(ttp, detection_timeout_s):
+        _console.print(
+            f"  [dim]propose_detection_rule: RulePoller matched '{ttp}' recently "
+            f"— detection_missed is a false negative, skipping proposal[/dim]"
+        )
+        return state
+
     failed_query = ctx.get("failed_query") or raw.get("failed_query", "(unknown)")
     workspace_id = ctx.get("workspace_id", "")
     source = raw.get("detection_source", "azure_monitor")

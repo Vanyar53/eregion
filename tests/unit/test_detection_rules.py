@@ -16,6 +16,7 @@ from glorfindel.detection_rules import (
     load_rules,
     load_config,
     normalize_row,
+    rulepoller_recently_matched,
 )
 
 
@@ -181,6 +182,58 @@ def test_load_rules_defaults(tmp_path):
 
 
 # ── status persistence ───────────────────────────────────────────────────────────
+
+# ── rulepoller_recently_matched ───────────────────────────────────────────────
+
+def test_rulepoller_recently_matched_true(tmp_path, monkeypatch):
+    """Returns True when a matching TTP had a recent match."""
+    from datetime import datetime, timezone
+    monkeypatch.setattr("glorfindel.detection_rules._STATUS_FILE", tmp_path / "rs.json")
+    now_iso = datetime.now(timezone.utc).isoformat()
+    _save_status({"sudo-rule": {"last_match": now_iso, "ttp": "T1548.003"}})
+    assert rulepoller_recently_matched("T1548.003", within_s=300) is True
+
+
+def test_rulepoller_recently_matched_expired(tmp_path, monkeypatch):
+    """Returns False when the last match is older than within_s."""
+    monkeypatch.setattr("glorfindel.detection_rules._STATUS_FILE", tmp_path / "rs.json")
+    old_iso = "2020-01-01T00:00:00+00:00"
+    _save_status({"sudo-rule": {"last_match": old_iso, "ttp": "T1548.003"}})
+    assert rulepoller_recently_matched("T1548.003", within_s=300) is False
+
+
+def test_rulepoller_recently_matched_wrong_ttp(tmp_path, monkeypatch):
+    """Returns False when TTP doesn't match."""
+    from datetime import datetime, timezone
+    monkeypatch.setattr("glorfindel.detection_rules._STATUS_FILE", tmp_path / "rs.json")
+    now_iso = datetime.now(timezone.utc).isoformat()
+    _save_status({"ssh-rule": {"last_match": now_iso, "ttp": "T1110.001"}})
+    assert rulepoller_recently_matched("T1548.003", within_s=300) is False
+
+
+def test_rulepoller_recently_matched_no_status(tmp_path, monkeypatch):
+    """Returns False when no status file exists."""
+    monkeypatch.setattr("glorfindel.detection_rules._STATUS_FILE", tmp_path / "rs.json")
+    assert rulepoller_recently_matched("T1548.003", within_s=300) is False
+
+
+def test_poller_stores_ttp_in_status(tmp_path, monkeypatch):
+    """rule_status.json must include ttp after a match — required by rulepoller_recently_matched."""
+    monkeypatch.setattr("glorfindel.detection_rules._STATUS_FILE", tmp_path / "rs.json")
+    mock_detector = MagicMock()
+    mock_detector.poll_alert.return_value = (
+        1.0,
+        {"TimeGenerated": "2026-06-01T13:00:00Z", "Computer": "vm1"},
+    )
+    with patch("glorfindel.detection_rules.detector_for", return_value=mock_detector):
+        rule = _make_rule(name="test-rule", ttp="T1548.003", interval_s=0.05)
+        poller = RulePoller([rule], lambda s: None, dry_run=False)
+        poller.start()
+        time.sleep(0.3)
+        poller.stop()
+    status = _load_status()
+    assert status.get("test-rule", {}).get("ttp") == "T1548.003"
+
 
 def test_status_roundtrip(tmp_path, monkeypatch):
     monkeypatch.setattr(

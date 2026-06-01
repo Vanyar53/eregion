@@ -197,6 +197,44 @@ def test_append_indents_multiline_query(tmp_path):
 
 # ── agent routing: detection_missed goes to propose_detection_rule ───────────────
 
+def test_propose_detection_rule_skips_when_rulepoller_matched_recently(tmp_path, monkeypatch):
+    """When RulePoller recently matched the same TTP, propose_detection_rule must return
+    without calling the LLM or recording a proposal."""
+    from datetime import datetime, timezone
+    from unittest.mock import patch
+    from glorfindel.agent import propose_detection_rule
+    from glorfindel.detection_rules import _save_status
+
+    # Redirect status file so the test has a controlled view of recent matches
+    status_path = tmp_path / "rule_status.json"
+    monkeypatch.setattr("glorfindel.detection_rules._STATUS_FILE", status_path)
+    now_iso = datetime.now(timezone.utc).isoformat()
+    _save_status({"sudo-rule": {"last_match": now_iso, "ttp": "T1548.003"}})
+
+    state = {
+        "signal": {
+            "event": "detection_missed",
+            "ttp": "T1548.003",
+            "resource_id": "/sub/rg/vm1",
+            "raw_signal": {"detection_timeout_s": 300},
+            "context": {},
+        },
+        "past_cycles": [], "incident": None, "dry_run": True,
+        "reasoning": "", "confidence": 0.0, "action": "", "reversible": True,
+        "explanation": "", "escalate": False, "escalation_reason": "",
+        "suggested_steps": [], "outcome": None, "proposed_rule": None,
+        "proposal_id": "",
+    }
+
+    with patch("litellm.completion") as mock_llm:
+        result = propose_detection_rule(state, model="claude-test")
+
+    mock_llm.assert_not_called()
+    # State unchanged — no proposal recorded
+    assert pending() == []
+    assert result is state
+
+
 def test_route_after_load_context_detection_missed():
     from glorfindel.agent import _route_after_load_context, GlorfindelState
 

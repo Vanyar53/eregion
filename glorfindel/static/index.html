@@ -931,8 +931,7 @@ function _computeZone(resourceMap, vmEscs, restoreByVm) {
         <span class="dec-action">${actionLabel(a.action)}</span>
         ${pct ? `<span class="dec-conf">${pct}</span>` : ''}
         ${a.ttp ? `<span class="dec-ttp">${a.ttp}</span>` : ''}
-        ${a.reasoning ? `<span class="dec-text">↳ ${a.reasoning}</span>` : ''}
-        ${hasDetail ? `<span style="color:var(--dim);font-size:9px;margin-left:auto">▸ detail</span>` : ''}
+        ${hasDetail ? `<span style="color:var(--blue);font-size:10px;margin-left:auto">▸ reasoning</span>` : ''}
       </div>`;
     }).join('');
 
@@ -1586,16 +1585,6 @@ async function refreshAuditData() {
     _auditData = await r.json();
     renderInfra();
   } catch (e) {}
-}
-
-function showToast(msg, isError = false) {
-  const t = document.createElement('div');
-  t.style.cssText = `position:fixed;bottom:20px;right:20px;padding:10px 16px;border-radius:6px;
-    background:${isError ? 'var(--red)' : 'var(--green)'};color:#fff;font-size:12px;
-    z-index:9999;max-width:400px`;
-  t.textContent = msg;
-  document.body.appendChild(t);
-  setTimeout(() => t.remove(), 4000);
 }
 
 // ── Init ───────────────────────────────────────────────────────────────────────

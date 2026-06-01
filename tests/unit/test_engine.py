@@ -149,6 +149,72 @@ def test_engine_skip_preflight_bypasses_check(tmp_path, monkeypatch):
     assert len(files) == 1
 
 
+# ── RulePoller watch-file detection ──────────────────────────────────────────
+
+def test_check_watch_files_finds_matching_detection(tmp_path):
+    """_check_watch_files returns 'detection' when a watch file has a match."""
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    watch_file = runs / "watch-sudo-privilege-escalation-20260601T134025Z_debug.jsonl"
+    rec = {
+        "signal": {
+            "event": "detection",
+            "ttp": "T1548.003",
+            "resource_id": RESOURCE_ID,
+        }
+    }
+    watch_file.write_text(json.dumps(rec) + "\n")
+
+    engine = Engine()
+    result = engine._check_watch_files(
+        "T1548.003", RESOURCE_ID, since=0.0, runs_dir=runs
+    )
+    assert result == "detection"
+
+
+def test_check_watch_files_ignores_wrong_ttp(tmp_path):
+    """_check_watch_files ignores files whose TTP does not match."""
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    watch_file = runs / "watch-something-20260601T000000Z_debug.jsonl"
+    rec = {
+        "signal": {
+            "event": "detection",
+            "ttp": "T1041",
+            "resource_id": RESOURCE_ID,
+        }
+    }
+    watch_file.write_text(json.dumps(rec) + "\n")
+
+    engine = Engine()
+    result = engine._check_watch_files(
+        "T1548.003", RESOURCE_ID, since=0.0, runs_dir=runs
+    )
+    assert result is None
+
+
+def test_check_watch_files_ignores_old_files(tmp_path):
+    """_check_watch_files ignores files older than since."""
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    watch_file = runs / "watch-old-20260101T000000Z_debug.jsonl"
+    rec = {
+        "signal": {
+            "event": "detection",
+            "ttp": "T1548.003",
+            "resource_id": RESOURCE_ID,
+        }
+    }
+    watch_file.write_text(json.dumps(rec) + "\n")
+
+    import time as _time
+    engine = Engine()
+    result = engine._check_watch_files(
+        "T1548.003", RESOURCE_ID, since=_time.time() + 10, runs_dir=runs
+    )
+    assert result is None
+
+
 # ── Block watcher ─────────────────────────────────────────────────────────────
 
 def test_watch_blocks_emits_attack_adapted(tmp_path):

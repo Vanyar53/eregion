@@ -250,6 +250,8 @@ class Engine:
         wait_s = detection_timeout_s + 120
         poll_interval = 5.0
         deadline = time.time() + wait_s
+        # RulePoller watch files created within this window are from this run
+        scan_since = time.time() - detection_timeout_s
 
         console.print(
             f"\n[dim]Purple team feedback: monitoring Glorfindel response "
@@ -258,6 +260,7 @@ class Engine:
 
         result_event: str | None = None
         while time.time() < deadline:
+            # 1. Direct Annatar debug file (poll_detection path)
             if debug_path.exists():
                 for line in debug_path.read_text().splitlines():
                     if not line.strip():
@@ -270,6 +273,12 @@ class Engine:
                             break
                     except Exception:
                         pass
+            if result_event:
+                break
+            # 2. RulePoller watch-* files (different run_id, same TTP + resource)
+            result_event = self._check_watch_files(
+                scenario.mitre, emitter.resource_id, scan_since
+            )
             if result_event:
                 break
             time.sleep(poll_interval)
@@ -311,6 +320,47 @@ class Engine:
         )
         if stop_event is not None:
             stop_event.set()
+
+    @staticmethod
+    def _check_watch_files(
+        ttp: str,
+        resource_id: str,
+        since: float,
+        runs_dir: Path | None = None,
+    ) -> str | None:
+        """Scan runs/watch-*_debug.jsonl for a RulePoller detection.
+
+        Returns 'detection' if a matching event is found, else None.
+        Catches the case where RulePoller detects before poll_detection
+        runs — the watch file has a different run_id than the Annatar run.
+        """
+        base = runs_dir if runs_dir is not None else Path("runs")
+        try:
+            candidates = [
+                f for f in base.glob("watch-*_debug.jsonl")
+                if f.stat().st_mtime >= since
+            ]
+        except OSError:
+            return None
+        for path in candidates:
+            try:
+                for line in path.read_text().splitlines():
+                    if not line.strip():
+                        continue
+                    try:
+                        rec = json.loads(line)
+                        sig = rec.get("signal", {})
+                        if (
+                            sig.get("event") == "detection"
+                            and sig.get("ttp") == ttp
+                            and sig.get("resource_id") == resource_id
+                        ):
+                            return "detection"
+                    except Exception:
+                        pass
+            except OSError:
+                pass
+        return None
 
     def _watch_blocks(
         self,

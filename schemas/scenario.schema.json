@@ -79,6 +79,11 @@
             "failure_candidates": {
               "type": "array",
               "items": { "type": "string" }
+            },
+            "source_ips": {
+              "description": "IP addresses used by the attack script — Annatar monitors if Glorfindel blocks them",
+              "type": "array",
+              "items": { "type": "string" }
             }
           }
         }

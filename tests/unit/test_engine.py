@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from annatar.runner.engine import Engine
+from annatar.signals.emitter import SignalEmitter
 
 _SCENARIOS = Path(__file__).parent.parent.parent / "annatar" / "scenarios" / "azure"
 EXFIL_YAML = str(_SCENARIOS / "data-exfiltration.yaml")
 RANSOMWARE_YAML = str(_SCENARIOS / "ransomware-vm.yaml")
+LATERAL_YAML = str(_SCENARIOS / "lateral-movement.yaml")
 
 
 def test_parse_duration_seconds():
@@ -144,3 +147,105 @@ def test_engine_skip_preflight_bypasses_check(tmp_path, monkeypatch):
     executor.check_preflight.assert_not_called()
     files = list((tmp_path / "runs").glob("*_signals.jsonl"))
     assert len(files) == 1
+
+
+# ── Block watcher ─────────────────────────────────────────────────────────────
+
+def test_watch_blocks_emits_attack_adapted(tmp_path):
+    """_watch_blocks emits attack_adapted when a source IP appears in blocks."""
+    emitter = SignalEmitter(
+        run_id="test-block-watch",
+        scenario_name="test",
+        scenario_mitre="T1110.001",
+        target={"type": "azure_vm", "resource_group": "rg", "vm_name": "vm"},
+        resource_id="/sub/123/vm",
+        runs_dir=tmp_path / "runs",
+    )
+    blocks_file = tmp_path / "blocks.json"
+    stop_event = threading.Event()
+    engine = Engine()
+
+    t = threading.Thread(
+        target=engine._watch_blocks,
+        args=(["185.220.101.1"], emitter, stop_event, blocks_file, 0.05),
+    )
+    t.start()
+
+    # Write block after a short delay — watcher should pick it up
+    import time
+    time.sleep(0.02)
+    blocks_file.write_text(json.dumps([{"ip": "185.220.101.1"}]))
+    time.sleep(0.2)
+    stop_event.set()
+    t.join(timeout=2.0)
+
+    signals_file = tmp_path / "runs" / "test-block-watch_signals.jsonl"
+    signals = [json.loads(ln) for ln in signals_file.read_text().strip().splitlines()]
+    adapted = [s for s in signals if s["event"] == "attack_adapted"]
+    assert len(adapted) == 1
+    assert adapted[0]["raw_signal"]["blocked_ip"] == "185.220.101.1"
+    assert adapted[0]["raw_signal"]["reason"] == "source_ip_blocked_by_defender"
+
+
+def test_watch_blocks_no_duplicate_emit(tmp_path):
+    """_watch_blocks emits attack_adapted only once per blocked IP."""
+    import time
+
+    emitter = SignalEmitter(
+        run_id="test-no-dup",
+        scenario_name="test",
+        scenario_mitre="T1110.001",
+        target={"type": "azure_vm", "resource_group": "rg", "vm_name": "vm"},
+        resource_id="/sub/123/vm",
+        runs_dir=tmp_path / "runs",
+    )
+    blocks_file = tmp_path / "blocks.json"
+    blocks_file.write_text(json.dumps([{"ip": "185.220.101.1"}]))
+
+    stop_event = threading.Event()
+    engine = Engine()
+
+    t = threading.Thread(
+        target=engine._watch_blocks,
+        args=(["185.220.101.1"], emitter, stop_event, blocks_file, 0.05),
+    )
+    t.start()
+    time.sleep(0.3)
+    stop_event.set()
+    t.join(timeout=2.0)
+
+    signals_file = tmp_path / "runs" / "test-no-dup_signals.jsonl"
+    signals = [json.loads(ln) for ln in signals_file.read_text().strip().splitlines()]
+    adapted = [s for s in signals if s["event"] == "attack_adapted"]
+    assert len(adapted) == 1
+
+
+def test_watch_blocks_ignores_unrelated_ips(tmp_path):
+    """_watch_blocks does not emit for IPs not in source_ips."""
+    import time
+
+    emitter = SignalEmitter(
+        run_id="test-unrelated",
+        scenario_name="test",
+        scenario_mitre="T1110.001",
+        target={"type": "azure_vm", "resource_group": "rg", "vm_name": "vm"},
+        resource_id="/sub/123/vm",
+        runs_dir=tmp_path / "runs",
+    )
+    blocks_file = tmp_path / "blocks.json"
+    blocks_file.write_text(json.dumps([{"ip": "10.0.0.1"}]))
+
+    stop_event = threading.Event()
+    engine = Engine()
+
+    t = threading.Thread(
+        target=engine._watch_blocks,
+        args=(["185.220.101.1"], emitter, stop_event, blocks_file, 0.05),
+    )
+    t.start()
+    time.sleep(0.2)
+    stop_event.set()
+    t.join(timeout=2.0)
+
+    runs_dir = tmp_path / "runs"
+    assert not runs_dir.exists() or not any(runs_dir.glob("*_signals.jsonl"))

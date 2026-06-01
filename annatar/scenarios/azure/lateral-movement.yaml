@@ -30,6 +30,7 @@ detection:
       setup: "az vm extension set -g <resource_group> --vm-name <vm_name> --publisher Microsoft.Azure.Monitor --name AzureMonitorLinuxAgent"
   hints:
     log_source: Syslog
+    source_ips: ["185.220.101.1"]  # IP injected by lateral_movement_sim.sh (default ATTACKER_IP)
     attack_commands_summary: >
       Simulates rapid SSH authentication failures via sshpass to a random
       external IP range. Generates 'Failed password' and 'Invalid user'

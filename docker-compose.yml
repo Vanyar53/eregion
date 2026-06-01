@@ -60,6 +60,7 @@ services:
       <<: *env
     volumes:
       - ./runs:/app/runs
+      - ./glorfindel/static:/app/glorfindel/static:ro
       - ./glorfindel/rules:/app/glorfindel/rules
       - ${HOME}/.glorfindel:/root/.glorfindel
       - ${HOME}/.cache/chroma:/root/.cache/chroma

@@ -1295,14 +1295,12 @@ function renderInfra() {
     if (resourceMap.has(r.resource_id)) resourceMap.get(r.resource_id).states = r.states;
     else resourceMap.set(r.resource_id, r);
   });
-  // Ajouter les assets découverts (AssetRegistry) absents du resourceMap
+  // Ajouter les assets découverts absents du resourceMap — déduplique par vm_name
   discovered.forEach(d => {
-    if (d.resource_id && !resourceMap.has(d.resource_id))
-      resourceMap.set(d.resource_id, { resource_id: d.resource_id, vm_name: d.name, states: [] });
-    else if (!d.resource_id) {
-      const key = `discovered:${d.name}`;
-      if (![...resourceMap.values()].some(r => r.vm_name === d.name))
-        resourceMap.set(key, { resource_id: key, vm_name: d.name, states: [] });
+    const exists = [...resourceMap.values()].some(r => r.vm_name === d.name);
+    if (!exists) {
+      const key = d.resource_id || `discovered:${d.name}`;
+      resourceMap.set(key, { resource_id: key, vm_name: d.name, states: [] });
     }
   });
   vmEscs.forEach(e => {

@@ -1449,7 +1449,7 @@ function _renderModules(rules, detectBackends, recoverBackends, resources) {
       : `<div class="node-backend-row" style="color:var(--dim)">checking…</div>`;
     return `<div class="node-backend recover ${worst==='fail'?'state-error':worst==='warn'?'state-warn':''}" id="nb-${b.name}">
       <div class="node-backend-name">${dot} ${b.name}</div>
-      <div class="node-backend-type">${b.type.replace('azure_','')} vault</div>
+      <div class="node-backend-type">backup vault</div>
       ${statusRow}
     </div>`;
   }).join('') || `<div style="color:var(--dim);font-size:10px">No action backends</div>`;
@@ -1580,10 +1580,10 @@ function _drawTopologyEdges() {
     };
   }
 
-  function bezier(x1, y1, x2, y2, color, dash = '', width = 2.5) {
+  function bezier(x1, y1, x2, y2, color, dash = '', width = 2.5, opacity = 0.75) {
     const cy = (y1 + y2) / 2;
     return `<path d="M${x1|0},${y1|0} C${x1|0},${cy|0} ${x2|0},${cy|0} ${x2|0},${y2|0}"
-      fill="none" stroke="${color}" stroke-width="${width}" opacity="0.75"
+      fill="none" stroke="${color}" stroke-width="${width}" opacity="${opacity}"
       stroke-linecap="round"
       ${dash ? `stroke-dasharray="${dash}"` : ''}/>`;
   }
@@ -1633,7 +1633,42 @@ function _drawTopologyEdges() {
       worst==='fail' ? 'var(--red)' : worst==='warn' ? 'var(--orange)' : 'var(--cyan)'));
   });
 
-  // Modules → active assets (incident edges only — keep it sparse)
+  // Structural edges: modules → assets (always visible, dim)
+  const discovered = _state?.discovered_assets || [];
+  const assetEls = [...document.querySelectorAll('[id^="asset-"]')];
+
+  assetEls.forEach(el => {
+    const vmName  = el.id.replace('asset-', '');
+    const asset   = pt(el);
+    if (!asset) return;
+
+    // DETECT → VM  (via the monitoring backend that discovered it)
+    const disc = discovered.find(d => d.name === vmName);
+    const detNb = disc
+      ? pt(document.getElementById(`nb-${disc.monitoring_backend}`))
+      : detectBackends.length ? pt(document.getElementById(`nb-${detectBackends[0].name}`)) : null;
+    if (detNb) lines.push(bezier(detNb.x, detNb.bottom, asset.x, asset.top,
+      'var(--blue)', '', 1.5, 0.25));
+
+    // PROTECT → VM  (NSG always applies, color = current state of this VM)
+    if (nbNsg) {
+      const vmRes   = resources.find(r => r.vm_name === vmName || r.resource_id.endsWith(vmName));
+      const vmIso   = vmRes?.states?.some(s => s.type === 'isolated');
+      const vmBlk   = vmRes?.states?.some(s => s.type === 'blocked');
+      const color   = vmIso ? 'var(--red)' : vmBlk ? 'var(--orange)' : 'var(--green)';
+      const opacity = (vmIso || vmBlk) ? 0.6 : 0.25;
+      lines.push(bezier(nbNsg.x, nbNsg.bottom, asset.x, asset.top, color, vmIso ? '5,4' : '', 1.5, opacity));
+    }
+
+    // RECOVER → VM  (RSV covers all discovered assets)
+    recoverBackends.forEach(b => {
+      const nb = pt(document.getElementById(`nb-${b.name}`));
+      if (nb) lines.push(bezier(nb.x, nb.bottom, asset.x, asset.top,
+        'var(--cyan)', '', 1.5, 0.25));
+    });
+  });
+
+  // Incident edges: modules → assets with active escalations (brighter, dashed)
   escalations.forEach(e => {
     const vm    = e.resource_id.split('/').pop();
     const asset = pt(document.getElementById(`asset-${vm}`));
@@ -1641,16 +1676,12 @@ function _drawTopologyEdges() {
     const color = e.action === 'restore_from_backup' ? 'var(--cyan)'
                 : e.escalation_type === 'verification_failed' ? 'var(--red)'
                 : 'var(--yellow)';
-
-    // find the relevant module node
     const nb = e.action === 'restore_from_backup'
       ? pt(document.getElementById(`nb-${recoverBackends[0]?.name}`))
       : e.action === 'improve_detection'
       ? pt(document.getElementById(`nb-${detectBackends[0]?.name}`))
       : pt(document.getElementById('nb-nsg'));
-    if (nb) {
-      lines.push(bezier(nb.x, nb.bottom, asset.x, asset.top, color, '4,3', 2));
-    }
+    if (nb) lines.push(bezier(nb.x, nb.bottom, asset.x, asset.top, color, '4,3', 2, 0.7));
   });
 
   svg.innerHTML = lines.join('\n');

@@ -542,7 +542,7 @@
   .node-asset.s-both      { border-color: var(--red);    background: color-mix(in srgb, var(--red)    6%, var(--bg1)); }
   .node-asset.s-restoring { border-color: var(--blue);   background: color-mix(in srgb, var(--blue)   5%, var(--bg1)); animation: pulse 2s infinite; }
   .node-asset.s-incident  { border: 2px solid var(--purple); background: color-mix(in srgb, var(--purple) 6%, var(--bg1)); box-shadow: 0 0 8px color-mix(in srgb, var(--purple) 20%, transparent); }
-  .node-asset.expanded    { min-width: min(360px, 100%); max-width: min(420px, 100%); cursor: default; }
+  .node-asset.expanded    { cursor: default; }
   .node-asset:not(.expanded):hover { box-shadow: 0 0 0 1px var(--dim); }
   .node-asset-header { display: flex; align-items: center; gap: 6px; }
   .node-asset-name   { font-weight: 700; font-size: 12px; flex: 1; }
@@ -2159,13 +2159,16 @@ async function refreshAuditData() {
   if (_auditLoading) return;
   _auditLoading = true;
   renderInfra();
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 20000);
   try {
-    const r = await fetch('/api/audit');
+    const r = await fetch('/api/audit', { signal: ctrl.signal });
     _auditData    = await r.json();
     _auditLastRun = new Date().toISOString();
   } catch (e) {
-    _auditData = { audits: [], error: e.message };
+    _auditData = { audits: [], error: e.name === 'AbortError' ? 'timeout (20s)' : e.message };
   } finally {
+    clearTimeout(timer);
     _auditLoading = false;
     renderInfra();
   }

@@ -489,7 +489,7 @@ async def vm_actions(vm_name: str, limit: int = 5) -> dict:
                 if rid.split("/")[-1] != vm_name:
                     continue
                 action = d.get("action", "")
-                if not action or action in ("snapshot",):
+                if not action or action in ("snapshot", "improve_detection"):
                     continue
                 import re as _re
                 full = d.get("reasoning") or ""

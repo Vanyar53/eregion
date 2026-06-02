@@ -818,7 +818,9 @@ function openCommandModal(escId) {
 let _state      = { resources: [], escalations: [] };
 let _escById    = {};
 let _cfgData    = null;
-let _auditData  = null;
+let _auditData     = null;   // null=never loaded, {audits:[]} = loaded (possibly empty)
+let _auditLoading  = false;
+let _auditLastRun  = null;   // ISO timestamp of last successful fetch
 let _actionsCache = {};   // vm_name → {actions, fetchedAt}
 let _autoScroll = true;
 
@@ -1452,26 +1454,49 @@ function _renderModules(rules, detectBackends, recoverBackends, resources) {
 
   // RECOVER
   const recoverNodes = recoverBackends.map(b => {
-    const checks  = (_auditData?.audits || []).flatMap(a =>
+    const checks = (_auditData?.audits || []).flatMap(a =>
       (a.checks||[]).filter(c => c.action === 'restore_from_backup'));
-    const worst = checks.some(c => c.status === 'fail') ? 'fail'
+    const hasError = !!_auditData?.error;
+    const worst = hasError         ? 'error'
+                : _auditLoading    ? 'loading'
+                : _auditData === null ? 'pending'
+                : checks.some(c => c.status === 'fail') ? 'fail'
                 : checks.some(c => c.status === 'warn') ? 'warn'
-                : checks.length ? 'ok' : 'unknown';
-    const dot = worst==='ok'   ? `<span style="color:var(--green)">●</span>`
-              : worst==='warn' ? `<span style="color:var(--orange)">●</span>`
-              : worst==='fail' ? `<span style="color:var(--red)">●</span>`
-              :                  `<span style="color:var(--dim)">●</span>`;
+                : checks.length    ? 'ok'
+                :                    'nodata';
+    const dot = worst==='ok'      ? `<span style="color:var(--green)">●</span>`
+              : worst==='warn'    ? `<span style="color:var(--orange)">●</span>`
+              : worst==='fail'    ? `<span style="color:var(--red)">●</span>`
+              : worst==='error'   ? `<span style="color:var(--red)">●</span>`
+              :                     `<span style="color:var(--dim)">●</span>`;
+    const lastRun = _auditLastRun
+      ? `<div class="node-backend-row" style="color:var(--dim);font-size:9px">audit ${_relTime(_auditLastRun)}</div>` : '';
     const statusRow = worst==='ok'
       ? `<div class="node-backend-row" style="color:var(--green)">backup ok</div>`
       : worst==='warn'
       ? `<div class="node-backend-row" style="color:var(--orange)">backup stale</div>`
       : worst==='fail'
-      ? `<div class="node-backend-row" style="color:var(--red)">backup missing</div>`
-      : `<div class="node-backend-row" style="color:var(--dim)">checking…</div>`;
-    return `<div class="node-backend recover ${worst==='fail'?'state-error':worst==='warn'?'state-warn':''}" id="nb-${b.name}">
+      ? `<div class="node-backend-row" style="color:var(--red)">backup manquant</div>`
+      : worst==='error'
+      ? `<div class="node-backend-row" style="color:var(--red);font-size:9px">erreur Azure API</div>`
+      : worst==='loading'
+      ? `<div class="node-backend-row" style="color:var(--dim)"><span class="spinner"></span>audit…</div>`
+      : worst==='nodata'
+      ? `<div class="node-backend-row" style="color:var(--dim)">aucun asset audité</div>`
+      : `<div class="node-backend-row" style="color:var(--dim)">audit en attente
+          <button class="action" style="font-size:9px;padding:1px 5px;margin-left:4px"
+            onclick="event.stopPropagation();refreshAuditData()">↺</button></div>`;
+    const refreshBtn = worst !== 'loading'
+      ? `<div class="node-backend-row" style="margin-top:2px">
+           <button class="action" style="font-size:9px;padding:1px 5px"
+             onclick="event.stopPropagation();refreshAuditData()">↺ audit</button>
+         </div>` : '';
+    return `<div class="node-backend recover ${worst==='fail'||worst==='error'?'state-error':worst==='warn'?'state-warn':''}" id="nb-${b.name}">
       <div class="node-backend-name">${dot} ${b.name}</div>
       <div class="node-backend-type">backup vault</div>
       ${statusRow}
+      ${lastRun}
+      ${refreshBtn}
     </div>`;
   }).join('') || `<div style="color:var(--dim);font-size:10px">No action backends</div>`;
 
@@ -2121,11 +2146,19 @@ async function refreshCfgData() {
 }
 
 async function refreshAuditData() {
+  if (_auditLoading) return;
+  _auditLoading = true;
+  renderInfra();
   try {
     const r = await fetch('/api/audit');
-    _auditData = await r.json();
+    _auditData    = await r.json();
+    _auditLastRun = new Date().toISOString();
+  } catch (e) {
+    _auditData = { audits: [], error: e.message };
+  } finally {
+    _auditLoading = false;
     renderInfra();
-  } catch (e) {}
+  }
 }
 
 // ── Init ───────────────────────────────────────────────────────────────────────

@@ -10,12 +10,17 @@ Modèle : CLI open source gratuit, SaaS payant pour multi-tenant + connecteurs a
 
 ## État actuel (v0.2.0)
 - 5 TTPs validés en réel sur Azure : T1486, T1041, T1110.001, T1548.003 + run parallèle T1110+T1548
-- Run parallèle multi-signal validé avec IncidentRegistry
-- 90 tests, 0 appel Azure, 0 appel LLM
+- Run parallèle multi-signal validé avec IncidentRegistry + propagation investigative_context entre cycles
+- 229 tests, 0 appel Azure, 0 appel LLM
 - Support multi-provider LLM via LiteLLM : Anthropic (défaut), OpenAI, Azure OpenAI, Ollama, self-hosted
+- **Prompt caching** activé sur system prompt (~400 lignes) — -60-80% tokens input
+- **Confidence gate** : LLM confidence < 0.7 → escalade forcée même sur action autonome
+- **Signal normalisé** (`normalize_row`) — indicateur sémantique uniforme entre toutes les règles KQL
 - `gf pending` avec next steps contextuels générés par le LLM (ChromaDB history)
 - Alerting webhook sur décisions autonomes + escalades (Slack/Teams/Discord)
 - **Bot Discord interactif** : un fil par VM, boutons ✓ Acknowledge / 📋 Command / 🔄 Restore / ↩️ Revert — exécutent les commandes Glorfindel directement depuis Discord
+- **War Room web** (`glorfindel war-room`, `make glorfindel-start`) — incident cards, live feed WebSocket, action buttons, infra map avec posture gaps
+- **Annatar block watcher** — émet `attack_adapted` si Glorfindel bloque une IP en cours de run
 - Repo public : https://github.com/Vanyar53/eregion
 - Coût exploitation : <$2/mois LLM API sur infra existante
 
@@ -100,8 +105,8 @@ et le LLM se comporte de façon incohérente selon la source.
 }
 ```
 
-- [ ] Définir le schéma normalisé
-- [ ] Migrer `AzureMonitorDetector` vers ce schéma
+- [x] Définir le schéma normalisé (`normalize_row()` implémenté — indicateur sémantique uniforme)
+- [x] Migrer `AzureMonitorDetector` vers ce schéma (appliqué à la sortie du poll)
 - [ ] Documenter le mapping dans `CONTRIBUTING.md`
 
 ### Ordre connecteurs — basé sur adoption marché
@@ -155,36 +160,23 @@ class DatadogDetector(DetectionConnector):
 
 ---
 
-## Phase 6 — War Room UI
+## Phase 6 — War Room UI ✅ Livré
 
-**Pourquoi maintenant et pas au SaaS :**
-- Réduit la friction pour le premier utilisateur externe — un clic au lieu de 3 terminaux
-- Démontre la valeur en temps réel sans que l'utilisateur comprenne le CLI
-- C'est une interface sur ce qui existe déjà — pas de nouveau backend
+**Accessible sur `http://localhost:7007`** via `make glorfindel-start` ou `glorfindel war-room`.
 
-**Ce que c'est :**
-```
-┌──────────────────────────────────────────────┐
-│ EREGION — War Room                           │
-├────────────────┬─────────────────────────────┤
-│ Scénarios      │ Run en cours                │
-│ T1486 ▶        │ 14:32:51 Detection (50s)    │
-│ T1041 ▶        │ 14:32:53 isolate_vm ✓ ✓    │
-├────────────────┤ Incidents actifs            │
-│ vm-victim 🔴   │ ISOLATED  52m ago           │
-│                │ → revert ?                  │
-├────────────────┤ Escalades                   │
-│                │ restore_from_backup ▶        │
-└────────────────┴─────────────────────────────┘
-```
+**Ce qui est livré :**
+- Infra map avec 4 zones (network, monitoring, compute, backup) + connexions SVG dynamiques
+- VM cards : état (ok/isolated/blocked), LLM reasoning cliquable, boutons Release/Unblock/Reset/Restore
+- Live feed WebSocket avec reconnect automatique
+- Posture gaps par VM (NSG, backup, IAM) — avec commande `az` exacte pour corriger
+- Règles de détection cliquables (modal avec query KQL complète + polling status)
+- Config panel : Azure credentials + LLM
+- `make glorfindel-dev` — auto-reload sur modification de `index.html` (volume mount)
 
-**Stack :** FastAPI + WebSocket (temps réel) + React ou HTML/JS simple. Thin layer sur `glorfindel watch` + `glorfindel list` + `glorfindel pending`.
-
-**Ce que ce n'est pas :** dashboard de monitoring permanent, configurateur de scénarios, Grafana.
-
-- [ ] Après le premier utilisateur externe — son feedback dicte ce qui va dans l'interface
-- [ ] API REST minimale sur les commandes CLI existantes
-- [ ] WebSocket pour le feed temps réel du run
+**Prochaine itération (après feedback premier utilisateur) :**
+- [ ] Confidence score visible dans les VM cards
+- [ ] Historique des actions par VM (timeline)
+- [ ] Lancement de scénario Annatar depuis la War Room
 
 ---
 
@@ -230,7 +222,7 @@ War Room local              →  War Room SaaS multi-tenant
 5. Schéma normalisé first_result_row        → prérequis connecteurs
 6. AWS + CloudWatch/GuardDuty               → 32% marché cloud
 7. Prometheus + Loki                        → stack open source dominante
-8. War Room UI                              → après feedback premier utilisateur
+8. War Room UI                              → ✅ livré (http://localhost:7007)
 9. Datadog                                  → leader commercial mid-market
 10. AKS                                     → chantier complexe, après les autres
 11. Nouveaux scénarios TTP                  → selon demande utilisateurs

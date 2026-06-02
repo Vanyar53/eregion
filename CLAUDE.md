@@ -74,8 +74,9 @@ load_context → poll_detection → investigate → decide → execute_action �
   - Résultats dans `raw_signal.investigative_context` — le LLM les voit avant decide
   - No-op si pas de workspace_id ou dry_run
 - `decide` : LLM via LiteLLM + few-shot anchors + RAG (3 cycles) + incident context + investigative_context
+  - Gate confidence : `confidence < GLORFINDEL_CONFIDENCE_THRESHOLD` (défaut 0.7) + action autonome → escalade forcée
 - `verify_action` : NSG check (isolate/release), Compute API (snapshot), NSG rule (block)
-- `store_cycle` : ChromaDB + `runs/{run_id}_debug.jsonl`
+- `store_cycle` : ChromaDB + `runs/{run_id}_debug.jsonl` (toujours écrit, même si ChromaDB/webhook échoue)
 - `dry_run: bool` dans `GlorfindelState` → skipe escalations.record() et actions réelles
 
 ---
@@ -83,10 +84,10 @@ load_context → poll_detection → investigate → decide → execute_action �
 ## Raisonnement LLM — few-shot + signal enrichi
 
 Le LLM ne suit pas de routing table TTP→action. Il raisonne depuis :
-1. Les indicateurs bruts du signal (`first_result_row`)
+1. Les indicateurs bruts du signal (`first_result_row`) — normalisés via `normalize_row()` (indicateur sémantique uniforme)
 2. Le contexte investigatif (`investigative_context`) collecté par le noeud `investigate`
-3. Les exemples few-shot validés en prod dans `_SYSTEM_PROMPT`
-4. Les cycles passés ChromaDB + l'incident context multi-signal
+3. Les exemples few-shot validés en prod dans `_SYSTEM_PROMPT` (prompt caching activé)
+4. Les cycles passés ChromaDB + l'incident context multi-signal (investigative_context des cycles précédents propagé)
 
 Exemples few-shot : 4 chaînes de raisonnement complètes (MaxWrite → encryption → restore ;
 CallerIP RFC-1918 → exfil, disk intact → isolate ; etc.). Le LLM peut dévier sur les cas
@@ -288,6 +289,7 @@ DISCORD_PING_ROLE=...               # ID du rôle à pinger à l'ouverture d'un 
 GLORFINDEL_KEEP_ISOLATED=1          # mode forensique
 GLORFINDEL_ISOLATION_TTL_H=4        # TTL isolation (défaut 4h)
 GLORFINDEL_INCIDENT_TTL_S=300       # TTL fenêtre incident
+GLORFINDEL_CONFIDENCE_THRESHOLD=0.7 # gate autonomie LLM (défaut 0.7 — en dessous → escalade forcée)
 ```
 
 ---
@@ -295,14 +297,14 @@ GLORFINDEL_INCIDENT_TTL_S=300       # TTL fenêtre incident
 ## Tests
 
 ```bash
-pytest                    # 193 tests, 0 appel Azure, 0 appel LLM, 0 écriture ~/.glorfindel/
-pytest tests/unit/test_agent_nodes.py        # 43 tests LangGraph nodes (incl. investigate)
-pytest tests/unit/test_glorfindel.py         # 27 tests actions/routing/signals
-pytest tests/unit/test_detection_rules.py    # 14 tests RulePoller + load_rules + status
-pytest tests/unit/test_proposed_rules.py     # 14 tests record/pending/approve + routing
-pytest tests/unit/test_audit.py              # 14 tests NSG/backup/compute/IAM readiness
-pytest tests/unit/test_config.py             # 11 tests GlorfindelConfig + ExceptionConfig
-pytest tests/unit/test_discovery.py          # 24 tests AssetRegistry + DiscoveryService + eviction
+pytest                    # 229 tests, 0 appel Azure, 0 appel LLM, 0 écriture ~/.glorfindel/
+pytest tests/unit/test_agent_nodes.py        # LangGraph nodes (incl. investigate + confidence gate)
+pytest tests/unit/test_glorfindel.py         # actions/routing/signals
+pytest tests/unit/test_detection_rules.py    # RulePoller + load_rules + status + recently_matched
+pytest tests/unit/test_proposed_rules.py     # record/pending/approve/reject + routing
+pytest tests/unit/test_audit.py              # NSG/backup/compute/IAM readiness
+pytest tests/unit/test_config.py             # GlorfindelConfig + ExceptionConfig
+pytest tests/unit/test_discovery.py          # AssetRegistry + DiscoveryService + eviction
 ```
 
 ---

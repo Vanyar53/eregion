@@ -37,11 +37,14 @@ Signals from different resources run in parallel threads; signals from the same 
 | TTP | Scenario | Detection source | Detection time | Action | RTO |
 |-----|----------|-----------------|----------------|--------|-----|
 | T1486 | Ransomware VM | Perf disk write anomaly | ~71s | `restore_from_backup` (escalate) | 21m23s |
-| T1041 | Data exfiltration | StorageBlobLogs (PutBlob, RFC-1918) | ~30s | `isolate_vm` (internal IP) | — |
-| T1110.001 | SSH brute force | Syslog DCR (auth facility) | ~89s | `block_suspicious_ip` (Tor IP) | — |
+| T1041 | Data exfiltration | StorageBlobLogs (PutBlob, RFC-1918) | ~79s* | `isolate_vm` (internal IP) | — |
+| T1110.001 | SSH brute force | Syslog DCR (auth facility) | ~58s | `block_suspicious_ip` | — |
 | T1548.003 | Sudo privilege escalation | Syslog DCR (auth facility) | ~40s | `isolate_vm` (OS-level compromise) | — |
+| T1110+T1548 | Parallel multi-signal | Syslog DCR | 41s / 59s | `block_suspicious_ip` → `isolate_vm` (incident context) | — |
 
-Glorfindel chose the right action on all four by reasoning from raw signal indicators — not from a TTP→action table.
+\* T1041: StorageBlobLogs ingestion latency is variable on the Azure side, not the query. Functional SLA, monitored.
+
+Glorfindel chose the right action on all five by reasoning from raw signal indicators — not from a TTP→action table.
 
 ## Getting started
 
@@ -247,6 +250,7 @@ glorfindel watch runs/ --rules glorfindel/rules/azure/detection_rules.yaml  # + 
 glorfindel audit <resource_id>                  # remediation readiness: NSG, backup, IAM
 glorfindel audit --all                          # audit all discovered VMs
 glorfindel approve-rule <id>                    # apply a proposed detection rule to detection_rules.yaml
+glorfindel reject-rule <id>                     # dismiss a proposed rule without applying it
 glorfindel respond runs/<run_id>_signals.jsonl  # post-run processing
 # ── Remediation actions — choose the right scope ─────────────────────────────
 #
@@ -306,6 +310,7 @@ DISCORD_PING_ROLE=...               # Role ID to ping on new incident thread (op
 GLORFINDEL_KEEP_ISOLATED=1          # forensic mode — VM stays isolated after restore
 GLORFINDEL_ISOLATION_TTL_H=4        # auto-release timeout in hours (default: 4)
 GLORFINDEL_INCIDENT_TTL_S=300       # incident grouping window in seconds (default: 300)
+GLORFINDEL_CONFIDENCE_THRESHOLD=0.7 # min LLM confidence for autonomous action (default: 0.7 — below this, escalate)
 ```
 
 See [.envrc.example](.envrc.example) for a ready-to-fill template with provider examples.
@@ -335,7 +340,7 @@ glorfindel/
   detection_rules.py   → DetectionRule + RulePoller: continuous polling, auto-apply via discovered assets
                          load_config(path, glorfindel_cfg=None) — workspace_id from glorfindel-config.yaml
   audit.py             → AuditCheck, AuditResult, run(): NSG / backup / compute readiness checks
-  proposed_rules.py    → record/pending/approve(): detection rule proposal lifecycle
+  proposed_rules.py    → record/pending/approve()/reject(): detection rule proposal lifecycle
   rules/azure/
     detection_rules.yaml → rules only: KQL queries, TTP tags, backend references
                            assets: [auto] + monitoring_backends: [law-annatar] per rule
@@ -343,7 +348,7 @@ glorfindel/
   incidents.py         → IncidentRegistry: groups signals by resource_id within a TTL window
   memory.py            → CycleMemory: ChromaDB with confidence + past_cycles_used metadata
   cli.py               → watch, respond, restore, release, unblock, revert, list, pending, ack,
-                         audit, approve-rule, check-ttl, bot, dashboard, war-room
+                         audit, approve-rule, reject-rule, check-ttl, bot, dashboard, war-room
   escalations.py       → persistent escalation log (~/.glorfindel/escalations.jsonl)
                          types: low_confidence, destructive_action, verification_failed,
                                 proposed_rule, proposed_action, posture_gap

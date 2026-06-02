@@ -403,7 +403,8 @@ async def audit_resource(vm_name: str) -> dict:
         return {"error": f"resource_id not found for {vm_name}"}
 
     connector = AzureConnector(dry_run=False)
-    result = _audit.run(resource_id, connector)
+    # Run blocking Azure SDK calls in a thread pool — prevents event loop stall.
+    result = await asyncio.to_thread(_audit.run, resource_id, connector)
     return result.to_dict()
 
 
@@ -423,8 +424,6 @@ async def audit_all() -> dict:
         return {"audits": []}
 
     connector = AzureConnector(dry_run=False)
-    seen: set[str] = set()
-    audits = []
 
     # Vault name: from glorfindel-config.yaml action_backends (source of truth)
     rsv = glorfindel_cfg.backup_vault()
@@ -443,16 +442,24 @@ async def audit_all() -> dict:
             for r in cfg.rules
             if r.resource_id and "${" not in r.resource_id
         ]
+
+    # Deduplicate, then run all audits concurrently in thread pool threads.
+    seen: set[str] = set()
+    unique: list[tuple[str, str]] = []
     for rid, asset_name in targets:
-        if rid in seen:
-            continue
-        seen.add(rid)
-        result = _audit.run(rid, connector, vault=vault)
+        if rid not in seen:
+            seen.add(rid)
+            unique.append((rid, asset_name))
+
+    async def _audit_one(rid: str, asset_name: str) -> dict:
+        result = await asyncio.to_thread(_audit.run, rid, connector, vault)
         d = result.to_dict()
         d["vault"] = vault
         d["asset_name"] = asset_name
-        audits.append(d)
-    return {"audits": audits}
+        return d
+
+    audits = await asyncio.gather(*(_audit_one(rid, name) for rid, name in unique))
+    return {"audits": list(audits)}
 
 
 @app.get("/api/actions/{vm_name}")

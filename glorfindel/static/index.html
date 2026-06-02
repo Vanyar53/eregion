@@ -531,8 +531,9 @@
     border: 1px solid var(--border);
     border-radius: 8px;
     padding: 10px 12px;
-    min-width: 200px;
-    flex: 0 1 340px;
+    min-width: 160px;
+    flex: 0 1 260px;
+    max-width: 260px;
     transition: border-color .15s, background .15s;
     cursor: pointer;
     position: relative;
@@ -1338,7 +1339,7 @@ function renderInfra() {
       <!-- Layer 3 — Assets -->
       <div class="topo-assets" id="topo-assets">
         ${[...resourceMap.values()].map(r =>
-            _renderAssetNode(r, vmEscs, restoreByVm)).join('')}
+            _renderAssetNode(r, vmEscs, detEscs, restoreByVm)).join('')}
         ${resourceMap.size === 0 ? `<div style="color:var(--dim);font-size:11px;padding:24px;text-align:center;width:100%">
             No assets discovered — check monitoring backends</div>` : ''}
       </div>
@@ -1520,13 +1521,16 @@ function _renderModules(rules, detectBackends, recoverBackends, resources) {
 
 // ── Asset nodes ────────────────────────────────────────────────────────────────
 
-function _renderAssetNode(resource, vmEscs, restoreByVm) {
+function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm) {
   const { resource_id, vm_name, states = [] } = resource;
   const isIsolated  = states.some(s => s.type === 'isolated');
   const isBlocked   = states.some(s => s.type === 'blocked');
   const restoreInfo = restoreByVm[vm_name];
   const myEscs      = vmEscs.filter(e =>
     e.resource_id === resource_id || e.resource_id.split('/').pop() === vm_name);
+  const myDetEscs   = (detEscs||[]).filter(e =>
+    e.resource_id === resource_id || e.resource_id.split('/').pop() === vm_name);
+  const totalEscs   = myEscs.length + myDetEscs.length;
   const isExpanded  = _expandedVms.has(vm_name);
 
   const stateClass = restoreInfo    ? 's-restoring'
@@ -1601,7 +1605,7 @@ function _renderAssetNode(resource, vmEscs, restoreByVm) {
     <div class="node-asset-header">
       ${dot}
       <span class="node-asset-name">${vm_name}</span>
-      ${myEscs.length ? `<span style="background:color-mix(in srgb,var(--purple) 20%,transparent);color:var(--purple);border:1px solid color-mix(in srgb,var(--purple) 50%,transparent);border-radius:4px;font-size:9px;font-weight:700;padding:1px 5px;flex-shrink:0">🚨 ${myEscs.length}</span>` : ''}
+      ${totalEscs ? `<span style="background:color-mix(in srgb,var(--purple) 20%,transparent);color:var(--purple);border:1px solid color-mix(in srgb,var(--purple) 50%,transparent);border-radius:4px;font-size:9px;font-weight:700;padding:1px 5px;flex-shrink:0">🚨 ${totalEscs}</span>` : ''}
       ${readiness ? `<span style="color:var(--dim);font-size:9px">${readiness}</span>` : ''}
       <span style="color:var(--dim);font-size:9px;margin-left:6px">${isExpanded ? '▾' : '▸'}</span>
     </div>

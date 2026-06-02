@@ -493,6 +493,9 @@
     align-self: stretch;
     text-align: center;
   }
+  .topo-module-label.detect  { border-color: var(--blue);   color: var(--blue); }
+  .topo-module-label.protect { border-color: var(--orange); color: var(--orange); }
+  .topo-module-label.recover { border-color: var(--green);  color: var(--green); }
   .topo-module-nodes { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
 
   /* Backend nodes */
@@ -506,10 +509,11 @@
     font-size: 11px;
     position: relative;
   }
-  .node-backend.detect  { border-top: 3px solid var(--blue); }
-  .node-backend.protect { border-top: 3px solid var(--orange); }
-  .node-backend.recover { border-top: 3px solid var(--cyan); }
-  .node-backend.state-error { border-color: var(--red); }
+  .node-backend.detect                { border: 1px solid var(--blue); }
+  .node-backend.protect               { border: 1px solid var(--orange); }
+  .node-backend.recover               { border: 1px solid var(--green); }
+  .node-backend.recover.state-error   { border-color: var(--red); }
+  .node-backend.recover.state-warn    { border-color: var(--orange); }
   .node-backend.state-warn  { border-color: var(--orange); }
   .node-backend-name { font-weight: 700; color: var(--text); margin-bottom: 2px; display: flex; align-items: center; gap: 5px; }
   .node-backend-type { font-size: 9px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 5px; }
@@ -1348,11 +1352,11 @@ function renderInfra() {
         <span style="font-size:9px;font-weight:700;letter-spacing:1px;color:var(--dim);flex-shrink:0">LÉGENDE</span>
         <span style="font-size:9px;color:var(--dim)">Traits :</span>
         <span style="font-size:10px;color:var(--blue)">━━ detect</span>
-        <span style="font-size:10px;color:var(--green)">━━ protect</span>
-        <span style="font-size:10px;color:var(--cyan)">━━ recover</span>
-        <span style="font-size:10px;color:var(--orange)">━━ bloqué</span>
-        <span style="font-size:10px;color:var(--red)">━━ isolé / erreur</span>
-        <span style="font-size:10px;color:var(--purple);letter-spacing:2px">╌╌ escalade active</span>
+        <span style="font-size:10px;color:var(--orange)">━━ protect</span>
+        <span style="font-size:10px;color:var(--green)">━━ recover</span>
+        <span style="font-size:10px;color:var(--red)">━━ isolé</span>
+        <span style="font-size:10px;color:var(--red);letter-spacing:2px">╌╌ bloqué</span>
+        <span style="font-size:10px;color:var(--purple)">━━ escalade</span>
         <span style="font-size:9px;color:var(--dim);margin-left:4px">Assets :</span>
         <span style="font-size:10px"><span style="color:var(--green)">●</span> <span style="color:var(--dim)">clean</span></span>
         <span style="font-size:10px"><span style="color:var(--orange)">●</span> <span style="color:var(--dim)">bloqué</span></span>
@@ -1646,34 +1650,24 @@ function _drawTopologyEdges() {
     <filter id="glow-o"><feGaussianBlur stdDeviation="2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
   </defs>`];
 
-  // Agent → DETECT backends
+  // Agent → DETECT backends (always blue — identity color)
   detectBackends.forEach(b => {
     const nb = pt(document.getElementById(`nb-${b.name}`));
     if (!nb) return;
-    const bRules = rules.filter(r => r.monitoring_backend_name === b.name);
-    const hasErr = bRules.some(r => r.last_error);
-    lines.push(bezier(agent.x, agent.bottom, nb.x, nb.top,
-      hasErr ? 'var(--red)' : 'var(--blue)', hasErr ? '4,3' : ''));
+    lines.push(bezier(agent.x, agent.bottom, nb.x, nb.top, 'var(--blue)'));
   });
 
-  // Agent → PROTECT (NSG)
+  // Agent → PROTECT (always orange — identity color, state shown in node)
   const nbNsg = pt(document.getElementById('module-protect'));
   if (nbNsg) {
-    const color = isIsolated ? 'var(--red)' : isBlocked ? 'var(--orange)' : 'var(--green)';
-    lines.push(bezier(agent.x, agent.bottom, nbNsg.x, nbNsg.top, color,
-      isIsolated ? '5,4' : ''));
+    lines.push(bezier(agent.x, agent.bottom, nbNsg.x, nbNsg.top, 'var(--orange)'));
   }
 
-  // Agent → RECOVER backends
+  // Agent → RECOVER backends (always green — identity color, state shown in node)
   recoverBackends.forEach(b => {
     const nb = pt(document.getElementById(`nb-${b.name}`));
     if (!nb) return;
-    const checks = (_auditData?.audits || []).flatMap(a =>
-      (a.checks||[]).filter(c => c.action === 'restore_from_backup'));
-    const worst = checks.some(c => c.status==='fail') ? 'fail'
-                : checks.some(c => c.status==='warn') ? 'warn' : 'ok';
-    lines.push(bezier(agent.x, agent.bottom, nb.x, nb.top,
-      worst==='fail' ? 'var(--red)' : worst==='warn' ? 'var(--orange)' : 'var(--cyan)'));
+    lines.push(bezier(agent.x, agent.bottom, nb.x, nb.top, 'var(--green)'));
   });
 
   // Structural edges: modules → assets (always visible, dim)
@@ -1691,23 +1685,30 @@ function _drawTopologyEdges() {
       ? pt(document.getElementById(`nb-${disc.monitoring_backend}`))
       : detectBackends.length ? pt(document.getElementById(`nb-${detectBackends[0].name}`)) : null;
     if (detNb) lines.push(bezier(detNb.x, detNb.bottom, asset.x, asset.top,
-      'var(--blue)', '', 1.5, 0.25));
+      'var(--blue)', '', 1.5, 0.3));
 
-    // PROTECT → VM  (NSG always applies, color = current state of this VM)
+    // PROTECT → VM  (rouge si isolé/bloqué, orange dim si clean)
     if (nbNsg) {
-      const vmRes   = resources.find(r => r.vm_name === vmName || r.resource_id.endsWith(vmName));
-      const vmIso   = vmRes?.states?.some(s => s.type === 'isolated');
-      const vmBlk   = vmRes?.states?.some(s => s.type === 'blocked');
-      const color   = vmIso ? 'var(--red)' : vmBlk ? 'var(--orange)' : 'var(--green)';
-      const opacity = (vmIso || vmBlk) ? 0.6 : 0.25;
-      lines.push(bezier(nbNsg.x, nbNsg.bottom, asset.x, asset.top, color, vmIso ? '5,4' : '', 1.5, opacity));
+      const vmRes = resources.find(r => r.vm_name === vmName || r.resource_id.endsWith(vmName));
+      const vmIso = vmRes?.states?.some(s => s.type === 'isolated');
+      const vmBlk = vmRes?.states?.some(s => s.type === 'blocked');
+      if (vmIso) {
+        // isolé — rouge plein
+        lines.push(bezier(nbNsg.x, nbNsg.bottom, asset.x, asset.top, 'var(--red)', '', 1.5, 0.7));
+      } else if (vmBlk) {
+        // bloqué — rouge tirets
+        lines.push(bezier(nbNsg.x, nbNsg.bottom, asset.x, asset.top, 'var(--red)', '6,4', 1.5, 0.7));
+      } else {
+        // clean — orange dim
+        lines.push(bezier(nbNsg.x, nbNsg.bottom, asset.x, asset.top, 'var(--orange)', '', 1.5, 0.2));
+      }
     }
 
     // RECOVER → VM  (RSV covers all discovered assets)
     recoverBackends.forEach(b => {
       const nb = pt(document.getElementById(`nb-${b.name}`));
       if (nb) lines.push(bezier(nb.x, nb.bottom, asset.x, asset.top,
-        'var(--cyan)', '', 1.5, 0.25));
+        'var(--green)', '', 1.5, 0.3));
     });
   });
 
@@ -1727,7 +1728,7 @@ function _drawTopologyEdges() {
       : e.action === 'improve_detection'
       ? pt(document.getElementById(`nb-${detectBackends[0]?.name}`))
       : pt(document.getElementById('module-protect'));
-    if (nb) lines.push(bezier(nb.x, nb.bottom, asset.x, asset.top, color, '4,3', 2, 0.7));
+    if (nb) lines.push(bezier(nb.x, nb.bottom, asset.x, asset.top, color, '', 2.5, 0.85));
   });
 
   svg.innerHTML = lines.join('\n');

@@ -532,8 +532,7 @@
     border-radius: 8px;
     padding: 10px 12px;
     min-width: 200px;
-    flex: 1;
-    max-width: 340px;
+    flex: 0 1 340px;
     transition: border-color .15s, background .15s;
     cursor: pointer;
     position: relative;
@@ -542,7 +541,7 @@
   .node-asset.s-blocked   { border-color: var(--orange); background: color-mix(in srgb, var(--orange) 5%, var(--bg1)); }
   .node-asset.s-both      { border-color: var(--red);    background: color-mix(in srgb, var(--red)    6%, var(--bg1)); }
   .node-asset.s-restoring { border-color: var(--blue);   background: color-mix(in srgb, var(--blue)   5%, var(--bg1)); animation: pulse 2s infinite; }
-  .node-asset.s-incident  { border-color: var(--purple); background: color-mix(in srgb, var(--purple) 5%, var(--bg1)); }
+  .node-asset.s-incident  { border: 2px solid var(--purple); background: color-mix(in srgb, var(--purple) 6%, var(--bg1)); box-shadow: 0 0 8px color-mix(in srgb, var(--purple) 20%, transparent); }
   .node-asset.expanded    { min-width: min(560px, 100%); max-width: 100%; cursor: default; }
   .node-asset:not(.expanded):hover { box-shadow: 0 0 0 1px var(--dim); }
   .node-asset-header { display: flex; align-items: center; gap: 6px; }
@@ -1561,7 +1560,9 @@ function _renderAssetNode(resource, vmEscs, restoreByVm) {
     : '';
 
   const cached = _actionsCache[vm_name];
-  const decisionHtml = (cached?.actions || []).slice(0, 2).map((a, idx) => {
+  const decisionHtml = (cached?.actions || [])
+    .filter(a => a.action !== 'improve_detection')
+    .slice(0, 2).map((a, idx) => {
     const pct = a.confidence ? Math.round(a.confidence * 100) + '%' : '';
     const hasDetail = !!a.full_reasoning;
     return `<div class="dec-row ${hasDetail ? 'dec-clickable' : ''}"

@@ -142,7 +142,7 @@ class IncidentRegistry:
 
     def _append(self, inc: Incident) -> None:
         with open(self._path, "a") as f:
-            f.write(json.dumps(asdict(inc)) + "\n")
+            f.write(json.dumps(asdict(inc), default=str) + "\n")
 
     def _rewrite_row(self, updated: Incident) -> None:
         rows = self._load_all()
@@ -155,7 +155,7 @@ class IncidentRegistry:
     def _write_all(self, rows: list[Incident]) -> None:
         with open(self._path, "w") as f:
             for inc in rows:
-                f.write(json.dumps(asdict(inc)) + "\n")
+                f.write(json.dumps(asdict(inc), default=str) + "\n")
 
 
 def _now_iso() -> str:

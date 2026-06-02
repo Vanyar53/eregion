@@ -65,7 +65,7 @@ def record(
     }
     _STORE.parent.mkdir(parents=True, exist_ok=True)
     with open(_STORE, "a") as f:
-        f.write(json.dumps(esc) + "\n")
+        f.write(json.dumps(esc, default=str) + "\n")
     _notify(esc)
     return esc["id"]
 
@@ -81,7 +81,7 @@ def resolve(escalation_id: str) -> None:
         if e["id"] == escalation_id:
             e["status"] = "resolved"
             e["resolved_at"] = datetime.now(timezone.utc).isoformat()
-        updated.append(json.dumps(e))
+        updated.append(json.dumps(e, default=str))
     _STORE.write_text("\n".join(updated) + "\n")
 
 
@@ -103,7 +103,7 @@ def resolve_by_resource(resource_id: str, action: str) -> int:
             e["status"] = "resolved"
             e["resolved_at"] = now
             count += 1
-        updated.append(json.dumps(e))
+        updated.append(json.dumps(e, default=str))
     _STORE.write_text("\n".join(updated) + "\n")
     return count
 

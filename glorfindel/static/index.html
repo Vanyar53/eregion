@@ -1277,8 +1277,8 @@ function renderInfra() {
   if (_configMode) return;
   const list           = document.getElementById('incidents-list');
   const rules          = _cfgData?.detection?.rules     || [];
-  const detectBackends = _cfgData?.monitoring_backends  || [];
-  const recoverBackends= _cfgData?.action_backends      || [];
+  const detectBackends  = _cfgData?.monitoring_backends  || [];
+  const recoverBackends = (_cfgData?.assets || []).filter(a => a.type === 'azure_backup_vault');
   const discovered     = _state?.discovered_assets      || [];
   const knownResources = _cfgData?.known_resources      || [];
   const { resources = [], escalations = [], restores = [] } = _state;
@@ -1379,7 +1379,7 @@ function _renderAgentNode(rules, detectBackends, recoverBackends, discovered) {
       <span class="node-agent-title">GLORFINDEL</span>
       ${dot}
       <span style="color:var(--dim);font-size:10px">${watchLabel}</span>
-      <span style="color:var(--dim);font-size:10px;margin-left:auto" id="agent-expand-icon">▸ rules</span>
+      <span style="color:var(--blue);font-size:10px;margin-left:auto;border:1px solid color-mix(in srgb,var(--blue) 40%,transparent);border-radius:3px;padding:1px 5px" id="agent-expand-icon">▸ rules</span>
     </div>
     <div class="node-agent-stats">
       <span>${moduleCount} modules</span>
@@ -1582,16 +1582,17 @@ function _drawTopologyEdges() {
     };
   }
 
-  function bezier(x1, y1, x2, y2, color, dash = '', width = 2) {
+  function bezier(x1, y1, x2, y2, color, dash = '', width = 2.5) {
     const cy = (y1 + y2) / 2;
     return `<path d="M${x1|0},${y1|0} C${x1|0},${cy|0} ${x2|0},${cy|0} ${x2|0},${y2|0}"
-      fill="none" stroke="${color}" stroke-width="${width}" opacity="0.65"
+      fill="none" stroke="${color}" stroke-width="${width}" opacity="0.75"
+      stroke-linecap="round"
       ${dash ? `stroke-dasharray="${dash}"` : ''}/>`;
   }
 
-  const rules          = _cfgData?.detection?.rules    || [];
-  const detectBackends = _cfgData?.monitoring_backends || [];
-  const recoverBackends= _cfgData?.action_backends     || [];
+  const rules           = _cfgData?.detection?.rules    || [];
+  const detectBackends  = _cfgData?.monitoring_backends || [];
+  const recoverBackends = (_cfgData?.assets || []).filter(a => a.type === 'azure_backup_vault');
   const { resources = [], escalations = [] } = _state;
   const isIsolated = resources.some(r => r.states?.some(s => s.type === 'isolated'));
   const isBlocked  = resources.some(r => r.states?.some(s => s.type === 'blocked'));
@@ -1650,7 +1651,7 @@ function _drawTopologyEdges() {
       ? pt(document.getElementById(`nb-${detectBackends[0]?.name}`))
       : pt(document.getElementById('nb-nsg'));
     if (nb) {
-      lines.push(bezier(nb.x, nb.bottom, asset.x, asset.top, color, '4,3', 1.5));
+      lines.push(bezier(nb.x, nb.bottom, asset.x, asset.top, color, '4,3', 2));
     }
   });
 

@@ -542,7 +542,7 @@
   .node-asset.s-both      { border-color: var(--red);    background: color-mix(in srgb, var(--red)    6%, var(--bg1)); }
   .node-asset.s-restoring { border-color: var(--blue);   background: color-mix(in srgb, var(--blue)   5%, var(--bg1)); animation: pulse 2s infinite; }
   .node-asset.s-incident  { border: 2px solid var(--purple); background: color-mix(in srgb, var(--purple) 6%, var(--bg1)); box-shadow: 0 0 8px color-mix(in srgb, var(--purple) 20%, transparent); }
-  .node-asset.expanded    { min-width: min(480px, 100%); max-width: min(600px, 100%); cursor: default; }
+  .node-asset.expanded    { min-width: min(360px, 100%); max-width: min(420px, 100%); cursor: default; }
   .node-asset:not(.expanded):hover { box-shadow: 0 0 0 1px var(--dim); }
   .node-asset-header { display: flex; align-items: center; gap: 6px; }
   .node-asset-name   { font-weight: 700; font-size: 12px; flex: 1; }
@@ -1261,7 +1261,7 @@ async function refreshActionsData() {
 
   for (const vm of toFetch) {
     try {
-      const r = await fetch(`/api/actions/${vm}`);
+      const r = await fetch(`/api/actions/${vm}?limit=15`);
       const d = await r.json();
       _actionsCache[vm] = { actions: d.actions || [], fetchedAt: Date.now() };
     } catch (e) {}

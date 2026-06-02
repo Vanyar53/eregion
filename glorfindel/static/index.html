@@ -1355,13 +1355,13 @@ function renderInfra() {
         <span style="font-size:10px;color:var(--cyan)">━━ recover</span>
         <span style="font-size:10px;color:var(--orange)">━━ bloqué</span>
         <span style="font-size:10px;color:var(--red)">━━ isolé / erreur</span>
-        <span style="font-size:10px;color:var(--yellow);letter-spacing:2px">╌╌ incident actif</span>
+        <span style="font-size:10px;color:var(--purple);letter-spacing:2px">╌╌ escalade active</span>
         <span style="font-size:9px;color:var(--dim);margin-left:4px">Assets :</span>
         <span style="font-size:10px"><span style="color:var(--green)">●</span> <span style="color:var(--dim)">clean</span></span>
         <span style="font-size:10px"><span style="color:var(--orange)">●</span> <span style="color:var(--dim)">bloqué</span></span>
         <span style="font-size:10px"><span style="color:var(--red)">●</span> <span style="color:var(--dim)">isolé</span></span>
         <span style="font-size:10px"><span style="color:var(--blue)">●</span> <span style="color:var(--dim)">restauration</span></span>
-        <span style="font-size:10px"><span style="color:var(--yellow)">●</span> <span style="color:var(--dim)">escalade</span></span>
+        <span style="font-size:10px"><span style="color:var(--purple)">●</span> <span style="color:var(--dim)">escalade</span></span>
       </div>
     </div>`;
 
@@ -1537,7 +1537,7 @@ function _renderAssetNode(resource, vmEscs, restoreByVm) {
   const dot = restoreInfo   ? `<span style="color:var(--blue)">●</span>`
             : isIsolated    ? `<span style="color:var(--red)">●</span>`
             : isBlocked     ? `<span style="color:var(--orange)">●</span>`
-            : myEscs.length ? `<span style="color:var(--yellow)">●</span>`
+            : myEscs.length ? `<span style="color:var(--purple)">●</span>`
             :                 `<span style="color:var(--green)">●</span>`;
 
   const stateBadges = [
@@ -1719,9 +1719,12 @@ function _drawTopologyEdges() {
     const vm    = e.resource_id.split('/').pop();
     const asset = pt(document.getElementById(`asset-${vm}`));
     if (!asset) return;
-    const color = e.action === 'restore_from_backup' ? 'var(--cyan)'
+    const color = e.action === 'restore_from_backup'          ? 'var(--cyan)'
+                : e.action === 'isolate_vm'                   ? 'var(--red)'
+                : e.action === 'block_suspicious_ip'          ? 'var(--orange)'
+                : e.action === 'improve_detection'            ? 'var(--blue)'
                 : e.escalation_type === 'verification_failed' ? 'var(--red)'
-                : 'var(--yellow)';
+                : 'var(--purple)';
     const nb = e.action === 'restore_from_backup'
       ? pt(document.getElementById(`nb-${recoverBackends[0]?.name}`))
       : e.action === 'improve_detection'

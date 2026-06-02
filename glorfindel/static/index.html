@@ -469,7 +469,7 @@
     gap: 0;
     position: relative;
     z-index: 1;
-    align-items: stretch;
+    align-items: flex-start;
   }
   .topo-module {
     flex: 1;
@@ -909,6 +909,7 @@ function _escFooter(escs) {
 
 let _expandedVms      = new Set();
 let _expandedBackends = new Set();
+let _rulesCache       = [];   // flat array, index used in onclick to avoid JSON.stringify in HTML
 
 function toggleBackend(name) {
   if (_expandedBackends.has(name)) _expandedBackends.delete(name);
@@ -1281,6 +1282,7 @@ function renderInfra() {
 
   _escById = {};
   escalations.forEach(e => { _escById[e.id] = e; });
+  _rulesCache = rules.slice(); // refresh index cache each render
   const restoreByVm = {};
   restores.forEach(r => { restoreByVm[r.vm_name] = r; });
 
@@ -1409,9 +1411,10 @@ function _renderModules(rules, detectBackends, recoverBackends, resources) {
     const expandId  = `rules-${b.name.replace(/[^a-z0-9]/gi,'-')}`;
     const isExpanded = _expandedBackends.has(b.name);
     const ruleRows  = bRules.map(r => {
-      const dc = r.last_error ? 'var(--red)' : r.last_poll ? 'var(--green)' : 'var(--dim)';
-      const mt = r.last_match ? `<span style="color:var(--orange);font-size:9px;margin-left:auto">${_relTime(r.last_match)}</span>` : '';
-      return `<div class="row rule-item" onclick="event.stopPropagation();showRuleDetail(${JSON.stringify(r)})"
+      const idx = _rulesCache.indexOf(r);
+      const dc  = r.last_error ? 'var(--red)' : r.last_poll ? 'var(--green)' : 'var(--dim)';
+      const mt  = r.last_match ? `<span style="color:var(--orange);font-size:9px;margin-left:auto">${_relTime(r.last_match)}</span>` : '';
+      return `<div class="row rule-item" onclick="event.stopPropagation();showRuleByIdx(${idx})"
         style="padding:3px 4px;font-size:10px">
         <span style="color:${dc};font-size:9px">●</span>
         <span style="flex:1">${r.name}</span>
@@ -2066,6 +2069,11 @@ function showRuleDetail(rule) {
   btn.onclick = closeModal;
   document.querySelector('.modal').classList.add('wide');
   document.getElementById('modal').classList.add('open');
+}
+
+function showRuleByIdx(idx) {
+  const rule = _rulesCache[idx];
+  if (rule) showRuleDetail(rule);
 }
 
 async function refreshConfig() {

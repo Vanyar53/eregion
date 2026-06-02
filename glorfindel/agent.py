@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import time
+from pathlib import Path
 from typing import TypedDict
 
 from langgraph.graph import StateGraph, END
@@ -13,6 +14,40 @@ from glorfindel.incidents import IncidentRegistry
 from glorfindel.memory import CycleMemory
 
 _console = Console()
+
+
+def _load_few_shot_examples() -> str:
+    """Load and format few-shot examples from few_shot_examples.yaml.
+
+    Falls back to an empty string if the file is missing or malformed so
+    the agent still starts without crashing.
+    """
+    try:
+        import yaml  # optional; only needed at startup
+        candidates = [
+            Path(__file__).parent / "few_shot_examples.yaml",
+        ]
+        for path in candidates:
+            if path.exists():
+                data = yaml.safe_load(path.read_text())
+                examples = data.get("examples", [])
+                if not examples:
+                    return ""
+                blocks: list[str] = []
+                for i, ex in enumerate(examples, 1):
+                    lines: list[str] = [
+                        f"EXAMPLE {i} — {ex['title']}",
+                        f"  Signal indicators: {ex['signal_indicators']}",
+                    ]
+                    for step in ex.get("reasoning", []):
+                        lines.append(f"  {step}")
+                    lines.append(f"  → {ex['conclusion']}")
+                    lines.append(f"  confidence: {ex['confidence']}")
+                    blocks.append("\n".join(lines))
+                return "\n\n".join(blocks)
+        return ""
+    except Exception:
+        return ""
 
 
 # ── State ─────────────────────────────────────────────────────────────────────
@@ -157,45 +192,7 @@ that were already verified effective or ineffective on this resource.
 These are not rules — they are examples of correct reasoning chains for signals you may
 encounter. Apply the same reasoning process to new or ambiguous signals.
 
-EXAMPLE 1 — Disk write anomaly
-  Signal indicators: MaxWrite=147 MB/s sustained over 8 min, Logical Disk counter
-  Q: What happened? Sustained high-rate writes across all files — consistent with
-     encryption. If encryption ran for 8 minutes, disk data is likely destroyed.
-  Q: Does isolation help? No — isolation cuts network but cannot decrypt data.
-  Q: What recovers the data? Only restore_from_backup replaces the disk contents.
-  → action=restore_from_backup, escalate=true (destructive, ~20 min, human must confirm)
-  confidence: high when MaxWrite is sustained and anomalous vs. baseline
-
-EXAMPLE 2 — Outbound blob upload from private IP
-  Signal indicators: PutBlob, CallerIpAddress=10.x.x.x (RFC-1918), AccountName=storage-prod
-  Q: What happened? A VM used its managed identity to upload data to blob storage.
-     Data left the perimeter. Disk on the VM is intact.
-  Q: What stops further leakage? Cutting the VM's network (isolate_vm). The data
-     already uploaded cannot be recalled, but the channel is severed.
-  Q: Is block_suspicious_ip appropriate? No — the source is an internal IP, not an
-     external attacker IP. NSG perimeter rules don't filter internal→internal traffic.
-  → action=isolate_vm, escalate=false (reversible, disk intact, no data destruction)
-  confidence: high when CallerIpAddress is RFC-1918 and PutBlob count is anomalous
-
-EXAMPLE 3 — SSH brute force from external IP
-  Signal indicators: FailedAttempts=47, SourceIP=185.x.x.x (Tor exit node), auth facility
-  Q: What happened? External IP attempted repeated SSH logins. No success confirmed.
-     The VM is likely uncompromised — the attacker is still outside.
-  Q: What contains the threat? Deny the attacker's IP at the NSG perimeter.
-  Q: Should we isolate? No — isolation disrupts the VM for all users. The VM itself
-     is not compromised. Use the minimum effective action.
-  → action=block_suspicious_ip, escalate=false (reversible, VM stays online)
-  confidence: high when FailedAttempts≥10 and SourceIP is external (non-RFC-1918)
-
-EXAMPLE 4 — Confirmed privilege escalation
-  Signal indicators: sudo COMMAND=..., USER=root, SyslogMessage confirms success
-  Q: What happened? A user successfully escalated to root. Attacker has OS-level control.
-  Q: What is the blast radius? With root, attacker can read/destroy data, install
-     persistence, pivot. But disk data is likely still intact.
-  Q: What contains the threat? Isolate the VM — cuts their remote foothold immediately.
-     Restore is not warranted unless forensics confirm data destruction.
-  → action=isolate_vm, escalate=false (reversible, OS compromised but disk intact)
-  confidence: high when sudo success to USER=root is confirmed in syslog
+{_load_few_shot_examples()}
 
 You always call the security_decision tool — never respond in plain text.
 """

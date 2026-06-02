@@ -1,0 +1,40 @@
+# Validated few-shot examples for Glorfindel's security_decision LLM.
+# Each entry is a production-verified reasoning chain.
+# Add new examples here — no need to edit agent.py.
+
+examples:
+  - title: "Disk write anomaly"
+    signal_indicators: "MaxWrite=147 MB/s sustained over 8 min, Logical Disk counter"
+    reasoning:
+      - "Q: What happened? Sustained high-rate writes across all files — consistent with\n     encryption. If encryption ran for 8 minutes, disk data is likely destroyed."
+      - "Q: Does isolation help? No — isolation cuts network but cannot decrypt data."
+      - "Q: What recovers the data? Only restore_from_backup replaces the disk contents."
+    conclusion: "action=restore_from_backup, escalate=true (destructive, ~20 min, human must confirm)"
+    confidence: "high when MaxWrite is sustained and anomalous vs. baseline"
+
+  - title: "Outbound blob upload from private IP"
+    signal_indicators: "PutBlob, CallerIpAddress=10.x.x.x (RFC-1918), AccountName=storage-prod"
+    reasoning:
+      - "Q: What happened? A VM used its managed identity to upload data to blob storage.\n     Data left the perimeter. Disk on the VM is intact."
+      - "Q: What stops further leakage? Cutting the VM's network (isolate_vm). The data\n     already uploaded cannot be recalled, but the channel is severed."
+      - "Q: Is block_suspicious_ip appropriate? No — the source is an internal IP, not an\n     external attacker IP. NSG perimeter rules don't filter internal→internal traffic."
+    conclusion: "action=isolate_vm, escalate=false (reversible, disk intact, no data destruction)"
+    confidence: "high when CallerIpAddress is RFC-1918 and PutBlob count is anomalous"
+
+  - title: "SSH brute force from external IP"
+    signal_indicators: "FailedAttempts=47, SourceIP=185.x.x.x (Tor exit node), auth facility"
+    reasoning:
+      - "Q: What happened? External IP attempted repeated SSH logins. No success confirmed.\n     The VM is likely uncompromised — the attacker is still outside."
+      - "Q: What contains the threat? Deny the attacker's IP at the NSG perimeter."
+      - "Q: Should we isolate? No — isolation disrupts the VM for all users. The VM itself\n     is not compromised. Use the minimum effective action."
+    conclusion: "action=block_suspicious_ip, escalate=false (reversible, VM stays online)"
+    confidence: "high when FailedAttempts≥10 and SourceIP is external (non-RFC-1918)"
+
+  - title: "Confirmed privilege escalation"
+    signal_indicators: "sudo COMMAND=..., USER=root, SyslogMessage confirms success"
+    reasoning:
+      - "Q: What happened? A user successfully escalated to root. Attacker has OS-level control."
+      - "Q: What is the blast radius? With root, attacker can read/destroy data, install\n     persistence, pivot. But disk data is likely still intact."
+      - "Q: What contains the threat? Isolate the VM — cuts their remote foothold immediately.\n     Restore is not warranted unless forensics confirm data destruction."
+    conclusion: "action=isolate_vm, escalate=false (reversible, OS compromised but disk intact)"
+    confidence: "high when sudo success to USER=root is confirmed in syslog"

@@ -542,7 +542,7 @@
   .node-asset.s-both      { border-color: var(--red);    background: color-mix(in srgb, var(--red)    6%, var(--bg1)); }
   .node-asset.s-restoring { border-color: var(--blue);   background: color-mix(in srgb, var(--blue)   5%, var(--bg1)); animation: pulse 2s infinite; }
   .node-asset.s-incident  { border: 2px solid var(--purple); background: color-mix(in srgb, var(--purple) 6%, var(--bg1)); box-shadow: 0 0 8px color-mix(in srgb, var(--purple) 20%, transparent); }
-  .node-asset.expanded    { min-width: min(560px, 100%); max-width: 100%; cursor: default; }
+  .node-asset.expanded    { min-width: min(480px, 100%); max-width: min(600px, 100%); cursor: default; }
   .node-asset:not(.expanded):hover { box-shadow: 0 0 0 1px var(--dim); }
   .node-asset-header { display: flex; align-items: center; gap: 6px; }
   .node-asset-name   { font-weight: 700; font-size: 12px; flex: 1; }
@@ -1601,6 +1601,7 @@ function _renderAssetNode(resource, vmEscs, restoreByVm) {
     <div class="node-asset-header">
       ${dot}
       <span class="node-asset-name">${vm_name}</span>
+      ${myEscs.length ? `<span style="background:color-mix(in srgb,var(--purple) 20%,transparent);color:var(--purple);border:1px solid color-mix(in srgb,var(--purple) 50%,transparent);border-radius:4px;font-size:9px;font-weight:700;padding:1px 5px;flex-shrink:0">🚨 ${myEscs.length}</span>` : ''}
       ${readiness ? `<span style="color:var(--dim);font-size:9px">${readiness}</span>` : ''}
       <span style="color:var(--dim);font-size:9px;margin-left:6px">${isExpanded ? '▾' : '▸'}</span>
     </div>

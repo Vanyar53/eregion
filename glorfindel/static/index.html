@@ -1356,11 +1356,10 @@ function _renderAgentNode(rules, detectBackends, recoverBackends, discovered) {
   const rulesCount   = rules.length;
   const assetsCount  = discovered.length;
   const moduleCount  = detectBackends.length + recoverBackends.length + 1; // +1 for NSG
-  const hasErr       = rules.some(r => r.last_error);
-  const dot          = hasErr
-    ? `<span style="color:var(--red)">●</span>`
-    : `<span style="color:var(--green)">●</span>`;
-  const watchLabel   = document.getElementById('watch-label')?.textContent || 'watch…';
+  const hasErr   = rules.some(r => r.last_error);
+  const dot      = hasErr
+    ? `<span style="color:var(--red)" title="rule error">●</span>`
+    : `<span style="color:var(--green)" title="rules polling">●</span>`;
 
   const ruleRows = rules.map(r => {
     const dotColor = r.last_error ? 'var(--red)' : r.last_poll ? 'var(--green)' : 'var(--dim)';
@@ -1378,7 +1377,6 @@ function _renderAgentNode(rules, detectBackends, recoverBackends, discovered) {
     <div class="node-agent-header">
       <span class="node-agent-title">GLORFINDEL</span>
       ${dot}
-      <span style="color:var(--dim);font-size:10px">${watchLabel}</span>
       <span style="color:var(--blue);font-size:10px;margin-left:auto;border:1px solid color-mix(in srgb,var(--blue) 40%,transparent);border-radius:3px;padding:1px 5px" id="agent-expand-icon">▸ rules</span>
     </div>
     <div class="node-agent-stats">

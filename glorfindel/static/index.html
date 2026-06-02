@@ -1549,8 +1549,10 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm) {
   const stateBadges = [
     restoreInfo ? `<span class="badge restoring" style="font-size:9px">🔄 RESTORING · ${restoreInfo.elapsed_label}</span>` : '',
     ...states.map(s => s.type === 'isolated'
-      ? `<span class="badge isolated" style="font-size:9px">ISOLATED · ${age(s.since)}</span>`
-      : `<span class="badge blocked" style="font-size:9px">BLOCKED ${s.ip} · ${age(s.since)}</span>`)
+      ? `<span class="badge isolated" style="font-size:9px;cursor:pointer"
+           onclick="event.stopPropagation();showIsolationModal('${vm_name}')">ISOLATED · ${age(s.since)}</span>`
+      : `<span class="badge blocked" style="font-size:9px;cursor:pointer"
+           onclick="event.stopPropagation();showIsolationModal('${vm_name}')">BLOCKED ${s.ip} · ${age(s.since)}</span>`)
   ].filter(Boolean).join('');
 
   const auditEntry = (_auditData?.audits || []).find(a => a.resource_id === resource_id);
@@ -1605,7 +1607,8 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm) {
     <div class="node-asset-header">
       ${dot}
       <span class="node-asset-name">${vm_name}</span>
-      ${totalEscs ? `<span style="background:color-mix(in srgb,var(--purple) 20%,transparent);color:var(--purple);border:1px solid color-mix(in srgb,var(--purple) 50%,transparent);border-radius:4px;font-size:9px;font-weight:700;padding:1px 5px;flex-shrink:0">🚨 ${totalEscs}</span>` : ''}
+      ${totalEscs ? `<span style="background:color-mix(in srgb,var(--purple) 20%,transparent);color:var(--purple);border:1px solid color-mix(in srgb,var(--purple) 50%,transparent);border-radius:4px;font-size:9px;font-weight:700;padding:1px 5px;flex-shrink:0;cursor:pointer"
+        onclick="event.stopPropagation();showEscModal('${vm_name}')">🚨 ${totalEscs}</span>` : ''}
       ${readiness ? `<span style="color:var(--dim);font-size:9px">${readiness}</span>` : ''}
       <span style="color:var(--dim);font-size:9px;margin-left:6px">${isExpanded ? '▾' : '▸'}</span>
     </div>
@@ -2078,6 +2081,78 @@ function showRuleDetail(rule) {
 function showRuleByIdx(idx) {
   const rule = _rulesCache[idx];
   if (rule) showRuleDetail(rule);
+}
+
+function showIsolationModal(vmName) {
+  const actions = (_actionsCache[vmName]?.actions || []);
+  const idx = actions.findIndex(a =>
+    ['isolate_vm', 'block_suspicious_ip', 'release_isolation', 'revoke_temp_access'].includes(a.action));
+  if (idx >= 0) {
+    showReasoning(vmName, idx);
+    return;
+  }
+  // Fallback: show basic info
+  document.getElementById('modal-title').textContent = 'Décision — ' + vmName;
+  document.getElementById('modal-body').textContent =
+    'Raisonnement LLM non disponible pour cette VM.\n\nPossible cause : les cycles de détection récents sont tous des improve_detection. Le raisonnement sera disponible au prochain cycle de remédiation.';
+  document.getElementById('modal-cmd').style.display = 'none';
+  const btn = document.getElementById('modal-confirm');
+  btn.textContent = 'Close';
+  btn.className = 'action';
+  btn.onclick = closeModal;
+  document.getElementById('modal').classList.add('open');
+}
+
+function showEscModal(vmName) {
+  const escs = Object.values(_escById).filter(e =>
+    e.resource_id.split('/').pop() === vmName ||
+    e.resource_id === vmName);
+  if (!escs.length) { toast('Aucune escalade active pour ' + vmName); return; }
+
+  document.getElementById('modal-title').textContent = `Escalades — ${vmName} (${escs.length})`;
+  document.getElementById('modal-cmd').style.display = 'none';
+  document.getElementById('modal-cancel').style.display = 'none';
+
+  const bodyEl = document.getElementById('modal-body');
+  bodyEl.innerHTML = escs.map(e => {
+    const label  = actionLabel(e.action);
+    const ctx    = [e.ttp, e.severity, escLabel(e.escalation_type)].filter(Boolean).join(' · ');
+    const steps  = (e.suggested_steps || []).slice(0, 4)
+      .map(s => `<div style="color:var(--dim);font-size:10px;padding:2px 0 2px 8px">• ${s}</div>`).join('');
+    const query  = e.proposed_query
+      ? `<pre style="background:var(--bg2);border-left:2px solid var(--cyan);padding:8px;font-size:10px;
+           color:var(--blue);white-space:pre-wrap;overflow-x:auto;margin:6px 0;border-radius:0 4px 4px 0">${e.proposed_query.trim()}</pre>`
+      : '';
+    const isRule = e.action === 'improve_detection' && e.proposal_id;
+    const pid    = e.proposal_id || '';
+    const ruleButtons = isRule
+      ? `<button class="action" style="color:var(--green)" onclick="doApproveRule('${pid}','${e.id}');closeModal()">✓ Approve</button>
+         <button class="action" style="color:var(--red)"   onclick="doRejectRule('${pid}','${e.id}');closeModal()">✗ Reject</button>`
+      : '';
+    return `<div style="border:1px solid var(--border);border-radius:6px;padding:10px;margin-bottom:10px;background:var(--bg2)">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;flex-wrap:wrap">
+        <span style="color:var(--orange);font-weight:700;font-size:12px">🚨 ${label}</span>
+        <span style="margin-left:auto;display:flex;gap:6px">
+          <button class="action" onclick="doAck('${e.id}');refreshState()">✓ Ack</button>
+          <button class="action" onclick="openCommandModal('${e.id}')">📋 Cmd</button>
+          ${ruleButtons}
+        </span>
+      </div>
+      ${ctx ? `<div style="color:var(--dim);font-size:10px;margin-bottom:6px">${ctx}</div>` : ''}
+      <div style="color:var(--text);font-size:11px;line-height:1.6">${e.reason}</div>
+      ${query}${steps}
+    </div>`;
+  }).join('');
+
+  const btn = document.getElementById('modal-confirm');
+  btn.textContent = 'Fermer';
+  btn.className = 'action';
+  btn.onclick = () => {
+    closeModal();
+    document.getElementById('modal-cancel').style.display = '';
+  };
+  document.querySelector('.modal').classList.add('wide');
+  document.getElementById('modal').classList.add('open');
 }
 
 async function refreshConfig() {

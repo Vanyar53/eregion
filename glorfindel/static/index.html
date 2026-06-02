@@ -404,7 +404,155 @@
 
   button#config-toggle.active { border-color: var(--blue); color: var(--blue); }
 
-  /* ── Scrollbar ── */
+  /* ── Topology Graph ── */
+  .topo-graph {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    padding: 20px 20px 16px;
+    flex: 1;
+    overflow-y: auto;
+    gap: 0;
+  }
+  .topo-svg {
+    position: absolute;
+    inset: 0;
+    width: 100%; height: 100%;
+    pointer-events: none;
+    z-index: 0;
+    overflow: visible;
+  }
+  .topo-layer {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    gap: 12px;
+    flex-shrink: 0;
+  }
+  .topo-spacer { height: 52px; flex-shrink: 0; }
+
+  /* Agent node */
+  .node-agent {
+    background: var(--bg1);
+    border: 2px solid var(--blue);
+    border-radius: 10px;
+    padding: 12px 20px;
+    min-width: 240px;
+    max-width: 420px;
+    cursor: pointer;
+    transition: box-shadow .2s;
+    position: relative;
+    z-index: 1;
+  }
+  .node-agent:hover { box-shadow: 0 0 20px color-mix(in srgb, var(--blue) 15%, transparent); }
+  .node-agent-header { display: flex; align-items: center; gap: 8px; }
+  .node-agent-title { color: var(--blue); font-weight: 700; font-size: 14px; letter-spacing: 2px; flex: 1; }
+  .node-agent-stats { display: flex; gap: 14px; margin-top: 6px; font-size: 10px; color: var(--dim); }
+  .agent-rules-panel {
+    display: none;
+    margin-top: 10px;
+    border-top: 1px solid var(--border);
+    padding-top: 8px;
+    flex-direction: column;
+    gap: 2px;
+    max-height: 220px;
+    overflow-y: auto;
+  }
+  .agent-rules-panel.open { display: flex; }
+
+  /* Module sections */
+  .topo-modules {
+    display: flex;
+    gap: 0;
+    position: relative;
+    z-index: 1;
+    align-items: stretch;
+  }
+  .topo-module {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding: 0 12px;
+  }
+  .topo-module + .topo-module { border-left: 1px solid var(--border); }
+  .topo-module-label {
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    color: var(--dim);
+    padding: 2px 8px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg);
+    white-space: nowrap;
+    align-self: stretch;
+    text-align: center;
+  }
+  .topo-module-label.detect  { border-color: var(--blue);   color: var(--blue); }
+  .topo-module-label.protect { border-color: var(--orange); color: var(--orange); }
+  .topo-module-label.recover { border-color: var(--cyan);   color: var(--cyan); }
+  .topo-module-nodes { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+
+  /* Backend nodes */
+  .node-backend {
+    background: var(--bg1);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 12px;
+    min-width: 140px;
+    max-width: 200px;
+    font-size: 11px;
+    position: relative;
+  }
+  .node-backend.detect  { border-top: 3px solid var(--blue); }
+  .node-backend.protect { border-top: 3px solid var(--orange); }
+  .node-backend.recover { border-top: 3px solid var(--cyan); }
+  .node-backend.state-error { border-color: var(--red); }
+  .node-backend.state-warn  { border-color: var(--orange); }
+  .node-backend-name { font-weight: 700; color: var(--text); margin-bottom: 2px; display: flex; align-items: center; gap: 5px; }
+  .node-backend-type { font-size: 9px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 5px; }
+  .node-backend-row  { display: flex; align-items: center; gap: 4px; color: var(--dim); font-size: 10px; margin-top: 2px; }
+
+  /* Asset layer */
+  .topo-assets {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    justify-content: flex-start;
+    position: relative;
+    z-index: 1;
+    padding: 4px 0;
+  }
+  .node-asset {
+    background: var(--bg1);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    min-width: 200px;
+    flex: 1;
+    max-width: 340px;
+    transition: border-color .15s, background .15s;
+    cursor: pointer;
+    position: relative;
+  }
+  .node-asset.s-isolated  { border-color: var(--red);    background: color-mix(in srgb, var(--red)    5%, var(--bg1)); }
+  .node-asset.s-blocked   { border-color: var(--orange); background: color-mix(in srgb, var(--orange) 5%, var(--bg1)); }
+  .node-asset.s-both      { border-color: var(--red);    background: color-mix(in srgb, var(--red)    6%, var(--bg1)); }
+  .node-asset.s-restoring { border-color: var(--blue);   background: color-mix(in srgb, var(--blue)   5%, var(--bg1)); animation: pulse 2s infinite; }
+  .node-asset.s-incident  { border-color: var(--yellow); }
+  .node-asset.expanded    { min-width: min(560px, 100%); max-width: 100%; cursor: default; }
+  .node-asset:not(.expanded):hover { box-shadow: 0 0 0 1px var(--dim); }
+  .node-asset-header { display: flex; align-items: center; gap: 6px; }
+  .node-asset-name   { font-weight: 700; font-size: 12px; flex: 1; }
+  .node-asset-states { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 6px; }
+  .node-asset-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+
+  /* Scrollbar ── */
   ::-webkit-scrollbar { width: 6px; }
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
@@ -757,15 +905,29 @@ function _escFooter(escs) {
   </div>`;
 }
 
-// ── Map rendering ──────────────────────────────────────────────────────────────
+// ── Topology rendering ─────────────────────────────────────────────────────────
 
+let _expandedVms   = new Set();
+let _agentExpanded = false;
+
+function toggleAgentRules(evt) {
+  if (evt) evt.stopPropagation();
+  _agentExpanded = !_agentExpanded;
+  const panel = document.getElementById('agent-rules-panel');
+  const icon  = document.getElementById('agent-expand-icon');
+  if (panel) panel.classList.toggle('open', _agentExpanded);
+  if (icon)  icon.textContent = _agentExpanded ? '▾' : '▸';
+  requestAnimationFrame(_drawTopologyEdges);
+}
+
+function toggleAsset(vmName) {
+  if (_expandedVms.has(vmName)) _expandedVms.delete(vmName);
+  else _expandedVms.add(vmName);
+  renderInfra();
+}
 
 function _dot(color) {
   return `<span style="color:${color};font-size:10px">●</span>`;
-}
-
-function _zoneClass(status) {
-  return status === 'alert' ? 'zone-alert' : status === 'warn' ? 'zone-warn' : 'zone-ok';
 }
 
 function _networkZone(resources, escalations) {
@@ -1019,7 +1181,7 @@ function _backupZone(rsvEscs, restores) {
 }
 
 
-function _drawConnections() {
+function _drawConnections() {  // kept for safety, no longer called
   const svg = document.getElementById('map-svg');
   if (!svg) return;
   const map = document.getElementById('infra-map');
@@ -1113,23 +1275,21 @@ async function refreshActionsData() {
 
 function renderInfra() {
   if (_configMode) return;
-  const list = document.getElementById('incidents-list');
+  const list           = document.getElementById('incidents-list');
   const rules          = _cfgData?.detection?.rules     || [];
-  const backends       = _cfgData?.monitoring_backends  || [];
+  const detectBackends = _cfgData?.monitoring_backends  || [];
+  const recoverBackends= _cfgData?.action_backends      || [];
   const discovered     = _state?.discovered_assets      || [];
-  const postureGaps    = _state?.posture_gaps            || [];
   const knownResources = _cfgData?.known_resources      || [];
   const { resources = [], escalations = [], restores = [] } = _state;
 
   _escById = {};
   escalations.forEach(e => { _escById[e.id] = e; });
-  const restoreByVm   = {};
+  const restoreByVm = {};
   restores.forEach(r => { restoreByVm[r.vm_name] = r; });
 
-  const detectionEscs = escalations.filter(e => e.action === 'improve_detection');
-  const rsvEscs       = escalations.filter(e => e.action === 'restore_from_backup');
-  const hasRsv        = (_cfgData?.assets || []).some(a => a.type === 'azure_backup_vault');
-  const vmEscs        = escalations.filter(e => !['improve_detection','restore_from_backup'].includes(e.action));
+  const detEscs = escalations.filter(e => e.action === 'improve_detection');
+  const vmEscs  = escalations.filter(e => e.action !== 'improve_detection');
 
   const resourceMap = new Map();
   knownResources.forEach(r => resourceMap.set(r.resource_id, { ...r, states: [] }));
@@ -1139,33 +1299,363 @@ function renderInfra() {
   });
   vmEscs.forEach(e => {
     if (!resourceMap.has(e.resource_id))
-      resourceMap.set(e.resource_id, { resource_id: e.resource_id,
+      resourceMap.set(e.resource_id, {
+        resource_id: e.resource_id,
         vm_name: e.resource_id.split('/').pop(), states: [] });
   });
 
-  const lawEscHtml = detectionEscs.length
-    ? `<div class="vm-escalations" style="margin:0;padding:6px 10px;border-top:1px solid var(--border)">
-        ${detectionEscs.map(_renderEscItem).join('')}
-      </div>` : '';
+  // Auto-expand VMs with active incidents
+  [...resourceMap.values()].forEach(r => {
+    const hasIncident = (r.states||[]).length > 0
+      || vmEscs.some(e => e.resource_id === r.resource_id
+           || e.resource_id.split('/').pop() === r.vm_name);
+    if (hasIncident) _expandedVms.add(r.vm_name);
+  });
 
-  list.innerHTML = `<div class="infra-map" id="infra-map">
-    <svg class="map-svg" id="map-svg"></svg>
-    ${_networkZone(resources, escalations)}
-    ${_monitoringZone(rules, backends, discovered, postureGaps)}
-    ${_computeZone(resourceMap, vmEscs, restoreByVm)}
-    ${hasRsv ? _backupZone(rsvEscs, restores) : ''}
-  </div>
-  ${lawEscHtml ? `<div style="padding:0 12px 12px">${lawEscHtml}</div>` : ''}`;
+  list.innerHTML = `
+    <div class="topo-graph" id="topo-graph">
+      <svg class="topo-svg" id="topo-svg"></svg>
 
-  // Adjust grid layout based on whether RSV asset is configured
-  const mapEl = document.getElementById('infra-map');
-  if (mapEl) mapEl.classList.toggle('no-backup', !hasRsv);
+      <!-- Layer 1 — Agent -->
+      <div class="topo-layer">
+        ${_renderAgentNode(rules, detectBackends, recoverBackends, discovered)}
+      </div>
 
-  requestAnimationFrame(_drawConnections);
+      <div class="topo-spacer"></div>
+
+      <!-- Layer 2 — Modules -->
+      <div class="topo-layer">
+        ${_renderModules(rules, detectBackends, recoverBackends, resources)}
+      </div>
+
+      <div class="topo-spacer"></div>
+
+      <!-- Layer 3 — Assets -->
+      <div class="topo-assets" id="topo-assets">
+        ${[...resourceMap.values()].map(r =>
+            _renderAssetNode(r, vmEscs, restoreByVm)).join('')}
+        ${resourceMap.size === 0 ? `<div style="color:var(--dim);font-size:11px;padding:24px;text-align:center;width:100%">
+            No assets discovered — check monitoring backends</div>` : ''}
+      </div>
+
+      <!-- Detection rule escalations -->
+      ${detEscs.length ? `<div style="padding:12px 0 0">
+        <div style="font-size:9px;font-weight:700;letter-spacing:1px;color:var(--dim);margin-bottom:8px">DETECTION RULES</div>
+        ${detEscs.map(_renderEscItem).join('')}
+      </div>` : ''}
+    </div>`;
+
+  requestAnimationFrame(_drawTopologyEdges);
 }
 
-// legacy alias kept for WS onmessage calls — delegates to renderInfra
 function renderIncidents() { renderInfra(); }
+
+// ── Agent node ─────────────────────────────────────────────────────────────────
+
+function _renderAgentNode(rules, detectBackends, recoverBackends, discovered) {
+  const rulesCount   = rules.length;
+  const assetsCount  = discovered.length;
+  const moduleCount  = detectBackends.length + recoverBackends.length + 1; // +1 for NSG
+  const hasErr       = rules.some(r => r.last_error);
+  const dot          = hasErr
+    ? `<span style="color:var(--red)">●</span>`
+    : `<span style="color:var(--green)">●</span>`;
+  const watchLabel   = document.getElementById('watch-label')?.textContent || 'watch…';
+
+  const ruleRows = rules.map(r => {
+    const dotColor = r.last_error ? 'var(--red)' : r.last_poll ? 'var(--green)' : 'var(--dim)';
+    const match = r.last_match ? `<span style="color:var(--orange);font-size:9px">${_relTime(r.last_match)}</span>` : '';
+    return `<div class="row rule-item" onclick="event.stopPropagation();showRuleDetail(${JSON.stringify(r)})" style="padding:3px 4px">
+      <span style="color:${dotColor};font-size:9px">●</span>
+      <span style="font-size:11px;flex:1">${r.name}</span>
+      ${r.ttp ? `<span class="cfg-badge dim" style="font-size:9px">${r.ttp}</span>` : ''}
+      ${match}
+      <span style="color:var(--dim);font-size:9px">▸</span>
+    </div>`;
+  }).join('') || `<div style="color:var(--dim);font-size:10px;padding:4px 0">No rules loaded</div>`;
+
+  return `<div class="node-agent" id="node-agent" onclick="toggleAgentRules(event)">
+    <div class="node-agent-header">
+      <span class="node-agent-title">GLORFINDEL</span>
+      ${dot}
+      <span style="color:var(--dim);font-size:10px">${watchLabel}</span>
+      <span style="color:var(--dim);font-size:10px;margin-left:auto" id="agent-expand-icon">▸ rules</span>
+    </div>
+    <div class="node-agent-stats">
+      <span>${moduleCount} modules</span>
+      <span>${rulesCount} rules</span>
+      <span>${assetsCount} assets</span>
+    </div>
+    <div class="agent-rules-panel ${_agentExpanded ? 'open' : ''}" id="agent-rules-panel">
+      ${ruleRows}
+    </div>
+  </div>`;
+}
+
+// ── Module nodes ───────────────────────────────────────────────────────────────
+
+function _renderModules(rules, detectBackends, recoverBackends, resources) {
+  // DETECT
+  const detectNodes = detectBackends.map(b => {
+    const bRules   = rules.filter(r => r.monitoring_backend_name === b.name);
+    const hasErr   = bRules.some(r => r.last_error);
+    const allPoll  = bRules.length && bRules.every(r => r.last_poll && !r.last_error);
+    const lastMatch = bRules.reduce((m, r) => r.last_match && r.last_match > (m||'') ? r.last_match : m, null);
+    const dot = hasErr ? `<span style="color:var(--red)">●</span>`
+              : allPoll ? `<span style="color:var(--green)">●</span>`
+              : `<span style="color:var(--dim)">●</span>`;
+    const errCls = hasErr ? 'state-error' : '';
+    return `<div class="node-backend detect ${errCls}" id="nb-${b.name}">
+      <div class="node-backend-name">${dot} ${b.name}</div>
+      <div class="node-backend-type">${b.type}</div>
+      <div class="node-backend-row"><span>${bRules.length} rules</span></div>
+      ${lastMatch ? `<div class="node-backend-row" style="color:var(--orange)">match ${_relTime(lastMatch)}</div>` : ''}
+      ${hasErr ? `<div class="node-backend-row" style="color:var(--red);font-size:9px">error</div>` : ''}
+    </div>`;
+  }).join('') || `<div style="color:var(--dim);font-size:10px">No monitoring backends</div>`;
+
+  // PROTECT (NSG implicit)
+  const isIsolated = resources.some(r => r.states?.some(s => s.type === 'isolated'));
+  const isBlocked  = resources.some(r => r.states?.some(s => s.type === 'blocked'));
+  const nsgDot  = isIsolated ? `<span style="color:var(--red)">●</span>`
+                : isBlocked  ? `<span style="color:var(--orange)">●</span>`
+                :               `<span style="color:var(--green)">●</span>`;
+  const nsgStatus = isIsolated
+    ? `<div class="node-backend-row" style="color:var(--red)">deny-all active</div>`
+    : isBlocked
+    ? `<div class="node-backend-row" style="color:var(--orange)">IP rules active</div>`
+    : `<div class="node-backend-row" style="color:var(--green)">clean</div>`;
+  const protectNode = `<div class="node-backend protect ${isIsolated ? 'state-error' : isBlocked ? 'state-warn' : ''}" id="nb-nsg">
+    <div class="node-backend-name">${nsgDot} nsg</div>
+    <div class="node-backend-type">network security</div>
+    ${nsgStatus}
+  </div>`;
+
+  // RECOVER
+  const recoverNodes = recoverBackends.map(b => {
+    const checks  = (_auditData?.audits || []).flatMap(a =>
+      (a.checks||[]).filter(c => c.action === 'restore_from_backup'));
+    const worst = checks.some(c => c.status === 'fail') ? 'fail'
+                : checks.some(c => c.status === 'warn') ? 'warn'
+                : checks.length ? 'ok' : 'unknown';
+    const dot = worst==='ok'   ? `<span style="color:var(--green)">●</span>`
+              : worst==='warn' ? `<span style="color:var(--orange)">●</span>`
+              : worst==='fail' ? `<span style="color:var(--red)">●</span>`
+              :                  `<span style="color:var(--dim)">●</span>`;
+    const statusRow = worst==='ok'
+      ? `<div class="node-backend-row" style="color:var(--green)">backup ok</div>`
+      : worst==='warn'
+      ? `<div class="node-backend-row" style="color:var(--orange)">backup stale</div>`
+      : worst==='fail'
+      ? `<div class="node-backend-row" style="color:var(--red)">backup missing</div>`
+      : `<div class="node-backend-row" style="color:var(--dim)">checking…</div>`;
+    return `<div class="node-backend recover ${worst==='fail'?'state-error':worst==='warn'?'state-warn':''}" id="nb-${b.name}">
+      <div class="node-backend-name">${dot} ${b.name}</div>
+      <div class="node-backend-type">${b.type.replace('azure_','')} vault</div>
+      ${statusRow}
+    </div>`;
+  }).join('') || `<div style="color:var(--dim);font-size:10px">No action backends</div>`;
+
+  return `<div class="topo-modules">
+    <div class="topo-module">
+      <div class="topo-module-label detect">DETECT</div>
+      <div class="topo-module-nodes">${detectNodes}</div>
+    </div>
+    <div class="topo-module">
+      <div class="topo-module-label protect">PROTECT</div>
+      <div class="topo-module-nodes">${protectNode}</div>
+    </div>
+    <div class="topo-module">
+      <div class="topo-module-label recover">RECOVER</div>
+      <div class="topo-module-nodes">${recoverNodes}</div>
+    </div>
+  </div>`;
+}
+
+// ── Asset nodes ────────────────────────────────────────────────────────────────
+
+function _renderAssetNode(resource, vmEscs, restoreByVm) {
+  const { resource_id, vm_name, states = [] } = resource;
+  const isIsolated  = states.some(s => s.type === 'isolated');
+  const isBlocked   = states.some(s => s.type === 'blocked');
+  const restoreInfo = restoreByVm[vm_name];
+  const myEscs      = vmEscs.filter(e =>
+    e.resource_id === resource_id || e.resource_id.split('/').pop() === vm_name);
+  const isExpanded  = _expandedVms.has(vm_name);
+
+  const stateClass = restoreInfo    ? 's-restoring'
+                   : (isIsolated && isBlocked) ? 's-both'
+                   : isIsolated     ? 's-isolated'
+                   : isBlocked      ? 's-blocked'
+                   : myEscs.length  ? 's-incident'
+                   : 's-clean';
+
+  const dot = restoreInfo   ? `<span style="color:var(--blue)">●</span>`
+            : isIsolated    ? `<span style="color:var(--red)">●</span>`
+            : isBlocked     ? `<span style="color:var(--orange)">●</span>`
+            : myEscs.length ? `<span style="color:var(--yellow)">●</span>`
+            :                 `<span style="color:var(--green)">●</span>`;
+
+  const stateBadges = [
+    restoreInfo ? `<span class="badge restoring" style="font-size:9px">🔄 RESTORING · ${restoreInfo.elapsed_label}</span>` : '',
+    ...states.map(s => s.type === 'isolated'
+      ? `<span class="badge isolated" style="font-size:9px">ISOLATED · ${age(s.since)}</span>`
+      : `<span class="badge blocked" style="font-size:9px">BLOCKED ${s.ip} · ${age(s.since)}</span>`)
+  ].filter(Boolean).join('');
+
+  const auditEntry = (_auditData?.audits || []).find(a => a.resource_id === resource_id);
+  const readiness  = auditEntry
+    ? ACTION_GROUPS.map(g => {
+        const st = _worstStatus(auditEntry.checks, g.actions);
+        const [ic, col] = st==='ok' ? ['✓','var(--green)'] : st==='warn' ? ['⚠','var(--orange)']
+                        : st==='fail' ? ['✗','var(--red)'] : ['—','var(--dim)'];
+        return `<span style="font-size:9px"><span style="color:${col}">${ic}</span> ${g.label}</span>`;
+      }).join('  ')
+    : '';
+
+  const cached = _actionsCache[vm_name];
+  const decisionHtml = (cached?.actions || []).slice(0, 2).map((a, idx) => {
+    const pct = a.confidence ? Math.round(a.confidence * 100) + '%' : '';
+    const hasDetail = !!a.full_reasoning;
+    return `<div class="dec-row ${hasDetail ? 'dec-clickable' : ''}"
+      ${hasDetail ? `onclick="event.stopPropagation();showReasoning('${vm_name}',${idx})"` : ''}>
+      <span class="dec-action">${actionLabel(a.action)}</span>
+      ${pct ? `<span class="dec-conf">${pct}</span>` : ''}
+      ${a.ttp ? `<span class="dec-ttp">${a.ttp}</span>` : ''}
+      ${hasDetail ? `<span style="color:var(--blue);font-size:10px;margin-left:auto">▸ reasoning</span>` : ''}
+    </div>`;
+  }).join('');
+
+  const actions = [];
+  if (isIsolated) actions.push(`<button class="action danger" onclick="event.stopPropagation();confirmRelease('${vm_name}')">↩️ Release</button>`);
+  if (isBlocked)  actions.push(`<button class="action danger" onclick="event.stopPropagation();confirmUnblock('${vm_name}')">↩️ Unblock</button>`);
+  if (isIsolated && isBlocked) actions.push(`<button class="action danger" onclick="event.stopPropagation();confirmReset('${vm_name}')">⟳ Reset</button>`);
+  if (!restoreInfo && myEscs.some(e => e.action === 'restore_from_backup'))
+    actions.push(`<button class="action primary" onclick="event.stopPropagation();confirmRestore('${vm_name}')">🔄 Restore</button>`);
+
+  const isClean = !isIsolated && !isBlocked && !restoreInfo && !myEscs.length;
+
+  const expandedBody = `
+    ${stateBadges ? `<div class="node-asset-states">${stateBadges}</div>` : ''}
+    ${decisionHtml ? `<div class="map-decision" style="margin-top:8px">${decisionHtml}</div>` : ''}
+    ${actions.length ? `<div class="node-asset-actions">${actions.join('')}</div>` : ''}
+    ${myEscs.length ? `<div class="vm-escalations" style="margin:8px 0 0;padding:8px 0 0;border-top:1px solid var(--border)">
+      ${myEscs.map(_renderEscItem).join('')}
+    </div>` : ''}`;
+
+  const compactBody = isClean ? '' : `
+    <div class="node-asset-states" style="margin-top:6px">${stateBadges}</div>
+    ${myEscs.length ? `<div style="margin-top:6px;font-size:10px;color:var(--orange)">🚨 ${myEscs.length} escalade${myEscs.length>1?'s':''}</div>` : ''}
+    ${actions.length ? `<div class="node-asset-actions">${actions.join('')}</div>` : ''}`;
+
+  return `<div class="node-asset ${stateClass} ${isExpanded ? 'expanded' : ''}"
+    id="asset-${vm_name}" onclick="toggleAsset('${vm_name}')">
+    <div class="node-asset-header">
+      ${dot}
+      <span class="node-asset-name">${vm_name}</span>
+      ${readiness ? `<span style="color:var(--dim);font-size:9px">${readiness}</span>` : ''}
+      <span style="color:var(--dim);font-size:9px;margin-left:6px">${isExpanded ? '▾' : '▸'}</span>
+    </div>
+    ${isExpanded ? expandedBody : compactBody}
+  </div>`;
+}
+
+// ── Topology edge drawing ──────────────────────────────────────────────────────
+
+function _drawTopologyEdges() {
+  const svg   = document.getElementById('topo-svg');
+  const graph = document.getElementById('topo-graph');
+  if (!svg || !graph) return;
+  const base = graph.getBoundingClientRect();
+
+  function pt(el, side) {
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    const x = r.left - base.left + r.width / 2;
+    return {
+      x,
+      top:    r.top    - base.top,
+      bottom: r.bottom - base.top,
+      left:   r.left   - base.left,
+      right:  r.right  - base.left,
+      width:  r.width,
+    };
+  }
+
+  function bezier(x1, y1, x2, y2, color, dash = '', width = 2) {
+    const cy = (y1 + y2) / 2;
+    return `<path d="M${x1|0},${y1|0} C${x1|0},${cy|0} ${x2|0},${cy|0} ${x2|0},${y2|0}"
+      fill="none" stroke="${color}" stroke-width="${width}" opacity="0.65"
+      ${dash ? `stroke-dasharray="${dash}"` : ''}/>`;
+  }
+
+  const rules          = _cfgData?.detection?.rules    || [];
+  const detectBackends = _cfgData?.monitoring_backends || [];
+  const recoverBackends= _cfgData?.action_backends     || [];
+  const { resources = [], escalations = [] } = _state;
+  const isIsolated = resources.some(r => r.states?.some(s => s.type === 'isolated'));
+  const isBlocked  = resources.some(r => r.states?.some(s => s.type === 'blocked'));
+
+  const agent = pt(document.getElementById('node-agent'));
+  if (!agent) return;
+
+  const lines = [`<defs>
+    <filter id="glow-r"><feGaussianBlur stdDeviation="2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    <filter id="glow-o"><feGaussianBlur stdDeviation="2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+  </defs>`];
+
+  // Agent → DETECT backends
+  detectBackends.forEach(b => {
+    const nb = pt(document.getElementById(`nb-${b.name}`));
+    if (!nb) return;
+    const bRules = rules.filter(r => r.monitoring_backend_name === b.name);
+    const hasErr = bRules.some(r => r.last_error);
+    lines.push(bezier(agent.x, agent.bottom, nb.x, nb.top,
+      hasErr ? 'var(--red)' : 'var(--blue)', hasErr ? '4,3' : ''));
+  });
+
+  // Agent → PROTECT (NSG)
+  const nbNsg = pt(document.getElementById('nb-nsg'));
+  if (nbNsg) {
+    const color = isIsolated ? 'var(--red)' : isBlocked ? 'var(--orange)' : 'var(--green)';
+    lines.push(bezier(agent.x, agent.bottom, nbNsg.x, nbNsg.top, color,
+      isIsolated ? '5,4' : ''));
+  }
+
+  // Agent → RECOVER backends
+  recoverBackends.forEach(b => {
+    const nb = pt(document.getElementById(`nb-${b.name}`));
+    if (!nb) return;
+    const checks = (_auditData?.audits || []).flatMap(a =>
+      (a.checks||[]).filter(c => c.action === 'restore_from_backup'));
+    const worst = checks.some(c => c.status==='fail') ? 'fail'
+                : checks.some(c => c.status==='warn') ? 'warn' : 'ok';
+    lines.push(bezier(agent.x, agent.bottom, nb.x, nb.top,
+      worst==='fail' ? 'var(--red)' : worst==='warn' ? 'var(--orange)' : 'var(--cyan)'));
+  });
+
+  // Modules → active assets (incident edges only — keep it sparse)
+  escalations.forEach(e => {
+    const vm    = e.resource_id.split('/').pop();
+    const asset = pt(document.getElementById(`asset-${vm}`));
+    if (!asset) return;
+    const color = e.action === 'restore_from_backup' ? 'var(--cyan)'
+                : e.escalation_type === 'verification_failed' ? 'var(--red)'
+                : 'var(--yellow)';
+
+    // find the relevant module node
+    const nb = e.action === 'restore_from_backup'
+      ? pt(document.getElementById(`nb-${recoverBackends[0]?.name}`))
+      : e.action === 'improve_detection'
+      ? pt(document.getElementById(`nb-${detectBackends[0]?.name}`))
+      : pt(document.getElementById('nb-nsg'));
+    if (nb) {
+      lines.push(bezier(nb.x, nb.bottom, asset.x, asset.top, color, '4,3', 1.5));
+    }
+  });
+
+  svg.innerHTML = lines.join('\n');
+}
 
 async function doApproveRule(proposalId, escId) {
   try {

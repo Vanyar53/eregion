@@ -907,17 +907,13 @@ function _escFooter(escs) {
 
 // ── Topology rendering ─────────────────────────────────────────────────────────
 
-let _expandedVms   = new Set();
-let _agentExpanded = false;
+let _expandedVms      = new Set();
+let _expandedBackends = new Set();
 
-function toggleAgentRules(evt) {
-  if (evt) evt.stopPropagation();
-  _agentExpanded = !_agentExpanded;
-  const panel = document.getElementById('agent-rules-panel');
-  const icon  = document.getElementById('agent-expand-icon');
-  if (panel) panel.classList.toggle('open', _agentExpanded);
-  if (icon)  icon.textContent = _agentExpanded ? '▾' : '▸';
-  requestAnimationFrame(_drawTopologyEdges);
+function toggleBackend(name) {
+  if (_expandedBackends.has(name)) _expandedBackends.delete(name);
+  else _expandedBackends.add(name);
+  renderInfra();
 }
 
 function toggleAsset(vmName) {
@@ -1297,6 +1293,16 @@ function renderInfra() {
     if (resourceMap.has(r.resource_id)) resourceMap.get(r.resource_id).states = r.states;
     else resourceMap.set(r.resource_id, r);
   });
+  // Ajouter les assets découverts (AssetRegistry) absents du resourceMap
+  discovered.forEach(d => {
+    if (d.resource_id && !resourceMap.has(d.resource_id))
+      resourceMap.set(d.resource_id, { resource_id: d.resource_id, vm_name: d.name, states: [] });
+    else if (!d.resource_id) {
+      const key = `discovered:${d.name}`;
+      if (![...resourceMap.values()].some(r => r.vm_name === d.name))
+        resourceMap.set(key, { resource_id: key, vm_name: d.name, states: [] });
+    }
+  });
   vmEscs.forEach(e => {
     if (!resourceMap.has(e.resource_id))
       resourceMap.set(e.resource_id, {
@@ -1371,39 +1377,19 @@ function renderIncidents() { renderInfra(); }
 // ── Agent node ─────────────────────────────────────────────────────────────────
 
 function _renderAgentNode(rules, detectBackends, recoverBackends, discovered) {
-  const rulesCount   = rules.length;
-  const assetsCount  = discovered.length;
-  const moduleCount  = detectBackends.length + recoverBackends.length + 1; // +1 for NSG
-  const hasErr   = rules.some(r => r.last_error);
-  const dot      = hasErr
+  const moduleCount = detectBackends.length + recoverBackends.length + 1;
+  const hasErr      = rules.some(r => r.last_error);
+  const dot         = hasErr
     ? `<span style="color:var(--red)" title="rule error">●</span>`
-    : `<span style="color:var(--green)" title="rules polling">●</span>`;
+    : `<span style="color:var(--green)" title="polling">●</span>`;
 
-  const ruleRows = rules.map(r => {
-    const dotColor = r.last_error ? 'var(--red)' : r.last_poll ? 'var(--green)' : 'var(--dim)';
-    const match = r.last_match ? `<span style="color:var(--orange);font-size:9px">${_relTime(r.last_match)}</span>` : '';
-    return `<div class="row rule-item" onclick="event.stopPropagation();showRuleDetail(${JSON.stringify(r)})" style="padding:3px 4px">
-      <span style="color:${dotColor};font-size:9px">●</span>
-      <span style="font-size:11px;flex:1">${r.name}</span>
-      ${r.ttp ? `<span class="cfg-badge dim" style="font-size:9px">${r.ttp}</span>` : ''}
-      ${match}
-      <span style="color:var(--dim);font-size:9px">▸</span>
-    </div>`;
-  }).join('') || `<div style="color:var(--dim);font-size:10px;padding:4px 0">No rules loaded</div>`;
-
-  return `<div class="node-agent" id="node-agent" onclick="toggleAgentRules(event)">
+  return `<div class="node-agent" id="node-agent">
     <div class="node-agent-header">
       <span class="node-agent-title">GLORFINDEL</span>
       ${dot}
-      <span style="color:var(--blue);font-size:10px;margin-left:auto;border:1px solid color-mix(in srgb,var(--blue) 40%,transparent);border-radius:3px;padding:1px 5px" id="agent-expand-icon">▸ rules</span>
     </div>
     <div class="node-agent-stats">
       <span>${moduleCount} modules</span>
-      <span>${rulesCount} rules</span>
-      <span>${assetsCount} assets</span>
-    </div>
-    <div class="agent-rules-panel ${_agentExpanded ? 'open' : ''}" id="agent-rules-panel">
-      ${ruleRows}
     </div>
   </div>`;
 }
@@ -1420,13 +1406,31 @@ function _renderModules(rules, detectBackends, recoverBackends, resources) {
     const dot = hasErr ? `<span style="color:var(--red)">●</span>`
               : allPoll ? `<span style="color:var(--green)">●</span>`
               : `<span style="color:var(--dim)">●</span>`;
-    const errCls = hasErr ? 'state-error' : '';
-    return `<div class="node-backend detect ${errCls}" id="nb-${b.name}">
+    const expandId  = `rules-${b.name.replace(/[^a-z0-9]/gi,'-')}`;
+    const isExpanded = _expandedBackends.has(b.name);
+    const ruleRows  = bRules.map(r => {
+      const dc = r.last_error ? 'var(--red)' : r.last_poll ? 'var(--green)' : 'var(--dim)';
+      const mt = r.last_match ? `<span style="color:var(--orange);font-size:9px;margin-left:auto">${_relTime(r.last_match)}</span>` : '';
+      return `<div class="row rule-item" onclick="event.stopPropagation();showRuleDetail(${JSON.stringify(r)})"
+        style="padding:3px 4px;font-size:10px">
+        <span style="color:${dc};font-size:9px">●</span>
+        <span style="flex:1">${r.name}</span>
+        ${r.ttp ? `<span style="color:var(--dim);font-size:9px">${r.ttp}</span>` : ''}
+        ${mt}
+        <span style="color:var(--dim);font-size:9px">▸</span>
+      </div>`;
+    }).join('');
+    return `<div class="node-backend detect" id="nb-${b.name}" style="cursor:pointer;max-width:240px"
+      onclick="event.stopPropagation();toggleBackend('${b.name}')">
       <div class="node-backend-name">${dot} ${b.name}</div>
       <div class="node-backend-type">${b.type}</div>
-      <div class="node-backend-row"><span>${bRules.length} rules</span></div>
-      ${lastMatch ? `<div class="node-backend-row" style="color:var(--orange)">match ${_relTime(lastMatch)}</div>` : ''}
-      ${hasErr ? `<div class="node-backend-row" style="color:var(--red);font-size:9px">error</div>` : ''}
+      <div class="node-backend-row" style="justify-content:space-between">
+        <span>${bRules.length} règle${bRules.length>1?'s':''}</span>
+        ${lastMatch ? `<span style="color:var(--orange);font-size:9px">match ${_relTime(lastMatch)}</span>` : ''}
+        <span style="color:var(--blue);font-size:9px">${isExpanded ? '▾' : '▸'}</span>
+      </div>
+      ${hasErr ? `<div class="node-backend-row" style="color:var(--red);font-size:9px">⚠ error</div>` : ''}
+      ${isExpanded ? `<div style="margin-top:6px;border-top:1px solid var(--border);padding-top:6px">${ruleRows}</div>` : ''}
     </div>`;
   }).join('') || `<div style="color:var(--dim);font-size:10px">No monitoring backends</div>`;
 

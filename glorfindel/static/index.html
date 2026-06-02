@@ -1430,21 +1430,24 @@ function _renderModules(rules, detectBackends, recoverBackends, resources) {
     </div>`;
   }).join('') || `<div style="color:var(--dim);font-size:10px">No monitoring backends</div>`;
 
-  // PROTECT (NSG implicit)
-  const isIsolated = resources.some(r => r.states?.some(s => s.type === 'isolated'));
-  const isBlocked  = resources.some(r => r.states?.some(s => s.type === 'blocked'));
-  const nsgDot  = isIsolated ? `<span style="color:var(--red)">●</span>`
-                : isBlocked  ? `<span style="color:var(--orange)">●</span>`
-                :               `<span style="color:var(--green)">●</span>`;
-  const nsgStatus = isIsolated
-    ? `<div class="node-backend-row" style="color:var(--red)">deny-all active</div>`
-    : isBlocked
-    ? `<div class="node-backend-row" style="color:var(--orange)">IP rules active</div>`
-    : `<div class="node-backend-row" style="color:var(--green)">clean</div>`;
-  const protectNode = `<div class="node-backend protect ${isIsolated ? 'state-error' : isBlocked ? 'state-warn' : ''}" id="nb-nsg">
-    <div class="node-backend-name">${nsgDot} nsg</div>
-    <div class="node-backend-type">network security</div>
-    ${nsgStatus}
+  // PROTECT — capacité de réaction du provider (pas un backend configuré)
+  const isIsolated  = resources.some(r => r.states?.some(s => s.type === 'isolated'));
+  const isBlocked   = resources.some(r => r.states?.some(s => s.type === 'blocked'));
+  const isolCount   = resources.filter(r => r.states?.some(s => s.type === 'isolated')).length;
+  const blockCount  = resources.reduce((n, r) =>
+    n + (r.states||[]).filter(s => s.type === 'blocked').length, 0);
+  const protectDot  = isIsolated ? `<span style="color:var(--red)">●</span>`
+                    : isBlocked  ? `<span style="color:var(--orange)">●</span>`
+                    :              `<span style="color:var(--green)">●</span>`;
+  const protectRows = [
+    isolCount ? `<div class="node-backend-row" style="color:var(--red)">${isolCount} isolation${isolCount>1?'s':''} active${isolCount>1?'s':''}</div>` : '',
+    blockCount ? `<div class="node-backend-row" style="color:var(--orange)">${blockCount} IP${blockCount>1?'s':''} bloquée${blockCount>1?'s':''}</div>` : '',
+    (!isIsolated && !isBlocked) ? `<div class="node-backend-row" style="color:var(--green)">aucune restriction</div>` : '',
+  ].filter(Boolean).join('');
+  const protectNode = `<div class="node-backend protect ${isIsolated ? 'state-error' : isBlocked ? 'state-warn' : ''}" id="module-protect">
+    <div class="node-backend-name">${protectDot} network control</div>
+    <div class="node-backend-type">cloud provider</div>
+    ${protectRows}
   </div>`;
 
   // RECOVER
@@ -1632,7 +1635,7 @@ function _drawTopologyEdges() {
   });
 
   // Agent → PROTECT (NSG)
-  const nbNsg = pt(document.getElementById('nb-nsg'));
+  const nbNsg = pt(document.getElementById('module-protect'));
   if (nbNsg) {
     const color = isIsolated ? 'var(--red)' : isBlocked ? 'var(--orange)' : 'var(--green)';
     lines.push(bezier(agent.x, agent.bottom, nbNsg.x, nbNsg.top, color,
@@ -1698,7 +1701,7 @@ function _drawTopologyEdges() {
       ? pt(document.getElementById(`nb-${recoverBackends[0]?.name}`))
       : e.action === 'improve_detection'
       ? pt(document.getElementById(`nb-${detectBackends[0]?.name}`))
-      : pt(document.getElementById('nb-nsg'));
+      : pt(document.getElementById('module-protect'));
     if (nb) lines.push(bezier(nb.x, nb.bottom, asset.x, asset.top, color, '4,3', 2, 0.7));
   });
 

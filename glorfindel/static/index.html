@@ -1343,6 +1343,24 @@ function renderInfra() {
         <div style="font-size:9px;font-weight:700;letter-spacing:1px;color:var(--dim);margin-bottom:8px">DETECTION RULES</div>
         ${detEscs.map(_renderEscItem).join('')}
       </div>` : ''}
+
+      <!-- Legend -->
+      <div style="margin-top:auto;padding-top:16px;border-top:1px solid var(--border);display:flex;flex-wrap:wrap;gap:12px;align-items:center">
+        <span style="font-size:9px;font-weight:700;letter-spacing:1px;color:var(--dim);flex-shrink:0">LÉGENDE</span>
+        <span style="font-size:9px;color:var(--dim)">Traits :</span>
+        <span style="font-size:10px;color:var(--blue)">━━ detect</span>
+        <span style="font-size:10px;color:var(--green)">━━ protect</span>
+        <span style="font-size:10px;color:var(--cyan)">━━ recover</span>
+        <span style="font-size:10px;color:var(--orange)">━━ bloqué</span>
+        <span style="font-size:10px;color:var(--red)">━━ isolé / erreur</span>
+        <span style="font-size:10px;color:var(--yellow);letter-spacing:2px">╌╌ incident actif</span>
+        <span style="font-size:9px;color:var(--dim);margin-left:4px">Assets :</span>
+        <span style="font-size:10px"><span style="color:var(--green)">●</span> <span style="color:var(--dim)">clean</span></span>
+        <span style="font-size:10px"><span style="color:var(--orange)">●</span> <span style="color:var(--dim)">bloqué</span></span>
+        <span style="font-size:10px"><span style="color:var(--red)">●</span> <span style="color:var(--dim)">isolé</span></span>
+        <span style="font-size:10px"><span style="color:var(--blue)">●</span> <span style="color:var(--dim)">restauration</span></span>
+        <span style="font-size:10px"><span style="color:var(--yellow)">●</span> <span style="color:var(--dim)">escalade</span></span>
+      </div>
     </div>`;
 
   requestAnimationFrame(_drawTopologyEdges);

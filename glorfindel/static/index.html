@@ -328,7 +328,8 @@
   }
   .esc-action-label { font-weight: 700; font-size: 12px; color: var(--orange); flex: 1; }
   .esc-context { color: var(--dim); font-size: 10px; margin-bottom: 4px; }
-  .esc-reason  { color: var(--dim); font-size: 11px; line-height: 1.5; margin-bottom: 4px; }
+  .esc-reason  { color: var(--dim); font-size: 11px; line-height: 1.5; margin-bottom: 4px;
+                 display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
   .esc-steps { margin-top: 6px; border-left: 2px solid var(--border); padding-left: 8px; display: flex; flex-direction: column; gap: 3px; }
   .esc-step  { color: var(--dim); font-size: 10px; line-height: 1.5; }
   .esc-query { background: var(--bg2); border-left: 2px solid var(--cyan); padding: 8px;
@@ -874,9 +875,6 @@ async function runScenario(name) {
 function _renderEscItem(e) {
   const label = actionLabel(e.action);
   const ctx   = [e.ttp, e.severity, escLabel(e.escalation_type)].filter(Boolean).join(' · ');
-  const steps = (e.suggested_steps || []).slice(0, 3);
-  const stepsHtml = steps.length
-    ? `<div class="esc-steps">${steps.map(s => `<div class="esc-step">• ${s}</div>`).join('')}</div>` : '';
   const escId = e.id;
   const isRule = e.action === 'improve_detection' && e.proposal_id;
   const queryHtml = isRule && e.proposed_query
@@ -893,7 +891,7 @@ function _renderEscItem(e) {
     </div>
     ${ctx ? `<div class="esc-context">${ctx}</div>` : ''}
     <div class="esc-reason">${e.reason}</div>
-    ${queryHtml}${stepsHtml}
+    ${queryHtml}
   </div>`;
 }
 
@@ -1310,10 +1308,12 @@ function renderInfra() {
     }
   });
   vmEscs.forEach(e => {
-    if (!resourceMap.has(e.resource_id))
+    const vmName = e.resource_id.split('/').pop();
+    const exists = [...resourceMap.values()].some(r => r.vm_name === vmName);
+    if (!exists)
       resourceMap.set(e.resource_id, {
         resource_id: e.resource_id,
-        vm_name: e.resource_id.split('/').pop(), states: [] });
+        vm_name: vmName, states: [] });
   });
 
   // Auto-expand VMs with active incidents, unless user explicitly collapsed them

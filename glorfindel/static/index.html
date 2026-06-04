@@ -909,7 +909,7 @@ function _renderEscGroup(group) {
   const label = actionLabel(e.action);
   const count = group.length;
   const ctx   = [e.ttp, e.severity, escLabel(e.escalation_type)].filter(Boolean).join(' · ');
-  const ids   = JSON.stringify(group.map(g => g.id));
+  const ids   = group.map(g => g.id).join(','); // CSV — safe in onclick attrs, no quotes
   const isRule = e.action === 'improve_detection' && e.proposal_id;
   const queryHtml = isRule && e.proposed_query
     ? `<pre class="esc-query">${e.proposed_query.trim()}</pre>` : '';
@@ -925,9 +925,9 @@ function _renderEscGroup(group) {
   const isRestore = e.action === 'restore_from_backup';
   const actionBtns = isRestore
     ? `<button class="action primary" onclick="event.stopPropagation();confirmRestore('${vmName}')" style="font-size:9px;padding:2px 7px">🔄 Restore</button>
-       <button class="action" onclick="event.stopPropagation();doAckAll(${ids})" style="font-size:9px;padding:2px 7px">✓ Ack</button>
+       <button class="action" onclick="event.stopPropagation();doAckAll('${ids}')" style="font-size:9px;padding:2px 7px">✓ Ack</button>
        <button class="action" onclick="event.stopPropagation();openCommandModal('${e.id}')" style="font-size:9px;padding:2px 7px">📋 Cmd</button>`
-    : `<button class="action" onclick="event.stopPropagation();doAckAll(${ids})" style="font-size:9px;padding:2px 7px">✓ Ack</button>
+    : `<button class="action" onclick="event.stopPropagation();doAckAll('${ids}')" style="font-size:9px;padding:2px 7px">✓ Ack</button>
        <button class="action" onclick="event.stopPropagation();openCommandModal('${e.id}')" style="font-size:9px;padding:2px 7px">📋 Cmd</button>
        ${ruleButtons}`;
   const ctxParts = [e.ttp, pct, e.severity, escLabel(e.escalation_type)].filter(Boolean).join(' · ');
@@ -944,6 +944,7 @@ function _renderEscGroup(group) {
 }
 
 async function doAckAll(ids) {
+  if (typeof ids === 'string') ids = ids.split(',').filter(Boolean);
   try {
     await Promise.all(ids.map(id => fetch(`/api/action/ack/${id}`, { method: 'POST' })));
     toast(`✓ Acknowledged (${ids.length})`);
@@ -2309,7 +2310,7 @@ function showEscModal(vmName) {
   const bodyEl = document.getElementById('modal-body');
   bodyEl.innerHTML = groups.map(group => {
     const e     = group[0];
-    const ids   = JSON.stringify(group.map(g => g.id));
+    const ids   = group.map(g => g.id).join(','); // CSV — safe in onclick attrs, no quotes
     const count = group.length;
     const label = actionLabel(e.action);
     const ctx   = [e.ttp, e.severity, escLabel(e.escalation_type)].filter(Boolean).join(' · ');
@@ -2334,7 +2335,7 @@ function showEscModal(vmName) {
         <span style="color:var(--orange);font-weight:700;font-size:12px">🚨 ${label}</span>
         ${countBadge}
         <span style="margin-left:auto;display:flex;gap:6px">
-          <button class="action" onclick="doAckAll(${ids});closeModal()">✓ Ack</button>
+          <button class="action" onclick="doAckAll('${ids}');closeModal()">✓ Ack</button>
           <button class="action" onclick="openCommandModal('${e.id}')">📋 Cmd</button>
           ${ruleButtons}
         </span>

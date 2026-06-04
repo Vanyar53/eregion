@@ -426,8 +426,14 @@ async def audit_all() -> dict:
     connector = AzureConnector(dry_run=False)
 
     # Vault name: from glorfindel-config.yaml action_backends (source of truth)
-    rsv = glorfindel_cfg.backup_vault()
-    vault = rsv.vault_name if rsv and rsv.vault_name else os.environ.get("GLORFINDEL_BACKUP_VAULT", "rsv-annatar")
+    try:
+        from glorfindel.config import load_glorfindel_config
+        _cfg = load_glorfindel_config()
+        rsv = _cfg.backup_vault()
+        vault = rsv.vault_name if rsv and rsv.vault_name else os.environ.get("GLORFINDEL_BACKUP_VAULT", "rsv-annatar")
+    except Exception:
+        vault = os.environ.get("GLORFINDEL_BACKUP_VAULT", "rsv-annatar")
+        _cfg = None
 
     # VM targets: discovered dynamically via Heartbeat
     from glorfindel.discovery import get_registry
@@ -436,7 +442,7 @@ async def audit_all() -> dict:
     if not targets:
         # Legacy fallback: rules with inline resource_id
         from glorfindel.detection_rules import load_config
-        cfg = load_config(rp, glorfindel_cfg=glorfindel_cfg)
+        cfg = load_config(rp, glorfindel_cfg=_cfg)
         targets = [
             (r.resource_id, r.asset_name or r.resource_id.split("/")[-1])
             for r in cfg.rules

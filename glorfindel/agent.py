@@ -624,14 +624,17 @@ def decide(state: GlorfindelState, *, model: str) -> GlorfindelState:
     tool_call = response.choices[0].message.tool_calls[0]
     d = json.loads(tool_call.function.arguments)
 
-    # Confidence gate: override LLM if confidence below threshold on autonomous actions
-    confidence = d.get("confidence")
+    # Confidence gate: override LLM if confidence below threshold on autonomous actions.
+    # Normalize to float first so all downstream d["confidence"] accesses are safe.
+    raw_conf = d.get("confidence")
+    confidence = float(raw_conf) if raw_conf is not None else 0.0
+    d["confidence"] = confidence
     _threshold = float(os.environ.get("GLORFINDEL_CONFIDENCE_THRESHOLD", "0.7"))
     if not d["escalate"] and d["action"] in AUTONOMOUS_ACTIONS:
-        if confidence is None or confidence < _threshold:
+        if raw_conf is None or confidence < _threshold:
             d["escalate"] = True
             d["escalation_reason"] = (
-                f"Low confidence ({f'{confidence:.0%}' if confidence is not None else 'unknown'}) "
+                f"Low confidence ({'unknown' if raw_conf is None else f'{confidence:.0%}'}) "
                 "— human review required"
             )
 

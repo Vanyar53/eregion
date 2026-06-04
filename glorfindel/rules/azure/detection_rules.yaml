@@ -61,7 +61,7 @@ rules:
       Syslog
       | where Facility == "auth"
       | where SyslogMessage has "Failed password" or SyslogMessage has "Invalid user"
-      | where TimeGenerated > ago(5m)
+      | where TimeGenerated > ago(10m)
       | extend SourceIP = extract(@"from (\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})", 1, SyslogMessage)
       | where isnotempty(SourceIP)
       | where not(SourceIP startswith "10.") and not(SourceIP startswith "192.168.") and not(SourceIP startswith "127.")
@@ -79,7 +79,7 @@ rules:
     query: |
       Syslog
       | where Facility == "auth"
-      | where TimeGenerated > ago(5m)
+      | where TimeGenerated > ago(10m)
       | where SyslogMessage has "sudo"
             and SyslogMessage has "USER=root"
             and SyslogMessage has "COMMAND="

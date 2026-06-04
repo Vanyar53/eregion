@@ -914,8 +914,7 @@ function _renderEscGroup(group) {
   // proposed rule: Approve/Reject cover the decision — Ack is redundant
   const ruleButtons = isRule ? `
     <button class="action ok" onclick="event.stopPropagation();doApproveRule('${e.proposal_id}','${e.id}')" style="font-size:9px;padding:2px 7px">✓ Approve</button>
-    <button class="action" onclick="event.stopPropagation();doRejectRule('${e.proposal_id}','${e.id}')" style="font-size:9px;padding:2px 7px;color:var(--red)">✗ Reject</button>
-    <button class="action" onclick="event.stopPropagation();doAckAll('${ids}')" style="font-size:9px;padding:2px 7px">✓ Ack</button>` : '';
+    <button class="action" onclick="event.stopPropagation();doRejectRule('${e.proposal_id}','${e.id}')" style="font-size:9px;padding:2px 7px;color:var(--red)">✗ Reject</button>` : '';
   const vmName = e.resource_id.split('/').pop();
   const pct    = e.confidence ? Math.round(e.confidence * 100) + '%' : '';
   const countBadge = count > 1
@@ -2330,8 +2329,7 @@ function showEscModal(vmName) {
                       color:var(--purple)">×${count}</span>` : '';
     const modalBtns = isRule
       ? `<button class="action" style="color:var(--green)" onclick="doApproveRule('${pid}','${e.id}');closeModal()">✓ Approve</button>
-         <button class="action" style="color:var(--red)"   onclick="doRejectRule('${pid}','${e.id}');closeModal()">✗ Reject</button>
-         <button class="action" onclick="doAckAll('${ids}');closeModal()">✓ Ack</button>`
+         <button class="action" style="color:var(--red)"   onclick="doRejectRule('${pid}','${e.id}');closeModal()">✗ Reject</button>`
       : `<button class="action" onclick="doAckAll('${ids}');closeModal()">✓ Ack</button>
          <button class="action" onclick="openCommandModal('${e.id}')">📋 Cmd</button>`;
     return `<div style="border-left:2px solid var(--purple);padding:10px;margin-bottom:10px;background:color-mix(in srgb,var(--purple) 4%,var(--bg1))">

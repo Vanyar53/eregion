@@ -555,6 +555,13 @@
   .node-asset-states { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 6px; }
   .node-asset-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
 
+  /* Drag-and-drop cards */
+  .node-asset { transition: opacity 0.15s; }
+  .node-asset.dragging   { opacity: 0.35; }
+  .node-asset.drag-over  { box-shadow: 0 0 0 2px var(--purple), 0 0 12px color-mix(in srgb, var(--purple) 35%, transparent); }
+  .node-asset-header     { cursor: grab; }
+  .node-asset-header:active { cursor: grabbing; }
+
   /* Scrollbar ── */
   ::-webkit-scrollbar { width: 6px; }
   ::-webkit-scrollbar-track { background: transparent; }
@@ -952,6 +959,29 @@ let _expandedVms      = new Set();
 let _collapsedVms     = new Set(); // user explicitly collapsed — immune to auto-expand
 let _expandedBackends = new Set();
 let _rulesCache       = [];   // flat array, index used in onclick to avoid JSON.stringify in HTML
+let _cardOrder        = JSON.parse(localStorage.getItem('glorfindel_card_order') || '[]');
+
+function _sortByOrder(resources) {
+  return [...resources].sort((a, b) => {
+    const ai = _cardOrder.indexOf(a.vm_name);
+    const bi = _cardOrder.indexOf(b.vm_name);
+    if (ai === -1 && bi === -1) return 0;
+    if (ai === -1) return 1;
+    if (bi === -1) return -1;
+    return ai - bi;
+  });
+}
+
+function swapCards(targetName, sourceName) {
+  if (!sourceName || sourceName === targetName) return;
+  if (!_cardOrder.includes(sourceName)) _cardOrder.push(sourceName);
+  if (!_cardOrder.includes(targetName)) _cardOrder.push(targetName);
+  const si = _cardOrder.indexOf(sourceName);
+  const ti = _cardOrder.indexOf(targetName);
+  [_cardOrder[si], _cardOrder[ti]] = [_cardOrder[ti], _cardOrder[si]];
+  localStorage.setItem('glorfindel_card_order', JSON.stringify(_cardOrder));
+  renderInfra();
+}
 
 function toggleBackend(name) {
   if (_expandedBackends.has(name)) _expandedBackends.delete(name);
@@ -1390,7 +1420,7 @@ function renderInfra() {
 
       <!-- Layer 3 — Assets -->
       <div class="topo-assets" id="topo-assets">
-        ${[...resourceMap.values()].map(r =>
+        ${_sortByOrder([...resourceMap.values()]).map(r =>
             _renderAssetNode(r, vmEscs, detEscs, restoreByVm)).join('')}
         ${resourceMap.size === 0 ? `<div style="color:var(--dim);font-size:11px;padding:24px;text-align:center;width:100%">
             No assets discovered — check monitoring backends</div>` : ''}
@@ -1712,8 +1742,14 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm) {
     <div class="node-asset-states" style="margin-top:6px">${stateBadges}</div>`;
 
   return `<div class="node-asset ${stateClass} ${isExpanded ? 'expanded' : ''}"
-    id="asset-${vm_name}">
-    <div class="node-asset-header" style="cursor:pointer" onclick="toggleAsset('${vm_name}')">
+    id="asset-${vm_name}"
+    draggable="true"
+    ondragstart="event.dataTransfer.setData('text/plain','${vm_name}');event.currentTarget.classList.add('dragging')"
+    ondragend="event.currentTarget.classList.remove('dragging');document.querySelectorAll('.drag-over').forEach(e=>e.classList.remove('drag-over'))"
+    ondragover="event.preventDefault();event.currentTarget.classList.add('drag-over')"
+    ondragleave="event.currentTarget.classList.remove('drag-over')"
+    ondrop="event.preventDefault();event.currentTarget.classList.remove('drag-over');swapCards('${vm_name}',event.dataTransfer.getData('text/plain'))">
+    <div class="node-asset-header" onclick="toggleAsset('${vm_name}')">
       ${dot}
       <span class="node-asset-name">${vm_name}</span>
       ${readiness ? `<span style="color:var(--dim);font-size:9px">${readiness}</span>` : ''}

@@ -1260,14 +1260,15 @@ async function refreshActionsData() {
       return !cached || (Date.now() - cached.fetchedAt > 30000);
     });
 
-  for (const vm of toFetch) {
+  if (!toFetch.length) return;
+  await Promise.all(toFetch.map(async vm => {
     try {
       const r = await fetch(`/api/actions/${vm}?limit=15`);
       const d = await r.json();
       _actionsCache[vm] = { actions: d.actions || [], fetchedAt: Date.now() };
     } catch (e) {}
-  }
-  if (toFetch.length) renderInfra();
+  }));
+  renderInfra();
 }
 
 function renderInfra() {
@@ -1570,11 +1571,13 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm) {
     : '';
 
   const cached = _actionsCache[vm_name];
+  // Show ▸ reasoning only for clean VMs — isolated/blocked badge click handles it for active states
+  const stateActive = isIsolated || isBlocked;
   const decisionHtml = (cached?.actions || [])
     .filter(a => a.action !== 'improve_detection')
     .slice(0, 2).map((a, idx) => {
     const pct = a.confidence ? Math.round(a.confidence * 100) + '%' : '';
-    const hasDetail = !!a.full_reasoning;
+    const hasDetail = !!a.full_reasoning && !stateActive;
     return `<div class="dec-row ${hasDetail ? 'dec-clickable' : ''}"
       ${hasDetail ? `onclick="event.stopPropagation();showReasoning('${vm_name}',${idx})"` : ''}>
       <span class="dec-action">${actionLabel(a.action)}</span>
@@ -1936,7 +1939,7 @@ async function refreshState() {
     const r = await fetch('/api/state');
     _state = await r.json();
     renderInfra();
-    refreshActionsData();  // fetch LLM reasoning for active VMs (cached, no-op if fresh)
+    await refreshActionsData();  // parallel fetch, re-renders when ready
   } catch (e) {}
 }
 
@@ -2097,8 +2100,8 @@ async function showIsolationModal(vmName) {
   if (idx >= 0) { showReasoning(vmName, idx); return; }
 
   // Cache stale or not yet populated — force-fetch then retry
-  document.getElementById('modal-title').textContent = 'Décision — ' + vmName;
-  document.getElementById('modal-body').textContent = 'Chargement du raisonnement…';
+  document.getElementById('modal-title').textContent = 'Decision — ' + vmName;
+  document.getElementById('modal-body').textContent = 'Loading reasoning…';
   document.getElementById('modal-cmd').style.display = 'none';
   const btn = document.getElementById('modal-confirm');
   btn.textContent = 'Close';
@@ -2117,7 +2120,7 @@ async function showIsolationModal(vmName) {
 
   // Still nothing
   document.getElementById('modal-body').textContent =
-    'Raisonnement non encore disponible.\nLe cycle de remédiation est peut-être encore en cours — réessayez dans quelques secondes.';
+    'No reasoning available yet.\nThe remediation cycle may still be running — retry in a few seconds.';
 }
 
 function showEscModal(vmName) {

@@ -543,9 +543,8 @@
   .node-asset.s-both      { border-color: var(--red);    background: color-mix(in srgb, var(--red)    6%, var(--bg1)); }
   .node-asset.s-restoring { border-color: var(--blue);   background: color-mix(in srgb, var(--blue)   5%, var(--bg1)); animation: pulse 2s infinite; }
   .node-asset.s-incident  { border: 2px solid var(--purple); background: color-mix(in srgb, var(--purple) 6%, var(--bg1)); box-shadow: 0 0 8px color-mix(in srgb, var(--purple) 20%, transparent); }
-  .node-asset.expanded    { cursor: default; }
-  .node-asset:not(.expanded):hover { box-shadow: 0 0 0 1px var(--dim); }
   .node-asset-header { display: flex; align-items: center; gap: 6px; }
+  .node-asset-header:hover { opacity: 0.85; }
   .node-asset-name   { font-weight: 700; font-size: 12px; flex: 1; }
   .node-asset-states { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 6px; }
   .node-asset-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
@@ -908,6 +907,7 @@ function _escFooter(escs) {
 // ── Topology rendering ─────────────────────────────────────────────────────────
 
 let _expandedVms      = new Set();
+let _collapsedVms     = new Set(); // user explicitly collapsed — immune to auto-expand
 let _expandedBackends = new Set();
 let _rulesCache       = [];   // flat array, index used in onclick to avoid JSON.stringify in HTML
 
@@ -918,8 +918,13 @@ function toggleBackend(name) {
 }
 
 function toggleAsset(vmName) {
-  if (_expandedVms.has(vmName)) _expandedVms.delete(vmName);
-  else _expandedVms.add(vmName);
+  if (_expandedVms.has(vmName)) {
+    _expandedVms.delete(vmName);
+    _collapsedVms.add(vmName);
+  } else {
+    _expandedVms.add(vmName);
+    _collapsedVms.delete(vmName);
+  }
   renderInfra();
 }
 
@@ -1311,12 +1316,14 @@ function renderInfra() {
         vm_name: e.resource_id.split('/').pop(), states: [] });
   });
 
-  // Auto-expand VMs with active incidents
+  // Auto-expand VMs with active incidents, unless user explicitly collapsed them
+  // When incident clears, reset the collapsed preference so next incident re-expands
   [...resourceMap.values()].forEach(r => {
     const hasIncident = (r.states||[]).length > 0
       || vmEscs.some(e => e.resource_id === r.resource_id
            || e.resource_id.split('/').pop() === r.vm_name);
-    if (hasIncident) _expandedVms.add(r.vm_name);
+    if (hasIncident && !_collapsedVms.has(r.vm_name)) _expandedVms.add(r.vm_name);
+    if (!hasIncident) { _collapsedVms.delete(r.vm_name); _expandedVms.delete(r.vm_name); }
   });
 
   list.innerHTML = `
@@ -1610,8 +1617,8 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm) {
     ${actions.length ? `<div class="node-asset-actions">${actions.join('')}</div>` : ''}`;
 
   return `<div class="node-asset ${stateClass} ${isExpanded ? 'expanded' : ''}"
-    id="asset-${vm_name}" onclick="toggleAsset('${vm_name}')">
-    <div class="node-asset-header">
+    id="asset-${vm_name}">
+    <div class="node-asset-header" style="cursor:pointer" onclick="toggleAsset('${vm_name}')">
       ${dot}
       <span class="node-asset-name">${vm_name}</span>
       ${readiness ? `<span style="color:var(--dim);font-size:9px">${readiness}</span>` : ''}

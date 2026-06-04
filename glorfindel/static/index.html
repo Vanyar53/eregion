@@ -1344,11 +1344,6 @@ function renderInfra() {
             No assets discovered — check monitoring backends</div>` : ''}
       </div>
 
-      <!-- Detection rule escalations -->
-      ${detEscs.length ? `<div style="padding:12px 0 0">
-        <div style="font-size:9px;font-weight:700;letter-spacing:1px;color:var(--dim);margin-bottom:8px">DETECTION RULES</div>
-        ${detEscs.map(_renderEscItem).join('')}
-      </div>` : ''}
 
       <!-- Legend -->
       <div style="margin-top:auto;padding-top:16px;border-top:1px solid var(--border);display:flex;flex-wrap:wrap;gap:12px;align-items:center">
@@ -1546,13 +1541,22 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm) {
             : myEscs.length ? `<span style="color:var(--purple)">●</span>`
             :                 `<span style="color:var(--green)">●</span>`;
 
+  const escBadge = totalEscs
+    ? `<span onclick="event.stopPropagation();showEscModal('${vm_name}')"
+        style="font-size:9px;font-weight:700;padding:2px 7px;border-radius:4px;cursor:pointer;
+               background:color-mix(in srgb,var(--purple) 18%,transparent);
+               color:var(--purple);border:1px solid color-mix(in srgb,var(--purple) 45%,transparent)">
+        ${totalEscs} escalade${totalEscs > 1 ? 's' : ''} ▸</span>`
+    : '';
+
   const stateBadges = [
     restoreInfo ? `<span class="badge restoring" style="font-size:9px">🔄 RESTORING · ${restoreInfo.elapsed_label}</span>` : '',
     ...states.map(s => s.type === 'isolated'
       ? `<span class="badge isolated" style="font-size:9px;cursor:pointer"
            onclick="event.stopPropagation();showIsolationModal('${vm_name}')">ISOLATED · ${age(s.since)}</span>`
       : `<span class="badge blocked" style="font-size:9px;cursor:pointer"
-           onclick="event.stopPropagation();showIsolationModal('${vm_name}')">BLOCKED ${s.ip} · ${age(s.since)}</span>`)
+           onclick="event.stopPropagation();showIsolationModal('${vm_name}')">BLOCKED ${s.ip} · ${age(s.since)}</span>`),
+    escBadge,
   ].filter(Boolean).join('');
 
   const auditEntry = (_auditData?.audits || []).find(a => a.resource_id === resource_id);
@@ -1607,8 +1611,6 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm) {
     <div class="node-asset-header">
       ${dot}
       <span class="node-asset-name">${vm_name}</span>
-      ${totalEscs ? `<span style="background:color-mix(in srgb,var(--purple) 20%,transparent);color:var(--purple);border:1px solid color-mix(in srgb,var(--purple) 50%,transparent);border-radius:4px;font-size:9px;font-weight:700;padding:1px 5px;flex-shrink:0;cursor:pointer"
-        onclick="event.stopPropagation();showEscModal('${vm_name}')">🚨 ${totalEscs}</span>` : ''}
       ${readiness ? `<span style="color:var(--dim);font-size:9px">${readiness}</span>` : ''}
       <span style="color:var(--dim);font-size:9px;margin-left:6px">${isExpanded ? '▾' : '▸'}</span>
     </div>

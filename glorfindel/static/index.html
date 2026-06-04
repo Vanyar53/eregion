@@ -1542,21 +1542,23 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm) {
             : myEscs.length ? `<span style="color:var(--purple)">●</span>`
             :                 `<span style="color:var(--green)">●</span>`;
 
+  // Badges are clickable in compact mode only — expanded mode uses dec-row / esc-items
   const escBadge = totalEscs
-    ? `<span onclick="event.stopPropagation();showEscModal('${vm_name}')"
-        style="font-size:9px;font-weight:700;padding:2px 7px;border-radius:4px;cursor:pointer;
+    ? `<span ${!isExpanded ? `onclick="event.stopPropagation();showEscModal('${vm_name}')"` : ''}
+        style="font-size:9px;font-weight:700;padding:2px 7px;border-radius:4px;
+               ${!isExpanded ? 'cursor:pointer;' : ''}
                background:color-mix(in srgb,var(--purple) 18%,transparent);
                color:var(--purple);border:1px solid color-mix(in srgb,var(--purple) 45%,transparent)">
-        ${totalEscs} escalation${totalEscs > 1 ? 's' : ''} ▸</span>`
+        ${totalEscs} escalation${totalEscs > 1 ? 's' : ''}${!isExpanded ? ' ▸' : ''}</span>`
     : '';
 
   const stateBadges = [
     restoreInfo ? `<span class="badge restoring" style="font-size:9px">🔄 RESTORING · ${restoreInfo.elapsed_label}</span>` : '',
     ...states.map(s => s.type === 'isolated'
-      ? `<span class="badge isolated" style="font-size:9px;cursor:pointer"
-           onclick="event.stopPropagation();showIsolationModal('${vm_name}')">ISOLATED · ${age(s.since)}</span>`
-      : `<span class="badge blocked" style="font-size:9px;cursor:pointer"
-           onclick="event.stopPropagation();showIsolationModal('${vm_name}')">BLOCKED ${s.ip} · ${age(s.since)}</span>`),
+      ? `<span class="badge isolated" style="font-size:9px${!isExpanded ? ';cursor:pointer' : ''}"
+           ${!isExpanded ? `onclick="event.stopPropagation();showIsolationModal('${vm_name}')"` : ''}>ISOLATED · ${age(s.since)}</span>`
+      : `<span class="badge blocked" style="font-size:9px${!isExpanded ? ';cursor:pointer' : ''}"
+           ${!isExpanded ? `onclick="event.stopPropagation();showIsolationModal('${vm_name}')"` : ''}>BLOCKED ${s.ip} · ${age(s.since)}</span>`),
     escBadge,
   ].filter(Boolean).join('');
 
@@ -1571,13 +1573,12 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm) {
     : '';
 
   const cached = _actionsCache[vm_name];
-  // Show ▸ reasoning only for clean VMs — isolated/blocked badge click handles it for active states
-  const stateActive = isIsolated || isBlocked;
+  // dec-row is always the click target for reasoning in expanded mode
   const decisionHtml = (cached?.actions || [])
     .filter(a => a.action !== 'improve_detection')
     .slice(0, 2).map((a, idx) => {
     const pct = a.confidence ? Math.round(a.confidence * 100) + '%' : '';
-    const hasDetail = !!a.full_reasoning && !stateActive;
+    const hasDetail = !!a.full_reasoning;
     return `<div class="dec-row ${hasDetail ? 'dec-clickable' : ''}"
       ${hasDetail ? `onclick="event.stopPropagation();showReasoning('${vm_name}',${idx})"` : ''}>
       <span class="dec-action">${actionLabel(a.action)}</span>
@@ -1606,7 +1607,6 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm) {
 
   const compactBody = isClean ? '' : `
     <div class="node-asset-states" style="margin-top:6px">${stateBadges}</div>
-    ${myEscs.length ? `<div style="margin-top:6px;font-size:10px;color:var(--orange)">🚨 ${myEscs.length} escalation${myEscs.length>1?'s':''}</div>` : ''}
     ${actions.length ? `<div class="node-asset-actions">${actions.join('')}</div>` : ''}`;
 
   return `<div class="node-asset ${stateClass} ${isExpanded ? 'expanded' : ''}"

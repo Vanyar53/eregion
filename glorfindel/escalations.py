@@ -51,6 +51,7 @@ def record(
     escalation_type already exists, return its id without writing a new one.
     Prevents duplicate cards when RulePoller fires on consecutive polls.
     """
+    rid_lower = resource_id.lower()
     if _STORE.exists():
         for line in _STORE.read_text().splitlines():
             if not line.strip():
@@ -59,7 +60,7 @@ def record(
                 e = json.loads(line)
                 if (
                     e.get("status") == "pending"
-                    and e.get("resource_id") == resource_id
+                    and e.get("resource_id", "").lower() == rid_lower
                     and e.get("action") == action
                     and e.get("escalation_type") == escalation_type
                 ):
@@ -107,9 +108,14 @@ def resolve(escalation_id: str) -> None:
 
 
 def resolve_by_resource(resource_id: str, action: str) -> int:
-    """Resolve all pending escalations matching resource_id + action."""
+    """Resolve all pending escalations matching resource_id + action.
+
+    resource_id comparison is case-insensitive — Azure ARM IDs are
+    case-insensitive but Python string equality is not.
+    """
     if not _STORE.exists():
         return 0
+    rid_lower = resource_id.lower()
     lines = _STORE.read_text().splitlines()
     updated = []
     count = 0
@@ -118,7 +124,7 @@ def resolve_by_resource(resource_id: str, action: str) -> int:
         e = json.loads(line)
         if (
             e["status"] == "pending"
-            and e["resource_id"] == resource_id
+            and e.get("resource_id", "").lower() == rid_lower
             and e["action"] == action
         ):
             e["status"] = "resolved"

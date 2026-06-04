@@ -2169,31 +2169,41 @@ function showEscModal(vmName) {
     e.resource_id === vmName);
   if (!escs.length) { toast('No active escalations for ' + vmName); return; }
 
-  document.getElementById('modal-title').textContent = `Escalations — ${vmName} (${escs.length})`;
+  const groups = _groupEscs(escs);
+  document.getElementById('modal-title').textContent =
+    `Escalations — ${vmName} (${groups.length}${groups.length < escs.length ? `, ${escs.length} total` : ''})`;
   document.getElementById('modal-cmd').style.display = 'none';
   document.getElementById('modal-cancel').style.display = 'none';
 
   const bodyEl = document.getElementById('modal-body');
-  bodyEl.innerHTML = escs.map(e => {
-    const label  = actionLabel(e.action);
-    const ctx    = [e.ttp, e.severity, escLabel(e.escalation_type)].filter(Boolean).join(' · ');
-    const steps  = (e.suggested_steps || []).slice(0, 4)
+  bodyEl.innerHTML = groups.map(group => {
+    const e     = group[0];
+    const ids   = JSON.stringify(group.map(g => g.id));
+    const count = group.length;
+    const label = actionLabel(e.action);
+    const ctx   = [e.ttp, e.severity, escLabel(e.escalation_type)].filter(Boolean).join(' · ');
+    const steps = (e.suggested_steps || [])
       .map(s => `<div style="color:var(--dim);font-size:10px;padding:2px 0 2px 8px">• ${s}</div>`).join('');
-    const query  = e.proposed_query
+    const query = e.proposed_query
       ? `<pre style="background:var(--bg2);border-left:2px solid var(--cyan);padding:8px;font-size:10px;
            color:var(--blue);white-space:pre-wrap;overflow-x:auto;margin:6px 0;border-radius:0 4px 4px 0">${e.proposed_query.trim()}</pre>`
       : '';
     const isRule = e.action === 'improve_detection' && e.proposal_id;
-    const pid    = e.proposal_id || '';
+    const pid   = e.proposal_id || '';
     const ruleButtons = isRule
       ? `<button class="action" style="color:var(--green)" onclick="doApproveRule('${pid}','${e.id}');closeModal()">✓ Approve</button>
          <button class="action" style="color:var(--red)"   onclick="doRejectRule('${pid}','${e.id}');closeModal()">✗ Reject</button>`
       : '';
+    const countBadge = count > 1
+      ? `<span style="font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;
+                      background:color-mix(in srgb,var(--orange) 15%,transparent);
+                      color:var(--orange)">×${count}</span>` : '';
     return `<div style="border:1px solid var(--border);border-radius:6px;padding:10px;margin-bottom:10px;background:var(--bg2)">
       <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;flex-wrap:wrap">
         <span style="color:var(--orange);font-weight:700;font-size:12px">🚨 ${label}</span>
+        ${countBadge}
         <span style="margin-left:auto;display:flex;gap:6px">
-          <button class="action" onclick="doAck('${e.id}');refreshState()">✓ Ack</button>
+          <button class="action" onclick="doAckAll(${ids});closeModal()">✓ Ack</button>
           <button class="action" onclick="openCommandModal('${e.id}')">📋 Cmd</button>
           ${ruleButtons}
         </span>
@@ -2205,7 +2215,7 @@ function showEscModal(vmName) {
   }).join('');
 
   const btn = document.getElementById('modal-confirm');
-  btn.textContent = 'Fermer';
+  btn.textContent = 'Close';
   btn.className = 'action';
   btn.onclick = () => {
     closeModal();

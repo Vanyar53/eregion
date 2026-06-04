@@ -23,6 +23,7 @@ Plateforme OSS (Apache 2.0) de défense active cloud. Deux agents IA en boucle :
 | T1110+T1548 | Run parallèle | — | 41s/59s | block → isolate (incident context) |
 
 \* T1041 : latence StorageBlobLogs variable (ingestion Azure, pas la query). SLA fonctionnel, à surveiller.
+† T1548 run parallèle (T1110+T1548) : detection_timeout possible si DCR saturé — contention infra Azure, pas un bug Glorfindel.
 
 Glorfindel choisit la bonne action sans règles per-TTP explicites — raisonnement depuis le contexte signal + incident.
 

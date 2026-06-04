@@ -1694,9 +1694,12 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
   const filteredDecs = (cached?.actions || [])
     .map((a, realIdx) => ({ a, realIdx }))
     .filter(({ a }) => {
-      if (a.action === 'improve_detection') return false;
-      if (escalatedActions.has(a.action))   return false;
-      if (seenDecActions.has(a.action))     return false;
+      if (a.action === 'improve_detection')                return false;
+      if (escalatedActions.has(a.action))                  return false;
+      if (seenDecActions.has(a.action))                    return false;
+      // Hide state-coupled actions when their state is no longer active (stale cache)
+      if (a.action === 'isolate_vm'          && !isIsolated) return false;
+      if (a.action === 'block_suspicious_ip' && !isBlocked)  return false;
       seenDecActions.add(a.action);
       return true;
     })

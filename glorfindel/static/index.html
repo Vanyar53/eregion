@@ -67,12 +67,16 @@
     cursor: pointer;
     outline: none;
   }
-  select:hover, button:hover { border-color: var(--blue); }
+  select:hover { border-color: var(--blue); }
+  button { transition: background 0.1s, box-shadow 0.1s; }
   button.primary { background: #1f6feb; border-color: #388bfd; color: #fff; }
   button.primary:hover { background: #388bfd; }
   button.danger  { background: #b62324; border-color: #f85149; color: #fff; }
   button.danger:hover  { background: #f85149; }
   button.action  { background: var(--bg2); border-color: var(--border); font-size: 11px; padding: 3px 8px; }
+  button.action:hover  { background: color-mix(in srgb, var(--text) 10%, var(--bg2)); border-color: var(--dim); }
+  button.action.ok { color: var(--green); }
+  button.action.ok:hover { background: color-mix(in srgb, var(--green) 10%, var(--bg2)); }
   button:disabled { opacity: .4; cursor: not-allowed; }
 
   /* ── Main layout ── */
@@ -510,9 +514,10 @@
   .node-backend.detect  { border: 1px solid var(--blue); }
   .node-backend.protect { border: 1px solid var(--orange); }
   .node-backend.recover { border: 1px solid var(--green); }
-  .node-backend.detect:hover  { box-shadow: 0 0 8px color-mix(in srgb, var(--blue)   35%, transparent); cursor: pointer; }
-  .node-backend.protect:hover { box-shadow: 0 0 8px color-mix(in srgb, var(--orange) 35%, transparent); cursor: pointer; }
-  .node-backend.recover:hover { box-shadow: 0 0 8px color-mix(in srgb, var(--green)  35%, transparent); cursor: pointer; }
+  .node-backend { transition: box-shadow 0.15s; }
+  .node-backend.detect:hover  { box-shadow: 0 0 12px color-mix(in srgb, var(--blue)   55%, transparent); cursor: pointer; }
+  .node-backend.protect:hover { box-shadow: 0 0 12px color-mix(in srgb, var(--orange) 55%, transparent); cursor: pointer; }
+  .node-backend.recover:hover { box-shadow: 0 0 12px color-mix(in srgb, var(--green)  55%, transparent); cursor: pointer; }
   .node-backend-name { font-weight: 700; color: var(--text); margin-bottom: 2px; display: flex; align-items: center; gap: 5px; }
   .node-backend-type { font-size: 9px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 5px; }
   .node-backend-row  { display: flex; align-items: center; gap: 4px; color: var(--dim); font-size: 10px; margin-top: 2px; }

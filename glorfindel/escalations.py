@@ -135,6 +135,36 @@ def resolve_by_resource(resource_id: str, action: str) -> int:
     return count
 
 
+def resolve_by_proposal(proposal_id: str) -> int:
+    """Resolve all pending proposed_rule escalations for a given proposal_id."""
+    if not _STORE.exists() or not proposal_id:
+        return 0
+    lines = _STORE.read_text().splitlines()
+    updated = []
+    count = 0
+    now = datetime.now(timezone.utc).isoformat()
+    for line in lines:
+        if not line.strip():
+            updated.append(line)
+            continue
+        try:
+            e = json.loads(line)
+        except Exception:
+            updated.append(line)
+            continue
+        if (
+            e.get("status") == "pending"
+            and e.get("escalation_type") == "proposed_rule"
+            and e.get("proposal_id") == proposal_id
+        ):
+            e["status"] = "resolved"
+            e["resolved_at"] = now
+            count += 1
+        updated.append(json.dumps(e, default=str))
+    _STORE.write_text("\n".join(updated) + "\n")
+    return count
+
+
 def pending() -> list[dict]:
     """Return all unresolved escalations, oldest first."""
     if not _STORE.exists():

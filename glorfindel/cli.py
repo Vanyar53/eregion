@@ -993,6 +993,8 @@ def approve_rule(proposal_id: str, rules_file: str | None) -> None:
 
     try:
         proposal = approve(proposal_id, target)
+        from glorfindel import escalations as _esc
+        _esc.resolve_by_proposal(proposal_id)
         vm = proposal["resource_id"].split("/")[-1]
         console.print(
             f"[green]✓ Rule '{proposal['rule_name']}' approved[/green] "
@@ -1020,6 +1022,8 @@ def reject_rule(proposal_id: str) -> None:
 
     try:
         proposal = reject(proposal_id)
+        from glorfindel import escalations as _esc
+        _esc.resolve_by_proposal(proposal_id)
         console.print(
             f"[yellow]✗ Rule '{proposal['rule_name']}' rejected[/yellow] "
             f"({proposal['ttp']}) — removed from pending."

@@ -244,24 +244,27 @@
   .map-node-name { flex: 1; color: var(--text); }
   .map-node-body { color: var(--dim); font-size: 10px; line-height: 1.6; }
   .map-node-body .row { display: flex; align-items: baseline; gap: 6px; }
-  .map-decision {
-    margin-top: 6px;
-    padding: 5px 8px;
-    background: var(--bg1);
-    border-radius: 4px;
+  /* shared section style — left border, used by both dec-groups and esc-items */
+  .section-group {
     border-left: 2px solid var(--border);
+    padding: 5px 8px;
     font-size: 10px;
     line-height: 1.5;
+    margin-top: 6px;
   }
-  .map-decision .dec-row {
-    display: flex; flex-direction: column; gap: 2px; padding: 2px 0;
-  }
-  .map-decision .dec-action { color: var(--dim); font-weight: 600; }
-  .map-decision .dec-meta   { display: flex; align-items: center; gap: 6px; }
-  .map-decision .dec-conf   { color: var(--orange); }
-  .map-decision .dec-ttp    { color: var(--dim); font-size: 9px; }
-  .map-decision .dec-clickable { cursor: pointer; border-radius: 3px; padding: 2px 4px; margin: -2px -4px; }
-  .map-decision .dec-clickable:hover { background: color-mix(in srgb, var(--blue) 10%, transparent); }
+  .section-group.s-protect { border-color: var(--orange); background: color-mix(in srgb, var(--orange) 4%, transparent); }
+  .section-group.s-escalation { border-color: var(--purple); background: color-mix(in srgb, var(--purple) 4%, transparent); }
+  .section-group.s-escalation:hover { background: color-mix(in srgb, var(--purple) 8%, transparent); cursor: pointer; }
+  .map-decision { font-size: 10px; line-height: 1.5; }
+  .dec-row { display: flex; flex-direction: column; gap: 2px; padding: 2px 0; }
+  .dec-header { display: flex; align-items: center; }
+  .dec-action { color: var(--dim); font-weight: 600; flex: 1; }
+  .dec-meta   { display: flex; align-items: center; gap: 6px; margin-top: 1px; }
+  .dec-conf   { color: var(--orange); }
+  .dec-ttp    { color: var(--dim); font-size: 9px; }
+  .dec-clickable { cursor: pointer; }
+  .dec-clickable:hover .dec-header { color: var(--blue); }
+  .dec-clickable:hover .dec-action { color: var(--blue); }
   .map-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
 
   /* ── VM Card ── */
@@ -314,13 +317,7 @@
     flex-direction: column;
     gap: 10px;
   }
-  .esc-item {
-    background: var(--bg2);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 8px 10px;
-  }
-  .esc-item:hover { border-color: var(--purple); }
+  .esc-item { font-size: 10px; line-height: 1.5; }
   .esc-item-header {
     display: flex;
     align-items: center;
@@ -911,7 +908,7 @@ function _renderEscGroup(group) {
        <button class="action" onclick="event.stopPropagation();openCommandModal('${e.id}')" style="font-size:9px;padding:2px 7px">📋 Cmd</button>
        ${ruleButtons}`;
   const ctxParts = [e.ttp, pct, e.severity, escLabel(e.escalation_type)].filter(Boolean).join(' · ');
-  return `<div class="esc-item" style="cursor:pointer" onclick="showEscModal('${vmName}')">
+  return `<div class="esc-item section-group s-escalation" style="margin-top:5px" onclick="showEscModal('${vmName}')">
     <div style="display:flex;align-items:center;gap:5px;margin-bottom:3px">
       <span class="esc-action-label">${label}</span>
       ${countBadge}
@@ -919,7 +916,7 @@ function _renderEscGroup(group) {
     </div>
     ${ctxParts ? `<div class="esc-context">${ctxParts}</div>` : ''}
     ${queryHtml}
-    <div style="display:flex;gap:5px;margin-top:6px;flex-wrap:wrap">${actionBtns}</div>
+    <div style="display:flex;gap:5px;margin-top:6px;flex-wrap:wrap" onclick="event.stopPropagation()">${actionBtns}</div>
   </div>`;
 }
 
@@ -1655,19 +1652,22 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm) {
     }
 
     const meta = [
-      pct     ? `<span class="dec-conf">${pct}</span>` : '',
-      a.ttp   ? `<span class="dec-ttp">${a.ttp}</span>` : '',
-      hasDetail ? `<span style="color:var(--blue);font-size:10px">▸ reasoning</span>` : '',
+      pct   ? `<span class="dec-conf">${pct}</span>` : '',
+      a.ttp ? `<span class="dec-ttp">${a.ttp}</span>` : '',
     ].filter(Boolean).join('');
 
-    return `<div style="margin-bottom:6px">
+    const sectionClass = corrBtn ? 's-protect' : '';
+    return `<div class="section-group ${sectionClass}" style="margin-top:5px">
       ${badge ? `<div style="margin-bottom:3px">${badge}</div>` : ''}
       <div class="dec-row ${hasDetail ? 'dec-clickable' : ''}"
         ${hasDetail ? `onclick="event.stopPropagation();showReasoning('${vm_name}',${realIdx})"` : ''}>
-        <span class="dec-action">${actionLabel(a.action)}</span>
+        <div class="dec-header">
+          <span class="dec-action">${actionLabel(a.action)}</span>
+          ${hasDetail ? `<span style="color:var(--blue);font-size:10px;margin-left:6px">▸ reasoning</span>` : ''}
+        </div>
         ${meta ? `<div class="dec-meta">${meta}</div>` : ''}
       </div>
-      ${corrBtn ? `<div style="display:flex;justify-content:flex-end;margin-top:4px">${corrBtn}</div>` : ''}
+      ${corrBtn ? `<div style="margin-top:5px">${corrBtn}</div>` : ''}
     </div>`;
   }).join('');
 
@@ -1696,7 +1696,7 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm) {
 
   const expandedBody = `
     ${fallbackRows.length ? `<div style="display:flex;flex-direction:column;gap:5px;margin-top:6px">${fallbackRows.join('')}</div>` : ''}
-    ${decisionHtml ? `<div class="map-decision" style="margin-top:6px">${decisionHtml}</div>` : ''}
+    ${decisionHtml || ''}
     ${myEscs.length ? `<div class="vm-escalations" style="margin:8px 0 0;padding:8px 0 0;border-top:1px solid var(--border)">
       ${_groupEscs(myEscs).map(_renderEscGroup).join('')}
     </div>` : ''}`;

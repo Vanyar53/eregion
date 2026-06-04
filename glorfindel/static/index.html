@@ -1700,6 +1700,7 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
       if (seenDecActions.has(a.action))                    return false;
       // Hide state-coupled actions when their state is no longer active (stale cache)
       if (a.action === 'isolate_vm'          && !isIsolated) return false;
+      if (a.action === 'release_isolation'   &&  isIsolated) return false;
       if (a.action === 'block_suspicious_ip' && !isBlocked)  return false;
       seenDecActions.add(a.action);
       return true;
@@ -1773,6 +1774,13 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
     ${decisionHtml || ''}
     ${myEscs.length ? `<div class="vm-escalations" style="margin:8px 0 0;padding:8px 0 0;border-top:1px solid var(--border)">
       ${_groupEscs(myEscs).map(_renderEscGroup).join('')}
+    </div>` : ''}
+    ${myDetEscs.length ? `<div class="vm-escalations" style="margin:8px 0 0;padding:8px 0 0;border-top:1px solid var(--border)">
+      <div style="font-size:9px;color:var(--blue);font-weight:600;margin-bottom:4px;text-transform:uppercase;letter-spacing:.05em">Amélioration détection</div>
+      ${myDetEscs.map(e => `<div style="font-size:10px;color:var(--dim);margin-bottom:2px">
+        <span style="color:var(--blue)">⚙</span> ${e.reason?.slice(0,120) || 'Règle de détection proposée'}…
+        <span style="font-size:9px;color:var(--dim);margin-left:4px">${e.ttp || ''}</span>
+      </div>`).join('')}
     </div>` : ''}`;
 
   const compactBody = isClean ? '' : `

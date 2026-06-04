@@ -1610,11 +1610,20 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm) {
     : '';
 
   const cached = _actionsCache[vm_name];
-  // dec-rows: autonomous actions only — escalated actions shown in esc-items, no duplication
+  // dec-rows: autonomous actions only, deduplicated by action, real cache index for reasoning click
   const escalatedActions = new Set(myEscs.map(e => e.action));
+  const seenDecActions = new Set();
   const decisionHtml = (cached?.actions || [])
-    .filter(a => a.action !== 'improve_detection' && !escalatedActions.has(a.action))
-    .slice(0, 2).map((a, idx) => {
+    .map((a, realIdx) => ({ a, realIdx }))
+    .filter(({ a }) => {
+      if (a.action === 'improve_detection') return false;
+      if (escalatedActions.has(a.action)) return false;
+      if (seenDecActions.has(a.action)) return false;
+      seenDecActions.add(a.action);
+      return true;
+    })
+    .slice(0, 2)
+    .map(({ a, realIdx }) => {
     const pct = a.confidence ? Math.round(a.confidence * 100) + '%' : '';
     const hasDetail = !!a.full_reasoning;
     const meta = [
@@ -1623,7 +1632,7 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm) {
       hasDetail ? `<span style="color:var(--blue);font-size:10px;margin-left:auto">▸ reasoning</span>` : '',
     ].filter(Boolean).join('');
     return `<div class="dec-row ${hasDetail ? 'dec-clickable' : ''}"
-      ${hasDetail ? `onclick="event.stopPropagation();showReasoning('${vm_name}',${idx})"` : ''}>
+      ${hasDetail ? `onclick="event.stopPropagation();showReasoning('${vm_name}',${realIdx})"` : ''}>
       <span class="dec-action">${actionLabel(a.action)}</span>
       ${meta ? `<div class="dec-meta">${meta}</div>` : ''}
     </div>`;

@@ -548,6 +548,7 @@
   .node-asset.s-blocked   { border-color: var(--orange); background: color-mix(in srgb, var(--orange) 5%, var(--bg1)); }
   .node-asset.s-both      { border-color: var(--red);    background: color-mix(in srgb, var(--red)    6%, var(--bg1)); }
   .node-asset.s-restoring { border-color: var(--blue);   background: color-mix(in srgb, var(--blue)   5%, var(--bg1)); animation: pulse 2s infinite; }
+  .node-asset.s-releasing { border-color: var(--orange); background: color-mix(in srgb, var(--orange) 5%, var(--bg1)); animation: pulse 2s infinite; }
   .node-asset.s-incident  { border: 2px solid var(--purple); background: color-mix(in srgb, var(--purple) 6%, var(--bg1)); box-shadow: 0 0 8px color-mix(in srgb, var(--purple) 20%, transparent); }
   .node-asset-header { display: flex; align-items: center; gap: 6px; }
   .node-asset-header:hover { opacity: 0.85; }
@@ -968,6 +969,7 @@ let _expandedVms      = new Set();
 let _collapsedVms     = new Set(); // user explicitly collapsed — immune to auto-expand
 let _expandedBackends = new Set();
 let _rulesCache       = [];   // flat array, index used in onclick to avoid JSON.stringify in HTML
+let _pendingActions   = new Set(); // vm_names with in-flight release/unblock actions
 let _cardOrder     = JSON.parse(localStorage.getItem('glorfindel_card_order') || '[]');
 let _currentVmNames = [];
 
@@ -1643,7 +1645,8 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
   const totalEscs   = myEscs.length + myDetEscs.length;
   const isExpanded  = _expandedVms.has(vm_name);
 
-  const stateClass = restoreInfo    ? 's-restoring'
+  const stateClass = _pendingActions.has(vm_name) ? 's-releasing'
+                   : restoreInfo    ? 's-restoring'
                    : (isIsolated && isBlocked) ? 's-both'
                    : isIsolated     ? 's-isolated'
                    : isBlocked      ? 's-blocked'
@@ -1966,12 +1969,14 @@ function confirmRelease(vmName) {
 
 async function doRelease(vmName) {
   toast('↩️ Releasing isolation on ' + vmName + '…');
+  _pendingActions.add(vmName); renderInfra();
   try {
     const r = await fetch(`/api/action/release/${vmName}`, { method: 'POST' });
     const d = await r.json();
-    if (d.ok) { toast('✓ Isolation released — ' + vmName + ' is back online'); refreshState(); }
-    else { toast('✗ Release failed: ' + (d.stderr || d.error || '?')); }
+    if (d.ok) toast('✓ Isolation released — ' + vmName + ' is back online');
+    else toast('✗ Release failed: ' + (d.stderr || d.error || '?'));
   } catch (e) { toast('✗ ' + e.message); }
+  finally { _pendingActions.delete(vmName); refreshState(); }
 }
 
 function confirmUnblock(vmName) {
@@ -2025,18 +2030,14 @@ function confirmAck(escId) {
 
 async function doRevert(vmName) {
   toast('↩️ Reverting ' + vmName + '…');
+  _pendingActions.add(vmName); renderInfra();
   try {
     const r = await fetch(`/api/action/revert/${vmName}`, { method: 'POST' });
     const d = await r.json();
-    if (d.ok) {
-      toast('✓ Revert complete — ' + vmName + ' is clean');
-      refreshState();
-    } else {
-      toast('✗ Revert failed: ' + (d.stderr || d.error || '?'));
-    }
-  } catch (e) {
-    toast('✗ ' + e.message);
-  }
+    if (d.ok) toast('✓ Revert complete — ' + vmName + ' is clean');
+    else toast('✗ Revert failed: ' + (d.stderr || d.error || '?'));
+  } catch (e) { toast('✗ ' + e.message); }
+  finally { _pendingActions.delete(vmName); refreshState(); }
 }
 
 async function doRestore(vmName) {

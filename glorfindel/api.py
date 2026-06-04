@@ -645,6 +645,26 @@ def _find_resource_id(vm_name: str) -> str | None:
     for b in active_blocks():
         if b["resource_id"].split("/")[-1] == vm_name:
             return b["resource_id"]
+
+    # Fallback 1: pending escalations (e.g. restore_from_backup without prior isolation)
+    try:
+        from glorfindel import escalations as _esc
+        for esc in _esc.pending():
+            rid = esc.get("resource_id", "")
+            if rid.split("/")[-1] == vm_name:
+                return rid
+    except Exception:
+        pass
+
+    # Fallback 2: discovered asset registry
+    try:
+        from glorfindel.discovery import get_registry
+        for asset in get_registry().all():
+            if asset.name == vm_name or asset.resource_id.split("/")[-1] == vm_name:
+                return asset.resource_id
+    except Exception:
+        pass
+
     return None
 
 

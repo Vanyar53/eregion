@@ -561,6 +561,15 @@
   .node-asset.drag-over  { box-shadow: 0 0 0 2px var(--purple), 0 0 12px color-mix(in srgb, var(--purple) 35%, transparent); }
   .node-asset-header     { cursor: grab; }
   .node-asset-header:active { cursor: grabbing; }
+  .node-asset-empty {
+    min-width: 160px; flex: 0 1 260px; max-width: 260px; height: 44px;
+    border: 1px dashed color-mix(in srgb, var(--border) 50%, transparent);
+    border-radius: 8px; opacity: 0.4; transition: opacity 0.15s, box-shadow 0.15s;
+  }
+  .node-asset-empty.drag-over {
+    opacity: 1; border-color: var(--purple);
+    box-shadow: 0 0 0 2px var(--purple), 0 0 12px color-mix(in srgb, var(--purple) 35%, transparent);
+  }
 
   /* Scrollbar ── */
   ::-webkit-scrollbar { width: 6px; }
@@ -959,26 +968,39 @@ let _expandedVms      = new Set();
 let _collapsedVms     = new Set(); // user explicitly collapsed — immune to auto-expand
 let _expandedBackends = new Set();
 let _rulesCache       = [];   // flat array, index used in onclick to avoid JSON.stringify in HTML
-let _cardOrder        = JSON.parse(localStorage.getItem('glorfindel_card_order') || '[]');
+let _cardOrder     = JSON.parse(localStorage.getItem('glorfindel_card_order') || '[]');
+let _currentVmNames = [];
 
-function _sortByOrder(resources) {
-  return [...resources].sort((a, b) => {
-    const ai = _cardOrder.indexOf(a.vm_name);
-    const bi = _cardOrder.indexOf(b.vm_name);
-    if (ai === -1 && bi === -1) return 0;
-    if (ai === -1) return 1;
-    if (bi === -1) return -1;
-    return ai - bi;
-  });
+// Build ordered slot array (vm_name | null) — always min 4 slots, always 1 extra empty
+function _buildSlots(vmNames) {
+  const minSize = Math.max(4, vmNames.length + 1);
+  const slots = [..._cardOrder];
+  while (slots.length < minSize) slots.push(null);
+  // Remove stale VMs (no longer exist)
+  const nameSet = new Set(vmNames);
+  for (let i = 0; i < slots.length; i++) {
+    if (slots[i] && !nameSet.has(slots[i])) slots[i] = null;
+  }
+  // Place new VMs into first available empty slot
+  const inSlots = new Set(slots.filter(Boolean));
+  for (const name of vmNames) {
+    if (!inSlots.has(name)) {
+      const ei = slots.findIndex(s => s === null);
+      if (ei >= 0) slots[ei] = name; else slots.push(name);
+    }
+  }
+  return slots;
 }
 
-function swapCards(targetName, sourceName) {
-  if (!sourceName || sourceName === targetName) return;
-  if (!_cardOrder.includes(sourceName)) _cardOrder.push(sourceName);
-  if (!_cardOrder.includes(targetName)) _cardOrder.push(targetName);
-  const si = _cardOrder.indexOf(sourceName);
-  const ti = _cardOrder.indexOf(targetName);
-  [_cardOrder[si], _cardOrder[ti]] = [_cardOrder[ti], _cardOrder[si]];
+function dropOnSlot(slotIdx, sourceName) {
+  if (!sourceName) return;
+  const slots = _buildSlots(_currentVmNames);
+  const sourceIdx = slots.indexOf(sourceName);
+  if (sourceIdx === slotIdx) return;
+  const displaced = slots[slotIdx]; // null or another VM
+  if (sourceIdx >= 0) slots[sourceIdx] = displaced;
+  slots[slotIdx] = sourceName;
+  _cardOrder = [...slots];
   localStorage.setItem('glorfindel_card_order', JSON.stringify(_cardOrder));
   renderInfra();
 }
@@ -1420,10 +1442,21 @@ function renderInfra() {
 
       <!-- Layer 3 — Assets -->
       <div class="topo-assets" id="topo-assets">
-        ${_sortByOrder([...resourceMap.values()]).map(r =>
-            _renderAssetNode(r, vmEscs, detEscs, restoreByVm)).join('')}
-        ${resourceMap.size === 0 ? `<div style="color:var(--dim);font-size:11px;padding:24px;text-align:center;width:100%">
-            No assets discovered — check monitoring backends</div>` : ''}
+        ${(() => {
+          _currentVmNames = [...resourceMap.values()].map(r => r.vm_name);
+          const slots = _buildSlots(_currentVmNames);
+          if (slots.every(s => !s)) return `<div style="color:var(--dim);font-size:11px;padding:24px;text-align:center;width:100%">No assets discovered — check monitoring backends</div>`;
+          return slots.map((vmName, slotIdx) => {
+            if (vmName) {
+              const r = [...resourceMap.values()].find(r => r.vm_name === vmName);
+              if (r) return _renderAssetNode(r, vmEscs, detEscs, restoreByVm, slotIdx);
+            }
+            return `<div class="node-asset-empty"
+              ondragover="event.preventDefault();this.classList.add('drag-over')"
+              ondragleave="this.classList.remove('drag-over')"
+              ondrop="event.preventDefault();this.classList.remove('drag-over');dropOnSlot(${slotIdx},event.dataTransfer.getData('text/plain'))"></div>`;
+          }).join('');
+        })()}
       </div>
 
 
@@ -1598,7 +1631,7 @@ function _renderModules(rules, detectBackends, recoverBackends, resources) {
 
 // ── Asset nodes ────────────────────────────────────────────────────────────────
 
-function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm) {
+function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
   const { resource_id, vm_name, states = [] } = resource;
   const isIsolated  = states.some(s => s.type === 'isolated');
   const isBlocked   = states.some(s => s.type === 'blocked');
@@ -1748,7 +1781,7 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm) {
     ondragend="event.currentTarget.classList.remove('dragging');document.querySelectorAll('.drag-over').forEach(e=>e.classList.remove('drag-over'))"
     ondragover="event.preventDefault();event.currentTarget.classList.add('drag-over')"
     ondragleave="event.currentTarget.classList.remove('drag-over')"
-    ondrop="event.preventDefault();event.currentTarget.classList.remove('drag-over');swapCards('${vm_name}',event.dataTransfer.getData('text/plain'))">
+    ondrop="event.preventDefault();event.currentTarget.classList.remove('drag-over');dropOnSlot(${slotIdx},event.dataTransfer.getData('text/plain'))">
     <div class="node-asset-header" onclick="toggleAsset('${vm_name}')">
       ${dot}
       <span class="node-asset-name">${vm_name}</span>

@@ -1610,9 +1610,10 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm) {
     : '';
 
   const cached = _actionsCache[vm_name];
-  // dec-row is always the click target for reasoning in expanded mode
+  // dec-rows: autonomous actions only — escalated actions shown in esc-items, no duplication
+  const escalatedActions = new Set(myEscs.map(e => e.action));
   const decisionHtml = (cached?.actions || [])
-    .filter(a => a.action !== 'improve_detection')
+    .filter(a => a.action !== 'improve_detection' && !escalatedActions.has(a.action))
     .slice(0, 2).map((a, idx) => {
     const pct = a.confidence ? Math.round(a.confidence * 100) + '%' : '';
     const hasDetail = !!a.full_reasoning;
@@ -1639,11 +1640,11 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm) {
 
   const expandedBody = `
     ${stateBadges ? `<div class="node-asset-states">${stateBadges}</div>` : ''}
-    ${decisionHtml ? `<div class="map-decision" style="margin-top:8px">${decisionHtml}</div>` : ''}
-    ${actions.length ? `<div class="node-asset-actions">${actions.join('')}</div>` : ''}
     ${myEscs.length ? `<div class="vm-escalations" style="margin:8px 0 0;padding:8px 0 0;border-top:1px solid var(--border)">
       ${_groupEscs(myEscs).map(_renderEscGroup).join('')}
-    </div>` : ''}`;
+    </div>` : ''}
+    ${decisionHtml ? `<div class="map-decision" style="margin-top:8px">${decisionHtml}</div>` : ''}
+    ${actions.length ? `<div class="node-asset-actions">${actions.join('')}</div>` : ''}`;
 
   const compactBody = isClean ? '' : `
     <div class="node-asset-states" style="margin-top:6px">${stateBadges}</div>

@@ -320,7 +320,7 @@
     border-radius: 6px;
     padding: 8px 10px;
   }
-  .esc-item:hover { border-color: var(--orange); }
+  .esc-item:hover { border-color: var(--purple); }
   .esc-item-header {
     display: flex;
     align-items: center;
@@ -897,26 +897,29 @@ function _renderEscGroup(group) {
     <button class="action ok" onclick="doApproveRule('${e.proposal_id}','${e.id}')" style="flex-shrink:0">✓ Approve</button>
     <button class="action" onclick="doRejectRule('${e.proposal_id}','${e.id}')" style="flex-shrink:0;color:var(--red)">✗ Reject</button>` : '';
   const vmName = e.resource_id.split('/').pop();
+  const pct    = e.confidence ? Math.round(e.confidence * 100) + '%' : '';
   const countBadge = count > 1
-    ? `<span style="font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;
+    ? `<span style="font-size:9px;font-weight:700;padding:1px 4px;border-radius:3px;
                     background:color-mix(in srgb,var(--purple) 15%,transparent);
                     color:var(--purple)">×${count}</span>` : '';
-  // restore_from_backup auto-acks on restore — show Restore as primary CTA, no separate Ack
   const isRestore = e.action === 'restore_from_backup';
   const actionBtns = isRestore
-    ? `<button class="action primary" onclick="event.stopPropagation();confirmRestore('${vmName}')" style="flex-shrink:0">🔄 Restore</button>
-       <button class="action" onclick="event.stopPropagation();openCommandModal('${e.id}')" style="flex-shrink:0">📋 Cmd</button>`
-    : `<button class="action" onclick="event.stopPropagation();doAckAll(${ids})" style="flex-shrink:0">✓ Ack</button>
-       <button class="action" onclick="event.stopPropagation();openCommandModal('${e.id}')" style="flex-shrink:0">📋 Cmd</button>
+    ? `<button class="action primary" onclick="event.stopPropagation();confirmRestore('${vmName}')" style="font-size:9px;padding:2px 7px">🔄 Restore</button>
+       <button class="action" onclick="event.stopPropagation();doAckAll(${ids})" style="font-size:9px;padding:2px 7px">✓ Ack</button>
+       <button class="action" onclick="event.stopPropagation();openCommandModal('${e.id}')" style="font-size:9px;padding:2px 7px">📋 Cmd</button>`
+    : `<button class="action" onclick="event.stopPropagation();doAckAll(${ids})" style="font-size:9px;padding:2px 7px">✓ Ack</button>
+       <button class="action" onclick="event.stopPropagation();openCommandModal('${e.id}')" style="font-size:9px;padding:2px 7px">📋 Cmd</button>
        ${ruleButtons}`;
+  const ctxParts = [e.ttp, pct, e.severity, escLabel(e.escalation_type)].filter(Boolean).join(' · ');
   return `<div class="esc-item" style="cursor:pointer" onclick="showEscModal('${vmName}')">
-    <div class="esc-item-header">
-      <span class="esc-action-label">🚨 ${label}</span>
+    <div style="display:flex;align-items:center;gap:5px;margin-bottom:3px">
+      <span class="esc-action-label">${label}</span>
       ${countBadge}
-      ${actionBtns}
+      <span style="color:var(--blue);font-size:10px;margin-left:auto">▸ details</span>
     </div>
-    ${ctx ? `<div class="esc-context">${ctx}</div>` : ''}
+    ${ctxParts ? `<div class="esc-context">${ctxParts}</div>` : ''}
     ${queryHtml}
+    <div style="display:flex;gap:5px;margin-top:6px;flex-wrap:wrap">${actionBtns}</div>
   </div>`;
 }
 
@@ -1397,8 +1400,8 @@ function renderInfra() {
         <span style="font-size:10px;color:var(--blue)">━━ detect</span>
         <span style="font-size:10px;color:var(--orange)">━━ protect</span>
         <span style="font-size:10px;color:var(--green)">━━ recover</span>
-        <span style="font-size:10px;color:var(--red)">━━ isolated</span>
-        <span style="font-size:10px;color:var(--red);letter-spacing:2px">╌╌ blocked</span>
+        <span style="font-size:10px;color:var(--orange)">━━ isolated</span>
+        <span style="font-size:10px;color:var(--orange);letter-spacing:2px">╌╌ blocked</span>
         <span style="font-size:10px;color:var(--purple)">━━ escalation</span>
         <span style="font-size:9px;color:var(--dim);margin-left:4px">Assets:</span>
         <span style="font-size:10px"><span style="color:var(--green)">●</span> <span style="color:var(--dim)">clean</span></span>
@@ -1655,16 +1658,16 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm) {
       pct     ? `<span class="dec-conf">${pct}</span>` : '',
       a.ttp   ? `<span class="dec-ttp">${a.ttp}</span>` : '',
       hasDetail ? `<span style="color:var(--blue);font-size:10px">▸ reasoning</span>` : '',
-      corrBtn,
     ].filter(Boolean).join('');
 
-    return `<div style="margin-bottom:4px">
+    return `<div style="margin-bottom:6px">
       ${badge ? `<div style="margin-bottom:3px">${badge}</div>` : ''}
       <div class="dec-row ${hasDetail ? 'dec-clickable' : ''}"
         ${hasDetail ? `onclick="event.stopPropagation();showReasoning('${vm_name}',${realIdx})"` : ''}>
         <span class="dec-action">${actionLabel(a.action)}</span>
         ${meta ? `<div class="dec-meta">${meta}</div>` : ''}
       </div>
+      ${corrBtn ? `<div style="display:flex;justify-content:flex-end;margin-top:4px">${corrBtn}</div>` : ''}
     </div>`;
   }).join('');
 
@@ -1795,19 +1798,16 @@ function _drawTopologyEdges() {
     if (detNb) lines.push(bezier(detNb.x, detNb.bottom, asset.x, asset.top,
       'var(--blue)', '', 1.5, 0.3));
 
-    // PROTECT → VM  (rouge si isolé/bloqué, orange dim si clean)
+    // PROTECT → VM  (orange = module identity; opacity/dash show state)
     if (nbNsg) {
       const vmRes = resources.find(r => r.vm_name === vmName || r.resource_id.endsWith(vmName));
       const vmIso = vmRes?.states?.some(s => s.type === 'isolated');
       const vmBlk = vmRes?.states?.some(s => s.type === 'blocked');
       if (vmIso) {
-        // isolé — rouge plein
-        lines.push(bezier(nbNsg.x, nbNsg.bottom, asset.x, asset.top, 'var(--red)', '', 1.5, 0.7));
+        lines.push(bezier(nbNsg.x, nbNsg.bottom, asset.x, asset.top, 'var(--orange)', '', 2, 0.9));
       } else if (vmBlk) {
-        // bloqué — rouge tirets
-        lines.push(bezier(nbNsg.x, nbNsg.bottom, asset.x, asset.top, 'var(--red)', '6,4', 1.5, 0.7));
+        lines.push(bezier(nbNsg.x, nbNsg.bottom, asset.x, asset.top, 'var(--orange)', '6,4', 2, 0.9));
       } else {
-        // clean — orange dim
         lines.push(bezier(nbNsg.x, nbNsg.bottom, asset.x, asset.top, 'var(--orange)', '', 1.5, 0.2));
       }
     }

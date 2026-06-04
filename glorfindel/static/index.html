@@ -254,12 +254,12 @@
     line-height: 1.5;
   }
   .map-decision .dec-row {
-    display: flex; align-items: baseline; gap: 6px; padding: 1px 0;
+    display: flex; flex-direction: column; gap: 2px; padding: 2px 0;
   }
   .map-decision .dec-action { color: var(--cyan); font-weight: 700; }
+  .map-decision .dec-meta   { display: flex; align-items: center; gap: 6px; }
   .map-decision .dec-conf   { color: var(--orange); }
   .map-decision .dec-ttp    { color: var(--dim); font-size: 9px; }
-  .map-decision .dec-text   { color: var(--dim); font-size: 9px; display: block; padding-left: 2px; }
   .map-decision .dec-clickable { cursor: pointer; border-radius: 3px; padding: 2px 4px; margin: -2px -4px; }
   .map-decision .dec-clickable:hover { background: color-mix(in srgb, var(--blue) 10%, transparent); }
   .map-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
@@ -1586,12 +1586,15 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm) {
     .slice(0, 2).map((a, idx) => {
     const pct = a.confidence ? Math.round(a.confidence * 100) + '%' : '';
     const hasDetail = !!a.full_reasoning;
+    const meta = [
+      pct     ? `<span class="dec-conf">${pct}</span>` : '',
+      a.ttp   ? `<span class="dec-ttp">${a.ttp}</span>` : '',
+      hasDetail ? `<span style="color:var(--blue);font-size:10px;margin-left:auto">▸ reasoning</span>` : '',
+    ].filter(Boolean).join('');
     return `<div class="dec-row ${hasDetail ? 'dec-clickable' : ''}"
       ${hasDetail ? `onclick="event.stopPropagation();showReasoning('${vm_name}',${idx})"` : ''}>
       <span class="dec-action">${actionLabel(a.action)}</span>
-      ${pct ? `<span class="dec-conf">${pct}</span>` : ''}
-      ${a.ttp ? `<span class="dec-ttp">${a.ttp}</span>` : ''}
-      ${hasDetail ? `<span style="color:var(--blue);font-size:10px;margin-left:auto">▸ reasoning</span>` : ''}
+      ${meta ? `<div class="dec-meta">${meta}</div>` : ''}
     </div>`;
   }).join('');
 

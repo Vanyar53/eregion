@@ -2085,24 +2085,39 @@ function showRuleByIdx(idx) {
   if (rule) showRuleDetail(rule);
 }
 
-function showIsolationModal(vmName) {
-  const actions = (_actionsCache[vmName]?.actions || []);
-  const idx = actions.findIndex(a =>
-    ['isolate_vm', 'block_suspicious_ip', 'release_isolation', 'revoke_temp_access'].includes(a.action));
-  if (idx >= 0) {
-    showReasoning(vmName, idx);
-    return;
-  }
-  // Fallback: show basic info
+async function showIsolationModal(vmName) {
+  const _tryShow = () => {
+    const actions = (_actionsCache[vmName]?.actions || []);
+    const idx = actions.findIndex(a =>
+      ['isolate_vm', 'block_suspicious_ip', 'release_isolation', 'revoke_temp_access'].includes(a.action));
+    return idx;
+  };
+
+  let idx = _tryShow();
+  if (idx >= 0) { showReasoning(vmName, idx); return; }
+
+  // Cache stale or not yet populated — force-fetch then retry
   document.getElementById('modal-title').textContent = 'Décision — ' + vmName;
-  document.getElementById('modal-body').textContent =
-    'Raisonnement LLM non disponible pour cette VM.\n\nPossible cause : les cycles de détection récents sont tous des improve_detection. Le raisonnement sera disponible au prochain cycle de remédiation.';
+  document.getElementById('modal-body').textContent = 'Chargement du raisonnement…';
   document.getElementById('modal-cmd').style.display = 'none';
   const btn = document.getElementById('modal-confirm');
   btn.textContent = 'Close';
   btn.className = 'action';
   btn.onclick = closeModal;
   document.getElementById('modal').classList.add('open');
+
+  try {
+    const r = await fetch(`/api/actions/${vmName}?limit=15`);
+    const d = await r.json();
+    _actionsCache[vmName] = { actions: d.actions || [], fetchedAt: Date.now() };
+  } catch (e) {}
+
+  idx = _tryShow();
+  if (idx >= 0) { closeModal(); showReasoning(vmName, idx); return; }
+
+  // Still nothing
+  document.getElementById('modal-body').textContent =
+    'Raisonnement non encore disponible.\nLe cycle de remédiation est peut-être encore en cours — réessayez dans quelques secondes.';
 }
 
 function showEscModal(vmName) {

@@ -914,7 +914,8 @@ function _renderEscGroup(group) {
   // proposed rule: Approve/Reject cover the decision — Ack is redundant
   const ruleButtons = isRule ? `
     <button class="action ok" onclick="event.stopPropagation();doApproveRule('${e.proposal_id}','${e.id}')" style="font-size:9px;padding:2px 7px">✓ Approve</button>
-    <button class="action" onclick="event.stopPropagation();doRejectRule('${e.proposal_id}','${e.id}')" style="font-size:9px;padding:2px 7px;color:var(--red)">✗ Reject</button>` : '';
+    <button class="action" onclick="event.stopPropagation();doRejectRule('${e.proposal_id}','${e.id}')" style="font-size:9px;padding:2px 7px;color:var(--red)">✗ Reject</button>
+    <button class="action" onclick="event.stopPropagation();doAckAll('${ids}')" style="font-size:9px;padding:2px 7px">✓ Ack</button>` : '';
   const vmName = e.resource_id.split('/').pop();
   const pct    = e.confidence ? Math.round(e.confidence * 100) + '%' : '';
   const countBadge = count > 1
@@ -1932,13 +1933,11 @@ async function doApproveRule(proposalId, escId) {
   try {
     const r = await fetch(`/api/action/approve-rule/${proposalId}`, {method: 'POST'});
     const d = await r.json();
-    if (d.ok) {
-      toast(`✓ Rule '${d.rule_name}' added to detection_rules.yaml — restart watch to activate`);
-      await doAck(escId);
-      refreshState();
-    } else {
-      toast('Error: ' + (d.error || 'unknown'), true);
-    }
+    if (d.ok) toast(`✓ Rule '${d.rule_name}' added to detection_rules.yaml — restart watch to activate`);
+    else toast('Error: ' + (d.error || 'unknown'), true);
+    // Always ack the escalation — rule may already be approved via CLI
+    await doAck(escId);
+    refreshState();
   } catch (e) { toast('Error: ' + e.message, true); }
 }
 
@@ -1946,13 +1945,10 @@ async function doRejectRule(proposalId, escId) {
   try {
     const r = await fetch(`/api/action/reject-rule/${proposalId}`, {method: 'POST'});
     const d = await r.json();
-    if (d.ok) {
-      toast(`✗ Rule '${d.rule_name}' rejected`);
-      await doAck(escId);
-      refreshState();
-    } else {
-      toast('Error: ' + (d.error || 'unknown'), true);
-    }
+    if (d.ok) toast(`✗ Rule '${d.rule_name}' rejected`);
+    // Always ack the escalation — rule may already be rejected via CLI
+    await doAck(escId);
+    refreshState();
   } catch (e) { toast('Error: ' + e.message, true); }
 }
 
@@ -2334,7 +2330,8 @@ function showEscModal(vmName) {
                       color:var(--purple)">×${count}</span>` : '';
     const modalBtns = isRule
       ? `<button class="action" style="color:var(--green)" onclick="doApproveRule('${pid}','${e.id}');closeModal()">✓ Approve</button>
-         <button class="action" style="color:var(--red)"   onclick="doRejectRule('${pid}','${e.id}');closeModal()">✗ Reject</button>`
+         <button class="action" style="color:var(--red)"   onclick="doRejectRule('${pid}','${e.id}');closeModal()">✗ Reject</button>
+         <button class="action" onclick="doAckAll('${ids}');closeModal()">✓ Ack</button>`
       : `<button class="action" onclick="doAckAll('${ids}');closeModal()">✓ Ack</button>
          <button class="action" onclick="openCommandModal('${e.id}')">📋 Cmd</button>`;
     return `<div style="border-left:2px solid var(--purple);padding:10px;margin-bottom:10px;background:color-mix(in srgb,var(--purple) 4%,var(--bg1))">

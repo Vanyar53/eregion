@@ -911,11 +911,10 @@ function _renderEscGroup(group) {
   const ctx   = [e.ttp, e.severity, escLabel(e.escalation_type)].filter(Boolean).join(' · ');
   const ids   = group.map(g => g.id).join(','); // CSV — safe in onclick attrs, no quotes
   const isRule = e.action === 'improve_detection' && e.proposal_id;
-  const queryHtml = isRule && e.proposed_query
-    ? `<pre class="esc-query">${e.proposed_query.trim()}</pre>` : '';
+  // proposed rule: Approve/Reject cover the decision — Ack is redundant
   const ruleButtons = isRule ? `
-    <button class="action ok" onclick="doApproveRule('${e.proposal_id}','${e.id}')" style="flex-shrink:0">✓ Approve</button>
-    <button class="action" onclick="doRejectRule('${e.proposal_id}','${e.id}')" style="flex-shrink:0;color:var(--red)">✗ Reject</button>` : '';
+    <button class="action ok" onclick="event.stopPropagation();doApproveRule('${e.proposal_id}','${e.id}')" style="font-size:9px;padding:2px 7px">✓ Approve</button>
+    <button class="action" onclick="event.stopPropagation();doRejectRule('${e.proposal_id}','${e.id}')" style="font-size:9px;padding:2px 7px;color:var(--red)">✗ Reject</button>` : '';
   const vmName = e.resource_id.split('/').pop();
   const pct    = e.confidence ? Math.round(e.confidence * 100) + '%' : '';
   const countBadge = count > 1
@@ -923,13 +922,14 @@ function _renderEscGroup(group) {
                     background:color-mix(in srgb,var(--purple) 15%,transparent);
                     color:var(--purple)">×${count}</span>` : '';
   const isRestore = e.action === 'restore_from_backup';
-  const actionBtns = isRestore
+  const actionBtns = isRule
+    ? ruleButtons  // proposed rules: Approve + Reject only (▸ details shows query)
+    : isRestore
     ? `<button class="action primary" onclick="event.stopPropagation();confirmRestore('${vmName}')" style="font-size:9px;padding:2px 7px">🔄 Restore</button>
        <button class="action" onclick="event.stopPropagation();doAckAll('${ids}')" style="font-size:9px;padding:2px 7px">✓ Ack</button>
        <button class="action" onclick="event.stopPropagation();openCommandModal('${e.id}')" style="font-size:9px;padding:2px 7px">📋 Cmd</button>`
     : `<button class="action" onclick="event.stopPropagation();doAckAll('${ids}')" style="font-size:9px;padding:2px 7px">✓ Ack</button>
-       <button class="action" onclick="event.stopPropagation();openCommandModal('${e.id}')" style="font-size:9px;padding:2px 7px">📋 Cmd</button>
-       ${ruleButtons}`;
+       <button class="action" onclick="event.stopPropagation();openCommandModal('${e.id}')" style="font-size:9px;padding:2px 7px">📋 Cmd</button>`;
   const ctxParts = [e.ttp, pct, e.severity, escLabel(e.escalation_type)].filter(Boolean).join(' · ');
   return `<div class="esc-item section-group s-escalation" style="margin-top:5px" onclick="showEscModal('${vmName}')">
     <div style="display:flex;align-items:center;gap:5px;margin-bottom:3px">
@@ -938,7 +938,6 @@ function _renderEscGroup(group) {
       <span style="color:var(--blue);font-size:10px;margin-left:auto">▸ details</span>
     </div>
     ${ctxParts ? `<div class="esc-context">${ctxParts}</div>` : ''}
-    ${queryHtml}
     <div style="display:flex;gap:5px;margin-top:6px;flex-wrap:wrap" onclick="event.stopPropagation()">${actionBtns}</div>
   </div>`;
 }
@@ -1698,10 +1697,12 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
       if (a.action === 'improve_detection')                return false;
       if (escalatedActions.has(a.action))                  return false;
       if (seenDecActions.has(a.action))                    return false;
-      // Hide state-coupled actions when their state is no longer active (stale cache)
+      // Hide state-coupled actions when state is no longer active
       if (a.action === 'isolate_vm'          && !isIsolated) return false;
-      if (a.action === 'release_isolation'   &&  isIsolated) return false;
       if (a.action === 'block_suspicious_ip' && !isBlocked)  return false;
+      // Admin/recovery actions — not useful context in the card
+      if (a.action === 'release_isolation')   return false;
+      if (a.action === 'revoke_temp_access') return false;
       seenDecActions.add(a.action);
       return true;
     })

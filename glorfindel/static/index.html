@@ -320,6 +320,7 @@
     border-radius: 6px;
     padding: 8px 10px;
   }
+  .esc-item:hover { border-color: var(--orange); }
   .esc-item-header {
     display: flex;
     align-items: center;
@@ -895,16 +896,17 @@ function _renderEscGroup(group) {
   const ruleButtons = isRule ? `
     <button class="action ok" onclick="doApproveRule('${e.proposal_id}','${e.id}')" style="flex-shrink:0">✓ Approve</button>
     <button class="action" onclick="doRejectRule('${e.proposal_id}','${e.id}')" style="flex-shrink:0;color:var(--red)">✗ Reject</button>` : '';
+  const vmName = e.resource_id.split('/').pop();
   const countBadge = count > 1
     ? `<span style="font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;
                     background:color-mix(in srgb,var(--orange) 15%,transparent);
                     color:var(--orange)">×${count}</span>` : '';
-  return `<div class="esc-item">
+  return `<div class="esc-item" style="cursor:pointer" onclick="showEscModal('${vmName}')">
     <div class="esc-item-header">
       <span class="esc-action-label">🚨 ${label}</span>
       ${countBadge}
-      <button class="action" onclick="doAckAll(${ids})" style="flex-shrink:0">✓ Ack</button>
-      <button class="action" onclick="openCommandModal('${e.id}')" style="flex-shrink:0">📋 Cmd</button>
+      <button class="action" onclick="event.stopPropagation();doAckAll(${ids})" style="flex-shrink:0">✓ Ack</button>
+      <button class="action" onclick="event.stopPropagation();openCommandModal('${e.id}')" style="flex-shrink:0">📋 Cmd</button>
       ${ruleButtons}
     </div>
     ${ctx ? `<div class="esc-context">${ctx}</div>` : ''}

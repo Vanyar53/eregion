@@ -256,7 +256,7 @@
   .map-decision .dec-row {
     display: flex; flex-direction: column; gap: 2px; padding: 2px 0;
   }
-  .map-decision .dec-action { color: var(--cyan); font-weight: 700; }
+  .map-decision .dec-action { color: var(--dim); font-weight: 600; }
   .map-decision .dec-meta   { display: flex; align-items: center; gap: 6px; }
   .map-decision .dec-conf   { color: var(--orange); }
   .map-decision .dec-ttp    { color: var(--dim); font-size: 9px; }
@@ -327,7 +327,7 @@
     gap: 6px;
     margin-bottom: 4px;
   }
-  .esc-action-label { font-weight: 700; font-size: 12px; color: var(--orange); flex: 1; }
+  .esc-action-label { font-weight: 700; font-size: 12px; color: var(--purple); flex: 1; }
   .esc-context { color: var(--dim); font-size: 10px; margin-bottom: 4px; }
   .esc-reason  { color: var(--dim); font-size: 11px; line-height: 1.5; margin-bottom: 4px;
                  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
@@ -899,18 +899,23 @@ function _renderEscGroup(group) {
   const vmName = e.resource_id.split('/').pop();
   const countBadge = count > 1
     ? `<span style="font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;
-                    background:color-mix(in srgb,var(--orange) 15%,transparent);
-                    color:var(--orange)">×${count}</span>` : '';
+                    background:color-mix(in srgb,var(--purple) 15%,transparent);
+                    color:var(--purple)">×${count}</span>` : '';
+  // restore_from_backup auto-acks on restore — show Restore as primary CTA, no separate Ack
+  const isRestore = e.action === 'restore_from_backup';
+  const actionBtns = isRestore
+    ? `<button class="action primary" onclick="event.stopPropagation();confirmRestore('${vmName}')" style="flex-shrink:0">🔄 Restore</button>
+       <button class="action" onclick="event.stopPropagation();openCommandModal('${e.id}')" style="flex-shrink:0">📋 Cmd</button>`
+    : `<button class="action" onclick="event.stopPropagation();doAckAll(${ids})" style="flex-shrink:0">✓ Ack</button>
+       <button class="action" onclick="event.stopPropagation();openCommandModal('${e.id}')" style="flex-shrink:0">📋 Cmd</button>
+       ${ruleButtons}`;
   return `<div class="esc-item" style="cursor:pointer" onclick="showEscModal('${vmName}')">
     <div class="esc-item-header">
       <span class="esc-action-label">🚨 ${label}</span>
       ${countBadge}
-      <button class="action" onclick="event.stopPropagation();doAckAll(${ids})" style="flex-shrink:0">✓ Ack</button>
-      <button class="action" onclick="event.stopPropagation();openCommandModal('${e.id}')" style="flex-shrink:0">📋 Cmd</button>
-      ${ruleButtons}
+      ${actionBtns}
     </div>
     ${ctx ? `<div class="esc-context">${ctx}</div>` : ''}
-    <div class="esc-reason">${e.reason}</div>
     ${queryHtml}
   </div>`;
 }
@@ -1640,26 +1645,40 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm) {
     </div>`;
   }).join('');
 
-  const actions = [];
-  if (isIsolated) actions.push(`<button class="action danger" onclick="event.stopPropagation();confirmRelease('${vm_name}')">↩️ Release</button>`);
-  if (isBlocked)  actions.push(`<button class="action danger" onclick="event.stopPropagation();confirmUnblock('${vm_name}')">↩️ Unblock</button>`);
-  if (isIsolated && isBlocked) actions.push(`<button class="action danger" onclick="event.stopPropagation();confirmReset('${vm_name}')">⟳ Reset</button>`);
-  if (!restoreInfo && myEscs.some(e => e.action === 'restore_from_backup'))
-    actions.push(`<button class="action primary" onclick="event.stopPropagation();confirmRestore('${vm_name}')">🔄 Restore</button>`);
+  // State action buttons — inline with their respective state, not a separate row
+  const releaseBtn = isIsolated
+    ? `<button class="action danger" onclick="event.stopPropagation();confirmRelease('${vm_name}')" style="font-size:9px;padding:2px 7px">↩️ Release</button>` : '';
+  const unblockBtn = isBlocked
+    ? `<button class="action danger" onclick="event.stopPropagation();confirmUnblock('${vm_name}')" style="font-size:9px;padding:2px 7px">↩️ Unblock</button>` : '';
+  const resetBtn = (isIsolated && isBlocked)
+    ? `<button class="action danger" onclick="event.stopPropagation();confirmReset('${vm_name}')" style="font-size:9px;padding:2px 7px">⟳ Reset</button>` : '';
+  // Restore is inside the esc-item — only show here if restoring is already in progress
+  const restoringBtn = restoreInfo
+    ? `<button class="action primary" onclick="event.stopPropagation();confirmRestore('${vm_name}')" style="font-size:9px;padding:2px 7px">🔄 Restore</button>` : '';
+
+  const stateBadgesWithActions = [
+    restoreInfo ? `<span class="badge restoring" style="font-size:9px">🔄 RESTORING · ${restoreInfo.elapsed_label}</span>` : '',
+    ...states.map(s => s.type === 'isolated'
+      ? `<span class="badge isolated" style="font-size:9px${!isExpanded ? ';cursor:pointer' : ''}"
+           ${!isExpanded ? `onclick="event.stopPropagation();showIsolationModal('${vm_name}')"` : ''}>ISOLATED · ${age(s.since)}</span>${isExpanded ? releaseBtn : ''}`
+      : `<span class="badge blocked" style="font-size:9px${!isExpanded ? ';cursor:pointer' : ''}"
+           ${!isExpanded ? `onclick="event.stopPropagation();showIsolationModal('${vm_name}')"` : ''}>BLOCKED ${s.ip} · ${age(s.since)}</span>${isExpanded ? unblockBtn : ''}`),
+    isExpanded && isIsolated && isBlocked ? resetBtn : '',
+    isExpanded ? restoringBtn : '',
+    escBadge,
+  ].filter(Boolean).join('');
 
   const isClean = !isIsolated && !isBlocked && !restoreInfo && !myEscs.length;
 
   const expandedBody = `
-    ${stateBadges ? `<div class="node-asset-states">${stateBadges}</div>` : ''}
+    ${stateBadgesWithActions ? `<div class="node-asset-states" style="flex-wrap:wrap;gap:4px">${stateBadgesWithActions}</div>` : ''}
     ${myEscs.length ? `<div class="vm-escalations" style="margin:8px 0 0;padding:8px 0 0;border-top:1px solid var(--border)">
       ${_groupEscs(myEscs).map(_renderEscGroup).join('')}
     </div>` : ''}
-    ${decisionHtml ? `<div class="map-decision" style="margin-top:8px">${decisionHtml}</div>` : ''}
-    ${actions.length ? `<div class="node-asset-actions">${actions.join('')}</div>` : ''}`;
+    ${decisionHtml ? `<div class="map-decision" style="margin-top:8px">${decisionHtml}</div>` : ''}`;
 
   const compactBody = isClean ? '' : `
-    <div class="node-asset-states" style="margin-top:6px">${stateBadges}</div>
-    ${actions.length ? `<div class="node-asset-actions">${actions.join('')}</div>` : ''}`;
+    <div class="node-asset-states" style="margin-top:6px">${stateBadges}</div>`;
 
   return `<div class="node-asset ${stateClass} ${isExpanded ? 'expanded' : ''}"
     id="asset-${vm_name}">

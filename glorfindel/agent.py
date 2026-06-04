@@ -46,7 +46,8 @@ def _load_few_shot_examples() -> str:
                     blocks.append("\n".join(lines))
                 return "\n\n".join(blocks)
         return ""
-    except Exception:
+    except Exception as exc:
+        _console.print(f"[yellow]few-shot: failed to load examples — {exc}[/yellow]")
         return ""
 
 
@@ -624,13 +625,15 @@ def decide(state: GlorfindelState, *, model: str) -> GlorfindelState:
     d = json.loads(tool_call.function.arguments)
 
     # Confidence gate: override LLM if confidence below threshold on autonomous actions
-    confidence = d["confidence"]
+    confidence = d.get("confidence")
     _threshold = float(os.environ.get("GLORFINDEL_CONFIDENCE_THRESHOLD", "0.7"))
-    if not d["escalate"] and d["action"] in AUTONOMOUS_ACTIONS and confidence < _threshold:
-        d["escalate"] = True
-        d["escalation_reason"] = (
-            f"Low confidence ({confidence:.0%}) — human review required"
-        )
+    if not d["escalate"] and d["action"] in AUTONOMOUS_ACTIONS:
+        if confidence is None or confidence < _threshold:
+            d["escalate"] = True
+            d["escalation_reason"] = (
+                f"Low confidence ({f'{confidence:.0%}' if confidence is not None else 'unknown'}) "
+                "— human review required"
+            )
 
     usage = getattr(response, "usage", None)
     llm_usage: dict | None = None

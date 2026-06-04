@@ -1700,9 +1700,10 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
       // Hide state-coupled actions when state is no longer active
       if (a.action === 'isolate_vm'          && !isIsolated) return false;
       if (a.action === 'block_suspicious_ip' && !isBlocked)  return false;
-      // Admin/recovery actions — not useful context in the card
-      if (a.action === 'release_isolation')   return false;
-      if (a.action === 'revoke_temp_access') return false;
+      // Admin/recovery/destructive actions — noise once resolved, handled via esc-item when pending
+      if (['release_isolation', 'revoke_temp_access',
+           'restore_from_backup', 'delete_resource',
+           'wipe_storage', 'modify_network_rule', 'escalate_permissions'].includes(a.action)) return false;
       seenDecActions.add(a.action);
       return true;
     })

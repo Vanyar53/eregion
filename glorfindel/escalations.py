@@ -45,7 +45,28 @@ def record(
     proposal_id: str = "",
     proposed_query: str = "",
 ) -> str:
-    """Append an escalation and return its id."""
+    """Append an escalation and return its id.
+
+    Dedup: if a pending escalation with the same action + resource_id +
+    escalation_type already exists, return its id without writing a new one.
+    Prevents duplicate cards when RulePoller fires on consecutive polls.
+    """
+    if _STORE.exists():
+        for line in _STORE.read_text().splitlines():
+            if not line.strip():
+                continue
+            try:
+                e = json.loads(line)
+                if (
+                    e.get("status") == "pending"
+                    and e.get("resource_id") == resource_id
+                    and e.get("action") == action
+                    and e.get("escalation_type") == escalation_type
+                ):
+                    return e["id"]
+            except Exception:
+                pass
+
     esc = {
         "id": str(uuid.uuid4()),
         "timestamp": datetime.now(timezone.utc).isoformat(),

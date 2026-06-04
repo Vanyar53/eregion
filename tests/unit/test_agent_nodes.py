@@ -625,6 +625,46 @@ def test_escalate_to_human_real_run_records():
     mock_record.assert_called_once()
 
 
+# ── escalations.record — dedup ────────────────────────────────────────────────
+
+def test_escalation_record_dedup_returns_existing_id():
+    """Second record() call with same action+resource_id+type returns first id."""
+    from glorfindel.escalations import record
+
+    id1 = record("sig1", "/sub/rg/vm1", "restore_from_backup", "destructive_action", "reason A")
+    id2 = record("sig2", "/sub/rg/vm1", "restore_from_backup", "destructive_action", "reason B")
+    assert id1 == id2
+
+
+def test_escalation_record_dedup_different_action_not_deduped():
+    """Different action → two distinct escalations created."""
+    from glorfindel.escalations import record, pending
+
+    record("sig1", "/sub/rg/vm1", "restore_from_backup", "destructive_action", "reason")
+    record("sig2", "/sub/rg/vm1", "snapshot", "low_confidence", "reason")
+    assert len(pending()) == 2
+
+
+def test_escalation_record_dedup_different_resource_not_deduped():
+    """Different resource_id → two distinct escalations created."""
+    from glorfindel.escalations import record, pending
+
+    record("sig1", "/sub/rg/vm1", "restore_from_backup", "destructive_action", "reason")
+    record("sig2", "/sub/rg/vm2", "restore_from_backup", "destructive_action", "reason")
+    assert len(pending()) == 2
+
+
+def test_escalation_record_dedup_after_resolve_creates_new():
+    """After resolving, a new record() for same action+resource creates a fresh escalation."""
+    from glorfindel.escalations import record, resolve, pending
+
+    id1 = record("sig1", "/sub/rg/vm1", "restore_from_backup", "destructive_action", "reason")
+    resolve(id1)
+    id2 = record("sig2", "/sub/rg/vm1", "restore_from_backup", "destructive_action", "reason")
+    assert id1 != id2
+    assert len(pending()) == 1
+
+
 # ── decide — confidence gate ──────────────────────────────────────────────────
 
 def test_decide_confidence_gate_forces_escalation():

@@ -674,25 +674,25 @@
 // ── Label maps (mirrors escalations.py) ────────────────────────────────────────
 
 const ACTION_LABELS = {
-  isolate_vm:           'VM isolée du réseau',
-  release_isolation:    'Isolation levée',
-  snapshot:             'Snapshot forensique créé',
-  block_suspicious_ip:  'IP suspecte bloquée',
-  revoke_temp_access:   'Accès temporaire révoqué',
-  restore_from_backup:  'Restauration depuis backup',
-  delete_resource:      'Ressource supprimée',
-  wipe_storage:         'Stockage effacé',
-  modify_network_rule:  'Règle réseau modifiée',
-  escalate_permissions: 'Permissions élevées',
+  isolate_vm:           'VM isolated from network',
+  release_isolation:    'Isolation lifted',
+  snapshot:             'Forensic snapshot created',
+  block_suspicious_ip:  'Suspicious IP blocked',
+  revoke_temp_access:   'Temporary access revoked',
+  restore_from_backup:  'Restore from backup',
+  delete_resource:      'Resource deleted',
+  wipe_storage:         'Storage wiped',
+  modify_network_rule:  'Network rule modified',
+  escalate_permissions: 'Permissions escalated',
 };
 
 const ESC_LABELS = {
   low_confidence:      'detection timeout',
-  destructive_action:  'action destructive',
-  proposed_action:     'action inconnue',
-  verification_failed: 'vérification échouée',
-  proposed_rule:       'règle proposée',
-  ttl_exceeded:        'TTL expiré',
+  destructive_action:  'destructive action',
+  proposed_action:     'unknown action',
+  verification_failed: 'verification failed',
+  proposed_rule:       'proposed rule',
+  ttl_exceeded:        'TTL exceeded',
 };
 
 function actionLabel(action) {
@@ -796,7 +796,7 @@ function openCommandModal(escId) {
   const cmd = cliCommand(esc);
   const label = actionLabel(esc.action);
   document.getElementById('modal-title').textContent = '📋 ' + label;
-  document.getElementById('modal-body').textContent = 'Commande CLI à exécuter pour cette escalade :';
+  document.getElementById('modal-body').textContent = 'CLI command to run for this escalation:';
   const cmdEl = document.getElementById('modal-cmd');
   cmdEl.textContent = cmd;
   cmdEl.style.display = '';
@@ -1347,20 +1347,20 @@ function renderInfra() {
 
       <!-- Legend -->
       <div style="margin-top:auto;padding-top:16px;border-top:1px solid var(--border);display:flex;flex-wrap:wrap;gap:12px;align-items:center">
-        <span style="font-size:9px;font-weight:700;letter-spacing:1px;color:var(--dim);flex-shrink:0">LÉGENDE</span>
-        <span style="font-size:9px;color:var(--dim)">Traits :</span>
+        <span style="font-size:9px;font-weight:700;letter-spacing:1px;color:var(--dim);flex-shrink:0">LEGEND</span>
+        <span style="font-size:9px;color:var(--dim)">Edges :</span>
         <span style="font-size:10px;color:var(--blue)">━━ detect</span>
         <span style="font-size:10px;color:var(--orange)">━━ protect</span>
         <span style="font-size:10px;color:var(--green)">━━ recover</span>
-        <span style="font-size:10px;color:var(--red)">━━ isolé</span>
-        <span style="font-size:10px;color:var(--red);letter-spacing:2px">╌╌ bloqué</span>
-        <span style="font-size:10px;color:var(--purple)">━━ escalade</span>
-        <span style="font-size:9px;color:var(--dim);margin-left:4px">Assets :</span>
+        <span style="font-size:10px;color:var(--red)">━━ isolated</span>
+        <span style="font-size:10px;color:var(--red);letter-spacing:2px">╌╌ blocked</span>
+        <span style="font-size:10px;color:var(--purple)">━━ escalation</span>
+        <span style="font-size:9px;color:var(--dim);margin-left:4px">Assets:</span>
         <span style="font-size:10px"><span style="color:var(--green)">●</span> <span style="color:var(--dim)">clean</span></span>
-        <span style="font-size:10px"><span style="color:var(--orange)">●</span> <span style="color:var(--dim)">bloqué</span></span>
-        <span style="font-size:10px"><span style="color:var(--red)">●</span> <span style="color:var(--dim)">isolé</span></span>
-        <span style="font-size:10px"><span style="color:var(--blue)">●</span> <span style="color:var(--dim)">restauration</span></span>
-        <span style="font-size:10px"><span style="color:var(--purple)">●</span> <span style="color:var(--dim)">escalade</span></span>
+        <span style="font-size:10px"><span style="color:var(--orange)">●</span> <span style="color:var(--dim)">blocked</span></span>
+        <span style="font-size:10px"><span style="color:var(--red)">●</span> <span style="color:var(--dim)">isolated</span></span>
+        <span style="font-size:10px"><span style="color:var(--blue)">●</span> <span style="color:var(--dim)">restoring</span></span>
+        <span style="font-size:10px"><span style="color:var(--purple)">●</span> <span style="color:var(--dim)">escalation</span></span>
       </div>
     </div>`;
 
@@ -1440,9 +1440,9 @@ function _renderModules(rules, detectBackends, recoverBackends, resources) {
                     : isBlocked  ? `<span style="color:var(--orange)">●</span>`
                     :              `<span style="color:var(--green)">●</span>`;
   const protectRows = [
-    isolCount ? `<div class="node-backend-row" style="color:var(--red)">${isolCount} isolation${isolCount>1?'s':''} active${isolCount>1?'s':''}</div>` : '',
-    blockCount ? `<div class="node-backend-row" style="color:var(--orange)">${blockCount} IP${blockCount>1?'s':''} bloquée${blockCount>1?'s':''}</div>` : '',
-    (!isIsolated && !isBlocked) ? `<div class="node-backend-row" style="color:var(--green)">aucune restriction</div>` : '',
+    isolCount ? `<div class="node-backend-row" style="color:var(--red)">${isolCount} isolation${isolCount>1?'s':''} active</div>` : '',
+    blockCount ? `<div class="node-backend-row" style="color:var(--orange)">${blockCount} IP${blockCount>1?'s':''} blocked</div>` : '',
+    (!isIsolated && !isBlocked) ? `<div class="node-backend-row" style="color:var(--green)">no restrictions</div>` : '',
   ].filter(Boolean).join('');
   const protectNode = `<div class="node-backend protect ${isIsolated ? 'state-error' : isBlocked ? 'state-warn' : ''}" id="module-protect">
     <div class="node-backend-name">${protectDot} network control</div>
@@ -1474,14 +1474,14 @@ function _renderModules(rules, detectBackends, recoverBackends, resources) {
       : worst==='warn'
       ? `<div class="node-backend-row" style="color:var(--orange)">backup stale</div>`
       : worst==='fail'
-      ? `<div class="node-backend-row" style="color:var(--red)">backup manquant</div>`
+      ? `<div class="node-backend-row" style="color:var(--red)">backup missing</div>`
       : worst==='error'
-      ? `<div class="node-backend-row" style="color:var(--red);font-size:9px">erreur Azure API</div>`
+      ? `<div class="node-backend-row" style="color:var(--red);font-size:9px">Azure API error</div>`
       : worst==='loading'
-      ? `<div class="node-backend-row" style="color:var(--dim)"><span class="spinner"></span>audit…</div>`
+      ? `<div class="node-backend-row" style="color:var(--dim)"><span class="spinner"></span>auditing…</div>`
       : worst==='nodata'
-      ? `<div class="node-backend-row" style="color:var(--dim)">aucun asset audité</div>`
-      : `<div class="node-backend-row" style="color:var(--dim)">audit en attente
+      ? `<div class="node-backend-row" style="color:var(--dim)">no assets audited</div>`
+      : `<div class="node-backend-row" style="color:var(--dim)">audit pending
           <button class="action" style="font-size:9px;padding:1px 5px;margin-left:4px"
             onclick="event.stopPropagation();refreshAuditData()">↺</button></div>`;
     const refreshBtn = worst !== 'loading'
@@ -1546,7 +1546,7 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm) {
         style="font-size:9px;font-weight:700;padding:2px 7px;border-radius:4px;cursor:pointer;
                background:color-mix(in srgb,var(--purple) 18%,transparent);
                color:var(--purple);border:1px solid color-mix(in srgb,var(--purple) 45%,transparent)">
-        ${totalEscs} escalade${totalEscs > 1 ? 's' : ''} ▸</span>`
+        ${totalEscs} escalation${totalEscs > 1 ? 's' : ''} ▸</span>`
     : '';
 
   const stateBadges = [
@@ -1603,7 +1603,7 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm) {
 
   const compactBody = isClean ? '' : `
     <div class="node-asset-states" style="margin-top:6px">${stateBadges}</div>
-    ${myEscs.length ? `<div style="margin-top:6px;font-size:10px;color:var(--orange)">🚨 ${myEscs.length} escalade${myEscs.length>1?'s':''}</div>` : ''}
+    ${myEscs.length ? `<div style="margin-top:6px;font-size:10px;color:var(--orange)">🚨 ${myEscs.length} escalation${myEscs.length>1?'s':''}</div>` : ''}
     ${actions.length ? `<div class="node-asset-actions">${actions.join('')}</div>` : ''}`;
 
   return `<div class="node-asset ${stateClass} ${isExpanded ? 'expanded' : ''}"
@@ -2109,9 +2109,9 @@ function showEscModal(vmName) {
   const escs = Object.values(_escById).filter(e =>
     e.resource_id.split('/').pop() === vmName ||
     e.resource_id === vmName);
-  if (!escs.length) { toast('Aucune escalade active pour ' + vmName); return; }
+  if (!escs.length) { toast('No active escalations for ' + vmName); return; }
 
-  document.getElementById('modal-title').textContent = `Escalades — ${vmName} (${escs.length})`;
+  document.getElementById('modal-title').textContent = `Escalations — ${vmName} (${escs.length})`;
   document.getElementById('modal-cmd').style.display = 'none';
   document.getElementById('modal-cancel').style.display = 'none';
 

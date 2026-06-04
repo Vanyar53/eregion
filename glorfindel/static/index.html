@@ -2328,23 +2328,20 @@ function showEscModal(vmName) {
       : '';
     const isRule = e.action === 'improve_detection' && e.proposal_id;
     const pid   = e.proposal_id || '';
-    const ruleButtons = isRule
-      ? `<button class="action" style="color:var(--green)" onclick="doApproveRule('${pid}','${e.id}');closeModal()">✓ Approve</button>
-         <button class="action" style="color:var(--red)"   onclick="doRejectRule('${pid}','${e.id}');closeModal()">✗ Reject</button>`
-      : '';
     const countBadge = count > 1
       ? `<span style="font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;
-                      background:color-mix(in srgb,var(--orange) 15%,transparent);
-                      color:var(--orange)">×${count}</span>` : '';
-    return `<div style="border:1px solid var(--border);border-radius:6px;padding:10px;margin-bottom:10px;background:var(--bg2)">
+                      background:color-mix(in srgb,var(--purple) 15%,transparent);
+                      color:var(--purple)">×${count}</span>` : '';
+    const modalBtns = isRule
+      ? `<button class="action" style="color:var(--green)" onclick="doApproveRule('${pid}','${e.id}');closeModal()">✓ Approve</button>
+         <button class="action" style="color:var(--red)"   onclick="doRejectRule('${pid}','${e.id}');closeModal()">✗ Reject</button>`
+      : `<button class="action" onclick="doAckAll('${ids}');closeModal()">✓ Ack</button>
+         <button class="action" onclick="openCommandModal('${e.id}')">📋 Cmd</button>`;
+    return `<div style="border-left:2px solid var(--purple);padding:10px;margin-bottom:10px;background:color-mix(in srgb,var(--purple) 4%,var(--bg1))">
       <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;flex-wrap:wrap">
-        <span style="color:var(--orange);font-weight:700;font-size:12px">🚨 ${label}</span>
+        <span style="color:var(--purple);font-weight:700;font-size:12px">${label}</span>
         ${countBadge}
-        <span style="margin-left:auto;display:flex;gap:6px">
-          <button class="action" onclick="doAckAll('${ids}');closeModal()">✓ Ack</button>
-          <button class="action" onclick="openCommandModal('${e.id}')">📋 Cmd</button>
-          ${ruleButtons}
-        </span>
+        <span style="margin-left:auto;display:flex;gap:6px">${modalBtns}</span>
       </div>
       ${ctx ? `<div style="color:var(--dim);font-size:10px;margin-bottom:6px">${ctx}</div>` : ''}
       <div style="color:var(--text);font-size:11px;line-height:1.6">${e.reason}</div>

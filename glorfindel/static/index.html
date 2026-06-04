@@ -1617,65 +1617,86 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm) {
     : '';
 
   const cached = _actionsCache[vm_name];
-  // dec-rows: autonomous actions only, deduplicated by action, real cache index for reasoning click
   const escalatedActions = new Set(myEscs.map(e => e.action));
-  const seenDecActions = new Set();
-  const decisionHtml = (cached?.actions || [])
+  const seenDecActions   = new Set();
+
+  // Build dec-rows: autonomous actions only, deduplicated, state badge + correction button merged in
+  const filteredDecs = (cached?.actions || [])
     .map((a, realIdx) => ({ a, realIdx }))
     .filter(({ a }) => {
       if (a.action === 'improve_detection') return false;
-      if (escalatedActions.has(a.action)) return false;
-      if (seenDecActions.has(a.action)) return false;
+      if (escalatedActions.has(a.action))   return false;
+      if (seenDecActions.has(a.action))     return false;
       seenDecActions.add(a.action);
       return true;
     })
-    .slice(0, 2)
-    .map(({ a, realIdx }) => {
+    .slice(0, 2);
+
+  const coveredByDec = new Set(filteredDecs.map(({ a }) => a.action));
+
+  const decisionHtml = filteredDecs.map(({ a, realIdx }) => {
     const pct = a.confidence ? Math.round(a.confidence * 100) + '%' : '';
     const hasDetail = !!a.full_reasoning;
+
+    // State badge + correction button for matching autonomous actions
+    let badge = '';
+    let corrBtn = '';
+    if (a.action === 'isolate_vm' && isIsolated) {
+      const s = states.find(s => s.type === 'isolated');
+      badge   = s ? `<span class="badge isolated" style="font-size:9px;cursor:default">ISOLATED · ${age(s.since)}</span>` : '';
+      corrBtn = `<button class="action danger" onclick="event.stopPropagation();confirmRelease('${vm_name}')" style="font-size:9px;padding:2px 7px;margin-left:auto">↩️ Release</button>`;
+    } else if (a.action === 'block_suspicious_ip' && isBlocked) {
+      const s = states.find(s => s.type === 'blocked');
+      badge   = s ? `<span class="badge blocked" style="font-size:9px;cursor:default">BLOCKED ${s.ip} · ${age(s.since)}</span>` : '';
+      corrBtn = `<button class="action danger" onclick="event.stopPropagation();confirmUnblock('${vm_name}')" style="font-size:9px;padding:2px 7px;margin-left:auto">↩️ Unblock</button>`;
+    }
+
     const meta = [
       pct     ? `<span class="dec-conf">${pct}</span>` : '',
       a.ttp   ? `<span class="dec-ttp">${a.ttp}</span>` : '',
-      hasDetail ? `<span style="color:var(--blue);font-size:10px;margin-left:auto">▸ reasoning</span>` : '',
+      hasDetail ? `<span style="color:var(--blue);font-size:10px">▸ reasoning</span>` : '',
+      corrBtn,
     ].filter(Boolean).join('');
-    return `<div class="dec-row ${hasDetail ? 'dec-clickable' : ''}"
-      ${hasDetail ? `onclick="event.stopPropagation();showReasoning('${vm_name}',${realIdx})"` : ''}>
-      <span class="dec-action">${actionLabel(a.action)}</span>
-      ${meta ? `<div class="dec-meta">${meta}</div>` : ''}
+
+    return `<div style="margin-bottom:4px">
+      ${badge ? `<div style="margin-bottom:3px">${badge}</div>` : ''}
+      <div class="dec-row ${hasDetail ? 'dec-clickable' : ''}"
+        ${hasDetail ? `onclick="event.stopPropagation();showReasoning('${vm_name}',${realIdx})"` : ''}>
+        <span class="dec-action">${actionLabel(a.action)}</span>
+        ${meta ? `<div class="dec-meta">${meta}</div>` : ''}
+      </div>
     </div>`;
   }).join('');
 
-  // State action buttons — inline with their respective state, not a separate row
-  const releaseBtn = isIsolated
-    ? `<button class="action danger" onclick="event.stopPropagation();confirmRelease('${vm_name}')" style="font-size:9px;padding:2px 7px">↩️ Release</button>` : '';
-  const unblockBtn = isBlocked
-    ? `<button class="action danger" onclick="event.stopPropagation();confirmUnblock('${vm_name}')" style="font-size:9px;padding:2px 7px">↩️ Unblock</button>` : '';
-  const resetBtn = (isIsolated && isBlocked)
-    ? `<button class="action danger" onclick="event.stopPropagation();confirmReset('${vm_name}')" style="font-size:9px;padding:2px 7px">⟳ Reset</button>` : '';
-  // Restore is inside the esc-item — only show here if restoring is already in progress
-  const restoringBtn = restoreInfo
-    ? `<button class="action primary" onclick="event.stopPropagation();confirmRestore('${vm_name}')" style="font-size:9px;padding:2px 7px">🔄 Restore</button>` : '';
-
-  const stateBadgesWithActions = [
-    restoreInfo ? `<span class="badge restoring" style="font-size:9px">🔄 RESTORING · ${restoreInfo.elapsed_label}</span>` : '',
-    ...states.map(s => s.type === 'isolated'
-      ? `<span class="badge isolated" style="font-size:9px${!isExpanded ? ';cursor:pointer' : ''}"
-           ${!isExpanded ? `onclick="event.stopPropagation();showIsolationModal('${vm_name}')"` : ''}>ISOLATED · ${age(s.since)}</span>${isExpanded ? releaseBtn : ''}`
-      : `<span class="badge blocked" style="font-size:9px${!isExpanded ? ';cursor:pointer' : ''}"
-           ${!isExpanded ? `onclick="event.stopPropagation();showIsolationModal('${vm_name}')"` : ''}>BLOCKED ${s.ip} · ${age(s.since)}</span>${isExpanded ? unblockBtn : ''}`),
-    isExpanded && isIsolated && isBlocked ? resetBtn : '',
-    isExpanded ? restoringBtn : '',
-    escBadge,
-  ].filter(Boolean).join('');
+  // Fallback: states with no matching dec-row (cache miss) — show badge + button standalone
+  const fallbackRows = [];
+  if (restoreInfo) fallbackRows.push(
+    `<span class="badge restoring" style="font-size:9px">🔄 RESTORING · ${restoreInfo.elapsed_label}</span>`);
+  if (isIsolated && !coveredByDec.has('isolate_vm')) {
+    const s = states.find(s => s.type === 'isolated');
+    fallbackRows.push(`<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+      <span class="badge isolated" style="font-size:9px;cursor:default">ISOLATED · ${age(s?.since)}</span>
+      <button class="action danger" onclick="event.stopPropagation();confirmRelease('${vm_name}')" style="font-size:9px;padding:2px 7px">↩️ Release</button>
+    </div>`);
+  }
+  if (isBlocked && !coveredByDec.has('block_suspicious_ip')) {
+    states.filter(s => s.type === 'blocked').forEach(s => fallbackRows.push(
+      `<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+        <span class="badge blocked" style="font-size:9px;cursor:default">BLOCKED ${s.ip} · ${age(s.since)}</span>
+        <button class="action danger" onclick="event.stopPropagation();confirmUnblock('${vm_name}')" style="font-size:9px;padding:2px 7px">↩️ Unblock</button>
+      </div>`));
+  }
+  if (isIsolated && isBlocked) fallbackRows.push(
+    `<button class="action danger" onclick="event.stopPropagation();confirmReset('${vm_name}')" style="font-size:9px;padding:2px 7px">⟳ Reset</button>`);
 
   const isClean = !isIsolated && !isBlocked && !restoreInfo && !myEscs.length;
 
   const expandedBody = `
-    ${stateBadgesWithActions ? `<div class="node-asset-states" style="flex-wrap:wrap;gap:4px">${stateBadgesWithActions}</div>` : ''}
+    ${fallbackRows.length ? `<div style="display:flex;flex-direction:column;gap:5px;margin-top:6px">${fallbackRows.join('')}</div>` : ''}
+    ${decisionHtml ? `<div class="map-decision" style="margin-top:6px">${decisionHtml}</div>` : ''}
     ${myEscs.length ? `<div class="vm-escalations" style="margin:8px 0 0;padding:8px 0 0;border-top:1px solid var(--border)">
       ${_groupEscs(myEscs).map(_renderEscGroup).join('')}
-    </div>` : ''}
-    ${decisionHtml ? `<div class="map-decision" style="margin-top:8px">${decisionHtml}</div>` : ''}`;
+    </div>` : ''}`;
 
   const compactBody = isClean ? '' : `
     <div class="node-asset-states" style="margin-top:6px">${stateBadges}</div>`;

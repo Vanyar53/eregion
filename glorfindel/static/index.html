@@ -872,21 +872,39 @@ async function runScenario(name) {
 
 // ── Infrastructure cards ───────────────────────────────────────────────────────
 
-function _renderEscItem(e) {
+// Group escalations by action, render each group as one item (N dupes = single Ack All)
+function _groupEscs(escs) {
+  const map = new Map();
+  escs.forEach(e => {
+    const key = e.action === 'improve_detection' ? e.id : e.action; // rules stay separate
+    if (!map.has(key)) map.set(key, []);
+    map.get(key).push(e);
+  });
+  return [...map.values()];
+}
+
+function _renderEscGroup(group) {
+  const e     = group[0]; // most recent / representative
   const label = actionLabel(e.action);
+  const count = group.length;
   const ctx   = [e.ttp, e.severity, escLabel(e.escalation_type)].filter(Boolean).join(' · ');
-  const escId = e.id;
+  const ids   = JSON.stringify(group.map(g => g.id));
   const isRule = e.action === 'improve_detection' && e.proposal_id;
   const queryHtml = isRule && e.proposed_query
     ? `<pre class="esc-query">${e.proposed_query.trim()}</pre>` : '';
   const ruleButtons = isRule ? `
-    <button class="action ok" onclick="doApproveRule('${e.proposal_id}','${escId}')" style="flex-shrink:0">✓ Approve</button>
-    <button class="action" onclick="doRejectRule('${e.proposal_id}','${escId}')" style="flex-shrink:0;color:var(--red)">✗ Reject</button>` : '';
+    <button class="action ok" onclick="doApproveRule('${e.proposal_id}','${e.id}')" style="flex-shrink:0">✓ Approve</button>
+    <button class="action" onclick="doRejectRule('${e.proposal_id}','${e.id}')" style="flex-shrink:0;color:var(--red)">✗ Reject</button>` : '';
+  const countBadge = count > 1
+    ? `<span style="font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;
+                    background:color-mix(in srgb,var(--orange) 15%,transparent);
+                    color:var(--orange)">×${count}</span>` : '';
   return `<div class="esc-item">
     <div class="esc-item-header">
       <span class="esc-action-label">🚨 ${label}</span>
-      <button class="action" onclick="confirmAck('${escId}')" style="flex-shrink:0">✓ Ack</button>
-      <button class="action" onclick="openCommandModal('${escId}')" style="flex-shrink:0">📋 Cmd</button>
+      ${countBadge}
+      <button class="action" onclick="doAckAll(${ids})" style="flex-shrink:0">✓ Ack</button>
+      <button class="action" onclick="openCommandModal('${e.id}')" style="flex-shrink:0">📋 Cmd</button>
       ${ruleButtons}
     </div>
     ${ctx ? `<div class="esc-context">${ctx}</div>` : ''}
@@ -895,10 +913,22 @@ function _renderEscItem(e) {
   </div>`;
 }
 
+async function doAckAll(ids) {
+  try {
+    await Promise.all(ids.map(id => fetch(`/api/action/ack/${id}`, { method: 'POST' })));
+    toast(`✓ Acknowledged (${ids.length})`);
+    refreshState();
+  } catch (e) {
+    toast('✗ ' + e.message);
+  }
+}
+
+function _renderEscItem(e) { return _renderEscGroup([e]); }
+
 function _escFooter(escs) {
   if (!escs.length) return '';
   return `<div class="vm-escalations" style="margin:0;padding:8px 14px;border-top:1px solid var(--border)">
-    ${escs.map(_renderEscItem).join('')}
+    ${_groupEscs(escs).map(_renderEscGroup).join('')}
   </div>`;
 }
 
@@ -1612,7 +1642,7 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm) {
     ${decisionHtml ? `<div class="map-decision" style="margin-top:8px">${decisionHtml}</div>` : ''}
     ${actions.length ? `<div class="node-asset-actions">${actions.join('')}</div>` : ''}
     ${myEscs.length ? `<div class="vm-escalations" style="margin:8px 0 0;padding:8px 0 0;border-top:1px solid var(--border)">
-      ${myEscs.map(_renderEscItem).join('')}
+      ${_groupEscs(myEscs).map(_renderEscGroup).join('')}
     </div>` : ''}`;
 
   const compactBody = isClean ? '' : `

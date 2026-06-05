@@ -1422,7 +1422,7 @@ function renderInfra() {
       || vmEscs.some(e => e.resource_id === r.resource_id
            || e.resource_id.split('/').pop() === r.vm_name);
     if (hasIncident && !_collapsedVms.has(r.vm_name)) _expandedVms.add(r.vm_name);
-    if (!hasIncident) { _collapsedVms.delete(r.vm_name); _expandedVms.delete(r.vm_name); }
+    if (!hasIncident) _collapsedVms.delete(r.vm_name); // allow re-expand on next incident; don't force-collapse user-expanded clean cards
   });
 
   list.innerHTML = `
@@ -1786,6 +1786,17 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
       ? `<span style="color:var(--dim);font-size:9px">${backupMsg.slice(0, 48) || 'checking…'}</span>`
       : `<span style="color:var(--dim)">—</span>`;
 
+  // Readiness checks with full labels — shown in expanded clean card
+  const readinessExpanded = (isClean && auditEntry)
+    ? `<div style="display:flex;gap:14px;margin-top:6px;flex-wrap:wrap">
+        ${ACTION_GROUPS.map(g => {
+          const st = _worstStatus(auditEntry.checks, g.actions);
+          const [ic, col] = st==='ok' ? ['✓','var(--green)'] : st==='warn' ? ['⚠','var(--orange)']
+                          : st==='fail' ? ['✗','var(--red)'] : ['—','var(--dim)'];
+          return `<span style="font-size:11px;color:${col};font-weight:600">${ic} ${g.label}</span>`;
+        }).join('')}
+      </div>` : '';
+
   const backupSection = `<div class="section-group s-recover" style="margin-top:5px">
     <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
       <span style="color:var(--green);font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:.5px">Backup</span>
@@ -1796,6 +1807,7 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
   </div>`;
 
   const expandedBody = `
+    ${readinessExpanded}
     ${fallbackRows.length ? `<div style="display:flex;flex-direction:column;gap:5px;margin-top:6px">${fallbackRows.join('')}</div>` : ''}
     ${decisionHtml || ''}
     ${myEscs.length ? `<div class="vm-escalations" style="margin:8px 0 0;padding:8px 0 0;border-top:1px solid var(--border)">
@@ -1806,8 +1818,18 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
     </div>` : ''}
     ${backupSection}`;
 
-  const compactBody = isClean ? '' : `
-    <div class="node-asset-states" style="margin-top:6px">${stateBadges}</div>`;
+  // Compact clean: backup age + snapshot button (always visible without expanding)
+  const backupCompact = bMatch
+    ? `<span style="font-size:9px;color:var(--green)">${bMatch[1]} pts</span><span style="font-size:9px;color:var(--dim)"> · ${bMatch[2]}</span>`
+    : `<span style="font-size:9px;color:var(--dim)">—</span>`;
+
+  const compactBody = isClean
+    ? `<div style="margin-top:5px;display:flex;align-items:center;gap:6px">
+        ${backupCompact}
+        <button class="action" onclick="event.stopPropagation();doSnapshot('${vm_name}')"
+          style="margin-left:auto;font-size:9px;padding:1px 6px">📸 Snapshot</button>
+      </div>`
+    : `<div class="node-asset-states" style="margin-top:6px">${stateBadges}</div>`;
 
   return `<div class="node-asset ${stateClass} ${isExpanded ? 'expanded' : ''}"
     id="asset-${vm_name}"

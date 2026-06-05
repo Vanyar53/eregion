@@ -12,13 +12,19 @@ def cli():
 
 @cli.command()
 @click.argument("scenario")
-@click.option("--dry-run", is_flag=True, help="Show what would happen without executing.")
+@click.option(
+    "--dry-run", is_flag=True, help="Show what would happen without executing."
+)
 @click.option("--yes", is_flag=True, help="Skip confirmation prompt.")
-@click.option("--skip-preflight", is_flag=True, help="Skip VM state checks (power + isolation).")
+@click.option(
+    "--skip-preflight",
+    is_flag=True,
+    help="Skip VM state checks (power + isolation).",
+)
 def run(scenario: str, dry_run: bool, yes: bool, skip_preflight: bool):
     """Run a chaos scenario (path or scenario name).
 
-    SCENARIO can be a file path or the scenario name as shown by 'annatar list'.
+    SCENARIO can be a file path or the scenario name from 'annatar list'.
 
     Examples:
         annatar run azure-ransomware-vm
@@ -53,7 +59,9 @@ def list_scenarios():
 
 @cli.command()
 @click.argument("scenario", required=False)
-@click.option("--all", "validate_all", is_flag=True, help="Validate all available scenarios.")
+@click.option(
+    "--all", "validate_all", is_flag=True, help="Validate all available scenarios."
+)
 def validate(scenario: str | None, validate_all: bool):
     """Validate one scenario YAML or all available scenarios.
 
@@ -64,7 +72,11 @@ def validate(scenario: str | None, validate_all: bool):
     """
     import glob
     import os
-    from annatar.runner.parser import ScenarioParser, scenarios_root, find_scenario_by_name
+    from annatar.runner.parser import (
+        ScenarioParser,
+        scenarios_root,
+        find_scenario_by_name,
+    )
 
     parser = ScenarioParser()
 
@@ -120,13 +132,14 @@ def report(run_id: str):
 
 
 @cli.command()
-@click.option("--yes", is_flag=True, help="Pass -auto-approve to terraform apply.")
+@click.option(
+    "--yes", is_flag=True, help="Pass -auto-approve to terraform apply."
+)
 @click.argument("scenario", type=click.Path(exists=True), required=False)
 def init(yes: bool, scenario: str | None):
     """Provision Azure test environment.
 
-    Optionally pass a SCENARIO path to also prepare the VM and create the
-    first clean backup in one step:
+    Optionally pass a SCENARIO path to also prepare the VM disk in one step:
 
         annatar init --yes scenarios/azure/ransomware-vm.yaml
     """
@@ -136,7 +149,11 @@ def init(yes: bool, scenario: str | None):
 
 @cli.command()
 @click.argument("scenario", type=click.Path(exists=True))
-def snapshot(scenario: str):
-    """Clean the VM disk and take a fresh backup — use before re-running a scenario."""
+def clean(scenario: str):
+    """Reset the VM disk to a clean state before re-running a scenario.
+
+    After this, run 'glorfindel snapshot <resource_id> --yes' to capture
+    a clean recovery point.
+    """
     from annatar.runner.initializer import InitRunner
-    InitRunner().snapshot(scenario)
+    InitRunner().clean(scenario)

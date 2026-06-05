@@ -335,7 +335,8 @@ async def action_release(vm_name: str) -> dict:
     resource_id = _find_resource_id(vm_name)
     if not resource_id:
         return {"error": f"No active isolation found for {vm_name}"}
-    result = subprocess.run(
+    result = await asyncio.to_thread(
+        subprocess.run,
         [_bin(), "release", resource_id, "--yes"],
         capture_output=True, text=True, timeout=60,
     )
@@ -352,7 +353,8 @@ async def action_revert(vm_name: str) -> dict:
     resource_id = _find_resource_id(vm_name)
     if not resource_id:
         return {"error": f"No active actions found for {vm_name}"}
-    result = subprocess.run(
+    result = await asyncio.to_thread(
+        subprocess.run,
         [_bin(), "reset", resource_id, "--yes"],
         capture_output=True, text=True, timeout=60,
     )

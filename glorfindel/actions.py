@@ -200,7 +200,7 @@ class AzureConnector(CloudConnector):
                 r = self._network.security_rules.get(nsg_rg, nsg_name, rule_info["name"])
                 r.priority = rule_info["original_priority"]
                 self._network.security_rules.begin_create_or_update(nsg_rg, nsg_name, r.name, r).result()
-            _clear_isolation_state(vm_name)
+        _clear_isolation_state(vm_name)  # always clear — even if state was already absent
 
         return {"status": "released", "resource_id": resource_id}
 

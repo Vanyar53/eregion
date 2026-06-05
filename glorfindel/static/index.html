@@ -1781,7 +1781,7 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
   // Extract "latest Xh ago" from message like "Vault 'rsv-annatar': 5 point(s), latest 2h ago"
   const bMatch = backupMsg.match(/(\d+)\s*point[^,]*,\s*latest\s+(.+)/);
   const backupSummary = bMatch
-    ? `<span style="color:var(--green)">${bMatch[1]} pts</span> <span style="color:var(--dim)">· last ${bMatch[2]}</span>`
+    ? `<span style="color:var(--green)">${bMatch[1]} RP</span> <span style="color:var(--dim)">· last ${bMatch[2]}</span>`
     : backupCheck
       ? `<span style="color:var(--dim);font-size:9px">${backupMsg.slice(0, 48) || 'checking…'}</span>`
       : `<span style="color:var(--dim)">—</span>`;
@@ -1820,7 +1820,7 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
 
   // Compact clean: backup age + snapshot button (always visible without expanding)
   const backupCompact = bMatch
-    ? `<span style="font-size:9px;color:var(--green)">${bMatch[1]} pts</span><span style="font-size:9px;color:var(--dim)"> · ${bMatch[2]}</span>`
+    ? `<span style="font-size:9px;color:var(--green)">${bMatch[1]} RP</span><span style="font-size:9px;color:var(--dim)"> · ${bMatch[2]}</span>`
     : `<span style="font-size:9px;color:var(--dim)">—</span>`;
 
   const compactBody = isClean
@@ -1842,7 +1842,7 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
     <div class="node-asset-header" onclick="toggleAsset('${vm_name}')">
       ${dot}
       <span class="node-asset-name">${vm_name}</span>
-      ${readiness ? `<span style="color:var(--dim);font-size:9px">${readiness}</span>` : ''}
+      ${readiness && !isExpanded ? `<span style="color:var(--dim);font-size:9px">${readiness}</span>` : ''}
       <span style="color:var(--dim);font-size:9px;margin-left:6px">${isExpanded ? '▾' : '▸'}</span>
     </div>
     ${isExpanded ? expandedBody : compactBody}

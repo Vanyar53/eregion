@@ -453,6 +453,73 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
 
 @cli.command()
 @click.argument("resource_id")
+@click.option("--vault", default=None, metavar="VAULT",
+              help="RSV vault name (default: first azure_backup_vault in glorfindel-config.yaml).")
+@click.option("--dry-run", is_flag=True)
+@click.option("--yes", is_flag=True, help="Skip confirmation prompt.")
+def snapshot(resource_id: str, vault: str | None, dry_run: bool, yes: bool):
+    """Trigger an on-demand Azure Backup for a VM (pre-scenario setup).
+
+    Creates a recovery point in the RSV vault that can be used by
+    'glorfindel restore' after an attack. Run this before launching
+    an Annatar scenario to ensure a clean restore point exists.
+
+    Workflow:
+        annatar clean <scenario.yaml>
+        glorfindel snapshot <resource_id> --yes
+        annatar run <scenario.yaml>
+    """
+    from glorfindel.actions import AzureConnector
+    from glorfindel.config import load_glorfindel_config
+
+    if vault is None:
+        try:
+            cfg = load_glorfindel_config()
+            for b in cfg.action_backends:
+                if b.type == "azure_backup_vault":
+                    vault = b.vault_name
+                    break
+        except Exception:
+            pass
+        vault = vault or "rsv-annatar"
+
+    connector = AzureConnector(dry_run=dry_run)
+
+    console.rule("[bold yellow]Glorfindel — On-demand Snapshot[/bold yellow]")
+    console.print(f"  Resource : {resource_id}")
+    console.print(f"  Vault    : {vault}")
+    console.print(f"  Dry-run  : {dry_run}\n")
+
+    if not dry_run and not yes:
+        if not click.confirm("Trigger on-demand Azure Backup for this VM?", default=False):
+            console.print("Aborted.")
+            return
+
+    import time as _time
+    console.print("[cyan]->[/cyan] Triggering on-demand backup...")
+    t0 = _time.time()
+    snap_id = connector.snapshot(resource_id, vault=vault)
+    elapsed = round(_time.time() - t0)
+
+    if dry_run:
+        console.print("[yellow]DRY RUN — no changes made.[/yellow]")
+        return
+
+    elapsed_label = f"{elapsed // 60}min {elapsed % 60}s"
+    console.print(f"[green]✓ Backup complete.[/green]  Time: {elapsed_label}")
+    console.print(f"  snap_id: [dim]{snap_id}[/dim]")
+
+    verification = connector.verify_snapshot(snap_id)
+    if verification.get("verified"):
+        console.print("[green]✓ Recovery point verified in vault.[/green]")
+    else:
+        console.print(f"[yellow]⚠ Verification inconclusive: {verification}[/yellow]")
+
+    _record_manual_action("snapshot", resource_id, {"snap_id": snap_id, **verification})
+
+
+@cli.command()
+@click.argument("resource_id")
 @click.option("--vault", default="rsv-annatar", show_default=True)
 @click.option("--dry-run", is_flag=True)
 @click.option("--yes", is_flag=True, help="Skip confirmation prompt.")

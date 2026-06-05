@@ -244,10 +244,75 @@ class AzureConnector(CloudConnector):
             "resource_id": resource_id,
         }
 
-    def snapshot(self, resource_id: str) -> str:
+    def snapshot(self, resource_id: str, vault: str = "rsv-annatar") -> str:
+        """Trigger an RSV on-demand backup and wait for completion.
+
+        Returns an opaque snap_id ("rsv:{vault}/{rg}/{job}") usable by
+        verify_snapshot(). Blocks until the backup job finishes (~5-20 min).
+        """
         if self.dry_run:
             return "snap-dry-run-000"
-        raise NotImplementedError("snapshot: not yet implemented")
+
+        import time
+        import requests
+        from datetime import datetime, timezone, timedelta
+        from azure.mgmt.recoveryservicesbackup import RecoveryServicesBackupClient
+
+        self._ensure_clients()
+        rg, vm_name = _parse_vm_resource_id(resource_id)
+        sub = self._subscription_id
+        container_name = f"iaasvmcontainer;iaasvmcontainerv2;{rg};{vm_name}"
+        item_name = f"vm;iaasvmcontainerv2;{rg};{vm_name}"
+
+        backup_client = RecoveryServicesBackupClient(self._credential, sub)
+
+        expiry = (datetime.now(timezone.utc) + timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        token = self._credential.get_token("https://management.azure.com/.default").token
+        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+        container_enc = container_name.replace(";", "%3B")
+        item_enc = item_name.replace(";", "%3B")
+        url = (
+            f"https://management.azure.com/subscriptions/{sub}"
+            f"/resourceGroups/{rg}/providers/Microsoft.RecoveryServices/vaults/{vault}"
+            f"/backupFabrics/Azure/protectionContainers/{container_enc}"
+            f"/protectedItems/{item_enc}/backup"
+            f"?api-version=2021-10-01"
+        )
+        payload = {
+            "properties": {
+                "objectType": "IaasVMBackupRequest",
+                "recoveryPointExpiryTimeInUTC": expiry,
+            }
+        }
+        r = requests.post(url, json=payload, headers=headers)
+        if r.status_code not in (200, 202):
+            raise RuntimeError(f"Snapshot trigger failed ({r.status_code}): {r.text[:300]}")
+
+        time.sleep(10)
+        backup_job = next(
+            (j for j in backup_client.backup_jobs.list(vault, rg)
+             if getattr(j.properties, "operation", "") == "Backup"
+             and getattr(j.properties, "status", "") == "InProgress"),
+            None,
+        )
+        if backup_job is None:
+            raise RuntimeError("Backup job not found after trigger")
+
+        _console.print(f"  [dim]Backup job {backup_job.name} started (5-20 min expected)...[/dim]")
+        elapsed = 0
+        while True:
+            time.sleep(60)
+            elapsed += 60
+            job = backup_client.job_details.get(vault, rg, backup_job.name)
+            status = getattr(job.properties, "status", "Unknown")
+            _console.print(f"  [dim]Backup in progress... {elapsed}s — {status}[/dim]")
+            if status in ("Completed", "Failed", "Cancelled"):
+                break
+
+        if status != "Completed":
+            raise RuntimeError(f"Backup job ended with status: {status}")
+
+        return f"rsv:{vault}/{rg}/{backup_job.name}"
 
     def verify_isolation(self, resource_id: str) -> dict:
         if self.dry_run:
@@ -270,6 +335,26 @@ class AzureConnector(CloudConnector):
             return {"verified": True, "method": "dry_run"}
         if not snap_id:
             return {"verified": None, "method": "no_snap_id"}
+
+        # RSV on-demand backup: "rsv:{vault}/{rg}/{job_name}"
+        if snap_id.startswith("rsv:"):
+            try:
+                from azure.mgmt.recoveryservicesbackup import RecoveryServicesBackupClient
+                _, rest = snap_id.split("rsv:", 1)
+                vault, rg, job_name = rest.split("/", 2)
+                self._ensure_clients()
+                backup_client = RecoveryServicesBackupClient(
+                    self._credential, self._subscription_id
+                )
+                job = backup_client.job_details.get(vault, rg, job_name)
+                status = getattr(job.properties, "status", "Unknown")
+                if status == "Completed":
+                    return {"verified": True, "method": "rsv_backup", "job": job_name}
+                return {"verified": False, "method": "rsv_backup", "status": status}
+            except Exception as e:
+                return {"verified": False, "method": "rsv_backup", "error": str(e)}
+
+        # Legacy: Azure Compute disk snapshot by full resource ID
         self._ensure_clients()
         try:
             rg = snap_id.split("/resourceGroups/")[1].split("/")[0] if "/resourceGroups/" in snap_id else None

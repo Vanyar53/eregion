@@ -232,6 +232,11 @@ glorfindel watch runs/                       # terminal 1 — réponses automati
 annatar run annatar/scenarios/azure/ransomware-vm.yaml  # terminal 2 — attaque
 glorfindel pending --watch                   # terminal 3 — alerting (poll 2s, NEW ESCALATION)
 
+# Setup scénario T1486 (avant chaque run)
+annatar clean annatar/scenarios/azure/ransomware-vm.yaml   # nettoyage disque
+glorfindel snapshot <resource_id> --yes                    # recovery point propre (~5-20min)
+annatar run annatar/scenarios/azure/ransomware-vm.yaml     # lancer l'attaque
+
 # État
 glorfindel list                              # toutes VMs : isolations + IPs bloquées
 glorfindel pending                           # escalades en attente
@@ -250,6 +255,7 @@ glorfindel pending --watch                   # alerting temps réel
 glorfindel release <resource_id> --yes       # lever isolation NSG (post-restore, VM de retour)
 glorfindel unblock <ip> <resource_id> --yes  # supprimer une règle block IP
 glorfindel reset <resource_id> --yes        # reset complet : release + unblock toutes IPs
+glorfindel snapshot <resource_id> --yes      # backup on-demand RSV (setup scénario, ~5-20min)
 glorfindel restore <resource_id> --yes       # Azure Backup (--before auto-détecté)
 glorfindel ack <escalation_id>               # acquitter escalade
 glorfindel ack --all                         # acquitter toutes

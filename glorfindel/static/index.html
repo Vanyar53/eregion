@@ -260,6 +260,7 @@
   .section-group.s-protect:hover { background: color-mix(in srgb, var(--orange) 8%, transparent); cursor: pointer; }
   .section-group.s-escalation { border-color: var(--purple); background: color-mix(in srgb, var(--purple) 4%, transparent); }
   .section-group.s-escalation:hover { background: color-mix(in srgb, var(--purple) 8%, transparent); cursor: pointer; }
+  .section-group.s-recover { border-color: var(--green); background: color-mix(in srgb, var(--green) 3%, transparent); }
   .map-decision { font-size: 10px; line-height: 1.5; }
   .dec-row { display: flex; flex-direction: column; gap: 2px; padding: 2px 0; }
   .dec-header { display: flex; align-items: center; }
@@ -1774,6 +1775,26 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
 
   const isClean = !isIsolated && !isBlocked && !restoreInfo && !myEscs.length;
 
+  // Backup section — from audit data (refreshed every 5 min or on user click)
+  const backupCheck = (auditEntry?.checks || []).find(c => c.action === 'restore_from_backup');
+  const backupMsg = backupCheck?.message || '';
+  // Extract "latest Xh ago" from message like "Vault 'rsv-annatar': 5 point(s), latest 2h ago"
+  const bMatch = backupMsg.match(/(\d+)\s*point[^,]*,\s*latest\s+(.+)/);
+  const backupSummary = bMatch
+    ? `<span style="color:var(--green)">${bMatch[1]} pts</span> <span style="color:var(--dim)">· last ${bMatch[2]}</span>`
+    : backupCheck
+      ? `<span style="color:var(--dim);font-size:9px">${backupMsg.slice(0, 48) || 'checking…'}</span>`
+      : `<span style="color:var(--dim)">—</span>`;
+
+  const backupSection = `<div class="section-group s-recover" style="margin-top:5px">
+    <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+      <span style="color:var(--green);font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:.5px">Backup</span>
+      <span style="margin-left:2px">${backupSummary}</span>
+      <button class="action" onclick="event.stopPropagation();doSnapshot('${vm_name}')"
+        style="margin-left:auto;font-size:9px;padding:2px 7px">📸 Snapshot</button>
+    </div>
+  </div>`;
+
   const expandedBody = `
     ${fallbackRows.length ? `<div style="display:flex;flex-direction:column;gap:5px;margin-top:6px">${fallbackRows.join('')}</div>` : ''}
     ${decisionHtml || ''}
@@ -1782,7 +1803,8 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
     </div>` : ''}
     ${myDetEscs.length ? `<div class="vm-escalations" style="margin:8px 0 0;padding:8px 0 0;border-top:1px solid var(--border)">
       ${_groupEscs(myDetEscs).map(_renderEscGroup).join('')}
-    </div>` : ''}`;
+    </div>` : ''}
+    ${backupSection}`;
 
   const compactBody = isClean ? '' : `
     <div class="node-asset-states" style="margin-top:6px">${stateBadges}</div>`;
@@ -2038,6 +2060,15 @@ async function doRevert(vmName) {
     else toast('✗ Revert failed: ' + (d.stderr || d.error || '?'));
   } catch (e) { toast('✗ ' + e.message); }
   finally { _pendingActions.delete(vmName); refreshState(); }
+}
+
+async function doSnapshot(vmName) {
+  toast('📸 Snapshot started for ' + vmName + ' — check RSV for job status');
+  try {
+    const r = await fetch(`/api/action/snapshot/${vmName}`, { method: 'POST' });
+    const d = await r.json();
+    if (d.error) toast('✗ Snapshot failed: ' + d.error);
+  } catch (e) { toast('✗ ' + e.message); }
 }
 
 async function doRestore(vmName) {

@@ -365,6 +365,24 @@ async def action_revert(vm_name: str) -> dict:
     }
 
 
+@app.post("/api/action/snapshot/{vm_name}")
+async def action_snapshot(vm_name: str) -> dict:
+    """Trigger an on-demand Azure Backup snapshot (fire-and-forget)."""
+    resource_id = _find_resource_id(vm_name)
+    if not resource_id:
+        return {"error": f"Resource ID not found for {vm_name}"}
+
+    async def _bg_snapshot(rid: str) -> None:
+        await asyncio.to_thread(
+            subprocess.run,
+            [_bin(), "snapshot", rid, "--yes"],
+            capture_output=True, text=True, timeout=1800,
+        )
+
+    asyncio.create_task(_bg_snapshot(resource_id))
+    return {"status": "started", "resource_id": resource_id}
+
+
 @app.post("/api/action/restore/{vm_name}")
 async def action_restore(vm_name: str) -> dict:
     resource_id = _find_resource_id(vm_name)

@@ -3,14 +3,24 @@
 # Add new examples here — no need to edit agent.py.
 
 examples:
-  - title: "Disk write anomaly"
-    signal_indicators: "MaxWrite=147 MB/s sustained over 8 min, Logical Disk counter"
+  - title: "Disk write anomaly — first detection, no prior isolation"
+    signal_indicators: "MaxWrite=147 MB/s sustained, Logical Disk counter, incident context shows no prior action"
     reasoning:
-      - "Q: What happened? Sustained high-rate writes across all files — consistent with\n     encryption. If encryption ran for 8 minutes, disk data is likely destroyed."
-      - "Q: Does isolation help? No — isolation cuts network but cannot decrypt data."
-      - "Q: What recovers the data? Only restore_from_backup replaces the disk contents."
+      - "Q: What happened? Sustained high-rate writes — consistent with active file encryption.\n     Data on disk is being destroyed in real time."
+      - "Q: Does isolation stop the ransomware? Not the local encryption — but it stops:\n     (1) network exfiltration of encrypted data, (2) C2 communication that could extend\n     the attack, (3) lateral movement to other VMs. The blast radius is contained."
+      - "Q: Why not restore_from_backup immediately? restore_from_backup is destructive (~20 min,\n     replaces the disk). It requires human approval. The correct autonomous first action is\n     isolate_vm — it contains the threat now without destroying anything. Restore will be\n     escalated once isolation is confirmed in the next cycle."
+      - "Q: Past cycles show T1486 → restore_from_backup — should I skip isolation?\n     NO. past_cycles are from PREVIOUS RUNS, not the current incident state. The current\n     incident context (actions_taken=[]) shows no action has been taken for THIS incident.\n     Always isolate first when actions_taken is empty for a T1486 signal."
+    conclusion: "action=isolate_vm, escalate=false (contains blast radius now; restore_from_backup escalated next cycle)"
+    confidence: "high when MaxWrite is sustained and anomalous, disk write rate confirms active encryption"
+
+  - title: "Disk write anomaly — isolation already active, restore needed"
+    signal_indicators: "MaxWrite still high, incident context shows isolate_vm confirmed (actions_taken non-empty)"
+    reasoning:
+      - "Q: What happened? Ransomware confirmed, encryption ongoing. VM is already isolated."
+      - "Q: Is isolation sufficient? No — the VM is isolated but local encryption continues.\n     Data on the disk is being destroyed. Isolation was the right first step; now the\n     disk must be replaced."
+      - "Q: What recovers the data? Only restore_from_backup replaces the disk contents.\n     This is destructive and irreversible — human approval required."
     conclusion: "action=restore_from_backup, escalate=true (destructive, ~20 min, human must confirm)"
-    confidence: "high when MaxWrite is sustained and anomalous vs. baseline"
+    confidence: "high when isolation confirmed in incident context and disk write rate confirms ongoing encryption"
 
   - title: "Outbound blob upload from private IP"
     signal_indicators: "PutBlob, CallerIpAddress=10.x.x.x (RFC-1918), AccountName=storage-prod"

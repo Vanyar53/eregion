@@ -665,6 +665,21 @@ def test_escalation_record_dedup_after_resolve_creates_new():
     assert len(pending()) == 1
 
 
+def test_restore_resolves_escalation_case_insensitive():
+    """resolve_by_resource() matches resource_id case-insensitively (Azure ARM IDs)."""
+    from glorfindel.escalations import record, resolve_by_resource, pending
+
+    rid_upper = "/subscriptions/abc/resourceGroups/Annatar/providers/Microsoft.Compute/virtualMachines/vm1"
+    rid_lower = rid_upper.lower()
+
+    record("sig1", rid_upper, "restore_from_backup", "destructive_action", "ransomware detected")
+    assert len(pending()) == 1
+
+    count = resolve_by_resource(rid_lower, "restore_from_backup")
+    assert count == 1
+    assert len(pending()) == 0
+
+
 # ── decide — confidence gate ──────────────────────────────────────────────────
 
 def test_decide_confidence_gate_forces_escalation():

@@ -432,13 +432,16 @@ Perf
 # Identifiable backup agents only — generic POSIX tools (rsync, cp, tar, gzip)
 # are NOT included: a ransomware archiving before encryption would match them,
 # producing a false-negative "legitimate backup" conclusion.
+# Requires \\Process(*)\\IO Write Bytes/sec in DCR counter_specifiers — without
+# it this query always returns empty (ObjectName=Process data is not collected
+# by default).
 _IQ_BACKUP_AGENT = """
 Perf
 | where TimeGenerated > ago(10m)
 | where Computer == "{vm}"
 | where ObjectName == "Process"
 | where CounterName == "IO Write Bytes/sec"
-| where InstanceName in~ ("waagent", "WALinuxAgent", "azure-backup", "snapd")
+| where InstanceName in~ ("waagent", "WALinuxAgent", "azure-backup", "snapd", "MicrosoftAzureRecoveryServices")
 | summarize MaxWriteMBs = round(max(CounterValue) / 1048576, 1) by InstanceName
 """
 

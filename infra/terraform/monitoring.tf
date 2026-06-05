@@ -35,6 +35,7 @@ resource "azurerm_monitor_data_collection_rule" "annatar" {
         "\\LogicalDisk(*)\\Disk Read Bytes/sec",
         "\\Network Interface(*)\\Bytes Sent/sec",
         "\\Processor(_Total)\\% Processor Time",
+        "\\Process(*)\\IO Write Bytes/sec",
       ]
       name = "perf-counters"
     }

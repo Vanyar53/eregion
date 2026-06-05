@@ -777,7 +777,7 @@ def ack(escalation_id: str | None, all_pending: bool):
 
 @cli.command("list")
 def list_active():
-    """List all VMs with active Glorfindel actions (isolation, blocked IPs)."""
+    """List discovered VMs and any active Glorfindel actions (isolation, blocked IPs)."""
     from datetime import datetime, timezone
     from glorfindel.actions import active_blocks, active_isolations
 
@@ -789,35 +789,58 @@ def list_active():
         age_m = int((now - datetime.fromisoformat(ts)).total_seconds() // 60)
         return f"{ts[:19].replace('T', ' ')} UTC ({age_m}m ago)"
 
-    isolations = {i["resource_id"]: i for i in active_isolations()}
+    isolations = {i["resource_id"].lower(): i for i in active_isolations()}
     blocks: dict[str, list] = {}
     for b in active_blocks():
-        blocks.setdefault(b["resource_id"], []).append(b)
+        blocks.setdefault(b["resource_id"].lower(), []).append(b)
 
-    all_ids = sorted(set(isolations) | set(blocks))
-    if not all_ids:
-        console.print("[green]No active actions — all VMs clean.[/green]")
+    # Discovered assets from AssetRegistry (survives between runs)
+    discovered: dict[str, str] = {}  # resource_id.lower() → resource_id (canonical)
+    try:
+        from glorfindel.discovery import AssetRegistry
+        for asset in AssetRegistry().all():
+            discovered[asset.resource_id.lower()] = asset.resource_id
+    except Exception:
+        pass
+
+    all_ids_lower = sorted(set(isolations) | set(blocks) | set(discovered))
+    if not all_ids_lower:
+        console.print("[dim]No discovered VMs and no active actions.[/dim]")
+        console.print("[dim]Start 'glorfindel watch' to discover assets via Heartbeat.[/dim]")
         return
 
-    console.rule(f"[bold yellow]Glorfindel — {len(all_ids)} VM(s) with active actions[/bold yellow]")
-    for resource_id in all_ids:
+    console.rule(f"[bold cyan]Glorfindel — {len(all_ids_lower)} VM(s)[/bold cyan]")
+    for rid_lower in all_ids_lower:
+        resource_id = discovered.get(rid_lower) or (
+            isolations.get(rid_lower, {}).get("resource_id")
+            or blocks.get(rid_lower, [{}])[0].get("resource_id", rid_lower)
+        )
         vm_short = resource_id.split("/")[-1]
-        console.print(f"[bold]{vm_short}[/bold]")
 
-        if resource_id in isolations:
-            ts = isolations[resource_id].get("isolated_at", "")
+        has_action = rid_lower in isolations or rid_lower in blocks
+        status_color = "bold red" if rid_lower in isolations else (
+            "bold yellow" if rid_lower in blocks else "bold"
+        )
+        console.print(f"[{status_color}]{vm_short}[/{status_color}]")
+        console.print(f"  [dim]{resource_id}[/dim]", soft_wrap=True)
+
+        if rid_lower in isolations:
+            ts = isolations[rid_lower].get("isolated_at", "")
             console.print(f"  [red]ISOLATED[/red]  {_age(ts)}")
             console.print(f"  [dim]→ glorfindel release {resource_id} --yes[/dim]",
                           soft_wrap=True)
 
-        for b in blocks.get(resource_id, []):
+        for b in blocks.get(rid_lower, []):
             ts = b.get("blocked_at", "")
             console.print(f"  [yellow]BLOCKED[/yellow]   {b['ip']}  {_age(ts)}")
             console.print(f"  [dim]→ glorfindel unblock {b['ip']} {resource_id} --yes[/dim]",
                           soft_wrap=True)
 
-        console.print(f"  [dim]→ glorfindel reset {resource_id} --yes  (all at once)[/dim]\n",
-                      soft_wrap=True)
+        if has_action:
+            console.print(
+                f"  [dim]→ glorfindel reset {resource_id} --yes  (all at once)[/dim]",
+                soft_wrap=True)
+        console.print()
 
 
 def _do_reset(resource_id: str, yes: bool, dry_run: bool) -> None:

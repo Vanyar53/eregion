@@ -341,6 +341,8 @@ wheel : eregion-0.2.0-py3-none-any.whl ✓
 
 ## Pitfalls opérateur
 
+`backup_agent_check` retourne toujours `[]` sur les Linux VMs — `\\Process(*)\\IO Write Bytes/sec` est un counter Windows-only, Linux AMA ne le collecte pas. Idem pour `top_write_processes` (même counter, même limitation). Le LLM interprète correctement un résultat vide comme une ambiguïté (ne peut pas exclure le ransomware) — comportement conservateur correct.
+
 `annatar run` fait un preflight check automatique (VM running + pas de règles `glorfindel-isolation-*`). Si ça échoue, le run s'arrête avec la commande exacte à lancer. `--skip-preflight` pour bypasser.
 
 ```bash

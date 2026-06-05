@@ -59,11 +59,11 @@ async def state() -> dict:
             "states": states,
         })
 
-    # Discovered assets from background discovery service
+    # Discovered assets — fresh read from disk (watch service may have updated the file)
     discovered: list[dict] = []
     try:
-        from glorfindel.discovery import get_registry
-        discovered = get_registry().to_dicts()
+        from glorfindel.discovery import AssetRegistry
+        discovered = AssetRegistry().to_dicts()
     except Exception:
         pass
 
@@ -394,8 +394,8 @@ async def audit_resource(vm_name: str) -> dict:
         ]
         rp = next((p for p in rules_candidates if p.exists()), None)
         if rp:
-            from glorfindel.discovery import get_registry
-            for asset in get_registry().all():
+            from glorfindel.discovery import AssetRegistry
+            for asset in AssetRegistry().all():
                 if asset.name == vm_name or asset.resource_id.split("/")[-1] == vm_name:
                     resource_id = asset.resource_id
                     break
@@ -435,9 +435,9 @@ async def audit_all() -> dict:
         vault = os.environ.get("GLORFINDEL_BACKUP_VAULT", "rsv-annatar")
         _cfg = None
 
-    # VM targets: discovered dynamically via Heartbeat
-    from glorfindel.discovery import get_registry
-    discovered = get_registry().all()
+    # VM targets: fresh read from disk (watch service may have updated the file)
+    from glorfindel.discovery import AssetRegistry
+    discovered = AssetRegistry().all()
     targets = [(a.resource_id, a.name) for a in discovered if a.resource_id]
     if not targets:
         # Legacy fallback: rules with inline resource_id
@@ -526,8 +526,8 @@ async def vm_actions(vm_name: str, limit: int = 5) -> dict:
 async def discovered_assets() -> dict:
     """Return assets discovered from monitoring backends."""
     try:
-        from glorfindel.discovery import get_registry
-        return {"assets": get_registry().to_dicts()}
+        from glorfindel.discovery import AssetRegistry
+        return {"assets": AssetRegistry().to_dicts()}
     except Exception:
         return {"assets": []}
 
@@ -656,10 +656,10 @@ def _find_resource_id(vm_name: str) -> str | None:
     except Exception:
         pass
 
-    # Fallback 2: discovered asset registry
+    # Fallback 2: discovered asset registry (fresh read from disk)
     try:
-        from glorfindel.discovery import get_registry
-        for asset in get_registry().all():
+        from glorfindel.discovery import AssetRegistry
+        for asset in AssetRegistry().all():
             if asset.name == vm_name or asset.resource_id.split("/")[-1] == vm_name:
                 return asset.resource_id
     except Exception:

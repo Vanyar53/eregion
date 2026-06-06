@@ -1,7 +1,7 @@
 # Eregion — Roadmap & Priorités
 
 ## Contexte produit
-Eregion est une plateforme de réponse autonome aux incidents cloud, sans playbooks ni SOC requis.
+Eregion est un CDR — Cloud Detection and Response. Détecte, répond et apprend — sans playbooks, sans équipe SOC dédiée.
 Pitch : "Teste ton infra avant que les autres le fassent pour toi."
 Cible : DevOps leads mid-market (50-500 personnes), pas de SOC dédié, <$500/mois acceptable.
 Modèle : CLI open source gratuit, SaaS payant pour multi-tenant + connecteurs avancés + reporting.
@@ -248,3 +248,17 @@ War Room local              →  War Room SaaS multi-tenant
 - Pas de fine-tuning LLM — la RAG ChromaDB suffit pour le MVP
 - Pas de multi-cloud avant que la boucle Azure soit solide
 - Pas de SaaS avant utilisateurs réels
+
+---
+
+## Vision long terme
+
+Eregion n'est pas un outil de sécurité supplémentaire — c'est la couche de raisonnement qui manquait au-dessus des outils existants. Les EDR, SIEM, NIDS continuent d'exister comme collecteurs de signaux. Eregion raisonne sur leurs sorties sans règles de corrélation explicites.
+
+```
+Court terme  : CDR Azure — détecter, répondre, apprendre sur un cloud
+Moyen terme  : CDR multi-cloud + posture (CSPM lite) — AWS, GCP, Prometheus
+Long terme   : raisonnement unifié cross-sources — endpoint, réseau, cloud, identité
+```
+
+La catégorie CDR (Cloud Detection and Response) est émergente chez Gartner (intégrée dans CNAPP). C'est là qu'Eregion se positionne — sans la complexité playbook des SOAR, sans le scope limité des EDR cloud-natifs.

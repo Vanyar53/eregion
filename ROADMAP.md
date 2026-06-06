@@ -1,7 +1,7 @@
 # Eregion — Roadmap & Priorités
 
 ## Contexte produit
-Eregion est un SOAR IA open-core. Pas de playbooks — Glorfindel raisonne depuis le contexte du signal.
+Eregion est une plateforme de réponse autonome aux incidents cloud, sans playbooks ni SOC requis.
 Pitch : "Teste ton infra avant que les autres le fassent pour toi."
 Cible : DevOps leads mid-market (50-500 personnes), pas de SOC dédié, <$500/mois acceptable.
 Modèle : CLI open source gratuit, SaaS payant pour multi-tenant + connecteurs avancés + reporting.

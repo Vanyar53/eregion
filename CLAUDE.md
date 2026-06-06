@@ -16,8 +16,8 @@ Plateforme OSS (Apache 2.0) de défense active cloud. Deux agents IA en boucle :
 
 | TTP | Scénario | Détection | Temps | Action |
 |-----|----------|-----------|-------|--------|
-| T1486 | Ransomware VM | Perf disk write | ~71s | `restore_from_backup` (escalade) → 21m23s RTO |
-| T1041 | Data exfiltration | StorageBlobLogs (RFC-1918, PutBlob ≥ 1) | ~79s* | `isolate_vm` (disk intact) |
+| T1486 | Ransomware VM | Perf disk write | ~71s | cycle 1 : `isolate_vm` (autonome), cycle 2 : `restore_from_backup` (escalade) → 21m23s RTO |
+| T1041 | Data exfiltration | StorageBlobLogs (RFC-1918, PutBlob ≥ 1) | ~79–108s* | `isolate_vm` (disk intact) |
 | T1110.001 | SSH brute force | Syslog DCR | 58s | `block_suspicious_ip` |
 | T1548.003 | Sudo priv esc | Syslog DCR | 40s | `isolate_vm` (root confirmé) |
 | T1110+T1548 | Run parallèle | — | 41s/59s | block → isolate (incident context) |
@@ -166,10 +166,11 @@ glorfindel/
   bot.py                → Discord bot — un fil par VM, boutons Acquitter + Commande, /pending slash command
   tui.py                → Rich TUI full-screen (glorfindel dashboard) : resources + feed + escalations, raccourcis a/r/x/u/v
   api.py                → FastAPI War Room — /api/state, /api/feed (WS), /api/config, /api/audit[/<vm>],
-                          /api/pending/rules, /api/action/{release,revert,restore,ack,approve-rule}
-                          /api/discovered — assets découverts (registry)
-  static/index.html     → War Room web UI — cards VM, feed live,
+                          /api/pending/rules, /api/action/{release,revert,restore,ack,approve-rule,snapshot/<vm>}
+                          /api/discovered — assets découverts (lecture fraîche JSON à chaque appel)
+  static/index.html     → War Room web UI — cards VM expandables (compact + étendu), feed live
                           boutons ↩️ Release (isolated) | ↩️ Unblock (blocked IP) | ⟳ Reset (les deux) | 🔄 Restore
+                          section BACKUP par carte : nb de RPs, âge dernier backup, bouton 📸 Snapshot (fire-and-forget RSV)
                           carte MONITORING : backends + assets découverts + règles cliquables (modal query)
                           panneau ⚙ Config : Azure credentials + LLM uniquement
   rules/azure/
@@ -238,7 +239,7 @@ glorfindel snapshot <resource_id> --yes                    # recovery point prop
 annatar run annatar/scenarios/azure/ransomware-vm.yaml     # lancer l'attaque
 
 # État
-glorfindel list                              # toutes VMs : isolations + IPs bloquées
+glorfindel list                              # toutes VMs : isolations + IPs bloquées + assets découverts
 glorfindel pending                           # escalades en attente
 glorfindel pending --watch                   # alerting temps réel
 
@@ -304,7 +305,7 @@ GLORFINDEL_CONFIDENCE_THRESHOLD=0.7 # gate autonomie LLM (défaut 0.7 — en des
 ## Tests
 
 ```bash
-pytest                    # 229 tests, 0 appel Azure, 0 appel LLM, 0 écriture ~/.glorfindel/
+pytest                    # 234 tests, 0 appel Azure, 0 appel LLM, 0 écriture ~/.glorfindel/
 pytest tests/unit/test_agent_nodes.py        # LangGraph nodes (incl. investigate + confidence gate)
 pytest tests/unit/test_glorfindel.py         # actions/routing/signals
 pytest tests/unit/test_detection_rules.py    # RulePoller + load_rules + status + recently_matched
@@ -347,7 +348,7 @@ wheel : eregion-0.2.0-py3-none-any.whl ✓
 
 ## Pitfalls opérateur
 
-`backup_agent_check` retourne toujours `[]` sur les Linux VMs — `\\Process(*)\\IO Write Bytes/sec` est un counter Windows-only, Linux AMA ne le collecte pas. Idem pour `top_write_processes` (même counter, même limitation). Le LLM interprète correctement un résultat vide comme une ambiguïté (ne peut pas exclure le ransomware) — comportement conservateur correct.
+`backup_agent_check` retourne toujours `[]` sur les Linux VMs — `\\Process(*)\\IO Write Bytes/sec` est un counter Windows-only, Linux AMA ne le collecte pas. Idem pour `top_write_processes` (même counter). **C'est le comportement voulu** : résultats vides → le LLM ne peut pas exclure le ransomware → escalade forcée. L'alternative (`az backup job list` via RunCommand) ajouterait latence 15-30s + dépendance AZ CLI in-guest pour un résultat qui rendrait le produit trop confiant sur des données incomplètes.
 
 `annatar run` fait un preflight check automatique (VM running + pas de règles `glorfindel-isolation-*`). Si ça échoue, le run s'arrête avec la commande exacte à lancer. `--skip-preflight` pour bypasser.
 
@@ -372,12 +373,13 @@ az network nsg rule list -g annatar --nsg-name nsg-annatar -o table
 - `dry_run=True` dans tous les tests — jamais d'appel Azure ou LLM dans les tests
 - `tests/unit/conftest.py` : fixture `autouse` redirige `escalations._STORE` → `tmp_path/escalations.jsonl` (les tests n'écrivent jamais dans `~/.glorfindel/`)
 - `AZURE_SUBSCRIPTION_ID` obligatoire dans l'env (plus d'auto-détection via SubscriptionClient)
+- **Edit de `few_shot_examples.yaml` ou `_SYSTEM_PROMPT`** : requiert un run end-to-end T1486 + au moins un autre TTP avant merge. Les few-shot examples sont des politiques de sécurité implicites — les 234 tests unitaires (LLM mocké, dry_run=True) ne peuvent pas les valider. Un edit mal calibré peut introduire un raccourci critique (ex: ransomware non-isolé 20min, faux positif T1041). Voir c6fe0d0.
 
 ---
 
 ## Sessions Claude spécialisées (multi-agents)
 
-4 sessions en parallèle sur le même repo, coordonnées via `collab/`.
+4 sessions spécialisées + 2 sessions transversales, coordonnées via `collab/`.
 
 | Session | Fichier de rôle | Périmètre |
 |---------|----------------|-----------|
@@ -385,6 +387,8 @@ az network nsg rule list -g annatar --nsg-name nsg-annatar -o table
 | Annatar | `CLAUDE_ANNATAR.md` | `annatar/`, `annatar/scenarios/`, tests unitaires Annatar |
 | Tests | `CLAUDE_TESTS.md` | Chef d'orchestre — tests fonctionnels bout en bout sur Azure réel |
 | War Room | `CLAUDE_WARROOM.md` | UI/UX `glorfindel/static/index.html` + `glorfindel/api.py` |
+| Review | `CLAUDE.md` (base) | Design review, architecture critique, BA sprint — ad hoc |
+| General | `CLAUDE.md` (base) | Coordination inter-sessions, inbox routing, CLAUDE.md/README/ROADMAP |
 
 **Démarrer une session :**
 ```
@@ -399,6 +403,12 @@ az network nsg rule list -g annatar --nsg-name nsg-annatar -o table
 
 # Session War Room
 "Lis CLAUDE_WARROOM.md pour tes instructions de session, puis commence par ton inbox."
+
+# Session Review (ad hoc — challenge design et implémentations)
+"Tu es la session Review d'Eregion. Lis CLAUDE.md. Ta mission : challenger les décisions architecturales, les implémentations critiques et les choix de sécurité. Commence par lire inbox_review.md."
+
+# Session General (coordination)
+"Tu es la session General d'Eregion. Lis CLAUDE.md. Ta mission : coordonner les sessions spécialisées, router les items cross-cutting, mettre à jour CLAUDE.md/README.md/ROADMAP.md. Commence par lire inbox_general.md."
 ```
 
 **Protocole :** chaque session lit son inbox (`collab/inbox_<role>.md`) en début de tâche, met à jour son status (`collab/<role>_status.md`) après chaque changement significatif, et écrit dans l'inbox de l'autre si un changement a un impact cross-cutting.

@@ -36,8 +36,8 @@ Signals from different resources run in parallel threads; signals from the same 
 
 | TTP | Scenario | Detection source | Detection time | Action | RTO |
 |-----|----------|-----------------|----------------|--------|-----|
-| T1486 | Ransomware VM | Perf disk write anomaly | ~71s | `restore_from_backup` (escalate) | 21m23s |
-| T1041 | Data exfiltration | StorageBlobLogs (PutBlob, RFC-1918) | ~79s* | `isolate_vm` (internal IP) | — |
+| T1486 | Ransomware VM | Perf disk write anomaly | ~71s | cycle 1: `isolate_vm` (autonomous) → cycle 2: `restore_from_backup` (escalate) | 21m23s |
+| T1041 | Data exfiltration | StorageBlobLogs (PutBlob, RFC-1918) | ~79–108s* | `isolate_vm` (internal IP) | — |
 | T1110.001 | SSH brute force | Syslog DCR (auth facility) | ~58s | `block_suspicious_ip` | — |
 | T1548.003 | Sudo privilege escalation | Syslog DCR (auth facility) | ~40s | `isolate_vm` (OS-level compromise) | — |
 | T1110+T1548 | Parallel multi-signal | Syslog DCR | 41s / 59s | `block_suspicious_ip` → `isolate_vm` (incident context) | — |
@@ -137,10 +137,15 @@ State, history, and ChromaDB model cache are persisted on the host (`~/.glorfind
 ```bash
 az vm start -g annatar -n vm-annatar-victim   # VM auto-shuts down at 23:00 UTC
 
+# Setup T1486 (before each run — clean disk + fresh recovery point)
+annatar clean annatar/scenarios/azure/ransomware-vm.yaml           # wipe testdata disk
+glorfindel snapshot /subscriptions/.../vm-annatar-victim --yes    # clean RP (~5-20min)
+
 glorfindel watch runs/                              # terminal 1 — Glorfindel watches for signals
 annatar run annatar/scenarios/azure/ransomware-vm.yaml      # terminal 2 — Annatar attacks
 
-# Glorfindel escalates restore_from_backup within ~60s (disk encrypted — human approval required)
+# Cycle 1 (~71s): Glorfindel detects disk write spike → isolate_vm autonomously (stops exfil/spread)
+# Cycle 2: Glorfindel escalates restore_from_backup (disk encrypted — human approval required)
 
 glorfindel pending                                  # see escalation: restore_from_backup
 glorfindel restore /subscriptions/.../vm-annatar-victim --yes   # terminal 3 (~20 min)
@@ -209,8 +214,9 @@ Glorfindel operates under strict autonomy rules. The graph enforces them regardl
 
 ```
 Signal: MaxWrite=147 MB/s sustained 8 min
-→ Encryption likely ran. Disk data destroyed. Isolation can't recover data.
-→ restore_from_backup (escalate — human confirms)
+→ Encryption active. VM still on network — may spread or exfiltrate before restore.
+→ Cycle 1: isolate_vm (autonomous — severs network immediately)
+→ Cycle 2: restore_from_backup (escalate — disk encrypted, human confirms)
 
 Signal: PutBlob, CallerIP=10.x.x.x (RFC-1918)
 → Internal VM uploaded data. Disk intact. Block_ip won't work on internal IP.
@@ -355,8 +361,10 @@ glorfindel/
   bot.py               → Discord bot: one thread per VM, Ack/Restore/Revert buttons, /pending command
   tui.py               → Rich full-screen TUI: resources + feed + escalations, keyboard shortcuts a/r/v
   api.py               → FastAPI War Room: /api/state, /api/feed (WS), /api/config, /api/audit,
-                         /api/discovered, /api/pending/rules, /api/action/*
-  static/index.html    → War Room: incident cards, live feed, action buttons
+                         /api/discovered (fresh JSON read per call), /api/pending/rules,
+                         /api/action/{release,revert,restore,ack,approve-rule,snapshot/<vm>}
+  static/index.html    → War Room: expandable VM cards (compact + expanded), live feed, action buttons
+                         BACKUP section per card: recovery point count, last backup age, 📸 Snapshot
                          MONITORING zone: backends + discovered VMs + posture gaps + rules (clickable)
                          Config panel: Azure credentials + LLM only
 
@@ -481,7 +489,7 @@ glorfindel audit --all   # NSG / backup vault / compute — surfaces IAM gaps wi
 ```bash
 pip install eregion[dev]
 pytest
-# 184 tests — 0 Azure calls, 0 LLM calls
+# 234 tests — 0 Azure calls, 0 LLM calls
 ```
 
 Coverage: 7 LangGraph nodes (incl. propose_detection_rule), routing rules, signal schema, safety guard, YAML parser, ChromaDB memory, CLI escalation flow, detection rules (RulePoller + auto-apply + eviction), proposed rules lifecycle, audit readiness checks, GlorfindelConfig + ExceptionConfig, AssetRegistry + DiscoveryService (replace-on-refresh, self-evicting threads), PostureChecker (dedup, re-escalation).

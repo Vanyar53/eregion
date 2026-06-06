@@ -11,7 +11,11 @@ Modèle : CLI open source gratuit, SaaS payant pour multi-tenant + connecteurs a
 ## État actuel (v0.2.0)
 - 5 TTPs validés en réel sur Azure : T1486, T1041, T1110.001, T1548.003 + run parallèle T1110+T1548
 - Run parallèle multi-signal validé avec IncidentRegistry + propagation investigative_context entre cycles
-- 229 tests, 0 appel Azure, 0 appel LLM
+- 234 tests, 0 appel Azure, 0 appel LLM
+- **Few-shot T1486 corrigé** (commit c6fe0d0) — bug sécurité : LLM sautait l'isolation, ransomware restait actif 20min. Flow corrigé : cycle 1 `isolate_vm` autonome, cycle 2 `restore_from_backup` escaladé
+- **War Room BACKUP** : section visible sur chaque carte VM, bouton 📸 Snapshot (fire-and-forget RSV)
+- **Stabilité War Room** : registry stale corrigé (lecture fraîche JSON), release isolation robuste, subprocess non-bloquant
+- `glorfindel snapshot` (on-demand RSV) + `annatar clean` (nettoyage disque seul, remplace annatar snapshot)
 - Support multi-provider LLM via LiteLLM : Anthropic (défaut), OpenAI, Azure OpenAI, Ollama, self-hosted
 - **Prompt caching** activé sur system prompt (~400 lignes) — -60-80% tokens input
 - **Confidence gate** : LLM confidence < 0.7 → escalade forcée même sur action autonome
@@ -166,12 +170,16 @@ class DatadogDetector(DetectionConnector):
 
 **Ce qui est livré :**
 - Infra map avec 4 zones (network, monitoring, compute, backup) + connexions SVG dynamiques
-- VM cards : état (ok/isolated/blocked), LLM reasoning cliquable, boutons Release/Unblock/Reset/Restore
+- VM cards expandables (compact + étendu), état (ok/isolated/blocked), LLM reasoning cliquable
+- Boutons Release/Unblock/Reset/Restore par VM
+- **Section BACKUP** par carte : recovery point count, âge dernier backup, bouton 📸 Snapshot (fire-and-forget RSV)
 - Live feed WebSocket avec reconnect automatique
 - Posture gaps par VM (NSG, backup, IAM) — avec commande `az` exacte pour corriger
 - Règles de détection cliquables (modal avec query KQL complète + polling status)
 - Config panel : Azure credentials + LLM
 - `make glorfindel-dev` — auto-reload sur modification de `index.html` (volume mount)
+- Registry stale corrigé : lecture fraîche `discovered_assets.json` à chaque appel API
+- Release isolation robuste : `_clear_isolation_state` inconditionnel + subprocess asyncio non-bloquant
 
 **Prochaine itération (après feedback premier utilisateur) :**
 - [ ] Confidence score visible dans les VM cards

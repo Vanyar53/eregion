@@ -240,6 +240,36 @@ War Room local              →  War Room SaaS multi-tenant
 
 ---
 
+## Paysage concurrentiel CDR
+
+### Acteurs établis (CNAPP — CDR bundlé)
+| Acteur | Position | Différence avec Eregion |
+|--------|----------|------------------------|
+| **Wiz** (post-Gem Security ~$350M, 2024) | CNAPP leader + CDR | $100k+/an, bundlé shift-left + CSPM + CDR. Eregion = CDR seul, accessible mid-market |
+| **Palo Alto Prisma Cloud** | CNAPP enterprise | Même logique — overkill pour une équipe sans SOC |
+| **CrowdStrike** | EDR + cloud workload | Endpoint-first, pas cloud-first |
+| **Microsoft Defender for Cloud** | CDR natif Azure | Détection uniquement, pas de réponse autonome ni purple team loop |
+
+### Émergents CDR à surveiller
+| Acteur | Status | Différence avec Eregion |
+|--------|--------|------------------------|
+| **Skyhawk Security** | Startup ~2022, VC-backed | Simulation + behavioral ML, **pas de réponse LLM autonome ni purple team loop** à ce jour |
+| **CloudFence** | POC en cours (NDA) | Behavioral baseline + alerting, **pas de réponse autonome** aujourd'hui |
+
+### Précédents d'acquisition
+- **Gem Security → Wiz** (~$350M, 2024) — CDR standalone acheté plutôt que construit. Valide la catégorie.
+- **Lacework → Fortinet** (2023) — CDR behavioral ML. Les CNAPP/enterprise players achètent de la CDR.
+- Pattern : les CNAPP giants rachètent le CDR plutôt que de le construire. Fenêtre pour établir une position différenciée : **12-18 mois**.
+
+### Scénarios Eregion
+1. **Acquisition** — 10-20 utilisateurs + différenciation claire → acquérable par Orca, Aqua, Rapid7, IBM, ou acteur EU souverain (Orange Cyberdefense, Thales)
+2. **Business OSS mid-market** — niche Azure défendue, 200-500 clients × $200-500/mois
+3. **Trop tard** — terrain occupé avant traction externe
+
+**Ce qui détermine le scénario : un utilisateur externe dans les 60 prochains jours.**
+
+---
+
 ## Ce qu'on ne fait PAS
 - Pas compliance-oriented (NIS2, DORA)
 - Pas d'agent en roue libre sur actions destructives

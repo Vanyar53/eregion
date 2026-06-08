@@ -45,8 +45,13 @@ class CloudConnector(ABC):
         ...
 
     @abstractmethod
-    def snapshot(self, resource_id: str) -> str:
-        """Take an on-demand snapshot before any destructive recovery."""
+    def snapshot(self, resource_id: str, vault: str = "rsv-annatar", wait: bool = True) -> str:
+        """Take an on-demand RSV backup snapshot.
+
+        wait=True: blocks until job completes (~5-20 min). Use for CLI setup workflow.
+        wait=False: fire-and-forget — returns job_id immediately. Use on detection_timeout
+        paths to avoid blocking the queue during a long initial backup.
+        """
         ...
 
     @abstractmethod
@@ -244,11 +249,12 @@ class AzureConnector(CloudConnector):
             "resource_id": resource_id,
         }
 
-    def snapshot(self, resource_id: str, vault: str = "rsv-annatar") -> str:
-        """Trigger an RSV on-demand backup and wait for completion.
+    def snapshot(self, resource_id: str, vault: str = "rsv-annatar", wait: bool = True) -> str:
+        """Trigger an RSV on-demand backup.
 
-        Returns an opaque snap_id ("rsv:{vault}/{rg}/{job}") usable by
-        verify_snapshot(). Blocks until the backup job finishes (~5-20 min).
+        wait=True: blocks until job completes (~5-20 min). Use for CLI setup workflow.
+        wait=False: fire-and-forget — returns job_id immediately without polling.
+        Use on detection_timeout paths to avoid blocking the queue.
         """
         if self.dry_run:
             return "snap-dry-run-000"
@@ -298,7 +304,13 @@ class AzureConnector(CloudConnector):
         if backup_job is None:
             raise RuntimeError("Backup job not found after trigger")
 
-        _console.print(f"  [dim]Backup job {backup_job.name} started (5-20 min expected)...[/dim]")
+        snap_id = f"rsv:{vault}/{rg}/{backup_job.name}"
+        _console.print(
+            f"  [dim]Backup job {backup_job.name} started (5-20 min expected)...[/dim]"
+        )
+        if not wait:
+            return snap_id
+
         elapsed = 0
         while True:
             time.sleep(60)
@@ -312,7 +324,7 @@ class AzureConnector(CloudConnector):
         if status != "Completed":
             raise RuntimeError(f"Backup job ended with status: {status}")
 
-        return f"rsv:{vault}/{rg}/{backup_job.name}"
+        return snap_id
 
     def verify_isolation(self, resource_id: str) -> dict:
         if self.dry_run:
@@ -350,6 +362,9 @@ class AzureConnector(CloudConnector):
                 status = getattr(job.properties, "status", "Unknown")
                 if status == "Completed":
                     return {"verified": True, "method": "rsv_backup", "job": job_name}
+                if status == "InProgress":
+                    # Fire-and-forget path: job still running — not a failure
+                    return {"verified": None, "method": "rsv_backup", "status": status}
                 return {"verified": False, "method": "rsv_backup", "status": status}
             except Exception as e:
                 return {"verified": False, "method": "rsv_backup", "error": str(e)}

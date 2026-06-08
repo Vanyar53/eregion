@@ -362,12 +362,26 @@ def test_execute_action_snapshot_returns_snapshot_id(tmp_incidents):
     from glorfindel.agent import execute_action
     connector = MagicMock()
     connector.snapshot.return_value = "snap-20260524-001"
-    state = _state(action="snapshot")
+    state = _state(action="snapshot")  # event="detection" → wait=True
 
     result = execute_action(state, connector=connector, incidents=tmp_incidents)
 
-    connector.snapshot.assert_called_once_with(_RESOURCE_ID)
+    connector.snapshot.assert_called_once_with(_RESOURCE_ID, wait=True)
     assert result["outcome"]["snapshot_id"] == "snap-20260524-001"
+
+
+def test_execute_action_snapshot_fire_and_forget_on_detection_timeout(tmp_incidents):
+    """On detection_timeout, snapshot() must be called with wait=False to avoid blocking."""
+    from glorfindel.agent import execute_action
+    connector = MagicMock()
+    connector.snapshot.return_value = "rsv:rsv-annatar/rg/job123"
+    state = _state(action="snapshot")
+    state["signal"]["event"] = "detection_timeout"
+
+    result = execute_action(state, connector=connector, incidents=tmp_incidents)
+
+    connector.snapshot.assert_called_once_with(_RESOURCE_ID, wait=False)
+    assert result["outcome"]["snapshot_id"] == "rsv:rsv-annatar/rg/job123"
 
 
 def test_execute_action_unknown_is_noop(tmp_incidents):

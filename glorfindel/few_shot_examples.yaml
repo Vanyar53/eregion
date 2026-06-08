@@ -48,3 +48,13 @@ examples:
       - "Q: What contains the threat? Isolate the VM — cuts their remote foothold immediately.\n     Restore is not warranted unless forensics confirm data destruction."
     conclusion: "action=isolate_vm, escalate=false (reversible, OS compromised but disk intact)"
     confidence: "high when sudo success to USER=root is confirmed in syslog"
+
+  - title: "Local account creation — T1136.001 detected or suspected"
+    signal_indicators: "useradd in syslog (authpriv/auth facility), new user message, OR detection_timeout with TTP=T1136.001"
+    reasoning:
+      - "Q: Is account creation a confirmed compromise? No — useradd is a normal sysadmin\n     operation. It becomes a threat only if the account is unauthorized AND used for\n     persistence (SSH keys added, cron jobs, backdoor services). The syslog event alone\n     cannot confirm any of this."
+      - "Q: Should we isolate? NO — do NOT use isolate_vm for T1136.001 alone. Unlike\n     sudo USER=root (active attacker shell) or MaxWrite anomaly (data destroyed now),\n     account creation has no confirmed attacker foothold. Isolating on useradd triggers\n     false positives on every legitimate admin operation. This is the key difference\n     between T1548.003 (root escalation — isolate) and T1136.001 (account created — investigate)."
+      - "Q: What is the minimum effective action? Snapshot to preserve disk state for\n     forensics, then escalate. Confidence is inherently low for this TTP without\n     corroborating signals — the confidence gate will force escalation."
+      - "Q: What suggested_steps must the escalation include? The operator must check:\n     (1) /etc/passwd — confirm the account name, UID, and creation timestamp.\n     (2) ~/.ssh/authorized_keys on all accounts — look for newly added keys.\n     (3) crontab -l and /etc/cron.d/ — check for persistence via cron.\n     (4) 'last' and 'who' — look for active sessions from the account.\n     (5) /var/log/auth.log — check if the account was used post-creation.\n     If unauthorized account with persistence evidence: isolate manually, then restore\n     if data is compromised. If account was deleted or was a one-time admin op: release."
+    conclusion: "action=snapshot, escalate=false, confidence=0.35 (low — confidence gate forces escalation with forensic suggested_steps)"
+    confidence: "low (0.3-0.45) — useradd alone is insufficient for autonomous action; gate forces human review"

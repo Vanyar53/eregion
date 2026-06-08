@@ -697,7 +697,10 @@ def execute_action(
         )
         outcome = connector.block_suspicious_ip(ip, resource_id)
     elif action == "snapshot":
-        snap_id = connector.snapshot(resource_id)
+        # Fire-and-forget on detection_timeout: we don't know if the VM is compromised,
+        # and blocking the queue for a 3-4h initial RSV backup is operationally unacceptable.
+        event = state["signal"].get("event", "")
+        snap_id = connector.snapshot(resource_id, wait=event != "detection_timeout")
         outcome = {"snapshot_id": snap_id}
     else:
         outcome = {"status": "no_op", "action": action}

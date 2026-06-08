@@ -12,7 +12,9 @@ Modèle : CLI open source gratuit, SaaS payant pour multi-tenant + connecteurs a
 - 6 TTPs validés en réel sur Azure : T1486, T1041, T1110.001, T1548.003, T1110+T1548 (parallèle), T1136.001
 - Run parallèle multi-signal validé avec IncidentRegistry + propagation investigative_context entre cycles
 - **Purple loop end-to-end validé** (commit 9a64e83) — `detection_missed → propose_detection_rule → approve-rule → detection_rules.yaml → restart watch → détection réussie ~78s`. Scénario T1136.001 (account creation) créé pour ce test.
-- 234 tests, 0 appel Azure, 0 appel LLM
+- 235 tests, 0 appel Azure, 0 appel LLM
+- **Few-shot T1136.001** (commit b36a5a7) — ancre "T1136.001 ≠ isolate_vm", confidence 0.35 → escalade + suggested_steps forensiques. Gate prod : run T1486 + T1136.001 end-to-end avant déploiement prod.
+- **`snapshot()` fire-and-forget** sur `detection_timeout` — `wait=False`, `verify_snapshot()` tolère "InProgress"
 - **Few-shot T1486 corrigé** (commit c6fe0d0) — bug sécurité : LLM sautait l'isolation, ransomware restait actif 20min. Flow corrigé : cycle 1 `isolate_vm` autonome, cycle 2 `restore_from_backup` escaladé
 - **War Room BACKUP** : section visible sur chaque carte VM, bouton 📸 Snapshot (fire-and-forget RSV)
 - **Stabilité War Room** : registry stale corrigé (lecture fraîche JSON), release isolation robuste, subprocess non-bloquant

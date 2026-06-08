@@ -1053,3 +1053,48 @@ def test_investigate_no_matching_fields_returns_unchanged():
         result = investigate(state)
     assert result["signal"] is state["signal"]
     mock_det.run_query.assert_not_called()
+
+
+# ── _build_user_message — current_vm_state injection ─────────────────────────
+
+
+def test_build_user_message_includes_isolation_state_not_isolated(tmp_path):
+    """current_vm_state shows NON when no isolation file exists."""
+    from glorfindel.agent import _build_user_message
+    signal = {
+        "resource_id": _RESOURCE_ID,
+        "event": "detection",
+        "raw_signal": {},
+    }
+    with patch("pathlib.Path.home", return_value=tmp_path):
+        msg = _build_user_message(signal, [])
+    assert "État actuel de la VM" in msg
+    assert "NON" in msg
+
+
+def test_build_user_message_includes_isolation_state_isolated(tmp_path):
+    """current_vm_state shows OUI when isolation file exists for this VM."""
+    import json
+    from glorfindel.agent import _build_user_message
+    vm_name = _RESOURCE_ID.split("/")[-1]
+    iso_dir = tmp_path / ".glorfindel" / "isolation"
+    iso_dir.mkdir(parents=True)
+    (iso_dir / f"{vm_name}.json").write_text(json.dumps({"resource_id": _RESOURCE_ID}))
+    signal = {
+        "resource_id": _RESOURCE_ID,
+        "event": "detection",
+        "raw_signal": {},
+    }
+    with patch("pathlib.Path.home", return_value=tmp_path):
+        msg = _build_user_message(signal, [])
+    assert "OUI" in msg
+
+
+def test_build_user_message_past_cycles_header_warns_about_state_inference(tmp_path):
+    """past_cycles header must explicitly warn against inferring current state."""
+    from glorfindel.agent import _build_user_message
+    signal = {"resource_id": _RESOURCE_ID, "event": "detection", "raw_signal": {}}
+    past = [{"summary": "T1486 — isolate_vm confirmed"}]
+    with patch("pathlib.Path.home", return_value=tmp_path):
+        msg = _build_user_message(signal, past)
+    assert "NE PAS inférer état courant" in msg

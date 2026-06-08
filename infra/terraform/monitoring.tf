@@ -41,7 +41,7 @@ resource "azurerm_monitor_data_collection_rule" "annatar" {
 
     syslog {
       streams        = ["Microsoft-Syslog"]
-      facility_names = ["auth", "syslog", "daemon"]
+      facility_names = ["auth", "authpriv", "syslog", "daemon"]
       log_levels     = ["Warning", "Error", "Critical", "Alert", "Emergency", "Notice", "Info"]
       name           = "syslog-collection"
     }

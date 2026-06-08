@@ -87,3 +87,22 @@ rules:
             and SyslogMessage !has "authentication failure"
       | project TimeGenerated, Computer, SyslogMessage
       | limit 1
+
+  - name: t1136-001-local-account-creation-linux-v1
+    description: >
+      Auto-proposed by Glorfindel after detection_missed (TTP: T1136.001).
+      This query polls the Syslog table and fires on PAM auth/authpriv messages from useradd.
+    enabled: true
+    ttp: T1136.001
+    monitoring_backends: [law-annatar]
+    assets: [auto]
+    interval_s: 30
+    query: |
+      Syslog
+      | where TimeGenerated >= ago(10m)
+      | where Facility in ("auth", "authpriv")
+      | where ProcessName == "useradd"
+            or SyslogMessage has "new user"
+            or SyslogMessage has "useradd"
+      | project TimeGenerated, Computer, Facility, SeverityLevel, ProcessName, SyslogMessage
+      | order by TimeGenerated desc

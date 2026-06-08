@@ -136,11 +136,18 @@ def _append_to_rules_yaml(proposal: dict, rules_path: Path) -> None:
                 asset_name = match.name
                 if match.monitoring_backends:
                     backend_name = match.monitoring_backends[0]
+            else:
+                # No static asset — borrow backend from first existing rule, use auto discovery
+                for r in cfg.rules:
+                    if r.monitoring_backends:
+                        asset_name = "auto"
+                        backend_name = r.monitoring_backends[0]
+                        break
         except Exception:
             pass
 
     if asset_name:
-        # New format — no inline workspace_id / resource_id
+        backend_line = f"    monitoring_backends: [{backend_name}]\n" if backend_name else ""
         block = (
             f"\n"
             f"  - name: {proposal['rule_name']}\n"
@@ -149,13 +156,14 @@ def _append_to_rules_yaml(proposal: dict, rules_path: Path) -> None:
             f"      {proposal['explanation'][:120]}\n"
             f"    enabled: true\n"
             f"    ttp: {proposal['ttp']}\n"
+            f"{backend_line}"
             f"    assets: [{asset_name}]\n"
-            f"    interval_s: {proposal['interval_s']}\n"
+            f"    interval_s: {int(proposal['interval_s'])}\n"
             f"    query: |\n"
             f"{indented_query}"
         )
     else:
-        # Legacy fallback — inline workspace_id / resource_id
+        # Legacy fallback — should not happen in normal deployments
         block = (
             f"\n"
             f"  - name: {proposal['rule_name']}\n"
@@ -167,7 +175,7 @@ def _append_to_rules_yaml(proposal: dict, rules_path: Path) -> None:
             f"    workspace_id: \"{proposal['workspace_id']}\"\n"
             f"    ttp: {proposal['ttp']}\n"
             f"    resource_id: \"{proposal['resource_id']}\"\n"
-            f"    interval_s: {proposal['interval_s']}\n"
+            f"    interval_s: {int(proposal['interval_s'])}\n"
             f"    query: |\n"
             f"{indented_query}"
         )

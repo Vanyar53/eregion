@@ -64,11 +64,31 @@ resource "azurerm_managed_disk" "testdata" {
   tags                 = azurerm_resource_group.annatar.tags
 }
 
+# Detach any Azure Backup restore artifact at LUN 10 before Terraform manages it.
+# Azure Backup OriginalLocation restores leave orphan disks attached at LUN 10 — this
+# causes a conflict on every terraform apply after a restore.
+resource "null_resource" "clean_lun10" {
+  triggers = {
+    always_run = timestamp()
+  }
+  provisioner "local-exec" {
+    command = <<-EOT
+      current=$(az vm show -g annatar -n vm-annatar-victim \
+        --query "storageProfile.dataDisks[?lun==\`10\`].name" -o tsv 2>/dev/null || true)
+      if [ -n "$current" ] && [ "$current" != "disk-annatar-testdata" ]; then
+        echo "Detaching restore artifact '$current' from LUN 10..."
+        az vm disk detach -g annatar --vm-name vm-annatar-victim --name "$current"
+      fi
+    EOT
+  }
+}
+
 resource "azurerm_virtual_machine_data_disk_attachment" "testdata" {
   managed_disk_id    = azurerm_managed_disk.testdata.id
   virtual_machine_id = azurerm_linux_virtual_machine.victim.id
   lun                = 10
   caching            = "None"
+  depends_on         = [null_resource.clean_lun10]
 }
 
 resource "azurerm_dev_test_global_vm_shutdown_schedule" "victim" {

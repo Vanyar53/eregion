@@ -70,11 +70,14 @@ class CloudConnector(ABC):
         resource_id: str,
         vault: str = "rsv-annatar",
         before_attack_time: str | None = None,
+        wait: bool = True,
     ) -> dict:
         """Trigger an Azure Backup OriginalLocation restore. Human-approved action.
 
         before_attack_time: ISO8601 timestamp — selects the most recent recovery point
         that predates the attack, avoiding restoration of a post-attack backup.
+        wait=False: returns after triggering the restore job, without polling.
+          VM stays deallocated; caller must start it and emit recovery_complete manually.
         """
         ...
 
@@ -386,6 +389,7 @@ class AzureConnector(CloudConnector):
         resource_id: str,
         vault: str = "rsv-annatar",
         before_attack_time: str | None = None,
+        wait: bool = True,
     ) -> dict:
         if self.dry_run:
             return {"status": "dry_run", "action": "restore_from_backup", "resource_id": resource_id}
@@ -491,6 +495,18 @@ class AzureConnector(CloudConnector):
             raise RuntimeError("Restore job not found after trigger")
 
         _console.print(f"  [dim]Tracking job {restore_job.name} (15-30 min expected)...[/dim]")
+
+        if not wait:
+            return {
+                "status": "restore_triggered",
+                "job_name": restore_job.name,
+                "vault": vault,
+                "rg": rg,
+                "recovery_point": latest.name,
+                "recovery_point_time": str(rp_time),
+                "resource_id": resource_id,
+            }
+
         elapsed = 0
         while True:
             time.sleep(60)

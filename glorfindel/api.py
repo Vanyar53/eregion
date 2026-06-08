@@ -21,8 +21,6 @@ app = FastAPI(title="Glorfindel War Room", docs_url=None, redoc_url=None)
 _STATIC = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=str(_STATIC)), name="static")
 
-_snapshots_in_progress: set[str] = set()
-
 
 @app.get("/")
 async def index() -> FileResponse:
@@ -86,7 +84,7 @@ async def state() -> dict:
         "restores": _active_restores(),
         "discovered_assets": discovered,
         "posture_gaps": posture_gaps,
-        "snapshots_in_progress": list(_snapshots_in_progress),
+        "active_jobs": _all_jobs(),
         "now": now.isoformat(),
     }
 
@@ -368,27 +366,60 @@ async def action_revert(vm_name: str) -> dict:
     }
 
 
+def _all_jobs() -> list[dict]:
+    try:
+        from glorfindel.jobs import all_jobs
+        return all_jobs()
+    except Exception:
+        return []
+
+
+@app.get("/api/jobs/{vm_name}")
+async def get_job_status(vm_name: str, refresh: bool = False) -> dict:
+    """Return the active job for a VM. Pass ?refresh=true to poll Azure for status."""
+    from glorfindel.jobs import get_job, save_job
+    job = get_job(vm_name)
+    if not job:
+        return {}
+    if refresh and job.get("status") == "InProgress":
+        from glorfindel.actions import AzureConnector
+        connector = AzureConnector(dry_run=False)
+        jtype = job.get("type")
+        if jtype == "snapshot":
+            result = await asyncio.to_thread(connector.verify_snapshot, job.get("snap_id", ""))
+            if result.get("verified") is True:
+                job.update({"status": "Completed", "completed_at": datetime.now(timezone.utc).isoformat()})
+                await asyncio.to_thread(save_job, vm_name, job)
+            elif result.get("verified") is False:
+                job.update({"status": "Failed", "completed_at": datetime.now(timezone.utc).isoformat(),
+                            "error": result.get("error", "unknown")})
+                await asyncio.to_thread(save_job, vm_name, job)
+    return job
+
+
 @app.post("/api/action/snapshot/{vm_name}")
 async def action_snapshot(vm_name: str) -> dict:
-    """Trigger an on-demand Azure Backup snapshot (fire-and-forget)."""
+    """Trigger an on-demand Azure Backup snapshot via jobs.py (visible to CLI + War Room)."""
     resource_id = _find_resource_id(vm_name)
     if not resource_id:
         return {"error": f"Resource ID not found for {vm_name}"}
 
-    _snapshots_in_progress.add(vm_name)
+    try:
+        from glorfindel.config import load_glorfindel_config
+        _cfg = load_glorfindel_config()
+        rsv = _cfg.backup_vault()
+        vault = rsv.vault_name if rsv and rsv.vault_name else "rsv-annatar"
+    except Exception:
+        vault = "rsv-annatar"
 
-    async def _bg_snapshot(rid: str) -> None:
-        try:
-            await asyncio.to_thread(
-                subprocess.run,
-                [_bin(), "snapshot", rid, "--yes"],
-                capture_output=True, text=True, timeout=1800,
-            )
-        finally:
-            _snapshots_in_progress.discard(vm_name)
+    from glorfindel.actions import AzureConnector
+    from glorfindel.jobs import start_snapshot as _start_snapshot
 
-    asyncio.create_task(_bg_snapshot(resource_id))
-    return {"status": "started", "resource_id": resource_id}
+    def _start() -> dict:
+        return _start_snapshot(resource_id, AzureConnector(dry_run=False), vault)
+
+    job = await asyncio.to_thread(_start)
+    return {"status": "started", "job_id": job["job_id"], "resource_id": resource_id}
 
 
 @app.post("/api/action/restore/{vm_name}")

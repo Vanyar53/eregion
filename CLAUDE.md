@@ -21,7 +21,7 @@ Plateforme OSS (Apache 2.0) de défense active cloud. Deux agents IA en boucle :
 | T1110.001 | SSH brute force | Syslog DCR | 58s | `block_suspicious_ip` |
 | T1548.003 | Sudo priv esc | Syslog DCR | 40s | `isolate_vm` (root confirmé) |
 | T1110+T1548 | Run parallèle | — | 41s/59s | block → isolate (incident context) |
-| T1136.001 | Account creation (purple loop) | Syslog DCR (authpriv) | ~78s | `isolate_vm` (persistance potentielle) — règle proposée + approuvée via purple loop |
+| T1136.001 | Account creation (purple loop) | Syslog DCR (authpriv) | ~41s | `snapshot + escalade` (few-shot b36a5a7, confidence < 0.7 → gate) — règle proposée + approuvée via purple loop |
 
 \* T1041 : latence StorageBlobLogs variable (ingestion Azure, pas la query). SLA fonctionnel, à surveiller.
 † T1548 run parallèle (T1110+T1548) : detection_timeout possible si DCR saturé — contention infra Azure, pas un bug Glorfindel.
@@ -357,6 +357,8 @@ wheel : eregion-0.2.0-py3-none-any.whl ✓
 
 `annatar run` fait un preflight check automatique (VM running + pas de règles `glorfindel-isolation-*`). Si ça échoue, le run s'arrête avec la commande exacte à lancer. `--skip-preflight` pour bypasser.
 
+Après un `restore_from_backup`, le backup suivant est un **full backup** (~40min–4h selon Azure). Aucune API ne permet de prédire la durée. Le `glorfindel snapshot` du setup T1486 suivant peut donc être long. À anticiper avant les sessions de test.
+
 ```bash
 # Si preflight échoue — commandes de fix
 glorfindel list                           # voir isolations + IPs bloquées
@@ -378,7 +380,8 @@ az network nsg rule list -g annatar --nsg-name nsg-annatar -o table
 - `dry_run=True` dans tous les tests — jamais d'appel Azure ou LLM dans les tests
 - `tests/unit/conftest.py` : fixture `autouse` redirige `escalations._STORE` → `tmp_path/escalations.jsonl` (les tests n'écrivent jamais dans `~/.glorfindel/`)
 - `AZURE_SUBSCRIPTION_ID` obligatoire dans l'env (plus d'auto-détection via SubscriptionClient)
-- **Edit de `few_shot_examples.yaml` ou `_SYSTEM_PROMPT`** : requiert un run end-to-end T1486 + au moins un autre TTP avant merge. Les few-shot examples sont des politiques de sécurité implicites — les 234 tests unitaires (LLM mocké, dry_run=True) ne peuvent pas les valider. Un edit mal calibré peut introduire un raccourci critique (ex: ransomware non-isolé 20min, faux positif T1041). Voir c6fe0d0.
+- **Edit de `few_shot_examples.yaml`, `_SYSTEM_PROMPT` ou `_build_user_message()`** : requiert un run end-to-end T1486 + au moins un autre TTP avant merge. Ces trois zones contrôlent ce que le LLM voit et comment il raisonne — les 238 tests unitaires (LLM mocké, dry_run=True) ne peuvent pas valider le comportement résultant. Un edit mal calibré peut introduire un raccourci critique (ex: ransomware non-isolé 20min, faux positif T1041, cycle 1 sauté). Voir c6fe0d0, 740659a.
+- **`past_cycles` ChromaDB = historique uniquement** : ne jamais inférer l'état courant de la VM depuis les cycles passés. `_build_user_message()` injecte `## État actuel de la VM` depuis `~/.glorfindel/isolation/<vm>.json` — c'est la source de vérité. Voir commit 740659a (bug : LLM voyait `isolate_vm` dans past_cycles → concluait "VM déjà isolée" → sautait le cycle 1).
 
 ---
 

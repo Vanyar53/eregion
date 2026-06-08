@@ -457,16 +457,17 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
               help="RSV vault name (default: first azure_backup_vault in glorfindel-config.yaml).")
 @click.option("--dry-run", is_flag=True)
 @click.option("--yes", is_flag=True, help="Skip confirmation prompt.")
-def snapshot(resource_id: str, vault: str | None, dry_run: bool, yes: bool):
+@click.option("--wait", is_flag=True, help="Block until backup completes (default: fire-and-forget).")
+def snapshot(resource_id: str, vault: str | None, dry_run: bool, yes: bool, wait: bool):
     """Trigger an on-demand Azure Backup for a VM (pre-scenario setup).
 
-    Creates a recovery point in the RSV vault that can be used by
-    'glorfindel restore' after an attack. Run this before launching
-    an Annatar scenario to ensure a clean restore point exists.
+    By default, returns immediately with a job_id (fire-and-forget).
+    Use --wait to block until the backup completes (~5-20 min).
+    Use 'glorfindel jobs <resource_id>' to check job status.
 
     Workflow:
         annatar clean <scenario.yaml>
-        glorfindel snapshot <resource_id> --yes
+        glorfindel snapshot <resource_id> --yes --wait   # --wait for setup
         annatar run <scenario.yaml>
     """
     from glorfindel.actions import AzureConnector
@@ -488,22 +489,35 @@ def snapshot(resource_id: str, vault: str | None, dry_run: bool, yes: bool):
     console.rule("[bold yellow]Glorfindel — On-demand Snapshot[/bold yellow]")
     console.print(f"  Resource : {resource_id}")
     console.print(f"  Vault    : {vault}")
-    console.print(f"  Dry-run  : {dry_run}\n")
+    console.print(f"  Dry-run  : {dry_run}")
+    console.print(f"  Wait     : {wait}\n")
 
     if not dry_run and not yes:
         if not click.confirm("Trigger on-demand Azure Backup for this VM?", default=False):
             console.print("Aborted.")
             return
 
-    import time as _time
-    console.print("[cyan]->[/cyan] Triggering on-demand backup...")
-    t0 = _time.time()
-    snap_id = connector.snapshot(resource_id, vault=vault)
-    elapsed = round(_time.time() - t0)
-
     if dry_run:
         console.print("[yellow]DRY RUN — no changes made.[/yellow]")
         return
+
+    if not wait:
+        from glorfindel.jobs import start_snapshot
+        console.print("[cyan]->[/cyan] Triggering on-demand backup (fire-and-forget)...")
+        job = start_snapshot(resource_id, connector, vault)
+        console.print(f"[green]✓ Backup job started.[/green]")
+        console.print(f"  job_id : [dim]{job['job_id']}[/dim]")
+        console.print(f"  snap_id: [dim]{job['snap_id']}[/dim]")
+        console.print(f"\n[dim]Check status: glorfindel jobs {resource_id} --refresh[/dim]")
+        console.print("[dim]Use --wait to block until completion (needed for setup workflow).[/dim]")
+        _record_manual_action("snapshot", resource_id, {"snap_id": job["snap_id"], "status": "InProgress"})
+        return
+
+    import time as _time
+    console.print("[cyan]->[/cyan] Triggering on-demand backup (blocking)...")
+    t0 = _time.time()
+    snap_id = connector.snapshot(resource_id, vault=vault, wait=True)
+    elapsed = round(_time.time() - t0)
 
     elapsed_label = f"{elapsed // 60}min {elapsed % 60}s"
     console.print(f"[green]✓ Backup complete.[/green]  Time: {elapsed_label}")
@@ -520,6 +534,84 @@ def snapshot(resource_id: str, vault: str | None, dry_run: bool, yes: bool):
 
 @cli.command()
 @click.argument("resource_id")
+@click.option("--refresh", is_flag=True, help="Poll Azure for current job status (requires credentials).")
+def jobs(resource_id: str, refresh: bool):
+    """Show the status of an active snapshot or restore job for a VM.
+
+    Jobs are persisted in ~/.glorfindel/active_jobs/<vm>.json.
+    Use --refresh to query Azure for the latest status.
+    """
+    from glorfindel.jobs import get_job, save_job
+
+    vm_name = resource_id.split("/")[-1]
+    job = get_job(vm_name)
+    if not job:
+        console.print(f"[dim]No active job recorded for {vm_name}.[/dim]")
+        return
+
+    if refresh and job.get("status") == "InProgress":
+        from datetime import datetime, timezone as _tz
+        from glorfindel.actions import AzureConnector
+        connector = AzureConnector()
+        jtype = job.get("type")
+        if jtype == "snapshot":
+            result = connector.verify_snapshot(job.get("snap_id", ""))
+            verified = result.get("verified")
+            if verified is True:
+                job.update({"status": "Completed", "completed_at": datetime.now(_tz.utc).isoformat()})
+                save_job(vm_name, job)
+            elif verified is False:
+                job.update({"status": "Failed", "completed_at": datetime.now(_tz.utc).isoformat(),
+                            "error": result.get("error", result.get("status", "unknown"))})
+                save_job(vm_name, job)
+        elif jtype == "restore":
+            restore_job_name = job.get("restore_job_name")
+            vault = job.get("vault", "rsv-annatar")
+            rg = job.get("rg", "")
+            if restore_job_name and rg:
+                try:
+                    from azure.mgmt.recoveryservicesbackup import RecoveryServicesBackupClient
+                    connector._ensure_clients()
+                    bc = RecoveryServicesBackupClient(connector._credential, connector._subscription_id)
+                    j = bc.job_details.get(vault, rg, restore_job_name)
+                    az_status = getattr(j.properties, "status", "Unknown")
+                    if az_status == "Completed":
+                        job.update({"status": "Completed", "completed_at": datetime.now(_tz.utc).isoformat()})
+                        save_job(vm_name, job)
+                    elif az_status in ("Failed", "Cancelled"):
+                        job.update({"status": "Failed", "completed_at": datetime.now(_tz.utc).isoformat(),
+                                    "error": az_status})
+                        save_job(vm_name, job)
+                except Exception as e:
+                    console.print(f"[yellow]Azure poll error: {e}[/yellow]")
+
+    status = job.get("status", "?")
+    color = {"Completed": "green", "Failed": "red", "InProgress": "cyan"}.get(status, "white")
+    console.rule(f"[bold]Glorfindel — Job Status: [{color}]{status}[/{color}][/bold]")
+    console.print(f"  job_id  : {job.get('job_id')}")
+    console.print(f"  type    : {job.get('type')}")
+    console.print(f"  started : {job.get('started_at', '?')}")
+    if job.get("completed_at"):
+        console.print(f"  completed: {job.get('completed_at')}")
+    if job.get("snap_id"):
+        console.print(f"  snap_id : {job.get('snap_id')}")
+    if job.get("restore_job_name"):
+        console.print(f"  azure_job: {job.get('restore_job_name')}")
+    if job.get("recovery_point_time"):
+        console.print(f"  RP      : {job.get('recovery_point_time')}")
+    if job.get("error"):
+        console.print(f"  [red]error   : {job.get('error')}[/red]")
+    if status == "InProgress":
+        console.print(f"\n[dim]Run with --refresh to poll Azure for current status.[/dim]")
+    if status == "Completed" and job.get("type") == "restore":
+        console.print(f"\n[yellow]Restore done. Next steps:[/yellow]")
+        rg = job.get("rg", "<rg>")
+        console.print(f"  1. az vm start -g {rg} -n {vm_name}")
+        console.print(f"  2. glorfindel release {resource_id} --yes")
+
+
+@cli.command()
+@click.argument("resource_id")
 @click.option("--vault", default="rsv-annatar", show_default=True)
 @click.option("--dry-run", is_flag=True)
 @click.option("--yes", is_flag=True, help="Skip confirmation prompt.")
@@ -532,15 +624,16 @@ def snapshot(resource_id: str, vault: str | None, dry_run: bool, yes: bool):
                    "Example: 2026-05-24T13:44:00+00:00")
 @click.option("--model", default=lambda: os.environ.get("GLORFINDEL_LLM_MODEL", "anthropic/claude-sonnet-4-6"), show_default=True)
 @click.option("--memory-path", default=None)
-def restore(resource_id: str, vault: str, dry_run: bool, yes: bool, keep_isolated: bool, before: str | None, model: str, memory_path: str | None):
+@click.option("--wait", is_flag=True, help="Block until restore completes (~15-30 min). Default: fire-and-forget.")
+def restore(resource_id: str, vault: str, dry_run: bool, yes: bool, keep_isolated: bool, before: str | None, model: str, memory_path: str | None, wait: bool):
     """Trigger an Azure Backup restore on a VM (human approval action).
 
-    Run this after Glorfindel escalates a restore_from_backup recommendation.
-    After a successful restore, emits a recovery_complete signal and lets
-    Glorfindel decide the next action (release_isolation), unless --keep-isolated.
+    By default, returns after triggering the restore job (fire-and-forget).
+    The VM stays deallocated until the restore completes; start it manually
+    with 'az vm start' and then run 'glorfindel release'. Use --wait for the
+    old blocking behavior that handles post-restore steps automatically.
 
     Use --before <ISO8601> to ensure the recovery point predates the attack.
-    Without it, Azure may restore a post-attack backup that still contains artifacts.
     """
     from glorfindel.actions import AzureConnector
 
@@ -551,7 +644,8 @@ def restore(resource_id: str, vault: str, dry_run: bool, yes: bool, keep_isolate
     console.print(f"  Vault    : {vault}")
     if before:
         console.print(f"  Before   : {before}")
-    console.print(f"  Dry-run  : {dry_run}\n")
+    console.print(f"  Dry-run  : {dry_run}")
+    console.print(f"  Wait     : {wait}\n")
 
     if not dry_run and not yes:
         if not click.confirm("Trigger Azure Backup restore on this VM?", default=False):
@@ -566,15 +660,28 @@ def restore(resource_id: str, vault: str, dry_run: bool, yes: bool, keep_isolate
             console.print("  [yellow]Warning: --before not set and no attack_started signal found in runs/. "
                           "May restore a post-attack backup.[/yellow]")
 
-    import time as _time
-    console.print("[cyan]->[/cyan] Triggering restore...")
-    t0 = _time.time()
-    result = connector.restore_from_backup(resource_id, vault=vault, before_attack_time=before)
-    rto_s = round(_time.time() - t0)
-
     if dry_run:
         console.print("[yellow]DRY RUN — no changes made.[/yellow]")
         return
+
+    if not wait:
+        from glorfindel.jobs import start_restore
+        console.print("[cyan]->[/cyan] Triggering restore (fire-and-forget — VM deallocation ~1-2 min)...")
+        job = start_restore(resource_id, connector, vault, before)
+        console.print(f"[green]✓ Restore job started.[/green]")
+        console.print(f"  job_id  : [dim]{job['job_id']}[/dim]")
+        console.print(f"  azure_job: [dim]{job.get('restore_job_name', '?')}[/dim]")
+        console.print(f"  RP      : [dim]{job.get('recovery_point_time', '?')}[/dim]")
+        console.print(f"\n[dim]Check status : glorfindel jobs {resource_id} --refresh[/dim]")
+        console.print("[dim]When Completed: az vm start + glorfindel release (or War Room)[/dim]")
+        _record_manual_action("restore", resource_id, {"status": "InProgress", "job": job.get("restore_job_name")})
+        return
+
+    import time as _time
+    console.print("[cyan]->[/cyan] Triggering restore (blocking ~15-30 min)...")
+    t0 = _time.time()
+    result = connector.restore_from_backup(resource_id, vault=vault, before_attack_time=before, wait=True)
+    rto_s = round(_time.time() - t0)
 
     restore_label = f"{rto_s // 60}min {rto_s % 60}s"
     console.print(f"[green]✓ Restore complete.[/green]  restore_time: {restore_label}  RP: {result.get('recovery_point_time')}")

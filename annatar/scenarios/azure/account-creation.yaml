@@ -1,0 +1,39 @@
+name: account-creation
+description: T1136.001 — Création d'un compte local persistant (technique non couverte par detection_rules.yaml — purple loop test)
+mitre: T1136.001
+version: "1.0.0"
+
+target:
+  type: azure_vm
+  resource_group: annatar
+  vm_name: vm-annatar-victim
+
+steps:
+  - name: create_local_account
+    action: run_script_on_vm
+    script: scripts/vm/account_creation_sim.sh
+    record: T0
+
+detection:
+  timeout: "120s"
+  prerequisites:
+    - name: syslog_auth_dcr
+      table: Syslog
+      why: DCR must collect auth/authpriv facility — required for useradd Syslog events
+      verify: "Syslog | where Facility in ('auth', 'authpriv') | where TimeGenerated > ago(1h) | limit 1"
+  hints:
+    log_source: Syslog
+    attack_commands_summary: >
+      Création d'un compte local via useradd -M (pas de home dir, shell /sbin/nologin).
+      Génère des messages PAM dans auth.log (facility auth ou authpriv) :
+      "new user: name=testuser-annatar", "new group: name=testuser-annatar".
+      Suivi de userdel -f pour cleanup immédiat.
+    expected_indicators:
+      - "Syslog Facility: 'auth' or 'authpriv'"
+      - "SyslogMessage contains 'new user' or 'useradd'"
+      - "ProcessName: 'useradd'"
+      - "SyslogMessage contains 'testuser-annatar'"
+    failure_candidates:
+      - "Syslog | where Facility in ('auth', 'authpriv') | where SyslogMessage has 'new user' | where TimeGenerated > ago(10m)"
+      - "Syslog | where ProcessName == 'useradd' | where TimeGenerated > ago(10m)"
+      - "Ubuntu: facility peut être 'authpriv' plutôt que 'auth' pour les events useradd/PAM"

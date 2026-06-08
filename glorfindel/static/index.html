@@ -1826,6 +1826,7 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
   const compactBody = isClean
     ? `<div style="margin-top:5px;display:flex;align-items:center;gap:6px">
         ${backupCompact}
+        ${escBadge}
         <button class="action" onclick="event.stopPropagation();doSnapshot('${vm_name}')"
           style="margin-left:auto;font-size:9px;padding:1px 6px">📸 Snapshot</button>
       </div>`

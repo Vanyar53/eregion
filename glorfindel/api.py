@@ -21,6 +21,8 @@ app = FastAPI(title="Glorfindel War Room", docs_url=None, redoc_url=None)
 _STATIC = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=str(_STATIC)), name="static")
 
+_snapshots_in_progress: set[str] = set()
+
 
 @app.get("/")
 async def index() -> FileResponse:
@@ -84,6 +86,7 @@ async def state() -> dict:
         "restores": _active_restores(),
         "discovered_assets": discovered,
         "posture_gaps": posture_gaps,
+        "snapshots_in_progress": list(_snapshots_in_progress),
         "now": now.isoformat(),
     }
 
@@ -372,12 +375,17 @@ async def action_snapshot(vm_name: str) -> dict:
     if not resource_id:
         return {"error": f"Resource ID not found for {vm_name}"}
 
+    _snapshots_in_progress.add(vm_name)
+
     async def _bg_snapshot(rid: str) -> None:
-        await asyncio.to_thread(
-            subprocess.run,
-            [_bin(), "snapshot", rid, "--yes"],
-            capture_output=True, text=True, timeout=1800,
-        )
+        try:
+            await asyncio.to_thread(
+                subprocess.run,
+                [_bin(), "snapshot", rid, "--yes"],
+                capture_output=True, text=True, timeout=1800,
+            )
+        finally:
+            _snapshots_in_progress.discard(vm_name)
 
     asyncio.create_task(_bg_snapshot(resource_id))
     return {"status": "started", "resource_id": resource_id}

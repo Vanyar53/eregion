@@ -1786,6 +1786,11 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
       ? `<span style="color:var(--dim);font-size:9px">${backupMsg.slice(0, 48) || 'checking…'}</span>`
       : `<span style="color:var(--dim)">—</span>`;
 
+  const snapshotInProgress = (_state?.snapshots_in_progress || []).includes(vm_name);
+  const snapshotBtn = snapshotInProgress
+    ? `<button class="action" disabled style="margin-left:auto;font-size:9px;padding:2px 7px;opacity:.5;cursor:default">⏳ Snapshot…</button>`
+    : `<button class="action" onclick="event.stopPropagation();doSnapshot('${vm_name}')" style="margin-left:auto;font-size:9px;padding:2px 7px">📸 Snapshot</button>`;
+
   // Readiness checks with full labels — shown in expanded clean card
   const readinessExpanded = (isClean && auditEntry)
     ? `<div style="display:flex;gap:14px;margin-top:6px;flex-wrap:wrap">
@@ -1800,9 +1805,10 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
   const backupSection = `<div class="section-group s-recover" style="margin-top:5px">
     <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
       <span style="color:var(--green);font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:.5px">Backup</span>
+      <button onclick="event.stopPropagation();refreshAuditVm('${vm_name}')"
+        style="background:none;border:none;color:var(--dim);cursor:pointer;font-size:11px;padding:0 2px;line-height:1" title="Refresh backup info">↺</button>
       <span style="margin-left:2px">${backupSummary}</span>
-      <button class="action" onclick="event.stopPropagation();doSnapshot('${vm_name}')"
-        style="margin-left:auto;font-size:9px;padding:2px 7px">📸 Snapshot</button>
+      ${snapshotBtn}
     </div>
   </div>`;
 
@@ -1823,12 +1829,15 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
     ? `<span style="font-size:9px;color:var(--green)">${bMatch[1]} RP</span><span style="font-size:9px;color:var(--dim)"> · ${bMatch[2]}</span>`
     : `<span style="font-size:9px;color:var(--dim)">—</span>`;
 
+  const compactSnapshotBtn = snapshotInProgress
+    ? `<button class="action" disabled style="margin-left:auto;font-size:9px;padding:1px 6px;opacity:.5;cursor:default">⏳</button>`
+    : `<button class="action" onclick="event.stopPropagation();doSnapshot('${vm_name}')" style="margin-left:auto;font-size:9px;padding:1px 6px">📸</button>`;
+
   const compactBody = isClean
     ? `<div style="margin-top:5px;display:flex;align-items:center;gap:6px">
         ${backupCompact}
         ${escBadge}
-        <button class="action" onclick="event.stopPropagation();doSnapshot('${vm_name}')"
-          style="margin-left:auto;font-size:9px;padding:1px 6px">📸 Snapshot</button>
+        ${compactSnapshotBtn}
       </div>`
     : `<div class="node-asset-states" style="margin-top:6px">${stateBadges}</div>`;
 
@@ -2091,6 +2100,23 @@ async function doSnapshot(vmName) {
     const r = await fetch(`/api/action/snapshot/${vmName}`, { method: 'POST' });
     const d = await r.json();
     if (d.error) toast('✗ Snapshot failed: ' + d.error);
+    else refreshState();  // triggers re-render with snapshotInProgress badge
+  } catch (e) { toast('✗ ' + e.message); }
+}
+
+async function refreshAuditVm(vmName) {
+  toast('↺ Refreshing backup info…');
+  try {
+    const r = await fetch(`/api/audit/${vmName}`);
+    const d = await r.json();
+    if (d.error) { toast('✗ ' + d.error); return; }
+    if (!_auditData) _auditData = { audits: [] };
+    const idx = (_auditData.audits || []).findIndex(
+      a => a.resource_id === d.resource_id || a.asset_name === vmName);
+    if (idx >= 0) _auditData.audits[idx] = d;
+    else { _auditData.audits = _auditData.audits || []; _auditData.audits.push(d); }
+    renderInfra();
+    toast('✓ Backup info updated');
   } catch (e) { toast('✗ ' + e.message); }
 }
 

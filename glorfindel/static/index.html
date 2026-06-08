@@ -1830,8 +1830,8 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
     : `<span style="font-size:9px;color:var(--dim)">—</span>`;
 
   const compactSnapshotBtn = snapshotInProgress
-    ? `<button class="action" disabled style="margin-left:auto;font-size:9px;padding:1px 6px;opacity:.5;cursor:default">⏳</button>`
-    : `<button class="action" onclick="event.stopPropagation();doSnapshot('${vm_name}')" style="margin-left:auto;font-size:9px;padding:1px 6px">📸</button>`;
+    ? `<button class="action" disabled style="margin-left:auto;font-size:9px;padding:1px 6px;opacity:.5;cursor:default">⏳ Snapshot…</button>`
+    : `<button class="action" onclick="event.stopPropagation();doSnapshot('${vm_name}')" style="margin-left:auto;font-size:9px;padding:1px 6px">📸 Snapshot</button>`;
 
   const compactBody = isClean
     ? `<div style="margin-top:5px;display:flex;align-items:center;gap:6px">

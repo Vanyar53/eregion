@@ -125,8 +125,12 @@ _DECISION_TOOL = {
                 "description": (
                     "Concrete, context-aware next steps for the human operator. "
                     "ALWAYS return a JSON array (never null). "
-                    "If escalate=true: 3-5 specific steps referencing the TTP, resource, "
-                    "and past cycle history. If escalate=false: empty array []."
+                    "If escalate=true OR confidence < 0.7: 3-5 forensic investigation steps "
+                    "specific to the observed TTP and resource — e.g. for account creation: "
+                    "check /etc/passwd, ~/.ssh/authorized_keys, crontabs, active sessions. "
+                    "For ransomware: check running processes, mounted shares, network connections. "
+                    "For brute force: check successful auth after failed attempts, active sessions. "
+                    "If escalate=false and confidence >= 0.7: empty array []."
                 ),
             },
         },
@@ -186,8 +190,14 @@ Do NOT look up a TTP→action table. Instead, reason from the observable evidenc
 - recovery_failed: escalate with failure context from raw_signal.
 
 ━━ Using past cycles ━━
-If past_cycles are provided, use them to calibrate confidence and avoid repeating actions
-that were already verified effective or ineffective on this resource.
+CRITICAL: past_cycles are historical records from PREVIOUS runs — they describe decisions
+made in the past, NOT the current VM state. The VM may have been released, reset, or
+re-compromised since then. NEVER conclude that a VM is currently isolated or an IP currently
+blocked based on past_cycles alone.
+The ONLY authoritative source of current isolation/block state is the "État actuel de la VM"
+section in the user message (derived from live filesystem state). If "État actuel" shows
+isolated=NON, treat the VM as NOT isolated, regardless of what past_cycles say.
+Use past_cycles only to calibrate confidence and reasoning patterns — not to infer state.
 
 ━━ Validated reasoning examples (production-verified) ━━
 These are not rules — they are examples of correct reasoning chains for signals you may
@@ -1200,12 +1210,33 @@ def _build_user_message(
         else:
             lines.append("- Aucune action encore exécutée sur cet incident.")
         lines.append(
-            "\nTiens compte des actions déjà prises — évite de re-isoler une VM déjà isolée, "
-            "ou de bloquer une IP déjà bloquée."
+            "\nTiens compte des actions déjà prises DANS CET INCIDENT. "
+            "Pour l'état d'isolation actuel, voir la section 'État actuel de la VM' — "
+            "ne jamais inférer depuis past_cycles."
+        )
+
+    # Inject current VM state from filesystem — authoritative, never inferred from past_cycles.
+    resource_id = signal.get("resource_id", "")
+    vm_name = resource_id.split("/")[-1] if resource_id else ""
+    if vm_name:
+        from pathlib import Path as _Path
+        _iso_file = _Path.home() / ".glorfindel" / "isolation" / f"{vm_name}.json"
+        _blk_file = _Path.home() / ".glorfindel" / "blocks" / f"{vm_name}.json"
+        isolated = _iso_file.exists()
+        blocked_ips: list[str] = []
+        if _blk_file.exists():
+            try:
+                blocked_ips = [e["ip"] for e in json.loads(_blk_file.read_text())]
+            except Exception:
+                pass
+        lines.append("\n## État actuel de la VM (source de vérité — ne jamais inférer depuis past_cycles)\n")
+        lines.append(f"- Isolée (NSG deny-all actif) : **{'OUI' if isolated else 'NON'}**")
+        lines.append(
+            f"- IPs bloquées : {', '.join(blocked_ips) if blocked_ips else 'aucune'}"
         )
 
     if past_cycles:
-        lines.append("\n## Cycles passés similaires (contexte)\n")
+        lines.append("\n## Cycles passés similaires (historique — NE PAS inférer état courant depuis ces cycles)\n")
         for i, c in enumerate(past_cycles, 1):
             lines.append(f"**Cycle {i}:** {c.get('summary', str(c))}")
     else:

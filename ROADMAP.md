@@ -12,8 +12,9 @@ Modèle : CLI open source gratuit, SaaS payant pour multi-tenant + connecteurs a
 - 6 TTPs validés en réel sur Azure : T1486, T1041, T1110.001, T1548.003, T1110+T1548 (parallèle), T1136.001
 - Run parallèle multi-signal validé avec IncidentRegistry + propagation investigative_context entre cycles
 - **Purple loop end-to-end validé** (commit 9a64e83) — `detection_missed → propose_detection_rule → approve-rule → detection_rules.yaml → restart watch → détection réussie ~78s`. Scénario T1136.001 (account creation) créé pour ce test.
-- 235 tests, 0 appel Azure, 0 appel LLM
-- **Few-shot T1136.001** (commit b36a5a7) — ancre "T1136.001 ≠ isolate_vm", confidence 0.35 → escalade + suggested_steps forensiques. Gate prod : run T1486 + T1136.001 end-to-end avant déploiement prod.
+- 238 tests, 0 appel Azure, 0 appel LLM
+- **Few-shot T1136.001** (commit b36a5a7) — ancre "T1136.001 ≠ isolate_vm", confidence 0.35 → escalade + suggested_steps forensiques. Gate T1136.001 PASSED ✅ (41s, snapshot + escalade).
+- **Fix past_cycles ChromaDB** (commit 740659a) — bug critique : LLM inférait état isolation depuis ChromaDB past_cycles → sautait cycle 1 → restore direct → ransomware actif. Fix : `current_vm_state` injecté dans le prompt avant past_cycles + CRITICAL warning. Gate T1486 re-run requis.
 - **`snapshot()` fire-and-forget** sur `detection_timeout` — `wait=False`, `verify_snapshot()` tolère "InProgress"
 - **Few-shot T1486 corrigé** (commit c6fe0d0) — bug sécurité : LLM sautait l'isolation, ransomware restait actif 20min. Flow corrigé : cycle 1 `isolate_vm` autonome, cycle 2 `restore_from_backup` escaladé
 - **War Room BACKUP** : section visible sur chaque carte VM, bouton 📸 Snapshot (fire-and-forget RSV)
@@ -72,13 +73,16 @@ Eregion couvre aujourd'hui le milieu de la kill chain. La roadmap ressources ét
 
 | Priorité | Ressource | Position kill chain | Nouvelles actions | Complexité |
 |---|---|---|---|---|
-| 1 | **Entra ID / Service Principal** | Entrée | `revoke_service_principal` | Moyenne |
+| 0 | **Azure Activity Logs** (`AzureActivity`) | Contrôle-plan | detection-only (escalade) | Très faible |
+| 1 | **Entra ID / Service Principal** | Entrée | detection-only MVP, puis `revoke_service_principal` | Moyenne |
 | 2 | **Storage Account** (misconfiguration) | Objectif | `lock_storage_public_access` | Faible |
 | 3 | **Key Vault** | Objectif final | `revoke_keyvault_access` | Faible |
 | 4 | **AKS** | Pivot avancé | `isolate_namespace`, `cordon_node` | Haute |
 | 5 | **App Service / Function App** | Entrée exposée | `isolate_app_service` | Moyenne |
 
-**Entra ID en premier** : 87% de surge des campagnes destructives Azure en 2025 via tokens volés et workload identities compromises. `revoke_temp_access` existe déjà — extension naturelle vers `revoke_service_principal`.
+**Azure Activity Logs en premier (P0)** : déjà dans LAW par défaut, zéro permission supplémentaire, une journée de travail. Couvre les modifications NSG externes, assignations de rôles, snapshots créés par un attaquant — TTPs T1098, T1562, lateral movement contrôle-plan.
+
+**Entra ID — detection-only pour le MVP** : pas d'action autonome sur l'identité (faux positif trop coûteux — désactiver un admin légitime). Détecter → escalader humain + suggested_steps. Action autonome après validation sur signaux réels. Prérequis : permission `Security Reader` Entra ID sur le SP Glorfindel.
 
 **Storage et Key Vault avant AKS** : actions simples, impact élevé, faible complexité. AKS demande une nouvelle catégorie d'actions (namespace/node) — c'est un chantier à part entière.
 
@@ -91,6 +95,16 @@ Key Vault    → T1555 (credentials from stores), T1552 (unsecured credentials)
 AKS          → T1610 (deploy container), T1613 (container discovery)
 App Service  → T1190 (exploit public-facing), T1078 (valid accounts)
 ```
+
+### Prérequis transversal — surveillance comportement LLM (avant scaling utilisateurs)
+
+Pattern observé sur 3 bugs critiques de sécurité (c6fe0d0, b36a5a7, 740659a) : LLM confond contexte historique avec état courant. Chaque source de contexte injectée dans le prompt (few-shot, ChromaDB past_cycles, investigative_context) est un vecteur potentiel de dérive.
+
+La gate "re-run end-to-end avant déploiement" protège au moment du déploiement — mais pas dans la durée. À mesure que ChromaDB accumule des cycles (usage prod sur plusieurs semaines), les past_cycles créeront des contextes que le sandbox de test ne reproduit pas.
+
+À implémenter avant d'atteindre 5+ utilisateurs actifs :
+- [ ] Monitoring des décisions LLM en prod — détecter les dérives (action inhabituelle pour un TTP donné, confidence anormalement haute sans signal fort)
+- [ ] Alerting sur actions autonomes inattendues — `isolate_vm` décidé sans `MaxWrite` ni `USER=root` → flag pour revue humaine
 
 ---
 

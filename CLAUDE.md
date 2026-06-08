@@ -21,9 +21,11 @@ Plateforme OSS (Apache 2.0) de défense active cloud. Deux agents IA en boucle :
 | T1110.001 | SSH brute force | Syslog DCR | 58s | `block_suspicious_ip` |
 | T1548.003 | Sudo priv esc | Syslog DCR | 40s | `isolate_vm` (root confirmé) |
 | T1110+T1548 | Run parallèle | — | 41s/59s | block → isolate (incident context) |
+| T1136.001 | Account creation (purple loop) | Syslog DCR (authpriv) | ~78s | `isolate_vm` (persistance potentielle) — règle proposée + approuvée via purple loop |
 
 \* T1041 : latence StorageBlobLogs variable (ingestion Azure, pas la query). SLA fonctionnel, à surveiller.
 † T1548 run parallèle (T1110+T1548) : detection_timeout possible si DCR saturé — contention infra Azure, pas un bug Glorfindel.
+‡ T1136.001 : scénario créé spécifiquement pour valider le purple loop end-to-end (`detection_missed → propose_detection_rule → approve-rule → détection réussie`). Règle approuvée dans `detection_rules.yaml` lors du run 20260608T143312Z.
 
 Glorfindel choisit la bonne action sans règles per-TTP explicites — raisonnement depuis le contexte signal + incident.
 
@@ -192,6 +194,7 @@ annatar/scenarios/azure/
   data-exfiltration.yaml      → T1041
   lateral-movement.yaml       → T1110.001
   privilege-escalation.yaml   → T1548.003
+  account-creation.yaml       → T1136.001 (purple loop test — pas de règle initiale, règle proposée + approuvée)
   (cleanup/recovery/source/query/workspace_id supprimés — appartiennent à Glorfindel)
 
 schemas/scenario.schema.json  → JSON Schema validation IDE (mis à jour: prerequisites→detection.prerequisites)
@@ -343,6 +346,8 @@ wheel : eregion-0.2.0-py3-none-any.whl ✓
 - Restore via REST API `IaasVMRestoreRequest OriginalLocation` → VM deallocated puis redémarrée.
 - VM auto-shutdown 23h UTC → `az vm start -g annatar -n vm-annatar-victim` avant chaque session.
 - Syslog latence ~60s nominal, timeout 300s dans les scénarios.
+- DCR `facility_names` doit inclure `authpriv` — `useradd` sur Ubuntu génère des messages `LOG_AUTHPRIV`. Sans ce facility, T1136.001 (account creation) ne remonte pas dans LAW. Ajouté dans `monitoring.tf` (commit 9a64e83).
+- Azure Backup OriginalLocation restore laisse des disques orphelins à LUN 10 → `terraform apply` échoue sur le prochain attachement. Fix : `null_resource.clean_lun10` dans `vm.tf` détache automatiquement tout disque non-testdata à LUN 10.
 
 ---
 

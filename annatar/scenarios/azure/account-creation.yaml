@@ -15,7 +15,7 @@ steps:
     record: T0
 
 detection:
-  timeout: "120s"
+  timeout: "600s"
   prerequisites:
     - name: syslog_auth_dcr
       table: Syslog

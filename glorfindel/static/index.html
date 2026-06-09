@@ -2413,7 +2413,8 @@ function showEscModal(vmName) {
     const e     = group[0];
     const ids   = group.map(g => g.id).join(','); // CSV — safe in onclick attrs, no quotes
     const count = group.length;
-    const label = actionLabel(e.action);
+    const label = (e.action === 'snapshot' && e.escalation_type === 'low_confidence')
+      ? 'Snapshot recommended' : actionLabel(e.action);
     const ctx   = [e.ttp, e.severity, escLabel(e.escalation_type)].filter(Boolean).join(' · ');
     const steps = (e.suggested_steps || [])
       .map(s => `<div style="color:var(--dim);font-size:10px;padding:2px 0 2px 8px">• ${s}</div>`).join('');
@@ -2421,7 +2422,8 @@ function showEscModal(vmName) {
       ? `<pre style="background:var(--bg2);border-left:2px solid var(--cyan);padding:8px;font-size:10px;
            color:var(--blue);white-space:pre-wrap;overflow-x:auto;margin:6px 0;border-radius:0 4px 4px 0">${e.proposed_query.trim()}</pre>`
       : '';
-    const isRule = e.action === 'improve_detection' && e.proposal_id;
+    const isRule             = e.action === 'improve_detection' && e.proposal_id;
+    const isSnapshotPending  = e.action === 'snapshot' && e.escalation_type === 'low_confidence';
     const pid   = e.proposal_id || '';
     const countBadge = count > 1
       ? `<span style="font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;
@@ -2430,6 +2432,10 @@ function showEscModal(vmName) {
     const modalBtns = isRule
       ? `<button class="action" style="color:var(--green)" onclick="doApproveRule('${pid}','${e.id}');closeModal()">✓ Approve</button>
          <button class="action" style="color:var(--red)"   onclick="doRejectRule('${pid}','${e.id}');closeModal()">✗ Reject</button>`
+      : isSnapshotPending
+      ? `<button class="action" onclick="doSnapshot('${vmName}');closeModal()">📸 Snapshot</button>
+         <button class="action" onclick="doAckAll('${ids}');closeModal()">✓ Ack</button>
+         <button class="action" onclick="openCommandModal('${e.id}')">📋 Cmd</button>`
       : `<button class="action" onclick="doAckAll('${ids}');closeModal()">✓ Ack</button>
          <button class="action" onclick="openCommandModal('${e.id}')">📋 Cmd</button>`;
     return `<div style="border-left:2px solid var(--purple);padding:10px;margin-bottom:10px;background:color-mix(in srgb,var(--purple) 4%,var(--bg1))">

@@ -1796,11 +1796,15 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
     j => j.resource_id === resource_id || j.resource_id?.split('/').pop() === vm_name);
   const snapshotInProgress = activeJob?.type === 'snapshot' && activeJob?.status === 'InProgress';
   const snapshotFailed     = activeJob?.type === 'snapshot' && activeJob?.status === 'Failed';
+  // Escalade snapshot pending : bouton déjà dans la carte d'escalade — ne pas doubler dans BACKUP
+  const hasSnapshotEsc = myEscs.some(e => e.action === 'snapshot' && e.escalation_type === 'low_confidence');
   const snapshotBtn = snapshotInProgress
     ? `<button class="action" disabled style="margin-left:auto;font-size:9px;padding:2px 7px;opacity:.5;cursor:default">⏳ Snapshot…</button>`
     : snapshotFailed
       ? `<button class="action" onclick="event.stopPropagation();doSnapshot('${vm_name}')" style="margin-left:auto;font-size:9px;padding:2px 7px;background:color-mix(in srgb,var(--red) 20%,transparent);color:var(--red);border-color:var(--red)" title="${activeJob?.error || 'Snapshot failed'}">✗ Retry</button>`
-      : `<button class="action" onclick="event.stopPropagation();doSnapshot('${vm_name}')" style="margin-left:auto;font-size:9px;padding:2px 7px">📸 Snapshot</button>`;
+      : hasSnapshotEsc
+        ? ''
+        : `<button class="action" onclick="event.stopPropagation();doSnapshot('${vm_name}')" style="margin-left:auto;font-size:9px;padding:2px 7px">📸 Snapshot</button>`;
 
   // Readiness checks with full labels — shown in expanded clean card
   const readinessExpanded = (isClean && auditEntry)
@@ -1844,7 +1848,9 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
     ? `<button class="action" disabled style="margin-left:auto;font-size:9px;padding:1px 6px;opacity:.5;cursor:default">⏳ Snapshot…</button>`
     : snapshotFailed
       ? `<button class="action" onclick="event.stopPropagation();doSnapshot('${vm_name}')" style="margin-left:auto;font-size:9px;padding:1px 6px;background:color-mix(in srgb,var(--red) 20%,transparent);color:var(--red);border-color:var(--red)" title="${activeJob?.error || 'Snapshot failed'}">✗ Retry</button>`
-      : `<button class="action" onclick="event.stopPropagation();doSnapshot('${vm_name}')" style="margin-left:auto;font-size:9px;padding:1px 6px">📸 Snapshot</button>`;
+      : hasSnapshotEsc
+        ? ''
+        : `<button class="action" onclick="event.stopPropagation();doSnapshot('${vm_name}')" style="margin-left:auto;font-size:9px;padding:1px 6px">📸 Snapshot</button>`;
 
   const compactBody = isClean
     ? `<div style="margin-top:5px;display:flex;align-items:center;gap:6px">

@@ -742,6 +742,14 @@ def escalate_to_human(state: GlorfindelState) -> GlorfindelState:
         escalation_type = "low_confidence"
 
     signal = state["signal"]
+    steps = list(state.get("suggested_steps") or [])
+    if action == "snapshot":
+        resource_id = signal.get("resource_id", "")
+        steps.append(
+            f"Si tu confirmes la compromission après vérification : "
+            f"`glorfindel snapshot {resource_id} --yes` pour capturer l'état forensique."
+        )
+
     if not state.get("dry_run", False):
         from glorfindel import escalations
         escalations.record(
@@ -751,7 +759,7 @@ def escalate_to_human(state: GlorfindelState) -> GlorfindelState:
             escalation_type=escalation_type,
             reason=state.get("escalation_reason", ""),
             run_id=signal.get("context", {}).get("run_id", ""),
-            suggested_steps=state.get("suggested_steps") or [],
+            suggested_steps=steps,
             ttp=signal.get("ttp", ""),
             severity=signal.get("severity", ""),
             proposal_id=state.get("proposal_id", ""),

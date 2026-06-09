@@ -639,6 +639,42 @@ def test_escalate_to_human_real_run_records():
     mock_record.assert_called_once()
 
 
+def test_escalate_to_human_snapshot_appends_cli_step():
+    """snapshot escalation must include the exact CLI command in suggested_steps."""
+    from glorfindel.agent import escalate_to_human
+    from glorfindel import escalations as esc_module
+
+    state = _state(action="snapshot")
+    state["dry_run"] = False
+    state["escalation_reason"] = "confidence too low"
+    state["suggested_steps"] = ["/etc/passwd", "check authorized_keys"]
+
+    with patch.object(esc_module, "record") as mock_record:
+        escalate_to_human(state)
+
+    _, kwargs = mock_record.call_args
+    steps = kwargs.get("suggested_steps", [])
+    assert any("glorfindel snapshot" in s and _RESOURCE_ID in s for s in steps)
+
+
+def test_escalate_to_human_non_snapshot_no_cli_step():
+    """restore_from_backup escalation must NOT inject the snapshot CLI command."""
+    from glorfindel.agent import escalate_to_human
+    from glorfindel import escalations as esc_module
+
+    state = _state(action="restore_from_backup")
+    state["dry_run"] = False
+    state["escalation_reason"] = "destructive action"
+    state["suggested_steps"] = ["Check backup points"]
+
+    with patch.object(esc_module, "record") as mock_record:
+        escalate_to_human(state)
+
+    _, kwargs = mock_record.call_args
+    steps = kwargs.get("suggested_steps", [])
+    assert not any("glorfindel snapshot" in s for s in steps)
+
+
 # ── escalations.record — dedup ────────────────────────────────────────────────
 
 def test_escalation_record_dedup_returns_existing_id():

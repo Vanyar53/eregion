@@ -238,7 +238,9 @@ glorfindel pending --watch                   # terminal 3 — alerting (poll 2s,
 
 # Setup scénario T1486 (avant chaque run)
 annatar clean annatar/scenarios/azure/ransomware-vm.yaml   # nettoyage disque
-glorfindel snapshot <resource_id> --yes                    # recovery point propre (~5-20min)
+# ⚠ Attendre 10 min après annatar clean — les I/O du nettoyage peuvent déclencher
+#   ransomware-disk-write (ago(10m)) et fausser detection_time_s à 0.
+glorfindel snapshot <resource_id> --yes --wait             # recovery point propre (~5-20min, --wait requis)
 annatar run annatar/scenarios/azure/ransomware-vm.yaml     # lancer l'attaque
 
 # État
@@ -340,6 +342,7 @@ wheel : eregion-0.2.0-py3-none-any.whl ✓
 ## Détails Azure à connaître
 
 - NSG isolation = outbound deny-all → bloque AMA (`mdsd.err` : Failed to get gig token) → detection timeout sur run suivant. Toujours `glorfindel reset` avant le prochain run.
+- `annatar clean` T1486 génère des I/O disque élevées → RulePoller peut matcher la règle `ransomware-disk-write` (données dans `ago(10m)`) avant le vrai run. Résultat : `detection_time_s=0`, isolation sur données du nettoyage, pas du vrai run. Fix : attendre 10 min entre `annatar clean` et `annatar run`, ou vérifier que `detection_time_s > 0` après le run.
 - Règles block IP persistent entre runs → conflit priority si T1110 puis T1548. Nettoyage : `glorfindel reset`.
 - Priority bump `isolate_vm` : dynamique (premier slot libre ≥ 200) → fix bug conflit T1110 + T1548.
 - StorageBlobLogs : latence secondes. `AzureNetworkAnalytics_CL` inutilisable (10-60min).

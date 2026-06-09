@@ -12,9 +12,11 @@ Modèle : CLI open source gratuit, SaaS payant pour multi-tenant + connecteurs a
 - 6 TTPs validés en réel sur Azure : T1486, T1041, T1110.001, T1548.003, T1110+T1548 (parallèle), T1136.001
 - Run parallèle multi-signal validé avec IncidentRegistry + propagation investigative_context entre cycles
 - **Purple loop end-to-end validé** (commit 9a64e83) — `detection_missed → propose_detection_rule → approve-rule → detection_rules.yaml → restart watch → détection réussie ~78s`. Scénario T1136.001 (account creation) créé pour ce test.
-- 238 tests, 0 appel Azure, 0 appel LLM
+- 247 tests, 0 appel Azure, 0 appel LLM
 - **Few-shot T1136.001** (commit b36a5a7) — ancre "T1136.001 ≠ isolate_vm", confidence 0.35 → escalade + suggested_steps forensiques. Gate T1136.001 PASSED ✅ (41s, snapshot + escalade).
-- **Fix past_cycles ChromaDB** (commit 740659a) — bug critique : LLM inférait état isolation depuis ChromaDB past_cycles → sautait cycle 1 → restore direct → ransomware actif. Fix : `current_vm_state` injecté dans le prompt avant past_cycles + CRITICAL warning. Gate T1486 re-run requis.
+- **Fix past_cycles ChromaDB** (commit 740659a) — bug critique : LLM inférait état isolation depuis ChromaDB past_cycles → sautait cycle 1 → restore direct → ransomware actif. Fix : `current_vm_state` injecté dans le prompt avant past_cycles + CRITICAL warning. Gate T1486 PASSED ✅ (run 20260609T190824Z, RTO 21m29s).
+- **`expected_latency_s` par règle** (commit dd48b12) — timeout adaptatif `poll_detection` : `max(expected_latency_s, signal.detection_timeout_s)`. Couvre les spikes d'ingestion LAW > P50.
+- **jobs.py** (commit 10ae917) — backend partagé CLI/War Room : `~/.glorfindel/active_jobs/<vm>.json`, `snapshot/restore --wait`, `glorfindel jobs <vm>`, `/api/jobs/<vm>`
 - **`snapshot()` fire-and-forget** sur `detection_timeout` — `wait=False`, `verify_snapshot()` tolère "InProgress"
 - **Few-shot T1486 corrigé** (commit c6fe0d0) — bug sécurité : LLM sautait l'isolation, ransomware restait actif 20min. Flow corrigé : cycle 1 `isolate_vm` autonome, cycle 2 `restore_from_backup` escaladé
 - **War Room BACKUP** : section visible sur chaque carte VM, bouton 📸 Snapshot (fire-and-forget RSV)

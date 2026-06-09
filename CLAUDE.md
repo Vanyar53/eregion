@@ -162,14 +162,15 @@ glorfindel/
   proposed_rules.py     → record/pending/approve()/reject() — detection rule proposal lifecycle
   memory.py             → CycleMemory ChromaDB (confidence + past_cycles_used)
   incidents.py          → IncidentRegistry (TTL, persist, thread-safe)
-  cli.py                → watch, respond, restore, release, unblock, reset (revert=alias), list, pending, ack,
-                          audit (--all), approve-rule, reject-rule, check-ttl, bot, dashboard, war-room
+  cli.py                → watch, respond, restore (--wait), release, unblock, reset (revert=alias), list, pending, ack,
+                          audit (--all), approve-rule, reject-rule, check-ttl, jobs, bot, dashboard, war-room
   escalations.py        → ~/.glorfindel/escalations.jsonl + labels (proposed_rule, improve_detection ajoutés)
   bot.py                → Discord bot — un fil par VM, boutons Acquitter + Commande, /pending slash command
   tui.py                → Rich TUI full-screen (glorfindel dashboard) : resources + feed + escalations, raccourcis a/r/x/u/v
   api.py                → FastAPI War Room — /api/state, /api/feed (WS), /api/config, /api/audit[/<vm>],
                           /api/pending/rules, /api/action/{release,revert,restore,ack,approve-rule,snapshot/<vm>}
                           /api/discovered — assets découverts (lecture fraîche JSON à chaque appel)
+                          /api/jobs/<vm> — état du job snapshot/restore en cours (lit active_jobs/<vm>.json)
   static/index.html     → War Room web UI — cards VM expandables (compact + étendu), feed live
                           boutons ↩️ Release (isolated) | ↩️ Unblock (blocked IP) | ⟳ Reset (les deux) | 🔄 Restore
                           section BACKUP par carte : nb de RPs, âge dernier backup, bouton 📸 Snapshot (fire-and-forget RSV)
@@ -210,6 +211,7 @@ terraform/                    → infra complète Azure (VM, NSG, LAW, Backup, D
   bot_threads.json            → resource_id → thread_id Discord (persistance entre redémarrages)
   rule_status.json            → état de polling des règles (last_poll, last_match, match_count, last_error)
   discovered_assets.json      → cache assets découverts (AssetRegistry) — survit aux redémarrages
+  active_jobs/<vm>.json       → état persisté du job snapshot/restore en cours (partagé CLI/War Room)
   .bashrc                     → PS1 + HISTFILE + alias gf (chargé par make glorfindel-shell)
   .bash_history               → historique bash persistant
 
@@ -262,7 +264,9 @@ glorfindel release <resource_id> --yes       # lever isolation NSG (post-restore
 glorfindel unblock <ip> <resource_id> --yes  # supprimer une règle block IP
 glorfindel reset <resource_id> --yes        # reset complet : release + unblock toutes IPs
 glorfindel snapshot <resource_id> --yes      # backup on-demand RSV (setup scénario, ~5-20min)
-glorfindel restore <resource_id> --yes       # Azure Backup (--before auto-détecté)
+glorfindel restore <resource_id> --yes       # Azure Backup fire-and-forget (--before auto-détecté)
+glorfindel restore <resource_id> --yes --wait  # workflow complet : attend recovery_complete → release_isolation auto
+glorfindel jobs <vm-name> [--refresh]        # état du job snapshot/restore en cours
 glorfindel ack <escalation_id>               # acquitter escalade
 glorfindel ack --all                         # acquitter toutes
 glorfindel check-ttl                         # libérer isolations expirées
@@ -310,7 +314,7 @@ GLORFINDEL_CONFIDENCE_THRESHOLD=0.7 # gate autonomie LLM (défaut 0.7 — en des
 ## Tests
 
 ```bash
-pytest                    # 235 tests, 0 appel Azure, 0 appel LLM, 0 écriture ~/.glorfindel/
+pytest                    # 247 tests, 0 appel Azure, 0 appel LLM, 0 écriture ~/.glorfindel/
 pytest tests/unit/test_agent_nodes.py        # LangGraph nodes (incl. investigate + confidence gate)
 pytest tests/unit/test_glorfindel.py         # actions/routing/signals
 pytest tests/unit/test_detection_rules.py    # RulePoller + load_rules + status + recently_matched
@@ -383,7 +387,7 @@ az network nsg rule list -g annatar --nsg-name nsg-annatar -o table
 - `dry_run=True` dans tous les tests — jamais d'appel Azure ou LLM dans les tests
 - `tests/unit/conftest.py` : fixture `autouse` redirige `escalations._STORE` → `tmp_path/escalations.jsonl` (les tests n'écrivent jamais dans `~/.glorfindel/`)
 - `AZURE_SUBSCRIPTION_ID` obligatoire dans l'env (plus d'auto-détection via SubscriptionClient)
-- **Edit de `few_shot_examples.yaml`, `_SYSTEM_PROMPT` ou `_build_user_message()`** : requiert un run end-to-end T1486 + au moins un autre TTP avant merge. Ces trois zones contrôlent ce que le LLM voit et comment il raisonne — les 238 tests unitaires (LLM mocké, dry_run=True) ne peuvent pas valider le comportement résultant. Un edit mal calibré peut introduire un raccourci critique (ex: ransomware non-isolé 20min, faux positif T1041, cycle 1 sauté). Voir c6fe0d0, 740659a.
+- **Edit de `few_shot_examples.yaml`, `_SYSTEM_PROMPT` ou `_build_user_message()`** : requiert un run end-to-end T1486 + au moins un autre TTP avant merge. Ces trois zones contrôlent ce que le LLM voit et comment il raisonne — les 247 tests unitaires (LLM mocké, dry_run=True) ne peuvent pas valider le comportement résultant. Un edit mal calibré peut introduire un raccourci critique (ex: ransomware non-isolé 20min, faux positif T1041, cycle 1 sauté). Voir c6fe0d0, 740659a.
 - **`past_cycles` ChromaDB = historique uniquement** : ne jamais inférer l'état courant de la VM depuis les cycles passés. `_build_user_message()` injecte `## État actuel de la VM` depuis `~/.glorfindel/isolation/<vm>.json` — c'est la source de vérité. Voir commit 740659a (bug : LLM voyait `isolate_vm` dans past_cycles → concluait "VM déjà isolée" → sautait le cycle 1).
 
 ---

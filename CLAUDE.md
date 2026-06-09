@@ -21,11 +21,11 @@ Plateforme OSS (Apache 2.0) de défense active cloud. Deux agents IA en boucle :
 | T1110.001 | SSH brute force | Syslog DCR | 58s | `block_suspicious_ip` |
 | T1548.003 | Sudo priv esc | Syslog DCR | 40s | `isolate_vm` (root confirmé) |
 | T1110+T1548 | Run parallèle | — | 41s/59s | block → isolate (incident context) |
-| T1136.001 | Account creation (purple loop) | Syslog DCR (authpriv) | ~41s | `snapshot + escalade` (few-shot b36a5a7, confidence < 0.7 → gate) — règle proposée + approuvée via purple loop |
+| T1136.001 | Account creation (purple loop) | Syslog DCR (authpriv) | 21–49s‡ | `snapshot + escalade` (few-shot b36a5a7, confidence < 0.7 → gate) — règle proposée + approuvée via purple loop |
 
 \* T1041 : latence StorageBlobLogs variable (ingestion Azure, pas la query). SLA fonctionnel, à surveiller.
 † T1548 run parallèle (T1110+T1548) : detection_timeout possible si DCR saturé — contention infra Azure, pas un bug Glorfindel.
-‡ T1136.001 : scénario créé spécifiquement pour valider le purple loop end-to-end (`detection_missed → propose_detection_rule → approve-rule → détection réussie`). Règle approuvée dans `detection_rules.yaml` lors du run 20260608T143312Z.
+‡ T1136.001 : scénario créé spécifiquement pour valider le purple loop end-to-end (`detection_missed → propose_detection_rule → approve-rule → détection réussie`). Règle approuvée dans `detection_rules.yaml` lors du run 20260608T143312Z. Ingestion DCR Syslog empiriquement rapide (21–49s) mais peut monter à >300s sur spike Azure — `expected_latency_s: 480` dans la règle + `detection.timeout: 600s` dans le scénario couvrent le P99. Commit `dd48b12`.
 
 Glorfindel choisit la bonne action sans règles per-TTP explicites — raisonnement depuis le contexte signal + incident.
 

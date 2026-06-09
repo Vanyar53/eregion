@@ -10,10 +10,13 @@
 #   action_backends     → RSV et autres cibles de remédiation
 
 # ── Detection rules ────────────────────────────────────────────────────────────
-# monitoring_backends : référence le backend par nom (workspace_id dans glorfindel-config.yaml)
-# assets: [auto]      : s'applique à toutes les VMs découvertes par ce backend
-# interval_s          : période de polling en secondes
-# enabled             : mettre à false pour désactiver sans supprimer
+# monitoring_backends  : référence le backend par nom (workspace_id dans glorfindel-config.yaml)
+# assets: [auto]       : s'applique à toutes les VMs découvertes par ce backend
+# interval_s           : période de polling en secondes
+# enabled              : mettre à false pour désactiver sans supprimer
+# expected_latency_s   : latence d'ingestion P95 du backend.
+#                        poll_detection utilise max(expected_latency_s, signal.detection_timeout_s)
+#                        comme timeout effectif. Perf AMA ≈ 45s | StorageBlobLogs ≈ 90s | Syslog DCR ≈ 480s
 
 rules:
 
@@ -24,6 +27,7 @@ rules:
     monitoring_backends: [law-annatar]
     assets: [auto]
     interval_s: 30
+    expected_latency_s: 45
     query: |
       Perf
       | where (ObjectName == "Logical Disk" or ObjectName == "LogicalDisk")
@@ -40,6 +44,7 @@ rules:
     monitoring_backends: [law-annatar]
     assets: [auto]
     interval_s: 30
+    expected_latency_s: 90
     query: |
       StorageBlobLogs
       | where OperationName == "PutBlob"
@@ -57,6 +62,7 @@ rules:
     monitoring_backends: [law-annatar]
     assets: [auto]
     interval_s: 30
+    expected_latency_s: 480
     query: |
       Syslog
       | where Facility == "auth"
@@ -76,6 +82,7 @@ rules:
     monitoring_backends: [law-annatar]
     assets: [auto]
     interval_s: 30
+    expected_latency_s: 480
     query: |
       Syslog
       | where Facility == "auth"
@@ -97,6 +104,7 @@ rules:
     monitoring_backends: [law-annatar]
     assets: [auto]
     interval_s: 30
+    expected_latency_s: 480
     query: |
       Syslog
       | where TimeGenerated >= ago(10m)

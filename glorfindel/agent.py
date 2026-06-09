@@ -432,6 +432,19 @@ def poll_detection(state: GlorfindelState) -> GlorfindelState:
 # All queries use ago(5m) to stay within the detection window.
 # Kept short: investigate must complete in <15s total.
 
+_IQ_HEARTBEAT_GAP = """
+Heartbeat
+| where Computer == "{vm}"
+| where TimeGenerated > ago(2h)
+| order by TimeGenerated asc
+| extend PrevBeat = prev(TimeGenerated)
+| extend GapMin = datetime_diff('minute', TimeGenerated, PrevBeat)
+| where GapMin > 10
+| project TimeGenerated, GapMin
+| order by TimeGenerated desc
+| limit 1
+"""
+
 _IQ_DISK_PROCESSES = """
 Perf
 | where TimeGenerated > ago(5m)
@@ -561,13 +574,19 @@ def investigate(state: GlorfindelState) -> GlorfindelState:
 
     ctx: dict[str, list[dict]] = {}
 
-    # ── Disk write anomaly → which process is writing? backup agent present?
+    # ── Disk write anomaly → which process is writing? backup agent present? recent reboot?
     if "MaxWrite" in first_row or "DiskWrite" in first_row:
         ctx["top_write_processes"] = _run_investigative_query(
             workspace_id, _IQ_DISK_PROCESSES.format(vm=vm)
         )
         ctx["backup_agent_check"] = _run_investigative_query(
             workspace_id, _IQ_BACKUP_AGENT.format(vm=vm)
+        )
+        # Azure Backup OriginalLocation restore causes high I/O during boot rewrite.
+        # A Heartbeat gap > 10min indicates a recent VM reboot — raises suspicion of
+        # legitimate post-restore I/O rather than active ransomware encryption.
+        ctx["heartbeat_gap"] = _run_investigative_query(
+            workspace_id, _IQ_HEARTBEAT_GAP.format(vm=vm)
         )
 
     # ── Brute force → did any attempt succeed from this IP?
@@ -1247,6 +1266,19 @@ def _build_user_message(
         lines.append(
             f"- IPs bloquées : {', '.join(blocked_ips) if blocked_ips else 'aucune'}"
         )
+        try:
+            from glorfindel.jobs import get_last_restore as _get_last_restore
+            _rec = _get_last_restore(vm_name)
+            if _rec:
+                from datetime import datetime as _dt
+                _rt = _dt.fromisoformat(_rec["last_restore_at"])
+                _age_min = int((_dt.now(__import__("datetime").timezone.utc) - _rt).total_seconds() / 60)
+                lines.append(
+                    f"- Restauration Azure Backup déclenchée il y a **{_age_min} minutes**"
+                    f" — I/O disque élevée possible au boot post-restore (ne pas confondre avec ransomware)"
+                )
+        except Exception:
+            pass
 
     if past_cycles:
         lines.append("\n## Cycles passés similaires (historique — NE PAS inférer état courant depuis ces cycles)\n")

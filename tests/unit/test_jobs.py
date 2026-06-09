@@ -102,6 +102,52 @@ def test_start_restore_calls_connector_wait_false(jobs_dir):
     assert stored == job
 
 
+def test_start_restore_writes_last_restore_at(tmp_path, monkeypatch):
+    """start_restore must write ~/.glorfindel/recovery/<vm>.json with last_restore_at."""
+    import glorfindel.jobs as _jobs
+    monkeypatch.setattr(_jobs, "_JOBS_DIR", tmp_path / "active_jobs")
+    monkeypatch.setattr(_jobs, "_RECOVERY_DIR", tmp_path / "recovery")
+    from glorfindel.jobs import start_restore, get_last_restore
+
+    connector = MagicMock()
+    connector.restore_from_backup.return_value = {
+        "status": "restore_triggered",
+        "job_name": "restore-job-abc",
+        "vault": "rsv-annatar",
+        "rg": "rg",
+        "recovery_point": "rp-001",
+        "recovery_point_time": "2026-06-09T10:00:00Z",
+    }
+    start_restore(_RESOURCE_ID, connector, vault="rsv-annatar")
+    rec = get_last_restore(_VM_NAME)
+    assert rec is not None
+    assert "last_restore_at" in rec
+    assert rec["resource_id"] == _RESOURCE_ID
+
+
+def test_get_last_restore_returns_none_when_no_file(tmp_path, monkeypatch):
+    import glorfindel.jobs as _jobs
+    monkeypatch.setattr(_jobs, "_RECOVERY_DIR", tmp_path / "recovery")
+    from glorfindel.jobs import get_last_restore
+    assert get_last_restore(_VM_NAME) is None
+
+
+def test_get_last_restore_returns_none_when_older_than_one_hour(tmp_path, monkeypatch):
+    import glorfindel.jobs as _jobs
+    monkeypatch.setattr(_jobs, "_RECOVERY_DIR", tmp_path / "recovery")
+    from glorfindel.jobs import get_last_restore
+    import json
+    from datetime import datetime, timezone, timedelta
+
+    (tmp_path / "recovery").mkdir(parents=True)
+    old_time = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+    (tmp_path / "recovery" / f"{_VM_NAME}.json").write_text(json.dumps({
+        "last_restore_at": old_time,
+        "resource_id": _RESOURCE_ID,
+    }))
+    assert get_last_restore(_VM_NAME) is None
+
+
 def test_start_snapshot_job_id_contains_vm_name(jobs_dir):
     from glorfindel.jobs import start_snapshot
     connector = MagicMock()

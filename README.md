@@ -6,6 +6,7 @@ Eregion is an open-source automated incident response platform for cloud infrast
 - **Glorfindel** (blue) detects signals continuously, responds autonomously, verifies containment, and learns from every cycle
 
 > Autonomous SOC for teams that don't have one.
+> **RTO < 25 min on ransomware VM** — detection to restored service, no human on the critical path.
 
 ## How it works
 
@@ -36,15 +37,16 @@ Signals from different resources run in parallel threads; signals from the same 
 
 | TTP | Scenario | Detection source | Detection time | Action | RTO |
 |-----|----------|-----------------|----------------|--------|-----|
-| T1486 | Ransomware VM | Perf disk write anomaly | ~71s | cycle 1: `isolate_vm` (autonomous) → cycle 2: `restore_from_backup` (escalate) | 21m23s |
+| T1486 | Ransomware VM | Perf disk write anomaly | 55–71s | cycle 1: `isolate_vm` (autonomous) → cycle 2: `restore_from_backup` (escalate) | **21m29s** |
 | T1041 | Data exfiltration | StorageBlobLogs (PutBlob, RFC-1918) | ~79–108s* | `isolate_vm` (internal IP) | — |
 | T1110.001 | SSH brute force | Syslog DCR (auth facility) | ~58s | `block_suspicious_ip` | — |
 | T1548.003 | Sudo privilege escalation | Syslog DCR (auth facility) | ~40s | `isolate_vm` (OS-level compromise) | — |
 | T1110+T1548 | Parallel multi-signal | Syslog DCR | 41s / 59s | `block_suspicious_ip` → `isolate_vm` (incident context) | — |
+| T1136.001 | Account creation (purple loop) | Syslog DCR (authpriv) | 21–49s | `snapshot` + escalate (confidence < 0.7) | — |
 
 \* T1041: StorageBlobLogs ingestion latency is variable on the Azure side, not the query. Functional SLA, monitored.
 
-Glorfindel chose the right action on all five by reasoning from raw signal indicators — not from a TTP→action table.
+Glorfindel chose the right action on all six by reasoning from raw signal indicators — not from a TTP→action table.
 
 ## Getting started
 

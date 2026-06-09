@@ -16,7 +16,7 @@ Plateforme OSS (Apache 2.0) de défense active cloud. Deux agents IA en boucle :
 
 | TTP | Scénario | Détection | Temps | Action |
 |-----|----------|-----------|-------|--------|
-| T1486 | Ransomware VM | Perf disk write | ~71s | cycle 1 : `isolate_vm` (autonome), cycle 2 : `restore_from_backup` (escalade) → 21m23s RTO |
+| T1486 | Ransomware VM | Perf disk write | 55–71s | cycle 1 : `isolate_vm` (autonome), `restore --wait` → `recovery_complete` → `release_isolation` auto → RTO ~21m29s |
 | T1041 | Data exfiltration | StorageBlobLogs (RFC-1918, PutBlob ≥ 1) | ~79–108s* | `isolate_vm` (disk intact) |
 | T1110.001 | SSH brute force | Syslog DCR | 58s | `block_suspicious_ip` |
 | T1548.003 | Sudo priv esc | Syslog DCR | 40s | `isolate_vm` (root confirmé) |

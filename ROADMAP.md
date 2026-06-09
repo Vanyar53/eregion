@@ -3,6 +3,7 @@
 ## Contexte produit
 Eregion est un CDR — Cloud Detection and Response. Détecte, répond et apprend — sans playbooks, sans équipe SOC dédiée.
 Pitch : "Teste ton infra avant que les autres le fassent pour toi."
+**RTO mesuré : < 25 min sur ransomware VM** — de la détection à la remise en service, sans intervention humaine sur le chemin critique (run 20260609T190824Z : 21m29s).
 Cible : DevOps leads mid-market (50-500 personnes), pas de SOC dédié, <$500/mois acceptable.
 Modèle : CLI open source gratuit, SaaS payant pour multi-tenant + connecteurs avancés + reporting.
 

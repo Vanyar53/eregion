@@ -817,7 +817,8 @@ function openCommandModal(escId) {
   const esc = _escById[escId];
   if (!esc) return;
   const cmd = cliCommand(esc);
-  const label = actionLabel(esc.action);
+  const isSnapshotPending = esc.action === 'snapshot' && esc.escalation_type === 'low_confidence';
+  const label = isSnapshotPending ? 'Snapshot recommended' : actionLabel(esc.action);
   document.getElementById('modal-title').textContent = '📋 ' + label;
   document.getElementById('modal-body').textContent = 'CLI command to run for this escalation:';
   const cmdEl = document.getElementById('modal-cmd');
@@ -908,7 +909,8 @@ function _groupEscs(escs) {
 
 function _renderEscGroup(group) {
   const e     = group[0]; // most recent / representative
-  const label = actionLabel(e.action);
+  const isSnapshotPending = e.action === 'snapshot' && e.escalation_type === 'low_confidence';
+  const label = isSnapshotPending ? 'Snapshot recommended' : actionLabel(e.action);
   const count = group.length;
   const ctx   = [e.ttp, e.severity, escLabel(e.escalation_type)].filter(Boolean).join(' · ');
   const ids   = group.map(g => g.id).join(','); // CSV — safe in onclick attrs, no quotes
@@ -928,6 +930,10 @@ function _renderEscGroup(group) {
     ? ruleButtons  // proposed rules: Approve + Reject only (▸ details shows query)
     : isRestore
     ? `<button class="action primary" onclick="event.stopPropagation();confirmRestore('${vmName}')" style="font-size:9px;padding:2px 7px">🔄 Restore</button>
+       <button class="action" onclick="event.stopPropagation();doAckAll('${ids}')" style="font-size:9px;padding:2px 7px">✓ Ack</button>
+       <button class="action" onclick="event.stopPropagation();openCommandModal('${e.id}')" style="font-size:9px;padding:2px 7px">📋 Cmd</button>`
+    : isSnapshotPending
+    ? `<button class="action" onclick="event.stopPropagation();doSnapshot('${vmName}')" style="font-size:9px;padding:2px 7px">📸 Snapshot</button>
        <button class="action" onclick="event.stopPropagation();doAckAll('${ids}')" style="font-size:9px;padding:2px 7px">✓ Ack</button>
        <button class="action" onclick="event.stopPropagation();openCommandModal('${e.id}')" style="font-size:9px;padding:2px 7px">📋 Cmd</button>`
     : `<button class="action" onclick="event.stopPropagation();doAckAll('${ids}')" style="font-size:9px;padding:2px 7px">✓ Ack</button>

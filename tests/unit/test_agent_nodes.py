@@ -172,6 +172,76 @@ def test_poll_detection_unknown_source_falls_back_to_timeout():
     assert result["signal"]["event"] == "detection_timeout"
 
 
+def test_poll_detection_expected_latency_overrides_signal_timeout():
+    """expected_latency_s on the matched rule must override a shorter signal timeout.
+
+    T1136.001 scenario: signal has detection_timeout_s=300 but the Syslog DCR
+    rule has expected_latency_s=480 — poll_alert must be called with timeout_s=480.
+    """
+    from glorfindel.agent import poll_detection
+    from glorfindel.detection_rules import DetectionRule
+
+    state = _state()
+    state["signal"]["event"] = "attack_started"
+    state["signal"]["ttp"] = "T1136.001"
+    state["signal"]["raw_signal"] = {
+        "detection_timeout_s": 300,  # scenario says 300s
+        "attack_time": 1000.0,
+    }
+    mock_rule = DetectionRule(
+        name="t1136-001-rule",
+        source="azure_monitor",
+        workspace_id="ws-abc",
+        query="Syslog | ...",
+        ttp="T1136.001",
+        resource_id="",
+        expected_latency_s=480,  # DCR latency P95
+    )
+    mock_detector = MagicMock()
+    mock_detector.poll_alert.return_value = None  # timed out (testing timeout value)
+
+    with patch("glorfindel.agent._find_rule_for_ttp", return_value=mock_rule), \
+         patch("glorfindel.agent.load_glorfindel_config", return_value=None), \
+         patch("glorfindel.detectors.detector_for", return_value=mock_detector):
+        poll_detection(state)
+
+    _, kwargs = mock_detector.poll_alert.call_args
+    assert kwargs.get("timeout_s") == 480.0
+
+
+def test_poll_detection_signal_timeout_preserved_when_higher_than_latency():
+    """Signal timeout must be preserved when it already exceeds expected_latency_s."""
+    from glorfindel.agent import poll_detection
+    from glorfindel.detection_rules import DetectionRule
+
+    state = _state()
+    state["signal"]["event"] = "attack_started"
+    state["signal"]["ttp"] = "T1486"
+    state["signal"]["raw_signal"] = {
+        "detection_timeout_s": 300,  # scenario says 300s
+        "attack_time": 1000.0,
+    }
+    mock_rule = DetectionRule(
+        name="ransomware-disk-write",
+        source="azure_monitor",
+        workspace_id="ws-abc",
+        query="Perf | ...",
+        ttp="T1486",
+        resource_id="",
+        expected_latency_s=45,  # Perf AMA fast — signal timeout wins
+    )
+    mock_detector = MagicMock()
+    mock_detector.poll_alert.return_value = None
+
+    with patch("glorfindel.agent._find_rule_for_ttp", return_value=mock_rule), \
+         patch("glorfindel.agent.load_glorfindel_config", return_value=None), \
+         patch("glorfindel.detectors.detector_for", return_value=mock_detector):
+        poll_detection(state)
+
+    _, kwargs = mock_detector.poll_alert.call_args
+    assert kwargs.get("timeout_s") == 300.0
+
+
 # ── _find_rule_for_ttp / resolve_attack_started ───────────────────────────────
 
 def test_find_rule_for_ttp_with_glorfindel_cfg_resolves_workspace_id(tmp_path):

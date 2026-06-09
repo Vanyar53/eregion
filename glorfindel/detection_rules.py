@@ -64,6 +64,7 @@ class DetectionRule:
     # auto_apply: True when no explicit assets — applies to all discovered
     # assets for the monitoring_backend (filtered by GlorfindelConfig.exceptions)
     auto_apply: bool = False
+    expected_latency_s: int = 0
 
 
 @dataclass
@@ -251,6 +252,7 @@ def load_config(path: str | Path, glorfindel_cfg=None) -> DetectionConfig:
             asset_name=primary_asset_name,
             monitoring_backend_name=primary_backend_name,
             auto_apply=auto_apply,
+            expected_latency_s=int(item.get("expected_latency_s", 0)),
         ))
 
     return DetectionConfig(backends=backends, assets=assets, rules=rules)
@@ -359,6 +361,7 @@ class RulePoller:
                     asset_name=asset.name,
                     monitoring_backend_name=rule.monitoring_backend_name,
                     auto_apply=False,
+                    expected_latency_s=rule.expected_latency_s,
                 )
                 t = threading.Thread(
                     target=self._poll_rule,

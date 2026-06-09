@@ -368,8 +368,13 @@ def resolve_attack_started(signal: dict) -> dict:
             source = source or rule.source
             query = rule.query
             workspace_id = workspace_id or rule.workspace_id
+            # expected_latency_s: DCR/Syslog ingestion takes up to 480s — override
+            # the scenario timeout when the rule knows better.
+            if rule.expected_latency_s > timeout_s:
+                timeout_s = float(rule.expected_latency_s)
             _console.print(
-                f"  [dim]Using detection rule '{rule.name}' from detection_rules.yaml[/dim]"
+                f"  [dim]Using detection rule '{rule.name}' from detection_rules.yaml"
+                f" (timeout={int(timeout_s)}s)[/dim]"
             )
 
     if not query:

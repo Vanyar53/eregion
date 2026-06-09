@@ -10,6 +10,21 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 _JOBS_DIR = Path.home() / ".glorfindel" / "active_jobs"
+_RECOVERY_DIR = Path.home() / ".glorfindel" / "recovery"
+
+
+def get_last_restore(vm_name: str) -> dict | None:
+    """Return last restore metadata if triggered within 60 minutes, else None."""
+    p = _RECOVERY_DIR / f"{vm_name}.json"
+    if not p.exists():
+        return None
+    try:
+        data = json.loads(p.read_text())
+        restore_time = datetime.fromisoformat(data["last_restore_at"])
+        age_s = (datetime.now(timezone.utc) - restore_time).total_seconds()
+        return data if age_s < 3600 else None
+    except Exception:
+        return None
 
 
 def _path(vm_name: str) -> Path:
@@ -95,4 +110,9 @@ def start_restore(
         "completed_at": None,
     }
     save_job(vm_name, job)
+    _RECOVERY_DIR.mkdir(parents=True, exist_ok=True)
+    (_RECOVERY_DIR / f"{vm_name}.json").write_text(json.dumps({
+        "last_restore_at": datetime.now(timezone.utc).isoformat(),
+        "resource_id": resource_id,
+    }))
     return job

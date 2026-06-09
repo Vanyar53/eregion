@@ -1092,7 +1092,8 @@ def test_investigate_skips_dry_run():
     assert "investigative_context" not in result["signal"].get("raw_signal", {})
 
 
-def test_investigate_disk_write_runs_two_queries():
+def test_investigate_disk_write_runs_three_queries():
+    """Disk write anomaly triggers top_write_processes + backup_agent_check + heartbeat_gap."""
     state = _inv_state(first_row={"Computer": "vm-test", "MaxWrite": 147000000})
     mock_det = MagicMock()
     mock_det.run_query.return_value = [{"InstanceName": "crypt", "MaxWriteMBs": 140}]
@@ -1101,7 +1102,8 @@ def test_investigate_disk_write_runs_two_queries():
     ctx = result["signal"]["raw_signal"]["investigative_context"]
     assert "top_write_processes" in ctx
     assert "backup_agent_check" in ctx
-    assert mock_det.run_query.call_count == 2
+    assert "heartbeat_gap" in ctx
+    assert mock_det.run_query.call_count == 3
 
 
 def test_investigate_backup_agent_found_appears_in_context():
@@ -1110,6 +1112,7 @@ def test_investigate_backup_agent_found_appears_in_context():
     mock_det.run_query.side_effect = [
         [{"InstanceName": "crypt", "MaxWriteMBs": 78}],
         [{"InstanceName": "azure-backup", "MaxWriteMBs": 75}],  # backup present
+        [],  # heartbeat_gap: no gap detected
     ]
     with patch("glorfindel.detectors.detector_for", return_value=mock_det):
         result = investigate(state)

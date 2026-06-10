@@ -63,6 +63,7 @@ Eregion couvre aujourd'hui le milieu de la kill chain. La roadmap ressources ét
 ## Phase 2 — Solidification (après premier utilisateur)
 **Objectif : robustesse hors contexte auteur.**
 
+- [~] **Modes d'autonomie granulaires par asset** — backend livré 2026-06-10 (`9154fc6`/`364d466` volet 1 ; `ac392ac`/`6122db0` volet 2 read-only). UI War Room + gate Tests (2 runs + run read-only) à venir. `human_only` (défaut), `non_disruptive` (actuel), `full_auto` (différé, refusé par la validation). Résolution par asset (asset > tag > défaut global), config section `autonomy`, `allow_destructive` séparé. Escalier de confiance : observe → réagit quand l'utilisateur a confiance. Débloque l'adoption externe — le persona sans SOC craint l'action réversible mais disruptive (`isolate_vm`) en autonome sur un faux positif, pas le restore (déjà gated). **`human_only` tourne sur credentials read-only** = on-ramp du premier test externe (lecture seule sur le LAW du pair, zéro risque). Défaut `human_only` = première expérience sûre.
 - [ ] `glorfindel check-ttl` en cron — crontab ou systemd timer
 - [ ] Gestion d'erreur documentée — Azure Monitor en retard, NSG apply échoué, restore timeout
 - [ ] `glorfindel list --live` — détecter règles NSG orphelines

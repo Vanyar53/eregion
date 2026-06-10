@@ -48,3 +48,31 @@ exceptions: []
   # Example: exclude a specific VM from one rule only
   # - asset_pattern: "vm-staging"
   #   exclude_rules: [ssh-brute-force]
+
+# ── Autonomy ────────────────────────────────────────────────────────────────────
+# How much Glorfindel is allowed to ACT on its own, resolved per asset.
+#
+#   human_only     (default) — nothing executes. Every action, even reversible
+#                  ones (isolate_vm/block/snapshot), is recommended and escalated.
+#                  ⚠ Detection without response until a human acts — only use on
+#                  critical assets if escalations are watched (webhook/bot/War Room).
+#   non_disruptive — current behaviour: reversible actions run autonomously,
+#                  destructive actions are always gated.
+#   full_auto      — deferred; refused by config validation for now.
+#
+# Resolution order: matching asset rule > global default. Unknown assets fall
+# back to the global default (never accidental escalation to a more permissive mode).
+# Start in human_only, observe what Glorfindel WOULD do on your real infra, then
+# promote assets to non_disruptive once you trust it.
+
+autonomy:
+  default: human_only
+  # allow_destructive is a SEPARATE axis from the mode — delete/wipe are never
+  # controlled by a mode. Empty = never autonomous, regardless of mode.
+  allow_destructive: []
+  assets: []
+    # Example: dev VMs act autonomously, the prod DB stays human-gated
+    # - match: "vm-dev-*"
+    #   mode: non_disruptive
+    # - match: "vm-prod-db"
+    #   mode: human_only

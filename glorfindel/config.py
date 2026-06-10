@@ -60,11 +60,57 @@ class ExceptionConfig:
         return self.exclude_all or rule_name in self.exclude_rules
 
 
+# Autonomy modes — resolved per asset, defaults to the safest (human_only).
+# full_auto is deferred: the mechanism resolves it but config validation refuses
+# the value for now. Order of precedence: asset match > global default.
+VALID_AUTONOMY_MODES = {"human_only", "non_disruptive"}
+DEFERRED_AUTONOMY_MODES = {"full_auto"}
+
+
+@dataclass
+class AutonomyRule:
+    """An asset-scoped autonomy mode override (fnmatch, like ExceptionConfig)."""
+    match: str                   # fnmatch pattern matched against VM name
+    mode: str
+
+    def matches(self, asset_name: str) -> bool:
+        return fnmatch.fnmatch(asset_name, self.match)
+
+
+@dataclass
+class AutonomyConfig:
+    """Per-asset autonomy policy.
+
+    - human_only (default): nothing executes autonomously — every action, even
+      reversible ones (isolate_vm/block/snapshot), is recommended and escalated.
+    - non_disruptive: current behaviour — AUTONOMOUS_ACTIONS run, destructive gated.
+
+    allow_destructive is a SEPARATE axis from the mode (Review 2026-06-10):
+    delete_resource/wipe_storage are NEVER controlled by a mode. Empty = never
+    autonomous, regardless of mode.
+    """
+    default: str = "human_only"
+    assets: list[AutonomyRule] = field(default_factory=list)
+    allow_destructive: list[str] = field(default_factory=list)
+
+    def resolve(self, asset_name: str) -> str:
+        """Resolve the autonomy mode for an asset. asset > global default.
+
+        Unknown assets fall back to the global default — never an accidental
+        inheritance toward a more permissive mode.
+        """
+        for rule in self.assets:
+            if rule.matches(asset_name):
+                return rule.mode
+        return self.default
+
+
 @dataclass
 class GlorfindelConfig:
     monitoring_backends: list[MonitoringBackendConfig] = field(default_factory=list)
     action_backends: list[ActionBackendConfig] = field(default_factory=list)
     exceptions: list[ExceptionConfig] = field(default_factory=list)
+    autonomy: AutonomyConfig = field(default_factory=AutonomyConfig)
 
     def monitoring_backend(self, name: str) -> MonitoringBackendConfig | None:
         return next((b for b in self.monitoring_backends if b.name == name), None)
@@ -136,8 +182,80 @@ def load_glorfindel_config(path: str | Path | None = None) -> GlorfindelConfig:
             exclude_rules=e.get("exclude_rules", []),
         ))
 
+    autonomy = _parse_autonomy(data.get("autonomy", {}))
+
     return GlorfindelConfig(
         monitoring_backends=monitoring_backends,
         action_backends=action_backends,
         exceptions=exceptions,
+        autonomy=autonomy,
     )
+
+
+def _validate_mode(mode: str, where: str) -> str:
+    """Validate an autonomy mode value, raising a clear error for refused values."""
+    if mode in VALID_AUTONOMY_MODES:
+        return mode
+    if mode in DEFERRED_AUTONOMY_MODES:
+        raise ValueError(
+            f"Autonomy mode '{mode}' ({where}) is not available yet — it is deferred. "
+            f"Use one of {sorted(VALID_AUTONOMY_MODES)}."
+        )
+    raise ValueError(
+        f"Unknown autonomy mode '{mode}' ({where}). "
+        f"Valid modes: {sorted(VALID_AUTONOMY_MODES)}."
+    )
+
+
+def _parse_autonomy(raw: dict) -> AutonomyConfig:
+    """Parse + validate the autonomy section. Empty/absent → safe defaults."""
+    default = _validate_mode(raw.get("default", "human_only"), where="autonomy.default")
+    assets = []
+    for a in raw.get("assets", []):
+        mode = _validate_mode(a["mode"], where=f"autonomy.assets[match={a.get('match', '?')}]")
+        assets.append(AutonomyRule(match=a["match"], mode=mode))
+    return AutonomyConfig(
+        default=default,
+        assets=assets,
+        allow_destructive=list(raw.get("allow_destructive", [])),
+    )
+
+
+def set_asset_mode(asset_name: str, mode: str, path: str | Path | None = None) -> str:
+    """Set the autonomy mode for a single asset and persist to glorfindel-config.yaml.
+
+    Backend for the War Room mode selector / change-mode endpoint. Validates the
+    mode (refuses full_auto / unknown), upserts an exact-match `autonomy.assets`
+    entry for asset_name, and writes the file back. Returns the resolved path.
+
+    NOTE: this rewrites the YAML via safe_dump — inline comments are not preserved.
+    Intended for UI-driven edits; hand-edited configs keep their comments as long
+    as the mode is changed through the file directly.
+    """
+    if yaml is None:
+        raise ImportError("PyYAML is required: pip install pyyaml")
+    _validate_mode(mode, where=f"set_asset_mode({asset_name})")
+
+    if path is not None:
+        cfg_path = Path(path)
+    else:
+        cfg_path = next((p for p in _DEFAULT_PATHS if p.exists()), _DEFAULT_PATHS[0])
+
+    data = {}
+    if cfg_path.exists():
+        data = yaml.safe_load(cfg_path.read_text()) or {}
+
+    autonomy = data.setdefault("autonomy", {})
+    autonomy.setdefault("default", "human_only")
+    assets = autonomy.setdefault("assets", [])
+
+    for entry in assets:
+        if entry.get("match") == asset_name:
+            entry["mode"] = mode
+            break
+    else:
+        assets.append({"match": asset_name, "mode": mode})
+
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    cfg_path.write_text(yaml.safe_dump(data, sort_keys=False, default_flow_style=False))
+    return str(cfg_path)

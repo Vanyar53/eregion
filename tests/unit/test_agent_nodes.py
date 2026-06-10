@@ -817,13 +817,19 @@ def test_decide_confidence_gate_forces_escalation():
 
 
 def test_decide_confidence_gate_above_threshold_no_override():
-    """Confidence above threshold → LLM decision respected, no forced escalation."""
+    """Confidence above threshold → LLM decision respected, no forced escalation.
+
+    Runs in non_disruptive so the autonomy policy doesn't hold the action back —
+    this test isolates the confidence-gate behaviour.
+    """
     from glorfindel.agent import decide
+    from glorfindel.config import AutonomyConfig
 
     state = _state()
     with patch("litellm.completion",
                return_value=_mock_llm_response("isolate_vm", escalate=False, confidence=0.8)):
-        result = decide(state, model="claude-test")
+        result = decide(state, model="claude-test",
+                        autonomy=AutonomyConfig(default="non_disruptive"))
 
     assert result["escalate"] is False
 
@@ -858,10 +864,15 @@ def test_decide_confidence_gate_env_threshold(monkeypatch):
 
 # ── Graph integration (LLM mocked) ───────────────────────────────────────────
 
-def _build(tmp_path, tmp_memory, dry_connector):
+def _build(tmp_path, tmp_memory, dry_connector, autonomy=None):
     from glorfindel.agent import _build_graph
+    from glorfindel.config import AutonomyConfig
     (tmp_path / "runs").mkdir(exist_ok=True)
-    return _build_graph(tmp_memory, dry_connector, "claude-test")
+    # Default these graph tests to non_disruptive — they validate the autonomous
+    # execution path. human_only behaviour is covered by dedicated tests below.
+    if autonomy is None:
+        autonomy = AutonomyConfig(default="non_disruptive")
+    return _build_graph(tmp_memory, dry_connector, "claude-test", autonomy=autonomy)
 
 
 def _initial(event: str, ttp: str = "T1486", raw: dict | None = None) -> dict:
@@ -970,6 +981,84 @@ def test_graph_proposed_action_escalates(tmp_path, monkeypatch, dry_connector, t
     assert final["outcome"]["status"] == "escalated"
     assert final["outcome"]["escalation_type"] == "proposed_action"
     assert tmp_memory.count() == 1
+
+
+# ── Autonomy modes (human_only / non_disruptive) ──────────────────────────────
+
+def test_graph_human_only_holds_back_isolate_vm(tmp_path, monkeypatch, dry_connector, tmp_memory):
+    """human_only: a high-confidence isolate_vm is recommended but NOT executed."""
+    from glorfindel.config import AutonomyConfig
+    monkeypatch.chdir(tmp_path)
+    graph = _build(tmp_path, tmp_memory, dry_connector,
+                   autonomy=AutonomyConfig(default="human_only"))
+
+    with patch("litellm.completion") as mock_cls:
+        mock_cls.return_value = _mock_llm_response("isolate_vm")  # confidence 0.95, escalate False
+        final = graph.invoke(_initial("detection", raw={"detection_time_s": 50}))
+
+    assert final["action"] == "isolate_vm"
+    assert final["escalate"] is True
+    assert final["mode_hold"] is True
+    assert final["outcome"]["status"] == "escalated"
+    assert final["outcome"]["escalation_type"] == "mode_hold"
+    # executed=False + status=escalated proves the connector was never invoked
+    assert final["outcome"]["executed"] is False
+    assert final["autonomy_mode"] == "human_only"
+
+
+def test_graph_non_disruptive_executes_isolate_vm(tmp_path, monkeypatch, dry_connector, tmp_memory):
+    """non_disruptive: isolate_vm runs autonomously (current behaviour unchanged)."""
+    from glorfindel.config import AutonomyConfig
+    monkeypatch.chdir(tmp_path)
+    graph = _build(tmp_path, tmp_memory, dry_connector,
+                   autonomy=AutonomyConfig(default="non_disruptive"))
+
+    with patch("litellm.completion") as mock_cls:
+        mock_cls.return_value = _mock_llm_response("isolate_vm")
+        final = graph.invoke(_initial("detection", raw={"detection_time_s": 50}))
+
+    assert final["action"] == "isolate_vm"
+    assert final["escalate"] is False
+    assert final.get("mode_hold") is False
+    assert final["outcome"]["status"] == "dry_run"
+    assert final["autonomy_mode"] == "non_disruptive"
+
+
+def test_graph_human_only_destructive_stays_destructive_type(tmp_path, monkeypatch, dry_connector, tmp_memory):
+    """human_only does not relabel an already-escalated destructive action as mode_hold."""
+    from glorfindel.config import AutonomyConfig
+    monkeypatch.chdir(tmp_path)
+    graph = _build(tmp_path, tmp_memory, dry_connector,
+                   autonomy=AutonomyConfig(default="human_only"))
+
+    with patch("litellm.completion") as mock_cls:
+        mock_cls.return_value = _mock_llm_response("restore_from_backup", escalate=False)
+        final = graph.invoke(_initial("recovery_failed"))
+
+    # Destructive gate fired first → escalation type is destructive_action, not mode_hold
+    assert final["outcome"]["escalation_type"] == "destructive_action"
+    assert final.get("mode_hold") is False
+
+
+def test_graph_human_only_per_asset_resolution(tmp_path, monkeypatch, dry_connector, tmp_memory):
+    """A matching asset rule overrides the global default per asset."""
+    from glorfindel.config import AutonomyConfig, AutonomyRule
+    monkeypatch.chdir(tmp_path)
+    # Global default human_only, but THIS vm matches a non_disruptive rule
+    vm_name = _RESOURCE_ID.split("/")[-1]
+    autonomy = AutonomyConfig(
+        default="human_only",
+        assets=[AutonomyRule(match=vm_name, mode="non_disruptive")],
+    )
+    graph = _build(tmp_path, tmp_memory, dry_connector, autonomy=autonomy)
+
+    with patch("litellm.completion") as mock_cls:
+        mock_cls.return_value = _mock_llm_response("isolate_vm")
+        final = graph.invoke(_initial("detection", raw={"detection_time_s": 50}))
+
+    assert final["autonomy_mode"] == "non_disruptive"
+    assert final["escalate"] is False
+    assert final["outcome"]["status"] == "dry_run"
 
 
 # ── T1548.003 — Sudo privilege escalation ─────────────────────────────────────

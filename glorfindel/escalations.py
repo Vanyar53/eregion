@@ -44,6 +44,7 @@ def record(
     severity: str = "",
     proposal_id: str = "",
     proposed_query: str = "",
+    confidence: float = 0.0,
 ) -> str:
     """Append an escalation and return its id.
 
@@ -82,6 +83,7 @@ def record(
         "severity": severity,
         "proposal_id": proposal_id,
         "proposed_query": proposed_query,
+        "confidence": confidence,
         "status": "pending",
         "resolved_at": None,
     }

@@ -78,6 +78,23 @@ async def state() -> dict:
     except Exception:
         pass
 
+    # Autonomy modes per discovered asset
+    autonomy_modes: dict[str, str] = {}
+    autonomy_default = "human_only"
+    try:
+        from glorfindel.config import load_glorfindel_config as _load_gcfg
+        _acfg = _load_gcfg()
+        autonomy_default = _acfg.autonomy.default
+        for _a in discovered:
+            _vm = _a.get("name") or _a.get("resource_id", "").split("/")[-1]
+            if _vm:
+                autonomy_modes[_vm] = _acfg.autonomy.resolve(_vm)
+    except Exception:
+        pass
+
+    import os as _os
+    read_only = _os.environ.get("GLORFINDEL_READ_ONLY", "0") in ("1", "true", "True")
+
     return {
         "resources": resources,
         "escalations": esc_module.pending(),
@@ -85,6 +102,9 @@ async def state() -> dict:
         "discovered_assets": discovered,
         "posture_gaps": posture_gaps,
         "active_jobs": _all_jobs(),
+        "autonomy_modes": autonomy_modes,
+        "autonomy_default": autonomy_default,
+        "read_only": read_only,
         "now": now.isoformat(),
     }
 
@@ -330,6 +350,18 @@ async def feed_ws(ws: WebSocket) -> None:
         pass
 
 
+def _subprocess_result(result: "subprocess.CompletedProcess[str]") -> dict:
+    """Normalise subprocess result — surfaces PermissionError from stderr."""
+    stderr = result.stderr or ""
+    permission_denied = "read-only" in stderr.lower() or "PermissionError" in stderr
+    return {
+        "stdout": result.stdout,
+        "stderr": stderr,
+        "ok": result.returncode == 0 and not permission_denied,
+        **({"permission_denied": True, "error": stderr.strip()} if permission_denied else {}),
+    }
+
+
 @app.post("/api/action/release/{vm_name}")
 async def action_release(vm_name: str) -> dict:
     """Release isolation only — use after restore when the VM is clean."""
@@ -341,11 +373,7 @@ async def action_release(vm_name: str) -> dict:
         [_bin(), "release", resource_id, "--yes"],
         capture_output=True, text=True, timeout=60,
     )
-    return {
-        "stdout": result.stdout,
-        "stderr": result.stderr,
-        "ok": result.returncode == 0,
-    }
+    return _subprocess_result(result)
 
 
 @app.post("/api/action/revert/{vm_name}")
@@ -359,11 +387,7 @@ async def action_revert(vm_name: str) -> dict:
         [_bin(), "reset", resource_id, "--yes"],
         capture_output=True, text=True, timeout=60,
     )
-    return {
-        "stdout": result.stdout,
-        "stderr": result.stderr,
-        "ok": result.returncode == 0,
-    }
+    return _subprocess_result(result)
 
 
 def _all_jobs() -> list[dict]:
@@ -395,6 +419,65 @@ async def get_job_status(vm_name: str, refresh: bool = False) -> dict:
                             "error": result.get("error", "unknown")})
                 await asyncio.to_thread(save_job, vm_name, job)
     return job
+
+
+@app.post("/api/autonomy/{vm_name}")
+async def set_autonomy_mode(vm_name: str, body: dict) -> dict:
+    """Set the autonomy mode for an asset and persist to glorfindel-config.yaml."""
+    mode = body.get("mode", "")
+    try:
+        from glorfindel.config import set_asset_mode
+        path = await asyncio.to_thread(set_asset_mode, vm_name, mode)
+        return {"ok": True, "vm": vm_name, "mode": mode, "path": str(path)}
+    except ValueError as e:
+        return {"error": str(e)}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/api/action/approve/{esc_id}")
+async def action_approve(esc_id: str) -> dict:
+    """One-click approve for mode_hold escalations — executes the recommended action and acks."""
+    from glorfindel import escalations as _esc
+    esc = next((e for e in _esc.pending() if e["id"] == esc_id), None)
+    if not esc:
+        return {"error": f"Escalation {esc_id} not found or already resolved"}
+
+    action = esc.get("action", "")
+    resource_id = esc.get("resource_id", "")
+    vm_name = resource_id.split("/")[-1]
+
+    try:
+        from glorfindel.actions import AzureConnector
+        connector = AzureConnector(dry_run=False)
+
+        if action == "isolate_vm":
+            result = await asyncio.to_thread(connector.isolate_vm, resource_id)
+            _esc.resolve(esc_id)
+            return {"ok": True, "action": action, "result": result}
+
+        elif action == "snapshot":
+            resp = await action_snapshot(vm_name)
+            if "error" not in resp:
+                _esc.resolve(esc_id)
+            return resp
+
+        elif action == "release_isolation":
+            resp = await action_release(vm_name)
+            if resp.get("ok"):
+                _esc.resolve(esc_id)
+            return resp
+
+        elif action == "block_suspicious_ip":
+            return {"error": f"block_suspicious_ip nécessite l'IP — utilisez le CLI : glorfindel block <ip> {resource_id} --yes"}
+
+        else:
+            return {"error": f"Action '{action}' non supportée via War Room — CLI : glorfindel respond {resource_id}"}
+
+    except PermissionError as e:
+        return {"error": str(e), "permission_denied": True}
+    except Exception as e:
+        return {"error": str(e)}
 
 
 @app.post("/api/action/snapshot/{vm_name}")

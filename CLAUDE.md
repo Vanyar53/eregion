@@ -109,6 +109,23 @@ HUMAN_APPROVAL_REQUIRED = ["restore_from_backup", "delete_resource", "wipe_stora
 
 Actions inconnues proposées → escalade automatique, humain valide et codifie.
 
+### Modes d'autonomie par asset (commit 9154fc6)
+
+La gate destructive est nécessaire mais pas suffisante : le persona sans SOC craint l'action **réversible mais disruptive** (`isolate_vm`) décidée en autonome sur un faux positif. Réponse : 3 modes résolus **par asset** (escalier de confiance).
+
+| Mode | Comportement | Statut |
+|------|-------------|--------|
+| `human_only` | **Aucune** action exécutée — tout recommandé/escaladé (y compris réversibles). | **Défaut** |
+| `non_disruptive` | Comportement historique : `AUTONOMOUS_ACTIONS` autonomes, destructif gated. | Sélectionnable |
+| `full_auto` | Différé — **valeur refusée** par la validation config. | Différé |
+
+- Config : section `autonomy` dans `glorfindel-config.yaml` (résolution asset fnmatch > défaut global). `allow_destructive: []` = axe **séparé** du mode, `delete`/`wipe` jamais autonomes.
+- Couche politique **après `decide`** (jamais un bypass) : en `human_only`, action autonome → `escalate=True` + `mode_hold=True`. Gate destructive + gate confiance restent actives.
+- Nouveau type d'escalade `mode_hold` (≠ `low_confidence`/`destructive_action`) — porte l'action recommandée + confidence pour approbation en un clic.
+- `store_cycle` logue `resolved_autonomy_mode` (cycle + debug.jsonl) — trail d'audit.
+- `glorfindel watch --mode <m>` surcharge le défaut **global** d'une session (les règles par-asset restent prioritaires). `glorfindel list` affiche le mode résolu par VM. Warning au démarrage si `human_only` sans webhook/bot (gap de process : détection sans réponse tant qu'un humain n'agit pas).
+- ⚠️ **Défaut `human_only`** : les runs gate autonomes (T1486/T1548) nécessitent `--mode non_disruptive` ou une section `autonomy` dans le config live.
+
 ---
 
 ## Vérification post-action
@@ -434,7 +451,7 @@ az network nsg rule list -g annatar --nsg-name nsg-annatar -o table
 
 `gf pending` affiche les escalades avec **next steps générés par le LLM** (`suggested_steps`), contextuels à l'historique ChromaDB. Fallback statique pour les anciennes escalades sans ce champ.
 
-Types d'escalade : `low_confidence` (detection_timeout + snapshot), `destructive_action` (HUMAN_APPROVAL_REQUIRED), `proposed_action` (action inconnue), `verification_failed`, `proposed_rule` (règle de détection proposée après detection_missed).
+Types d'escalade : `low_confidence` (detection_timeout + snapshot), `destructive_action` (HUMAN_APPROVAL_REQUIRED), `proposed_action` (action inconnue), `verification_failed`, `proposed_rule` (règle de détection proposée après detection_missed), `mode_hold` (action autonome retenue par le mode `human_only` de l'asset — pas un manque de confiance).
 
 `gf ack <id>` / `gf ack --all` → marque `resolved` dans `~/.glorfindel/escalations.jsonl`. Purement administratif — ne fait rien sur Azure. `restore_from_backup` auto-acquitte via `resolve_by_resource`.
 

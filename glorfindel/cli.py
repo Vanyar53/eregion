@@ -206,6 +206,26 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
             "so escalations are seen."
         )
 
+    # Permission regime — read-only means no action can execute, by design.
+    _perm = getattr(agent.connector, "permission_mode", lambda: "read_write")()
+    console.print(f"[bold]Credentials:[/bold] [cyan]{_perm}[/cyan]")
+    if _perm == "read_only":
+        # On read-only creds, any mode that would execute will fail at action time.
+        _executing_modes = (
+            _autonomy.default != "human_only"
+            or any(a.mode != "human_only" for a in _autonomy.assets)
+        )
+        if _executing_modes:
+            console.print(
+                "[yellow]⚠ Read-only credentials with a non-human_only mode.[/yellow]\n"
+                "  Autonomous actions will fail (no write permission). Either grant write "
+                "roles to the SP, or keep all assets in human_only (observe-only)."
+            )
+        else:
+            console.print(
+                "[dim]  Observe-only deployment: detection + recommendations, no writes.[/dim]"
+            )
+
     # path → byte offset of last read position
     tracked: dict[Path, int] = {}
 

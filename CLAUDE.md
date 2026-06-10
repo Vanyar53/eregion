@@ -126,6 +126,16 @@ La gate destructive est nécessaire mais pas suffisante : le persona sans SOC cr
 - `glorfindel watch --mode <m>` surcharge le défaut **global** d'une session (les règles par-asset restent prioritaires). `glorfindel list` affiche le mode résolu par VM. Warning au démarrage si `human_only` sans webhook/bot (gap de process : détection sans réponse tant qu'un humain n'agit pas).
 - ⚠️ **Défaut `human_only`** : les runs gate autonomes (T1486/T1548) nécessitent `--mode non_disruptive` ou une section `autonomy` dans le config live.
 
+### Mode observe-only — credentials read-only (`GLORFINDEL_READ_ONLY=1`)
+
+`human_only` n'exécute que des chemins **lecture** (détection LAW, investigate KQL, discovery Heartbeat, decide LLM, escalade locale) → peut tourner sur un SP **Reader / Log Analytics Reader** (pas Contributor). C'est l'on-ramp du premier test externe : un pair donne un accès lecture seule, observe les recos une semaine, zéro risque.
+
+- `AzureConnector(read_only=...)` (défaut depuis `GLORFINDEL_READ_ONLY`). `_ensure_clients()` est déjà paresseux — aucun check write à l'init, `watch` démarre proprement sur Reader.
+- Méthodes write (`isolate_vm`/`block`/`snapshot`/`release`/`restore`/`unblock`) → `_guard_write()` lève un `PermissionError` clair si read-only (jamais atteint en human_only).
+- `audit.run` sous read-only → check `Credentials` (warn, pas fail) : « capacité d'écriture non vérifiable, checks ci-dessous = accès lecture uniquement ». Déploiement reste `ready` pour son usage observe-only.
+- `glorfindel watch` logue le régime (`Credentials: read_only`) + warning si read-only combiné à un mode exécutant (les actions échoueront).
+- ⚠️ Bouton War Room « Approuver & exécuter » sous read-only → `PermissionError` (à surfacer côté UI).
+
 ---
 
 ## Vérification post-action
@@ -324,6 +334,7 @@ GLORFINDEL_KEEP_ISOLATED=1          # mode forensique
 GLORFINDEL_ISOLATION_TTL_H=4        # TTL isolation (défaut 4h)
 GLORFINDEL_INCIDENT_TTL_S=300       # TTL fenêtre incident
 GLORFINDEL_CONFIDENCE_THRESHOLD=0.7 # gate autonomie LLM (défaut 0.7 — en dessous → escalade forcée)
+GLORFINDEL_READ_ONLY=1              # creds lecture seule (SP Reader) — mode observe-only
 ```
 
 ---

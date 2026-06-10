@@ -66,6 +66,24 @@ def run(
         ]
         return result
 
+    # Read-only credentials: remediation actions cannot execute by design. The
+    # checks below still run — they confirm READ access (needed for detection) —
+    # but write capability is not verifiable without performing a write.
+    # `is True` (not truthy): MagicMock connectors in tests have an auto-truthy
+    # read_only attribute — only a real bool True should trigger this branch.
+    if getattr(connector, "read_only", False) is True:
+        result.checks.append(AuditCheck(
+            action="all",
+            name="Credentials",
+            status="warn",
+            message=(
+                "Read-only credentials (GLORFINDEL_READ_ONLY) — Glorfindel detects "
+                "and recommends but cannot execute remediation. Checks below confirm "
+                "READ access only; write capability is not verifiable."
+            ),
+            fix="Use a service principal with write roles to enable autonomous actions.",
+        ))
+
     result.checks.append(_check_nsg(resource_id, connector))
     result.checks.append(_check_backup(resource_id, connector, vault))
     result.checks.append(_check_compute(resource_id, connector))

@@ -10,6 +10,8 @@ from glorfindel.config import (
     MonitoringBackendConfig,
     ActionBackendConfig,
     DiscoveryConfig,
+    AutonomyConfig,
+    AutonomyRule,
     load_glorfindel_config,
 )
 
@@ -154,3 +156,119 @@ def test_is_excluded_via_config():
     assert cfg.is_excluded("vm-staging", "ssh-brute-force")
     assert not cfg.is_excluded("vm-staging", "disk-write-anomaly")
     assert not cfg.is_excluded("vm-prod", "any-rule")
+
+
+# ── AutonomyConfig ─────────────────────────────────────────────────────────────
+
+def test_autonomy_default_is_human_only():
+    """Absent autonomy section → safe default human_only."""
+    cfg = GlorfindelConfig()
+    assert cfg.autonomy.default == "human_only"
+    assert cfg.autonomy.resolve("any-vm") == "human_only"
+
+
+def test_autonomy_resolve_asset_overrides_default():
+    autonomy = AutonomyConfig(
+        default="human_only",
+        assets=[AutonomyRule(match="vm-dev-*", mode="non_disruptive")],
+    )
+    assert autonomy.resolve("vm-dev-01") == "non_disruptive"
+    assert autonomy.resolve("vm-prod-db") == "human_only"  # falls back to default
+
+
+def test_autonomy_unknown_asset_falls_back_to_default():
+    autonomy = AutonomyConfig(
+        default="non_disruptive",
+        assets=[AutonomyRule(match="vm-prod-db", mode="human_only")],
+    )
+    # unknown asset → global default, never accidental permissive inheritance
+    assert autonomy.resolve("vm-unknown") == "non_disruptive"
+
+
+def test_load_autonomy_section(tmp_path):
+    cfg_file = tmp_path / "glorfindel-config.yaml"
+    cfg_file.write_text(textwrap.dedent("""
+        autonomy:
+          default: human_only
+          allow_destructive: []
+          assets:
+            - match: "vm-dev-*"
+              mode: non_disruptive
+            - match: "vm-prod-db"
+              mode: human_only
+    """))
+    cfg = load_glorfindel_config(cfg_file)
+    assert cfg.autonomy.default == "human_only"
+    assert cfg.autonomy.resolve("vm-dev-99") == "non_disruptive"
+    assert cfg.autonomy.resolve("vm-prod-db") == "human_only"
+    assert cfg.autonomy.allow_destructive == []
+
+
+def test_load_autonomy_refuses_full_auto_default(tmp_path):
+    cfg_file = tmp_path / "glorfindel-config.yaml"
+    cfg_file.write_text(textwrap.dedent("""
+        autonomy:
+          default: full_auto
+    """))
+    with pytest.raises(ValueError, match="full_auto"):
+        load_glorfindel_config(cfg_file)
+
+
+def test_load_autonomy_refuses_full_auto_asset(tmp_path):
+    cfg_file = tmp_path / "glorfindel-config.yaml"
+    cfg_file.write_text(textwrap.dedent("""
+        autonomy:
+          default: human_only
+          assets:
+            - match: "vm-*"
+              mode: full_auto
+    """))
+    with pytest.raises(ValueError, match="full_auto"):
+        load_glorfindel_config(cfg_file)
+
+
+def test_load_autonomy_refuses_unknown_mode(tmp_path):
+    cfg_file = tmp_path / "glorfindel-config.yaml"
+    cfg_file.write_text(textwrap.dedent("""
+        autonomy:
+          default: yolo_mode
+    """))
+    with pytest.raises(ValueError, match="Unknown autonomy mode"):
+        load_glorfindel_config(cfg_file)
+
+
+def test_set_asset_mode_adds_new_entry(tmp_path):
+    from glorfindel.config import set_asset_mode
+    cfg_file = tmp_path / "glorfindel-config.yaml"
+    set_asset_mode("vm-prod-db", "human_only", path=cfg_file)
+    cfg = load_glorfindel_config(cfg_file)
+    assert cfg.autonomy.resolve("vm-prod-db") == "human_only"
+
+
+def test_set_asset_mode_updates_existing_entry(tmp_path):
+    from glorfindel.config import set_asset_mode
+    cfg_file = tmp_path / "glorfindel-config.yaml"
+    set_asset_mode("vm-dev-01", "human_only", path=cfg_file)
+    set_asset_mode("vm-dev-01", "non_disruptive", path=cfg_file)
+    cfg = load_glorfindel_config(cfg_file)
+    assert cfg.autonomy.resolve("vm-dev-01") == "non_disruptive"
+    # only one entry for the asset — updated, not duplicated
+    assert sum(1 for a in cfg.autonomy.assets if a.match == "vm-dev-01") == 1
+
+
+def test_set_asset_mode_refuses_full_auto(tmp_path):
+    from glorfindel.config import set_asset_mode
+    cfg_file = tmp_path / "glorfindel-config.yaml"
+    with pytest.raises(ValueError, match="full_auto"):
+        set_asset_mode("vm-x", "full_auto", path=cfg_file)
+
+
+def test_set_asset_mode_preserves_other_sections(tmp_path):
+    from glorfindel.config import set_asset_mode
+    cfg_file = tmp_path / "glorfindel-config.yaml"
+    cfg_file.write_text(MINIMAL_YAML)
+    set_asset_mode("vm-a", "non_disruptive", path=cfg_file)
+    cfg = load_glorfindel_config(cfg_file)
+    # monitoring_backends from MINIMAL_YAML survive the rewrite
+    assert len(cfg.monitoring_backends) == 1
+    assert cfg.autonomy.resolve("vm-a") == "non_disruptive"

@@ -70,6 +70,8 @@ class GlorfindelState(TypedDict):
     proposed_rule: dict | None  # set by propose_detection_rule for detection_missed signals
     proposal_id: str            # UUID of the saved proposed rule (empty if not a rule proposal)
     llm_usage: dict | None      # LLM token usage from last litellm.completion call (P1 observability)
+    autonomy_mode: str          # resolved autonomy mode for this asset (audit trail)
+    mode_hold: bool             # True when an autonomous action was held back by human_only mode
 
 
 # ── LLM decision tool schema ──────────────────────────────────────────────────
@@ -627,11 +629,15 @@ def investigate(state: GlorfindelState) -> GlorfindelState:
     return {**state, "signal": enriched}
 
 
-def decide(state: GlorfindelState, *, model: str) -> GlorfindelState:
+def decide(state: GlorfindelState, *, model: str, autonomy=None) -> GlorfindelState:
     """Call LLM to reason about the signal and produce a structured decision.
 
     Supports any provider via LiteLLM: anthropic/claude-*, openai/gpt-*, ollama/*,
     azure/*, or any OpenAI-compatible endpoint via GLORFINDEL_LLM_BASE_URL.
+
+    autonomy: AutonomyConfig resolved per asset. A policy layer ABOVE the
+    confidence gate (never a bypass): in human_only mode, every autonomous action
+    is held back and escalated instead of executed.
     """
     import json
     import litellm
@@ -678,6 +684,22 @@ def decide(state: GlorfindelState, *, model: str) -> GlorfindelState:
                 "— human review required"
             )
 
+    # ── Autonomy mode policy layer (above the gate — never a bypass) ──
+    # Resolve the mode for this asset. human_only holds back EVERY autonomous
+    # action (even high-confidence ones) and escalates it as mode_hold instead.
+    # The destructive gate and confidence gate above remain active regardless.
+    resource_id = signal.get("resource_id", "")
+    asset_name = resource_id.split("/")[-1] if resource_id else ""
+    mode = autonomy.resolve(asset_name) if autonomy is not None else "human_only"
+    mode_hold = False
+    if mode == "human_only" and not d["escalate"] and d["action"] in AUTONOMOUS_ACTIONS:
+        d["escalate"] = True
+        mode_hold = True
+        d["escalation_reason"] = (
+            f"Mode human_only — action '{d['action']}' recommandée "
+            f"(confiance {confidence:.0%}) mais retenue : approbation humaine requise."
+        )
+
     usage = getattr(response, "usage", None)
     llm_usage: dict | None = None
     if usage is not None:
@@ -699,6 +721,8 @@ def decide(state: GlorfindelState, *, model: str) -> GlorfindelState:
         "escalation_reason": d.get("escalation_reason", ""),
         "suggested_steps": d.get("suggested_steps") or [],
         "llm_usage": llm_usage,
+        "autonomy_mode": mode,
+        "mode_hold": mode_hold,
     }
 
 
@@ -756,7 +780,12 @@ def execute_action(
 def escalate_to_human(state: GlorfindelState) -> GlorfindelState:
     """Mark the decision as escalated — human must approve before any action."""
     action = state["action"]
-    if action in HUMAN_APPROVAL_REQUIRED:
+    # mode_hold takes precedence: the action would have run autonomously but was
+    # held back by the asset's human_only mode — NOT by low confidence. The
+    # operator must understand it's a policy hold, with a one-click approve path.
+    if state.get("mode_hold"):
+        escalation_type = "mode_hold"
+    elif action in HUMAN_APPROVAL_REQUIRED:
         escalation_type = "destructive_action"
     elif action == "improve_detection":
         escalation_type = "proposed_rule"
@@ -788,6 +817,7 @@ def escalate_to_human(state: GlorfindelState) -> GlorfindelState:
             severity=signal.get("severity", ""),
             proposal_id=state.get("proposal_id", ""),
             proposed_query=(state.get("proposed_rule") or {}).get("query", ""),
+            confidence=state.get("confidence", 0.0),
         )
 
     return {
@@ -880,6 +910,7 @@ def store_cycle(state: GlorfindelState, *, memory: CycleMemory) -> GlorfindelSta
         "detection_s": signal.get("raw_signal", {}).get("detection_time_s", 0),
         "action_s": outcome.get("action_s", 0),
         "past_cycles_used": [c.get("summary", "") for c in state.get("past_cycles", [])],
+        "resolved_autonomy_mode": state.get("autonomy_mode", ""),
     }
     # ChromaDB write — non-fatal: debug JSONL must still be written on failure
     try:
@@ -924,6 +955,7 @@ def store_cycle(state: GlorfindelState, *, memory: CycleMemory) -> GlorfindelSta
             "escalation_reason": state.get("escalation_reason", ""),
             "outcome": outcome,
             "llm_usage": state.get("llm_usage"),
+            "resolved_autonomy_mode": state.get("autonomy_mode", ""),
         }
         out = Path("runs") / f"{run_id}_debug.jsonl"
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -1113,6 +1145,7 @@ def _build_graph(
     connector: CloudConnector,
     model: str,
     incidents: IncidentRegistry | None = None,
+    autonomy=None,
 ):
     if incidents is None:
         incidents = IncidentRegistry(path=".glorfindel/incidents.jsonl")
@@ -1122,7 +1155,7 @@ def _build_graph(
     graph.add_node("load_context", lambda s: load_context(s, memory=memory, incidents=incidents))
     graph.add_node("poll_detection", poll_detection)
     graph.add_node("investigate", investigate)
-    graph.add_node("decide", lambda s: decide(s, model=model))
+    graph.add_node("decide", lambda s: decide(s, model=model, autonomy=autonomy))
     graph.add_node("execute_action", lambda s: execute_action(s, connector=connector, incidents=incidents))
     graph.add_node("verify_action", lambda s: verify_action(s, connector=connector))
     graph.add_node("escalate_to_human", escalate_to_human)
@@ -1156,6 +1189,8 @@ class GlorfindelAgent:
         incidents_path: str | None = None,
         model: str = "",
         dry_run: bool = False,
+        autonomy=None,
+        autonomy_default: str | None = None,
     ):
         from glorfindel.actions import AzureConnector
 
@@ -1164,7 +1199,23 @@ class GlorfindelAgent:
         self.connector = connector or AzureConnector(dry_run=dry_run)
         self.incidents = IncidentRegistry(path=incidents_path)
         self.model = model or os.environ.get("GLORFINDEL_LLM_MODEL") or "anthropic/claude-sonnet-4-6"
-        self._graph = _build_graph(self.memory, self.connector, self.model, self.incidents)
+
+        # Autonomy policy: explicit arg > loaded config > safe default (human_only).
+        # autonomy_default overrides the resolved global default (glorfindel watch --mode).
+        if autonomy is None:
+            try:
+                from glorfindel.config import load_glorfindel_config
+                autonomy = load_glorfindel_config().autonomy
+            except Exception:
+                from glorfindel.config import AutonomyConfig
+                autonomy = AutonomyConfig()
+        if autonomy_default:
+            autonomy.default = autonomy_default
+        self.autonomy = autonomy
+
+        self._graph = _build_graph(
+            self.memory, self.connector, self.model, self.incidents, autonomy=self.autonomy
+        )
 
     def respond(self, signal: dict) -> GlorfindelState:
         """Process a single signal and return the final state."""
@@ -1181,6 +1232,8 @@ class GlorfindelAgent:
             "escalate": False,
             "escalation_reason": "",
             "outcome": None,
+            "autonomy_mode": "",
+            "mode_hold": False,
         }
         return self._graph.invoke(initial)
 

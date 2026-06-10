@@ -155,7 +155,11 @@ def unblock(ip: str, resource_id: str, dry_run: bool, yes: bool):
 @click.option("--interval", default=2, show_default=True, help="Poll interval in seconds.")
 @click.option("--rules", "rules_file", default=None, metavar="PATH",
               help="Detection rules YAML (default: detection_rules.yaml in cwd or project root).")
-def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, interval: int, rules_file: str | None):
+@click.option("--mode", "mode_override", default=None,
+              type=click.Choice(["human_only", "non_disruptive"]),
+              help="Override the GLOBAL autonomy default for this session "
+                   "(per-asset rules in glorfindel-config.yaml still apply).")
+def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, interval: int, rules_file: str | None, mode_override: str | None):
     """Watch a runs/ directory and respond to signals as they arrive.
 
     Start this before (or during) an Annatar run to get real-time responses.
@@ -171,7 +175,36 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
     from annatar.signals.schema import Signal
     from glorfindel.agent import GlorfindelAgent
 
-    agent = GlorfindelAgent(dry_run=dry_run, model=model, memory_path=memory_path)
+    agent = GlorfindelAgent(
+        dry_run=dry_run, model=model, memory_path=memory_path,
+        autonomy_default=mode_override,
+    )
+
+    # Surface the resolved autonomy policy at startup — it determines whether
+    # actions execute or are held for human approval.
+    _autonomy = agent.autonomy
+    console.print(
+        f"[bold]Autonomy:[/bold] default = [cyan]{_autonomy.default}[/cyan]"
+        + (f"  ([dim]{len(_autonomy.assets)} per-asset override(s)[/dim])"
+           if _autonomy.assets else "")
+    )
+    # Process warning: human_only = detection without response until a human acts.
+    # On a critical asset with nobody watching the escalations, the threat runs free.
+    _has_human_only = (
+        _autonomy.default == "human_only"
+        or any(a.mode == "human_only" for a in _autonomy.assets)
+    )
+    _has_alerting = bool(
+        os.environ.get("GLORFINDEL_WEBHOOK_URL") or os.environ.get("DISCORD_BOT_TOKEN")
+    )
+    if _has_human_only and not _has_alerting:
+        console.print(
+            "[yellow]⚠ human_only mode active but no alerting configured.[/yellow]\n"
+            "  In human_only, Glorfindel detects and recommends but does NOT act — "
+            "escalations need a human.\n"
+            "  Set GLORFINDEL_WEBHOOK_URL or DISCORD_BOT_TOKEN, or watch the War Room, "
+            "so escalations are seen."
+        )
 
     # path → byte offset of last read position
     tracked: dict[Path, int] = {}
@@ -285,7 +318,6 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
                     _dispatch(data, sig)   # non-blocking — worker thread takes over
                 tracked[path] = f.tell()
 
-    import os
     from datetime import datetime, timezone
     from glorfindel.actions import AzureConnector, active_isolations
 
@@ -910,6 +942,13 @@ def list_active():
     except Exception:
         pass
 
+    # Resolved autonomy mode per asset (for display)
+    try:
+        from glorfindel.config import load_glorfindel_config
+        _autonomy = load_glorfindel_config().autonomy
+    except Exception:
+        _autonomy = None
+
     all_ids_lower = sorted(set(isolations) | set(blocks) | set(discovered))
     if not all_ids_lower:
         console.print("[dim]No discovered VMs and no active actions.[/dim]")
@@ -930,6 +969,11 @@ def list_active():
         )
         console.print(f"[{status_color}]{vm_short}[/{status_color}]")
         console.print(f"  [dim]{resource_id}[/dim]", soft_wrap=True)
+
+        if _autonomy is not None:
+            _mode = _autonomy.resolve(vm_short)
+            _mode_color = "yellow" if _mode == "human_only" else "green"
+            console.print(f"  mode: [{_mode_color}]{_mode}[/{_mode_color}]")
 
         if rid_lower in isolations:
             ts = isolations[rid_lower].get("isolated_at", "")

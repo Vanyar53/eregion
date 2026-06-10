@@ -646,6 +646,7 @@
   <span style="color:var(--border);margin:0 4px">│</span>
   <span id="live-dot">●</span>
   <span id="live-label" style="color:var(--dim);font-size:11px">connecting…</span>
+  <span id="read-only-badge" style="display:none;font-size:9px;font-weight:700;padding:2px 8px;border-radius:4px;background:color-mix(in srgb,var(--dim) 18%,transparent);color:var(--dim);border:1px solid var(--border);letter-spacing:1px;margin-left:6px">OBSERVE-ONLY</span>
 
   <div class="spacer"></div>
 
@@ -715,6 +716,7 @@ const ESC_LABELS = {
   proposed_action:     'unknown action',
   verification_failed: 'verification failed',
   proposed_rule:       'proposed rule',
+  mode_hold:           'mode human-only',
   ttl_exceeded:        'TTL exceeded',
 };
 
@@ -910,7 +912,11 @@ function _groupEscs(escs) {
 function _renderEscGroup(group) {
   const e     = group[0]; // most recent / representative
   const isSnapshotPending = e.action === 'snapshot' && e.escalation_type === 'low_confidence';
-  const label = isSnapshotPending ? 'Snapshot recommended' : actionLabel(e.action);
+  const isModeHold        = e.escalation_type === 'mode_hold';
+  const pct    = e.confidence ? Math.round(e.confidence * 100) + '%' : '';
+  const label  = isModeHold
+    ? `${actionLabel(e.action)}${pct ? ` (${pct})` : ''} — retenu`
+    : isSnapshotPending ? 'Snapshot recommended' : actionLabel(e.action);
   const count = group.length;
   const ctx   = [e.ttp, e.severity, escLabel(e.escalation_type)].filter(Boolean).join(' · ');
   const ids   = group.map(g => g.id).join(','); // CSV — safe in onclick attrs, no quotes
@@ -920,14 +926,17 @@ function _renderEscGroup(group) {
     <button class="action ok" onclick="event.stopPropagation();doApproveRule('${e.proposal_id}','${e.id}')" style="font-size:9px;padding:2px 7px">✓ Approve</button>
     <button class="action" onclick="event.stopPropagation();doRejectRule('${e.proposal_id}','${e.id}')" style="font-size:9px;padding:2px 7px;color:var(--red)">✗ Reject</button>` : '';
   const vmName = e.resource_id.split('/').pop();
-  const pct    = e.confidence ? Math.round(e.confidence * 100) + '%' : '';
   const countBadge = count > 1
     ? `<span style="font-size:9px;font-weight:700;padding:1px 4px;border-radius:3px;
                     background:color-mix(in srgb,var(--purple) 15%,transparent);
                     color:var(--purple)">×${count}</span>` : '';
   const isRestore = e.action === 'restore_from_backup';
   const actionBtns = isRule
-    ? ruleButtons  // proposed rules: Approve + Reject only (▸ details shows query)
+    ? ruleButtons
+    : isModeHold
+    ? `<button class="action primary" onclick="event.stopPropagation();doApproveAction('${e.id}','${vmName}')" style="font-size:9px;padding:2px 7px">▶ Approuver & exécuter</button>
+       <button class="action" onclick="event.stopPropagation();doAckAll('${ids}')" style="font-size:9px;padding:2px 7px">✓ Ack</button>
+       <button class="action" onclick="event.stopPropagation();openCommandModal('${e.id}')" style="font-size:9px;padding:2px 7px">📋 Cmd</button>`
     : isRestore
     ? `<button class="action primary" onclick="event.stopPropagation();confirmRestore('${vmName}')" style="font-size:9px;padding:2px 7px">🔄 Restore</button>
        <button class="action" onclick="event.stopPropagation();doAckAll('${ids}')" style="font-size:9px;padding:2px 7px">✓ Ack</button>
@@ -1781,6 +1790,22 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
 
   const isClean = !isIsolated && !isBlocked && !restoreInfo && !myEscs.length;
 
+  const autonomyMode = (_state?.autonomy_modes || {})[vm_name] || _state?.autonomy_default || 'human_only';
+  const modeBadge = autonomyMode === 'non_disruptive'
+    ? `<span style="font-size:8px;font-weight:700;padding:1px 5px;border-radius:3px;background:color-mix(in srgb,var(--blue) 15%,transparent);color:var(--blue);border:1px solid color-mix(in srgb,var(--blue) 30%,transparent);letter-spacing:.5px;flex-shrink:0">NON-DISRUPTIVE</span>`
+    : `<span style="font-size:8px;font-weight:700;padding:1px 5px;border-radius:3px;background:color-mix(in srgb,var(--dim) 12%,transparent);color:var(--dim);border:1px solid var(--border);letter-spacing:.5px;flex-shrink:0">HUMAN-ONLY</span>`;
+
+  const modeSelector = isClean && isExpanded
+    ? `<div style="display:flex;align-items:center;gap:6px;margin-top:6px">
+        <span style="font-size:9px;color:var(--dim);font-weight:600;letter-spacing:.5px">MODE</span>
+        <select onchange="setAutonomyMode('${vm_name}',this.value)" onclick="event.stopPropagation()"
+          style="font-size:9px;background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:2px 5px;border-radius:3px;cursor:pointer">
+          <option value="human_only"${autonomyMode === 'human_only' ? ' selected' : ''}>human-only (recommander)</option>
+          <option value="non_disruptive"${autonomyMode === 'non_disruptive' ? ' selected' : ''}>non-disruptive (exécuter)</option>
+        </select>
+      </div>`
+    : '';
+
   // Backup section — from audit data (refreshed every 5 min or on user click)
   const backupCheck = (auditEntry?.checks || []).find(c => c.action === 'restore_from_backup');
   const backupMsg = backupCheck?.message || '';
@@ -1829,6 +1854,7 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
 
   const expandedBody = `
     ${readinessExpanded}
+    ${modeSelector}
     ${fallbackRows.length ? `<div style="display:flex;flex-direction:column;gap:5px;margin-top:6px">${fallbackRows.join('')}</div>` : ''}
     ${decisionHtml || ''}
     ${myEscs.length ? `<div class="vm-escalations" style="margin:8px 0 0;padding:8px 0 0;border-top:1px solid var(--border)">
@@ -1871,6 +1897,7 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
     <div class="node-asset-header" onclick="toggleAsset('${vm_name}')">
       ${dot}
       <span class="node-asset-name">${vm_name}</span>
+      ${modeBadge}
       ${readiness && !isExpanded ? `<span style="color:var(--dim);font-size:9px">${readiness}</span>` : ''}
       <span style="color:var(--dim);font-size:9px;margin-left:6px">${isExpanded ? '▾' : '▸'}</span>
     </div>
@@ -2041,6 +2068,7 @@ function confirmRelease(vmName) {
 }
 
 async function doRelease(vmName) {
+  if (_guardReadOnly()) return;
   toast('↩️ Releasing isolation on ' + vmName + '…');
   _pendingActions.add(vmName); renderInfra();
   try {
@@ -2102,6 +2130,7 @@ function confirmAck(escId) {
 }
 
 async function doRevert(vmName) {
+  if (_guardReadOnly()) return;
   toast('↩️ Reverting ' + vmName + '…');
   _pendingActions.add(vmName); renderInfra();
   try {
@@ -2114,6 +2143,7 @@ async function doRevert(vmName) {
 }
 
 async function doSnapshot(vmName) {
+  if (_guardReadOnly()) return;
   toast('📸 Snapshot started for ' + vmName + ' — check RSV for job status');
   try {
     const r = await fetch(`/api/action/snapshot/${vmName}`, { method: 'POST' });
@@ -2140,6 +2170,7 @@ async function refreshAuditVm(vmName) {
 }
 
 async function doRestore(vmName) {
+  if (_guardReadOnly()) return;
   toast('🔄 Restore started for ' + vmName + ' (~20 min)…', 8000);
   try {
     await fetch(`/api/action/restore/${vmName}`, { method: 'POST' });
@@ -2156,6 +2187,42 @@ async function doAck(escId) {
   } catch (e) {
     toast('✗ ' + e.message);
   }
+}
+
+function _guardReadOnly() {
+  if (_state?.read_only) {
+    toast('✗ Mode observe-only — credentials lecture seule');
+    return true;
+  }
+  return false;
+}
+
+async function doApproveAction(escId, vmName) {
+  if (_guardReadOnly()) return;
+  toast('▶ Approbation en cours…');
+  try {
+    const r = await fetch(`/api/action/approve/${escId}`, { method: 'POST' });
+    const d = await r.json();
+    if (d.permission_denied) { toast('✗ Action impossible : credentials lecture seule'); return; }
+    if (d.error) { toast('✗ ' + d.error); return; }
+    if (d.cli_instruction) { toast('✓ Approuvé — lancez : ' + d.cli_instruction, 5000); }
+    else toast('✓ Action approuvée et exécutée');
+    refreshState();
+  } catch (e) { toast('✗ ' + e.message); }
+}
+
+async function setAutonomyMode(vmName, mode) {
+  try {
+    const r = await fetch(`/api/autonomy/${vmName}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode }),
+    });
+    const d = await r.json();
+    if (d.error) { toast('✗ ' + d.error); return; }
+    toast(`✓ Mode ${mode} appliqué à ${vmName}`);
+    refreshState();
+  } catch (e) { toast('✗ ' + e.message); }
 }
 
 // ── Feed ───────────────────────────────────────────────────────────────────────
@@ -2211,9 +2278,15 @@ async function refreshState() {
   try {
     const r = await fetch('/api/state');
     _state = await r.json();
+    _updateReadOnlyBadge();
     renderInfra();
     await refreshActionsData();  // parallel fetch, re-renders when ready
   } catch (e) {}
+}
+
+function _updateReadOnlyBadge() {
+  const badge = document.getElementById('read-only-badge');
+  if (badge) badge.style.display = _state?.read_only ? '' : 'none';
 }
 
 setInterval(refreshState, 5000);
@@ -2424,6 +2497,7 @@ function showEscModal(vmName) {
       : '';
     const isRule             = e.action === 'improve_detection' && e.proposal_id;
     const isSnapshotPending  = e.action === 'snapshot' && e.escalation_type === 'low_confidence';
+    const isModeHold         = e.escalation_type === 'mode_hold';
     const pid   = e.proposal_id || '';
     const countBadge = count > 1
       ? `<span style="font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;
@@ -2432,6 +2506,10 @@ function showEscModal(vmName) {
     const modalBtns = isRule
       ? `<button class="action" style="color:var(--green)" onclick="doApproveRule('${pid}','${e.id}');closeModal()">✓ Approve</button>
          <button class="action" style="color:var(--red)"   onclick="doRejectRule('${pid}','${e.id}');closeModal()">✗ Reject</button>`
+      : isModeHold
+      ? `<button class="action primary" onclick="doApproveAction('${e.id}','${vmName}');closeModal()">▶ Approuver & exécuter</button>
+         <button class="action" onclick="doAckAll('${ids}');closeModal()">✓ Ack</button>
+         <button class="action" onclick="openCommandModal('${e.id}')">📋 Cmd</button>`
       : isSnapshotPending
       ? `<button class="action" onclick="doSnapshot('${vmName}');closeModal()">📸 Snapshot</button>
          <button class="action" onclick="doAckAll('${ids}');closeModal()">✓ Ack</button>

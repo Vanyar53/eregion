@@ -64,6 +64,11 @@ exceptions: []
 # back to the global default (never accidental escalation to a more permissive mode).
 # Start in human_only, observe what Glorfindel WOULD do on your real infra, then
 # promote assets to non_disruptive once you trust it.
+#
+# Observe-only deployment: human_only only reads (detection/investigate/discovery).
+# It runs on a Reader / Log Analytics Reader service principal — no Contributor
+# needed. Set GLORFINDEL_READ_ONLY=1 to declare read-only creds: write actions
+# then fail fast with a clear error instead of an opaque Azure 403.
 
 autonomy:
   default: human_only

@@ -4,6 +4,7 @@ import json
 from dataclasses import asdict
 from unittest.mock import MagicMock
 
+import pytest
 
 from annatar.signals.schema import Signal
 from glorfindel.actions import (
@@ -81,6 +82,77 @@ def test_azure_connector_verify_block_ip_dry_run():
     result = connector.verify_block_ip("1.2.3.4", "any_resource_id")
     assert result["verified"] is True
     assert result["method"] == "dry_run"
+
+
+# ── read-only credentials ──────────────────────────────────────────────────────
+
+_RID = "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm"
+
+
+def test_read_only_default_is_false(monkeypatch):
+    from glorfindel.actions import AzureConnector
+    monkeypatch.delenv("GLORFINDEL_READ_ONLY", raising=False)
+    connector = AzureConnector(dry_run=False)
+    assert connector.read_only is False
+    assert connector.permission_mode() == "read_write"
+
+
+def test_read_only_from_env(monkeypatch):
+    from glorfindel.actions import AzureConnector
+    monkeypatch.setenv("GLORFINDEL_READ_ONLY", "1")
+    connector = AzureConnector(dry_run=False)
+    assert connector.read_only is True
+    assert connector.permission_mode() == "read_only"
+
+
+def test_read_only_explicit_param_overrides_env(monkeypatch):
+    from glorfindel.actions import AzureConnector
+    monkeypatch.setenv("GLORFINDEL_READ_ONLY", "1")
+    connector = AzureConnector(dry_run=False, read_only=False)
+    assert connector.read_only is False
+
+
+def test_read_only_blocks_write_actions_with_clear_error():
+    """Write actions raise a clear PermissionError on read-only creds — no Azure call."""
+    from glorfindel.actions import AzureConnector
+    connector = AzureConnector(dry_run=False, read_only=True)
+    for call in (
+        lambda: connector.isolate_vm(_RID),
+        lambda: connector.release_isolation(_RID),
+        lambda: connector.block_suspicious_ip("1.2.3.4", _RID),
+        lambda: connector.snapshot(_RID),
+        lambda: connector.restore_from_backup(_RID),
+        lambda: connector.unblock_ip("1.2.3.4", _RID),
+    ):
+        with pytest.raises(PermissionError, match="lecture seule"):
+            call()
+
+
+def test_read_only_does_not_block_dry_run():
+    """dry_run short-circuits before the read-only guard — no PermissionError."""
+    from glorfindel.actions import AzureConnector
+    connector = AzureConnector(dry_run=True, read_only=True)
+    assert connector.isolate_vm(_RID)["status"] == "dry_run"
+
+
+def test_audit_reports_read_only_credentials():
+    """audit.run prepends a warn check explaining the observe-only posture."""
+    from glorfindel import audit
+    from glorfindel.actions import AzureConnector
+    connector = AzureConnector(dry_run=False, read_only=True)
+
+    # Stub the read checks so we don't hit Azure — we only assert the creds check.
+    connector.check_nsg_access = lambda rid: {"ok": True, "nsg": "rg/nsg", "rules": 3}
+    connector.check_backup_points = lambda rid, vault="rsv-annatar": {"ok": True, "points": 2, "latest_age_h": 5}
+    connector.check_compute_access = lambda rid: {"ok": True, "vm": "vm", "disks": ["osdisk"]}
+
+    result = audit.run(_RID, connector)
+    creds = [c for c in result.checks if c.name == "Credentials"]
+    assert len(creds) == 1
+    assert creds[0].status == "warn"
+    assert "read-only" in creds[0].message.lower()
+    # warn (not fail) → the observe-only deployment is still "ready" for its purpose
+    assert result.ready is True
 
 
 # ── signals loader ────────────────────────────────────────────────────────────

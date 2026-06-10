@@ -102,12 +102,37 @@ class AzureConnector(CloudConnector):
     ISOLATION_RULE_NAME = "glorfindel-isolation-deny-all"
     ISOLATION_PRIORITY = 100
 
-    def __init__(self, dry_run: bool = False):
+    def __init__(self, dry_run: bool = False, read_only: bool | None = None):
+        import os
         self.dry_run = dry_run
+        # read_only: when the SP only has Reader/Log Analytics Reader, write actions
+        # cannot run. human_only mode never calls them, so detection-only deployments
+        # work on read-only credentials. Declared via GLORFINDEL_READ_ONLY=1 (the
+        # operator knows the SP's role; auto-detection isn't reliable without a write).
+        if read_only is None:
+            read_only = os.environ.get("GLORFINDEL_READ_ONLY", "").lower() in ("1", "true", "yes")
+        self.read_only = read_only
         self._credential = None
         self._subscription_id = None
         self._network = None
         self._compute = None
+
+    def permission_mode(self) -> str:
+        """Return the effective permission regime: 'read_only' or 'read_write'."""
+        return "read_only" if self.read_only else "read_write"
+
+    def _guard_write(self, action: str) -> None:
+        """Block a mutating action when running on read-only credentials.
+
+        Raised lazily, only when an action is actually attempted — never at init,
+        so detection-only (human_only) deployments start cleanly on Reader creds.
+        """
+        if self.read_only:
+            raise PermissionError(
+                f"Action '{action}' impossible : credentials lecture seule "
+                "(GLORFINDEL_READ_ONLY). Glorfindel détecte et recommande mais ne peut "
+                "pas agir. Utilisez un SP avec droits d'écriture pour exécuter les actions."
+            )
 
     def _ensure_clients(self) -> None:
         if self._network is not None:
@@ -134,6 +159,7 @@ class AzureConnector(CloudConnector):
         if self.dry_run:
             return {"status": "dry_run", "action": "isolate_vm", "resource_id": resource_id}
 
+        self._guard_write("isolate_vm")
         self._ensure_clients()
         rg, vm_name = _parse_vm_resource_id(resource_id)
         nic_id = self._get_primary_nic_id(rg, vm_name)
@@ -190,6 +216,7 @@ class AzureConnector(CloudConnector):
         if self.dry_run:
             return {"status": "dry_run", "action": "release_isolation", "resource_id": resource_id}
 
+        self._guard_write("release_isolation")
         self._ensure_clients()
         rg, vm_name = _parse_vm_resource_id(resource_id)
         nic_id = self._get_primary_nic_id(rg, vm_name)
@@ -218,6 +245,7 @@ class AzureConnector(CloudConnector):
         if not ip:
             raise ValueError("block_suspicious_ip: no IP address provided")
 
+        self._guard_write("block_suspicious_ip")
         self._ensure_clients()
         rg, vm_name = _parse_vm_resource_id(resource_id)
         nic_id = self._get_primary_nic_id(rg, vm_name)
@@ -262,6 +290,7 @@ class AzureConnector(CloudConnector):
         if self.dry_run:
             return "snap-dry-run-000"
 
+        self._guard_write("snapshot")
         import time
         import requests
         from datetime import datetime, timezone, timedelta
@@ -394,6 +423,7 @@ class AzureConnector(CloudConnector):
         if self.dry_run:
             return {"status": "dry_run", "action": "restore_from_backup", "resource_id": resource_id}
 
+        self._guard_write("restore_from_backup")
         import time
         import requests
         from datetime import datetime, timezone
@@ -554,6 +584,7 @@ class AzureConnector(CloudConnector):
         if not ip:
             raise ValueError("unblock_ip: no IP address provided")
 
+        self._guard_write("unblock_ip")
         self._ensure_clients()
         rg, vm_name = _parse_vm_resource_id(resource_id)
         nic_id = self._get_primary_nic_id(rg, vm_name)

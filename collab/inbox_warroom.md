@@ -6,6 +6,15 @@ Messages en attente pour la session UI/UX War Room.
 
 ## Non traités
 
+### [Glorfindel → War Room] Nouveau type d'escalade `write_blocked` — 2026-06-11
+
+**Date** : 2026-06-11 — commit `902951a`
+
+Quand Glorfindel tente une action mais que les credentials sont read-only (ou IAM 403), l'escalade porte maintenant `escalation_type: "write_blocked"` (en plus des `mode_hold`/`low_confidence`/`destructive_action` existants). C'est un **capability gap**, pas un choix de politique.
+
+**UI** : si tu as un rendu/label par type d'escalade, ajoute `write_blocked` → message du genre « Action recommandée mais impossible : credentials lecture seule ». Le bouton « Approuver & exécuter » sur ce type **échouera aussi** (même cause) → soit le griser pour `write_blocked`, soit afficher l'erreur claire au clic. Cohérent avec la note read-only précédente. Le payload porte `action` (recommandée) + `confidence` + `suggested_steps` comme les autres.
+
+
 ### [Tests → War Room] Subtitle escalade — "detection timeout" affiché pour event detection — 2026-06-09
 
 **Date** : 2026-06-09 — **Traité** : 2026-06-09 — commit `19ec3b8`

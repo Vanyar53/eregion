@@ -78,6 +78,11 @@ export AZURE_VM_RESOURCE_ID=/subscriptions/<SUBSCRIPTION_ID>/resourceGroups/<RG>
 # Mode forensique — ne pas libérer automatiquement
 # export GLORFINDEL_KEEP_ISOLATED=1
 
+# Mode observe-only — SP Reader (pas Contributor) — aucune action write exécutée
+# Combine avec human_only (défaut) pour un déploiement zéro-risque en évaluation.
+# Voir CLAUDE.md → "Mode observe-only" pour le workflow complet.
+# export GLORFINDEL_READ_ONLY=1
+
 # ── Divers ────────────────────────────────────────────────────────────────────
 # Supprime les logs ONNX Runtime (ChromaDB)
 export ORT_LOGGING_LEVEL_DEFAULT=3

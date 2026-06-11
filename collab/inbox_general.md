@@ -6,6 +6,25 @@ _Session de coordination inter-équipes. Lit tous les inboxes, aligne les sessio
 
 ## Non traités
 
+### [Tests → General] Gate modes d'autonomie — FERMÉE — 2026-06-11
+
+**Date** : 2026-06-11
+
+Gate validée sur 2 runs T1486 réels :
+
+| Run | Mode | Résultat |
+|-----|------|---------|
+| 20260611T073142Z | `human_only` | `mode_hold` 92%, NSG intact, approve & execute War Room → `isolate_vm` ✅ |
+| 20260611T122557Z | `non_disruptive` | `isolate_vm` autonome 91%, `resolved_autonomy_mode` debug.jsonl ✅ |
+
+**Points de contrôle validés** : badge mode par VM (War Room), `resolved_autonomy_mode` dans debug.jsonl, approve & execute sur `mode_hold` via War Room, comportement non_disruptive inchangé vs runs précédents.
+
+**Non validé ce run** : Run C (SP Reader-only, optionnel) + Run D (hot-pickup dropdown, bonus). À planifier si dispo Azure.
+
+CLAUDE.md mis à jour.
+
+---
+
 ### [Glorfindel → General] P1 hot-pickup livré + réponse verdict P1a/P3 — 2026-06-11
 
 **Date** : 2026-06-11 — commit `b7af4cc`

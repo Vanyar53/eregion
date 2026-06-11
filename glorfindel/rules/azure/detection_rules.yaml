@@ -70,7 +70,9 @@ rules:
       | where TimeGenerated > ago(10m)
       | extend SourceIP = extract(@"from (\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})", 1, SyslogMessage)
       | where isnotempty(SourceIP)
-      | where not(SourceIP startswith "10.") and not(SourceIP startswith "192.168.") and not(SourceIP startswith "127.")
+      // Exclude all RFC-1918 + loopback — aligned with data-exfiltration-blob
+      // (172.16-31 was previously missing → internal 172.x flagged as external)
+      | where not(SourceIP matches regex @"^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.|127\.)")
       | summarize FailedAttempts = count() by SourceIP
       | where FailedAttempts >= 10
       | project SourceIP, FailedAttempts
@@ -97,8 +99,8 @@ rules:
 
   - name: t1136-001-local-account-creation-linux-v1
     description: >
-      Auto-proposed by Glorfindel after detection_missed (TTP: T1136.001).
-      This query polls the Syslog table and fires on PAM auth/authpriv messages from useradd.
+      Local account creation on Linux — T1136.001. Fires on PAM auth/authpriv
+      Syslog messages from useradd (new user/new group).
     enabled: true
     ttp: T1136.001
     monitoring_backends: [law-annatar]

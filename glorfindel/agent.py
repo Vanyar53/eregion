@@ -757,30 +757,50 @@ def execute_action(
     action = state["action"]
 
     t_start = time.time()
-    if action == "isolate_vm":
-        outcome = connector.isolate_vm(resource_id)
-    elif action == "release_isolation":
-        outcome = connector.release_isolation(resource_id)
-    elif action == "block_suspicious_ip":
-        raw = state["signal"].get("raw_signal", {})
-        detected = raw.get("detected_data", {})
-        ip = (
-            state["signal"].get("context", {}).get("suspicious_ip")
-            or detected.get("SourceIP")          # lateral movement / brute force
-            or detected.get("DestIP_s")          # exfil via Traffic Analytics
-            or detected.get("DestinationIp")
-            or detected.get("DestinationIPAddress")
-            or ""
-        )
-        outcome = connector.block_suspicious_ip(ip, resource_id)
-    elif action == "snapshot":
-        # Fire-and-forget on detection_timeout: we don't know if the VM is compromised,
-        # and blocking the queue for a 3-4h initial RSV backup is operationally unacceptable.
-        event = state["signal"].get("event", "")
-        snap_id = connector.snapshot(resource_id, wait=event != "detection_timeout")
-        outcome = {"snapshot_id": snap_id}
-    else:
-        outcome = {"status": "no_op", "action": action}
+    try:
+        if action == "isolate_vm":
+            outcome = connector.isolate_vm(resource_id)
+        elif action == "release_isolation":
+            outcome = connector.release_isolation(resource_id)
+        elif action == "block_suspicious_ip":
+            raw = state["signal"].get("raw_signal", {})
+            detected = raw.get("detected_data", {})
+            ip = (
+                state["signal"].get("context", {}).get("suspicious_ip")
+                or detected.get("SourceIP")          # lateral movement / brute force
+                or detected.get("DestIP_s")          # exfil via Traffic Analytics
+                or detected.get("DestinationIp")
+                or detected.get("DestinationIPAddress")
+                or ""
+            )
+            outcome = connector.block_suspicious_ip(ip, resource_id)
+        elif action == "snapshot":
+            # Fire-and-forget on detection_timeout: we don't know if the VM is compromised,
+            # and blocking the queue for a 3-4h initial RSV backup is operationally unacceptable.
+            event = state["signal"].get("event", "")
+            snap_id = connector.snapshot(resource_id, wait=event != "detection_timeout")
+            outcome = {"snapshot_id": snap_id}
+        else:
+            outcome = {"status": "no_op", "action": action}
+    except PermissionError as e:
+        # Read-only credentials (or a real IAM 403): the action cannot run. Do NOT
+        # let it abort the cycle silently — route to escalation so the operator sees
+        # the recommended action in `pending` / the War Room, and store_cycle writes
+        # the debug file. This is a misconfiguration (non_disruptive + read-only creds),
+        # surfaced by the startup warning, but the failure must be visible.
+        return {
+            **state,
+            "escalate": True,
+            "escalation_reason": f"Action '{action}' bloquée — {e}",
+            "mode_hold": False,
+            "outcome": {
+                "status": "write_blocked",
+                "executed": False,
+                "action_pending": action,
+                "error": str(e),
+                "action_s": round(time.time() - t_start),
+            },
+        }
     action_s = round(time.time() - t_start)
 
     incident = state.get("incident")
@@ -799,10 +819,14 @@ def execute_action(
 def escalate_to_human(state: GlorfindelState) -> GlorfindelState:
     """Mark the decision as escalated — human must approve before any action."""
     action = state["action"]
+    # write_blocked: the action was attempted but the credentials can't write
+    # (read-only SP / IAM 403). Distinct from a policy hold — it's a capability gap.
+    if (state.get("outcome") or {}).get("status") == "write_blocked":
+        escalation_type = "write_blocked"
     # mode_hold takes precedence: the action would have run autonomously but was
     # held back by the asset's human_only mode — NOT by low confidence. The
     # operator must understand it's a policy hold, with a one-click approve path.
-    if state.get("mode_hold"):
+    elif state.get("mode_hold"):
         escalation_type = "mode_hold"
     elif action in HUMAN_APPROVAL_REQUIRED:
         escalation_type = "destructive_action"
@@ -1157,6 +1181,13 @@ def _route_after_decide(state: GlorfindelState) -> str:
     return "execute_action"
 
 
+def _route_after_execute(state: GlorfindelState) -> str:
+    # A write blocked by read-only credentials must be escalated (visible), not verified.
+    if (state.get("outcome") or {}).get("status") == "write_blocked":
+        return "escalate_to_human"
+    return "verify_action"
+
+
 # ── Graph builder ─────────────────────────────────────────────────────────────
 
 def _build_graph(
@@ -1191,7 +1222,7 @@ def _build_graph(
     graph.add_edge("poll_detection", "investigate")
     graph.add_edge("investigate", "decide")
     graph.add_conditional_edges("decide", _route_after_decide)
-    graph.add_edge("execute_action", "verify_action")
+    graph.add_conditional_edges("execute_action", _route_after_execute)
     graph.add_conditional_edges("verify_action", _route_after_verify)
     graph.add_edge("propose_detection_rule", "escalate_to_human")
     graph.add_edge("escalate_to_human", "store_cycle")

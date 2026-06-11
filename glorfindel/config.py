@@ -94,14 +94,20 @@ class AutonomyConfig:
     allow_destructive: list[str] = field(default_factory=list)
 
     def resolve(self, asset_name: str) -> str:
-        """Resolve the autonomy mode for an asset. asset > global default.
+        """Resolve the autonomy mode for an asset. Most specific match > global default.
 
-        Unknown assets fall back to the global default — never an accidental
-        inheritance toward a more permissive mode.
+        Precedence: an exact match (pattern == asset_name, e.g. an entry written by
+        the War Room dropdown) wins over any wildcard. Among wildcard matches, the
+        longest pattern wins (proxy for specificity) — so a broad "vm-*" never
+        shadows a targeted "vm-prod-db". Unknown assets fall back to the global
+        default — never an accidental inheritance toward a more permissive mode.
         """
-        for rule in self.assets:
-            if rule.matches(asset_name):
-                return rule.mode
+        exact = next((r for r in self.assets if r.match == asset_name), None)
+        if exact is not None:
+            return exact.mode
+        matches = [r for r in self.assets if r.matches(asset_name)]
+        if matches:
+            return max(matches, key=lambda r: len(r.match)).mode
         return self.default
 
 

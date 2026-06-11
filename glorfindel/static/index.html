@@ -799,7 +799,8 @@ function _renderEscGroup(group) {
   const pct    = e.confidence ? Math.round(e.confidence * 100) + '%' : '';
   const label  = isModeHold
     ? `${actionLabelVerb(e.action)}${pct ? ` (${pct})` : ''} — pending approval`
-    : isSnapshotPending ? 'Snapshot recommended' : actionLabel(e.action);
+    : isSnapshotPending ? 'Snapshot recommended'
+    : (actionLabel(e.action) || escLabel(e.escalation_type) || e.escalation_type || '?');
   const count = group.length;
   const ids   = group.map(g => g.id).join(','); // CSV — safe in onclick attrs, no quotes
   const isRule = e.action === 'improve_detection' && e.proposal_id;
@@ -2060,7 +2061,8 @@ function showEscModal(vmName) {
     const pct2  = e.confidence ? Math.round(e.confidence * 100) + '%' : '';
     const label = isModeHold
       ? `${actionLabelVerb(e.action)}${pct2 ? ` (${pct2})` : ''} — pending approval`
-      : isSnapshotPending ? 'Snapshot recommended' : actionLabel(e.action);
+      : isSnapshotPending ? 'Snapshot recommended'
+      : (actionLabel(e.action) || escLabel(e.escalation_type) || e.escalation_type || '?');
     // mode_hold: pct already in title, mode already in card header badge — keep ctx lean
     const ctx   = isModeHold
       ? [e.ttp, e.severity].filter(Boolean).join(' · ')
@@ -2096,7 +2098,7 @@ function showEscModal(vmName) {
         <span style="margin-left:auto;display:flex;gap:6px">${modalBtns}</span>
       </div>
       ${ctx ? `<div style="color:var(--dim);font-size:10px;margin-bottom:6px">${ctx}</div>` : ''}
-      <div style="color:var(--text);font-size:11px;line-height:1.6">${e.reason}</div>
+      <div style="color:var(--text);font-size:11px;line-height:1.6">${e.reason || ''}</div>
       ${query}${steps}
     </div>`;
   }).join('');

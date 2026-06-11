@@ -915,7 +915,7 @@ function _renderEscGroup(group) {
   const isModeHold        = e.escalation_type === 'mode_hold';
   const pct    = e.confidence ? Math.round(e.confidence * 100) + '%' : '';
   const label  = isModeHold
-    ? `${actionLabel(e.action)}${pct ? ` (${pct})` : ''} — retenu`
+    ? `${actionLabel(e.action)}${pct ? ` (${pct})` : ''} — held`
     : isSnapshotPending ? 'Snapshot recommended' : actionLabel(e.action);
   const count = group.length;
   const ctx   = [e.ttp, e.severity, escLabel(e.escalation_type)].filter(Boolean).join(' · ');
@@ -934,7 +934,7 @@ function _renderEscGroup(group) {
   const actionBtns = isRule
     ? ruleButtons
     : isModeHold
-    ? `<button class="action primary" onclick="event.stopPropagation();doApproveAction('${e.id}','${vmName}')" style="font-size:9px;padding:2px 7px">▶ Approuver & exécuter</button>
+    ? `<button class="action primary" onclick="event.stopPropagation();doApproveAction('${e.id}','${vmName}')" style="font-size:9px;padding:2px 7px">▶ Approve & execute</button>
        <button class="action" onclick="event.stopPropagation();doAckAll('${ids}')" style="font-size:9px;padding:2px 7px">✓ Ack</button>
        <button class="action" onclick="event.stopPropagation();openCommandModal('${e.id}')" style="font-size:9px;padding:2px 7px">📋 Cmd</button>`
     : isRestore
@@ -1554,7 +1554,7 @@ function _renderModules(rules, detectBackends, recoverBackends, resources) {
       <div class="node-backend-name">${dot} ${b.name}</div>
       <div class="node-backend-type">${b.type}</div>
       <div class="node-backend-row" style="justify-content:space-between">
-        <span>${bRules.length} règle${bRules.length>1?'s':''}</span>
+        <span>${bRules.length} rule${bRules.length>1?'s':''}</span>
         ${lastMatch ? `<span style="color:var(--orange);font-size:9px">match ${_relTime(lastMatch)}</span>` : ''}
         <span style="color:var(--blue);font-size:9px">${isExpanded ? '▾' : '▸'}</span>
       </div>
@@ -1800,8 +1800,8 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
         <span style="font-size:9px;color:var(--dim);font-weight:600;letter-spacing:.5px">MODE</span>
         <select onchange="setAutonomyMode('${vm_name}',this.value)" onclick="event.stopPropagation()"
           style="font-size:9px;background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:2px 5px;border-radius:3px;cursor:pointer">
-          <option value="human_only"${autonomyMode === 'human_only' ? ' selected' : ''}>human-only (recommander)</option>
-          <option value="non_disruptive"${autonomyMode === 'non_disruptive' ? ' selected' : ''}>non-disruptive (exécuter)</option>
+          <option value="human_only"${autonomyMode === 'human_only' ? ' selected' : ''}>human-only (recommend)</option>
+          <option value="non_disruptive"${autonomyMode === 'non_disruptive' ? ' selected' : ''}>non-disruptive (execute)</option>
         </select>
       </div>`
     : '';
@@ -2191,7 +2191,7 @@ async function doAck(escId) {
 
 function _guardReadOnly() {
   if (_state?.read_only) {
-    toast('✗ Mode observe-only — credentials lecture seule');
+    toast('✗ Observe-only mode — read-only credentials');
     return true;
   }
   return false;
@@ -2199,14 +2199,14 @@ function _guardReadOnly() {
 
 async function doApproveAction(escId, vmName) {
   if (_guardReadOnly()) return;
-  toast('▶ Approbation en cours…');
+  toast('▶ Approving…');
   try {
     const r = await fetch(`/api/action/approve/${escId}`, { method: 'POST' });
     const d = await r.json();
-    if (d.permission_denied) { toast('✗ Action impossible : credentials lecture seule'); return; }
+    if (d.permission_denied) { toast('✗ Cannot execute: read-only credentials'); return; }
     if (d.error) { toast('✗ ' + d.error); return; }
-    if (d.cli_instruction) { toast('✓ Approuvé — lancez : ' + d.cli_instruction, 5000); }
-    else toast('✓ Action approuvée et exécutée');
+    if (d.cli_instruction) { toast('✓ Approved — run: ' + d.cli_instruction, 5000); }
+    else toast('✓ Action approved and executed');
     refreshState();
   } catch (e) { toast('✗ ' + e.message); }
 }
@@ -2220,7 +2220,7 @@ async function setAutonomyMode(vmName, mode) {
     });
     const d = await r.json();
     if (d.error) { toast('✗ ' + d.error); return; }
-    toast(`✓ Mode ${mode} appliqué à ${vmName}`);
+    toast(`✓ Mode ${mode} set for ${vmName}`);
     refreshState();
   } catch (e) { toast('✗ ' + e.message); }
 }
@@ -2507,7 +2507,7 @@ function showEscModal(vmName) {
       ? `<button class="action" style="color:var(--green)" onclick="doApproveRule('${pid}','${e.id}');closeModal()">✓ Approve</button>
          <button class="action" style="color:var(--red)"   onclick="doRejectRule('${pid}','${e.id}');closeModal()">✗ Reject</button>`
       : isModeHold
-      ? `<button class="action primary" onclick="doApproveAction('${e.id}','${vmName}');closeModal()">▶ Approuver & exécuter</button>
+      ? `<button class="action primary" onclick="doApproveAction('${e.id}','${vmName}');closeModal()">▶ Approve & execute</button>
          <button class="action" onclick="doAckAll('${ids}');closeModal()">✓ Ack</button>
          <button class="action" onclick="openCommandModal('${e.id}')">📋 Cmd</button>`
       : isSnapshotPending

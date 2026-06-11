@@ -6,11 +6,22 @@ IMAGE_GLORFINDEL := eregion-glorfindel
 SCENARIO ?= annatar/scenarios/azure/ransomware-vm.yaml
 SIGNALS  ?= $(shell ls runs/*_signals.jsonl 2>/dev/null | tail -1)
 
-AZURE_ENV := \
-	-e AZURE_CLIENT_ID \
-	-e AZURE_CLIENT_SECRET \
-	-e AZURE_TENANT_ID \
-	-e AZURE_SUBSCRIPTION_ID
+# Annatar — ANNATAR_AZURE_* si définis, sinon fallback AZURE_*
+# Annatar a besoin de Contributor (RunCommand). Définir ANNATAR_AZURE_*
+# pour séparer ses creds de ceux de Glorfindel (Reader pour observe-only).
+ANNATAR_AZURE_ENV := \
+	-e AZURE_CLIENT_ID=$(or $(ANNATAR_AZURE_CLIENT_ID),$(AZURE_CLIENT_ID)) \
+	-e AZURE_CLIENT_SECRET=$(or $(ANNATAR_AZURE_CLIENT_SECRET),$(AZURE_CLIENT_SECRET)) \
+	-e AZURE_TENANT_ID=$(or $(ANNATAR_AZURE_TENANT_ID),$(AZURE_TENANT_ID)) \
+	-e AZURE_SUBSCRIPTION_ID=$(AZURE_SUBSCRIPTION_ID)
+
+# Glorfindel — GLORFINDEL_AZURE_* si définis, sinon fallback AZURE_*
+# Glorfindel peut tourner en Reader (GLORFINDEL_READ_ONLY=1 + SP Reader).
+GLORFINDEL_AZURE_ENV := \
+	-e AZURE_CLIENT_ID=$(or $(GLORFINDEL_AZURE_CLIENT_ID),$(AZURE_CLIENT_ID)) \
+	-e AZURE_CLIENT_SECRET=$(or $(GLORFINDEL_AZURE_CLIENT_SECRET),$(AZURE_CLIENT_SECRET)) \
+	-e AZURE_TENANT_ID=$(or $(GLORFINDEL_AZURE_TENANT_ID),$(AZURE_TENANT_ID)) \
+	-e AZURE_SUBSCRIPTION_ID=$(AZURE_SUBSCRIPTION_ID)
 
 GLORFINDEL_STATE := \
 	-v $(HOME)/.glorfindel:/root/.glorfindel \
@@ -29,7 +40,7 @@ GLORFINDEL_VOLS := \
 	-v $(PWD)/runs:/app/runs \
 	-v $(PWD)/glorfindel/rules:/app/glorfindel/rules
 
-DOCKER_ANNATAR := docker run --rm $(AZURE_ENV) $(ANNATAR_VOLS) $(IMAGE_ANNATAR)
+DOCKER_ANNATAR := docker run --rm $(ANNATAR_AZURE_ENV) $(ANNATAR_VOLS) $(IMAGE_ANNATAR)
 GLORFINDEL_ENV := \
 	-e AZURE_WORKSPACE_ID \
 	-e AZURE_VM_RESOURCE_ID \
@@ -49,7 +60,7 @@ GLORFINDEL_ENV := \
 	-e GLORFINDEL_INCIDENT_TTL_S \
 	-e ORT_LOGGING_LEVEL_DEFAULT=3
 
-DOCKER_GLORFINDEL := docker run --rm $(AZURE_ENV) $(GLORFINDEL_VOLS) $(GLORFINDEL_STATE) \
+DOCKER_GLORFINDEL := docker run --rm $(GLORFINDEL_AZURE_ENV) $(GLORFINDEL_VOLS) $(GLORFINDEL_STATE) \
 	$(GLORFINDEL_ENV) \
 	$(IMAGE_GLORFINDEL)
 
@@ -207,12 +218,12 @@ glorfindel-ui: build-glorfindel
 
 annatar-shell: build-annatar
 	@mkdir -p $(HOME)/.annatar
-	docker run --rm -it $(AZURE_ENV) $(ANNATAR_VOLS) $(ANNATAR_STATE) \
+	docker run --rm -it $(ANNATAR_AZURE_ENV) $(ANNATAR_VOLS) $(ANNATAR_STATE) \
 		$(IMAGE_ANNATAR) bash --init-file /root/.annatar/.bashrc
 
 glorfindel-shell: build-glorfindel
 	@mkdir -p $(HOME)/.glorfindel
-	docker run --rm -it $(AZURE_ENV) $(GLORFINDEL_VOLS) $(GLORFINDEL_STATE) \
+	docker run --rm -it $(GLORFINDEL_AZURE_ENV) $(GLORFINDEL_VOLS) $(GLORFINDEL_STATE) \
 		$(GLORFINDEL_ENV) \
 		$(IMAGE_GLORFINDEL) bash --init-file /root/.glorfindel/.bashrc
 

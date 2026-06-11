@@ -148,26 +148,6 @@
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
   }
-  .infra-label {
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 0.8px;
-    color: var(--dim);
-    flex: 1;
-  }
-  .infra-sub {
-    font-size: 10px;
-    color: var(--dim);
-    font-weight: 400;
-    margin-left: auto;
-  }
-  .readiness-inline {
-    display: flex;
-    gap: 10px;
-    margin-top: 6px;
-    font-size: 10px;
-  }
-  .readiness-inline span { color: var(--dim); }
   #incidents-list {
     flex: 1;
     overflow-y: auto;
@@ -176,78 +156,6 @@
     flex-direction: column;
   }
 
-  /* ── Infrastructure Map ── */
-  .infra-map {
-    position: relative;
-    display: grid;
-    grid-template-areas:
-      "network  monitoring"
-      "compute  compute"
-      "backup   backup";
-    grid-template-columns: 1fr 1fr;
-    grid-template-rows: auto auto auto;
-    align-items: start;
-    align-content: start;
-    gap: 10px;
-    padding: 12px;
-    flex: 1;
-  }
-  .infra-map.no-backup {
-    grid-template-areas:
-      "network  monitoring"
-      "compute  compute";
-  }
-  .map-svg {
-    position: absolute;
-    inset: 0;
-    width: 100%; height: 100%;
-    pointer-events: none;
-    z-index: 0;
-    overflow: visible;
-  }
-  .map-zone {
-    position: relative;
-    z-index: 1;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    background: var(--bg1);
-    padding: 10px 12px;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-  .map-zone.zone-alert  { border-color: var(--red);    background: color-mix(in srgb, var(--red)    6%, var(--bg1)); }
-  .map-zone.zone-warn   { border-color: var(--orange); background: color-mix(in srgb, var(--orange) 6%, var(--bg1)); }
-  .map-zone.zone-ok     { border-color: var(--border); }
-  .zone-network    { grid-area: network; }
-  .zone-monitoring { grid-area: monitoring; }
-  .zone-compute    { grid-area: compute; }
-  .zone-backup     { grid-area: backup; }
-  .zone-storage    { grid-area: storage; }
-  .zone-label {
-    font-size: 9px;
-    font-weight: 700;
-    letter-spacing: 1px;
-    color: var(--dim);
-    margin-bottom: 2px;
-  }
-  .map-node {
-    background: var(--bg2);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 8px 10px;
-    font-size: 11px;
-  }
-  .map-node-header {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-weight: 700;
-    margin-bottom: 4px;
-  }
-  .map-node-name { flex: 1; color: var(--text); }
-  .map-node-body { color: var(--dim); font-size: 10px; line-height: 1.6; }
-  .map-node-body .row { display: flex; align-items: baseline; gap: 6px; }
   /* shared section style — left border, used by both dec-groups and esc-items */
   .section-group {
     border-left: 2px solid var(--border);
@@ -261,7 +169,6 @@
   .section-group.s-escalation { border-color: var(--purple); background: color-mix(in srgb, var(--purple) 4%, transparent); }
   .section-group.s-escalation:hover { background: color-mix(in srgb, var(--purple) 8%, transparent); cursor: pointer; }
   .section-group.s-recover { border-color: var(--green); background: color-mix(in srgb, var(--green) 3%, transparent); }
-  .map-decision { font-size: 10px; line-height: 1.5; }
   .dec-row { display: flex; flex-direction: column; gap: 2px; padding: 2px 0; }
   .dec-header { display: flex; align-items: center; }
   .dec-action { color: var(--dim); font-weight: 600; flex: 1; }
@@ -269,35 +176,6 @@
   .dec-conf   { color: var(--orange); }
   .dec-ttp    { color: var(--dim); font-size: 9px; }
   .dec-clickable { cursor: pointer; }
-  .map-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
-
-  /* ── VM Card ── */
-  .vm-card {
-    background: var(--bg1);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    overflow: hidden;
-  }
-  .vm-card-header {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 10px 14px 8px;
-    border-bottom: 1px solid var(--border);
-  }
-  .vm-dot { font-size: 10px; }
-  .vm-name { font-weight: 700; font-size: 13px; flex: 1; }
-  .vm-age  { font-size: 10px; color: var(--dim); }
-
-  .vm-card-body { padding: 10px 14px; }
-
-  .state-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 4px 0;
-    font-size: 12px;
-  }
   .badge {
     font-size: 10px;
     font-weight: 700;
@@ -309,8 +187,6 @@
   .badge.blocked   { background: #3d2e00; color: var(--orange); border: 1px solid #6d5200; }
   .badge.restoring { background: #0d2035; color: var(--blue); border: 1px solid #1a4060;
                      animation: pulse 2s infinite; }
-  .restore-progress { background: #0a1a2a; border-radius: 4px; padding: 4px 6px; }
-  .state-detail    { color: var(--dim); font-size: 11px; }
 
   /* ── Escalation items ── */
   .vm-escalations {
@@ -338,12 +214,6 @@
                font-size: 10px; color: var(--blue); white-space: pre-wrap; overflow-x: auto;
                margin: 6px 0; border-radius: 0 4px 4px 0; }
 
-  .vm-actions {
-    display: flex;
-    gap: 6px;
-    margin-top: 10px;
-    flex-wrap: wrap;
-  }
 
   .empty-state {
     text-align: center;
@@ -399,12 +269,6 @@
     max-height: 220px; overflow-y: auto;
   }
 
-  .ttp-table { width: 100%; border-collapse: collapse; }
-  .ttp-table th { padding: 4px 8px; font-size: 10px; color: var(--dim); text-align: left; border-bottom: 1px solid var(--border); }
-  .ttp-table td { padding: 5px 8px; font-size: 11px; border-bottom: 1px solid var(--bg2); }
-  .ttp-table td:first-child { color: var(--blue); font-weight: 600; }
-  .ttp-table td:last-child { text-align: right; }
-
   button#config-toggle.active { border-color: var(--blue); color: var(--blue); }
 
   /* ── Topology Graph ── */
@@ -454,17 +318,6 @@
   .node-agent-header { display: flex; align-items: center; gap: 8px; }
   .node-agent-title { color: var(--blue); font-weight: 700; font-size: 14px; letter-spacing: 2px; flex: 1; }
   .node-agent-stats { display: flex; gap: 14px; margin-top: 6px; font-size: 10px; color: var(--dim); }
-  .agent-rules-panel {
-    display: none;
-    margin-top: 10px;
-    border-top: 1px solid var(--border);
-    padding-top: 8px;
-    flex-direction: column;
-    gap: 2px;
-    max-height: 220px;
-    overflow-y: auto;
-  }
-  .agent-rules-panel.open { display: flex; }
 
   /* Module sections */
   .topo-modules {
@@ -676,7 +529,7 @@
         <div style="margin-top:6px;font-size:11px">Run a scenario to start</div>
       </div>
     </div>
-    <div id="config-panel" style="display:none;flex:1;overflow-y:auto;padding:16px;display:none;flex-direction:column;gap:16px;"></div>
+    <div id="config-panel" style="display:none;flex:1;overflow-y:auto;padding:16px;flex-direction:column;gap:16px;"></div>
   </div>
 </main>
 
@@ -710,6 +563,19 @@ const ACTION_LABELS = {
   escalate_permissions: 'Permissions escalated',
 };
 
+// Verb forms — used for actions not yet executed (mode_hold: recommended, pending approval)
+const ACTION_LABELS_VERB = {
+  isolate_vm:          'Isolate VM',
+  release_isolation:   'Release isolation',
+  snapshot:            'Create forensic snapshot',
+  block_suspicious_ip: 'Block suspicious IP',
+  revoke_temp_access:  'Revoke temporary access',
+};
+
+function actionLabelVerb(action) {
+  return ACTION_LABELS_VERB[action] || ACTION_LABELS[action] || action;
+}
+
 const ESC_LABELS = {
   low_confidence:      'low confidence',
   destructive_action:  'destructive action',
@@ -731,6 +597,17 @@ function escLabel(type) {
 function cliCommand(esc) {
   const rid = esc.resource_id;
   const id  = esc.id.slice(0, 8);
+  if (esc.escalation_type === 'mode_hold') {
+    const vm = rid.split('/').pop();
+    const actionMap = {
+      isolate_vm:          `glorfindel isolate ${vm} --yes`,
+      snapshot:            `glorfindel snapshot ${vm} --yes`,
+      block_suspicious_ip: `glorfindel block <ip> ${vm} --yes`,
+      release_isolation:   `glorfindel release ${vm} --yes`,
+      revoke_temp_access:  `glorfindel ack ${id}  # revoke_temp_access — manual`,
+    };
+    return (actionMap[esc.action] || `glorfindel ack ${id}`) + `\nglorfindel ack ${id}`;
+  }
   if (esc.action === 'restore_from_backup') {
     return `glorfindel restore ${rid} --yes\nglorfindel ack ${id}`;
   }
@@ -738,7 +615,7 @@ function cliCommand(esc) {
     return `glorfindel revert ${rid} --yes\nglorfindel ack ${id}`;
   }
   if (esc.escalation_type === 'low_confidence') {
-    return `# Vérifier le snapshot, puis si nécessaire :\nglorfindel restore ${rid} --yes\nglorfindel ack ${id}`;
+    return `# Verify the snapshot, then if needed:\nglorfindel restore ${rid} --yes\nglorfindel ack ${id}`;
   }
   return `glorfindel ack ${id}`;
 }
@@ -820,7 +697,9 @@ function openCommandModal(escId) {
   if (!esc) return;
   const cmd = cliCommand(esc);
   const isSnapshotPending = esc.action === 'snapshot' && esc.escalation_type === 'low_confidence';
-  const label = isSnapshotPending ? 'Snapshot recommended' : actionLabel(esc.action);
+  const isCmdModeHold = esc.escalation_type === 'mode_hold';
+  const label = isCmdModeHold ? actionLabelVerb(esc.action) + ' — pending approval'
+              : isSnapshotPending ? 'Snapshot recommended' : actionLabel(esc.action);
   document.getElementById('modal-title').textContent = '📋 ' + label;
   document.getElementById('modal-body').textContent = 'CLI command to run for this escalation:';
   const cmdEl = document.getElementById('modal-cmd');
@@ -915,7 +794,7 @@ function _renderEscGroup(group) {
   const isModeHold        = e.escalation_type === 'mode_hold';
   const pct    = e.confidence ? Math.round(e.confidence * 100) + '%' : '';
   const label  = isModeHold
-    ? `${actionLabel(e.action)}${pct ? ` (${pct})` : ''} — held`
+    ? `${actionLabelVerb(e.action)}${pct ? ` (${pct})` : ''} — pending approval`
     : isSnapshotPending ? 'Snapshot recommended' : actionLabel(e.action);
   const count = group.length;
   const ctx   = [e.ttp, e.severity, escLabel(e.escalation_type)].filter(Boolean).join(' · ');
@@ -968,15 +847,6 @@ async function doAckAll(ids) {
   } catch (e) {
     toast('✗ ' + e.message);
   }
-}
-
-function _renderEscItem(e) { return _renderEscGroup([e]); }
-
-function _escFooter(escs) {
-  if (!escs.length) return '';
-  return `<div class="vm-escalations" style="margin:0;padding:8px 14px;border-top:1px solid var(--border)">
-    ${_groupEscs(escs).map(_renderEscGroup).join('')}
-  </div>`;
 }
 
 // ── Topology rendering ─────────────────────────────────────────────────────────
@@ -1044,329 +914,7 @@ function _dot(color) {
   return `<span style="color:${color};font-size:10px">●</span>`;
 }
 
-function _networkZone(resources, escalations) {
-  const isIsolated = resources.some(r => r.states?.some(s => s.type === 'isolated'));
-  const isBlocked  = resources.some(r => r.states?.some(s => s.type === 'blocked'));
-  const status = isIsolated ? 'alert' : isBlocked ? 'warn' : 'ok';
-  const dot = isIsolated ? _dot('var(--red)') : isBlocked ? _dot('var(--orange)') : _dot('var(--green)');
 
-  const blockRows = resources.flatMap(r =>
-    (r.states || []).filter(s => s.type === 'blocked').map(s =>
-      `<div class="row"><span class="badge blocked" style="font-size:9px">BLOCKED</span>
-       <span>${s.ip}</span><span style="color:var(--dim)">${age(s.since)}</span></div>`
-    )
-  ).join('');
-
-  const isolRows = resources.filter(r => r.states?.some(s => s.type === 'isolated')).map(r =>
-    `<div class="row"><span class="badge isolated" style="font-size:9px">DENY-ALL</span>
-     <span style="color:var(--dim)">${r.vm_name}</span></div>`
-  ).join('');
-
-  return `<div class="map-zone zone-network ${_zoneClass(status)}" id="zone-network">
-    <div class="zone-label">NETWORK</div>
-    <div class="map-node">
-      <div class="map-node-header">${dot}<span class="map-node-name">nsg-annatar</span></div>
-      <div class="map-node-body">
-        ${blockRows || isolRows
-          ? blockRows + isolRows
-          : `<span style="color:var(--green)">✓ No active rules</span>`}
-      </div>
-    </div>
-  </div>`;
-}
-
-function _monitoringZone(rules, backends, discoveredAssets, postureGaps) {
-  const hasErr  = rules.some(r => r.last_error);
-  const allPoll = rules.length > 0 && rules.every(r => r.last_poll && !r.last_error);
-  const zoneStatus = hasErr ? 'alert' : 'ok';
-
-  const discByBackend = {};
-  (discoveredAssets || []).forEach(a => {
-    (discByBackend[a.monitoring_backend] = discByBackend[a.monitoring_backend] || []).push(a);
-  });
-  const gapsByVm = {};
-  (postureGaps || []).forEach(g => {
-    (gapsByVm[g.vm_name] = gapsByVm[g.vm_name] || []).push(g);
-  });
-
-  const nodes = (backends || []).map(b => {
-    const bRules = rules.filter(r => r.monitoring_backend_name === b.name);
-    const bDisc  = discByBackend[b.name] || [];
-    const bErr   = bRules.some(r => r.last_error);
-    const bPoll  = bRules.length > 0 && bRules.every(r => r.last_poll && !r.last_error);
-    const dot    = bErr ? _dot('var(--red)') : bPoll ? _dot('var(--green)') : _dot('var(--dim)');
-
-    const discRows = bDisc.map(a => {
-      const vmGaps = gapsByVm[a.name] || [];
-      const gapRows = vmGaps.map(g => {
-        const col = g.severity === 'critical' ? 'var(--red)' : 'var(--orange)';
-        const icon = g.severity === 'critical' ? '✗' : '⚠';
-        return `<div class="row" style="padding-left:16px">
-          <span style="color:${col};font-size:9px">${icon}</span>
-          <span style="color:${col};font-size:10px">${g.check}</span>
-          <span style="color:var(--dim);font-size:9px;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"
-                title="${g.message}">${g.message}</span>
-        </div>`;
-      }).join('');
-      return `<div class="row">
-        <span style="color:${vmGaps.length ? (vmGaps.some(g=>g.severity==='critical') ? 'var(--red)' : 'var(--orange)') : 'var(--green)'};font-size:9px">●</span>
-        <span style="font-size:11px">${a.name}</span>
-        <span style="color:var(--dim);font-size:9px;margin-left:auto">${_relTime(a.last_seen)}</span>
-      </div>${gapRows}`;
-    }).join('') || `<div class="row"><span style="color:var(--dim);font-size:10px">No assets — discovery pending</span></div>`;
-
-    const ruleRows = bRules.map(r => {
-      const dotCls = r.last_error ? 'var(--red)' : r.last_poll ? 'var(--green)' : 'var(--dim)';
-      const match  = r.last_match ? `<span style="color:var(--orange);font-size:9px">${_relTime(r.last_match)}</span>` : '';
-      return `<div class="row rule-item" style="padding:3px 4px;border-radius:4px;cursor:pointer"
-          onclick='showRuleDetail(${JSON.stringify(r)})'>
-        <span style="color:${dotCls};font-size:9px">●</span>
-        <span style="font-size:11px;flex:1">${r.name}</span>
-        ${r.ttp ? `<span class="cfg-badge dim" style="font-size:9px">${r.ttp}</span>` : ''}
-        ${match}
-        <span style="color:var(--dim);font-size:9px">▸</span>
-      </div>`;
-    }).join('') || `<div class="row"><span style="color:var(--dim);font-size:10px">No rules for this backend</span></div>`;
-
-    return `<div class="map-node" style="margin-bottom:8px">
-      <div class="map-node-header">${dot}
-        <span class="map-node-name">${b.name}</span>
-        <span style="font-size:9px;color:var(--dim)">${b.type}</span>
-      </div>
-      <div class="map-node-body">
-        <div style="font-size:9px;color:var(--dim);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px">Assets</div>
-        ${discRows}
-        <div style="font-size:9px;color:var(--dim);text-transform:uppercase;letter-spacing:1px;margin:8px 0 4px">Rules</div>
-        ${ruleRows}
-      </div>
-    </div>`;
-  }).join('');
-
-  const emptyNode = backends && backends.length === 0
-    ? `<div class="map-node"><div class="map-node-body">
-        <span style="color:var(--dim)">No monitoring backends — add to glorfindel-config.yaml</span>
-      </div></div>`
-    : '';
-
-  return `<div class="map-zone zone-monitoring ${_zoneClass(zoneStatus)}" id="zone-monitoring">
-    <div class="zone-label">MONITORING</div>
-    ${nodes || emptyNode}
-  </div>`;
-}
-
-function _computeZone(resourceMap, vmEscs, restoreByVm) {
-  const anyAlert = [...resourceMap.values()].some(r =>
-    r.states?.some(s => s.type === 'isolated')
-  );
-  const anyWarn = [...resourceMap.values()].some(r =>
-    r.states?.some(s => s.type === 'blocked') || r.states?.length > 0
-  );
-  const status = anyAlert ? 'alert' : anyWarn ? 'warn' : 'ok';
-
-  const nodes = [...resourceMap.values()].map(resource => {
-    const { resource_id, vm_name, states = [] } = resource;
-    const isIsolated  = states.some(s => s.type === 'isolated');
-    const isBlocked   = states.some(s => s.type === 'blocked');
-    const myEscs      = vmEscs.filter(e =>
-      e.resource_id === resource_id || e.resource_id.split('/').pop() === vm_name);
-    const restoreInfo = restoreByVm[vm_name];
-    const cached      = _actionsCache[vm_name];
-
-    const dot = restoreInfo   ? _dot('var(--blue)')
-              : isIsolated    ? _dot('var(--red)')
-              : isBlocked     ? _dot('var(--orange)')
-              : myEscs.length ? _dot('var(--orange)')
-              :                 _dot('var(--green)');
-
-    const stateRows = [
-      restoreInfo ? `<div class="row"><span class="badge restoring" style="font-size:9px">🔄 RESTORING</span>
-        <span style="color:var(--dim)">${restoreInfo.elapsed_label}</span></div>` : '',
-      ...states.map(s => s.type === 'isolated'
-        ? `<div class="row"><span class="badge isolated" style="font-size:9px">ISOLATED</span>
-           <span style="color:var(--dim)">${age(s.since)}</span></div>`
-        : `<div class="row"><span class="badge blocked" style="font-size:9px">BLOCKED</span>
-           <span>${s.ip}</span><span style="color:var(--dim)">${age(s.since)}</span></div>`)
-    ].join('');
-
-    const auditEntry = (_auditData?.audits || []).find(a => a.resource_id === resource_id);
-    const readiness  = auditEntry
-      ? ACTION_GROUPS.map(g => {
-          const st = _worstStatus(auditEntry.checks, g.actions);
-          const [ic, col] = st === 'ok' ? ['✓','var(--green)'] : st === 'warn' ? ['⚠','var(--orange)']
-                          : st === 'fail' ? ['✗','var(--red)'] : ['—','var(--dim)'];
-          return `<span><span style="color:${col}">${ic}</span> ${g.label}</span>`;
-        }).join('  ')
-      : '';
-
-    // Last LLM decisions (conclusion pre-extracted server-side, full reasoning on click)
-    const reasonHtml = (cached?.actions || []).slice(0, 2).map((a, idx) => {
-      const pct = a.confidence ? Math.round(a.confidence * 100) + '%' : '';
-      const hasDetail = !!a.full_reasoning;
-      return `<div class="dec-row ${hasDetail ? 'dec-clickable' : ''}"
-        ${hasDetail ? `onclick="showReasoning('${vm_name}',${idx})" title="Click to see full reasoning"` : ''}>
-        <span class="dec-action">${actionLabel(a.action)}</span>
-        ${pct ? `<span class="dec-conf">${pct}</span>` : ''}
-        ${a.ttp ? `<span class="dec-ttp">${a.ttp}</span>` : ''}
-        ${hasDetail ? `<span style="color:var(--blue);font-size:10px;margin-left:auto">▸ reasoning</span>` : ''}
-      </div>`;
-    }).join('');
-
-    const actions = [];
-    if (isIsolated) actions.push(`<button class="action danger" onclick="confirmRelease('${vm_name}')">↩️ Release</button>`);
-    if (isBlocked)  actions.push(`<button class="action danger" onclick="confirmUnblock('${vm_name}')">↩️ Unblock</button>`);
-    if (isIsolated && isBlocked) actions.push(`<button class="action danger" onclick="confirmReset('${vm_name}')">⟳ Reset</button>`);
-    if (!restoreInfo && myEscs.some(e => e.action === 'restore_from_backup'))
-      actions.push(`<button class="action primary" onclick="confirmRestore('${vm_name}')">🔄 Restore</button>`);
-
-    const clean = !isIsolated && !isBlocked && !restoreInfo && !myEscs.length;
-
-    return `<div class="map-node">
-      <div class="map-node-header">${dot}
-        <span class="map-node-name">${vm_name}</span>
-        ${readiness ? `<span style="font-size:9px;color:var(--dim);margin-left:auto">${readiness}</span>` : ''}
-      </div>
-      <div class="map-node-body">
-        ${clean ? `<span style="color:var(--green)">✓ No active incidents</span>` : stateRows}
-        ${reasonHtml ? `<div class="map-decision">${reasonHtml}</div>` : ''}
-        ${actions.length ? `<div class="map-actions">${actions.join('')}</div>` : ''}
-      </div>
-      ${_escFooter(myEscs)}
-    </div>`;
-  }).join('');
-
-  return `<div class="map-zone zone-compute ${_zoneClass(status)}" id="zone-compute">
-    <div class="zone-label">COMPUTE</div>
-    ${nodes || `<div class="map-node"><div class="map-node-body" style="color:var(--dim)">No resources configured</div></div>`}
-  </div>`;
-}
-
-function _backupZone(rsvEscs, restores) {
-  const allAudits    = _auditData?.audits || [];
-  // Vault name: from RSV asset config, then audit data, then fallback
-  const rsvAsset     = (_cfgData?.assets || []).find(a => a.type === 'azure_backup_vault');
-  const vault        = rsvAsset?.vault_name || allAudits[0]?.vault || 'rsv-annatar';
-  const backupChecks = allAudits.flatMap(a => (a.checks||[]).filter(c => c.action === 'restore_from_backup'));
-  const worst = backupChecks.some(c => c.status === 'fail') ? 'fail'
-              : backupChecks.some(c => c.status === 'warn') ? 'warn'
-              : backupChecks.length ? 'ok' : 'unknown';
-  const dot = worst === 'ok'   ? _dot('var(--green)')
-            : worst === 'warn' ? _dot('var(--orange)')
-            : worst === 'fail' ? _dot('var(--red)')
-            :                    _dot('var(--dim)');
-  const status = worst === 'fail' ? 'alert' : worst === 'warn' ? 'warn' : 'ok';
-
-  const restoreRows = restores.map(r =>
-    `<div class="row"><span class="badge restoring" style="font-size:9px">🔄 RESTORING</span>
-     <span style="color:var(--dim)">${r.vm_name} · ${r.elapsed_label}</span></div>`).join('');
-
-  const backupRows = backupChecks.length
-    ? backupChecks.map(c => {
-        const col  = c.status === 'ok' ? 'var(--green)' : c.status === 'warn' ? 'var(--orange)' : 'var(--red)';
-        const icon = c.status === 'ok' ? '✓' : c.status === 'warn' ? '⚠' : '✗';
-        return `<div class="row"><span style="color:${col}">${icon}</span>
-          <span style="color:var(--dim)">${c.message}</span></div>`;
-      }).join('')
-    : `<div style="color:var(--dim)">Loading…</div>`;
-
-  const rsvEscHtml = rsvEscs.length ? `<div class="vm-escalations" style="margin:0;padding:6px 10px;border-top:1px solid var(--border)">
-    ${rsvEscs.map(e => {
-      const vm = e.resource_id.split('/').pop();
-      const restoring = restores.some(r => r.vm_name === vm);
-      const ctx = [e.ttp, e.severity].filter(Boolean).join(' · ');
-      return `<div class="esc-item"><div class="esc-item-header">
-        <span class="esc-action-label">🚨 restore_from_backup</span>
-        <button class="action" onclick="confirmAck('${e.id}')" style="flex-shrink:0">✓ Ack</button>
-        <button class="action" onclick="openCommandModal('${e.id}')" style="flex-shrink:0">📋</button>
-        ${!restoring ? `<button class="action primary" onclick="confirmRestore('${vm}')" style="flex-shrink:0">🔄 Restore</button>` : ''}
-      </div>
-      ${ctx ? `<div class="esc-context">${ctx}</div>` : ''}
-      <div class="esc-reason">${e.reason}</div>
-      </div>`;
-    }).join('')}</div>` : '';
-
-  return `<div class="map-zone zone-backup ${_zoneClass(status)}" id="zone-backup">
-    <div class="zone-label">BACKUP</div>
-    <div class="map-node">
-      <div class="map-node-header">${dot}<span class="map-node-name">${vault}</span></div>
-      <div class="map-node-body">${restoreRows}${backupRows}</div>
-    </div>
-    ${rsvEscHtml}
-  </div>`;
-}
-
-
-function _drawConnections() {  // kept for safety, no longer called
-  const svg = document.getElementById('map-svg');
-  if (!svg) return;
-  const map = document.getElementById('infra-map');
-  if (!map) return;
-  const mapRect = map.getBoundingClientRect();
-
-  function bbox(id) {
-    const el = document.getElementById(id);
-    if (!el) return null;
-    const r = el.getBoundingClientRect();
-    return {
-      cx: r.left - mapRect.left + r.width / 2,
-      cy: r.top - mapRect.top + r.height / 2,
-      top: r.top - mapRect.top,
-      bottom: r.bottom - mapRect.top,
-      left: r.left - mapRect.left,
-      right: r.right - mapRect.left,
-    };
-  }
-
-  const net = bbox('zone-network');
-  const mon = bbox('zone-monitoring');
-  const cmp = bbox('zone-compute');
-  const bkp = bbox('zone-backup');
-  if (!net || !cmp) return;
-
-  const { resources = [] } = _state;
-  const isIsolated = resources.some(r => r.states?.some(s => s.type === 'isolated'));
-  const isBlocked  = resources.some(r => r.states?.some(s => s.type === 'blocked'));
-  const hasDetErr  = (_cfgData?.detection?.rules || []).some(r => r.last_error);
-
-  const netColor = isIsolated ? '#e74c3c' : isBlocked ? '#f39c12' : '#556';
-  const monColor = hasDetErr  ? '#e74c3c' : '#2ecc71';
-  const bkpColor = '#556';
-
-  const defs = `<defs>
-    <marker id="a-r" markerWidth="8" markerHeight="8" refX="4" refY="4" orient="auto">
-      <path d="M0,1 L0,7 L7,4 z" fill="#e74c3c"/></marker>
-    <marker id="a-o" markerWidth="8" markerHeight="8" refX="4" refY="4" orient="auto">
-      <path d="M0,1 L0,7 L7,4 z" fill="#f39c12"/></marker>
-    <marker id="a-g" markerWidth="8" markerHeight="8" refX="4" refY="4" orient="auto">
-      <path d="M0,1 L0,7 L7,4 z" fill="#2ecc71"/></marker>
-    <marker id="a-d" markerWidth="8" markerHeight="8" refX="4" refY="4" orient="auto">
-      <path d="M0,1 L0,7 L7,4 z" fill="#556"/></marker>
-  </defs>`;
-
-  function mId(c) {
-    return c === '#e74c3c' ? 'a-r' : c === '#f39c12' ? 'a-o' : c === '#2ecc71' ? 'a-g' : 'a-d';
-  }
-
-  function seg(x1, y1, x2, y2, color, dash = '') {
-    return `<line x1="${x1|0}" y1="${y1|0}" x2="${x2|0}" y2="${y2|0}"
-      stroke="${color}" stroke-width="2"
-      ${dash ? `stroke-dasharray="${dash}"` : ''}
-      marker-end="url(#${mId(color)})" opacity="0.85"/>`;
-  }
-
-  const lines = [defs];
-
-  // NETWORK → COMPUTE
-  lines.push(seg(net.cx, net.bottom + 2, net.cx, cmp.top - 4,
-    netColor, isIsolated ? '5,4' : ''));
-
-  // MONITORING → COMPUTE (enters right side)
-  if (mon) lines.push(seg(mon.cx, mon.bottom + 2, mon.cx, cmp.top - 4, monColor, '4,3'));
-
-  // COMPUTE → BACKUP (only if RSV asset is configured)
-  if (bkp) lines.push(seg(bkp.cx, cmp.bottom + 2, bkp.cx, bkp.top - 4, bkpColor));
-
-  svg.innerHTML = lines.join('\n');
-}
 
 async function refreshActionsData() {
   const { resources = [] } = _state;
@@ -2486,7 +2034,11 @@ function showEscModal(vmName) {
     const e     = group[0];
     const ids   = group.map(g => g.id).join(','); // CSV — safe in onclick attrs, no quotes
     const count = group.length;
-    const label = (e.action === 'snapshot' && e.escalation_type === 'low_confidence')
+    const _isModeHold2 = e.escalation_type === 'mode_hold';
+    const _pct2        = e.confidence ? Math.round(e.confidence * 100) + '%' : '';
+    const label = _isModeHold2
+      ? `${actionLabelVerb(e.action)}${_pct2 ? ` (${_pct2})` : ''} — pending approval`
+      : (e.action === 'snapshot' && e.escalation_type === 'low_confidence')
       ? 'Snapshot recommended' : actionLabel(e.action);
     const ctx   = [e.ttp, e.severity, escLabel(e.escalation_type)].filter(Boolean).join(' · ');
     const steps = (e.suggested_steps || [])

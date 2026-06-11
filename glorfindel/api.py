@@ -421,6 +421,9 @@ async def get_job_status(vm_name: str, refresh: bool = False) -> dict:
     return job
 
 
+_CFG_READONLY_MSG = "Config file is read-only — edit glorfindel-config.yaml directly (or remount without :ro)"
+
+
 @app.post("/api/autonomy/{vm_name}")
 async def set_autonomy_mode(vm_name: str, body: dict) -> dict:
     """Set the autonomy mode for an asset and persist to glorfindel-config.yaml."""
@@ -431,6 +434,8 @@ async def set_autonomy_mode(vm_name: str, body: dict) -> dict:
         return {"ok": True, "vm": vm_name, "mode": mode, "path": str(path)}
     except ValueError as e:
         return {"error": str(e)}
+    except OSError:
+        return {"error": _CFG_READONLY_MSG}
     except Exception as e:
         return {"error": str(e)}
 
@@ -445,6 +450,8 @@ async def set_autonomy_default(body: dict) -> dict:
         return {"ok": True, "mode": mode, "path": str(path)}
     except ValueError as e:
         return {"error": str(e)}
+    except OSError:
+        return {"error": _CFG_READONLY_MSG}
     except Exception as e:
         return {"error": str(e)}
 

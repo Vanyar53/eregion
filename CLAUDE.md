@@ -16,7 +16,7 @@ Plateforme OSS (Apache 2.0) de défense active cloud. Deux agents IA en boucle :
 
 | TTP | Scénario | Détection | Temps | Action |
 |-----|----------|-----------|-------|--------|
-| T1486 | Ransomware VM | Perf disk write | 55–71s | cycle 1 : `isolate_vm` (autonome), `restore --wait` → `recovery_complete` → `release_isolation` auto → RTO ~21m29s |
+| T1486 | Ransomware VM | Perf disk write | 55–71s | cycle 1 : `isolate_vm` (autonome en `non_disruptive`, retenu en `human_only` → `mode_hold`), `restore --wait` → `recovery_complete` → `release_isolation` auto → RTO ~21m29s |
 | T1041 | Data exfiltration | StorageBlobLogs (RFC-1918, PutBlob ≥ 1) | ~79–108s* | `isolate_vm` (disk intact) |
 | T1110.001 | SSH brute force | Syslog DCR | 58s | `block_suspicious_ip` |
 | T1548.003 | Sudo priv esc | Syslog DCR | 40s | `isolate_vm` (root confirmé) |
@@ -125,6 +125,7 @@ La gate destructive est nécessaire mais pas suffisante : le persona sans SOC cr
 - `store_cycle` logue `resolved_autonomy_mode` (cycle + debug.jsonl) — trail d'audit.
 - `glorfindel watch --mode <m>` surcharge le défaut **global** d'une session (les règles par-asset restent prioritaires). `glorfindel list` affiche le mode résolu par VM. Warning au démarrage si `human_only` sans webhook/bot (gap de process : détection sans réponse tant qu'un humain n'agit pas).
 - ⚠️ **Défaut `human_only`** : les runs gate autonomes (T1486/T1548) nécessitent `--mode non_disruptive` ou une section `autonomy` dans le config live.
+- **Gate validée 2026-06-11** : T1486 human_only → `mode_hold` (NSG intact, approve War Room → `isolate_vm` exécuté) ✅ ; T1486 non_disruptive → `isolate_vm` autonome, `resolved_autonomy_mode=non_disruptive` dans debug.jsonl ✅. War Room : badge mode par VM, dropdown per-asset (hot-pickup `b7af4cc`), approve & execute (`/api/action/approve/{esc_id}`).
 
 ### Mode observe-only — credentials read-only (`GLORFINDEL_READ_ONLY=1`)
 
@@ -132,6 +133,7 @@ La gate destructive est nécessaire mais pas suffisante : le persona sans SOC cr
 
 - `AzureConnector(read_only=...)` (défaut depuis `GLORFINDEL_READ_ONLY`). `_ensure_clients()` est déjà paresseux — aucun check write à l'init, `watch` démarre proprement sur Reader.
 - Méthodes write (`isolate_vm`/`block`/`snapshot`/`release`/`restore`/`unblock`) → `_guard_write()` lève un `PermissionError` clair si read-only (jamais atteint en human_only).
+- ⚠️ `non_disruptive` + read-only (mauvaise config) : `execute_action` catche le `PermissionError` → escalade type `write_blocked` (≠ mode_hold) → cycle complété, debug file + `pending` visibles (pas de perte silencieuse). Commit `902951a`.
 - `audit.run` sous read-only → check `Credentials` (warn, pas fail) : « capacité d'écriture non vérifiable, checks ci-dessous = accès lecture uniquement ». Déploiement reste `ready` pour son usage observe-only.
 - `glorfindel watch` logue le régime (`Credentials: read_only`) + warning si read-only combiné à un mode exécutant (les actions échoueront).
 - ⚠️ Bouton War Room « Approuver & exécuter » sous read-only → `PermissionError` (à surfacer côté UI).
@@ -462,7 +464,7 @@ az network nsg rule list -g annatar --nsg-name nsg-annatar -o table
 
 `gf pending` affiche les escalades avec **next steps générés par le LLM** (`suggested_steps`), contextuels à l'historique ChromaDB. Fallback statique pour les anciennes escalades sans ce champ.
 
-Types d'escalade : `low_confidence` (detection_timeout + snapshot), `destructive_action` (HUMAN_APPROVAL_REQUIRED), `proposed_action` (action inconnue), `verification_failed`, `proposed_rule` (règle de détection proposée après detection_missed), `mode_hold` (action autonome retenue par le mode `human_only` de l'asset — pas un manque de confiance).
+Types d'escalade : `low_confidence` (detection_timeout + snapshot), `destructive_action` (HUMAN_APPROVAL_REQUIRED), `proposed_action` (action inconnue), `verification_failed`, `proposed_rule` (règle de détection proposée après detection_missed), `mode_hold` (action autonome retenue par le mode `human_only` de l'asset — pas un manque de confiance), `write_blocked` (action tentée mais credentials read-only / IAM 403 — capability gap, pas un choix de politique).
 
 `gf ack <id>` / `gf ack --all` → marque `resolved` dans `~/.glorfindel/escalations.jsonl`. Purement administratif — ne fait rien sur Azure. `restore_from_backup` auto-acquitte via `resolve_by_resource`.
 

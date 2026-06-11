@@ -21,6 +21,7 @@ x-env: &env
   DISCORD_PING_ROLE: ${DISCORD_PING_ROLE:-}
   GLORFINDEL_ISOLATION_TTL_H: ${GLORFINDEL_ISOLATION_TTL_H:-}
   GLORFINDEL_INCIDENT_TTL_S: ${GLORFINDEL_INCIDENT_TTL_S:-}
+  GLORFINDEL_READ_ONLY: ${GLORFINDEL_READ_ONLY:-}
   ORT_LOGGING_LEVEL_DEFAULT: "3"
 
 services:
@@ -65,7 +66,7 @@ services:
       - ${HOME}/.glorfindel:/root/.glorfindel
       - ${HOME}/.cache/chroma:/root/.cache/chroma
       # Optional: mount glorfindel-config.yaml if it exists
-      - ./glorfindel-config.yaml:/app/glorfindel-config.yaml:ro
+      - ./glorfindel-config.yaml:/app/glorfindel-config.yaml
     depends_on:
       - watch
     develop:

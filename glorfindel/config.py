@@ -227,6 +227,33 @@ def _parse_autonomy(raw: dict) -> AutonomyConfig:
     )
 
 
+def set_default_mode(mode: str, path: str | Path | None = None) -> str:
+    """Set the global default autonomy mode and persist to glorfindel-config.yaml.
+
+    Backend for the War Room Config panel global dropdown. Validates the mode
+    (refuses full_auto / unknown), updates ``autonomy.default``, and writes the
+    file back. Returns the resolved path.
+    """
+    if yaml is None:
+        raise ImportError("PyYAML is required: pip install pyyaml")
+    _validate_mode(mode, where="set_default_mode()")
+
+    if path is not None:
+        cfg_path = Path(path)
+    else:
+        cfg_path = next((p for p in _DEFAULT_PATHS if p.exists()), _DEFAULT_PATHS[0])
+
+    data = {}
+    if cfg_path.exists():
+        data = yaml.safe_load(cfg_path.read_text()) or {}
+
+    data.setdefault("autonomy", {})["default"] = mode
+
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    cfg_path.write_text(yaml.safe_dump(data, sort_keys=False, default_flow_style=False))
+    return str(cfg_path)
+
+
 def set_asset_mode(asset_name: str, mode: str, path: str | Path | None = None) -> str:
     """Set the autonomy mode for a single asset and persist to glorfindel-config.yaml.
 

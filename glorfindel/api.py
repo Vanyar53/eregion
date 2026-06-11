@@ -435,6 +435,20 @@ async def set_autonomy_mode(vm_name: str, body: dict) -> dict:
         return {"error": str(e)}
 
 
+@app.patch("/api/config/autonomy/default")
+async def set_autonomy_default(body: dict) -> dict:
+    """Set the global default autonomy mode and persist to glorfindel-config.yaml."""
+    mode = body.get("mode", "")
+    try:
+        from glorfindel.config import set_default_mode
+        path = await asyncio.to_thread(set_default_mode, mode)
+        return {"ok": True, "mode": mode, "path": str(path)}
+    except ValueError as e:
+        return {"error": str(e)}
+    except Exception as e:
+        return {"error": str(e)}
+
+
 @app.post("/api/action/approve/{esc_id}")
 async def action_approve(esc_id: str) -> dict:
     """One-click approve for mode_hold escalations — executes the recommended action and acks."""

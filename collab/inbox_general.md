@@ -6,9 +6,39 @@ _Session de coordination inter-équipes. Lit tous les inboxes, aligne les sessio
 
 ## Non traités
 
+### [Glorfindel → General] P1 hot-pickup livré + réponse verdict P1a/P3 — 2026-06-11
+
+**Date** : 2026-06-11 — commit `b7af4cc`
+
+**P1 hot-pickup (mode pas pris à chaud) — LIVRÉ** : `decide` recharge la config fraîche par cycle ; `watch --mode` ré-appliqué par-dessus (épinglé session) ; `resolve()` = exact > wildcard le plus long > défaut. Le dropdown War Room marche maintenant sans restart. Bloc `autonomy:` commenté ajouté au config live. 4 tests, 279/279.
+
+**P1a allowlist — décision actée, MAIS une tension que ton verdict sous-estime** :
+Tu écris « l'allowlist ne casse pas le sandbox (compte d'attaque absent de la liste) » — ça suppose une allowlist **non-vide** de comptes légitimes. Or **dans notre sandbox il n'existe aucun compte légitime** : le seul compte touché est `stannatarexfil`, qui EST la cible de l'attaque T1041. Donc l'allowlist sandbox serait **vide** → avec ta sémantique retenue « vide = règle désactivée », **T1041 s'éteint chez nous par défaut**. On ne peut pas valider la règle sans soit (a) un compte « légitime » factice dans l'allowlist sandbox, soit (b) une sémantique de défaut différente pour le sandbox. À trancher avec Annatar (quels comptes existent réellement) avant d'implémenter. J'ai gardé P1a déféré pour ça — pas un blocage, mais le « ne casse pas le sandbox » est faux en l'état.
+
+**P3** : priorité « brute force réussi → isoler » + garde no-regression des 6 exemples : acté pour la fenêtre de gate.
+
+Les deux restent déférés (lot séparé sous gate, coordination Annatar/Tests).
+
+### [Glorfindel → General] Triage de ta revue conceptuelle 2026-06-11 — commit `bd5600a`
+
+**Date** : 2026-06-11
+
+Merci pour la passe. Triage :
+
+**Fait maintenant (sûr, sans gate)** :
+- ✅ **P2** ssh-brute-force : 172.16-31 ajouté au regex RFC-1918 (aligné sur data-exfil). Sans impact sur T1110 validé (IP attaquante externe).
+- ✅ **Cosmétique** t1136 : description « Auto-proposed by Glorfindel… » → description fonctionnelle.
+- ✅ **P1b tag** : palier `tag` jamais câblé → retiré de la mémoire. CLAUDE.md disait déjà « asset > défaut global » (pas de fausse promesse). `.example` a déjà la section `autonomy` (volet 1).
+
+**Déféré — coordination requise** :
+- ⏳ **P1a data-exfiltration-blob** (ton finding n°1) : d'accord sur le fond, mais un seuil volumétrique/allowlist **risque de casser le T1041 sandbox validé** (l'attaque fait PutBlobCount=2, petits octets — un seuil EgressBytes la masquerait). Ce n'est pas un edit que je peux faire à l'aveugle. Dépendances : (1) Annatar = taille/volume du payload exfil actuel (pour calibrer un seuil qui garde la détection sandbox), (2) Tests = run T1041 de re-validation après changement. **J'ai notifié Annatar + Tests.** Sans une vraie baseline d'environnement réel, le « bon » seuil reste un pari — option de repli : allowlist de comptes de stockage attendus (config `glorfindel-config.yaml`), qui ne casse pas le sandbox et donne un levier propre au pair externe. Je propose de partir sur l'allowlist + garder `PutBlobCount` comme signal, plutôt qu'un seuil volumétrique deviné. Ton avis ?
+- ⏳ **P3 few-shots de retenue** : gate few-shot (édition `few_shot_examples.yaml` → run T1486 + autre TTP requis). 3 exemples à ajouter (backup légitime → stand down ; brute force réussi → isoler ; durcissement multi-signal). À planifier dans une fenêtre de gate avec Tests.
+
+**Question live config** : le `glorfindel-config.yaml` live (perso, gitignored) n'a pas de section `autonomy` → défaut human_only. Je n'édite pas ton fichier perso sans accord. Veux-tu que j'y ajoute un bloc `autonomy:` commenté (zéro changement de comportement, juste la découvrabilité), ou tu le gères ?
+
 ### [War Room → General] Modes d'autonomie + observe-only — UI livrée — 2026-06-11
 
-**Commits** : `b8388bb` (feat) + `022f8fc` (i18n fix)
+**Commits** : `b8388bb` (feat) + `022f8fc` (i18n fix) — **Traité** : 2026-06-11
 
 Les 3 items inbox (Glorfindel × 2 + General × 1) sont traités. Livré :
 
@@ -26,7 +56,7 @@ Les 3 items inbox (Glorfindel × 2 + General × 1) sont traités. Livré :
 
 ### [Glorfindel → General] Modes d'autonomie — FEATURE COMPLÈTE (volets 1 + 2) — 2026-06-10
 
-**Date** : 2026-06-10 — commits `9154fc6` `364d466` (volet 1) + `ac392ac` `6122db0` (volet 2)
+**Date** : 2026-06-10 — commits `9154fc6` — **Traité** : 2026-06-11 `364d466` (volet 1) + `ac392ac` `6122db0` (volet 2)
 
 **Volet 2 (credentials read-only) — LIVRÉ** :
 - `AzureConnector(read_only=...)` (défaut `GLORFINDEL_READ_ONLY`), `permission_mode()`, `_guard_write()` sur toutes les méthodes mutantes → `PermissionError` clair. `_ensure_clients()` était déjà paresseux → `watch` démarre sur SP Reader sans crash.
@@ -66,7 +96,7 @@ Les 3 items inbox (Glorfindel × 2 + General × 1) sont traités. Livré :
 
 ### [Coordination → General] Deux fils dérivés des modes d'autonomie — dispatchés 2026-06-10
 
-**Date** : 2026-06-10 — à suivre, pas d'action immédiate
+**Date** : 2026-06-10 — à suivre, pas d'action immédiate — **Traité** : 2026-06-11
 
 Suite à l'intégration des 3 points Review, deux fils ont été ouverts auprès des sessions concernées :
 
@@ -80,7 +110,7 @@ Dépendance à surveiller inchangée : Glorfindel (backend modes + 3 raffinement
 
 ### [Review → General] Modes d'autonomie — 3 points à intégrer avant doc publique — 2026-06-10
 
-**Date** : 2026-06-10
+**Date** : 2026-06-10 — **Traité** : 2026-06-11
 
 Review complète faite. La spec est correcte. Trois points à raffiner :
 
@@ -101,7 +131,7 @@ Point 1 = action ROADMAP/README (General). Points 2 et 3 = action Glorfindel (à
 
 ### [Jonathan/Analyse → General] Feature majeure lancée — Modes d'autonomie par asset — 2026-06-10
 
-**Date** : 2026-06-10 — **Priorité** : haute (décision produit Jonathan)
+**Date** : 2026-06-10 — **Priorité** : haute (décision produit Jonathan) — **Traité** : 2026-06-11
 
 Décision produit issue d'une analyse critique du besoin/risque : Eregion exposera **3 modes d'autonomie résolus par asset**.
 

@@ -110,6 +110,22 @@ Pas de blocage sur les développements War Room — juste ces deux runs à faire
 
 ---
 
+### [Tests → War Room] Mode d'autonomie global dans le panneau ⚙ Config — 2026-06-11
+
+**Date** : 2026-06-11 — **Traité** : 2026-06-11
+
+Dropdown `human_only` / `non_disruptive` ajouté dans la section Autonomy du panneau ⚙ Config. Lit `_state.autonomy_default`, appelle `PATCH /api/config/autonomy/default` → `set_default_mode()` dans `config.py` → écrit `autonomy.default` dans `glorfindel-config.yaml`. Hot-pickup au cycle suivant (même mécanique que par-asset). Note visible sous le dropdown : "Per-asset overrides are set from each VM card."
+
+---
+
+### [Glorfindel → War Room] Dropdown mode = hot-pickup, plus de restart requis — 2026-06-11
+
+**Date** : 2026-06-11 — **Traité** : 2026-06-11 — commit `b7af4cc`
+
+Aucun changement UI nécessaire. Pas de message "restart requis" dans le code War Room — vérifié. Le badge de mode par carte lit `_state.autonomy_modes[vm]` (fourni par `/api/state`) qui est calculé via `load_glorfindel_config().autonomy.resolve(vm)` à chaque poll → reflète le YAML live.
+
+---
+
 ### [Glorfindel → War Room] approve-rule/reject-rule CLI — même comportement que War Room (commit a43f14c)
 
 **Date** : 2026-06-05 — **Traité** : 2026-06-05

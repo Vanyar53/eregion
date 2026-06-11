@@ -32,15 +32,46 @@ export ANTHROPIC_API_KEY=sk-ant-...
 # export GLORFINDEL_LLM_BASE_URL=http://my-server:8000
 
 # ── Azure — Service Principal ──────────────────────────────────────────────────
-# Créer avec : az ad sp create-for-rbac --name "eregion" --role Contributor \
-#              --scopes /subscriptions/<SUBSCRIPTION_ID>
+#
+# Option A — SP unique Contributor (démarrage rapide)
+# az ad sp create-for-rbac --name "eregion" --role Contributor \
+#                           --scopes /subscriptions/<SUBSCRIPTION_ID>
 # Retourne : appId (CLIENT_ID), password (CLIENT_SECRET), tenant (TENANT_ID)
+#
 export AZURE_CLIENT_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 export AZURE_CLIENT_SECRET=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 export AZURE_TENANT_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 
 # az account show --query id -o tsv
 export AZURE_SUBSCRIPTION_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+
+# Option B — SPs séparés (Glorfindel Reader + Annatar Contributor)
+# Utiliser pour tester le mode observe-only sans bloquer Annatar.
+# Annatar a besoin de Contributor (RunCommand). Glorfindel peut tourner en
+# Reader + Log Analytics Reader (GLORFINDEL_READ_ONLY=1, human_only par défaut).
+#
+# SP Glorfindel — Reader + Log Analytics Reader
+# az ad sp create-for-rbac --name "glorfindel" --role Reader \
+#                           --scopes /subscriptions/<SUBSCRIPTION_ID>
+# az role assignment create --assignee <appId> \
+#   --role "Log Analytics Reader" --scope /subscriptions/<SUBSCRIPTION_ID>
+# export GLORFINDEL_AZURE_CLIENT_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+# export GLORFINDEL_AZURE_CLIENT_SECRET=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+# export GLORFINDEL_AZURE_TENANT_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+#
+# SP Annatar — Contributor
+# az ad sp create-for-rbac --name "annatar" --role Contributor \
+#                           --scopes /subscriptions/<SUBSCRIPTION_ID>
+# export ANNATAR_AZURE_CLIENT_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+# export ANNATAR_AZURE_CLIENT_SECRET=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+# export ANNATAR_AZURE_TENANT_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+#
+# Note : docker compose utilise AZURE_CLIENT_* directement (Glorfindel uniquement).
+# En Option B, pointer AZURE_CLIENT_* vers le SP Glorfindel Reader :
+# export AZURE_CLIENT_ID=$GLORFINDEL_AZURE_CLIENT_ID
+# export AZURE_CLIENT_SECRET=$GLORFINDEL_AZURE_CLIENT_SECRET
+# export AZURE_TENANT_ID=$GLORFINDEL_AZURE_TENANT_ID
+# Les commandes `make annatar-*` liront ANNATAR_AZURE_* avec fallback sur AZURE_*.
 
 # ── Glorfindel — détection continue (detection_rules.yaml) ───────────────────
 # Ces variables résolvent les placeholders ${...} dans detection_rules.yaml.

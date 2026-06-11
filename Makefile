@@ -6,21 +6,23 @@ IMAGE_GLORFINDEL := eregion-glorfindel
 SCENARIO ?= annatar/scenarios/azure/ransomware-vm.yaml
 SIGNALS  ?= $(shell ls runs/*_signals.jsonl 2>/dev/null | tail -1)
 
-# Annatar — ANNATAR_AZURE_* si définis, sinon fallback AZURE_*
-# Annatar a besoin de Contributor (RunCommand). Définir ANNATAR_AZURE_*
+# Annatar — ANNATAR_AZURE_CLIENT_* si définis, sinon fallback AZURE_CLIENT_*
+# Annatar a besoin de Contributor (RunCommand). Définir ANNATAR_AZURE_CLIENT_*
 # pour séparer ses creds de ceux de Glorfindel (Reader pour observe-only).
+# AZURE_TENANT_ID et AZURE_SUBSCRIPTION_ID sont toujours partagés (même tenant).
 ANNATAR_AZURE_ENV := \
 	-e AZURE_CLIENT_ID=$(or $(ANNATAR_AZURE_CLIENT_ID),$(AZURE_CLIENT_ID)) \
 	-e AZURE_CLIENT_SECRET=$(or $(ANNATAR_AZURE_CLIENT_SECRET),$(AZURE_CLIENT_SECRET)) \
-	-e AZURE_TENANT_ID=$(or $(ANNATAR_AZURE_TENANT_ID),$(AZURE_TENANT_ID)) \
+	-e AZURE_TENANT_ID=$(AZURE_TENANT_ID) \
 	-e AZURE_SUBSCRIPTION_ID=$(AZURE_SUBSCRIPTION_ID)
 
-# Glorfindel — GLORFINDEL_AZURE_* si définis, sinon fallback AZURE_*
+# Glorfindel — GLORFINDEL_AZURE_CLIENT_* si définis, sinon fallback AZURE_CLIENT_*
 # Glorfindel peut tourner en Reader (GLORFINDEL_READ_ONLY=1 + SP Reader).
+# AZURE_TENANT_ID et AZURE_SUBSCRIPTION_ID sont toujours partagés (même tenant).
 GLORFINDEL_AZURE_ENV := \
 	-e AZURE_CLIENT_ID=$(or $(GLORFINDEL_AZURE_CLIENT_ID),$(AZURE_CLIENT_ID)) \
 	-e AZURE_CLIENT_SECRET=$(or $(GLORFINDEL_AZURE_CLIENT_SECRET),$(AZURE_CLIENT_SECRET)) \
-	-e AZURE_TENANT_ID=$(or $(GLORFINDEL_AZURE_TENANT_ID),$(AZURE_TENANT_ID)) \
+	-e AZURE_TENANT_ID=$(AZURE_TENANT_ID) \
 	-e AZURE_SUBSCRIPTION_ID=$(AZURE_SUBSCRIPTION_ID)
 
 GLORFINDEL_STATE := \

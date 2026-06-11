@@ -185,6 +185,33 @@ def test_autonomy_unknown_asset_falls_back_to_default():
     assert autonomy.resolve("vm-unknown") == "non_disruptive"
 
 
+def test_autonomy_exact_match_wins_over_broad_pattern():
+    """An exact entry (e.g. written by the War Room dropdown) beats a broad wildcard,
+    regardless of list order."""
+    autonomy = AutonomyConfig(
+        default="human_only",
+        assets=[
+            AutonomyRule(match="vm-*", mode="non_disruptive"),     # broad, listed first
+            AutonomyRule(match="vm-prod-db", mode="human_only"),   # exact, listed later
+        ],
+    )
+    assert autonomy.resolve("vm-prod-db") == "human_only"   # exact wins
+    assert autonomy.resolve("vm-dev-01") == "non_disruptive"  # only the broad matches
+
+
+def test_autonomy_longest_wildcard_wins():
+    """Among wildcard matches, the most specific (longest) pattern wins."""
+    autonomy = AutonomyConfig(
+        default="human_only",
+        assets=[
+            AutonomyRule(match="vm-*", mode="non_disruptive"),
+            AutonomyRule(match="vm-prod-*", mode="human_only"),
+        ],
+    )
+    assert autonomy.resolve("vm-prod-web") == "human_only"   # vm-prod-* more specific
+    assert autonomy.resolve("vm-dev-web") == "non_disruptive"  # only vm-* matches
+
+
 def test_load_autonomy_section(tmp_path):
     cfg_file = tmp_path / "glorfindel-config.yaml"
     cfg_file.write_text(textwrap.dedent("""

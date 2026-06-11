@@ -862,6 +862,52 @@ def test_decide_confidence_gate_env_threshold(monkeypatch):
     assert "85%" in result["escalation_reason"]
 
 
+# ── decide — autonomy hot-pickup ──────────────────────────────────────────────
+
+def test_decide_reloads_autonomy_fresh_each_cycle():
+    """autonomy=None → decide reloads config per cycle (War Room dropdown hot-pickup)."""
+    from glorfindel.agent import decide
+    from glorfindel.config import GlorfindelConfig, AutonomyConfig
+
+    state = _state()
+
+    # Cycle 1: config says human_only → isolate_vm held back as mode_hold
+    cfg1 = GlorfindelConfig(autonomy=AutonomyConfig(default="human_only"))
+    with patch("glorfindel.agent.load_glorfindel_config", return_value=cfg1), \
+         patch("litellm.completion",
+               return_value=_mock_llm_response("isolate_vm", confidence=0.95)):
+        r1 = decide(state, model="claude-test")  # autonomy=None → reload fresh
+    assert r1["autonomy_mode"] == "human_only"
+    assert r1["mode_hold"] is True
+    assert r1["escalate"] is True
+
+    # Cycle 2: same agent, config flipped to non_disruptive on disk → picked up now
+    cfg2 = GlorfindelConfig(autonomy=AutonomyConfig(default="non_disruptive"))
+    with patch("glorfindel.agent.load_glorfindel_config", return_value=cfg2), \
+         patch("litellm.completion",
+               return_value=_mock_llm_response("isolate_vm", confidence=0.95)):
+        r2 = decide(state, model="claude-test")
+    assert r2["autonomy_mode"] == "non_disruptive"
+    assert r2["mode_hold"] is False
+    assert r2["escalate"] is False
+
+
+def test_decide_session_override_survives_fresh_reload():
+    """watch --mode pins the global default even when config is reloaded per cycle."""
+    from glorfindel.agent import decide
+    from glorfindel.config import GlorfindelConfig, AutonomyConfig
+
+    state = _state()
+    # Disk config says non_disruptive, but the session was started with --mode human_only
+    cfg = GlorfindelConfig(autonomy=AutonomyConfig(default="non_disruptive"))
+    with patch("glorfindel.agent.load_glorfindel_config", return_value=cfg), \
+         patch("litellm.completion",
+               return_value=_mock_llm_response("isolate_vm", confidence=0.95)):
+        r = decide(state, model="claude-test", autonomy_override="human_only")
+    assert r["autonomy_mode"] == "human_only"   # override wins over disk default
+    assert r["mode_hold"] is True
+
+
 # ── Graph integration (LLM mocked) ───────────────────────────────────────────
 
 def _build(tmp_path, tmp_memory, dry_connector, autonomy=None):

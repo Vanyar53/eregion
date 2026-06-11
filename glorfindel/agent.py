@@ -629,7 +629,9 @@ def investigate(state: GlorfindelState) -> GlorfindelState:
     return {**state, "signal": enriched}
 
 
-def decide(state: GlorfindelState, *, model: str, autonomy=None) -> GlorfindelState:
+def decide(
+    state: GlorfindelState, *, model: str, autonomy=None, autonomy_override: str | None = None
+) -> GlorfindelState:
     """Call LLM to reason about the signal and produce a structured decision.
 
     Supports any provider via LiteLLM: anthropic/claude-*, openai/gpt-*, ollama/*,
@@ -638,6 +640,13 @@ def decide(state: GlorfindelState, *, model: str, autonomy=None) -> GlorfindelSt
     autonomy: AutonomyConfig resolved per asset. A policy layer ABOVE the
     confidence gate (never a bypass): in human_only mode, every autonomous action
     is held back and escalated instead of executed.
+
+    Hot-pickup: when autonomy is None (production), the config is reloaded FRESH
+    each cycle from glorfindel-config.yaml — so a War Room dropdown change (which
+    persists to disk) takes effect on the next signal without restarting watch.
+    Tests inject an explicit AutonomyConfig to bypass the disk read.
+    autonomy_override (session `glorfindel watch --mode`) is re-applied on top of
+    the fresh config so it stays pinned for the session.
     """
     import json
     import litellm
@@ -688,9 +697,19 @@ def decide(state: GlorfindelState, *, model: str, autonomy=None) -> GlorfindelSt
     # Resolve the mode for this asset. human_only holds back EVERY autonomous
     # action (even high-confidence ones) and escalates it as mode_hold instead.
     # The destructive gate and confidence gate above remain active regardless.
+    # Reload config fresh per cycle (hot-pickup) unless one is injected (tests).
+    if autonomy is None:
+        try:
+            autonomy = load_glorfindel_config().autonomy
+        except Exception:
+            from glorfindel.config import AutonomyConfig
+            autonomy = AutonomyConfig()
+    if autonomy_override:
+        # Session --mode pins the GLOBAL default; per-asset rules still win in resolve().
+        autonomy.default = autonomy_override
     resource_id = signal.get("resource_id", "")
     asset_name = resource_id.split("/")[-1] if resource_id else ""
-    mode = autonomy.resolve(asset_name) if autonomy is not None else "human_only"
+    mode = autonomy.resolve(asset_name)
     mode_hold = False
     if mode == "human_only" and not d["escalate"] and d["action"] in AUTONOMOUS_ACTIONS:
         d["escalate"] = True
@@ -1146,6 +1165,7 @@ def _build_graph(
     model: str,
     incidents: IncidentRegistry | None = None,
     autonomy=None,
+    autonomy_override: str | None = None,
 ):
     if incidents is None:
         incidents = IncidentRegistry(path=".glorfindel/incidents.jsonl")
@@ -1155,7 +1175,8 @@ def _build_graph(
     graph.add_node("load_context", lambda s: load_context(s, memory=memory, incidents=incidents))
     graph.add_node("poll_detection", poll_detection)
     graph.add_node("investigate", investigate)
-    graph.add_node("decide", lambda s: decide(s, model=model, autonomy=autonomy))
+    graph.add_node("decide", lambda s: decide(
+        s, model=model, autonomy=autonomy, autonomy_override=autonomy_override))
     graph.add_node("execute_action", lambda s: execute_action(s, connector=connector, incidents=incidents))
     graph.add_node("verify_action", lambda s: verify_action(s, connector=connector))
     graph.add_node("escalate_to_human", escalate_to_human)
@@ -1200,8 +1221,12 @@ class GlorfindelAgent:
         self.incidents = IncidentRegistry(path=incidents_path)
         self.model = model or os.environ.get("GLORFINDEL_LLM_MODEL") or "anthropic/claude-sonnet-4-6"
 
-        # Autonomy policy: explicit arg > loaded config > safe default (human_only).
-        # autonomy_default overrides the resolved global default (glorfindel watch --mode).
+        # Autonomy policy. autonomy_default is the session override (watch --mode).
+        # When an explicit AutonomyConfig is injected (tests), the graph uses it as-is.
+        # Otherwise the graph reloads config FRESH each cycle (hot-pickup of War Room
+        # dropdown changes) — self.autonomy here is only for the startup banner / display.
+        self._autonomy_explicit = autonomy if autonomy is not None else None
+        self._autonomy_override = autonomy_default
         if autonomy is None:
             try:
                 from glorfindel.config import load_glorfindel_config
@@ -1214,7 +1239,9 @@ class GlorfindelAgent:
         self.autonomy = autonomy
 
         self._graph = _build_graph(
-            self.memory, self.connector, self.model, self.incidents, autonomy=self.autonomy
+            self.memory, self.connector, self.model, self.incidents,
+            autonomy=self._autonomy_explicit,          # None in prod → decide reloads fresh
+            autonomy_override=self._autonomy_override,  # --mode stays pinned across reloads
         )
 
     def respond(self, signal: dict) -> GlorfindelState:

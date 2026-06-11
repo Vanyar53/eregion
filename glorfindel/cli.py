@@ -394,6 +394,22 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
         _HEARTBEAT.parent.mkdir(parents=True, exist_ok=True)
         _HEARTBEAT.write_text(datetime.now(timezone.utc).isoformat())
 
+    # Remove the heartbeat on exit so a fast restart (docker compose restart / stop+up)
+    # doesn't see a stale heartbeat and warn about a phantom second watch. Ctrl+C is
+    # handled below; SIGTERM (docker stop) won't run the except block, so convert it to
+    # SystemExit which triggers atexit cleanup.
+    import atexit as _atexit
+    import signal as _signalmod
+
+    def _remove_heartbeat() -> None:
+        _HEARTBEAT.unlink(missing_ok=True)
+
+    def _on_sigterm(_signum, _frame):
+        raise SystemExit(0)
+
+    _atexit.register(_remove_heartbeat)
+    _signalmod.signal(_signalmod.SIGTERM, _on_sigterm)
+
     if _rules_file:
         try:
             from glorfindel.config import load_glorfindel_config

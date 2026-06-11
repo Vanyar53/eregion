@@ -1070,6 +1070,31 @@ def test_graph_non_disruptive_executes_isolate_vm(tmp_path, monkeypatch, dry_con
     assert final["autonomy_mode"] == "non_disruptive"
 
 
+def test_graph_read_only_write_blocked_escalates_not_silent(tmp_path, monkeypatch, tmp_memory):
+    """non_disruptive + read-only creds: isolate_vm raises PermissionError →
+    cycle must escalate (write_blocked) and reach store_cycle, not abort silently."""
+    from glorfindel.config import AutonomyConfig
+    from glorfindel.actions import AzureConnector
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "runs").mkdir(exist_ok=True)
+    ro_connector = AzureConnector(dry_run=False, read_only=True)
+    from glorfindel.agent import _build_graph
+    graph = _build_graph(tmp_memory, ro_connector, "claude-test",
+                         autonomy=AutonomyConfig(default="non_disruptive"))
+
+    with patch("litellm.completion") as mock_cls:
+        mock_cls.return_value = _mock_llm_response("isolate_vm")
+        final = graph.invoke(_initial("detection", raw={"detection_time_s": 50}))
+
+    assert final["escalate"] is True
+    assert final["outcome"]["status"] == "escalated"
+    assert final["outcome"]["escalation_type"] == "write_blocked"
+    # cycle completed → stored, not silently aborted
+    assert tmp_memory.count() == 1
+    # debug file written
+    assert (tmp_path / "runs" / "run001_debug.jsonl").exists()
+
+
 def test_graph_human_only_destructive_stays_destructive_type(tmp_path, monkeypatch, dry_connector, tmp_memory):
     """human_only does not relabel an already-escalated destructive action as mode_hold."""
     from glorfindel.config import AutonomyConfig

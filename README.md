@@ -212,6 +212,35 @@ Glorfindel operates under strict autonomy rules. The graph enforces them regardl
 
 > The graph is defensive by design: even if the LLM proposes a destructive action without `escalate=True`, the routing blocks it.
 
+### Autonomy modes
+
+Three modes, resolved per asset. The default is intentionally conservative.
+
+| Mode | Behavior |
+|------|----------|
+| `human_only` | Everything escalated as a recommendation — no autonomous action, including reversible ones. Default. |
+| `non_disruptive` | Historical behavior: reversible actions (`isolate_vm`, `block`, `snapshot`) run autonomously; destructive always gated. |
+| `full_auto` | Deferred — value rejected by config validation. |
+
+Modes resolve per asset via `glorfindel-config.yaml` (fnmatch pattern matching). Run `non_disruptive` on test VMs, `human_only` on production assets, in the same `watch` session.
+
+> **First demo tip** — to see autonomous containment in action, start with:
+> ```bash
+> glorfindel watch runs/ --mode non_disruptive
+> ```
+> The default `human_only` is the right setting for production assets — it generates detection + recommendations without acting. Switch per-asset once you've seen a few cycles and trust the reasoning.
+
+### Observe-only mode
+
+Run with read-only credentials — detect threats and generate recommendations, never call write APIs.
+
+```bash
+export GLORFINDEL_READ_ONLY=1   # Azure Reader + Log Analytics Reader SP
+glorfindel watch runs/           # detects, investigates, recommends — never writes
+```
+
+The War Room and Discord bot still work — every escalation includes the recommended action and suggested forensic steps. Zero risk for a first evaluation: give a peer read-only access to your LAW and let them observe a week of Glorfindel decisions before granting Contributor.
+
 **How Glorfindel reasons** — it follows a validated reasoning chain from raw signal indicators, not a TTP→action lookup table. The system prompt contains production-verified examples of correct reasoning:
 
 ```
@@ -491,7 +520,7 @@ glorfindel audit --all   # NSG / backup vault / compute — surfaces IAM gaps wi
 ```bash
 pip install eregion[dev]
 pytest
-# 234 tests — 0 Azure calls, 0 LLM calls
+# 275 tests — 0 Azure calls, 0 LLM calls
 ```
 
 Coverage: 7 LangGraph nodes (incl. propose_detection_rule), routing rules, signal schema, safety guard, YAML parser, ChromaDB memory, CLI escalation flow, detection rules (RulePoller + auto-apply + eviction), proposed rules lifecycle, audit readiness checks, GlorfindelConfig + ExceptionConfig, AssetRegistry + DiscoveryService (replace-on-refresh, self-evicting threads), PostureChecker (dedup, re-escalation).

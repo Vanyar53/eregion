@@ -800,10 +800,14 @@ def execute_action(
             or "AuthorizationFailed" in str(e)
         )
         out_status = "write_blocked" if is_auth else "action_failed"
+        # Azure HttpResponseError.__str__ repeats the message (summary line + a
+        # "Message:" section) — take only the first line for the escalation reason so
+        # the War Room modal doesn't show the same text twice. Full text → outcome.error.
+        err_summary = str(e).splitlines()[0].strip() if str(e) else str(e)
         return {
             **state,
             "escalate": True,
-            "escalation_reason": f"Action '{action}' {'bloquée' if is_auth else 'échouée'} — {e}",
+            "escalation_reason": f"Action '{action}' {'bloquée' if is_auth else 'échouée'} — {err_summary}",
             "mode_hold": False,
             "outcome": {
                 "status": out_status,

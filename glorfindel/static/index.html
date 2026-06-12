@@ -1382,8 +1382,7 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
   // can act (non_disruptive), blue = observe (human_only) — so exceptions pop out.
   const modeDeviates = autonomyMode !== globalDefault;
   const modeIsAct    = autonomyMode === 'non_disruptive';
-  // No icon on cards (icon is header-only) — text + posture colour carry it here.
-  const modeTxt      = modeIsAct ? 'NON-DISRUPTIVE' : 'HUMAN-ONLY';
+  const modeTxt      = `${modeIsAct ? '⚡' : '👁'} ${modeIsAct ? 'NON-DISRUPTIVE' : 'HUMAN-ONLY'}`;
   const _defLabel    = globalDefault === 'non_disruptive' ? 'non-disruptive' : 'human-only';
   const _modeBadgeBase = 'font-size:8px;font-weight:700;padding:1px 5px;border-radius:3px;letter-spacing:.5px;flex-shrink:0';
   const modeBadge = !modeDeviates

@@ -40,7 +40,8 @@ ANNATAR_VOLS := \
 
 GLORFINDEL_VOLS := \
 	-v $(PWD)/runs:/app/runs \
-	-v $(PWD)/glorfindel/rules:/app/glorfindel/rules
+	-v $(PWD)/glorfindel/rules:/app/glorfindel/rules \
+	$(if $(wildcard $(PWD)/glorfindel-config.yaml),-v $(PWD)/glorfindel-config.yaml:/app/glorfindel-config.yaml,)
 
 DOCKER_ANNATAR := docker run --rm $(ANNATAR_AZURE_ENV) $(ANNATAR_VOLS) $(IMAGE_ANNATAR)
 GLORFINDEL_ENV := \

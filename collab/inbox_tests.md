@@ -24,7 +24,7 @@ Plus aucune redondance, et le point carte gagne du sens. Si tu tenais à retirer
 
 **Hors scope (noté)** : le « bonus cohérence » (observe-only + asset non_disruptive = contradiction) n'est pas matérialisé — c'est déjà couvert par le `write_blocked` réactif. À rouvrir si tu veux un signal préventif.
 
-À valider visuellement sur un run. Header chargé mais groupé (identité → posture → moteur/live → spacer → contrôles).
+**Placement (maj Jonathan)** : panneau posture déplacé du header titre vers le **bandeau INFRASTRUCTURE** (à droite, `margin-left:auto`) — là où l'admin/auditeur scanne le plus. Reste visible en mode CONFIGURATION aussi. Le header titre redevient sobre (identité → moteur/live).
 
 ---
 

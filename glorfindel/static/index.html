@@ -498,15 +498,6 @@
 <header>
   <span class="logo">GLORFINDEL</span>
   <span class="subtitle">War Room</span>
-
-  <!-- Posture panel — two orthogonal axes: credentials regime + autonomy default -->
-  <span id="posture-panel" style="display:inline-flex;align-items:center;gap:9px;margin-left:10px;padding:3px 10px;border-radius:5px;border:1px solid var(--border);background:var(--bg2)" title="Security posture — what Glorfindel can do right now">
-    <span id="regime-badge" style="font-size:10px;font-weight:700;letter-spacing:.5px;color:var(--dim)">…</span>
-    <span style="color:var(--border)">·</span>
-    <span id="autonomy-default" style="font-size:10px"></span>
-  </span>
-
-  <span style="color:var(--border);margin:0 6px">│</span>
   <span id="watch-dot" style="font-size:10px;color:var(--dim)">●</span>
   <span id="watch-label" style="color:var(--dim);font-size:11px">watch…</span>
   <span style="color:var(--border);margin:0 4px">│</span>
@@ -533,7 +524,15 @@
 
   <!-- Infrastructure / Config RIGHT -->
   <div id="incidents-col">
-    <div class="col-header" id="right-col-header">INFRASTRUCTURE</div>
+    <div class="col-header" id="right-col-header" style="display:flex;align-items:center;gap:12px">
+      <span id="right-col-label">INFRASTRUCTURE</span>
+      <!-- Posture panel — anchored to the infra view (what Glorfindel can do TO it) -->
+      <span id="posture-panel" style="margin-left:auto;display:inline-flex;align-items:center;gap:9px;padding:3px 10px;border-radius:5px;border:1px solid var(--border);background:var(--bg2);letter-spacing:normal" title="Security posture — what Glorfindel can do to this infrastructure">
+        <span id="regime-badge" style="font-size:10px;font-weight:700;letter-spacing:.5px;color:var(--dim)">…</span>
+        <span style="color:var(--border)">·</span>
+        <span id="autonomy-default" style="font-size:10px"></span>
+      </span>
+    </div>
     <div id="incidents-list">
       <div class="empty-state">
         <div class="check">✓</div>
@@ -2032,7 +2031,7 @@ function toggleConfig() {
   document.getElementById('incidents-list').style.display = _configMode ? 'none' : '';
   const cfgPanel = document.getElementById('config-panel');
   cfgPanel.style.display = _configMode ? 'flex' : 'none';
-  document.getElementById('right-col-header').textContent = _configMode ? 'CONFIGURATION' : 'INFRASTRUCTURE';
+  document.getElementById('right-col-label').textContent = _configMode ? 'CONFIGURATION' : 'INFRASTRUCTURE';
   if (_configMode) refreshConfig();
 }
 

@@ -6,6 +6,76 @@ Messages en attente pour la session UI/UX War Room.
 
 ## Non traités
 
+### [Tests → War Room] Lot UX « posture » — grisage read-only + indicateurs + régime/autonomie — 2026-06-12
+
+**Date** : 2026-06-12 — **Traité** : 2026-06-12 (les 4 axes) — retours Jonathan post-validation observe-only. Le fil rouge : l'UI ne communique pas clairement la **posture** de Glorfindel (peut-il agir ? agit-il seul ?) et disperse des indicateurs redondants. 4 axes, le #1 est décidé, les #2–4 sont des propositions à challenger.
+
+---
+
+**#1 — Griser les boutons d'action write en read-only (DÉCIDÉ — implémenter).**
+
+Contexte : sous `read_only` (déjà exposé par `/api/state`, c'est ce qui allume OBSERVE-ONLY + `_guardReadOnly()`), cliquer une action write → toast d'erreur (réactif). On veut du **préventif**.
+
+- **Griser (disabled + tooltip)** les boutons qui font un **write Azure** : `Approve & execute`, `Snapshot`, `Release`, `Reset`, `Restore`, `Unblock`. Tooltip : « Read-only credentials (observe-only) — write actions disabled ».
+- **Garder ACTIFS** : `Ack` (purement local, `escalations.jsonl`, aucun appel Azure — le pair observe-only doit pouvoir clore ce qu'il a lu, sinon `pending` gonfle à l'infini) et `Cmd` (affiche juste la commande CLI).
+- **Ne PAS cacher** les boutons : en observe-only, voir « Isolate VM (88%) recommandée » + le bouton grisé EST la proposition de valeur (montrer ce que Glorfindel aurait fait). Cacher = retirer l'info.
+- Base de décision = `read_only` de `/api/state` (le flag déclaré). Le cas « Reader sans flag » (Test 2) reste géré par le `write_blocked` réactif — complémentaire, pas redondant.
+
+---
+
+**#2 — Indicateurs verts redondants (proposition).**
+
+Plusieurs points verts répondent à la **même question** « le système tourne ? » : `watch active` (header), `live` (header), et le point de la carte GLORFINDEL. Règle : un indicateur = une question distincte. Il y a 3 questions réelles :
+- moteur en marche ? (watch heartbeat frais)
+- vue à jour ? (WS connecté = `live`)
+- backends sains ? (DETECT/PROTECT/RECOVER)
+
+Proposition : `watch active` et le point GLORFINDEL font doublon → en garder **un** comme santé moteur (le point de la carte GLORFINDEL devient l'**agrégat** des 3 modules : vert si tout ok, ambre si un dégradé). `live` reste (fraîcheur UI, info distincte). Les points par backend gardent leur valeur.
+
+---
+
+**#3 — Régime observe/active asymétrique et terne (proposition — le plus important).**
+
+Aujourd'hui on matérialise observe-only (faiblement), mais le mode **actif (read-write) n'est pas matérialisé du tout** → l'absence de badge = actif. L'info la plus critique de l'UI (Glorfindel peut-il toucher mon infra ?) est implicite dans un de ses deux états. Dangereux.
+
+Proposition : **indicateur de régime permanent**, toujours présent, qui bascule explicitement avec couleur + icône + label :
+- **👁 OBSERVE-ONLY** — couleur calme (cyan/bleu) — « observation, aucune action »
+- **⚡ ACTIVE** — couleur capacité d'agir (ambre/vert vif) — « Glorfindel peut exécuter »
+
+Placement proéminent près du titre (statut de sécurité = position d'autorité), pas en bout de ligne. La symétrie tue le piège « pas de badge = j'oublie que je suis en actif ».
+
+---
+
+**#4 — Mode d'autonomie : remonter le défaut global + exergue par déviation (proposition).**
+
+Le défaut global est enterré dans Config alors que c'est le mode que prendra **tout nouvel asset découvert**. → Le remonter dans le header, à côté du régime #3 (les deux forment un « panneau de posture »).
+
+Cartes VM : garder le mode par carte, mais **mettre en exergue uniquement ce qui dévie du défaut** (évite le sapin de Noël) :
+- VM au défaut global → badge discret
+- VM avec override per-asset → badge marqué + couleur selon l'escalier de confiance (human_only calme → non_disruptive ambre)
+
+L'opérateur scanne et repère immédiatement les exceptions.
+
+---
+
+**Vue d'ensemble — 2 axes orthogonaux à exposer ensemble dans le header :**
+
+| Axe | Question | États |
+|---|---|---|
+| Régime credentials (#3) | peut-il toucher Azure ? | observe-only ↔ active |
+| Mode d'autonomie (#4) | agit-il seul ? | human_only ↔ non_disruptive |
+
+```
+GLORFINDEL · War Room    👁 OBSERVE-ONLY  ·  default: human_only        ● live    [Run ▾][▶][⚙]  20:05
+                         └─ régime (couleur) ─┘   └─ autonomie ─┘
+```
+
+**Bonus cohérence (raffinement, hors scope immédiat)** : observe-only **+** un asset en non_disruptive = contradiction (le mode dit « agis », les creds disent « tu ne peux pas » → c'est le `write_blocked`). L'UI pourrait le signaler discrètement.
+
+**Priorités** : #1 décidé (à faire). #3 = le plus de valeur (sécurité/lisibilité). #2 et #4 = qualité de vie. À toi de challenger les propositions #2–4, c'est ton périmètre.
+
+---
+
 ### [Tests → War Room] Feed — dédupliquer les events d'escalade identiques — 2026-06-12
 
 **Date** : 2026-06-12 — **Traité** : 2026-06-12 — observé au Test 2 (run ~19:11 UTC)

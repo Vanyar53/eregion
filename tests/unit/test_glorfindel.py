@@ -135,6 +135,41 @@ def test_read_only_does_not_block_dry_run():
     assert connector.isolate_vm(_RID)["status"] == "dry_run"
 
 
+def test_isolate_vm_no_orphan_state_file_when_azure_fails(tmp_path, monkeypatch):
+    """isolate_vm must NOT write the isolation state file if the NSG write fails.
+
+    Pre-fix, the state file was written before the deny-all rules → a 403 left an
+    orphan ~/.glorfindel/isolation/<vm>.json (War Room showing ISOLATED) with no rule.
+    """
+    import glorfindel.actions as actions
+    from glorfindel.actions import AzureConnector, _load_isolation_state
+
+    monkeypatch.setattr(actions, "_ISOLATION_STATE_DIR", tmp_path / "isolation")
+
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    monkeypatch.setattr(connector, "_get_primary_nic_id", lambda rg, vm: "nic-id")
+    monkeypatch.setattr(connector, "_get_nic_nsg", lambda nic: ("rg", "nsg"))
+
+    net = MagicMock()
+    net.security_rules.list.return_value = []          # no conflicting rules to bump
+    net.security_rules.begin_create_or_update.side_effect = _azure_403()  # deny-all write fails
+    connector._network = net
+
+    with pytest.raises(Exception):
+        connector.isolate_vm(_RID)
+
+    # No orphan state file — the VM is not actually isolated
+    assert _load_isolation_state("vm") is None
+
+
+def _azure_403():
+    from azure.core.exceptions import HttpResponseError
+    e = HttpResponseError(message="(AuthorizationFailed) no write permission")
+    e.status_code = 403
+    return e
+
+
 def test_audit_reports_read_only_credentials():
     """audit.run prepends a warn check explaining the observe-only posture."""
     from glorfindel import audit

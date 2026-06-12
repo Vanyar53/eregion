@@ -241,6 +241,53 @@ glorfindel watch runs/           # detects, investigates, recommends — never w
 
 The War Room and Discord bot still work — every escalation includes the recommended action and suggested forensic steps. Zero risk for a first evaluation: give a peer read-only access to your LAW and let them observe a week of Glorfindel decisions before granting Contributor.
 
+#### Quickstart — evaluate on your own subscription (observe / eval)
+
+The safest on-ramp: a peer grants Glorfindel **read-only** access to their existing Log Analytics Workspace and watches a week of recommendations before anything can touch their infra. The pitch is simple — *"see what I'd have done on your real signals; I can't touch anything."*
+
+**1. Create a Reader-only service principal** (no write permission anywhere):
+
+```bash
+az ad sp create-for-rbac --name "glorfindel-eval" --role Reader \
+    --scopes /subscriptions/<SUBSCRIPTION_ID>
+# Grant log read access on the workspace (or its resource group):
+az role assignment create --assignee <appId> \
+    --role "Log Analytics Reader" --scope /subscriptions/<SUBSCRIPTION_ID>
+```
+
+**2. Wire it through the Glorfindel-specific credentials** (keeps Annatar's creds untouched — see [`.envrc.example`](.envrc.example)):
+
+```bash
+export GLORFINDEL_AZURE_CLIENT_ID=<eval-sp-app-id>
+export GLORFINDEL_AZURE_CLIENT_SECRET=<eval-sp-secret>
+# Tenant + subscription are shared (same tenant), no prefixed vars needed:
+export AZURE_TENANT_ID=<tenant-id>
+export AZURE_SUBSCRIPTION_ID=<subscription-id>
+export AZURE_WORKSPACE_ID=<law-customer-id>   # az monitor log-analytics workspace show ... --query customerId
+```
+
+For `docker compose` (Glorfindel-only), `AZURE_CLIENT_*` *is* the Glorfindel SP — point it at the Reader app:
+
+```bash
+export AZURE_CLIENT_ID=$GLORFINDEL_AZURE_CLIENT_ID
+export AZURE_CLIENT_SECRET=$GLORFINDEL_AZURE_CLIENT_SECRET
+```
+
+**3. Run observe-only with the conservative default** (`human_only` — nothing executes):
+
+```bash
+export GLORFINDEL_READ_ONLY=1
+glorfindel watch runs/ --rules glorfindel/rules/azure/detection_rules.yaml
+```
+
+`GLORFINDEL_READ_ONLY=1` guarantees no write API is ever called; the `human_only` default holds every recommended action *before* the connector is even touched (so you see `mode_hold` escalations, never permission errors).
+
+**4. Read the recommendations** — nothing runs autonomously, so the value is in what Glorfindel *would* have done:
+- **War Room** (`glorfindel war-room` → http://localhost:7007) — live cards per VM, `OBSERVE-ONLY` badge in the header, each escalation shows the held action + confidence + forensic next steps.
+- **`glorfindel pending`** — same escalations on the CLI.
+
+> ⚠ **For the first observe run, disable `data-exfiltration-blob`.** It fires on `PutBlobCount >= 1` from any RFC-1918 source — fine in the sandbox, too noisy on a real workload where VMs write to blob continuously. Set `enabled: false` on that rule in [`detection_rules.yaml`](glorfindel/rules/azure/detection_rules.yaml) until the allowlist hardening lands. The other rules (ransomware disk-write, SSH brute force, sudo escalation, account creation) are safe to leave on.
+
 **How Glorfindel reasons** — it follows a validated reasoning chain from raw signal indicators, not a TTP→action lookup table. The system prompt contains production-verified examples of correct reasoning:
 
 ```

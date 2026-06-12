@@ -527,9 +527,10 @@
     <div class="col-header" id="right-col-header" style="display:flex;align-items:center;gap:12px">
       <span id="right-col-label">INFRASTRUCTURE</span>
       <!-- Posture panel — anchored to the infra view (what Glorfindel can do TO it) -->
-      <span id="posture-panel" style="margin-left:auto;display:inline-flex;align-items:center;gap:9px;padding:3px 10px;border-radius:5px;border:1px solid var(--border);background:var(--bg2);letter-spacing:normal" title="Security posture — what Glorfindel can do to this infrastructure">
+      <span id="posture-panel" style="margin-left:auto;display:inline-flex;align-items:center;gap:7px;padding:3px 10px;border-radius:5px;border:1px solid var(--border);background:var(--bg2);letter-spacing:normal" title="Security posture — what Glorfindel can do to this infrastructure">
+        <span style="font-size:10px;color:var(--dim)">mode</span>
         <span id="regime-badge" style="font-size:10px;font-weight:700;letter-spacing:.5px;color:var(--dim)">…</span>
-        <span style="color:var(--border)">·</span>
+        <span style="color:var(--border);margin:0 2px">·</span>
         <span id="autonomy-default" style="font-size:10px"></span>
       </span>
     </div>
@@ -1381,7 +1382,8 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
   // can act (non_disruptive), blue = observe (human_only) — so exceptions pop out.
   const modeDeviates = autonomyMode !== globalDefault;
   const modeIsAct    = autonomyMode === 'non_disruptive';
-  const modeTxt      = `${modeIsAct ? '⚡' : '👁'} ${modeIsAct ? 'NON-DISRUPTIVE' : 'HUMAN-ONLY'}`;
+  // No icon on cards (icon is header-only) — text + posture colour carry it here.
+  const modeTxt      = modeIsAct ? 'NON-DISRUPTIVE' : 'HUMAN-ONLY';
   const _defLabel    = globalDefault === 'non_disruptive' ? 'non-disruptive' : 'human-only';
   const _modeBadgeBase = 'font-size:8px;font-weight:700;padding:1px 5px;border-radius:3px;letter-spacing:.5px;flex-shrink:0';
   const modeBadge = !modeDeviates
@@ -1952,9 +1954,10 @@ function _updatePosture() {
   const ad = document.getElementById('autonomy-default');
   if (ad) {
     const act = def === 'non_disruptive';
-    ad.innerHTML = `<span style="color:var(--dim)">default</span> `
-      + `<span style="color:${act ? 'var(--orange)' : 'var(--dim)'};font-weight:600">`
-      + `${act ? 'non-disruptive' : 'human-only'}</span>`;
+    // Header-only icon: ⚡ = can act, 👁 = observe — same vocabulary as the regime badge.
+    ad.innerHTML = `<span style="color:var(--dim)">autonomy</span> `
+      + `<span style="color:${act ? 'var(--orange)' : 'var(--blue)'};font-weight:600">`
+      + `${act ? '⚡' : '👁'} ${act ? 'non-disruptive' : 'human-only'}</span>`;
     ad.title = act
       ? 'New discovered assets act autonomously (non-disruptive actions)'
       : 'New discovered assets recommend only — every action escalated';

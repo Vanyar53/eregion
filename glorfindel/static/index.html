@@ -587,6 +587,8 @@ const ESC_LABELS = {
   verification_failed: 'verification failed',
   proposed_rule:       'proposed rule',
   mode_hold:           'mode human-only',
+  write_blocked:       'write blocked',
+  action_failed:       'action failed',
   ttl_exceeded:        'TTL exceeded',
 };
 
@@ -796,10 +798,14 @@ function _renderEscGroup(group) {
   const e     = group[0]; // most recent / representative
   const isSnapshotPending = e.action === 'snapshot' && e.escalation_type === 'low_confidence';
   const isModeHold        = e.escalation_type === 'mode_hold';
+  const isWriteBlocked    = e.escalation_type === 'write_blocked';
+  const isActionFailed    = e.escalation_type === 'action_failed';
   const pct    = e.confidence ? Math.round(e.confidence * 100) + '%' : '';
   const label  = isModeHold
     ? `${actionLabelVerb(e.action)}${pct ? ` (${pct})` : ''} — pending approval`
-    : isSnapshotPending ? 'Snapshot recommended'
+    : isSnapshotPending  ? 'Snapshot recommended'
+    : isWriteBlocked     ? `${actionLabelVerb(e.action) || e.action || '?'} — write blocked`
+    : isActionFailed     ? `${actionLabelVerb(e.action) || e.action || '?'} — failed`
     : (actionLabel(e.action) || escLabel(e.escalation_type) || e.escalation_type || '?');
   const count = group.length;
   const ids   = group.map(g => g.id).join(','); // CSV — safe in onclick attrs, no quotes
@@ -830,8 +836,8 @@ function _renderEscGroup(group) {
        <button class="action" onclick="event.stopPropagation();openCommandModal('${e.id}')" style="font-size:9px;padding:2px 7px">📋 Cmd</button>`
     : `<button class="action" onclick="event.stopPropagation();doAckAll('${ids}')" style="font-size:9px;padding:2px 7px">✓ Ack</button>
        <button class="action" onclick="event.stopPropagation();openCommandModal('${e.id}')" style="font-size:9px;padding:2px 7px">📋 Cmd</button>`;
-  // mode_hold: pct already in title, mode already in card header badge — keep ctx lean
-  const ctxParts = isModeHold
+  // mode_hold/write_blocked/action_failed: type already encoded in title, keep ctx lean
+  const ctxParts = (isModeHold || isWriteBlocked || isActionFailed)
     ? [e.ttp, e.severity].filter(Boolean).join(' · ')
     : [e.ttp, pct, e.severity, escLabel(e.escalation_type)].filter(Boolean).join(' · ');
   return `<div class="esc-item section-group s-escalation" style="margin-top:5px" onclick="showEscModal('${vmName}')">
@@ -1796,12 +1802,37 @@ async function setDefaultMode(mode) {
 
 // ── Feed ───────────────────────────────────────────────────────────────────────
 
+// Dedup escalate feed entries with same action+vm within 5s — same underlying event
+const _feedDedup = new Map(); // key → {el, count, ts}
+const _FEED_DEDUP_MS = 5000;
+
 function appendFeedEntry(entry) {
   const list = document.getElementById('feed-list');
   const el = document.createElement('div');
   el.className = 'feed-entry';
 
   const ts = fmtTime(entry.timestamp);
+
+  if (entry.escalate) {
+    const key = `${entry.action}|${entry.vm || ''}`;
+    const now = Date.now();
+    const hit = _feedDedup.get(key);
+    if (hit && (now - hit.ts) < _FEED_DEDUP_MS) {
+      hit.count++;
+      hit.ts = now;
+      const pctEl = hit.el.querySelector('.feed-pct');
+      if (pctEl) {
+        const pct = entry.confidence ? Math.round(entry.confidence * 100) + '%' : '';
+        pctEl.textContent = pct ? `${pct} ×${hit.count}` : `×${hit.count}`;
+      }
+      return; // suppress duplicate row
+    }
+    _feedDedup.set(key, { el, count: 1, ts: now });
+    // prune stale keys
+    for (const [k, v] of _feedDedup) {
+      if (now - v.ts > _FEED_DEDUP_MS * 4) _feedDedup.delete(k);
+    }
+  }
 
   if (entry.type === 'signal') {
     const cls = 'ev-' + entry.event;
@@ -2057,14 +2088,18 @@ function showEscModal(vmName) {
     const count = group.length;
     const isModeHold        = e.escalation_type === 'mode_hold';
     const isSnapshotPending = e.action === 'snapshot' && e.escalation_type === 'low_confidence';
+    const isWriteBlocked    = e.escalation_type === 'write_blocked';
+    const isActionFailed    = e.escalation_type === 'action_failed';
     const isRule            = e.action === 'improve_detection' && e.proposal_id;
     const pct2  = e.confidence ? Math.round(e.confidence * 100) + '%' : '';
     const label = isModeHold
       ? `${actionLabelVerb(e.action)}${pct2 ? ` (${pct2})` : ''} — pending approval`
       : isSnapshotPending ? 'Snapshot recommended'
+      : isWriteBlocked    ? `${actionLabelVerb(e.action) || e.action || '?'} — write blocked`
+      : isActionFailed    ? `${actionLabelVerb(e.action) || e.action || '?'} — failed`
       : (actionLabel(e.action) || escLabel(e.escalation_type) || e.escalation_type || '?');
-    // mode_hold: pct already in title, mode already in card header badge — keep ctx lean
-    const ctx   = isModeHold
+    // type already encoded in title for these — keep ctx lean
+    const ctx   = (isModeHold || isWriteBlocked || isActionFailed)
       ? [e.ttp, e.severity].filter(Boolean).join(' · ')
       : [e.ttp, e.severity, escLabel(e.escalation_type)].filter(Boolean).join(' · ');
     const steps = (e.suggested_steps || [])

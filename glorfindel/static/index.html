@@ -498,12 +498,20 @@
 <header>
   <span class="logo">GLORFINDEL</span>
   <span class="subtitle">War Room</span>
+
+  <!-- Posture panel — two orthogonal axes: credentials regime + autonomy default -->
+  <span id="posture-panel" style="display:inline-flex;align-items:center;gap:9px;margin-left:10px;padding:3px 10px;border-radius:5px;border:1px solid var(--border);background:var(--bg2)" title="Security posture — what Glorfindel can do right now">
+    <span id="regime-badge" style="font-size:10px;font-weight:700;letter-spacing:.5px;color:var(--dim)">…</span>
+    <span style="color:var(--border)">·</span>
+    <span id="autonomy-default" style="font-size:10px"></span>
+  </span>
+
+  <span style="color:var(--border);margin:0 6px">│</span>
   <span id="watch-dot" style="font-size:10px;color:var(--dim)">●</span>
   <span id="watch-label" style="color:var(--dim);font-size:11px">watch…</span>
   <span style="color:var(--border);margin:0 4px">│</span>
   <span id="live-dot">●</span>
   <span id="live-label" style="color:var(--dim);font-size:11px">connecting…</span>
-  <span id="read-only-badge" style="display:none;font-size:9px;font-weight:700;padding:2px 8px;border-radius:4px;background:color-mix(in srgb,var(--dim) 18%,transparent);color:var(--dim);border:1px solid var(--border);letter-spacing:1px;margin-left:6px">OBSERVE-ONLY</span>
 
   <div class="spacer"></div>
 
@@ -1059,6 +1067,7 @@ function renderInfra() {
     </div>`;
 
   requestAnimationFrame(_drawTopologyEdges);
+  _applyReadOnlyGuards(list);
 }
 
 function renderIncidents() { renderInfra(); }
@@ -1067,10 +1076,25 @@ function renderIncidents() { renderInfra(); }
 
 function _renderAgentNode(rules, detectBackends, recoverBackends, discovered) {
   const moduleCount = detectBackends.length + recoverBackends.length + 1;
-  const hasErr      = rules.some(r => r.last_error);
-  const dot         = hasErr
-    ? `<span style="color:var(--red)" title="rule error">●</span>`
-    : `<span style="color:var(--green)" title="polling">●</span>`;
+  // Parent node summarises its children: aggregate health of DETECT (rule polling)
+  // and RECOVER (backup audit). Distinct from the header's `watch active` (engine
+  // heartbeat) and `live` (UI freshness) — three different questions, no redundancy.
+  const ruleErr      = rules.some(r => r.last_error);
+  const rulesPolling = rules.length && rules.every(r => r.last_poll && !r.last_error);
+  const auditChecks  = (_auditData?.audits || []).flatMap(a =>
+    (a.checks || []).filter(c => c.action === 'restore_from_backup'));
+  const auditErr  = !!_auditData?.error || auditChecks.some(c => c.status === 'fail');
+  const auditWarn = auditChecks.some(c => c.status === 'warn');
+  const health = (ruleErr || auditErr)                    ? 'err'
+               : (auditWarn || (rules.length && !rulesPolling)) ? 'warn'
+               : (rules.length || auditChecks.length)     ? 'ok'
+               :                                            'idle';
+  const [dotColor, dotTitle] =
+      health === 'err'  ? ['var(--red)',    'A module is in error']
+    : health === 'warn' ? ['var(--orange)', 'A module is degraded']
+    : health === 'ok'   ? ['var(--green)',  'All modules healthy']
+    :                     ['var(--dim)',    'Awaiting data'];
+  const dot = `<span style="color:${dotColor}" title="${dotTitle}">●</span>`;
 
   return `<div class="node-agent" id="node-agent">
     <div class="node-agent-header">
@@ -1351,10 +1375,14 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
 
   const isClean = !isIsolated && !isBlocked && !restoreInfo && !myEscs.length;
 
-  const autonomyMode = (_state?.autonomy_modes || {})[vm_name] || _state?.autonomy_default || 'human_only';
-  const modeBadge = autonomyMode === 'non_disruptive'
-    ? `<span style="font-size:8px;font-weight:700;padding:1px 5px;border-radius:3px;background:color-mix(in srgb,var(--blue) 15%,transparent);color:var(--blue);border:1px solid color-mix(in srgb,var(--blue) 30%,transparent);letter-spacing:.5px;flex-shrink:0">NON-DISRUPTIVE</span>`
-    : `<span style="font-size:8px;font-weight:700;padding:1px 5px;border-radius:3px;background:color-mix(in srgb,var(--dim) 12%,transparent);color:var(--dim);border:1px solid var(--border);letter-spacing:.5px;flex-shrink:0">HUMAN-ONLY</span>`;
+  const globalDefault = _state?.autonomy_default || 'human_only';
+  const autonomyMode  = (_state?.autonomy_modes || {})[vm_name] || globalDefault;
+  // Only surface the badge when the asset DEVIATES from the global default (header carries
+  // the default). Colour follows the posture language: orange = can act, blue = observe-only.
+  const modeDeviates = autonomyMode !== globalDefault;
+  const modeBadge = !modeDeviates ? '' : (autonomyMode === 'non_disruptive'
+    ? `<span title="Override — autonomous (non-disruptive)" style="font-size:8px;font-weight:700;padding:1px 5px;border-radius:3px;background:color-mix(in srgb,var(--orange) 16%,transparent);color:var(--orange);border:1px solid color-mix(in srgb,var(--orange) 35%,transparent);letter-spacing:.5px;flex-shrink:0">⚡ NON-DISRUPTIVE</span>`
+    : `<span title="Override — recommend only" style="font-size:8px;font-weight:700;padding:1px 5px;border-radius:3px;background:color-mix(in srgb,var(--blue) 14%,transparent);color:var(--blue);border:1px solid color-mix(in srgb,var(--blue) 30%,transparent);letter-spacing:.5px;flex-shrink:0">👁 HUMAN-ONLY</span>`);
 
   const modeSelector = isClean && isExpanded
     ? `<div style="display:flex;align-items:center;gap:6px;margin-top:6px">
@@ -1758,6 +1786,23 @@ function _guardReadOnly() {
   return false;
 }
 
+// Preventive read-only guard: disable every button that triggers an Azure write,
+// detected by its onclick handler. Ack / Cmd / Approve-rule stay active (local only).
+const _WRITE_HANDLERS = [
+  'doApproveAction', 'confirmRestore', 'doSnapshot',
+  'confirmRelease', 'confirmUnblock', 'confirmReset',
+];
+function _applyReadOnlyGuards(root) {
+  if (!_state?.read_only) return;
+  (root || document).querySelectorAll('button').forEach(b => {
+    const oc = b.getAttribute('onclick') || '';
+    if (_WRITE_HANDLERS.some(h => oc.includes(h))) {
+      b.disabled = true;
+      b.title = 'Read-only credentials (observe-only) — write actions disabled';
+    }
+  });
+}
+
 async function doApproveAction(escId, vmName) {
   if (_guardReadOnly()) return;
   toast('▶ Approving…');
@@ -1878,15 +1923,35 @@ async function refreshState() {
   try {
     const r = await fetch('/api/state');
     _state = await r.json();
-    _updateReadOnlyBadge();
+    _updatePosture();
     renderInfra();
     await refreshActionsData();  // parallel fetch, re-renders when ready
   } catch (e) {}
 }
 
-function _updateReadOnlyBadge() {
-  const badge = document.getElementById('read-only-badge');
-  if (badge) badge.style.display = _state?.read_only ? '' : 'none';
+// Posture panel — two orthogonal axes, always visible (symmetric: no "absence = active" trap).
+// Colour language shared with the VM cards: blue = observe/recommend, orange = can act.
+function _updatePosture() {
+  const ro = !!_state?.read_only;
+  const regime = document.getElementById('regime-badge');
+  if (regime) {
+    regime.textContent = ro ? '👁 OBSERVE-ONLY' : '⚡ ACTIVE';
+    regime.style.color = ro ? 'var(--blue)' : 'var(--orange)';
+    regime.title = ro
+      ? 'Read-only credentials — Glorfindel observes and recommends, executes nothing'
+      : 'Read-write credentials — Glorfindel can execute actions on Azure';
+  }
+  const def = _state?.autonomy_default === 'non_disruptive' ? 'non_disruptive' : 'human_only';
+  const ad = document.getElementById('autonomy-default');
+  if (ad) {
+    const act = def === 'non_disruptive';
+    ad.innerHTML = `<span style="color:var(--dim)">default</span> `
+      + `<span style="color:${act ? 'var(--orange)' : 'var(--dim)'};font-weight:600">`
+      + `${act ? 'non-disruptive' : 'human-only'}</span>`;
+    ad.title = act
+      ? 'New discovered assets act autonomously (non-disruptive actions)'
+      : 'New discovered assets recommend only — every action escalated';
+  }
 }
 
 setInterval(refreshState, 5000);
@@ -2147,6 +2212,7 @@ function showEscModal(vmName) {
   };
   document.querySelector('.modal').classList.add('wide');
   document.getElementById('modal').classList.add('open');
+  _applyReadOnlyGuards(bodyEl);
 }
 
 async function refreshConfig() {

@@ -6,7 +6,43 @@ Messages en attente pour la session UI/UX War Room.
 
 ## Non traités
 
+### [Jonathan → War Room] Surfacer la CAPACITÉ d'autonomie, pas juste le mode — TODO demain 2026-06-13
+
+**Date** : 2026-06-12 (noté pour demain)
+
+**Constat** : le badge/tooltip dit *qu'*il agit seul (`non_disruptive`) mais pas *ce qu'*il a le droit de faire seul. Le tooltip actuel (« New discovered assets act autonomously ») ne lève pas la vraie question de confiance de l'opérateur : « si je mets non-disruptive, qu'est-ce que Glorfindel exécute SANS me demander ? ».
+
+**Modèle de capacité réel (3 tiers)** :
+1. **Autonome** (s'exécute sans demander, en `non_disruptive`) — TOUS réversibles : `isolate_vm`, `block_suspicious_ip`, `snapshot`, `release_isolation`, `revoke_temp_access`.
+2. **Toujours gaté** (escalade quel que soit le mode) — irréversibles : `restore_from_backup`, `delete_resource`, `wipe_storage`, `modify_network_rule`, `escalate_permissions`.
+3. **Gate de confiance** : toute action autonome avec `confidence < 0.7` (GLORFINDEL_CONFIDENCE_THRESHOLD) → escaladée quand même.
+
+Le mode ne change QUE le tier 1 : `human_only` → tier 1 aussi escaladé (rien ne s'exécute) ; `non_disruptive` → tier 1 s'exécute (sous gate confiance) ; tier 2 toujours gaté. `allow_destructive` (config) = axe séparé, vide par défaut.
+
+**Proposition UI** : rendre le badge autonomie **cliquable** → petit popover « capacité » contextuel au mode résolu :
+```
+NON-DISRUPTIVE — agit seul
+✅ Sans demander (réversible) : isolate · block IP · snapshot · release · revoke
+🔒 Demande toujours (irréversible) : restore · delete · wipe · modify NSG
+⚠ + confiance < 70 % → escalade quand même
+```
+```
+HUMAN-ONLY — recommande seulement
+👁 N'exécute rien — toute action escaladée (même réversible)
+```
+- Popover du badge **header** = capacité du défaut global ; popover du badge **carte** = capacité résolue de CETTE VM (override + allow_destructive pris en compte).
+
+**Dépendance backend** (à faire avant le front) : exposer la matrice dans `/api/config` (ou `/api/state`) — `autonomous_actions`, `gated_actions` (HUMAN_APPROVAL_REQUIRED), `allow_destructive`, `confidence_threshold`. Les listes vivent dans `agent.py`/`actions.py` ; `api.py` (périmètre War Room) peut les importer. Coordination Glorfindel si les constantes bougent.
+
+**Pourquoi ça compte** : c'est la décision de confiance centrale du produit (« jusqu'où je le laisse agir »). Aujourd'hui l'opérateur doit lire le code ou `glorfindel-config.yaml.example` pour savoir. À surfacer dans l'UI.
+
+---
+
 ### [Tests → War Room] Lot UX « posture » — grisage read-only + indicateurs + régime/autonomie — 2026-06-12
+
+**Réponse Tests 2026-06-12** : les 4 axes validés visuellement sur run live OBSERVE-ONLY. **#2 — ta déviation est acceptée, tu as raison** : ma prémisse « watch active = doublon du point GLORFINDEL » était fausse. Une fois le point GLORFINDEL = agrégat de santé des 3 modules, `watch active` (moteur tourne) et la santé backends sont deux questions distinctes (le moteur peut processer pendant qu'un backend est en erreur). Ta résolution est supérieure à ma proposition — `watch active` reste, je ne demande pas son retrait. **2 angles non couverts par ce run read-only, à confirmer au prochain run ACTIVE** (non bloquant) : (1) régime bascule en ⚡ ACTIVE ambre sans le flag ; (2) boutons write non grisés en active (`_applyReadOnlyGuards` ne déborde pas). Rien d'autre à corriger.
+
+---
 
 **Date** : 2026-06-12 — **Traité** : 2026-06-12 (les 4 axes) — retours Jonathan post-validation observe-only. Le fil rouge : l'UI ne communique pas clairement la **posture** de Glorfindel (peut-il agir ? agit-il seul ?) et disperse des indicateurs redondants. 4 axes, le #1 est décidé, les #2–4 sont des propositions à challenger.
 

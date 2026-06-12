@@ -1095,6 +1095,60 @@ def test_graph_read_only_write_blocked_escalates_not_silent(tmp_path, monkeypatc
     assert (tmp_path / "runs" / "run001_debug.jsonl").exists()
 
 
+def _azure_error(status_code: int, message: str):
+    """Build a real azure HttpResponseError carrying a status_code, like the SDK raises."""
+    from azure.core.exceptions import HttpResponseError
+    e = HttpResponseError(message=message)
+    e.status_code = status_code
+    return e
+
+
+def test_graph_azure_403_escalates_write_blocked(tmp_path, monkeypatch, tmp_memory):
+    """non_disruptive + IAM gap: isolate_vm raises Azure 403 → write_blocked escalation,
+    cycle reaches store_cycle (not the silent abort of the pre-fix behaviour)."""
+    from glorfindel.config import AutonomyConfig
+    from glorfindel.agent import _build_graph
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "runs").mkdir(exist_ok=True)
+    connector = MagicMock()
+    connector.dry_run = False
+    connector.isolate_vm.side_effect = _azure_error(
+        403, "(AuthorizationFailed) does not have authorization to perform action "
+             "'Microsoft.Network/networkSecurityGroups/securityRules/write'")
+    graph = _build_graph(tmp_memory, connector, "claude-test",
+                         autonomy=AutonomyConfig(default="non_disruptive"))
+
+    with patch("litellm.completion") as mock_cls:
+        mock_cls.return_value = _mock_llm_response("isolate_vm")
+        final = graph.invoke(_initial("detection", raw={"detection_time_s": 50}))
+
+    assert final["outcome"]["status"] == "escalated"
+    assert final["outcome"]["escalation_type"] == "write_blocked"
+    assert tmp_memory.count() == 1
+    assert (tmp_path / "runs" / "run001_debug.jsonl").exists()
+
+
+def test_graph_azure_500_escalates_action_failed(tmp_path, monkeypatch, tmp_memory):
+    """A non-auth Azure failure during execution → action_failed escalation, still visible."""
+    from glorfindel.config import AutonomyConfig
+    from glorfindel.agent import _build_graph
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "runs").mkdir(exist_ok=True)
+    connector = MagicMock()
+    connector.dry_run = False
+    connector.isolate_vm.side_effect = _azure_error(500, "(InternalServerError) try again")
+    graph = _build_graph(tmp_memory, connector, "claude-test",
+                         autonomy=AutonomyConfig(default="non_disruptive"))
+
+    with patch("litellm.completion") as mock_cls:
+        mock_cls.return_value = _mock_llm_response("isolate_vm")
+        final = graph.invoke(_initial("detection", raw={"detection_time_s": 50}))
+
+    assert final["outcome"]["status"] == "escalated"
+    assert final["outcome"]["escalation_type"] == "action_failed"
+    assert tmp_memory.count() == 1
+
+
 def test_graph_human_only_destructive_stays_destructive_type(tmp_path, monkeypatch, dry_connector, tmp_memory):
     """human_only does not relabel an already-escalated destructive action as mode_hold."""
     from glorfindel.config import AutonomyConfig

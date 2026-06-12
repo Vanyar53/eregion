@@ -1034,8 +1034,13 @@ def _do_reset(resource_id: str, yes: bool, dry_run: bool) -> None:
     """Shared implementation for reset/revert."""
     from glorfindel.actions import active_blocks, active_isolations, AzureConnector
 
-    isolations = [i for i in active_isolations() if i.get("resource_id") == resource_id]
-    blocks = [b for b in active_blocks() if b.get("resource_id") == resource_id]
+    # Case-insensitive match: Azure ARM IDs are case-insensitive but Python == is not.
+    # A case mismatch left an orphan isolation state file ("Nothing to reset" while
+    # `list` still showed ISOLATED). release_isolation clears the local file even when
+    # Azure has no matching rule, so matching here is enough to recover.
+    rid_lower = resource_id.lower()
+    isolations = [i for i in active_isolations() if i.get("resource_id", "").lower() == rid_lower]
+    blocks = [b for b in active_blocks() if b.get("resource_id", "").lower() == rid_lower]
 
     if not isolations and not blocks:
         console.print(f"[green]Nothing to reset on {resource_id.split('/')[-1]}.[/green]")

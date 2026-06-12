@@ -753,6 +753,10 @@ def execute_action(
 ) -> GlorfindelState:
     """Execute the autonomous action via the cloud connector."""
     import time
+    try:
+        from azure.core.exceptions import HttpResponseError
+    except ImportError:  # azure SDK not installed (e.g. some test envs)
+        HttpResponseError = ()  # type: ignore[assignment]
     resource_id = state["signal"].get("resource_id", "unknown")
     action = state["action"]
 
@@ -782,19 +786,27 @@ def execute_action(
             outcome = {"snapshot_id": snap_id}
         else:
             outcome = {"status": "no_op", "action": action}
-    except PermissionError as e:
-        # Read-only credentials (or a real IAM 403): the action cannot run. Do NOT
-        # let it abort the cycle silently — route to escalation so the operator sees
-        # the recommended action in `pending` / the War Room, and store_cycle writes
-        # the debug file. This is a misconfiguration (non_disruptive + read-only creds),
-        # surfaced by the startup warning, but the failure must be visible.
+    except (PermissionError, HttpResponseError) as e:
+        # The action could not run. Never let it abort the cycle silently — route to
+        # escalation so the operator sees the recommended action in `pending` / the
+        # War Room, and store_cycle writes the debug file.
+        #   PermissionError          → GLORFINDEL_READ_ONLY guard (observe-only)
+        #   HttpResponseError 403    → real IAM gap (SP lacks the write role)
+        #   other HttpResponseError  → transient/other Azure failure (still visible)
+        status_code = getattr(e, "status_code", None)
+        is_auth = (
+            isinstance(e, PermissionError)
+            or status_code == 403
+            or "AuthorizationFailed" in str(e)
+        )
+        out_status = "write_blocked" if is_auth else "action_failed"
         return {
             **state,
             "escalate": True,
-            "escalation_reason": f"Action '{action}' bloquée — {e}",
+            "escalation_reason": f"Action '{action}' {'bloquée' if is_auth else 'échouée'} — {e}",
             "mode_hold": False,
             "outcome": {
-                "status": "write_blocked",
+                "status": out_status,
                 "executed": False,
                 "action_pending": action,
                 "error": str(e),
@@ -819,10 +831,12 @@ def execute_action(
 def escalate_to_human(state: GlorfindelState) -> GlorfindelState:
     """Mark the decision as escalated — human must approve before any action."""
     action = state["action"]
-    # write_blocked: the action was attempted but the credentials can't write
-    # (read-only SP / IAM 403). Distinct from a policy hold — it's a capability gap.
-    if (state.get("outcome") or {}).get("status") == "write_blocked":
-        escalation_type = "write_blocked"
+    # An action attempted but not completed carries its own escalation type:
+    #   write_blocked  → credentials can't write (read-only SP / IAM 403) — capability gap
+    #   action_failed  → other Azure failure during execution (transient / config)
+    _out_status = (state.get("outcome") or {}).get("status")
+    if _out_status in ("write_blocked", "action_failed"):
+        escalation_type = _out_status
     # mode_hold takes precedence: the action would have run autonomously but was
     # held back by the asset's human_only mode — NOT by low confidence. The
     # operator must understand it's a policy hold, with a one-click approve path.
@@ -1182,8 +1196,9 @@ def _route_after_decide(state: GlorfindelState) -> str:
 
 
 def _route_after_execute(state: GlorfindelState) -> str:
-    # A write blocked by read-only credentials must be escalated (visible), not verified.
-    if (state.get("outcome") or {}).get("status") == "write_blocked":
+    # An action that could not run (read-only guard, IAM 403, other Azure failure)
+    # must be escalated (visible), not verified.
+    if (state.get("outcome") or {}).get("status") in ("write_blocked", "action_failed"):
         return "escalate_to_human"
     return "verify_action"
 

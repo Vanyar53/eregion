@@ -26,6 +26,8 @@ Plus aucune redondance, et le point carte gagne du sens. Si tu tenais à retirer
 
 **Placement (maj Jonathan)** : panneau posture déplacé du header titre vers le **bandeau INFRASTRUCTURE** (à droite, `margin-left:auto`) — là où l'admin/auditeur scanne le plus. Reste visible en mode CONFIGURATION aussi. Le header titre redevient sobre (identité → moteur/live).
 
+**✅ Validé visuellement sur run live (T1486, OBSERVE-ONLY) — 2026-06-12** : posture `👁 OBSERVE-ONLY · default human-only` dans le bandeau ✓ ; `Approve & execute` grisé sur la carte mode_hold tandis que `Ack` reste actif ✓ ; feed dedup `escalate → isolate_vm … 92% ×4` (4 cycles collapsés en 1 ligne) ✓ ; carte mode_hold sans pct dupliqué ni label mode redondant ✓ ; pas de badge mode sur la VM au défaut global ✓. Rien à corriger. Chevauchement observe-only + action retenue géré proprement (bouton grisé + tooltip, pas de clic mort).
+
 ---
 
 ### [General → Tests] Cadrage Analyze — il s'auto-dirige, ne pré-build rien — 2026-06-12

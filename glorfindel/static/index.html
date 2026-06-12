@@ -1376,14 +1376,21 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
 
   const globalDefault = _state?.autonomy_default || 'human_only';
   const autonomyMode  = (_state?.autonomy_modes || {})[vm_name] || globalDefault;
-  // Only surface the badge when the asset DEVIATES from the global default (header carries
-  // the default). Colour follows the posture language: orange = can act, blue = observe-only.
+  // The mode is ALWAYS shown (per-VM visibility). At the global default it's discreet
+  // (neutral/dim); a per-asset override is highlighted in the posture colour — orange =
+  // can act (non_disruptive), blue = observe (human_only) — so exceptions pop out.
   const modeDeviates = autonomyMode !== globalDefault;
-  const modeBadge = !modeDeviates ? '' : (autonomyMode === 'non_disruptive'
-    ? `<span title="Override — autonomous (non-disruptive)" style="font-size:8px;font-weight:700;padding:1px 5px;border-radius:3px;background:color-mix(in srgb,var(--orange) 16%,transparent);color:var(--orange);border:1px solid color-mix(in srgb,var(--orange) 35%,transparent);letter-spacing:.5px;flex-shrink:0">⚡ NON-DISRUPTIVE</span>`
-    : `<span title="Override — recommend only" style="font-size:8px;font-weight:700;padding:1px 5px;border-radius:3px;background:color-mix(in srgb,var(--blue) 14%,transparent);color:var(--blue);border:1px solid color-mix(in srgb,var(--blue) 30%,transparent);letter-spacing:.5px;flex-shrink:0">👁 HUMAN-ONLY</span>`);
+  const modeIsAct    = autonomyMode === 'non_disruptive';
+  const modeTxt      = `${modeIsAct ? '⚡' : '👁'} ${modeIsAct ? 'NON-DISRUPTIVE' : 'HUMAN-ONLY'}`;
+  const _defLabel    = globalDefault === 'non_disruptive' ? 'non-disruptive' : 'human-only';
+  const _modeBadgeBase = 'font-size:8px;font-weight:700;padding:1px 5px;border-radius:3px;letter-spacing:.5px;flex-shrink:0';
+  const modeBadge = !modeDeviates
+    ? `<span title="Autonomy mode — matches global default" style="${_modeBadgeBase};background:transparent;color:var(--dim);border:1px solid var(--border)">${modeTxt}</span>`
+    : modeIsAct
+    ? `<span title="Override — acts autonomously (global default: ${_defLabel})" style="${_modeBadgeBase};background:color-mix(in srgb,var(--orange) 16%,transparent);color:var(--orange);border:1px solid color-mix(in srgb,var(--orange) 35%,transparent)">${modeTxt}</span>`
+    : `<span title="Override — recommend only (global default: ${_defLabel})" style="${_modeBadgeBase};background:color-mix(in srgb,var(--blue) 14%,transparent);color:var(--blue);border:1px solid color-mix(in srgb,var(--blue) 30%,transparent)">${modeTxt}</span>`;
 
-  const modeSelector = isClean && isExpanded
+  const modeSelector = isExpanded
     ? `<div style="display:flex;align-items:center;gap:6px;margin-top:6px">
         <span style="font-size:9px;color:var(--dim);font-weight:600;letter-spacing:.5px">MODE</span>
         <select onchange="setAutonomyMode('${vm_name}',this.value)" onclick="event.stopPropagation()"
@@ -1419,8 +1426,9 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
         ? ''
         : `<button class="action" onclick="event.stopPropagation();doSnapshot('${vm_name}')" style="margin-left:auto;font-size:9px;padding:2px 7px">📸 Snapshot</button>`;
 
-  // Readiness checks with full labels — shown in expanded clean card
-  const readinessExpanded = (isClean && auditEntry)
+  // Readiness checks (NSG / Backup / Compute) — shown in any expanded card. During an
+  // incident "can Glorfindel act on this VM?" matters more, not less → not gated on isClean.
+  const readinessExpanded = auditEntry
     ? `<div style="display:flex;gap:14px;margin-top:6px;flex-wrap:wrap">
         ${ACTION_GROUPS.map(g => {
           const st = _worstStatus(auditEntry.checks, g.actions);

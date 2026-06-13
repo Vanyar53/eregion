@@ -176,7 +176,8 @@ glorfindel/
   discovery.py          → AssetRegistry (thread-safe, persist ~/.glorfindel/discovered_assets.json)
                           DiscoveryService — thread daemon, découverte au démarrage + périodique
                           _discover_from_azure_monitor() → LAW Heartbeat query → liste VMs actives
-                          replace_for_backend() : remplace (pas merge) — évince les VMs supprimées
+                          replace_for_backend() : refresh + rétention — une VM absente du Heartbeat (éteinte)
+                          est retenue (last_seen figé) tant que gap < GLORFINDEL_DISCOVERY_RETENTION_H (défaut 8h), puis évincée
                           None sur erreur query → cache conservé (pas d'éviction sur panne)
   agent.py              → LangGraph 8 nodes + _SOURCE_LANGUAGES map (source → query lang)
                           load_context → [poll_detection | propose_detection_rule]
@@ -337,6 +338,7 @@ GLORFINDEL_ISOLATION_TTL_H=4        # TTL isolation (défaut 4h)
 GLORFINDEL_INCIDENT_TTL_S=300       # TTL fenêtre incident
 GLORFINDEL_CONFIDENCE_THRESHOLD=0.7 # gate autonomie LLM (défaut 0.7 — en dessous → escalade forcée)
 GLORFINDEL_READ_ONLY=1              # creds lecture seule (SP Reader) — mode observe-only
+GLORFINDEL_DISCOVERY_RETENTION_H=8  # rétention d'une VM éteinte dans le registre avant éviction (défaut 8h)
 ```
 
 ---

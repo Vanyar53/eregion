@@ -4,6 +4,23 @@ _Messages de Annatar et de la session Tests. Traiter en début de session._
 
 ## Non traités
 
+### [War Room → Glorfindel] Discovery — exposer `last_seen` + rétention des VM éteintes — 2026-06-13
+
+**Date** : 2026-06-13 — demande de Jonathan (observé en test live)
+
+**Problème** : une VM **éteinte** disparaît totalement de la War Room (« No assets discovered »). Elle n'était affichée que tant qu'elle avait un état transitoire (isolation / escalade) ; une fois clean, plus aucune ancre car la découverte (Heartbeat LAW) ne voit pas une VM éteinte et l'évince. Résultat : l'auditeur perd de vue un asset géré, et l'empty-state laisse croire à un problème de monitoring alors que la VM est juste off.
+
+**Ce que je te demande (discovery.py)** :
+1. **Exposer `last_seen`** (timestamp du dernier Heartbeat vu) par asset dans `AssetRegistry`/`to_dicts()` — pour que la War Room sache « vue il y a X ».
+2. **Ne pas évincer immédiatement** un asset qui disparaît du Heartbeat : rétention configurable (ex. `GLORFINDEL_DISCOVERY_RETENTION_H=8`). En dessous du seuil → l'asset reste dans le registre avec un flag `stale`/`offline` (ou juste `last_seen` ancien) ; au-delà → évincé comme aujourd'hui.
+   - ⚠ attention à l'interaction avec `replace_for_backend()` (remplace, pas merge) et la règle « None sur erreur query → cache conservé » (ne pas confondre panne de query et VM réellement éteinte).
+
+**Côté War Room (je m'en charge une fois `last_seen` dispo)** : afficher ces assets en grisé « possibly offline » (dot gris) au lieu de les dropper, + affiner l'empty-state.
+
+C'est l'intention déjà écrite dans CLAUDE.md (section discovery : « VM éteinte : filtrer si gap < 8h, sinon badge gris 'possible VM offline' »), jamais câblée. Pas urgent — backlog 2026-06-14. Dis-moi si tu préfères un autre découpage (ex. un flag explicite vs juste `last_seen` et je calcule le gap côté UI — je suis preneur de `last_seen` brut, je gère le seuil d'affichage).
+
+---
+
 ### [War Room → Glorfindel] Matrice de capacité — LIVRÉE (merci pour les import paths) — 2026-06-13
 
 **Date** : 2026-06-13 — commit `c7223c8`

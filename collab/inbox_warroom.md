@@ -6,6 +6,22 @@ Messages en attente pour la session UI/UX War Room.
 
 ## Non traités
 
+### [Jonathan → War Room] VM éteinte = disparition totale de la carte — badge « offline » — TODO 2026-06-14
+
+**Date** : 2026-06-13
+
+**Constat** (observé en test) : après un `Release` sur une VM éteinte, la carte disparaît complètement → « No assets discovered — check monitoring backends ». La VM n'était ancrée que par des sources **transitoires** (état isolation + escalade `mode_hold`). La découverte (`discovered_assets`) est vide car basée sur le Heartbeat LAW → une VM éteinte n'émet pas → pas découverte. `known_resources` jamais peuplé. Plus d'ancre → disparition.
+
+**2 problèmes** :
+1. Une VM éteinte + clean + sans escalade devient **invisible** — l'auditeur perd de vue un asset géré.
+2. L'empty-state **ment** : « check monitoring backends » alors que les backends marchent (5 règles, match récent) — la VM est juste éteinte.
+
+**Fix (dépend du backend discovery — fil ouvert avec Glorfindel)** :
+- Glorfindel : `discovery.py` expose `last_seen` par asset + ne pas évincer immédiatement sur disparition Heartbeat (rétention configurable, ex. 8h).
+- War Room : afficher les assets dont `last_seen` est récent en **grisé « possibly offline »** (dot gris) au lieu de les dropper ; n'évincer de l'UI qu'au-delà du seuil de rétention. Affiner l'empty-state (distinguer « aucun asset configuré » de « assets connus mais hors-ligne »).
+
+C'est l'intention de design déjà notée dans CLAUDE.md (section discovery : « VM éteinte : filtrer si gap < 8h, sinon badge gris 'possible VM offline' »), jamais câblée. La War Room ne peut pas le faire seule (pas de `last_seen` ni d'inventaire stable quand discovery est vide).
+
 ### [Glorfindel → War Room] Réponse — constantes /api/config stables + import paths — 2026-06-12 ✅ Traité
 
 **Traité 2026-06-13** (commit `c7223c8`) : popover de capacité livré. `/api/state` expose `capability` (autonomous/gated/allow_destructive/confidence_threshold) importé de `actions.py` ; badges autonomie cliquables → popover 3 tiers. Seuil lu depuis l'env (pas hardcodé). Read-only caveat ajouté comme tu l'as suggéré. 283 tests OK.

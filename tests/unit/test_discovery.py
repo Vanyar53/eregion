@@ -122,10 +122,49 @@ def test_replace_for_backend_keeps_other_backends(tmp_path):
 
 
 def test_replace_for_backend_empty_valid_evicts_all(tmp_path):
+    # _asset() uses last_seen far in the past → beyond retention → evicted
     reg = AssetRegistry(path=tmp_path / "assets.json")
     reg.update([_asset("vm-a", backend="law"), _asset("vm-b", backend="law")])
     reg.replace_for_backend("law", [])
     assert reg.for_backend("law") == []
+
+
+def _recent_asset(name, backend="law", rid=""):
+    from datetime import datetime, timezone
+    return DiscoveredAsset(
+        name=name, resource_id=rid, monitoring_backend=backend,
+        last_seen=datetime.now(timezone.utc).isoformat(),
+    )
+
+
+def test_replace_for_backend_retains_recently_seen_offline_vm(tmp_path):
+    """A VM that vanishes from Heartbeat but was seen recently is retained (offline VM)."""
+    reg = AssetRegistry(path=tmp_path / "assets.json")
+    reg.update([_recent_asset("vm-on"), _recent_asset("vm-off")])
+    # vm-off drops out of the fresh results (powered off) — must NOT be evicted yet
+    reg.replace_for_backend("law", [_recent_asset("vm-on")])
+    names = {a.name for a in reg.all()}
+    assert "vm-on" in names
+    assert "vm-off" in names  # retained within the 8h window
+
+
+def test_replace_for_backend_retained_vm_keeps_frozen_last_seen(tmp_path):
+    """The retained offline VM keeps its original last_seen so its gap grows."""
+    reg = AssetRegistry(path=tmp_path / "assets.json")
+    off = _recent_asset("vm-off")
+    reg.update([off])
+    reg.replace_for_backend("law", [])
+    retained = next(a for a in reg.all() if a.name == "vm-off")
+    assert retained.last_seen == off.last_seen  # frozen, not refreshed
+
+
+def test_replace_for_backend_retention_env_override(tmp_path, monkeypatch):
+    """GLORFINDEL_DISCOVERY_RETENTION_H=0 → recent offline VM is evicted immediately."""
+    monkeypatch.setenv("GLORFINDEL_DISCOVERY_RETENTION_H", "0")
+    reg = AssetRegistry(path=tmp_path / "assets.json")
+    reg.update([_recent_asset("vm-off")])
+    reg.replace_for_backend("law", [])
+    assert reg.for_backend("law") == []  # retention 0 → no grace, evicted
 
 
 # ── _discover_from_azure_monitor ───────────────────────────────────────────────

@@ -7,12 +7,26 @@ Results are cached to disk and hot-reloaded by RulePoller and the API.
 from __future__ import annotations
 
 import json
+import os
 import threading
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
 _CACHE_FILE = Path.home() / ".glorfindel" / "discovered_assets.json"
+
+# How long a VM that vanished from Heartbeat (e.g. powered off) is kept in the
+# registry before eviction. Within this window it stays visible with a stale
+# `last_seen` so the War Room can show it as "possibly offline" instead of
+# dropping it (an auditor must not lose sight of a managed-but-off asset).
+_DEFAULT_RETENTION_H = 8.0
+
+
+def _retention_h() -> float:
+    try:
+        return float(os.environ.get("GLORFINDEL_DISCOVERY_RETENTION_H", _DEFAULT_RETENTION_H))
+    except (TypeError, ValueError):
+        return _DEFAULT_RETENTION_H
 
 
 @dataclass
@@ -45,16 +59,42 @@ class AssetRegistry:
             self._persist()
 
     def replace_for_backend(
-        self, backend_name: str, assets: list[DiscoveredAsset]
+        self,
+        backend_name: str,
+        assets: list[DiscoveredAsset],
+        retention_h: float | None = None,
     ) -> None:
-        """Replace all assets for a backend — evicts VMs no longer in Heartbeat."""
+        """Refresh assets for a backend, retaining recently-seen offline VMs.
+
+        A VM that drops out of Heartbeat (powered off) is NOT evicted immediately:
+        it is kept — with its frozen `last_seen`, so the gap grows — until it has
+        been gone longer than `retention_h` (default GLORFINDEL_DISCOVERY_RETENTION_H,
+        8h). Only called with a real result list; a failed query keeps the whole
+        cache upstream (found is None → no call), so this never confuses a query
+        outage with a genuinely offline VM. Assets of other backends are untouched.
+        """
+        if retention_h is None:
+            retention_h = _retention_h()
+        now = datetime.now(timezone.utc)
+        fresh_names = {a.name for a in assets}
         with self._lock:
-            self._assets = {
-                name: a for name, a in self._assets.items()
-                if a.monitoring_backend != backend_name
-            }
+            kept: dict[str, DiscoveredAsset] = {}
+            for name, a in self._assets.items():
+                if a.monitoring_backend != backend_name:
+                    kept[name] = a            # other backends: leave as-is
+                    continue
+                if name in fresh_names:
+                    continue                  # replaced by the fresh entry below
+                # Vanished from this backend's Heartbeat — retain if still within window.
+                try:
+                    age_h = (now - datetime.fromisoformat(a.last_seen)).total_seconds() / 3600
+                except (TypeError, ValueError):
+                    age_h = retention_h + 1.0  # unparseable timestamp → evict
+                if age_h < retention_h:
+                    kept[name] = a            # keep stale (frozen last_seen)
             for a in assets:
-                self._assets[a.name] = a
+                kept[a.name] = a              # fresh / updated entries win
+            self._assets = kept
             self._persist()
 
     def all(self) -> list[DiscoveredAsset]:

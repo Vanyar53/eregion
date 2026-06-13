@@ -114,6 +114,14 @@ export AZURE_VM_RESOURCE_ID=/subscriptions/<SUBSCRIPTION_ID>/resourceGroups/<RG>
 # Voir CLAUDE.md → "Mode observe-only" pour le workflow complet.
 # export GLORFINDEL_READ_ONLY=1
 
+# Gate de confiance — action autonome avec confidence < seuil → escaladée (défaut 0.7)
+# export GLORFINDEL_CONFIDENCE_THRESHOLD=0.7
+
+# Rétention discovery — une VM éteinte (absente du Heartbeat) reste visible dans le
+# registre tant que son dernier heartbeat date de moins de X heures, puis est évincée
+# (défaut 8h). Évite qu'une VM juste éteinte disparaisse de la War Room.
+# export GLORFINDEL_DISCOVERY_RETENTION_H=8
+
 # ── Divers ────────────────────────────────────────────────────────────────────
 # Supprime les logs ONNX Runtime (ChromaDB)
 export ORT_LOGGING_LEVEL_DEFAULT=3

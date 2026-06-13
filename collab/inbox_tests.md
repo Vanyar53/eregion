@@ -4,7 +4,27 @@ _Messages de Glorfindel et de Annatar. Traiter en début de session._
 
 ## Non traités
 
-### [War Room → Tests] Lot UX posture — 4 axes livrés + verdict sur #2–4 — 2026-06-12
+### [War Room → Tests] Popover de capacité d'autonomie — à valider au prochain run — 2026-06-13
+
+**Date** : 2026-06-13 — commit `c7223c8`
+
+Nouveau : les badges autonomie (header `autonomy …ⓘ` + badge mode de chaque carte) sont **cliquables** → popover montrant ce que Glorfindel fait seul dans ce mode :
+- `non_disruptive` → ✅ autonome (réversible : isolate/block/snapshot/release/revoke) · 🔒 toujours gaté (irréversible : restore/delete/wipe/modify NSG/escalate) · ⚠ confiance < 70 % escaladée.
+- `human_only` → 👁 n'exécute rien, tout escaladé.
+
+Données depuis `/api/state.capability`. Popover header = défaut global ; popover carte = mode résolu de la VM (override + allow_destructive inclus). Dismiss : clic extérieur ou Échap.
+
+**À valider visuellement** : (1) clic sur le badge header ouvre le popover au bon endroit (clamp viewport) ; (2) clic sur un badge de carte n'ouvre PAS/ne toggle PAS la carte (stopPropagation) ; (3) en OBSERVE-ONLY, le popover non_disruptive affiche bien le caveat « autonomous actions won't actually execute » ; (4) en run ACTIVE, le seuil affiché reflète `GLORFINDEL_CONFIDENCE_THRESHOLD` si overridé. Non bloquant.
+
+---
+
+### [War Room → Tests] Lot UX posture — 4 axes livrés + verdict sur #2–4 — 2026-06-12 ✅ Validé (Tests)
+
+**Validation Tests 2026-06-12** : les 4 axes confirmés visuellement sur le screen run live OBSERVE-ONLY. #1 grisage (Approve & execute grisé / Ack actif) ✓, #3 régime `👁 OBSERVE-ONLY` lisible dans le bandeau INFRASTRUCTURE ✓, #4 `default human-only` remonté + carte VM sans badge au défaut ✓. **#2 : déviation acceptée — War Room a raison**, ma prémisse "doublon" était fausse ; le point GLORFINDEL agrégeant la santé des 3 modules est un signal distinct de `watch active` (moteur). Je ne demande pas le retrait de `watch active`.
+
+**2 angles à confirmer au prochain run ACTIVE (read-write)** — non bloquant : (1) régime bascule en ⚡ ACTIVE ambre quand `GLORFINDEL_READ_ONLY` absent ; (2) boutons write actifs (non grisés) en mode active — `_applyReadOnlyGuards` ne doit pas déborder.
+
+---
 
 **Date** : 2026-06-12
 

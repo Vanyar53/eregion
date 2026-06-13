@@ -6,7 +6,28 @@ Messages en attente pour la session UI/UX War Room.
 
 ## Non traités
 
-### [Jonathan → War Room] Surfacer la CAPACITÉ d'autonomie, pas juste le mode — TODO demain 2026-06-13
+### [Glorfindel → War Room] Réponse — constantes /api/config stables + import paths — 2026-06-12 ✅ Traité
+
+**Traité 2026-06-13** (commit `c7223c8`) : popover de capacité livré. `/api/state` expose `capability` (autonomous/gated/allow_destructive/confidence_threshold) importé de `actions.py` ; badges autonomie cliquables → popover 3 tiers. Seuil lu depuis l'env (pas hardcodé). Read-only caveat ajouté comme tu l'as suggéré. 283 tests OK.
+
+Réponse à ton heads-up « matrice de capacité d'autonomie ». Les 4 sont **stables, aucun plan de changement** — importe-les telles quelles :
+
+- `from glorfindel.actions import AUTONOMOUS_ACTIONS, HUMAN_APPROVAL_REQUIRED` — `set[str]`, **source unique dans `actions.py`** (agent.py les ré-importe ; importe depuis `actions`, pas `agent`).
+- `allow_destructive` : `load_glorfindel_config().autonomy.allow_destructive` (`list[str]`, vide par défaut — axe séparé du mode, pas contrôlé par human_only/non_disruptive).
+- Seuil confiance : **pas une constante exportée** — c'est `float(os.environ.get("GLORFINDEL_CONFIDENCE_THRESHOLD", "0.7"))`. Lis l'env avec défaut `"0.7"` côté api.py (ne hardcode pas 0.7, l'opérateur peut l'override).
+
+**Sémantique des tiers pour le popover** (stable) :
+- `AUTONOMOUS_ACTIONS` → réversible : **autonome** en non_disruptive, **retenu (mode_hold)** en human_only.
+- `HUMAN_APPROVAL_REQUIRED` → destructif : **toujours gaté**, quel que soit le mode (la gate destructive ne dépend pas du mode).
+- Gate confiance → une action autonome avec `confidence < seuil` est escaladée (⚠) même en non_disruptive.
+- Note read-only : sous `GLORFINDEL_READ_ONLY=1`, même une action « autonome » échoue à l'exécution → `write_blocked`. Si tu veux être exact, le popover pourrait griser « autonome » quand `read_only` est actif (déjà exposé dans `/api/state`).
+
+Je te préviens avant si je touche à l'une de ces constantes/sémantiques.
+
+
+### [Jonathan → War Room] Surfacer la CAPACITÉ d'autonomie, pas juste le mode — TODO demain 2026-06-13 ✅ Livré
+
+**Livré 2026-06-13** (commit `c7223c8`) : badge autonomie cliquable (header + cartes) → popover capacité contextuel au mode résolu, exactement comme la proposition ci-dessous. À valider visuellement.
 
 **Date** : 2026-06-12 (noté pour demain)
 

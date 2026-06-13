@@ -78,17 +78,32 @@ async def state() -> dict:
     except Exception:
         pass
 
-    # Autonomy modes per discovered asset
+    pending_escalations = esc_module.pending()
+
+    # Autonomy modes — resolved for EVERY VM the UI can render (discovered assets,
+    # isolated/blocked resources, and escalation targets). Resolving only discovered
+    # assets left escalation-only cards (e.g. a mode_hold target) falling back to the
+    # global default, so a per-asset override never showed in the card.
     autonomy_modes: dict[str, str] = {}
     autonomy_default = "human_only"
     try:
         from glorfindel.config import load_glorfindel_config as _load_gcfg
         _acfg = _load_gcfg()
         autonomy_default = _acfg.autonomy.default
+        _vm_names: set[str] = set()
         for _a in discovered:
-            _vm = _a.get("name") or _a.get("resource_id", "").split("/")[-1]
-            if _vm:
-                autonomy_modes[_vm] = _acfg.autonomy.resolve(_vm)
+            _n = _a.get("name") or _a.get("resource_id", "").split("/")[-1]
+            if _n:
+                _vm_names.add(_n)
+        for _r in resources:
+            if _r.get("vm_name"):
+                _vm_names.add(_r["vm_name"])
+        for _e in pending_escalations:
+            _rid = _e.get("resource_id", "")
+            if _rid:
+                _vm_names.add(_rid.split("/")[-1])
+        for _n in _vm_names:
+            autonomy_modes[_n] = _acfg.autonomy.resolve(_n)
     except Exception:
         pass
 
@@ -116,7 +131,7 @@ async def state() -> dict:
 
     return {
         "resources": resources,
-        "escalations": esc_module.pending(),
+        "escalations": pending_escalations,
         "restores": _active_restores(),
         "discovered_assets": discovered,
         "posture_gaps": posture_gaps,

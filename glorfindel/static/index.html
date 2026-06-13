@@ -450,6 +450,26 @@
   }
   #toast.show { opacity: 1; }
 
+  /* ── Capability popover ── */
+  #cap-popover {
+    display: none;
+    position: fixed;
+    z-index: 300;
+    max-width: 340px;
+    background: var(--bg1);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 14px;
+    box-shadow: 0 8px 28px rgba(0,0,0,.55);
+    font-size: 11px;
+    line-height: 1.5;
+  }
+  .cap-title { font-weight: 700; font-size: 12px; margin-bottom: 8px; }
+  .cap-line  { color: var(--dim); margin: 4px 0; }
+  .cap-group { margin-top: 8px; }
+  .cap-head  { font-size: 9px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase; margin-bottom: 3px; }
+  .cap-item  { color: var(--text); padding: 1px 0 1px 4px; }
+
   /* ── Modal ── */
   .modal-overlay {
     display: none;
@@ -546,6 +566,9 @@
 </main>
 
 <div id="toast"></div>
+
+<!-- Autonomy capability popover — what Glorfindel runs alone vs always gates, per mode -->
+<div id="cap-popover"></div>
 
 <div class="modal-overlay" id="modal" onclick="closeModal()">
   <div class="modal" onclick="event.stopPropagation()">
@@ -1384,12 +1407,13 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
   const modeIsAct    = autonomyMode === 'non_disruptive';
   const modeTxt      = `${modeIsAct ? '⚡' : '👁'} ${modeIsAct ? 'NON-DISRUPTIVE' : 'HUMAN-ONLY'}`;
   const _defLabel    = globalDefault === 'non_disruptive' ? 'non-disruptive' : 'human-only';
-  const _modeBadgeBase = 'font-size:8px;font-weight:700;padding:1px 5px;border-radius:3px;letter-spacing:.5px;flex-shrink:0';
+  const _modeBadgeBase = 'font-size:8px;font-weight:700;padding:1px 5px;border-radius:3px;letter-spacing:.5px;flex-shrink:0;cursor:pointer';
+  const _modeClick = `onclick="event.stopPropagation();showCapabilityPopover(event,'${autonomyMode}')"`;
   const modeBadge = !modeDeviates
-    ? `<span title="Autonomy mode — matches global default" style="${_modeBadgeBase};background:transparent;color:var(--dim);border:1px solid var(--border)">${modeTxt}</span>`
+    ? `<span ${_modeClick} title="Autonomy mode — matches global default · click for capability" style="${_modeBadgeBase};background:transparent;color:var(--dim);border:1px solid var(--border)">${modeTxt}</span>`
     : modeIsAct
-    ? `<span title="Override — acts autonomously (global default: ${_defLabel})" style="${_modeBadgeBase};background:color-mix(in srgb,var(--orange) 16%,transparent);color:var(--orange);border:1px solid color-mix(in srgb,var(--orange) 35%,transparent)">${modeTxt}</span>`
-    : `<span title="Override — recommend only (global default: ${_defLabel})" style="${_modeBadgeBase};background:color-mix(in srgb,var(--blue) 14%,transparent);color:var(--blue);border:1px solid color-mix(in srgb,var(--blue) 30%,transparent)">${modeTxt}</span>`;
+    ? `<span ${_modeClick} title="Override — acts autonomously (global default: ${_defLabel}) · click for capability" style="${_modeBadgeBase};background:color-mix(in srgb,var(--orange) 16%,transparent);color:var(--orange);border:1px solid color-mix(in srgb,var(--orange) 35%,transparent)">${modeTxt}</span>`
+    : `<span ${_modeClick} title="Override — recommend only (global default: ${_defLabel}) · click for capability" style="${_modeBadgeBase};background:color-mix(in srgb,var(--blue) 14%,transparent);color:var(--blue);border:1px solid color-mix(in srgb,var(--blue) 30%,transparent)">${modeTxt}</span>`;
 
   const modeSelector = isExpanded
     ? `<div style="display:flex;align-items:center;gap:6px;margin-top:6px">
@@ -1956,12 +1980,83 @@ function _updatePosture() {
     // Header-only icon: ⚡ = can act, 👁 = observe — same vocabulary as the regime badge.
     ad.innerHTML = `<span style="color:var(--dim)">autonomy</span> `
       + `<span style="color:${act ? 'var(--orange)' : 'var(--blue)'};font-weight:600">`
-      + `${act ? '⚡' : '👁'} ${act ? 'non-disruptive' : 'human-only'}</span>`;
-    ad.title = act
-      ? 'New discovered assets act autonomously (non-disruptive actions)'
-      : 'New discovered assets recommend only — every action escalated';
+      + `${act ? '⚡' : '👁'} ${act ? 'non-disruptive' : 'human-only'}</span>`
+      + ` <span style="color:var(--dim);font-size:9px">ⓘ</span>`;
+    ad.style.cursor = 'pointer';
+    ad.title = 'Click — what Glorfindel can do on its own in this mode';
+    ad.onclick = (e) => showCapabilityPopover(e, def);
   }
 }
+
+// ── Autonomy capability popover ──────────────────────────────────────────────────
+// Surfaces what a given mode lets Glorfindel do alone (autonomous / always-gated /
+// confidence gate), built from /api/state `capability`. Mode is resolved per badge.
+
+function _capActionLabel(a) {
+  return ACTION_LABELS_VERB[a]
+    || a.replace(/_/g, ' ').replace(/^\w/, c => c.toUpperCase());
+}
+
+function _capabilityHtml(mode) {
+  const cap = _state?.capability;
+  if (!cap || !cap.autonomous_actions) {
+    return `<div class="cap-line">Capability data unavailable.</div>`;
+  }
+  const allow = new Set(cap.allow_destructive || []);
+  const auto  = [...(cap.autonomous_actions || []), ...(cap.allow_destructive || [])];
+  const gated = (cap.gated_actions || []).filter(a => !allow.has(a));
+  const pct   = Math.round((cap.confidence_threshold ?? 0.7) * 100);
+  const ro    = !!_state?.read_only;
+
+  if (mode === 'human_only') {
+    return `
+      <div class="cap-title" style="color:var(--blue)">👁 HUMAN-ONLY — recommends only</div>
+      <div class="cap-line">Executes nothing on its own — every action is escalated for your approval, including reversible ones.</div>
+      <div class="cap-group">
+        <div class="cap-head" style="color:var(--blue)">Would recommend, then wait</div>
+        ${auto.map(a => `<div class="cap-item">👁 ${_capActionLabel(a)}</div>`).join('')}
+      </div>`;
+  }
+  return `
+    <div class="cap-title" style="color:var(--orange)">⚡ NON-DISRUPTIVE — acts alone</div>
+    <div class="cap-group">
+      <div class="cap-head" style="color:var(--green)">Runs autonomously · reversible</div>
+      ${auto.map(a => `<div class="cap-item">✅ ${_capActionLabel(a)}</div>`).join('')}
+    </div>
+    <div class="cap-group">
+      <div class="cap-head" style="color:var(--orange)">Always asks first · irreversible</div>
+      ${gated.map(a => `<div class="cap-item">🔒 ${_capActionLabel(a)}</div>`).join('')}
+    </div>
+    <div class="cap-line" style="color:var(--orange);margin-top:8px">⚠ Any action below ${pct}% confidence is escalated anyway.</div>
+    ${ro ? `<div class="cap-line" style="color:var(--blue)">👁 Observe-only credentials: autonomous actions are recommended but won't actually execute.</div>` : ''}`;
+}
+
+function showCapabilityPopover(evt, mode) {
+  evt.stopPropagation();
+  const pop = document.getElementById('cap-popover');
+  if (!pop) return;
+  pop.innerHTML = _capabilityHtml(mode);
+  pop.style.display = 'block';
+  const pad = 8;
+  const r = pop.getBoundingClientRect();
+  let x = evt.clientX;
+  let y = evt.clientY + 14;
+  if (x + r.width + pad > window.innerWidth)  x = window.innerWidth - r.width - pad;
+  if (y + r.height + pad > window.innerHeight) y = evt.clientY - r.height - 14;
+  pop.style.left = Math.max(pad, x) + 'px';
+  pop.style.top  = Math.max(pad, y) + 'px';
+}
+
+function hideCapabilityPopover() {
+  const pop = document.getElementById('cap-popover');
+  if (pop) pop.style.display = 'none';
+}
+
+document.addEventListener('click', (e) => {
+  const pop = document.getElementById('cap-popover');
+  if (pop && pop.style.display === 'block' && !pop.contains(e.target)) hideCapabilityPopover();
+});
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') hideCapabilityPopover(); });
 
 setInterval(refreshState, 5000);
 

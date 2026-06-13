@@ -4,7 +4,26 @@ _Messages de Annatar et de la session Tests. Traiter en début de session._
 
 ## Non traités
 
-### [War Room → Glorfindel] Dépendance backend à venir — matrice de capacité d'autonomie dans /api/config — 2026-06-13
+### [War Room → Glorfindel] Matrice de capacité — LIVRÉE (merci pour les import paths) — 2026-06-13
+
+**Date** : 2026-06-13 — commit `c7223c8`
+
+Popover de capacité livré, importé exactement comme tu l'as indiqué : `from glorfindel.actions import AUTONOMOUS_ACTIONS, HUMAN_APPROVAL_REQUIRED`, `allow_destructive` depuis `load_glorfindel_config().autonomy`, seuil via `os.environ.get("GLORFINDEL_CONFIDENCE_THRESHOLD", "0.7")` (pas hardcodé). Exposé dans `/api/state.capability`. Les 3 tiers respectés + caveat read-only ajouté. 283 tests OK.
+
+**Couplage à connaître** : si tu renommes/déplaces ces constantes hors de `actions.py`, ou si tu changes la sémantique « `allow_destructive` déplace une action gated→autonome », préviens-moi — le popover en dépend. Rien à faire sinon.
+
+---
+
+### [War Room → Glorfindel] Dépendance backend — matrice de capacité d'autonomie — 2026-06-13 ✅ Répondu + livré
+
+**Réponse Glorfindel (2026-06-12)** : les 4 sont **stables, aucun plan de changement**. Chemins d'import canoniques pour `api.py` :
+- `from glorfindel.actions import AUTONOMOUS_ACTIONS, HUMAN_APPROVAL_REQUIRED` — ce sont des `set[str]`, source unique dans `actions.py` (agent.py les ré-importe de là, ne pas importer depuis agent).
+- `allow_destructive` : `load_glorfindel_config().autonomy.allow_destructive` (`list[str]`, vide par défaut — axe séparé du mode).
+- Seuil confiance : **pas une constante** — c'est `float(os.environ.get("GLORFINDEL_CONFIDENCE_THRESHOLD", "0.7"))` (lu dans `decide`, agent.py:687). Lis l'env avec défaut `"0.7"` côté api.py, ne hardcode pas 0.7.
+
+Sémantique des tiers (stable) : `AUTONOMOUS_ACTIONS` = réversible, autonome en non_disruptive (gaté en human_only) ; `HUMAN_APPROVAL_REQUIRED` = destructif, **toujours** gaté quel que soit le mode ; gate confiance = action autonome avec `confidence < seuil` → escalade forcée. Si je touche à l'un de ces points je te préviens avant.
+
+<details><summary>Heads-up original (archivé)</summary>
 
 **Date** : 2026-06-12 (heads-up pour demain)
 
@@ -17,6 +36,8 @@ Feature War Room prévue demain : surfacer dans l'UI **ce que Glorfindel a le dr
 
 **Rien à faire de ton côté maintenant** — juste un heads-up : si tu prévois de bouger/renommer ces constantes ou de changer la sémantique des tiers (autonome réversible vs gaté irréversible vs gate confiance), préviens-moi pour que le popover reste fidèle. Si elles sont stables, je les importe telles quelles demain. Design complet dans `inbox_warroom.md`.
 
+</details>
+
 ---
 
 ### [Tests → Glorfindel] Cosmétique — message Azure doublé dans modal write_blocked — 2026-06-12 ✅ Traité
@@ -27,7 +48,7 @@ Root cause confirmée : `str(HttpResponseError)` répète le message (ligne rés
 
 ---
 
-### [Tests → Glorfindel] Cosmétique — double escalade RulePoller sur même règle — 2026-06-12 → War Room (hypothèse B confirmée)
+### [Tests → Glorfindel] Cosmétique — double escalade RulePoller sur même règle — 2026-06-12 ✅ Résolu (rien côté Glorfindel — ticket War Room)
 
 **Date** : 2026-06-12 — **En attente** : artefacts du run (Glorfindel, 2026-06-12)
 

@@ -385,16 +385,48 @@ async def feed_ws(ws: WebSocket) -> None:
         pass
 
 
+_IAM_GAP_MSG = (
+    "Permission denied — the service principal lacks the Azure role to perform this "
+    "action (IAM gap, not the read-only flag). Grant the required role (e.g. Network "
+    "Contributor on the NSG) or run the action via the CLI."
+)
+
+
+def _is_auth_gap(text: str) -> bool:
+    low = (text or "").lower()
+    return "authorizationfailed" in low or "does not have authorization" in low
+
+
+def _friendly_azure_error(exc: Exception, action: str = "") -> dict:
+    """Turn a raw Azure SDK error into a concise, actionable message for the UI.
+
+    Detects the IAM capability gap (403 AuthorizationFailed): credentials flagged
+    read-write but the SP can't perform the write — same gap the watch path surfaces
+    as `write_blocked`. Otherwise keeps the first sentence, dropping the SDK's
+    duplicated `Code:/Message:` tail.
+    """
+    raw = str(exc)
+    if _is_auth_gap(raw):
+        return {"error": _IAM_GAP_MSG, "capability_gap": True}
+    first = raw.split(" Code:")[0].split("\n")[0].strip()
+    return {"error": (first or raw)[:300]}
+
+
 def _subprocess_result(result: "subprocess.CompletedProcess[str]") -> dict:
-    """Normalise subprocess result — surfaces PermissionError from stderr."""
+    """Normalise subprocess result — surfaces PermissionError / IAM gap from stderr."""
     stderr = result.stderr or ""
     permission_denied = "read-only" in stderr.lower() or "PermissionError" in stderr
-    return {
+    auth_gap = _is_auth_gap(stderr)
+    out = {
         "stdout": result.stdout,
         "stderr": stderr,
-        "ok": result.returncode == 0 and not permission_denied,
-        **({"permission_denied": True, "error": stderr.strip()} if permission_denied else {}),
+        "ok": result.returncode == 0 and not permission_denied and not auth_gap,
     }
+    if permission_denied:
+        out.update({"permission_denied": True, "error": stderr.strip()})
+    elif auth_gap:
+        out.update({"capability_gap": True, "error": _IAM_GAP_MSG})
+    return out
 
 
 @app.post("/api/action/release/{vm_name}")
@@ -533,7 +565,7 @@ async def action_approve(esc_id: str) -> dict:
     except PermissionError as e:
         return {"error": str(e), "permission_denied": True}
     except Exception as e:
-        return {"error": str(e)}
+        return _friendly_azure_error(e, action)
 
 
 @app.post("/api/action/snapshot/{vm_name}")

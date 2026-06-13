@@ -1696,7 +1696,8 @@ async function doRelease(vmName) {
     const r = await fetch(`/api/action/release/${vmName}`, { method: 'POST' });
     const d = await r.json();
     if (d.ok) toast('✓ Isolation released — ' + vmName + ' is back online');
-    else toast('✗ Release failed: ' + (d.stderr || d.error || '?'));
+    else if (d.capability_gap) toast('✗ ' + d.error, 8000);
+    else toast('✗ Release failed: ' + (d.error || d.stderr || '?'), 6000);
   } catch (e) { toast('✗ ' + e.message); }
   finally { _pendingActions.delete(vmName); refreshState(); }
 }
@@ -1758,7 +1759,8 @@ async function doRevert(vmName) {
     const r = await fetch(`/api/action/revert/${vmName}`, { method: 'POST' });
     const d = await r.json();
     if (d.ok) toast('✓ Revert complete — ' + vmName + ' is clean');
-    else toast('✗ Revert failed: ' + (d.stderr || d.error || '?'));
+    else if (d.capability_gap) toast('✗ ' + d.error, 8000);
+    else toast('✗ Revert failed: ' + (d.error || d.stderr || '?'), 6000);
   } catch (e) { toast('✗ ' + e.message); }
   finally { _pendingActions.delete(vmName); refreshState(); }
 }
@@ -1842,7 +1844,8 @@ async function doApproveAction(escId, vmName) {
     const r = await fetch(`/api/action/approve/${escId}`, { method: 'POST' });
     const d = await r.json();
     if (d.permission_denied) { toast('✗ Cannot execute: read-only credentials'); return; }
-    if (d.error) { toast('✗ ' + d.error); return; }
+    if (d.capability_gap) { toast('✗ ' + d.error, 8000); return; }
+    if (d.error) { toast('✗ ' + d.error, 6000); return; }
     if (d.cli_instruction) { toast('✓ Approved — run: ' + d.cli_instruction, 5000); }
     else toast('✓ Action approved and executed');
     refreshState();

@@ -95,6 +95,25 @@ async def state() -> dict:
     import os as _os
     read_only = _os.environ.get("GLORFINDEL_READ_ONLY", "0") in ("1", "true", "True")
 
+    # Autonomy capability matrix — what runs alone vs is always gated (UI popover).
+    # Constants are stable per Glorfindel; import from actions (single source).
+    capability: dict = {}
+    try:
+        from glorfindel.actions import AUTONOMOUS_ACTIONS, HUMAN_APPROVAL_REQUIRED
+        _allow: list = []
+        try:
+            _allow = list(_acfg.autonomy.allow_destructive)
+        except Exception:
+            pass
+        capability = {
+            "autonomous_actions": sorted(AUTONOMOUS_ACTIONS),
+            "gated_actions": sorted(HUMAN_APPROVAL_REQUIRED),
+            "allow_destructive": _allow,
+            "confidence_threshold": float(_os.environ.get("GLORFINDEL_CONFIDENCE_THRESHOLD", "0.7")),
+        }
+    except Exception:
+        pass
+
     return {
         "resources": resources,
         "escalations": esc_module.pending(),
@@ -105,6 +124,7 @@ async def state() -> dict:
         "autonomy_modes": autonomy_modes,
         "autonomy_default": autonomy_default,
         "read_only": read_only,
+        "capability": capability,
         "now": now.isoformat(),
     }
 

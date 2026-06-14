@@ -45,6 +45,7 @@ def record(
     proposal_id: str = "",
     proposed_query: str = "",
     confidence: float = 0.0,
+    action_params: dict | None = None,
 ) -> str:
     """Append an escalation and return its id.
 
@@ -84,6 +85,7 @@ def record(
         "proposal_id": proposal_id,
         "proposed_query": proposed_query,
         "confidence": confidence,
+        "action_params": action_params or {},
         "status": "pending",
         "resolved_at": None,
     }

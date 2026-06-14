@@ -745,6 +745,69 @@ def test_escalate_to_human_non_snapshot_no_cli_step():
     assert not any("glorfindel snapshot" in s for s in steps)
 
 
+def test_escalate_block_ip_carries_ip_in_action_params():
+    """block_suspicious_ip escalation must carry the IP so War Room can 1-click approve."""
+    from glorfindel.agent import escalate_to_human
+    from glorfindel import escalations as esc_module
+
+    state = _state(action="block_suspicious_ip")
+    state["dry_run"] = False
+    state["escalation_reason"] = "mode human_only"
+    state["mode_hold"] = True
+    state["signal"]["raw_signal"] = {
+        "first_result_row": {"SourceIP": "95.47.246.223", "FailedAttempts": "26"},
+    }
+
+    with patch.object(esc_module, "record") as mock_record:
+        escalate_to_human(state)
+
+    _, kwargs = mock_record.call_args
+    assert kwargs.get("action_params") == {"ip": "95.47.246.223"}
+
+
+def test_escalate_non_param_action_has_no_action_params():
+    """isolate_vm (resource_id-only) carries no action_params."""
+    from glorfindel.agent import escalate_to_human
+    from glorfindel import escalations as esc_module
+
+    state = _state(action="isolate_vm")
+    state["dry_run"] = False
+    state["escalation_reason"] = "mode human_only"
+    state["mode_hold"] = True
+
+    with patch.object(esc_module, "record") as mock_record:
+        escalate_to_human(state)
+
+    _, kwargs = mock_record.call_args
+    assert kwargs.get("action_params") is None
+
+
+def test_extract_suspicious_ip_from_first_result_row():
+    from glorfindel.agent import _extract_suspicious_ip
+    sig = {"raw_signal": {"first_result_row": {"SourceIP": "1.2.3.4"}}}
+    assert _extract_suspicious_ip(sig) == "1.2.3.4"
+
+
+def test_extract_suspicious_ip_from_detected_data():
+    from glorfindel.agent import _extract_suspicious_ip
+    sig = {"raw_signal": {"detected_data": {"SourceIP": "5.6.7.8"}}}
+    assert _extract_suspicious_ip(sig) == "5.6.7.8"
+
+
+def test_extract_suspicious_ip_context_override_wins():
+    from glorfindel.agent import _extract_suspicious_ip
+    sig = {
+        "context": {"suspicious_ip": "9.9.9.9"},
+        "raw_signal": {"first_result_row": {"SourceIP": "1.2.3.4"}},
+    }
+    assert _extract_suspicious_ip(sig) == "9.9.9.9"
+
+
+def test_extract_suspicious_ip_empty_when_absent():
+    from glorfindel.agent import _extract_suspicious_ip
+    assert _extract_suspicious_ip({"raw_signal": {}}) == ""
+
+
 # ── escalations.record — dedup ────────────────────────────────────────────────
 
 def test_escalation_record_dedup_returns_existing_id():

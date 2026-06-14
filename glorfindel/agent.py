@@ -745,6 +745,26 @@ def decide(
     }
 
 
+def _extract_suspicious_ip(signal: dict) -> str:
+    """Best-effort extraction of the suspicious IP for block_suspicious_ip.
+
+    Checks an explicit context override, then both the detected row (detected_data)
+    and the raw source row (first_result_row) for the common source/destination IP
+    fields. Shared by execute_action (to act) and escalate_to_human (to carry the IP
+    in the escalation payload so the War Room can approve & execute in one click).
+    """
+    raw = signal.get("raw_signal", {})
+    explicit = signal.get("context", {}).get("suspicious_ip")
+    if explicit:
+        return explicit
+    for row in (raw.get("detected_data") or {}, raw.get("first_result_row") or {}):
+        for key in ("SourceIP", "DestIP_s", "DestinationIp", "DestinationIPAddress"):
+            value = row.get(key)
+            if value:
+                return value
+    return ""
+
+
 def execute_action(
     state: GlorfindelState,
     *,
@@ -767,16 +787,7 @@ def execute_action(
         elif action == "release_isolation":
             outcome = connector.release_isolation(resource_id)
         elif action == "block_suspicious_ip":
-            raw = state["signal"].get("raw_signal", {})
-            detected = raw.get("detected_data", {})
-            ip = (
-                state["signal"].get("context", {}).get("suspicious_ip")
-                or detected.get("SourceIP")          # lateral movement / brute force
-                or detected.get("DestIP_s")          # exfil via Traffic Analytics
-                or detected.get("DestinationIp")
-                or detected.get("DestinationIPAddress")
-                or ""
-            )
+            ip = _extract_suspicious_ip(state["signal"])
             outcome = connector.block_suspicious_ip(ip, resource_id)
         elif action == "snapshot":
             # Fire-and-forget on detection_timeout: we don't know if the VM is compromised,
@@ -864,6 +875,16 @@ def escalate_to_human(state: GlorfindelState) -> GlorfindelState:
             f"`glorfindel snapshot {resource_id} --yes` pour capturer l'état forensique."
         )
 
+    # Carry action parameters so the War Room can approve & execute parameterised
+    # actions in one click (not just resource_id-only actions like isolate_vm).
+    # block_suspicious_ip needs the IP — extracted from the signal, same source as
+    # execute_action uses, so the approved action matches what would have run.
+    action_params: dict | None = None
+    if action == "block_suspicious_ip":
+        ip = _extract_suspicious_ip(signal)
+        if ip:
+            action_params = {"ip": ip}
+
     if not state.get("dry_run", False):
         from glorfindel import escalations
         escalations.record(
@@ -879,6 +900,7 @@ def escalate_to_human(state: GlorfindelState) -> GlorfindelState:
             proposal_id=state.get("proposal_id", ""),
             proposed_query=(state.get("proposed_rule") or {}).get("query", ""),
             confidence=state.get("confidence", 0.0),
+            action_params=action_params,
         )
 
     return {

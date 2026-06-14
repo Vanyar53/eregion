@@ -259,6 +259,45 @@ def test_discovery_service_run_once_uses_replace(tmp_path):
     assert "vm-old" not in names  # evicted by replace
 
 
+def test_posture_interval_read_from_config(tmp_path):
+    reg = AssetRegistry(path=tmp_path / "assets.json")
+    svc = DiscoveryService(_law_cfg(interval_s=900), reg, dry_run=False)
+    assert svc._posture_interval_s == 900
+
+
+def test_posture_interval_default_when_no_backend(tmp_path):
+    from glorfindel.config import GlorfindelConfig
+    reg = AssetRegistry(path=tmp_path / "assets.json")
+    svc = DiscoveryService(GlorfindelConfig(), reg, dry_run=False)
+    assert svc._posture_interval_s == 1800.0
+
+
+def test_run_once_runs_posture(tmp_path):
+    """run_once triggers a posture cycle (discovery + posture in one call)."""
+    from unittest.mock import MagicMock
+    reg = AssetRegistry(path=tmp_path / "assets.json")
+    posture = MagicMock()
+    svc = DiscoveryService(_law_cfg(), reg, dry_run=False, posture_checker=posture)
+
+    with patch("glorfindel.discovery._discover_from_backend", return_value=[]):
+        svc.run_once()
+
+    posture.check_and_escalate.assert_called_once()
+
+
+def test_discover_all_does_not_run_posture(tmp_path):
+    """_discover_all is now posture-free — posture is throttled separately."""
+    from unittest.mock import MagicMock
+    reg = AssetRegistry(path=tmp_path / "assets.json")
+    posture = MagicMock()
+    svc = DiscoveryService(_law_cfg(), reg, dry_run=False, posture_checker=posture)
+
+    with patch("glorfindel.discovery._discover_from_backend", return_value=[]):
+        svc._discover_all()
+
+    posture.check_and_escalate.assert_not_called()
+
+
 def test_discovery_service_keeps_cache_on_error(tmp_path):
     reg = AssetRegistry(path=tmp_path / "assets.json")
     reg.update([_asset("vm-a", backend="law")])

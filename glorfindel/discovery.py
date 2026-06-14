@@ -9,9 +9,17 @@ from __future__ import annotations
 import json
 import os
 import threading
+import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+
+# Discovery (cheap LAW Heartbeat query) runs often for responsiveness — a VM
+# powered on appears within this window. Posture checks (expensive RSV/NSG calls,
+# one set per discovered VM) are throttled separately to interval_s, so the slow
+# RSV API is not hammered every minute. See DiscoveryService._run.
+_DISCOVERY_INTERVAL_S = 60.0
+_DEFAULT_POSTURE_INTERVAL_S = 1800.0
 
 _CACHE_FILE = Path.home() / ".glorfindel" / "discovered_assets.json"
 
@@ -211,6 +219,13 @@ class DiscoveryService:
         self._posture_checker = posture_checker
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        # Posture cadence = interval_s of the first enabled backend (default 30min).
+        # Discovery itself runs on the faster _DISCOVERY_INTERVAL_S for responsiveness.
+        self._posture_interval_s = next(
+            (b.discovery.interval_s for b in config.monitoring_backends
+             if b.discovery.enabled),
+            _DEFAULT_POSTURE_INTERVAL_S,
+        )
 
     def start(self) -> None:
         """Start the discovery thread (non-blocking)."""
@@ -227,20 +242,31 @@ class DiscoveryService:
         self._stop.set()
 
     def run_once(self) -> None:
-        """Run a single discovery cycle synchronously (for testing)."""
+        """Run a single discovery + posture cycle synchronously (for testing)."""
         self._discover_all()
+        self._run_posture()
 
     # ── Private ───────────────────────────────────────────────────────────────
 
     def _run(self) -> None:
-        """Main discovery loop."""
+        """Main loop: discover often (responsive), run posture on a slower throttle.
+
+        Discovery is a cheap LAW Heartbeat query — runs every _DISCOVERY_INTERVAL_S
+        so a powered-on VM shows up quickly. Posture is expensive (RSV + NSG per VM)
+        — runs only every interval_s, so the slow RSV API isn't hit every minute.
+        """
         self._discover_all()
+        self._run_posture()
+        last_posture = time.monotonic()
 
         while not self._stop.is_set():
-            self._stop.wait(60)
+            self._stop.wait(_DISCOVERY_INTERVAL_S)
             if self._stop.is_set():
                 break
             self._discover_all()
+            if time.monotonic() - last_posture >= self._posture_interval_s:
+                self._run_posture()
+                last_posture = time.monotonic()
 
     def _discover_all(self) -> None:
         for backend in self._config.monitoring_backends:
@@ -252,7 +278,8 @@ class DiscoveryService:
                 continue
             self._registry.replace_for_backend(backend.name, found)
 
-        # Posture check after each discovery cycle
+    def _run_posture(self) -> None:
+        """Run posture checks (RSV/NSG per discovered VM) — best-effort."""
         if self._posture_checker is not None:
             try:
                 self._posture_checker.check_and_escalate(self._registry.all())

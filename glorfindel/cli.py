@@ -445,14 +445,13 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
                         dry_run=dry_run,
                         posture_checker=_posture,
                     )
-                    interval_min = int(
+                    posture_min = int(
                         _glorfindel_cfg.monitoring_backends[0].discovery.interval_s / 60
                     )
                     console.print(
                         f"[dim]Discovery:[/dim] "
                         f"{len(_glorfindel_cfg.monitoring_backends)} backend(s) "
-                        f"— re-discovering every {interval_min}min"
-                        f" + posture checks"
+                        f"— Heartbeat every 60s, posture (RSV/NSG) every {posture_min}min"
                     )
 
                     # Expand auto-apply rules after a short delay for initial discovery

@@ -1873,13 +1873,21 @@ function _applyReadOnlyGuards(root) {
   });
 }
 
-async function doApproveAction(escId, vmName) {
+async function doApproveAction(escId, vmName, ip) {
   if (_guardReadOnly()) return;
   toast('▶ Approving…');
   try {
-    const r = await fetch(`/api/action/approve/${escId}`, { method: 'POST' });
+    const url = `/api/action/approve/${escId}` + (ip ? `?ip=${encodeURIComponent(ip)}` : '');
+    const r = await fetch(url, { method: 'POST' });
     const d = await r.json();
     if (d.permission_denied) { toast('✗ Cannot execute: read-only credentials'); return; }
+    // Parameterised action whose param is missing (e.g. pre-fix escalation with no IP) —
+    // ask the operator for it and retry, no need to wait for a fresh trigger.
+    if (d.needs_ip) {
+      const entered = prompt(`IP to block for ${vmName}:`, '');
+      if (entered && entered.trim()) return doApproveAction(escId, vmName, entered.trim());
+      return;
+    }
     if (d.capability_gap) { toast('✗ ' + d.error, 8000); return; }
     if (d.error) { toast('✗ ' + d.error, 6000); return; }
     if (d.cli_instruction) { toast('✓ Approved — run: ' + d.cli_instruction, 5000); }

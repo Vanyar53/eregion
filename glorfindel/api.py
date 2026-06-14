@@ -539,8 +539,12 @@ async def set_autonomy_default(body: dict) -> dict:
 
 
 @app.post("/api/action/approve/{esc_id}")
-async def action_approve(esc_id: str) -> dict:
-    """One-click approve for mode_hold escalations — executes the recommended action and acks."""
+async def action_approve(esc_id: str, ip: str = "") -> dict:
+    """One-click approve for mode_hold escalations — executes the recommended action and acks.
+
+    `ip` (query param) lets the operator supply the target IP for block_suspicious_ip
+    when the escalation doesn't carry it (e.g. recorded before action_params existed).
+    """
     from glorfindel import escalations as _esc
     esc = next((e for e in _esc.pending() if e["id"] == esc_id), None)
     if not esc:
@@ -572,17 +576,19 @@ async def action_approve(esc_id: str) -> dict:
             return resp
 
         elif action == "block_suspicious_ip":
-            # Parameterised action — needs the IP. Read it from the escalation payload
-            # (forward-compatible with Glorfindel adding `ip` or `action_params.ip`).
-            ip = esc.get("ip") or (esc.get("action_params") or {}).get("ip") or ""
-            if not ip:
-                return {"error": (
-                    "block_suspicious_ip needs the IP, which this escalation doesn't "
-                    f"carry yet. Run: glorfindel block <ip> {resource_id} --yes"
+            # Parameterised action — needs the IP. Prefer an operator-supplied IP (query
+            # param), else read it from the escalation payload (`ip` or `action_params.ip`).
+            block_ip = ip or esc.get("ip") or (esc.get("action_params") or {}).get("ip") or ""
+            if not block_ip:
+                # Escalation carries no IP (e.g. recorded before action_params) — ask the
+                # operator instead of refusing, so the current escalation is still actionable.
+                return {"needs_ip": True, "error": (
+                    "This escalation doesn't carry the IP — enter the IP to block, "
+                    f"or run: glorfindel block <ip> {resource_id} --yes"
                 )}
-            result = await asyncio.to_thread(connector.block_suspicious_ip, ip, resource_id)
+            result = await asyncio.to_thread(connector.block_suspicious_ip, block_ip, resource_id)
             _esc.resolve(esc_id)
-            return {"ok": True, "action": action, "ip": ip, "result": result}
+            return {"ok": True, "action": action, "ip": block_ip, "result": result}
 
         else:
             return {"error": f"Action '{action}' non supportée via War Room — CLI : glorfindel respond {resource_id}"}

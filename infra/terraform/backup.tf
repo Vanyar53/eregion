@@ -24,8 +24,9 @@ resource "azurerm_backup_policy_vm" "daily" {
 }
 
 resource "azurerm_backup_protected_vm" "victim" {
+  for_each            = local.vms
   resource_group_name = azurerm_resource_group.annatar.name
   recovery_vault_name = azurerm_recovery_services_vault.annatar.name
-  source_vm_id        = azurerm_linux_virtual_machine.victim.id
+  source_vm_id        = azurerm_linux_virtual_machine.victim[each.key].id
   backup_policy_id    = azurerm_backup_policy_vm.daily.id
 }

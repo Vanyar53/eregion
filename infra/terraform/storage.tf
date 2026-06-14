@@ -14,9 +14,10 @@ resource "azurerm_storage_container" "exfil" {
 
 # VM managed identity needs to write blobs for exfil simulation
 resource "azurerm_role_assignment" "vm_storage_exfil" {
+  for_each             = local.vms
   scope                = azurerm_storage_account.exfil.id
   role_definition_name = "Storage Blob Data Contributor"
-  principal_id         = azurerm_linux_virtual_machine.victim.identity[0].principal_id
+  principal_id         = azurerm_linux_virtual_machine.victim[each.key].identity[0].principal_id
 }
 
 # Diagnostic logs → law-annatar: StorageBlobLogs populated in seconds (vs 10 min for Traffic Analytics)

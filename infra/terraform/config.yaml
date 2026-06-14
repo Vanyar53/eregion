@@ -4,10 +4,22 @@
 resource_group_name: annatar
 location: westeurope
 
-# VM
+# VM — défauts appliqués à chaque VM qui ne surcharge pas
 vm_size: Standard_D2as_v6
 admin_username: annatar
 disk_size_gb: 32
+
+# VMs à déployer (for_each). La clé "victim" → nom historique vm-annatar-victim
+# (rétro-compat scénarios / règles de détection / recovery points de backup).
+# Chaque VM peut surcharger vm_size / disk_size_gb ; sinon hérite des défauts ci-dessus.
+# Ajouter une entrée = une VM de plus, clé stable (pas de décalage d'index → pas de
+# destroy/recreate des autres VMs, contrairement à count).
+vms:
+  victim: {}
+  # victim-web:
+  #   vm_size: Standard_B1s
+  # victim-db:
+  #   disk_size_gb: 64
 
 # Network
 vnet_address_space: 10.10.0.0/16

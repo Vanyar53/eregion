@@ -49,8 +49,9 @@ resource "azurerm_monitor_data_collection_rule" "annatar" {
 }
 
 resource "azurerm_monitor_data_collection_rule_association" "vm" {
-  name                    = "dcra-annatar-vm"
-  target_resource_id      = azurerm_linux_virtual_machine.victim.id
+  for_each                = local.vms
+  name                    = each.value.dcra_name
+  target_resource_id      = azurerm_linux_virtual_machine.victim[each.key].id
   data_collection_rule_id = azurerm_monitor_data_collection_rule.annatar.id
 }
 
@@ -70,7 +71,7 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "disk_write_anomaly" {
   auto_mitigation_enabled = false
 
   criteria {
-    query = <<-KQL
+    query                   = <<-KQL
       Perf
       | where ObjectName == "Logical Disk" and CounterName == "Disk Write Bytes/sec"
       | where CounterValue > ${local.cfg.disk_write_alert_threshold_bytes}
@@ -87,9 +88,10 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "disk_write_anomaly" {
 }
 
 resource "azurerm_role_assignment" "ama_dcr" {
+  for_each             = local.vms
   scope                = azurerm_monitor_data_collection_rule.annatar.id
   role_definition_name = "Monitoring Metrics Publisher"
-  principal_id         = azurerm_linux_virtual_machine.victim.identity[0].principal_id
+  principal_id         = azurerm_linux_virtual_machine.victim[each.key].identity[0].principal_id
 }
 
 # Network Watcher — auto-created by Azure per region, reference as data source

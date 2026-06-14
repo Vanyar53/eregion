@@ -2,12 +2,14 @@ output "resource_group" {
   value = azurerm_resource_group.annatar.name
 }
 
-output "vm_name" {
-  value = azurerm_linux_virtual_machine.victim.name
+output "vm_names" {
+  value       = { for k, vm in azurerm_linux_virtual_machine.victim : k => vm.name }
+  description = "Map clé VM → nom Azure de la VM"
 }
 
-output "vm_public_ip" {
-  value = azurerm_public_ip.annatar_vm.ip_address
+output "vm_public_ips" {
+  value       = { for k, pip in azurerm_public_ip.annatar_vm : k => pip.ip_address }
+  description = "Map clé VM → IP publique"
 }
 
 output "log_analytics_workspace_id" {

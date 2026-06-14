@@ -1,14 +1,15 @@
 resource "azurerm_linux_virtual_machine" "victim" {
-  name                = "vm-annatar-victim"
+  for_each            = local.vms
+  name                = each.value.vm_name
   resource_group_name = azurerm_resource_group.annatar.name
   location            = azurerm_resource_group.annatar.location
-  size                = local.cfg.vm_size
+  size                = each.value.vm_size
   admin_username      = local.cfg.admin_username
   tags = merge(azurerm_resource_group.annatar.tags, {
     "annatar-test" = "true"
   })
 
-  network_interface_ids = [azurerm_network_interface.annatar_vm.id]
+  network_interface_ids = [azurerm_network_interface.annatar_vm[each.key].id]
 
   identity {
     type = "SystemAssigned"
@@ -35,7 +36,7 @@ resource "azurerm_linux_virtual_machine" "victim" {
     #!/bin/bash
     # Wait for the data disk to appear (udev may not have settled yet)
     for i in $(seq 1 30); do
-      DATA_DISK=$(lsblk -dpno NAME,SIZE | awk '$2=="32G"{print $1}' | head -1)
+      DATA_DISK=$(lsblk -dpno NAME,SIZE | awk '$2=="${each.value.disk_size_gb}G"{print $1}' | head -1)
       [ -n "$DATA_DISK" ] && break
       sleep 2
     done
@@ -55,12 +56,13 @@ resource "azurerm_linux_virtual_machine" "victim" {
 }
 
 resource "azurerm_managed_disk" "testdata" {
-  name                 = "disk-annatar-testdata"
+  for_each             = local.vms
+  name                 = each.value.disk_name
   location             = azurerm_resource_group.annatar.location
   resource_group_name  = azurerm_resource_group.annatar.name
   storage_account_type = "Standard_LRS"
   create_option        = "Empty"
-  disk_size_gb         = local.cfg.disk_size_gb
+  disk_size_gb         = each.value.disk_size_gb
   tags                 = azurerm_resource_group.annatar.tags
 }
 
@@ -68,35 +70,38 @@ resource "azurerm_managed_disk" "testdata" {
 # Azure Backup OriginalLocation restores leave orphan disks attached at LUN 10 — this
 # causes a conflict on every terraform apply after a restore.
 resource "null_resource" "clean_lun10" {
+  for_each = local.vms
   triggers = {
     always_run = timestamp()
   }
   provisioner "local-exec" {
     command = <<-EOT
-      current=$(az vm show -g annatar -n vm-annatar-victim \
+      current=$(az vm show -g annatar -n ${each.value.vm_name} \
         --query "storageProfile.dataDisks[?lun==\`10\`].name" -o tsv 2>/dev/null || true)
-      if [ -n "$current" ] && [ "$current" != "disk-annatar-testdata" ]; then
+      if [ -n "$current" ] && [ "$current" != "${each.value.disk_name}" ]; then
         echo "Detaching restore artifact '$current' from LUN 10..."
-        az vm disk detach -g annatar --vm-name vm-annatar-victim --name "$current"
+        az vm disk detach -g annatar --vm-name ${each.value.vm_name} --name "$current"
       fi
     EOT
   }
 }
 
 resource "azurerm_virtual_machine_data_disk_attachment" "testdata" {
-  managed_disk_id    = azurerm_managed_disk.testdata.id
-  virtual_machine_id = azurerm_linux_virtual_machine.victim.id
+  for_each           = local.vms
+  managed_disk_id    = azurerm_managed_disk.testdata[each.key].id
+  virtual_machine_id = azurerm_linux_virtual_machine.victim[each.key].id
   lun                = 10
   caching            = "None"
   depends_on         = [null_resource.clean_lun10]
 }
 
 resource "azurerm_dev_test_global_vm_shutdown_schedule" "victim" {
-  virtual_machine_id = azurerm_linux_virtual_machine.victim.id
-  location           = azurerm_resource_group.annatar.location
-  enabled            = true
+  for_each              = local.vms
+  virtual_machine_id    = azurerm_linux_virtual_machine.victim[each.key].id
+  location              = azurerm_resource_group.annatar.location
+  enabled               = true
   daily_recurrence_time = local.cfg.vm_shutdown_time
-  timezone           = "UTC"
+  timezone              = "UTC"
 
   notification_settings {
     enabled         = true
@@ -106,8 +111,9 @@ resource "azurerm_dev_test_global_vm_shutdown_schedule" "victim" {
 }
 
 resource "azurerm_virtual_machine_extension" "ama" {
+  for_each                   = local.vms
   name                       = "AzureMonitorLinuxAgent"
-  virtual_machine_id         = azurerm_linux_virtual_machine.victim.id
+  virtual_machine_id         = azurerm_linux_virtual_machine.victim[each.key].id
   publisher                  = "Microsoft.Azure.Monitor"
   type                       = "AzureMonitorLinuxAgent"
   type_handler_version       = "1.0"

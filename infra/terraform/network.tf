@@ -50,7 +50,8 @@ resource "azurerm_subnet_network_security_group_association" "annatar" {
 }
 
 resource "azurerm_public_ip" "annatar_vm" {
-  name                = "pip-annatar-vm"
+  for_each            = local.vms
+  name                = each.value.pip_name
   location            = azurerm_resource_group.annatar.location
   resource_group_name = azurerm_resource_group.annatar.name
   allocation_method   = "Static"
@@ -59,7 +60,8 @@ resource "azurerm_public_ip" "annatar_vm" {
 }
 
 resource "azurerm_network_interface" "annatar_vm" {
-  name                = "nic-annatar-vm"
+  for_each            = local.vms
+  name                = each.value.nic_name
   location            = azurerm_resource_group.annatar.location
   resource_group_name = azurerm_resource_group.annatar.name
   tags                = azurerm_resource_group.annatar.tags
@@ -68,6 +70,6 @@ resource "azurerm_network_interface" "annatar_vm" {
     name                          = "internal"
     subnet_id                     = azurerm_subnet.annatar.id
     private_ip_address_allocation = "Dynamic"
-    public_ip_address_id          = azurerm_public_ip.annatar_vm.id
+    public_ip_address_id          = azurerm_public_ip.annatar_vm[each.key].id
   }
 }

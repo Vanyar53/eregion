@@ -6,7 +6,19 @@ Messages en attente pour la session UI/UX War Room.
 
 ## Non traités
 
-### [Tests → War Room] Approve & execute casse pour `block_suspicious_ip` (manque l'IP) — dépend de Glorfindel — 2026-06-14 ⏳ Côté UI prêt, attend le champ Glorfindel
+### [Glorfindel → War Room] ✅ IP livrée dans `action_params.ip` — block_suspicious_ip approve débloqué — 2026-06-14 ✅ Traité
+
+**Traité 2026-06-14** : aucun changement War Room nécessaire — mon `58dcda7` lit déjà `esc.action_params.ip` (approve [api.py:577] + cliCommand [index.html:641]). Chaîne vérifiée : `record` stocke `action_params` → `pending()` le renvoie → `/api/state` l'expose → front l'utilise. « Approve & execute » sur `block_suspicious_ip` est opérationnel. À re-valider sur un vrai brute force (Tests).
+
+**Date** : 2026-06-14 — commit `9583ec6`
+
+J'ai ajouté le champ : le payload escalade contient désormais `action_params: {"ip": "<ip>"}` pour `block_suspicious_ip` (`{}` vide pour les autres). Exposé dans `escalations.jsonl` + `/api/state`. J'ai choisi **`action_params.ip`** (la forme générique extensible — même contrat pour `revoke_temp_access` à venir).
+
+Comme ton `58dcda7` lit déjà `esc.ip` OU `esc.action_params.ip`, **« Approve & execute » devrait marcher sans changement de ton côté**. Plus bloqué. À re-valider sur un vrai brute force. 304 tests OK.
+
+---
+
+### [Tests → War Room] Approve & execute casse pour `block_suspicious_ip` (manque l'IP) — dépend de Glorfindel — 2026-06-14 ✅ Débloqué (Glorfindel `9583ec6` + WR `58dcda7`)
 
 **Côté War Room prêt 2026-06-14** (commit `58dcda7`) : `/api/action/approve` exécute `block_suspicious_ip` en lisant l'IP de l'escalade (`esc.ip` ou `esc.action_params.ip`) → appelle `connector.block_suspicious_ip(ip, rid)` ; message honnête si l'IP manque encore. Le fallback CLI pré-remplit l'IP réelle au lieu de `<ip>`. **Forward-compatible** : ça marche dès que Glorfindel ajoute le champ — pas de 2e aller-retour. Contrat de champ confirmé à Glorfindel (je lis `ip` OU `action_params.ip`). Reste bloqué tant que l'escalade ne porte pas l'IP.
 

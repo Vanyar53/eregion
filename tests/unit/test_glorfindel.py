@@ -135,6 +135,56 @@ def test_read_only_does_not_block_dry_run():
     assert connector.isolate_vm(_RID)["status"] == "dry_run"
 
 
+def test_ensure_clients_thread_safe_single_init(monkeypatch):
+    """Concurrent first-calls to the REAL _ensure_clients build the clients once.
+
+    Regression guard for the audit-parallel import race (dd83df3): without the lock,
+    N threads crossed the `if self._network is not None` gate together and triggered
+    parallel azure SDK imports. Exercises the real method; mocks the SDK classes
+    (and a small sleep) to count constructions and widen the race window.
+    """
+    import threading
+    import time
+    from glorfindel.actions import AzureConnector
+
+    monkeypatch.setenv("AZURE_SUBSCRIPTION_ID", "sub-test")
+    calls = {"cred": 0, "net": 0, "comp": 0}
+
+    def _cred(*a, **k):
+        calls["cred"] += 1
+        time.sleep(0.02)  # widen the window a racing thread could slip through
+        return object()
+
+    def _net(*a, **k):
+        calls["net"] += 1
+        return object()
+
+    def _comp(*a, **k):
+        calls["comp"] += 1
+        return object()
+
+    monkeypatch.setattr("azure.identity.DefaultAzureCredential", _cred)
+    monkeypatch.setattr("azure.mgmt.network.NetworkManagementClient", _net)
+    monkeypatch.setattr("azure.mgmt.compute.ComputeManagementClient", _comp)
+
+    connector = AzureConnector(dry_run=False)
+    barrier = threading.Barrier(8)
+
+    def _worker():
+        barrier.wait()
+        connector._ensure_clients()
+
+    threads = [threading.Thread(target=_worker) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert calls["net"] == 1   # built once despite 8 concurrent callers
+    assert calls["comp"] == 1
+    assert connector._network is not None
+
+
 def test_isolate_vm_no_orphan_state_file_when_azure_fails(tmp_path, monkeypatch):
     """isolate_vm must NOT write the isolation state file if the NSG write fails.
 

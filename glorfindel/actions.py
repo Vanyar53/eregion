@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from abc import ABC, abstractmethod
 from pathlib import Path
 
@@ -116,6 +117,7 @@ class AzureConnector(CloudConnector):
         self._subscription_id = None
         self._network = None
         self._compute = None
+        self._clients_lock = threading.Lock()
 
     def permission_mode(self) -> str:
         """Return the effective permission regime: 'read_only' or 'read_write'."""
@@ -135,20 +137,32 @@ class AzureConnector(CloudConnector):
             )
 
     def _ensure_clients(self) -> None:
+        # Double-checked locking: the lazy SDK import + client creation must be
+        # thread-safe. audit.run() and the watch poll threads can call this
+        # concurrently; without the lock, simultaneous first-calls trigger parallel
+        # imports of azure.core and one thread sees a half-initialised module
+        # (ImportError: cannot import name 'Pipeline'). _network is assigned LAST so
+        # the lock-free fast path only passes when both clients are fully built.
         if self._network is not None:
             return
-        import os
-        from azure.identity import DefaultAzureCredential
-        from azure.mgmt.network import NetworkManagementClient
-        from azure.mgmt.compute import ComputeManagementClient
+        with self._clients_lock:
+            if self._network is not None:
+                return
+            import os
+            from azure.identity import DefaultAzureCredential
+            from azure.mgmt.network import NetworkManagementClient
+            from azure.mgmt.compute import ComputeManagementClient
 
-        sub_id = os.environ.get("AZURE_SUBSCRIPTION_ID")
-        if not sub_id:
-            raise RuntimeError("AZURE_SUBSCRIPTION_ID is not set")
-        self._credential = DefaultAzureCredential()
-        self._subscription_id = sub_id
-        self._network = NetworkManagementClient(self._credential, self._subscription_id)
-        self._compute = ComputeManagementClient(self._credential, self._subscription_id)
+            sub_id = os.environ.get("AZURE_SUBSCRIPTION_ID")
+            if not sub_id:
+                raise RuntimeError("AZURE_SUBSCRIPTION_ID is not set")
+            credential = DefaultAzureCredential()
+            compute = ComputeManagementClient(credential, sub_id)
+            network = NetworkManagementClient(credential, sub_id)
+            self._credential = credential
+            self._subscription_id = sub_id
+            self._compute = compute
+            self._network = network  # assign last — gate for the fast path
 
     def isolate_vm(self, resource_id: str) -> dict:
         """Apply a deny-all NSG rule (priority 100) to the VM's NSG.

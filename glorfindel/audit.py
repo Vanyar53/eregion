@@ -131,6 +131,8 @@ def _check_nsg(resource_id: str, connector) -> AuditCheck:
                 f"--scope /subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/{rg}"
             ),
         )
+    if _is_transient_error(err):
+        return _transient_check("isolate_vm, block_suspicious_ip", "NSG access", err)
     return AuditCheck(
         action="isolate_vm, block_suspicious_ip",
         name="NSG access",
@@ -177,6 +179,8 @@ def _check_backup(resource_id: str, connector, vault: str) -> AuditCheck:
                 f"--scope /subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/{rg}"
             ),
         )
+    if _is_transient_error(err):
+        return _transient_check("restore_from_backup", "Backup vault", err)
     return AuditCheck(
         action="restore_from_backup",
         name="Backup vault",
@@ -219,12 +223,40 @@ def _check_compute(resource_id: str, connector) -> AuditCheck:
                 f"--scope /subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/{rg}"
             ),
         )
+    if _is_transient_error(err):
+        return _transient_check("snapshot", "Compute access", err)
     return AuditCheck(
         action="snapshot",
         name="Compute access",
         status="fail",
         message=f"VM {vm} not found in {rg} — {err}",
         fix=f"Verify the VM exists: az vm show -g {rg} -n {vm}",
+    )
+
+
+def _is_transient_error(err: str) -> bool:
+    """True for an SDK/transport error (not a real IAM or config gap).
+
+    A transient error must NOT be reported as "no NSG / not configured / not found"
+    — that sends the operator chasing a phantom infra fix. Covers the lazy-import
+    race and common transport failures.
+    """
+    markers = (
+        "cannot import name", "_modulelock", "partially initialized",
+        "connectionerror", "connection aborted", "timeout", "timed out",
+        "temporarily unavailable", "service unavailable",
+    )
+    e = err.lower()
+    return any(m in e for m in markers)
+
+
+def _transient_check(action: str, name: str, err: str) -> AuditCheck:
+    return AuditCheck(
+        action=action,
+        name=name,
+        status="warn",
+        message=f"Could not verify (transient SDK/transport error) — {err}",
+        fix="Retry; if it persists, check the Azure SDK install and connectivity.",
     )
 
 

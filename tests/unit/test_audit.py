@@ -118,6 +118,31 @@ def test_run_checks_run_concurrently():
     assert [ch.name for ch in result.checks] == ["NSG access", "Backup vault", "Compute access"]
 
 
+def test_nsg_transient_sdk_error_not_labelled_no_nsg():
+    """An SDK import-race error must be reported as transient, not 'attach an NSG'."""
+    c = _connector(nsg={
+        "ok": False, "iam": False,
+        "error": "cannot import name 'Pipeline' from 'azure.core.pipeline'",
+    })
+    result = run(RESOURCE_ID, c)
+    nsg = next(ch for ch in result.checks if ch.name == "NSG access")
+    assert nsg.status == "warn"
+    assert "transient" in nsg.message.lower()
+    assert "Attach an NSG" not in nsg.fix
+
+
+def test_nsg_genuine_absence_still_says_attach():
+    """A real 'no NSG' error keeps the actionable attach-NSG guidance."""
+    c = _connector(nsg={
+        "ok": False, "iam": False,
+        "error": "NIC vm-x and its subnet have no NSG — cannot isolate VM",
+    })
+    result = run(RESOURCE_ID, c)
+    nsg = next(ch for ch in result.checks if ch.name == "NSG access")
+    assert nsg.status == "fail"
+    assert "Attach an NSG" in nsg.fix
+
+
 def test_run_nsg_fail_iam():
     c = _connector(nsg={"ok": False, "iam": True, "error": "AuthorizationFailed"})
     result = run(RESOURCE_ID, c)

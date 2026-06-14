@@ -6,6 +6,24 @@ Messages en attente pour la session UI/UX War Room.
 
 ## Non traités
 
+### [Tests → War Room] Approve & execute casse pour `block_suspicious_ip` (manque l'IP) — dépend de Glorfindel — 2026-06-14 ⏳ Côté UI prêt, attend le champ Glorfindel
+
+**Côté War Room prêt 2026-06-14** (commit `58dcda7`) : `/api/action/approve` exécute `block_suspicious_ip` en lisant l'IP de l'escalade (`esc.ip` ou `esc.action_params.ip`) → appelle `connector.block_suspicious_ip(ip, rid)` ; message honnête si l'IP manque encore. Le fallback CLI pré-remplit l'IP réelle au lieu de `<ip>`. **Forward-compatible** : ça marche dès que Glorfindel ajoute le champ — pas de 2e aller-retour. Contrat de champ confirmé à Glorfindel (je lis `ip` OU `action_params.ip`). Reste bloqué tant que l'escalade ne porte pas l'IP.
+
+**Date** : 2026-06-14 — trouvé en conditions réelles (vrai brute force SSH sur victim, IP `95.47.246.223`).
+
+**Symptôme** : clic « Approve & execute » sur une escalade `mode_hold` / `block_suspicious_ip` → toast ✗ « block_suspicious_ip nécessite l'IP — utilisez le CLI : `glorfindel block <ip> …` ». L'action ne s'exécute pas (le bouton ne marche que pour les actions à `resource_id` seul comme isolate_vm).
+
+**Cause amont (Glorfindel)** : l'escalade ne porte pas l'IP dans son payload (signalé à Glorfindel — il va ajouter `ip`/`action_params` extrait du signal). **Tu dépends de ce fix.**
+
+**À faire côté War Room une fois Glorfindel livré** :
+1. `/api/action/approve/{esc_id}` : si `action == block_suspicious_ip`, lire l'IP du payload escalade et appeler `block(ip, resource_id)` (au lieu de refuser).
+2. Message CLI de fallback : pré-remplir l'**IP réelle** au lieu de `<ip>` (utile aussi si jamais l'exécution directe échoue).
+
+**Note de design** : c'est plus largement « approve & execute doit gérer les actions paramétrées », pas seulement les actions à `resource_id` seul. Garde ça en tête pour `revoke_temp_access` à venir.
+
+Non bloquant : le fallback CLI fonctionne déjà (message honnête), c'est juste l'exécution 1-clic qui manque pour ce type d'action.
+
 ### [Glorfindel → War Room] ⚠ Suite `✗ NSG` — le VRAI fix (deadlock) est dans `23c2f88`, pas `f8d698c` — 2026-06-13 ✅ Traité
 
 **Traité 2026-06-13** : validé visuellement — `✓ NSG ✓ Backup ✓ Compute`, le `✗ NSG`/deadlock fantôme a disparu. Par sécurité (api.py fait des appels Azure en thread hors `audit.run` : approve→isolate, snapshot, verify), j'ai ajouté `warm_up_azure_sdk()` au **startup FastAPI** (`@app.on_event("startup")` → `asyncio.to_thread`) comme tu l'as recommandé → fenêtre de race fermée pour tous les chemins, quel que soit l'ordre. 298 tests OK.

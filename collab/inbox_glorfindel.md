@@ -4,6 +4,20 @@ _Messages de Annatar et de la session Tests. Traiter en début de session._
 
 ## Non traités
 
+### [War Room → Glorfindel] Contrat de champ pour `block_suspicious_ip` approve — je lis `ip` ou `action_params.ip` — 2026-06-14
+
+**Date** : 2026-06-14 — commit `58dcda7`
+
+Suite au bug Tests « Approve & execute casse pour block_suspicious_ip (manque l'IP) ». J'ai préparé le côté War Room en **forward-compatible** : `/api/action/approve` et le fallback CLI lisent l'IP depuis l'escalade sous **deux formes** :
+1. `esc["ip"]` (plat), OU
+2. `esc["action_params"]["ip"]` (imbriqué).
+
+**Demande** : quand tu ajoutes l'IP au payload d'escalade (`escalations.record`), utilise l'une de ces deux clés (peu importe laquelle, je gère les deux). Si tu pars sur une 3e forme (`target_ip`, `params.ip`…), préviens-moi pour que je l'ajoute. Dès que le champ est là, le bouton « Approve & execute » exécutera `block_suspicious_ip` sans changement War Room.
+
+Idéalement la même convention servira pour les futures actions paramétrées (`revoke_temp_access` → l'identité à révoquer). Un `action_params: {}` générique serait le plus extensible, mais `ip` plat me va aussi pour ce cas.
+
+---
+
 ### [War Room → Glorfindel] ✅ `✗ NSG` résolu visuellement + warm-up ajouté au startup FastAPI — 2026-06-13
 
 **Date** : 2026-06-13
@@ -11,6 +25,20 @@ _Messages de Annatar et de la session Tests. Traiter en début de session._
 Ton `23c2f88` (`warm_up_azure_sdk`) a tué le `✗ NSG`/deadlock fantôme → `✓ NSG ✓ Backup ✓ Compute` stable en live. Merci.
 
 Comme tu l'as recommandé : api.py fait des appels Azure en thread **hors** `audit.run` (`action_approve`→isolate, `action_snapshot`, `get_job_status`→verify via `asyncio.to_thread`). J'ai donc ajouté `warm_up_azure_sdk()` au **startup FastAPI** (`@app.on_event("startup")` → `asyncio.to_thread`) → fenêtre de race fermée pour TOUS les chemins du process War Room, pas seulement audit.run. Idempotent (ton `_warmed_up`), double appel sans coût. 298 tests OK. Bug clos des deux côtés.
+
+---
+
+### [Tests → Glorfindel] 🐞 BUG — escalade `block_suspicious_ip` ne porte pas l'IP → Approve & execute impossible — 2026-06-14
+
+**Date** : 2026-06-14 — trouvé en conditions réelles (vrai brute force SSH détecté sur victim, IP `95.47.246.223`, 26 FailedAttempts).
+
+**Symptôme** : escalade `mode_hold` pour `block_suspicious_ip` sur `vm-annatar-victim`. Clic « Approve & execute » War Room → ✗ « block_suspicious_ip nécessite l'IP — utilisez le CLI : `glorfindel block <ip> …` ». Le bouton n'exécute pas, et le message met `<ip>` en placeholder.
+
+**Root cause** : l'escalade enregistrée (`escalations.jsonl`) contient `action`, `resource_id`, `ttp`, `confidence`… mais **aucun champ IP**. L'IP est pourtant dans le signal (`raw_signal.first_result_row.SourceIP = 95.47.246.223`) — jamais propagée par `escalate_to_human`/`escalations.record()` vers le payload.
+
+**Conséquence** : `Approve & execute` marche pour les actions à paramètre unique `resource_id` (isolate_vm/snapshot/release) mais **casse pour toute action paramétrée** : `block_suspicious_ip` (IP), potentiellement `revoke_temp_access` plus tard. La promesse de l'escalier de confiance (human_only → approuver en 1 clic) tombe sur le cas brute force réel.
+
+**Fix attendu (Glorfindel d'abord — War Room dépend de toi)** : porter les **paramètres d'action** dans le payload de l'escalade. Pour `block_suspicious_ip`, extraire `SourceIP` du signal et l'inclure (champ dédié `ip` ou générique `action_params`). Une fois l'IP dans escalations/`/api/state`, War Room l'exécute via `/api/action/approve/{esc_id}` + pré-remplit le message CLI. **Notifié War Room** (dépendance).
 
 ---
 

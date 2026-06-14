@@ -391,6 +391,7 @@ wheel : eregion-0.2.0-py3-none-any.whl ✓
 - DCR `facility_names` doit inclure `authpriv` — `useradd` sur Ubuntu génère des messages `LOG_AUTHPRIV`. Sans ce facility, T1136.001 (account creation) ne remonte pas dans LAW. Ajouté dans `monitoring.tf` (commit 9a64e83).
 - Azure Backup OriginalLocation restore laisse des disques orphelins à LUN 10 → `terraform apply` échoue sur le prochain attachement. Fix : `null_resource.clean_lun10` dans `vm.tf` détache automatiquement tout disque non-testdata à LUN 10.
 - `isolate_vm` écrit `~/.glorfindel/isolation/<vm>.json` **après** confirmation des règles NSG (commit `b2a41c3`) — un 403 ne laisse plus d'état orphelin « ISOLATED » sans règle. `glorfindel reset` matche le `resource_id` en case-insensitive et `release_isolation` nettoie le state file local même si Azure n'a aucune règle.
+- **Imports azure.* concurrents → deadlock `_ModuleLock`** : les imports `from azure... import ...` sont paresseux (dans les méthodes). Deux threads important `azure.core` pour la 1re fois en même temps (audit parallèle, threads de poll watch) → deadlock du système d'import Python ou « cannot import name 'Pipeline' ». Fix : `actions.warm_up_azure_sdk()` importe tout une fois sur le thread principal au démarrage de `watch` ET au début de `audit.run` (avant le ThreadPool). Commit `23c2f88`. ⚠ Tout nouveau code qui importe azure dans un thread doit pouvoir compter sur le warm-up préalable, ou l'appeler.
 
 ---
 

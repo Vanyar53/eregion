@@ -174,11 +174,14 @@ glorfindel/
   config.py             → GlorfindelConfig + load_glorfindel_config() — charge glorfindel-config.yaml
                           ExceptionConfig.is_excluded(asset_name, rule_name) — opt-out fnmatch
   discovery.py          → AssetRegistry (thread-safe, persist ~/.glorfindel/discovered_assets.json)
-                          DiscoveryService — thread daemon, découverte au démarrage + périodique
+                          DiscoveryService — thread daemon. Cadences DÉCOUPLÉES :
+                            discovery (LAW Heartbeat, cheap) toutes les 60s → VM allumée apparaît vite ;
+                            posture (RSV/NSG par VM, cher) throttlée à interval_s (défaut 30min) → pas de matraquage RSV.
                           _discover_from_azure_monitor() → LAW Heartbeat query → liste VMs actives
                           replace_for_backend() : refresh + rétention — une VM absente du Heartbeat (éteinte)
                           est retenue (last_seen figé) tant que gap < GLORFINDEL_DISCOVERY_RETENTION_H (défaut 8h), puis évincée
                           None sur erreur query → cache conservé (pas d'éviction sur panne)
+                          audit.run() lance NSG/backup/compute en parallèle (le RSV ne s'empile plus sur le reste)
   agent.py              → LangGraph 8 nodes + _SOURCE_LANGUAGES map (source → query lang)
                           load_context → [poll_detection | propose_detection_rule]
                           → investigate → decide → execute_action → verify_action → store_cycle

@@ -638,10 +638,11 @@ function cliCommand(esc) {
   const id  = esc.id.slice(0, 8);
   if (esc.escalation_type === 'mode_hold') {
     const vm = rid.split('/').pop();
+    const ip = esc.ip || (esc.action_params && esc.action_params.ip) || '<ip>';
     const actionMap = {
       isolate_vm:          `glorfindel isolate ${vm} --yes`,
       snapshot:            `glorfindel snapshot ${vm} --yes`,
-      block_suspicious_ip: `glorfindel block <ip> ${vm} --yes`,
+      block_suspicious_ip: `glorfindel block ${ip} ${vm} --yes`,
       release_isolation:   `glorfindel release ${vm} --yes`,
       revoke_temp_access:  `glorfindel ack ${id}  # revoke_temp_access — manual`,
     };

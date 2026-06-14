@@ -84,9 +84,21 @@ def run(
             fix="Use a service principal with write roles to enable autonomous actions.",
         ))
 
-    result.checks.append(_check_nsg(resource_id, connector))
-    result.checks.append(_check_backup(resource_id, connector, vault))
-    result.checks.append(_check_compute(resource_id, connector))
+    # Run the three Azure checks concurrently. The RSV backup check
+    # (recovery_points.list) is the slow leg (several seconds); running it in
+    # parallel with the fast NSG/Compute checks means the whole result returns at
+    # the speed of the slowest single check instead of their sum. Order is
+    # preserved (NSG, backup, compute) — futures are read in submission order.
+    from concurrent.futures import ThreadPoolExecutor
+
+    jobs = [
+        (_check_nsg, (resource_id, connector)),
+        (_check_backup, (resource_id, connector, vault)),
+        (_check_compute, (resource_id, connector)),
+    ]
+    with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
+        futures = [pool.submit(fn, *args) for fn, args in jobs]
+        result.checks.extend(f.result() for f in futures)
     return result
 
 

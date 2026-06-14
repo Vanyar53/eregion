@@ -87,6 +87,37 @@ def test_run_all_ok():
     assert statuses["Compute access"] == "ok"
 
 
+def test_run_checks_run_concurrently():
+    """The 3 Azure checks run in parallel — total time ≈ slowest, not the sum.
+
+    Each connector check sleeps 0.3s; sequential would be ~0.9s, parallel ~0.3s.
+    Also asserts order is preserved (NSG, Backup, Compute) despite parallelism.
+    """
+    import time
+
+    def _slow(result):
+        def _fn(*args, **kwargs):
+            time.sleep(0.3)
+            return result
+        return _fn
+
+    c = MagicMock()
+    c.dry_run = False
+    c.read_only = False
+    c.check_nsg_access.side_effect = _slow({"ok": True, "nsg": "rg/nsg", "rules": 3})
+    c.check_backup_points.side_effect = _slow(
+        {"ok": True, "vault": "rsv-annatar", "points": 5, "latest_age_h": 12.0})
+    c.check_compute_access.side_effect = _slow(
+        {"ok": True, "vm": "vm", "disks": ["osdisk"]})
+
+    t0 = time.monotonic()
+    result = run(RESOURCE_ID, c)
+    elapsed = time.monotonic() - t0
+
+    assert elapsed < 0.7, f"checks not concurrent — took {elapsed:.2f}s (sum would be ~0.9s)"
+    assert [ch.name for ch in result.checks] == ["NSG access", "Backup vault", "Compute access"]
+
+
 def test_run_nsg_fail_iam():
     c = _connector(nsg={"ok": False, "iam": True, "error": "AuthorizationFailed"})
     result = run(RESOURCE_ID, c)

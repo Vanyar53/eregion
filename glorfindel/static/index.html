@@ -380,6 +380,8 @@
   .topo-assets {
     display: flex;
     flex-wrap: wrap;
+    align-items: flex-start;   /* cards keep their natural height — an expanded card
+                                  must not stretch its compact row-neighbours */
     gap: 10px;
     justify-content: flex-start;
     position: relative;

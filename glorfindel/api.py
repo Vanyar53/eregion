@@ -22,6 +22,21 @@ _STATIC = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=str(_STATIC)), name="static")
 
 
+@app.on_event("startup")
+async def _warm_up_azure() -> None:
+    """Import the Azure SDK once, single-threaded, before any request thread.
+
+    api.py runs Azure calls in threads outside audit.run (approve→isolate, snapshot,
+    verify) via asyncio.to_thread; warming up here closes the concurrent-first-import
+    race window for all of them (per Glorfindel 23c2f88). Idempotent + best-effort.
+    """
+    try:
+        from glorfindel.actions import warm_up_azure_sdk
+        await asyncio.to_thread(warm_up_azure_sdk)
+    except Exception:
+        pass
+
+
 @app.get("/")
 async def index() -> FileResponse:
     return FileResponse(_STATIC / "index.html")

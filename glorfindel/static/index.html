@@ -1330,7 +1330,8 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
         const st = _worstStatus(auditEntry.checks, g.actions);
         const [ic, col] = st==='ok' ? ['✓','var(--green)'] : st==='warn' ? ['⚠','var(--orange)']
                         : st==='fail' ? ['✗','var(--red)'] : ['—','var(--dim)'];
-        return `<span style="font-size:11px;color:${col}" title="${g.label}: ${st}">${ic}</span>`;
+        const detail = _groupDetail(auditEntry.checks, g.actions);
+        return `<span style="font-size:11px;color:${col}" title="${_attr(`${g.label}: ${st}${detail ? '\n' + detail : ''}`)}">${ic}</span>`;
       }).join(' ')
     : '';
 
@@ -1452,10 +1453,11 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
   const backupMsg = backupCheck?.message || '';
   // Extract "latest Xh ago" from message like "Vault 'rsv-annatar': 5 point(s), latest 2h ago"
   const bMatch = backupMsg.match(/(\d+)\s*point[^,]*,\s*latest\s+(.+)/);
+  const backupFix = backupCheck?.fix ? `\nFix: ${backupCheck.fix}` : '';
   const backupSummary = bMatch
     ? `<span style="color:var(--green)">${bMatch[1]} RP</span> <span style="color:var(--dim)">· last ${bMatch[2]}</span>`
     : backupCheck
-      ? `<span style="color:var(--dim);font-size:9px">${backupMsg.slice(0, 48) || 'checking…'}</span>`
+      ? `<span style="color:var(--dim);font-size:9px" title="${_attr(backupMsg + backupFix)}">${backupMsg || 'checking…'}</span>`
       : `<span style="color:var(--dim)">—</span>`;
 
   const activeJob = (_state?.active_jobs || []).find(
@@ -1480,7 +1482,9 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
           const st = _worstStatus(auditEntry.checks, g.actions);
           const [ic, col] = st==='ok' ? ['✓','var(--green)'] : st==='warn' ? ['⚠','var(--orange)']
                           : st==='fail' ? ['✗','var(--red)'] : ['—','var(--dim)'];
-          return `<span style="font-size:11px;color:${col};font-weight:600">${ic} ${g.label}</span>`;
+          const detail = _groupDetail(auditEntry.checks, g.actions);
+          const cursor = detail ? ';cursor:help' : '';
+          return `<span style="font-size:11px;color:${col};font-weight:600${cursor}" title="${_attr(`${g.label}: ${st}${detail ? '\n' + detail : ''}`)}">${ic} ${g.label}</span>`;
         }).join('')}
       </div>` : '';
 
@@ -2447,6 +2451,25 @@ function _worstStatus(checks, actions) {
   if (relevant.some(c => c.status === 'warn'))  return 'warn';
   if (relevant.every(c => c.status === 'ok'))   return 'ok';
   return 'skip';
+}
+
+// Escape for use inside an HTML attribute (title). Newlines → &#10; so tooltips wrap.
+function _attr(s) {
+  return (s || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;').replace(/\n/g, '&#10;');
+}
+
+// Full audit detail (message + fix) for a readiness group — surfaced as a tooltip
+// so ✗ NSG / ✗ Backup explain WHY without going to the CLI.
+function _groupDetail(checks, actions) {
+  const relevant = checks.filter(c =>
+    actions.some(a => c.action.split(/,\s*/).includes(a)));
+  if (!relevant.length) return '';
+  return relevant.map(c => {
+    let s = `${c.message || c.status}`;
+    if (c.fix) s += `\nFix: ${c.fix}`;
+    return s;
+  }).join('\n');
 }
 
 // ── Config + audit data refresh ────────────────────────────────────────────────

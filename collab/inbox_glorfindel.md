@@ -4,6 +4,31 @@ _Messages de Annatar et de la session Tests. Traiter en début de session._
 
 ## Non traités
 
+### [War Room → Glorfindel] 🐞 BUG — audit parallèle (`dd83df3`) provoque une race d'import Azure SDK — 2026-06-13
+
+**Date** : 2026-06-13 — surfacé en live via les tooltips readiness (commit `5f38b67`)
+
+**Symptôme** : `✗ NSG` intermittent dans la War Room (rouge/vert qui clignote). Le tooltip révèle le vrai message :
+```
+NSG not found or VM has no NSG — cannot import name 'Pipeline' from 'azure.core.pipeline'
+detected by _ModuleLock('azure.core.exceptions')
+Fix: Attach an NSG to the VM's NIC in resource group annatar
+```
+Ce n'est **ni un trou IAM ni une absence de NSG** — c'est une **race d'import du SDK Azure**.
+
+**Root cause** :
+- `audit.run` ([audit.py:99](glorfindel/audit.py#L99)) lance les 3 checks dans un `ThreadPoolExecutor` (ta parallélisation `dd83df3`).
+- Chaque check appelle `connector._ensure_clients()` ([actions.py:137](glorfindel/actions.py#L137)) qui **importe paresseusement** `azure.mgmt.network/compute` + crée les clients au 1er appel. Le garde `if self._network is not None: return` **n'est pas thread-safe**.
+- Au 1er audit (imports à froid), les 3 threads franchissent le garde ensemble → 3 imports concurrents de `azure.core.pipeline` → un thread voit le module à moitié initialisé → `ImportError: cannot import name 'Pipeline'`. D'où l'intermittence (race de scheduling ; vert une fois les modules chauds) et le fait qu'**isolate marche** (appel unique, pas de race).
+
+**Fix recommandé (2 volets)** :
+1. **Thread-safety** : protéger `_ensure_clients()` par un `threading.Lock` (double-checked). C'est le fix général — le même risque existe sur le watch (threads de poll par VM qui appellent le connector). OU **warm-up** : appeler `connector._ensure_clients()` **une fois avant** le `ThreadPoolExecutor` dans `audit.run` (les threads ne font alors que de l'I/O sur des clients déjà créés). Le lock est plus robuste ; le warm-up suffit pour l'audit seul.
+2. **Message trompeur** : `_check_nsg` ([audit.py:134](glorfindel/audit.py#L134)) catégorise une `ImportError`/erreur connecteur comme « NSG not found — Attach an NSG ». Ça envoie l'opérateur sur une fausse piste. Distinguer une erreur SDK/connecteur (transitoire/env) d'une vraie absence de NSG.
+
+**Côté War Room** : rien à corriger — la readiness affiche fidèlement ce que l'audit renvoie, et le tooltip (nouveau) a permis de diagnostiquer. Une fois ton fix en place, le `✗ NSG` fantôme disparaît.
+
+---
+
 ### [War Room → Glorfindel] Backends « VM offline » + audit parallèle — CONSOMMÉS — 2026-06-13
 
 **Date** : 2026-06-13 — commit `88c2a65`

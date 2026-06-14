@@ -1427,15 +1427,21 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
   // can act (non_disruptive), blue = observe (human_only) — so exceptions pop out.
   const modeDeviates = autonomyMode !== globalDefault;
   const modeIsAct    = autonomyMode === 'non_disruptive';
-  const modeTxt      = `${modeIsAct ? '⚡' : '👁'} ${modeIsAct ? 'NON-DISRUPTIVE' : 'HUMAN-ONLY'}`;
-  const _defLabel    = globalDefault === 'non_disruptive' ? 'non-disruptive' : 'human-only';
-  const _modeBadgeBase = 'font-size:8px;font-weight:700;padding:1px 5px;border-radius:3px;letter-spacing:.5px;flex-shrink:0;cursor:pointer';
+  // Header badge is icon-only (⚡ act / 👁 observe) to keep the VM name readable in a
+  // 260px card. At the global default → bare dim icon; an override → small tinted pill
+  // (orange=act, blue=observe) so it pops. Full text + capability on hover/click and in
+  // the MODE dropdown when expanded.
+  const modeIcon  = modeIsAct ? '⚡' : '👁';
+  const modeFull  = modeIsAct ? 'non-disruptive' : 'human-only';
+  const _defLabel = globalDefault === 'non_disruptive' ? 'non-disruptive' : 'human-only';
   const _modeClick = `onclick="event.stopPropagation();showCapabilityPopover(event,'${autonomyMode}')"`;
+  const _modeTitle = (modeDeviates
+    ? `Autonomy override: ${modeFull} (global default: ${_defLabel})`
+    : `Autonomy: ${modeFull} (global default)`) + ' · click for capability';
+  const _modeColor = modeIsAct ? 'orange' : 'blue';
   const modeBadge = !modeDeviates
-    ? `<span ${_modeClick} title="Autonomy mode — matches global default · click for capability" style="${_modeBadgeBase};background:transparent;color:var(--dim);border:1px solid var(--border)">${modeTxt}</span>`
-    : modeIsAct
-    ? `<span ${_modeClick} title="Override — acts autonomously (global default: ${_defLabel}) · click for capability" style="${_modeBadgeBase};background:color-mix(in srgb,var(--orange) 16%,transparent);color:var(--orange);border:1px solid color-mix(in srgb,var(--orange) 35%,transparent)">${modeTxt}</span>`
-    : `<span ${_modeClick} title="Override — recommend only (global default: ${_defLabel}) · click for capability" style="${_modeBadgeBase};background:color-mix(in srgb,var(--blue) 14%,transparent);color:var(--blue);border:1px solid color-mix(in srgb,var(--blue) 30%,transparent)">${modeTxt}</span>`;
+    ? `<span ${_modeClick} title="${_modeTitle}" style="font-size:11px;flex-shrink:0;cursor:pointer;opacity:.6">${modeIcon}</span>`
+    : `<span ${_modeClick} title="${_modeTitle}" style="font-size:10px;flex-shrink:0;cursor:pointer;padding:1px 4px;border-radius:3px;line-height:1;background:color-mix(in srgb,var(--${_modeColor}) 16%,transparent);border:1px solid color-mix(in srgb,var(--${_modeColor}) 35%,transparent)">${modeIcon}</span>`;
 
   const modeSelector = isExpanded
     ? `<div style="display:flex;align-items:center;gap:6px;margin-top:6px">

@@ -1005,12 +1005,16 @@ function renderInfra() {
     if (resourceMap.has(r.resource_id)) resourceMap.get(r.resource_id).states = r.states;
     else resourceMap.set(r.resource_id, r);
   });
-  // Ajouter les assets découverts absents du resourceMap — déduplique par vm_name
+  // Ajouter les assets découverts absents du resourceMap — déduplique par vm_name.
+  // Carry last_seen so a powered-off VM (retained by discovery up to 8h) can be
+  // shown grayed "offline" instead of vanishing.
   discovered.forEach(d => {
-    const exists = [...resourceMap.values()].some(r => r.vm_name === d.name);
-    if (!exists) {
+    const existing = [...resourceMap.values()].find(r => r.vm_name === d.name);
+    if (existing) {
+      if (d.last_seen) existing.last_seen = d.last_seen;
+    } else {
       const key = d.resource_id || `discovered:${d.name}`;
-      resourceMap.set(key, { resource_id: key, vm_name: d.name, states: [] });
+      resourceMap.set(key, { resource_id: key, vm_name: d.name, states: [], last_seen: d.last_seen });
     }
   });
   vmEscs.forEach(e => {
@@ -1055,7 +1059,12 @@ function renderInfra() {
         ${(() => {
           _currentVmNames = [...resourceMap.values()].map(r => r.vm_name);
           const slots = _buildSlots(_currentVmNames);
-          if (slots.every(s => !s)) return `<div style="color:var(--dim);font-size:11px;padding:24px;text-align:center;width:100%">No assets discovered — check monitoring backends</div>`;
+          if (slots.every(s => !s)) {
+            const msg = detectBackends.length
+              ? 'No assets to show yet — powered-on VMs appear here once they emit a heartbeat'
+              : 'No monitoring backends configured — add one in detection_rules.yaml';
+            return `<div style="color:var(--dim);font-size:11px;padding:24px;text-align:center;width:100%">${msg}</div>`;
+          }
           return slots.map((vmName, slotIdx) => {
             if (vmName) {
               const r = [...resourceMap.values()].find(r => r.vm_name === vmName);
@@ -1258,7 +1267,7 @@ function _renderModules(rules, detectBackends, recoverBackends, resources) {
 // ── Asset nodes ────────────────────────────────────────────────────────────────
 
 function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
-  const { resource_id, vm_name, states = [] } = resource;
+  const { resource_id, vm_name, states = [], last_seen } = resource;
   const isIsolated  = states.some(s => s.type === 'isolated');
   const isBlocked   = states.some(s => s.type === 'blocked');
   const restoreInfo = restoreByVm[vm_name];
@@ -1268,6 +1277,13 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
     e.resource_id === resource_id || e.resource_id.split('/').pop() === vm_name);
   const totalEscs   = myEscs.length + myDetEscs.length;
   const isExpanded  = _expandedVms.has(vm_name);
+
+  // "Possibly offline": no heartbeat for >15 min and otherwise idle. Backend retains
+  // the asset up to 8h, so it stays visible (grayed) instead of vanishing. Isolated
+  // VMs also stop heart-beating (NSG deny-all blocks AMA) — don't flag those.
+  const _gapMin   = last_seen ? (Date.now() - new Date(last_seen).getTime()) / 60000 : null;
+  const isOffline = !isIsolated && !isBlocked && !restoreInfo && !myEscs.length
+                    && _gapMin !== null && _gapMin > 15;
 
   const stateClass = _pendingActions.has(vm_name) ? 's-releasing'
                    : restoreInfo    ? 's-restoring'
@@ -1281,7 +1297,12 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
             : isIsolated    ? `<span style="color:var(--red)">●</span>`
             : isBlocked     ? `<span style="color:var(--orange)">●</span>`
             : myEscs.length ? `<span style="color:var(--purple)">●</span>`
+            : isOffline     ? `<span style="color:var(--dim)" title="possibly offline">●</span>`
             :                 `<span style="color:var(--green)">●</span>`;
+
+  const offlineBadge = isOffline
+    ? `<span title="No heartbeat for ${_relTime(last_seen)} — possibly powered off" style="font-size:8px;font-weight:700;padding:1px 5px;border-radius:3px;background:color-mix(in srgb,var(--dim) 14%,transparent);color:var(--dim);border:1px solid var(--border);letter-spacing:.5px;flex-shrink:0">OFFLINE</span>`
+    : '';
 
   // Badges are clickable in compact mode only — expanded mode uses dec-row / esc-items
   const escBadge = totalEscs
@@ -1518,6 +1539,7 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
     <div class="node-asset-header" onclick="toggleAsset('${vm_name}')">
       ${dot}
       <span class="node-asset-name">${vm_name}</span>
+      ${offlineBadge}
       ${modeBadge}
       ${readiness && !isExpanded ? `<span style="color:var(--dim);font-size:9px">${readiness}</span>` : ''}
       <span style="color:var(--dim);font-size:9px;margin-left:6px">${isExpanded ? '▾' : '▸'}</span>
@@ -1959,9 +1981,28 @@ async function refreshState() {
     const r = await fetch('/api/state');
     _state = await r.json();
     _updatePosture();
+    _autoFetchAuditOnNewVm();
     renderInfra();
     await refreshActionsData();  // parallel fetch, re-renders when ready
   } catch (e) {}
+}
+
+// Auto-fetch the readiness audit as soon as a new VM shows up (don't wait for the
+// 5-min poll or a click) — the audit backend is parallel/fast now, the perceived
+// delay was the UI fetch timing.
+let _seenVmNames = new Set();
+function _autoFetchAuditOnNewVm() {
+  const names = new Set();
+  (_state?.resources || []).forEach(r => r.vm_name && names.add(r.vm_name));
+  (_state?.discovered_assets || []).forEach(d => d.name && names.add(d.name));
+  (_state?.escalations || []).forEach(e => {
+    const v = (e.resource_id || '').split('/').pop();
+    if (v) names.add(v);
+  });
+  let hasNew = false;
+  names.forEach(n => { if (!_seenVmNames.has(n)) hasNew = true; });
+  _seenVmNames = names;
+  if (hasNew && !_auditLoading) refreshAuditData();
 }
 
 // Posture panel — two orthogonal axes, always visible (symmetric: no "absence = active" trap).

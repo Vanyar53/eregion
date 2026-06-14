@@ -6,7 +6,36 @@ Messages en attente pour la session UI/UX War Room.
 
 ## Non traités
 
-### [Jonathan → War Room] VM éteinte = disparition totale de la carte — badge « offline » — TODO 2026-06-14
+### [Glorfindel → War Room] Audit parallélisé + le « attendre un refresh » est côté UI — 2026-06-13 ✅ Traité
+
+**Traité 2026-06-13** : auto-fetch de l'audit dès qu'une nouvelle VM apparaît dans `/api/state` (`_autoFetchAuditOnNewVm` — diff des vm_names resources+discovered+escalades, déclenche `refreshAuditData()` sur nouveauté). Option (1) retenue ; l'audit revenant en 1 bloc rapide, pas d'affichage progressif. Plus besoin d'attendre le poll 5min/clic.
+
+**Date** : 2026-06-13 — commit `dd83df3`
+
+Jonathan a observé : VM allumée → apparaît vite, mais le statut **NSG/backup/compute** d'une carte n'apparaît qu'après un refresh. Diagnostic :
+- La VM apparaît = discovery (LAW Heartbeat). Le statut = `audit.run` (NSG + backup RSV + compute). Le check **RSV était le plus lent et s'empilait** sur les deux autres (séquentiel). **Corrigé** : `audit.run` lance les 3 en parallèle → le triplet revient à la vitesse du RSV seul (plancher Azure), plus la somme. `/api/audit` en bénéficie automatiquement.
+- **Mais le « il faut un refresh » est côté War Room** : c'est le *moment* où l'UI va chercher `/api/audit`. Deux pistes (ton périmètre) : (1) **auto-fetch l'audit dès qu'une nouvelle VM apparaît** dans `/api/state` (au lieu d'attendre le prochain poll/clic) ; (2) optionnellement **affichage progressif** — montrer NSG/compte dès qu'ils sont là sans attendre le RSV (mais comme l'audit revient maintenant en 1 bloc plus rapide, (1) suffit probablement).
+
+Rien de bloquant — juste pour que tu saches que le backend audit est maintenant rapide ; le reste du délai perçu est le timing de fetch UI.
+
+
+### [Glorfindel → War Room] Backend prêt pour « VM offline » — rétention + last_seen livrés — 2026-06-13 ✅ Traité
+
+**Traité 2026-06-13** : `last_seen` carry-é dans le resourceMap ; carte d'une VM sans heartbeat depuis >15 min (et sinon idle) → **dot gris + badge `OFFLINE`** (tooltip « no heartbeat for X — possibly powered off ») au lieu de disparaître (le backend la retient jusqu'à 8h). Seuil UI 15 min < rétention backend 8h. Empty-state affiné : « No assets to show yet — powered-on VMs appear here once they emit a heartbeat » si backends OK, sinon « No monitoring backends configured ». Les VM isolées (AMA coupé par le deny-all) ne sont PAS flaggées offline.
+
+**Date** : 2026-06-13 — commit `747aa4c`
+
+Le backend pour ton TODO « VM éteinte = disparition » est en place :
+- **`last_seen`** : déjà présent par asset dans `/api/discovered`/`/api/state` (champ `DiscoveredAsset.last_seen`, ISO). Rien de nouveau à fetch — calcule le gap côté UI.
+- **Rétention** : une VM absente du Heartbeat (éteinte) n'est plus évincée du registre immédiatement → elle reste avec son `last_seen` **figé** (le gap grandit visiblement) tant que `gap < GLORFINDEL_DISCOVERY_RETENTION_H` (défaut 8h), puis évincée. Donc une VM clean + éteinte **reste dans `/api/state`** jusqu'à 8h.
+
+**Côté UI (à toi)** : affiche les assets au `last_seen` ancien en grisé « possibly offline » (dot gris) au lieu de les dropper ; affine l'empty-state (« assets connus mais hors-ligne » ≠ « aucun backend »). Ton seuil d'affichage UI peut être plus court que la rétention backend (8h) — c'est même souhaitable (ex. gris dès 10-15 min sans heartbeat). Tu pilotes le seuil d'affichage, le backend te garantit juste que l'asset ne disparaît pas avant 8h.
+
+---
+
+### [Jonathan → War Room] VM éteinte = disparition totale de la carte — badge « offline » — ✅ Livré 2026-06-13
+
+**Livré 2026-06-13** : backend (`747aa4c`, rétention + `last_seen`) + UI (dot gris `OFFLINE` au-delà de 15 min sans heartbeat, empty-state affiné). La VM éteinte reste visible grisée au lieu de disparaître. À valider visuellement.
 
 **Date** : 2026-06-13
 

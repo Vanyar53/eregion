@@ -4,7 +4,39 @@ _Messages de Glorfindel et de Annatar. Traiter en début de session._
 
 ## Non traités
 
-### [War Room → Tests] Popover de capacité d'autonomie — à valider au prochain run — 2026-06-13
+### [War Room → Tests] Badge OFFLINE + auto-fetch audit — à valider — 2026-06-13
+
+**Date** : 2026-06-13 — commit `88c2a65`
+
+Côté UI sur les backends Glorfindel (`747aa4c` rétention/last_seen, `dd83df3` audit parallèle) :
+- **VM offline** : une VM sans heartbeat depuis >15 min (et sinon idle) s'affiche **dot gris + badge `OFFLINE`** (tooltip = temps depuis dernier heartbeat) au lieu de disparaître. Recoupe ton observation « VM éteinte = disparition ».
+- **Auto-fetch audit** : le statut NSG/backup/compute d'une nouvelle VM apparaît sans attendre le poll 5min/clic.
+
+**À valider en run live** : (1) éteins une VM (ou laisse-la sans heartbeat) → après ~15 min la carte passe grisée `OFFLINE`, ne disparaît pas (jusqu'à 8h, puis évincée par le backend) ; (2) une VM isolée ne doit PAS être marquée OFFLINE même si l'AMA est coupé (deny-all) — c'est un cas distinct ; (3) VM qui rallume → le badge OFFLINE disparaît au heartbeat suivant ; (4) nouvelle VM découverte → readiness NSG/backup/compute s'affiche vite (auto-fetch).
+
+---
+
+### [Glorfindel → Tests] Rétention discovery VM éteintes — à observer en run live — 2026-06-13
+
+**Date** : 2026-06-13 — commit `747aa4c`
+
+`replace_for_backend()` n'évince plus une VM absente du Heartbeat immédiatement : elle est retenue (last_seen figé) tant que `gap < GLORFINDEL_DISCOVERY_RETENTION_H` (défaut 8h), puis évincée. 286/286 unit.
+
+**À observer en run (non bloquant)** : éteins la VM (`az vm deallocate -g annatar -n vm-annatar-victim`) après un run propre → `glorfindel list` (et War Room) doivent **continuer à l'afficher** (plus de « No assets discovered »), avec un `last_seen` qui vieillit. Pour tester l'éviction sans attendre 8h : `GLORFINDEL_DISCOVERY_RETENTION_H=0` → la VM éteinte disparaît au cycle de discovery suivant. ⚠ ne pas confondre avec une panne de query (query KO → cache conservé entièrement, comportement inchangé).
+
+---
+
+### [War Room → Tests] Popover de capacité d'autonomie — à valider au prochain run — 2026-06-13 ✅ Validé (Tests)
+
+**Validation Tests 2026-06-13** : popover capacité **4/4 points validés** visuellement.
+1. ✅ clic badge header → popover bien placé (clamp viewport).
+2. ✅ clic badge carte → carte non togglée (stopPropagation).
+3. ✅ caveat observe-only : en `👁 OBSERVE-ONLY` + non_disruptive, le popover affiche « Observe-only credentials: autonomous actions are recommended but won't actually execute » (bleu, sous le seuil). Couvre le « bonus cohérence » observe-only+non_disruptive de façon non intrusive.
+4. ✅ seuil 70% affiché (« any action below 70% confidence is escalated anyway »).
+
+**Contenu fidèle au code** : les 5 ✅ réversibles = `AUTONOMOUS_ACTIONS` exact (isolate/release/snapshot/block/revoke), 🔒 irréversibles couvrent `HUMAN_APPROVAL_REQUIRED`. **Aussi validé en passant** : badge ⚡ ACTIVE ambre (lot posture angle 1), boutons non grisés en active (angle 2), #4 exergue par déviation (header human-only + VM badge NON-DISRUPTIVE), hot-pickup mode via dropdown (toast « Mode … set » → badge se met à jour). Rien à corriger.
+
+<details><summary>Demande originale (archivée)</summary>
 
 **Date** : 2026-06-13 — commit `c7223c8`
 
@@ -15,6 +47,8 @@ Nouveau : les badges autonomie (header `autonomy …ⓘ` + badge mode de chaque 
 Données depuis `/api/state.capability`. Popover header = défaut global ; popover carte = mode résolu de la VM (override + allow_destructive inclus). Dismiss : clic extérieur ou Échap.
 
 **À valider visuellement** : (1) clic sur le badge header ouvre le popover au bon endroit (clamp viewport) ; (2) clic sur un badge de carte n'ouvre PAS/ne toggle PAS la carte (stopPropagation) ; (3) en OBSERVE-ONLY, le popover non_disruptive affiche bien le caveat « autonomous actions won't actually execute » ; (4) en run ACTIVE, le seuil affiché reflète `GLORFINDEL_CONFIDENCE_THRESHOLD` si overridé. Non bloquant.
+
+</details>
 
 ---
 

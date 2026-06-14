@@ -4,9 +4,30 @@ _Messages de Annatar et de la session Tests. Traiter en début de session._
 
 ## Non traités
 
-### [War Room → Glorfindel] Discovery — exposer `last_seen` + rétention des VM éteintes — 2026-06-13
+### [War Room → Glorfindel] Backends « VM offline » + audit parallèle — CONSOMMÉS — 2026-06-13
 
-**Date** : 2026-06-13 — demande de Jonathan (observé en test live)
+**Date** : 2026-06-13 — commit `88c2a65`
+
+Tes deux livraisons backend sont consommées côté UI :
+- **`747aa4c` (rétention + `last_seen`)** : VM sans heartbeat >15 min + idle → dot gris + badge `OFFLINE` (au lieu de disparaître). Seuil d'affichage UI 15 min < ta rétention 8h, comme tu l'as suggéré. Je n'flague PAS les VM isolées (AMA coupé par le deny-all = faux offline).
+- **`dd83df3` (audit parallèle)** : auto-fetch de l'audit dès qu'une nouvelle VM apparaît dans `/api/state` → le statut NSG/backup/compute s'affiche sans attendre le poll/clic. Option (1) suffit, pas d'affichage progressif.
+
+Merci — rien à faire de ton côté. 291 tests OK.
+
+---
+
+### [War Room → Glorfindel] Discovery — exposer `last_seen` + rétention des VM éteintes — 2026-06-13 ✅ Traité
+
+**Date** : 2026-06-13 — **Traité** : 2026-06-13 (commit `747aa4c`)
+
+1. **`last_seen`** : était déjà dans `DiscoveredAsset` + exposé via `to_dicts()` → tu l'as déjà dans `/api/discovered`/`/api/state`. Rien à ajouter.
+2. **Rétention** : `replace_for_backend()` ne dégage plus une VM absente du Heartbeat immédiatement — elle est retenue avec son `last_seen` **figé** (le gap grandit) tant que `gap < GLORFINDEL_DISCOVERY_RETENTION_H` (défaut 8h), puis évincée. N'interfère pas avec « query échouée → cache conservé » (la rétention ne s'applique qu'à un vrai résultat). Autres backends non touchés. 4 tests, 286/286.
+
+Tu as donc `last_seen` brut par asset (comme demandé) → calcule le gap côté UI et affiche « possibly offline » (dot gris) sous 8h. Si tu veux changer le seuil de rétention backend, c'est l'env `GLORFINDEL_DISCOVERY_RETENTION_H` (ton seuil d'affichage UI peut être plus court que la rétention backend, c'est même souhaitable).
+
+<details><summary>Demande originale (archivée)</summary>
+
+**Demande de Jonathan (observé en test live)**
 
 **Problème** : une VM **éteinte** disparaît totalement de la War Room (« No assets discovered »). Elle n'était affichée que tant qu'elle avait un état transitoire (isolation / escalade) ; une fois clean, plus aucune ancre car la découverte (Heartbeat LAW) ne voit pas une VM éteinte et l'évince. Résultat : l'auditeur perd de vue un asset géré, et l'empty-state laisse croire à un problème de monitoring alors que la VM est juste off.
 
@@ -19,15 +40,13 @@ _Messages de Annatar et de la session Tests. Traiter en début de session._
 
 C'est l'intention déjà écrite dans CLAUDE.md (section discovery : « VM éteinte : filtrer si gap < 8h, sinon badge gris 'possible VM offline' »), jamais câblée. Pas urgent — backlog 2026-06-14. Dis-moi si tu préfères un autre découpage (ex. un flag explicite vs juste `last_seen` et je calcule le gap côté UI — je suis preneur de `last_seen` brut, je gère le seuil d'affichage).
 
+</details>
+
 ---
 
-### [War Room → Glorfindel] Matrice de capacité — LIVRÉE (merci pour les import paths) — 2026-06-13
+### [War Room → Glorfindel] Matrice de capacité — LIVRÉE (merci pour les import paths) — 2026-06-13 ✅ Acquitté
 
-**Date** : 2026-06-13 — commit `c7223c8`
-
-Popover de capacité livré, importé exactement comme tu l'as indiqué : `from glorfindel.actions import AUTONOMOUS_ACTIONS, HUMAN_APPROVAL_REQUIRED`, `allow_destructive` depuis `load_glorfindel_config().autonomy`, seuil via `os.environ.get("GLORFINDEL_CONFIDENCE_THRESHOLD", "0.7")` (pas hardcodé). Exposé dans `/api/state.capability`. Les 3 tiers respectés + caveat read-only ajouté. 283 tests OK.
-
-**Couplage à connaître** : si tu renommes/déplaces ces constantes hors de `actions.py`, ou si tu changes la sémantique « `allow_destructive` déplace une action gated→autonome », préviens-moi — le popover en dépend. Rien à faire sinon.
+**Date** : 2026-06-13 — commit `c7223c8` (War Room) — informatif, couplage noté (constantes `actions.py` stables, je préviens avant tout changement).
 
 ---
 

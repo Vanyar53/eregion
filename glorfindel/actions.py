@@ -26,6 +26,45 @@ HUMAN_APPROVAL_REQUIRED = {
     "restore_from_backup",  # replaces disk content — irreversible without another backup
 }
 
+_warmed_up = False
+_warmup_lock = threading.Lock()
+
+
+def warm_up_azure_sdk() -> None:
+    """Import the Azure SDK once, single-threaded, before any worker threads run.
+
+    The codebase imports azure.* lazily inside methods. When several threads first-import
+    azure.core concurrently (audit's 3 parallel checks, or the watch's discovery + poll
+    threads), CPython's import system can deadlock (`_ModuleLock` on azure.core.exceptions)
+    or expose a half-initialised module ("cannot import name 'Pipeline'"). Doing every
+    azure import here, on the calling (main) thread, makes all later in-method imports
+    instant cache hits — no concurrent first-import. Idempotent + best-effort.
+
+    Call at watch startup AND at the top of audit.run (before the ThreadPoolExecutor) so
+    both the watch process and the War Room API process are covered.
+    """
+    global _warmed_up
+    if _warmed_up:
+        return
+    with _warmup_lock:
+        if _warmed_up:
+            return
+        try:
+            import azure.core.pipeline          # noqa: F401  (the module that races)
+            import azure.core.exceptions         # noqa: F401
+            from azure.identity import DefaultAzureCredential   # noqa: F401
+            from azure.mgmt.network import NetworkManagementClient   # noqa: F401
+            from azure.mgmt.network import models               # noqa: F401
+            from azure.mgmt.compute import ComputeManagementClient   # noqa: F401
+            from azure.mgmt.recoveryservicesbackup import (        # noqa: F401
+                RecoveryServicesBackupClient,
+            )
+            from azure.monitor.query import LogsQueryClient    # noqa: F401
+            _warmed_up = True
+        except Exception:
+            # azure not installed / partial env — real errors surface at actual use.
+            pass
+
 
 class CloudConnector(ABC):
     """Provider-agnostic interface. Azure now, AWS/GCP later."""

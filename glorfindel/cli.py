@@ -175,6 +175,12 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
     from annatar.signals.schema import Signal
     from glorfindel.agent import GlorfindelAgent
 
+    # Import the Azure SDK once, on the main thread, before discovery/poll/audit
+    # threads start — avoids concurrent first-import deadlocks (azure.core _ModuleLock).
+    if not dry_run:
+        from glorfindel.actions import warm_up_azure_sdk
+        warm_up_azure_sdk()
+
     agent = GlorfindelAgent(
         dry_run=dry_run, model=model, memory_path=memory_path,
         autonomy_default=mode_override,

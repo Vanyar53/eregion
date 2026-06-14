@@ -110,6 +110,11 @@ def test_run_checks_run_concurrently():
     c.check_compute_access.side_effect = _slow(
         {"ok": True, "vm": "vm", "disks": ["osdisk"]})
 
+    # Pre-warm the Azure SDK import so it isn't counted in the concurrency timing
+    # (audit.run calls warm_up_azure_sdk() before the ThreadPool; idempotent).
+    from glorfindel.actions import warm_up_azure_sdk
+    warm_up_azure_sdk()
+
     t0 = time.monotonic()
     result = run(RESOURCE_ID, c)
     elapsed = time.monotonic() - t0

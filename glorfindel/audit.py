@@ -91,6 +91,13 @@ def run(
     # preserved (NSG, backup, compute) — futures are read in submission order.
     from concurrent.futures import ThreadPoolExecutor
 
+    # Import the Azure SDK once, on THIS thread, before spawning the 3 parallel
+    # checks — otherwise their concurrent first-import of azure.core deadlocks the
+    # import system (_ModuleLock) / yields a half-init module. No-op after the first
+    # call. Covers the War Room API process too (it calls audit.run via to_thread).
+    from glorfindel.actions import warm_up_azure_sdk
+    warm_up_azure_sdk()
+
     jobs = [
         (_check_nsg, (resource_id, connector)),
         (_check_backup, (resource_id, connector, vault)),

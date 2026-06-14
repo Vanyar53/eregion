@@ -135,6 +135,16 @@ def test_read_only_does_not_block_dry_run():
     assert connector.isolate_vm(_RID)["status"] == "dry_run"
 
 
+def test_warm_up_azure_sdk_idempotent():
+    """warm_up_azure_sdk imports without raising and is safe to call repeatedly."""
+    from glorfindel.actions import warm_up_azure_sdk
+    warm_up_azure_sdk()
+    warm_up_azure_sdk()  # second call is a no-op (already warmed)
+    # After warm-up, the lazily-imported SDK modules are in sys.modules (cache hits)
+    import sys
+    assert "azure.core.pipeline" in sys.modules
+
+
 def test_ensure_clients_thread_safe_single_init(monkeypatch):
     """Concurrent first-calls to the REAL _ensure_clients build the clients once.
 

@@ -225,6 +225,50 @@ def test_discover_azure_monitor_empty_query_result():
     assert assets == []  # valid empty — all VMs gone
 
 
+def test_discover_uses_real_lastseen_not_now():
+    """last_seen must come from the query's LastSeen, not be reset to now.
+
+    Otherwise the ago(2h) window keeps a powered-off VM refreshing last_seen=now
+    for 2h, defeating retention + the OFFLINE badge.
+    """
+    real = "2026-06-14T11:06:46+00:00"
+    rows = [{"Computer": "vm-x", "ResourceId": "/r", "LastSeen": real}]
+    with patch(
+        "glorfindel.detectors.detector_for",
+        return_value=_mock_detector(rows),
+    ):
+        assets = _discover_from_azure_monitor("law-test", "ws-guid")
+    assert assets[0].last_seen == real  # the real heartbeat time, not now
+
+
+def test_discover_normalizes_datetime_lastseen():
+    """A datetime LastSeen (no tz) is normalised to an ISO string (UTC)."""
+    from datetime import datetime
+    rows = [{"Computer": "vm-x", "ResourceId": "/r",
+             "LastSeen": datetime(2026, 6, 14, 11, 6, 46)}]
+    with patch(
+        "glorfindel.detectors.detector_for",
+        return_value=_mock_detector(rows),
+    ):
+        assets = _discover_from_azure_monitor("law-test", "ws-guid")
+    # parseable by fromisoformat (retention relies on it)
+    from datetime import datetime as _dt
+    assert _dt.fromisoformat(assets[0].last_seen).year == 2026
+
+
+def test_discover_falls_back_to_now_when_lastseen_absent():
+    """No LastSeen field → fall back to now (parseable ISO)."""
+    from datetime import datetime as _dt, timezone as _tz
+    rows = [{"Computer": "vm-x", "ResourceId": "/r"}]
+    with patch(
+        "glorfindel.detectors.detector_for",
+        return_value=_mock_detector(rows),
+    ):
+        assets = _discover_from_azure_monitor("law-test", "ws-guid")
+    age = (_dt.now(_tz.utc) - _dt.fromisoformat(assets[0].last_seen)).total_seconds()
+    assert age < 60  # ~now
+
+
 def test_discover_from_backend_unsupported_returns_empty():
     """Unsupported backend → empty list (not None — not an error)."""
     class FakeBackend:

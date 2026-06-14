@@ -148,6 +148,26 @@ Heartbeat
 """
 
 
+def _normalize_last_seen(value, fallback: str) -> str:
+    """Return an ISO-8601 string for the Heartbeat LastSeen value.
+
+    Azure may return it as a datetime, an ISO string (often with a trailing 'Z'),
+    or nothing. Normalised so AssetRegistry's retention can parse it with
+    datetime.fromisoformat. Falls back to `fallback` (now) when absent/unparseable.
+    """
+    if value in (None, ""):
+        return fallback
+    if isinstance(value, datetime):
+        dt = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        return dt.isoformat()
+    s = str(value).replace("Z", "+00:00")  # fromisoformat (3.11) handles Z, be safe
+    try:
+        datetime.fromisoformat(s)
+        return s
+    except ValueError:
+        return fallback
+
+
 def _discover_from_azure_monitor(
     backend_name: str,
     workspace_id: str,
@@ -169,11 +189,17 @@ def _discover_from_azure_monitor(
             if not name:
                 continue
             short_name = name.split(".")[0]
+            # Use the REAL last Heartbeat time (max(TimeGenerated) from the query),
+            # NOT now: the ago(2h) window keeps a powered-off VM in results for 2h,
+            # so writing `now` would freeze the gap at ~0 and defeat retention/OFFLINE.
+            last_seen = _normalize_last_seen(
+                row.get("LastSeen") or row.get("last_seen"), now_iso
+            )
             assets.append(DiscoveredAsset(
                 name=short_name,
                 resource_id=rid,
                 monitoring_backend=backend_name,
-                last_seen=now_iso,
+                last_seen=last_seen,
                 source="heartbeat",
                 extra={"fqdn": name},
             ))

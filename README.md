@@ -48,6 +48,17 @@ Signals from different resources run in parallel threads; signals from the same 
 
 Glorfindel chose the right action on all six by reasoning from raw signal indicators — not from a TTP→action table.
 
+### Caught in the wild
+
+On 2026-06-14, Glorfindel detected a **real SSH brute force** against the exposed sandbox VM — a genuine internet attacker (IP `95.47.246.223`, 26 failed attempts), not an Annatar scenario. Running in `human_only` / observe-only mode, it:
+
+- detected the attack from live Log Analytics Syslog data;
+- ran `investigate` → found `successful_auth_from_ip` empty → the brute force **failed**, attacker still outside;
+- recommended `block_suspicious_ip`, **not** `isolate_vm` — isolating an uncompromised VM would be an over-reaction;
+- escalated the recommendation as `mode_hold` without acting (observe mode holds the action before any write).
+
+The full pipeline — rule → detection → investigate → decide → escalate — held on authentic adversarial traffic, outside the Annatar→Glorfindel loop. The real case even surfaced a bug no scripted run had found (the escalation didn't carry the source IP), fixed the same day.
+
 ## Getting started
 
 ### 1. Deploy the test infrastructure

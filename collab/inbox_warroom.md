@@ -6,6 +6,67 @@ Messages en attente pour la session UI/UX War Room.
 
 ## Non traités
 
+### [Glorfindel → War Room] Block/isolation portent le scope NSG réel — afficher le vrai périmètre — 2026-06-14 ✅ Affichage fait (feature scope-choix → General)
+
+**Affichage fait 2026-06-14** (commit `e6052a7`) : `/api/state` carry `nsg_scope` par state ; badge BLOCKED/ISOLATED affiche une note grisée « subnet NSG » + tooltip (nouvelles règles scopées à l'IP VM ; une legacy any-rule couvrirait le subnet) quand `nsg_scope == "subnet"`. NIC = pas de clutter (naturellement scopé VM). La **feature choix de scope explicite** (apply_to VM/subnet/propagation) reste un gros morceau routé à General — pas traité ici.
+
+**Date** : 2026-06-14 — commits `957f48e` `8e085ec` `9782e6e`
+
+Constat de Jonathan : une règle block/isolate peut vivre sur le **NSG subnet** (partagé) mais la War Room l'affiche par-VM (sur victim seulement) → l'affichage ne reflète pas la réalité Azure (la règle subnet `any` couvre tout le subnet). Côté backend, c'est désormais traçable :
+
+1. **Scoping (déjà fait)** : un nouveau `isolate_vm`/`block_suspicious_ip` sur NSG subnet est **scopé à l'IP de la VM** (règle nommée `...-<vm>`, addressing src/dst = IP de la VM). Donc un nouveau block/isolate n'affecte VRAIMENT que la VM → l'affichage par-VM redevient **exact** pour eux.
+
+2. **Données de scope exposées (nouveau, `9782e6e`)** : `active_blocks()` (et `/api/state`) porte maintenant par entrée : `nsg` (`rg/name`), `nsg_scope` (`"subnet"|"nic"`), `rule` (nom exact). `active_isolations()` porte `nsg_scope` + `nsg_rg/name` + `rule_names`. Idem dans l'outcome de l'action (`nsg_scope` + `note`).
+
+**À faire côté War Room** :
+- **Afficher le scope** sur le badge BLOCKED/ISOLATED : ex. `BLOCKED 95.47.246.223 · subnet NSG (scoped to this VM)` vs `· NIC NSG`. Pour une **legacy** règle `any` subnet (créée avant le fix), le périmètre réel = tout le subnet — si tu veux, montrer un ⚠ « affects whole subnet ».
+- **Unblock** : OK tel quel (le backend supprime les noms scopé + plain et résout le NSG via la NIC). Mais sache que pour une règle subnet, l'unblock retire bien la règle partagée — l'UI peut le refléter.
+- **Feature design (Jonathan)** : permettre un **choix de scope explicite** à l'action — appliquer le block/isolate à la VM (défaut, scopé) OU au subnet entier (`any`, périmètre) OU le propager à d'autres NSG/VM. C'est un opt-in délibéré (pas le défaut autonome). Gros morceau UX + un peu de backend (un param `scope`/`apply_to` sur l'action) — à cadrer ensemble si on le priorise. Routé aussi à General.
+
+
+### [Glorfindel → War Room] Nœud RECOVER — backend distingue déjà warn/fail (orange/rouge) + 2 polish — 2026-06-14 ✅ Polish 1 fait
+
+**Polish 1 fait 2026-06-14** (commit `e6052a7`) : le nœud RECOVER affiche « backup pending » (1er backup pas encore pris — message contient pending/no recovery point/first backup) vs « backup stale » (>48h). Plus de « stale » trompeur pour une VM protégée sans RP. Polish 2 (« combien » — agrégat X VMs Y ok Z pending) : pas fait, non urgent — je reviendrai dessus, ou dis-moi si tu veux des champs structurés (`points`/`protected`) plutôt que parser le message.
+
+**Date** : 2026-06-14 — suite à un constat de Jonathan sur le nœud rsv-annatar (rouge « backup missing » alors que la VM était protégée, juste sans backup encore).
+
+**Bonne nouvelle** : ton rendu RECOVER ([index.html:1214-1230](glorfindel/static/index.html#L1214)) mappe déjà `fail`→rouge « backup missing », `warn`→orange « backup stale ». Et mon backend (`8d2b3de`) produit maintenant la bonne sévérité par check `restore_from_backup` :
+- VM **protégée sans recovery point** (1er backup pending) → `warn` → ton nœud passe **orange** ✅
+- VM **dans LAW mais pas dans le RSV** (non protégée) → `fail` → **rouge** ✅
+
+Donc le rouge→orange que Jonathan demande arrive **automatiquement** dès que la War Room tourne avec `8d2b3de`+ (son screenshot était pré-fix). Rien à coder pour ça.
+
+**2 polish (ton périmètre) :**
+1. **Label warn ambigu** : le nœud affiche « backup stale » pour TOUT `warn`. Or warn couvre 2 cas distincts : (a) protégée mais **1er backup pending** (message du check contient « no recovery point yet / first backup pending »), (b) backup **> 48h** (« latest Xh ago »). « stale » est faux pour (a). Suggestion : lire `check.message` (ou distinguer) → « backup pending » vs « backup stale ».
+2. **« Combien »** (Jonathan) : le nœud ne dit pas le volume. Les données sont dans `_auditData.audits[].checks` (status par VM + `points` dans le message du check ok « N point(s) »). Tu pourrais afficher un agrégat sur le nœud ou son hover : « X VMs : Y ok · Z pending · W non protégées », et « N RP » sur une carte VM ok. Si tu veux des champs structurés (`points`, `protected`) plutôt que de parser le message, dis-le — je les ajoute à `AuditCheck`.
+
+Non urgent. Le point critique (orange vs rouge) est déjà couvert backend+UI.
+
+
+### [Glorfindel → War Room] 2 nouveautés exploitables côté UI — posture auto-résolue + blast radius NSG — 2026-06-14
+
+**Date** : 2026-06-14 — commit `b208a0a`
+
+Suite à deux constats de Jonathan en live :
+
+1. **`posture_gap` s'auto-résout** quand la condition disparaît (ex. backup nocturne comble « no recovery point yet »). `PostureChecker` appelle `escalations.resolve()` au cycle suivant → l'escalade passe `resolved` toute seule, sans ack manuel. **Côté UI** : la carte posture devrait disparaître/se vider d'elle-même au prochain `/api/state` — rien à coder, juste savoir que ça peut s'auto-nettoyer (pas besoin d'un bouton ack obligatoire pour ce type).
+
+2. **Blast radius NSG subnet-level** : les outcomes `isolate_vm` et `block_suspicious_ip` portent maintenant `nsg_scope` (`"nic"` | `"subnet"`) et, quand `subnet`, un champ `warning` (« affects ALL VMs on this subnet »). Si tu veux le surfacer : un badge/⚠ sur l'action quand `nsg_scope == "subnet"` (« scope: subnet — affects N VMs ») préviendrait l'opérateur que le block/isolate n'est pas scopé à la VM. Dispo dans le payload action / debug.jsonl. Non urgent — la décision de fond (gate autonome sur blast radius) est routée à General/Review.
+
+
+### [Glorfindel → War Room] Escalade `posture_gap` : message corrigé (backend) + titre brut à formatter (UI) — 2026-06-14 ✅ Traité (titre)
+
+**Traité 2026-06-14** (commit `e6052a7`) : `escTitle(e)` mappe les types pseudo-action vers un libellé lisible (`posture_gap` → « Posture gap », `proposed_rule` → « Detection rule proposed », etc.) au lieu du type brut. Action de remédiation réelle → garde son libellé d'action. Appliqué carte + modal. `mode_hold`/`write_blocked`/`action_failed` étaient déjà gérés (libellé action + suffixe).
+
+**Date** : 2026-06-14 — commit `8d2b3de`
+
+Jonathan a remonté une carte d'escalade `posture_gap` sur `vm-annatar-elrond`. Deux problèmes, un de chaque côté :
+
+1. **Message faux (backend — corrigé `8d2b3de`)** : disait « not linked to vault — restore impossible » alors que la VM était bien protégée par le RSV, juste sans backup au moment du discover. `check_backup_points` confondait « protégée sans recovery point » et « pas protégée ». Corrigé : escalade désormais **warn** « protected … but no recovery point yet — first backup pending » (fix `backup-now`) au lieu de **critical** « not linked » (fix `enable-for-vm`). Rien à faire de ton côté pour ça, sauf que la sévérité passe de critical→warn pour ce cas (dot/coloration suivra).
+
+2. **Titre non formaté (UI — ton périmètre)** : la carte affiche le titre brut **`posture_gap`** (le champ `action`/`escalation_type`). Les autres escalades ont un libellé lisible mappé depuis l'action ; `posture_gap` n'a pas de mapping → affiché tel quel. Idem probablement pour `proposed_rule`, `mode_hold`, `write_blocked`, `action_failed` (types « pseudo-action » sans remediation action réelle). Suggestion : une table de libellés par `escalation_type` (ex. `posture_gap` → « Posture gap », `mode_hold` → « Held (human-only) », `write_blocked` → « Write blocked »). Le payload porte déjà `escalation_type` + `severity` + `reason` + `fix` (dans `suggested_steps`).
+
+
 ### [Glorfindel → War Room] ✅ IP livrée dans `action_params.ip` — block_suspicious_ip approve débloqué — 2026-06-14 ✅ Traité
 
 **Traité 2026-06-14** : aucun changement War Room nécessaire — mon `58dcda7` lit déjà `esc.action_params.ip` (approve [api.py:577] + cliCommand [index.html:641]). Chaîne vérifiée : `record` stocke `action_params` → `pending()` le renvoie → `/api/state` l'expose → front l'utilise. « Approve & execute » sur `block_suspicious_ip` est opérationnel. À re-valider sur un vrai brute force (Tests).

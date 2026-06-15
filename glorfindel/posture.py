@@ -53,7 +53,7 @@ class PostureChecker:
     # ── Public ────────────────────────────────────────────────────────────────
 
     def check_and_escalate(self, assets: list) -> list[PostureGap]:
-        """Check all assets and escalate new gaps. Returns all gaps found."""
+        """Check all assets, escalate new gaps, auto-resolve cleared ones. Returns gaps."""
         all_gaps: list[PostureGap] = []
         for asset in assets:
             if not asset.resource_id:
@@ -62,7 +62,30 @@ class PostureChecker:
             all_gaps.extend(gaps)
             for gap in gaps:
                 self._maybe_escalate(gap)
+        # Auto-resolve gaps that no longer exist (e.g. the overnight backup ran →
+        # "no recovery point yet" cleared) so the operator doesn't have to ack a
+        # posture escalation for a condition that fixed itself.
+        self._resolve_cleared_gaps({g.key for g in all_gaps})
         return all_gaps
+
+    def _resolve_cleared_gaps(self, current_keys: set[str]) -> None:
+        """Resolve escalations for previously-pending gaps no longer detected."""
+        from glorfindel import escalations
+        with self._lock:
+            changed = False
+            for key, entry in list(self._state.items()):
+                if entry.get("status") == "pending" and key not in current_keys:
+                    esc_id = entry.get("escalation_id", "")
+                    if esc_id and not self._dry_run:
+                        try:
+                            escalations.resolve(esc_id)
+                        except Exception:
+                            pass
+                    entry["status"] = "resolved"
+                    entry["resolved_at"] = datetime.now(timezone.utc).isoformat()
+                    changed = True
+            if changed:
+                self._save_state()
 
     def active_gaps(self) -> list[dict]:
         """Return persisted pending gaps (for API exposure)."""

@@ -216,7 +216,7 @@ class AzureConnector(CloudConnector):
         self._ensure_clients()
         rg, vm_name = _parse_vm_resource_id(resource_id)
         nic_id = self._get_primary_nic_id(rg, vm_name)
-        nsg_rg, nsg_name = self._get_nic_nsg(nic_id)
+        nsg_rg, nsg_name, nsg_scope = self._get_nic_nsg(nic_id)
 
         from azure.mgmt.network.models import SecurityRule
 
@@ -261,12 +261,22 @@ class AzureConnector(CloudConnector):
             "isolated_at": datetime.now(timezone.utc).isoformat(),
         })
 
-        return {
+        out = {
             "status": "isolated",
             "nsg": f"{nsg_rg}/{nsg_name}",
+            "nsg_scope": nsg_scope,
             "rule": self.ISOLATION_RULE_NAME,
             "resource_id": resource_id,
         }
+        if nsg_scope == "subnet":
+            # ⚠ Blast radius: a subnet-level NSG deny-all isolates EVERY VM on the
+            # subnet, not just this one. Surface it so the operator/LLM sees the
+            # collateral scope (the rule is shared, not VM-scoped).
+            out["warning"] = (
+                f"NSG {nsg_rg}/{nsg_name} is subnet-level — isolation affects ALL "
+                "VMs on this subnet, not only this VM."
+            )
+        return out
 
     def release_isolation(self, resource_id: str) -> dict:
         if self.dry_run:
@@ -276,7 +286,7 @@ class AzureConnector(CloudConnector):
         self._ensure_clients()
         rg, vm_name = _parse_vm_resource_id(resource_id)
         nic_id = self._get_primary_nic_id(rg, vm_name)
-        nsg_rg, nsg_name = self._get_nic_nsg(nic_id)
+        nsg_rg, nsg_name, nsg_scope = self._get_nic_nsg(nic_id)
 
         for rule_name in (self.ISOLATION_RULE_NAME, f"{self.ISOLATION_RULE_NAME}-out"):
             try:
@@ -305,7 +315,7 @@ class AzureConnector(CloudConnector):
         self._ensure_clients()
         rg, vm_name = _parse_vm_resource_id(resource_id)
         nic_id = self._get_primary_nic_id(rg, vm_name)
-        nsg_rg, nsg_name = self._get_nic_nsg(nic_id)
+        nsg_rg, nsg_name, nsg_scope = self._get_nic_nsg(nic_id)
 
         from azure.mgmt.network.models import SecurityRule
 
@@ -328,13 +338,23 @@ class AzureConnector(CloudConnector):
             ).result()
 
         _save_block_state(vm_name, ip, resource_id)
-        return {
+        out = {
             "status": "blocked",
             "ip": ip,
             "nsg": f"{nsg_rg}/{nsg_name}",
+            "nsg_scope": nsg_scope,
             "rule": rule_name,
             "resource_id": resource_id,
         }
+        if nsg_scope == "subnet":
+            # ⚠ Blast radius: a subnet-level NSG block applies to EVERY VM on the
+            # subnet. For a shared subnet that's often the intent (block the IP at the
+            # perimeter), but surface it so it's not a silent side effect.
+            out["warning"] = (
+                f"NSG {nsg_rg}/{nsg_name} is subnet-level — this IP block applies to "
+                "ALL VMs on the subnet, not only this VM."
+            )
+        return out
 
     def snapshot(self, resource_id: str, vault: str = "rsv-annatar", wait: bool = True) -> str:
         """Trigger an RSV on-demand backup.
@@ -421,7 +441,7 @@ class AzureConnector(CloudConnector):
         self._ensure_clients()
         rg, vm_name = _parse_vm_resource_id(resource_id)
         nic_id = self._get_primary_nic_id(rg, vm_name)
-        nsg_rg, nsg_name = self._get_nic_nsg(nic_id)
+        nsg_rg, nsg_name, nsg_scope = self._get_nic_nsg(nic_id)
 
         try:
             self._network.security_rules.get(nsg_rg, nsg_name, self.ISOLATION_RULE_NAME)
@@ -625,7 +645,7 @@ class AzureConnector(CloudConnector):
         self._ensure_clients()
         rg, vm_name = _parse_vm_resource_id(resource_id)
         nic_id = self._get_primary_nic_id(rg, vm_name)
-        nsg_rg, nsg_name = self._get_nic_nsg(nic_id)
+        nsg_rg, nsg_name, nsg_scope = self._get_nic_nsg(nic_id)
 
         rule_name = f"glorfindel-block-{ip.replace('.', '-').replace('/', '-')}"
         try:
@@ -644,7 +664,7 @@ class AzureConnector(CloudConnector):
         self._ensure_clients()
         rg, vm_name = _parse_vm_resource_id(resource_id)
         nic_id = self._get_primary_nic_id(rg, vm_name)
-        nsg_rg, nsg_name = self._get_nic_nsg(nic_id)
+        nsg_rg, nsg_name, nsg_scope = self._get_nic_nsg(nic_id)
 
         rule_name = f"glorfindel-block-{ip.replace('.', '-').replace('/', '-')}"
         deleted = []
@@ -673,7 +693,7 @@ class AzureConnector(CloudConnector):
             self._ensure_clients()
             rg, vm_name = _parse_vm_resource_id(resource_id)
             nic_id = self._get_primary_nic_id(rg, vm_name)
-            nsg_rg, nsg_name = self._get_nic_nsg(nic_id)
+            nsg_rg, nsg_name, nsg_scope = self._get_nic_nsg(nic_id)
             rules = list(self._network.security_rules.list(nsg_rg, nsg_name))
             return {"ok": True, "nsg": f"{nsg_rg}/{nsg_name}", "rules": len(rules)}
         except Exception as e:
@@ -766,15 +786,24 @@ class AzureConnector(CloudConnector):
         primary = next((n for n in nics if n.primary), nics[0])
         return primary.id
 
-    def _get_nic_nsg(self, nic_id: str) -> tuple[str, str]:
+    def _get_nic_nsg(self, nic_id: str) -> tuple[str, str, str]:
+        """Resolve the NSG governing a NIC. Returns (rg, name, scope).
+
+        scope is "nic" (NSG attached to the NIC — rule affects only this VM) or
+        "subnet" (fallback: NSG on the subnet — ⚠ rule affects EVERY VM on the
+        subnet, not just this one). Callers acting on the NSG (isolate/block) must
+        surface "subnet" so the blast radius is visible — a subnet-level deny-all
+        isolates the whole subnet, not the single VM.
+        """
         nic_rg, nic_name = _parse_nic_resource_id(nic_id)
         nic = self._network.network_interfaces.get(nic_rg, nic_name)
 
-        # NIC-level NSG (preferred)
+        # NIC-level NSG (preferred — scoped to this VM)
         if nic.network_security_group is not None:
-            return _parse_nsg_resource_id(nic.network_security_group.id)
+            rg, name = _parse_nsg_resource_id(nic.network_security_group.id)
+            return rg, name, "nic"
 
-        # Fallback: subnet-level NSG
+        # Fallback: subnet-level NSG (shared — affects all VMs on the subnet)
         subnet_id = nic.ip_configurations[0].subnet.id
         # /subscriptions/.../virtualNetworks/<vnet>/subnets/<subnet>
         parts = subnet_id.split("/")
@@ -784,7 +813,8 @@ class AzureConnector(CloudConnector):
         subnet = self._network.subnets.get(sub_rg, vnet, subnet_name)
         if subnet.network_security_group is None:
             raise RuntimeError(f"NIC {nic_name} and its subnet have no NSG — cannot isolate VM")
-        return _parse_nsg_resource_id(subnet.network_security_group.id)
+        rg, name = _parse_nsg_resource_id(subnet.network_security_group.id)
+        return rg, name, "subnet"
 
 
 _ISOLATION_STATE_DIR = Path.home() / ".glorfindel" / "isolation"

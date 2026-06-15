@@ -382,6 +382,7 @@ wheel : eregion-0.2.0-py3-none-any.whl ✓
 
 - NSG isolation = outbound deny-all → bloque AMA (`mdsd.err` : Failed to get gig token) → detection timeout sur run suivant. Toujours `glorfindel reset` avant le prochain run.
 - `annatar clean` T1486 génère des I/O disque élevées → RulePoller peut matcher la règle `ransomware-disk-write` (données dans `ago(10m)`) avant le vrai run. Résultat : `detection_time_s=0`, isolation sur données du nettoyage, pas du vrai run. Fix : attendre 10 min entre `annatar clean` et `annatar run`, ou vérifier que `detection_time_s > 0` après le run.
+- ⚠️ **NSG subnet-level = blast radius VNET** : `_get_nic_nsg` prend l'NSG de la NIC si elle en a une, sinon retombe sur l'NSG du **subnet** (partagé). Dans ce cas, `isolate_vm` (deny-all) et `block_suspicious_ip` s'appliquent à **toutes les VMs du subnet**, pas seulement la cible. L'outcome porte `nsg_scope` (`nic`|`subnet`) + un `warning` quand subnet (commit `b208a0a`). ⚠ Un `isolate_vm` autonome en `non_disruptive` sur un NSG subnet coupe tout le subnet sur un faux positif — décision de design ouverte (scoper via NSG NIC-level, ou refuser l'autonome subnet-wide).
 - Règles block IP persistent entre runs → conflit priority si T1110 puis T1548. Nettoyage : `glorfindel reset`.
 - Priority bump `isolate_vm` : dynamique (premier slot libre ≥ 200) → fix bug conflit T1110 + T1548.
 - StorageBlobLogs : latence secondes. `AzureNetworkAnalytics_CL` inutilisable (10-60min).
@@ -475,7 +476,7 @@ Types d'escalade : `low_confidence` (detection_timeout + snapshot), `destructive
 
 L'escalade porte `action_params` (dict, vide par défaut) pour les actions paramétrées — ex. `block_suspicious_ip` → `{"ip": ...}` extrait du signal via `_extract_suspicious_ip` (même source que `execute_action`). Permet à la War Room « Approve & execute » d'exécuter en 1 clic une action qui n'est pas à `resource_id` seul. Commit `9583ec6`.
 
-`gf ack <id>` / `gf ack --all` → marque `resolved` dans `~/.glorfindel/escalations.jsonl`. Purement administratif — ne fait rien sur Azure. `restore_from_backup` auto-acquitte via `resolve_by_resource`.
+`gf ack <id>` / `gf ack --all` → marque `resolved` dans `~/.glorfindel/escalations.jsonl`. Purement administratif — ne fait rien sur Azure. `restore_from_backup` auto-acquitte via `resolve_by_resource`. Les `posture_gap` s'**auto-résolvent** quand la condition disparaît (ex. backup nocturne comble « no recovery point yet ») — `PostureChecker.check_and_escalate` résout l'escalade au cycle suivant (commit `b208a0a`).
 
 ## alerting webhook + bot Discord
 

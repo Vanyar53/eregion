@@ -647,13 +647,21 @@ function escTitle(e) {
   return _ESC_TITLES[e.escalation_type] || escLabel(e.escalation_type) || e.action || '?';
 }
 
-// NSG scope note for a block/isolation state. A rule on the shared subnet NSG is
-// flagged (new rules are scoped to the VM's IP; a legacy any-rule would hit the
-// whole subnet). NIC-level rules are naturally VM-scoped → no clutter.
+// NSG scope chip for a block/isolation — makes "VM NSG vs subnet NSG" explicit.
+// VM NSG (NIC) = rule on the VM's own NSG, affects this VM only (neutral).
+// subnet NSG = rule on the SHARED subnet NSG; new rules are scoped to this VM's IP
+// (safe), but a legacy any-rule would hit the whole subnet → faint amber border as a
+// "shared resource, be aware" cue (not an alarm — the common scoped case is safe).
+// A real blast-radius ⚠ is reserved for when the backend flags a rule as unscoped.
 function _scopeNote(s) {
-  if (s && s.nsg_scope === 'subnet')
-    return ` <span style="font-size:8px;color:var(--dim)" title="Rule on the shared subnet NSG, scoped to this VM's IP. A legacy any-rule here would cover the whole subnet.">subnet NSG</span>`;
-  return '';
+  if (!s || !s.nsg_scope) return '';
+  const base = 'font-size:8px;font-weight:600;padding:0 4px;border-radius:3px;color:var(--dim);flex-shrink:0';
+  if (s.nsg_scope === 'subnet') {
+    if (s.blast_radius || s.scoped === false)
+      return ` <span style="${base};color:var(--orange);background:color-mix(in srgb,var(--orange) 12%,transparent);border:1px solid color-mix(in srgb,var(--orange) 40%,transparent)" title="Rule on the shared subnet NSG and NOT scoped to this VM — affects the WHOLE subnet.">⚠ subnet-wide</span>`;
+    return ` <span style="${base};border:1px solid color-mix(in srgb,var(--orange) 28%,var(--border))" title="Rule on the shared SUBNET NSG, scoped to this VM's IP. The NSG is shared with other subnet VMs; a legacy any-rule here would cover the whole subnet.">subnet NSG</span>`;
+  }
+  return ` <span style="${base};border:1px solid var(--border)" title="Rule on the VM's own NIC NSG — affects this VM only.">VM NSG</span>`;
 }
 
 function cliCommand(esc) {

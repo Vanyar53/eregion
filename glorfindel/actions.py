@@ -275,6 +275,7 @@ class AzureConnector(CloudConnector):
         _save_isolation_state(vm_name, {
             "nsg_rg": nsg_rg,
             "nsg_name": nsg_name,
+            "nsg_scope": nsg_scope,
             "bumped": bumped,
             "rule_names": [in_name, out_name],
             "resource_id": resource_id,
@@ -370,7 +371,10 @@ class AzureConnector(CloudConnector):
                 ),
             ).result()
 
-        _save_block_state(vm_name, ip, resource_id)
+        _save_block_state(
+            vm_name, ip, resource_id,
+            nsg=f"{nsg_rg}/{nsg_name}", nsg_scope=nsg_scope, rule=rule_name,
+        )
         out = {
             "status": "blocked",
             "ip": ip,
@@ -913,15 +917,24 @@ def active_isolations() -> list[dict]:
     return result
 
 
-def _save_block_state(vm_name: str, ip: str, resource_id: str) -> None:
+def _save_block_state(
+    vm_name: str, ip: str, resource_id: str,
+    nsg: str = "", nsg_scope: str = "", rule: str = "",
+) -> None:
     import json
     from datetime import datetime, timezone
     _BLOCK_STATE_DIR.mkdir(parents=True, exist_ok=True)
     f = _BLOCK_STATE_DIR / f"{vm_name}.json"
     entries = json.loads(f.read_text()) if f.exists() else []
     if not any(e["ip"] == ip for e in entries):
-        entries.append({"ip": ip, "resource_id": resource_id,
-                        "blocked_at": datetime.now(timezone.utc).isoformat()})
+        # Record the NSG + scope so the representation matches Azure reality:
+        # nsg_scope="subnet" → rule lives on a shared subnet NSG (War Room can show
+        # the true blast radius), "nic" → rule is on the VM's own NIC.
+        entries.append({
+            "ip": ip, "resource_id": resource_id,
+            "blocked_at": datetime.now(timezone.utc).isoformat(),
+            "nsg": nsg, "nsg_scope": nsg_scope, "rule": rule,
+        })
     f.write_text(json.dumps(entries))
 
 

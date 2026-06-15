@@ -345,6 +345,30 @@ def test_block_ip_subnet_nsg_scopes_to_vm_ip(monkeypatch):
     assert ("10.0.0.5", "95.47.246.223") in addrs
 
 
+def test_block_state_records_nsg_scope(tmp_path, monkeypatch):
+    """Block state must record the NSG + scope so the War Room shows the true scope."""
+    import glorfindel.actions as actions
+    from glorfindel.actions import AzureConnector, active_blocks
+    monkeypatch.setattr(actions, "_BLOCK_STATE_DIR", tmp_path / "blocks")
+
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    monkeypatch.setattr(connector, "_get_primary_nic_id", lambda rg, vm: "nic-id")
+    monkeypatch.setattr(connector, "_get_nic_nsg", lambda nic: ("nsgrg", "subnetnsg", "subnet"))
+    monkeypatch.setattr(connector, "_get_nic_private_ip", lambda nic: "10.0.0.5")
+    net = MagicMock()
+    net.security_rules.list.return_value = []
+    net.security_rules.begin_create_or_update.return_value.result.return_value = None
+    connector._network = net
+
+    connector.block_suspicious_ip("95.47.246.223", _RID)
+    blocks = [b for b in active_blocks() if b["ip"] == "95.47.246.223"]
+    assert len(blocks) == 1
+    assert blocks[0]["nsg_scope"] == "subnet"
+    assert blocks[0]["nsg"] == "nsgrg/subnetnsg"
+    assert blocks[0]["rule"] == "glorfindel-block-95-47-246-223-vm"
+
+
 def test_block_ip_nic_nsg_stays_any(monkeypatch):
     """NIC NSG → block stays attacker↔any (scoped to the VM by the NIC NSG itself)."""
     from glorfindel.actions import AzureConnector

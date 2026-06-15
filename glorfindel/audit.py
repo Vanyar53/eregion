@@ -188,6 +188,19 @@ def _check_backup(resource_id: str, connector, vault: str) -> AuditCheck:
         )
     if _is_transient_error(err):
         return _transient_check("restore_from_backup", "Backup vault", err)
+    if res.get("protected"):
+        # Protected but no recovery point yet — restore not yet possible, but the VM
+        # IS linked. Warn (not fail), and the fix is to trigger the first backup.
+        return AuditCheck(
+            action="restore_from_backup",
+            name="Backup vault",
+            status="warn",
+            message=f"{vm} protected in '{vault}' but no recovery point yet (first backup pending)",
+            fix=(
+                f"az backup protection backup-now -g {rg} -v {vault} "
+                f"-c {vm} -i {vm} --backup-management-type AzureIaasVM"
+            ),
+        )
     return AuditCheck(
         action="restore_from_backup",
         name="Backup vault",

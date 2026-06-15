@@ -75,6 +75,29 @@ def test_backup_linked_gap(tmp_path):
     assert any(g.severity == "critical" for g in gaps)
 
 
+def test_backup_protected_no_rp_warns_not_critical(tmp_path):
+    """Protected VM with no recovery point yet → warn 'first backup pending',
+    NOT a critical 'not linked to vault' gap (the bug: elrond was protected, just
+    had no backup at discovery)."""
+    conn = _connector()
+    conn.check_backup_points.return_value = {
+        "ok": False, "protected": True, "no_recovery_point": True,
+        "vault": "rsv-annatar",
+        "error": "vm protected in 'rsv-annatar' but has no recovery point yet",
+    }
+    checker = PostureChecker(_cfg(), conn, dry_run=False)
+    checker._state = {}
+    gaps = checker._check_asset(_asset())
+    backup_gaps = [g for g in gaps if g.check in ("backup_linked", "backup_recent")]
+    assert len(backup_gaps) == 1
+    g = backup_gaps[0]
+    assert g.check == "backup_recent"        # not "backup_linked"
+    assert g.severity == "warn"              # not "critical"
+    assert "not linked" not in g.message.lower()
+    assert "first backup pending" in g.message.lower()
+    assert "backup-now" in g.fix             # not enable-for-vm
+
+
 def test_backup_stale_gap(tmp_path):
     checker = PostureChecker(_cfg(), _connector(backup_age_h=72), dry_run=False)
     gaps = checker._check_asset(_asset())

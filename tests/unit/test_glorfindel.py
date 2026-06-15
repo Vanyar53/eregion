@@ -135,6 +135,46 @@ def test_read_only_does_not_block_dry_run():
     assert connector.isolate_vm(_RID)["status"] == "dry_run"
 
 
+def _backup_connector(monkeypatch, rps, protected_get_raises):
+    """AzureConnector with a mocked RSV client for check_backup_points tests."""
+    from unittest.mock import MagicMock
+    import azure.mgmt.recoveryservicesbackup as _rsv
+    from glorfindel.actions import AzureConnector
+
+    client = MagicMock()
+    client.recovery_points.list.return_value = rps
+    if protected_get_raises:
+        client.protected_items.get.side_effect = Exception("ResourceNotFound")
+    else:
+        client.protected_items.get.return_value = MagicMock()
+    monkeypatch.setattr(_rsv, "RecoveryServicesBackupClient", lambda *a, **k: client)
+
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    connector._credential = object()
+    connector._subscription_id = "sub"
+    return connector
+
+
+def test_check_backup_points_protected_no_rp(monkeypatch):
+    """Empty RP list + item IS a protected item → protected=True (first backup pending)."""
+    connector = _backup_connector(monkeypatch, rps=[], protected_get_raises=False)
+    res = connector.check_backup_points(_RID, vault="rsv-annatar")
+    assert res["ok"] is False
+    assert res["protected"] is True
+    assert res["no_recovery_point"] is True
+    assert "not linked" not in res["error"].lower()
+
+
+def test_check_backup_points_not_protected(monkeypatch):
+    """Empty RP list + item is NOT a protected item → protected=False (not linked)."""
+    connector = _backup_connector(monkeypatch, rps=[], protected_get_raises=True)
+    res = connector.check_backup_points(_RID, vault="rsv-annatar")
+    assert res["ok"] is False
+    assert res["protected"] is False
+    assert "not linked" in res["error"].lower()
+
+
 def test_warm_up_azure_sdk_idempotent():
     """warm_up_azure_sdk imports without raising and is safe to call repeatedly."""
     from glorfindel.actions import warm_up_azure_sdk

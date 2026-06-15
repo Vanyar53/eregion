@@ -183,6 +183,21 @@ def test_run_backup_fail_not_configured():
     assert "enable-for-vm" in bk.fix
 
 
+def test_run_backup_protected_no_recovery_point_warns_not_fails():
+    """Protected VM with no RP yet → warn 'first backup pending', NOT fail 'not configured'."""
+    c = _connector(backup={
+        "ok": False, "iam": False, "vault": "rsv-annatar", "protected": True,
+        "no_recovery_point": True,
+        "error": "vm protected in 'rsv-annatar' but has no recovery point yet",
+    })
+    result = run(RESOURCE_ID, c)
+    bk = next(ch for ch in result.checks if ch.name == "Backup vault")
+    assert bk.status == "warn"
+    assert "first backup pending" in bk.message.lower()
+    assert "backup-now" in bk.fix          # trigger first backup
+    assert "enable-for-vm" not in bk.fix   # NOT the "not linked" guidance
+
+
 def test_run_backup_warn_stale():
     c = _connector(backup={"ok": True, "vault": "rsv-annatar", "points": 2, "latest_age_h": 52.0})
     result = run(RESOURCE_ID, c)

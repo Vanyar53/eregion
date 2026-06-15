@@ -694,9 +694,23 @@ class AzureConnector(CloudConnector):
             item = f"vm;iaasvmcontainerv2;{rg};{vm_name}"
             rps = list(client.recovery_points.list(vault, rg, "Azure", container, item))
             if not rps:
+                # No recovery point — but is the VM actually protected? An empty RP
+                # list means EITHER "protected, first backup pending" OR "not protected
+                # at all". Distinguish via the protected-item status so posture/audit
+                # don't cry "not linked to vault" on a freshly-protected VM.
+                protected = self._is_protected_item(client, vault, rg, container, item)
+                if protected:
+                    return {
+                        "ok": False, "iam": False, "vault": vault,
+                        "protected": True, "no_recovery_point": True,
+                        "error": (
+                            f"{vm_name} is protected in '{vault}' but has no recovery "
+                            "point yet (first backup pending)"
+                        ),
+                    }
                 return {
-                    "ok": False, "iam": False, "vault": vault,
-                    "error": f"No recovery points found for {vm_name} in vault '{vault}'",
+                    "ok": False, "iam": False, "vault": vault, "protected": False,
+                    "error": f"{vm_name} not linked to vault '{vault}'",
                 }
             times = [
                 getattr(rp.properties, "recovery_point_time", None) for rp in rps
@@ -712,6 +726,19 @@ class AzureConnector(CloudConnector):
             }
         except Exception as e:
             return {"ok": False, "iam": _is_iam_error(str(e)), "vault": vault, "error": str(e)}
+
+    def _is_protected_item(self, client, vault: str, rg: str, container: str, item: str) -> bool:
+        """Return True if the VM is registered as a protected item in the vault.
+
+        Used to tell "protected, first backup pending" (recovery points empty but the
+        item exists) from "not protected at all". A 404 / ResourceNotFound means not
+        protected; any other error → assume not protected (conservative).
+        """
+        try:
+            client.protected_items.get(vault, rg, "Azure", container, item)
+            return True
+        except Exception:
+            return False
 
     def check_compute_access(self, resource_id: str) -> dict:
         """Verify VM + disk read access — snapshot readiness."""

@@ -92,7 +92,25 @@ class PostureChecker:
         if vault:
             try:
                 res = self._connector.check_backup_points(rid, vault)
-                if not res.get("ok"):
+                if not res.get("ok") and res.get("protected"):
+                    # Protected, but the first backup hasn't run yet. NOT a "not linked"
+                    # critical — restore will be possible once a recovery point exists.
+                    gaps.append(PostureGap(
+                        resource_id=rid,
+                        vm_name=vm,
+                        check="backup_recent",
+                        severity="warn",
+                        message=(
+                            f"{vm} protected in '{vault}' but no recovery point yet"
+                            " — first backup pending, restore not yet possible"
+                        ),
+                        fix=(
+                            f"az backup protection backup-now "
+                            f"-g {rg} -v {vault} -c {vm} -i {vm}"
+                            " --backup-management-type AzureIaasVM"
+                        ),
+                    ))
+                elif not res.get("ok"):
                     gaps.append(PostureGap(
                         resource_id=rid,
                         vm_name=vm,

@@ -1308,11 +1308,13 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
   const totalEscs   = myEscs.length + myDetEscs.length;
   const isExpanded  = _expandedVms.has(vm_name);
 
-  // "Possibly offline": no heartbeat for >15 min and otherwise idle. Backend retains
-  // the asset up to 8h, so it stays visible (grayed) instead of vanishing. Isolated
-  // VMs also stop heart-beating (NSG deny-all blocks AMA) — don't flag those.
+  // "Possibly offline": no heartbeat for >15 min. Backend retains the asset up to 8h
+  // so it stays visible (grayed) instead of vanishing. Only exclude states that
+  // legitimately stop the heartbeat without the VM being down: isolation (NSG deny-all
+  // cuts AMA) and an in-flight restore (VM deallocated). A single-IP block does NOT
+  // cut AMA, and an escalation is unrelated to heartbeat — those can still be offline.
   const _gapMin   = last_seen ? (Date.now() - new Date(last_seen).getTime()) / 60000 : null;
-  const isOffline = !isIsolated && !isBlocked && !restoreInfo && !myEscs.length
+  const isOffline = !isIsolated && !restoreInfo
                     && _gapMin !== null && _gapMin > 15;
 
   const stateClass = _pendingActions.has(vm_name) ? 's-releasing'

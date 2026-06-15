@@ -317,6 +317,59 @@ def test_isolate_vm_subnet_nsg_picks_free_priority(tmp_path, monkeypatch):
     assert out["status"] == "isolated"
 
 
+def test_block_ip_subnet_nsg_scopes_to_vm_ip(monkeypatch):
+    """block_suspicious_ip on a subnet NSG scopes to THIS VM's IP (not the whole subnet)."""
+    from glorfindel.actions import AzureConnector
+    import glorfindel.actions as actions
+    monkeypatch.setattr(actions, "_save_block_state", lambda *a, **k: None)
+
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    monkeypatch.setattr(connector, "_get_primary_nic_id", lambda rg, vm: "nic-id")
+    monkeypatch.setattr(connector, "_get_nic_nsg", lambda nic: ("rg", "nsg", "subnet"))
+    monkeypatch.setattr(connector, "_get_nic_private_ip", lambda nic: "10.0.0.5")
+    net = MagicMock()
+    net.security_rules.list.return_value = []
+    net.security_rules.begin_create_or_update.return_value.result.return_value = None
+    connector._network = net
+
+    out = connector.block_suspicious_ip("95.47.246.223", _RID)
+    assert out["nsg_scope"] == "subnet"
+    assert "warning" not in out
+    assert "note" in out and "scoped" in out["note"].lower()
+    assert out["rule"] == "glorfindel-block-95-47-246-223-vm"  # VM-suffixed
+    rules = [c.args[3] for c in net.security_rules.begin_create_or_update.call_args_list]
+    addrs = [(r.source_address_prefix, r.destination_address_prefix) for r in rules]
+    # inbound: attacker → THIS VM ; outbound: THIS VM → attacker (not any/*)
+    assert ("95.47.246.223", "10.0.0.5") in addrs
+    assert ("10.0.0.5", "95.47.246.223") in addrs
+
+
+def test_block_ip_nic_nsg_stays_any(monkeypatch):
+    """NIC NSG → block stays attacker↔any (scoped to the VM by the NIC NSG itself)."""
+    from glorfindel.actions import AzureConnector
+    import glorfindel.actions as actions
+    monkeypatch.setattr(actions, "_save_block_state", lambda *a, **k: None)
+
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    monkeypatch.setattr(connector, "_get_primary_nic_id", lambda rg, vm: "nic-id")
+    monkeypatch.setattr(connector, "_get_nic_nsg", lambda nic: ("rg", "nsg", "nic"))
+    net = MagicMock()
+    net.security_rules.list.return_value = []
+    net.security_rules.begin_create_or_update.return_value.result.return_value = None
+    connector._network = net
+
+    out = connector.block_suspicious_ip("95.47.246.223", _RID)
+    assert out["nsg_scope"] == "nic"
+    assert "note" not in out and "warning" not in out
+    assert out["rule"] == "glorfindel-block-95-47-246-223"  # not suffixed
+    rules = [c.args[3] for c in net.security_rules.begin_create_or_update.call_args_list]
+    addrs = [(r.source_address_prefix, r.destination_address_prefix) for r in rules]
+    assert ("95.47.246.223", "*") in addrs
+    assert ("*", "95.47.246.223") in addrs
+
+
 def test_isolate_vm_nic_nsg_no_blast_radius_warning(tmp_path, monkeypatch):
     """NIC-level NSG → scoped to this VM, no blast-radius warning."""
     import glorfindel.actions as actions

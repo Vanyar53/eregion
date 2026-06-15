@@ -349,16 +349,23 @@ class AzureConnector(CloudConnector):
         used_priorities = {r.priority for r in existing}
         priority = next(p for p in range(200, 4000, 10) if p not in used_priorities)
 
-        rule_name = f"glorfindel-block-{ip.replace('.', '-').replace('/', '-')}"
+        rule_name = self._block_rule_name(ip, vm_name, nsg_scope)
+        # On a shared subnet NSG, scope the block to THIS VM's IP so the autonomous
+        # action on this VM's incident doesn't change the posture of other VMs on the
+        # subnet (an unrequested side effect). NIC NSG already only covers this VM.
+        vm_ip = self._get_nic_private_ip(nic_id) if nsg_scope == "subnet" else "*"
         for direction in ("Inbound", "Outbound"):
             name = rule_name if direction == "Inbound" else f"{rule_name}-out"
+            if direction == "Inbound":
+                src, dst = ip, vm_ip       # deny attacker → this VM (subnet) / any (nic)
+            else:
+                src, dst = vm_ip, ip       # deny this VM (subnet) / any (nic) → attacker
             self._network.security_rules.begin_create_or_update(
                 nsg_rg, nsg_name, name,
                 SecurityRule(
                     name=name, protocol="*",
                     source_port_range="*", destination_port_range="*",
-                    source_address_prefix=ip if direction == "Inbound" else "*",
-                    destination_address_prefix="*" if direction == "Inbound" else ip,
+                    source_address_prefix=src, destination_address_prefix=dst,
                     access="Deny", priority=priority, direction=direction,
                 ),
             ).result()
@@ -373,12 +380,10 @@ class AzureConnector(CloudConnector):
             "resource_id": resource_id,
         }
         if nsg_scope == "subnet":
-            # ⚠ Blast radius: a subnet-level NSG block applies to EVERY VM on the
-            # subnet. For a shared subnet that's often the intent (block the IP at the
-            # perimeter), but surface it so it's not a silent side effect.
-            out["warning"] = (
-                f"NSG {nsg_rg}/{nsg_name} is subnet-level — this IP block applies to "
-                "ALL VMs on the subnet, not only this VM."
+            # Scoped to this VM's IP → no impact on other VMs on the subnet.
+            out["note"] = (
+                f"NSG {nsg_rg}/{nsg_name} is subnet-level — block scoped to this VM's "
+                "private IP only (attacker still reaches other VMs until they detect it)."
             )
         return out
 
@@ -674,7 +679,7 @@ class AzureConnector(CloudConnector):
         nic_id = self._get_primary_nic_id(rg, vm_name)
         nsg_rg, nsg_name, nsg_scope = self._get_nic_nsg(nic_id)
 
-        rule_name = f"glorfindel-block-{ip.replace('.', '-').replace('/', '-')}"
+        rule_name = self._block_rule_name(ip, vm_name, nsg_scope)
         try:
             self._network.security_rules.get(nsg_rg, nsg_name, rule_name)
             return {"verified": True, "method": "nsg_check", "rule": rule_name}
@@ -693,9 +698,12 @@ class AzureConnector(CloudConnector):
         nic_id = self._get_primary_nic_id(rg, vm_name)
         nsg_rg, nsg_name, nsg_scope = self._get_nic_nsg(nic_id)
 
-        rule_name = f"glorfindel-block-{ip.replace('.', '-').replace('/', '-')}"
+        # Delete both the VM-suffixed (subnet-scope) and plain (nic-scope) names so
+        # cleanup is robust regardless of which scope the block was created under.
+        scoped = self._block_rule_name(ip, vm_name, "subnet")
+        plain = self._block_rule_name(ip, vm_name, "nic")
         deleted = []
-        for name in (rule_name, f"{rule_name}-out"):
+        for name in (scoped, f"{scoped}-out", plain, f"{plain}-out"):
             try:
                 self._network.security_rules.begin_delete(nsg_rg, nsg_name, name).result()
                 deleted.append(name)
@@ -820,6 +828,12 @@ class AzureConnector(CloudConnector):
             base = f"{self.ISOLATION_RULE_NAME}-{vm_name}"
             return base, f"{base}-out"
         return self.ISOLATION_RULE_NAME, f"{self.ISOLATION_RULE_NAME}-out"
+
+    def _block_rule_name(self, ip: str, vm_name: str, scope: str) -> str:
+        """Base name for a block rule. VM-suffixed on a shared subnet NSG so blocks
+        scoped to different VMs (same attacker IP) don't collide."""
+        base = f"glorfindel-block-{ip.replace('.', '-').replace('/', '-')}"
+        return f"{base}-{vm_name}" if scope == "subnet" else base
 
     def _get_nic_private_ip(self, nic_id: str) -> str:
         """Primary private IP of a NIC — used to scope isolation on a subnet NSG."""

@@ -58,15 +58,19 @@ async def state() -> dict:
         vm_name = resource_id.split("/")[-1]
         states = []
         if resource_id in isolations:
+            _iso = isolations[resource_id]
             states.append({
                 "type": "isolated",
-                "since": isolations[resource_id].get("isolated_at", ""),
+                "since": _iso.get("isolated_at", ""),
+                "nsg_scope": _iso.get("nsg_scope", ""),  # "nic" | "subnet"
             })
         for b in blocks.get(resource_id, []):
             states.append({
                 "type": "blocked",
                 "ip": b["ip"],
                 "since": b.get("blocked_at", ""),
+                "nsg_scope": b.get("nsg_scope", ""),
+                "rule": b.get("rule", ""),
             })
         resources.append({
             "resource_id": resource_id,

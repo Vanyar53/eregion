@@ -633,6 +633,29 @@ function escLabel(type) {
   return ESC_LABELS[type] || type;
 }
 
+// Readable titles for escalation types that are NOT tied to a real remediation action
+// (the card would otherwise show the raw type, e.g. "posture_gap").
+const _ESC_TITLES = {
+  posture_gap:    'Posture gap',
+  proposed_rule:  'Detection rule proposed',
+  ttl_exceeded:   'Isolation TTL exceeded',
+  proposed_action:'Unknown action proposed',
+};
+function escTitle(e) {
+  // Real remediation action → its label; otherwise a readable type title.
+  if (e.action && ACTION_LABELS[e.action]) return ACTION_LABELS[e.action];
+  return _ESC_TITLES[e.escalation_type] || escLabel(e.escalation_type) || e.action || '?';
+}
+
+// NSG scope note for a block/isolation state. A rule on the shared subnet NSG is
+// flagged (new rules are scoped to the VM's IP; a legacy any-rule would hit the
+// whole subnet). NIC-level rules are naturally VM-scoped → no clutter.
+function _scopeNote(s) {
+  if (s && s.nsg_scope === 'subnet')
+    return ` <span style="font-size:8px;color:var(--dim)" title="Rule on the shared subnet NSG, scoped to this VM's IP. A legacy any-rule here would cover the whole subnet.">subnet NSG</span>`;
+  return '';
+}
+
 function cliCommand(esc) {
   const rid = esc.resource_id;
   const id  = esc.id.slice(0, 8);
@@ -840,7 +863,7 @@ function _renderEscGroup(group) {
     : isSnapshotPending  ? 'Snapshot recommended'
     : isWriteBlocked     ? `${actionLabelVerb(e.action) || e.action || '?'} — write blocked`
     : isActionFailed     ? `${actionLabelVerb(e.action) || e.action || '?'} — failed`
-    : (actionLabel(e.action) || escLabel(e.escalation_type) || e.escalation_type || '?');
+    : escTitle(e);
   const count = group.length;
   const ids   = group.map(g => g.id).join(','); // CSV — safe in onclick attrs, no quotes
   const isRule = e.action === 'improve_detection' && e.proposal_id;
@@ -1222,10 +1245,14 @@ function _renderModules(rules, detectBackends, recoverBackends, resources) {
               :                     `<span style="color:var(--dim)">●</span>`;
     const lastRun = _auditLastRun
       ? `<div class="node-backend-row" style="color:var(--dim);font-size:9px">audit ${_relTime(_auditLastRun)}</div>` : '';
+    // warn covers two cases: protected-but-first-backup-pending vs backup >48h stale.
+    const warnPending = checks.some(c => c.status === 'warn'
+      && /pending|no recovery point|first backup/i.test(c.message || ''));
+    const warnLabel = warnPending ? 'backup pending' : 'backup stale';
     const statusRow = worst==='ok'
       ? `<div class="node-backend-row" style="color:var(--green)">backup ok</div>`
       : worst==='warn'
-      ? `<div class="node-backend-row" style="color:var(--orange)">backup stale</div>`
+      ? `<div class="node-backend-row" style="color:var(--orange)">${warnLabel}</div>`
       : worst==='fail'
       ? `<div class="node-backend-row" style="color:var(--red)">backup missing</div>`
       : worst==='error'
@@ -1321,9 +1348,9 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
     restoreInfo ? `<span class="badge restoring" style="font-size:9px">🔄 RESTORING · ${restoreInfo.elapsed_label}</span>` : '',
     ...states.map(s => s.type === 'isolated'
       ? `<span class="badge isolated" style="font-size:9px${!isExpanded ? ';cursor:pointer' : ''}"
-           ${!isExpanded ? `onclick="event.stopPropagation();showIsolationModal('${vm_name}')"` : ''}>ISOLATED · ${age(s.since)}</span>`
+           ${!isExpanded ? `onclick="event.stopPropagation();showIsolationModal('${vm_name}')"` : ''}>ISOLATED · ${age(s.since)}</span>${_scopeNote(s)}`
       : `<span class="badge blocked" style="font-size:9px${!isExpanded ? ';cursor:pointer' : ''}"
-           ${!isExpanded ? `onclick="event.stopPropagation();showIsolationModal('${vm_name}')"` : ''}>BLOCKED ${s.ip} · ${age(s.since)}</span>`),
+           ${!isExpanded ? `onclick="event.stopPropagation();showIsolationModal('${vm_name}')"` : ''}>BLOCKED ${s.ip} · ${age(s.since)}</span>${_scopeNote(s)}`),
     escBadge,
   ].filter(Boolean).join('');
 
@@ -1372,11 +1399,11 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
     let corrBtn = '';
     if (a.action === 'isolate_vm' && isIsolated) {
       const s = states.find(s => s.type === 'isolated');
-      badge   = s ? `<span class="badge isolated" style="font-size:9px;cursor:default">ISOLATED · ${age(s.since)}</span>` : '';
+      badge   = s ? `<span class="badge isolated" style="font-size:9px;cursor:default">ISOLATED · ${age(s.since)}</span>${_scopeNote(s)}` : '';
       corrBtn = `<button class="action danger" onclick="event.stopPropagation();confirmRelease('${vm_name}')" style="font-size:9px;padding:2px 7px;margin-left:auto">↩️ Release</button>`;
     } else if (a.action === 'block_suspicious_ip' && isBlocked) {
       const s = states.find(s => s.type === 'blocked');
-      badge   = s ? `<span class="badge blocked" style="font-size:9px;cursor:default">BLOCKED ${s.ip} · ${age(s.since)}</span>` : '';
+      badge   = s ? `<span class="badge blocked" style="font-size:9px;cursor:default">BLOCKED ${s.ip} · ${age(s.since)}</span>${_scopeNote(s)}` : '';
       corrBtn = `<button class="action danger" onclick="event.stopPropagation();confirmUnblock('${vm_name}')" style="font-size:9px;padding:2px 7px;margin-left:auto">↩️ Unblock</button>`;
     }
 
@@ -1407,14 +1434,14 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
   if (isIsolated && !coveredByDec.has('isolate_vm')) {
     const s = states.find(s => s.type === 'isolated');
     fallbackRows.push(`<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
-      <span class="badge isolated" style="font-size:9px;cursor:default">ISOLATED · ${age(s?.since)}</span>
+      <span class="badge isolated" style="font-size:9px;cursor:default">ISOLATED · ${age(s?.since)}</span>${_scopeNote(s)}
       <button class="action danger" onclick="event.stopPropagation();confirmRelease('${vm_name}')" style="font-size:9px;padding:2px 7px">↩️ Release</button>
     </div>`);
   }
   if (isBlocked && !coveredByDec.has('block_suspicious_ip')) {
     states.filter(s => s.type === 'blocked').forEach(s => fallbackRows.push(
       `<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
-        <span class="badge blocked" style="font-size:9px;cursor:default">BLOCKED ${s.ip} · ${age(s.since)}</span>
+        <span class="badge blocked" style="font-size:9px;cursor:default">BLOCKED ${s.ip} · ${age(s.since)}</span>${_scopeNote(s)}
         <button class="action danger" onclick="event.stopPropagation();confirmUnblock('${vm_name}')" style="font-size:9px;padding:2px 7px">↩️ Unblock</button>
       </div>`));
   }
@@ -2332,7 +2359,7 @@ function showEscModal(vmName) {
       : isSnapshotPending ? 'Snapshot recommended'
       : isWriteBlocked    ? `${actionLabelVerb(e.action) || e.action || '?'} — write blocked`
       : isActionFailed    ? `${actionLabelVerb(e.action) || e.action || '?'} — failed`
-      : (actionLabel(e.action) || escLabel(e.escalation_type) || e.escalation_type || '?');
+      : escTitle(e);
     // type already encoded in title for these — keep ctx lean
     const ctx   = (isModeHold || isWriteBlocked || isActionFailed)
       ? [e.ttp, e.severity].filter(Boolean).join(' · ')

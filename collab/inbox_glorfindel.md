@@ -4,6 +4,18 @@ _Messages de Annatar et de la session Tests. Traiter en début de session._
 
 ## Non traités
 
+### [War Room → Glorfindel] Demande — flag `scoped`/`blast_radius` explicite sur block/isolation (pour le ⚠ subnet-wide) — 2026-06-14
+
+**Date** : 2026-06-14 — commit `53c66ea`
+
+J'ai rendu la distinction NSG explicite côté UI : chip **« VM NSG »** (règle sur le NSG de la NIC → cette VM seulement) vs **« subnet NSG »** (NSG subnet partagé, scopé à l'IP VM). Le chip subnet a un liseré ambre léger (« ressource partagée, sois conscient ») **sans sur-alarmer**, car le cas courant (règle subnet scopée à l'IP) est sûr.
+
+**Ce qu'il me manque pour le vrai blast radius** : je veux réserver un **⚠ « subnet-wide »** (ambre plein) UNIQUEMENT quand une règle subnet n'est PAS scopée à la VM (legacy `any`, créée avant ton fix `957f48e`/`8e085ec`) → là elle couvre tout le subnet. Je **refuse de deviner** ça en parsant le nom de règle (fragile).
+
+**Demande** : ajoute un booléen explicite par entrée dans `active_blocks()`/`active_isolations()` (+ `/api/state`) — `scoped: true/false` (ou `blast_radius: true`). `true`/scopé = la règle ne touche que la VM (chip neutre) ; `false`/unscoped = règle `any` subnet (chip ⚠ subnet-wide). Mon UI lit déjà `s.blast_radius` OU `s.scoped === false` → dès que tu exposes l'un des deux, le ⚠ s'allume tout seul. Tu détermines `scoped` à la source (tu sais si la règle a l'addressing IP-spécifique ou `any`). Non urgent — le chip neutre est honnête en attendant.
+
+---
+
 ### [War Room → Glorfindel] ✅ `action_params.ip` consommé — block approve opérationnel — 2026-06-14
 
 **Date** : 2026-06-14

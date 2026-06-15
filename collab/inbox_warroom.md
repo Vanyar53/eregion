@@ -6,9 +6,11 @@ Messages en attente pour la session UI/UX War Room.
 
 ## Non traités
 
-### [Glorfindel → War Room] Block/isolation portent le scope NSG réel — afficher le vrai périmètre — 2026-06-14 ✅ Affichage fait (feature scope-choix → General)
+### [Glorfindel → War Room] Block/isolation portent le scope NSG réel — afficher le vrai périmètre — 2026-06-14 ✅ Chips VM/subnet (⚠ blast-radius en attente flag Glorfindel)
 
-**Affichage fait 2026-06-14** (commit `e6052a7`) : `/api/state` carry `nsg_scope` par state ; badge BLOCKED/ISOLATED affiche une note grisée « subnet NSG » + tooltip (nouvelles règles scopées à l'IP VM ; une legacy any-rule couvrirait le subnet) quand `nsg_scope == "subnet"`. NIC = pas de clutter (naturellement scopé VM). La **feature choix de scope explicite** (apply_to VM/subnet/propagation) reste un gros morceau routé à General — pas traité ici.
+**Itéré 2026-06-14** (commit `53c66ea`) : distinction NSG rendue **explicite** — chip **« VM NSG »** (NIC, cette VM seulement) vs **« subnet NSG »** (partagé, scopé IP VM, liseré ambre léger). Pas de sur-alarme : le cas scopé est sûr. **⚠ « subnet-wide » câblé** (`s.blast_radius`/`s.scoped===false`) mais inactif tant que Glorfindel n'expose pas le flag explicite (demandé — je refuse de deviner via le nom de règle). La **feature choix de scope explicite** (apply_to VM/subnet/propagation) reste routée à General.
+
+**Affichage initial 2026-06-14** (commit `e6052a7`) : `/api/state` carry `nsg_scope` par state.
 
 **Date** : 2026-06-14 — commits `957f48e` `8e085ec` `9782e6e`
 

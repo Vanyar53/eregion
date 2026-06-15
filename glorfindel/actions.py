@@ -220,36 +220,55 @@ class AzureConnector(CloudConnector):
 
         from azure.mgmt.network.models import SecurityRule
 
-        # Shift any existing rules that conflict at ISOLATION_PRIORITY
         existing = list(self._network.security_rules.list(nsg_rg, nsg_name))
         used_priorities = {r.priority for r in existing}
+        in_name, out_name = self._isolation_rule_names(vm_name, nsg_scope)
         bumped = []
-        for r in existing:
-            if r.priority == self.ISOLATION_PRIORITY and not r.name.startswith("glorfindel-"):
-                new_prio = next(
-                    p for p in range(self.ISOLATION_PRIORITY + 100, 4000, 100)
-                    if p not in used_priorities
-                )
-                used_priorities.add(new_prio)
-                r.priority = new_prio
-                self._network.security_rules.begin_create_or_update(nsg_rg, nsg_name, r.name, r).result()
-                bumped.append({"name": r.name, "original_priority": self.ISOLATION_PRIORITY})
 
-        for direction, rule_name in [
-            ("Inbound", self.ISOLATION_RULE_NAME),
-            ("Outbound", f"{self.ISOLATION_RULE_NAME}-out"),
-        ]:
+        if nsg_scope == "subnet":
+            # Shared subnet NSG: a deny any/any would cut EVERY VM. Scope the deny to
+            # THIS VM's private IP so only the target is isolated. Use a free priority
+            # (don't bump others' rules) so several VMs can be isolated independently.
+            vm_ip = self._get_nic_private_ip(nic_id)
+            priority = next(
+                p for p in range(self.ISOLATION_PRIORITY, 4000)
+                if p not in used_priorities
+            )
+            rules = [
+                ("Inbound", in_name, "*", vm_ip),     # deny inbound TO this VM
+                ("Outbound", out_name, vm_ip, "*"),   # deny outbound FROM this VM
+            ]
+        else:
+            # NIC-level NSG: scoped to this VM already → a deny any/any is safe.
+            # Insist on ISOLATION_PRIORITY, shifting any conflicting non-glorfindel rule.
+            for r in existing:
+                if r.priority == self.ISOLATION_PRIORITY and not r.name.startswith("glorfindel-"):
+                    new_prio = next(
+                        p for p in range(self.ISOLATION_PRIORITY + 100, 4000, 100)
+                        if p not in used_priorities
+                    )
+                    used_priorities.add(new_prio)
+                    r.priority = new_prio
+                    self._network.security_rules.begin_create_or_update(nsg_rg, nsg_name, r.name, r).result()
+                    bumped.append({"name": r.name, "original_priority": self.ISOLATION_PRIORITY})
+            priority = self.ISOLATION_PRIORITY
+            rules = [
+                ("Inbound", in_name, "*", "*"),
+                ("Outbound", out_name, "*", "*"),
+            ]
+
+        for direction, rule_name, src, dst in rules:
             self._network.security_rules.begin_create_or_update(
                 nsg_rg, nsg_name, rule_name,
                 SecurityRule(
                     name=rule_name, protocol="*",
                     source_port_range="*", destination_port_range="*",
-                    source_address_prefix="*", destination_address_prefix="*",
-                    access="Deny", priority=self.ISOLATION_PRIORITY, direction=direction,
+                    source_address_prefix=src, destination_address_prefix=dst,
+                    access="Deny", priority=priority, direction=direction,
                 ),
             ).result()
 
-        # Persist isolation state ONLY after the deny-all rules are confirmed on Azure.
+        # Persist isolation state ONLY after the deny rules are confirmed on Azure.
         # Writing it earlier left an orphan ~/.glorfindel/isolation/<vm>.json (War Room
         # showing ISOLATED) when the NSG write failed with 403 — no rule, but stale state.
         from datetime import datetime, timezone
@@ -257,6 +276,7 @@ class AzureConnector(CloudConnector):
             "nsg_rg": nsg_rg,
             "nsg_name": nsg_name,
             "bumped": bumped,
+            "rule_names": [in_name, out_name],
             "resource_id": resource_id,
             "isolated_at": datetime.now(timezone.utc).isoformat(),
         })
@@ -265,16 +285,15 @@ class AzureConnector(CloudConnector):
             "status": "isolated",
             "nsg": f"{nsg_rg}/{nsg_name}",
             "nsg_scope": nsg_scope,
-            "rule": self.ISOLATION_RULE_NAME,
+            "rule": in_name,
             "resource_id": resource_id,
         }
         if nsg_scope == "subnet":
-            # ⚠ Blast radius: a subnet-level NSG deny-all isolates EVERY VM on the
-            # subnet, not just this one. Surface it so the operator/LLM sees the
-            # collateral scope (the rule is shared, not VM-scoped).
-            out["warning"] = (
-                f"NSG {nsg_rg}/{nsg_name} is subnet-level — isolation affects ALL "
-                "VMs on this subnet, not only this VM."
+            # Now SAFE on a shared subnet NSG: isolation is scoped to this VM's IP,
+            # not the whole subnet. Note it so the operator knows it's a shared NSG.
+            out["note"] = (
+                f"NSG {nsg_rg}/{nsg_name} is subnet-level — isolation scoped to this "
+                "VM's private IP only (no impact on other VMs on the subnet)."
             )
         return out
 
@@ -288,14 +307,21 @@ class AzureConnector(CloudConnector):
         nic_id = self._get_primary_nic_id(rg, vm_name)
         nsg_rg, nsg_name, nsg_scope = self._get_nic_nsg(nic_id)
 
-        for rule_name in (self.ISOLATION_RULE_NAME, f"{self.ISOLATION_RULE_NAME}-out"):
+        # Delete the rule names this VM could have under either scope (state-stored
+        # names + both fixed and VM-suffixed), so cleanup is robust to scope drift.
+        state = _load_isolation_state(vm_name)
+        names = set((state or {}).get("rule_names", []))
+        names.update([
+            self.ISOLATION_RULE_NAME, f"{self.ISOLATION_RULE_NAME}-out",
+            f"{self.ISOLATION_RULE_NAME}-{vm_name}", f"{self.ISOLATION_RULE_NAME}-{vm_name}-out",
+        ])
+        for rule_name in names:
             try:
                 self._network.security_rules.begin_delete(nsg_rg, nsg_name, rule_name).result()
             except Exception:
                 pass
 
-        # Restore bumped rules to their original priorities
-        state = _load_isolation_state(vm_name)
+        # Restore bumped rules to their original priorities (NIC-scope only)
         if state:
             for rule_info in state.get("bumped", []):
                 r = self._network.security_rules.get(nsg_rg, nsg_name, rule_info["name"])
@@ -443,9 +469,10 @@ class AzureConnector(CloudConnector):
         nic_id = self._get_primary_nic_id(rg, vm_name)
         nsg_rg, nsg_name, nsg_scope = self._get_nic_nsg(nic_id)
 
+        in_name, out_name = self._isolation_rule_names(vm_name, nsg_scope)
         try:
-            self._network.security_rules.get(nsg_rg, nsg_name, self.ISOLATION_RULE_NAME)
-            self._network.security_rules.get(nsg_rg, nsg_name, f"{self.ISOLATION_RULE_NAME}-out")
+            self._network.security_rules.get(nsg_rg, nsg_name, in_name)
+            self._network.security_rules.get(nsg_rg, nsg_name, out_name)
             return {"verified": True, "method": "nsg_check", "nsg": f"{nsg_rg}/{nsg_name}"}
         except Exception as e:
             return {"verified": False, "method": "nsg_check", "error": str(e)}
@@ -785,6 +812,25 @@ class AzureConnector(CloudConnector):
         nics = vm.network_profile.network_interfaces
         primary = next((n for n in nics if n.primary), nics[0])
         return primary.id
+
+    def _isolation_rule_names(self, vm_name: str, scope: str) -> tuple[str, str]:
+        """(inbound, outbound) isolation rule names. On a shared subnet NSG the names
+        are VM-suffixed so isolating several VMs doesn't clobber each other's rules."""
+        if scope == "subnet":
+            base = f"{self.ISOLATION_RULE_NAME}-{vm_name}"
+            return base, f"{base}-out"
+        return self.ISOLATION_RULE_NAME, f"{self.ISOLATION_RULE_NAME}-out"
+
+    def _get_nic_private_ip(self, nic_id: str) -> str:
+        """Primary private IP of a NIC — used to scope isolation on a subnet NSG."""
+        nic_rg, nic_name = _parse_nic_resource_id(nic_id)
+        nic = self._network.network_interfaces.get(nic_rg, nic_name)
+        cfgs = nic.ip_configurations or []
+        primary = next((c for c in cfgs if getattr(c, "primary", False)), cfgs[0] if cfgs else None)
+        ip = getattr(primary, "private_ip_address", None) if primary else None
+        if not ip:
+            raise RuntimeError(f"NIC {nic_name} has no private IP — cannot scope isolation")
+        return ip
 
     def _get_nic_nsg(self, nic_id: str) -> tuple[str, str, str]:
         """Resolve the NSG governing a NIC. Returns (rg, name, scope).

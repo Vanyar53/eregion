@@ -263,8 +263,8 @@ def test_isolate_vm_no_orphan_state_file_when_azure_fails(tmp_path, monkeypatch)
     assert _load_isolation_state("vm") is None
 
 
-def test_isolate_vm_subnet_nsg_surfaces_blast_radius(tmp_path, monkeypatch):
-    """isolate_vm on a subnet-level NSG must flag the blast radius (affects all VMs)."""
+def test_isolate_vm_subnet_nsg_scopes_to_vm_ip(tmp_path, monkeypatch):
+    """isolate_vm on a subnet NSG scopes the deny to THIS VM's IP (no blast radius)."""
     import glorfindel.actions as actions
     from glorfindel.actions import AzureConnector
     monkeypatch.setattr(actions, "_ISOLATION_STATE_DIR", tmp_path / "isolation")
@@ -273,6 +273,7 @@ def test_isolate_vm_subnet_nsg_surfaces_blast_radius(tmp_path, monkeypatch):
     monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
     monkeypatch.setattr(connector, "_get_primary_nic_id", lambda rg, vm: "nic-id")
     monkeypatch.setattr(connector, "_get_nic_nsg", lambda nic: ("rg", "nsg", "subnet"))
+    monkeypatch.setattr(connector, "_get_nic_private_ip", lambda nic: "10.0.0.5")
     net = MagicMock()
     net.security_rules.list.return_value = []
     net.security_rules.begin_create_or_update.return_value.result.return_value = None
@@ -281,8 +282,39 @@ def test_isolate_vm_subnet_nsg_surfaces_blast_radius(tmp_path, monkeypatch):
     out = connector.isolate_vm(_RID)
     assert out["status"] == "isolated"
     assert out["nsg_scope"] == "subnet"
-    assert "warning" in out
-    assert "subnet" in out["warning"].lower()
+    assert "warning" not in out          # no blast radius anymore — scoped to the VM
+    assert "note" in out and "scoped" in out["note"].lower()
+    # rule names are VM-suffixed (no collision with other isolated VMs)
+    assert out["rule"] == "glorfindel-isolation-deny-all-vm"
+    # the created deny rules reference the VM IP, not any/any
+    rules = [c.args[3] for c in net.security_rules.begin_create_or_update.call_args_list]
+    addrs = [(r.source_address_prefix, r.destination_address_prefix) for r in rules]
+    assert ("*", "10.0.0.5") in addrs    # inbound: deny TO the VM
+    assert ("10.0.0.5", "*") in addrs    # outbound: deny FROM the VM
+
+
+def test_isolate_vm_subnet_nsg_picks_free_priority(tmp_path, monkeypatch):
+    """On a shared subnet NSG, isolation takes a free priority (no bump of others)."""
+    import glorfindel.actions as actions
+    from glorfindel.actions import AzureConnector
+    monkeypatch.setattr(actions, "_ISOLATION_STATE_DIR", tmp_path / "isolation")
+
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    monkeypatch.setattr(connector, "_get_primary_nic_id", lambda rg, vm: "nic-id")
+    monkeypatch.setattr(connector, "_get_nic_nsg", lambda nic: ("rg", "nsg", "subnet"))
+    monkeypatch.setattr(connector, "_get_nic_private_ip", lambda nic: "10.0.0.6")
+    existing = MagicMock(priority=100, name="someone-else")  # 100 already taken
+    net = MagicMock()
+    net.security_rules.list.return_value = [existing]
+    net.security_rules.begin_create_or_update.return_value.result.return_value = None
+    connector._network = net
+
+    out = connector.isolate_vm(_RID)
+    prios = {c.args[3].priority for c in net.security_rules.begin_create_or_update.call_args_list}
+    assert 100 not in prios               # didn't reuse the taken priority
+    assert all(p >= 100 for p in prios)
+    assert out["status"] == "isolated"
 
 
 def test_isolate_vm_nic_nsg_no_blast_radius_warning(tmp_path, monkeypatch):

@@ -718,11 +718,13 @@ function toast(msg, ms = 3000) {
 function closeModal() {
   document.getElementById('modal').classList.remove('open');
   document.querySelector('.modal').classList.remove('wide');
+  document.getElementById('modal-confirm').style.display = '';  // restore (block-scope modal hides it)
 }
 
 function openModal(title, body, cmd, confirmLabel, confirmClass, onConfirm) {
   document.getElementById('modal-title').textContent = title;
   document.getElementById('modal-body').textContent = body;
+  document.getElementById('modal-confirm').style.display = '';
   const cmdEl = document.getElementById('modal-cmd');
   if (cmd) { cmdEl.textContent = cmd; cmdEl.style.display = ''; }
   else cmdEl.style.display = 'none';
@@ -1916,27 +1918,63 @@ function _applyReadOnlyGuards(root) {
   });
 }
 
-async function doApproveAction(escId, vmName, ip) {
+async function doApproveAction(escId, vmName, opts) {
   if (_guardReadOnly()) return;
+  opts = opts || {};
+  // Block action: let the operator pick the blast radius first (this VM vs whole subnet).
+  const esc = _escById[escId];
+  if (esc && esc.action === 'block_suspicious_ip' && !opts.scope) {
+    return showBlockScopeModal(escId, vmName, opts.ip || '');
+  }
   toast('▶ Approving…');
   try {
-    const url = `/api/action/approve/${escId}` + (ip ? `?ip=${encodeURIComponent(ip)}` : '');
+    const qs = new URLSearchParams();
+    if (opts.ip)    qs.set('ip', opts.ip);
+    if (opts.scope) qs.set('scope', opts.scope);
+    const url = `/api/action/approve/${escId}` + (qs.toString() ? `?${qs}` : '');
     const r = await fetch(url, { method: 'POST' });
     const d = await r.json();
     if (d.permission_denied) { toast('✗ Cannot execute: read-only credentials'); return; }
     // Parameterised action whose param is missing (e.g. pre-fix escalation with no IP) —
-    // ask the operator for it and retry, no need to wait for a fresh trigger.
+    // ask the operator for it and retry, preserving the chosen scope.
     if (d.needs_ip) {
       const entered = prompt(`IP to block for ${vmName}:`, '');
-      if (entered && entered.trim()) return doApproveAction(escId, vmName, entered.trim());
+      if (entered && entered.trim()) return doApproveAction(escId, vmName, { ...opts, ip: entered.trim() });
       return;
     }
     if (d.capability_gap) { toast('✗ ' + d.error, 8000); return; }
     if (d.error) { toast('✗ ' + d.error, 6000); return; }
+    const scopeNote = d.scope === 'subnet' ? ' — whole subnet' : '';
     if (d.cli_instruction) { toast('✓ Approved — run: ' + d.cli_instruction, 5000); }
-    else toast('✓ Action approved and executed');
+    else toast('✓ Action approved and executed' + scopeNote);
     refreshState();
   } catch (e) { toast('✗ ' + e.message); }
+}
+
+// Block blast-radius choice — operator decision at click time (not stored in the
+// escalation). "vm" scopes the rule to this VM's IP; "subnet" puts one any-rule on
+// the subnet NSG → blocks the IP for every VM on the subnet.
+function showBlockScopeModal(escId, vmName, ip) {
+  const ipArg = ip ? `,ip:'${ip}'` : '';
+  document.getElementById('modal-title').textContent = `Block scope — ${vmName}`;
+  document.getElementById('modal-body').innerHTML = `
+    <div style="margin-bottom:12px;color:var(--text)">Where should this IP block apply?</div>
+    <div style="display:flex;flex-direction:column;gap:8px">
+      <button class="action" onclick="closeModal();doApproveAction('${escId}','${vmName}',{scope:'vm'${ipArg}})"
+        style="text-align:left;padding:9px 11px">
+        <div style="font-weight:700;color:var(--text)">🔒 This VM only <span style="color:var(--dim);font-weight:400;font-size:10px">· default</span></div>
+        <div style="color:var(--dim);font-size:11px;margin-top:2px">Rule scoped to this VM's IP — other subnet VMs are untouched.</div>
+      </button>
+      <button class="action" onclick="closeModal();doApproveAction('${escId}','${vmName}',{scope:'subnet'${ipArg}})"
+        style="text-align:left;padding:9px 11px;border-color:color-mix(in srgb,var(--orange) 45%,var(--border))">
+        <div style="font-weight:700;color:var(--orange)">⚠ Whole subnet — all VMs</div>
+        <div style="color:var(--dim);font-size:11px;margin-top:2px">One any-rule on the subnet NSG — blocks this IP for every VM on the subnet, incl. future ones.</div>
+      </button>
+    </div>`;
+  document.getElementById('modal-cmd').style.display = 'none';
+  document.getElementById('modal-cancel').style.display = '';
+  document.getElementById('modal-confirm').style.display = 'none';
+  document.getElementById('modal').classList.add('open');
 }
 
 async function setAutonomyMode(vmName, mode) {

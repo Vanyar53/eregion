@@ -543,11 +543,14 @@ async def set_autonomy_default(body: dict) -> dict:
 
 
 @app.post("/api/action/approve/{esc_id}")
-async def action_approve(esc_id: str, ip: str = "") -> dict:
+async def action_approve(esc_id: str, ip: str = "", scope: str = "vm") -> dict:
     """One-click approve for mode_hold escalations — executes the recommended action and acks.
 
     `ip` (query param) lets the operator supply the target IP for block_suspicious_ip
     when the escalation doesn't carry it (e.g. recorded before action_params existed).
+    `scope` ("vm"|"subnet", block_suspicious_ip only) is the operator's blast-radius
+    choice at click time: "vm" (default, scoped to this VM's IP) or "subnet" (one
+    any-rule on the subnet NSG → blocks the IP for every VM on the subnet).
     """
     from glorfindel import escalations as _esc
     esc = next((e for e in _esc.pending() if e["id"] == esc_id), None)
@@ -590,9 +593,12 @@ async def action_approve(esc_id: str, ip: str = "") -> dict:
                     "This escalation doesn't carry the IP — enter the IP to block, "
                     f"or run: glorfindel block <ip> {resource_id} --yes"
                 )}
-            result = await asyncio.to_thread(connector.block_suspicious_ip, block_ip, resource_id)
+            block_scope = scope if scope in ("vm", "subnet") else "vm"
+            result = await asyncio.to_thread(
+                connector.block_suspicious_ip, block_ip, resource_id, block_scope)
             _esc.resolve(esc_id)
-            return {"ok": True, "action": action, "ip": block_ip, "result": result}
+            return {"ok": True, "action": action, "ip": block_ip,
+                    "scope": block_scope, "result": result}
 
         else:
             return {"error": f"Action '{action}' non supportée via War Room — CLI : glorfindel respond {resource_id}"}

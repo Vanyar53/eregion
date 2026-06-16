@@ -449,13 +449,19 @@ glorfindel/
                                 proposed_rule, proposed_action, posture_gap
   bot.py               → Discord bot: one thread per VM, Ack/Restore/Revert buttons, /pending command
   tui.py               → Rich full-screen TUI: resources + feed + escalations, keyboard shortcuts a/r/v
-  api.py               → FastAPI War Room: /api/state, /api/feed (WS), /api/config, /api/audit,
-                         /api/discovered (fresh JSON read per call), /api/pending/rules,
-                         /api/action/{release,revert,restore,ack,approve-rule,snapshot/<vm>}
+  api.py               → FastAPI War Room: /api/state (autonomy_modes, read_only, capability),
+                         /api/feed (WS), /api/config, /api/audit, /api/discovered (fresh JSON per call),
+                         /api/pending/rules, /api/autonomy/{vm}, /api/config/autonomy/default,
+                         /api/action/{release,revert,restore,ack,approve-rule,approve/<esc_id>,snapshot/<vm>}
   static/index.html    → War Room: expandable VM cards (compact + expanded), live feed, action buttons
+                         INFRASTRUCTURE banner: credentials regime (OBSERVE-ONLY ↔ ACTIVE) + autonomy mode,
+                         color language (orange = can act, blue = observes) — kills "no badge = active"
+                         per-card autonomy badge → capability popover; global mode dropdown in Config
+                         read-only guards (write buttons disabled in observe-only); OFFLINE badge (no heartbeat)
+                         parametrized Approve & execute (block_suspicious_ip in one click)
                          BACKUP section per card: recovery point count, last backup age, 📸 Snapshot
                          MONITORING zone: backends + discovered VMs + posture gaps + rules (clickable)
-                         Config panel: Azure credentials + LLM only
+                         Config panel: Azure credentials + LLM + global autonomy mode
 
 annatar/
   runner/engine.py    → setup → integrity check → attack → emit attack_started → purple-team feedback thread
@@ -578,7 +584,7 @@ glorfindel audit --all   # NSG / backup vault / compute — surfaces IAM gaps wi
 ```bash
 pip install eregion[dev]
 pytest
-# 275 tests — 0 Azure calls, 0 LLM calls
+# 314 tests — 0 Azure calls, 0 LLM calls
 ```
 
 Coverage: 7 LangGraph nodes (incl. propose_detection_rule), routing rules, signal schema, safety guard, YAML parser, ChromaDB memory, CLI escalation flow, detection rules (RulePoller + auto-apply + eviction), proposed rules lifecycle, audit readiness checks, GlorfindelConfig + ExceptionConfig, AssetRegistry + DiscoveryService (replace-on-refresh, self-evicting threads), PostureChecker (dedup, re-escalation).

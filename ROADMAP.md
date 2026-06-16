@@ -13,7 +13,9 @@ Modèle : CLI open source gratuit, SaaS payant pour multi-tenant + connecteurs a
 - 6 TTPs validés en réel sur Azure : T1486, T1041, T1110.001, T1548.003, T1110+T1548 (parallèle), T1136.001
 - Run parallèle multi-signal validé avec IncidentRegistry + propagation investigative_context entre cycles
 - **Purple loop end-to-end validé** (commit 9a64e83) — `detection_missed → propose_detection_rule → approve-rule → detection_rules.yaml → restart watch → détection réussie ~78s`. Scénario T1136.001 (account creation) créé pour ce test.
-- 279 tests, 0 appel Azure, 0 appel LLM
+- 314 tests, 0 appel Azure, 0 appel LLM
+- **🎯 Premier vrai incident** (2026-06-14) — Glorfindel a détecté un **vrai brute force SSH internet** (IP `95.47.246.223`, 26 FailedAttempts) sur la sandbox, hors boucle Annatar. En `human_only` → escalade `mode_hold` recommandant `block_suspicious_ip`. `investigate` a qualifié (auth échouée → block, pas isolate). Le pipeline tient sur du trafic adverse authentique — et a débusqué un bug (escalade sans IP) qu'aucun run scénarisé n'avait trouvé.
+- **War Room posture + opérabilité** (~50 commits 12-14 juin) — bandeau INFRASTRUCTURE 2 axes (credentials OBSERVE-ONLY↔ACTIVE + autonomy human-only/non-disruptive), dropdown mode global + badge par carte + popover capacité, grisage read-only préventif, badge VM OFFLINE, Approve & execute paramétré (`block_suspicious_ip` 1-clic). Bugs cross-cutting débusqués via l'UI (race import Azure SDK → `warm_up_azure_sdk`, mode invisible sur VM connue par escalade, VM éteinte = disparition).
 - **Hot-pickup mode** (commit b7af4cc) — `decide` recharge la config fraîche par cycle ; `watch --mode` épinglé session par-dessus config ; `resolve()` = exact > wildcard le plus long > défaut. Dropdown War Room sans restart.
 - **Few-shot T1136.001** (commit b36a5a7) — ancre "T1136.001 ≠ isolate_vm", confidence 0.35 → escalade + suggested_steps forensiques. Gate T1136.001 PASSED ✅ (41s, snapshot + escalade).
 - **Fix past_cycles ChromaDB** (commit 740659a) — bug critique : LLM inférait état isolation depuis ChromaDB past_cycles → sautait cycle 1 → restore direct → ransomware actif. Fix : `current_vm_state` injecté dans le prompt avant past_cycles + CRITICAL warning. Gate T1486 PASSED ✅ (run 20260609T190824Z, RTO 21m29s).
@@ -199,10 +201,12 @@ class DatadogDetector(DetectionConnector):
 - Live feed WebSocket avec reconnect automatique
 - Posture gaps par VM (NSG, backup, IAM) — avec commande `az` exacte pour corriger
 - Règles de détection cliquables (modal avec query KQL complète + polling status)
-- Config panel : Azure credentials + LLM
+- Config panel : Azure credentials + LLM + mode autonomie global
 - `make glorfindel-dev` — auto-reload sur modification de `index.html` (volume mount)
 - Registry stale corrigé : lecture fraîche `discovered_assets.json` à chaque appel API
 - Release isolation robuste : `_clear_isolation_state` inconditionnel + subprocess asyncio non-bloquant
+- **Posture/observe-only UI** (12-14 juin) : bandeau INFRASTRUCTURE 2 axes (credentials OBSERVE-ONLY↔ACTIVE + autonomy), dropdown mode global + badge par carte cliquable + popover capacité, grisage read-only préventif, badge VM OFFLINE (rétention 8h), Approve & execute paramétré
+- **Purple loop visible en UI** : escalades `proposed_rule` affichées, approbation règle en 1-clic depuis ⚙
 
 **Prochaine itération (après feedback premier utilisateur) :**
 - [ ] Confidence score visible dans les VM cards

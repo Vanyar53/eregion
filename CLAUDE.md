@@ -200,15 +200,26 @@ glorfindel/
   escalations.py        → ~/.glorfindel/escalations.jsonl + labels (proposed_rule, improve_detection ajoutés)
   bot.py                → Discord bot — un fil par VM, boutons Acquitter + Commande, /pending slash command
   tui.py                → Rich TUI full-screen (glorfindel dashboard) : resources + feed + escalations, raccourcis a/r/x/u/v
-  api.py                → FastAPI War Room — /api/state, /api/feed (WS), /api/config, /api/audit[/<vm>],
+  api.py                → FastAPI War Room — /api/state (expose autonomy_modes, autonomy_default,
+                          read_only, capability), /api/feed (WS), /api/config, /api/audit[/<vm>],
                           /api/pending/rules, /api/action/{release,revert,restore,ack,approve-rule,snapshot/<vm>}
+                          /api/action/approve/{esc_id} — exécute l'action retenue d'un mode_hold (action_params)
+                          /api/autonomy/{vm} (set_asset_mode) + /api/config/autonomy/default (set_default_mode)
                           /api/discovered — assets découverts (lecture fraîche JSON à chaque appel)
                           /api/jobs/<vm> — état du job snapshot/restore en cours (lit active_jobs/<vm>.json)
   static/index.html     → War Room web UI — cards VM expandables (compact + étendu), feed live
+                          bandeau INFRASTRUCTURE (posture) : 2 axes orthogonaux — régime credentials
+                          (👁 OBSERVE-ONLY ↔ ⚡ ACTIVE) + autonomy (⚡ non-disruptive / 👁 human-only).
+                          Langage couleur : orange = peut agir, bleu = observe. Tue « absence de badge = actif ».
+                          Mode autonomie : dropdown ⚙ Config (défaut global) + badge par carte cliquable
+                          → popover capacité (ce que Glorfindel fait seul par mode, lit /api/state.capability)
                           boutons ↩️ Release (isolated) | ↩️ Unblock (blocked IP) | ⟳ Reset (les deux) | 🔄 Restore
+                          grisage read-only préventif (_applyReadOnlyGuards) : write désactivés en observe-only,
+                          Ack/Cmd restent actifs. Badge VM OFFLINE (heartbeat >15min, reste grisée, rétention 8h).
+                          Approve & execute paramétré : block_suspicious_ip en 1-clic (action_params.ip ou invite)
                           section BACKUP par carte : nb de RPs, âge dernier backup, bouton 📸 Snapshot (fire-and-forget RSV)
                           carte MONITORING : backends + assets découverts + règles cliquables (modal query)
-                          panneau ⚙ Config : Azure credentials + LLM uniquement
+                          panneau ⚙ Config : Azure credentials + LLM + mode autonomie global
   rules/azure/
     detection_rules.yaml → rules UNIQUEMENT — queries KQL, TTPs, noms de backends
                            PAS de workspace_id, resource_id, ni section assets
@@ -349,7 +360,7 @@ GLORFINDEL_DISCOVERY_RETENTION_H=8  # rétention d'une VM éteinte dans le regis
 ## Tests
 
 ```bash
-pytest                    # 279 tests, 0 appel Azure, 0 appel LLM, 0 écriture ~/.glorfindel/
+pytest                    # 314 tests, 0 appel Azure, 0 appel LLM, 0 écriture ~/.glorfindel/
 pytest tests/unit/test_agent_nodes.py        # LangGraph nodes (incl. investigate + confidence gate)
 pytest tests/unit/test_glorfindel.py         # actions/routing/signals
 pytest tests/unit/test_detection_rules.py    # RulePoller + load_rules + status + recently_matched

@@ -80,8 +80,12 @@ class CloudConnector(ABC):
         ...
 
     @abstractmethod
-    def block_suspicious_ip(self, ip: str, resource_id: str, scope: str = "vm") -> dict:
-        """Add deny rule for this IP. scope="vm" (this VM only) | "subnet" (all VMs)."""
+    def block_suspicious_ip(
+        self, ip: str, resource_id: str, scope: str = "vm", replace: bool = False
+    ) -> dict:
+        """Add deny rule for this IP. scope="vm" (this VM only) | "subnet" (all VMs).
+        replace=True (with scope="subnet"): promote — apply the subnet rule, then drop
+        the now-redundant VM-scoped rule (create-then-delete → no protection gap)."""
         ...
 
     @abstractmethod
@@ -337,7 +341,9 @@ class AzureConnector(CloudConnector):
 
         return {"status": "released", "resource_id": resource_id}
 
-    def block_suspicious_ip(self, ip: str, resource_id: str, scope: str = "vm") -> dict:
+    def block_suspicious_ip(
+        self, ip: str, resource_id: str, scope: str = "vm", replace: bool = False
+    ) -> dict:
         """Block a suspicious IP.
 
         scope="vm" (default, autonomous): the rule only affects THIS VM — on a shared
@@ -346,6 +352,9 @@ class AzureConnector(CloudConnector):
         scope="subnet" (deliberate, operator opt-in): one perimeter rule on the SUBNET
           NSG, attacker→any → blocks the IP for EVERY VM on the subnet (incl. future
           ones). scoped=False → War Room shows the ⚠ subnet-wide chip.
+        replace=True (promote VM→subnet): apply the subnet rule FIRST, then drop the
+          now-redundant VM-scoped rule for this IP. Create-then-delete → no protection
+          gap (if the subnet rule fails to apply, the VM rule is left intact).
         """
         if self.dry_run:
             return {"status": "dry_run", "action": "block_ip", "ip": ip, "scope": scope}
@@ -395,6 +404,25 @@ class AzureConnector(CloudConnector):
                 ),
             ).result()
 
+        promoted_from = None
+        if scope == "subnet" and replace:
+            # The subnet-wide rule is now in place (created above) → the prior VM-scoped
+            # rule for this IP is redundant. Delete it AFTER (create-then-delete → never
+            # a protection gap). Target the NSG recorded at block time (faithful), so a
+            # NIC-NSG VM-scoped rule is removed from its NIC NSG, not the subnet one.
+            prev = next((e for e in _load_block_entries(vm_name) if e.get("ip") == ip), None)
+            old_rule = (prev or {}).get("rule") or self._block_rule_name(ip, vm_name, "subnet")
+            old_nsg = (prev or {}).get("nsg", f"{nsg_rg}/{nsg_name}")
+            old_rg, old_name = old_nsg.split("/", 1)
+            if old_rule != rule_name:  # don't delete the subnet rule we just created
+                for nm in (old_rule, f"{old_rule}-out"):
+                    try:
+                        self._network.security_rules.begin_delete(old_rg, old_name, nm).result()
+                    except Exception:
+                        pass
+                promoted_from = old_rule
+            _clear_block_state(vm_name, ip)  # drop the old entry so the new one is saved
+
         _save_block_state(
             vm_name, ip, resource_id,
             nsg=f"{nsg_rg}/{nsg_name}", nsg_scope=nsg_scope, rule=rule_name, scoped=scoped,
@@ -408,6 +436,8 @@ class AzureConnector(CloudConnector):
             "rule": rule_name,
             "resource_id": resource_id,
         }
+        if promoted_from:
+            out["promoted_from"] = promoted_from   # VM-scoped rule removed after promote
         if scope == "subnet":
             out["note"] = (
                 f"NSG {nsg_rg}/{nsg_name} — perimeter block: this IP is denied for ALL "

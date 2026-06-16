@@ -371,6 +371,50 @@ def test_block_state_records_nsg_scope(tmp_path, monkeypatch):
     assert blocks[0]["scoped"] is True     # War Room reads this → neutral chip (safe)
 
 
+def test_block_ip_promote_replace_create_then_delete(tmp_path, monkeypatch):
+    """replace=True promotes VM→subnet: subnet any-rule created, VM rule deleted AFTER
+    (create-then-delete = no protection gap), state replaced (one entry, scoped=False)."""
+    import glorfindel.actions as actions
+    from glorfindel.actions import AzureConnector, active_blocks
+    monkeypatch.setattr(actions, "_BLOCK_STATE_DIR", tmp_path / "blocks")
+
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    monkeypatch.setattr(connector, "_get_primary_nic_id", lambda rg, vm: "nic-id")
+    monkeypatch.setattr(connector, "_get_nic_nsg", lambda nic: ("rg", "subnet-nsg", "subnet"))
+    monkeypatch.setattr(connector, "_get_nic_private_ip", lambda nic: "10.0.0.5")
+    monkeypatch.setattr(connector, "_get_subnet_nsg", lambda nic: ("rg", "subnet-nsg"))
+    net = MagicMock()
+    net.security_rules.list.return_value = []
+    net.security_rules.begin_create_or_update.return_value.result.return_value = None
+    net.security_rules.begin_delete.return_value.result.return_value = None
+    connector._network = net
+
+    # 1) a VM-scoped block exists
+    connector.block_suspicious_ip("95.47.246.223", _RID)  # scope=vm
+    # 2) promote it to subnet-wide
+    order = []
+    net.security_rules.begin_create_or_update.side_effect = (
+        lambda *a, **k: order.append(("create", a[2])) or MagicMock())
+    net.security_rules.begin_delete.side_effect = (
+        lambda *a, **k: order.append(("delete", a[2])) or MagicMock())
+
+    out = connector.block_suspicious_ip("95.47.246.223", _RID, scope="subnet", replace=True)
+
+    assert out["scoped"] is False
+    assert out["rule"] == "glorfindel-block-95-47-246-223"            # subnet-wide (no suffix)
+    assert out["promoted_from"] == "glorfindel-block-95-47-246-223-vm"  # removed VM rule
+    # create-then-delete: the subnet rule is created BEFORE the VM rule is deleted
+    first_create = next(i for i, (op, _) in enumerate(order) if op == "create")
+    first_delete = next(i for i, (op, _) in enumerate(order) if op == "delete")
+    assert first_create < first_delete
+    # state replaced: single entry, now subnet-wide
+    blocks = [b for b in active_blocks() if b["ip"] == "95.47.246.223"]
+    assert len(blocks) == 1
+    assert blocks[0]["scoped"] is False
+    assert blocks[0]["rule"] == "glorfindel-block-95-47-246-223"
+
+
 def test_block_ip_scope_subnet_one_any_rule_on_subnet_nsg(monkeypatch):
     """scope='subnet' → one perimeter rule (any) on the SUBNET NSG, scoped=False."""
     import glorfindel.actions as actions

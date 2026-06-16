@@ -1316,14 +1316,17 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
   const totalEscs   = myEscs.length + myDetEscs.length;
   const isExpanded  = _expandedVms.has(vm_name);
 
-  // "Possibly offline": no heartbeat for >15 min. Backend retains the asset up to 8h
-  // so it stays visible (grayed) instead of vanishing. Only exclude states that
-  // legitimately stop the heartbeat without the VM being down: isolation (NSG deny-all
-  // cuts AMA) and an in-flight restore (VM deallocated). A single-IP block does NOT
-  // cut AMA, and an escalation is unrelated to heartbeat — those can still be offline.
+  // "Possibly offline": no heartbeat. Backend retains a VM in discovery up to 8h, then
+  // evicts it (last_seen gone). Two offline signals, both excluding states that
+  // legitimately stop the heartbeat without the VM being down — isolation (NSG deny-all
+  // cuts AMA) and an in-flight restore (VM deallocated):
+  //   (a) still in discovery but heartbeat stale (>15 min), OR
+  //   (b) evicted from discovery (no last_seen) yet kept visible by a block — a block
+  //       doesn't cut AMA, so absence from discovery means it stopped reporting >8h ago.
   const _gapMin   = last_seen ? (Date.now() - new Date(last_seen).getTime()) / 60000 : null;
+  const _evicted  = _gapMin === null && isBlocked;
   const isOffline = !isIsolated && !restoreInfo
-                    && _gapMin !== null && _gapMin > 15;
+                    && ((_gapMin !== null && _gapMin > 15) || _evicted);
 
   const stateClass = _pendingActions.has(vm_name) ? 's-releasing'
                    : restoreInfo    ? 's-restoring'
@@ -1340,8 +1343,11 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
             : isOffline     ? `<span style="color:var(--dim)" title="possibly offline">●</span>`
             :                 `<span style="color:var(--green)">●</span>`;
 
+  const _offlineTitle = last_seen
+    ? `No heartbeat for ${_relTime(last_seen)} — possibly powered off`
+    : `No recent heartbeat — dropped from discovery (off > retention window), kept visible by an active block`;
   const offlineBadge = isOffline
-    ? `<span title="No heartbeat for ${_relTime(last_seen)} — possibly powered off" style="font-size:8px;font-weight:700;padding:1px 5px;border-radius:3px;background:color-mix(in srgb,var(--dim) 14%,transparent);color:var(--dim);border:1px solid var(--border);letter-spacing:.5px;flex-shrink:0">OFFLINE</span>`
+    ? `<span title="${_offlineTitle}" style="font-size:8px;font-weight:700;padding:1px 5px;border-radius:3px;background:color-mix(in srgb,var(--dim) 14%,transparent);color:var(--dim);border:1px solid var(--border);letter-spacing:.5px;flex-shrink:0">OFFLINE</span>`
     : '';
 
   // Badges are clickable in compact mode only — expanded mode uses dec-row / esc-items

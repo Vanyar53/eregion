@@ -1079,17 +1079,6 @@ function renderInfra() {
     if (!hasIncident) _collapsedVms.delete(r.vm_name); // allow re-expand on next incident; don't force-collapse user-expanded clean cards
   });
 
-  // Subnet-wide blocks (scoped=false) belong to the shared subnet NSG, not a VM —
-  // gather them (grouped by NSG) for a dedicated card. Read-only scan, no mutation.
-  const subnetBlocks = new Map();
-  resources.forEach(r => (r.states || []).forEach(s => {
-    if (s.type === 'blocked' && s.scoped === false) {
-      const key = s.nsg || 'subnet';
-      if (!subnetBlocks.has(key)) subnetBlocks.set(key, { nsg: s.nsg || '', ips: [] });
-      subnetBlocks.get(key).ips.push({ ip: s.ip, since: s.since, vm_name: r.vm_name });
-    }
-  }));
-
   list.innerHTML = `
     <div class="topo-graph" id="topo-graph">
       <svg class="topo-svg" id="topo-svg"></svg>
@@ -1107,12 +1096,6 @@ function renderInfra() {
       </div>
 
       <div class="topo-spacer"></div>
-
-      ${subnetBlocks.size ? `
-      <!-- Subnet-level protections (shared NSG) -->
-      <div class="topo-assets" style="margin-bottom:6px">
-        ${[...subnetBlocks.values()].map(_renderSubnetNsgCard).join('')}
-      </div>` : ''}
 
       <!-- Layer 3 — Assets -->
       <div class="topo-assets" id="topo-assets">
@@ -1249,15 +1232,49 @@ function _renderModules(rules, detectBackends, recoverBackends, resources) {
   const protectDot  = isIsolated ? `<span style="color:var(--red)">●</span>`
                     : isBlocked  ? `<span style="color:var(--orange)">●</span>`
                     :              `<span style="color:var(--green)">●</span>`;
-  const protectRows = [
-    isolCount ? `<div class="node-backend-row" style="color:var(--red)">${isolCount} isolation${isolCount>1?'s':''} active</div>` : '',
-    blockCount ? `<div class="node-backend-row" style="color:var(--orange)">${blockCount} IP${blockCount>1?'s':''} blocked</div>` : '',
-    (!isIsolated && !isBlocked) ? `<div class="node-backend-row" style="color:var(--green)">no restrictions</div>` : '',
-  ].filter(Boolean).join('');
-  const protectNode = `<div class="node-backend protect ${isIsolated ? 'state-error' : isBlocked ? 'state-warn' : ''}" id="module-protect">
+  // PROTECT = the NSG layer. Subnet NSGs + their subnet-wide blocks live here;
+  // VM-scoped blocks stay on the VM cards. Expandable: compact = NSG/action counts,
+  // expanded = the subnet NSG(s) with their blocks.
+  const subnetGroups = new Map();   // nsg → [{ip, since, vm_name}]
+  const nsgKeys = new Set();
+  resources.forEach(r => (r.states || []).forEach(s => {
+    if ((s.type === 'blocked' || s.type === 'isolated') && s.nsg) nsgKeys.add(s.nsg);
+    if (s.type === 'blocked' && s.scoped === false) {
+      const key = s.nsg || 'subnet';
+      if (!subnetGroups.has(key)) subnetGroups.set(key, []);
+      subnetGroups.get(key).push({ ip: s.ip, since: s.since, vm_name: r.vm_name });
+    }
+  }));
+  const actionCount    = blockCount + isolCount;
+  const protectExpanded = _expandedBackends.has('__protect__');
+  const nsgN           = nsgKeys.size || subnetGroups.size;
+  const protectSummary = actionCount
+    ? `${nsgN ? nsgN + ' NSG · ' : ''}${actionCount} action${actionCount > 1 ? 's' : ''}`
+    : 'no restrictions';
+  const subnetDetail = [...subnetGroups.entries()].map(([nsg, ips]) => `
+      <div style="margin-top:5px">
+        <div style="font-size:9px;color:var(--orange);font-weight:600">🌐 ${nsg.split('/').pop()} · subnet-wide</div>
+        ${ips.map(b => `
+          <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap;margin-top:3px">
+            <span class="badge blocked" style="font-size:9px;cursor:default">⚠ ${b.ip} · ${age(b.since)}</span>
+            <button class="action danger" onclick="event.stopPropagation();confirmUnblock('${b.vm_name}')" style="font-size:9px;padding:1px 6px;margin-left:auto">↩️ Unblock</button>
+          </div>`).join('')}
+      </div>`).join('');
+  const protectBody = protectExpanded
+    ? `<div style="margin-top:6px;border-top:1px solid var(--border);padding-top:6px">
+         ${subnetGroups.size ? subnetDetail
+            : '<div class="node-backend-row" style="color:var(--dim);font-size:9px">No subnet-wide blocks. VM-scoped blocks appear on each VM card.</div>'}
+       </div>`
+    : '';
+  const protectNode = `<div class="node-backend protect ${isIsolated ? 'state-error' : isBlocked ? 'state-warn' : ''}" id="module-protect"
+      style="cursor:pointer" onclick="event.stopPropagation();toggleBackend('__protect__')">
     <div class="node-backend-name">${protectDot} network control</div>
-    <div class="node-backend-type">cloud provider</div>
-    ${protectRows}
+    <div class="node-backend-type">cloud provider · NSG</div>
+    <div class="node-backend-row" style="justify-content:space-between">
+      <span style="color:${actionCount ? 'var(--orange)' : 'var(--green)'}">${protectSummary}</span>
+      <span style="color:var(--blue);font-size:9px">${protectExpanded ? '▾' : '▸'}</span>
+    </div>
+    ${protectBody}
   </div>`;
 
   // RECOVER
@@ -1329,29 +1346,6 @@ function _renderModules(rules, detectBackends, recoverBackends, resources) {
 }
 
 // ── Asset nodes ────────────────────────────────────────────────────────────────
-
-// Subnet NSG card — carries the subnet-wide blocks (one any-rule per IP on the
-// shared subnet NSG). Represents the subnet itself, not a VM: it protects every VM
-// on the subnet, which is why these blocks don't live on individual VM cards.
-function _renderSubnetNsgCard(group) {
-  const name = (group.nsg || '').split('/').pop() || 'subnet';
-  const rows = group.ips.map(b => `
-    <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:5px">
-      <span class="badge blocked" style="font-size:9px;cursor:default">⚠ ${b.ip} · ${age(b.since)}</span>
-      <button class="action danger" onclick="event.stopPropagation();confirmUnblock('${b.vm_name}')" style="font-size:9px;padding:2px 7px;margin-left:auto">↩️ Unblock</button>
-    </div>`).join('');
-  const cardId = 'subnet-nsg-' + (group.nsg || 'subnet').replace(/[^a-z0-9]/gi, '-');
-  return `<div class="node-asset s-blocked" id="${cardId}" style="border-color:color-mix(in srgb,var(--orange) 50%,var(--border))">
-    <div class="node-asset-header">
-      <div style="display:flex;align-items:center;gap:6px">
-        <span style="color:var(--orange);font-size:13px">🌐</span>
-        <span class="node-asset-name" style="color:var(--orange)">subnet NSG · ${name}</span>
-      </div>
-    </div>
-    <div style="font-size:9px;color:var(--dim);margin-top:4px">⚠ Blocked for every VM on this subnet</div>
-    ${rows}
-  </div>`;
-}
 
 function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
   const { resource_id, vm_name, states: _rawStates = [], last_seen } = resource;
@@ -1759,26 +1753,6 @@ function _drawTopologyEdges() {
       const nb = pt(document.getElementById(`nb-${b.name}`));
       if (nb) lines.push(bezier(nb.x, nb.bottom, asset.x, asset.top,
         'var(--green)', '', 1.5, 0.3));
-    });
-  });
-
-  // Subnet NSG card edges: PROTECT → subnet NSG (the network-control artifact it
-  // manages), and subnet NSG → each VM it protects (dashed orange = the block reaches
-  // the VM through the shared NSG, same language as a VM block edge).
-  const subnetVms = {};
-  resources.forEach(r => (r.states || []).forEach(s => {
-    if (s.type === 'blocked' && s.scoped === false) {
-      const key = (s.nsg || 'subnet').replace(/[^a-z0-9]/gi, '-');
-      (subnetVms[key] = subnetVms[key] || []).push(r.vm_name);
-    }
-  }));
-  document.querySelectorAll('[id^="subnet-nsg-"]').forEach(el => {
-    const card = pt(el);
-    if (!card) return;
-    if (nbNsg) lines.push(bezier(nbNsg.x, nbNsg.bottom, card.x, card.top, 'var(--orange)', '', 2, 0.9));
-    (subnetVms[el.id.replace('subnet-nsg-', '')] || []).forEach(vm => {
-      const asset = pt(document.getElementById(`asset-${vm}`));
-      if (asset) lines.push(bezier(card.x, card.bottom, asset.x, asset.top, 'var(--orange)', '6,4', 2, 0.85));
     });
   });
 

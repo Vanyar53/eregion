@@ -63,6 +63,7 @@ async def state() -> dict:
                 "type": "isolated",
                 "since": _iso.get("isolated_at", ""),
                 "nsg_scope": _iso.get("nsg_scope", ""),  # "nic" | "subnet"
+                "nsg": _iso.get("nsg_name", "") or _iso.get("nsg", ""),
             })
         for b in blocks.get(resource_id, []):
             states.append({

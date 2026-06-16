@@ -80,8 +80,8 @@ class CloudConnector(ABC):
         ...
 
     @abstractmethod
-    def block_suspicious_ip(self, ip: str, resource_id: str) -> dict:
-        """Add deny rule for this IP on the resource's NSG."""
+    def block_suspicious_ip(self, ip: str, resource_id: str, scope: str = "vm") -> dict:
+        """Add deny rule for this IP. scope="vm" (this VM only) | "subnet" (all VMs)."""
         ...
 
     @abstractmethod
@@ -337,9 +337,18 @@ class AzureConnector(CloudConnector):
 
         return {"status": "released", "resource_id": resource_id}
 
-    def block_suspicious_ip(self, ip: str, resource_id: str) -> dict:
+    def block_suspicious_ip(self, ip: str, resource_id: str, scope: str = "vm") -> dict:
+        """Block a suspicious IP.
+
+        scope="vm" (default, autonomous): the rule only affects THIS VM — on a shared
+          subnet NSG it is addressed to the VM's private IP; on a NIC NSG it's any/any
+          (the NSG already covers only this VM).
+        scope="subnet" (deliberate, operator opt-in): one perimeter rule on the SUBNET
+          NSG, attacker→any → blocks the IP for EVERY VM on the subnet (incl. future
+          ones). scoped=False → War Room shows the ⚠ subnet-wide chip.
+        """
         if self.dry_run:
-            return {"status": "dry_run", "action": "block_ip", "ip": ip}
+            return {"status": "dry_run", "action": "block_ip", "ip": ip, "scope": scope}
         if not ip:
             raise ValueError("block_suspicious_ip: no IP address provided")
 
@@ -347,25 +356,35 @@ class AzureConnector(CloudConnector):
         self._ensure_clients()
         rg, vm_name = _parse_vm_resource_id(resource_id)
         nic_id = self._get_primary_nic_id(rg, vm_name)
-        nsg_rg, nsg_name, nsg_scope = self._get_nic_nsg(nic_id)
 
         from azure.mgmt.network.models import SecurityRule
+
+        if scope == "subnet":
+            # Perimeter block: one any rule on the SUBNET NSG (always the subnet's,
+            # even if the NIC has its own NSG). Covers all VMs on the subnet + future.
+            nsg_rg, nsg_name = self._get_subnet_nsg(nic_id)
+            nsg_scope = "subnet"
+            scoped = False
+            vm_ip = "*"
+            rule_name = self._block_rule_name(ip, vm_name, scope="vm")  # shared (no VM suffix)
+        else:
+            # VM-scoped block (autonomous default) — only this VM. See _block_rule_name.
+            nsg_rg, nsg_name, nsg_scope = self._get_nic_nsg(nic_id)
+            scoped = True
+            # subnet NSG → address to the VM IP so other VMs aren't touched; nic → any.
+            vm_ip = self._get_nic_private_ip(nic_id) if nsg_scope == "subnet" else "*"
+            rule_name = self._block_rule_name(ip, vm_name, nsg_scope)
 
         existing = list(self._network.security_rules.list(nsg_rg, nsg_name))
         used_priorities = {r.priority for r in existing}
         priority = next(p for p in range(200, 4000, 10) if p not in used_priorities)
 
-        rule_name = self._block_rule_name(ip, vm_name, nsg_scope)
-        # On a shared subnet NSG, scope the block to THIS VM's IP so the autonomous
-        # action on this VM's incident doesn't change the posture of other VMs on the
-        # subnet (an unrequested side effect). NIC NSG already only covers this VM.
-        vm_ip = self._get_nic_private_ip(nic_id) if nsg_scope == "subnet" else "*"
         for direction in ("Inbound", "Outbound"):
             name = rule_name if direction == "Inbound" else f"{rule_name}-out"
             if direction == "Inbound":
-                src, dst = ip, vm_ip       # deny attacker → this VM (subnet) / any (nic)
+                src, dst = ip, vm_ip       # deny attacker → VM (vm scope) / any (subnet)
             else:
-                src, dst = vm_ip, ip       # deny this VM (subnet) / any (nic) → attacker
+                src, dst = vm_ip, ip       # deny VM (vm scope) / any (subnet) → attacker
             self._network.security_rules.begin_create_or_update(
                 nsg_rg, nsg_name, name,
                 SecurityRule(
@@ -378,20 +397,23 @@ class AzureConnector(CloudConnector):
 
         _save_block_state(
             vm_name, ip, resource_id,
-            nsg=f"{nsg_rg}/{nsg_name}", nsg_scope=nsg_scope, rule=rule_name,
-            scoped=True,  # block addressing always scoped to this VM (nic any, or subnet+VM-IP)
+            nsg=f"{nsg_rg}/{nsg_name}", nsg_scope=nsg_scope, rule=rule_name, scoped=scoped,
         )
         out = {
             "status": "blocked",
             "ip": ip,
             "nsg": f"{nsg_rg}/{nsg_name}",
             "nsg_scope": nsg_scope,
-            "scoped": True,
+            "scoped": scoped,
             "rule": rule_name,
             "resource_id": resource_id,
         }
-        if nsg_scope == "subnet":
-            # Scoped to this VM's IP → no impact on other VMs on the subnet.
+        if scope == "subnet":
+            out["note"] = (
+                f"NSG {nsg_rg}/{nsg_name} — perimeter block: this IP is denied for ALL "
+                "VMs on the subnet (and future ones)."
+            )
+        elif nsg_scope == "subnet":
             out["note"] = (
                 f"NSG {nsg_rg}/{nsg_name} is subnet-level — block scoped to this VM's "
                 "private IP only (attacker still reaches other VMs until they detect it)."
@@ -706,11 +728,18 @@ class AzureConnector(CloudConnector):
         self._guard_write("unblock_ip")
         self._ensure_clients()
         rg, vm_name = _parse_vm_resource_id(resource_id)
-        nic_id = self._get_primary_nic_id(rg, vm_name)
-        nsg_rg, nsg_name, nsg_scope = self._get_nic_nsg(nic_id)
 
-        # Delete both the VM-suffixed (subnet-scope) and plain (nic-scope) names so
-        # cleanup is robust regardless of which scope the block was created under.
+        # Prefer the NSG recorded at block time (faithful — a subnet-wide block lives
+        # on the subnet NSG even if the VM has its own NIC NSG). Fall back to resolving
+        # via the NIC for legacy state without a recorded nsg.
+        entry = next((e for e in _load_block_entries(vm_name) if e.get("ip") == ip), None)
+        if entry and entry.get("nsg"):
+            nsg_rg, nsg_name = entry["nsg"].split("/", 1)
+        else:
+            nsg_rg, nsg_name, _ = self._get_nic_nsg(self._get_primary_nic_id(rg, vm_name))
+
+        # Delete every name this block could have under any scope (VM-suffixed,
+        # plain/perimeter) so cleanup is robust regardless of how it was created.
         scoped = self._block_rule_name(ip, vm_name, "subnet")
         plain = self._block_rule_name(ip, vm_name, "nic")
         deleted = []
@@ -887,6 +916,25 @@ class AzureConnector(CloudConnector):
         rg, name = _parse_nsg_resource_id(subnet.network_security_group.id)
         return rg, name, "subnet"
 
+    def _get_subnet_nsg(self, nic_id: str) -> tuple[str, str]:
+        """Resolve the NSG on the NIC's SUBNET (always the subnet's, ignoring any NIC
+        NSG). Used for a deliberate subnet-wide block. Raises if the subnet has no NSG
+        (then a subnet-wide block isn't possible without per-NIC propagation)."""
+        nic_rg, nic_name = _parse_nic_resource_id(nic_id)
+        nic = self._network.network_interfaces.get(nic_rg, nic_name)
+        subnet_id = nic.ip_configurations[0].subnet.id
+        parts = subnet_id.split("/")
+        sub_rg = parts[parts.index("resourceGroups") + 1]
+        vnet = parts[parts.index("virtualNetworks") + 1]
+        subnet_name = parts[-1]
+        subnet = self._network.subnets.get(sub_rg, vnet, subnet_name)
+        if subnet.network_security_group is None:
+            raise RuntimeError(
+                f"Subnet {subnet_name} has no NSG — subnet-wide block not available "
+                "(NSGs are per-NIC; would require propagating to each NIC)."
+            )
+        return _parse_nsg_resource_id(subnet.network_security_group.id)
+
 
 _ISOLATION_STATE_DIR = Path.home() / ".glorfindel" / "isolation"
 _BLOCK_STATE_DIR = Path.home() / ".glorfindel" / "blocks"
@@ -944,6 +992,18 @@ def _save_block_state(
             "nsg": nsg, "nsg_scope": nsg_scope, "rule": rule, "scoped": scoped,
         })
     f.write_text(json.dumps(entries))
+
+
+def _load_block_entries(vm_name: str) -> list[dict]:
+    """Return the recorded block entries for a VM (empty if none)."""
+    import json
+    f = _BLOCK_STATE_DIR / f"{vm_name}.json"
+    if not f.exists():
+        return []
+    try:
+        return json.loads(f.read_text())
+    except Exception:
+        return []
 
 
 def _clear_block_state(vm_name: str, ip: str) -> None:

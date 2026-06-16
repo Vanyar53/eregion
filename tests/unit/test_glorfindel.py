@@ -371,6 +371,50 @@ def test_block_state_records_nsg_scope(tmp_path, monkeypatch):
     assert blocks[0]["scoped"] is True     # War Room reads this → neutral chip (safe)
 
 
+def test_block_ip_scope_subnet_one_any_rule_on_subnet_nsg(monkeypatch):
+    """scope='subnet' → one perimeter rule (any) on the SUBNET NSG, scoped=False."""
+    import glorfindel.actions as actions
+    from glorfindel.actions import AzureConnector
+    monkeypatch.setattr(actions, "_save_block_state", lambda *a, **k: None)
+
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    monkeypatch.setattr(connector, "_get_primary_nic_id", lambda rg, vm: "nic-id")
+    # subnet-wide must resolve the SUBNET NSG (not the NIC one)
+    monkeypatch.setattr(connector, "_get_subnet_nsg", lambda nic: ("rg", "subnet-nsg"))
+    net = MagicMock()
+    net.security_rules.list.return_value = []
+    net.security_rules.begin_create_or_update.return_value.result.return_value = None
+    connector._network = net
+
+    out = connector.block_suspicious_ip("95.47.246.223", _RID, scope="subnet")
+    assert out["nsg"] == "rg/subnet-nsg"
+    assert out["nsg_scope"] == "subnet"
+    assert out["scoped"] is False          # → War Room ⚠ subnet-wide chip
+    assert out["rule"] == "glorfindel-block-95-47-246-223"  # shared, no VM suffix
+    assert "perimeter" in out["note"].lower() or "all" in out["note"].lower()
+    rules = [c.args[3] for c in net.security_rules.begin_create_or_update.call_args_list]
+    addrs = [(r.source_address_prefix, r.destination_address_prefix) for r in rules]
+    assert ("95.47.246.223", "*") in addrs   # perimeter: attacker → any
+    assert ("*", "95.47.246.223") in addrs
+
+
+def test_block_ip_scope_subnet_requires_subnet_nsg(monkeypatch):
+    """scope='subnet' with no subnet NSG → clear error (no silent fallback)."""
+    from glorfindel.actions import AzureConnector
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    monkeypatch.setattr(connector, "_get_primary_nic_id", lambda rg, vm: "nic-id")
+
+    def _no_subnet_nsg(nic):
+        raise RuntimeError("Subnet x has no NSG — subnet-wide block not available")
+    monkeypatch.setattr(connector, "_get_subnet_nsg", _no_subnet_nsg)
+    connector._network = MagicMock()
+
+    with pytest.raises(RuntimeError, match="subnet-wide block not available"):
+        connector.block_suspicious_ip("1.2.3.4", _RID, scope="subnet")
+
+
 def test_block_ip_nic_nsg_stays_any(monkeypatch):
     """NIC NSG → block stays attacker↔any (scoped to the VM by the NIC NSG itself)."""
     from glorfindel.actions import AzureConnector

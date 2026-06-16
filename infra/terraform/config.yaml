@@ -16,6 +16,7 @@ disk_size_gb: 32
 # destroy/recreate des autres VMs, contrairement à count).
 vms:
   victim: {}
+  elrond: {}
   # victim-web:
   #   vm_size: Standard_B1s
   # victim-db:

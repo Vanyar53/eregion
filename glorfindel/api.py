@@ -71,6 +71,7 @@ async def state() -> dict:
                 "since": b.get("blocked_at", ""),
                 "nsg_scope": b.get("nsg_scope", ""),
                 "rule": b.get("rule", ""),
+                "scoped": b.get("scoped", True),  # False once promoted subnet-wide
             })
         resources.append({
             "resource_id": resource_id,
@@ -607,6 +608,38 @@ async def action_approve(esc_id: str, ip: str = "", scope: str = "vm") -> dict:
         return {"error": str(e), "permission_denied": True}
     except Exception as e:
         return _friendly_azure_error(e, action)
+
+
+@app.post("/api/action/block-promote/{vm_name}")
+async def action_block_promote(vm_name: str) -> dict:
+    """Extend an existing VM-scoped block to the whole subnet (all VMs).
+
+    Reads the IP from the active block and re-blocks with scope="subnet", replace=True.
+    The connector places the subnet-wide rule first, then removes the redundant VM rule
+    (create-then-delete) → no protection window. Operator decision, never autonomous.
+    """
+    from glorfindel.actions import AzureConnector, active_blocks
+
+    block = next(
+        (b for b in active_blocks() if b["resource_id"].split("/")[-1] == vm_name),
+        None,
+    )
+    if not block:
+        return {"error": f"No active block found for {vm_name}"}
+    ip = block.get("ip", "")
+    rid = block["resource_id"]
+    if not ip:
+        return {"error": f"Active block for {vm_name} has no IP"}
+
+    try:
+        connector = AzureConnector(dry_run=False)
+        result = await asyncio.to_thread(
+            connector.block_suspicious_ip, ip, rid, "subnet", True)
+        return {"ok": True, "ip": ip, "scope": "subnet", "result": result}
+    except PermissionError as e:
+        return {"error": str(e), "permission_denied": True}
+    except Exception as e:
+        return _friendly_azure_error(e, "block_suspicious_ip")
 
 
 @app.post("/api/action/snapshot/{vm_name}")

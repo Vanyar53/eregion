@@ -664,6 +664,13 @@ function _scopeNote(s) {
   return ` <span style="${base};border:1px solid var(--border)" title="Rule on the VM's own NIC NSG — affects this VM only.">VM NSG</span>`;
 }
 
+// "Extend to subnet" affordance for an existing VM-scoped block (operator decision).
+// Hidden once the block is already subnet-wide (scoped === false).
+function _extendBtn(s, vmName) {
+  if (!s || s.scoped === false) return '';
+  return `<button class="action" onclick="event.stopPropagation();confirmExtendSubnet('${vmName}')" style="font-size:9px;padding:2px 7px;color:var(--orange)" title="Block this IP for every VM on the subnet">⚠ Extend to subnet</button>`;
+}
+
 function cliCommand(esc) {
   const rid = esc.resource_id;
   const id  = esc.id.slice(0, 8);
@@ -1422,7 +1429,7 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
     } else if (a.action === 'block_suspicious_ip' && isBlocked) {
       const s = states.find(s => s.type === 'blocked');
       badge   = s ? `<span class="badge blocked" style="font-size:9px;cursor:default">BLOCKED ${s.ip} · ${age(s.since)}</span>${_scopeNote(s)}` : '';
-      corrBtn = `<button class="action danger" onclick="event.stopPropagation();confirmUnblock('${vm_name}')" style="font-size:9px;padding:2px 7px;margin-left:auto">↩️ Unblock</button>`;
+      corrBtn = `${_extendBtn(s, vm_name)}<button class="action danger" onclick="event.stopPropagation();confirmUnblock('${vm_name}')" style="font-size:9px;padding:2px 7px;margin-left:auto">↩️ Unblock</button>`;
     }
 
     const meta = [
@@ -1441,7 +1448,7 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
         </div>
         ${meta ? `<div class="dec-meta">${meta}</div>` : ''}
       </div>
-      ${corrBtn ? `<div style="margin-top:5px">${corrBtn}</div>` : ''}
+      ${corrBtn ? `<div style="margin-top:5px;display:flex;gap:6px;flex-wrap:wrap;align-items:center">${corrBtn}</div>` : ''}
     </div>`;
   }).join('');
 
@@ -1460,6 +1467,7 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
     states.filter(s => s.type === 'blocked').forEach(s => fallbackRows.push(
       `<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
         <span class="badge blocked" style="font-size:9px;cursor:default">BLOCKED ${s.ip} · ${age(s.since)}</span>${_scopeNote(s)}
+        ${_extendBtn(s, vm_name)}
         <button class="action danger" onclick="event.stopPropagation();confirmUnblock('${vm_name}')" style="font-size:9px;padding:2px 7px">↩️ Unblock</button>
       </div>`));
   }
@@ -1794,6 +1802,34 @@ function confirmUnblock(vmName) {
   );
 }
 
+// Promote an existing VM-scoped block to the whole subnet (operator decision).
+function confirmExtendSubnet(vmName) {
+  openModal(
+    'Extend block to subnet — ' + vmName,
+    'This blocks the IP for EVERY VM on the subnet (and future ones), replacing the '
+      + 'VM-scoped rule with one subnet-wide rule. The subnet rule is placed before the '
+      + 'VM rule is removed — no protection gap.',
+    '',
+    '⚠ Extend to subnet',
+    'danger',
+    () => doBlockPromote(vmName),
+  );
+}
+
+async function doBlockPromote(vmName) {
+  if (_guardReadOnly()) return;
+  toast('▶ Extending block to subnet…');
+  try {
+    const r = await fetch(`/api/action/block-promote/${vmName}`, { method: 'POST' });
+    const d = await r.json();
+    if (d.permission_denied) { toast('✗ Cannot execute: read-only credentials'); return; }
+    if (d.capability_gap) { toast('✗ ' + d.error, 8000); return; }
+    if (d.error) { toast('✗ ' + d.error, 6000); return; }
+    toast('✓ Block extended to the whole subnet');
+    refreshState();
+  } catch (e) { toast('✗ ' + e.message); }
+}
+
 function confirmReset(vmName) {
   openModal(
     'Reset ' + vmName,
@@ -1905,7 +1941,7 @@ function _guardReadOnly() {
 // detected by its onclick handler. Ack / Cmd / Approve-rule stay active (local only).
 const _WRITE_HANDLERS = [
   'doApproveAction', 'confirmRestore', 'doSnapshot',
-  'confirmRelease', 'confirmUnblock', 'confirmReset',
+  'confirmRelease', 'confirmUnblock', 'confirmReset', 'confirmExtendSubnet',
 ];
 function _applyReadOnlyGuards(root) {
   if (!_state?.read_only) return;

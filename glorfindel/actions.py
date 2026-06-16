@@ -276,6 +276,10 @@ class AzureConnector(CloudConnector):
             "nsg_rg": nsg_rg,
             "nsg_name": nsg_name,
             "nsg_scope": nsg_scope,
+            # scoped=True → the rule only affects THIS VM (NIC NSG, or subnet NSG with
+            # VM-IP addressing). A future subnet-wide opt-in (any on a shared NSG) would
+            # set this False → War Room shows the ⚠ "subnet-wide" blast-radius chip.
+            "scoped": True,
             "bumped": bumped,
             "rule_names": [in_name, out_name],
             "resource_id": resource_id,
@@ -286,6 +290,7 @@ class AzureConnector(CloudConnector):
             "status": "isolated",
             "nsg": f"{nsg_rg}/{nsg_name}",
             "nsg_scope": nsg_scope,
+            "scoped": True,
             "rule": in_name,
             "resource_id": resource_id,
         }
@@ -374,12 +379,14 @@ class AzureConnector(CloudConnector):
         _save_block_state(
             vm_name, ip, resource_id,
             nsg=f"{nsg_rg}/{nsg_name}", nsg_scope=nsg_scope, rule=rule_name,
+            scoped=True,  # block addressing always scoped to this VM (nic any, or subnet+VM-IP)
         )
         out = {
             "status": "blocked",
             "ip": ip,
             "nsg": f"{nsg_rg}/{nsg_name}",
             "nsg_scope": nsg_scope,
+            "scoped": True,
             "rule": rule_name,
             "resource_id": resource_id,
         }
@@ -919,7 +926,7 @@ def active_isolations() -> list[dict]:
 
 def _save_block_state(
     vm_name: str, ip: str, resource_id: str,
-    nsg: str = "", nsg_scope: str = "", rule: str = "",
+    nsg: str = "", nsg_scope: str = "", rule: str = "", scoped: bool = True,
 ) -> None:
     import json
     from datetime import datetime, timezone
@@ -928,12 +935,13 @@ def _save_block_state(
     entries = json.loads(f.read_text()) if f.exists() else []
     if not any(e["ip"] == ip for e in entries):
         # Record the NSG + scope so the representation matches Azure reality:
-        # nsg_scope="subnet" → rule lives on a shared subnet NSG (War Room can show
-        # the true blast radius), "nic" → rule is on the VM's own NIC.
+        # nsg_scope="subnet" → rule lives on a shared subnet NSG, "nic" → on the VM NIC.
+        # scoped=True → rule only affects THIS VM (NIC, or subnet+VM-IP addressing);
+        # False would be a subnet-wide `any` rule → War Room shows the ⚠ blast-radius chip.
         entries.append({
             "ip": ip, "resource_id": resource_id,
             "blocked_at": datetime.now(timezone.utc).isoformat(),
-            "nsg": nsg, "nsg_scope": nsg_scope, "rule": rule,
+            "nsg": nsg, "nsg_scope": nsg_scope, "rule": rule, "scoped": scoped,
         })
     f.write_text(json.dumps(entries))
 

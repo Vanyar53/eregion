@@ -361,12 +361,14 @@ def test_block_state_records_nsg_scope(tmp_path, monkeypatch):
     net.security_rules.begin_create_or_update.return_value.result.return_value = None
     connector._network = net
 
-    connector.block_suspicious_ip("95.47.246.223", _RID)
+    out = connector.block_suspicious_ip("95.47.246.223", _RID)
+    assert out["scoped"] is True          # live outcome carries the flag too
     blocks = [b for b in active_blocks() if b["ip"] == "95.47.246.223"]
     assert len(blocks) == 1
     assert blocks[0]["nsg_scope"] == "subnet"
     assert blocks[0]["nsg"] == "nsgrg/subnetnsg"
     assert blocks[0]["rule"] == "glorfindel-block-95-47-246-223-vm"
+    assert blocks[0]["scoped"] is True     # War Room reads this → neutral chip (safe)
 
 
 def test_block_ip_nic_nsg_stays_any(monkeypatch):

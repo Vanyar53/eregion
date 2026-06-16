@@ -1079,6 +1079,17 @@ function renderInfra() {
     if (!hasIncident) _collapsedVms.delete(r.vm_name); // allow re-expand on next incident; don't force-collapse user-expanded clean cards
   });
 
+  // Subnet-wide blocks (scoped=false) belong to the shared subnet NSG, not a VM —
+  // gather them (grouped by NSG) for a dedicated card. Read-only scan, no mutation.
+  const subnetBlocks = new Map();
+  resources.forEach(r => (r.states || []).forEach(s => {
+    if (s.type === 'blocked' && s.scoped === false) {
+      const key = s.nsg || 'subnet';
+      if (!subnetBlocks.has(key)) subnetBlocks.set(key, { nsg: s.nsg || '', ips: [] });
+      subnetBlocks.get(key).ips.push({ ip: s.ip, since: s.since, vm_name: r.vm_name });
+    }
+  }));
+
   list.innerHTML = `
     <div class="topo-graph" id="topo-graph">
       <svg class="topo-svg" id="topo-svg"></svg>
@@ -1096,6 +1107,12 @@ function renderInfra() {
       </div>
 
       <div class="topo-spacer"></div>
+
+      ${subnetBlocks.size ? `
+      <!-- Subnet-level protections (shared NSG) -->
+      <div class="topo-assets" style="margin-bottom:6px">
+        ${[...subnetBlocks.values()].map(_renderSubnetNsgCard).join('')}
+      </div>` : ''}
 
       <!-- Layer 3 — Assets -->
       <div class="topo-assets" id="topo-assets">
@@ -1313,8 +1330,33 @@ function _renderModules(rules, detectBackends, recoverBackends, resources) {
 
 // ── Asset nodes ────────────────────────────────────────────────────────────────
 
+// Subnet NSG card — carries the subnet-wide blocks (one any-rule per IP on the
+// shared subnet NSG). Represents the subnet itself, not a VM: it protects every VM
+// on the subnet, which is why these blocks don't live on individual VM cards.
+function _renderSubnetNsgCard(group) {
+  const name = (group.nsg || '').split('/').pop() || 'subnet';
+  const rows = group.ips.map(b => `
+    <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:5px">
+      <span class="badge blocked" style="font-size:9px;cursor:default">⚠ ${b.ip} · ${age(b.since)}</span>
+      <button class="action danger" onclick="event.stopPropagation();confirmUnblock('${b.vm_name}')" style="font-size:9px;padding:2px 7px;margin-left:auto">↩️ Unblock</button>
+    </div>`).join('');
+  return `<div class="node-asset s-blocked" style="border-color:color-mix(in srgb,var(--orange) 50%,var(--border))">
+    <div class="node-asset-header">
+      <div style="display:flex;align-items:center;gap:6px">
+        <span style="color:var(--orange);font-size:13px">🌐</span>
+        <span class="node-asset-name" style="color:var(--orange)">subnet NSG · ${name}</span>
+      </div>
+    </div>
+    <div style="font-size:9px;color:var(--dim);margin-top:4px">⚠ Blocked for every VM on this subnet</div>
+    ${rows}
+  </div>`;
+}
+
 function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
-  const { resource_id, vm_name, states = [], last_seen } = resource;
+  const { resource_id, vm_name, states: _rawStates = [], last_seen } = resource;
+  // Subnet-wide blocks live on the shared subnet NSG, not on this VM — they're shown
+  // on a dedicated subnet NSG card, so exclude them from every VM-card view here.
+  const states = _rawStates.filter(s => !(s.type === 'blocked' && s.scoped === false));
   const isIsolated  = states.some(s => s.type === 'isolated');
   const isBlocked   = states.some(s => s.type === 'blocked');
   const restoreInfo = restoreByVm[vm_name];

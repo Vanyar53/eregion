@@ -70,6 +70,7 @@ async def state() -> dict:
                 "ip": b["ip"],
                 "since": b.get("blocked_at", ""),
                 "nsg_scope": b.get("nsg_scope", ""),
+                "nsg": b.get("nsg", ""),       # "rg/name" of the NSG holding the rule
                 "rule": b.get("rule", ""),
                 "scoped": b.get("scoped", True),  # False once promoted subnet-wide
             })

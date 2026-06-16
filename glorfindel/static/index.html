@@ -1340,7 +1340,8 @@ function _renderSubnetNsgCard(group) {
       <span class="badge blocked" style="font-size:9px;cursor:default">⚠ ${b.ip} · ${age(b.since)}</span>
       <button class="action danger" onclick="event.stopPropagation();confirmUnblock('${b.vm_name}')" style="font-size:9px;padding:2px 7px;margin-left:auto">↩️ Unblock</button>
     </div>`).join('');
-  return `<div class="node-asset s-blocked" style="border-color:color-mix(in srgb,var(--orange) 50%,var(--border))">
+  const cardId = 'subnet-nsg-' + (group.nsg || 'subnet').replace(/[^a-z0-9]/gi, '-');
+  return `<div class="node-asset s-blocked" id="${cardId}" style="border-color:color-mix(in srgb,var(--orange) 50%,var(--border))">
     <div class="node-asset-header">
       <div style="display:flex;align-items:center;gap:6px">
         <span style="color:var(--orange);font-size:13px">🌐</span>
@@ -1758,6 +1759,26 @@ function _drawTopologyEdges() {
       const nb = pt(document.getElementById(`nb-${b.name}`));
       if (nb) lines.push(bezier(nb.x, nb.bottom, asset.x, asset.top,
         'var(--green)', '', 1.5, 0.3));
+    });
+  });
+
+  // Subnet NSG card edges: PROTECT → subnet NSG (the network-control artifact it
+  // manages), and subnet NSG → each VM it protects (dashed orange = the block reaches
+  // the VM through the shared NSG, same language as a VM block edge).
+  const subnetVms = {};
+  resources.forEach(r => (r.states || []).forEach(s => {
+    if (s.type === 'blocked' && s.scoped === false) {
+      const key = (s.nsg || 'subnet').replace(/[^a-z0-9]/gi, '-');
+      (subnetVms[key] = subnetVms[key] || []).push(r.vm_name);
+    }
+  }));
+  document.querySelectorAll('[id^="subnet-nsg-"]').forEach(el => {
+    const card = pt(el);
+    if (!card) return;
+    if (nbNsg) lines.push(bezier(nbNsg.x, nbNsg.bottom, card.x, card.top, 'var(--orange)', '', 2, 0.9));
+    (subnetVms[el.id.replace('subnet-nsg-', '')] || []).forEach(vm => {
+      const asset = pt(document.getElementById(`asset-${vm}`));
+      if (asset) lines.push(bezier(card.x, card.bottom, asset.x, asset.top, 'var(--orange)', '6,4', 2, 0.85));
     });
   });
 

@@ -1371,10 +1371,11 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
   // legitimately stop the heartbeat without the VM being down — isolation (NSG deny-all
   // cuts AMA) and an in-flight restore (VM deallocated):
   //   (a) still in discovery but heartbeat stale (>15 min), OR
-  //   (b) evicted from discovery (no last_seen) yet kept visible by a block — a block
+  //   (b) evicted from discovery (no last_seen) yet still rendered because it has an
+  //       active state — a block (incl. a subnet-wide one filtered off the VM view)
   //       doesn't cut AMA, so absence from discovery means it stopped reporting >8h ago.
   const _gapMin   = last_seen ? (Date.now() - new Date(last_seen).getTime()) / 60000 : null;
-  const _evicted  = _gapMin === null && isBlocked;
+  const _evicted  = _gapMin === null && _rawStates.length > 0;
   const isOffline = !isIsolated && !restoreInfo
                     && ((_gapMin !== null && _gapMin > 15) || _evicted);
 

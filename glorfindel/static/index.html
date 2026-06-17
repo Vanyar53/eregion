@@ -1304,6 +1304,18 @@ function _renderModules(rules, detectBackends, recoverBackends, resources) {
     const warnPending = checks.some(c => c.status === 'warn'
       && /pending|no recovery point|first backup/i.test(c.message || ''));
     const warnLabel = warnPending ? 'backup pending' : 'backup stale';
+    // "How many" aggregate from the structured backup check data (only useful >1 VM).
+    const bk = { ok: 0, pending: 0, missing: 0, rp: 0 };
+    checks.forEach(c => {
+      const d = c.data || {};
+      if (typeof d.points === 'number') bk.rp += d.points;
+      if (c.status === 'fail') bk.missing++;
+      else if (c.status === 'warn') bk.pending++;
+      else if (c.status === 'ok') bk.ok++;
+    });
+    const bkAgg = checks.length > 1
+      ? `<div class="node-backend-row" style="color:var(--dim);font-size:9px">${bk.ok} ok · ${bk.pending} pending · ${bk.missing} missing${bk.rp ? ` · ${bk.rp} RP` : ''}</div>`
+      : '';
     const statusRow = worst==='ok'
       ? `<div class="node-backend-row" style="color:var(--green)">backup ok</div>`
       : worst==='warn'
@@ -1328,6 +1340,7 @@ function _renderModules(rules, detectBackends, recoverBackends, resources) {
       <div class="node-backend-name">${dot} ${b.name}</div>
       <div class="node-backend-type">backup vault</div>
       ${statusRow}
+      ${bkAgg}
       ${lastRun}
       ${refreshBtn}
     </div>`;
@@ -1598,8 +1611,16 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
     </div>
   </div>`;
 
+  // VM ↔ its NSG (from the audit's structured NSG check) — NIC NSG = this VM only,
+  // subnet NSG = shared with the subnet.
+  const _nsgData = ((auditEntry?.checks || []).find(c => c.name === 'NSG access') || {}).data || {};
+  const nsgLine = _nsgData.nsg
+    ? `<div style="font-size:9px;color:var(--dim);margin-top:5px">🛡 NSG <span style="color:var(--text)">${_nsgData.nsg.split('/').pop()}</span> · <span style="color:${_nsgData.nsg_scope === 'subnet' ? 'var(--orange)' : 'var(--dim)'}">${_nsgData.nsg_scope === 'subnet' ? 'subnet (shared)' : 'NIC (this VM)'}</span></div>`
+    : '';
+
   const expandedBody = `
     ${readinessExpanded}
+    ${nsgLine}
     ${modeSelector}
     ${fallbackRows.length ? `<div style="display:flex;flex-direction:column;gap:5px;margin-top:6px">${fallbackRows.join('')}</div>` : ''}
     ${decisionHtml || ''}

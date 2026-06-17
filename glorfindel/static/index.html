@@ -1680,6 +1680,18 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
 
 // ── Topology edge drawing ──────────────────────────────────────────────────────
 
+// Is a VM actually protected by the RSV (vs merely discovered)? From the audit's
+// backup check — data.protected when present, else status != fail. null = unknown.
+function _vmProtected(vmName) {
+  const a = (_auditData?.audits || []).find(x =>
+    x.asset_name === vmName || (x.resource_id || '').split('/').pop() === vmName);
+  if (!a) return null;
+  const bk = (a.checks || []).find(c => c.action === 'restore_from_backup' || c.name === 'Backup vault');
+  if (!bk) return null;
+  if (bk.data && typeof bk.data.protected === 'boolean') return bk.data.protected;
+  return bk.status !== 'fail';
+}
+
 function _drawTopologyEdges() {
   const svg   = document.getElementById('topo-svg');
   const graph = document.getElementById('topo-graph');
@@ -1774,11 +1786,13 @@ function _drawTopologyEdges() {
       }
     }
 
-    // RECOVER → VM  (RSV covers all discovered assets)
-    recoverBackends.forEach(b => {
+    // RECOVER → VM — only when the VM is actually backed up by the RSV, not merely
+    // discovered. A VM confirmed not in the vault gets no recover link.
+    const _prot = _vmProtected(vmName);
+    if (_prot !== false) recoverBackends.forEach(b => {
       const nb = pt(document.getElementById(`nb-${b.name}`));
       if (nb) lines.push(bezier(nb.x, nb.bottom, asset.x, asset.top,
-        'var(--green)', '', 1.5, 0.3));
+        'var(--green)', '', 1.5, _prot ? 0.4 : 0.2));  // brighter when confirmed protected
     });
   });
 

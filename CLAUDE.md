@@ -191,7 +191,8 @@ glorfindel/
                           load_config(path, glorfindel_cfg=None) — workspace_id résolu depuis glorfindel_cfg
                           RulePoller.expand_for_discovered(registry, glorfindel_cfg) — démarre threads
                           par (règle auto_apply, asset découvert), thread s'arrête si asset évincé
-  audit.py              → AuditCheck, AuditResult, run() — NSG/backup/compute readiness checks, IAM gap detection
+  audit.py              → AuditCheck (+ champ `data` structuré : nsg/nsg_scope, points/protected), AuditResult,
+                          run() — NSG/backup/compute readiness checks en parallèle, IAM gap detection
   proposed_rules.py     → record/pending/approve()/reject() — detection rule proposal lifecycle
   memory.py             → CycleMemory ChromaDB (confidence + past_cycles_used)
   incidents.py          → IncidentRegistry (TTL, persist, thread-safe)

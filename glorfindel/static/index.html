@@ -1245,12 +1245,16 @@ function _renderModules(rules, detectBackends, recoverBackends, resources) {
       subnetGroups.get(key).push({ ip: s.ip, since: s.since, vm_name: r.vm_name });
     }
   }));
+  // Full NSG landscape (incl. idle NSGs) from the audit's structured NSG check data.
+  (_auditData?.audits || []).forEach(a => (a.checks || []).forEach(c => {
+    if (c.data && c.data.nsg) nsgKeys.add(c.data.nsg);
+  }));
   const actionCount    = blockCount + isolCount;
   const protectExpanded = _expandedBackends.has('__protect__');
   const nsgN           = nsgKeys.size || subnetGroups.size;
-  const protectSummary = actionCount
-    ? `${nsgN ? nsgN + ' NSG · ' : ''}${actionCount} action${actionCount > 1 ? 's' : ''}`
-    : 'no restrictions';
+  const protectSummary = nsgN
+    ? `${nsgN} NSG · ${actionCount ? actionCount + ' action' + (actionCount > 1 ? 's' : '') : 'no restrictions'}`
+    : (actionCount ? `${actionCount} action${actionCount > 1 ? 's' : ''}` : 'no restrictions');
   const subnetDetail = [...subnetGroups.entries()].map(([nsg, ips]) => `
       <div style="margin-top:5px">
         <div style="font-size:9px;color:var(--orange);font-weight:600">🌐 ${nsg.split('/').pop()} · subnet-wide</div>

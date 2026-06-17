@@ -87,6 +87,27 @@ def test_run_all_ok():
     assert statuses["Compute access"] == "ok"
 
 
+def test_nsg_check_exposes_structured_nsg_and_scope():
+    """NSG check carries nsg + nsg_scope in `data` (no message parsing for War Room)."""
+    c = _connector(nsg={"ok": True, "nsg": "annatar/subnet-nsg", "scope": "subnet", "rules": 4})
+    result = run(RESOURCE_ID, c)
+    nsg = next(ch for ch in result.checks if ch.name == "NSG access")
+    assert nsg.data["nsg"] == "annatar/subnet-nsg"
+    assert nsg.data["nsg_scope"] == "subnet"
+    # survives to_dict (what /api/audit serialises)
+    d = next(ch for ch in result.to_dict()["checks"] if ch["name"] == "NSG access")
+    assert d["data"]["nsg_scope"] == "subnet"
+
+
+def test_backup_check_exposes_structured_points_protected():
+    """Backup check carries points + protected in `data` (the 'combien')."""
+    c = _connector(backup={"ok": True, "vault": "rsv-annatar", "points": 7, "latest_age_h": 3.0})
+    result = run(RESOURCE_ID, c)
+    bk = next(ch for ch in result.checks if ch.name == "Backup vault")
+    assert bk.data["points"] == 7
+    assert bk.data["protected"] is True
+
+
 def test_run_checks_run_concurrently():
     """The 3 Azure checks run in parallel — total time ≈ slowest, not the sum.
 

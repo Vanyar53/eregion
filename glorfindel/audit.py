@@ -14,6 +14,10 @@ class AuditCheck:
     status: AuditStatus
     message: str
     fix: str = ""     # actionable CLI command to resolve the gap
+    # Structured extras so the War Room doesn't have to parse `message`.
+    # NSG check → {"nsg": "rg/name", "nsg_scope": "nic"|"subnet"}.
+    # Backup check → {"points": int, "protected": bool} (when available).
+    data: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -38,6 +42,7 @@ class AuditResult:
                     "status": c.status,
                     "message": c.message,
                     "fix": c.fix,
+                    "data": c.data,
                 }
                 for c in self.checks
             ],
@@ -123,6 +128,7 @@ def _check_nsg(resource_id: str, connector) -> AuditCheck:
             name="NSG access",
             status="ok",
             message=f"NSG {nsg} readable ({rules} rules)",
+            data={"nsg": nsg, "nsg_scope": res.get("scope", "")},
         )
 
     err = res.get("error", "")[:120]
@@ -171,6 +177,7 @@ def _check_backup(resource_id: str, connector, vault: str) -> AuditCheck:
                 f"az backup protection backup-now -g {rg} -v {vault} "
                 f"-c {vm} -i {vm} --backup-management-type AzureIaasVM"
             ),
+            data={"protected": True, "points": points, "latest_age_h": age_h},
         )
 
     err = res.get("error", "")[:120]
@@ -200,6 +207,7 @@ def _check_backup(resource_id: str, connector, vault: str) -> AuditCheck:
                 f"az backup protection backup-now -g {rg} -v {vault} "
                 f"-c {vm} -i {vm} --backup-management-type AzureIaasVM"
             ),
+            data={"protected": True, "points": 0},
         )
     return AuditCheck(
         action="restore_from_backup",
@@ -210,6 +218,7 @@ def _check_backup(resource_id: str, connector, vault: str) -> AuditCheck:
             f"az backup protection enable-for-vm -g {rg} -v {vault} "
             f"--vm {vm} --policy-name DefaultPolicy"
         ),
+        data={"protected": False, "points": 0},
     )
 
 

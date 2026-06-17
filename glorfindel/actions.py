@@ -800,7 +800,10 @@ class AzureConnector(CloudConnector):
             nic_id = self._get_primary_nic_id(rg, vm_name)
             nsg_rg, nsg_name, nsg_scope = self._get_nic_nsg(nic_id)
             rules = list(self._network.security_rules.list(nsg_rg, nsg_name))
-            return {"ok": True, "nsg": f"{nsg_rg}/{nsg_name}", "rules": len(rules)}
+            return {
+                "ok": True, "nsg": f"{nsg_rg}/{nsg_name}",
+                "scope": nsg_scope, "rules": len(rules),
+            }
         except Exception as e:
             return {"ok": False, "iam": _is_iam_error(str(e)), "error": str(e)}
 

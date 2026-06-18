@@ -868,6 +868,58 @@ class AzureConnector(CloudConnector):
         except Exception:
             return False
 
+    def list_backup_items(
+        self, vault: str = "rsv-annatar", resource_group: str = "annatar"
+    ) -> list[dict]:
+        """List the vault's protected items directly — the backup inventory.
+
+        Source of truth for "do my backups exist?". The RSV knows its protected items
+        regardless of VM power state, so this works when an off VM has dropped out of
+        the LAW heartbeat (the discovered-asset audit can't see it then — which is
+        exactly when you want to confirm backups exist). One paginated
+        `backup_protected_items.list` call — the CHEAP leg.
+
+        `last_recovery_point` rides on each item, so freshness comes free. The recovery
+        point COUNT does NOT (it needs a per-item recovery_points.list = N slow RSV
+        calls, the very thing the discovery/posture decoupling avoids) and is
+        deliberately omitted — use check_backup_points(resource_id) for a single VM's
+        count when a card is expanded.
+
+        Pure read — no _guard_write, so it runs on read-only (observe-only) credentials.
+        An empty list means the vault has no protected items (meaningful: nothing is
+        backed up). IAM / vault-not-found surface as a raised exception (the caller
+        distinguishes "empty vault" from "can't read vault").
+        """
+        if self.dry_run:
+            return []
+        from datetime import datetime, timezone
+        from azure.mgmt.recoveryservicesbackup import RecoveryServicesBackupClient
+
+        self._ensure_clients()
+        client = RecoveryServicesBackupClient(self._credential, self._subscription_id)
+        # Narrow to IaaS VM items so we don't enumerate file-share / SQL / SAP items.
+        fltr = "backupManagementType eq 'AzureIaasVM' and itemType eq 'VM'"
+        now = datetime.now(timezone.utc)
+        items: list[dict] = []
+        for it in client.backup_protected_items.list(vault, resource_group, filter=fltr):
+            p = getattr(it, "properties", None)
+            if p is None:
+                continue
+            last_rp = getattr(p, "last_recovery_point", None)
+            age_h = round((now - last_rp).total_seconds() / 3600, 1) if last_rp else None
+            rid = getattr(p, "virtual_machine_id", None) or getattr(p, "source_resource_id", "")
+            items.append({
+                "name": getattr(p, "friendly_name", "") or getattr(it, "name", ""),
+                "resource_id": rid,
+                "protection_state": (
+                    getattr(p, "protection_state", None)
+                    or getattr(p, "protection_status", "")
+                ),
+                "latest_recovery_point": last_rp.isoformat() if last_rp else None,
+                "latest_age_h": age_h,
+            })
+        return items
+
     def check_compute_access(self, resource_id: str) -> dict:
         """Verify VM + disk read access — snapshot readiness."""
         if self.dry_run:

@@ -186,6 +186,9 @@ glorfindel/
                           load_context → [poll_detection | propose_detection_rule]
                           → investigate → decide → execute_action → verify_action → store_cycle
   actions.py            → CloudConnector ABC + AzureConnector + check_nsg_access/check_backup_points/check_compute_access
+                          list_backup_items(vault, rg) → inventaire RSV vault-wide (protected items + last RP/state),
+                          indépendant de l'état des VMs (source de vérité backup même VM éteinte). Cheap leg : 1 appel
+                          paginé, pas de count RP par item (count = check_backup_points par VM, opt-in). Read-only OK.
   detectors.py          → DetectionConnector ABC + AzureMonitorDetector (poll 10s) + run_query()
   detection_rules.py    → DetectionRule dataclass + RulePoller (continuous polling, status persistence)
                           load_config(path, glorfindel_cfg=None) — workspace_id résolu depuis glorfindel_cfg

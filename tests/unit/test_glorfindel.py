@@ -175,6 +175,78 @@ def test_check_backup_points_not_protected(monkeypatch):
     assert "not linked" in res["error"].lower()
 
 
+def _backup_items_connector(monkeypatch, items):
+    """AzureConnector with a mocked RSV client for list_backup_items tests."""
+    from unittest.mock import MagicMock
+    import azure.mgmt.recoveryservicesbackup as _rsv
+    from glorfindel.actions import AzureConnector
+
+    client = MagicMock()
+    client.backup_protected_items.list.return_value = items
+    monkeypatch.setattr(_rsv, "RecoveryServicesBackupClient", lambda *a, **k: client)
+
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    connector._credential = object()
+    connector._subscription_id = "sub"
+    return connector, client
+
+
+def _protected_item(friendly_name, vm_id, state, last_rp):
+    from unittest.mock import MagicMock
+    p = MagicMock()
+    p.friendly_name = friendly_name
+    p.virtual_machine_id = vm_id
+    p.source_resource_id = vm_id
+    p.protection_state = state
+    p.last_recovery_point = last_rp
+    it = MagicMock()
+    it.properties = p
+    it.name = f"VM;iaasvmcontainerv2;annatar;{friendly_name}"
+    return it
+
+
+def test_list_backup_items_dry_run_returns_empty():
+    from glorfindel.actions import AzureConnector
+    assert AzureConnector(dry_run=True).list_backup_items() == []
+
+
+def test_list_backup_items_parses_inventory(monkeypatch):
+    """Vault items parsed from the single protected-items.list call (cheap leg)."""
+    from datetime import datetime, timezone, timedelta
+    last = datetime.now(timezone.utc) - timedelta(hours=3)
+    items = [
+        _protected_item("vm-victim", "/sub/.../vm-victim", "Protected", last),
+        _protected_item("vm-elrond", "/sub/.../vm-elrond", "Protected", None),
+    ]
+    connector, client = _backup_items_connector(monkeypatch, items)
+    out = connector.list_backup_items(vault="rsv-annatar", resource_group="annatar")
+
+    # The RSV is queried vault-wide (not per discovered VM) and filtered to IaaS VMs.
+    client.backup_protected_items.list.assert_called_once()
+    args, kwargs = client.backup_protected_items.list.call_args
+    assert args[0] == "rsv-annatar"
+    assert "AzureIaasVM" in kwargs["filter"]
+
+    assert [i["name"] for i in out] == ["vm-victim", "vm-elrond"]
+    assert out[0]["resource_id"] == "/sub/.../vm-victim"
+    assert out[0]["protection_state"] == "Protected"
+    assert out[0]["latest_age_h"] == 3.0
+    assert out[0]["latest_recovery_point"] is not None
+    # No recovery point yet (first backup pending) → freshness None, item still listed.
+    assert out[1]["latest_recovery_point"] is None
+    assert out[1]["latest_age_h"] is None
+    # The expensive RP count is deliberately NOT computed here.
+    assert "points" not in out[0]
+    client.recovery_points.list.assert_not_called()
+
+
+def test_list_backup_items_empty_vault(monkeypatch):
+    """No protected items → empty list (vault readable but nothing backed up)."""
+    connector, _ = _backup_items_connector(monkeypatch, items=[])
+    assert connector.list_backup_items() == []
+
+
 def test_warm_up_azure_sdk_idempotent():
     """warm_up_azure_sdk imports without raising and is safe to call repeatedly."""
     from glorfindel.actions import warm_up_azure_sdk

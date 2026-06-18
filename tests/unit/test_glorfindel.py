@@ -247,6 +247,57 @@ def test_list_backup_items_empty_vault(monkeypatch):
     assert connector.list_backup_items() == []
 
 
+def test_check_backup_points_vault_rg_scopes_lookup(monkeypatch):
+    """Central vault: lookup scoped to the VAULT's RG, container to the VM's RG.
+
+    The 'backup missing 0/15' bug: the vault was looked up under each VM's RG
+    (ResourceNotFound) instead of the vault's own RG.
+    """
+    from unittest.mock import MagicMock
+    import azure.mgmt.recoveryservicesbackup as _rsv
+    from glorfindel.actions import AzureConnector
+
+    client = MagicMock()
+    client.recovery_points.list.return_value = []
+    client.protected_items.get.return_value = MagicMock()  # protected, first backup pending
+    monkeypatch.setattr(_rsv, "RecoveryServicesBackupClient", lambda *a, **k: client)
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    connector._credential = object()
+    connector._subscription_id = "sub"
+
+    rid = ("/subscriptions/s/resourceGroups/app-rg"
+           "/providers/Microsoft.Compute/virtualMachines/vm-x")
+    connector.check_backup_points(rid, vault="central-vault", vault_rg="backup-rg")
+
+    args = client.recovery_points.list.call_args.args
+    # (vault, vault_rg, fabric, container, item)
+    assert args[0] == "central-vault"
+    assert args[1] == "backup-rg"            # vault's RG — NOT the VM's 'app-rg'
+    assert "app-rg" in args[3]               # container is keyed by the VM's RG
+
+
+def test_check_backup_points_vault_rg_defaults_to_vm_rg(monkeypatch):
+    """No vault_rg → fall back to the VM's RG (sandbox: vault co-located with VM)."""
+    from unittest.mock import MagicMock
+    import azure.mgmt.recoveryservicesbackup as _rsv
+    from glorfindel.actions import AzureConnector
+
+    client = MagicMock()
+    client.recovery_points.list.return_value = []
+    client.protected_items.get.side_effect = Exception("ResourceNotFound")
+    monkeypatch.setattr(_rsv, "RecoveryServicesBackupClient", lambda *a, **k: client)
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    connector._credential = object()
+    connector._subscription_id = "sub"
+
+    rid = ("/subscriptions/s/resourceGroups/annatar"
+           "/providers/Microsoft.Compute/virtualMachines/vm-x")
+    connector.check_backup_points(rid, vault="rsv-annatar")  # no vault_rg
+    assert client.recovery_points.list.call_args.args[1] == "annatar"
+
+
 def test_warm_up_azure_sdk_idempotent():
     """warm_up_azure_sdk imports without raising and is safe to call repeatedly."""
     from glorfindel.actions import warm_up_azure_sdk
@@ -591,7 +642,7 @@ def test_audit_reports_read_only_credentials():
 
     # Stub the read checks so we don't hit Azure — we only assert the creds check.
     connector.check_nsg_access = lambda rid: {"ok": True, "nsg": "rg/nsg", "rules": 3}
-    connector.check_backup_points = lambda rid, vault="rsv-annatar": {"ok": True, "points": 2, "latest_age_h": 5}
+    connector.check_backup_points = lambda rid, vault="rsv-annatar", vault_rg="": {"ok": True, "points": 2, "latest_age_h": 5}
     connector.check_compute_access = lambda rid: {"ok": True, "vm": "vm", "disks": ["osdisk"]}
 
     result = audit.run(_RID, connector)

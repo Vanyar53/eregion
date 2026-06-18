@@ -709,8 +709,18 @@ async def audit_resource(vm_name: str) -> dict:
         return {"error": f"resource_id not found for {vm_name}"}
 
     connector = AzureConnector(dry_run=False)
+    # Resolve vault + its RG from config (central vault ≠ VM RG — see /api/audit).
+    vault, vault_rg = os.environ.get("GLORFINDEL_BACKUP_VAULT", "rsv-annatar"), ""
+    try:
+        from glorfindel.config import load_glorfindel_config
+        rsv = load_glorfindel_config().backup_vault()
+        if rsv:
+            vault = rsv.vault_name or vault
+            vault_rg = rsv.resource_group or ""
+    except Exception:
+        pass
     # Run blocking Azure SDK calls in a thread pool — prevents event loop stall.
-    result = await asyncio.to_thread(_audit.run, resource_id, connector)
+    result = await asyncio.to_thread(_audit.run, resource_id, connector, vault, vault_rg)
     return result.to_dict()
 
 
@@ -731,12 +741,17 @@ async def audit_all() -> dict:
 
     connector = AzureConnector(dry_run=False)
 
-    # Vault name: from glorfindel-config.yaml action_backends (source of truth)
+    # Vault name + its resource group: from glorfindel-config.yaml action_backends
+    # (source of truth). A central vault protects VMs across RGs, so the vault's RG
+    # must come from config — deriving it from each VM's resource_id yields a false
+    # "backup missing" (ResourceNotFound on the vault under the wrong RG).
+    vault_rg = ""
     try:
         from glorfindel.config import load_glorfindel_config
         _cfg = load_glorfindel_config()
         rsv = _cfg.backup_vault()
         vault = rsv.vault_name if rsv and rsv.vault_name else os.environ.get("GLORFINDEL_BACKUP_VAULT", "rsv-annatar")
+        vault_rg = rsv.resource_group if rsv and rsv.resource_group else ""
     except Exception:
         vault = os.environ.get("GLORFINDEL_BACKUP_VAULT", "rsv-annatar")
         _cfg = None
@@ -764,7 +779,7 @@ async def audit_all() -> dict:
             unique.append((rid, asset_name))
 
     async def _audit_one(rid: str, asset_name: str) -> dict:
-        result = await asyncio.to_thread(_audit.run, rid, connector, vault)
+        result = await asyncio.to_thread(_audit.run, rid, connector, vault, vault_rg)
         d = result.to_dict()
         d["vault"] = vault
         d["asset_name"] = asset_name

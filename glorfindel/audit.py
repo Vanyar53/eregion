@@ -53,8 +53,12 @@ def run(
     resource_id: str,
     connector,
     vault: str = "rsv-annatar",
+    vault_rg: str = "",
 ) -> AuditResult:
     """Check that Glorfindel can execute all remediation actions on this resource.
+
+    vault_rg: the vault's own resource group (a central vault protects VMs across many
+    RGs). Falls back to the VM's RG when empty (sandbox: vault and VM co-located).
 
     Covers: NSG (isolate_vm, block_suspicious_ip), Azure Backup (restore_from_backup),
     and Compute (snapshot). Detects both IAM gaps and missing infrastructure.
@@ -105,7 +109,7 @@ def run(
 
     jobs = [
         (_check_nsg, (resource_id, connector)),
-        (_check_backup, (resource_id, connector, vault)),
+        (_check_backup, (resource_id, connector, vault, vault_rg)),
         (_check_compute, (resource_id, connector)),
     ]
     with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
@@ -155,10 +159,12 @@ def _check_nsg(resource_id: str, connector) -> AuditCheck:
     )
 
 
-def _check_backup(resource_id: str, connector, vault: str) -> AuditCheck:
+def _check_backup(resource_id: str, connector, vault: str, vault_rg: str = "") -> AuditCheck:
     rg = _rg(resource_id)
     vm = resource_id.split("/")[-1]
-    res = connector.check_backup_points(resource_id, vault)
+    # az backup commands are scoped to the VAULT's resource group, not the VM's.
+    vrg = vault_rg or rg
+    res = connector.check_backup_points(resource_id, vault, vault_rg)
 
     if res.get("dry_run"):
         return AuditCheck("restore_from_backup", "Backup vault", "skip", "Skipped in dry-run")
@@ -174,7 +180,7 @@ def _check_backup(resource_id: str, connector, vault: str) -> AuditCheck:
             message=f"Vault '{vault}': {points} point(s), latest {age_h}h ago",
             fix=(
                 "" if status == "ok" else
-                f"az backup protection backup-now -g {rg} -v {vault} "
+                f"az backup protection backup-now -g {vrg} -v {vault} "
                 f"-c {vm} -i {vm} --backup-management-type AzureIaasVM"
             ),
             data={"protected": True, "points": points, "latest_age_h": age_h},
@@ -190,7 +196,7 @@ def _check_backup(resource_id: str, connector, vault: str) -> AuditCheck:
             fix=(
                 f"az role assignment create --assignee $AZURE_CLIENT_ID "
                 f"--role 'Backup Contributor' "
-                f"--scope /subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/{rg}"
+                f"--scope /subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/{vrg}"
             ),
         )
     if _is_transient_error(err):
@@ -204,7 +210,7 @@ def _check_backup(resource_id: str, connector, vault: str) -> AuditCheck:
             status="warn",
             message=f"{vm} protected in '{vault}' but no recovery point yet (first backup pending)",
             fix=(
-                f"az backup protection backup-now -g {rg} -v {vault} "
+                f"az backup protection backup-now -g {vrg} -v {vault} "
                 f"-c {vm} -i {vm} --backup-management-type AzureIaasVM"
             ),
             data={"protected": True, "points": 0},
@@ -215,7 +221,7 @@ def _check_backup(resource_id: str, connector, vault: str) -> AuditCheck:
         status="fail",
         message=f"Backup not configured for {vm} in '{vault}' — {err}",
         fix=(
-            f"az backup protection enable-for-vm -g {rg} -v {vault} "
+            f"az backup protection enable-for-vm -g {vrg} -v {vault} "
             f"--vm {vm} --policy-name DefaultPolicy"
         ),
         data={"protected": False, "points": 0},

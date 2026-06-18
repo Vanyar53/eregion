@@ -807,8 +807,18 @@ class AzureConnector(CloudConnector):
         except Exception as e:
             return {"ok": False, "iam": _is_iam_error(str(e)), "error": str(e)}
 
-    def check_backup_points(self, resource_id: str, vault: str = "rsv-annatar") -> dict:
-        """Verify vault + recent recovery point — restore_from_backup readiness."""
+    def check_backup_points(
+        self, resource_id: str, vault: str = "rsv-annatar", vault_rg: str = ""
+    ) -> dict:
+        """Verify vault + recent recovery point — restore_from_backup readiness.
+
+        vault_rg: the resource group the VAULT lives in. A central backup vault commonly
+        protects VMs spread across many resource groups, so the vault's RG ≠ the VM's RG.
+        The protected-item CONTAINER is keyed by the VM's RG (fabric naming), but the
+        recovery_points / protected_items calls are scoped to the VAULT's RG — passing
+        the VM's RG there yields ResourceNotFound on the vault and a false "backup
+        missing". Falls back to the VM's RG when empty (sandbox: vault and VM co-located).
+        """
         if self.dry_run:
             return {"ok": True, "vault": vault, "dry_run": True}
         try:
@@ -816,17 +826,18 @@ class AzureConnector(CloudConnector):
             from azure.mgmt.recoveryservicesbackup import RecoveryServicesBackupClient
 
             self._ensure_clients()
-            rg, vm_name = _parse_vm_resource_id(resource_id)
+            vm_rg, vm_name = _parse_vm_resource_id(resource_id)
+            v_rg = vault_rg or vm_rg
             client = RecoveryServicesBackupClient(self._credential, self._subscription_id)
-            container = f"iaasvmcontainer;iaasvmcontainerv2;{rg};{vm_name}"
-            item = f"vm;iaasvmcontainerv2;{rg};{vm_name}"
-            rps = list(client.recovery_points.list(vault, rg, "Azure", container, item))
+            container = f"iaasvmcontainer;iaasvmcontainerv2;{vm_rg};{vm_name}"
+            item = f"vm;iaasvmcontainerv2;{vm_rg};{vm_name}"
+            rps = list(client.recovery_points.list(vault, v_rg, "Azure", container, item))
             if not rps:
                 # No recovery point — but is the VM actually protected? An empty RP
                 # list means EITHER "protected, first backup pending" OR "not protected
                 # at all". Distinguish via the protected-item status so posture/audit
                 # don't cry "not linked to vault" on a freshly-protected VM.
-                protected = self._is_protected_item(client, vault, rg, container, item)
+                protected = self._is_protected_item(client, vault, v_rg, container, item)
                 if protected:
                     return {
                         "ok": False, "iam": False, "vault": vault,

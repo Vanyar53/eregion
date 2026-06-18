@@ -73,17 +73,12 @@ export AZURE_SUBSCRIPTION_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 # export AZURE_CLIENT_SECRET=$GLORFINDEL_AZURE_CLIENT_SECRET
 # Les commandes `make annatar-*` liront ANNATAR_AZURE_CLIENT_* avec fallback sur AZURE_CLIENT_*.
 
-# ── Glorfindel — détection continue (detection_rules.yaml) ───────────────────
-# Ces variables résolvent les placeholders ${...} dans detection_rules.yaml.
-# Elles ne sont nécessaires que si tu utilises glorfindel/rules/azure/detection_rules.yaml.
-#
-# AZURE_WORKSPACE_ID : GUID du Log Analytics Workspace (pas le resource ID complet)
-#   az monitor log-analytics workspace show -g <rg> -n <workspace> --query customerId -o tsv
-export AZURE_WORKSPACE_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-#
-# AZURE_VM_RESOURCE_ID : resource ID complet de la VM cible
-#   az vm show -g <rg> -n <vm> --query id -o tsv
-export AZURE_VM_RESOURCE_ID=/subscriptions/<SUBSCRIPTION_ID>/resourceGroups/<RG>/providers/Microsoft.Compute/virtualMachines/<VM_NAME>
+# ── Glorfindel — détection continue ──────────────────────────────────────────
+# Plus de variable workspace_id / VM ici : le Log Analytics Workspace est défini
+# dans glorfindel-config.yaml (section monitoring_backends), et les VMs sont
+# découvertes automatiquement via le heartbeat LAW (discovery) — pas de resource_id
+# statique à renseigner. detection_rules.yaml ne contient que les règles (queries,
+# TTPs, noms de backends), aucun ID d'infra.
 
 # ── Glorfindel — optionnel ────────────────────────────────────────────────────
 # Slack / Teams / Discord webhook — actions autonomes (one-way)

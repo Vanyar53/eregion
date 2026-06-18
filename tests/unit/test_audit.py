@@ -99,6 +99,14 @@ def test_nsg_check_exposes_structured_nsg_and_scope():
     assert d["data"]["nsg_scope"] == "subnet"
 
 
+def test_run_threads_vault_rg_to_backup_check():
+    """run(vault_rg=...) reaches check_backup_points — central vault ≠ VM RG."""
+    c = _connector()
+    run(RESOURCE_ID, c, vault="central-vault", vault_rg="backup-rg")
+    c.check_backup_points.assert_called_once_with(
+        RESOURCE_ID, "central-vault", "backup-rg")
+
+
 def test_backup_check_exposes_structured_points_protected():
     """Backup check carries points + protected in `data` (the 'combien')."""
     c = _connector(backup={"ok": True, "vault": "rsv-annatar", "points": 7, "latest_age_h": 3.0})

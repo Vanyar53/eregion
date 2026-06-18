@@ -487,12 +487,21 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
                 from glorfindel.actions import AzureConnector
                 from glorfindel.detection_rules import load_rules
                 connector = AzureConnector(dry_run=False)
+                _vault, _vault_rg = "rsv-annatar", ""
+                try:
+                    from glorfindel.config import load_glorfindel_config
+                    _rsv = load_glorfindel_config().backup_vault()
+                    if _rsv:
+                        _vault = _rsv.vault_name or _vault
+                        _vault_rg = _rsv.resource_group or ""
+                except Exception:
+                    pass
                 seen: set[str] = set()
                 for rule in load_rules(_rules_file):
                     rid = rule.resource_id
                     if rid and "${" not in rid and rid not in seen:
                         seen.add(rid)
-                        result = _audit.run(rid, connector)
+                        result = _audit.run(rid, connector, vault=_vault, vault_rg=_vault_rg)
                         if not result.ready:
                             vm = rid.split("/")[-1]
                             gaps = [c for c in result.checks if c.status == "fail"]
@@ -1328,8 +1337,10 @@ def reject_rule(proposal_id: str) -> None:
 @click.option("--all", "audit_all", is_flag=True,
               help="Audit all resources from detection_rules.yaml.")
 @click.option("--vault", default="rsv-annatar", show_default=True)
+@click.option("--vault-rg", "vault_rg", default="",
+              help="Vault resource group (central vault ≠ VM RG). Default: from config.")
 @click.option("--dry-run", is_flag=True)
-def audit(resource_id: str | None, audit_all: bool, vault: str, dry_run: bool):
+def audit(resource_id: str | None, audit_all: bool, vault: str, vault_rg: str, dry_run: bool):
     """Check that Glorfindel can execute all remediation actions.
 
     Verifies NSG access (isolate_vm / block_suspicious_ip), backup vault +
@@ -1340,6 +1351,20 @@ def audit(resource_id: str | None, audit_all: bool, vault: str, dry_run: bool):
     """
     from glorfindel import audit as _audit
     from glorfindel.actions import AzureConnector
+
+    # Resolve vault + its resource group from glorfindel-config.yaml (source of truth).
+    # A central vault protects VMs across RGs, so the vault's RG must come from config,
+    # not be derived from the VM's resource_id.
+    if not vault_rg:
+        try:
+            from glorfindel.config import load_glorfindel_config
+            rsv = load_glorfindel_config().backup_vault()
+            if rsv:
+                vault_rg = rsv.resource_group or ""
+                if vault == "rsv-annatar" and rsv.vault_name:
+                    vault = rsv.vault_name
+        except Exception:
+            pass
 
     connector = AzureConnector(dry_run=dry_run)
     targets: list[str] = []
@@ -1368,7 +1393,7 @@ def audit(resource_id: str | None, audit_all: bool, vault: str, dry_run: bool):
     for rid in targets:
         vm = rid.split("/")[-1]
         console.rule(f"[bold cyan]Audit — {vm}[/bold cyan]")
-        result = _audit.run(rid, connector, vault=vault)
+        result = _audit.run(rid, connector, vault=vault, vault_rg=vault_rg)
         _render_audit(result)
         console.print()
 

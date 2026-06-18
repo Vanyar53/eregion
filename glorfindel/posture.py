@@ -100,6 +100,12 @@ class PostureChecker:
         rsv = self._cfg.backup_vault() if self._cfg else None
         return rsv.vault_name if rsv and rsv.vault_name else ""
 
+    def _vault_rg(self) -> str:
+        """The vault's own resource group (central vault ≠ VM RG). Empty → caller
+        falls back to the VM's RG (sandbox: vault and VM co-located)."""
+        rsv = self._cfg.backup_vault() if self._cfg else None
+        return rsv.resource_group if rsv and rsv.resource_group else ""
+
     # ── Checks ────────────────────────────────────────────────────────────────
 
     def _check_asset(self, asset) -> list[PostureGap]:
@@ -108,13 +114,16 @@ class PostureChecker:
 
         gaps: list[PostureGap] = []
         vault = self._vault_name()
+        vault_rg = self._vault_rg()
         rid = asset.resource_id
         vm = asset.name
         rg = _rg(rid)
+        # az backup commands target the vault's RG, not the VM's.
+        vrg = vault_rg or rg
 
         if vault:
             try:
-                res = self._connector.check_backup_points(rid, vault)
+                res = self._connector.check_backup_points(rid, vault, vault_rg)
                 if not res.get("ok") and res.get("protected"):
                     # Protected, but the first backup hasn't run yet. NOT a "not linked"
                     # critical — restore will be possible once a recovery point exists.
@@ -129,7 +138,7 @@ class PostureChecker:
                         ),
                         fix=(
                             f"az backup protection backup-now "
-                            f"-g {rg} -v {vault} -c {vm} -i {vm}"
+                            f"-g {vrg} -v {vault} -c {vm} -i {vm}"
                             " --backup-management-type AzureIaasVM"
                         ),
                     ))
@@ -145,7 +154,7 @@ class PostureChecker:
                         ),
                         fix=(
                             f"az backup protection enable-for-vm "
-                            f"-g {rg} -v {vault} --vm {vm}"
+                            f"-g {vrg} -v {vault} --vm {vm}"
                             " --policy-name DefaultPolicy"
                         ),
                     ))
@@ -162,7 +171,7 @@ class PostureChecker:
                         ),
                         fix=(
                             f"az backup protection backup-now "
-                            f"-g {rg} -v {vault} -c {vm} -i {vm}"
+                            f"-g {vrg} -v {vault} -c {vm} -i {vm}"
                             " --backup-management-type AzureIaasVM"
                         ),
                     ))

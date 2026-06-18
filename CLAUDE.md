@@ -192,6 +192,12 @@ glorfindel/
   detectors.py          → DetectionConnector ABC + AzureMonitorDetector (poll 10s) + run_query()
   detection_rules.py    → DetectionRule dataclass + RulePoller (continuous polling, status persistence)
                           load_config(path, glorfindel_cfg=None) — workspace_id résolu depuis glorfindel_cfg
+                          _resolve_backend_for_rule() — la règle se LIE au backend de glorfindel-config :
+                            backend nommé s'il existe ; sinon fallback sur l'unique backend du type de la règle
+                            (cas mono-LAW → le nom dans detection_rules.yaml devient optionnel). Échec bruyant
+                            (warning) si nom absent / ambiguïté / 0 backend — jamais de workspace_id="" silencieux.
+                            Règle non résolue → enabled=False (ne poll pas). monitoring_backend_name = nom RÉSOLU
+                            (l'asset matching de expand_for_discovered en dépend). start()/expand respectent enabled.
                           RulePoller.expand_for_discovered(registry, glorfindel_cfg) — démarre threads
                           par (règle auto_apply, asset découvert), thread s'arrête si asset évincé
   audit.py              → AuditCheck (+ champ `data` structuré : nsg/nsg_scope, points/protected), AuditResult,

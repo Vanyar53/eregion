@@ -98,6 +98,88 @@ def test_load_rules_new_format_backward_compat(tmp_path):
     assert rules[0].workspace_id == "ws-abc"
 
 
+# ── backend binding: rules bind to glorfindel-config, not a brittle name match ───
+
+def _auto_rule_yaml(backends_block: str, rule_backend_line: str) -> str:
+    return (
+        "monitoring_backends:\n" + backends_block +
+        "rules:\n"
+        "  - name: disk-write\n"
+        "    ttp: T1486\n"
+        "    assets: [auto]\n"
+        + rule_backend_line +
+        '    query: "Perf | limit 1"\n'
+    )
+
+
+_ONE_BACKEND = "  - name: law-prod\n    type: azure_monitor\n    workspace_id: ws-prod\n"
+
+
+def test_rule_falls_back_to_single_backend_on_name_mismatch(tmp_path, caplog):
+    """Rule names a backend absent from config → binds to the single config backend,
+    loudly (never an empty workspace_id in silence)."""
+    import logging
+    f = tmp_path / "rules.yaml"
+    f.write_text(_auto_rule_yaml(_ONE_BACKEND, "    monitoring_backends: [law-annatar]\n"))
+    with caplog.at_level(logging.WARNING, logger="glorfindel.detection_rules"):
+        r = load_config(f).rules[0]
+    assert r.workspace_id == "ws-prod"             # bound to the config backend
+    assert r.source == "azure_monitor"
+    assert r.monitoring_backend_name == "law-prod"  # resolved name drives asset matching
+    assert r.enabled is True
+    assert any("law-annatar" in m for m in caplog.messages)  # warned, not silent
+
+
+def test_rule_binds_to_single_backend_when_unnamed(tmp_path):
+    """Rule with no monitoring_backends → uses the single config backend directly."""
+    f = tmp_path / "rules.yaml"
+    f.write_text(_auto_rule_yaml(_ONE_BACKEND, ""))
+    r = load_config(f).rules[0]
+    assert r.workspace_id == "ws-prod"
+    assert r.monitoring_backend_name == "law-prod"
+    assert r.enabled is True
+
+
+def test_named_backend_is_honored_without_fallback(tmp_path, caplog):
+    """A correctly named backend resolves to itself, no fallback warning."""
+    import logging
+    f = tmp_path / "rules.yaml"
+    f.write_text(_auto_rule_yaml(_ONE_BACKEND, "    monitoring_backends: [law-prod]\n"))
+    with caplog.at_level(logging.WARNING, logger="glorfindel.detection_rules"):
+        r = load_config(f).rules[0]
+    assert r.workspace_id == "ws-prod"
+    assert r.monitoring_backend_name == "law-prod"
+    assert not caplog.messages  # nothing to warn about
+
+
+def test_rule_disabled_when_no_backend(tmp_path, caplog):
+    """No backend resolvable → empty workspace → rule DISABLED + warned (not silent)."""
+    import logging
+    f = tmp_path / "rules.yaml"
+    f.write_text(_auto_rule_yaml("monitoring_backends: []\n",
+                                 "    monitoring_backends: [law-annatar]\n"))
+    with caplog.at_level(logging.WARNING, logger="glorfindel.detection_rules"):
+        r = load_config(f).rules[0]
+    assert r.workspace_id == ""
+    assert r.enabled is False
+    assert any("cannot run" in m or "no workspace_id" in m for m in caplog.messages)
+
+
+def test_rule_disabled_when_ambiguous_backends(tmp_path, caplog):
+    """Several backends of the type and none named → ambiguous → disabled + warned."""
+    import logging
+    two = (
+        "  - name: law-a\n    type: azure_monitor\n    workspace_id: ws-a\n"
+        "  - name: law-b\n    type: azure_monitor\n    workspace_id: ws-b\n"
+    )
+    f = tmp_path / "rules.yaml"
+    f.write_text(_auto_rule_yaml(two, ""))  # no name → ambiguous
+    with caplog.at_level(logging.WARNING, logger="glorfindel.detection_rules"):
+        r = load_config(f).rules[0]
+    assert r.enabled is False
+    assert any("disambiguate" in m for m in caplog.messages)
+
+
 # ── load_rules (legacy format) ──────────────────────────────────────────────────
 
 VALID_YAML = textwrap.dedent("""\

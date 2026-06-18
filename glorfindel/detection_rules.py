@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import time
 import uuid
@@ -15,6 +16,8 @@ except ImportError:
     yaml = None  # type: ignore[assignment]
 
 from glorfindel.detectors import detector_for  # noqa: E402  (after optional deps)
+
+logger = logging.getLogger("glorfindel.detection_rules")
 
 _STATUS_FILE = Path.home() / ".glorfindel" / "rule_status.json"
 
@@ -132,6 +135,60 @@ def normalize_row(row: dict, ttp: str = "") -> dict:
 
 # ── Loading ────────────────────────────────────────────────────────────────────
 
+def _resolve_backend_for_rule(
+    rule_name: str,
+    named_backend_name: str,
+    backend_by_name: dict,
+    backends: list,
+    source: str,
+):
+    """Pick the monitoring backend a rule should use — bind it to glorfindel-config.
+
+    A rule references a backend by name; the connection details (workspace_id) live
+    in glorfindel-config.yaml. To avoid a brittle name match that fails SILENTLY
+    (a typo or a renamed backend → empty workspace_id → a rule that never fires
+    and never errors), resolution is:
+
+      1. the explicitly named backend if it exists in config;
+      2. otherwise the single config backend of the rule's type (the common
+         single-LAW case) — so the name in detection_rules.yaml is optional;
+      3. nothing — but always WARNED about (missing name, or ambiguity when
+         several backends of the type exist and none is named).
+
+    Returns the chosen MonitoringBackend, or None (caller disables the rule).
+    """
+    if named_backend_name:
+        b = backend_by_name.get(named_backend_name)
+        if b is not None:
+            return b
+        logger.warning(
+            "detection rule '%s': monitoring backend '%s' is not defined in "
+            "glorfindel-config.yaml", rule_name, named_backend_name,
+        )
+
+    candidates = [b for b in backends if b.type == source]
+    if len(candidates) == 1:
+        chosen = candidates[0]
+        if named_backend_name and named_backend_name != chosen.name:
+            logger.warning(
+                "detection rule '%s': falling back to the only '%s' backend "
+                "'%s' from glorfindel-config.yaml", rule_name, source, chosen.name,
+            )
+        return chosen
+    if not candidates:
+        logger.warning(
+            "detection rule '%s': no '%s' monitoring backend in "
+            "glorfindel-config.yaml — rule cannot run", rule_name, source,
+        )
+    else:
+        logger.warning(
+            "detection rule '%s': %d '%s' backends defined and none named — "
+            "add `monitoring_backends: [<name>]` to disambiguate; rule cannot run",
+            rule_name, len(candidates), source,
+        )
+    return None
+
+
 def load_config(path: str | Path, glorfindel_cfg=None) -> DetectionConfig:
     """Load detection configuration from YAML.
 
@@ -203,7 +260,7 @@ def load_config(path: str | Path, glorfindel_cfg=None) -> DetectionConfig:
         # Detect auto-apply: no explicit assets → apply to all discovered assets
         auto_apply = not rule_assets or rule_assets == ["auto"]
 
-        # Resolve the primary backend
+        # Which backend NAME does the rule reference (if any)?
         if rule_backends:
             primary_backend_name = rule_backends[0]
         elif item.get("monitoring_backend"):
@@ -211,33 +268,51 @@ def load_config(path: str | Path, glorfindel_cfg=None) -> DetectionConfig:
         else:
             primary_backend_name = ""
 
-        primary_backend = backend_by_name.get(primary_backend_name)
+        rule_source = item.get("source", "azure_monitor")
+        inline_ws = item.get("workspace_id", "")
 
         if not auto_apply and (backends or assets):
-            # Explicit assets: resolve workspace_id and resource_id from graph
+            # Explicit assets: resolve resource_id from graph; backend may come
+            # from the asset if the rule didn't name one.
             primary_asset_name = rule_assets[0] if rule_assets else ""
             primary_asset = asset_by_name.get(primary_asset_name)
             resource_id = primary_asset.resource_id if primary_asset else item.get("resource_id", "")
             if not primary_backend_name and primary_asset and primary_asset.monitoring_backends:
                 primary_backend_name = primary_asset.monitoring_backends[0]
-                primary_backend = backend_by_name.get(primary_backend_name)
-            workspace_id = (
-                primary_backend.workspace_id if primary_backend
-                else item.get("workspace_id", "")
-            )
-            source = primary_backend.type if primary_backend else item.get("source", "azure_monitor")
         elif not auto_apply:
             # Legacy inline format
-            workspace_id = item.get("workspace_id", "")
-            resource_id  = item.get("resource_id", "")
-            source       = item.get("source", "azure_monitor")
+            resource_id = item.get("resource_id", "")
             primary_asset_name = ""
         else:
-            # Auto-apply: workspace_id from backend, resource_id filled at runtime
-            workspace_id = primary_backend.workspace_id if primary_backend else item.get("workspace_id", "")
-            source       = primary_backend.type if primary_backend else item.get("source", "azure_monitor")
-            resource_id  = ""
+            # Auto-apply: resource_id filled at runtime per discovered asset
+            resource_id = ""
             primary_asset_name = ""
+
+        # Bind the rule to a config backend. An inline workspace_id (legacy) wins
+        # and skips the config lookup; otherwise resolve against glorfindel-config
+        # with a forgiving, LOUD fallback (never an empty workspace_id in silence).
+        if inline_ws:
+            workspace_id = inline_ws
+            source = rule_source
+            resolved_backend_name = primary_backend_name
+        else:
+            backend = _resolve_backend_for_rule(
+                item["name"], primary_backend_name, backend_by_name, backends, rule_source,
+            )
+            workspace_id = backend.workspace_id if backend else ""
+            source = backend.type if backend else rule_source
+            # Asset matching (expand_for_discovered) keys off this name, so it must
+            # be the RESOLVED backend's name — not a stale/typo'd reference.
+            resolved_backend_name = backend.name if backend else primary_backend_name
+
+        # A rule that couldn't resolve a workspace must not poll silently.
+        rule_enabled = True
+        if source == "azure_monitor" and not workspace_id:
+            logger.warning(
+                "detection rule '%s': no workspace_id resolved — rule disabled",
+                item["name"],
+            )
+            rule_enabled = False
 
         rules.append(DetectionRule(
             name=item["name"],
@@ -247,10 +322,10 @@ def load_config(path: str | Path, glorfindel_cfg=None) -> DetectionConfig:
             ttp=item.get("ttp", ""),
             resource_id=resource_id,
             interval_s=float(item.get("interval_s", 30)),
-            enabled=True,
+            enabled=rule_enabled,
             description=item.get("description", ""),
             asset_name=primary_asset_name,
-            monitoring_backend_name=primary_backend_name,
+            monitoring_backend_name=resolved_backend_name,
             auto_apply=auto_apply,
             expected_latency_s=int(item.get("expected_latency_s", 0)),
         ))
@@ -338,7 +413,7 @@ class RulePoller:
         running_keys = {t.name for t in self._threads if t.is_alive()}
 
         for rule in self._rules:
-            if not rule.auto_apply:
+            if not rule.auto_apply or not rule.enabled:
                 continue
             discovered = registry.for_backend(rule.monitoring_backend_name)
             for asset in discovered:
@@ -374,8 +449,8 @@ class RulePoller:
 
     def start(self) -> None:
         for rule in self._rules:
-            if rule.auto_apply:
-                continue  # expanded later via expand_for_discovered()
+            if rule.auto_apply or not rule.enabled:
+                continue  # auto_apply expanded later; disabled rules don't poll
             t = threading.Thread(
                 target=self._poll_rule,
                 args=(rule,),

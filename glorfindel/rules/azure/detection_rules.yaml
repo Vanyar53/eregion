@@ -10,7 +10,12 @@
 #   action_backends     → RSV et autres cibles de remédiation
 
 # ── Detection rules ────────────────────────────────────────────────────────────
-# monitoring_backends  : référence le backend par nom (workspace_id dans glorfindel-config.yaml)
+# monitoring_backends  : OPTIONNEL. La règle se lie au backend défini dans
+#                        glorfindel-config.yaml. Avec un seul backend du bon type
+#                        (cas mono-LAW), inutile de le nommer ici. Ne préciser
+#                        `monitoring_backends: [<nom>]` que pour cibler un backend
+#                        précis quand plusieurs sont définis. Un nom absent du config
+#                        ou une ambiguïté → warning au chargement (jamais silencieux).
 # assets: [auto]       : s'applique à toutes les VMs découvertes par ce backend
 # interval_s           : période de polling en secondes
 # enabled              : mettre à false pour désactiver sans supprimer
@@ -24,7 +29,6 @@ rules:
     description: "Sustained high disk write rate — T1486 ransomware file encryption"
     enabled: true
     ttp: T1486
-    monitoring_backends: [law-annatar]
     assets: [auto]
     interval_s: 30
     expected_latency_s: 45
@@ -41,7 +45,6 @@ rules:
     description: "PutBlob from a VM private IP — T1041 exfiltration via MSI"
     enabled: true
     ttp: T1041
-    monitoring_backends: [law-annatar]
     assets: [auto]
     interval_s: 30
     expected_latency_s: 90
@@ -59,7 +62,6 @@ rules:
     description: "Repeated SSH failures from an external IP — T1110.001"
     enabled: true
     ttp: T1110.001
-    monitoring_backends: [law-annatar]
     assets: [auto]
     interval_s: 30
     expected_latency_s: 480
@@ -81,7 +83,6 @@ rules:
     description: "Successful sudo to root by a non-root user — T1548.003"
     enabled: true
     ttp: T1548.003
-    monitoring_backends: [law-annatar]
     assets: [auto]
     interval_s: 30
     expected_latency_s: 480
@@ -103,7 +104,6 @@ rules:
       Syslog messages from useradd (new user/new group).
     enabled: true
     ttp: T1136.001
-    monitoring_backends: [law-annatar]
     assets: [auto]
     interval_s: 30
     expected_latency_s: 480

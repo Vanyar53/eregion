@@ -410,6 +410,23 @@ def test_expand_for_discovered_starts_threads(tmp_path):
     assert any("vm-a" in t.name for t in poller._threads)
 
 
+def test_expand_for_discovered_skips_disabled_rule(tmp_path):
+    """A rule that couldn't resolve a backend (enabled=False) must not poll."""
+    from glorfindel.detection_rules import RulePoller, DetectionRule
+
+    disabled = DetectionRule(
+        name="disk-write", source="azure_monitor", workspace_id="",
+        query="Perf | limit 1", ttp="T1486", resource_id="",
+        auto_apply=True, monitoring_backend_name="law", enabled=False,
+    )
+    poller = RulePoller([disabled], lambda s: None, dry_run=True)
+    poller.start()
+    reg = AssetRegistry(path=tmp_path / "assets.json")
+    reg.update([_asset("vm-a", backend="law", rid="/sub/vm-a")])
+    poller.expand_for_discovered(reg)
+    assert not any("vm-a" in t.name for t in poller._threads)
+
+
 def test_expand_for_discovered_respects_exceptions(tmp_path):
     from glorfindel.detection_rules import RulePoller
 

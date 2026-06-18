@@ -56,6 +56,20 @@ def test_registry_update_and_all(tmp_path):
     assert {a.name for a in reg.all()} == {"vm-a", "vm-b"}
 
 
+def test_registry_all_is_sorted_by_name(tmp_path):
+    """all()/to_dicts() return a STABLE order (sorted by name) so War Room cards
+    don't reshuffle on every discovery refresh."""
+    reg = AssetRegistry(path=tmp_path / "assets.json")
+    reg.update([_asset("vm-charlie"), _asset("vm-alpha"), _asset("vm-bravo")])
+    assert [a.name for a in reg.all()] == ["vm-alpha", "vm-bravo", "vm-charlie"]
+    assert [d["name"] for d in reg.to_dicts()] == ["vm-alpha", "vm-bravo", "vm-charlie"]
+
+    # Re-inserting in a different order still yields the same stable order.
+    reg2 = AssetRegistry(path=tmp_path / "assets2.json")
+    reg2.update([_asset("vm-bravo"), _asset("vm-charlie"), _asset("vm-alpha")])
+    assert [a.name for a in reg2.all()] == ["vm-alpha", "vm-bravo", "vm-charlie"]
+
+
 def test_registry_update_overwrites(tmp_path):
     reg = AssetRegistry(path=tmp_path / "assets.json")
     reg.update([_asset("vm-a", rid="/old")])

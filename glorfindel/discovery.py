@@ -7,12 +7,15 @@ Results are cached to disk and hot-reloaded by RulePoller and the API.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+
+logger = logging.getLogger("glorfindel.discovery")
 
 # Discovery (cheap LAW Heartbeat query) runs often for responsiveness — a VM
 # powered on appears within this window. Posture checks (expensive RSV/NSG calls,
@@ -105,25 +108,32 @@ class AssetRegistry:
             self._assets = kept
             self._persist()
 
+    # Assets are returned sorted by name so the order is STABLE across discovery
+    # refreshes. The heartbeat query has no guaranteed order, so without this the
+    # registry rebuilds in a different order each cycle and the War Room cards
+    # reshuffle on every auto-refresh.
+    def _sorted(self) -> list[DiscoveredAsset]:
+        return sorted(self._assets.values(), key=lambda a: a.name)
+
     def all(self) -> list[DiscoveredAsset]:
         with self._lock:
-            return list(self._assets.values())
+            return self._sorted()
 
     def for_backend(self, backend_name: str) -> list[DiscoveredAsset]:
         with self._lock:
             return [
-                a for a in self._assets.values()
+                a for a in self._sorted()
                 if a.monitoring_backend == backend_name
             ]
 
     def to_dicts(self) -> list[dict]:
         with self._lock:
-            return [asdict(a) for a in self._assets.values()]
+            return [asdict(a) for a in self._sorted()]
 
     def _persist(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._path.write_text(
-            json.dumps([asdict(a) for a in self._assets.values()], indent=2)
+            json.dumps([asdict(a) for a in self._sorted()], indent=2)
         )
 
     def _load(self) -> None:
@@ -203,9 +213,18 @@ def _discover_from_azure_monitor(
                 source="heartbeat",
                 extra={"fqdn": name},
             ))
+        logger.info(
+            "discovery: backend %s heartbeat → %d VM(s)", backend_name, len(assets)
+        )
         return assets
-    except Exception:
-        return None  # query failed — caller keeps existing cache
+    except Exception as e:
+        # Query failed — caller keeps existing cache. Surface the cause: a silent
+        # failure here looks identical to "no VMs", which hid real errors in the field.
+        logger.warning(
+            "discovery: backend %s heartbeat query failed (%s) — keeping cache",
+            backend_name, e,
+        )
+        return None
 
 
 def _discover_from_backend(backend) -> list[DiscoveredAsset] | None:
@@ -307,10 +326,12 @@ class DiscoveryService:
     def _run_posture(self) -> None:
         """Run posture checks (RSV/NSG per discovered VM) — best-effort."""
         if self._posture_checker is not None:
+            assets = self._registry.all()
+            logger.info("posture: checking %d discovered asset(s)", len(assets))
             try:
-                self._posture_checker.check_and_escalate(self._registry.all())
-            except Exception:
-                pass
+                self._posture_checker.check_and_escalate(assets)
+            except Exception as e:
+                logger.warning("posture: check failed (%s)", e)
 
 
 # ── Singleton helpers ─────────────────────────────────────────────────────────

@@ -175,6 +175,16 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
     from annatar.signals.schema import Signal
     from glorfindel.agent import GlorfindelAgent
 
+    # Surface library logs (discovery cycles, posture, query failures) on stdout so
+    # the daemon threads aren't silent — `make glorfindel-logs` shows discovery
+    # activity and errors. basicConfig is a no-op if the root logger is already set up.
+    import logging as _logging
+    _logging.basicConfig(
+        level=_logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
+
     # Import the Azure SDK once, on the main thread, before discovery/poll/audit
     # threads start — avoids concurrent first-import deadlocks (azure.core _ModuleLock).
     if not dry_run:

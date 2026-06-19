@@ -274,7 +274,6 @@ export GLORFINDEL_AZURE_CLIENT_SECRET=<eval-sp-secret>
 # Tenant + subscription are shared (same tenant), no prefixed vars needed:
 export AZURE_TENANT_ID=<tenant-id>
 export AZURE_SUBSCRIPTION_ID=<subscription-id>
-export AZURE_WORKSPACE_ID=<law-customer-id>   # az monitor log-analytics workspace show ... --query customerId
 ```
 
 For `docker compose` (Glorfindel-only), `AZURE_CLIENT_*` *is* the Glorfindel SP — point it at the Reader app:
@@ -284,7 +283,19 @@ export AZURE_CLIENT_ID=$GLORFINDEL_AZURE_CLIENT_ID
 export AZURE_CLIENT_SECRET=$GLORFINDEL_AZURE_CLIENT_SECRET
 ```
 
-**3. Run observe-only with the conservative default** (`human_only` — nothing executes):
+**3. Point Glorfindel at your workspace** — the LAW workspace ID lives in `glorfindel-config.yaml`, **not** an environment variable:
+
+```bash
+cp glorfindel-config.yaml.example glorfindel-config.yaml
+# Edit it: set monitoring_backends[0].workspace_id to your LAW customer ID —
+#   az monitor log-analytics workspace show -g <rg> -n <name> --query customerId -o tsv
+# A single azure_monitor backend is enough; the rules bind to it automatically
+# (no need to keep the example's "law-annatar" name).
+```
+
+> Skip this and detection silently never fires — `watch` resolves the workspace from this file only. There is no `AZURE_WORKSPACE_ID` env var.
+
+**4. Run observe-only with the conservative default** (`human_only` — nothing executes):
 
 ```bash
 export GLORFINDEL_READ_ONLY=1
@@ -293,7 +304,7 @@ glorfindel watch runs/ --rules glorfindel/rules/azure/detection_rules.yaml
 
 `GLORFINDEL_READ_ONLY=1` guarantees no write API is ever called; the `human_only` default holds every recommended action *before* the connector is even touched (so you see `mode_hold` escalations, never permission errors).
 
-**4. Read the recommendations** — nothing runs autonomously, so the value is in what Glorfindel *would* have done:
+**5. Read the recommendations** — nothing runs autonomously, so the value is in what Glorfindel *would* have done:
 - **War Room** (`glorfindel war-room` → http://localhost:7007) — live cards per VM, `OBSERVE-ONLY` badge in the header, each escalation shows the held action + confidence + forensic next steps.
 - **`glorfindel pending`** — same escalations on the CLI.
 

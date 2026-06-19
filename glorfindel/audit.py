@@ -127,12 +127,16 @@ def _check_nsg(resource_id: str, connector) -> AuditCheck:
     if res.get("ok"):
         nsg = res.get("nsg", "")
         rules = res.get("rules", "?")
+        nsgs = res.get("nsgs", [])
+        # Multi-NIC: a VM with several NICs has several NSGs. Surface them all so the
+        # War Room shows full coverage at rest (data.nsg = primary, kept for back-compat).
+        extra = f" (+{len(nsgs) - 1} more NIC)" if len(nsgs) > 1 else ""
         return AuditCheck(
             action="isolate_vm, block_suspicious_ip",
             name="NSG access",
             status="ok",
-            message=f"NSG {nsg} readable ({rules} rules)",
-            data={"nsg": nsg, "nsg_scope": res.get("scope", "")},
+            message=f"NSG {nsg} readable ({rules} rules){extra}",
+            data={"nsg": nsg, "nsg_scope": res.get("scope", ""), "nsgs": nsgs},
         )
 
     err = res.get("error", "")[:120]

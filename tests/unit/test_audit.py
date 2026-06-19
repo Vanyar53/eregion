@@ -99,6 +99,22 @@ def test_nsg_check_exposes_structured_nsg_and_scope():
     assert d["data"]["nsg_scope"] == "subnet"
 
 
+def test_nsg_check_exposes_all_nics_multi_nsg():
+    """The NSG check surfaces every NIC's NSG in data.nsgs (multi-NIC at rest)."""
+    c = _connector(nsg={
+        "ok": True, "nsg": "rg1/nsg-a", "scope": "nic", "rules": 3,
+        "nsgs": [
+            {"nsg": "rg1/nsg-a", "nsg_scope": "nic", "nic_id": "nic-a", "ips": []},
+            {"nsg": "rg2/nsg-b", "nsg_scope": "subnet", "nic_id": "nic-b", "ips": ["10.0.1.7"]},
+        ],
+    })
+    result = run(RESOURCE_ID, c)
+    nsg = next(ch for ch in result.checks if ch.name == "NSG access")
+    assert [n["nsg"] for n in nsg.data["nsgs"]] == ["rg1/nsg-a", "rg2/nsg-b"]
+    assert nsg.data["nsg"] == "rg1/nsg-a"   # back-compat primary
+    assert "+1 more NIC" in nsg.message
+
+
 def test_run_threads_vault_rg_to_backup_check():
     """run(vault_rg=...) reaches check_backup_points — central vault ≠ VM RG."""
     c = _connector()

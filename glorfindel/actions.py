@@ -913,18 +913,36 @@ class AzureConnector(CloudConnector):
     # ── Audit / readiness checks ───────────────────────────────────────────────
 
     def check_nsg_access(self, resource_id: str) -> dict:
-        """Verify NSG read access — proxy for isolate_vm / block_suspicious_ip readiness."""
+        """Verify NSG read access — proxy for isolate_vm / block_suspicious_ip readiness.
+
+        Enumerates EVERY NIC's governing NSG (`nsgs`), so the War Room shows the full
+        multi-NIC NSG picture at rest (not just the primary NIC). `nsg`/`scope` mirror
+        the first NIC for back-compat.
+        """
         if self.dry_run:
             return {"ok": True, "nsg": "dry_run"}
         try:
             self._ensure_clients()
             rg, vm_name = _parse_vm_resource_id(resource_id)
-            nic_id = self._get_primary_nic_id(rg, vm_name)
-            nsg_rg, nsg_name, nsg_scope = self._get_nic_nsg(nic_id)
-            rules = list(self._network.security_rules.list(nsg_rg, nsg_name))
+            targets = self._get_vm_nic_targets(rg, vm_name)
+            nsgs = [
+                {
+                    "nsg": f'{t["nsg_rg"]}/{t["nsg_name"]}',
+                    "nsg_scope": t["scope"],
+                    "nic_id": t["nic_id"],
+                    "ips": t["private_ips"],
+                }
+                for t in targets
+            ]
+            first = targets[0]
+            # rule count on the primary NIC's NSG (cheap signal that we can read it)
+            rules = list(self._network.security_rules.list(first["nsg_rg"], first["nsg_name"]))
             return {
-                "ok": True, "nsg": f"{nsg_rg}/{nsg_name}",
-                "scope": nsg_scope, "rules": len(rules),
+                "ok": True,
+                "nsg": f'{first["nsg_rg"]}/{first["nsg_name"]}',
+                "scope": first["scope"],
+                "rules": len(rules),
+                "nsgs": nsgs,
             }
         except Exception as e:
             return {"ok": False, "iam": _is_iam_error(str(e)), "error": str(e)}

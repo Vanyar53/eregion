@@ -166,6 +166,28 @@ def test_check_backup_points_protected_no_rp(monkeypatch):
     assert "not linked" not in res["error"].lower()
 
 
+def test_check_nsg_access_lists_all_nics(monkeypatch):
+    """check_nsg_access enumerates EVERY NIC's NSG (nsgs[]) + primary for back-compat."""
+    from glorfindel.actions import AzureConnector
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    monkeypatch.setattr(connector, "_get_vm_nic_targets", lambda rg, vm: [
+        _nic_target(nsg_rg="rg1", nsg_name="nsg-a", scope="nic", nic_id="nic-a"),
+        _nic_target(nsg_rg="rg2", nsg_name="nsg-b", scope="subnet",
+                    ips=("10.0.1.7",), nic_id="nic-b"),
+    ])
+    net = MagicMock()
+    net.security_rules.list.return_value = [MagicMock(), MagicMock()]
+    connector._network = net
+
+    res = connector.check_nsg_access(_RID)
+    assert res["ok"] is True
+    assert [n["nsg"] for n in res["nsgs"]] == ["rg1/nsg-a", "rg2/nsg-b"]
+    assert res["nsgs"][1]["nsg_scope"] == "subnet"
+    assert res["nsg"] == "rg1/nsg-a"      # back-compat: primary NIC
+    assert res["scope"] == "nic"
+
+
 def test_check_backup_points_vmss_instance_not_backupable():
     """A VMSS instance (AKS node) short-circuits to not_backupable WITHOUT an Azure call
     — same error as an unprotected VM otherwise, so the resource shape is the only tell."""

@@ -668,12 +668,50 @@ function _scopeNote(s) {
 // isolate_vm/block place one deny per NIC (placements[]); show "N NICs" so the operator
 // sees full coverage (a one-NSG badge could read as if only the primary NIC were covered).
 // Only shown when >1 NIC; single-NIC keeps the badge clean.
-function _nicNote(s) {
+function _nicNote(s, vmName) {
   const n = Array.isArray(s?.placements) ? s.placements.length : 0;
   if (n <= 1) return '';
   const nsgs = new Set(s.placements.map(p => p.nsg || `${p.nsg_rg}/${p.nsg_name}`)).size;
-  const base = 'font-size:8px;font-weight:600;padding:0 4px;border-radius:3px;flex-shrink:0';
-  return ` <span style="${base};color:var(--cyan);border:1px solid color-mix(in srgb,var(--cyan) 35%,var(--border))" title="Deny placed on all ${n} NICs of this VM (${nsgs} NSG${nsgs>1?'s':''}) — full coverage.">${n} NICs</span>`;
+  const idx = _coverageCache.push({ vmName, type: s.type, ip: s.ip || '', placements: s.placements }) - 1;
+  const base = 'font-size:8px;font-weight:600;padding:0 4px;border-radius:3px;flex-shrink:0;cursor:pointer';
+  return ` <span style="${base};color:var(--cyan);border:1px solid color-mix(in srgb,var(--cyan) 35%,var(--border))"
+    onclick="event.stopPropagation();showCoverageModal(${idx})"
+    title="Click for per-NIC coverage — deny placed on all ${n} NICs (${nsgs} NSG${nsgs>1?'s':''}).">${n} NICs ▸</span>`;
+}
+
+// Per-NIC coverage detail for a multi-NIC isolate/block. Lists each placement
+// (NIC → NSG · scope · rule) so the operator sees exactly where each deny landed.
+function showCoverageModal(idx) {
+  const c = _coverageCache[idx];
+  if (!c) return;
+  const verb = c.type === 'isolated' ? 'Isolation' : 'Block';
+  const rows = (c.placements || []).map((p, i) => {
+    const nsg   = (p.nsg || `${p.nsg_rg || ''}/${p.nsg_name || ''}`).split('/').pop();
+    const scope = p.scope === 'subnet' ? 'subnet NSG (shared)' : 'NIC NSG (this VM)';
+    const scopeCol = p.scope === 'subnet' ? 'var(--orange)' : 'var(--dim)';
+    const nic   = p.nic_id ? p.nic_id.split('/').pop() : `NIC ${i + 1}`;
+    const ips   = Array.isArray(p.ips) && p.ips.length ? p.ips.join(', ') : '';
+    const rules = p.rule_in || p.rule_out
+      ? [p.rule_in, p.rule_out].filter(Boolean).join(' · ')
+      : (p.rule || '');
+    return `<div style="padding:6px 0;border-top:1px solid var(--border)">
+      <div style="display:flex;gap:8px;align-items:baseline">
+        <span style="color:var(--cyan);font-weight:600;font-size:11px;flex:1">${nic}</span>
+        <span style="color:${scopeCol};font-size:9px">${scope}</span>
+      </div>
+      <div style="color:var(--dim);font-size:10px;margin-top:2px">🛡 ${nsg}${ips ? ` · ${ips}` : ''}</div>
+      ${rules ? `<div style="color:var(--dim);font-size:9px;margin-top:1px">rule: ${rules}</div>` : ''}
+    </div>`;
+  }).join('');
+  document.getElementById('modal-title').textContent =
+    `${verb} coverage — ${c.vmName}${c.ip ? ` (${c.ip})` : ''}`;
+  const body = document.getElementById('modal-body');
+  body.innerHTML = `<div style="font-size:10px;color:var(--dim);margin-bottom:4px">${(c.placements || []).length} NICs covered — one deny placement each</div>${rows}`;
+  document.getElementById('modal-cmd').style.display = 'none';
+  const btn = document.getElementById('modal-confirm');
+  btn.textContent = 'Close'; btn.className = 'action'; btn.onclick = closeModal;
+  document.getElementById('modal-cancel').style.display = 'none';
+  document.getElementById('modal').classList.add('open');
 }
 
 // "Extend to subnet" affordance for an existing VM-scoped block (operator decision).
@@ -958,6 +996,7 @@ let _expandedVms      = new Set();
 let _collapsedVms     = new Set(); // user explicitly collapsed — immune to auto-expand
 let _expandedBackends = new Set();
 let _rulesCache       = [];   // flat array, index used in onclick to avoid JSON.stringify in HTML
+let _coverageCache    = [];   // per-render {vmName, type, ip, placements} — index used by the N-NICs chip
 let _pendingActions   = new Set(); // vm_names with in-flight release/unblock actions
 let _cardOrder     = JSON.parse(localStorage.getItem('glorfindel_card_order') || '[]');
 let _currentVmNames = [];
@@ -1061,6 +1100,7 @@ function renderInfra() {
   _escById = {};
   escalations.forEach(e => { _escById[e.id] = e; });
   _rulesCache = rules.slice(); // refresh index cache each render
+  _coverageCache = [];         // rebuilt by _nicNote() during this render
   const restoreByVm = {};
   restores.forEach(r => { restoreByVm[r.vm_name] = r; });
 
@@ -1521,9 +1561,9 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
     restoreInfo ? `<span class="badge restoring" style="font-size:9px">🔄 RESTORING · ${restoreInfo.elapsed_label}</span>` : '',
     ...states.map(s => s.type === 'isolated'
       ? `<span class="badge isolated" style="font-size:9px${!isExpanded ? ';cursor:pointer' : ''}"
-           ${!isExpanded ? `onclick="event.stopPropagation();showIsolationModal('${vm_name}')"` : ''}>ISOLATED · ${age(s.since)}</span>${_scopeNote(s)}${_nicNote(s)}`
+           ${!isExpanded ? `onclick="event.stopPropagation();showIsolationModal('${vm_name}')"` : ''}>ISOLATED · ${age(s.since)}</span>${_scopeNote(s)}${_nicNote(s, vm_name)}`
       : `<span class="badge blocked" style="font-size:9px${!isExpanded ? ';cursor:pointer' : ''}"
-           ${!isExpanded ? `onclick="event.stopPropagation();showIsolationModal('${vm_name}')"` : ''}>BLOCKED ${s.ip} · ${age(s.since)}</span>${_scopeNote(s)}${_nicNote(s)}`),
+           ${!isExpanded ? `onclick="event.stopPropagation();showIsolationModal('${vm_name}')"` : ''}>BLOCKED ${s.ip} · ${age(s.since)}</span>${_scopeNote(s)}${_nicNote(s, vm_name)}`),
     escBadge,
   ].filter(Boolean).join('');
 
@@ -1572,11 +1612,11 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
     let corrBtn = '';
     if (a.action === 'isolate_vm' && isIsolated) {
       const s = states.find(s => s.type === 'isolated');
-      badge   = s ? `<span class="badge isolated" style="font-size:9px;cursor:default">ISOLATED · ${age(s.since)}</span>${_scopeNote(s)}${_nicNote(s)}` : '';
+      badge   = s ? `<span class="badge isolated" style="font-size:9px;cursor:default">ISOLATED · ${age(s.since)}</span>${_scopeNote(s)}${_nicNote(s, vm_name)}` : '';
       corrBtn = `<button class="action danger" onclick="event.stopPropagation();confirmRelease('${vm_name}')" style="font-size:9px;padding:2px 7px;margin-left:auto">↩️ Release</button>`;
     } else if (a.action === 'block_suspicious_ip' && isBlocked) {
       const s = states.find(s => s.type === 'blocked');
-      badge   = s ? `<span class="badge blocked" style="font-size:9px;cursor:default">BLOCKED ${s.ip} · ${age(s.since)}</span>${_scopeNote(s)}${_nicNote(s)}` : '';
+      badge   = s ? `<span class="badge blocked" style="font-size:9px;cursor:default">BLOCKED ${s.ip} · ${age(s.since)}</span>${_scopeNote(s)}${_nicNote(s, vm_name)}` : '';
       corrBtn = `${_extendBtn(s, vm_name)}<button class="action danger" onclick="event.stopPropagation();confirmUnblock('${vm_name}')" style="font-size:9px;padding:2px 7px;margin-left:auto">↩️ Unblock</button>`;
     }
 
@@ -1607,14 +1647,14 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
   if (isIsolated && !coveredByDec.has('isolate_vm')) {
     const s = states.find(s => s.type === 'isolated');
     fallbackRows.push(`<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
-      <span class="badge isolated" style="font-size:9px;cursor:default">ISOLATED · ${age(s?.since)}</span>${_scopeNote(s)}${_nicNote(s)}
+      <span class="badge isolated" style="font-size:9px;cursor:default">ISOLATED · ${age(s?.since)}</span>${_scopeNote(s)}${_nicNote(s, vm_name)}
       <button class="action danger" onclick="event.stopPropagation();confirmRelease('${vm_name}')" style="font-size:9px;padding:2px 7px">↩️ Release</button>
     </div>`);
   }
   if (isBlocked && !coveredByDec.has('block_suspicious_ip')) {
     states.filter(s => s.type === 'blocked').forEach(s => fallbackRows.push(
       `<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
-        <span class="badge blocked" style="font-size:9px;cursor:default">BLOCKED ${s.ip} · ${age(s.since)}</span>${_scopeNote(s)}${_nicNote(s)}
+        <span class="badge blocked" style="font-size:9px;cursor:default">BLOCKED ${s.ip} · ${age(s.since)}</span>${_scopeNote(s)}${_nicNote(s, vm_name)}
         ${_extendBtn(s, vm_name)}
         <button class="action danger" onclick="event.stopPropagation();confirmUnblock('${vm_name}')" style="font-size:9px;padding:2px 7px">↩️ Unblock</button>
       </div>`));

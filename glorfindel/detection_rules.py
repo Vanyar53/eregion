@@ -338,6 +338,22 @@ def load_rules(path: str | Path, glorfindel_cfg=None) -> list[DetectionRule]:
     return load_config(path, glorfindel_cfg=glorfindel_cfg).rules
 
 
+def pollable_rules(rules: list[DetectionRule]) -> list[DetectionRule]:
+    """Rules that can actually query a backend (enabled + a resolved workspace_id)."""
+    return [r for r in rules if r.enabled and r.workspace_id]
+
+
+def detection_inert(rules: list[DetectionRule]) -> bool:
+    """True if NO rule can poll — detection fires nothing.
+
+    Happens when glorfindel-config.yaml has no monitoring backend (so every rule
+    resolves to an empty workspace_id) or every rule is disabled. Honest signal >
+    silence: callers (watch banner, /api/state) surface this so a deployment that
+    detects nothing doesn't look healthy — a key defined-but-inert must shout, not
+    fail quietly."""
+    return len(pollable_rules(rules)) == 0
+
+
 # ── Status persistence ────────────────────────────────────────────────────────
 
 def _load_status() -> dict:

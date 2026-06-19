@@ -165,6 +165,27 @@ def test_rule_disabled_when_no_backend(tmp_path, caplog):
     assert any("cannot run" in m or "no workspace_id" in m for m in caplog.messages)
 
 
+def _rule(name="r", ws="ws", enabled=True):
+    return DetectionRule(
+        name=name, source="azure_monitor", workspace_id=ws, query="q",
+        ttp="T1486", resource_id="", enabled=enabled,
+    )
+
+
+def test_detection_inert_true_when_nothing_can_poll():
+    """No rule with a resolved workspace_id (empty config) or all disabled → inert."""
+    from glorfindel.detection_rules import detection_inert
+    assert detection_inert([_rule(ws=""), _rule(ws="", enabled=False)]) is True
+    assert detection_inert([]) is True
+
+
+def test_detection_inert_false_with_one_pollable_rule():
+    from glorfindel.detection_rules import detection_inert, pollable_rules
+    rules = [_rule(name="dead", ws=""), _rule(name="live", ws="ws-1")]
+    assert detection_inert(rules) is False
+    assert [r.name for r in pollable_rules(rules)] == ["live"]
+
+
 def test_rule_disabled_when_ambiguous_backends(tmp_path, caplog):
     """Several backends of the type and none named → ambiguous → disabled + warned."""
     import logging

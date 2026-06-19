@@ -436,6 +436,23 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
             det_cfg = _load_det_cfg(_rules_file, glorfindel_cfg=_glorfindel_cfg)
             rules = det_cfg.rules
 
+            # Honest signal > silence: if no rule can actually poll a backend (no
+            # monitoring_backend with a workspace_id resolved, or every rule disabled),
+            # detection fires NOTHING. Say so loudly at startup instead of looking
+            # healthy while detecting nothing — the failure mode that torpedoes a first
+            # external test ("your thing detects nothing").
+            from glorfindel.detection_rules import detection_inert as _det_inert
+            if not dry_run and rules and _det_inert(rules):
+                console.print(
+                    "[bold red]⚠ DÉTECTION INERTE[/bold red] — aucune règle ne peut "
+                    "interroger un backend de monitoring.\n"
+                    "  Cause probable : aucun [bold]monitoring_backend[/bold] (avec "
+                    "workspace_id) résolu dans glorfindel-config.yaml, ou toutes les "
+                    "règles désactivées.\n"
+                    "  → Renseigne la section [bold]monitoring_backends[/bold] de "
+                    "glorfindel-config.yaml. Sans ça, Glorfindel ne détecte rien."
+                )
+
             if rules:
                 def _rule_dispatch(signal_data: dict) -> None:
                     from annatar.signals.schema import Signal as _Signal

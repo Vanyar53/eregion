@@ -806,6 +806,8 @@ let _auditLoading  = false;
 let _auditLastRun  = null;   // ISO timestamp of last successful fetch
 let _backupItems   = null;   // null=never loaded, {vault, items[], error?} = loaded — vault inventory for RECOVER
 let _backupLoading = false;
+let _auditStale    = null;   // error string when a refresh failed but last-good data is kept
+let _backupStale   = null;   // idem for /api/backups — resilience: never wipe cards on a transient timeout
 let _actionsCache = {};   // vm_name → {actions, fetchedAt}
 let _autoScroll = true;
 
@@ -1028,10 +1030,13 @@ async function refreshActionsData() {
 function renderInfra() {
   if (_configMode) return;
   const list           = document.getElementById('incidents-list');
-  // Preserve scroll position across the full innerHTML swap below. With asset order
-  // now stable backend-side (51ca01d), restoring scrollTop keeps the operator where
-  // they were instead of yanking them back to the top on every 5s auto-refresh.
-  const _savedScroll = list.scrollTop;
+  // Preserve scroll position across the full innerHTML swap below. The actual scroll
+  // container is #topo-graph (overflow-y:auto), NOT #incidents-list — and topo-graph
+  // is destroyed/recreated by the swap, so save its scrollTop now and reapply it to
+  // the fresh element afterwards. With asset order stable backend-side (99b4882),
+  // this keeps the operator where they were instead of yanking back to the top.
+  const _prevGraph = document.getElementById('topo-graph');
+  const _savedScroll = _prevGraph ? _prevGraph.scrollTop : 0;
   const rules          = _cfgData?.detection?.rules     || [];
   const detectBackends  = _cfgData?.monitoring_backends  || [];
   const recoverBackends = (_cfgData?.assets || []).filter(a => a.type === 'azure_backup_vault');
@@ -1147,7 +1152,10 @@ function renderInfra() {
       </div>
     </div>`;
 
-  if (_savedScroll) list.scrollTop = _savedScroll;
+  if (_savedScroll) {
+    const _newGraph = document.getElementById('topo-graph');
+    if (_newGraph) _newGraph.scrollTop = _savedScroll;
+  }
   requestAnimationFrame(_drawTopologyEdges);
   _applyReadOnlyGuards(list);
 }
@@ -1186,6 +1194,7 @@ function _renderAgentNode(rules, detectBackends, recoverBackends, discovered) {
     <div class="node-agent-stats">
       <span>${moduleCount} modules</span>
     </div>
+    ${(_auditStale || _backupStale) ? `<div class="node-agent-stats" style="color:var(--orange);font-size:9px" title="A readiness fetch timed out — showing last known data">⚠ data stale</div>` : ''}
   </div>`;
 }
 
@@ -1351,10 +1360,20 @@ function _renderModules(rules, detectBackends, recoverBackends, resources) {
       : worst === 'warn' || worst === 'pending' ? ['var(--orange)', 'var(--orange)']
       : worst === 'error' || worst === 'empty' ? ['var(--red)',    'var(--red)']
       :                                        ['var(--dim)',    'var(--dim)'];
+    // Cross-reference: VMs we monitor (discovered + known) minus protected items =
+    // VMs with NO backup. The count operators most want — "how many are NOT covered".
+    const _monitored = new Set();
+    (_state?.discovered_assets || []).forEach(d => { if (d.name) _monitored.add(d.name.toLowerCase()); });
+    (_cfgData?.known_resources || []).forEach(r => { if (r.vm_name) _monitored.add(r.vm_name.toLowerCase()); });
+    const _protectedNames = new Set(items.map(it =>
+      (it.name || (it.resource_id || '').split('/').pop() || '').toLowerCase()).filter(Boolean));
+    let unprotectedN = 0;
+    _monitored.forEach(n => { if (!_protectedNames.has(n)) unprotectedN++; });
+    const staleSfx = _backupStale ? ` · <span style="color:var(--orange)">stale</span>` : '';
     const summary = worst === 'error'   ? 'vault read error'
                   : worst === 'loading' ? 'loading…'
-                  : worst === 'empty'   ? 'no protected items'
-                  : `${items.length} protected${oldest ? ` · oldest ${oldest}h` : ''}${pendingN ? ` · ${pendingN} pending` : ''}${stoppedN ? ` · ${stoppedN} stopped` : ''}`;
+                  : worst === 'empty'   ? `no protected items${unprotectedN ? ` · <span style="color:var(--red)">${unprotectedN} unprotected</span>` : ''}`
+                  : `${items.length} protected${unprotectedN ? ` · <span style="color:var(--red)">${unprotectedN} unprotected</span>` : ''}${oldest ? ` · oldest ${oldest}h` : ''}${pendingN ? ` · ${pendingN} pending` : ''}${stoppedN ? ` · ${stoppedN} stopped` : ''}${staleSfx}`;
     const itemRows = items.map(it => {
       const hasRP = it.latest_recovery_point != null;
       const age = hasRP ? _relTime(it.latest_recovery_point) : 'first backup pending';
@@ -2237,7 +2256,11 @@ document.getElementById('feed-list').addEventListener('scroll', function () {
 async function refreshState() {
   try {
     const r = await fetch('/api/state');
-    _state = await r.json();
+    const data = await r.json();
+    // Resilience: only adopt a well-formed payload. A FastAPI error body ({detail:…})
+    // or partial response would otherwise blank every card — keep the last good state.
+    if (data && Array.isArray(data.resources)) _state = data;
+    else return;
     _updatePosture();
     _autoFetchAuditOnNewVm();
     renderInfra();
@@ -2746,8 +2769,13 @@ async function refreshAuditData() {
     const r = await fetch('/api/audit', { signal: ctrl.signal });
     _auditData    = await r.json();
     _auditLastRun = new Date().toISOString();
+    _auditStale   = null;
   } catch (e) {
-    _auditData = { audits: [], error: e.name === 'AbortError' ? 'timeout (20s)' : e.message };
+    const msg = e.name === 'AbortError' ? 'timeout (20s)' : e.message;
+    // Resilience: keep the last good audit so a transient RSV timeout (likely with
+    // 15 VMs × 3 checks) doesn't wipe every card — just flag the data stale.
+    if (_auditData && Array.isArray(_auditData.audits) && _auditData.audits.length) _auditStale = msg;
+    else _auditData = { audits: [], error: msg };
   } finally {
     clearTimeout(timer);
     _auditLoading = false;
@@ -2763,8 +2791,12 @@ async function refreshBackups() {
   try {
     const r = await fetch('/api/backups', { signal: ctrl.signal });
     _backupItems = await r.json();   // {vault, items[], error?}
+    _backupStale = null;
   } catch (e) {
-    _backupItems = { vault: null, items: [], error: e.name === 'AbortError' ? 'timeout (20s)' : e.message };
+    const msg = e.name === 'AbortError' ? 'timeout (20s)' : e.message;
+    // Keep last good inventory on a transient failure; flag stale instead of wiping.
+    if (_backupItems && Array.isArray(_backupItems.items) && _backupItems.items.length) _backupStale = msg;
+    else _backupItems = { vault: null, items: [], error: msg };
   } finally {
     clearTimeout(timer);
     _backupLoading = false;

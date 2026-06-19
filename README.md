@@ -1,12 +1,16 @@
-# Eregion — Automated Incident Response
+# Eregion — Cloud Detection & Response, for teams without a SOC
 
-Eregion is an open-source automated incident response platform for cloud infrastructure. Two AI agents form a closed loop:
+Open-source CDR for cloud infrastructure (Azure today; the LLM layer is provider-agnostic). Two AI agents form a closed loop:
 
-- **Annatar** (red) simulates real attacks on your Azure infrastructure using MITRE ATT&CK scenarios
-- **Glorfindel** (blue) detects signals continuously, responds autonomously, verifies containment, and learns from every cycle
+- **Annatar** (red) — launches real MITRE ATT&CK attacks to prove the defense actually works.
+- **Glorfindel** (blue) — does two jobs on your cloud logs:
+  - **Detects** — continuous rule-based polling (KQL / PromQL …), auto-discovers your assets from their own telemetry (no inventory to maintain), and proposes a new detection rule when an attack slips through (purple-team loop).
+  - **Responds** — reasons from the raw signal to choose the minimum effective action and verifies it via the cloud API.
 
-> Autonomous SOC for teams that don't have one.
-> **RTO < 25 min on ransomware VM** — detection to restored service, no human on the critical path.
+**The core — LLM reasoning + RAG, not playbooks.** Glorfindel never follows a TTP→action table. Every decision comes from an **LLM** (provider-agnostic via LiteLLM — Anthropic, OpenAI, Azure OpenAI, Ollama, self-hosted) reasoning over: the enriched signal (targeted follow-up queries run *before* deciding), a **RAG memory of past incidents** (ChromaDB — it learns every cycle, no fine-tuning), and production-validated few-shot examples. Two hard guardrails wrap the LLM: a **confidence gate** (low confidence → forced escalation) and a **safety graph** that blocks destructive actions without human approval regardless of what the LLM proposes. *(Annatar is a deterministic scenario engine today; an LLM-driven Annatar is on the roadmap.)*
+
+> **Observe-only by default** — Glorfindel recommends, you decide. Grant it autonomy per asset as you build trust.
+> With autonomous containment enabled: **~1 min to contain a ransomware VM, 21m29s to restored service** — the only human step is approving the backup restore.
 
 ## How it works
 
@@ -59,7 +63,60 @@ On 2026-06-14, Glorfindel detected a **real SSH brute force** against the expose
 
 The full pipeline — rule → detection → investigate → decide → escalate — held on authentic adversarial traffic, outside the Annatar→Glorfindel loop. The real case even surfaced a bug no scripted run had found (the escalation didn't carry the source IP), fixed the same day.
 
-## Getting started
+## Evaluate on your infrastructure — read-only, zero risk
+
+The fastest, safest way to see Glorfindel: point it at your existing Log Analytics Workspace with **read-only** credentials and watch a week of recommendations. It detects and reasons on your real signals but **cannot touch anything** — no Contributor role, no write API. The pitch to a colleague: *"see what I'd have done on your real signals; I can't touch a thing."*
+
+**1. Create a Reader-only service principal** (no write permission anywhere):
+
+```bash
+az ad sp create-for-rbac --name "glorfindel-eval" --role Reader \
+    --scopes /subscriptions/<SUBSCRIPTION_ID>
+az role assignment create --assignee <appId> \
+    --role "Log Analytics Reader" --scope /subscriptions/<SUBSCRIPTION_ID>
+```
+
+**2. Install and wire the credentials**:
+
+```bash
+git clone https://github.com/Vanyar53/eregion && cd eregion && make install
+export GLORFINDEL_AZURE_CLIENT_ID=<eval-sp-app-id>
+export GLORFINDEL_AZURE_CLIENT_SECRET=<eval-sp-secret>
+export AZURE_TENANT_ID=<tenant-id>
+export AZURE_SUBSCRIPTION_ID=<subscription-id>
+```
+
+**3. Point Glorfindel at your workspace** — the LAW ID lives in `glorfindel-config.yaml`, **not** an env var (there is no `AZURE_WORKSPACE_ID`):
+
+```bash
+cp glorfindel-config.yaml.example glorfindel-config.yaml
+# set monitoring_backends[0].workspace_id to your LAW customer ID:
+#   az monitor log-analytics workspace show -g <rg> -n <name> --query customerId -o tsv
+# A single azure_monitor backend is enough — the rules bind to it automatically.
+```
+
+> Skip step 3 and detection silently never fires — `watch` resolves the workspace from this file only.
+
+**4. Run observe-only** (`human_only` default — nothing executes):
+
+```bash
+export GLORFINDEL_READ_ONLY=1
+glorfindel watch runs/ --rules glorfindel/rules/azure/detection_rules.yaml
+```
+
+`GLORFINDEL_READ_ONLY=1` guarantees no write API is ever called; `human_only` holds every recommended action *before* the connector is touched (you see `mode_hold` escalations, never permission errors).
+
+**5. Read the recommendations** — the value is in what Glorfindel *would* have done:
+- **War Room** (`glorfindel war-room` → http://localhost:7007) — live cards, `OBSERVE-ONLY` badge, each escalation shows the held action + confidence + forensic steps.
+- **`glorfindel pending`** — same on the CLI.
+
+> ⚠ **For the first observe run, disable `data-exfiltration-blob`** — it fires on `PutBlobCount >= 1` from any RFC-1918 source, too noisy on real workloads. Set `enabled: false` on that rule in [`detection_rules.yaml`](glorfindel/rules/azure/detection_rules.yaml) until the allowlist hardening lands. The other rules are safe to leave on.
+
+---
+
+## Try it in a sandbox — full attack/defense loop (optional)
+
+Want to watch the **red→blue loop** end to end (Annatar attacks, Glorfindel responds and recovers)? The Terraform sandbox below provisions a disposable target for exactly that. **Not needed to evaluate on your own infra** — that's the read-only path above. This track uses a **Contributor** service principal because Annatar needs to launch real attacks.
 
 ### 1. Deploy the test infrastructure
 
@@ -110,17 +167,12 @@ terraform apply
 
 **Option A — local (dev)**
 
-```bash
-git clone https://github.com/Vanyar53/eregion && cd eregion
-make install          # creates .venv + installs all dependencies
+Base install is the same `make install` as the eval section above. The difference for the sandbox: Annatar launches real attacks via Azure Run Command, so it needs a **Contributor** service principal (Reader isn't enough):
 
-cp .envrc.example .envrc
-# edit .envrc — fill in ANTHROPIC_API_KEY and Azure credentials
-# direnv allow   (or source .envrc manually)
-```
-
-Azure credentials require a Service Principal:
 ```bash
+git clone https://github.com/Vanyar53/eregion && cd eregion && make install
+cp .envrc.example .envrc   # fill in ANTHROPIC_API_KEY + Azure creds
+
 az ad sp create-for-rbac --name "eregion" --role Contributor \
   --scopes /subscriptions/$(az account show --query id -o tsv)
 # → appId = AZURE_CLIENT_ID, password = AZURE_CLIENT_SECRET, tenant = AZURE_TENANT_ID
@@ -175,15 +227,7 @@ python scripts/simulate_annatar.py --ids-gap  # detection_timeout flow
 
 ## Using Glorfindel standalone
 
-Glorfindel doesn't require Annatar. Two standalone modes:
-
-**Continuous detection** — configure your Log Analytics Workspace in `glorfindel-config.yaml`, then:
-```bash
-cp glorfindel-config.yaml.example glorfindel-config.yaml
-# edit: fill in workspace_id (LAW GUID) and vault_name (RSV)
-glorfindel watch runs/ --rules glorfindel/rules/azure/detection_rules.yaml
-# polls rules continuously, auto-discovers VMs via Heartbeat, runs posture checks
-```
+Glorfindel doesn't require Annatar. Its main standalone path — **continuous detection** — is the **Evaluate on your infrastructure** section above (it polls the rules, auto-discovers assets, runs posture checks, and recommends or acts per the mode you set). Two more standalone uses below: manual signal injection and a pre-deployment audit.
 
 `glorfindel-config.yaml` is the single source of truth for infrastructure connection details:
 - `monitoring_backends` — LAW workspace IDs, Prometheus endpoints, etc.
@@ -252,63 +296,7 @@ glorfindel watch runs/           # detects, investigates, recommends — never w
 
 The War Room and Discord bot still work — every escalation includes the recommended action and suggested forensic steps. Zero risk for a first evaluation: give a peer read-only access to your LAW and let them observe a week of Glorfindel decisions before granting Contributor.
 
-#### Quickstart — evaluate on your own subscription (observe / eval)
-
-The safest on-ramp: a peer grants Glorfindel **read-only** access to their existing Log Analytics Workspace and watches a week of recommendations before anything can touch their infra. The pitch is simple — *"see what I'd have done on your real signals; I can't touch anything."*
-
-**1. Create a Reader-only service principal** (no write permission anywhere):
-
-```bash
-az ad sp create-for-rbac --name "glorfindel-eval" --role Reader \
-    --scopes /subscriptions/<SUBSCRIPTION_ID>
-# Grant log read access on the workspace (or its resource group):
-az role assignment create --assignee <appId> \
-    --role "Log Analytics Reader" --scope /subscriptions/<SUBSCRIPTION_ID>
-```
-
-**2. Wire it through the Glorfindel-specific credentials** (keeps Annatar's creds untouched — see [`.envrc.example`](.envrc.example)):
-
-```bash
-export GLORFINDEL_AZURE_CLIENT_ID=<eval-sp-app-id>
-export GLORFINDEL_AZURE_CLIENT_SECRET=<eval-sp-secret>
-# Tenant + subscription are shared (same tenant), no prefixed vars needed:
-export AZURE_TENANT_ID=<tenant-id>
-export AZURE_SUBSCRIPTION_ID=<subscription-id>
-```
-
-For `docker compose` (Glorfindel-only), `AZURE_CLIENT_*` *is* the Glorfindel SP — point it at the Reader app:
-
-```bash
-export AZURE_CLIENT_ID=$GLORFINDEL_AZURE_CLIENT_ID
-export AZURE_CLIENT_SECRET=$GLORFINDEL_AZURE_CLIENT_SECRET
-```
-
-**3. Point Glorfindel at your workspace** — the LAW workspace ID lives in `glorfindel-config.yaml`, **not** an environment variable:
-
-```bash
-cp glorfindel-config.yaml.example glorfindel-config.yaml
-# Edit it: set monitoring_backends[0].workspace_id to your LAW customer ID —
-#   az monitor log-analytics workspace show -g <rg> -n <name> --query customerId -o tsv
-# A single azure_monitor backend is enough; the rules bind to it automatically
-# (no need to keep the example's "law-annatar" name).
-```
-
-> Skip this and detection silently never fires — `watch` resolves the workspace from this file only. There is no `AZURE_WORKSPACE_ID` env var.
-
-**4. Run observe-only with the conservative default** (`human_only` — nothing executes):
-
-```bash
-export GLORFINDEL_READ_ONLY=1
-glorfindel watch runs/ --rules glorfindel/rules/azure/detection_rules.yaml
-```
-
-`GLORFINDEL_READ_ONLY=1` guarantees no write API is ever called; the `human_only` default holds every recommended action *before* the connector is even touched (so you see `mode_hold` escalations, never permission errors).
-
-**5. Read the recommendations** — nothing runs autonomously, so the value is in what Glorfindel *would* have done:
-- **War Room** (`glorfindel war-room` → http://localhost:7007) — live cards per VM, `OBSERVE-ONLY` badge in the header, each escalation shows the held action + confidence + forensic next steps.
-- **`glorfindel pending`** — same escalations on the CLI.
-
-> ⚠ **For the first observe run, disable `data-exfiltration-blob`.** It fires on `PutBlobCount >= 1` from any RFC-1918 source — fine in the sandbox, too noisy on a real workload where VMs write to blob continuously. Set `enabled: false` on that rule in [`detection_rules.yaml`](glorfindel/rules/azure/detection_rules.yaml) until the allowlist hardening lands. The other rules (ransomware disk-write, SSH brute force, sudo escalation, account creation) are safe to leave on.
+The full read-only evaluation walkthrough (Reader SP → workspace config → observe) is the **Evaluate on your infrastructure** section near the top of this README.
 
 **How Glorfindel reasons** — it follows a validated reasoning chain from raw signal indicators, not a TTP→action lookup table. The system prompt contains production-verified examples of correct reasoning:
 

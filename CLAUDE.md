@@ -505,6 +505,8 @@ L'escalade porte `action_params` (dict, vide par défaut) pour les actions param
 
 `gf ack <id>` / `gf ack --all` → marque `resolved` dans `~/.glorfindel/escalations.jsonl`. Purement administratif — ne fait rien sur Azure. `restore_from_backup` auto-acquitte via `resolve_by_resource`. Les `posture_gap` s'**auto-résolvent** quand la condition disparaît (ex. backup nocturne comble « no recovery point yet ») — `PostureChecker.check_and_escalate` résout l'escalade au cycle suivant (commit `b208a0a`).
 
+⚠️ **Ack d'un posture_gap encore RÉEL** : l'ack ne fait que `resolve` l'escalade ; `posture_state.json` gardait `status: "pending"` → le cycle suivant voyait « mon escalade n'est plus pending mais le gap existe toujours » → **recréait une escalade à chaque cycle** (ack inutile sur un gap persistant, ex. 14 VMs vraiment sans backup). Fix : `_maybe_escalate` interprète « pending + escalade absente de `pending()` » comme **acquitté** → `status: "acknowledged"`, ne ré-escalade plus. Le gap n'est ré-alerté que s'il **se résout puis réapparaît** (`_resolve_cleared_gaps` transitionne `pending`/`acknowledged` → `resolved` quand la condition disparaît). Un gap `acknowledged` sort de `active_gaps()` (n'apparaît plus dans `/api/state`).
+
 ## alerting webhook + bot Discord
 
 **Webhook** (`GLORFINDEL_WEBHOOK_URL`) — one-way, Slack format :

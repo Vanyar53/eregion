@@ -74,7 +74,10 @@ class PostureChecker:
         with self._lock:
             changed = False
             for key, entry in list(self._state.items()):
-                if entry.get("status") == "pending" and key not in current_keys:
+                # Clear both still-pending and acked gaps once the condition is gone,
+                # so a future recurrence re-alerts (an acked gap that clears must not
+                # stay 'acknowledged' forever and swallow the next real occurrence).
+                if entry.get("status") in ("pending", "acknowledged") and key not in current_keys:
                     esc_id = entry.get("escalation_id", "")
                     if esc_id and not self._dry_run:
                         try:
@@ -207,10 +210,24 @@ class PostureChecker:
 
         with self._lock:
             entry = self._state.get(gap.key)
-            if entry and entry.get("status") == "pending":
+            if entry:
+                status = entry.get("status")
                 esc_id = entry.get("escalation_id", "")
-                if esc_id and _escalation_pending(esc_id):
+                if status == "pending":
+                    if esc_id and _escalation_pending(esc_id):
+                        return  # already pending — dedup, don't duplicate
+                    # The escalation left pending() while the gap is STILL present:
+                    # the operator acked it. Respect that — record the ack in posture
+                    # state and stop re-raising. Re-escalating an acked-but-real gap
+                    # every cycle (the bug) made `ack` useless on a persistent gap.
+                    if not self._dry_run:
+                        entry["status"] = "acknowledged"
+                        entry["acknowledged_at"] = datetime.now(timezone.utc).isoformat()
+                        self._save_state()
                     return
+                if status == "acknowledged":
+                    return  # acked and condition unchanged — stay quiet
+                # status == "resolved": the gap had cleared and now recurs → re-escalate
 
             if self._dry_run:
                 return

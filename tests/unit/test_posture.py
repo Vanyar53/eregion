@@ -158,6 +158,7 @@ def test_no_duplicate_escalation(tmp_path):
 
 
 def test_reescalate_when_resolved(tmp_path):
+    """A gap that had CLEARED (status 'resolved') and now recurs → re-escalate."""
     checker = PostureChecker(_cfg(), _connector(backup_ok=False), dry_run=False)
 
     with patch("glorfindel.posture._escalation_pending", return_value=False), \
@@ -166,12 +167,56 @@ def test_reescalate_when_resolved(tmp_path):
             resource_id="/r", vm_name="vm-test", check="backup_linked",
             severity="critical", message="msg",
         )
-        # Gap exists in state but escalation was resolved
+        # Previously cleared (resolved by _resolve_cleared_gaps), now detected again
         checker._state = {
-            gap.key: {"escalation_id": "esc-old", "status": "pending"}
+            gap.key: {"escalation_id": "esc-old", "status": "resolved"}
         }
         checker._maybe_escalate(gap)
-        assert mock_rec.call_count == 1  # re-escalated
+        assert mock_rec.call_count == 1  # re-escalated — genuine recurrence
+
+
+def test_acked_persistent_gap_is_not_reescalated(tmp_path):
+    """The bug Jonathan hit: ack a still-true gap → it must NOT come back.
+
+    State stays 'pending' (ack only touches the escalation, not posture state) while
+    the escalation has left pending(). The checker must read that as 'acknowledged'
+    and stop re-raising, not mint a fresh escalation every cycle.
+    """
+    checker = PostureChecker(_cfg(), _connector(backup_ok=False), dry_run=False)
+    with patch("glorfindel.posture._escalation_pending", return_value=False), \
+         patch("glorfindel.escalations.record", return_value="esc-new") as mock_rec:
+        gap = PostureGap(
+            resource_id="/r", vm_name="vm-test", check="backup_linked",
+            severity="critical", message="msg",
+        )
+        checker._state = {gap.key: {"escalation_id": "esc-old", "status": "pending"}}
+        checker._maybe_escalate(gap)
+        assert mock_rec.call_count == 0                       # no new escalation
+        assert checker._state[gap.key]["status"] == "acknowledged"
+
+        # Subsequent cycles stay quiet too.
+        checker._maybe_escalate(gap)
+        assert mock_rec.call_count == 0
+
+
+def test_acked_gap_realerts_after_clearing_then_recurring(tmp_path):
+    """Acked gap that CLEARS then RECURS must re-alert (ack doesn't mute forever)."""
+    checker = PostureChecker(_cfg(), _connector(backup_ok=False), dry_run=False)
+    gap = PostureGap(
+        resource_id="/r", vm_name="vm-test", check="backup_linked",
+        severity="critical", message="msg",
+    )
+    checker._state = {gap.key: {"escalation_id": "esc-old", "status": "acknowledged"}}
+
+    # Condition cleared (gap not in current set) → state goes 'resolved'.
+    checker._resolve_cleared_gaps(current_keys=set())
+    assert checker._state[gap.key]["status"] == "resolved"
+
+    # Now it recurs → re-escalate.
+    with patch("glorfindel.posture._escalation_pending", return_value=False), \
+         patch("glorfindel.escalations.record", return_value="esc-2") as mock_rec:
+        checker._maybe_escalate(gap)
+        assert mock_rec.call_count == 1
 
 
 # ── active_gaps ────────────────────────────────────────────────────────────────

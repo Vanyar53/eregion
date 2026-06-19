@@ -949,6 +949,8 @@ let _rulesCache       = [];   // flat array, index used in onclick to avoid JSON
 let _pendingActions   = new Set(); // vm_names with in-flight release/unblock actions
 let _cardOrder     = JSON.parse(localStorage.getItem('glorfindel_card_order') || '[]');
 let _currentVmNames = [];
+let _cardVmNames    = new Set(); // lowercased vm_names of the cards actually shown — the
+                                 // honest denominator for "unprotected" (deduped like the cards)
 
 // Build ordered slot array (vm_name | null) — always min 4 slots, always 1 extra empty
 function _buildSlots(vmNames) {
@@ -1079,6 +1081,12 @@ function renderInfra() {
         resource_id: e.resource_id,
         vm_name: vmName, states: [] });
   });
+
+  // Card name set (deduped exactly like the rendered cards) — RECOVER uses this as the
+  // "unprotected" denominator so the count always matches what the operator sees on
+  // screen (e.g. an AKS cluster = one card, not its N node heartbeats).
+  _cardVmNames = new Set(
+    [...resourceMap.values()].map(r => (r.vm_name || '').toLowerCase()).filter(Boolean));
 
   // Auto-expand VMs with active incidents, unless user explicitly collapsed them
   // When incident clears, reset the collapsed preference so next incident re-expands
@@ -1360,15 +1368,14 @@ function _renderModules(rules, detectBackends, recoverBackends, resources) {
       : worst === 'warn' || worst === 'pending' ? ['var(--orange)', 'var(--orange)']
       : worst === 'error' || worst === 'empty' ? ['var(--red)',    'var(--red)']
       :                                        ['var(--dim)',    'var(--dim)'];
-    // Cross-reference: VMs we monitor (discovered + known) minus protected items =
-    // VMs with NO backup. The count operators most want — "how many are NOT covered".
-    const _monitored = new Set();
-    (_state?.discovered_assets || []).forEach(d => { if (d.name) _monitored.add(d.name.toLowerCase()); });
-    (_cfgData?.known_resources || []).forEach(r => { if (r.vm_name) _monitored.add(r.vm_name.toLowerCase()); });
+    // Cross-reference the VM cards on screen against the vault's protected items =
+    // cards with NO backup. The count operators most want — "how many are NOT covered".
+    // Denominator is _cardVmNames (deduped like the cards) so it matches the visible
+    // card count, not the raw heartbeat count (AKS = 1 card, not N nodes).
     const _protectedNames = new Set(items.map(it =>
       (it.name || (it.resource_id || '').split('/').pop() || '').toLowerCase()).filter(Boolean));
     let unprotectedN = 0;
-    _monitored.forEach(n => { if (!_protectedNames.has(n)) unprotectedN++; });
+    _cardVmNames.forEach(n => { if (!_protectedNames.has(n)) unprotectedN++; });
     const staleSfx = _backupStale ? ` · <span style="color:var(--orange)">stale</span>` : '';
     const summary = worst === 'error'   ? 'vault read error'
                   : worst === 'loading' ? 'loading…'

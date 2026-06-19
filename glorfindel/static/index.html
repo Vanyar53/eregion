@@ -804,6 +804,8 @@ let _cfgData    = null;
 let _auditData     = null;   // null=never loaded, {audits:[]} = loaded (possibly empty)
 let _auditLoading  = false;
 let _auditLastRun  = null;   // ISO timestamp of last successful fetch
+let _backupItems   = null;   // null=never loaded, {vault, items[], error?} = loaded — vault inventory for RECOVER
+let _backupLoading = false;
 let _actionsCache = {};   // vm_name → {actions, fetchedAt}
 let _autoScroll = true;
 
@@ -1026,6 +1028,10 @@ async function refreshActionsData() {
 function renderInfra() {
   if (_configMode) return;
   const list           = document.getElementById('incidents-list');
+  // Preserve scroll position across the full innerHTML swap below. With asset order
+  // now stable backend-side (51ca01d), restoring scrollTop keeps the operator where
+  // they were instead of yanking them back to the top on every 5s auto-refresh.
+  const _savedScroll = list.scrollTop;
   const rules          = _cfgData?.detection?.rules     || [];
   const detectBackends  = _cfgData?.monitoring_backends  || [];
   const recoverBackends = (_cfgData?.assets || []).filter(a => a.type === 'azure_backup_vault');
@@ -1141,6 +1147,7 @@ function renderInfra() {
       </div>
     </div>`;
 
+  if (_savedScroll) list.scrollTop = _savedScroll;
   requestAnimationFrame(_drawTopologyEdges);
   _applyReadOnlyGuards(list);
 }
@@ -1186,35 +1193,53 @@ function _renderAgentNode(rules, detectBackends, recoverBackends, discovered) {
 
 function _renderModules(rules, detectBackends, recoverBackends, resources) {
   // DETECT
+  // A rule renders one of two ways: bound + polling (live coverage) or enabled===false
+  // (couldn't resolve a backend, doesn't poll — 90a0b09). Disabled rules are grayed
+  // with an "⚠ unbound" badge and excluded from the backend health dot, so they never
+  // read as live coverage. Orphaned disabled rules (matching no backend) get their own
+  // node below — invisible would be a false sense of coverage.
+  const _ruleRow = (r) => {
+    const idx = _rulesCache.indexOf(r);
+    if (r.enabled === false) {
+      return `<div class="row rule-item" onclick="event.stopPropagation();showRuleByIdx(${idx})"
+        style="padding:3px 4px;font-size:10px;opacity:.55">
+        <span style="color:var(--dim);font-size:9px">●</span>
+        <span style="flex:1">${r.name}</span>
+        ${r.ttp ? `<span style="color:var(--dim);font-size:9px">${r.ttp}</span>` : ''}
+        <span style="color:var(--orange);font-size:9px;margin-left:auto">⚠ unbound</span>
+        <span style="color:var(--dim);font-size:9px">▸</span>
+      </div>`;
+    }
+    const dc  = r.last_error ? 'var(--red)' : r.last_poll ? 'var(--green)' : 'var(--dim)';
+    const mt  = r.last_match ? `<span style="color:var(--orange);font-size:9px;margin-left:auto">${_relTime(r.last_match)}</span>` : '';
+    return `<div class="row rule-item" onclick="event.stopPropagation();showRuleByIdx(${idx})"
+      style="padding:3px 4px;font-size:10px">
+      <span style="color:${dc};font-size:9px">●</span>
+      <span style="flex:1">${r.name}</span>
+      ${r.ttp ? `<span style="color:var(--dim);font-size:9px">${r.ttp}</span>` : ''}
+      ${mt}
+      <span style="color:var(--dim);font-size:9px">▸</span>
+    </div>`;
+  };
   const detectNodes = detectBackends.map(b => {
     const bRules   = rules.filter(r => r.monitoring_backend_name === b.name);
-    const hasErr   = bRules.some(r => r.last_error);
-    const allPoll  = bRules.length && bRules.every(r => r.last_poll && !r.last_error);
-    const lastMatch = bRules.reduce((m, r) => r.last_match && r.last_match > (m||'') ? r.last_match : m, null);
+    const liveRules = bRules.filter(r => r.enabled !== false);
+    const unboundN  = bRules.length - liveRules.length;
+    const hasErr   = liveRules.some(r => r.last_error);
+    const allPoll  = liveRules.length && liveRules.every(r => r.last_poll && !r.last_error);
+    const lastMatch = liveRules.reduce((m, r) => r.last_match && r.last_match > (m||'') ? r.last_match : m, null);
     const dot = hasErr ? `<span style="color:var(--red)">●</span>`
               : allPoll ? `<span style="color:var(--green)">●</span>`
               : `<span style="color:var(--dim)">●</span>`;
     const expandId  = `rules-${b.name.replace(/[^a-z0-9]/gi,'-')}`;
     const isExpanded = _expandedBackends.has(b.name);
-    const ruleRows  = bRules.map(r => {
-      const idx = _rulesCache.indexOf(r);
-      const dc  = r.last_error ? 'var(--red)' : r.last_poll ? 'var(--green)' : 'var(--dim)';
-      const mt  = r.last_match ? `<span style="color:var(--orange);font-size:9px;margin-left:auto">${_relTime(r.last_match)}</span>` : '';
-      return `<div class="row rule-item" onclick="event.stopPropagation();showRuleByIdx(${idx})"
-        style="padding:3px 4px;font-size:10px">
-        <span style="color:${dc};font-size:9px">●</span>
-        <span style="flex:1">${r.name}</span>
-        ${r.ttp ? `<span style="color:var(--dim);font-size:9px">${r.ttp}</span>` : ''}
-        ${mt}
-        <span style="color:var(--dim);font-size:9px">▸</span>
-      </div>`;
-    }).join('');
+    const ruleRows  = bRules.map(_ruleRow).join('');
     return `<div class="node-backend detect" id="nb-${b.name}" style="cursor:pointer;max-width:240px"
       onclick="event.stopPropagation();toggleBackend('${b.name}')">
       <div class="node-backend-name">${dot} ${b.name}</div>
       <div class="node-backend-type">${b.type}</div>
       <div class="node-backend-row" style="justify-content:space-between">
-        <span>${bRules.length} rule${bRules.length>1?'s':''}</span>
+        <span>${liveRules.length} rule${liveRules.length>1?'s':''}${unboundN ? ` <span style="color:var(--orange)">· ${unboundN} unbound</span>` : ''}</span>
         ${lastMatch ? `<span style="color:var(--orange);font-size:9px">match ${_relTime(lastMatch)}</span>` : ''}
         <span style="color:var(--blue);font-size:9px">${isExpanded ? '▾' : '▸'}</span>
       </div>
@@ -1222,6 +1247,24 @@ function _renderModules(rules, detectBackends, recoverBackends, resources) {
       ${isExpanded ? `<div style="margin-top:6px;border-top:1px solid var(--border);padding-top:6px">${ruleRows}</div>` : ''}
     </div>`;
   }).join('') || `<div style="color:var(--dim);font-size:10px">No monitoring backends</div>`;
+
+  // Disabled rules bound to no known backend would otherwise vanish — surface them
+  // in a dim "unbound rules" node so the gap is visible (no false coverage).
+  const _backendNames = new Set(detectBackends.map(b => b.name));
+  const orphanRules = rules.filter(r => r.enabled === false && !_backendNames.has(r.monitoring_backend_name));
+  const orphanExpanded = _expandedBackends.has('__unbound__');
+  const orphanNode = orphanRules.length
+    ? `<div class="node-backend detect state-warn" id="nb-__unbound__" style="cursor:pointer;max-width:240px;opacity:.85"
+        onclick="event.stopPropagation();toggleBackend('__unbound__')">
+        <div class="node-backend-name"><span style="color:var(--orange)">●</span> unbound rules</div>
+        <div class="node-backend-type">no backend resolved</div>
+        <div class="node-backend-row" style="justify-content:space-between">
+          <span style="color:var(--orange)">${orphanRules.length} rule${orphanRules.length>1?'s':''} not polling</span>
+          <span style="color:var(--blue);font-size:9px">${orphanExpanded ? '▾' : '▸'}</span>
+        </div>
+        ${orphanExpanded ? `<div style="margin-top:6px;border-top:1px solid var(--border);padding-top:6px">${orphanRules.map(_ruleRow).join('')}</div>` : ''}
+      </div>`
+    : '';
 
   // PROTECT — capacité de réaction du provider (pas un backend configuré)
   const isIsolated  = resources.some(r => r.states?.some(s => s.type === 'isolated'));
@@ -1281,75 +1324,74 @@ function _renderModules(rules, detectBackends, recoverBackends, resources) {
     ${protectBody}
   </div>`;
 
-  // RECOVER
+  // RECOVER — sourced from the vault inventory (_backupItems), the RSV's protected
+  // items, independent of VM discovery/power state. Expandable: compact = N protected
+  // · oldest age; expanded = the list of items + last backup each.
   const recoverNodes = recoverBackends.map(b => {
-    const checks = (_auditData?.audits || []).flatMap(a =>
-      (a.checks||[]).filter(c => c.action === 'restore_from_backup'));
-    const hasError = !!_auditData?.error;
-    const worst = hasError         ? 'error'
-                : _auditLoading    ? 'loading'
-                : _auditData === null ? 'pending'
-                : checks.some(c => c.status === 'fail') ? 'fail'
-                : checks.some(c => c.status === 'warn') ? 'warn'
-                : checks.length    ? 'ok'
-                :                    'nodata';
-    const dot = worst==='ok'      ? `<span style="color:var(--green)">●</span>`
-              : worst==='warn'    ? `<span style="color:var(--orange)">●</span>`
-              : worst==='fail'    ? `<span style="color:var(--red)">●</span>`
-              : worst==='error'   ? `<span style="color:var(--red)">●</span>`
-              :                     `<span style="color:var(--dim)">●</span>`;
-    const lastRun = _auditLastRun
-      ? `<div class="node-backend-row" style="color:var(--dim);font-size:9px">audit ${_relTime(_auditLastRun)}</div>` : '';
-    // warn covers two cases: protected-but-first-backup-pending vs backup >48h stale.
-    const warnPending = checks.some(c => c.status === 'warn'
-      && /pending|no recovery point|first backup/i.test(c.message || ''));
-    const warnLabel = warnPending ? 'backup pending' : 'backup stale';
-    // "How many" aggregate from the structured backup check data (only useful >1 VM).
-    const bk = { ok: 0, pending: 0, missing: 0, rp: 0 };
-    checks.forEach(c => {
-      const d = c.data || {};
-      if (typeof d.points === 'number') bk.rp += d.points;
-      if (c.status === 'fail') bk.missing++;
-      else if (c.status === 'warn') bk.pending++;
-      else if (c.status === 'ok') bk.ok++;
+    const inv   = _backupItems;                       // {vault, items, error} | null
+    const invOk = inv && !inv.error && Array.isArray(inv.items);
+    const items = invOk ? inv.items : [];
+    const expanded = _expandedBackends.has(b.name);
+
+    let pendingN = 0, oldest = 0, stoppedN = 0;
+    items.forEach(it => {
+      const st = (it.protection_state || '').toLowerCase();
+      if (st.includes('stop') || st.includes('paus')) stoppedN++;
+      if (it.latest_recovery_point == null) pendingN++;
+      else if (typeof it.latest_age_h === 'number') oldest = Math.max(oldest, it.latest_age_h);
     });
-    const bkAgg = checks.length > 1
-      ? `<div class="node-backend-row" style="color:var(--dim);font-size:9px">${bk.ok} ok · ${bk.pending} pending · ${bk.missing} missing${bk.rp ? ` · ${bk.rp} RP` : ''}</div>`
+    const worst = (inv && inv.error)        ? 'error'
+                : (inv === null)            ? 'loading'
+                : (items.length === 0)      ? 'empty'
+                : (stoppedN || oldest > 48) ? 'warn'
+                : (pendingN)                ? 'pending'
+                :                             'ok';
+    const [dotCol, sumCol] =
+        worst === 'ok'                       ? ['var(--green)',  'var(--green)']
+      : worst === 'warn' || worst === 'pending' ? ['var(--orange)', 'var(--orange)']
+      : worst === 'error' || worst === 'empty' ? ['var(--red)',    'var(--red)']
+      :                                        ['var(--dim)',    'var(--dim)'];
+    const summary = worst === 'error'   ? 'vault read error'
+                  : worst === 'loading' ? 'loading…'
+                  : worst === 'empty'   ? 'no protected items'
+                  : `${items.length} protected${oldest ? ` · oldest ${oldest}h` : ''}${pendingN ? ` · ${pendingN} pending` : ''}${stoppedN ? ` · ${stoppedN} stopped` : ''}`;
+    const itemRows = items.map(it => {
+      const hasRP = it.latest_recovery_point != null;
+      const age = hasRP ? _relTime(it.latest_recovery_point) : 'first backup pending';
+      const col = !hasRP ? 'var(--orange)' : (it.latest_age_h > 48 ? 'var(--orange)' : 'var(--dim)');
+      const st  = (it.protection_state || '').toLowerCase();
+      const stopBadge = (st.includes('stop') || st.includes('paus'))
+        ? ' <span style="color:var(--red);font-size:9px">⚠ stopped</span>' : '';
+      return `<div class="row" style="padding:3px 4px;font-size:10px;display:flex;gap:6px;align-items:center">
+        <span style="flex:1">${it.name || (it.resource_id || '').split('/').pop()}</span>${stopBadge}
+        <span style="color:${col};font-size:9px">${age}</span>
+      </div>`;
+    }).join('');
+    const body = expanded
+      ? `<div style="margin-top:6px;border-top:1px solid var(--border);padding-top:6px">
+           ${items.length ? itemRows
+              : `<div class="node-backend-row" style="color:var(--dim);font-size:9px">${inv && inv.error ? 'Vault read error: ' + String(inv.error).slice(0, 80) : 'No protected items in this vault — nothing is backed up'}</div>`}
+           <div class="node-backend-row" style="margin-top:4px">
+             <button class="action" style="font-size:9px;padding:1px 5px" onclick="event.stopPropagation();refreshBackups()">↺ refresh</button>
+           </div>
+         </div>`
       : '';
-    const statusRow = worst==='ok'
-      ? `<div class="node-backend-row" style="color:var(--green)">backup ok</div>`
-      : worst==='warn'
-      ? `<div class="node-backend-row" style="color:var(--orange)">${warnLabel}</div>`
-      : worst==='fail'
-      ? `<div class="node-backend-row" style="color:var(--red)">backup missing</div>`
-      : worst==='error'
-      ? `<div class="node-backend-row" style="color:var(--red);font-size:9px">Azure API error</div>`
-      : worst==='loading'
-      ? `<div class="node-backend-row" style="color:var(--dim)"><span class="spinner"></span>auditing…</div>`
-      : worst==='nodata'
-      ? `<div class="node-backend-row" style="color:var(--dim)">no assets audited</div>`
-      : `<div class="node-backend-row" style="color:var(--dim)">audit pending
-          <button class="action" style="font-size:9px;padding:1px 5px;margin-left:4px"
-            onclick="event.stopPropagation();refreshAuditData()">↺</button></div>`;
-    const refreshBtn = worst !== 'loading'
-      ? `<div class="node-backend-row" style="margin-top:2px">
-           <button class="action" style="font-size:9px;padding:1px 5px"
-             onclick="event.stopPropagation();refreshAuditData()">↺ audit</button>
-         </div>` : '';
-    return `<div class="node-backend recover ${worst==='fail'||worst==='error'?'state-error':worst==='warn'?'state-warn':''}" id="nb-${b.name}">
-      <div class="node-backend-name">${dot} ${b.name}</div>
+    return `<div class="node-backend recover ${worst==='error'||worst==='empty'?'state-error':worst==='warn'||worst==='pending'?'state-warn':''}" id="nb-${b.name}"
+        style="cursor:pointer" onclick="event.stopPropagation();toggleBackend('${b.name}')">
+      <div class="node-backend-name"><span style="color:${dotCol}">●</span> ${b.name}</div>
       <div class="node-backend-type">backup vault</div>
-      ${statusRow}
-      ${bkAgg}
-      ${lastRun}
-      ${refreshBtn}
+      <div class="node-backend-row" style="justify-content:space-between">
+        <span style="color:${sumCol}">${summary}</span>
+        <span style="color:var(--blue);font-size:9px">${expanded ? '▾' : '▸'}</span>
+      </div>
+      ${body}
     </div>`;
   }).join('') || `<div style="color:var(--dim);font-size:10px">No action backends</div>`;
 
   return `<div class="topo-modules">
     <div class="topo-module">
       <div class="topo-module-label detect">DETECT</div>
-      <div class="topo-module-nodes">${detectNodes}</div>
+      <div class="topo-module-nodes">${detectNodes}${orphanNode}</div>
     </div>
     <div class="topo-module">
       <div class="topo-module-label protect">PROTECT</div>
@@ -2713,6 +2755,23 @@ async function refreshAuditData() {
   }
 }
 
+async function refreshBackups() {
+  if (_backupLoading) return;
+  _backupLoading = true;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 20000);
+  try {
+    const r = await fetch('/api/backups', { signal: ctrl.signal });
+    _backupItems = await r.json();   // {vault, items[], error?}
+  } catch (e) {
+    _backupItems = { vault: null, items: [], error: e.name === 'AbortError' ? 'timeout (20s)' : e.message };
+  } finally {
+    clearTimeout(timer);
+    _backupLoading = false;
+    renderInfra();
+  }
+}
+
 // ── Init ───────────────────────────────────────────────────────────────────────
 
 (async function init() {
@@ -2723,7 +2782,9 @@ async function refreshAuditData() {
   connectWS();
   setInterval(refreshCfgData,   30000);  // rules polling status
   setInterval(refreshAuditData, 300000); // backup/compute readiness (slow, Azure API)
+  setInterval(refreshBackups,   300000); // vault inventory for RECOVER (slow, Azure API)
   refreshAuditData();                    // first audit in background
+  refreshBackups();                      // first vault inventory in background
 })();
 </script>
 </body>

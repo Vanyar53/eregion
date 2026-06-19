@@ -313,6 +313,7 @@ async def config() -> dict:
                     "interval_s": rule.interval_s,
                     "asset_name": rule.asset_name,
                     "monitoring_backend_name": rule.monitoring_backend_name,
+                    "enabled": rule.enabled,
                     "last_poll": s.get("last_poll", ""),
                     "last_match": s.get("last_match", ""),
                     "last_error": s.get("last_error", ""),
@@ -787,6 +788,31 @@ async def audit_all() -> dict:
 
     audits = await asyncio.gather(*(_audit_one(rid, name) for rid, name in unique))
     return {"audits": list(audits)}
+
+
+@app.get("/api/backups")
+async def backups() -> dict:
+    """Vault-level backup inventory (RSV protected items) — the source of truth for
+    "do my backups exist?", independent of VM discovery/power state. One cheap
+    paginated call (list_backup_items); the per-VM /api/audit stays for readiness.
+    """
+    from glorfindel.actions import AzureConnector
+    from glorfindel.config import load_glorfindel_config
+
+    vault, rg = "rsv-annatar", "annatar"
+    try:
+        rsv = load_glorfindel_config().backup_vault()
+        if rsv:
+            vault = rsv.vault_name or vault
+            rg = rsv.resource_group or rg
+    except Exception:
+        pass
+    try:
+        connector = AzureConnector(dry_run=False)
+        items = await asyncio.to_thread(connector.list_backup_items, vault, rg)
+        return {"vault": vault, "items": items}
+    except Exception as e:
+        return {"vault": vault, "items": [], "error": str(e)}
 
 
 @app.get("/api/actions/{vm_name}")

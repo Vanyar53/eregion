@@ -64,6 +64,9 @@ async def state() -> dict:
                 "since": _iso.get("isolated_at", ""),
                 "nsg_scope": _iso.get("nsg_scope", ""),  # "nic" | "subnet"
                 "nsg": _iso.get("nsg_name", "") or _iso.get("nsg", ""),
+                # placements[] = one deny placement per NIC (multi-NIC coverage). The UI
+                # shows "N NICs" when >1 so the operator sees full coverage, not just one NSG.
+                "placements": _iso.get("placements", []),
             })
         for b in blocks.get(resource_id, []):
             states.append({
@@ -74,6 +77,7 @@ async def state() -> dict:
                 "nsg": b.get("nsg", ""),       # "rg/name" of the NSG holding the rule
                 "rule": b.get("rule", ""),
                 "scoped": b.get("scoped", True),  # False once promoted subnet-wide
+                "placements": b.get("placements", []),  # one rule per NIC (multi-NIC block)
             })
         resources.append({
             "resource_id": resource_id,
@@ -270,6 +274,7 @@ async def config() -> dict:
     known_resources: list[dict] = []
     backends_info: list[dict] = []
     assets_info: list[dict] = []
+    detection_is_inert = False  # True if no rule can poll → detection fires nothing
     rules_candidates = [
         Path("glorfindel/rules/azure/detection_rules.yaml"),
         Path(__file__).parent / "rules" / "azure" / "detection_rules.yaml",
@@ -279,9 +284,14 @@ async def config() -> dict:
     )
     if rules_path:
         try:
-            from glorfindel.detection_rules import _load_status, load_config
+            from glorfindel.detection_rules import (
+                _load_status,
+                detection_inert,
+                load_config,
+            )
             cfg = load_config(rules_path, glorfindel_cfg=glorfindel_cfg)
             status = _load_status()
+            detection_is_inert = detection_inert(cfg.rules)
 
             for b in cfg.backends:
                 backends_info.append({
@@ -342,6 +352,7 @@ async def config() -> dict:
         "detection": {
             "rules": rules_info,
             "rules_file": str(rules_path) if rules_path else None,
+            "inert": detection_is_inert,
         },
         "monitoring_backends": backends_info,
         "assets": assets_info,

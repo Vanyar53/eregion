@@ -664,6 +664,18 @@ function _scopeNote(s) {
   return ` <span style="${base};border:1px solid var(--border)" title="Rule on the VM's own NIC NSG — affects this VM only.">VM NSG</span>`;
 }
 
+// Multi-NIC coverage chip — a VM can have several NICs, each behind its own NSG.
+// isolate_vm/block place one deny per NIC (placements[]); show "N NICs" so the operator
+// sees full coverage (a one-NSG badge could read as if only the primary NIC were covered).
+// Only shown when >1 NIC; single-NIC keeps the badge clean.
+function _nicNote(s) {
+  const n = Array.isArray(s?.placements) ? s.placements.length : 0;
+  if (n <= 1) return '';
+  const nsgs = new Set(s.placements.map(p => p.nsg || `${p.nsg_rg}/${p.nsg_name}`)).size;
+  const base = 'font-size:8px;font-weight:600;padding:0 4px;border-radius:3px;flex-shrink:0';
+  return ` <span style="${base};color:var(--cyan);border:1px solid color-mix(in srgb,var(--cyan) 35%,var(--border))" title="Deny placed on all ${n} NICs of this VM (${nsgs} NSG${nsgs>1?'s':''}) — full coverage.">${n} NICs</span>`;
+}
+
 // "Extend to subnet" affordance for an existing VM-scoped block (operator decision).
 // Hidden once the block is already subnet-wide (scoped === false).
 function _extendBtn(s, vmName) {
@@ -1414,10 +1426,23 @@ function _renderModules(rules, detectBackends, recoverBackends, resources) {
     </div>`;
   }).join('') || `<div style="color:var(--dim);font-size:10px">No action backends</div>`;
 
+  // Detection inert = no rule can poll a backend (no monitoring backend resolved, or
+  // all rules disabled) → the system detects NOTHING. Honest signal > silence: shout it
+  // above DETECT so an inert deployment never looks healthy. Pendant UI de la bannière CLI.
+  const inertBanner = _cfgData?.detection?.inert
+    ? `<div style="margin-bottom:6px;padding:5px 8px;border:1px solid var(--red);border-radius:5px;
+         background:color-mix(in srgb, var(--red) 12%, transparent);color:var(--red);
+         font-size:10px;font-weight:700;line-height:1.4">
+         ⚠ DETECTION INERT — no monitoring backend resolved
+         <div style="font-weight:400;color:var(--text);font-size:9px;margin-top:2px">
+           No rule can poll — nothing is being detected. Configure a monitoring backend in glorfindel-config.yaml.
+         </div>
+       </div>`
+    : '';
   return `<div class="topo-modules">
     <div class="topo-module">
       <div class="topo-module-label detect">DETECT</div>
-      <div class="topo-module-nodes">${detectNodes}${orphanNode}</div>
+      <div class="topo-module-nodes">${inertBanner}${detectNodes}${orphanNode}</div>
     </div>
     <div class="topo-module">
       <div class="topo-module-label protect">PROTECT</div>
@@ -1496,9 +1521,9 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
     restoreInfo ? `<span class="badge restoring" style="font-size:9px">🔄 RESTORING · ${restoreInfo.elapsed_label}</span>` : '',
     ...states.map(s => s.type === 'isolated'
       ? `<span class="badge isolated" style="font-size:9px${!isExpanded ? ';cursor:pointer' : ''}"
-           ${!isExpanded ? `onclick="event.stopPropagation();showIsolationModal('${vm_name}')"` : ''}>ISOLATED · ${age(s.since)}</span>${_scopeNote(s)}`
+           ${!isExpanded ? `onclick="event.stopPropagation();showIsolationModal('${vm_name}')"` : ''}>ISOLATED · ${age(s.since)}</span>${_scopeNote(s)}${_nicNote(s)}`
       : `<span class="badge blocked" style="font-size:9px${!isExpanded ? ';cursor:pointer' : ''}"
-           ${!isExpanded ? `onclick="event.stopPropagation();showIsolationModal('${vm_name}')"` : ''}>BLOCKED ${s.ip} · ${age(s.since)}</span>${_scopeNote(s)}`),
+           ${!isExpanded ? `onclick="event.stopPropagation();showIsolationModal('${vm_name}')"` : ''}>BLOCKED ${s.ip} · ${age(s.since)}</span>${_scopeNote(s)}${_nicNote(s)}`),
     escBadge,
   ].filter(Boolean).join('');
 
@@ -1547,11 +1572,11 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
     let corrBtn = '';
     if (a.action === 'isolate_vm' && isIsolated) {
       const s = states.find(s => s.type === 'isolated');
-      badge   = s ? `<span class="badge isolated" style="font-size:9px;cursor:default">ISOLATED · ${age(s.since)}</span>${_scopeNote(s)}` : '';
+      badge   = s ? `<span class="badge isolated" style="font-size:9px;cursor:default">ISOLATED · ${age(s.since)}</span>${_scopeNote(s)}${_nicNote(s)}` : '';
       corrBtn = `<button class="action danger" onclick="event.stopPropagation();confirmRelease('${vm_name}')" style="font-size:9px;padding:2px 7px;margin-left:auto">↩️ Release</button>`;
     } else if (a.action === 'block_suspicious_ip' && isBlocked) {
       const s = states.find(s => s.type === 'blocked');
-      badge   = s ? `<span class="badge blocked" style="font-size:9px;cursor:default">BLOCKED ${s.ip} · ${age(s.since)}</span>${_scopeNote(s)}` : '';
+      badge   = s ? `<span class="badge blocked" style="font-size:9px;cursor:default">BLOCKED ${s.ip} · ${age(s.since)}</span>${_scopeNote(s)}${_nicNote(s)}` : '';
       corrBtn = `${_extendBtn(s, vm_name)}<button class="action danger" onclick="event.stopPropagation();confirmUnblock('${vm_name}')" style="font-size:9px;padding:2px 7px;margin-left:auto">↩️ Unblock</button>`;
     }
 
@@ -1582,14 +1607,14 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
   if (isIsolated && !coveredByDec.has('isolate_vm')) {
     const s = states.find(s => s.type === 'isolated');
     fallbackRows.push(`<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
-      <span class="badge isolated" style="font-size:9px;cursor:default">ISOLATED · ${age(s?.since)}</span>${_scopeNote(s)}
+      <span class="badge isolated" style="font-size:9px;cursor:default">ISOLATED · ${age(s?.since)}</span>${_scopeNote(s)}${_nicNote(s)}
       <button class="action danger" onclick="event.stopPropagation();confirmRelease('${vm_name}')" style="font-size:9px;padding:2px 7px">↩️ Release</button>
     </div>`);
   }
   if (isBlocked && !coveredByDec.has('block_suspicious_ip')) {
     states.filter(s => s.type === 'blocked').forEach(s => fallbackRows.push(
       `<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
-        <span class="badge blocked" style="font-size:9px;cursor:default">BLOCKED ${s.ip} · ${age(s.since)}</span>${_scopeNote(s)}
+        <span class="badge blocked" style="font-size:9px;cursor:default">BLOCKED ${s.ip} · ${age(s.since)}</span>${_scopeNote(s)}${_nicNote(s)}
         ${_extendBtn(s, vm_name)}
         <button class="action danger" onclick="event.stopPropagation();confirmUnblock('${vm_name}')" style="font-size:9px;padding:2px 7px">↩️ Unblock</button>
       </div>`));

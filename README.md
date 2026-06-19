@@ -457,7 +457,8 @@ glorfindel/
                          audit, approve-rule, reject-rule, check-ttl, bot, dashboard, war-room
   escalations.py       → persistent escalation log (~/.glorfindel/escalations.jsonl)
                          types: low_confidence, destructive_action, verification_failed,
-                                proposed_rule, proposed_action, posture_gap
+                                proposed_rule, proposed_action, posture_gap,
+                                mode_hold, write_blocked, action_failed
   bot.py               → Discord bot: one thread per VM, Ack/Restore/Revert buttons, /pending command
   tui.py               → Rich full-screen TUI: resources + feed + escalations, keyboard shortcuts a/r/v
   api.py               → FastAPI War Room: /api/state (autonomy_modes, read_only, capability),
@@ -561,7 +562,7 @@ class AwsConnector(CloudConnector):
     def release_isolation(self, resource_id) -> dict: ...
 ```
 
-Adding AWS = one class. Agent logic, scenarios, and RAG memory don't change.
+The agent logic, scenarios, and RAG memory are provider-agnostic — they don't change. The connector itself is more than a stub, though: real isolation has to handle the provider's network topology (on Azure that means NIC-level vs subnet NSGs, multi-NIC VMs, and rule priorities — see `actions.py`). Budget for the connector, not a one-liner.
 
 ## Operational notes
 

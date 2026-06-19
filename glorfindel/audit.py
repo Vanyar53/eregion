@@ -169,6 +169,14 @@ def _check_backup(resource_id: str, connector, vault: str, vault_rg: str = "") -
     if res.get("dry_run"):
         return AuditCheck("restore_from_backup", "Backup vault", "skip", "Skipped in dry-run")
 
+    if res.get("not_backupable"):
+        # VMSS instance (e.g. AKS node) — IaaS-VM backup doesn't apply. Not a gap.
+        return AuditCheck(
+            action="restore_from_backup", name="Backup vault", status="skip",
+            message=f"{vm} is a VMSS instance (e.g. AKS node) — not an IaaS-VM backup item",
+            data={"not_backupable": True},
+        )
+
     if res.get("ok"):
         points = res.get("points", 0)
         age_h = res.get("latest_age_h", 0)

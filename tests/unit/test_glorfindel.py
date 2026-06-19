@@ -166,6 +166,19 @@ def test_check_backup_points_protected_no_rp(monkeypatch):
     assert "not linked" not in res["error"].lower()
 
 
+def test_check_backup_points_vmss_instance_not_backupable():
+    """A VMSS instance (AKS node) short-circuits to not_backupable WITHOUT an Azure call
+    — same error as an unprotected VM otherwise, so the resource shape is the only tell."""
+    from glorfindel.actions import AzureConnector
+    connector = AzureConnector(dry_run=False)  # no clients set — must not be reached
+    rid = ("/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute"
+           "/virtualMachineScaleSets/aks-pool/virtualMachines/0")
+    res = connector.check_backup_points(rid, vault="rsv")
+    assert res["not_backupable"] is True
+    assert res["ok"] is False
+    assert res["iam"] is False
+
+
 def test_check_backup_points_not_protected(monkeypatch):
     """Empty RP list + item is NOT a protected item → protected=False (not linked)."""
     connector = _backup_connector(monkeypatch, rps=[], protected_get_raises=True)

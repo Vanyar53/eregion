@@ -127,7 +127,12 @@ class PostureChecker:
         if vault:
             try:
                 res = self._connector.check_backup_points(rid, vault, vault_rg)
-                if not res.get("ok") and res.get("protected"):
+                if res.get("not_backupable"):
+                    # VMSS instance (e.g. AKS node) — not an IaaS-VM backup item. No gap:
+                    # raising "not linked to vault" with an `enable-for-vm` fix is nonsense
+                    # for a node that is ephemeral by design (recreated from the pool).
+                    pass
+                elif not res.get("ok") and res.get("protected"):
                     # Protected, but the first backup hasn't run yet. NOT a "not linked"
                     # critical — restore will be possible once a recovery point exists.
                     gaps.append(PostureGap(

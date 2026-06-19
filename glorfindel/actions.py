@@ -943,6 +943,18 @@ class AzureConnector(CloudConnector):
         """
         if self.dry_run:
             return {"ok": True, "vault": vault, "dry_run": True}
+        # A VMSS instance (e.g. an AKS node, .../virtualMachineScaleSets/<vmss>/
+        # virtualMachines/<n>) is NOT an IaaS-VM backup item — it produces the same
+        # BMSUserErrorDataSourceObjectNotFound as a genuinely unprotected standalone VM,
+        # so the error alone can't tell them apart. Short-circuit here: it's not
+        # backupable by design (nodes are ephemeral, recreated from the node pool), so
+        # posture/audit must not raise a false "not linked to vault" gap.
+        if _is_vmss_instance(resource_id):
+            return {
+                "ok": False, "iam": False, "vault": vault, "not_backupable": True,
+                "error": f"{resource_id.split('/')[-1]} is a VMSS instance — not an "
+                         "IaaS-VM backup item (e.g. AKS node)",
+            }
         try:
             from datetime import datetime, timezone
             from azure.mgmt.recoveryservicesbackup import RecoveryServicesBackupClient
@@ -1306,6 +1318,13 @@ def _is_iam_error(err: str) -> bool:
     """Return True if the error is an Azure authorization/permission failure."""
     markers = ("AuthorizationFailed", "Forbidden", "403", "does not have authorization")
     return any(m in err for m in markers)
+
+
+def _is_vmss_instance(resource_id: str) -> bool:
+    """True if the resource is a Virtual Machine Scale Set instance (e.g. an AKS node),
+    not a standalone Microsoft.Compute/virtualMachines. Such instances aren't IaaS-VM
+    backup items, so the backup readiness check doesn't apply to them."""
+    return "/virtualmachinescalesets/" in resource_id.lower()
 
 
 def _parse_vm_resource_id(resource_id: str) -> tuple[str, str]:

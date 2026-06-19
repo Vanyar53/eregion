@@ -227,6 +227,18 @@ def test_run_backup_protected_no_recovery_point_warns_not_fails():
     assert "enable-for-vm" not in bk.fix   # NOT the "not linked" guidance
 
 
+def test_backup_check_vmss_instance_skipped_not_failed():
+    """A VMSS instance (AKS node) → backup check is 'skip', not a fail with enable-for-vm."""
+    c = _connector(backup={"ok": False, "not_backupable": True, "vault": "rsv-annatar",
+                           "error": "VMSS instance"})
+    result = run(RESOURCE_ID, c)
+    bk = next(ch for ch in result.checks if ch.name == "Backup vault")
+    assert bk.status == "skip"
+    assert "enable-for-vm" not in bk.fix
+    assert bk.data.get("not_backupable") is True
+    assert result.ready is True  # skip doesn't block readiness
+
+
 def test_run_backup_warn_stale():
     c = _connector(backup={"ok": True, "vault": "rsv-annatar", "points": 2, "latest_age_h": 52.0})
     result = run(RESOURCE_ID, c)

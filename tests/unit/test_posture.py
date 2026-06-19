@@ -75,6 +75,24 @@ def test_backup_linked_gap(tmp_path):
     assert any(g.severity == "critical" for g in gaps)
 
 
+def test_vmss_node_raises_no_backup_gap(tmp_path):
+    """A VMSS instance (AKS node) is not an IaaS-VM backup item → check_backup_points
+    returns not_backupable → NO backup gap (the bogus 'not linked to vault' that
+    looped on Jonathan's cluster)."""
+    conn = _connector()
+    conn.check_backup_points.return_value = {
+        "ok": False, "not_backupable": True, "error": "VMSS instance — not a backup item",
+    }
+    checker = PostureChecker(_cfg(), conn, dry_run=False)
+    checker._state = {}
+    gaps = checker._check_asset(_asset(
+        name="aks-node-0",
+        rid="/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute"
+            "/virtualMachineScaleSets/aks-pool/virtualMachines/0",
+    ))
+    assert not any(g.check in ("backup_linked", "backup_recent") for g in gaps)
+
+
 def test_backup_protected_no_rp_warns_not_critical(tmp_path):
     """Protected VM with no recovery point yet → warn 'first backup pending',
     NOT a critical 'not linked to vault' gap (the bug: elrond was protected, just

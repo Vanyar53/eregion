@@ -207,11 +207,38 @@ class AzureConnector(CloudConnector):
             self._compute = compute
             self._network = network  # assign last — gate for the fast path
 
-    def isolate_vm(self, resource_id: str) -> dict:
-        """Apply a deny-all NSG rule (priority 100) to the VM's NSG.
+    def _put_deny_rule(
+        self, nsg_rg: str, nsg_name: str, name: str, direction: str, priority: int,
+        *, src=None, srcs=None, dst=None, dsts=None,
+    ) -> None:
+        """Create/update a Deny security rule. Use srcs/dsts (lists, augmented rule) to
+        cover several IPs in one rule; src/dst for a single prefix like '*'."""
+        from azure.mgmt.network.models import SecurityRule
+        kwargs = dict(
+            name=name, protocol="*",
+            source_port_range="*", destination_port_range="*",
+            access="Deny", priority=priority, direction=direction,
+        )
+        if srcs is not None:
+            kwargs["source_address_prefixes"] = srcs
+        else:
+            kwargs["source_address_prefix"] = src
+        if dsts is not None:
+            kwargs["destination_address_prefixes"] = dsts
+        else:
+            kwargs["destination_address_prefix"] = dst
+        self._network.security_rules.begin_create_or_update(
+            nsg_rg, nsg_name, name, SecurityRule(**kwargs)
+        ).result()
 
-        If existing rules occupy priority 100, they are shifted +100 and saved
-        to ~/.glorfindel/isolation/<vm>.json for restoration on release.
+    def isolate_vm(self, resource_id: str) -> dict:
+        """Deny all traffic on EVERY NIC of the VM (fully reversible).
+
+        A VM can have several NICs, each behind its own NSG (or its subnet's NSG).
+        Isolating only the primary NIC leaves the others open. So we place one deny
+        pair per NIC: any/any on a NIC-level NSG (priority 100, bumping conflicts), or
+        scoped to all the NIC's private IPs on a shared subnet NSG (free priority, no
+        bump → other VMs untouched). State records every placement for release.
         """
         if self.dry_run:
             return {"status": "dry_run", "action": "isolate_vm", "resource_id": resource_id}
@@ -219,91 +246,86 @@ class AzureConnector(CloudConnector):
         self._guard_write("isolate_vm")
         self._ensure_clients()
         rg, vm_name = _parse_vm_resource_id(resource_id)
-        nic_id = self._get_primary_nic_id(rg, vm_name)
-        nsg_rg, nsg_name, nsg_scope = self._get_nic_nsg(nic_id)
+        targets = self._get_vm_nic_targets(rg, vm_name)
 
-        from azure.mgmt.network.models import SecurityRule
+        placements: list[dict] = []
+        assigned: dict[str, set] = {}  # nsg_key → priorities used during THIS call
+        for t in targets:
+            nsg_rg, nsg_name, scope = t["nsg_rg"], t["nsg_name"], t["scope"]
+            nsg_key = f"{nsg_rg}/{nsg_name}"
+            base = self._placement_rule_base("glorfindel-iso", vm_name, t["nic_short"], t["nic_id"])
+            in_name, out_name = base, f"{base}-out"
+            existing = list(self._network.security_rules.list(nsg_rg, nsg_name))
+            used = {r.priority for r in existing} | assigned.get(nsg_key, set())
+            bumped: list[dict] = []
 
-        existing = list(self._network.security_rules.list(nsg_rg, nsg_name))
-        used_priorities = {r.priority for r in existing}
-        in_name, out_name = self._isolation_rule_names(vm_name, nsg_scope)
-        bumped = []
-
-        if nsg_scope == "subnet":
-            # Shared subnet NSG: a deny any/any would cut EVERY VM. Scope the deny to
-            # THIS VM's private IP so only the target is isolated. Use a free priority
-            # (don't bump others' rules) so several VMs can be isolated independently.
-            vm_ip = self._get_nic_private_ip(nic_id)
-            priority = next(
-                p for p in range(self.ISOLATION_PRIORITY, 4000)
-                if p not in used_priorities
-            )
-            rules = [
-                ("Inbound", in_name, "*", vm_ip),     # deny inbound TO this VM
-                ("Outbound", out_name, vm_ip, "*"),   # deny outbound FROM this VM
-            ]
-        else:
-            # NIC-level NSG: scoped to this VM already → a deny any/any is safe.
-            # Insist on ISOLATION_PRIORITY, shifting any conflicting non-glorfindel rule.
-            for r in existing:
-                if r.priority == self.ISOLATION_PRIORITY and not r.name.startswith("glorfindel-"):
-                    new_prio = next(
-                        p for p in range(self.ISOLATION_PRIORITY + 100, 4000, 100)
-                        if p not in used_priorities
+            if scope == "subnet":
+                ips = t["private_ips"]
+                if not ips:
+                    raise RuntimeError(
+                        f"NIC {t['nic_short']} has no private IP — cannot scope isolation "
+                        "on its shared subnet NSG"
                     )
-                    used_priorities.add(new_prio)
-                    r.priority = new_prio
-                    self._network.security_rules.begin_create_or_update(nsg_rg, nsg_name, r.name, r).result()
-                    bumped.append({"name": r.name, "original_priority": self.ISOLATION_PRIORITY})
-            priority = self.ISOLATION_PRIORITY
-            rules = [
-                ("Inbound", in_name, "*", "*"),
-                ("Outbound", out_name, "*", "*"),
-            ]
+                priority = next(p for p in range(self.ISOLATION_PRIORITY, 4000) if p not in used)
+                self._put_deny_rule(nsg_rg, nsg_name, in_name, "Inbound", priority, src="*", dsts=ips)
+                self._put_deny_rule(nsg_rg, nsg_name, out_name, "Outbound", priority, srcs=ips, dst="*")
+            else:
+                # NIC-level NSG (this VM only) — any/any is safe. Insist on priority 100
+                # so the deny wins; shift any conflicting non-glorfindel rule off it.
+                for r in existing:
+                    if r.priority == self.ISOLATION_PRIORITY and not r.name.startswith("glorfindel-"):
+                        new_prio = next(
+                            p for p in range(self.ISOLATION_PRIORITY + 100, 4000, 100)
+                            if p not in used
+                        )
+                        used.add(new_prio)
+                        r.priority = new_prio
+                        self._network.security_rules.begin_create_or_update(
+                            nsg_rg, nsg_name, r.name, r).result()
+                        bumped.append({"name": r.name, "original_priority": self.ISOLATION_PRIORITY})
+                priority = self.ISOLATION_PRIORITY
+                self._put_deny_rule(nsg_rg, nsg_name, in_name, "Inbound", priority, src="*", dst="*")
+                self._put_deny_rule(nsg_rg, nsg_name, out_name, "Outbound", priority, src="*", dst="*")
 
-        for direction, rule_name, src, dst in rules:
-            self._network.security_rules.begin_create_or_update(
-                nsg_rg, nsg_name, rule_name,
-                SecurityRule(
-                    name=rule_name, protocol="*",
-                    source_port_range="*", destination_port_range="*",
-                    source_address_prefix=src, destination_address_prefix=dst,
-                    access="Deny", priority=priority, direction=direction,
-                ),
-            ).result()
+            assigned.setdefault(nsg_key, set()).add(priority)
+            placements.append({
+                "nic_id": t["nic_id"], "nsg_rg": nsg_rg, "nsg_name": nsg_name,
+                "scope": scope, "ips": t["private_ips"], "priority": priority,
+                "rule_in": in_name, "rule_out": out_name, "bumped": bumped,
+            })
 
-        # Persist isolation state ONLY after the deny rules are confirmed on Azure.
-        # Writing it earlier left an orphan ~/.glorfindel/isolation/<vm>.json (War Room
-        # showing ISOLATED) when the NSG write failed with 403 — no rule, but stale state.
+        # Persist state ONLY after every deny rule is confirmed on Azure (a 403 mid-way
+        # must not leave an orphan "ISOLATED" state). placements[] drives release/verify;
+        # the flat nsg/nsg_scope/rule_names fields keep /api/state + legacy paths working.
         from datetime import datetime, timezone
+        first = placements[0]
         _save_isolation_state(vm_name, {
-            "nsg_rg": nsg_rg,
-            "nsg_name": nsg_name,
-            "nsg_scope": nsg_scope,
-            # scoped=True → the rule only affects THIS VM (NIC NSG, or subnet NSG with
-            # VM-IP addressing). A future subnet-wide opt-in (any on a shared NSG) would
-            # set this False → War Room shows the ⚠ "subnet-wide" blast-radius chip.
-            "scoped": True,
-            "bumped": bumped,
-            "rule_names": [in_name, out_name],
             "resource_id": resource_id,
             "isolated_at": datetime.now(timezone.utc).isoformat(),
+            "scoped": True,
+            "placements": placements,
+            "nsg_rg": first["nsg_rg"], "nsg_name": first["nsg_name"], "nsg_scope": first["scope"],
+            "rule_names": [p["rule_in"] for p in placements] + [p["rule_out"] for p in placements],
         })
 
         out = {
             "status": "isolated",
-            "nsg": f"{nsg_rg}/{nsg_name}",
-            "nsg_scope": nsg_scope,
-            "scoped": True,
-            "rule": in_name,
             "resource_id": resource_id,
+            "scoped": True,
+            "nics_covered": len(placements),
+            "placements": [
+                {"nsg": f'{p["nsg_rg"]}/{p["nsg_name"]}', "scope": p["scope"]}
+                for p in placements
+            ],
+            # Back-compat summary (first placement)
+            "nsg": f'{first["nsg_rg"]}/{first["nsg_name"]}',
+            "nsg_scope": first["scope"],
+            "rule": first["rule_in"],
         }
-        if nsg_scope == "subnet":
-            # Now SAFE on a shared subnet NSG: isolation is scoped to this VM's IP,
-            # not the whole subnet. Note it so the operator knows it's a shared NSG.
+        if any(p["scope"] == "subnet" for p in placements):
             out["note"] = (
-                f"NSG {nsg_rg}/{nsg_name} is subnet-level — isolation scoped to this "
-                "VM's private IP only (no impact on other VMs on the subnet)."
+                "subnet-level NSG involved — isolation scoped to this VM's private IP(s) "
+                "only (no impact on other VMs on the subnet)."
             )
         return out
 
@@ -314,31 +336,49 @@ class AzureConnector(CloudConnector):
         self._guard_write("release_isolation")
         self._ensure_clients()
         rg, vm_name = _parse_vm_resource_id(resource_id)
-        nic_id = self._get_primary_nic_id(rg, vm_name)
-        nsg_rg, nsg_name, nsg_scope = self._get_nic_nsg(nic_id)
+        state = _load_isolation_state(vm_name) or {}
 
-        # Delete the rule names this VM could have under either scope (state-stored
-        # names + both fixed and VM-suffixed), so cleanup is robust to scope drift.
-        state = _load_isolation_state(vm_name)
-        names = set((state or {}).get("rule_names", []))
-        names.update([
-            self.ISOLATION_RULE_NAME, f"{self.ISOLATION_RULE_NAME}-out",
-            f"{self.ISOLATION_RULE_NAME}-{vm_name}", f"{self.ISOLATION_RULE_NAME}-{vm_name}-out",
-        ])
-        for rule_name in names:
-            try:
-                self._network.security_rules.begin_delete(nsg_rg, nsg_name, rule_name).result()
-            except Exception:
-                pass
-
-        # Restore bumped rules to their original priorities (NIC-scope only)
-        if state:
+        if state.get("placements"):
+            # Multi-NIC: undo each placement on its own NSG (delete rules, restore bumps).
+            for p in state["placements"]:
+                p_rg, p_name = p["nsg_rg"], p["nsg_name"]
+                for rule_name in (p.get("rule_in"), p.get("rule_out")):
+                    if rule_name:
+                        try:
+                            self._network.security_rules.begin_delete(p_rg, p_name, rule_name).result()
+                        except Exception:
+                            pass
+                for rule_info in p.get("bumped", []):
+                    try:
+                        r = self._network.security_rules.get(p_rg, p_name, rule_info["name"])
+                        r.priority = rule_info["original_priority"]
+                        self._network.security_rules.begin_create_or_update(p_rg, p_name, r.name, r).result()
+                    except Exception:
+                        pass
+        else:
+            # Legacy single-NSG state (isolated before the multi-NIC upgrade) — resolve
+            # via the primary NIC and delete both fixed and VM-suffixed rule names.
+            nic_id = self._get_primary_nic_id(rg, vm_name)
+            nsg_rg, nsg_name, _ = self._get_nic_nsg(nic_id)
+            names = set(state.get("rule_names", []))
+            names.update([
+                self.ISOLATION_RULE_NAME, f"{self.ISOLATION_RULE_NAME}-out",
+                f"{self.ISOLATION_RULE_NAME}-{vm_name}", f"{self.ISOLATION_RULE_NAME}-{vm_name}-out",
+            ])
+            for rule_name in names:
+                try:
+                    self._network.security_rules.begin_delete(nsg_rg, nsg_name, rule_name).result()
+                except Exception:
+                    pass
             for rule_info in state.get("bumped", []):
-                r = self._network.security_rules.get(nsg_rg, nsg_name, rule_info["name"])
-                r.priority = rule_info["original_priority"]
-                self._network.security_rules.begin_create_or_update(nsg_rg, nsg_name, r.name, r).result()
-        _clear_isolation_state(vm_name)  # always clear — even if state was already absent
+                try:
+                    r = self._network.security_rules.get(nsg_rg, nsg_name, rule_info["name"])
+                    r.priority = rule_info["original_priority"]
+                    self._network.security_rules.begin_create_or_update(nsg_rg, nsg_name, r.name, r).result()
+                except Exception:
+                    pass
 
+        _clear_isolation_state(vm_name)  # always clear — even if state was already absent
         return {"status": "released", "resource_id": resource_id}
 
     def block_suspicious_ip(
@@ -364,91 +404,123 @@ class AzureConnector(CloudConnector):
         self._guard_write("block_suspicious_ip")
         self._ensure_clients()
         rg, vm_name = _parse_vm_resource_id(resource_id)
-        nic_id = self._get_primary_nic_id(rg, vm_name)
-
-        from azure.mgmt.network.models import SecurityRule
 
         if scope == "subnet":
-            # Perimeter block: one any rule on the SUBNET NSG (always the subnet's,
-            # even if the NIC has its own NSG). Covers all VMs on the subnet + future.
-            nsg_rg, nsg_name = self._get_subnet_nsg(nic_id)
-            nsg_scope = "subnet"
-            scoped = False
-            vm_ip = "*"
-            rule_name = self._block_rule_name(ip, vm_name, scope="vm")  # shared (no VM suffix)
-        else:
-            # VM-scoped block (autonomous default) — only this VM. See _block_rule_name.
-            nsg_rg, nsg_name, nsg_scope = self._get_nic_nsg(nic_id)
-            scoped = True
-            # subnet NSG → address to the VM IP so other VMs aren't touched; nic → any.
-            vm_ip = self._get_nic_private_ip(nic_id) if nsg_scope == "subnet" else "*"
-            rule_name = self._block_rule_name(ip, vm_name, nsg_scope)
+            return self._block_ip_subnet(ip, resource_id, rg, vm_name, replace)
+        return self._block_ip_vm(ip, resource_id, rg, vm_name)
+
+    def _block_ip_vm(self, ip: str, resource_id: str, rg: str, vm_name: str) -> dict:
+        """VM-scoped block (autonomous default) — deny the attacker IP on EVERY NIC so a
+        secondary NIC doesn't leave the attacker a path. One rule per NIC: any↔attacker
+        on a NIC NSG, attacker↔(all the NIC's IPs) on a shared subnet NSG."""
+        prefix = self._block_rule_prefix(ip)
+        targets = self._get_vm_nic_targets(rg, vm_name)
+        placements: list[dict] = []
+        assigned: dict[str, set] = {}
+        for t in targets:
+            nsg_rg, nsg_name, scope_t = t["nsg_rg"], t["nsg_name"], t["scope"]
+            nsg_key = f"{nsg_rg}/{nsg_name}"
+            base = self._placement_rule_base(prefix, vm_name, t["nic_short"], t["nic_id"])
+            in_name, out_name = base, f"{base}-out"
+            existing = list(self._network.security_rules.list(nsg_rg, nsg_name))
+            used = {r.priority for r in existing} | assigned.get(nsg_key, set())
+            priority = next(p for p in range(200, 4000, 10) if p not in used)
+            if scope_t == "subnet":
+                ips = t["private_ips"]
+                self._put_deny_rule(nsg_rg, nsg_name, in_name, "Inbound", priority, src=ip, dsts=ips)
+                self._put_deny_rule(nsg_rg, nsg_name, out_name, "Outbound", priority, srcs=ips, dst=ip)
+            else:
+                self._put_deny_rule(nsg_rg, nsg_name, in_name, "Inbound", priority, src=ip, dst="*")
+                self._put_deny_rule(nsg_rg, nsg_name, out_name, "Outbound", priority, src="*", dst=ip)
+            assigned.setdefault(nsg_key, set()).add(priority)
+            placements.append({
+                "nsg_rg": nsg_rg, "nsg_name": nsg_name, "scope": scope_t,
+                "ips": t["private_ips"], "rule": base,
+            })
+
+        first = placements[0]
+        _save_block_state(
+            vm_name, ip, resource_id,
+            nsg=f'{first["nsg_rg"]}/{first["nsg_name"]}', nsg_scope=first["scope"],
+            rule=first["rule"], scoped=True, placements=placements,
+        )
+        out = {
+            "status": "blocked", "ip": ip, "scoped": True, "resource_id": resource_id,
+            "nics_covered": len(placements),
+            "nsg": f'{first["nsg_rg"]}/{first["nsg_name"]}',
+            "nsg_scope": first["scope"], "rule": first["rule"],
+            "placements": [
+                {"nsg": f'{p["nsg_rg"]}/{p["nsg_name"]}', "scope": p["scope"]}
+                for p in placements
+            ],
+        }
+        if any(p["scope"] == "subnet" for p in placements):
+            out["note"] = (
+                "subnet-level NSG involved — block scoped to this VM's private IP(s) "
+                "(attacker still reaches other VMs until they detect it)."
+            )
+        return out
+
+    def _block_ip_subnet(
+        self, ip: str, resource_id: str, rg: str, vm_name: str, replace: bool
+    ) -> dict:
+        """Perimeter block — one any rule on the SUBNET NSG (covers all VMs on the
+        subnet + future). replace=True promotes a prior VM-scoped block: create the
+        subnet rule first, then drop the prior per-NIC rules (no protection gap)."""
+        nic_id = self._get_primary_nic_id(rg, vm_name)
+        nsg_rg, nsg_name = self._get_subnet_nsg(nic_id)
+        rule_name = self._block_rule_name(ip, vm_name, scope="vm")  # shared (no VM suffix)
 
         existing = list(self._network.security_rules.list(nsg_rg, nsg_name))
-        used_priorities = {r.priority for r in existing}
-        priority = next(p for p in range(200, 4000, 10) if p not in used_priorities)
-
-        for direction in ("Inbound", "Outbound"):
-            name = rule_name if direction == "Inbound" else f"{rule_name}-out"
-            if direction == "Inbound":
-                src, dst = ip, vm_ip       # deny attacker → VM (vm scope) / any (subnet)
-            else:
-                src, dst = vm_ip, ip       # deny VM (vm scope) / any (subnet) → attacker
-            self._network.security_rules.begin_create_or_update(
-                nsg_rg, nsg_name, name,
-                SecurityRule(
-                    name=name, protocol="*",
-                    source_port_range="*", destination_port_range="*",
-                    source_address_prefix=src, destination_address_prefix=dst,
-                    access="Deny", priority=priority, direction=direction,
-                ),
-            ).result()
+        used = {r.priority for r in existing}
+        priority = next(p for p in range(200, 4000, 10) if p not in used)
+        self._put_deny_rule(nsg_rg, nsg_name, rule_name, "Inbound", priority, src=ip, dst="*")
+        self._put_deny_rule(nsg_rg, nsg_name, f"{rule_name}-out", "Outbound", priority, src="*", dst=ip)
 
         promoted_from = None
-        if scope == "subnet" and replace:
-            # The subnet-wide rule is now in place (created above) → the prior VM-scoped
-            # rule for this IP is redundant. Delete it AFTER (create-then-delete → never
-            # a protection gap). Target the NSG recorded at block time (faithful), so a
-            # NIC-NSG VM-scoped rule is removed from its NIC NSG, not the subnet one.
+        if replace:
+            # Subnet rule now in place → drop the prior VM-scoped rules (every NIC).
             prev = next((e for e in _load_block_entries(vm_name) if e.get("ip") == ip), None)
-            old_rule = (prev or {}).get("rule") or self._block_rule_name(ip, vm_name, "subnet")
-            old_nsg = (prev or {}).get("nsg", f"{nsg_rg}/{nsg_name}")
-            old_rg, old_name = old_nsg.split("/", 1)
-            if old_rule != rule_name:  # don't delete the subnet rule we just created
-                for nm in (old_rule, f"{old_rule}-out"):
+            dropped = []
+            for pl in (prev or {}).get("placements", []):
+                for nm in (pl["rule"], f'{pl["rule"]}-out'):
+                    try:
+                        self._network.security_rules.begin_delete(pl["nsg_rg"], pl["nsg_name"], nm).result()
+                    except Exception:
+                        pass
+                dropped.append(pl["rule"])
+            # Legacy single-rule entry (no placements)
+            if prev and prev.get("rule") and not prev.get("placements") and prev["rule"] != rule_name:
+                old_rg, old_name = (prev.get("nsg") or f"{nsg_rg}/{nsg_name}").split("/", 1)
+                for nm in (prev["rule"], f'{prev["rule"]}-out'):
                     try:
                         self._network.security_rules.begin_delete(old_rg, old_name, nm).result()
                     except Exception:
                         pass
-                promoted_from = old_rule
-            _clear_block_state(vm_name, ip)  # drop the old entry so the new one is saved
+                dropped.append(prev["rule"])
+            if prev:
+                _clear_block_state(vm_name, ip)
+            promoted_from = dropped or None
 
         _save_block_state(
             vm_name, ip, resource_id,
-            nsg=f"{nsg_rg}/{nsg_name}", nsg_scope=nsg_scope, rule=rule_name, scoped=scoped,
+            nsg=f"{nsg_rg}/{nsg_name}", nsg_scope="subnet", rule=rule_name, scoped=False,
         )
         out = {
-            "status": "blocked",
-            "ip": ip,
-            "nsg": f"{nsg_rg}/{nsg_name}",
-            "nsg_scope": nsg_scope,
-            "scoped": scoped,
-            "rule": rule_name,
+            "status": "blocked", "ip": ip, "nsg": f"{nsg_rg}/{nsg_name}",
+            "nsg_scope": "subnet", "scoped": False, "rule": rule_name,
             "resource_id": resource_id,
-        }
-        if promoted_from:
-            out["promoted_from"] = promoted_from   # VM-scoped rule removed after promote
-        if scope == "subnet":
-            out["note"] = (
+            "note": (
                 f"NSG {nsg_rg}/{nsg_name} — perimeter block: this IP is denied for ALL "
                 "VMs on the subnet (and future ones)."
-            )
-        elif nsg_scope == "subnet":
-            out["note"] = (
-                f"NSG {nsg_rg}/{nsg_name} is subnet-level — block scoped to this VM's "
-                "private IP only (attacker still reaches other VMs until they detect it)."
-            )
+            ),
+        }
+        if promoted_from:
+            out["promoted_from"] = promoted_from
         return out
+
+    def _block_rule_prefix(self, ip: str) -> str:
+        return f"glorfindel-block-{ip.replace('.', '-').replace('/', '-')}"
 
     def snapshot(self, resource_id: str, vault: str = "rsv-annatar", wait: bool = True) -> str:
         """Trigger an RSV on-demand backup.
@@ -534,16 +606,34 @@ class AzureConnector(CloudConnector):
 
         self._ensure_clients()
         rg, vm_name = _parse_vm_resource_id(resource_id)
-        nic_id = self._get_primary_nic_id(rg, vm_name)
-        nsg_rg, nsg_name, nsg_scope = self._get_nic_nsg(nic_id)
+        targets = self._get_vm_nic_targets(rg, vm_name)
 
-        in_name, out_name = self._isolation_rule_names(vm_name, nsg_scope)
+        # Isolation holds only if EVERY NIC carries a deny pair — a single uncovered NIC
+        # is the multi-NIC gap (looks ISOLATED but traffic still flows on the other NIC).
+        uncovered: list[str] = []
+        for t in targets:
+            base = self._placement_rule_base("glorfindel-iso", vm_name, t["nic_short"], t["nic_id"])
+            if self._rules_present(t["nsg_rg"], t["nsg_name"], [base, f"{base}-out"]):
+                continue
+            # Legacy fallback: a VM isolated before the multi-NIC upgrade used the old
+            # fixed/VM-suffixed names on the primary NIC's NSG.
+            legacy_in, legacy_out = self._isolation_rule_names(vm_name, t["scope"])
+            if self._rules_present(t["nsg_rg"], t["nsg_name"], [legacy_in, legacy_out]):
+                continue
+            uncovered.append(t["nic_short"])
+
+        if uncovered:
+            return {"verified": False, "method": "nsg_check", "uncovered_nics": uncovered}
+        return {"verified": True, "method": "nsg_check", "nics_covered": len(targets)}
+
+    def _rules_present(self, nsg_rg: str, nsg_name: str, names: list[str]) -> bool:
+        """True if all named rules exist on the NSG."""
         try:
-            self._network.security_rules.get(nsg_rg, nsg_name, in_name)
-            self._network.security_rules.get(nsg_rg, nsg_name, out_name)
-            return {"verified": True, "method": "nsg_check", "nsg": f"{nsg_rg}/{nsg_name}"}
-        except Exception as e:
-            return {"verified": False, "method": "nsg_check", "error": str(e)}
+            for n in names:
+                self._network.security_rules.get(nsg_rg, nsg_name, n)
+            return True
+        except Exception:
+            return False
 
     def verify_snapshot(self, snap_id: str) -> dict:
         if self.dry_run:
@@ -739,15 +829,39 @@ class AzureConnector(CloudConnector):
 
         self._ensure_clients()
         rg, vm_name = _parse_vm_resource_id(resource_id)
-        nic_id = self._get_primary_nic_id(rg, vm_name)
-        nsg_rg, nsg_name, nsg_scope = self._get_nic_nsg(nic_id)
+        entry = next((e for e in _load_block_entries(vm_name) if e.get("ip") == ip), None)
 
-        rule_name = self._block_rule_name(ip, vm_name, nsg_scope)
-        try:
-            self._network.security_rules.get(nsg_rg, nsg_name, rule_name)
-            return {"verified": True, "method": "nsg_check", "rule": rule_name}
-        except Exception as e:
-            return {"verified": False, "method": "nsg_check", "error": str(e)}
+        # Multi-NIC VM block: confirmed only if every placement's rule is present.
+        if entry and entry.get("placements"):
+            missing = [
+                p["rule"] for p in entry["placements"]
+                if not self._rules_present(p["nsg_rg"], p["nsg_name"], [p["rule"]])
+            ]
+            if missing:
+                return {"verified": False, "method": "nsg_check", "missing_rules": missing}
+            return {"verified": True, "method": "nsg_check",
+                    "nics_covered": len(entry["placements"])}
+
+        # Perimeter (subnet) block, or legacy single-rule entry: check the recorded rule.
+        if entry and entry.get("nsg") and entry.get("rule"):
+            nsg_rg, nsg_name = entry["nsg"].split("/", 1)
+            if self._rules_present(nsg_rg, nsg_name, [entry["rule"]]):
+                return {"verified": True, "method": "nsg_check", "rule": entry["rule"]}
+            return {"verified": False, "method": "nsg_check", "error": "rule not found"}
+
+        # No state — recompute per-NIC names (multi-NIC) and check coverage.
+        prefix = self._block_rule_prefix(ip)
+        targets = self._get_vm_nic_targets(rg, vm_name)
+        uncovered = [
+            t["nic_short"] for t in targets
+            if not self._rules_present(
+                t["nsg_rg"], t["nsg_name"],
+                [self._placement_rule_base(prefix, vm_name, t["nic_short"], t["nic_id"])],
+            )
+        ]
+        if uncovered:
+            return {"verified": False, "method": "nsg_check", "uncovered_nics": uncovered}
+        return {"verified": True, "method": "nsg_check", "nics_covered": len(targets)}
 
     def unblock_ip(self, ip: str, resource_id: str) -> dict:
         if self.dry_run:
@@ -758,25 +872,34 @@ class AzureConnector(CloudConnector):
         self._guard_write("unblock_ip")
         self._ensure_clients()
         rg, vm_name = _parse_vm_resource_id(resource_id)
-
-        # Prefer the NSG recorded at block time (faithful — a subnet-wide block lives
-        # on the subnet NSG even if the VM has its own NIC NSG). Fall back to resolving
-        # via the NIC for legacy state without a recorded nsg.
         entry = next((e for e in _load_block_entries(vm_name) if e.get("ip") == ip), None)
-        if entry and entry.get("nsg"):
-            nsg_rg, nsg_name = entry["nsg"].split("/", 1)
-        else:
-            nsg_rg, nsg_name, _ = self._get_nic_nsg(self._get_primary_nic_id(rg, vm_name))
+        deleted: list[str] = []
 
-        # Delete every name this block could have under any scope (VM-suffixed,
-        # plain/perimeter) so cleanup is robust regardless of how it was created.
-        scoped = self._block_rule_name(ip, vm_name, "subnet")
-        plain = self._block_rule_name(ip, vm_name, "nic")
-        deleted = []
-        for name in (scoped, f"{scoped}-out", plain, f"{plain}-out"):
+        def _del(p_rg: str, p_name: str, rule: str) -> None:
+            for nm in (rule, f"{rule}-out"):
+                try:
+                    self._network.security_rules.begin_delete(p_rg, p_name, nm).result()
+                    deleted.append(nm)
+                except Exception:
+                    pass
+
+        # 1) Every per-NIC placement recorded at block time (multi-NIC VM block).
+        for p in (entry or {}).get("placements", []):
+            _del(p["nsg_rg"], p["nsg_name"], p["rule"])
+
+        # 2) The recorded single rule (perimeter / legacy entry).
+        if entry and entry.get("nsg") and entry.get("rule"):
+            r_rg, r_name = entry["nsg"].split("/", 1)
+            _del(r_rg, r_name, entry["rule"])
+
+        # 3) Belt-and-braces for legacy state without rule names: resolve via the primary
+        # NIC and delete the historical VM-suffixed / plain block-rule names.
+        if not deleted:
             try:
-                self._network.security_rules.begin_delete(nsg_rg, nsg_name, name).result()
-                deleted.append(name)
+                nsg_rg, nsg_name, _ = self._get_nic_nsg(self._get_primary_nic_id(rg, vm_name))
+                for legacy in (self._block_rule_name(ip, vm_name, "subnet"),
+                               self._block_rule_name(ip, vm_name, "nic")):
+                    _del(nsg_rg, nsg_name, legacy)
             except Exception:
                 pass
 
@@ -785,7 +908,6 @@ class AzureConnector(CloudConnector):
             "status": "unblocked" if deleted else "not_found",
             "ip": ip,
             "deleted_rules": deleted,
-            "nsg": f"{nsg_rg}/{nsg_name}",
         }
 
     # ── Audit / readiness checks ───────────────────────────────────────────────
@@ -957,6 +1079,43 @@ class AzureConnector(CloudConnector):
         primary = next((n for n in nics if n.primary), nics[0])
         return primary.id
 
+    def _get_vm_nic_targets(self, rg: str, vm_name: str) -> list[dict]:
+        """Every NIC of the VM with its governing NSG + all private IPs.
+
+        Isolation must cover EVERY NIC: a VM with 2 NICs each behind its own NSG is
+        only half-isolated if we touch the primary alone (the real bug). Each target
+        becomes one placement — deny any/any on a NIC-level NSG (scope 'nic') or deny
+        scoped to ALL the NIC's private IPs on a shared subnet NSG (scope 'subnet').
+        """
+        vm = self._compute.virtual_machines.get(rg, vm_name)
+        targets: list[dict] = []
+        for ref in vm.network_profile.network_interfaces:
+            nic_id = ref.id
+            nsg_rg, nsg_name, scope = self._get_nic_nsg(nic_id)
+            targets.append({
+                "nic_id": nic_id,
+                "nic_short": nic_id.rstrip("/").split("/")[-1],
+                "nsg_rg": nsg_rg,
+                "nsg_name": nsg_name,
+                "scope": scope,
+                "private_ips": self._get_nic_private_ips(nic_id),
+            })
+        return targets
+
+    def _get_nic_private_ips(self, nic_id: str) -> list[str]:
+        """All private IPs across a NIC's ipConfigurations (a NIC can have several).
+
+        An NSG applies to the whole NIC, not per ipConfig, so a subnet-scoped deny must
+        address every private IP of the NIC or a secondary IP stays reachable.
+        """
+        nic_rg, nic_name = _parse_nic_resource_id(nic_id)
+        nic = self._network.network_interfaces.get(nic_rg, nic_name)
+        ips = [
+            getattr(c, "private_ip_address", None)
+            for c in (nic.ip_configurations or [])
+        ]
+        return [ip for ip in ips if ip]
+
     def _isolation_rule_names(self, vm_name: str, scope: str) -> tuple[str, str]:
         """(inbound, outbound) isolation rule names. On a shared subnet NSG the names
         are VM-suffixed so isolating several VMs doesn't clobber each other's rules."""
@@ -972,15 +1131,25 @@ class AzureConnector(CloudConnector):
         return f"{base}-{vm_name}" if scope == "subnet" else base
 
     def _get_nic_private_ip(self, nic_id: str) -> str:
-        """Primary private IP of a NIC — used to scope isolation on a subnet NSG."""
-        nic_rg, nic_name = _parse_nic_resource_id(nic_id)
-        nic = self._network.network_interfaces.get(nic_rg, nic_name)
-        cfgs = nic.ip_configurations or []
-        primary = next((c for c in cfgs if getattr(c, "primary", False)), cfgs[0] if cfgs else None)
-        ip = getattr(primary, "private_ip_address", None) if primary else None
-        if not ip:
+        """Primary private IP of a NIC — used to scope a subnet-wide block to one VM."""
+        ips = self._get_nic_private_ips(nic_id)
+        if not ips:
+            _, nic_name = _parse_nic_resource_id(nic_id)
             raise RuntimeError(f"NIC {nic_name} has no private IP — cannot scope isolation")
-        return ip
+        return ips[0]
+
+    def _placement_rule_base(self, prefix: str, vm_name: str, nic_short: str, nic_id: str) -> str:
+        """A rule-name base unique per (VM, NIC), within Azure's 80-char rule-name limit.
+
+        Per-NIC uniqueness lets two NICs of the same VM be denied on the same shared
+        subnet NSG without clobbering each other. Falls back to a short nic_id hash if
+        the readable name would overflow 80 chars (incl. the '-out' suffix)."""
+        base = f"{prefix}-{vm_name}-{nic_short}"
+        if len(base) + 4 > 80:
+            import hashlib
+            h = hashlib.sha1(nic_id.encode()).hexdigest()[:8]
+            base = f"{prefix}-{vm_name[:40]}-{h}"
+        return base
 
     def _get_nic_nsg(self, nic_id: str) -> tuple[str, str, str]:
         """Resolve the NSG governing a NIC. Returns (rg, name, scope).
@@ -1071,6 +1240,7 @@ def active_isolations() -> list[dict]:
 def _save_block_state(
     vm_name: str, ip: str, resource_id: str,
     nsg: str = "", nsg_scope: str = "", rule: str = "", scoped: bool = True,
+    placements: list | None = None,
 ) -> None:
     import json
     from datetime import datetime, timezone
@@ -1082,10 +1252,13 @@ def _save_block_state(
         # nsg_scope="subnet" → rule lives on a shared subnet NSG, "nic" → on the VM NIC.
         # scoped=True → rule only affects THIS VM (NIC, or subnet+VM-IP addressing);
         # False would be a subnet-wide `any` rule → War Room shows the ⚠ blast-radius chip.
+        # placements[] → one rule per NIC (multi-NIC VM block); nsg/rule mirror the first
+        # placement for /api/state + legacy display.
         entries.append({
             "ip": ip, "resource_id": resource_id,
             "blocked_at": datetime.now(timezone.utc).isoformat(),
             "nsg": nsg, "nsg_scope": nsg_scope, "rule": rule, "scoped": scoped,
+            "placements": placements or [],
         })
     f.write_text(json.dumps(entries))
 

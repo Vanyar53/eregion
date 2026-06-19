@@ -358,6 +358,22 @@ def test_ensure_clients_thread_safe_single_init(monkeypatch):
     assert connector._network is not None
 
 
+def _nic_target(nsg_rg="rg", nsg_name="nsg", scope="nic", ips=("10.0.0.5",), nic_id="nic-a"):
+    """Build one _get_vm_nic_targets() entry for the multi-NIC isolation tests."""
+    return {
+        "nic_id": nic_id, "nic_short": nic_id.rstrip("/").split("/")[-1],
+        "nsg_rg": nsg_rg, "nsg_name": nsg_name, "scope": scope,
+        "private_ips": list(ips),
+    }
+
+
+def _sd(r):
+    """(src, dst) of a SecurityRule, taking the singular prefix or the plural list."""
+    src = r.source_address_prefix if r.source_address_prefix is not None else r.source_address_prefixes
+    dst = r.destination_address_prefix if r.destination_address_prefix is not None else r.destination_address_prefixes
+    return src, dst
+
+
 def test_isolate_vm_no_orphan_state_file_when_azure_fails(tmp_path, monkeypatch):
     """isolate_vm must NOT write the isolation state file if the NSG write fails.
 
@@ -371,8 +387,8 @@ def test_isolate_vm_no_orphan_state_file_when_azure_fails(tmp_path, monkeypatch)
 
     connector = AzureConnector(dry_run=False)
     monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
-    monkeypatch.setattr(connector, "_get_primary_nic_id", lambda rg, vm: "nic-id")
-    monkeypatch.setattr(connector, "_get_nic_nsg", lambda nic: ("rg", "nsg", "nic"))
+    monkeypatch.setattr(connector, "_get_vm_nic_targets",
+                        lambda rg, vm: [_nic_target(scope="nic")])
 
     net = MagicMock()
     net.security_rules.list.return_value = []          # no conflicting rules to bump
@@ -394,9 +410,8 @@ def test_isolate_vm_subnet_nsg_scopes_to_vm_ip(tmp_path, monkeypatch):
 
     connector = AzureConnector(dry_run=False)
     monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
-    monkeypatch.setattr(connector, "_get_primary_nic_id", lambda rg, vm: "nic-id")
-    monkeypatch.setattr(connector, "_get_nic_nsg", lambda nic: ("rg", "nsg", "subnet"))
-    monkeypatch.setattr(connector, "_get_nic_private_ip", lambda nic: "10.0.0.5")
+    monkeypatch.setattr(connector, "_get_vm_nic_targets",
+                        lambda rg, vm: [_nic_target(scope="subnet", ips=("10.0.0.5",))])
     net = MagicMock()
     net.security_rules.list.return_value = []
     net.security_rules.begin_create_or_update.return_value.result.return_value = None
@@ -407,13 +422,88 @@ def test_isolate_vm_subnet_nsg_scopes_to_vm_ip(tmp_path, monkeypatch):
     assert out["nsg_scope"] == "subnet"
     assert "warning" not in out          # no blast radius anymore — scoped to the VM
     assert "note" in out and "scoped" in out["note"].lower()
-    # rule names are VM-suffixed (no collision with other isolated VMs)
-    assert out["rule"] == "glorfindel-isolation-deny-all-vm"
-    # the created deny rules reference the VM IP, not any/any
+    assert out["rule"] == "glorfindel-iso-vm-nic-a"   # per-(vm,nic) name
+    # the created deny rules reference the VM IP (augmented list), not any/any
     rules = [c.args[3] for c in net.security_rules.begin_create_or_update.call_args_list]
-    addrs = [(r.source_address_prefix, r.destination_address_prefix) for r in rules]
-    assert ("*", "10.0.0.5") in addrs    # inbound: deny TO the VM
-    assert ("10.0.0.5", "*") in addrs    # outbound: deny FROM the VM
+    addrs = [_sd(r) for r in rules]
+    assert ("*", ["10.0.0.5"]) in addrs    # inbound: deny TO the VM's IPs
+    assert (["10.0.0.5"], "*") in addrs    # outbound: deny FROM the VM's IPs
+
+
+def test_isolate_vm_multi_nic_covers_every_nic(tmp_path, monkeypatch):
+    """The bug: a VM with 2 NICs (each its own NSG) must be denied on BOTH NSGs."""
+    import glorfindel.actions as actions
+    from glorfindel.actions import AzureConnector, _load_isolation_state
+    monkeypatch.setattr(actions, "_ISOLATION_STATE_DIR", tmp_path / "isolation")
+
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    monkeypatch.setattr(connector, "_get_vm_nic_targets", lambda rg, vm: [
+        _nic_target(nsg_rg="rg1", nsg_name="nsg-a", scope="nic", nic_id="nic-a"),
+        _nic_target(nsg_rg="rg2", nsg_name="nsg-b", scope="subnet",
+                    ips=("10.0.1.7",), nic_id="nic-b"),
+    ])
+    net = MagicMock()
+    net.security_rules.list.return_value = []
+    net.security_rules.begin_create_or_update.return_value.result.return_value = None
+    connector._network = net
+
+    out = connector.isolate_vm(_RID)
+    assert out["nics_covered"] == 2
+    # rules landed on BOTH NSGs
+    nsgs = {(c.args[0], c.args[1]) for c in net.security_rules.begin_create_or_update.call_args_list}
+    assert ("rg1", "nsg-a") in nsgs
+    assert ("rg2", "nsg-b") in nsgs
+    # state records both placements (release/verify depend on it)
+    state = _load_isolation_state("vm")
+    assert len(state["placements"]) == 2
+    assert {p["nsg_name"] for p in state["placements"]} == {"nsg-a", "nsg-b"}
+
+
+def test_verify_isolation_false_when_a_nic_uncovered(monkeypatch):
+    """verify_isolation = False if any NIC lacks its deny rules (half-isolated VM)."""
+    from glorfindel.actions import AzureConnector
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    monkeypatch.setattr(connector, "_get_vm_nic_targets", lambda rg, vm: [
+        _nic_target(nsg_rg="rg1", nsg_name="nsg-a", nic_id="nic-a"),
+        _nic_target(nsg_rg="rg2", nsg_name="nsg-b", nic_id="nic-b"),
+    ])
+    net = MagicMock()
+
+    def _get(rg, name, rule):
+        if name == "nsg-b":               # nic-b has NO rules → uncovered
+            raise Exception("NotFound")
+        return MagicMock()
+    net.security_rules.get.side_effect = _get
+    connector._network = net
+
+    out = connector.verify_isolation(_RID)
+    assert out["verified"] is False
+    assert "nic-b" in out["uncovered_nics"]
+
+
+def test_release_isolation_multi_nic_deletes_all_placements(tmp_path, monkeypatch):
+    """release_isolation removes the deny rules from EVERY placement's NSG."""
+    import glorfindel.actions as actions
+    from glorfindel.actions import AzureConnector, _save_isolation_state
+    monkeypatch.setattr(actions, "_ISOLATION_STATE_DIR", tmp_path / "isolation")
+    _save_isolation_state("vm", {
+        "resource_id": _RID, "placements": [
+            {"nsg_rg": "rg1", "nsg_name": "nsg-a", "rule_in": "iso-a", "rule_out": "iso-a-out", "bumped": []},
+            {"nsg_rg": "rg2", "nsg_name": "nsg-b", "rule_in": "iso-b", "rule_out": "iso-b-out", "bumped": []},
+        ],
+    })
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    net = MagicMock()
+    net.security_rules.begin_delete.return_value.result.return_value = None
+    connector._network = net
+
+    connector.release_isolation(_RID)
+    deleted = {(c.args[0], c.args[1], c.args[2]) for c in net.security_rules.begin_delete.call_args_list}
+    assert ("rg1", "nsg-a", "iso-a") in deleted
+    assert ("rg2", "nsg-b", "iso-b") in deleted
 
 
 def test_isolate_vm_subnet_nsg_picks_free_priority(tmp_path, monkeypatch):
@@ -424,9 +514,8 @@ def test_isolate_vm_subnet_nsg_picks_free_priority(tmp_path, monkeypatch):
 
     connector = AzureConnector(dry_run=False)
     monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
-    monkeypatch.setattr(connector, "_get_primary_nic_id", lambda rg, vm: "nic-id")
-    monkeypatch.setattr(connector, "_get_nic_nsg", lambda nic: ("rg", "nsg", "subnet"))
-    monkeypatch.setattr(connector, "_get_nic_private_ip", lambda nic: "10.0.0.6")
+    monkeypatch.setattr(connector, "_get_vm_nic_targets",
+                        lambda rg, vm: [_nic_target(scope="subnet", ips=("10.0.0.6",))])
     existing = MagicMock(priority=100, name="someone-else")  # 100 already taken
     net = MagicMock()
     net.security_rules.list.return_value = [existing]
@@ -448,9 +537,8 @@ def test_block_ip_subnet_nsg_scopes_to_vm_ip(monkeypatch):
 
     connector = AzureConnector(dry_run=False)
     monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
-    monkeypatch.setattr(connector, "_get_primary_nic_id", lambda rg, vm: "nic-id")
-    monkeypatch.setattr(connector, "_get_nic_nsg", lambda nic: ("rg", "nsg", "subnet"))
-    monkeypatch.setattr(connector, "_get_nic_private_ip", lambda nic: "10.0.0.5")
+    monkeypatch.setattr(connector, "_get_vm_nic_targets",
+                        lambda rg, vm: [_nic_target(scope="subnet", ips=("10.0.0.5",))])
     net = MagicMock()
     net.security_rules.list.return_value = []
     net.security_rules.begin_create_or_update.return_value.result.return_value = None
@@ -460,12 +548,37 @@ def test_block_ip_subnet_nsg_scopes_to_vm_ip(monkeypatch):
     assert out["nsg_scope"] == "subnet"
     assert "warning" not in out
     assert "note" in out and "scoped" in out["note"].lower()
-    assert out["rule"] == "glorfindel-block-95-47-246-223-vm"  # VM-suffixed
+    assert out["rule"] == "glorfindel-block-95-47-246-223-vm-nic-a"  # per-(vm,nic)
     rules = [c.args[3] for c in net.security_rules.begin_create_or_update.call_args_list]
-    addrs = [(r.source_address_prefix, r.destination_address_prefix) for r in rules]
-    # inbound: attacker → THIS VM ; outbound: THIS VM → attacker (not any/*)
-    assert ("95.47.246.223", "10.0.0.5") in addrs
-    assert ("10.0.0.5", "95.47.246.223") in addrs
+    addrs = [_sd(r) for r in rules]
+    # inbound: attacker → THIS VM's IPs ; outbound: THIS VM's IPs → attacker (not any/*)
+    assert ("95.47.246.223", ["10.0.0.5"]) in addrs
+    assert (["10.0.0.5"], "95.47.246.223") in addrs
+
+
+def test_block_ip_multi_nic_covers_every_nic(tmp_path, monkeypatch):
+    """A VM block lands on EVERY NIC's NSG (a 2nd NIC must not leave the attacker a path)."""
+    import glorfindel.actions as actions
+    from glorfindel.actions import AzureConnector, _load_block_entries
+    monkeypatch.setattr(actions, "_BLOCK_STATE_DIR", tmp_path / "blocks")
+
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    monkeypatch.setattr(connector, "_get_vm_nic_targets", lambda rg, vm: [
+        _nic_target(nsg_rg="rg1", nsg_name="nsg-a", scope="nic", nic_id="nic-a"),
+        _nic_target(nsg_rg="rg2", nsg_name="nsg-b", scope="subnet", ips=("10.0.1.9",), nic_id="nic-b"),
+    ])
+    net = MagicMock()
+    net.security_rules.list.return_value = []
+    net.security_rules.begin_create_or_update.return_value.result.return_value = None
+    connector._network = net
+
+    out = connector.block_suspicious_ip("95.47.246.223", _RID)
+    assert out["nics_covered"] == 2
+    nsgs = {(c.args[0], c.args[1]) for c in net.security_rules.begin_create_or_update.call_args_list}
+    assert ("rg1", "nsg-a") in nsgs and ("rg2", "nsg-b") in nsgs
+    entry = next(e for e in _load_block_entries("vm") if e["ip"] == "95.47.246.223")
+    assert len(entry["placements"]) == 2
 
 
 def test_block_state_records_nsg_scope(tmp_path, monkeypatch):
@@ -476,9 +589,8 @@ def test_block_state_records_nsg_scope(tmp_path, monkeypatch):
 
     connector = AzureConnector(dry_run=False)
     monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
-    monkeypatch.setattr(connector, "_get_primary_nic_id", lambda rg, vm: "nic-id")
-    monkeypatch.setattr(connector, "_get_nic_nsg", lambda nic: ("nsgrg", "subnetnsg", "subnet"))
-    monkeypatch.setattr(connector, "_get_nic_private_ip", lambda nic: "10.0.0.5")
+    monkeypatch.setattr(connector, "_get_vm_nic_targets", lambda rg, vm: [
+        _nic_target(nsg_rg="nsgrg", nsg_name="subnetnsg", scope="subnet", ips=("10.0.0.5",))])
     net = MagicMock()
     net.security_rules.list.return_value = []
     net.security_rules.begin_create_or_update.return_value.result.return_value = None
@@ -490,12 +602,11 @@ def test_block_state_records_nsg_scope(tmp_path, monkeypatch):
     assert len(blocks) == 1
     assert blocks[0]["nsg_scope"] == "subnet"
     assert blocks[0]["nsg"] == "nsgrg/subnetnsg"
-    assert blocks[0]["rule"] == "glorfindel-block-95-47-246-223-vm"
     assert blocks[0]["scoped"] is True     # War Room reads this → neutral chip (safe)
 
 
 def test_block_ip_promote_replace_create_then_delete(tmp_path, monkeypatch):
-    """replace=True promotes VM→subnet: subnet any-rule created, VM rule deleted AFTER
+    """replace=True promotes VM→subnet: subnet any-rule created, VM rules deleted AFTER
     (create-then-delete = no protection gap), state replaced (one entry, scoped=False)."""
     import glorfindel.actions as actions
     from glorfindel.actions import AzureConnector, active_blocks
@@ -503,9 +614,10 @@ def test_block_ip_promote_replace_create_then_delete(tmp_path, monkeypatch):
 
     connector = AzureConnector(dry_run=False)
     monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    monkeypatch.setattr(connector, "_get_vm_nic_targets",
+                        lambda rg, vm: [_nic_target(nsg_rg="rg", nsg_name="subnet-nsg",
+                                                    scope="subnet", ips=("10.0.0.5",))])
     monkeypatch.setattr(connector, "_get_primary_nic_id", lambda rg, vm: "nic-id")
-    monkeypatch.setattr(connector, "_get_nic_nsg", lambda nic: ("rg", "subnet-nsg", "subnet"))
-    monkeypatch.setattr(connector, "_get_nic_private_ip", lambda nic: "10.0.0.5")
     monkeypatch.setattr(connector, "_get_subnet_nsg", lambda nic: ("rg", "subnet-nsg"))
     net = MagicMock()
     net.security_rules.list.return_value = []
@@ -513,7 +625,7 @@ def test_block_ip_promote_replace_create_then_delete(tmp_path, monkeypatch):
     net.security_rules.begin_delete.return_value.result.return_value = None
     connector._network = net
 
-    # 1) a VM-scoped block exists
+    # 1) a VM-scoped block exists (one placement on the subnet NSG)
     connector.block_suspicious_ip("95.47.246.223", _RID)  # scope=vm
     # 2) promote it to subnet-wide
     order = []
@@ -526,7 +638,7 @@ def test_block_ip_promote_replace_create_then_delete(tmp_path, monkeypatch):
 
     assert out["scoped"] is False
     assert out["rule"] == "glorfindel-block-95-47-246-223"            # subnet-wide (no suffix)
-    assert out["promoted_from"] == "glorfindel-block-95-47-246-223-vm"  # removed VM rule
+    assert "glorfindel-block-95-47-246-223-vm-nic-a" in out["promoted_from"]  # removed VM rule
     # create-then-delete: the subnet rule is created BEFORE the VM rule is deleted
     first_create = next(i for i, (op, _) in enumerate(order) if op == "create")
     first_delete = next(i for i, (op, _) in enumerate(order) if op == "delete")
@@ -590,8 +702,8 @@ def test_block_ip_nic_nsg_stays_any(monkeypatch):
 
     connector = AzureConnector(dry_run=False)
     monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
-    monkeypatch.setattr(connector, "_get_primary_nic_id", lambda rg, vm: "nic-id")
-    monkeypatch.setattr(connector, "_get_nic_nsg", lambda nic: ("rg", "nsg", "nic"))
+    monkeypatch.setattr(connector, "_get_vm_nic_targets",
+                        lambda rg, vm: [_nic_target(scope="nic")])
     net = MagicMock()
     net.security_rules.list.return_value = []
     net.security_rules.begin_create_or_update.return_value.result.return_value = None
@@ -600,10 +712,9 @@ def test_block_ip_nic_nsg_stays_any(monkeypatch):
     out = connector.block_suspicious_ip("95.47.246.223", _RID)
     assert out["nsg_scope"] == "nic"
     assert "note" not in out and "warning" not in out
-    assert out["rule"] == "glorfindel-block-95-47-246-223"  # not suffixed
     rules = [c.args[3] for c in net.security_rules.begin_create_or_update.call_args_list]
-    addrs = [(r.source_address_prefix, r.destination_address_prefix) for r in rules]
-    assert ("95.47.246.223", "*") in addrs
+    addrs = [_sd(r) for r in rules]
+    assert ("95.47.246.223", "*") in addrs    # nic NSG → attacker ↔ any (NSG scopes to VM)
     assert ("*", "95.47.246.223") in addrs
 
 
@@ -615,8 +726,8 @@ def test_isolate_vm_nic_nsg_no_blast_radius_warning(tmp_path, monkeypatch):
 
     connector = AzureConnector(dry_run=False)
     monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
-    monkeypatch.setattr(connector, "_get_primary_nic_id", lambda rg, vm: "nic-id")
-    monkeypatch.setattr(connector, "_get_nic_nsg", lambda nic: ("rg", "nsg", "nic"))
+    monkeypatch.setattr(connector, "_get_vm_nic_targets",
+                        lambda rg, vm: [_nic_target(scope="nic")])
     net = MagicMock()
     net.security_rules.list.return_value = []
     net.security_rules.begin_create_or_update.return_value.result.return_value = None

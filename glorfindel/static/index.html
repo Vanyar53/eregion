@@ -1750,14 +1750,17 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
 
 // Is a VM actually protected by the RSV (vs merely discovered)? From the audit's
 // backup check — data.protected when present, else status != fail. null = unknown.
+// Is this asset actually protected? Ground truth = the vault inventory (_backupItems),
+// the same source the RECOVER node and the "unprotected" count use. Returns true (in the
+// vault), false (loaded, not in vault), or null (inventory not loaded yet → unknown).
+// Per-VM audit was unreliable here: an AKS node errors (BMSUserErrorDataSourceObjectNotFound)
+// and its card name flips, so an audit miss read as "unknown" → spurious recover link.
 function _vmProtected(vmName) {
-  const a = (_auditData?.audits || []).find(x =>
-    x.asset_name === vmName || (x.resource_id || '').split('/').pop() === vmName);
-  if (!a) return null;
-  const bk = (a.checks || []).find(c => c.action === 'restore_from_backup' || c.name === 'Backup vault');
-  if (!bk) return null;
-  if (bk.data && typeof bk.data.protected === 'boolean') return bk.data.protected;
-  return bk.status !== 'fail';
+  const items = (_backupItems && Array.isArray(_backupItems.items)) ? _backupItems.items : null;
+  if (!items) return null;
+  const n = (vmName || '').toLowerCase();
+  return items.some(it =>
+    ((it.name || (it.resource_id || '').split('/').pop() || '').toLowerCase()) === n);
 }
 
 function _drawTopologyEdges() {
@@ -1854,13 +1857,13 @@ function _drawTopologyEdges() {
       }
     }
 
-    // RECOVER → VM — only when the VM is actually backed up by the RSV, not merely
-    // discovered. A VM confirmed not in the vault gets no recover link.
-    const _prot = _vmProtected(vmName);
-    if (_prot !== false) recoverBackends.forEach(b => {
+    // RECOVER → VM — only when the asset is CONFIRMED in the vault inventory. Unknown
+    // (inventory not loaded) or absent → no link, so we never imply a backup relationship
+    // we haven't confirmed (e.g. AKS nodes, which aren't vault-protected items).
+    if (_vmProtected(vmName) === true) recoverBackends.forEach(b => {
       const nb = pt(document.getElementById(`nb-${b.name}`));
       if (nb) lines.push(bezier(nb.x, nb.bottom, asset.x, asset.top,
-        'var(--green)', '', 1.5, _prot ? 0.4 : 0.2));  // brighter when confirmed protected
+        'var(--green)', '', 1.5, 0.4));
     });
   });
 

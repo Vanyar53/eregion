@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# Eregion — block commits that introduce real infrastructure identifiers
+# (employer / NDA data) into this PUBLIC repo.
+#
+# Recurring leak vector: real names pasted into the dev loop reaching committed
+# files. This converts "I'll be careful" into "the machine refuses".
+#
+# Denylist lives OUTSIDE version control: <gitdir>/infra-denylist.txt
+#   one term per line · '#' comments · case-insensitive literal substring match
+# Intentional override (rare): git commit --no-verify
+
+denylist="$(git rev-parse --git-dir)/infra-denylist.txt"
+[ -f "$denylist" ] || exit 0
+
+patterns="$(grep -vE '^[[:space:]]*(#|$)' "$denylist")"
+[ -z "$patterns" ] && exit 0
+
+# Only newly ADDED lines in the staged diff (ignore removals and file headers),
+# so removing a leaked term is never blocked.
+added="$(git diff --cached --no-color | grep -E '^\+' | grep -vE '^\+\+\+' || true)"
+[ -z "$added" ] && exit 0
+
+hits="$(printf '%s\n' "$added" | grep -niFf <(printf '%s\n' "$patterns") || true)"
+if [ -n "$hits" ]; then
+  echo "" >&2
+  echo "🚫 COMMIT BLOCKED — real infra identifier(s) in staged changes:" >&2
+  printf '%s\n' "$hits" | sed 's/^/    /' >&2
+  echo "" >&2
+  echo "Matched <gitdir>/infra-denylist.txt. Remove them before committing," >&2
+  echo "or override deliberately with: git commit --no-verify" >&2
+  exit 1
+fi
+exit 0

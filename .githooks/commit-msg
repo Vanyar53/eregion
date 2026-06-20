@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Eregion — block commit MESSAGES containing real infra identifiers.
+# (Avoids re-leaking a scrubbed term in a commit subject/body — almost happened.)
+# Shares the same denylist as pre-commit: <gitdir>/infra-denylist.txt
+
+denylist="$(git rev-parse --git-dir)/infra-denylist.txt"
+[ -f "$denylist" ] || exit 0
+
+patterns="$(grep -vE '^[[:space:]]*(#|$)' "$denylist")"
+[ -z "$patterns" ] && exit 0
+
+hits="$(grep -niFf <(printf '%s\n' "$patterns") "$1" || true)"
+if [ -n "$hits" ]; then
+  echo "" >&2
+  echo "🚫 COMMIT MESSAGE BLOCKED — real infra identifier(s):" >&2
+  printf '%s\n' "$hits" | sed 's/^/    /' >&2
+  echo "Edit the message, or override with: git commit --no-verify" >&2
+  exit 1
+fi
+exit 0

@@ -8,8 +8,27 @@ Eregion is open-core (Apache 2.0). Contributions are welcome — scenarios, clou
 git clone https://github.com/Vanyar53/eregion
 cd eregion
 pip install -e ".[dev]"
-pytest                  # 88 tests, 0 Azure calls, 0 Claude API calls
+pytest                  # 0 Azure calls, 0 Claude API calls
 ```
+
+## Local safety hooks (recommended)
+
+This is a **public** repo. To stop real infrastructure identifiers (vault / resource-group / host names, subscription IDs, NDA codenames) from ever being committed, enable the local commit hooks:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+Then list the terms to block in `.git/infra-denylist.txt` — one per line. This file lives under `.git/` and is **never committed**:
+
+```
+# .git/infra-denylist.txt
+my-real-vault-name
+my-real-resource-group
+00000000-0000-0000-0000-000000000000
+```
+
+`pre-commit` (staged content) and `commit-msg` (commit message) then refuse any commit that introduces a listed term — case-insensitive. Deliberate override: `git commit --no-verify`. Both `core.hooksPath` and the denylist are local, so re-run this after a fresh clone.
 
 ## How to add a detection source
 

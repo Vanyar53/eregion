@@ -269,31 +269,32 @@ War Room local              →  War Room SaaS multi-tenant
 
 ## Paysage concurrentiel CDR
 
-### Acteurs établis (CNAPP — CDR bundlé)
-| Acteur | Position | Différence avec Eregion |
+### Acteurs établis
+| Acteur | Position | Réalité face à Eregion |
 |--------|----------|------------------------|
-| **Wiz** (post-Gem Security ~$350M, 2024) | CNAPP leader + CDR | $100k+/an, bundlé shift-left + CSPM + CDR. Eregion = CDR seul, accessible mid-market |
-| **Palo Alto Prisma Cloud** | CNAPP enterprise | Même logique — overkill pour une équipe sans SOC |
-| **CrowdStrike** | EDR + cloud workload | Endpoint-first, pas cloud-first |
-| **Microsoft Defender for Cloud** | CDR natif Azure | Détection uniquement, pas de réponse autonome ni purple team loop |
+| **Microsoft Defender for Cloud + Sentinel + Security Copilot** | CDR natif Azure + automation + LLM | **Menace existentielle** pour un outil Azure-first : natif, intégré, bundlable quasi-gratuitement. On ne gagne pas en capacité — on gagne en OSS / souveraineté / accessibilité mid-market. |
+| **Darktrace** (Thoma Bravo, 2024) | Behavioral ML + réponse autonome (Antigena) | Fait la réponse autonome depuis des années. **Boîte noire, enterprise, cher.** Contre-position : transparent/auditable + self-hostable, pas « plus autonome ». |
+| **Wiz** (post-Gem ~$350M, 2024) / **Palo Alto Prisma** / **CrowdStrike** | CNAPP / EDR enterprise | $50–100k+/an, nécessitent une équipe pour opérer. Overkill et inopérable pour un mid-market sans SOC. |
+| **Skyhawk Security** | Startup ~2022, VC-backed | Simulation + behavioral ML. À surveiller. |
 
-### Émergents CDR à surveiller
-| Acteur | Status | Différence avec Eregion |
-|--------|--------|------------------------|
-| **Skyhawk Security** | Startup ~2022, VC-backed | Simulation + behavioral ML, **pas de réponse LLM autonome ni purple team loop** à ce jour |
-| **[redacted]** | POC en cours (NDA) | Behavioral baseline + alerting, **pas de réponse autonome** aujourd'hui |
+### Le moat réel d'Eregion (recalibré 2026-06)
+La réponse autonome et le raisonnement LLM sont devenus **table stakes** — les incumbents les ont tous (Darktrace Antigena, MS Security Copilot, CrowdStrike Charlotte…). **On ne rivalise PAS sur la capacité.** La position défendable :
+- **OSS + self-hostable** (LLM local via Ollama) — aucun gros acteur ne l'est. Souveraineté / air-gap / data EU.
+- **Transparence / auditabilité** — code ouvert, chaque décision lisible (`pending`, escalades, raisonnement loggé). Anti-boîte-noire ML.
+- **Opérable par une équipe sans SOC** — là où Darktrace / Wiz / MS exigent expertise + budget.
+- Le pari : pas « meilleur CDR », mais **« le CDR qu'une petite équipe Azure peut faire tourner gratuitement, sans envoyer ses données à un vendeur, et dont elle voit chaque décision »**.
 
 ### Précédents d'acquisition
 - **Gem Security → Wiz** (~$350M, 2024) — CDR standalone acheté plutôt que construit. Valide la catégorie.
 - **Lacework → Fortinet** (2023) — CDR behavioral ML. Les CNAPP/enterprise players achètent de la CDR.
-- Pattern : les CNAPP giants rachètent le CDR plutôt que de le construire. Fenêtre pour établir une position différenciée : **12-18 mois**.
+- Pattern : les CNAPP giants rachètent le CDR plutôt que de le construire.
 
 ### Scénarios Eregion
-1. **Acquisition** — 10-20 utilisateurs + différenciation claire → acquérable par Orca, Aqua, Rapid7, IBM, ou acteur EU souverain (Orange Cyberdefense, Thales)
-2. **Business OSS mid-market** — niche Azure défendue, 200-500 clients × $200-500/mois
-3. **Trop tard** — terrain occupé avant traction externe
+1. **Business OSS mid-market** — niche Azure/souveraine défendue, 200-500 clients × $200-500/mois. Scénario le plus réaliste vu le moat OSS/transparence.
+2. **Acquisition** — 10-20 utilisateurs + différenciation claire → acteur EU souverain (Orange Cyberdefense, Thales) ou CNAPP voulant la couche transparente/mid-market.
+3. **Trop tard** — terrain occupé avant traction externe. **Risque dominant aujourd'hui.**
 
-**Ce qui détermine le scénario : un utilisateur externe dans les 60 prochains jours.**
+**Ce qui détermine le scénario : un premier utilisateur externe — non encore acquis.** La fenêtre estimée (12-18 mois, mi-2025) se referme ; chaque mois de durcissement interne sans adoption tierce rapproche du scénario 3.
 
 ---
 

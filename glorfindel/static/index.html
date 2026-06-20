@@ -684,7 +684,7 @@ function _nicNote(s, vmName) {
 function showCoverageModal(idx) {
   const c = _coverageCache[idx];
   if (!c) return;
-  const verb = c.type === 'isolated' ? 'Isolation' : 'Block';
+  const verb = c.type === 'isolated' ? 'Isolation' : c.type === 'nsg' ? 'NSG' : 'Block';
   const rows = (c.placements || []).map((p, i) => {
     const nsg   = (p.nsg || `${p.nsg_rg || ''}/${p.nsg_name || ''}`).split('/').pop();
     const scope = p.scope === 'subnet' ? 'subnet NSG (shared)' : 'NIC NSG (this VM)';
@@ -706,7 +706,10 @@ function showCoverageModal(idx) {
   document.getElementById('modal-title').textContent =
     `${verb} coverage — ${c.vmName}${c.ip ? ` (${c.ip})` : ''}`;
   const body = document.getElementById('modal-body');
-  body.innerHTML = `<div style="font-size:10px;color:var(--dim);margin-bottom:4px">${(c.placements || []).length} NICs covered — one deny placement each</div>${rows}`;
+  const subtitle = c.type === 'nsg'
+    ? `${(c.placements || []).length} NICs — NSG on each`
+    : `${(c.placements || []).length} NICs covered — one deny placement each`;
+  body.innerHTML = `<div style="font-size:10px;color:var(--dim);margin-bottom:4px">${subtitle}</div>${rows}`;
   document.getElementById('modal-cmd').style.display = 'none';
   const btn = document.getElementById('modal-confirm');
   btn.textContent = 'Close'; btn.className = 'action'; btn.onclick = closeModal;
@@ -1747,9 +1750,23 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
   // VM ↔ its NSG (from the audit's structured NSG check) — NIC NSG = this VM only,
   // subnet NSG = shared with the subnet.
   const _nsgData = ((auditEntry?.checks || []).find(c => c.name === 'NSG access') || {}).data || {};
-  const nsgLine = _nsgData.nsg
-    ? `<div style="font-size:9px;color:var(--dim);margin-top:5px">🛡 NSG <span style="color:var(--text)">${_nsgData.nsg.split('/').pop()}</span> · <span style="color:${_nsgData.nsg_scope === 'subnet' ? 'var(--orange)' : 'var(--dim)'}">${_nsgData.nsg_scope === 'subnet' ? 'subnet (shared)' : 'NIC (this VM)'}</span></div>`
-    : '';
+  // Multi-NIC at rest: data.nsgs[] enumerates every NIC's NSG. With >1, show a clickable
+  // "N NSGs" chip → same per-NIC modal as the isolation coverage popover. Single NIC keeps
+  // the inline one-liner. data.nsg/nsg_scope (primary NIC) is the back-compat fallback.
+  const _nsgs = Array.isArray(_nsgData.nsgs) ? _nsgData.nsgs : [];
+  let nsgLine = '';
+  if (_nsgs.length > 1) {
+    const idx = _coverageCache.push({
+      vmName: vm_name, type: 'nsg', ip: '',
+      placements: _nsgs.map(x => ({ nsg: x.nsg, scope: x.nsg_scope, nic_id: x.nic_id, ips: x.ips })),
+    }) - 1;
+    const subnetN = _nsgs.filter(x => x.nsg_scope === 'subnet').length;
+    nsgLine = `<div style="font-size:9px;color:var(--dim);margin-top:5px;cursor:pointer"
+      onclick="event.stopPropagation();showCoverageModal(${idx})"
+      title="Click for the NSG on each NIC">🛡 ${_nsgs.length} NSGs across NICs${subnetN ? ` · <span style="color:var(--orange)">${subnetN} subnet</span>` : ''} ▸</div>`;
+  } else if (_nsgData.nsg) {
+    nsgLine = `<div style="font-size:9px;color:var(--dim);margin-top:5px">🛡 NSG <span style="color:var(--text)">${_nsgData.nsg.split('/').pop()}</span> · <span style="color:${_nsgData.nsg_scope === 'subnet' ? 'var(--orange)' : 'var(--dim)'}">${_nsgData.nsg_scope === 'subnet' ? 'subnet (shared)' : 'NIC (this VM)'}</span></div>`;
+  }
 
   const expandedBody = `
     ${readinessExpanded}

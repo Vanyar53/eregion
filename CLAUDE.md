@@ -178,6 +178,10 @@ glorfindel/
                             discovery (LAW Heartbeat, cheap) toutes les 60s → VM allumée apparaît vite ;
                             posture (RSV/NSG par VM, cher) throttlée à interval_s (défaut 30min) → pas de matraquage RSV.
                           _discover_from_azure_monitor() → LAW Heartbeat query → liste VMs actives
+                          _classify_asset(rid) → (kind, parent) : une instance VMSS (.../virtualMachineScaleSets/
+                          <vmss>/virtualMachines/<n>, ex. nœud AKS) → kind="vmss_instance" + parent=<id VMSS>
+                          (clé de groupage) ; VM standalone → ("vm",""). DiscoveredAsset porte kind/parent
+                          (defaults rétro-compat cache) → /api/state → War Room replie les nœuds par parent.
                           replace_for_backend() : refresh + rétention — une VM absente du Heartbeat (éteinte)
                           est retenue (last_seen figé) tant que gap < GLORFINDEL_DISCOVERY_RETENTION_H (défaut 8h), puis évincée
                           None sur erreur query → cache conservé (pas d'éviction sur panne)

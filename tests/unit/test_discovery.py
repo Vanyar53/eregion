@@ -56,6 +56,49 @@ def test_registry_update_and_all(tmp_path):
     assert {a.name for a in reg.all()} == {"vm-a", "vm-b"}
 
 
+def test_classify_asset_vmss_instance():
+    """A VMSS instance (AKS node) → kind=vmss_instance + parent=<vmss id> for grouping."""
+    from glorfindel.discovery import _classify_asset
+    rid = ("/subscriptions/s/resourceGroups/mc-rg/providers/Microsoft.Compute"
+           "/virtualMachineScaleSets/aks-default-12345-vmss/virtualMachines/3")
+    kind, parent = _classify_asset(rid)
+    assert kind == "vmss_instance"
+    assert parent == ("/subscriptions/s/resourceGroups/mc-rg/providers/Microsoft.Compute"
+                      "/virtualMachineScaleSets/aks-default-12345-vmss")
+
+
+def test_classify_asset_standalone_vm():
+    from glorfindel.discovery import _classify_asset
+    rid = ("/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute"
+           "/virtualMachines/vm-standalone")
+    assert _classify_asset(rid) == ("vm", "")
+
+
+def test_classify_asset_empty():
+    from glorfindel.discovery import _classify_asset
+    assert _classify_asset("") == ("vm", "")
+
+
+def test_discover_tags_vmss_nodes_with_parent():
+    """Heartbeat discovery tags scale-set members so the UI can group them."""
+    from glorfindel.discovery import _discover_from_azure_monitor
+    vmss_rid = ("/subscriptions/s/resourceGroups/mc/providers/Microsoft.Compute"
+                "/virtualMachineScaleSets/aks-pool-vmss/virtualMachines/0")
+    rows = [
+        {"Computer": "aks-pool-vmss000000", "ResourceId": vmss_rid, "LastSeen": ""},
+        {"Computer": "vm-app.local", "ResourceId":
+            "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute"
+            "/virtualMachines/vm-app", "LastSeen": ""},
+    ]
+    with patch("glorfindel.detectors.detector_for", return_value=_mock_detector(rows)):
+        assets = _discover_from_azure_monitor("law", "ws")
+    by_name = {a.name: a for a in assets}
+    assert by_name["aks-pool-vmss000000"].kind == "vmss_instance"
+    assert by_name["aks-pool-vmss000000"].parent.endswith("aks-pool-vmss")
+    assert by_name["vm-app"].kind == "vm"
+    assert by_name["vm-app"].parent == ""
+
+
 def test_registry_all_is_sorted_by_name(tmp_path):
     """all()/to_dicts() return a STABLE order (sorted by name) so War Room cards
     don't reshuffle on every discovery refresh."""

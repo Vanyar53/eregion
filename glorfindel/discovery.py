@@ -48,6 +48,12 @@ class DiscoveredAsset:
     monitoring_backend: str # backend that discovered this asset
     last_seen: str          # ISO timestamp
     source: str = "heartbeat"  # "heartbeat", "rsv", ...
+    # kind/parent let the UI collapse scale-set members. A VMSS instance (e.g. an AKS
+    # node) is one Heartbeat row each → N flapping cards otherwise. kind="vmss_instance"
+    # + parent=<vmss resource id> = the grouping key; War Room shows 1 card per parent.
+    # Defaults keep old cache files loadable (DiscoveredAsset(**item)).
+    kind: str = "vm"        # "vm" | "vmss_instance"
+    parent: str = ""        # grouping key — the VMSS resource id for instances
     extra: dict = field(default_factory=dict)  # backend-specific data
 
 
@@ -178,6 +184,25 @@ def _normalize_last_seen(value, fallback: str) -> str:
         return fallback
 
 
+def _classify_asset(resource_id: str) -> tuple[str, str]:
+    """(kind, parent) for a discovered asset.
+
+    A VMSS instance (e.g. an AKS node) has a resource_id of the form
+    .../virtualMachineScaleSets/<vmss>/virtualMachines/<n>. Each instance is one
+    Heartbeat row → N flapping cards otherwise. We tag it kind="vmss_instance" with
+    parent=<vmss resource id> (the id truncated at /virtualMachines/) so the War Room
+    can collapse all members of a scale set into one card. Standalone VMs → ("vm", "").
+    """
+    rid = resource_id or ""
+    low = rid.lower()
+    marker = "/virtualmachinescalesets/"
+    if marker in low and "/virtualmachines/" in low.split(marker, 1)[1]:
+        # Parent = everything up to (and including) the VMSS name, before the instance.
+        idx = low.index("/virtualmachines/", low.index(marker))
+        return "vmss_instance", rid[:idx]
+    return "vm", ""
+
+
 def _discover_from_azure_monitor(
     backend_name: str,
     workspace_id: str,
@@ -205,12 +230,15 @@ def _discover_from_azure_monitor(
             last_seen = _normalize_last_seen(
                 row.get("LastSeen") or row.get("last_seen"), now_iso
             )
+            kind, parent = _classify_asset(rid)
             assets.append(DiscoveredAsset(
                 name=short_name,
                 resource_id=rid,
                 monitoring_backend=backend_name,
                 last_seen=last_seen,
                 source="heartbeat",
+                kind=kind,
+                parent=parent,
                 extra={"fqdn": name},
             ))
         logger.info(

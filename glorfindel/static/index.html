@@ -1119,7 +1119,21 @@ function renderInfra() {
   // Ajouter les assets découverts absents du resourceMap — déduplique par vm_name.
   // Carry last_seen so a powered-off VM (retained by discovery up to 8h) can be
   // shown grayed "offline" instead of vanishing.
+  // VMSS instances (AKS nodes, kind="vmss_instance") are FOLDED into one synthetic
+  // cluster card per `parent` (the VMSS id) — see project_aks_display. Standalone VMs
+  // map 1:1. This kills the flapping node cards and stops each node inflating counts.
   discovered.forEach(d => {
+    if (d.kind === 'vmss_instance' && d.parent) {
+      let cl = resourceMap.get(d.parent);
+      if (!cl || !cl.is_cluster) {
+        cl = { resource_id: d.parent, vm_name: d.parent.split('/').pop(),
+               is_cluster: true, states: [], nodes: [], last_seen: null };
+        resourceMap.set(d.parent, cl);
+      }
+      cl.nodes.push({ name: d.name, last_seen: d.last_seen });
+      if (d.last_seen && (!cl.last_seen || d.last_seen > cl.last_seen)) cl.last_seen = d.last_seen;
+      return;
+    }
     const existing = [...resourceMap.values()].find(r => r.vm_name === d.name);
     if (existing) {
       if (d.last_seen) existing.last_seen = d.last_seen;
@@ -1185,7 +1199,9 @@ function renderInfra() {
           return slots.map((vmName, slotIdx) => {
             if (vmName) {
               const r = [...resourceMap.values()].find(r => r.vm_name === vmName);
-              if (r) return _renderAssetNode(r, vmEscs, detEscs, restoreByVm, slotIdx);
+              if (r) return r.is_cluster
+                ? _renderClusterNode(r, slotIdx)
+                : _renderAssetNode(r, vmEscs, detEscs, restoreByVm, slotIdx);
             }
             return `<div class="node-asset-empty"
               ondragover="event.preventDefault();this.classList.add('drag-over')"
@@ -1495,6 +1511,57 @@ function _renderModules(rules, detectBackends, recoverBackends, resources) {
       <div class="topo-module-label recover">RECOVER</div>
       <div class="topo-module-nodes">${recoverNodes}</div>
     </div>
+  </div>`;
+}
+
+// ── Cluster node (AKS / VMSS — N nodes folded into one card) ────────────────────
+// Glorfindel groups VMSS instances by `parent`; here we render one card per cluster
+// with an aggregate (N nodes · X offline) and an expandable node list. Health is
+// aggregated UI-side (a node is "offline" if its heartbeat is >15min stale, same
+// threshold as VM cards). See project_aks_display.
+function _renderClusterNode(cluster, slotIdx = 0) {
+  const { vm_name, nodes = [] } = cluster;
+  const isExpanded = _expandedVms.has(vm_name);
+  const _nodeOffline = n =>
+    !n.last_seen || (Date.now() - new Date(n.last_seen).getTime()) / 60000 > 15;
+  const offlineN = nodes.filter(_nodeOffline).length;
+  const dotCol = offlineN === nodes.length && nodes.length ? 'var(--dim)'
+               : offlineN ? 'var(--orange)' : 'var(--cyan)';
+  const summary = `${nodes.length} node${nodes.length > 1 ? 's' : ''}${offlineN ? ` · ${offlineN} offline` : ''}`;
+  const nodeRows = nodes
+    .slice()
+    .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+    .map(n => {
+      const off = _nodeOffline(n);
+      const short = (n.name || '').split('/').pop();
+      return `<div style="display:flex;align-items:center;gap:6px;padding:3px 4px;font-size:10px">
+        <span style="color:${off ? 'var(--dim)' : 'var(--green)'};font-size:9px">●</span>
+        <span style="flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${short}</span>
+        ${off
+          ? `<span style="color:var(--dim);font-size:9px" title="${n.last_seen ? `last heartbeat ${_relTime(n.last_seen)}` : 'no recent heartbeat'}">${n.last_seen ? 'OFFLINE' : 'no heartbeat'}</span>`
+          : `<span style="color:var(--green);font-size:9px">online</span>`}
+      </div>`;
+    }).join('');
+  return `<div class="node-asset s-clean ${isExpanded ? 'expanded' : ''}"
+    id="asset-${vm_name}"
+    draggable="true"
+    ondragstart="event.dataTransfer.setData('text/plain','${vm_name}');event.currentTarget.classList.add('dragging')"
+    ondragend="event.currentTarget.classList.remove('dragging');document.querySelectorAll('.drag-over').forEach(e=>e.classList.remove('drag-over'))"
+    ondragover="event.preventDefault();event.currentTarget.classList.add('drag-over')"
+    ondragleave="event.currentTarget.classList.remove('drag-over')"
+    ondrop="event.preventDefault();event.currentTarget.classList.remove('drag-over');dropOnSlot(${slotIdx},event.dataTransfer.getData('text/plain'))">
+    <div class="node-asset-header" onclick="toggleAsset('${vm_name}')">
+      <div style="display:flex;align-items:center;gap:6px">
+        <span style="color:${dotCol};font-size:10px">●</span>
+        <span class="node-asset-name">🎛 ${vm_name}</span>
+        <span style="font-size:8px;font-weight:700;padding:1px 5px;border-radius:3px;background:color-mix(in srgb,var(--cyan) 14%,transparent);color:var(--cyan);border:1px solid color-mix(in srgb,var(--cyan) 35%,var(--border));letter-spacing:.5px;flex-shrink:0">CLUSTER</span>
+        <span style="color:var(--dim);font-size:9px;margin-left:auto;flex-shrink:0">${isExpanded ? '▾' : '▸'}</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px;margin-top:5px">
+        <span style="font-size:9px;color:${offlineN ? 'var(--orange)' : 'var(--dim)'}">${summary}</span>
+      </div>
+    </div>
+    ${isExpanded ? `<div style="margin-top:6px;border-top:1px solid var(--border);padding-top:4px">${nodeRows}</div>` : ''}
   </div>`;
 }
 

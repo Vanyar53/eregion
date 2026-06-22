@@ -416,6 +416,8 @@
   .node-asset { transition: opacity 0.15s; }
   .node-asset.dragging   { opacity: 0.35; }
   .node-asset.drag-over  { box-shadow: 0 0 0 2px var(--purple), 0 0 12px color-mix(in srgb, var(--purple) 35%, transparent); }
+  /* Glow VM cards governed by the hovered NSG (PROTECT detail) */
+  .node-asset.nsg-glow   { box-shadow: 0 0 0 2px var(--orange), 0 0 14px color-mix(in srgb, var(--orange) 45%, transparent); transition: box-shadow 0.12s; }
   .node-asset-header     { cursor: grab; }
   .node-asset-header:active { cursor: grabbing; }
   .node-asset-empty {
@@ -1003,6 +1005,7 @@ let _collapsedVms     = new Set(); // user explicitly collapsed — immune to au
 let _expandedBackends = new Set();
 let _rulesCache       = [];   // flat array, index used in onclick to avoid JSON.stringify in HTML
 let _coverageCache    = [];   // per-render {vmName, type, ip, placements} — index used by the N-NICs chip
+let _nsgGlowCache     = [];   // per-render [vm_name,...] per NSG row — index used to glow governed VM cards on hover
 let _pendingActions   = new Set(); // vm_names with in-flight release/unblock actions
 let _cardOrder     = JSON.parse(localStorage.getItem('glorfindel_card_order') || '[]');
 let _currentVmNames = [];
@@ -1072,6 +1075,14 @@ function _dot(color) {
 //     (AKS node heartbeats report the managedClusters id; all nodes share it = natural key)
 // "" = not a cluster member. Single source of truth for folding nodes into one cluster card
 // across discovered assets AND escalations (a posture_gap on a node must fold too).
+// Glow the VM cards governed by a hovered NSG (PROTECT detail row → its `vms`).
+function _glowNsgVms(idx, on) {
+  (_nsgGlowCache[idx] || []).forEach(vm => {
+    const el = document.getElementById(`asset-${vm}`);
+    if (el) el.classList.toggle('nsg-glow', on);
+  });
+}
+
 function _clusterKey(rid, parent) {
   if (parent) return parent;
   rid = rid || '';
@@ -1124,6 +1135,7 @@ function renderInfra() {
   escalations.forEach(e => { _escById[e.id] = e; });
   _rulesCache = rules.slice(); // refresh index cache each render
   _coverageCache = [];         // rebuilt by _nicNote() during this render
+  _nsgGlowCache  = [];         // rebuilt by the PROTECT NSG list during this render
   const restoreByVm = {};
   restores.forEach(r => { restoreByVm[r.vm_name] = r; });
 
@@ -1421,23 +1433,39 @@ function _renderModules(rules, detectBackends, recoverBackends, resources) {
   const protectExpanded = _expandedBackends.has('__protect__');
   const nsgN           = nsgInv ? nsgInv.length : (nsgKeys.size || subnetGroups.size);
   const restrictedN    = nsgInv ? nsgInv.filter(n => n.restricted).length : actionCount;
+  // "Monitored" = an NSG governs ≥1 VM that LAW sees (discovered_assets). An NSG that
+  // governs ONLY out-of-LAW VMs is a blind spot — Glorfindel can't detect/act there.
+  const _discRids = new Set((_state?.discovered_assets || []).map(d => (d.resource_id || '').toLowerCase()).filter(Boolean));
+  const _nsgMon   = n => (n.vms || []).some(v => _discRids.has((v || '').toLowerCase()));
+  const blindN    = nsgInv ? nsgInv.filter(n => (n.vms || []).length && !_nsgMon(n)).length : 0;
+  const blindSuffix = blindN ? ` · <span style="color:var(--red)" title="NSG(s) governing only VMs not in Log Analytics — Glorfindel is blind there">${blindN} blind-spot</span>` : '';
   const protectSummary = nsgInv
-    ? `${nsgN} NSG${nsgN > 1 ? 's' : ''} · ${restrictedN ? `${restrictedN} with restriction${restrictedN > 1 ? 's' : ''}` : 'no restrictions'}${_nsgStale ? ' · stale' : ''}`
+    ? `${nsgN} NSG${nsgN > 1 ? 's' : ''} · ${restrictedN ? `${restrictedN} with restriction${restrictedN > 1 ? 's' : ''}` : 'no restrictions'}${blindSuffix}${_nsgStale ? ' · stale' : ''}`
     : (nsgN
         ? `${nsgN} NSG · ${actionCount ? actionCount + ' action' + (actionCount > 1 ? 's' : '') : 'no restrictions'}`
         : (actionCount ? `${actionCount} action${actionCount > 1 ? 's' : ''}` : 'no restrictions'));
-  // Expanded: the full NSG list (associations + which carry a Glorfindel rule), then the
-  // subnet-wide blocks (the actionable subset that lives on shared subnet NSGs).
+  // Expanded: the full NSG list (associations + governed VMs + which carry a Glorfindel
+  // rule). Hovering a row glows the VM card(s) it governs. Then the subnet-wide blocks.
   const nsgListDetail = nsgInv
     ? (nsgInv.length
         ? nsgInv.slice().sort((a, b) => (a.nsg || '').localeCompare(b.nsg || '')).map(n => {
             const sub = (n.subnets || []).length, nic = (n.nics || []).length;
-            const assoc = [sub ? `${sub} subnet${sub > 1 ? 's' : ''}` : '', nic ? `${nic} NIC${nic > 1 ? 's' : ''}` : '']
+            const govVms = n.vms || [];
+            const assoc = [sub ? `${sub} subnet${sub > 1 ? 's' : ''}` : '', nic ? `${nic} NIC${nic > 1 ? 's' : ''}` : '', govVms.length ? `${govVms.length} VM${govVms.length > 1 ? 's' : ''}` : '']
               .filter(Boolean).join(' · ') || 'unassociated';
-            return `<div style="display:flex;align-items:center;gap:6px;padding:3px 4px;font-size:10px">
+            const blind = govVms.length && !_nsgMon(n);
+            const glowNames = [];
+            govVms.forEach(v => {
+              glowNames.push((v || '').split('/').pop());
+              const ck = _clusterKey(v, ''); if (ck) glowNames.push(ck.split('/').pop());
+            });
+            const gi = _nsgGlowCache.push(glowNames) - 1;
+            return `<div style="display:flex;align-items:center;gap:6px;padding:3px 4px;font-size:10px;cursor:default"
+              onmouseenter="_glowNsgVms(${gi},true)" onmouseleave="_glowNsgVms(${gi},false)">
               <span style="color:${n.restricted ? 'var(--orange)' : 'var(--dim)'};font-size:9px">●</span>
               <span style="flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${_attr(n.nsg)}">${(n.nsg || '').split('/').pop()}</span>
               <span style="color:var(--dim);font-size:9px">${assoc} · ${n.rules} rule${n.rules > 1 ? 's' : ''}</span>
+              ${blind ? `<span style="color:var(--red);font-size:9px" title="Governs only VMs not in Log Analytics — blind spot">⚠ blind</span>` : ''}
               ${n.restricted ? `<span style="color:var(--orange);font-size:9px" title="Carries ${n.glorfindel_rules} Glorfindel rule(s) — active isolation/block">restricted</span>` : ''}
             </div>`;
           }).join('')

@@ -1061,14 +1061,21 @@ function _dot(color) {
   return `<span style="color:${color};font-size:10px">●</span>`;
 }
 
-// VMSS-instance (AKS node) → its parent VMSS id, derived from the resource_id SHAPE so
-// it's robust even when the discovery cache predates the kind/parent fields. "" = not a
-// VMSS instance. This is the single source of truth for folding nodes into a cluster
-// card across discovered assets AND escalations (a posture_gap on a node must fold too,
-// not spawn a bare node card).
-function _vmssParentId(rid) {
-  const m = (rid || '').match(/^(.*\/virtualMachineScaleSets\/[^/]+)\/virtualMachines\//i);
-  return m ? m[1] : '';
+// Cluster grouping key for an AKS node, from the explicit backend `parent` when present,
+// else derived from the resource_id SHAPE (robust to a discovery that predates kind/parent).
+// Two real-world shapes seen in the field:
+//   - VMSS instance: .../virtualMachineScaleSets/<vmss>/virtualMachines/<n>  → parent VMSS id
+//   - managed cluster: .../Microsoft.ContainerService/managedClusters/<name> → the cluster id
+//     (AKS node heartbeats report the managedClusters id; all nodes share it = natural key)
+// "" = not a cluster member. Single source of truth for folding nodes into one cluster card
+// across discovered assets AND escalations (a posture_gap on a node must fold too).
+function _clusterKey(rid, parent) {
+  if (parent) return parent;
+  rid = rid || '';
+  const vmss = rid.match(/^(.*\/virtualMachineScaleSets\/[^/]+)\/virtualMachines\//i);
+  if (vmss) return vmss[1];
+  if (/\/Microsoft\.ContainerService\/managedClusters\/[^/]+$/i.test(rid)) return rid;
+  return '';
 }
 
 
@@ -1145,12 +1152,12 @@ function renderInfra() {
     else resourceMap.set(r.resource_id, r);
   });
   // Discovered assets — 1:1 cards for standalone VMs; VMSS instances (AKS nodes) FOLD
-  // into a cluster card. Membership is decided by the resource_id SHAPE (_vmssParentId)
+  // into a cluster card. Membership is decided by _clusterKey (resource_id SHAPE: VMSS
   // with the explicit `parent`/`kind` as a hint — robust to a discovery cache that
   // predates those fields (that mismatch was making a cluster flip to a lone node card).
   // Carry last_seen so a powered-off VM (retained up to 8h) shows grayed, not vanishes.
   discovered.forEach(d => {
-    const parentId = d.parent || _vmssParentId(d.resource_id);
+    const parentId = _clusterKey(d.resource_id, d.parent);
     if (parentId) { _addClusterNode(parentId, d.name, d.last_seen); return; }
     const existing = [...resourceMap.values()].find(r => r.vm_name === d.name);
     if (existing) {
@@ -1163,7 +1170,7 @@ function renderInfra() {
   vmEscs.forEach(e => {
     // An escalation on an AKS node (e.g. a stale posture_gap) folds into its cluster —
     // it must not spawn a bare node card. Actionable node states come via `resources`.
-    const parentId = _vmssParentId(e.resource_id);
+    const parentId = _clusterKey(e.resource_id, '');
     if (parentId) { _addClusterNode(parentId, e.resource_id.split('/').pop(), null); return; }
     const vmName = e.resource_id.split('/').pop();
     const exists = [...resourceMap.values()].some(r => r.vm_name === vmName);

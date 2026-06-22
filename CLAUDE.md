@@ -195,6 +195,10 @@ glorfindel/
                           list_backup_items(vault, rg) → inventaire RSV vault-wide (protected items + last RP/state),
                           indépendant de l'état des VMs (source de vérité backup même VM éteinte). Cheap leg : 1 appel
                           paginé, pas de count RP par item (count = check_backup_points par VM, opt-in). Read-only OK.
+                          list_nsgs() → inventaire NSG réel (network_security_groups.list_all) : tous les NSG +
+                          associations (subnets/nics) + restriction Glorfindel (rule `glorfindel-*`). Corrige le
+                          sous-comptage de check_nsg_access (dérivé par-VM : rate le NSG subnet quand la NIC a le
+                          sien, le NSG d'un subnet AKS, les VMs éteintes). Read-only OK. War Room → nœud PROTECT.
   detectors.py          → DetectionConnector ABC + AzureMonitorDetector (poll 10s) + run_query()
   detection_rules.py    → DetectionRule dataclass + RulePoller (continuous polling, status persistence)
                           load_config(path, glorfindel_cfg=None) — workspace_id résolu depuis glorfindel_cfg

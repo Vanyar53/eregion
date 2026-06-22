@@ -188,6 +188,50 @@ def test_check_nsg_access_lists_all_nics(monkeypatch):
     assert res["scope"] == "nic"
 
 
+def test_list_nsgs_dry_run_empty():
+    from glorfindel.actions import AzureConnector
+    assert AzureConnector(dry_run=True).list_nsgs() == []
+
+
+def test_list_nsgs_enumerates_all_including_subnet_and_restriction(monkeypatch):
+    """list_nsgs surfaces NSGs the per-VM audit misses (subnet NSG, AKS subnet) and
+    flags those carrying a Glorfindel restriction."""
+    from glorfindel.actions import AzureConnector
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+
+    # A subnet-level NSG (e.g. AKS subnet) — invisible to per-VM audit when NICs have
+    # their own NSG / the cluster isn't audited as a VM.
+    nsg_subnet = MagicMock()
+    nsg_subnet.id = ("/subscriptions/s/resourceGroups/rg-aks/providers/Microsoft.Network"
+                     "/networkSecurityGroups/aks-subnet-nsg")
+    nsg_subnet.subnets = [MagicMock(id="/subnets/aks")]
+    nsg_subnet.network_interfaces = []
+    nsg_subnet.security_rules = []
+
+    # A NIC-level NSG carrying an active Glorfindel isolation rule.
+    nsg_nic = MagicMock()
+    nsg_nic.id = ("/subscriptions/s/resourceGroups/rg/providers/Microsoft.Network"
+                  "/networkSecurityGroups/vm-nsg")
+    nsg_nic.subnets = []
+    nsg_nic.network_interfaces = [MagicMock(id="/nic/x")]
+    rule = MagicMock()
+    rule.name = "glorfindel-iso-vm-nic"
+    nsg_nic.security_rules = [rule]
+
+    net = MagicMock()
+    net.network_security_groups.list_all.return_value = [nsg_subnet, nsg_nic]
+    connector._network = net
+
+    by = {n["nsg"]: n for n in connector.list_nsgs()}
+    assert "rg-aks/aks-subnet-nsg" in by                       # subnet NSG surfaced
+    assert by["rg-aks/aks-subnet-nsg"]["subnets"] == ["/subnets/aks"]
+    assert by["rg-aks/aks-subnet-nsg"]["restricted"] is False
+    assert by["rg/vm-nsg"]["restricted"] is True               # has a glorfindel- rule
+    assert by["rg/vm-nsg"]["glorfindel_rules"] == 1
+    assert by["rg/vm-nsg"]["nics"] == ["/nic/x"]
+
+
 @pytest.mark.parametrize("rid", [
     # VMSS instance (direct id)
     "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute"

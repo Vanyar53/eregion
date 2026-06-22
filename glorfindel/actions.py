@@ -947,6 +947,38 @@ class AzureConnector(CloudConnector):
         except Exception as e:
             return {"ok": False, "iam": _is_iam_error(str(e)), "error": str(e)}
 
+    def list_nsgs(self) -> list[dict]:
+        """Enumerate ALL NSGs as resources — the true network-control inventory.
+
+        The per-VM audit (check_nsg_access) UNDER-counts the inventory: it reports one
+        NSG per NIC and so misses (1) a subnet NSG when the NIC also has its own NSG
+        (a NIC is governed by BOTH), (2) an NSG on an AKS subnet (the cluster isn't
+        audited as a VM), (3) NSGs of powered-off / evicted VMs. Listing NSG resources
+        directly gives the complete set, each with its associations (subnets/NICs), its
+        rule count, and whether it carries a Glorfindel restriction (a `glorfindel-*`
+        rule = an active isolation/block). Read-only → works in observe mode.
+        """
+        if self.dry_run:
+            return []
+        self._ensure_clients()
+        out: list[dict] = []
+        for nsg in self._network.network_security_groups.list_all():
+            rg, name = _parse_nsg_resource_id(nsg.id)
+            rules = list(nsg.security_rules or [])
+            glor = [r for r in rules if (getattr(r, "name", "") or "").startswith("glorfindel-")]
+            out.append({
+                "nsg": f"{rg}/{name}",
+                "id": nsg.id,
+                # Associations: a subnet-level NSG has subnets[], a NIC-level NSG has
+                # network_interfaces[]. A shared NSG can have both / several.
+                "subnets": [s.id for s in (nsg.subnets or [])],
+                "nics": [n.id for n in (nsg.network_interfaces or [])],
+                "rules": len(rules),
+                "restricted": bool(glor),          # carries an active Glorfindel rule
+                "glorfindel_rules": len(glor),
+            })
+        return out
+
     def check_backup_points(
         self, resource_id: str, vault: str = "rsv-annatar", vault_rg: str = ""
     ) -> dict:

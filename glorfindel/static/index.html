@@ -1446,9 +1446,11 @@ function _renderModules(rules, detectBackends, recoverBackends, resources) {
         : (actionCount ? `${actionCount} action${actionCount > 1 ? 's' : ''}` : 'no restrictions'));
   // Expanded: the full NSG list (associations + governed VMs + which carry a Glorfindel
   // rule). Hovering a row glows the VM card(s) it governs. Then the subnet-wide blocks.
+  // Alphabetical order; the list is capped in height and scrolls (22 NSGs would make the
+  // card endless otherwise). blind/restricted chips flag what needs attention in place.
   const nsgListDetail = nsgInv
     ? (nsgInv.length
-        ? nsgInv.slice().sort((a, b) => (a.nsg || '').localeCompare(b.nsg || '')).map(n => {
+        ? `<div style="max-height:240px;overflow-y:auto">${nsgInv.slice().sort((a, b) => (a.nsg || '').localeCompare(b.nsg || '')).map(n => {
             const sub = (n.subnets || []).length, nic = (n.nics || []).length;
             const govVms = n.vms || [];
             const assoc = [sub ? `${sub} subnet${sub > 1 ? 's' : ''}` : '', nic ? `${nic} NIC${nic > 1 ? 's' : ''}` : '', govVms.length ? `${govVms.length} VM${govVms.length > 1 ? 's' : ''}` : '']
@@ -1472,7 +1474,7 @@ function _renderModules(rules, detectBackends, recoverBackends, resources) {
               </div>
               <div style="color:var(--dim);font-size:9px;margin-left:15px">${assoc} · ${n.rules} rule${n.rules > 1 ? 's' : ''}</div>
             </div>`;
-          }).join('')
+          }).join('')}</div>`
         : `<div class="node-backend-row" style="color:var(--dim);font-size:9px">${_nsgItems.error ? 'NSG inventory error: ' + String(_nsgItems.error).slice(0, 80) : 'No NSGs found'}</div>`)
     : '';
   const subnetDetail = [...subnetGroups.entries()].map(([nsg, ips]) => `

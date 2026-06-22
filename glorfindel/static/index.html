@@ -1460,13 +1460,17 @@ function _renderModules(rules, detectBackends, recoverBackends, resources) {
               const ck = _clusterKey(v, ''); if (ck) glowNames.push(ck.split('/').pop());
             });
             const gi = _nsgGlowCache.push(glowNames) - 1;
-            return `<div style="display:flex;align-items:center;gap:6px;padding:3px 4px;font-size:10px;cursor:default"
+            // Two lines so the NSG NAME gets the full width (it's what matters): name +
+            // chips on top, the associations/rules metadata dimmed underneath.
+            return `<div style="padding:4px;cursor:default"
               onmouseenter="_glowNsgVms(${gi},true)" onmouseleave="_glowNsgVms(${gi},false)">
-              <span style="color:${n.restricted ? 'var(--orange)' : 'var(--dim)'};font-size:9px">●</span>
-              <span style="flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${_attr(n.nsg)}">${(n.nsg || '').split('/').pop()}</span>
-              <span style="color:var(--dim);font-size:9px">${assoc} · ${n.rules} rule${n.rules > 1 ? 's' : ''}</span>
-              ${blind ? `<span style="color:var(--red);font-size:9px" title="Governs only VMs not in Log Analytics — blind spot">⚠ blind</span>` : ''}
-              ${n.restricted ? `<span style="color:var(--orange);font-size:9px" title="Carries ${n.glorfindel_rules} Glorfindel rule(s) — active isolation/block">restricted</span>` : ''}
+              <div style="display:flex;align-items:center;gap:6px;font-size:10px">
+                <span style="color:${n.restricted ? 'var(--orange)' : 'var(--dim)'};font-size:9px">●</span>
+                <span style="flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600" title="${_attr(n.nsg)}">${(n.nsg || '').split('/').pop()}</span>
+                ${blind ? `<span style="color:var(--red);font-size:9px;flex-shrink:0" title="Governs only VMs not in Log Analytics — blind spot">⚠ blind</span>` : ''}
+                ${n.restricted ? `<span style="color:var(--orange);font-size:9px;flex-shrink:0" title="Carries ${n.glorfindel_rules} Glorfindel rule(s) — active isolation/block">restricted</span>` : ''}
+              </div>
+              <div style="color:var(--dim);font-size:9px;margin-left:15px">${assoc} · ${n.rules} rule${n.rules > 1 ? 's' : ''}</div>
             </div>`;
           }).join('')
         : `<div class="node-backend-row" style="color:var(--dim);font-size:9px">${_nsgItems.error ? 'NSG inventory error: ' + String(_nsgItems.error).slice(0, 80) : 'No NSGs found'}</div>`)

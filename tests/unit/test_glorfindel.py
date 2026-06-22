@@ -221,6 +221,7 @@ def test_list_nsgs_enumerates_all_including_subnet_and_restriction(monkeypatch):
 
     net = MagicMock()
     net.network_security_groups.list_all.return_value = [nsg_subnet, nsg_nic]
+    net.network_interfaces.list_all.return_value = []          # no NIC→VM mapping here
     connector._network = net
 
     by = {n["nsg"]: n for n in connector.list_nsgs()}
@@ -230,6 +231,45 @@ def test_list_nsgs_enumerates_all_including_subnet_and_restriction(monkeypatch):
     assert by["rg/vm-nsg"]["restricted"] is True               # has a glorfindel- rule
     assert by["rg/vm-nsg"]["glorfindel_rules"] == 1
     assert by["rg/vm-nsg"]["nics"] == ["/nic/x"]
+
+
+def test_list_nsgs_attributes_vms_nic_and_subnet(monkeypatch):
+    """Each NSG carries the VMs it governs — NIC-level (nic→vm) and subnet-level
+    (subnet→vms) — for the War Room monitored flag + hover glow."""
+    from glorfindel.actions import AzureConnector
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+
+    # NIC of vm-a → has nic-NSG 'nic-nsg' and sits in subnet 'subnet-x' (NSG 'subnet-nsg')
+    nic = MagicMock()
+    nic.id = "/nic/a"
+    nic.virtual_machine = MagicMock(id="/sub/.../virtualMachines/vm-a")
+    nic.ip_configurations = [MagicMock(subnet=MagicMock(id="/subnets/subnet-x"))]
+
+    nic_nsg = MagicMock()
+    nic_nsg.id = ("/subscriptions/s/resourceGroups/rg/providers/Microsoft.Network"
+                  "/networkSecurityGroups/nic-nsg")
+    nic_nsg.subnets = []
+    nic_nsg.network_interfaces = [MagicMock(id="/nic/a")]
+    nic_nsg.security_rules = []
+
+    subnet_nsg = MagicMock()
+    subnet_nsg.id = ("/subscriptions/s/resourceGroups/rg/providers/Microsoft.Network"
+                     "/networkSecurityGroups/subnet-nsg")
+    subnet_nsg.subnets = [MagicMock(id="/subnets/subnet-x")]
+    subnet_nsg.network_interfaces = []
+    subnet_nsg.security_rules = []
+
+    net = MagicMock()
+    net.network_interfaces.list_all.return_value = [nic]
+    net.network_security_groups.list_all.return_value = [nic_nsg, subnet_nsg]
+    connector._network = net
+
+    by = {n["nsg"]: n for n in connector.list_nsgs()}
+    # NIC-level NSG → attributed to vm-a via the NIC
+    assert by["rg/nic-nsg"]["vms"] == ["/sub/.../virtualMachines/vm-a"]
+    # subnet-level NSG → attributed to vm-a via the subnet it sits in
+    assert by["rg/subnet-nsg"]["vms"] == ["/sub/.../virtualMachines/vm-a"]
 
 
 @pytest.mark.parametrize("rid", [

@@ -956,23 +956,57 @@ class AzureConnector(CloudConnector):
         audited as a VM), (3) NSGs of powered-off / evicted VMs. Listing NSG resources
         directly gives the complete set, each with its associations (subnets/NICs), its
         rule count, and whether it carries a Glorfindel restriction (a `glorfindel-*`
-        rule = an active isolation/block). Read-only → works in observe mode.
+        rule = an active isolation/block).
+
+        Each NSG also carries `vms` — the resource_ids of the VMs it governs (NIC-level
+        OR subnet-level), resolved from one network-interfaces enumeration. The War Room
+        uses it to (a) flag NSGs whose VMs aren't monitored (not in the LAW = a coverage
+        blind spot) and (b) glow the associated VM card(s) on hover. Read-only.
         """
         if self.dry_run:
             return []
         self._ensure_clients()
+
+        # NIC → VM and subnet → {VMs} maps, so each NSG can be attributed to the VMs it
+        # governs (NIC association OR subnet association). One list_all over NICs — best
+        # effort: if it fails, NSGs are still listed, just without `vms`.
+        nic_to_vm: dict[str, str] = {}
+        subnet_to_vms: dict[str, set] = {}
+        try:
+            for nic in self._network.network_interfaces.list_all():
+                vm_id = getattr(getattr(nic, "virtual_machine", None), "id", None)
+                if not vm_id:
+                    continue
+                nic_to_vm[nic.id.lower()] = vm_id
+                for cfg in (nic.ip_configurations or []):
+                    sub = getattr(getattr(cfg, "subnet", None), "id", None)
+                    if sub:
+                        subnet_to_vms.setdefault(sub.lower(), set()).add(vm_id)
+        except Exception:
+            pass
+
         out: list[dict] = []
         for nsg in self._network.network_security_groups.list_all():
             rg, name = _parse_nsg_resource_id(nsg.id)
             rules = list(nsg.security_rules or [])
             glor = [r for r in rules if (getattr(r, "name", "") or "").startswith("glorfindel-")]
+            nic_ids = [n.id for n in (nsg.network_interfaces or [])]
+            subnet_ids = [s.id for s in (nsg.subnets or [])]
+            vms: set = set()
+            for nid in nic_ids:
+                vm = nic_to_vm.get(nid.lower())
+                if vm:
+                    vms.add(vm)
+            for sid in subnet_ids:
+                vms |= subnet_to_vms.get(sid.lower(), set())
             out.append({
                 "nsg": f"{rg}/{name}",
                 "id": nsg.id,
                 # Associations: a subnet-level NSG has subnets[], a NIC-level NSG has
                 # network_interfaces[]. A shared NSG can have both / several.
-                "subnets": [s.id for s in (nsg.subnets or [])],
-                "nics": [n.id for n in (nsg.network_interfaces or [])],
+                "subnets": subnet_ids,
+                "nics": nic_ids,
+                "vms": sorted(vms),                # VM resource_ids this NSG governs
                 "rules": len(rules),
                 "restricted": bool(glor),          # carries an active Glorfindel rule
                 "glorfindel_rules": len(glor),

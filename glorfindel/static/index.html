@@ -1061,6 +1061,16 @@ function _dot(color) {
   return `<span style="color:${color};font-size:10px">●</span>`;
 }
 
+// VMSS-instance (AKS node) → its parent VMSS id, derived from the resource_id SHAPE so
+// it's robust even when the discovery cache predates the kind/parent fields. "" = not a
+// VMSS instance. This is the single source of truth for folding nodes into a cluster
+// card across discovered assets AND escalations (a posture_gap on a node must fold too,
+// not spawn a bare node card).
+function _vmssParentId(rid) {
+  const m = (rid || '').match(/^(.*\/virtualMachineScaleSets\/[^/]+)\/virtualMachines\//i);
+  return m ? m[1] : '';
+}
+
 
 
 async function refreshActionsData() {
@@ -1111,29 +1121,37 @@ function renderInfra() {
   const vmEscs  = escalations.filter(e => e.action !== 'improve_detection');
 
   const resourceMap = new Map();
+  // Get-or-create the synthetic cluster card for a VMSS parent id. AKS nodes (VMSS
+  // instances) fold into ONE cluster card per parent — see project_aks_display.
+  const _getCluster = (parentId) => {
+    let cl = resourceMap.get(parentId);
+    if (!cl || !cl.is_cluster) {
+      cl = { resource_id: parentId, vm_name: parentId.split('/').pop(),
+             is_cluster: true, states: [], nodes: [], last_seen: null };
+      resourceMap.set(parentId, cl);
+    }
+    return cl;
+  };
+  const _addClusterNode = (parentId, name, last_seen) => {
+    const cl = _getCluster(parentId);
+    if (name && !cl.nodes.some(n => n.name === name)) cl.nodes.push({ name, last_seen: last_seen || null });
+    if (last_seen && (!cl.last_seen || last_seen > cl.last_seen)) cl.last_seen = last_seen;
+  };
   knownResources.forEach(r => resourceMap.set(r.resource_id, { ...r, states: [] }));
   resources.forEach(r => {
+    // A node with an ACTIVE state (isolated/blocked) keeps its own card — the incident +
+    // its action buttons must stay visible, never hidden inside the cluster.
     if (resourceMap.has(r.resource_id)) resourceMap.get(r.resource_id).states = r.states;
     else resourceMap.set(r.resource_id, r);
   });
-  // Ajouter les assets découverts absents du resourceMap — déduplique par vm_name.
-  // Carry last_seen so a powered-off VM (retained by discovery up to 8h) can be
-  // shown grayed "offline" instead of vanishing.
-  // VMSS instances (AKS nodes, kind="vmss_instance") are FOLDED into one synthetic
-  // cluster card per `parent` (the VMSS id) — see project_aks_display. Standalone VMs
-  // map 1:1. This kills the flapping node cards and stops each node inflating counts.
+  // Discovered assets — 1:1 cards for standalone VMs; VMSS instances (AKS nodes) FOLD
+  // into a cluster card. Membership is decided by the resource_id SHAPE (_vmssParentId)
+  // with the explicit `parent`/`kind` as a hint — robust to a discovery cache that
+  // predates those fields (that mismatch was making a cluster flip to a lone node card).
+  // Carry last_seen so a powered-off VM (retained up to 8h) shows grayed, not vanishes.
   discovered.forEach(d => {
-    if (d.kind === 'vmss_instance' && d.parent) {
-      let cl = resourceMap.get(d.parent);
-      if (!cl || !cl.is_cluster) {
-        cl = { resource_id: d.parent, vm_name: d.parent.split('/').pop(),
-               is_cluster: true, states: [], nodes: [], last_seen: null };
-        resourceMap.set(d.parent, cl);
-      }
-      cl.nodes.push({ name: d.name, last_seen: d.last_seen });
-      if (d.last_seen && (!cl.last_seen || d.last_seen > cl.last_seen)) cl.last_seen = d.last_seen;
-      return;
-    }
+    const parentId = d.parent || _vmssParentId(d.resource_id);
+    if (parentId) { _addClusterNode(parentId, d.name, d.last_seen); return; }
     const existing = [...resourceMap.values()].find(r => r.vm_name === d.name);
     if (existing) {
       if (d.last_seen) existing.last_seen = d.last_seen;
@@ -1143,6 +1161,10 @@ function renderInfra() {
     }
   });
   vmEscs.forEach(e => {
+    // An escalation on an AKS node (e.g. a stale posture_gap) folds into its cluster —
+    // it must not spawn a bare node card. Actionable node states come via `resources`.
+    const parentId = _vmssParentId(e.resource_id);
+    if (parentId) { _addClusterNode(parentId, e.resource_id.split('/').pop(), null); return; }
     const vmName = e.resource_id.split('/').pop();
     const exists = [...resourceMap.values()].some(r => r.vm_name === vmName);
     if (!exists)

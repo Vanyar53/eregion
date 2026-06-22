@@ -67,6 +67,17 @@ def test_classify_asset_vmss_instance():
                       "/virtualMachineScaleSets/aks-default-12345-vmss")
 
 
+def test_classify_asset_aks_managed_cluster():
+    """Real-world AKS: the heartbeat reports the managed-cluster id (shared by all nodes)
+    → kind=aks_node, parent=<cluster id> (the shared grouping key)."""
+    from glorfindel.discovery import _classify_asset
+    rid = ("/subscriptions/s/resourceGroups/mc-rg/providers"
+           "/Microsoft.ContainerService/managedClusters/aks-prod")
+    kind, parent = _classify_asset(rid)
+    assert kind == "aks_node"
+    assert parent == rid          # shared cluster id is the grouping key
+
+
 def test_classify_asset_standalone_vm():
     from glorfindel.discovery import _classify_asset
     rid = ("/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute"

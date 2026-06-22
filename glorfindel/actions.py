@@ -961,17 +961,16 @@ class AzureConnector(CloudConnector):
         """
         if self.dry_run:
             return {"ok": True, "vault": vault, "dry_run": True}
-        # A VMSS instance (e.g. an AKS node, .../virtualMachineScaleSets/<vmss>/
-        # virtualMachines/<n>) is NOT an IaaS-VM backup item — it produces the same
-        # BMSUserErrorDataSourceObjectNotFound as a genuinely unprotected standalone VM,
-        # so the error alone can't tell them apart. Short-circuit here: it's not
-        # backupable by design (nodes are ephemeral, recreated from the node pool), so
-        # posture/audit must not raise a false "not linked to vault" gap.
-        if _is_vmss_instance(resource_id):
+        # Only a standalone Microsoft.Compute/virtualMachines is an IaaS-VM backup item.
+        # An AKS managed cluster (what the AMA heartbeat reports for AKS nodes), a VMSS
+        # instance, or any other resource produces the same BMSUserErrorDataSourceObject
+        # NotFound as a genuinely unprotected VM — the error can't tell them apart, the
+        # resource SHAPE can. Short-circuit so posture/audit don't raise a false gap.
+        if not _is_backupable_vm(resource_id):
             return {
                 "ok": False, "iam": False, "vault": vault, "not_backupable": True,
-                "error": f"{resource_id.split('/')[-1]} is a VMSS instance — not an "
-                         "IaaS-VM backup item (e.g. AKS node)",
+                "error": f"{resource_id.split('/')[-1]} is not a standalone IaaS VM "
+                         "(AKS cluster / VMSS instance / other) — not a backup item",
             }
         try:
             from datetime import datetime, timezone
@@ -1338,11 +1337,19 @@ def _is_iam_error(err: str) -> bool:
     return any(m in err for m in markers)
 
 
-def _is_vmss_instance(resource_id: str) -> bool:
-    """True if the resource is a Virtual Machine Scale Set instance (e.g. an AKS node),
-    not a standalone Microsoft.Compute/virtualMachines. Such instances aren't IaaS-VM
-    backup items, so the backup readiness check doesn't apply to them."""
-    return "/virtualmachinescalesets/" in resource_id.lower()
+def _is_backupable_vm(resource_id: str) -> bool:
+    """True only for a standalone Microsoft.Compute/virtualMachines.
+
+    Azure Backup IaaS-VM protects standalone VMs only. NOT a backup item (and the
+    VM-oriented checks — backup/NSG/compute — don't apply): a VMSS instance, an AKS
+    managed cluster (Microsoft.ContainerService/managedClusters — what the AMA heartbeat
+    actually reports for AKS nodes, NOT the VMSS-instance id), or any other resource.
+    Allowlisting standalone VMs is more robust than denylisting each non-VM type."""
+    low = resource_id.lower()
+    return (
+        "/providers/microsoft.compute/virtualmachines/" in low
+        and "/virtualmachinescalesets/" not in low
+    )
 
 
 def _parse_vm_resource_id(resource_id: str) -> tuple[str, str]:

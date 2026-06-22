@@ -128,6 +128,15 @@ class PostureChecker:
         if self._dry_run:
             return []
 
+        # Only standalone VMs get VM-oriented checks. An AKS managed cluster (what the
+        # AMA heartbeat reports for AKS nodes), a VMSS instance, or any non-VM asset is
+        # not backupable, not NSG-isolatable, not snapshot-able the IaaS way → skip
+        # entirely. Otherwise check_backup_points / check_nsg_access fail on it and
+        # mint false backup_linked / nsg_reachable gaps that loop (the AKS parasite).
+        from glorfindel.actions import _is_backupable_vm
+        if not _is_backupable_vm(asset.resource_id):
+            return []
+
         gaps: list[PostureGap] = []
         vault = self._vault_name()
         vault_rg = self._vault_rg()
@@ -140,12 +149,7 @@ class PostureChecker:
         if vault:
             try:
                 res = self._connector.check_backup_points(rid, vault, vault_rg)
-                if res.get("not_backupable"):
-                    # VMSS instance (e.g. AKS node) — not an IaaS-VM backup item. No gap:
-                    # raising "not linked to vault" with an `enable-for-vm` fix is nonsense
-                    # for a node that is ephemeral by design (recreated from the pool).
-                    pass
-                elif not res.get("ok") and res.get("protected"):
+                if not res.get("ok") and res.get("protected"):
                     # Protected, but the first backup hasn't run yet. NOT a "not linked"
                     # critical — restore will be possible once a recovery point exists.
                     gaps.append(PostureGap(

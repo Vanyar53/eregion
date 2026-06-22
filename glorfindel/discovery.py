@@ -195,6 +195,13 @@ def _classify_asset(resource_id: str) -> tuple[str, str]:
     """
     rid = resource_id or ""
     low = rid.lower()
+    # Real-world AKS: the AMA heartbeat resolves every node's id to the AKS managed
+    # cluster (Microsoft.ContainerService/managedClusters/<name>), shared by all nodes.
+    # That shared id IS the grouping key → War Room collapses them into one card.
+    if "/providers/microsoft.containerservice/managedclusters/" in low:
+        return "aks_node", rid
+    # Direct VMSS instance id (.../virtualMachineScaleSets/<vmss>/virtualMachines/<n>) —
+    # seen when the heartbeat reports the instance rather than the cluster.
     marker = "/virtualmachinescalesets/"
     if marker in low and "/virtualmachines/" in low.split(marker, 1)[1]:
         # Parent = everything up to (and including) the VMSS name, before the instance.

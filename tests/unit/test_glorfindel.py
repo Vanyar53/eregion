@@ -188,17 +188,32 @@ def test_check_nsg_access_lists_all_nics(monkeypatch):
     assert res["scope"] == "nic"
 
 
-def test_check_backup_points_vmss_instance_not_backupable():
-    """A VMSS instance (AKS node) short-circuits to not_backupable WITHOUT an Azure call
-    — same error as an unprotected VM otherwise, so the resource shape is the only tell."""
+@pytest.mark.parametrize("rid", [
+    # VMSS instance (direct id)
+    "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute"
+    "/virtualMachineScaleSets/aks-pool/virtualMachines/0",
+    # AKS managed cluster — what the AMA heartbeat reports for real AKS nodes
+    "/subscriptions/s/resourceGroups/rg/providers"
+    "/Microsoft.ContainerService/managedClusters/aks-cluster",
+])
+def test_check_backup_points_non_vm_not_backupable(rid):
+    """Non standalone-VM resources short-circuit to not_backupable WITHOUT an Azure call
+    — same error as an unprotected VM otherwise, so the resource SHAPE is the only tell.
+    Covers both the VMSS-instance id and the AKS managed-cluster id (real-world)."""
     from glorfindel.actions import AzureConnector
     connector = AzureConnector(dry_run=False)  # no clients set — must not be reached
-    rid = ("/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute"
-           "/virtualMachineScaleSets/aks-pool/virtualMachines/0")
     res = connector.check_backup_points(rid, vault="rsv")
     assert res["not_backupable"] is True
     assert res["ok"] is False
     assert res["iam"] is False
+
+
+def test_check_backup_points_standalone_vm_is_backupable(monkeypatch):
+    """A real standalone VM is NOT short-circuited — it goes through the RSV lookup."""
+    from glorfindel.actions import _is_backupable_vm
+    assert _is_backupable_vm(
+        "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute"
+        "/virtualMachines/vm-app") is True
 
 
 def test_check_backup_points_not_protected(monkeypatch):

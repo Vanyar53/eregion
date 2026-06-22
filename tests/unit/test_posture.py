@@ -10,7 +10,12 @@ from glorfindel.discovery import DiscoveredAsset
 from glorfindel.posture import PostureChecker, PostureGap
 
 
-def _asset(name="vm-test", rid="/subs/s/rg/rg-test/providers/vm/vm-test"):
+def _asset(name="vm-test", rid=None):
+    if rid is None:
+        rid = (
+            "/subscriptions/s/resourceGroups/rg-test/providers/Microsoft.Compute"
+            f"/virtualMachines/{name}"
+        )
     return DiscoveredAsset(
         name=name,
         resource_id=rid,
@@ -75,22 +80,29 @@ def test_backup_linked_gap(tmp_path):
     assert any(g.severity == "critical" for g in gaps)
 
 
-def test_vmss_node_raises_no_backup_gap(tmp_path):
-    """A VMSS instance (AKS node) is not an IaaS-VM backup item → check_backup_points
-    returns not_backupable → NO backup gap (the bogus 'not linked to vault' that
-    looped on Jonathan's cluster)."""
-    conn = _connector()
-    conn.check_backup_points.return_value = {
-        "ok": False, "not_backupable": True, "error": "VMSS instance — not a backup item",
-    }
+def test_non_vm_assets_skip_all_posture_checks(tmp_path):
+    """An AKS managed cluster (what the AMA heartbeat reports for AKS nodes) and a VMSS
+    instance are not standalone VMs → posture skips ALL checks (no backup_linked AND no
+    nsg_reachable gap). The early guard runs before the connector is even called — kills
+    the parasite gap that looped on Jonathan's cluster."""
+    conn = _connector(backup_ok=False, nsg_ok=False)  # would gap on a real VM
     checker = PostureChecker(_cfg(), conn, dry_run=False)
     checker._state = {}
-    gaps = checker._check_asset(_asset(
+
+    aks = _asset(
+        name="aks-cluster",
+        rid="/subscriptions/s/resourceGroups/rg/providers"
+            "/Microsoft.ContainerService/managedClusters/aks-cluster",
+    )
+    vmss = _asset(
         name="aks-node-0",
         rid="/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute"
             "/virtualMachineScaleSets/aks-pool/virtualMachines/0",
-    ))
-    assert not any(g.check in ("backup_linked", "backup_recent") for g in gaps)
+    )
+    for asset in (aks, vmss):
+        assert checker._check_asset(asset) == []          # no gaps at all
+    conn.check_backup_points.assert_not_called()          # short-circuited
+    conn.check_nsg_access.assert_not_called()
 
 
 def test_backup_protected_no_rp_warns_not_critical(tmp_path):

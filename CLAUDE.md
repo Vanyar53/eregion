@@ -257,7 +257,10 @@ annatar/scenarios/azure/
   (cleanup/recovery/source/query/workspace_id supprimés — appartiennent à Glorfindel)
 
 schemas/scenario.schema.json  → JSON Schema validation IDE (mis à jour: prerequisites→detection.prerequisites)
-terraform/                    → infra complète Azure (VM, NSG, LAW, Backup, DCR, StorageBlobLogs)
+infra/terraform/              → infra complète Azure (VM, NSG, LAW, Backup, DCR, StorageBlobLogs).
+                                Pilotée par config.yaml (yamldecode + for_each sur `vms`, cf. locals.tf).
+                                Bench de validation on-demand : bench.config.yaml.example (topos multi-NIC/AKS/
+                                2-LAW/2-RSV, flags enabled, jetable) — module à construire (session infra).
 
 ~/.glorfindel/
   escalations.jsonl           → escalades persistées
@@ -465,7 +468,7 @@ az network nsg rule list -g annatar --nsg-name nsg-annatar -o table
 
 ## Sessions Claude spécialisées (multi-agents)
 
-4 sessions spécialisées + 2 sessions transversales, coordonnées via `collab/`.
+5 sessions spécialisées + 2 sessions transversales, coordonnées via `collab/`.
 
 | Session | Fichier de rôle | Périmètre |
 |---------|----------------|-----------|
@@ -473,6 +476,7 @@ az network nsg rule list -g annatar --nsg-name nsg-annatar -o table
 | Annatar | `CLAUDE_ANNATAR.md` | `annatar/`, `annatar/scenarios/`, tests unitaires Annatar |
 | Tests | `CLAUDE_TESTS.md` | Chef d'orchestre — tests fonctionnels bout en bout sur Azure réel |
 | War Room | `CLAUDE_WARROOM.md` | UI/UX `glorfindel/static/index.html` + `glorfindel/api.py` |
+| Infra | `CLAUDE_INFRA.md` | `infra/terraform/` — infra Azure + bench de validation on-demand |
 | Review | `CLAUDE.md` (base) | Design review, architecture critique, BA sprint — ad hoc |
 | General | `CLAUDE.md` (base) | Coordination inter-sessions, inbox routing, CLAUDE.md/README/ROADMAP |
 
@@ -489,6 +493,9 @@ az network nsg rule list -g annatar --nsg-name nsg-annatar -o table
 
 # Session War Room
 "Lis CLAUDE_WARROOM.md pour tes instructions de session, puis commence par ton inbox."
+
+# Session Infra
+"Lis CLAUDE_INFRA.md pour tes instructions de session, puis commence par ton inbox."
 
 # Session Review (ad hoc — challenge design et implémentations)
 "Tu es la session Review d'Eregion. Lis CLAUDE.md. Ta mission : challenger les décisions architecturales, les implémentations critiques et les choix de sécurité. Commence par lire inbox_review.md."

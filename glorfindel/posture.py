@@ -55,9 +55,11 @@ class PostureChecker:
     def check_and_escalate(self, assets: list) -> list[PostureGap]:
         """Check all assets, escalate new gaps, auto-resolve cleared ones. Returns gaps."""
         all_gaps: list[PostureGap] = []
+        checked_vms: set[str] = set()
         for asset in assets:
             if not asset.resource_id:
                 continue
+            checked_vms.add(asset.name)
             gaps = self._check_asset(asset)
             all_gaps.extend(gaps)
             for gap in gaps:
@@ -65,15 +67,26 @@ class PostureChecker:
         # Auto-resolve gaps that no longer exist (e.g. the overnight backup ran →
         # "no recovery point yet" cleared) so the operator doesn't have to ack a
         # posture escalation for a condition that fixed itself.
-        self._resolve_cleared_gaps({g.key for g in all_gaps})
+        self._resolve_cleared_gaps({g.key for g in all_gaps}, checked_vms)
         return all_gaps
 
-    def _resolve_cleared_gaps(self, current_keys: set[str]) -> None:
-        """Resolve escalations for previously-pending gaps no longer detected."""
+    def _resolve_cleared_gaps(self, current_keys: set[str], checked_vms: set[str]) -> None:
+        """Resolve escalations for gaps whose CONDITION genuinely cleared this cycle.
+
+        Only resolve a gap if its VM was actually checked and the gap no longer fires.
+        A VM that simply dropped out of discovery (powered off > retention → evicted) is
+        NOT "the gap cleared" — we just couldn't check it. Resolving on eviction would
+        wipe the ack and re-flood a fresh escalation when the VM returns (the Monday-
+        morning flood after a weekend off). So we FREEZE gaps for un-checked VMs.
+        """
         from glorfindel import escalations
         with self._lock:
             changed = False
             for key, entry in list(self._state.items()):
+                # Freeze gaps for VMs not checked this cycle (evicted/offline) — don't
+                # touch their ack/pending state.
+                if entry.get("vm_name") not in checked_vms:
+                    continue
                 # Clear both still-pending and acked gaps once the condition is gone,
                 # so a future recurrence re-alerts (an acked gap that clears must not
                 # stay 'acknowledged' forever and swallow the next real occurrence).

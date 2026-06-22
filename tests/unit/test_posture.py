@@ -224,10 +224,11 @@ def test_acked_gap_realerts_after_clearing_then_recurring(tmp_path):
         resource_id="/r", vm_name="vm-test", check="backup_linked",
         severity="critical", message="msg",
     )
-    checker._state = {gap.key: {"escalation_id": "esc-old", "status": "acknowledged"}}
+    checker._state = {gap.key: {
+        "escalation_id": "esc-old", "status": "acknowledged", "vm_name": "vm-test"}}
 
-    # Condition cleared (gap not in current set) → state goes 'resolved'.
-    checker._resolve_cleared_gaps(current_keys=set())
+    # VM WAS checked this cycle and the gap no longer fires → condition cleared.
+    checker._resolve_cleared_gaps(current_keys=set(), checked_vms={"vm-test"})
     assert checker._state[gap.key]["status"] == "resolved"
 
     # Now it recurs → re-escalate.
@@ -235,6 +236,25 @@ def test_acked_gap_realerts_after_clearing_then_recurring(tmp_path):
          patch("glorfindel.escalations.record", return_value="esc-2") as mock_rec:
         checker._maybe_escalate(gap)
         assert mock_rec.call_count == 1
+
+
+def test_evicted_vm_gap_is_frozen_not_resolved(tmp_path):
+    """A VM not checked this cycle (powered off > retention → evicted) must NOT have its
+    gap resolved — else the ack is wiped and a fresh escalation re-floods on return
+    (the Monday-morning flood after a weekend off)."""
+    checker = PostureChecker(_cfg(), _connector(backup_ok=False), dry_run=False)
+    checker._state = {
+        "vm-off:backup_linked": {
+            "escalation_id": "esc-1", "status": "acknowledged", "vm_name": "vm-off"},
+        "vm-on:backup_linked": {
+            "escalation_id": "esc-2", "status": "acknowledged", "vm_name": "vm-on"},
+    }
+    # Only vm-on was checked this cycle (vm-off is evicted); neither gap fires now.
+    checker._resolve_cleared_gaps(current_keys=set(), checked_vms={"vm-on"})
+
+    # vm-off (evicted) → frozen (ack preserved); vm-on (checked, cleared) → resolved.
+    assert checker._state["vm-off:backup_linked"]["status"] == "acknowledged"
+    assert checker._state["vm-on:backup_linked"]["status"] == "resolved"
 
 
 # ── active_gaps ────────────────────────────────────────────────────────────────

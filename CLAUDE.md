@@ -520,6 +520,8 @@ L'escalade porte `action_params` (dict, vide par défaut) pour les actions param
 
 ⚠️ **Ack d'un posture_gap encore RÉEL** : l'ack ne fait que `resolve` l'escalade ; `posture_state.json` gardait `status: "pending"` → le cycle suivant voyait « mon escalade n'est plus pending mais le gap existe toujours » → **recréait une escalade à chaque cycle** (ack inutile sur un gap persistant, ex. 14 VMs vraiment sans backup). Fix : `_maybe_escalate` interprète « pending + escalade absente de `pending()` » comme **acquitté** → `status: "acknowledged"`, ne ré-escalade plus. Le gap n'est ré-alerté que s'il **se résout puis réapparaît** (`_resolve_cleared_gaps` transitionne `pending`/`acknowledged` → `resolved` quand la condition disparaît). Un gap `acknowledged` sort de `active_gaps()` (n'apparaît plus dans `/api/state`).
 
+⚠️ **Éviction ≠ condition résolue** : `_resolve_cleared_gaps` ne résout un gap que si son asset a été **réellement checké ce cycle** (`checked_vms`). Une VM éteinte > rétention (8h) → évincée de l'inventaire → **non checkée** → ses gaps sont **gelés** (ack préservé), PAS résolus. Sinon : VM éteinte le weekend → gap résolu à l'éviction → re-découverte lundi → **ré-escalade fraîche en masse** (le « flood du lundi », acks effacés). Avec le gel, un gap `acknowledged` reste silencieux au retour de la VM. Effet de bord assumé : une VM **supprimée** (pas juste éteinte) garde son gap gelé jusqu'à un ack (qui tient). Pour une VM intentionnellement sans backup → `exceptions:` dans `glorfindel-config.yaml` (sort du check, pas juste un ack).
+
 ## alerting webhook + bot Discord
 
 **Webhook** (`GLORFINDEL_WEBHOOK_URL`) — one-way, Slack format :

@@ -1565,7 +1565,7 @@ function _renderClusterNode(cluster, slotIdx = 0) {
       const short = (n.name || '').split('/').pop();
       return `<div style="display:flex;align-items:center;gap:6px;padding:3px 4px;font-size:10px">
         <span style="color:${off ? 'var(--dim)' : 'var(--green)'};font-size:9px">●</span>
-        <span style="flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${short}</span>
+        <span title="${_attr(n.name || short)}" style="flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${short}</span>
         ${off
           ? `<span style="color:var(--dim);font-size:9px" title="${n.last_seen ? `last heartbeat ${_relTime(n.last_seen)}` : 'no recent heartbeat'}">${n.last_seen ? 'OFFLINE' : 'no heartbeat'}</span>`
           : `<span style="color:var(--green);font-size:9px">online</span>`}
@@ -1582,7 +1582,7 @@ function _renderClusterNode(cluster, slotIdx = 0) {
     <div class="node-asset-header" onclick="toggleAsset('${vm_name}')">
       <div style="display:flex;align-items:center;gap:6px">
         <span style="color:${dotCol};font-size:10px">●</span>
-        <span class="node-asset-name">🎛 ${vm_name}</span>
+        <span class="node-asset-name" title="${_attr(vm_name)}">🎛 ${vm_name}</span>
         <span style="font-size:8px;font-weight:700;padding:1px 5px;border-radius:3px;background:color-mix(in srgb,var(--cyan) 14%,transparent);color:var(--cyan);border:1px solid color-mix(in srgb,var(--cyan) 35%,var(--border));letter-spacing:.5px;flex-shrink:0">CLUSTER</span>
         <span style="color:var(--dim);font-size:9px;margin-left:auto;flex-shrink:0">${isExpanded ? '▾' : '▸'}</span>
       </div>
@@ -1910,7 +1910,7 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
     <div class="node-asset-header" onclick="toggleAsset('${vm_name}')">
       <div style="display:flex;align-items:center;gap:6px">
         ${dot}
-        <span class="node-asset-name">${vm_name}</span>
+        <span class="node-asset-name" title="${_attr(vm_name)}">${vm_name}</span>
         <span style="color:var(--dim);font-size:9px;margin-left:auto;flex-shrink:0">${isExpanded ? '▾' : '▸'}</span>
       </div>
       ${(offlineBadge || modeBadge || (readiness && !isExpanded)) ? `

@@ -1124,6 +1124,9 @@ function renderInfra() {
   // this keeps the operator where they were instead of yanking back to the top.
   const _prevGraph = document.getElementById('topo-graph');
   const _savedScroll = _prevGraph ? _prevGraph.scrollTop : 0;
+  // Same for the PROTECT NSG list's own inner scroll (recreated by the swap too).
+  const _prevNsg = document.getElementById('nsg-scroll');
+  const _savedNsgScroll = _prevNsg ? _prevNsg.scrollTop : 0;
   const rules          = _cfgData?.detection?.rules     || [];
   const detectBackends  = _cfgData?.monitoring_backends  || [];
   const recoverBackends = (_cfgData?.assets || []).filter(a => a.type === 'azure_backup_vault');
@@ -1278,6 +1281,10 @@ function renderInfra() {
   if (_savedScroll) {
     const _newGraph = document.getElementById('topo-graph');
     if (_newGraph) _newGraph.scrollTop = _savedScroll;
+  }
+  if (_savedNsgScroll) {
+    const _newNsg = document.getElementById('nsg-scroll');
+    if (_newNsg) _newNsg.scrollTop = _savedNsgScroll;
   }
   requestAnimationFrame(_drawTopologyEdges);
   _applyReadOnlyGuards(list);
@@ -1450,7 +1457,7 @@ function _renderModules(rules, detectBackends, recoverBackends, resources) {
   // card endless otherwise). blind/restricted chips flag what needs attention in place.
   const nsgListDetail = nsgInv
     ? (nsgInv.length
-        ? `<div style="max-height:240px;overflow-y:auto">${nsgInv.slice().sort((a, b) => (a.nsg || '').localeCompare(b.nsg || '')).map(n => {
+        ? `<div id="nsg-scroll" style="max-height:240px;overflow-y:auto">${nsgInv.slice().sort((a, b) => (a.nsg || '').localeCompare(b.nsg || '')).map(n => {
             const sub = (n.subnets || []).length, nic = (n.nics || []).length;
             const govVms = n.vms || [];
             const assoc = [sub ? `${sub} subnet${sub > 1 ? 's' : ''}` : '', nic ? `${nic} NIC${nic > 1 ? 's' : ''}` : '', govVms.length ? `${govVms.length} VM${govVms.length > 1 ? 's' : ''}` : '']

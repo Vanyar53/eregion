@@ -826,6 +826,23 @@ async def backups() -> dict:
         return {"vault": vault, "items": [], "error": str(e)}
 
 
+@app.get("/api/nsgs")
+async def nsgs() -> dict:
+    """Full NSG inventory (network-control layer) — every NSG as a resource, complete
+    and independent of VM discovery/power state. The per-VM audit under-counts (misses
+    subnet NSGs shared with a NIC's own NSG, AKS subnet NSGs, off-VM NSGs); listing NSG
+    resources gives the true count + associations + which carry a Glorfindel rule.
+    """
+    from glorfindel.actions import AzureConnector
+
+    try:
+        connector = AzureConnector(dry_run=False)
+        items = await asyncio.to_thread(connector.list_nsgs)
+        return {"nsgs": items}
+    except Exception as e:
+        return {"nsgs": [], "error": str(e)}
+
+
 @app.get("/api/actions/{vm_name}")
 async def vm_actions(vm_name: str, limit: int = 5) -> dict:
     """Return recent Glorfindel decisions for a VM (reasoning + confidence)."""

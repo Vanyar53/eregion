@@ -6,6 +6,14 @@ IMAGE_GLORFINDEL := eregion-glorfindel
 SCENARIO ?= annatar/scenarios/azure/ransomware-vm.yaml
 SIGNALS  ?= $(shell ls runs/*_signals.jsonl 2>/dev/null | tail -1)
 
+# ── Celebrimbor (infra de test modulaire, jetable) ─────────────────────────
+# TF = module unifié infra/terraform/. INSTANCE = workspace Terraform (stack
+# isolée pour pipelines parallèles). TOPO = topos à activer (surcharge les flags
+# enabled: du config.yaml). Le baseline est toujours déployé.
+TF       := terraform -chdir=infra/terraform
+INSTANCE ?= default
+TOPO     ?=
+
 # Annatar — ANNATAR_AZURE_CLIENT_* si définis, sinon fallback AZURE_CLIENT_*
 # Annatar a besoin de Contributor (RunCommand). Définir ANNATAR_AZURE_CLIENT_*
 # pour séparer ses creds de ceux de Glorfindel (Reader pour observe-only).
@@ -74,7 +82,8 @@ DOCKER_GLORFINDEL := docker run --rm $(GLORFINDEL_AZURE_ENV) $(GLORFINDEL_VOLS) 
 	glorfindel-pending glorfindel-check-ttl \
 	glorfindel-start glorfindel-stop glorfindel-restart glorfindel-dev glorfindel-logs glorfindel-ui \
 	annatar-shell glorfindel-shell \
-	venv install test test-unit lint annatar-simulate annatar-simulate-gap clean
+	venv install test test-unit lint annatar-simulate annatar-simulate-gap clean \
+	celebrimbor-init celebrimbor-plan celebrimbor-up celebrimbor-down celebrimbor-output celebrimbor-stop celebrimbor-start
 
 # ── Help ──────────────────────────────────────────────────────────────────
 
@@ -123,10 +132,19 @@ help:
 	@echo "  make annatar-shell      🔴 Interactive shell in eregion-annatar"
 	@echo "  make glorfindel-shell   🔵 Interactive shell in eregion-glorfindel"
 	@echo ""
+	@echo "Celebrimbor (infra de test Terraform, jetable)"
+	@echo "  make celebrimbor-plan [TOPO=] [INSTANCE=]   Plan (lecture seule, pas d'apply)"
+	@echo "  make celebrimbor-up   [TOPO=] [INSTANCE=]   Apply baseline (+ topos)"
+	@echo "  make celebrimbor-down [INSTANCE=]           Détruit le workspace"
+	@echo "  make celebrimbor-stop / celebrimbor-start         Éteint/rallume les VMs (sans détruire)"
+	@echo "  make celebrimbor-output [INSTANCE=]         Fragment glorfindel-config.yaml généré"
+	@echo ""
 	@echo "Variables"
 	@echo "  SCENARIO    Path to scenario YAML (default: $(SCENARIO))"
 	@echo "  SIGNALS     Path to signals JSONL (default: latest in runs/)"
 	@echo "  RESOURCE_ID Azure VM resource ID"
+	@echo "  INSTANCE    Workspace/stack du bench (default: default)"
+	@echo "  TOPO        Topos à activer, ex: TOPO=\"multinic,aks\""
 	@echo ""
 
 # ── Build ─────────────────────────────────────────────────────────────────
@@ -239,6 +257,54 @@ glorfindel-shell: build-glorfindel
 	docker run --rm -it $(GLORFINDEL_AZURE_ENV) $(GLORFINDEL_VOLS) $(GLORFINDEL_STATE) \
 		$(GLORFINDEL_ENV) \
 		$(IMAGE_GLORFINDEL) bash --init-file /root/.glorfindel/.bashrc
+
+# ── Celebrimbor (infra Terraform) ──────────────────────────────────────────
+# Apply/destroy interactifs (Terraform demande la confirmation = la revue du plan).
+#   make celebrimbor-up                       # baseline (+ topos enabled:true du config)
+#   make celebrimbor-up TOPO="multinic,aks"   # n'active QUE ces topos
+#   make celebrimbor-up INSTANCE=ci-1234       # stack isolée (workspace dédié)
+#   make celebrimbor-plan TOPO=multinic        # plan seul (lecture, pas d'apply)
+#   make celebrimbor-down                      # détruit le workspace courant
+#   make celebrimbor-stop / celebrimbor-start        # éteint/rallume les VMs sans détruire
+#   make celebrimbor-output                    # fragment glorfindel-config.yaml généré
+
+celebrimbor-init:
+	$(TF) init -upgrade
+
+celebrimbor-plan: celebrimbor-init
+	@$(TF) workspace select -or-create $(INSTANCE)
+	@if [ -n "$(TOPO)" ]; then \
+	   filter=$$(echo '$(TOPO)' | awk -F, '{for(i=1;i<=NF;i++){printf "%s\"%s\"",(i>1?",":""),$$i}}'); \
+	   $(TF) plan -var="topo_filter=[$$filter]"; \
+	 else \
+	   $(TF) plan; \
+	 fi
+
+celebrimbor-up: celebrimbor-init
+	@$(TF) workspace select -or-create $(INSTANCE)
+	@if [ -n "$(TOPO)" ]; then \
+	   filter=$$(echo '$(TOPO)' | awk -F, '{for(i=1;i<=NF;i++){printf "%s\"%s\"",(i>1?",":""),$$i}}'); \
+	   $(TF) apply -var="topo_filter=[$$filter]" --auto-approve; \
+	 else \
+	   $(TF) apply --auto-approve; \
+	 fi
+	@echo "" && echo "  Fragment glorfindel-config → make celebrimbor-output"
+
+celebrimbor-down:
+	@$(TF) workspace select $(INSTANCE)
+	$(TF) destroy
+
+celebrimbor-output:
+	@$(TF) workspace select $(INSTANCE)
+	@$(TF) output -raw glorfindel_config_fragment
+
+celebrimbor-stop:
+	@ids=$$(az vm list --query "[?tags.project=='celebrimbor' && tags.instance=='$(INSTANCE)'].id" -o tsv); \
+	 [ -n "$$ids" ] && az vm deallocate --ids $$ids || echo "Aucune VM celebrimbor pour l'instance '$(INSTANCE)'"
+
+celebrimbor-start:
+	@ids=$$(az vm list --query "[?tags.project=='celebrimbor' && tags.instance=='$(INSTANCE)'].id" -o tsv); \
+	 [ -n "$$ids" ] && az vm start --ids $$ids || echo "Aucune VM celebrimbor pour l'instance '$(INSTANCE)'"
 
 # ── Dev ───────────────────────────────────────────────────────────────────
 

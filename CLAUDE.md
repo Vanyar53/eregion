@@ -248,7 +248,8 @@ glorfindel/
     detection_rules.yaml → rules UNIQUEMENT — queries KQL, TTPs, noms de backends
                            PAS de workspace_id, resource_id, ni section assets
                            assets: [auto] → s'applique aux VMs découvertes par le backend
-                           monitoring_backends: [law-annatar] dans chaque rule → nom du backend
+                           monitoring_backends: [law-celebrimbor-amonsul] par rule → nom du backend
+                           (OPTIONNEL : omis si un seul backend du type, cas mono-LAW → résolution fallback)
 
 annatar/
   runner/engine.py    → setup → integrity check → attack → emit attack_started (sans query — Glorfindel résout via detection_rules.yaml)
@@ -267,10 +268,16 @@ annatar/scenarios/azure/
   (cleanup/recovery/source/query/workspace_id supprimés — appartiennent à Glorfindel)
 
 schemas/scenario.schema.json  → JSON Schema validation IDE (mis à jour: prerequisites→detection.prerequisites)
-infra/terraform/              → infra complète Azure (VM, NSG, LAW, Backup, DCR, StorageBlobLogs).
-                                Pilotée par config.yaml (yamldecode + for_each sur `vms`, cf. locals.tf).
-                                Bench de validation on-demand : bench.config.yaml.example (topos multi-NIC/AKS/
-                                2-LAW/2-RSV, flags enabled, jetable) — module à construire (session infra).
+infra/terraform/              → module Celebrimbor : infra de test Azure modulaire, namespacée, jetable.
+                                Celebrimbor = le bâtisseur (annatar=rouge, glorfindel=bleu, celebrimbor=infra).
+                                Pilotée par config.yaml (yamldecode + for_each). instance = WORKSPACE Terraform :
+                                "default" → noms canoniques (vm-celebrimbor-gondolin, law-celebrimbor-amonsul,
+                                rsv-celebrimbor-erebor, rg-celebrimbor) ; instance nommée → tout suffixé "-<instance>"
+                                + state isolé → stacks parallèles (pipelines short/long run).
+                                Topologies de validation dans config.yaml (topologies.<n>.enabled, toutes false
+                                par défaut), gated par for_each, 1 RG par topo. topo_multinic.tf = topo #1 (2 NIC).
+                                Cibles : make celebrimbor-{plan,up,down,output,stop,start} [INSTANCE=] [TOPO=].
+                                Schéma de noms type-celebrimbor-nom (CAF) : VM=cités, LAW=tours de guet, RSV=coffres.
 
 ~/.glorfindel/
   escalations.jsonl           → escalades persistées
@@ -345,7 +352,7 @@ glorfindel check-ttl                         # libérer isolations expirées
 # Audit remédiation — vérifier que Glorfindel peut agir avant l'incident
 glorfindel audit <resource_id>               # NSG / backup / compute / IAM
 glorfindel audit --all                       # toutes ressources de detection_rules.yaml
-glorfindel audit --all --vault <nom>         # vault non-défaut (défaut: rsv-annatar)
+glorfindel audit --all --vault <nom>         # vault non-défaut (défaut: rsv-celebrimbor-erebor)
 
 # Boucle purple team — apprentissage détection
 glorfindel pending                           # voir les règles proposées (proposed_rule)
@@ -412,7 +419,7 @@ wheel : eregion-0.2.0-py3-none-any.whl ✓
 ## Coûts réels (West Europe)
 
 - **Infra existante** : LLM API uniquement (Anthropic défaut), <$2/mois (~$0.05–0.10 par run)
-- **Sandbox Terraform** : ~$25–35/mois (VM ~6h/jour + disques + IP + backup + LAW). Désactivable entre runs.
+- **Infra Celebrimbor (Terraform)** : ~$25–35/mois (VM ~6h/jour + disques + IP + backup + LAW). Jetable — `make celebrimbor-down` entre sessions, ou `make celebrimbor-stop` pour pauser sans détruire.
 
 ---
 
@@ -431,7 +438,7 @@ wheel : eregion-0.2.0-py3-none-any.whl ✓
 - Priority bump `isolate_vm` : dynamique (premier slot libre ≥ 200) → fix bug conflit T1110 + T1548.
 - StorageBlobLogs : latence secondes. `AzureNetworkAnalytics_CL` inutilisable (10-60min).
 - Restore via REST API `IaasVMRestoreRequest OriginalLocation` → VM deallocated puis redémarrée.
-- VM auto-shutdown 23h UTC → `az vm start -g annatar -n vm-annatar-victim` avant chaque session.
+- VM auto-shutdown 23h UTC → `az vm start -g rg-celebrimbor -n vm-celebrimbor-gondolin` avant chaque session (ou `make celebrimbor-start`).
 - Syslog latence ~60s nominal, timeout 300s dans les scénarios.
 - DCR `facility_names` doit inclure `authpriv` — `useradd` sur Ubuntu génère des messages `LOG_AUTHPRIV`. Sans ce facility, T1136.001 (account creation) ne remonte pas dans LAW. Ajouté dans `monitoring.tf` (commit 9a64e83).
 - Azure Backup OriginalLocation restore laisse des disques orphelins à LUN 10 → `terraform apply` échoue sur le prochain attachement. Fix : `null_resource.clean_lun10` dans `vm.tf` détache automatiquement tout disque non-testdata à LUN 10.
@@ -456,7 +463,7 @@ glorfindel list                           # voir isolations + IPs bloquées
 glorfindel reset <resource_id> --yes     # reset complet
 
 # Vérification NSG directe si besoin
-az network nsg rule list -g annatar --nsg-name nsg-annatar -o table
+az network nsg rule list -g rg-celebrimbor --nsg-name nsg-celebrimbor -o table
 ```
 
 ---
@@ -486,7 +493,7 @@ az network nsg rule list -g annatar --nsg-name nsg-annatar -o table
 | Annatar | `CLAUDE_ANNATAR.md` | `annatar/`, `annatar/scenarios/`, tests unitaires Annatar |
 | Tests | `CLAUDE_TESTS.md` | Chef d'orchestre — tests fonctionnels bout en bout sur Azure réel |
 | War Room | `CLAUDE_WARROOM.md` | UI/UX `glorfindel/static/index.html` + `glorfindel/api.py` |
-| Infra | `CLAUDE_INFRA.md` | `infra/terraform/` — infra Azure + bench de validation on-demand |
+| Infra | `CLAUDE_INFRA.md` | `infra/terraform/` — module Celebrimbor : infra Azure modulaire, namespacée, jetable + topos de validation |
 | Review | `CLAUDE.md` (base) | Design review, architecture critique, BA sprint — ad hoc |
 | General | `CLAUDE.md` (base) | Coordination inter-sessions, inbox routing, CLAUDE.md/README/ROADMAP |
 

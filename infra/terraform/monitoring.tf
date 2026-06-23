@@ -1,29 +1,29 @@
-resource "azurerm_log_analytics_workspace" "annatar" {
-  name                = "law-annatar"
-  location            = azurerm_resource_group.annatar.location
-  resource_group_name = azurerm_resource_group.annatar.name
+resource "azurerm_log_analytics_workspace" "celebrimbor" {
+  name                = "law-${local.project}-${local.cfg.law_name}${local.ns}"
+  location            = azurerm_resource_group.celebrimbor.location
+  resource_group_name = azurerm_resource_group.celebrimbor.name
   sku                 = "PerGB2018"
   retention_in_days   = local.cfg.log_retention_days
-  tags                = azurerm_resource_group.annatar.tags
+  tags                = local.common_tags
 }
 
 # Data Collection Rule — collect VM perf metrics and syslogs
-resource "azurerm_monitor_data_collection_rule" "annatar" {
-  name                = "dcr-annatar"
-  resource_group_name = azurerm_resource_group.annatar.name
-  location            = azurerm_resource_group.annatar.location
-  tags                = azurerm_resource_group.annatar.tags
+resource "azurerm_monitor_data_collection_rule" "celebrimbor" {
+  name                = "dcr-${local.project}${local.ns}"
+  resource_group_name = azurerm_resource_group.celebrimbor.name
+  location            = azurerm_resource_group.celebrimbor.location
+  tags                = local.common_tags
 
   destinations {
     log_analytics {
-      workspace_resource_id = azurerm_log_analytics_workspace.annatar.id
-      name                  = "law-annatar-dest"
+      workspace_resource_id = azurerm_log_analytics_workspace.celebrimbor.id
+      name                  = "law-dest"
     }
   }
 
   data_flow {
     streams      = ["Microsoft-Perf", "Microsoft-Syslog"]
-    destinations = ["law-annatar-dest"]
+    destinations = ["law-dest"]
   }
 
   data_sources {
@@ -51,18 +51,18 @@ resource "azurerm_monitor_data_collection_rule" "annatar" {
 resource "azurerm_monitor_data_collection_rule_association" "vm" {
   for_each                = local.vms
   name                    = each.value.dcra_name
-  target_resource_id      = azurerm_linux_virtual_machine.victim[each.key].id
-  data_collection_rule_id = azurerm_monitor_data_collection_rule.annatar.id
+  target_resource_id      = azurerm_linux_virtual_machine.baseline[each.key].id
+  data_collection_rule_id = azurerm_monitor_data_collection_rule.celebrimbor.id
 }
 
 # Alert — Disk write anomaly (ransomware signal)
 resource "azurerm_monitor_scheduled_query_rules_alert_v2" "disk_write_anomaly" {
-  name                = "alert-annatar-disk-write-anomaly"
-  resource_group_name = azurerm_resource_group.annatar.name
-  location            = azurerm_resource_group.annatar.location
-  tags                = azurerm_resource_group.annatar.tags
+  name                = "alert-${local.project}-disk-write-anomaly${local.ns}"
+  resource_group_name = azurerm_resource_group.celebrimbor.name
+  location            = azurerm_resource_group.celebrimbor.location
+  tags                = local.common_tags
 
-  scopes                  = [azurerm_log_analytics_workspace.annatar.id]
+  scopes                  = [azurerm_log_analytics_workspace.celebrimbor.id]
   description             = "High disk write rate — potential ransomware"
   severity                = 1
   enabled                 = true
@@ -89,35 +89,35 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "disk_write_anomaly" {
 
 resource "azurerm_role_assignment" "ama_dcr" {
   for_each             = local.vms
-  scope                = azurerm_monitor_data_collection_rule.annatar.id
+  scope                = azurerm_monitor_data_collection_rule.celebrimbor.id
   role_definition_name = "Monitoring Metrics Publisher"
-  principal_id         = azurerm_linux_virtual_machine.victim[each.key].identity[0].principal_id
+  principal_id         = azurerm_linux_virtual_machine.baseline[each.key].identity[0].principal_id
 }
 
 # Network Watcher — auto-created by Azure per region, reference as data source
-data "azurerm_network_watcher" "annatar" {
+data "azurerm_network_watcher" "celebrimbor" {
   name                = "NetworkWatcher_${local.cfg.location}"
   resource_group_name = "NetworkWatcherRG"
 }
 
-# NSG Flow Logs + Traffic Analytics — populates AzureNetworkAnalytics_CL in law-annatar.
+# NSG Flow Logs + Traffic Analytics — populates AzureNetworkAnalytics_CL in the LAW.
 # Enables T1041 detection via outbound traffic anomaly queries.
 # Minimum interval is 10 min — detection timeout in data-exfiltration.yaml is set to 900s.
-resource "azurerm_network_watcher_flow_log" "annatar" {
-  network_watcher_name = data.azurerm_network_watcher.annatar.name
-  resource_group_name  = data.azurerm_network_watcher.annatar.resource_group_name
-  name                 = "flowlog-annatar"
+resource "azurerm_network_watcher_flow_log" "celebrimbor" {
+  network_watcher_name = data.azurerm_network_watcher.celebrimbor.name
+  resource_group_name  = data.azurerm_network_watcher.celebrimbor.resource_group_name
+  name                 = "flowlog-${local.project}${local.ns}"
 
   # VNet flow logs (NSG flow logs retired June 2025 — target_resource_id replaces network_security_group_id)
-  target_resource_id = azurerm_virtual_network.annatar.id
+  target_resource_id = azurerm_virtual_network.celebrimbor.id
   storage_account_id = azurerm_storage_account.exfil.id
   enabled            = true
 
   traffic_analytics {
     enabled               = true
-    workspace_id          = azurerm_log_analytics_workspace.annatar.workspace_id
-    workspace_region      = azurerm_resource_group.annatar.location
-    workspace_resource_id = azurerm_log_analytics_workspace.annatar.id
+    workspace_id          = azurerm_log_analytics_workspace.celebrimbor.workspace_id
+    workspace_region      = azurerm_resource_group.celebrimbor.location
+    workspace_resource_id = azurerm_log_analytics_workspace.celebrimbor.id
     interval_in_minutes   = 10
   }
 
@@ -126,5 +126,5 @@ resource "azurerm_network_watcher_flow_log" "annatar" {
     days    = 7
   }
 
-  tags = azurerm_resource_group.annatar.tags
+  tags = local.common_tags
 }

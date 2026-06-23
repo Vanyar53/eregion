@@ -1,42 +1,93 @@
-# Annatar — Infrastructure configuration
+# Celebrimbor — Infrastructure de test Eregion
+#
+# Celebrimbor est le bâtisseur : le seigneur-forgeron d'Eregion (l'univers du repo).
+# Annatar (rouge) attaque, Glorfindel (bleu) défend, Celebrimbor construit l'infra.
+#
+# Ce fichier pilote le module via yamldecode + for_each (cf. locals.tf). L'instance
+# est dérivée du WORKSPACE Terraform (`terraform.workspace`) :
+#   - workspace "default"  → noms canoniques (rg-celebrimbor, vm-celebrimbor-gondolin…)
+#   - workspace "<nom>"    → tout suffixé "-<nom>" (stacks éphémères parallèles, pipelines)
+#
+#   make celebrimbor-up                       # applique le baseline (+ topos enabled:true)
+#   make celebrimbor-up TOPO="multinic,aks"   # n'active QUE ces topos (surcharge enabled)
+#   make celebrimbor-up INSTANCE=ci-1234       # stack isolée dans un workspace dédié
+#   make celebrimbor-down                      # détruit le workspace courant
+#   make celebrimbor-stop / celebrimbor-start        # éteint/rallume les VMs sans détruire
 
-# Infrastructure
-resource_group_name: annatar
+# ── Identité ─────────────────────────────────────────────────────────────────
+project:  celebrimbor
 location: westeurope
 
-# VM — défauts appliqués à chaque VM qui ne surcharge pas
-vm_size: Standard_D2as_v6
-admin_username: annatar
-disk_size_gb: 32
+# ── Baseline VM — défauts appliqués à chaque hôte qui ne surcharge pas ────────
+vm_size:        Standard_D2as_v6
+admin_username: celebrimbor
+disk_size_gb:   32
 
-# VMs à déployer (for_each). La clé "victim" → nom historique vm-annatar-victim
-# (rétro-compat scénarios / règles de détection / recovery points de backup).
-# Chaque VM peut surcharger vm_size / disk_size_gb ; sinon hérite des défauts ci-dessus.
-# Ajouter une entrée = une VM de plus, clé stable (pas de décalage d'index → pas de
-# destroy/recreate des autres VMs, contrairement à count).
+# Hôtes baseline (instance courante). La CLÉ = nom propre Tolkien (cités/forteresses).
+# Chaque hôte peut surcharger vm_size / disk_size_gb. Clé stable (pas d'index décalé).
+# gondolin : la cité cachée trahie et mise à sac — celle que Glorfindel a défendue.
 vms:
-  victim: {}
-  elrond: {}
-  # victim-web:
-  #   vm_size: Standard_B1s
-  # victim-db:
-  #   disk_size_gb: 64
+  gondolin: {}
 
-# Network
-vnet_address_space: 10.10.0.0/16
+# ── Ressources nommées (baseline) ────────────────────────────────────────────
+law_name: amonsul # tour de guet (Weathertop) — observation/logs
+rsv_name: erebor  # la Montagne au trésor — coffre/sauvegarde
+
+# ── Network ──────────────────────────────────────────────────────────────────
+vnet_address_space:    10.10.0.0/16
 subnet_address_prefix: 10.10.1.0/24
 
-# Backup
-vault_storage_mode: LocallyRedundant
-vault_immutability: Disabled
-backup_time: "02:00"
+# ── Backup ───────────────────────────────────────────────────────────────────
+vault_storage_mode:    LocallyRedundant
+vault_immutability:    Disabled
+backup_time:           "02:00"
 backup_retention_days: 7
 
-# VM auto-shutdown (UTC — minuit Paris = 22:00 UTC été, 23:00 UTC hiver)
-vm_shutdown_time: "2300" # format HHMM UTC, changer à 0000 ou 0100 si tu travailles tard
+# ── VM auto-shutdown (UTC — minuit Paris = 22:00 UTC été, 23:00 UTC hiver) ─────
+vm_shutdown_time:  "2300" # format HHMM UTC
 vm_shutdown_email: fontaine.jonathan@proton.me
 
-# Monitoring
-log_retention_days: 30
-perf_sampling_frequency: 10
+# ── Monitoring ───────────────────────────────────────────────────────────────
+log_retention_days:               30
+perf_sampling_frequency:          10
 disk_write_alert_threshold_bytes: 52428800 # 50 MB/s
+
+# ── Topologies de test (jetables, toutes enabled:false par défaut) ────────────
+# Un apply de base ne déploie QUE le baseline. Chaque topo = ressources gated par
+# `enabled` (for_each), dans son propre RG taggé ttl=destroy-after-test → jetable.
+# La surcharge `make celebrimbor-up TOPO=...` passe -var topo_filter et ignore ces flags.
+topologies:
+
+  # 1. VM 2 NICs, 1 NSG par NIC (niveau NIC) → isolation multi-NIC (7603a3e)
+  multinic:
+    enabled: false
+
+  # 2. VM derrière un NSG de SUBNET (+ voisin) → deny scopé IP, non-impact (957f48e)
+  subnet_nsg:
+    enabled: false
+
+  # 3. VM 2 NICs — mix NSG NIC + NSG subnet → 2 scopes en une passe
+  mix_nsg:
+    enabled: false
+
+  # 4. NIC à plusieurs ipConfigs → couverture de toutes les IP (7603a3e)
+  multiip:
+    enabled: false
+    secondary_ips: 1
+
+  # 5. Cluster AKS → groupage kind/parent (cb3593b) + posture skip (9a7bd59)
+  aks:
+    enabled: false
+    node_count: 2
+
+  # 6. Vault cross-RG (RSV dans son propre RG) → check_backup_points RG du vault (4ba8134)
+  vault_cross_rg:
+    enabled: false
+
+  # 7. Deux Log Analytics Workspaces → binding règle↔backend multi-LAW (90a0b09)
+  two_law:
+    enabled: false
+
+  # 8. Deux Recovery Services Vaults → résolution multi-vault (4ba8134/754aea0)
+  two_rsv:
+    enabled: false

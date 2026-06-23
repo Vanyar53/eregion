@@ -1,23 +1,25 @@
-resource "azurerm_virtual_network" "annatar" {
-  name                = "vnet-annatar"
+resource "azurerm_virtual_network" "celebrimbor" {
+  name                = "vnet-${local.project}${local.ns}"
   address_space       = [local.cfg.vnet_address_space]
-  location            = azurerm_resource_group.annatar.location
-  resource_group_name = azurerm_resource_group.annatar.name
-  tags                = azurerm_resource_group.annatar.tags
+  location            = azurerm_resource_group.celebrimbor.location
+  resource_group_name = azurerm_resource_group.celebrimbor.name
+  tags                = local.common_tags
 }
 
-resource "azurerm_subnet" "annatar" {
-  name                 = "subnet-annatar"
-  resource_group_name  = azurerm_resource_group.annatar.name
-  virtual_network_name = azurerm_virtual_network.annatar.name
+resource "azurerm_subnet" "celebrimbor" {
+  name                 = "subnet-${local.project}"
+  resource_group_name  = azurerm_resource_group.celebrimbor.name
+  virtual_network_name = azurerm_virtual_network.celebrimbor.name
   address_prefixes     = [local.cfg.subnet_address_prefix]
 }
 
-resource "azurerm_network_security_group" "annatar" {
-  name                = "nsg-annatar"
-  location            = azurerm_resource_group.annatar.location
-  resource_group_name = azurerm_resource_group.annatar.name
-  tags                = azurerm_resource_group.annatar.tags
+# NSG niveau SUBNET pour le baseline (un seul NSG partagé). Les topos NIC-level
+# (multinic, mix_nsg) montent leurs propres NSG associés aux NICs.
+resource "azurerm_network_security_group" "celebrimbor" {
+  name                = "nsg-${local.project}${local.ns}"
+  location            = azurerm_resource_group.celebrimbor.location
+  resource_group_name = azurerm_resource_group.celebrimbor.name
+  tags                = local.common_tags
 
   security_rule {
     name                       = "allow-ssh"
@@ -44,32 +46,32 @@ resource "azurerm_network_security_group" "annatar" {
   }
 }
 
-resource "azurerm_subnet_network_security_group_association" "annatar" {
-  subnet_id                 = azurerm_subnet.annatar.id
-  network_security_group_id = azurerm_network_security_group.annatar.id
+resource "azurerm_subnet_network_security_group_association" "celebrimbor" {
+  subnet_id                 = azurerm_subnet.celebrimbor.id
+  network_security_group_id = azurerm_network_security_group.celebrimbor.id
 }
 
-resource "azurerm_public_ip" "annatar_vm" {
+resource "azurerm_public_ip" "celebrimbor_vm" {
   for_each            = local.vms
   name                = each.value.pip_name
-  location            = azurerm_resource_group.annatar.location
-  resource_group_name = azurerm_resource_group.annatar.name
+  location            = azurerm_resource_group.celebrimbor.location
+  resource_group_name = azurerm_resource_group.celebrimbor.name
   allocation_method   = "Static"
   sku                 = "Standard"
-  tags                = azurerm_resource_group.annatar.tags
+  tags                = local.common_tags
 }
 
-resource "azurerm_network_interface" "annatar_vm" {
+resource "azurerm_network_interface" "celebrimbor_vm" {
   for_each            = local.vms
   name                = each.value.nic_name
-  location            = azurerm_resource_group.annatar.location
-  resource_group_name = azurerm_resource_group.annatar.name
-  tags                = azurerm_resource_group.annatar.tags
+  location            = azurerm_resource_group.celebrimbor.location
+  resource_group_name = azurerm_resource_group.celebrimbor.name
+  tags                = local.common_tags
 
   ip_configuration {
     name                          = "internal"
-    subnet_id                     = azurerm_subnet.annatar.id
+    subnet_id                     = azurerm_subnet.celebrimbor.id
     private_ip_address_allocation = "Dynamic"
-    public_ip_address_id          = azurerm_public_ip.annatar_vm[each.key].id
+    public_ip_address_id          = azurerm_public_ip.celebrimbor_vm[each.key].id
   }
 }

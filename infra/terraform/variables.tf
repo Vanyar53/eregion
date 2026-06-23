@@ -3,3 +3,9 @@ variable "admin_ssh_public_key" {
   type        = string
   sensitive   = true
 }
+
+variable "topo_filter" {
+  description = "Surcharge des topologies actives (depuis `make celebrimbor-up TOPO=a,b`). Vide = on respecte topologies.<name>.enabled du config.yaml."
+  type        = list(string)
+  default     = []
+}

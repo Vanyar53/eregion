@@ -1,15 +1,13 @@
-resource "azurerm_linux_virtual_machine" "victim" {
+resource "azurerm_linux_virtual_machine" "baseline" {
   for_each            = local.vms
   name                = each.value.vm_name
-  resource_group_name = azurerm_resource_group.annatar.name
-  location            = azurerm_resource_group.annatar.location
+  resource_group_name = azurerm_resource_group.celebrimbor.name
+  location            = azurerm_resource_group.celebrimbor.location
   size                = each.value.vm_size
   admin_username      = local.cfg.admin_username
-  tags = merge(azurerm_resource_group.annatar.tags, {
-    "annatar-test" = "true"
-  })
+  tags                = local.common_tags
 
-  network_interface_ids = [azurerm_network_interface.annatar_vm[each.key].id]
+  network_interface_ids = [azurerm_network_interface.celebrimbor_vm[each.key].id]
 
   identity {
     type = "SystemAssigned"
@@ -49,8 +47,8 @@ resource "azurerm_linux_virtual_machine" "victim" {
     mount "$DATA_DISK" /mnt/testdata
     DATA_UUID=$(blkid -o value -s UUID "$DATA_DISK")
     echo "UUID=$DATA_UUID /mnt/testdata ext4 defaults,nofail 0 0" >> /etc/fstab
-    touch /mnt/testdata/.annatar_test_marker
-    chmod 600 /mnt/testdata/.annatar_test_marker
+    touch /mnt/testdata/.eregion_test_marker
+    chmod 600 /mnt/testdata/.eregion_test_marker
   EOF
   )
 }
@@ -58,12 +56,12 @@ resource "azurerm_linux_virtual_machine" "victim" {
 resource "azurerm_managed_disk" "testdata" {
   for_each             = local.vms
   name                 = each.value.disk_name
-  location             = azurerm_resource_group.annatar.location
-  resource_group_name  = azurerm_resource_group.annatar.name
+  location             = azurerm_resource_group.celebrimbor.location
+  resource_group_name  = azurerm_resource_group.celebrimbor.name
   storage_account_type = "Standard_LRS"
   create_option        = "Empty"
   disk_size_gb         = each.value.disk_size_gb
-  tags                 = azurerm_resource_group.annatar.tags
+  tags                 = local.common_tags
 }
 
 # Detach any Azure Backup restore artifact at LUN 10 before Terraform manages it.
@@ -76,11 +74,11 @@ resource "null_resource" "clean_lun10" {
   }
   provisioner "local-exec" {
     command = <<-EOT
-      current=$(az vm show -g annatar -n ${each.value.vm_name} \
+      current=$(az vm show -g ${azurerm_resource_group.celebrimbor.name} -n ${each.value.vm_name} \
         --query "storageProfile.dataDisks[?lun==\`10\`].name" -o tsv 2>/dev/null || true)
       if [ -n "$current" ] && [ "$current" != "${each.value.disk_name}" ]; then
         echo "Detaching restore artifact '$current' from LUN 10..."
-        az vm disk detach -g annatar --vm-name ${each.value.vm_name} --name "$current"
+        az vm disk detach -g ${azurerm_resource_group.celebrimbor.name} --vm-name ${each.value.vm_name} --name "$current"
       fi
     EOT
   }
@@ -89,16 +87,16 @@ resource "null_resource" "clean_lun10" {
 resource "azurerm_virtual_machine_data_disk_attachment" "testdata" {
   for_each           = local.vms
   managed_disk_id    = azurerm_managed_disk.testdata[each.key].id
-  virtual_machine_id = azurerm_linux_virtual_machine.victim[each.key].id
+  virtual_machine_id = azurerm_linux_virtual_machine.baseline[each.key].id
   lun                = 10
   caching            = "None"
   depends_on         = [null_resource.clean_lun10]
 }
 
-resource "azurerm_dev_test_global_vm_shutdown_schedule" "victim" {
+resource "azurerm_dev_test_global_vm_shutdown_schedule" "baseline" {
   for_each              = local.vms
-  virtual_machine_id    = azurerm_linux_virtual_machine.victim[each.key].id
-  location              = azurerm_resource_group.annatar.location
+  virtual_machine_id    = azurerm_linux_virtual_machine.baseline[each.key].id
+  location              = azurerm_resource_group.celebrimbor.location
   enabled               = true
   daily_recurrence_time = local.cfg.vm_shutdown_time
   timezone              = "UTC"
@@ -113,7 +111,7 @@ resource "azurerm_dev_test_global_vm_shutdown_schedule" "victim" {
 resource "azurerm_virtual_machine_extension" "ama" {
   for_each                   = local.vms
   name                       = "AzureMonitorLinuxAgent"
-  virtual_machine_id         = azurerm_linux_virtual_machine.victim[each.key].id
+  virtual_machine_id         = azurerm_linux_virtual_machine.baseline[each.key].id
   publisher                  = "Microsoft.Azure.Monitor"
   type                       = "AzureMonitorLinuxAgent"
   type_handler_version       = "1.0"

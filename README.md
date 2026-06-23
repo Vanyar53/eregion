@@ -121,18 +121,18 @@ Want to watch the **red→blue loop** end to end (Annatar attacks, Glorfindel re
 ### 1. Deploy the test infrastructure
 
 > **Skip this step if you already have Azure VMs, a Log Analytics Workspace, and NSGs.**
-> The Terraform provisions a dedicated sandbox for running Annatar attack simulations safely.
+> The Terraform provisions **Celebrimbor** — a disposable, modular test infrastructure for running
+> Annatar attack simulations safely (Celebrimbor is the builder; Annatar=red, Glorfindel=blue).
 > Glorfindel works on any existing Azure infrastructure — the test infra is not a prerequisite.
 
-Everything is provisioned by Terraform — Log Analytics Workspace, VM, NSG, Backup vault, Data Collection Rule, StorageBlobLogs diagnostic settings, and Managed Identity role assignment.
+Everything is provisioned by Terraform — Log Analytics Workspace, VM, NSG, Backup vault, Data Collection Rule, StorageBlobLogs diagnostic settings, and Managed Identity role assignment. The stack is namespaced by Terraform workspace (`INSTANCE=`), so parallel ephemeral stacks coexist.
 
 ```bash
-cd infra/terraform/
 cp infra/terraform/terraform.tfvars.example infra/terraform/terraform.tfvars
 # edit terraform.tfvars — set your SSH public key and notification email
-terraform init
-terraform apply
-# → full test infrastructure in one command (~5 min)
+make celebrimbor-up          # baseline (vm-celebrimbor-gondolin, law-celebrimbor-amonsul, rsv-celebrimbor-erebor)
+make celebrimbor-output      # → glorfindel-config.yaml fragment (workspace_id, vault) — no copy-paste
+# → full test infrastructure in one command (~5 min). make celebrimbor-down to tear it down.
 ```
 
 **What gets deployed** (all in one resource group, tagged `annatar-test: true`):
@@ -161,7 +161,7 @@ terraform apply
 
 **Cost of running Glorfindel on existing infrastructure**: LLM API only (Anthropic default) — ~$0.05–0.10 per run (<$2/month for regular testing). **Free, local and air-gapped with Ollama** — validated in practice: `command-r7b` and `qwen2.5` are the most reliable (good actions + escalate when unsure), `mistral-nemo` and `llama3.1` also work; `llama3.2-3b` is too weak. The model must support tool-calling. Validate any model in one command: `make llm-smoke MODEL=ollama/<model> [--runs 5]` — it scores integration (valid tool-calls) and judgment (act on clear threats, escalate on ambiguous) against a real model. A deterministic guardrail holds disruptive actions on uncharacterized signals regardless of the model, so a weak local model can't make Glorfindel misfire.
 
-> The VM auto-shuts down at 23:00 UTC daily. Start it before each run: `az vm start -g annatar -n vm-annatar-victim`. Compute is only billed when running.
+> The VM auto-shuts down at 23:00 UTC daily. Start it before each run: `az vm start -g rg-celebrimbor -n vm-celebrimbor-gondolin`. Compute is only billed when running.
 
 ### 2. Install Eregion
 
@@ -200,11 +200,11 @@ State, history, and ChromaDB model cache are persisted on the host (`~/.glorfind
 ### 3. Run your first attack/defense loop
 
 ```bash
-az vm start -g annatar -n vm-annatar-victim   # VM auto-shuts down at 23:00 UTC
+az vm start -g rg-celebrimbor -n vm-celebrimbor-gondolin   # VM auto-shuts down at 23:00 UTC
 
 # Setup T1486 (before each run — clean disk + fresh recovery point)
 annatar clean annatar/scenarios/azure/ransomware-vm.yaml           # wipe testdata disk
-glorfindel snapshot /subscriptions/.../vm-annatar-victim --yes    # clean RP (~5-20min)
+glorfindel snapshot /subscriptions/.../vm-celebrimbor-gondolin --yes    # clean RP (~5-20min)
 
 glorfindel watch runs/                              # terminal 1 — Glorfindel watches for signals
 annatar run annatar/scenarios/azure/ransomware-vm.yaml      # terminal 2 — Annatar attacks
@@ -213,7 +213,7 @@ annatar run annatar/scenarios/azure/ransomware-vm.yaml      # terminal 2 — Ann
 # Cycle 2: Glorfindel escalates restore_from_backup (disk encrypted — human approval required)
 
 glorfindel pending                                  # see escalation: restore_from_backup
-glorfindel restore /subscriptions/.../vm-annatar-victim --yes   # terminal 3 (~20 min)
+glorfindel restore /subscriptions/.../vm-celebrimbor-gondolin --yes   # terminal 3 (~20 min)
 
 # Glorfindel releases isolation automatically after restore completes
 ```
@@ -438,7 +438,7 @@ glorfindel/
   proposed_rules.py    → record/pending/approve()/reject(): detection rule proposal lifecycle
   rules/azure/
     detection_rules.yaml → rules only: KQL queries, TTP tags, backend references
-                           assets: [auto] + monitoring_backends: [law-annatar] per rule
+                           assets: [auto] + monitoring_backends: [law-celebrimbor-amonsul] per rule (optional — omit for single-LAW)
                            no workspace_id, no resource_id, no asset declarations
   incidents.py         → IncidentRegistry: groups signals by resource_id within a TTL window
   memory.py            → CycleMemory: ChromaDB with confidence + past_cycles_used metadata
@@ -482,7 +482,7 @@ annatar/
 schemas/
   scenario.schema.json → JSON Schema for IDE validation of scenario YAML files
 
-infra/terraform/           → full test infrastructure (VM, NSG, Log Analytics, Backup, DCR)
+infra/terraform/           → Celebrimbor: modular, namespaced, disposable test infra (VM, NSG, Log Analytics, Backup, DCR)
 ```
 
 ## Extending Glorfindel

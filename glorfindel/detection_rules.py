@@ -105,6 +105,22 @@ _RESOURCE_COLUMNS = ("Computer", "computer", "AccountName", "StorageAccountName"
 _SKIP_GENERIC = frozenset({"TimeGenerated", "_ResourceId", "TenantId", "Type"})
 
 
+# The CURATED threat-indicator labels (the `_INDICATOR_COLUMNS` semantic labels + the
+# privilege_escalation override). A row mapping to one of these is "characterized" — we
+# recognise the kind of threat. A generic-fallback column or "unknown" is NOT: we found
+# data but can't say what threat it represents. The decide guardrail uses this to refuse
+# AUTONOMOUS disruptive action on an uncharacterized signal.
+RECOGNIZED_INDICATOR_KEYS: frozenset = frozenset(
+    {label for _, label in _INDICATOR_COLUMNS} | {"privilege_escalation"}
+)
+
+
+def has_recognized_indicator(row: dict, ttp: str = "") -> bool:
+    """True if the row maps to a curated threat indicator (not a generic-fallback column
+    nor 'unknown'). Deterministic, model-independent — used to gate autonomous action."""
+    return normalize_row(row, ttp).get("indicator_key") in RECOGNIZED_INDICATOR_KEYS
+
+
 def normalize_row(row: dict, ttp: str = "") -> dict:
     """Map a raw KQL result row to a concise indicator dict for the LLM.
 

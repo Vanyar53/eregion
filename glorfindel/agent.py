@@ -629,6 +629,12 @@ def investigate(state: GlorfindelState) -> GlorfindelState:
     return {**state, "signal": enriched}
 
 
+# Autonomous actions that DISRUPT the VM / network / access (vs read-only `snapshot`
+# or the reversal `release_isolation`). The deterministic signal guardrail refuses to
+# run THESE autonomously on an uncharacterized signal.
+_DISRUPTIVE_AUTONOMOUS = {"isolate_vm", "block_suspicious_ip", "revoke_temp_access"}
+
+
 def _as_bool(v) -> bool:
     """Coerce an LLM-provided value to a real bool.
 
@@ -689,8 +695,18 @@ def decide(
         **kwargs,
     )
 
-    tool_call = response.choices[0].message.tool_calls[0]
-    d = json.loads(tool_call.function.arguments)
+    # Extract the tool-call defensively. Despite tool_choice forcing it, some models
+    # return NO tool-call (tool_calls None/[] → tool_calls[0] raises TypeError) or
+    # malformed JSON arguments. Treat any of these as "no decision" → empty d → the
+    # normalization below forces escalation (no action). Found by the provider smoke
+    # (mistral-nemo: <error: TypeError> when tool_calls was None).
+    try:
+        tool_calls = getattr(response.choices[0].message, "tool_calls", None) or []
+        d = json.loads(tool_calls[0].function.arguments) if tool_calls else {}
+    except (json.JSONDecodeError, TypeError, AttributeError, IndexError):
+        d = {}
+    if not isinstance(d, dict):
+        d = {}
 
     # Hard-default + coerce EVERY decision field before anything reads it. A
     # non-conforming model can (a) omit a required field → KeyError crashes the cycle,
@@ -722,6 +738,27 @@ def decide(
             d["escalation_reason"] = (
                 f"Low confidence ({'unknown' if raw_conf is None else f'{confidence:.0%}'}) "
                 "— human review required"
+            )
+
+    # ── Deterministic signal guardrail (model-independent) ──
+    # The confidence gate trusts the model to report low confidence on a thin signal —
+    # but weak models report HIGH confidence on a vague signal (provider smoke: 0.85 on
+    # an uncharacterized row), defeating it. So, independently of the LLM: a DISRUPTIVE
+    # autonomous action on a signal with NO recognized threat indicator (normalize_row →
+    # generic-fallback / "unknown") is held for human review. A characterized-but-
+    # ambiguous signal (e.g. syslog account creation) is NOT caught here — that's the
+    # confidence gate's job. To "bless" a new indicator column, add it to
+    # detection_rules._INDICATOR_COLUMNS.
+    if not d["escalate"] and d["action"] in _DISRUPTIVE_AUTONOMOUS:
+        from glorfindel.detection_rules import has_recognized_indicator
+        raw = signal.get("raw_signal", {})
+        first_row = raw.get("detected_data") or raw.get("first_result_row") or {}
+        if not has_recognized_indicator(first_row, signal.get("ttp", "")):
+            d["escalate"] = True
+            d["escalation_reason"] = (
+                "Signal sans indicateur de menace reconnu — action disruptive "
+                f"'{d['action']}' retenue pour revue humaine (garde-fou déterministe, "
+                "indépendant de la confiance du LLM)."
             )
 
     # ── Autonomy mode policy layer (above the gate — never a bypass) ──

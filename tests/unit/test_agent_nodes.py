@@ -34,7 +34,11 @@ def _state(**overrides) -> dict:
             "ttp": "T1486",
             "severity": "critical",
             "event": "detection",
-            "raw_signal": {"detection_time_s": 50},
+            # A real detection always carries the matched row → a recognized indicator
+            # (so the deterministic signal guardrail doesn't hold disruptive actions in
+            # tests that exercise the gate/autonomy logic, not the signal content).
+            "raw_signal": {"detection_time_s": 50,
+                           "first_result_row": {"Computer": "vm-test", "MaxWrite": 147000000}},
             "context": {"run_id": "run001"},
         },
         "past_cycles": [],
@@ -993,7 +997,11 @@ def _initial(event: str, ttp: str = "T1486", raw: dict | None = None) -> dict:
             "ttp": ttp,
             "severity": "critical",
             "event": event,
-            "raw_signal": raw or {},
+            # Default a recognized indicator (real detections carry the matched row) so
+            # the signal guardrail doesn't hold disruptive actions; an explicit `raw`
+            # merges on top (and can override first_result_row).
+            "raw_signal": {"first_result_row": {"Computer": "vm-test", "MaxWrite": 147000000},
+                           **(raw or {})},
             "context": {"run_id": "run001"},
         },
         "past_cycles": [],
@@ -1063,6 +1071,21 @@ def test_decide_string_escalate_does_not_bypass_confidence_gate(monkeypatch):
     assert out["reversible"] is True            # "true" string coerced too
 
 
+def test_decide_survives_no_tool_call(monkeypatch):
+    """A model can return NO tool-call (tool_calls None) despite tool_choice forcing it.
+    Must not crash (TypeError on tool_calls[0]) — treat as no decision → escalate.
+    Found by the mistral-nemo smoke (<error: TypeError>)."""
+    from glorfindel.agent import decide
+    msg = MagicMock()
+    msg.tool_calls = None
+    resp = MagicMock()
+    resp.choices = [MagicMock(message=msg)]
+    with patch("litellm.completion", return_value=resp):
+        out = decide(_state(), model="x", autonomy_override="non_disruptive")
+    assert out["action"] == ""
+    assert out["escalate"] is True
+
+
 def test_decide_survives_missing_fields_and_empty_action(monkeypatch):
     """A non-conforming model can OMIT required fields (KeyError crash) or return no
     action. decide must not crash; an empty action forces escalation. Found by the
@@ -1085,6 +1108,38 @@ def test_decide_survives_missing_fields_and_empty_action(monkeypatch):
     assert out["action"] == ""                  # missing → empty, not a crash
     assert out["escalate"] is True              # no action → forced human review
     assert out["reasoning"] == "" and out["explanation"] == ""  # safe defaults
+
+
+def _signal(row, ttp=""):
+    return {
+        "signal_id": "s", "resource_id": _RESOURCE_ID, "resource_type": "vm",
+        "ttp": ttp, "severity": "critical", "event": "detection",
+        "raw_signal": {"first_result_row": row}, "context": {"run_id": "r"},
+    }
+
+
+def test_guardrail_holds_disruptive_action_on_uncharacterized_signal(monkeypatch):
+    """Deterministic guardrail: a CONFIDENT disruptive action on a signal with no
+    recognized indicator is escalated regardless of the LLM's confidence (defeats the
+    over-acting found by the provider smoke)."""
+    from glorfindel.agent import decide
+    resp = _mock_llm_response("block_suspicious_ip", confidence=0.9, escalate=False)
+    state = _state(signal=_signal({"Activity": "anomalous login pattern", "Computer": "vm"}))
+    with patch("litellm.completion", return_value=resp):
+        out = decide(state, model="x", autonomy_override="non_disruptive")
+    assert out["escalate"] is True
+    assert "indicateur de menace reconnu" in out["escalation_reason"]
+
+
+def test_guardrail_does_not_fire_on_characterized_signal(monkeypatch):
+    """A recognized indicator (MaxWrite) → the guardrail does NOT over-escalate a
+    confident disruptive action (no false-positive holding)."""
+    from glorfindel.agent import decide
+    resp = _mock_llm_response("isolate_vm", confidence=0.9, escalate=False)
+    state = _state(signal=_signal({"Computer": "vm", "MaxWrite": 147000000}, ttp="T1486"))
+    with patch("litellm.completion", return_value=resp):
+        out = decide(state, model="x", autonomy_override="non_disruptive")
+    assert out["escalate"] is False
 
 
 def test_graph_detection_timeout_takes_snapshot_and_escalates(tmp_path, monkeypatch, dry_connector, tmp_memory):

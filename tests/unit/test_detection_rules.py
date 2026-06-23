@@ -172,6 +172,19 @@ def _rule(name="r", ws="ws", enabled=True):
     )
 
 
+def test_has_recognized_indicator():
+    """Curated threat indicators are recognized; a generic-fallback column or empty row
+    is NOT (drives the decide deterministic guardrail)."""
+    from glorfindel.detection_rules import has_recognized_indicator
+    assert has_recognized_indicator({"Computer": "vm", "MaxWrite": 1e8}) is True
+    assert has_recognized_indicator(
+        {"Computer": "vm", "FailedAttempts": 40, "SourceIP": "1.2.3.4"}) is True
+    assert has_recognized_indicator({"SyslogMessage": "sudo: USER=root"}) is True
+    # generic fallback (unknown column) → NOT a recognized threat indicator
+    assert has_recognized_indicator({"Activity": "anomalous login", "Computer": "vm"}) is False
+    assert has_recognized_indicator({}) is False
+
+
 def test_detection_inert_true_when_nothing_can_poll():
     """No rule with a resolved workspace_id (empty config) or all disabled → inert."""
     from glorfindel.detection_rules import detection_inert

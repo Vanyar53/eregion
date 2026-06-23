@@ -159,6 +159,12 @@ annatar-simulate:
 annatar-simulate-gap:
 	$(PYTHON) scripts/simulate_annatar.py --ids-gap
 
+# LLM provider smoke-test — runs the real `decide` against a provider (Ollama/Mistral)
+# to prove provider-agnosticism (the mocked unit tests can't). No Azure.
+#   make llm-smoke MODEL=ollama/llama3.1
+llm-smoke:
+	GLORFINDEL_LLM_MODEL=$(or $(MODEL),ollama/llama3.1) $(PYTHON) scripts/llm_smoke.py
+
 # ── Glorfindel ────────────────────────────────────────────────────────────
 
 glorfindel-watch: build

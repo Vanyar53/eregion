@@ -629,6 +629,19 @@ def investigate(state: GlorfindelState) -> GlorfindelState:
     return {**state, "signal": enriched}
 
 
+def _as_bool(v) -> bool:
+    """Coerce an LLM-provided value to a real bool.
+
+    Some models return JSON booleans as strings ("true"/"false") — and "false" is
+    truthy in Python, which would silently defeat the escalation/confidence gate.
+    Map the common textual forms; anything else falls back to Python truthiness."""
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, str):
+        return v.strip().lower() in {"true", "1", "yes", "y"}
+    return bool(v)
+
+
 def decide(
     state: GlorfindelState, *, model: str, autonomy=None, autonomy_override: str | None = None
 ) -> GlorfindelState:
@@ -679,10 +692,20 @@ def decide(
     tool_call = response.choices[0].message.tool_calls[0]
     d = json.loads(tool_call.function.arguments)
 
-    # Confidence gate: override LLM if confidence below threshold on autonomous actions.
-    # Normalize to float first so all downstream d["confidence"] accesses are safe.
+    # Normalize the decision's typed fields BEFORE the safety gates read them. A weaker
+    # model (e.g. llama3.2-3b) returns the JSON booleans as STRINGS ("false") and the
+    # confidence as 0/garbage. In Python "false" is truthy → `not d["escalate"]` is False
+    # → the confidence gate would be silently bypassed (a low-confidence autonomous
+    # action NOT escalated). Coerce so a non-conforming model can't defeat a safety
+    # control. raw_conf None/unparseable → 0.0 → forces escalation via the gate below.
+    d["escalate"] = _as_bool(d.get("escalate"))
+    d["reversible"] = _as_bool(d["reversible"]) if "reversible" in d else True
     raw_conf = d.get("confidence")
-    confidence = float(raw_conf) if raw_conf is not None else 0.0
+    try:
+        confidence = float(raw_conf) if raw_conf is not None else 0.0
+    except (TypeError, ValueError):
+        raw_conf = None
+        confidence = 0.0
     d["confidence"] = confidence
     _threshold = float(os.environ.get("GLORFINDEL_CONFIDENCE_THRESHOLD", "0.7"))
     if not d["escalate"] and d["action"] in AUTONOMOUS_ACTIONS:

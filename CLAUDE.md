@@ -78,6 +78,7 @@ load_context → poll_detection → investigate → decide → execute_action �
   - No-op si pas de workspace_id ou dry_run
 - `decide` : LLM via LiteLLM + few-shot anchors + RAG (3 cycles) + incident context + investigative_context
   - Gate confidence : `confidence < GLORFINDEL_CONFIDENCE_THRESHOLD` (défaut 0.7) + action autonome → escalade forcée
+  - **Coercion des champs typés AVANT les gates** (`_as_bool` + float safe) : un modèle faible (ex. Ollama llama3.2-3b) renvoie `escalate` en **string `"false"`** (truthy en Python → bypasse le gate) et `confidence` en 0/garbage. Normalisés pour qu'un modèle non-conforme ne puisse pas défaire un contrôle de sécurité. Trouvé par `scripts/llm_smoke.py`.
 - `verify_action` : NSG check (isolate/release), Compute API (snapshot), NSG rule (block)
 - `store_cycle` : ChromaDB + `runs/{run_id}_debug.jsonl` (toujours écrit, même si ChromaDB/webhook échoue)
 - `dry_run: bool` dans `GlorfindelState` → skipe escalations.record() et actions réelles

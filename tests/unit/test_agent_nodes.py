@@ -1025,6 +1025,44 @@ def test_graph_detection_isolate_vm(tmp_path, monkeypatch, dry_connector, tmp_me
     assert tmp_memory.count() == 1
 
 
+def test_as_bool_handles_string_booleans():
+    from glorfindel.agent import _as_bool
+    assert _as_bool("false") is False     # the llama3.2 quirk — truthy string → False
+    assert _as_bool("true") is True
+    assert _as_bool(False) is False
+    assert _as_bool("yes") is True
+    assert _as_bool(0) is False
+    assert _as_bool(None) is False
+
+
+def test_decide_string_escalate_does_not_bypass_confidence_gate(monkeypatch):
+    """A model returning escalate as the STRING 'false' (truthy in Python) must NOT
+    defeat the confidence gate — a low-confidence autonomous action stays escalated.
+    Found by the Ollama llama3.2-3b smoke run (scripts/llm_smoke.py)."""
+    import json
+    from glorfindel.agent import decide
+
+    args = json.dumps({
+        "reasoning": "r", "confidence": 0.0, "action": "isolate_vm",
+        "reversible": "true", "explanation": "e",
+        "escalate": "false",              # STRING, not bool
+        "suggested_steps": [],
+    })
+    tc = MagicMock()
+    tc.function.arguments = args
+    msg = MagicMock()
+    msg.tool_calls = [tc]
+    resp = MagicMock()
+    resp.choices = [MagicMock(message=msg)]
+
+    with patch("litellm.completion", return_value=resp):
+        out = decide(_state(), model="ollama/llama3.2", autonomy_override="non_disruptive")
+
+    assert out["escalate"] is True              # gate forced it (conf 0.0 < 0.7)
+    assert isinstance(out["escalate"], bool)    # real bool, not the "false" string
+    assert out["reversible"] is True            # "true" string coerced too
+
+
 def test_graph_detection_timeout_takes_snapshot_and_escalates(tmp_path, monkeypatch, dry_connector, tmp_memory):
     monkeypatch.chdir(tmp_path)
     graph = _build(tmp_path, tmp_memory, dry_connector)

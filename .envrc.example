@@ -19,9 +19,14 @@ export ANTHROPIC_API_KEY=sk-ant-...
 # export AZURE_API_BASE=https://<resource>.openai.azure.com
 # export AZURE_API_VERSION=2024-02-01
 #
-# Ollama (local / air-gap)
-# export GLORFINDEL_LLM_MODEL=ollama/llama3.1
+# Ollama (local / air-gap — gratuit, souverain)
+#   Le modèle DOIT supporter le function/tool-calling (decide force un tool).
+#   Validés en réel (make llm-smoke) : command-r7b et qwen2.5 (les + fiables),
+#   mistral-nemo, llama3.1. ⚠ llama3.2-3b trop faible (mauvaises actions).
+#   Setup : `ollama serve` + `ollama pull command-r7b`
+# export GLORFINDEL_LLM_MODEL=ollama/command-r7b
 # export GLORFINDEL_LLM_BASE_URL=http://localhost:11434
+#   Vérifier qu'un modèle raisonne bien : make llm-smoke MODEL=ollama/<modèle> [--runs 5]
 #
 # Mistral AI (API cloud)
 # export GLORFINDEL_LLM_MODEL=mistral/mistral-large-latest

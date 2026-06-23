@@ -159,7 +159,7 @@ terraform apply
 | Storage account | <$1 |
 | **Total sandbox** | **~$25–35/month** |
 
-**Cost of running Glorfindel on existing infrastructure**: LLM API only (Anthropic default) — ~$0.05–0.10 per run (<$2/month for regular testing). Free with a local Ollama model.
+**Cost of running Glorfindel on existing infrastructure**: LLM API only (Anthropic default) — ~$0.05–0.10 per run (<$2/month for regular testing). **Free, local and air-gapped with Ollama** — validated in practice: `command-r7b` and `qwen2.5` are the most reliable (good actions + escalate when unsure), `mistral-nemo` and `llama3.1` also work; `llama3.2-3b` is too weak. The model must support tool-calling. Validate any model in one command: `make llm-smoke MODEL=ollama/<model> [--runs 5]` — it scores integration (valid tool-calls) and judgment (act on clear threats, escalate on ambiguous) against a real model. A deterministic guardrail holds disruptive actions on uncharacterized signals regardless of the model, so a weak local model can't make Glorfindel misfire.
 
 > The VM auto-shuts down at 23:00 UTC daily. Start it before each run: `az vm start -g annatar -n vm-annatar-victim`. Compute is only billed when running.
 
@@ -383,7 +383,8 @@ ANTHROPIC_API_KEY=...               # required for default Anthropic provider
 # GLORFINDEL_LLM_MODEL=anthropic/claude-sonnet-4-6  # default
 # GLORFINDEL_LLM_MODEL=openai/gpt-4o               # OpenAI
 # GLORFINDEL_LLM_MODEL=azure/gpt-4o                # Azure OpenAI (+ AZURE_API_KEY, AZURE_API_BASE)
-# GLORFINDEL_LLM_MODEL=ollama/llama3.1             # local / air-gapped
+# GLORFINDEL_LLM_MODEL=mistral/mistral-large-latest # Mistral cloud (EU) (+ MISTRAL_API_KEY)
+# GLORFINDEL_LLM_MODEL=ollama/command-r7b          # local / air-gapped — must be tool-capable
 # GLORFINDEL_LLM_BASE_URL=http://localhost:11434    # self-hosted / Ollama endpoint
 
 # Azure

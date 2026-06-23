@@ -692,14 +692,18 @@ def decide(
     tool_call = response.choices[0].message.tool_calls[0]
     d = json.loads(tool_call.function.arguments)
 
-    # Normalize the decision's typed fields BEFORE the safety gates read them. A weaker
-    # model (e.g. llama3.2-3b) returns the JSON booleans as STRINGS ("false") and the
-    # confidence as 0/garbage. In Python "false" is truthy → `not d["escalate"]` is False
-    # → the confidence gate would be silently bypassed (a low-confidence autonomous
-    # action NOT escalated). Coerce so a non-conforming model can't defeat a safety
-    # control. raw_conf None/unparseable → 0.0 → forces escalation via the gate below.
+    # Hard-default + coerce EVERY decision field before anything reads it. A
+    # non-conforming model can (a) omit a required field → KeyError crashes the cycle,
+    # (b) return JSON booleans as STRINGS ("false" is truthy in Python → `not
+    # d["escalate"]` is False → the confidence gate is silently bypassed), (c) send a
+    # non-numeric confidence → float() raises. All seen in the multi-run provider smoke
+    # (scripts/llm_smoke.py): llama3.2 string booleans, command-r7b omitted a field.
+    # Defensive parsing so a quirky model can't crash or defeat a safety control.
+    d["action"] = (d.get("action") or "").strip()
+    d["reasoning"] = d.get("reasoning", "")
+    d["explanation"] = d.get("explanation", "")
     d["escalate"] = _as_bool(d.get("escalate"))
-    d["reversible"] = _as_bool(d["reversible"]) if "reversible" in d else True
+    d["reversible"] = _as_bool(d.get("reversible")) if d.get("reversible") is not None else True
     raw_conf = d.get("confidence")
     try:
         confidence = float(raw_conf) if raw_conf is not None else 0.0
@@ -707,6 +711,10 @@ def decide(
         raw_conf = None
         confidence = 0.0
     d["confidence"] = confidence
+    # No action parsed → cannot act safely → force human review.
+    if not d["action"]:
+        d["escalate"] = True
+        d.setdefault("escalation_reason", "LLM returned no action — human review required")
     _threshold = float(os.environ.get("GLORFINDEL_CONFIDENCE_THRESHOLD", "0.7"))
     if not d["escalate"] and d["action"] in AUTONOMOUS_ACTIONS:
         if raw_conf is None or confidence < _threshold:

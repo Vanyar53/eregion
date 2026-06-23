@@ -1063,6 +1063,30 @@ def test_decide_string_escalate_does_not_bypass_confidence_gate(monkeypatch):
     assert out["reversible"] is True            # "true" string coerced too
 
 
+def test_decide_survives_missing_fields_and_empty_action(monkeypatch):
+    """A non-conforming model can OMIT required fields (KeyError crash) or return no
+    action. decide must not crash; an empty action forces escalation. Found by the
+    multi-run smoke (command-r7b omitted a field → <error: KeyError>)."""
+    import json
+    from glorfindel.agent import decide
+
+    # Only confidence present — reasoning/explanation/action/escalate/reversible omitted.
+    args = json.dumps({"confidence": 0.4})
+    tc = MagicMock()
+    tc.function.arguments = args
+    msg = MagicMock()
+    msg.tool_calls = [tc]
+    resp = MagicMock()
+    resp.choices = [MagicMock(message=msg)]
+
+    with patch("litellm.completion", return_value=resp):
+        out = decide(_state(), model="ollama/x", autonomy_override="non_disruptive")
+
+    assert out["action"] == ""                  # missing → empty, not a crash
+    assert out["escalate"] is True              # no action → forced human review
+    assert out["reasoning"] == "" and out["explanation"] == ""  # safe defaults
+
+
 def test_graph_detection_timeout_takes_snapshot_and_escalates(tmp_path, monkeypatch, dry_connector, tmp_memory):
     monkeypatch.chdir(tmp_path)
     graph = _build(tmp_path, tmp_memory, dry_connector)

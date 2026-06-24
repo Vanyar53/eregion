@@ -18,6 +18,10 @@ from typing import Literal
 
 _STATE_FILE = Path.home() / ".glorfindel" / "posture_state.json"
 
+# Sentinel: "this VM is not a protected item in the vault at all" — distinct from
+# present-but-no-recovery-point-yet (which maps to a None age).
+_MISSING = object()
+
 PostureCheckName = Literal["backup_linked", "backup_recent", "nsg_reachable"]
 
 
@@ -56,9 +60,12 @@ class PostureChecker:
         """Check all assets, escalate new gaps, auto-resolve cleared ones. Returns gaps."""
         all_gaps: list[PostureGap] = []
         checked_vms: set[str] = set()
+        fallback_rg = ""
         for asset in assets:
             if not asset.resource_id:
                 continue
+            if not fallback_rg:
+                fallback_rg = _rg(asset.resource_id)
             checked_vms.add(asset.name)
             gaps = self._check_asset(asset)
             all_gaps.extend(gaps)
@@ -66,40 +73,97 @@ class PostureChecker:
                 self._maybe_escalate(gap)
         # Auto-resolve gaps that no longer exist (e.g. the overnight backup ran →
         # "no recovery point yet" cleared) so the operator doesn't have to ack a
-        # posture escalation for a condition that fixed itself.
-        self._resolve_cleared_gaps({g.key for g in all_gaps}, checked_vms)
+        # posture escalation for a condition that fixed itself. The vault inventory lets
+        # BACKUP gaps resolve from the RSV even when the VM is off (the recovery point
+        # exists regardless of VM power state — don't wait for it to come back online).
+        vault_inv = self._vault_inventory(fallback_rg)
+        self._resolve_cleared_gaps({g.key for g in all_gaps}, checked_vms, vault_inv)
         return all_gaps
 
-    def _resolve_cleared_gaps(self, current_keys: set[str], checked_vms: set[str]) -> None:
+    def _vault_inventory(self, fallback_rg: str = "") -> dict:
+        """VM (lowercased short name) → latest recovery-point age in hours, read from
+        the vault. None age = protected but no recovery point yet; absent key = not a
+        protected item at all.
+
+        Power-independent: the RSV knows its recovery points whether the VM is on or
+        off, so a backup gap can resolve from here without waiting for the VM to re-enter
+        the LAW heartbeat. Empty on dry-run / no vault / unresolvable RG / read error →
+        the caller then only resolves backup gaps for VMs actually checked this cycle.
+        """
+        if self._dry_run or self._connector is None:
+            return {}
+        vault = self._vault_name()
+        if not vault:
+            return {}
+        vault_rg = self._vault_rg() or fallback_rg
+        if not vault_rg:
+            return {}
+        try:
+            items = self._connector.list_backup_items(vault, vault_rg)
+        except Exception:
+            return {}
+        inv: dict[str, float | None] = {}
+        for it in items:
+            rid = it.get("resource_id", "")
+            if rid:
+                inv[rid.rstrip("/").split("/")[-1].lower()] = it.get("latest_age_h")
+        return inv
+
+    def _resolve_cleared_gaps(
+        self, current_keys: set[str], checked_vms: set[str], vault_inv: dict | None = None
+    ) -> None:
         """Resolve escalations for gaps whose CONDITION genuinely cleared this cycle.
 
-        Only resolve a gap if its VM was actually checked and the gap no longer fires.
-        A VM that simply dropped out of discovery (powered off > retention → evicted) is
-        NOT "the gap cleared" — we just couldn't check it. Resolving on eviction would
-        wipe the ack and re-flood a fresh escalation when the VM returns (the Monday-
-        morning flood after a weekend off). So we FREEZE gaps for un-checked VMs.
+        Default rule: only resolve a gap if its VM was actually checked and the gap no
+        longer fires. A VM that simply dropped out of discovery (powered off > retention
+        → evicted) is NOT "the gap cleared" — we just couldn't check it. Resolving on
+        eviction would wipe the ack and re-flood a fresh escalation when the VM returns
+        (the Monday-morning flood after a weekend off). So NSG/compute gaps stay FROZEN
+        for un-checked VMs.
+
+        BACKUP gaps are the exception: the RSV knows a VM's recovery points whether the
+        VM is on or off, so `backup_linked` / `backup_recent` resolve from the vault
+        inventory (`vault_inv`) regardless of heartbeat — a recovery point that exists
+        shouldn't wait for the VM to power back on to clear the gap.
         """
         from glorfindel import escalations
+        vault_inv = vault_inv or {}
         with self._lock:
             changed = False
             for key, entry in list(self._state.items()):
-                # Freeze gaps for VMs not checked this cycle (evicted/offline) — don't
-                # touch their ack/pending state.
-                if entry.get("vm_name") not in checked_vms:
+                if entry.get("status") not in ("pending", "acknowledged"):
                     continue
-                # Clear both still-pending and acked gaps once the condition is gone,
-                # so a future recurrence re-alerts (an acked gap that clears must not
-                # stay 'acknowledged' forever and swallow the next real occurrence).
-                if entry.get("status") in ("pending", "acknowledged") and key not in current_keys:
-                    esc_id = entry.get("escalation_id", "")
-                    if esc_id and not self._dry_run:
-                        try:
-                            escalations.resolve(esc_id)
-                        except Exception:
-                            pass
-                    entry["status"] = "resolved"
-                    entry["resolved_at"] = datetime.now(timezone.utc).isoformat()
-                    changed = True
+                vm = entry.get("vm_name", "")
+                check = entry.get("check", "")
+                if vm in checked_vms:
+                    # Checked this cycle: clear once the gap no longer fires (a future
+                    # recurrence re-alerts — an acked gap that clears must not stay
+                    # 'acknowledged' forever and swallow the next real occurrence).
+                    resolve = key not in current_keys
+                elif check in ("backup_recent", "backup_linked"):
+                    # VM not in the heartbeat (off/evicted) but backup status is knowable
+                    # from the vault — power-independent.
+                    age = vault_inv.get(vm.lower(), _MISSING)
+                    if age is _MISSING:
+                        resolve = False  # not a protected item → real gap, stay frozen
+                    elif check == "backup_linked":
+                        resolve = True  # now a protected item → it IS linked
+                    else:  # backup_recent: needs an actual, fresh recovery point
+                        resolve = age is not None and age < 48
+                else:
+                    # NSG / compute gap on an un-checked VM → eviction-freeze.
+                    resolve = False
+                if not resolve:
+                    continue
+                esc_id = entry.get("escalation_id", "")
+                if esc_id and not self._dry_run:
+                    try:
+                        escalations.resolve(esc_id)
+                    except Exception:
+                        pass
+                entry["status"] = "resolved"
+                entry["resolved_at"] = datetime.now(timezone.utc).isoformat()
+                changed = True
             if changed:
                 self._save_state()
 

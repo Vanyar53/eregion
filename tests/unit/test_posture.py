@@ -269,6 +269,92 @@ def test_evicted_vm_gap_is_frozen_not_resolved(tmp_path):
     assert checker._state["vm-on:backup_linked"]["status"] == "resolved"
 
 
+def test_backup_gap_resolves_from_vault_when_vm_off(tmp_path):
+    """The core fix: a backup gap on an OFF VM (not in the heartbeat this cycle) resolves
+    from the vault inventory — the recovery point exists regardless of VM power state, so
+    it must not wait for the VM to come back online (the stuck gondolin gap)."""
+    checker = PostureChecker(_cfg(), _connector(), dry_run=False)
+    checker._state = {
+        "vm-off:backup_recent": {
+            "escalation_id": "esc-1", "status": "acknowledged",
+            "vm_name": "vm-off", "check": "backup_recent"},
+    }
+    # vm-off NOT checked this cycle, but the vault shows a fresh recovery point (5.9h).
+    checker._resolve_cleared_gaps(
+        current_keys=set(), checked_vms=set(), vault_inv={"vm-off": 5.9})
+    assert checker._state["vm-off:backup_recent"]["status"] == "resolved"
+
+
+def test_backup_recent_gap_frozen_when_vault_rp_stale(tmp_path):
+    """An off VM whose only recovery point in the vault is stale (>=48h) keeps its
+    backup_recent gap — the warning ('restore will lose recent data') is still true."""
+    checker = PostureChecker(_cfg(), _connector(), dry_run=False)
+    checker._state = {
+        "vm-off:backup_recent": {
+            "escalation_id": "esc-1", "status": "acknowledged",
+            "vm_name": "vm-off", "check": "backup_recent"},
+    }
+    checker._resolve_cleared_gaps(
+        current_keys=set(), checked_vms=set(), vault_inv={"vm-off": 72.0})
+    assert checker._state["vm-off:backup_recent"]["status"] == "acknowledged"
+
+
+def test_backup_recent_gap_frozen_when_no_rp_in_vault(tmp_path):
+    """Off VM that is protected but still has NO recovery point (age None) keeps its
+    backup_recent gap — there is genuinely nothing to restore yet."""
+    checker = PostureChecker(_cfg(), _connector(), dry_run=False)
+    checker._state = {
+        "vm-off:backup_recent": {
+            "escalation_id": "esc-1", "status": "acknowledged",
+            "vm_name": "vm-off", "check": "backup_recent"},
+    }
+    checker._resolve_cleared_gaps(
+        current_keys=set(), checked_vms=set(), vault_inv={"vm-off": None})
+    assert checker._state["vm-off:backup_recent"]["status"] == "acknowledged"
+
+
+def test_backup_linked_gap_resolves_when_now_protected(tmp_path):
+    """An off VM with a backup_linked gap (was 'not in vault') resolves the moment it
+    appears in the vault inventory — even with no recovery point yet, it IS linked now."""
+    checker = PostureChecker(_cfg(), _connector(), dry_run=False)
+    checker._state = {
+        "vm-off:backup_linked": {
+            "escalation_id": "esc-1", "status": "acknowledged",
+            "vm_name": "vm-off", "check": "backup_linked"},
+    }
+    checker._resolve_cleared_gaps(
+        current_keys=set(), checked_vms=set(), vault_inv={"vm-off": None})
+    assert checker._state["vm-off:backup_linked"]["status"] == "resolved"
+
+
+def test_nsg_gap_still_frozen_for_off_vm_despite_vault(tmp_path):
+    """The vault-side resolution is BACKUP-only. An NSG/compute gap on an off VM stays
+    frozen (it genuinely needs the VM) even when the vault inventory is populated."""
+    checker = PostureChecker(_cfg(), _connector(), dry_run=False)
+    checker._state = {
+        "vm-off:nsg_reachable": {
+            "escalation_id": "esc-1", "status": "acknowledged",
+            "vm_name": "vm-off", "check": "nsg_reachable"},
+    }
+    checker._resolve_cleared_gaps(
+        current_keys=set(), checked_vms=set(), vault_inv={"vm-off": 1.0})
+    assert checker._state["vm-off:nsg_reachable"]["status"] == "acknowledged"
+
+
+def test_vault_inventory_matches_resource_id_case_insensitively(tmp_path):
+    """Discovery lowercases VM names (from _ResourceId); the vault's virtual_machine_id
+    may be canonical-case. The match must be case-insensitive."""
+    conn = _connector()
+    conn.list_backup_items.return_value = [{
+        "resource_id": "/subscriptions/s/resourceGroups/RG/providers/Microsoft.Compute"
+                       "/virtualMachines/VM-Off",
+        "latest_age_h": 3.0,
+    }]
+    checker = PostureChecker(_cfg(), conn, dry_run=False)
+    inv = checker._vault_inventory(fallback_rg="rg-test")
+    assert inv == {"vm-off": 3.0}
+
+
 # ── active_gaps ────────────────────────────────────────────────────────────────
 
 def test_active_gaps_returns_only_pending(tmp_path):

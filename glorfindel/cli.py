@@ -42,7 +42,63 @@ def _find_rules_file() -> str | None:
     return None
 
 
-@click.group()
+def _resolve_resource_id(arg: str) -> str:
+    """Accept a short VM name (what `list` and the War Room display) or a full ARM id.
+
+    The Azure calls parse the full resource path (resource group + VM name), so a bare
+    name must be resolved to it — otherwise the command either silently matches nothing
+    ("Nothing to reset" on a VM that IS blocked) or crashes in _parse_vm_resource_id.
+    Resolve via the active isolation/block state. A full id (contains '/') or an unknown
+    name is returned unchanged — the command then reports 'nothing to do' rather than
+    crash on an unresolvable name.
+    """
+    if "/" in arg:
+        return arg
+    from glorfindel.actions import active_blocks, active_isolations
+    target = arg.lower()
+    for entry in (*active_isolations(), *active_blocks()):
+        rid = entry.get("resource_id", "")
+        if rid and rid.rsplit("/", 1)[-1].lower() == target:
+            return rid
+    return arg
+
+
+class _GlorfindelCli(click.Group):
+    """Render operational failures as a clean one-liner, not a raw traceback.
+
+    Missing creds, a root-owned state file (written by the root container), an Azure
+    API error — these are operator conditions, not bugs. Dumping a 20-line stack on
+    `AZURE_SUBSCRIPTION_ID is not set` helps no one. Print the cause + a targeted hint
+    and exit non-zero. GLORFINDEL_DEBUG=1 restores the full traceback for real debugging.
+    """
+
+    def invoke(self, ctx):
+        try:
+            return super().invoke(ctx)
+        except (click.ClickException, click.exceptions.Abort, SystemExit, KeyboardInterrupt):
+            raise
+        except Exception as e:  # noqa: BLE001 — deliberate CLI boundary
+            if os.environ.get("GLORFINDEL_DEBUG"):
+                raise
+            console.print(f"[red]✗ {type(e).__name__}: {e}[/red]")
+            msg = str(e)
+            if "AZURE_SUBSCRIPTION_ID" in msg or "credential" in msg.lower():
+                console.print(
+                    "[dim]  → environnement non chargé : `direnv allow` ou "
+                    "`source .envrc` avant de relancer.[/dim]"
+                )
+            elif isinstance(e, PermissionError):
+                console.print(
+                    "[dim]  → fichier d'état appartenant à root (écrit par le "
+                    "container). Lance la commande dans le container "
+                    "(`docker compose exec watch glorfindel …`) ou corrige "
+                    "l'ownership de ~/.glorfindel.[/dim]"
+                )
+            console.print("[dim]  (GLORFINDEL_DEBUG=1 pour la stack complète)[/dim]")
+            ctx.exit(1)
+
+
+@click.group(cls=_GlorfindelCli)
 @click.version_option(version="0.2.0", prog_name="glorfindel")
 def cli():
     """Glorfindel — detect, respond, restore."""
@@ -85,6 +141,7 @@ def release(resource_id: str, dry_run: bool, yes: bool):
     """Release an isolation applied by Glorfindel on a VM."""
     from glorfindel.actions import AzureConnector
 
+    resource_id = _resolve_resource_id(resource_id)
     connector = AzureConnector(dry_run=dry_run)
 
     console.rule("[bold yellow]Glorfindel — Release Isolation[/bold yellow]")
@@ -124,6 +181,7 @@ def unblock(ip: str, resource_id: str, dry_run: bool, yes: bool):
     """Remove a block rule created by Glorfindel for a suspicious IP."""
     from glorfindel.actions import AzureConnector
 
+    resource_id = _resolve_resource_id(resource_id)
     connector = AzureConnector(dry_run=dry_run)
 
     console.rule("[bold yellow]Glorfindel — Unblock IP[/bold yellow]")
@@ -1075,6 +1133,7 @@ def _do_reset(resource_id: str, yes: bool, dry_run: bool) -> None:
     """Shared implementation for reset/revert."""
     from glorfindel.actions import active_blocks, active_isolations, AzureConnector
 
+    resource_id = _resolve_resource_id(resource_id)
     # Case-insensitive match: Azure ARM IDs are case-insensitive but Python == is not.
     # A case mismatch left an orphan isolation state file ("Nothing to reset" while
     # `list` still showed ISOLATED). release_isolation clears the local file even when

@@ -1693,6 +1693,11 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
   const _evicted  = _gapMin === null && _rawStates.length > 0;
   const isOffline = !isIsolated && !restoreInfo
                     && ((_gapMin !== null && _gapMin > 15) || _evicted);
+  // A card backed ONLY by an escalation (e.g. a posture_gap) for a VM that LAW never saw
+  // (no discovery entry → no last_seen, no active state) isn't "offline" (that implies
+  // known-but-silent) — it's outside monitoring. Flag it distinctly, don't fake OFFLINE.
+  const isUnmonitored = _gapMin === null && _rawStates.length === 0
+                        && myEscs.length > 0 && !isIsolated && !restoreInfo;
 
   const stateClass = _pendingActions.has(vm_name) ? 's-releasing'
                    : restoreInfo    ? 's-restoring'
@@ -1714,6 +1719,9 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
     : `No recent heartbeat — dropped from discovery (off > retention window), kept visible by an active block`;
   const offlineBadge = isOffline
     ? `<span title="${_offlineTitle}" style="font-size:8px;font-weight:700;padding:1px 5px;border-radius:3px;background:color-mix(in srgb,var(--dim) 14%,transparent);color:var(--dim);border:1px solid var(--border);letter-spacing:.5px;flex-shrink:0">OFFLINE</span>`
+    : '';
+  const unmonitoredBadge = isUnmonitored
+    ? `<span title="No Log Analytics heartbeat and not in discovery — this card exists only from an escalation. Glorfindel isn't monitoring this resource." style="font-size:8px;font-weight:700;padding:1px 5px;border-radius:3px;background:color-mix(in srgb,var(--dim) 14%,transparent);color:var(--dim);border:1px solid var(--border);letter-spacing:.5px;flex-shrink:0">UNMONITORED</span>`
     : '';
 
   // Badges are clickable in compact mode only — expanded mode uses dec-row / esc-items
@@ -1983,9 +1991,10 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
         <span class="node-asset-name" title="${_attr(vm_name)}">${vm_name}</span>
         <span style="color:var(--dim);font-size:9px;margin-left:auto;flex-shrink:0">${isExpanded ? '▾' : '▸'}</span>
       </div>
-      ${(offlineBadge || modeBadge || (readiness && !isExpanded)) ? `
+      ${(offlineBadge || unmonitoredBadge || modeBadge || (readiness && !isExpanded)) ? `
       <div style="display:flex;align-items:center;gap:6px;margin-top:5px;flex-wrap:wrap">
         ${offlineBadge}
+        ${unmonitoredBadge}
         ${modeBadge}
         ${readiness && !isExpanded ? `<span style="color:var(--dim);font-size:9px;margin-left:auto">${readiness}</span>` : ''}
       </div>` : ''}

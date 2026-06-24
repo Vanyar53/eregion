@@ -445,6 +445,17 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
                     )
                     console.print("  [green]✓ Released.[/green]")
 
+    def _reconcile_jobs() -> None:
+        """Move InProgress snapshot/restore jobs to a terminal state. Without this a
+        fire-and-forget job lingers 'InProgress' forever if nobody opens the jobs view
+        to --refresh it (a real snapshot sat InProgress for 10 days)."""
+        from glorfindel import jobs as _jobs
+        if not any(j.get("status") == "InProgress" for j in _jobs.all_jobs()):
+            return  # cheap local check — no Azure call when nothing is pending
+        for j in _jobs.reconcile_jobs(None if dry_run else ttl_connector):
+            vm_short = j.get("resource_id", "").rsplit("/", 1)[-1]
+            console.print(f"[dim]Job {j.get('type')} {vm_short} → {j.get('status')}[/dim]")
+
     _HEARTBEAT = Path.home() / ".glorfindel" / "watch_heartbeat"
 
     # Warn if another watch process appears to be running (shared ~/.glorfindel/)
@@ -609,6 +620,7 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
             _ttl_check_counter += 1
             if _ttl_check_counter % 30 == 0:  # check TTL every 30 polls (~1 min at 2s interval)
                 _check_ttl()
+                _reconcile_jobs()
                 _write_heartbeat()
             time.sleep(interval)
     except KeyboardInterrupt:
@@ -708,7 +720,7 @@ def jobs(resource_id: str, refresh: bool):
     Jobs are persisted in ~/.glorfindel/active_jobs/<vm>.json.
     Use --refresh to query Azure for the latest status.
     """
-    from glorfindel.jobs import get_job, save_job
+    from glorfindel.jobs import get_job, refresh_job, save_job
 
     vm_name = resource_id.split("/")[-1]
     job = get_job(vm_name)
@@ -717,43 +729,18 @@ def jobs(resource_id: str, refresh: bool):
         return
 
     if refresh and job.get("status") == "InProgress":
-        from datetime import datetime, timezone as _tz
         from glorfindel.actions import AzureConnector
-        connector = AzureConnector()
-        jtype = job.get("type")
-        if jtype == "snapshot":
-            result = connector.verify_snapshot(job.get("snap_id", ""))
-            verified = result.get("verified")
-            if verified is True:
-                job.update({"status": "Completed", "completed_at": datetime.now(_tz.utc).isoformat()})
+        before = job.get("status")
+        try:
+            refresh_job(job, AzureConnector())
+            if job.get("status") != before:
                 save_job(vm_name, job)
-            elif verified is False:
-                job.update({"status": "Failed", "completed_at": datetime.now(_tz.utc).isoformat(),
-                            "error": result.get("error", result.get("status", "unknown"))})
-                save_job(vm_name, job)
-        elif jtype == "restore":
-            restore_job_name = job.get("restore_job_name")
-            vault = job.get("vault", "rsv-annatar")
-            rg = job.get("rg", "")
-            if restore_job_name and rg:
-                try:
-                    from azure.mgmt.recoveryservicesbackup import RecoveryServicesBackupClient
-                    connector._ensure_clients()
-                    bc = RecoveryServicesBackupClient(connector._credential, connector._subscription_id)
-                    j = bc.job_details.get(vault, rg, restore_job_name)
-                    az_status = getattr(j.properties, "status", "Unknown")
-                    if az_status == "Completed":
-                        job.update({"status": "Completed", "completed_at": datetime.now(_tz.utc).isoformat()})
-                        save_job(vm_name, job)
-                    elif az_status in ("Failed", "Cancelled"):
-                        job.update({"status": "Failed", "completed_at": datetime.now(_tz.utc).isoformat(),
-                                    "error": az_status})
-                        save_job(vm_name, job)
-                except Exception as e:
-                    console.print(f"[yellow]Azure poll error: {e}[/yellow]")
+        except Exception as e:
+            console.print(f"[yellow]Azure poll error: {e}[/yellow]")
 
     status = job.get("status", "?")
-    color = {"Completed": "green", "Failed": "red", "InProgress": "cyan"}.get(status, "white")
+    color = {"Completed": "green", "Failed": "red", "InProgress": "cyan",
+             "Stale": "yellow"}.get(status, "white")
     console.rule(f"[bold]Glorfindel — Job Status: [{color}]{status}[/{color}][/bold]")
     console.print(f"  job_id  : {job.get('job_id')}")
     console.print(f"  type    : {job.get('type')}")

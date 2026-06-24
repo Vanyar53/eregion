@@ -155,3 +155,101 @@ def test_start_snapshot_job_id_contains_vm_name(jobs_dir):
     job = start_snapshot(_RESOURCE_ID, connector)
     assert _VM_NAME in job["job_id"]
     assert job["job_id"].startswith("snapshot-")
+
+
+# ── refresh_job ────────────────────────────────────────────────────────────────
+
+def _hours_ago(h: float) -> str:
+    from datetime import datetime, timezone, timedelta
+    return (datetime.now(timezone.utc) - timedelta(hours=h)).isoformat()
+
+
+def test_refresh_job_snapshot_completed(jobs_dir):
+    from glorfindel.jobs import refresh_job
+    conn = MagicMock()
+    conn.verify_snapshot.return_value = {"verified": True}
+    job = {"type": "snapshot", "status": "InProgress", "snap_id": "x"}
+    refresh_job(job, conn)
+    assert job["status"] == "Completed"
+    assert job["completed_at"]
+
+
+def test_refresh_job_snapshot_failed_carries_error(jobs_dir):
+    from glorfindel.jobs import refresh_job
+    conn = MagicMock()
+    conn.verify_snapshot.return_value = {"verified": False, "error": "boom"}
+    job = {"type": "snapshot", "status": "InProgress", "snap_id": "x"}
+    refresh_job(job, conn)
+    assert job["status"] == "Failed"
+    assert job["error"] == "boom"
+
+
+def test_refresh_job_noop_on_terminal(jobs_dir):
+    from glorfindel.jobs import refresh_job
+    conn = MagicMock()
+    job = {"type": "snapshot", "status": "Completed"}
+    refresh_job(job, conn)
+    conn.verify_snapshot.assert_not_called()
+    assert job["status"] == "Completed"
+
+
+# ── reconcile_jobs ─────────────────────────────────────────────────────────────
+
+def test_reconcile_marks_old_job_stale_without_connector(jobs_dir):
+    """The core zombie fix: an InProgress job past the staleness threshold is moved to a
+    terminal 'Stale' state deterministically — no Azure needed (the 2026-06-14 snapshot
+    that sat InProgress for 10 days because nobody opened the jobs view)."""
+    from glorfindel.jobs import save_job, reconcile_jobs, get_job
+    save_job("vm", {"resource_id": _RESOURCE_ID, "type": "snapshot",
+                    "status": "InProgress", "started_at": _hours_ago(240)})
+    changed = reconcile_jobs(connector=None)
+    assert len(changed) == 1
+    assert get_job("vm")["status"] == "Stale"
+    assert "lost" in get_job("vm")["error"]
+
+
+def test_reconcile_leaves_fresh_job_inprogress(jobs_dir):
+    from glorfindel.jobs import save_job, reconcile_jobs, get_job
+    save_job("vm", {"resource_id": _RESOURCE_ID, "type": "snapshot",
+                    "status": "InProgress", "started_at": _hours_ago(1)})
+    assert reconcile_jobs(connector=None) == []
+    assert get_job("vm")["status"] == "InProgress"
+
+
+def test_reconcile_polls_azure_and_completes(jobs_dir):
+    from glorfindel.jobs import save_job, reconcile_jobs, get_job
+    conn = MagicMock()
+    conn.verify_snapshot.return_value = {"verified": True}
+    save_job("vm", {"resource_id": _RESOURCE_ID, "type": "snapshot",
+                    "status": "InProgress", "started_at": _hours_ago(1), "snap_id": "x"})
+    reconcile_jobs(connector=conn)
+    assert get_job("vm")["status"] == "Completed"
+
+
+def test_reconcile_ignores_terminal_jobs(jobs_dir):
+    from glorfindel.jobs import save_job, reconcile_jobs
+    conn = MagicMock()
+    save_job("vm", {"resource_id": _RESOURCE_ID, "type": "snapshot",
+                    "status": "Completed", "started_at": _hours_ago(240)})
+    assert reconcile_jobs(connector=conn) == []
+    conn.verify_snapshot.assert_not_called()
+
+
+def test_reconcile_unparseable_started_is_stale(jobs_dir):
+    from glorfindel.jobs import save_job, reconcile_jobs, get_job
+    save_job("vm", {"resource_id": _RESOURCE_ID, "type": "snapshot",
+                    "status": "InProgress", "started_at": "not-a-date"})
+    reconcile_jobs(connector=None)
+    assert get_job("vm")["status"] == "Stale"
+
+
+def test_reconcile_azure_error_falls_through_to_staleness(jobs_dir):
+    """A failing Azure poll must not crash reconciliation; an old job still gets the
+    deterministic Stale fallback."""
+    from glorfindel.jobs import save_job, reconcile_jobs, get_job
+    conn = MagicMock()
+    conn.verify_snapshot.side_effect = RuntimeError("azure down")
+    save_job("vm", {"resource_id": _RESOURCE_ID, "type": "snapshot",
+                    "status": "InProgress", "started_at": _hours_ago(240), "snap_id": "x"})
+    reconcile_jobs(connector=conn)
+    assert get_job("vm")["status"] == "Stale"

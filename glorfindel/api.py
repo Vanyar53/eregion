@@ -502,23 +502,16 @@ def _all_jobs() -> list[dict]:
 @app.get("/api/jobs/{vm_name}")
 async def get_job_status(vm_name: str, refresh: bool = False) -> dict:
     """Return the active job for a VM. Pass ?refresh=true to poll Azure for status."""
-    from glorfindel.jobs import get_job, save_job
+    from glorfindel.jobs import get_job, refresh_job, save_job
     job = get_job(vm_name)
     if not job:
         return {}
     if refresh and job.get("status") == "InProgress":
         from glorfindel.actions import AzureConnector
-        connector = AzureConnector(dry_run=False)
-        jtype = job.get("type")
-        if jtype == "snapshot":
-            result = await asyncio.to_thread(connector.verify_snapshot, job.get("snap_id", ""))
-            if result.get("verified") is True:
-                job.update({"status": "Completed", "completed_at": datetime.now(timezone.utc).isoformat()})
-                await asyncio.to_thread(save_job, vm_name, job)
-            elif result.get("verified") is False:
-                job.update({"status": "Failed", "completed_at": datetime.now(timezone.utc).isoformat(),
-                            "error": result.get("error", "unknown")})
-                await asyncio.to_thread(save_job, vm_name, job)
+        before = job.get("status")
+        await asyncio.to_thread(refresh_job, job, AzureConnector(dry_run=False))
+        if job.get("status") != before:
+            await asyncio.to_thread(save_job, vm_name, job)
     return job
 
 

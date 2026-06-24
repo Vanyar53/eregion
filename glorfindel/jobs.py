@@ -12,6 +12,12 @@ from pathlib import Path
 _JOBS_DIR = Path.home() / ".glorfindel" / "active_jobs"
 _RECOVERY_DIR = Path.home() / ".glorfindel" / "recovery"
 
+# A snapshot is usually minutes; a restore / post-restore full backup tops out around
+# a few hours. A job still InProgress past this is dead — the process died, or the Azure
+# job record is gone — and the local file must stop claiming "InProgress" forever (a real
+# snapshot sat InProgress for 10 days because nobody opened the jobs view to --refresh it).
+_STALE_AGE_H = 24.0
+
 
 def get_last_restore(vm_name: str) -> dict | None:
     """Return last restore metadata if triggered within 60 minutes, else None."""
@@ -61,6 +67,83 @@ def all_jobs() -> list[dict]:
         except Exception:
             pass
     return result
+
+
+def refresh_job(job: dict, connector) -> dict:
+    """Poll Azure for an InProgress job's real status and update it in place.
+
+    Single source of truth for the CLI (`jobs --refresh`), the API (`?refresh=true`) and
+    the watch-loop reconciliation — previously duplicated, and the API copy handled only
+    snapshots (a restore never reconciled there). No-op on a terminal job. Returns the
+    (possibly mutated) job; the caller persists it if the status changed.
+    """
+    if job.get("status") != "InProgress":
+        return job
+    now = datetime.now(timezone.utc).isoformat()
+    jtype = job.get("type")
+    if jtype == "snapshot":
+        result = connector.verify_snapshot(job.get("snap_id", ""))
+        verified = result.get("verified")
+        if verified is True:
+            job.update({"status": "Completed", "completed_at": now})
+        elif verified is False:
+            job.update({"status": "Failed", "completed_at": now,
+                        "error": result.get("error", result.get("status", "unknown"))})
+    elif jtype == "restore":
+        restore_job_name = job.get("restore_job_name")
+        vault = job.get("vault", "rsv-annatar")
+        rg = job.get("rg", "")
+        if restore_job_name and rg:
+            from azure.mgmt.recoveryservicesbackup import RecoveryServicesBackupClient
+            connector._ensure_clients()
+            bc = RecoveryServicesBackupClient(connector._credential, connector._subscription_id)
+            j = bc.job_details.get(vault, rg, restore_job_name)
+            az_status = getattr(j.properties, "status", "Unknown")
+            if az_status == "Completed":
+                job.update({"status": "Completed", "completed_at": now})
+            elif az_status in ("Failed", "Cancelled"):
+                job.update({"status": "Failed", "completed_at": now, "error": az_status})
+    return job
+
+
+def reconcile_jobs(connector=None, max_age_h: float = _STALE_AGE_H) -> list[dict]:
+    """Move InProgress jobs to a terminal state so the local file stops lying.
+
+    Two layers: (1) with a connector, poll Azure (refresh_job) → Completed/Failed; (2) a
+    deterministic fallback — a job still InProgress past max_age_h is marked 'Stale'
+    (no Azure needed), for jobs Azure can't resolve (record gone, poll error) or when no
+    connector is available. The on-demand `jobs --refresh` only ran when an operator
+    looked; nobody looking is exactly how a job lingers forever. Called each watch cycle.
+
+    Returns the jobs whose status changed (for logging).
+    """
+    changed: list[dict] = []
+    now = datetime.now(timezone.utc)
+    for job in all_jobs():
+        if job.get("status") != "InProgress":
+            continue
+        before = job.get("status")
+        if connector is not None:
+            try:
+                refresh_job(job, connector)
+            except Exception:
+                pass  # Azure unreachable → fall through to the staleness guard
+        if job.get("status") == "InProgress":
+            try:
+                age_h = (now - datetime.fromisoformat(job["started_at"])).total_seconds() / 3600
+            except (KeyError, ValueError, TypeError):
+                age_h = max_age_h + 1.0  # unparseable start → treat as stale
+            if age_h > max_age_h:
+                job.update({
+                    "status": "Stale",
+                    "completed_at": now.isoformat(),
+                    "error": f"no terminal state after {age_h:.0f}h — job lost, re-verify manually",
+                })
+        if job.get("status") != before:
+            vm = job.get("resource_id", "").rsplit("/", 1)[-1] or job.get("job_id", "job")
+            save_job(vm, job)
+            changed.append(job)
+    return changed
 
 
 def start_snapshot(resource_id: str, connector, vault: str = "rsv-annatar") -> dict:

@@ -290,6 +290,10 @@ infra/terraform/              → module Celebrimbor : infra de test Azure modul
   rule_status.json            → état de polling des règles (last_poll, last_match, match_count, last_error)
   discovered_assets.json      → cache assets découverts (AssetRegistry) — survit aux redémarrages
   active_jobs/<vm>.json       → état persisté du job snapshot/restore en cours (partagé CLI/War Room)
+                                réconcilié par la boucle watch (`jobs.reconcile_jobs`, cadence TTL ~1min) :
+                                poll Azure (`refresh_job`, source unique CLI+API+watch) → Completed/Failed ;
+                                garde-fou déterministe → `Stale` si InProgress > 24h (job mort, sinon InProgress
+                                éternel — un snapshot a traîné 10j faute de `jobs --refresh` manuel)
   .bashrc                     → PS1 + HISTFILE + alias gf (chargé par make glorfindel-shell)
   .bash_history               → historique bash persistant
 

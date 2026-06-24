@@ -8,7 +8,7 @@ Plateforme OSS (Apache 2.0) de défense active cloud. Deux agents IA en boucle :
 **Repo** : https://github.com/Vanyar53/eregion
 **Local** : `/home/jonathan/eregion/`, branch `main`, venv `.venv/` (créé par `make install`), `.envrc` charge les creds
 **Stack** : Python 3.12, Azure SDK, LangGraph, LiteLLM (Anthropic défaut, OpenAI, Azure, Ollama, self-hosted), ChromaDB, Click, pytest
-**Docker** : `make build` → `eregion-annatar` + `eregion-glorfindel`. `make annatar-shell` (alias `ar`) / `make glorfindel-shell` (alias `gf`). State persisté dans `~/.annatar/` et `~/.glorfindel/`, cache ChromaDB dans `~/.cache/chroma/`.
+**Docker** : `make build` → `eregion-annatar` + `eregion-glorfindel`. `make annatar-shell` (alias `ar`) / `make glorfindel-shell` (alias `gf`). State persisté dans `~/.annatar/` et `~/.glorfindel/`, cache ChromaDB dans `~/.cache/chroma/`. **Images non-root** : `make build` injecte l'UID/GID de l'opérateur (`id -u`/`id -g`) en build-arg → le container écrit le state bind-monté comme l'opérateur, pas root (sinon la CLI locale ne peut pas muter ce que le container a écrit → `PermissionError` sur `reset`/`unblock`). HOME reste `/root` (chowné), aucun chemin de mount ne change. Une seule fois après upgrade depuis l'ancienne image root : `make fix-state-ownership` (`chown` des fichiers root legacy).
 
 ---
 

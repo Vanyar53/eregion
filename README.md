@@ -197,6 +197,8 @@ make glorfindel-stop    # stop all services
 
 State, history, and ChromaDB model cache are persisted on the host (`~/.glorfindel/`, `~/.annatar/`, `~/.cache/chroma/`).
 
+The images run **non-root** as your own UID/GID (baked in by `make build` via `id -u`/`id -g`), so the container and your local `glorfindel` CLI share the same host state without ownership clashes. Upgrading from an older root-built image once? Reclaim the files it wrote with `make fix-state-ownership`.
+
 ### 3. Run your first attack/defense loop
 
 ```bash

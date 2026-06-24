@@ -75,7 +75,7 @@ DOCKER_GLORFINDEL := docker run --rm $(GLORFINDEL_AZURE_ENV) $(GLORFINDEL_VOLS) 
 	$(GLORFINDEL_ENV) \
 	$(IMAGE_GLORFINDEL)
 
-.PHONY: help build build-annatar build-glorfindel \
+.PHONY: help build build-annatar build-glorfindel fix-state-ownership \
 	annatar-run annatar-dry-run annatar-validate annatar-list \
 	glorfindel-respond glorfindel-dry-run glorfindel-watch \
 	glorfindel-release glorfindel-revert glorfindel-list \
@@ -151,11 +151,23 @@ help:
 
 build: build-annatar build-glorfindel
 
+# Bake the operator's UID/GID into the image so the container runs non-root as them →
+# bind-mounted state (~/.glorfindel, ~/.cache/chroma, ./runs) stays owned by the
+# operator, not root (the local CLI must be able to mutate what the container wrote).
+DOCKER_UIDGID = --build-arg UID=$(shell id -u) --build-arg GID=$(shell id -g)
+
 build-annatar:
-	docker build -f annatar/Dockerfile -t $(IMAGE_ANNATAR) .
+	docker build $(DOCKER_UIDGID) -f annatar/Dockerfile -t $(IMAGE_ANNATAR) .
 
 build-glorfindel:
-	docker build -f glorfindel/Dockerfile -t $(IMAGE_GLORFINDEL) .
+	docker build $(DOCKER_UIDGID) -f glorfindel/Dockerfile -t $(IMAGE_GLORFINDEL) .
+
+# One-time reclaim of state files written by the OLD root container (pre-non-root
+# image). New images write as the operator, so this is only needed once after upgrade.
+fix-state-ownership:
+	sudo chown -R $(shell id -u):$(shell id -g) \
+		$(HOME)/.glorfindel $(HOME)/.cache/chroma runs $(HOME)/.annatar 2>/dev/null || true
+	@echo "✓ ~/.glorfindel, ~/.cache/chroma, runs/, ~/.annatar → $(shell id -un)"
 
 # ── Annatar ───────────────────────────────────────────────────────────────
 

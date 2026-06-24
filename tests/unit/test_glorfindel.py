@@ -409,6 +409,10 @@ def test_check_backup_points_vault_rg_scopes_lookup(monkeypatch):
     assert args[0] == "central-vault"
     assert args[1] == "backup-rg"            # vault's RG — NOT the VM's 'app-rg'
     assert "app-rg" in args[3]               # container is keyed by the VM's RG
+    # Canonical CASE — recovery_points.list is case-sensitive on the type prefix.
+    # Lowercase made it return empty → false "first backup pending" (Celebrimbor bench).
+    assert args[3] == "IaasVMContainer;iaasvmcontainerv2;app-rg;vm-x"
+    assert args[4] == "VM;iaasvmcontainerv2;app-rg;vm-x"
 
 
 def test_check_backup_points_vault_rg_defaults_to_vm_rg(monkeypatch):

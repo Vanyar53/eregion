@@ -1046,8 +1046,14 @@ class AzureConnector(CloudConnector):
             vm_rg, vm_name = _parse_vm_resource_id(resource_id)
             v_rg = vault_rg or vm_rg
             client = RecoveryServicesBackupClient(self._credential, self._subscription_id)
-            container = f"iaasvmcontainer;iaasvmcontainerv2;{vm_rg};{vm_name}"
-            item = f"vm;iaasvmcontainerv2;{vm_rg};{vm_name}"
+            # Canonical fabric names — CASE MATTERS. `recovery_points.list` is
+            # case-SENSITIVE on the container/item type prefix (`IaasVMContainer;` / `VM;`),
+            # while `protected_items.get` is case-insensitive. Lowercase prefixes made
+            # protected_items.get succeed (→ protected=True) but recovery_points.list return
+            # EMPTY → a false "first backup pending" on a VM that IS backed up (confirmed on
+            # the Celebrimbor bench: az showed the RP, our query missed it on case alone).
+            container = f"IaasVMContainer;iaasvmcontainerv2;{vm_rg};{vm_name}"
+            item = f"VM;iaasvmcontainerv2;{vm_rg};{vm_name}"
             rps = list(client.recovery_points.list(vault, v_rg, "Azure", container, item))
             if not rps:
                 # No recovery point — but is the VM actually protected? An empty RP

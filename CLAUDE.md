@@ -423,7 +423,7 @@ wheel : eregion-0.2.0-py3-none-any.whl ✓
 ## Coûts réels (West Europe)
 
 - **Infra existante** : LLM API uniquement (Anthropic défaut), <$2/mois (~$0.05–0.10 par run)
-- **Infra Celebrimbor (Terraform)** : ~$25–35/mois (VM ~6h/jour + disques + IP + backup + LAW). Jetable — `make celebrimbor-stop` pour pauser sans détruire, ou `make celebrimbor-down` pour tout détruire. ⚠️ **Pitfall (incident 2026-06-25)** : `celebrimbor-down` = `terraform destroy` brut **non scopable** → il détruit **TOUT le baseline** (VM + LAW + RSV), pas une topo. Pour **retirer une topo** : `enabled: false` dans `config.yaml` + `make celebrimbor-up` (sans arg) → réconcilie et ne détruit que le `for_each` de la topo, baseline intact. **Ne jamais utiliser `down` pour retirer une topo.** (Fix structurel `down` symétrique/guardé : ticket Infra.)
+- **Infra Celebrimbor (Terraform)** : ~$25–35/mois (VM ~6h/jour + disques + IP + backup + LAW). Jetable — `make celebrimbor-stop` pour pauser sans détruire. ⚠️ **`celebrimbor-down` est GARDÉ** (suite incident 2026-06-25 où un `down` non scopé a emporté tout le baseline) : il est **symétrique de `up`** et **protège le baseline**. `make celebrimbor-down TOPO=multinic` → destruction **scopée** d'une topo (via `-target` sur son RG), baseline intact. `make celebrimbor-down` **sans arg refuse** et exige `CONFIRM=<instance>` pour un teardown total (baseline inclus). Retirer une topo proprement = `enabled: false` dans `config.yaml` + `make celebrimbor-up`. Convention : chaque topo définit `azurerm_resource_group.<topo>` (count) = la cible `-target`.
 
 ---
 

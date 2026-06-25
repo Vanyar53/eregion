@@ -135,7 +135,8 @@ help:
 	@echo "Celebrimbor (infra de test Terraform, jetable)"
 	@echo "  make celebrimbor-plan [TOPO=] [INSTANCE=]   Plan (lecture seule, pas d'apply)"
 	@echo "  make celebrimbor-up   [TOPO=] [INSTANCE=]   Apply baseline (+ topos)"
-	@echo "  make celebrimbor-down [INSTANCE=]           Détruit le workspace"
+	@echo "  make celebrimbor-down TOPO=x                Détruit UNE topo (baseline préservé)"
+	@echo "  make celebrimbor-down CONFIRM=<instance>    Teardown TOTAL (gardé, baseline inclus)"
 	@echo "  make celebrimbor-stop / celebrimbor-start         Éteint/rallume les VMs (sans détruire)"
 	@echo "  make celebrimbor-output [INSTANCE=]         Fragment glorfindel-config.yaml généré"
 	@echo ""
@@ -276,9 +277,15 @@ glorfindel-shell: build-glorfindel
 #   make celebrimbor-up TOPO="multinic,aks"   # n'active QUE ces topos
 #   make celebrimbor-up INSTANCE=ci-1234       # stack isolée (workspace dédié)
 #   make celebrimbor-plan TOPO=multinic        # plan seul (lecture, pas d'apply)
-#   make celebrimbor-down                      # détruit le workspace courant
 #   make celebrimbor-stop / celebrimbor-start        # éteint/rallume les VMs sans détruire
 #   make celebrimbor-output                    # fragment glorfindel-config.yaml généré
+#
+# ⚠ celebrimbor-down est GARDÉ (incident 2026-06-25 : un down non scopé a emporté tout
+#   le baseline). Il est SYMÉTRIQUE de up et protège le baseline :
+#   make celebrimbor-down TOPO=multinic        # destruction SCOPÉE de la/les topo(s) — baseline préservé
+#   make celebrimbor-down CONFIRM=<instance>   # teardown TOTAL (baseline INCLUS) — confirmation obligatoire
+#   Retirer une topo proprement = enabled:false dans config.yaml + celebrimbor-up (reconcile).
+#   Convention : chaque topo doit définir `azurerm_resource_group.<topo>` (count) → la cible -target.
 
 celebrimbor-init:
 	$(TF) init -upgrade
@@ -304,7 +311,21 @@ celebrimbor-up: celebrimbor-init
 
 celebrimbor-down:
 	@$(TF) workspace select $(INSTANCE)
-	$(TF) destroy
+	@set -f; if [ -n "$(TOPO)" ]; then \
+	   targets=$$(echo '$(TOPO)' | awk -F, '{for(i=1;i<=NF;i++) printf "-target=azurerm_resource_group.%s[0] ", $$i}'); \
+	   filter=$$(echo '$(TOPO)' | awk -F, '{for(i=1;i<=NF;i++){printf "%s\"%s\"",(i>1?",":""),$$i}}'); \
+	   echo ">> Destruction SCOPÉE topo(s) '$(TOPO)' sur l'instance '$(INSTANCE)' (baseline préservé)"; \
+	   $(TF) destroy $$targets -var="topo_filter=[$$filter]"; \
+	 else \
+	   echo "!! celebrimbor-down SANS TOPO = teardown TOTAL de l'instance '$(INSTANCE)'."; \
+	   echo "!! → détruit le baseline (vm-celebrimbor-gondolin + law-celebrimbor-amonsul + rsv-celebrimbor-erebor) ET toutes les topos."; \
+	   echo "!! Retirer une seule topo : make celebrimbor-down TOPO=<nom>  (ou enabled:false + celebrimbor-up)."; \
+	   if [ "$(CONFIRM)" != "$(INSTANCE)" ]; then \
+	     echo "!! Refus. Confirme la destruction totale avec :  make celebrimbor-down CONFIRM=$(INSTANCE)"; \
+	     exit 1; \
+	   fi; \
+	   $(TF) destroy; \
+	 fi
 
 celebrimbor-output:
 	@$(TF) workspace select $(INSTANCE)

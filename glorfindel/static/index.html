@@ -1180,9 +1180,10 @@ function renderInfra() {
     const existing = [...resourceMap.values()].find(r => r.vm_name === d.name);
     if (existing) {
       if (d.last_seen) existing.last_seen = d.last_seen;
+      if (d.monitoring_backend) existing.monitoring_backend = d.monitoring_backend;
     } else {
       const key = d.resource_id || `discovered:${d.name}`;
-      resourceMap.set(key, { resource_id: key, vm_name: d.name, states: [], last_seen: d.last_seen });
+      resourceMap.set(key, { resource_id: key, vm_name: d.name, states: [], last_seen: d.last_seen, monitoring_backend: d.monitoring_backend });
     }
   });
   vmEscs.forEach(e => {
@@ -1367,13 +1368,20 @@ function _renderModules(rules, detectBackends, recoverBackends, resources) {
     const hasErr   = liveRules.some(r => r.last_error);
     const allPoll  = liveRules.length && liveRules.every(r => r.last_poll && !r.last_error);
     const lastMatch = liveRules.reduce((m, r) => r.last_match && r.last_match > (m||'') ? r.last_match : m, null);
-    const dot = hasErr ? `<span style="color:var(--red)">●</span>`
-              : allPoll ? `<span style="color:var(--green)">●</span>`
+    // Backend-level reachability (commit 8b099de): reachable===false means the LAW is
+    // gone/IAM-revoked/wrong-GUID → detection is BLIND. Authoritative over rule status;
+    // null falls back to the rules. Kills the "green DETECT while the LAW is dead" lie.
+    const unreachable = b.reachable === false;
+    const backendErr  = b.last_error || '';
+    const dot = unreachable          ? `<span style="color:var(--red)" title="${_attr(backendErr || 'backend unreachable')}">●</span>`
+              : b.reachable === true ? `<span style="color:var(--green)">●</span>`
+              : hasErr               ? `<span style="color:var(--red)">●</span>`
+              : allPoll              ? `<span style="color:var(--green)">●</span>`
               : `<span style="color:var(--dim)">●</span>`;
     const expandId  = `rules-${b.name.replace(/[^a-z0-9]/gi,'-')}`;
     const isExpanded = _expandedBackends.has(b.name);
     const ruleRows  = bRules.map(_ruleRow).join('');
-    return `<div class="node-backend detect" id="nb-${b.name}" style="cursor:pointer;max-width:240px"
+    return `<div class="node-backend detect ${unreachable ? 'state-error' : ''}" id="nb-${b.name}" style="cursor:pointer;max-width:240px"
       onclick="event.stopPropagation();toggleBackend('${b.name}')">
       <div class="node-backend-name">${dot} ${b.name}</div>
       <div class="node-backend-type">${b.type}</div>
@@ -1382,7 +1390,8 @@ function _renderModules(rules, detectBackends, recoverBackends, resources) {
         ${lastMatch ? `<span style="color:var(--orange);font-size:9px">match ${_relTime(lastMatch)}</span>` : ''}
         <span style="color:var(--blue);font-size:9px">${isExpanded ? '▾' : '▸'}</span>
       </div>
-      ${hasErr ? `<div class="node-backend-row" style="color:var(--red);font-size:9px">⚠ error</div>` : ''}
+      ${unreachable ? `<div class="node-backend-row" style="color:var(--red);font-size:9px" title="${_attr(backendErr)}">⚠ unreachable — detection blind</div>`
+        : hasErr ? `<div class="node-backend-row" style="color:var(--red);font-size:9px">⚠ error</div>` : ''}
       ${isExpanded ? `<div style="margin-top:6px;border-top:1px solid var(--border);padding-top:6px">${ruleRows}</div>` : ''}
     </div>`;
   }).join('') || `<div style="color:var(--dim);font-size:10px">No monitoring backends</div>`;
@@ -1667,7 +1676,7 @@ function _renderClusterNode(cluster, slotIdx = 0) {
 // ── Asset nodes ────────────────────────────────────────────────────────────────
 
 function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
-  const { resource_id, vm_name, states: _rawStates = [], last_seen } = resource;
+  const { resource_id, vm_name, states: _rawStates = [], last_seen, monitoring_backend } = resource;
   // Subnet-wide blocks live on the shared subnet NSG, not on this VM — they're shown
   // on a dedicated subnet NSG card, so exclude them from every VM-card view here.
   const states = _rawStates.filter(s => !(s.type === 'blocked' && s.scoped === false));
@@ -1698,6 +1707,13 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
   // known-but-silent) — it's outside monitoring. Flag it distinctly, don't fake OFFLINE.
   const isUnmonitored = _gapMin === null && _rawStates.length === 0
                         && myEscs.length > 0 && !isIsolated && !restoreInfo;
+  // The VM's monitoring backend (LAW) is unreachable → its last_seen is frozen at the
+  // last good heartbeat (discovery keeps the cache on a backend failure, by contract).
+  // A "fresh" last_seen from a DEAD LAW is a lie: we can't actually verify the VM. Flag
+  // STALE and don't show a confident green dot. (commit 8b099de exposes reachable.)
+  const _vmBackend = monitoring_backend
+    ? (_cfgData?.monitoring_backends || []).find(b => b.name === monitoring_backend) : null;
+  const isStale = _vmBackend && _vmBackend.reachable === false && !isIsolated && !restoreInfo;
 
   const stateClass = _pendingActions.has(vm_name) ? 's-releasing'
                    : restoreInfo    ? 's-restoring'
@@ -1711,6 +1727,7 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
             : isIsolated    ? `<span style="color:var(--red)">●</span>`
             : isBlocked     ? `<span style="color:var(--orange)">●</span>`
             : myEscs.length ? `<span style="color:var(--purple)">●</span>`
+            : isStale       ? `<span style="color:var(--dim)" title="monitoring backend unreachable — state unverifiable">●</span>`
             : isOffline     ? `<span style="color:var(--dim)" title="possibly offline">●</span>`
             :                 `<span style="color:var(--green)">●</span>`;
 
@@ -1722,6 +1739,9 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
     : '';
   const unmonitoredBadge = isUnmonitored
     ? `<span title="No Log Analytics heartbeat and not in discovery — this card exists only from an escalation. Glorfindel isn't monitoring this resource." style="font-size:8px;font-weight:700;padding:1px 5px;border-radius:3px;background:color-mix(in srgb,var(--dim) 14%,transparent);color:var(--dim);border:1px solid var(--border);letter-spacing:.5px;flex-shrink:0">UNMONITORED</span>`
+    : '';
+  const staleBadge = isStale
+    ? `<span title="${_attr(`Monitoring backend '${monitoring_backend}' unreachable${_vmBackend.last_error ? ' — ' + _vmBackend.last_error : ''}. last_seen is frozen — VM state cannot be verified.`)}" style="font-size:8px;font-weight:700;padding:1px 5px;border-radius:3px;background:color-mix(in srgb,var(--orange) 14%,transparent);color:var(--orange);border:1px solid color-mix(in srgb,var(--orange) 35%,var(--border));letter-spacing:.5px;flex-shrink:0">STALE</span>`
     : '';
 
   // Badges are clickable in compact mode only — expanded mode uses dec-row / esc-items
@@ -1887,10 +1907,15 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
     j => j.resource_id === resource_id || j.resource_id?.split('/').pop() === vm_name);
   const snapshotInProgress = activeJob?.type === 'snapshot' && activeJob?.status === 'InProgress';
   const snapshotFailed     = activeJob?.type === 'snapshot' && activeJob?.status === 'Failed';
+  // Stale (commit c514596): InProgress >24h with no terminal Azure state → zombie job.
+  // Yellow, distinct from Failed (red) — it may still be running, just unverified.
+  const snapshotStale      = activeJob?.type === 'snapshot' && activeJob?.status === 'Stale';
   // Escalade snapshot pending : bouton déjà dans la carte d'escalade — ne pas doubler dans BACKUP
   const hasSnapshotEsc = myEscs.some(e => e.action === 'snapshot' && e.escalation_type === 'low_confidence');
   const snapshotBtn = snapshotInProgress
     ? `<button class="action" disabled style="margin-left:auto;font-size:9px;padding:2px 7px;opacity:.5;cursor:default">⏳ Snapshot…</button>`
+    : snapshotStale
+      ? `<button class="action" onclick="event.stopPropagation();doSnapshot('${vm_name}')" style="margin-left:auto;font-size:9px;padding:2px 7px;background:color-mix(in srgb,var(--yellow) 20%,transparent);color:var(--yellow);border-color:var(--yellow)" title="Snapshot job stale — InProgress >24h with no terminal state. Re-check Azure or relaunch.">⏱ Stale</button>`
     : snapshotFailed
       ? `<button class="action" onclick="event.stopPropagation();doSnapshot('${vm_name}')" style="margin-left:auto;font-size:9px;padding:2px 7px;background:color-mix(in srgb,var(--red) 20%,transparent);color:var(--red);border-color:var(--red)" title="${activeJob?.error || 'Snapshot failed'}">✗ Retry</button>`
       : hasSnapshotEsc
@@ -1963,6 +1988,8 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
 
   const compactSnapshotBtn = snapshotInProgress
     ? `<button class="action" disabled style="margin-left:auto;font-size:9px;padding:1px 6px;opacity:.5;cursor:default">⏳ Snapshot…</button>`
+    : snapshotStale
+      ? `<button class="action" onclick="event.stopPropagation();doSnapshot('${vm_name}')" style="margin-left:auto;font-size:9px;padding:1px 6px;background:color-mix(in srgb,var(--yellow) 20%,transparent);color:var(--yellow);border-color:var(--yellow)" title="Snapshot job stale — InProgress >24h with no terminal state. Re-check Azure or relaunch.">⏱ Stale</button>`
     : snapshotFailed
       ? `<button class="action" onclick="event.stopPropagation();doSnapshot('${vm_name}')" style="margin-left:auto;font-size:9px;padding:1px 6px;background:color-mix(in srgb,var(--red) 20%,transparent);color:var(--red);border-color:var(--red)" title="${activeJob?.error || 'Snapshot failed'}">✗ Retry</button>`
       : hasSnapshotEsc
@@ -1991,10 +2018,11 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
         <span class="node-asset-name" title="${_attr(vm_name)}">${vm_name}</span>
         <span style="color:var(--dim);font-size:9px;margin-left:auto;flex-shrink:0">${isExpanded ? '▾' : '▸'}</span>
       </div>
-      ${(offlineBadge || unmonitoredBadge || modeBadge || (readiness && !isExpanded)) ? `
+      ${(offlineBadge || unmonitoredBadge || staleBadge || modeBadge || (readiness && !isExpanded)) ? `
       <div style="display:flex;align-items:center;gap:6px;margin-top:5px;flex-wrap:wrap">
         ${offlineBadge}
         ${unmonitoredBadge}
+        ${staleBadge}
         ${modeBadge}
         ${readiness && !isExpanded ? `<span style="color:var(--dim);font-size:9px;margin-left:auto">${readiness}</span>` : ''}
       </div>` : ''}

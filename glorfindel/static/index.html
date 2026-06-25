@@ -1698,22 +1698,28 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
   //   (b) evicted from discovery (no last_seen) yet still rendered because it has an
   //       active state — a block (incl. a subnet-wide one filtered off the VM view)
   //       doesn't cut AMA, so absence from discovery means it stopped reporting >8h ago.
+  // Three mutually-exclusive "monitoring blindness" states, in precedence order (most
+  // blind first) so a card shows exactly ONE — no OFFLINE+STALE doublon:
+  //   UNMONITORED — never in discovery, card exists only from an escalation → not monitored
+  //   STALE       — monitoring backend (LAW) unreachable → last_seen frozen, unverifiable
+  //   OFFLINE     — in discovery but heartbeat stale (>15m) / evicted (>8h) → silent (off?)
   const _gapMin   = last_seen ? (Date.now() - new Date(last_seen).getTime()) / 60000 : null;
   const _evicted  = _gapMin === null && _rawStates.length > 0;
-  const isOffline = !isIsolated && !restoreInfo
-                    && ((_gapMin !== null && _gapMin > 15) || _evicted);
-  // A card backed ONLY by an escalation (e.g. a posture_gap) for a VM that LAW never saw
-  // (no discovery entry → no last_seen, no active state) isn't "offline" (that implies
-  // known-but-silent) — it's outside monitoring. Flag it distinctly, don't fake OFFLINE.
+  // (a) UNMONITORED — no discovery, no active state, only an escalation references it.
   const isUnmonitored = _gapMin === null && _rawStates.length === 0
                         && myEscs.length > 0 && !isIsolated && !restoreInfo;
-  // The VM's monitoring backend (LAW) is unreachable → its last_seen is frozen at the
-  // last good heartbeat (discovery keeps the cache on a backend failure, by contract).
-  // A "fresh" last_seen from a DEAD LAW is a lie: we can't actually verify the VM. Flag
-  // STALE and don't show a confident green dot. (commit 8b099de exposes reachable.)
+  // (b) STALE — the backend that would heartbeat this VM is down; discovery keeps the
+  // cache on a backend failure (by contract), so a "fresh" last_seen is a lie here.
   const _vmBackend = monitoring_backend
     ? (_cfgData?.monitoring_backends || []).find(b => b.name === monitoring_backend) : null;
-  const isStale = _vmBackend && _vmBackend.reachable === false && !isIsolated && !restoreInfo;
+  // !isUnmonitored makes the precedence explicit: UNMONITORED always wins over STALE
+  // (guaranteed exclusive, not just relying on the discovery data invariant).
+  const isStale = _vmBackend && _vmBackend.reachable === false
+                  && !isUnmonitored && !isIsolated && !restoreInfo;
+  // (c) OFFLINE — only when neither more-blind state holds (a dead backend can't tell us
+  // the VM is silent; an escalation-only card was never heartbeating).
+  const isOffline = !isIsolated && !restoreInfo && !isStale && !isUnmonitored
+                    && ((_gapMin !== null && _gapMin > 15) || _evicted);
 
   const stateClass = _pendingActions.has(vm_name) ? 's-releasing'
                    : restoreInfo    ? 's-restoring'

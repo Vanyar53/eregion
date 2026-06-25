@@ -293,12 +293,38 @@ async def config() -> dict:
             status = _load_status()
             detection_is_inert = detection_inert(cfg.rules)
 
+            # Per-backend reachability from rule poll status. A backend whose rules are
+            # erroring is unreachable (deleted LAW / IAM revoked / wrong GUID) — surfaced
+            # so the War Room can red the DETECT node instead of showing it green while
+            # detection is blind. Needs the detector to actually record last_error on a
+            # failed query (it used to swallow failures as empty results).
+            backend_state: dict[str, dict] = {}
+            for rule in cfg.rules:
+                bn = rule.monitoring_backend_name
+                if not bn:
+                    continue
+                s = status.get(rule.name, {})
+                st = backend_state.setdefault(bn, {"polled": False, "error": ""})
+                if s.get("last_poll"):
+                    st["polled"] = True
+                if s.get("last_error") and not st["error"]:
+                    st["error"] = s["last_error"]
+
             for b in cfg.backends:
+                st = backend_state.get(b.name)
+                if st is None:
+                    reachable, backend_error = None, ""        # no rule bound yet
+                elif st["error"]:
+                    reachable, backend_error = False, st["error"]
+                else:
+                    reachable, backend_error = (True if st["polled"] else None), ""
                 backends_info.append({
                     "name": b.name,
                     "type": b.type,
                     "workspace_id": b.workspace_id,
                     "endpoint": b.endpoint,
+                    "reachable": reachable,
+                    "last_error": backend_error,
                 })
 
             # Action backends (RSV, storage...) from glorfindel-config.yaml

@@ -204,6 +204,14 @@ glorfindel/
                           sien, le NSG d'un subnet AKS, les VMs éteintes). `vms` → War Room : flag monitored
                           (VM hors-LAW = angle mort) + glow de la/les carte(s) VM au survol. Read-only OK.
   detectors.py          → DetectionConnector ABC + AzureMonitorDetector (poll 10s) + run_query()
+                          run_query/poll_alert REMONTENT les échecs de query (lèvent), ne les avalent
+                          plus en `[]`/no-match : un LAW injoignable (supprimé/IAM/GUID faux) était
+                          indistinguable d'un LAW sain sans détection → détection aveugle en silence +
+                          fausse éviction discovery. poll_alert ne lève que sur échec PERSISTANT (jamais
+                          un seul SUCCESS dans la fenêtre ; 0 row sur query réussie = no-match légitime).
+                          Handlers en aval déjà prêts (discovery except→None garde cache ; poller
+                          except→last_error ; investigate try→[]). /api/state.monitoring_backends porte
+                          `reachable`/`last_error` (dérivé du poll status) → War Room rougit le DETECT.
   detection_rules.py    → DetectionRule dataclass + RulePoller (continuous polling, status persistence)
                           load_config(path, glorfindel_cfg=None) — workspace_id résolu depuis glorfindel_cfg
                           _resolve_backend_for_rule() — la règle se LIE au backend de glorfindel-config :

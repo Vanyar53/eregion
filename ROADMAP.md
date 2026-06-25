@@ -12,6 +12,7 @@ Modèle : CLI open source gratuit, SaaS payant pour multi-tenant + connecteurs a
 ## État actuel (v0.2.0)
 - 6 TTPs validés en réel sur Azure : T1486, T1041, T1110.001, T1548.003, T1110+T1548 (parallèle), T1136.001
 - Run parallèle multi-signal validé avec IncidentRegistry + propagation investigative_context entre cycles
+- **✅ Isolation multi-NIC validée sur Azure réel** (2026-06-25, topo Celebrimbor `multinic`, PASS 7/7) — isolate couvre **les 2 NICs/2 NSG**, `verify_isolation` détecte `uncovered_nics` si une NIC manque. Le trou de sécurité terrain (2e NIC joignable malgré ISOLATED) est fermé et **vérifié** (plus mocké). Correctif `7603a3e`.
 - **Purple loop end-to-end validé** (commit 9a64e83) — `detection_missed → propose_detection_rule → approve-rule → detection_rules.yaml → restart watch → détection réussie ~78s`. Scénario T1136.001 (account creation) créé pour ce test.
 - 314 tests, 0 appel Azure, 0 appel LLM
 - **🎯 Premier vrai incident** (2026-06-14) — Glorfindel a détecté un **vrai brute force SSH internet** (IP `95.47.246.223`, 26 FailedAttempts) sur la sandbox, hors boucle Annatar. En `human_only` → escalade `mode_hold` recommandant `block_suspicious_ip`. `investigate` a qualifié (auth échouée → block, pas isolate). Le pipeline tient sur du trafic adverse authentique — et a débusqué un bug (escalade sans IP) qu'aucun run scénarisé n'avait trouvé.

@@ -10,6 +10,7 @@ from rich.console import Console
 
 from glorfindel.actions import AUTONOMOUS_ACTIONS, HUMAN_APPROVAL_REQUIRED, CloudConnector
 from glorfindel.config import load_glorfindel_config
+from glorfindel.detection_authoring import author_rule
 from glorfindel.incidents import IncidentRegistry
 from glorfindel.memory import CycleMemory
 
@@ -225,83 +226,9 @@ _SOURCE_LANGUAGES: dict[str, str] = {
     "sentinel": "KQL (Microsoft Sentinel)",
 }
 
-_RULE_PROPOSAL_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "propose_detection_rule",
-        "description": (
-            "Propose an improved detection query for the client's monitoring system "
-            "after a missed attack. You must always call this tool — never respond in plain text."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "analysis": {
-                    "type": "string",
-                    "description": (
-                        "Why the current detection failed: wrong table/metric, threshold too high, "
-                        "time window too narrow, missing filter, wrong query language constructs, etc."
-                    ),
-                },
-                "rule_name": {
-                    "type": "string",
-                    "description": (
-                        "Short kebab-case identifier for the rule, e.g. "
-                        "'ransomware-disk-write-v2'. Must be unique."
-                    ),
-                },
-                "proposed_query": {
-                    "type": "string",
-                    "description": (
-                        "The complete runnable query in the source's language (see system prompt). "
-                        "Must target the correct data source and use thresholds calibrated to "
-                        "the observed attack behavior."
-                    ),
-                },
-                "interval_s": {
-                    "type": "number",
-                    "description": "Recommended polling interval in seconds (10–120).",
-                },
-                "explanation": {
-                    "type": "string",
-                    "description": (
-                        "One or two sentences: what the new query detects and why it "
-                        "improves on the previous one."
-                    ),
-                },
-                "confidence": {
-                    "type": "number",
-                    "description": "Confidence 0.0–1.0 that this query would catch the attack.",
-                },
-            },
-            "required": [
-                "analysis", "rule_name", "proposed_query",
-                "interval_s", "explanation", "confidence",
-            ],
-        },
-    },
-}
-
-_RULE_PROPOSAL_SYSTEM_PROMPT = """\
-You are Glorfindel's detection engineering module.
-
-An attack was simulated but your detection rules failed to fire (detection_timeout). \
-Your job: analyze the failure and propose a better detection query for the client's \
-monitoring system.
-
-The query language depends on the source — it is specified in the user message. \
-Write the query in that language only (KQL for azure_monitor, PromQL for prometheus, \
-SPL for splunk, etc.).
-
-Rules:
-- Target the correct data source / table / metric for the monitoring system
-- Use thresholds calibrated to the observed attack intensity, not arbitrary values
-- Keep the time window tight to minimize false positives
-- Include only filters that distinguish malicious from benign activity
-- If the original query was close, fix only what was wrong; do not over-engineer
-
-You always call the propose_detection_rule tool — never respond in plain text.
-"""
+# Detection-rule authoring (tool schema, system prompt, grounded LLM call) lives in
+# glorfindel/detection_authoring.py — the single source shared by this reactive node
+# and the proactive `glorfindel propose-rules` cold-start command.
 
 
 # ── Nodes ─────────────────────────────────────────────────────────────────────
@@ -1123,10 +1050,8 @@ def propose_detection_rule(
 
     Uses a focused prompt distinct from the main security_decision flow.
     The proposal is stored in state['proposed_rule'] and persisted by store_cycle.
+    Delegates the grounded LLM call to detection_authoring.author_rule.
     """
-    import json
-    import litellm
-
     signal = state["signal"]
     raw = signal.get("raw_signal", {})
     hints = raw.get("detection_hints", {})
@@ -1151,7 +1076,6 @@ def propose_detection_rule(
     failed_query = ctx.get("failed_query") or raw.get("failed_query", "(unknown)")
     workspace_id = ctx.get("workspace_id", "")
     source = raw.get("detection_source", "azure_monitor")
-    query_lang = _SOURCE_LANGUAGES.get(source, source)
 
     # Check if an action was already taken on this VM — timeout may be caused by
     # the action (e.g. isolate_vm cuts off AMA) rather than a bad detection rule.
@@ -1162,72 +1086,42 @@ def propose_detection_rule(
             actions_summary = ", ".join(
                 f"{a['action']} (at {a.get('timestamp', '?')})" for a in inc.actions_taken
             )
-            incident_context = f"""
+            incident_context = f"""\
 == IMPORTANT: actions already taken on this resource ==
 {actions_summary}
 
 If one of these actions (e.g. isolate_vm) could have cut off the monitoring agent (AMA/syslog),
 the detection timeout may be caused by that action — not by a bad detection rule.
 In that case, note this in your analysis and set confidence accordingly.
-The existing rule may be correct and no change needed.
-"""
+The existing rule may be correct and no change needed."""
 
-    user_msg = f"""Detection missed for TTP: {signal.get('ttp', '?')}
-Resource: {signal.get('resource_id', '?')}
-Detection source: {source} — write your query in {query_lang}
-Workspace / endpoint: {workspace_id or '(not specified)'}
+    # Grounded authoring: introspect the real table schema (getschema) when we have a
+    # live workspace. dry_run / no workspace → detector=None → engine authors without
+    # the schema block (prior behaviour), no Azure call.
+    detector = None
+    if not state.get("dry_run") and workspace_id and source in ("azure_monitor", "sentinel"):
+        try:
+            from glorfindel.detectors import detector_for
+            detector = detector_for(source, workspace_id=workspace_id)
+        except Exception as e:  # never let detector wiring break authoring
+            _console.print(f"  [dim]schema introspection unavailable: {e}[/dim]")
 
-== What the attacker executed ==
-{hints.get('attack_commands_summary', '(no attack summary provided)')}
-
-== Expected log source / table ==
-{hints.get('log_source', '(unknown)')}
-
-== Expected indicators ==
-{chr(10).join('- ' + i for i in (hints.get('expected_indicators') or []))}
-
-== Query that failed (timed out after {ctx.get('detection_timeout_s', '?')}s) ==
-{failed_query}
-
-== Past detection history for this TTP ==
-{chr(10).join(c.get('summary', '') for c in state.get('past_cycles', [])) or '(no history)'}
-{incident_context}
-Propose a better {query_lang} query that would have caught this attack."""
-
-    kwargs: dict = {}
-    base_url = os.environ.get("GLORFINDEL_LLM_BASE_URL")
-    if base_url:
-        kwargs["base_url"] = base_url
-
-    response = litellm.completion(
+    past_summaries = [c.get("summary", "") for c in state.get("past_cycles", []) if c.get("summary")]
+    proposed_rule = author_rule(
+        ttp=ttp,
+        resource_id=signal.get("resource_id", ""),
+        source=source,
+        workspace_id=workspace_id,
         model=model,
-        max_tokens=2048,
-        messages=[
-            {
-                "role": "system",
-                "content": [{"type": "text", "text": _RULE_PROPOSAL_SYSTEM_PROMPT,
-                              "cache_control": {"type": "ephemeral"}}],
-            },
-            {"role": "user", "content": user_msg},
-        ],
-        tools=[_RULE_PROPOSAL_TOOL],
-        tool_choice={"type": "function", "function": {"name": "propose_detection_rule"}},
-        **kwargs,
+        detector=detector,
+        attack_summary=hints.get("attack_commands_summary", ""),
+        expected_indicators=hints.get("expected_indicators") or [],
+        failed_query=failed_query,
+        detection_timeout_s=ctx.get("detection_timeout_s"),
+        past_summaries=past_summaries,
+        incident_context=incident_context,
     )
-
-    tool_call = response.choices[0].message.tool_calls[0]
-    d = json.loads(tool_call.function.arguments)
-
-    proposed_rule = {
-        "rule_name": d["rule_name"],
-        "source": signal.get("raw_signal", {}).get("detection_source", "azure_monitor"),
-        "workspace_id": workspace_id,
-        "query": d["proposed_query"],
-        "interval_s": float(d.get("interval_s", 30)),
-        "explanation": d["explanation"],
-        "confidence": float(d["confidence"]),
-        "analysis": d["analysis"],
-    }
+    d = proposed_rule  # field access below mirrors the proposal dict
 
     # Save the proposed rule immediately so proposal_id is available for the
     # escalation card (escalate_to_human runs before store_cycle).
@@ -1235,12 +1129,15 @@ Propose a better {query_lang} query that would have caught this attack."""
     if not state.get("dry_run"):
         from glorfindel import proposed_rules as _pr
         run_id = signal.get("context", {}).get("run_id", "")
+        # grounded_schema is audit metadata (kept in state/debug.jsonl), not a
+        # record() field — strip it from the persisted-proposal kwargs.
+        record_kwargs = {k: v for k, v in proposed_rule.items() if k != "grounded_schema"}
         pid = _pr.record(
             run_id=run_id,
             signal_id=signal.get("signal_id", ""),
             ttp=signal.get("ttp", ""),
             resource_id=signal.get("resource_id", ""),
-            **proposed_rule,
+            **record_kwargs,
         )
 
     return {

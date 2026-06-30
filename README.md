@@ -29,7 +29,7 @@ Open-source CDR for cloud infrastructure (Azure today; the LLM layer is provider
 
 **Detection loop** — `detection_rules.yaml` defines continuous polling rules (KQL, PromQL, SPL…). VMs are auto-discovered via LAW Heartbeat — no `resource_id` to maintain. Glorfindel polls independently of any attack simulation.
 
-**Purple team loop** — if detection fails, Glorfindel's LLM proposes an improved query. `glorfindel approve-rule <id>` applies it. The rules get better with each missed detection.
+**Purple team loop** — detection authoring is LLM-generated but **grounded**: anchored on a shared technique catalog *and* the real schema of your log tables (`getschema`), so queries reference columns that actually exist — never hallucinated. Reactively, a missed attack triggers a proposed query; proactively, `glorfindel propose-rules` authors detection for uncovered techniques *before* any attack (cold-start). Every result is a **proposal** — `glorfindel approve-rule <id>` applies it; the deterministic poller runs the ratified rule (generative at authoring, deterministic at runtime). The rules get better with each cycle.
 
 **Posture loop** — after each discovery cycle, Glorfindel checks that it can actually defend each VM: backup linked and recent, NSG accessible. Missing capabilities are escalated immediately with the exact `az` command to fix them — before an incident, not during.
 

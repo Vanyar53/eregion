@@ -1,12 +1,16 @@
 #!/bin/bash
 # Annatar — Data exfiltration simulation
-# Uses VM managed identity (IMDS) to upload synthetic data to stannatarexfil.
+# Uses VM managed identity (IMDS) to upload synthetic data to a blob account.
 # No SAS URL needed — MSI must have Storage Blob Data Contributor on the account.
+#
+# Args: $1 = size in MB (default 512), $2 = storage account name
+#       (default stcelebrimborexfil — the default Celebrimbor instance).
+#       Pass $2 for a named instance (e.g. stcelebrimborexfilci1234).
 
 set -euo pipefail
 
 SIZE_MB="${1:-512}"
-STORAGE_ACCOUNT="stannatarexfil"
+STORAGE_ACCOUNT="${2:-stcelebrimborexfil}"
 CONTAINER="exfil-target"
 BLOB_NAME="exfil-$(date -u +%s).bin"
 

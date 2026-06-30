@@ -955,6 +955,13 @@ function _renderEscGroup(group) {
     ? `<span style="font-size:9px;font-weight:700;padding:1px 4px;border-radius:3px;
                     background:color-mix(in srgb,var(--purple) 15%,transparent);
                     color:var(--purple)">×${count}</span>` : '';
+  // Recurrence (commit 87c066d): a persistent escalation stays ONE card but counts its
+  // re-fires (occurrences) since first_seen → "this is lasting / repeating". Old
+  // escalations without the field fall back to 1 (no badge).
+  const occ = e.occurrences || 1;
+  const recurBadge = occ > 1
+    ? `<span title="${_attr(`Re-fired ${occ}× since ${e.first_seen || '?'}${e.last_seen ? ` (last ${e.last_seen})` : ''}`)}" style="font-size:9px;font-weight:700;padding:1px 4px;border-radius:3px;background:color-mix(in srgb,var(--orange) 15%,transparent);color:var(--orange);flex-shrink:0">↻ ${occ}×${e.first_seen ? ` · ${_relTime(e.first_seen)}` : ''}</span>`
+    : '';
   const isRestore = e.action === 'restore_from_backup';
   const actionBtns = isRule
     ? ruleButtons
@@ -980,6 +987,7 @@ function _renderEscGroup(group) {
     <div style="display:flex;align-items:flex-start;gap:5px;margin-bottom:3px">
       <span class="esc-action-label">${label}</span>
       ${countBadge}
+      ${recurBadge}
       <span style="color:var(--blue);font-size:10px;margin-left:auto;padding-top:1px;flex-shrink:0">▸ details</span>
     </div>
     ${ctxParts ? `<div class="esc-context">${ctxParts}</div>` : ''}

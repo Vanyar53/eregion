@@ -47,18 +47,24 @@ def record(
     return proposal["id"]
 
 
-def pending() -> list[dict]:
-    """Return all unapproved proposals, oldest first."""
+def all_proposals() -> list[dict]:
+    """Return every proposal (any status), oldest first.
+
+    Used by campaign replay to find the rule proposed for a missed scenario's
+    run_id (the proposal may already be approved/rejected, so pending() is too narrow).
+    """
     if not _STORE.exists():
         return []
-    result = []
+    out = []
     for line in _STORE.read_text().splitlines():
-        if not line.strip():
-            continue
-        p = json.loads(line)
-        if p["status"] == "pending":
-            result.append(p)
-    return result
+        if line.strip():
+            out.append(json.loads(line))
+    return out
+
+
+def pending() -> list[dict]:
+    """Return all unapproved proposals, oldest first."""
+    return [p for p in all_proposals() if p["status"] == "pending"]
 
 
 def approve(proposal_id: str, rules_yaml_path: str | Path) -> dict:

@@ -1527,6 +1527,76 @@ def propose_rules(ttps, source, include_planned, model, rules_file, dry_run):
                   "Review: [dim]glorfindel pending[/dim]")
 
 
+@cli.command("replay-campaign")
+@click.argument("campaign_id")
+@click.option("--runs-dir", default="runs", show_default=True,
+              help="Directory holding runs/campaigns/<id>/.")
+@click.option("--source", default="azure_monitor", show_default=True)
+@click.option("--dry-run", is_flag=True,
+              help="Replay and print, but do not write replay.json.")
+def replay_campaign_cmd(campaign_id, runs_dir, source, dry_run):
+    """Replay the missed scenarios of a campaign — "would the proposed rule have caught it?".
+
+    Closes the generative purple loop: for each scenario the deterministic poller MISSED,
+    re-run the LLM-proposed rule against the attack's traces (read-only) and record the
+    verdict in runs/campaigns/<id>/replay.json. Reads Annatar's manifest.json post-hoc only.
+    Activates nothing — a rule that would have caught it stays a proposal until approve-rule.
+    """
+    from glorfindel import campaign_replay as _cr
+    from glorfindel import proposed_rules as _pr
+
+    # Resolve a workspace_id for the read-only replay query (mono-LAW: first matching backend).
+    workspace_id = ""
+    try:
+        from glorfindel.config import load_glorfindel_config
+        cfg = load_glorfindel_config()
+        be = next((b for b in cfg.monitoring_backends
+                   if b.type == source and b.workspace_id), None)
+        if be:
+            workspace_id = be.workspace_id
+    except Exception:
+        pass
+
+    detector = None
+    if workspace_id and source in ("azure_monitor", "sentinel"):
+        try:
+            from glorfindel.detectors import detector_for
+            detector = detector_for(source, workspace_id=workspace_id)
+        except Exception as e:
+            console.print(f"[dim]replay query backend unavailable: {e}[/dim]")
+
+    try:
+        doc = _cr.replay_campaign(
+            campaign_id, runs_dir=runs_dir, detector=detector,
+            proposals=_pr.all_proposals(), write=not dry_run,
+        )
+    except FileNotFoundError:
+        console.print(f"[red]No manifest for campaign '{campaign_id}'[/red] "
+                      f"under {runs_dir}/campaigns/.")
+        return
+
+    replays = doc["replays"]
+    if not replays:
+        console.print("[green]No missed scenarios to replay[/green] — detection caught "
+                      "everything (or the campaign had no executed misses).")
+        return
+
+    for r in replays:
+        if r["would_have_caught"] is True:
+            tag = "[green]✓ would catch[/green]"
+        elif r["would_have_caught"] is False:
+            tag = "[yellow]✗ still misses[/yellow]"
+        else:
+            tag = "[dim]– not replayed[/dim]"
+        console.print(f"  seq {r['seq']} {r['ttp']}: {tag} [dim]({r['detail']})[/dim]")
+
+    caught = sum(1 for r in replays if r["would_have_caught"] is True)
+    where = "(dry-run, not written)" if dry_run else \
+        f"→ {runs_dir}/campaigns/{campaign_id}/replay.json"
+    console.print(f"\n[bold]{caught}/{len(replays)}[/bold] missed scenarios would now be "
+                  f"caught by the proposed rules. {where}")
+
+
 @cli.command()
 @click.argument("resource_id", required=False)
 @click.option("--all", "audit_all", is_flag=True,

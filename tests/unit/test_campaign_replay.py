@@ -4,7 +4,6 @@ Builds real campaign manifests via annatar.campaign.manifest, injects a fake det
 and proposals → zero Azure, zero LLM, zero ~/.glorfindel writes.
 """
 import json
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from annatar.campaign.manifest import (
@@ -138,6 +137,48 @@ def test_replay_writes_replay_json(tmp_path):
     saved = json.loads(path.read_text())
     assert saved["campaign_id"] == cid
     assert saved["replays"][0]["would_have_caught"] is True
+
+
+def test_runner_to_replay_end_to_end(tmp_path):
+    """Red→blue handoff in-process (zero Azure): Annatar's CampaignRunner fills the
+    manifest with a missed scenario → Glorfindel's replay consumes it and verdicts the
+    proposed rule. Guards against format drift between the two sessions' code."""
+    from annatar.campaign.runner import CampaignRunner
+    from annatar.runner.engine import RunOutcome
+
+    target = ("/subscriptions/s/resourceGroups/rg-celebrimbor/providers/"
+              "Microsoft.Compute/virtualMachines/vm-celebrimbor-gondolin")
+    scen = ScenarioEntry(
+        seq=1, ttp="T1041", tactic="exfiltration", name="exfil",
+        scenario_file="scenarios/01.yaml", target_resource_id=target, status="pending",
+    )
+    m = CampaignManifest(
+        campaign_id="20260630T210000Z", objective="e2e",
+        scope=Scope(allowed_resource_groups=["rg-celebrimbor"],
+                    allowed_resource_ids=[target]),
+        budget=Budget(reset_nsg_between=False), scenarios=[scen], state="ratified",
+    )
+    cdir = campaign_dir(m.campaign_id, tmp_path)
+    m.save(cdir)
+
+    class _FakeEngine:  # returns a MISSED outcome — no Azure, no real attack
+        def run(self, path, skip_confirm=False):
+            return RunOutcome(run_id="rc-e2e", detection="missed")
+
+    CampaignRunner(
+        cdir, reset_fn=lambda rid: None, engine_factory=lambda: _FakeEngine(),
+    ).run()
+
+    # The runner persisted the miss with its run_id — the bridge my replay reads.
+    s = CampaignManifest.load(cdir).scenarios[0]
+    assert s.detection == "missed" and s.run_id == "rc-e2e"
+
+    doc = cr.replay_campaign(
+        m.campaign_id, runs_dir=tmp_path, detector=_Detector([{"x": 1}]),
+        proposals=[_proposal("rc-e2e", "T1041")], write=False,
+    )
+    assert doc["replays"][0]["run_id"] == "rc-e2e"
+    assert doc["replays"][0]["would_have_caught"] is True
 
 
 def test_replay_campaign_cli_dry_run(tmp_path, monkeypatch):

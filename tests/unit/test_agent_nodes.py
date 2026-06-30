@@ -852,6 +852,62 @@ def test_escalation_record_dedup_after_resolve_creates_new():
     assert len(pending()) == 1
 
 
+def test_escalation_first_create_has_lifecycle_fields():
+    """A fresh escalation carries occurrences=1 + first_seen/last_seen."""
+    from glorfindel.escalations import record, pending
+
+    record("sig1", "/sub/rg/vm1", "snapshot", "low_confidence", "reason", confidence=0.3)
+    e = pending()[0]
+    assert e["occurrences"] == 1
+    assert e["first_seen"] == e["last_seen"] == e["timestamp"]
+
+
+def test_escalation_dedup_increments_occurrences_and_keeps_first_seen():
+    """Re-firing a standing escalation bumps occurrences + last_seen, preserves first_seen."""
+    from glorfindel.escalations import record, pending
+
+    record("sig1", "/sub/rg/vm1", "snapshot", "low_confidence", "reason A", confidence=0.3)
+    first = pending()[0]
+    record("sig2", "/sub/rg/vm1", "snapshot", "low_confidence", "reason B", confidence=0.32)
+    after = pending()
+    assert len(after) == 1                      # still ONE card
+    assert after[0]["occurrences"] == 2
+    assert after[0]["first_seen"] == first["first_seen"]
+    assert after[0]["last_seen"] >= first["last_seen"]
+
+
+def test_escalation_dedup_immaterial_change_keeps_content():
+    """Confidence barely moved (< delta) → content NOT refreshed (no flicker)."""
+    from glorfindel.escalations import record, pending
+
+    record("sig1", "/sub/rg/vm1", "snapshot", "low_confidence", "reason A",
+           suggested_steps=["step A"], confidence=0.30)
+    record("sig2", "/sub/rg/vm1", "snapshot", "low_confidence", "reason B",
+           suggested_steps=["step B"], confidence=0.34)
+    e = pending()[0]
+    assert e["reason"] == "reason A"            # original kept
+    assert e["suggested_steps"] == ["step A"]
+    assert e["occurrences"] == 2                # but the counter still moved
+    assert "first_reason" not in e             # no refresh happened
+
+
+def test_escalation_dedup_material_change_refreshes_and_preserves_first_triage():
+    """A material confidence shift refreshes content, keeping the first triage."""
+    from glorfindel.escalations import record, pending
+
+    record("sig1", "/sub/rg/vm1", "snapshot", "low_confidence", "reason A",
+           suggested_steps=["step A"], confidence=0.30)
+    record("sig2", "/sub/rg/vm1", "snapshot", "low_confidence", "reason B",
+           suggested_steps=["step B"], confidence=0.85)
+    e = pending()[0]
+    assert e["reason"] == "reason B"            # refreshed to latest
+    assert e["suggested_steps"] == ["step B"]
+    assert e["confidence"] == 0.85
+    assert e["first_reason"] == "reason A"      # initial triage preserved
+    assert e["first_suggested_steps"] == ["step A"]
+    assert e["occurrences"] == 2
+
+
 def test_restore_resolves_escalation_case_insensitive():
     """resolve_by_resource() matches resource_id case-insensitively (Azure ARM IDs)."""
     from glorfindel.escalations import record, resolve_by_resource, pending

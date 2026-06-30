@@ -7,6 +7,11 @@ from pathlib import Path
 
 _STORE = Path.home() / ".glorfindel" / "escalations.jsonl"
 
+# A re-fired escalation refreshes its (LLM-generated) content only when confidence
+# moves at least this much — keeps a standing card current without flickering its
+# reason/steps on every poll for a stable finding.
+_MATERIAL_CONFIDENCE_DELTA = 0.1
+
 
 _ACTION_LABELS = {
     "isolate_vm": "VM isolée du réseau",
@@ -49,37 +54,70 @@ def record(
 ) -> str:
     """Append an escalation and return its id.
 
-    Dedup: if a pending escalation with the same action + resource_id +
-    escalation_type already exists, return its id without writing a new one.
-    Prevents duplicate cards when RulePoller fires on consecutive polls.
+    Dedup: a pending escalation with the same action + resource_id + escalation_type
+    is NOT duplicated — instead the standing one is kept as a single card and made
+    *live*:
+      - `occurrences` is incremented and `last_seen` bumped (cheap, every re-fire) so
+        the operator sees "this keeps happening" at a glance (`first_seen` is preserved);
+      - the expensive content (reason / suggested_steps / confidence) is refreshed ONLY
+        on a MATERIAL change (a confidence shift ≥ _MATERIAL_CONFIDENCE_DELTA) so the
+        card reflects the current situation without flickering on every poll, and the
+        FIRST triage is preserved (`first_reason` / `first_suggested_steps`).
+    This stops the re-decide output from being silently discarded on a persistent
+    finding (the stale-card behaviour seen in the field).
     """
     rid_lower = resource_id.lower()
+    now = datetime.now(timezone.utc).isoformat()
+    steps = suggested_steps or []
     if _STORE.exists():
-        for line in _STORE.read_text().splitlines():
+        lines = _STORE.read_text().splitlines()
+        for i, line in enumerate(lines):
             if not line.strip():
                 continue
             try:
                 e = json.loads(line)
-                if (
-                    e.get("status") == "pending"
-                    and e.get("resource_id", "").lower() == rid_lower
-                    and e.get("action") == action
-                    and e.get("escalation_type") == escalation_type
-                ):
-                    return e["id"]
             except Exception:
-                pass
+                continue
+            if (
+                e.get("status") == "pending"
+                and e.get("resource_id", "").lower() == rid_lower
+                and e.get("action") == action
+                and e.get("escalation_type") == escalation_type
+            ):
+                e["occurrences"] = int(e.get("occurrences", 1)) + 1
+                e["last_seen"] = now
+                try:
+                    material = abs(
+                        float(confidence or 0.0) - float(e.get("confidence") or 0.0)
+                    ) >= _MATERIAL_CONFIDENCE_DELTA
+                except (TypeError, ValueError):
+                    material = False
+                if material:
+                    # Preserve the initial triage before overwriting with the latest.
+                    e.setdefault("first_reason", e.get("reason", ""))
+                    e.setdefault("first_suggested_steps", e.get("suggested_steps", []))
+                    e.setdefault("first_confidence", e.get("confidence", 0.0))
+                    e["reason"] = reason
+                    e["suggested_steps"] = steps
+                    e["confidence"] = confidence
+                    e["updated_at"] = now
+                lines[i] = json.dumps(e, default=str)
+                _STORE.write_text("\n".join(lines) + "\n")
+                return e["id"]
 
     esc = {
         "id": str(uuid.uuid4()),
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": now,
+        "first_seen": now,
+        "last_seen": now,
+        "occurrences": 1,
         "signal_id": signal_id,
         "resource_id": resource_id,
         "action": action,
         "escalation_type": escalation_type,
         "reason": reason,
         "run_id": run_id,
-        "suggested_steps": suggested_steps or [],
+        "suggested_steps": steps,
         "ttp": ttp,
         "severity": severity,
         "proposal_id": proposal_id,

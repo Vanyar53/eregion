@@ -1,1 +1,5 @@
 admin_ssh_public_key = "ssh-ed25519 AAAA... your-key-comment"
+
+# Optionnel — sinon le provider lit ARM_SUBSCRIPTION_ID de l'env (le Makefile le
+# dérive de AZURE_SUBSCRIPTION_ID). Décommenter pour figer l'abonnement ici.
+# subscription_id = "00000000-0000-0000-0000-000000000000"

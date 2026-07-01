@@ -1167,7 +1167,12 @@ function renderInfra() {
   };
   const _addClusterNode = (parentId, name, last_seen) => {
     const cl = _getCluster(parentId);
-    if (name && !cl.nodes.some(n => n.name === name)) cl.nodes.push({ name, last_seen: last_seen || null });
+    // The managed-cluster resource itself is NOT one of its member nodes: an escalation
+    // (e.g. a posture_gap) or a discovered entry keyed on the cluster id would otherwise
+    // fold in as a phantom "<cluster> · no heartbeat" node (name === cluster short name).
+    // Skip it as a node, but still let its last_seen refresh the cluster aggregate.
+    if (name && name !== cl.vm_name && !cl.nodes.some(n => n.name === name))
+      cl.nodes.push({ name, last_seen: last_seen || null });
     if (last_seen && (!cl.last_seen || last_seen > cl.last_seen)) cl.last_seen = last_seen;
   };
   knownResources.forEach(r => resourceMap.set(r.resource_id, { ...r, states: [] }));

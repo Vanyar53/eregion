@@ -26,7 +26,11 @@ class AzureVMExecutor:
         )
 
     def get_resource_group_tags(self, rg_name: str) -> dict:
-        from azure.mgmt.resource import ResourceManagementClient
+        # Import from the .resources submodule (stable across versions). In
+        # azure-mgmt-resource 26.0.0 the top-level `azure.mgmt.resource` no longer
+        # re-exports ResourceManagementClient → `from azure.mgmt.resource import ...`
+        # breaks. The submodule path works on 25.x and 26.x.
+        from azure.mgmt.resource.resources import ResourceManagementClient
         client = ResourceManagementClient(self._credential, self._subscription_id)
         rg = client.resource_groups.get(rg_name)
         return rg.tags or {}

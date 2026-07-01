@@ -793,6 +793,20 @@ def restore(resource_id: str, vault: str, dry_run: bool, yes: bool, keep_isolate
 
     connector = AzureConnector(dry_run=dry_run)
 
+    # Resolve vault + staging storage from glorfindel-config.yaml (source of truth,
+    # namespaced per Celebrimbor instance). Overrides the stale CLI defaults; the staging
+    # SA is required by the IaaS restore and must never be a hardcoded name.
+    staging_storage = ""
+    try:
+        from glorfindel.config import load_glorfindel_config
+        rsv = load_glorfindel_config().backup_vault()
+        if rsv:
+            if rsv.vault_name and vault == "rsv-annatar":
+                vault = rsv.vault_name
+            staging_storage = rsv.restore_staging_storage
+    except Exception:
+        pass
+
     console.rule("[bold yellow]Glorfindel — Restore from Backup[/bold yellow]")
     console.print(f"  Resource : {resource_id}")
     console.print(f"  Vault    : {vault}")
@@ -821,7 +835,8 @@ def restore(resource_id: str, vault: str, dry_run: bool, yes: bool, keep_isolate
     if not wait:
         from glorfindel.jobs import start_restore
         console.print("[cyan]->[/cyan] Triggering restore (fire-and-forget — VM deallocation ~1-2 min)...")
-        job = start_restore(resource_id, connector, vault, before)
+        job = start_restore(resource_id, connector, vault, before,
+                            staging_storage=staging_storage)
         console.print(f"[green]✓ Restore job started.[/green]")
         console.print(f"  job_id  : [dim]{job['job_id']}[/dim]")
         console.print(f"  azure_job: [dim]{job.get('restore_job_name', '?')}[/dim]")
@@ -834,7 +849,7 @@ def restore(resource_id: str, vault: str, dry_run: bool, yes: bool, keep_isolate
     import time as _time
     console.print("[cyan]->[/cyan] Triggering restore (blocking ~15-30 min)...")
     t0 = _time.time()
-    result = connector.restore_from_backup(resource_id, vault=vault, before_attack_time=before, wait=True)
+    result = connector.restore_from_backup(resource_id, vault=vault, before_attack_time=before, wait=True, staging_storage=staging_storage)
     rto_s = round(_time.time() - t0)
 
     restore_label = f"{rto_s // 60}min {rto_s % 60}s"

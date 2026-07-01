@@ -88,10 +88,13 @@ def test_start_restore_calls_connector_wait_false(jobs_dir):
         "recovery_point_time": "2026-06-08T10:00:00Z",
     }
 
-    job = start_restore(_RESOURCE_ID, connector, vault="rsv-annatar", before_attack_time="2026-06-08T09:00:00Z")
+    job = start_restore(_RESOURCE_ID, connector, vault="rsv-annatar",
+                        before_attack_time="2026-06-08T09:00:00Z",
+                        staging_storage="ststaging")
 
     connector.restore_from_backup.assert_called_once_with(
-        _RESOURCE_ID, vault="rsv-annatar", before_attack_time="2026-06-08T09:00:00Z", wait=False
+        _RESOURCE_ID, vault="rsv-annatar", before_attack_time="2026-06-08T09:00:00Z",
+        wait=False, staging_storage="ststaging",
     )
     assert job["type"] == "restore"
     assert job["status"] == "InProgress"

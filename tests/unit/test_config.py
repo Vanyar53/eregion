@@ -30,6 +30,7 @@ FULL_YAML = textwrap.dedent("""\
         type: azure_backup_vault
         vault_name: "rsv-test"
         resource_group: "rg-test"
+        restore_staging_storage: "ststaging"
 
     exceptions:
       - asset_pattern: "vm-dev-*"
@@ -58,6 +59,7 @@ def test_load_full_config(tmp_path):
     assert cfg.monitoring_backends[0].discovery.interval_s == 900
     assert len(cfg.action_backends) == 1
     assert cfg.action_backends[0].vault_name == "rsv-test"
+    assert cfg.action_backends[0].restore_staging_storage == "ststaging"
     assert len(cfg.exceptions) == 2
 
 

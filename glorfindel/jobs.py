@@ -169,6 +169,7 @@ def start_restore(
     connector,
     vault: str = "rsv-annatar",
     before_attack_time: str | None = None,
+    staging_storage: str = "",
 ) -> dict:
     """Trigger a non-blocking restore. Blocks only on VM deallocation (~1-2 min).
 
@@ -177,7 +178,8 @@ def start_restore(
     """
     vm_name = resource_id.split("/")[-1]
     result = connector.restore_from_backup(
-        resource_id, vault=vault, before_attack_time=before_attack_time, wait=False
+        resource_id, vault=vault, before_attack_time=before_attack_time,
+        wait=False, staging_storage=staging_storage,
     )
     job = {
         "job_id": f"restore-{vm_name}-{_now()}",

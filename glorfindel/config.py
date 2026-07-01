@@ -44,6 +44,10 @@ class ActionBackendConfig:
     type: str                    # "azure_backup_vault"
     vault_name: str = ""
     resource_group: str = ""
+    # Staging storage account for Azure Backup IaaS restore (same region/subscription).
+    # Namespaced per Celebrimbor instance → resolved from `make celebrimbor-output`, never
+    # hardcoded. Empty → restore_from_backup raises a clear error rather than a stale name.
+    restore_staging_storage: str = ""
 
 
 @dataclass
@@ -178,6 +182,7 @@ def load_glorfindel_config(path: str | Path | None = None) -> GlorfindelConfig:
             type=b.get("type", "azure_backup_vault"),
             vault_name=b.get("vault_name", ""),
             resource_group=b.get("resource_group", ""),
+            restore_staging_storage=b.get("restore_staging_storage", ""),
         ))
 
     exceptions = []

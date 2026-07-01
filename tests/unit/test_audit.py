@@ -78,13 +78,25 @@ def test_run_dry_run_returns_skip():
 
 
 def test_run_all_ok():
-    result = run(RESOURCE_ID, _connector())
+    result = run(RESOURCE_ID, _connector(), staging_storage="ststaging")
     assert result.ready is True
-    assert len(result.checks) == 3
+    assert len(result.checks) == 4
     statuses = {c.name: c.status for c in result.checks}
     assert statuses["NSG access"] == "ok"
     assert statuses["Backup vault"] == "ok"
     assert statuses["Compute access"] == "ok"
+    assert statuses["Restore staging"] == "ok"
+
+
+def test_run_staging_missing_warns_but_stays_ready():
+    """No staging SA → a readiness WARN (educational), not a fail: detection/isolation
+    still work, only restore would stop. ready stays True (warn ≠ fail)."""
+    result = run(RESOURCE_ID, _connector())  # no staging_storage
+    staging = next(c for c in result.checks if c.name == "Restore staging")
+    assert staging.status == "warn"
+    assert staging.action == "restore_from_backup"
+    assert "restore_staging_storage" in staging.fix
+    assert result.ready is True  # warn does not break readiness
 
 
 def test_nsg_check_exposes_structured_nsg_and_scope():
@@ -165,7 +177,8 @@ def test_run_checks_run_concurrently():
     elapsed = time.monotonic() - t0
 
     assert elapsed < 0.7, f"checks not concurrent — took {elapsed:.2f}s (sum would be ~0.9s)"
-    assert [ch.name for ch in result.checks] == ["NSG access", "Backup vault", "Compute access"]
+    assert [ch.name for ch in result.checks] == [
+        "NSG access", "Backup vault", "Compute access", "Restore staging"]
 
 
 def test_nsg_transient_sdk_error_not_labelled_no_nsg():

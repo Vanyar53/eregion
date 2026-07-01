@@ -738,11 +738,16 @@ class AzureConnector(CloudConnector):
         vm = self._compute.virtual_machines.get(rg, vm_name)
         if not staging_storage:
             raise RuntimeError(
-                "restore_from_backup: no staging storage account configured. "
-                "Azure Backup IaaS restore needs a staging storage account (same "
-                "region/subscription). Set 'restore_staging_storage' on the "
-                "azure_backup_vault backend in glorfindel-config.yaml "
-                "(from `make celebrimbor-output`)."
+                "Restore needs a staging storage account, and none is configured.\n"
+                "  Why: to restore a VM from the immutable vault tier (the copy an "
+                "attacker can't have tampered — the one you want after ransomware), "
+                "Azure temporarily writes the recovered disks to a scratch storage "
+                "account, then attaches them. This is NOT the vault's storage; it's a "
+                "throwaway staging area in the same region/subscription.\n"
+                "  Fix: set 'restore_staging_storage: <account>' on the "
+                "azure_backup_vault backend in glorfindel-config.yaml (any Standard "
+                "LRS account in the VM's region works; `make celebrimbor-output` "
+                "generates it for the Celebrimbor sandbox)."
             )
         # Staging SA co-located with the VM's RG (Celebrimbor sandbox). A staging SA in a
         # different RG would need its own rg field — refinement (cf. vault cross-RG).

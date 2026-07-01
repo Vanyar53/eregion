@@ -34,9 +34,13 @@ action_backends:
     type: azure_backup_vault
     vault_name: "rsv-annatar"
     resource_group: "annatar"
-    # Staging storage account for Azure Backup IaaS restore (same region/subscription).
-    # Required by `glorfindel restore`; without it restore raises a clear error rather
-    # than using a hardcoded name. Namespaced per environment — wire from Terraform output.
+    # Throwaway storage account where Azure temporarily writes the recovered disks
+    # DURING a restore, before attaching them. This is NOT the vault's storage — the
+    # backups live inside the vault. It's a scratch/staging area Azure requires to
+    # restore from the immutable vault tier (the copy that survives ransomware).
+    # → Any Standard LRS account in the VM's region/subscription works.
+    # → Without it, `glorfindel restore` stops with a clear message (never a wrong name).
+    # → Not needed for detection/isolation — only for restore_from_backup (T1486 recovery).
     restore_staging_storage: "stannatarexfil"
 
 # ── Exceptions ────────────────────────────────────────────────────────────────

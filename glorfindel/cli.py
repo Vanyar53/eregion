@@ -583,13 +583,14 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
                 from glorfindel.actions import AzureConnector
                 from glorfindel.detection_rules import load_rules
                 connector = AzureConnector(dry_run=False)
-                _vault, _vault_rg = "rsv-annatar", ""
+                _vault, _vault_rg, _staging = "rsv-annatar", "", ""
                 try:
                     from glorfindel.config import load_glorfindel_config
                     _rsv = load_glorfindel_config().backup_vault()
                     if _rsv:
                         _vault = _rsv.vault_name or _vault
                         _vault_rg = _rsv.resource_group or ""
+                        _staging = _rsv.restore_staging_storage
                 except Exception:
                     pass
                 seen: set[str] = set()
@@ -597,7 +598,8 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
                     rid = rule.resource_id
                     if rid and "${" not in rid and rid not in seen:
                         seen.add(rid)
-                        result = _audit.run(rid, connector, vault=_vault, vault_rg=_vault_rg)
+                        result = _audit.run(rid, connector, vault=_vault,
+                                            vault_rg=_vault_rg, staging_storage=_staging)
                         if not result.ready:
                             vm = rid.split("/")[-1]
                             gaps = [c for c in result.checks if c.status == "fail"]
@@ -1635,16 +1637,18 @@ def audit(resource_id: str | None, audit_all: bool, vault: str, vault_rg: str, d
     # Resolve vault + its resource group from glorfindel-config.yaml (source of truth).
     # A central vault protects VMs across RGs, so the vault's RG must come from config,
     # not be derived from the VM's resource_id.
-    if not vault_rg:
-        try:
-            from glorfindel.config import load_glorfindel_config
-            rsv = load_glorfindel_config().backup_vault()
-            if rsv:
+    staging_storage = ""
+    try:
+        from glorfindel.config import load_glorfindel_config
+        rsv = load_glorfindel_config().backup_vault()
+        if rsv:
+            staging_storage = rsv.restore_staging_storage
+            if not vault_rg:
                 vault_rg = rsv.resource_group or ""
                 if vault == "rsv-annatar" and rsv.vault_name:
                     vault = rsv.vault_name
-        except Exception:
-            pass
+    except Exception:
+        pass
 
     connector = AzureConnector(dry_run=dry_run)
     targets: list[str] = []
@@ -1677,7 +1681,8 @@ def audit(resource_id: str | None, audit_all: bool, vault: str, vault_rg: str, d
     for rid in targets:
         vm = rid.split("/")[-1]
         console.rule(f"[bold cyan]Audit — {vm}[/bold cyan]")
-        result = _audit.run(rid, connector, vault=vault, vault_rg=vault_rg)
+        result = _audit.run(rid, connector, vault=vault, vault_rg=vault_rg,
+                            staging_storage=staging_storage)
         _render_audit(result)
         console.print()
 

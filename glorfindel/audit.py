@@ -54,11 +54,14 @@ def run(
     connector,
     vault: str = "rsv-annatar",
     vault_rg: str = "",
+    staging_storage: str = "",
 ) -> AuditResult:
     """Check that Glorfindel can execute all remediation actions on this resource.
 
     vault_rg: the vault's own resource group (a central vault protects VMs across many
     RGs). Falls back to the VM's RG when empty (sandbox: vault and VM co-located).
+    staging_storage: the SA where Azure stages recovered disks during a restore (see
+    _check_restore_staging). Empty → surfaced as a readiness gap, not a live failure.
 
     Covers: NSG (isolate_vm, block_suspicious_ip), Azure Backup (restore_from_backup),
     and Compute (snapshot). Detects both IAM gaps and missing infrastructure.
@@ -115,6 +118,9 @@ def run(
     with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
         futures = [pool.submit(fn, *args) for fn, args in jobs]
         result.checks.extend(f.result() for f in futures)
+
+    # Restore staging SA — pure config check (no Azure call), so it runs outside the pool.
+    result.checks.append(_check_restore_staging(staging_storage))
     return result
 
 
@@ -278,6 +284,40 @@ def _check_compute(resource_id: str, connector) -> AuditCheck:
         status="fail",
         message=f"VM {vm} not found in {rg} — {err}",
         fix=f"Verify the VM exists: az vm show -g {rg} -n {vm}",
+    )
+
+
+def _check_restore_staging(staging_storage: str) -> AuditCheck:
+    """Restore readiness: is a staging storage account configured?
+
+    Azure restores a VM by first writing the recovered disks to a throwaway storage
+    account (not the vault's storage), then attaching them — required to restore from
+    the immutable vault tier. Surfaced as a readiness gap at rest so the operator learns
+    WHY it's needed *before* a ransomware incident, not mid-restore. Config-presence only
+    (no Azure call) — verifying the SA exists/region is a follow-up.
+    """
+    if staging_storage:
+        return AuditCheck(
+            action="restore_from_backup",
+            name="Restore staging",
+            status="ok",
+            message=f"staging account '{staging_storage}' configured",
+            data={"staging_storage": staging_storage},
+        )
+    return AuditCheck(
+        action="restore_from_backup",
+        name="Restore staging",
+        status="warn",
+        message=(
+            "No staging storage account — restore will stop. Azure needs a throwaway "
+            "account to stage recovered disks when restoring from the immutable vault "
+            "tier (not the vault's own storage). Detection/isolation are unaffected."
+        ),
+        fix=(
+            "Set 'restore_staging_storage: <account>' on the azure_backup_vault backend "
+            "in glorfindel-config.yaml (any Standard LRS account in the VM's region)."
+        ),
+        data={"staging_storage": ""},
     )
 
 

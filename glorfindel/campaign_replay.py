@@ -26,7 +26,9 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import tempfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -36,10 +38,27 @@ logger = logging.getLogger("glorfindel.campaign_replay")
 
 REPLAY_SCHEMA_VERSION = "1.0"
 
+# Relative KQL time filter, e.g. ago(10m) / ago( 1h ) / ago(2d). Replaced at replay time
+# so a query's own tight window doesn't exclude an attack replayed minutes/hours later.
+_AGO_RE = re.compile(r"ago\(\s*\d+\s*[smhdw]\s*\)", re.IGNORECASE)
+
 
 def _utcnow() -> str:
-    from datetime import datetime, timezone
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def attack_time(scenario: Any) -> datetime | None:
+    """T0 of the attack — from started_at, else the run_id timestamp (YYYYMMDDThhmmssZ)."""
+    for v in (getattr(scenario, "started_at", None), getattr(scenario, "run_id", None)):
+        if not v:
+            continue
+        try:
+            if len(v) == 16 and v.endswith("Z") and "T" in v:  # run_id form
+                return datetime.strptime(v, "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
+            return datetime.fromisoformat(v.replace("Z", "+00:00"))
+        except (ValueError, TypeError):
+            continue
+    return None
 
 
 def proposal_for_scenario(scenario: Any, proposals: list[dict]) -> dict | None:
@@ -56,21 +75,34 @@ def proposal_for_scenario(scenario: Any, proposals: list[dict]) -> dict | None:
     return by_ttp[-1] if by_ttp else None
 
 
-def would_have_caught(detector: Any, query: str) -> tuple[bool, str]:
-    """Re-run a proposed query; True if it returns ≥1 row.
+def would_have_caught(
+    detector: Any, query: str, *, t0: datetime | None = None, window_s: int = 600
+) -> tuple[bool, str]:
+    """Re-run a proposed query scoped to the attack's window; True if it returns ≥1 row.
 
-    v1 runs the query as-is over the detector's default window — sound for the IMMEDIATE
-    in-campaign replay (option A: data is still fresh). A windowed replay scoped to the
-    original run's T0 is a refinement for replaying older campaigns.
+    A proposed rule carries its own relative time filter (e.g. `ago(10m)`). Replayed
+    minutes/hours after the attack, that filter would exclude the attack's events → a
+    false "still misses". So when T0 is known we (a) rewrite the query's `ago(...)` to a
+    lookback that reaches back to T0, and (b) bound the SDK timespan to [T0-5m, now]. This
+    measures whether the rule fires on the ATTACK, not on the replay-time window.
+    Without T0 we fall back to the query as-is (immediate replay).
     Returns (caught, detail). Raises nothing — query failure → (False, error) so one bad
     scenario never aborts the whole replay.
     """
+    q, timespan = query, None
+    if t0 is not None:
+        now = datetime.now(timezone.utc)
+        lookback_min = int((now - t0).total_seconds() // 60) + 15
+        q = _AGO_RE.sub(f"ago({lookback_min}m)", query)
+        timespan = (t0 - timedelta(minutes=5), now + timedelta(minutes=1))
     try:
-        rows = detector.run_query(query)
+        rows = detector.run_query(q, timespan=timespan) if timespan is not None \
+            else detector.run_query(q)
     except Exception as e:
         return False, f"query failed: {e}"
     n = len(rows or [])
-    return (n > 0), (f"{n} row(s) in window" if n else "0 rows in window")
+    scope = "attack window" if t0 is not None else "window"
+    return (n > 0), (f"{n} row(s) in {scope}" if n else f"0 rows in {scope}")
 
 
 def replay_campaign(
@@ -110,7 +142,10 @@ def replay_campaign(
             entry["detail"] = "no detector (offline / dry-run) — not replayed"
         else:
             entry["proposed_rule_id"] = proposal.get("id")
-            caught, detail = would_have_caught(detector, proposal.get("query", ""))
+            caught, detail = would_have_caught(
+                detector, proposal.get("query", ""),
+                t0=attack_time(s), window_s=manifest.budget.detection_window_s,
+            )
             entry["would_have_caught"] = caught
             entry["detail"] = detail
         replays.append(entry)

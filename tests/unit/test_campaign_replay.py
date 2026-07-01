@@ -16,9 +16,11 @@ class _Detector:
     def __init__(self, rows):
         self.rows = rows
         self.queries = []
+        self.timespans = []
 
-    def run_query(self, query):
+    def run_query(self, query, timespan=None):
         self.queries.append(query)
+        self.timespans.append(timespan)
         return self.rows
 
 
@@ -96,6 +98,26 @@ def test_replay_still_misses_when_query_returns_nothing(tmp_path):
         proposals=[_proposal("r2", "T1041")], write=False,
     )
     assert doc["replays"][0]["would_have_caught"] is False
+
+
+def test_replay_rewrites_relative_time_filter_to_attack_window(tmp_path):
+    """A proposed query's ago(10m) must not exclude an attack replayed later: the replay
+    rewrites ago() to reach back to T0 (from run_id) and bounds the SDK timespan."""
+    cid = _campaign(tmp_path, [
+        _scenario(1, "T1136.001", detection="missed", run_id="20260701T115643Z"),
+    ])
+    det = _Detector([{"row": 1}])
+    q = "Syslog\n| where TimeGenerated >= ago(10m)\n| where ProcessName == 'useradd'"
+    doc = cr.replay_campaign(
+        cid, runs_dir=tmp_path, detector=det,
+        proposals=[_proposal("20260701T115643Z", "T1136.001", query=q)], write=False,
+    )
+    sent = det.queries[0]
+    assert "ago(10m)" not in sent            # the tight filter was rewritten
+    assert "ago(" in sent                     # ...to a wider lookback reaching T0
+    assert det.timespans[0] is not None       # SDK timespan bounded to the attack window
+    assert doc["replays"][0]["would_have_caught"] is True
+    assert "attack window" in doc["replays"][0]["detail"]
 
 
 def test_replay_no_proposal_for_miss(tmp_path):

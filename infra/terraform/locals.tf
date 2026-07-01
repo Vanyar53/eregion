@@ -17,6 +17,11 @@ locals {
   # default → nom lisible ; instance → token hashé court pour rester sous 24 car.
   exfil_storage_name = local.instance == "default" ? "stcelebrimborexfil" : "stcbrexfil${substr(md5(local.instance), 0, 8)}"
 
+  # Staging SA du restore Azure Backup IaaS (disques restaurés stagés ici, même
+  # région/souscription). SA dédié — séparé de l'exfil (attaque) : pas de diag
+  # setting → aucune I/O de restore ne pollue le flux StorageWrite du LAW (T1041).
+  staging_storage_name = local.instance == "default" ? "stcelebrimborstaging" : "stcbrstg${substr(md5(local.instance), 0, 8)}"
+
   common_tags = {
     project    = local.project
     managed-by = "terraform"

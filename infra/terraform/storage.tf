@@ -7,6 +7,18 @@ resource "azurerm_storage_account" "exfil" {
   tags                     = local.common_tags
 }
 
+# Staging SA du restore Azure Backup IaaS : Glorfindel (restore_from_backup) y
+# stage les disques restaurés. SA dédié (pas de diag setting → n'alimente PAS le
+# StorageWrite du LAW, contrairement à l'exfil), même région/souscription.
+resource "azurerm_storage_account" "restore_staging" {
+  name                     = local.staging_storage_name
+  resource_group_name      = azurerm_resource_group.celebrimbor.name
+  location                 = azurerm_resource_group.celebrimbor.location
+  account_tier             = "Standard"
+  account_replication_type = "LRS"
+  tags                     = local.common_tags
+}
+
 resource "azurerm_storage_container" "exfil" {
   name               = "exfil-target"
   storage_account_id = azurerm_storage_account.exfil.id

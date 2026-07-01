@@ -27,11 +27,12 @@ class DetectionConnector(ABC):
         """
         ...
 
-    def run_query(self, query: str) -> list[dict]:
+    def run_query(self, query: str, timespan=None) -> list[dict]:
         """Run a query and return ALL result rows (not just the first).
 
-        Used for discovery queries (e.g. Heartbeat). Default implementation
-        returns an empty list — backends that support it override this.
+        Used for discovery queries (e.g. Heartbeat) and campaign replay. timespan is
+        an optional (start_dt, end_dt) window. Default implementation returns an empty
+        list — backends that support it override this.
         """
         return []
 
@@ -98,8 +99,12 @@ class AzureMonitorDetector(DetectionConnector):
                 _console.print(f"  [dim]Still polling... {round(elapsed)}s elapsed[/dim]")
             time.sleep(interval_s)
 
-    def run_query(self, query: str) -> list[dict]:
+    def run_query(self, query: str, timespan=None) -> list[dict]:
         """Run a query and return ALL result rows (no polling, one-shot).
+
+        timespan: optional (start_dt, end_dt) tuple. Defaults to the last 3h. Callers
+        replaying a historical attack (campaign_replay) pass an explicit window scoped
+        to the attack's T0 so old events aren't excluded by the default 3h bound.
 
         Raises on a query FAILURE (the workspace is unreachable — deleted, IAM revoked,
         wrong GUID — or the query errored). A successful query that simply returned no
@@ -113,8 +118,9 @@ class AzureMonitorDetector(DetectionConnector):
 
         credential = DefaultAzureCredential()
         client = LogsQueryClient(credential)
-        now = datetime.now(tz=timezone.utc)
-        timespan = (now - timedelta(hours=3), now + timedelta(minutes=1))
+        if timespan is None:
+            now = datetime.now(tz=timezone.utc)
+            timespan = (now - timedelta(hours=3), now + timedelta(minutes=1))
         response = client.query_workspace(
             workspace_id=self.workspace_id, query=query, timespan=timespan
         )

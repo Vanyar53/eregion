@@ -157,3 +157,186 @@ def clean(scenario: str):
     """
     from annatar.runner.initializer import InitRunner
     InitRunner().clean(scenario)
+
+
+# ── Generative campaigns ─────────────────────────────────────────────────────
+@cli.group()
+def campaign():
+    """Plan, run and inspect generative attack campaigns (kill-chains)."""
+
+
+@campaign.command(name="plan")
+@click.option("--target", required=True, help="Target resource_id (must be in the Celebrimbor sandbox).")
+@click.option("--objective", default="", help="One-line campaign intent (steers the LLM planner).")
+@click.option("--max-scenarios", default=5, show_default=True, help="Budget ceiling.")
+@click.option("--allow-destructive", is_flag=True, help="Permit destructive (testdata-only) techniques.")
+@click.option("--llm/--no-llm", "use_llm", default=False, help="Use the LLM planner (default: deterministic).")
+@click.option("--runs-dir", default="runs", help="Where campaigns are stored.")
+def campaign_plan(target, objective, max_scenarios, allow_destructive, use_llm, runs_dir):
+    """Plan a kill-chain and materialize its scenarios (state: planned)."""
+    from annatar.campaign.catalog import load_catalog
+    from annatar.campaign.manifest import (
+        Budget,
+        CampaignManifest,
+        ScenarioEntry,
+        Scope,
+        campaign_dir,
+        new_campaign_id,
+    )
+    from annatar.campaign.planner import plan_campaign
+    from annatar.campaign.scope import Scope as GuardScope
+    from annatar.campaign.scope import _rg_from_id
+    from annatar.campaign.synthesizer import synthesize
+
+    rg = _rg_from_id(target)
+    sub = _subscription_from_id(target)
+    guard = GuardScope(
+        subscription_id=sub,
+        allowed_resource_groups=[rg] if rg else [],
+        allowed_resource_ids=[target],
+    )
+    res = guard.check(target, rg)
+    if not res.allowed:
+        console.print(f"[red]Target rejected:[/red] {res.reason}")
+        raise SystemExit(1)
+
+    catalog = load_catalog()
+    plan = plan_campaign(objective=objective, max_scenarios=max_scenarios, use_llm=use_llm)
+
+    cid = new_campaign_id()
+    cdir = campaign_dir(cid, runs_dir=runs_dir)
+    scen_dir = cdir / "scenarios"
+
+    entries: list[ScenarioEntry] = []
+    for i, tech in enumerate(plan.techniques, 1):
+        entry = catalog.get(tech.ttp)
+        if not entry:
+            continue
+        s = synthesize(
+            entry=entry, target_resource_id=target, scope=guard,
+            out_dir=scen_dir, seq=i, allow_destructive=allow_destructive,
+        )
+        if not s.ok:
+            console.print(f"[yellow]skip {tech.ttp}: {s.reason}[/yellow]")
+            continue
+        entries.append(
+            ScenarioEntry(
+                seq=i, ttp=tech.ttp, tactic=tech.tactic, name=tech.name,
+                scenario_file=f"scenarios/{s.path.name}",
+                target_resource_id=target,
+                destructive=bool(entry.get("destructive")),
+                safe_target=entry.get("safe_target", "") or "",
+            )
+        )
+
+    if not entries:
+        console.print("[red]No scenario could be synthesized — nothing planned.[/red]")
+        raise SystemExit(1)
+
+    manifest = CampaignManifest(
+        campaign_id=cid,
+        objective=objective or plan.objective,
+        scope=Scope(
+            subscription_id=sub,
+            allowed_resource_groups=[rg] if rg else [],
+            allowed_resource_ids=[target],
+        ),
+        budget=Budget(max_scenarios=max_scenarios, allow_destructive=allow_destructive),
+        scenarios=entries,
+    )
+    manifest.save(cdir)
+    console.print(f"[green]Planned campaign {cid}[/green] — {len(entries)} scenario(s):")
+    for e in entries:
+        console.print(f"  [{e.seq}] {e.tactic:22} {e.ttp}  {e.scenario_file}")
+    console.print(
+        f"\n[dim]Review {cdir}/manifest.json, then:[/dim] "
+        f"annatar campaign run {cid} --yes"
+    )
+
+
+@campaign.command(name="run")
+@click.argument("campaign_id")
+@click.option("--yes", is_flag=True, help="Ratify the budget/scope and execute.")
+@click.option("--dry-run", is_flag=True, help="Preview the sequence without executing.")
+@click.option("--runs-dir", default="runs", help="Where campaigns are stored.")
+def campaign_run(campaign_id, yes, dry_run, runs_dir):
+    """Execute a planned campaign sequentially within its budget/scope."""
+    from annatar.campaign.manifest import CampaignManifest, campaign_dir
+    from annatar.campaign.runner import CampaignRunner
+
+    cdir = campaign_dir(campaign_id, runs_dir=runs_dir)
+    if not (cdir / "manifest.json").exists():
+        console.print(f"[red]Campaign not found:[/red] {campaign_id}")
+        raise SystemExit(1)
+
+    m = CampaignManifest.load(cdir)
+    if m.state == "planned":
+        if not (yes or dry_run):
+            console.print(
+                "[yellow]Campaign is 'planned' — ratify budget/scope with --yes "
+                "(or preview with --dry-run).[/yellow]"
+            )
+            raise SystemExit(1)
+        if yes and not dry_run:
+            m.set_state("ratified")
+            m.save(cdir)
+
+    result = CampaignRunner(cdir, dry_run=dry_run).run()
+    if not dry_run:
+        r = result.results
+        console.print(
+            f"\n[bold]Campaign {result.campaign_id} → {result.state}[/bold]  "
+            f"executed={r['executed']} detected={r['detected']} "
+            f"missed={r['missed']} skipped={r['skipped']} errors={r['errors']}"
+        )
+
+
+@campaign.command(name="list")
+@click.option("--runs-dir", default="runs", help="Where campaigns are stored.")
+def campaign_list(runs_dir):
+    """List campaigns and their state."""
+    from annatar.campaign.manifest import CampaignManifest, campaigns_root
+
+    root = campaigns_root(runs_dir)
+    if not root.exists():
+        console.print("[dim]No campaigns yet.[/dim]")
+        return
+    for d in sorted(root.iterdir()):
+        if not (d / "manifest.json").exists():
+            continue
+        m = CampaignManifest.load(d)
+        r = m.results
+        console.print(
+            f"{m.campaign_id}  [{m.state}]  {len(m.scenarios)} scenario(s)  "
+            f"detected={r['detected']}/{r['executed']}"
+        )
+
+
+@campaign.command(name="show")
+@click.argument("campaign_id")
+@click.option("--runs-dir", default="runs", help="Where campaigns are stored.")
+def campaign_show(campaign_id, runs_dir):
+    """Show a campaign manifest summary."""
+    from annatar.campaign.manifest import CampaignManifest, campaign_dir
+
+    cdir = campaign_dir(campaign_id, runs_dir=runs_dir)
+    if not (cdir / "manifest.json").exists():
+        console.print(f"[red]Campaign not found:[/red] {campaign_id}")
+        raise SystemExit(1)
+    m = CampaignManifest.load(cdir)
+    console.print(f"[bold]{m.campaign_id}[/bold]  state={m.state}  objective={m.objective!r}")
+    console.print(f"scope: {m.scope.allowed_resource_ids}")
+    for e in m.scenarios:
+        det = e.detection or "-"
+        console.print(
+            f"  [{e.seq}] {e.ttp:12} {e.status:9} detection={det:9} "
+            f"run_id={e.run_id or '-'}"
+        )
+
+
+def _subscription_from_id(resource_id: str) -> str:
+    parts = resource_id.split("/")
+    for i, p in enumerate(parts):
+        if p.lower() == "subscriptions" and i + 1 < len(parts):
+            return parts[i + 1]
+    return ""

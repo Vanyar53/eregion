@@ -5,6 +5,9 @@ WORKDIR /app
 COPY pyproject.toml .
 COPY annatar/ annatar/
 COPY scripts/ scripts/
+COPY technique_catalog.yaml .
+
+# The campaign planner/synthesizer reads the shared technique catalog at repo root.
 
 RUN pip install --no-cache-dir -e ".[annatar]"
 

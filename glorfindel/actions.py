@@ -115,6 +115,7 @@ class CloudConnector(ABC):
         vault: str = "rsv-annatar",
         before_attack_time: str | None = None,
         wait: bool = True,
+        staging_storage: str = "",
     ) -> dict:
         """Trigger an Azure Backup OriginalLocation restore. Human-approved action.
 
@@ -680,6 +681,7 @@ class AzureConnector(CloudConnector):
         vault: str = "rsv-annatar",
         before_attack_time: str | None = None,
         wait: bool = True,
+        staging_storage: str = "",
     ) -> dict:
         if self.dry_run:
             return {"status": "dry_run", "action": "restore_from_backup", "resource_id": resource_id}
@@ -734,9 +736,19 @@ class AzureConnector(CloudConnector):
             _console.print(f"  [dim]Using pre-attack recovery point: {rp_time}[/dim]")
 
         vm = self._compute.virtual_machines.get(rg, vm_name)
+        if not staging_storage:
+            raise RuntimeError(
+                "restore_from_backup: no staging storage account configured. "
+                "Azure Backup IaaS restore needs a staging storage account (same "
+                "region/subscription). Set 'restore_staging_storage' on the "
+                "azure_backup_vault backend in glorfindel-config.yaml "
+                "(from `make celebrimbor-output`)."
+            )
+        # Staging SA co-located with the VM's RG (Celebrimbor sandbox). A staging SA in a
+        # different RG would need its own rg field — refinement (cf. vault cross-RG).
         storage_id = (
             f"/subscriptions/{sub}/resourceGroups/{rg}"
-            f"/providers/Microsoft.Storage/storageAccounts/stannatarexfil"
+            f"/providers/Microsoft.Storage/storageAccounts/{staging_storage}"
         )
 
         self._compute.virtual_machines.begin_deallocate(rg, vm_name).result()

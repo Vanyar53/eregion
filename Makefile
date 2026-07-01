@@ -10,6 +10,10 @@ SIGNALS  ?= $(shell ls runs/*_signals.jsonl 2>/dev/null | tail -1)
 # TF = module unifié infra/terraform/. INSTANCE = workspace Terraform (stack
 # isolée pour pipelines parallèles). TOPO = topos à activer (surcharge les flags
 # enabled: du config.yaml). Le baseline est toujours déployé.
+# subscription_id n'est plus en dur dans le Terraform (repo public) : le provider
+# azurerm lit ARM_SUBSCRIPTION_ID. On le dérive de l'AZURE_SUBSCRIPTION_ID déjà
+# exporté par .envrc → les flux `make celebrimbor-*` marchent sans config en plus.
+export ARM_SUBSCRIPTION_ID ?= $(AZURE_SUBSCRIPTION_ID)
 TF       := terraform -chdir=infra/terraform
 INSTANCE ?= default
 TOPO     ?=

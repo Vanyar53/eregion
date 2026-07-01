@@ -5,6 +5,10 @@ WORKDIR /app
 COPY pyproject.toml .
 COPY annatar/ annatar/
 COPY glorfindel/ glorfindel/
+# Shared technique catalog (Annatar↔Glorfindel contract) — root-level, consumed by
+# detection_authoring.load_catalog(). Baked in so the image is self-contained; the
+# compose mount overrides it for live edits.
+COPY technique_catalog.yaml .
 
 RUN pip install --no-cache-dir -e ".[glorfindel,war-room]"
 

@@ -38,6 +38,7 @@ services:
       - ${HOME}/.glorfindel:/root/.glorfindel
       - ${HOME}/.cache/chroma:/root/.cache/chroma
       - ./glorfindel-config.yaml:/app/glorfindel-config.yaml:ro
+      - ./technique_catalog.yaml:/app/technique_catalog.yaml:ro
     develop:
       watch:
         - action: rebuild
@@ -67,6 +68,7 @@ services:
       - ${HOME}/.cache/chroma:/root/.cache/chroma
       # Optional: mount glorfindel-config.yaml if it exists
       - ./glorfindel-config.yaml:/app/glorfindel-config.yaml
+      - ./technique_catalog.yaml:/app/technique_catalog.yaml:ro
     depends_on:
       - watch
     develop:

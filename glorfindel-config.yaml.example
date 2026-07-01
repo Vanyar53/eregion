@@ -34,6 +34,10 @@ action_backends:
     type: azure_backup_vault
     vault_name: "rsv-annatar"
     resource_group: "annatar"
+    # Staging storage account for Azure Backup IaaS restore (same region/subscription).
+    # Required by `glorfindel restore`; without it restore raises a clear error rather
+    # than using a hardcoded name. Namespaced per environment — wire from Terraform output.
+    restore_staging_storage: "stannatarexfil"
 
 # ── Exceptions ────────────────────────────────────────────────────────────────
 # Opt-out specific assets from auto-discovered monitoring.

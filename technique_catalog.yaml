@@ -1,0 +1,307 @@
+# Eregion — Catalogue de techniques (contrat partagé Annatar ↔ Glorfindel)
+#
+# Seul contrat de couplage restant entre l'agent rouge (génératif) et l'agent bleu
+# (autoring grounded). La phase « concerté » ayant été supprimée (boucle AVEUGLE complète),
+# c'est l'unique surface partagée — voir collab/design_generative_purple_loop.md.
+#
+#   - Annatar (rouge) pioche des techniques pour PLANIFIER une kill-chain cohérente puis
+#     SYNTHÉTISER des scénarios YAML exécutables (schemas/scenario.schema.json).
+#   - Glorfindel (bleu) / l'humain s'en servent pour l'AUTORING grounded de détection
+#     (cold-start proactif : `glorfindel propose-rules`) et le raisonnement de couverture.
+#
+# INVARIANT NON-NÉGOCIABLE : tout produit LLM (scénario, règle) est une PROPOSITION.
+# Runtime de détection = RulePoller déterministe (zéro LLM hot-path). Zéro action destructive
+# autonome : `destructive: true` ⇒ TESTDATA jetable uniquement, jamais de vraie donnée.
+#
+# ── Statut des entrées ───────────────────────────────────────────────────────────
+#   implemented : scénario + script + règle de détection existent et validés en réel.
+#                 Le synthétiseur PEUT les matérialiser et les exécuter dès maintenant.
+#   planned     : périmètre cible du design, PAS encore exécutable (reference_script null).
+#                 Donne au planner un menu kill-chain complet ; le synthétiseur DOIT filtrer
+#                 sur `status: implemented` pour l'exécution v1. Sert au bleu à raisonner
+#                 couverture / autoring avant qu'un scénario rouge n'existe.
+#
+# ── Champs ───────────────────────────────────────────────────────────────────────
+# Contrat minimal (design) : ttp, tactic, log_source, destructive.
+# Côté BLEU (Glorfindel — grounded, fiables) :
+#   log_source         : table LAW où l'attaque devient observable (Perf/Syslog/StorageBlobLogs…)
+#   indicator_key      : label sémantique normalisé (voir RECOGNIZED_INDICATOR_KEYS dans
+#                        glorfindel/detection_rules.py) ; "" = indicateur nouveau, à autoriser
+#                        par le purple loop / l'autoring (pas encore curé).
+#   indicator_columns  : colonnes KQL brutes qu'une règle projette (entrée de normalize_row).
+#   expected_latency_s : latence de détection P99 (alimente rule.expected_latency_s côté bleu
+#                        ET detection.timeout du scénario côté rouge).
+# Côté ROUGE (Annatar — CONFIRMÉS par la session Annatar 2026-06-30) :
+#   destructive        : l'attaque détruit/altère des données ou l'état système → confinement obligatoire.
+#   requires_testdata  : le synthétiseur doit provisionner un volume/compte jetable AVANT l'attaque
+#                        (via setup_scripts) — sinon il REFUSE d'émettre l'étape destructive.
+#   safe_target        : (destructif uniquement) périmètre de confinement du blast radius, VALIDÉ ⊂ scope
+#                        AVANT run. Valeurs : un chemin VM (/mnt/testdata), un container Storage jetable
+#                        dédié, ou `sandbox_disposable` (la ressource entière est jetable — un log-clear /
+#                        account-manip ne se confine PAS à un volume ; sûr UNIQUEMENT parce que le scope
+#                        allowlist = sandbox Celebrimbor). Un destructif SANS safe_target n'est pas
+#                        synthétisable.
+#   testdata_marker    : sentinelle de fichier que le script destructif EXIGE au runtime avant d'agir
+#                        (garde-fou NON-LLM, déterministe, posé par le setup_script). "" si non applicable.
+#   reference_script   : script d'attaque existant (implemented) ou null (planned). Le synthétiseur
+#                        ne RÉFÉRENCE que des scripts versionnés de scripts/vm/ — JAMAIS de shell inline
+#                        (cf. réponse Q2 : un script LLM est une proposition à ratifier par un humain
+#                        avant d'entrer dans scripts/vm/, pas du code exécuté tel quel via RunCommand root).
+#   setup_scripts      : scripts de préparation à jouer avant l'attaque.
+#   params             : knobs déclaratifs que le synthétiseur PEUT régler {name, type, default, min, max}.
+#                        Les bornes = part du garde-fou budget (ex. payload_mb plafonné). v1 : ADVISORY —
+#                        le passage d'args nécessite `steps[].args` au schéma + l'engine (fast-follow).
+#                        Absent ⇒ le script tourne avec ses défauts figés.
+
+version: "1.0"
+
+resource_types:
+
+  # ───────────────────────────────────────────────────────────────────────────────
+  azure_vm:
+    techniques:
+
+      - ttp: T1486
+        name: "Data Encrypted for Impact (ransomware)"
+        tactic: impact
+        status: implemented
+        # blue
+        log_source: Perf
+        indicator_key: disk_write_rate_bps
+        indicator_columns: [MaxWrite]
+        expected_latency_s: 90
+        # red (confirmed — Annatar 2026-06-30)
+        destructive: true
+        requires_testdata: true
+        safe_target: /mnt/testdata
+        testdata_marker: .annatar_test_marker
+        reference_script: scripts/vm/ransomware_sim.sh
+        setup_scripts: [scripts/vm/setup_testdata.sh]
+        params:                       # ADVISORY v1 — script hardcode encore ces valeurs
+          - {name: duration_s, type: int, default: 45, min: 30, max: 120}
+          - {name: seed_mb,    type: int, default: 512, min: 128, max: 1024}
+
+      - ttp: T1041
+        name: "Exfiltration Over C2 Channel (blob upload via MSI)"
+        tactic: exfiltration
+        status: implemented
+        # blue
+        log_source: StorageBlobLogs
+        indicator_key: blob_upload_count
+        indicator_columns: [PutBlobCount, CallerIpAddress]
+        expected_latency_s: 120
+        # red (confirmed — Annatar 2026-06-30)
+        destructive: false
+        requires_testdata: false
+        safe_target: ""               # non destructif
+        testdata_marker: ""
+        reference_script: scripts/vm/exfil_sim.sh
+        setup_scripts: []
+        params:                       # exfil_sim.sh lit déjà $1=SIZE_MB → câblable dès `steps[].args`
+          - {name: payload_mb, type: int, default: 512, min: 10, max: 1024}
+
+      - ttp: T1110.001
+        name: "Brute Force: Password Guessing (SSH)"
+        tactic: credential-access
+        status: implemented
+        # blue
+        log_source: Syslog
+        indicator_key: failed_auth_count
+        indicator_columns: [FailedAttempts, SourceIP]
+        expected_latency_s: 120
+        # red (confirmed — Annatar 2026-06-30)
+        destructive: false
+        requires_testdata: false
+        safe_target: ""
+        testdata_marker: ""
+        reference_script: scripts/vm/lateral_movement_sim.sh
+        setup_scripts: []
+        params:                       # lateral_movement_sim.sh lit $1=ATTACKER_IP, $2=ATTEMPTS
+          - {name: attacker_ip, type: str, default: "185.220.101.1"}   # doit rester ⊂ scope si jamais routable
+          - {name: attempts,    type: int, default: 25, min: 10, max: 100}
+
+      - ttp: T1548.003
+        name: "Abuse Elevation Control Mechanism: Sudo and Sudo Caching"
+        tactic: privilege-escalation
+        status: implemented
+        # blue
+        log_source: Syslog
+        indicator_key: privilege_escalation
+        indicator_columns: [SyslogMessage]
+        expected_latency_s: 120
+        # red (confirmed — Annatar 2026-06-30)
+        destructive: false
+        requires_testdata: false
+        safe_target: ""
+        testdata_marker: ""
+        reference_script: scripts/vm/privilege_escalation_sim.sh
+        setup_scripts: []
+        params:                       # privilege_escalation_sim.sh lit $1=ATTACKER_USER, $2=FAILED_ATTEMPTS
+          - {name: attacker_user,   type: str, default: "svc-backup"}
+          - {name: failed_attempts, type: int, default: 8, min: 1, max: 30}
+
+      - ttp: T1136.001
+        name: "Create Account: Local Account"
+        tactic: persistence
+        status: implemented
+        # blue
+        log_source: Syslog          # facility auth/authpriv
+        indicator_key: syslog_event
+        indicator_columns: [SyslogMessage, ProcessName]
+        expected_latency_s: 480     # ingestion Syslog peut spiker — couvre le P99
+        # red (confirmed — Annatar 2026-06-30)
+        # Mute l'état système (useradd) mais revert immédiat + idempotent → NON destructif au sens
+        # perte de donnée. safe_target=sandbox_disposable serait abusif ici (réversible). Laissé false.
+        destructive: false
+        requires_testdata: false
+        safe_target: ""
+        testdata_marker: ""
+        reference_script: scripts/vm/account_creation_sim.sh
+        setup_scripts: []
+
+      # ── Expansion VM (design — pas encore exécutable) ──
+      - ttp: T1070.002
+        name: "Indicator Removal: Clear Linux or Mac System Logs"
+        tactic: defense-evasion
+        status: planned
+        log_source: Syslog
+        indicator_key: ""
+        indicator_columns: [SyslogMessage]
+        expected_latency_s: 300
+        destructive: true           # supprime des logs → ne se confine PAS à un volume
+        requires_testdata: false
+        safe_target: sandbox_disposable   # garde-fou = scope allowlist (VM Celebrimbor jetable), pas un path
+        testdata_marker: ""
+        reference_script: null
+        setup_scripts: []
+
+      - ttp: T1053.003
+        name: "Scheduled Task/Job: Cron"
+        tactic: persistence
+        status: planned
+        log_source: Syslog
+        indicator_key: ""
+        indicator_columns: [SyslogMessage, ProcessName]
+        expected_latency_s: 300
+        destructive: false
+        requires_testdata: false
+        reference_script: null
+        setup_scripts: []
+
+      - ttp: T1059.004
+        name: "Command and Scripting Interpreter: Unix Shell"
+        tactic: execution
+        status: planned
+        log_source: Syslog
+        indicator_key: ""
+        indicator_columns: [SyslogMessage, ProcessName]
+        expected_latency_s: 300
+        destructive: false
+        requires_testdata: false
+        reference_script: null
+        setup_scripts: []
+
+  # ───────────────────────────────────────────────────────────────────────────────
+  # ⚠ target.type non encore autorisé par schemas/scenario.schema.json (enum: azure_vm).
+  #    Extension du schéma = prérequis avant qu'un scénario Storage soit synthétisable.
+  azure_storage:
+    techniques:
+
+      - ttp: T1530
+        name: "Data from Cloud Storage"
+        tactic: collection
+        status: planned
+        log_source: StorageBlobLogs
+        indicator_key: ""
+        indicator_columns: [OperationName, CallerIpAddress]   # GetBlob/ListBlobs en masse
+        expected_latency_s: 120
+        destructive: false
+        requires_testdata: false
+        reference_script: null
+        setup_scripts: []
+
+      - ttp: T1485
+        name: "Data Destruction"
+        tactic: impact
+        status: planned
+        log_source: StorageBlobLogs
+        indicator_key: ""
+        indicator_columns: [OperationName, CallerIpAddress]   # DeleteBlob en masse
+        expected_latency_s: 120
+        destructive: true
+        requires_testdata: true
+        safe_target: "container:disposable"   # container blob dédié jetable (≠ compte/container de prod)
+        testdata_marker: ""                    # pas de sentinelle fichier hors-VM → garde-fou = scope + setup_script
+        reference_script: null
+        setup_scripts: []
+
+      - ttp: T1567.002
+        name: "Exfiltration to Cloud Storage"
+        tactic: exfiltration
+        status: planned
+        log_source: StorageBlobLogs
+        indicator_key: ""
+        indicator_columns: [PutBlobCount, CallerIpAddress]
+        expected_latency_s: 120
+        destructive: false
+        requires_testdata: false
+        reference_script: null
+        setup_scripts: []
+
+  # ───────────────────────────────────────────────────────────────────────────────
+  # Périmètre le plus lourd (vecteur #1 Azure 2025) — en DERNIER (design §6).
+  # Modèle d'asset tenant-level + action revoke_service_principal = design dédié à venir.
+  entra_id:
+    techniques:
+
+      - ttp: T1098.001
+        name: "Account Manipulation: Additional Cloud Credentials"
+        tactic: persistence
+        status: planned
+        log_source: AuditLogs
+        indicator_key: ""
+        indicator_columns: [OperationName, InitiatedBy]
+        expected_latency_s: 600
+        destructive: false
+        requires_testdata: false
+        reference_script: null
+        setup_scripts: []
+
+      - ttp: T1078.004
+        name: "Valid Accounts: Cloud Accounts"
+        tactic: defense-evasion
+        status: planned
+        log_source: SigninLogs
+        indicator_key: ""
+        indicator_columns: [UserPrincipalName, IPAddress, ResultType]
+        expected_latency_s: 600
+        destructive: false
+        requires_testdata: false
+        reference_script: null
+        setup_scripts: []
+
+      - ttp: T1528
+        name: "Steal Application Access Token"
+        tactic: credential-access
+        status: planned
+        log_source: AuditLogs
+        indicator_key: ""
+        indicator_columns: [OperationName, InitiatedBy]
+        expected_latency_s: 600
+        destructive: false
+        requires_testdata: false
+        reference_script: null
+        setup_scripts: []
+
+      - ttp: T1556
+        name: "Modify Authentication Process"
+        tactic: credential-access
+        status: planned
+        log_source: AuditLogs
+        indicator_key: ""
+        indicator_columns: [OperationName, InitiatedBy]
+        expected_latency_s: 600
+        destructive: false
+        requires_testdata: false
+        reference_script: null
+        setup_scripts: []

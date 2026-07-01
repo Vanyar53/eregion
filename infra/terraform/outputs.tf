@@ -38,6 +38,11 @@ output "exfil_storage_account" {
   value = azurerm_storage_account.exfil.name
 }
 
+output "restore_staging_storage" {
+  value       = azurerm_storage_account.restore_staging.name
+  description = "SA de staging du restore Azure Backup — restore_staging_storage du backend azure_backup_vault"
+}
+
 output "enabled_topologies" {
   value       = [for name, on in local.topo_enabled : name if on]
   description = "Topologies de test actives sur cette instance"
@@ -65,5 +70,6 @@ output "glorfindel_config_fragment" {
         type: azure_backup_vault
         vault_name: ${azurerm_recovery_services_vault.celebrimbor.name}
         resource_group: ${azurerm_resource_group.celebrimbor.name}
+        restore_staging_storage: ${azurerm_storage_account.restore_staging.name}
   YAML
 }

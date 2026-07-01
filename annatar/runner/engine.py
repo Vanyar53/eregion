@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import threading
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -17,15 +18,32 @@ from annatar.signals.emitter import SignalEmitter
 console = Console()
 
 
+@dataclass
+class RunOutcome:
+    """Result of a single scenario run — consumed by the campaign runner.
+
+    ``detection`` is the honest blind measure: "detected" (Glorfindel caught it),
+    "missed" (active watch, no detection in window → detection_missed emitted), or
+    "unknown" (no active glorfindel watch — detection was not measured).
+    """
+
+    run_id: str
+    detection: str = "unknown"
+    detection_latency_s: float | None = None
+    error: str | None = None
+
+
 class Engine:
     def __init__(self, dry_run: bool = False, skip_preflight: bool = False):
         self.dry_run = dry_run
         self.skip_preflight = skip_preflight
         self.parser = ScenarioParser()
+        self._detection_result = "unknown"
 
     def run(self, scenario_path: str, skip_confirm: bool = False):
         scenario = self.parser.load(scenario_path)
         run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        self._detection_result = "unknown"
 
         console.rule(f"[bold cyan]Annatar — {scenario.name}[/bold cyan]")
         console.print(f"  MITRE   : {scenario.mitre}")
@@ -48,7 +66,7 @@ class Engine:
         guard = check_resource_group(rg_tags)
         if not guard.allowed:
             console.print(f"[red]Safety check failed:[/red] {guard.reason}")
-            return
+            return RunOutcome(run_id, "unknown", error=f"safety: {guard.reason}")
 
         # Preflight check — VM running + not isolated
         if not self.skip_preflight:
@@ -61,7 +79,7 @@ class Engine:
                     "\n[red]Pre-flight check failed — fix the above before running.[/red]\n"
                     "[dim]Use --skip-preflight to bypass.[/dim]"
                 )
-                return
+                return RunOutcome(run_id, "unknown", error="preflight failed")
 
         emitter = SignalEmitter(
             run_id=run_id,
@@ -88,7 +106,7 @@ class Engine:
                     "  [bold]az vm run-command invoke -g annatar -n vm-annatar-victim "
                     "--command-id RunShellScript --scripts 'lsblk && ls /mnt/testdata'[/bold]"
                 )
-                return
+                return RunOutcome(run_id, "unknown", error="integrity check failed")
 
         # Block watcher — detects if Glorfindel blocks a source IP mid-run
         stop_event = threading.Event()
@@ -166,6 +184,8 @@ class Engine:
             t.join()
         else:
             stop_event.set()
+
+        return RunOutcome(run_id, self._detection_result)
 
     def _dry_run_display(self, scenario):
         console.print("[yellow]DRY RUN — no actions will be executed[/yellow]\n")
@@ -245,6 +265,7 @@ class Engine:
                     "[dim]Purple team feedback: no active glorfindel watch detected"
                     " — skipping.[/dim]"
                 )
+                self._detection_result = "unknown"  # detection was not measured
                 return
 
         wait_s = detection_timeout_s + 120
@@ -285,6 +306,7 @@ class Engine:
 
         if result_event == "detection":
             console.print("[green]✓ Glorfindel detected the attack — no feedback needed.[/green]")
+            self._detection_result = "detected"
             if stop_event is not None:
                 stop_event.set()
             return
@@ -300,6 +322,7 @@ class Engine:
                 "Is 'glorfindel watch' running? Emitting detection_missed anyway.[/dim]"
             )
 
+        self._detection_result = "missed"  # timeout or no detection in window
         det = scenario.detection or {}
         emitter.emit(
             event="detection_missed",

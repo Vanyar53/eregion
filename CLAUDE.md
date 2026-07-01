@@ -172,6 +172,15 @@ glorfindel-config.yaml          → source unique pour la config infra (NE PAS c
                                    exceptions: fnmatch patterns opt-out par VM et/ou par règle
                                    (fichier non versionné — monté en Docker volume ou présent localement)
 
+technique_catalog.yaml          → CONTRAT PARTAGÉ Annatar↔Glorfindel (boucle purple générative).
+                                   Référentiel des techniques (resource_type → [{ttp, tactic, ...}]),
+                                   seul couplage entre rouge et bleu (boucle aveugle). Bloc blue
+                                   (log_source/indicator_columns/expected_latency_s) consommé par
+                                   detection_authoring (autoring grounded) ; bloc red (destructive/
+                                   safe_target/testdata_marker/params/reference_script) par le synthé
+                                   Annatar. status: implemented | planned. Versionné (≠ config locale) ;
+                                   monté en Docker (compose) + COPY Dockerfile (image autonome).
+
 glorfindel/
   config.py             → GlorfindelConfig + load_glorfindel_config() — charge glorfindel-config.yaml
                           ExceptionConfig.is_excluded(asset_name, rule_name) — opt-out fnmatch
@@ -225,10 +234,17 @@ glorfindel/
   audit.py              → AuditCheck (+ champ `data` structuré : nsg/nsg_scope + nsgs[] multi-NIC, points/protected), AuditResult,
                           run() — NSG/backup/compute readiness checks en parallèle, IAM gap detection
   proposed_rules.py     → record/pending/approve()/reject() — detection rule proposal lifecycle
+  detection_authoring.py → moteur d'autoring grounded (boucle purple GÉNÉRATIVE, côté bleu).
+                          load_catalog()/catalog_entry() (lit technique_catalog.yaml),
+                          fetch_table_schema() (KQL getschema — schéma RÉEL du LAW, best-effort),
+                          author_rule() (appel LLM grounded partagé : catalogue + schéma → règle
+                          proposée ; flag grounded_schema). techniques_needing_rules() (sélection
+                          cold-start). Source UNIQUE du tool+prompt d'autoring (agent.py importe).
+                          Deux appelants : propose_detection_rule (réactif) + `propose-rules` (proactif).
   memory.py             → CycleMemory ChromaDB (confidence + past_cycles_used)
   incidents.py          → IncidentRegistry (TTL, persist, thread-safe)
   cli.py                → watch, respond, restore (--wait), release, unblock, reset (revert=alias), list, pending, ack,
-                          audit (--all), approve-rule, reject-rule, check-ttl, jobs, bot, dashboard, war-room
+                          audit (--all), approve-rule, reject-rule, propose-rules, check-ttl, jobs, bot, dashboard, war-room
   escalations.py        → ~/.glorfindel/escalations.jsonl + labels (proposed_rule, improve_detection ajoutés)
   bot.py                → Discord bot — un fil par VM, boutons Acquitter + Commande, /pending slash command
   tui.py                → Rich TUI full-screen (glorfindel dashboard) : resources + feed + escalations, raccourcis a/r/x/u/v
@@ -368,6 +384,10 @@ glorfindel audit --all --vault <nom>         # vault non-défaut (défaut: rsv-c
 
 # Boucle purple team — apprentissage détection
 glorfindel pending                           # voir les règles proposées (proposed_rule)
+glorfindel propose-rules [--ttp T..] [--include-planned] [--dry-run]  # autoring PROACTIF cold-start :
+                                             # génère la détection depuis technique_catalog.yaml AVANT
+                                             # l'attaque (getschema sur le vrai LAW → KQL groundée).
+                                             # Skip les TTPs déjà couverts. Sortie = propositions.
 glorfindel approve-rule <id>                 # appliquer la règle → detection_rules.yaml
 glorfindel reject-rule <id>                  # écarter la règle sans l'approuver
 
@@ -406,11 +426,12 @@ GLORFINDEL_DISCOVERY_RETENTION_H=8  # rétention d'une VM éteinte dans le regis
 ## Tests
 
 ```bash
-pytest                    # 314 tests, 0 appel Azure, 0 appel LLM, 0 écriture ~/.glorfindel/
+pytest                    # 414 tests, 0 appel Azure, 0 appel LLM, 0 écriture ~/.glorfindel/
 pytest tests/unit/test_agent_nodes.py        # LangGraph nodes (incl. investigate + confidence gate)
 pytest tests/unit/test_glorfindel.py         # actions/routing/signals
 pytest tests/unit/test_detection_rules.py    # RulePoller + load_rules + status + recently_matched
 pytest tests/unit/test_proposed_rules.py     # record/pending/approve/reject + routing
+pytest tests/unit/test_detection_authoring.py # catalogue + getschema + author_rule + propose-rules
 pytest tests/unit/test_audit.py              # NSG/backup/compute/IAM readiness
 pytest tests/unit/test_config.py             # GlorfindelConfig + ExceptionConfig
 pytest tests/unit/test_discovery.py          # AssetRegistry + DiscoveryService + eviction
@@ -588,18 +609,31 @@ L'escalade porte `action_params` (dict, vide par défaut) pour les actions param
 
 ## Boucle purple team — implémentée
 
-**Détection manquée :**
+**Détection manquée (réactif) :**
 ```
 Annatar attaque → detection_timeout
   → thread daemon (_wait_and_emit_feedback) poll runs/<run_id>_debug.jsonl
   → émet detection_missed {TTP, detection.hints, failed_query, source}
-  → Glorfindel: propose_detection_rule node (LLM)
-  → propose une query dans le bon langage (source → _SOURCE_LANGUAGES)
+  → Glorfindel: propose_detection_rule node → detection_authoring.author_rule (LLM grounded)
+  → grounding : catalogue (table/colonnes) + getschema (schéma RÉEL du LAW au runtime)
   → ~/.glorfindel/proposed_rules.jsonl + escalation proposed_rule
   → glorfindel pending / War Room ⚙ → Approve
   → glorfindel approve-rule <id> → detection_rules.yaml
   → restart watch → règle active au prochain run
 ```
+
+**Autoring proactif (cold-start) — `glorfindel propose-rules` :**
+```
+glorfindel propose-rules [--include-planned]
+  → lit technique_catalog.yaml, skip les TTPs déjà couverts
+  → pour chaque technique non couverte : getschema sur le vrai LAW → author_rule (LLM grounded)
+  → propositions (pending / War Room) → approve-rule
+  → génère la détection AVANT l'attaque (pas besoin d'un raté). Validé Azure réel (T1070.002).
+```
+**Deux couches anti-hallucination** : le catalogue (quelle table/colonnes) + getschema (colonnes
+RÉELLES → le LLM n'invente pas de colonne). Invariant : sortie = proposition, RulePoller déterministe
+inchangé, zéro LLM sur le hot-path. Le rejeu auto-activé en sandbox (étape 5) reste à venir (dépend
+de l'exécuteur de campagne Annatar — voir collab/design_campaign_manifest.md).
 
 **Remédiation non prête :**
 ```
@@ -612,7 +646,10 @@ glorfindel audit --all (ou watch startup)
 
 **Deux asymétries intentionnelles :**
 - Réaction = LLM libre + RAG ChromaDB — apprentissage implicite, continu, aucune règle
-- Détection = règles explicites (`detection_rules.yaml`) — source de vérité, query language = fonction du `source`
+- Détection = règles explicites (`detection_rules.yaml`) — source de vérité, query language = fonction du `source`.
+  Les règles sont désormais **autorées par le LLM** (réactif sur raté + proactif `propose-rules`),
+  groundées sur le catalogue + le schéma réel — mais restent des **propositions** ratifiées, exécutées
+  par le `RulePoller` **déterministe**. Génératif à l'autoring, déterministe au runtime.
 - Audit = vérification IAM + infra — détecte les trous *avant* l'incident
 
 ## Conventions scénarios Annatar

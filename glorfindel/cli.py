@@ -793,6 +793,20 @@ def restore(resource_id: str, vault: str, dry_run: bool, yes: bool, keep_isolate
 
     connector = AzureConnector(dry_run=dry_run)
 
+    # Resolve vault + staging storage from glorfindel-config.yaml (source of truth,
+    # namespaced per Celebrimbor instance). Overrides the stale CLI defaults; the staging
+    # SA is required by the IaaS restore and must never be a hardcoded name.
+    staging_storage = ""
+    try:
+        from glorfindel.config import load_glorfindel_config
+        rsv = load_glorfindel_config().backup_vault()
+        if rsv:
+            if rsv.vault_name and vault == "rsv-annatar":
+                vault = rsv.vault_name
+            staging_storage = rsv.restore_staging_storage
+    except Exception:
+        pass
+
     console.rule("[bold yellow]Glorfindel — Restore from Backup[/bold yellow]")
     console.print(f"  Resource : {resource_id}")
     console.print(f"  Vault    : {vault}")
@@ -821,7 +835,8 @@ def restore(resource_id: str, vault: str, dry_run: bool, yes: bool, keep_isolate
     if not wait:
         from glorfindel.jobs import start_restore
         console.print("[cyan]->[/cyan] Triggering restore (fire-and-forget — VM deallocation ~1-2 min)...")
-        job = start_restore(resource_id, connector, vault, before)
+        job = start_restore(resource_id, connector, vault, before,
+                            staging_storage=staging_storage)
         console.print(f"[green]✓ Restore job started.[/green]")
         console.print(f"  job_id  : [dim]{job['job_id']}[/dim]")
         console.print(f"  azure_job: [dim]{job.get('restore_job_name', '?')}[/dim]")
@@ -834,7 +849,7 @@ def restore(resource_id: str, vault: str, dry_run: bool, yes: bool, keep_isolate
     import time as _time
     console.print("[cyan]->[/cyan] Triggering restore (blocking ~15-30 min)...")
     t0 = _time.time()
-    result = connector.restore_from_backup(resource_id, vault=vault, before_attack_time=before, wait=True)
+    result = connector.restore_from_backup(resource_id, vault=vault, before_attack_time=before, wait=True, staging_storage=staging_storage)
     rto_s = round(_time.time() - t0)
 
     restore_label = f"{rto_s // 60}min {rto_s % 60}s"
@@ -1405,6 +1420,198 @@ def reject_rule(proposal_id: str) -> None:
         console.print(f"[red]Error:[/red] {e}")
 
 
+@cli.command("propose-rules")
+@click.option("--ttp", "ttps", multiple=True,
+              help="Restrict to specific TTPs (repeatable). Default: all uncovered.")
+@click.option("--source", default="azure_monitor", show_default=True,
+              help="Monitoring source to author for.")
+@click.option("--include-planned", is_flag=True,
+              help="Also author for 'planned' techniques (best-effort — the table "
+                   "may not exist yet, so no schema grounding).")
+@click.option("--model",
+              default=lambda: os.environ.get("GLORFINDEL_LLM_MODEL",
+                                             "anthropic/claude-sonnet-4-6"),
+              show_default=True)
+@click.option("--rules", "rules_file", default=None, metavar="PATH",
+              help="detection_rules.yaml (default: auto-detected) — TTPs already "
+                   "covered there are skipped.")
+@click.option("--dry-run", is_flag=True,
+              help="Author and print, but do not record proposals.")
+def propose_rules(ttps, source, include_planned, model, rules_file, dry_run):
+    """Proactively author detection rules for catalog techniques with no rule yet.
+
+    The cold-start half of the generative purple loop: instead of waiting for an
+    attack to slip through (detection_missed), author detection up front from the
+    technique catalog. For each uncovered technique in technique_catalog.yaml,
+    introspect the target LAW table schema (getschema) and ask the LLM for a
+    grounded query. Each result is a PROPOSAL — review with 'glorfindel pending',
+    apply with 'glorfindel approve-rule <id>'. Nothing is activated automatically.
+    """
+    from glorfindel import detection_authoring as da
+
+    catalog = da.load_catalog()
+    if not catalog:
+        console.print("[red]technique_catalog.yaml not found or empty.[/red]")
+        return
+
+    # TTPs already covered by an existing rule → skip. Pass the glorfindel config so
+    # backends resolve (otherwise the loader prints misleading "rule disabled" warnings;
+    # the .ttp we need is present regardless, but the noise is a false alarm).
+    existing_ttps: set[str] = set()
+    target = rules_file or _find_rules_file()
+    if target:
+        from glorfindel.detection_rules import load_rules
+        from glorfindel.config import load_glorfindel_config as _lgc
+        for r in load_rules(target, glorfindel_cfg=_lgc()):
+            if r.ttp:
+                existing_ttps.add(r.ttp)
+
+    todo = da.techniques_needing_rules(
+        catalog, existing_ttps,
+        include_planned=include_planned, only_ttps=set(ttps),
+    )
+    if not todo:
+        console.print(
+            "[green]Nothing to author[/green] — every selected technique already "
+            "has a rule (or none matched). Use --include-planned to widen."
+        )
+        return
+
+    # Resolve a workspace_id for schema introspection (mono-LAW: first matching backend).
+    workspace_id = ""
+    try:
+        from glorfindel.config import load_glorfindel_config
+        cfg = load_glorfindel_config()
+        be = next((b for b in cfg.monitoring_backends
+                   if b.type == source and b.workspace_id), None)
+        if be:
+            workspace_id = be.workspace_id
+    except Exception:
+        pass
+
+    # getschema introspection is READ-ONLY → run it even in --dry-run (dry-run only
+    # suppresses recording the proposal, not the read). This lets `--dry-run` actually
+    # exercise schema grounding for validation.
+    detector = None
+    if workspace_id and source in ("azure_monitor", "sentinel"):
+        try:
+            from glorfindel.detectors import detector_for
+            detector = detector_for(source, workspace_id=workspace_id)
+        except Exception as e:
+            console.print(f"[dim]schema introspection unavailable: {e}[/dim]")
+
+    grounding = "on" if detector else "off (no workspace resolved)"
+    console.print(
+        f"Authoring [bold]{len(todo)}[/bold] rule(s) "
+        f"[dim](source={source}, schema-grounding={grounding})[/dim]\n"
+    )
+
+    authored = 0
+    for entry in todo:
+        ttp = entry["ttp"]
+        try:
+            proposal = da.author_rule(
+                ttp=ttp, resource_id="", source=source,
+                workspace_id=workspace_id, model=model, detector=detector,
+            )
+        except Exception as e:
+            console.print(f"[red]✗ {ttp}: authoring failed:[/red] {e}")
+            continue
+
+        tag = "schema-grounded" if proposal.get("grounded_schema") else "no schema"
+        console.print(
+            f"[green]✓ {ttp}[/green] {proposal['rule_name']} "
+            f"[dim](conf {proposal['confidence']:.2f}, {tag})[/dim]"
+        )
+        console.print(f"  {proposal['explanation']}")
+
+        if not dry_run:
+            from glorfindel import proposed_rules as _pr
+            rk = {k: v for k, v in proposal.items() if k != "grounded_schema"}
+            pid = _pr.record(run_id="propose-rules", signal_id="",
+                             ttp=ttp, resource_id="", **rk)
+            console.print(
+                f"  [dim]proposal {pid} — apply: "
+                f"glorfindel approve-rule {pid}[/dim]"
+            )
+        authored += 1
+        console.print()
+
+    verb = "would author" if dry_run else "authored"
+    console.print(f"[bold]{authored}[/bold] proposal(s) {verb}. "
+                  "Review: [dim]glorfindel pending[/dim]")
+
+
+@cli.command("replay-campaign")
+@click.argument("campaign_id")
+@click.option("--runs-dir", default="runs", show_default=True,
+              help="Directory holding runs/campaigns/<id>/.")
+@click.option("--source", default="azure_monitor", show_default=True)
+@click.option("--dry-run", is_flag=True,
+              help="Replay and print, but do not write replay.json.")
+def replay_campaign_cmd(campaign_id, runs_dir, source, dry_run):
+    """Replay the missed scenarios of a campaign — "would the proposed rule have caught it?".
+
+    Closes the generative purple loop: for each scenario the deterministic poller MISSED,
+    re-run the LLM-proposed rule against the attack's traces (read-only) and record the
+    verdict in runs/campaigns/<id>/replay.json. Reads Annatar's manifest.json post-hoc only.
+    Activates nothing — a rule that would have caught it stays a proposal until approve-rule.
+    """
+    from glorfindel import campaign_replay as _cr
+    from glorfindel import proposed_rules as _pr
+
+    # Resolve a workspace_id for the read-only replay query (mono-LAW: first matching backend).
+    workspace_id = ""
+    try:
+        from glorfindel.config import load_glorfindel_config
+        cfg = load_glorfindel_config()
+        be = next((b for b in cfg.monitoring_backends
+                   if b.type == source and b.workspace_id), None)
+        if be:
+            workspace_id = be.workspace_id
+    except Exception:
+        pass
+
+    detector = None
+    if workspace_id and source in ("azure_monitor", "sentinel"):
+        try:
+            from glorfindel.detectors import detector_for
+            detector = detector_for(source, workspace_id=workspace_id)
+        except Exception as e:
+            console.print(f"[dim]replay query backend unavailable: {e}[/dim]")
+
+    try:
+        doc = _cr.replay_campaign(
+            campaign_id, runs_dir=runs_dir, detector=detector,
+            proposals=_pr.all_proposals(), write=not dry_run,
+        )
+    except FileNotFoundError:
+        console.print(f"[red]No manifest for campaign '{campaign_id}'[/red] "
+                      f"under {runs_dir}/campaigns/.")
+        return
+
+    replays = doc["replays"]
+    if not replays:
+        console.print("[green]No missed scenarios to replay[/green] — detection caught "
+                      "everything (or the campaign had no executed misses).")
+        return
+
+    for r in replays:
+        if r["would_have_caught"] is True:
+            tag = "[green]✓ would catch[/green]"
+        elif r["would_have_caught"] is False:
+            tag = "[yellow]✗ still misses[/yellow]"
+        else:
+            tag = "[dim]– not replayed[/dim]"
+        console.print(f"  seq {r['seq']} {r['ttp']}: {tag} [dim]({r['detail']})[/dim]")
+
+    caught = sum(1 for r in replays if r["would_have_caught"] is True)
+    where = "(dry-run, not written)" if dry_run else \
+        f"→ {runs_dir}/campaigns/{campaign_id}/replay.json"
+    console.print(f"\n[bold]{caught}/{len(replays)}[/bold] missed scenarios would now be "
+                  f"caught by the proposed rules. {where}")
+
+
 @cli.command()
 @click.argument("resource_id", required=False)
 @click.option("--all", "audit_all", is_flag=True,
@@ -1446,7 +1653,11 @@ def audit(resource_id: str | None, audit_all: bool, vault: str, vault_rg: str, d
         rules_file = _find_rules_file()
         if rules_file:
             from glorfindel.detection_rules import load_rules
-            for rule in load_rules(rules_file):
+            from glorfindel.config import load_glorfindel_config
+            # Pass the glorfindel config so backends/workspace_id resolve — otherwise
+            # every rule looks "disabled / no backend" (false alarm), the exact misleading
+            # signal a config-fantôme produces. watch already loads rules this way.
+            for rule in load_rules(rules_file, glorfindel_cfg=load_glorfindel_config()):
                 if rule.resource_id and "${" not in rule.resource_id:
                     targets.append(rule.resource_id)
         if not targets:

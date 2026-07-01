@@ -27,6 +27,10 @@ locals {
     managed-by = "terraform"
     eregion    = "test-infra"
     instance   = local.instance
+    # Autorisation de chaos versionnée : le garde-fou d'Annatar (safety/guard.py)
+    # refuse d'attaquer un RG sans ce tag. Tout RG Celebrimbor EST un sandbox de
+    # chaos → il doit porter l'autorisation par construction (survit aux rebuilds).
+    "annatar-test" = "true"
   }
 
   # ── Hôtes baseline ─────────────────────────────────────────────────────────

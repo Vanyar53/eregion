@@ -52,18 +52,18 @@ vms:
   himring: { enabled: false, always_on: true }
 
 # ── Clusters managés (assets d'un autre TYPE, sœurs de vms:) ───────────────────
-# Un cluster AKS est un asset first-class que Glorfindel découvre et gouverne — mais
+# Un cluster managé est un asset first-class que Glorfindel découvre et gouverne — mais
 # PAS comme une VM IaaS : ses nœuds (VMSS, RG managé MC_*) ne sont ni backupables IaaS
 # ni NSG-isolables la voie IaaS → Glorfindel les groupe par kind/parent + skip posture
 # (cb3593b, 9a7bd59). Ce n'est donc ni un hôte vms: (pas un azurerm_linux_virtual_machine)
 # ni une topologie d'arrangement (c'est un type d'asset, pas une forme de NSG).
-# Provisionné par un futur clusters.tf (azurerm_kubernetes_cluster). enabled:false = opt-in.
+# Comme vms:, la CLÉ = nom propre Tolkien (asset → petit nom, pas le type générique) ;
+# overrides inline. Le type d'orchestrateur est AKS, implicite dans ce module Azure
+# (comme un hôte vms: est un Linux VM implicite). Provisionné par un futur clusters.tf.
+# menegroth : les Mille Cavernes de Doriath (forteresse aux mille salles) → beaucoup de
+#   nœuds. enabled:false = opt-in. node_count = taille du node pool.
 clusters:
-
-  # AKS → groupage kind/parent (cb3593b) + posture skip (9a7bd59)
-  aks:
-    enabled: false
-    node_count: 2
+  menegroth: { enabled: false, node_count: 2 }
 
 # ── Ressources nommées (baseline) ────────────────────────────────────────────
 law_name: amonsul # tour de guet (Weathertop) — observation/logs

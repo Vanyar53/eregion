@@ -97,6 +97,8 @@ cp glorfindel-config.yaml.example glorfindel-config.yaml
 
 > Skip step 3 and detection silently never fires — `watch` resolves the workspace from this file only.
 
+> **If you'll use `restore_from_backup` (T1486 recovery)**, also set `restore_staging_storage` on the `azure_backup_vault` backend. Azure restores a VM by first writing the recovered disks to a *throwaway* storage account, then attaching them — this is **not** the vault's storage, just a scratch area in the VM's region (any Standard LRS account). Restoring from the *immutable vault tier* (the copy ransomware can't have touched) requires it. Detection and isolation don't; without it, only `restore` stops — with a message explaining exactly this.
+
 **4. Run observe-only** (`human_only` default — nothing executes):
 
 ```bash

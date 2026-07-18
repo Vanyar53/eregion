@@ -742,16 +742,19 @@ async def audit_resource(vm_name: str) -> dict:
     connector = AzureConnector(dry_run=False)
     # Resolve vault + its RG from config (central vault ≠ VM RG — see /api/audit).
     vault, vault_rg = os.environ.get("GLORFINDEL_BACKUP_VAULT", "rsv-annatar"), ""
+    staging_storage = ""
     try:
         from glorfindel.config import load_glorfindel_config
         rsv = load_glorfindel_config().backup_vault()
         if rsv:
             vault = rsv.vault_name or vault
             vault_rg = rsv.resource_group or ""
+            staging_storage = rsv.restore_staging_storage
     except Exception:
         pass
     # Run blocking Azure SDK calls in a thread pool — prevents event loop stall.
-    result = await asyncio.to_thread(_audit.run, resource_id, connector, vault, vault_rg)
+    result = await asyncio.to_thread(
+        _audit.run, resource_id, connector, vault, vault_rg, staging_storage)
     return result.to_dict()
 
 
@@ -777,12 +780,14 @@ async def audit_all() -> dict:
     # must come from config — deriving it from each VM's resource_id yields a false
     # "backup missing" (ResourceNotFound on the vault under the wrong RG).
     vault_rg = ""
+    staging_storage = ""
     try:
         from glorfindel.config import load_glorfindel_config
         _cfg = load_glorfindel_config()
         rsv = _cfg.backup_vault()
         vault = rsv.vault_name if rsv and rsv.vault_name else os.environ.get("GLORFINDEL_BACKUP_VAULT", "rsv-annatar")
         vault_rg = rsv.resource_group if rsv and rsv.resource_group else ""
+        staging_storage = rsv.restore_staging_storage if rsv else ""
     except Exception:
         vault = os.environ.get("GLORFINDEL_BACKUP_VAULT", "rsv-annatar")
         _cfg = None
@@ -810,7 +815,8 @@ async def audit_all() -> dict:
             unique.append((rid, asset_name))
 
     async def _audit_one(rid: str, asset_name: str) -> dict:
-        result = await asyncio.to_thread(_audit.run, rid, connector, vault, vault_rg)
+        result = await asyncio.to_thread(
+            _audit.run, rid, connector, vault, vault_rg, staging_storage)
         d = result.to_dict()
         d["vault"] = vault
         d["asset_name"] = asset_name

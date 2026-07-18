@@ -37,6 +37,7 @@ locals {
   vm_defaults = {
     vm_size      = local.cfg.vm_size
     disk_size_gb = local.cfg.disk_size_gb
+    image        = local.cfg.vm_image
   }
 
   # Per-host : merge des défauts + surcharges + noms dérivés de la clé (nom propre Tolkien).

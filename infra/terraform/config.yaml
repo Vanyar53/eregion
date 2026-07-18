@@ -22,6 +22,11 @@ location: westeurope
 vm_size:        Standard_D2as_v6
 admin_username: celebrimbor
 disk_size_gb:   32
+vm_image:       # image des VMs (surcharge par hôte = bloc complet)
+  publisher: Canonical
+  offer:     0001-com-ubuntu-server-jammy
+  sku:       22_04-lts-gen2
+  version:   latest
 
 # Assets de test — trois catégories distinctes :
 #   vms:        VM IaaS standalone, gouvernée COMME une VM (isolate/backup/snapshot).

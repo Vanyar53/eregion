@@ -24,10 +24,10 @@ resource "azurerm_linux_virtual_machine" "baseline" {
   }
 
   source_image_reference {
-    publisher = "Canonical"
-    offer     = "0001-com-ubuntu-server-jammy"
-    sku       = "22_04-lts-gen2"
-    version   = "latest"
+    publisher = each.value.image.publisher
+    offer     = each.value.image.offer
+    sku       = each.value.image.sku
+    version   = each.value.image.version
   }
 
   custom_data = base64encode(<<-EOF

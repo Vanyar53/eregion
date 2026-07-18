@@ -24,10 +24,18 @@ admin_username: celebrimbor
 disk_size_gb:   32
 
 # Hôtes baseline (instance courante). La CLÉ = nom propre Tolkien (cités/forteresses).
-# Chaque hôte peut surcharger vm_size / disk_size_gb. Clé stable (pas d'index décalé).
+# Chaque hôte peut surcharger vm_size / disk_size_gb + deux knobs de cycle de vie :
+#   enabled   (défaut true)  → false = hôte NON déployé (gate opt-in).
+#   always_on (défaut false) → true  = pas d'auto-shutdown, la VM tourne 24/7.
 # gondolin : la cité cachée trahie et mise à sac — celle que Glorfindel a défendue.
+# himring : forteresse-frontière de Maedhros, avant-poste de guet qui attirait les
+#   assauts ennemis → HONEYPOT dédié (SSH exposé via le NSG partagé), toujours allumé
+#   pour un test long, isolé du cycle de vie de gondolin. enabled:false = opt-in :
+#   passe-le à true + `make celebrimbor-up` pour le lever, false + up pour le retirer.
+#   ⚠ always_on = coût 24/7 (≈4× une VM en ~6h/jour).
 vms:
   gondolin: {}
+  himring: { enabled: false, always_on: true }
 
 # ── Ressources nommées (baseline) ────────────────────────────────────────────
 law_name: amonsul # tour de guet (Weathertop) — observation/logs

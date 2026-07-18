@@ -40,6 +40,10 @@ locals {
   }
 
   # Per-host : merge des défauts + surcharges + noms dérivés de la clé (nom propre Tolkien).
+  # Knobs par hôte (dans config.yaml vms.<clé>) :
+  #   enabled   (défaut true)  → false = hôte NON déployé (gate opt-in, ex. honeypot à la demande).
+  #   always_on (défaut false) → true  = pas d'auto-shutdown (VM 24/7, ex. honeypot long-run).
+  # Un hôte enabled:false disparaît de la map → aucune de ses ressources (for_each) n'est créée.
   vms = {
     for key, override in try(local.cfg.vms, {}) :
     key => merge(
@@ -53,6 +57,7 @@ locals {
         dcra_name = "dcra-${local.project}-${key}${local.ns}"
       }
     )
+    if try(override.enabled, true)
   }
 
   # ── Gating des topologies de test ──────────────────────────────────────────

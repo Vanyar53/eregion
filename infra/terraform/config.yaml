@@ -23,57 +23,35 @@ vm_size:        Standard_D2as_v6
 admin_username: celebrimbor
 disk_size_gb:   32
 
-# Trois axes d'assets/infra de test, à ne pas confondre :
-#   vms:        VMs IaaS STANDALONE que Glorfindel gouverne COMME des VMs (isolate /
-#               backup / snapshot s'appliquent). Assets baseline persistants. ← ICI.
-#   clusters:   assets d'un AUTRE type — cluster managé (AKS). First-class comme vms,
-#               mais gouverné différemment (groupage kind/parent, posture skip) et
-#               provisionné par azurerm_kubernetes_cluster, pas par cette map.
-#   topologies: échafaudages d'ARRANGEMENT d'infra (jetables, RG propre + ttl) qui
-#               testent le HANDLING de Glorfindel sur une forme (multi-NIC, vault
-#               cross-RG, multi-LAW…) — pas de nouveaux types d'asset.
+# Assets de test — trois catégories distinctes :
+#   vms:        VM IaaS standalone, gouvernée COMME une VM (isolate/backup/snapshot).
+#   clusters:   cluster managé (AKS) — asset first-class, gouverné autrement.
+#   topologies: forme d'arrangement d'infra jetable pour valider un handling (pas un asset).
+# vms + clusters : clé = nom propre Tolkien, format bloc, champ `kind`.
 #
-# vms = « toute chose que Glorfindel gouverne comme une VM IaaS », PAS « toute chose
-# qui est une VM » : les nœuds AKS sont des VMs (VMSS) mais vivent dans clusters:.
-#
-# La CLÉ = nom propre Tolkien (cités/forteresses). Chaque hôte peut surcharger
-# vm_size / disk_size_gb + deux knobs de cycle de vie :
-#   enabled   (défaut true)  → false = hôte NON déployé (gate opt-in PERSISTANT :
-#             repasser à true = l'hôte reste debout à travers les applies suivants).
-#   always_on (défaut false) → true  = pas d'auto-shutdown, la VM tourne 24/7.
-# gondolin : la cité cachée trahie et mise à sac — celle que Glorfindel a défendue.
-# himring : forteresse-frontière de Maedhros, avant-poste de guet qui attirait les
-#   assauts ennemis → HONEYPOT dédié (SSH exposé via le NSG partagé), toujours allumé
-#   pour un test long, isolé du cycle de vie de gondolin. enabled:false = opt-in :
-#   passe-le à true + `make celebrimbor-up` pour le lever, false + up pour le retirer.
-#   ⚠ always_on = coût 24/7 (≈4× une VM en ~6h/jour).
+# Knobs vms : kind (vm), enabled (défaut true), always_on (défaut false → 24/7,
+# pas d'auto-shutdown), vm_size / disk_size_gb (défauts globaux surchargeables).
+# gondolin : cité défendue par Glorfindel. himring : forteresse-frontière → honeypot
+# (SSH exposé, always_on, opt-in via enabled:true ; ⚠ coût 24/7).
 vms:
-  gondolin: {}
-  himring: { enabled: false, always_on: true }
+  gondolin:
+    kind: vm
+  himring:
+    kind:      vm
+    enabled:   false
+    always_on: true
 
-# ── Clusters managés (assets d'un autre TYPE, sœurs de vms:) ───────────────────
-# Un cluster managé est un asset first-class que Glorfindel découvre et gouverne — mais
-# PAS comme une VM IaaS : ses nœuds (VMSS, RG managé MC_*) ne sont ni backupables IaaS
-# ni NSG-isolables la voie IaaS → Glorfindel les groupe par kind/parent + skip posture
-# (cb3593b, 9a7bd59). Ce n'est donc ni un hôte vms: (pas un azurerm_linux_virtual_machine)
-# ni une topologie d'arrangement (c'est un type d'asset, pas une forme de NSG).
-# Comme vms:, la CLÉ = nom propre Tolkien (asset → petit nom, pas le type générique).
-# Provisionné par un futur clusters.tf. Champs (défauts résolus par clusters.tf) :
-#   kind       orchestrateur — `aks` seul supporté pour l'instant (pas implicite : explicite
-#              pour que la conf reste lisible/adaptable, pas un bloc Azure opaque).
-#   enabled    (défaut false) opt-in.
-#   location   région Azure — défaut = `location` globale ci-dessus, surchargeable par cluster.
-#   node_count taille du node pool.
-#   node_size  taille des nœuds (VMSS) — défaut = `vm_size` global, surchargeable.
-# menegroth : les Mille Cavernes de Doriath (forteresse aux mille salles) → beaucoup de nœuds.
+# Cluster managé ≠ VM IaaS : nœuds VMSS (RG MC_*) non backupables/isolables IaaS →
+# Glorfindel groupe par kind/parent + skip posture (cb3593b, 9a7bd59). Futur clusters.tf.
+# Knobs : kind (aks seul), enabled (défaut false), node_count, node_size (défaut vm_size),
+# location (défaut globale). menegroth : Mille Cavernes → beaucoup de nœuds.
 clusters:
   menegroth:
     kind:       aks
     enabled:    false
     node_count: 2
-    node_size:  Standard_D2as_v6  # taille des nœuds (VMSS)
-    # location: francecentral      # décommenter pour épingler hors de la location globale
-    #                              # (par défaut le cluster suit la région globale, pas de drift)
+    # node_size: Standard_D4as_v6  # défaut = vm_size global
+    # location:  francecentral      # défaut = location globale
 
 # ── Ressources nommées (baseline) ────────────────────────────────────────────
 law_name: amonsul # tour de guet (Weathertop) — observation/logs
@@ -98,16 +76,11 @@ log_retention_days:               30
 perf_sampling_frequency:          10
 disk_write_alert_threshold_bytes: 52428800 # 50 MB/s
 
-# ── Topologies de test (jetables, toutes enabled:false par défaut) ────────────
-# Une topo n'est NI un hôte `vms:` NI un `clusters:` : ce n'est pas un nouveau type
-# d'asset, c'est une FORME d'ARRANGEMENT d'infra (autour du même asset VM le plus souvent)
-# montée pour valider un chemin de code Glorfindel précis (isolation multi-NIC, deny
-# scopé sur NSG de subnet, vault cross-RG, multi-LAW…) puis détruite.
-# Un apply de base ne déploie QUE le baseline. Chaque topo = ressources gated par
-# `enabled` (for_each), dans son propre RG taggé ttl=destroy-after-test → jetable.
-# La surcharge `make celebrimbor-up TOPO=...` passe -var topo_filter (override TRANSITOIRE :
-# la topo redescend au prochain apply sans la var — normal pour du jetable, à l'inverse
-# d'un hôte vms enabled:true qui, lui, persiste).
+# ── Topologies de test (jetables, enabled:false par défaut) ───────────────────
+# PAS un asset : une FORME d'arrangement d'infra montée pour valider un handling
+# Glorfindel (multi-NIC, deny NSG subnet, vault cross-RG, multi-LAW…) puis détruite.
+# Chaque topo = son propre RG taggé ttl=destroy-after-test. `make celebrimbor-up TOPO=...`
+# = override TRANSITOIRE (redescend au prochain apply sans la var, ≠ vms enabled:true).
 topologies:
 
   # 1. VM 2 NICs, 1 NSG par NIC (niveau NIC) → isolation multi-NIC (7603a3e)

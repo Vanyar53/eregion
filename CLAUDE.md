@@ -426,7 +426,7 @@ GLORFINDEL_DISCOVERY_RETENTION_H=8  # rétention d'une VM éteinte dans le regis
 ## Tests
 
 ```bash
-pytest                    # 414 tests, 0 appel Azure, 0 appel LLM, 0 écriture ~/.glorfindel/
+pytest                    # 459 tests, 0 appel Azure, 0 appel LLM, 0 écriture ~/.glorfindel/
 pytest tests/unit/test_agent_nodes.py        # LangGraph nodes (incl. investigate + confidence gate)
 pytest tests/unit/test_glorfindel.py         # actions/routing/signals
 pytest tests/unit/test_detection_rules.py    # RulePoller + load_rules + status + recently_matched

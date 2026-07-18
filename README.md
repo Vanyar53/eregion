@@ -7,7 +7,7 @@ Open-source CDR for cloud infrastructure (Azure today; the LLM layer is provider
   - **Detects** — continuous rule-based polling (KQL / PromQL …), auto-discovers your assets from their own telemetry (no inventory to maintain), and proposes a new detection rule when an attack slips through (purple-team loop).
   - **Responds** — reasons from the raw signal to choose the minimum effective action and verifies it via the cloud API.
 
-**The core — LLM reasoning + RAG, not playbooks.** Glorfindel never follows a TTP→action table. Every decision comes from an **LLM** (provider-agnostic via LiteLLM — Anthropic, OpenAI, Azure OpenAI, Ollama, self-hosted) reasoning over: the enriched signal (targeted follow-up queries run *before* deciding), a **RAG memory of past incidents** (ChromaDB — it learns every cycle, no fine-tuning), and production-validated few-shot examples. Two hard guardrails wrap the LLM: a **confidence gate** (low confidence → forced escalation) and a **safety graph** that blocks destructive actions without human approval regardless of what the LLM proposes. *(Annatar is a deterministic scenario engine today; an LLM-driven Annatar is on the roadmap.)*
+**The core — LLM reasoning + RAG, not playbooks.** Glorfindel never follows a TTP→action table. Every decision comes from an **LLM** (provider-agnostic via LiteLLM — Anthropic, OpenAI, Azure OpenAI, Ollama, self-hosted) reasoning over: the enriched signal (targeted follow-up queries run *before* deciding), a **RAG memory of past incidents** (ChromaDB — it learns every cycle, no fine-tuning), and production-validated few-shot examples. Two hard guardrails wrap the LLM: a **confidence gate** (low confidence → forced escalation) and a **safety graph** that blocks destructive actions without human approval regardless of what the LLM proposes. *(Annatar runs fixed scenarios deterministically and also has a generative campaign layer — `annatar campaign plan` composes an ATT&CK kill-chain from a shared technique catalog, optionally LLM-planned, and materializes replayable scenarios.)*
 
 > **Observe-only by default** — Glorfindel recommends, you decide. Grant it autonomy per asset as you build trust.
 > With autonomous containment enabled: **~1 min to contain a ransomware VM, 21m29s to restored service** — the only human step is approving the backup restore.
@@ -161,7 +161,19 @@ make celebrimbor-output      # → glorfindel-config.yaml fragment (workspace_id
 | Storage account | <$1 |
 | **Total sandbox** | **~$25–35/month** |
 
-**Cost of running Glorfindel on existing infrastructure**: LLM API only (Anthropic default) — ~$0.05–0.10 per run (<$2/month for regular testing). **Free, local and air-gapped with Ollama** — validated in practice: `command-r7b` and `qwen2.5` are the most reliable (good actions + escalate when unsure), `mistral-nemo` and `llama3.1` also work; `llama3.2-3b` is too weak. The model must support tool-calling. Validate any model in one command: `make llm-smoke MODEL=ollama/<model> [--runs 5]` — it scores integration (valid tool-calls) and judgment (act on clear threats, escalate on ambiguous) against a real model. A deterministic guardrail holds disruptive actions on uncharacterized signals regardless of the model, so a weak local model can't make Glorfindel misfire.
+**Cost of running Glorfindel on existing infrastructure**: LLM API only (Anthropic default) — ~$0.05–0.10 per run (<$2/month for regular testing). **Free, local and air-gapped with Ollama** — validated with a real-model harness (`scripts/llm_smoke.py`), scored on *integration* (valid tool-calls) and *judgment* (act on clear threats, escalate on ambiguous). Compare several models side by side in one command: `make llm-compare` (or a single model: `make llm-smoke MODEL=ollama/<model> [RUNS=5]`).
+
+Local-model verdict (6 models × 3 runs, 2026-07):
+
+| Model | Integration | Judgment | Note |
+|---|---|---|---|
+| `gemma3`, `qwen2.5` | 15/15 | 15/15 | best value — perfect *and* fast/small |
+| `gemma4` | 15/15 | 15/15 | perfect but 2–3× slower, 2× bigger for no judgment gain |
+| `command-r7b` | 14/15 | 14/15 | near-perfect |
+| `qwen3` | 13/15 | 13/15 | occasionally skips the tool-call (thinking mode) |
+| `qwen3.5` | **0/15** | 0/15 | **unusable** — never emits a tool-call under Ollama |
+
+`mistral-nemo` and `llama3.1` also work; `llama3.2-3b` is too weak. **The model must support tool-calling** — and newer isn't safer: the newest model here (`qwen3.5`) fails completely, and the harness catches it in seconds. A deterministic guardrail holds disruptive actions on uncharacterized signals regardless of the model, so a weak local model can't make Glorfindel misfire.
 
 > The VM auto-shuts down at 23:00 UTC daily. Start it before each run: `az vm start -g rg-celebrimbor -n vm-celebrimbor-gondolin`. Compute is only billed when running.
 
@@ -349,6 +361,7 @@ glorfindel audit <resource_id>                  # remediation readiness: NSG, ba
 glorfindel audit --all                          # audit all discovered VMs
 glorfindel approve-rule <id>                    # apply a proposed detection rule to detection_rules.yaml
 glorfindel reject-rule <id>                     # dismiss a proposed rule without applying it
+glorfindel propose-rules [--ttp T..]            # proactively author detection for uncovered techniques (cold-start)
 glorfindel respond runs/<run_id>_signals.jsonl  # post-run processing
 # ── Remediation actions — choose the right scope ─────────────────────────────
 #
@@ -360,7 +373,9 @@ glorfindel respond runs/<run_id>_signals.jsonl  # post-run processing
 glorfindel release <resource_id> --yes          # lift isolation only (post-restore, VM back online)
 glorfindel unblock <ip> <resource_id> --yes     # remove one IP block (e.g. after T1110)
 glorfindel reset <resource_id> --yes           # reset: release isolation + unblock all IPs
+glorfindel snapshot <resource_id> --yes         # on-demand Recovery Services Vault backup (~5-20min)
 glorfindel restore <resource_id> --yes          # trigger Azure Backup restore (--before auto-detected)
+glorfindel jobs <vm-name> [--refresh]           # snapshot/restore job status
 glorfindel list                                 # all VMs with active actions (isolation + blocked IPs)
 #
 # War Room buttons:   ↩️ Release (isolated) | ↩️ Unblock (blocked IP) | ⟳ Reset (both)
@@ -380,7 +395,10 @@ annatar run annatar/scenarios/azure/ransomware-vm.yaml            # run a scenar
 annatar run annatar/scenarios/azure/data-exfiltration.yaml
 annatar run annatar/scenarios/azure/lateral-movement.yaml
 annatar run annatar/scenarios/azure/privilege-escalation.yaml
+annatar run annatar/scenarios/azure/account-creation.yaml        # T1136.001 (purple-loop test)
 # annatar run ... --skip-preflight                        # bypass VM state check (power + isolation)
+annatar campaign plan --target <resource_id> [--llm]      # compose a kill-chain → materialize scenarios
+annatar campaign run <campaign_id>                        # execute a planned campaign (sequential, budgeted)
 
 # LLM provider — default: Anthropic Claude
 ANTHROPIC_API_KEY=...               # required for default Anthropic provider
@@ -440,14 +458,18 @@ glorfindel/
                          load_config(path, glorfindel_cfg=None) — workspace_id from glorfindel-config.yaml
   audit.py             → AuditCheck, AuditResult, run(): NSG / backup / compute readiness checks
   proposed_rules.py    → record/pending/approve()/reject(): detection rule proposal lifecycle
+  detection_authoring.py → grounded LLM rule authoring (technique catalog + real LAW getschema) — reactive on a miss, proactive via propose-rules
+  campaign_replay.py   → blue-side closing of the generative purple loop: auto-activation + replay
+  jobs.py              → snapshot/restore job state shared by CLI + War Room (active_jobs/<vm>.json)
   rules/azure/
     detection_rules.yaml → rules only: KQL queries, TTP tags, backend references
                            assets: [auto] + monitoring_backends: [law-celebrimbor-amonsul] per rule (optional — omit for single-LAW)
                            no workspace_id, no resource_id, no asset declarations
   incidents.py         → IncidentRegistry: groups signals by resource_id within a TTL window
   memory.py            → CycleMemory: ChromaDB with confidence + past_cycles_used metadata
-  cli.py               → watch, respond, restore, release, unblock, revert, list, pending, ack,
-                         audit, approve-rule, reject-rule, check-ttl, bot, dashboard, war-room
+  cli.py               → watch, respond, restore, release, unblock, reset, snapshot, jobs, list,
+                         pending, ack, audit, approve-rule, reject-rule, propose-rules, check-ttl,
+                         bot, dashboard, war-room
   escalations.py       → persistent escalation log (~/.glorfindel/escalations.jsonl)
                          types: low_confidence, destructive_action, verification_failed,
                                 proposed_rule, proposed_action, posture_gap,
@@ -471,6 +493,9 @@ glorfindel/
 annatar/
   runner/engine.py    → setup → integrity check → attack → emit attack_started → purple-team feedback thread
   runner/parser.py    → Scenario dataclass (detection: timeout + prerequisites + hints)
+  campaign/           → generative red layer: planner (compose an ATT&CK kill-chain from the catalog,
+                        optionally LLM-planned) + synthesizer (materialize replayable scenarios) +
+                        runner (sequential, budgeted, blind-loop) + scope guard. CLI: annatar campaign plan|run
   signals/schema.py   → Signal dataclass + severity_for_ttp
   signals/emitter.py  → normalized JSONL signal emitter
   scenarios/azure/
@@ -478,6 +503,7 @@ annatar/
     data-exfiltration.yaml      → T1041
     lateral-movement.yaml       → T1110.001
     privilege-escalation.yaml   → T1548.003
+    account-creation.yaml       → T1136.001 (purple-loop test — no initial rule, rule proposed then approved)
 
 > **Annatar never uses SSH.** Scripts are pushed to the VM via Azure Run Command (Azure VM Agent
 > over the Wire Protocol — control plane only). The VM needs no SSH access and no public IP for
@@ -589,10 +615,10 @@ glorfindel audit --all   # NSG / backup vault / compute — surfaces IAM gaps wi
 ```bash
 pip install eregion[dev]
 pytest
-# 314 tests — 0 Azure calls, 0 LLM calls
+# 459 tests — 0 Azure calls, 0 LLM calls
 ```
 
-Coverage: 7 LangGraph nodes (incl. propose_detection_rule), routing rules, signal schema, safety guard, YAML parser, ChromaDB memory, CLI escalation flow, detection rules (RulePoller + auto-apply + eviction), proposed rules lifecycle, audit readiness checks, GlorfindelConfig + ExceptionConfig, AssetRegistry + DiscoveryService (replace-on-refresh, self-evicting threads), PostureChecker (dedup, re-escalation).
+Coverage: 8 LangGraph nodes (incl. the propose_detection_rule branch), routing rules, signal schema, safety guard, YAML parser, ChromaDB memory, CLI escalation flow, detection rules (RulePoller + auto-apply + eviction), proposed rules lifecycle, grounded detection authoring, campaign planner/synthesizer/runner + replay, audit readiness checks, GlorfindelConfig + ExceptionConfig, AssetRegistry + DiscoveryService (replace-on-refresh, self-evicting threads), PostureChecker (dedup, re-escalation).
 
 ## License
 

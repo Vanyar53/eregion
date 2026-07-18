@@ -56,6 +56,12 @@ SCENARIOS = [
      "ttp": "T1548.003",
      "row": {"SyslogMessage": "sudo: USER=root ; COMMAND=/bin/bash", "Computer": "vm-smoke"},
      "expected": {"isolate_vm"}},
+    {"kind": "act", "label": "data exfiltration — upload from internal IP (T1041)",
+     "ttp": "T1041",
+     # RFC-1918 caller → block_suspicious_ip is useless (internal), disk intact →
+     # isolate the VM to sever the exfil channel (validated action, see CLAUDE.md).
+     "row": {"CallerIpAddress": "10.0.0.4", "OperationName": "PutBlob", "Computer": "vm-smoke"},
+     "expected": {"isolate_vm"}},
     # ── ambiguous — the judgment test ──
     {"kind": "caution", "label": "account creation — few indicators (T1136.001)",
      "ttp": "T1136.001",
@@ -98,6 +104,27 @@ def _state(ttp: str, raw_signal: dict) -> dict:
         "incident": None,
         "dry_run": True,
     }
+
+
+def _launchable_ttps() -> set[str]:
+    """The TTP set Annatar can actually launch — read from the scenario YAMLs.
+
+    The eval is 'grounded' when every launchable TTP has at least one case here,
+    so coverage tracks what red really does instead of drifting on its own. Add
+    an Annatar scenario → this flags the missing eval case until you add it.
+    """
+    import re
+    from pathlib import Path
+
+    scen_dir = Path(__file__).resolve().parent.parent / "annatar/scenarios/azure"
+    ttps: set[str] = set()
+    for path in sorted(scen_dir.glob("*.yaml")):
+        for line in path.read_text().splitlines():
+            m = re.match(r"\s*mitre:\s*(\S+)", line)
+            if m:
+                ttps.add(m.group(1).strip())
+                break
+    return ttps
 
 
 def _run_one(model: str, runs: int) -> dict:
@@ -166,6 +193,16 @@ def main() -> int:
     args = ap.parse_args()
     runs = max(1, args.runs)
     models = [m.strip() for m in args.models.split(",") if m.strip()] or [args.model]
+
+    # Ground-truth coverage: does the eval cover every TTP Annatar can launch?
+    covered = {sc["ttp"] for sc in SCENARIOS if sc["ttp"]}
+    launchable = _launchable_ttps()
+    if launchable:
+        missing = sorted(launchable - covered)
+        line = f"Ground truth: {len(launchable & covered)}/{len(launchable)} Annatar-launchable TTPs covered"
+        line += f" — ⚠ no eval case for: {', '.join(missing)}" if missing else " ✓"
+        print(line)
+        print("=" * 72)
 
     results = []
     for i, model in enumerate(models):

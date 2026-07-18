@@ -196,9 +196,17 @@ annatar-simulate-gap:
 
 # LLM provider smoke-test — runs the real `decide` against a provider (Ollama/Mistral)
 # to prove provider-agnosticism (the mocked unit tests can't). No Azure.
-#   make llm-smoke MODEL=ollama/llama3.1
+#   make llm-smoke MODEL=ollama/llama3.1 [RUNS=5]
 llm-smoke:
-	GLORFINDEL_LLM_MODEL=$(or $(MODEL),ollama/llama3.1) $(PYTHON) scripts/llm_smoke.py
+	GLORFINDEL_LLM_MODEL=$(or $(MODEL),ollama/llama3.1) $(PYTHON) scripts/llm_smoke.py --runs $(or $(RUNS),1)
+
+# Compare several local models on the `decide` path and print a leaderboard.
+# Defaults to a sensible Ollama set; override the set / repeats as needed:
+#   make llm-compare
+#   make llm-compare MODELS=ollama/gemma4,ollama/qwen3.5 RUNS=5
+MODELS ?= ollama/gemma4,ollama/qwen3.5,ollama/qwen3,ollama/gemma3,ollama/qwen2.5,ollama/command-r7b
+llm-compare:
+	$(PYTHON) scripts/llm_smoke.py --models $(MODELS) --runs $(or $(RUNS),3)
 
 # ── Glorfindel ────────────────────────────────────────────────────────────
 

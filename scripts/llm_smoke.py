@@ -100,15 +100,8 @@ def _state(ttp: str, raw_signal: dict) -> dict:
     }
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--model", default=os.environ.get("GLORFINDEL_LLM_MODEL", "ollama/llama3.1"))
-    ap.add_argument("--runs", type=int, default=1,
-                    help="repeat each scenario N times and aggregate — LLMs are "
-                         "stochastic, so a single run is a signal, not a verdict.")
-    args = ap.parse_args()
-    model, runs = args.model, max(1, args.runs)
-
+def _run_one(model: str, runs: int) -> dict:
+    """Run all scenarios against ONE model, print its block, return its scores."""
     from collections import Counter
     from glorfindel.agent import decide
 
@@ -156,13 +149,49 @@ def main() -> int:
           f"(provider can do tool-calls).")
     print(f"Judgment   : {judgment}/{slots} good calls "
           f"(act on clear threats, stay cautious on ambiguous).")
-    if integration < slots:
-        print("→ A provider that can't reliably return a tool-call isn't usable for "
-              "`decide` (pick a tool-capable model).")
+    return {"model": model, "integration": integration,
+            "judgment": judgment, "slots": slots}
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--model", default=os.environ.get("GLORFINDEL_LLM_MODEL", "ollama/llama3.1"))
+    ap.add_argument("--models", default="",
+                    help="comma-separated list of models to compare in one go — runs "
+                         "each and prints a leaderboard (e.g. "
+                         "ollama/qwen3,ollama/gemma3,ollama/llama3.1).")
+    ap.add_argument("--runs", type=int, default=1,
+                    help="repeat each scenario N times and aggregate — LLMs are "
+                         "stochastic, so a single run is a signal, not a verdict.")
+    args = ap.parse_args()
+    runs = max(1, args.runs)
+    models = [m.strip() for m in args.models.split(",") if m.strip()] or [args.model]
+
+    results = []
+    for i, model in enumerate(models):
+        if i:
+            print("\n" + "=" * 72 + "\n")
+        results.append(_run_one(model, runs))
+
+    if len(results) > 1:
+        print("\n" + "=" * 72)
+        print("LEADERBOARD — best judgment first (ties broken by integration)")
+        print("-" * 72)
+        print(f"{'model':<30} {'integration':>12} {'judgment':>12}")
+        for r in sorted(results, key=lambda r: (r["judgment"], r["integration"]),
+                        reverse=True):
+            print(f"{r['model']:<30} {r['integration']:>7}/{r['slots']:<4} "
+                  f"{r['judgment']:>7}/{r['slots']:<4}")
+        print("=" * 72)
+
+    # Exit non-zero if ANY model can't reliably return a tool-call (unusable for decide).
+    if any(r["integration"] < r["slots"] for r in results):
+        print("→ At least one provider can't reliably return a tool-call — not usable "
+              "for `decide` (pick a tool-capable model).")
         return 1
-    if judgment < slots:
-        print("→ Integration OK; judgment imperfect — over-acting on ambiguity is the "
-              "usual local-model failure (see the ✗/~ above).")
+    if any(r["judgment"] < r["slots"] for r in results):
+        print("→ Integration OK; judgment imperfect on some models — over-acting on "
+              "ambiguity is the usual local-model failure (see the ✗/~ above).")
     else:
         print("→ Integration + judgment OK across all runs.")
     return 0

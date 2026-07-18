@@ -60,6 +60,11 @@ locals {
     if try(override.enabled, true)
   }
 
+  # ── Clusters managés (assets d'un autre type — cf. section clusters: du config) ──
+  # Contrat exposé ici pour que la section ne flotte pas orpheline. Consommé par un
+  # futur clusters.tf (azurerm_kubernetes_cluster) — pas de ressource pilotée encore.
+  clusters = try(local.cfg.clusters, {})
+
   # ── Gating des topologies de test ──────────────────────────────────────────
   # topo_filter (var, depuis `make celebrimbor-up TOPO=...`) surcharge les flags YAML :
   #   - filtre non vide  → une topo est active SSI son nom y figure

@@ -1,6 +1,16 @@
 # Eregion — Roadmap & Priorités
 
-## Contexte produit
+## Objectif premier
+
+Eregion est d'abord un projet **personnel** : un terrain pour apprendre l'IA et les LLM en profondeur — raisonnement agentique, RAG, génération grounded, évaluation — sur un usage de défense cloud dont j'ai réellement besoin. **Le plaisir de le construire et ce que j'y apprends priment sur l'adoption externe.**
+
+Le pari assumé : la sécurité va vers la **réponse autonome** (vitesse machine des attaques → réponse machine), et Eregion explore cet espace sans le brider — mais sous contrôle (observe-only par défaut, garde-fous déterministes, tout produit LLM reste une proposition).
+
+**Tout ce qui suit sur le positionnement produit, la concurrence et le SaaS est un scénario _optionnel_** — la voie « et si j'en faisais un produit ». Utile à garder en tête, ce n'est pas le juge de valeur du projet. Ne pas lire « pas d'utilisateur externe » comme un échec : ce n'est pas l'objectif poursuivi activement.
+
+---
+
+## Contexte produit (scénario optionnel)
 Eregion est un CDR — Cloud Detection and Response. Détecte, répond et apprend — sans playbooks, sans équipe SOC dédiée.
 Pitch : "Teste ton infra avant que les autres le fassent pour toi."
 **RTO mesuré : < 25 min sur ransomware VM** — de la détection à la remise en service, sans intervention humaine sur le chemin critique (run 20260609T190824Z : 21m29s).
@@ -55,14 +65,13 @@ Eregion couvre aujourd'hui le milieu de la kill chain. La roadmap ressources ét
 
 ---
 
-## Phase 1 — Validation utilisateur (MAINTENANT)
-**Objectif : prouver que quelqu'un d'autre peut l'utiliser.**
+## Phase 1 — Validation utilisateur externe (scénario optionnel)
+**Objectif : prouver que quelqu'un d'autre peut l'utiliser — pertinent uniquement si la voie produit est poursuivie.**
 
 - [ ] Premier utilisateur externe sur son infra Azure
 - [ ] Collecter feedback brut — ce qui casse, ce qui manque, ce qui surprend
-- [ ] Ne rien construire de nouveau avant ce retour
 
-**Rien d'autre ne passe avant ça.**
+> Ce jalon n'est **plus le bloquant** du projet (voir _Objectif premier_). Il reste la meilleure porte d'entrée si un jour l'ambition produit prend le dessus — pas une dette.
 
 ---
 

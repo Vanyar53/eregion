@@ -33,7 +33,7 @@ Open-source CDR for cloud infrastructure (Azure today; the LLM layer is provider
 
 **Posture loop** — after each discovery cycle, Glorfindel checks that it can actually defend each VM: backup linked and recent, NSG accessible. Missing capabilities are escalated immediately with the exact `az` command to fix them — before an incident, not during.
 
-**Autonomy boundary** — destructive actions (restore, delete) always require human approval. The graph enforces this regardless of LLM output. Reversible actions (isolate, block, snapshot) run autonomously and are verified via Azure API.
+**Autonomy — two independent gates.** First, a **trust ladder resolved per asset**: Glorfindel starts **observe-only** (`human_only`, the default — every action is recommended, nothing executes), and you grant it autonomy asset by asset as you learn to trust its reasoning. Second, a **hard safety line the graph enforces regardless of mode or LLM output**: destructive actions (restore, delete) always require human approval; reversible ones (isolate, block, snapshot) may run autonomously and are verified via Azure API. The two axes are orthogonal — even in an autonomous mode, destructive stays gated. *(Setup and the full mode table are in [Autonomy model](#autonomy-model) below.)*
 
 Signals from different resources run in parallel threads; signals from the same resource are serialized with shared incident context.
 

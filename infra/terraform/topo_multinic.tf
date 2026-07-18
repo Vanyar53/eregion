@@ -145,15 +145,15 @@ resource "azurerm_linux_virtual_machine" "multinic" {
   }
 
   os_disk {
-    caching              = "ReadWrite"
-    storage_account_type = "Standard_LRS"
+    caching              = local.cfg.os_disk.caching
+    storage_account_type = local.cfg.os_disk.storage_account_type
   }
 
   source_image_reference {
-    publisher = "Canonical"
-    offer     = "0001-com-ubuntu-server-jammy"
-    sku       = "22_04-lts-gen2"
-    version   = "latest"
+    publisher = local.cfg.vm_image.publisher
+    offer     = local.cfg.vm_image.offer
+    sku       = local.cfg.vm_image.sku
+    version   = local.cfg.vm_image.version
   }
 }
 

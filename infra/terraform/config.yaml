@@ -22,20 +22,44 @@ location: westeurope
 vm_size:        Standard_D2as_v6
 admin_username: celebrimbor
 disk_size_gb:   32
+vm_image:       # image des VMs (surcharge par hôte = bloc complet)
+  publisher: Canonical
+  offer:     0001-com-ubuntu-server-jammy
+  sku:       22_04-lts-gen2
+  version:   latest
+os_disk:        # disque OS des VMs (surcharge par hôte = bloc complet ; type : Standard_LRS / Premium_LRS / StandardSSD_LRS)
+  caching:              ReadWrite
+  storage_account_type: Standard_LRS
 
-# Hôtes baseline (instance courante). La CLÉ = nom propre Tolkien (cités/forteresses).
-# Chaque hôte peut surcharger vm_size / disk_size_gb + deux knobs de cycle de vie :
-#   enabled   (défaut true)  → false = hôte NON déployé (gate opt-in).
-#   always_on (défaut false) → true  = pas d'auto-shutdown, la VM tourne 24/7.
-# gondolin : la cité cachée trahie et mise à sac — celle que Glorfindel a défendue.
-# himring : forteresse-frontière de Maedhros, avant-poste de guet qui attirait les
-#   assauts ennemis → HONEYPOT dédié (SSH exposé via le NSG partagé), toujours allumé
-#   pour un test long, isolé du cycle de vie de gondolin. enabled:false = opt-in :
-#   passe-le à true + `make celebrimbor-up` pour le lever, false + up pour le retirer.
-#   ⚠ always_on = coût 24/7 (≈4× une VM en ~6h/jour).
+# Assets de test — trois catégories distinctes :
+#   vms:        VM IaaS standalone, gouvernée COMME une VM (isolate/backup/snapshot).
+#   clusters:   cluster managé (AKS) — asset first-class, gouverné autrement.
+#   topologies: forme d'arrangement d'infra jetable pour valider un handling (pas un asset).
+# vms + clusters : clé = nom propre Tolkien, format bloc, champ `kind`.
+#
+# Knobs vms : kind (vm), enabled (défaut true), always_on (défaut false → 24/7,
+# pas d'auto-shutdown), vm_size / disk_size_gb (défauts globaux surchargeables).
+# gondolin : cité défendue par Glorfindel. himring : forteresse-frontière → honeypot
+# (SSH exposé, always_on, opt-in via enabled:true ; ⚠ coût 24/7).
 vms:
-  gondolin: {}
-  himring: { enabled: false, always_on: true }
+  gondolin:
+    kind: vm
+  himring:
+    kind:      vm
+    enabled:   false
+    always_on: true
+
+# Cluster managé ≠ VM IaaS : nœuds VMSS (RG MC_*) non backupables/isolables IaaS →
+# Glorfindel groupe par kind/parent + skip posture (cb3593b, 9a7bd59). Futur clusters.tf.
+# Knobs : kind (aks seul), enabled (défaut false), node_count, node_size (défaut vm_size),
+# location (défaut globale). menegroth : Mille Cavernes → beaucoup de nœuds.
+clusters:
+  menegroth:
+    kind:       aks
+    enabled:    false
+    node_count: 2
+    # node_size: Standard_D4as_v6  # défaut = vm_size global
+    # location:  francecentral      # défaut = location globale
 
 # ── Ressources nommées (baseline) ────────────────────────────────────────────
 law_name: amonsul # tour de guet (Weathertop) — observation/logs
@@ -60,10 +84,11 @@ log_retention_days:               30
 perf_sampling_frequency:          10
 disk_write_alert_threshold_bytes: 52428800 # 50 MB/s
 
-# ── Topologies de test (jetables, toutes enabled:false par défaut) ────────────
-# Un apply de base ne déploie QUE le baseline. Chaque topo = ressources gated par
-# `enabled` (for_each), dans son propre RG taggé ttl=destroy-after-test → jetable.
-# La surcharge `make celebrimbor-up TOPO=...` passe -var topo_filter et ignore ces flags.
+# ── Topologies de test (jetables, enabled:false par défaut) ───────────────────
+# PAS un asset : une FORME d'arrangement d'infra montée pour valider un handling
+# Glorfindel (multi-NIC, deny NSG subnet, vault cross-RG, multi-LAW…) puis détruite.
+# Chaque topo = son propre RG taggé ttl=destroy-after-test. `make celebrimbor-up TOPO=...`
+# = override TRANSITOIRE (redescend au prochain apply sans la var, ≠ vms enabled:true).
 topologies:
 
   # 1. VM 2 NICs, 1 NSG par NIC (niveau NIC) → isolation multi-NIC (7603a3e)
@@ -83,19 +108,14 @@ topologies:
     enabled: false
     secondary_ips: 1
 
-  # 5. Cluster AKS → groupage kind/parent (cb3593b) + posture skip (9a7bd59)
-  aks:
-    enabled: false
-    node_count: 2
-
-  # 6. Vault cross-RG (RSV dans son propre RG) → check_backup_points RG du vault (4ba8134)
+  # 5. Vault cross-RG (RSV dans son propre RG) → check_backup_points RG du vault (4ba8134)
   vault_cross_rg:
     enabled: false
 
-  # 7. Deux Log Analytics Workspaces → binding règle↔backend multi-LAW (90a0b09)
+  # 6. Deux Log Analytics Workspaces → binding règle↔backend multi-LAW (90a0b09)
   two_law:
     enabled: false
 
-  # 8. Deux Recovery Services Vaults → résolution multi-vault (4ba8134/754aea0)
+  # 7. Deux Recovery Services Vaults → résolution multi-vault (4ba8134/754aea0)
   two_rsv:
     enabled: false

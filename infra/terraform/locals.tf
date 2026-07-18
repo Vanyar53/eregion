@@ -37,6 +37,8 @@ locals {
   vm_defaults = {
     vm_size      = local.cfg.vm_size
     disk_size_gb = local.cfg.disk_size_gb
+    image        = local.cfg.vm_image
+    os_disk      = local.cfg.os_disk
   }
 
   # Per-host : merge des défauts + surcharges + noms dérivés de la clé (nom propre Tolkien).
@@ -59,6 +61,11 @@ locals {
     )
     if try(override.enabled, true)
   }
+
+  # ── Clusters managés (assets d'un autre type — cf. section clusters: du config) ──
+  # Contrat exposé ici pour que la section ne flotte pas orpheline. Consommé par un
+  # futur clusters.tf (azurerm_kubernetes_cluster) — pas de ressource pilotée encore.
+  clusters = try(local.cfg.clusters, {})
 
   # ── Gating des topologies de test ──────────────────────────────────────────
   # topo_filter (var, depuis `make celebrimbor-up TOPO=...`) surcharge les flags YAML :

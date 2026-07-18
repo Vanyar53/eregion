@@ -19,15 +19,15 @@ resource "azurerm_linux_virtual_machine" "baseline" {
   }
 
   os_disk {
-    caching              = "ReadWrite"
-    storage_account_type = "Standard_LRS"
+    caching              = each.value.os_disk.caching
+    storage_account_type = each.value.os_disk.storage_account_type
   }
 
   source_image_reference {
-    publisher = "Canonical"
-    offer     = "0001-com-ubuntu-server-jammy"
-    sku       = "22_04-lts-gen2"
-    version   = "latest"
+    publisher = each.value.image.publisher
+    offer     = each.value.image.offer
+    sku       = each.value.image.sku
+    version   = each.value.image.version
   }
 
   custom_data = base64encode(<<-EOF

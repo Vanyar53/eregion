@@ -57,13 +57,23 @@ vms:
 # ni NSG-isolables la voie IaaS → Glorfindel les groupe par kind/parent + skip posture
 # (cb3593b, 9a7bd59). Ce n'est donc ni un hôte vms: (pas un azurerm_linux_virtual_machine)
 # ni une topologie d'arrangement (c'est un type d'asset, pas une forme de NSG).
-# Comme vms:, la CLÉ = nom propre Tolkien (asset → petit nom, pas le type générique) ;
-# overrides inline. Le type d'orchestrateur est AKS, implicite dans ce module Azure
-# (comme un hôte vms: est un Linux VM implicite). Provisionné par un futur clusters.tf.
-# menegroth : les Mille Cavernes de Doriath (forteresse aux mille salles) → beaucoup de
-#   nœuds. enabled:false = opt-in. node_count = taille du node pool.
+# Comme vms:, la CLÉ = nom propre Tolkien (asset → petit nom, pas le type générique).
+# Provisionné par un futur clusters.tf. Champs (défauts résolus par clusters.tf) :
+#   kind       orchestrateur — `aks` seul supporté pour l'instant (pas implicite : explicite
+#              pour que la conf reste lisible/adaptable, pas un bloc Azure opaque).
+#   enabled    (défaut false) opt-in.
+#   location   région Azure — défaut = `location` globale ci-dessus, surchargeable par cluster.
+#   node_count taille du node pool.
+#   node_size  taille des nœuds (VMSS) — défaut = `vm_size` global, surchargeable.
+# menegroth : les Mille Cavernes de Doriath (forteresse aux mille salles) → beaucoup de nœuds.
 clusters:
-  menegroth: { enabled: false, node_count: 2 }
+  menegroth:
+    kind:       aks
+    enabled:    false
+    node_count: 2
+    node_size:  Standard_D2as_v6  # taille des nœuds (VMSS)
+    # location: francecentral      # décommenter pour épingler hors de la location globale
+    #                              # (par défaut le cluster suit la région globale, pas de drift)
 
 # ── Ressources nommées (baseline) ────────────────────────────────────────────
 law_name: amonsul # tour de guet (Weathertop) — observation/logs

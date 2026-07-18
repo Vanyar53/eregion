@@ -163,17 +163,18 @@ make celebrimbor-output      # → glorfindel-config.yaml fragment (workspace_id
 
 **Cost of running Glorfindel on existing infrastructure**: LLM API only (Anthropic default) — ~$0.05–0.10 per run (<$2/month for regular testing). **Free, local and air-gapped with Ollama** — validated with a real-model harness (`scripts/llm_smoke.py`), scored on *integration* (valid tool-calls) and *judgment* (act on clear threats, escalate on ambiguous). Compare several models side by side in one command: `make llm-compare` (or a single model: `make llm-smoke MODEL=ollama/<model> [RUNS=5]`).
 
-Local-model verdict (6 models × 3 runs, 2026-07):
+Local-model verdict (6 models × 3 runs, grounded on the 5 TTPs Annatar can launch, 2026-07):
 
 | Model | Integration | Judgment | Note |
 |---|---|---|---|
-| `gemma3`, `qwen2.5` | 15/15 | 15/15 | best value — perfect *and* fast/small |
-| `gemma4` | 15/15 | 15/15 | perfect but 2–3× slower, 2× bigger for no judgment gain |
-| `command-r7b` | 14/15 | 14/15 | near-perfect |
-| `qwen3` | 13/15 | 13/15 | occasionally skips the tool-call (thinking mode) |
-| `qwen3.5` | **0/15** | 0/15 | **unusable** — never emits a tool-call under Ollama |
+| `command-r7b` | 18/18 | 17/18 | most reliable overall |
+| `qwen2.5` | 18/18 | 16/18 | fast; wavers on the internal-IP exfil case |
+| `gemma4` | 16/18 | 16/18 | strong judgment, but slower/heavier + an occasional missed tool-call |
+| `gemma3` | 17/18 | 14/18 | fast, but unstable on the exfil case |
+| `qwen3` | 14/18 | 14/18 | skips the tool-call under load (thinking mode) |
+| `qwen3.5` | **0/18** | 0/18 | **unusable** — never emits a tool-call under Ollama |
 
-`mistral-nemo` and `llama3.1` also work; `llama3.2-3b` is too weak. **The model must support tool-calling** — and newer isn't safer: the newest model here (`qwen3.5`) fails completely, and the harness catches it in seconds. A deterministic guardrail holds disruptive actions on uncharacterized signals regardless of the model, so a weak local model can't make Glorfindel misfire.
+The hardest case is **T1041 (exfil from an internal IP)**: `block_suspicious_ip` is useless on an RFC-1918 source, so `isolate_vm` is correct — several models waver on it, and that's exactly what separates them (a single run can look perfect; run 3+ and the wobble shows). `mistral-nemo` and `llama3.1` also work; `llama3.2-3b` is too weak. **The model must support tool-calling** — and newer isn't safer: the newest model here (`qwen3.5`) fails completely, and the harness catches it in seconds. A deterministic guardrail holds disruptive actions on uncharacterized signals regardless of the model, so a weak local model can't make Glorfindel misfire.
 
 > The VM auto-shuts down at 23:00 UTC daily. Start it before each run: `az vm start -g rg-celebrimbor -n vm-celebrimbor-gondolin`. Compute is only billed when running.
 

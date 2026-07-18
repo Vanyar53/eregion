@@ -145,8 +145,8 @@ resource "azurerm_linux_virtual_machine" "multinic" {
   }
 
   os_disk {
-    caching              = "ReadWrite"
-    storage_account_type = "Standard_LRS"
+    caching              = local.cfg.os_disk.caching
+    storage_account_type = local.cfg.os_disk.storage_account_type
   }
 
   source_image_reference {

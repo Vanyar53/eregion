@@ -94,10 +94,11 @@ resource "azurerm_virtual_machine_data_disk_attachment" "testdata" {
 }
 
 resource "azurerm_dev_test_global_vm_shutdown_schedule" "baseline" {
-  for_each              = local.vms
-  virtual_machine_id    = azurerm_linux_virtual_machine.baseline[each.key].id
-  location              = azurerm_resource_group.celebrimbor.location
-  enabled               = true
+  for_each           = local.vms
+  virtual_machine_id = azurerm_linux_virtual_machine.baseline[each.key].id
+  location           = azurerm_resource_group.celebrimbor.location
+  # always_on:true (honeypot long-run) → planning désactivé, la VM ne s'éteint jamais.
+  enabled               = !try(each.value.always_on, false)
   daily_recurrence_time = local.cfg.vm_shutdown_time
   timezone              = "UTC"
 

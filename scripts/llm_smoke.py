@@ -43,6 +43,11 @@ _RID = (
 #                 the ambiguous ones that separate good judgment from over-acting.
 _NON_DISRUPTIVE = {"snapshot", "no_action", "monitor", "investigate", "escalate"}
 
+# The autonomy confidence gate: below this, decide() forces escalation. Calibration
+# asks whether a model's self-reported confidence actually earns that trust — an
+# "overconfident error" (wrong AND confidence >= gate) slips straight through it.
+_GATE = float(os.environ.get("GLORFINDEL_CONFIDENCE_THRESHOLD", "0.7"))
+
 SCENARIOS = [
     {"kind": "act", "label": "ransomware — sustained disk write (T1486)",
      "ttp": "T1486",
@@ -139,6 +144,7 @@ def _run_one(model: str, runs: int) -> dict:
     print("-" * 72)
 
     integration = judgment = slots = 0   # over all (scenario × run) slots
+    conf_good: list[tuple[float, bool]] = []   # (confidence, was-correct) per slot
     for sc in SCENARIOS:
         acts: Counter = Counter()
         valid_n = good_n = 0
@@ -161,6 +167,7 @@ def _run_one(model: str, runs: int) -> dict:
             acts[action] += 1
             good, _ = _judge(sc, action, bool(out.get("escalate")))
             good_n += 1 if good else 0
+            conf_good.append((float(out.get("confidence") or 0.0), good))
 
         slots += runs
         integration += valid_n
@@ -176,8 +183,19 @@ def _run_one(model: str, runs: int) -> dict:
           f"(provider can do tool-calls).")
     print(f"Judgment   : {judgment}/{slots} good calls "
           f"(act on clear threats, stay cautious on ambiguous).")
-    return {"model": model, "integration": integration,
-            "judgment": judgment, "slots": slots}
+
+    # Calibration — is the self-reported confidence trustworthy enough for the gate?
+    correct = [c for c, g in conf_good if g]
+    wrong = [c for c, g in conf_good if not g]
+    overconf = sum(1 for c, g in conf_good if c >= _GATE and not g)
+    needless = sum(1 for c, g in conf_good if c < _GATE and g)
+    mc = f"{sum(correct) / len(correct):.2f}" if correct else "—"
+    mw = f"{sum(wrong) / len(wrong):.2f}" if wrong else "—"
+    print(f"Calibration: conf|correct={mc}  conf|wrong={mw}  "
+          f"overconfident errors (≥{_GATE:g} & wrong): {overconf}  "
+          f"needless holds (<{_GATE:g} & right): {needless}")
+    return {"model": model, "integration": integration, "judgment": judgment,
+            "slots": slots, "overconf": overconf, "needless": needless}
 
 
 def main() -> int:
@@ -214,11 +232,13 @@ def main() -> int:
         print("\n" + "=" * 72)
         print("LEADERBOARD — best judgment first (ties broken by integration)")
         print("-" * 72)
-        print(f"{'model':<30} {'integration':>12} {'judgment':>12}")
-        for r in sorted(results, key=lambda r: (r["judgment"], r["integration"]),
+        print(f"{'model':<28} {'integration':>11} {'judgment':>10} "
+              f"{'overconf err':>13}")
+        for r in sorted(results,
+                        key=lambda r: (r["judgment"], -r["overconf"], r["integration"]),
                         reverse=True):
-            print(f"{r['model']:<30} {r['integration']:>7}/{r['slots']:<4} "
-                  f"{r['judgment']:>7}/{r['slots']:<4}")
+            print(f"{r['model']:<28} {r['integration']:>7}/{r['slots']:<3} "
+                  f"{r['judgment']:>6}/{r['slots']:<3} {r['overconf']:>13}")
         print("=" * 72)
 
     # Exit non-zero if ANY model can't reliably return a tool-call (unusable for decide).
@@ -231,6 +251,10 @@ def main() -> int:
               "ambiguity is the usual local-model failure (see the ✗/~ above).")
     else:
         print("→ Integration + judgment OK across all runs.")
+    if any(r.get("overconf") for r in results):
+        print(f"→ Overconfident errors present (wrong AND confidence ≥ {_GATE:g}): the "
+              "confidence gate can't catch those — that's what the deterministic "
+              "guardrails are for. Prefer a model with 0 here for autonomous modes.")
     return 0
 
 

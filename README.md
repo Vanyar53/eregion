@@ -176,6 +176,8 @@ Local-model verdict (6 models × 3 runs, grounded on the 5 TTPs Annatar can laun
 
 The hardest case is **T1041 (exfil from an internal IP)**: `block_suspicious_ip` is useless on an RFC-1918 source, so `isolate_vm` is correct — several models waver on it, and that's exactly what separates them (a single run can look perfect; run 3+ and the wobble shows). `mistral-nemo` and `llama3.1` also work; `llama3.2-3b` is too weak. **The model must support tool-calling** — and newer isn't safer: the newest model here (`qwen3.5`) fails completely, and the harness catches it in seconds. A deterministic guardrail holds disruptive actions on uncharacterized signals regardless of the model, so a weak local model can't make Glorfindel misfire.
 
+**Calibration matters as much as judgment.** The harness also scores whether a model's self-reported confidence earns the autonomy gate's trust (`confidence < 0.7 → escalate`). `command-r7b` is the best-calibrated: noticeably *less* confident when wrong (~0.6) than when right (~0.8), so the gate catches its mistakes — **zero overconfident errors** (wrong *and* confidence ≥ 0.7). `qwen2.5` is the cautionary case: similar judgment, but mildly *more* confident when wrong, producing overconfident errors the gate can't catch. **For an autonomous mode, prefer a model with zero overconfident errors, not just a high judgment score** — run `make llm-compare` and read the `overconf err` column.
+
 > The VM auto-shuts down at 23:00 UTC daily. Start it before each run: `az vm start -g rg-celebrimbor -n vm-celebrimbor-gondolin`. Compute is only billed when running.
 
 ### 2. Install Eregion

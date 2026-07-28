@@ -72,6 +72,21 @@ SCENARIOS = [
      "ttp": "T1136.001",
      "row": {"SyslogMessage": "useradd: new user: name=svc-deploy, UID=1001",
              "Computer": "vm-smoke"}},
+    # Sub-threshold twins of the "act" cases above: same shape, benign specifics.
+    # A model that reacts to the KEYWORD ('MaxWrite', 'sudo/root') over-acts; one
+    # that reads the MAGNITUDE/command stays its hand. This is the sharpest test —
+    # over-isolating on a false positive is the persona's actual fear.
+    {"kind": "caution", "label": "modest disk write — likely a large copy, not ransomware",
+     "ttp": "",
+     # 5 MB/s vs the 147 MB/s of the real T1486 case — three orders of magnitude.
+     "row": {"Computer": "vm-smoke", "MaxWrite": 5000000}},
+    {"kind": "caution", "label": "sudo running a routine package update — not priv-esc",
+     "ttp": "",
+     # Same 'sudo USER=root' shape as the T1548 act case, but the COMMAND is a
+     # benign apt update, not an interactive root shell. A model that isolates on
+     # the 'sudo/root' keyword over-acts; the specifics say routine admin.
+     "row": {"SyslogMessage": "sudo: USER=root ; COMMAND=/usr/bin/apt-get update",
+             "Computer": "vm-smoke"}},
     {"kind": "caution", "label": "sparse/vague signal — no clear TTP",
      "ttp": "",
      "row": {"Activity": "anomalous login pattern", "Computer": "vm-smoke"}},

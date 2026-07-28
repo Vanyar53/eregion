@@ -163,20 +163,22 @@ make celebrimbor-output      # → glorfindel-config.yaml fragment (workspace_id
 
 **Cost of running Glorfindel on existing infrastructure**: LLM API only (Anthropic default) — ~$0.05–0.10 per run (<$2/month for regular testing). **Free, local and air-gapped with Ollama** — validated with a real-model harness (`scripts/llm_smoke.py`), scored on *integration* (valid tool-calls) and *judgment* (act on clear threats, escalate on ambiguous). Compare several models side by side in one command: `make llm-compare` (or a single model: `make llm-smoke MODEL=ollama/<model> [RUNS=5]`).
 
-Local-model verdict (6 models × 3 runs, grounded on the 5 TTPs Annatar can launch, 2026-07):
+Local-model verdict (6 models × 3 runs over 8 cases — the 5 TTPs Annatar can launch plus 3 ambiguous/sub-threshold traps, 2026-07):
 
-| Model | Integration | Judgment | Note |
+| Model | Integration | Judgment | Overconf err |
 |---|---|---|---|
-| `command-r7b` | 18/18 | 17/18 | most reliable overall |
-| `qwen2.5` | 18/18 | 16/18 | fast; wavers on the internal-IP exfil case |
-| `gemma4` | 16/18 | 16/18 | strong judgment, but slower/heavier + an occasional missed tool-call |
-| `gemma3` | 17/18 | 14/18 | fast, but unstable on the exfil case |
-| `qwen3` | 14/18 | 14/18 | skips the tool-call under load (thinking mode) |
-| `qwen3.5` | **0/18** | 0/18 | **unusable** — never emits a tool-call under Ollama |
+| `qwen2.5` | 24/24 | 20/24 | 4 |
+| `gemma4` | 24/24 | 19/24 | 5 |
+| `command-r7b` | 22/24 | 18/24 | 4 |
+| `qwen3` | 23/24 | 17/24 | 6 |
+| `gemma3` | 24/24 | 17/24 | 7 |
+| `qwen3.5` | **0/24** | 0/24 | **unusable** — never emits a tool-call under Ollama |
 
-The hardest case is **T1041 (exfil from an internal IP)**: `block_suspicious_ip` is useless on an RFC-1918 source, so `isolate_vm` is correct — several models waver on it, and that's exactly what separates them (a single run can look perfect; run 3+ and the wobble shows). `mistral-nemo` and `llama3.1` also work; `llama3.2-3b` is too weak. **The model must support tool-calling** — and newer isn't safer: the newest model here (`qwen3.5`) fails completely, and the harness catches it in seconds. A deterministic guardrail holds disruptive actions on uncharacterized signals regardless of the model, so a weak local model can't make Glorfindel misfire.
+**The model must support tool-calling** — and newer isn't safer: the newest model here (`qwen3.5`) fails completely, and the harness catches it in seconds. `mistral-nemo` and `llama3.1` also work; `llama3.2-3b` is too weak.
 
-**Calibration matters as much as judgment.** The harness also scores whether a model's self-reported confidence earns the autonomy gate's trust (`confidence < 0.7 → escalate`). `command-r7b` is the best-calibrated: noticeably *less* confident when wrong (~0.6) than when right (~0.8), so the gate catches its mistakes — **zero overconfident errors** (wrong *and* confidence ≥ 0.7). `qwen2.5` is the cautionary case: similar judgment, but mildly *more* confident when wrong, producing overconfident errors the gate can't catch. **For an autonomous mode, prefer a model with zero overconfident errors, not just a high judgment score** — run `make llm-compare` and read the `overconf err` column.
+**Calibration matters as much as judgment — and confidence is not a safety mechanism.** The harness scores whether a model's self-reported confidence earns the autonomy gate's trust (`confidence < 0.7 → escalate`), counting *overconfident errors* (wrong **and** confidence ≥ 0.7 — the ones the gate can't catch). The revealing cases are **sub-threshold look-alikes**: a 5 MB/s disk write (149× below the real ransomware) or a `sudo apt-get update` (routine admin, not priv-esc). On easy cases the models look perfectly calibrated; on these, *every* usable model over-acts — it isolates the VM — and does so *more* confidently when wrong than when right (`conf|wrong` ≈ 0.90–0.98 vs `conf|correct` ≈ 0.79–0.87). The 0.7 gate is structurally blind to this. It's also a signal that is **characterized** (a `MaxWrite` value *is* a recognized indicator) yet **sub-threshold**, so the uncharacterized-signal guardrail doesn't fire either — the failure slips between both gates.
+
+That sounds alarming but its blast radius is bounded **by design, not by trusting the model**: the over-reaction here is `isolate_vm`, which is **reversible**; the destructive gate blocks truly destructive actions *regardless* of confidence; and autonomy is resolved **per asset** — the default is `human_only` (nothing runs unattended), `non_disruptive` is opt-in per non-critical asset, and `allow_destructive` is a separate axis. With proper alerting an over-isolation is a page and a one-click release, not a loss. So the practical takeaway is not "pick the model with zero overconfident errors" (harder tests show none stays at zero) but **never delegate safety to LLM confidence** — gate it on action reversibility, asset criticality, mode, and alerting. This eval empirically validates *why* `human_only` is the default. Run `make llm-compare` and read the `overconf err` column.
 
 > The VM auto-shuts down at 23:00 UTC daily. Start it before each run: `az vm start -g rg-celebrimbor -n vm-celebrimbor-gondolin`. Compute is only billed when running.
 

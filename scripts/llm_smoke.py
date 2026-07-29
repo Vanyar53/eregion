@@ -76,6 +76,10 @@ SCENARIOS = [
     # A model that reacts to the KEYWORD ('MaxWrite', 'sudo/root') over-acts; one
     # that reads the MAGNITUDE/command stays its hand. This is the sharpest test —
     # over-isolating on a false positive is the persona's actual fear.
+    # NB: in production the disk-write/failed-auth traps never reach decide() —
+    # the detection rules floor the magnitude (MaxWrite>50MB/s, FailedAttempts>=10),
+    # so the RulePoller filters them first. Injecting the row here probes the
+    # MODEL's judgment in isolation, which is stricter than the running system.
     {"kind": "caution", "label": "modest disk write — likely a large copy, not ransomware",
      "ttp": "",
      # 5 MB/s vs the 147 MB/s of the real T1486 case — three orders of magnitude.

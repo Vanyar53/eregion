@@ -108,7 +108,7 @@ resource_types:
         log_source: Syslog
         indicator_key: failed_auth_count
         indicator_columns: [FailedAttempts, SourceIP]
-        expected_latency_s: 120
+        expected_latency_s: 480     # P99 DCR Syslog (règle curée ssh-brute-force)
         # red (confirmed — Annatar 2026-06-30)
         destructive: false
         requires_testdata: false
@@ -128,7 +128,7 @@ resource_types:
         log_source: Syslog
         indicator_key: privilege_escalation
         indicator_columns: [SyslogMessage]
-        expected_latency_s: 120
+        expected_latency_s: 480     # P99 DCR Syslog (règle curée sudo-privilege-escalation)
         # red (confirmed — Annatar 2026-06-30)
         destructive: false
         requires_testdata: false
@@ -167,7 +167,7 @@ resource_types:
         log_source: Syslog
         indicator_key: ""
         indicator_columns: [SyslogMessage]
-        expected_latency_s: 300
+        expected_latency_s: 480     # P99 DCR Syslog (mesuré sur les règles curées)
         destructive: true           # supprime des logs → ne se confine PAS à un volume
         requires_testdata: false
         safe_target: sandbox_disposable   # garde-fou = scope allowlist (VM Celebrimbor jetable), pas un path
@@ -182,7 +182,7 @@ resource_types:
         log_source: Syslog
         indicator_key: ""
         indicator_columns: [SyslogMessage, ProcessName]
-        expected_latency_s: 300
+        expected_latency_s: 480     # P99 DCR Syslog (mesuré sur les règles curées)
         destructive: false
         requires_testdata: false
         reference_script: null
@@ -195,7 +195,7 @@ resource_types:
         log_source: Syslog
         indicator_key: ""
         indicator_columns: [SyslogMessage, ProcessName]
-        expected_latency_s: 300
+        expected_latency_s: 480     # P99 DCR Syslog (mesuré sur les règles curées)
         destructive: false
         requires_testdata: false
         reference_script: null

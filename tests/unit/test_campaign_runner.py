@@ -142,6 +142,33 @@ def test_refuses_unratified_campaign(tmp_path):
         CampaignRunner(cdir, reset_fn=lambda x: None).run()
 
 
+def test_refuses_done_campaign_with_replan_hint(tmp_path):
+    # A 'done' campaign is terminal — ratify does not unblock it; the message
+    # must point to re-planning, not ratifying (2026-07-30 CLI hygiene finding).
+    cdir = _make_campaign(tmp_path, [_entry(1, "T1110.001")], state="done")
+    with pytest.raises(ValueError, match="re-plan"):
+        CampaignRunner(cdir, reset_fn=lambda x: None).run()
+
+
+def test_multi_scenario_warns_human_only(tmp_path, capsys):
+    cdir = _make_campaign(
+        tmp_path, [_entry(1, "T1110.001"), _entry(2, "T1486")],
+    )
+    engine = FakeEngine([
+        RunOutcome("run-1", "detected"),
+        RunOutcome("run-2", "detected"),
+    ])
+    CampaignRunner(cdir, reset_fn=lambda x: None, engine_factory=lambda: engine).run()
+    assert "human_only" in capsys.readouterr().out
+
+
+def test_single_scenario_no_human_only_warning(tmp_path, capsys):
+    cdir = _make_campaign(tmp_path, [_entry(1, "T1110.001")])
+    engine = FakeEngine([RunOutcome("run-1", "detected")])
+    CampaignRunner(cdir, reset_fn=lambda x: None, engine_factory=lambda: engine).run()
+    assert "human_only" not in capsys.readouterr().out
+
+
 def test_engine_error_marks_error_continues(tmp_path):
     cdir = _make_campaign(tmp_path, [_entry(1, "T1110.001"), _entry(2, "T1486")])
     engine = FakeEngine([

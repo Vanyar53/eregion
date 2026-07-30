@@ -33,6 +33,17 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 # Detection-window margin added on top of the catalog's P99 latency.
 _LATENCY_MARGIN_S = 120
 
+# Per-log-source detection-window floor (seconds): a window must NEVER be shorter
+# than the empirical P99 ingestion latency for its source, or a slow-but-correct
+# detection is mislabelled "missed" (→ spurious rule proposals). DCR-backed Syslog
+# is nominally ~60s but spikes past 300s; the curated Syslog rules encode this as
+# expected_latency_s: 480. A catalog entry with an optimistic latency (e.g. 120s →
+# 240s window) would open a window below that floor — clamp it. See CLAUDE.md
+# ("Syslog latence ~60s nominal") and the 2026-07-30 e2e finding.
+_WINDOW_FLOOR_S = {
+    "Syslog": 480,
+}
+
 
 @dataclass
 class SynthesisResult:
@@ -116,7 +127,8 @@ def synthesize(
 
     # ── build the scenario dict (schema: name/description/mitre/target/steps) ──
     latency = int(entry.get("expected_latency_s") or 300)
-    timeout_s = latency + _LATENCY_MARGIN_S
+    log_source = entry.get("log_source", "")
+    timeout_s = max(latency + _LATENCY_MARGIN_S, _WINDOW_FLOOR_S.get(log_source, 0))
     name = entry.get("name", ttp)
     scenario: dict[str, Any] = {
         "name": f"campaign-{_slug(ttp)}-{_slug(name)}"[:80],

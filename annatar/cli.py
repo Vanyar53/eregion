@@ -1,10 +1,40 @@
+import os
+
 import click
 from rich.console import Console
 
 console = Console()
 
 
-@click.group()
+class _AnnatarCli(click.Group):
+    """Render operational failures as a clean one-liner, not a raw traceback.
+
+    Missing creds, an azure-mgmt import mismatch, a campaign in a terminal state —
+    these are operator conditions, not bugs. Dumping a 20-line stack helps no one.
+    Print the cause + a targeted hint and exit non-zero. ANNATAR_DEBUG=1 restores
+    the full traceback for real debugging. Mirrors glorfindel's _GlorfindelCli.
+    """
+
+    def invoke(self, ctx):
+        try:
+            return super().invoke(ctx)
+        except (click.ClickException, click.exceptions.Abort, SystemExit, KeyboardInterrupt):
+            raise
+        except Exception as e:  # noqa: BLE001 — deliberate CLI boundary
+            if os.environ.get("ANNATAR_DEBUG"):
+                raise
+            console.print(f"[red]✗ {type(e).__name__}: {e}[/red]")
+            msg = str(e)
+            if "AZURE_SUBSCRIPTION_ID" in msg or "credential" in msg.lower():
+                console.print(
+                    "[dim]  → environnement non chargé : `direnv allow` ou "
+                    "`source .envrc` avant de relancer.[/dim]"
+                )
+            console.print("[dim]  (ANNATAR_DEBUG=1 pour la stack complète)[/dim]")
+            ctx.exit(1)
+
+
+@click.group(cls=_AnnatarCli)
 @click.version_option()
 def cli():
     """Annatar — simulate attacks, measure real RTO/RPO."""

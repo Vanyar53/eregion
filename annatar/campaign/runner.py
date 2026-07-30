@@ -68,12 +68,30 @@ class CampaignRunner:
             return m
 
         if m.state not in ("ratified", "running"):
+            if m.state in ("done", "aborted"):
+                hint = "re-plan to run again (terminal state)"
+            else:
+                hint = "ratify it with --yes before running"
             raise ValueError(
-                f"campaign {m.campaign_id} is '{m.state}' — ratify it before running"
+                f"campaign {m.campaign_id} is '{m.state}' — {hint}"
             )
 
         m.set_state("running")
         m.save(self.campaign_dir)
+
+        # Multi-scenario advisory: an autonomous blue response (isolate_vm) mid-chain
+        # persists and can break every downstream scenario (AMA/egress cut → no
+        # telemetry, no attack traffic). Recommend running the chain with Glorfindel
+        # in human_only so it detects+decides without executing. See 2026-07-30 e2e
+        # finding (Fix A). Not enforced here — cross-container, operator's call.
+        pending = sum(1 for s in m.scenarios if s.status == "pending")
+        if pending > 1:
+            console.print(
+                "[yellow]⚠ Multi-scenario campaign: run Glorfindel in "
+                "[bold]human_only[/bold] to avoid an autonomous isolation "
+                "persisting across scenarios and breaking the chain "
+                "(egress/telemetry cut).[/yellow]"
+            )
 
         executed = sum(1 for s in m.scenarios if s.status == "executed")
         aborted = False

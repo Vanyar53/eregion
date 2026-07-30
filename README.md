@@ -454,6 +454,9 @@ glorfindel/
                            backup agent check, auth success, root commands post-escalation)
                            → enrichit raw_signal.investigative_context avant le LLM
                          LLM reasons from enriched signal indicators + few-shot anchors
+                         propose_detection_rule: authors a rule ONLY when the TTP has none.
+                           A miss on a covered TTP = detection prevented (isolation, ingestion
+                           latency, backend down) → `detection_blocked` escalation, no duplicate rule
   config.py            → GlorfindelConfig + load_glorfindel_config() + ExceptionConfig
   discovery.py         → AssetRegistry (thread-safe, disk-persisted) + DiscoveryService (background thread)
                          LAW Heartbeat query → replace_for_backend() evicts deleted VMs
@@ -480,7 +483,8 @@ glorfindel/
   escalations.py       → persistent escalation log (~/.glorfindel/escalations.jsonl)
                          types: low_confidence, destructive_action, verification_failed,
                                 proposed_rule, proposed_action, posture_gap,
-                                mode_hold, write_blocked, action_failed
+                                mode_hold, write_blocked, action_failed,
+                                detection_blocked
   bot.py               → Discord bot: one thread per VM, Ack/Restore/Revert buttons, /pending command
   tui.py               → Rich full-screen TUI: resources + feed + escalations, keyboard shortcuts a/r/v
   api.py               → FastAPI War Room: /api/state (autonomy_modes, read_only, capability),
@@ -622,7 +626,7 @@ glorfindel audit --all   # NSG / backup vault / compute — surfaces IAM gaps wi
 ```bash
 pip install eregion[dev]
 pytest
-# 459 tests — 0 Azure calls, 0 LLM calls
+# 475 tests — 0 Azure calls, 0 LLM calls
 ```
 
 Coverage: 8 LangGraph nodes (incl. the propose_detection_rule branch), routing rules, signal schema, safety guard, YAML parser, ChromaDB memory, CLI escalation flow, detection rules (RulePoller + auto-apply + eviction), proposed rules lifecycle, grounded detection authoring, campaign planner/synthesizer/runner + replay, audit readiness checks, GlorfindelConfig + ExceptionConfig, AssetRegistry + DiscoveryService (replace-on-refresh, self-evicting threads), PostureChecker (dedup, re-escalation).

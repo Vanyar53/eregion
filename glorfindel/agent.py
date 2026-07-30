@@ -856,6 +856,11 @@ def escalate_to_human(state: GlorfindelState) -> GlorfindelState:
         escalation_type = "destructive_action"
     elif action == "improve_detection":
         escalation_type = "proposed_rule"
+    # A miss on a TTP an existing rule covers: not a rule gap, a prevented
+    # detection (isolation / ingestion latency / backend down) — distinct type so
+    # the operator investigates posture instead of reviewing a duplicate rule.
+    elif action == "investigate_detection_gap":
+        escalation_type = "detection_blocked"
     elif action not in AUTONOMOUS_ACTIONS:
         escalation_type = "proposed_action"
     else:
@@ -1043,6 +1048,65 @@ def store_cycle(state: GlorfindelState, *, memory: CycleMemory) -> GlorfindelSta
     return state
 
 
+def _detection_blocked(
+    state: GlorfindelState, rule, actions_summary: str
+) -> GlorfindelState:
+    """State for a miss on a TTP an existing rule already covers.
+
+    No LLM call, no proposal recorded: the deterministic finding is "a rule for
+    this TTP exists, so authoring another one is noise". What the operator needs
+    is the reason detection was PREVENTED — an isolation cutting the agent off,
+    ingestion latency above the rule's expected_latency_s, or an unreachable
+    backend. escalate_to_human turns this into a `detection_blocked` escalation.
+    """
+    signal = state["signal"]
+    ttp = signal.get("ttp", "")
+    reasons = [
+        f"Le TTP {ttp} est déjà couvert par la règle '{rule.name}' "
+        f"(expected_latency_s={rule.expected_latency_s or 'non défini'}) — "
+        f"aucune règle manquante, la détection a été EMPÊCHÉE."
+    ]
+    if actions_summary:
+        reasons.append(
+            f"Actions déjà prises sur cette ressource : {actions_summary}. "
+            f"Une isolation NSG coupe l'agent (AMA/Syslog) et le trafic sortant "
+            f"— cause la plus probable du raté."
+        )
+    if not rule.enabled or not rule.workspace_id:
+        reasons.append(
+            "⚠ La règle est chargée mais NON pollable (aucun backend de monitoring "
+            "résolu) — elle ne peut pas fire tant que glorfindel-config.yaml n'est "
+            "pas corrigé."
+        )
+
+    resource_id = signal.get("resource_id", "")
+    return {
+        **state,
+        "reasoning": " ".join(reasons),
+        # Déterministe (présence d'une règle), pas une confiance de modèle.
+        "confidence": 1.0,
+        "action": "investigate_detection_gap",
+        "reversible": True,
+        "explanation": (
+            f"Règle '{rule.name}' existante pour {ttp} : pas de proposition de règle. "
+            f"Vérifier posture, latence d'ingestion et état du backend."
+        ),
+        "escalate": True,
+        "escalation_reason": " ".join(reasons),
+        "suggested_steps": [
+            f"glorfindel list  — vérifier qu'aucune isolation/block résiduel ne "
+            f"coupe {resource_id}",
+            f"glorfindel reset {resource_id} --yes  — si l'isolation est résiduelle",
+            f"Rejouer la query de '{rule.name}' dans Log Analytics sur la fenêtre "
+            f"de l'attaque (latence d'ingestion > expected_latency_s ?)",
+            "Vérifier l'état du backend (carte MONITORING War Room / rule_status.json)",
+        ],
+        "proposed_rule": None,
+        "proposal_id": "",
+        "outcome": None,
+    }
+
+
 def propose_detection_rule(
     state: GlorfindelState, *, model: str, incidents: IncidentRegistry | None = None
 ) -> GlorfindelState:
@@ -1079,14 +1143,33 @@ def propose_detection_rule(
 
     # Check if an action was already taken on this VM — timeout may be caused by
     # the action (e.g. isolate_vm cuts off AMA) rather than a bad detection rule.
-    incident_context = ""
+    actions_summary = ""
     if incidents is not None:
         inc = incidents.get_active(signal.get("resource_id", ""))
         if inc and inc.actions_taken:
             actions_summary = ", ".join(
                 f"{a['action']} (at {a.get('timestamp', '?')})" for a in inc.actions_taken
             )
-            incident_context = f"""\
+
+    # Gate: a rule already covers this TTP → the miss is NOT a rule gap.
+    # Authoring here duplicates a curated rule (first e2e campaign run: T1110 and
+    # T1041 both re-authored while ssh-brute-force / data-exfiltration-blob existed,
+    # the misses being caused by a leftover isolation cutting AMA + egress).
+    # A miss on a covered TTP means detection was PREVENTED — posture, ingestion
+    # latency or an unreachable backend — so escalate that instead of a duplicate.
+    # Fail OPEN (author as before) if the config/rules can't be read: a broken
+    # config must not silence the purple loop, only the gate.
+    try:
+        existing_rule = _find_rule_for_ttp(ttp, glorfindel_cfg=load_glorfindel_config())
+    except Exception as e:
+        _console.print(f"  [dim]rule-coverage gate unavailable: {e}[/dim]")
+        existing_rule = None
+    if existing_rule is not None:
+        return _detection_blocked(state, existing_rule, actions_summary)
+
+    incident_context = ""
+    if actions_summary:
+        incident_context = f"""\
 == IMPORTANT: actions already taken on this resource ==
 {actions_summary}
 

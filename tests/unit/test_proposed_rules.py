@@ -236,6 +236,149 @@ def test_propose_detection_rule_skips_when_rulepoller_matched_recently(tmp_path,
     assert result is state
 
 
+# ── gate: existing rule for the TTP → no duplicate authoring ────────────────────
+
+def _missed_state(ttp: str) -> dict:
+    return {
+        "signal": {
+            "event": "detection_missed",
+            "ttp": ttp,
+            "resource_id": "/sub/rg/vm1",
+            "raw_signal": {},
+            "context": {"run_id": "20260730T193824Z", "detection_timeout_s": 300},
+        },
+        "past_cycles": [], "incident": None, "dry_run": True,
+        "reasoning": "", "confidence": 0.0, "action": "", "reversible": True,
+        "explanation": "", "escalate": False, "escalation_reason": "",
+        "suggested_steps": [], "outcome": None, "proposed_rule": None,
+        "proposal_id": "",
+    }
+
+
+def _fake_rule(name: str, ttp: str, *, enabled: bool = True, workspace_id: str = "ws-1"):
+    from glorfindel.detection_rules import DetectionRule
+
+    return DetectionRule(
+        name=name, source="azure_monitor", workspace_id=workspace_id,
+        query="Syslog | limit 1", ttp=ttp, resource_id="",
+        enabled=enabled, expected_latency_s=480,
+    )
+
+
+def test_propose_skips_authoring_when_rule_covers_ttp(monkeypatch):
+    """A miss on a TTP an existing rule covers is NOT a rule gap — no LLM call,
+    no proposal, and a detection_blocked escalation instead of a duplicate rule."""
+    from unittest.mock import patch
+    from glorfindel.agent import propose_detection_rule
+
+    monkeypatch.setattr(
+        "glorfindel.agent._find_rule_for_ttp",
+        lambda ttp, glorfindel_cfg=None: _fake_rule("ssh-brute-force", ttp),
+    )
+
+    with patch("glorfindel.agent.author_rule") as mock_author, patch("litellm.completion") as mock_llm:
+        result = propose_detection_rule(_missed_state("T1110.001"), model="claude-test")
+
+    mock_author.assert_not_called()
+    mock_llm.assert_not_called()
+    assert pending() == []
+    assert result["action"] == "investigate_detection_gap"
+    assert result["escalate"] is True
+    assert result["proposed_rule"] is None
+    assert result["proposal_id"] == ""
+    assert "ssh-brute-force" in result["escalation_reason"]
+
+
+def test_propose_gate_reports_actions_taken_as_likely_cause(monkeypatch, tmp_path):
+    """The leftover isolation that prevented detection must be named in the reason."""
+    from glorfindel.agent import propose_detection_rule
+    from glorfindel.incidents import IncidentRegistry
+
+    monkeypatch.setattr(
+        "glorfindel.agent._find_rule_for_ttp",
+        lambda ttp, glorfindel_cfg=None: _fake_rule("data-exfiltration-blob", ttp),
+    )
+    incidents = IncidentRegistry(path=tmp_path / "incidents.jsonl", ttl_s=300)
+    inc = incidents.get_or_create(resource_id="/sub/rg/vm1", ttp="T1041")
+    incidents.record_action(inc.incident_id, "isolate_vm", "success")
+
+    result = propose_detection_rule(
+        _missed_state("T1041"), model="claude-test", incidents=incidents
+    )
+
+    assert "isolate_vm" in result["escalation_reason"]
+
+
+def test_propose_gate_flags_rule_bound_to_no_backend(monkeypatch):
+    """Rule present but unpollable → say so; authoring another wouldn't fix it."""
+    from glorfindel.agent import propose_detection_rule
+
+    monkeypatch.setattr(
+        "glorfindel.agent._find_rule_for_ttp",
+        lambda ttp, glorfindel_cfg=None: _fake_rule(
+            "ssh-brute-force", ttp, enabled=False, workspace_id=""
+        ),
+    )
+    result = propose_detection_rule(_missed_state("T1110.001"), model="claude-test")
+    assert "NON pollable" in result["escalation_reason"]
+
+
+def test_propose_authors_when_no_rule_covers_ttp(monkeypatch):
+    """Cold start (no rule for the TTP) keeps the original authoring behaviour."""
+    from unittest.mock import patch
+    from glorfindel.agent import propose_detection_rule
+
+    monkeypatch.setattr(
+        "glorfindel.agent._find_rule_for_ttp", lambda ttp, glorfindel_cfg=None: None
+    )
+    authored = {
+        "rule_name": "new-rule", "source": "azure_monitor", "workspace_id": "ws-1",
+        "query": "Syslog | limit 1", "interval_s": 30.0,
+        "explanation": "e", "confidence": 0.8, "analysis": "a",
+    }
+    with patch("glorfindel.agent.author_rule", return_value=authored) as mock_author:
+        result = propose_detection_rule(_missed_state("T1070.002"), model="claude-test")
+
+    mock_author.assert_called_once()
+    assert result["action"] == "improve_detection"
+    assert result["proposed_rule"] == authored
+
+
+def test_propose_gate_fails_open_on_unreadable_rules(monkeypatch):
+    """A broken config must disable the gate, never the purple loop itself."""
+    from unittest.mock import patch
+    from glorfindel.agent import propose_detection_rule
+
+    def _boom(ttp, glorfindel_cfg=None):
+        raise RuntimeError("malformed detection_rules.yaml")
+
+    monkeypatch.setattr("glorfindel.agent._find_rule_for_ttp", _boom)
+    authored = {
+        "rule_name": "new-rule", "source": "azure_monitor", "workspace_id": "ws-1",
+        "query": "Syslog | limit 1", "interval_s": 30.0,
+        "explanation": "e", "confidence": 0.8, "analysis": "a",
+    }
+    with patch("glorfindel.agent.author_rule", return_value=authored):
+        result = propose_detection_rule(_missed_state("T1110.001"), model="claude-test")
+
+    assert result["action"] == "improve_detection"
+
+
+def test_detection_blocked_escalation_type(monkeypatch, tmp_path):
+    """escalate_to_human maps the gate's action to its own escalation type."""
+    from glorfindel.agent import escalate_to_human
+
+    state = _missed_state("T1110.001")
+    state.update({
+        "action": "investigate_detection_gap",
+        "escalate": True,
+        "escalation_reason": "règle existante",
+        "dry_run": True,
+    })
+    out = escalate_to_human(state)
+    assert out["outcome"]["escalation_type"] == "detection_blocked"
+
+
 def test_route_after_load_context_detection_missed():
     from glorfindel.agent import _route_after_load_context, GlorfindelState
 

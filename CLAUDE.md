@@ -426,7 +426,7 @@ GLORFINDEL_DISCOVERY_RETENTION_H=8  # rétention d'une VM éteinte dans le regis
 ## Tests
 
 ```bash
-pytest                    # 459 tests, 0 appel Azure, 0 appel LLM, 0 écriture ~/.glorfindel/
+pytest                    # 475 tests, 0 appel Azure, 0 appel LLM, 0 écriture ~/.glorfindel/
 pytest tests/unit/test_agent_nodes.py        # LangGraph nodes (incl. investigate + confidence gate)
 pytest tests/unit/test_glorfindel.py         # actions/routing/signals
 pytest tests/unit/test_detection_rules.py    # RulePoller + load_rules + status + recently_matched
@@ -565,7 +565,7 @@ az network nsg rule list -g rg-celebrimbor --nsg-name nsg-celebrimbor -o table
 
 **Escalade persistante — 1 carte vivante (pas N, pas figée).** La dédup `record()` (clé `action+resource_id+escalation_type` parmi les `pending`) garde **une seule** carte quand un finding re-déclenche, mais la rend vivante : `occurrences++` + `last_seen` à chaque re-fire (cheap, `first_seen` préservé → « 12× depuis 3h » d'un coup d'œil), et le contenu cher (reason/suggested_steps/confidence) **rafraîchi uniquement sur changement matériel** (delta de confiance ≥ `_MATERIAL_CONFIDENCE_DELTA`=0.1) — sinon le contenu reste stable (pas de flicker), et le **premier triage est préservé** (`first_reason`/`first_suggested_steps`/`first_confidence`). Avant : la sortie du re-`decide` était jetée → carte périmée sur un finding qui dure (constat terrain). ⚠️ Deux raffinements **différés** (touchent des hot-paths, validation run réel requise) : (a) throttle du re-`decide` LLM lui-même (risque de masquer un changement matériel si l'équivalence est trop lâche — `indicator_value` varie) ; (b) résolution du mismatch `Computer`≠`resource_id` via la map discovery (change l'input LLM via `normalize_row` → run end-to-end requis).
 
-Types d'escalade : `low_confidence` (detection_timeout + snapshot), `destructive_action` (HUMAN_APPROVAL_REQUIRED), `proposed_action` (action inconnue), `verification_failed`, `proposed_rule` (règle de détection proposée après detection_missed), `mode_hold` (action autonome retenue par le mode `human_only` de l'asset — pas un manque de confiance), `write_blocked` (action tentée mais credentials read-only / IAM 403 — capability gap, pas un choix de politique), `action_failed` (échec Azure non-auth pendant l'exécution — toujours escaladé, jamais d'abort silencieux du cycle).
+Types d'escalade : `low_confidence` (detection_timeout + snapshot), `destructive_action` (HUMAN_APPROVAL_REQUIRED), `proposed_action` (action inconnue), `verification_failed`, `proposed_rule` (règle de détection proposée après detection_missed), `mode_hold` (action autonome retenue par le mode `human_only` de l'asset — pas un manque de confiance), `write_blocked` (action tentée mais credentials read-only / IAM 403 — capability gap, pas un choix de politique), `action_failed` (échec Azure non-auth pendant l'exécution — toujours escaladé, jamais d'abort silencieux du cycle), `detection_blocked` (raté sur un TTP **déjà couvert** par une règle : la détection a été **empêchée** — isolation résiduelle, latence d'ingestion, backend injoignable — pas un manque de règle ; action portée `investigate_detection_gap`).
 
 L'escalade porte `action_params` (dict, vide par défaut) pour les actions paramétrées — ex. `block_suspicious_ip` → `{"ip": ...}` extrait du signal via `_extract_suspicious_ip` (même source que `execute_action`). Permet à la War Room « Approve & execute » d'exécuter en 1 clic une action qui n'est pas à `resource_id` seul. Commit `9583ec6`.
 
@@ -614,7 +614,16 @@ L'escalade porte `action_params` (dict, vide par défaut) pour les actions param
 Annatar attaque → detection_timeout
   → thread daemon (_wait_and_emit_feedback) poll runs/<run_id>_debug.jsonl
   → émet detection_missed {TTP, detection.hints, failed_query, source}
-  → Glorfindel: propose_detection_rule node → detection_authoring.author_rule (LLM grounded)
+  → Glorfindel: propose_detection_rule node
+  → 2 gates AVANT l'autoring (déterministes, zéro LLM) :
+      (a) RulePoller a matché ce TTP récemment → faux négatif du watcher Annatar → skip
+      (b) une règle couvre DÉJÀ ce TTP (detection_rules.yaml) → PAS de proposition :
+          le raté n'est pas un manque de règle mais une détection EMPÊCHÉE
+          (isolation résiduelle qui coupe l'AMA/l'egress, latence d'ingestion, backend KO)
+          → escalade `detection_blocked` (action `investigate_detection_gap`) qui pointe
+            posture/latence/backend. Constat 1er run e2e campagne (20260730T193824Z) :
+            2 ratés d'origine infra → 2 règles doublon autorées (T1110, T1041) = bruit.
+  → sinon (cold-start, TTP non couvert) → detection_authoring.author_rule (LLM grounded)
   → grounding : catalogue (table/colonnes) + getschema (schéma RÉEL du LAW au runtime)
   → ~/.glorfindel/proposed_rules.jsonl + escalation proposed_rule
   → glorfindel pending / War Room ⚙ → Approve

@@ -25,6 +25,7 @@ _ACTION_LABELS = {
     "modify_network_rule": "Règle réseau modifiée",
     "escalate_permissions": "Permissions élevées",
     "improve_detection": "Règle de détection proposée",
+    "investigate_detection_gap": "Détection empêchée — enquête requise",
 }
 
 _ESCALATION_LABELS = {
@@ -34,6 +35,7 @@ _ESCALATION_LABELS = {
     "verification_failed": "vérification échouée",
     "proposed_rule": "règle de détection proposée",
     "posture_gap": "gap de posture",
+    "detection_blocked": "détection empêchée (règle déjà en place)",
 }
 
 

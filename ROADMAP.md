@@ -55,6 +55,20 @@ Modèle : CLI open source gratuit, SaaS payant pour multi-tenant + connecteurs a
 
 ---
 
+## Chantier en cours — Module d'isolation compatible IaC (décidé 2026-10-05)
+
+Conception complète : [`docs/design/module-isolation-iac.md`](docs/design/module-isolation-iac.md).
+
+**Pourquoi** : le constat du 05/10 sur le banc (`allow-ssh` en priorité 100 devant les deny de Glorfindel, isolation et blocage SSH inefficaces avec `verified=True`) montre que le mécanisme actuel — règles créées pendant l'incident, règles client décalées — entre en concurrence avec la numérotation du client **et avec son Terraform** : un `terraform apply` supprime les règles ajoutées à un NSG à règles en ligne, rétablit une règle décalée ou une association changée.
+
+**Direction** : Terraform possède la structure, Glorfindel ne change que l'état de l'incident. Un module Terraform fourni par Eregion, ajouté une fois au code du client, déclare une ASG de quarantaine par VNet, deux règles deny en priorité 100 qui la visent, une règle « liste de blocage » en 101 dont Glorfindel gère le contenu (`ignore_changes`), et un rôle Azure minimal. Isoler = mettre les NICs dans l'ASG ; bloquer = ajouter l'IP à la liste. Le code source du provider azurerm confirme qu'une appartenance à une ASG ajoutée hors Terraform est conservée sans dérive. Plage réservée : 100–101, visible dans le code du client. AVNM : lecture seule, pour détecter un Always Allow.
+
+**Décisions ouvertes** : portée du blocage (périmètre du NSG proposé), NSG à règles en ligne (migration ou repli), sessions déjà établies (non coupées par un NSG — à mesurer, puis action complémentaire).
+
+**Étapes** : mesure des sessions établies → module Terraform + migration du NSG du banc → prototype plan/apply sans dérive → connecteur (ancrages, repli sur l'existant) → audit → documentation.
+
+---
+
 ## La kill chain Azure — où sont les VMs
 
 Les VMs sont rarement la cible finale. Elles sont le point d'entrée ou le pivot :
@@ -270,6 +284,7 @@ War Room local              →  War Room SaaS multi-tenant
 ## Récapitulatif ordre de priorité global
 
 ```
+0. Module d'isolation compatible IaC        → chantier en cours (docs/design/module-isolation-iac.md)
 1. Premier utilisateur externe              → MAINTENANT, bloque tout
 2. Solidification (erreurs, cron)           → après feedback
 3. Entra ID / Service Principal             → vecteur #1 Azure 2025

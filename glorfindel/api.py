@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
+import os
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -17,6 +19,103 @@ except ImportError as e:
     ) from e
 
 app = FastAPI(title="Glorfindel War Room", docs_url=None, redoc_url=None)
+
+_TOKEN_COOKIE = "glorfindel_warroom"
+
+
+class _TokenAuthMiddleware:
+    """Shared-token gate for every War Room route (pages, API, live feed).
+
+    The War Room triggers real Azure actions (restore, release, approve & execute) and
+    can switch an asset's autonomy mode. It used to listen on 0.0.0.0 with no
+    authentication: anyone reaching the port could do all of that.
+
+    Active when GLORFINDEL_WARROOM_TOKEN is set (read per request, so tests and a
+    restart pick it up). Accepted proofs: the `glorfindel_warroom` cookie, an
+    `Authorization: Bearer <token>` header, or `?token=<token>` once — which sets the
+    cookie (HttpOnly, SameSite=Strict: a cross-site page can't ride on it) and
+    redirects to the same URL without the token. Pure ASGI so it also covers the
+    WebSocket feed, which HTTP middlewares don't see.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        token = os.environ.get("GLORFINDEL_WARROOM_TOKEN", "")
+        if not token or scope["type"] not in ("http", "websocket"):
+            await self.app(scope, receive, send)
+            return
+
+        from starlette.requests import HTTPConnection
+        conn = HTTPConnection(scope)
+
+        def _ok(candidate: str | None) -> bool:
+            return bool(candidate) and hmac.compare_digest(candidate, token)
+
+        bearer = conn.headers.get("authorization", "")
+        bearer = bearer[7:] if bearer.lower().startswith("bearer ") else ""
+        if _ok(conn.cookies.get(_TOKEN_COOKIE)) or _ok(bearer):
+            await self.app(scope, receive, send)
+            return
+
+        if scope["type"] == "http" and _ok(conn.query_params.get("token")):
+            from urllib.parse import urlencode
+            from starlette.responses import RedirectResponse
+            query = urlencode([(k, v) for k, v in conn.query_params.multi_items() if k != "token"])
+            target = conn.url.path + (f"?{query}" if query else "")
+            resp = RedirectResponse(target, status_code=303)
+            resp.set_cookie(_TOKEN_COOKIE, token, httponly=True, samesite="strict")
+            await resp(scope, receive, send)
+            return
+
+        if scope["type"] == "websocket":
+            await receive()  # websocket.connect
+            await send({"type": "websocket.close", "code": 1008})
+            return
+        if "text/html" in conn.headers.get("accept", ""):
+            # A browser navigating here: a page that asks for the token (GET form →
+            # ?token=… → cookie + redirect above), not a raw JSON error.
+            from starlette.responses import HTMLResponse
+            resp = HTMLResponse(_TOKEN_PAGE, status_code=401)
+        else:
+            from starlette.responses import JSONResponse
+            resp = JSONResponse(
+                {"error": "War Room protégée : ouvrir /?token=<GLORFINDEL_WARROOM_TOKEN> "
+                          "ou envoyer Authorization: Bearer <token>."},
+                status_code=401,
+            )
+        await resp(scope, receive, send)
+
+
+_TOKEN_PAGE = """<!doctype html><html lang="fr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>War Room — accès</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 16px;
+         background: #0d1117; color: #e6edf3;
+         font: 14px/1.5 ui-monospace, "Cascadia Code", "SF Mono", Consolas, monospace; }
+  form { display: grid; gap: 12px; width: min(100%, 26rem); padding: 24px;
+         border: 1px solid #30363d; border-radius: 8px; background: #161b22; }
+  h1 { margin: 0; font-size: 16px; }
+  p { margin: 0; color: #7d8590; }
+  input, button { font: inherit; padding: 8px 10px; border-radius: 6px; }
+  input { background: #0d1117; color: #e6edf3; border: 1px solid #30363d; }
+  input:focus-visible, button:focus-visible { outline: 2px solid #58a6ff; outline-offset: 2px; }
+  button { background: #1f6feb; color: #fff; border: 0; cursor: pointer; }
+</style></head><body>
+<form method="get" action="">
+  <h1>Glorfindel War Room</h1>
+  <p>Cette War Room peut déclencher des actions Azure. Saisis le jeton défini dans
+     <code>GLORFINDEL_WARROOM_TOKEN</code> sur la machine qui l'héberge.</p>
+  <label for="token">Jeton</label>
+  <input id="token" name="token" type="password" autocomplete="current-password" required autofocus>
+  <button type="submit">Ouvrir la War Room</button>
+</form></body></html>"""
+
+
+app.add_middleware(_TokenAuthMiddleware)
 
 _STATIC = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=str(_STATIC)), name="static")
@@ -67,6 +166,12 @@ async def state() -> dict:
                 # placements[] = one deny placement per NIC (multi-NIC coverage). The UI
                 # shows "N NICs" when >1 so the operator sees full coverage, not just one NSG.
                 "placements": _iso.get("placements", []),
+                **_state_flags(_iso.get("placements", [])),
+                # partial: some NICs only (a placement failed) — or a release that could
+                # not remove every rule. Never shown as a plain ISOLATED.
+                "partial": bool(_iso.get("partial")),
+                "failed_nic": _iso.get("failed_nic", ""),
+                "release_failed": _iso.get("release_failed", []),
             })
         for b in blocks.get(resource_id, []):
             states.append({
@@ -78,6 +183,9 @@ async def state() -> dict:
                 "rule": b.get("rule", ""),
                 "scoped": b.get("scoped", True),  # False once promoted subnet-wide
                 "placements": b.get("placements", []),  # one rule per NIC (multi-NIC block)
+                **_state_flags(b.get("placements", [])),
+                "partial": bool(b.get("partial")),
+                "unblock_failed": b.get("unblock_failed", []),
             })
         resources.append({
             "resource_id": resource_id,
@@ -170,6 +278,15 @@ async def state() -> dict:
     }
 
 
+def _state_flags(placements: list) -> dict:
+    """Per-state flags the cards need: a NIC-level NSG shared with other NICs (treated
+    like a subnet NSG), and ALLOW rules recorded as evaluated before our deny."""
+    return {
+        "shared": any(p.get("shared_nsg") for p in placements),
+        "shadowed": [s for p in placements for s in (p.get("shadowed_by") or [])],
+    }
+
+
 @app.get("/api/watch/status")
 async def watch_status() -> dict:
     """Heartbeat-based: watch writes ~/.glorfindel/watch_heartbeat every ~60s."""
@@ -235,39 +352,6 @@ async def config() -> dict:
         }
     except Exception:
         glorfindel_cfg_dict = {"monitoring_backends": [], "action_backends": [], "exceptions_count": 0}
-
-    # Detection history: workspaces + TTP coverage from recent signal files
-    workspaces: set[str] = set()
-    ttp_events: dict[str, set[str]] = {}
-    runs = Path("runs")
-    if runs.exists():
-        for f in sorted(
-            runs.glob("*_signals.jsonl"),
-            key=lambda p: p.stat().st_mtime,
-            reverse=True,
-        )[:10]:
-            for line in f.read_text().splitlines():
-                if not line.strip():
-                    continue
-                try:
-                    d = json.loads(line)
-                    ws = d.get("context", {}).get("workspace_id", "")
-                    if ws:
-                        workspaces.add(ws)
-                    ttp = d.get("ttp", "")
-                    event = d.get("event", "")
-                    if ttp and event in ("detection", "detection_timeout"):
-                        ttp_events.setdefault(ttp, set()).add(event)
-                except Exception:
-                    pass
-
-    coverage = {
-        ttp: {
-            "detected": "detection" in events,
-            "timeout": "detection_timeout" in events,
-        }
-        for ttp, events in sorted(ttp_events.items())
-    }
 
     # Detection config (backends, assets, rules)
     rules_info: list[dict] = []
@@ -682,19 +766,22 @@ async def action_snapshot(vm_name: str) -> dict:
     if not resource_id:
         return {"error": f"Resource ID not found for {vm_name}"}
 
+    vault, vault_rg = os.environ.get("GLORFINDEL_BACKUP_VAULT", "rsv-annatar"), ""
     try:
         from glorfindel.config import load_glorfindel_config
-        _cfg = load_glorfindel_config()
-        rsv = _cfg.backup_vault()
-        vault = rsv.vault_name if rsv and rsv.vault_name else "rsv-annatar"
+        rsv = load_glorfindel_config().backup_vault()
+        if rsv:
+            vault = rsv.vault_name or vault
+            vault_rg = rsv.resource_group or ""
     except Exception:
-        vault = "rsv-annatar"
+        pass
 
     from glorfindel.actions import AzureConnector
     from glorfindel.jobs import start_snapshot as _start_snapshot
 
     def _start() -> dict:
-        return _start_snapshot(resource_id, AzureConnector(dry_run=False), vault)
+        # vault_rg: a central vault lives in its own RG (not the VM's).
+        return _start_snapshot(resource_id, AzureConnector(dry_run=False), vault, vault_rg=vault_rg)
 
     job = await asyncio.to_thread(_start)
     return {"status": "started", "job_id": job["job_id"], "resource_id": resource_id}
@@ -1182,7 +1269,7 @@ def _parse(data: dict, kind: str) -> dict:
     }
 
 
-def serve(host: str = "0.0.0.0", port: int = 7007) -> None:
+def serve(host: str = "127.0.0.1", port: int = 7007) -> None:
     try:
         import uvicorn
     except ImportError as e:
@@ -1190,5 +1277,17 @@ def serve(host: str = "0.0.0.0", port: int = 7007) -> None:
             "War Room requires extra dependencies: "
             "pip install eregion[war-room]"
         ) from e
-    print(f"  War Room  →  http://localhost:{port}")
+    token = os.environ.get("GLORFINDEL_WARROOM_TOKEN", "")
+    loopback = host in ("127.0.0.1", "localhost", "::1")
+    if token:
+        print(f"  War Room  →  http://localhost:{port}/?token=$GLORFINDEL_WARROOM_TOKEN")
+    else:
+        print(f"  War Room  →  http://localhost:{port}")
+    if not loopback and not token:
+        print(
+            f"  ⚠ Écoute sur {host} SANS jeton : quiconque joint ce port peut déclencher "
+            "des actions Azure (restore, release, approve) et changer le mode "
+            "d'autonomie. Définir GLORFINDEL_WARROOM_TOKEN, ou limiter l'exposition "
+            "(mapping Docker 127.0.0.1:7007:7007)."
+        )
     uvicorn.run(app, host=host, port=port, log_level="warning")

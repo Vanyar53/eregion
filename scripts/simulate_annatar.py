@@ -85,4 +85,4 @@ else:
     )
     print("[annatar] → signal 'recovery_complete' emitted")
     print()
-    print(f"[annatar] Run complete.")
+    print("[annatar] Run complete.")

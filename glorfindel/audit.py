@@ -117,7 +117,10 @@ def run(
     ]
     with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
         futures = [pool.submit(fn, *args) for fn, args in jobs]
-        result.checks.extend(f.result() for f in futures)
+        for f in futures:
+            out = f.result()
+            # _check_nsg may return two checks (access + precedence).
+            result.checks.extend(out if isinstance(out, list) else [out])
 
     # Restore staging SA — pure config check (no Azure call), so it runs outside the pool.
     result.checks.append(_check_restore_staging(staging_storage))
@@ -125,6 +128,36 @@ def run(
 
 
 # ── Per-action checks ──────────────────────────────────────────────────────────
+
+def _check_precedence(issues: list[dict]) -> AuditCheck | None:
+    """ALLOW rules evaluated before Glorfindel's denies → isolate/block would be
+    bypassed for the traffic they allow, while verification of rule PRESENCE passes.
+
+    Found on the Celebrimbor bench (2026-10-05): allow-ssh at priority 100 on the subnet
+    NSG kept SSH open on every isolated VM and let an SSH brute force through a block.
+    """
+    if not issues:
+        return None
+    rules: dict[tuple[str, str], dict] = {}
+    for i in issues:
+        entry = rules.setdefault((i["nsg"], i["rule"]), {**i, "actions": set()})
+        entry["actions"].add(i["action"])
+    parts, fixes = [], []
+    for (nsg, rule), info in rules.items():
+        parts.append(
+            f"'{rule}' (priorité {info['priority']}, {info['direction']}, ports {info['ports']}) "
+            f"sur {nsg} → contourne {', '.join(sorted(info['actions']))}"
+        )
+        rg, name = nsg.split("/", 1)
+        fixes.append(f"az network nsg rule update -g {rg} --nsg-name {name} -n {rule} --priority 1000")
+    return AuditCheck(
+        action="isolate_vm, block_suspicious_ip",
+        name="NSG precedence",
+        status="fail",
+        message="Règle(s) allow évaluée(s) avant les deny de Glorfindel : " + " ; ".join(parts),
+        fix=" ; ".join(fixes) + "  — placer les allow après la plage de Glorfindel (100–999)",
+        data={"precedence": issues},
+    )
 
 def _check_nsg(resource_id: str, connector) -> AuditCheck:
     rg = _rg(resource_id)
@@ -137,13 +170,15 @@ def _check_nsg(resource_id: str, connector) -> AuditCheck:
         # Multi-NIC: a VM with several NICs has several NSGs. Surface them all so the
         # War Room shows full coverage at rest (data.nsg = primary, kept for back-compat).
         extra = f" (+{len(nsgs) - 1} more NIC)" if len(nsgs) > 1 else ""
-        return AuditCheck(
+        access = AuditCheck(
             action="isolate_vm, block_suspicious_ip",
             name="NSG access",
             status="ok",
             message=f"NSG {nsg} readable ({rules} rules){extra}",
             data={"nsg": nsg, "nsg_scope": res.get("scope", ""), "nsgs": nsgs},
         )
+        precedence = _check_precedence(res.get("precedence") or [])
+        return [access, precedence] if precedence else access
 
     err = res.get("error", "")[:120]
     if res.get("iam"):

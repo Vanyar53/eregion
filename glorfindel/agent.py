@@ -8,7 +8,9 @@ from typing import TypedDict
 from langgraph.graph import StateGraph, END
 from rich.console import Console
 
-from glorfindel.actions import AUTONOMOUS_ACTIONS, HUMAN_APPROVAL_REQUIRED, CloudConnector
+from glorfindel.actions import (
+    AUTONOMOUS_ACTIONS, HUMAN_APPROVAL_REQUIRED, CloudConnector, PartialActionError, _first_line,
+)
 from glorfindel.config import load_glorfindel_config
 from glorfindel.detection_authoring import author_rule
 from glorfindel.incidents import IncidentRegistry
@@ -73,6 +75,7 @@ class GlorfindelState(TypedDict):
     llm_usage: dict | None      # LLM token usage from last litellm.completion call (P1 observability)
     autonomy_mode: str          # resolved autonomy mode for this asset (audit trail)
     mode_hold: bool             # True when an autonomous action was held back by human_only mode
+    cycle_error: str            # set when the cycle could not complete normally (→ cycle_failed escalation)
 
 
 # ── LLM decision tool schema ──────────────────────────────────────────────────
@@ -575,6 +578,183 @@ def _as_bool(v) -> bool:
     return bool(v)
 
 
+# Retries on the decision call (rate limit, timeout, transient provider error) before the
+# cycle gives up and escalates as `cycle_failed`.
+_LLM_RETRIES = 2
+
+
+def _confidence_threshold() -> float:
+    """GLORFINDEL_CONFIDENCE_THRESHOLD, defaulting to 0.7 when unset OR malformed.
+
+    A malformed value used to raise inside decide() and drop the whole cycle."""
+    raw = os.environ.get("GLORFINDEL_CONFIDENCE_THRESHOLD", "0.7")
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        _console.print(
+            f"[yellow]GLORFINDEL_CONFIDENCE_THRESHOLD={raw!r} invalide — seuil 0.7 utilisé[/yellow]"
+        )
+        return 0.7
+
+
+def _parse_decision(response) -> tuple[dict, object]:
+    """Extract and normalize the security_decision tool-call. Returns (d, raw_conf).
+
+    Extract the tool-call defensively. Despite tool_choice forcing it, some models
+    return NO tool-call (tool_calls None/[] → tool_calls[0] raises TypeError) or
+    malformed JSON arguments. Treat any of these as "no decision" → empty d → the
+    normalization below forces escalation (no action). Found by the provider smoke
+    (mistral-nemo: <error: TypeError> when tool_calls was None).
+
+    Hard-default + coerce EVERY decision field before anything reads it. A
+    non-conforming model can (a) omit a required field → KeyError crashes the cycle,
+    (b) return JSON booleans as STRINGS ("false" is truthy in Python → `not
+    d["escalate"]` is False → the confidence gate is silently bypassed), (c) send a
+    non-numeric confidence → float() raises. All seen in the multi-run provider smoke
+    (scripts/llm_smoke.py): llama3.2 string booleans, command-r7b omitted a field.
+    Defensive parsing so a quirky model can't crash or defeat a safety control.
+    """
+    import json
+    try:
+        tool_calls = getattr(response.choices[0].message, "tool_calls", None) or []
+        d = json.loads(tool_calls[0].function.arguments) if tool_calls else {}
+    except (json.JSONDecodeError, TypeError, AttributeError, IndexError):
+        d = {}
+    if not isinstance(d, dict):
+        d = {}
+
+    d["action"] = (d.get("action") or "").strip()
+    d["reasoning"] = d.get("reasoning", "")
+    d["explanation"] = d.get("explanation", "")
+    d["escalate"] = _as_bool(d.get("escalate"))
+    d["reversible"] = _as_bool(d.get("reversible")) if d.get("reversible") is not None else True
+    raw_conf = d.get("confidence")
+    try:
+        confidence = float(raw_conf) if raw_conf is not None else 0.0
+    except (TypeError, ValueError):
+        raw_conf = None
+        confidence = 0.0
+    d["confidence"] = confidence
+    # No action parsed → cannot act safely → force human review. `if not` rather than
+    # setdefault: the schema asks for "" when there is nothing to say, and an explicit ""
+    # used to survive setdefault → an escalation with no reason.
+    if not d["action"]:
+        d["escalate"] = True
+        if not d.get("escalation_reason"):
+            d["escalation_reason"] = "LLM returned no action — human review required"
+    return d, raw_conf
+
+
+def _apply_confidence_gate(d: dict, raw_conf, threshold: float) -> None:
+    """An autonomous action below the confidence threshold is escalated."""
+    if not d["escalate"] and d["action"] in AUTONOMOUS_ACTIONS:
+        if raw_conf is None or d["confidence"] < threshold:
+            shown = "unknown" if raw_conf is None else f"{d['confidence']:.0%}"
+            d["escalate"] = True
+            d["escalation_reason"] = f"Low confidence ({shown}) — human review required"
+
+
+def _apply_signal_guardrail(d: dict, signal: dict) -> None:
+    """Deterministic signal guardrail (model-independent).
+
+    The confidence gate trusts the model to report low confidence on a thin signal —
+    but weak models report HIGH confidence on a vague signal (provider smoke: 0.85 on
+    an uncharacterized row), defeating it. So, independently of the LLM: a DISRUPTIVE
+    autonomous action on a signal with NO recognized threat indicator (normalize_row →
+    generic-fallback / "unknown" / an uncurated Syslog line) is held for human review.
+    A characterized-but-ambiguous signal (e.g. syslog account creation) is NOT caught
+    here — that's the confidence gate's job. To "bless" a new indicator, add it to
+    detection_rules._INDICATOR_COLUMNS (or a Syslog pattern to _CURATED_SYSLOG_PATTERNS).
+    """
+    if d["escalate"] or d["action"] not in _DISRUPTIVE_AUTONOMOUS:
+        return
+    from glorfindel.detection_rules import has_recognized_indicator
+    raw = signal.get("raw_signal", {})
+    first_row = raw.get("detected_data") or raw.get("first_result_row") or {}
+    if not has_recognized_indicator(first_row, signal.get("ttp", "")):
+        d["escalate"] = True
+        d["escalation_reason"] = (
+            "Signal sans indicateur de menace reconnu — action disruptive "
+            f"'{d['action']}' retenue pour revue humaine (garde-fou déterministe, "
+            "indépendant de la confiance du LLM)."
+        )
+
+
+def _apply_release_precondition(d: dict, signal: dict) -> None:
+    """An autonomous release_isolation only answers a completed restore.
+
+    Releasing un-contains a VM. The signal guardrail can't cover it: a recovery_complete
+    signal carries no threat indicator, so putting release under that guardrail would
+    hold the legitimate post-restore release (and break the restore → release flow).
+    The rule is structural instead: `recovery_complete` — emitted by Glorfindel itself
+    after a completed restore — is the only event that justifies releasing without a
+    human. On any other signal, a model choosing release is held, whatever its
+    confidence.
+    """
+    if d["escalate"] or d["action"] != "release_isolation":
+        return
+    if signal.get("event") == "recovery_complete":
+        return
+    d["escalate"] = True
+    d["escalation_reason"] = (
+        f"Levée d'isolation proposée sur un événement '{signal.get('event', '?')}' — "
+        "retenue pour revue humaine (garde-fou déterministe : seule une restauration "
+        "terminée justifie une levée autonome)."
+    )
+
+
+def _apply_autonomy_mode(d: dict, mode: str) -> bool:
+    """Autonomy mode policy layer (above the gates — never a bypass).
+
+    human_only holds back EVERY autonomous action (even high-confidence ones) and
+    escalates it as mode_hold instead. The destructive gate and the confidence gate
+    remain active regardless. Returns True when the action was held by the mode.
+    """
+    if mode == "human_only" and not d["escalate"] and d["action"] in AUTONOMOUS_ACTIONS:
+        d["escalate"] = True
+        d["escalation_reason"] = (
+            f"Mode human_only — action '{d['action']}' recommandée "
+            f"(confiance {d['confidence']:.0%}) mais retenue : approbation humaine requise."
+        )
+        return True
+    return False
+
+
+_CYCLE_FAILED_STEPS = [
+    "Trier le signal à la main : la menace a été détectée mais pas analysée jusqu'au bout.",
+    "Vérifier le fournisseur LLM (GLORFINDEL_LLM_MODEL, clé API, quota, réseau) "
+    "si l'erreur vient de la décision.",
+    "Consulter runs/<run_id>_debug.jsonl et la console du watch pour l'erreur complète.",
+]
+
+
+def _decision_failed(state: GlorfindelState, exc: BaseException) -> GlorfindelState:
+    """State for a decision that could not be obtained (LLM call failed after retries).
+
+    The cycle continues to escalate_to_human → store_cycle, so the detected threat
+    reaches `pending` / the War Room / the debug file instead of one console line."""
+    err = _first_line(exc)
+    reason = (
+        f"Décision impossible : l'appel LLM a échoué après {_LLM_RETRIES} nouvelles "
+        f"tentatives ({err}). Le signal est détecté mais n'a pas été analysé — triage "
+        "humain requis."
+    )
+    return {
+        **state,
+        "reasoning": "",
+        "confidence": 0.0,
+        "action": "",
+        "reversible": True,
+        "explanation": "",
+        "escalate": True,
+        "escalation_reason": reason,
+        "suggested_steps": list(_CYCLE_FAILED_STEPS),
+        "llm_usage": None,
+        "mode_hold": False,
+        "cycle_error": f"decide: {err}",
+    }
+
+
 def decide(
     state: GlorfindelState, *, model: str, autonomy=None, autonomy_override: str | None = None
 ) -> GlorfindelState:
@@ -593,8 +773,11 @@ def decide(
     Tests inject an explicit AutonomyConfig to bypass the disk read.
     autonomy_override (session `glorfindel watch --mode`) is re-applied on top of
     the fresh config so it stays pinned for the session.
+
+    Gates, in order (each a pure helper, testable on its own): parsing defaults →
+    confidence gate → deterministic signal guardrail → release precondition →
+    autonomy mode. A failed LLM call (after retries) escalates as `cycle_failed`.
     """
-    import json
     import litellm
 
     signal = state["signal"]
@@ -606,93 +789,36 @@ def decide(
     if base_url:
         kwargs["base_url"] = base_url
 
-    response = litellm.completion(
-        model=model,
-        max_tokens=4096,
-        messages=[
-            {
-                "role": "system",
-                "content": [{"type": "text", "text": _SYSTEM_PROMPT,
-                              "cache_control": {"type": "ephemeral"}}],
-            },
-            {"role": "user", "content": user_content},
-        ],
-        tools=[_DECISION_TOOL],
-        tool_choice={"type": "function", "function": {"name": "security_decision"}},
-        **kwargs,
-    )
-
-    # Extract the tool-call defensively. Despite tool_choice forcing it, some models
-    # return NO tool-call (tool_calls None/[] → tool_calls[0] raises TypeError) or
-    # malformed JSON arguments. Treat any of these as "no decision" → empty d → the
-    # normalization below forces escalation (no action). Found by the provider smoke
-    # (mistral-nemo: <error: TypeError> when tool_calls was None).
     try:
-        tool_calls = getattr(response.choices[0].message, "tool_calls", None) or []
-        d = json.loads(tool_calls[0].function.arguments) if tool_calls else {}
-    except (json.JSONDecodeError, TypeError, AttributeError, IndexError):
-        d = {}
-    if not isinstance(d, dict):
-        d = {}
+        response = litellm.completion(
+            model=model,
+            max_tokens=4096,
+            messages=[
+                {
+                    "role": "system",
+                    "content": [{"type": "text", "text": _SYSTEM_PROMPT,
+                                  "cache_control": {"type": "ephemeral"}}],
+                },
+                {"role": "user", "content": user_content},
+            ],
+            tools=[_DECISION_TOOL],
+            tool_choice={"type": "function", "function": {"name": "security_decision"}},
+            num_retries=_LLM_RETRIES,
+            **kwargs,
+        )
+    except Exception as exc:
+        # Rate limit, timeout, auth, network: previously this escaped the graph and
+        # ended as one console line in the watch worker — a detected threat dropped
+        # with no escalation and no debug file.
+        return _decision_failed(state, exc)
 
-    # Hard-default + coerce EVERY decision field before anything reads it. A
-    # non-conforming model can (a) omit a required field → KeyError crashes the cycle,
-    # (b) return JSON booleans as STRINGS ("false" is truthy in Python → `not
-    # d["escalate"]` is False → the confidence gate is silently bypassed), (c) send a
-    # non-numeric confidence → float() raises. All seen in the multi-run provider smoke
-    # (scripts/llm_smoke.py): llama3.2 string booleans, command-r7b omitted a field.
-    # Defensive parsing so a quirky model can't crash or defeat a safety control.
-    d["action"] = (d.get("action") or "").strip()
-    d["reasoning"] = d.get("reasoning", "")
-    d["explanation"] = d.get("explanation", "")
-    d["escalate"] = _as_bool(d.get("escalate"))
-    d["reversible"] = _as_bool(d.get("reversible")) if d.get("reversible") is not None else True
-    raw_conf = d.get("confidence")
-    try:
-        confidence = float(raw_conf) if raw_conf is not None else 0.0
-    except (TypeError, ValueError):
-        raw_conf = None
-        confidence = 0.0
-    d["confidence"] = confidence
-    # No action parsed → cannot act safely → force human review.
-    if not d["action"]:
-        d["escalate"] = True
-        d.setdefault("escalation_reason", "LLM returned no action — human review required")
-    _threshold = float(os.environ.get("GLORFINDEL_CONFIDENCE_THRESHOLD", "0.7"))
-    if not d["escalate"] and d["action"] in AUTONOMOUS_ACTIONS:
-        if raw_conf is None or confidence < _threshold:
-            d["escalate"] = True
-            d["escalation_reason"] = (
-                f"Low confidence ({'unknown' if raw_conf is None else f'{confidence:.0%}'}) "
-                "— human review required"
-            )
+    d, raw_conf = _parse_decision(response)
+    _apply_confidence_gate(d, raw_conf, _confidence_threshold())
+    _apply_signal_guardrail(d, signal)
+    _apply_release_precondition(d, signal)
 
-    # ── Deterministic signal guardrail (model-independent) ──
-    # The confidence gate trusts the model to report low confidence on a thin signal —
-    # but weak models report HIGH confidence on a vague signal (provider smoke: 0.85 on
-    # an uncharacterized row), defeating it. So, independently of the LLM: a DISRUPTIVE
-    # autonomous action on a signal with NO recognized threat indicator (normalize_row →
-    # generic-fallback / "unknown") is held for human review. A characterized-but-
-    # ambiguous signal (e.g. syslog account creation) is NOT caught here — that's the
-    # confidence gate's job. To "bless" a new indicator column, add it to
-    # detection_rules._INDICATOR_COLUMNS.
-    if not d["escalate"] and d["action"] in _DISRUPTIVE_AUTONOMOUS:
-        from glorfindel.detection_rules import has_recognized_indicator
-        raw = signal.get("raw_signal", {})
-        first_row = raw.get("detected_data") or raw.get("first_result_row") or {}
-        if not has_recognized_indicator(first_row, signal.get("ttp", "")):
-            d["escalate"] = True
-            d["escalation_reason"] = (
-                "Signal sans indicateur de menace reconnu — action disruptive "
-                f"'{d['action']}' retenue pour revue humaine (garde-fou déterministe, "
-                "indépendant de la confiance du LLM)."
-            )
-
-    # ── Autonomy mode policy layer (above the gate — never a bypass) ──
-    # Resolve the mode for this asset. human_only holds back EVERY autonomous
-    # action (even high-confidence ones) and escalates it as mode_hold instead.
-    # The destructive gate and confidence gate above remain active regardless.
-    # Reload config fresh per cycle (hot-pickup) unless one is injected (tests).
+    # Resolve the mode for this asset. Reload config fresh per cycle (hot-pickup)
+    # unless one is injected (tests).
     if autonomy is None:
         try:
             autonomy = load_glorfindel_config().autonomy
@@ -705,14 +831,7 @@ def decide(
     resource_id = signal.get("resource_id", "")
     asset_name = resource_id.split("/")[-1] if resource_id else ""
     mode = autonomy.resolve(asset_name)
-    mode_hold = False
-    if mode == "human_only" and not d["escalate"] and d["action"] in AUTONOMOUS_ACTIONS:
-        d["escalate"] = True
-        mode_hold = True
-        d["escalation_reason"] = (
-            f"Mode human_only — action '{d['action']}' recommandée "
-            f"(confiance {confidence:.0%}) mais retenue : approbation humaine requise."
-        )
+    mode_hold = _apply_autonomy_mode(d, mode)
 
     usage = getattr(response, "usage", None)
     llm_usage: dict | None = None
@@ -760,6 +879,20 @@ def _extract_suspicious_ip(signal: dict) -> str:
     return ""
 
 
+def _backup_vault_target() -> tuple[str, str]:
+    """(vault, vault_rg) from glorfindel-config.yaml — the source the CLI and the War
+    Room already use. The connector's own default ("rsv-annatar") names the retired
+    sandbox vault: an agent-side snapshot must never fall back on it silently."""
+    try:
+        rsv = load_glorfindel_config().backup_vault()
+    except Exception:
+        rsv = None
+    vault = (rsv.vault_name if rsv and rsv.vault_name else "") \
+        or os.environ.get("GLORFINDEL_BACKUP_VAULT", "") or "rsv-annatar"
+    vault_rg = rsv.resource_group if rsv and rsv.resource_group else ""
+    return vault, vault_rg
+
+
 def execute_action(
     state: GlorfindelState,
     *,
@@ -768,10 +901,6 @@ def execute_action(
 ) -> GlorfindelState:
     """Execute the autonomous action via the cloud connector."""
     import time
-    try:
-        from azure.core.exceptions import HttpResponseError
-    except ImportError:  # azure SDK not installed (e.g. some test envs)
-        HttpResponseError = ()  # type: ignore[assignment]
     resource_id = state["signal"].get("resource_id", "unknown")
     action = state["action"]
 
@@ -785,20 +914,29 @@ def execute_action(
             ip = _extract_suspicious_ip(state["signal"])
             outcome = connector.block_suspicious_ip(ip, resource_id)
         elif action == "snapshot":
-            # Fire-and-forget on detection_timeout: we don't know if the VM is compromised,
-            # and blocking the queue for a 3-4h initial RSV backup is operationally unacceptable.
-            event = state["signal"].get("event", "")
-            snap_id = connector.snapshot(resource_id, wait=event != "detection_timeout")
-            outcome = {"snapshot_id": snap_id}
+            # Always fire-and-forget. The watch worker is serialized per VM, so a blocking
+            # snapshot holds every later signal for that VM until the backup ends: 4h25 in
+            # a real run (runs/watch-t1136-...-20260608T143425Z, an initial full backup) —
+            # a ransomware detection behind it would have waited while the disk encrypted.
+            # Completion is tracked as a job (jobs.reconcile_jobs); verify_snapshot reports
+            # an InProgress job as "no claim" (verified=None), never as success.
+            vault, vault_rg = _backup_vault_target()
+            snap_id = connector.snapshot(resource_id, vault=vault, wait=False, vault_rg=vault_rg)
+            outcome = {"snapshot_id": snap_id, "vault": vault}
+            if not state.get("dry_run") and getattr(connector, "dry_run", True) is False:
+                from glorfindel.jobs import record_snapshot_job
+                record_snapshot_job(resource_id, snap_id, vault, vault_rg, overwrite_running=False)
         else:
             outcome = {"status": "no_op", "action": action}
-    except (PermissionError, HttpResponseError) as e:
-        # The action could not run. Never let it abort the cycle silently — route to
-        # escalation so the operator sees the recommended action in `pending` / the
-        # War Room, and store_cycle writes the debug file.
-        #   PermissionError          → GLORFINDEL_READ_ONLY guard (observe-only)
-        #   HttpResponseError 403    → real IAM gap (SP lacks the write role)
-        #   other HttpResponseError  → transient/other Azure failure (still visible)
+    except Exception as e:
+        # The action could not run (or only partly). Never let it abort the cycle
+        # silently — route to escalation so the operator sees it in `pending` / the War
+        # Room, and store_cycle writes the debug file. This used to catch only
+        # PermissionError + Azure HttpResponseError: the connector's own RuntimeErrors
+        # ("Snapshot trigger failed", "no NSG", job not found…) and `requests` errors
+        # escaped to the watch worker and ended as one console line.
+        #   PermissionError / 403 / AuthorizationFailed → write_blocked (capability gap)
+        #   anything else                               → action_failed
         status_code = getattr(e, "status_code", None)
         is_auth = (
             isinstance(e, PermissionError)
@@ -809,19 +947,23 @@ def execute_action(
         # Azure HttpResponseError.__str__ repeats the message (summary line + a
         # "Message:" section) — take only the first line for the escalation reason so
         # the War Room modal doesn't show the same text twice. Full text → outcome.error.
-        err_summary = str(e).splitlines()[0].strip() if str(e) else str(e)
+        err_summary = _first_line(e)
+        outcome = {
+            "status": out_status,
+            "executed": False,
+            "action_pending": action,
+            "error": str(e),
+            "action_s": round(time.time() - t_start),
+        }
+        if isinstance(e, PartialActionError):
+            # Some NICs are covered and recorded in state; the escalation says so.
+            outcome.update(partial=True, covered=e.covered, failed_nic=e.failed_nic)
         return {
             **state,
             "escalate": True,
             "escalation_reason": f"Action '{action}' {'bloquée' if is_auth else 'échouée'} — {err_summary}",
             "mode_hold": False,
-            "outcome": {
-                "status": out_status,
-                "executed": False,
-                "action_pending": action,
-                "error": str(e),
-                "action_s": round(time.time() - t_start),
-            },
+            "outcome": outcome,
         }
     action_s = round(time.time() - t_start)
 
@@ -847,6 +989,11 @@ def escalate_to_human(state: GlorfindelState) -> GlorfindelState:
     _out_status = (state.get("outcome") or {}).get("status")
     if _out_status in ("write_blocked", "action_failed"):
         escalation_type = _out_status
+    # The cycle itself could not complete (LLM decision unavailable, internal error):
+    # the signal is real but unanalyzed — its own type so it is never mistaken for a
+    # judgment ("unknown action", "low confidence").
+    elif state.get("cycle_error"):
+        escalation_type = "cycle_failed"
     # mode_hold takes precedence: the action would have run autonomously but was
     # held back by the asset's human_only mode — NOT by low confidence. The
     # operator must understand it's a policy hold, with a one-click approve path.
@@ -932,9 +1079,10 @@ def verify_action(state: GlorfindelState, *, connector: CloudConnector) -> Glorf
     if action == "isolate_vm":
         verification = connector.verify_isolation(resource_id)
     elif action == "release_isolation":
-        # verified=True means isolation is GONE (success), verified=False means still active (failure)
-        iso = connector.verify_isolation(resource_id)
-        verification = {"verified": not iso.get("verified", True), "method": iso.get("method")}
+        # verified=True only when NO NIC carries an isolation rule any more. The former
+        # `not verify_isolation()` meant "at least one NIC uncovered": a release that
+        # failed on one NIC (or one direction) passed as verified.
+        verification = connector.verify_release(resource_id)
     elif action == "snapshot":
         verification = connector.verify_snapshot(outcome.get("snapshot_id", ""))
     elif action == "block_suspicious_ip":
@@ -969,10 +1117,6 @@ def verify_action(state: GlorfindelState, *, connector: CloudConnector) -> Glorf
 
 def store_cycle(state: GlorfindelState, *, memory: CycleMemory) -> GlorfindelState:
     """Persist the completed cycle to vector store and debug JSONL."""
-    import json
-    from datetime import datetime, timezone
-    from pathlib import Path
-
     signal = state["signal"]
     outcome = state.get("outcome") or {}
     run_id = signal.get("context", {}).get("run_id", "")
@@ -1026,26 +1170,39 @@ def store_cycle(state: GlorfindelState, *, memory: CycleMemory) -> GlorfindelSta
         _console.print(f"[yellow]store_cycle: notify_action failed: {exc}[/yellow]")
 
     # Debug JSONL — always written, even if ChromaDB or webhook failed
-    if run_id:
-        debug_record = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "signal": signal,
-            "past_cycles": state.get("past_cycles", []),
-            "reasoning": state["reasoning"],
-            "confidence": state["confidence"],
-            "action": state["action"],
-            "escalate": state["escalate"],
-            "escalation_reason": state.get("escalation_reason", ""),
-            "outcome": outcome,
-            "llm_usage": state.get("llm_usage"),
-            "resolved_autonomy_mode": state.get("autonomy_mode", ""),
-        }
-        out = Path("runs") / f"{run_id}_debug.jsonl"
-        out.parent.mkdir(parents=True, exist_ok=True)
-        with open(out, "a") as f:
-            f.write(json.dumps(debug_record, default=str) + "\n")
-
+    _write_debug_record(state)
     return state
+
+
+def _write_debug_record(state: GlorfindelState) -> None:
+    """Append the cycle to runs/<run_id>_debug.jsonl (no-op without a run_id)."""
+    import json
+    from datetime import datetime, timezone
+    from pathlib import Path
+
+    signal = state["signal"]
+    run_id = signal.get("context", {}).get("run_id", "")
+    if not run_id:
+        return
+    debug_record = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "signal": signal,
+        "past_cycles": state.get("past_cycles", []),
+        "reasoning": state.get("reasoning", ""),
+        "confidence": state.get("confidence", 0.0),
+        "action": state.get("action", ""),
+        "escalate": state.get("escalate", False),
+        "escalation_reason": state.get("escalation_reason", ""),
+        "outcome": state.get("outcome") or {},
+        "llm_usage": state.get("llm_usage"),
+        "resolved_autonomy_mode": state.get("autonomy_mode", ""),
+    }
+    if state.get("cycle_error"):
+        debug_record["cycle_error"] = state["cycle_error"]
+    out = Path("runs") / f"{run_id}_debug.jsonl"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with open(out, "a") as f:
+        f.write(json.dumps(debug_record, default=str) + "\n")
 
 
 def _detection_blocked(
@@ -1135,7 +1292,16 @@ def propose_detection_rule(
             f"  [dim]propose_detection_rule: RulePoller matched '{ttp}' recently "
             f"— detection_missed is a false negative, skipping proposal[/dim]"
         )
-        return state
+        # Nothing for a human to do: route straight to store_cycle (debug trail kept).
+        # Returning the bare state used to flow into escalate_to_human and record an
+        # empty `proposed_action` escalation — the noise this path exists to avoid.
+        return {
+            **state,
+            "escalate": False,
+            "escalation_reason": "",
+            "outcome": {"status": "skipped", "reason": "rulepoller_recently_matched",
+                        "executed": False},
+        }
 
     failed_query = ctx.get("failed_query") or raw.get("failed_query", "(unknown)")
     workspace_id = ctx.get("workspace_id", "")
@@ -1244,6 +1410,11 @@ The existing rule may be correct and no change needed."""
     }
 
 
+def _route_after_propose(state: GlorfindelState) -> str:
+    # A proposal / detection_blocked escalates; a skipped false negative only stores.
+    return "escalate_to_human" if state.get("escalate") else "store_cycle"
+
+
 def _route_after_verify(state: GlorfindelState) -> str:
     outcome = state.get("outcome") or {}
     # Only escalate on explicit False — None (not implemented) proceeds to store
@@ -1313,7 +1484,7 @@ def _build_graph(
     graph.add_conditional_edges("decide", _route_after_decide)
     graph.add_conditional_edges("execute_action", _route_after_execute)
     graph.add_conditional_edges("verify_action", _route_after_verify)
-    graph.add_edge("propose_detection_rule", "escalate_to_human")
+    graph.add_conditional_edges("propose_detection_rule", _route_after_propose)
     graph.add_edge("escalate_to_human", "store_cycle")
     graph.add_edge("store_cycle", END)
 
@@ -1381,8 +1552,76 @@ class GlorfindelAgent:
             "outcome": None,
             "autonomy_mode": "",
             "mode_hold": False,
+            "cycle_error": "",
         }
-        return self._graph.invoke(initial)
+        try:
+            return self._graph.invoke(initial)
+        except Exception as exc:
+            return record_cycle_failure(signal, exc, stage="graph", dry_run=self.dry_run)
+
+
+def record_cycle_failure(
+    signal: dict, exc: BaseException, *, stage: str, dry_run: bool = False
+) -> GlorfindelState:
+    """Last-resort boundary: a cycle that raised still leaves a visible trace.
+
+    Before this, an exception anywhere in a cycle (an unreadable file, a connector
+    error in verify, a detection backend down while polling an attack) reached the
+    watch worker's catch-all and ended as a single console line: a detected threat
+    dropped with no escalation, invisible in `pending` and the War Room. Records a
+    `cycle_failed` escalation (unless dry-run) and the debug line, then returns a
+    terminal state. Also used by the watch poll threads (stage="detection").
+    """
+    err = _first_line(exc)
+    reason = (
+        f"Cycle interrompu ({stage}) : {err} — le signal n'a pas été traité jusqu'au "
+        "bout, triage humain requis."
+    )
+    state: GlorfindelState = {
+        "signal": signal,
+        "past_cycles": [],
+        "incident": None,
+        "dry_run": dry_run,
+        "reasoning": "",
+        "confidence": 0.0,
+        "action": "",
+        "reversible": True,
+        "explanation": "",
+        "escalate": True,
+        "escalation_reason": reason,
+        "suggested_steps": list(_CYCLE_FAILED_STEPS),
+        "outcome": {
+            "status": "escalated",
+            "escalation_type": "cycle_failed",
+            "reason": reason,
+            "executed": False,
+            "error": str(exc)[:2000],
+        },
+        "autonomy_mode": "",
+        "mode_hold": False,
+        "cycle_error": f"{stage}: {err}",
+    }
+    if not dry_run:
+        try:
+            from glorfindel import escalations
+            escalations.record(
+                signal_id=signal.get("signal_id", ""),
+                resource_id=signal.get("resource_id", ""),
+                action="",
+                escalation_type="cycle_failed",
+                reason=reason,
+                run_id=signal.get("context", {}).get("run_id", ""),
+                suggested_steps=list(_CYCLE_FAILED_STEPS),
+                ttp=signal.get("ttp", ""),
+                severity=signal.get("severity", ""),
+            )
+        except Exception as rec_exc:  # the trace must not raise in turn
+            _console.print(f"[red]cycle_failed: escalation non enregistrée — {rec_exc}[/red]")
+    try:
+        _write_debug_record(state)
+    except Exception as dbg_exc:
+        _console.print(f"[red]cycle_failed: debug non écrit — {dbg_exc}[/red]")
+    return state
 
 
 def _build_user_message(

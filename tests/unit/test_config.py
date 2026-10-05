@@ -9,7 +9,6 @@ from glorfindel.config import (
     ExceptionConfig,
     MonitoringBackendConfig,
     ActionBackendConfig,
-    DiscoveryConfig,
     AutonomyConfig,
     AutonomyRule,
     load_glorfindel_config,

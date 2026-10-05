@@ -624,6 +624,7 @@ const ESC_LABELS = {
   mode_hold:           'mode human-only',
   write_blocked:       'write blocked',
   action_failed:       'action failed',
+  cycle_failed:        'signal not processed',
   ttl_exceeded:        'TTL exceeded',
 };
 
@@ -642,6 +643,7 @@ const _ESC_TITLES = {
   proposed_rule:  'Detection rule proposed',
   ttl_exceeded:   'Isolation TTL exceeded',
   proposed_action:'Unknown action proposed',
+  cycle_failed:   'Signal not processed — triage by hand',
 };
 function escTitle(e) {
   // Real remediation action → its label; otherwise a readable type title.
@@ -657,13 +659,45 @@ function escTitle(e) {
 // A real blast-radius ⚠ is reserved for when the backend flags a rule as unscoped.
 function _scopeNote(s) {
   if (!s || !s.nsg_scope) return '';
+  return _scopeChip(s) + _healthNote(s);
+}
+
+function _scopeChip(s) {
   const base = 'font-size:8px;font-weight:600;padding:0 4px;border-radius:3px;color:var(--dim);flex-shrink:0';
   if (s.nsg_scope === 'subnet') {
     if (s.blast_radius || s.scoped === false)
       return ` <span style="${base};color:var(--orange);background:color-mix(in srgb,var(--orange) 12%,transparent);border:1px solid color-mix(in srgb,var(--orange) 40%,transparent)" title="Rule on the shared subnet NSG and NOT scoped to this VM — affects the WHOLE subnet.">⚠ subnet-wide</span>`;
     return ` <span style="${base};border:1px solid color-mix(in srgb,var(--orange) 28%,var(--border))" title="Rule on the shared SUBNET NSG, scoped to this VM's IP. The NSG is shared with other subnet VMs; a legacy any-rule here would cover the whole subnet.">subnet NSG</span>`;
   }
+  if (s.shared)
+    return ` <span style="${base};border:1px solid color-mix(in srgb,var(--orange) 28%,var(--border))" title="NIC-level NSG shared with other NICs (other VMs or a subnet): the rule is scoped to this VM's IP so the other VMs are untouched.">shared NSG</span>`;
   return ` <span style="${base};border:1px solid var(--border)" title="Rule on the VM's own NIC NSG — affects this VM only.">VM NSG</span>`;
+}
+
+// Health chips that must never hide behind a plain ISOLATED / BLOCKED badge:
+//   partial  — some NICs only, or a release/unblock that left rules in place
+//   bypassed — an ALLOW rule is evaluated before our deny (its traffic still passes)
+function _healthNote(s) {
+  const base = 'font-size:8px;font-weight:700;padding:0 4px;border-radius:3px;flex-shrink:0;color:var(--red);border:1px solid color-mix(in srgb,var(--red) 45%,transparent);background:color-mix(in srgb,var(--red) 10%,transparent)';
+  let out = '';
+  const leftovers = [...(s.release_failed || []), ...(s.unblock_failed || [])];
+  if (s.partial || leftovers.length) {
+    const why = leftovers.length
+      ? 'Rules could not be removed:\n' + leftovers.join('\n')
+      : `Placed on some NICs only — failed on ${s.failed_nic || 'a NIC'}. The placed rules are recorded; Reset removes them.`;
+    out += ` <span style="${base}" title="${_attr(why)}">⚠ partial</span>`;
+  }
+  if (Array.isArray(s.shadowed) && s.shadowed.length) {
+    const why = 'ALLOW rule(s) evaluated BEFORE the Glorfindel deny — their traffic still passes:\n'
+      + s.shadowed.map(x => `${x.rule} (priority ${x.priority}, ${x.direction}, ports ${x.ports})`).join('\n');
+    out += ` <span style="${base}" title="${_attr(why)}">⚠ bypassed</span>`;
+  }
+  return out;
+}
+
+// Last meaningful lines of a CLI run (release / reset print the rules still in place).
+function _cliTail(text, n = 4) {
+  return (text || '').split('\n').map(l => l.trim()).filter(Boolean).slice(-n).join(' · ');
 }
 
 // Multi-NIC coverage chip — a VM can have several NICs, each behind its own NSG.
@@ -2238,7 +2272,7 @@ async function doRelease(vmName) {
     const d = await r.json();
     if (d.ok) toast('✓ Isolation released — ' + vmName + ' is back online');
     else if (d.capability_gap) toast('✗ ' + d.error, 8000);
-    else toast('✗ Release failed: ' + (d.error || d.stderr || '?'), 6000);
+    else toast('✗ Release failed: ' + (d.error || _cliTail(d.stdout) || d.stderr || '?'), 10000);
   } catch (e) { toast('✗ ' + e.message); }
   finally { _pendingActions.delete(vmName); refreshState(); }
 }
@@ -2329,7 +2363,7 @@ async function doRevert(vmName) {
     const d = await r.json();
     if (d.ok) toast('✓ Revert complete — ' + vmName + ' is clean');
     else if (d.capability_gap) toast('✗ ' + d.error, 8000);
-    else toast('✗ Revert failed: ' + (d.error || d.stderr || '?'), 6000);
+    else toast('✗ Revert failed: ' + (d.error || _cliTail(d.stdout) || d.stderr || '?'), 10000);
   } catch (e) { toast('✗ ' + e.message); }
   finally { _pendingActions.delete(vmName); refreshState(); }
 }

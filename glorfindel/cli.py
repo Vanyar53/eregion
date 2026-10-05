@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 from pathlib import Path
 
@@ -29,6 +30,67 @@ def _record_manual_action(action: str, resource_id: str, outcome: dict) -> None:
     }
     with open(runs / "manual_actions.jsonl", "a") as f:
         f.write(_json.dumps(record) + "\n")
+
+
+def _backup_vault_from_config(vault: str | None) -> tuple[str, str, str]:
+    """(vault, vault_rg, staging_storage) from glorfindel-config.yaml.
+
+    An explicit --vault wins for the name; the vault's resource group and the staging
+    account always come from config (a central vault lives outside the VM's RG — the
+    calls failed with ResourceNotFound when they used the VM's RG).
+    """
+    vault_rg, staging = "", ""
+    try:
+        from glorfindel.config import load_glorfindel_config
+        rsv = load_glorfindel_config().backup_vault()
+        if rsv:
+            if not vault or vault == "rsv-annatar":
+                vault = rsv.vault_name or vault
+            vault_rg = rsv.resource_group or ""
+            staging = rsv.restore_staging_storage or ""
+    except Exception:
+        pass
+    return vault or "rsv-annatar", vault_rg, staging
+
+
+def _parse_signal_line(raw: str):
+    """(data, Signal) for one JSONL line. Raises on a malformed line.
+
+    Unknown keys are dropped (same filtering as the RulePoller dispatch) so a field
+    added by a newer Annatar can't make Signal(**data) raise."""
+    from annatar.signals.schema import Signal
+    data = json.loads(raw)
+    if not isinstance(data, dict):
+        raise ValueError("not a JSON object")
+    sig = Signal(**{k: data.get(k, "") for k in Signal.__dataclass_fields__})
+    return data, sig
+
+
+def _read_new_signals(path: Path, offset: int, on_error) -> tuple[list, int]:
+    """Signals appended to `path` since `offset` → ([(data, Signal)], new_offset).
+
+    One bad line used to kill the whole watch (json.loads / Signal(**) unguarded, only
+    KeyboardInterrupt caught), and after a restart the lines written meanwhile were
+    skipped. Now: a malformed line is reported through on_error and skipped; a line
+    still being written (no trailing newline — Annatar writes from another container)
+    is left in place and read whole on the next poll.
+    """
+    out: list = []
+    with open(path) as f:
+        f.seek(offset)
+        while True:
+            line = f.readline()
+            if not line or not line.endswith("\n"):
+                break
+            offset = f.tell()
+            raw = line.strip()
+            if not raw:
+                continue
+            try:
+                out.append(_parse_signal_line(raw))
+            except Exception as exc:
+                on_error(exc)
+    return out, offset
 
 
 def _find_rules_file() -> str | None:
@@ -75,7 +137,8 @@ class _GlorfindelCli(click.Group):
     def invoke(self, ctx):
         try:
             return super().invoke(ctx)
-        except (click.ClickException, click.exceptions.Abort, SystemExit, KeyboardInterrupt):
+        except (click.ClickException, click.exceptions.Abort, click.exceptions.Exit,
+                SystemExit, KeyboardInterrupt):
             raise
         except Exception as e:  # noqa: BLE001 — deliberate CLI boundary
             if os.environ.get("GLORFINDEL_DEBUG"):
@@ -149,8 +212,11 @@ def release(resource_id: str, dry_run: bool, yes: bool):
     console.print(f"  Dry-run  : {dry_run}\n")
 
     if not dry_run:
-        verification = connector.verify_isolation(resource_id)
-        if not verification.get("verified"):
+        # "Nothing to release" means NO NIC still carries an isolation rule. The former
+        # test (`not verify_isolation()`) also matched a PARTIALLY isolated VM — one NIC
+        # still cut off — and then cleared its state, leaving the rule orphaned.
+        verification = connector.verify_release(resource_id)
+        if verification.get("verified"):
             # NSG already clean — still clear any stale state file so War Room updates
             from glorfindel.actions import _clear_isolation_state, _parse_vm_resource_id
             _, vm_name = _parse_vm_resource_id(resource_id)
@@ -167,6 +233,13 @@ def release(resource_id: str, dry_run: bool, yes: bool):
 
     if dry_run:
         console.print("[yellow]DRY RUN — no changes made.[/yellow]")
+    elif result.get("status") == "release_partial":
+        console.print("[red]✗ Isolation partiellement levée — règles encore en place :[/red]")
+        for item in result.get("failed", []):
+            console.print(f"  • {item}")
+        console.print("[dim]État conservé : relancer `glorfindel release` après correction.[/dim]")
+        _record_manual_action("release_isolation", resource_id, result)
+        sys.exit(2)
     else:
         console.print(f"[green]✓ Isolation released.[/green]  ({result})")
         _record_manual_action("release_isolation", resource_id, result)
@@ -200,6 +273,12 @@ def unblock(ip: str, resource_id: str, dry_run: bool, yes: bool):
         console.print("[yellow]DRY RUN — no changes made.[/yellow]")
     elif result["status"] == "not_found":
         console.print(f"[yellow]No block rules found for {ip} — already removed?[/yellow]")
+    elif result["status"] == "unblock_partial":
+        console.print(f"[red]✗ Blocage de {ip} partiellement retiré — règles encore en place :[/red]")
+        for item in result.get("failed", []):
+            console.print(f"  • {item}")
+        _record_manual_action("unblock_ip", resource_id, {**result, "ip": ip})
+        sys.exit(2)
     else:
         console.print(f"[green]✓ Unblocked {ip}.[/green]  Deleted: {result['deleted_rules']}")
         _record_manual_action("unblock_ip", resource_id, {**result, "ip": ip})
@@ -374,7 +453,20 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
                         f"  TTP      : {sig.ttp}  |  Severity: [red]{sig.severity}[/red]"
                     )
                     console.print(f"  Event    : attack_started → polling {src}...\n")
-                resolved = resolve_attack_started(data)
+                try:
+                    resolved = resolve_attack_started(data)
+                except Exception as exc:
+                    # A persistent backend failure raises (detectors no longer swallow
+                    # it). This thread used to die with it: the attack was never
+                    # enqueued, and nothing said detection had been blind.
+                    from glorfindel.agent import record_cycle_failure
+                    record_cycle_failure(data, exc, stage="detection", dry_run=dry_run)
+                    with _output_lock:
+                        console.print(
+                            f"[red]Détection impossible pour {sig.signal_id} :[/red] {exc} "
+                            "— escalade cycle_failed enregistrée"
+                        )
+                    return
                 resolved_sig = Signal(**{k: resolved.get(k, getattr(sig, k, ""))
                                          for k in sig.__dataclass_fields__})
                 _get_or_start_worker(resource_id).put((resolved, resolved_sig))
@@ -401,16 +493,13 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
                 console.print(f"[dim]New run: {path.name}[/dim]")
 
         for path in list(tracked):
-            with open(path) as f:
-                f.seek(tracked[path])
-                for raw in f:
-                    raw = raw.strip()
-                    if not raw:
-                        continue
-                    data = json.loads(raw)
-                    sig = Signal(**data)
-                    _dispatch(data, sig)   # non-blocking — worker thread takes over
-                tracked[path] = f.tell()
+            signals, tracked[path] = _read_new_signals(
+                path, tracked[path],
+                lambda exc, name=path.name: console.print(
+                    f"[yellow]Ligne de signal ignorée ({name}) : {exc}[/yellow]"),
+            )
+            for data, sig in signals:
+                _dispatch(data, sig)   # non-blocking — worker thread takes over
 
     from datetime import datetime, timezone
     from glorfindel.actions import AzureConnector, active_isolations
@@ -618,12 +707,17 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
     _write_heartbeat()
     try:
         while True:
-            _poll()
-            _ttl_check_counter += 1
-            if _ttl_check_counter % 30 == 0:  # check TTL every 30 polls (~1 min at 2s interval)
-                _check_ttl()
-                _reconcile_jobs()
-                _write_heartbeat()
+            try:
+                _poll()
+                _ttl_check_counter += 1
+                if _ttl_check_counter % 30 == 0:  # check TTL every 30 polls (~1 min at 2s interval)
+                    _check_ttl()
+                    _reconcile_jobs()
+                    _write_heartbeat()
+            except Exception as exc:
+                # The daemon outlives a bad iteration (unreadable file, transient Azure
+                # error in the TTL/jobs housekeeping); the next poll retries.
+                console.print(f"[red]watch: itération en erreur — {exc}[/red]")
             time.sleep(interval)
     except KeyboardInterrupt:
         if _rule_poller:
@@ -652,18 +746,8 @@ def snapshot(resource_id: str, vault: str | None, dry_run: bool, yes: bool, wait
         annatar run <scenario.yaml>
     """
     from glorfindel.actions import AzureConnector
-    from glorfindel.config import load_glorfindel_config
 
-    if vault is None:
-        try:
-            cfg = load_glorfindel_config()
-            for b in cfg.action_backends:
-                if b.type == "azure_backup_vault":
-                    vault = b.vault_name
-                    break
-        except Exception:
-            pass
-        vault = vault or "rsv-annatar"
+    vault, vault_rg, _ = _backup_vault_from_config(vault)
 
     connector = AzureConnector(dry_run=dry_run)
 
@@ -685,8 +769,8 @@ def snapshot(resource_id: str, vault: str | None, dry_run: bool, yes: bool, wait
     if not wait:
         from glorfindel.jobs import start_snapshot
         console.print("[cyan]->[/cyan] Triggering on-demand backup (fire-and-forget)...")
-        job = start_snapshot(resource_id, connector, vault)
-        console.print(f"[green]✓ Backup job started.[/green]")
+        job = start_snapshot(resource_id, connector, vault, vault_rg=vault_rg)
+        console.print("[green]✓ Backup job started.[/green]")
         console.print(f"  job_id : [dim]{job['job_id']}[/dim]")
         console.print(f"  snap_id: [dim]{job['snap_id']}[/dim]")
         console.print(f"\n[dim]Check status: glorfindel jobs {resource_id} --refresh[/dim]")
@@ -697,7 +781,7 @@ def snapshot(resource_id: str, vault: str | None, dry_run: bool, yes: bool, wait
     import time as _time
     console.print("[cyan]->[/cyan] Triggering on-demand backup (blocking)...")
     t0 = _time.time()
-    snap_id = connector.snapshot(resource_id, vault=vault, wait=True)
+    snap_id = connector.snapshot(resource_id, vault=vault, wait=True, vault_rg=vault_rg)
     elapsed = round(_time.time() - t0)
 
     elapsed_label = f"{elapsed // 60}min {elapsed % 60}s"
@@ -758,9 +842,9 @@ def jobs(resource_id: str, refresh: bool):
     if job.get("error"):
         console.print(f"  [red]error   : {job.get('error')}[/red]")
     if status == "InProgress":
-        console.print(f"\n[dim]Run with --refresh to poll Azure for current status.[/dim]")
+        console.print("\n[dim]Run with --refresh to poll Azure for current status.[/dim]")
     if status == "Completed" and job.get("type") == "restore":
-        console.print(f"\n[yellow]Restore done. Next steps:[/yellow]")
+        console.print("\n[yellow]Restore done. Next steps:[/yellow]")
         rg = job.get("rg", "<rg>")
         console.print(f"  1. az vm start -g {rg} -n {vm_name}")
         console.print(f"  2. glorfindel release {resource_id} --yes")
@@ -798,16 +882,7 @@ def restore(resource_id: str, vault: str, dry_run: bool, yes: bool, keep_isolate
     # Resolve vault + staging storage from glorfindel-config.yaml (source of truth,
     # namespaced per Celebrimbor instance). Overrides the stale CLI defaults; the staging
     # SA is required by the IaaS restore and must never be a hardcoded name.
-    staging_storage = ""
-    try:
-        from glorfindel.config import load_glorfindel_config
-        rsv = load_glorfindel_config().backup_vault()
-        if rsv:
-            if rsv.vault_name and vault == "rsv-annatar":
-                vault = rsv.vault_name
-            staging_storage = rsv.restore_staging_storage
-    except Exception:
-        pass
+    vault, vault_rg, staging_storage = _backup_vault_from_config(vault)
 
     console.rule("[bold yellow]Glorfindel — Restore from Backup[/bold yellow]")
     console.print(f"  Resource : {resource_id}")
@@ -838,8 +913,8 @@ def restore(resource_id: str, vault: str, dry_run: bool, yes: bool, keep_isolate
         from glorfindel.jobs import start_restore
         console.print("[cyan]->[/cyan] Triggering restore (fire-and-forget — VM deallocation ~1-2 min)...")
         job = start_restore(resource_id, connector, vault, before,
-                            staging_storage=staging_storage)
-        console.print(f"[green]✓ Restore job started.[/green]")
+                            staging_storage=staging_storage, vault_rg=vault_rg)
+        console.print("[green]✓ Restore job started.[/green]")
         console.print(f"  job_id  : [dim]{job['job_id']}[/dim]")
         console.print(f"  azure_job: [dim]{job.get('restore_job_name', '?')}[/dim]")
         console.print(f"  RP      : [dim]{job.get('recovery_point_time', '?')}[/dim]")
@@ -851,7 +926,8 @@ def restore(resource_id: str, vault: str, dry_run: bool, yes: bool, keep_isolate
     import time as _time
     console.print("[cyan]->[/cyan] Triggering restore (blocking ~15-30 min)...")
     t0 = _time.time()
-    result = connector.restore_from_backup(resource_id, vault=vault, before_attack_time=before, wait=True, staging_storage=staging_storage)
+    result = connector.restore_from_backup(resource_id, vault=vault, before_attack_time=before, wait=True,
+                                           staging_storage=staging_storage, vault_rg=vault_rg)
     rto_s = round(_time.time() - t0)
 
     restore_label = f"{rto_s // 60}min {rto_s % 60}s"
@@ -1133,11 +1209,45 @@ def list_active():
         console.print()
 
 
-def _do_reset(resource_id: str, yes: bool, dry_run: bool) -> None:
+def _do_reset_from_azure(resource_id: str, yes: bool, dry_run: bool) -> None:
+    """reset --from-azure: the rules on Azure are the truth, local state is not needed."""
+    from glorfindel.actions import AzureConnector
+
+    vm_short = resource_id.split("/")[-1]
+    connector = AzureConnector(dry_run=False)
+    preview = connector.sweep_vm_rules(resource_id, dry_run=True)
+    console.rule(f"[bold yellow]Reset (source : Azure) — {vm_short}[/bold yellow]")
+    if not preview["deleted"]:
+        console.print(f"[green]Aucune règle Glorfindel de {vm_short} sur ses NSG.[/green]")
+    for name in preview["deleted"]:
+        console.print(f"  • supprimer {name}")
+    for name in preview["kept_perimeter"]:
+        console.print(f"  [dim]• conservée (blocage de périmètre, toutes les VMs) : {name}[/dim]")
+    if dry_run or not preview["deleted"]:
+        return
+    if not yes:
+        click.confirm("\nProceed?", abort=True)
+    result = connector.sweep_vm_rules(resource_id)
+    if result["failed"]:
+        console.print("\n[red]✗ Reset incomplet — règles encore en place :[/red]")
+        for item in result["failed"]:
+            console.print(f"  • {item}")
+        _record_manual_action("reset", resource_id, {"status": "partial", "vm": vm_short,
+                                                     "source": "azure", "failed": result["failed"]})
+        sys.exit(2)
+    console.print(f"\n[green]✓ {len(result['deleted'])} règle(s) retirée(s), états locaux effacés.[/green]")
+    console.print(f"[dim]{result['note']}[/dim]")
+    _record_manual_action("reset", resource_id, {"status": "clean", "vm": vm_short, "source": "azure"})
+
+
+def _do_reset(resource_id: str, yes: bool, dry_run: bool, from_azure: bool = False) -> None:
     """Shared implementation for reset/revert."""
     from glorfindel.actions import active_blocks, active_isolations, AzureConnector
 
     resource_id = _resolve_resource_id(resource_id)
+    if from_azure:
+        _do_reset_from_azure(resource_id, yes, dry_run)
+        return
     # Case-insensitive match: Azure ARM IDs are case-insensitive but Python == is not.
     # A case mismatch left an orphan isolation state file ("Nothing to reset" while
     # `list` still showed ISOLATED). release_isolation clears the local file even when
@@ -1161,13 +1271,26 @@ def _do_reset(resource_id: str, yes: bool, dry_run: bool) -> None:
         click.confirm("\nProceed?", abort=True)
 
     connector = AzureConnector(dry_run=dry_run)
+    leftovers: list[str] = []
     if isolations:
         r = connector.release_isolation(resource_id)
         console.print(f"  [cyan]release_isolation[/cyan] → {r.get('status', '?')}")
+        leftovers += r.get("failed", [])
     for b in blocks:
         r = connector.unblock_ip(b["ip"], resource_id)
         console.print(f"  [cyan]unblock {b['ip']}[/cyan] → {r.get('status', '?')}")
+        leftovers += r.get("failed", [])
 
+    if leftovers:
+        # Say what is still in place instead of "is clean": these rules still cut the
+        # VM off or block the IP, and their state is kept for a retry.
+        console.print(f"\n[red]✗ Reset incomplet — {vm_short} garde des règles :[/red]")
+        for item in leftovers:
+            console.print(f"  • {item}")
+        if not dry_run:
+            _record_manual_action("reset", resource_id, {"status": "partial", "vm": vm_short,
+                                                         "failed": leftovers})
+        sys.exit(2)
     console.print(f"\n[green]✓ Reset complete — {vm_short} is clean.[/green]")
     if not dry_run:
         _record_manual_action("reset", resource_id, {"status": "clean", "vm": vm_short})
@@ -1177,13 +1300,18 @@ def _do_reset(resource_id: str, yes: bool, dry_run: bool) -> None:
 @click.argument("resource_id")
 @click.option("--yes", is_flag=True, help="Skip confirmation prompt.")
 @click.option("--dry-run", is_flag=True)
-def reset(resource_id: str, yes: bool, dry_run: bool):
+@click.option("--from-azure", is_flag=True,
+              help="Use the NSG rules on Azure as the source of truth (works without local "
+                   "state): remove every glorfindel-* rule that belongs to this VM.")
+def reset(resource_id: str, yes: bool, dry_run: bool, from_azure: bool):
     """Reset a VM to clean state: release isolation + unblock all IPs.
 
     Use when a VM has both isolation and IP blocks and you want to clear
     everything in one command. For finer control use 'release' or 'unblock'.
+    With --from-azure, local state is not needed (lost state file, another
+    container's state): the VM's own Glorfindel rules are found on its NSGs.
     """
-    _do_reset(resource_id, yes, dry_run)
+    _do_reset(resource_id, yes, dry_run, from_azure)
 
 
 @cli.command("revert", hidden=True)
@@ -1739,13 +1867,19 @@ def dashboard():
 
 
 @cli.command("war-room")
-@click.option("--host", default="0.0.0.0", show_default=True)
+@click.option("--host", default="127.0.0.1", show_default=True,
+              help="Listen address. Loopback by default: the War Room triggers real Azure "
+                   "actions. To expose it, set GLORFINDEL_WARROOM_TOKEN first.")
 @click.option("--port", default=7007, show_default=True)
 def war_room(host: str, port: int):
     """Start the War Room web UI (cards + live feed + action buttons).
 
     Requires: pip install eregion[war-room]
     Then open http://localhost:7007 in a browser.
+
+    With GLORFINDEL_WARROOM_TOKEN set, every page and API call requires the token:
+    open http://<host>:7007/?token=<token> once (it is then kept in a cookie), or send
+    `Authorization: Bearer <token>` from scripts.
     """
     from glorfindel.api import serve
     serve(host=host, port=port)

@@ -45,9 +45,11 @@ resource "azurerm_network_security_group" "multinic_nic0" {
   resource_group_name = azurerm_resource_group.multinic[0].name
   tags                = local.multinic_tags
 
+  # 1000, hors de la plage 100–999 de Glorfindel (voir network.tf) : en 100, un
+  # block_suspicious_ip (deny à partir de 200) serait contourné pour SSH.
   security_rule {
     name                       = "allow-ssh"
-    priority                   = 100
+    priority                   = 1000
     direction                  = "Inbound"
     access                     = "Allow"
     protocol                   = "Tcp"

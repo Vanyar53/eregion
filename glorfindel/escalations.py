@@ -36,6 +36,10 @@ _ESCALATION_LABELS = {
     "proposed_rule": "règle de détection proposée",
     "posture_gap": "gap de posture",
     "detection_blocked": "détection empêchée (règle déjà en place)",
+    "mode_hold": "action retenue (mode human_only)",
+    "write_blocked": "écriture refusée (droits)",
+    "action_failed": "action en échec",
+    "cycle_failed": "signal non traité (cycle interrompu)",
 }
 
 

@@ -119,3 +119,8 @@ topologies:
   # 7. Deux Recovery Services Vaults → résolution multi-vault (4ba8134/754aea0)
   two_rsv:
     enabled: false
+
+  # 8. Deux VMs dont les NICs partagent UN NSG de NIC → isolation d'une VM sans
+  #    toucher l'autre (revue 2026-10 : any/any sur un NSG partagé coupait les deux)
+  sharednsg:
+    enabled: false

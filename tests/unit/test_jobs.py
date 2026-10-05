@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from unittest.mock import MagicMock
-from pathlib import Path
 
 import pytest
 
@@ -66,7 +65,8 @@ def test_start_snapshot_calls_connector_wait_false(jobs_dir):
 
     job = start_snapshot(_RESOURCE_ID, connector, vault="rsv-annatar")
 
-    connector.snapshot.assert_called_once_with(_RESOURCE_ID, vault="rsv-annatar", wait=False)
+    connector.snapshot.assert_called_once_with(
+        _RESOURCE_ID, vault="rsv-annatar", wait=False, vault_rg="")
     assert job["type"] == "snapshot"
     assert job["status"] == "InProgress"
     assert job["snap_id"] == "rsv:vault/rg/job123"
@@ -94,7 +94,7 @@ def test_start_restore_calls_connector_wait_false(jobs_dir):
 
     connector.restore_from_backup.assert_called_once_with(
         _RESOURCE_ID, vault="rsv-annatar", before_attack_time="2026-06-08T09:00:00Z",
-        wait=False, staging_storage="ststaging",
+        wait=False, staging_storage="ststaging", vault_rg="",
     )
     assert job["type"] == "restore"
     assert job["status"] == "InProgress"
@@ -256,3 +256,64 @@ def test_reconcile_azure_error_falls_through_to_staleness(jobs_dir):
                     "status": "InProgress", "started_at": _hours_ago(240), "snap_id": "x"})
     reconcile_jobs(connector=conn)
     assert get_job("vm")["status"] == "Stale"
+
+
+# ── Vault RG + agent snapshot tracking (revue 2026-09) ────────────────────────
+
+def test_start_restore_passes_vault_rg_and_records_it(jobs_dir):
+    """A central vault lives in its own RG: start_restore passes it to the connector and
+    stores it, so refresh_job polls the job where it actually is."""
+    from glorfindel.jobs import start_restore
+    connector = MagicMock()
+    connector.restore_from_backup.return_value = {
+        "job_name": "restore-job-abc", "rg": "rg-backup", "vault_rg": "rg-backup",
+        "recovery_point": "rp-001", "recovery_point_time": "2026-06-08T10:00:00Z",
+    }
+    job = start_restore(_RESOURCE_ID, connector, vault="rsv-central", vault_rg="rg-backup",
+                        staging_storage="st")
+    assert connector.restore_from_backup.call_args.kwargs["vault_rg"] == "rg-backup"
+    assert job["vault_rg"] == "rg-backup"
+
+
+def test_refresh_job_restore_polls_the_vault_rg(jobs_dir, monkeypatch):
+    """refresh_job must query the job in the VAULT's RG, not the VM's."""
+    import sys
+    import types
+    from glorfindel.jobs import refresh_job
+
+    calls = []
+
+    class _FakeClient:
+        def __init__(self, *a, **k):
+            self.job_details = types.SimpleNamespace(get=self._get)
+
+        def _get(self, vault, rg, name):
+            calls.append((vault, rg, name))
+            return types.SimpleNamespace(properties=types.SimpleNamespace(status="Completed"))
+
+    fake_mod = types.ModuleType("azure.mgmt.recoveryservicesbackup")
+    fake_mod.RecoveryServicesBackupClient = _FakeClient
+    monkeypatch.setitem(sys.modules, "azure.mgmt.recoveryservicesbackup", fake_mod)
+    connector = MagicMock()
+    job = {"type": "restore", "status": "InProgress", "vault": "rsv-central",
+           "rg": "rg-vm", "vault_rg": "rg-backup", "restore_job_name": "j1"}
+    refresh_job(job, connector)
+    assert calls == [("rsv-central", "rg-backup", "j1")]
+    assert job["status"] == "Completed"
+
+
+def test_record_snapshot_job_keeps_a_running_job(jobs_dir):
+    """The agent's autonomous snapshot must not overwrite a job still InProgress for the
+    VM (one file per VM) — a running restore would lose its tracking."""
+    from glorfindel.jobs import get_job, record_snapshot_job, save_job
+    save_job(_VM_NAME, {"job_id": "restore-1", "type": "restore", "status": "InProgress"})
+    assert record_snapshot_job(_RESOURCE_ID, "rsv:v/rg/j", "v", overwrite_running=False) is None
+    assert get_job(_VM_NAME)["job_id"] == "restore-1"
+
+
+def test_record_snapshot_job_writes_when_no_running_job(jobs_dir):
+    from glorfindel.jobs import get_job, record_snapshot_job
+    job = record_snapshot_job(_RESOURCE_ID, "rsv:v/rg-b/j", "v", "rg-b", overwrite_running=False)
+    assert job is not None and job["status"] == "InProgress"
+    assert get_job(_VM_NAME)["snap_id"] == "rsv:v/rg-b/j"
+    assert get_job(_VM_NAME)["vault_rg"] == "rg-b"

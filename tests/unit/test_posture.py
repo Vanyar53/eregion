@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from glorfindel.config import GlorfindelConfig, ActionBackendConfig
 from glorfindel.discovery import DiscoveredAsset
@@ -395,3 +393,45 @@ def test_connector_exception_does_not_raise(tmp_path):
     checker = PostureChecker(_cfg(), conn, dry_run=False)
     gaps = checker._check_asset(_asset())
     assert gaps == []  # exceptions swallowed gracefully
+
+
+# ── Revue 2026-09 : une erreur transitoire n'est pas un gap ───────────────────
+
+def test_transient_backup_error_is_not_a_critical_gap(tmp_path):
+    """A transport hiccup used to mint a critical `backup_linked` gap ("not linked to
+    the vault") — a phantom fix for the operator. audit already routed it to warn."""
+    conn = _connector()
+    conn.check_backup_points.return_value = {
+        "ok": False, "iam": False, "error": "ConnectionError: Connection aborted."}
+    conn.check_nsg_access.return_value = {
+        "ok": False, "iam": False, "error": "ServiceRequestError: timed out"}
+    checker = PostureChecker(_cfg(), conn, dry_run=False)
+    assert checker._check_asset(_asset()) == []
+    assert ("vm-test", "backup_linked") in checker._inconclusive
+    assert ("vm-test", "nsg_reachable") in checker._inconclusive
+
+
+def test_iam_error_is_still_a_gap(tmp_path):
+    """An authorization failure is a real capability gap — not transient."""
+    conn = _connector()
+    conn.check_nsg_access.return_value = {
+        "ok": False, "iam": True, "error": "AuthorizationFailed — timed out waiting"}
+    checker = PostureChecker(_cfg(), conn, dry_run=False)
+    assert [g.check for g in checker._check_asset(_asset())] == ["nsg_reachable"]
+
+
+def test_transient_error_does_not_resolve_an_existing_gap(tmp_path):
+    """Inconclusive this cycle → the standing gap neither resolves nor re-fires."""
+    conn = _connector()
+    conn.check_backup_points.return_value = {"ok": False, "error": "connection aborted"}
+    checker = PostureChecker(_cfg(), conn, dry_run=False)
+    key = PostureGap(resource_id=_asset().resource_id, vm_name="vm-test",
+                     check="backup_linked", severity="critical", message="m").key
+    checker._state = {key: {"status": "pending", "vm_name": "vm-test",
+                            "check": "backup_linked", "escalation_id": "esc-1"}}
+    with patch("glorfindel.escalations.resolve") as mock_resolve, \
+         patch.object(checker, "_save_state"), \
+         patch.object(checker, "_vault_inventory", return_value={}):
+        checker.check_and_escalate([_asset()])
+    mock_resolve.assert_not_called()
+    assert checker._state[key]["status"] == "pending"

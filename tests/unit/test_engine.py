@@ -38,9 +38,10 @@ RESOURCE_ID = (
 )
 
 
-def _make_executor(tags=None):
+def _make_executor(tags=None, vm_tags=None):
     executor = MagicMock()
     executor.get_resource_group_tags.return_value = tags or {"annatar-test": "true"}
+    executor.get_vm_tags.return_value = vm_tags if vm_tags is not None else {"annatar-test": "true"}
     executor.resource_id = RESOURCE_ID
     executor.run_script.return_value = "INTEGRITY_PASS"
     executor.verify_restore_integrity.return_value = True
@@ -315,3 +316,45 @@ def test_watch_blocks_ignores_unrelated_ips(tmp_path):
 
     runs_dir = tmp_path / "runs"
     assert not runs_dir.exists() or not any(runs_dir.glob("*_signals.jsonl"))
+
+
+# ── Revue 2026-09 : la porte de sécurité refuse vraiment (RG ET VM) ───────────
+
+def _run_and_list_signals(tmp_path, monkeypatch, executor):
+    monkeypatch.chdir(tmp_path)
+    engine = Engine()
+    with patch.object(engine, "_get_executor_collector", return_value=(executor, _make_collector())), \
+         patch.object(engine, "_wait_and_emit_feedback"):
+        outcome = engine.run(EXFIL_YAML, skip_confirm=True)
+    files = list((tmp_path / "runs").glob("*_signals.jsonl"))
+    return outcome, files
+
+
+def test_engine_refuses_an_untagged_resource_group_and_emits_nothing(tmp_path, monkeypatch):
+    executor = _make_executor(tags={"env": "production"})
+    outcome, files = _run_and_list_signals(tmp_path, monkeypatch, executor)
+    assert outcome.error and "safety" in outcome.error
+    assert files == []
+    executor.run_script.assert_not_called()
+
+
+def test_engine_refuses_an_untagged_vm_in_a_tagged_group(tmp_path, monkeypatch):
+    """The RG tag alone used to authorize EVERY VM of the group — including an untagged
+    production VM sharing it (check_vm existed but had no call site)."""
+    executor = _make_executor(vm_tags={"env": "production"})
+    outcome, files = _run_and_list_signals(tmp_path, monkeypatch, executor)
+    assert outcome.error and "VM missing tag" in outcome.error
+    assert files == []
+    executor.run_script.assert_not_called()
+
+
+def test_clean_refuses_an_untagged_vm(monkeypatch):
+    """`annatar clean` rewrites the data disk: same gate as `run`."""
+    import pytest
+    from annatar.runner import initializer
+
+    executor = _make_executor(vm_tags={})
+    monkeypatch.setattr("annatar.executors.azure_vm.AzureVMExecutor", lambda target: executor)
+    with pytest.raises(RuntimeError, match="Safety check failed"):
+        initializer.InitRunner().clean(EXFIL_YAML)
+    executor.run_script.assert_not_called()

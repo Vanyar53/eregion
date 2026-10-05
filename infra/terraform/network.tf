@@ -21,9 +21,18 @@ resource "azurerm_network_security_group" "celebrimbor" {
   resource_group_name = azurerm_resource_group.celebrimbor.name
   tags                = local.common_tags
 
+  # Priorité 1000, PAS 100 : Glorfindel pose ses deny d'isolation / de blocage dans la
+  # plage 100–999. Une allow à 100 passait avant eux (premier match gagnant) : SSH restait
+  # ouvert sur une VM « isolée » et un brute force SSH traversait le blocage de son IP,
+  # alors que la vérification (présence des règles) disait verified=True. Constat banc
+  # 2026-10-05 ; `glorfindel audit` le signale désormais (check « NSG precedence »).
+  #
+  # ⚠ Règles EN LIGNE : un `terraform apply` sur ce NSG supprime toute règle absente de
+  # ce fichier — y compris les règles glorfindel-* d'une isolation ou d'un blocage en
+  # cours. `glorfindel list` doit être vide avant un apply.
   security_rule {
     name                       = "allow-ssh"
-    priority                   = 100
+    priority                   = 1000
     direction                  = "Inbound"
     access                     = "Allow"
     protocol                   = "Tcp"

@@ -1649,3 +1649,172 @@ def test_snapshot_tracks_the_job_of_its_own_vm(monkeypatch):
     snap_id = connector.snapshot(_RID, vault="rsv", wait=False, vault_rg="rg-backup")
     assert snap_id == "rsv:rsv/rg-backup/job-mine"
     assert "/resourceGroups/rg-backup/" in posted[0]
+
+
+# ── Règles allow prioritaires (constat banc Celebrimbor 2026-10-05) ───────────
+
+def _nsg_rule(name, priority, direction="Inbound", access="Allow", src="*", dst="*", port="22"):
+    """A security rule shaped like the SDK object (single-prefix form)."""
+    r = MagicMock()
+    r.name = name
+    r.priority = priority
+    r.direction = direction
+    r.access = access
+    r.source_address_prefix = src
+    r.source_address_prefixes = []
+    r.destination_address_prefix = dst
+    r.destination_address_prefixes = []
+    r.source_application_security_groups = None
+    r.destination_application_security_groups = None
+    r.destination_port_range = port
+    r.destination_port_ranges = []
+    return r
+
+
+_BENCH_ALLOW_SSH = dict(name="allow-ssh", priority=100)   # the real bench rule
+
+
+def test_prefix_coverage_rules():
+    from glorfindel.actions import _prefix_covers
+    assert _prefix_covers("*", "10.0.0.5")
+    assert _prefix_covers("VirtualNetwork", "10.0.0.5")
+    assert not _prefix_covers("Internet", "10.0.0.5")
+    assert _prefix_covers("Internet", "95.47.246.223")
+    assert _prefix_covers("10.0.0.0/24", "10.0.0.5")
+    assert not _prefix_covers("10.0.1.0/24", "10.0.0.5")
+    assert not _prefix_covers("Storage", "10.0.0.5")
+
+
+def test_bench_allow_ssh_shadows_isolation_and_block():
+    """allow-ssh (Inbound, * → *, port 22) at 100 precedes an isolation deny at 101 and
+    a block deny at 200: both are bypassed for SSH."""
+    from glorfindel.actions import _shadowing_rules
+    rules = [_nsg_rule(**_BENCH_ALLOW_SSH), _nsg_rule("deny-inbound-default", 4096, access="Deny")]
+    iso = _shadowing_rules(rules, 101, inbound_src=None, inbound_dst=["10.0.0.5"],
+                           outbound_src=["10.0.0.5"], outbound_dst=None)
+    blk = _shadowing_rules(rules, 200, inbound_src=["95.47.246.223"], inbound_dst=["10.0.0.5"],
+                           outbound_src=["10.0.0.5"], outbound_dst=["95.47.246.223"])
+    assert [s["rule"] for s in iso] == ["allow-ssh"]
+    assert [s["rule"] for s in blk] == ["allow-ssh"]
+    assert iso[0]["ports"] == "22"
+
+
+def test_allow_after_our_deny_or_for_other_ips_does_not_shadow():
+    from glorfindel.actions import _shadowing_rules
+    rules = [
+        _nsg_rule("allow-ssh-late", 1000),                              # after the deny
+        _nsg_rule("allow-other-subnet", 100, dst="10.0.9.0/24"),        # other VMs only
+        _nsg_rule("glorfindel-iso-x", 100, access="Deny"),             # ours / a deny
+    ]
+    assert _shadowing_rules(rules, 101, inbound_src=None, inbound_dst=["10.0.0.5"],
+                            outbound_src=["10.0.0.5"], outbound_dst=None) == []
+
+
+def test_isolate_vm_reports_the_allow_that_bypasses_it(monkeypatch):
+    from glorfindel.actions import AzureConnector
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    monkeypatch.setattr(connector, "_get_vm_nic_targets",
+                        lambda rg, vm: [_nic_target(scope="subnet", ips=("10.0.0.5",))])
+    net = MagicMock()
+    net.security_rules.list.return_value = [_nsg_rule(**_BENCH_ALLOW_SSH)]
+    connector._network = net
+
+    out = connector.isolate_vm(_RID)
+    assert {c.args[3].priority for c in net.security_rules.begin_create_or_update.call_args_list} == {101}
+    assert [s["rule"] for s in out["shadowed_by"]] == ["allow-ssh"]
+    assert "contournée" in out["bypass"]
+
+
+def test_verify_isolation_fails_when_an_allow_precedes_the_deny(monkeypatch):
+    """Presence alone said verified=True on the bench while SSH stayed open."""
+    from glorfindel.actions import AzureConnector
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    monkeypatch.setattr(connector, "_get_vm_nic_targets",
+                        lambda rg, vm: [_nic_target(scope="subnet", ips=("10.0.0.5",))])
+    net = MagicMock()
+    ours_in = _nsg_rule("glorfindel-iso-vm-nic-a", 101, access="Deny", dst="10.0.0.5", port="*")
+    net.security_rules.list.return_value = [_nsg_rule(**_BENCH_ALLOW_SSH), ours_in]
+    net.security_rules.get.return_value = MagicMock()          # our rules are present
+    connector._network = net
+
+    out = connector.verify_isolation(_RID)
+    assert out["verified"] is False
+    assert "allow-ssh" in out["error"]
+
+
+def test_verify_isolation_on_a_dedicated_nsg_ignores_precedence(monkeypatch):
+    """Dedicated NSG: the deny takes priority 100 (customer rules bumped) — nothing can
+    precede it, so no listing is needed and verification stays a presence check."""
+    from glorfindel.actions import AzureConnector
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    monkeypatch.setattr(connector, "_get_vm_nic_targets", lambda rg, vm: [_nic_target(scope="nic")])
+    net = MagicMock()
+    net.security_rules.get.return_value = MagicMock()
+    connector._network = net
+    assert connector.verify_isolation(_RID)["verified"] is True
+    net.security_rules.list.assert_not_called()
+
+
+def test_verify_block_ip_fails_when_allow_ssh_precedes_it(monkeypatch):
+    """A block of an SSH brute forcer at priority 200 does nothing while allow-ssh at
+    100 matches first — the T1110 response on the bench."""
+    from glorfindel.actions import AzureConnector, _save_block_state
+    rule = "glorfindel-block-95-47-246-223-vm-nic-a"
+    _save_block_state("vm", "95.47.246.223", _RID, nsg="rg/nsg", nsg_scope="subnet", rule=rule,
+                      placements=[{"nsg_rg": "rg", "nsg_name": "nsg", "scope": "subnet",
+                                   "rule": rule, "ips": ["10.0.0.5"]}])
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    net = MagicMock()
+    net.security_rules.get.return_value = MagicMock()
+    ours = _nsg_rule(rule, 200, access="Deny", src="95.47.246.223", dst="10.0.0.5", port="*")
+    net.security_rules.list.return_value = [_nsg_rule(**_BENCH_ALLOW_SSH), ours]
+    connector._network = net
+
+    out = connector.verify_block_ip("95.47.246.223", _RID)
+    assert out["verified"] is False
+    assert [s["rule"] for s in out["shadowed_by"]] == ["allow-ssh"]
+
+
+def test_check_nsg_access_reports_precedence_issues(monkeypatch):
+    from glorfindel.actions import AzureConnector
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    monkeypatch.setattr(connector, "_get_vm_nic_targets",
+                        lambda rg, vm: [_nic_target(scope="subnet", ips=("10.0.0.5",))])
+    net = MagicMock()
+    net.security_rules.list.return_value = [
+        _nsg_rule(**_BENCH_ALLOW_SSH),
+        _nsg_rule("allow-admin", 101, src="20.50.0.10/32"),   # specific source: not flagged for blocks
+    ]
+    connector._network = net
+
+    res = connector.check_nsg_access(_RID)
+    by_action = {(i["action"], i["rule"]) for i in res["precedence"]}
+    assert ("isolate_vm", "allow-ssh") in by_action
+    assert ("block_suspicious_ip", "allow-ssh") in by_action
+    assert ("isolate_vm", "allow-admin") in by_action          # isolation deny would land at 102
+    assert ("block_suspicious_ip", "allow-admin") not in by_action
+
+
+def test_audit_fails_on_nsg_precedence():
+    from unittest.mock import MagicMock as _MM
+    from glorfindel import audit
+    connector = _MM()
+    connector.dry_run = False
+    connector.read_only = False
+    connector.check_nsg_access.return_value = {
+        "ok": True, "nsg": "rg/nsg", "rules": 2, "nsgs": [],
+        "precedence": [{"rule": "allow-ssh", "priority": 100, "direction": "Inbound",
+                        "ports": "22", "nsg": "rg/nsg", "nic": "nic-a", "action": "isolate_vm"}],
+    }
+    connector.check_backup_points.return_value = {"ok": True, "points": 3, "latest_age_h": 1}
+    connector.check_compute_access.return_value = {"ok": True, "vm": "vm", "disks": []}
+    result = audit.run(_RID, connector, vault="rsv", staging_storage="st")
+    check = next(c for c in result.checks if c.name == "NSG precedence")
+    assert check.status == "fail"
+    assert "allow-ssh" in check.message
+    assert "--priority 1000" in check.fix

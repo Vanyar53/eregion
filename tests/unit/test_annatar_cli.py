@@ -53,3 +53,11 @@ def test_click_usage_errors_still_render_normally():
     res = CliRunner().invoke(g, ["does-not-exist"])
     assert res.exit_code != 0
     assert "No such command" in res.output
+
+
+def test_subcommand_help_exits_zero_without_a_fake_error():
+    from click.testing import CliRunner
+    from annatar.cli import cli
+    result = CliRunner().invoke(cli, ["run", "--help"])
+    assert result.exit_code == 0
+    assert "✗" not in result.output

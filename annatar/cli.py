@@ -18,7 +18,8 @@ class _AnnatarCli(click.Group):
     def invoke(self, ctx):
         try:
             return super().invoke(ctx)
-        except (click.ClickException, click.exceptions.Abort, SystemExit, KeyboardInterrupt):
+        except (click.ClickException, click.exceptions.Abort, click.exceptions.Exit,
+                SystemExit, KeyboardInterrupt):
             raise
         except Exception as e:  # noqa: BLE001 — deliberate CLI boundary
             if os.environ.get("ANNATAR_DEBUG"):

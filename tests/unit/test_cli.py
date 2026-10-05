@@ -150,3 +150,14 @@ def test_parse_signal_line_ignores_unknown_fields():
     data, sig = _parse_signal_line(_sig_line(new_field_from_the_future=1).strip())
     assert sig.signal_id == "r1_attack"
     assert data["new_field_from_the_future"] == 1
+
+
+def test_subcommand_help_exits_zero_without_a_fake_error():
+    """click >= 8.2 raises click.exceptions.Exit (a RuntimeError) for --help: the CLI
+    boundary caught it as a failure → '✗ Exit: 0' and exit code 1."""
+    from click.testing import CliRunner
+    from glorfindel.cli import cli
+    result = CliRunner().invoke(cli, ["reset", "--help"])
+    assert result.exit_code == 0
+    assert "✗" not in result.output
+    assert "--from-azure" in result.output

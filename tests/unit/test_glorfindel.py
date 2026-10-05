@@ -1833,3 +1833,77 @@ def test_unblock_deletes_each_rule_once(monkeypatch):
     out = connector.unblock_ip("1.2.3.4", _RID)
     assert out["deleted_rules"] == [rule, f"{rule}-out"]
     assert connector._network.security_rules.begin_delete.call_count == 2
+
+
+# ── reset --from-azure : Azure comme source de vérité ─────────────────────────
+
+def _named(name):
+    r = MagicMock()
+    r.name = name
+    return r
+
+
+def test_sweep_vm_rules_removes_only_this_vms_rules(monkeypatch):
+    """No local state needed. Never touches another VM (`app-web` vs `web`), a perimeter
+    block, or a customer rule."""
+    import hashlib
+    from glorfindel.actions import AzureConnector, _load_isolation_state, _save_isolation_state
+    rid = "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/web"
+    _save_isolation_state("web", {"resource_id": rid})            # stale local state
+    nic_id = "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Network/networkInterfaces/nic1"
+    h = hashlib.sha1(nic_id.encode()).hexdigest()[:8]
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    monkeypatch.setattr(connector, "_get_vm_nic_targets", lambda rg, vm: [{
+        "nic_id": nic_id, "nic_short": "nic1", "nsg_rg": "rg", "nsg_name": "nsg",
+        "scope": "subnet", "shared_nsg": False, "ip_scoped": True, "private_ips": ["10.0.0.5"]}])
+    net = MagicMock()
+    net.security_rules.list.return_value = [_named(n) for n in [
+        "glorfindel-iso-web-nic1", "glorfindel-iso-web-nic1-out",                  # ours
+        "glorfindel-block-1-2-3-4-web-nic1", "glorfindel-block-1-2-3-4-web-nic1-out",  # ours
+        f"glorfindel-block-95-47-246-223-web-{h}",                                # ours, hashed
+        "glorfindel-block-5-6-7-8-app-web-nic1",                                  # another VM
+        "glorfindel-iso-app-web-nic9",                                            # another VM
+        "glorfindel-block-9-9-9-9",                                               # perimeter
+        "allow-ssh",                                                              # customer
+    ]]
+    connector._network = net
+
+    out = connector.sweep_vm_rules(rid)
+    deleted = {c.args[2] for c in net.security_rules.begin_delete.call_args_list}
+    assert deleted == {
+        "glorfindel-iso-web-nic1", "glorfindel-iso-web-nic1-out",
+        "glorfindel-block-1-2-3-4-web-nic1", "glorfindel-block-1-2-3-4-web-nic1-out",
+        f"glorfindel-block-95-47-246-223-web-{h}",
+    }
+    assert out["status"] == "swept"
+    assert out["kept_perimeter"] == ["rg/nsg/glorfindel-block-9-9-9-9"]
+    assert _load_isolation_state("web") is None                    # local state cleared
+
+
+def test_sweep_vm_rules_dry_run_deletes_nothing(monkeypatch):
+    from glorfindel.actions import AzureConnector
+    connector = AzureConnector(dry_run=False, read_only=True)       # dry run needs no write
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    monkeypatch.setattr(connector, "_get_vm_nic_targets", lambda rg, vm: [_nic_target()])
+    net = MagicMock()
+    net.security_rules.list.return_value = [_named("glorfindel-iso-vm-nic-a")]
+    connector._network = net
+    out = connector.sweep_vm_rules(_RID, dry_run=True)
+    assert out["deleted"] == ["rg/nsg/glorfindel-iso-vm-nic-a"]
+    net.security_rules.begin_delete.assert_not_called()
+
+
+def test_sweep_vm_rules_keeps_state_when_a_delete_fails(monkeypatch):
+    from glorfindel.actions import AzureConnector, _load_isolation_state, _save_isolation_state
+    _save_isolation_state("vm", {"resource_id": _RID})
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    monkeypatch.setattr(connector, "_get_vm_nic_targets", lambda rg, vm: [_nic_target()])
+    net = MagicMock()
+    net.security_rules.list.return_value = [_named("glorfindel-iso-vm-nic-a")]
+    net.security_rules.begin_delete.side_effect = _azure_403()
+    connector._network = net
+    out = connector.sweep_vm_rules(_RID)
+    assert out["status"] == "swept_partial" and out["failed"]
+    assert _load_isolation_state("vm") is not None

@@ -137,7 +137,8 @@ class _GlorfindelCli(click.Group):
     def invoke(self, ctx):
         try:
             return super().invoke(ctx)
-        except (click.ClickException, click.exceptions.Abort, SystemExit, KeyboardInterrupt):
+        except (click.ClickException, click.exceptions.Abort, click.exceptions.Exit,
+                SystemExit, KeyboardInterrupt):
             raise
         except Exception as e:  # noqa: BLE001 — deliberate CLI boundary
             if os.environ.get("GLORFINDEL_DEBUG"):
@@ -1208,11 +1209,45 @@ def list_active():
         console.print()
 
 
-def _do_reset(resource_id: str, yes: bool, dry_run: bool) -> None:
+def _do_reset_from_azure(resource_id: str, yes: bool, dry_run: bool) -> None:
+    """reset --from-azure: the rules on Azure are the truth, local state is not needed."""
+    from glorfindel.actions import AzureConnector
+
+    vm_short = resource_id.split("/")[-1]
+    connector = AzureConnector(dry_run=False)
+    preview = connector.sweep_vm_rules(resource_id, dry_run=True)
+    console.rule(f"[bold yellow]Reset (source : Azure) — {vm_short}[/bold yellow]")
+    if not preview["deleted"]:
+        console.print(f"[green]Aucune règle Glorfindel de {vm_short} sur ses NSG.[/green]")
+    for name in preview["deleted"]:
+        console.print(f"  • supprimer {name}")
+    for name in preview["kept_perimeter"]:
+        console.print(f"  [dim]• conservée (blocage de périmètre, toutes les VMs) : {name}[/dim]")
+    if dry_run or not preview["deleted"]:
+        return
+    if not yes:
+        click.confirm("\nProceed?", abort=True)
+    result = connector.sweep_vm_rules(resource_id)
+    if result["failed"]:
+        console.print("\n[red]✗ Reset incomplet — règles encore en place :[/red]")
+        for item in result["failed"]:
+            console.print(f"  • {item}")
+        _record_manual_action("reset", resource_id, {"status": "partial", "vm": vm_short,
+                                                     "source": "azure", "failed": result["failed"]})
+        sys.exit(2)
+    console.print(f"\n[green]✓ {len(result['deleted'])} règle(s) retirée(s), états locaux effacés.[/green]")
+    console.print(f"[dim]{result['note']}[/dim]")
+    _record_manual_action("reset", resource_id, {"status": "clean", "vm": vm_short, "source": "azure"})
+
+
+def _do_reset(resource_id: str, yes: bool, dry_run: bool, from_azure: bool = False) -> None:
     """Shared implementation for reset/revert."""
     from glorfindel.actions import active_blocks, active_isolations, AzureConnector
 
     resource_id = _resolve_resource_id(resource_id)
+    if from_azure:
+        _do_reset_from_azure(resource_id, yes, dry_run)
+        return
     # Case-insensitive match: Azure ARM IDs are case-insensitive but Python == is not.
     # A case mismatch left an orphan isolation state file ("Nothing to reset" while
     # `list` still showed ISOLATED). release_isolation clears the local file even when
@@ -1265,13 +1300,18 @@ def _do_reset(resource_id: str, yes: bool, dry_run: bool) -> None:
 @click.argument("resource_id")
 @click.option("--yes", is_flag=True, help="Skip confirmation prompt.")
 @click.option("--dry-run", is_flag=True)
-def reset(resource_id: str, yes: bool, dry_run: bool):
+@click.option("--from-azure", is_flag=True,
+              help="Use the NSG rules on Azure as the source of truth (works without local "
+                   "state): remove every glorfindel-* rule that belongs to this VM.")
+def reset(resource_id: str, yes: bool, dry_run: bool, from_azure: bool):
     """Reset a VM to clean state: release isolation + unblock all IPs.
 
     Use when a VM has both isolation and IP blocks and you want to clear
     everything in one command. For finer control use 'release' or 'unblock'.
+    With --from-azure, local state is not needed (lost state file, another
+    container's state): the VM's own Glorfindel rules are found on its NSGs.
     """
-    _do_reset(resource_id, yes, dry_run)
+    _do_reset(resource_id, yes, dry_run, from_azure)
 
 
 @cli.command("revert", hidden=True)

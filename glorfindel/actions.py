@@ -1362,6 +1362,60 @@ class AzureConnector(CloudConnector):
             "resource_id": resource_id,
         }
 
+    def sweep_vm_rules(self, resource_id: str, dry_run: bool = False) -> dict:
+        """Azure as the source of truth: remove every glorfindel-* rule that belongs to
+        THIS VM on the NSGs of its NICs, with or without local state.
+
+        Ownership comes from the deterministic rule names: the per-(VM, NIC) isolation
+        and block names (readable or hashed form) and the legacy VM-suffixed ones; the
+        legacy fixed isolation names only on an NSG governing this VM alone. The IP
+        segment of a block name anchors the match, so `web` never matches `app-web`.
+        Kept: perimeter (subnet-wide) blocks — an operator decision covering every VM —
+        and every non-glorfindel rule. Customer rules bumped by an isolation can't be
+        put back without state: reported, not guessed.
+        """
+        if not dry_run:
+            self._guard_write("reset")
+        self._ensure_clients()
+        import hashlib
+        import re
+        rg, vm_name = _parse_vm_resource_id(resource_id)
+        block_re = re.compile(r"^glorfindel-block-\d{1,3}(?:-\d{1,3}){3}(?:-\d{1,2})?-(?P<rest>.+?)(?:-out)?$")
+        to_delete: list[tuple[str, str, str]] = []
+        kept: list[str] = []
+        seen: set = set()
+        for t in self._get_vm_nic_targets(rg, vm_name):
+            nsg_key = (t["nsg_rg"], t["nsg_name"])
+            h = hashlib.sha1(t["nic_id"].encode()).hexdigest()[:8]
+            owned_rest = {vm_name, f"{vm_name}-{t['nic_short']}", f"{vm_name[:40]}-{h}"}
+            iso_names = set(self._isolation_names_for_target(vm_name, t))
+            for r in self._list_rules({}, *nsg_key):
+                name = getattr(r, "name", "") or ""
+                if not name.startswith("glorfindel-") or (nsg_key, name) in seen:
+                    continue
+                seen.add((nsg_key, name))
+                m = block_re.match(name)
+                if name in iso_names or (m and m.group("rest") in owned_rest):
+                    to_delete.append((t["nsg_rg"], t["nsg_name"], name))
+                elif m is None and name.startswith("glorfindel-block-"):
+                    kept.append(f'{t["nsg_rg"]}/{t["nsg_name"]}/{name}')   # perimeter block
+        deleted, failed = [], []
+        for nsg_rg, nsg_name, name in to_delete:
+            if dry_run:
+                deleted.append(f"{nsg_rg}/{nsg_name}/{name}")
+                continue
+            err = self._delete_rule(nsg_rg, nsg_name, name)
+            (failed if err else deleted).append(err or f"{nsg_rg}/{nsg_name}/{name}")
+        if not dry_run and not failed:
+            _clear_isolation_state(vm_name)
+            for entry in _load_block_entries(vm_name):
+                _clear_block_state(vm_name, entry.get("ip", ""))
+        return {
+            "status": "dry_run" if dry_run else ("swept_partial" if failed else "swept"),
+            "deleted": deleted, "failed": failed, "kept_perimeter": kept,
+            "note": "Règles client décalées par une isolation : non restaurées sans état local.",
+        }
+
     def verify_block_ip(self, ip: str, resource_id: str) -> dict:
         """Confirm the block is in place: the inbound AND the outbound rule of every
         placement. Checking only the inbound one let a missing `-out` rule (egress /

@@ -2018,3 +2018,90 @@ def test_audit_precedence_unreadable_is_a_warning_not_a_pass():
     check = _check_precedence([{"nsg": "rg/nsg", "nic": "nic-a", "unreadable": True}])
     assert check is not None and check.status == "warn"
     assert "rg/nsg" in check.message
+
+
+# ── Run Azure du 2026-10-05 : rejeu Run Command au restore, sessions ouvertes ──────
+
+def _restore_ready(monkeypatch):
+    from datetime import timedelta  # noqa: F401
+    connector, client, posted, now = _backup_env(monkeypatch, rps=[], jobs=[])
+    rp = _rp("rp-1", now)
+    rp.name = "rp-1"
+    client.recovery_points.list.return_value = [rp]
+    job = _job("restore-1", "vm", "Restore", now)
+    job.name = "restore-1"
+    client.backup_jobs.list.return_value = [job]
+    return connector, posted
+
+
+def test_restore_neutralizes_run_command_before_swapping_the_disks(monkeypatch):
+    """The restored disk replayed the last Run Command at boot — the ransomware script,
+    which re-encrypted the restored data (real run, 2026-10-05)."""
+    connector, posted = _restore_ready(monkeypatch)
+    out = connector.restore_from_backup(_RID, vault="rsv", wait=False, staging_storage="st")
+    calls = [c[0] for c in connector._compute.mock_calls]
+    run = calls.index("virtual_machines.begin_run_command")
+    dealloc = calls.index("virtual_machines.begin_deallocate")
+    assert run < dealloc
+    script = connector._compute.virtual_machines.begin_run_command.call_args.args[2].script
+    assert all("ransomware" not in line and "rm " not in line for line in script)
+    assert out["run_command_neutralized"] is True and posted
+
+
+def test_restore_still_runs_when_run_command_cannot_be_neutralized(monkeypatch):
+    connector, posted = _restore_ready(monkeypatch)
+    connector._compute.virtual_machines.begin_run_command.side_effect = RuntimeError(
+        "(OperationNotAllowed) VM is not running")
+    out = connector.restore_from_backup(_RID, vault="rsv", wait=False, staging_storage="st")
+    assert out["run_command_neutralized"] is False
+    assert "not running" in out["run_command_error"]
+    assert posted                                    # recovery first
+
+
+def _drain_connector(message="glorfindel-drain-remaining=0", os_type="Linux", error=None):
+    from glorfindel.actions import AzureConnector
+    c = AzureConnector(dry_run=False)
+    c._compute = MagicMock()
+    c._compute.virtual_machines.get.return_value.storage_profile.os_disk.os_type = os_type
+    if error:
+        c._compute.virtual_machines.begin_run_command.side_effect = error
+    else:
+        res = MagicMock()
+        res.value = [MagicMock(message=f"Enable succeeded:\n[stdout]\n{message}\n")]
+        c._compute.virtual_machines.begin_run_command.return_value.result.return_value = res
+    return c
+
+
+def test_drain_cuts_established_sessions_but_spares_loopback_and_platform():
+    """Measured 2026-10-05: an SSH session (17 min), an idle one and a download all
+    survived the isolation rules; `ss -K` through Run Command cut them."""
+    c = _drain_connector()
+    assert c.drain_connections(_RID) == {"status": "drained"}
+    script = " ".join(c._compute.virtual_machines.begin_run_command.call_args.args[2].script)
+    assert "ss -K state established" in script
+    for spared in ("127.0.0.0/8", "[::1]", "168.63.129.16", "169.254.169.254"):
+        assert f"not dst {spared}" in script
+
+
+def test_drain_reports_what_it_could_not_cut():
+    assert _drain_connector("glorfindel-drain-remaining=2").drain_connections(_RID)["status"] == "partial"
+    assert _drain_connector(error=RuntimeError("(AuthorizationFailed) runCommand/action"))\
+        .drain_connections(_RID)["status"] == "failed"
+    assert _drain_connector(os_type="Windows").drain_connections(_RID)["status"] == "unsupported"
+
+
+def test_isolate_vm_drains_after_the_rules_are_in_place(monkeypatch):
+    from glorfindel.actions import AzureConnector
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    monkeypatch.setattr(connector, "_get_vm_nic_targets", lambda rg, vm: [_nic_target(scope="nic")])
+    order = []
+    net = MagicMock()
+    net.security_rules.list.return_value = []
+    net.security_rules.begin_create_or_update.side_effect = lambda *a, **k: order.append("rule") or MagicMock()
+    connector._network = net
+    monkeypatch.setattr(connector, "drain_connections",
+                        lambda rid: order.append("drain") or {"status": "drained"})
+    out = connector.isolate_vm(_RID)
+    assert out["drain"] == {"status": "drained"}
+    assert order[-1] == "drain" and "rule" in order[:-1]

@@ -628,7 +628,7 @@ The audit also checks **NSG precedence**: NSG rules apply the first match by asc
 ```bash
 pip install eregion[dev]
 pytest
-# 563 tests (~15s) — 0 Azure calls, 0 LLM calls, 0 writes to ~/.glorfindel
+# 583 tests (~15s) — 0 Azure calls, 0 LLM calls, 0 writes to ~/.glorfindel
 ```
 
 The suite is hermetic by construction: `tests/unit/conftest.py` redirects every `~/.glorfindel` path to a temp directory and ignores any local `glorfindel-config.yaml`. CI (`.github/workflows/ci.yml`) runs `ruff check` + `pytest` on Python 3.11 and 3.12.

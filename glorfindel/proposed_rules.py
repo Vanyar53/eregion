@@ -136,7 +136,12 @@ def _append_to_rules_yaml(proposal: dict, rules_path: Path) -> None:
 
     if not asset_name:
         try:
-            cfg = load_config(rules_path)
+            try:
+                from glorfindel.config import load_glorfindel_config
+                gcfg = load_glorfindel_config()
+            except Exception:
+                gcfg = None
+            cfg = load_config(rules_path, glorfindel_cfg=gcfg)
             match = cfg.asset_for_resource(proposal.get("resource_id", ""))
             if match:
                 asset_name = match.name

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
 import time
 import uuid
@@ -405,6 +406,63 @@ def _save_status(status: dict) -> None:
     _STATUS_FILE.write_text(json.dumps(status, indent=2))
 
 
+# Query window of a polled rule. The rule's own `ago()` decides what it looks at; the
+# API timespan used to be `now - 2*interval_s` (60 s), which overrides the query's
+# window: a row ingested more than ~84 s after its TimeGenerated was never seen. Run of
+# 2026-10-05: Perf ingestion 89–109 s → `ransomware-disk-write` matched nothing.
+_DEFAULT_LOOKBACK_S = 600.0
+_INGESTION_MARGIN_S = 300.0
+_AGO_RE = re.compile(r"ago\(\s*(\d+(?:\.\d+)?)\s*([smhd])\s*\)", re.IGNORECASE)
+_UNIT_S = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+
+
+def _query_lookback_s(query: str) -> float:
+    """Longest `ago(...)` window in a KQL query (seconds); default 10 min."""
+    spans = [float(n) * _UNIT_S[u.lower()] for n, u in _AGO_RE.findall(query or "")]
+    return max(spans) if spans else _DEFAULT_LOOKBACK_S
+
+
+def _looks_numeric(value: str) -> bool:
+    try:
+        float(value)
+        return True
+    except ValueError:
+        return False
+
+
+def _row_identity(row: dict) -> str:
+    """What makes a match "the same detection" across polls.
+
+    A row with TimeGenerated is that event. An aggregated row (summarize … by Computer
+    / SourceIP) has none, and its counts grow while the attack runs: its identity is
+    its non-numeric columns (who, where) — the same attacker on the same VM is one
+    detection for the length of the query window.
+    """
+    ts = row.get("TimeGenerated")
+    if ts:
+        return f"ts:{ts}"
+    keys = sorted(
+        f"{k}={v}" for k, v in row.items()
+        if isinstance(v, str) and v and not _looks_numeric(v)
+    )
+    return "row:" + "|".join(keys)
+
+
+def _row_attribution(row: dict, resource_id: str, asset_name: str) -> bool | None:
+    """Does this row concern this asset? True/False when the row names a resource
+    (`_ResourceId` / `ResourceId` / `Computer`), None when it can't tell (a query
+    aggregated by attacker IP or storage account)."""
+    rid = row.get("_ResourceId") or row.get("ResourceId")
+    if isinstance(rid, str) and rid:
+        return rid.lower() == (resource_id or "").lower()
+    computer = row.get("Computer")
+    if isinstance(computer, str) and computer:
+        host = computer.split(".")[0].lower()
+        names = {(asset_name or "").lower(), (resource_id or "").rstrip("/").split("/")[-1].lower()}
+        return host in names or computer.lower() in names
+    return None
+
+
 def rulepoller_recently_matched(ttp: str, within_s: float) -> bool:
     """Return True if a RulePoller rule for this TTP had a match within `within_s` seconds.
 
@@ -449,8 +507,9 @@ class RulePoller:
         self._threads: list[threading.Thread] = []
         self._status: dict = _load_status()
         self._lock = threading.Lock()
-        # Dedup: key = f"{rule.name}@{resource_id}", value = last dispatched row TimeGenerated
-        self._last_dispatch_row: dict[str, str] = {}
+        # Dedup state lives in self._status[rule]["dispatched"][resource_id] =
+        # {"id": row identity, "at": epoch} — persisted, so a restart doesn't dispatch
+        # (and act on) a detection still inside the query window a second time.
 
     def expand_for_discovered(
         self,
@@ -546,13 +605,22 @@ class RulePoller:
             now_iso = datetime.now(timezone.utc).isoformat()
             try:
                 detector = detector_for(rule.source, workspace_id=rule.workspace_id)
-                since = time.time() - rule.interval_s * 2
+                lookback = _query_lookback_s(rule.query)
+                since = time.time() - (lookback + _INGESTION_MARGIN_S)
+                # A per-asset rule runs the shared (unscoped) query: only rows about
+                # THIS asset, or rows that name no resource, count as its match. Before,
+                # a detection on one VM was dispatched for every discovered VM.
+                match_row = None
+                if rule.asset_name:
+                    def match_row(r, _rule=rule):
+                        return _row_attribution(r, _rule.resource_id, _rule.asset_name) is not False
                 result = detector.poll_alert(
                     query=rule.query,
                     since=since,
                     timeout_s=rule.interval_s * 0.8,
                     interval_s=min(rule.interval_s * 0.8, 10.0),
                     verbose=False,
+                    match_row=match_row,
                 )
                 with self._lock:
                     self._status.setdefault(rule.name, {})
@@ -570,20 +638,33 @@ class RulePoller:
                 if result is not None:
                     _elapsed, row = result
 
-                    # Deduplication: KQL queries use ago(5m) windows, so the same
-                    # event row reappears across multiple poll cycles. Skip dispatch
-                    # if TimeGenerated is identical to the last dispatched row for
-                    # this (rule, resource_id) pair.
-                    dedup_key = f"{rule.name}@{rule.resource_id}"
-                    row_ts = str(row.get("TimeGenerated", ""))
+                    # Deduplication: the same detection stays in the query window for
+                    # its whole length (ago(10m)) and reappears at every poll. Skip it
+                    # while it is the last one dispatched for this (rule, resource) and
+                    # still inside the window. Aggregated rows have no TimeGenerated:
+                    # they used to bypass the dedup entirely.
+                    identity = _row_identity(row)
+                    window = lookback + _INGESTION_MARGIN_S
                     with self._lock:
-                        last_ts = self._last_dispatch_row.get(dedup_key, "")
-                    if row_ts and row_ts == last_ts:
+                        dispatched = self._status.setdefault(rule.name, {}).setdefault("dispatched", {})
+                        last = dispatched.get(rule.resource_id) or {}
+                        if last.get("id") == identity and time.time() - float(last.get("at", 0)) < window:
+                            duplicate = True
+                        else:
+                            duplicate = False
+                            dispatched[rule.resource_id] = {"id": identity, "at": time.time()}
+                            _save_status(self._status)
+                    if duplicate:
                         self._stop.wait(rule.interval_s)
                         continue
 
-                    with self._lock:
-                        self._last_dispatch_row[dedup_key] = row_ts
+                    # A row that names no resource (aggregated by attacker IP / account)
+                    # can't be tied to this VM when several are monitored: say so, the
+                    # decision layer holds VM-targeted actions on it.
+                    attribution = "asset"
+                    if rule.asset_name and _row_attribution(row, rule.resource_id, rule.asset_name) is None:
+                        peers = registry.for_backend(rule.monitoring_backend_name) if registry else []
+                        attribution = "unattributed" if len(peers) > 1 else "single_asset"
 
                     # Synthetic run_id so store_cycle writes a debug JSONL
                     # and War Room can display the decision (isolate_vm, block…).
@@ -604,6 +685,7 @@ class RulePoller:
                             "rule_name": rule.name,
                             "asset_name": rule.asset_name,
                             "run_id": watch_run_id,
+                            "attribution": attribution,
                         },
                         "raw_signal": {
                             "detection_source": rule.source,

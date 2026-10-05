@@ -161,3 +161,21 @@ def test_subcommand_help_exits_zero_without_a_fake_error():
     assert result.exit_code == 0
     assert "✗" not in result.output
     assert "--from-azure" in result.output
+
+
+def test_list_shows_a_partial_isolation_and_a_bypassed_block():
+    """Real run 2026-10-05 (topology multinic): a partial isolation printed as a plain
+    ISOLATED while one NIC carried no rule — the War Room showed ⚠ partial."""
+    from glorfindel.actions import _save_block_state, _save_isolation_state
+    from glorfindel.cli import cli
+    rid = "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm-x"
+    _save_isolation_state("vm-x", {"resource_id": rid, "isolated_at": "2026-10-05T16:16:29+00:00",
+                                   "partial": True, "failed_nic": "nic-x-1", "placements": []})
+    _save_block_state("vm-x", "203.0.113.50", rid, nsg="rg/nsg", nsg_scope="subnet", rule="r",
+                      placements=[{"nsg_rg": "rg", "nsg_name": "nsg", "rule": "r",
+                                   "shadowed_by": [{"rule": "allow-ssh", "priority": 100}]}])
+    res = CliRunner().invoke(cli, ["list"])
+    assert res.exit_code == 0, res.output
+    assert "ISOLATED (PARTIAL)" in res.output
+    assert "NIC nic-x-1 not covered" in res.output
+    assert "bypassed: allow-ssh (priority 100)" in res.output

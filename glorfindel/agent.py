@@ -330,6 +330,12 @@ def resolve_attack_started(signal: dict) -> dict:
 
     if result is not None:
         detection_s, detected_row = result
+        # Measure from the attack (Annatar's T0), not from when the signal arrived:
+        # attack_started is emitted after the attack steps, so the poll's own elapsed
+        # time said 42 s for ~135 s of real detection time (run 2026-10-05).
+        since_attack = time.time() - attack_time
+        if "attack_time" in raw and 0 < since_attack < 86400:
+            detection_s = round(since_attack)
         from glorfindel.detection_rules import normalize_row
         return {
             **signal,
@@ -579,7 +585,13 @@ _HELD_BY_TYPE = {
     "confidence": "low_confidence",
     "signal_guardrail": "uncharacterized_signal",
     "release_precondition": "release_hold",
+    "attribution": "unattributed_signal",
 }
+
+# Actions aimed at ONE VM. On a detection the RulePoller could not tie to that VM (a row
+# aggregated by attacker IP, several VMs monitored) they are held: the same row is
+# dispatched for every VM. An IP block or a snapshot stays autonomous.
+_VM_TARGETED_ACTIONS = {"isolate_vm", "revoke_temp_access"}
 
 
 def _as_bool(v) -> bool:
@@ -713,6 +725,21 @@ def _apply_signal_guardrail(d: dict, signal: dict) -> None:
         )
 
 
+def _apply_attribution_guard(d: dict, signal: dict) -> None:
+    """A VM-targeted action on a detection not attributed to this VM is held."""
+    if d["escalate"] or d["action"] not in _VM_TARGETED_ACTIONS:
+        return
+    if (signal.get("context") or {}).get("attribution") != "unattributed":
+        return
+    d["escalate"] = True
+    d["held_by"] = "attribution"
+    d["escalation_reason"] = (
+        f"Détection non attribuable à cette VM (ligne sans ressource, plusieurs VMs "
+        f"surveillées) — '{d['action']}' retenue pour revue humaine : vérifier quelle "
+        "VM est concernée avant d'agir."
+    )
+
+
 def _apply_release_precondition(d: dict, signal: dict) -> None:
     """An autonomous release_isolation only answers a completed restore.
 
@@ -726,7 +753,19 @@ def _apply_release_precondition(d: dict, signal: dict) -> None:
     """
     if d["escalate"] or d["action"] != "release_isolation":
         return
+    neutralized = (signal.get("raw_signal") or {}).get("run_command_neutralized")
+    if signal.get("event") == "recovery_complete" and neutralized is not False:
+        return
     if signal.get("event") == "recovery_complete":
+        # The restored disk may have replayed the attacker's last Run Command at boot
+        # (seen 2026-10-05: the ransomware ran again, then the VM was released).
+        d["escalate"] = True
+        d["held_by"] = "release_precondition"
+        d["escalation_reason"] = (
+            "Restauration terminée, mais la dernière commande Run Command n'a pas pu être "
+            "neutralisée avant : le disque restauré a pu la rejouer au démarrage. "
+            "Vérifier l'intégrité de la VM avant de lever l'isolation."
+        )
         return
     d["escalate"] = True
     d["held_by"] = "release_precondition"
@@ -762,7 +801,7 @@ _CYCLE_FAILED_STEPS = [
 ]
 
 
-def _decision_failed(state: GlorfindelState, exc: BaseException) -> GlorfindelState:
+def _decision_failed(state: GlorfindelState, exc: BaseException, mode: str = "") -> GlorfindelState:
     """State for a decision that could not be obtained (LLM call failed after retries).
 
     The cycle continues to escalate_to_human → store_cycle, so the detected threat
@@ -784,6 +823,7 @@ def _decision_failed(state: GlorfindelState, exc: BaseException) -> GlorfindelSt
         "escalation_reason": reason,
         "suggested_steps": list(_CYCLE_FAILED_STEPS),
         "llm_usage": None,
+        "autonomy_mode": mode,
         "mode_hold": False,
         "cycle_error": f"decide: {err}",
     }
@@ -809,8 +849,8 @@ def decide(
     the fresh config so it stays pinned for the session.
 
     Gates, in order (each a pure helper, testable on its own): parsing defaults →
-    executable guard → confidence gate → deterministic signal guardrail → release
-    precondition → autonomy mode. A failed LLM call (after retries) escalates as
+    executable guard → confidence gate → deterministic signal guardrail → attribution
+    guard → release precondition → autonomy mode. A failed LLM call (after retries) escalates as
     `cycle_failed`. The gate that escalates is recorded (`held_by`) and gives the
     escalation its type.
     """
@@ -819,6 +859,22 @@ def decide(
     signal = state["signal"]
     past = state["past_cycles"]
     user_content = _build_user_message(signal, past, state.get("incident"))
+
+    # Resolve the mode for this asset first: the debug line of a failed decision
+    # (cycle_failed) carries it too. Reload config fresh per cycle (hot-pickup)
+    # unless one is injected (tests).
+    if autonomy is None:
+        try:
+            autonomy = load_glorfindel_config().autonomy
+        except Exception:
+            from glorfindel.config import AutonomyConfig
+            autonomy = AutonomyConfig()
+    if autonomy_override:
+        # Session --mode pins the GLOBAL default; per-asset rules still win in resolve().
+        autonomy.default = autonomy_override
+    resource_id = signal.get("resource_id", "")
+    asset_name = resource_id.split("/")[-1] if resource_id else ""
+    mode = autonomy.resolve(asset_name)
 
     kwargs: dict = {}
     base_url = os.environ.get("GLORFINDEL_LLM_BASE_URL")
@@ -846,28 +902,15 @@ def decide(
         # Rate limit, timeout, auth, network: previously this escaped the graph and
         # ended as one console line in the watch worker — a detected threat dropped
         # with no escalation and no debug file.
-        return _decision_failed(state, exc)
+        return _decision_failed(state, exc, mode)
 
     d, raw_conf = _parse_decision(response)
     _apply_executable_guard(d)
     _apply_confidence_gate(d, raw_conf, _confidence_threshold())
     _apply_signal_guardrail(d, signal)
+    _apply_attribution_guard(d, signal)
     _apply_release_precondition(d, signal)
 
-    # Resolve the mode for this asset. Reload config fresh per cycle (hot-pickup)
-    # unless one is injected (tests).
-    if autonomy is None:
-        try:
-            autonomy = load_glorfindel_config().autonomy
-        except Exception:
-            from glorfindel.config import AutonomyConfig
-            autonomy = AutonomyConfig()
-    if autonomy_override:
-        # Session --mode pins the GLOBAL default; per-asset rules still win in resolve().
-        autonomy.default = autonomy_override
-    resource_id = signal.get("resource_id", "")
-    asset_name = resource_id.split("/")[-1] if resource_id else ""
-    mode = autonomy.resolve(asset_name)
     mode_hold = _apply_autonomy_mode(d, mode)
 
     usage = getattr(response, "usage", None)
@@ -1129,7 +1172,10 @@ def verify_action(state: GlorfindelState, *, connector: CloudConnector) -> Glorf
         return {**state, "outcome": {**outcome, "verified": None}, "escalate": False, "escalation_reason": ""}
 
     if action == "isolate_vm":
-        verification = connector.verify_isolation(resource_id)
+        # The drain's result counts: rules in place but sessions still open is not a
+        # contained VM (measured 2026-10-05).
+        from glorfindel.actions import isolation_verdict
+        verification = isolation_verdict(connector.verify_isolation(resource_id), outcome)
     elif action == "release_isolation":
         # verified=True only when NO NIC carries an isolation rule any more. The former
         # `not verify_isolation()` meant "at least one NIC uncovered": a release that

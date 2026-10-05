@@ -321,6 +321,10 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
         datefmt="%H:%M:%S",
     )
+    # The Azure SDK logs every HTTP request and response at INFO: 1.5 MB in 44 min of
+    # watch (real run, 2026-10-05), drowning Glorfindel's own lines. Warnings still show.
+    for _noisy in ("azure", "urllib3", "httpx", "LiteLLM"):
+        _logging.getLogger(_noisy).setLevel(_logging.WARNING)
 
     # Import the Azure SDK once, on the main thread, before discovery/poll/audit
     # threads start — avoids concurrent first-import deadlocks (azure.core _ModuleLock).
@@ -673,9 +677,11 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
                 from glorfindel.detection_rules import load_rules
                 connector = AzureConnector(dry_run=False)
                 _vault, _vault_rg, _staging = "rsv-annatar", "", ""
+                _gcfg = None
                 try:
                     from glorfindel.config import load_glorfindel_config
-                    _rsv = load_glorfindel_config().backup_vault()
+                    _gcfg = load_glorfindel_config()
+                    _rsv = _gcfg.backup_vault()
                     if _rsv:
                         _vault = _rsv.vault_name or _vault
                         _vault_rg = _rsv.resource_group or ""
@@ -683,7 +689,9 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
                 except Exception:
                     pass
                 seen: set[str] = set()
-                for rule in load_rules(_rules_file):
+                # With the config: rules bind to its backends. Without it, every rule
+                # logged a misleading "rule disabled" warning at each start.
+                for rule in load_rules(_rules_file, glorfindel_cfg=_gcfg):
                     rid = rule.resource_id
                     if rid and "${" not in rid and rid not in seen:
                         seen.add(rid)
@@ -932,6 +940,13 @@ def restore(resource_id: str, vault: str, dry_run: bool, yes: bool, keep_isolate
 
     restore_label = f"{rto_s // 60}min {rto_s % 60}s"
     console.print(f"[green]✓ Restore complete.[/green]  restore_time: {restore_label}  RP: {result.get('recovery_point_time')}")
+    if result.get("run_command_neutralized") is False:
+        console.print(
+            "[bold red]⚠ Run Command non neutralisée avant le restore[/bold red] "
+            f"({result.get('run_command_error', '?')}) : le disque restauré a pu rejouer la "
+            "dernière commande au démarrage. Vérifier l'intégrité avant de lever "
+            "l'isolation — Glorfindel ne la lèvera pas seul."
+        )
     console.print("[dim]RTO = detection_s + isolation_s + restore_time  (human decision time excluded)[/dim]\n")
 
     from glorfindel import escalations as _esc
@@ -1191,14 +1206,21 @@ def list_active():
             console.print(f"  mode: [{_mode_color}]{_mode}[/{_mode_color}]")
 
         if rid_lower in isolations:
-            ts = isolations[rid_lower].get("isolated_at", "")
-            console.print(f"  [red]ISOLATED[/red]  {_age(ts)}")
+            iso = isolations[rid_lower]
+            ts = iso.get("isolated_at", "")
+            label = "ISOLATED (PARTIAL)" if iso.get("partial") else "ISOLATED"
+            console.print(f"  [red]{label}[/red]  {_age(ts)}")
+            for w in _state_warnings(iso, "release_failed"):
+                console.print(f"    [bold red]⚠ {w}[/bold red]", soft_wrap=True)
             console.print(f"  [dim]→ glorfindel release {resource_id} --yes[/dim]",
                           soft_wrap=True)
 
         for b in blocks.get(rid_lower, []):
             ts = b.get("blocked_at", "")
-            console.print(f"  [yellow]BLOCKED[/yellow]   {b['ip']}  {_age(ts)}")
+            label = "BLOCKED (PARTIAL)" if b.get("partial") else "BLOCKED"
+            console.print(f"  [yellow]{label}[/yellow]   {b['ip']}  {_age(ts)}")
+            for w in _state_warnings(b, "unblock_failed"):
+                console.print(f"    [bold red]⚠ {w}[/bold red]", soft_wrap=True)
             console.print(f"  [dim]→ glorfindel unblock {b['ip']} {resource_id} --yes[/dim]",
                           soft_wrap=True)
 
@@ -1207,6 +1229,23 @@ def list_active():
                 f"  [dim]→ glorfindel reset {resource_id} --yes  (all at once)[/dim]",
                 soft_wrap=True)
         console.print()
+
+
+def _state_warnings(entry: dict, failed_key: str) -> list[str]:
+    """What `list` must say next to ISOLATED / BLOCKED — the same flags the War Room
+    shows as chips. A partial isolation used to print as a plain ISOLATED while one
+    NIC carried no rule at all (real run, 2026-10-05, topology multinic)."""
+    out = []
+    if entry.get("partial"):
+        nic = entry.get("failed_nic")
+        out.append(f"partial: NIC {nic} not covered" if nic else "partial: not every NIC is covered")
+    if entry.get(failed_key):
+        out.append("rules still on Azure after a failed removal: " + ", ".join(entry[failed_key]))
+    shadowed = [s for p in entry.get("placements") or [] for s in (p.get("shadowed_by") or [])]
+    if shadowed:
+        rules = ", ".join(sorted({f"{s.get('rule')} (priority {s.get('priority')})" for s in shadowed}))
+        out.append(f"bypassed: {rules} evaluated before Glorfindel's deny")
+    return out
 
 
 def _do_reset_from_azure(resource_id: str, yes: bool, dry_run: bool) -> None:
@@ -1402,6 +1441,7 @@ def _build_recovery_signal(resource_id: str, restore_result: dict, restore_time_
         "raw_signal": {
             "recovery_point_time": restore_result.get("recovery_point_time", ""),
             "restore_time_s": restore_time_s,
+            "run_command_neutralized": restore_result.get("run_command_neutralized"),
         },
         "context": {"run_id": run_id},
     }

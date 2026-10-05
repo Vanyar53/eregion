@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import json
 import os
+import re
 import tempfile
 import threading
 from abc import ABC, abstractmethod
@@ -52,6 +53,31 @@ class PartialActionError(RuntimeError):
         self.status_code = getattr(cause, "status_code", None)
         self.covered = covered
         self.failed_nic = failed_nic
+
+
+# An Azure error names the lock (ScopeLocked) or the policy at the END of its first
+# line: cut at 200 characters, the operator lost what to remove (real run, 2026-10-05).
+_ERR_MAX = 600
+
+
+def isolation_verdict(verification: dict, outcome: dict) -> dict:
+    """verify_isolation's result, downgraded when the drain left sessions open.
+
+    The rules only stop NEW connections (measured 2026-10-05): rules in place with an
+    attacker's session still open is not a contained VM. Shared by the agent's
+    verify_action and the War Room's approve route."""
+    drain = (outcome or {}).get("drain") or {}
+    if verification.get("verified") is True and drain.get("status") in ("failed", "partial"):
+        return {
+            **verification, "verified": False,
+            "error": (
+                f"règles posées, mais les sessions déjà ouvertes n'ont pas été coupées "
+                f"({drain.get('error', drain.get('status'))}) — un attaquant connecté "
+                "garde la main. Couper à la main : az vm run-command invoke "
+                "--command-id RunShellScript --scripts 'ss -K state established'"
+            ),
+        }
+    return verification
 
 
 def _first_line(exc: BaseException) -> str:
@@ -547,7 +573,56 @@ class AzureConnector(CloudConnector):
                 "Isolation contournée : " + _describe_shadowing(shadowed)
                 + " passe avant le deny de Glorfindel."
             )
+        # The rules only stop NEW connections: measured 2026-10-05, an attacker's SSH
+        # session (17 min), an idle one (11 min) and an outbound download all survived
+        # the isolation. Cut them from inside, now that nothing can reconnect.
+        out["drain"] = self.drain_connections(resource_id)
         return out
+
+    # Connections a drain must never cut: loopback (local services) and the Azure
+    # platform addresses the VM agent, Run Command and IMDS depend on.
+    _DRAIN_FILTER = (
+        "( not dst 127.0.0.0/8 and not dst [::1] "
+        "and not dst 168.63.129.16 and not dst 169.254.169.254 )"
+    )
+
+    def drain_connections(self, resource_id: str) -> dict:
+        """Kill the VM's established TCP connections through Run Command (`ss -K`).
+
+        Run Command still works on an isolated VM (platform address, not filtered by
+        NSGs) and `ss -K` cut every session in the bench test. Linux only: on Windows
+        the outcome says the sessions were not cut. Never raises — the isolation rules
+        are in place either way; the outcome tells whether open sessions survive.
+        """
+        if self.dry_run:
+            return {"status": "dry_run"}
+        try:
+            from azure.mgmt.compute.models import RunCommandInput
+            rg, vm_name = _parse_vm_resource_id(resource_id)
+            vm = self._compute.virtual_machines.get(rg, vm_name)
+            os_type = str(getattr(getattr(vm.storage_profile, "os_disk", None), "os_type", "") or "")
+            if "windows" in os_type.lower():
+                return {"status": "unsupported",
+                        "note": "Windows : les sessions déjà ouvertes ne sont pas coupées."}
+            script = [
+                f"ss -K state established '{self._DRAIN_FILTER}' >/dev/null 2>&1",
+                f"echo \"glorfindel-drain-remaining=$(ss -Htn state established "
+                f"'{self._DRAIN_FILTER}' | wc -l)\"",
+            ]
+            res = self._compute.virtual_machines.begin_run_command(
+                rg, vm_name, RunCommandInput(command_id="RunShellScript", script=script),
+            ).result(timeout=300)   # an unresponsive VM agent must not hold the watch worker
+            text = " ".join(str(getattr(v, "message", "") or "") for v in (getattr(res, "value", None) or []))
+            m = re.search(r"glorfindel-drain-remaining=(\d+)", text)
+            if m is None:
+                return {"status": "failed", "error": "sortie de Run Command illisible"}
+            remaining = int(m.group(1))
+            if remaining:
+                return {"status": "partial", "remaining": remaining,
+                        "error": f"{remaining} connexion(s) encore établie(s) après ss -K"}
+            return {"status": "drained"}
+        except Exception as e:
+            return {"status": "failed", "error": _first_line(e)[:_ERR_MAX]}
 
     def _record_partial_isolation(
         self, vm_name: str, resource_id: str, done: list[dict], failed: dict,
@@ -599,7 +674,7 @@ class AzureConnector(CloudConnector):
         except Exception as e:
             if _is_not_found(e):
                 return None
-            return f"{nsg_rg}/{nsg_name}/{rule_name}: {_first_line(e)[:200]}"
+            return f"{nsg_rg}/{nsg_name}/{rule_name}: {_first_line(e)[:_ERR_MAX]}"
 
     def _restore_bumped(self, nsg_rg: str, nsg_name: str, bumped: list[dict]) -> list[dict]:
         """Put customer rules back on their original priority. Returns the ones that
@@ -613,7 +688,7 @@ class AzureConnector(CloudConnector):
             except Exception as e:
                 if _is_not_found(e):
                     continue  # its owner deleted it meanwhile — nothing to put back
-                left.append({**info, "error": _first_line(e)[:200]})
+                left.append({**info, "error": _first_line(e)[:_ERR_MAX]})
         return left
 
     def _isolation_names_for_target(self, vm_name: str, t: dict) -> list[str]:
@@ -1321,6 +1396,11 @@ class AzureConnector(CloudConnector):
             f"/providers/Microsoft.Storage/storageAccounts/{staging_storage}"
         )
 
+        # Before the disks are swapped: the restored disk would otherwise REPLAY the last
+        # Run Command at boot (real run, 2026-10-05: ransomware_sim.sh re-encrypted the
+        # restored data). An attacker who used Run Command (T1651) gets the same replay.
+        neutralize = self._neutralize_run_command(rg, vm_name, vm)
+
         self._compute.virtual_machines.begin_deallocate(rg, vm_name).result()
 
         token = self._credential.get_token("https://management.azure.com/.default").token
@@ -1378,6 +1458,7 @@ class AzureConnector(CloudConnector):
                 "recovery_point": latest.name,
                 "recovery_point_time": str(rp_time),
                 "resource_id": resource_id,
+                **neutralize,
             }
 
         elapsed = 0
@@ -1401,7 +1482,37 @@ class AzureConnector(CloudConnector):
             "recovery_point": latest.name,
             "recovery_point_time": str(rp_time),
             "resource_id": resource_id,
+            **neutralize,
         }
+
+    def _neutralize_run_command(self, rg: str, vm_name: str, vm) -> dict:
+        """Make a harmless command the VM's last Run Command.
+
+        The guest agent of a restored disk replays the Run Command whose sequence number
+        it has not seen yet: the last one in the VM model, i.e. the attacker's (or, on
+        the bench, Annatar's attack script). Running a no-op first makes the replay
+        harmless. Works on an isolated VM (Run Command goes through the platform
+        address 168.63.129.16, which NSGs don't filter — measured 2026-10-05). Needs a
+        running VM; on failure the restore still proceeds (recovery first) and the
+        result says so, which holds the autonomous release.
+        """
+        from azure.mgmt.compute.models import RunCommandInput
+        os_type = str(getattr(getattr(vm.storage_profile, "os_disk", None), "os_type", "") or "")
+        if "windows" in os_type.lower():
+            cmd = RunCommandInput(command_id="RunPowerShellScript",
+                                  script=["Write-Output 'glorfindel: run command neutralized'"])
+        else:
+            cmd = RunCommandInput(command_id="RunShellScript",
+                                  script=["echo 'glorfindel: run command neutralized'"])
+        try:
+            self._compute.virtual_machines.begin_run_command(rg, vm_name, cmd).result(timeout=600)
+            return {"run_command_neutralized": True}
+        except Exception as e:
+            _console.print(
+                f"  [yellow]Run Command non neutralisée ({_first_line(e)[:_ERR_MAX]}) — le "
+                "disque restauré peut rejouer la dernière commande au démarrage.[/yellow]")
+            return {"run_command_neutralized": False,
+                    "run_command_error": _first_line(e)[:_ERR_MAX]}
 
     def sweep_vm_rules(self, resource_id: str, dry_run: bool = False) -> dict:
         """Azure as the source of truth: remove every glorfindel-* rule that belongs to
@@ -1598,7 +1709,7 @@ class AzureConnector(CloudConnector):
                                self._block_rule_name(ip, vm_name, "nic")):
                     _del(nsg_rg, nsg_name, legacy)
             except Exception as e:
-                failed.append(f"legacy lookup: {_first_line(e)[:200]}")
+                failed.append(f"legacy lookup: {_first_line(e)[:_ERR_MAX]}")
 
         if failed:
             # Keep the entry: the rules that are still there keep blocking the IP, and a

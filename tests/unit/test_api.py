@@ -116,3 +116,24 @@ def test_browser_without_token_gets_a_token_form(monkeypatch):
     assert 'name="token"' in r.text and "<form" in r.text
     # API clients still get JSON
     assert c.get("/api/state").headers["content-type"].startswith("application/json")
+
+
+def test_approved_isolation_is_verified_and_traced(client, monkeypatch, tmp_path):
+    """The approve route executed the held isolation without verifying it nor leaving
+    a trace in runs/ (real run, 2026-10-05). Sessions left open → verification_failed."""
+    from glorfindel import escalations
+    monkeypatch.chdir(tmp_path)
+    rid = "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm"
+    esc = escalations.record(signal_id="s1", resource_id=rid, action="isolate_vm",
+                             escalation_type="mode_hold", reason="held")
+    esc_id = esc["id"] if isinstance(esc, dict) else escalations.pending()[0]["id"]
+    conn = MagicMock()
+    conn.isolate_vm.return_value = {"status": "isolated",
+                                    "drain": {"status": "failed", "error": "403 runCommand"}}
+    conn.verify_isolation.return_value = {"verified": True, "method": "nsg_check"}
+    monkeypatch.setattr("glorfindel.actions.AzureConnector", lambda **k: conn)
+
+    r = client.post(f"/api/action/approve/{esc_id}")
+    assert r.json()["verification"]["verified"] is False
+    assert [e["escalation_type"] for e in escalations.pending()] == ["verification_failed"]
+    assert "isolate_vm" in (tmp_path / "runs" / "manual_actions.jsonl").read_text()

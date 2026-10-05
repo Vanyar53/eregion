@@ -435,3 +435,15 @@ def test_transient_error_does_not_resolve_an_existing_gap(tmp_path):
         checker.check_and_escalate([_asset()])
     mock_resolve.assert_not_called()
     assert checker._state[key]["status"] == "pending"
+
+
+def test_asset_in_exceptions_is_not_checked_and_its_gaps_resolve(tmp_path):
+    """`exceptions:` is documented as taking a VM out of the posture check (a VM with no
+    backup on purpose); the checker ignored it (real run, 2026-10-05)."""
+    from glorfindel.config import ExceptionConfig
+    cfg = _cfg()
+    checker = PostureChecker(cfg, _connector(backup_ok=False), dry_run=False)
+    assert checker.check_and_escalate([_asset()])          # gap while monitored
+    cfg.exceptions = [ExceptionConfig(asset_pattern="vm-*", exclude_all=True)]
+    assert checker.check_and_escalate([_asset()]) == []
+    assert not checker.active_gaps()

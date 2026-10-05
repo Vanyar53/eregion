@@ -660,6 +660,38 @@ async def set_autonomy_default(body: dict) -> dict:
         return {"error": str(e)}
 
 
+def _verify_approved(connector, esc: dict, action: str, resource_id: str, result: dict,
+                     ip: str = "") -> dict:
+    """Verify an action approved from the War Room, as the agent verifies its own, and
+    leave a trace in runs/ for the feed. The approve route used to execute without
+    either (real run, 2026-10-05). A failed check becomes a verification_failed
+    escalation — the approval itself resolved the mode_hold one."""
+    from glorfindel import escalations as _esc
+    from glorfindel.actions import isolation_verdict
+    try:
+        if action == "isolate_vm":
+            verification = isolation_verdict(connector.verify_isolation(resource_id), result)
+        else:
+            verification = connector.verify_block_ip(ip, resource_id)
+    except Exception as e:
+        verification = {"verified": None, "error": f"vérification impossible : {e}"}
+    try:
+        from glorfindel.cli import _record_manual_action
+        _record_manual_action(action, resource_id, {
+            **(result or {}), **verification, "approved_escalation": esc.get("id", "")})
+    except Exception:
+        pass
+    if verification.get("verified") is False:
+        _esc.record(
+            signal_id=f"approve-{esc.get('id', '')}", resource_id=resource_id, action=action,
+            escalation_type="verification_failed",
+            reason=f"Action '{action}' approuvée et exécutée, mais la vérification a échoué : "
+                   f"{verification.get('error', 'check failed')}",
+            ttp=esc.get("ttp", ""), severity=esc.get("severity", ""),
+        )
+    return verification
+
+
 @app.post("/api/action/approve/{esc_id}")
 async def action_approve(esc_id: str, ip: str = "", scope: str = "vm") -> dict:
     """One-click approve for mode_hold escalations — executes the recommended action and acks.
@@ -686,7 +718,9 @@ async def action_approve(esc_id: str, ip: str = "", scope: str = "vm") -> dict:
         if action == "isolate_vm":
             result = await asyncio.to_thread(connector.isolate_vm, resource_id)
             _esc.resolve(esc_id)
-            return {"ok": True, "action": action, "result": result}
+            verification = await asyncio.to_thread(
+                _verify_approved, connector, esc, action, resource_id, result)
+            return {"ok": True, "action": action, "result": result, "verification": verification}
 
         elif action == "snapshot":
             resp = await action_snapshot(vm_name)
@@ -715,8 +749,10 @@ async def action_approve(esc_id: str, ip: str = "", scope: str = "vm") -> dict:
             result = await asyncio.to_thread(
                 connector.block_suspicious_ip, block_ip, resource_id, block_scope)
             _esc.resolve(esc_id)
+            verification = await asyncio.to_thread(
+                _verify_approved, connector, esc, action, resource_id, result, block_ip)
             return {"ok": True, "action": action, "ip": block_ip,
-                    "scope": block_scope, "result": result}
+                    "scope": block_scope, "result": result, "verification": verification}
 
         else:
             return {"error": f"Action '{action}' non supportée via War Room — CLI : glorfindel respond {resource_id}"}

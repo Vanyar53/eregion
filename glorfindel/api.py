@@ -73,13 +73,46 @@ class _TokenAuthMiddleware:
             await receive()  # websocket.connect
             await send({"type": "websocket.close", "code": 1008})
             return
-        from starlette.responses import JSONResponse
-        resp = JSONResponse(
-            {"error": "War Room protégée : ouvrir /?token=<GLORFINDEL_WARROOM_TOKEN> "
-                      "ou envoyer Authorization: Bearer <token>."},
-            status_code=401,
-        )
+        if "text/html" in conn.headers.get("accept", ""):
+            # A browser navigating here: a page that asks for the token (GET form →
+            # ?token=… → cookie + redirect above), not a raw JSON error.
+            from starlette.responses import HTMLResponse
+            resp = HTMLResponse(_TOKEN_PAGE, status_code=401)
+        else:
+            from starlette.responses import JSONResponse
+            resp = JSONResponse(
+                {"error": "War Room protégée : ouvrir /?token=<GLORFINDEL_WARROOM_TOKEN> "
+                          "ou envoyer Authorization: Bearer <token>."},
+                status_code=401,
+            )
         await resp(scope, receive, send)
+
+
+_TOKEN_PAGE = """<!doctype html><html lang="fr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>War Room — accès</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 16px;
+         background: #0d1117; color: #e6edf3;
+         font: 14px/1.5 ui-monospace, "Cascadia Code", "SF Mono", Consolas, monospace; }
+  form { display: grid; gap: 12px; width: min(100%, 26rem); padding: 24px;
+         border: 1px solid #30363d; border-radius: 8px; background: #161b22; }
+  h1 { margin: 0; font-size: 16px; }
+  p { margin: 0; color: #7d8590; }
+  input, button { font: inherit; padding: 8px 10px; border-radius: 6px; }
+  input { background: #0d1117; color: #e6edf3; border: 1px solid #30363d; }
+  input:focus-visible, button:focus-visible { outline: 2px solid #58a6ff; outline-offset: 2px; }
+  button { background: #1f6feb; color: #fff; border: 0; cursor: pointer; }
+</style></head><body>
+<form method="get" action="">
+  <h1>Glorfindel War Room</h1>
+  <p>Cette War Room peut déclencher des actions Azure. Saisis le jeton défini dans
+     <code>GLORFINDEL_WARROOM_TOKEN</code> sur la machine qui l'héberge.</p>
+  <label for="token">Jeton</label>
+  <input id="token" name="token" type="password" autocomplete="current-password" required autofocus>
+  <button type="submit">Ouvrir la War Room</button>
+</form></body></html>"""
 
 
 app.add_middleware(_TokenAuthMiddleware)
@@ -133,6 +166,12 @@ async def state() -> dict:
                 # placements[] = one deny placement per NIC (multi-NIC coverage). The UI
                 # shows "N NICs" when >1 so the operator sees full coverage, not just one NSG.
                 "placements": _iso.get("placements", []),
+                **_state_flags(_iso.get("placements", [])),
+                # partial: some NICs only (a placement failed) — or a release that could
+                # not remove every rule. Never shown as a plain ISOLATED.
+                "partial": bool(_iso.get("partial")),
+                "failed_nic": _iso.get("failed_nic", ""),
+                "release_failed": _iso.get("release_failed", []),
             })
         for b in blocks.get(resource_id, []):
             states.append({
@@ -144,6 +183,9 @@ async def state() -> dict:
                 "rule": b.get("rule", ""),
                 "scoped": b.get("scoped", True),  # False once promoted subnet-wide
                 "placements": b.get("placements", []),  # one rule per NIC (multi-NIC block)
+                **_state_flags(b.get("placements", [])),
+                "partial": bool(b.get("partial")),
+                "unblock_failed": b.get("unblock_failed", []),
             })
         resources.append({
             "resource_id": resource_id,
@@ -233,6 +275,15 @@ async def state() -> dict:
         "read_only": read_only,
         "capability": capability,
         "now": now.isoformat(),
+    }
+
+
+def _state_flags(placements: list) -> dict:
+    """Per-state flags the cards need: a NIC-level NSG shared with other NICs (treated
+    like a subnet NSG), and ALLOW rules recorded as evaluated before our deny."""
+    return {
+        "shared": any(p.get("shared_nsg") for p in placements),
+        "shadowed": [s for p in placements for s in (p.get("shadowed_by") or [])],
     }
 
 

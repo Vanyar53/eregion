@@ -86,3 +86,33 @@ def test_war_room_cli_defaults_to_loopback():
     from glorfindel.cli import war_room
     host = next(p for p in war_room.params if p.name == "host")
     assert host.default == "127.0.0.1"
+
+
+def test_state_exposes_partial_shared_and_bypassed_isolation(client):
+    """A partial or bypassed isolation must never render as a plain ISOLATED."""
+    from glorfindel.actions import _save_isolation_state
+    rid = "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm"
+    _save_isolation_state("vm", {
+        "resource_id": rid, "isolated_at": "2026-10-05T10:00:00+00:00",
+        "nsg_scope": "nic", "partial": True, "failed_nic": "nic-b",
+        "placements": [{"nsg_rg": "rg", "nsg_name": "nsg-tier", "scope": "nic", "shared_nsg": True,
+                        "shadowed_by": [{"rule": "allow-ssh", "priority": 100,
+                                         "direction": "Inbound", "ports": "22"}]}],
+    })
+    r = client.get("/api/state")
+    assert r.status_code == 200
+    vm = next(x for x in r.json()["resources"] if x["vm_name"] == "vm")
+    iso = next(s for s in vm["states"] if s["type"] == "isolated")
+    assert iso["partial"] is True and iso["failed_nic"] == "nic-b"
+    assert iso["shared"] is True
+    assert [s["rule"] for s in iso["shadowed"]] == ["allow-ssh"]
+
+
+def test_browser_without_token_gets_a_token_form(monkeypatch):
+    monkeypatch.setenv("GLORFINDEL_WARROOM_TOKEN", "s3cret")
+    c = TestClient(api.app)
+    r = c.get("/", headers={"Accept": "text/html,application/xhtml+xml"})
+    assert r.status_code == 401
+    assert 'name="token"' in r.text and "<form" in r.text
+    # API clients still get JSON
+    assert c.get("/api/state").headers["content-type"].startswith("application/json")

@@ -1475,10 +1475,14 @@ class AzureConnector(CloudConnector):
         for p in (entry or {}).get("placements", []):
             _del(p["nsg_rg"], p["nsg_name"], p["rule"])
 
-        # 2) The recorded single rule (perimeter / legacy entry).
+        # 2) The recorded single rule (perimeter / legacy entry). A VM-scoped entry also
+        # mirrors its first placement in nsg/rule: skip it then (deleted in step 1 — the
+        # bench run listed every rule twice).
         if entry and entry.get("nsg") and entry.get("rule"):
             r_rg, r_name = entry["nsg"].split("/", 1)
-            _del(r_rg, r_name, entry["rule"])
+            done = {(p["nsg_rg"], p["nsg_name"], p["rule"]) for p in entry.get("placements", [])}
+            if (r_rg, r_name, entry["rule"]) not in done:
+                _del(r_rg, r_name, entry["rule"])
 
         # 3) Belt-and-braces for legacy state without rule names: resolve via the primary
         # NIC and delete the historical VM-suffixed / plain block-rule names.

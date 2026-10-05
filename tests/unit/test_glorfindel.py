@@ -1818,3 +1818,18 @@ def test_audit_fails_on_nsg_precedence():
     assert check.status == "fail"
     assert "allow-ssh" in check.message
     assert "--priority 1000" in check.fix
+
+
+def test_unblock_deletes_each_rule_once(monkeypatch):
+    """A VM-scoped entry mirrors its first placement in nsg/rule: the bench run showed
+    every rule deleted (and listed) twice."""
+    from glorfindel.actions import AzureConnector, _save_block_state
+    rule = "glorfindel-block-1-2-3-4-vm-nic-a"
+    _save_block_state("vm", "1.2.3.4", _RID, nsg="rg/nsg", nsg_scope="subnet", rule=rule,
+                      placements=[{"nsg_rg": "rg", "nsg_name": "nsg", "scope": "subnet", "rule": rule}])
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    connector._network = MagicMock()
+    out = connector.unblock_ip("1.2.3.4", _RID)
+    assert out["deleted_rules"] == [rule, f"{rule}-out"]
+    assert connector._network.security_rules.begin_delete.call_count == 2

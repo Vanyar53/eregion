@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import importlib
+import json
+import os
+import tempfile
 import threading
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -30,6 +34,55 @@ _warmed_up = False
 _warmup_lock = threading.Lock()
 
 
+class PartialActionError(RuntimeError):
+    """An NSG action landed on some NICs, then failed on the next one.
+
+    The rules already in place are KEPT (partial containment beats none) and recorded
+    in state, so release / unblock / reset can remove them later. Before this, a failure
+    on NIC n left the rules of NICs 1..n-1 on Azure with no state at all: invisible to
+    `glorfindel list`, and out of reach of `reset`.
+
+    Carries the original error's status_code so execute_action still tells an IAM gap
+    (403 → write_blocked) from any other failure (action_failed).
+    """
+
+    def __init__(self, message: str, *, cause: BaseException, covered: list[str], failed_nic: str):
+        super().__init__(message)
+        self.cause = cause
+        self.status_code = getattr(cause, "status_code", None)
+        self.covered = covered
+        self.failed_nic = failed_nic
+
+
+def _first_line(exc: BaseException) -> str:
+    """First line of an exception message (Azure SDK errors repeat it on later lines)."""
+    text = str(exc).strip()
+    return text.splitlines()[0].strip() if text else type(exc).__name__
+
+
+def _is_not_found(exc: BaseException) -> bool:
+    """True when an Azure call failed only because the resource doesn't exist."""
+    if getattr(exc, "status_code", None) == 404:
+        return True
+    try:
+        from azure.core.exceptions import ResourceNotFoundError
+        if isinstance(exc, ResourceNotFoundError):
+            return True
+    except ImportError:
+        pass
+    return "notfound" in str(exc).replace(" ", "").lower()
+
+
+def _ip_scoped(target: dict) -> bool:
+    """True when the deny must be addressed to the VM's own IPs.
+
+    That is the case on any NSG that also governs other NICs: a subnet NSG, or a
+    NIC-level NSG shared with other NICs. An any/any deny there would cut off every VM
+    behind it. Older target dicts carry no `ip_scoped` key: fall back to the scope.
+    """
+    return target.get("ip_scoped", target.get("scope") == "subnet")
+
+
 def warm_up_azure_sdk() -> None:
     """Import the Azure SDK once, single-threaded, before any worker threads run.
 
@@ -42,6 +95,10 @@ def warm_up_azure_sdk() -> None:
 
     Call at watch startup AND at the top of audit.run (before the ThreadPoolExecutor) so
     both the watch process and the War Room API process are covered.
+
+    Each module is imported on its own: one missing optional package (e.g. the
+    recovery-services SDK) no longer cancels the warm-up of the modules that ARE
+    installed — which is what removes the deadlock window for them.
     """
     global _warmed_up
     if _warmed_up:
@@ -49,21 +106,25 @@ def warm_up_azure_sdk() -> None:
     with _warmup_lock:
         if _warmed_up:
             return
-        try:
-            import azure.core.pipeline          # noqa: F401  (the module that races)
-            import azure.core.exceptions         # noqa: F401
-            from azure.identity import DefaultAzureCredential   # noqa: F401
-            from azure.mgmt.network import NetworkManagementClient   # noqa: F401
-            from azure.mgmt.network import models               # noqa: F401
-            from azure.mgmt.compute import ComputeManagementClient   # noqa: F401
-            from azure.mgmt.recoveryservicesbackup import (        # noqa: F401
-                RecoveryServicesBackupClient,
-            )
-            from azure.monitor.query import LogsQueryClient    # noqa: F401
-            _warmed_up = True
-        except Exception:
-            # azure not installed / partial env — real errors surface at actual use.
-            pass
+        for module in _WARM_UP_MODULES:
+            try:
+                importlib.import_module(module)
+            except Exception:
+                # Not installed / partial env — real errors surface at actual use.
+                pass
+        _warmed_up = True
+
+
+_WARM_UP_MODULES = (
+    "azure.core.pipeline",        # the module that races
+    "azure.core.exceptions",
+    "azure.identity",
+    "azure.mgmt.network",
+    "azure.mgmt.network.models",
+    "azure.mgmt.compute",
+    "azure.mgmt.recoveryservicesbackup",
+    "azure.monitor.query",
+)
 
 
 class CloudConnector(ABC):
@@ -89,19 +150,33 @@ class CloudConnector(ABC):
         ...
 
     @abstractmethod
-    def snapshot(self, resource_id: str, vault: str = "rsv-annatar", wait: bool = True) -> str:
+    def snapshot(
+        self, resource_id: str, vault: str = "rsv-annatar", wait: bool = True,
+        vault_rg: str = "",
+    ) -> str:
         """Take an on-demand RSV backup snapshot.
 
         wait=True: blocks until job completes (~5-20 min). Use for CLI setup workflow.
-        wait=False: fire-and-forget — returns job_id immediately. Use on detection_timeout
-        paths to avoid blocking the queue during a long initial backup.
+        wait=False: fire-and-forget — returns job_id immediately. The agent always uses
+        it: a blocking snapshot holds the VM's (serialized) signal queue for the whole
+        backup — 4h25 on an initial full backup in a real run.
+        vault_rg: the vault's resource group (central vault ≠ VM RG); empty → VM's RG.
         """
         ...
 
     @abstractmethod
     def verify_isolation(self, resource_id: str) -> dict:
-        """Confirm that isolation rules are active on the VM's NSG."""
+        """Confirm that isolation rules are active on EVERY NIC of the VM."""
         ...
+
+    def verify_release(self, resource_id: str) -> dict:
+        """Confirm that NO isolation rule remains on any NIC of the VM.
+
+        Not `not verify_isolation()`: that is False as soon as ONE NIC is uncovered, so
+        its negation would call a VM released while another NIC is still cut off.
+        Default for connectors that don't implement it: no claim (verified=None).
+        """
+        return {"verified": None, "method": "not_implemented"}
 
     @abstractmethod
     def verify_snapshot(self, snap_id: str) -> dict:
@@ -116,6 +191,7 @@ class CloudConnector(ABC):
         before_attack_time: str | None = None,
         wait: bool = True,
         staging_storage: str = "",
+        vault_rg: str = "",
     ) -> dict:
         """Trigger an Azure Backup OriginalLocation restore. Human-approved action.
 
@@ -123,6 +199,7 @@ class CloudConnector(ABC):
         that predates the attack, avoiding restoration of a post-attack backup.
         wait=False: returns after triggering the restore job, without polling.
           VM stays deallocated; caller must start it and emit recovery_complete manually.
+        vault_rg: the vault's resource group (central vault ≠ VM RG); empty → VM's RG.
         """
         ...
 
@@ -140,8 +217,12 @@ class CloudConnector(ABC):
 class AzureConnector(CloudConnector):
     """Azure implementation of CloudConnector.
 
-    All mutating actions are restricted to resources tagged annatar-test: 'true'
-    unless the resource_id is explicitly in an override list.
+    Mutating actions act on the resource_id they are given. Scope control lives
+    upstream, not in a tag allowlist: the per-asset autonomy mode (human_only by
+    default) decides whether an action runs at all, and GLORFINDEL_READ_ONLY blocks
+    every write (_guard_write). A defender limited to resources tagged as test targets
+    would not defend production; the `annatar-test` tag gates the RED side only
+    (annatar/safety/guard.py).
     """
 
     ISOLATION_RULE_NAME = "glorfindel-isolation-deny-all"
@@ -237,9 +318,15 @@ class AzureConnector(CloudConnector):
 
         A VM can have several NICs, each behind its own NSG (or its subnet's NSG).
         Isolating only the primary NIC leaves the others open. So we place one deny
-        pair per NIC: any/any on a NIC-level NSG (priority 100, bumping conflicts), or
-        scoped to all the NIC's private IPs on a shared subnet NSG (free priority, no
-        bump → other VMs untouched). State records every placement for release.
+        pair per NIC: any/any on an NSG that governs this VM alone (priority 100,
+        bumping conflicts), or scoped to all the NIC's private IPs on an NSG shared with
+        other NICs — a subnet NSG or a shared NIC-level NSG (free priority, no bump →
+        other VMs untouched). State records every placement for release.
+
+        Partial failure: if a later NIC fails, the denies already in place stay (partial
+        containment beats none), are recorded in state with `partial: true`, and a
+        PartialActionError is raised. A failure before anything landed raises the
+        original error and writes no state (nothing to undo).
         """
         if self.dry_run:
             return {"status": "dry_run", "action": "isolate_vm", "resource_id": resource_id}
@@ -256,44 +343,62 @@ class AzureConnector(CloudConnector):
             nsg_key = f"{nsg_rg}/{nsg_name}"
             base = self._placement_rule_base("glorfindel-iso", vm_name, t["nic_short"], t["nic_id"])
             in_name, out_name = base, f"{base}-out"
-            existing = list(self._network.security_rules.list(nsg_rg, nsg_name))
-            used = {r.priority for r in existing} | assigned.get(nsg_key, set())
-            bumped: list[dict] = []
-
-            if scope == "subnet":
-                ips = t["private_ips"]
-                if not ips:
-                    raise RuntimeError(
-                        f"NIC {t['nic_short']} has no private IP — cannot scope isolation "
-                        "on its shared subnet NSG"
-                    )
-                priority = next(p for p in range(self.ISOLATION_PRIORITY, 4000) if p not in used)
-                self._put_deny_rule(nsg_rg, nsg_name, in_name, "Inbound", priority, src="*", dsts=ips)
-                self._put_deny_rule(nsg_rg, nsg_name, out_name, "Outbound", priority, srcs=ips, dst="*")
-            else:
-                # NIC-level NSG (this VM only) — any/any is safe. Insist on priority 100
-                # so the deny wins; shift any conflicting non-glorfindel rule off it.
-                for r in existing:
-                    if r.priority == self.ISOLATION_PRIORITY and not r.name.startswith("glorfindel-"):
-                        new_prio = next(
-                            p for p in range(self.ISOLATION_PRIORITY + 100, 4000, 100)
-                            if p not in used
+            placement = {
+                "nic_id": t["nic_id"], "nsg_rg": nsg_rg, "nsg_name": nsg_name,
+                "scope": scope, "shared_nsg": bool(t.get("shared_nsg", False)),
+                "ips": t["private_ips"], "priority": None,
+                "rule_in": in_name, "rule_out": out_name,
+                "bumped": [],    # customer rules moved off priority 100 (restored on release)
+                "applied": [],   # deny rules confirmed by Azure
+            }
+            try:
+                existing = list(self._network.security_rules.list(nsg_rg, nsg_name))
+                used = {r.priority for r in existing} | assigned.get(nsg_key, set())
+                if _ip_scoped(t):
+                    ips = t["private_ips"]
+                    if not ips:
+                        raise RuntimeError(
+                            f"NIC {t['nic_short']} has no private IP — cannot scope isolation "
+                            "on its shared NSG"
                         )
-                        used.add(new_prio)
-                        r.priority = new_prio
-                        self._network.security_rules.begin_create_or_update(
-                            nsg_rg, nsg_name, r.name, r).result()
-                        bumped.append({"name": r.name, "original_priority": self.ISOLATION_PRIORITY})
-                priority = self.ISOLATION_PRIORITY
-                self._put_deny_rule(nsg_rg, nsg_name, in_name, "Inbound", priority, src="*", dst="*")
-                self._put_deny_rule(nsg_rg, nsg_name, out_name, "Outbound", priority, src="*", dst="*")
+                    priority = next(p for p in range(self.ISOLATION_PRIORITY, 4000) if p not in used)
+                    placement["priority"] = priority
+                    self._put_deny_rule(nsg_rg, nsg_name, in_name, "Inbound", priority, src="*", dsts=ips)
+                    placement["applied"].append(in_name)
+                    self._put_deny_rule(nsg_rg, nsg_name, out_name, "Outbound", priority, srcs=ips, dst="*")
+                    placement["applied"].append(out_name)
+                else:
+                    # NSG governing this VM only — any/any is safe. Insist on priority 100
+                    # so the deny wins; shift any conflicting non-glorfindel rule off it.
+                    for r in existing:
+                        if r.priority == self.ISOLATION_PRIORITY and not r.name.startswith("glorfindel-"):
+                            new_prio = next(
+                                p for p in range(self.ISOLATION_PRIORITY + 100, 4000, 100)
+                                if p not in used
+                            )
+                            used.add(new_prio)
+                            r.priority = new_prio
+                            self._network.security_rules.begin_create_or_update(
+                                nsg_rg, nsg_name, r.name, r).result()
+                            # Recorded as soon as Azure confirms the move: if a later step
+                            # fails, release still knows to put the customer's rule back.
+                            placement["bumped"].append(
+                                {"name": r.name, "original_priority": self.ISOLATION_PRIORITY})
+                    priority = self.ISOLATION_PRIORITY
+                    placement["priority"] = priority
+                    self._put_deny_rule(nsg_rg, nsg_name, in_name, "Inbound", priority, src="*", dst="*")
+                    placement["applied"].append(in_name)
+                    self._put_deny_rule(nsg_rg, nsg_name, out_name, "Outbound", priority, src="*", dst="*")
+                    placement["applied"].append(out_name)
+            except Exception as exc:
+                partial = self._record_partial_isolation(
+                    vm_name, resource_id, placements, placement, exc, total=len(targets))
+                if partial is None:
+                    raise
+                raise partial from exc
 
             assigned.setdefault(nsg_key, set()).add(priority)
-            placements.append({
-                "nic_id": t["nic_id"], "nsg_rg": nsg_rg, "nsg_name": nsg_name,
-                "scope": scope, "ips": t["private_ips"], "priority": priority,
-                "rule_in": in_name, "rule_out": out_name, "bumped": bumped,
-            })
+            placements.append(placement)
 
         # Persist state ONLY after every deny rule is confirmed on Azure (a 403 mid-way
         # must not leave an orphan "ISOLATED" state). placements[] drives release/verify;
@@ -328,9 +433,109 @@ class AzureConnector(CloudConnector):
                 "subnet-level NSG involved — isolation scoped to this VM's private IP(s) "
                 "only (no impact on other VMs on the subnet)."
             )
+        if any(p["shared_nsg"] for p in placements):
+            out["note"] = (
+                "NSG shared with other NICs involved — isolation scoped to this VM's "
+                "private IP(s) only (no impact on the other VMs behind that NSG)."
+            )
         return out
 
+    def _record_partial_isolation(
+        self, vm_name: str, resource_id: str, done: list[dict], failed: dict,
+        exc: BaseException, *, total: int,
+    ) -> PartialActionError | None:
+        """Persist what a failed isolation left on Azure; build the error to raise.
+
+        Returns None when nothing landed (no state written — the caller re-raises the
+        original error, exactly as before). Otherwise writes a `partial` state covering
+        every rule still in place, so release / reset can find and remove them.
+        """
+        # A customer rule moved off priority 100 for a deny that never landed protects
+        # nothing: put it back now. If that fails too, keep it in state for release.
+        if failed["bumped"] and not failed["applied"]:
+            failed["bumped"] = self._restore_bumped(
+                failed["nsg_rg"], failed["nsg_name"], failed["bumped"])
+        kept = done + ([failed] if failed["applied"] or failed["bumped"] else [])
+        if not kept:
+            return None
+
+        from datetime import datetime, timezone
+        failed_nic = failed["nic_id"].rstrip("/").split("/")[-1]
+        covered = [p["nic_id"].rstrip("/").split("/")[-1] for p in done]
+        first = kept[0]
+        _save_isolation_state(vm_name, {
+            "resource_id": resource_id,
+            "isolated_at": datetime.now(timezone.utc).isoformat(),
+            "scoped": True,
+            "partial": True,
+            "failed_nic": failed_nic,
+            "error": _first_line(exc)[:300],
+            "placements": kept,
+            "nsg_rg": first["nsg_rg"], "nsg_name": first["nsg_name"], "nsg_scope": first["scope"],
+            "rule_names": [p["rule_in"] for p in kept] + [p["rule_out"] for p in kept],
+        })
+        return PartialActionError(
+            f"Isolation partielle de {vm_name} : {len(done)}/{total} NIC(s) couverte(s), "
+            f"échec sur {failed_nic} ({_first_line(exc)}). Les règles déjà posées restent "
+            "en place et sont enregistrées — `glorfindel reset` pour les retirer.",
+            cause=exc, covered=covered, failed_nic=failed_nic,
+        )
+
+    def _delete_rule(self, nsg_rg: str, nsg_name: str, rule_name: str) -> str | None:
+        """Delete one security rule. None on success or if it was already gone; else a
+        short description of the failure (the rule may still be in place)."""
+        try:
+            self._network.security_rules.begin_delete(nsg_rg, nsg_name, rule_name).result()
+            return None
+        except Exception as e:
+            if _is_not_found(e):
+                return None
+            return f"{nsg_rg}/{nsg_name}/{rule_name}: {_first_line(e)[:200]}"
+
+    def _restore_bumped(self, nsg_rg: str, nsg_name: str, bumped: list[dict]) -> list[dict]:
+        """Put customer rules back on their original priority. Returns the ones that
+        could not be restored (kept in state so a later release can retry)."""
+        left: list[dict] = []
+        for info in bumped:
+            try:
+                r = self._network.security_rules.get(nsg_rg, nsg_name, info["name"])
+                r.priority = info["original_priority"]
+                self._network.security_rules.begin_create_or_update(nsg_rg, nsg_name, r.name, r).result()
+            except Exception as e:
+                if _is_not_found(e):
+                    continue  # its owner deleted it meanwhile — nothing to put back
+                left.append({**info, "error": _first_line(e)[:200]})
+        return left
+
+    def _isolation_names_for_target(self, vm_name: str, t: dict) -> list[str]:
+        """Every rule name an isolation of this VM can have left on this NIC's NSG.
+
+        Names are deterministic: the per-(VM, NIC) names of the multi-NIC isolation,
+        plus the legacy VM-suffixed names. The legacy FIXED names are only ours to touch
+        on an NSG that governs this VM alone — on a shared NSG they could belong to
+        another VM's isolation.
+        """
+        base = self._placement_rule_base("glorfindel-iso", vm_name, t["nic_short"], t["nic_id"])
+        names = [
+            base, f"{base}-out",
+            f"{self.ISOLATION_RULE_NAME}-{vm_name}", f"{self.ISOLATION_RULE_NAME}-{vm_name}-out",
+        ]
+        if not _ip_scoped(t):
+            names += [self.ISOLATION_RULE_NAME, f"{self.ISOLATION_RULE_NAME}-out"]
+        return names
+
     def release_isolation(self, resource_id: str) -> dict:
+        """Remove every isolation rule of the VM and restore bumped customer rules.
+
+        Failures are no longer swallowed: a rule that could not be deleted keeps the VM
+        cut off, so the state is kept for those placements, and the status says
+        `release_partial` with the failing rules. `released` means every delete succeeded
+        (or the rule was already gone).
+
+        Without recorded placements (legacy state, a lost or corrupt state file, a state
+        never written), the rule names are recomputed on every current NIC — the same
+        names verify_isolation / verify_release look for.
+        """
         if self.dry_run:
             return {"status": "dry_run", "action": "release_isolation", "resource_id": resource_id}
 
@@ -339,47 +544,56 @@ class AzureConnector(CloudConnector):
         rg, vm_name = _parse_vm_resource_id(resource_id)
         state = _load_isolation_state(vm_name) or {}
 
+        failed: list[str] = []
+        remaining: list[dict] = []
         if state.get("placements"):
-            # Multi-NIC: undo each placement on its own NSG (delete rules, restore bumps).
+            # Multi-NIC: undo each placement on its own NSG. Delete our denies first —
+            # a customer rule can only go back to priority 100 once ours is gone.
             for p in state["placements"]:
                 p_rg, p_name = p["nsg_rg"], p["nsg_name"]
-                for rule_name in (p.get("rule_in"), p.get("rule_out")):
-                    if rule_name:
-                        try:
-                            self._network.security_rules.begin_delete(p_rg, p_name, rule_name).result()
-                        except Exception:
-                            pass
-                for rule_info in p.get("bumped", []):
-                    try:
-                        r = self._network.security_rules.get(p_rg, p_name, rule_info["name"])
-                        r.priority = rule_info["original_priority"]
-                        self._network.security_rules.begin_create_or_update(p_rg, p_name, r.name, r).result()
-                    except Exception:
-                        pass
+                p_failed = [
+                    err for err in (
+                        self._delete_rule(p_rg, p_name, name)
+                        for name in (p.get("rule_in"), p.get("rule_out")) if name
+                    ) if err
+                ]
+                left = self._restore_bumped(p_rg, p_name, p.get("bumped", []))
+                p_failed += [f"{p_rg}/{p_name}/{b['name']} (priorité non restaurée) : {b['error']}"
+                             for b in left]
+                if p_failed:
+                    failed += p_failed
+                    # Keep the placement for a retry: its rule names (deleting an absent
+                    # rule is a no-op) and only the bumps still to put back.
+                    remaining.append({**p, "bumped": left})
         else:
-            # Legacy single-NSG state (isolated before the multi-NIC upgrade) — resolve
-            # via the primary NIC and delete both fixed and VM-suffixed rule names.
-            nic_id = self._get_primary_nic_id(rg, vm_name)
-            nsg_rg, nsg_name, _ = self._get_nic_nsg(nic_id)
-            names = set(state.get("rule_names", []))
-            names.update([
-                self.ISOLATION_RULE_NAME, f"{self.ISOLATION_RULE_NAME}-out",
-                f"{self.ISOLATION_RULE_NAME}-{vm_name}", f"{self.ISOLATION_RULE_NAME}-{vm_name}-out",
-            ])
-            for rule_name in names:
-                try:
-                    self._network.security_rules.begin_delete(nsg_rg, nsg_name, rule_name).result()
-                except Exception:
-                    pass
-            for rule_info in state.get("bumped", []):
-                try:
-                    r = self._network.security_rules.get(nsg_rg, nsg_name, rule_info["name"])
-                    r.priority = rule_info["original_priority"]
-                    self._network.security_rules.begin_create_or_update(nsg_rg, nsg_name, r.name, r).result()
-                except Exception:
-                    pass
+            for t in self._get_vm_nic_targets(rg, vm_name):
+                for name in self._isolation_names_for_target(vm_name, t):
+                    err = self._delete_rule(t["nsg_rg"], t["nsg_name"], name)
+                    if err:
+                        failed.append(err)
+            # Legacy single-NSG state: recorded rule names + bumps live on the recorded NSG.
+            if state.get("nsg_name"):
+                l_rg, l_name = state.get("nsg_rg", rg), state["nsg_name"]
+                for name in state.get("rule_names", []):
+                    err = self._delete_rule(l_rg, l_name, name)
+                    if err:
+                        failed.append(err)
+                left = self._restore_bumped(l_rg, l_name, state.get("bumped", []))
+                failed += [f"{l_rg}/{l_name}/{b['name']} (priorité non restaurée) : {b['error']}"
+                           for b in left]
 
-        _clear_isolation_state(vm_name)  # always clear — even if state was already absent
+        if failed:
+            from datetime import datetime, timezone
+            _save_isolation_state(vm_name, {
+                **state,
+                "resource_id": state.get("resource_id") or resource_id,
+                "isolated_at": state.get("isolated_at") or datetime.now(timezone.utc).isoformat(),
+                "placements": remaining if state.get("placements") else state.get("placements", []),
+                "release_failed": failed,
+            })
+            return {"status": "release_partial", "resource_id": resource_id, "failed": failed}
+
+        _clear_isolation_state(vm_name)
         return {"status": "released", "resource_id": resource_id}
 
     def block_suspicious_ip(
@@ -412,8 +626,12 @@ class AzureConnector(CloudConnector):
 
     def _block_ip_vm(self, ip: str, resource_id: str, rg: str, vm_name: str) -> dict:
         """VM-scoped block (autonomous default) — deny the attacker IP on EVERY NIC so a
-        secondary NIC doesn't leave the attacker a path. One rule per NIC: any↔attacker
-        on a NIC NSG, attacker↔(all the NIC's IPs) on a shared subnet NSG."""
+        secondary NIC doesn't leave the attacker a path. One rule pair per NIC:
+        any↔attacker on an NSG that governs this VM alone, attacker↔(all the NIC's IPs)
+        on an NSG shared with other NICs (subnet NSG or shared NIC-level NSG).
+
+        Partial failure: rules already placed stay and are recorded (`partial: true`),
+        then PartialActionError is raised — same contract as isolate_vm."""
         prefix = self._block_rule_prefix(ip)
         targets = self._get_vm_nic_targets(rg, vm_name)
         placements: list[dict] = []
@@ -423,21 +641,54 @@ class AzureConnector(CloudConnector):
             nsg_key = f"{nsg_rg}/{nsg_name}"
             base = self._placement_rule_base(prefix, vm_name, t["nic_short"], t["nic_id"])
             in_name, out_name = base, f"{base}-out"
-            existing = list(self._network.security_rules.list(nsg_rg, nsg_name))
-            used = {r.priority for r in existing} | assigned.get(nsg_key, set())
-            priority = next(p for p in range(200, 4000, 10) if p not in used)
-            if scope_t == "subnet":
-                ips = t["private_ips"]
-                self._put_deny_rule(nsg_rg, nsg_name, in_name, "Inbound", priority, src=ip, dsts=ips)
-                self._put_deny_rule(nsg_rg, nsg_name, out_name, "Outbound", priority, srcs=ips, dst=ip)
-            else:
-                self._put_deny_rule(nsg_rg, nsg_name, in_name, "Inbound", priority, src=ip, dst="*")
-                self._put_deny_rule(nsg_rg, nsg_name, out_name, "Outbound", priority, src="*", dst=ip)
-            assigned.setdefault(nsg_key, set()).add(priority)
-            placements.append({
+            placement = {
                 "nsg_rg": nsg_rg, "nsg_name": nsg_name, "scope": scope_t,
+                "shared_nsg": bool(t.get("shared_nsg", False)),
                 "ips": t["private_ips"], "rule": base,
-            })
+            }
+            applied: list[str] = []
+            try:
+                existing = list(self._network.security_rules.list(nsg_rg, nsg_name))
+                used = {r.priority for r in existing} | assigned.get(nsg_key, set())
+                priority = next(p for p in range(200, 4000, 10) if p not in used)
+                if _ip_scoped(t):
+                    ips = t["private_ips"]
+                    if not ips:
+                        # Same guard as isolate_vm: an empty destination list would make
+                        # a rule that matches nothing (or is rejected) — never "blocked".
+                        raise RuntimeError(
+                            f"NIC {t['nic_short']} has no private IP — cannot scope the "
+                            "block on its shared NSG"
+                        )
+                    self._put_deny_rule(nsg_rg, nsg_name, in_name, "Inbound", priority, src=ip, dsts=ips)
+                    applied.append(in_name)
+                    self._put_deny_rule(nsg_rg, nsg_name, out_name, "Outbound", priority, srcs=ips, dst=ip)
+                    applied.append(out_name)
+                else:
+                    self._put_deny_rule(nsg_rg, nsg_name, in_name, "Inbound", priority, src=ip, dst="*")
+                    applied.append(in_name)
+                    self._put_deny_rule(nsg_rg, nsg_name, out_name, "Outbound", priority, src="*", dst=ip)
+                    applied.append(out_name)
+            except Exception as exc:
+                kept = placements + ([placement] if applied else [])
+                if not kept:
+                    raise
+                first = kept[0]
+                _save_block_state(
+                    vm_name, ip, resource_id,
+                    nsg=f'{first["nsg_rg"]}/{first["nsg_name"]}', nsg_scope=first["scope"],
+                    rule=first["rule"], scoped=True, placements=kept, partial=True,
+                )
+                failed_nic = t["nic_short"]
+                raise PartialActionError(
+                    f"Blocage partiel de {ip} sur {vm_name} : {len(placements)}/{len(targets)} "
+                    f"NIC(s) couverte(s), échec sur {failed_nic} ({_first_line(exc)}). "
+                    "Les règles déjà posées restent en place et sont enregistrées — "
+                    f"`glorfindel unblock {ip} <resource_id>` pour les retirer.",
+                    cause=exc, covered=[p["rule"] for p in placements], failed_nic=failed_nic,
+                ) from exc
+            assigned.setdefault(nsg_key, set()).add(priority)
+            placements.append(placement)
 
         first = placements[0]
         _save_block_state(
@@ -455,10 +706,10 @@ class AzureConnector(CloudConnector):
                 for p in placements
             ],
         }
-        if any(p["scope"] == "subnet" for p in placements):
+        if any(_ip_scoped(p) or p["shared_nsg"] for p in placements):
             out["note"] = (
-                "subnet-level NSG involved — block scoped to this VM's private IP(s) "
-                "(attacker still reaches other VMs until they detect it)."
+                "shared NSG involved (subnet or several NICs) — block scoped to this VM's "
+                "private IP(s) (attacker still reaches other VMs until they detect it)."
             )
         return out
 
@@ -523,12 +774,16 @@ class AzureConnector(CloudConnector):
     def _block_rule_prefix(self, ip: str) -> str:
         return f"glorfindel-block-{ip.replace('.', '-').replace('/', '-')}"
 
-    def snapshot(self, resource_id: str, vault: str = "rsv-annatar", wait: bool = True) -> str:
+    def snapshot(
+        self, resource_id: str, vault: str = "rsv-annatar", wait: bool = True,
+        vault_rg: str = "",
+    ) -> str:
         """Trigger an RSV on-demand backup.
 
         wait=True: blocks until job completes (~5-20 min). Use for CLI setup workflow.
         wait=False: fire-and-forget — returns job_id immediately without polling.
-        Use on detection_timeout paths to avoid blocking the queue.
+        The agent always uses it (see CloudConnector.snapshot).
+        vault_rg: the vault's resource group (central vault ≠ VM RG); empty → VM's RG.
         """
         if self.dry_run:
             return "snap-dry-run-000"
@@ -541,11 +796,12 @@ class AzureConnector(CloudConnector):
 
         self._ensure_clients()
         rg, vm_name = _parse_vm_resource_id(resource_id)
+        v_rg = vault_rg or rg
         sub = self._subscription_id
-        container_name = f"iaasvmcontainer;iaasvmcontainerv2;{rg};{vm_name}"
-        item_name = f"vm;iaasvmcontainerv2;{rg};{vm_name}"
 
         backup_client = RecoveryServicesBackupClient(self._credential, sub)
+        container_name, item_name = self._resolve_backup_item_names(
+            backup_client, vault, v_rg, rg, vm_name)
 
         expiry = (datetime.now(timezone.utc) + timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
         token = self._credential.get_token("https://management.azure.com/.default").token
@@ -554,7 +810,7 @@ class AzureConnector(CloudConnector):
         item_enc = item_name.replace(";", "%3B")
         url = (
             f"https://management.azure.com/subscriptions/{sub}"
-            f"/resourceGroups/{rg}/providers/Microsoft.RecoveryServices/vaults/{vault}"
+            f"/resourceGroups/{v_rg}/providers/Microsoft.RecoveryServices/vaults/{vault}"
             f"/backupFabrics/Azure/protectionContainers/{container_enc}"
             f"/protectedItems/{item_enc}/backup"
             f"?api-version=2021-10-01"
@@ -565,21 +821,17 @@ class AzureConnector(CloudConnector):
                 "recoveryPointExpiryTimeInUTC": expiry,
             }
         }
+        triggered_at = datetime.now(timezone.utc)
         r = requests.post(url, json=payload, headers=headers)
         if r.status_code not in (200, 202):
             raise RuntimeError(f"Snapshot trigger failed ({r.status_code}): {r.text[:300]}")
 
-        time.sleep(10)
-        backup_job = next(
-            (j for j in backup_client.backup_jobs.list(vault, rg)
-             if getattr(j.properties, "operation", "") == "Backup"
-             and getattr(j.properties, "status", "") == "InProgress"),
-            None,
-        )
+        backup_job = self._find_backup_job(
+            backup_client, vault, v_rg, "Backup", vm_name, triggered_at)
         if backup_job is None:
-            raise RuntimeError("Backup job not found after trigger")
+            raise RuntimeError(f"Backup job for {vm_name} not found after trigger")
 
-        snap_id = f"rsv:{vault}/{rg}/{backup_job.name}"
+        snap_id = f"rsv:{vault}/{v_rg}/{backup_job.name}"
         _console.print(
             f"  [dim]Backup job {backup_job.name} started (5-20 min expected)...[/dim]"
         )
@@ -590,7 +842,7 @@ class AzureConnector(CloudConnector):
         while True:
             time.sleep(60)
             elapsed += 60
-            job = backup_client.job_details.get(vault, rg, backup_job.name)
+            job = backup_client.job_details.get(vault, v_rg, backup_job.name)
             status = getattr(job.properties, "status", "Unknown")
             _console.print(f"  [dim]Backup in progress... {elapsed}s — {status}[/dim]")
             if status in ("Completed", "Failed", "Cancelled"):
@@ -600,6 +852,65 @@ class AzureConnector(CloudConnector):
             raise RuntimeError(f"Backup job ended with status: {status}")
 
         return snap_id
+
+    def _resolve_backup_item_names(
+        self, client, vault: str, vault_rg: str, vm_rg: str, vm_name: str,
+    ) -> tuple[str, str]:
+        """The (container, item) names exactly as the vault stores them.
+
+        recovery_points.list is case-SENSITIVE on these names; protected_items.get is
+        not. So: ask the vault for the item with the canonical names, then read the
+        stored names back from the returned resource id. Falls back to the canonical
+        names when the lookup fails (the call that needs them reports the real error).
+        """
+        container, item = _backup_item_names(vm_rg, vm_name)
+        try:
+            found = client.protected_items.get(vault, vault_rg, "Azure", container, item)
+            parts = (getattr(found, "id", "") or "").split("/")
+            low = [p.lower() for p in parts]
+            if "protectioncontainers" in low and "protecteditems" in low:
+                container = parts[low.index("protectioncontainers") + 1]
+                item = parts[low.index("protecteditems") + 1]
+        except Exception:
+            pass
+        return container, item
+
+    def _find_backup_job(
+        self, client, vault: str, vault_rg: str, operation: str, vm_name: str,
+        triggered_at, attempts: int = 3, delay_s: float = 10.0,
+    ):
+        """The InProgress job this trigger created, for THIS VM.
+
+        Taking the first InProgress job of the vault cross-wired concurrent jobs: two
+        snapshots (watch + CLI + War Room) could each track the other VM's job. Filter
+        on the VM (entity_friendly_name) and on a start time not older than the trigger,
+        newest first. Jobs show up a few seconds after the trigger: retry a few times.
+        """
+        import time
+        from datetime import timedelta
+
+        not_before = triggered_at - timedelta(minutes=2)  # tolerate clock skew
+        for attempt in range(attempts):
+            time.sleep(delay_s)
+            candidates = []
+            for j in client.backup_jobs.list(vault, vault_rg):
+                p = getattr(j, "properties", None)
+                if p is None:
+                    continue
+                if getattr(p, "operation", "") != operation:
+                    continue
+                if getattr(p, "status", "") != "InProgress":
+                    continue
+                if (getattr(p, "entity_friendly_name", "") or "").lower() != vm_name.lower():
+                    continue
+                start = getattr(p, "start_time", None)
+                if start is not None and start < not_before:
+                    continue
+                candidates.append((start, j))
+            if candidates:
+                candidates.sort(key=lambda c: (c[0] is not None, c[0]), reverse=True)
+                return candidates[0][1]
+        return None
 
     def verify_isolation(self, resource_id: str) -> dict:
         if self.dry_run:
@@ -626,6 +937,43 @@ class AzureConnector(CloudConnector):
         if uncovered:
             return {"verified": False, "method": "nsg_check", "uncovered_nics": uncovered}
         return {"verified": True, "method": "nsg_check", "nics_covered": len(targets)}
+
+    def verify_release(self, resource_id: str) -> dict:
+        """Confirm that NO NIC still carries an isolation rule of this VM.
+
+        The previous check was `not verify_isolation()`, i.e. "at least one NIC is
+        uncovered". A release that failed on one NIC (or on one direction of a single
+        NIC) therefore passed as verified while that NIC stayed cut off. A rule whose
+        presence can't be read counts as still there: no success claim on an unknown.
+        """
+        if self.dry_run:
+            return {"verified": True, "method": "dry_run"}
+
+        self._ensure_clients()
+        rg, vm_name = _parse_vm_resource_id(resource_id)
+        still: list[str] = []
+        unknown: list[str] = []
+        for t in self._get_vm_nic_targets(rg, vm_name):
+            for name in self._isolation_names_for_target(vm_name, t):
+                state = self._rule_state(t["nsg_rg"], t["nsg_name"], name)
+                if state == "present":
+                    still.append(f'{t["nic_short"]}:{name}')
+                elif state == "unknown":
+                    unknown.append(f'{t["nic_short"]}:{name}')
+        if still or unknown:
+            detail = ", ".join(still + [f"{u} (lecture impossible)" for u in unknown])
+            return {"verified": False, "method": "nsg_check",
+                    "still_isolated": still, "unreadable": unknown,
+                    "error": f"isolation toujours présente : {detail}"}
+        return {"verified": True, "method": "nsg_check"}
+
+    def _rule_state(self, nsg_rg: str, nsg_name: str, name: str) -> str:
+        """'present' | 'absent' | 'unknown' (the read itself failed)."""
+        try:
+            self._network.security_rules.get(nsg_rg, nsg_name, name)
+            return "present"
+        except Exception as e:
+            return "absent" if _is_not_found(e) else "unknown"
 
     def _rules_present(self, nsg_rg: str, nsg_name: str, names: list[str]) -> bool:
         """True if all named rules exist on the NSG."""
@@ -682,6 +1030,7 @@ class AzureConnector(CloudConnector):
         before_attack_time: str | None = None,
         wait: bool = True,
         staging_storage: str = "",
+        vault_rg: str = "",
     ) -> dict:
         if self.dry_run:
             return {"status": "dry_run", "action": "restore_from_backup", "resource_id": resource_id}
@@ -694,14 +1043,20 @@ class AzureConnector(CloudConnector):
 
         self._ensure_clients()
         rg, vm_name = _parse_vm_resource_id(resource_id)
+        # Vault calls are scoped to the VAULT's resource group (a central vault protects
+        # VMs across RGs); the container name stays keyed by the VM's RG.
+        v_rg = vault_rg or rg
         sub = self._subscription_id
-        container_name = f"iaasvmcontainer;iaasvmcontainerv2;{rg};{vm_name}"
-        item_name = f"vm;iaasvmcontainerv2;{rg};{vm_name}"
         fabric = "Azure"
 
         backup_client = RecoveryServicesBackupClient(self._credential, sub)
+        # Stored names, not hand-built ones: recovery_points.list is case-sensitive
+        # (lowercase prefixes returned an EMPTY list on the Celebrimbor bench → "No
+        # recovery points" on a VM that has some).
+        container_name, item_name = self._resolve_backup_item_names(
+            backup_client, vault, v_rg, rg, vm_name)
 
-        rps = list(backup_client.recovery_points.list(vault, rg, fabric, container_name, item_name))
+        rps = list(backup_client.recovery_points.list(vault, v_rg, fabric, container_name, item_name))
         if not rps:
             raise RuntimeError(f"No recovery points in vault {vault}")
 
@@ -711,14 +1066,16 @@ class AzureConnector(CloudConnector):
                 for t in (getattr(rp.properties, "recovery_point_tier_details", None) or [])
             )
 
+        def _rp_time(rp):
+            return getattr(rp.properties, "recovery_point_time", None)
+
         # Select the most recent clean recovery point — must predate the attack
         # to avoid restoring a backup that already contains attack artifacts.
         if before_attack_time:
             attack_dt = datetime.fromisoformat(before_attack_time).astimezone(timezone.utc)
             pre_attack = [
                 rp for rp in rps
-                if getattr(rp.properties, "recovery_point_time", None) is not None
-                and rp.properties.recovery_point_time < attack_dt
+                if _rp_time(rp) is not None and _rp_time(rp) < attack_dt
             ]
             if not pre_attack:
                 raise RuntimeError(
@@ -729,9 +1086,12 @@ class AzureConnector(CloudConnector):
         else:
             candidate_pool = rps
 
-        vaulted = [rp for rp in candidate_pool if _has_vault_tier(rp)]
-        latest = vaulted[0] if vaulted else candidate_pool[0]
-        rp_time = getattr(latest.properties, "recovery_point_time", "unknown")
+        # Prefer the immutable vault tier, then the NEWEST point by its timestamp.
+        # Taking pool[0] relied on the order Azure happens to list points in.
+        pool = [rp for rp in candidate_pool if _has_vault_tier(rp)] or candidate_pool
+        timed = [rp for rp in pool if _rp_time(rp) is not None]
+        latest = max(timed, key=_rp_time) if timed else pool[0]
+        rp_time = _rp_time(latest) or "unknown"
         if before_attack_time:
             _console.print(f"  [dim]Using pre-attack recovery point: {rp_time}[/dim]")
 
@@ -764,7 +1124,7 @@ class AzureConnector(CloudConnector):
         item_enc = item_name.replace(";", "%3B")
         url = (
             f"https://management.azure.com/subscriptions/{sub}"
-            f"/resourceGroups/{rg}/providers/Microsoft.RecoveryServices/vaults/{vault}"
+            f"/resourceGroups/{v_rg}/providers/Microsoft.RecoveryServices/vaults/{vault}"
             f"/backupFabrics/Azure/protectionContainers/{container_enc}"
             f"/protectedItems/{item_enc}/recoveryPoints/{latest.name}/restore"
             f"?api-version=2021-10-01"
@@ -788,19 +1148,15 @@ class AzureConnector(CloudConnector):
             }
         }
 
+        triggered_at = datetime.now(timezone.utc)
         r = requests.post(url, json=payload, headers=headers)
         if r.status_code not in (200, 202):
             raise RuntimeError(f"Restore trigger failed ({r.status_code}): {r.text[:300]}")
 
-        time.sleep(15)
-        restore_job = next(
-            (j for j in backup_client.backup_jobs.list(vault, rg)
-             if getattr(j.properties, "operation", "") == "Restore"
-             and getattr(j.properties, "status", "") == "InProgress"),
-            None,
-        )
+        restore_job = self._find_backup_job(
+            backup_client, vault, v_rg, "Restore", vm_name, triggered_at, delay_s=15.0)
         if restore_job is None:
-            raise RuntimeError("Restore job not found after trigger")
+            raise RuntimeError(f"Restore job for {vm_name} not found after trigger")
 
         _console.print(f"  [dim]Tracking job {restore_job.name} (15-30 min expected)...[/dim]")
 
@@ -809,7 +1165,11 @@ class AzureConnector(CloudConnector):
                 "status": "restore_triggered",
                 "job_name": restore_job.name,
                 "vault": vault,
-                "rg": rg,
+                # `rg` is the resource group job lookups run against (jobs.refresh_job):
+                # the VAULT's. The VM's own RG is kept separately.
+                "rg": v_rg,
+                "vault_rg": v_rg,
+                "vm_rg": rg,
                 "recovery_point": latest.name,
                 "recovery_point_time": str(rp_time),
                 "resource_id": resource_id,
@@ -819,7 +1179,7 @@ class AzureConnector(CloudConnector):
         while True:
             time.sleep(60)
             elapsed += 60
-            job = backup_client.job_details.get(vault, rg, restore_job.name)
+            job = backup_client.job_details.get(vault, v_rg, restore_job.name)
             status = getattr(job.properties, "status", "Unknown")
             _console.print(f"  [dim]Still restoring... {elapsed // 60}min elapsed — {status}[/dim]")
             if status in ("Completed", "Failed", "Cancelled"):
@@ -839,6 +1199,9 @@ class AzureConnector(CloudConnector):
         }
 
     def verify_block_ip(self, ip: str, resource_id: str) -> dict:
+        """Confirm the block is in place: the inbound AND the outbound rule of every
+        placement. Checking only the inbound one let a missing `-out` rule (egress /
+        C2 / exfil path still open) pass as verified."""
         if self.dry_run:
             return {"verified": True, "method": "dry_run"}
         if not ip:
@@ -848,39 +1211,47 @@ class AzureConnector(CloudConnector):
         rg, vm_name = _parse_vm_resource_id(resource_id)
         entry = next((e for e in _load_block_entries(vm_name) if e.get("ip") == ip), None)
 
-        # Multi-NIC VM block: confirmed only if every placement's rule is present.
+        # Multi-NIC VM block: confirmed only if every placement's rule pair is present.
         if entry and entry.get("placements"):
             missing = [
-                p["rule"] for p in entry["placements"]
-                if not self._rules_present(p["nsg_rg"], p["nsg_name"], [p["rule"]])
+                name
+                for p in entry["placements"]
+                for name in (p["rule"], f'{p["rule"]}-out')
+                if not self._rules_present(p["nsg_rg"], p["nsg_name"], [name])
             ]
             if missing:
-                return {"verified": False, "method": "nsg_check", "missing_rules": missing}
+                return {"verified": False, "method": "nsg_check", "missing_rules": missing,
+                        "error": f"rules missing: {', '.join(missing)}"}
             return {"verified": True, "method": "nsg_check",
                     "nics_covered": len(entry["placements"])}
 
-        # Perimeter (subnet) block, or legacy single-rule entry: check the recorded rule.
+        # Perimeter (subnet) block, or legacy single-rule entry: check the recorded pair.
         if entry and entry.get("nsg") and entry.get("rule"):
             nsg_rg, nsg_name = entry["nsg"].split("/", 1)
-            if self._rules_present(nsg_rg, nsg_name, [entry["rule"]]):
+            pair = [entry["rule"], f'{entry["rule"]}-out']
+            missing = [n for n in pair if not self._rules_present(nsg_rg, nsg_name, [n])]
+            if not missing:
                 return {"verified": True, "method": "nsg_check", "rule": entry["rule"]}
-            return {"verified": False, "method": "nsg_check", "error": "rule not found"}
+            return {"verified": False, "method": "nsg_check", "missing_rules": missing,
+                    "error": f"rules missing: {', '.join(missing)}"}
 
         # No state — recompute per-NIC names (multi-NIC) and check coverage.
         prefix = self._block_rule_prefix(ip)
         targets = self._get_vm_nic_targets(rg, vm_name)
-        uncovered = [
-            t["nic_short"] for t in targets
-            if not self._rules_present(
-                t["nsg_rg"], t["nsg_name"],
-                [self._placement_rule_base(prefix, vm_name, t["nic_short"], t["nic_id"])],
-            )
-        ]
+        uncovered = []
+        for t in targets:
+            base = self._placement_rule_base(prefix, vm_name, t["nic_short"], t["nic_id"])
+            if not self._rules_present(t["nsg_rg"], t["nsg_name"], [base, f"{base}-out"]):
+                uncovered.append(t["nic_short"])
         if uncovered:
-            return {"verified": False, "method": "nsg_check", "uncovered_nics": uncovered}
+            return {"verified": False, "method": "nsg_check", "uncovered_nics": uncovered,
+                    "error": f"NIC(s) not covered: {', '.join(uncovered)}"}
         return {"verified": True, "method": "nsg_check", "nics_covered": len(targets)}
 
     def unblock_ip(self, ip: str, resource_id: str) -> dict:
+        """Remove every rule of a block. Delete failures are reported, not swallowed: a
+        rule that could not be removed still blocks the IP, so its entry stays in state
+        and the status is `unblock_partial`."""
         if self.dry_run:
             return {"status": "dry_run", "action": "unblock_ip", "ip": ip}
         if not ip:
@@ -891,14 +1262,15 @@ class AzureConnector(CloudConnector):
         rg, vm_name = _parse_vm_resource_id(resource_id)
         entry = next((e for e in _load_block_entries(vm_name) if e.get("ip") == ip), None)
         deleted: list[str] = []
+        failed: list[str] = []
 
         def _del(p_rg: str, p_name: str, rule: str) -> None:
             for nm in (rule, f"{rule}-out"):
-                try:
-                    self._network.security_rules.begin_delete(p_rg, p_name, nm).result()
+                err = self._delete_rule(p_rg, p_name, nm)
+                if err:
+                    failed.append(err)
+                else:
                     deleted.append(nm)
-                except Exception:
-                    pass
 
         # 1) Every per-NIC placement recorded at block time (multi-NIC VM block).
         for p in (entry or {}).get("placements", []):
@@ -911,15 +1283,23 @@ class AzureConnector(CloudConnector):
 
         # 3) Belt-and-braces for legacy state without rule names: resolve via the primary
         # NIC and delete the historical VM-suffixed / plain block-rule names.
-        if not deleted:
+        if not deleted and not failed:
             try:
                 nsg_rg, nsg_name, _ = self._get_nic_nsg(self._get_primary_nic_id(rg, vm_name))
                 for legacy in (self._block_rule_name(ip, vm_name, "subnet"),
                                self._block_rule_name(ip, vm_name, "nic")):
                     _del(nsg_rg, nsg_name, legacy)
-            except Exception:
-                pass
+            except Exception as e:
+                failed.append(f"legacy lookup: {_first_line(e)[:200]}")
 
+        if failed:
+            # Keep the entry: the rules that are still there keep blocking the IP, and a
+            # retry of unblock / reset must still find them.
+            _update_block_entry(vm_name, ip, unblock_failed=failed)
+            return {
+                "status": "unblock_partial", "ip": ip,
+                "deleted_rules": deleted, "failed": failed,
+            }
         _clear_block_state(vm_name, ip)
         return {
             "status": "unblocked" if deleted else "not_found",
@@ -1063,14 +1443,8 @@ class AzureConnector(CloudConnector):
             vm_rg, vm_name = _parse_vm_resource_id(resource_id)
             v_rg = vault_rg or vm_rg
             client = RecoveryServicesBackupClient(self._credential, self._subscription_id)
-            # Canonical fabric names — CASE MATTERS. `recovery_points.list` is
-            # case-SENSITIVE on the container/item type prefix (`IaasVMContainer;` / `VM;`),
-            # while `protected_items.get` is case-insensitive. Lowercase prefixes made
-            # protected_items.get succeed (→ protected=True) but recovery_points.list return
-            # EMPTY → a false "first backup pending" on a VM that IS backed up (confirmed on
-            # the Celebrimbor bench: az showed the RP, our query missed it on case alone).
-            container = f"IaasVMContainer;iaasvmcontainerv2;{vm_rg};{vm_name}"
-            item = f"VM;iaasvmcontainerv2;{vm_rg};{vm_name}"
+            # Canonical fabric names — CASE MATTERS (see _backup_item_names).
+            container, item = _backup_item_names(vm_rg, vm_name)
             rps = list(client.recovery_points.list(vault, v_rg, "Azure", container, item))
             if not rps:
                 # No recovery point — but is the VM actually protected? An empty RP
@@ -1210,15 +1584,37 @@ class AzureConnector(CloudConnector):
         for ref in vm.network_profile.network_interfaces:
             nic_id = ref.id
             nsg_rg, nsg_name, scope = self._get_nic_nsg(nic_id)
+            shared = scope == "nic" and self._nsg_is_shared(nsg_rg, nsg_name)
             targets.append({
                 "nic_id": nic_id,
                 "nic_short": nic_id.rstrip("/").split("/")[-1],
                 "nsg_rg": nsg_rg,
                 "nsg_name": nsg_name,
                 "scope": scope,
+                # A NIC-level NSG attached to other NICs (or to a subnet as well) is as
+                # shared as a subnet NSG: any/any there would cut off every VM behind it.
+                "shared_nsg": shared,
+                "ip_scoped": scope == "subnet" or shared,
                 "private_ips": self._get_nic_private_ips(nic_id),
             })
         return targets
+
+    def _nsg_is_shared(self, nsg_rg: str, nsg_name: str) -> bool:
+        """True if this NSG governs more than one NIC, or a subnet too.
+
+        Azure lets one NSG be attached to several NICs and subnets at once (the common
+        "one NSG per tier" layout). Treating such an NSG as "this VM only" put an
+        any/any deny on it: an autonomous isolation then cut off every VM sharing it.
+        Unreadable association → shared: the IP-scoped placement only ever touches the
+        target's own IPs, so it is the safe default.
+        """
+        try:
+            nsg = self._network.network_security_groups.get(nsg_rg, nsg_name)
+        except Exception:
+            return True
+        nics = list(getattr(nsg, "network_interfaces", None) or [])
+        subnets = list(getattr(nsg, "subnets", None) or [])
+        return len(nics) > 1 or len(subnets) > 0
 
     def _get_nic_private_ips(self, nic_id: str) -> list[str]:
         """All private IPs across a NIC's ipConfigurations (a NIC can have several).
@@ -1247,14 +1643,6 @@ class AzureConnector(CloudConnector):
         scoped to different VMs (same attacker IP) don't collide."""
         base = f"glorfindel-block-{ip.replace('.', '-').replace('/', '-')}"
         return f"{base}-{vm_name}" if scope == "subnet" else base
-
-    def _get_nic_private_ip(self, nic_id: str) -> str:
-        """Primary private IP of a NIC — used to scope a subnet-wide block to one VM."""
-        ips = self._get_nic_private_ips(nic_id)
-        if not ips:
-            _, nic_name = _parse_nic_resource_id(nic_id)
-            raise RuntimeError(f"NIC {nic_name} has no private IP — cannot scope isolation")
-        return ips[0]
 
     def _placement_rule_base(self, prefix: str, vm_name: str, nic_short: str, nic_id: str) -> str:
         """A rule-name base unique per (VM, NIC), within Azure's 80-char rule-name limit.
@@ -1323,16 +1711,50 @@ _ISOLATION_STATE_DIR = Path.home() / ".glorfindel" / "isolation"
 _BLOCK_STATE_DIR = Path.home() / ".glorfindel" / "blocks"
 
 
+def _atomic_write_text(path: Path, text: str) -> None:
+    """Write through a temp file + os.replace.
+
+    A reader (War Room, a concurrent CLI, the watch) never sees a half-written state
+    file, and a crash mid-write leaves the previous version intact instead of a
+    truncated JSON that would break the next release.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def _save_isolation_state(vm_name: str, state: dict) -> None:
-    import json
-    _ISOLATION_STATE_DIR.mkdir(parents=True, exist_ok=True)
-    (_ISOLATION_STATE_DIR / f"{vm_name}.json").write_text(json.dumps(state))
+    _atomic_write_text(_ISOLATION_STATE_DIR / f"{vm_name}.json", json.dumps(state))
 
 
 def _load_isolation_state(vm_name: str) -> dict | None:
-    import json
+    """The recorded isolation, or None if absent or unreadable.
+
+    An unreadable file is reported, not raised: release_isolation then recomputes the
+    rule names on every NIC (they are deterministic), so a corrupt file can no longer
+    make an isolation impossible to lift from the CLI.
+    """
     f = _ISOLATION_STATE_DIR / f"{vm_name}.json"
-    return json.loads(f.read_text()) if f.exists() else None
+    if not f.exists():
+        return None
+    try:
+        return json.loads(f.read_text())
+    except (OSError, ValueError) as e:
+        _console.print(
+            f"[yellow]État d'isolation illisible pour {vm_name} ({e}) — traité comme "
+            "absent ; les règles sont retrouvées par leur nom sur chaque NIC.[/yellow]"
+        )
+        return None
 
 
 def _clear_isolation_state(vm_name: str) -> None:
@@ -1343,7 +1765,6 @@ def _clear_isolation_state(vm_name: str) -> None:
 
 def active_isolations() -> list[dict]:
     """Return all active isolation state files (VMs that Glorfindel has isolated)."""
-    import json
     result = []
     for f in _ISOLATION_STATE_DIR.glob("*.json"):
         try:
@@ -1355,17 +1776,23 @@ def active_isolations() -> list[dict]:
     return result
 
 
+def _merge_placements(old: list[dict], new: list[dict]) -> list[dict]:
+    """Union of block placements, keyed by (NSG, rule) — a re-block after a partial
+    failure must keep track of the rules of BOTH attempts."""
+    seen = {(p.get("nsg_rg"), p.get("nsg_name"), p.get("rule")) for p in new}
+    return new + [p for p in old if (p.get("nsg_rg"), p.get("nsg_name"), p.get("rule")) not in seen]
+
+
 def _save_block_state(
     vm_name: str, ip: str, resource_id: str,
     nsg: str = "", nsg_scope: str = "", rule: str = "", scoped: bool = True,
-    placements: list | None = None,
+    placements: list | None = None, partial: bool = False,
 ) -> None:
-    import json
     from datetime import datetime, timezone
-    _BLOCK_STATE_DIR.mkdir(parents=True, exist_ok=True)
     f = _BLOCK_STATE_DIR / f"{vm_name}.json"
-    entries = json.loads(f.read_text()) if f.exists() else []
-    if not any(e["ip"] == ip for e in entries):
+    entries = _load_block_entries(vm_name)
+    prev = next((e for e in entries if e.get("ip") == ip), None)
+    if prev is None:
         # Record the NSG + scope so the representation matches Azure reality:
         # nsg_scope="subnet" → rule lives on a shared subnet NSG, "nic" → on the VM NIC.
         # scoped=True → rule only affects THIS VM (NIC, or subnet+VM-IP addressing);
@@ -1377,13 +1804,22 @@ def _save_block_state(
             "blocked_at": datetime.now(timezone.utc).isoformat(),
             "nsg": nsg, "nsg_scope": nsg_scope, "rule": rule, "scoped": scoped,
             "placements": placements or [],
+            "partial": partial,
         })
-    f.write_text(json.dumps(entries))
+    else:
+        # The IP is already recorded (a retry after a partial block, or a block of
+        # another scope). Previously this call was silently dropped, so the rules it
+        # had just placed were unknown to unblock. Merge instead: every rule in place
+        # stays recorded, and a subnet-wide rule becomes the entry's single rule.
+        if not scoped:
+            prev.update(nsg=nsg, nsg_scope=nsg_scope, rule=rule, scoped=False)
+        prev["placements"] = _merge_placements(prev.get("placements") or [], placements or [])
+        prev["partial"] = partial
+    _atomic_write_text(f, json.dumps(entries))
 
 
 def _load_block_entries(vm_name: str) -> list[dict]:
     """Return the recorded block entries for a VM (empty if none)."""
-    import json
     f = _BLOCK_STATE_DIR / f"{vm_name}.json"
     if not f.exists():
         return []
@@ -1394,20 +1830,29 @@ def _load_block_entries(vm_name: str) -> list[dict]:
 
 
 def _clear_block_state(vm_name: str, ip: str) -> None:
-    import json
     f = _BLOCK_STATE_DIR / f"{vm_name}.json"
     if not f.exists():
         return
-    entries = [e for e in json.loads(f.read_text()) if e["ip"] != ip]
+    entries = [e for e in _load_block_entries(vm_name) if e.get("ip") != ip]
     if entries:
-        f.write_text(json.dumps(entries))
+        _atomic_write_text(f, json.dumps(entries))
     else:
         f.unlink()
 
 
+def _update_block_entry(vm_name: str, ip: str, **fields) -> None:
+    """Annotate an existing block entry (e.g. the rules an unblock could not remove)."""
+    f = _BLOCK_STATE_DIR / f"{vm_name}.json"
+    entries = _load_block_entries(vm_name)
+    for e in entries:
+        if e.get("ip") == ip:
+            e.update(fields)
+    if entries:
+        _atomic_write_text(f, json.dumps(entries))
+
+
 def active_blocks() -> list[dict]:
     """Return all active IP blocks per VM ({vm_name, resource_id, ip, blocked_at})."""
-    import json
     result = []
     if not _BLOCK_STATE_DIR.exists():
         return result
@@ -1418,6 +1863,21 @@ def active_blocks() -> list[dict]:
         except Exception:
             pass
     return result
+
+
+def _backup_item_names(vm_rg: str, vm_name: str) -> tuple[str, str]:
+    """Canonical (container, item) names of an IaaS-VM backup item.
+
+    CASE MATTERS: `recovery_points.list` is case-SENSITIVE on the type prefix
+    (`IaasVMContainer;` / `VM;`) while `protected_items.get` is not. Lowercase prefixes
+    made protected_items.get succeed but recovery_points.list return EMPTY — a false
+    "first backup pending" in posture (commit 8bda989), and "No recovery points" in
+    restore, which still built them in lowercase. One builder for every caller.
+    """
+    return (
+        f"IaasVMContainer;iaasvmcontainerv2;{vm_rg};{vm_name}",
+        f"VM;iaasvmcontainerv2;{vm_rg};{vm_name}",
+    )
 
 
 def _is_iam_error(err: str) -> bool:

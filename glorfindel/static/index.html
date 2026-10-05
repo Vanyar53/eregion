@@ -624,6 +624,7 @@ const ESC_LABELS = {
   mode_hold:           'mode human-only',
   write_blocked:       'write blocked',
   action_failed:       'action failed',
+  cycle_failed:        'signal not processed',
   ttl_exceeded:        'TTL exceeded',
 };
 
@@ -642,6 +643,7 @@ const _ESC_TITLES = {
   proposed_rule:  'Detection rule proposed',
   ttl_exceeded:   'Isolation TTL exceeded',
   proposed_action:'Unknown action proposed',
+  cycle_failed:   'Signal not processed — triage by hand',
 };
 function escTitle(e) {
   // Real remediation action → its label; otherwise a readable type title.

@@ -231,9 +231,13 @@ def test_propose_detection_rule_skips_when_rulepoller_matched_recently(tmp_path,
         result = propose_detection_rule(state, model="claude-test")
 
     mock_llm.assert_not_called()
-    # State unchanged — no proposal recorded
+    # No proposal recorded, and nothing for a human: the skip is explicit so the graph
+    # routes to store_cycle (the bare state used to reach escalate_to_human and record
+    # an empty `proposed_action` escalation).
     assert pending() == []
-    assert result is state
+    assert result["escalate"] is False
+    assert result["outcome"]["status"] == "skipped"
+    assert result.get("proposed_rule") is None
 
 
 # ── gate: existing rule for the TTP → no duplicate authoring ────────────────────

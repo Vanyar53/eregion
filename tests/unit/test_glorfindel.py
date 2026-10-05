@@ -1158,3 +1158,494 @@ def test_memory_retrieve_empty_returns_empty_list(tmp_path):
     mem = CycleMemory(path=tmp_path / "cycles")
     results = mem.retrieve_similar({"ttp": "T1486"}, n=3)
     assert results == []
+
+
+# ── Revue 2026-09 : NSG partagé, échecs partiels, vérification du release ─────
+
+def _shared_target(nic_id="nic-a", ips=("10.0.0.5",)):
+    """A NIC-level NSG that ALSO governs other NICs (shared) → must be IP-scoped."""
+    t = _nic_target(scope="nic", ips=ips, nic_id=nic_id)
+    t.update(shared_nsg=True, ip_scoped=True)
+    return t
+
+
+def test_get_vm_nic_targets_flags_a_shared_nic_nsg(monkeypatch):
+    """A NIC-level NSG attached to several NICs is shared: any/any there would cut off
+    every VM behind it. _get_vm_nic_targets must say so (ip_scoped=True)."""
+    from types import SimpleNamespace
+    from glorfindel.actions import AzureConnector
+    connector = AzureConnector(dry_run=False)
+    nic_id = "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Network/networkInterfaces/nic-a"
+    compute, net = MagicMock(), MagicMock()
+    compute.virtual_machines.get.return_value = SimpleNamespace(
+        network_profile=SimpleNamespace(network_interfaces=[SimpleNamespace(id=nic_id)]))
+    net.network_interfaces.get.return_value = SimpleNamespace(
+        network_security_group=SimpleNamespace(
+            id="/subscriptions/s/resourceGroups/rg/providers/Microsoft.Network/networkSecurityGroups/nsg-tier"),
+        ip_configurations=[SimpleNamespace(private_ip_address="10.0.0.5")],
+    )
+    net.network_security_groups.get.return_value = SimpleNamespace(
+        network_interfaces=[SimpleNamespace(id="nic-a"), SimpleNamespace(id="nic-of-another-vm")],
+        subnets=None,
+    )
+    connector._compute, connector._network = compute, net
+
+    [t] = connector._get_vm_nic_targets("rg", "vm")
+    assert t["scope"] == "nic"
+    assert t["shared_nsg"] is True
+    assert t["ip_scoped"] is True
+
+
+def test_get_vm_nic_targets_dedicated_nic_nsg_stays_any(monkeypatch):
+    from types import SimpleNamespace
+    from glorfindel.actions import AzureConnector
+    connector = AzureConnector(dry_run=False)
+    compute, net = MagicMock(), MagicMock()
+    nic_id = "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Network/networkInterfaces/nic-a"
+    compute.virtual_machines.get.return_value = SimpleNamespace(
+        network_profile=SimpleNamespace(network_interfaces=[SimpleNamespace(id=nic_id)]))
+    net.network_interfaces.get.return_value = SimpleNamespace(
+        network_security_group=SimpleNamespace(
+            id="/subscriptions/s/resourceGroups/rg/providers/Microsoft.Network/networkSecurityGroups/nsg-a"),
+        ip_configurations=[SimpleNamespace(private_ip_address="10.0.0.5")],
+    )
+    net.network_security_groups.get.return_value = SimpleNamespace(
+        network_interfaces=[SimpleNamespace(id=nic_id)], subnets=[])
+    connector._compute, connector._network = compute, net
+    [t] = connector._get_vm_nic_targets("rg", "vm")
+    assert t["shared_nsg"] is False and t["ip_scoped"] is False
+
+
+def test_nsg_unreadable_counts_as_shared():
+    """Can't read the NSG's associations → IP-scoped placement (the safe choice)."""
+    from glorfindel.actions import AzureConnector
+    connector = AzureConnector(dry_run=False)
+    connector._network = MagicMock()
+    connector._network.network_security_groups.get.side_effect = Exception("boom")
+    assert connector._nsg_is_shared("rg", "nsg") is True
+
+
+def test_isolate_vm_shared_nic_nsg_scopes_to_vm_ip_and_bumps_nothing(tmp_path, monkeypatch):
+    """On a shared NIC-level NSG: deny addressed to THIS VM's IPs at a free priority,
+    and no customer rule moved (other VMs depend on them)."""
+    from glorfindel.actions import AzureConnector
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    monkeypatch.setattr(connector, "_get_vm_nic_targets", lambda rg, vm: [_shared_target()])
+    customer = MagicMock(priority=100)
+    customer.name = "allow-https"
+    net = MagicMock()
+    net.security_rules.list.return_value = [customer]
+    connector._network = net
+
+    out = connector.isolate_vm(_RID)
+
+    rules = [c.args[3] for c in net.security_rules.begin_create_or_update.call_args_list]
+    assert all(r.name.startswith("glorfindel-") for r in rules)      # customer rule untouched
+    assert ("*", ["10.0.0.5"]) in [_sd(r) for r in rules]
+    assert (["10.0.0.5"], "*") in [_sd(r) for r in rules]
+    assert {r.priority for r in rules} == {101}                      # free slot, not 100
+    assert "shared" in out["note"].lower()
+
+
+def test_isolate_vm_partial_failure_keeps_and_records_rules(monkeypatch):
+    """NIC 1 isolated, NIC 2 fails (403): NIC 1's rules stay, are RECORDED (partial),
+    and the error is a PartialActionError that still carries the 403."""
+    from glorfindel.actions import AzureConnector, PartialActionError, _load_isolation_state
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    monkeypatch.setattr(connector, "_get_vm_nic_targets", lambda rg, vm: [
+        _nic_target(nsg_rg="rg1", nsg_name="nsg-a", nic_id="nic-a"),
+        _nic_target(nsg_rg="rg2", nsg_name="nsg-b", nic_id="nic-b"),
+    ])
+    net = MagicMock()
+    net.security_rules.list.return_value = []
+
+    def _put(rg, nsg, name, rule):
+        if nsg == "nsg-b":
+            raise _azure_403()
+        return MagicMock()
+    net.security_rules.begin_create_or_update.side_effect = _put
+    connector._network = net
+
+    with pytest.raises(PartialActionError) as ei:
+        connector.isolate_vm(_RID)
+    assert ei.value.status_code == 403            # write_blocked classification preserved
+    assert ei.value.failed_nic == "nic-b"
+    state = _load_isolation_state("vm")
+    assert state["partial"] is True
+    assert [p["nsg_name"] for p in state["placements"]] == ["nsg-a"]
+
+
+def test_isolate_vm_puts_customer_rule_back_when_the_deny_fails(monkeypatch):
+    """The bump of a customer rule happens BEFORE the deny. If the deny then fails, the
+    moved rule protects nothing: put it back to 100 — and write no state."""
+    from glorfindel.actions import AzureConnector, _load_isolation_state
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    monkeypatch.setattr(connector, "_get_vm_nic_targets", lambda rg, vm: [_nic_target(scope="nic")])
+    customer = MagicMock(priority=100)
+    customer.name = "allow-ssh"
+    net = MagicMock()
+    net.security_rules.list.return_value = [customer]
+    net.security_rules.get.return_value = customer
+    calls = []
+
+    def _put(rg, nsg, name, rule):
+        calls.append((name, rule.priority))
+        if name.startswith("glorfindel-"):
+            raise RuntimeError("deny rejected")
+        return MagicMock()
+    net.security_rules.begin_create_or_update.side_effect = _put
+    connector._network = net
+
+    with pytest.raises(RuntimeError, match="deny rejected"):
+        connector.isolate_vm(_RID)
+    assert calls[0] == ("allow-ssh", 200)          # moved off 100…
+    assert calls[-1] == ("allow-ssh", 100)         # …and put back
+    assert _load_isolation_state("vm") is None
+
+
+def test_release_isolation_reports_failed_delete_and_keeps_state(monkeypatch):
+    """A delete that fails leaves the VM cut off: release must say so (release_partial)
+    and keep that placement in state for a retry, instead of 'released'."""
+    from glorfindel.actions import AzureConnector, _load_isolation_state, _save_isolation_state
+    _save_isolation_state("vm", {"resource_id": _RID, "placements": [
+        {"nsg_rg": "rg1", "nsg_name": "nsg-a", "rule_in": "iso-a", "rule_out": "iso-a-out", "bumped": []},
+        {"nsg_rg": "rg2", "nsg_name": "nsg-b", "rule_in": "iso-b", "rule_out": "iso-b-out", "bumped": []},
+    ]})
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    net = MagicMock()
+
+    def _delete(rg, nsg, name):
+        if name == "iso-b":
+            raise _azure_403()
+        return MagicMock()
+    net.security_rules.begin_delete.side_effect = _delete
+    connector._network = net
+
+    out = connector.release_isolation(_RID)
+    assert out["status"] == "release_partial"
+    assert any("iso-b" in f for f in out["failed"])
+    state = _load_isolation_state("vm")
+    assert [p["nsg_name"] for p in state["placements"]] == ["nsg-b"]
+
+
+def test_release_isolation_without_state_sweeps_every_nic(monkeypatch):
+    """No state file (lost / corrupt / never written): rule names are deterministic, so
+    release recomputes them on EVERY NIC — the legacy path only knew the primary NIC."""
+    from glorfindel.actions import AzureConnector
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    monkeypatch.setattr(connector, "_get_vm_nic_targets", lambda rg, vm: [
+        _nic_target(nsg_rg="rg1", nsg_name="nsg-a", nic_id="nic-a"),
+        _nic_target(nsg_rg="rg2", nsg_name="nsg-b", nic_id="nic-b", scope="subnet"),
+    ])
+    net = MagicMock()
+    connector._network = net
+
+    out = connector.release_isolation(_RID)
+    deleted = {(c.args[1], c.args[2]) for c in net.security_rules.begin_delete.call_args_list}
+    assert ("nsg-a", "glorfindel-iso-vm-nic-a") in deleted
+    assert ("nsg-b", "glorfindel-iso-vm-nic-b-out") in deleted
+    # fixed legacy names only on the NSG that governs this VM alone
+    assert ("nsg-a", "glorfindel-isolation-deny-all") in deleted
+    assert ("nsg-b", "glorfindel-isolation-deny-all") not in deleted
+    assert out["status"] == "released"
+
+
+def test_release_deletes_the_deny_before_restoring_the_customer_rule(monkeypatch):
+    """Our deny holds priority 100: the customer rule can only go back once it's gone."""
+    from glorfindel.actions import AzureConnector, _save_isolation_state
+    _save_isolation_state("vm", {"resource_id": _RID, "placements": [
+        {"nsg_rg": "rg", "nsg_name": "nsg", "rule_in": "iso", "rule_out": "iso-out",
+         "bumped": [{"name": "allow-ssh", "original_priority": 100}]},
+    ]})
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    order = []
+    net = MagicMock()
+    net.security_rules.begin_delete.side_effect = lambda *a: order.append(("delete", a[2])) or MagicMock()
+    net.security_rules.get.return_value = MagicMock(name="allow-ssh")
+    net.security_rules.begin_create_or_update.side_effect = (
+        lambda rg, nsg, name, rule: order.append(("restore", rule.priority)) or MagicMock())
+    connector._network = net
+
+    assert connector.release_isolation(_RID)["status"] == "released"
+    assert order[-1] == ("restore", 100)
+    assert order.index(("restore", 100)) > max(i for i, o in enumerate(order) if o[0] == "delete")
+
+
+def _rules_on(net, present: dict):
+    """security_rules.get that knows which (nsg, rule) exist; others → NotFound."""
+    from azure.core.exceptions import ResourceNotFoundError
+
+    def _get(rg, nsg, name):
+        if name in present.get(nsg, set()):
+            return MagicMock()
+        raise ResourceNotFoundError("NotFound")
+    net.security_rules.get.side_effect = _get
+
+
+def test_verify_release_false_when_one_nic_still_isolated(monkeypatch):
+    """The inverted-predicate bug: NIC a released, NIC b still denied. The old check
+    (`not verify_isolation()`) called this released. verify_release must not."""
+    from glorfindel.actions import AzureConnector
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    monkeypatch.setattr(connector, "_get_vm_nic_targets", lambda rg, vm: [
+        _nic_target(nsg_name="nsg-a", nic_id="nic-a"),
+        _nic_target(nsg_name="nsg-b", nic_id="nic-b"),
+    ])
+    net = MagicMock()
+    _rules_on(net, {"nsg-b": {"glorfindel-iso-vm-nic-b"}})
+    connector._network = net
+
+    assert connector.verify_isolation(_RID)["verified"] is False   # half-isolated…
+    out = connector.verify_release(_RID)                           # …but NOT released
+    assert out["verified"] is False
+    assert any("nic-b" in s for s in out["still_isolated"])
+
+
+def test_verify_release_true_when_no_rule_left(monkeypatch):
+    from glorfindel.actions import AzureConnector
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    monkeypatch.setattr(connector, "_get_vm_nic_targets", lambda rg, vm: [_nic_target()])
+    net = MagicMock()
+    _rules_on(net, {})
+    connector._network = net
+    assert connector.verify_release(_RID)["verified"] is True
+
+
+def test_verify_release_unreadable_rule_is_not_a_success(monkeypatch):
+    from glorfindel.actions import AzureConnector
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    monkeypatch.setattr(connector, "_get_vm_nic_targets", lambda rg, vm: [_nic_target()])
+    net = MagicMock()
+    net.security_rules.get.side_effect = _azure_403()
+    connector._network = net
+    out = connector.verify_release(_RID)
+    assert out["verified"] is False and out["unreadable"]
+
+
+def test_verify_block_ip_false_when_outbound_rule_missing(monkeypatch):
+    """Only the inbound rule used to be checked: a missing `-out` (egress / C2 / exfil
+    still open) passed as verified."""
+    from glorfindel.actions import AzureConnector, _save_block_state
+    rule = "glorfindel-block-1-2-3-4-vm-nic-a"
+    _save_block_state("vm", "1.2.3.4", _RID, nsg="rg/nsg", nsg_scope="nic", rule=rule,
+                      placements=[{"nsg_rg": "rg", "nsg_name": "nsg", "scope": "nic", "rule": rule}])
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    net = MagicMock()
+    _rules_on(net, {"nsg": {rule}})                    # inbound present, -out absent
+    connector._network = net
+
+    out = connector.verify_block_ip("1.2.3.4", _RID)
+    assert out["verified"] is False
+    assert f"{rule}-out" in out["missing_rules"]
+
+
+def test_unblock_ip_reports_failure_and_keeps_the_entry(monkeypatch):
+    from glorfindel.actions import AzureConnector, _load_block_entries, _save_block_state
+    rule = "glorfindel-block-1-2-3-4-vm-nic-a"
+    _save_block_state("vm", "1.2.3.4", _RID, nsg="rg/nsg", nsg_scope="nic", rule=rule,
+                      placements=[{"nsg_rg": "rg", "nsg_name": "nsg", "scope": "nic", "rule": rule}])
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    net = MagicMock()
+    net.security_rules.begin_delete.side_effect = (
+        lambda rg, nsg, name: (_ for _ in ()).throw(_azure_403()) if name.endswith("-out") else MagicMock())
+    connector._network = net
+
+    out = connector.unblock_ip("1.2.3.4", _RID)
+    assert out["status"] == "unblock_partial"
+    entry = next(e for e in _load_block_entries("vm") if e["ip"] == "1.2.3.4")
+    assert entry["unblock_failed"]
+
+
+def test_block_ip_on_shared_nsg_without_private_ip_raises(monkeypatch):
+    """Same guard as isolate_vm: an empty destination list would match nothing."""
+    from glorfindel.actions import AzureConnector
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    monkeypatch.setattr(connector, "_get_vm_nic_targets", lambda rg, vm: [_shared_target(ips=())])
+    net = MagicMock()
+    net.security_rules.list.return_value = []
+    connector._network = net
+    with pytest.raises(RuntimeError, match="no private IP"):
+        connector.block_suspicious_ip("1.2.3.4", _RID)
+    net.security_rules.begin_create_or_update.assert_not_called()
+
+
+def test_block_ip_partial_failure_records_placed_rules(monkeypatch):
+    from glorfindel.actions import AzureConnector, PartialActionError, _load_block_entries
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    monkeypatch.setattr(connector, "_get_vm_nic_targets", lambda rg, vm: [
+        _nic_target(nsg_name="nsg-a", nic_id="nic-a"),
+        _nic_target(nsg_name="nsg-b", nic_id="nic-b"),
+    ])
+    net = MagicMock()
+    net.security_rules.list.return_value = []
+
+    def _put(rg, nsg, name, rule):
+        if nsg == "nsg-b":
+            raise RuntimeError("conflict")
+        return MagicMock()
+    net.security_rules.begin_create_or_update.side_effect = _put
+    connector._network = net
+
+    with pytest.raises(PartialActionError):
+        connector.block_suspicious_ip("1.2.3.4", _RID)
+    entry = next(e for e in _load_block_entries("vm") if e["ip"] == "1.2.3.4")
+    assert entry["partial"] is True
+    assert [p["nsg_name"] for p in entry["placements"]] == ["nsg-a"]
+
+
+def test_save_block_state_merges_on_retry():
+    """A retry after a partial block must record the rules of BOTH attempts (the old
+    code silently dropped the second save because the IP was already recorded)."""
+    from glorfindel.actions import _load_block_entries, _save_block_state
+    a = {"nsg_rg": "rg", "nsg_name": "nsg-a", "scope": "nic", "rule": "r-a"}
+    b = {"nsg_rg": "rg", "nsg_name": "nsg-b", "scope": "nic", "rule": "r-b"}
+    _save_block_state("vm", "1.2.3.4", _RID, rule="r-a", placements=[a], partial=True)
+    _save_block_state("vm", "1.2.3.4", _RID, rule="r-a", placements=[a, b])
+    [entry] = _load_block_entries("vm")
+    assert {p["rule"] for p in entry["placements"]} == {"r-a", "r-b"}
+    assert entry["partial"] is False
+
+
+def test_corrupt_isolation_state_is_tolerated():
+    """A torn / corrupt state file is reported, not raised (release then recomputes the
+    rule names) — it used to make `release` crash."""
+    import glorfindel.actions as actions
+    actions._ISOLATION_STATE_DIR.mkdir(parents=True, exist_ok=True)
+    (actions._ISOLATION_STATE_DIR / "vm.json").write_text('{"resource_id": "x", "plac')
+    assert actions._load_isolation_state("vm") is None
+
+
+def test_state_writes_are_atomic():
+    """os.replace through a temp file: no half-written file, no temp file left behind."""
+    import glorfindel.actions as actions
+    actions._save_isolation_state("vm", {"resource_id": _RID})
+    files = [f.name for f in actions._ISOLATION_STATE_DIR.iterdir()]
+    assert files == ["vm.json"]
+
+
+def test_warm_up_imports_each_module_on_its_own(monkeypatch):
+    """One missing module no longer cancels the warm-up of the installed ones."""
+    import sys
+    import glorfindel.actions as actions
+    monkeypatch.setattr(actions, "_warmed_up", False)
+    monkeypatch.setattr(actions, "_WARM_UP_MODULES", ("not_a_real_module_xyz", "json.decoder"))
+    sys.modules.pop("json.decoder", None)
+    actions.warm_up_azure_sdk()
+    assert "json.decoder" in sys.modules
+    assert actions._warmed_up is True
+
+
+# ── Sauvegarde : RG du vault, noms stockés, point le plus récent, job de la VM ──
+
+def _backup_env(monkeypatch, *, rps, jobs, stored_id=None):
+    """A connector wired to a fake RSV client + fake REST endpoint."""
+    import sys
+    import types
+    from datetime import datetime, timezone
+    from glorfindel.actions import AzureConnector
+
+    client = MagicMock()
+    client.recovery_points.list.return_value = rps
+    client.backup_jobs.list.return_value = jobs
+    if stored_id:
+        client.protected_items.get.return_value = MagicMock(id=stored_id)
+    else:
+        client.protected_items.get.side_effect = Exception("not found")
+    fake_mod = types.ModuleType("azure.mgmt.recoveryservicesbackup")
+    fake_mod.RecoveryServicesBackupClient = lambda *a, **k: client
+    monkeypatch.setitem(sys.modules, "azure.mgmt.recoveryservicesbackup", fake_mod)
+
+    posted = []
+    fake_requests = types.ModuleType("requests")
+    fake_requests.post = lambda url, json=None, headers=None: (
+        posted.append(url) or types.SimpleNamespace(status_code=202, text=""))
+    monkeypatch.setitem(sys.modules, "requests", fake_requests)
+    monkeypatch.setattr("time.sleep", lambda s: None)
+
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    connector._credential = MagicMock()
+    connector._subscription_id = "s"
+    connector._compute = MagicMock()
+    connector._compute.virtual_machines.get.return_value = MagicMock(
+        id=_RID, location="westeurope", storage_profile=MagicMock(data_disks=[]))
+    return connector, client, posted, datetime.now(timezone.utc)
+
+
+def _rp(name, when, vaulted=True):
+    tier = [MagicMock(type="HardenedRP", status="Valid")] if vaulted else []
+    return MagicMock(name=name, properties=MagicMock(recovery_point_time=when,
+                                                     recovery_point_tier_details=tier))
+
+
+def _job(name, vm, op, start):
+    return MagicMock(name=name, properties=MagicMock(
+        operation=op, status="InProgress", entity_friendly_name=vm, start_time=start))
+
+
+def test_restore_picks_the_newest_point_not_the_list_order(monkeypatch):
+    from datetime import timedelta
+    connector, client, posted, now = _backup_env(monkeypatch, rps=[], jobs=[])
+    old_rp = _rp("rp-old", now - timedelta(days=2))
+    new_rp = _rp("rp-new", now - timedelta(hours=3))
+    old_rp.name, new_rp.name = "rp-old", "rp-new"
+    client.recovery_points.list.return_value = [old_rp, new_rp]      # oldest FIRST
+    job = _job("restore-1", "vm", "Restore", now)
+    job.name = "restore-1"
+    client.backup_jobs.list.return_value = [job]
+
+    out = connector.restore_from_backup(_RID, vault="rsv", wait=False, staging_storage="st")
+    assert out["recovery_point"] == "rp-new"
+    assert "/recoveryPoints/rp-new/restore" in posted[0]
+
+
+def test_restore_uses_vault_rg_and_the_names_the_vault_stores(monkeypatch):
+    """Central vault in its own RG + stored names read back from the protected item:
+    recovery_points.list is case-sensitive (lowercase returned nothing on the bench)."""
+    stored = ("/subscriptions/s/resourceGroups/rg-backup/providers/Microsoft.RecoveryServices"
+              "/vaults/rsv/backupFabrics/Azure/protectionContainers/IaasVMContainer;iaasvmcontainerv2;rg;vm"
+              "/protectedItems/VM;iaasvmcontainerv2;rg;vm")
+    connector, client, posted, now = _backup_env(monkeypatch, rps=[], jobs=[], stored_id=stored)
+    rp = _rp("rp-1", now)
+    rp.name = "rp-1"
+    client.recovery_points.list.return_value = [rp]
+    job = _job("restore-1", "vm", "Restore", now)
+    job.name = "restore-1"
+    client.backup_jobs.list.return_value = [job]
+
+    out = connector.restore_from_backup(_RID, vault="rsv", wait=False, staging_storage="st",
+                                        vault_rg="rg-backup")
+    args = client.recovery_points.list.call_args.args
+    assert args[1] == "rg-backup"
+    assert args[3] == "IaasVMContainer;iaasvmcontainerv2;rg;vm"
+    assert args[4] == "VM;iaasvmcontainerv2;rg;vm"
+    assert "/resourceGroups/rg-backup/" in posted[0]
+    assert out["rg"] == "rg-backup"                     # job lookups run in the vault RG
+
+
+def test_snapshot_tracks_the_job_of_its_own_vm(monkeypatch):
+    """Two jobs InProgress in the vault: the snapshot must track the one of ITS VM, not
+    the first one listed (cross-wiring between concurrent snapshots)."""
+    connector, client, posted, now = _backup_env(monkeypatch, rps=[], jobs=[])
+    other = _job("job-other", "vm-other", "Backup", now)
+    other.name = "job-other"
+    mine = _job("job-mine", "vm", "Backup", now)
+    mine.name = "job-mine"
+    client.backup_jobs.list.return_value = [other, mine]
+
+    snap_id = connector.snapshot(_RID, vault="rsv", wait=False, vault_rg="rg-backup")
+    assert snap_id == "rsv:rsv/rg-backup/job-mine"
+    assert "/resourceGroups/rg-backup/" in posted[0]

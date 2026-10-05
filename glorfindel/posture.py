@@ -25,6 +25,15 @@ _MISSING = object()
 PostureCheckName = Literal["backup_linked", "backup_recent", "nsg_reachable"]
 
 
+def _transient(res: dict) -> bool:
+    """True when a failed check result carries a transient SDK/transport error (same
+    classification as audit._is_transient_error) rather than a real gap."""
+    if res.get("iam"):
+        return False  # an authorization failure is a real capability gap
+    from glorfindel.audit import _is_transient_error
+    return _is_transient_error(str(res.get("error", "")))
+
+
 @dataclass
 class PostureGap:
     resource_id: str
@@ -53,6 +62,7 @@ class PostureChecker:
         self._dry_run = dry_run
         self._lock = threading.Lock()
         self._state: dict[str, dict] = self._load_state()
+        self._inconclusive: set[tuple[str, str]] = set()
 
     # ── Public ────────────────────────────────────────────────────────────────
 
@@ -60,6 +70,9 @@ class PostureChecker:
         """Check all assets, escalate new gaps, auto-resolve cleared ones. Returns gaps."""
         all_gaps: list[PostureGap] = []
         checked_vms: set[str] = set()
+        # (vm, check) pairs this cycle could NOT conclude on (transient SDK/transport
+        # error): neither a new gap nor a resolution of an existing one.
+        self._inconclusive: set[tuple[str, str]] = set()
         fallback_rg = ""
         for asset in assets:
             if not asset.resource_id:
@@ -135,7 +148,11 @@ class PostureChecker:
                     continue
                 vm = entry.get("vm_name", "")
                 check = entry.get("check", "")
-                if vm in checked_vms:
+                if (vm, check) in getattr(self, "_inconclusive", set()):
+                    # The check failed transiently this cycle: we don't know, so the
+                    # gap neither resolves nor re-fires — it stays as it was.
+                    resolve = False
+                elif vm in checked_vms:
                     # Checked this cycle: clear once the gap no longer fires (a future
                     # recurrence re-alerts — an acked gap that clears must not stay
                     # 'acknowledged' forever and swallow the next real occurrence).
@@ -213,7 +230,12 @@ class PostureChecker:
         if vault:
             try:
                 res = self._connector.check_backup_points(rid, vault, vault_rg)
-                if not res.get("ok") and res.get("protected"):
+                if not res.get("ok") and _transient(res):
+                    # An SDK/transport hiccup is not "VM not linked to the vault": that
+                    # critical gap sent operators chasing a phantom fix (audit already
+                    # routes the same errors to `warn`).
+                    self._mark_inconclusive(vm, "backup_linked", "backup_recent")
+                elif not res.get("ok") and res.get("protected"):
                     # Protected, but the first backup hasn't run yet. NOT a "not linked"
                     # critical — restore will be possible once a recovery point exists.
                     gaps.append(PostureGap(
@@ -265,11 +287,13 @@ class PostureChecker:
                         ),
                     ))
             except Exception:
-                pass
+                self._mark_inconclusive(vm, "backup_linked", "backup_recent")
 
         try:
             res = self._connector.check_nsg_access(rid)
-            if not res.get("ok"):
+            if not res.get("ok") and _transient(res):
+                self._mark_inconclusive(vm, "nsg_reachable")
+            elif not res.get("ok"):
                 gaps.append(PostureGap(
                     resource_id=rid,
                     vm_name=vm,
@@ -285,9 +309,15 @@ class PostureChecker:
                     ),
                 ))
         except Exception:
-            pass
+            self._mark_inconclusive(vm, "nsg_reachable")
 
         return gaps
+
+    def _mark_inconclusive(self, vm: str, *checks: str) -> None:
+        if not hasattr(self, "_inconclusive"):
+            self._inconclusive = set()
+        for check in checks:
+            self._inconclusive.add((vm, check))
 
     # ── Dedup + escalation ────────────────────────────────────────────────────
 

@@ -37,3 +37,15 @@ def check_vm(vm_tags: dict) -> GuardResult:
             ),
         )
     return GuardResult(allowed=True)
+
+
+def check_target(rg_tags: dict, vm_tags: dict) -> GuardResult:
+    """Both gates: the resource group AND the VM must carry the chaos authorization.
+
+    The RG tag alone authorized attacks on EVERY VM of that group — including an
+    untagged production VM sharing it. `check_vm` existed but had no call site.
+    """
+    rg = check_resource_group(rg_tags)
+    if not rg.allowed:
+        return rg
+    return check_vm(vm_tags)

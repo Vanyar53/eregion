@@ -12,7 +12,7 @@ from rich.prompt import Confirm
 
 from annatar.runner.parser import ScenarioParser
 from annatar.runner.report import RunReport
-from annatar.safety.guard import check_resource_group
+from annatar.safety.guard import check_target
 from annatar.signals.emitter import SignalEmitter
 
 console = Console()
@@ -61,9 +61,9 @@ class Engine:
 
         executor, collector = self._get_executor_collector(scenario)
 
-        # Safety check
+        # Safety check — the resource group AND the VM must be tagged for chaos testing
         rg_tags = executor.get_resource_group_tags(scenario.target["resource_group"])
-        guard = check_resource_group(rg_tags)
+        guard = check_target(rg_tags, executor.get_vm_tags())
         if not guard.allowed:
             console.print(f"[red]Safety check failed:[/red] {guard.reason}")
             return RunOutcome(run_id, "unknown", error=f"safety: {guard.reason}")

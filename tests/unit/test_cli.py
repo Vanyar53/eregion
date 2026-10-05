@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import click
-import pytest
 from click.testing import CliRunner
 
 from glorfindel.cli import _GlorfindelCli, _resolve_resource_id
@@ -104,3 +103,50 @@ def test_click_usage_errors_still_render_normally():
     res = CliRunner().invoke(g, ["does-not-exist"])
     assert res.exit_code != 0
     assert "No such command" in res.output
+
+
+# ── Revue 2026-09 : watch survit à ses propres entrées ────────────────────────
+
+def _sig_line(**over):
+    import json
+    base = {"signal_id": "r1_attack", "timestamp": "2026-06-01T00:00:00Z", "provider": "azure",
+            "resource_id": "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm",
+            "resource_type": "vm", "ttp": "T1486", "severity": "critical", "event": "attack_started",
+            "raw_signal": {}, "context": {"run_id": "r1"}}
+    base.update(over)
+    return json.dumps(base) + "\n"
+
+
+def test_read_new_signals_skips_a_corrupt_line_and_continues(tmp_path):
+    """One bad line used to kill the whole watch daemon."""
+    from glorfindel.cli import _read_new_signals
+    f = tmp_path / "x_signals.jsonl"
+    f.write_text(_sig_line(signal_id="a") + "{not json\n" + _sig_line(signal_id="b"))
+    errors = []
+    signals, offset = _read_new_signals(f, 0, errors.append)
+    assert [s.signal_id for _, s in signals] == ["a", "b"]
+    assert len(errors) == 1
+    assert offset == f.stat().st_size
+
+
+def test_read_new_signals_leaves_a_half_written_line_for_next_poll(tmp_path):
+    """Annatar writes from another container: a line without its newline yet must be
+    read whole on the next poll, not parsed half-written."""
+    from glorfindel.cli import _read_new_signals
+    f = tmp_path / "x_signals.jsonl"
+    full, partial = _sig_line(signal_id="a"), _sig_line(signal_id="b")
+    f.write_text(full + partial[:40])
+    signals, offset = _read_new_signals(f, 0, lambda e: None)
+    assert [s.signal_id for _, s in signals] == ["a"]
+    with open(f, "a") as fh:
+        fh.write(partial[40:])
+    signals, _ = _read_new_signals(f, offset, lambda e: None)
+    assert [s.signal_id for _, s in signals] == ["b"]
+
+
+def test_parse_signal_line_ignores_unknown_fields():
+    """A field added by a newer Annatar must not make Signal(**data) raise."""
+    from glorfindel.cli import _parse_signal_line
+    data, sig = _parse_signal_line(_sig_line(new_field_from_the_future=1).strip())
+    assert sig.signal_id == "r1_attack"
+    assert data["new_field_from_the_future"] == 1

@@ -7,9 +7,6 @@ from unittest.mock import MagicMock, patch
 
 from glorfindel.detection_rules import (
     DetectionRule,
-    DetectionConfig,
-    MonitoringBackend,
-    Asset,
     RulePoller,
     _load_status,
     _save_status,
@@ -183,6 +180,20 @@ def test_has_recognized_indicator():
     # generic fallback (unknown column) → NOT a recognized threat indicator
     assert has_recognized_indicator({"Activity": "anomalous login", "Computer": "vm"}) is False
     assert has_recognized_indicator({}) is False
+
+
+def test_syslog_is_characterized_only_by_a_curated_pattern():
+    """SyslogMessage is a log SOURCE: its mere presence no longer counts. Curated
+    patterns do — USER=root and account creation (real T1136.001 rows)."""
+    from glorfindel.detection_rules import has_recognized_indicator, normalize_row
+    t1136 = ("new user: name=testuser-annatar, UID=2001, GID=2001, "
+             "home=/home/testuser-annatar, shell=/sbin/nologin")
+    assert has_recognized_indicator({"SyslogMessage": t1136}) is True
+    assert has_recognized_indicator({"SyslogMessage": "sudo: USER=root ; COMMAND=/bin/sh"}) is True
+    assert has_recognized_indicator({"SyslogMessage": "CRON[812]: session opened for user root"}) is False
+    assert has_recognized_indicator({"SyslogMessage": "systemd[1]: Started Daily apt."}) is False
+    # What the LLM sees is unchanged (normalize_row untouched → no prompt change).
+    assert normalize_row({"SyslogMessage": t1136})["indicator_key"] == "syslog_event"
 
 
 def test_detection_inert_true_when_nothing_can_poll():
@@ -541,10 +552,17 @@ def test_poller_records_error_status(tmp_path, monkeypatch):
         rule = _make_rule(interval_s=0.05)
         poller = RulePoller([rule], lambda s: None, dry_run=False)
         poller.start()
-        time.sleep(0.3)
+        # Wait on the CONDITION, not a fixed sleep: a 0.3s sleep failed whenever the
+        # poll thread hadn't run once yet (scheduling-dependent flake).
+        deadline = time.time() + 5
+        status = {}
+        while time.time() < deadline:
+            status = _load_status()
+            if "network error" in status.get("rule-x", {}).get("last_error", ""):
+                break
+            time.sleep(0.02)
         poller.stop()
 
-    status = _load_status()
     assert "rule-x" in status
     assert "network error" in status["rule-x"].get("last_error", "")
 

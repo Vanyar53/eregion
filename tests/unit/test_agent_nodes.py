@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from glorfindel.actions import AzureConnector
+from glorfindel.agent import investigate
 from glorfindel.memory import CycleMemory
 
 
@@ -432,30 +433,38 @@ def test_execute_action_block_ip_falls_back_to_dest_ip(tmp_incidents):
     connector.block_suspicious_ip.assert_called_once_with("203.0.113.5", _RESOURCE_ID)
 
 
-def test_execute_action_snapshot_returns_snapshot_id(tmp_incidents):
+def test_execute_action_snapshot_is_fire_and_forget_on_detection(tmp_incidents, monkeypatch):
+    """Even on a `detection` event the snapshot must NOT block: the worker queue is
+    serialized per VM and a blocking snapshot held it 4h25 in a real run. The vault and
+    its RG come from config, never from the connector's legacy default."""
+    import glorfindel.agent as agent_mod
     from glorfindel.agent import execute_action
+    monkeypatch.setattr(agent_mod, "_backup_vault_target", lambda: ("rsv-central", "rg-backup"))
     connector = MagicMock()
     connector.snapshot.return_value = "snap-20260524-001"
-    state = _state(action="snapshot")  # event="detection" → wait=True
+    state = _state(action="snapshot")  # event="detection"
 
     result = execute_action(state, connector=connector, incidents=tmp_incidents)
 
-    connector.snapshot.assert_called_once_with(_RESOURCE_ID, wait=True)
+    connector.snapshot.assert_called_once_with(
+        _RESOURCE_ID, vault="rsv-central", wait=False, vault_rg="rg-backup")
     assert result["outcome"]["snapshot_id"] == "snap-20260524-001"
 
 
-def test_execute_action_snapshot_fire_and_forget_on_detection_timeout(tmp_incidents):
-    """On detection_timeout, snapshot() must be called with wait=False to avoid blocking."""
+def test_execute_action_snapshot_fire_and_forget_on_detection_timeout(tmp_incidents, monkeypatch):
+    """On detection_timeout, snapshot() is called with wait=False (as before)."""
+    import glorfindel.agent as agent_mod
     from glorfindel.agent import execute_action
+    monkeypatch.setattr(agent_mod, "_backup_vault_target", lambda: ("rsv-x", ""))
     connector = MagicMock()
-    connector.snapshot.return_value = "rsv:rsv-annatar/rg/job123"
+    connector.snapshot.return_value = "rsv:rsv-x/rg/job123"
     state = _state(action="snapshot")
     state["signal"]["event"] = "detection_timeout"
 
     result = execute_action(state, connector=connector, incidents=tmp_incidents)
 
-    connector.snapshot.assert_called_once_with(_RESOURCE_ID, wait=False)
-    assert result["outcome"]["snapshot_id"] == "rsv:rsv-annatar/rg/job123"
+    connector.snapshot.assert_called_once_with(_RESOURCE_ID, vault="rsv-x", wait=False, vault_rg="")
+    assert result["outcome"]["snapshot_id"] == "rsv:rsv-x/rg/job123"
 
 
 def test_execute_action_unknown_is_noop(tmp_incidents):
@@ -558,33 +567,34 @@ def test_verify_action_isolate_vm_failure_sets_escalate():
 
 
 def test_verify_action_release_isolation_success_when_rules_gone():
-    """release_isolation is verified when verify_isolation reports no rules (verified=False)."""
+    """release_isolation is verified by verify_release (NO rule left on any NIC)."""
     from glorfindel.agent import verify_action
     connector = MagicMock()
-    connector.verify_isolation.return_value = {"verified": False, "method": "nsg_check"}
+    connector.verify_release.return_value = {"verified": True, "method": "nsg_check"}
     state = _state(action="release_isolation")
     state["outcome"] = {"status": "released", "executed": True}
 
     result = verify_action(state, connector=connector)
 
-    # not False = True: no isolation = successful release
     assert result["outcome"]["verified"] is True
     assert result["escalate"] is False
+    connector.verify_isolation.assert_not_called()   # no more `not verify_isolation()`
 
 
 def test_verify_action_release_isolation_failure_when_rules_still_present():
-    """release_isolation fails when isolation rules are still active."""
+    """A rule still on one NIC → release NOT verified → escalation."""
     from glorfindel.agent import verify_action
     connector = MagicMock()
-    connector.verify_isolation.return_value = {"verified": True, "method": "nsg_check"}
+    connector.verify_release.return_value = {
+        "verified": False, "method": "nsg_check", "error": "isolation toujours présente : nic-b"}
     state = _state(action="release_isolation")
-    state["outcome"] = {"status": "released", "executed": True}
+    state["outcome"] = {"status": "release_partial", "executed": True}
 
     result = verify_action(state, connector=connector)
 
-    # not True = False: still isolated = failed release
     assert result["outcome"]["verified"] is False
     assert result["escalate"] is True
+    assert "nic-b" in result["escalation_reason"]
 
 
 def test_verify_action_block_suspicious_ip_extracts_source_ip():
@@ -1473,8 +1483,6 @@ def test_graph_t1548_detection_isolates_vm(tmp_path, monkeypatch, dry_connector,
 
 # ── investigate node ──────────────────────────────────────────────────────────
 
-from glorfindel.agent import investigate
-
 
 def _inv_state(event="detection", first_row=None, workspace_id="ws-test", dry_run=False):
     return {
@@ -1532,7 +1540,6 @@ def test_investigate_resolves_workspace_from_glorfindel_cfg():
     ctx = result["signal"]["raw_signal"].get("investigative_context")
     assert ctx is not None, "investigate must run when workspace_id resolved from glorfindel_cfg"
     # detector must have been called with the resolved workspace_id
-    from glorfindel.detectors import detector_for as _det_for  # just for reference
     assert mock_det.run_query.called
 
 
@@ -1657,3 +1664,181 @@ def test_build_user_message_past_cycles_header_warns_about_state_inference(tmp_p
     with patch("pathlib.Path.home", return_value=tmp_path):
         msg = _build_user_message(signal, past)
     assert "NE PAS inférer état courant" in msg
+
+
+# ── Revue 2026-09 : frontière d'exceptions, précondition du release, gardes ─────
+
+def test_decide_llm_failure_escalates_instead_of_raising():
+    """A provider outage (429, timeout, auth) must not escape decide(): the detected
+    threat becomes a cycle_failed escalation, not one console line."""
+    from glorfindel.agent import decide
+    with patch("litellm.completion", side_effect=RuntimeError("RateLimitError: 429")):
+        out = decide(_state(), model="x", autonomy_override="non_disruptive")
+    assert out["escalate"] is True
+    assert out["action"] == ""
+    assert "429" in out["cycle_error"]
+    assert "triage humain" in out["escalation_reason"]
+
+
+def test_decide_asks_litellm_to_retry():
+    from glorfindel.agent import _LLM_RETRIES, decide
+    with patch("litellm.completion", return_value=_mock_llm_response("snapshot")) as m:
+        decide(_state(), model="x", autonomy_override="non_disruptive")
+    assert m.call_args.kwargs["num_retries"] == _LLM_RETRIES
+
+
+def test_graph_llm_failure_records_cycle_failed_escalation_and_debug(tmp_path, monkeypatch, dry_connector, tmp_memory):
+    from glorfindel import escalations
+    monkeypatch.chdir(tmp_path)
+    graph = _build(tmp_path, tmp_memory, dry_connector)
+    with patch("litellm.completion", side_effect=TimeoutError("read timed out")):
+        final = graph.invoke(_initial("detection", raw={"detection_time_s": 50}))
+    assert final["outcome"]["escalation_type"] == "cycle_failed"
+    pending = escalations.pending()
+    assert [e["escalation_type"] for e in pending] == ["cycle_failed"]
+    debug = (tmp_path / "runs" / "run001_debug.jsonl").read_text()
+    assert "read timed out" in debug
+
+
+def test_decide_malformed_threshold_falls_back_to_default(monkeypatch):
+    """GLORFINDEL_CONFIDENCE_THRESHOLD='abc' used to raise inside decide → cycle lost."""
+    from glorfindel.agent import decide
+    monkeypatch.setenv("GLORFINDEL_CONFIDENCE_THRESHOLD", "abc")
+    resp = _mock_llm_response("isolate_vm", confidence=0.5)
+    with patch("litellm.completion", return_value=resp):
+        out = decide(_state(), model="x", autonomy_override="non_disruptive")
+    assert out["escalate"] is True            # 0.5 < default 0.7
+    assert "Low confidence" in out["escalation_reason"]
+
+
+def test_decide_empty_reason_with_no_action_gets_a_reason():
+    """The schema asks for "" when there's nothing to say: setdefault kept the "" →
+    an escalation with no reason. Now the default reason is set."""
+    import json as _json
+    from glorfindel.agent import decide
+    tc = MagicMock()
+    tc.function.arguments = _json.dumps({"action": "", "escalation_reason": "", "confidence": 0.9})
+    resp = MagicMock()
+    resp.choices = [MagicMock(message=MagicMock(tool_calls=[tc]))]
+    with patch("litellm.completion", return_value=resp):
+        out = decide(_state(), model="x", autonomy_override="non_disruptive")
+    assert out["escalate"] is True
+    assert out["escalation_reason"]
+
+
+def test_release_outside_recovery_complete_is_held():
+    """A confident release_isolation on a plain detection must not un-contain a VM."""
+    from glorfindel.agent import decide
+    resp = _mock_llm_response("release_isolation", confidence=0.95)
+    with patch("litellm.completion", return_value=resp):
+        out = decide(_state(), model="x", autonomy_override="non_disruptive")
+    assert out["escalate"] is True
+    assert "restauration" in out["escalation_reason"]
+
+
+def test_release_on_recovery_complete_stays_autonomous():
+    """The legitimate post-restore release is untouched (it carries no threat indicator,
+    which is why release could not simply be put under the signal guardrail)."""
+    from glorfindel.agent import decide
+    state = _state()
+    state["signal"]["event"] = "recovery_complete"
+    state["signal"]["raw_signal"] = {"recovery_point_time": "2026-06-09T10:00:00Z"}
+    with patch("litellm.completion", return_value=_mock_llm_response("release_isolation")):
+        out = decide(state, model="x", autonomy_override="non_disruptive")
+    assert out["escalate"] is False
+    assert out["action"] == "release_isolation"
+
+
+def test_guardrail_holds_isolate_on_an_uncurated_syslog_line():
+    """Any Syslog row used to count as 'characterized' (SyslogMessage present) — so the
+    guardrail never fired for Syslog rules, including LLM-authored ones."""
+    from glorfindel.agent import decide
+    resp = _mock_llm_response("isolate_vm", confidence=0.95)
+    state = _state(signal=_signal({"Computer": "vm", "SyslogMessage": "systemd[1]: Started Daily apt."}))
+    with patch("litellm.completion", return_value=resp):
+        out = decide(state, model="x", autonomy_override="non_disruptive")
+    assert out["escalate"] is True
+    assert "indicateur de menace reconnu" in out["escalation_reason"]
+
+
+def test_guardrail_still_lets_curated_syslog_through():
+    """USER=root (privilege_escalation) stays characterized — T1548 keeps its
+    autonomous isolate."""
+    from glorfindel.agent import decide
+    resp = _mock_llm_response("isolate_vm", confidence=0.95)
+    state = _state(signal=_signal({"Computer": "vm", "SyslogMessage": _T1548_SYSLOG}, ttp="T1548.003"))
+    with patch("litellm.completion", return_value=resp):
+        out = decide(state, model="x", autonomy_override="non_disruptive")
+    assert out["escalate"] is False
+
+
+def test_execute_action_connector_runtime_error_escalates(tmp_incidents, monkeypatch):
+    """The connector's own RuntimeErrors used to escape execute_action (only
+    PermissionError / HttpResponseError were caught)."""
+    import glorfindel.agent as agent_mod
+    from glorfindel.agent import execute_action
+    monkeypatch.setattr(agent_mod, "_backup_vault_target", lambda: ("rsv", ""))
+    connector = MagicMock()
+    connector.snapshot.side_effect = RuntimeError("Snapshot trigger failed (404): vault not found")
+    out = execute_action(_state(action="snapshot"), connector=connector, incidents=tmp_incidents)
+    assert out["outcome"]["status"] == "action_failed"
+    assert out["escalate"] is True
+    assert "404" in out["escalation_reason"]
+
+
+def test_execute_action_partial_isolation_is_flagged(tmp_incidents):
+    from glorfindel.actions import PartialActionError
+    from glorfindel.agent import execute_action
+    cause = RuntimeError("conflict")
+    cause.status_code = 403
+    connector = MagicMock()
+    connector.isolate_vm.side_effect = PartialActionError(
+        "Isolation partielle de vm : 1/2 NIC(s)", cause=cause, covered=["nic-a"], failed_nic="nic-b")
+    out = execute_action(_state(action="isolate_vm"), connector=connector, incidents=tmp_incidents)
+    assert out["outcome"]["status"] == "write_blocked"   # 403 preserved through the wrapper
+    assert out["outcome"]["partial"] is True
+    assert out["outcome"]["failed_nic"] == "nic-b"
+
+
+def test_graph_skipped_proposal_records_no_escalation(tmp_path, monkeypatch, dry_connector, tmp_memory):
+    """detection_missed that the RulePoller already matched: skip → store only. It used
+    to flow into escalate_to_human and record an empty `proposed_action` card."""
+    from glorfindel import escalations
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("glorfindel.detection_rules.rulepoller_recently_matched", lambda *a, **k: True)
+    from glorfindel.agent import _build_graph
+    from glorfindel.config import AutonomyConfig
+    (tmp_path / "runs").mkdir(exist_ok=True)
+    graph = _build_graph(tmp_memory, dry_connector, "claude-test",
+                         autonomy=AutonomyConfig(default="non_disruptive"))
+    final = graph.invoke(_initial("detection_missed", ttp="T1486"))
+    assert final["outcome"]["status"] == "skipped"
+    assert escalations.pending() == []
+
+
+def test_respond_turns_an_unexpected_exception_into_cycle_failed(tmp_path, monkeypatch):
+    """Last-resort boundary in respond(): whatever raises inside the graph, the signal
+    leaves an escalation + a debug line instead of a console print in the worker."""
+    from glorfindel import escalations
+    from glorfindel.agent import GlorfindelAgent
+    from glorfindel.config import AutonomyConfig
+    monkeypatch.chdir(tmp_path)
+    agent = GlorfindelAgent(
+        connector=AzureConnector(dry_run=True), memory_path=str(tmp_path / "mem"),
+        incidents_path=str(tmp_path / "inc.jsonl"), model="x", dry_run=False,
+        autonomy=AutonomyConfig(default="non_disruptive"),
+    )
+    agent._graph = MagicMock()
+    agent._graph.invoke.side_effect = OSError("disk full")
+    sig = _initial("detection")["signal"]
+
+    final = agent.respond(sig)
+
+    assert final["outcome"]["escalation_type"] == "cycle_failed"
+    assert [e["escalation_type"] for e in escalations.pending()] == ["cycle_failed"]
+    assert "disk full" in (tmp_path / "runs" / "run001_debug.jsonl").read_text()
+
+
+def test_cycle_failed_has_a_label():
+    from glorfindel.escalations import _ESCALATION_LABELS
+    assert "cycle_failed" in _ESCALATION_LABELS

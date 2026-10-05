@@ -1,4 +1,4 @@
-from annatar.safety.guard import check_resource_group, check_vm
+from annatar.safety.guard import check_resource_group, check_target, check_vm
 
 
 def test_guard_allows_tagged_rg():
@@ -35,3 +35,12 @@ def test_guard_vm_allows_tagged():
 def test_guard_vm_blocks_untagged():
     result = check_vm({"env": "prod"})
     assert not result.allowed
+
+
+
+def test_check_target_requires_both_tags():
+    tagged = {"annatar-test": "true"}
+    assert check_target(tagged, tagged).allowed
+    assert not check_target(tagged, {}).allowed            # VM untagged
+    assert not check_target({}, tagged).allowed            # RG untagged
+    assert "VM" in check_target(tagged, {"env": "prod"}).reason

@@ -109,7 +109,7 @@ glorfindel watch runs/ --rules glorfindel/rules/azure/detection_rules.yaml
 `GLORFINDEL_READ_ONLY=1` guarantees no write API is ever called; `human_only` holds every recommended action *before* the connector is touched (you see `mode_hold` escalations, never permission errors).
 
 **5. Read the recommendations** — the value is in what Glorfindel *would* have done:
-- **War Room** (`glorfindel war-room` → http://localhost:7007) — live cards, `OBSERVE-ONLY` badge, each escalation shows the held action + confidence + forensic steps.
+- **War Room** (`glorfindel war-room` → http://localhost:7007) — live cards, `OBSERVE-ONLY` badge, each escalation shows the held action + confidence + forensic steps. It listens on `127.0.0.1` by default (Docker publishes `127.0.0.1:7007`). To reach it from another machine, set `GLORFINDEL_WARROOM_TOKEN` first, then open `http://<host>:7007/?token=<token>` once (scripts: `Authorization: Bearer <token>`) — the War Room can trigger real Azure actions.
 - **`glorfindel pending`** — same on the CLI.
 
 > ⚠ **For the first observe run, disable `data-exfiltration-blob`** — it fires on `PutBlobCount >= 1` from any RFC-1918 source, too noisy on real workloads. Set `enabled: false` on that rule in [`detection_rules.yaml`](glorfindel/rules/azure/detection_rules.yaml) until the allowlist hardening lands. The other rules are safe to leave on.
@@ -395,7 +395,7 @@ glorfindel check-ttl                            # release isolations older than 
 glorfindel memory-stats                         # ChromaDB cycle count
 glorfindel bot                                  # start the interactive Discord bot
 glorfindel dashboard                            # full-screen TUI: resources + feed + escalations
-glorfindel war-room                             # web UI on http://localhost:7007 (pip install eregion[war-room])
+glorfindel war-room                             # web UI on http://localhost:7007 (pip install eregion[war-room]); loopback by default, GLORFINDEL_WARROOM_TOKEN to expose it
 
 # Annatar
 annatar run annatar/scenarios/azure/ransomware-vm.yaml            # run a scenario (--dry-run available)
@@ -626,8 +626,10 @@ glorfindel audit --all   # NSG / backup vault / compute — surfaces IAM gaps wi
 ```bash
 pip install eregion[dev]
 pytest
-# 475 tests — 0 Azure calls, 0 LLM calls
+# 534 tests (~15s) — 0 Azure calls, 0 LLM calls, 0 writes to ~/.glorfindel
 ```
+
+The suite is hermetic by construction: `tests/unit/conftest.py` redirects every `~/.glorfindel` path to a temp directory and ignores any local `glorfindel-config.yaml`. CI (`.github/workflows/ci.yml`) runs `ruff check` + `pytest` on Python 3.11 and 3.12.
 
 Coverage: 8 LangGraph nodes (incl. the propose_detection_rule branch), routing rules, signal schema, safety guard, YAML parser, ChromaDB memory, CLI escalation flow, detection rules (RulePoller + auto-apply + eviction), proposed rules lifecycle, grounded detection authoring, campaign planner/synthesizer/runner + replay, audit readiness checks, GlorfindelConfig + ExceptionConfig, AssetRegistry + DiscoveryService (replace-on-refresh, self-evicting threads), PostureChecker (dedup, re-escalation).
 

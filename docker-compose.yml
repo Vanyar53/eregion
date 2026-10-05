@@ -22,6 +22,8 @@ x-env: &env
   GLORFINDEL_ISOLATION_TTL_H: ${GLORFINDEL_ISOLATION_TTL_H:-}
   GLORFINDEL_INCIDENT_TTL_S: ${GLORFINDEL_INCIDENT_TTL_S:-}
   GLORFINDEL_READ_ONLY: ${GLORFINDEL_READ_ONLY:-}
+  GLORFINDEL_WARROOM_TOKEN: ${GLORFINDEL_WARROOM_TOKEN:-}
+  GLORFINDEL_BACKUP_VAULT: ${GLORFINDEL_BACKUP_VAULT:-}
   ORT_LOGGING_LEVEL_DEFAULT: "3"
 
 services:
@@ -54,10 +56,13 @@ services:
   war-room:
     image: eregion-glorfindel
     container_name: eregion-war-room
+    # 0.0.0.0 INSIDE the container is required for the port mapping to work; what
+    # limits exposure is the HOST side of the mapping: loopback only. To reach the War
+    # Room from another machine, set GLORFINDEL_WARROOM_TOKEN and widen the mapping.
     command: glorfindel war-room --host 0.0.0.0 --port 7007
     restart: unless-stopped
     ports:
-      - "7007:7007"
+      - "127.0.0.1:7007:7007"
     environment:
       <<: *env
     volumes:

@@ -110,15 +110,36 @@ _SKIP_GENERIC = frozenset({"TimeGenerated", "_ResourceId", "TenantId", "Type"})
 # recognise the kind of threat. A generic-fallback column or "unknown" is NOT: we found
 # data but can't say what threat it represents. The decide guardrail uses this to refuse
 # AUTONOMOUS disruptive action on an uncharacterized signal.
+#
+# `syslog_event` is deliberately NOT in the set. SyslogMessage names a log SOURCE, not a
+# threat: every Syslog-based rule produces it — including the rules the LLM authors in
+# the purple loop. Counting its mere presence as "characterized" switched the guardrail
+# off for the whole Syslog family. A Syslog row is characterized only by a curated
+# pattern: USER=root (privilege_escalation, in normalize_row) or one below.
 RECOGNIZED_INDICATOR_KEYS: frozenset = frozenset(
-    {label for _, label in _INDICATOR_COLUMNS} | {"privilege_escalation"}
+    {label for _, label in _INDICATOR_COLUMNS if label != "syslog_event"}
+    | {"privilege_escalation"}
+)
+
+# Curated Syslog patterns (lowercase substrings) → the threat they characterize. Bless a
+# new one only after a human has checked what the line means. Account creation keeps the
+# documented design: characterized-but-ambiguous, so the CONFIDENCE gate (not this
+# guardrail) decides — validated on real T1136.001 runs ("new user: name=…").
+_CURATED_SYSLOG_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("account_creation", ("new user:", "useradd")),
 )
 
 
 def has_recognized_indicator(row: dict, ttp: str = "") -> bool:
-    """True if the row maps to a curated threat indicator (not a generic-fallback column
-    nor 'unknown'). Deterministic, model-independent — used to gate autonomous action."""
-    return normalize_row(row, ttp).get("indicator_key") in RECOGNIZED_INDICATOR_KEYS
+    """True if the row maps to a curated threat indicator (not a generic-fallback column,
+    'unknown', nor an uncurated Syslog line). Deterministic, model-independent — used to
+    gate autonomous action. Does not change what normalize_row gives the LLM."""
+    norm = normalize_row(row, ttp)
+    key = norm.get("indicator_key")
+    if key == "syslog_event":
+        message = str(norm.get("indicator_value", "")).lower()
+        return any(p in message for _, patterns in _CURATED_SYSLOG_PATTERNS for p in patterns)
+    return key in RECOGNIZED_INDICATOR_KEYS
 
 
 def normalize_row(row: dict, ttp: str = "") -> dict:
@@ -441,7 +462,6 @@ class RulePoller:
         Starts new poll threads for each (rule, asset) pair not yet running.
         Safe to call multiple times — skips already-running combinations.
         """
-        from glorfindel.discovery import AssetRegistry as _Reg
         running_keys = {t.name for t in self._threads if t.is_alive()}
 
         for rule in self._rules:

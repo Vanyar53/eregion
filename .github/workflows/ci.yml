@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: lint + tests (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # pyproject declares requires-python >=3.11; the Docker images run 3.12.
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      # ChromaDB downloads its ONNX embedding model (~80 MB) on first use.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/chroma
+          key: chroma-onnx-v1
+
+      - name: Install
+        run: python -m pip install -e ".[dev]" ruff
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Tests (0 Azure call, 0 LLM call, 0 write in ~/.glorfindel)
+        run: python -m pytest tests/ -q

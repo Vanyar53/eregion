@@ -42,8 +42,14 @@ def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 
+def _atomic_write(path: Path, text: str) -> None:
+    """Same contract as actions._atomic_write_text: readers never see a torn file."""
+    from glorfindel.actions import _atomic_write_text
+    _atomic_write_text(path, text)
+
+
 def save_job(vm_name: str, job: dict) -> None:
-    _path(vm_name).write_text(json.dumps(job, default=str))
+    _atomic_write(_path(vm_name), json.dumps(job, default=str))
 
 
 def get_job(vm_name: str) -> dict | None:
@@ -92,7 +98,8 @@ def refresh_job(job: dict, connector) -> dict:
     elif jtype == "restore":
         restore_job_name = job.get("restore_job_name")
         vault = job.get("vault", "rsv-annatar")
-        rg = job.get("rg", "")
+        # Job lookups run in the VAULT's resource group (central vault ≠ VM RG).
+        rg = job.get("vault_rg") or job.get("rg", "")
         if restore_job_name and rg:
             from azure.mgmt.recoveryservicesbackup import RecoveryServicesBackupClient
             connector._ensure_clients()
@@ -146,15 +153,27 @@ def reconcile_jobs(connector=None, max_age_h: float = _STALE_AGE_H) -> list[dict
     return changed
 
 
-def start_snapshot(resource_id: str, connector, vault: str = "rsv-annatar") -> dict:
-    """Trigger a non-blocking RSV backup. Returns job metadata immediately."""
+def record_snapshot_job(
+    resource_id: str, snap_id: str, vault: str, vault_rg: str = "",
+    *, overwrite_running: bool = True,
+) -> dict | None:
+    """Persist a snapshot job so the CLI, the War Room and the watch reconciler see it.
+
+    overwrite_running=False (the agent's autonomous snapshot): keep a job that is still
+    InProgress for this VM — there is one job file per VM, and overwriting a running
+    restore's record would lose its tracking. Returns the job written, or None.
+    """
     vm_name = resource_id.split("/")[-1]
-    snap_id = connector.snapshot(resource_id, vault=vault, wait=False)
+    if not overwrite_running:
+        current = get_job(vm_name)
+        if current and current.get("status") == "InProgress":
+            return None
     job = {
         "job_id": f"snapshot-{vm_name}-{_now()}",
         "type": "snapshot",
         "resource_id": resource_id,
         "vault": vault,
+        "vault_rg": vault_rg,
         "snap_id": snap_id,
         "status": "InProgress",
         "started_at": datetime.now(timezone.utc).isoformat(),
@@ -164,12 +183,21 @@ def start_snapshot(resource_id: str, connector, vault: str = "rsv-annatar") -> d
     return job
 
 
+def start_snapshot(
+    resource_id: str, connector, vault: str = "rsv-annatar", vault_rg: str = "",
+) -> dict:
+    """Trigger a non-blocking RSV backup. Returns job metadata immediately."""
+    snap_id = connector.snapshot(resource_id, vault=vault, wait=False, vault_rg=vault_rg)
+    return record_snapshot_job(resource_id, snap_id, vault, vault_rg)
+
+
 def start_restore(
     resource_id: str,
     connector,
     vault: str = "rsv-annatar",
     before_attack_time: str | None = None,
     staging_storage: str = "",
+    vault_rg: str = "",
 ) -> dict:
     """Trigger a non-blocking restore. Blocks only on VM deallocation (~1-2 min).
 
@@ -179,7 +207,7 @@ def start_restore(
     vm_name = resource_id.split("/")[-1]
     result = connector.restore_from_backup(
         resource_id, vault=vault, before_attack_time=before_attack_time,
-        wait=False, staging_storage=staging_storage,
+        wait=False, staging_storage=staging_storage, vault_rg=vault_rg,
     )
     job = {
         "job_id": f"restore-{vm_name}-{_now()}",
@@ -188,6 +216,7 @@ def start_restore(
         "vault": vault,
         "restore_job_name": result.get("job_name"),
         "rg": result.get("rg"),
+        "vault_rg": result.get("vault_rg") or vault_rg,
         "recovery_point": result.get("recovery_point"),
         "recovery_point_time": str(result.get("recovery_point_time", "")),
         "status": "InProgress",
@@ -195,8 +224,7 @@ def start_restore(
         "completed_at": None,
     }
     save_job(vm_name, job)
-    _RECOVERY_DIR.mkdir(parents=True, exist_ok=True)
-    (_RECOVERY_DIR / f"{vm_name}.json").write_text(json.dumps({
+    _atomic_write(_RECOVERY_DIR / f"{vm_name}.json", json.dumps({
         "last_restore_at": datetime.now(timezone.utc).isoformat(),
         "resource_id": resource_id,
     }))

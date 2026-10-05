@@ -35,6 +35,11 @@ class AzureVMExecutor:
         rg = client.resource_groups.get(rg_name)
         return rg.tags or {}
 
+    def get_vm_tags(self) -> dict:
+        """Tags of the target VM — the per-VM chaos authorization (safety/guard.py)."""
+        vm = self._compute.virtual_machines.get(self.resource_group, self.vm_name)
+        return vm.tags or {}
+
     def _ensure_vm_running(self) -> None:
         iv = self._compute.virtual_machines.get(
             self.resource_group, self.vm_name, expand="instanceView"

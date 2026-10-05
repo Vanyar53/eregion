@@ -137,3 +137,24 @@ def test_approved_isolation_is_verified_and_traced(client, monkeypatch, tmp_path
     assert r.json()["verification"]["verified"] is False
     assert [e["escalation_type"] for e in escalations.pending()] == ["verification_failed"]
     assert "isolate_vm" in (tmp_path / "runs" / "manual_actions.jsonl").read_text()
+
+
+def test_approved_release_is_verified_after_the_rules_are_removed(client, monkeypatch, tmp_path):
+    """The CLI release checks only before removing the rules (validation run, 2026-10-05)."""
+    from glorfindel import escalations
+    monkeypatch.chdir(tmp_path)
+    rid = "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm"
+    escalations.record(signal_id="s1", resource_id=rid, action="release_isolation",
+                       escalation_type="mode_hold", reason="held")
+    esc_id = escalations.pending()[0]["id"]
+    conn = MagicMock()
+    conn.verify_release.return_value = {"verified": True, "method": "nsg_check"}
+    monkeypatch.setattr("glorfindel.actions.AzureConnector", lambda **k: conn)
+
+    async def _released(vm_name):
+        return {"ok": True, "stdout": "released"}
+    monkeypatch.setattr(api, "action_release", _released)
+
+    r = client.post(f"/api/action/approve/{esc_id}")
+    assert r.json()["verification"]["verified"] is True
+    conn.verify_release.assert_called_once_with(rid)

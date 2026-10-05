@@ -179,3 +179,13 @@ def test_list_shows_a_partial_isolation_and_a_bypassed_block():
     assert "ISOLATED (PARTIAL)" in res.output
     assert "NIC nic-x-1 not covered" in res.output
     assert "bypassed: allow-ssh (priority 100)" in res.output
+
+
+def test_list_shows_sessions_left_open_by_the_drain():
+    from glorfindel.actions import _save_isolation_state
+    from glorfindel.cli import cli
+    rid = "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm-y"
+    _save_isolation_state("vm-y", {"resource_id": rid, "isolated_at": "2026-10-05T20:07:27+00:00",
+                                   "placements": [], "drain": {"status": "failed", "error": "403 runCommand"}})
+    res = CliRunner().invoke(cli, ["list"])
+    assert "open sessions not cut: 403 runCommand" in res.output

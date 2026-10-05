@@ -394,10 +394,15 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
     _output_lock = _threading.Lock()
 
     def _get_or_start_worker(resource_id: str) -> _queue.Queue:
-        """Return the resource queue, starting its worker thread if needed."""
-        if resource_id not in _resource_queues:
+        """Return the resource queue, starting its worker thread if needed.
+
+        Keyed case-insensitively: the RulePoller carries the lowercase id from the
+        Heartbeat, Annatar and the CLI the canonical one — two workers for the same VM
+        ran two decisions in parallel instead of in series (real run, 2026-10-05)."""
+        key = resource_id.lower()
+        if key not in _resource_queues:
             q: _queue.Queue = _queue.Queue()
-            _resource_queues[resource_id] = q
+            _resource_queues[key] = q
 
             def _worker(q=q):
                 while True:
@@ -433,7 +438,7 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
                 target=_worker, daemon=True, name=f"glorf-{vm_short}"
             )
             t.start()
-        return _resource_queues[resource_id]
+        return _resource_queues[key]
 
     def _dispatch(data: dict, sig: Signal) -> None:
         """Route signal to its resource worker queue.
@@ -940,6 +945,9 @@ def restore(resource_id: str, vault: str, dry_run: bool, yes: bool, keep_isolate
 
     restore_label = f"{rto_s // 60}min {rto_s % 60}s"
     console.print(f"[green]✓ Restore complete.[/green]  restore_time: {restore_label}  RP: {result.get('recovery_point_time')}")
+    if result.get("run_command_neutralized") is True:
+        console.print("[dim]✓ Run Command neutralisée avant le restore (pas de rejeu de la "
+                      "dernière commande au démarrage).[/dim]")
     if result.get("run_command_neutralized") is False:
         console.print(
             "[bold red]⚠ Run Command non neutralisée avant le restore[/bold red] "
@@ -1241,6 +1249,9 @@ def _state_warnings(entry: dict, failed_key: str) -> list[str]:
         out.append(f"partial: NIC {nic} not covered" if nic else "partial: not every NIC is covered")
     if entry.get(failed_key):
         out.append("rules still on Azure after a failed removal: " + ", ".join(entry[failed_key]))
+    drain = entry.get("drain") or {}
+    if drain.get("status") in ("failed", "partial", "unsupported"):
+        out.append("open sessions not cut: " + str(drain.get("error") or drain.get("note") or drain["status"]))
     shadowed = [s for p in entry.get("placements") or [] for s in (p.get("shadowed_by") or [])]
     if shadowed:
         rules = ", ".join(sorted({f"{s.get('rule')} (priority {s.get('priority')})" for s in shadowed}))

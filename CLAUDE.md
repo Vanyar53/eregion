@@ -29,7 +29,7 @@ Plateforme OSS (Apache 2.0) de défense active cloud. Deux agents IA en boucle :
 
 ⚠️ **Run Azure du 2026-10-05 — ce tableau est à relire** :
 - Les temps de détection ci-dessus comptaient depuis la **réception** d'`attack_started`, émis par Annatar **après** l'étape d'attaque (42 s rapportés pour ~135 s réels). `detection_time_s` compte désormais depuis le début de l'attaque (`attack_time`, T0 d'Annatar).
-- Ces détections passaient par le chemin `attack_started` (poll depuis T0). Le **RulePoller** — seul chemin en production — ne voyait **aucune** ligne ingérée avec plus de ~84 s de retard (fenêtre API de 60 s qui l'emportait sur le `ago(10m)` des règles) : `ransomware-disk-write` n'a rien matché le 05/10 (latence Perf 89–109 s). Corrigé (voir RulePoller ci-dessous) ; T1486 détecté par le RulePoller seul reste à rejouer.
+- Ces détections passaient par le chemin `attack_started` (poll depuis T0). Le **RulePoller** — seul chemin en production — ne voyait **aucune** ligne ingérée avec plus de ~84 s de retard (fenêtre API de 60 s qui l'emportait sur le `ago(10m)` des règles) : `ransomware-disk-write` n'a rien matché le 05/10 (latence Perf 89–109 s). Corrigé (voir RulePoller ci-dessous) et **validé le soir même** : RulePoller seul à T0+114 s (latence Perf 72–124 s), un seul dispatch, pour la seule bonne VM sur 4 découvertes ; sessions SSH coupées 22 s après la pose des règles ; neutralisation avant restore → le disque restauré a rejoué la commande inoffensive, VM saine (`INTEGRITY_PASS`) à la levée ; RTO ≈ 23 min 10 hors décisions humaines (rapport `collab/test_run_2026-10-05_validation.md`).
 - T1486 du 05/10 (chemin `attack_started`, gondolin en `human_only`) : `mode_hold` → approbation → isolation vérifiée, restore 19 min 47, **RTO 24 min 42**. Le disque restauré a **rejoué la dernière commande Run Command** au démarrage (le script de chiffrement) → corrigé par la neutralisation avant restore.
 
 Glorfindel choisit la bonne action sans règles per-TTP explicites — raisonnement depuis le contexte signal + incident.
@@ -459,7 +459,7 @@ GLORFINDEL_DISCOVERY_RETENTION_H=8  # rétention d'une VM éteinte dans le regis
 ## Tests
 
 ```bash
-pytest                    # 583 tests (~15s), 0 appel Azure, 0 appel LLM, 0 écriture ~/.glorfindel/
+pytest                    # 586 tests (~15s), 0 appel Azure, 0 appel LLM, 0 écriture ~/.glorfindel/
                           # Hermétique par construction (conftest) : TOUS les chemins ~/.glorfindel redirigés
                           # vers tmp, et le glorfindel-config.yaml local ignoré (avant : avec une config locale,
                           # les tests de graphe lançaient de vraies requêtes KQL via `investigate`, suite 5× plus lente).

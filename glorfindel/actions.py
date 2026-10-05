@@ -577,6 +577,15 @@ class AzureConnector(CloudConnector):
         # session (17 min), an idle one (11 min) and an outbound download all survived
         # the isolation. Cut them from inside, now that nothing can reconnect.
         out["drain"] = self.drain_connections(resource_id)
+        # Kept with the isolation: `list` and the War Room must show that sessions were
+        # left open, not only the response of the call (validation run, 2026-10-05).
+        try:
+            _, _vm = _parse_vm_resource_id(resource_id)
+            state = _load_isolation_state(_vm)
+            if state is not None:
+                _save_isolation_state(_vm, {**state, "drain": out["drain"]})
+        except Exception:
+            pass
         return out
 
     # Connections a drain must never cut: loopback (local services) and the Azure

@@ -172,6 +172,8 @@ async def state() -> dict:
                 "partial": bool(_iso.get("partial")),
                 "failed_nic": _iso.get("failed_nic", ""),
                 "release_failed": _iso.get("release_failed", []),
+                # Open sessions cut after the rules? (drain: drained|partial|failed|unsupported)
+                "drain": _iso.get("drain") or {},
             })
         for b in blocks.get(resource_id, []):
             states.append({
@@ -671,6 +673,8 @@ def _verify_approved(connector, esc: dict, action: str, resource_id: str, result
     try:
         if action == "isolate_vm":
             verification = isolation_verdict(connector.verify_isolation(resource_id), result)
+        elif action == "release_isolation":
+            verification = connector.verify_release(resource_id)
         else:
             verification = connector.verify_block_ip(ip, resource_id)
     except Exception as e:
@@ -732,6 +736,10 @@ async def action_approve(esc_id: str, ip: str = "", scope: str = "vm") -> dict:
             resp = await action_release(vm_name)
             if resp.get("ok"):
                 _esc.resolve(esc_id)
+                # The CLI release checks only BEFORE removing the rules; confirm after,
+                # as for an approved isolation (validation run, 2026-10-05).
+                resp["verification"] = await asyncio.to_thread(
+                    _verify_approved, connector, esc, action, resource_id, {"status": "released"})
             return resp
 
         elif action == "block_suspicious_ip":

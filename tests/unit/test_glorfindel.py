@@ -2105,3 +2105,18 @@ def test_isolate_vm_drains_after_the_rules_are_in_place(monkeypatch):
     out = connector.isolate_vm(_RID)
     assert out["drain"] == {"status": "drained"}
     assert order[-1] == "drain" and "rule" in order[:-1]
+
+
+def test_isolation_state_keeps_the_drain_result(monkeypatch):
+    """`list` and the War Room must show sessions left open, not only the API response."""
+    from glorfindel.actions import AzureConnector, _load_isolation_state
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    monkeypatch.setattr(connector, "_get_vm_nic_targets", lambda rg, vm: [_nic_target(scope="nic")])
+    net = MagicMock()
+    net.security_rules.list.return_value = []
+    connector._network = net
+    monkeypatch.setattr(connector, "drain_connections",
+                        lambda rid: {"status": "failed", "error": "403 runCommand"})
+    connector.isolate_vm(_RID)
+    assert _load_isolation_state("vm")["drain"]["status"] == "failed"

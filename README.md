@@ -281,7 +281,7 @@ Annatar is only needed if you want to run controlled attack scenarios and measur
 Glorfindel operates under strict autonomy rules. The graph enforces them regardless of what the LLM proposes.
 
 **Autonomous** (reversible, no human approval):
-`isolate_vm`, `release_isolation`, `snapshot`, `block_suspicious_ip`, `revoke_temp_access`
+`isolate_vm`, `release_isolation`, `snapshot`, `block_suspicious_ip` (`revoke_temp_access` is announced but not implemented yet: it is held for human review)
 
 **Human required** (destructive or irreversible):
 `restore_from_backup`, `delete_resource`, `wipe_storage`, `modify_network_rule`, `escalate_permissions`
@@ -628,7 +628,7 @@ The audit also checks **NSG precedence**: NSG rules apply the first match by asc
 ```bash
 pip install eregion[dev]
 pytest
-# 551 tests (~15s) — 0 Azure calls, 0 LLM calls, 0 writes to ~/.glorfindel
+# 563 tests (~15s) — 0 Azure calls, 0 LLM calls, 0 writes to ~/.glorfindel
 ```
 
 The suite is hermetic by construction: `tests/unit/conftest.py` redirects every `~/.glorfindel` path to a temp directory and ignores any local `glorfindel-config.yaml`. CI (`.github/workflows/ci.yml`) runs `ruff check` + `pytest` on Python 3.11 and 3.12.

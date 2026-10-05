@@ -76,6 +76,7 @@ class GlorfindelState(TypedDict):
     autonomy_mode: str          # resolved autonomy mode for this asset (audit trail)
     mode_hold: bool             # True when an autonomous action was held back by human_only mode
     cycle_error: str            # set when the cycle could not complete normally (→ cycle_failed escalation)
+    held_by: str                # deterministic gate that escalated (→ its own escalation type)
 
 
 # ── LLM decision tool schema ──────────────────────────────────────────────────
@@ -564,6 +565,22 @@ def investigate(state: GlorfindelState) -> GlorfindelState:
 # run THESE autonomously on an uncharacterized signal.
 _DISRUPTIVE_AUTONOMOUS = {"isolate_vm", "block_suspicious_ip", "revoke_temp_access"}
 
+# Autonomous actions execute_action can actually run. `revoke_temp_access` is announced
+# to the model (AUTONOMOUS_ACTIONS, so in the prompt) but has no implementation: it used
+# to end as a no_op recorded as executed, then notified. Removing it from the prompt is
+# a prompt edit (end-to-end run required) — until then the executable guard holds it.
+_EXECUTABLE_ACTIONS = {"isolate_vm", "release_isolation", "block_suspicious_ip", "snapshot"}
+
+# Escalation type for each deterministic gate (escalate_to_human). Without it, a
+# signal-guardrail or release hold fell through to `low_confidence`, labelled
+# "detection timeout".
+_HELD_BY_TYPE = {
+    "not_implemented": "proposed_action",
+    "confidence": "low_confidence",
+    "signal_guardrail": "uncharacterized_signal",
+    "release_precondition": "release_hold",
+}
+
 
 def _as_bool(v) -> bool:
     """Coerce an LLM-provided value to a real bool.
@@ -645,12 +662,27 @@ def _parse_decision(response) -> tuple[dict, object]:
     return d, raw_conf
 
 
+def _apply_executable_guard(d: dict) -> None:
+    """An autonomous action with no implementation is never "executed"."""
+    if d["escalate"] or d["action"] not in AUTONOMOUS_ACTIONS:
+        return
+    if d["action"] in _EXECUTABLE_ACTIONS:
+        return
+    d["escalate"] = True
+    d["held_by"] = "not_implemented"
+    d["escalation_reason"] = (
+        f"Action '{d['action']}' pas encore implémentée par Glorfindel — retenue pour "
+        "revue humaine (à exécuter à la main si elle est justifiée)."
+    )
+
+
 def _apply_confidence_gate(d: dict, raw_conf, threshold: float) -> None:
     """An autonomous action below the confidence threshold is escalated."""
     if not d["escalate"] and d["action"] in AUTONOMOUS_ACTIONS:
         if raw_conf is None or d["confidence"] < threshold:
             shown = "unknown" if raw_conf is None else f"{d['confidence']:.0%}"
             d["escalate"] = True
+            d["held_by"] = "confidence"
             d["escalation_reason"] = f"Low confidence ({shown}) — human review required"
 
 
@@ -673,6 +705,7 @@ def _apply_signal_guardrail(d: dict, signal: dict) -> None:
     first_row = raw.get("detected_data") or raw.get("first_result_row") or {}
     if not has_recognized_indicator(first_row, signal.get("ttp", "")):
         d["escalate"] = True
+        d["held_by"] = "signal_guardrail"
         d["escalation_reason"] = (
             "Signal sans indicateur de menace reconnu — action disruptive "
             f"'{d['action']}' retenue pour revue humaine (garde-fou déterministe, "
@@ -696,6 +729,7 @@ def _apply_release_precondition(d: dict, signal: dict) -> None:
     if signal.get("event") == "recovery_complete":
         return
     d["escalate"] = True
+    d["held_by"] = "release_precondition"
     d["escalation_reason"] = (
         f"Levée d'isolation proposée sur un événement '{signal.get('event', '?')}' — "
         "retenue pour revue humaine (garde-fou déterministe : seule une restauration "
@@ -775,8 +809,10 @@ def decide(
     the fresh config so it stays pinned for the session.
 
     Gates, in order (each a pure helper, testable on its own): parsing defaults →
-    confidence gate → deterministic signal guardrail → release precondition →
-    autonomy mode. A failed LLM call (after retries) escalates as `cycle_failed`.
+    executable guard → confidence gate → deterministic signal guardrail → release
+    precondition → autonomy mode. A failed LLM call (after retries) escalates as
+    `cycle_failed`. The gate that escalates is recorded (`held_by`) and gives the
+    escalation its type.
     """
     import litellm
 
@@ -813,6 +849,7 @@ def decide(
         return _decision_failed(state, exc)
 
     d, raw_conf = _parse_decision(response)
+    _apply_executable_guard(d)
     _apply_confidence_gate(d, raw_conf, _confidence_threshold())
     _apply_signal_guardrail(d, signal)
     _apply_release_precondition(d, signal)
@@ -856,6 +893,7 @@ def decide(
         "llm_usage": llm_usage,
         "autonomy_mode": mode,
         "mode_hold": mode_hold,
+        "held_by": d.get("held_by", ""),
     }
 
 
@@ -888,7 +926,7 @@ def _backup_vault_target() -> tuple[str, str]:
     except Exception:
         rsv = None
     vault = (rsv.vault_name if rsv and rsv.vault_name else "") \
-        or os.environ.get("GLORFINDEL_BACKUP_VAULT", "") or "rsv-annatar"
+        or os.environ.get("GLORFINDEL_BACKUP_VAULT", "")
     vault_rg = rsv.resource_group if rsv and rsv.resource_group else ""
     return vault, vault_rg
 
@@ -921,13 +959,20 @@ def execute_action(
             # Completion is tracked as a job (jobs.reconcile_jobs); verify_snapshot reports
             # an InProgress job as "no claim" (verified=None), never as success.
             vault, vault_rg = _backup_vault_target()
+            if not vault and not state.get("dry_run"):
+                raise RuntimeError(
+                    "aucun coffre de sauvegarde configuré (action_backends dans "
+                    "glorfindel-config.yaml, ou GLORFINDEL_BACKUP_VAULT)"
+                )
             snap_id = connector.snapshot(resource_id, vault=vault, wait=False, vault_rg=vault_rg)
             outcome = {"snapshot_id": snap_id, "vault": vault}
             if not state.get("dry_run") and getattr(connector, "dry_run", True) is False:
                 from glorfindel.jobs import record_snapshot_job
                 record_snapshot_job(resource_id, snap_id, vault, vault_rg, overwrite_running=False)
         else:
-            outcome = {"status": "no_op", "action": action}
+            # Unreachable through the graph (executable guard in decide); kept as a
+            # guard so an action with no implementation can never pass as executed.
+            raise NotImplementedError(f"action '{action}' non implémentée")
     except Exception as e:
         # The action could not run (or only partly). Never let it abort the cycle
         # silently — route to escalation so the operator sees it in `pending` / the War
@@ -989,6 +1034,10 @@ def escalate_to_human(state: GlorfindelState) -> GlorfindelState:
     _out_status = (state.get("outcome") or {}).get("status")
     if _out_status in ("write_blocked", "action_failed"):
         escalation_type = _out_status
+    # Executed but the check failed (rule missing, an allow evaluated before the deny,
+    # a NIC left open): the type the Revert / reset buttons answer to.
+    elif (state.get("outcome") or {}).get("verified") is False:
+        escalation_type = "verification_failed"
     # The cycle itself could not complete (LLM decision unavailable, internal error):
     # the signal is real but unanalyzed — its own type so it is never mistaken for a
     # judgment ("unknown action", "low confidence").
@@ -999,6 +1048,9 @@ def escalate_to_human(state: GlorfindelState) -> GlorfindelState:
     # operator must understand it's a policy hold, with a one-click approve path.
     elif state.get("mode_hold"):
         escalation_type = "mode_hold"
+    # A deterministic gate held the action: its own type, not the generic fallback.
+    elif state.get("held_by") in _HELD_BY_TYPE:
+        escalation_type = _HELD_BY_TYPE[state["held_by"]]
     elif action in HUMAN_APPROVAL_REQUIRED:
         escalation_type = "destructive_action"
     elif action == "improve_detection":
@@ -1152,7 +1204,7 @@ def store_cycle(state: GlorfindelState, *, memory: CycleMemory) -> GlorfindelSta
             not state.get("dry_run")
             and not state.get("escalate")
             and outcome.get("executed")
-            and outcome.get("status") != "dry_run"
+            and outcome.get("status") not in ("dry_run", "no_op")
             and outcome.get("verified") is not False
         ):
             from glorfindel.escalations import notify_action

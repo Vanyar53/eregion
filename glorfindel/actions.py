@@ -878,6 +878,10 @@ class AzureConnector(CloudConnector):
             vm_name, ip, resource_id,
             nsg=f"{nsg_rg}/{nsg_name}", nsg_scope="subnet", rule=rule_name, scoped=False,
         )
+        # Same precedence report as the VM-scoped block (verify fails on it as well).
+        shadowed = _shadowing_rules(
+            existing, priority, inbound_src=[ip], inbound_dst=None,
+            outbound_src=None, outbound_dst=[ip])
         out = {
             "status": "blocked", "ip": ip, "nsg": f"{nsg_rg}/{nsg_name}",
             "nsg_scope": "subnet", "scoped": False, "rule": rule_name,
@@ -889,6 +893,12 @@ class AzureConnector(CloudConnector):
         }
         if promoted_from:
             out["promoted_from"] = promoted_from
+        if shadowed:
+            out["shadowed_by"] = shadowed
+            out["bypass"] = (
+                f"Blocage de {ip} contourné : " + _describe_shadowing(shadowed)
+                + " passe avant le deny de Glorfindel."
+            )
         return out
 
     def _block_rule_prefix(self, ip: str) -> str:
@@ -1043,14 +1053,17 @@ class AzureConnector(CloudConnector):
         # Isolation holds only if EVERY NIC carries a deny pair — a single uncovered NIC
         # is the multi-NIC gap (looks ISOLATED but traffic still flows on the other NIC).
         uncovered: list[str] = []
+        present_in: dict[str, str] = {}      # nic_id → name of the inbound deny found
         for t in targets:
             base = self._placement_rule_base("glorfindel-iso", vm_name, t["nic_short"], t["nic_id"])
             if self._rules_present(t["nsg_rg"], t["nsg_name"], [base, f"{base}-out"]):
+                present_in[t["nic_id"]] = base
                 continue
             # Legacy fallback: a VM isolated before the multi-NIC upgrade used the old
             # fixed/VM-suffixed names on the primary NIC's NSG.
             legacy_in, legacy_out = self._isolation_rule_names(vm_name, t["scope"])
             if self._rules_present(t["nsg_rg"], t["nsg_name"], [legacy_in, legacy_out]):
+                present_in[t["nic_id"]] = legacy_in
                 continue
             uncovered.append(t["nic_short"])
 
@@ -1060,47 +1073,75 @@ class AzureConnector(CloudConnector):
         # Present is not effective. On a shared NSG the deny sits at the first free
         # priority, and an ALLOW evaluated before it still passes its traffic (the bench's
         # allow-ssh at 100 kept SSH open on every "isolated" VM). A dedicated NSG gets
-        # priority 100, which nothing can precede.
-        shadowed: list[dict] = []
-        cache: dict = {}
-        for t in targets:
-            if not _ip_scoped(t):
-                continue
-            base = self._placement_rule_base("glorfindel-iso", vm_name, t["nic_short"], t["nic_id"])
-            shadowed += self._shadowed_deny(
-                cache, t["nsg_rg"], t["nsg_name"], base,
-                inbound_src=None, inbound_dst=t["private_ips"],
-                outbound_src=t["private_ips"], outbound_dst=None)
+        # priority 100, which nothing can precede. The check uses the name actually
+        # found: a legacy-named isolation used to pass it by finding nothing to compare.
+        shadowed, unknown = self._precedence([
+            (t["nsg_rg"], t["nsg_name"], present_in[t["nic_id"]],
+             {"inbound_src": None, "inbound_dst": t["private_ips"],
+              "outbound_src": t["private_ips"], "outbound_dst": None})
+            for t in targets if _ip_scoped(t)
+        ])
         if shadowed:
             return {
                 "verified": False, "method": "nsg_check", "shadowed_by": shadowed,
                 "error": "isolation contournée : " + _describe_shadowing(shadowed)
                          + " passe avant le deny de Glorfindel",
             }
+        if unknown:
+            return self._precedence_unknown(unknown, nics_covered=len(targets))
         return {"verified": True, "method": "nsg_check", "nics_covered": len(targets)}
 
-    def _list_rules(self, cache: dict, nsg_rg: str, nsg_name: str) -> list:
-        """Security rules of an NSG, listed once per verification ([] if unreadable)."""
+    def _list_rules(self, cache: dict, nsg_rg: str, nsg_name: str) -> list | None:
+        """Security rules of an NSG, listed once per verification. None if unreadable:
+        an empty list would read as "nothing precedes our deny" (fail open)."""
         key = (nsg_rg, nsg_name)
         if key not in cache:
             try:
                 cache[key] = list(self._network.security_rules.list(nsg_rg, nsg_name))
             except Exception:
-                cache[key] = []
+                cache[key] = None
         return cache[key]
 
     def _shadowed_deny(
         self, cache: dict, nsg_rg: str, nsg_name: str, rule_name: str, **scope,
-    ) -> list[dict]:
+    ) -> list[dict] | None:
         """ALLOW rules evaluated before OUR deny `rule_name` on this NSG (see
-        _shadowing_rules). Empty when our rule isn't listed (nothing to compare)."""
+        _shadowing_rules). None when that can't be established: the NSG's rules are
+        unreadable, or our rule (present per `get`) is missing from the listing."""
         rules = self._list_rules(cache, nsg_rg, nsg_name)
+        if rules is None:
+            return None
         ours = next((r for r in rules if getattr(r, "name", "") == rule_name), None)
         prio = getattr(ours, "priority", None)
         if not isinstance(prio, int):
-            return []
+            return None
         found = _shadowing_rules(rules, prio, **scope)
         return [{**f, "nsg": f"{nsg_rg}/{nsg_name}"} for f in found]
+
+    def _precedence(self, checks: list[tuple]) -> tuple[list[dict], list[str]]:
+        """Run _shadowed_deny over (nsg_rg, nsg_name, rule_name, scope) checks.
+        Returns (shadowing allows, NSGs whose precedence could not be established)."""
+        cache: dict = {}
+        shadowed: list[dict] = []
+        unknown: list[str] = []
+        for nsg_rg, nsg_name, rule_name, scope in checks:
+            found = self._shadowed_deny(cache, nsg_rg, nsg_name, rule_name, **scope)
+            if found is None:
+                if f"{nsg_rg}/{nsg_name}" not in unknown:
+                    unknown.append(f"{nsg_rg}/{nsg_name}")
+            else:
+                shadowed += found
+        return shadowed, unknown
+
+    @staticmethod
+    def _precedence_unknown(unknown: list[str], **extra) -> dict:
+        """Rules present but their precedence unreadable: no claim either way."""
+        return {
+            "verified": None, "method": "nsg_check", "precedence_unknown": unknown, **extra,
+            "error": "préséance non vérifiable (règles illisibles sur "
+                     + ", ".join(unknown) + ") : les règles sont posées, rien ne garantit "
+                     "qu'aucune allow ne passe avant",
+        }
 
     def verify_release(self, resource_id: str) -> dict:
         """Confirm that NO NIC still carries an isolation rule of this VM.
@@ -1383,13 +1424,19 @@ class AzureConnector(CloudConnector):
         block_re = re.compile(r"^glorfindel-block-\d{1,3}(?:-\d{1,3}){3}(?:-\d{1,2})?-(?P<rest>.+?)(?:-out)?$")
         to_delete: list[tuple[str, str, str]] = []
         kept: list[str] = []
+        unreadable: list[str] = []
         seen: set = set()
         for t in self._get_vm_nic_targets(rg, vm_name):
             nsg_key = (t["nsg_rg"], t["nsg_name"])
             h = hashlib.sha1(t["nic_id"].encode()).hexdigest()[:8]
             owned_rest = {vm_name, f"{vm_name}-{t['nic_short']}", f"{vm_name[:40]}-{h}"}
             iso_names = set(self._isolation_names_for_target(vm_name, t))
-            for r in self._list_rules({}, *nsg_key):
+            rules = self._list_rules({}, *nsg_key)
+            if rules is None:
+                # Unreadable: nothing found is not nothing there — keep the local state.
+                unreadable.append(f'{t["nsg_rg"]}/{t["nsg_name"]}: règles illisibles')
+                continue
+            for r in rules:
                 name = getattr(r, "name", "") or ""
                 if not name.startswith("glorfindel-") or (nsg_key, name) in seen:
                     continue
@@ -1399,7 +1446,7 @@ class AzureConnector(CloudConnector):
                     to_delete.append((t["nsg_rg"], t["nsg_name"], name))
                 elif m is None and name.startswith("glorfindel-block-"):
                     kept.append(f'{t["nsg_rg"]}/{t["nsg_name"]}/{name}')   # perimeter block
-        deleted, failed = [], []
+        deleted, failed = [], list(unreadable)
         for nsg_rg, nsg_name, name in to_delete:
             if dry_run:
                 deleted.append(f"{nsg_rg}/{nsg_name}/{name}")
@@ -1440,16 +1487,16 @@ class AzureConnector(CloudConnector):
             if missing:
                 return {"verified": False, "method": "nsg_check", "missing_rules": missing,
                         "error": f"rules missing: {', '.join(missing)}"}
-            cache: dict = {}
-            shadowed = [
-                s for p in entry["placements"]
-                for s in self._shadowed_deny(
-                    cache, p["nsg_rg"], p["nsg_name"], p["rule"],
-                    inbound_src=[ip], inbound_dst=p.get("ips") or None,
-                    outbound_src=p.get("ips") or None, outbound_dst=[ip])
-            ]
+            shadowed, unknown = self._precedence([
+                (p["nsg_rg"], p["nsg_name"], p["rule"],
+                 {"inbound_src": [ip], "inbound_dst": p.get("ips") or None,
+                  "outbound_src": p.get("ips") or None, "outbound_dst": [ip]})
+                for p in entry["placements"]
+            ])
             if shadowed:
                 return self._block_bypassed(ip, shadowed)
+            if unknown:
+                return self._precedence_unknown(unknown, nics_covered=len(entry["placements"]))
             return {"verified": True, "method": "nsg_check",
                     "nics_covered": len(entry["placements"])}
 
@@ -1460,11 +1507,15 @@ class AzureConnector(CloudConnector):
             missing = [n for n in pair if not self._rules_present(nsg_rg, nsg_name, [n])]
             if not missing:
                 # A perimeter block has no destination scope: any VM behind the NSG.
-                shadowed = self._shadowed_deny(
-                    {}, nsg_rg, nsg_name, entry["rule"],
-                    inbound_src=[ip], inbound_dst=None, outbound_src=None, outbound_dst=[ip])
+                shadowed, unknown = self._precedence([
+                    (nsg_rg, nsg_name, entry["rule"],
+                     {"inbound_src": [ip], "inbound_dst": None,
+                      "outbound_src": None, "outbound_dst": [ip]})
+                ])
                 if shadowed:
                     return self._block_bypassed(ip, shadowed)
+                if unknown:
+                    return self._precedence_unknown(unknown, rule=entry["rule"])
                 return {"verified": True, "method": "nsg_check", "rule": entry["rule"]}
             return {"verified": False, "method": "nsg_check", "missing_rules": missing,
                     "error": f"rules missing: {', '.join(missing)}"}
@@ -1480,17 +1531,17 @@ class AzureConnector(CloudConnector):
         if uncovered:
             return {"verified": False, "method": "nsg_check", "uncovered_nics": uncovered,
                     "error": f"NIC(s) not covered: {', '.join(uncovered)}"}
-        cache: dict = {}
-        shadowed = [
-            s for t in targets
-            for s in self._shadowed_deny(
-                cache, t["nsg_rg"], t["nsg_name"],
-                self._placement_rule_base(prefix, vm_name, t["nic_short"], t["nic_id"]),
-                inbound_src=[ip], inbound_dst=t["private_ips"] or None,
-                outbound_src=t["private_ips"] or None, outbound_dst=[ip])
-        ]
+        shadowed, unknown = self._precedence([
+            (t["nsg_rg"], t["nsg_name"],
+             self._placement_rule_base(prefix, vm_name, t["nic_short"], t["nic_id"]),
+             {"inbound_src": [ip], "inbound_dst": t["private_ips"] or None,
+              "outbound_src": t["private_ips"] or None, "outbound_dst": [ip]})
+            for t in targets
+        ])
         if shadowed:
             return self._block_bypassed(ip, shadowed)
+        if unknown:
+            return self._precedence_unknown(unknown, nics_covered=len(targets))
         return {"verified": True, "method": "nsg_check", "nics_covered": len(targets)}
 
     @staticmethod
@@ -1614,9 +1665,12 @@ class AzureConnector(CloudConnector):
         cache: dict = {}
         for t in targets:
             rules = self._list_rules(cache, t["nsg_rg"], t["nsg_name"])
+            where = {"nsg": f'{t["nsg_rg"]}/{t["nsg_name"]}', "nic": t["nic_short"]}
+            if rules is None:
+                issues.append({**where, "unreadable": True})
+                continue
             used = {r.priority for r in rules if isinstance(getattr(r, "priority", None), int)}
             ips = t["private_ips"] or None
-            where = {"nsg": f'{t["nsg_rg"]}/{t["nsg_name"]}', "nic": t["nic_short"]}
             if _ip_scoped(t):
                 iso = next((p for p in range(self.ISOLATION_PRIORITY, 4000) if p not in used), None)
                 if iso is not None:

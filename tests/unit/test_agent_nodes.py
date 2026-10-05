@@ -467,17 +467,20 @@ def test_execute_action_snapshot_fire_and_forget_on_detection_timeout(tmp_incide
     assert result["outcome"]["snapshot_id"] == "rsv:rsv-x/rg/job123"
 
 
-def test_execute_action_unknown_is_noop(tmp_incidents):
+def test_execute_action_unimplemented_escalates_instead_of_noop(tmp_incidents):
+    """An action with no implementation used to end as {"status": "no_op"} with
+    executed=True — then notified as done ("Accès temporaire révoqué")."""
     from glorfindel.agent import execute_action
     connector = MagicMock()
-    state = _state(action="proposed_custom_action")
+    state = _state(action="revoke_temp_access")
 
     result = execute_action(state, connector=connector, incidents=tmp_incidents)
 
     connector.isolate_vm.assert_not_called()
     connector.block_suspicious_ip.assert_not_called()
-    assert result["outcome"]["status"] == "no_op"
-    assert result["outcome"]["action"] == "proposed_custom_action"
+    assert result["outcome"]["status"] == "action_failed"
+    assert "non implémentée" in result["outcome"]["error"]
+    assert result["escalate"] is True
 
 
 def test_execute_action_records_action_s(tmp_incidents):
@@ -1372,6 +1375,92 @@ def test_graph_azure_403_escalates_write_blocked(tmp_path, monkeypatch, tmp_memo
     assert final["outcome"]["escalation_type"] == "write_blocked"
     assert tmp_memory.count() == 1
     assert (tmp_path / "runs" / "run001_debug.jsonl").exists()
+
+
+def _graph_run(tmp_path, monkeypatch, tmp_memory, connector, action, event="detection",
+               raw=None, mode="non_disruptive"):
+    from glorfindel.config import AutonomyConfig
+    from glorfindel.agent import _build_graph
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "runs").mkdir(exist_ok=True)
+    graph = _build_graph(tmp_memory, connector, "claude-test",
+                         autonomy=AutonomyConfig(default=mode))
+    with patch("litellm.completion") as mock_cls:
+        mock_cls.return_value = _mock_llm_response(action)
+        return graph.invoke(_initial(event, raw=raw))
+
+
+def test_graph_bypassed_isolation_escalates_verification_failed(tmp_path, monkeypatch, tmp_memory):
+    """Seconde passe N1: a failed verification fell through to `low_confidence`,
+    labelled "detection timeout" — no Revert button in the bot, the TUI or the War Room."""
+    from glorfindel import escalations
+    connector = MagicMock()
+    connector.dry_run = False
+    connector.isolate_vm.return_value = {"status": "isolated"}
+    connector.verify_isolation.return_value = {
+        "verified": False, "method": "nsg_check",
+        "shadowed_by": [{"rule": "allow-ssh", "priority": 100}],
+        "error": "isolation contournée : 'allow-ssh' (priorité 100) passe avant le deny",
+    }
+    final = _graph_run(tmp_path, monkeypatch, tmp_memory, connector, "isolate_vm")
+
+    assert final["outcome"]["escalation_type"] == "verification_failed"
+    assert "allow-ssh" in final["escalation_reason"]
+    assert [e["escalation_type"] for e in escalations.pending()] == ["verification_failed"]
+
+
+def test_graph_unimplemented_autonomous_action_escalates_unexecuted(tmp_path, monkeypatch, tmp_memory):
+    """Seconde passe N5: revoke_temp_access is announced to the model but does nothing;
+    it ended as a no_op "executed", then notified as done."""
+    connector = MagicMock()
+    connector.dry_run = False
+    with patch("glorfindel.escalations.notify_action") as notify:
+        final = _graph_run(tmp_path, monkeypatch, tmp_memory, connector, "revoke_temp_access",
+                           raw={"first_result_row": {"Computer": "vm-test", "SourceIP": "1.2.3.4",
+                                                     "FailedAttempts": 40}})
+    assert final["outcome"]["escalation_type"] == "proposed_action"
+    assert "pas encore implémentée" in final["escalation_reason"]
+    assert final["outcome"].get("executed") is not True
+    notify.assert_not_called()
+
+
+def test_graph_signal_guardrail_has_its_own_type(tmp_path, monkeypatch, tmp_memory):
+    connector = MagicMock()
+    connector.dry_run = False
+    final = _graph_run(tmp_path, monkeypatch, tmp_memory, connector, "isolate_vm",
+                       raw={"first_result_row": {"Computer": "vm-test"}})
+    connector.isolate_vm.assert_not_called()
+    assert final["outcome"]["escalation_type"] == "uncharacterized_signal"
+
+
+def test_graph_release_precondition_has_its_own_type(tmp_path, monkeypatch, tmp_memory):
+    connector = MagicMock()
+    connector.dry_run = False
+    final = _graph_run(tmp_path, monkeypatch, tmp_memory, connector, "release_isolation")
+    connector.release_isolation.assert_not_called()
+    assert final["outcome"]["escalation_type"] == "release_hold"
+
+
+def test_store_cycle_never_notifies_a_no_op(tmp_memory):
+    from glorfindel.agent import store_cycle
+    state = _state(action="revoke_temp_access", confidence=0.9,
+                   outcome={"status": "no_op", "executed": True, "verified": None})
+    with patch("glorfindel.escalations.notify_action") as notify:
+        store_cycle(state, memory=tmp_memory)
+    notify.assert_not_called()
+
+
+def test_autonomous_snapshot_without_a_configured_vault_escalates(tmp_incidents, monkeypatch):
+    """No silent fallback on the retired sandbox vault `rsv-annatar`."""
+    from glorfindel.agent import _backup_vault_target, execute_action
+    monkeypatch.delenv("GLORFINDEL_BACKUP_VAULT", raising=False)
+    assert _backup_vault_target() == ("", "")
+    connector = MagicMock()
+    connector.dry_run = False
+    result = execute_action(_state(action="snapshot"), connector=connector, incidents=tmp_incidents)
+    connector.snapshot.assert_not_called()
+    assert result["outcome"]["status"] == "action_failed"
+    assert "coffre" in result["outcome"]["error"]
 
 
 def test_graph_azure_500_escalates_action_failed(tmp_path, monkeypatch, tmp_memory):

@@ -29,7 +29,7 @@ _ACTION_LABELS = {
 }
 
 _ESCALATION_LABELS = {
-    "low_confidence": "detection timeout",
+    "low_confidence": "confiance insuffisante",
     "destructive_action": "action destructive",
     "proposed_action": "action inconnue",
     "verification_failed": "vérification échouée",
@@ -40,6 +40,8 @@ _ESCALATION_LABELS = {
     "write_blocked": "écriture refusée (droits)",
     "action_failed": "action en échec",
     "cycle_failed": "signal non traité (cycle interrompu)",
+    "uncharacterized_signal": "signal non caractérisé (garde-fou)",
+    "release_hold": "levée retenue (aucune restauration terminée)",
 }
 
 

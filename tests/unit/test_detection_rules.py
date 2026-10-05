@@ -356,7 +356,7 @@ def test_poller_stores_ttp_in_status(tmp_path, monkeypatch):
         rule = _make_rule(name="test-rule", ttp="T1548.003", interval_s=0.05)
         poller = RulePoller([rule], lambda s: None, dry_run=False)
         poller.start()
-        time.sleep(0.3)
+        _wait_for(lambda: _load_status().get("test-rule", {}).get("ttp"))
         poller.stop()
     status = _load_status()
     assert status.get("test-rule", {}).get("ttp") == "T1548.003"
@@ -446,7 +446,7 @@ def test_poller_signal_contains_normalized_signal(tmp_path, monkeypatch):
         rule = _make_rule(interval_s=0.05, ttp="T1486")
         poller = RulePoller([rule], dispatched.append, dry_run=False)
         poller.start()
-        time.sleep(0.3)
+        _wait_for(lambda: dispatched)
         poller.stop()
 
     assert len(dispatched) >= 1
@@ -456,6 +456,17 @@ def test_poller_signal_contains_normalized_signal(tmp_path, monkeypatch):
 
 
 # ── RulePoller ───────────────────────────────────────────────────────────────────
+
+def _wait_for(cond, timeout: float = 5.0) -> bool:
+    """Wait on a CONDITION, not a fixed duration: a 0.3s sleep failed whenever the
+    poll thread hadn't run enough times yet (scheduling-dependent flake under load)."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if cond():
+            return True
+        time.sleep(0.01)
+    return False
+
 
 def _make_rule(**kwargs) -> DetectionRule:
     base = dict(
@@ -488,7 +499,7 @@ def test_poller_dispatches_on_match(tmp_path, monkeypatch):
         rule = _make_rule(interval_s=0.05)
         poller = RulePoller([rule], dispatched.append, dry_run=False)
         poller.start()
-        time.sleep(0.3)
+        _wait_for(lambda: dispatched)
         poller.stop()
 
     assert len(dispatched) >= 1
@@ -513,7 +524,7 @@ def test_poller_dry_run_no_dispatch(tmp_path, monkeypatch):
         rule = _make_rule(interval_s=0.05)
         poller = RulePoller([rule], dispatched.append, dry_run=True)
         poller.start()
-        time.sleep(0.3)
+        _wait_for(lambda: mock_detector.poll_alert.call_count >= 4)
         poller.stop()
 
     assert dispatched == []
@@ -533,7 +544,7 @@ def test_poller_no_match_no_dispatch(tmp_path, monkeypatch):
         rule = _make_rule(interval_s=0.05)
         poller = RulePoller([rule], dispatched.append, dry_run=False)
         poller.start()
-        time.sleep(0.3)
+        _wait_for(lambda: mock_detector.poll_alert.call_count >= 4)
         poller.stop()
 
     assert dispatched == []
@@ -580,7 +591,7 @@ def test_poller_status_snapshot(tmp_path, monkeypatch):
         rule = _make_rule(name="snap-rule", ttp="T1041", interval_s=0.05)
         poller = RulePoller([rule], lambda s: None, dry_run=False)
         poller.start()
-        time.sleep(0.3)
+        _wait_for(lambda: mock_detector.poll_alert.call_count >= 1)
         poller.stop()
 
     snap = poller.status_snapshot()
@@ -603,7 +614,7 @@ def test_poller_signal_has_unique_ids(tmp_path, monkeypatch):
         rule = _make_rule(interval_s=0.05)
         poller = RulePoller([rule], dispatched.append, dry_run=False)
         poller.start()
-        time.sleep(0.4)
+        _wait_for(lambda: mock_detector.poll_alert.call_count >= 4)
         poller.stop()
 
     ids = [s["signal_id"] for s in dispatched]
@@ -627,7 +638,7 @@ def test_poller_multiple_rules(tmp_path, monkeypatch):
         ]
         poller = RulePoller(rules, dispatched.append, dry_run=False)
         poller.start()
-        time.sleep(0.4)
+        _wait_for(lambda: {s["ttp"] for s in dispatched} >= {"T1486", "T1041"})
         poller.stop()
 
     ttps = {s["ttp"] for s in dispatched}
@@ -651,7 +662,7 @@ def test_poller_deduplicates_same_row(tmp_path, monkeypatch):
         rule = _make_rule(interval_s=0.05)
         poller = RulePoller([rule], dispatched.append, dry_run=False)
         poller.start()
-        time.sleep(0.4)
+        _wait_for(lambda: mock_detector.poll_alert.call_count >= 4)
         poller.stop()
 
     assert len(dispatched) == 1, (
@@ -683,7 +694,7 @@ def test_poller_dispatches_new_row_after_dedup(tmp_path, monkeypatch):
         rule = _make_rule(interval_s=0.05)
         poller = RulePoller([rule], dispatched.append, dry_run=False)
         poller.start()
-        time.sleep(0.4)
+        _wait_for(lambda: call_count[0] >= 4 and len(dispatched) >= 2)
         poller.stop()
 
     assert len(dispatched) == 2, (

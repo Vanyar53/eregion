@@ -1907,3 +1907,114 @@ def test_sweep_vm_rules_keeps_state_when_a_delete_fails(monkeypatch):
     out = connector.sweep_vm_rules(_RID)
     assert out["status"] == "swept_partial" and out["failed"]
     assert _load_isolation_state("vm") is not None
+
+
+# ── Seconde passe (2026-10-05) : préséance illisible, nom legacy, blocage périmètre ──
+
+def test_verify_isolation_unreadable_precedence_is_not_verified(monkeypatch):
+    """Rules present (`get`) but the listing fails (throttling): the precedence check
+    used to read [] as "nothing before our deny" → verified=True on an unknown."""
+    from glorfindel.actions import AzureConnector
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    monkeypatch.setattr(connector, "_get_vm_nic_targets",
+                        lambda rg, vm: [_nic_target(scope="subnet", ips=("10.0.0.5",))])
+    net = MagicMock()
+    net.security_rules.get.return_value = MagicMock()
+    net.security_rules.list.side_effect = RuntimeError("429 Too Many Requests")
+    connector._network = net
+
+    out = connector.verify_isolation(_RID)
+    assert out["verified"] is None
+    assert out["precedence_unknown"] == ["rg/nsg"]
+    assert "non vérifiable" in out["error"]
+
+
+def test_verify_isolation_checks_precedence_of_a_legacy_named_rule(monkeypatch):
+    """A VM isolated before the multi-NIC upgrade carries the legacy VM-suffixed name:
+    the precedence check looked for the new name only, found nothing to compare and
+    passed — even with allow-ssh evaluated first."""
+    from glorfindel.actions import AzureConnector
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    monkeypatch.setattr(connector, "_get_vm_nic_targets",
+                        lambda rg, vm: [_nic_target(scope="subnet", ips=("10.0.0.5",))])
+    legacy_in = "glorfindel-isolation-deny-all-vm"
+    net = MagicMock()
+    net.security_rules.get.side_effect = (
+        lambda rg, nsg, name: MagicMock() if name.startswith(legacy_in) else _raise_not_found())
+    net.security_rules.list.return_value = [
+        _nsg_rule(**_BENCH_ALLOW_SSH),
+        _nsg_rule(legacy_in, 101, access="Deny", dst="10.0.0.5", port="*"),
+    ]
+    connector._network = net
+
+    out = connector.verify_isolation(_RID)
+    assert out["verified"] is False
+    assert [s["rule"] for s in out["shadowed_by"]] == ["allow-ssh"]
+
+
+def _raise_not_found():
+    raise RuntimeError("(ResourceNotFound) rule not found")
+
+
+def test_verify_block_ip_unreadable_precedence_is_not_verified(monkeypatch):
+    from glorfindel.actions import AzureConnector, _save_block_state
+    rule = "glorfindel-block-95-47-246-223-vm-nic-a"
+    _save_block_state("vm", "95.47.246.223", _RID, nsg="rg/nsg", nsg_scope="subnet", rule=rule,
+                      placements=[{"nsg_rg": "rg", "nsg_name": "nsg", "scope": "subnet",
+                                   "rule": rule, "ips": ["10.0.0.5"]}])
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    net = MagicMock()
+    net.security_rules.get.return_value = MagicMock()
+    net.security_rules.list.side_effect = RuntimeError("timeout")
+    connector._network = net
+
+    out = connector.verify_block_ip("95.47.246.223", _RID)
+    assert out["verified"] is None
+    assert out["precedence_unknown"] == ["rg/nsg"]
+
+
+def test_perimeter_block_reports_the_allow_that_bypasses_it(monkeypatch):
+    """The VM-scoped block reported shadowing at placement; the subnet-wide one only
+    learned it at verification."""
+    import glorfindel.actions as actions
+    from glorfindel.actions import AzureConnector
+    monkeypatch.setattr(actions, "_save_block_state", lambda *a, **k: None)
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    monkeypatch.setattr(connector, "_get_primary_nic_id", lambda rg, vm: "nic-id")
+    monkeypatch.setattr(connector, "_get_subnet_nsg", lambda nic: ("rg", "subnet-nsg"))
+    net = MagicMock()
+    net.security_rules.list.return_value = [_nsg_rule(**_BENCH_ALLOW_SSH)]
+    connector._network = net
+
+    out = connector.block_suspicious_ip("95.47.246.223", _RID, scope="subnet")
+    assert [s["rule"] for s in out["shadowed_by"]] == ["allow-ssh"]
+    assert "contourné" in out["bypass"]
+
+
+def test_sweep_vm_rules_unreadable_nsg_keeps_state(monkeypatch):
+    """An unreadable rule list is not an empty NSG: the sweep must not report success
+    and clear the local state while rules may still be there."""
+    from glorfindel.actions import AzureConnector, _load_isolation_state, _save_isolation_state
+    _save_isolation_state("vm", {"resource_id": _RID})
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    monkeypatch.setattr(connector, "_get_vm_nic_targets", lambda rg, vm: [_nic_target()])
+    net = MagicMock()
+    net.security_rules.list.side_effect = RuntimeError("403 AuthorizationFailed")
+    connector._network = net
+
+    out = connector.sweep_vm_rules(_RID)
+    assert out["status"] == "swept_partial"
+    assert any("illisibles" in f for f in out["failed"])
+    assert _load_isolation_state("vm") is not None
+
+
+def test_audit_precedence_unreadable_is_a_warning_not_a_pass():
+    from glorfindel.audit import _check_precedence
+    check = _check_precedence([{"nsg": "rg/nsg", "nic": "nic-a", "unreadable": True}])
+    assert check is not None and check.status == "warn"
+    assert "rg/nsg" in check.message

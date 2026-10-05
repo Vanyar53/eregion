@@ -136,8 +136,21 @@ def _check_precedence(issues: list[dict]) -> AuditCheck | None:
     Found on the Celebrimbor bench (2026-10-05): allow-ssh at priority 100 on the subnet
     NSG kept SSH open on every isolated VM and let an SSH brute force through a block.
     """
-    if not issues:
+    unreadable = sorted({i["nsg"] for i in issues if i.get("unreadable")})
+    issues = [i for i in issues if not i.get("unreadable")]
+    if not issues and not unreadable:
         return None
+    if not issues:
+        # An unreadable rule list is not "no allow before our deny".
+        return AuditCheck(
+            action="isolate_vm, block_suspicious_ip",
+            name="NSG precedence",
+            status="warn",
+            message="Préséance non vérifiable : règles illisibles sur " + ", ".join(unreadable),
+            fix="Vérifier le droit Microsoft.Network/networkSecurityGroups/securityRules/read, "
+                "puis relancer l'audit",
+            data={"precedence": [], "precedence_unreadable": unreadable},
+        )
     rules: dict[tuple[str, str], dict] = {}
     for i in issues:
         entry = rules.setdefault((i["nsg"], i["rule"]), {**i, "actions": set()})
@@ -150,13 +163,16 @@ def _check_precedence(issues: list[dict]) -> AuditCheck | None:
         )
         rg, name = nsg.split("/", 1)
         fixes.append(f"az network nsg rule update -g {rg} --nsg-name {name} -n {rule} --priority 1000")
+    message = "Règle(s) allow évaluée(s) avant les deny de Glorfindel : " + " ; ".join(parts)
+    if unreadable:
+        message += " (règles illisibles, non vérifié : " + ", ".join(unreadable) + ")"
     return AuditCheck(
         action="isolate_vm, block_suspicious_ip",
         name="NSG precedence",
         status="fail",
-        message="Règle(s) allow évaluée(s) avant les deny de Glorfindel : " + " ; ".join(parts),
+        message=message,
         fix=" ; ".join(fixes) + "  — placer les allow après la plage de Glorfindel (100–999)",
-        data={"precedence": issues},
+        data={"precedence": issues, "precedence_unreadable": unreadable},
     )
 
 def _check_nsg(resource_id: str, connector) -> AuditCheck:

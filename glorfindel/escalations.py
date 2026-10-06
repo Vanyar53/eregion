@@ -42,6 +42,7 @@ _ESCALATION_LABELS = {
     "cycle_failed": "signal non traité (cycle interrompu)",
     "uncharacterized_signal": "signal non caractérisé (garde-fou)",
     "release_hold": "levée retenue (aucune restauration terminée)",
+    "unattributed_signal": "détection non attribuée à cette VM",
 }
 
 

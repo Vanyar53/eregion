@@ -700,3 +700,129 @@ def test_poller_dispatches_new_row_after_dedup(tmp_path, monkeypatch):
     assert len(dispatched) == 2, (
         f"Two distinct rows should produce two dispatches, got {len(dispatched)}"
     )
+
+
+# ── Run Azure du 2026-10-05 : fenêtre de requête, attribution, déduplication ──────
+
+class _Asset:
+    def __init__(self, name):
+        self.name = name
+        self.resource_id = f"/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/{name}"
+
+
+class _Registry:
+    def __init__(self, *names):
+        self.assets = [_Asset(n) for n in names]
+
+    def for_backend(self, _name):
+        return self.assets
+
+
+def _asset_rule(name="vm1", **kw):
+    return _make_rule(name="ransomware-disk-write", interval_s=0.05, asset_name=name,
+                      resource_id=_Asset(name).resource_id,
+                      query="Perf | where TimeGenerated > ago(10m) | summarize MaxWrite=max(CounterValue) by Computer",
+                      **kw)
+
+
+def _run_asset_rule(poller, rule, registry, cond):
+    import threading
+    t = threading.Thread(target=poller._poll_rule, args=(rule, registry), daemon=True)
+    t.start()
+    _wait_for(cond)
+    poller.stop()
+    t.join(timeout=2)
+
+
+def test_query_lookback_follows_the_rules_ago():
+    from glorfindel.detection_rules import _query_lookback_s
+    assert _query_lookback_s("Perf | where TimeGenerated > ago(10m)") == 600
+    assert _query_lookback_s("X | where TimeGenerated > ago(5m) | join (Y | where T > ago(1h))") == 3600
+    assert _query_lookback_s("Perf | limit 1") == 600          # no ago(): default
+
+
+def test_poller_window_covers_late_ingestion(tmp_path, monkeypatch):
+    """The API timespan used to start 2*interval (60 s) back and overrode the query's
+    ago(10m): rows ingested 89–109 s late (real run, 05/10) were never seen."""
+    monkeypatch.setattr("glorfindel.detection_rules._STATUS_FILE", tmp_path / "s.json")
+    mock_detector = MagicMock()
+    mock_detector.poll_alert.return_value = None
+    with patch("glorfindel.detection_rules.detector_for", return_value=mock_detector):
+        poller = RulePoller([], lambda s: None, dry_run=False)
+        before = time.time()
+        _run_asset_rule(poller, _asset_rule(), _Registry("vm1"),
+                        lambda: mock_detector.poll_alert.call_count >= 1)
+    since = mock_detector.poll_alert.call_args.kwargs["since"]
+    assert since <= before - 600
+
+
+def test_row_attribution():
+    from glorfindel.detection_rules import _row_attribution
+    rid = _Asset("vm1").resource_id
+    assert _row_attribution({"Computer": "vm1"}, rid, "vm1") is True
+    assert _row_attribution({"Computer": "VM1.internal.cloudapp.net"}, rid, "vm1") is True
+    assert _row_attribution({"Computer": "vm2"}, rid, "vm1") is False
+    assert _row_attribution({"_ResourceId": rid.upper()}, rid, "vm1") is True
+    assert _row_attribution({"SourceIP": "203.0.113.9", "FailedAttempts": 40}, rid, "vm1") is None
+
+
+def test_asset_rule_ignores_rows_about_another_vm(tmp_path, monkeypatch):
+    """The per-asset rule runs the shared, unscoped query: a ransomware row for vm2 was
+    dispatched for vm1 too (and for every discovered VM)."""
+    monkeypatch.setattr("glorfindel.detection_rules._STATUS_FILE", tmp_path / "s.json")
+    mock_detector = MagicMock()
+    mock_detector.poll_alert.return_value = None
+    with patch("glorfindel.detection_rules.detector_for", return_value=mock_detector):
+        poller = RulePoller([], lambda s: None, dry_run=False)
+        _run_asset_rule(poller, _asset_rule("vm1"), _Registry("vm1", "vm2"),
+                        lambda: mock_detector.poll_alert.call_count >= 1)
+    match_row = mock_detector.poll_alert.call_args.kwargs["match_row"]
+    assert match_row({"Computer": "vm1", "MaxWrite": 1.2e8})
+    assert not match_row({"Computer": "vm2", "MaxWrite": 1.2e8})
+    assert match_row({"SourceIP": "203.0.113.9"})              # names no VM: kept
+
+
+def test_aggregated_row_dispatched_once_while_its_counts_grow(tmp_path, monkeypatch):
+    """No TimeGenerated on a summarized row → the old dedup never applied; with the
+    10-min window the same detection would be re-dispatched at every poll."""
+    monkeypatch.setattr("glorfindel.detection_rules._STATUS_FILE", tmp_path / "s.json")
+    dispatched = []
+    values = iter(range(10**6))
+    mock_detector = MagicMock()
+    mock_detector.poll_alert.side_effect = (
+        lambda **kw: (1.0, {"Computer": "vm1", "MaxWrite": 1.2e8 + next(values)}))
+    with patch("glorfindel.detection_rules.detector_for", return_value=mock_detector):
+        poller = RulePoller([], dispatched.append, dry_run=False)
+        _run_asset_rule(poller, _asset_rule("vm1"), _Registry("vm1"),
+                        lambda: mock_detector.poll_alert.call_count >= 4)
+    assert len(dispatched) == 1
+
+
+def test_dedup_survives_a_restart(tmp_path, monkeypatch):
+    """A detection still inside the query window must not be dispatched (and acted on)
+    again by the next watch process."""
+    monkeypatch.setattr("glorfindel.detection_rules._STATUS_FILE", tmp_path / "s.json")
+    dispatched = []
+    mock_detector = MagicMock()
+    mock_detector.poll_alert.return_value = (1.0, {"Computer": "vm1", "MaxWrite": 1.2e8})
+    with patch("glorfindel.detection_rules.detector_for", return_value=mock_detector):
+        first = RulePoller([], dispatched.append, dry_run=False)
+        _run_asset_rule(first, _asset_rule("vm1"), _Registry("vm1"), lambda: dispatched)
+        second = RulePoller([], dispatched.append, dry_run=False)
+        mock_detector.poll_alert.reset_mock()
+        _run_asset_rule(second, _asset_rule("vm1"), _Registry("vm1"),
+                        lambda: mock_detector.poll_alert.call_count >= 3)
+    assert len(dispatched) == 1
+
+
+def test_unattributed_row_is_flagged_when_several_vms_are_monitored(tmp_path, monkeypatch):
+    monkeypatch.setattr("glorfindel.detection_rules._STATUS_FILE", tmp_path / "s.json")
+    mock_detector = MagicMock()
+    mock_detector.poll_alert.return_value = (1.0, {"SourceIP": "203.0.113.9", "FailedAttempts": 40})
+    for peers, expected in ((("vm1", "vm2"), "unattributed"), (("vm1",), "single_asset")):
+        dispatched = []
+        (tmp_path / "s.json").unlink(missing_ok=True)
+        with patch("glorfindel.detection_rules.detector_for", return_value=mock_detector):
+            poller = RulePoller([], dispatched.append, dry_run=False)
+            _run_asset_rule(poller, _asset_rule("vm1"), _Registry(*peers), lambda: dispatched)
+        assert dispatched[0]["context"]["attribution"] == expected

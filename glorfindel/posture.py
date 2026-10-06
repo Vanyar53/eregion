@@ -80,6 +80,11 @@ class PostureChecker:
             if not fallback_rg:
                 fallback_rg = _rg(asset.resource_id)
             checked_vms.add(asset.name)
+            # An asset opted out in `exceptions:` (all rules, or the "posture" rule) is
+            # not checked — and its open gaps resolve, as documented. It used to be
+            # checked and escalated anyway (real run, 2026-10-05).
+            if self._excluded(asset.name):
+                continue
             gaps = self._check_asset(asset)
             all_gaps.extend(gaps)
             for gap in gaps:
@@ -92,6 +97,13 @@ class PostureChecker:
         vault_inv = self._vault_inventory(fallback_rg)
         self._resolve_cleared_gaps({g.key for g in all_gaps}, checked_vms, vault_inv)
         return all_gaps
+
+    def _excluded(self, asset_name: str) -> bool:
+        is_excluded = getattr(self._cfg, "is_excluded", None)
+        try:
+            return bool(is_excluded and is_excluded(asset_name, "posture"))
+        except Exception:
+            return False
 
     def _vault_inventory(self, fallback_rg: str = "") -> dict:
         """VM (lowercased short name) → latest recovery-point age in hours, read from

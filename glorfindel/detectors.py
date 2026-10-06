@@ -19,10 +19,13 @@ class DetectionConnector(ABC):
         since: float,
         timeout_s: float,
         interval_s: float = 10.0,
+        match_row=None,
     ) -> tuple[float, dict] | None:
         """Poll until the query returns results or timeout expires.
 
         since: Unix timestamp — only match events after this time.
+        match_row: optional predicate; only a row it accepts counts as a match (the
+        first accepted row is returned). None = the first row of the result.
         Returns (elapsed_seconds, first_result_row_as_dict) or None on timeout.
         """
         ...
@@ -48,6 +51,7 @@ class AzureMonitorDetector(DetectionConnector):
         timeout_s: float,
         interval_s: float = 10.0,
         verbose: bool = True,
+        match_row=None,
     ) -> tuple | None:
         from azure.identity import DefaultAzureCredential
         from azure.monitor.query import LogsQueryClient, LogsQueryStatus
@@ -78,8 +82,10 @@ class AzureMonitorDetector(DetectionConnector):
                     saw_success = True
                     last_error = None  # a successful query with 0 rows is not an error
                     for table in response.tables:
-                        if table.rows:
-                            row = dict(zip(table.columns, table.rows[0]))
+                        for raw_row in table.rows:
+                            row = dict(zip(table.columns, raw_row))
+                            if match_row is not None and not match_row(row):
+                                continue
                             if verbose:
                                 _console.print(
                                     f"  [green]Alert detected[/green] after {round(elapsed)}s"

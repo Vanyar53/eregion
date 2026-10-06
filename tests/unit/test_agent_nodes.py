@@ -142,6 +142,25 @@ def test_poll_detection_updates_event_to_detection_on_alert():
     assert result["signal"]["raw_signal"]["detected_data"]["SourceIP"] == "185.220.101.1"
 
 
+def test_detection_time_counts_from_the_attack_not_from_the_signal():
+    """attack_started arrives after the attack steps: the poll's own elapsed time said
+    42 s for ~135 s of real detection time (run 2026-10-05)."""
+    import time as _t
+    from glorfindel.agent import poll_detection
+    state = _state()
+    state["signal"]["event"] = "attack_started"
+    state["signal"]["raw_signal"] = {
+        "detection_source": "azure_monitor", "detection_query": "Perf | ...",
+        "detection_timeout_s": 300, "attack_time": _t.time() - 130,
+        "log_analytics_workspace_id": "ws-123",
+    }
+    mock_detector = MagicMock()
+    mock_detector.poll_alert.return_value = (42.0, {"Computer": "vm1", "MaxWrite": 1.2e8})
+    with patch("glorfindel.detectors.detector_for", return_value=mock_detector):
+        result = poll_detection(state)
+    assert result["signal"]["raw_signal"]["detection_time_s"] >= 130
+
+
 def test_poll_detection_updates_event_to_timeout_on_no_alert():
     from glorfindel.agent import poll_detection
     state = _state()
@@ -1441,6 +1460,64 @@ def test_graph_release_precondition_has_its_own_type(tmp_path, monkeypatch, tmp_
     assert final["outcome"]["escalation_type"] == "release_hold"
 
 
+def test_unattributed_detection_holds_isolation_but_not_an_ip_block():
+    """A row aggregated by attacker IP is dispatched for every monitored VM: isolating
+    each of them on it is the blast radius the per-asset rules used to have."""
+    from glorfindel.agent import _apply_attribution_guard
+    signal = {"context": {"attribution": "unattributed"}}
+    iso = {"action": "isolate_vm", "escalate": False}
+    _apply_attribution_guard(iso, signal)
+    assert iso["escalate"] is True and iso["held_by"] == "attribution"
+    blk = {"action": "block_suspicious_ip", "escalate": False}
+    _apply_attribution_guard(blk, signal)
+    assert blk["escalate"] is False
+    single = {"action": "isolate_vm", "escalate": False}
+    _apply_attribution_guard(single, {"context": {"attribution": "single_asset"}})
+    assert single["escalate"] is False
+
+
+def test_graph_unattributed_isolation_has_its_own_type(tmp_path, monkeypatch, tmp_memory):
+    from glorfindel.config import AutonomyConfig
+    from glorfindel.agent import _build_graph
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "runs").mkdir(exist_ok=True)
+    connector = MagicMock()
+    connector.dry_run = False
+    graph = _build_graph(tmp_memory, connector, "claude-test",
+                         autonomy=AutonomyConfig(default="non_disruptive"))
+    initial = _initial("detection")
+    initial["signal"]["context"]["attribution"] = "unattributed"
+    with patch("litellm.completion") as mock_cls:
+        mock_cls.return_value = _mock_llm_response("isolate_vm")
+        final = graph.invoke(initial)
+    connector.isolate_vm.assert_not_called()
+    assert final["outcome"]["escalation_type"] == "unattributed_signal"
+
+
+def test_release_after_restore_is_held_when_run_command_was_not_neutralized():
+    """The restored disk may have replayed the attacker's last Run Command at boot."""
+    from glorfindel.agent import _apply_release_precondition
+    held = {"action": "release_isolation", "escalate": False}
+    _apply_release_precondition(held, {"event": "recovery_complete",
+                                       "raw_signal": {"run_command_neutralized": False}})
+    assert held["escalate"] is True and "rejouer" in held["escalation_reason"]
+    ok = {"action": "release_isolation", "escalate": False}
+    _apply_release_precondition(ok, {"event": "recovery_complete",
+                                     "raw_signal": {"run_command_neutralized": True}})
+    assert ok["escalate"] is False
+
+
+def test_graph_isolation_with_sessions_left_open_fails_verification(tmp_path, monkeypatch, tmp_memory):
+    connector = MagicMock()
+    connector.dry_run = False
+    connector.isolate_vm.return_value = {
+        "status": "isolated", "drain": {"status": "failed", "error": "(AuthorizationFailed) runCommand"}}
+    connector.verify_isolation.return_value = {"verified": True, "method": "nsg_check"}
+    final = _graph_run(tmp_path, monkeypatch, tmp_memory, connector, "isolate_vm")
+    assert final["outcome"]["escalation_type"] == "verification_failed"
+    assert "sessions déjà ouvertes" in final["escalation_reason"]
+
+
 def test_store_cycle_never_notifies_a_no_op(tmp_memory):
     from glorfindel.agent import store_cycle
     state = _state(action="revoke_temp_access", confidence=0.9,
@@ -1787,6 +1864,10 @@ def test_graph_llm_failure_records_cycle_failed_escalation_and_debug(tmp_path, m
     assert [e["escalation_type"] for e in pending] == ["cycle_failed"]
     debug = (tmp_path / "runs" / "run001_debug.jsonl").read_text()
     assert "read timed out" in debug
+    # The mode is resolved before the LLM call: the audit trail of a failed decision
+    # names it too (it was empty — real run, 2026-10-05).
+    assert final["autonomy_mode"]
+    assert '"resolved_autonomy_mode": ""' not in debug
 
 
 def test_decide_malformed_threshold_falls_back_to_default(monkeypatch):

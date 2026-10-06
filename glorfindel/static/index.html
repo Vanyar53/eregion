@@ -667,6 +667,8 @@ function _scopeNote(s) {
 
 function _scopeChip(s) {
   const base = 'font-size:8px;font-weight:600;padding:0 4px;border-radius:3px;color:var(--dim);flex-shrink:0';
+  if (s.nsg_scope === 'quarantine')
+    return ` <span style="${base};border:1px solid var(--border)" title="Glorfindel's quarantine NSG attached to the NIC (it had no NSG of its own). No customer rule touched; detached on release.">quarantine NSG</span>`;
   if (s.nsg_scope === 'subnet') {
     if (s.blast_radius || s.scoped === false)
       return ` <span style="${base};color:var(--orange);background:color-mix(in srgb,var(--orange) 12%,transparent);border:1px solid color-mix(in srgb,var(--orange) 40%,transparent)" title="Rule on the shared subnet NSG and NOT scoped to this VM — affects the WHOLE subnet.">⚠ subnet-wide</span>`;

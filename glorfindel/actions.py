@@ -153,6 +153,21 @@ def _prefix_open_to_internet(prefix: str) -> bool:
     return (prefix or "").strip().lower() in ("*", "any", "internet", "0.0.0.0/0", "::/0")
 
 
+# Lot L4 — Glorfindel's own quarantine NSG, attached to a NIC that has none of its own.
+QUARANTINE_NSG_PREFIX = "nsg-glorfindel-quarantine"
+QUARANTINE_RULE_IN = "glorfindel-quarantine-deny-in"
+QUARANTINE_RULE_OUT = "glorfindel-quarantine-deny-out"
+
+
+def _is_quarantine_nsg(nsg_id_or_name: str) -> bool:
+    name = (nsg_id_or_name or "").rstrip("/").split("/")[-1].lower()
+    return name.startswith(QUARANTINE_NSG_PREFIX)
+
+
+def _same_id(a: str, b: str) -> bool:
+    return (a or "").rstrip("/").lower() == (b or "").rstrip("/").lower()
+
+
 def _enum_text(value) -> str:
     """Lowercase text of an SDK field that may be a plain string or an enum.
 
@@ -516,11 +531,34 @@ class AzureConnector(CloudConnector):
         self._guard_write("isolate_vm")
         self._ensure_clients()
         rg, vm_name = _parse_vm_resource_id(resource_id)
-        targets = self._get_vm_nic_targets(rg, vm_name)
+        targets = self._get_vm_nic_targets(rg, vm_name, allow_no_nsg=True)
+        quarantine_on, _ = self._quarantine_settings()
 
         placements: list[dict] = []
         assigned: dict[str, set] = {}  # nsg_key → priorities used during THIS call
         for t in targets:
+            # L4: a NIC with no NSG of its own gets Glorfindel's quarantine NSG — nothing
+            # of the customer's touched, nothing evaluated before its deny, untouched by a
+            # `terraform apply` (the NIC resource keeps an NSG it doesn't manage). Falls
+            # back to the subnet NSG's rules if attaching is refused (Azure Policy, IAM).
+            quarantine_error = ""
+            if t.get("quarantine") or (quarantine_on and "nic_has_nsg" in t):
+                try:
+                    placements.append(self._quarantine_placement(t, rg))
+                    continue
+                except Exception as exc:
+                    if not t.get("nsg_name"):
+                        failed = {"nic_id": t["nic_id"], "applied": [], "bumped": []}
+                        partial = self._record_partial_isolation(
+                            vm_name, resource_id, placements, failed, exc, total=len(targets))
+                        if partial is None:
+                            raise
+                        raise partial from exc
+                    quarantine_error = _first_line(exc)[:_ERR_MAX]
+            if not t.get("nsg_name"):
+                raise RuntimeError(
+                    f"NIC {t['nic_short']} has no NSG and the quarantine NSG is disabled — "
+                    "cannot isolate (enable `isolation.quarantine_nsg` or add an NSG)")
             nsg_rg, nsg_name, scope = t["nsg_rg"], t["nsg_name"], t["scope"]
             nsg_key = f"{nsg_rg}/{nsg_name}"
             base = self._placement_rule_base("glorfindel-iso", vm_name, t["nic_short"], t["nic_id"])
@@ -533,6 +571,8 @@ class AzureConnector(CloudConnector):
                 "bumped": [],    # customer rules moved off priority 100 (restored on release)
                 "applied": [],   # deny rules confirmed by Azure
             }
+            if quarantine_error:
+                placement["quarantine_error"] = quarantine_error
             try:
                 # Never move a customer rule (a `terraform apply` puts it back, or fails
                 # on the priority we took): the deny takes the first free priority. An
@@ -622,6 +662,14 @@ class AzureConnector(CloudConnector):
                 "NSG shared with other NICs involved — isolation scoped to this VM's "
                 "private IP(s) only (no impact on the other VMs behind that NSG)."
             )
+        if any(p.get("kind") == "quarantine" for p in placements):
+            out["note"] = (
+                "Glorfindel's quarantine NSG on the NIC(s) for the time of the isolation — "
+                "the customer's own NSG (if any) is left untouched and goes back on release."
+            )
+        refused = [p["quarantine_error"] for p in placements if p.get("quarantine_error")]
+        if refused:
+            out["quarantine_refused"] = refused
         shadowed = [s for p in placements for s in p.get("shadowed_by", [])]
         if shadowed:
             out["shadowed_by"] = shadowed
@@ -650,6 +698,36 @@ class AzureConnector(CloudConnector):
         "( not dst 127.0.0.0/8 and not dst [::1] "
         "and not dst 168.63.129.16 and not dst 169.254.169.254 )"
     )
+
+    def recent_changes(self, resource_uri: str, minutes: int = 60) -> list[str]:
+        """Who wrote this resource lately, from the Azure activity log (best effort, a
+        few minutes behind). Explains an alert — never used to detect: Azure itself is
+        re-read for that."""
+        if self.dry_run:
+            return []
+        try:
+            import requests
+            from datetime import datetime, timedelta, timezone
+            self._ensure_clients()
+            since = (datetime.now(timezone.utc) - timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            token = self._credential.get_token("https://management.azure.com/.default").token
+            url = (f"https://management.azure.com/subscriptions/{self._subscription_id}"
+                   "/providers/Microsoft.Insights/eventtypes/management/values")
+            r = requests.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=20, params={
+                "api-version": "2015-04-01",
+                "$filter": f"eventTimestamp ge '{since}' and resourceUri eq '{resource_uri}'",
+                "$select": "caller,operationName,eventTimestamp,status",
+            })
+            out = []
+            for e in (r.json().get("value") or []) if r.ok else []:
+                op = (e.get("operationName") or {}).get("localizedValue") or (e.get("operationName") or {}).get("value", "")
+                st = (e.get("status") or {}).get("value", "")
+                if st and st not in ("Succeeded", "Accepted"):
+                    continue
+                out.append(f'{str(e.get("eventTimestamp", ""))[11:19]} {e.get("caller", "?")} — {op}')
+            return sorted(set(out))[-5:]
+        except Exception:
+            return []
 
     def drain_connections(self, resource_id: str) -> dict:
         """Kill the VM's established TCP connections through Run Command (`ss -K`).
@@ -772,12 +850,81 @@ class AzureConnector(CloudConnector):
         return {"nsg_key": nsg_key, "priority": priority, "ip_scoped": ip_scoped,
                 "shadowed": shadowed}
 
+    def _quarantine_placement(self, t: dict, default_rg: str) -> dict:
+        """Put the quarantine NSG on this NIC (JIT); the placement to record.
+
+        A NIC with no NSG gets ours attached (L4). A NIC with its own NSG gets ours IN
+        PLACE of it, for the time of the isolation: the customer's NSG and its rules are
+        left untouched, and go back on release. Measured on the bench (2026-10-06,
+        azurerm 4.81.0): `terraform plan` sees no change and `apply` reverts nothing —
+        the NIC resource doesn't hold its NSG, the association only checks that the NIC
+        has one. Only a forced replacement of the association, or a Bicep/ARM redeploy
+        of the NIC, puts the customer's NSG back (L5 notices). The original is recorded
+        in state and, before the swap, as a tag on our NSG — Azure keeps the answer even
+        if the local state is lost."""
+        q = self._ensure_quarantine_nsg(t.get("location"), default_rg)
+        current = t.get("quarantine")
+        if current and _same_id(current["nsg_id"], q["nsg_id"]):
+            original = self._original_from_tags(q, t["nic_id"])
+        else:
+            original = t.get("own_nsg_id")
+            if original:
+                self._record_original(q, t["nic_id"], original)
+            self._set_nic_nsg(t["nic_id"], q["nsg_id"], expect=original or "")
+        return {
+            "nic_id": t["nic_id"], "kind": "quarantine", "scope": "quarantine",
+            "nsg_rg": q["nsg_rg"], "nsg_name": q["nsg_name"], "nsg_id": q["nsg_id"],
+            "original_nsg_id": original,
+            "shared_nsg": False, "ips": t["private_ips"], "priority": 100,
+            "rule_in": QUARANTINE_RULE_IN, "rule_out": QUARANTINE_RULE_OUT,
+            "bumped": [], "applied": ["nic-attach"], "shadowed_by": [],
+        }
+
+    @staticmethod
+    def _orig_tag(nic_id: str) -> str:
+        import hashlib
+        return "glorfindel-orig-" + hashlib.sha1(nic_id.rstrip("/").lower().encode()).hexdigest()[:12]
+
+    def _quarantine_tags(self, q: dict) -> dict:
+        nsg = self._network.network_security_groups.get(q["nsg_rg"], q["nsg_name"])
+        return dict(getattr(nsg, "tags", None) or {})
+
+    def _write_quarantine_tags(self, q: dict, tags: dict) -> None:
+        from azure.mgmt.network.models import TagsObject
+        self._network.network_security_groups.update_tags(q["nsg_rg"], q["nsg_name"], TagsObject(tags=tags))
+
+    def _record_original(self, q: dict, nic_id: str, original_id: str) -> None:
+        """NIC → its own NSG, kept as a tag on our quarantine NSG (not on the NIC: a
+        `terraform apply` rewrites the NIC's tags — measured)."""
+        tags = self._quarantine_tags(q)
+        tags[self._orig_tag(nic_id)] = original_id
+        self._write_quarantine_tags(q, tags)
+
+    def _original_from_tags(self, q: dict, nic_id: str) -> str | None:
+        try:
+            return self._quarantine_tags(q).get(self._orig_tag(nic_id)) or None
+        except Exception:
+            return None
+
+    def _forget_original(self, q: dict, nic_id: str) -> None:
+        try:
+            tags = self._quarantine_tags(q)
+            if tags.pop(self._orig_tag(nic_id), None) is not None:
+                self._write_quarantine_tags(q, tags)
+        except Exception:
+            pass     # a stale tag is harmless: it is only read for a NIC carrying our NSG
+
+    def _unquarantine(self, nic_id: str, q: dict, original: str | None) -> None:
+        """Put the NIC's own NSG back (or none), only if it still carries OURS."""
+        self._set_nic_nsg(nic_id, original, expect=q["nsg_id"])
+        self._forget_original(q, nic_id)
+
     @staticmethod
     def _nic_nsg_views(t: dict) -> list[dict]:
         """The NIC as seen from each NSG that governs it: its own (or its subnet's when it
         has none), plus its subnet's NSG when it has both. An isolation or a block may
         sit on either — the second one when the first had an ALLOW before our deny."""
-        views = [t]
+        views = [t] if t.get("nsg_name") else []
         alt = t.get("alt_nsg")
         if alt:
             views.append({**t, "nsg_rg": alt["nsg_rg"], "nsg_name": alt["nsg_name"],
@@ -827,6 +974,18 @@ class AzureConnector(CloudConnector):
             # Multi-NIC: undo each placement on its own NSG. Delete our denies first —
             # a customer rule can only go back to priority 100 once ours is gone.
             for p in state["placements"]:
+                if p.get("kind") == "quarantine":
+                    # Put the NIC's own NSG back (or none) — only if it still carries
+                    # OURS; our NSG keeps its deny rules for the next VM.
+                    try:
+                        original = p.get("original_nsg_id") or self._original_from_tags(p, p["nic_id"])
+                        self._unquarantine(p["nic_id"], p, original)
+                    except Exception as exc:
+                        if not _is_not_found(exc):
+                            failed.append(f'{p["nic_id"].split("/")[-1]}: NSG de quarantaine '
+                                          f"non détaché : {_first_line(exc)[:_ERR_MAX]}")
+                            remaining.append(p)
+                    continue
                 p_rg, p_name = p["nsg_rg"], p["nsg_name"]
                 p_failed = [
                     err for err in (
@@ -843,7 +1002,14 @@ class AzureConnector(CloudConnector):
                     # rule is a no-op) and only the bumps still to put back.
                     remaining.append({**p, "bumped": left})
         else:
-            for t0 in self._get_vm_nic_targets(rg, vm_name):
+            for t0 in self._get_vm_nic_targets(rg, vm_name, allow_no_nsg=True):
+                if t0.get("quarantine"):
+                    q = t0["quarantine"]
+                    try:
+                        self._unquarantine(t0["nic_id"], q, self._original_from_tags(q, t0["nic_id"]))
+                    except Exception as exc:
+                        failed.append(f'{t0["nic_short"]}: NSG de quarantaine non retiré : '
+                                      f"{_first_line(exc)[:_ERR_MAX]}")
                 for t in self._nic_nsg_views(t0):
                     for name in self._isolation_names_for_target(vm_name, t):
                         err = self._delete_rule(t["nsg_rg"], t["nsg_name"], name)
@@ -1249,13 +1415,18 @@ class AzureConnector(CloudConnector):
 
         self._ensure_clients()
         rg, vm_name = _parse_vm_resource_id(resource_id)
-        targets = self._get_vm_nic_targets(rg, vm_name)
+        targets = self._get_vm_nic_targets(rg, vm_name, allow_no_nsg=True)
 
         # Isolation holds only if EVERY NIC carries a deny pair — a single uncovered NIC
         # is the multi-NIC gap (looks ISOLATED but traffic still flows on the other NIC).
         uncovered: list[str] = []
         found: dict[str, tuple] = {}     # nic_id → (nsg_rg, nsg_name, inbound deny name)
         for t0 in targets:
+            # Glorfindel's quarantine NSG on the NIC (L4): holds if its two denies are there.
+            q = t0.get("quarantine")
+            if q and self._rules_present(q["nsg_rg"], q["nsg_name"], [QUARANTINE_RULE_IN, QUARANTINE_RULE_OUT]):
+                found[t0["nic_id"]] = (q["nsg_rg"], q["nsg_name"], QUARANTINE_RULE_IN)
+                continue
             # The deny may sit on the NIC's own NSG or on its subnet's (placed there when
             # an ALLOW preceded it on the first): either one holds.
             for t in self._nic_nsg_views(t0):
@@ -1363,7 +1534,10 @@ class AzureConnector(CloudConnector):
         rg, vm_name = _parse_vm_resource_id(resource_id)
         still: list[str] = []
         unknown: list[str] = []
-        for t in (v for t0 in self._get_vm_nic_targets(rg, vm_name) for v in self._nic_nsg_views(t0)):
+        targets = self._get_vm_nic_targets(rg, vm_name, allow_no_nsg=True)
+        still += [f'{t0["nic_short"]}:{t0["quarantine"]["nsg_name"]} (NSG de quarantaine attaché)'
+                  for t0 in targets if t0.get("quarantine")]
+        for t in (v for t0 in targets for v in self._nic_nsg_views(t0)):
             for name in self._isolation_names_for_target(vm_name, t):
                 state = self._rule_state(t["nsg_rg"], t["nsg_name"], name)
                 if state == "present":
@@ -1667,7 +1841,9 @@ class AzureConnector(CloudConnector):
         kept: list[str] = []
         unreadable: list[str] = []
         seen: set = set()
-        for t in (v for t0 in self._get_vm_nic_targets(rg, vm_name) for v in self._nic_nsg_views(t0)):
+        targets = self._get_vm_nic_targets(rg, vm_name, allow_no_nsg=True)
+        quarantined = [t0 for t0 in targets if t0.get("quarantine")]
+        for t in (v for t0 in targets for v in self._nic_nsg_views(t0)):
             nsg_key = (t["nsg_rg"], t["nsg_name"])
             h = hashlib.sha1(t["nic_id"].encode()).hexdigest()[:8]
             owned_rest = {vm_name, f"{vm_name}-{t['nic_short']}", f"{vm_name[:40]}-{h}"}
@@ -1688,6 +1864,19 @@ class AzureConnector(CloudConnector):
                 elif m is None and name.startswith("glorfindel-block-"):
                     kept.append(f'{t["nsg_rg"]}/{t["nsg_name"]}/{name}')   # perimeter block
         deleted, failed = [], list(unreadable)
+        for t0 in quarantined:
+            q = t0["quarantine"]
+            original = self._original_from_tags(q, t0["nic_id"])
+            label = (f'{t0["nic_short"]}: retirer {q["nsg_name"]}'
+                     + (f' (remettre {original.rstrip("/").split("/")[-1]})' if original else ""))
+            if dry_run:
+                deleted.append(label)
+                continue
+            try:
+                self._unquarantine(t0["nic_id"], q, original)
+                deleted.append(label)
+            except Exception as exc:
+                failed.append(f"{label} : {_first_line(exc)[:_ERR_MAX]}")
         for nsg_rg, nsg_name, name in to_delete:
             if dry_run:
                 deleted.append(f"{nsg_rg}/{nsg_name}/{name}")
@@ -2167,28 +2356,50 @@ class AzureConnector(CloudConnector):
         primary = next((n for n in nics if n.primary), nics[0])
         return primary.id
 
-    def _get_vm_nic_targets(self, rg: str, vm_name: str) -> list[dict]:
+    def _get_vm_nic_targets(self, rg: str, vm_name: str, allow_no_nsg: bool = False) -> list[dict]:
         """Every NIC of the VM with its governing NSG + all private IPs.
 
         Isolation must cover EVERY NIC: a VM with 2 NICs each behind its own NSG is
         only half-isolated if we touch the primary alone (the real bug). Each target
         becomes one placement — deny any/any on a NIC-level NSG (scope 'nic') or deny
         scoped to ALL the NIC's private IPs on a shared subnet NSG (scope 'subnet').
+
+        Glorfindel's own quarantine NSG (L4) is not the NIC's NSG: a NIC carrying it is
+        described as it is without it (`nic_has_nsg` False, its subnet's NSG as the
+        governing one) and the quarantine NSG is reported apart (`quarantine`) — a block
+        must not land in an NSG that leaves with the isolation.
+
+        allow_no_nsg: a NIC with no NSG at all (neither its own nor its subnet's) is
+        returned with scope 'none' instead of raising — isolation can still attach the
+        quarantine NSG to it.
         """
         vm = self._compute.virtual_machines.get(rg, vm_name)
         targets: list[dict] = []
         for ref in vm.network_profile.network_interfaces:
             nic_id = ref.id
-            nsg_rg, nsg_name, scope = self._get_nic_nsg(nic_id)
-            shared = scope == "nic" and self._nsg_is_shared(nsg_rg, nsg_name)
+            nic_rg, nic_name = _parse_nic_resource_id(nic_id)
+            nic = self._network.network_interfaces.get(nic_rg, nic_name)
+            own_id = getattr(getattr(nic, "network_security_group", None), "id", None)
+            quarantine = None
+            if own_id and _is_quarantine_nsg(own_id):
+                q_rg, q_name = _parse_nsg_resource_id(own_id)
+                quarantine = {"nsg_rg": q_rg, "nsg_name": q_name, "nsg_id": own_id}
+                own_id = None
+            subnet_nsg = self._subnet_nsg_of(nic)
             alt_nsg = None
-            if scope == "nic":
-                try:
-                    s_rg, s_name = self._get_subnet_nsg(nic_id)
-                    if (s_rg, s_name) != (nsg_rg, nsg_name):
-                        alt_nsg = {"nsg_rg": s_rg, "nsg_name": s_name}
-                except Exception:
-                    alt_nsg = None      # subnet without NSG: nowhere else to place
+            if own_id:
+                nsg_rg, nsg_name = _parse_nsg_resource_id(own_id)
+                scope = "nic"
+                if subnet_nsg and subnet_nsg != (nsg_rg, nsg_name):
+                    alt_nsg = {"nsg_rg": subnet_nsg[0], "nsg_name": subnet_nsg[1]}
+            elif subnet_nsg:
+                (nsg_rg, nsg_name), scope = subnet_nsg, "subnet"
+            elif allow_no_nsg:
+                nsg_rg, nsg_name, scope = None, None, "none"
+            else:
+                raise RuntimeError(f"NIC {nic_name} and its subnet have no NSG — cannot isolate VM")
+            shared = scope == "nic" and self._nsg_is_shared(nsg_rg, nsg_name)
+            ips = [getattr(c, "private_ip_address", None) for c in (getattr(nic, "ip_configurations", None) or [])]
             targets.append({
                 "nic_id": nic_id,
                 "nic_short": nic_id.rstrip("/").split("/")[-1],
@@ -2198,13 +2409,92 @@ class AzureConnector(CloudConnector):
                 # A NIC-level NSG attached to other NICs (or to a subnet as well) is as
                 # shared as a subnet NSG: any/any there would cut off every VM behind it.
                 "shared_nsg": shared,
-                "ip_scoped": scope == "subnet" or shared,
-                "private_ips": self._get_nic_private_ips(nic_id),
+                "ip_scoped": scope in ("subnet", "none") or shared,
+                "private_ips": [ip for ip in ips if ip],
                 # The subnet's NSG when the NIC also has its own: the other place a deny
                 # holds (traffic must pass both).
                 "alt_nsg": alt_nsg,
+                "nic_has_nsg": bool(own_id),
+                "own_nsg_id": own_id,
+                "quarantine": quarantine,
+                "location": getattr(nic, "location", None),
             })
         return targets
+
+    def _subnet_nsg_of(self, nic) -> tuple[str, str] | None:
+        """(rg, name) of the NSG on the NIC's subnet, or None (no NSG, or unreadable)."""
+        try:
+            subnet_id = nic.ip_configurations[0].subnet.id
+            parts = subnet_id.split("/")
+            sub_rg = parts[parts.index("resourceGroups") + 1]
+            vnet = parts[parts.index("virtualNetworks") + 1]
+            subnet = self._network.subnets.get(sub_rg, vnet, parts[-1])
+            if subnet.network_security_group is None:
+                return None
+            return _parse_nsg_resource_id(subnet.network_security_group.id)
+        except Exception:
+            return None
+
+    # ── L4: Glorfindel's quarantine NSG ─────────────────────────────────────────
+
+    def _quarantine_settings(self) -> tuple[bool, str]:
+        """(enabled, resource group) from glorfindel-config.yaml `isolation:` — enabled
+        by default; GLORFINDEL_QUARANTINE_NSG=0 turns it off."""
+        if os.environ.get("GLORFINDEL_QUARANTINE_NSG", "").strip() in ("0", "false", "no"):
+            return False, ""
+        try:
+            from glorfindel.config import load_glorfindel_config
+            iso = load_glorfindel_config().isolation
+            return bool(iso.quarantine_nsg), iso.quarantine_rg or ""
+        except Exception:
+            return True, ""
+
+    def _ensure_quarantine_nsg(self, location: str, default_rg: str) -> dict:
+        """Get or create Glorfindel's quarantine NSG for this region: deny-all in and
+        out at priority 100, nothing else. One per region (a NIC only takes an NSG of
+        its own region and subscription), created on first need."""
+        from azure.mgmt.network.models import NetworkSecurityGroup, SecurityRule
+        _, cfg_rg = self._quarantine_settings()
+        q_rg = cfg_rg or default_rg
+        name = f"{QUARANTINE_NSG_PREFIX}-{(location or 'unknown').lower()}"
+
+        def _rule(rule_name: str, direction: str) -> SecurityRule:
+            return SecurityRule(
+                name=rule_name, priority=100, direction=direction, access="Deny",
+                protocol="*", source_address_prefix="*", destination_address_prefix="*",
+                source_port_range="*", destination_port_range="*",
+                description="Glorfindel — incident quarantine (attached only while a VM is isolated)",
+            )
+        try:
+            nsg = self._network.network_security_groups.get(q_rg, name)
+        except Exception as exc:
+            if not _is_not_found(exc):
+                raise
+            nsg = self._network.network_security_groups.begin_create_or_update(q_rg, name, NetworkSecurityGroup(
+                location=location,
+                tags={"managed-by": "glorfindel", "purpose": "incident-quarantine"},
+                security_rules=[_rule(QUARANTINE_RULE_IN, "Inbound"), _rule(QUARANTINE_RULE_OUT, "Outbound")],
+            )).result()
+        present = {getattr(r, "name", "") for r in (getattr(nsg, "security_rules", None) or [])}
+        for rule_name, direction in ((QUARANTINE_RULE_IN, "Inbound"), (QUARANTINE_RULE_OUT, "Outbound")):
+            if rule_name not in present:       # someone removed it: put it back
+                self._network.security_rules.begin_create_or_update(
+                    q_rg, name, rule_name, _rule(rule_name, direction)).result()
+        return {"nsg_rg": q_rg, "nsg_name": name, "nsg_id": nsg.id}
+
+    def _set_nic_nsg(self, nic_id: str, nsg_id: str | None, expect: str | None = None) -> bool:
+        """Attach `nsg_id` to the NIC (None: detach). With `expect`, only when the NIC
+        currently carries that NSG (never touch an NSG that isn't ours). Returns True
+        if the NIC was changed."""
+        from azure.mgmt.network.models import NetworkSecurityGroup
+        nic_rg, nic_name = _parse_nic_resource_id(nic_id)
+        nic = self._network.network_interfaces.get(nic_rg, nic_name)
+        current = getattr(getattr(nic, "network_security_group", None), "id", None)
+        if expect is not None and not _same_id(current or "", expect):
+            return False
+        nic.network_security_group = NetworkSecurityGroup(id=nsg_id) if nsg_id else None
+        self._network.network_interfaces.begin_create_or_update(nic_rg, nic_name, nic).result()
+        return True
 
     def _nsg_is_shared(self, nsg_rg: str, nsg_name: str) -> bool:
         """True if this NSG governs more than one NIC, or a subnet too.

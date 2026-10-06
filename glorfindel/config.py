@@ -116,11 +116,27 @@ class AutonomyConfig:
 
 
 @dataclass
+class IsolationConfig:
+    """How Glorfindel isolates a VM.
+
+    quarantine_nsg: a NIC with no NSG of its own gets Glorfindel's quarantine NSG
+      (deny-all in and out) attached for the time of the isolation — no customer rule
+      touched, nothing evaluated before it, untouched by a `terraform apply` (lot L4).
+      False → the deny goes into the subnet's NSG, as before.
+    quarantine_rg: resource group where Glorfindel creates its quarantine NSGs (one per
+      region, on first need). Empty → the isolated VM's resource group.
+    """
+    quarantine_nsg: bool = True
+    quarantine_rg: str = ""
+
+
+@dataclass
 class GlorfindelConfig:
     monitoring_backends: list[MonitoringBackendConfig] = field(default_factory=list)
     action_backends: list[ActionBackendConfig] = field(default_factory=list)
     exceptions: list[ExceptionConfig] = field(default_factory=list)
     autonomy: AutonomyConfig = field(default_factory=AutonomyConfig)
+    isolation: IsolationConfig = field(default_factory=IsolationConfig)
 
     def monitoring_backend(self, name: str) -> MonitoringBackendConfig | None:
         return next((b for b in self.monitoring_backends if b.name == name), None)
@@ -194,12 +210,18 @@ def load_glorfindel_config(path: str | Path | None = None) -> GlorfindelConfig:
         ))
 
     autonomy = _parse_autonomy(data.get("autonomy", {}))
+    iso = data.get("isolation") or {}
+    isolation = IsolationConfig(
+        quarantine_nsg=bool(iso.get("quarantine_nsg", True)),
+        quarantine_rg=str(iso.get("quarantine_rg", "") or ""),
+    )
 
     return GlorfindelConfig(
         monitoring_backends=monitoring_backends,
         action_backends=action_backends,
         exceptions=exceptions,
         autonomy=autonomy,
+        isolation=isolation,
     )
 
 

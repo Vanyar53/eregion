@@ -1,6 +1,6 @@
 # Module d'isolation compatible avec l'infrastructure as code
 
-_Conception — 2026-10-05 — statut : proposition, à prototyper sur le banc Celebrimbor._
+_Conception — 2026-10-05, mise à jour le 2026-10-06 — statut : mécanisme par défaut durci (L1–L3, L5, L7 livrés et validés sur Azure) ; L4, L6 et le module (L8) restent à faire._
 
 ## Pourquoi ce chantier
 
@@ -40,10 +40,16 @@ infrastructure gérée en Terraform.
 | Règle client décalée de la priorité 100 (isolation actuelle sur NSG dédié) | Remise à 100, en conflit avec le deny de Glorfindel | déduit |
 | Association NSG ↔ NIC ou subnet changée | Rétablie | ressources `*_security_group_association` |
 | **NIC ajoutée à une ASG** | **Conservée, sans dérive dans le plan** | [source du provider](https://github.com/hashicorp/terraform-provider-azurerm/blob/main/internal/services/network/network_interface.go) |
+| **NSG accroché à une NIC qui n'en a pas** (pas de ressource `azurerm_network_interface_security_group_association` pour elle) | **Conservé, sans dérive dans le plan** (vérifié le 06/10) | [`resourceNetworkInterfaceUpdate`](https://github.com/hashicorp/terraform-provider-azurerm/blob/main/internal/services/network/network_interface_resource.go) |
 
-Le dernier point vient du code du provider : à chaque mise à jour d'une NIC,
+Les deux dernières lignes viennent du code du provider. Pour le NSG d'une NIC :
+`resourceNetworkInterfaceUpdate` relit la NIC sur Azure, part de ce modèle (`payload := existing.Model`)
+et n'écrase que les champs qui ont changé ; le NSG n'y est jamais touché, et le schéma de
+`azurerm_network_interface` ne le contient pas (il passe par la ressource d'association). Un NSG accroché
+hors Terraform survit donc à un `apply` et n'apparaît pas comme une dérive. Pour les ASG,
+
 `parseFieldsFromNetworkInterface` relit les ASG présentes sur Azure et `mapFieldsToNetworkInterface` les
-réécrit telles quelles. Le schéma de la NIC ne contient pas les ASG (elles passent par des ressources
+réécrit telles quelles quand les `ip_configuration` changent. Le schéma de la NIC ne contient pas les ASG (elles passent par des ressources
 d'association), donc une appartenance ajoutée hors Terraform n'apparaît pas comme une dérive.
 
 ### ASG ([doc](https://learn.microsoft.com/en-us/azure/virtual-network/application-security-groups))
@@ -110,15 +116,87 @@ Conséquences :
 2. **NSG à règles en ligne.** `ignore_changes` ne peut pas viser une seule règle en ligne. Options :
    migrer le NSG vers des règles séparées (une fois, avec des blocs `import`), ou un repli où Glorfindel
    repose le blocage et alerte quand un apply le retire.
-3. **Sessions déjà établies.** Ni la quarantaine ni les règles ne coupent une session ouverte. À mesurer
-   d'abord sur le banc ; ensuite décider d'une action complémentaire (couper les sessions dans la VM,
-   arrêter la VM).
+3. ~~**Sessions déjà établies.**~~ **Tranché le 05/10** : mesuré sur le banc, une session SSH active
+   (17 min), une session inactive (11 min) et un téléchargement sortant survivent à une règle NSG ; les
+   nouvelles connexions sont refusées. Run Command passe pendant l'isolation et `ss -K` coupe tout →
+   `isolate_vm` coupe désormais les connexions établies après la pose des règles (`drain_connections`),
+   et une isolation dont les sessions restent ouvertes n'est pas vérifiée. Vaudra pour tout mécanisme
+   (règles, NSG accroché, ASG).
 4. **Bicep / ARM.** Un redéploiement de la NIC réécrit probablement sa liste d'ASG (non vérifié).
 5. **Topologies.** Une ASG par VNet (VMs réparties sur plusieurs VNets) ; VMs multi-NIC (toutes les
    NICs dans la quarantaine) ; VM sans aucun NSG (rien où s'ancrer : l'audit le signale).
 6. **AVNM.** Lecture seule : détecter un Always Allow qui couvre une VM défendue.
 
-## Plan
+## Avancement au 2026-10-06 — le mécanisme par défaut, durci
+
+La seconde passe de l'analyste (05/10) a proposé de garder l'activation en un clic : les règles posées à
+la volée restent le mécanisme par défaut, durci, et le module devient un renfort optionnel (choix
+prérequis/renfort : à trancher). Livré et validé sur Azure réel (PR #17 à #19) :
+
+| Lot | Ce qui a changé | Validé |
+|---|---|---|
+| L1 | Un échec de vérification est escaladé en `verification_failed` (Revert) ; préséance illisible → non vérifié | 05/10 |
+| L2 | Mesure des sessions établies (ci-dessus) | 05/10 |
+| L3 | Aucune règle client déplacée (le deny prend la 1re priorité libre) ; si une allow passe avant lui sur le NSG de la carte, le deny va sur le NSG du subnet (un deny dans l'un suffit) ; blocage jugé selon le port de la menace (une allow sur un autre port = exposition, pas contournement) | 06/10 |
+| L5 | Règles disparues d'Azure (apply sur NSG à règles en ligne, retrait manuel) → reposées une fois + alerte ; disparues à nouveau → alerte seule ; `human_only` → alerte seule | 06/10 |
+| L7 | Sessions ouvertes coupées après l'isolation (Run Command, `ss -K`) ; restore : la dernière commande Run Command est neutralisée avant (le disque restauré la rejouait) | 05/10 |
+
+Ce qui reste exposé avec le mécanisme par défaut :
+- **NIC sans NSG dont le NSG de subnet a une allow avant notre deny** : pas d'autre NSG où poser le deny
+  → isolation signalée contournée (vérification en échec), sans parade. → L4.
+- **NSG de subnet à règles en ligne géré en Terraform** : un `apply` efface nos règles ; L5 les repose une
+  fois puis alerte. → L4 (pour les NIC sans NSG), ou le module.
+- **NSG en ligne de la NIC** : même chose, sans parade hors module.
+
+## L4 — accrocher un NSG de quarantaine aux NIC qui n'en ont pas (à concevoir cet après-midi)
+
+Une NIC sans NSG propre est gouvernée par le seul NSG de son subnet. Glorfindel y accroche son propre NSG,
+qui ne contient que deux règles deny-all (entrée et sortie) : le trafic doit passer les deux NSG, donc la
+VM est isolée quel que soit le contenu du NSG de subnet.
+
+Pourquoi c'est intéressant :
+- aucune règle client touchée, **aucune préséance possible** (notre NSG ne contient que nos règles) ;
+- aucun autre VM concerné ;
+- **compatible Terraform** : le NSG d'une NIC sans ressource d'association n'est pas géré par la ressource
+  NIC (vérifié dans le provider, tableau ci-dessus) ; un `apply` sur le NSG de subnet à règles en ligne ne
+  touche pas notre NSG non plus ;
+- c'est le modèle des playbooks Sentinel (`Isolate-AzureVMtoNSG`), sans leurs défauts : on n'écrase pas un
+  NSG existant (NIC sans NSG uniquement) et on sait revenir en arrière.
+
+Points de conception à trancher :
+1. **Quand l'utiliser** : en premier choix pour toute NIC sans NSG (proposé — plus robuste que des règles
+   dans le NSG de subnet), ou seulement quand le NSG de subnet a une allow devant notre deny ?
+2. **Le NSG de quarantaine** : un par région et par abonnement (une NIC ne peut recevoir qu'un NSG de sa
+   région/abonnement), créé par Glorfindel dans son propre RG au premier besoin, ou fourni par le module /
+   l'onboarding ? Contenu fixe : deny `*` entrée et sortie en 100 (les adresses plateforme 168.63.129.16 et
+   169.254.169.254 ne sont pas filtrées par un NSG : Run Command et la coupure des sessions marchent).
+3. **État et levée** : enregistrer que la NIC n'avait pas de NSG ; la levée détache notre NSG (et seulement
+   le nôtre, vérifié par son id) ; `reset --from-azure` le reconnaît par son nom.
+4. **Vérification** : la NIC porte bien notre NSG + ses deux règles ; L5 réaccroche une fois s'il a été
+   détaché.
+5. **Droits** : `Microsoft.Network/networkInterfaces/write` (large : permet aussi de changer IP et NSG d'une
+   NIC — le même plancher que l'ASG) + `Microsoft.Network/networkSecurityGroups/join/action` sur notre NSG ;
+   création du NSG si Glorfindel le crée lui-même.
+6. **Risques à vérifier** : une Azure Policy qui interdit les NSG au niveau NIC (fréquente : « NSG au
+   subnet seulement ») → refus 403 → repli sur les règles dans le NSG de subnet ; un redéploiement
+   **Bicep/ARM** de la NIC (PUT complet) retire très probablement notre NSG → L5 le réaccroche une fois puis
+   alerte (non vérifié) ; durée de la mise à jour d'une NIC (~10–30 s) ; VM multi-NIC (chaque NIC sans NSG).
+7. **Topologie de test** : une VM dont la NIC n'a pas de NSG et dont le NSG de subnet a une allow en 100
+   (le cas que L3 ne sait pas traiter) ; vérifier `terraform plan` vide après l'accroche.
+
+## Pour le module (L8) — ajouts de la seconde passe
+
+- L'appartenance à une ASG se fait **par ipConfiguration** : mettre en quarantaine toutes les
+  ipConfigurations de toutes les NICs, et le vérifier (sinon le trou multi-NIC de juin revient une couche
+  plus bas).
+- La règle « liste de blocage » exige au moins un préfixe : une **sentinelle** quand elle est vide
+  (adresse de documentation, ex. `192.0.2.1/32`) et une **garde** qui refuse `*`, `0.0.0.0/0`, `Internet`,
+  `VirtualNetwork` ou tout préfixe large (sinon un bug devient un deny-all en 101 pour tout le NSG).
+- Plancher de droits : `networkInterfaces/write` + `applicationSecurityGroups/joinIpConfiguration/action`.
+- Garder le mécanisme par défaut en repli = deux moteurs d'isolation à maintenir : le repli reste-t-il
+  autonome, ou devient-il une recommandation ?
+
+## Plan initial (05/10)
 
 1. Mesurer sur le banc : une session SSH ouverte survit-elle à une isolation ?
 2. Écrire le module Terraform des ancrages ; migrer le NSG du banc vers des règles séparées.

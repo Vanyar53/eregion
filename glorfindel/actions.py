@@ -153,6 +153,16 @@ def _prefix_open_to_internet(prefix: str) -> bool:
     return (prefix or "").strip().lower() in ("*", "any", "internet", "0.0.0.0/0", "::/0")
 
 
+def _enum_text(value) -> str:
+    """Lowercase text of an SDK field that may be a plain string or an enum.
+
+    azure-mgmt-network 33 (the Docker image) returns enums: str(SecurityRuleAccess.ALLOW)
+    is 'SecurityRuleAccess.ALLOW', so `str(access).lower() != "allow"` skipped EVERY rule
+    — the precedence check saw no allow at all in the deployed product, while 30.x (the
+    host venv, the tests) returns plain strings (validation run, 2026-10-06)."""
+    return str(getattr(value, "value", value) or "").lower()
+
+
 def _rule_covers_port(rule, port: int) -> bool:
     """Does this rule's destination port range include `port`? (`*`, `22`, `20-30`)"""
     ranges = [getattr(rule, "destination_port_range", None)]
@@ -203,9 +213,9 @@ def _shadowing_rules(
         prio = getattr(r, "priority", None)
         if name.startswith("glorfindel-") or not isinstance(prio, int) or prio >= priority:
             continue
-        if str(getattr(r, "access", "")).lower() != "allow":
+        if _enum_text(getattr(r, "access", "")) != "allow":
             continue
-        direction = str(getattr(r, "direction", "")).lower()
+        direction = _enum_text(getattr(r, "direction", ""))
         if direction == "inbound":
             src, dst = inbound_src, inbound_dst
         elif direction == "outbound":
@@ -529,10 +539,11 @@ class AzureConnector(CloudConnector):
                 # ALLOW evaluated before it would let its traffic through — then use the
                 # NIC's other NSG if it has one: traffic must pass both, a deny in either
                 # holds. Plan both before writing anything.
-                plan = self._plan_isolation(t, nsg_rg, nsg_name, _ip_scoped(t), assigned)
+                own = (in_name, out_name)
+                plan = self._plan_isolation(t, nsg_rg, nsg_name, _ip_scoped(t), assigned, own)
                 alt = t.get("alt_nsg")
                 if plan["shadowed"] and alt:
-                    alt_plan = self._plan_isolation(t, alt["nsg_rg"], alt["nsg_name"], True, assigned)
+                    alt_plan = self._plan_isolation(t, alt["nsg_rg"], alt["nsg_name"], True, assigned, own)
                     if not alt_plan["shadowed"]:
                         placement.update({
                             "nsg_rg": alt["nsg_rg"], "nsg_name": alt["nsg_name"],
@@ -592,7 +603,8 @@ class AzureConnector(CloudConnector):
             "scoped": True,
             "nics_covered": len(placements),
             "placements": [
-                {"nsg": f'{p["nsg_rg"]}/{p["nsg_name"]}', "scope": p["scope"]}
+                {"nsg": f'{p["nsg_rg"]}/{p["nsg_name"]}', "scope": p["scope"],
+                 **({"moved_from": p["moved_from"]["nsg"]} if p.get("moved_from") else {})}
                 for p in placements
             ],
             # Back-compat summary (first placement)
@@ -745,12 +757,14 @@ class AzureConnector(CloudConnector):
         return left
 
     def _plan_isolation(self, t: dict, nsg_rg: str, nsg_name: str, ip_scoped: bool,
-                        assigned: dict) -> dict:
+                        assigned: dict, own: tuple = ()) -> dict:
         """Priority an isolation deny would take on this NSG, and the customer ALLOW
-        rules that would be evaluated before it (nothing written)."""
+        rules that would be evaluated before it (nothing written). `own`: our rule
+        names — a re-application keeps their priority instead of moving them."""
         nsg_key = f"{nsg_rg}/{nsg_name}"
         existing = list(self._network.security_rules.list(nsg_rg, nsg_name))
-        used = {r.priority for r in existing} | assigned.get(nsg_key, set())
+        used = ({r.priority for r in existing if getattr(r, "name", "") not in own}
+                | assigned.get(nsg_key, set()))
         priority = next(p for p in range(self.ISOLATION_PRIORITY, 4000) if p not in used)
         ips = t["private_ips"] or None
         shadowed = _shadowing_rules(existing, priority, inbound_src=None, inbound_dst=ips,
@@ -1001,7 +1015,8 @@ class AzureConnector(CloudConnector):
             "nsg": f'{first["nsg_rg"]}/{first["nsg_name"]}',
             "nsg_scope": first["scope"], "rule": first["rule"],
             "placements": [
-                {"nsg": f'{p["nsg_rg"]}/{p["nsg_name"]}', "scope": p["scope"]}
+                {"nsg": f'{p["nsg_rg"]}/{p["nsg_name"]}', "scope": p["scope"],
+                 **({"moved_from": p["moved_from"]["nsg"]} if p.get("moved_from") else {})}
                 for p in placements
             ],
         }
@@ -1009,6 +1024,15 @@ class AzureConnector(CloudConnector):
             out["note"] = (
                 "shared NSG involved (subnet or several NICs) — block scoped to this VM's "
                 "private IP(s) (attacker still reaches other VMs until they detect it)."
+            )
+        moved = [p for p in placements if p.get("moved_from")]
+        if moved:
+            out["note"] = (
+                "deny placed on the subnet NSG, scoped to this VM's IP(s): on "
+                + ", ".join(p["moved_from"]["nsg"] for p in moved)
+                + " an allow is evaluated before it ("
+                + _describe_shadowing([s for p in moved for s in p["moved_from"]["because"]])
+                + ")."
             )
         _report_block_shadowing(out, ip, [s for p in placements for s in p.get("shadowed_by", [])])
         return out

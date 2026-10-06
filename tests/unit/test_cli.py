@@ -189,3 +189,16 @@ def test_list_shows_sessions_left_open_by_the_drain():
                                    "placements": [], "drain": {"status": "failed", "error": "403 runCommand"}})
     res = CliRunner().invoke(cli, ["list"])
     assert "open sessions not cut: 403 runCommand" in res.output
+
+
+def test_list_shows_exposure_apart_from_a_bypass():
+    """Another port still reachable is not a bypassed block (L3)."""
+    from glorfindel.actions import _save_block_state
+    from glorfindel.cli import cli
+    rid = "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm-z"
+    _save_block_state("vm-z", "203.0.113.9", rid, nsg="rg/nsg", nsg_scope="subnet", rule="r", threat_port=22,
+                      placements=[{"nsg_rg": "rg", "nsg_name": "nsg", "rule": "r", "shadowed_by": [
+                          {"rule": "allow-https", "priority": 150, "ports": "443", "threat_port_open": False}]}])
+    res = CliRunner().invoke(cli, ["list"])
+    assert "bypassed" not in res.output
+    assert "other ports still reachable: allow-https (ports 443)" in res.output

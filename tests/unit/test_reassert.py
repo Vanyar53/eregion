@@ -81,3 +81,14 @@ def test_vanished_block_is_put_back_once_with_its_threat_port():
     c.block_suspicious_ip.assert_called_once_with("203.0.113.9", _RID, scope="vm", threat_port=22)
     assert report[0]["outcome"] == "reapplied"
     assert _load_block_entries("vm")[0]["reasserted_at"]
+
+
+def test_second_removal_is_a_new_card_not_folded_into_the_first():
+    """The store merged the second alert into the 're-applied once' card, which kept
+    its text and sent no notification (validation run, 2026-10-06)."""
+    _isolated()
+    c = _connector({"verified": False, "uncovered_nics": ["nic-a"]})
+    reassert_active(c, _ACT)                       # first removal: re-applied
+    reassert_active(c, _ACT)                       # gone again: alert only
+    pending = escalations.pending()
+    assert len(pending) == 1 and "deuxième fois" in pending[0]["reason"]

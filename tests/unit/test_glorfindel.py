@@ -2208,3 +2208,28 @@ def test_block_moves_to_the_subnet_nsg_when_the_nic_nsg_lets_the_threat_through(
     assert "bypass" not in out
     entry = _load_block_entries("vm")[0]
     assert entry["threat_port"] == 22 and entry["placements"][0]["nsg_name"] == "nsg-subnet"
+
+
+def test_shadowing_reads_sdk_enums_not_only_strings():
+    """azure-mgmt-network 33 (Docker image) returns enums: str() gave
+    'SecurityRuleAccess.ALLOW' and every allow was skipped — precedence check, L3
+    fallback and port grading did nothing in the deployed product (2026-10-06)."""
+    from azure.mgmt.network.models import SecurityRuleAccess, SecurityRuleDirection
+    from glorfindel.actions import _shadowing_rules
+    rule = _nsg_rule(**_BENCH_ALLOW_SSH)
+    rule.access = SecurityRuleAccess.ALLOW
+    rule.direction = SecurityRuleDirection.INBOUND
+    found = _shadowing_rules([rule], 200, inbound_src=["203.0.113.9"], inbound_dst=["10.0.0.5"],
+                             outbound_src=["10.0.0.5"], outbound_dst=["203.0.113.9"], port=22)
+    assert [f["rule"] for f in found] == ["allow-ssh"] and found[0]["threat_port_open"] is True
+
+
+def test_reapplied_isolation_keeps_its_own_priority(monkeypatch):
+    """A re-application (L5) saw its own surviving -out rule at 100 as 'used' and moved
+    the pair to 101 (validation run, 2026-10-06)."""
+    connector, net = _block_env(monkeypatch, {})
+    monkeypatch.setattr(connector, "drain_connections", lambda rid: {"status": "drained"})
+    survivor = _nsg_rule("glorfindel-iso-vm-nic-a-out", 100, direction="Outbound", access="Deny", port="*")
+    net.security_rules.list.side_effect = lambda rg, nsg: [survivor]
+    connector.isolate_vm(_RID)
+    assert {c.args[3].priority for c in net.security_rules.begin_create_or_update.call_args_list} == {100}

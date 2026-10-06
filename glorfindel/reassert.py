@@ -26,6 +26,18 @@ def _missing(verification: dict) -> bool:
         verification.get("uncovered_nics") or verification.get("missing_rules"))
 
 
+def _alert(signal_id: str, **kwargs) -> None:
+    """Record a reassert alert as a NEW card. The escalation store merges a re-fire into
+    the pending card of the same action/resource/type and keeps its text: the second
+    removal ("no longer isolated, not re-applied") was folded into the first card, which
+    still said "re-applied once", and no notification went out (validation, 06/10)."""
+    from glorfindel import escalations
+    for e in escalations.pending():
+        if e.get("signal_id") == signal_id:
+            escalations.resolve(e["id"])
+    escalations.record(signal_id=signal_id, escalation_type="verification_failed", **kwargs)
+
+
 def _mode(autonomy, vm_name: str) -> str:
     try:
         return autonomy.resolve(vm_name) if autonomy is not None else "human_only"
@@ -39,7 +51,6 @@ def reassert_active(connector, autonomy=None) -> list[dict]:
     Returns one record per isolation/block whose rules were missing:
     {"kind", "vm", "ip"?, "outcome": "reapplied" | "escalated" | "failed", "detail"}.
     """
-    from glorfindel import escalations
     from glorfindel.actions import (
         _load_isolation_state, _save_isolation_state, _update_block_entry,
         active_blocks, active_isolations,
@@ -67,8 +78,7 @@ def reassert_active(connector, autonomy=None) -> list[dict]:
                 "NSG à règles en ligne ? Glorfindel ne les repose pas : "
                 f"`glorfindel release {rid} --yes` si la levée est voulue, sinon ré-isoler."
             )
-            escalations.record(signal_id=f"reassert-{vm}", resource_id=rid, action="isolate_vm",
-                               escalation_type="verification_failed", reason=reason)
+            _alert(f"reassert-{vm}", resource_id=rid, action="isolate_vm", reason=reason)
             report.append({"kind": "isolation", "vm": vm, "outcome": "escalated", "detail": reason})
             continue
         try:
@@ -84,8 +94,7 @@ def reassert_active(connector, autonomy=None) -> list[dict]:
         except Exception as exc:
             reason = f"Les règles d'isolation de {vm} ont disparu d'Azure ; les reposer a échoué : {exc}"
             outcome = "failed"
-        escalations.record(signal_id=f"reassert-{vm}", resource_id=rid, action="isolate_vm",
-                           escalation_type="verification_failed", reason=reason)
+        _alert(f"reassert-{vm}", resource_id=rid, action="isolate_vm", reason=reason)
         report.append({"kind": "isolation", "vm": vm, "outcome": outcome, "detail": reason})
 
     for b in active_blocks():
@@ -103,9 +112,8 @@ def reassert_active(connector, autonomy=None) -> list[dict]:
                       + (" une deuxième fois" if b.get("reasserted_at") else "")
                       + " — l'IP n'est plus bloquée. Glorfindel ne le repose pas : "
                       f"`glorfindel unblock {ip} {rid} --yes` si c'est voulu, sinon re-bloquer.")
-            escalations.record(signal_id=f"reassert-{vm}-{ip}", resource_id=rid,
-                               action="block_suspicious_ip", escalation_type="verification_failed",
-                               reason=reason, action_params={"ip": ip})
+            _alert(f"reassert-{vm}-{ip}", resource_id=rid, action="block_suspicious_ip",
+                   reason=reason, action_params={"ip": ip})
             report.append({"kind": "block", "vm": vm, "ip": ip, "outcome": "escalated", "detail": reason})
             continue
         try:
@@ -119,9 +127,8 @@ def reassert_active(connector, autonomy=None) -> list[dict]:
         except Exception as exc:
             reason = f"Le blocage de {ip} sur {vm} a disparu d'Azure ; le reposer a échoué : {exc}"
             outcome = "failed"
-        escalations.record(signal_id=f"reassert-{vm}-{ip}", resource_id=rid,
-                           action="block_suspicious_ip", escalation_type="verification_failed",
-                           reason=reason, action_params={"ip": ip})
+        _alert(f"reassert-{vm}-{ip}", resource_id=rid, action="block_suspicious_ip",
+               reason=reason, action_params={"ip": ip})
         report.append({"kind": "block", "vm": vm, "ip": ip, "outcome": outcome, "detail": reason})
 
     return report

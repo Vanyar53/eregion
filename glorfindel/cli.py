@@ -681,13 +681,27 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
                         f"— Heartbeat every 60s, posture (RSV/NSG) every {posture_min}min"
                     )
 
-                    # Expand auto-apply rules after a short delay for initial discovery
+                    # The registry the discovery service FILLS — the one built above only
+                    # read the disk cache once, so a VM discovered after start-up (or
+                    # off when the watch started) was never polled (validation run,
+                    # 2026-10-06: no rule thread for the whole life of the watch).
+                    from glorfindel.discovery import get_registry
+                    _registry = get_registry()
+
+                    # Expand auto-apply rules for every newly discovered asset, every
+                    # minute (idempotent: running (rule, asset) threads are skipped; an
+                    # evicted asset's thread stops and restarts when it comes back).
                     import threading as _td
-                    def _expand_later() -> None:
+                    def _expand_loop() -> None:
                         import time as _t
                         _t.sleep(10)  # give discovery 10s head start
-                        _rule_poller.expand_for_discovered(_registry, _glorfindel_cfg)
-                    _td.Thread(target=_expand_later, daemon=True, name="expand-rules").start()
+                        while True:
+                            try:
+                                _rule_poller.expand_for_discovered(_registry, _glorfindel_cfg)
+                            except Exception as exc:
+                                console.print(f"[yellow]expand rules: {exc}[/yellow]")
+                            _t.sleep(60)
+                    _td.Thread(target=_expand_loop, daemon=True, name="expand-rules").start()
 
                 auto_count = sum(1 for r in rules if r.auto_apply)
                 static_count = len(rules) - auto_count
@@ -1280,10 +1294,15 @@ def _state_warnings(entry: dict, failed_key: str) -> list[str]:
     drain = entry.get("drain") or {}
     if drain.get("status") in ("failed", "partial", "unsupported"):
         out.append("open sessions not cut: " + str(drain.get("error") or drain.get("note") or drain["status"]))
-    shadowed = [s for p in entry.get("placements") or [] for s in (p.get("shadowed_by") or [])]
+    found = [s for p in entry.get("placements") or [] for s in (p.get("shadowed_by") or [])]
+    shadowed = [s for s in found if s.get("threat_port_open", True)]
+    exposure = [s for s in found if not s.get("threat_port_open", True)]
     if shadowed:
         rules = ", ".join(sorted({f"{s.get('rule')} (priority {s.get('priority')})" for s in shadowed}))
         out.append(f"bypassed: {rules} evaluated before Glorfindel's deny")
+    if exposure:
+        rules = ", ".join(sorted({f"{s.get('rule')} (ports {s.get('ports')})" for s in exposure}))
+        out.append(f"threat port blocked; other ports still reachable: {rules}")
     return out
 
 

@@ -107,3 +107,23 @@ def test_the_alert_says_who_changed_the_nic():
     c.recent_changes.return_value = ["10:41:02 alice@example.com — Create or Update Network Interface"]
     reassert_active(c, AutonomyConfig(default="human_only"))
     assert "alice@example.com" in escalations.pending()[0]["reason"]
+
+
+def test_one_alert_per_disappearance_not_one_per_minute():
+    """human_only + isolation gone: every 60-s cycle used to resolve the card and open
+    a new one — a webhook notification per minute, acknowledgements undone (06/10)."""
+    _isolated()
+    c = _connector({"verified": False, "uncovered_nics": ["nic-a"]})
+    human = AutonomyConfig(default="human_only")
+    for _ in range(3):
+        reassert_active(c, human)
+    assert len(escalations.pending()) == 1
+    first = escalations.pending()[0]["id"]
+    escalations.resolve(first)                       # the operator acknowledges
+    reassert_active(c, human)
+    assert escalations.pending() == []               # the ack holds
+    c.verify_isolation.return_value = {"verified": True}
+    reassert_active(c, human)                        # back in place...
+    c.verify_isolation.return_value = {"verified": False, "uncovered_nics": ["nic-a"]}
+    reassert_active(c, human)                        # ...gone again: a new episode
+    assert len(escalations.pending()) == 1

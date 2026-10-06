@@ -1259,7 +1259,10 @@ def list_active():
             iso = isolations[rid_lower]
             ts = iso.get("isolated_at", "")
             label = "ISOLATED (PARTIAL)" if iso.get("partial") else "ISOLATED"
-            console.print(f"  [red]{label}[/red]  {_age(ts)}")
+            if any(p.get("kind") == "quarantine" for p in iso.get("placements") or []):
+                label += " · quarantine NSG"
+            checked = f"  [dim]verified {_age(iso['verified_at'])}[/dim]" if iso.get("verified_at") else ""
+            console.print(f"  [red]{label}[/red]  {_age(ts)}{checked}")
             for w in _state_warnings(iso, "release_failed"):
                 console.print(f"    [bold red]⚠ {w}[/bold red]", soft_wrap=True)
             console.print(f"  [dim]→ glorfindel release {resource_id} --yes[/dim]",

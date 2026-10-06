@@ -148,7 +148,17 @@ Ce qui reste exposé avec le mécanisme par défaut :
   fois puis alerte. → L4 (pour les NIC sans NSG), ou le module.
 - **NSG en ligne de la NIC** : même chose, sans parade hors module.
 
-## L4 — accrocher un NSG de quarantaine aux NIC qui n'en ont pas (à concevoir cet après-midi)
+## L4 — accrocher un NSG de quarantaine aux NIC qui n'en ont pas
+
+**Décidé le 06/10 avec Jonathan** : premier choix pour toute NIC sans NSG ; Glorfindel crée le NSG au
+premier besoin (un par région) dans un RG configuré ; le module Terraform reste un renfort optionnel.
+Cas d'une NIC qui a déjà un NSG : mécanisme L3 (règles, NSG de subnet en repli, escalade si les deux
+laissent passer). Dernier recours discuté, non retenu pour l'instant : échanger temporairement le NSG
+client contre le nôtre (invisible pour Terraform — la lecture de l'association ne compare pas le NSG
+réel —, mais restauration dépendante de notre état) → action soumise à approbation, plus tard.
+
+Implémenté (`isolate_vm` / `release_isolation` / vérifications / `reset --from-azure`) ; détails dans
+CLAUDE.md. Points ci-dessous : la conception d'origine.
 
 Une NIC sans NSG propre est gouvernée par le seul NSG de son subnet. Glorfindel y accroche son propre NSG,
 qui ne contient que deux règles deny-all (entrée et sortie) : le trafic doit passer les deux NSG, donc la

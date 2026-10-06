@@ -300,3 +300,13 @@ def test_set_asset_mode_preserves_other_sections(tmp_path):
     # monitoring_backends from MINIMAL_YAML survive the rewrite
     assert len(cfg.monitoring_backends) == 1
     assert cfg.autonomy.resolve("vm-a") == "non_disruptive"
+
+
+def test_isolation_section(tmp_path):
+    from glorfindel.config import load_glorfindel_config
+    f = tmp_path / "glorfindel-config.yaml"
+    f.write_text("isolation:\n  quarantine_nsg: false\n  quarantine_rg: rg-glorfindel\n")
+    cfg = load_glorfindel_config(f)
+    assert cfg.isolation.quarantine_nsg is False and cfg.isolation.quarantine_rg == "rg-glorfindel"
+    f.write_text("monitoring_backends: []\n")
+    assert load_glorfindel_config(f).isolation.quarantine_nsg is True     # default on

@@ -826,3 +826,24 @@ def test_unattributed_row_is_flagged_when_several_vms_are_monitored(tmp_path, mo
             poller = RulePoller([], dispatched.append, dry_run=False)
             _run_asset_rule(poller, _asset_rule("vm1"), _Registry(*peers), lambda: dispatched)
         assert dispatched[0]["context"]["attribution"] == expected
+
+
+def test_expansion_picks_up_a_vm_discovered_after_start(tmp_path, monkeypatch):
+    """The watch expanded rules once, 10 s after start: a VM that came up later (or was
+    off at start) was never polled (validation run, 2026-10-06). Expansion now runs
+    every minute; it must start the new VM's thread without duplicating the others."""
+    monkeypatch.setattr("glorfindel.detection_rules._STATUS_FILE", tmp_path / "s.json")
+    mock_detector = MagicMock()
+    mock_detector.poll_alert.return_value = None
+    rule = _make_rule(name="ransomware-disk-write", interval_s=0.05, auto_apply=True,
+                      monitoring_backend_name="law")
+    registry = _Registry("vm1")
+    with patch("glorfindel.detection_rules.detector_for", return_value=mock_detector):
+        poller = RulePoller([rule], lambda s: None, dry_run=False)
+        poller.expand_for_discovered(registry)
+        registry.assets.append(_Asset("vm2"))
+        poller.expand_for_discovered(registry)
+        poller.expand_for_discovered(registry)
+        names = sorted(t.name for t in poller._threads if t.is_alive())
+        poller.stop()
+    assert names == ["rule-ransomware-disk-write@vm1", "rule-ransomware-disk-write@vm2"]

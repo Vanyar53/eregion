@@ -283,9 +283,14 @@ async def state() -> dict:
 def _state_flags(placements: list) -> dict:
     """Per-state flags the cards need: a NIC-level NSG shared with other NICs (treated
     like a subnet NSG), and ALLOW rules recorded as evaluated before our deny."""
+    found = [s for p in placements for s in (p.get("shadowed_by") or [])]
     return {
         "shared": any(p.get("shared_nsg") for p in placements),
-        "shadowed": [s for p in placements for s in (p.get("shadowed_by") or [])],
+        # Bypass = the threat itself gets through; exposure = other ports stay reachable
+        # (a block whose threat port is known). Exposure must not light ⚠ bypassed.
+        "shadowed": [s for s in found if s.get("threat_port_open", True)],
+        "exposure": [s for s in found if not s.get("threat_port_open", True)],
+        "moved": [p["moved_from"] for p in placements if p.get("moved_from")],
     }
 
 
@@ -754,8 +759,10 @@ async def action_approve(esc_id: str, ip: str = "", scope: str = "vm") -> dict:
                     f"or run: glorfindel block <ip> {resource_id} --yes"
                 )}
             block_scope = scope if scope in ("vm", "subnet") else "vm"
+            threat_port = (esc.get("action_params") or {}).get("port")
             result = await asyncio.to_thread(
-                connector.block_suspicious_ip, block_ip, resource_id, block_scope)
+                connector.block_suspicious_ip, block_ip, resource_id, block_scope,
+                False, threat_port)
             _esc.resolve(esc_id)
             verification = await asyncio.to_thread(
                 _verify_approved, connector, esc, action, resource_id, result, block_ip)

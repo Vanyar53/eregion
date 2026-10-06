@@ -402,8 +402,20 @@ def _load_status() -> dict:
 
 
 def _save_status(status: dict) -> None:
+    """Atomic write (tmp + rename): poll threads rewrite this file while the War Room
+    and `rulepoller_recently_matched` read it — a reader used to catch it truncated
+    mid-write and see no status at all (flaky test, possible in production)."""
+    import os
+    import tempfile
     _STATUS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _STATUS_FILE.write_text(json.dumps(status, indent=2))
+    fd, tmp = tempfile.mkstemp(dir=_STATUS_FILE.parent, prefix=".rule_status.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(json.dumps(status, indent=2))
+        os.replace(tmp, _STATUS_FILE)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
 
 
 # Query window of a polled rule. The rule's own `ago()` decides what it looks at; the

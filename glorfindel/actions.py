@@ -17,7 +17,8 @@ _console = Console()
 AUTONOMOUS_ACTIONS = {
     "isolate_vm",
     "release_isolation",  # inverse of isolate_vm — safe to reverse autonomously
-    "revoke_temp_access",
+    # revoke_temp_access: removed 2026-10-06 — announced to the model, never implemented
+    # (it ended as a no_op "executed", then notified). Proposed → escalated as unknown.
     "snapshot",           # forensic snapshot of current (compromised) state
     "block_suspicious_ip",
 }
@@ -152,9 +153,41 @@ def _prefix_open_to_internet(prefix: str) -> bool:
     return (prefix or "").strip().lower() in ("*", "any", "internet", "0.0.0.0/0", "::/0")
 
 
+def _enum_text(value) -> str:
+    """Lowercase text of an SDK field that may be a plain string or an enum.
+
+    azure-mgmt-network 33 (the Docker image) returns enums: str(SecurityRuleAccess.ALLOW)
+    is 'SecurityRuleAccess.ALLOW', so `str(access).lower() != "allow"` skipped EVERY rule
+    — the precedence check saw no allow at all in the deployed product, while 30.x (the
+    host venv, the tests) returns plain strings (validation run, 2026-10-06)."""
+    return str(getattr(value, "value", value) or "").lower()
+
+
+def _rule_covers_port(rule, port: int) -> bool:
+    """Does this rule's destination port range include `port`? (`*`, `22`, `20-30`)"""
+    ranges = [getattr(rule, "destination_port_range", None)]
+    ranges += list(getattr(rule, "destination_port_ranges", None) or [])
+    for pr in ranges:
+        pr = str(pr or "").strip()
+        if not pr:
+            continue
+        if pr in ("*", "any", "Any"):
+            return True
+        try:
+            if "-" in pr:
+                lo, hi = (int(x) for x in pr.split("-", 1))
+                if lo <= port <= hi:
+                    return True
+            elif int(pr) == port:
+                return True
+        except ValueError:
+            return True       # unreadable range: assume it covers (fail closed)
+    return False
+
+
 def _shadowing_rules(
     rules, priority: int, *, inbound_src: list[str] | None, inbound_dst: list[str] | None,
-    outbound_src: list[str] | None, outbound_dst: list[str] | None,
+    outbound_src: list[str] | None, outbound_dst: list[str] | None, port: int | None = None,
 ) -> list[dict]:
     """Customer ALLOW rules evaluated before a Glorfindel deny placed at `priority`.
 
@@ -166,6 +199,13 @@ def _shadowing_rules(
 
     For each direction, a rule shadows the deny when its source AND destination cover
     the deny's source and destination (None = any).
+
+    `port` (a block whose threat port is known, e.g. 22 for an SSH brute force): every
+    shadowing allow is still reported, but `threat_port_open` says whether it lets the
+    THREAT through (an inbound allow covering that port) or only leaves other ports
+    reachable. Without it, a web server's `allow-https` declared every SSH block
+    bypassed — the alert operators learn to ignore. Isolation passes no port: any
+    allow before the deny defeats it.
     """
     found: list[dict] = []
     for r in rules or []:
@@ -173,9 +213,9 @@ def _shadowing_rules(
         prio = getattr(r, "priority", None)
         if name.startswith("glorfindel-") or not isinstance(prio, int) or prio >= priority:
             continue
-        if str(getattr(r, "access", "")).lower() != "allow":
+        if _enum_text(getattr(r, "access", "")) != "allow":
             continue
-        direction = str(getattr(r, "direction", "")).lower()
+        direction = _enum_text(getattr(r, "direction", ""))
         if direction == "inbound":
             src, dst = inbound_src, inbound_dst
         elif direction == "outbound":
@@ -187,8 +227,26 @@ def _shadowing_rules(
                 "rule": name, "priority": prio, "direction": getattr(r, "direction", ""),
                 "ports": getattr(r, "destination_port_range", None)
                 or ",".join(getattr(r, "destination_port_ranges", None) or []) or "*",
+                "threat_port_open": (
+                    port is None or (direction == "inbound" and _rule_covers_port(r, port))),
             })
     return found
+
+
+def _report_block_shadowing(out: dict, ip: str, shadowed: list[dict]) -> None:
+    """Add a block's precedence findings to its outcome: `bypass` when an allow lets
+    the threat through, `exposure` when other ports only stay reachable."""
+    if not shadowed:
+        return
+    out["shadowed_by"] = shadowed
+    bypass = [x for x in shadowed if x.get("threat_port_open", True)]
+    exposure = [x for x in shadowed if not x.get("threat_port_open", True)]
+    if bypass:
+        out["bypass"] = (f"Blocage de {ip} contourné : " + _describe_shadowing(bypass)
+                         + " passe avant le deny de Glorfindel.")
+    if exposure:
+        out["exposure"] = (f"Port de la menace bloqué ; {ip} atteint encore d'autres ports : "
+                           + _describe_shadowing(exposure) + ".")
 
 
 def _describe_shadowing(found: list[dict]) -> str:
@@ -265,7 +323,8 @@ class CloudConnector(ABC):
 
     @abstractmethod
     def block_suspicious_ip(
-        self, ip: str, resource_id: str, scope: str = "vm", replace: bool = False
+        self, ip: str, resource_id: str, scope: str = "vm", replace: bool = False,
+        threat_port: int | None = None,
     ) -> dict:
         """Add deny rule for this IP. scope="vm" (this VM only) | "subnet" (all VMs).
         replace=True (with scope="subnet"): promote — apply the subnet rule, then drop
@@ -475,49 +534,45 @@ class AzureConnector(CloudConnector):
                 "applied": [],   # deny rules confirmed by Azure
             }
             try:
-                existing = list(self._network.security_rules.list(nsg_rg, nsg_name))
-                used = {r.priority for r in existing} | assigned.get(nsg_key, set())
-                if _ip_scoped(t):
-                    ips = t["private_ips"]
+                # Never move a customer rule (a `terraform apply` puts it back, or fails
+                # on the priority we took): the deny takes the first free priority. An
+                # ALLOW evaluated before it would let its traffic through — then use the
+                # NIC's other NSG if it has one: traffic must pass both, a deny in either
+                # holds. Plan both before writing anything.
+                own = (in_name, out_name)
+                plan = self._plan_isolation(t, nsg_rg, nsg_name, _ip_scoped(t), assigned, own)
+                alt = t.get("alt_nsg")
+                if plan["shadowed"] and alt:
+                    alt_plan = self._plan_isolation(t, alt["nsg_rg"], alt["nsg_name"], True, assigned, own)
+                    if not alt_plan["shadowed"]:
+                        placement.update({
+                            "nsg_rg": alt["nsg_rg"], "nsg_name": alt["nsg_name"],
+                            "scope": "subnet", "shared_nsg": False,
+                            "moved_from": {"nsg": nsg_key, "because": plan["shadowed"]},
+                        })
+                        nsg_rg, nsg_name, nsg_key = alt["nsg_rg"], alt["nsg_name"], alt_plan["nsg_key"]
+                        plan = alt_plan
+                priority = plan["priority"]
+                placement["priority"] = priority
+                ips = t["private_ips"]
+                if plan["ip_scoped"]:
                     if not ips:
                         raise RuntimeError(
                             f"NIC {t['nic_short']} has no private IP — cannot scope isolation "
                             "on its shared NSG"
                         )
-                    priority = next(p for p in range(self.ISOLATION_PRIORITY, 4000) if p not in used)
-                    placement["priority"] = priority
                     self._put_deny_rule(nsg_rg, nsg_name, in_name, "Inbound", priority, src="*", dsts=ips)
                     placement["applied"].append(in_name)
                     self._put_deny_rule(nsg_rg, nsg_name, out_name, "Outbound", priority, srcs=ips, dst="*")
                     placement["applied"].append(out_name)
-                    # On a shared NSG nothing is bumped: an ALLOW evaluated before our
-                    # deny still lets its traffic through. Record it; verify escalates.
-                    placement["shadowed_by"] = _shadowing_rules(
-                        existing, priority, inbound_src=None, inbound_dst=ips,
-                        outbound_src=ips, outbound_dst=None)
                 else:
-                    # NSG governing this VM only — any/any is safe. Insist on priority 100
-                    # so the deny wins; shift any conflicting non-glorfindel rule off it.
-                    for r in existing:
-                        if r.priority == self.ISOLATION_PRIORITY and not r.name.startswith("glorfindel-"):
-                            new_prio = next(
-                                p for p in range(self.ISOLATION_PRIORITY + 100, 4000, 100)
-                                if p not in used
-                            )
-                            used.add(new_prio)
-                            r.priority = new_prio
-                            self._network.security_rules.begin_create_or_update(
-                                nsg_rg, nsg_name, r.name, r).result()
-                            # Recorded as soon as Azure confirms the move: if a later step
-                            # fails, release still knows to put the customer's rule back.
-                            placement["bumped"].append(
-                                {"name": r.name, "original_priority": self.ISOLATION_PRIORITY})
-                    priority = self.ISOLATION_PRIORITY
-                    placement["priority"] = priority
+                    # NSG governing this VM only: any/any affects nobody else.
                     self._put_deny_rule(nsg_rg, nsg_name, in_name, "Inbound", priority, src="*", dst="*")
                     placement["applied"].append(in_name)
                     self._put_deny_rule(nsg_rg, nsg_name, out_name, "Outbound", priority, src="*", dst="*")
                     placement["applied"].append(out_name)
+                # Still recorded when no alternative was clean: verify escalates on it.
+                placement["shadowed_by"] = plan["shadowed"]
             except Exception as exc:
                 partial = self._record_partial_isolation(
                     vm_name, resource_id, placements, placement, exc, total=len(targets))
@@ -548,7 +603,8 @@ class AzureConnector(CloudConnector):
             "scoped": True,
             "nics_covered": len(placements),
             "placements": [
-                {"nsg": f'{p["nsg_rg"]}/{p["nsg_name"]}', "scope": p["scope"]}
+                {"nsg": f'{p["nsg_rg"]}/{p["nsg_name"]}', "scope": p["scope"],
+                 **({"moved_from": p["moved_from"]["nsg"]} if p.get("moved_from") else {})}
                 for p in placements
             ],
             # Back-compat summary (first placement)
@@ -700,6 +756,34 @@ class AzureConnector(CloudConnector):
                 left.append({**info, "error": _first_line(e)[:_ERR_MAX]})
         return left
 
+    def _plan_isolation(self, t: dict, nsg_rg: str, nsg_name: str, ip_scoped: bool,
+                        assigned: dict, own: tuple = ()) -> dict:
+        """Priority an isolation deny would take on this NSG, and the customer ALLOW
+        rules that would be evaluated before it (nothing written). `own`: our rule
+        names — a re-application keeps their priority instead of moving them."""
+        nsg_key = f"{nsg_rg}/{nsg_name}"
+        existing = list(self._network.security_rules.list(nsg_rg, nsg_name))
+        used = ({r.priority for r in existing if getattr(r, "name", "") not in own}
+                | assigned.get(nsg_key, set()))
+        priority = next(p for p in range(self.ISOLATION_PRIORITY, 4000) if p not in used)
+        ips = t["private_ips"] or None
+        shadowed = _shadowing_rules(existing, priority, inbound_src=None, inbound_dst=ips,
+                                    outbound_src=ips, outbound_dst=None)
+        return {"nsg_key": nsg_key, "priority": priority, "ip_scoped": ip_scoped,
+                "shadowed": shadowed}
+
+    @staticmethod
+    def _nic_nsg_views(t: dict) -> list[dict]:
+        """The NIC as seen from each NSG that governs it: its own (or its subnet's when it
+        has none), plus its subnet's NSG when it has both. An isolation or a block may
+        sit on either — the second one when the first had an ALLOW before our deny."""
+        views = [t]
+        alt = t.get("alt_nsg")
+        if alt:
+            views.append({**t, "nsg_rg": alt["nsg_rg"], "nsg_name": alt["nsg_name"],
+                          "scope": "subnet", "shared_nsg": False, "ip_scoped": True})
+        return views
+
     def _isolation_names_for_target(self, vm_name: str, t: dict) -> list[str]:
         """Every rule name an isolation of this VM can have left on this NIC's NSG.
 
@@ -759,11 +843,12 @@ class AzureConnector(CloudConnector):
                     # rule is a no-op) and only the bumps still to put back.
                     remaining.append({**p, "bumped": left})
         else:
-            for t in self._get_vm_nic_targets(rg, vm_name):
-                for name in self._isolation_names_for_target(vm_name, t):
-                    err = self._delete_rule(t["nsg_rg"], t["nsg_name"], name)
-                    if err:
-                        failed.append(err)
+            for t0 in self._get_vm_nic_targets(rg, vm_name):
+                for t in self._nic_nsg_views(t0):
+                    for name in self._isolation_names_for_target(vm_name, t):
+                        err = self._delete_rule(t["nsg_rg"], t["nsg_name"], name)
+                        if err:
+                            failed.append(err)
             # Legacy single-NSG state: recorded rule names + bumps live on the recorded NSG.
             if state.get("nsg_name"):
                 l_rg, l_name = state.get("nsg_rg", rg), state["nsg_name"]
@@ -790,7 +875,8 @@ class AzureConnector(CloudConnector):
         return {"status": "released", "resource_id": resource_id}
 
     def block_suspicious_ip(
-        self, ip: str, resource_id: str, scope: str = "vm", replace: bool = False
+        self, ip: str, resource_id: str, scope: str = "vm", replace: bool = False,
+        threat_port: int | None = None,
     ) -> dict:
         """Block a suspicious IP.
 
@@ -803,6 +889,9 @@ class AzureConnector(CloudConnector):
         replace=True (promote VM→subnet): apply the subnet rule FIRST, then drop the
           now-redundant VM-scoped rule for this IP. Create-then-delete → no protection
           gap (if the subnet rule fails to apply, the VM rule is left intact).
+        threat_port: the port the attack targets, when known (22 for SSH brute force).
+          An ALLOW before the deny only defeats the block if it opens that port; other
+          ports left reachable are reported as exposure, not as a bypass.
         """
         if self.dry_run:
             return {"status": "dry_run", "action": "block_ip", "ip": ip, "scope": scope}
@@ -814,10 +903,25 @@ class AzureConnector(CloudConnector):
         rg, vm_name = _parse_vm_resource_id(resource_id)
 
         if scope == "subnet":
-            return self._block_ip_subnet(ip, resource_id, rg, vm_name, replace)
-        return self._block_ip_vm(ip, resource_id, rg, vm_name)
+            return self._block_ip_subnet(ip, resource_id, rg, vm_name, replace, threat_port)
+        return self._block_ip_vm(ip, resource_id, rg, vm_name, threat_port)
 
-    def _block_ip_vm(self, ip: str, resource_id: str, rg: str, vm_name: str) -> dict:
+    def _plan_block(self, t: dict, ip: str, nsg_rg: str, nsg_name: str, ip_scoped: bool,
+                    assigned: dict, threat_port: int | None) -> dict:
+        """Priority a block deny would take on this NSG, and the allows before it."""
+        nsg_key = f"{nsg_rg}/{nsg_name}"
+        existing = list(self._network.security_rules.list(nsg_rg, nsg_name))
+        used = {r.priority for r in existing} | assigned.get(nsg_key, set())
+        priority = next(p for p in range(200, 4000, 10) if p not in used)
+        vm_ips = t["private_ips"] or None
+        shadowed = _shadowing_rules(existing, priority, inbound_src=[ip], inbound_dst=vm_ips,
+                                    outbound_src=vm_ips, outbound_dst=[ip], port=threat_port)
+        return {"nsg_key": nsg_key, "priority": priority, "ip_scoped": ip_scoped,
+                "shadowed": shadowed,
+                "bypassed": [x for x in shadowed if x.get("threat_port_open", True)]}
+
+    def _block_ip_vm(self, ip: str, resource_id: str, rg: str, vm_name: str,
+                     threat_port: int | None = None) -> dict:
         """VM-scoped block (autonomous default) — deny the attacker IP on EVERY NIC so a
         secondary NIC doesn't leave the attacker a path. One rule pair per NIC:
         any↔attacker on an NSG that governs this VM alone, attacker↔(all the NIC's IPs)
@@ -841,10 +945,24 @@ class AzureConnector(CloudConnector):
             }
             applied: list[str] = []
             try:
-                existing = list(self._network.security_rules.list(nsg_rg, nsg_name))
-                used = {r.priority for r in existing} | assigned.get(nsg_key, set())
-                priority = next(p for p in range(200, 4000, 10) if p not in used)
-                if _ip_scoped(t):
+                # Same placement rule as the isolation: no customer rule moved; when an
+                # allow before the deny lets the THREAT through on this NSG, the NIC's
+                # other NSG (its subnet's) holds the deny instead.
+                plan = self._plan_block(t, ip, nsg_rg, nsg_name, _ip_scoped(t), assigned, threat_port)
+                alt = t.get("alt_nsg")
+                if plan["bypassed"] and alt:
+                    alt_plan = self._plan_block(t, ip, alt["nsg_rg"], alt["nsg_name"], True,
+                                                assigned, threat_port)
+                    if not alt_plan["bypassed"]:
+                        placement.update({
+                            "nsg_rg": alt["nsg_rg"], "nsg_name": alt["nsg_name"],
+                            "scope": "subnet", "shared_nsg": False,
+                            "moved_from": {"nsg": nsg_key, "because": plan["bypassed"]},
+                        })
+                        nsg_rg, nsg_name, nsg_key = alt["nsg_rg"], alt["nsg_name"], alt_plan["nsg_key"]
+                        plan = alt_plan
+                priority = plan["priority"]
+                if plan["ip_scoped"]:
                     ips = t["private_ips"]
                     if not ips:
                         # Same guard as isolate_vm: an empty destination list would make
@@ -862,10 +980,7 @@ class AzureConnector(CloudConnector):
                     applied.append(in_name)
                     self._put_deny_rule(nsg_rg, nsg_name, out_name, "Outbound", priority, src="*", dst=ip)
                     applied.append(out_name)
-                vm_ips = t["private_ips"] or None
-                placement["shadowed_by"] = _shadowing_rules(
-                    existing, priority, inbound_src=[ip], inbound_dst=vm_ips,
-                    outbound_src=vm_ips, outbound_dst=[ip])
+                placement["shadowed_by"] = plan["shadowed"]
             except Exception as exc:
                 kept = placements + ([placement] if applied else [])
                 if not kept:
@@ -875,6 +990,7 @@ class AzureConnector(CloudConnector):
                     vm_name, ip, resource_id,
                     nsg=f'{first["nsg_rg"]}/{first["nsg_name"]}', nsg_scope=first["scope"],
                     rule=first["rule"], scoped=True, placements=kept, partial=True,
+                    threat_port=threat_port,
                 )
                 failed_nic = t["nic_short"]
                 raise PartialActionError(
@@ -891,7 +1007,7 @@ class AzureConnector(CloudConnector):
         _save_block_state(
             vm_name, ip, resource_id,
             nsg=f'{first["nsg_rg"]}/{first["nsg_name"]}', nsg_scope=first["scope"],
-            rule=first["rule"], scoped=True, placements=placements,
+            rule=first["rule"], scoped=True, placements=placements, threat_port=threat_port,
         )
         out = {
             "status": "blocked", "ip": ip, "scoped": True, "resource_id": resource_id,
@@ -899,7 +1015,8 @@ class AzureConnector(CloudConnector):
             "nsg": f'{first["nsg_rg"]}/{first["nsg_name"]}',
             "nsg_scope": first["scope"], "rule": first["rule"],
             "placements": [
-                {"nsg": f'{p["nsg_rg"]}/{p["nsg_name"]}', "scope": p["scope"]}
+                {"nsg": f'{p["nsg_rg"]}/{p["nsg_name"]}', "scope": p["scope"],
+                 **({"moved_from": p["moved_from"]["nsg"]} if p.get("moved_from") else {})}
                 for p in placements
             ],
         }
@@ -908,17 +1025,21 @@ class AzureConnector(CloudConnector):
                 "shared NSG involved (subnet or several NICs) — block scoped to this VM's "
                 "private IP(s) (attacker still reaches other VMs until they detect it)."
             )
-        shadowed = [s for p in placements for s in p.get("shadowed_by", [])]
-        if shadowed:
-            out["shadowed_by"] = shadowed
-            out["bypass"] = (
-                f"Blocage de {ip} contourné : " + _describe_shadowing(shadowed)
-                + " passe avant le deny de Glorfindel."
+        moved = [p for p in placements if p.get("moved_from")]
+        if moved:
+            out["note"] = (
+                "deny placed on the subnet NSG, scoped to this VM's IP(s): on "
+                + ", ".join(p["moved_from"]["nsg"] for p in moved)
+                + " an allow is evaluated before it ("
+                + _describe_shadowing([s for p in moved for s in p["moved_from"]["because"]])
+                + ")."
             )
+        _report_block_shadowing(out, ip, [s for p in placements for s in p.get("shadowed_by", [])])
         return out
 
     def _block_ip_subnet(
-        self, ip: str, resource_id: str, rg: str, vm_name: str, replace: bool
+        self, ip: str, resource_id: str, rg: str, vm_name: str, replace: bool,
+        threat_port: int | None = None,
     ) -> dict:
         """Perimeter block — one any rule on the SUBNET NSG (covers all VMs on the
         subnet + future). replace=True promotes a prior VM-scoped block: create the
@@ -961,11 +1082,12 @@ class AzureConnector(CloudConnector):
         _save_block_state(
             vm_name, ip, resource_id,
             nsg=f"{nsg_rg}/{nsg_name}", nsg_scope="subnet", rule=rule_name, scoped=False,
+            threat_port=threat_port,
         )
         # Same precedence report as the VM-scoped block (verify fails on it as well).
         shadowed = _shadowing_rules(
             existing, priority, inbound_src=[ip], inbound_dst=None,
-            outbound_src=None, outbound_dst=[ip])
+            outbound_src=None, outbound_dst=[ip], port=threat_port)
         out = {
             "status": "blocked", "ip": ip, "nsg": f"{nsg_rg}/{nsg_name}",
             "nsg_scope": "subnet", "scoped": False, "rule": rule_name,
@@ -977,12 +1099,7 @@ class AzureConnector(CloudConnector):
         }
         if promoted_from:
             out["promoted_from"] = promoted_from
-        if shadowed:
-            out["shadowed_by"] = shadowed
-            out["bypass"] = (
-                f"Blocage de {ip} contourné : " + _describe_shadowing(shadowed)
-                + " passe avant le deny de Glorfindel."
-            )
+        _report_block_shadowing(out, ip, shadowed)
         return out
 
     def _block_rule_prefix(self, ip: str) -> str:
@@ -1137,33 +1254,37 @@ class AzureConnector(CloudConnector):
         # Isolation holds only if EVERY NIC carries a deny pair — a single uncovered NIC
         # is the multi-NIC gap (looks ISOLATED but traffic still flows on the other NIC).
         uncovered: list[str] = []
-        present_in: dict[str, str] = {}      # nic_id → name of the inbound deny found
-        for t in targets:
-            base = self._placement_rule_base("glorfindel-iso", vm_name, t["nic_short"], t["nic_id"])
-            if self._rules_present(t["nsg_rg"], t["nsg_name"], [base, f"{base}-out"]):
-                present_in[t["nic_id"]] = base
-                continue
-            # Legacy fallback: a VM isolated before the multi-NIC upgrade used the old
-            # fixed/VM-suffixed names on the primary NIC's NSG.
-            legacy_in, legacy_out = self._isolation_rule_names(vm_name, t["scope"])
-            if self._rules_present(t["nsg_rg"], t["nsg_name"], [legacy_in, legacy_out]):
-                present_in[t["nic_id"]] = legacy_in
-                continue
-            uncovered.append(t["nic_short"])
+        found: dict[str, tuple] = {}     # nic_id → (nsg_rg, nsg_name, inbound deny name)
+        for t0 in targets:
+            # The deny may sit on the NIC's own NSG or on its subnet's (placed there when
+            # an ALLOW preceded it on the first): either one holds.
+            for t in self._nic_nsg_views(t0):
+                base = self._placement_rule_base("glorfindel-iso", vm_name, t["nic_short"], t["nic_id"])
+                if self._rules_present(t["nsg_rg"], t["nsg_name"], [base, f"{base}-out"]):
+                    found[t0["nic_id"]] = (t["nsg_rg"], t["nsg_name"], base)
+                    break
+                # Legacy fallback: a VM isolated before the multi-NIC upgrade used the
+                # old fixed/VM-suffixed names on the primary NIC's NSG.
+                legacy_in, legacy_out = self._isolation_rule_names(vm_name, t["scope"])
+                if self._rules_present(t["nsg_rg"], t["nsg_name"], [legacy_in, legacy_out]):
+                    found[t0["nic_id"]] = (t["nsg_rg"], t["nsg_name"], legacy_in)
+                    break
+            else:
+                uncovered.append(t0["nic_short"])
 
         if uncovered:
             return {"verified": False, "method": "nsg_check", "uncovered_nics": uncovered}
 
-        # Present is not effective. On a shared NSG the deny sits at the first free
-        # priority, and an ALLOW evaluated before it still passes its traffic (the bench's
-        # allow-ssh at 100 kept SSH open on every "isolated" VM). A dedicated NSG gets
-        # priority 100, which nothing can precede. The check uses the name actually
-        # found: a legacy-named isolation used to pass it by finding nothing to compare.
+        # Present is not effective: an ALLOW evaluated before the deny still passes its
+        # traffic (the bench's allow-ssh at 100 kept SSH open on every "isolated" VM).
+        # Every NSG is checked now — a deny no longer forces priority 100 by moving the
+        # customer's rules. The check uses the name actually found (a legacy-named
+        # isolation used to pass it by finding nothing to compare).
         shadowed, unknown = self._precedence([
-            (t["nsg_rg"], t["nsg_name"], present_in[t["nic_id"]],
-             {"inbound_src": None, "inbound_dst": t["private_ips"],
-              "outbound_src": t["private_ips"], "outbound_dst": None})
-            for t in targets if _ip_scoped(t)
+            (*found[t["nic_id"]],
+             {"inbound_src": None, "inbound_dst": t["private_ips"] or None,
+              "outbound_src": t["private_ips"] or None, "outbound_dst": None})
+            for t in targets
         ])
         if shadowed:
             return {
@@ -1242,7 +1363,7 @@ class AzureConnector(CloudConnector):
         rg, vm_name = _parse_vm_resource_id(resource_id)
         still: list[str] = []
         unknown: list[str] = []
-        for t in self._get_vm_nic_targets(rg, vm_name):
+        for t in (v for t0 in self._get_vm_nic_targets(rg, vm_name) for v in self._nic_nsg_views(t0)):
             for name in self._isolation_names_for_target(vm_name, t):
                 state = self._rule_state(t["nsg_rg"], t["nsg_name"], name)
                 if state == "present":
@@ -1546,7 +1667,7 @@ class AzureConnector(CloudConnector):
         kept: list[str] = []
         unreadable: list[str] = []
         seen: set = set()
-        for t in self._get_vm_nic_targets(rg, vm_name):
+        for t in (v for t0 in self._get_vm_nic_targets(rg, vm_name) for v in self._nic_nsg_views(t0)):
             nsg_key = (t["nsg_rg"], t["nsg_name"])
             h = hashlib.sha1(t["nic_id"].encode()).hexdigest()[:8]
             owned_rest = {vm_name, f"{vm_name}-{t['nic_short']}", f"{vm_name[:40]}-{h}"}
@@ -1607,18 +1728,21 @@ class AzureConnector(CloudConnector):
             if missing:
                 return {"verified": False, "method": "nsg_check", "missing_rules": missing,
                         "error": f"rules missing: {', '.join(missing)}"}
+            port = entry.get("threat_port")
             shadowed, unknown = self._precedence([
                 (p["nsg_rg"], p["nsg_name"], p["rule"],
                  {"inbound_src": [ip], "inbound_dst": p.get("ips") or None,
-                  "outbound_src": p.get("ips") or None, "outbound_dst": [ip]})
+                  "outbound_src": p.get("ips") or None, "outbound_dst": [ip], "port": port})
                 for p in entry["placements"]
             ])
-            if shadowed:
+            if self._threat_open(shadowed):
                 return self._block_bypassed(ip, shadowed)
             if unknown:
                 return self._precedence_unknown(unknown, nics_covered=len(entry["placements"]))
+            # Threat port blocked; other ports the attacker still reaches are reported.
             return {"verified": True, "method": "nsg_check",
-                    "nics_covered": len(entry["placements"])}
+                    "nics_covered": len(entry["placements"]),
+                    **({"exposure": shadowed} if shadowed else {})}
 
         # Perimeter (subnet) block, or legacy single-rule entry: check the recorded pair.
         if entry and entry.get("nsg") and entry.get("rule"):
@@ -1629,14 +1753,15 @@ class AzureConnector(CloudConnector):
                 # A perimeter block has no destination scope: any VM behind the NSG.
                 shadowed, unknown = self._precedence([
                     (nsg_rg, nsg_name, entry["rule"],
-                     {"inbound_src": [ip], "inbound_dst": None,
-                      "outbound_src": None, "outbound_dst": [ip]})
+                     {"inbound_src": [ip], "inbound_dst": None, "outbound_src": None,
+                      "outbound_dst": [ip], "port": entry.get("threat_port")})
                 ])
-                if shadowed:
+                if self._threat_open(shadowed):
                     return self._block_bypassed(ip, shadowed)
                 if unknown:
                     return self._precedence_unknown(unknown, rule=entry["rule"])
-                return {"verified": True, "method": "nsg_check", "rule": entry["rule"]}
+                return {"verified": True, "method": "nsg_check", "rule": entry["rule"],
+                        **({"exposure": shadowed} if shadowed else {})}
             return {"verified": False, "method": "nsg_check", "missing_rules": missing,
                     "error": f"rules missing: {', '.join(missing)}"}
 
@@ -1644,16 +1769,20 @@ class AzureConnector(CloudConnector):
         prefix = self._block_rule_prefix(ip)
         targets = self._get_vm_nic_targets(rg, vm_name)
         uncovered = []
-        for t in targets:
-            base = self._placement_rule_base(prefix, vm_name, t["nic_short"], t["nic_id"])
-            if not self._rules_present(t["nsg_rg"], t["nsg_name"], [base, f"{base}-out"]):
-                uncovered.append(t["nic_short"])
+        found: dict[str, tuple] = {}
+        for t0 in targets:
+            base = self._placement_rule_base(prefix, vm_name, t0["nic_short"], t0["nic_id"])
+            for t in self._nic_nsg_views(t0):
+                if self._rules_present(t["nsg_rg"], t["nsg_name"], [base, f"{base}-out"]):
+                    found[t0["nic_id"]] = (t["nsg_rg"], t["nsg_name"], base)
+                    break
+            else:
+                uncovered.append(t0["nic_short"])
         if uncovered:
             return {"verified": False, "method": "nsg_check", "uncovered_nics": uncovered,
                     "error": f"NIC(s) not covered: {', '.join(uncovered)}"}
         shadowed, unknown = self._precedence([
-            (t["nsg_rg"], t["nsg_name"],
-             self._placement_rule_base(prefix, vm_name, t["nic_short"], t["nic_id"]),
+            (*found[t["nic_id"]],
              {"inbound_src": [ip], "inbound_dst": t["private_ips"] or None,
               "outbound_src": t["private_ips"] or None, "outbound_dst": [ip]})
             for t in targets
@@ -1665,10 +1794,17 @@ class AzureConnector(CloudConnector):
         return {"verified": True, "method": "nsg_check", "nics_covered": len(targets)}
 
     @staticmethod
+    def _threat_open(shadowed: list[dict]) -> bool:
+        """An allow before the deny lets the threat itself through (not just another
+        port). Entries without the flag (no known threat port) count as open."""
+        return any(x.get("threat_port_open", True) for x in shadowed)
+
+    @staticmethod
     def _block_bypassed(ip: str, shadowed: list[dict]) -> dict:
+        bypass = [x for x in shadowed if x.get("threat_port_open", True)]
         return {
             "verified": False, "method": "nsg_check", "shadowed_by": shadowed,
-            "error": f"blocage de {ip} contourné : " + _describe_shadowing(shadowed)
+            "error": f"blocage de {ip} contourné : " + _describe_shadowing(bypass)
                      + " passe avant le deny de Glorfindel",
         }
 
@@ -2045,6 +2181,14 @@ class AzureConnector(CloudConnector):
             nic_id = ref.id
             nsg_rg, nsg_name, scope = self._get_nic_nsg(nic_id)
             shared = scope == "nic" and self._nsg_is_shared(nsg_rg, nsg_name)
+            alt_nsg = None
+            if scope == "nic":
+                try:
+                    s_rg, s_name = self._get_subnet_nsg(nic_id)
+                    if (s_rg, s_name) != (nsg_rg, nsg_name):
+                        alt_nsg = {"nsg_rg": s_rg, "nsg_name": s_name}
+                except Exception:
+                    alt_nsg = None      # subnet without NSG: nowhere else to place
             targets.append({
                 "nic_id": nic_id,
                 "nic_short": nic_id.rstrip("/").split("/")[-1],
@@ -2056,6 +2200,9 @@ class AzureConnector(CloudConnector):
                 "shared_nsg": shared,
                 "ip_scoped": scope == "subnet" or shared,
                 "private_ips": self._get_nic_private_ips(nic_id),
+                # The subnet's NSG when the NIC also has its own: the other place a deny
+                # holds (traffic must pass both).
+                "alt_nsg": alt_nsg,
             })
         return targets
 
@@ -2246,7 +2393,7 @@ def _merge_placements(old: list[dict], new: list[dict]) -> list[dict]:
 def _save_block_state(
     vm_name: str, ip: str, resource_id: str,
     nsg: str = "", nsg_scope: str = "", rule: str = "", scoped: bool = True,
-    placements: list | None = None, partial: bool = False,
+    placements: list | None = None, partial: bool = False, threat_port: int | None = None,
 ) -> None:
     from datetime import datetime, timezone
     f = _BLOCK_STATE_DIR / f"{vm_name}.json"
@@ -2265,6 +2412,7 @@ def _save_block_state(
             "nsg": nsg, "nsg_scope": nsg_scope, "rule": rule, "scoped": scoped,
             "placements": placements or [],
             "partial": partial,
+            "threat_port": threat_port,
         })
     else:
         # The IP is already recorded (a retry after a partial block, or a block of
@@ -2275,6 +2423,8 @@ def _save_block_state(
             prev.update(nsg=nsg, nsg_scope=nsg_scope, rule=rule, scoped=False)
         prev["placements"] = _merge_placements(prev.get("placements") or [], placements or [])
         prev["partial"] = partial
+        if threat_port is not None:
+            prev["threat_port"] = threat_port
     _atomic_write_text(f, json.dumps(entries))
 
 

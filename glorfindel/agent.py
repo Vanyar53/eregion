@@ -571,10 +571,10 @@ def investigate(state: GlorfindelState) -> GlorfindelState:
 # run THESE autonomously on an uncharacterized signal.
 _DISRUPTIVE_AUTONOMOUS = {"isolate_vm", "block_suspicious_ip", "revoke_temp_access"}
 
-# Autonomous actions execute_action can actually run. `revoke_temp_access` is announced
-# to the model (AUTONOMOUS_ACTIONS, so in the prompt) but has no implementation: it used
-# to end as a no_op recorded as executed, then notified. Removing it from the prompt is
-# a prompt edit (end-to-end run required) — until then the executable guard holds it.
+# Autonomous actions execute_action can actually run. An action announced in
+# AUTONOMOUS_ACTIONS (so in the prompt) without an implementation used to end as a no_op
+# recorded as executed, then notified (`revoke_temp_access`, removed from the list on
+# 2026-10-06). The guard keeps that from happening again to the next one.
 _EXECUTABLE_ACTIONS = {"isolate_vm", "release_isolation", "block_suspicious_ip", "snapshot"}
 
 # Escalation type for each deterministic gate (escalate_to_human). Without it, a
@@ -940,6 +940,30 @@ def decide(
     }
 
 
+def _threat_port(signal: dict) -> int | None:
+    """The port the attack targets, when the detection says so — read from the
+    detection, never added to the signal (the LLM sees the signal as is).
+
+    SSH (port 22): the RulePoller's rule name, the matched row, or the query of the
+    rule covering this TTP (`sshd`, `Failed password`). None when unknown: every allow
+    before a block's deny then counts as a bypass, as before."""
+    ctx = signal.get("context") or {}
+    raw = signal.get("raw_signal") or {}
+    if "ssh" in str(ctx.get("rule_name", "")).lower():
+        return 22
+    rows = [raw.get("detected_data") or {}, raw.get("first_result_row") or {}]
+    if any("ssh" in str(v).lower() for r in rows for v in r.values()):
+        return 22
+    try:
+        rule = _find_rule_for_ttp(signal.get("ttp", ""), glorfindel_cfg=load_glorfindel_config())
+    except Exception:
+        rule = None
+    query = (getattr(rule, "query", "") or "").lower()
+    if "sshd" in query or "failed password" in query:
+        return 22
+    return None
+
+
 def _extract_suspicious_ip(signal: dict) -> str:
     """Best-effort extraction of the suspicious IP for block_suspicious_ip.
 
@@ -993,7 +1017,9 @@ def execute_action(
             outcome = connector.release_isolation(resource_id)
         elif action == "block_suspicious_ip":
             ip = _extract_suspicious_ip(state["signal"])
-            outcome = connector.block_suspicious_ip(ip, resource_id)
+            port = _threat_port(state["signal"])
+            outcome = (connector.block_suspicious_ip(ip, resource_id, threat_port=port)
+                       if port else connector.block_suspicious_ip(ip, resource_id))
         elif action == "snapshot":
             # Always fire-and-forget. The watch worker is serialized per VM, so a blocking
             # snapshot holds every later signal for that VM until the backup ends: 4h25 in
@@ -1126,6 +1152,9 @@ def escalate_to_human(state: GlorfindelState) -> GlorfindelState:
         ip = _extract_suspicious_ip(signal)
         if ip:
             action_params = {"ip": ip}
+            port = _threat_port(signal)
+            if port:
+                action_params["port"] = port
 
     if not state.get("dry_run", False):
         from glorfindel import escalations

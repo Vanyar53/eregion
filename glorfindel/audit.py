@@ -114,6 +114,7 @@ def run(
         (_check_nsg, (resource_id, connector)),
         (_check_backup, (resource_id, connector, vault, vault_rg)),
         (_check_compute, (resource_id, connector)),
+        (_check_permissions, (resource_id, connector)),
     ]
     with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
         futures = [pool.submit(fn, *args) for fn, args in jobs]
@@ -128,6 +129,37 @@ def run(
 
 
 # ── Per-action checks ──────────────────────────────────────────────────────────
+
+def _check_permissions(resource_id: str, connector) -> AuditCheck | list:
+    """Rights the isolation needs (JIT NSG swap, session drain, fallback rules), read
+    from Azure's permissions API — nothing written. Read-only credentials → skipped
+    (the observe-only regime is a choice, not a gap)."""
+    if getattr(connector, "read_only", False) is True:
+        return []
+    res = connector.check_permissions(resource_id)
+    if not isinstance(res, dict):
+        return []
+    name, action = "Isolation permissions", "isolate_vm, block_suspicious_ip"
+    if not res.get("ok"):
+        return AuditCheck(action, name, "warn",
+                          f"Droits non vérifiables : {res.get('error', '?')}",
+                          fix="Donner au moins Reader sur le resource group pour lire les permissions.")
+    missing = res.get("missing") or []
+    if not missing:
+        return AuditCheck(action, name, "ok",
+                          "Échange du NSG, coupure des sessions et règles de repli : droits présents.")
+    by_scope: dict[str, list[str]] = {}
+    for m in missing:
+        by_scope.setdefault(m["scope"], []).append(m["action"])
+    detail = " ; ".join(f"{scope} : {', '.join(acts)}" for scope, acts in by_scope.items())
+    return AuditCheck(
+        action, name, "fail",
+        f"Droits manquants — {detail}",
+        fix=("Rôles intégrés suffisants : Network Contributor + Virtual Machine Contributor "
+             "sur le resource group (ou un rôle personnalisé avec ces seules actions)."),
+        data={"missing_permissions": missing},
+    )
+
 
 def _check_precedence(issues: list[dict]) -> AuditCheck | None:
     """ALLOW rules evaluated before Glorfindel's denies → isolate/block would be

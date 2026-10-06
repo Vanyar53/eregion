@@ -699,6 +699,61 @@ class AzureConnector(CloudConnector):
         "and not dst 168.63.129.16 and not dst 169.254.169.254 )"
     )
 
+    # What the JIT isolation, the drain and the fallback rules need — checked without
+    # writing anything, through Azure's permissions API (L6 readiness).
+    REQUIRED_ACTIONS = (
+        ("isolate_vm", "Microsoft.Network/networkInterfaces/write"),
+        ("isolate_vm", "Microsoft.Network/networkSecurityGroups/write"),
+        ("isolate_vm", "Microsoft.Network/networkSecurityGroups/join/action"),
+        ("isolate_vm", "Microsoft.Compute/virtualMachines/runCommand/action"),
+        ("block_suspicious_ip", "Microsoft.Network/networkSecurityGroups/securityRules/write"),
+        ("block_suspicious_ip", "Microsoft.Network/networkSecurityGroups/securityRules/delete"),
+    )
+
+    def check_permissions(self, resource_id: str) -> dict:
+        """Which of REQUIRED_ACTIONS Glorfindel's identity holds on the VM's resource
+        group (and on the quarantine NSG's, when configured elsewhere) — read from
+        `Microsoft.Authorization/permissions`, nothing written. Deny assignments are not
+        evaluated (the API doesn't return them)."""
+        if self.dry_run:
+            return {"ok": True, "missing": [], "dry_run": True}
+        import fnmatch
+        import requests
+        try:
+            self._ensure_clients()
+            rg, _ = _parse_vm_resource_id(resource_id)
+            _, q_rg = self._quarantine_settings()
+            scopes = {rg.lower(): rg}
+            if q_rg:
+                scopes.setdefault(q_rg.lower(), q_rg)
+            token = self._credential.get_token("https://management.azure.com/.default").token
+            missing: list[dict] = []
+            for scope_rg in scopes.values():
+                url = (f"https://management.azure.com/subscriptions/{self._subscription_id}"
+                       f"/resourceGroups/{scope_rg}/providers/Microsoft.Authorization/permissions")
+                r = requests.get(url, headers={"Authorization": f"Bearer {token}"},
+                                 params={"api-version": "2022-04-01"}, timeout=20)
+                if not r.ok:
+                    return {"ok": False, "error": f"{scope_rg}: HTTP {r.status_code} {r.text[:200]}"}
+                perms = r.json().get("value") or []
+
+                def allowed(action: str) -> bool:
+                    a = action.lower()
+                    return any(
+                        any(fnmatch.fnmatch(a, x.lower()) for x in (p.get("actions") or []))
+                        and not any(fnmatch.fnmatch(a, x.lower()) for x in (p.get("notActions") or []))
+                        for p in perms
+                    )
+                for used_by, action in self.REQUIRED_ACTIONS:
+                    # The quarantine RG only needs the NSG write/join; the VM's RG needs all.
+                    if scope_rg.lower() != rg.lower() and "networkSecurityGroups" not in action:
+                        continue
+                    if not allowed(action):
+                        missing.append({"scope": scope_rg, "action": action, "used_by": used_by})
+            return {"ok": True, "missing": missing, "scopes": list(scopes.values())}
+        except Exception as e:
+            return {"ok": False, "error": _first_line(e)[:_ERR_MAX]}
+
     def recent_changes(self, resource_uri: str, minutes: int = 60) -> list[str]:
         """Who wrote this resource lately, from the Azure activity log (best effort, a
         few minutes behind). Explains an alert — never used to detect: Azure itself is

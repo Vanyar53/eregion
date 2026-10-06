@@ -662,7 +662,19 @@ function escTitle(e) {
 // A real blast-radius ⚠ is reserved for when the backend flags a rule as unscoped.
 function _scopeNote(s) {
   if (!s || !s.nsg_scope) return '';
-  return _scopeChip(s) + _healthNote(s);
+  return _scopeChip(s) + _healthNote(s) + _freshNote(s);
+}
+
+// When Glorfindel last re-read Azure and found the isolation / block in place (the watch
+// re-checks every minute). Older than 5 min = its knowledge of the real state is stale.
+function _freshNote(s) {
+  if (!s || !s.verified_at) return '';
+  const stale = (Date.now() - new Date(s.verified_at).getTime()) > 5 * 60 * 1000;
+  const color = stale ? 'var(--orange)' : 'var(--dim)';
+  const title = stale
+    ? 'Not re-verified for more than 5 minutes — is the watch running? The real state on Azure may differ.'
+    : 'Last time Glorfindel re-read Azure and found it in place (checked every minute).';
+  return ` <span style="font-size:8px;color:${color};flex-shrink:0" title="${title}">✓ ${age(s.verified_at)}</span>`;
 }
 
 function _scopeChip(s) {

@@ -2411,3 +2411,42 @@ def test_release_without_state_reads_the_original_from_azure(monkeypatch):
     nic.network_security_group = type("R", (), {"id": _Q_ID})()
     connector.release_isolation(_RID)
     assert net.network_interfaces.begin_create_or_update.call_args.args[2].network_security_group.id == _CLIENT_NSG_ID
+
+
+# ── L6 : droits de l'isolation, lus sans rien écrire ─────────────────────────────────
+
+def test_check_permissions_lists_what_is_missing(monkeypatch):
+    """Reader + a role whose notActions exclude NIC writes: the JIT swap can't run."""
+    import sys
+    import types
+    from glorfindel.actions import AzureConnector
+    perms = {"value": [
+        {"actions": ["*/read"], "notActions": []},
+        {"actions": ["Microsoft.Network/*", "Microsoft.Compute/virtualMachines/*"],
+         "notActions": ["Microsoft.Network/networkInterfaces/write"]},
+    ]}
+    fake = types.ModuleType("requests")
+    fake.get = lambda *a, **k: types.SimpleNamespace(ok=True, json=lambda: perms, status_code=200, text="")
+    monkeypatch.setitem(sys.modules, "requests", fake)
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    monkeypatch.setattr(connector, "_quarantine_settings", lambda: (True, ""))
+    connector._credential = MagicMock()
+    connector._subscription_id = "s"
+    res = connector.check_permissions(_RID)
+    assert [m["action"] for m in res["missing"]] == ["Microsoft.Network/networkInterfaces/write"]
+
+
+def test_audit_reports_missing_isolation_permissions():
+    from glorfindel import audit
+    connector = MagicMock()
+    connector.dry_run = False
+    connector.read_only = False
+    connector.check_nsg_access.return_value = {"ok": True, "nsg": "rg/nsg", "rules": 1, "nsgs": [], "precedence": []}
+    connector.check_backup_points.return_value = {"ok": True, "points": 3, "latest_age_h": 1}
+    connector.check_compute_access.return_value = {"ok": True, "vm": "vm", "disks": []}
+    connector.check_permissions.return_value = {"ok": True, "missing": [
+        {"scope": "rg", "action": "Microsoft.Compute/virtualMachines/runCommand/action", "used_by": "isolate_vm"}]}
+    result = audit.run(_RID, connector, vault="rsv", staging_storage="st")
+    check = next(c for c in result.checks if c.name == "Isolation permissions")
+    assert check.status == "fail" and "runCommand" in check.message

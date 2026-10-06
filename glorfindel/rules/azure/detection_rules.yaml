@@ -32,13 +32,14 @@ rules:
     assets: [auto]
     interval_s: 30
     expected_latency_s: 45
-    # 20-s average (two consecutive samples of the same volume) above 50 MB/s, ~1 GB in
-    # 20 s. A single sample above 50 MB/s fired on Ubuntu's morning apt/snap catch-up
-    # (52.2 MB/s on 2026-10-05). Measured 2026-10-06 (collab/test_run_2026-10-06_b6_boot.md):
-    # largest benign 20-s average 35.7 MB/s; weakest attack (post-restore replay) 65.7;
-    # attacks 82.7–120.3. Replayed poll by poll on all history: same detection times on
-    # the 5 attack episodes, the false positive gone. Output unchanged (MaxWrite by
-    # Computer): dedup and what the LLM sees stay the same.
+    # 20-s average (two consecutive samples of the same volume) above 45 MB/s, ~0.9 GB
+    # in 20 s. A single sample above 50 MB/s fired on Ubuntu's morning apt/snap catch-up
+    # (52.2 MB/s on 2026-10-05). Measured (collab/test_run_2026-10-06_b6_*.md): largest
+    # benign 20-s average 35.7 MB/s; weakest attack 53.4 (total) / 49.1 (data volume) on
+    # 2026-10-06 — the bench's Standard HDD caps writes near 60 MB/s; other attacks
+    # 65.7–120.3. 45 (chosen with Jonathan) keeps 26 % above the benign peak and catches
+    # every malicious window on both volumes; 50 missed the data volume on 06/10.
+    # Output unchanged (MaxWrite by Computer): dedup and what the LLM sees stay the same.
     query: |
       Perf
       | where TimeGenerated > ago(10m)
@@ -49,7 +50,7 @@ rules:
       | extend PrevValue = iff(prev(Computer) == Computer and prev(InstanceName) == InstanceName
                                and TimeGenerated - prev(TimeGenerated) <= 25s,
                                prev(CounterValue), real(null))
-      | where isnotnull(PrevValue) and (CounterValue + PrevValue) / 2 > 50000000
+      | where isnotnull(PrevValue) and (CounterValue + PrevValue) / 2 > 45000000
       | summarize MaxWrite = max(max_of(CounterValue, PrevValue)) by Computer
 
   - name: data-exfiltration-blob

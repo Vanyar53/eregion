@@ -52,6 +52,13 @@ def _who_changed(connector, iso: dict) -> str:
     return (" Dernières écritures sur la carte (journal d'activité) : " + " ; ".join(lines) + ".") if lines else ""
 
 
+def _mark_alerted(vm: str, now: str) -> None:
+    from glorfindel.actions import _load_isolation_state, _save_isolation_state
+    state = _load_isolation_state(vm)
+    if state is not None:
+        _save_isolation_state(vm, {**state, "drift_alerted_at": now})
+
+
 def _mode(autonomy, vm_name: str) -> str:
     try:
         return autonomy.resolve(vm_name) if autonomy is not None else "human_only"
@@ -85,15 +92,22 @@ def reassert_active(connector, autonomy=None) -> list[dict]:
         if verification.get("verified") is True:
             state = _load_isolation_state(vm)
             if state is not None:
+                # Back in place: a later disappearance is a new episode, alerted again.
+                state.pop("drift_alerted_at", None)
                 _save_isolation_state(vm, {**state, "verified_at": now})
             continue
         if not _missing(verification):
             continue
+        if iso.get("drift_alerted_at"):
+            # Already alerted for this disappearance: one alert per episode. Re-alerting
+            # every minute flooded the webhook and undid every acknowledgement
+            # (validation run, 2026-10-06).
+            continue
         who = _who_changed(connector, iso)
         if iso.get("reasserted_at") or _mode(autonomy, vm) == "human_only":
             reason = (
-                f"Les règles d'isolation de {vm} ont disparu d'Azure"
-                + (" une deuxième fois (déjà reposées le " + iso["reasserted_at"] + ")"
+                f"L'isolation de {vm} a disparu d'Azure (règles ou NSG de quarantaine retirés)"
+                + (" une deuxième fois (déjà reposée le " + iso["reasserted_at"] + ")"
                    if iso.get("reasserted_at") else "")
                 + " — la VM n'est plus isolée. Retrait délibéré, `terraform apply`, "
                 "redéploiement Bicep/ARM de la carte ? Glorfindel ne les repose pas : "
@@ -101,6 +115,7 @@ def reassert_active(connector, autonomy=None) -> list[dict]:
                 + who
             )
             _alert(f"reassert-{vm}", resource_id=rid, action="isolate_vm", reason=reason)
+            _mark_alerted(vm, now)
             report.append({"kind": "isolation", "vm": vm, "outcome": "escalated", "detail": reason})
             continue
         try:
@@ -114,8 +129,9 @@ def reassert_active(connector, autonomy=None) -> list[dict]:
                       "Glorfindel alertera sans la reposer." + who)
             outcome = "reapplied"
         except Exception as exc:
-            reason = f"Les règles d'isolation de {vm} ont disparu d'Azure ; les reposer a échoué : {exc}"
+            reason = f"L'isolation de {vm} a disparu d'Azure ; la reposer a échoué : {exc}"
             outcome = "failed"
+            _mark_alerted(vm, now)        # no retry-and-alert every minute
         _alert(f"reassert-{vm}", resource_id=rid, action="isolate_vm", reason=reason)
         report.append({"kind": "isolation", "vm": vm, "outcome": outcome, "detail": reason})
 
@@ -129,10 +145,12 @@ def reassert_active(connector, autonomy=None) -> list[dict]:
             log.warning("reassert: block of %s on %s not checked (%s)", ip, vm, exc)
             continue
         if verification.get("verified") is True:
-            _update_block_entry(vm, ip, verified_at=now)
+            _update_block_entry(vm, ip, verified_at=now, drift_alerted_at=None)
             continue
         if not _missing(verification):
             continue
+        if b.get("drift_alerted_at"):
+            continue                      # one alert per disappearance (see isolations)
         if b.get("reasserted_at") or _mode(autonomy, vm) == "human_only":
             reason = (f"Le blocage de {ip} sur {vm} a disparu d'Azure"
                       + (" une deuxième fois" if b.get("reasserted_at") else "")
@@ -140,6 +158,7 @@ def reassert_active(connector, autonomy=None) -> list[dict]:
                       f"`glorfindel unblock {ip} {rid} --yes` si c'est voulu, sinon re-bloquer.")
             _alert(f"reassert-{vm}-{ip}", resource_id=rid, action="block_suspicious_ip",
                    reason=reason, action_params={"ip": ip})
+            _update_block_entry(vm, ip, drift_alerted_at=now)
             report.append({"kind": "block", "vm": vm, "ip": ip, "outcome": "escalated", "detail": reason})
             continue
         try:
@@ -153,6 +172,7 @@ def reassert_active(connector, autonomy=None) -> list[dict]:
         except Exception as exc:
             reason = f"Le blocage de {ip} sur {vm} a disparu d'Azure ; le reposer a échoué : {exc}"
             outcome = "failed"
+            _update_block_entry(vm, ip, drift_alerted_at=now)
         _alert(f"reassert-{vm}-{ip}", resource_id=rid, action="block_suspicious_ip",
                reason=reason, action_params={"ip": ip})
         report.append({"kind": "block", "vm": vm, "ip": ip, "outcome": outcome, "detail": reason})

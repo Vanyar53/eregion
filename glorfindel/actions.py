@@ -774,10 +774,13 @@ class AzureConnector(CloudConnector):
                 "$select": "caller,operationName,eventTimestamp,status",
             })
             out = []
+            # Glorfindel's own writes are not the answer to "who changed it".
+            own = {os.environ.get(k, "").lower() for k in ("AZURE_CLIENT_ID", "GLORFINDEL_AZURE_CLIENT_ID")} - {""}
             for e in (r.json().get("value") or []) if r.ok else []:
                 op = (e.get("operationName") or {}).get("localizedValue") or (e.get("operationName") or {}).get("value", "")
                 st = (e.get("status") or {}).get("value", "")
-                if st and st not in ("Succeeded", "Accepted"):
+                # One line per write: the activity log has Started/Accepted AND Succeeded.
+                if st != "Succeeded" or str(e.get("caller", "")).lower() in own:
                     continue
                 out.append(f'{str(e.get("eventTimestamp", ""))[11:19]} {e.get("caller", "?")} — {op}')
             return sorted(set(out))[-5:]

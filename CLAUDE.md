@@ -661,7 +661,7 @@ L'escalade porte `action_params` (dict, vide par défaut) pour les actions param
 
 ## Prochaines priorités (voir ROADMAP.md pour détail complet)
 
-0. **Module d'isolation compatible IaC** — chantier en cours, conception dans `docs/design/module-isolation-iac.md` : ASG de quarantaine + liste de blocage déclarées une fois dans le Terraform du client, Glorfindel ne change que l'appartenance et le contenu (rien qu'un `terraform apply` défasse)
+0. **Isolation compatible IaC** — isolation JIT par NSG de quarantaine livrée et validée (06/10, `docs/design/module-isolation-iac.md`) ; reste L6 (écran d'activation, la brique `check_permissions` existe) et L8 (module renfort optionnel). **Risque à couvrir** : le JIT repose sur le fait que la lecture de `azurerm_network_interface_security_group_association` ne compare pas le NSG réel → canary CI qui rejoue les 8 tests à chaque nouvelle version d'azurerm.
 1. **Utilisateur extérieur** — avant tout nouveau scénario ou provider
 2. **glorfindel check-ttl en cron** — crontab ou systemd timer
 3. **Entra ID / Service Principal** — vecteur #1 Azure 2025, `revoke_service_principal`

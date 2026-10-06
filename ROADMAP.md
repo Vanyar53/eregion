@@ -300,7 +300,8 @@ War Room local              →  War Room SaaS multi-tenant
 ## Récapitulatif ordre de priorité global
 
 ```
-0. Module d'isolation compatible IaC        → chantier en cours (docs/design/module-isolation-iac.md)
+0. Module d'isolation compatible IaC        → L1–L5, L7 + isolation JIT livrés et validés (06/10) ; reste L6 (écran d'activation), L8 (module renfort)
+0b. Canary CI azurerm                        → rejouer les 8 tests Terraform du JIT à chaque version du provider (le JIT dépend d'un angle mort qu'HashiCorp peut corriger)
 1. Premier utilisateur externe              → MAINTENANT, bloque tout
 2. Solidification (erreurs, cron)           → après feedback
 3. Entra ID / Service Principal             → vecteur #1 Azure 2025
@@ -334,6 +335,12 @@ La réponse autonome et le raisonnement LLM sont devenus **table stakes** — le
 - **Transparence / auditabilité** — code ouvert, chaque décision lisible (`pending`, escalades, raisonnement loggé). Anti-boîte-noire ML.
 - **Opérable par une équipe sans SOC** — là où Darktrace / Wiz / MS exigent expertise + budget.
 - Le pari : pas « meilleur CDR », mais **« le CDR qu'une petite équipe Azure peut faire tourner gratuitement, sans envoyer ses données à un vendeur, et dont elle voit chaque décision »**.
+
+### Analyse d'innovation (2026-10-06)
+Les briques sont standard (deny NSG, snapshot, KQL à seuil, tri LLM) ; l'assemblage et la discipline ne le sont pas.
+- **Nouveau** : (1) la **défense vérifiée** — chaque action est prouvée contre Azure (préséance, sessions coupées, relecture chaque minute, auteur d'un changement, droits vérifiés sans écriture) ; le marché pose et suppose, et personne ne vérifie les prérequis réseau avant d'automatiser. (2) La **boucle purple fermée** sur une vraie infra (le raté de détection produit une règle ancrée sur le schéma réel) — les outils BAS mesurent les trous, les CDR détectent, aucun n'écrit la règle. (3) L'**isolation qui cohabite avec Terraform** (JIT NSG, original dans Azure, mesuré). (4) La **sûreté indépendante de la confiance du LLM** (gardes déterministes, mode par actif).
+- **Faible ou fragile** : détection à seuils calés sur peu de données (marge B6 : 53 contre 45 Mo/s) — loin des baselines comportementales commerciales ; apport du LLM surtout en écriture de règles et cas ambigus, pas dans la décision ; périmètre Azure/VM/réseau quand les attaques passent par l'identité ; le JIT repose sur un angle mort du provider azurerm (la lecture de l'association ne compare pas le NSG réel) → canary CI.
+- **Paris** : faire de la « défense vérifiée » l'identité du projet ; publier les deux découvertes (rejeu Run Command au restore, comportement Terraform) — décision Jonathan ; Entra ID avant tout nouveau scénario VM.
 
 ### Précédents d'acquisition
 - **Gem Security → Wiz** (~$350M, 2024) — CDR standalone acheté plutôt que construit. Valide la catégorie.

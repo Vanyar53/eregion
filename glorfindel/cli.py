@@ -557,9 +557,9 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
     # Reassert isolations/blocks whose rules vanished from Azure (terraform apply on an
     # NSG with inline rules, removal in the portal): re-apply once, then alert only.
     try:
-        _reassert_every_s = float(os.environ.get("GLORFINDEL_REASSERT_INTERVAL_S", "300"))
+        _reassert_every_s = float(os.environ.get("GLORFINDEL_REASSERT_INTERVAL_S", "60"))
     except ValueError:
-        _reassert_every_s = 300.0
+        _reassert_every_s = 60.0
     _last_reassert = [time.time()]
 
     def _reassert() -> None:

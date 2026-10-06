@@ -542,7 +542,7 @@ class AzureConnector(CloudConnector):
             # `terraform apply` (the NIC resource keeps an NSG it doesn't manage). Falls
             # back to the subnet NSG's rules if attaching is refused (Azure Policy, IAM).
             quarantine_error = ""
-            if t.get("quarantine") or (quarantine_on and t.get("nic_has_nsg") is False):
+            if t.get("quarantine") or (quarantine_on and "nic_has_nsg" in t):
                 try:
                     placements.append(self._quarantine_placement(t, rg))
                     continue
@@ -664,8 +664,8 @@ class AzureConnector(CloudConnector):
             )
         if any(p.get("kind") == "quarantine" for p in placements):
             out["note"] = (
-                "Glorfindel's quarantine NSG attached to the NIC(s) without an NSG of their "
-                "own — detached on release; no customer rule touched."
+                "Glorfindel's quarantine NSG on the NIC(s) for the time of the isolation — "
+                "the customer's own NSG (if any) is left untouched and goes back on release."
             )
         refused = [p["quarantine_error"] for p in placements if p.get("quarantine_error")]
         if refused:
@@ -698,6 +698,36 @@ class AzureConnector(CloudConnector):
         "( not dst 127.0.0.0/8 and not dst [::1] "
         "and not dst 168.63.129.16 and not dst 169.254.169.254 )"
     )
+
+    def recent_changes(self, resource_uri: str, minutes: int = 60) -> list[str]:
+        """Who wrote this resource lately, from the Azure activity log (best effort, a
+        few minutes behind). Explains an alert — never used to detect: Azure itself is
+        re-read for that."""
+        if self.dry_run:
+            return []
+        try:
+            import requests
+            from datetime import datetime, timedelta, timezone
+            self._ensure_clients()
+            since = (datetime.now(timezone.utc) - timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            token = self._credential.get_token("https://management.azure.com/.default").token
+            url = (f"https://management.azure.com/subscriptions/{self._subscription_id}"
+                   "/providers/Microsoft.Insights/eventtypes/management/values")
+            r = requests.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=20, params={
+                "api-version": "2015-04-01",
+                "$filter": f"eventTimestamp ge '{since}' and resourceUri eq '{resource_uri}'",
+                "$select": "caller,operationName,eventTimestamp,status",
+            })
+            out = []
+            for e in (r.json().get("value") or []) if r.ok else []:
+                op = (e.get("operationName") or {}).get("localizedValue") or (e.get("operationName") or {}).get("value", "")
+                st = (e.get("status") or {}).get("value", "")
+                if st and st not in ("Succeeded", "Accepted"):
+                    continue
+                out.append(f'{str(e.get("eventTimestamp", ""))[11:19]} {e.get("caller", "?")} — {op}')
+            return sorted(set(out))[-5:]
+        except Exception:
+            return []
 
     def drain_connections(self, resource_id: str) -> dict:
         """Kill the VM's established TCP connections through Run Command (`ss -K`).
@@ -821,18 +851,73 @@ class AzureConnector(CloudConnector):
                 "shadowed": shadowed}
 
     def _quarantine_placement(self, t: dict, default_rg: str) -> dict:
-        """Attach (or keep) the quarantine NSG on this NIC; the placement to record."""
+        """Put the quarantine NSG on this NIC (JIT); the placement to record.
+
+        A NIC with no NSG gets ours attached (L4). A NIC with its own NSG gets ours IN
+        PLACE of it, for the time of the isolation: the customer's NSG and its rules are
+        left untouched, and go back on release. Measured on the bench (2026-10-06,
+        azurerm 4.81.0): `terraform plan` sees no change and `apply` reverts nothing —
+        the NIC resource doesn't hold its NSG, the association only checks that the NIC
+        has one. Only a forced replacement of the association, or a Bicep/ARM redeploy
+        of the NIC, puts the customer's NSG back (L5 notices). The original is recorded
+        in state and, before the swap, as a tag on our NSG — Azure keeps the answer even
+        if the local state is lost."""
         q = self._ensure_quarantine_nsg(t.get("location"), default_rg)
         current = t.get("quarantine")
-        if not (current and _same_id(current["nsg_id"], q["nsg_id"])):
-            self._set_nic_nsg(t["nic_id"], q["nsg_id"])
+        if current and _same_id(current["nsg_id"], q["nsg_id"]):
+            original = self._original_from_tags(q, t["nic_id"])
+        else:
+            original = t.get("own_nsg_id")
+            if original:
+                self._record_original(q, t["nic_id"], original)
+            self._set_nic_nsg(t["nic_id"], q["nsg_id"], expect=original or "")
         return {
             "nic_id": t["nic_id"], "kind": "quarantine", "scope": "quarantine",
             "nsg_rg": q["nsg_rg"], "nsg_name": q["nsg_name"], "nsg_id": q["nsg_id"],
+            "original_nsg_id": original,
             "shared_nsg": False, "ips": t["private_ips"], "priority": 100,
             "rule_in": QUARANTINE_RULE_IN, "rule_out": QUARANTINE_RULE_OUT,
             "bumped": [], "applied": ["nic-attach"], "shadowed_by": [],
         }
+
+    @staticmethod
+    def _orig_tag(nic_id: str) -> str:
+        import hashlib
+        return "glorfindel-orig-" + hashlib.sha1(nic_id.rstrip("/").lower().encode()).hexdigest()[:12]
+
+    def _quarantine_tags(self, q: dict) -> dict:
+        nsg = self._network.network_security_groups.get(q["nsg_rg"], q["nsg_name"])
+        return dict(getattr(nsg, "tags", None) or {})
+
+    def _write_quarantine_tags(self, q: dict, tags: dict) -> None:
+        from azure.mgmt.network.models import TagsObject
+        self._network.network_security_groups.update_tags(q["nsg_rg"], q["nsg_name"], TagsObject(tags=tags))
+
+    def _record_original(self, q: dict, nic_id: str, original_id: str) -> None:
+        """NIC → its own NSG, kept as a tag on our quarantine NSG (not on the NIC: a
+        `terraform apply` rewrites the NIC's tags — measured)."""
+        tags = self._quarantine_tags(q)
+        tags[self._orig_tag(nic_id)] = original_id
+        self._write_quarantine_tags(q, tags)
+
+    def _original_from_tags(self, q: dict, nic_id: str) -> str | None:
+        try:
+            return self._quarantine_tags(q).get(self._orig_tag(nic_id)) or None
+        except Exception:
+            return None
+
+    def _forget_original(self, q: dict, nic_id: str) -> None:
+        try:
+            tags = self._quarantine_tags(q)
+            if tags.pop(self._orig_tag(nic_id), None) is not None:
+                self._write_quarantine_tags(q, tags)
+        except Exception:
+            pass     # a stale tag is harmless: it is only read for a NIC carrying our NSG
+
+    def _unquarantine(self, nic_id: str, q: dict, original: str | None) -> None:
+        """Put the NIC's own NSG back (or none), only if it still carries OURS."""
+        self._set_nic_nsg(nic_id, original, expect=q["nsg_id"])
+        self._forget_original(q, nic_id)
 
     @staticmethod
     def _nic_nsg_views(t: dict) -> list[dict]:
@@ -890,10 +975,11 @@ class AzureConnector(CloudConnector):
             # a customer rule can only go back to priority 100 once ours is gone.
             for p in state["placements"]:
                 if p.get("kind") == "quarantine":
-                    # Detach OUR NSG only (if the NIC still carries it); its deny rules
-                    # stay in it for the next VM.
+                    # Put the NIC's own NSG back (or none) — only if it still carries
+                    # OURS; our NSG keeps its deny rules for the next VM.
                     try:
-                        self._set_nic_nsg(p["nic_id"], None, expect=p["nsg_id"])
+                        original = p.get("original_nsg_id") or self._original_from_tags(p, p["nic_id"])
+                        self._unquarantine(p["nic_id"], p, original)
                     except Exception as exc:
                         if not _is_not_found(exc):
                             failed.append(f'{p["nic_id"].split("/")[-1]}: NSG de quarantaine '
@@ -918,10 +1004,11 @@ class AzureConnector(CloudConnector):
         else:
             for t0 in self._get_vm_nic_targets(rg, vm_name, allow_no_nsg=True):
                 if t0.get("quarantine"):
+                    q = t0["quarantine"]
                     try:
-                        self._set_nic_nsg(t0["nic_id"], None, expect=t0["quarantine"]["nsg_id"])
+                        self._unquarantine(t0["nic_id"], q, self._original_from_tags(q, t0["nic_id"]))
                     except Exception as exc:
-                        failed.append(f'{t0["nic_short"]}: NSG de quarantaine non détaché : '
+                        failed.append(f'{t0["nic_short"]}: NSG de quarantaine non retiré : '
                                       f"{_first_line(exc)[:_ERR_MAX]}")
                 for t in self._nic_nsg_views(t0):
                     for name in self._isolation_names_for_target(vm_name, t):
@@ -1778,12 +1865,15 @@ class AzureConnector(CloudConnector):
                     kept.append(f'{t["nsg_rg"]}/{t["nsg_name"]}/{name}')   # perimeter block
         deleted, failed = [], list(unreadable)
         for t0 in quarantined:
-            label = f'{t0["nic_short"]}: détacher {t0["quarantine"]["nsg_name"]}'
+            q = t0["quarantine"]
+            original = self._original_from_tags(q, t0["nic_id"])
+            label = (f'{t0["nic_short"]}: retirer {q["nsg_name"]}'
+                     + (f' (remettre {original.rstrip("/").split("/")[-1]})' if original else ""))
             if dry_run:
                 deleted.append(label)
                 continue
             try:
-                self._set_nic_nsg(t0["nic_id"], None, expect=t0["quarantine"]["nsg_id"])
+                self._unquarantine(t0["nic_id"], q, original)
                 deleted.append(label)
             except Exception as exc:
                 failed.append(f"{label} : {_first_line(exc)[:_ERR_MAX]}")
@@ -2325,6 +2415,7 @@ class AzureConnector(CloudConnector):
                 # holds (traffic must pass both).
                 "alt_nsg": alt_nsg,
                 "nic_has_nsg": bool(own_id),
+                "own_nsg_id": own_id,
                 "quarantine": quarantine,
                 "location": getattr(nic, "location", None),
             })

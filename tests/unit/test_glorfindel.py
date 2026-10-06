@@ -2262,8 +2262,9 @@ def _l4_env(monkeypatch, nic_nsg_id=None, subnet_nsg_id=_SUBNET_NSG_ID, quaranti
     net.network_interfaces.get.return_value = nic
     net.subnets.get.return_value = SimpleNamespace(
         network_security_group=SimpleNamespace(id=subnet_nsg_id) if subnet_nsg_id else None)
-    q = SimpleNamespace(id=_Q_ID, security_rules=[SimpleNamespace(name="glorfindel-quarantine-deny-in"),
-                                                  SimpleNamespace(name="glorfindel-quarantine-deny-out")])
+    q = SimpleNamespace(id=_Q_ID, tags={}, security_rules=[SimpleNamespace(name="glorfindel-quarantine-deny-in"),
+                                                           SimpleNamespace(name="glorfindel-quarantine-deny-out")])
+    net.network_security_groups.update_tags.side_effect = lambda rg, name, t: setattr(q, "tags", dict(t.tags))
     if quarantine_exists:
         net.network_security_groups.get.return_value = q
     else:
@@ -2364,5 +2365,49 @@ def test_reset_from_azure_detaches_the_quarantine_nsg(monkeypatch):
     connector, net, nic = _l4_env(monkeypatch, quarantine_exists=True)
     nic.network_security_group = type("R", (), {"id": _Q_ID})()
     out = connector.sweep_vm_rules(_RID)
-    assert any("détacher nsg-glorfindel-quarantine" in d for d in out["deleted"])
+    assert any("retirer nsg-glorfindel-quarantine" in d for d in out["deleted"])
     assert net.network_interfaces.begin_create_or_update.call_args.args[2].network_security_group is None
+
+
+# ── JIT : échange du NSG d'une carte qui en a un ─────────────────────────────────────
+
+_CLIENT_NSG_ID = "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Network/networkSecurityGroups/nsg-client"
+
+
+def test_jit_swaps_the_customer_nsg_and_keeps_the_original_in_azure(monkeypatch):
+    """Validated with Jonathan on 2026-10-06 after measuring it on the bench: Terraform
+    neither sees nor reverts a swapped NIC NSG. The customer's NSG is left untouched."""
+    from glorfindel.actions import AzureConnector, _load_isolation_state
+    connector, net, nic = _l4_env(monkeypatch, nic_nsg_id=_CLIENT_NSG_ID, quarantine_exists=True)
+    order = []
+    net.network_security_groups.update_tags.side_effect = (
+        lambda rg, name, t: order.append("tag") or setattr(net.network_security_groups.get.return_value, "tags", dict(t.tags)))
+    net.network_interfaces.begin_create_or_update.side_effect = lambda *a: order.append("swap") or MagicMock()
+    connector.isolate_vm(_RID)
+    assert order == ["tag", "swap"]                     # the original is in Azure before the swap
+    assert net.network_interfaces.begin_create_or_update.call_args.args[2].network_security_group.id == _Q_ID
+    tags = net.network_security_groups.get.return_value.tags
+    assert tags[AzureConnector._orig_tag(_NIC_ID)] == _CLIENT_NSG_ID
+    assert _load_isolation_state("vm")["placements"][0]["original_nsg_id"] == _CLIENT_NSG_ID
+    net.security_rules.begin_create_or_update.assert_not_called()     # nothing written in nsg-client
+
+
+def test_release_puts_the_customer_nsg_back(monkeypatch):
+    from glorfindel.actions import AzureConnector
+    connector, net, nic = _l4_env(monkeypatch, nic_nsg_id=_CLIENT_NSG_ID, quarantine_exists=True)
+    connector.isolate_vm(_RID)
+    nic.network_security_group = type("R", (), {"id": _Q_ID})()
+    net.network_interfaces.begin_create_or_update.reset_mock()
+    assert connector.release_isolation(_RID)["status"] == "released"
+    assert net.network_interfaces.begin_create_or_update.call_args.args[2].network_security_group.id == _CLIENT_NSG_ID
+    assert AzureConnector._orig_tag(_NIC_ID) not in net.network_security_groups.get.return_value.tags
+
+
+def test_release_without_state_reads_the_original_from_azure(monkeypatch):
+    """The local state is lost: the tag on our NSG still says which NSG to put back."""
+    from glorfindel.actions import AzureConnector
+    connector, net, nic = _l4_env(monkeypatch, quarantine_exists=True)
+    net.network_security_groups.get.return_value.tags = {AzureConnector._orig_tag(_NIC_ID): _CLIENT_NSG_ID}
+    nic.network_security_group = type("R", (), {"id": _Q_ID})()
+    connector.release_isolation(_RID)
+    assert net.network_interfaces.begin_create_or_update.call_args.args[2].network_security_group.id == _CLIENT_NSG_ID

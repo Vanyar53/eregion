@@ -4,7 +4,9 @@ A rule Glorfindel placed can vanish without Glorfindel: a `terraform apply` on a
 with inline rules deletes every rule absent from the code, and a person can remove one
 in the portal. The local state then says ISOLATED / BLOCKED while nothing is enforced.
 
-Each watch cycle (every few minutes) checks every recorded isolation and block:
+Every minute (GLORFINDEL_REASSERT_INTERVAL_S) the watch re-reads Azure for every
+recorded isolation and block — Glorfindel must know the real state at time T, and only
+the few isolated/blocked VMs are read. A check that holds records `verified_at`.
 - rules all present → nothing to do;
 - rules missing, first time → put them back once (outside `human_only`) and alert;
 - rules missing again after that → alert only. Two removals look deliberate (a person,
@@ -38,6 +40,18 @@ def _alert(signal_id: str, **kwargs) -> None:
     escalations.record(signal_id=signal_id, escalation_type="verification_failed", **kwargs)
 
 
+def _who_changed(connector, iso: dict) -> str:
+    """Who wrote the VM's NICs lately (activity log, best effort) — the alert says it."""
+    nics = {p.get("nic_id") for p in iso.get("placements") or [] if p.get("nic_id")}
+    lines = []
+    for nic in sorted(nics):
+        try:
+            lines += connector.recent_changes(nic) or []
+        except Exception:
+            pass
+    return (" Dernières écritures sur la carte (journal d'activité) : " + " ; ".join(lines) + ".") if lines else ""
+
+
 def _mode(autonomy, vm_name: str) -> str:
     try:
         return autonomy.resolve(vm_name) if autonomy is not None else "human_only"
@@ -64,19 +78,27 @@ def reassert_active(connector, autonomy=None) -> list[dict]:
         if iso.get("partial"):
             continue          # already reported as partial; the operator decides
         try:
-            if not _missing(connector.verify_isolation(rid)):
-                continue
+            verification = connector.verify_isolation(rid)
         except Exception as exc:                                   # VM gone, API down
             log.warning("reassert: isolation of %s not checked (%s)", vm, exc)
             continue
+        if verification.get("verified") is True:
+            state = _load_isolation_state(vm)
+            if state is not None:
+                _save_isolation_state(vm, {**state, "verified_at": now})
+            continue
+        if not _missing(verification):
+            continue
+        who = _who_changed(connector, iso)
         if iso.get("reasserted_at") or _mode(autonomy, vm) == "human_only":
             reason = (
                 f"Les règles d'isolation de {vm} ont disparu d'Azure"
                 + (" une deuxième fois (déjà reposées le " + iso["reasserted_at"] + ")"
                    if iso.get("reasserted_at") else "")
-                + " — la VM n'est plus isolée. Retrait délibéré ou `terraform apply` sur un "
-                "NSG à règles en ligne ? Glorfindel ne les repose pas : "
+                + " — la VM n'est plus isolée. Retrait délibéré, `terraform apply`, "
+                "redéploiement Bicep/ARM de la carte ? Glorfindel ne les repose pas : "
                 f"`glorfindel release {rid} --yes` si la levée est voulue, sinon ré-isoler."
+                + who
             )
             _alert(f"reassert-{vm}", resource_id=rid, action="isolate_vm", reason=reason)
             report.append({"kind": "isolation", "vm": vm, "outcome": "escalated", "detail": reason})
@@ -87,9 +109,9 @@ def reassert_active(connector, autonomy=None) -> list[dict]:
             # Keep the original isolation time (TTL); record the re-application.
             _save_isolation_state(vm, {**state, "isolated_at": iso.get("isolated_at", state.get("isolated_at")),
                                        "reasserted_at": now})
-            reason = (f"Les règles d'isolation de {vm} avaient disparu d'Azure (retrait hors "
-                      "Glorfindel) : reposées une fois. Si elles disparaissent encore, "
-                      "Glorfindel alertera sans les reposer.")
+            reason = (f"L'isolation de {vm} avait disparu d'Azure (modification hors "
+                      "Glorfindel) : reposée une fois. Si elle disparaît encore, "
+                      "Glorfindel alertera sans la reposer." + who)
             outcome = "reapplied"
         except Exception as exc:
             reason = f"Les règles d'isolation de {vm} ont disparu d'Azure ; les reposer a échoué : {exc}"
@@ -102,10 +124,14 @@ def reassert_active(connector, autonomy=None) -> list[dict]:
         if not rid or not ip or b.get("partial"):
             continue
         try:
-            if not _missing(connector.verify_block_ip(ip, rid)):
-                continue
+            verification = connector.verify_block_ip(ip, rid)
         except Exception as exc:
             log.warning("reassert: block of %s on %s not checked (%s)", ip, vm, exc)
+            continue
+        if verification.get("verified") is True:
+            _update_block_entry(vm, ip, verified_at=now)
+            continue
+        if not _missing(verification):
             continue
         if b.get("reasserted_at") or _mode(autonomy, vm) == "human_only":
             reason = (f"Le blocage de {ip} sur {vm} a disparu d'Azure"

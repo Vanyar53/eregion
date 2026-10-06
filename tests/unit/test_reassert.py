@@ -92,3 +92,18 @@ def test_second_removal_is_a_new_card_not_folded_into_the_first():
     reassert_active(c, _ACT)                       # gone again: alert only
     pending = escalations.pending()
     assert len(pending) == 1 and "deuxième fois" in pending[0]["reason"]
+
+
+def test_a_held_isolation_records_when_it_was_last_verified():
+    """Glorfindel must know the real state at time T: every check that holds is dated."""
+    _isolated()
+    reassert_active(_connector({"verified": True}), _ACT)
+    assert _load_isolation_state("vm")["verified_at"]
+
+
+def test_the_alert_says_who_changed_the_nic():
+    _isolated(placements=[{"nic_id": "/subscriptions/s/.../networkInterfaces/nic-a", "kind": "quarantine"}])
+    c = _connector({"verified": False, "uncovered_nics": ["nic-a"]})
+    c.recent_changes.return_value = ["10:41:02 alice@example.com — Create or Update Network Interface"]
+    reassert_active(c, AutonomyConfig(default="human_only"))
+    assert "alice@example.com" in escalations.pending()[0]["reason"]

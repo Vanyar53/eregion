@@ -38,7 +38,7 @@ infrastructure gérée en Terraform.
 | Règle ajoutée à un NSG à règles **en ligne** (`security_rule {}`) | Supprimée : les règles en ligne sont autoritaires | [doc azurerm](https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/network_security_rule), constaté sur le banc |
 | Règle ajoutée à un NSG à règles **séparées** (`azurerm_network_security_rule`) | Conservée. Mais un apply qui ajoute une règle client à une priorité occupée échoue | doc azurerm |
 | Règle client décalée de la priorité 100 (isolation actuelle sur NSG dédié) | Remise à 100, en conflit avec le deny de Glorfindel | déduit |
-| Association NSG ↔ NIC ou subnet changée | Rétablie | ressources `*_security_group_association` |
+| Association NSG ↔ NIC changée hors Terraform (NSG échangé) | **Conservée, sans dérive** — mesuré le 06/10 (la note du 05/10 disait « rétablie » : déduction fausse). Seuls un remplacement forcé de l'association et un redéploiement Bicep/ARM remettent le NSG du client | test sur le banc, `network_interface_security_group_association_resource.go` |
 | **NIC ajoutée à une ASG** | **Conservée, sans dérive dans le plan** | [source du provider](https://github.com/hashicorp/terraform-provider-azurerm/blob/main/internal/services/network/network_interface.go) |
 | **NSG accroché à une NIC qui n'en a pas** (pas de ressource `azurerm_network_interface_security_group_association` pour elle) | **Conservé, sans dérive dans le plan** (vérifié le 06/10) | [`resourceNetworkInterfaceUpdate`](https://github.com/hashicorp/terraform-provider-azurerm/blob/main/internal/services/network/network_interface_resource.go) |
 
@@ -148,7 +148,26 @@ Ce qui reste exposé avec le mécanisme par défaut :
   fois puis alerte. → L4 (pour les NIC sans NSG), ou le module.
 - **NSG en ligne de la NIC** : même chose, sans parade hors module.
 
-## L4 — accrocher un NSG de quarantaine aux NIC qui n'en ont pas
+## L4 — isolation JIT par NSG de quarantaine
+
+**Mesuré sur le banc le 06/10** (azurerm 4.81.0, pile Terraform jetable : réseau, NSG client, une NIC associée
+en code, une NIC sans NSG) :
+
+| # | Situation | Résultat |
+|---|---|---|
+| 2 | NSG client de la NIC échangé contre le nôtre, hors Terraform | `plan` sans changement, `apply` ne remet rien |
+| 3 | Notre NSG accroché à une NIC sans NSG | idem |
+| 4 | `apply` qui modifie les deux NIC (tag) pendant ce temps | notre NSG reste sur les deux |
+| 5 | Le client ajoute en code une association sur la NIC L4 | son `apply` échoue (import requis), notre NSG reste |
+| 6 | Remplacement forcé de l'association (≈ changement de NSG dans le code) | son NSG revient, le nôtre part |
+| 7 | NSG client remis à la levée | `plan` propre |
+| 8 | Redéploiement ARM/Bicep de la NIC (incrémental) | notre NSG retiré (NIC L4 sans NSG, NIC échangée avec le NSG client) |
+
+**Validé avec Jonathan** : l'isolation devient JIT — chaque NIC porte notre NSG le temps de l'incident,
+le NSG client (s'il y en a un) est mis de côté intact et revient à la levée ; l'original est noté en tag sur
+notre NSG (source de vérité Azure). Les cas 6 et 8 sont suivis par la boucle L5 (relecture toutes les 60 s,
+réechange une fois, alerte avec l'auteur lu dans le journal d'activité).
+
 
 **Décidé le 06/10 avec Jonathan** : premier choix pour toute NIC sans NSG ; Glorfindel crée le NSG au
 premier besoin (un par région) dans un RG configuré ; le module Terraform reste un renfort optionnel.

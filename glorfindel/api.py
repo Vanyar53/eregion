@@ -172,6 +172,8 @@ async def state() -> dict:
                 "partial": bool(_iso.get("partial")),
                 "failed_nic": _iso.get("failed_nic", ""),
                 "release_failed": _iso.get("release_failed", []),
+                # Last time the watch re-read Azure and found the isolation in place.
+                "verified_at": _iso.get("verified_at", ""),
                 # Open sessions cut after the rules? (drain: drained|partial|failed|unsupported)
                 "drain": _iso.get("drain") or {},
             })
@@ -188,6 +190,7 @@ async def state() -> dict:
                 **_state_flags(b.get("placements", [])),
                 "partial": bool(b.get("partial")),
                 "unblock_failed": b.get("unblock_failed", []),
+                "verified_at": b.get("verified_at", ""),
             })
         resources.append({
             "resource_id": resource_id,

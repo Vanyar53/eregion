@@ -754,8 +754,10 @@ async def action_approve(esc_id: str, ip: str = "", scope: str = "vm") -> dict:
                     f"or run: glorfindel block <ip> {resource_id} --yes"
                 )}
             block_scope = scope if scope in ("vm", "subnet") else "vm"
+            threat_port = (esc.get("action_params") or {}).get("port")
             result = await asyncio.to_thread(
-                connector.block_suspicious_ip, block_ip, resource_id, block_scope)
+                connector.block_suspicious_ip, block_ip, resource_id, block_scope,
+                False, threat_port)
             _esc.resolve(esc_id)
             verification = await asyncio.to_thread(
                 _verify_approved, connector, esc, action, resource_id, result, block_ip)

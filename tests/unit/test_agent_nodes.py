@@ -1428,9 +1428,12 @@ def test_graph_bypassed_isolation_escalates_verification_failed(tmp_path, monkey
     assert [e["escalation_type"] for e in escalations.pending()] == ["verification_failed"]
 
 
-def test_graph_unimplemented_autonomous_action_escalates_unexecuted(tmp_path, monkeypatch, tmp_memory):
-    """Seconde passe N5: revoke_temp_access is announced to the model but does nothing;
-    it ended as a no_op "executed", then notified as done."""
+def test_graph_revoke_temp_access_is_no_longer_autonomous(tmp_path, monkeypatch, tmp_memory):
+    """Seconde passe N5: revoke_temp_access was announced to the model but did nothing;
+    it ended as a no_op "executed", then notified as done. Removed from the autonomous
+    actions: a model proposing it gets an unknown-action escalation."""
+    from glorfindel.actions import AUTONOMOUS_ACTIONS
+    assert "revoke_temp_access" not in AUTONOMOUS_ACTIONS
     connector = MagicMock()
     connector.dry_run = False
     with patch("glorfindel.escalations.notify_action") as notify:
@@ -1438,9 +1441,16 @@ def test_graph_unimplemented_autonomous_action_escalates_unexecuted(tmp_path, mo
                            raw={"first_result_row": {"Computer": "vm-test", "SourceIP": "1.2.3.4",
                                                      "FailedAttempts": 40}})
     assert final["outcome"]["escalation_type"] == "proposed_action"
-    assert "pas encore implémentée" in final["escalation_reason"]
     assert final["outcome"].get("executed") is not True
     notify.assert_not_called()
+
+
+def test_executable_guard_holds_an_announced_action_without_implementation(monkeypatch):
+    import glorfindel.agent as agent
+    monkeypatch.setattr(agent, "AUTONOMOUS_ACTIONS", set(agent.AUTONOMOUS_ACTIONS) | {"future_action"})
+    d = {"action": "future_action", "escalate": False}
+    agent._apply_executable_guard(d)
+    assert d["escalate"] is True and d["held_by"] == "not_implemented"
 
 
 def test_graph_signal_guardrail_has_its_own_type(tmp_path, monkeypatch, tmp_memory):
@@ -2012,3 +2022,23 @@ def test_respond_turns_an_unexpected_exception_into_cycle_failed(tmp_path, monke
 def test_cycle_failed_has_a_label():
     from glorfindel.escalations import _ESCALATION_LABELS
     assert "cycle_failed" in _ESCALATION_LABELS
+
+
+def test_threat_port_comes_from_the_detection_not_from_the_llm():
+    from glorfindel.agent import _threat_port
+    assert _threat_port({"context": {"rule_name": "ssh-brute-force"}, "raw_signal": {}}) == 22
+    assert _threat_port({"context": {}, "raw_signal": {
+        "first_result_row": {"SyslogMessage": "sshd[123]: Failed password for root"}}}) == 22
+    assert _threat_port({"context": {}, "ttp": "T1486",
+                         "raw_signal": {"first_result_row": {"Computer": "vm1", "MaxWrite": 1}}}) is None
+
+
+def test_execute_action_passes_the_threat_port_to_the_block(tmp_incidents):
+    from glorfindel.agent import execute_action
+    connector = MagicMock()
+    connector.block_suspicious_ip.return_value = {"status": "blocked"}
+    state = _state(action="block_suspicious_ip")
+    state["signal"]["context"]["rule_name"] = "ssh-brute-force"
+    state["signal"]["raw_signal"]["first_result_row"] = {"SourceIP": "203.0.113.9", "FailedAttempts": 40}
+    execute_action(state, connector=connector, incidents=tmp_incidents)
+    assert connector.block_suspicious_ip.call_args.kwargs["threat_port"] == 22

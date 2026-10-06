@@ -1277,33 +1277,47 @@ def test_isolate_vm_partial_failure_keeps_and_records_rules(monkeypatch):
     assert [p["nsg_name"] for p in state["placements"]] == ["nsg-a"]
 
 
-def test_isolate_vm_puts_customer_rule_back_when_the_deny_fails(monkeypatch):
-    """The bump of a customer rule happens BEFORE the deny. If the deny then fails, the
-    moved rule protects nothing: put it back to 100 — and write no state."""
+def test_isolate_vm_never_moves_a_customer_rule(monkeypatch):
+    """A customer rule at 100 used to be moved to 200 for the deny: a `terraform apply`
+    puts it back (or fails on our priority). The deny now takes the first free one."""
     from glorfindel.actions import AzureConnector, _load_isolation_state
     connector = AzureConnector(dry_run=False)
     monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    monkeypatch.setattr(connector, "drain_connections", lambda rid: {"status": "drained"})
     monkeypatch.setattr(connector, "_get_vm_nic_targets", lambda rg, vm: [_nic_target(scope="nic")])
-    customer = MagicMock(priority=100)
-    customer.name = "allow-ssh"
+    customer = _nsg_rule("deny-telnet", 100, access="Deny", port="23")
     net = MagicMock()
     net.security_rules.list.return_value = [customer]
-    net.security_rules.get.return_value = customer
-    calls = []
-
-    def _put(rg, nsg, name, rule):
-        calls.append((name, rule.priority))
-        if name.startswith("glorfindel-"):
-            raise RuntimeError("deny rejected")
-        return MagicMock()
-    net.security_rules.begin_create_or_update.side_effect = _put
     connector._network = net
 
-    with pytest.raises(RuntimeError, match="deny rejected"):
-        connector.isolate_vm(_RID)
-    assert calls[0] == ("allow-ssh", 200)          # moved off 100…
-    assert calls[-1] == ("allow-ssh", 100)         # …and put back
-    assert _load_isolation_state("vm") is None
+    connector.isolate_vm(_RID)
+    written = [(c.args[2], c.args[3].priority) for c in net.security_rules.begin_create_or_update.call_args_list]
+    assert all(name.startswith("glorfindel-") for name, _ in written)
+    assert {prio for _, prio in written} == {101}
+    assert _load_isolation_state("vm")["placements"][0]["bumped"] == []
+
+
+def test_isolation_moves_to_the_subnet_nsg_when_the_nic_nsg_lets_traffic_through(monkeypatch):
+    """Traffic must pass the NIC's NSG AND its subnet's: when an ALLOW precedes our deny
+    on the first, the deny holds on the second — without touching the customer rule."""
+    from glorfindel.actions import AzureConnector, _load_isolation_state
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    monkeypatch.setattr(connector, "drain_connections", lambda rid: {"status": "drained"})
+    t = {**_nic_target(nsg_name="nsg-nic", scope="nic", ips=("10.0.0.5",)),
+         "alt_nsg": {"nsg_rg": "rg", "nsg_name": "nsg-subnet"}}
+    monkeypatch.setattr(connector, "_get_vm_nic_targets", lambda rg, vm: [t])
+    net = MagicMock()
+    net.security_rules.list.side_effect = lambda rg, nsg: (
+        [_nsg_rule(**_BENCH_ALLOW_SSH)] if nsg == "nsg-nic" else [])
+    connector._network = net
+
+    out = connector.isolate_vm(_RID)
+    nsgs = {c.args[1] for c in net.security_rules.begin_create_or_update.call_args_list}
+    assert nsgs == {"nsg-subnet"}
+    placement = _load_isolation_state("vm")["placements"][0]
+    assert placement["nsg_name"] == "nsg-subnet" and placement["moved_from"]["nsg"] == "rg/nsg-nic"
+    assert "shadowed_by" not in out
 
 
 def test_release_isolation_reports_failed_delete_and_keeps_state(monkeypatch):
@@ -1744,18 +1758,35 @@ def test_verify_isolation_fails_when_an_allow_precedes_the_deny(monkeypatch):
     assert "allow-ssh" in out["error"]
 
 
-def test_verify_isolation_on_a_dedicated_nsg_ignores_precedence(monkeypatch):
-    """Dedicated NSG: the deny takes priority 100 (customer rules bumped) — nothing can
-    precede it, so no listing is needed and verification stays a presence check."""
+def test_verify_isolation_checks_precedence_on_a_dedicated_nsg_too(monkeypatch):
+    """The deny no longer forces priority 100 on a dedicated NSG (no customer rule is
+    moved), so an ALLOW before it there bypasses it as well."""
     from glorfindel.actions import AzureConnector
     connector = AzureConnector(dry_run=False)
     monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
     monkeypatch.setattr(connector, "_get_vm_nic_targets", lambda rg, vm: [_nic_target(scope="nic")])
     net = MagicMock()
     net.security_rules.get.return_value = MagicMock()
+    ours = _nsg_rule("glorfindel-iso-vm-nic-a", 101, access="Deny", port="*")
+    net.security_rules.list.return_value = [_nsg_rule(**_BENCH_ALLOW_SSH), ours]
+    connector._network = net
+    out = connector.verify_isolation(_RID)
+    assert out["verified"] is False and [s["rule"] for s in out["shadowed_by"]] == ["allow-ssh"]
+
+
+def test_verify_isolation_finds_the_deny_on_the_subnet_nsg(monkeypatch):
+    from glorfindel.actions import AzureConnector
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    t = {**_nic_target(nsg_name="nsg-nic", scope="nic"), "alt_nsg": {"nsg_rg": "rg", "nsg_name": "nsg-subnet"}}
+    monkeypatch.setattr(connector, "_get_vm_nic_targets", lambda rg, vm: [t])
+    net = MagicMock()
+    net.security_rules.get.side_effect = (
+        lambda rg, nsg, name: MagicMock() if nsg == "nsg-subnet" else _raise_not_found())
+    ours = _nsg_rule("glorfindel-iso-vm-nic-a", 100, access="Deny", dst="10.0.0.5", port="*")
+    net.security_rules.list.return_value = [ours]
     connector._network = net
     assert connector.verify_isolation(_RID)["verified"] is True
-    net.security_rules.list.assert_not_called()
 
 
 def test_verify_block_ip_fails_when_allow_ssh_precedes_it(monkeypatch):
@@ -2120,3 +2151,60 @@ def test_isolation_state_keeps_the_drain_result(monkeypatch):
                         lambda rid: {"status": "failed", "error": "403 runCommand"})
     connector.isolate_vm(_RID)
     assert _load_isolation_state("vm")["drain"]["status"] == "failed"
+
+
+# ── L3 : port de la menace, NSG de repli pour les blocages ──────────────────────────
+
+def test_rule_covers_port():
+    from glorfindel.actions import _rule_covers_port
+    assert _rule_covers_port(_nsg_rule("a", 100, port="*"), 22)
+    assert _rule_covers_port(_nsg_rule("a", 100, port="20-30"), 22)
+    assert not _rule_covers_port(_nsg_rule("a", 100, port="443"), 22)
+    multi = _nsg_rule("a", 100, port=None)
+    multi.destination_port_ranges = ["80", "22"]
+    assert _rule_covers_port(multi, 22)
+
+
+def _block_env(monkeypatch, rules_by_nsg, target=None):
+    from glorfindel.actions import AzureConnector
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    t = target or _nic_target(scope="subnet", ips=("10.0.0.5",))
+    monkeypatch.setattr(connector, "_get_vm_nic_targets", lambda rg, vm: [t])
+    net = MagicMock()
+    net.security_rules.list.side_effect = lambda rg, nsg: rules_by_nsg.get(nsg, [])
+    net.security_rules.get.return_value = MagicMock()
+    connector._network = net
+    return connector, net
+
+
+def test_ssh_block_is_not_bypassed_by_an_https_allow(monkeypatch):
+    """A web server's allow-https before the deny used to declare every SSH block
+    bypassed — the alert operators learn to ignore, including the day it is allow-ssh."""
+    https = _nsg_rule("allow-https", 150, port="443")
+    connector, net = _block_env(monkeypatch, {"nsg": [https]})
+    out = connector.block_suspicious_ip("203.0.113.9", _RID, threat_port=22)
+    assert "bypass" not in out and "allow-https" in out["exposure"]
+    ours = _nsg_rule("glorfindel-block-203-0-113-9-vm-nic-a", 200, access="Deny",
+                     src="203.0.113.9", dst="10.0.0.5", port="*")
+    net.security_rules.list.side_effect = lambda rg, nsg: [https, ours]
+    res = connector.verify_block_ip("203.0.113.9", _RID)
+    assert res["verified"] is True and [x["rule"] for x in res["exposure"]] == ["allow-https"]
+
+
+def test_ssh_block_is_bypassed_by_an_ssh_allow(monkeypatch):
+    connector, net = _block_env(monkeypatch, {"nsg": [_nsg_rule(**_BENCH_ALLOW_SSH)]})
+    out = connector.block_suspicious_ip("203.0.113.9", _RID, threat_port=22)
+    assert "allow-ssh" in out["bypass"]
+
+
+def test_block_moves_to_the_subnet_nsg_when_the_nic_nsg_lets_the_threat_through(monkeypatch):
+    from glorfindel.actions import _load_block_entries
+    t = {**_nic_target(nsg_name="nsg-nic", scope="nic", ips=("10.0.0.5",)),
+         "alt_nsg": {"nsg_rg": "rg", "nsg_name": "nsg-subnet"}}
+    connector, net = _block_env(monkeypatch, {"nsg-nic": [_nsg_rule(**_BENCH_ALLOW_SSH)]}, t)
+    out = connector.block_suspicious_ip("203.0.113.9", _RID, threat_port=22)
+    assert {c.args[1] for c in net.security_rules.begin_create_or_update.call_args_list} == {"nsg-subnet"}
+    assert "bypass" not in out
+    entry = _load_block_entries("vm")[0]
+    assert entry["threat_port"] == 22 and entry["placements"][0]["nsg_name"] == "nsg-subnet"

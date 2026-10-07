@@ -661,7 +661,7 @@ L'escalade porte `action_params` (dict, vide par défaut) pour les actions param
 
 ## Prochaines priorités (voir ROADMAP.md pour détail complet)
 
-0. **Isolation compatible IaC** — isolation JIT par NSG de quarantaine livrée et validée (06/10, `docs/design/module-isolation-iac.md`) ; reste L6 (écran d'activation, la brique `check_permissions` existe) et L8 (module renfort optionnel). **Risque à couvrir** : le JIT repose sur le fait que la lecture de `azurerm_network_interface_security_group_association` ne compare pas le NSG réel → canary CI qui rejoue les 8 tests à chaque nouvelle version d'azurerm.
+0. **Isolation compatible IaC** — isolation JIT par NSG de quarantaine livrée et validée (06/10, `docs/design/module-isolation-iac.md`) ; reste L6 (écran d'activation, la brique `check_permissions` existe) et L8 (module renfort optionnel). **Dépendance couverte** : le JIT repose sur un comportement mesuré d'azurerm (4.81.0) → `make canary-jit` (`infra/canary/jit-terraform/run.sh`, pile jetable ~5 min, ressources gratuites) le revérifie sur la dernière version du provider, et `.github/workflows/canary-azurerm.yml` chaque lundi (si les secrets Azure du dépôt sont configurés). Premier passage le 07/10 : PASS.
 1. **Utilisateur extérieur** — avant tout nouveau scénario ou provider
 2. **glorfindel check-ttl en cron** — crontab ou systemd timer
 3. **Entra ID / Service Principal** — vecteur #1 Azure 2025, `revoke_service_principal`

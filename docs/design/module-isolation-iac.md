@@ -1,6 +1,6 @@
 # Module d'isolation compatible avec l'infrastructure as code
 
-_Conception — 2026-10-05, mise à jour le 2026-10-06 — statut : mécanisme par défaut durci (L1–L3, L5, L7 livrés et validés sur Azure) ; L4, L6 et le module (L8) restent à faire._
+_Conception — 2026-10-05, mise à jour le 2026-10-07 — statut : isolation juste à temps par NSG de quarantaine livrée et validée sur Azure (L1–L5, L7 ; PR #17 à #24), canary du comportement Terraform en place ; restent l'écran d'activation (L6) et le module de renfort optionnel (L8)._
 
 ## Pourquoi ce chantier
 
@@ -169,15 +169,18 @@ notre NSG (source de vérité Azure). Les cas 6 et 8 sont suivis par la boucle L
 réechange une fois, alerte avec l'auteur lu dans le journal d'activité).
 
 
-**Décidé le 06/10 avec Jonathan** : premier choix pour toute NIC sans NSG ; Glorfindel crée le NSG au
-premier besoin (un par région) dans un RG configuré ; le module Terraform reste un renfort optionnel.
-Cas d'une NIC qui a déjà un NSG : mécanisme L3 (règles, NSG de subnet en repli, escalade si les deux
-laissent passer). Dernier recours discuté, non retenu pour l'instant : échanger temporairement le NSG
-client contre le nôtre (invisible pour Terraform — la lecture de l'association ne compare pas le NSG
-réel —, mais restauration dépendante de notre état) → action soumise à approbation, plus tard.
+**Décidé le 06/10 avec Jonathan, dans cet ordre :** d'abord le NSG de quarantaine pour toute NIC sans
+NSG ; puis, après la mesure ci-dessus, l'échange pour une NIC qui en a déjà un (le NSG client est mis de
+côté intact et remis à la levée ; l'original est gardé en tag sur notre NSG, ce qui lève la dépendance à
+l'état local). Glorfindel crée le NSG au premier besoin (un par région) dans un RG configuré ; le module
+Terraform reste un renfort optionnel. Repli si l'échange est refusé (Azure Policy, droits) : règles L3.
+
+**Dépendance au provider** : ce comportement est celui d'azurerm 4.81.0. `make canary-jit`
+(`infra/canary/jit-terraform/run.sh`, et chaque semaine en CI : `.github/workflows/canary-azurerm.yml`)
+le revérifie sur la dernière version du provider et échoue s'il a changé. Premier passage le 07/10 : PASS.
 
 Implémenté (`isolate_vm` / `release_isolation` / vérifications / `reset --from-azure`) ; détails dans
-CLAUDE.md. Points ci-dessous : la conception d'origine.
+CLAUDE.md. Points ci-dessous : la conception d'origine de L4 (NIC sans NSG), avant l'échange.
 
 Une NIC sans NSG propre est gouvernée par le seul NSG de son subnet. Glorfindel y accroche son propre NSG,
 qui ne contient que deux règles deny-all (entrée et sortie) : le trafic doit passer les deux NSG, donc la

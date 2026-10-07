@@ -611,7 +611,8 @@ def test_verify_isolation_false_when_a_nic_uncovered(monkeypatch):
 
     def _get(rg, name, rule):
         if name == "nsg-b":               # nic-b has NO rules → uncovered
-            raise Exception("NotFound")
+            from azure.core.exceptions import ResourceNotFoundError
+            raise ResourceNotFoundError("rule not found")
         return MagicMock()
     net.security_rules.get.side_effect = _get
     connector._network = net
@@ -619,6 +620,32 @@ def test_verify_isolation_false_when_a_nic_uncovered(monkeypatch):
     out = connector.verify_isolation(_RID)
     assert out["verified"] is False
     assert "nic-b" in out["uncovered_nics"]
+
+
+def test_verify_isolation_unreadable_rules_are_not_missing(monkeypatch):
+    """A read error (throttling) is an unknown, not a removal: the reassertion used to
+    put back an isolation still in place and alert that it had been removed (T10)."""
+    from glorfindel.actions import AzureConnector
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    monkeypatch.setattr(connector, "_get_vm_nic_targets", lambda rg, vm, **_k: [
+        _nic_target(nsg_rg="rg1", nsg_name="nsg-a", nic_id="nic-a")])
+    net = MagicMock()
+    net.security_rules.get.side_effect = Exception("429 Too Many Requests")
+    connector._network = net
+
+    out = connector.verify_isolation(_RID)
+    assert out["verified"] is None and out["unreadable_nics"] == ["nic-a"]
+    assert "uncovered_nics" not in out
+
+
+def test_not_found_in_a_message_is_not_a_missing_target():
+    """'…was not found' also describes a missing REFERENCED resource (re-attaching a
+    deleted customer NSG): only the SDK's 404 counts (T15)."""
+    from azure.core.exceptions import ResourceNotFoundError
+    from glorfindel.actions import _is_not_found
+    assert _is_not_found(ResourceNotFoundError("gone"))
+    assert not _is_not_found(Exception("Resource nsg-client was not found"))
 
 
 def test_release_isolation_multi_nic_deletes_all_placements(tmp_path, monkeypatch):
@@ -2413,6 +2440,66 @@ def test_release_without_state_reads_the_original_from_azure(monkeypatch):
     assert net.network_interfaces.begin_create_or_update.call_args.args[2].network_security_group.id == _CLIENT_NSG_ID
 
 
+
+# ── Troisième passe (T3, T4) : pas de succès sur une inconnue ─────────────────────────
+
+def test_release_keeps_the_quarantine_when_the_original_is_unknown(monkeypatch):
+    """No state and an unreadable tag: the NIC used to lose every NSG while
+    verify_release said verified. It stays in quarantine; the release says so."""
+    connector, net, nic = _l4_env(monkeypatch, quarantine_exists=True)
+    nic.network_security_group = type("R", (), {"id": _Q_ID})()
+    monkeypatch.setattr(connector, "_quarantine_tags", lambda q: (_ for _ in ()).throw(RuntimeError("429")))
+    out = connector.release_isolation(_RID)
+    assert out["status"] == "release_partial"
+    net.network_interfaces.begin_create_or_update.assert_not_called()
+
+
+def test_release_checks_the_original_came_back(monkeypatch):
+    """Released means the customer's NSG is on the NIC again, not only ours gone."""
+    from glorfindel.actions import _load_isolation_state
+    connector, net, nic = _l4_env(monkeypatch, nic_nsg_id=_CLIENT_NSG_ID, quarantine_exists=True)
+    connector.isolate_vm(_RID)
+    nic.network_security_group = type("R", (), {"id": _Q_ID})()
+    monkeypatch.setattr(connector, "_nic_nsg_id", lambda nic_id: None)    # Azure didn't apply it
+    out = connector.release_isolation(_RID)
+    assert out["status"] == "release_partial" and "non remis" in out["failed"][0]
+    assert _load_isolation_state("vm")["placements"][0]["original_nsg_id"] == _CLIENT_NSG_ID
+
+
+def test_an_overwritten_original_tag_cancels_the_swap(monkeypatch):
+    """Two isolations at once rewrote the shared NSG's tags: read back, and fall back
+    to the rules rather than swap with no record of the customer's NSG."""
+    connector, net, nic = _l4_env(monkeypatch, nic_nsg_id=_CLIENT_NSG_ID, quarantine_exists=True)
+    net.network_security_groups.update_tags.side_effect = lambda *a: None   # the tag never lands
+    out = connector.isolate_vm(_RID)
+    assert all(c.args[2].network_security_group.id != _Q_ID
+               for c in net.network_interfaces.begin_create_or_update.call_args_list)
+    assert "not recorded" in out["quarantine_refused"][0]
+
+
+def test_reisolation_keeps_the_original_recorded_in_state(monkeypatch):
+    """Re-applying on a NIC already in quarantine read the original from the tag only,
+    and overwrote the state's with None when the tag was gone."""
+    from glorfindel.actions import _load_isolation_state
+    connector, net, nic = _l4_env(monkeypatch, nic_nsg_id=_CLIENT_NSG_ID, quarantine_exists=True)
+    connector.isolate_vm(_RID)
+    nic.network_security_group = type("R", (), {"id": _Q_ID})()
+    net.network_security_groups.get.return_value.tags = {}                 # tag lost
+    connector.isolate_vm(_RID)
+    assert _load_isolation_state("vm")["placements"][0]["original_nsg_id"] == _CLIENT_NSG_ID
+
+
+def test_windows_isolation_is_not_verified_while_sessions_stay_open():
+    """`unsupported` left verified=True and a ✓ notification (T4)."""
+    from glorfindel.actions import isolation_verdict
+    out = isolation_verdict({"verified": True}, {"drain": {"status": "unsupported", "note": "Windows"}})
+    assert out["verified"] is False and "non coupées" in out["error"]
+
+
+def test_a_drain_count_that_failed_is_not_zero():
+    """`ss … | wc -l` printed 0 when ss was missing or refused -H."""
+    assert _drain_connector("glorfindel-drain-remaining=error").drain_connections(_RID)["status"] == "failed"
+
 # ── L6 : droits de l'isolation, lus sans rien écrire ─────────────────────────────────
 
 def test_check_permissions_lists_what_is_missing(monkeypatch):
@@ -2450,3 +2537,28 @@ def test_audit_reports_missing_isolation_permissions():
     result = audit.run(_RID, connector, vault="rsv", staging_storage="st")
     check = next(c for c in result.checks if c.name == "Isolation permissions")
     assert check.status == "fail" and "runCommand" in check.message
+
+
+def test_an_action_in_another_subscription_is_refused(monkeypatch):
+    """Ids were reduced to (group, name) in AZURE_SUBSCRIPTION_ID: a VM discovered in
+    subscription B was isolated in A, on the homonymous VM (third review, T1)."""
+    from glorfindel.actions import AzureConnector, WrongSubscriptionError
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    connector._subscription_id = "sub-a"
+    connector._network = MagicMock()
+    other = "/subscriptions/sub-b/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm"
+    for call in (lambda: connector.isolate_vm(other),
+                 lambda: connector.block_suspicious_ip("203.0.113.9", other),
+                 lambda: connector.release_isolation(other)):
+        with pytest.raises(WrongSubscriptionError):
+            call()
+    connector._network.network_interfaces.begin_create_or_update.assert_not_called()
+
+
+def test_readiness_says_a_vm_of_another_subscription_is_not_ready():
+    from glorfindel.readiness import assess
+    c = MagicMock(read_only=False, _subscription_id="sub-a")
+    a = assess("/subscriptions/sub-b/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm", c)
+    assert a["verdict"] == "not_ready" and a["reasons"][0]["code"] == "other_subscription"
+    c.check_permissions.assert_not_called()

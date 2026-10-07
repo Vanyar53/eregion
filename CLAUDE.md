@@ -469,7 +469,7 @@ GLORFINDEL_DISCOVERY_RETENTION_H=8  # rétention d'une VM éteinte dans le regis
 ## Tests
 
 ```bash
-pytest                    # 655 tests (~15s), 0 appel Azure, 0 appel LLM, 0 écriture ~/.glorfindel/
+pytest                    # 668 tests (~15s), 0 appel Azure, 0 appel LLM, 0 écriture ~/.glorfindel/
                           # Hermétique par construction (conftest) : TOUS les chemins ~/.glorfindel redirigés
                           # vers tmp, et le glorfindel-config.yaml local ignoré (avant : avec une config locale,
                           # les tests de graphe lançaient de vraies requêtes KQL via `investigate`, suite 5× plus lente).
@@ -550,6 +550,13 @@ wheel : eregion-0.2.0-py3-none-any.whl ✓
 - **Nom de container/item backup — CASSE sensible** : `recovery_points.list` est **case-SENSITIVE** sur le préfixe de type (`IaasVMContainer;` / `VM;`), alors que `protected_items.get` est **case-insensitive**. Construire en minuscules (`iaasvmcontainer;`/`vm;`) faisait réussir `protected_items.get` (→ `protected=True`) mais renvoyer `recovery_points.list` **vide** → faux « first backup pending » sur une VM **réellement** sauvegardée (RECOVER/`list_backup_items` lisait `last_recovery_point` de l'item trouvé par get → l'affichait, d'où l'incohérence posture vs RECOVER). Confirmé sur le bench Celebrimbor (`az backup recoverypoint list` montrait le RP, notre query le ratait sur la casse seule). `check_backup_points` utilise désormais le format canonique `IaasVMContainer;iaasvmcontainerv2;{rg_vm};{vm}` + `VM;...` (`_backup_item_names`). **Revue 2026-10** : `snapshot` et `restore` lisent les noms **tels que le vault les stocke** (`_resolve_backup_item_names` : `protected_items.get` insensible à la casse → id renvoyé → noms exacts) et prennent `vault_rg`. ⚠️ **Mesure réelle 2026-10-05 (lecture seule, rsv-celebrimbor-erebor)** : `recovery_points.list` renvoie les **mêmes 8 points en minuscules et en casse canonique** — la sensibilité à la casse constatée par 8bda989 n'est **pas reproduite** aujourd'hui (cause d'époque inconnue). L'hypothèse « l'ancien restore ne trouvait plus de point » est donc réfutée ; les noms canoniques + la résolution restent comme robustesse. Le restore complet n'a pas retourné en réel depuis le 09/06 (RTO 21m29s, ancienne sandbox) → à rejouer par la session Tests.
 
 ---
+
+- **Troisième passe (07/10) — pas de succès sur une inconnue, bonne cible (L10, L11 en partie, L14 en partie)** :
+  - `_original_from_tags` **lève** sur une erreur de lecture (avant : `None` → la levée laissait la carte **sans NSG** et `verify_release` disait vrai) ; la levée lit d'abord l'original dans l'état (`"original_nsg_id" in p`, `None` = la carte n'en avait pas), puis **relit la carte** (`_unquarantine`) : original absent ou inconnu → la carte reste en quarantaine, `release_partial`. Tags d'origine écrits sous verrou (`_quarantine_lock` : thread + flock `~/.glorfindel/locks/`) puis relus ; tag non posé → échange annulé, repli sur les règles. Ré-isolation d'une carte déjà en quarantaine : original repris de l'état (`_recorded_original`), pas écrasé par `None`.
+  - `_rules_state` à trois états : une règle **illisible** n'est plus « disparue » → `verify_isolation` / `verify_block_ip` rendent `verified=None` (`unreadable_nics` / `unreadable_rules`), la réaffirmation ne repose rien. `_is_not_found` : 404 / `ResourceNotFoundError` seulement (la sous-chaîne « not found » couvrait aussi une ressource *référencée* manquante).
+  - Coupure des sessions : `unsupported` (Windows) → **non vérifié** ; comptage `ss` en erreur → `failed` (avant : `| wc -l` donnait 0). Levée autonome seulement si `run_command_neutralized is True` (drapeau absent = inconnu → `release_hold`).
+  - **Abonnement** : toute méthode d'action/vérification du connecteur refuse une VM d'un autre abonnement que `AZURE_SUBSCRIPTION_ID` (`WrongSubscriptionError` → `action_failed`) ; la préparation dit `other_subscription` (pas prête).
+  - Règles : `ransomware-disk-write` lit la cadence de chaque série (`Step = min(Gap)`) — fine (≤ 25 s) : 2 échantillons > 45 Mo/s ; grossière (défaut Azure 60 s) : 1 échantillon > 25 Mo/s (moyennes 60 s reconstruites sur 10 jours : attaques 26,8–91,7, bénin max 23,2 — marge mince, à mesurer avec une vraie DCR à 60 s). `sudo-privilege-escalation` : `summarize arg_max(TimeGenerated, *) by Computer` au lieu de `| limit 1` (exécuté avant le filtre par VM → aveugle en multi-VM). Toute règle `assets: [auto]` avec `limit`/`take`/`top` → avertissement au chargement.
 
 ## Pitfalls opérateur
 

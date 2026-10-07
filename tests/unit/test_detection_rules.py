@@ -146,7 +146,7 @@ def test_named_backend_is_honored_without_fallback(tmp_path, caplog):
         r = load_config(f).rules[0]
     assert r.workspace_id == "ws-prod"
     assert r.monitoring_backend_name == "law-prod"
-    assert not caplog.messages  # nothing to warn about
+    assert not [m for m in caplog.messages if "limit" not in m]  # no backend warning
 
 
 def test_rule_disabled_when_no_backend(tmp_path, caplog):
@@ -847,3 +847,27 @@ def test_expansion_picks_up_a_vm_discovered_after_start(tmp_path, monkeypatch):
         names = sorted(t.name for t in poller._threads if t.is_alive())
         poller.stop()
     assert names == ["rule-ransomware-disk-write@vm1", "rule-ransomware-disk-write@vm2"]
+
+
+def test_shipped_rules_do_not_truncate_before_the_vm_filter():
+    """`| limit 1` ran on the server before the per-VM filter: a benign sudo on another
+    VM hid the attack (third review, T7). Same check warns on LLM-authored rules."""
+    from pathlib import Path
+    import yaml
+    from glorfindel.detection_rules import _truncates_before_vm_filter
+    path = Path(__file__).resolve().parents[2] / "glorfindel/rules/azure/detection_rules.yaml"
+    for r in yaml.safe_load(path.read_text())["rules"]:
+        if "auto" in (r.get("assets") or []):
+            assert not _truncates_before_vm_filter(r["query"]), r["name"]
+    assert _truncates_before_vm_filter("Syslog\n| where x\n| limit 1")
+    assert not _truncates_before_vm_filter("Syslog\n// no | limit here\n| summarize arg_max(TimeGenerated, *) by Computer")
+
+
+def test_ransomware_rule_reads_the_sampling_step_from_the_data():
+    """Two samples ≤ 25 s apart never exist at Azure's default 60-s sampling: the rule
+    never fired there (third review, T6). Coarse series use one sample."""
+    from pathlib import Path
+    import yaml
+    path = Path(__file__).resolve().parents[2] / "glorfindel/rules/azure/detection_rules.yaml"
+    q = next(r["query"] for r in yaml.safe_load(path.read_text())["rules"] if r["name"] == "ransomware-disk-write")
+    assert "Step = min(Gap)" in q and "not(Fine) and Rate > 25000000" in q

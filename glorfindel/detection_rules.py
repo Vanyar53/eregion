@@ -227,6 +227,18 @@ def _resolve_backend_for_rule(
     return None
 
 
+_TRUNCATE_RE = re.compile(r"\|\s*(limit|take|top)\b", re.IGNORECASE)
+
+
+def _truncates_before_vm_filter(query: str) -> bool:
+    """A rule applied to every discovered VM runs one unfiltered query per VM and keeps
+    the rows of THAT VM client-side (B8). A `limit` / `take` / `top` cuts the rows on the
+    server first: `| limit 1` on the sudo rule let a benign sudo elsewhere hide the
+    attack for the whole window (third review, T7). Comment lines are ignored."""
+    code = "\n".join(line.split("//", 1)[0] for line in query.splitlines())
+    return bool(_TRUNCATE_RE.search(code))
+
+
 def load_config(path: str | Path, glorfindel_cfg=None) -> DetectionConfig:
     """Load detection configuration from YAML.
 
@@ -351,6 +363,14 @@ def load_config(path: str | Path, glorfindel_cfg=None) -> DetectionConfig:
                 item["name"],
             )
             rule_enabled = False
+
+        if auto_apply and _truncates_before_vm_filter(item["query"]):
+            logger.warning(
+                "detection rule '%s': `limit` / `take` / `top` runs on the server BEFORE the "
+                "per-VM filter — with several VMs, a row from one VM hides the others "
+                "(use `summarize arg_max(TimeGenerated, *) by Computer`)",
+                item["name"],
+            )
 
         rules.append(DetectionRule(
             name=item["name"],

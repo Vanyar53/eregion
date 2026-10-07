@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import importlib
 import json
 import os
@@ -68,6 +69,12 @@ def isolation_verdict(verification: dict, outcome: dict) -> dict:
     attacker's session still open is not a contained VM. Shared by the agent's
     verify_action and the War Room's approve route."""
     drain = (outcome or {}).get("drain") or {}
+    if verification.get("verified") is True and drain.get("status") == "unsupported":
+        return {
+            **verification, "verified": False, "drain": drain,
+            "error": ("sessions déjà ouvertes non coupées (" + (drain.get("note") or "OS non pris en charge")
+                      + ") : un attaquant connecté garde la main — les couper à la main"),
+        }
     if verification.get("verified") is True and drain.get("status") in ("failed", "partial"):
         return {
             **verification, "verified": False,
@@ -97,7 +104,10 @@ def _is_not_found(exc: BaseException) -> bool:
             return True
     except ImportError:
         pass
-    return "notfound" in str(exc).replace(" ", "").lower()
+    # No substring guess: "…was not found" also describes a REFERENCED resource that is
+    # missing (re-attaching a deleted customer NSG), which is a failure, not "already
+    # gone". The SDK raises ResourceNotFoundError / status 404 for the target itself.
+    return False
 
 
 def _prefix_covers(prefix: str, ip: str) -> bool:
@@ -814,15 +824,21 @@ class AzureConnector(CloudConnector):
             if "windows" in os_type.lower():
                 return {"status": "unsupported",
                         "note": "Windows : les sessions déjà ouvertes ne sont pas coupées."}
+            # The count must fail loudly: `ss … | wc -l` printed 0 when `ss` was missing
+            # or refused -H — "nothing left" on an unknown.
             script = [
                 f"ss -K state established '{self._DRAIN_FILTER}' >/dev/null 2>&1",
-                f"echo \"glorfindel-drain-remaining=$(ss -Htn state established "
-                f"'{self._DRAIN_FILTER}' | wc -l)\"",
+                f"if out=$(ss -Htn state established '{self._DRAIN_FILTER}' 2>/dev/null); "
+                f"then echo \"glorfindel-drain-remaining=$(printf '%s\\n' \"$out\" | grep -c .)\"; "
+                f"else echo glorfindel-drain-remaining=error; fi",
             ]
             res = self._compute.virtual_machines.begin_run_command(
                 rg, vm_name, RunCommandInput(command_id="RunShellScript", script=script),
             ).result(timeout=300)   # an unresponsive VM agent must not hold the watch worker
             text = " ".join(str(getattr(v, "message", "") or "") for v in (getattr(res, "value", None) or []))
+            if "glorfindel-drain-remaining=error" in text:
+                return {"status": "failed",
+                        "error": "sessions restantes non comptées (`ss` absent ou en erreur)"}
             m = re.search(r"glorfindel-drain-remaining=(\d+)", text)
             if m is None:
                 return {"status": "failed", "error": "sortie de Run Command illisible"}
@@ -932,7 +948,12 @@ class AzureConnector(CloudConnector):
         q = self._ensure_quarantine_nsg(t.get("location"), default_rg)
         current = t.get("quarantine")
         if current and _same_id(current["nsg_id"], q["nsg_id"]):
-            original = self._original_from_tags(q, t["nic_id"])
+            # Already in quarantine (a re-application): the state knows the original;
+            # the tag is the fallback, and a tag that can't be read raises — an unknown
+            # original must not be recorded as "none".
+            original = _recorded_original(t["nic_id"])
+            if original is _UNKNOWN:
+                original = self._original_from_tags(q, t["nic_id"])
         else:
             original = t.get("own_nsg_id")
             if original:
@@ -962,28 +983,60 @@ class AzureConnector(CloudConnector):
 
     def _record_original(self, q: dict, nic_id: str, original_id: str) -> None:
         """NIC → its own NSG, kept as a tag on our quarantine NSG (not on the NIC: a
-        `terraform apply` rewrites the NIC's tags — measured)."""
-        tags = self._quarantine_tags(q)
-        tags[self._orig_tag(nic_id)] = original_id
-        self._write_quarantine_tags(q, tags)
+        `terraform apply` rewrites the NIC's tags — measured).
+
+        The quarantine NSG is shared by every isolation in the region: the tags are
+        rewritten whole, so two isolations at once (N VMs on one rule, the War Room next
+        to the watch) erased each other's tag. Read-modify-write under a lock, then read
+        back: a tag that didn't land raises, and the NIC is not swapped."""
+        key = self._orig_tag(nic_id)
+        with _quarantine_lock(q["nsg_id"]):
+            tags = self._quarantine_tags(q)
+            tags[key] = original_id
+            self._write_quarantine_tags(q, tags)
+            if self._quarantine_tags(q).get(key) != original_id:
+                raise RuntimeError(f"original NSG of {nic_id.rsplit('/', 1)[-1]} not recorded "
+                                   "on the quarantine NSG (tag overwritten)")
 
     def _original_from_tags(self, q: dict, nic_id: str) -> str | None:
-        try:
-            return self._quarantine_tags(q).get(self._orig_tag(nic_id)) or None
-        except Exception:
-            return None
+        """The NIC's original NSG from our tag; None if the NIC had none. A read error
+        RAISES: it used to read as "no original", and the release then left the NIC
+        with no NSG at all while verify_release said verified."""
+        return self._quarantine_tags(q).get(self._orig_tag(nic_id)) or None
 
     def _forget_original(self, q: dict, nic_id: str) -> None:
         try:
-            tags = self._quarantine_tags(q)
-            if tags.pop(self._orig_tag(nic_id), None) is not None:
-                self._write_quarantine_tags(q, tags)
+            with _quarantine_lock(q["nsg_id"]):
+                tags = self._quarantine_tags(q)
+                if tags.pop(self._orig_tag(nic_id), None) is not None:
+                    self._write_quarantine_tags(q, tags)
         except Exception:
             pass     # a stale tag is harmless: it is only read for a NIC carrying our NSG
 
+    def _nic_nsg_id(self, nic_id: str) -> str | None:
+        nic_rg, nic_name = _parse_nic_resource_id(nic_id)
+        nic = self._network.network_interfaces.get(nic_rg, nic_name)
+        return getattr(getattr(nic, "network_security_group", None), "id", None)
+
+    def _nic_gone(self, nic_id: str) -> bool:
+        """True only when the NIC itself no longer exists (deleted with its VM)."""
+        try:
+            self._nic_nsg_id(nic_id)
+            return False
+        except Exception as e:
+            return _is_not_found(e)
+
     def _unquarantine(self, nic_id: str, q: dict, original: str | None) -> None:
-        """Put the NIC's own NSG back (or none), only if it still carries OURS."""
-        self._set_nic_nsg(nic_id, original, expect=q["nsg_id"])
+        """Put the NIC's own NSG back (or none), only if it still carries OURS, then read
+        the NIC back: release is done when the ORIGINAL is on it, not when ours is gone
+        (verify_release only checks the latter)."""
+        if self._set_nic_nsg(nic_id, original, expect=q["nsg_id"]):
+            now = self._nic_nsg_id(nic_id)
+            if not _same_id(now or "", original or ""):
+                raise RuntimeError(
+                    f"NSG d'origine non remis sur {nic_id.rsplit('/', 1)[-1]} : la carte porte "
+                    f"{(now or 'aucun NSG').rsplit('/', 1)[-1]} au lieu de "
+                    f"{(original or 'aucun NSG').rsplit('/', 1)[-1]}")
         self._forget_original(q, nic_id)
 
     @staticmethod
@@ -1044,11 +1097,15 @@ class AzureConnector(CloudConnector):
                 if p.get("kind") == "quarantine":
                     # Put the NIC's own NSG back (or none) — only if it still carries
                     # OURS; our NSG keeps its deny rules for the next VM.
+                    # The state's original wins (None = the NIC had no NSG); the tag
+                    # is read only when the state doesn't say. Unknown original, or
+                    # an original that didn't come back → the NIC stays in quarantine.
                     try:
-                        original = p.get("original_nsg_id") or self._original_from_tags(p, p["nic_id"])
+                        original = (p["original_nsg_id"] if "original_nsg_id" in p
+                                    else self._original_from_tags(p, p["nic_id"]))
                         self._unquarantine(p["nic_id"], p, original)
                     except Exception as exc:
-                        if not _is_not_found(exc):
+                        if not self._nic_gone(p["nic_id"]):
                             failed.append(f'{p["nic_id"].split("/")[-1]}: NSG de quarantaine '
                                           f"non détaché : {_first_line(exc)[:_ERR_MAX]}")
                             remaining.append(p)
@@ -1487,31 +1544,46 @@ class AzureConnector(CloudConnector):
         # Isolation holds only if EVERY NIC carries a deny pair — a single uncovered NIC
         # is the multi-NIC gap (looks ISOLATED but traffic still flows on the other NIC).
         uncovered: list[str] = []
+        unreadable: list[str] = []
         found: dict[str, tuple] = {}     # nic_id → (nsg_rg, nsg_name, inbound deny name)
         for t0 in targets:
+            unknown = False
             # Glorfindel's quarantine NSG on the NIC (L4): holds if its two denies are there.
             q = t0.get("quarantine")
-            if q and self._rules_present(q["nsg_rg"], q["nsg_name"], [QUARANTINE_RULE_IN, QUARANTINE_RULE_OUT]):
-                found[t0["nic_id"]] = (q["nsg_rg"], q["nsg_name"], QUARANTINE_RULE_IN)
-                continue
+            if q:
+                st = self._rules_state(q["nsg_rg"], q["nsg_name"], [QUARANTINE_RULE_IN, QUARANTINE_RULE_OUT])
+                if st == "present":
+                    found[t0["nic_id"]] = (q["nsg_rg"], q["nsg_name"], QUARANTINE_RULE_IN)
+                    continue
+                unknown = st == "unknown"
             # The deny may sit on the NIC's own NSG or on its subnet's (placed there when
             # an ALLOW preceded it on the first): either one holds.
             for t in self._nic_nsg_views(t0):
                 base = self._placement_rule_base("glorfindel-iso", vm_name, t["nic_short"], t["nic_id"])
-                if self._rules_present(t["nsg_rg"], t["nsg_name"], [base, f"{base}-out"]):
-                    found[t0["nic_id"]] = (t["nsg_rg"], t["nsg_name"], base)
-                    break
                 # Legacy fallback: a VM isolated before the multi-NIC upgrade used the
                 # old fixed/VM-suffixed names on the primary NIC's NSG.
                 legacy_in, legacy_out = self._isolation_rule_names(vm_name, t["scope"])
-                if self._rules_present(t["nsg_rg"], t["nsg_name"], [legacy_in, legacy_out]):
-                    found[t0["nic_id"]] = (t["nsg_rg"], t["nsg_name"], legacy_in)
+                hit = None
+                for pair in ([base, f"{base}-out"], [legacy_in, legacy_out]):
+                    st = self._rules_state(t["nsg_rg"], t["nsg_name"], pair)
+                    if st == "present":
+                        hit = pair[0]
+                        break
+                    unknown = unknown or st == "unknown"
+                if hit:
+                    found[t0["nic_id"]] = (t["nsg_rg"], t["nsg_name"], hit)
                     break
             else:
-                uncovered.append(t0["nic_short"])
+                # Not found: missing for sure, or only unreadable (no claim either way).
+                (unreadable if unknown else uncovered).append(t0["nic_short"])
 
         if uncovered:
-            return {"verified": False, "method": "nsg_check", "uncovered_nics": uncovered}
+            return {"verified": False, "method": "nsg_check", "uncovered_nics": uncovered,
+                    **({"unreadable_nics": unreadable} if unreadable else {})}
+        if unreadable:
+            return {"verified": None, "method": "nsg_check", "unreadable_nics": unreadable,
+                    "error": "isolation non vérifiable : règles illisibles sur "
+                             + ", ".join(unreadable)}
 
         # Present is not effective: an ALLOW evaluated before the deny still passes its
         # traffic (the bench's allow-ssh at 100 kept SSH open on every "isolated" VM).
@@ -1628,12 +1700,16 @@ class AzureConnector(CloudConnector):
 
     def _rules_present(self, nsg_rg: str, nsg_name: str, names: list[str]) -> bool:
         """True if all named rules exist on the NSG."""
-        try:
-            for n in names:
-                self._network.security_rules.get(nsg_rg, nsg_name, n)
-            return True
-        except Exception:
-            return False
+        return self._rules_state(nsg_rg, nsg_name, names) == "present"
+
+    def _rules_state(self, nsg_rg: str, nsg_name: str, names: list[str]) -> str:
+        """'present' (all there) | 'absent' (one is definitely gone) | 'unknown' (a read
+        failed). A read error used to count as "missing": the reassertion then put back
+        an isolation that was still in place, and alerted that it had been removed."""
+        states = [self._rule_state(nsg_rg, nsg_name, n) for n in names]
+        if "absent" in states:
+            return "absent"
+        return "unknown" if "unknown" in states else "present"
 
     def verify_snapshot(self, snap_id: str) -> dict:
         if self.dry_run:
@@ -1975,15 +2051,19 @@ class AzureConnector(CloudConnector):
 
         # Multi-NIC VM block: confirmed only if every placement's rule pair is present.
         if entry and entry.get("placements"):
-            missing = [
-                name
+            states = {
+                name: self._rule_state(p["nsg_rg"], p["nsg_name"], name)
                 for p in entry["placements"]
                 for name in (p["rule"], f'{p["rule"]}-out')
-                if not self._rules_present(p["nsg_rg"], p["nsg_name"], [name])
-            ]
+            }
+            missing = [n for n, st in states.items() if st == "absent"]
             if missing:
                 return {"verified": False, "method": "nsg_check", "missing_rules": missing,
                         "error": f"rules missing: {', '.join(missing)}"}
+            unread = [n for n, st in states.items() if st == "unknown"]
+            if unread:
+                return {"verified": None, "method": "nsg_check", "unreadable_rules": unread,
+                        "error": "blocage non vérifiable : règles illisibles (" + ", ".join(unread) + ")"}
             port = entry.get("threat_port")
             shadowed, unknown = self._precedence([
                 (p["nsg_rg"], p["nsg_name"], p["rule"],
@@ -2004,7 +2084,12 @@ class AzureConnector(CloudConnector):
         if entry and entry.get("nsg") and entry.get("rule"):
             nsg_rg, nsg_name = entry["nsg"].split("/", 1)
             pair = [entry["rule"], f'{entry["rule"]}-out']
-            missing = [n for n in pair if not self._rules_present(nsg_rg, nsg_name, [n])]
+            states = {n: self._rule_state(nsg_rg, nsg_name, n) for n in pair}
+            missing = [n for n, st in states.items() if st == "absent"]
+            if not missing and any(st == "unknown" for st in states.values()):
+                return {"verified": None, "method": "nsg_check",
+                        "unreadable_rules": [n for n, st in states.items() if st == "unknown"],
+                        "error": "blocage non vérifiable : règles illisibles"}
             if not missing:
                 # A perimeter block has no destination scope: any VM behind the NSG.
                 shadowed, unknown = self._precedence([
@@ -2671,7 +2756,89 @@ class AzureConnector(CloudConnector):
         return _parse_nsg_resource_id(subnet.network_security_group.id)
 
 
+class WrongSubscriptionError(RuntimeError):
+    """The target lives in another subscription than the one Glorfindel acts in."""
+
+
+def _subscription_of(resource_id: str) -> str:
+    parts = (resource_id or "").split("/")
+    for i, part in enumerate(parts[:-1]):
+        if part.lower() == "subscriptions":
+            return parts[i + 1]
+    return ""
+
+
+def _same_subscription(method):
+    """Refuse to act on (or vouch for) a VM of another subscription (third review, T1).
+
+    The resource ids are reduced to (resource group, name) and every client runs in
+    AZURE_SUBSCRIPTION_ID. With a Log Analytics workspace shared by several
+    subscriptions, a VM discovered in subscription B was isolated in subscription A —
+    on the homonymous VM if one exists. Until clients exist per subscription, the
+    action is refused, and the cycle escalates it as action_failed."""
+    import functools
+
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        if not self.dry_run:
+            rid = kwargs.get("resource_id") or next(
+                (a for a in args if isinstance(a, str) and a.lower().startswith("/subscriptions/")), "")
+            # The subscription the clients run in — read without building them, so the
+            # read-only guard and its clear message still come first.
+            target = _subscription_of(rid)
+            mine = self._subscription_id or os.environ.get("AZURE_SUBSCRIPTION_ID", "")
+            if target and mine and target.lower() != mine.lower():
+                raise WrongSubscriptionError(
+                    f"{rid.rsplit('/', 1)[-1]} est dans l'abonnement {target}, Glorfindel agit dans "
+                    f"{mine} : action refusée (elle viserait une autre VM, ou aucune). "
+                    "Agir depuis une instance configurée pour cet abonnement.")
+        return method(self, *args, **kwargs)
+    return wrapper
+
+
+for _name in ("isolate_vm", "release_isolation", "verify_isolation", "verify_release",
+              "block_suspicious_ip", "unblock_ip", "verify_block_ip", "snapshot",
+              "restore_from_backup", "drain_connections", "sweep_vm_rules", "check_permissions"):
+    if hasattr(AzureConnector, _name):
+        setattr(AzureConnector, _name, _same_subscription(getattr(AzureConnector, _name)))
+
+
 _ISOLATION_STATE_DIR = Path.home() / ".glorfindel" / "isolation"
+
+_UNKNOWN = object()
+_QUARANTINE_LOCKS: dict[str, threading.Lock] = {}
+_QUARANTINE_LOCKS_GUARD = threading.Lock()
+
+
+@contextlib.contextmanager
+def _quarantine_lock(nsg_id: str):
+    """One writer at a time on a quarantine NSG's tags: a thread lock (workers of one
+    watch) plus an flock (the War Room and the CLI are other processes)."""
+    import hashlib
+    key = nsg_id.rstrip("/").lower()
+    with _QUARANTINE_LOCKS_GUARD:
+        lock = _QUARANTINE_LOCKS.setdefault(key, threading.Lock())
+    with lock:
+        lock_dir = _ISOLATION_STATE_DIR.parent / "locks"
+        lock_dir.mkdir(parents=True, exist_ok=True)
+        with open(lock_dir / f"quarantine-{hashlib.sha1(key.encode()).hexdigest()[:12]}.lock", "a") as fh:
+            try:
+                import fcntl
+                fcntl.flock(fh, fcntl.LOCK_EX)
+            except ImportError:
+                pass
+            yield
+
+
+def _recorded_original(nic_id: str):
+    """The original NSG recorded in local state for this NIC (None = it had none), or
+    _UNKNOWN when no state records it."""
+    for iso in active_isolations():
+        for p in iso.get("placements") or []:
+            if p.get("kind") == "quarantine" and _same_id(p.get("nic_id", ""), nic_id) \
+                    and "original_nsg_id" in p:
+                return p["original_nsg_id"]
+    return _UNKNOWN
 _BLOCK_STATE_DIR = Path.home() / ".glorfindel" / "blocks"
 
 

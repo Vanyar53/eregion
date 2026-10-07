@@ -3,8 +3,11 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def fake_anthropic_key(monkeypatch):
-    """Ensure ANTHROPIC_API_KEY is set in all unit tests — actual calls are mocked."""
+    """Ensure ANTHROPIC_API_KEY is set in all unit tests — actual calls are mocked.
+    The operator's AZURE_SUBSCRIPTION_ID is removed: the subscription guard would
+    otherwise refuse the tests' "/subscriptions/s/..." ids on a configured machine."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-fake")
+    monkeypatch.delenv("AZURE_SUBSCRIPTION_ID", raising=False)
 
 
 @pytest.fixture(autouse=True)

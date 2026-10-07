@@ -49,6 +49,7 @@ _SILENT = {"read_only", "unsupported_asset"}
 
 _ISOLATION_RIGHTS = {
     "Microsoft.Network/networkInterfaces/write",
+    "Microsoft.Network/virtualNetworks/subnets/join/action",
     "Microsoft.Network/networkSecurityGroups/write",
     "Microsoft.Network/networkSecurityGroups/join/action",
 }
@@ -102,8 +103,11 @@ def assess(resource_id: str, connector, quarantine_nsg: bool = True) -> dict:
             f"Droits non vérifiables ({(perms or {}).get('error', '?') if isinstance(perms, dict) else '?'}).",
             "Donner au moins Reader sur le resource group pour lire les permissions."))
         missing: set[str] = set()
+        release_missing: list[dict] = []
     else:
-        missing = {m["action"] for m in perms.get("missing") or []}
+        # What the isolation needs, apart from the release's own right (below).
+        missing = {m["action"] for m in perms.get("missing") or [] if m.get("used_by") != "release_isolation"}
+        release_missing = [m for m in perms.get("missing") or [] if m.get("used_by") == "release_isolation"]
     jit_ok = quarantine_nsg and not (missing & _ISOLATION_RIGHTS)
     rules_ok = not (missing & _RULE_RIGHTS)
     if not jit_ok and not rules_ok:
@@ -123,6 +127,13 @@ def assess(resource_id: str, connector, quarantine_nsg: bool = True) -> dict:
             "no_block", "reserve",
             "Blocage d'IP impossible (droits sur les règles NSG manquants).",
             "Ajouter " + ", ".join(sorted(missing & _RULE_RIGHTS)) + "."))
+    if release_missing and jit_ok:
+        reasons.append(_reason(
+            "release_blocked", "reserve",
+            "La levée ne pourra pas remettre le NSG d'origine de la carte (join/action manquant sur "
+            + ", ".join(sorted({m["scope"] for m in release_missing}))
+            + ") : la carte resterait en quarantaine jusqu'à une intervention.",
+            "Ajouter Microsoft.Network/networkSecurityGroups/join/action sur le groupe du NSG du client."))
     if _DRAIN_RIGHT in missing:
         reasons.append(_reason(
             "no_drain", "reserve",

@@ -97,7 +97,7 @@ def refresh_job(job: dict, connector) -> dict:
                         "error": result.get("error", result.get("status", "unknown"))})
     elif jtype == "restore":
         restore_job_name = job.get("restore_job_name")
-        vault = job.get("vault", "rsv-annatar")
+        vault = job.get("vault", "")
         # Job lookups run in the VAULT's resource group (central vault ≠ VM RG).
         rg = job.get("vault_rg") or job.get("rg", "")
         if restore_job_name and rg:
@@ -184,7 +184,7 @@ def record_snapshot_job(
 
 
 def start_snapshot(
-    resource_id: str, connector, vault: str = "rsv-annatar", vault_rg: str = "",
+    resource_id: str, connector, vault: str = "", vault_rg: str = "",
 ) -> dict:
     """Trigger a non-blocking RSV backup. Returns job metadata immediately."""
     snap_id = connector.snapshot(resource_id, vault=vault, wait=False, vault_rg=vault_rg)
@@ -194,7 +194,7 @@ def start_snapshot(
 def start_restore(
     resource_id: str,
     connector,
-    vault: str = "rsv-annatar",
+    vault: str = "",
     before_attack_time: str | None = None,
     staging_storage: str = "",
     vault_rg: str = "",

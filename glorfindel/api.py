@@ -20,6 +20,16 @@ except ImportError as e:
 
 app = FastAPI(title="Glorfindel War Room", docs_url=None, redoc_url=None)
 
+
+class AmbiguousVM(Exception):
+    """A VM name the War Room sent matches several VMs (same name, two resource groups)."""
+
+
+@app.exception_handler(AmbiguousVM)
+async def _ambiguous_vm(_request, exc: AmbiguousVM):
+    from fastapi.responses import JSONResponse
+    return JSONResponse(status_code=409, content={"error": str(exc)})
+
 _TOKEN_COOKIE = "glorfindel_warroom"
 
 
@@ -906,15 +916,10 @@ async def action_snapshot(vm_name: str) -> dict:
     if not resource_id:
         return {"error": f"Resource ID not found for {vm_name}"}
 
-    vault, vault_rg = os.environ.get("GLORFINDEL_BACKUP_VAULT", "rsv-annatar"), ""
-    try:
-        from glorfindel.config import load_glorfindel_config
-        rsv = load_glorfindel_config().backup_vault()
-        if rsv:
-            vault = rsv.vault_name or vault
-            vault_rg = rsv.resource_group or ""
-    except Exception:
-        pass
+    from glorfindel.config import NO_VAULT_MSG, resolve_backup_vault
+    vault, vault_rg, _ = resolve_backup_vault()
+    if not vault:
+        return {"error": NO_VAULT_MSG}
 
     from glorfindel.actions import AzureConnector
     from glorfindel.jobs import start_snapshot as _start_snapshot
@@ -956,17 +961,10 @@ async def audit_resource(vm_name: str) -> dict:
 
     connector = AzureConnector(dry_run=False)
     # Resolve vault + its RG from config (central vault ≠ VM RG — see /api/audit).
-    vault, vault_rg = os.environ.get("GLORFINDEL_BACKUP_VAULT", "rsv-annatar"), ""
-    staging_storage = ""
-    try:
-        from glorfindel.config import load_glorfindel_config
-        rsv = load_glorfindel_config().backup_vault()
-        if rsv:
-            vault = rsv.vault_name or vault
-            vault_rg = rsv.resource_group or ""
-            staging_storage = rsv.restore_staging_storage
-    except Exception:
-        pass
+    from glorfindel.config import NO_VAULT_MSG, resolve_backup_vault
+    vault, vault_rg, staging_storage = resolve_backup_vault()
+    if not vault:
+        return {"error": NO_VAULT_MSG}
     # Run blocking Azure SDK calls in a thread pool — prevents event loop stall.
     result = await asyncio.to_thread(
         _audit.run, resource_id, connector, vault, vault_rg, staging_storage)
@@ -1000,11 +998,11 @@ async def audit_all() -> dict:
         from glorfindel.config import load_glorfindel_config
         _cfg = load_glorfindel_config()
         rsv = _cfg.backup_vault()
-        vault = rsv.vault_name if rsv and rsv.vault_name else os.environ.get("GLORFINDEL_BACKUP_VAULT", "rsv-annatar")
+        vault = rsv.vault_name if rsv and rsv.vault_name else os.environ.get("GLORFINDEL_BACKUP_VAULT", "")
         vault_rg = rsv.resource_group if rsv and rsv.resource_group else ""
         staging_storage = rsv.restore_staging_storage if rsv else ""
     except Exception:
-        vault = os.environ.get("GLORFINDEL_BACKUP_VAULT", "rsv-annatar")
+        vault = os.environ.get("GLORFINDEL_BACKUP_VAULT", "")
         _cfg = None
 
     # VM targets: fresh read from disk (watch service may have updated the file)
@@ -1048,16 +1046,11 @@ async def backups() -> dict:
     paginated call (list_backup_items); the per-VM /api/audit stays for readiness.
     """
     from glorfindel.actions import AzureConnector
-    from glorfindel.config import load_glorfindel_config
 
-    vault, rg = "rsv-annatar", "annatar"
-    try:
-        rsv = load_glorfindel_config().backup_vault()
-        if rsv:
-            vault = rsv.vault_name or vault
-            rg = rsv.resource_group or rg
-    except Exception:
-        pass
+    from glorfindel.config import NO_VAULT_MSG, resolve_backup_vault
+    vault, rg, _ = resolve_backup_vault()
+    if not vault or not rg:
+        return {"error": NO_VAULT_MSG, "items": []}
     try:
         connector = AzureConnector(dry_run=False)
         items = await asyncio.to_thread(connector.list_backup_items, vault, rg)
@@ -1252,35 +1245,44 @@ async def _bg_restore(resource_id: str, vm_name: str = "") -> None:
 
 
 def _find_resource_id(vm_name: str) -> str | None:
+    """The resource id behind a VM name the War Room shows: active isolations and
+    blocks, pending escalations, then the discovered assets.
+
+    The registry now keeps two VMs that share a name (third review, T1): resolving the
+    name to the first match could release, restore or isolate the OTHER one. Several
+    distinct ids → AmbiguousVM, the action is refused with a clear message."""
     from glorfindel.actions import active_blocks, active_isolations
 
-    for i in active_isolations():
-        if i["resource_id"].split("/")[-1] == vm_name:
-            return i["resource_id"]
-    for b in active_blocks():
-        if b["resource_id"].split("/")[-1] == vm_name:
-            return b["resource_id"]
+    found: dict[str, str] = {}
 
-    # Fallback 1: pending escalations (e.g. restore_from_backup without prior isolation)
+    def add(rid: str) -> None:
+        if rid and rid.rstrip("/").split("/")[-1] == vm_name:
+            found.setdefault(rid.rstrip("/").lower(), rid)
+
+    for i in active_isolations():
+        add(i.get("resource_id", ""))
+    for b in active_blocks():
+        add(b.get("resource_id", ""))
     try:
         from glorfindel import escalations as _esc
         for esc in _esc.pending():
-            rid = esc.get("resource_id", "")
-            if rid.split("/")[-1] == vm_name:
-                return rid
+            add(esc.get("resource_id", ""))
     except Exception:
         pass
-
-    # Fallback 2: discovered asset registry (fresh read from disk)
     try:
         from glorfindel.discovery import AssetRegistry
         for asset in AssetRegistry().all():
-            if asset.name == vm_name or asset.resource_id.split("/")[-1] == vm_name:
-                return asset.resource_id
+            if asset.name == vm_name and asset.resource_id:
+                found.setdefault(asset.resource_id.rstrip("/").lower(), asset.resource_id)
+            else:
+                add(asset.resource_id)
     except Exception:
         pass
-
-    return None
+    if len(found) > 1:
+        raise AmbiguousVM(
+            f"{vm_name} désigne {len(found)} VMs ({', '.join(sorted(found))}) : action refusée "
+            "depuis la War Room — utiliser la CLI avec l'ID de ressource complet.")
+    return next(iter(found.values()), None)
 
 
 def _write_manual_feed(action: str, resource_id: str, outcome: dict) -> None:

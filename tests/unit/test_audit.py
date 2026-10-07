@@ -3,7 +3,13 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 
-from glorfindel.audit import AuditCheck, AuditResult, run
+from glorfindel.audit import AuditCheck, AuditResult
+from glorfindel.audit import run as _audit_run
+
+
+def run(resource_id, connector, vault="rsv-test", **kw):
+    """audit.run with a vault: there is no default vault any more (third review)."""
+    return _audit_run(resource_id, connector, vault=vault, **kw)
 
 
 # ── Fixtures ────────────────────────────────────────────────────────────────────
@@ -325,3 +331,11 @@ def test_perf_sampling_fine_coarse_and_missing():
     assert coarse.status == "warn" and "grossier" in coarse.message
     missing = _check_perf_sampling(rid, "ws", _PerfDet([]))
     assert missing.status == "warn" and "aveugle" in missing.message and missing.fix
+
+
+
+def test_no_vault_configured_is_a_clear_failure():
+    """The retired "rsv-annatar" default sent restores to a vault that no longer exists."""
+    result = _audit_run(RESOURCE_ID, _connector())
+    bk = next(ch for ch in result.checks if ch.name == "Backup vault")
+    assert bk.status == "fail" and "Aucun coffre" in bk.message

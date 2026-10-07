@@ -778,3 +778,14 @@ def test_a_host_name_shared_by_two_vms_attributes_nothing():
     dr._save_status({})
     p2.poll_once(rule)
     assert sent2[0]["resource_id"] == reg.assets[1].resource_id and sent2[0]["context"]["attribution"] == "asset"
+
+
+def test_query_lookback_reads_every_kql_timespan_and_ignores_comments():
+    """`ago(30min)` / `ago(2hours)` fell back to 10 minutes, and an ago() in a comment
+    counted (third review, details)."""
+    from glorfindel.detection_rules import _query_lookback_s
+    assert _query_lookback_s("T | where TimeGenerated > ago(30min)") == 1800
+    assert _query_lookback_s("T | where TimeGenerated > ago(2hours)") == 7200
+    assert _query_lookback_s("T | where TimeGenerated > ago(1.5d)") == 129600
+    assert _query_lookback_s("T | where TimeGenerated > ago(90sec)") == 90
+    assert _query_lookback_s("T | where TimeGenerated > ago(5m)\n// was ago(1d)") == 300

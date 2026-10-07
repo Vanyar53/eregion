@@ -368,7 +368,7 @@ class CloudConnector(ABC):
 
     @abstractmethod
     def snapshot(
-        self, resource_id: str, vault: str = "rsv-annatar", wait: bool = True,
+        self, resource_id: str, vault: str = "", wait: bool = True,
         vault_rg: str = "",
     ) -> str:
         """Take an on-demand RSV backup snapshot.
@@ -404,7 +404,7 @@ class CloudConnector(ABC):
     def restore_from_backup(
         self,
         resource_id: str,
-        vault: str = "rsv-annatar",
+        vault: str = "",
         before_attack_time: str | None = None,
         wait: bool = True,
         staging_storage: str = "",
@@ -1084,6 +1084,18 @@ class AzureConnector(CloudConnector):
         except Exception:
             pass     # a stale tag is harmless: it is only read for a NIC carrying our NSG
 
+    def _managed_by_glorfindel(self, nsg_id: str) -> bool:
+        """A customer NSG whose name happens to start like ours is not ours: a stateless
+        release would have detached it (third review, details). Our quarantine NSGs carry
+        `managed-by: glorfindel`. Unreadable → treated as ours: the release then needs
+        our tags to proceed, and fails safely rather than detach anything."""
+        try:
+            nsg_rg, nsg_name = _parse_nsg_resource_id(nsg_id)
+            tags = getattr(self._network.network_security_groups.get(nsg_rg, nsg_name), "tags", None) or {}
+            return tags.get("managed-by") == "glorfindel"
+        except Exception:
+            return True
+
     def _nic_nsg_id(self, nic_id: str) -> str | None:
         nic_rg, nic_name = _parse_nic_resource_id(nic_id)
         nic = self._network.network_interfaces.get(nic_rg, nic_name)
@@ -1473,7 +1485,7 @@ class AzureConnector(CloudConnector):
         return f"glorfindel-block-{ip.replace('.', '-').replace('/', '-')}"
 
     def snapshot(
-        self, resource_id: str, vault: str = "rsv-annatar", wait: bool = True,
+        self, resource_id: str, vault: str = "", wait: bool = True,
         vault_rg: str = "",
     ) -> str:
         """Trigger an RSV on-demand backup.
@@ -1487,6 +1499,9 @@ class AzureConnector(CloudConnector):
             return "snap-dry-run-000"
 
         self._guard_write("snapshot")
+        if not vault:
+            from glorfindel.config import NO_VAULT_MSG
+            raise RuntimeError(NO_VAULT_MSG)
         import time
         import requests
         from datetime import datetime, timezone, timedelta
@@ -1830,7 +1845,7 @@ class AzureConnector(CloudConnector):
     def restore_from_backup(
         self,
         resource_id: str,
-        vault: str = "rsv-annatar",
+        vault: str = "",
         before_attack_time: str | None = None,
         wait: bool = True,
         staging_storage: str = "",
@@ -1840,6 +1855,9 @@ class AzureConnector(CloudConnector):
             return {"status": "dry_run", "action": "restore_from_backup", "resource_id": resource_id}
 
         self._guard_write("restore_from_backup")
+        if not vault:
+            from glorfindel.config import NO_VAULT_MSG
+            raise RuntimeError(NO_VAULT_MSG)
         import time
         import requests
         from datetime import datetime, timezone
@@ -2377,9 +2395,11 @@ class AzureConnector(CloudConnector):
         """ALLOW rules that would be evaluated BEFORE the deny Glorfindel would place —
         found at rest, before any incident (audit readiness).
 
-        Isolation: only on a shared NSG (a dedicated one gets priority 100). Block: the
-        deny starts at 200 on every NSG, and the attacker is unknown yet, so any allow
-        that admits SOME internet source to the VM counts (bench: allow-ssh at 100).
+        Isolation: on every NSG — since L3 the deny takes the first free priority from
+        100, so a customer rule at 100 on a dedicated NSG comes first too (this check
+        still assumed "a dedicated NSG gets 100"). Block: the deny starts at 200 on every
+        NSG, and the attacker is unknown yet, so any allow that admits SOME internet
+        source to the VM counts (bench: allow-ssh at 100).
         """
         issues: list[dict] = []
         cache: dict = {}
@@ -2391,12 +2411,11 @@ class AzureConnector(CloudConnector):
                 continue
             used = {r.priority for r in rules if isinstance(getattr(r, "priority", None), int)}
             ips = t["private_ips"] or None
-            if _ip_scoped(t):
-                iso = next((p for p in range(self.ISOLATION_PRIORITY, 4000) if p not in used), None)
-                if iso is not None:
-                    issues += [{**s, **where, "action": "isolate_vm"} for s in _shadowing_rules(
-                        rules, iso, inbound_src=None, inbound_dst=ips,
-                        outbound_src=ips, outbound_dst=None)]
+            iso = next((p for p in range(self.ISOLATION_PRIORITY, 4000) if p not in used), None)
+            if iso is not None:
+                issues += [{**s, **where, "action": "isolate_vm"} for s in _shadowing_rules(
+                    rules, iso, inbound_src=None, inbound_dst=ips,
+                    outbound_src=ips, outbound_dst=None)]
             blk = next((p for p in range(200, 4000, 10) if p not in used), None)
             if blk is not None:
                 issues += [{**s, **where, "action": "block_suspicious_ip"} for s in _shadowing_rules(
@@ -2471,7 +2490,7 @@ class AzureConnector(CloudConnector):
         return out
 
     def check_backup_points(
-        self, resource_id: str, vault: str = "rsv-annatar", vault_rg: str = ""
+        self, resource_id: str, vault: str = "", vault_rg: str = ""
     ) -> dict:
         """Verify vault + recent recovery point — restore_from_backup readiness.
 
@@ -2554,7 +2573,7 @@ class AzureConnector(CloudConnector):
             return False
 
     def list_backup_items(
-        self, vault: str = "rsv-annatar", resource_group: str = "annatar"
+        self, vault: str = "", resource_group: str = ""
     ) -> list[dict]:
         """List the vault's protected items directly — the backup inventory.
 
@@ -2656,7 +2675,7 @@ class AzureConnector(CloudConnector):
             nic = self._network.network_interfaces.get(nic_rg, nic_name)
             own_id = getattr(getattr(nic, "network_security_group", None), "id", None)
             quarantine = None
-            if own_id and _is_quarantine_nsg(own_id):
+            if own_id and _is_quarantine_nsg(own_id) and self._managed_by_glorfindel(own_id):
                 q_rg, q_name = _parse_nsg_resource_id(own_id)
                 quarantine = {"nsg_rg": q_rg, "nsg_name": q_name, "nsg_id": own_id}
                 own_id = None

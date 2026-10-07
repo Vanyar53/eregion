@@ -444,13 +444,28 @@ def _save_status(status: dict) -> None:
 # 2026-10-05: Perf ingestion 89–109 s → `ransomware-disk-write` matched nothing.
 _DEFAULT_LOOKBACK_S = 600.0
 _INGESTION_MARGIN_S = 300.0
-_AGO_RE = re.compile(r"ago\(\s*(\d+(?:\.\d+)?)\s*([smhd])\s*\)", re.IGNORECASE)
-_UNIT_S = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+# KQL timespan literals: 10m, 30min, 2h, 2hours, 1d, 1.5days, 90s, 90sec… (third review:
+# `ago(30min)` / `ago(2hours)` weren't recognised and fell back to 10 minutes).
+_AGO_RE = re.compile(
+    r"ago\(\s*(\d+(?:\.\d+)?)\s*(d|days?|h|hrs?|hours?|m|mins?|minutes?|s|secs?|seconds?|ms|milliseconds?)\s*\)",
+    re.IGNORECASE)
+_UNIT_S = {"d": 86400, "h": 3600, "m": 60, "s": 1}
+
+
+def _unit_seconds(unit: str) -> float:
+    u = unit.lower()
+    if u.startswith("ms") or u.startswith("milli"):
+        return 0.001
+    if u.startswith("min") or u == "m":
+        return 60
+    return _UNIT_S[u[0]]
 
 
 def _query_lookback_s(query: str) -> float:
     """Longest `ago(...)` window in a KQL query (seconds); default 10 min."""
-    spans = [float(n) * _UNIT_S[u.lower()] for n, u in _AGO_RE.findall(query or "")]
+    # Comment lines don't count: `// was ago(1d)` must not widen the window.
+    code = "\n".join(line.split("//", 1)[0] for line in (query or "").splitlines())
+    spans = [float(n) * _unit_seconds(u) for n, u in _AGO_RE.findall(code)]
     return max(spans) if spans else _DEFAULT_LOOKBACK_S
 
 

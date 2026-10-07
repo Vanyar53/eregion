@@ -161,6 +161,31 @@ class GlorfindelConfig:
         )
 
 
+NO_VAULT_MSG = ("Aucun coffre de sauvegarde configuré : action_backends (type "
+                "azure_backup_vault) dans glorfindel-config.yaml, GLORFINDEL_BACKUP_VAULT, "
+                "ou --vault.")
+
+
+def resolve_backup_vault(explicit: str | None = None) -> tuple[str, str, str]:
+    """(vault, vault_rg, staging_storage). Name: explicit (--vault) > config > env
+    GLORFINDEL_BACKUP_VAULT > "" — never the retired "rsv-annatar", which sent a restore
+    to a vault that no longer exists (third review, details). The vault's resource group
+    and the staging account come from config (a central vault lives outside the VM's
+    resource group)."""
+    import os
+    vault, vault_rg, staging = (explicit or "").strip(), "", ""
+    try:
+        rsv = load_glorfindel_config().backup_vault()
+    except Exception:
+        rsv = None
+    if rsv:
+        vault = vault or rsv.vault_name or ""
+        vault_rg = rsv.resource_group or ""
+        staging = rsv.restore_staging_storage or ""
+    vault = vault or os.environ.get("GLORFINDEL_BACKUP_VAULT", "").strip()
+    return vault, vault_rg, staging
+
+
 def load_glorfindel_config(path: str | Path | None = None) -> GlorfindelConfig:
     """Load infrastructure config from glorfindel-config.yaml.
 

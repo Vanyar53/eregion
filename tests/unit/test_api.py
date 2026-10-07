@@ -37,11 +37,19 @@ def test_audit_resource_endpoint_no_longer_raises_nameerror(client, monkeypatch)
         return result
     monkeypatch.setattr("glorfindel.audit.run", _run)
     monkeypatch.setattr("glorfindel.actions.AzureConnector", lambda **k: MagicMock())
+    monkeypatch.setenv("GLORFINDEL_BACKUP_VAULT", "rsv-test")
 
     r = client.get("/api/audit/vm")
     assert r.status_code == 200
     assert r.json()["ready"] is True
-    assert seen["vault"]          # resolved from config or the env/legacy default
+    assert seen["vault"] == "rsv-test"    # from the env (no retired default any more)
+
+
+def test_snapshot_without_a_vault_says_so(client, monkeypatch):
+    monkeypatch.delenv("GLORFINDEL_BACKUP_VAULT", raising=False)
+    rid = "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm"
+    monkeypatch.setattr(api, "_find_resource_id", lambda vm: rid)
+    assert "Aucun coffre" in client.post("/api/action/snapshot/vm").json()["error"]
 
 
 def test_open_access_without_token(client):
@@ -194,3 +202,17 @@ def test_state_shows_a_vm_held_by_its_readiness(client, monkeypatch):
     assert state["autonomy_modes"]["vm"] == "human_only"
     assert state["autonomy_holds"]["vm"]["configured"] == "non_disruptive"
     assert state["autonomy_holds"]["vm"]["reason"] == "not_checked"
+
+
+def test_an_ambiguous_vm_name_is_refused(client, monkeypatch):
+    """Two VMs named web in two resource groups (now both in the registry): resolving
+    the name to the first match could release the OTHER one (third review, T1)."""
+    from glorfindel.actions import _save_isolation_state
+    a = "/subscriptions/s/resourceGroups/rg-a/providers/Microsoft.Compute/virtualMachines/web"
+    b = a.replace("rg-a", "rg-b")
+    _save_isolation_state(a, {"resource_id": a})
+    _save_isolation_state(b, {"resource_id": b})
+    ran = []
+    monkeypatch.setattr(api.subprocess, "run", lambda *x, **k: ran.append(x))
+    r = client.post("/api/action/release/web")
+    assert r.status_code == 409 and "2 VMs" in r.json()["error"] and ran == []

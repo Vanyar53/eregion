@@ -47,10 +47,14 @@ ANNATAR_STATE := \
 	-v $(HOME)/.annatar:/root/.annatar \
 	-v $(HOME)/.glorfindel:/root/.glorfindel:ro
 
+# ~/.glorfindel read-only: Annatar reads the watch heartbeat to send its purple-team
+# feedback (detection_missed). Without it, every Docker run printed "no active
+# glorfindel watch detected" and skipped the feedback (constaté le 2026-10-07).
 ANNATAR_VOLS := \
 	-v $(PWD)/annatar/scenarios:/app/annatar/scenarios \
 	-v $(PWD)/scripts:/app/scripts \
-	-v $(PWD)/runs:/app/runs
+	-v $(PWD)/runs:/app/runs \
+	$(if $(wildcard $(HOME)/.glorfindel),-v $(HOME)/.glorfindel:/root/.glorfindel:ro,)
 
 GLORFINDEL_VOLS := \
 	-v $(PWD)/runs:/app/runs \

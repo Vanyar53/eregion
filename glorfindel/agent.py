@@ -75,6 +75,7 @@ class GlorfindelState(TypedDict):
     llm_usage: dict | None      # LLM token usage from last litellm.completion call (P1 observability)
     autonomy_mode: str          # resolved autonomy mode for this asset (audit trail)
     mode_hold: bool             # True when an autonomous action was held back by human_only mode
+    autonomy_gate: dict         # set when the VM is configured autonomous but held by its readiness
     cycle_error: str            # set when the cycle could not complete normally (→ cycle_failed escalation)
     held_by: str                # deterministic gate that escalated (→ its own escalation type)
 
@@ -776,19 +777,33 @@ def _apply_release_precondition(d: dict, signal: dict) -> None:
     )
 
 
-def _apply_autonomy_mode(d: dict, mode: str) -> bool:
+def _apply_autonomy_mode(d: dict, mode: str, gate: dict | None = None) -> bool:
     """Autonomy mode policy layer (above the gates — never a bypass).
 
     human_only holds back EVERY autonomous action (even high-confidence ones) and
     escalates it as mode_hold instead. The destructive gate and the confidence gate
     remain active regardless. Returns True when the action was held by the mode.
+    `gate`: the VM is configured autonomous but held by its readiness (`readiness.
+    effective_mode`) — the reason says so, and how to lift it.
     """
     if mode == "human_only" and not d["escalate"] and d["action"] in AUTONOMOUS_ACTIONS:
         d["escalate"] = True
-        d["escalation_reason"] = (
-            f"Mode human_only — action '{d['action']}' recommandée "
-            f"(confiance {d['confidence']:.0%}) mais retenue : approbation humaine requise."
-        )
+        if gate:
+            lift = ("Corriger les points bloquants (`glorfindel activate`) pour qu'elle "
+                    "agisse seule." if gate.get("reason") == "not_ready" else
+                    "Confirmer la VM (War Room, Activer) pour qu'elle agisse seule la "
+                    "prochaine fois.")
+            d["escalation_reason"] = (
+                f"Réponse autonome configurée ({gate.get('configured', '?')}) mais VM "
+                f"retenue en human_only — {gate.get('message', '')}. Action "
+                f"'{d['action']}' recommandée (confiance {d['confidence']:.0%}), "
+                f"approbation humaine requise. {lift}"
+            )
+        else:
+            d["escalation_reason"] = (
+                f"Mode human_only — action '{d['action']}' recommandée "
+                f"(confiance {d['confidence']:.0%}) mais retenue : approbation humaine requise."
+            )
         return True
     return False
 
@@ -830,7 +845,8 @@ def _decision_failed(state: GlorfindelState, exc: BaseException, mode: str = "")
 
 
 def decide(
-    state: GlorfindelState, *, model: str, autonomy=None, autonomy_override: str | None = None
+    state: GlorfindelState, *, model: str, autonomy=None, autonomy_override: str | None = None,
+    readiness_gate=None,
 ) -> GlorfindelState:
     """Call LLM to reason about the signal and produce a structured decision.
 
@@ -847,6 +863,10 @@ def decide(
     Tests inject an explicit AutonomyConfig to bypass the disk read.
     autonomy_override (session `glorfindel watch --mode`) is re-applied on top of
     the fresh config so it stays pinned for the session.
+    readiness_gate (production: `readiness.ReadinessGate`): the configured mode is an
+    intention — a VM configured autonomous runs in human_only until its readiness
+    allows it (ready, or every reserve acknowledged). Covers the global default, the
+    patterns and `--mode`, including VMs created after the setting.
 
     Gates, in order (each a pure helper, testable on its own): parsing defaults →
     executable guard → confidence gate → deterministic signal guardrail → attribution
@@ -875,6 +895,14 @@ def decide(
     resource_id = signal.get("resource_id", "")
     asset_name = resource_id.split("/")[-1] if resource_id else ""
     mode = autonomy.resolve(asset_name)
+    gate: dict = {}
+    if readiness_gate is not None and mode != "human_only":
+        try:
+            mode, gate = readiness_gate(asset_name, resource_id, mode)
+        except Exception as exc:              # the gate fails closed
+            gate = {"configured": mode, "reason": "not_checked",
+                    "message": f"préparation illisible ({_first_line(exc)})"}
+            mode = "human_only"
 
     kwargs: dict = {}
     base_url = os.environ.get("GLORFINDEL_LLM_BASE_URL")
@@ -902,7 +930,7 @@ def decide(
         # Rate limit, timeout, auth, network: previously this escaped the graph and
         # ended as one console line in the watch worker — a detected threat dropped
         # with no escalation and no debug file.
-        return _decision_failed(state, exc, mode)
+        return {**_decision_failed(state, exc, mode), "autonomy_gate": gate}
 
     d, raw_conf = _parse_decision(response)
     _apply_executable_guard(d)
@@ -911,7 +939,7 @@ def decide(
     _apply_attribution_guard(d, signal)
     _apply_release_precondition(d, signal)
 
-    mode_hold = _apply_autonomy_mode(d, mode)
+    mode_hold = _apply_autonomy_mode(d, mode, gate)
 
     usage = getattr(response, "usage", None)
     llm_usage: dict | None = None
@@ -937,6 +965,7 @@ def decide(
         "autonomy_mode": mode,
         "mode_hold": mode_hold,
         "held_by": d.get("held_by", ""),
+        "autonomy_gate": gate,
     }
 
 
@@ -1265,6 +1294,7 @@ def store_cycle(state: GlorfindelState, *, memory: CycleMemory) -> GlorfindelSta
         "action_s": outcome.get("action_s", 0),
         "past_cycles_used": [c.get("summary", "") for c in state.get("past_cycles", [])],
         "resolved_autonomy_mode": state.get("autonomy_mode", ""),
+        "autonomy_gate": state.get("autonomy_gate") or {},
     }
     # ChromaDB write — non-fatal: debug JSONL must still be written on failure
     try:
@@ -1324,6 +1354,8 @@ def _write_debug_record(state: GlorfindelState) -> None:
         "llm_usage": state.get("llm_usage"),
         "resolved_autonomy_mode": state.get("autonomy_mode", ""),
     }
+    if state.get("autonomy_gate"):
+        debug_record["autonomy_gate"] = state["autonomy_gate"]
     if state.get("cycle_error"):
         debug_record["cycle_error"] = state["cycle_error"]
     out = Path("runs") / f"{run_id}_debug.jsonl"
@@ -1584,6 +1616,7 @@ def _build_graph(
     incidents: IncidentRegistry | None = None,
     autonomy=None,
     autonomy_override: str | None = None,
+    readiness_gate=None,
 ):
     if incidents is None:
         incidents = IncidentRegistry(path=".glorfindel/incidents.jsonl")
@@ -1594,7 +1627,8 @@ def _build_graph(
     graph.add_node("poll_detection", poll_detection)
     graph.add_node("investigate", investigate)
     graph.add_node("decide", lambda s: decide(
-        s, model=model, autonomy=autonomy, autonomy_override=autonomy_override))
+        s, model=model, autonomy=autonomy, autonomy_override=autonomy_override,
+        readiness_gate=readiness_gate))
     graph.add_node("execute_action", lambda s: execute_action(s, connector=connector, incidents=incidents))
     graph.add_node("verify_action", lambda s: verify_action(s, connector=connector))
     graph.add_node("escalate_to_human", escalate_to_human)
@@ -1630,6 +1664,7 @@ class GlorfindelAgent:
         dry_run: bool = False,
         autonomy=None,
         autonomy_default: str | None = None,
+        readiness_gate=True,
     ):
         from glorfindel.actions import AzureConnector
 
@@ -1656,10 +1691,16 @@ class GlorfindelAgent:
             autonomy.default = autonomy_default
         self.autonomy = autonomy
 
+        # Readiness gate (L6): on by default whenever actions are real. In dry-run
+        # nothing executes, so there is nothing to hold back.
+        if readiness_gate is True:
+            from glorfindel.readiness import ReadinessGate
+            readiness_gate = None if dry_run else ReadinessGate(self.connector)
         self._graph = _build_graph(
             self.memory, self.connector, self.model, self.incidents,
             autonomy=self._autonomy_explicit,          # None in prod → decide reloads fresh
             autonomy_override=self._autonomy_override,  # --mode stays pinned across reloads
+            readiness_gate=readiness_gate or None,
         )
 
     def respond(self, signal: dict) -> GlorfindelState:

@@ -56,6 +56,11 @@ def _cli_command(esc: dict) -> str:
             f"glorfindel revert {rid} --yes\n"
             f"glorfindel ack {esc_id}"
         )
+    if esc["escalation_type"] == "readiness_hold":
+        return (
+            f"# Lire les réserves, puis les accepter :\n"
+            f"glorfindel activate {rid}"
+        )
     if esc["escalation_type"] == "low_confidence":
         return (
             f"# Vérifier le snapshot, puis si nécessaire :\n"

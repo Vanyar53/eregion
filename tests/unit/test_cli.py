@@ -202,3 +202,36 @@ def test_list_shows_exposure_apart_from_a_bypass():
     res = CliRunner().invoke(cli, ["list"])
     assert "bypassed" not in res.output
     assert "other ports still reachable: allow-https (ports 443)" in res.output
+
+
+# ── activate (L6) ──────────────────────────────────────────────────────────────
+
+def _activate_env(monkeypatch, missing=(), read_only=False):
+    from unittest.mock import MagicMock
+    conn = MagicMock(read_only=read_only)
+    conn.check_permissions.return_value = {"ok": True, "missing": [
+        {"scope": "rg", "action": a, "used_by": "x"} for a in missing]}
+    conn.check_nsg_access.return_value = {"ok": True, "precedence": []}
+    conn.vm_os.return_value = "linux"
+    monkeypatch.setattr("glorfindel.actions.AzureConnector", lambda **k: conn)
+    switched = []
+    monkeypatch.setattr("glorfindel.config.set_asset_mode", lambda vm, mode: switched.append((vm, mode)))
+    return switched
+
+
+def test_activate_refuses_a_vm_that_is_not_ready(monkeypatch):
+    from glorfindel.cli import cli
+    switched = _activate_env(monkeypatch, read_only=True)
+    res = CliRunner().invoke(cli, ["activate", _FULL, "--yes"])
+    assert res.exit_code != 0 and switched == []
+
+
+def test_activate_records_the_reserves_accepted(monkeypatch):
+    from glorfindel import readiness
+    from glorfindel.cli import cli
+    switched = _activate_env(monkeypatch, missing=["Microsoft.Compute/virtualMachines/runCommand/action"])
+    res = CliRunner().invoke(cli, ["activate", _FULL], input="n\n")
+    assert switched == [] and "Aborted" in res.output             # reserves shown, refused
+    res = CliRunner().invoke(cli, ["activate", _FULL, "--yes"])
+    assert res.exit_code == 0 and switched == [("vm-x", "non_disruptive")]
+    assert readiness.effective_mode("vm-x", "non_disruptive")[0] == "non_disruptive"

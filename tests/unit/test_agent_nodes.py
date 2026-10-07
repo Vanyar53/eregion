@@ -2042,3 +2042,61 @@ def test_execute_action_passes_the_threat_port_to_the_block(tmp_incidents):
     state["signal"]["raw_signal"]["first_result_row"] = {"SourceIP": "203.0.113.9", "FailedAttempts": 40}
     execute_action(state, connector=connector, incidents=tmp_incidents)
     assert connector.block_suspicious_ip.call_args.kwargs["threat_port"] == 22
+
+
+# ── Readiness gate (L6): configured autonomous ≠ allowed to act alone ─────────────
+
+def test_graph_held_vm_recommends_instead_of_isolating(tmp_path, monkeypatch, dry_connector, tmp_memory):
+    """Global default non_disruptive, but the VM has an unconfirmed reserve: the
+    action is held as mode_hold, and the reason says how to lift the hold."""
+    from glorfindel import readiness
+    from glorfindel.agent import _build_graph
+    from glorfindel.config import AutonomyConfig
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "runs").mkdir(exist_ok=True)
+    readiness.record_assessment(readiness._verdict("vm", [
+        readiness._reason("no_drain", "reserve", "sessions survive")]), _RESOURCE_ID)
+    graph = _build_graph(tmp_memory, dry_connector, "claude-test",
+                         autonomy=AutonomyConfig(default="non_disruptive"),
+                         readiness_gate=readiness.ReadinessGate(dry_connector))
+
+    with patch("litellm.completion") as mock_cls:
+        mock_cls.return_value = _mock_llm_response("isolate_vm")
+        final = graph.invoke(_initial("detection", raw={"detection_time_s": 50}))
+
+    assert final["outcome"]["escalation_type"] == "mode_hold"
+    assert final["outcome"]["executed"] is False
+    assert final["autonomy_mode"] == "human_only"
+    assert final["autonomy_gate"]["codes"] == ["no_drain"]
+    assert "Activer" in final["escalation_reason"]
+
+    readiness.acknowledge("vm", ["no_drain"], by="test")      # the operator confirms
+    with patch("litellm.completion") as mock_cls:
+        mock_cls.return_value = _mock_llm_response("isolate_vm")
+        final = graph.invoke(_initial("detection", raw={"detection_time_s": 50}))
+    assert final["outcome"]["status"] == "dry_run" and final["autonomy_mode"] == "non_disruptive"
+
+
+def test_decide_gate_failure_holds_the_vm():
+    """The gate fails closed: an error reading readiness keeps the VM in human_only."""
+    from glorfindel.agent import decide
+
+    def broken(*_a):
+        raise OSError("disk")
+
+    with patch("litellm.completion", return_value=_mock_llm_response("isolate_vm")):
+        out = decide(_state(), model="x", autonomy_override="non_disruptive",
+                     readiness_gate=broken)
+    assert out["autonomy_mode"] == "human_only" and out["mode_hold"] is True
+
+
+def test_agent_gates_by_default_except_in_dry_run(tmp_path, monkeypatch):
+    """Production path: the gate is on whenever actions are real."""
+    from glorfindel import readiness
+    from glorfindel.agent import GlorfindelAgent
+    built = []
+    monkeypatch.setattr(readiness, "ReadinessGate", lambda c: built.append(c) or (lambda *a: ("human_only", {})))
+    for dry in (False, True):
+        GlorfindelAgent(connector=AzureConnector(dry_run=True), memory_path=str(tmp_path / f"m{dry}"),
+                        incidents_path=str(tmp_path / f"i{dry}.jsonl"), model="x", dry_run=dry)
+    assert len(built) == 1

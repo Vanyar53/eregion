@@ -60,8 +60,13 @@ def _mark_alerted(vm: str, now: str) -> None:
 
 
 def _mode(autonomy, vm_name: str) -> str:
+    """The EFFECTIVE mode: a VM configured autonomous but held by its readiness (L6)
+    gets an alert, not a re-application."""
     try:
-        return autonomy.resolve(vm_name) if autonomy is not None else "human_only"
+        if autonomy is None:
+            return "human_only"
+        from glorfindel.readiness import effective_mode
+        return effective_mode(vm_name, autonomy.resolve(vm_name))[0]
     except Exception:
         return "human_only"
 

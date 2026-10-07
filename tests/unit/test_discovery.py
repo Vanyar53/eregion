@@ -535,3 +535,27 @@ def test_poll_thread_self_evicts_when_asset_removed(tmp_path):
         thread.join(timeout=2.0)
 
     assert not thread.is_alive()
+
+
+def test_a_discovery_pass_checks_readiness_of_what_it_found(tmp_path):
+    """L6 gate: a VM created after the global default was set is checked on the pass
+    that discovers it — not 30 minutes later at the posture cadence."""
+    from unittest.mock import MagicMock
+    reg = AssetRegistry(path=tmp_path / "assets.json")
+    tracker = MagicMock()
+    tracker.refresh.return_value = [{"vm": "vm-new", "event": "activated"}]
+    svc = DiscoveryService(_law_cfg(), reg, dry_run=False, readiness_tracker=tracker)
+    with patch("glorfindel.discovery._discover_from_backend",
+               return_value=[_asset("vm-new", backend="law", rid="/r")]):
+        svc.run_once()
+    assert [a.name for a in tracker.refresh.call_args[0][0]] == ["vm-new"]
+
+
+def test_a_failing_readiness_check_does_not_stop_discovery(tmp_path):
+    from unittest.mock import MagicMock
+    reg = AssetRegistry(path=tmp_path / "assets.json")
+    tracker = MagicMock()
+    tracker.refresh.side_effect = RuntimeError("azure down")
+    svc = DiscoveryService(_law_cfg(), reg, dry_run=False, readiness_tracker=tracker)
+    with patch("glorfindel.discovery._discover_from_backend", return_value=[]):
+        svc.run_once()                                   # no exception

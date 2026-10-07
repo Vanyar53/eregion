@@ -345,6 +345,12 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
         + (f"  ([dim]{len(_autonomy.assets)} per-asset override(s)[/dim])"
            if _autonomy.assets else "")
     )
+    if not dry_run and (_autonomy.default != "human_only"
+                        or any(a.mode != "human_only" for a in _autonomy.assets)):
+        console.print(
+            "[dim]  Readiness gate: a VM configured autonomous acts alone once checked "
+            "ready (or its reserves confirmed); until then it stays in human_only.[/dim]"
+        )
     # Process warning: human_only = detection without response until a human acts.
     # On a critical asset with nobody watching the escalations, the threat runs free.
     _has_human_only = (
@@ -575,6 +581,8 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
         try:
             from glorfindel.config import load_glorfindel_config as _lgc
             autonomy = _lgc().autonomy          # fresh: a War Room mode change applies
+            if mode_override:
+                autonomy.default = mode_override  # --mode stays pinned, as in decide
         except Exception:
             autonomy = _autonomy
         for r in reassert_active(ttl_connector, autonomy):
@@ -664,17 +672,22 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
                 if not dry_run and _glorfindel_cfg.monitoring_backends:
                     from glorfindel.actions import AzureConnector
                     from glorfindel.posture import PostureChecker
+                    from glorfindel.readiness import ReadinessTracker
                     _posture = PostureChecker(
                         _glorfindel_cfg, AzureConnector(dry_run=False)
                     )
+                    _posture_s = _glorfindel_cfg.monitoring_backends[0].discovery.interval_s
                     _discovery_svc = start_discovery(
                         _glorfindel_cfg,
                         dry_run=dry_run,
                         posture_checker=_posture,
+                        # L6 gate: VMs configured autonomous are checked when discovered,
+                        # then at the posture cadence; held in human_only until ready.
+                        readiness_tracker=ReadinessTracker(
+                            AzureConnector(dry_run=False), interval_s=_posture_s,
+                            autonomy_override=mode_override),
                     )
-                    posture_min = int(
-                        _glorfindel_cfg.monitoring_backends[0].discovery.interval_s / 60
-                    )
+                    posture_min = int(_posture_s / 60)
                     console.print(
                         f"[dim]Discovery:[/dim] "
                         f"{len(_glorfindel_cfg.monitoring_backends)} backend(s) "
@@ -1194,6 +1207,57 @@ def ack(escalation_id: str | None, all_pending: bool):
     console.print(f"[green]✓ Escalation {escalation_id} acknowledged.[/green]")
 
 
+@cli.command()
+@click.argument("vm")
+@click.option("--yes", is_flag=True, help="Accept the reserves shown without prompting.")
+def activate(vm: str, yes: bool):
+    """Turn on autonomous response for a VM after its readiness check (lot L6).
+
+    VM: short name or full resource id. Shows the verdict and every reserve; a VM that
+    is not ready is refused. The reserves accepted are recorded: one that appears later
+    puts the VM back in human_only, with an alert.
+    """
+    from glorfindel import readiness
+    from glorfindel.actions import AzureConnector
+    from glorfindel.config import load_glorfindel_config, set_asset_mode
+
+    rid = _resolve_resource_id(vm)
+    if "/" not in rid:
+        from glorfindel.discovery import AssetRegistry
+        rid = next((a.resource_id for a in AssetRegistry().all()
+                    if a.resource_id.rsplit("/", 1)[-1].lower() == vm.lower()), rid)
+    if "/" not in rid:
+        raise click.ClickException(
+            f"{vm}: resource id unknown — pass the full id, or start `glorfindel watch` "
+            "so discovery finds the VM.")
+
+    try:
+        quarantine = load_glorfindel_config().isolation.quarantine_nsg
+    except Exception:
+        quarantine = True
+    a = readiness.assess(rid, AzureConnector(dry_run=False), quarantine_nsg=quarantine)
+    colors = {"ready": "green", "reserve": "yellow", "not_ready": "red"}
+    console.rule(f"[bold]Autonomous response — {a['vm']}[/bold]")
+    console.print(f"  Verdict : [{colors[a['verdict']]}]{a['verdict']}[/{colors[a['verdict']]}]")
+    for r in a["reasons"]:
+        console.print(f"  • [{r['level']}] {r['message']}", soft_wrap=True)
+        if r.get("fix"):
+            console.print(f"    [dim]fix: {r['fix']}[/dim]", soft_wrap=True)
+    refusal = readiness.activation_refusal(a, a["reserve_codes"])
+    if refusal:
+        raise click.ClickException(refusal)
+    if a["reserve_codes"] and not yes and not click.confirm(
+            f"Accept these reserves ({', '.join(a['reserve_codes'])}) and turn on "
+            "autonomous response?", default=False):
+        console.print("Aborted.")
+        return
+    set_asset_mode(a["vm"], "non_disruptive")
+    readiness.record_assessment(a, rid)
+    readiness.acknowledge(a["vm"], a["reserve_codes"], by="cli")
+    readiness.resolve_card(a["vm"])
+    console.print(f"[green]✓ {a['vm']}: autonomous response on (non_disruptive).[/green]")
+
+
 @cli.command("list")
 def list_active():
     """List discovered VMs and any active Glorfindel actions (isolation, blocked IPs)."""
@@ -1251,9 +1315,13 @@ def list_active():
         console.print(f"  [dim]{resource_id}[/dim]", soft_wrap=True)
 
         if _autonomy is not None:
-            _mode = _autonomy.resolve(vm_short)
+            from glorfindel.readiness import effective_mode
+            _mode, _hold = effective_mode(vm_short, _autonomy.resolve(vm_short))
             _mode_color = "yellow" if _mode == "human_only" else "green"
-            console.print(f"  mode: [{_mode_color}]{_mode}[/{_mode_color}]")
+            _held = (f"  [dim](configured {_hold['configured']}, held: {_hold['message']}"
+                     f" → glorfindel activate {vm_short})[/dim]") if _hold else ""
+            console.print(f"  mode: [{_mode_color}]{_mode}[/{_mode_color}]{_held}",
+                          soft_wrap=True)
 
         if rid_lower in isolations:
             iso = isolations[rid_lower]

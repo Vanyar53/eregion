@@ -174,5 +174,23 @@ def test_activation_refuses_reserves_that_were_not_shown(client, monkeypatch):
     assert switched == []
     r = client.post("/api/activate/vm", json={"acknowledged": ["no_drain"]}).json()
     assert r["ok"] and switched == [("vm", "non_disruptive")]
+    # What was shown and accepted is what the watch's gate reads.
+    assert readiness.effective_mode("vm", "non_disruptive")[0] == "non_disruptive"
     client.post("/api/autonomy/vm", json={"mode": "human_only"})          # back: no check
     assert switched[-1] == ("vm", "human_only")
+    assert readiness.effective_mode("vm", "non_disruptive")[0] == "human_only"   # shown again next time
+
+
+def test_state_shows_a_vm_held_by_its_readiness(client, monkeypatch):
+    """Global default autonomous, VM not confirmed: the card shows human-only and why."""
+    from glorfindel import escalations
+    from glorfindel.config import AutonomyConfig, GlorfindelConfig
+    monkeypatch.setattr("glorfindel.config.load_glorfindel_config",
+                        lambda *a, **k: GlorfindelConfig(autonomy=AutonomyConfig(default="non_disruptive")))
+    rid = "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm"
+    escalations.record(signal_id="s", resource_id=rid, action="isolate_vm",
+                       escalation_type="mode_hold", reason="r")
+    state = client.get("/api/state").json()
+    assert state["autonomy_modes"]["vm"] == "human_only"
+    assert state["autonomy_holds"]["vm"]["configured"] == "non_disruptive"
+    assert state["autonomy_holds"]["vm"]["reason"] == "not_checked"

@@ -27,6 +27,7 @@ _ACTION_LABELS = {
     "improve_detection": "Règle de détection proposée",
     "investigate_detection_gap": "Détection empêchée — enquête requise",
     "activate_autonomy": "Réponse autonome en attente de confirmation",
+    "review_isolation": "Isolation à revoir (TTL dépassé)",
 }
 
 _ESCALATION_LABELS = {

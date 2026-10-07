@@ -216,3 +216,46 @@ def test_an_ambiguous_vm_name_is_refused(client, monkeypatch):
     monkeypatch.setattr(api.subprocess, "run", lambda *x, **k: ran.append(x))
     r = client.post("/api/action/release/web")
     assert r.status_code == 409 and "2 VMs" in r.json()["error"] and ran == []
+
+
+
+# ── Quatrième passe (Q4) : ce qu'une approbation peut exécuter ───────────────────────
+
+def _card(etype="mode_hold", action="isolate_vm", age_h=0.0, **extra):
+    from datetime import datetime, timedelta, timezone
+    from glorfindel import escalations
+    rid = "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm"
+    eid = escalations.record(signal_id="s", resource_id=rid, action=action, escalation_type=etype,
+                             reason="r", **extra)
+    if age_h:
+        import json
+        lines = escalations._STORE.read_text().splitlines()
+        old = (datetime.now(timezone.utc) - timedelta(hours=age_h)).isoformat()
+        rows = [json.loads(line) for line in lines if line.strip()]
+        for r in rows:
+            if r["id"] == eid:
+                r["last_seen"] = r["timestamp"] = old
+        escalations._STORE.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    return eid
+
+
+def test_an_unattributed_card_cannot_be_executed(client, monkeypatch):
+    """Anchored on a VM the detection did not name: approving isolated that VM."""
+    monkeypatch.setattr("glorfindel.actions.AzureConnector", lambda **k: (_ for _ in ()).throw(AssertionError("no Azure")))
+    eid = _card("unattributed_signal")
+    assert "non attribuée" in client.post(f"/api/action/approve/{eid}").json()["error"]
+
+
+def test_a_stale_card_cannot_be_executed(client, monkeypatch):
+    monkeypatch.setattr("glorfindel.actions.AzureConnector", lambda **k: (_ for _ in ()).throw(AssertionError("no Azure")))
+    eid = _card(age_h=5)
+    assert "vieille" in client.post(f"/api/action/approve/{eid}").json()["error"]
+
+
+def test_an_approval_refuses_anything_but_one_ip(client, monkeypatch):
+    """`ip=*&scope=subnet` cut a whole subnet (fourth review, Q4)."""
+    monkeypatch.setattr("glorfindel.actions.AzureConnector", lambda **k: (_ for _ in ()).throw(AssertionError("no Azure")))
+    eid = _card(action="block_suspicious_ip")
+    for bad in ("*", "10.0.0.0/8", "Internet", "0.0.0.0"):
+        r = client.post(f"/api/action/approve/{eid}", params={"ip": bad, "scope": "subnet"}).json()
+        assert "IP" in r["error"], bad

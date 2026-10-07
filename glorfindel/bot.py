@@ -61,14 +61,8 @@ def _cli_command(esc: dict) -> str:
             f"# Lire les réserves, puis les accepter :\n"
             f"glorfindel activate {rid}"
         )
-    # Restore only for its original case (detection timeout, snapshot taken): a
-    # low_confidence card now also holds isolations and blocks (third review, T14).
-    if esc["escalation_type"] == "low_confidence" and action == "snapshot":
-        return (
-            f"# Vérifier le snapshot, puis si nécessaire :\n"
-            f"glorfindel restore {rid} --yes\n"
-            f"glorfindel ack {esc_id}"
-        )
+    # No restore on a low_confidence card: a held snapshot never ran — restoring would
+    # overwrite the disk the model wanted preserved (fourth review, Q16).
     return f"glorfindel ack {esc_id}"
 
 
@@ -169,14 +163,7 @@ def _make_action_button(esc: dict) -> _ExecuteButton | None:
             discord.ButtonStyle.danger,
             ["revert", rid, "--yes"],
         )
-    if esc_type == "low_confidence" and action == "snapshot":
-        # Detection timeout — snapshot taken, operator may want to restore. Not for an
-        # isolation or a block held for low confidence (third review, T14).
-        return _ExecuteButton(
-            esc, "🔄 Restore",
-            discord.ButtonStyle.secondary,
-            ["restore", rid, "--yes"],
-        )
+    # No Restore on a low_confidence card: a held snapshot never ran (fourth review, Q16).
     return None
 
 

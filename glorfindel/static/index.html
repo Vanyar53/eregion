@@ -601,6 +601,7 @@ const ACTION_LABELS = {
   modify_network_rule:  'Network rule modified',
   escalate_permissions: 'Permissions escalated',
   activate_autonomy:    'Autonomous response held',
+  review_isolation:     'Isolation to review (TTL)',
 };
 
 // Verb forms — used for actions not yet executed (mode_hold: recommended, pending approval)
@@ -637,8 +638,9 @@ const ESC_LABELS = {
 // An autonomous action a gate held back: recommended, NOT executed. It used to read
 // "VM isolated from network" as if done, with only an Ack (third review, T14). Say it
 // is held, and why, with the one-click approve path every held type deserves.
-const _HELD_TYPES = new Set(['mode_hold', 'low_confidence', 'uncharacterized_signal',
-                             'unattributed_signal', 'release_hold']);
+// Not unattributed_signal: its card is anchored on a VM the detection did not name, and
+// the server refuses to execute it (fourth review, Q4).
+const _HELD_TYPES = new Set(['mode_hold', 'low_confidence', 'uncharacterized_signal', 'release_hold']);
 const _APPROVABLE = new Set(['isolate_vm', 'block_suspicious_ip', 'release_isolation', 'snapshot']);
 function _isHeld(e) {
   return _HELD_TYPES.has(e.escalation_type) && _APPROVABLE.has(e.action)
@@ -818,9 +820,8 @@ function cliCommand(esc) {
   if (esc.escalation_type === 'verification_failed') {
     return `glorfindel revert ${rid} --yes\nglorfindel ack ${id}`;
   }
-  if (esc.escalation_type === 'low_confidence' && esc.action === 'snapshot') {
-    return `# Verify the snapshot, then if needed:\nglorfindel restore ${rid} --yes\nglorfindel ack ${id}`;
-  }
+  // No restore here: a held snapshot never ran — restoring would overwrite the very
+  // disk the model wanted preserved (fourth review, Q16).
   return `glorfindel ack ${id}`;
 }
 

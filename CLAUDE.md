@@ -160,6 +160,7 @@ La War Room déclenche de vraies actions Azure (restore, release, approve & exec
 - `glorfindel war-room` écoute sur **127.0.0.1** par défaut ; `docker-compose.yml` publie `127.0.0.1:7007:7007` (le `--host 0.0.0.0` reste nécessaire *dans* le conteneur).
 - `GLORFINDEL_WARROOM_TOKEN` (optionnel) : protège **toutes** les routes, WebSocket du feed compris (middleware ASGI). Ouvrir une fois `http://<hôte>:7007/?token=<jeton>` → cookie HttpOnly/SameSite=Strict + redirection sans le jeton ; scripts : `Authorization: Bearer <jeton>`. Sans jeton sur une adresse non-loopback → avertissement au démarrage.
 - Sans jeton, un **navigateur** reçoit une page de saisie (formulaire GET → cookie → redirection) ; les clients API gardent le 401 JSON.
+- **Approbation en un clic (quatrième passe, L19)** : `_approval_refusal` — types exécutables `mode_hold`, `low_confidence`, `uncharacterized_signal`, `release_hold` seulement (**jamais** `unattributed_signal` : sa carte est ancrée sur une VM que la détection ne nomme pas) ; carte plus vieille que `GLORFINDEL_APPROVAL_MAX_AGE_H` (2 h, sur `last_seen`) ou antérieure au dernier restore → refus ; IP d'un blocage = une seule adresse (`single_host_ip` : ni `*`, ni CIDR, ni tag). **TTL** : `reassert.ttl_alerts` escalade (`ttl_exceeded`, action `review_isolation`, `ttl_alerted_at`), ne lève jamais (avant : toute isolation levée au bout de 4 h, sans humain ni précondition).
 - **Nom ambigu** : `_find_resource_id` lève `AmbiguousVM` (409, `{error}`) quand un nom de VM désigne plusieurs VMs (homonymes dans deux groupes, possibles depuis le registre par ID) — avant, la première trouvée était visée (release, restore, snapshot, activate…).
 - Cartes : chip `shared NSG`, chips rouges **`⚠ partial`** (NICs partielles, ou release/unblock qui a laissé des règles) et **`⚠ bypassed`** (allow évaluée avant le deny) à côté de ISOLATED/BLOCKED — `/api/state` expose `partial`, `failed_nic`, `release_failed`/`unblock_failed`, `shared`, `shadowed`. Release/Revert en échec : le toast reprend les règles restantes (sortie CLI).
 - Corrigé au passage : `GET /api/audit/<vm>` (panneau readiness par VM) levait `NameError: os` **à chaque appel** depuis `053156b` (18/06) — `import os` manquant ; `ruff` le signalait.
@@ -424,7 +425,7 @@ glorfindel restore <resource_id> --yes --wait  # workflow complet : attend recov
 glorfindel jobs <vm-name> [--refresh]        # état du job snapshot/restore en cours
 glorfindel ack <escalation_id>               # acquitter escalade
 glorfindel ack --all                         # acquitter toutes
-glorfindel check-ttl                         # libérer isolations expirées
+glorfindel check-ttl                         # escalade les isolations au-delà du TTL (ne lève JAMAIS — quatrième passe Q1)
 
 # Audit remédiation — vérifier que Glorfindel peut agir avant l'incident
 glorfindel activate <vm|resource_id>         # réponse autonome pour une VM : contrôle de préparation,
@@ -465,7 +466,8 @@ DISCORD_BOT_TOKEN=...               # Bot Discord interactif (fils par VM, bouto
 DISCORD_CHANNEL_ID=...              # ID du channel (clic droit → Copy Channel ID)
 DISCORD_PING_ROLE=...               # ID du rôle à pinger à l'ouverture d'un fil (optionnel)
 GLORFINDEL_KEEP_ISOLATED=1          # mode forensique
-GLORFINDEL_ISOLATION_TTL_H=4        # TTL isolation (défaut 4h)
+GLORFINDEL_ISOLATION_TTL_H=4        # TTL isolation (défaut 4h) : au-delà, une carte ttl_exceeded — jamais de levée automatique
+GLORFINDEL_APPROVAL_MAX_AGE_H=2     # âge max d'une carte exécutable en un clic (War Room « Approve & execute »)
 GLORFINDEL_INCIDENT_TTL_S=300       # TTL fenêtre incident
 GLORFINDEL_CONFIDENCE_THRESHOLD=0.7 # gate autonomie LLM (défaut 0.7 — en dessous → escalade forcée)
 GLORFINDEL_READ_ONLY=1              # creds lecture seule (SP Reader) — mode observe-only
@@ -477,7 +479,7 @@ GLORFINDEL_DISCOVERY_RETENTION_H=8  # rétention d'une VM éteinte dans le regis
 ## Tests
 
 ```bash
-pytest                    # 695 tests (~15s), 0 appel Azure, 0 appel LLM, 0 écriture ~/.glorfindel/
+pytest                    # 701 tests (~15s), 0 appel Azure, 0 appel LLM, 0 écriture ~/.glorfindel/
                           # Hermétique par construction (conftest) : TOUS les chemins ~/.glorfindel redirigés
                           # vers tmp, et le glorfindel-config.yaml local ignoré (avant : avec une config locale,
                           # les tests de graphe lançaient de vraies requêtes KQL via `investigate`, suite 5× plus lente).

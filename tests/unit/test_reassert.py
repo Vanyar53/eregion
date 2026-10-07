@@ -154,7 +154,8 @@ def test_a_vm_held_by_its_readiness_gets_an_alert_not_a_reapplication():
 def test_a_release_in_progress_is_not_put_back():
     """The release removes the NSGs NIC by NIC and clears the state at the end: seen
     halfway, the isolation looked 'removed outside Glorfindel' and was re-isolated."""
-    _isolated(releasing_at="2026-10-07T10:00:00+00:00")
+    from datetime import datetime, timezone
+    _isolated(releasing_at=datetime.now(timezone.utc).isoformat())
     c = _connector({"verified": False, "uncovered_nics": ["nic-a"]})
     assert reassert_active(c, _ACT) == []
     c.isolate_vm.assert_not_called()
@@ -208,7 +209,61 @@ def test_an_unblock_in_progress_is_not_put_back():
     _save_block_state("vm", "203.0.113.9", _RID, nsg="rg/nsg", nsg_scope="subnet", rule="r",
                       placements=[{"nsg_rg": "rg", "nsg_name": "nsg", "rule": "r"}])
     from glorfindel.actions import _update_block_entry
-    _update_block_entry("vm", "203.0.113.9", unblocking_at="2026-10-07T10:00:00+00:00")
+    from datetime import datetime, timezone
+    _update_block_entry("vm", "203.0.113.9", unblocking_at=datetime.now(timezone.utc).isoformat())
     c = _connector(verify_blk={"verified": False, "missing_rules": ["r"]})
     assert reassert_active(c, _ACT) == []
     c.block_suspicious_ip.assert_not_called()
+
+
+
+# ── Quatrième passe (Q1, Q10) ─────────────────────────────────────────────────────────
+
+def test_an_interrupted_release_is_alerted_once_not_forgotten():
+    """A release cut off midway (War Room timeout, crash) kept its marker forever: the
+    VM was ignored by the reassertion for good, and nothing said so (fourth review, Q10)."""
+    _isolated(releasing_at="2026-10-07T08:00:00+00:00")
+    c = _connector({"verified": False, "uncovered_nics": ["nic-a"]})
+    assert reassert_active(c, _ACT)[0]["outcome"] == "escalated"
+    assert "interrompue" in escalations.pending()[0]["reason"]
+    assert reassert_active(c, _ACT) == []                          # once
+    c.isolate_vm.assert_not_called()                               # never re-isolated against the intent
+
+
+def test_past_the_ttl_an_isolation_is_escalated_never_released():
+    """The watch released every isolation older than 4 h — no human, no mode, no
+    precondition: a ransomware VM waiting for its restore went back on the network."""
+    from glorfindel.reassert import ttl_alerts
+    _isolated()                                                     # isolated at 08:00 on 06/10
+    out = ttl_alerts(4.0)
+    assert [a["vm"] for a in out] == ["vm"]
+    card = escalations.pending()[0]
+    assert card["escalation_type"] == "ttl_exceeded" and "ne lève pas" in card["reason"]
+    assert _load_isolation_state("vm") is not None                 # still isolated
+    assert ttl_alerts(4.0) == []                                    # one card, not one per minute
+
+
+def test_reassertion_skips_a_vm_whose_lock_is_busy():
+    import threading
+    from glorfindel.actions import _vm_lock
+    import glorfindel.reassert as ra
+    _isolated()
+    c = _connector({"verified": False, "uncovered_nics": ["nic-a"]})
+    held, release = threading.Event(), threading.Event()
+
+    def writer():
+        with _vm_lock("vm"):
+            held.set()
+            release.wait(5)
+    t = threading.Thread(target=writer)
+    t.start()
+    held.wait(2)
+    old = ra._LOCK_WAIT_S
+    ra._LOCK_WAIT_S = 0.2
+    try:
+        assert reassert_active(c, _ACT) == []
+    finally:
+        ra._LOCK_WAIT_S = old
+        release.set()
+        t.join(5)
+    c.verify_isolation.assert_not_called()

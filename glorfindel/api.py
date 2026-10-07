@@ -597,7 +597,7 @@ async def action_release(vm_name: str) -> dict:
     result = await asyncio.to_thread(
         subprocess.run,
         [_bin(), "release", resource_id, "--yes"],
-        capture_output=True, text=True, timeout=60,
+        capture_output=True, text=True, timeout=600,   # a multi-NIC release takes minutes; cut midway = half released
     )
     return _subprocess_result(result)
 
@@ -611,7 +611,7 @@ async def action_revert(vm_name: str) -> dict:
     result = await asyncio.to_thread(
         subprocess.run,
         [_bin(), "reset", resource_id, "--yes"],
-        capture_output=True, text=True, timeout=60,
+        capture_output=True, text=True, timeout=600,   # a multi-NIC release takes minutes; cut midway = half released
     )
     return _subprocess_result(result)
 

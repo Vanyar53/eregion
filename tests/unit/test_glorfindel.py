@@ -921,7 +921,7 @@ def test_audit_reports_read_only_credentials():
     connector.check_backup_points = lambda rid, vault="rsv-annatar", vault_rg="": {"ok": True, "points": 2, "latest_age_h": 5}
     connector.check_compute_access = lambda rid: {"ok": True, "vm": "vm", "disks": ["osdisk"]}
 
-    result = audit.run(_RID, connector)
+    result = audit.run(_RID, connector, vault="rsv-test")
     creds = [c for c in result.checks if c.name == "Credentials"]
     assert len(creds) == 1
     assert creds[0].status == "warn"
@@ -2315,7 +2315,7 @@ def _l4_env(monkeypatch, nic_nsg_id=None, subnet_nsg_id=_SUBNET_NSG_ID, quaranti
     net.network_interfaces.get.return_value = nic
     net.subnets.get.return_value = SimpleNamespace(
         network_security_group=SimpleNamespace(id=subnet_nsg_id) if subnet_nsg_id else None)
-    q = SimpleNamespace(id=_Q_ID, tags={}, security_rules=[SimpleNamespace(name=n) for n in (
+    q = SimpleNamespace(id=_Q_ID, tags={"managed-by": "glorfindel"}, security_rules=[SimpleNamespace(name=n) for n in (
         "glorfindel-quarantine-deny-in", "glorfindel-quarantine-deny-out",
         "glorfindel-quarantine-deny-dns", "glorfindel-quarantine-deny-imds")])
     net.network_security_groups.update_tags.side_effect = lambda rg, name, t: setattr(q, "tags", dict(t.tags))
@@ -2462,7 +2462,8 @@ def test_release_without_state_reads_the_original_from_azure(monkeypatch):
     """The local state is lost: the tag on our NSG still says which NSG to put back."""
     from glorfindel.actions import AzureConnector
     connector, net, nic = _l4_env(monkeypatch, quarantine_exists=True)
-    net.network_security_groups.get.return_value.tags = {AzureConnector._orig_tag(_NIC_ID): _CLIENT_NSG_ID}
+    net.network_security_groups.get.return_value.tags = {"managed-by": "glorfindel",
+                                                         AzureConnector._orig_tag(_NIC_ID): _CLIENT_NSG_ID}
     nic.network_security_group = type("R", (), {"id": _Q_ID})()
     connector.release_isolation(_RID)
     assert net.network_interfaces.begin_create_or_update.call_args.args[2].network_security_group.id == _CLIENT_NSG_ID
@@ -2512,7 +2513,7 @@ def test_reisolation_keeps_the_original_recorded_in_state(monkeypatch):
     connector, net, nic = _l4_env(monkeypatch, nic_nsg_id=_CLIENT_NSG_ID, quarantine_exists=True)
     connector.isolate_vm(_RID)
     nic.network_security_group = type("R", (), {"id": _Q_ID})()
-    net.network_security_groups.get.return_value.tags = {}                 # tag lost
+    net.network_security_groups.get.return_value.tags = {"managed-by": "glorfindel"}   # tag lost
     connector.isolate_vm(_RID)
     assert _load_isolation_state("vm")["placements"][0]["original_nsg_id"] == _CLIENT_NSG_ID
 
@@ -2693,3 +2694,26 @@ def test_other_replayable_scripts_hold_the_release(monkeypatch):
     out = connector.restore_from_backup(_RID, vault="rsv", wait=False, staging_storage="st")
     assert out["run_command_neutralized"] is False
     assert out["replay_vectors"] == ["extension setup", "run command managé nightly"]
+
+
+
+def test_a_customer_nsg_named_like_ours_is_not_treated_as_quarantine(monkeypatch):
+    """Recognised by its name prefix only, a customer NSG named like ours would have
+    been detached by a stateless release (third review, details)."""
+    connector, net, nic = _l4_env(monkeypatch, quarantine_exists=True)
+    nic.network_security_group = type("R", (), {"id": _Q_ID})()
+    net.network_security_groups.get.return_value.tags = {"owner": "network-team"}
+    [t] = connector._get_vm_nic_targets("rg", "vm", allow_no_nsg=True)
+    assert t["quarantine"] is None and t["nsg_name"] == _Q_ID.rsplit("/", 1)[-1]
+
+
+def test_precedence_at_rest_checks_isolation_on_a_dedicated_nsg_too(monkeypatch):
+    """Since L3 the deny takes the first free priority: a customer allow at 100 on the
+    NIC's own NSG comes before it — the audit assumed 'a dedicated NSG gets 100'."""
+    from glorfindel.actions import AzureConnector
+    connector = AzureConnector(dry_run=False)
+    net = MagicMock()
+    net.security_rules.list.return_value = [_nsg_rule("allow-ssh", 100, port="22")]
+    connector._network = net
+    issues = connector._precedence_issues([_nic_target(scope="nic")])
+    assert {i["action"] for i in issues} >= {"isolate_vm"}

@@ -916,15 +916,10 @@ async def action_snapshot(vm_name: str) -> dict:
     if not resource_id:
         return {"error": f"Resource ID not found for {vm_name}"}
 
-    vault, vault_rg = os.environ.get("GLORFINDEL_BACKUP_VAULT", "rsv-annatar"), ""
-    try:
-        from glorfindel.config import load_glorfindel_config
-        rsv = load_glorfindel_config().backup_vault()
-        if rsv:
-            vault = rsv.vault_name or vault
-            vault_rg = rsv.resource_group or ""
-    except Exception:
-        pass
+    from glorfindel.config import NO_VAULT_MSG, resolve_backup_vault
+    vault, vault_rg, _ = resolve_backup_vault()
+    if not vault:
+        return {"error": NO_VAULT_MSG}
 
     from glorfindel.actions import AzureConnector
     from glorfindel.jobs import start_snapshot as _start_snapshot
@@ -966,17 +961,10 @@ async def audit_resource(vm_name: str) -> dict:
 
     connector = AzureConnector(dry_run=False)
     # Resolve vault + its RG from config (central vault ≠ VM RG — see /api/audit).
-    vault, vault_rg = os.environ.get("GLORFINDEL_BACKUP_VAULT", "rsv-annatar"), ""
-    staging_storage = ""
-    try:
-        from glorfindel.config import load_glorfindel_config
-        rsv = load_glorfindel_config().backup_vault()
-        if rsv:
-            vault = rsv.vault_name or vault
-            vault_rg = rsv.resource_group or ""
-            staging_storage = rsv.restore_staging_storage
-    except Exception:
-        pass
+    from glorfindel.config import NO_VAULT_MSG, resolve_backup_vault
+    vault, vault_rg, staging_storage = resolve_backup_vault()
+    if not vault:
+        return {"error": NO_VAULT_MSG}
     # Run blocking Azure SDK calls in a thread pool — prevents event loop stall.
     result = await asyncio.to_thread(
         _audit.run, resource_id, connector, vault, vault_rg, staging_storage)
@@ -1010,11 +998,11 @@ async def audit_all() -> dict:
         from glorfindel.config import load_glorfindel_config
         _cfg = load_glorfindel_config()
         rsv = _cfg.backup_vault()
-        vault = rsv.vault_name if rsv and rsv.vault_name else os.environ.get("GLORFINDEL_BACKUP_VAULT", "rsv-annatar")
+        vault = rsv.vault_name if rsv and rsv.vault_name else os.environ.get("GLORFINDEL_BACKUP_VAULT", "")
         vault_rg = rsv.resource_group if rsv and rsv.resource_group else ""
         staging_storage = rsv.restore_staging_storage if rsv else ""
     except Exception:
-        vault = os.environ.get("GLORFINDEL_BACKUP_VAULT", "rsv-annatar")
+        vault = os.environ.get("GLORFINDEL_BACKUP_VAULT", "")
         _cfg = None
 
     # VM targets: fresh read from disk (watch service may have updated the file)
@@ -1058,16 +1046,11 @@ async def backups() -> dict:
     paginated call (list_backup_items); the per-VM /api/audit stays for readiness.
     """
     from glorfindel.actions import AzureConnector
-    from glorfindel.config import load_glorfindel_config
 
-    vault, rg = "rsv-annatar", "annatar"
-    try:
-        rsv = load_glorfindel_config().backup_vault()
-        if rsv:
-            vault = rsv.vault_name or vault
-            rg = rsv.resource_group or rg
-    except Exception:
-        pass
+    from glorfindel.config import NO_VAULT_MSG, resolve_backup_vault
+    vault, rg, _ = resolve_backup_vault()
+    if not vault or not rg:
+        return {"error": NO_VAULT_MSG, "items": []}
     try:
         connector = AzureConnector(dry_run=False)
         items = await asyncio.to_thread(connector.list_backup_items, vault, rg)

@@ -37,11 +37,19 @@ def test_audit_resource_endpoint_no_longer_raises_nameerror(client, monkeypatch)
         return result
     monkeypatch.setattr("glorfindel.audit.run", _run)
     monkeypatch.setattr("glorfindel.actions.AzureConnector", lambda **k: MagicMock())
+    monkeypatch.setenv("GLORFINDEL_BACKUP_VAULT", "rsv-test")
 
     r = client.get("/api/audit/vm")
     assert r.status_code == 200
     assert r.json()["ready"] is True
-    assert seen["vault"]          # resolved from config or the env/legacy default
+    assert seen["vault"] == "rsv-test"    # from the env (no retired default any more)
+
+
+def test_snapshot_without_a_vault_says_so(client, monkeypatch):
+    monkeypatch.delenv("GLORFINDEL_BACKUP_VAULT", raising=False)
+    rid = "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm"
+    monkeypatch.setattr(api, "_find_resource_id", lambda vm: rid)
+    assert "Aucun coffre" in client.post("/api/action/snapshot/vm").json()["error"]
 
 
 def test_open_access_without_token(client):

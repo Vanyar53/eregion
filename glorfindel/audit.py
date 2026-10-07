@@ -52,7 +52,7 @@ class AuditResult:
 def run(
     resource_id: str,
     connector,
-    vault: str = "rsv-annatar",
+    vault: str = "",
     vault_rg: str = "",
     staging_storage: str = "",
     workspace_id: str | None = None,
@@ -317,6 +317,11 @@ def _check_nsg(resource_id: str, connector) -> AuditCheck:
 
 
 def _check_backup(resource_id: str, connector, vault: str, vault_rg: str = "") -> AuditCheck:
+    if not vault and not getattr(connector, "dry_run", False):
+        from glorfindel.config import NO_VAULT_MSG
+        return AuditCheck("restore_from_backup", "Backup vault", "fail",
+                          "Restauration impossible : " + NO_VAULT_MSG,
+                          "Déclarer le coffre dans action_backends de glorfindel-config.yaml.")
     rg = _rg(resource_id)
     vm = resource_id.split("/")[-1]
     # az backup commands are scoped to the VAULT's resource group, not the VM's.

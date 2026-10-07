@@ -33,24 +33,13 @@ def _record_manual_action(action: str, resource_id: str, outcome: dict) -> None:
 
 
 def _backup_vault_from_config(vault: str | None) -> tuple[str, str, str]:
-    """(vault, vault_rg, staging_storage) from glorfindel-config.yaml.
-
-    An explicit --vault wins for the name; the vault's resource group and the staging
-    account always come from config (a central vault lives outside the VM's RG — the
-    calls failed with ResourceNotFound when they used the VM's RG).
-    """
-    vault_rg, staging = "", ""
-    try:
-        from glorfindel.config import load_glorfindel_config
-        rsv = load_glorfindel_config().backup_vault()
-        if rsv:
-            if not vault or vault == "rsv-annatar":
-                vault = rsv.vault_name or vault
-            vault_rg = rsv.resource_group or ""
-            staging = rsv.restore_staging_storage or ""
-    except Exception:
-        pass
-    return vault or "rsv-annatar", vault_rg, staging
+    """(vault, vault_rg, staging_storage) — see config.resolve_backup_vault. No vault
+    configured → a clear error instead of the retired "rsv-annatar" default."""
+    from glorfindel.config import NO_VAULT_MSG, resolve_backup_vault
+    resolved = resolve_backup_vault(vault)
+    if not resolved[0]:
+        raise click.ClickException(NO_VAULT_MSG)
+    return resolved
 
 
 def _parse_signal_line(raw: str):
@@ -754,7 +743,8 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
                 from glorfindel.actions import AzureConnector
                 from glorfindel.detection_rules import load_rules
                 connector = AzureConnector(dry_run=False)
-                _vault, _vault_rg, _staging = "rsv-annatar", "", ""
+                from glorfindel.config import resolve_backup_vault as _rbv
+                _vault, _vault_rg, _staging = _rbv()
                 _gcfg = None
                 try:
                     from glorfindel.config import load_glorfindel_config
@@ -939,7 +929,7 @@ def jobs(resource_id: str, refresh: bool):
 
 @cli.command()
 @click.argument("resource_id")
-@click.option("--vault", default="rsv-annatar", show_default=True)
+@click.option("--vault", default=None, help="Recovery Services vault (default: glorfindel-config.yaml).")
 @click.option("--dry-run", is_flag=True)
 @click.option("--yes", is_flag=True, help="Skip confirmation prompt.")
 @click.option("--keep-isolated", is_flag=True, envvar="GLORFINDEL_KEEP_ISOLATED",
@@ -1934,7 +1924,7 @@ def replay_campaign_cmd(campaign_id, runs_dir, source, dry_run):
 @click.argument("resource_id", required=False)
 @click.option("--all", "audit_all", is_flag=True,
               help="Audit all resources from detection_rules.yaml.")
-@click.option("--vault", default="rsv-annatar", show_default=True)
+@click.option("--vault", default=None, help="Recovery Services vault (default: glorfindel-config.yaml).")
 @click.option("--vault-rg", "vault_rg", default="",
               help="Vault resource group (central vault ≠ VM RG). Default: from config.")
 @click.option("--dry-run", is_flag=True)
@@ -1953,18 +1943,9 @@ def audit(resource_id: str | None, audit_all: bool, vault: str, vault_rg: str, d
     # Resolve vault + its resource group from glorfindel-config.yaml (source of truth).
     # A central vault protects VMs across RGs, so the vault's RG must come from config,
     # not be derived from the VM's resource_id.
-    staging_storage = ""
-    try:
-        from glorfindel.config import load_glorfindel_config
-        rsv = load_glorfindel_config().backup_vault()
-        if rsv:
-            staging_storage = rsv.restore_staging_storage
-            if not vault_rg:
-                vault_rg = rsv.resource_group or ""
-                if vault == "rsv-annatar" and rsv.vault_name:
-                    vault = rsv.vault_name
-    except Exception:
-        pass
+    from glorfindel.config import resolve_backup_vault
+    vault, cfg_vault_rg, staging_storage = resolve_backup_vault(vault)
+    vault_rg = vault_rg or cfg_vault_rg      # empty vault → the audit says so per VM
 
     connector = AzureConnector(dry_run=dry_run)
     targets: list[str] = []

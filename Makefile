@@ -87,7 +87,7 @@ DOCKER_GLORFINDEL := docker run --rm $(GLORFINDEL_AZURE_ENV) $(GLORFINDEL_VOLS) 
 	glorfindel-start glorfindel-stop glorfindel-restart glorfindel-dev glorfindel-logs glorfindel-ui \
 	annatar-shell glorfindel-shell \
 	venv install test test-unit lint annatar-simulate annatar-simulate-gap clean \
-	celebrimbor-init celebrimbor-plan celebrimbor-up celebrimbor-down celebrimbor-output celebrimbor-stop celebrimbor-start
+	canary-jit celebrimbor-init celebrimbor-plan celebrimbor-up celebrimbor-down celebrimbor-output celebrimbor-stop celebrimbor-start
 
 # ── Help ──────────────────────────────────────────────────────────────────
 
@@ -298,6 +298,12 @@ glorfindel-shell: build-glorfindel
 #   make celebrimbor-down CONFIRM=<instance>   # teardown TOTAL (baseline INCLUS) — confirmation obligatoire
 #   Retirer une topo proprement = enabled:false dans config.yaml + celebrimbor-up (reconcile).
 #   Convention : chaque topo doit définir `azurerm_resource_group.<topo>` (count) → la cible -target.
+
+# Canary of the just-in-time isolation: re-checks, on the latest azurerm provider, the
+# Terraform behavior Glorfindel's isolation relies on (throwaway stack, own RG, ~5 min,
+# free resources only). Exit 1 = the behavior changed. Also weekly in CI (canary-azurerm).
+canary-jit:
+	@infra/canary/jit-terraform/run.sh
 
 celebrimbor-init:
 	$(TF) init -upgrade

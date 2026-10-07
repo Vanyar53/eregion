@@ -40,3 +40,6 @@ collab/
 .DS_Store
 Thumbs.db
 *.code-workspace
+infra/canary/**/.terraform/
+infra/canary/**/.terraform.lock.hcl
+infra/canary/**/terraform.tfstate*

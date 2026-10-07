@@ -1,0 +1,50 @@
+name: canary-azurerm
+
+# Weekly: re-checks, on the latest azurerm provider, the Terraform behavior Glorfindel's
+# just-in-time isolation relies on (infra/canary/jit-terraform). Fails if it changed.
+# Needs repository secrets AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_TENANT_ID and
+# AZURE_SUBSCRIPTION_ID (a principal allowed to create a resource group); skipped
+# without them. Creates only free resources (resource group, VNet, NSG, NICs), deleted
+# at the end.
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  canary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      ARM_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+    steps:
+      - name: Check credentials
+        id: creds
+        run: |
+          if [ -z "$ARM_CLIENT_ID" ] || [ -z "$ARM_SUBSCRIPTION_ID" ]; then
+            echo "Azure secrets not configured — canary skipped."; echo "ok=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v4
+        if: steps.creds.outputs.ok == 'true'
+      - uses: hashicorp/setup-terraform@v3
+        if: steps.creds.outputs.ok == 'true'
+        with:
+          terraform_wrapper: false
+      - name: Azure login
+        if: steps.creds.outputs.ok == 'true'
+        run: |
+          az login --service-principal -u "$ARM_CLIENT_ID" -p "$ARM_CLIENT_SECRET" --tenant "$ARM_TENANT_ID" -o none
+          az account set --subscription "$ARM_SUBSCRIPTION_ID"
+      - name: Run canary
+        if: steps.creds.outputs.ok == 'true'
+        env:
+          CANARY_SUFFIX: gh${{ github.run_id }}
+        run: infra/canary/jit-terraform/run.sh

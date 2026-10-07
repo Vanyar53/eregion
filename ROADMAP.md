@@ -301,7 +301,7 @@ War Room local              →  War Room SaaS multi-tenant
 
 ```
 0. Module d'isolation compatible IaC        → L1–L5, L7 + isolation JIT livrés et validés (06/10) ; reste L6 (écran d'activation), L8 (module renfort)
-0b. Canary CI azurerm                        → rejouer les 8 tests Terraform du JIT à chaque version du provider (le JIT dépend d'un angle mort qu'HashiCorp peut corriger)
+0b. Canary azurerm                           → ✅ `make canary-jit` + CI hebdo (secrets Azure du dépôt à configurer) ; PASS le 07/10 sur azurerm 4.81.0
 1. Premier utilisateur externe              → MAINTENANT, bloque tout
 2. Solidification (erreurs, cron)           → après feedback
 3. Entra ID / Service Principal             → vecteur #1 Azure 2025

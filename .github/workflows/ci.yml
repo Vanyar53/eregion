@@ -40,3 +40,23 @@ jobs:
 
       - name: Tests (0 Azure call, 0 LLM call, 0 write in ~/.glorfindel)
         run: python -m pytest tests/ -q
+
+  # The state files are keyed by name; macOS (APFS, case-insensitive by default) is
+  # where a VM name with an upper-case letter deleted its own state (fifth review, C1).
+  # Linux CI could not see it.
+  test-macos:
+    name: tests (macOS, case-insensitive file system)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: python -m pip install -e ".[dev]"
+
+      - name: State and identity tests
+        run: python -m pytest tests/unit/test_glorfindel.py tests/unit/test_readiness.py tests/unit/test_reassert.py -q

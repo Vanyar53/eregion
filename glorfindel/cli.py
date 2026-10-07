@@ -319,6 +319,13 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
     if not dry_run:
         from glorfindel.actions import warm_up_azure_sdk
         warm_up_azure_sdk()
+    try:
+        from glorfindel.actions import migrate_state_files
+        _moved = migrate_state_files()     # one lowercase keyed file per VM (fifth review, C2)
+        if _moved:
+            console.print(f"[dim]State: {_moved} file(s) migrated to the lowercase keyed names.[/dim]")
+    except Exception as exc:
+        console.print(f"[yellow]State migration skipped: {exc}[/yellow]")
 
     agent = GlorfindelAgent(
         dry_run=dry_run, model=model, memory_path=memory_path,

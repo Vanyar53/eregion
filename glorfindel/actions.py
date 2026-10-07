@@ -3149,24 +3149,34 @@ def _file_rid(f: Path) -> str:
     return str((data or {}).get("resource_id") or "").rstrip("/").lower()
 
 
+def _hash_variants(directory: Path, rid: str) -> list[Path]:
+    """Every `*--<hash>.json` of this resource id, whatever the case of its name part
+    (the hash itself ignores case). Newest first."""
+    if not directory.exists():
+        return []
+    files = [f for f in directory.glob(f"*--{_rid_hash(rid)}.json")
+             if _file_rid(f) in ("", rid.rstrip("/").lower())]
+    return sorted(files, key=lambda f: f.stat().st_mtime, reverse=True)
+
+
 def _state_file(directory: Path, ref: str) -> Path | None:
-    """The state file of a VM, keyed `<name>--<hash of its resource id>.json`.
+    """The state file of a VM, keyed `<name in lowercase>--<hash of its resource id>.json`.
 
     Keyed by name only, two VMs with the same name in two resource groups shared one
-    file: isolating one overwrote the other's state, and releasing one deleted it —
-    the other stayed isolated, out of sight of `list`, the reassertion and `reset`
-    (third review, T1 follow-up). A legacy `<name>.json` is used only when it belongs
-    to that resource id; by name alone, an ambiguous name resolves to nothing."""
+    file (third review). The name part is lowercase (fourth review, Q9), and a file is
+    found by its HASH whatever the case of its name — a mixed-case file of an earlier
+    version stayed invisible to lowercase ids (fifth review, C2). A legacy `<name>.json`
+    is used only when it belongs to that resource id; by name alone, an ambiguous name
+    resolves to nothing."""
     name, rid = _vm_ref(ref)
     legacy = directory / f"{name}.json"
     if rid:
-        # Lowercase name part (fourth review, Q9): the detection writes ids in lowercase,
-        # the CLI in their own case — one VM had two files on a case-sensitive file
-        # system. The original-case file of an earlier version is still read.
-        for keyed in (directory / f"{name.lower()}--{_rid_hash(rid)}.json",
-                      directory / f"{name}--{_rid_hash(rid)}.json"):
-            if keyed.exists():
-                return keyed
+        target = directory / f"{name.lower()}--{_rid_hash(rid)}.json"
+        if target.exists():
+            return target
+        variants = _hash_variants(directory, rid)
+        if variants:
+            return variants[0]
         if legacy.exists() and _file_rid(legacy) in ("", rid.rstrip("/").lower()):
             return legacy
         return None
@@ -3179,9 +3189,19 @@ def _state_file(directory: Path, ref: str) -> Path | None:
     return keyed[0] if len(keyed) == 1 else None
 
 
+def _same_file(a: Path, b: Path) -> bool:
+    try:
+        return a.samefile(b)
+    except OSError:
+        return False
+
+
 def _write_state(directory: Path, ref: str, rid: str, payload) -> None:
-    """Write under the keyed name (migrating the VM's legacy file), or the plain name
-    when no resource id is known."""
+    """Write under the keyed name, then remove this VM's OTHER files (plain name, other
+    cases of the name part). Never one that IS the target: on a case-insensitive file
+    system (macOS, Windows, Docker Desktop mounts) `VM-Foo--h.json` and `vm-foo--h.json`
+    are the same file — removing the "old" one deleted the state just written (fifth
+    review, C1)."""
     name, ref_rid = _vm_ref(ref)
     rid = rid or ref_rid
     if not rid:
@@ -3189,10 +3209,39 @@ def _write_state(directory: Path, ref: str, rid: str, payload) -> None:
         return
     target = directory / f"{name.lower()}--{_rid_hash(rid)}.json"
     _atomic_write_text(target, json.dumps(payload))
-    # Migrate this VM's older files: plain name, or keyed with the name's own case.
-    for old in (directory / f"{name}.json", directory / f"{name}--{_rid_hash(rid)}.json"):
-        if old != target and old.exists() and _file_rid(old) in ("", rid.rstrip("/").lower()):
+    for old in [directory / f"{name}.json", *_hash_variants(directory, rid)]:
+        if old.name == target.name or not old.exists() or _same_file(old, target):
+            continue
+        if _file_rid(old) in ("", rid.rstrip("/").lower()):
             old.unlink()
+
+
+def migrate_state_files() -> int:
+    """At start-up: every state file under its lowercase keyed name, one per VM (the
+    newest wins). A mixed-case file left by #41's version, or a plain `<name>.json`,
+    would otherwise stay invisible to lowercase ids — or come back to life once the
+    lowercase file is cleared (fifth review, C2). Returns the files moved or removed."""
+    changed = 0
+    for directory in (_ISOLATION_STATE_DIR, _BLOCK_STATE_DIR):
+        if not directory.exists():
+            continue
+        seen: set[str] = set()
+        for f in sorted(directory.glob("*.json"), key=lambda f: f.stat().st_mtime, reverse=True):
+            rid = _file_rid(f)
+            if not rid or rid in seen or not f.exists():
+                continue
+            seen.add(rid)
+            name = rid.rsplit("/", 1)[-1]
+            target = directory / f"{name.lower()}--{_rid_hash(rid)}.json"
+            if f.name != target.name and not _same_file(f, target):
+                _atomic_write_text(target, f.read_text())
+                f.unlink()
+                changed += 1
+            for other in _hash_variants(directory, rid) + [directory / f"{name}.json"]:
+                if other.exists() and other.name != target.name and not _same_file(other, target):
+                    other.unlink()
+                    changed += 1
+    return changed
 
 
 def _save_isolation_state(vm_ref: str, state: dict) -> None:

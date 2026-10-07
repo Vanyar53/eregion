@@ -2730,3 +2730,61 @@ def test_state_files_ignore_the_ids_case_and_handle_double_dashes():
     assert actions._load_isolation_state(rid)["verified_at"] == "t"
     assert [i["vm_name"] for i in actions.active_isolations()] == ["web--01"]
     assert actions._load_isolation_state("Web--01") is not None
+
+
+# ── Cinquième passe (C1, C2) : l'état sur un disque insensible à la casse ──────────────
+
+def _case_insensitive(directory) -> bool:
+    directory.mkdir(parents=True, exist_ok=True)
+    probe = directory / "case-probe"
+    probe.write_text("x")
+    try:
+        return (directory / "CASE-PROBE").exists()
+    finally:
+        probe.unlink()
+
+
+def test_writing_state_never_deletes_the_file_it_just_wrote():
+    """macOS/Windows/Docker Desktop: `VM-Foo--h.json` and `vm-foo--h.json` are the same
+    file — removing the "old" one deleted the state just written (fifth review, C1).
+    Runs for real on a case-insensitive file system (the macOS CI job)."""
+    import glorfindel.actions as actions
+    if not _case_insensitive(actions._ISOLATION_STATE_DIR):
+        pytest.skip("needs a case-insensitive file system (macOS CI job)")
+    rid = _RID.replace("/vm", "/VM-Foo")
+    actions._save_isolation_state(rid, {"resource_id": rid})
+    actions._save_isolation_state(rid, {"resource_id": rid, "verified_at": "t"})
+    assert actions._load_isolation_state(rid)["verified_at"] == "t"
+    assert [i["vm_name"] for i in actions.active_isolations()] == ["VM-Foo"]
+
+
+def test_the_cleanup_skips_a_file_that_is_the_target(monkeypatch):
+    """The same guard, checked on any file system: a variant that IS the target (as on a
+    case-insensitive disk) is never removed."""
+    import json
+    import glorfindel.actions as actions
+    monkeypatch.setattr(actions, "_same_file", lambda a, b: a.name.lower() == b.name.lower())
+    rid = _RID.replace("/vm", "/VM-Foo")
+    d = actions._ISOLATION_STATE_DIR
+    d.mkdir(parents=True, exist_ok=True)
+    alias = d / f"VM-Foo--{actions._rid_hash(rid)}.json"
+    alias.write_text(json.dumps({"resource_id": rid}))
+    actions._save_isolation_state(rid, {"resource_id": rid, "verified_at": "t"})
+    assert alias.exists()
+
+
+def test_an_old_mixed_case_file_is_found_and_migrated_and_never_resurrects():
+    """Linux: an old `VM-Foo--h.json` was invisible to lowercase ids, and came back to
+    life once the lowercase twin was cleared (fifth review, C2)."""
+    import json
+    import glorfindel.actions as actions
+    rid = _RID.replace("/vm", "/VM-Foo")
+    d = actions._ISOLATION_STATE_DIR
+    d.mkdir(parents=True, exist_ok=True)
+    old = d / f"VM-Foo--{actions._rid_hash(rid)}.json"
+    old.write_text(json.dumps({"resource_id": rid, "placements": [{"nic_id": "n", "original_nsg_id": "o"}]}))
+    assert actions._load_isolation_state(rid.lower())["placements"][0]["original_nsg_id"] == "o"
+    assert actions.migrate_state_files() == 1
+    assert [f.name for f in d.glob("*.json")] == [f"vm-foo--{actions._rid_hash(rid)}.json"]
+    actions._clear_isolation_state(rid)
+    assert actions._load_isolation_state(rid) is None and list(d.glob("*.json")) == []

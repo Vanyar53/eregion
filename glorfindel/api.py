@@ -253,8 +253,28 @@ async def state() -> dict:
             if _rid:
                 _vm_names.add(_rid.split("/")[-1])
         from glorfindel.readiness import effective_mode as _effective
+        # The gate reads readiness by resource id: so must the display (fifth review,
+        # C4 — by name, homonyms showed "human_only" while one acted alone).
+        _rids: dict[str, set] = {}
+        for _a in discovered:
+            if _a.get("resource_id"):
+                _rids.setdefault(_a.get("name") or _a["resource_id"].split("/")[-1], set()).add(_a["resource_id"])
+        for _r in resources:
+            if _r.get("vm_name") and _r.get("resource_id"):
+                _rids.setdefault(_r["vm_name"], set()).add(_r["resource_id"])
         for _n in _vm_names:
-            autonomy_modes[_n], _hold = _effective(_n, _acfg.autonomy.resolve(_n))
+            _conf = _acfg.autonomy.resolve(_n)
+            _ids = sorted(_rids.get(_n, set()), key=str.lower)
+            _ids = list({i.lower(): i for i in _ids}.values())
+            if len(_ids) > 1:
+                # Homonyms: show the MOST permissive effective mode, and say it is ambiguous.
+                _modes = [_effective(i, _conf)[0] for i in _ids]
+                autonomy_modes[_n] = "non_disruptive" if "non_disruptive" in _modes else "human_only"
+                autonomy_holds[_n] = {"reason": "ambiguous", "codes": [], "configured": _conf,
+                                      "message": f"{len(_ids)} VMs portent ce nom — modes : "
+                                                 + ", ".join(_modes)}
+                continue
+            autonomy_modes[_n], _hold = _effective(_ids[0] if _ids else _n, _conf)
             if _hold:
                 autonomy_holds[_n] = _hold
     except Exception:

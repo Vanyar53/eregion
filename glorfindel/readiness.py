@@ -235,7 +235,7 @@ def _find(data: dict, ref: str) -> str | None:
                 "", rid.rstrip("/").lower()):
             return name
         return None
-    hits = [k for k in data if k == name or k.split("--")[0] == name]
+    hits = [k for k in data if k == name or k.rsplit("--", 1)[0] == name]   # `web--01` (C3)
     return hits[0] if len(hits) == 1 else None
 
 
@@ -327,11 +327,24 @@ def acknowledge(vm: str, codes: list[str], by: str) -> dict:
     return _update(vm, acknowledged=merged, acknowledged_at=_now(), acknowledged_by=by)
 
 
-def revoke(vm: str) -> None:
-    """The VM was put back in human_only: a later activation shows the reserves again."""
-    if _raw(vm):
-        _update(vm, acknowledged=None, acknowledged_at=None, acknowledged_by=None,
-                active_since=None, alerted=None)
+def revoke(ref: str) -> None:
+    """The VM was put back in human_only: a later activation shows the reserves again.
+    By name, EVERY VM of that name — `set_asset_mode` applies to all of them by name too
+    (fifth review, C4: on an ambiguous name it used to revoke nothing)."""
+    from glorfindel.actions import _vm_ref
+    name, rid = _vm_ref(ref or "")
+    if rid:
+        if _raw(ref):
+            _update(ref, acknowledged=None, acknowledged_at=None, acknowledged_by=None,
+                    active_since=None, alerted=None)
+        return
+    with _locked():
+        data = _read()
+        for k, rec in data.items():
+            if isinstance(rec, dict) and (k == name.lower() or k.rsplit("--", 1)[0] == name.lower()):
+                for f in ("acknowledged", "acknowledged_at", "acknowledged_by", "active_since", "alerted"):
+                    rec.pop(f, None)
+        _write(data)
 
 
 # ── The gate ───────────────────────────────────────────────────────────────────

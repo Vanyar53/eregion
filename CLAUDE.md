@@ -351,6 +351,11 @@ infra/terraform/              → module Celebrimbor : infra de test Azure modul
                                 passe : deux VMs homonymes partageaient `<vm>.json`) ; un ancien `<vm>.json` n'est
                                 lu que s'il porte cet ID, migré à la première écriture ; par nom seul, un nom
                                 ambigu ne résout rien. Toujours lire via `_load_isolation_state(resource_id)`.
+                                Nom en minuscules ; un fichier est retrouvé par son HASH quelle que soit la casse
+                                (`_hash_variants`) ; à l'écriture, les autres variantes sont supprimées SAUF celle qui
+                                est la cible (`samefile` — sur macOS/Windows/Docker Desktop `VM-Foo--h` et `vm-foo--h`
+                                sont le même fichier : cinquième passe C1) ; `migrate_state_files()` au démarrage du watch.
+                                CI : job macOS (APFS insensible à la casse) ; `main` protégée, checks requis.
   blocks/<vm>--<h>.json       → IPs bloquées par VM (même clé)
   proposed_rules.jsonl        → règles de détection proposées (en attente d'approbation)
   bot_posted.json             → IDs escalades déjà postées (évite doublons au redémarrage du bot)
@@ -480,7 +485,7 @@ GLORFINDEL_DISCOVERY_RETENTION_H=8  # rétention d'une VM éteinte dans le regis
 ## Tests
 
 ```bash
-pytest                    # 704 tests (~15s), 0 appel Azure, 0 appel LLM, 0 écriture ~/.glorfindel/
+pytest                    # 707 tests (~15s), 0 appel Azure, 0 appel LLM, 0 écriture ~/.glorfindel/
                           # Hermétique par construction (conftest) : TOUS les chemins ~/.glorfindel redirigés
                           # vers tmp, et le glorfindel-config.yaml local ignoré (avant : avec une config locale,
                           # les tests de graphe lançaient de vraies requêtes KQL via `investigate`, suite 5× plus lente).

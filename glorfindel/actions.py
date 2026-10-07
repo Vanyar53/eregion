@@ -259,7 +259,7 @@ def _shadowing_rules(
             continue
         if _side_covers(r, "source", src) and _side_covers(r, "destination", dst):
             found.append({
-                "rule": name, "priority": prio, "direction": getattr(r, "direction", ""),
+                "rule": name, "priority": prio, "direction": _enum_text(getattr(r, "direction", "")),
                 "ports": getattr(r, "destination_port_range", None)
                 or ",".join(getattr(r, "destination_port_ranges", None) or []) or "*",
                 "threat_port_open": (
@@ -723,39 +723,82 @@ class AzureConnector(CloudConnector):
     # writing anything, through Azure's permissions API (L6 readiness).
     REQUIRED_ACTIONS = (
         ("isolate_vm", "Microsoft.Network/networkInterfaces/write"),
+        ("isolate_vm", "Microsoft.Network/virtualNetworks/subnets/join/action"),
         ("isolate_vm", "Microsoft.Network/networkSecurityGroups/write"),
         ("isolate_vm", "Microsoft.Network/networkSecurityGroups/join/action"),
         ("isolate_vm", "Microsoft.Compute/virtualMachines/runCommand/action"),
+        ("release_isolation", "Microsoft.Network/networkSecurityGroups/join/action"),
         ("block_suspicious_ip", "Microsoft.Network/networkSecurityGroups/securityRules/write"),
         ("block_suspicious_ip", "Microsoft.Network/networkSecurityGroups/securityRules/delete"),
     )
 
+    def _permission_scopes(self, rg: str, vm_name: str) -> dict[str, tuple[str, set]]:
+        """Resource group → the (used_by, action) pairs needed THERE (third review, T12).
+        Only the VM's and the quarantine's groups were read: a NIC, a VNet or the
+        customer's NSG in another group (a central network group is common) failed the
+        swap (LinkedAuthorizationFailed on subnets/join) or the release, while the
+        readiness said "ready"."""
+        scopes: dict[str, tuple[str, set]] = {}
+
+        def need(group: str, used_by: str, action: str) -> None:
+            if group:
+                scopes.setdefault(group.lower(), (group, set()))[1].add((used_by, action))
+
+        _, q_rg = self._quarantine_settings()
+        need(rg, "isolate_vm", "Microsoft.Compute/virtualMachines/runCommand/action")
+        for action in ("Microsoft.Network/networkSecurityGroups/write",
+                       "Microsoft.Network/networkSecurityGroups/join/action"):
+            need(q_rg or rg, "isolate_vm", action)
+        for t in self._get_vm_nic_targets(rg, vm_name, allow_no_nsg=True):
+            nic_rg, nic_name = _parse_nic_resource_id(t["nic_id"])
+            need(nic_rg, "isolate_vm", "Microsoft.Network/networkInterfaces/write")
+            try:
+                nic = self._network.network_interfaces.get(nic_rg, nic_name)
+                for ipc in getattr(nic, "ip_configurations", None) or []:
+                    sub_id = getattr(getattr(ipc, "subnet", None), "id", "") or ""
+                    if "/resourcegroups/" in sub_id.lower():
+                        need(_parse_vm_resource_id(sub_id)[0], "isolate_vm",
+                             "Microsoft.Network/virtualNetworks/subnets/join/action")
+            except Exception:
+                pass
+            if t.get("own_nsg_id"):        # release puts the customer's NSG back
+                need(_parse_nsg_resource_id(t["own_nsg_id"])[0], "release_isolation",
+                     "Microsoft.Network/networkSecurityGroups/join/action")
+            for v in self._nic_nsg_views(t):
+                for action in ("Microsoft.Network/networkSecurityGroups/securityRules/write",
+                               "Microsoft.Network/networkSecurityGroups/securityRules/delete"):
+                    need(v["nsg_rg"], "block_suspicious_ip", action)
+        return scopes
+
     def check_permissions(self, resource_id: str) -> dict:
-        """Which of REQUIRED_ACTIONS Glorfindel's identity holds on the VM's resource
-        group (and on the quarantine NSG's, when configured elsewhere) — read from
-        `Microsoft.Authorization/permissions`, nothing written. Deny assignments are not
-        evaluated (the API doesn't return them)."""
+        """Which of REQUIRED_ACTIONS Glorfindel's identity holds, each on the resource
+        group where it applies (NICs, VNet, quarantine NSG, customer NSG, rule NSGs,
+        VM) — read from `Microsoft.Authorization/permissions` (all pages), nothing
+        written. Deny assignments, locks and PIM are not evaluated (the API doesn't
+        return them)."""
         if self.dry_run:
             return {"ok": True, "missing": [], "dry_run": True}
         import fnmatch
         import requests
         try:
             self._ensure_clients()
-            rg, _ = _parse_vm_resource_id(resource_id)
-            _, q_rg = self._quarantine_settings()
-            scopes = {rg.lower(): rg}
-            if q_rg:
-                scopes.setdefault(q_rg.lower(), q_rg)
+            rg, vm_name = _parse_vm_resource_id(resource_id)
+            scopes = self._permission_scopes(rg, vm_name)
             token = self._credential.get_token("https://management.azure.com/.default").token
             missing: list[dict] = []
-            for scope_rg in scopes.values():
+            for scope_rg, needed in scopes.values():
                 url = (f"https://management.azure.com/subscriptions/{self._subscription_id}"
                        f"/resourceGroups/{scope_rg}/providers/Microsoft.Authorization/permissions")
-                r = requests.get(url, headers={"Authorization": f"Bearer {token}"},
-                                 params={"api-version": "2022-04-01"}, timeout=20)
-                if not r.ok:
-                    return {"ok": False, "error": f"{scope_rg}: HTTP {r.status_code} {r.text[:200]}"}
-                perms = r.json().get("value") or []
+                params: dict | None = {"api-version": "2022-04-01"}
+                perms: list = []
+                while url:                     # nextLink: a long role list spans pages
+                    r = requests.get(url, headers={"Authorization": f"Bearer {token}"},
+                                     params=params, timeout=20)
+                    if not r.ok:
+                        return {"ok": False, "error": f"{scope_rg}: HTTP {r.status_code} {r.text[:200]}"}
+                    body = r.json()
+                    perms += body.get("value") or []
+                    url, params = body.get("nextLink"), None
 
                 def allowed(action: str) -> bool:
                     a = action.lower()
@@ -764,13 +807,10 @@ class AzureConnector(CloudConnector):
                         and not any(fnmatch.fnmatch(a, x.lower()) for x in (p.get("notActions") or []))
                         for p in perms
                     )
-                for used_by, action in self.REQUIRED_ACTIONS:
-                    # The quarantine RG only needs the NSG write/join; the VM's RG needs all.
-                    if scope_rg.lower() != rg.lower() and "networkSecurityGroups" not in action:
-                        continue
+                for used_by, action in sorted(needed):
                     if not allowed(action):
                         missing.append({"scope": scope_rg, "action": action, "used_by": used_by})
-            return {"ok": True, "missing": missing, "scopes": list(scopes.values())}
+            return {"ok": True, "missing": missing, "scopes": [g for g, _ in scopes.values()]}
         except Exception as e:
             return {"ok": False, "error": _first_line(e)[:_ERR_MAX]}
 
@@ -830,7 +870,7 @@ class AzureConnector(CloudConnector):
             from azure.mgmt.compute.models import RunCommandInput
             rg, vm_name = _parse_vm_resource_id(resource_id)
             vm = self._compute.virtual_machines.get(rg, vm_name)
-            os_type = str(getattr(getattr(vm.storage_profile, "os_disk", None), "os_type", "") or "")
+            os_type = _enum_text(getattr(getattr(vm.storage_profile, "os_disk", None), "os_type", "") or "")
             if "windows" in os_type.lower():
                 return {"status": "unsupported",
                         "note": "Windows : les sessions déjà ouvertes ne sont pas coupées."}
@@ -1963,7 +2003,7 @@ class AzureConnector(CloudConnector):
         result says so, which holds the autonomous release.
         """
         from azure.mgmt.compute.models import RunCommandInput
-        os_type = str(getattr(getattr(vm.storage_profile, "os_disk", None), "os_type", "") or "")
+        os_type = _enum_text(getattr(getattr(vm.storage_profile, "os_disk", None), "os_type", "") or "")
         if "windows" in os_type.lower():
             cmd = RunCommandInput(command_id="RunPowerShellScript",
                                   script=["Write-Output 'glorfindel: run command neutralized'"])

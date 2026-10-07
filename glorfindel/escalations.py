@@ -42,7 +42,8 @@ _ESCALATION_LABELS = {
     "action_failed": "action en échec",
     "cycle_failed": "signal non traité (cycle interrompu)",
     "uncharacterized_signal": "signal non caractérisé (garde-fou)",
-    "release_hold": "levée retenue (aucune restauration terminée)",
+    "release_hold": "levée retenue (restauration non terminée, ou rejeu possible au démarrage)",
+    "ttl_exceeded": "isolation levée à l'expiration du TTL",
     "unattributed_signal": "détection non attribuée à cette VM",
     "readiness_hold": "VM retenue en observation (préparation)",
 }

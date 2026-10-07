@@ -2505,25 +2505,63 @@ def test_a_drain_count_that_failed_is_not_zero():
 # ── L6 : droits de l'isolation, lus sans rien écrire ─────────────────────────────────
 
 def test_check_permissions_lists_what_is_missing(monkeypatch):
-    """Reader + a role whose notActions exclude NIC writes: the JIT swap can't run."""
+    """Each right is read where it applies (third review, T12): the VNet in a central
+    network group needs subnets/join there — the swap failed with
+    LinkedAuthorizationFailed while readiness said ready. Pages are followed."""
     import sys
     import types
     from glorfindel.actions import AzureConnector
-    perms = {"value": [
-        {"actions": ["*/read"], "notActions": []},
-        {"actions": ["Microsoft.Network/*", "Microsoft.Compute/virtualMachines/*"],
-         "notActions": ["Microsoft.Network/networkInterfaces/write"]},
-    ]}
+    per_rg = {
+        "rg": [{"actions": ["*/read"], "notActions": []},
+               {"actions": ["Microsoft.Network/*", "Microsoft.Compute/virtualMachines/*"],
+                "notActions": ["Microsoft.Network/networkInterfaces/write"]}],
+        "rg-net": [{"actions": ["*/read"], "notActions": []}],
+    }
+    calls = []
+
+    def get(url, params=None, **k):
+        calls.append(url)
+        rg = url.split("/resourceGroups/")[1].split("/")[0]
+        if rg == "rg" and "page2" not in url:          # first page only has Reader
+            body = {"value": per_rg["rg"][:1], "nextLink": url + "?page2"}
+        elif rg == "rg":
+            body = {"value": per_rg["rg"][1:]}
+        else:
+            body = {"value": per_rg[rg]}
+        return types.SimpleNamespace(ok=True, json=lambda: body, status_code=200, text="")
     fake = types.ModuleType("requests")
-    fake.get = lambda *a, **k: types.SimpleNamespace(ok=True, json=lambda: perms, status_code=200, text="")
+    fake.get = get
     monkeypatch.setitem(sys.modules, "requests", fake)
     connector = AzureConnector(dry_run=False)
     monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
     monkeypatch.setattr(connector, "_quarantine_settings", lambda: (True, ""))
+    monkeypatch.setattr(connector, "_get_vm_nic_targets", lambda rg, vm, **_k: [_nic_target(
+        nic_id="/subscriptions/s/resourceGroups/rg/providers/Microsoft.Network/networkInterfaces/nic-a")])
+    from types import SimpleNamespace
+    net = MagicMock()
+    net.network_interfaces.get.return_value = SimpleNamespace(ip_configurations=[SimpleNamespace(
+        subnet=SimpleNamespace(id="/subscriptions/s/resourceGroups/rg-net/providers/Microsoft.Network"
+                                  "/virtualNetworks/vnet/subnets/default"))])
+    connector._network = net
     connector._credential = MagicMock()
     connector._subscription_id = "s"
     res = connector.check_permissions(_RID)
-    assert [m["action"] for m in res["missing"]] == ["Microsoft.Network/networkInterfaces/write"]
+    assert sorted((m["scope"], m["action"]) for m in res["missing"]) == [
+        ("rg", "Microsoft.Network/networkInterfaces/write"),
+        ("rg-net", "Microsoft.Network/virtualNetworks/subnets/join/action")]
+    assert any("page2" in u for u in calls)
+
+
+def test_readiness_flags_a_release_that_cannot_put_the_customer_nsg_back():
+    from glorfindel.readiness import assess
+    c = MagicMock(read_only=False, _subscription_id=None)
+    c.check_permissions.return_value = {"ok": True, "missing": [
+        {"scope": "rg-sec", "action": "Microsoft.Network/networkSecurityGroups/join/action",
+         "used_by": "release_isolation"}]}
+    c.check_nsg_access.return_value = {"ok": True, "precedence": []}
+    c.vm_os.return_value = "linux"
+    a = assess(_RID, c)
+    assert a["reserve_codes"] == ["release_blocked"]
 
 
 def test_audit_reports_missing_isolation_permissions():

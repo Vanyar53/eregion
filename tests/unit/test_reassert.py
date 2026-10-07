@@ -147,3 +147,68 @@ def test_a_vm_held_by_its_readiness_gets_an_alert_not_a_reapplication():
     report = reassert_active(c, _ACT)
     c.isolate_vm.assert_not_called()
     assert report[0]["outcome"] == "escalated"
+
+
+# ── Un seul écrivain par VM (troisième passe, T2) ─────────────────────────────────────
+
+def test_a_release_in_progress_is_not_put_back():
+    """The release removes the NSGs NIC by NIC and clears the state at the end: seen
+    halfway, the isolation looked 'removed outside Glorfindel' and was re-isolated."""
+    _isolated(releasing_at="2026-10-07T10:00:00+00:00")
+    c = _connector({"verified": False, "uncovered_nics": ["nic-a"]})
+    assert reassert_active(c, _ACT) == []
+    c.isolate_vm.assert_not_called()
+
+
+def test_a_partly_failed_release_is_left_to_the_operator():
+    """It kept the state without `partial`: reassertion re-isolated every NIC within a
+    minute and overwrote release_failed."""
+    _isolated(release_failed=["nic-b: rule left"])
+    c = _connector({"verified": False, "uncovered_nics": ["nic-a"]})
+    assert reassert_active(c, _ACT) == []
+    c.isolate_vm.assert_not_called()
+
+
+def test_reassertion_waits_for_a_running_release_then_sees_it_done():
+    """The release holds the VM's lock; the reassertion reads the state again once it
+    gets the lock, and finds nothing left to reassert."""
+    import threading
+    from glorfindel.actions import _clear_isolation_state, _vm_lock
+    _isolated()
+    c = _connector({"verified": False, "uncovered_nics": ["nic-a"]})
+    entered, done = threading.Event(), threading.Event()
+
+    def release():
+        with _vm_lock("vm"):
+            entered.set()
+            done.wait(2)
+            _clear_isolation_state("vm")
+
+    t = threading.Thread(target=release)
+    t.start()
+    entered.wait(2)
+    result = []
+    r = threading.Thread(target=lambda: result.append(reassert_active(c, _ACT)))
+    r.start()
+    done.set()
+    t.join(5)
+    r.join(5)
+    assert result == [[]]
+    c.isolate_vm.assert_not_called()
+
+
+def test_the_vm_lock_is_reentrant():
+    from glorfindel.actions import _vm_lock
+    with _vm_lock("vm"):
+        with _vm_lock("vm"):
+            pass
+
+
+def test_an_unblock_in_progress_is_not_put_back():
+    _save_block_state("vm", "203.0.113.9", _RID, nsg="rg/nsg", nsg_scope="subnet", rule="r",
+                      placements=[{"nsg_rg": "rg", "nsg_name": "nsg", "rule": "r"}])
+    from glorfindel.actions import _update_block_entry
+    _update_block_entry("vm", "203.0.113.9", unblocking_at="2026-10-07T10:00:00+00:00")
+    c = _connector(verify_blk={"verified": False, "missing_rules": ["r"]})
+    assert reassert_active(c, _ACT) == []
+    c.block_suspicious_ip.assert_not_called()

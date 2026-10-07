@@ -77,109 +77,134 @@ def reassert_active(connector, autonomy=None) -> list[dict]:
     Returns one record per isolation/block whose rules were missing:
     {"kind", "vm", "ip"?, "outcome": "reapplied" | "escalated" | "failed", "detail"}.
     """
-    from glorfindel.actions import (
-        _load_isolation_state, _save_isolation_state, _update_block_entry,
-        active_blocks, active_isolations,
-    )
+    from glorfindel.actions import active_blocks, active_isolations, _vm_lock
+
+    report: list[dict] = []
+    for snapshot in active_isolations():
+        # Under the VM's lock, from a fresh read: a release running in the War Room or
+        # the CLI finishes first, and its cleared state then says there is nothing to
+        # reassert. Without it, a release seen halfway was put back (third review, T2).
+        with _vm_lock(snapshot["vm_name"]):
+            _reassert_isolation(connector, autonomy, snapshot["vm_name"], report)
+    for snapshot in active_blocks():
+        with _vm_lock(snapshot["vm_name"]):
+            _reassert_block(connector, autonomy, snapshot["vm_name"], snapshot.get("ip", ""), report)
+    return report
+
+
+def _held_by_an_operation(state: dict, failed_key: str, running_key: str) -> bool:
+    """Partial, half-failed or in-progress work belongs to whoever started it."""
+    return bool(state.get("partial") or state.get(failed_key) or state.get(running_key))
+
+
+def _reassert_isolation(connector, autonomy, vm: str, report: list[dict]) -> None:
+    from glorfindel.actions import _load_isolation_state, _save_isolation_state
 
     now = datetime.now(timezone.utc).isoformat()
-    report: list[dict] = []
-
-    for iso in active_isolations():
-        vm, rid = iso["vm_name"], iso["resource_id"]
-        if iso.get("partial"):
-            continue          # already reported as partial; the operator decides
-        try:
-            verification = connector.verify_isolation(rid)
-        except Exception as exc:                                   # VM gone, API down
-            log.warning("reassert: isolation of %s not checked (%s)", vm, exc)
-            continue
-        if verification.get("verified") is True:
-            state = _load_isolation_state(vm)
-            if state is not None:
-                # Back in place: a later disappearance is a new episode, alerted again.
-                state.pop("drift_alerted_at", None)
-                _save_isolation_state(vm, {**state, "verified_at": now})
-            continue
-        if not _missing(verification):
-            continue
-        if iso.get("drift_alerted_at"):
-            # Already alerted for this disappearance: one alert per episode. Re-alerting
-            # every minute flooded the webhook and undid every acknowledgement
-            # (validation run, 2026-10-06).
-            continue
-        who = _who_changed(connector, iso)
-        if iso.get("reasserted_at") or _mode(autonomy, vm) == "human_only":
-            reason = (
-                f"L'isolation de {vm} a disparu d'Azure (règles ou NSG de quarantaine retirés)"
-                + (" une deuxième fois (déjà reposée le " + iso["reasserted_at"] + ")"
-                   if iso.get("reasserted_at") else "")
-                + " — la VM n'est plus isolée. Retrait délibéré, `terraform apply`, "
-                "redéploiement Bicep/ARM de la carte ? Glorfindel ne les repose pas : "
-                f"`glorfindel release {rid} --yes` si la levée est voulue, sinon ré-isoler."
-                + who
-            )
-            _alert(f"reassert-{vm}", resource_id=rid, action="isolate_vm", reason=reason)
-            _mark_alerted(vm, now)
-            report.append({"kind": "isolation", "vm": vm, "outcome": "escalated", "detail": reason})
-            continue
-        try:
-            connector.isolate_vm(rid)
-            state = _load_isolation_state(vm) or {}
-            # Keep the original isolation time (TTL); record the re-application.
-            _save_isolation_state(vm, {**state, "isolated_at": iso.get("isolated_at", state.get("isolated_at")),
-                                       "reasserted_at": now})
-            reason = (f"L'isolation de {vm} avait disparu d'Azure (modification hors "
-                      "Glorfindel) : reposée une fois. Si elle disparaît encore, "
-                      "Glorfindel alertera sans la reposer." + who)
-            outcome = "reapplied"
-        except Exception as exc:
-            reason = f"L'isolation de {vm} a disparu d'Azure ; la reposer a échoué : {exc}"
-            outcome = "failed"
-            _mark_alerted(vm, now)        # no retry-and-alert every minute
+    state = _load_isolation_state(vm)
+    if not state or not state.get("resource_id"):
+        return                # released meanwhile
+    iso = {**state, "vm_name": vm}
+    rid = iso["resource_id"]
+    if _held_by_an_operation(iso, "release_failed", "releasing_at"):
+        return                # a release is running, or left NICs for the operator
+    try:
+        verification = connector.verify_isolation(rid)
+    except Exception as exc:                                   # VM gone, API down
+        log.warning("reassert: isolation of %s not checked (%s)", vm, exc)
+        return
+    if verification.get("verified") is True:
+        state = _load_isolation_state(vm)
+        if state is not None:
+            # Back in place: a later disappearance is a new episode, alerted again.
+            state.pop("drift_alerted_at", None)
+            _save_isolation_state(vm, {**state, "verified_at": now})
+        return
+    if not _missing(verification):
+        return
+    if iso.get("drift_alerted_at"):
+        # Already alerted for this disappearance: one alert per episode. Re-alerting
+        # every minute flooded the webhook and undid every acknowledgement
+        # (validation run, 2026-10-06).
+        return
+    who = _who_changed(connector, iso)
+    if iso.get("reasserted_at") or _mode(autonomy, vm) == "human_only":
+        reason = (
+            f"L'isolation de {vm} a disparu d'Azure (règles ou NSG de quarantaine retirés)"
+            + (" une deuxième fois (déjà reposée le " + iso["reasserted_at"] + ")"
+               if iso.get("reasserted_at") else "")
+            + " — la VM n'est plus isolée. Retrait délibéré, `terraform apply`, "
+            "redéploiement Bicep/ARM de la carte ? Glorfindel ne les repose pas : "
+            f"`glorfindel release {rid} --yes` si la levée est voulue, sinon ré-isoler."
+            + who
+        )
         _alert(f"reassert-{vm}", resource_id=rid, action="isolate_vm", reason=reason)
-        report.append({"kind": "isolation", "vm": vm, "outcome": outcome, "detail": reason})
+        _mark_alerted(vm, now)
+        report.append({"kind": "isolation", "vm": vm, "outcome": "escalated", "detail": reason})
+        return
+    try:
+        connector.isolate_vm(rid)
+        state = _load_isolation_state(vm) or {}
+        # Keep the original isolation time (TTL); record the re-application.
+        _save_isolation_state(vm, {**state, "isolated_at": iso.get("isolated_at", state.get("isolated_at")),
+                                   "reasserted_at": now})
+        reason = (f"L'isolation de {vm} avait disparu d'Azure (modification hors "
+                  "Glorfindel) : reposée une fois. Si elle disparaît encore, "
+                  "Glorfindel alertera sans la reposer." + who)
+        outcome = "reapplied"
+    except Exception as exc:
+        reason = f"L'isolation de {vm} a disparu d'Azure ; la reposer a échoué : {exc}"
+        outcome = "failed"
+        _mark_alerted(vm, now)        # no retry-and-alert every minute
+    _alert(f"reassert-{vm}", resource_id=rid, action="isolate_vm", reason=reason)
+    report.append({"kind": "isolation", "vm": vm, "outcome": outcome, "detail": reason})
 
-    for b in active_blocks():
-        vm, rid, ip = b["vm_name"], b.get("resource_id", ""), b.get("ip", "")
-        if not rid or not ip or b.get("partial"):
-            continue
-        try:
-            verification = connector.verify_block_ip(ip, rid)
-        except Exception as exc:
-            log.warning("reassert: block of %s on %s not checked (%s)", ip, vm, exc)
-            continue
-        if verification.get("verified") is True:
-            _update_block_entry(vm, ip, verified_at=now, drift_alerted_at=None)
-            continue
-        if not _missing(verification):
-            continue
-        if b.get("drift_alerted_at"):
-            continue                      # one alert per disappearance (see isolations)
-        if b.get("reasserted_at") or _mode(autonomy, vm) == "human_only":
-            reason = (f"Le blocage de {ip} sur {vm} a disparu d'Azure"
-                      + (" une deuxième fois" if b.get("reasserted_at") else "")
-                      + " — l'IP n'est plus bloquée. Glorfindel ne le repose pas : "
-                      f"`glorfindel unblock {ip} {rid} --yes` si c'est voulu, sinon re-bloquer.")
-            _alert(f"reassert-{vm}-{ip}", resource_id=rid, action="block_suspicious_ip",
-                   reason=reason, action_params={"ip": ip})
-            _update_block_entry(vm, ip, drift_alerted_at=now)
-            report.append({"kind": "block", "vm": vm, "ip": ip, "outcome": "escalated", "detail": reason})
-            continue
-        try:
-            connector.block_suspicious_ip(
-                ip, rid, scope="vm" if b.get("scoped", True) else "subnet",
-                threat_port=b.get("threat_port"))
-            _update_block_entry(vm, ip, reasserted_at=now)
-            reason = (f"Le blocage de {ip} sur {vm} avait disparu d'Azure : reposé une fois. "
-                      "S'il disparaît encore, Glorfindel alertera sans le reposer.")
-            outcome = "reapplied"
-        except Exception as exc:
-            reason = f"Le blocage de {ip} sur {vm} a disparu d'Azure ; le reposer a échoué : {exc}"
-            outcome = "failed"
-            _update_block_entry(vm, ip, drift_alerted_at=now)
+
+def _reassert_block(connector, autonomy, vm: str, ip: str, report: list[dict]) -> None:
+    from glorfindel.actions import _load_block_entries, _update_block_entry
+
+    now = datetime.now(timezone.utc).isoformat()
+    b = next((e for e in _load_block_entries(vm) if e.get("ip") == ip), None)
+    if not b:
+        return                # unblocked meanwhile
+    rid = b.get("resource_id", "")
+    if not rid or not ip or _held_by_an_operation(b, "unblock_failed", "unblocking_at"):
+        return
+    try:
+        verification = connector.verify_block_ip(ip, rid)
+    except Exception as exc:
+        log.warning("reassert: block of %s on %s not checked (%s)", ip, vm, exc)
+        return
+    if verification.get("verified") is True:
+        _update_block_entry(vm, ip, verified_at=now, drift_alerted_at=None)
+        return
+    if not _missing(verification):
+        return
+    if b.get("drift_alerted_at"):
+        return                      # one alert per disappearance (see isolations)
+    if b.get("reasserted_at") or _mode(autonomy, vm) == "human_only":
+        reason = (f"Le blocage de {ip} sur {vm} a disparu d'Azure"
+                  + (" une deuxième fois" if b.get("reasserted_at") else "")
+                  + " — l'IP n'est plus bloquée. Glorfindel ne le repose pas : "
+                  f"`glorfindel unblock {ip} {rid} --yes` si c'est voulu, sinon re-bloquer.")
         _alert(f"reassert-{vm}-{ip}", resource_id=rid, action="block_suspicious_ip",
                reason=reason, action_params={"ip": ip})
-        report.append({"kind": "block", "vm": vm, "ip": ip, "outcome": outcome, "detail": reason})
+        _update_block_entry(vm, ip, drift_alerted_at=now)
+        report.append({"kind": "block", "vm": vm, "ip": ip, "outcome": "escalated", "detail": reason})
+        return
+    try:
+        connector.block_suspicious_ip(
+            ip, rid, scope="vm" if b.get("scoped", True) else "subnet",
+            threat_port=b.get("threat_port"))
+        _update_block_entry(vm, ip, reasserted_at=now)
+        reason = (f"Le blocage de {ip} sur {vm} avait disparu d'Azure : reposé une fois. "
+                  "S'il disparaît encore, Glorfindel alertera sans le reposer.")
+        outcome = "reapplied"
+    except Exception as exc:
+        reason = f"Le blocage de {ip} sur {vm} a disparu d'Azure ; le reposer a échoué : {exc}"
+        outcome = "failed"
+        _update_block_entry(vm, ip, drift_alerted_at=now)
+    _alert(f"reassert-{vm}-{ip}", resource_id=rid, action="block_suspicious_ip",
+           reason=reason, action_params={"ip": ip})
+    report.append({"kind": "block", "vm": vm, "ip": ip, "outcome": outcome, "detail": reason})
 
-    return report

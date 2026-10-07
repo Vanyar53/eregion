@@ -1087,6 +1087,12 @@ class AzureConnector(CloudConnector):
         self._ensure_clients()
         rg, vm_name = _parse_vm_resource_id(resource_id)
         state = _load_isolation_state(vm_name) or {}
+        if state:
+            # The intent is recorded before Azure is touched: a release cut off midway
+            # (War Room timeout, crash) leaves NICs half released — the reassertion
+            # must not read that as "removed outside Glorfindel" and isolate again.
+            from datetime import datetime, timezone
+            _save_isolation_state(vm_name, {**state, "releasing_at": datetime.now(timezone.utc).isoformat()})
 
         failed: list[str] = []
         remaining: list[dict] = []
@@ -2162,6 +2168,11 @@ class AzureConnector(CloudConnector):
         self._ensure_clients()
         rg, vm_name = _parse_vm_resource_id(resource_id)
         entry = next((e for e in _load_block_entries(vm_name) if e.get("ip") == ip), None)
+        if entry:
+            # Intent first (see release_isolation): an unblock cut off midway is not a
+            # block "removed outside Glorfindel" for the reassertion to put back.
+            from datetime import datetime, timezone
+            _update_block_entry(vm_name, ip, unblocking_at=datetime.now(timezone.utc).isoformat())
         deleted: list[str] = []
         failed: list[str] = []
 
@@ -2796,6 +2807,23 @@ def _same_subscription(method):
     return wrapper
 
 
+def _one_writer(method):
+    """Hold the VM's lock for the whole write (see _vm_lock)."""
+    import functools
+
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        rid = kwargs.get("resource_id") or next(
+            (a for a in args if isinstance(a, str) and a.lower().startswith("/subscriptions/")), "")
+        if self.dry_run or not rid:
+            return method(self, *args, **kwargs)
+        with _vm_lock(rid.rstrip("/").rsplit("/", 1)[-1]):
+            return method(self, *args, **kwargs)
+    return wrapper
+
+
+for _name in ("isolate_vm", "release_isolation", "block_suspicious_ip", "unblock_ip", "sweep_vm_rules"):
+    setattr(AzureConnector, _name, _one_writer(getattr(AzureConnector, _name)))
 for _name in ("isolate_vm", "release_isolation", "verify_isolation", "verify_release",
               "block_suspicious_ip", "unblock_ip", "verify_block_ip", "snapshot",
               "restore_from_backup", "drain_connections", "sweep_vm_rules", "check_permissions"):
@@ -2828,6 +2856,46 @@ def _quarantine_lock(nsg_id: str):
             except ImportError:
                 pass
             yield
+
+
+_VM_LOCKS: dict[str, threading.RLock] = {}
+_VM_LOCK_DEPTH = threading.local()
+
+
+@contextlib.contextmanager
+def _vm_lock(vm_name: str):
+    """One writer at a time per VM (third review, T2): isolate, release, block, unblock
+    and the reassertion. A thread lock (watch workers, reassert loop) plus an flock
+    (the War Room and the CLI are other processes). Re-entrant within a thread — the
+    reassertion re-isolates while holding it."""
+    import hashlib
+    key = (vm_name or "").lower()
+    with _QUARANTINE_LOCKS_GUARD:
+        lock = _VM_LOCKS.setdefault(key, threading.RLock())
+    depth = getattr(_VM_LOCK_DEPTH, "d", None)
+    if depth is None:
+        depth = _VM_LOCK_DEPTH.d = {}
+    with lock:
+        if depth.get(key):
+            depth[key] += 1
+            try:
+                yield
+            finally:
+                depth[key] -= 1
+            return
+        lock_dir = _ISOLATION_STATE_DIR.parent / "locks"
+        lock_dir.mkdir(parents=True, exist_ok=True)
+        with open(lock_dir / f"vm-{hashlib.sha1(key.encode()).hexdigest()[:12]}.lock", "a") as fh:
+            try:
+                import fcntl
+                fcntl.flock(fh, fcntl.LOCK_EX)
+            except ImportError:
+                pass
+            depth[key] = 1
+            try:
+                yield
+            finally:
+                depth[key] = 0
 
 
 def _recorded_original(nic_id: str):

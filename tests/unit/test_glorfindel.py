@@ -2562,3 +2562,18 @@ def test_readiness_says_a_vm_of_another_subscription_is_not_ready():
     a = assess("/subscriptions/sub-b/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm", c)
     assert a["verdict"] == "not_ready" and a["reasons"][0]["code"] == "other_subscription"
     c.check_permissions.assert_not_called()
+
+
+def test_release_records_its_intent_before_touching_azure(monkeypatch):
+    """A release cut off midway (War Room timeout, crash) must read as 'being released',
+    not as an isolation removed outside Glorfindel (third review, T2)."""
+    from glorfindel.actions import _load_isolation_state
+    connector, net, nic = _l4_env(monkeypatch)
+    connector.isolate_vm(_RID)
+    nic.network_security_group = type("R", (), {"id": _Q_ID})()
+    seen = []
+    orig = connector._unquarantine
+    monkeypatch.setattr(connector, "_unquarantine",
+                        lambda *a: seen.append(_load_isolation_state("vm").get("releasing_at")) or orig(*a))
+    assert connector.release_isolation(_RID)["status"] == "released"
+    assert seen and seen[0]

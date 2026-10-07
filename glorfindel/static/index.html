@@ -1953,7 +1953,7 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
   const modeSelector = isExpanded
     ? `<div style="display:flex;align-items:center;gap:6px;margin-top:6px">
         <span style="font-size:9px;color:var(--dim);font-weight:600;letter-spacing:.5px">MODE</span>
-        <select onchange="setAutonomyMode('${vm_name}',this.value)" onclick="event.stopPropagation()"
+        <select onchange="this.value === 'non_disruptive' ? openActivation('${vm_name}') : setAutonomyMode('${vm_name}',this.value)" onclick="event.stopPropagation()"
           style="font-size:9px;background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:2px 5px;border-radius:3px;cursor:pointer">
           <option value="human_only"${autonomyMode === 'human_only' ? ' selected' : ''}>human-only (recommend)</option>
           <option value="non_disruptive"${autonomyMode === 'non_disruptive' ? ' selected' : ''}>non-disruptive (execute)</option>
@@ -2528,6 +2528,55 @@ async function setAutonomyMode(vmName, mode) {
     toast(`✓ Mode ${mode} set for ${vmName}`);
     refreshState();
   } catch (e) { toast('✗ ' + e.message); }
+}
+
+// ── Activation (L6): no VM leaves human-only without its readiness being shown ──
+const _VERDICT = {
+  ready:     ['Ready', 'var(--green)', 'The autonomous response will run as designed.'],
+  reserve:   ['Ready with reserves', 'var(--orange)', 'It will run, with the limitations below. Confirm you have read them.'],
+  not_ready: ['Not ready', 'var(--red)', 'Glorfindel cannot act on this VM yet. Fix the points below first.'],
+};
+function _h(t) { const d = document.createElement('div'); d.textContent = t ?? ''; return d.innerHTML; }
+
+async function openActivation(vmName) {
+  document.getElementById('modal-title').textContent = `Autonomous response for ${vmName}`;
+  const body = document.getElementById('modal-body');
+  body.innerHTML = '<div style="color:var(--dim)">Checking rights and network on Azure (nothing is changed)…</div>';
+  document.getElementById('modal-cmd').style.display = 'none';
+  document.getElementById('modal-cancel').style.display = '';
+  const confirm = document.getElementById('modal-confirm');
+  confirm.style.display = 'none';
+  document.getElementById('modal').classList.add('open');
+  let a;
+  try { a = await (await fetch(`/api/readiness/${vmName}`)).json(); }
+  catch (e) { body.textContent = '✗ ' + e.message; refreshState(); return; }
+  if (a.error) { body.textContent = '✗ ' + a.error; refreshState(); return; }
+  const [label, color, lead] = _VERDICT[a.verdict] || _VERDICT.not_ready;
+  const rows = (a.reasons || []).map(r => {
+    const c = r.level === 'not_ready' ? 'var(--red)' : r.level === 'reserve' ? 'var(--orange)' : 'var(--dim)';
+    return `<li style="margin:6px 0"><span style="color:${c};font-weight:700">${r.level === 'info' ? 'Not checked' : r.level === 'reserve' ? 'Reserve' : 'Blocking'}</span> — ${_h(r.message)}${r.fix ? `<div style="color:var(--dim);font-size:11px">Fix: ${_h(r.fix)}</div>` : ''}</li>`;
+  }).join('');
+  const ack = a.verdict === 'reserve'
+    ? `<label style="display:flex;gap:6px;align-items:flex-start;margin-top:8px"><input type="checkbox" id="activation-ack"> I have read the reserves and accept them for this VM.</label>` : '';
+  body.innerHTML = `<div style="font-weight:700;color:${color}">${label}</div><div style="margin:4px 0 8px">${lead}</div><ul style="margin:0;padding-left:18px">${rows}</ul>${ack}`;
+  if (a.verdict === 'not_ready') { refreshState(); return; }
+  confirm.style.display = '';
+  confirm.textContent = 'Turn on autonomous response';
+  confirm.onclick = async () => {
+    if (a.verdict === 'reserve' && !document.getElementById('activation-ack')?.checked) {
+      toast('Confirm the reserves first'); return;
+    }
+    try {
+      const d = await (await fetch(`/api/activate/${vmName}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ acknowledged: a.reserve_codes || [] }),
+      })).json();
+      if (d.error) { toast('✗ ' + d.error, 6000); return; }
+      closeModal(); toast(`✓ Autonomous response on for ${vmName}`); refreshState();
+    } catch (e) { toast('✗ ' + e.message); }
+  };
+  // Cancel or click outside: the selector re-renders from the real mode.
+  document.getElementById('modal-cancel').onclick = () => { closeModal(); refreshState(); };
 }
 
 async function setDefaultMode(mode) {

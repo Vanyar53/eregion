@@ -670,11 +670,11 @@ class RulePoller:
         doesn't watch (excluded, another backend's) is dropped; one that names none is
         keyed "unattributed"."""
         by_rid = {rid.lower(): (rid, name) for rid, name in targets}
-        by_name: dict[str, tuple[str, str]] = {}
+        by_name: dict[str, set] = {}
         for rid, name in targets:
             for n in (name, rid.rstrip("/").split("/")[-1]):
                 if n:
-                    by_name.setdefault(n.split(".")[0].lower(), (rid, name))
+                    by_name.setdefault(n.split(".")[0].lower(), set()).add((rid, name))
         out: dict[str, tuple] = {}
         for row in rows:
             named, tgt = False, None
@@ -684,7 +684,11 @@ class RulePoller:
             if not named:
                 comp = row.get("Computer")
                 if isinstance(comp, str) and comp:
-                    named, tgt = True, by_name.get(comp.split(".")[0].lower())
+                    hits = by_name.get(comp.split(".")[0].lower(), set())
+                    # Two watched VMs with this host name (clones in two resource
+                    # groups): the name can't tell which — never a guess.
+                    if len(hits) <= 1:
+                        named, tgt = True, next(iter(hits), None)
             if not named:
                 ip = _caller_ip(row)
                 owner = self._owners().get(ip) if ip else None

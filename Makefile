@@ -19,6 +19,8 @@ INSTANCE ?= default
 TOPO     ?=
 
 # Annatar — ANNATAR_AZURE_CLIENT_* si définis, sinon fallback AZURE_CLIENT_*
+# ⚠ Les recettes qui les utilisent commencent par @ : make afficherait sinon la commande
+# développée, secret compris (constaté le 2026-10-07).
 # Annatar a besoin de Contributor (RunCommand). Définir ANNATAR_AZURE_CLIENT_*
 # pour séparer ses creds de ceux de Glorfindel (Reader pour observe-only).
 # AZURE_TENANT_ID et AZURE_SUBSCRIPTION_ID sont toujours partagés (même tenant).
@@ -55,7 +57,9 @@ GLORFINDEL_VOLS := \
 	-v $(PWD)/glorfindel/rules:/app/glorfindel/rules \
 	$(if $(wildcard $(PWD)/glorfindel-config.yaml),-v $(PWD)/glorfindel-config.yaml:/app/glorfindel-config.yaml,)
 
-DOCKER_ANNATAR := docker run --rm $(ANNATAR_AZURE_ENV) $(ANNATAR_VOLS) $(IMAGE_ANNATAR)
+# The images' CMD is the CLI itself: arguments REPLACE it, so the binary is named here
+# (`make annatar-run` ran `run` as a command and failed).
+DOCKER_ANNATAR := docker run --rm $(ANNATAR_AZURE_ENV) $(ANNATAR_VOLS) $(IMAGE_ANNATAR) annatar
 GLORFINDEL_ENV := \
 	-e AZURE_WORKSPACE_ID \
 	-e AZURE_VM_RESOURCE_ID \
@@ -77,7 +81,7 @@ GLORFINDEL_ENV := \
 
 DOCKER_GLORFINDEL := docker run --rm $(GLORFINDEL_AZURE_ENV) $(GLORFINDEL_VOLS) $(GLORFINDEL_STATE) \
 	$(GLORFINDEL_ENV) \
-	$(IMAGE_GLORFINDEL)
+	$(IMAGE_GLORFINDEL) glorfindel
 
 .PHONY: help build build-annatar build-glorfindel fix-state-ownership \
 	annatar-run annatar-dry-run annatar-validate annatar-list \
@@ -177,10 +181,10 @@ fix-state-ownership:
 # ── Annatar ───────────────────────────────────────────────────────────────
 
 annatar-run: build
-	$(DOCKER_ANNATAR) run $(SCENARIO) --yes
+	@$(DOCKER_ANNATAR) run $(SCENARIO) --yes
 
 annatar-dry-run: build
-	$(DOCKER_ANNATAR) run $(SCENARIO) --dry-run --yes
+	@$(DOCKER_ANNATAR) run $(SCENARIO) --dry-run --yes
 
 annatar-validate:
 	docker run --rm -v $(PWD)/annatar/scenarios:/app/annatar/scenarios --entrypoint annatar $(IMAGE_ANNATAR) validate $(SCENARIO)
@@ -211,30 +215,30 @@ llm-compare:
 # ── Glorfindel ────────────────────────────────────────────────────────────
 
 glorfindel-watch: build
-	$(DOCKER_GLORFINDEL) watch runs/
+	@$(DOCKER_GLORFINDEL) watch runs/
 
 glorfindel-respond: build
-	$(DOCKER_GLORFINDEL) respond $(SIGNALS)
+	@$(DOCKER_GLORFINDEL) respond $(SIGNALS)
 
 glorfindel-dry-run: build
-	$(DOCKER_GLORFINDEL) respond $(SIGNALS) --dry-run
+	@$(DOCKER_GLORFINDEL) respond $(SIGNALS) --dry-run
 
 glorfindel-list: build
-	$(DOCKER_GLORFINDEL) list
+	@$(DOCKER_GLORFINDEL) list
 
 glorfindel-pending: build
-	$(DOCKER_GLORFINDEL) pending
+	@$(DOCKER_GLORFINDEL) pending
 
 glorfindel-revert: build
 	@test -n "$(RESOURCE_ID)" || (echo "Error: RESOURCE_ID is required" && exit 1)
-	$(DOCKER_GLORFINDEL) revert $(RESOURCE_ID) --yes
+	@$(DOCKER_GLORFINDEL) revert $(RESOURCE_ID) --yes
 
 glorfindel-release: build
 	@test -n "$(RESOURCE_ID)" || (echo "Error: RESOURCE_ID is required" && exit 1)
-	$(DOCKER_GLORFINDEL) release $(RESOURCE_ID) --yes
+	@$(DOCKER_GLORFINDEL) release $(RESOURCE_ID) --yes
 
 glorfindel-check-ttl: build
-	$(DOCKER_GLORFINDEL) check-ttl
+	@$(DOCKER_GLORFINDEL) check-ttl
 
 glorfindel-start: build-glorfindel
 	mkdir -p $(HOME)/.glorfindel $(HOME)/.cache/chroma runs
@@ -272,14 +276,14 @@ annatar-shell: build-annatar
 	@mkdir -p $(HOME)/.annatar
 	@touch $(HOME)/.annatar/.bashrc
 	@grep -q "alias ar=" $(HOME)/.annatar/.bashrc || echo "alias ar='annatar'" >> $(HOME)/.annatar/.bashrc
-	docker run --rm -it $(ANNATAR_AZURE_ENV) $(ANNATAR_VOLS) $(ANNATAR_STATE) \
+	@docker run --rm -it $(ANNATAR_AZURE_ENV) $(ANNATAR_VOLS) $(ANNATAR_STATE) \
 		$(IMAGE_ANNATAR) bash --init-file /root/.annatar/.bashrc
 
 glorfindel-shell: build-glorfindel
 	@mkdir -p $(HOME)/.glorfindel
 	@touch $(HOME)/.glorfindel/.bashrc
 	@grep -q "alias gf=" $(HOME)/.glorfindel/.bashrc || echo "alias gf='glorfindel'" >> $(HOME)/.glorfindel/.bashrc
-	docker run --rm -it $(GLORFINDEL_AZURE_ENV) $(GLORFINDEL_VOLS) $(GLORFINDEL_STATE) \
+	@docker run --rm -it $(GLORFINDEL_AZURE_ENV) $(GLORFINDEL_VOLS) $(GLORFINDEL_STATE) \
 		$(GLORFINDEL_ENV) \
 		$(IMAGE_GLORFINDEL) bash --init-file /root/.glorfindel/.bashrc
 

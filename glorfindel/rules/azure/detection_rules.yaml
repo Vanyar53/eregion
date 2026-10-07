@@ -53,7 +53,7 @@ rules:
         | where TimeGenerated > ago(10m)
         | where ObjectName == "Logical Disk" or ObjectName == "LogicalDisk"
         | where CounterName == "Disk Write Bytes/sec"
-        | project TimeGenerated, Computer, InstanceName, CounterValue
+        | project TimeGenerated, Computer, _ResourceId, InstanceName, CounterValue
         | order by Computer asc, InstanceName asc, TimeGenerated asc
         | extend Same = prev(Computer) == Computer and prev(InstanceName) == InstanceName
         | extend Gap = iff(Same, TimeGenerated - prev(TimeGenerated), timespan(null)),
@@ -65,7 +65,8 @@ rules:
       | extend Rate = iff(Fine, iff(Gap <= 25s, (CounterValue + PrevValue) / 2, real(null)), CounterValue),
                Peak = iff(Fine, max_of(CounterValue, PrevValue), CounterValue)
       | where (Fine and Rate > 45000000) or (not(Fine) and Rate > 25000000)
-      | summarize MaxWrite = max(Peak) by Computer
+      // _ResourceId routes the row to its VM even when two VMs share a host name.
+      | summarize MaxWrite = max(Peak) by Computer, _ResourceId
 
   - name: data-exfiltration-blob
     description: "PutBlob from a VM private IP — T1041 exfiltration via MSI"
@@ -103,9 +104,9 @@ rules:
       | where not(SourceIP matches regex @"^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.|127\.)")
       // By VM too (third review, L13): an attacker row without Computer was dispatched
       // to every monitored VM and blocked on each — or, routed, to none of them.
-      | summarize FailedAttempts = count() by SourceIP, Computer
+      | summarize FailedAttempts = count() by SourceIP, Computer, _ResourceId
       | where FailedAttempts >= 10
-      | project SourceIP, Computer, FailedAttempts
+      | project SourceIP, Computer, _ResourceId, FailedAttempts
 
   - name: sudo-privilege-escalation
     description: "Successful sudo to root by a non-root user — T1548.003"
@@ -123,7 +124,7 @@ rules:
             and SyslogMessage has "COMMAND="
       | where SyslogMessage !has "NOT in sudoers"
             and SyslogMessage !has "authentication failure"
-      | project TimeGenerated, Computer, SyslogMessage
+      | project TimeGenerated, Computer, _ResourceId, SyslogMessage
       // One row per VM, not `limit 1`: the limit ran on the server before the per-VM
       // filter, so a benign sudo on another VM hid the attack (third review, T7).
       | summarize arg_max(TimeGenerated, *) by Computer
@@ -144,5 +145,5 @@ rules:
       | where ProcessName == "useradd"
             or SyslogMessage has "new user"
             or SyslogMessage has "useradd"
-      | project TimeGenerated, Computer, Facility, SeverityLevel, ProcessName, SyslogMessage
+      | project TimeGenerated, Computer, _ResourceId, Facility, SeverityLevel, ProcessName, SyslogMessage
       | order by TimeGenerated desc

@@ -754,3 +754,27 @@ def test_ransomware_rule_reads_the_sampling_step_from_the_data():
     path = Path(__file__).resolve().parents[2] / "glorfindel/rules/azure/detection_rules.yaml"
     q = next(r["query"] for r in yaml.safe_load(path.read_text())["rules"] if r["name"] == "ransomware-disk-write")
     assert "Step = min(Gap)" in q and "not(Fine) and Rate > 25000000" in q
+
+
+def test_a_host_name_shared_by_two_vms_attributes_nothing():
+    """Clones in two resource groups: the host name can't tell which VM — the row
+    names its _ResourceId (shipped rules emit it), or it is unattributed."""
+    class _TwoWebs:
+        def __init__(self):
+            a, b = _Asset("web"), _Asset("web")
+            b.resource_id = b.resource_id.replace("/rg/", "/rg-b/")
+            self.assets = [a, b]
+
+        def for_backend(self, _n):
+            return self.assets
+    reg = _TwoWebs()
+    rule = _auto_rule()
+    p, sent = _poller(_Det([{"Computer": "web", "MaxWrite": 9e7}]), [rule], registry=reg)
+    p.poll_once(rule)
+    assert sent[0]["context"]["attribution"] == "unattributed"
+    p2, sent2 = _poller(_Det([{"Computer": "web", "_ResourceId": reg.assets[1].resource_id, "MaxWrite": 9e7}]),
+                        [rule], registry=reg)
+    import glorfindel.detection_rules as dr
+    dr._save_status({})
+    p2.poll_once(rule)
+    assert sent2[0]["resource_id"] == reg.assets[1].resource_id and sent2[0]["context"]["attribution"] == "asset"

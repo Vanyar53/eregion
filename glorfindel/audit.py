@@ -55,6 +55,7 @@ def run(
     vault: str = "rsv-annatar",
     vault_rg: str = "",
     staging_storage: str = "",
+    workspace_id: str | None = None,
 ) -> AuditResult:
     """Check that Glorfindel can execute all remediation actions on this resource.
 
@@ -116,6 +117,9 @@ def run(
         (_check_compute, (resource_id, connector)),
         (_check_permissions, (resource_id, connector)),
     ]
+    ws = _workspace_id() if workspace_id is None else workspace_id
+    if ws:
+        jobs.append((_check_perf_sampling, (resource_id, ws)))
     with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
         futures = [pool.submit(fn, *args) for fn, args in jobs]
         for f in futures:
@@ -129,6 +133,66 @@ def run(
 
 
 # ── Per-action checks ──────────────────────────────────────────────────────────
+
+def _workspace_id() -> str:
+    """The Log Analytics workspace of the first azure_monitor backend in the config."""
+    try:
+        from glorfindel.config import load_glorfindel_config
+        for b in load_glorfindel_config().monitoring_backends:
+            if getattr(b, "workspace_id", ""):
+                return b.workspace_id
+    except Exception:
+        pass
+    return ""
+
+
+_COARSE_STEP_S = 25
+
+
+def _check_perf_sampling(resource_id: str, workspace_id: str, detector=None) -> AuditCheck:
+    """What the ransomware rule actually receives for this VM (third review, T6/L14).
+
+    Read from the data, not the DCR: it also catches a DCR that doesn't collect the
+    counter at all — the rule is then blind, without any error. At Azure's default
+    60-s sampling the rule used to never fire; it now uses a coarse mode whose
+    threshold is provisional."""
+    name = "Disk write sampling"
+    vm = resource_id.rstrip("/").split("/")[-1]
+    query = (
+        "Perf | where TimeGenerated > ago(1h)"
+        ' | where ObjectName == "Logical Disk" or ObjectName == "LogicalDisk"'
+        ' | where CounterName == "Disk Write Bytes/sec"'
+        f' | where _ResourceId =~ "{resource_id}" or Computer =~ "{vm}"'
+        " | summarize n = count(), t0 = min(TimeGenerated), t1 = max(TimeGenerated) by InstanceName"
+        # Seconds computed by KQL: the SDK returns a timespan column as text ("00:59:00").
+        " | extend span_s = datetime_diff('second', t1, t0)"
+        " | order by n desc | take 1"
+    )
+    try:
+        if detector is None:
+            from glorfindel.detectors import detector_for
+            detector = detector_for("azure_monitor", workspace_id=workspace_id)
+        rows = detector.run_query(query)
+    except Exception as e:
+        return AuditCheck("detection", name, "warn", f"Échantillonnage illisible ({str(e)[:160]}).")
+    fix = ("Collecter \\LogicalDisk(*)\\Disk Write Bytes/sec dans la DCR Perf, toutes les "
+           "10 à 15 s.")
+    if not rows or int(rows[0].get("n") or 0) < 2:
+        return AuditCheck(
+            "detection", name, "warn",
+            "Aucun échantillon « Disk Write Bytes/sec » depuis 1 h : la détection ransomware est "
+            "aveugle pour cette VM (compteur absent de la DCR) — ou la VM est éteinte.", fix)
+    step = float(rows[0].get("span_s") or 0) / (int(rows[0]["n"]) - 1)
+    if step <= _COARSE_STEP_S:
+        return AuditCheck("detection", name, "ok",
+                          f"Échantillonnage ~{step:.0f} s : règle ransomware en mode fin "
+                          "(2 échantillons > 45 Mo/s, calibré sur le banc).")
+    return AuditCheck(
+        "detection", name, "warn",
+        f"Échantillonnage ~{step:.0f} s : règle ransomware en mode grossier (1 échantillon "
+        "> 25 Mo/s) — seuil provisoire, marge mince ; une attaque courte ou un disque lent "
+        "peut passer sous le seuil.", fix)
+
 
 def _check_permissions(resource_id: str, connector) -> AuditCheck | list:
     """Rights the isolation needs (JIT NSG swap, session drain, fallback rules), read

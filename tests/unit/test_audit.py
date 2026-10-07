@@ -302,3 +302,26 @@ def test_is_iam_error_detection():
     assert _is_iam_error("does not have authorization to perform action")
     assert not _is_iam_error("ResourceNotFound: The Resource 'Microsoft.Compute/vm' was not found")
     assert not _is_iam_error("Invalid resource ID format")
+
+
+# ── Échantillonnage Perf (troisième passe, T6 / L14) ─────────────────────────────
+
+class _PerfDet:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def run_query(self, query, timespan=None):
+        return self.rows
+
+
+def test_perf_sampling_fine_coarse_and_missing():
+    """The ransomware rule never fired at Azure's default 60-s sampling, and is blind
+    without the counter — both silent. The audit says which mode the VM is in."""
+    from glorfindel.audit import _check_perf_sampling
+    rid = "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm"
+    fine = _check_perf_sampling(rid, "ws", _PerfDet([{"n": 361, "span_s": 3600}]))
+    assert fine.status == "ok" and "fin" in fine.message
+    coarse = _check_perf_sampling(rid, "ws", _PerfDet([{"n": 61, "span_s": 3600}]))
+    assert coarse.status == "warn" and "grossier" in coarse.message
+    missing = _check_perf_sampling(rid, "ws", _PerfDet([]))
+    assert missing.status == "warn" and "aveugle" in missing.message and missing.fix

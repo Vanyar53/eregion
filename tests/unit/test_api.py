@@ -194,3 +194,17 @@ def test_state_shows_a_vm_held_by_its_readiness(client, monkeypatch):
     assert state["autonomy_modes"]["vm"] == "human_only"
     assert state["autonomy_holds"]["vm"]["configured"] == "non_disruptive"
     assert state["autonomy_holds"]["vm"]["reason"] == "not_checked"
+
+
+def test_an_ambiguous_vm_name_is_refused(client, monkeypatch):
+    """Two VMs named web in two resource groups (now both in the registry): resolving
+    the name to the first match could release the OTHER one (third review, T1)."""
+    from glorfindel.actions import _save_isolation_state
+    a = "/subscriptions/s/resourceGroups/rg-a/providers/Microsoft.Compute/virtualMachines/web"
+    b = a.replace("rg-a", "rg-b")
+    _save_isolation_state(a, {"resource_id": a})
+    _save_isolation_state(b, {"resource_id": b})
+    ran = []
+    monkeypatch.setattr(api.subprocess, "run", lambda *x, **k: ran.append(x))
+    r = client.post("/api/action/release/web")
+    assert r.status_code == 409 and "2 VMs" in r.json()["error"] and ran == []

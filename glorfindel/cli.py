@@ -566,13 +566,25 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
     except ValueError:
         _reassert_every_s = 60.0
     _last_reassert = [time.time()]
+    _reassert_thread: list = [None]
 
     def _reassert() -> None:
+        """Start a reassertion pass in its own thread: a re-application cuts sessions
+        through Run Command (up to 300 s) and used to stall the main loop — no new
+        signal read, no TTL check, no heartbeat meanwhile (third review, details)."""
         if dry_run or _reassert_every_s <= 0 or getattr(ttl_connector, "read_only", False):
             return
         if time.time() - _last_reassert[0] < _reassert_every_s:
             return
+        t = _reassert_thread[0]
+        if t is not None and t.is_alive():
+            return      # the previous pass is still running: never two at once
         _last_reassert[0] = time.time()
+        import threading as _thr
+        _reassert_thread[0] = _thr.Thread(target=_reassert_pass, daemon=True, name="reassert")
+        _reassert_thread[0].start()
+
+    def _reassert_pass() -> None:
         from glorfindel.actions import active_blocks, active_isolations
         if not active_isolations() and not active_blocks():
             return      # cheap local check — no Azure call when nothing is active
@@ -584,9 +596,14 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
                 autonomy.default = mode_override  # --mode stays pinned, as in decide
         except Exception:
             autonomy = _autonomy
-        for r in reassert_active(ttl_connector, autonomy):
-            target = r["vm"] + (f" {r['ip']}" if r.get("ip") else "")
-            console.print(f"[yellow]reassert {r['kind']} {target} → {r['outcome']}[/yellow]")
+        try:
+            for r in reassert_active(ttl_connector, autonomy):
+                target = r["vm"] + (f" {r['ip']}" if r.get("ip") else "")
+                with _output_lock:
+                    console.print(f"[yellow]reassert {r['kind']} {target} → {r['outcome']}[/yellow]")
+        except Exception as exc:
+            with _output_lock:
+                console.print(f"[red]reassert pass failed:[/red] {exc}")
 
     _HEARTBEAT = Path.home() / ".glorfindel" / "watch_heartbeat"
 

@@ -85,21 +85,42 @@ def reassert_active(connector, autonomy=None) -> list[dict]:
         # the CLI finishes first, and its cleared state then says there is nothing to
         # reassert. Without it, a release seen halfway was put back (third review, T2).
         # State is read by resource id: two VMs may share a name.
-        with _vm_lock(snapshot["vm_name"]):
-            _reassert_isolation(connector, autonomy, snapshot["vm_name"], report,
-                                ref=snapshot["resource_id"])
+        try:
+            with _vm_lock(snapshot["vm_name"], timeout=_LOCK_WAIT_S):
+                _reassert_isolation(connector, autonomy, snapshot["vm_name"], report,
+                                    ref=snapshot["resource_id"])
+        except TimeoutError:
+            continue          # a write is running on this VM: next pass
     for snapshot in active_blocks():
         if not snapshot.get("resource_id"):
             continue
-        with _vm_lock(snapshot["vm_name"]):
-            _reassert_block(connector, autonomy, snapshot["vm_name"], snapshot.get("ip", ""), report,
-                            ref=snapshot["resource_id"])
+        try:
+            with _vm_lock(snapshot["vm_name"], timeout=_LOCK_WAIT_S):
+                _reassert_block(connector, autonomy, snapshot["vm_name"], snapshot.get("ip", ""), report,
+                                ref=snapshot["resource_id"])
+        except TimeoutError:
+            continue
     return report
+
+
+_LOCK_WAIT_S = 30
+_STALE_MARKER_S = 1800
 
 
 def _held_by_an_operation(state: dict, failed_key: str, running_key: str) -> bool:
     """Partial, half-failed or in-progress work belongs to whoever started it."""
     return bool(state.get("partial") or state.get(failed_key) or state.get(running_key))
+
+
+def _stale(marker: str | None) -> bool:
+    """An intent marker older than 30 min: the release/unblock was cut off (War Room
+    timeout, crash) and nobody is finishing it (fourth review, Q10)."""
+    if not marker:
+        return False
+    try:
+        return (datetime.now(timezone.utc) - datetime.fromisoformat(marker)).total_seconds() > _STALE_MARKER_S
+    except ValueError:
+        return True
 
 
 def _reassert_isolation(connector, autonomy, vm: str, report: list[dict], ref: str = "") -> None:
@@ -111,6 +132,15 @@ def _reassert_isolation(connector, autonomy, vm: str, report: list[dict], ref: s
         return                # released meanwhile
     iso = {**state, "vm_name": vm}
     rid = iso["resource_id"]
+    if _stale(iso.get("releasing_at")) and not iso.get("stale_alerted_at"):
+        reason = (f"La levée de l'isolation de {vm} a été interrompue (commencée le "
+                  f"{iso['releasing_at']}, jamais terminée) : des cartes peuvent être levées et "
+                  f"d'autres encore isolées. Relancer `glorfindel release {rid} --yes`, ou "
+                  "ré-isoler si la levée n'était pas voulue.")
+        _alert(f"reassert-{vm}", resource_id=rid, action="isolate_vm", reason=reason)
+        _save_isolation_state(ref or vm, {**state, "stale_alerted_at": now})
+        report.append({"kind": "isolation", "vm": vm, "outcome": "escalated", "detail": reason})
+        return
     if _held_by_an_operation(iso, "release_failed", "releasing_at"):
         return                # a release is running, or left NICs for the operator
     try:
@@ -173,7 +203,18 @@ def _reassert_block(connector, autonomy, vm: str, ip: str, report: list[dict], r
     if not b:
         return                # unblocked meanwhile
     rid = b.get("resource_id", "")
-    if not rid or not ip or _held_by_an_operation(b, "unblock_failed", "unblocking_at"):
+    if not rid or not ip:
+        return
+    if _stale(b.get("unblocking_at")) and not b.get("stale_alerted_at"):
+        reason = (f"Le déblocage de {ip} sur {vm} a été interrompu (commencé le "
+                  f"{b['unblocking_at']}) : des règles peuvent rester. Relancer "
+                  f"`glorfindel unblock {ip} {rid} --yes`, ou re-bloquer.")
+        _alert(f"reassert-{vm}-{ip}", resource_id=rid, action="block_suspicious_ip",
+               reason=reason, action_params={"ip": ip})
+        _update_block_entry(ref or vm, ip, stale_alerted_at=now)
+        report.append({"kind": "block", "vm": vm, "ip": ip, "outcome": "escalated", "detail": reason})
+        return
+    if _held_by_an_operation(b, "unblock_failed", "unblocking_at"):
         return
     try:
         verification = connector.verify_block_ip(ip, rid)
@@ -213,3 +254,48 @@ def _reassert_block(connector, autonomy, vm: str, ip: str, report: list[dict], r
            reason=reason, action_params={"ip": ip})
     report.append({"kind": "block", "vm": vm, "ip": ip, "outcome": outcome, "detail": reason})
 
+
+
+def ttl_alerts(ttl_h: float, now: datetime | None = None) -> list[dict]:
+    """Isolations older than the TTL: ONE escalation each, never a release.
+
+    The watch used to release every isolation older than GLORFINDEL_ISOLATION_TTL_H
+    (4 h): no human, no autonomy mode, no release precondition — a ransomware VM
+    waiting for its restore went back on the network (fourth review, Q1). The TTL now
+    asks a human: release (`glorfindel release`) or keep it isolated."""
+    from glorfindel import escalations
+    from glorfindel.actions import _load_isolation_state, _save_isolation_state, _vm_lock, active_isolations
+
+    now = now or datetime.now(timezone.utc)
+    out: list[dict] = []
+    for iso in active_isolations():
+        rid, since = iso.get("resource_id", ""), iso.get("isolated_at", "")
+        if not rid or not since or iso.get("ttl_alerted_at"):
+            continue
+        try:
+            age_h = (now - datetime.fromisoformat(since)).total_seconds() / 3600
+        except ValueError:
+            continue
+        if age_h < ttl_h:
+            continue
+        vm = iso["vm_name"]
+        try:
+            with _vm_lock(vm, timeout=5):
+                state = _load_isolation_state(rid)
+                if not state or state.get("ttl_alerted_at"):
+                    continue
+                escalations.record(
+                    signal_id=f"ttl-{iso.get('state_key', vm)}", resource_id=rid,
+                    action="review_isolation", escalation_type="ttl_exceeded",
+                    reason=(f"{vm} est isolée depuis {age_h:.1f} h (TTL {ttl_h:g} h). Glorfindel ne "
+                            "lève pas une isolation seul : vérifier la VM, puis "
+                            f"`glorfindel release {rid} --yes` si elle est saine, ou la garder "
+                            "isolée (restore en attente, investigation)."),
+                    suggested_steps=["Vérifier l'état de la VM (restore terminé ? intégrité ?).",
+                                     f"Lever : glorfindel release {rid} --yes",
+                                     "Ou garder l'isolation et acquitter cette carte."])
+                _save_isolation_state(rid, {**state, "ttl_alerted_at": now.isoformat()})
+                out.append({"vm": vm, "age_h": age_h})
+        except TimeoutError:
+            continue                 # a write in progress: next pass
+    return out

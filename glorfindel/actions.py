@@ -184,6 +184,19 @@ def _is_quarantine_nsg(nsg_id_or_name: str) -> bool:
     return name.startswith(QUARANTINE_NSG_PREFIX)
 
 
+def single_host_ip(ip: str) -> str:
+    """The address itself when `ip` is ONE host address, else ValueError. An approval
+    passed `ip=*&scope=subnet` straight to a subnet-wide deny (fourth review, Q4)."""
+    import ipaddress
+    try:
+        addr = ipaddress.ip_address((ip or "").strip())
+    except ValueError:
+        raise ValueError(f"adresse IP invalide : {ip!r} (une seule adresse attendue, pas de plage ni de tag)")
+    if addr.is_unspecified or addr.is_loopback or addr.is_multicast or addr.is_link_local:
+        raise ValueError(f"adresse IP refusée : {ip} (non routable ou réservée)")
+    return str(addr)
+
+
 def _same_id(a: str, b: str) -> bool:
     return (a or "").rstrip("/").lower() == (b or "").rstrip("/").lower()
 
@@ -1276,6 +1289,7 @@ class AzureConnector(CloudConnector):
             return {"status": "dry_run", "action": "block_ip", "ip": ip, "scope": scope}
         if not ip:
             raise ValueError("block_suspicious_ip: no IP address provided")
+        single_host_ip(ip)          # `*`, a CIDR or a service tag would cut far more
 
         self._guard_write("block_suspicious_ip")
         self._ensure_clients()
@@ -3023,11 +3037,15 @@ _VM_LOCK_DEPTH = threading.local()
 
 
 @contextlib.contextmanager
-def _vm_lock(vm_name: str):
+def _vm_lock(vm_name: str, timeout: float | None = None):
     """One writer at a time per VM (third review, T2): isolate, release, block, unblock
     and the reassertion. A thread lock (watch workers, reassert loop) plus an flock
     (the War Room and the CLI are other processes). Re-entrant within a thread — the
-    reassertion re-isolates while holding it."""
+    reassertion re-isolates while holding it.
+
+    `timeout` (background tasks): give up after that many seconds with TimeoutError
+    instead of waiting behind a write that can last minutes (a session cut through Run
+    Command) — fourth review, Q10/Q12. Writers keep waiting: they must serialise."""
     import hashlib
     key = (vm_name or "").lower()
     with _QUARANTINE_LOCKS_GUARD:
@@ -3035,7 +3053,9 @@ def _vm_lock(vm_name: str):
     depth = getattr(_VM_LOCK_DEPTH, "d", None)
     if depth is None:
         depth = _VM_LOCK_DEPTH.d = {}
-    with lock:
+    if not lock.acquire(timeout=-1 if timeout is None else timeout):
+        raise TimeoutError(f"VM {vm_name} busy (another write in progress)")
+    try:
         if depth.get(key):
             depth[key] += 1
             try:
@@ -3048,7 +3068,19 @@ def _vm_lock(vm_name: str):
         with open(lock_dir / f"vm-{hashlib.sha1(key.encode()).hexdigest()[:12]}.lock", "a") as fh:
             try:
                 import fcntl
-                fcntl.flock(fh, fcntl.LOCK_EX)
+                import time as _time
+                if timeout is None:
+                    fcntl.flock(fh, fcntl.LOCK_EX)
+                else:
+                    deadline = _time.monotonic() + timeout
+                    while True:
+                        try:
+                            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                            break
+                        except BlockingIOError:
+                            if _time.monotonic() >= deadline:
+                                raise TimeoutError(f"VM {vm_name} busy (another process is writing)")
+                            _time.sleep(0.2)
             except ImportError:
                 pass
             depth[key] = 1
@@ -3056,6 +3088,8 @@ def _vm_lock(vm_name: str):
                 yield
             finally:
                 depth[key] = 0
+    finally:
+        lock.release()
 
 
 def _recorded_original(nic_id: str):

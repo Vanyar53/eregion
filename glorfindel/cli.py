@@ -512,30 +512,14 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
     _ttl_check_counter = 0
 
     def _check_ttl() -> None:
-        now = datetime.now(timezone.utc)
-        for iso in active_isolations():
-            isolated_at_s = iso.get("isolated_at")
-            resource_id = iso.get("resource_id", "")
-            if not isolated_at_s or not resource_id:
-                continue
-            age_h = (now - datetime.fromisoformat(isolated_at_s)).total_seconds() / 3600
-            if age_h >= ttl_h:
-                vm_short = resource_id.split("/")[-1]
-                console.print(
-                    f"[yellow]⚠ TTL exceeded[/yellow] — {vm_short} isolated {age_h:.1f}h "
-                    f"(limit {ttl_h}h). {'DRY RUN' if dry_run else 'Auto-releasing...'}"
-                )
-                if not dry_run:
-                    ttl_connector.release_isolation(resource_id)
-                    from glorfindel import escalations as _esc
-                    _esc.record(
-                        signal_id="ttl-auto-release",
-                        resource_id=resource_id,
-                        action="release_isolation",
-                        escalation_type="ttl_exceeded",
-                        reason=f"Isolation TTL exceeded ({age_h:.1f}h > {ttl_h}h) — auto-released by watch",
-                    )
-                    console.print("  [green]✓ Released.[/green]")
+        """Past the TTL an isolation is escalated, never released (fourth review, Q1)."""
+        if dry_run:
+            return
+        from glorfindel.reassert import ttl_alerts
+        for a in ttl_alerts(ttl_h):
+            with _output_lock:
+                console.print(f"[yellow]⚠ TTL exceeded[/yellow] — {a['vm']} isolated {a['age_h']:.1f}h "
+                              f"(limit {ttl_h}h): escalated, NOT released")
 
     def _reconcile_jobs() -> None:
         """Move InProgress snapshot/restore jobs to a terminal state. Without this a
@@ -574,7 +558,7 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
         _reassert_thread[0].start()
 
     def _reassert_pass() -> None:
-        from glorfindel.actions import active_blocks, active_isolations
+        from glorfindel.actions import active_blocks
         if not active_isolations() and not active_blocks():
             return      # cheap local check — no Azure call when nothing is active
         from glorfindel.reassert import reassert_active
@@ -786,11 +770,16 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
             try:
                 _poll()
                 _ttl_check_counter += 1
-                if _ttl_check_counter % 30 == 0:  # check TTL every 30 polls (~1 min at 2s interval)
-                    _check_ttl()
-                    _reconcile_jobs()
-                    _reassert()
-                    _write_heartbeat()
+                if _ttl_check_counter % 30 == 0:  # housekeeping every 30 polls (~1 min at 2s interval)
+                    # Each task on its own: one that keeps failing (an old isolation the
+                    # subscription guard refuses…) no longer skips the reassertion and the
+                    # heartbeat at every pass — the watch looked dead (fourth review, Q12).
+                    for _task in (_check_ttl, _reconcile_jobs, _reassert, _write_heartbeat):
+                        try:
+                            _task()
+                        except Exception as exc:
+                            with _output_lock:
+                                console.print(f"[red]watch: {_task.__name__} en erreur — {exc}[/red]")
             except Exception as exc:
                 # The daemon outlives a bad iteration (unreadable file, transient Azure
                 # error in the TTL/jobs housekeeping); the next poll retries.
@@ -1516,51 +1505,24 @@ def memory_stats(memory_path: str | None):
                    "Defaults to GLORFINDEL_ISOLATION_TTL_H env var or 4h.")
 @click.option("--dry-run", is_flag=True)
 def check_ttl(ttl: float | None, dry_run: bool):
-    """Release isolations that have exceeded the TTL.
+    """Escalate isolations that have exceeded the TTL — never release them.
 
-    Protects against false-positive isolations staying locked indefinitely.
-    Default TTL: 4h (override via --ttl or GLORFINDEL_ISOLATION_TTL_H).
-
-    Run this periodically (cron, watch loop) on any operator machine.
+    Releasing un-contains a VM: past the TTL a human decides (a VM can be waiting for a
+    restore, or under investigation). Default TTL: 4h (--ttl or
+    GLORFINDEL_ISOLATION_TTL_H). Safe to run from cron.
     """
     import os
-    from datetime import datetime, timezone
-    from glorfindel.actions import AzureConnector, active_isolations
-
     ttl_h = ttl or float(os.environ.get("GLORFINDEL_ISOLATION_TTL_H") or "4")
-    connector = AzureConnector(dry_run=dry_run)
-    now = datetime.now(timezone.utc)
-    released = 0
-
-    for iso in active_isolations():
-        isolated_at_s = iso.get("isolated_at")
-        resource_id = iso.get("resource_id", "")
-        if not isolated_at_s or not resource_id:
-            continue
-        isolated_at = datetime.fromisoformat(isolated_at_s)
-        age_h = (now - isolated_at).total_seconds() / 3600
-        vm_short = resource_id.split("/")[-1]
-
-        if age_h >= ttl_h:
-            console.print(
-                f"[yellow]TTL exceeded[/yellow] — {vm_short} isolated for {age_h:.1f}h "
-                f"(limit {ttl_h}h). {'[dim]DRY RUN[/dim]' if dry_run else 'Releasing...'}"
-            )
-            if not dry_run:
-                connector.release_isolation(resource_id)
-                from glorfindel import escalations
-                escalations.record(
-                    signal_id="ttl-auto-release",
-                    resource_id=resource_id,
-                    action="release_isolation",
-                    escalation_type="ttl_exceeded",
-                    reason=f"Isolation TTL exceeded ({age_h:.1f}h > {ttl_h}h) — auto-released",
-                )
-                console.print("  [green]✓ Released.[/green]")
-            released += 1
-
-    if released == 0:
-        console.print(f"[green]No isolations older than {ttl_h}h.[/green]")
+    if dry_run:
+        console.print("[dim]DRY RUN — nothing recorded.[/dim]")
+        return
+    from glorfindel.reassert import ttl_alerts
+    alerts = ttl_alerts(ttl_h)
+    for a in alerts:
+        console.print(f"[yellow]TTL exceeded[/yellow] — {a['vm']} isolated for {a['age_h']:.1f}h "
+                      f"(limit {ttl_h}h): escalated, not released.")
+    if not alerts:
+        console.print(f"[green]No new isolation older than {ttl_h}h.[/green]")
 
 
 def _build_recovery_signal(resource_id: str, restore_result: dict, restore_time_s: int) -> dict:

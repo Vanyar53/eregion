@@ -419,11 +419,8 @@ def run() -> None:
                             }
                         elif key == "r" and escs:
                             e = escs[0]
-                            is_restore = (
-                                e["action"] == "restore_from_backup"
-                                or (e.get("escalation_type") == "low_confidence"
-                                    and e.get("action") == "snapshot")
-                            )
+                            # Only a restore card: a held snapshot never ran (fourth review, Q16).
+                            is_restore = e["action"] == "restore_from_backup"
                             if is_restore:
                                 vm = e["resource_id"].split("/")[-1]
                                 pending = {

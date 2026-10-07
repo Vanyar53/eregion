@@ -2145,5 +2145,7 @@ def test_bot_offers_restore_only_after_a_snapshot():
     held = {"id": "e1", "action": "isolate_vm", "escalation_type": "low_confidence",
             "resource_id": _RESOURCE_ID}
     assert _make_action_button(held) is None and "restore" not in _cli_command(held)
-    snap = {**held, "action": "snapshot"}
-    assert "restore" in _cli_command(snap)
+    snap = {**held, "action": "snapshot"}           # a HELD snapshot never ran (fourth review, Q16)
+    assert _make_action_button(snap) is None and "restore" not in _cli_command(snap)
+    restore = {**held, "action": "restore_from_backup", "escalation_type": "destructive_action"}
+    assert "restore" in _cli_command(restore)

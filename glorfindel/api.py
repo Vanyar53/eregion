@@ -800,6 +800,48 @@ def _verify_approved(connector, esc: dict, action: str, resource_id: str, result
     return verification
 
 
+# Escalation types whose held action a human may run in one click. Not
+# unattributed_signal: its card is anchored on a VM the detection did NOT name —
+# approving isolated that VM (fourth review, Q4).
+_APPROVABLE_TYPES = {"mode_hold", "low_confidence", "uncharacterized_signal", "release_hold"}
+
+
+def _approval_max_age_h() -> float:
+    try:
+        return float(os.environ.get("GLORFINDEL_APPROVAL_MAX_AGE_H", "2"))
+    except ValueError:
+        return 2.0
+
+
+def _approval_refusal(esc: dict, vm_name: str) -> str | None:
+    """Why this card can't be executed in one click any more, or None."""
+    from datetime import datetime, timezone
+    etype = esc.get("escalation_type", "")
+    if etype == "unattributed_signal":
+        return ("Détection non attribuée : la carte est ancrée sur une VM que la détection "
+                "ne nomme pas. Identifier la VM concernée, puis agir depuis la CLI.")
+    if etype not in _APPROVABLE_TYPES:
+        return f"Ce type de carte ({etype or '?'}) ne s'exécute pas en un clic."
+    seen = esc.get("last_seen") or esc.get("timestamp") or ""
+    try:
+        seen_dt = datetime.fromisoformat(seen)
+    except ValueError:
+        return "Carte sans date lisible : relancer l'analyse plutôt que l'exécuter."
+    age_h = (datetime.now(timezone.utc) - seen_dt).total_seconds() / 3600
+    if age_h > _approval_max_age_h():
+        return (f"Carte vieille de {age_h:.1f} h : l'état de la VM a pu changer (restore, levée). "
+                "Acquitter et laisser la détection se reproduire, ou agir depuis la CLI.")
+    try:
+        from glorfindel import jobs as _jobs
+        rec = json.loads((_jobs._RECOVERY_DIR / f"{vm_name}.json").read_text())
+        if datetime.fromisoformat(rec["last_restore_at"]) > seen_dt:
+            return ("Un restore a eu lieu après cette carte : l'exécuter agirait sur une VM "
+                    "restaurée. Acquitter la carte.")
+    except (OSError, ValueError, KeyError):
+        pass
+    return None
+
+
 @app.post("/api/action/approve/{esc_id}")
 async def action_approve(esc_id: str, ip: str = "", scope: str = "vm") -> dict:
     """One-click approve for mode_hold escalations — executes the recommended action and acks.
@@ -818,6 +860,15 @@ async def action_approve(esc_id: str, ip: str = "", scope: str = "vm") -> dict:
     action = esc.get("action", "")
     resource_id = esc.get("resource_id", "")
     vm_name = resource_id.split("/")[-1]
+    refusal = _approval_refusal(esc, vm_name)
+    if refusal:
+        return {"error": refusal}
+    if action == "block_suspicious_ip" and ip:
+        from glorfindel.actions import single_host_ip
+        try:
+            ip = single_host_ip(ip)
+        except ValueError as e:
+            return {"error": str(e)}
 
     try:
         from glorfindel.actions import AzureConnector
@@ -850,6 +901,12 @@ async def action_approve(esc_id: str, ip: str = "", scope: str = "vm") -> dict:
             # Parameterised action — needs the IP. Prefer an operator-supplied IP (query
             # param), else read it from the escalation payload (`ip` or `action_params.ip`).
             block_ip = ip or esc.get("ip") or (esc.get("action_params") or {}).get("ip") or ""
+            if block_ip:
+                from glorfindel.actions import single_host_ip
+                try:
+                    block_ip = single_host_ip(block_ip)
+                except ValueError as e:
+                    return {"error": str(e)}
             if not block_ip:
                 # Escalation carries no IP (e.g. recorded before action_params) — ask the
                 # operator instead of refusing, so the current escalation is still actionable.

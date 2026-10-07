@@ -421,7 +421,8 @@ def run() -> None:
                             e = escs[0]
                             is_restore = (
                                 e["action"] == "restore_from_backup"
-                                or e.get("escalation_type") == "low_confidence"
+                                or (e.get("escalation_type") == "low_confidence"
+                                    and e.get("action") == "snapshot")
                             )
                             if is_restore:
                                 vm = e["resource_id"].split("/")[-1]

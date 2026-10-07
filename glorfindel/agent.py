@@ -1208,14 +1208,20 @@ def escalate_to_human(state: GlorfindelState) -> GlorfindelState:
             action_params=action_params,
         )
 
+    # An action that ran (verification failed, or it failed midway) keeps what its
+    # outcome says — verified, shadowed_by, uncovered NICs, drain — in the debug file
+    # and ChromaDB; it used to be replaced wholesale (third review, T14).
+    prior = state.get("outcome") or {}
+    kept = prior if escalation_type in ("verification_failed", "write_blocked", "action_failed") else {}
     return {
         **state,
         "outcome": {
+            **kept,
             "status": "escalated",
             "escalation_type": escalation_type,
             "reason": state["escalation_reason"],
             "action_pending": action,
-            "executed": False,
+            "executed": bool(kept.get("executed", False)),
         },
     }
 

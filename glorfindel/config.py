@@ -128,6 +128,9 @@ class IsolationConfig:
     """
     quarantine_nsg: bool = True
     quarantine_rg: str = ""
+    # CIDRs allowed IN to an isolated VM (Bastion subnet, investigation jump host),
+    # before the quarantine's deny: isolate while keeping investigation access.
+    forensic_sources: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -214,6 +217,7 @@ def load_glorfindel_config(path: str | Path | None = None) -> GlorfindelConfig:
     isolation = IsolationConfig(
         quarantine_nsg=bool(iso.get("quarantine_nsg", True)),
         quarantine_rg=str(iso.get("quarantine_rg", "") or ""),
+        forensic_sources=[str(x) for x in (iso.get("forensic_sources") or [])],
     )
 
     return GlorfindelConfig(

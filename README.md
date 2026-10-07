@@ -35,7 +35,7 @@ Open-source CDR for cloud infrastructure (Azure today; the LLM layer is provider
 
 **Autonomy — two independent gates.** First, a **trust ladder resolved per asset**: Glorfindel starts **observe-only** (`human_only`, the default — every action is recommended, nothing executes), and you grant it autonomy asset by asset as you learn to trust its reasoning. Second, a **hard safety line the graph enforces regardless of mode or LLM output**: destructive actions (restore, delete) always require human approval; reversible ones (isolate, block, snapshot) may run autonomously and are verified via Azure API. The two axes are orthogonal — even in an autonomous mode, destructive stays gated. *(Setup and the full mode table are in [Autonomy model](#autonomy-model) below.)*
 
-**Verified defense — the action is checked against Azure, not assumed.** An isolation is verified on every NIC, including whether a customer ALLOW rule is evaluated before the deny; sessions that were already open are cut (an NSG rule only stops *new* connections — measured); active isolations and blocks are re-read from Azure every minute, and a change made outside Glorfindel is alerted with who made it (activity log). Isolation is just-in-time: for the time of the incident each NIC carries Glorfindel's quarantine NSG, the customer's own NSG is set aside untouched and restored on release — a `terraform apply` neither sees nor reverts it (measured on the provider, see `docs/design/module-isolation-iac.md`). Before an incident, `glorfindel audit` checks the rights the response needs without writing anything (Azure permissions API).
+**Verified defense — the action is checked against Azure, not assumed.** An isolation is verified on every NIC, including whether a customer ALLOW rule is evaluated before the deny; sessions that were already open are cut (an NSG rule only stops *new* connections — measured); active isolations and blocks are re-read from Azure every minute, and a change made outside Glorfindel is alerted with who made it (activity log). Isolation is just-in-time: for the time of the incident each NIC carries Glorfindel's quarantine NSG, the customer's own NSG is set aside untouched and restored on release — a `terraform apply` neither sees nor reverts it (measured on the provider, see `docs/design/module-isolation-iac.md`). The quarantine also denies Azure's DNS and IMDS, which a deny-all leaves open — measured: before, an isolated VM still resolved names and could fetch a managed-identity token; after, neither, while Run Command (used to cut sessions) still works. Investigation sources can be let in (`isolation.forensic_sources`). Before an incident, `glorfindel audit` checks the rights the response needs without writing anything (Azure permissions API).
 
 Signals from different resources run in parallel threads; signals from the same resource are serialized with shared incident context.
 
@@ -640,7 +640,7 @@ The audit also checks **NSG precedence**: NSG rules apply the first match by asc
 ```bash
 pip install eregion[dev]
 pytest
-# 674 tests (~15s) — 0 Azure calls, 0 LLM calls, 0 writes to ~/.glorfindel
+# 676 tests (~15s) — 0 Azure calls, 0 LLM calls, 0 writes to ~/.glorfindel
 ```
 
 The suite is hermetic by construction: `tests/unit/conftest.py` redirects every `~/.glorfindel` path to a temp directory and ignores any local `glorfindel-config.yaml`. CI (`.github/workflows/ci.yml`) runs `ruff check` + `pytest` on Python 3.11 and 3.12.

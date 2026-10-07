@@ -169,8 +169,11 @@ def assess(resource_id: str, connector, quarantine_nsg: bool = True) -> dict:
 
     reasons.append(_reason(
         "unverified_layers", "info",
-        "Non vérifié : règles d'admin AVNM (« Always Allow ») et Azure Policy qui refuserait "
-        "l'échange de NSG (repli automatique sur les règles dans ce cas).", ""))
+        "Non vérifié : règles d'admin AVNM (« Always Allow ») ; Azure Policy qui refuserait "
+        "l'échange de NSG (repli automatique sur les règles) ; deny assignments, verrous de "
+        "ressource, PIM. Non tenable : une carte redéployée en Bicep/ARM, ou gérée par un "
+        "réconciliateur continu (Crossplane, Azure Service Operator), retire la quarantaine "
+        "— la réaffirmation alerte, mais ne peut pas la maintenir.", ""))
     return _verdict(vm, reasons)
 
 

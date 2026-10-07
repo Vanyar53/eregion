@@ -469,7 +469,7 @@ GLORFINDEL_DISCOVERY_RETENTION_H=8  # rétention d'une VM éteinte dans le regis
 ## Tests
 
 ```bash
-pytest                    # 678 tests (~15s), 0 appel Azure, 0 appel LLM, 0 écriture ~/.glorfindel/
+pytest                    # 680 tests (~15s), 0 appel Azure, 0 appel LLM, 0 écriture ~/.glorfindel/
                           # Hermétique par construction (conftest) : TOUS les chemins ~/.glorfindel redirigés
                           # vers tmp, et le glorfindel-config.yaml local ignoré (avant : avec une config locale,
                           # les tests de graphe lançaient de vraies requêtes KQL via `investigate`, suite 5× plus lente).

@@ -2122,3 +2122,27 @@ def test_agent_gates_by_default_except_in_dry_run(tmp_path, monkeypatch):
         GlorfindelAgent(connector=AzureConnector(dry_run=True), memory_path=str(tmp_path / f"m{dry}"),
                         incidents_path=str(tmp_path / f"i{dry}.jsonl"), model="x", dry_run=dry)
     assert len(built) == 1
+
+
+def test_a_failed_verification_keeps_what_it_found(tmp_incidents):
+    """escalate_to_human replaced the outcome wholesale: `verified` and `shadowed_by`
+    vanished from the debug file and ChromaDB (third review, T14)."""
+    from glorfindel.agent import escalate_to_human
+    state = _state(action="isolate_vm", escalate=True, escalation_reason="r", dry_run=True,
+                   outcome={"status": "isolated", "executed": True, "verified": False,
+                            "shadowed_by": [{"rule": "allow-ssh"}]})
+    out = escalate_to_human(state)["outcome"]
+    assert out["escalation_type"] == "verification_failed"
+    assert out["shadowed_by"] == [{"rule": "allow-ssh"}] and out["executed"] is True
+
+
+def test_bot_offers_restore_only_after_a_snapshot():
+    """A low_confidence card now also holds isolations: a one-click Restore there would
+    restore a VM nobody isolated (third review, T14)."""
+    pytest.importorskip("discord")
+    from glorfindel.bot import _cli_command, _make_action_button
+    held = {"id": "e1", "action": "isolate_vm", "escalation_type": "low_confidence",
+            "resource_id": _RESOURCE_ID}
+    assert _make_action_button(held) is None and "restore" not in _cli_command(held)
+    snap = {**held, "action": "snapshot"}
+    assert "restore" in _cli_command(snap)

@@ -633,6 +633,20 @@ const ESC_LABELS = {
   readiness_hold:      'reserves to confirm',
 };
 
+// An autonomous action a gate held back: recommended, NOT executed. It used to read
+// "VM isolated from network" as if done, with only an Ack (third review, T14). Say it
+// is held, and why, with the one-click approve path every held type deserves.
+const _HELD_TYPES = new Set(['mode_hold', 'low_confidence', 'uncharacterized_signal',
+                             'unattributed_signal', 'release_hold']);
+const _APPROVABLE = new Set(['isolate_vm', 'block_suspicious_ip', 'release_isolation', 'snapshot']);
+function _isHeld(e) {
+  return _HELD_TYPES.has(e.escalation_type) && _APPROVABLE.has(e.action)
+    && !(e.action === 'snapshot' && e.escalation_type === 'low_confidence');
+}
+function _heldWord(e) {
+  return e.escalation_type === 'mode_hold' ? 'pending approval' : 'held: ' + escLabel(e.escalation_type);
+}
+
 function actionLabel(action) {
   return ACTION_LABELS[action] || action;
 }
@@ -782,7 +796,7 @@ function _extendBtn(s, vmName) {
 function cliCommand(esc) {
   const rid = esc.resource_id;
   const id  = esc.id.slice(0, 8);
-  if (esc.escalation_type === 'mode_hold') {
+  if (_isHeld(esc)) {
     const vm = rid.split('/').pop();
     const ip = esc.ip || (esc.action_params && esc.action_params.ip) || '<ip>';
     const actionMap = {
@@ -803,7 +817,7 @@ function cliCommand(esc) {
   if (esc.escalation_type === 'verification_failed') {
     return `glorfindel revert ${rid} --yes\nglorfindel ack ${id}`;
   }
-  if (esc.escalation_type === 'low_confidence') {
+  if (esc.escalation_type === 'low_confidence' && esc.action === 'snapshot') {
     return `# Verify the snapshot, then if needed:\nglorfindel restore ${rid} --yes\nglorfindel ack ${id}`;
   }
   return `glorfindel ack ${id}`;
@@ -888,8 +902,8 @@ function openCommandModal(escId) {
   if (!esc) return;
   const cmd = cliCommand(esc);
   const isSnapshotPending = esc.action === 'snapshot' && esc.escalation_type === 'low_confidence';
-  const isCmdModeHold = esc.escalation_type === 'mode_hold';
-  const label = isCmdModeHold ? actionLabelVerb(esc.action) + ' — pending approval'
+  const isCmdModeHold = _isHeld(esc);
+  const label = isCmdModeHold ? actionLabelVerb(esc.action) + ' — ' + _heldWord(esc)
               : isSnapshotPending ? 'Snapshot recommended' : actionLabel(esc.action);
   document.getElementById('modal-title').textContent = '📋 ' + label;
   document.getElementById('modal-body').textContent = 'CLI command to run for this escalation:';
@@ -989,12 +1003,12 @@ function _groupEscs(escs) {
 function _renderEscGroup(group) {
   const e     = group[0]; // most recent / representative
   const isSnapshotPending = e.action === 'snapshot' && e.escalation_type === 'low_confidence';
-  const isModeHold        = e.escalation_type === 'mode_hold';
+  const isModeHold        = _isHeld(e);
   const isWriteBlocked    = e.escalation_type === 'write_blocked';
   const isActionFailed    = e.escalation_type === 'action_failed';
   const pct    = e.confidence ? Math.round(e.confidence * 100) + '%' : '';
   const label  = isModeHold
-    ? `${actionLabelVerb(e.action)}${pct ? ` (${pct})` : ''} — pending approval`
+    ? `${actionLabelVerb(e.action)}${pct ? ` (${pct})` : ''} — ${_heldWord(e)}`
     : isSnapshotPending  ? 'Snapshot recommended'
     : isWriteBlocked     ? `${actionLabelVerb(e.action) || e.action || '?'} — write blocked`
     : isActionFailed     ? `${actionLabelVerb(e.action) || e.action || '?'} — failed`
@@ -3012,14 +3026,14 @@ function showEscModal(vmName) {
     const e     = group[0];
     const ids   = group.map(g => g.id).join(','); // CSV — safe in onclick attrs, no quotes
     const count = group.length;
-    const isModeHold        = e.escalation_type === 'mode_hold';
+    const isModeHold        = _isHeld(e);
     const isSnapshotPending = e.action === 'snapshot' && e.escalation_type === 'low_confidence';
     const isWriteBlocked    = e.escalation_type === 'write_blocked';
     const isActionFailed    = e.escalation_type === 'action_failed';
     const isRule            = e.action === 'improve_detection' && e.proposal_id;
     const pct2  = e.confidence ? Math.round(e.confidence * 100) + '%' : '';
     const label = isModeHold
-      ? `${actionLabelVerb(e.action)}${pct2 ? ` (${pct2})` : ''} — pending approval`
+      ? `${actionLabelVerb(e.action)}${pct2 ? ` (${pct2})` : ''} — ${_heldWord(e)}`
       : isSnapshotPending ? 'Snapshot recommended'
       : isWriteBlocked    ? `${actionLabelVerb(e.action) || e.action || '?'} — write blocked`
       : isActionFailed    ? `${actionLabelVerb(e.action) || e.action || '?'} — failed`

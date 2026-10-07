@@ -61,7 +61,9 @@ def _cli_command(esc: dict) -> str:
             f"# Lire les réserves, puis les accepter :\n"
             f"glorfindel activate {rid}"
         )
-    if esc["escalation_type"] == "low_confidence":
+    # Restore only for its original case (detection timeout, snapshot taken): a
+    # low_confidence card now also holds isolations and blocks (third review, T14).
+    if esc["escalation_type"] == "low_confidence" and action == "snapshot":
         return (
             f"# Vérifier le snapshot, puis si nécessaire :\n"
             f"glorfindel restore {rid} --yes\n"
@@ -167,8 +169,9 @@ def _make_action_button(esc: dict) -> _ExecuteButton | None:
             discord.ButtonStyle.danger,
             ["revert", rid, "--yes"],
         )
-    if esc_type == "low_confidence":
-        # Detection timeout — snapshot taken, operator may want to restore
+    if esc_type == "low_confidence" and action == "snapshot":
+        # Detection timeout — snapshot taken, operator may want to restore. Not for an
+        # isolation or a block held for low confidence (third review, T14).
         return _ExecuteButton(
             esc, "🔄 Restore",
             discord.ButtonStyle.secondary,

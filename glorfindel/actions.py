@@ -3160,15 +3160,22 @@ def _state_file(directory: Path, ref: str) -> Path | None:
     name, rid = _vm_ref(ref)
     legacy = directory / f"{name}.json"
     if rid:
-        keyed = directory / f"{name}--{_rid_hash(rid)}.json"
-        if keyed.exists():
-            return keyed
+        # Lowercase name part (fourth review, Q9): the detection writes ids in lowercase,
+        # the CLI in their own case — one VM had two files on a case-sensitive file
+        # system. The original-case file of an earlier version is still read.
+        for keyed in (directory / f"{name.lower()}--{_rid_hash(rid)}.json",
+                      directory / f"{name}--{_rid_hash(rid)}.json"):
+            if keyed.exists():
+                return keyed
         if legacy.exists() and _file_rid(legacy) in ("", rid.rstrip("/").lower()):
             return legacy
         return None
     if legacy.exists():
         return legacy
-    keyed = sorted(directory.glob(f"{name}--*.json")) if directory.exists() else []
+    if not directory.exists():
+        return None
+    keyed = sorted({f for f in directory.glob("*--*.json")
+                    if _file_rid(f).rsplit("/", 1)[-1] == name.lower()})
     return keyed[0] if len(keyed) == 1 else None
 
 
@@ -3180,10 +3187,12 @@ def _write_state(directory: Path, ref: str, rid: str, payload) -> None:
     if not rid:
         _atomic_write_text(directory / f"{name}.json", json.dumps(payload))
         return
-    _atomic_write_text(directory / f"{name}--{_rid_hash(rid)}.json", json.dumps(payload))
-    legacy = directory / f"{name}.json"
-    if legacy.exists() and _file_rid(legacy) in ("", rid.rstrip("/").lower()):
-        legacy.unlink()
+    target = directory / f"{name.lower()}--{_rid_hash(rid)}.json"
+    _atomic_write_text(target, json.dumps(payload))
+    # Migrate this VM's older files: plain name, or keyed with the name's own case.
+    for old in (directory / f"{name}.json", directory / f"{name}--{_rid_hash(rid)}.json"):
+        if old != target and old.exists() and _file_rid(old) in ("", rid.rstrip("/").lower()):
+            old.unlink()
 
 
 def _save_isolation_state(vm_ref: str, state: dict) -> None:
@@ -3223,7 +3232,8 @@ def active_isolations() -> list[dict]:
         try:
             state = json.loads(f.read_text())
             if state.get("resource_id"):
-                result.append({**state, "vm_name": f.stem.split("--")[0], "state_key": f.stem})
+                result.append({**state, "vm_name": state["resource_id"].rstrip("/").rsplit("/", 1)[-1],
+                               "state_key": f.stem})
         except Exception:
             pass
     return result
@@ -3317,7 +3327,8 @@ def active_blocks() -> list[dict]:
     for f in _BLOCK_STATE_DIR.glob("*.json"):
         try:
             for entry in json.loads(f.read_text()):
-                result.append({**entry, "vm_name": f.stem.split("--")[0], "state_key": f.stem})
+                vm = (entry.get("resource_id") or "").rstrip("/").rsplit("/", 1)[-1] or f.stem
+                result.append({**entry, "vm_name": vm, "state_key": f.stem})
         except Exception:
             pass
     return result

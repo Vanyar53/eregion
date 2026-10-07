@@ -207,3 +207,27 @@ def test_decide_gate_checks_an_unseen_vm_on_demand():
     broken.check_permissions.side_effect = RuntimeError("boom")
     mode, hold = readiness.ReadinessGate(broken)("other", _RID.replace("/vm", "/other"), "non_disruptive")
     assert mode == "human_only" and hold["reason"] == "not_checked"
+
+
+# ── Quatrième passe (Q3) : un homonyme n'hérite pas du verdict de l'autre ─────────────
+
+def test_a_homonym_does_not_inherit_ready_or_acknowledged_reserves():
+    a = _RID.replace("/vm", "/web")
+    b = a.replace("/rg/", "/rg-b/")
+    readiness.record_assessment(readiness._verdict("web", []), a)
+    readiness._update(a, active_since="t")
+    assert readiness.effective_mode(a, "non_disruptive")[0] == "non_disruptive"
+    mode, hold = readiness.effective_mode(b, "non_disruptive")
+    assert mode == "human_only" and hold["reason"] == "not_checked"      # never checked itself
+    readiness.record_assessment(readiness._verdict("web", [readiness._reason("no_drain", "reserve", "x")]), b)
+    assert readiness.effective_mode("web", "non_disruptive")[0] == "human_only"   # ambiguous name: held
+
+
+def test_a_name_keyed_record_is_read_for_its_own_vm_and_migrated():
+    import glorfindel.readiness as rd
+    rd._STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    rd._write({"vm": {"vm": "vm", "resource_id": _RID, "verdict": "ready", "reserve_codes": [], "reasons": []}})
+    assert rd.effective_mode(_RID, "non_disruptive")[0] == "non_disruptive"
+    assert rd.effective_mode(_RID.replace("/rg/", "/rg-b/"), "non_disruptive")[0] == "human_only"
+    rd.acknowledge(_RID, ["no_drain"], by="test")
+    assert rd._key(_RID) in rd._read() and "vm" not in rd._read()

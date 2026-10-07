@@ -1251,8 +1251,8 @@ def activate(vm: str, yes: bool):
         return
     set_asset_mode(a["vm"], "non_disruptive")
     readiness.record_assessment(a, rid)
-    readiness.acknowledge(a["vm"], a["reserve_codes"], by="cli")
-    readiness.resolve_card(a["vm"])
+    readiness.acknowledge(rid, a["reserve_codes"], by="cli")
+    readiness.resolve_card(rid)
     console.print(f"[green]✓ {a['vm']}: autonomous response on (non_disruptive).[/green]")
 
 
@@ -1314,7 +1314,7 @@ def list_active():
 
         if _autonomy is not None:
             from glorfindel.readiness import effective_mode
-            _mode, _hold = effective_mode(vm_short, _autonomy.resolve(vm_short))
+            _mode, _hold = effective_mode(resource_id, _autonomy.resolve(vm_short))
             _mode_color = "yellow" if _mode == "human_only" else "green"
             _held = (f"  [dim](configured {_hold['configured']}, held: {_hold['message']}"
                      f" → glorfindel activate {vm_short})[/dim]") if _hold else ""

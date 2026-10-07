@@ -356,7 +356,8 @@ infra/terraform/              → module Celebrimbor : infra de test Azure modul
   bot_posted.json             → IDs escalades déjà postées (évite doublons au redémarrage du bot)
   bot_threads.json            → resource_id → thread_id Discord (persistance entre redémarrages)
   rule_status.json            → état de polling des règles (last_poll, last_match, match_count, last_error)
-  readiness.json              → verrou L6 par VM : dernier contrôle de préparation + réserves acceptées
+  readiness.json              → verrou L6 par VM, clé `nom--hash(ID)` (quatrième passe Q3 : un homonyme héritait du
+                                verdict « prête ») ; un nom seul ambigu ne résout rien → VM retenue : dernier contrôle de préparation + réserves acceptées
                                 (active_since, alerted) — écrit par le watch (tracker) et la War Room
   discovered_assets.json      → cache assets découverts (AssetRegistry) — survit aux redémarrages
   active_jobs/<vm>.json       → état persisté du job snapshot/restore en cours (partagé CLI/War Room)
@@ -479,7 +480,7 @@ GLORFINDEL_DISCOVERY_RETENTION_H=8  # rétention d'une VM éteinte dans le regis
 ## Tests
 
 ```bash
-pytest                    # 701 tests (~15s), 0 appel Azure, 0 appel LLM, 0 écriture ~/.glorfindel/
+pytest                    # 704 tests (~15s), 0 appel Azure, 0 appel LLM, 0 écriture ~/.glorfindel/
                           # Hermétique par construction (conftest) : TOUS les chemins ~/.glorfindel redirigés
                           # vers tmp, et le glorfindel-config.yaml local ignoré (avant : avec une config locale,
                           # les tests de graphe lançaient de vraies requêtes KQL via `investigate`, suite 5× plus lente).

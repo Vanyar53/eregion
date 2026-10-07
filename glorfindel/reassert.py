@@ -59,14 +59,14 @@ def _mark_alerted(vm: str, now: str) -> None:
         _save_isolation_state(vm, {**state, "drift_alerted_at": now})
 
 
-def _mode(autonomy, vm_name: str) -> str:
+def _mode(autonomy, vm_name: str, ref: str = "") -> str:
     """The EFFECTIVE mode: a VM configured autonomous but held by its readiness (L6)
     gets an alert, not a re-application."""
     try:
         if autonomy is None:
             return "human_only"
         from glorfindel.readiness import effective_mode
-        return effective_mode(vm_name, autonomy.resolve(vm_name))[0]
+        return effective_mode(ref or vm_name, autonomy.resolve(vm_name))[0]
     except Exception:
         return "human_only"
 
@@ -163,7 +163,7 @@ def _reassert_isolation(connector, autonomy, vm: str, report: list[dict], ref: s
         # (validation run, 2026-10-06).
         return
     who = _who_changed(connector, iso)
-    if iso.get("reasserted_at") or _mode(autonomy, vm) == "human_only":
+    if iso.get("reasserted_at") or _mode(autonomy, vm, ref) == "human_only":
         reason = (
             f"L'isolation de {vm} a disparu d'Azure (règles ou NSG de quarantaine retirés)"
             + (" une deuxième fois (déjà reposée le " + iso["reasserted_at"] + ")"
@@ -228,7 +228,7 @@ def _reassert_block(connector, autonomy, vm: str, ip: str, report: list[dict], r
         return
     if b.get("drift_alerted_at"):
         return                      # one alert per disappearance (see isolations)
-    if b.get("reasserted_at") or _mode(autonomy, vm) == "human_only":
+    if b.get("reasserted_at") or _mode(autonomy, vm, ref) == "human_only":
         reason = (f"Le blocage de {ip} sur {vm} a disparu d'Azure"
                   + (" une deuxième fois" if b.get("reasserted_at") else "")
                   + " — l'IP n'est plus bloquée. Glorfindel ne le repose pas : "

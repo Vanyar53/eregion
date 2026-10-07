@@ -2717,3 +2717,16 @@ def test_precedence_at_rest_checks_isolation_on_a_dedicated_nsg_too(monkeypatch)
     connector._network = net
     issues = connector._precedence_issues([_nic_target(scope="nic")])
     assert {i["action"] for i in issues} >= {"isolate_vm"}
+
+
+def test_state_files_ignore_the_ids_case_and_handle_double_dashes():
+    """Detection writes ids in lowercase, the CLI in their own case: one VM had two
+    state files on a case-sensitive file system; `web--01` was cut at `--` (fourth review, Q9)."""
+    import glorfindel.actions as actions
+    rid = _RID.replace("/vm", "/Web--01")
+    actions._save_isolation_state(rid, {"resource_id": rid})
+    actions._save_isolation_state(rid.lower(), {"resource_id": rid.lower(), "verified_at": "t"})
+    assert len(list(actions._ISOLATION_STATE_DIR.glob("*.json"))) == 1
+    assert actions._load_isolation_state(rid)["verified_at"] == "t"
+    assert [i["vm_name"] for i in actions.active_isolations()] == ["web--01"]
+    assert actions._load_isolation_state("Web--01") is not None

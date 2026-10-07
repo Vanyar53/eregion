@@ -2784,7 +2784,9 @@ def test_an_old_mixed_case_file_is_found_and_migrated_and_never_resurrects():
     old = d / f"VM-Foo--{actions._rid_hash(rid)}.json"
     old.write_text(json.dumps({"resource_id": rid, "placements": [{"nic_id": "n", "original_nsg_id": "o"}]}))
     assert actions._load_isolation_state(rid.lower())["placements"][0]["original_nsg_id"] == "o"
-    assert actions.migrate_state_files() == 1
-    assert [f.name for f in d.glob("*.json")] == [f"vm-foo--{actions._rid_hash(rid)}.json"]
+    # Linux renames it (1); on a case-insensitive disk it already IS the lowercase file (0).
+    assert actions.migrate_state_files() == (0 if _case_insensitive(d) else 1)
+    assert [f.name.lower() for f in d.glob("*.json")] == [f"vm-foo--{actions._rid_hash(rid)}.json"]
+    assert actions._load_isolation_state(rid)["placements"][0]["original_nsg_id"] == "o"
     actions._clear_isolation_state(rid)
     assert actions._load_isolation_state(rid) is None and list(d.glob("*.json")) == []

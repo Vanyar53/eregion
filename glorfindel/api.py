@@ -710,8 +710,8 @@ async def activate(vm_name: str, body: dict | None = None) -> dict:
     from glorfindel import readiness as _rd
     rid = _resolve_vm(vm_name) or ""
     await asyncio.to_thread(_rd.record_assessment, assessment, rid)
-    await asyncio.to_thread(_rd.acknowledge, assessment["vm"], assessment["reserve_codes"], "war-room")
-    await asyncio.to_thread(_rd.resolve_card, assessment["vm"])
+    await asyncio.to_thread(_rd.acknowledge, rid or assessment["vm"], assessment["reserve_codes"], "war-room")
+    await asyncio.to_thread(_rd.resolve_card, rid or assessment["vm"])
     return {"ok": True, "vm": vm_name, "mode": "non_disruptive", "path": str(path),
             "acknowledged": assessment["reserve_codes"]}
 

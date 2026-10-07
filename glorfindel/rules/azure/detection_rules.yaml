@@ -57,13 +57,16 @@ rules:
         | where ObjectName == "Logical Disk" or ObjectName == "LogicalDisk"
         | where CounterName == "Disk Write Bytes/sec"
         | project TimeGenerated, Computer, _ResourceId, InstanceName, CounterValue
-        | order by Computer asc, InstanceName asc, TimeGenerated asc
-        | extend Same = prev(Computer) == Computer and prev(InstanceName) == InstanceName
+        // One series per VM by its resource id (fourth review, Q3): by Computer, two
+        // homonymous VMs mixed their samples and one could carry the other's MaxWrite.
+        | extend Vm = iff(isnotempty(_ResourceId), tolower(_ResourceId), Computer)
+        | order by Vm asc, InstanceName asc, TimeGenerated asc
+        | extend Same = prev(Vm) == Vm and prev(InstanceName) == InstanceName
         | extend Gap = iff(Same, TimeGenerated - prev(TimeGenerated), timespan(null)),
                  PrevValue = iff(Same, prev(CounterValue), real(null));
       samples
-      | join kind=leftouter (samples | summarize Step = min(Gap) by Computer, InstanceName)
-          on Computer, InstanceName
+      | join kind=leftouter (samples | summarize Step = min(Gap) by Vm, InstanceName)
+          on Vm, InstanceName
       | extend Fine = isnotnull(Step) and Step <= 25s
       | extend Rate = iff(Fine, iff(Gap <= 25s, (CounterValue + PrevValue) / 2, real(null)), CounterValue),
                Peak = iff(Fine, max_of(CounterValue, PrevValue), CounterValue)
@@ -130,7 +133,7 @@ rules:
       | project TimeGenerated, Computer, _ResourceId, SyslogMessage
       // One row per VM, not `limit 1`: the limit ran on the server before the per-VM
       // filter, so a benign sudo on another VM hid the attack (third review, T7).
-      | summarize arg_max(TimeGenerated, *) by Computer
+      | summarize arg_max(TimeGenerated, *) by Computer, _ResourceId
 
   - name: t1136-001-local-account-creation-linux-v1
     description: >

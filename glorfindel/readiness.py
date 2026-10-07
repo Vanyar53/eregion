@@ -211,8 +211,32 @@ def activation_refusal(assessment: dict, acknowledged: list[str] | None) -> str 
 
 # ── Store: last assessment + what the operator acknowledged, per VM ──────────────
 
-def _key(vm: str) -> str:
-    return (vm or "").rstrip("/").split("/")[-1].lower()
+def _key(ref: str) -> str:
+    """`name--hash(id)` for a resource id, the bare name otherwise. Keyed by name alone,
+    a homonym in another resource group inherited the other VM's "ready" verdict and
+    acknowledged reserves — never checked itself (fourth review, Q3)."""
+    from glorfindel.actions import _rid_hash, _vm_ref
+    name, rid = _vm_ref(ref or "")
+    return f"{name.lower()}--{_rid_hash(rid)}" if rid else name.lower()
+
+
+def _find(data: dict, ref: str) -> str | None:
+    """The key of this VM's record. By id: its own key, or an older name-keyed record
+    that belongs to it. By name alone: the only record of that name — an ambiguous name
+    resolves to nothing, and the VM is held (never a guess)."""
+    from glorfindel.actions import _vm_ref
+    name, rid = _vm_ref(ref or "")
+    name = name.lower()
+    if rid:
+        if _key(ref) in data:
+            return _key(ref)
+        legacy = data.get(name)
+        if isinstance(legacy, dict) and str(legacy.get("resource_id") or "").rstrip("/").lower() in (
+                "", rid.rstrip("/").lower()):
+            return name
+        return None
+    hits = [k for k in data if k == name or k.split("--")[0] == name]
+    return hits[0] if len(hits) == 1 else None
 
 
 def _now() -> str:
@@ -252,23 +276,31 @@ def _write(data: dict) -> None:
     os.replace(tmp, _STATE_FILE)
 
 
-def _update(name: str, /, **fields) -> dict:
-    """Merge `fields` into the VM's record (None removes a field). Returns the record."""
+def _update(ref: str, /, **fields) -> dict:
+    """Merge `fields` into the VM's record (None removes a field). Returns the record.
+    Written under the id key when `ref` is a resource id (an older name-keyed record
+    of the same VM is moved there)."""
     with _locked():
         data = _read()
-        rec = dict(data.get(_key(name)) or {})
+        found = _find(data, ref)
+        rec = dict(data.get(found) or {}) if found else {}
+        target = _key(ref) if "/" in (ref or "") else (found or _key(ref))
+        if found and found != target:
+            data.pop(found, None)
         for k, v in fields.items():
             if v is None:
                 rec.pop(k, None)
             else:
                 rec[k] = v
-        data[_key(name)] = rec
+        data[target] = rec
         _write(data)
         return rec
 
 
-def _raw(vm: str) -> dict:
-    rec = _read().get(_key(vm))
+def _raw(ref: str) -> dict:
+    data = _read()
+    found = _find(data, ref)
+    rec = data.get(found) if found else None
     return rec if isinstance(rec, dict) else {}
 
 
@@ -284,7 +316,7 @@ def all_records() -> dict:
 
 def record_assessment(assessment: dict, resource_id: str = "") -> dict:
     return _update(
-        assessment["vm"], vm=assessment["vm"], resource_id=resource_id or None,
+        resource_id or assessment["vm"], vm=assessment["vm"], resource_id=resource_id or None,
         verdict=assessment["verdict"], reserve_codes=list(assessment["reserve_codes"]),
         reasons=assessment["reasons"], checked_at=_now(), recheck=None)
 
@@ -346,13 +378,14 @@ class ReadinessGate:
         self._connector = connector
 
     def __call__(self, vm: str, resource_id: str, configured: str) -> tuple[str, dict]:
-        if configured != "human_only" and get(vm) is None and resource_id:
+        ref = resource_id or vm
+        if configured != "human_only" and get(ref) is None and resource_id:
             try:
                 record_assessment(
                     assess(resource_id, self._connector, _quarantine_enabled()), resource_id)
             except Exception as exc:
                 log.warning("readiness: %s not checked (%s) — held in human_only", vm, exc)
-        return effective_mode(vm, configured)
+        return effective_mode(ref, configured)
 
 
 # ── The tracker: checks VMs as they are discovered, then at the posture cadence ──
@@ -361,11 +394,18 @@ def _card_id(vm: str) -> str:
     return f"readiness-{_key(vm)}"
 
 
-def resolve_card(vm: str) -> None:
-    """Close the VM's pending 'autonomous response held' card, if any."""
+def resolve_card(ref: str) -> None:
+    """Close the VM's pending 'autonomous response held' card, if any — matched on the
+    resource id when given (a homonym's card stays open), else on the name."""
     from glorfindel import escalations
+    from glorfindel.actions import _vm_ref
+    name, rid = _vm_ref(ref or "")
     for e in escalations.pending():
-        if e.get("signal_id") == _card_id(vm):
+        if e.get("escalation_type") != "readiness_hold":
+            continue
+        erid = (e.get("resource_id") or "").rstrip("/")
+        if (rid and erid.lower() == rid.rstrip("/").lower()) or (
+                not rid and erid.rsplit("/", 1)[-1].lower() == name.lower()):
             escalations.resolve(e["id"])
 
 
@@ -412,9 +452,9 @@ class ReadinessTracker:
             vm = rid.rstrip("/").split("/")[-1]
             configured = autonomy.resolve(vm)
             if configured == "human_only":
-                self._stand_down(vm)
+                self._stand_down(rid)
                 continue
-            rec = _raw(vm)
+            rec = _raw(rid)
             if self._due(rec):
                 try:
                     assessment = assess(rid, self._connector, quarantine_nsg=quarantine)
@@ -431,7 +471,7 @@ class ReadinessTracker:
         new = set(assessment["reserve_codes"]) - set(prev.get("acknowledged") or [])
         if (prev.get("active_since") and assessment["verdict"] == "reserve"
                 and new and new <= _INCONCLUSIVE and not prev.get("recheck")):
-            _update(assessment["vm"], recheck=True)      # confirm on the next pass
+            _update(rid, recheck=True)      # confirm on the next pass
             return
         record_assessment(assessment, rid)
 
@@ -443,13 +483,13 @@ class ReadinessTracker:
             _update(vm, alerted=None, active_since=None)
 
     def _transition(self, vm: str, rid: str, configured: str) -> dict | None:
-        rec = _raw(vm)
-        hold = hold_for(vm, configured)
+        rec = _raw(rid)
+        hold = hold_for(rid, configured)
         if not hold:
             if rec.get("active_since"):
                 return None
-            resolve_card(vm)
-            _update(vm, active_since=_now(), alerted=None)
+            resolve_card(rid)
+            _update(rid, active_since=_now(), alerted=None)
             log.info("readiness: %s now acts autonomously (%s)", vm,
                      "ready" if rec.get("verdict") == "ready" else "reserves confirmed")
             return {"vm": vm, "event": "activated"}
@@ -458,10 +498,10 @@ class ReadinessTracker:
         if rec.get("alerted") == signature and not was_active:
             return None                      # one card per situation, not one per pass
         if was_active:
-            _update(vm, active_since=None, demoted_at=_now())
+            _update(rid, active_since=None, demoted_at=_now())
         if hold["reason"] != "not_checked" and not set(hold["codes"]) & _SILENT:
             self._alert(vm, rid, hold, rec, was_active)
-        _update(vm, alerted=signature)
+        _update(rid, alerted=signature)
         log.warning("readiness: %s held in human_only (%s)", vm, hold["message"])
         return {"vm": vm, "event": "demoted" if was_active else "held", "hold": hold}
 
@@ -482,7 +522,7 @@ class ReadinessTracker:
         if hold["reason"] != "not_ready":
             steps.append(f"Lire et confirmer les réserves : War Room (Activer) ou "
                          f"`glorfindel activate {vm}`.")
-        resolve_card(vm)        # a new situation is a new card (and a new notification)
+        resolve_card(rid)       # a new situation is a new card (and a new notification)
         escalations.record(
             signal_id=_card_id(vm), resource_id=rid, action="activate_autonomy",
             escalation_type="readiness_hold", reason=f"{lead} {detail}".strip(),

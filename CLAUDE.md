@@ -149,6 +149,7 @@ La gate destructive est nécessaire mais pas suffisante : le persona sans SOC cr
 - `store_cycle` logue `resolved_autonomy_mode` (cycle + debug.jsonl) — trail d'audit.
 - `glorfindel watch --mode <m>` surcharge le défaut **global** d'une session (les règles par-asset restent prioritaires). `glorfindel list` affiche le mode résolu par VM. Warning au démarrage si `human_only` sans webhook/bot (gap de process : détection sans réponse tant qu'un humain n'agit pas).
 - ⚠️ **Défaut `human_only`** : les runs gate autonomes (T1486/T1548) nécessitent `--mode non_disruptive` ou une section `autonomy` dans le config live.
+- **Activation par VM (lot L6, 2026-10-07)** : passer une VM en `non_disruptive` depuis la War Room ouvre un **contrôle de préparation** (`glorfindel/readiness.py`, `GET /api/readiness/<vm>`, rien n'est écrit) : verdict `ready` / `reserve` / `not_ready` + raisons à code stable (droits via l'API de permissions, repli sur les règles si les droits du NSG de quarantaine manquent, sessions non coupées sans `runCommand` ou sous Windows, allow qui passent avant un blocage, NIC/subnet sans NSG ; AVNM et Azure Policy signalés non vérifiés). `POST /api/activate/<vm>` **recalcule** le verdict et refuse une VM pas prête ou dont une réserve n'a pas été confirmée (`acknowledged`) ; `POST /api/autonomy/<vm>` avec `non_disruptive` passe par la même vérification (retour à `human_only` : direct). Aucune VM ne quitte `human_only` sans que ses réserves aient été montrées. Banc : gondolin `ready`.
 - **Gate validée 2026-06-11** : T1486 human_only → `mode_hold` (NSG intact, approve War Room → `isolate_vm` exécuté) ✅ ; T1486 non_disruptive → `isolate_vm` autonome, `resolved_autonomy_mode=non_disruptive` dans debug.jsonl ✅. War Room : badge mode par VM, dropdown per-asset (hot-pickup `b7af4cc`), approve & execute (`/api/action/approve/{esc_id}`).
 
 ### War Room — exposition (revue 2026-10)
@@ -463,7 +464,7 @@ GLORFINDEL_DISCOVERY_RETENTION_H=8  # rétention d'une VM éteinte dans le regis
 ## Tests
 
 ```bash
-pytest                    # 623 tests (~15s), 0 appel Azure, 0 appel LLM, 0 écriture ~/.glorfindel/
+pytest                    # 633 tests (~15s), 0 appel Azure, 0 appel LLM, 0 écriture ~/.glorfindel/
                           # Hermétique par construction (conftest) : TOUS les chemins ~/.glorfindel redirigés
                           # vers tmp, et le glorfindel-config.yaml local ignoré (avant : avec une config locale,
                           # les tests de graphe lançaient de vraies requêtes KQL via `investigate`, suite 5× plus lente).

@@ -754,6 +754,15 @@ class AzureConnector(CloudConnector):
         except Exception as e:
             return {"ok": False, "error": _first_line(e)[:_ERR_MAX]}
 
+    def vm_os(self, resource_id: str) -> str:
+        """"linux" / "windows" (lowercase os type of the OS disk), "" if unknown."""
+        if self.dry_run:
+            return ""
+        self._ensure_clients()
+        rg, vm_name = _parse_vm_resource_id(resource_id)
+        vm = self._compute.virtual_machines.get(rg, vm_name)
+        return _enum_text(getattr(getattr(vm.storage_profile, "os_disk", None), "os_type", ""))
+
     def recent_changes(self, resource_uri: str, minutes: int = 60) -> list[str]:
         """Who wrote this resource lately, from the Azure activity log (best effort, a
         few minutes behind). Explains an alert — never used to detect: Azure itself is

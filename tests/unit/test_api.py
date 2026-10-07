@@ -158,3 +158,21 @@ def test_approved_release_is_verified_after_the_rules_are_removed(client, monkey
     r = client.post(f"/api/action/approve/{esc_id}")
     assert r.json()["verification"]["verified"] is True
     conn.verify_release.assert_called_once_with(rid)
+
+
+def test_activation_refuses_reserves_that_were_not_shown(client, monkeypatch):
+    """L6: no VM leaves human_only without its reserves having been shown — enforced
+    by the server, also on the older /api/autonomy route."""
+    from glorfindel import readiness
+    assessment = readiness._verdict("vm", [readiness._reason("no_drain", "reserve", "sessions survive")])
+    monkeypatch.setattr(api, "_assess_vm", lambda vm: assessment)
+    switched = []
+    monkeypatch.setattr("glorfindel.config.set_asset_mode", lambda vm, mode: switched.append((vm, mode)) or "cfg.yaml")
+
+    assert "no_drain" in client.post("/api/activate/vm", json={"acknowledged": []}).json()["error"]
+    assert "error" in client.post("/api/autonomy/vm", json={"mode": "non_disruptive"}).json()
+    assert switched == []
+    r = client.post("/api/activate/vm", json={"acknowledged": ["no_drain"]}).json()
+    assert r["ok"] and switched == [("vm", "non_disruptive")]
+    client.post("/api/autonomy/vm", json={"mode": "human_only"})          # back: no check
+    assert switched[-1] == ("vm", "human_only")

@@ -638,10 +638,71 @@ async def get_job_status(vm_name: str, refresh: bool = False) -> dict:
 _CFG_READONLY_MSG = "Config file is read-only — edit glorfindel-config.yaml directly (or remount without :ro)"
 
 
+def _resolve_vm(vm_name: str) -> str | None:
+    """resource_id of a VM by name: detection rules first, then discovered assets."""
+    rid = _find_resource_id(vm_name)
+    if rid:
+        return rid
+    from glorfindel.discovery import AssetRegistry
+    for asset in AssetRegistry().all():
+        if asset.name == vm_name or asset.resource_id.split("/")[-1] == vm_name:
+            return asset.resource_id
+    return None
+
+
+def _assess_vm(vm_name: str) -> dict:
+    from glorfindel.actions import AzureConnector
+    from glorfindel.readiness import assess
+    rid = _resolve_vm(vm_name)
+    if not rid:
+        return {"error": f"resource_id not found for {vm_name}"}
+    try:
+        from glorfindel.config import load_glorfindel_config
+        quarantine = load_glorfindel_config().isolation.quarantine_nsg
+    except Exception:
+        quarantine = True
+    return assess(rid, AzureConnector(dry_run=False), quarantine_nsg=quarantine)
+
+
+@app.get("/api/readiness/{vm_name}")
+async def readiness(vm_name: str) -> dict:
+    """Can Glorfindel act on this VM? Verdict (ready / reserve / not_ready) and reasons,
+    computed from Azure without writing anything — what the activation screen shows."""
+    return await asyncio.to_thread(_assess_vm, vm_name)
+
+
+@app.post("/api/activate/{vm_name}")
+async def activate(vm_name: str, body: dict | None = None) -> dict:
+    """Switch a VM to autonomous response (non_disruptive). Recomputes the readiness
+    verdict and refuses a VM that isn't ready, or one whose reserves were not all
+    acknowledged (`acknowledged`: the reserve codes the operator was shown)."""
+    from glorfindel.readiness import activation_refusal
+    assessment = await asyncio.to_thread(_assess_vm, vm_name)
+    if "error" in assessment:
+        return assessment
+    refusal = activation_refusal(assessment, (body or {}).get("acknowledged"))
+    if refusal:
+        return {"error": refusal, "readiness": assessment}
+    try:
+        from glorfindel.config import set_asset_mode
+        path = await asyncio.to_thread(set_asset_mode, vm_name, "non_disruptive")
+    except OSError:
+        return {"error": _CFG_READONLY_MSG}
+    except Exception as e:
+        return {"error": str(e)}
+    return {"ok": True, "vm": vm_name, "mode": "non_disruptive", "path": str(path),
+            "acknowledged": assessment["reserve_codes"]}
+
+
 @app.post("/api/autonomy/{vm_name}")
 async def set_autonomy_mode(vm_name: str, body: dict) -> dict:
-    """Set the autonomy mode for an asset and persist to glorfindel-config.yaml."""
+    """Set the autonomy mode for an asset and persist to glorfindel-config.yaml.
+
+    Switching TO autonomous response goes through the readiness check, like
+    /api/activate: no VM leaves human_only without its reserves having been shown."""
     mode = body.get("mode", "")
+    if mode == "non_disruptive":
+        return await activate(vm_name, body)
     try:
         from glorfindel.config import set_asset_mode
         path = await asyncio.to_thread(set_asset_mode, vm_name, mode)
@@ -864,19 +925,7 @@ async def audit_resource(vm_name: str) -> dict:
     from glorfindel import audit as _audit
     from glorfindel.actions import AzureConnector
 
-    resource_id = _find_resource_id(vm_name)
-    if not resource_id:
-        rules_candidates = [
-            Path("glorfindel/rules/azure/detection_rules.yaml"),
-            Path(__file__).parent / "rules" / "azure" / "detection_rules.yaml",
-        ]
-        rp = next((p for p in rules_candidates if p.exists()), None)
-        if rp:
-            from glorfindel.discovery import AssetRegistry
-            for asset in AssetRegistry().all():
-                if asset.name == vm_name or asset.resource_id.split("/")[-1] == vm_name:
-                    resource_id = asset.resource_id
-                    break
+    resource_id = _resolve_vm(vm_name)
     if not resource_id:
         return {"error": f"resource_id not found for {vm_name}"}
 

@@ -1,0 +1,41 @@
+name: Invariants (deep)
+
+# The invariant tests (tests/unit/test_invariants.py) run 60 random sequences on every
+# push. Every night, thousands: new seeds each time, on both kinds of file system. A
+# failure prints the shortest sequence that breaks a property — replay it by hand.
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      examples:
+        description: "Number of random sequences"
+        default: "5000"
+
+permissions:
+  contents: read
+
+jobs:
+  invariants:
+    name: invariants (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: python -m pip install -e ".[dev]"
+
+      - name: Isolation, release, reassertion, crashes
+        env:
+          GLORFINDEL_INVARIANT_EXAMPLES: ${{ inputs.examples || '5000' }}
+          GLORFINDEL_INVARIANT_STATS: "1"
+        run: python -m pytest tests/unit/test_invariants.py -q -s

@@ -59,4 +59,4 @@ jobs:
         run: python -m pip install -e ".[dev]"
 
       - name: State and identity tests
-        run: python -m pytest tests/unit/test_glorfindel.py tests/unit/test_readiness.py tests/unit/test_reassert.py -q
+        run: python -m pytest tests/unit/test_glorfindel.py tests/unit/test_readiness.py tests/unit/test_reassert.py tests/unit/test_invariants.py -q

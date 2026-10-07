@@ -57,6 +57,7 @@ dev = [
     "pytest>=8.0",
     "pytest-cov>=5.0",
     "pytest-mock>=3.12",
+    "hypothesis>=6.100",     # invariant tests (tests/unit/test_invariants.py)
     "ruff==0.15.14",
 ]
 

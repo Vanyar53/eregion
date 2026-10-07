@@ -2602,3 +2602,30 @@ def test_an_older_quarantine_nsg_gets_the_platform_rules(monkeypatch):
     connector._ensure_quarantine_nsg("westeurope", "rg")
     assert {c.args[2] for c in net.security_rules.begin_create_or_update.call_args_list} == {
         "glorfindel-quarantine-deny-dns", "glorfindel-quarantine-deny-imds"}
+
+
+def test_neutralized_only_when_the_harmless_command_finished(monkeypatch):
+    """result(timeout) returns at the deadline without raising (third review, T13)."""
+    connector, posted = _restore_ready(monkeypatch)
+    connector._compute.virtual_machines.begin_run_command.return_value.done.return_value = False
+    out = connector.restore_from_backup(_RID, vault="rsv", wait=False, staging_storage="st")
+    assert out["run_command_neutralized"] is False and "600" in out["run_command_error"]
+
+
+def test_other_replayable_scripts_hold_the_release(monkeypatch):
+    """A CustomScript extension or a managed Run Command (v2) replays like Run Command
+    v1 on a restored disk: Glorfindel can't vouch for them (third review, T13)."""
+    from types import SimpleNamespace
+    connector, posted = _restore_ready(monkeypatch)
+    def ext(name, publisher, typ):      # the shape azure-mgmt-compute 38 returns (measured)
+        d = {"name": name, "type": "Microsoft.Compute/virtualMachines/extensions",
+             "properties": {"publisher": publisher, "type": typ}}
+        return SimpleNamespace(name=name, publisher=publisher, as_dict=lambda: d)
+    connector._compute.virtual_machine_extensions.list.return_value = SimpleNamespace(value=[
+        ext("AzureMonitorLinuxAgent", "Microsoft.Azure.Monitor", "AzureMonitorLinuxAgent"),
+        ext("setup", "Microsoft.Azure.Extensions", "CustomScript")])
+    connector._compute.virtual_machine_run_commands.list_by_virtual_machine.return_value = [
+        SimpleNamespace(name="nightly")]
+    out = connector.restore_from_backup(_RID, vault="rsv", wait=False, staging_storage="st")
+    assert out["run_command_neutralized"] is False
+    assert out["replay_vectors"] == ["extension setup", "run command managé nightly"]

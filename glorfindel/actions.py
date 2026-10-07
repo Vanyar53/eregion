@@ -1971,7 +1971,18 @@ class AzureConnector(CloudConnector):
             cmd = RunCommandInput(command_id="RunShellScript",
                                   script=["echo 'glorfindel: run command neutralized'"])
         try:
-            self._compute.virtual_machines.begin_run_command(rg, vm_name, cmd).result(timeout=600)
+            poller = self._compute.virtual_machines.begin_run_command(rg, vm_name, cmd)
+            poller.result(timeout=600)
+            # result(timeout) returns at the deadline without raising: "neutralized"
+            # must mean the harmless command actually finished (third review, T13).
+            if not poller.done():
+                raise TimeoutError("la commande inoffensive n'a pas terminé en 600 s")
+            others = self._replayable_scripts(rg, vm_name)
+            if others:
+                # Run Command v1 is neutralized, but these replay the same way on a
+                # restored disk and Glorfindel can't vouch for them: hold the release.
+                return {"run_command_neutralized": False, "replay_vectors": others,
+                        "run_command_error": "autres scripts rejouables sur la VM : " + ", ".join(others)}
             return {"run_command_neutralized": True}
         except Exception as e:
             _console.print(
@@ -1979,6 +1990,36 @@ class AzureConnector(CloudConnector):
                 "disque restauré peut rejouer la dernière commande au démarrage.[/yellow]")
             return {"run_command_neutralized": False,
                     "run_command_error": _first_line(e)[:_ERR_MAX]}
+
+    _SCRIPT_EXTENSIONS = {("microsoft.azure.extensions", "customscript"),
+                          ("microsoft.compute", "customscriptextension"),
+                          ("microsoft.ostcextensions", "customscriptforlinux")}
+
+    def _replayable_scripts(self, rg: str, vm_name: str) -> list[str]:
+        """Script-running extensions (CustomScript) and managed Run Commands (v2,
+        `runCommands` resources) on the VM: like Run Command v1, a restored disk can run
+        them again at boot. Unreadable → reported as such (no success on an unknown)."""
+        found: list[str] = []
+        try:
+            for ext in self._compute.virtual_machine_extensions.list(rg, vm_name).value or []:
+                # azure-mgmt-compute 38 nests publisher/type under `properties` (the
+                # top-level `type` is the ARM resource type); older SDKs flattened them
+                # as publisher / type_properties_type — read whichever is there.
+                d = ext.as_dict() if hasattr(ext, "as_dict") else {}
+                props = d.get("properties") or {}
+                key = (str(props.get("publisher") or d.get("publisher") or getattr(ext, "publisher", "") or "").lower(),
+                       str(props.get("type") or d.get("type_properties_type")
+                           or getattr(ext, "type_properties_type", "") or "").lower())
+                if key in self._SCRIPT_EXTENSIONS:
+                    found.append(f"extension {ext.name}")
+        except Exception as e:
+            found.append(f"extensions illisibles ({_first_line(e)[:120]})")
+        try:
+            for rc in self._compute.virtual_machine_run_commands.list_by_virtual_machine(rg, vm_name):
+                found.append(f"run command managé {rc.name}")
+        except Exception as e:
+            found.append(f"run commands managés illisibles ({_first_line(e)[:120]})")
+        return found
 
     def sweep_vm_rules(self, resource_id: str, dry_run: bool = False) -> dict:
         """Azure as the source of truth: remove every glorfindel-* rule that belongs to

@@ -451,91 +451,65 @@ def _auto_rule(interval_s=30.0):
     )
 
 
-def test_expand_for_discovered_starts_threads(tmp_path):
+def _rows_poller(reg, rows, rule=None, cfg=None):
+    """A poller whose query returns `rows`; dispatched signals collected."""
     from glorfindel.detection_rules import RulePoller
+    rule = rule or _auto_rule()
+    det = MagicMock()
+    det.run_query.return_value = rows
+    sent = []
+    poller = RulePoller([rule], sent.append, dry_run=False)
+    poller._detector = lambda r: det
+    poller._registry, poller._cfg = reg, cfg
+    return poller, rule, sent
 
-    poller = RulePoller([_auto_rule()], lambda s: None, dry_run=True)
-    poller.start()
 
-    reg = AssetRegistry(path=tmp_path / "assets.json")
-    reg.update([_asset("vm-a", backend="law", rid="/sub/vm-a")])
-    poller.expand_for_discovered(reg)
-
-    assert any("vm-a" in t.name for t in poller._threads)
+def test_expand_for_discovered_starts_one_thread_per_rule(tmp_path):
+    """One query per rule, routed to the VMs (third review, L13) — not a thread per VM."""
+    from glorfindel.detection_rules import RulePoller
+    with patch("glorfindel.detection_rules.detector_for",
+               return_value=MagicMock(**{"run_query.return_value": []})):
+        poller = RulePoller([_auto_rule(interval_s=60)], lambda s: None, dry_run=True)
+        reg = AssetRegistry(path=tmp_path / "assets.json")
+        reg.update([_asset("vm-a", backend="law", rid="/sub/vm-a"),
+                    _asset("vm-b", backend="law", rid="/sub/vm-b")])
+        poller.expand_for_discovered(reg)
+        poller.expand_for_discovered(reg)
+        assert [t.name for t in poller._threads.values()] == [f"rule-{_auto_rule().name}"]
+        poller.stop()
 
 
 def test_expand_for_discovered_skips_disabled_rule(tmp_path):
     """A rule that couldn't resolve a backend (enabled=False) must not poll."""
-    from glorfindel.detection_rules import RulePoller, DetectionRule
-
-    disabled = DetectionRule(
-        name="disk-write", source="azure_monitor", workspace_id="",
-        query="Perf | limit 1", ttp="T1486", resource_id="",
-        auto_apply=True, monitoring_backend_name="law", enabled=False,
-    )
+    from glorfindel.detection_rules import RulePoller
+    disabled = _auto_rule()
+    disabled.enabled = False
     poller = RulePoller([disabled], lambda s: None, dry_run=True)
-    poller.start()
     reg = AssetRegistry(path=tmp_path / "assets.json")
     reg.update([_asset("vm-a", backend="law", rid="/sub/vm-a")])
     poller.expand_for_discovered(reg)
-    assert not any("vm-a" in t.name for t in poller._threads)
+    assert poller._threads == {}
 
 
-def test_expand_for_discovered_respects_exceptions(tmp_path):
-    from glorfindel.detection_rules import RulePoller
-
-    poller = RulePoller([_auto_rule()], lambda s: None, dry_run=True)
-    poller.start()
-
+def test_an_excluded_asset_gets_no_detection(tmp_path):
+    from glorfindel.config import GlorfindelConfig
     reg = AssetRegistry(path=tmp_path / "assets.json")
-    reg.update([_asset("vm-dev-1", backend="law", rid="/sub/vm-dev-1")])
+    reg.update([_asset("vm-dev-1", backend="law", rid="/sub/vm-dev-1"),
+                _asset("vm-prod-1", backend="law", rid="/sub/vm-prod-1")])
+    cfg = GlorfindelConfig(exceptions=[ExceptionConfig(asset_pattern="vm-dev-*", exclude_all=True)])
+    poller, rule, sent = _rows_poller(reg, [{"Computer": "vm-dev-1"}, {"Computer": "vm-prod-1"}], cfg=cfg)
+    poller.poll_once(rule)
+    assert [s["resource_id"] for s in sent] == ["/sub/vm-prod-1"]
 
-    cfg = GlorfindelConfig(
-        exceptions=[ExceptionConfig(asset_pattern="vm-dev-*", exclude_all=True)]
-    )
-    poller.expand_for_discovered(reg, glorfindel_cfg=cfg)
-    assert not any("vm-dev-1" in t.name for t in poller._threads)
 
-
-def test_expand_for_discovered_not_duplicate(tmp_path):
-    from glorfindel.detection_rules import RulePoller
-
-    poller = RulePoller([_auto_rule()], lambda s: None, dry_run=True)
-    poller.start()
-
+def test_an_evicted_asset_gets_no_detection(tmp_path):
+    """Replaces the per-VM thread that exited on eviction: the registry is read each cycle."""
     reg = AssetRegistry(path=tmp_path / "assets.json")
     reg.update([_asset("vm-a", backend="law", rid="/sub/vm-a")])
-
-    poller.expand_for_discovered(reg)
-    count_after_first = len(poller._threads)
-    poller.expand_for_discovered(reg)
-    assert len(poller._threads) == count_after_first
-
-
-def test_poll_thread_self_evicts_when_asset_removed(tmp_path):
-    """Thread exits naturally when its asset disappears from the registry."""
-    from glorfindel.detection_rules import RulePoller
-
-    reg = AssetRegistry(path=tmp_path / "assets.json")
-    reg.update([_asset("vm-a", backend="law", rid="/sub/vm-a")])
-
-    # Mock Azure so the poll loop is near-instant (no real HTTP calls)
-    with patch(
-        "glorfindel.detection_rules.detector_for",
-        return_value=MagicMock(**{"poll_alert.return_value": None}),
-    ):
-        poller = RulePoller([_auto_rule(interval_s=0.05)], lambda s: None, dry_run=True)
-        poller.start()
-        poller.expand_for_discovered(reg)
-
-        thread = next(t for t in poller._threads if "vm-a" in t.name)
-
-        # Evict — thread exits at start of next poll cycle (<50ms away)
-        reg.replace_for_backend("law", [])
-        thread.join(timeout=2.0)
-
-    assert not thread.is_alive()
-
+    poller, rule, sent = _rows_poller(reg, [{"Computer": "vm-a", "TimeGenerated": "t1"}])
+    reg.replace_for_backend("law", [])
+    poller.poll_once(rule)
+    assert sent == []
 
 def test_a_discovery_pass_checks_readiness_of_what_it_found(tmp_path):
     """L6 gate: a VM created after the global default was set is checked on the pass

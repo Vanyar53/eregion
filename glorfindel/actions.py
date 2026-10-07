@@ -814,6 +814,24 @@ class AzureConnector(CloudConnector):
         except Exception as e:
             return {"ok": False, "error": _first_line(e)[:_ERR_MAX]}
 
+    def private_ip_owners(self) -> dict[str, str]:
+        """Private IP → VM resource id, for every NIC of the subscription (one paged
+        call). The RulePoller attributes a call made FROM a VM (a storage PutBlob, T1041)
+        to that VM by its address — such rows name no VM otherwise. Read-only."""
+        if self.dry_run:
+            return {}
+        self._ensure_clients()
+        owners: dict[str, str] = {}
+        for nic in self._network.network_interfaces.list_all():
+            vm = getattr(getattr(nic, "virtual_machine", None), "id", None)
+            if not vm:
+                continue
+            for ipc in getattr(nic, "ip_configurations", None) or []:
+                ip = getattr(ipc, "private_ip_address", None)
+                if ip:
+                    owners[ip] = vm
+        return owners
+
     def vm_os(self, resource_id: str) -> str:
         """"linux" / "windows" (lowercase os type of the OS disk), "" if unknown."""
         if self.dry_run:

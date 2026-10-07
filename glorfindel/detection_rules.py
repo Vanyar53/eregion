@@ -7,7 +7,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable
 
@@ -523,88 +523,92 @@ def rulepoller_recently_matched(ttp: str, within_s: float) -> bool:
 
 # ── RulePoller ────────────────────────────────────────────────────────────────
 
+_IP_OWNERS_TTL_S = 300.0
+# Columns naming the VM that MADE a call (not an attacker's address): a storage call's
+# caller is the VM itself (T1041 exfiltration via its managed identity).
+_VM_IP_COLUMNS = ("CallerIpAddress",)
+
+
+def _caller_ip(row: dict) -> str:
+    for col in _VM_IP_COLUMNS:
+        v = row.get(col)
+        if isinstance(v, str) and v:
+            # StorageBlobLogs writes "10.0.0.4:52114"; IPv6 isn't routed by this column.
+            return v.rsplit(":", 1)[0] if v.count(":") == 1 else v
+    return ""
+
+
 class RulePoller:
-    """Polls detection rules continuously and dispatches detection signals."""
+    """Polls detection rules continuously and dispatches detection signals.
+
+    One query per rule and per cycle (third review, L13). It used to be one thread per
+    (rule, VM), each running the same unfiltered query and keeping its own rows
+    client-side: the query volume grew with the number of VMs (~8·N per 30 s for five
+    rules, Log Analytics throttles around 20–25 VMs), a `limit` hid the other VMs,
+    and a row naming no VM was dispatched once per VM. Now each cycle's rows are
+    routed: to the VM the row names (`_ResourceId`, `Computer`), or whose private IP
+    made the call (`CallerIpAddress` — T1041), and a row that can't be attributed is
+    dispatched once, flagged `unattributed`.
+    """
 
     def __init__(
         self,
         rules: list[DetectionRule],
         dispatch: Callable[[dict], None],
         dry_run: bool = False,
+        ip_owners: Callable[[], dict] | None = None,
     ) -> None:
         self._rules = rules
         self._dispatch = dispatch
         self._dry_run = dry_run
         self._stop = threading.Event()
-        self._threads: list[threading.Thread] = []
+        self._threads: dict[str, threading.Thread] = {}
         self._status: dict = _load_status()
         self._lock = threading.Lock()
-        # Dedup state lives in self._status[rule]["dispatched"][resource_id] =
-        # {"id": row identity, "at": epoch} — persisted, so a restart doesn't dispatch
-        # (and act on) a detection still inside the query window a second time.
+        self._registry = None
+        self._cfg = None
+        # private IP → VM resource id (lowercase), read from Azure, cached.
+        self._ip_owners = ip_owners
+        self._ip_cache: tuple[float, dict] = (0.0, {})
+        self._detectors: dict[str, object] = {}
+        # Dedup state: self._status[rule]["dispatched"][target] = {row identity: epoch}
+        # — persisted, so a restart doesn't dispatch (and act on) a detection still
+        # inside the query window a second time.
 
-    def expand_for_discovered(
-        self,
-        registry,              # AssetRegistry
-        glorfindel_cfg=None,   # GlorfindelConfig | None
-    ) -> None:
-        """Expand auto_apply rules against currently discovered assets.
+    # ── lifecycle ──
 
-        Starts new poll threads for each (rule, asset) pair not yet running.
-        Safe to call multiple times — skips already-running combinations.
-        """
-        running_keys = {t.name for t in self._threads if t.is_alive()}
-
+    def expand_for_discovered(self, registry, glorfindel_cfg=None) -> None:
+        """Auto-apply rules: one poll thread per RULE, routing rows to the assets the
+        registry holds at each cycle (a VM discovered later is covered at once, an
+        evicted one is no longer). Idempotent — called every minute by the watch."""
+        self._registry = registry
+        self._cfg = glorfindel_cfg
         for rule in self._rules:
-            if not rule.auto_apply or not rule.enabled:
-                continue
-            discovered = registry.for_backend(rule.monitoring_backend_name)
-            for asset in discovered:
-                if glorfindel_cfg and glorfindel_cfg.is_excluded(asset.name, rule.name):
-                    continue
-                key = f"rule-{rule.name}@{asset.name}"
-                if key in running_keys:
-                    continue
-                # Materialise a concrete rule for this asset
-                concrete = DetectionRule(
-                    name=rule.name,
-                    source=rule.source,
-                    workspace_id=rule.workspace_id,
-                    query=rule.query,
-                    ttp=rule.ttp,
-                    resource_id=asset.resource_id,
-                    interval_s=rule.interval_s,
-                    enabled=True,
-                    description=rule.description,
-                    asset_name=asset.name,
-                    monitoring_backend_name=rule.monitoring_backend_name,
-                    auto_apply=False,
-                    expected_latency_s=rule.expected_latency_s,
-                )
-                t = threading.Thread(
-                    target=self._poll_rule,
-                    args=(concrete, registry),
-                    daemon=True,
-                    name=key,
-                )
-                self._threads.append(t)
-                t.start()
+            if rule.auto_apply and rule.enabled:
+                self._start_thread(rule)
 
     def start(self) -> None:
         for rule in self._rules:
             if rule.auto_apply or not rule.enabled:
-                continue  # auto_apply expanded later; disabled rules don't poll
-            t = threading.Thread(
-                target=self._poll_rule,
-                args=(rule,),
-                daemon=True,
-                name=f"rule-{rule.name}",
-            )
-            self._threads.append(t)
-            t.start()
+                continue  # auto_apply starts with the registry; disabled rules don't poll
+            self._start_thread(rule)
+
+    def _start_thread(self, rule: DetectionRule) -> None:
+        key = f"rule-{rule.name}"
+        t = self._threads.get(key)
+        if t is not None and t.is_alive():
+            return
+        t = threading.Thread(target=self._loop, args=(rule,), daemon=True, name=key)
+        self._threads[key] = t
+        t.start()
 
     def stop(self) -> None:
         self._stop.set()
+
+    def _loop(self, rule: DetectionRule) -> None:
+        while not self._stop.is_set():
+            self.poll_once(rule)
+            self._stop.wait(rule.interval_s)
 
     def status_snapshot(self) -> list[dict]:
         with self._lock:
@@ -628,111 +632,179 @@ class RulePoller:
                 })
             return out
 
-    def _poll_rule(self, rule: DetectionRule, registry=None) -> None:
-        while not self._stop.is_set():
-            # Self-evict: stop polling if this asset was removed from registry
-            if registry is not None and rule.asset_name:
-                if not any(a.name == rule.asset_name for a in registry.for_backend(rule.monitoring_backend_name)):
-                    return
-            now_iso = datetime.now(timezone.utc).isoformat()
-            try:
-                detector = detector_for(rule.source, workspace_id=rule.workspace_id)
-                lookback = _query_lookback_s(rule.query)
-                since = time.time() - (lookback + _INGESTION_MARGIN_S)
-                # A per-asset rule runs the shared (unscoped) query: only rows about
-                # THIS asset, or rows that name no resource, count as its match. Before,
-                # a detection on one VM was dispatched for every discovered VM.
-                match_row = None
-                if rule.asset_name:
-                    def match_row(r, _rule=rule):
-                        return _row_attribution(r, _rule.resource_id, _rule.asset_name) is not False
-                result = detector.poll_alert(
-                    query=rule.query,
-                    since=since,
-                    timeout_s=rule.interval_s * 0.8,
-                    interval_s=min(rule.interval_s * 0.8, 10.0),
-                    verbose=False,
-                    match_row=match_row,
-                )
-                with self._lock:
-                    self._status.setdefault(rule.name, {})
-                    self._status[rule.name]["last_poll"] = now_iso
-                    self._status[rule.name].pop("last_error", None)
-                    if result is not None:
-                        _elapsed, row = result
-                        self._status[rule.name]["last_match"] = now_iso
-                        self._status[rule.name]["ttp"] = rule.ttp
-                        self._status[rule.name]["match_count"] = (
-                            self._status[rule.name].get("match_count", 0) + 1
-                        )
-                    _save_status(self._status)
+    # ── one cycle ──
 
-                if result is not None:
-                    _elapsed, row = result
+    def _targets(self, rule: DetectionRule) -> list[tuple[str, str]]:
+        """(resource_id, name) of the assets this rule watches right now."""
+        if not rule.auto_apply:
+            return [(rule.resource_id, rule.asset_name or rule.resource_id.rstrip("/").split("/")[-1])] \
+                if rule.resource_id else []
+        if self._registry is None:
+            return []
+        out = []
+        for a in self._registry.for_backend(rule.monitoring_backend_name):
+            if not a.resource_id:
+                continue
+            if self._cfg is not None and self._cfg.is_excluded(a.name, rule.name):
+                continue
+            out.append((a.resource_id, a.name))
+        return out
 
-                    # Deduplication: the same detection stays in the query window for
-                    # its whole length (ago(10m)) and reappears at every poll. Skip it
-                    # while it is the last one dispatched for this (rule, resource) and
-                    # still inside the window. Aggregated rows have no TimeGenerated:
-                    # they used to bypass the dedup entirely.
-                    identity = _row_identity(row)
-                    window = lookback + _INGESTION_MARGIN_S
-                    with self._lock:
-                        dispatched = self._status.setdefault(rule.name, {}).setdefault("dispatched", {})
-                        last = dispatched.get(rule.resource_id) or {}
-                        if last.get("id") == identity and time.time() - float(last.get("at", 0)) < window:
-                            duplicate = True
-                        else:
-                            duplicate = False
-                            dispatched[rule.resource_id] = {"id": identity, "at": time.time()}
-                            _save_status(self._status)
-                    if duplicate:
-                        self._stop.wait(rule.interval_s)
-                        continue
+    def _owners(self) -> dict:
+        if self._ip_owners is None:
+            return {}
+        at, cached = self._ip_cache
+        if time.time() - at < _IP_OWNERS_TTL_S:
+            return cached
+        try:
+            owners = {ip: rid.lower() for ip, rid in (self._ip_owners() or {}).items()}
+        except Exception as exc:
+            logger.warning("rule poller: private IP map unreadable (%s) — keeping the last one", exc)
+            owners = cached
+        self._ip_cache = (time.time(), owners)
+        return owners
 
-                    # A row that names no resource (aggregated by attacker IP / account)
-                    # can't be tied to this VM when several are monitored: say so, the
-                    # decision layer holds VM-targeted actions on it.
-                    attribution = "asset"
-                    if rule.asset_name and _row_attribution(row, rule.resource_id, rule.asset_name) is None:
-                        peers = registry.for_backend(rule.monitoring_backend_name) if registry else []
-                        attribution = "unattributed" if len(peers) > 1 else "single_asset"
+    def _route(self, rule: DetectionRule, rows: list[dict],
+               targets: list[tuple[str, str]]) -> dict[str, tuple]:
+        """target key → ((resource_id, name) | None, rows). A row naming a VM this rule
+        doesn't watch (excluded, another backend's) is dropped; one that names none is
+        keyed "unattributed"."""
+        by_rid = {rid.lower(): (rid, name) for rid, name in targets}
+        by_name: dict[str, tuple[str, str]] = {}
+        for rid, name in targets:
+            for n in (name, rid.rstrip("/").split("/")[-1]):
+                if n:
+                    by_name.setdefault(n.split(".")[0].lower(), (rid, name))
+        out: dict[str, tuple] = {}
+        for row in rows:
+            named, tgt = False, None
+            rid = row.get("_ResourceId") or row.get("ResourceId")
+            if isinstance(rid, str) and "/microsoft.compute/virtualmachines/" in rid.lower():
+                named, tgt = True, by_rid.get(rid.lower())
+            if not named:
+                comp = row.get("Computer")
+                if isinstance(comp, str) and comp:
+                    named, tgt = True, by_name.get(comp.split(".")[0].lower())
+            if not named:
+                ip = _caller_ip(row)
+                owner = self._owners().get(ip) if ip else None
+                if owner:
+                    named, tgt = True, by_rid.get(owner)
+            if named and tgt is None:
+                continue
+            key = tgt[0].lower() if tgt else "unattributed"
+            out.setdefault(key, (tgt, []))[1].append(row)
+        return out
 
-                    # Synthetic run_id so store_cycle writes a debug JSONL
-                    # and War Room can display the decision (isolate_vm, block…).
-                    # Format: watch-{rule}-{ts} to distinguish from Annatar runs.
-                    ts_compact = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-                    watch_run_id = f"watch-{rule.name}-{ts_compact}"
-                    signal = {
-                        "signal_id": f"rule-{rule.name}-{uuid.uuid4().hex[:8]}",
-                        "event": "detection",
-                        "ttp": rule.ttp,
-                        "severity": "high",
-                        "resource_id": rule.resource_id,
-                        "resource_type": "vm",
-                        "provider": "azure",
-                        "timestamp": now_iso,
-                        "context": {
-                            "workspace_id": rule.workspace_id,
-                            "rule_name": rule.name,
-                            "asset_name": rule.asset_name,
-                            "run_id": watch_run_id,
-                            "attribution": attribution,
-                        },
-                        "raw_signal": {
-                            "detection_source": rule.source,
-                            "first_result_row": row,
-                            "normalized_signal": normalize_row(row, ttp=rule.ttp),
-                        },
-                    }
-                    if not self._dry_run:
-                        self._dispatch(signal)
+    def _detector(self, rule: DetectionRule):
+        d = self._detectors.get(rule.name)
+        if d is None:
+            d = self._detectors[rule.name] = detector_for(rule.source, workspace_id=rule.workspace_id)
+        return d
 
-            except Exception as exc:
-                with self._lock:
-                    self._status.setdefault(rule.name, {})
-                    self._status[rule.name]["last_poll"] = now_iso
-                    self._status[rule.name]["last_error"] = str(exc)
-                    _save_status(self._status)
+    def poll_once(self, rule: DetectionRule) -> list[dict]:
+        """One cycle of one rule: query once, route, dedup, dispatch. Returns the
+        signals dispatched (or that would be, in dry-run)."""
+        now_iso = datetime.now(timezone.utc).isoformat()
+        lookback = _query_lookback_s(rule.query)
+        window = lookback + _INGESTION_MARGIN_S
+        try:
+            now_dt = datetime.now(timezone.utc)
+            rows = self._detector(rule).run_query(
+                rule.query, timespan=(now_dt - timedelta(seconds=window), now_dt + timedelta(minutes=1)))
+        except Exception as exc:
+            with self._lock:
+                st = self._status.setdefault(rule.name, {})
+                st["last_poll"], st["last_error"] = now_iso, str(exc)
+                _save_status(self._status)
+            return []
 
-            self._stop.wait(rule.interval_s)
+        targets = self._targets(rule)
+        routed = self._route(rule, rows, targets) if targets else {}
+        signals: list[dict] = []
+        sent_ids: dict[str, list[str]] = {}
+        with self._lock:
+            dispatched = self._status.setdefault(rule.name, {}).setdefault("dispatched", {})
+            cutoff = time.time() - window
+            for key in list(dispatched):
+                seen = dispatched[key]
+                if isinstance(seen, dict) and "id" in seen and "at" in seen:   # old shape
+                    seen = {seen["id"]: seen["at"]}
+                dispatched[key] = {i: at for i, at in (seen or {}).items() if float(at) >= cutoff}
+            plan = []
+            for key, (tgt, krows) in routed.items():
+                seen = dispatched.get(key, {})
+                new = [r for r in krows if _row_identity(r) not in seen]
+                if not new:
+                    continue
+                # Event rows (TimeGenerated) are one incident per cycle: the newest is
+                # sent. Aggregated rows (one per attacker, per account…) each count.
+                events = [r for r in new if r.get("TimeGenerated")]
+                send = [r for r in new if not r.get("TimeGenerated")]
+                if events:
+                    send.append(max(events, key=lambda r: str(r["TimeGenerated"])))
+                plan.append((key, tgt, send))
+                sent_ids[key] = [_row_identity(r) for r in new]
+
+        for key, tgt, send in plan:
+            for row in send:
+                sig = self._signal(rule, row, tgt, targets, now_iso)
+                signals.append(sig)
+                if not self._dry_run:
+                    self._dispatch(sig)
+
+        with self._lock:
+            st = self._status.setdefault(rule.name, {})
+            st["last_poll"] = now_iso
+            st.pop("last_error", None)
+            if signals:
+                st["last_match"], st["ttp"] = now_iso, rule.ttp
+                st["match_count"] = st.get("match_count", 0) + len(signals)
+            # Recorded AFTER the dispatch: a crash in between re-sends (at least once)
+            # rather than losing a detection (third review, detail).
+            dispatched = st.setdefault("dispatched", {})
+            for key, ids in sent_ids.items():
+                dispatched.setdefault(key, {}).update({i: time.time() for i in ids})
+            _save_status(self._status)
+        return signals
+
+    def _signal(self, rule: DetectionRule, row: dict, tgt, targets, now_iso: str) -> dict:
+        if tgt is not None:
+            resource_id, asset_name = tgt
+            attribution = "asset"
+        elif not rule.auto_apply:
+            # A rule bound to one asset by the operator: its rows are that asset's.
+            resource_id, asset_name = targets[0]
+            attribution = "asset"
+        else:
+            # No VM named, none whose IP made the call: never a default target — even
+            # with a single monitored VM (third review, L11). The card is anchored on
+            # one monitored VM; VM-targeted actions are held.
+            resource_id, asset_name = sorted(targets, key=lambda t: t[1])[0]
+            attribution = "unattributed"
+        ts_compact = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        return {
+            "signal_id": f"rule-{rule.name}-{uuid.uuid4().hex[:8]}",
+            "event": "detection",
+            "ttp": rule.ttp,
+            "severity": "high",
+            "resource_id": resource_id,
+            "resource_type": "vm",
+            "provider": "azure",
+            "timestamp": now_iso,
+            "context": {
+                "workspace_id": rule.workspace_id,
+                "rule_name": rule.name,
+                "asset_name": asset_name,
+                # Synthetic run_id so store_cycle writes a debug JSONL and the War
+                # Room can display the decision. watch-{rule}-{ts}: not an Annatar run.
+                "run_id": f"watch-{rule.name}-{ts_compact}",
+                "attribution": attribution,
+                **({"candidates": sorted(n for _, n in targets)} if attribution == "unattributed" else {}),
+            },
+            "raw_signal": {
+                "detection_source": rule.source,
+                "first_result_row": row,
+                "normalized_signal": normalize_row(row, ttp=rule.ttp),
+            },
+        }

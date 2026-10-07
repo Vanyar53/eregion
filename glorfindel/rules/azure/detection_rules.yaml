@@ -46,8 +46,11 @@ rules:
     # average over its own interval, rate counter) above 25 MB/s. 60-s averages rebuilt
     # from 10 days of bench data (2026-10-07): attacks 26.8 / 41.7 / 52.9 / 91.7 MB/s,
     # benign max 23.2 (apt catch-up) — 45 would miss two attacks out of four; 25 catches
-    # all four with a thin margin (8 %). Provisional: to measure with a real 60-s DCR.
-    # Output unchanged (MaxWrite by Computer): dedup and what the LLM sees stay the same.
+    # all four with a thin margin (8 %). MEASURED with the bench DCR at 60 s
+    # (2026-10-07, T1486 Annatar, 50 s of writes): samples 8.7 then 42.2 MB/s on the data
+    # volume (42.3 total) — detected by the RulePoller at T0+~3.5 min; 45 would have
+    # missed it. Benign side still measured on simulated averages only.
+    # Output: MaxWrite by Computer, _ResourceId (the row names its VM).
     query: |
       let samples = Perf
         | where TimeGenerated > ago(10m)

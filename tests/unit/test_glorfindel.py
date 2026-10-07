@@ -2289,8 +2289,9 @@ def _l4_env(monkeypatch, nic_nsg_id=None, subnet_nsg_id=_SUBNET_NSG_ID, quaranti
     net.network_interfaces.get.return_value = nic
     net.subnets.get.return_value = SimpleNamespace(
         network_security_group=SimpleNamespace(id=subnet_nsg_id) if subnet_nsg_id else None)
-    q = SimpleNamespace(id=_Q_ID, tags={}, security_rules=[SimpleNamespace(name="glorfindel-quarantine-deny-in"),
-                                                           SimpleNamespace(name="glorfindel-quarantine-deny-out")])
+    q = SimpleNamespace(id=_Q_ID, tags={}, security_rules=[SimpleNamespace(name=n) for n in (
+        "glorfindel-quarantine-deny-in", "glorfindel-quarantine-deny-out",
+        "glorfindel-quarantine-deny-dns", "glorfindel-quarantine-deny-imds")])
     net.network_security_groups.update_tags.side_effect = lambda rg, name, t: setattr(q, "tags", dict(t.tags))
     if quarantine_exists:
         net.network_security_groups.get.return_value = q
@@ -2332,7 +2333,8 @@ def test_isolation_attaches_the_quarantine_nsg_to_a_nic_without_one(monkeypatch)
     created = net.network_security_groups.begin_create_or_update.call_args
     assert created.args[1] == "nsg-glorfindel-quarantine-westeurope"
     assert {r.name for r in created.args[2].security_rules} == {
-        "glorfindel-quarantine-deny-in", "glorfindel-quarantine-deny-out"}
+        "glorfindel-quarantine-deny-in", "glorfindel-quarantine-deny-out",
+        "glorfindel-quarantine-deny-dns", "glorfindel-quarantine-deny-imds"}
     assert net.network_interfaces.begin_create_or_update.call_args.args[2].network_security_group.id == _Q_ID
     net.security_rules.begin_create_or_update.assert_not_called()     # nothing in the subnet NSG
     assert out["placements"][0]["scope"] == "quarantine" and out["drain"]["status"] == "drained"
@@ -2577,3 +2579,26 @@ def test_release_records_its_intent_before_touching_azure(monkeypatch):
                         lambda *a: seen.append(_load_isolation_state("vm").get("releasing_at")) or orig(*a))
     assert connector.release_isolation(_RID)["status"] == "released"
     assert seen and seen[0]
+
+
+
+def test_quarantine_blocks_azure_dns_and_imds_and_lets_forensics_in(monkeypatch):
+    """Measured 2026-10-07: an isolated VM still resolved names through Azure DNS and
+    fetched IMDS tokens — NSGs don't filter those without their service tags (L17)."""
+    connector, net, nic = _l4_env(monkeypatch)
+    monkeypatch.setattr(connector, "_forensic_sources", lambda: ["10.9.0.0/26"])
+    connector.isolate_vm(_RID)
+    rules = {r.name: r for r in net.network_security_groups.begin_create_or_update.call_args.args[2].security_rules}
+    assert rules["glorfindel-quarantine-deny-dns"].destination_address_prefix == "AzurePlatformDNS"
+    assert rules["glorfindel-quarantine-deny-imds"].destination_address_prefix == "AzurePlatformIMDS"
+    fwd = rules["glorfindel-quarantine-forensic-in"]
+    assert fwd.access == "Allow" and fwd.priority < 100 and fwd.source_address_prefixes == ["10.9.0.0/26"]
+
+
+def test_an_older_quarantine_nsg_gets_the_platform_rules(monkeypatch):
+    connector, net, nic = _l4_env(monkeypatch, quarantine_exists=True)
+    net.network_security_groups.get.return_value.security_rules = [
+        type("R", (), {"name": n})() for n in ("glorfindel-quarantine-deny-in", "glorfindel-quarantine-deny-out")]
+    connector._ensure_quarantine_nsg("westeurope", "rg")
+    assert {c.args[2] for c in net.security_rules.begin_create_or_update.call_args_list} == {
+        "glorfindel-quarantine-deny-dns", "glorfindel-quarantine-deny-imds"}

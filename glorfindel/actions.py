@@ -167,6 +167,16 @@ def _prefix_open_to_internet(prefix: str) -> bool:
 QUARANTINE_NSG_PREFIX = "nsg-glorfindel-quarantine"
 QUARANTINE_RULE_IN = "glorfindel-quarantine-deny-in"
 QUARANTINE_RULE_OUT = "glorfindel-quarantine-deny-out"
+# NSGs don't filter the platform addresses (168.63.129.16 DNS, 169.254.169.254 IMDS)
+# unless a rule names their service tags: an "isolated" VM still resolved names through
+# Azure DNS (a tunnel) and fetched managed-identity tokens from IMDS (measured on the
+# bench, 2026-10-07). The VM agent (Run Command, used to cut sessions) talks to the
+# WireServer, which these tags don't cover.
+QUARANTINE_PLATFORM_RULES = (
+    ("glorfindel-quarantine-deny-dns", 110, "AzurePlatformDNS"),
+    ("glorfindel-quarantine-deny-imds", 111, "AzurePlatformIMDS"),
+)
+QUARANTINE_FORENSIC_RULE = "glorfindel-quarantine-forensic-in"
 
 
 def _is_quarantine_nsg(nsg_id_or_name: str) -> bool:
@@ -826,9 +836,12 @@ class AzureConnector(CloudConnector):
                         "note": "Windows : les sessions déjà ouvertes ne sont pas coupées."}
             # The count must fail loudly: `ss … | wc -l` printed 0 when `ss` was missing
             # or refused -H — "nothing left" on an unknown.
+            flt = self._DRAIN_FILTER
+            for cidr in self._forensic_sources():     # investigation sessions survive
+                flt = flt[:-1] + f"and not dst {cidr} )"
             script = [
-                f"ss -K state established '{self._DRAIN_FILTER}' >/dev/null 2>&1",
-                f"if out=$(ss -Htn state established '{self._DRAIN_FILTER}' 2>/dev/null); "
+                f"ss -K state established '{flt}' >/dev/null 2>&1",
+                f"if out=$(ss -Htn state established '{flt}' 2>/dev/null); "
                 f"then echo \"glorfindel-drain-remaining=$(printf '%s\\n' \"$out\" | grep -c .)\"; "
                 f"else echo glorfindel-drain-remaining=error; fi",
             ]
@@ -2614,8 +2627,10 @@ class AzureConnector(CloudConnector):
 
     def _ensure_quarantine_nsg(self, location: str, default_rg: str) -> dict:
         """Get or create Glorfindel's quarantine NSG for this region: deny-all in and
-        out at priority 100, nothing else. One per region (a NIC only takes an NSG of
-        its own region and subscription), created on first need."""
+        out at priority 100, deny to Azure's DNS and IMDS (not filtered otherwise), and
+        the operator's forensic sources allowed in (`isolation.forensic_sources`), placed
+        before the deny. One per region (a NIC only takes an NSG of its own region and
+        subscription), created on first need; an older one gets the missing rules."""
         from azure.mgmt.network.models import NetworkSecurityGroup, SecurityRule
         _, cfg_rg = self._quarantine_settings()
         q_rg = cfg_rg or default_rg
@@ -2628,6 +2643,21 @@ class AzureConnector(CloudConnector):
                 source_port_range="*", destination_port_range="*",
                 description="Glorfindel — incident quarantine (attached only while a VM is isolated)",
             )
+        wanted = {QUARANTINE_RULE_IN: _rule(QUARANTINE_RULE_IN, "Inbound"),
+                  QUARANTINE_RULE_OUT: _rule(QUARANTINE_RULE_OUT, "Outbound")}
+        for rule_name, priority, tag in QUARANTINE_PLATFORM_RULES:
+            wanted[rule_name] = SecurityRule(
+                name=rule_name, priority=priority, direction="Outbound", access="Deny",
+                protocol="*", source_address_prefix="*", destination_address_prefix=tag,
+                source_port_range="*", destination_port_range="*",
+                description=f"Glorfindel — quarantine: {tag} is not filtered by a deny-all")
+        forensic = self._forensic_sources()
+        if forensic:
+            wanted[QUARANTINE_FORENSIC_RULE] = SecurityRule(
+                name=QUARANTINE_FORENSIC_RULE, priority=90, direction="Inbound", access="Allow",
+                protocol="*", source_address_prefixes=forensic, destination_address_prefix="*",
+                source_port_range="*", destination_port_range="*",
+                description="Glorfindel — quarantine: investigation access (isolation.forensic_sources)")
         try:
             nsg = self._network.network_security_groups.get(q_rg, name)
         except Exception as exc:
@@ -2636,14 +2666,26 @@ class AzureConnector(CloudConnector):
             nsg = self._network.network_security_groups.begin_create_or_update(q_rg, name, NetworkSecurityGroup(
                 location=location,
                 tags={"managed-by": "glorfindel", "purpose": "incident-quarantine"},
-                security_rules=[_rule(QUARANTINE_RULE_IN, "Inbound"), _rule(QUARANTINE_RULE_OUT, "Outbound")],
+                security_rules=list(wanted.values()),
             )).result()
-        present = {getattr(r, "name", "") for r in (getattr(nsg, "security_rules", None) or [])}
-        for rule_name, direction in ((QUARANTINE_RULE_IN, "Inbound"), (QUARANTINE_RULE_OUT, "Outbound")):
-            if rule_name not in present:       # someone removed it: put it back
-                self._network.security_rules.begin_create_or_update(
-                    q_rg, name, rule_name, _rule(rule_name, direction)).result()
+        rules = {getattr(r, "name", ""): r for r in (getattr(nsg, "security_rules", None) or [])}
+        for rule_name, rule in wanted.items():
+            current = rules.get(rule_name)
+            # Missing (someone removed it, or an NSG from before the rule existed), or
+            # the forensic sources changed in the config: put it (back) in place.
+            if current is None or (rule_name == QUARANTINE_FORENSIC_RULE and sorted(
+                    getattr(current, "source_address_prefixes", None) or []) != sorted(forensic)):
+                self._network.security_rules.begin_create_or_update(q_rg, name, rule_name, rule).result()
+        if not forensic and QUARANTINE_FORENSIC_RULE in rules:
+            self._network.security_rules.begin_delete(q_rg, name, QUARANTINE_FORENSIC_RULE).result()
         return {"nsg_rg": q_rg, "nsg_name": name, "nsg_id": nsg.id}
+
+    def _forensic_sources(self) -> list[str]:
+        try:
+            from glorfindel.config import load_glorfindel_config
+            return list(load_glorfindel_config().isolation.forensic_sources)
+        except Exception:
+            return []
 
     def _set_nic_nsg(self, nic_id: str, nsg_id: str | None, expect: str | None = None) -> bool:
         """Attach `nsg_id` to the NIC (None: detach). With `expect`, only when the NIC

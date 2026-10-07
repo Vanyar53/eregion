@@ -84,11 +84,16 @@ def reassert_active(connector, autonomy=None) -> list[dict]:
         # Under the VM's lock, from a fresh read: a release running in the War Room or
         # the CLI finishes first, and its cleared state then says there is nothing to
         # reassert. Without it, a release seen halfway was put back (third review, T2).
+        # State is read by resource id: two VMs may share a name.
         with _vm_lock(snapshot["vm_name"]):
-            _reassert_isolation(connector, autonomy, snapshot["vm_name"], report)
+            _reassert_isolation(connector, autonomy, snapshot["vm_name"], report,
+                                ref=snapshot["resource_id"])
     for snapshot in active_blocks():
+        if not snapshot.get("resource_id"):
+            continue
         with _vm_lock(snapshot["vm_name"]):
-            _reassert_block(connector, autonomy, snapshot["vm_name"], snapshot.get("ip", ""), report)
+            _reassert_block(connector, autonomy, snapshot["vm_name"], snapshot.get("ip", ""), report,
+                            ref=snapshot["resource_id"])
     return report
 
 
@@ -97,11 +102,11 @@ def _held_by_an_operation(state: dict, failed_key: str, running_key: str) -> boo
     return bool(state.get("partial") or state.get(failed_key) or state.get(running_key))
 
 
-def _reassert_isolation(connector, autonomy, vm: str, report: list[dict]) -> None:
+def _reassert_isolation(connector, autonomy, vm: str, report: list[dict], ref: str = "") -> None:
     from glorfindel.actions import _load_isolation_state, _save_isolation_state
 
     now = datetime.now(timezone.utc).isoformat()
-    state = _load_isolation_state(vm)
+    state = _load_isolation_state(ref or vm)
     if not state or not state.get("resource_id"):
         return                # released meanwhile
     iso = {**state, "vm_name": vm}
@@ -114,11 +119,11 @@ def _reassert_isolation(connector, autonomy, vm: str, report: list[dict]) -> Non
         log.warning("reassert: isolation of %s not checked (%s)", vm, exc)
         return
     if verification.get("verified") is True:
-        state = _load_isolation_state(vm)
+        state = _load_isolation_state(ref or vm)
         if state is not None:
             # Back in place: a later disappearance is a new episode, alerted again.
             state.pop("drift_alerted_at", None)
-            _save_isolation_state(vm, {**state, "verified_at": now})
+            _save_isolation_state(ref or vm, {**state, "verified_at": now})
         return
     if not _missing(verification):
         return
@@ -139,14 +144,14 @@ def _reassert_isolation(connector, autonomy, vm: str, report: list[dict]) -> Non
             + who
         )
         _alert(f"reassert-{vm}", resource_id=rid, action="isolate_vm", reason=reason)
-        _mark_alerted(vm, now)
+        _mark_alerted(ref or vm, now)
         report.append({"kind": "isolation", "vm": vm, "outcome": "escalated", "detail": reason})
         return
     try:
         connector.isolate_vm(rid)
-        state = _load_isolation_state(vm) or {}
+        state = _load_isolation_state(ref or vm) or {}
         # Keep the original isolation time (TTL); record the re-application.
-        _save_isolation_state(vm, {**state, "isolated_at": iso.get("isolated_at", state.get("isolated_at")),
+        _save_isolation_state(ref or vm, {**state, "isolated_at": iso.get("isolated_at", state.get("isolated_at")),
                                    "reasserted_at": now})
         reason = (f"L'isolation de {vm} avait disparu d'Azure (modification hors "
                   "Glorfindel) : reposée une fois. Si elle disparaît encore, "
@@ -155,16 +160,16 @@ def _reassert_isolation(connector, autonomy, vm: str, report: list[dict]) -> Non
     except Exception as exc:
         reason = f"L'isolation de {vm} a disparu d'Azure ; la reposer a échoué : {exc}"
         outcome = "failed"
-        _mark_alerted(vm, now)        # no retry-and-alert every minute
+        _mark_alerted(ref or vm, now)        # no retry-and-alert every minute
     _alert(f"reassert-{vm}", resource_id=rid, action="isolate_vm", reason=reason)
     report.append({"kind": "isolation", "vm": vm, "outcome": outcome, "detail": reason})
 
 
-def _reassert_block(connector, autonomy, vm: str, ip: str, report: list[dict]) -> None:
+def _reassert_block(connector, autonomy, vm: str, ip: str, report: list[dict], ref: str = "") -> None:
     from glorfindel.actions import _load_block_entries, _update_block_entry
 
     now = datetime.now(timezone.utc).isoformat()
-    b = next((e for e in _load_block_entries(vm) if e.get("ip") == ip), None)
+    b = next((e for e in _load_block_entries(ref or vm) if e.get("ip") == ip), None)
     if not b:
         return                # unblocked meanwhile
     rid = b.get("resource_id", "")
@@ -176,7 +181,7 @@ def _reassert_block(connector, autonomy, vm: str, ip: str, report: list[dict]) -
         log.warning("reassert: block of %s on %s not checked (%s)", ip, vm, exc)
         return
     if verification.get("verified") is True:
-        _update_block_entry(vm, ip, verified_at=now, drift_alerted_at=None)
+        _update_block_entry(ref or vm, ip, verified_at=now, drift_alerted_at=None)
         return
     if not _missing(verification):
         return
@@ -189,21 +194,21 @@ def _reassert_block(connector, autonomy, vm: str, ip: str, report: list[dict]) -
                   f"`glorfindel unblock {ip} {rid} --yes` si c'est voulu, sinon re-bloquer.")
         _alert(f"reassert-{vm}-{ip}", resource_id=rid, action="block_suspicious_ip",
                reason=reason, action_params={"ip": ip})
-        _update_block_entry(vm, ip, drift_alerted_at=now)
+        _update_block_entry(ref or vm, ip, drift_alerted_at=now)
         report.append({"kind": "block", "vm": vm, "ip": ip, "outcome": "escalated", "detail": reason})
         return
     try:
         connector.block_suspicious_ip(
             ip, rid, scope="vm" if b.get("scoped", True) else "subnet",
             threat_port=b.get("threat_port"))
-        _update_block_entry(vm, ip, reasserted_at=now)
+        _update_block_entry(ref or vm, ip, reasserted_at=now)
         reason = (f"Le blocage de {ip} sur {vm} avait disparu d'Azure : reposé une fois. "
                   "S'il disparaît encore, Glorfindel alertera sans le reposer.")
         outcome = "reapplied"
     except Exception as exc:
         reason = f"Le blocage de {ip} sur {vm} a disparu d'Azure ; le reposer a échoué : {exc}"
         outcome = "failed"
-        _update_block_entry(vm, ip, drift_alerted_at=now)
+        _update_block_entry(ref or vm, ip, drift_alerted_at=now)
     _alert(f"reassert-{vm}-{ip}", resource_id=rid, action="block_suspicious_ip",
            reason=reason, action_params={"ip": ip})
     report.append({"kind": "block", "vm": vm, "ip": ip, "outcome": outcome, "detail": reason})

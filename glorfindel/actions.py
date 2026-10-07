@@ -648,7 +648,7 @@ class AzureConnector(CloudConnector):
         # the flat nsg/nsg_scope/rule_names fields keep /api/state + legacy paths working.
         from datetime import datetime, timezone
         first = placements[0]
-        _save_isolation_state(vm_name, {
+        _save_isolation_state(resource_id, {
             "resource_id": resource_id,
             "isolated_at": datetime.now(timezone.utc).isoformat(),
             "scoped": True,
@@ -705,9 +705,9 @@ class AzureConnector(CloudConnector):
         # left open, not only the response of the call (validation run, 2026-10-05).
         try:
             _, _vm = _parse_vm_resource_id(resource_id)
-            state = _load_isolation_state(_vm)
+            state = _load_isolation_state(resource_id)
             if state is not None:
-                _save_isolation_state(_vm, {**state, "drain": out["drain"]})
+                _save_isolation_state(resource_id, {**state, "drain": out["drain"]})
         except Exception:
             pass
         return out
@@ -944,7 +944,7 @@ class AzureConnector(CloudConnector):
         failed_nic = failed["nic_id"].rstrip("/").split("/")[-1]
         covered = [p["nic_id"].rstrip("/").split("/")[-1] for p in done]
         first = kept[0]
-        _save_isolation_state(vm_name, {
+        _save_isolation_state(resource_id, {
             "resource_id": resource_id,
             "isolated_at": datetime.now(timezone.utc).isoformat(),
             "scoped": True,
@@ -1157,13 +1157,13 @@ class AzureConnector(CloudConnector):
         self._guard_write("release_isolation")
         self._ensure_clients()
         rg, vm_name = _parse_vm_resource_id(resource_id)
-        state = _load_isolation_state(vm_name) or {}
+        state = _load_isolation_state(resource_id) or {}
         if state:
             # The intent is recorded before Azure is touched: a release cut off midway
             # (War Room timeout, crash) leaves NICs half released — the reassertion
             # must not read that as "removed outside Glorfindel" and isolate again.
             from datetime import datetime, timezone
-            _save_isolation_state(vm_name, {**state, "releasing_at": datetime.now(timezone.utc).isoformat()})
+            _save_isolation_state(resource_id, {**state, "releasing_at": datetime.now(timezone.utc).isoformat()})
 
         failed: list[str] = []
         remaining: list[dict] = []
@@ -1229,7 +1229,7 @@ class AzureConnector(CloudConnector):
 
         if failed:
             from datetime import datetime, timezone
-            _save_isolation_state(vm_name, {
+            _save_isolation_state(resource_id, {
                 **state,
                 "resource_id": state.get("resource_id") or resource_id,
                 "isolated_at": state.get("isolated_at") or datetime.now(timezone.utc).isoformat(),
@@ -1238,7 +1238,7 @@ class AzureConnector(CloudConnector):
             })
             return {"status": "release_partial", "resource_id": resource_id, "failed": failed}
 
-        _clear_isolation_state(vm_name)
+        _clear_isolation_state(resource_id)
         return {"status": "released", "resource_id": resource_id}
 
     def block_suspicious_ip(
@@ -1424,7 +1424,7 @@ class AzureConnector(CloudConnector):
         promoted_from = None
         if replace:
             # Subnet rule now in place → drop the prior VM-scoped rules (every NIC).
-            prev = next((e for e in _load_block_entries(vm_name) if e.get("ip") == ip), None)
+            prev = next((e for e in _load_block_entries(resource_id) if e.get("ip") == ip), None)
             dropped = []
             for pl in (prev or {}).get("placements", []):
                 for nm in (pl["rule"], f'{pl["rule"]}-out'):
@@ -1443,7 +1443,7 @@ class AzureConnector(CloudConnector):
                         pass
                 dropped.append(prev["rule"])
             if prev:
-                _clear_block_state(vm_name, ip)
+                _clear_block_state(resource_id, ip)
             promoted_from = dropped or None
 
         _save_block_state(
@@ -2145,9 +2145,9 @@ class AzureConnector(CloudConnector):
             err = self._delete_rule(nsg_rg, nsg_name, name)
             (failed if err else deleted).append(err or f"{nsg_rg}/{nsg_name}/{name}")
         if not dry_run and not failed:
-            _clear_isolation_state(vm_name)
-            for entry in _load_block_entries(vm_name):
-                _clear_block_state(vm_name, entry.get("ip", ""))
+            _clear_isolation_state(resource_id)
+            for entry in _load_block_entries(resource_id):
+                _clear_block_state(resource_id, entry.get("ip", ""))
         return {
             "status": "dry_run" if dry_run else ("swept_partial" if failed else "swept"),
             "deleted": deleted, "failed": failed, "kept_perimeter": kept,
@@ -2165,7 +2165,7 @@ class AzureConnector(CloudConnector):
 
         self._ensure_clients()
         rg, vm_name = _parse_vm_resource_id(resource_id)
-        entry = next((e for e in _load_block_entries(vm_name) if e.get("ip") == ip), None)
+        entry = next((e for e in _load_block_entries(resource_id) if e.get("ip") == ip), None)
 
         # Multi-NIC VM block: confirmed only if every placement's rule pair is present.
         if entry and entry.get("placements"):
@@ -2279,12 +2279,12 @@ class AzureConnector(CloudConnector):
         self._guard_write("unblock_ip")
         self._ensure_clients()
         rg, vm_name = _parse_vm_resource_id(resource_id)
-        entry = next((e for e in _load_block_entries(vm_name) if e.get("ip") == ip), None)
+        entry = next((e for e in _load_block_entries(resource_id) if e.get("ip") == ip), None)
         if entry:
             # Intent first (see release_isolation): an unblock cut off midway is not a
             # block "removed outside Glorfindel" for the reassertion to put back.
             from datetime import datetime, timezone
-            _update_block_entry(vm_name, ip, unblocking_at=datetime.now(timezone.utc).isoformat())
+            _update_block_entry(resource_id, ip, unblocking_at=datetime.now(timezone.utc).isoformat())
         deleted: list[str] = []
         failed: list[str] = []
 
@@ -2323,12 +2323,12 @@ class AzureConnector(CloudConnector):
         if failed:
             # Keep the entry: the rules that are still there keep blocking the IP, and a
             # retry of unblock / reset must still find them.
-            _update_block_entry(vm_name, ip, unblock_failed=failed)
+            _update_block_entry(resource_id, ip, unblock_failed=failed)
             return {
                 "status": "unblock_partial", "ip": ip,
                 "deleted_rules": deleted, "failed": failed,
             }
-        _clear_block_state(vm_name, ip)
+        _clear_block_state(resource_id, ip)
         return {
             "status": "unblocked" if deleted else "not_found",
             "ip": ip,
@@ -3073,33 +3073,93 @@ def _atomic_write_text(path: Path, text: str) -> None:
         raise
 
 
-def _save_isolation_state(vm_name: str, state: dict) -> None:
-    _atomic_write_text(_ISOLATION_STATE_DIR / f"{vm_name}.json", json.dumps(state))
+def _vm_ref(ref: str) -> tuple[str, str]:
+    """(VM name, resource id) from a short name or a full resource id."""
+    if "/" in (ref or ""):
+        return ref.rstrip("/").split("/")[-1], ref
+    return ref, ""
 
 
-def _load_isolation_state(vm_name: str) -> dict | None:
+def _rid_hash(resource_id: str) -> str:
+    import hashlib
+    return hashlib.sha1(resource_id.rstrip("/").lower().encode()).hexdigest()[:8]
+
+
+def _file_rid(f: Path) -> str:
+    """The resource id a state file belongs to ("" if unreadable or not recorded)."""
+    try:
+        data = json.loads(f.read_text())
+    except Exception:
+        return ""
+    if isinstance(data, list):
+        data = data[0] if data else {}
+    return str((data or {}).get("resource_id") or "").rstrip("/").lower()
+
+
+def _state_file(directory: Path, ref: str) -> Path | None:
+    """The state file of a VM, keyed `<name>--<hash of its resource id>.json`.
+
+    Keyed by name only, two VMs with the same name in two resource groups shared one
+    file: isolating one overwrote the other's state, and releasing one deleted it —
+    the other stayed isolated, out of sight of `list`, the reassertion and `reset`
+    (third review, T1 follow-up). A legacy `<name>.json` is used only when it belongs
+    to that resource id; by name alone, an ambiguous name resolves to nothing."""
+    name, rid = _vm_ref(ref)
+    legacy = directory / f"{name}.json"
+    if rid:
+        keyed = directory / f"{name}--{_rid_hash(rid)}.json"
+        if keyed.exists():
+            return keyed
+        if legacy.exists() and _file_rid(legacy) in ("", rid.rstrip("/").lower()):
+            return legacy
+        return None
+    if legacy.exists():
+        return legacy
+    keyed = sorted(directory.glob(f"{name}--*.json")) if directory.exists() else []
+    return keyed[0] if len(keyed) == 1 else None
+
+
+def _write_state(directory: Path, ref: str, rid: str, payload) -> None:
+    """Write under the keyed name (migrating the VM's legacy file), or the plain name
+    when no resource id is known."""
+    name, ref_rid = _vm_ref(ref)
+    rid = rid or ref_rid
+    if not rid:
+        _atomic_write_text(directory / f"{name}.json", json.dumps(payload))
+        return
+    _atomic_write_text(directory / f"{name}--{_rid_hash(rid)}.json", json.dumps(payload))
+    legacy = directory / f"{name}.json"
+    if legacy.exists() and _file_rid(legacy) in ("", rid.rstrip("/").lower()):
+        legacy.unlink()
+
+
+def _save_isolation_state(vm_ref: str, state: dict) -> None:
+    _write_state(_ISOLATION_STATE_DIR, vm_ref, str(state.get("resource_id") or ""), state)
+
+
+def _load_isolation_state(vm_ref: str) -> dict | None:
     """The recorded isolation, or None if absent or unreadable.
 
     An unreadable file is reported, not raised: release_isolation then recomputes the
     rule names on every NIC (they are deterministic), so a corrupt file can no longer
     make an isolation impossible to lift from the CLI.
     """
-    f = _ISOLATION_STATE_DIR / f"{vm_name}.json"
-    if not f.exists():
+    f = _state_file(_ISOLATION_STATE_DIR, vm_ref)
+    if f is None:
         return None
     try:
         return json.loads(f.read_text())
     except (OSError, ValueError) as e:
         _console.print(
-            f"[yellow]État d'isolation illisible pour {vm_name} ({e}) — traité comme "
+            f"[yellow]État d'isolation illisible pour {_vm_ref(vm_ref)[0]} ({e}) — traité comme "
             "absent ; les règles sont retrouvées par leur nom sur chaque NIC.[/yellow]"
         )
         return None
 
 
-def _clear_isolation_state(vm_name: str) -> None:
-    f = _ISOLATION_STATE_DIR / f"{vm_name}.json"
-    if f.exists():
+def _clear_isolation_state(vm_ref: str) -> None:
+    f = _state_file(_ISOLATION_STATE_DIR, vm_ref)
+    if f is not None and f.exists():
         f.unlink()
 
 
@@ -3110,7 +3170,7 @@ def active_isolations() -> list[dict]:
         try:
             state = json.loads(f.read_text())
             if state.get("resource_id"):
-                result.append({**state, "vm_name": f.stem})
+                result.append({**state, "vm_name": f.stem.split("--")[0], "state_key": f.stem})
         except Exception:
             pass
     return result
@@ -3129,8 +3189,7 @@ def _save_block_state(
     placements: list | None = None, partial: bool = False, threat_port: int | None = None,
 ) -> None:
     from datetime import datetime, timezone
-    f = _BLOCK_STATE_DIR / f"{vm_name}.json"
-    entries = _load_block_entries(vm_name)
+    entries = _load_block_entries(resource_id or vm_name)
     prev = next((e for e in entries if e.get("ip") == ip), None)
     if prev is None:
         # Record the NSG + scope so the representation matches Azure reality:
@@ -3158,13 +3217,14 @@ def _save_block_state(
         prev["partial"] = partial
         if threat_port is not None:
             prev["threat_port"] = threat_port
-    _atomic_write_text(f, json.dumps(entries))
+    _write_state(_BLOCK_STATE_DIR, vm_name, resource_id, entries)
 
 
-def _load_block_entries(vm_name: str) -> list[dict]:
-    """Return the recorded block entries for a VM (empty if none)."""
-    f = _BLOCK_STATE_DIR / f"{vm_name}.json"
-    if not f.exists():
+def _load_block_entries(vm_ref: str) -> list[dict]:
+    """Return the recorded block entries for a VM (empty if none). `vm_ref`: a short
+    name or a full resource id (see _state_file)."""
+    f = _state_file(_BLOCK_STATE_DIR, vm_ref)
+    if f is None:
         return []
     try:
         return json.loads(f.read_text())
@@ -3172,21 +3232,23 @@ def _load_block_entries(vm_name: str) -> list[dict]:
         return []
 
 
-def _clear_block_state(vm_name: str, ip: str) -> None:
-    f = _BLOCK_STATE_DIR / f"{vm_name}.json"
-    if not f.exists():
+def _clear_block_state(vm_ref: str, ip: str) -> None:
+    f = _state_file(_BLOCK_STATE_DIR, vm_ref)
+    if f is None:
         return
-    entries = [e for e in _load_block_entries(vm_name) if e.get("ip") != ip]
+    entries = [e for e in _load_block_entries(vm_ref) if e.get("ip") != ip]
     if entries:
         _atomic_write_text(f, json.dumps(entries))
     else:
         f.unlink()
 
 
-def _update_block_entry(vm_name: str, ip: str, **fields) -> None:
+def _update_block_entry(vm_ref: str, ip: str, **fields) -> None:
     """Annotate an existing block entry (e.g. the rules an unblock could not remove)."""
-    f = _BLOCK_STATE_DIR / f"{vm_name}.json"
-    entries = _load_block_entries(vm_name)
+    f = _state_file(_BLOCK_STATE_DIR, vm_ref)
+    if f is None:
+        return
+    entries = _load_block_entries(vm_ref)
     for e in entries:
         if e.get("ip") == ip:
             e.update(fields)
@@ -3202,7 +3264,7 @@ def active_blocks() -> list[dict]:
     for f in _BLOCK_STATE_DIR.glob("*.json"):
         try:
             for entry in json.loads(f.read_text()):
-                result.append({**entry, "vm_name": f.stem})
+                result.append({**entry, "vm_name": f.stem.split("--")[0], "state_key": f.stem})
         except Exception:
             pass
     return result

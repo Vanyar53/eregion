@@ -218,9 +218,8 @@ def release(resource_id: str, dry_run: bool, yes: bool):
         verification = connector.verify_release(resource_id)
         if verification.get("verified"):
             # NSG already clean — still clear any stale state file so War Room updates
-            from glorfindel.actions import _clear_isolation_state, _parse_vm_resource_id
-            _, vm_name = _parse_vm_resource_id(resource_id)
-            _clear_isolation_state(vm_name)
+            from glorfindel.actions import _clear_isolation_state
+            _clear_isolation_state(resource_id)      # by id: two VMs may share a name
             console.print("[yellow]No active isolation found on NSG — state cleared.[/yellow]")
             return
 

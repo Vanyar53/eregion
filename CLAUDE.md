@@ -345,8 +345,11 @@ infra/terraform/              → module Celebrimbor : infra de test Azure modul
 ~/.glorfindel/
   escalations.jsonl           → escalades persistées
   incidents.jsonl             → incidents actifs
-  isolation/<vm>.json         → état NSG isolation + TTL
-  blocks/<vm>.json            → IPs bloquées par VM
+  isolation/<vm>--<h>.json    → état NSG isolation + TTL. Clé = nom + hash de l'ID de ressource (troisième
+                                passe : deux VMs homonymes partageaient `<vm>.json`) ; un ancien `<vm>.json` n'est
+                                lu que s'il porte cet ID, migré à la première écriture ; par nom seul, un nom
+                                ambigu ne résout rien. Toujours lire via `_load_isolation_state(resource_id)`.
+  blocks/<vm>--<h>.json       → IPs bloquées par VM (même clé)
   proposed_rules.jsonl        → règles de détection proposées (en attente d'approbation)
   bot_posted.json             → IDs escalades déjà postées (évite doublons au redémarrage du bot)
   bot_threads.json            → resource_id → thread_id Discord (persistance entre redémarrages)
@@ -473,7 +476,7 @@ GLORFINDEL_DISCOVERY_RETENTION_H=8  # rétention d'une VM éteinte dans le regis
 ## Tests
 
 ```bash
-pytest                    # 687 tests (~15s), 0 appel Azure, 0 appel LLM, 0 écriture ~/.glorfindel/
+pytest                    # 689 tests (~15s), 0 appel Azure, 0 appel LLM, 0 écriture ~/.glorfindel/
                           # Hermétique par construction (conftest) : TOUS les chemins ~/.glorfindel redirigés
                           # vers tmp, et le glorfindel-config.yaml local ignoré (avant : avec une config locale,
                           # les tests de graphe lançaient de vraies requêtes KQL via `investigate`, suite 5× plus lente).

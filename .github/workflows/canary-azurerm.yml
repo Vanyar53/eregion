@@ -1,14 +1,15 @@
 name: canary-azurerm
 
-# Weekly: re-checks, on the latest azurerm provider, the Terraform behavior Glorfindel's
-# just-in-time isolation relies on (infra/canary/jit-terraform). Fails if it changed.
-# Needs repository secrets AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_TENANT_ID and
-# AZURE_SUBSCRIPTION_ID (a principal allowed to create a resource group); skipped
-# without them. Creates only free resources (resource group, VNet, NSG, NICs), deleted
-# at the end.
+# Daily: re-checks, on the latest release of each azurerm major line customers run, the
+# Terraform behavior Glorfindel's just-in-time isolation relies on
+# (infra/canary/jit-terraform). Fails if it changed. Needs repository secrets
+# AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_TENANT_ID and AZURE_SUBSCRIPTION_ID (a
+# principal allowed to create a resource group); WITHOUT them the run FAILS — a canary
+# that stays green while testing nothing is worse than none (third review, T16).
+# Creates only free resources (resource group, VNet, NSG, NICs), deleted at the end.
 on:
   schedule:
-    - cron: "0 6 * * 1"
+    - cron: "0 6 * * *"
   workflow_dispatch:
 
 permissions:
@@ -18,6 +19,10 @@ jobs:
   canary:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        azurerm: ["~> 3.0", "~> 4.0", "~> 5.0"]
     env:
       ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
       ARM_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
@@ -28,7 +33,7 @@ jobs:
         id: creds
         run: |
           if [ -z "$ARM_CLIENT_ID" ] || [ -z "$ARM_SUBSCRIPTION_ID" ]; then
-            echo "Azure secrets not configured — canary skipped."; echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "::error::Azure secrets not configured — the canary tests nothing."; exit 1
           else
             echo "ok=true" >> "$GITHUB_OUTPUT"
           fi
@@ -46,5 +51,6 @@ jobs:
       - name: Run canary
         if: steps.creds.outputs.ok == 'true'
         env:
-          CANARY_SUFFIX: gh${{ github.run_id }}
+          CANARY_SUFFIX: gh${{ github.run_id }}-${{ strategy.job-index }}
+          AZURERM_CONSTRAINT: ${{ matrix.azurerm }}
         run: infra/canary/jit-terraform/run.sh

@@ -5,8 +5,15 @@
 # before relying on the isolation with that provider version); exit 2 = setup error.
 #
 # Needs: terraform, az (logged in), ARM_SUBSCRIPTION_ID or AZURE_SUBSCRIPTION_ID.
+# AZURERM_CONSTRAINT picks the provider line (default "~> 4.0"; "~> 5.0", "~> 3.0"…):
+# customers run all of them. The stack runs from a temporary copy (no state in the repo).
 set -uo pipefail
-cd "$(dirname "$0")"
+SRC="$(cd "$(dirname "$0")" && pwd)"
+CONSTRAINT="${AZURERM_CONSTRAINT:-~> 4.0}"
+WORK="$(mktemp -d)"
+cp "$SRC/main.tf" "$WORK/"
+sed -i "s/version = \"~> 4.0\"/version = \"$CONSTRAINT\"/" "$WORK/main.tf"
+cd "$WORK"
 export ARM_SUBSCRIPTION_ID="${ARM_SUBSCRIPTION_ID:-${AZURE_SUBSCRIPTION_ID:-}}"
 [ -n "$ARM_SUBSCRIPTION_ID" ] || { echo "ARM_SUBSCRIPTION_ID / AZURE_SUBSCRIPTION_ID not set"; exit 2; }
 SUFFIX="${CANARY_SUFFIX:-$(date +%s)}"
@@ -18,7 +25,7 @@ cleanup() {
   echo "== cleanup"
   terraform destroy -auto-approve "${TFV[@]}" -var nic_tag=v2 >/dev/null 2>&1 \
     || az group delete -n "$RG" --yes --no-wait >/dev/null 2>&1
-  rm -rf .terraform terraform.tfstate* .terraform.lock.hcl
+  cd / && rm -rf "$WORK"
 }
 trap cleanup EXIT
 
@@ -28,7 +35,7 @@ expect() {  # expect <label> <actual> <expected>
 }
 plan_code() { terraform plan -detailed-exitcode "${TFV[@]}" "$@" >/dev/null 2>&1; echo $?; }
 
-echo "== setup (latest azurerm ~> 4.0)"
+echo "== setup (latest azurerm $CONSTRAINT)"
 terraform init -upgrade -input=false -no-color >/dev/null || exit 2
 VERSION=$(terraform version -json | python3 -c 'import json,sys; print(json.load(sys.stdin).get("provider_selections",{}).get("registry.terraform.io/hashicorp/azurerm","?"))')
 echo "   azurerm $VERSION"
@@ -43,7 +50,10 @@ az network nic update -g "$RG" -n nic-with-nsg --network-security-group "$QID" -
 expect "NSG set outside Terraform on a NIC whose NSG is in code: plan shows no change" "$(plan_code)" 0
 az network nic update -g "$RG" -n nic-no-nsg --network-security-group "$QID" -o none
 expect "NSG attached outside Terraform to a NIC without one: plan shows no change" "$(plan_code)" 0
+# This apply must succeed: if it fails, the two checks below pass without testing
+# anything (third review, T16).
 terraform apply -auto-approve "${TFV[@]}" -var nic_tag=v2 >/dev/null 2>&1
+expect "apply updating the NIC succeeds" "$?" 0
 expect "apply updating the NIC keeps the quarantine NSG (NIC with NSG in code)" "$(nic_nsg nic-with-nsg)" "$Q"
 expect "apply updating the NIC keeps the quarantine NSG (NIC without NSG)" "$(nic_nsg nic-no-nsg)" "$Q"
 az network nic update -g "$RG" -n nic-with-nsg --network-security-group "$CID" -o none

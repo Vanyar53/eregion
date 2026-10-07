@@ -1574,7 +1574,33 @@ def test_state_writes_are_atomic():
     import glorfindel.actions as actions
     actions._save_isolation_state("vm", {"resource_id": _RID})
     files = [f.name for f in actions._ISOLATION_STATE_DIR.iterdir()]
-    assert files == ["vm.json"]
+    assert len(files) == 1 and files[0].startswith("vm--") and files[0].endswith(".json")
+
+
+def test_two_homonymous_vms_keep_two_states():
+    """Keyed by name, isolating web in rg-b overwrote web's state in rg-a, and releasing
+    one deleted the other's — that VM stayed isolated, invisible (third review, T1)."""
+    import glorfindel.actions as actions
+    a = _RID.replace("/vm", "/web")
+    b = a.replace("/rg/", "/rg-b/")
+    actions._save_isolation_state(a, {"resource_id": a, "placements": [{"nic_id": "nic-a"}]})
+    actions._save_isolation_state(b, {"resource_id": b, "placements": [{"nic_id": "nic-b"}]})
+    assert actions._load_isolation_state(a)["placements"][0]["nic_id"] == "nic-a"
+    assert actions._load_isolation_state("web") is None                 # ambiguous name: no guess
+    actions._clear_isolation_state(b)
+    assert actions._load_isolation_state(a) is not None
+    assert [i["vm_name"] for i in actions.active_isolations()] == ["web"]
+
+
+def test_a_legacy_state_file_is_read_only_for_its_own_vm():
+    import json
+    import glorfindel.actions as actions
+    actions._ISOLATION_STATE_DIR.mkdir(parents=True, exist_ok=True)
+    (actions._ISOLATION_STATE_DIR / "vm.json").write_text(json.dumps({"resource_id": _RID}))
+    assert actions._load_isolation_state(_RID) is not None
+    assert actions._load_isolation_state(_RID.replace("/rg/", "/rg-b/")) is None
+    actions._save_isolation_state(_RID, {"resource_id": _RID, "verified_at": "t"})     # migrated
+    assert not (actions._ISOLATION_STATE_DIR / "vm.json").exists()
 
 
 def test_warm_up_imports_each_module_on_its_own(monkeypatch):

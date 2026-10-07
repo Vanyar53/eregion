@@ -1838,22 +1838,20 @@ def test_build_user_message_includes_isolation_state_not_isolated(tmp_path):
     assert "NON" in msg
 
 
-def test_build_user_message_includes_isolation_state_isolated(tmp_path):
-    """current_vm_state shows OUI when isolation file exists for this VM."""
+def test_build_user_message_includes_isolation_state_isolated():
+    """current_vm_state shows OUI for an isolated VM — under the state key by name AND
+    resource id (a direct read of `<name>.json` said NON), and for a legacy file."""
     import json
+    import glorfindel.actions as actions
     from glorfindel.agent import _build_user_message
-    vm_name = _RESOURCE_ID.split("/")[-1]
-    iso_dir = tmp_path / ".glorfindel" / "isolation"
-    iso_dir.mkdir(parents=True)
-    (iso_dir / f"{vm_name}.json").write_text(json.dumps({"resource_id": _RESOURCE_ID}))
-    signal = {
-        "resource_id": _RESOURCE_ID,
-        "event": "detection",
-        "raw_signal": {},
-    }
-    with patch("pathlib.Path.home", return_value=tmp_path):
-        msg = _build_user_message(signal, [])
-    assert "OUI" in msg
+    signal = {"resource_id": _RESOURCE_ID, "event": "detection", "raw_signal": {}}
+    actions._save_isolation_state(_RESOURCE_ID, {"resource_id": _RESOURCE_ID})
+    assert "**OUI**" in _build_user_message(signal, [])
+    actions._clear_isolation_state(_RESOURCE_ID)
+    actions._ISOLATION_STATE_DIR.mkdir(parents=True, exist_ok=True)
+    (actions._ISOLATION_STATE_DIR / f"{_RESOURCE_ID.split('/')[-1]}.json").write_text(
+        json.dumps({"resource_id": _RESOURCE_ID}))
+    assert "**OUI**" in _build_user_message(signal, [])
 
 
 def test_build_user_message_past_cycles_header_warns_about_state_inference(tmp_path):

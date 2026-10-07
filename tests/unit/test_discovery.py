@@ -124,11 +124,21 @@ def test_registry_all_is_sorted_by_name(tmp_path):
     assert [a.name for a in reg2.all()] == ["vm-alpha", "vm-bravo", "vm-charlie"]
 
 
-def test_registry_update_overwrites(tmp_path):
+def test_registry_update_overwrites_the_same_vm(tmp_path):
     reg = AssetRegistry(path=tmp_path / "assets.json")
-    reg.update([_asset("vm-a", rid="/old")])
-    reg.update([_asset("vm-a", rid="/new")])
-    assert reg.all()[0].resource_id == "/new"
+    reg.update([_asset("vm-a", rid="/sub/rg/vm-a")])
+    a = _asset("vm-a", rid="/SUB/rg/vm-a")
+    a.last_seen = "2026-01-02T00:00:00Z"
+    reg.update([a])
+    assert len(reg.all()) == 1 and reg.all()[0].last_seen.startswith("2026-01-02")
+
+
+def test_two_vms_with_the_same_host_name_are_two_assets(tmp_path):
+    """Keyed by host name, the registry kept one of two cloned VMs (third review, T1)."""
+    reg = AssetRegistry(path=tmp_path / "assets.json")
+    reg.replace_for_backend("law", [_asset("web", rid="/sub/rg-a/web"), _asset("web", rid="/sub/rg-b/web")])
+    assert sorted(a.resource_id for a in reg.all()) == ["/sub/rg-a/web", "/sub/rg-b/web"]
+    assert len(AssetRegistry(path=tmp_path / "assets.json").all()) == 2      # reloaded from disk
 
 
 def test_registry_for_backend(tmp_path):

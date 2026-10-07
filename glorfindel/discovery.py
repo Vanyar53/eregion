@@ -69,10 +69,20 @@ class AssetRegistry:
         self._assets: dict[str, DiscoveredAsset] = {}
         self._load()
 
+    @staticmethod
+    def _key(a: DiscoveredAsset) -> str:
+        """A VM is its resource id: two VMs with the same host name in two resource
+        groups (cloned environments) are two Heartbeat rows, and keying by name kept
+        one of them (third review, T1). Cluster nodes keep their name (they share the
+        cluster's id; the War Room groups them by parent)."""
+        if a.kind == "vm" and a.resource_id:
+            return a.resource_id.lower()
+        return a.name
+
     def update(self, assets: list[DiscoveredAsset]) -> None:
         with self._lock:
             for a in assets:
-                self._assets[a.name] = a
+                self._assets[self._key(a)] = a
             self._persist()
 
     def replace_for_backend(
@@ -93,14 +103,14 @@ class AssetRegistry:
         if retention_h is None:
             retention_h = _retention_h()
         now = datetime.now(timezone.utc)
-        fresh_names = {a.name for a in assets}
+        fresh_keys = {self._key(a) for a in assets}
         with self._lock:
             kept: dict[str, DiscoveredAsset] = {}
             for name, a in self._assets.items():
                 if a.monitoring_backend != backend_name:
                     kept[name] = a            # other backends: leave as-is
                     continue
-                if name in fresh_names:
+                if name in fresh_keys:
                     continue                  # replaced by the fresh entry below
                 # Vanished from this backend's Heartbeat — retain if still within window.
                 try:
@@ -110,7 +120,7 @@ class AssetRegistry:
                 if age_h < retention_h:
                     kept[name] = a            # keep stale (frozen last_seen)
             for a in assets:
-                kept[a.name] = a              # fresh / updated entries win
+                kept[self._key(a)] = a        # fresh / updated entries win
             self._assets = kept
             self._persist()
 
@@ -148,7 +158,7 @@ class AssetRegistry:
         try:
             for item in json.loads(self._path.read_text()):
                 a = DiscoveredAsset(**item)
-                self._assets[a.name] = a
+                self._assets[self._key(a)] = a
         except Exception:
             pass
 

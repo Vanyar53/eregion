@@ -1876,16 +1876,16 @@ def _build_user_message(
     resource_id = signal.get("resource_id", "")
     vm_name = resource_id.split("/")[-1] if resource_id else ""
     if vm_name:
-        from pathlib import Path as _Path
-        _iso_file = _Path.home() / ".glorfindel" / "isolation" / f"{vm_name}.json"
-        _blk_file = _Path.home() / ".glorfindel" / "blocks" / f"{vm_name}.json"
-        isolated = _iso_file.exists()
+        # Read through the state helpers, by resource id: files are keyed by name AND
+        # resource id (two VMs may share a name) — reading `<name>.json` directly would
+        # tell the model a VM isolated under the new key is NOT isolated.
+        from glorfindel.actions import _load_block_entries, _load_isolation_state
+        isolated = _load_isolation_state(resource_id) is not None
         blocked_ips: list[str] = []
-        if _blk_file.exists():
-            try:
-                blocked_ips = [e["ip"] for e in json.loads(_blk_file.read_text())]
-            except Exception:
-                pass
+        try:
+            blocked_ips = [e["ip"] for e in _load_block_entries(resource_id)]
+        except Exception:
+            pass
         lines.append("\n## État actuel de la VM (source de vérité — ne jamais inférer depuis past_cycles)\n")
         lines.append(f"- Isolée (NSG deny-all actif) : **{'OUI' if isolated else 'NON'}**")
         lines.append(

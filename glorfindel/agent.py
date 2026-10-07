@@ -755,7 +755,9 @@ def _apply_release_precondition(d: dict, signal: dict) -> None:
     if d["escalate"] or d["action"] != "release_isolation":
         return
     neutralized = (signal.get("raw_signal") or {}).get("run_command_neutralized")
-    if signal.get("event") == "recovery_complete" and neutralized is not False:
+    # `is True`, not `is not False`: an absent flag (a restore that didn't neutralize,
+    # a recovery_complete written by anything else) is an unknown, not a success.
+    if signal.get("event") == "recovery_complete" and neutralized is True:
         return
     if signal.get("event") == "recovery_complete":
         # The restored disk may have replayed the attacker's last Run Command at boot
@@ -763,8 +765,11 @@ def _apply_release_precondition(d: dict, signal: dict) -> None:
         d["escalate"] = True
         d["held_by"] = "release_precondition"
         d["escalation_reason"] = (
-            "Restauration terminée, mais la dernière commande Run Command n'a pas pu être "
-            "neutralisée avant : le disque restauré a pu la rejouer au démarrage. "
+            ("Restauration terminée, mais la dernière commande Run Command n'a pas pu être "
+             "neutralisée avant : " if neutralized is False else
+             "Restauration terminée, mais la neutralisation de la dernière commande Run "
+             "Command n'est pas confirmée (restore lancé hors `glorfindel restore --wait`) : ")
+            + "le disque restauré a pu la rejouer au démarrage. "
             "Vérifier l'intégrité de la VM avant de lever l'isolation."
         )
         return

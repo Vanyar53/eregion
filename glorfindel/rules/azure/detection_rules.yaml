@@ -39,19 +39,33 @@ rules:
     # 2026-10-06 — the bench's Standard HDD caps writes near 60 MB/s; other attacks
     # 65.7–120.3. 45 (chosen with Jonathan) keeps 26 % above the benign peak and catches
     # every malicious window on both volumes; 50 missed the data volume on 06/10.
+    # Sampling (third review, T6): the bench samples every 10 s, Azure's default DCR
+    # every 60 s — where two samples are never 25 s apart, so the rule never fired. The
+    # step of each series is read from the data: fine sampling (≤ 25 s) → 2-sample
+    # average above 45 MB/s, unchanged; coarse sampling → one sample (already the
+    # average over its own interval, rate counter) above 25 MB/s. 60-s averages rebuilt
+    # from 10 days of bench data (2026-10-07): attacks 26.8 / 41.7 / 52.9 / 91.7 MB/s,
+    # benign max 23.2 (apt catch-up) — 45 would miss two attacks out of four; 25 catches
+    # all four with a thin margin (8 %). Provisional: to measure with a real 60-s DCR.
     # Output unchanged (MaxWrite by Computer): dedup and what the LLM sees stay the same.
     query: |
-      Perf
-      | where TimeGenerated > ago(10m)
-      | where ObjectName == "Logical Disk" or ObjectName == "LogicalDisk"
-      | where CounterName == "Disk Write Bytes/sec"
-      | project TimeGenerated, Computer, InstanceName, CounterValue
-      | order by Computer asc, InstanceName asc, TimeGenerated asc
-      | extend PrevValue = iff(prev(Computer) == Computer and prev(InstanceName) == InstanceName
-                               and TimeGenerated - prev(TimeGenerated) <= 25s,
-                               prev(CounterValue), real(null))
-      | where isnotnull(PrevValue) and (CounterValue + PrevValue) / 2 > 45000000
-      | summarize MaxWrite = max(max_of(CounterValue, PrevValue)) by Computer
+      let samples = Perf
+        | where TimeGenerated > ago(10m)
+        | where ObjectName == "Logical Disk" or ObjectName == "LogicalDisk"
+        | where CounterName == "Disk Write Bytes/sec"
+        | project TimeGenerated, Computer, InstanceName, CounterValue
+        | order by Computer asc, InstanceName asc, TimeGenerated asc
+        | extend Same = prev(Computer) == Computer and prev(InstanceName) == InstanceName
+        | extend Gap = iff(Same, TimeGenerated - prev(TimeGenerated), timespan(null)),
+                 PrevValue = iff(Same, prev(CounterValue), real(null));
+      samples
+      | join kind=leftouter (samples | summarize Step = min(Gap) by Computer, InstanceName)
+          on Computer, InstanceName
+      | extend Fine = isnotnull(Step) and Step <= 25s
+      | extend Rate = iff(Fine, iff(Gap <= 25s, (CounterValue + PrevValue) / 2, real(null)), CounterValue),
+               Peak = iff(Fine, max_of(CounterValue, PrevValue), CounterValue)
+      | where (Fine and Rate > 45000000) or (not(Fine) and Rate > 25000000)
+      | summarize MaxWrite = max(Peak) by Computer
 
   - name: data-exfiltration-blob
     description: "PutBlob from a VM private IP — T1041 exfiltration via MSI"
@@ -108,7 +122,9 @@ rules:
       | where SyslogMessage !has "NOT in sudoers"
             and SyslogMessage !has "authentication failure"
       | project TimeGenerated, Computer, SyslogMessage
-      | limit 1
+      // One row per VM, not `limit 1`: the limit ran on the server before the per-VM
+      // filter, so a benign sudo on another VM hid the attack (third review, T7).
+      | summarize arg_max(TimeGenerated, *) by Computer
 
   - name: t1136-001-local-account-creation-linux-v1
     description: >

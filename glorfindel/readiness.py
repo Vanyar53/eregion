@@ -77,6 +77,16 @@ def assess(resource_id: str, connector, quarantine_nsg: bool = True) -> dict:
             "instance de VMSS) n'est pas pris en charge.", ""))
         return _verdict(vm, reasons)
 
+    from glorfindel.actions import _subscription_of
+    target = _subscription_of(resource_id)
+    mine = getattr(connector, "_subscription_id", None)
+    if isinstance(mine, str) and mine and target and target.lower() != mine.lower():
+        reasons.append(_reason(
+            "other_subscription", "not_ready",
+            f"VM dans l'abonnement {target}, Glorfindel agit dans {mine} : toute action "
+            "serait refusée.", "Une instance de Glorfindel configurée pour cet abonnement."))
+        return _verdict(vm, reasons)
+
     if getattr(connector, "read_only", False) is True:
         reasons.append(_reason(
             "read_only", "not_ready",

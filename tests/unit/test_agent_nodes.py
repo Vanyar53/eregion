@@ -1255,13 +1255,34 @@ def test_graph_recovery_complete_releases_isolation(tmp_path, monkeypatch, dry_c
         mock_cls.return_value = _mock_llm_response("release_isolation")
         final = graph.invoke(_initial(
             "recovery_complete",
-            raw={"recovery_point_time": "2026-05-24T10:00:00Z", "restore_time_s": 1220},
+            raw={"recovery_point_time": "2026-05-24T10:00:00Z", "restore_time_s": 1220,
+                 "run_command_neutralized": True},
         ))
 
     assert final["action"] == "release_isolation"
     assert final["outcome"]["status"] == "dry_run"
     assert final["escalate"] is False
     assert tmp_memory.count() == 1
+
+
+def test_recovery_complete_without_the_neutralization_flag_is_held():
+    """An absent flag is an unknown, not a success (third review, T5): only a restore
+    that confirmed the neutralization releases on its own."""
+    from glorfindel.agent import _apply_release_precondition
+    for flag in (None, False):
+        d = {"escalate": False, "action": "release_isolation"}
+        raw = {} if flag is None else {"run_command_neutralized": flag}
+        _apply_release_precondition(d, {"event": "recovery_complete", "raw_signal": raw})
+        assert d["escalate"] is True and d["held_by"] == "release_precondition"
+    assert "pas confirmée" in _held_reason(None) and "pas pu" in _held_reason(False)
+
+
+def _held_reason(flag):
+    from glorfindel.agent import _apply_release_precondition
+    d = {"escalate": False, "action": "release_isolation"}
+    _apply_release_precondition(d, {"event": "recovery_complete",
+                                    "raw_signal": {"run_command_neutralized": flag}})
+    return d["escalation_reason"]
 
 
 def test_graph_destructive_action_always_escalates(tmp_path, monkeypatch, dry_connector, tmp_memory):
@@ -1922,7 +1943,8 @@ def test_release_on_recovery_complete_stays_autonomous():
     from glorfindel.agent import decide
     state = _state()
     state["signal"]["event"] = "recovery_complete"
-    state["signal"]["raw_signal"] = {"recovery_point_time": "2026-06-09T10:00:00Z"}
+    state["signal"]["raw_signal"] = {"recovery_point_time": "2026-06-09T10:00:00Z",
+                                     "run_command_neutralized": True}
     with patch("litellm.completion", return_value=_mock_llm_response("release_isolation")):
         out = decide(state, model="x", autonomy_override="non_disruptive")
     assert out["escalate"] is False

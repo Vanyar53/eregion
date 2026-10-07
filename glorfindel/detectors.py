@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 import time
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta, timezone
@@ -43,6 +44,19 @@ class DetectionConnector(ABC):
 class AzureMonitorDetector(DetectionConnector):
     def __init__(self, workspace_id: str):
         self.workspace_id = workspace_id
+        self._client = None
+        self._client_lock = threading.Lock()
+
+    def _logs_client(self):
+        """One credential + client per detector: a DefaultAzureCredential was rebuilt
+        on every query (token fetch each time) — third review, T10."""
+        if self._client is None:
+            with self._client_lock:
+                if self._client is None:
+                    from azure.identity import DefaultAzureCredential
+                    from azure.monitor.query import LogsQueryClient
+                    self._client = LogsQueryClient(DefaultAzureCredential())
+        return self._client
 
     def poll_alert(
         self,
@@ -53,11 +67,9 @@ class AzureMonitorDetector(DetectionConnector):
         verbose: bool = True,
         match_row=None,
     ) -> tuple | None:
-        from azure.identity import DefaultAzureCredential
-        from azure.monitor.query import LogsQueryClient, LogsQueryStatus
+        from azure.monitor.query import LogsQueryStatus
 
-        credential = DefaultAzureCredential()
-        client = LogsQueryClient(credential)
+        client = self._logs_client()
         since_dt = datetime.fromtimestamp(since, tz=timezone.utc)
 
         start = time.time()
@@ -119,11 +131,9 @@ class AzureMonitorDetector(DetectionConnector):
         discovery (it evicted assets instead of keeping its cache) and detection. Callers
         that want best-effort behaviour catch the exception explicitly.
         """
-        from azure.identity import DefaultAzureCredential
-        from azure.monitor.query import LogsQueryClient, LogsQueryStatus
+        from azure.monitor.query import LogsQueryStatus
 
-        credential = DefaultAzureCredential()
-        client = LogsQueryClient(credential)
+        client = self._logs_client()
         if timespan is None:
             now = datetime.now(tz=timezone.utc)
             timespan = (now - timedelta(hours=3), now + timedelta(minutes=1))

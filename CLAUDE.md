@@ -79,6 +79,7 @@ load_context → poll_detection → investigate → decide → execute_action �
 ```
 
 - `poll_detection` : no-op sauf `attack_started` → poll Azure Monitor jusqu'à alerte ou timeout ; `detection_time_s` = temps depuis `attack_time` (T0 de l'attaque), plus depuis la réception du signal
+- **RulePoller — une requête par règle, lignes routées (troisième passe L13, 07/10)** : un thread **par règle** (plus par couple règle × VM) lance la requête **une fois** par cycle (`poll_once` → `run_query`), puis route chaque ligne : `_ResourceId` d'une VM, sinon `Computer` (nom d'hôte ou nom de VM), sinon l'IP privée qui a fait l'appel (`CallerIpAddress`, table IP → VM `AzureConnector.private_ip_owners`, cache 5 min — T1041). Une ligne qui nomme une VM non surveillée (exclue, autre backend) est ignorée ; une ligne non attribuée est envoyée **une seule fois**, ancrée sur une VM surveillée, `context.attribution = "unattributed"` + `candidates` — même avec une seule VM (plus d'attribution par défaut) — et la garde d'attribution de `decide` retient l'isolation **et le blocage d'IP**. Déduplication : `dispatched[cible] = {identité: époque}` (ensemble avec expiration à la fenêtre ; ancienne forme relue), enregistrée **après** l'envoi ; lignes d'événement (`TimeGenerated`) : une seule par cycle et par VM (la plus récente), lignes agrégées : chacune (un attaquant B n'est plus masqué par A, l'alternance A/B ne renvoie plus rien). Le volume ne dépend plus du nombre de VMs ; le registre est relu à chaque cycle (VM découverte ou évincée prise en compte au cycle suivant). `ssh-brute-force` agrège `by SourceIP, Computer`. Client Log Analytics créé une fois par détecteur.
 - **RulePoller (run du 2026-10-05)** — trois défauts corrigés ensemble :
   - **Fenêtre** : le timespan API vaut maintenant le plus long `ago()` de la requête + 5 min de marge (`_query_lookback_s`, défaut 10 min). Avant : `now - 2*interval_s` (60 s), qui l'emportait sur le `ago(10m)` → aveugle à toute ligne ingérée avec plus de ~84 s de retard.
   - **Attribution (B8)** : une règle `assets: [auto]` est déclinée par VM découverte, mais la requête n'est pas filtrée sur la VM → une détection sur une VM était dispatchée pour **toutes** les VMs (isolation à tort possible en `non_disruptive`, masqué par le banc mono-VM). `poll_alert(match_row=…)` ne retient que les lignes de CETTE VM (`_ResourceId` / `Computer`) ou les lignes qui ne nomment aucune ressource (agrégées par IP attaquante / compte de stockage). Ces dernières portent `context.attribution = "unattributed"` quand plusieurs VMs sont surveillées → la garde d'attribution de `decide` retient `isolate_vm` (escalade `unattributed_signal`) ; un blocage d'IP reste autonome.
@@ -264,7 +265,8 @@ glorfindel/
                             (l'asset matching de expand_for_discovered en dépend). start()/expand respectent enabled.
                           RulePoller.expand_for_discovered(registry, glorfindel_cfg) — démarre threads
                           par (règle auto_apply, asset découvert), thread s'arrête si asset évincé
-  audit.py              → AuditCheck (+ champ `data` structuré : nsg/nsg_scope + nsgs[] multi-NIC, points/protected), AuditResult,
+  audit.py              → « Disk write sampling » (`_check_perf_sampling`, si un workspace est configuré) : cadence réelle du compteur Disk Write Bytes/sec de la VM sur 1 h — ≤ 25 s mode fin, au-delà mode grossier (warn), aucun échantillon = détection ransomware aveugle (warn + correctif DCR)
+                          AuditCheck (+ champ `data` structuré : nsg/nsg_scope + nsgs[] multi-NIC, points/protected), AuditResult,
                           run() — NSG/backup/compute readiness checks en parallèle, IAM gap detection
   proposed_rules.py     → record/pending/approve()/reject() — detection rule proposal lifecycle
   detection_authoring.py → moteur d'autoring grounded (boucle purple GÉNÉRATIVE, côté bleu).
@@ -469,7 +471,7 @@ GLORFINDEL_DISCOVERY_RETENTION_H=8  # rétention d'une VM éteinte dans le regis
 ## Tests
 
 ```bash
-pytest                    # 681 tests (~15s), 0 appel Azure, 0 appel LLM, 0 écriture ~/.glorfindel/
+pytest                    # 685 tests (~15s), 0 appel Azure, 0 appel LLM, 0 écriture ~/.glorfindel/
                           # Hermétique par construction (conftest) : TOUS les chemins ~/.glorfindel redirigés
                           # vers tmp, et le glorfindel-config.yaml local ignoré (avant : avec une config locale,
                           # les tests de graphe lançaient de vraies requêtes KQL via `investigate`, suite 5× plus lente).

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import textwrap
 import time
-from unittest.mock import MagicMock, patch
 
 
 from glorfindel.detection_rules import (
@@ -344,22 +343,12 @@ def test_rulepoller_recently_matched_no_status(tmp_path, monkeypatch):
     assert rulepoller_recently_matched("T1548.003", within_s=300) is False
 
 
-def test_poller_stores_ttp_in_status(tmp_path, monkeypatch):
+def test_poller_stores_ttp_in_status():
     """rule_status.json must include ttp after a match — required by rulepoller_recently_matched."""
-    monkeypatch.setattr("glorfindel.detection_rules._STATUS_FILE", tmp_path / "rs.json")
-    mock_detector = MagicMock()
-    mock_detector.poll_alert.return_value = (
-        1.0,
-        {"TimeGenerated": "2026-06-01T13:00:00Z", "Computer": "vm1"},
-    )
-    with patch("glorfindel.detection_rules.detector_for", return_value=mock_detector):
-        rule = _make_rule(name="test-rule", ttp="T1548.003", interval_s=0.05)
-        poller = RulePoller([rule], lambda s: None, dry_run=False)
-        poller.start()
-        _wait_for(lambda: _load_status().get("test-rule", {}).get("ttp"))
-        poller.stop()
-    status = _load_status()
-    assert status.get("test-rule", {}).get("ttp") == "T1548.003"
+    rule = _make_rule(name="test-rule", ttp="T1548.003")
+    p, _ = _poller(_Det([{"TimeGenerated": "2026-06-01T13:00:00Z", "Computer": "vm1"}]), [rule])
+    p.poll_once(rule)
+    assert _load_status().get("test-rule", {}).get("ttp") == "T1548.003"
 
 
 def test_status_roundtrip(tmp_path, monkeypatch):
@@ -431,26 +420,13 @@ def test_normalize_row_generic_fallback():
     assert n["indicator_value"] == 42
 
 
-def test_poller_signal_contains_normalized_signal(tmp_path, monkeypatch):
+def test_poller_signal_contains_normalized_signal():
     """Dispatched signals must include raw_signal.normalized_signal."""
-    monkeypatch.setattr(
-        "glorfindel.detection_rules._STATUS_FILE",
-        tmp_path / "status.json",
-    )
-    dispatched = []
-    mock_detector = MagicMock()
+    rule = _make_rule(ttp="T1486")
     row = {"TimeGenerated": "2026-05-31T19:13:29Z", "Computer": "vm1", "MaxWrite": 60000000}
-    mock_detector.poll_alert.return_value = (1.0, row)
-
-    with patch("glorfindel.detection_rules.detector_for", return_value=mock_detector):
-        rule = _make_rule(interval_s=0.05, ttp="T1486")
-        poller = RulePoller([rule], dispatched.append, dry_run=False)
-        poller.start()
-        _wait_for(lambda: dispatched)
-        poller.stop()
-
-    assert len(dispatched) >= 1
-    norm = dispatched[0]["raw_signal"].get("normalized_signal", {})
+    p, sent = _poller(_Det([row]), [rule])
+    p.poll_once(rule)
+    norm = sent[0]["raw_signal"].get("normalized_signal", {})
     assert norm["indicator_key"] == "disk_write_rate_bps"
     assert norm["resource"] == "vm1"
 
@@ -484,226 +460,6 @@ def _make_rule(**kwargs) -> DetectionRule:
     return DetectionRule(**base)
 
 
-def test_poller_dispatches_on_match(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        "glorfindel.detection_rules._STATUS_FILE",
-        tmp_path / "status.json",
-    )
-
-    dispatched = []
-
-    mock_detector = MagicMock()
-    mock_detector.poll_alert.return_value = (5.0, {"Computer": "vm1"})
-
-    with patch("glorfindel.detection_rules.detector_for", return_value=mock_detector):
-        rule = _make_rule(interval_s=0.05)
-        poller = RulePoller([rule], dispatched.append, dry_run=False)
-        poller.start()
-        _wait_for(lambda: dispatched)
-        poller.stop()
-
-    assert len(dispatched) >= 1
-    sig = dispatched[0]
-    assert sig["event"] == "detection"
-    assert sig["ttp"] == "T1486"
-    assert sig["resource_id"] == "/subscriptions/sub/rg/vm1"
-    assert sig["raw_signal"]["first_result_row"] == {"Computer": "vm1"}
-
-
-def test_poller_dry_run_no_dispatch(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        "glorfindel.detection_rules._STATUS_FILE",
-        tmp_path / "status.json",
-    )
-
-    dispatched = []
-    mock_detector = MagicMock()
-    mock_detector.poll_alert.return_value = (2.0, {"row": "data"})
-
-    with patch("glorfindel.detection_rules.detector_for", return_value=mock_detector):
-        rule = _make_rule(interval_s=0.05)
-        poller = RulePoller([rule], dispatched.append, dry_run=True)
-        poller.start()
-        _wait_for(lambda: mock_detector.poll_alert.call_count >= 4)
-        poller.stop()
-
-    assert dispatched == []
-
-
-def test_poller_no_match_no_dispatch(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        "glorfindel.detection_rules._STATUS_FILE",
-        tmp_path / "status.json",
-    )
-
-    dispatched = []
-    mock_detector = MagicMock()
-    mock_detector.poll_alert.return_value = None  # no rows
-
-    with patch("glorfindel.detection_rules.detector_for", return_value=mock_detector):
-        rule = _make_rule(interval_s=0.05)
-        poller = RulePoller([rule], dispatched.append, dry_run=False)
-        poller.start()
-        _wait_for(lambda: mock_detector.poll_alert.call_count >= 4)
-        poller.stop()
-
-    assert dispatched == []
-
-
-def test_poller_records_error_status(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        "glorfindel.detection_rules._STATUS_FILE",
-        tmp_path / "status.json",
-    )
-
-    mock_detector = MagicMock()
-    mock_detector.poll_alert.side_effect = RuntimeError("network error")
-
-    with patch("glorfindel.detection_rules.detector_for", return_value=mock_detector):
-        rule = _make_rule(interval_s=0.05)
-        poller = RulePoller([rule], lambda s: None, dry_run=False)
-        poller.start()
-        # Wait on the CONDITION, not a fixed sleep: a 0.3s sleep failed whenever the
-        # poll thread hadn't run once yet (scheduling-dependent flake).
-        deadline = time.time() + 5
-        status = {}
-        while time.time() < deadline:
-            status = _load_status()
-            if "network error" in status.get("rule-x", {}).get("last_error", ""):
-                break
-            time.sleep(0.02)
-        poller.stop()
-
-    assert "rule-x" in status
-    assert "network error" in status["rule-x"].get("last_error", "")
-
-
-def test_poller_status_snapshot(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        "glorfindel.detection_rules._STATUS_FILE",
-        tmp_path / "status.json",
-    )
-
-    mock_detector = MagicMock()
-    mock_detector.poll_alert.return_value = None
-
-    with patch("glorfindel.detection_rules.detector_for", return_value=mock_detector):
-        rule = _make_rule(name="snap-rule", ttp="T1041", interval_s=0.05)
-        poller = RulePoller([rule], lambda s: None, dry_run=False)
-        poller.start()
-        _wait_for(lambda: mock_detector.poll_alert.call_count >= 1)
-        poller.stop()
-
-    snap = poller.status_snapshot()
-    assert len(snap) == 1
-    assert snap[0]["name"] == "snap-rule"
-    assert snap[0]["ttp"] == "T1041"
-
-
-def test_poller_signal_has_unique_ids(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        "glorfindel.detection_rules._STATUS_FILE",
-        tmp_path / "status.json",
-    )
-
-    dispatched = []
-    mock_detector = MagicMock()
-    mock_detector.poll_alert.return_value = (1.0, {})
-
-    with patch("glorfindel.detection_rules.detector_for", return_value=mock_detector):
-        rule = _make_rule(interval_s=0.05)
-        poller = RulePoller([rule], dispatched.append, dry_run=False)
-        poller.start()
-        _wait_for(lambda: mock_detector.poll_alert.call_count >= 4)
-        poller.stop()
-
-    ids = [s["signal_id"] for s in dispatched]
-    assert len(ids) == len(set(ids)), "signal_ids must be unique"
-
-
-def test_poller_multiple_rules(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        "glorfindel.detection_rules._STATUS_FILE",
-        tmp_path / "status.json",
-    )
-
-    dispatched = []
-    mock_detector = MagicMock()
-    mock_detector.poll_alert.return_value = (1.0, {"row": "x"})
-
-    with patch("glorfindel.detection_rules.detector_for", return_value=mock_detector):
-        rules = [
-            _make_rule(name="rule-a", ttp="T1486", interval_s=0.05),
-            _make_rule(name="rule-b", ttp="T1041", interval_s=0.05),
-        ]
-        poller = RulePoller(rules, dispatched.append, dry_run=False)
-        poller.start()
-        _wait_for(lambda: {s["ttp"] for s in dispatched} >= {"T1486", "T1041"})
-        poller.stop()
-
-    ttps = {s["ttp"] for s in dispatched}
-    assert "T1486" in ttps
-    assert "T1041" in ttps
-
-
-def test_poller_deduplicates_same_row(tmp_path, monkeypatch):
-    """Same TimeGenerated row across polls must produce only one dispatch."""
-    monkeypatch.setattr(
-        "glorfindel.detection_rules._STATUS_FILE",
-        tmp_path / "status.json",
-    )
-    dispatched = []
-    mock_detector = MagicMock()
-    # Return the same row (same TimeGenerated) on every poll
-    same_row = {"TimeGenerated": "2026-05-31T19:13:29Z", "Computer": "vm1"}
-    mock_detector.poll_alert.return_value = (1.0, same_row)
-
-    with patch("glorfindel.detection_rules.detector_for", return_value=mock_detector):
-        rule = _make_rule(interval_s=0.05)
-        poller = RulePoller([rule], dispatched.append, dry_run=False)
-        poller.start()
-        _wait_for(lambda: mock_detector.poll_alert.call_count >= 4)
-        poller.stop()
-
-    assert len(dispatched) == 1, (
-        f"Same event row should only dispatch once, got {len(dispatched)}"
-    )
-
-
-def test_poller_dispatches_new_row_after_dedup(tmp_path, monkeypatch):
-    """Different TimeGenerated rows should each produce a dispatch."""
-    monkeypatch.setattr(
-        "glorfindel.detection_rules._STATUS_FILE",
-        tmp_path / "status.json",
-    )
-    dispatched = []
-    mock_detector = MagicMock()
-    rows = [
-        {"TimeGenerated": "2026-05-31T19:13:29Z", "Computer": "vm1"},
-        {"TimeGenerated": "2026-05-31T19:14:30Z", "Computer": "vm1"},
-    ]
-    # Alternate between two distinct rows
-    call_count = [0]
-    def _poll_side_effect(**kwargs):
-        idx = min(call_count[0], len(rows) - 1)
-        call_count[0] += 1
-        return (1.0, rows[idx])
-    mock_detector.poll_alert.side_effect = _poll_side_effect
-
-    with patch("glorfindel.detection_rules.detector_for", return_value=mock_detector):
-        rule = _make_rule(interval_s=0.05)
-        poller = RulePoller([rule], dispatched.append, dry_run=False)
-        poller.start()
-        _wait_for(lambda: call_count[0] >= 4 and len(dispatched) >= 2)
-        poller.stop()
-
-    assert len(dispatched) == 2, (
-        f"Two distinct rows should produce two dispatches, got {len(dispatched)}"
-    )
-
-
-# ── Run Azure du 2026-10-05 : fenêtre de requête, attribution, déduplication ──────
-
 class _Asset:
     def __init__(self, name):
         self.name = name
@@ -718,21 +474,102 @@ class _Registry:
         return self.assets
 
 
-def _asset_rule(name="vm1", **kw):
-    return _make_rule(name="ransomware-disk-write", interval_s=0.05, asset_name=name,
-                      resource_id=_Asset(name).resource_id,
-                      query="Perf | where TimeGenerated > ago(10m) | summarize MaxWrite=max(CounterValue) by Computer",
-                      **kw)
+class _Det:
+    """A detector whose query returns `rows` (or raises `error`); records each call."""
+    def __init__(self, rows=None, error=None):
+        self.rows, self.error, self.calls = list(rows or []), error, []
+
+    def run_query(self, query, timespan=None):
+        self.calls.append(timespan)
+        if self.error:
+            raise self.error
+        return list(self.rows)
 
 
-def _run_asset_rule(poller, rule, registry, cond):
-    import threading
-    t = threading.Thread(target=poller._poll_rule, args=(rule, registry), daemon=True)
-    t.start()
-    _wait_for(cond)
-    poller.stop()
-    t.join(timeout=2)
+def _vm(name):
+    return _Asset(name).resource_id
 
+
+def _auto_rule(**kw):
+    base = dict(name="ransomware-disk-write", auto_apply=True, resource_id="",
+                query="Perf | where TimeGenerated > ago(10m) | summarize MaxWrite=max(CounterValue) by Computer")
+    base.update(kw)
+    return _make_rule(**base)
+
+
+def _poller(det, rules=(), registry=None, dry_run=False, ip_owners=None, cfg=None):
+    sent: list = []
+    p = RulePoller(list(rules), sent.append, dry_run=dry_run, ip_owners=ip_owners)
+    p._detector = lambda rule: det
+    p._registry, p._cfg = registry, cfg
+    return p, sent
+
+
+def test_poller_dispatches_on_match():
+    rule = _make_rule()
+    p, sent = _poller(_Det([{"Computer": "vm1"}]), [rule])
+    p.poll_once(rule)
+    assert len(sent) == 1
+    sig = sent[0]
+    assert sig["event"] == "detection" and sig["ttp"] == "T1486"
+    assert sig["resource_id"] == "/subscriptions/sub/rg/vm1"
+    assert sig["raw_signal"]["first_result_row"] == {"Computer": "vm1"}
+    assert "normalized_signal" in sig["raw_signal"]
+
+
+def test_poller_dry_run_no_dispatch():
+    rule = _make_rule()
+    p, sent = _poller(_Det([{"Computer": "vm1"}]), [rule], dry_run=True)
+    assert len(p.poll_once(rule)) == 1 and sent == []
+
+
+def test_poller_no_match_no_dispatch():
+    rule = _make_rule()
+    p, sent = _poller(_Det([]), [rule])
+    p.poll_once(rule)
+    assert sent == [] and p.status_snapshot()[0]["last_poll"]
+
+
+def test_poller_records_error_status_then_clears_it():
+    rule = _make_rule()
+    det = _Det(error=RuntimeError("workspace query not successful"))
+    p, sent = _poller(det, [rule])
+    p.poll_once(rule)
+    assert "not successful" in p.status_snapshot()[0]["last_error"] and sent == []
+    det.error = None
+    p.poll_once(rule)
+    assert p.status_snapshot()[0]["last_error"] == ""
+
+
+def test_poller_status_snapshot_and_ttp():
+    rule = _make_rule()
+    p, _ = _poller(_Det([{"Computer": "vm1"}]), [rule])
+    p.poll_once(rule)
+    snap = p.status_snapshot()[0]
+    assert snap["match_count"] == 1 and snap["last_match"] and snap["ttp"] == "T1486"
+
+
+def test_poller_signal_has_unique_ids():
+    rule = _make_rule()
+    p, sent = _poller(_Det([{"Computer": "vm1", "SourceIP": "203.0.113.1"},
+                            {"Computer": "vm1", "SourceIP": "203.0.113.2"}]), [rule])
+    p.poll_once(rule)
+    assert len({s["signal_id"] for s in sent}) == 2
+
+
+def test_poller_deduplicates_same_row_and_sends_a_new_one():
+    rule = _make_rule()
+    det = _Det([{"Computer": "vm1", "TimeGenerated": "2026-10-07T10:00:00Z"}])
+    p, sent = _poller(det, [rule])
+    p.poll_once(rule)
+    p.poll_once(rule)
+    assert len(sent) == 1
+    det.rows.append({"Computer": "vm1", "TimeGenerated": "2026-10-07T10:05:00Z"})
+    p.poll_once(rule)
+    assert len(sent) == 2
+
+
+# ── Run Azure du 2026-10-05 / troisième passe : fenêtre, routage, déduplication ──────
 
 def test_query_lookback_follows_the_rules_ago():
     from glorfindel.detection_rules import _query_lookback_s
@@ -741,112 +578,158 @@ def test_query_lookback_follows_the_rules_ago():
     assert _query_lookback_s("Perf | limit 1") == 600          # no ago(): default
 
 
-def test_poller_window_covers_late_ingestion(tmp_path, monkeypatch):
+def test_poller_window_covers_late_ingestion():
     """The API timespan used to start 2*interval (60 s) back and overrode the query's
     ago(10m): rows ingested 89–109 s late (real run, 05/10) were never seen."""
-    monkeypatch.setattr("glorfindel.detection_rules._STATUS_FILE", tmp_path / "s.json")
-    mock_detector = MagicMock()
-    mock_detector.poll_alert.return_value = None
-    with patch("glorfindel.detection_rules.detector_for", return_value=mock_detector):
-        poller = RulePoller([], lambda s: None, dry_run=False)
-        before = time.time()
-        _run_asset_rule(poller, _asset_rule(), _Registry("vm1"),
-                        lambda: mock_detector.poll_alert.call_count >= 1)
-    since = mock_detector.poll_alert.call_args.kwargs["since"]
-    assert since <= before - 600
+    det = _Det([])
+    rule = _auto_rule()
+    p, _ = _poller(det, [rule], registry=_Registry("vm1"))
+    before = time.time()
+    p.poll_once(rule)
+    assert det.calls[0][0].timestamp() <= before - 600
 
 
 def test_row_attribution():
     from glorfindel.detection_rules import _row_attribution
-    rid = _Asset("vm1").resource_id
+    rid = _vm("vm1")
     assert _row_attribution({"Computer": "vm1"}, rid, "vm1") is True
-    assert _row_attribution({"Computer": "VM1.internal.cloudapp.net"}, rid, "vm1") is True
-    assert _row_attribution({"Computer": "vm2"}, rid, "vm1") is False
+    assert _row_attribution({"Computer": "vm2.internal"}, rid, "vm1") is False
     assert _row_attribution({"_ResourceId": rid.upper()}, rid, "vm1") is True
-    assert _row_attribution({"SourceIP": "203.0.113.9", "FailedAttempts": 40}, rid, "vm1") is None
+    assert _row_attribution({"CallerIpAddress": "10.0.0.4"}, rid, "vm1") is None
 
 
-def test_asset_rule_ignores_rows_about_another_vm(tmp_path, monkeypatch):
-    """The per-asset rule runs the shared, unscoped query: a ransomware row for vm2 was
-    dispatched for vm1 too (and for every discovered VM)."""
-    monkeypatch.setattr("glorfindel.detection_rules._STATUS_FILE", tmp_path / "s.json")
-    mock_detector = MagicMock()
-    mock_detector.poll_alert.return_value = None
-    with patch("glorfindel.detection_rules.detector_for", return_value=mock_detector):
-        poller = RulePoller([], lambda s: None, dry_run=False)
-        _run_asset_rule(poller, _asset_rule("vm1"), _Registry("vm1", "vm2"),
-                        lambda: mock_detector.poll_alert.call_count >= 1)
-    match_row = mock_detector.poll_alert.call_args.kwargs["match_row"]
-    assert match_row({"Computer": "vm1", "MaxWrite": 1.2e8})
-    assert not match_row({"Computer": "vm2", "MaxWrite": 1.2e8})
-    assert match_row({"SourceIP": "203.0.113.9"})              # names no VM: kept
+def test_one_query_per_rule_whatever_the_number_of_vms():
+    """It was one unfiltered query per (rule, VM), ~3 per cycle each: the volume grew
+    with the VMs and hit Log Analytics limits around 20–25 VMs (third review, T10)."""
+    det = _Det([])
+    rule = _auto_rule()
+    p, _ = _poller(det, [rule], registry=_Registry(*[f"vm{i}" for i in range(12)]))
+    p.poll_once(rule)
+    assert len(det.calls) == 1
 
 
-def test_aggregated_row_dispatched_once_while_its_counts_grow(tmp_path, monkeypatch):
-    """No TimeGenerated on a summarized row → the old dedup never applied; with the
-    10-min window the same detection would be re-dispatched at every poll."""
-    monkeypatch.setattr("glorfindel.detection_rules._STATUS_FILE", tmp_path / "s.json")
-    dispatched = []
-    values = iter(range(10**6))
-    mock_detector = MagicMock()
-    mock_detector.poll_alert.side_effect = (
-        lambda **kw: (1.0, {"Computer": "vm1", "MaxWrite": 1.2e8 + next(values)}))
-    with patch("glorfindel.detection_rules.detector_for", return_value=mock_detector):
-        poller = RulePoller([], dispatched.append, dry_run=False)
-        _run_asset_rule(poller, _asset_rule("vm1"), _Registry("vm1"),
-                        lambda: mock_detector.poll_alert.call_count >= 4)
-    assert len(dispatched) == 1
+def test_rows_are_routed_to_the_vm_they_name():
+    rule = _auto_rule()
+    p, sent = _poller(_Det([{"Computer": "vm1", "MaxWrite": 9e7},
+                            {"Computer": "vm2.contoso.internal", "MaxWrite": 8e7},
+                            {"Computer": "vm9", "MaxWrite": 9e7}]),      # not monitored
+                      [rule], registry=_Registry("vm1", "vm2"))
+    p.poll_once(rule)
+    assert sorted(s["resource_id"] for s in sent) == [_vm("vm1"), _vm("vm2")]
+    assert all(s["context"]["attribution"] == "asset" for s in sent)
 
 
-def test_dedup_survives_a_restart(tmp_path, monkeypatch):
-    """A detection still inside the query window must not be dispatched (and acted on)
-    again by the next watch process."""
-    monkeypatch.setattr("glorfindel.detection_rules._STATUS_FILE", tmp_path / "s.json")
-    dispatched = []
-    mock_detector = MagicMock()
-    mock_detector.poll_alert.return_value = (1.0, {"Computer": "vm1", "MaxWrite": 1.2e8})
-    with patch("glorfindel.detection_rules.detector_for", return_value=mock_detector):
-        first = RulePoller([], dispatched.append, dry_run=False)
-        _run_asset_rule(first, _asset_rule("vm1"), _Registry("vm1"), lambda: dispatched)
-        second = RulePoller([], dispatched.append, dry_run=False)
-        mock_detector.poll_alert.reset_mock()
-        _run_asset_rule(second, _asset_rule("vm1"), _Registry("vm1"),
-                        lambda: mock_detector.poll_alert.call_count >= 3)
-    assert len(dispatched) == 1
+def test_an_excluded_vm_gets_nothing():
+    class Cfg:
+        def is_excluded(self, asset, rule):
+            return asset == "vm2"
+    rule = _auto_rule()
+    p, sent = _poller(_Det([{"Computer": "vm2", "MaxWrite": 9e7}]), [rule],
+                      registry=_Registry("vm1", "vm2"), cfg=Cfg())
+    p.poll_once(rule)
+    assert sent == []
 
 
-def test_unattributed_row_is_flagged_when_several_vms_are_monitored(tmp_path, monkeypatch):
-    monkeypatch.setattr("glorfindel.detection_rules._STATUS_FILE", tmp_path / "s.json")
-    mock_detector = MagicMock()
-    mock_detector.poll_alert.return_value = (1.0, {"SourceIP": "203.0.113.9", "FailedAttempts": 40})
-    for peers, expected in ((("vm1", "vm2"), "unattributed"), (("vm1",), "single_asset")):
-        dispatched = []
-        (tmp_path / "s.json").unlink(missing_ok=True)
-        with patch("glorfindel.detection_rules.detector_for", return_value=mock_detector):
-            poller = RulePoller([], dispatched.append, dry_run=False)
-            _run_asset_rule(poller, _asset_rule("vm1"), _Registry(*peers), lambda: dispatched)
-        assert dispatched[0]["context"]["attribution"] == expected
+def test_a_storage_call_is_routed_to_the_vm_whose_ip_made_it():
+    """T1041 rows name no VM (summarised by caller IP and account): in multi-VM the
+    isolation was always held, with one escalation per VM (third review, T8)."""
+    rule = _auto_rule(name="data-exfiltration-blob", ttp="T1041",
+                      query="StorageBlobLogs | where TimeGenerated > ago(5m)")
+    p, sent = _poller(_Det([{"CallerIpAddress": "10.0.0.5:51234", "AccountName": "st", "PutBlobCount": 3}]),
+                      [rule], registry=_Registry("vm1", "vm2"),
+                      ip_owners=lambda: {"10.0.0.5": _vm("vm2")})
+    p.poll_once(rule)
+    assert [s["resource_id"] for s in sent] == [_vm("vm2")]
+    assert sent[0]["context"]["attribution"] == "asset"
 
 
-def test_expansion_picks_up_a_vm_discovered_after_start(tmp_path, monkeypatch):
-    """The watch expanded rules once, 10 s after start: a VM that came up later (or was
-    off at start) was never polled (validation run, 2026-10-06). Expansion now runs
-    every minute; it must start the new VM's thread without duplicating the others."""
-    monkeypatch.setattr("glorfindel.detection_rules._STATUS_FILE", tmp_path / "s.json")
-    mock_detector = MagicMock()
-    mock_detector.poll_alert.return_value = None
-    rule = _make_rule(name="ransomware-disk-write", interval_s=0.05, auto_apply=True,
-                      monitoring_backend_name="law")
-    registry = _Registry("vm1")
-    with patch("glorfindel.detection_rules.detector_for", return_value=mock_detector):
-        poller = RulePoller([rule], lambda s: None, dry_run=False)
-        poller.expand_for_discovered(registry)
-        registry.assets.append(_Asset("vm2"))
-        poller.expand_for_discovered(registry)
-        poller.expand_for_discovered(registry)
-        names = sorted(t.name for t in poller._threads if t.is_alive())
-        poller.stop()
-    assert names == ["rule-ransomware-disk-write@vm1", "rule-ransomware-disk-write@vm2"]
+def test_an_unattributed_row_is_sent_once_and_flagged():
+    """It was dispatched once per VM — N decisions, N blocks of the same IP fighting
+    for the same priority (T8). And with a single VM it was attributed to it by default
+    (L11): never a default target now."""
+    rule = _auto_rule(name="data-exfiltration-blob", ttp="T1041",
+                      query="StorageBlobLogs | where TimeGenerated > ago(5m)")
+    row = {"CallerIpAddress": "10.9.9.9", "AccountName": "st", "PutBlobCount": 1}
+    for registry in (_Registry("vm1", "vm2", "vm3"), _Registry("vm1")):
+        p, sent = _poller(_Det([row]), [rule], registry=registry, ip_owners=lambda: {})
+        p.poll_once(rule)
+        assert len(sent) == 1 and sent[0]["context"]["attribution"] == "unattributed"
+        assert sent[0]["context"]["candidates"] == sorted(a.name for a in registry.assets)
+        import glorfindel.detection_rules as dr
+        dr._save_status({})
+
+
+def test_aggregated_row_dispatched_once_while_its_counts_grow():
+    rule = _auto_rule()
+    det = _Det([{"Computer": "vm1", "SourceIP": "203.0.113.9", "FailedAttempts": 12}])
+    p, sent = _poller(det, [rule], registry=_Registry("vm1"))
+    p.poll_once(rule)
+    det.rows = [{"Computer": "vm1", "SourceIP": "203.0.113.9", "FailedAttempts": 40}]
+    p.poll_once(rule)
+    assert len(sent) == 1
+
+
+def test_alternating_rows_are_not_redispatched_and_a_second_attacker_is_not_hidden():
+    """Only the first row was kept, and only the last identity remembered: two
+    attackers in alternating order re-dispatched every poll (93 sends in 0.5 s in the
+    review's simulation), or B stayed hidden behind A for 10 minutes (T9)."""
+    rule = _auto_rule()
+    a = {"Computer": "vm1", "SourceIP": "203.0.113.1", "FailedAttempts": 10}
+    b = {"Computer": "vm1", "SourceIP": "203.0.113.2", "FailedAttempts": 10}
+    det = _Det([a])
+    p, sent = _poller(det, [rule], registry=_Registry("vm1"))
+    p.poll_once(rule)
+    det.rows = [a, b]
+    p.poll_once(rule)
+    det.rows = [b, a]
+    p.poll_once(rule)
+    assert [s["raw_signal"]["first_result_row"]["SourceIP"] for s in sent] == ["203.0.113.1", "203.0.113.2"]
+
+
+def test_event_rows_make_one_signal_per_cycle():
+    rule = _auto_rule()
+    rows = [{"Computer": "vm1", "TimeGenerated": f"2026-10-07T10:0{i}:00Z"} for i in range(3)]
+    p, sent = _poller(_Det(rows), [rule], registry=_Registry("vm1"))
+    p.poll_once(rule)
+    assert len(sent) == 1 and sent[0]["raw_signal"]["first_result_row"]["TimeGenerated"].endswith("02:00Z")
+
+
+def test_dedup_survives_a_restart():
+    rule = _auto_rule()
+    row = {"Computer": "vm1", "TimeGenerated": "2026-10-07T10:00:00Z"}
+    p, sent = _poller(_Det([row]), [rule], registry=_Registry("vm1"))
+    p.poll_once(rule)
+    p2, sent2 = _poller(_Det([row]), [rule], registry=_Registry("vm1"))      # new process
+    p2.poll_once(rule)
+    assert len(sent) == 1 and sent2 == []
+
+
+def test_dedup_reads_the_previous_state_shape():
+    import glorfindel.detection_rules as dr
+    rule = _auto_rule()
+    row = {"Computer": "vm1", "TimeGenerated": "2026-10-07T10:00:00Z"}
+    dr._save_status({rule.name: {"dispatched": {_vm("vm1").lower(): {"id": dr._row_identity(row), "at": time.time()}}}})
+    p, sent = _poller(_Det([row]), [rule], registry=_Registry("vm1"))
+    p.poll_once(rule)
+    assert sent == []
+
+
+def test_a_vm_discovered_later_is_covered_without_a_new_thread():
+    """Expansion starts one thread per RULE; each cycle reads the registry (a VM turned
+    on after the watch started used to have no poller for the life of the watch)."""
+    rule = _auto_rule(interval_s=60)
+    reg = _Registry("vm1")
+    det = _Det([{"Computer": "vm2", "MaxWrite": 9e7}])
+    p, sent = _poller(det, [rule], registry=reg)
+    p.poll_once(rule)
+    assert sent == []
+    reg.assets.append(_Asset("vm2"))
+    p.poll_once(rule)
+    assert [s["resource_id"] for s in sent] == [_vm("vm2")]
+    p.expand_for_discovered(reg)
+    p.expand_for_discovered(reg)
+    assert [t.name for t in p._threads.values()] == ["rule-ransomware-disk-write"]
+    p.stop()
 
 
 def test_shipped_rules_do_not_truncate_before_the_vm_filter():

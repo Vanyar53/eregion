@@ -664,7 +664,10 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
                     })
                     _dispatch(signal_data, sig)
 
-                _rule_poller = RulePoller(rules, _rule_dispatch, dry_run=dry_run)
+                # Private IP → VM (one Azure call, cached 5 min): routes a row made
+                # FROM a VM (T1041 storage calls) to that VM.
+                _ip_owners = None if dry_run else AzureConnector(dry_run=False).private_ip_owners
+                _rule_poller = RulePoller(rules, _rule_dispatch, dry_run=dry_run, ip_owners=_ip_owners)
                 _rule_poller.start()
 
                 # Start discovery service (non-blocking background thread)

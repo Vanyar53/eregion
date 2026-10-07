@@ -727,17 +727,24 @@ def _apply_signal_guardrail(d: dict, signal: dict) -> None:
 
 
 def _apply_attribution_guard(d: dict, signal: dict) -> None:
-    """A VM-targeted action on a detection not attributed to this VM is held."""
-    if d["escalate"] or d["action"] not in _VM_TARGETED_ACTIONS:
+    """An action aimed at this VM, on a detection not attributed to it, is held.
+
+    The RulePoller anchors an unattributed detection (no VM named, no VM's private IP
+    behind the call) on one monitored VM so it has a card. Isolating that VM — or
+    blocking the IP on its NSG only — would act on a guess (third review, L11/L13)."""
+    if d["escalate"] or d["action"] not in _VM_TARGETED_ACTIONS | {"block_suspicious_ip"}:
         return
-    if (signal.get("context") or {}).get("attribution") != "unattributed":
+    ctx = signal.get("context") or {}
+    if ctx.get("attribution") != "unattributed":
         return
+    candidates = ", ".join(ctx.get("candidates") or []) or "?"
     d["escalate"] = True
     d["held_by"] = "attribution"
     d["escalation_reason"] = (
-        f"Détection non attribuable à cette VM (ligne sans ressource, plusieurs VMs "
-        f"surveillées) — '{d['action']}' retenue pour revue humaine : vérifier quelle "
-        "VM est concernée avant d'agir."
+        f"Détection non attribuable à une VM (la ligne ne nomme aucune VM, et aucune IP "
+        f"de VM surveillée n'est à l'origine) — '{d['action']}' retenue pour revue "
+        f"humaine. VMs surveillées : {candidates}. Vérifier laquelle est concernée "
+        "(ou bloquer au périmètre) avant d'agir."
     )
 
 

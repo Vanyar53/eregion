@@ -304,11 +304,21 @@ Three modes, resolved per asset. The default is intentionally conservative.
 
 Modes resolve per asset via `glorfindel-config.yaml` (fnmatch pattern matching). Run `non_disruptive` on test VMs, `human_only` on production assets, in the same `watch` session.
 
+**A configured mode is an intention; readiness decides.** However a VM becomes autonomous (its own switch in the War Room, a pattern, the global default, `watch --mode`), it acts alone only once Glorfindel has checked it can actually defend it: rights to isolate (permissions API), session cut available, no customer ALLOW evaluated before a block, a VM type it supports. The watch checks each VM in an autonomous mode as soon as discovery finds it, then at the posture cadence:
+
+| Readiness | What happens |
+|---|---|
+| Ready | Acts alone, nothing to confirm |
+| Reserves (e.g. no Run Command right: open sessions survive) | Stays in `human_only`; one card asks you to read and accept the reserves (War Room *Review & turn on*, or `glorfindel activate <vm>`) |
+| Not ready (no right to isolate, read-only credentials) | Stays in `human_only`, with the fix |
+
+A reserve that appears after activation puts the VM back in `human_only`, with an alert. So setting the global default to `non_disruptive` is safe for VMs created later: none of them acts alone without that check.
+
 > **First demo tip** — to see autonomous containment in action, start with:
 > ```bash
 > glorfindel watch runs/ --mode non_disruptive
 > ```
-> The default `human_only` is the right setting for production assets — it generates detection + recommendations without acting. Switch per-asset once you've seen a few cycles and trust the reasoning.
+> The default `human_only` is the right setting for production assets — it generates detection + recommendations without acting. Switch per-asset once you've seen a few cycles and trust the reasoning. Each VM still passes the readiness check above before it acts alone.
 
 ### Observe-only mode
 
@@ -630,7 +640,7 @@ The audit also checks **NSG precedence**: NSG rules apply the first match by asc
 ```bash
 pip install eregion[dev]
 pytest
-# 633 tests (~15s) — 0 Azure calls, 0 LLM calls, 0 writes to ~/.glorfindel
+# 655 tests (~15s) — 0 Azure calls, 0 LLM calls, 0 writes to ~/.glorfindel
 ```
 
 The suite is hermetic by construction: `tests/unit/conftest.py` redirects every `~/.glorfindel` path to a temp directory and ignores any local `glorfindel-config.yaml`. CI (`.github/workflows/ci.yml`) runs `ruff check` + `pytest` on Python 3.11 and 3.12.

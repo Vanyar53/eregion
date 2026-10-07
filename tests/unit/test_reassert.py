@@ -3,7 +3,9 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from glorfindel import escalations
+import pytest
+
+from glorfindel import escalations, readiness
 from glorfindel.actions import (
     _load_block_entries, _load_isolation_state, _save_block_state, _save_isolation_state,
 )
@@ -12,6 +14,12 @@ from glorfindel.reassert import reassert_active
 
 _RID = "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm"
 _ACT = AutonomyConfig(default="non_disruptive")
+
+
+@pytest.fixture(autouse=True)
+def _vm_is_ready():
+    """The VM was checked ready (L6 gate): its configured mode is its effective mode."""
+    readiness.record_assessment(readiness._verdict("vm", []), _RID)
 
 
 def _isolated(**extra):
@@ -127,3 +135,15 @@ def test_one_alert_per_disappearance_not_one_per_minute():
     c.verify_isolation.return_value = {"verified": False, "uncovered_nics": ["nic-a"]}
     reassert_active(c, human)                        # ...gone again: a new episode
     assert len(escalations.pending()) == 1
+
+
+def test_a_vm_held_by_its_readiness_gets_an_alert_not_a_reapplication():
+    """Configured autonomous, but a reserve appeared since: the effective mode is
+    human_only, so reassertion alerts instead of putting the isolation back."""
+    readiness.record_assessment(readiness._verdict("vm", [
+        readiness._reason("no_drain", "reserve", "sessions survive")]), _RID)
+    _isolated()
+    c = _connector({"verified": False, "uncovered_nics": ["nic-a"]})
+    report = reassert_active(c, _ACT)
+    c.isolate_vm.assert_not_called()
+    assert report[0]["outcome"] == "escalated"

@@ -292,11 +292,13 @@ class DiscoveryService:
         registry: AssetRegistry,
         dry_run: bool = False,
         posture_checker=None,      # PostureChecker | None
+        readiness_tracker=None,    # readiness.ReadinessTracker | None
     ) -> None:
         self._config = config
         self._registry = registry
         self._dry_run = dry_run
         self._posture_checker = posture_checker
+        self._readiness = readiness_tracker
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         # Posture cadence = interval_s of the first enabled backend (default 30min).
@@ -324,6 +326,7 @@ class DiscoveryService:
     def run_once(self) -> None:
         """Run a single discovery + posture cycle synchronously (for testing)."""
         self._discover_all()
+        self._refresh_readiness()
         self._run_posture()
 
     # ── Private ───────────────────────────────────────────────────────────────
@@ -336,6 +339,7 @@ class DiscoveryService:
         — runs only every interval_s, so the slow RSV API isn't hit every minute.
         """
         self._discover_all()
+        self._refresh_readiness()
         self._run_posture()
         last_posture = time.monotonic()
 
@@ -344,6 +348,7 @@ class DiscoveryService:
             if self._stop.is_set():
                 break
             self._discover_all()
+            self._refresh_readiness()
             if time.monotonic() - last_posture >= self._posture_interval_s:
                 self._run_posture()
                 last_posture = time.monotonic()
@@ -357,6 +362,17 @@ class DiscoveryService:
                 # Query failed — keep existing cache, do not evict
                 continue
             self._registry.replace_for_backend(backend.name, found)
+
+    def _refresh_readiness(self) -> None:
+        """Readiness of the VMs configured autonomous (L6 gate): a new VM is checked on
+        the pass that discovers it, the others at the posture cadence. Best-effort."""
+        if self._readiness is None:
+            return
+        try:
+            for ev in self._readiness.refresh(self._registry.all()):
+                logger.info("readiness: %s → %s", ev["vm"], ev["event"])
+        except Exception as e:
+            logger.warning("readiness: refresh failed (%s)", e)
 
     def _run_posture(self) -> None:
         """Run posture checks (RSV/NSG per discovered VM) — best-effort."""
@@ -383,13 +399,14 @@ def get_registry() -> AssetRegistry:
 
 
 def start_discovery(
-    config, dry_run: bool = False, posture_checker=None
+    config, dry_run: bool = False, posture_checker=None, readiness_tracker=None
 ) -> DiscoveryService:
     """Create and start the discovery service. Returns the service instance."""
     global _service, _registry
     _registry = AssetRegistry()
     svc = DiscoveryService(
-        config, _registry, dry_run=dry_run, posture_checker=posture_checker
+        config, _registry, dry_run=dry_run, posture_checker=posture_checker,
+        readiness_tracker=readiness_tracker,
     )
     svc.start()
     _service = svc

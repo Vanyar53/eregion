@@ -47,6 +47,7 @@ def isolated_glorfindel_home(tmp_path, monkeypatch):
     import glorfindel.jobs as jobs
     import glorfindel.proposed_rules as proposed_rules
     import glorfindel.discovery as discovery
+    import glorfindel.readiness as readiness
     from glorfindel.incidents import IncidentRegistry
 
     monkeypatch.setattr(actions, "_ISOLATION_STATE_DIR", home / "isolation")
@@ -56,6 +57,7 @@ def isolated_glorfindel_home(tmp_path, monkeypatch):
     monkeypatch.setattr(proposed_rules, "_STORE", home / "proposed_rules.jsonl")
     monkeypatch.setattr(discovery, "_CACHE_FILE", home / "discovered_assets.json")
     monkeypatch.setattr(IncidentRegistry, "_DEFAULT_PATH", home / "incidents.jsonl")
+    monkeypatch.setattr(readiness, "_STATE_FILE", home / "readiness.json")
     try:
         import glorfindel.api as api
         monkeypatch.setattr(api, "_RESTORE_TRACKING", home / "restore_in_progress.json")

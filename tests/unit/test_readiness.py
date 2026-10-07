@@ -71,3 +71,139 @@ def test_activation_needs_every_reserve_acknowledged():
     assert "no_drain" in activation_refusal(a, [])
     assert activation_refusal(a, ["no_drain"]) is None
     assert "pas prête" in activation_refusal(assess(_RID, _conn(read_only=True)), ["read_only"])
+
+
+# ── The gate: a VM configured autonomous acts alone only once its readiness allows ──
+
+from glorfindel import escalations, readiness  # noqa: E402
+from glorfindel.config import AutonomyConfig, AutonomyRule, GlorfindelConfig  # noqa: E402
+from glorfindel.discovery import DiscoveredAsset  # noqa: E402
+
+_NO_DRAIN = ["Microsoft.Compute/virtualMachines/runCommand/action"]
+
+
+def _asset(rid=_RID):
+    return DiscoveredAsset(name=rid.rsplit("/", 1)[-1], resource_id=rid,
+                           monitoring_backend="law", last_seen="2026-10-07T08:00:00+00:00")
+
+
+def _tracker(conn, default="non_disruptive", assets=(), interval_s=1800, override=None):
+    cfg = GlorfindelConfig(autonomy=AutonomyConfig(default=default, assets=list(assets)))
+    return readiness.ReadinessTracker(conn, interval_s=interval_s, autonomy_override=override,
+                                      config_loader=lambda: cfg)
+
+
+def _cards():
+    return [e for e in escalations.pending() if e["escalation_type"] == "readiness_hold"]
+
+
+def test_a_vm_never_checked_is_held():
+    mode, hold = readiness.effective_mode("vm", "non_disruptive")
+    assert mode == "human_only" and hold["reason"] == "not_checked"
+    assert readiness.effective_mode("vm", "human_only") == ("human_only", {})
+
+
+def test_a_ready_vm_acts_alone_and_reserves_must_be_acknowledged():
+    readiness.record_assessment(assess(_RID, _conn()), _RID)
+    assert readiness.effective_mode("vm", "non_disruptive") == ("non_disruptive", {})
+    readiness.record_assessment(assess(_RID, _conn(missing=_NO_DRAIN)), _RID)
+    mode, hold = readiness.effective_mode("vm", "non_disruptive")
+    assert mode == "human_only" and hold["codes"] == ["no_drain"]
+    readiness.acknowledge("vm", ["no_drain"], by="test")
+    assert readiness.effective_mode("vm", "non_disruptive")[0] == "non_disruptive"
+
+
+def test_global_default_new_ready_vm_turns_autonomous_without_a_card():
+    """The hole: the global default made every VM — current and future — autonomous
+    without a readiness check. A new ready VM still needs nothing from the operator."""
+    events = _tracker(_conn()).refresh([_asset()])
+    assert events == [{"vm": "vm", "event": "activated"}]
+    assert readiness.get("vm")["active_since"] and _cards() == []
+
+
+def test_global_default_new_vm_with_reserves_is_held_with_one_card():
+    t = _tracker(_conn(missing=_NO_DRAIN))
+    assert t.refresh([_asset()])[0]["event"] == "held"
+    t.refresh([_asset()])                                   # next discovery pass
+    cards = _cards()
+    assert len(cards) == 1 and "no_drain" in cards[0]["reason"]
+    assert readiness.effective_mode("vm", "non_disruptive")[0] == "human_only"
+
+
+def test_confirming_the_reserves_lifts_the_hold_and_closes_the_card():
+    t = _tracker(_conn(missing=_NO_DRAIN))
+    t.refresh([_asset()])
+    readiness.acknowledge("vm", ["no_drain"], by="war-room")
+    assert t.refresh([_asset()]) == [{"vm": "vm", "event": "activated"}]
+    assert _cards() == []
+
+
+def test_a_reserve_that_appears_after_activation_puts_the_vm_back_with_an_alert():
+    conn = _conn()
+    t = _tracker(conn, interval_s=0)                        # re-checked every pass
+    t.refresh([_asset()])
+    conn.check_permissions.return_value = {"ok": True, "missing": [
+        {"scope": "rg", "action": _NO_DRAIN[0], "used_by": "drain"}]}
+    assert t.refresh([_asset()])[0]["event"] == "demoted"
+    assert "repasse en observation" in _cards()[0]["reason"]
+    assert readiness.effective_mode("vm", "non_disruptive")[0] == "human_only"
+
+
+def test_a_read_error_on_an_active_vm_is_confirmed_before_holding_it():
+    """A throttled permissions API must not flap the mode: re-checked on the next pass."""
+    conn = _conn()
+    t = _tracker(conn, interval_s=0)
+    t.refresh([_asset()])
+    conn.check_permissions.return_value = {"ok": False, "error": "429 throttled"}
+    assert t.refresh([_asset()]) == []                      # still active
+    assert readiness.effective_mode("vm", "non_disruptive")[0] == "non_disruptive"
+    assert t.refresh([_asset()])[0]["event"] == "demoted"   # seen twice: held
+
+
+def test_a_vm_in_human_only_is_not_checked():
+    conn = _conn()
+    t = _tracker(conn, default="human_only")
+    assert t.refresh([_asset()]) == []
+    conn.check_permissions.assert_not_called()
+
+
+def test_a_pattern_and_the_session_override_are_gated_too():
+    conn = _conn(missing=_NO_DRAIN)
+    t = _tracker(conn, default="human_only", assets=[AutonomyRule(match="v*", mode="non_disruptive")])
+    assert t.refresh([_asset()])[0]["event"] == "held"
+    other = _RID.replace("/vm", "/other")
+    t2 = _tracker(conn, default="human_only", override="non_disruptive")
+    assert t2.refresh([_asset(other)])[0]["event"] == "held"
+
+
+def test_going_back_to_human_only_closes_the_card():
+    t = _tracker(_conn(missing=_NO_DRAIN))
+    t.refresh([_asset()])
+    _tracker(_conn(), default="human_only").refresh([_asset()])
+    assert _cards() == []
+
+
+def test_an_aks_cluster_is_held_without_azure_calls_or_card():
+    aks = "/subscriptions/s/resourceGroups/rg/providers/Microsoft.ContainerService/managedClusters/aks"
+    conn = _conn()
+    assert _tracker(conn).refresh([_asset(aks)])[0]["event"] == "held"
+    conn.check_permissions.assert_not_called()
+    assert _cards() == []
+
+
+def test_the_tracker_rechecks_at_the_posture_cadence_only():
+    conn = _conn()
+    t = _tracker(conn, interval_s=3600)
+    t.refresh([_asset()])
+    t.refresh([_asset()])
+    assert conn.check_permissions.call_count == 1
+
+
+def test_decide_gate_checks_an_unseen_vm_on_demand():
+    """A signal before the first discovery pass (or a VM outside discovery): checked now."""
+    gate = readiness.ReadinessGate(_conn())
+    assert gate("vm", _RID, "non_disruptive") == ("non_disruptive", {})
+    broken = MagicMock(read_only=False)
+    broken.check_permissions.side_effect = RuntimeError("boom")
+    mode, hold = readiness.ReadinessGate(broken)("other", _RID.replace("/vm", "/other"), "non_disruptive")
+    assert mode == "human_only" and hold["reason"] == "not_checked"

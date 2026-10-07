@@ -224,6 +224,7 @@ async def state() -> dict:
     # assets left escalation-only cards (e.g. a mode_hold target) falling back to the
     # global default, so a per-asset override never showed in the card.
     autonomy_modes: dict[str, str] = {}
+    autonomy_holds: dict[str, dict] = {}   # configured autonomous, held by readiness (L6)
     autonomy_default = "human_only"
     try:
         from glorfindel.config import load_glorfindel_config as _load_gcfg
@@ -241,8 +242,11 @@ async def state() -> dict:
             _rid = _e.get("resource_id", "")
             if _rid:
                 _vm_names.add(_rid.split("/")[-1])
+        from glorfindel.readiness import effective_mode as _effective
         for _n in _vm_names:
-            autonomy_modes[_n] = _acfg.autonomy.resolve(_n)
+            autonomy_modes[_n], _hold = _effective(_n, _acfg.autonomy.resolve(_n))
+            if _hold:
+                autonomy_holds[_n] = _hold
     except Exception:
         pass
 
@@ -276,6 +280,7 @@ async def state() -> dict:
         "posture_gaps": posture_gaps,
         "active_jobs": _all_jobs(),
         "autonomy_modes": autonomy_modes,
+        "autonomy_holds": autonomy_holds,
         "autonomy_default": autonomy_default,
         "read_only": read_only,
         "capability": capability,
@@ -690,6 +695,13 @@ async def activate(vm_name: str, body: dict | None = None) -> dict:
         return {"error": _CFG_READONLY_MSG}
     except Exception as e:
         return {"error": str(e)}
+    # What the operator was shown and accepted: the watch's gate reads it (a reserve
+    # that appears later puts the VM back in human_only).
+    from glorfindel import readiness as _rd
+    rid = _resolve_vm(vm_name) or ""
+    await asyncio.to_thread(_rd.record_assessment, assessment, rid)
+    await asyncio.to_thread(_rd.acknowledge, assessment["vm"], assessment["reserve_codes"], "war-room")
+    await asyncio.to_thread(_rd.resolve_card, assessment["vm"])
     return {"ok": True, "vm": vm_name, "mode": "non_disruptive", "path": str(path),
             "acknowledged": assessment["reserve_codes"]}
 
@@ -706,6 +718,11 @@ async def set_autonomy_mode(vm_name: str, body: dict) -> dict:
     try:
         from glorfindel.config import set_asset_mode
         path = await asyncio.to_thread(set_asset_mode, vm_name, mode)
+        if mode == "human_only":
+            # Back to observation: a later activation shows the reserves again.
+            from glorfindel import readiness as _rd
+            await asyncio.to_thread(_rd.revoke, vm_name)
+            await asyncio.to_thread(_rd.resolve_card, vm_name)
         return {"ok": True, "vm": vm_name, "mode": mode, "path": str(path)}
     except ValueError as e:
         return {"error": str(e)}
@@ -717,12 +734,20 @@ async def set_autonomy_mode(vm_name: str, body: dict) -> dict:
 
 @app.patch("/api/config/autonomy/default")
 async def set_autonomy_default(body: dict) -> dict:
-    """Set the global default autonomy mode and persist to glorfindel-config.yaml."""
+    """Set the global default autonomy mode and persist to glorfindel-config.yaml.
+
+    Autonomous by default is safe for VMs created later: the watch checks each VM it
+    discovers, and only a ready one acts alone (L6 gate); the others stay in human_only
+    with a card asking to confirm their reserves."""
     mode = body.get("mode", "")
     try:
         from glorfindel.config import set_default_mode
         path = await asyncio.to_thread(set_default_mode, mode)
-        return {"ok": True, "mode": mode, "path": str(path)}
+        out = {"ok": True, "mode": mode, "path": str(path)}
+        if mode == "non_disruptive":
+            out["note"] = ("Ready VMs act alone within a minute; VMs with reserves stay "
+                           "in human-only and ask for confirmation.")
+        return out
     except ValueError as e:
         return {"error": str(e)}
     except OSError:

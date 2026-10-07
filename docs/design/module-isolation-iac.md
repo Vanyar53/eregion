@@ -1,6 +1,6 @@
 # Module d'isolation compatible avec l'infrastructure as code
 
-_Conception — 2026-10-05, mise à jour le 2026-10-07 — statut : isolation juste à temps par NSG de quarantaine livrée et validée sur Azure (L1–L5, L7 ; PR #17 à #24), canary du comportement Terraform en place ; l'écran d'activation (L6) livré le 07/10 ; reste le module de renfort optionnel (L8)._
+_Conception — 2026-10-05, mise à jour le 2026-10-07 — statut : isolation juste à temps par NSG de quarantaine livrée et validée sur Azure (L1–L5, L7 ; PR #17 à #24), canary du comportement Terraform en place ; l'écran d'activation (L6) et le verrou de préparation (une VM rendue autonome par le défaut global, un motif ou `--mode` n'agit seule qu'une fois contrôlée) livrés le 07/10 ; reste le module de renfort optionnel (L8)._
 
 ## Pourquoi ce chantier
 

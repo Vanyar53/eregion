@@ -600,6 +600,7 @@ const ACTION_LABELS = {
   wipe_storage:         'Storage wiped',
   modify_network_rule:  'Network rule modified',
   escalate_permissions: 'Permissions escalated',
+  activate_autonomy:    'Autonomous response held',
 };
 
 // Verb forms — used for actions not yet executed (mode_hold: recommended, pending approval)
@@ -629,6 +630,7 @@ const ESC_LABELS = {
   release_hold:        'release held',
   unattributed_signal: 'not attributed to this VM',
   ttl_exceeded:        'TTL exceeded',
+  readiness_hold:      'reserves to confirm',
 };
 
 function actionLabel(action) {
@@ -794,6 +796,9 @@ function cliCommand(esc) {
   }
   if (esc.action === 'restore_from_backup') {
     return `glorfindel restore ${rid} --yes\nglorfindel ack ${id}`;
+  }
+  if (esc.escalation_type === 'readiness_hold') {
+    return `# Shows the reserves, then asks you to accept them\nglorfindel activate ${rid.split('/').pop()}`;
   }
   if (esc.escalation_type === 'verification_failed') {
     return `glorfindel revert ${rid} --yes\nglorfindel ack ${id}`;
@@ -1014,8 +1019,13 @@ function _renderEscGroup(group) {
     ? `<span title="${_attr(`Re-fired ${occ}× since ${e.first_seen || '?'}${e.last_seen ? ` (last ${e.last_seen})` : ''}`)}" style="font-size:9px;font-weight:700;padding:1px 4px;border-radius:3px;background:color-mix(in srgb,var(--orange) 15%,transparent);color:var(--orange);flex-shrink:0">↻ ${occ}×${e.first_seen ? ` · ${_relTime(e.first_seen)}` : ''}</span>`
     : '';
   const isRestore = e.action === 'restore_from_backup';
+  const isReadinessHold = e.escalation_type === 'readiness_hold';
   const actionBtns = isRule
     ? ruleButtons
+    : isReadinessHold
+    ? `<button class="action primary" onclick="event.stopPropagation();openActivation('${vmName}')" style="font-size:9px;padding:2px 7px">⚡ Review & turn on</button>
+       <button class="action" onclick="event.stopPropagation();doAckAll('${ids}')" style="font-size:9px;padding:2px 7px">✓ Ack</button>
+       <button class="action" onclick="event.stopPropagation();openCommandModal('${e.id}')" style="font-size:9px;padding:2px 7px">📋 Cmd</button>`
     : isModeHold
     ? `<button class="action primary" onclick="event.stopPropagation();doApproveAction('${e.id}','${vmName}')" style="font-size:9px;padding:2px 7px">▶ Approve & execute</button>
        <button class="action" onclick="event.stopPropagation();doAckAll('${ids}')" style="font-size:9px;padding:2px 7px">✓ Ack</button>
@@ -1944,11 +1954,19 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
   const _defLabel = globalDefault === 'non_disruptive' ? 'non-disruptive' : 'human-only';
   const _modeBase = 'font-size:8px;font-weight:700;padding:1px 5px;border-radius:3px;letter-spacing:.5px;flex-shrink:0;cursor:pointer';
   const _modeClick = `onclick="event.stopPropagation();showCapabilityPopover(event,'${autonomyMode}')"`;
-  const modeBadge = !modeDeviates
+  // Configured autonomous but held in human-only by its readiness (L6 gate): say why,
+  // and one click opens the activation screen.
+  const modeHold = (_state?.autonomy_holds || {})[vm_name];
+  const holdChip = modeHold
+    ? `<span onclick="event.stopPropagation();openActivation('${vm_name}')" title="${_attr(`Configured ${modeHold.configured}, held in human-only: ${modeHold.message}. Click to review and turn on.`)}" style="${_modeBase};background:color-mix(in srgb,var(--orange) 12%,transparent);color:var(--orange);border:1px dashed color-mix(in srgb,var(--orange) 45%,transparent)">⏸ ${modeHold.reason === 'not_checked' ? 'CHECKING' : modeHold.reason === 'not_ready' ? 'NOT READY' : 'CONFIRM'}</span>`
+    : '';
+  const modeBadge = holdChip + (modeHold
+    ? `<span ${_modeClick} title="Held in human-only until its readiness allows (configured: ${modeHold.configured}) · click for capability" style="${_modeBase};background:transparent;color:var(--dim);border:1px solid var(--border)">${modeTxt}</span>`
+    : !modeDeviates
     ? `<span ${_modeClick} title="Autonomy — matches global default · click for capability" style="${_modeBase};background:transparent;color:var(--dim);border:1px solid var(--border)">${modeTxt}</span>`
     : modeIsAct
     ? `<span ${_modeClick} title="Override — acts autonomously (global default: ${_defLabel}) · click for capability" style="${_modeBase};background:color-mix(in srgb,var(--orange) 16%,transparent);color:var(--orange);border:1px solid color-mix(in srgb,var(--orange) 35%,transparent)">${modeTxt}</span>`
-    : `<span ${_modeClick} title="Override — recommend only (global default: ${_defLabel}) · click for capability" style="${_modeBase};background:color-mix(in srgb,var(--blue) 14%,transparent);color:var(--blue);border:1px solid color-mix(in srgb,var(--blue) 30%,transparent)">${modeTxt}</span>`;
+    : `<span ${_modeClick} title="Override — recommend only (global default: ${_defLabel}) · click for capability" style="${_modeBase};background:color-mix(in srgb,var(--blue) 14%,transparent);color:var(--blue);border:1px solid color-mix(in srgb,var(--blue) 30%,transparent)">${modeTxt}</span>`);
 
   const modeSelector = isExpanded
     ? `<div style="display:flex;align-items:center;gap:6px;margin-top:6px">
@@ -2588,7 +2606,7 @@ async function setDefaultMode(mode) {
     });
     const d = await r.json();
     if (d.error) { toast('✗ ' + d.error); return; }
-    toast(`✓ Default mode set to ${mode}`);
+    toast(`✓ Default mode set to ${mode}` + (d.note ? ` — ${d.note}` : ''), d.note ? 7000 : undefined);
     refreshState();
   } catch (e) { toast('✗ ' + e.message); }
 }
@@ -3024,6 +3042,10 @@ function showEscModal(vmName) {
     const modalBtns = isRule
       ? `<button class="action" style="color:var(--green)" onclick="doApproveRule('${pid}','${e.id}');closeModal()">✓ Approve</button>
          <button class="action" style="color:var(--red)"   onclick="doRejectRule('${pid}','${e.id}');closeModal()">✗ Reject</button>`
+      : e.escalation_type === 'readiness_hold'
+      ? `<button class="action primary" onclick="openActivation('${vmName}')">⚡ Review & turn on</button>
+         <button class="action" onclick="doAckAll('${ids}');closeModal()">✓ Ack</button>
+         <button class="action" onclick="openCommandModal('${e.id}')">📋 Cmd</button>`
       : isModeHold
       ? `<button class="action primary" onclick="doApproveAction('${e.id}','${vmName}');closeModal()">▶ Approve & execute</button>
          <button class="action" onclick="doAckAll('${ids}');closeModal()">✓ Ack</button>
@@ -3113,7 +3135,9 @@ async function refreshConfig() {
           </span>
         </div>
         <div style="color:var(--dim);font-size:10px;padding:4px 0 0">
-          Per-asset overrides are set from each VM card.
+          Per-asset overrides are set from each VM card. In non-disruptive, each VM is
+          checked first: a ready VM acts alone, a VM with reserves stays in human-only
+          until you confirm them.
         </div>
       </div>
 

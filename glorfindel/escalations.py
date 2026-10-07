@@ -26,6 +26,7 @@ _ACTION_LABELS = {
     "escalate_permissions": "Permissions élevées",
     "improve_detection": "Règle de détection proposée",
     "investigate_detection_gap": "Détection empêchée — enquête requise",
+    "activate_autonomy": "Réponse autonome en attente de confirmation",
 }
 
 _ESCALATION_LABELS = {
@@ -43,6 +44,7 @@ _ESCALATION_LABELS = {
     "uncharacterized_signal": "signal non caractérisé (garde-fou)",
     "release_hold": "levée retenue (aucune restauration terminée)",
     "unattributed_signal": "détection non attribuée à cette VM",
+    "readiness_hold": "VM retenue en observation (préparation)",
 }
 
 

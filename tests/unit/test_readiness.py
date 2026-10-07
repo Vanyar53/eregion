@@ -231,3 +231,20 @@ def test_a_name_keyed_record_is_read_for_its_own_vm_and_migrated():
     assert rd.effective_mode(_RID.replace("/rg/", "/rg-b/"), "non_disruptive")[0] == "human_only"
     rd.acknowledge(_RID, ["no_drain"], by="test")
     assert rd._key(_RID) in rd._read() and "vm" not in rd._read()
+
+
+def test_revoke_by_name_matches_the_whole_name_and_every_homonym():
+    """`split("--")` cut `web--01` at its first `--`: revoke("web--01") did nothing and
+    revoke("web") wiped web--01 (fifth review, C3). On a homonym name, revoke reached
+    neither VM while set_asset_mode had switched both (C4)."""
+    w01 = _RID.replace("/vm", "/web--01")
+    web_a = _RID.replace("/vm", "/web")
+    web_b = web_a.replace("/rg/", "/rg-b/")
+    for rid, name in ((w01, "web--01"), (web_a, "web"), (web_b, "web")):
+        readiness.record_assessment(readiness._verdict(name, []), rid)
+        readiness.acknowledge(rid, ["no_drain"], by="t")
+    readiness.revoke("web")
+    assert not readiness.get(web_a).get("acknowledged") and not readiness.get(web_b).get("acknowledged")
+    assert readiness.get(w01)["acknowledged"] == ["no_drain"]
+    readiness.revoke("web--01")
+    assert not readiness.get(w01).get("acknowledged")

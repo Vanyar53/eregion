@@ -633,6 +633,36 @@ def test_verify_action_block_suspicious_ip_extracts_source_ip():
     assert result["outcome"]["verified"] is True
 
 
+@pytest.mark.parametrize("action,check", [
+    ("isolate_vm", "verify_isolation"), ("release_isolation", "verify_release"),
+    ("block_suspicious_ip", "verify_block_ip")])
+def test_an_unverifiable_network_action_escalates(action, check):
+    """Rules unreadable, a subnet NSG that couldn't be read: verified=None used to store
+    the cycle silently, the VM perhaps open (fourth review, Q11)."""
+    from glorfindel.agent import _route_after_verify, escalate_to_human, verify_action
+    connector = MagicMock()
+    getattr(connector, check).return_value = {"verified": None, "error": "règles illisibles sur nic-a"}
+    state = _state(action=action)
+    state["outcome"] = {"status": "done", "executed": True, "ip": "203.0.113.9"}
+    result = verify_action(state, connector=connector)
+    assert result["escalate"] is True and result["outcome"]["unverified"] is True
+    assert "illisibles" in result["escalation_reason"]
+    assert _route_after_verify(result) == "escalate_to_human"
+    escalated = escalate_to_human({**result, "dry_run": True})
+    assert escalated["outcome"]["escalation_type"] == "verification_failed"
+    assert escalated["outcome"]["executed"] is True                   # the action did run
+
+
+def test_a_snapshot_in_progress_is_not_escalated():
+    from glorfindel.agent import _route_after_verify, verify_action
+    connector = MagicMock()
+    connector.verify_snapshot.return_value = {"verified": None, "status": "InProgress"}
+    state = _state(action="snapshot")
+    state["outcome"] = {"status": "triggered", "executed": True, "snapshot_id": "job-1"}
+    result = verify_action(state, connector=connector)
+    assert result["escalate"] is False and _route_after_verify(result) == "store_cycle"
+
+
 def test_verify_action_dry_run_short_circuits():
     """dry_run outcome skips all verification and returns verified=None."""
     from glorfindel.agent import verify_action

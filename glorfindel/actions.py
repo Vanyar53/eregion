@@ -177,6 +177,13 @@ QUARANTINE_PLATFORM_RULES = (
     ("glorfindel-quarantine-deny-imds", 111, "AzurePlatformIMDS"),
 )
 QUARANTINE_FORENSIC_RULE = "glorfindel-quarantine-forensic-in"
+# The rules fallback can't deny them for one VM: Azure refuses a rule to these service
+# tags unless its source is "*" (InvalidDNSExfilSourceTag, measured on the bench
+# 2026-10-08, DNS and IMDS alike) — on a shared NSG that would cut every VM behind it.
+# The fallback says they stay reachable (fourth review, Q15); only the quarantine NSG,
+# attached to the isolated NIC alone, denies them.
+PLATFORM_OPEN_NOTE = ("DNS et IMDS d'Azure encore joignables : le repli par règles ne peut "
+                      "pas les refuser à une seule VM (Azure exige la source « * »)")
 
 
 def _is_quarantine_nsg(nsg_id_or_name: str) -> bool:
@@ -365,6 +372,30 @@ def _deny_isolates(rule, direction: str, ips: list[str] | None) -> bool:
     if not _side_is_any(rule, peer):
         return False
     return all(_side_covers(rule, own, [ip]) for ip in ips) if ips else _side_is_any(rule, own)
+
+
+def _prefixes(rule, side: str) -> tuple:
+    single = getattr(rule, f"{side}_address_prefix", None)
+    values = ([single] if single else []) + list(getattr(rule, f"{side}_address_prefixes", None) or [])
+    return tuple(sorted({(v or "").strip().lower() for v in values}))
+
+
+def _rule_signature(rule) -> tuple:
+    """What a security rule does, without its name: two rules of the same signature
+    filter the same traffic. Checking our quarantine rules by name only let a deny
+    turned into an allow, moved to priority 4000 or narrowed to one address pass
+    (fourth review, Q6)."""
+    ports = [getattr(rule, "destination_port_range", None)] + list(getattr(rule, "destination_port_ranges", None) or [])
+    return (_enum_text(getattr(rule, "access", "")), _enum_text(getattr(rule, "direction", "")),
+            getattr(rule, "priority", None), _enum_text(getattr(rule, "protocol", "")),
+            _prefixes(rule, "source"), _prefixes(rule, "destination"),
+            tuple(sorted({str(p).strip().lower() for p in ports if p})))
+
+
+class OriginalUnknown(RuntimeError):
+    """The NSG a NIC carried before its quarantine is not known: neither the state nor
+    the quarantine NSG's tag says. The NIC stays in quarantine — putting "no NSG" back
+    on a guess left NICs without their NSG (fourth review, Q7)."""
 
 
 def warm_up_azure_sdk() -> None:
@@ -758,6 +789,10 @@ class AzureConnector(CloudConnector):
         refused = [p["quarantine_error"] for p in placements if p.get("quarantine_error")]
         if refused:
             out["quarantine_refused"] = refused
+        by_rules = [p["nic_id"].rstrip("/").rsplit("/", 1)[-1] for p in placements if p.get("kind") != "quarantine"]
+        if by_rules:
+            out["platform_open"] = by_rules           # Q15: said, not hidden
+            out["platform_note"] = PLATFORM_OPEN_NOTE
         shadowed = [s for p in placements for s in p.get("shadowed_by", [])]
         if shadowed:
             out["shadowed_by"] = shadowed
@@ -962,12 +997,16 @@ class AzureConnector(CloudConnector):
                         "note": "Windows : les sessions déjà ouvertes ne sont pas coupées."}
             # The count must fail loudly: `ss … | wc -l` printed 0 when `ss` was missing
             # or refused -H — "nothing left" on an unknown.
+            import shlex
             flt = self._DRAIN_FILTER
-            for cidr in self._forensic_sources():     # investigation sessions survive
+            # Investigation sessions survive. Validated networks only (Q5): the raw value
+            # went into this shell command as is.
+            for cidr in self._forensic_sources():
                 flt = flt[:-1] + f"and not dst {cidr} )"
+            flt = shlex.quote(flt)
             script = [
-                f"ss -K state established '{flt}' >/dev/null 2>&1",
-                f"if out=$(ss -Htn state established '{flt}' 2>/dev/null); "
+                f"ss -K state established {flt} >/dev/null 2>&1",
+                f"if out=$(ss -Htn state established {flt} 2>/dev/null); "
                 f"then echo \"glorfindel-drain-remaining=$(printf '%s\\n' \"$out\" | grep -c .)\"; "
                 f"else echo glorfindel-drain-remaining=error; fi",
             ]
@@ -1065,7 +1104,8 @@ class AzureConnector(CloudConnector):
         names — a re-application keeps their priority instead of moving them."""
         nsg_key = f"{nsg_rg}/{nsg_name}"
         existing = list(self._network.security_rules.list(nsg_rg, nsg_name))
-        used = ({r.priority for r in existing if getattr(r, "name", "") not in own}
+        own_low = {n.lower() for n in own}
+        used = ({r.priority for r in existing if _rule_name(r).lower() not in own_low}
                 | assigned.get(nsg_key, set()))
         priority = next(p for p in range(self.ISOLATION_PRIORITY, 4000) if p not in used)
         ips = t["private_ips"] or None
@@ -1090,20 +1130,25 @@ class AzureConnector(CloudConnector):
         current = t.get("quarantine")
         if current and _same_id(current["nsg_id"], q["nsg_id"]):
             # Already in quarantine (a re-application): the state knows the original;
-            # the tag is the fallback, and a tag that can't be read raises — an unknown
-            # original must not be recorded as "none".
+            # the tag is the fallback. Neither says → unknown, never recorded as "none"
+            # (the placement then carries no original, and the release keeps the NIC in
+            # quarantine rather than guess).
             original = _recorded_original(t["nic_id"])
             if original is _UNKNOWN:
-                original = self._original_from_tags(q, t["nic_id"])
+                try:
+                    original = self._original_from_tags(q, t["nic_id"])
+                except OriginalUnknown:
+                    original = _UNKNOWN
         else:
-            original = t.get("own_nsg_id")
-            if original:
-                self._record_original(q, t["nic_id"], original)
+            original = t.get("own_nsg_id") or None
+            # Recorded even when the NIC had no NSG: "none" said explicitly, so a tag
+            # that is missing means unknown (Q7), not "put no NSG back".
+            self._record_original(q, t["nic_id"], original)
             self._set_nic_nsg(t["nic_id"], q["nsg_id"], expect=original or "")
         return {
             "nic_id": t["nic_id"], "kind": "quarantine", "scope": "quarantine",
             "nsg_rg": q["nsg_rg"], "nsg_name": q["nsg_name"], "nsg_id": q["nsg_id"],
-            "original_nsg_id": original,
+            **({} if original is _UNKNOWN else {"original_nsg_id": original}),
             "shared_nsg": False, "ips": t["private_ips"], "priority": 100,
             "rule_in": QUARANTINE_RULE_IN, "rule_out": QUARANTINE_RULE_OUT,
             "bumped": [], "applied": ["nic-attach"], "shadowed_by": [],
@@ -1122,28 +1167,40 @@ class AzureConnector(CloudConnector):
         from azure.mgmt.network.models import TagsObject
         self._network.network_security_groups.update_tags(q["nsg_rg"], q["nsg_name"], TagsObject(tags=tags))
 
-    def _record_original(self, q: dict, nic_id: str, original_id: str) -> None:
-        """NIC → its own NSG, kept as a tag on our quarantine NSG (not on the NIC: a
-        `terraform apply` rewrites the NIC's tags — measured).
+    _NO_ORIGINAL = "none"
+
+    def _record_original(self, q: dict, nic_id: str, original_id: str | None) -> None:
+        """NIC → its own NSG (or "none"), kept as a tag on our quarantine NSG (not on
+        the NIC: a `terraform apply` rewrites the NIC's tags — measured).
 
         The quarantine NSG is shared by every isolation in the region: the tags are
         rewritten whole, so two isolations at once (N VMs on one rule, the War Room next
         to the watch) erased each other's tag. Read-modify-write under a lock, then read
         back: a tag that didn't land raises, and the NIC is not swapped."""
         key = self._orig_tag(nic_id)
+        value = original_id or self._NO_ORIGINAL
         with _quarantine_lock(q["nsg_id"]):
             tags = self._quarantine_tags(q)
-            tags[key] = original_id
+            tags[key] = value
             self._write_quarantine_tags(q, tags)
-            if self._quarantine_tags(q).get(key) != original_id:
+            if self._quarantine_tags(q).get(key) != value:
                 raise RuntimeError(f"original NSG of {nic_id.rsplit('/', 1)[-1]} not recorded "
                                    "on the quarantine NSG (tag overwritten)")
 
     def _original_from_tags(self, q: dict, nic_id: str) -> str | None:
-        """The NIC's original NSG from our tag; None if the NIC had none. A read error
-        RAISES: it used to read as "no original", and the release then left the NIC
-        with no NSG at all while verify_release said verified."""
-        return self._quarantine_tags(q).get(self._orig_tag(nic_id)) or None
+        """The NIC's original NSG from our tag; None if the tag says the NIC had none.
+        A read error RAISES (it used to read as "no original", and the release left the
+        NIC with no NSG while verify_release said verified), and so does a MISSING tag
+        (OriginalUnknown): written for every NIC since the fourth review (Q7), its
+        absence is an unknown — a lost write, a hand edit — not "none"."""
+        key = self._orig_tag(nic_id)
+        value = self._quarantine_tags(q).get(key)
+        if not value:
+            raise OriginalUnknown(
+                f"NSG d'origine de {nic_id.rstrip('/').rsplit('/', 1)[-1]} inconnu : ni l'état local "
+                f"ni le tag {key} de {q['nsg_name']} ne le disent. La carte reste en quarantaine — "
+                f"poser le tag ({key}=<id du NSG> ou {key}={self._NO_ORIGINAL}) puis relancer la levée.")
+        return None if value == self._NO_ORIGINAL else value
 
     def _forget_original(self, q: dict, nic_id: str) -> None:
         try:
@@ -1776,17 +1833,24 @@ class AzureConnector(CloudConnector):
         # is the multi-NIC gap (looks ISOLATED but traffic still flows on the other NIC).
         uncovered: list[str] = []
         unreadable: list[str] = []
+        altered: list[str] = []          # our quarantine NSG changed (Q6)
+        held: set[str] = set()           # NICs our quarantine NSG holds — nothing to compare
         found: dict[str, list[tuple]] = {}     # nic_id → [(nsg_rg, nsg_name, inbound deny name)]
         cache: dict = {}
         for t0 in targets:
             unknown = bool(t0.get("subnet_unreadable"))
             hits: list[tuple] = []
-            # Glorfindel's quarantine NSG on the NIC (L4): holds if its two denies are there.
+            # Glorfindel's quarantine NSG on the NIC (L4): holds if its rules are exactly
+            # ours — read by content (Q6). Nothing customer runs before them.
             q = t0.get("quarantine")
             if q:
-                st = self._rules_state(q["nsg_rg"], q["nsg_name"], [QUARANTINE_RULE_IN, QUARANTINE_RULE_OUT])
-                if st == "present":
-                    hits.append((q["nsg_rg"], q["nsg_name"], QUARANTINE_RULE_IN))
+                st, diff = self._quarantine_state(q, cache)
+                if st == "ok":
+                    held.add(t0["nic_id"])
+                    found[t0["nic_id"]] = []
+                    continue
+                if st == "altered":
+                    altered.append(f'{t0["nic_short"]} ({q["nsg_name"]} : {", ".join(diff)})')
                 unknown = unknown or st == "unknown"
             # The deny may sit on the NIC's own NSG and/or on its subnet's (placed there
             # when an ALLOW preceded it on the first): traffic crosses both, one deny that
@@ -1804,12 +1868,18 @@ class AzureConnector(CloudConnector):
                     hits.append((t["nsg_rg"], t["nsg_name"], hit))
             if hits:
                 found[t0["nic_id"]] = hits
+            elif q and t0["nic_short"] in {a.split(" ", 1)[0] for a in altered}:
+                # Our quarantine NSG tampered with: put back by the reassertion, which
+                # re-applies an isolation that is "missing".
+                uncovered.append(t0["nic_short"])
             else:
                 # Not found: missing for sure, or only unreadable (no claim either way).
                 (unreadable if unknown else uncovered).append(t0["nic_short"])
 
         if uncovered:
             return {"verified": False, "method": "nsg_check", "uncovered_nics": uncovered,
+                    **({"quarantine_altered": altered,
+                        "error": "NSG de quarantaine modifié : " + " ; ".join(altered)} if altered else {}),
                     **({"unreadable_nics": unreadable} if unreadable else {})}
         if unreadable:
             return {"verified": None, "method": "nsg_check", "unreadable_nics": unreadable,
@@ -1850,7 +1920,10 @@ class AzureConnector(CloudConnector):
             }
         if unknown:
             return self._precedence_unknown(unknown, nics_covered=len(targets))
-        return {"verified": True, "method": "nsg_check", "nics_covered": len(targets)}
+        # Isolated by rules (the quarantine was refused): said, not hidden (Q15).
+        platform_open = [t["nic_short"] for t in targets if t["nic_id"] not in held]
+        return {"verified": True, "method": "nsg_check", "nics_covered": len(targets),
+                **({"platform_open": platform_open, "note": PLATFORM_OPEN_NOTE} if platform_open else {})}
 
     def _list_rules(self, cache: dict, nsg_rg: str, nsg_name: str) -> list | None:
         """Security rules of an NSG, listed once per verification. None if unreadable:
@@ -2942,61 +3015,101 @@ class AzureConnector(CloudConnector):
         the operator's forensic sources allowed in (`isolation.forensic_sources`), placed
         before the deny. One per region (a NIC only takes an NSG of its own region and
         subscription), created on first need; an older one gets the missing rules."""
-        from azure.mgmt.network.models import NetworkSecurityGroup, SecurityRule
+        from azure.mgmt.network.models import NetworkSecurityGroup
         _, cfg_rg = self._quarantine_settings()
         q_rg = cfg_rg or default_rg
         name = f"{QUARANTINE_NSG_PREFIX}-{(location or 'unknown').lower()}"
+        wanted = self._quarantine_wanted()
+        # One creator at a time (Q7): two isolations in the region both read "not found"
+        # and both created it — the second creation rewrote the tags, erasing the
+        # original NSG the first had just recorded.
+        with _quarantine_lock(f"{q_rg}/{name}"):
+            try:
+                nsg = self._network.network_security_groups.get(q_rg, name)
+            except Exception as exc:
+                if not _is_not_found(exc):
+                    raise
+                nsg = self._network.network_security_groups.begin_create_or_update(q_rg, name, NetworkSecurityGroup(
+                    location=location,
+                    tags={"managed-by": "glorfindel", "purpose": "incident-quarantine"},
+                    security_rules=list(wanted.values()),
+                )).result()
+        # Never adopt an NSG that only has our name (Q6): our rules would land in a
+        # customer's NSG, and its own rules would be removed below.
+        if (getattr(nsg, "tags", None) or {}).get("managed-by") != "glorfindel":
+            raise RuntimeError(f"NSG {q_rg}/{name} exists without the managed-by=glorfindel tag — "
+                               "not Glorfindel's quarantine NSG, not adopted")
+        rules = {_rule_name(r).lower(): r for r in (getattr(nsg, "security_rules", None) or [])}
+        for rule_name, rule in wanted.items():
+            current = rules.get(rule_name.lower())
+            # Missing, or changed — turned into an allow, moved, narrowed (Q6), or the
+            # forensic sources changed in the config: put it back as it must be.
+            if current is None or _rule_signature(current) != _rule_signature(rule):
+                self._network.security_rules.begin_create_or_update(q_rg, name, rule_name, rule).result()
+        # Our NSG holds our rules only: anything else (an allow added by hand, a rule the
+        # config no longer wants) would be evaluated in every quarantine of the region.
+        for low, current in rules.items():
+            if low not in {w.lower() for w in wanted}:
+                self._network.security_rules.begin_delete(q_rg, name, _rule_name(current)).result()
+        return {"nsg_rg": q_rg, "nsg_name": name, "nsg_id": nsg.id}
 
-        def _rule(rule_name: str, direction: str) -> SecurityRule:
+    def _quarantine_wanted(self) -> dict:
+        """The rules Glorfindel's quarantine NSG carries, by name: deny-all in and out at
+        100, deny to Azure's DNS and IMDS (not filtered otherwise), and the validated
+        forensic sources allowed in before the deny, on their ports only (Q5)."""
+        from azure.mgmt.network.models import SecurityRule
+
+        def _deny(rule_name: str, direction: str) -> SecurityRule:
             return SecurityRule(
                 name=rule_name, priority=100, direction=direction, access="Deny",
                 protocol="*", source_address_prefix="*", destination_address_prefix="*",
                 source_port_range="*", destination_port_range="*",
                 description="Glorfindel — incident quarantine (attached only while a VM is isolated)",
             )
-        wanted = {QUARANTINE_RULE_IN: _rule(QUARANTINE_RULE_IN, "Inbound"),
-                  QUARANTINE_RULE_OUT: _rule(QUARANTINE_RULE_OUT, "Outbound")}
+        wanted = {QUARANTINE_RULE_IN: _deny(QUARANTINE_RULE_IN, "Inbound"),
+                  QUARANTINE_RULE_OUT: _deny(QUARANTINE_RULE_OUT, "Outbound")}
         for rule_name, priority, tag in QUARANTINE_PLATFORM_RULES:
             wanted[rule_name] = SecurityRule(
                 name=rule_name, priority=priority, direction="Outbound", access="Deny",
                 protocol="*", source_address_prefix="*", destination_address_prefix=tag,
                 source_port_range="*", destination_port_range="*",
                 description=f"Glorfindel — quarantine: {tag} is not filtered by a deny-all")
-        forensic = self._forensic_sources()
-        if forensic:
+        forensic, ports = self._forensic_sources(), self._forensic_ports()
+        if forensic and ports:
             wanted[QUARANTINE_FORENSIC_RULE] = SecurityRule(
                 name=QUARANTINE_FORENSIC_RULE, priority=90, direction="Inbound", access="Allow",
-                protocol="*", source_address_prefixes=forensic, destination_address_prefix="*",
-                source_port_range="*", destination_port_range="*",
+                protocol="Tcp", source_address_prefixes=forensic, destination_address_prefix="*",
+                source_port_range="*", destination_port_ranges=[str(p) for p in ports],
                 description="Glorfindel — quarantine: investigation access (isolation.forensic_sources)")
-        try:
-            nsg = self._network.network_security_groups.get(q_rg, name)
-        except Exception as exc:
-            if not _is_not_found(exc):
-                raise
-            nsg = self._network.network_security_groups.begin_create_or_update(q_rg, name, NetworkSecurityGroup(
-                location=location,
-                tags={"managed-by": "glorfindel", "purpose": "incident-quarantine"},
-                security_rules=list(wanted.values()),
-            )).result()
-        rules = {getattr(r, "name", ""): r for r in (getattr(nsg, "security_rules", None) or [])}
-        for rule_name, rule in wanted.items():
-            current = rules.get(rule_name)
-            # Missing (someone removed it, or an NSG from before the rule existed), or
-            # the forensic sources changed in the config: put it (back) in place.
-            if current is None or (rule_name == QUARANTINE_FORENSIC_RULE and sorted(
-                    getattr(current, "source_address_prefixes", None) or []) != sorted(forensic)):
-                self._network.security_rules.begin_create_or_update(q_rg, name, rule_name, rule).result()
-        if not forensic and QUARANTINE_FORENSIC_RULE in rules:
-            self._network.security_rules.begin_delete(q_rg, name, QUARANTINE_FORENSIC_RULE).result()
-        return {"nsg_rg": q_rg, "nsg_name": name, "nsg_id": nsg.id}
+        return wanted
+
+    def _quarantine_state(self, q: dict, cache: dict) -> tuple[str, list[str]]:
+        """('ok' | 'altered' | 'unknown', what differs) — our quarantine NSG read by its
+        content, not by the names of its rules (Q6)."""
+        rules = self._list_rules(cache, q["nsg_rg"], q["nsg_name"])
+        if rules is None:
+            return "unknown", []
+        by_name = {_rule_name(r).lower(): r for r in rules}
+        wanted = self._quarantine_wanted()
+        diff = [n for n, w in wanted.items()
+                if n.lower() not in by_name or _rule_signature(by_name[n.lower()]) != _rule_signature(w)]
+        diff += [_rule_name(r) for low, r in by_name.items() if low not in {w.lower() for w in wanted}]
+        return ("altered" if diff else "ok"), diff
 
     def _forensic_sources(self) -> list[str]:
+        """isolation.forensic_sources as validate_forensic_sources keeps them (Q5)."""
         try:
-            from glorfindel.config import load_glorfindel_config
-            return list(load_glorfindel_config().isolation.forensic_sources)
+            from glorfindel.config import load_glorfindel_config, validate_forensic_sources
+            return validate_forensic_sources(load_glorfindel_config().isolation.forensic_sources)[0]
         except Exception:
             return []
+
+    def _forensic_ports(self) -> list[int]:
+        try:
+            from glorfindel.config import load_glorfindel_config
+            return list(load_glorfindel_config().isolation.forensic_ports)
+        except Exception:
+            return [22, 3389]
 
     def _set_nic_nsg(self, nic_id: str, nsg_id: str | None, expect: str | None = None) -> bool:
         """Attach `nsg_id` to the NIC (None: detach). With `expect`, only when the NIC
@@ -3195,10 +3308,12 @@ _QUARANTINE_LOCKS_GUARD = threading.Lock()
 
 @contextlib.contextmanager
 def _quarantine_lock(nsg_id: str):
-    """One writer at a time on a quarantine NSG's tags: a thread lock (workers of one
-    watch) plus an flock (the War Room and the CLI are other processes)."""
+    """One writer at a time on a quarantine NSG (its creation, its tags): a thread lock
+    (workers of one watch) plus an flock (the War Room and the CLI are other processes).
+    Keyed `<rg>/<name>`, whether given an id or that pair."""
     import hashlib
-    key = nsg_id.rstrip("/").lower()
+    ref = nsg_id.rstrip("/")
+    key = ("/".join(_parse_nsg_resource_id(ref)) if "/providers/" in ref.lower() else ref).lower()
     with _QUARANTINE_LOCKS_GUARD:
         lock = _QUARANTINE_LOCKS.setdefault(key, threading.Lock())
     with lock:

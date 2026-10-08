@@ -809,12 +809,16 @@ def _verify_approved(connector, esc: dict, action: str, resource_id: str, result
             **(result or {}), **verification, "approved_escalation": esc.get("id", "")})
     except Exception:
         pass
-    if verification.get("verified") is False:
+    # Not verified is not a success either (fourth review, Q11): a check that couldn't
+    # conclude leaves a card too, as the agent's own cycle now does.
+    if verification.get("verified") is not True:
+        failed = verification.get("verified") is False
         _esc.record(
             signal_id=f"approve-{esc.get('id', '')}", resource_id=resource_id, action=action,
             escalation_type="verification_failed",
-            reason=f"Action '{action}' approuvée et exécutée, mais la vérification a échoué : "
-                   f"{verification.get('error', 'check failed')}",
+            reason=(f"Action '{action}' approuvée et exécutée, mais "
+                    + ("la vérification a échoué : " if failed else "elle n'a pas pu être vérifiée : ")
+                    + f"{verification.get('error', 'check failed' if failed else 'Azure illisible')}"),
             ttp=esc.get("ttp", ""), severity=esc.get("severity", ""),
         )
     return verification

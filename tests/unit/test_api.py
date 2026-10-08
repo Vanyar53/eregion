@@ -147,6 +147,25 @@ def test_approved_isolation_is_verified_and_traced(client, monkeypatch, tmp_path
     assert "isolate_vm" in (tmp_path / "runs" / "manual_actions.jsonl").read_text()
 
 
+def test_an_approved_isolation_that_cannot_be_verified_leaves_a_card(client, monkeypatch, tmp_path):
+    """Rules unreadable after the approval: no card used to remain — the mode_hold was
+    resolved by the approval itself, the VM perhaps open (fourth review, Q11)."""
+    from glorfindel import escalations
+    monkeypatch.chdir(tmp_path)
+    rid = "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm"
+    escalations.record(signal_id="s1", resource_id=rid, action="isolate_vm",
+                       escalation_type="mode_hold", reason="held")
+    esc_id = escalations.pending()[0]["id"]
+    conn = MagicMock()
+    conn.isolate_vm.return_value = {"status": "isolated", "drain": {"status": "drained"}}
+    conn.verify_isolation.return_value = {"verified": None, "error": "règles illisibles sur nic-a"}
+    monkeypatch.setattr("glorfindel.actions.AzureConnector", lambda **k: conn)
+
+    client.post(f"/api/action/approve/{esc_id}")
+    [card] = escalations.pending()
+    assert card["escalation_type"] == "verification_failed" and "pas pu être vérifiée" in card["reason"]
+
+
 def test_approved_release_is_verified_after_the_rules_are_removed(client, monkeypatch, tmp_path):
     """The CLI release checks only before removing the rules (validation run, 2026-10-05)."""
     from glorfindel import escalations

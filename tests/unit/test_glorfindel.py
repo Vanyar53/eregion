@@ -3086,3 +3086,48 @@ def test_the_quarantine_says_nothing_stays_open(monkeypatch):
     assert "platform_open" not in out
     nic.network_security_group = type("R", (), {"id": _Q_ID})()
     assert "platform_open" not in connector.verify_isolation(_RID)
+
+
+# ── L24, suite : les blocages d'IP dans la machine à invariants ──────────────────────
+
+def test_unblock_without_state_removes_the_rules_and_says_only_what_it_found(monkeypatch):
+    """A crash after the rules landed, before the state file: unblock looked up old
+    names on the primary NIC only, counted a delete of a missing rule as done, and
+    said `unblocked` while the rules stayed (found by the invariant tests)."""
+    connector, net = _block_env(monkeypatch, {})
+    t = _nic_target(scope="subnet", ips=("10.0.0.5",))
+    base = connector._placement_rule_base("glorfindel-block-192-31-196-7", "vm", "nic-a", "nic-a")
+    left = [_nsg_rule(base, 200, access="Deny", src="192.31.196.7", dst="10.0.0.5", port="*"),
+            _nsg_rule(f"{base}-out", 200, direction="Outbound", access="Deny", src="10.0.0.5",
+                      dst="192.31.196.7", port="*")]
+    net.security_rules.list.side_effect = lambda rg, nsg: left
+    out = connector.unblock_ip("192.31.196.7", _RID)
+    assert out["status"] == "unblocked" and set(out["deleted_rules"]) == {base, f"{base}-out"}
+    assert t["nic_id"] == "nic-a"
+    net.security_rules.list.side_effect = lambda rg, nsg: []
+    net.security_rules.begin_delete.reset_mock()
+    assert connector.unblock_ip("192.31.196.7", _RID)["status"] == "not_found"
+
+
+def test_a_sound_block_is_not_read_as_bypassed_because_of_an_older_placement(monkeypatch):
+    """One NIC, two placements left by two blocks: one bypassed on the NIC NSG, one
+    sound on the subnet NSG. The NIC is blocked — every placement used to have to hold."""
+    from glorfindel.actions import AzureConnector, _save_block_state
+    rule_nic, rule_sub = "glorfindel-block-192-31-196-7-vm-nic-a-1", "glorfindel-block-192-31-196-7-vm-nic-a-2"
+    _save_block_state("vm", "192.31.196.7", _RID, nsg="rg/nsg-nic", nsg_scope="nic", rule=rule_nic,
+                      placements=[{"nic_id": "nic-a", "nsg_rg": "rg", "nsg_name": "nsg-nic", "rule": rule_nic,
+                                   "ips": ["10.0.0.5"]},
+                                  {"nic_id": "nic-a", "nsg_rg": "rg", "nsg_name": "nsg-sub", "rule": rule_sub,
+                                   "ips": ["10.0.0.5"]}], threat_port=22)
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    net = MagicMock()
+    net.security_rules.get.return_value = MagicMock()
+    deny = lambda name: _nsg_rule(name, 200, access="Deny", src="192.31.196.7", dst="10.0.0.5", port="*")  # noqa: E731
+    _listings(net, {"nsg-nic": [_nsg_rule(**_BENCH_ALLOW_SSH), deny(rule_nic)], "nsg-sub": [deny(rule_sub)]})
+    connector._network = net
+    assert connector.verify_block_ip("192.31.196.7", _RID)["verified"] is True
+    _listings(net, {"nsg-nic": [_nsg_rule(**_BENCH_ALLOW_SSH), deny(rule_nic)]})
+    net.security_rules.get.side_effect = lambda rg, nsg, name: (
+        MagicMock() if nsg == "nsg-nic" else (_ for _ in ()).throw(_not_found_exc()))
+    assert connector.verify_block_ip("192.31.196.7", _RID)["verified"] is False

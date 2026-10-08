@@ -129,8 +129,55 @@ class IsolationConfig:
     quarantine_nsg: bool = True
     quarantine_rg: str = ""
     # CIDRs allowed IN to an isolated VM (Bastion subnet, investigation jump host),
-    # before the quarantine's deny: isolate while keeping investigation access.
+    # before the quarantine's deny: isolate while keeping investigation access. Only
+    # what validate_forensic_sources keeps is ever applied.
     forensic_sources: list[str] = field(default_factory=list)
+    # TCP ports those sources reach (SSH, RDP) — not every port of a compromised VM.
+    forensic_ports: list[int] = field(default_factory=lambda: [22, 3389])
+
+
+# The widest forensic source accepted: a Bastion subnet (/26), a jump host (/32), a
+# small management subnet (/24). Wider would let a whole network into an isolated VM.
+_FORENSIC_MAX_ADDRESSES = 256
+
+
+def validate_forensic_sources(values) -> tuple[list[str], list[tuple[str, str]]]:
+    """(accepted CIDRs in canonical form, [(rejected value, why)]).
+
+    The value became an NSG allow before the quarantine's deny AND part of the shell
+    filter of the session drain (fourth review, Q5): a service tag (`Internet`), `*`,
+    a /0 or a stray quote opened the isolated VM to everyone, or broke the command.
+    Only plain addresses and small prefixes pass, rewritten by `ipaddress`."""
+    import ipaddress
+    accepted: list[str] = []
+    rejected: list[tuple[str, str]] = []
+    for raw in values or []:
+        text = str(raw).strip()
+        try:
+            net = ipaddress.ip_network(text, strict=False)
+        except ValueError:
+            rejected.append((text, "ni une adresse ni un préfixe CIDR (tags et * refusés)"))
+            continue
+        if net.num_addresses > _FORENSIC_MAX_ADDRESSES:
+            rejected.append((text, f"préfixe trop large ({net.num_addresses} adresses, "
+                                   f"{_FORENSIC_MAX_ADDRESSES} au plus)"))
+        elif net.is_loopback or net.is_link_local or net.is_multicast or net.is_unspecified:
+            rejected.append((text, "adresse réservée"))
+        elif str(net) not in accepted:
+            accepted.append(str(net))
+    return accepted, rejected
+
+
+def validate_forensic_ports(values) -> list[int]:
+    ports: list[int] = []
+    for raw in values or []:
+        try:
+            port = int(str(raw).strip())
+        except ValueError:
+            continue
+        if 0 < port < 65536 and port not in ports:
+            ports.append(port)
+    return ports
 
 
 @dataclass
@@ -243,6 +290,7 @@ def load_glorfindel_config(path: str | Path | None = None) -> GlorfindelConfig:
         quarantine_nsg=bool(iso.get("quarantine_nsg", True)),
         quarantine_rg=str(iso.get("quarantine_rg", "") or ""),
         forensic_sources=[str(x) for x in (iso.get("forensic_sources") or [])],
+        forensic_ports=validate_forensic_ports(iso.get("forensic_ports", [22, 3389])),
     )
 
     return GlorfindelConfig(

@@ -38,7 +38,7 @@ from hypothesis.stateful import (
 from glorfindel import actions, escalations, reassert
 from glorfindel.actions import AzureConnector, _load_isolation_state
 
-from .fake_azure import Crash, FakeAzure, key, open_flows
+from .fake_azure import AZURE_DNS, AZURE_IMDS, Crash, FakeAzure, key, open_flows
 
 # ── the customer's network ───────────────────────────────────────────────────────
 
@@ -219,6 +219,13 @@ class IsolationMachine(RuleBasedStateMachine):
             _note(f"{label}: {what}" + (f" after {fault[1]}" if fired else ""))
         return out, err
 
+    def _undeclared(self, vm: str, claim: dict) -> frozenset:
+        """Open flows the claim doesn't admit: an isolation by rules can't deny Azure's DNS
+        and IMDS to one VM (measured) — it must say so (`platform_open`), never hide it."""
+        declared = set(claim.get("platform_open") or [])
+        return frozenset(f for f in open_flows(self._world(), vm)
+                         if not (f[0] in declared and f[3] in (AZURE_DNS, AZURE_IMDS)))
+
     def _draw(self, data):
         vm = data.draw(st.sampled_from(self.vms), label="vm")
         # The canonical id, or the lowercase id Log Analytics reports (_ResourceId).
@@ -253,11 +260,12 @@ class IsolationMachine(RuleBasedStateMachine):
         flows, states = self._flows(), {v: self._state(v) for v in self.vms}
         out, _ = self._run(fault, lambda: self.connector.isolate_vm(rid), "isolate")
         if out and out.get("status") == "isolated" and not out.get("bypass"):
-            assert not open_flows(self._world(), vm), f"I3: isolate_vm said isolated, {vm} still reachable"
+            assert not self._undeclared(vm, out), f"I3: isolate_vm said isolated, {vm} still reachable"
             # ...and its verification agrees: a false alarm would have the reassertion
             # put back an isolation that holds.
             check, _ = self._run(None, lambda: self.connector.verify_isolation(rid))
             assert check and check.get("verified") is True, f"I3: fresh isolation of {vm} not verified: {check}"
+            assert not self._undeclared(vm, check), f"I3: verify_isolation hides open flows of {vm}"
         self._others_unchanged(vm, flows, states)
 
     @rule(data=st.data())
@@ -274,7 +282,7 @@ class IsolationMachine(RuleBasedStateMachine):
         vm, rid, fault = self._draw(data)
         iso, _ = self._run(fault, lambda: self.connector.verify_isolation(rid), "verify_isolation")
         if iso and iso.get("verified") is True:
-            assert not open_flows(self._world(), vm), f"I3: verify_isolation True, {vm} reachable"
+            assert not self._undeclared(vm, iso), f"I3: verify_isolation True, {vm} reachable"
         rel, _ = self._run(None, lambda: self.connector.verify_release(rid))
         if rel and rel.get("verified") is True:
             assert open_flows(self._world(), vm) == self._designed(vm), (

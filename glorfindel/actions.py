@@ -312,6 +312,61 @@ def _ip_scoped(target: dict) -> bool:
     return target.get("ip_scoped", target.get("scope") == "subnet")
 
 
+def _scope_to_nic(target: dict) -> bool:
+    """A deny placed for one NIC addresses that NIC's IPs — on a dedicated NSG too.
+
+    Any/any was used on an NSG governing this NIC alone, as read at that moment. A NIC
+    of another VM away in quarantine (L4) doesn't show on its NSG: a "tier" NSG shared
+    by two VMs read as dedicated while one was isolated, took an any/any, and the other
+    VM found itself cut off when its own release put it back (L24). Addressed to the
+    NIC's IPs, the deny holds the same for this VM and can't reach any other, now or
+    later. Without a private IP to address, only an NSG that is not shared takes it."""
+    return bool(target.get("private_ips")) or _ip_scoped(target)
+
+
+def _nic_hash(nic_id: str, size: int) -> str:
+    import hashlib
+    return hashlib.sha1(nic_id.rstrip("/").lower().encode()).hexdigest()[:size]
+
+
+def _rule_name(rule) -> str:
+    return getattr(rule, "name", "") or ""
+
+
+def _side_is_any(rule, side: str) -> bool:
+    single = getattr(rule, f"{side}_address_prefix", None)
+    values = ([single] if single else []) + list(getattr(rule, f"{side}_address_prefixes", None) or [])
+    return not values or any((v or "").strip().lower() in ("*", "any", "0.0.0.0/0") for v in values)
+
+
+def _deny_applies(rule, ips: list[str] | None) -> bool:
+    """A Glorfindel deny that applies to this NIC: its own side (destination inbound,
+    source outbound) includes one of the NIC's addresses, or any address. A rule of the
+    same name scoped to OTHER addresses belongs to another VM — a homonym behind the
+    same NSG (L24) — and is neither this NIC's isolation nor ours to delete."""
+    if _enum_text(getattr(rule, "access", "")) != "deny":
+        return False
+    side = "destination" if _enum_text(getattr(rule, "direction", "")) == "inbound" else "source"
+    return _side_covers(rule, side, ips or None)
+
+
+def _deny_isolates(rule, direction: str, ips: list[str] | None) -> bool:
+    """This deny cuts ALL of the NIC's traffic in `direction`: every protocol and port,
+    any peer, each of the NIC's addresses. Presence by name was taken as proof: a
+    homonym's rule, or ours narrowed by hand, read as an isolation (L24)."""
+    if (_enum_text(getattr(rule, "access", "")) != "deny"
+            or _enum_text(getattr(rule, "direction", "")) != direction
+            or _enum_text(getattr(rule, "protocol", "*")) not in ("*", "any", "")):
+        return False
+    ports = [getattr(rule, "destination_port_range", None)] + list(getattr(rule, "destination_port_ranges", None) or [])
+    if not any(str(p or "").strip().lower() in ("*", "any", "0-65535") for p in ports):
+        return False
+    own, peer = ("destination", "source") if direction == "inbound" else ("source", "destination")
+    if not _side_is_any(rule, peer):
+        return False
+    return all(_side_covers(rule, own, [ip]) for ip in ips) if ips else _side_is_any(rule, own)
+
+
 def warm_up_azure_sdk() -> None:
     """Import the Azure SDK once, single-threaded, before any worker threads run.
 
@@ -613,7 +668,7 @@ class AzureConnector(CloudConnector):
                 # NIC's other NSG if it has one: traffic must pass both, a deny in either
                 # holds. Plan both before writing anything.
                 own = (in_name, out_name)
-                plan = self._plan_isolation(t, nsg_rg, nsg_name, _ip_scoped(t), assigned, own)
+                plan = self._plan_isolation(t, nsg_rg, nsg_name, _scope_to_nic(t), assigned, own)
                 alt = t.get("alt_nsg")
                 if plan["shadowed"] and alt:
                     alt_plan = self._plan_isolation(t, alt["nsg_rg"], alt["nsg_name"], True, assigned, own)
@@ -665,7 +720,7 @@ class AzureConnector(CloudConnector):
             "resource_id": resource_id,
             "isolated_at": datetime.now(timezone.utc).isoformat(),
             "scoped": True,
-            "placements": placements,
+            "placements": _merge_isolation_placements(_previous_placements(resource_id), placements),
             "nsg_rg": first["nsg_rg"], "nsg_name": first["nsg_name"], "nsg_scope": first["scope"],
             "rule_names": [p["rule_in"] for p in placements] + [p["rule_out"] for p in placements],
         })
@@ -964,7 +1019,9 @@ class AzureConnector(CloudConnector):
             "partial": True,
             "failed_nic": failed_nic,
             "error": _first_line(exc)[:300],
-            "placements": kept,
+            # A re-isolation that fails on NIC 2 still leaves NIC 2's earlier isolation
+            # on Azure: it stays recorded (L24 — the state used to forget it).
+            "placements": _merge_isolation_placements(_previous_placements(resource_id), kept),
             "nsg_rg": first["nsg_rg"], "nsg_name": first["nsg_name"], "nsg_scope": first["scope"],
             "rule_names": [p["rule_in"] for p in kept] + [p["rule_out"] for p in kept],
         })
@@ -1147,22 +1204,42 @@ class AzureConnector(CloudConnector):
                           "scope": "subnet", "shared_nsg": False, "ip_scoped": True})
         return views
 
-    def _isolation_names_for_target(self, vm_name: str, t: dict) -> list[str]:
-        """Every rule name an isolation of this VM can have left on this NIC's NSG.
-
-        Names are deterministic: the per-(VM, NIC) names of the multi-NIC isolation,
-        plus the legacy VM-suffixed names. The legacy FIXED names are only ours to touch
-        on an NSG that governs this VM alone — on a shared NSG they could belong to
-        another VM's isolation.
-        """
-        base = self._placement_rule_base("glorfindel-iso", vm_name, t["nic_short"], t["nic_id"])
-        names = [
-            base, f"{base}-out",
-            f"{self.ISOLATION_RULE_NAME}-{vm_name}", f"{self.ISOLATION_RULE_NAME}-{vm_name}-out",
-        ]
+    def _isolation_pairs(self, vm_name: str, t: dict) -> list[tuple[str, str]]:
+        """Every (inbound, outbound) rule-name pair an isolation of this VM can have left
+        on this NIC's NSG: the per-NIC names (current, then before the NIC hash), the
+        legacy VM-suffixed names, and the legacy FIXED names on an NSG that governs this
+        VM alone — on a shared NSG they could belong to another VM's isolation. A name
+        is never proof on its own: see _isolating_pair / _iso_rules_on."""
+        bases = [self._placement_rule_base("glorfindel-iso", vm_name, t["nic_short"], t["nic_id"]),
+                 self._legacy_rule_base("glorfindel-iso", vm_name, t["nic_short"], t["nic_id"]),
+                 f"{self.ISOLATION_RULE_NAME}-{vm_name}"]
         if not _ip_scoped(t):
-            names += [self.ISOLATION_RULE_NAME, f"{self.ISOLATION_RULE_NAME}-out"]
-        return names
+            bases.append(self.ISOLATION_RULE_NAME)
+        return [(b, f"{b}-out") for b in bases]
+
+    def _isolation_names_for_target(self, vm_name: str, t: dict) -> list[str]:
+        return [n for pair in self._isolation_pairs(vm_name, t) for n in pair]
+
+    def _isolating_pair(self, vm_name: str, t: dict, rules: list) -> str | None:
+        """The inbound rule name of an isolation of this NIC found in `rules` (the NSG's
+        listing): both directions present, each a deny that cuts all of the NIC's
+        traffic. None if no pair holds."""
+        by_name = {_rule_name(r).lower(): r for r in rules}
+        ips = t.get("private_ips") or []
+        for in_name, out_name in self._isolation_pairs(vm_name, t):
+            r_in, r_out = by_name.get(in_name.lower()), by_name.get(out_name.lower())
+            if (r_in is not None and r_out is not None
+                    and _deny_isolates(r_in, "inbound", ips) and _deny_isolates(r_out, "outbound", ips)):
+                return _rule_name(r_in)
+        return None
+
+    def _iso_rules_on(self, vm_name: str, t: dict, rules: list) -> list:
+        """The isolation rules of THIS NIC in `rules` (the NSG's listing): one of our
+        names for it, and a deny that applies to its addresses. Names compare without
+        case — Azure's do."""
+        names = {n.lower() for n in self._isolation_names_for_target(vm_name, t)}
+        ips = t.get("private_ips") or None
+        return [r for r in rules if _rule_name(r).lower() in names and _deny_applies(r, ips)]
 
     def release_isolation(self, resource_id: str) -> dict:
         """Remove every isolation rule of the VM and restore bumped customer rules.
@@ -1172,9 +1249,9 @@ class AzureConnector(CloudConnector):
         `release_partial` with the failing rules. `released` means every delete succeeded
         (or the rule was already gone).
 
-        Without recorded placements (legacy state, a lost or corrupt state file, a state
-        never written), the rule names are recomputed on every current NIC — the same
-        names verify_isolation / verify_release look for.
+        The recorded placements are undone first, then every current NIC is swept for
+        what the state doesn't know (_sweep_isolation) — with no state at all (lost,
+        corrupt, never written) that sweep is the whole release.
         """
         if self.dry_run:
             return {"status": "dry_run", "action": "release_isolation", "resource_id": resource_id}
@@ -1227,30 +1304,22 @@ class AzureConnector(CloudConnector):
                     # Keep the placement for a retry: its rule names (deleting an absent
                     # rule is a no-op) and only the bumps still to put back.
                     remaining.append({**p, "bumped": left})
-        else:
-            for t0 in self._get_vm_nic_targets(rg, vm_name, allow_no_nsg=True):
-                if t0.get("quarantine"):
-                    q = t0["quarantine"]
-                    try:
-                        self._unquarantine(t0["nic_id"], q, self._original_from_tags(q, t0["nic_id"]))
-                    except Exception as exc:
-                        failed.append(f'{t0["nic_short"]}: NSG de quarantaine non retiré : '
-                                      f"{_first_line(exc)[:_ERR_MAX]}")
-                for t in self._nic_nsg_views(t0):
-                    for name in self._isolation_names_for_target(vm_name, t):
-                        err = self._delete_rule(t["nsg_rg"], t["nsg_name"], name)
-                        if err:
-                            failed.append(err)
+        elif state.get("nsg_name"):
             # Legacy single-NSG state: recorded rule names + bumps live on the recorded NSG.
-            if state.get("nsg_name"):
-                l_rg, l_name = state.get("nsg_rg", rg), state["nsg_name"]
-                for name in state.get("rule_names", []):
-                    err = self._delete_rule(l_rg, l_name, name)
-                    if err:
-                        failed.append(err)
-                left = self._restore_bumped(l_rg, l_name, state.get("bumped", []))
-                failed += [f"{l_rg}/{l_name}/{b['name']} (priorité non restaurée) : {b['error']}"
-                           for b in left]
+            l_rg, l_name = state.get("nsg_rg", rg), state["nsg_name"]
+            for name in state.get("rule_names", []):
+                err = self._delete_rule(l_rg, l_name, name)
+                if err:
+                    failed.append(err)
+            left = self._restore_bumped(l_rg, l_name, state.get("bumped", []))
+            failed += [f"{l_rg}/{l_name}/{b['name']} (priorité non restaurée) : {b['error']}"
+                       for b in left]
+
+        # Then what the state doesn't know, state or not: a crash between Azure and the
+        # state file, an answer lost after Azure applied a write, a placement replaced
+        # by a re-isolation. `released` used to mean "what the state listed is undone"
+        # while a NIC stayed cut off (L24).
+        failed += self._sweep_isolation(rg, vm_name, remaining)
 
         if failed:
             from datetime import datetime, timezone
@@ -1265,6 +1334,62 @@ class AzureConnector(CloudConnector):
 
         _clear_isolation_state(resource_id)
         return {"status": "released", "resource_id": resource_id}
+
+    def _sweep_isolation(self, rg: str, vm_name: str, remaining: list[dict]) -> list[str]:
+        """Remove every isolation of this VM still on Azure: our quarantine NSG on its
+        NICs (original from the state, else from our tag), and on each NSG that governs
+        a NIC, the rules of THAT NIC — named for it and applying to its addresses, so a
+        homonym's rules on the same NSG stay. `remaining`: placements whose undo just
+        failed (not tried twice). Returns the failures; an unreadable NIC or rule list
+        is one — nothing found is not nothing there."""
+        try:
+            targets = self._get_vm_nic_targets(rg, vm_name, allow_no_nsg=True)
+        except Exception as exc:
+            if _is_not_found(exc):
+                return []                     # the VM is gone, and its NICs with it
+            return [f"cartes de {vm_name} illisibles, levée non vérifiée : {_first_line(exc)[:_ERR_MAX]}"]
+        held = {p["nic_id"].rstrip("/").lower() for p in remaining if p.get("kind") == "quarantine"}
+        stuck = {(p["nsg_rg"].lower(), p["nsg_name"].lower(), n.lower())
+                 for p in remaining if p.get("kind") != "quarantine"
+                 for n in (p.get("rule_in"), p.get("rule_out")) if n}
+        failed: list[str] = []
+        cache: dict = {}
+        restored = False
+        for t0 in targets:
+            q = t0.get("quarantine")
+            if q and t0["nic_id"].rstrip("/").lower() not in held:
+                try:
+                    original = _recorded_original(t0["nic_id"])
+                    if original is _UNKNOWN:
+                        original = self._original_from_tags(q, t0["nic_id"])
+                    self._unquarantine(t0["nic_id"], q, original)
+                    restored = True
+                except Exception as exc:
+                    failed.append(f'{t0["nic_short"]}: NSG de quarantaine non retiré : '
+                                  f"{_first_line(exc)[:_ERR_MAX]}")
+        if restored:
+            # A NIC in quarantine doesn't show its own NSG: the rules an earlier fallback
+            # left there were out of sight until it came back (L24).
+            try:
+                targets = self._get_vm_nic_targets(rg, vm_name, allow_no_nsg=True)
+            except Exception as exc:
+                return failed + [f"cartes de {vm_name} illisibles, levée non vérifiée : "
+                                 f"{_first_line(exc)[:_ERR_MAX]}"]
+        for t0 in targets:
+            if t0.get("subnet_unreadable"):
+                failed.append(f'{t0["nic_short"]} : NSG du subnet illisible, levée non vérifiée')
+            for t in self._nic_nsg_views(t0):
+                rules = self._list_rules(cache, t["nsg_rg"], t["nsg_name"])
+                if rules is None:
+                    failed.append(f'{t["nsg_rg"]}/{t["nsg_name"]} : règles illisibles, levée non vérifiée')
+                    continue
+                for r in self._iso_rules_on(vm_name, t, rules):
+                    if (t["nsg_rg"].lower(), t["nsg_name"].lower(), _rule_name(r).lower()) in stuck:
+                        continue
+                    err = self._delete_rule(t["nsg_rg"], t["nsg_name"], _rule_name(r))
+                    if err:
+                        failed.append(err)
+        return failed
 
     def block_suspicious_ip(
         self, ip: str, resource_id: str, scope: str = "vm", replace: bool = False,
@@ -1341,7 +1466,7 @@ class AzureConnector(CloudConnector):
                 # Same placement rule as the isolation: no customer rule moved; when an
                 # allow before the deny lets the THREAT through on this NSG, the NIC's
                 # other NSG (its subnet's) holds the deny instead.
-                plan = self._plan_block(t, ip, nsg_rg, nsg_name, _ip_scoped(t), assigned, threat_port)
+                plan = self._plan_block(t, ip, nsg_rg, nsg_name, _scope_to_nic(t), assigned, threat_port)
                 alt = t.get("alt_nsg")
                 if plan["bypassed"] and alt:
                     alt_plan = self._plan_block(t, ip, alt["nsg_rg"], alt["nsg_name"], True,
@@ -1651,34 +1776,34 @@ class AzureConnector(CloudConnector):
         # is the multi-NIC gap (looks ISOLATED but traffic still flows on the other NIC).
         uncovered: list[str] = []
         unreadable: list[str] = []
-        found: dict[str, tuple] = {}     # nic_id → (nsg_rg, nsg_name, inbound deny name)
+        found: dict[str, list[tuple]] = {}     # nic_id → [(nsg_rg, nsg_name, inbound deny name)]
+        cache: dict = {}
         for t0 in targets:
-            unknown = False
+            unknown = bool(t0.get("subnet_unreadable"))
+            hits: list[tuple] = []
             # Glorfindel's quarantine NSG on the NIC (L4): holds if its two denies are there.
             q = t0.get("quarantine")
             if q:
                 st = self._rules_state(q["nsg_rg"], q["nsg_name"], [QUARANTINE_RULE_IN, QUARANTINE_RULE_OUT])
                 if st == "present":
-                    found[t0["nic_id"]] = (q["nsg_rg"], q["nsg_name"], QUARANTINE_RULE_IN)
-                    continue
-                unknown = st == "unknown"
-            # The deny may sit on the NIC's own NSG or on its subnet's (placed there when
-            # an ALLOW preceded it on the first): either one holds.
+                    hits.append((q["nsg_rg"], q["nsg_name"], QUARANTINE_RULE_IN))
+                unknown = unknown or st == "unknown"
+            # The deny may sit on the NIC's own NSG and/or on its subnet's (placed there
+            # when an ALLOW preceded it on the first): traffic crosses both, one deny that
+            # isn't bypassed holds — every one is kept for the precedence check below (the
+            # first found used to decide alone, a bypassed leftover over a sound one: L24).
+            # Read from the NSG's listing, by content: a homonym's rule of the same name,
+            # scoped to its own addresses, isolates nothing here.
             for t in self._nic_nsg_views(t0):
-                base = self._placement_rule_base("glorfindel-iso", vm_name, t["nic_short"], t["nic_id"])
-                # Legacy fallback: a VM isolated before the multi-NIC upgrade used the
-                # old fixed/VM-suffixed names on the primary NIC's NSG.
-                legacy_in, legacy_out = self._isolation_rule_names(vm_name, t["scope"])
-                hit = None
-                for pair in ([base, f"{base}-out"], [legacy_in, legacy_out]):
-                    st = self._rules_state(t["nsg_rg"], t["nsg_name"], pair)
-                    if st == "present":
-                        hit = pair[0]
-                        break
-                    unknown = unknown or st == "unknown"
+                rules = self._list_rules(cache, t["nsg_rg"], t["nsg_name"])
+                if rules is None:
+                    unknown = True
+                    continue
+                hit = self._isolating_pair(vm_name, t, rules)
                 if hit:
-                    found[t0["nic_id"]] = (t["nsg_rg"], t["nsg_name"], hit)
-                    break
+                    hits.append((t["nsg_rg"], t["nsg_name"], hit))
+            if hits:
+                found[t0["nic_id"]] = hits
             else:
                 # Not found: missing for sure, or only unreadable (no claim either way).
                 (unreadable if unknown else uncovered).append(t0["nic_short"])
@@ -1695,13 +1820,28 @@ class AzureConnector(CloudConnector):
         # traffic (the bench's allow-ssh at 100 kept SSH open on every "isolated" VM).
         # Every NSG is checked now — a deny no longer forces priority 100 by moving the
         # customer's rules. The check uses the name actually found (a legacy-named
-        # isolation used to pass it by finding nothing to compare).
-        shadowed, unknown = self._precedence([
-            (*found[t["nic_id"]],
-             {"inbound_src": None, "inbound_dst": t["private_ips"] or None,
-              "outbound_src": t["private_ips"] or None, "outbound_dst": None})
-            for t in targets
-        ])
+        # isolation used to pass it by finding nothing to compare), on the listing the
+        # deny was read from.
+        shadowed: list[dict] = []
+        unknown: list[str] = []
+        for t in targets:
+            scope = {"inbound_src": None, "inbound_dst": t["private_ips"] or None,
+                     "outbound_src": t["private_ips"] or None, "outbound_dst": None}
+            nic_shadowed: list[dict] = []
+            nic_unknown: list[str] = []
+            for nsg_rg, nsg_name, rule in found[t["nic_id"]]:
+                res = self._shadowed_deny(cache, nsg_rg, nsg_name, rule, **scope)
+                if res == []:
+                    break                              # one deny holds for this NIC
+                if res is None:
+                    nic_unknown.append(f"{nsg_rg}/{nsg_name}")
+                else:
+                    nic_shadowed += res
+            else:
+                if nic_unknown:
+                    unknown += [u for u in nic_unknown if u not in unknown]
+                else:
+                    shadowed += nic_shadowed
         if shadowed:
             return {
                 "verified": False, "method": "nsg_check", "shadowed_by": shadowed,
@@ -1782,13 +1922,14 @@ class AzureConnector(CloudConnector):
         targets = self._get_vm_nic_targets(rg, vm_name, allow_no_nsg=True)
         still += [f'{t0["nic_short"]}:{t0["quarantine"]["nsg_name"]} (NSG de quarantaine attaché)'
                   for t0 in targets if t0.get("quarantine")]
+        cache: dict = {}
+        unknown += [f'{t0["nic_short"]}:NSG du subnet' for t0 in targets if t0.get("subnet_unreadable")]
         for t in (v for t0 in targets for v in self._nic_nsg_views(t0)):
-            for name in self._isolation_names_for_target(vm_name, t):
-                state = self._rule_state(t["nsg_rg"], t["nsg_name"], name)
-                if state == "present":
-                    still.append(f'{t["nic_short"]}:{name}')
-                elif state == "unknown":
-                    unknown.append(f'{t["nic_short"]}:{name}')
+            rules = self._list_rules(cache, t["nsg_rg"], t["nsg_name"])
+            if rules is None:
+                unknown.append(f'{t["nic_short"]}:{t["nsg_name"]}')
+                continue
+            still += [f'{t["nic_short"]}:{_rule_name(r)}' for r in self._iso_rules_on(vm_name, t, rules)]
         if still or unknown:
             detail = ", ".join(still + [f"{u} (lecture impossible)" for u in unknown])
             return {"verified": False, "method": "nsg_check",
@@ -2136,30 +2277,59 @@ class AzureConnector(CloudConnector):
         seen: set = set()
         targets = self._get_vm_nic_targets(rg, vm_name, allow_no_nsg=True)
         quarantined = [t0 for t0 in targets if t0.get("quarantine")]
-        for t in (v for t0 in targets for v in self._nic_nsg_views(t0)):
-            nsg_key = (t["nsg_rg"], t["nsg_name"])
+        unreadable += [f'{t0["nic_short"]}: NSG du subnet illisible' for t0 in targets if t0.get("subnet_unreadable")]
+        originals: dict[str, str | None] = {}
+        views = [v for t0 in targets for v in self._nic_nsg_views(t0)]
+        for t0 in quarantined:
+            try:
+                originals[t0["nic_id"]] = original = self._original_from_tags(t0["quarantine"], t0["nic_id"])
+            except Exception as exc:
+                unreadable.append(f'{t0["nic_short"]}: NSG d\'origine illisible ({_first_line(exc)[:_ERR_MAX]})')
+                continue
+            if original:
+                # Hidden behind the quarantine: its own NSG, where an earlier fallback
+                # may have left rules (L24).
+                o_rg, o_name = _parse_nsg_resource_id(original)
+                views.append({**t0, "nsg_rg": o_rg, "nsg_name": o_name, "scope": "nic", "ip_scoped": True})
+        for t in views:
+            nsg_key = (t["nsg_rg"].lower(), t["nsg_name"].lower())
             h = hashlib.sha1(t["nic_id"].encode()).hexdigest()[:8]
-            owned_rest = {vm_name, f"{vm_name}-{t['nic_short']}", f"{vm_name[:40]}-{h}"}
-            iso_names = set(self._isolation_names_for_target(vm_name, t))
-            rules = self._list_rules({}, *nsg_key)
+            iso_names = {n.lower() for n in self._isolation_names_for_target(vm_name, t)}
+            rules = self._list_rules({}, t["nsg_rg"], t["nsg_name"])
             if rules is None:
                 # Unreadable: nothing found is not nothing there — keep the local state.
                 unreadable.append(f'{t["nsg_rg"]}/{t["nsg_name"]}: règles illisibles')
                 continue
             for r in rules:
-                name = getattr(r, "name", "") or ""
-                if not name.startswith("glorfindel-") or (nsg_key, name) in seen:
+                name = _rule_name(r)
+                if not name.startswith("glorfindel-") or (nsg_key, name.lower()) in seen:
                     continue
-                seen.add((nsg_key, name))
                 m = block_re.match(name)
-                if name in iso_names or (m and m.group("rest") in owned_rest):
+                if m:
+                    prefix = name[: m.start("rest") - 1]
+                    base = name[:-4] if name.lower().endswith("-out") else name
+                    owned = {f"{prefix}-{x}".lower() for x in (
+                        vm_name, f"{vm_name}-{t['nic_short']}", f"{vm_name[:40]}-{h}")}
+                    owned.add(self._placement_rule_base(prefix, vm_name, t["nic_short"], t["nic_id"]))
+                    ours = base.lower() in owned
+                else:
+                    ours = name.lower() in iso_names
+                # Named for this VM is not enough: a homonym behind the same NSG has the
+                # same legacy names — only a rule that applies to THIS NIC goes (L24). A
+                # rule of the VM's other NIC waits for that NIC's pass (it used to be
+                # marked seen here, and skipped there).
+                if ours and _deny_applies(r, t.get("private_ips") or None):
+                    seen.add((nsg_key, name.lower()))
                     to_delete.append((t["nsg_rg"], t["nsg_name"], name))
                 elif m is None and name.startswith("glorfindel-block-"):
+                    seen.add((nsg_key, name.lower()))
                     kept.append(f'{t["nsg_rg"]}/{t["nsg_name"]}/{name}')   # perimeter block
         deleted, failed = [], list(unreadable)
         for t0 in quarantined:
             q = t0["quarantine"]
-            original = self._original_from_tags(q, t0["nic_id"])
+            if t0["nic_id"] not in originals:
+                continue                       # original unreadable: the NIC stays in quarantine
+            original = originals[t0["nic_id"]]
             label = (f'{t0["nic_short"]}: retirer {q["nsg_name"]}'
                      + (f' (remettre {original.rstrip("/").split("/")[-1]})' if original else ""))
             if dry_run:
@@ -2262,11 +2432,12 @@ class AzureConnector(CloudConnector):
         uncovered = []
         found: dict[str, tuple] = {}
         for t0 in targets:
-            base = self._placement_rule_base(prefix, vm_name, t0["nic_short"], t0["nic_id"])
-            for t in self._nic_nsg_views(t0):
-                if self._rules_present(t["nsg_rg"], t["nsg_name"], [base, f"{base}-out"]):
-                    found[t0["nic_id"]] = (t["nsg_rg"], t["nsg_name"], base)
-                    break
+            bases = (self._placement_rule_base(prefix, vm_name, t0["nic_short"], t0["nic_id"]),
+                     self._legacy_rule_base(prefix, vm_name, t0["nic_short"], t0["nic_id"]))
+            hit = next(((t, base) for t in self._nic_nsg_views(t0) for base in bases
+                        if self._rules_present(t["nsg_rg"], t["nsg_name"], [base, f"{base}-out"])), None)
+            if hit:
+                found[t0["nic_id"]] = (hit[0]["nsg_rg"], hit[0]["nsg_name"], hit[1])
             else:
                 uncovered.append(t0["nic_short"])
         if uncovered:
@@ -2693,7 +2864,12 @@ class AzureConnector(CloudConnector):
                 q_rg, q_name = _parse_nsg_resource_id(own_id)
                 quarantine = {"nsg_rg": q_rg, "nsg_name": q_name, "nsg_id": own_id}
                 own_id = None
-            subnet_nsg = self._subnet_nsg_of(nic)
+            try:
+                subnet_nsg, subnet_unreadable = self._subnet_nsg_of(nic), False
+            except Exception:
+                # Unknown, not "none": every reader that would conclude from its absence
+                # (release, verify_release, verify_isolation, reset) checks this flag.
+                subnet_nsg, subnet_unreadable = None, True
             alt_nsg = None
             if own_id:
                 nsg_rg, nsg_name = _parse_nsg_resource_id(own_id)
@@ -2724,24 +2900,27 @@ class AzureConnector(CloudConnector):
                 "alt_nsg": alt_nsg,
                 "nic_has_nsg": bool(own_id),
                 "own_nsg_id": own_id,
+                "subnet_unreadable": subnet_unreadable,
                 "quarantine": quarantine,
                 "location": getattr(nic, "location", None),
             })
         return targets
 
     def _subnet_nsg_of(self, nic) -> tuple[str, str] | None:
-        """(rg, name) of the NSG on the NIC's subnet, or None (no NSG, or unreadable)."""
+        """(rg, name) of the NSG on the NIC's subnet, or None when the subnet has none.
+        A failed read RAISES: it used to read as "no NSG", and a release without state,
+        hit by a 429 there, swept nothing and said released (L24)."""
         try:
             subnet_id = nic.ip_configurations[0].subnet.id
             parts = subnet_id.split("/")
             sub_rg = parts[parts.index("resourceGroups") + 1]
             vnet = parts[parts.index("virtualNetworks") + 1]
-            subnet = self._network.subnets.get(sub_rg, vnet, parts[-1])
-            if subnet.network_security_group is None:
-                return None
-            return _parse_nsg_resource_id(subnet.network_security_group.id)
         except Exception:
+            return None                       # no IP configuration or subnet to read
+        subnet = self._network.subnets.get(sub_rg, vnet, parts[-1])
+        if subnet.network_security_group is None:
             return None
+        return _parse_nsg_resource_id(subnet.network_security_group.id)
 
     # ── L4: Glorfindel's quarantine NSG ─────────────────────────────────────────
 
@@ -2864,14 +3043,6 @@ class AzureConnector(CloudConnector):
         ]
         return [ip for ip in ips if ip]
 
-    def _isolation_rule_names(self, vm_name: str, scope: str) -> tuple[str, str]:
-        """(inbound, outbound) isolation rule names. On a shared subnet NSG the names
-        are VM-suffixed so isolating several VMs doesn't clobber each other's rules."""
-        if scope == "subnet":
-            base = f"{self.ISOLATION_RULE_NAME}-{vm_name}"
-            return base, f"{base}-out"
-        return self.ISOLATION_RULE_NAME, f"{self.ISOLATION_RULE_NAME}-out"
-
     def _block_rule_name(self, ip: str, vm_name: str, scope: str) -> str:
         """Base name for a block rule. VM-suffixed on a shared subnet NSG so blocks
         scoped to different VMs (same attacker IP) don't collide."""
@@ -2879,16 +3050,26 @@ class AzureConnector(CloudConnector):
         return f"{base}-{vm_name}" if scope == "subnet" else base
 
     def _placement_rule_base(self, prefix: str, vm_name: str, nic_short: str, nic_id: str) -> str:
-        """A rule-name base unique per (VM, NIC), within Azure's 80-char rule-name limit.
+        """A rule-name base unique per NIC, within Azure's 80-char limit (with '-out').
 
-        Per-NIC uniqueness lets two NICs of the same VM be denied on the same shared
-        subnet NSG without clobbering each other. Falls back to a short nic_id hash if
-        the readable name would overflow 80 chars (incl. the '-out' suffix)."""
+        Unique by the hash of the NIC's id, not only by names: two VMs named alike in
+        two resource groups, with NICs named alike, behind one NSG (a hub subnet, a
+        "tier" NSG) got the same name — isolating one rewrote the other's rule, and the
+        other's verification found it by name (L24). Lowercase: the canonical id and
+        Log Analytics' lowercase one give one name."""
+        base = f"{prefix}-{vm_name}-{nic_short}-{_nic_hash(nic_id, 6)}"
+        if len(base) + 4 > 80:
+            room = max(80 - 4 - len(prefix) - 2 - 8, 1)
+            base = f"{prefix}-{vm_name[:room]}-{_nic_hash(nic_id, 8)}"
+        return base.lower()
+
+    @staticmethod
+    def _legacy_rule_base(prefix: str, vm_name: str, nic_short: str, nic_id: str) -> str:
+        """The name before the NIC hash (isolations and blocks placed before L24)."""
         base = f"{prefix}-{vm_name}-{nic_short}"
         if len(base) + 4 > 80:
             import hashlib
-            h = hashlib.sha1(nic_id.encode()).hexdigest()[:8]
-            base = f"{prefix}-{vm_name[:40]}-{h}"
+            base = f"{prefix}-{vm_name[:40]}-{hashlib.sha1(nic_id.encode()).hexdigest()[:8]}"
         return base
 
     def _get_nic_nsg(self, nic_id: str) -> tuple[str, str, str]:
@@ -3286,6 +3467,25 @@ def active_isolations() -> list[dict]:
         except Exception:
             pass
     return result
+
+
+def _previous_placements(resource_id: str) -> list[dict]:
+    return list((_load_isolation_state(resource_id) or {}).get("placements") or [])
+
+
+def _isolation_placement_key(p: dict) -> tuple:
+    if p.get("kind") == "quarantine":
+        return ("quarantine", (p.get("nic_id") or "").rstrip("/").lower())
+    return ("rules", (p.get("nsg_rg") or "").lower(), (p.get("nsg_name") or "").lower(),
+            (p.get("rule_in") or "").lower())
+
+
+def _merge_isolation_placements(old: list[dict], new: list[dict]) -> list[dict]:
+    """A re-isolation's placements, plus the earlier ones it didn't redo: a deny left
+    on another NSG, under an older name, or on a NIC the new attempt didn't reach is
+    still on Azure — release must know it."""
+    keys = {_isolation_placement_key(p) for p in new}
+    return new + [p for p in old if _isolation_placement_key(p) not in keys]
 
 
 def _merge_placements(old: list[dict], new: list[dict]) -> list[dict]:

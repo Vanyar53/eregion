@@ -485,7 +485,7 @@ GLORFINDEL_DISCOVERY_RETENTION_H=8  # rétention d'une VM éteinte dans le regis
 ## Tests
 
 ```bash
-pytest                    # 707 tests (~15s), 0 appel Azure, 0 appel LLM, 0 écriture ~/.glorfindel/
+pytest                    # 715 tests (~20s), 0 appel Azure, 0 appel LLM, 0 écriture ~/.glorfindel/
                           # Hermétique par construction (conftest) : TOUS les chemins ~/.glorfindel redirigés
                           # vers tmp, et le glorfindel-config.yaml local ignoré (avant : avec une config locale,
                           # les tests de graphe lançaient de vraies requêtes KQL via `investigate`, suite 5× plus lente).
@@ -501,6 +501,12 @@ pytest tests/unit/test_detection_authoring.py # catalogue + getschema + author_r
 pytest tests/unit/test_audit.py              # NSG/backup/compute/IAM readiness
 pytest tests/unit/test_config.py             # GlorfindelConfig + ExceptionConfig
 pytest tests/unit/test_discovery.py          # AssetRegistry + DiscoveryService + eviction
+pytest tests/unit/test_invariants.py         # L24 : invariants (Hypothesis, machine à états) sur un faux Azure
+                          # en mémoire (tests/unit/fake_azure.py : évaluation NSG comme Azure, politiques, noms
+                          # insensibles à la casse, pannes 429/crash avant ou après une écriture, disque plein).
+                          # GLORFINDEL_INVARIANT_EXAMPLES=5000 (passage profond, ~3 min) ;
+                          # GLORFINDEL_INVARIANT_STATS=1 -s affiche ce que les séquences ont traversé.
+                          # 60 séquences à chaque push ; 5 000 chaque nuit sur Linux et macOS (invariants.yml).
 ```
 
 ---
@@ -575,6 +581,16 @@ wheel : eregion-0.2.0-py3-none-any.whl ✓
   - Coupure des sessions : `unsupported` (Windows) → **non vérifié** ; comptage `ss` en erreur → `failed` (avant : `| wc -l` donnait 0). Levée autonome seulement si `run_command_neutralized is True` (drapeau absent = inconnu → `release_hold`).
   - **Abonnement** : toute méthode d'action/vérification du connecteur refuse une VM d'un autre abonnement que `AZURE_SUBSCRIPTION_ID` (`WrongSubscriptionError` → `action_failed`) ; la préparation dit `other_subscription` (pas prête).
   - Règles : `ransomware-disk-write` lit la cadence de chaque série (`Step = min(Gap)`) — fine (≤ 25 s) : 2 échantillons > 45 Mo/s ; grossière (défaut Azure 60 s) : 1 échantillon > 25 Mo/s (moyennes 60 s reconstruites sur 10 jours : attaques 26,8–91,7, bénin max 23,2 — marge mince). **Mesuré le 07/10 avec la DCR du banc à 60 s** : T1486 de 50 s → échantillons 8,7 puis 42,2 Mo/s, détecté par le RulePoller à T0+~3,5 min (`isolate_vm` 82 % retenu par `human_only`) ; l'ancien seuil de 45 l'aurait raté. Le bénin reste mesuré sur moyennes simulées. `sudo-privilege-escalation` : `summarize arg_max(TimeGenerated, *) by Computer` au lieu de `| limit 1` (exécuté avant le filtre par VM → aveugle en multi-VM). Toute règle `assets: [auto]` avec `limit`/`take`/`top` → avertissement au chargement.
+
+- **L24 (07/10) — invariants : sept défauts trouvés par les tests de propriétés, aucun par la revue** (`tests/unit/test_invariants.py`, réseau Azure en mémoire `fake_azure.py`) :
+  - **Homonymes** : le nom de règle ne dépendait que du nom de la VM et de la carte. Deux `web` dans deux groupes, cartes `web-nic`, un NSG partagé (hub, « tier ») → isoler l'une réécrivait la règle de l'autre (rouverte), `verify_isolation` de l'autre répondait `True` sans avoir jamais été isolée, la réaffirmation rouvrait l'homonyme. Les noms portent désormais l'empreinte de l'ID de la carte (`glorfindel-iso-<vm>-<nic>-<h6>`, en minuscules ; l'ancien nom reste reconnu).
+  - **Le nom n'est plus une preuve** : `verify_isolation`, `verify_release`, la levée et `reset --from-azure` lisent la liste des règles du NSG et ne comptent une règle comme celle de la carte que si c'est un deny qui s'applique à ses adresses (isolation : tous protocoles, tous ports, toute source, chacune de ses IP). Une seule lecture par NSG et par vérification.
+  - **La levée balaie toujours** (`_sweep_isolation`) : après les placements de l'état, chaque carte est relue et ce que l'état ignore est retiré (crash entre Azure et le fichier d'état, réponse perdue après une écriture appliquée, placement remplacé). Avant : une ré-isolation interrompue réécrivait l'état avec la seule première carte, la levée disait `released` et la seconde restait isolée. Les placements précédents sont aussi gardés dans l'état (`_merge_isolation_placements`). Carte en quarantaine : relue après sa remise (son NSG d'origine, masqué, peut porter un ancien repli).
+  - **Un deny de repli vise toujours les IP de la carte**, même sur un NSG qui semble dédié (`_scope_to_nic`, isolation et blocage) : une carte d'une autre VM partie en quarantaine n'apparaît plus sur son NSG, un NSG « tier » partagé semblait dédié, recevait un any/any, et l'autre VM se retrouvait coupée à sa propre levée.
+  - **Subnet illisible ≠ subnet sans NSG** : `_subnet_nsg_of` lève sur une erreur de lecture ; la carte porte `subnet_unreadable` et levée, `verify_release`, `verify_isolation`, `reset --from-azure` le traitent comme une inconnue. Avant : un 429 sur cette lecture → levée sans état qui ne balayait rien et disait `released`.
+  - **Une carte isolée par l'un de ses deux NSG** : un deny non contourné sur le NSG de la carte OU du subnet suffit ; la première paire trouvée décidait seule (un reste contourné l'emportait sur un deny sain).
+  - `reset --from-azure` : une règle de la seconde carte vue au passage de la première était marquée « vue » puis ignorée — restait en place.
+  - **Mesuré sur le banc (gondolin)** : quarantaine, repli sur les règles (NSG de subnet, règles `…-c271eb` en 100 visant 10.10.1.4), levée sans état — vérifiés (ID canonique et minuscules), levés, rien ne reste. Hypothèse non mesurée du faux : noms de règles insensibles à la casse côté Azure (le code n'en dépend plus).
 
 ## Pitfalls opérateur
 

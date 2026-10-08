@@ -1145,8 +1145,9 @@ def escalate_to_human(state: GlorfindelState) -> GlorfindelState:
     if _out_status in ("write_blocked", "action_failed"):
         escalation_type = _out_status
     # Executed but the check failed (rule missing, an allow evaluated before the deny,
-    # a NIC left open): the type the Revert / reset buttons answer to.
-    elif (state.get("outcome") or {}).get("verified") is False:
+    # a NIC left open) or couldn't conclude (Q11): the type the Revert / reset buttons
+    # answer to.
+    elif (state.get("outcome") or {}).get("verified") is False or (state.get("outcome") or {}).get("unverified"):
         escalation_type = "verification_failed"
     # The cycle itself could not complete (LLM decision unavailable, internal error):
     # the signal is real but unanalyzed — its own type so it is never mistaken for a
@@ -1275,18 +1276,30 @@ def verify_action(state: GlorfindelState, *, connector: CloudConnector) -> Glorf
         verification = {"verified": None, "method": "not_implemented"}
 
     verified = verification.get("verified")
-    escalate = verified is False
-    escalation_reason = (
-        f"Action '{action}' executed but verification failed: {verification.get('error', 'check failed')}"
-        if escalate
-        else state.get("escalation_reason", "")
-    )
+    # An action that changes the network and can't be checked (a list unreadable, a
+    # subnet NSG that couldn't be read) is not a success either: the cycle was stored
+    # silently, the VM perhaps open (fourth review, Q11). A snapshot in progress stays
+    # "no claim" — its job is followed elsewhere.
+    unverified = verified is None and action in _CHECKED_ACTIONS
+    escalate = verified is False or unverified
+    if verified is False:
+        escalation_reason = (f"Action '{action}' executed but verification failed: "
+                             f"{verification.get('error', 'check failed')}")
+    elif unverified:
+        escalation_reason = (f"Action '{action}' executed but could not be verified: "
+                             f"{verification.get('error', 'Azure unreadable')} — check it by hand")
+    else:
+        escalation_reason = state.get("escalation_reason", "")
     return {
         **state,
-        "outcome": {**outcome, **verification},
+        "outcome": {**outcome, **verification, **({"unverified": True} if unverified else {})},
         "escalate": escalate,
         "escalation_reason": escalation_reason,
     }
+
+
+# Actions whose effect on the network is read back from Azure: unverifiable = escalated.
+_CHECKED_ACTIONS = ("isolate_vm", "release_isolation", "block_suspicious_ip")
 
 
 def store_cycle(state: GlorfindelState, *, memory: CycleMemory) -> GlorfindelState:
@@ -1594,8 +1607,9 @@ def _route_after_propose(state: GlorfindelState) -> str:
 
 def _route_after_verify(state: GlorfindelState) -> str:
     outcome = state.get("outcome") or {}
-    # Only escalate on explicit False — None (not implemented) proceeds to store
-    if outcome.get("verified") is False:
+    # False, or None on an action whose effect must be read back (Q11): escalate.
+    # None elsewhere (a snapshot in progress, not implemented) proceeds to store.
+    if outcome.get("verified") is False or outcome.get("unverified"):
         return "escalate_to_human"
     return "store_cycle"
 

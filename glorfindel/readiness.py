@@ -120,8 +120,17 @@ def assess(resource_id: str, connector, quarantine_nsg: bool = True) -> dict:
         reasons.append(_reason(
             "rules_fallback", "reserve",
             "Isolation par règles seulement (droits manquants pour le NSG de quarantaine) : "
-            "exposée aux règles allow du client et aux `terraform apply`.",
+            "exposée aux règles allow du client et aux `terraform apply`, et les DNS / IMDS "
+            "d'Azure restent joignables (un NSG ne peut les refuser qu'à toutes ses cartes).",
             "Ajouter " + ", ".join(sorted(missing & _ISOLATION_RIGHTS)) + "."))
+    elif not quarantine_nsg and rules_ok:
+        reasons.append(_reason(
+            "platform_open", "reserve",
+            "NSG de quarantaine désactivé (isolation.quarantine_nsg) : l'isolation passe par des "
+            "règles, et les DNS / IMDS d'Azure restent joignables depuis la VM isolée (tunnel DNS, "
+            "jeton d'identité managée) — Azure ne laisse refuser ces deux services qu'à toutes "
+            "les cartes d'un NSG.",
+            "Activer isolation.quarantine_nsg."))
     if not rules_ok:
         reasons.append(_reason(
             "no_block", "reserve",
@@ -177,6 +186,27 @@ def assess(resource_id: str, connector, quarantine_nsg: bool = True) -> dict:
                     "Règle(s) allow évaluée(s) avant le deny de blocage : " + ", ".join(blk)
                     + " (contournement réel seulement si elle ouvre le port de l'attaque).",
                     "Placer ces règles après la plage 100–999."))
+
+    # Forensic access (Q5): an isolated VM that stays reachable from somewhere is a
+    # choice the operator confirms; a source that isn't applied must be said.
+    try:
+        from glorfindel.config import load_glorfindel_config, validate_forensic_sources
+        iso_cfg = load_glorfindel_config().isolation
+        accepted, rejected = validate_forensic_sources(iso_cfg.forensic_sources)
+        ports = ", ".join(str(p) for p in iso_cfg.forensic_ports) or "aucun"
+    except Exception:
+        accepted, rejected, ports = [], [], ""
+    if accepted and jit_ok:
+        reasons.append(_reason(
+            "forensic_access", "reserve",
+            f"Isolée, la VM reste joignable depuis {', '.join(accepted)} (TCP {ports}) — "
+            "isolation.forensic_sources, pour l'investigation.",
+            "Vider isolation.forensic_sources si cet accès n'est pas voulu."))
+    if rejected:
+        reasons.append(_reason(
+            "forensic_rejected", "reserve",
+            "Sources forensiques ignorées : " + " ; ".join(f"{v} ({why})" for v, why in rejected) + ".",
+            "Une adresse ou un préfixe d'au plus 256 adresses (Bastion, rebond d'investigation)."))
 
     reasons.append(_reason(
         "unverified_layers", "info",

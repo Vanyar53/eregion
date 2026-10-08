@@ -8,6 +8,7 @@ isolation paths, with Azure's semantics where they matter:
 - names are case-insensitive (ARM resource names are; assumed for rule names too);
 - an NSG lists the NICs and subnets attached to it;
 - two rules of one NSG can't share a priority in the same direction;
+- a rule to Azure's DNS must have "*" as its source (InvalidDNSExfilSourceTag, measured);
 - attaching an NSG that doesn't exist fails; a NIC can carry an Azure Policy that
   refuses any NSG other than the one the customer designed for it.
 
@@ -164,6 +165,14 @@ class FakeAzure:
 
     @staticmethod
     def _put_rule(nsg: dict, rec: dict) -> None:
+        # Measured on the bench (2026-10-08): a rule to Azure's DNS must have "*" as its
+        # source — it can't be scoped to one VM's addresses.
+        dst = [rec.get("destination_address_prefix")] + list(rec.get("destination_address_prefixes") or [])
+        src = [rec.get("source_address_prefix")] + list(rec.get("source_address_prefixes") or [])
+        if any((d or "").lower() == "azureplatformdns" for d in dst) and [v for v in src if v] != ["*"]:
+            raise _error(HttpResponseError, 400,
+                         f"(InvalidDNSExfilSourceTag) {rec['name']}: DNS Exfiltration Tags must have "
+                         '"*" as a sourceaddressPrefix')
         for other in nsg["rules"].values():
             if (other["name"].lower() != rec["name"].lower()
                     and other["direction"].lower() == rec["direction"].lower()
@@ -334,10 +343,17 @@ def _rg_name(resource_id: str) -> tuple[str, str]:
 
 INTERNET = "203.0.113.7"          # documentation range (RFC 5737), outside the 3 private blocks
 LATERAL = "10.9.9.9"
+AZURE_DNS = "168.63.129.16"
+AZURE_IMDS = "169.254.169.254"
 # (direction, peer, port): an attacker on the internet (SSH, HTTPS), a neighbour in the
-# VNet (lateral movement), the VM calling out (exfiltration, C2, lateral).
+# VNet (lateral movement), the VM calling out (exfiltration, C2, lateral), and Azure's
+# DNS (a tunnel) and IMDS (managed-identity tokens).
 PROBES = (("in", INTERNET, 22), ("in", INTERNET, 443), ("in", LATERAL, 22),
-          ("out", INTERNET, 443), ("out", LATERAL, 445))
+          ("out", INTERNET, 443), ("out", LATERAL, 445),
+          ("out", AZURE_DNS, 53), ("out", AZURE_IMDS, 80))
+# Platform addresses: no rule filters them unless it names their service tag — a
+# deny-all, the default rules included, lets them through (measured on the bench).
+_PLATFORM = {AZURE_DNS: "azureplatformdns", AZURE_IMDS: "azureplatformimds"}
 
 _PRIVATE = [ipaddress.ip_network(n) for n in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")]
 _DEFAULTS = {
@@ -388,9 +404,20 @@ def _port(rule: dict, port: int) -> bool:
     return False
 
 
+def _names_tag(rule: dict, tag: str) -> bool:
+    values = [rule.get("destination_address_prefix")] + list(rule.get("destination_address_prefixes") or [])
+    return any((v or "").strip().lower() == tag for v in values)
+
+
 def _nsg_allows(nsg: dict, direction: str, src: str, dst: str, port: int) -> bool:
     rules = [(r["priority"], r["access"].lower(), r) for r in nsg["rules"].values()
              if r["direction"].lower() == ("inbound" if direction == "in" else "outbound")]
+    if direction == "out" and dst in _PLATFORM:
+        tag = _PLATFORM[dst]
+        for _, access, r in sorted(rules, key=lambda x: x[0]):
+            if _names_tag(r, tag) and _side(r, "source", src) and _port(r, port):
+                return access == "allow"
+        return True
     rules += [(p, a, {"source_address_prefix": s, "destination_address_prefix": d,
                       "destination_port_range": pr})
               for p, a, s, d, pr in _DEFAULTS[direction]]

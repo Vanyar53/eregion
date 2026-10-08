@@ -38,7 +38,7 @@ from hypothesis.stateful import (
 from glorfindel import actions, escalations, reassert
 from glorfindel.actions import AzureConnector, _load_isolation_state
 
-from .fake_azure import AZURE_DNS, AZURE_IMDS, Crash, FakeAzure, key, open_flows
+from .fake_azure import ATTACKER, AZURE_DNS, AZURE_IMDS, Crash, FakeAzure, key, open_flows
 
 # ── the customer's network ───────────────────────────────────────────────────────
 
@@ -199,9 +199,17 @@ class IsolationMachine(RuleBasedStateMachine):
         return all(key(self.fake.nics[key(n)]["nsg"]) == key(self.fake.nics[key(n)]["design_nsg"])
                    for n in self.fake.vms[key(vm)]["nics"])
 
+    def _back_to_design(self, vm: str) -> bool:
+        """Every flow as designed — the attacker's excepted while a block of it stands
+        (a block legitimately closes them, and outlives a release)."""
+        live, design = open_flows(self._world(), vm), self._designed(vm)
+        if actions._load_block_entries(vm) or self._block_rules_for(vm):
+            return ({f for f in live if f[3] != ATTACKER} == {f for f in design if f[3] != ATTACKER}
+                    and live <= design)
+        return live == design
+
     def _released(self, vm: str) -> bool:
-        return (open_flows(self._world(), vm) == self._designed(vm)
-                and self._nics_as_designed(vm) and self._state(vm) is None)
+        return self._back_to_design(vm) and self._nics_as_designed(vm) and self._state(vm) is None
 
     def _run(self, fault, fn, label=""):
         self.chaos.arm(fault)
@@ -277,6 +285,50 @@ class IsolationMachine(RuleBasedStateMachine):
             assert self._released(vm), f"I3: release said released, {vm} is not back to its design"
         self._others_unchanged(vm, flows, states)
 
+    def _attacker_flows(self, vm: str, port: int | None) -> frozenset:
+        """What a block must close: the attacker's way in on the threat port (any port
+        when unknown) and the VM's way out to it."""
+        return frozenset(f for f in open_flows(self._world(), vm)
+                         if f[3] == ATTACKER and (f[2] == "out" or port is None or f[4] == port))
+
+    def _block_rules_for(self, vm: str) -> list[str]:
+        """Glorfindel block rules for the attacker that apply to one of this VM's NICs."""
+        found = []
+        for n_id in self.fake.vms[key(vm)]["nics"]:
+            nic = self.fake.nics[key(n_id)]
+            for g in {nic["nsg"], nic["design_nsg"], self.fake.subnets[key(nic["subnet"])]["nsg"]} - {None}:
+                for r in self.fake.nsgs[key(g)]["rules"].values():
+                    if not r["name"].startswith("glorfindel-block-"):
+                        continue
+                    sides = [r.get("source_address_prefix"), r.get("destination_address_prefix"),
+                             *(r.get("source_address_prefixes") or []), *(r.get("destination_address_prefixes") or [])]
+                    if ATTACKER in sides and any(v in ("*", *nic["ips"]) for v in sides):
+                        found.append(r["name"])
+        return found
+
+    @rule(data=st.data())
+    def block(self, data):
+        vm, rid, fault = self._draw(data)
+        port = data.draw(st.sampled_from([22, None]), label="threat_port")
+        flows, states = self._flows(), {v: self._state(v) for v in self.vms}
+        out, _ = self._run(fault, lambda: self.connector.block_suspicious_ip(
+            ATTACKER, rid, scope="vm", threat_port=port), "block")
+        if out and out.get("status") == "blocked" and not out.get("bypass"):
+            assert not self._attacker_flows(vm, port), f"I3: block said blocked, {ATTACKER} reaches {vm}"
+            check, _ = self._run(None, lambda: self.connector.verify_block_ip(ATTACKER, rid))
+            assert check and check.get("verified") is True, f"I3: fresh block on {vm} not verified: {check}"
+        self._others_unchanged(vm, flows, states)
+
+    @rule(data=st.data())
+    def unblock(self, data):
+        vm, rid, fault = self._draw(data)
+        flows, states = self._flows(), {v: self._state(v) for v in self.vms}
+        out, _ = self._run(fault, lambda: self.connector.unblock_ip(ATTACKER, rid), "unblock")
+        if out and out.get("status") in ("unblocked", "not_found"):
+            left = self._block_rules_for(vm)
+            assert not left, f"I3: unblock said {out['status']}, rules left for {vm}: {left}"
+        self._others_unchanged(vm, flows, states)
+
     @rule(data=st.data())
     def verify(self, data):
         vm, rid, fault = self._draw(data)
@@ -285,15 +337,15 @@ class IsolationMachine(RuleBasedStateMachine):
             assert not self._undeclared(vm, iso), f"I3: verify_isolation True, {vm} reachable"
         rel, _ = self._run(None, lambda: self.connector.verify_release(rid))
         if rel and rel.get("verified") is True:
-            assert open_flows(self._world(), vm) == self._designed(vm), (
-                f"I3: verify_release True, {vm} not back to its design")
+            assert self._back_to_design(vm), f"I3: verify_release True, {vm} not back to its design"
 
     @rule(data=st.data())
     def reassert(self, data):
         _CURRENT.mode = data.draw(st.sampled_from(["human_only", "non_disruptive"]), label="mode")
         fault = data.draw(_FAULTS, label="fault")
         flows = self._flows()
-        had_state = {vm: self._state(vm) is not None for vm in self.vms}
+        had_state = {vm: self._state(vm) is not None or bool(actions._load_block_entries(vm))
+                     for vm in self.vms}
         nics_before = {k: n["nsg"] for k, n in self.fake.nics.items()}
         report, _ = self._run(fault, lambda: reassert.reassert_active(self.connector, None))
         for r in report or []:
@@ -356,6 +408,9 @@ class IsolationMachine(RuleBasedStateMachine):
                         f.unlink()
             for _ in range(3):
                 if self.connector.release_isolation(vm)["status"] == "released":
+                    break
+            for _ in range(3):
+                if self.connector.unblock_ip(ATTACKER, vm)["status"] in ("unblocked", "not_found"):
                     break
         for vm in self.vms:
             assert self._released(vm), f"I7: {vm} could not be brought back to its design"

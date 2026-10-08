@@ -1514,7 +1514,7 @@ class AzureConnector(CloudConnector):
             base = self._placement_rule_base(prefix, vm_name, t["nic_short"], t["nic_id"])
             in_name, out_name = base, f"{base}-out"
             placement = {
-                "nsg_rg": nsg_rg, "nsg_name": nsg_name, "scope": scope_t,
+                "nic_id": t["nic_id"], "nsg_rg": nsg_rg, "nsg_name": nsg_name, "scope": scope_t,
                 "shared_nsg": bool(t.get("shared_nsg", False)),
                 "ips": t["private_ips"], "rule": base,
             }
@@ -2442,36 +2442,60 @@ class AzureConnector(CloudConnector):
         rg, vm_name = _parse_vm_resource_id(resource_id)
         entry = next((e for e in _load_block_entries(resource_id) if e.get("ip") == ip), None)
 
-        # Multi-NIC VM block: confirmed only if every placement's rule pair is present.
+        # Multi-NIC VM block: every NIC must be blocked — by ONE of its placements, both
+        # rules present and the threat not let through. A re-block can leave an earlier,
+        # bypassed placement next to a sound one: all of them used to have to hold, and
+        # the sound block read as bypassed (L24, blocks in the invariant machine).
         if entry and entry.get("placements"):
-            states = {
-                name: self._rule_state(p["nsg_rg"], p["nsg_name"], name)
-                for p in entry["placements"]
-                for name in (p["rule"], f'{p["rule"]}-out')
-            }
-            missing = [n for n, st in states.items() if st == "absent"]
+            port = entry.get("threat_port")
+            groups: dict = {}
+            for p in entry["placements"]:
+                groups.setdefault(p.get("nic_id") or tuple(p.get("ips") or []), []).append(p)
+            missing, unread, bypass, exposure, unknown = [], [], [], [], []
+            cache: dict = {}
+            for ps in groups.values():
+                nic_missing, nic_unread, nic_bypass, nic_unknown = [], [], [], []
+                for p in ps:
+                    states = {n: self._rule_state(p["nsg_rg"], p["nsg_name"], n)
+                              for n in (p["rule"], f'{p["rule"]}-out')}
+                    if "absent" in states.values():
+                        nic_missing += [n for n, st in states.items() if st == "absent"]
+                        continue
+                    if "unknown" in states.values():
+                        nic_unread += [n for n, st in states.items() if st == "unknown"]
+                        continue
+                    found = self._shadowed_deny(
+                        cache, p["nsg_rg"], p["nsg_name"], p["rule"],
+                        inbound_src=[ip], inbound_dst=p.get("ips") or None,
+                        outbound_src=p.get("ips") or None, outbound_dst=[ip], port=port)
+                    if found is None:
+                        nic_unknown.append(f'{p["nsg_rg"]}/{p["nsg_name"]}')
+                    elif self._threat_open(found):
+                        nic_bypass += found
+                    else:
+                        exposure += found
+                        break                       # this NIC is blocked
+                else:
+                    if nic_bypass:
+                        bypass += nic_bypass
+                    elif nic_unread or nic_unknown:
+                        unread += nic_unread
+                        unknown += [u for u in nic_unknown if u not in unknown]
+                    else:
+                        missing += nic_missing
             if missing:
                 return {"verified": False, "method": "nsg_check", "missing_rules": missing,
                         "error": f"rules missing: {', '.join(missing)}"}
-            unread = [n for n, st in states.items() if st == "unknown"]
+            if bypass:
+                return self._block_bypassed(ip, bypass)
             if unread:
                 return {"verified": None, "method": "nsg_check", "unreadable_rules": unread,
                         "error": "blocage non vérifiable : règles illisibles (" + ", ".join(unread) + ")"}
-            port = entry.get("threat_port")
-            shadowed, unknown = self._precedence([
-                (p["nsg_rg"], p["nsg_name"], p["rule"],
-                 {"inbound_src": [ip], "inbound_dst": p.get("ips") or None,
-                  "outbound_src": p.get("ips") or None, "outbound_dst": [ip], "port": port})
-                for p in entry["placements"]
-            ])
-            if self._threat_open(shadowed):
-                return self._block_bypassed(ip, shadowed)
             if unknown:
-                return self._precedence_unknown(unknown, nics_covered=len(entry["placements"]))
+                return self._precedence_unknown(unknown, nics_covered=len(groups))
             # Threat port blocked; other ports the attacker still reaches are reported.
-            return {"verified": True, "method": "nsg_check",
-                    "nics_covered": len(entry["placements"]),
-                    **({"exposure": shadowed} if shadowed else {})}
+            return {"verified": True, "method": "nsg_check", "nics_covered": len(groups),
+                    **({"exposure": exposure} if exposure else {})}
 
         # Perimeter (subnet) block, or legacy single-rule entry: check the recorded pair.
         if entry and entry.get("nsg") and entry.get("rule"):
@@ -2585,16 +2609,13 @@ class AzureConnector(CloudConnector):
             if (r_rg, r_name, entry["rule"]) not in done:
                 _del(r_rg, r_name, entry["rule"])
 
-        # 3) Belt-and-braces for legacy state without rule names: resolve via the primary
-        # NIC and delete the historical VM-suffixed / plain block-rule names.
-        if not deleted and not failed:
-            try:
-                nsg_rg, nsg_name, _ = self._get_nic_nsg(self._get_primary_nic_id(rg, vm_name))
-                for legacy in (self._block_rule_name(ip, vm_name, "subnet"),
-                               self._block_rule_name(ip, vm_name, "nic")):
-                    _del(nsg_rg, nsg_name, legacy)
-            except Exception as e:
-                failed.append(f"legacy lookup: {_first_line(e)[:_ERR_MAX]}")
+        # 3) Then every NIC, state or not: a crash between Azure and the state file left
+        # rules no entry knows — and the legacy lookup (primary NIC, old names) counted
+        # a delete of a rule that wasn't there as done, so `unblocked` was said while
+        # the rules stayed (L24, blocks in the invariant machine).
+        s_deleted, s_failed = self._sweep_block(rg, vm_name, ip)
+        deleted += [d for d in s_deleted if d not in deleted]
+        failed += s_failed
 
         if failed:
             # Keep the entry: the rules that are still there keep blocking the IP, and a
@@ -2610,6 +2631,48 @@ class AzureConnector(CloudConnector):
             "ip": ip,
             "deleted_rules": deleted,
         }
+
+    def _block_names_for_target(self, ip: str, vm_name: str, t: dict) -> set[str]:
+        """Every rule name a VM-scoped block of `ip` can have left on this NIC's NSG:
+        per-NIC (current, before the NIC hash), legacy VM-suffixed, and the plain name
+        only on an NSG that governs this VM alone (on a shared one it is a perimeter
+        block, an operator's decision covering every VM)."""
+        prefix = self._block_rule_prefix(ip)
+        bases = [self._placement_rule_base(prefix, vm_name, t["nic_short"], t["nic_id"]),
+                 self._legacy_rule_base(prefix, vm_name, t["nic_short"], t["nic_id"]),
+                 self._block_rule_name(ip, vm_name, "subnet")]
+        if not _ip_scoped(t):
+            bases.append(prefix)
+        return {n.lower() for b in bases for n in (b, f"{b}-out")}
+
+    def _sweep_block(self, rg: str, vm_name: str, ip: str) -> tuple[list[str], list[str]]:
+        """(deleted, failed): the block rules of `ip` still on any NSG of this VM's NICs —
+        named for it and applying to the NIC's addresses. Only rules that existed are
+        counted as deleted; an unreadable NIC or rule list is a failure."""
+        try:
+            targets = self._get_vm_nic_targets(rg, vm_name, allow_no_nsg=True)
+        except Exception as exc:
+            if _is_not_found(exc):
+                return [], []
+            return [], [f"cartes de {vm_name} illisibles, déblocage non vérifié : {_first_line(exc)[:_ERR_MAX]}"]
+        deleted: list[str] = []
+        failed: list[str] = []
+        cache: dict = {}
+        for t0 in targets:
+            if t0.get("subnet_unreadable"):
+                failed.append(f'{t0["nic_short"]} : NSG du subnet illisible, déblocage non vérifié')
+            for t in self._nic_nsg_views(t0):
+                rules = self._list_rules(cache, t["nsg_rg"], t["nsg_name"])
+                if rules is None:
+                    failed.append(f'{t["nsg_rg"]}/{t["nsg_name"]} : règles illisibles, déblocage non vérifié')
+                    continue
+                names = self._block_names_for_target(ip, vm_name, t)
+                for r in rules:
+                    name = _rule_name(r)
+                    if name.lower() in names and _deny_applies(r, t.get("private_ips") or None):
+                        err = self._delete_rule(t["nsg_rg"], t["nsg_name"], name)
+                        (failed if err else deleted).append(err or name)
+        return deleted, failed
 
     # ── Audit / readiness checks ───────────────────────────────────────────────
 

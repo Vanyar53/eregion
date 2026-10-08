@@ -640,13 +640,13 @@ The audit also checks **NSG precedence**: NSG rules apply the first match by asc
 ```bash
 pip install eregion[dev]
 pytest
-# 732 tests (~20s) — 0 Azure calls, 0 LLM calls, 0 writes to ~/.glorfindel
+# 734 tests (~20s) — 0 Azure calls, 0 LLM calls, 0 writes to ~/.glorfindel
 GLORFINDEL_INVARIANT_EXAMPLES=5000 pytest tests/unit/test_invariants.py   # deep run (~3 min)
 ```
 
 The suite is hermetic by construction: `tests/unit/conftest.py` redirects every `~/.glorfindel` path to a temp directory and ignores any local `glorfindel-config.yaml`. CI (`.github/workflows/ci.yml`) runs `ruff check` + `pytest` on Python 3.11 and 3.12, plus the state and identity tests on macOS (case-insensitive file system).
 
-**Invariant tests** (`tests/unit/test_invariants.py`, Hypothesis): random customer networks in an in-memory Azure (`tests/unit/fake_azure.py` — NSG evaluation, policies, case-insensitive names) and random sequences of isolate / release / reassert / verify, with faults anywhere — a throttled call, a crash before a write or after it, a full disk, a `terraform apply` that drops Glorfindel's rules, a NIC redeployed, the local state lost. Seven properties must hold whatever happens: no VM more reachable than designed; the customer's configuration untouched; no success claimed on a falsehood; an operation on one VM changes nothing for another (homonyms included); the reassertion never opens anything; one state file per VM; and from any state, release brings every VM back to its design. 60 sequences per push, 5,000 every night on Linux and macOS (`.github/workflows/invariants.yml`).
+**Invariant tests** (`tests/unit/test_invariants.py`, Hypothesis): random customer networks in an in-memory Azure (`tests/unit/fake_azure.py` — NSG evaluation, policies, case-insensitive names) and random sequences of isolate / release / block / unblock / reassert / verify, with faults anywhere — a throttled call, a crash before a write or after it, a full disk, a `terraform apply` that drops Glorfindel's rules, a NIC redeployed, the local state lost. Seven properties must hold whatever happens: no VM more reachable than designed; the customer's configuration untouched; no success claimed on a falsehood; an operation on one VM changes nothing for another (homonyms included); the reassertion never opens anything; one state file per VM; and from any state, release brings every VM back to its design. 60 sequences per push, 5,000 every night on Linux and macOS (`.github/workflows/invariants.yml`).
 
 Coverage: 8 LangGraph nodes (incl. the propose_detection_rule branch), routing rules, signal schema, safety guard, YAML parser, ChromaDB memory, CLI escalation flow, detection rules (RulePoller + auto-apply + eviction), proposed rules lifecycle, grounded detection authoring, campaign planner/synthesizer/runner + replay, audit readiness checks, GlorfindelConfig + ExceptionConfig, AssetRegistry + DiscoveryService (replace-on-refresh, self-evicting threads), PostureChecker (dedup, re-escalation).
 

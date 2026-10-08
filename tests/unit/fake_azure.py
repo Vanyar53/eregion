@@ -348,9 +348,14 @@ AZURE_IMDS = "169.254.169.254"
 # (direction, peer, port): an attacker on the internet (SSH, HTTPS), a neighbour in the
 # VNet (lateral movement), the VM calling out (exfiltration, C2, lateral), and Azure's
 # DNS (a tunnel) and IMDS (managed-identity tokens).
+# The IP a block targets: public for Python's `ipaddress` too (the RFC 5737 ranges read as
+# private there, and an `Internet` allow then never "covered" the attacker) — the AS112
+# blackhole range (RFC 7534), no real host behind it.
+ATTACKER = "192.31.196.7"
 PROBES = (("in", INTERNET, 22), ("in", INTERNET, 443), ("in", LATERAL, 22),
           ("out", INTERNET, 443), ("out", LATERAL, 445),
-          ("out", AZURE_DNS, 53), ("out", AZURE_IMDS, 80))
+          ("out", AZURE_DNS, 53), ("out", AZURE_IMDS, 80),
+          ("in", ATTACKER, 22), ("in", ATTACKER, 443), ("out", ATTACKER, 443))
 # Platform addresses: no rule filters them unless it names their service tag — a
 # deny-all, the default rules included, lets them through (measured on the bench).
 _PLATFORM = {AZURE_DNS: "azureplatformdns", AZURE_IMDS: "azureplatformimds"}

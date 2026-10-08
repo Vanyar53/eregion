@@ -485,7 +485,7 @@ GLORFINDEL_DISCOVERY_RETENTION_H=8  # rétention d'une VM éteinte dans le regis
 ## Tests
 
 ```bash
-pytest                    # 732 tests (~20s), 0 appel Azure, 0 appel LLM, 0 écriture ~/.glorfindel/
+pytest                    # 734 tests (~20s), 0 appel Azure, 0 appel LLM, 0 écriture ~/.glorfindel/
                           # Hermétique par construction (conftest) : TOUS les chemins ~/.glorfindel redirigés
                           # vers tmp, et le glorfindel-config.yaml local ignoré (avant : avec une config locale,
                           # les tests de graphe lançaient de vraies requêtes KQL via `investigate`, suite 5× plus lente).
@@ -599,6 +599,9 @@ wheel : eregion-0.2.0-py3-none-any.whl ✓
   - **Non vérifié = escalade (Q11)** : `verify_action` — `verified=None` après `isolate_vm` / `release_isolation` / `block_suspicious_ip` → escalade `verification_failed` (« n'a pas pu être vérifiée »), comme l'approbation War Room ; un snapshot en cours reste « sans affirmation ». (Subnet illisible = inconnue : L24.)
   - **DNS et IMDS dans le repli par règles (Q15) — impossible pour une seule VM, mesuré** : Azure **refuse** une règle vers `AzurePlatformDNS` ou `AzurePlatformIMDS` dont la source n'est pas `*` (`InvalidDNSExfilSourceTag`, banc 08/10, les deux tags). Sur un NSG partagé, les refuser couperait toutes les VMs derrière lui. Le repli ne les pose donc pas et **le dit** : `platform_open` + note dans le résultat de l'isolation et dans la vérification (vraie, sans affirmation sur DNS/IMDS) ; préparation : `rules_fallback` le mentionne, nouvelle réserve `platform_open` quand la quarantaine est désactivée. Seul le NSG de quarantaine (attaché à la carte isolée seule) les bloque — **remesuré le 08/10 sans cache** (requête directe à 168.63.129.16, résolution système après vidage du cache, IMDS) : tout bloqué en quarantaine, tout rouvert à la levée. Une première sonde par `getent` avait vu « ouvert » : le cache de systemd-resolved, rempli juste avant.
   - Invariants : le faux Azure modélise DNS/IMDS (seule une règle qui nomme leur tag les filtre) et refuse une règle DNS/IMDS à source limitée ; propriété : rien d'ouvert sauf ce que l'isolation déclare (`platform_open`).
+- **L24, suite (08/10) — les blocages d'IP dans la machine à invariants** (attaquant de test en 192.31.196.7, plage AS112 : publique aussi pour `ipaddress`, les plages RFC 5737 y sont « privées ») — deux défauts trouvés et corrigés :
+  - **`unblock_ip` disait `unblocked` à tort** : sans état (crash entre Azure et le fichier), il ne cherchait que les anciens noms sur la carte primaire et comptait la suppression d'une règle absente comme faite. Il balaie maintenant chaque carte (`_sweep_block` : noms de cette IP pour la carte, deny qui s'applique à ses adresses ; nom nu seulement sur un NSG dédié — ailleurs c'est un blocage de périmètre) et ne compte que ce qui existait (`not_found` sinon).
+  - **`verify_block_ip` par carte** : un blocage contourné laissé par une tentative précédente à côté d'un blocage sain faisait lire « contourné » ; une carte est bloquée dès qu'UN de ses placements tient sans que la menace passe. Les placements de blocage portent désormais `nic_id`.
 
 ## Pitfalls opérateur
 

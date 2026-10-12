@@ -2,7 +2,9 @@
 
 Ce document montre comment les pièces s'emboîtent : la boucle rouge/bleu, les processus et
 l'état qu'ils partagent, le graphe de décision, les gardes qui encadrent le LLM, la vie
-d'une isolation et la réaffirmation. Les schémas sont en Mermaid (rendus par GitHub).
+d'une isolation et la réaffirmation. Les schémas sont en Mermaid (rendus par GitHub), avec un code couleur
+commun : rouge = attaque (Annatar), bleu = Glorfindel, ambre = garde ou vérification, vert = humain ou succès,
+violet = Azure, rose = escalade ou échec, gris = données.
 Pour **comment on prouve** que tout cela tient, voir [`design/preuves.md`](design/preuves.md) ;
 pour l'isolation compatible avec l'infrastructure as code, [`design/module-isolation-iac.md`](design/module-isolation-iac.md).
 
@@ -39,6 +41,23 @@ flowchart LR
     PR --> H
     H -->|"approve-rule"| RULES[("detection_rules.yaml")]
     RULES --> RP
+    classDef red fill:#d64545,stroke:#9e2a2a,color:#ffffff
+    classDef azure fill:#7b5cd6,stroke:#4f3a99,color:#ffffff
+    classDef blue fill:#2f6fd6,stroke:#1d4a9a,color:#ffffff
+    classDef guard fill:#f2b33d,stroke:#b07a12,color:#2b1d00
+    classDef warn fill:#fbe3e3,stroke:#d64545,color:#7a1f1f
+    classDef human fill:#2e9e6a,stroke:#1d6b47,color:#ffffff
+    classDef data fill:#e9edf3,stroke:#8a96a8,color:#18212b
+    class A1,A2 red
+    class VM,LAW azure
+    class RP,INV,DEC,EX,ST,PR blue
+    class G,VER guard
+    class ESC warn
+    class H human
+    class RULES data
+    style Red fill:#fdeeee,stroke:#d64545,color:#7a1f1f
+    style Az fill:#f1edfc,stroke:#7b5cd6,color:#4f3a99
+    style Blue fill:#eaf1fd,stroke:#2f6fd6,color:#1d4a9a
 ```
 
 Deux asymétries voulues : la **réaction** est raisonnée par le LLM (aucune table TTP → action),
@@ -64,6 +83,15 @@ flowchart TB
     W & WR & CLI -->|"un écrivain par VM<br/>verrou de fil + flock"| AZ["Azure<br/>NSG, cartes réseau, Compute, Backup"]
     W -->|"KQL"| LAW[("Log Analytics")]
     W -->|"LiteLLM"| LLM["LLM<br/>Claude par défaut"]
+    classDef blue fill:#2f6fd6,stroke:#1d4a9a,color:#ffffff
+    classDef human fill:#2e9e6a,stroke:#1d6b47,color:#ffffff
+    classDef data fill:#e9edf3,stroke:#8a96a8,color:#18212b
+    classDef azure fill:#7b5cd6,stroke:#4f3a99,color:#ffffff
+    class W blue
+    class WR,CLI human
+    class S,LLM data
+    class AZ,LAW azure
+    style Host fill:#f4f7fb,stroke:#aab4c3,color:#18212b
 ```
 
 - **Un fichier d'état par VM**, nommé `<nom>--<empreinte de l'ID>.json` en minuscules : deux VMs
@@ -88,6 +116,12 @@ flowchart LR
     DEC -->|"retenue"| ESC
     ESC --> SC
     PDR --> SC
+    classDef blue fill:#2f6fd6,stroke:#1d4a9a,color:#ffffff
+    classDef guard fill:#f2b33d,stroke:#b07a12,color:#2b1d00
+    classDef warn fill:#fbe3e3,stroke:#d64545,color:#7a1f1f
+    class LC,PD,INV,DEC,EX,SC,PDR blue
+    class VA guard
+    class ESC warn
 ```
 
 Toute exception d'un cycle finit en escalade (`action_failed`, `cycle_failed`), jamais en
@@ -117,6 +151,14 @@ flowchart LR
     M -->|"non_disruptive"| D{"destructive ?"}
     D -->|oui| E7["destructive_action"]
     D -->|non| GO(("exécuter"))
+    classDef blue fill:#2f6fd6,stroke:#1d4a9a,color:#ffffff
+    classDef guard fill:#f2b33d,stroke:#b07a12,color:#2b1d00
+    classDef warn fill:#fbe3e3,stroke:#d64545,color:#7a1f1f
+    classDef go fill:#2e9e6a,stroke:#1d6b47,color:#ffffff
+    class LLM blue
+    class P,X,C,S,A,R,M,D guard
+    class E0,E1,E2,E3,E4,E5,E6,E7 warn
+    class GO go
 ```
 
 Le mode configuré n'est qu'une intention : une VM ne devient autonome qu'une fois contrôlée
@@ -146,6 +188,14 @@ stateDiagram-v2
     RelPartial --> Releasing: l'opérateur corrige
     Q --> Q: réaffirmation
     Rules --> Rules: réaffirmation
+    classDef human fill:#2e9e6a,stroke:#1d6b47,color:#ffffff
+    classDef blue fill:#2f6fd6,stroke:#1d4a9a,color:#ffffff
+    classDef guard fill:#f2b33d,stroke:#b07a12,color:#2b1d00
+    classDef warn fill:#fbe3e3,stroke:#d64545,color:#7a1f1f
+    class Free human
+    class Q,Rules blue
+    class Releasing guard
+    class Partial,RelPartial warn
 ```
 
 - **Partielle** : une carte a échoué ; ce qui est posé reste posé et enregistré.

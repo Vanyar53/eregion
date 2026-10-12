@@ -168,6 +168,17 @@ flowchart LR
         N3["carte"] --> C3["NSG du client<br/>remis, relu"]
     end
     Before --> During --> After
+    classDef data fill:#e9edf3,stroke:#8a96a8,color:#18212b
+    classDef human fill:#2e9e6a,stroke:#1d6b47,color:#ffffff
+    classDef idle fill:#dff3e8,stroke:#2e9e6a,color:#14532d
+    classDef blue fill:#2f6fd6,stroke:#1d4a9a,color:#ffffff
+    class N1,N2,N3 data
+    class C1,C3 human
+    class C2 idle
+    class Q2 blue
+    style Before fill:#f4f7fb,stroke:#aab4c3,color:#18212b
+    style During fill:#eaf1fd,stroke:#2f6fd6,color:#1d4a9a
+    style After fill:#f4f7fb,stroke:#aab4c3,color:#18212b
 ```
 
 L'isolation et la levée, appel par appel :

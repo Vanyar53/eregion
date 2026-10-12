@@ -39,6 +39,21 @@ flowchart LR
     A2 -. "detection missed" .-> PR["LLM proposes a<br/>grounded rule"]
     PR --> H
     H -->|"approve-rule"| RP
+    classDef red fill:#d64545,stroke:#9e2a2a,color:#ffffff
+    classDef azure fill:#7b5cd6,stroke:#4f3a99,color:#ffffff
+    classDef blue fill:#2f6fd6,stroke:#1d4a9a,color:#ffffff
+    classDef guard fill:#f2b33d,stroke:#b07a12,color:#2b1d00
+    classDef warn fill:#fbe3e3,stroke:#d64545,color:#7a1f1f
+    classDef human fill:#2e9e6a,stroke:#1d6b47,color:#ffffff
+    class A1,A2 red
+    class VM,LAW azure
+    class RP,INV,DEC,EX,PR blue
+    class G,VER guard
+    class ESC warn
+    class H human
+    style Red fill:#fdeeee,stroke:#d64545,color:#7a1f1f
+    style Az fill:#f1edfc,stroke:#7b5cd6,color:#4f3a99
+    style Blue fill:#eaf1fd,stroke:#2f6fd6,color:#1d4a9a
 ```
 
 More diagrams — processes and shared state, the decision graph, the guardrail chain, the life of an isolation, the reassertion loop — in [`docs/architecture.md`](docs/architecture.md).
@@ -69,6 +84,17 @@ flowchart LR
         N3["NIC"] --> C3["customer NSG<br/>put back, read back"]
     end
     Before --> During --> After
+    classDef data fill:#e9edf3,stroke:#8a96a8,color:#18212b
+    classDef human fill:#2e9e6a,stroke:#1d6b47,color:#ffffff
+    classDef idle fill:#dff3e8,stroke:#2e9e6a,color:#14532d
+    classDef blue fill:#2f6fd6,stroke:#1d4a9a,color:#ffffff
+    class N1,N2,N3 data
+    class C1,C3 human
+    class C2 idle
+    class Q2 blue
+    style Before fill:#f4f7fb,stroke:#aab4c3,color:#18212b
+    style During fill:#eaf1fd,stroke:#2f6fd6,color:#1d4a9a
+    style After fill:#f4f7fb,stroke:#aab4c3,color:#18212b
 ```
 
 Signals from different resources run in parallel threads; signals from the same resource are serialized with shared incident context.
@@ -686,6 +712,16 @@ flowchart BT
     L --> I
     B --> C
     B --> R
+    classDef data fill:#e9edf3,stroke:#8a96a8,color:#18212b
+    classDef blue fill:#2f6fd6,stroke:#1d4a9a,color:#ffffff
+    classDef guard fill:#f2b33d,stroke:#b07a12,color:#2b1d00
+    classDef azure fill:#7b5cd6,stroke:#4f3a99,color:#ffffff
+    classDef human fill:#2e9e6a,stroke:#1d6b47,color:#ffffff
+    class U,L data
+    class I blue
+    class M guard
+    class B,C azure
+    class R human
 ```
 
 - **Invariants** — eleven properties checked after every step of thousands of random sequences: never more reachable than designed, the customer's configuration never changed by Glorfindel, no success claimed on a falsehood, no effect on another VM, the local state always agreeing with Azure, two concurrent writers ending as if one ran after the other… 500 sequences per push, 10,000 every night.

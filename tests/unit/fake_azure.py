@@ -9,8 +9,14 @@ isolation paths, with Azure's semantics where they matter:
 - an NSG lists the NICs and subnets attached to it;
 - two rules of one NSG can't share a priority in the same direction;
 - a rule to Azure's DNS must have "*" as its source (InvalidDNSExfilSourceTag, measured);
-- attaching an NSG that doesn't exist fails; a NIC can carry an Azure Policy that
-  refuses any NSG other than the one the customer designed for it.
+- attaching an NSG that doesn't exist fails, and so does attaching one of another
+  region (the error code is assumed, not measured); a NIC can carry an Azure Policy
+  that refuses any NSG other than the one the customer designed for it;
+- an NSG attached to a NIC or a subnet can't be deleted (assumed:
+  InUseNetworkSecurityGroupCannotBeDeleted);
+- `write_denied`: every write is refused (403) — the role was removed, a deny
+  assignment, a resource lock;
+- Run Command's shell script doesn't run on a Windows VM (assumed).
 
 `open_flows` evaluates traffic as Azure does, independently of the connector's own
 helpers: inbound crosses the subnet's NSG then the NIC's, outbound the reverse; in each
@@ -110,6 +116,7 @@ class FakeAzure:
         self.nics: dict[str, dict] = {}
         self.subnets: dict[str, dict] = {}
         self.vms: dict[str, dict] = {}
+        self.write_denied = False
         self.network = SimpleNamespace(
             network_interfaces=_Nics(self), network_security_groups=_Nsgs(self),
             security_rules=_Rules(self), subnets=_Subnets(self))
@@ -131,18 +138,26 @@ class FakeAzure:
         return rid
 
     def add_vm(self, rg: str, name: str, nics: list[dict], os_type="Linux") -> str:
-        """nics: [{rg, name, ips, subnet, nsg, policy}] — `policy`: an Azure Policy
-        refusing any NSG on this NIC other than its own `nsg`."""
+        """nics: [{rg, name, ips, subnet, nsg, policy, location}] — `policy`: an Azure
+        Policy refusing any NSG on this NIC other than its own `nsg`."""
         ids = []
         for n in nics:
             rid = nic_id(n["rg"], n["name"])
-            self.nics[key(rid)] = {"id": rid, "location": "westeurope", "nsg": n.get("nsg"),
+            self.nics[key(rid)] = {"id": rid, "location": n.get("location", "westeurope"),
+                                   "nsg": n.get("nsg"),
                                    "design_nsg": n.get("nsg"), "ips": list(n["ips"]),
                                    "subnet": n["subnet"], "policy": bool(n.get("policy"))}
             ids.append(rid)
         rid = vm_id(rg, name)
         self.vms[key(rid)] = {"id": rid, "nics": ids, "os": os_type}
         return rid
+
+    def delete_nsg(self, rid: str) -> bool:
+        """The customer deletes an NSG — refused while it governs a NIC or a subnet."""
+        if any(key(n["nsg"]) == key(rid) for n in self.nics.values()) or \
+                any(key(s["nsg"]) == key(rid) for s in self.subnets.values()):
+            return False
+        return self.nsgs.pop(key(rid), None) is not None
 
     def snapshot(self) -> dict:
         return copy.deepcopy({"nsgs": self.nsgs, "nics": self.nics, "subnets": self.subnets,
@@ -152,6 +167,9 @@ class FakeAzure:
 
     def call(self, op: str, write: bool, fn):
         self.chaos(op, "before", write)
+        if write and self.write_denied:
+            raise _error(HttpResponseError, 403,
+                         f"(AuthorizationFailed) {op}: the client does not have authorization")
         out = fn()
         if write:
             self.chaos(op, "after", write)
@@ -223,6 +241,9 @@ class _Nics:
                 if key(new) not in self.az.nsgs:
                     raise _error(HttpResponseError, 400,
                                  f"(InvalidResourceReference) {new} referenced by {name} was not found.")
+                if self.az.nsgs[key(new)]["location"] != n["location"]:
+                    raise _error(HttpResponseError, 400,
+                                 f"(InvalidResourceReference) {new} is not in the region of {name}")
                 if n["policy"] and key(new) != key(n["design_nsg"]):
                     raise _error(HttpResponseError, 403,
                                  f"(RequestDisallowedByPolicy) NSG on {name} not allowed")
@@ -328,7 +349,9 @@ class _Vms:
 
     def begin_run_command(self, rg, name, command):
         def run():
-            self._get(rg, name)
+            if self._get(rg, name)["os"] == "Windows" and getattr(command, "command_id", "") == "RunShellScript":
+                raise _error(HttpResponseError, 409,
+                             f"(Conflict) RunShellScript is not supported on the Windows VM {name}")
             return _Done(SimpleNamespace(value=[SimpleNamespace(
                 message="Enable succeeded:\n[stdout]\nglorfindel-drain-remaining=0\n[stderr]\n")]))
         return self.az.call("vm.run_command", True, run)

@@ -1,8 +1,10 @@
 name: Invariants (deep)
 
-# The invariant tests (tests/unit/test_invariants.py) run 60 random sequences on every
-# push. Every night, thousands: new seeds each time, on both kinds of file system. A
-# failure prints the shortest sequence that breaks a property — replay it by hand.
+# The invariant tests (tests/unit/test_invariants.py) run 500 random sequences on every
+# push. Every night, ten thousand: new seeds each time, on both kinds of file system. A
+# failure prints the shortest sequence that breaks a property, and is kept (Hypothesis
+# database, cached): every push replays it first until it is fixed. Once fixed, write
+# it down in tests/unit/test_invariant_regressions.py.
 on:
   schedule:
     - cron: "17 3 * * *"
@@ -10,7 +12,7 @@ on:
     inputs:
       examples:
         description: "Number of random sequences"
-        default: "5000"
+        default: "10000"
 
 permissions:
   contents: read
@@ -34,8 +36,22 @@ jobs:
       - name: Install
         run: python -m pip install -e ".[dev]"
 
-      - name: Isolation, release, reassertion, crashes
+      - uses: actions/cache/restore@v5
+        with:
+          path: .hypothesis-invariants
+          key: invariants-db-
+          restore-keys: invariants-db-
+
+      - name: Isolation, release, blocks, reassertion, crashes, a world that moves
         env:
-          GLORFINDEL_INVARIANT_EXAMPLES: ${{ inputs.examples || '5000' }}
+          GLORFINDEL_INVARIANT_EXAMPLES: ${{ inputs.examples || '10000' }}
+          GLORFINDEL_INVARIANT_DB: .hypothesis-invariants
           GLORFINDEL_INVARIANT_STATS: "1"
         run: python -m pytest tests/unit/test_invariants.py -q -s
+
+      # Kept whatever the outcome — a failure above is what must be replayed.
+      - uses: actions/cache/save@v5
+        if: always() && matrix.os == 'ubuntu-latest'
+        with:
+          path: .hypothesis-invariants
+          key: invariants-db-${{ github.run_id }}

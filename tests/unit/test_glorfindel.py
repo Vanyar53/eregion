@@ -1370,6 +1370,27 @@ def test_release_isolation_reports_failed_delete_and_keeps_state(monkeypatch):
     assert [p["nsg_name"] for p in state["placements"]] == ["nsg-b"]
 
 
+def test_a_rule_named_for_the_nic_goes_whatever_address_it_covers(monkeypatch):
+    """The customer changed the NIC's IP after the isolation: the rule still denies the
+    old address. Without state, the sweep kept only the rules that apply to the NIC's
+    addresses — this one stayed, `released`, waiting to cut off whoever gets the old IP
+    (L26). Named with the NIC's hash, it is the NIC's; a legacy name still needs to apply
+    to the NIC (a homonym's)."""
+    from glorfindel.actions import AzureConnector
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    monkeypatch.setattr(connector, "_get_vm_nic_targets", lambda rg, vm, **_k: [
+        _nic_target(nsg_rg="rg1", nsg_name="nsg-sub", nic_id="nic-a", scope="subnet")])
+    net = MagicMock()
+    _listings(net, {"nsg-sub": _deny_pair(_iso_name("nic-a"), ip="10.0.0.99")              # old IP
+                    + _deny_pair("glorfindel-iso-vm-nic-a", 101, ip="10.0.0.77")})        # a homonym's
+    connector._network = net
+    assert connector.release_isolation(_RID)["status"] == "released"
+    deleted = {c.args[2] for c in net.security_rules.begin_delete.call_args_list}
+    assert {_iso_name("nic-a"), f'{_iso_name("nic-a")}-out'} <= deleted
+    assert "glorfindel-iso-vm-nic-a" not in deleted
+
+
 def test_release_isolation_without_state_sweeps_every_nic(monkeypatch):
     """No state file (lost / corrupt / never written): rule names are deterministic, so
     release recomputes them on EVERY NIC — the legacy path only knew the primary NIC."""
@@ -2661,10 +2682,28 @@ def test_release_checks_the_original_came_back(monkeypatch):
     connector, net, nic = _l4_env(monkeypatch, nic_nsg_id=_CLIENT_NSG_ID, quarantine_exists=True)
     connector.isolate_vm(_RID)
     nic.network_security_group = type("R", (), {"id": _Q_ID})()
-    monkeypatch.setattr(connector, "_nic_nsg_id", lambda nic_id: None)    # Azure didn't apply it
+    reads = iter([_Q_ID])                     # ours before the write, none after it
+    monkeypatch.setattr(connector, "_nic_nsg_id", lambda nic_id: next(reads, None))   # Azure didn't apply it
     out = connector.release_isolation(_RID)
     assert out["status"] == "release_partial" and "non remis" in out["failed"][0]
     assert _load_isolation_state("vm")["placements"][0]["original_nsg_id"] == _CLIENT_NSG_ID
+
+
+def test_release_of_a_nic_given_back_its_nsg_needs_no_original(monkeypatch):
+    """A redeploy put the customer's NSG back on the NIC; the state doesn't know the
+    original and the tag is gone. The release asked for the original first and failed
+    forever on an unknown it didn't need (L26, invariant machine)."""
+    from glorfindel.actions import _load_isolation_state, _save_isolation_state
+    connector, net, nic = _l4_env(monkeypatch, nic_nsg_id=_CLIENT_NSG_ID, quarantine_exists=True)
+    connector.isolate_vm(_RID)
+    state = _load_isolation_state("vm")
+    state["placements"][0].pop("original_nsg_id")
+    _save_isolation_state(_RID, state)
+    net.network_security_groups.get.return_value.tags = {"managed-by": "glorfindel"}   # tag lost
+    nic.network_security_group = type("R", (), {"id": _CLIENT_NSG_ID})()             # redeployed
+    writes = len(net.network_interfaces.begin_create_or_update.call_args_list)
+    assert connector.release_isolation(_RID)["status"] == "released"
+    assert len(net.network_interfaces.begin_create_or_update.call_args_list) == writes
 
 
 def test_an_overwritten_original_tag_cancels_the_swap(monkeypatch):
@@ -3126,6 +3165,7 @@ def test_a_sound_block_is_not_read_as_bypassed_because_of_an_older_placement(mon
                                    "ips": ["10.0.0.5"]}], threat_port=22)
     connector = AzureConnector(dry_run=False)
     monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    _nic_a(monkeypatch, connector, nsg="nsg-nic", alt="nsg-sub")
     net = MagicMock()
     net.security_rules.get.return_value = MagicMock()
     _listings(net, {"nsg-nic": [_nsg_rule(**_BENCH_ALLOW_SSH), *_block_pair(rule_nic, "192.31.196.7")],
@@ -3227,6 +3267,7 @@ def test_a_block_turned_into_an_allow_or_pointed_elsewhere_is_not_verified(monke
                                    "ips": ["10.0.0.5"]}])
     connector = AzureConnector(dry_run=False)
     monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    _nic_a(monkeypatch, connector)
     net = MagicMock()
     connector._network = net
     pair = _block_pair(rule, "192.31.196.7")
@@ -3237,6 +3278,36 @@ def test_a_block_turned_into_an_allow_or_pointed_elsewhere_is_not_verified(monke
     assert out["verified"] is False and out["missing_rules"] == [rule]
     pair[0].access, pair[1].destination_address_prefix = "Deny", "198.18.0.9"
     assert connector.verify_block_ip("192.31.196.7", _RID)["missing_rules"] == [f"{rule}-out"]
+
+
+def test_a_block_is_verified_against_the_nic_as_it_is_now(monkeypatch):
+    """The customer changed the NIC's IP after the block: the rules still deny the old
+    address. Checked against the IP recorded at block time, the block read as whole
+    while the new address was open to the attacker (L26, invariant machine)."""
+    from glorfindel.actions import AzureConnector, _save_block_state
+    rule = "glorfindel-block-192-31-196-7-vm-nic-a-1"
+    _save_block_state("vm", "192.31.196.7", _RID, nsg="rg/nsg", nsg_scope="subnet", rule=rule,
+                      placements=[{"nic_id": "nic-a", "nsg_rg": "rg", "nsg_name": "nsg", "rule": rule,
+                                   "ips": ["10.0.0.5"]}])
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    net = MagicMock()
+    connector._network = net
+    _listings(net, {"nsg": _block_pair(rule, "192.31.196.7")})       # scoped to 10.0.0.5
+    _nic_a(monkeypatch, connector, ["10.0.0.20"])
+    out = connector.verify_block_ip("192.31.196.7", _RID)
+    assert out["verified"] is False and rule in out["missing_rules"]
+    # NICs unreadable: a whole-looking block is not confirmed.
+    monkeypatch.setattr(connector, "_get_vm_nic_targets", MagicMock(side_effect=RuntimeError("429")))
+    assert connector.verify_block_ip("192.31.196.7", _RID)["verified"] is None
+
+
+def _nic_a(monkeypatch, connector, ips=("10.0.0.5",), nsg="nsg", alt=None):
+    """nic-a as _get_vm_nic_targets reads it: its NSG (`nsg`), its subnet's (`alt`)."""
+    target = {"nic_id": "nic-a", "nic_short": "nic-a", "private_ips": list(ips),
+              "nsg_rg": "rg", "nsg_name": nsg, "scope": "nic",
+              **({"alt_nsg": {"nsg_rg": "rg", "nsg_name": alt}} if alt else {})}
+    monkeypatch.setattr(connector, "_get_vm_nic_targets", lambda rg, vm, allow_no_nsg=False: [target])
 
 
 def test_an_allow_named_like_ours_counts_as_a_bypass():

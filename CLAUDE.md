@@ -485,7 +485,7 @@ GLORFINDEL_DISCOVERY_RETENTION_H=8  # rétention d'une VM éteinte dans le regis
 ## Tests
 
 ```bash
-pytest                    # 745 tests (~20s), 0 appel Azure, 0 appel LLM, 0 écriture ~/.glorfindel/
+pytest                    # 753 tests (~20s ; 60 séquences d'invariants, 500 en CI ~1 min), 0 appel Azure, 0 appel LLM, 0 écriture ~/.glorfindel/
                           # Hermétique par construction (conftest) : TOUS les chemins ~/.glorfindel redirigés
                           # vers tmp, et le glorfindel-config.yaml local ignoré (avant : avec une config locale,
                           # les tests de graphe lançaient de vraies requêtes KQL via `investigate`, suite 5× plus lente).
@@ -501,12 +501,16 @@ pytest tests/unit/test_detection_authoring.py # catalogue + getschema + author_r
 pytest tests/unit/test_audit.py              # NSG/backup/compute/IAM readiness
 pytest tests/unit/test_config.py             # GlorfindelConfig + ExceptionConfig
 pytest tests/unit/test_discovery.py          # AssetRegistry + DiscoveryService + eviction
-pytest tests/unit/test_invariants.py         # L24 : invariants (Hypothesis, machine à états) sur un faux Azure
-                          # en mémoire (tests/unit/fake_azure.py : évaluation NSG comme Azure, politiques, noms
-                          # insensibles à la casse, pannes 429/crash avant ou après une écriture, disque plein).
-                          # GLORFINDEL_INVARIANT_EXAMPLES=5000 (passage profond, ~3 min) ;
-                          # GLORFINDEL_INVARIANT_STATS=1 -s affiche ce que les séquences ont traversé.
-                          # 60 séquences à chaque push ; 5 000 chaque nuit sur Linux et macOS (invariants.yml).
+pytest tests/unit/test_invariants.py         # L24/L26 : invariants (Hypothesis, machine à états) sur un faux Azure
+                          # en mémoire (tests/unit/fake_azure.py : évaluation NSG comme Azure, politiques, régions,
+                          # noms insensibles à la casse, 429/crash avant ou après une écriture, API throttlée,
+                          # 403 persistant, disque plein) et un monde client qui bouge (règles, IP, NSG supprimé,
+                          # VM supprimée, tags, config illisible). 10 propriétés (I1–I10, docstring du fichier).
+                          # GLORFINDEL_INVARIANT_EXAMPLES (défaut 60 ; push 500, nuit 10 000), _STEPS (30),
+                          # _DB (base Hypothesis : rejoue les échecs mémorisés), _STATS=1 -s, _NO_SHRINK=1.
+pytest tests/unit/test_invariant_regressions.py  # séquences trouvées par la machine, figées (L26)
+python scripts/mutation_check.py [--examples 500 --rounds 2 --jobs 8]   # mesure des invariants par
+                          # mutation : 21 bugs réels réinjectés un par un ; chaque lundi (mutants.yml)
 ```
 
 ---
@@ -609,7 +613,19 @@ wheel : eregion-0.2.0-py3-none-any.whl ✓
   - **S4** : `reset --from-azure` affiche ce qu'il n'a pas pu établir (original inconnu, subnet illisible) et sort en 2 — il disait « aucune règle », code 0.
   - **S5 — hermétisme** : un thread de poll survivait à son test et écrivait le vrai `~/.glorfindel/rule_status.json`. `RulePoller._live` + fixture qui arrête les pollers avant que la redirection soit défaite ; garde de session : si `~/.glorfindel` n'existait pas au départ (CI), la suite échoue s'il existe à la fin.
   - **S6** : dans le NSG de quarantaine, seule une **allow** avant nos deny (≤ 111) compte comme une altération et est retirée ; le deny d'une politique (DINE / Modify) est laissé.
-  - Restent de la sixième passe : S7 (montrer `platform_open` à l'isolation), S8 (coupure des sessions limitée aux ports forensiques), S9 (divers) ; puis L26 (invariants v2 : monde client qui bouge) et L27 (concurrence).
+  - Restent de la sixième passe : S7 (montrer `platform_open` à l'isolation), S8 (coupure des sessions limitée aux ports forensiques), S9 (divers) ; puis L27 (concurrence).
+- **L26 (12/10) — invariants v2 : un monde qui bouge, mesuré par mutation** :
+  - **Harnais de mutation** `scripts/mutation_check.py` : réinjecte, un par un, des bugs que Glorfindel a vraiment eus (21 mutants : les classes des revues + ceux trouvés par L26) dans une copie du dépôt, lance les invariants, dit attrapé / intermittent / survit (`--jobs` en parallèle, `--min-caught` pour la CI). Mesure de départ (invariants L24/L25) : **1 sur 17** attrapé à coup sûr. Après L26, au budget du push (500 séquences, 2 tours) : **15 sur 17** à chaque tour. Classés à part, raison écrite : M02 et M11 **équivalents** (depuis L24 tout deny vise les IP de la carte ; aucun appelant ne voit un « not found » non 404), M14 et M17 → **L27** (une écriture concurrente, deux opérations à la fois).
+  - **Le monde du client bouge** (`fake_azure.py`, la machine) : règles ajoutées (allow et deny), restreintes, retirées — le « design » suit, I2 compare à ce que le client a écrit en dernier ; NSG supprimé (refusé tant qu'attaché, comme Azure) ; IP changée ; politique posée ou retirée ; VM supprimée ; `terraform apply` ; redéploiement de carte. Quelqu'un touche à ce qui est à Glorfindel : deny restreint à la main, tags du NSG de quarantaine remplacés, NSG de quarantaine vidé. Le rôle retiré (403 sur toute écriture). Config changée ou illisible (vrai fichier, vrais chemins de lecture). Une API throttlée pendant toute une opération. Une seconde région, une VM Windows, blocage de périmètre et promotion, `reset --from-azure`, sources forensiques.
+  - **Propriétés ajoutées** : I7 compatible Q7 (une carte dont l'original est inconnu ou supprimé reste en quarantaine et la levée le dit ; l'opérateur pose le tag ou recrée le NSG, la levée aboutit ; démontage avec l'état puis sans) ; I8 (ce qu'une opération qui a rendu la main laisse sur Azure est dans l'état) ; I9 (la réaffirmation ne refait pas une isolation dont la levée a commencé) ; I10 (config respectée : illisible ⇒ l'isolation n'écrit rien, désactivée ⇒ pas de quarantaine, groupe configuré) ; I4 direct (un deny de Glorfindel sur un NSG que le design partage vise les IP de sa carte, sauf le périmètre) ; toutes les vérifications contrôlées à chaque étape et après chaque mouvement du monde, et sous chaque API throttlée.
+  - **Génération orientée** vers les états rares (composites : levée interrompue puis réaffirmation, isolation interrompue puis reprise, état et tags perdus puis ré-isolation et redéploiement, voisins isolés l'un après l'autre, blocage puis isolation). **Base Hypothesis** : la nuit l'enregistre (cache), chaque push la rejoue d'abord. Les séquences trouvées sont figées dans `tests/unit/test_invariant_regressions.py` (rejeu à la main, tirage par tirage).
+  - **Quatre défauts trouvés et corrigés** :
+    - **IP changée → règle de l'ancienne adresse laissée** : sans état, la levée et `reset --from-azure` ne retenaient une règle de la carte que si elle s'appliquait à ses adresses actuelles ; le deny de l'ancienne IP restait (`released`) et aurait coupé la prochaine VM à recevoir cette adresse. Un nom qui porte l'empreinte de la carte est à elle, quelle que soit l'adresse qu'il vise (`_nic_owns`, isolation et blocage) ; un nom ancien, partagé par les homonymes, doit toujours s'appliquer à ses adresses.
+    - **`verify_block_ip` comparait aux IP enregistrées au blocage** : la carte changeait d'IP, « bloqué », la nouvelle adresse ouverte à l'attaquant. Relit les cartes (illisibles → `verified=None`, une règle absente reste un échec ; carte ajoutée depuis → manquante).
+    - **Blocage caché derrière la quarantaine** : bloquer sur le NSG propre de la carte, puis isoler par quarantaine — ce NSG n'est plus sur la carte. NSG de quarantaine vidé → l'attaquant passe, et la vérification lisait les règles du blocage, présentes, comme un blocage. Ne comptent que les placements sur un NSG qui gouverne la carte **maintenant** ; la quarantaine, intacte, compte comme un blocage (sauf pour une source forensique).
+    - **Levée d'une carte redéployée** (NSG du client remis) dont l'original est inconnu (état et tags perdus, puis ré-isolation) : la levée demandait l'original avant de regarder la carte, et échouait pour toujours. Elle regarde d'abord si la carte porte encore notre NSG.
+  - **CI** : push 500 séquences (~1 min) + rejeu de la base ; nuit 10 000 (Linux, macOS), base sauvegardée ; `mutants.yml` chaque lundi (1 000 séquences, 2 tours, rouge sous 14 attrapés).
+  - **Limites connues** : VM supprimée **et** état perdu → les règles qu'une isolation par règles a laissées sur un NSG partagé sont introuvables (seules les cartes disent quels NSG regarder) ; l'accès forensique ouvre ce que le NSG propre de la carte fermait (choix de l'opérateur, exempté de I1) ; aucune règle d'une version antérieure à L24 dans le faux (M02 n'y est donc pas observable).
 
 ## Pitfalls opérateur
 

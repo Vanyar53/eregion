@@ -43,3 +43,4 @@ Thumbs.db
 infra/canary/**/.terraform/
 infra/canary/**/.terraform.lock.hcl
 infra/canary/**/terraform.tfstate*
+.hypothesis-invariants/

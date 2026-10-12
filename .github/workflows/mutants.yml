@@ -1,0 +1,42 @@
+name: Mutants
+
+# Measures the invariant tests: re-introduces, one at a time, bugs Glorfindel really
+# had (scripts/mutation_check.py). Red when fewer than `min_caught` are caught in every
+# round — the invariants lost strength. 15 of 17 at the push budget on 2026-10-12.
+on:
+  schedule:
+    - cron: "41 4 * * 1"
+  workflow_dispatch:
+    inputs:
+      examples:
+        description: "Sequences per run"
+        default: "1000"
+      rounds:
+        description: "Rounds per mutant (new seeds each)"
+        default: "2"
+      min_caught:
+        description: "Fewest mutants caught in every round"
+        default: "14"
+
+permissions:
+  contents: read
+
+jobs:
+  mutants:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: python -m pip install -e ".[dev]"
+
+      - name: Re-introduce each bug, run the invariants
+        run: >-
+          python scripts/mutation_check.py --jobs 4 --min-caught ${{ inputs.min_caught || '14' }}
+          --examples ${{ inputs.examples || '1000' }} --rounds ${{ inputs.rounds || '2' }}

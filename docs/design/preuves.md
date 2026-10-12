@@ -22,6 +22,16 @@ flowchart BT
     B --> R
     M -.->|"mesure la force de"| I
     B -.->|"fixe les hypothèses de"| I
+    classDef data fill:#e9edf3,stroke:#8a96a8,color:#18212b
+    classDef blue fill:#2f6fd6,stroke:#1d4a9a,color:#ffffff
+    classDef guard fill:#f2b33d,stroke:#b07a12,color:#2b1d00
+    classDef azure fill:#7b5cd6,stroke:#4f3a99,color:#ffffff
+    classDef human fill:#2e9e6a,stroke:#1d6b47,color:#ffffff
+    class U,L data
+    class I blue
+    class M guard
+    class B,C azure
+    class R human
 ```
 
 | Couche | Ce qu'elle voit | Ce qu'elle ne voit pas |
@@ -60,6 +70,20 @@ flowchart LR
     FA --> P
     P -->|"violée"| SH["Hypothesis réduit<br/>la séquence"]
     SH --> REG["exemple figé<br/>test_invariant_regressions.py"]
+    classDef data fill:#e9edf3,stroke:#8a96a8,color:#18212b
+    classDef blue fill:#2f6fd6,stroke:#1d4a9a,color:#ffffff
+    classDef human fill:#2e9e6a,stroke:#1d6b47,color:#ffffff
+    classDef red fill:#d64545,stroke:#9e2a2a,color:#ffffff
+    classDef azure fill:#7b5cd6,stroke:#4f3a99,color:#ffffff
+    classDef guard fill:#f2b33d,stroke:#b07a12,color:#2b1d00
+    class N,Q,SH,REG data
+    class O,Cc blue
+    class Wd human
+    class F red
+    class FA azure
+    class P guard
+    style Draw fill:#f4f7fb,stroke:#aab4c3,color:#18212b
+    style Steps fill:#f4f7fb,stroke:#aab4c3,color:#18212b
 ```
 
 Les propriétés, vérifiées après chaque étape :
@@ -124,6 +148,16 @@ flowchart LR
     Cp --> T["invariants<br/>500 séquences, 2 tours"]
     T -->|"échec"| Ok["attrapé"]
     T -->|"succès"| Ko["survit : il manque une propriété<br/>ou un mouvement du monde"]
+    classDef red fill:#d64545,stroke:#9e2a2a,color:#ffffff
+    classDef data fill:#e9edf3,stroke:#8a96a8,color:#18212b
+    classDef guard fill:#f2b33d,stroke:#b07a12,color:#2b1d00
+    classDef go fill:#2e9e6a,stroke:#1d6b47,color:#ffffff
+    classDef warn fill:#fbe3e3,stroke:#d64545,color:#7a1f1f
+    class B,Mu red
+    class Cp data
+    class T guard
+    class Ok go
+    class Ko warn
 ```
 
 | Étape | Attrapés à chaque tour, au budget du push |
@@ -183,6 +217,10 @@ flowchart LR
     inv -. "séquences en échec<br/>gardées dans la base" .-> ci
     jour["chaque jour"] --> can["canary azurerm<br/>sur Azure"]
     lundi["chaque lundi"] --> mut["mutation, 1 000 séquences<br/>rouge sous 14 attrapés"]
+    classDef data fill:#e9edf3,stroke:#8a96a8,color:#18212b
+    classDef blue fill:#2f6fd6,stroke:#1d4a9a,color:#ffffff
+    class push,nuit,jour,lundi data
+    class ci,inv,can,mut blue
 ```
 
 Une séquence trouvée la nuit est rejouée en premier à chaque push jusqu'à sa correction, puis

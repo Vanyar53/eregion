@@ -14,16 +14,34 @@ Open-source CDR for cloud infrastructure (Azure today; the LLM layer is provider
 
 ## How it works
 
+```mermaid
+flowchart LR
+    subgraph Red["Annatar — red"]
+        A1["Scenario or campaign<br/>MITRE ATT#amp;CK"] --> A2["Real attack<br/>via Run Command"]
+    end
+    subgraph Az["Azure"]
+        VM[("Target VM")] --> LAW[("Log Analytics")]
+    end
+    subgraph Blue["Glorfindel — blue"]
+        RP["RulePoller<br/>deterministic rules"] --> INV["investigate<br/>targeted queries"]
+        INV --> DEC["decide<br/>LLM + RAG memory"]
+        DEC --> G{"deterministic<br/>guardrails"}
+        G -->|"allowed"| EX["act"]
+        EX --> VER["verify<br/>read back from Azure"]
+        G -->|"held"| ESC["escalate"]
+    end
+    H["Human<br/>War Room, Discord, CLI"]
+    A2 --> VM
+    LAW --> RP
+    EX -->|"quarantine, deny, snapshot"| VM
+    ESC --> H
+    H -->|"approve"| EX
+    A2 -. "detection missed" .-> PR["LLM proposes a<br/>grounded rule"]
+    PR --> H
+    H -->|"approve-rule"| RP
 ```
-┌─────────────────────────────── Red ────────────────────────────────┐
-│  Annatar attacks → attack_started signal → Glorfindel detects       │
-│                                          (via detection_rules.yaml) │
-└─────────────────────────────────────────────────────────────────────┘
-          │ detection                        │ detection_timeout
-          ▼                                  ▼
-  Glorfindel decides → action         LLM proposes improved rule
-  → verified → stored (ChromaDB)      → human approves → rules updated
-```
+
+More diagrams — processes and shared state, the decision graph, the guardrail chain, the life of an isolation, the reassertion loop — in [`docs/architecture.md`](docs/architecture.md).
 
 **Response loop** — on a detection, Glorfindel first runs targeted investigative queries (which process is writing at 147 MB/s? is a backup agent present?) to enrich the signal before the LLM decides. It then reasons about the observed indicators, past cycles from ChromaDB, and current incident context to choose the minimum effective response. Actions are verified via Azure API. Every cycle is stored in ChromaDB — no fine-tuning required.
 
@@ -36,6 +54,22 @@ Open-source CDR for cloud infrastructure (Azure today; the LLM layer is provider
 **Autonomy — two independent gates.** First, a **trust ladder resolved per asset**: Glorfindel starts **observe-only** (`human_only`, the default — every action is recommended, nothing executes), and you grant it autonomy asset by asset as you learn to trust its reasoning. Second, a **hard safety line the graph enforces regardless of mode or LLM output**: destructive actions (restore, delete) always require human approval; reversible ones (isolate, block, snapshot) may run autonomously and are verified via Azure API. The two axes are orthogonal — even in an autonomous mode, destructive stays gated. *(Setup and the full mode table are in [Autonomy model](#autonomy-model) below.)*
 
 **Verified defense — the action is checked against Azure, not assumed.** An isolation is verified on every NIC, including whether a customer ALLOW rule is evaluated before the deny; sessions that were already open are cut (an NSG rule only stops *new* connections — measured); active isolations and blocks are re-read from Azure every minute, and a change made outside Glorfindel is alerted with who made it (activity log). Isolation is just-in-time: for the time of the incident each NIC carries Glorfindel's quarantine NSG, the customer's own NSG is set aside untouched and restored on release — a `terraform apply` neither sees nor reverts it (measured on the provider, see `docs/design/module-isolation-iac.md`). The quarantine also denies Azure's DNS and IMDS, which a deny-all leaves open — measured: before, an isolated VM still resolved names and could fetch a managed-identity token; after, neither, while Run Command (used to cut sessions) still works. Investigation sources can be let in (`isolation.forensic_sources`: an address or a small prefix, validated, on SSH/RDP only). When the quarantine NSG can't be attached (an Azure Policy, missing rights) the isolation falls back on deny rules — and Azure only lets a rule deny its DNS and IMDS for *every* NIC behind an NSG (measured), so the fallback says they stay reachable rather than claim otherwise. Before an incident, `glorfindel audit` checks the rights the response needs without writing anything (Azure permissions API).
+
+```mermaid
+flowchart LR
+    subgraph Before["Before"]
+        N1["NIC"] --> C1["customer NSG"]
+    end
+    subgraph During["Isolated"]
+        N2["NIC"] --> Q2["Glorfindel quarantine NSG<br/>deny all, deny Azure DNS and IMDS"]
+        C2["customer NSG<br/>untouched, set aside"]
+        Q2 -. "tag records the original" .-> C2
+    end
+    subgraph After["Released"]
+        N3["NIC"] --> C3["customer NSG<br/>put back, read back"]
+    end
+    Before --> During --> After
+```
 
 Signals from different resources run in parallel threads; signals from the same resource are serialized with shared incident context.
 
@@ -635,12 +669,35 @@ glorfindel audit --all   # NSG / backup vault / compute — surfaces IAM gaps wi
 
 The audit also checks **NSG precedence**: NSG rules apply the first match by ascending priority, so an `Allow` rule numbered lower than Glorfindel's deny lets its traffic through an isolation or an IP block. Keep your own allow rules at priority 1000 or higher; Glorfindel places its denies in 100–999.
 
+## How we prove it
+
+A claim such as "the VM is isolated" must be true, not likely. Each layer of evidence sees what the others can't — the full picture, with what each layer has found, is in [`docs/design/preuves.md`](docs/design/preuves.md) (French).
+
+```mermaid
+flowchart BT
+    U["Unit tests<br/>~760, 20 s"]
+    I["Property-based invariants<br/>in-memory Azure, a moving world,<br/>faults, two writers at once"]
+    M["Mutation check<br/>real past bugs re-injected"]
+    L["Cross-process locks<br/>real flock"]
+    B["Celebrimbor bench<br/>Azure and Terraform behaviour measured"]
+    C["azurerm canary<br/>daily on 3.x, 4.x, 5.x"]
+    R["Real runs<br/>6 TTPs, measured RTO"]
+    U --> I --> M
+    L --> I
+    B --> C
+    B --> R
+```
+
+- **Invariants** — eleven properties checked after every step of thousands of random sequences: never more reachable than designed, the customer's configuration never changed by Glorfindel, no success claimed on a falsehood, no effect on another VM, the local state always agreeing with Azure, two concurrent writers ending as if one ran after the other… 500 sequences per push, 10,000 every night.
+- **Mutation** — the invariants caught 1 of 17 re-injected bugs before the customer's world moved in the fake Azure; they catch nearly all of them now. Seventeen defects that no code review had seen were found this way, and fixed — the worst one emptied the shared quarantine NSG on a second release.
+- **Measurement first** — no Azure or Terraform behaviour is assumed: it is measured on the bench (e.g. DNS and IMDS reachable from an "isolated" VM, `terraform apply` not reverting a NIC's NSG swap), and the canary re-checks the provider every day.
+
 ## Tests
 
 ```bash
 pip install eregion[dev]
 pytest
-# 754 tests (~20s) — 0 Azure calls, 0 LLM calls, 0 writes to ~/.glorfindel
+# 760 tests (~25s) — 0 Azure calls, 0 LLM calls, 0 writes to ~/.glorfindel
 GLORFINDEL_INVARIANT_EXAMPLES=5000 pytest tests/unit/test_invariants.py   # deep run (~8 min)
 python scripts/mutation_check.py --examples 500 --rounds 2                # measure the invariants
 ```

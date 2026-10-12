@@ -2422,7 +2422,13 @@ class AzureConnector(CloudConnector):
         views = [v for t0 in targets for v in self._nic_nsg_views(t0)]
         for t0 in quarantined:
             try:
-                originals[t0["nic_id"]] = original = self._original_from_tags(t0["quarantine"], t0["nic_id"])
+                # The local state first, when there is one, then our tag — as the release
+                # does. From the tag only, a reset with the state in hand stopped on an
+                # original it knew (L27).
+                original = _recorded_original(t0["nic_id"])
+                if original is _UNKNOWN:
+                    original = self._original_from_tags(t0["quarantine"], t0["nic_id"])
+                originals[t0["nic_id"]] = original
             except Exception as exc:
                 unreadable.append(f'{t0["nic_short"]}: NSG d\'origine illisible ({_first_line(exc)[:_ERR_MAX]})')
                 continue
@@ -2491,6 +2497,16 @@ class AzureConnector(CloudConnector):
             _clear_isolation_state(resource_id)
             for entry in _load_block_entries(resource_id):
                 _clear_block_state(resource_id, entry.get("ip", ""))
+        elif not dry_run:
+            # Part of it is gone from Azure, part is unknown: the state is kept, marked as
+            # a failed release / unblock — the reassertion leaves that to the operator. Left
+            # unmarked, it read "removed outside Glorfindel" and put back what the operator
+            # had just asked to remove (L27).
+            state = _load_isolation_state(resource_id)
+            if state:
+                _save_isolation_state(resource_id, {**state, "release_failed": failed})
+            for entry in _load_block_entries(resource_id):
+                _update_block_entry(resource_id, entry.get("ip", ""), unblock_failed=failed)
         return {
             "status": "dry_run" if dry_run else ("swept_partial" if failed else "swept"),
             "deleted": deleted, "failed": failed, "kept_perimeter": kept,
@@ -2785,7 +2801,23 @@ class AzureConnector(CloudConnector):
         for t0 in targets:
             if t0.get("subnet_unreadable"):
                 failed.append(f'{t0["nic_short"]} : NSG du subnet illisible, déblocage non vérifié')
-            for t in self._nic_nsg_views(t0):
+            views = self._nic_nsg_views(t0)
+            if t0.get("quarantine"):
+                # In quarantine, the NIC's own NSG — where a block lies — is off it, out
+                # of sight until the release puts it back. Unblocked meanwhile, `not_found`
+                # was answered and the IP was blocked again at the release (L27).
+                original = _recorded_original(t0["nic_id"])
+                try:
+                    if original is _UNKNOWN:
+                        original = self._original_from_tags(t0["quarantine"], t0["nic_id"])
+                except Exception as exc:
+                    failed.append(f'{t0["nic_short"]} : NSG d\'origine inconnu, déblocage non vérifié '
+                                  f"({_first_line(exc)[:_ERR_MAX]})")
+                    original = None
+                if original:
+                    o_rg, o_name = _parse_nsg_resource_id(original)
+                    views = views + [{**t0, "nsg_rg": o_rg, "nsg_name": o_name, "scope": "nic", "ip_scoped": True}]
+            for t in views:
                 rules = self._list_rules(cache, t["nsg_rg"], t["nsg_name"])
                 if rules is None:
                     failed.append(f'{t["nsg_rg"]}/{t["nsg_name"]} : règles illisibles, déblocage non vérifié')

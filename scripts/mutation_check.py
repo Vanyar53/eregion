@@ -12,7 +12,8 @@ mutant, the code moved) — never counted as caught.
 
 Each round draws new seeds. The table says, per mutant, how many rounds caught it.
 A mutant the invariants can't see by construction says why: EQUIVALENT (no behaviour
-of the fake world tells it apart), L27 (needs two operations at once).
+of the fake world tells it apart), MULTI-HOST (needs a second host writing between two of
+our calls — the locks are per host; a unit test covers it).
 """
 from __future__ import annotations
 
@@ -77,7 +78,8 @@ MUTANTS = [
     ("M14", "release does not read the NIC back", A,
      "            if not _same_id(now or \"\", original or \"\"):",
      "            if False:",
-     "L27: only a write racing ours changes the NIC between our write and the read-back"),
+     "MULTI-HOST: only another host's write (the lock is per host) between our write and our read-back; "
+     "covered by test_release_checks_the_original_came_back"),
     ("M15", "an unreadable config falls back to the defaults (S1)", A,
      "        from glorfindel.config import load_glorfindel_config\n        iso = load_glorfindel_config().isolation\n",
      "        from glorfindel.config import load_glorfindel_config\n        try:\n            iso = load_glorfindel_config().isolation\n"
@@ -87,8 +89,7 @@ MUTANTS = [
      "        altered = []"),
     ("M17", "per-VM lock inoperative", A,
      "        with _vm_lock(rid.rstrip(\"/\").rsplit(\"/\", 1)[-1]):\n            return method(self, *args, **kwargs)",
-     "        return method(self, *args, **kwargs)",
-     "L27: needs two operations at once"),
+     "        return method(self, *args, **kwargs)"),
     # Found by L26 itself (the world moving): kept so they stay found.
     ("M18", "a NIC's old-IP rule recognised by content only (L26)", A,
      "    return name in hashed or (name in names and _deny_applies(rule, ips))",
@@ -105,6 +106,17 @@ MUTANTS = [
     ("M22", "a partial release's flat fields read as a legacy state (L26)", A,
      '        elif "placements" not in state and state.get("nsg_name") and not _is_quarantine_nsg(state["nsg_name"]):',
      '        elif state.get("nsg_name"):'),
+    ("M23", "an unblock doesn't look behind the quarantine (L27)", A,
+     "            views = self._nic_nsg_views(t0)\n            if t0.get(\"quarantine\"):",
+     "            views = self._nic_nsg_views(t0)\n            if False:"),
+    ("M24", "reset --from-azure reads the original from the tag only (L27)", A,
+     "                original = _recorded_original(t0[\"nic_id\"])\n                if original is _UNKNOWN:\n"
+     "                    original = self._original_from_tags(t0[\"quarantine\"], t0[\"nic_id\"])\n"
+     "                originals[t0[\"nic_id\"]] = original",
+     "                originals[t0[\"nic_id\"]] = original = self._original_from_tags(t0[\"quarantine\"], t0[\"nic_id\"])"),
+    ("M25", "a partial reset leaves the state unmarked (L27)", A,
+     "        elif not dry_run:\n            # Part of it is gone from Azure",
+     "        elif False:\n            # Part of it is gone from Azure"),
 ]
 
 
@@ -139,7 +151,7 @@ def main() -> int:
     ap.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 2) // 2),
                     help="mutants measured at once")
     ap.add_argument("--min-caught", type=int, default=0,
-                    help="exit 1 if fewer mutants (equivalent and L27 aside) are caught in every round")
+                    help="exit 1 if fewer mutants (equivalent and multi-host aside) are caught in every round")
     args = ap.parse_args()
     only = {m.strip() for m in args.only.split(",") if m.strip()}
 
@@ -175,9 +187,9 @@ def main() -> int:
     print(f"\nbudget {args.examples} sequences, {args.rounds} rounds:")
     for mid, title, verdict, detail in rows:
         print(f"  {mid}  {verdict:8}  {detail:16}  {title}")
-    counted = [r for r in rows if r[2] not in ("EQUIVALENT", "L27", "STALE")]
+    counted = [r for r in rows if r[2] not in ("EQUIVALENT", "MULTI-HOST", "STALE")]
     caught = sum(1 for r in counted if r[2] == "CAUGHT")
-    print(f"\n{caught}/{len(counted)} caught in every round (equivalent and L27 mutants aside)")
+    print(f"\n{caught}/{len(counted)} caught in every round (equivalent and multi-host mutants aside)")
     return 1 if caught < args.min_caught else 0
 
 

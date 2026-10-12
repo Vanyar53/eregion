@@ -30,7 +30,9 @@ What must hold whatever happens:
   I8  what Glorfindel leaves on Azure after an operation that returned is in its state;
   I9  a release that has started is never undone by the reassertion;
   I10 the configuration is honoured: no quarantine NSG when the operator turned it off
-      or when the configuration can't be read, and only in the group it names.
+      or when the configuration can't be read, and only in the group it names;
+  I11 two operations at once (the watch, the War Room, the CLI) end as one of them
+      after the other would: what the local state says is what Azure has (L27).
 
 GLORFINDEL_INVARIANT_EXAMPLES raises the number of sequences (default 60);
 GLORFINDEL_INVARIANT_STEPS their length (default 30);
@@ -43,10 +45,12 @@ harness, scripts/mutation_check.py, only needs to know there is one).
 from __future__ import annotations
 
 import collections
+import contextlib
 import hashlib
 import os
 import shutil
 import tempfile
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -157,6 +161,8 @@ class _Chaos:
 
     def __call__(self, op: str, phase: str, write: bool):
         if phase == "before":
+            if _CURRENT.scheduler is not None:
+                _CURRENT.scheduler.point()
             self.calls += 1
         elif write:
             self.writes += 1
@@ -182,7 +188,100 @@ class _Chaos:
         raise throttled(op)
 
 
-_CURRENT = SimpleNamespace(chaos=None, mode="human_only")
+_CURRENT = SimpleNamespace(chaos=None, mode="human_only", scheduler=None)
+
+
+class _Scheduler:
+    """Glorfindel operations at once, one Azure call (or state write) at a time, in a
+    drawn order (L27). A thread waits for its turn before each call; one that waits for
+    a lock says so, and gets turns again once it holds it — the real locks decide."""
+
+    def __init__(self, seed: int):
+        import random
+        self.cv = threading.Condition()
+        self.rng = random.Random(seed)
+        self.state: dict[str, str] = {}
+        self.turn = None
+
+    def _me(self):
+        name = threading.current_thread().name
+        return name if name in self.state else None
+
+    def point(self):
+        with self.cv:
+            me = self._me()
+            if me is None:
+                return
+            if self.turn == me:
+                self.turn = None
+            self.state[me] = "wait"
+            self.cv.notify_all()
+            self.cv.wait_for(lambda: self.turn == me)
+            self.state[me] = "run"
+
+    def blocking(self):
+        with self.cv:
+            me = self._me()
+            if me is not None:
+                if self.turn == me:
+                    self.turn = None
+                self.state[me] = "blocked"
+                self.cv.notify_all()
+
+    def run(self, ops: list) -> dict:
+        results: dict = {}
+
+        def body(name, fn):
+            self.point()
+            try:
+                results[name] = (fn(), None)
+            except BaseException as exc:            # a Crash ends this thread only
+                results[name] = (None, exc)
+            finally:
+                with self.cv:
+                    self.state[name] = "done"
+                    if self.turn == name:
+                        self.turn = None
+                    self.cv.notify_all()
+
+        with self.cv:
+            self.state.update({name: "start" for name, _ in ops})
+        threads = [threading.Thread(target=body, args=op, name=op[0], daemon=True) for op in ops]
+        for th in threads:
+            th.start()
+        settled = ("wait", "blocked", "done")
+        with self.cv:
+            while True:
+                ok = self.cv.wait_for(
+                    lambda: all(s in settled for s in self.state.values())
+                    and (any(s == "wait" for s in self.state.values())
+                         or all(s == "done" for s in self.state.values())), timeout=20)
+                assert ok, f"I11: operations stuck (deadlock?): {self.state}"
+                ready = sorted(n for n, s in self.state.items() if s == "wait")
+                if not ready:
+                    break
+                pick = ready[self.rng.randrange(len(ready))]
+                self.turn, self.state[pick] = pick, "go"
+                self.cv.notify_all()
+                assert self.cv.wait_for(lambda: self.state[pick] in settled, timeout=20), (
+                    f"I11: {pick} never came back: {self.state}")
+        for th in threads:
+            th.join(timeout=5)
+        return results
+
+
+def _scheduled(real):
+    """A lock the scheduler sees: it is told before the wait, the turn comes after."""
+    @contextlib.contextmanager
+    def lock(*args, **kwargs):
+        sched = _CURRENT.scheduler
+        if sched is not None:
+            sched.blocking()
+        with real(*args, **kwargs):
+            if sched is not None:
+                sched.point()
+            yield
+    return lock
 _SEEN: collections.Counter = collections.Counter()
 
 
@@ -683,12 +782,108 @@ class IsolationMachine(RuleBasedStateMachine):
         """`glorfindel reset --from-azure`: Azure as the source of truth."""
         vm, rid, fault = self._draw(data)
         flows, states = self._before()
-        out, _ = self._run(fault, lambda: self.connector.sweep_vm_rules(rid), "reset --from-azure")
+        consistent = self._consistent(vm)
+        out, err = self._run(fault, lambda: self.connector.sweep_vm_rules(rid), "reset --from-azure")
+        if err is None and consistent:
+            # I8/I11: swept or not, the state says what Azure has — a partial reset marks
+            # what it couldn't finish, so the reassertion doesn't put back the rest.
+            assert self._consistent(vm), f"I8: reset --from-azure left {vm} with a state that isn't Azure's"
         if out and out.get("status") == "swept":
             assert self._back_to_design(vm, own=True) and self._nics_as_designed(vm), (
                 f"I3: reset --from-azure said swept, {vm} is not back to its design")
             assert self._state(vm) is None
         self._others_unchanged(vm, flows, states, perimeter=True)
+
+    # ── two operations at once (L27) ────────────────────────────────────────────
+
+    def _consistent(self, vm: str) -> bool:
+        """The local state says what Azure has: an isolation on Azure is in the state and
+        a state that claims one has it (unless it says it is partial or in progress), a
+        block likewise."""
+        st = self._state(vm)
+        held = bool(st and (st.get("partial") or st.get("release_failed") or st.get("releasing_at")))
+        if bool(self._footprint(vm)) != (st is not None) and not (held and st is not None):
+            return False
+        rules = [r for r in self._block_rules_for(vm) if not self._perimeter_rule(r)]
+        # An entry holds the VM's placements, and the perimeter rule too when the same
+        # IP was also blocked subnet-wide (one entry per IP).
+        entries = [e for e in actions._load_block_entries(vm)
+                   if e.get("placements") or e.get("scoped", True) is not False]
+        held = any(e.get("partial") or e.get("unblock_failed") or e.get("unblocking_at") for e in entries)
+        return bool(rules) == bool(entries) or held
+
+    def _concurrent_op(self, data, n: int, vm: str | None = None, kind: str | None = None):
+        vm = vm or data.draw(st.sampled_from(self.live), label=f"vm {n}")
+        kind = kind or data.draw(st.sampled_from(["isolate", "release", "block", "unblock", "reassert", "reset"]),
+                                 label=f"operation {n}")
+        c = self.connector
+        fn = {"isolate": lambda: c.isolate_vm(vm),
+              "release": lambda: c.release_isolation(vm),
+              "block": lambda: c.block_suspicious_ip(ATTACKER, vm, scope="vm", threat_port=22),
+              "unblock": lambda: c.unblock_ip(ATTACKER, vm),
+              "reassert": lambda: reassert.reassert_active(c, None),
+              "reset": lambda: c.sweep_vm_rules(vm)}[kind]
+        return vm, kind, fn
+
+    @rule(data=st.data())
+    def concurrently(self, data):
+        """Two writers at once — a release in the War Room while the watch reasserts, a
+        block from the CLI during an isolation — interleaved call by call. Whatever the
+        order, the VMs end as one operation after the other would leave them."""
+        first = self._concurrent_op(data, 1)
+        # Mostly on the same VM: that is where the lock matters.
+        same = data.draw(st.integers(0, 3), label="other vm") != 0
+        second = self._concurrent_op(data, 2, first[0] if same else None)
+        _CURRENT.mode = data.draw(st.sampled_from(["human_only", "non_disruptive"]), label="mode")
+        self._race(data, first, second)
+
+    _RACES = [("release", "reassert"), ("isolate", "release"), ("release", "release"),
+              ("block", "unblock"), ("unblock", "reassert"), ("release", "reset")]
+
+    @rule(data=st.data())
+    def race(self, data):
+        """The races that matter, from the state where they happen: the VM isolated and
+        its attacker blocked, then two of the writers that can meet on it."""
+        vm = data.draw(st.sampled_from(self.live), label="vm")
+        self._isolate(vm, vm, None)
+        self._block(vm, vm, None, 22)
+        one, two = data.draw(st.sampled_from(self._RACES), label="race")
+        _CURRENT.mode = "non_disruptive"
+        self._race(data, self._concurrent_op(data, 1, vm, one), self._concurrent_op(data, 2, vm, two))
+
+    def _race(self, data, first, second):
+        # A seed, not a list: Hypothesis keeps drawn lists short, and an empty one ran
+        # the two operations one after the other.
+        order = data.draw(st.integers(0, 2**32 - 1), label="interleaving")
+        involved = {first[0], second[0]}
+        consistent = {vm: self._consistent(vm) for vm in involved}
+        flows, states = self._before()
+        self.chaos.arm(None)
+        _CURRENT.scheduler = _Scheduler(order)
+        try:
+            results = _CURRENT.scheduler.run([("op-1", first[2]), ("op-2", second[2])])
+        finally:
+            _CURRENT.scheduler = None
+        errors = [e for _, e in results.values() if e is not None]
+        for name, (out, err) in sorted(results.items()):
+            kind = (first if name == "op-1" else second)[1]
+            _note(f"concurrently {kind}: " + (type(err).__name__ if err else str((out or {}).get("status", "ok"))
+                                               if not isinstance(out, list) else "ok"))
+        if not errors:
+            for vm in involved:
+                if consistent[vm]:
+                    assert self._consistent(vm), (
+                        f"I11: {first[1]} and {second[1]} at once left {vm} with a state that isn't Azure's")
+        # A perimeter block lives in a VM's entry: unblocking or resetting that VM lifts
+        # it for its whole subnet — the attacker's flows only, as in the serial rules.
+        perimeter = bool({first[1], second[1]} & {"block", "unblock", "reset"})
+        strip = (lambda fl: frozenset(f for f in fl if f[3] != ATTACKER)) if perimeter else (lambda fl: fl)
+        after = self._flows()
+        for other in self.live:
+            if other not in involved and "reassert" not in {first[1], second[1]}:
+                self._only_sealed(other, strip(flows[other]), strip(after[other]), "I4: two operations elsewhere",
+                                  flows[("own", other)] - flows[other])
+        self._claims_after_a_change()
 
     # ── the customer's world moving ─────────────────────────────────────────────
 
@@ -1086,6 +1281,8 @@ def invariant_env(monkeypatch) -> None:
     monkeypatch.setattr(reassert, "_mode", lambda autonomy, vm, ref="": _CURRENT.mode)
     monkeypatch.setattr(config, "_DEFAULT_PATHS", list(config._DEFAULT_PATHS))
     monkeypatch.delenv("GLORFINDEL_QUARANTINE_NSG", raising=False)
+    monkeypatch.setattr(actions, "_vm_lock", _scheduled(actions._vm_lock))
+    monkeypatch.setattr(actions, "_quarantine_lock", _scheduled(actions._quarantine_lock))
 
 
 def test_isolation_invariants(monkeypatch):

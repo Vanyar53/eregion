@@ -129,34 +129,37 @@ ligne de console : une menace détectée n'est pas perdue parce qu'un appel a é
 
 ## Les gardes qui encadrent le LLM
 
-Le LLM propose ; une suite de gardes déterministes décide si l'action part seule. Chaque garde
-qui retient l'action donne son propre type d'escalade, que la War Room affiche.
+Le LLM propose ; une suite de gardes déterministes décide si l'action part seule. Une action
+destructive n'est jamais autonome, quel que soit le mode. Chaque garde qui retient une action
+autonome donne son propre type d'escalade, que la War Room affiche. Une VM retenue parce
+qu'elle n'est pas prête reçoit en plus, du contrôle de préparation, une carte `readiness_hold`.
 
 ```mermaid
 flowchart LR
     LLM["Réponse du LLM<br/>tool call"] --> P{"décision<br/>lisible ?"}
-    P -->|non| E0["escalade"]
-    P -->|oui| X{"action<br/>implémentée ?"}
-    X -->|non| E1["proposed_action"]
+    P -->|non| E0["escalade forcée"]
+    P -->|oui| K{"quelle<br/>action ?"}
+    K -->|"destructive<br/>restore, delete…"| E7["destructive_action<br/>jamais autonome"]
+    K -->|"inconnue"| E1["proposed_action"]
+    K -->|"autonome"| X{"implémentée ?"}
+    X -->|non| E1
     X -->|oui| C{"confiance<br/>≥ 0,7 ?"}
     C -->|non| E2["low_confidence"]
-    C -->|oui| S{"signal<br/>caractérisé ?"}
+    C -->|oui| S{"isoler, bloquer :<br/>signal caractérisé ?"}
     S -->|non| E3["uncharacterized_signal"]
-    S -->|oui| A{"attribué à<br/>cette VM ?"}
+    S -->|oui| A{"isoler, bloquer :<br/>attribué à cette VM ?"}
     A -->|non| E4["unattributed_signal"]
-    A -->|oui| R{"levée sur<br/>recovery_complete ?"}
+    A -->|oui| R{"lever :<br/>après recovery_complete ?"}
     R -->|non| E5["release_hold"]
     R -->|oui| M{"mode effectif<br/>de la VM"}
-    M -->|"human_only, ou VM<br/>pas encore prête"| E6["mode_hold<br/>readiness_hold"]
-    M -->|"non_disruptive"| D{"destructive ?"}
-    D -->|oui| E7["destructive_action"]
-    D -->|non| GO(("exécuter"))
+    M -->|"human_only, ou VM<br/>pas encore prête"| E6["mode_hold"]
+    M -->|"non_disruptive"| GO(("exécuter"))
     classDef blue fill:#2f6fd6,stroke:#1d4a9a,color:#ffffff
     classDef guard fill:#f2b33d,stroke:#b07a12,color:#2b1d00
     classDef warn fill:#fbe3e3,stroke:#d64545,color:#7a1f1f
     classDef go fill:#2e9e6a,stroke:#1d6b47,color:#ffffff
     class LLM blue
-    class P,X,C,S,A,R,M,D guard
+    class P,K,X,C,S,A,R,M guard
     class E0,E1,E2,E3,E4,E5,E6,E7 warn
     class GO go
 ```

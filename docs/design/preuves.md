@@ -143,9 +143,9 @@ invariants les attrapent.
 
 ```mermaid
 flowchart LR
-    B["bug réel connu<br/>revues, L24 à L27"] --> Mu["mutant : le bug réinjecté<br/>par remplacement exact"]
+    B["bug réel connu<br/>revues, L24 à L28"] --> Mu["mutant : le bug réinjecté<br/>par remplacement exact"]
     Mu --> Cp["copie jetable du dépôt"]
-    Cp --> T["invariants<br/>500 séquences, 2 tours"]
+    Cp --> T["invariants<br/>1 000 séquences, 2 tours"]
     T -->|"échec"| Ok["attrapé"]
     T -->|"succès"| Ko["survit : il manque une propriété<br/>ou un mouvement du monde"]
     classDef red fill:#d64545,stroke:#9e2a2a,color:#ffffff

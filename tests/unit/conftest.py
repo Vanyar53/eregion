@@ -29,6 +29,30 @@ def isolated_rule_status(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def stop_rule_pollers(isolated_rule_status):
+    """Stop every RulePoller a test started BEFORE the status file redirection is
+    undone (this fixture's teardown runs first): a poll thread outlived its test and
+    wrote the operator's real ~/.glorfindel/rule_status.json (sixth review, S5)."""
+    yield
+    import glorfindel.detection_rules as dr_module
+    for poller in list(dr_module.RulePoller._live):
+        poller.stop(join_s=2.0)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def no_write_outside_the_sandbox():
+    """Where ~/.glorfindel doesn't exist when the suite starts (CI), it must not exist
+    when it ends: any write outside the sandbox fails the run. On an operator's machine
+    the watch writes there too, so only the CI case can be told apart."""
+    from pathlib import Path
+    real = Path.home() / ".glorfindel"
+    existed = real.exists()
+    yield
+    if not existed and real.exists():
+        pytest.fail(f"the test suite wrote outside its sandbox: {sorted(p.name for p in real.iterdir())}")
+
+
+@pytest.fixture(autouse=True)
 def isolated_posture_state(tmp_path, monkeypatch):
     """Redirect posture_state.json to a temp file."""
     import glorfindel.posture as posture_module

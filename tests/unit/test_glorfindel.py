@@ -1766,6 +1766,13 @@ def _deny_pair(base, priority=100, ip="*"):
             _nsg_rule(f"{base}-out", priority, direction="Outbound", access="Deny", src=ip, port="*")]
 
 
+def _block_pair(rule, attacker, vm_ip="10.0.0.5", priority=200):
+    """A block as Glorfindel places it: attacker → the NIC, and the NIC → attacker."""
+    return [_nsg_rule(rule, priority, access="Deny", src=attacker, dst=vm_ip, port="*"),
+            _nsg_rule(f"{rule}-out", priority, direction="Outbound", access="Deny", src=vm_ip,
+                      dst=attacker, port="*")]
+
+
 def _iso_name(nic_id="nic-a", vm="vm"):
     from glorfindel.actions import AzureConnector
     return AzureConnector()._placement_rule_base("glorfindel-iso", vm, nic_id.rsplit("/", 1)[-1], nic_id)
@@ -1918,8 +1925,7 @@ def test_verify_block_ip_fails_when_allow_ssh_precedes_it(monkeypatch):
     monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
     net = MagicMock()
     net.security_rules.get.return_value = MagicMock()
-    ours = _nsg_rule(rule, 200, access="Deny", src="95.47.246.223", dst="10.0.0.5", port="*")
-    net.security_rules.list.return_value = [_nsg_rule(**_BENCH_ALLOW_SSH), ours]
+    net.security_rules.list.return_value = [_nsg_rule(**_BENCH_ALLOW_SSH), *_block_pair(rule, "95.47.246.223")]
     connector._network = net
 
     out = connector.verify_block_ip("95.47.246.223", _RID)
@@ -2199,8 +2205,8 @@ def test_verify_block_ip_unreadable_precedence_is_not_verified(monkeypatch):
     connector._network = net
 
     out = connector.verify_block_ip("95.47.246.223", _RID)
-    assert out["verified"] is None
-    assert out["precedence_unknown"] == ["rg/nsg"]
+    assert out["verified"] is None                          # the rules are read by content now
+    assert out["unreadable_rules"] == [rule, f"{rule}-out"]
 
 
 def test_perimeter_block_reports_the_allow_that_bypasses_it(monkeypatch):
@@ -2381,8 +2387,7 @@ def test_ssh_block_is_not_bypassed_by_an_https_allow(monkeypatch):
     connector, net = _block_env(monkeypatch, {"nsg": [https]})
     out = connector.block_suspicious_ip("203.0.113.9", _RID, threat_port=22)
     assert "bypass" not in out and "allow-https" in out["exposure"]
-    ours = _nsg_rule(out["rule"], 200, access="Deny", src="203.0.113.9", dst="10.0.0.5", port="*")
-    net.security_rules.list.side_effect = lambda rg, nsg: [https, ours]
+    net.security_rules.list.side_effect = lambda rg, nsg: [https, *_block_pair(out["rule"], "203.0.113.9")]
     res = connector.verify_block_ip("203.0.113.9", _RID)
     assert res["verified"] is True and [x["rule"] for x in res["exposure"]] == ["allow-https"]
 
@@ -3123,11 +3128,151 @@ def test_a_sound_block_is_not_read_as_bypassed_because_of_an_older_placement(mon
     monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
     net = MagicMock()
     net.security_rules.get.return_value = MagicMock()
-    deny = lambda name: _nsg_rule(name, 200, access="Deny", src="192.31.196.7", dst="10.0.0.5", port="*")  # noqa: E731
-    _listings(net, {"nsg-nic": [_nsg_rule(**_BENCH_ALLOW_SSH), deny(rule_nic)], "nsg-sub": [deny(rule_sub)]})
+    _listings(net, {"nsg-nic": [_nsg_rule(**_BENCH_ALLOW_SSH), *_block_pair(rule_nic, "192.31.196.7")],
+                    "nsg-sub": _block_pair(rule_sub, "192.31.196.7")})
     connector._network = net
     assert connector.verify_block_ip("192.31.196.7", _RID)["verified"] is True
-    _listings(net, {"nsg-nic": [_nsg_rule(**_BENCH_ALLOW_SSH), deny(rule_nic)]})
-    net.security_rules.get.side_effect = lambda rg, nsg, name: (
-        MagicMock() if nsg == "nsg-nic" else (_ for _ in ()).throw(_not_found_exc()))
+    _listings(net, {"nsg-nic": [_nsg_rule(**_BENCH_ALLOW_SSH), *_block_pair(rule_nic, "192.31.196.7")]})
     assert connector.verify_block_ip("192.31.196.7", _RID)["verified"] is False
+
+
+# ── Sixième passe (L25) : S1, une config illisible ou changée ne fait plus perdre l'original ──
+
+def test_forensic_ports_written_without_a_list_or_as_strings(monkeypatch, tmp_path):
+    """`forensic_ports: 22` raised TypeError and made the whole config unreadable;
+    "22" iterated as "2", "2" (sixth review, S1/S8)."""
+    from glorfindel.config import ConfigError, load_glorfindel_config, validate_forensic_ports
+    assert validate_forensic_ports(22) == [22] and validate_forensic_ports("22") == [22]
+    assert validate_forensic_ports(["22", 3389, 22]) == [22, 3389]
+    for bad in (["ssh"], [70000], [True]):
+        with pytest.raises(ValueError):
+            validate_forensic_ports(bad)
+    cfg = tmp_path / "glorfindel-config.yaml"
+    cfg.write_text("isolation:\n  forensic_ports: 22\n")
+    assert load_glorfindel_config(cfg).isolation.forensic_ports == [22]
+    cfg.write_text("isolation:\n  forensic_ports: [ssh]\n")
+    with pytest.raises(ConfigError, match="forensic_ports"):
+        load_glorfindel_config(cfg)
+
+
+def test_reserved_ranges_are_not_forensic_sources():
+    from glorfindel.config import validate_forensic_sources
+    ok, rejected = validate_forensic_sources(["0.0.0.0/24", "::/120", "255.255.255.0/24", "10.8.0.10"])
+    assert ok == ["10.8.0.10/32"] and len(rejected) == 3
+
+
+def test_an_unreadable_config_stops_the_isolation_before_any_write(monkeypatch):
+    """The defaults stood in for it: another quarantine group, `quarantine_nsg: false`
+    ignored (S1). Now nothing is written."""
+    from glorfindel import config
+    connector, net, nic = _l4_env(monkeypatch)
+    from glorfindel.actions import AzureConnector
+    monkeypatch.setattr(connector, "_quarantine_settings",
+                        lambda: AzureConnector._quarantine_settings(connector))
+    monkeypatch.setattr(config, "load_glorfindel_config",
+                        lambda *a, **k: (_ for _ in ()).throw(config.ConfigError("forensic_ports")))
+    with pytest.raises(config.ConfigError):
+        connector.isolate_vm(_RID)
+    net.network_interfaces.begin_create_or_update.assert_not_called()
+    net.security_rules.begin_create_or_update.assert_not_called()
+    net.network_security_groups.begin_create_or_update.assert_not_called()
+
+
+def test_a_nic_in_any_of_our_quarantine_nsgs_is_a_reapplication(monkeypatch):
+    """`quarantine_rg` changed while a VM was isolated: the re-isolation resolved
+    ANOTHER quarantine NSG, took the NIC's "own" NSG for none, recorded "none", and
+    the release left the NIC without its NSG (S1). It stays on the NSG it carries,
+    with the original it had."""
+    from glorfindel.actions import _load_isolation_state
+    connector, net, nic = _l4_env(monkeypatch, nic_nsg_id=_CLIENT_NSG_ID, quarantine_exists=True)
+    connector.isolate_vm(_RID)
+    nic.network_security_group = type("R", (), {"id": _Q_ID})()
+    monkeypatch.setattr(connector, "_quarantine_settings", lambda: (True, "rg-moved"))
+    net.network_interfaces.begin_create_or_update.reset_mock()
+    connector.isolate_vm(_RID)
+    net.network_interfaces.begin_create_or_update.assert_not_called()       # not swapped again
+    [p] = [p for p in _load_isolation_state("vm")["placements"] if p.get("kind") == "quarantine"]
+    assert p["original_nsg_id"] == _CLIENT_NSG_ID and p["nsg_rg"] == "rg"
+    assert connector.release_isolation(_RID)["status"] == "released"
+    assert net.network_interfaces.begin_create_or_update.call_args.args[2].network_security_group.id == _CLIENT_NSG_ID
+
+
+def test_a_nic_changed_between_read_and_swap_is_not_reported_in_quarantine(monkeypatch):
+    """`_set_nic_nsg` returns False when the NIC no longer carries what was read: its
+    return was ignored and the isolation said isolated (S1)."""
+    connector, net, nic = _l4_env(monkeypatch, nic_nsg_id=_CLIENT_NSG_ID, quarantine_exists=True)
+    monkeypatch.setattr(connector, "_set_nic_nsg", lambda *a, **k: False)
+    out = connector.isolate_vm(_RID)
+    assert "changed since it was read" in out["quarantine_refused"][0]
+    assert all(p != "quarantine" for p in (x["scope"] for x in out["placements"]))
+
+
+def test_readiness_says_an_unreadable_config_is_not_ready(monkeypatch):
+    from glorfindel import config, readiness
+    monkeypatch.setattr(config, "load_glorfindel_config",
+                        lambda *a, **k: (_ for _ in ()).throw(config.ConfigError("x.yaml : TypeError")))
+    c = MagicMock(read_only=False, _subscription_id=None)
+    a = readiness.assess(_RID, c)
+    assert a["verdict"] == "not_ready" and a["reasons"][0]["code"] == "config_unreadable"
+    c.check_permissions.assert_not_called()
+
+
+def test_a_block_turned_into_an_allow_or_pointed_elsewhere_is_not_verified(monkeypatch):
+    """Checked by name, our block rules passed as an allow or for another address
+    (sixth review, S2): now they read as missing, and the reassertion puts them back."""
+    from glorfindel.actions import AzureConnector, _save_block_state
+    rule = "glorfindel-block-192-31-196-7-vm-nic-a-1"
+    _save_block_state("vm", "192.31.196.7", _RID, nsg="rg/nsg", nsg_scope="subnet", rule=rule,
+                      placements=[{"nic_id": "nic-a", "nsg_rg": "rg", "nsg_name": "nsg", "rule": rule,
+                                   "ips": ["10.0.0.5"]}])
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    net = MagicMock()
+    connector._network = net
+    pair = _block_pair(rule, "192.31.196.7")
+    _listings(net, {"nsg": pair})
+    assert connector.verify_block_ip("192.31.196.7", _RID)["verified"] is True
+    pair[0].access = "Allow"
+    out = connector.verify_block_ip("192.31.196.7", _RID)
+    assert out["verified"] is False and out["missing_rules"] == [rule]
+    pair[0].access, pair[1].destination_address_prefix = "Deny", "198.18.0.9"
+    assert connector.verify_block_ip("192.31.196.7", _RID)["missing_rules"] == [f"{rule}-out"]
+
+
+def test_an_allow_named_like_ours_counts_as_a_bypass():
+    """Glorfindel never puts an allow in a customer NSG: one named `glorfindel-*` is
+    someone else's, and lets the traffic through (S2)."""
+    from glorfindel.actions import _shadowing_rules
+    found = _shadowing_rules([_nsg_rule("glorfindel-sneaky", 100, port="*")], 200,
+                             inbound_src=["192.31.196.7"], inbound_dst=["10.0.0.5"],
+                             outbound_src=["10.0.0.5"], outbound_dst=["192.31.196.7"])
+    assert [f["rule"] for f in found] == ["glorfindel-sneaky"]
+
+
+def test_migration_never_deletes_a_homonyms_legacy_state():
+    """The plain `web.json` of a VM `web` in ANOTHER group was deleted as soon as its
+    homonym had a keyed file (sixth review, S3)."""
+    import json
+    import glorfindel.actions as actions
+    d = actions._ISOLATION_STATE_DIR
+    d.mkdir(parents=True, exist_ok=True)
+    rid_a = "/subscriptions/s/resourceGroups/rg-a/providers/Microsoft.Compute/virtualMachines/web"
+    rid_b = "/subscriptions/s/resourceGroups/rg-b/providers/Microsoft.Compute/virtualMachines/web"
+    (d / "web.json").write_text(json.dumps({"resource_id": rid_b, "placements": []}))
+    actions._save_isolation_state(rid_a, {"resource_id": rid_a, "placements": []})
+    actions.migrate_state_files()
+    assert actions._load_isolation_state(rid_b) is not None
+    assert actions._load_isolation_state(rid_a) is not None
+
+
+def test_a_policy_deny_in_our_quarantine_nsg_is_left_alone(monkeypatch):
+    """A deny at 4000 put there by a policy read as an alteration, was removed at every
+    isolation, came back, and alerted "removed a second time" (sixth review, S6)."""
+    connector, net, nic = _l4_env(monkeypatch, quarantine_exists=True)
+    q = net.network_security_groups.get.return_value
+    nic.network_security_group = type("R", (), {"id": _Q_ID})()
+    q.security_rules = [*q.security_rules, _nsg_rule("policy-deny-rdp", 4000, access="Deny", port="3389"),
+                        _nsg_rule("late-allow", 2000, port="443")]
+    assert connector.verify_isolation(_RID)["verified"] is True
+    connector._ensure_quarantine_nsg("westeurope", "rg")
+    net.security_rules.begin_delete.assert_not_called()

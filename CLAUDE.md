@@ -485,7 +485,7 @@ GLORFINDEL_DISCOVERY_RETENTION_H=8  # rétention d'une VM éteinte dans le regis
 ## Tests
 
 ```bash
-pytest                    # 734 tests (~20s), 0 appel Azure, 0 appel LLM, 0 écriture ~/.glorfindel/
+pytest                    # 745 tests (~20s), 0 appel Azure, 0 appel LLM, 0 écriture ~/.glorfindel/
                           # Hermétique par construction (conftest) : TOUS les chemins ~/.glorfindel redirigés
                           # vers tmp, et le glorfindel-config.yaml local ignoré (avant : avec une config locale,
                           # les tests de graphe lançaient de vraies requêtes KQL via `investigate`, suite 5× plus lente).
@@ -602,6 +602,14 @@ wheel : eregion-0.2.0-py3-none-any.whl ✓
 - **L24, suite (08/10) — les blocages d'IP dans la machine à invariants** (attaquant de test en 192.31.196.7, plage AS112 : publique aussi pour `ipaddress`, les plages RFC 5737 y sont « privées ») — deux défauts trouvés et corrigés :
   - **`unblock_ip` disait `unblocked` à tort** : sans état (crash entre Azure et le fichier), il ne cherchait que les anciens noms sur la carte primaire et comptait la suppression d'une règle absente comme faite. Il balaie maintenant chaque carte (`_sweep_block` : noms de cette IP pour la carte, deny qui s'applique à ses adresses ; nom nu seulement sur un NSG dédié — ailleurs c'est un blocage de périmètre) et ne compte que ce qui existait (`not_found` sinon).
   - **`verify_block_ip` par carte** : un blocage contourné laissé par une tentative précédente à côté d'un blocage sain faisait lire « contourné » ; une carte est bloquée dès qu'UN de ses placements tient sans que la menace passe. Les placements de blocage portent désormais `nic_id`.
+- **L25 (12/10) — sixième passe, correctifs S1 à S6** :
+  - **S1 (haut) — config illisible ou changée = l'original perdu** : `_quarantine_settings`, `_forensic_sources`, `_forensic_ports` retombaient sur leurs défauts au moindre souci de config (un `forensic_ports: 22` sans liste levait `TypeError` et rendait tout le fichier illisible) : autre groupe de quarantaine, ré-isolation prise pour une première pose, « aucun NSG » enregistré, la levée laissait la carte sans NSG. Désormais : `config.ConfigError` (fichier présent mais invalide ; absent = défauts) **refuse l'isolation avant toute écriture** et la préparation dit `config_unreadable` (pas prête) ; une carte qui porte **n'importe quel** NSG de quarantaine de Glorfindel = ré-application sur CE NSG (`_ensure_quarantine_nsg(..., at=)`), original repris de l'état / du tag ; le retour de `_set_nic_nsg` est vérifié (carte changée entre lecture et échange → repli, jamais « isolée ») ; `forensic_ports` accepte un port seul ou `"22"`, refuse le reste ; config écrite par la War Room en atomique.
+  - **S2 — blocages vérifiés par leur contenu** : `_block_pair_state` / `_deny_blocks` (deny, tous ports et protocoles, l'attaquant d'un côté, chaque IP de la carte de l'autre) ; une règle passée en allow ou pointée ailleurs = manquante → la réaffirmation la repose. `_shadowing_rules` compte aussi une allow nommée `glorfindel-*` (Glorfindel n'en pose jamais chez le client).
+  - **S3** : `migrate_state_files` ne supprime plus le `<nom>.json` d'un homonyme (ID vérifié ; sans ID, conservé).
+  - **S4** : `reset --from-azure` affiche ce qu'il n'a pas pu établir (original inconnu, subnet illisible) et sort en 2 — il disait « aucune règle », code 0.
+  - **S5 — hermétisme** : un thread de poll survivait à son test et écrivait le vrai `~/.glorfindel/rule_status.json`. `RulePoller._live` + fixture qui arrête les pollers avant que la redirection soit défaite ; garde de session : si `~/.glorfindel` n'existait pas au départ (CI), la suite échoue s'il existe à la fin.
+  - **S6** : dans le NSG de quarantaine, seule une **allow** avant nos deny (≤ 111) compte comme une altération et est retirée ; le deny d'une politique (DINE / Modify) est laissé.
+  - Restent de la sixième passe : S7 (montrer `platform_open` à l'isolation), S8 (coupure des sessions limitée aux ports forensiques), S9 (divers) ; puis L26 (invariants v2 : monde client qui bouge) et L27 (concurrence).
 
 ## Pitfalls opérateur
 

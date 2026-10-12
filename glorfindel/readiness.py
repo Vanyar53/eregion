@@ -95,6 +95,19 @@ def assess(resource_id: str, connector, quarantine_nsg: bool = True) -> dict:
             "Utiliser une identité avec des droits d'écriture (voir « droits » ci-dessous)."))
         return _verdict(vm, reasons)
 
+    # A config that exists but can't be read stops every isolation (sixth review, S1):
+    # not ready, said plainly, rather than a crash further down or a guessed default.
+    from glorfindel.config import ConfigError, load_glorfindel_config
+    try:
+        load_glorfindel_config()
+    except ConfigError as exc:
+        reasons.append(_reason(
+            "config_unreadable", "not_ready",
+            f"glorfindel-config.yaml illisible ({str(exc)[:200]}) : Glorfindel refuse d'isoler "
+            "plutôt que de deviner son groupe de quarantaine.",
+            "Corriger le fichier (une liste pour isolation.forensic_ports, par exemple)."))
+        return _verdict(vm, reasons)
+
     # Rights, read from Azure's permissions API.
     perms = connector.check_permissions(resource_id)
     if not isinstance(perms, dict) or not perms.get("ok"):

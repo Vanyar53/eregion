@@ -235,3 +235,23 @@ def test_activate_records_the_reserves_accepted(monkeypatch):
     res = CliRunner().invoke(cli, ["activate", _FULL, "--yes"])
     assert res.exit_code == 0 and switched == [("vm-x", "non_disruptive")]
     assert readiness.effective_mode("vm-x", "non_disruptive")[0] == "non_disruptive"
+
+
+def test_reset_from_azure_says_what_it_could_not_settle(monkeypatch):
+    """An unknown original NSG (the NIC stays in quarantine) or an unreadable subnet
+    ended in `failed`, which the CLI never read: "nothing to do", exit 0 (sixth
+    review, S4). The repair instruction was lost."""
+    from glorfindel import cli
+    preview = {"deleted": [], "kept_perimeter": [], "note": "",
+               "failed": ["nic-a: NSG d'origine illisible (… poser le tag glorfindel-orig-1234=none …)"]}
+
+    class _Conn:
+        def __init__(self, **_k):
+            pass
+
+        def sweep_vm_rules(self, rid, dry_run=False):
+            return preview
+    monkeypatch.setattr("glorfindel.actions.AzureConnector", _Conn)
+    result = CliRunner().invoke(cli.cli, ["reset", _FULL, "--from-azure", "--yes"])
+    assert result.exit_code == 2
+    assert "glorfindel-orig-1234" in result.output and "Aucune règle" not in result.output

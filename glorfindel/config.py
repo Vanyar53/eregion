@@ -23,6 +23,31 @@ _DEFAULT_PATHS = [
 ]
 
 
+class ConfigError(ValueError):
+    """glorfindel-config.yaml exists but can't be read or is invalid. Callers that act
+    on Azure must STOP on it: falling back to the defaults made an isolation pick
+    another quarantine NSG and record "no NSG" as the NIC's original (sixth review, S1).
+    A missing file is not an error — the defaults apply."""
+
+
+def _write_atomic(path: Path, text: str) -> None:
+    """Temp file + os.replace: the watch never reads a half-written config (the War
+    Room rewrites it — sixth review, S1)."""
+    import os
+    import tempfile
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
 @dataclass
 class DiscoveryConfig:
     enabled: bool = True
@@ -161,7 +186,9 @@ def validate_forensic_sources(values) -> tuple[list[str], list[tuple[str, str]]]
         if net.num_addresses > _FORENSIC_MAX_ADDRESSES:
             rejected.append((text, f"préfixe trop large ({net.num_addresses} adresses, "
                                    f"{_FORENSIC_MAX_ADDRESSES} au plus)"))
-        elif net.is_loopback or net.is_link_local or net.is_multicast or net.is_unspecified:
+        elif (net.is_loopback or net.is_link_local or net.is_multicast or net.is_reserved
+              or net.network_address.is_unspecified
+              or (net.version == 4 and net.overlaps(ipaddress.ip_network("0.0.0.0/8")))):
             rejected.append((text, "adresse réservée"))
         elif str(net) not in accepted:
             accepted.append(str(net))
@@ -169,13 +196,23 @@ def validate_forensic_sources(values) -> tuple[list[str], list[tuple[str, str]]]
 
 
 def validate_forensic_ports(values) -> list[int]:
+    """TCP ports, 1–65535. A single port written without a list (`forensic_ports: 22`)
+    raised TypeError and made the whole config unreadable; `"22"` iterated as "2", "2"
+    (sixth review, S1/S8). Anything else than a port number is a config error."""
+    if values is None:
+        return []
+    items = values if isinstance(values, (list, tuple)) else [values]
     ports: list[int] = []
-    for raw in values or []:
+    for raw in items:
+        if isinstance(raw, bool):
+            raise ValueError(f"isolation.forensic_ports : {raw!r} n'est pas un port")
         try:
             port = int(str(raw).strip())
         except ValueError:
-            continue
-        if 0 < port < 65536 and port not in ports:
+            raise ValueError(f"isolation.forensic_ports : {raw!r} n'est pas un port") from None
+        if not 0 < port < 65536:
+            raise ValueError(f"isolation.forensic_ports : {port} hors de 1–65535")
+        if port not in ports:
             ports.append(port)
     return ports
 
@@ -249,8 +286,17 @@ def load_glorfindel_config(path: str | Path | None = None) -> GlorfindelConfig:
     cfg_path = next((p for p in candidates if p.exists()), None)
     if cfg_path is None:
         return GlorfindelConfig()
+    try:
+        return _parse_config(yaml.safe_load(cfg_path.read_text()) or {})
+    except ConfigError:
+        raise
+    except Exception as exc:
+        raise ConfigError(f"{cfg_path} : {type(exc).__name__}: {exc}") from exc
 
-    data = yaml.safe_load(cfg_path.read_text()) or {}
+
+def _parse_config(data: dict) -> GlorfindelConfig:
+    if not isinstance(data, dict):
+        raise ValueError("le fichier ne contient pas une table YAML")
 
     monitoring_backends = []
     for b in data.get("monitoring_backends", []):
@@ -354,7 +400,7 @@ def set_default_mode(mode: str, path: str | Path | None = None) -> str:
     data.setdefault("autonomy", {})["default"] = mode
 
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
-    cfg_path.write_text(yaml.safe_dump(data, sort_keys=False, default_flow_style=False))
+    _write_atomic(cfg_path, yaml.safe_dump(data, sort_keys=False, default_flow_style=False))
     return str(cfg_path)
 
 
@@ -394,5 +440,5 @@ def set_asset_mode(asset_name: str, mode: str, path: str | Path | None = None) -
         assets.append({"match": asset_name, "mode": mode})
 
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
-    cfg_path.write_text(yaml.safe_dump(data, sort_keys=False, default_flow_style=False))
+    _write_atomic(cfg_path, yaml.safe_dump(data, sort_keys=False, default_flow_style=False))
     return str(cfg_path)

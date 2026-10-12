@@ -574,8 +574,12 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
             autonomy = _lgc().autonomy          # fresh: a War Room mode change applies
             if mode_override:
                 autonomy.default = mode_override  # --mode stays pinned, as in decide
-        except Exception:
-            autonomy = _autonomy
+        except Exception as exc:
+            # Unreadable config: the mode loaded when the watch started may be stale —
+            # alert only, never act on it (seventh review, U4).
+            autonomy = None
+            with _output_lock:
+                console.print(f"[yellow]reassert: config illisible, alertes seulement ({exc})[/yellow]")
         try:
             for r in reassert_active(ttl_connector, autonomy):
                 target = r["vm"] + (f" {r['ip']}" if r.get("ip") else "")

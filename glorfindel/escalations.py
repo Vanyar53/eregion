@@ -37,6 +37,7 @@ _ESCALATION_LABELS = {
     "verification_failed": "vérification échouée",
     "proposed_rule": "règle de détection proposée",
     "posture_gap": "gap de posture",
+    "orphan_rule": "règle orpheline (carte disparue)",
     "detection_blocked": "détection empêchée (règle déjà en place)",
     "mode_hold": "action retenue (mode human_only)",
     "write_blocked": "écriture refusée (droits)",

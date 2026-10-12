@@ -192,9 +192,9 @@ _CURRENT = SimpleNamespace(chaos=None, mode="human_only", scheduler=None)
 
 
 class _Scheduler:
-    """Glorfindel operations at once, one Azure call (or state write) at a time, in a
-    drawn order (L27). A thread waits for its turn before each call; one that waits for
-    a lock says so, and gets turns again once it holds it — the real locks decide."""
+    """Glorfindel operations at once, one Azure call (or state write) at a time, in an
+    order drawn from a seed (L27). A thread waits for its turn before each call; a lock
+    that is taken costs it a turn (see _scheduled) — the real locks decide."""
 
     def __init__(self, seed: int):
         import random
@@ -218,15 +218,6 @@ class _Scheduler:
             self.cv.notify_all()
             self.cv.wait_for(lambda: self.turn == me)
             self.state[me] = "run"
-
-    def blocking(self):
-        with self.cv:
-            me = self._me()
-            if me is not None:
-                if self.turn == me:
-                    self.turn = None
-                self.state[me] = "blocked"
-                self.cv.notify_all()
 
     def run(self, ops: list) -> dict:
         results: dict = {}
@@ -271,16 +262,33 @@ class _Scheduler:
 
 
 def _scheduled(real):
-    """A lock the scheduler sees: it is told before the wait, the turn comes after."""
+    """A lock the scheduler drives: a thread never blocks in it. It tries the real lock
+    without waiting; taken, it gives its turn away and tries again at its next turn —
+    so the interleaving depends on the drawn seed only, never on when the OS wakes a
+    waiting thread. A caller's timeout is honoured as a number of turns."""
     @contextlib.contextmanager
     def lock(*args, **kwargs):
         sched = _CURRENT.scheduler
-        if sched is not None:
-            sched.blocking()
-        with real(*args, **kwargs):
-            if sched is not None:
+        if sched is None or threading.current_thread().name not in sched.state:
+            with real(*args, **kwargs):
+                yield
+            return
+        tries = 0
+        while True:
+            cm = real(*args, **{**kwargs, "timeout": 0})
+            try:
+                cm.__enter__()
+                break
+            except TimeoutError:
+                tries += 1
+                if kwargs.get("timeout") is not None and tries > 40:
+                    raise
                 sched.point()
+        try:
+            sched.point()
             yield
+        finally:
+            cm.__exit__(None, None, None)
     return lock
 _SEEN: collections.Counter = collections.Counter()
 
@@ -311,6 +319,7 @@ class IsolationMachine(RuleBasedStateMachine):
         self.chaos = _CURRENT.chaos = _Chaos()
         self.fake = FakeAzure(self.chaos)
         self.deleted: dict[str, list[str]] = {}         # VM id → its NIC ids, once deleted
+        self.detached: set[str] = set()                 # NICs someone left without any NSG
 
     @initialize(net=_networks())
     def build(self, net):
@@ -422,12 +431,33 @@ class IsolationMachine(RuleBasedStateMachine):
         return [self.fake.nics[key(n)] for n in self.fake.vms[key(vm)]["nics"]]
 
     def _nics_as_designed(self, vm: str) -> bool:
-        return all(key(n["nsg"]) == key(n["design_nsg"]) for n in self._nics(vm))
+        return all(key(n["nsg"]) == key(n["design_nsg"]) or self._untraceable(vm, n) for n in self._nics(vm))
+
+    def _untraceable(self, vm: str, nic: dict) -> bool:
+        """A NIC someone left bare, whose original nothing records any more — not the
+        state, not a tag of ours: Glorfindel can't even tell it was in quarantine. Its
+        release may say `released`; the operator puts the NSG back (_recover_everything)."""
+        if key(nic["id"]) not in self.detached or nic["nsg"] is not None:
+            return False
+        # Only a real NSG on record traces it. A record of "none" for a NIC whose design
+        # has one was made while nothing knew better (a re-isolation of the bare NIC
+        # after state and tags were lost): no information either.
+        st = self._state(vm) or {}
+        if any(key(p.get("nic_id")) == key(nic["id"]) and p.get("original_nsg_id")
+               for p in st.get("placements") or []):
+            return False
+        tag = self.connector._orig_tag(nic["id"])
+        return not any(g["tags"].get(tag) not in (None, self.connector._NO_ORIGINAL)
+                       for g in self.fake.nsgs.values() if g["tags"].get("managed-by") == "glorfindel")
 
     def _back_to_design(self, vm: str, own: bool = False) -> bool:
         """Every flow as designed — the attacker's excepted while a block of it stands
         (a block legitimately closes them, and outlives a release)."""
         live, design = self._open(vm, own), self._designed(vm)
+        bare = {n["id"].rsplit("/", 1)[-1] for n in self._nics(vm) if self._untraceable(vm, n)}
+        if bare:                                   # nothing records what they carried
+            live = frozenset(f for f in live if f[0] not in bare)
+            design = frozenset(f for f in design if f[0] not in bare)
         if actions._load_block_entries(vm) or self._block_rules_for(vm):
             return ({f for f in live if f[3] != ATTACKER} == {f for f in design if f[3] != ATTACKER}
                     and live <= design)
@@ -553,7 +583,7 @@ class IsolationMachine(RuleBasedStateMachine):
             assert self._state(vm) is not None, f"I8: {what} left an isolation of {vm} on Azure without state"
 
     def _block_recorded(self, vm: str, what: str):
-        if [r for r in self._block_rules_for(vm) if not self._perimeter_rule(r)]:
+        if [r for r in self._block_rules_for(vm, own=True) if not self._perimeter_rule(r)]:
             assert actions._load_block_entries(vm), f"I8: {what} left a block on {vm} without state"
 
     # ── operations ──────────────────────────────────────────────────────────────
@@ -666,17 +696,24 @@ class IsolationMachine(RuleBasedStateMachine):
         return frozenset(f for f in self._open(vm)
                          if f[3] == ATTACKER and (f[2] == "out" or port is None or f[4] == port))
 
-    def _block_rules_for(self, vm: str) -> list[str]:
-        """Glorfindel block rules for the attacker that apply to one of this VM's NICs."""
+    def _block_rules_for(self, vm: str, own: bool = False) -> list[str]:
+        """Glorfindel block rules for the attacker that apply to one of this VM's NICs.
+        own=True: not those named for another NIC — a deleted VM's, aimed at an address
+        this VM got since (they are orphans: see orphans_are_reported)."""
+        others = self._other_marks(vm) if own else set()
         found = []
         for nic in self._nics(vm):
-            for g in {nic["nsg"], nic["design_nsg"], self.fake.subnets[key(nic["subnet"])]["nsg"]} - {None}:
+            # The NIC's own NSG counts even off the NIC (hidden by the quarantine) — not
+            # for a NIC left bare that nothing ties to it any more (_untraceable).
+            design = None if own and self._untraceable(vm, nic) else nic["design_nsg"]
+            for g in {nic["nsg"], design, self.fake.subnets[key(nic["subnet"])]["nsg"]} - {None}:
                 for r in self.fake.nsgs.get(key(g), {}).get("rules", {}).values():
                     if not r["name"].startswith("glorfindel-block-"):
                         continue
                     sides = [r.get("source_address_prefix"), r.get("destination_address_prefix"),
                              *(r.get("source_address_prefixes") or []), *(r.get("destination_address_prefixes") or [])]
-                    if ATTACKER in sides and any(v in ("*", *nic["ips"]) for v in sides):
+                    if (ATTACKER in sides and any(v in ("*", *nic["ips"]) for v in sides)
+                            and not self._owned_by(r["name"].lower(), others)):
                         found.append(r["name"])
         return found
 
@@ -721,7 +758,7 @@ class IsolationMachine(RuleBasedStateMachine):
         flows, states = self._before()
         out, _ = self._run(fault, lambda: self.connector.unblock_ip(ATTACKER, rid), "unblock")
         if out and out.get("status") in ("unblocked", "not_found"):
-            left = [r for r in self._block_rules_for(vm) if not self._perimeter_rule(r)]
+            left = [r for r in self._block_rules_for(vm, own=True) if not self._perimeter_rule(r)]
             assert not left, f"I3: unblock said {out['status']}, rules left for {vm}: {left}"
         self._others_unchanged(vm, flows, states, perimeter=True)
 
@@ -804,7 +841,7 @@ class IsolationMachine(RuleBasedStateMachine):
         held = bool(st and (st.get("partial") or st.get("release_failed") or st.get("releasing_at")))
         if bool(self._footprint(vm)) != (st is not None) and not (held and st is not None):
             return False
-        rules = [r for r in self._block_rules_for(vm) if not self._perimeter_rule(r)]
+        rules = [r for r in self._block_rules_for(vm, own=True) if not self._perimeter_rule(r)]
         # An entry holds the VM's placements, and the perimeter rule too when the same
         # IP was also blocked subnet-wide (one entry per IP).
         entries = [e for e in actions._load_block_entries(vm)
@@ -1035,6 +1072,17 @@ class IsolationMachine(RuleBasedStateMachine):
                 rules.pop(name, None)
 
     @rule(data=st.data())
+    def someone_detaches_the_quarantine(self, data):
+        """Someone takes our quarantine NSG off a NIC and leaves it with none (the
+        portal, a script): not the customer's design, not Glorfindel's doing."""
+        nics = sorted(k for k, n in self.fake.nics.items() if n["nsg"] and actions._is_quarantine_nsg(n["nsg"]))
+        if nics:
+            nic = data.draw(st.sampled_from(nics), label="nic")
+            self.fake.nics[nic]["nsg"] = None
+            self.detached.add(nic)
+            self._claims_after_a_change()
+
+    @rule(data=st.data())
     def tags_lost(self, data):
         self._tags_lost(data)
         self._claims_after_a_change()
@@ -1132,16 +1180,20 @@ class IsolationMachine(RuleBasedStateMachine):
         and the release says so. The operator then does what the message says: puts the
         customer's NSG back if it was deleted, sets the tag."""
         assert out.get("failed"), f"I7: release of {vm} not done and nothing said: {out}"
+        ours = [g for g in self.fake.nsgs.values() if g["tags"].get("managed-by") == "glorfindel"]
         for nic in self._nics(vm):
-            if not (nic["nsg"] and actions._is_quarantine_nsg(nic["nsg"])):
+            in_q = nic["nsg"] and actions._is_quarantine_nsg(nic["nsg"])
+            if not in_q and nic["nsg"] is not None:
                 continue
             want = nic["design_nsg"]
             if want and key(want) not in self.fake.nsgs:
                 d = self.design["nsgs"][key(want)]
                 self.fake.nsgs[key(want)] = {**d, "rules": {k: dict(r) for k, r in d["rules"].items()},
                                              "tags": dict(d["tags"])}
-            q = self.fake.nsgs[key(nic["nsg"])]
-            q["tags"][self.connector._orig_tag(nic["id"])] = want or self.connector._NO_ORIGINAL
+            # In quarantine: the tag on the NSG it carries. Left with no NSG (detached
+            # outside Glorfindel): on our NSGs, where the release looks for it.
+            for q in ([self.fake.nsgs[key(nic["nsg"])]] if in_q else ours):
+                q["tags"][self.connector._orig_tag(nic["id"])] = want or self.connector._NO_ORIGINAL
 
     def _recover_everything(self, lose_state: bool):
         """I7: whatever was reached, release brings every VM back to its design."""
@@ -1149,6 +1201,12 @@ class IsolationMachine(RuleBasedStateMachine):
         self.fake.write_denied = False
         self.config["readable"] = True
         self._write_config()
+        # NICs left bare whose original nothing records: the operator puts their NSG
+        # back first (Glorfindel can't know they were ever in quarantine).
+        for vm in self.live:
+            for n in self._nics(vm):
+                if self._untraceable(vm, n) and n["design_nsg"] and key(n["design_nsg"]) in self.fake.nsgs:
+                    n["nsg"] = n["design_nsg"]
         deleted_records = {vm: self._recorded_rules(self._state(vm)) for vm in self.deleted}
         for vm in self.vms:
             if lose_state and vm not in self.deleted and actions._ISOLATION_STATE_DIR.exists():
@@ -1183,7 +1241,10 @@ class IsolationMachine(RuleBasedStateMachine):
             return
         flows = self._flows()
         for vm in self.live:
-            extra = flows[vm] - self._designed(vm)
+            # A NIC someone else left without an NSG is open by their doing, until a
+            # release (or the reassertion) puts something back on it.
+            gone = {n["id"].rsplit("/", 1)[-1] for n in self._nics(vm) if key(n["id"]) in self.detached}
+            extra = {f for f in flows[vm] - self._designed(vm) if f[0] not in gone}
             assert not extra, f"I1: {vm} more reachable than designed: {sorted(extra)}"
 
     @invariant()
@@ -1198,9 +1259,12 @@ class IsolationMachine(RuleBasedStateMachine):
         for k, s in self.design["subnets"].items():
             assert key(self.fake.subnets[k]["nsg"]) == key(s["nsg"]), "I2: subnet NSG changed"
         for k, n in self.fake.nics.items():
+            if n["nsg"] is not None and not actions._is_quarantine_nsg(n["nsg"]):
+                self.detached.discard(k)          # a customer NSG is back on it
             ok = key(n["nsg"]) == key(n["design_nsg"]) or (
                 n["nsg"] and actions._is_quarantine_nsg(n["nsg"])
-                and self.fake.nsgs[key(n["nsg"])]["tags"].get("managed-by") == "glorfindel")
+                and self.fake.nsgs[key(n["nsg"])]["tags"].get("managed-by") == "glorfindel"
+            ) or (n["nsg"] is None and k in self.detached)          # someone else's doing
             assert ok, f"I2: {n['id']} carries {n['nsg']}, designed {n['design_nsg']}"
 
     @invariant()
@@ -1234,7 +1298,10 @@ class IsolationMachine(RuleBasedStateMachine):
         self._check_claims(vm, vm)
 
     def _check_claims(self, vm: str, rid: str, fault=None):
-        iso, _ = self._run(fault, lambda: self.connector.verify_isolation(rid))
+        iso, err = self._run(fault, lambda: self.connector.verify_isolation(rid))
+        # No fault injected: a verification answers — yes, no or unknown. Raising left
+        # the reassertion to log it and move on (seventh review, U4).
+        assert fault is not None or err is None, f"I3: verify_isolation of {vm} raised: {err!r}"
         if iso and iso.get("verified") is True:
             assert not self._undeclared(vm, iso), f"I3: verify_isolation True, {vm} reachable"
         rel, _ = self._run(fault, lambda: self.connector.verify_release(rid))
@@ -1253,6 +1320,32 @@ class IsolationMachine(RuleBasedStateMachine):
         that makes a verification false must not wait for that VM's turn."""
         for vm in self.live:
             self._check_claims(vm, vm)
+
+    @invariant()
+    def orphans_are_reported(self):
+        """U1: a rule left by a NIC that no longer exists, aimed at an address a live NIC
+        holds now, cuts that NIC off — Glorfindel must say so (find_orphan_rules feeds a
+        card). The rule's owner is told by the hash in its name, recomputed here."""
+        if not getattr(self, "design", None) or not self.deleted:
+            return
+        gone = {_nic_hash(n) for nics in self.deleted.values() for n in nics}
+        live_ips = {ip for n in self.fake.nics.values() for ip in n["ips"]}
+        harmful = set()
+        for g in self.fake.nsgs.values():
+            for name, r in g["rules"].items():
+                if not name.startswith(("glorfindel-iso-", "glorfindel-block-")) or r["access"].lower() != "deny":
+                    continue
+                if not any(h in name for h in gone):
+                    continue
+                side = "destination" if r["direction"].lower() == "inbound" else "source"
+                if live_ips & set([r.get(f"{side}_address_prefix")] + list(r.get(f"{side}_address_prefixes") or [])):
+                    harmful.add((key(g["id"]), name))
+        if not harmful:
+            return
+        reported, err = self._run(None, lambda: self.connector.find_orphan_rules())
+        assert err is None, f"U1: orphan rules not listed: {err}"
+        got = {(key(o["nsg_id"]), o["rule"].lower()) for o in reported}
+        assert harmful <= got, f"U1: orphan rules cutting a live NIC off, not reported: {sorted(harmful - got)}"
 
     @invariant()
     def one_vm_one_state_file(self):

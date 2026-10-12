@@ -274,6 +274,9 @@ class _Nsgs:
             return _Done(self.az.nsg_view(n))
         return self.az.call("nsg.write", True, write)
 
+    def list_all(self):
+        return self.az.call("nsg.list", False, lambda: [self.az.nsg_view(n) for n in self.az.nsgs.values()])
+
     def update_tags(self, rg, name, tags_object):
         def write():
             n = self.az.nsg(rg, name)

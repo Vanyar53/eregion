@@ -310,3 +310,42 @@ def test_isolation_section(tmp_path):
     assert cfg.isolation.quarantine_nsg is False and cfg.isolation.quarantine_rg == "rg-glorfindel"
     f.write_text("monitoring_backends: []\n")
     assert load_glorfindel_config(f).isolation.quarantine_nsg is True     # default on
+
+
+def test_a_config_mounted_alone_is_written_in_place(monkeypatch, tmp_path):
+    """docker-compose mounts glorfindel-config.yaml on its own: a rename over it fails
+    with EBUSY (measured, seventh review U3) — the War Room's mode change failed. It is
+    written in place under the lock instead, replacing the content, never appending."""
+    import errno
+    import os
+    from glorfindel import config
+    cfg = tmp_path / "glorfindel-config.yaml"
+    cfg.write_text("autonomy:\n  default: human_only\n" + "# padding\n" * 50)
+
+    def busy(src, dst):
+        raise OSError(errno.EBUSY, "Device or resource busy")
+
+    monkeypatch.setattr(os, "replace", busy)
+    inode = cfg.stat().st_ino
+    config.set_asset_mode("vm-a", "non_disruptive", path=cfg)
+    config.set_asset_mode("vm-a", "human_only", path=cfg)
+    config.set_default_mode("human_only", path=cfg)
+    assert cfg.stat().st_ino == inode                     # the same file, written in place
+    text = cfg.read_text()
+    assert text.count("autonomy:") == 1 and "padding" not in text
+    auto = config.load_glorfindel_config(cfg).autonomy
+    assert [(r.match, r.mode) for r in auto.assets] == [("vm-a", "human_only")]
+    assert not list(tmp_path.glob(".glorfindel-config.yaml.*.tmp"))
+
+
+def test_a_config_that_can_be_replaced_still_is(tmp_path):
+    """Outside a container the atomic replace stays: a reader sees the old file or the
+    new one, never a half."""
+    from glorfindel import config
+    cfg = tmp_path / "glorfindel-config.yaml"
+    config.set_asset_mode("vm-b", "non_disruptive", path=cfg)        # created
+    inode = cfg.stat().st_ino
+    config.set_default_mode("human_only", path=cfg)
+    assert cfg.stat().st_ino != inode
+    auto = config.load_glorfindel_config(cfg).autonomy
+    assert auto.default == "human_only" and auto.assets[0].mode == "non_disruptive"

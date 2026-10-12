@@ -55,7 +55,9 @@ def test_the_old_ip_rule_goes_with_a_stateless_release(monkeypatch):
     skipped it — `released`, and the rule waited for whoever got the old IP."""
     _run(monkeypatch, _net(web_nic={"own": "dedicated"}),
          ("isolate", WEB1, WEB1, None),
-         ("customer_changes_ip", _nic("rg-app1", "web-nic"), 0))       # teardown: state lost, release
+         ("customer_changes_ip", _nic("rg-app1", "web-nic"), 0),
+         ("lose_state", WEB1),
+         ("release", WEB1, WEB1, None))
 
 
 def test_a_block_is_checked_against_the_nic_as_it_is_now(monkeypatch):
@@ -137,3 +139,69 @@ def test_a_reset_reads_the_original_from_the_state_and_marks_what_it_left(monkey
          ("tags_lost", "/subscriptions/s/resourcegroups/rg-app1/providers/microsoft.network/"
                        "networksecuritygroups/nsg-glorfindel-quarantine-westeurope"),
          ("reset_from_azure", WEB1, WEB1, None))
+
+
+def test_a_nic_left_without_an_nsg_gets_its_original_back(monkeypatch):
+    """Someone takes the quarantine NSG off a NIC and leaves it with none. The release
+    moved on (the NIC no longer carried ours), deleted the tag of the original, and said
+    `released` — the NIC kept no NSG (seventh review, U2)."""
+    _run(monkeypatch, _net(quarantine=True, web_nic={"own": "dedicated"}),
+         ("isolate", WEB1, WEB1, None),
+         ("someone_detaches_the_quarantine", _nic("rg-app1", "web-nic")),
+         ("release", WEB1, WEB1, None))
+
+
+def test_an_emptied_quarantine_is_seen_with_an_unreadable_config(monkeypatch):
+    """The config can't be read and someone empties the quarantine NSG: the check of
+    the quarantine read the forensic sources from the config, raised, and the
+    reassertion only logged it — the VM open, nobody told (seventh review, U4). Our
+    denies don't depend on the config: an emptied NSG reads as altered."""
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_net(quarantine=True))
+        m.isolate(Script(WEB1, WEB1, None))
+        m.config["readable"] = False
+        m._write_config()
+        assert m.connector.verify_isolation(WEB1)["verified"] is None      # denies intact, forensic unknown
+        m._strip_quarantine_nsg(Script(
+            "/subscriptions/s/resourcegroups/rg-app1/providers/microsoft.network/networksecuritygroups/"
+            "nsg-glorfindel-quarantine-westeurope"))
+        assert m.connector.verify_isolation(WEB1)["verified"] is False
+        m.config["readable"] = True
+        m._write_config()
+    finally:
+        m.teardown()
+
+
+def test_a_deleted_vms_block_on_a_reused_ip_is_reported(monkeypatch):
+    """Seventh review, V-1 and U1: `web` (group 1) gets a new IP and is blocked, then
+    deleted; its homonym in group 2 is given that IP. The deleted VM's block rule now
+    applies to the live one: an unblock of the live one has nothing of its own to
+    remove, and the orphan — cutting the live VM off — is reported."""
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_net(subnet_nsg=[]))
+        m.customer_changes_ip(Script(_nic("rg-app1", "web-nic"), 0))
+        m.block(Script(WEB1, WEB1, None, 22))
+        m.delete_vm(Script(WEB1))
+        m.customer_changes_ip(Script(_nic("rg-app2", "web-nic"), 0))
+        m.unblock(Script(WEB2, WEB2, None))
+        m.orphans_are_reported()
+        orphans = m.connector.find_orphan_rules()
+        assert any(o["now_on"] and o["now_on"][0]["ip"] == "10.0.0.20" for o in orphans), orphans
+        assert m.fake.nics[_nic("rg-app2", "web-nic")]["ips"] == ["10.0.0.20"]
+    finally:
+        m.teardown()
+
+
+def test_a_bare_nic_isolated_again_keeps_its_recorded_original(monkeypatch):
+    """Isolated by quarantine, taken off it and left bare by someone, isolated again:
+    the second isolation saw no NSG and recorded "none" over the original the first one
+    had recorded — the release then left the NIC without its NSG (seventh review, U2)."""
+    _run(monkeypatch, _net(quarantine=True, web_nic={"own": "dedicated"}),
+         ("isolate", WEB1, WEB1, None),
+         ("someone_detaches_the_quarantine", _nic("rg-app1", "web-nic")),
+         ("isolate", WEB1, WEB1, None),
+         ("release", WEB1, WEB1, None))

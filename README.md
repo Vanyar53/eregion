@@ -697,7 +697,7 @@ flowchart BT
 ```bash
 pip install eregion[dev]
 pytest
-# 760 tests (~25s) — 0 Azure calls, 0 LLM calls, 0 writes to ~/.glorfindel
+# 767 tests (~25s) — 0 Azure calls, 0 LLM calls, 0 writes to ~/.glorfindel
 GLORFINDEL_INVARIANT_EXAMPLES=5000 pytest tests/unit/test_invariants.py   # deep run (~8 min)
 python scripts/mutation_check.py --examples 500 --rounds 2                # measure the invariants
 ```

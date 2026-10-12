@@ -96,7 +96,42 @@ class PostureChecker:
         # exists regardless of VM power state — don't wait for it to come back online).
         vault_inv = self._vault_inventory(fallback_rg)
         self._resolve_cleared_gaps({g.key for g in all_gaps}, checked_vms, vault_inv)
+        self._escalate_orphan_rules()
         return all_gaps
+
+    def _escalate_orphan_rules(self) -> None:
+        """One card per Glorfindel rule whose NIC no longer exists (seventh review, U1):
+        an isolation or a block of a deleted VM, aimed at an IP that another NIC may now
+        hold — that NIC is cut off. An alert for now; nothing is removed by itself."""
+        if self._dry_run or self._connector is None:
+            return
+        try:
+            orphans = self._connector.find_orphan_rules()
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("posture: orphan rules not checked (%s)", exc)
+            return
+        from glorfindel import escalations
+        for o in orphans:
+            from glorfindel.actions import _parse_nsg_resource_id
+            nsg_rg, nsg_name = _parse_nsg_resource_id(o["nsg_id"])
+            hit = o["now_on"][0] if o["now_on"] else None
+            if hit:
+                victim = (hit["vm_id"] or hit["nic_id"]).rstrip("/").rsplit("/", 1)[-1]
+                reason = (f"Règle {o['rule']} ({nsg_name}) : laissée par une carte qui n'existe plus, elle "
+                          f"vise {hit['ip']} — adresse de {victim} aujourd'hui, qui est donc coupé(e).")
+            else:
+                reason = (f"Règle {o['rule']} ({nsg_name}) : laissée par une carte qui n'existe plus "
+                          f"(vise {', '.join(o['ips']) or '*'}). Aucune carte ne porte cette adresse aujourd'hui.")
+            escalations.record(
+                signal_id=f"orphan-{o['nsg_id']}/{o['rule']}",
+                resource_id=(hit["vm_id"] or o["nsg_id"]) if hit else o["nsg_id"],
+                action="remove_orphan_rule",
+                escalation_type="orphan_rule",
+                reason=reason,
+                suggested_steps=[f"az network nsg rule delete -g {nsg_rg} --nsg-name {nsg_name} -n {o['rule']}"],
+                severity="high" if hit else "medium",
+            )
 
     def _excluded(self, asset_name: str) -> bool:
         is_excluded = getattr(self._cfg, "is_excluded", None)

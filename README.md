@@ -58,6 +58,8 @@ flowchart LR
 
 More diagrams — processes and shared state, the decision graph, the guardrail chain, the life of an isolation, the reassertion loop — in [`docs/architecture.md`](docs/architecture.md).
 
+**[Interactive, zoomable diagrams →](https://vanyar53.github.io/eregion/schemas/)** — the same diagrams in colour, with pinch / Ctrl + wheel zoom, drag to pan and a full-screen view (French).
+
 **Response loop** — on a detection, Glorfindel first runs targeted investigative queries (which process is writing at 147 MB/s? is a backup agent present?) to enrich the signal before the LLM decides. It then reasons about the observed indicators, past cycles from ChromaDB, and current incident context to choose the minimum effective response. Actions are verified via Azure API. Every cycle is stored in ChromaDB — no fine-tuning required.
 
 **Detection loop** — `detection_rules.yaml` defines continuous polling rules (KQL, PromQL, SPL…). VMs are auto-discovered via LAW Heartbeat — no `resource_id` to maintain. Glorfindel polls independently of any attack simulation.

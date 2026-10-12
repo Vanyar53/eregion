@@ -30,22 +30,89 @@ class ConfigError(ValueError):
     A missing file is not an error — the defaults apply."""
 
 
-def _write_atomic(path: Path, text: str) -> None:
+def _flock(f, exclusive: bool) -> None:
+    try:
+        import fcntl
+        fcntl.flock(f, fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
+    except (ImportError, OSError):
+        pass
+
+
+def _read_text(path: Path) -> str:
+    """The config's text, under a shared lock: never half of an in-place write."""
+    with open(path) as f:
+        _flock(f, exclusive=False)
+        return f.read()
+
+
+def _write_atomic(path: Path, text: str, locked=None) -> None:
     """Temp file + os.replace: the watch never reads a half-written config (the War
-    Room rewrites it — sixth review, S1)."""
+    Room rewrites it — sixth review, S1).
+
+    A file mounted on its own in a container — docker-compose mounts
+    glorfindel-config.yaml alone — can't be replaced: a rename over a mount point fails
+    with EBUSY (measured, seventh review U3: the War Room's mode change failed). Then it
+    is written in place, under the exclusive lock `locked` the caller holds on it;
+    readers take the shared one (_read_text), so none sees it half-written."""
+    import errno
     import os
     import tempfile
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
     try:
-        with os.fdopen(fd, "w") as f:
-            f.write(text)
-        os.replace(tmp, path)
-    except BaseException:
+        fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    except OSError:
+        fd, tmp = None, None
+    if fd is not None:
         try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+            with os.fdopen(fd, "w") as f:
+                f.write(text)
+            os.replace(tmp, path)
+            return
+        except OSError as exc:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            if exc.errno not in (errno.EBUSY, errno.EXDEV) or locked is None:
+                raise
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+    if locked is None:
+        raise OSError(errno.EBUSY, f"{path} can't be replaced and isn't held for an in-place write")
+    locked.seek(0)
+    locked.write(text)
+    locked.truncate()
+    locked.flush()
+    os.fsync(locked.fileno())
+
+
+def _update_config(cfg_path: Path, mutate) -> None:
+    """Read, change and write the config under one exclusive lock: two War Room
+    requests don't lose each other's change. If the file was replaced while we waited
+    for the lock (an atomic write on the host), read the new one."""
+    import os
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    while True:
+        cfg_path.touch(exist_ok=True)
+        f = open(cfg_path, "r+")         # not "a+": every write there goes to the end
+        try:
+            _flock(f, exclusive=True)
+            try:
+                same = os.fstat(f.fileno()).st_ino == os.stat(cfg_path).st_ino
+            except OSError:
+                same = False
+            if not same:
+                continue
+            f.seek(0)
+            data = yaml.safe_load(f.read()) or {}
+            mutate(data)
+            _write_atomic(cfg_path, yaml.safe_dump(data, sort_keys=False, default_flow_style=False), locked=f)
+            return
+        finally:
+            f.close()
 
 
 @dataclass
@@ -287,7 +354,7 @@ def load_glorfindel_config(path: str | Path | None = None) -> GlorfindelConfig:
     if cfg_path is None:
         return GlorfindelConfig()
     try:
-        return _parse_config(yaml.safe_load(cfg_path.read_text()) or {})
+        return _parse_config(yaml.safe_load(_read_text(cfg_path)) or {})
     except ConfigError:
         raise
     except Exception as exc:
@@ -393,14 +460,7 @@ def set_default_mode(mode: str, path: str | Path | None = None) -> str:
     else:
         cfg_path = next((p for p in _DEFAULT_PATHS if p.exists()), _DEFAULT_PATHS[0])
 
-    data = {}
-    if cfg_path.exists():
-        data = yaml.safe_load(cfg_path.read_text()) or {}
-
-    data.setdefault("autonomy", {})["default"] = mode
-
-    cfg_path.parent.mkdir(parents=True, exist_ok=True)
-    _write_atomic(cfg_path, yaml.safe_dump(data, sort_keys=False, default_flow_style=False))
+    _update_config(cfg_path, lambda data: data.setdefault("autonomy", {}).__setitem__("default", mode))
     return str(cfg_path)
 
 
@@ -424,21 +484,16 @@ def set_asset_mode(asset_name: str, mode: str, path: str | Path | None = None) -
     else:
         cfg_path = next((p for p in _DEFAULT_PATHS if p.exists()), _DEFAULT_PATHS[0])
 
-    data = {}
-    if cfg_path.exists():
-        data = yaml.safe_load(cfg_path.read_text()) or {}
+    def mutate(data):
+        autonomy = data.setdefault("autonomy", {})
+        autonomy.setdefault("default", "human_only")
+        assets = autonomy.setdefault("assets", [])
+        for entry in assets:
+            if entry.get("match") == asset_name:
+                entry["mode"] = mode
+                break
+        else:
+            assets.append({"match": asset_name, "mode": mode})
 
-    autonomy = data.setdefault("autonomy", {})
-    autonomy.setdefault("default", "human_only")
-    assets = autonomy.setdefault("assets", [])
-
-    for entry in assets:
-        if entry.get("match") == asset_name:
-            entry["mode"] = mode
-            break
-    else:
-        assets.append({"match": asset_name, "mode": mode})
-
-    cfg_path.parent.mkdir(parents=True, exist_ok=True)
-    _write_atomic(cfg_path, yaml.safe_dump(data, sort_keys=False, default_flow_style=False))
+    _update_config(cfg_path, mutate)
     return str(cfg_path)

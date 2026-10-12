@@ -139,7 +139,7 @@ Quatre mutants sont écartés du décompte, avec leur raison écrite dans le har
   hôte écrit entre notre écriture et notre relecture. Le verrou est par hôte, et un test
   unitaire couvre ce cas.
 
-Les mutants M18 à M25 réinjectent les défauts trouvés par la machine elle-même. Les plus rares
+Les mutants M18 à M29 réinjectent les défauts trouvés par la machine elle-même. Les plus rares
 (M21 à M24, trouvés à des milliers de séquences) ne sont pas attrapés à chaque tour au budget
 du push ; leur séquence figée, elle, les attrape à chaque push.
 
@@ -166,6 +166,8 @@ Aucun de ces défauts n'avait été vu en revue. Chacun a son test et sa séquen
 | L27 | déblocage aveugle derrière la quarantaine | « not_found », IP rebloquée à la levée |
 | L27 | `reset --from-azure` qui lisait l'original dans le seul tag | reset partiel alors que l'état connaissait l'original |
 | L27 | reset partiel qui laissait l'état intact | la réaffirmation aurait reposé ce que l'opérateur retirait |
+| L28 | carte détachée vers « aucun NSG » à la levée (U2, septième passe) | `released`, carte laissée sans son NSG, tag effacé |
+| L28 | réisolation d'une carte nue | « aucun » enregistré par-dessus le vrai original, carte laissée sans NSG à la levée |
 
 Le plus grave : après une levée qui échoue en partie, une seconde levée lisait les champs de
 rétro-compatibilité de l'état comme un ancien format, et supprimait les deny du NSG de

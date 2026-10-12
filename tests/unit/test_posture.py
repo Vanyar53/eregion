@@ -447,3 +447,25 @@ def test_asset_in_exceptions_is_not_checked_and_its_gaps_resolve(tmp_path):
     cfg.exceptions = [ExceptionConfig(asset_pattern="vm-*", exclude_all=True)]
     assert checker.check_and_escalate([_asset()]) == []
     assert not checker.active_gaps()
+
+
+def test_an_orphan_rule_cutting_a_live_vm_off_is_escalated(tmp_path):
+    """Seventh review, U1: a rule left by a NIC that no longer exists, aimed at an IP a
+    live VM holds now, cuts that VM off — one card, naming the victim and the command."""
+    from glorfindel import escalations
+    c = _connector()
+    nsg = "/subscriptions/s/resourceGroups/rg-net/providers/Microsoft.Network/networkSecurityGroups/nsg-subnet"
+    vm_b = "/subscriptions/s/resourceGroups/rg-b/providers/Microsoft.Compute/virtualMachines/vm-b"
+    c.find_orphan_rules.return_value = [
+        {"nsg_id": nsg, "rule": "glorfindel-iso-vm-a-nic-a-0d0228", "ips": ["10.0.0.20"],
+         "now_on": [{"ip": "10.0.0.20", "nic_id": "nic-b", "vm_id": vm_b}]},
+        {"nsg_id": nsg, "rule": "glorfindel-iso-vm-c-nic-c-1a2b3c", "ips": ["10.0.0.99"], "now_on": []},
+    ]
+    with patch("glorfindel.posture._STATE_FILE", tmp_path / "posture.json"):
+        PostureChecker(_cfg(), c).check_and_escalate([_asset()])
+    cards = [e for e in escalations.pending() if e.get("escalation_type") == "orphan_rule"]
+    assert len(cards) == 2
+    hit = next(e for e in cards if e["resource_id"] == vm_b)
+    assert hit["severity"] == "high" and "vm-b" in hit["reason"] and "10.0.0.20" in hit["reason"]
+    assert "az network nsg rule delete -g rg-net --nsg-name nsg-subnet -n glorfindel-iso-vm-a-nic-a-0d0228" \
+        in hit["suggested_steps"][0]

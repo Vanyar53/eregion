@@ -633,6 +633,7 @@ const ESC_LABELS = {
   unattributed_signal: 'not attributed to this VM',
   ttl_exceeded:        'TTL exceeded',
   readiness_hold:      'reserves to confirm',
+  orphan_rule:         'orphan rule (NIC gone)',
 };
 
 // An autonomous action a gate held back: recommended, NOT executed. It used to read
@@ -662,6 +663,7 @@ function escLabel(type) {
 // (the card would otherwise show the raw type, e.g. "posture_gap").
 const _ESC_TITLES = {
   posture_gap:    'Posture gap',
+  orphan_rule:    'Orphan Glorfindel rule',
   proposed_rule:  'Detection rule proposed',
   ttl_exceeded:   'Isolation TTL exceeded',
   proposed_action:'Unknown action proposed',

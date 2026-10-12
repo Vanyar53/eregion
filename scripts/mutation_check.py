@@ -98,7 +98,7 @@ MUTANTS = [
      "                now = current.get(nic) if current is not None and isinstance(nic, str) else None",
      "                now = None"),
     ("M20", "release asks for the original of a NIC no longer in quarantine (L26)", A,
-     "                        if not _same_id(self._nic_nsg_id(p[\"nic_id\"]) or \"\", p[\"nsg_id\"]):",
+     "                        if now and not _same_id(now, p[\"nsg_id\"]):",
      "                        if False:"),
     ("M21", "a block counted on an NSG that no longer governs the NIC (L26)", A,
      '                    off = [p for p in ps if (p["nsg_rg"].lower(), p["nsg_name"].lower()) not in governing]',
@@ -117,6 +117,18 @@ MUTANTS = [
     ("M25", "a partial reset leaves the state unmarked (L27)", A,
      "        elif not dry_run:\n            # Part of it is gone from Azure",
      "        elif False:\n            # Part of it is gone from Azure"),
+    ("M26", "a NIC left without an NSG: the release moves on (L28, U2)", A,
+     "                        if now is None:\n                            # Detached from our NSG",
+     "                        if False:\n                            # Detached from our NSG"),
+    ("M27", "an unreadable config hides an emptied quarantine NSG (L28, U4)", A,
+     "            wanted = self._quarantine_wanted(with_forensic=False)\n            forensic_known = False",
+     "            raise\n            forensic_known = False"),
+    ("M28", "orphan rules not reported (L28, U1)", A,
+     "                if len(mark) not in (6, 8) or any(c not in \"0123456789abcdef\" for c in mark) or mark in marks:",
+     "                if True:"),
+    ("M29", "a bare NIC isolated again records 'none' over its original (L28, U2)", A,
+     "            if original is None:\n                # A bare NIC may have been in our quarantine before",
+     "            if False:\n                # A bare NIC may have been in our quarantine before"),
 ]
 
 

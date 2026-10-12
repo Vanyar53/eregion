@@ -359,6 +359,18 @@ def _deny_applies(rule, ips: list[str] | None) -> bool:
     return _side_covers(rule, side, ips or None)
 
 
+def _nic_owns(rule, hashed: set[str], names: set[str], ips: list[str] | None) -> bool:
+    """A deny of this NIC's, to remove. Named with the NIC's hash (`hashed`, unique to
+    the NIC): its own, whatever addresses it covers now — the NIC's IP may have changed
+    since, and a deny left on the old address would cut off whoever gets it next (L26).
+    One of the older names (`names`, shared by homonyms): only if it applies to the
+    NIC's addresses (L24)."""
+    if _enum_text(getattr(rule, "access", "")) != "deny":
+        return False
+    name = _rule_name(rule).lower()
+    return name in hashed or (name in names and _deny_applies(rule, ips))
+
+
 def _deny_isolates(rule, direction: str, ips: list[str] | None) -> bool:
     """This deny cuts ALL of the NIC's traffic in `direction`: every protocol and port,
     any peer, each of the NIC's addresses. Presence by name was taken as proof: a
@@ -1335,12 +1347,12 @@ class AzureConnector(CloudConnector):
         return None
 
     def _iso_rules_on(self, vm_name: str, t: dict, rules: list) -> list:
-        """The isolation rules of THIS NIC in `rules` (the NSG's listing): one of our
-        names for it, and a deny that applies to its addresses. Names compare without
-        case — Azure's do."""
+        """The isolation rules of THIS NIC in `rules` (the NSG's listing): see _nic_owns.
+        Names compare without case — Azure's do."""
         names = {n.lower() for n in self._isolation_names_for_target(vm_name, t)}
+        base = self._placement_rule_base("glorfindel-iso", vm_name, t["nic_short"], t["nic_id"])
         ips = t.get("private_ips") or None
-        return [r for r in rules if _rule_name(r).lower() in names and _deny_applies(r, ips)]
+        return [r for r in rules if _nic_owns(r, {base, f"{base}-out"}, names, ips)]
 
     def release_isolation(self, resource_id: str) -> dict:
         """Remove every isolation rule of the VM and restore bumped customer rules.
@@ -1381,6 +1393,12 @@ class AzureConnector(CloudConnector):
                     # is read only when the state doesn't say. Unknown original, or
                     # an original that didn't come back → the NIC stays in quarantine.
                     try:
+                        # The NIC no longer carries ours (a redeploy put the customer's
+                        # back): nothing to restore, the original is not needed. Asked
+                        # first, an unknown original failed this release forever (L26).
+                        if not _same_id(self._nic_nsg_id(p["nic_id"]) or "", p["nsg_id"]):
+                            self._forget_original(p, p["nic_id"])
+                            continue
                         original = (p["original_nsg_id"] if "original_nsg_id" in p
                                     else self._original_from_tags(p, p["nic_id"]))
                         self._unquarantine(p["nic_id"], p, original)
@@ -1405,8 +1423,13 @@ class AzureConnector(CloudConnector):
                     # Keep the placement for a retry: its rule names (deleting an absent
                     # rule is a no-op) and only the bumps still to put back.
                     remaining.append({**p, "bumped": left})
-        elif state.get("nsg_name"):
+        elif "placements" not in state and state.get("nsg_name") and not _is_quarantine_nsg(state["nsg_name"]):
             # Legacy single-NSG state: recorded rule names + bumps live on the recorded NSG.
+            # Only a state written before placements existed: a partial release leaves
+            # `placements: []` next to the flat fields kept for /api/state, which name the
+            # FIRST placement — the shared quarantine NSG and its deny rules. Read as a
+            # legacy state, the next release deleted them: every VM in quarantine in the
+            # region was open again (L26, invariant machine).
             l_rg, l_name = state.get("nsg_rg", rg), state["nsg_name"]
             for name in state.get("rule_names", []):
                 err = self._delete_rule(l_rg, l_name, name)
@@ -2412,6 +2435,7 @@ class AzureConnector(CloudConnector):
             nsg_key = (t["nsg_rg"].lower(), t["nsg_name"].lower())
             h = hashlib.sha1(t["nic_id"].encode()).hexdigest()[:8]
             iso_names = {n.lower() for n in self._isolation_names_for_target(vm_name, t)}
+            iso_base = self._placement_rule_base("glorfindel-iso", vm_name, t["nic_short"], t["nic_id"])
             rules = self._list_rules({}, t["nsg_rg"], t["nsg_name"])
             if rules is None:
                 # Unreadable: nothing found is not nothing there — keep the local state.
@@ -2424,18 +2448,18 @@ class AzureConnector(CloudConnector):
                 m = block_re.match(name)
                 if m:
                     prefix = name[: m.start("rest") - 1]
-                    base = name[:-4] if name.lower().endswith("-out") else name
+                    hashed = self._placement_rule_base(prefix, vm_name, t["nic_short"], t["nic_id"])
                     owned = {f"{prefix}-{x}".lower() for x in (
                         vm_name, f"{vm_name}-{t['nic_short']}", f"{vm_name[:40]}-{h}")}
-                    owned.add(self._placement_rule_base(prefix, vm_name, t["nic_short"], t["nic_id"]))
-                    ours = base.lower() in owned
+                    owned = {n for b in owned for n in (b, f"{b}-out")}
                 else:
-                    ours = name.lower() in iso_names
+                    hashed, owned = iso_base, iso_names
                 # Named for this VM is not enough: a homonym behind the same NSG has the
-                # same legacy names — only a rule that applies to THIS NIC goes (L24). A
-                # rule of the VM's other NIC waits for that NIC's pass (it used to be
-                # marked seen here, and skipped there).
-                if ours and _deny_applies(r, t.get("private_ips") or None):
+                # same legacy names — only a rule that applies to THIS NIC goes (L24),
+                # unless its name carries this NIC's hash (_nic_owns). A rule of the VM's
+                # other NIC waits for that NIC's pass (it used to be marked seen here,
+                # and skipped there).
+                if _nic_owns(r, {hashed, f"{hashed}-out"}, owned, t.get("private_ips") or None):
                     seen.add((nsg_key, name.lower()))
                     to_delete.append((t["nsg_rg"], t["nsg_name"], name))
                 elif m is None and name.startswith("glorfindel-block-"):
@@ -2490,18 +2514,57 @@ class AzureConnector(CloudConnector):
         # rules present and the threat not let through. A re-block can leave an earlier,
         # bypassed placement next to a sound one: all of them used to have to hold, and
         # the sound block read as bypassed (L24, blocks in the invariant machine).
+        # Against the NICs as they are NOW: a NIC whose IP changed since the block was
+        # checked against the old one and read as blocked — the new address open (L26).
         if entry and entry.get("placements"):
             port = entry.get("threat_port")
+            # Unreadable NICs: a missing rule still fails the check; a block that looks
+            # whole can't be confirmed against addresses that weren't read.
+            current: dict | None = None
+            targets: dict = {}
+            nics_unread = ""
+            try:
+                targets = {t0["nic_id"].rstrip("/").lower(): t0
+                           for t0 in self._get_vm_nic_targets(rg, vm_name, allow_no_nsg=True)}
+                current = {n: t0.get("private_ips") or [] for n, t0 in targets.items()}
+            except Exception as exc:
+                nics_unread = _first_line(exc)[:_ERR_MAX]
             groups: dict = {}
             for p in entry["placements"]:
-                groups.setdefault(p.get("nic_id") or tuple(p.get("ips") or []), []).append(p)
+                nic = (p.get("nic_id") or "").rstrip("/").lower()
+                if current is not None and nic and nic not in current:
+                    continue                         # no longer one of the VM's NICs
+                groups.setdefault(nic or tuple(p.get("ips") or []), []).append(p)
             missing, unread, bypass, exposure, unknown = [], [], [], [], []
+            if current is not None and any(p.get("nic_id") for p in entry["placements"]):
+                missing += [n.rsplit("/", 1)[-1] for n in current if n not in groups]   # a NIC added since
             cache: dict = {}
-            for ps in groups.values():
+            for nic, ps in groups.items():
+                # Only an NSG that governs the NIC NOW blocks anything: in quarantine, the
+                # NIC's own NSG — where the block lies — is off it until the release. The
+                # quarantine then blocks everything, as long as it is intact; emptied, the
+                # attacker went through while the block's rules read as present (L26).
+                t0 = targets.get(nic) if isinstance(nic, str) else None
+                if t0 is not None:
+                    governing = {(v["nsg_rg"].lower(), v["nsg_name"].lower()) for v in self._nic_nsg_views(t0)}
+                    off = [p for p in ps if (p["nsg_rg"].lower(), p["nsg_name"].lower()) not in governing]
+                    ps = [p for p in ps if p not in off]
+                    if t0.get("quarantine"):
+                        q = self._quarantine_blocks(t0["quarantine"], ip, cache)
+                        if q == "blocks":
+                            continue
+                        if q == "unknown" and not ps:
+                            unread.append(f'{t0["nic_short"]}: {t0["quarantine"]["nsg_name"]}')
+                            continue
+                    if not ps:
+                        missing += [f'{p["rule"]} ({p["nsg_name"]} ne gouverne plus {t0["nic_short"]})' for p in off]
+                        continue
+                now = current.get(nic) if current is not None and isinstance(nic, str) else None
+                ips_of = {id(p): now if now is not None else (p.get("ips") or None) for p in ps}
                 nic_missing, nic_unread, nic_bypass, nic_unknown = [], [], [], []
                 for p in ps:
                     st, names = self._block_pair_state(cache, p["nsg_rg"], p["nsg_name"], p["rule"],
-                                                       ip, p.get("ips") or None)
+                                                       ip, ips_of[id(p)] or None)
                     if st in ("absent", "altered"):          # altered: put back like missing
                         nic_missing += names
                         continue
@@ -2510,8 +2573,8 @@ class AzureConnector(CloudConnector):
                         continue
                     found = self._shadowed_deny(
                         cache, p["nsg_rg"], p["nsg_name"], p["rule"],
-                        inbound_src=[ip], inbound_dst=p.get("ips") or None,
-                        outbound_src=p.get("ips") or None, outbound_dst=[ip], port=port)
+                        inbound_src=[ip], inbound_dst=ips_of[id(p)] or None,
+                        outbound_src=ips_of[id(p)] or None, outbound_dst=[ip], port=port)
                     if found is None:
                         nic_unknown.append(f'{p["nsg_rg"]}/{p["nsg_name"]}')
                     elif self._threat_open(found):
@@ -2537,6 +2600,9 @@ class AzureConnector(CloudConnector):
                         "error": "blocage non vérifiable : règles illisibles (" + ", ".join(unread) + ")"}
             if unknown:
                 return self._precedence_unknown(unknown, nics_covered=len(groups))
+            if nics_unread:
+                return {"verified": None, "method": "nsg_check",
+                        "error": f"blocage non vérifiable : cartes illisibles ({nics_unread})"}
             # Threat port blocked; other ports the attacker still reaches are reported.
             return {"verified": True, "method": "nsg_check", "nics_covered": len(groups),
                     **({"exposure": exposure} if exposure else {})}
@@ -2725,9 +2791,10 @@ class AzureConnector(CloudConnector):
                     failed.append(f'{t["nsg_rg"]}/{t["nsg_name"]} : règles illisibles, déblocage non vérifié')
                     continue
                 names = self._block_names_for_target(ip, vm_name, t)
+                base = self._placement_rule_base(self._block_rule_prefix(ip), vm_name, t["nic_short"], t["nic_id"])
                 for r in rules:
                     name = _rule_name(r)
-                    if name.lower() in names and _deny_applies(r, t.get("private_ips") or None):
+                    if _nic_owns(r, {base, f"{base}-out"}, names, t.get("private_ips") or None):
                         err = self._delete_rule(t["nsg_rg"], t["nsg_name"], name)
                         (failed if err else deleted).append(err or name)
         return deleted, failed
@@ -3209,6 +3276,21 @@ class AzureConnector(CloudConnector):
                 source_port_range="*", destination_port_ranges=[str(p) for p in ports],
                 description="Glorfindel — quarantine: investigation access (isolation.forensic_sources)")
         return wanted
+
+    def _quarantine_blocks(self, q: dict, ip: str, cache: dict) -> str:
+        """'blocks' | 'open' | 'unknown': does our quarantine NSG, intact, cut `ip` off
+        from the NIC? It denies everything but the operator's forensic sources."""
+        import ipaddress
+        try:
+            st, _ = self._quarantine_state(q, cache)
+            if st != "ok":
+                return "unknown" if st == "unknown" else "open"
+            addr = ipaddress.ip_address(ip)
+            if any(addr in ipaddress.ip_network(s, strict=False) for s in self._forensic_sources()):
+                return "open"
+            return "blocks"
+        except Exception:
+            return "unknown"
 
     def _quarantine_state(self, q: dict, cache: dict) -> tuple[str, list[str]]:
         """('ok' | 'altered' | 'unknown', what differs) — our quarantine NSG read by its

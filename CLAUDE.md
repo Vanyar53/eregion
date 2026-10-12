@@ -485,7 +485,7 @@ GLORFINDEL_DISCOVERY_RETENTION_H=8  # rétention d'une VM éteinte dans le regis
 ## Tests
 
 ```bash
-pytest                    # 754 tests (~20s ; 60 séquences d'invariants, 500 en CI ~1 min), 0 appel Azure, 0 appel LLM, 0 écriture ~/.glorfindel/
+pytest                    # 760 tests (~25s ; 60 séquences d'invariants, 500 en CI ~1 min), 0 appel Azure, 0 appel LLM, 0 écriture ~/.glorfindel/
                           # Hermétique par construction (conftest) : TOUS les chemins ~/.glorfindel redirigés
                           # vers tmp, et le glorfindel-config.yaml local ignoré (avant : avec une config locale,
                           # les tests de graphe lançaient de vraies requêtes KQL via `investigate`, suite 5× plus lente).
@@ -508,9 +508,10 @@ pytest tests/unit/test_invariants.py         # L24/L26 : invariants (Hypothesis,
                           # VM supprimée, tags, config illisible). 10 propriétés (I1–I10, docstring du fichier).
                           # GLORFINDEL_INVARIANT_EXAMPLES (défaut 60 ; push 500, nuit 10 000), _STEPS (30),
                           # _DB (base Hypothesis : rejoue les échecs mémorisés), _STATS=1 -s, _NO_SHRINK=1.
-pytest tests/unit/test_invariant_regressions.py  # séquences trouvées par la machine, figées (L26)
+pytest tests/unit/test_invariant_regressions.py  # séquences trouvées par la machine, figées (L26, L27)
+pytest tests/unit/test_locks.py               # L27 : _vm_lock / _quarantine_lock entre vrais processus (flock)
 python scripts/mutation_check.py [--examples 500 --rounds 2 --jobs 8]   # mesure des invariants par
-                          # mutation : 22 bugs réels réinjectés un par un ; chaque lundi (mutants.yml)
+                          # mutation : 25 bugs réels réinjectés un par un ; chaque lundi (mutants.yml)
 ```
 
 ---
@@ -626,7 +627,18 @@ wheel : eregion-0.2.0-py3-none-any.whl ✓
     - **Levée d'une carte redéployée** (NSG du client remis) dont l'original est inconnu (état et tags perdus, puis ré-isolation) : la levée demandait l'original avant de regarder la carte, et échouait pour toujours. Elle regarde d'abord si la carte porte encore notre NSG.
     - **Levée partielle puis nouvelle levée → NSG de quarantaine partagé vidé** (le plus grave, vu à 5 000 séquences) : une levée qui échoue en partie (subnet illisible) garde `placements: []` à côté des champs plats de rétro-compatibilité, qui nomment le NSG de quarantaine et ses deny. La levée suivante prenait cela pour un ancien état mono-NSG et supprimait ces deny : toutes les VMs en quarantaine dans le même groupe étaient rouvertes. Le chemin ancien ne sert plus qu'à un état sans clé `placements`, et ne touche jamais un NSG de quarantaine.
   - **CI** : push 500 séquences (~1 min) + rejeu de la base ; nuit 10 000 (Linux, macOS), base sauvegardée ; `mutants.yml` chaque lundi (1 000 séquences, 2 tours, rouge sous 14 attrapés).
-  - **Limites connues** : VM supprimée **et** état perdu → les règles qu'une isolation par règles a laissées sur un NSG partagé sont introuvables (seules les cartes disent quels NSG regarder) ; l'accès forensique ouvre ce que le NSG propre de la carte fermait (choix de l'opérateur, exempté de I1) ; aucune règle d'une version antérieure à L24 dans le faux (M02 n'y est donc pas observable).
+  - **Limites connues** (L26) : VM supprimée **et** état perdu → les règles qu'une isolation par règles a laissées sur un NSG partagé sont introuvables (seules les cartes disent quels NSG regarder) ; l'accès forensique ouvre ce que le NSG propre de la carte fermait (choix de l'opérateur, exempté de I1) ; aucune règle d'une version antérieure à L24 dans le faux (M02 n'y est donc pas observable).
+
+- **L27 (13/10) — deux écrivains à la fois, et les vrais verrous entre processus** :
+  - **Ordonnanceur dans la machine** (`_Scheduler`, `tests/unit/test_invariants.py`) : deux opérations (isoler, lever, bloquer, débloquer, réaffirmer, `reset --from-azure`) avancent un appel Azure (ou une écriture d'état) à la fois, dans un ordre tiré d'une graine, avec les **vrais** `_vm_lock` / `_quarantine_lock` — instrumentés pour que l'ordonnanceur sache qu'un fil attend un verrou. Règles `concurrently` (paires au hasard, surtout sur la même VM) et `race` (la VM isolée et bloquée, puis l'une des courses qui comptent : levée/réaffirmation, isolation/levée, deux levées, blocage/déblocage, déblocage/réaffirmation, levée/reset). Propriété **I11** : deux opérations à la fois finissent comme l'une après l'autre — l'état local dit ce qu'Azure a. M17 (verrou retiré) est attrapé à chaque tour.
+  - **Verrous entre processus** (`tests/unit/test_locks.py`) : quatre vrais processus sur le même verrou ne se chevauchent jamais (`_vm_lock` et `_quarantine_lock`), l'ID canonique et l'ID en minuscules prennent le même verrou, une tâche de fond renonce au bout de son délai. Sans `flock`, ces tests échouent (mesuré).
+  - **Trois défauts trouvés et corrigés** :
+    - **Déblocage aveugle derrière la quarantaine** : un blocage sur le NSG propre de la carte, la VM isolée par quarantaine, l'état du blocage perdu → `unblock_ip` ne regardait que les NSG sur la carte, répondait `not_found`, et l'IP était rebloquée à la levée. `_sweep_block` regarde aussi l'original (état, puis tag).
+    - **`reset --from-azure` lisait l'original dans le seul tag** : avec l'état en main et un tag remplacé, il s'arrêtait sur une inconnue qu'il connaissait. État d'abord, puis tag, comme la levée.
+    - **Reset partiel non marqué** : il supprimait des règles et gardait l'état tel quel → la réaffirmation y lisait « retiré hors de Glorfindel » et reposait ce que l'opérateur venait de retirer. L'état gardé porte maintenant `release_failed` / `unblock_failed` (laissé à l'opérateur).
+  - **Mesure au budget du push (500 séquences, 2 tours)** : 17 mutants sur 22 attrapés à chaque tour (M01 à M25, sans M02/M11 équivalents ni M14). M07 et M21 intermittents ; M22 à M24, trouvés à des milliers de séquences, sont attrapés à chaque push par leur séquence figée. Chasse : 11 200 séquences sans échec après les correctifs.
+  - **M14 reclassé** `MULTI-HOST` : la relecture après la levée ne sert que contre l'écriture d'un autre hôte (le verrou est par hôte) entre notre écriture et notre relecture ; couvert par `test_release_checks_the_original_came_back`.
+  - **Schémas** : `docs/architecture.md` (boucle, processus et état, graphe, gardes, vie d'une isolation, réaffirmation) et `docs/design/preuves.md` (couches de preuve, machine, ordonnanceur, mutation, défauts trouvés, cadence, limites) ; schémas de la quarantaine dans `docs/design/module-isolation-iac.md` ; README en Mermaid.
 
 ## Pitfalls opérateur
 

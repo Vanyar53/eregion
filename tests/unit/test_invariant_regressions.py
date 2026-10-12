@@ -105,3 +105,35 @@ def test_a_second_release_never_empties_the_shared_quarantine_nsg(monkeypatch):
          ("isolate", WEB1, WEB1, None),
          ("release", WEB1, WEB1, ("subnet.get", "always-429")),
          ("release", WEB1, WEB1, None))
+
+
+def test_an_unblock_in_quarantine_finds_the_block_behind_it(monkeypatch):
+    """A block on the NIC's own NSG, the VM isolated by quarantine, the block's state
+    lost (a crash before it was written): the unblock looked only at the NSGs on the
+    NIC, said `not_found`, and the IP was blocked again when the isolation was released."""
+    from glorfindel import actions
+    from .fake_azure import ATTACKER
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_net(quarantine=True, web_nic={"own": "dedicated"}))
+        m.block(Script(WEB1, WEB1, None, 22))
+        m.isolate(Script(WEB1, WEB1, None))
+        actions._clear_block_state(WEB1, ATTACKER)
+        m.unblock(Script(WEB1, WEB1, None))
+        m.customer_configuration_untouched()
+    finally:
+        m.teardown()
+
+
+def test_a_reset_reads_the_original_from_the_state_and_marks_what_it_left(monkeypatch):
+    """Blocked, isolated by quarantine, then the quarantine NSG's tags replaced. The
+    reset read the original NIC NSG from the tag only, stopped on it although the state
+    knew it, deleted the block's rules anyway and kept the block's state unmarked — the
+    reassertion would have put back what the operator had asked to remove."""
+    _run(monkeypatch, _net(quarantine=True, subnet_nsg=[]),
+         ("block", WEB1, WEB1, None, 22),
+         ("isolate", WEB1, WEB1, None),
+         ("tags_lost", "/subscriptions/s/resourcegroups/rg-app1/providers/microsoft.network/"
+                       "networksecuritygroups/nsg-glorfindel-quarantine-westeurope"),
+         ("reset_from_azure", WEB1, WEB1, None))

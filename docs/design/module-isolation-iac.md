@@ -150,6 +150,63 @@ Ce qui reste exposé avec le mécanisme par défaut :
 
 ## L4 — isolation JIT par NSG de quarantaine
 
+### En schémas
+
+Avant, pendant et après une isolation : la carte change de NSG, le NSG du client ne bouge pas.
+
+```mermaid
+flowchart LR
+    subgraph Before["Avant"]
+        N1["carte"] --> C1["NSG du client<br/>ses règles"]
+    end
+    subgraph During["Pendant l'isolation"]
+        N2["carte"] --> Q2["NSG de quarantaine<br/>deny entrant et sortant<br/>deny DNS et IMDS d'Azure"]
+        C2["NSG du client<br/>intact, détaché"]
+        Q2 -. "tag glorfindel-orig-…<br/>= id du NSG du client" .-> C2
+    end
+    subgraph After["Après la levée"]
+        N3["carte"] --> C3["NSG du client<br/>remis, relu"]
+    end
+    Before --> During --> After
+```
+
+L'isolation et la levée, appel par appel :
+
+```mermaid
+sequenceDiagram
+    participant G as Glorfindel
+    participant L as verrou de la VM
+    participant Q as NSG de quarantaine
+    participant N as carte
+    participant S as état local
+    G->>L: prendre
+    G->>Q: créer ou relire, règles comparées par contenu
+    G->>Q: tag de l'original, puis relire le tag
+    G->>N: échanger : NSG de quarantaine
+    alt échange refusé, politique ou droits
+        G->>N: repli : deny qui visent les IP de la carte
+    end
+    G->>S: écrire l'isolation et l'original
+    G->>N: couper les sessions ouvertes, Run Command
+    G->>L: rendre
+    Note over G,S: La levée, plus tard
+    G->>L: prendre
+    G->>S: noter releasing_at
+    G->>N: la carte porte-t-elle encore notre NSG ?
+    alt oui
+        G->>N: remettre l'original, puis relire la carte
+    else non, un redéploiement l'a déjà remis
+        G-->>G: rien à remettre
+    end
+    G->>N: balayer chaque carte, ce que l'état ignore aussi
+    G->>S: effacer l'état, ou le garder avec ce qui a échoué
+    G->>L: rendre
+```
+
+Si l'original est inconnu (état perdu **et** tag absent), la carte reste en quarantaine et la
+levée dit quel tag poser : jamais de carte laissée sans NSG.
+
+
 **Mesuré sur le banc le 06/10** (azurerm 4.81.0, pile Terraform jetable : réseau, NSG client, une NIC associée
 en code, une NIC sans NSG) :
 

@@ -266,7 +266,9 @@ def _shadowing_rules(
     for r in rules or []:
         name = getattr(r, "name", "") or ""
         prio = getattr(r, "priority", None)
-        if name.startswith("glorfindel-") or not isinstance(prio, int) or prio >= priority:
+        # Glorfindel never places an allow in a customer NSG: an allow named like ours is
+        # someone else's, and lets its traffic through like any other (sixth review, S2).
+        if not isinstance(prio, int) or prio >= priority:
             continue
         if _enum_text(getattr(r, "access", "")) != "allow":
             continue
@@ -365,8 +367,7 @@ def _deny_isolates(rule, direction: str, ips: list[str] | None) -> bool:
             or _enum_text(getattr(rule, "direction", "")) != direction
             or _enum_text(getattr(rule, "protocol", "*")) not in ("*", "any", "")):
         return False
-    ports = [getattr(rule, "destination_port_range", None)] + list(getattr(rule, "destination_port_ranges", None) or [])
-    if not any(str(p or "").strip().lower() in ("*", "any", "0-65535") for p in ports):
+    if not _covers_all_ports(rule):
         return False
     own, peer = ("destination", "source") if direction == "inbound" else ("source", "destination")
     if not _side_is_any(rule, peer):
@@ -392,10 +393,43 @@ def _rule_signature(rule) -> tuple:
             tuple(sorted({str(p).strip().lower() for p in ports if p})))
 
 
+# Our quarantine denies: deny-all at 100, Azure's DNS and IMDS at 110 / 111.
+_QUARANTINE_LAST_DENY = 111
+
+
+def _opens_quarantine(rule) -> bool:
+    """A rule in our quarantine NSG that could let traffic through: an allow evaluated
+    before our last deny. A deny, or an allow after them, changes nothing."""
+    prio = getattr(rule, "priority", None)
+    return (_enum_text(getattr(rule, "access", "")) == "allow"
+            and (not isinstance(prio, int) or prio <= _QUARANTINE_LAST_DENY))
+
+
 class OriginalUnknown(RuntimeError):
     """The NSG a NIC carried before its quarantine is not known: neither the state nor
     the quarantine NSG's tag says. The NIC stays in quarantine — putting "no NSG" back
     on a guess left NICs without their NSG (fourth review, Q7)."""
+
+
+def _covers_all_ports(rule) -> bool:
+    ports = [getattr(rule, "destination_port_range", None)] + list(getattr(rule, "destination_port_ranges", None) or [])
+    return any(str(p or "").strip().lower() in ("*", "any", "0-65535") for p in ports)
+
+
+def _deny_blocks(rule, direction: str, ip: str, ips: list[str] | None) -> bool:
+    """This rule is a block of `ip` for these addresses in `direction`: a deny, every
+    protocol and port, the attacker on its side, each of the NIC's addresses (any, for
+    a perimeter block) on the other. Checked by name only, a block turned into an
+    allow, or pointed at another address, passed (sixth review, S2)."""
+    if (_enum_text(getattr(rule, "access", "")) != "deny"
+            or _enum_text(getattr(rule, "direction", "")) != direction
+            or _enum_text(getattr(rule, "protocol", "*")) not in ("*", "any", "")
+            or not _covers_all_ports(rule)):
+        return False
+    attacker, own = ("source", "destination") if direction == "inbound" else ("destination", "source")
+    if not _side_covers(rule, attacker, [ip]):
+        return False
+    return all(_side_covers(rule, own, [a]) for a in ips) if ips else _side_is_any(rule, own)
 
 
 def warm_up_azure_sdk() -> None:
@@ -1126,13 +1160,19 @@ class AzureConnector(CloudConnector):
         of the NIC, puts the customer's NSG back (L5 notices). The original is recorded
         in state and, before the swap, as a tag on our NSG — Azure keeps the answer even
         if the local state is lost."""
-        q = self._ensure_quarantine_nsg(t.get("location"), default_rg)
         current = t.get("quarantine")
-        if current and _same_id(current["nsg_id"], q["nsg_id"]):
-            # Already in quarantine (a re-application): the state knows the original;
-            # the tag is the fallback. Neither says → unknown, never recorded as "none"
-            # (the placement then carries no original, and the release keeps the NIC in
-            # quarantine rather than guess).
+        # The NIC already carries one of Glorfindel's quarantine NSGs — whichever: a
+        # changed `quarantine_rg`, a config unreadable then read again, another region
+        # setting. It is a RE-application on THAT NSG. Taken for a first placement, the
+        # NIC's "own" NSG read as none, "none" was recorded, the old placement that knew
+        # the real original was replaced, and the release left the NIC without its NSG
+        # while verify_release said verified (sixth review, S1).
+        q = (self._ensure_quarantine_nsg(t.get("location"), default_rg, at=current) if current
+             else self._ensure_quarantine_nsg(t.get("location"), default_rg))
+        if current:
+            # The state knows the original; the tag is the fallback. Neither says →
+            # unknown, never recorded as "none" (the placement then carries no
+            # original, and the release keeps the NIC in quarantine rather than guess).
             original = _recorded_original(t["nic_id"])
             if original is _UNKNOWN:
                 try:
@@ -1144,7 +1184,11 @@ class AzureConnector(CloudConnector):
             # Recorded even when the NIC had no NSG: "none" said explicitly, so a tag
             # that is missing means unknown (Q7), not "put no NSG back".
             self._record_original(q, t["nic_id"], original)
-            self._set_nic_nsg(t["nic_id"], q["nsg_id"], expect=original or "")
+            # The swap only happens if the NIC still carries what was read: its return
+            # was ignored, and a NIC changed in between was reported isolated (S1).
+            if not self._set_nic_nsg(t["nic_id"], q["nsg_id"], expect=original or ""):
+                raise RuntimeError(f"{t['nic_short']} changed since it was read — quarantine NSG "
+                                   "not attached")
         return {
             "nic_id": t["nic_id"], "kind": "quarantine", "scope": "quarantine",
             "nsg_rg": q["nsg_rg"], "nsg_name": q["nsg_name"], "nsg_id": q["nsg_id"],
@@ -2456,13 +2500,13 @@ class AzureConnector(CloudConnector):
             for ps in groups.values():
                 nic_missing, nic_unread, nic_bypass, nic_unknown = [], [], [], []
                 for p in ps:
-                    states = {n: self._rule_state(p["nsg_rg"], p["nsg_name"], n)
-                              for n in (p["rule"], f'{p["rule"]}-out')}
-                    if "absent" in states.values():
-                        nic_missing += [n for n, st in states.items() if st == "absent"]
+                    st, names = self._block_pair_state(cache, p["nsg_rg"], p["nsg_name"], p["rule"],
+                                                       ip, p.get("ips") or None)
+                    if st in ("absent", "altered"):          # altered: put back like missing
+                        nic_missing += names
                         continue
-                    if "unknown" in states.values():
-                        nic_unread += [n for n, st in states.items() if st == "unknown"]
+                    if st == "unknown":
+                        nic_unread += names
                         continue
                     found = self._shadowed_deny(
                         cache, p["nsg_rg"], p["nsg_name"], p["rule"],
@@ -2500,12 +2544,10 @@ class AzureConnector(CloudConnector):
         # Perimeter (subnet) block, or legacy single-rule entry: check the recorded pair.
         if entry and entry.get("nsg") and entry.get("rule"):
             nsg_rg, nsg_name = entry["nsg"].split("/", 1)
-            pair = [entry["rule"], f'{entry["rule"]}-out']
-            states = {n: self._rule_state(nsg_rg, nsg_name, n) for n in pair}
-            missing = [n for n, st in states.items() if st == "absent"]
-            if not missing and any(st == "unknown" for st in states.values()):
-                return {"verified": None, "method": "nsg_check",
-                        "unreadable_rules": [n for n, st in states.items() if st == "unknown"],
+            st, names = self._block_pair_state({}, nsg_rg, nsg_name, entry["rule"], ip, None)
+            missing = names if st in ("absent", "altered") else []
+            if st == "unknown":
+                return {"verified": None, "method": "nsg_check", "unreadable_rules": names,
                         "error": "blocage non vérifiable : règles illisibles"}
             if not missing:
                 # A perimeter block has no destination scope: any VM behind the NSG.
@@ -2551,6 +2593,22 @@ class AzureConnector(CloudConnector):
         if unknown:
             return self._precedence_unknown(unknown, nics_covered=len(targets))
         return {"verified": True, "method": "nsg_check", "nics_covered": len(targets)}
+
+    def _block_pair_state(self, cache: dict, nsg_rg: str, nsg_name: str, rule: str, ip: str,
+                          ips: list[str] | None) -> tuple[str, list[str]]:
+        """('present' | 'absent' | 'altered' | 'unknown', rule names concerned) for a
+        block's rule pair, read from the NSG's listing by content (S2)."""
+        names = [rule, f"{rule}-out"]
+        rules = self._list_rules(cache, nsg_rg, nsg_name)
+        if rules is None:
+            return "unknown", names
+        by_name = {_rule_name(r).lower(): r for r in rules}
+        found = [by_name.get(n.lower()) for n in names]
+        missing = [n for n, r in zip(names, found) if r is None]
+        if missing:
+            return "absent", missing
+        altered = [n for n, r, d in zip(names, found, ("inbound", "outbound")) if not _deny_blocks(r, d, ip, ips)]
+        return ("altered", altered) if altered else ("present", [])
 
     @staticmethod
     def _threat_open(shadowed: list[dict]) -> bool:
@@ -3065,23 +3123,26 @@ class AzureConnector(CloudConnector):
         by default; GLORFINDEL_QUARANTINE_NSG=0 turns it off."""
         if os.environ.get("GLORFINDEL_QUARANTINE_NSG", "").strip() in ("0", "false", "no"):
             return False, ""
-        try:
-            from glorfindel.config import load_glorfindel_config
-            iso = load_glorfindel_config().isolation
-            return bool(iso.quarantine_nsg), iso.quarantine_rg or ""
-        except Exception:
-            return True, ""
+        # An unreadable config RAISES (ConfigError): the defaults used to stand in for
+        # it — another quarantine group, `quarantine_nsg: false` ignored — and a
+        # re-isolation then recorded "no NSG" as the NIC's original (sixth review, S1).
+        from glorfindel.config import load_glorfindel_config
+        iso = load_glorfindel_config().isolation
+        return bool(iso.quarantine_nsg), iso.quarantine_rg or ""
 
-    def _ensure_quarantine_nsg(self, location: str, default_rg: str) -> dict:
+    def _ensure_quarantine_nsg(self, location: str, default_rg: str, at: dict | None = None) -> dict:
         """Get or create Glorfindel's quarantine NSG for this region: deny-all in and
         out at priority 100, deny to Azure's DNS and IMDS (not filtered otherwise), and
         the operator's forensic sources allowed in (`isolation.forensic_sources`), placed
         before the deny. One per region (a NIC only takes an NSG of its own region and
         subscription), created on first need; an older one gets the missing rules."""
         from azure.mgmt.network.models import NetworkSecurityGroup
-        _, cfg_rg = self._quarantine_settings()
-        q_rg = cfg_rg or default_rg
-        name = f"{QUARANTINE_NSG_PREFIX}-{(location or 'unknown').lower()}"
+        if at:                                  # the quarantine NSG a NIC already carries
+            q_rg, name = at["nsg_rg"], at["nsg_name"]
+        else:
+            _, cfg_rg = self._quarantine_settings()
+            q_rg = cfg_rg or default_rg
+            name = f"{QUARANTINE_NSG_PREFIX}-{(location or 'unknown').lower()}"
         wanted = self._quarantine_wanted()
         # One creator at a time (Q7): two isolations in the region both read "not found"
         # and both created it — the second creation rewrote the tags, erasing the
@@ -3109,10 +3170,13 @@ class AzureConnector(CloudConnector):
             # forensic sources changed in the config: put it back as it must be.
             if current is None or _rule_signature(current) != _rule_signature(rule):
                 self._network.security_rules.begin_create_or_update(q_rg, name, rule_name, rule).result()
-        # Our NSG holds our rules only: anything else (an allow added by hand, a rule the
-        # config no longer wants) would be evaluated in every quarantine of the region.
+        # A rule that isn't ours goes only if it could let traffic through before our
+        # denies — an allow ahead of them (an allow added by hand, the forensic rule the
+        # config no longer wants). A policy's deny (DINE / Modify) is left alone: removed
+        # at every isolation, put back by the policy, it read as "removed a second time"
+        # (sixth review, S6).
         for low, current in rules.items():
-            if low not in {w.lower() for w in wanted}:
+            if low not in {w.lower() for w in wanted} and _opens_quarantine(current):
                 self._network.security_rules.begin_delete(q_rg, name, _rule_name(current)).result()
         return {"nsg_rg": q_rg, "nsg_name": name, "nsg_id": nsg.id}
 
@@ -3156,23 +3220,19 @@ class AzureConnector(CloudConnector):
         wanted = self._quarantine_wanted()
         diff = [n for n, w in wanted.items()
                 if n.lower() not in by_name or _rule_signature(by_name[n.lower()]) != _rule_signature(w)]
-        diff += [_rule_name(r) for low, r in by_name.items() if low not in {w.lower() for w in wanted}]
+        diff += [_rule_name(r) for low, r in by_name.items()
+                 if low not in {w.lower() for w in wanted} and _opens_quarantine(r)]
         return ("altered" if diff else "ok"), diff
 
     def _forensic_sources(self) -> list[str]:
-        """isolation.forensic_sources as validate_forensic_sources keeps them (Q5)."""
-        try:
-            from glorfindel.config import load_glorfindel_config, validate_forensic_sources
-            return validate_forensic_sources(load_glorfindel_config().isolation.forensic_sources)[0]
-        except Exception:
-            return []
+        """isolation.forensic_sources as validate_forensic_sources keeps them (Q5). An
+        unreadable config raises (S1) — no source is guessed."""
+        from glorfindel.config import load_glorfindel_config, validate_forensic_sources
+        return validate_forensic_sources(load_glorfindel_config().isolation.forensic_sources)[0]
 
     def _forensic_ports(self) -> list[int]:
-        try:
-            from glorfindel.config import load_glorfindel_config
-            return list(load_glorfindel_config().isolation.forensic_ports)
-        except Exception:
-            return [22, 3389]
+        from glorfindel.config import load_glorfindel_config
+        return list(load_glorfindel_config().isolation.forensic_ports)
 
     def _set_nic_nsg(self, nic_id: str, nsg_id: str | None, expect: str | None = None) -> bool:
         """Attach `nsg_id` to the NIC (None: detach). With `expect`, only when the NIC
@@ -3597,7 +3657,12 @@ def migrate_state_files() -> int:
                 f.unlink()
                 changed += 1
             for other in _hash_variants(directory, rid) + [directory / f"{name}.json"]:
-                if other.exists() and other.name != target.name and not _same_file(other, target):
+                # Only a file that IS this VM's: the plain `<name>.json` of a homonym in
+                # another group was deleted here, its isolation gone from the list, the
+                # reassertion, the TTL and the War Room (sixth review, S3). A legacy file
+                # without a recorded id stays: whose it is can't be told.
+                if (other.exists() and other.name != target.name and not _same_file(other, target)
+                        and _file_rid(other) == rid):
                     other.unlink()
                     changed += 1
     return changed

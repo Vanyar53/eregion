@@ -640,7 +640,7 @@ The audit also checks **NSG precedence**: NSG rules apply the first match by asc
 ```bash
 pip install eregion[dev]
 pytest
-# 734 tests (~20s) — 0 Azure calls, 0 LLM calls, 0 writes to ~/.glorfindel
+# 745 tests (~20s) — 0 Azure calls, 0 LLM calls, 0 writes to ~/.glorfindel
 GLORFINDEL_INVARIANT_EXAMPLES=5000 pytest tests/unit/test_invariants.py   # deep run (~3 min)
 ```
 

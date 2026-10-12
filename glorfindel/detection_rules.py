@@ -4,6 +4,7 @@ import json
 import logging
 import re
 import threading
+import weakref
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -566,6 +567,11 @@ class RulePoller:
     dispatched once, flagged `unattributed`.
     """
 
+    # Every poller alive, so the tests can stop their threads before the redirected
+    # status file is put back: one outlived its test and wrote the operator's real
+    # ~/.glorfindel/rule_status.json (sixth review, S5).
+    _live: "weakref.WeakSet[RulePoller]" = weakref.WeakSet()
+
     def __init__(
         self,
         rules: list[DetectionRule],
@@ -573,6 +579,7 @@ class RulePoller:
         dry_run: bool = False,
         ip_owners: Callable[[], dict] | None = None,
     ) -> None:
+        RulePoller._live.add(self)
         self._rules = rules
         self._dispatch = dispatch
         self._dry_run = dry_run
@@ -617,8 +624,11 @@ class RulePoller:
         self._threads[key] = t
         t.start()
 
-    def stop(self) -> None:
+    def stop(self, join_s: float = 0.0) -> None:
         self._stop.set()
+        for t in list(self._threads.values()):
+            if join_s and t.is_alive() and t is not threading.current_thread():
+                t.join(join_s)
 
     def _loop(self, rule: DetectionRule) -> None:
         while not self._stop.is_set():

@@ -1390,13 +1390,22 @@ def _do_reset_from_azure(resource_id: str, yes: bool, dry_run: bool) -> None:
     connector = AzureConnector(dry_run=False)
     preview = connector.sweep_vm_rules(resource_id, dry_run=True)
     console.rule(f"[bold yellow]Reset (source : Azure) — {vm_short}[/bold yellow]")
-    if not preview["deleted"]:
+    # What the preview could not settle comes first: an original NSG nobody knows (the
+    # NIC stays in quarantine, the message says which tag to set), a subnet or a rule
+    # list unreadable. It said "nothing to do" and exited 0 (sixth review, S4).
+    if preview["failed"]:
+        console.print(f"[red]✗ Impossible de tout établir pour {vm_short} :[/red]")
+        for item in preview["failed"]:
+            console.print(f"  • {item}")
+    elif not preview["deleted"]:
         console.print(f"[green]Aucune règle Glorfindel de {vm_short} sur ses NSG.[/green]")
     for name in preview["deleted"]:
         console.print(f"  • supprimer {name}")
     for name in preview["kept_perimeter"]:
         console.print(f"  [dim]• conservée (blocage de périmètre, toutes les VMs) : {name}[/dim]")
     if dry_run or not preview["deleted"]:
+        if preview["failed"]:
+            sys.exit(2)
         return
     if not yes:
         click.confirm("\nProceed?", abort=True)

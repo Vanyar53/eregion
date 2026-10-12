@@ -1416,7 +1416,10 @@ def test_release_isolation_without_state_sweeps_every_nic(monkeypatch):
     # fixed legacy names only on the NSG that governs this VM alone
     assert ("nsg-a", "glorfindel-isolation-deny-all") in deleted
     assert ("nsg-b", "glorfindel-isolation-deny-all") not in deleted
-    assert out["status"] == "released"
+    # ...but the one left there still cuts this VM off, and no old state names it:
+    # whose it is can't be told — said, not "released" (A0).
+    assert out["status"] == "release_partial"
+    assert any("glorfindel-isolation-deny-all" in f and "ancienne version" in f for f in out["failed"]), out
 
 
 def test_release_never_deletes_a_homonyms_rule_of_the_same_name(monkeypatch):
@@ -3320,6 +3323,30 @@ def test_an_allow_named_like_ours_counts_as_a_bypass():
     assert [f["rule"] for f in found] == ["glorfindel-sneaky"]
 
 
+def test_each_direction_is_judged_against_its_own_deny():
+    """Denies in place: the outbound one moved to 4000 by hand, behind an allow-all out at
+    1200 — the inbound deny's priority (100) was used for both directions (A0)."""
+    from glorfindel.actions import _shadowing_rules
+    out_all = _nsg_rule("allow-all-out", 1200, direction="Outbound", port="*")
+    scope = dict(inbound_src=None, inbound_dst=["10.0.0.5"], outbound_src=["10.0.0.5"], outbound_dst=None)
+    assert _shadowing_rules([out_all], 100, **scope) == []                       # about to be placed at 100
+    found = _shadowing_rules([out_all], {"inbound": 100, "outbound": 4000}, **scope)
+    assert [f["rule"] for f in found] == ["allow-all-out"]
+
+
+def test_an_outbound_allow_before_a_block_lets_the_threat_through():
+    """The threat port only grades INBOUND allows (an `allow-https` on a web server is
+    exposure, not a bypass of an SSH block). Outbound, the VM still reaches the attacker
+    on any port — a reverse shell: a bypass, it was counted as exposure (A0)."""
+    from glorfindel.actions import _shadowing_rules
+    rules = [_nsg_rule("allow-all-out", 120, direction="Outbound", port="*"),
+             _nsg_rule("allow-https", 110, port="443")]
+    found = {f["rule"]: f["threat_port_open"] for f in _shadowing_rules(
+        rules, 200, inbound_src=["192.31.196.7"], inbound_dst=["10.0.0.5"],
+        outbound_src=["10.0.0.5"], outbound_dst=["192.31.196.7"], port=22)}
+    assert found == {"allow-all-out": True, "allow-https": False}
+
+
 def test_migration_never_deletes_a_homonyms_legacy_state():
     """The plain `web.json` of a VM `web` in ANOTHER group was deleted as soon as its
     homonym had a keyed file (sixth review, S3)."""
@@ -3334,6 +3361,27 @@ def test_migration_never_deletes_a_homonyms_legacy_state():
     actions.migrate_state_files()
     assert actions._load_isolation_state(rid_b) is not None
     assert actions._load_isolation_state(rid_a) is not None
+
+
+def test_an_old_state_file_is_moved_before_it_is_rewritten(monkeypatch):
+    """A crash between writing the keyed file and removing the old `<name>.json` left
+    two: a lookup by name read the old one. Moved first (one rename), then rewritten —
+    one file at any instant (A0)."""
+    import json
+    import glorfindel.actions as actions
+    d = actions._ISOLATION_STATE_DIR
+    d.mkdir(parents=True, exist_ok=True)
+    rid = "/subscriptions/s/resourceGroups/rg-a/providers/Microsoft.Compute/virtualMachines/api"
+    (d / "api.json").write_text(json.dumps({"resource_id": rid, "nsg_name": "nsg-api", "rule_names": ["x"]}))
+
+    def crash(path, text):
+        raise OSError(28, "No space left on device")
+    monkeypatch.setattr(actions, "_atomic_write_text", crash)
+    with pytest.raises(OSError):
+        actions._save_isolation_state(rid, {"resource_id": rid, "placements": []})
+    files = [f for f in d.glob("*.json") if actions._file_rid(f) == rid.lower()]
+    assert len(files) == 1 and files[0].name != "api.json", files
+    assert actions._load_isolation_state("api")["rule_names"] == ["x"]     # the old content, by name too
 
 
 def test_a_policy_deny_in_our_quarantine_nsg_is_left_alone(monkeypatch):

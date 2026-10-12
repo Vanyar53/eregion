@@ -5,10 +5,11 @@ order it makes them — `_draw` takes the VM, the id it is reached with, the fau
 from __future__ import annotations
 
 from .fake_azure import key
-from .test_invariants import IsolationMachine, invariant_env
+from .test_invariants import IsolationMachine, _rule, invariant_env
 
 WEB1 = "/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/web"
 WEB2 = "/subscriptions/s/resourceGroups/rg-app2/providers/Microsoft.Compute/virtualMachines/web"
+API = "/subscriptions/s/resourceGroups/rg-edge/providers/Microsoft.Compute/virtualMachines/api"
 DB = "/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/Db--01"
 
 
@@ -26,13 +27,14 @@ class Script:
         return self.values.pop(0)
 
 
-def _net(quarantine=False, subnet_nsg=None, quarantine_rg="", **nics):
+def _net(quarantine=False, subnet_nsg=None, quarantine_rg="", tier_rules=(), legacy=None, **nics):
     plain = {"own": None, "rules": [], "policy": False}
-    return {"subnet_nsg": subnet_nsg, "edge_nsg": None, "tier_rules": [],
+    return {"subnet_nsg": subnet_nsg, "edge_nsg": None, "tier_rules": list(tier_rules),
             "nics": {n: {**plain, **nics.get(n.replace("-", "_"), {})}
                      for n in ("web-nic", "db-nic-0", "db-nic-1", "api-nic")},
             "windows": None,
-            "config": {"quarantine": quarantine, "rg": quarantine_rg, "forensic": [], "readable": True}}
+            "config": {"quarantine": quarantine, "rg": quarantine_rg, "forensic": [], "readable": True},
+            "legacy": legacy}
 
 
 def _run(monkeypatch, net, *steps):
@@ -55,7 +57,7 @@ def test_the_old_ip_rule_goes_with_a_stateless_release(monkeypatch):
     skipped it — `released`, and the rule waited for whoever got the old IP."""
     _run(monkeypatch, _net(web_nic={"own": "dedicated"}),
          ("isolate", WEB1, WEB1, None),
-         ("customer_changes_ip", _nic("rg-app1", "web-nic"), 0),
+         ("customer_changes_ip", _nic("rg-app1", "web-nic"), 0, 20),
          ("lose_state", WEB1),
          ("release", WEB1, WEB1, None))
 
@@ -65,7 +67,7 @@ def test_a_block_is_checked_against_the_nic_as_it_is_now(monkeypatch):
     rules with the IPs recorded at block time and said blocked — the new address open."""
     _run(monkeypatch, _net(subnet_nsg=[]),
          ("block", DB, DB, None, 22),
-         ("customer_changes_ip", _nic("rg-app1", "db-nic-0"), 0),
+         ("customer_changes_ip", _nic("rg-app1", "db-nic-0"), 0, 20),
          ("verify", DB, DB, None))
 
 
@@ -183,10 +185,10 @@ def test_a_deleted_vms_block_on_a_reused_ip_is_reported(monkeypatch):
     m = IsolationMachine()
     try:
         m.build(_net(subnet_nsg=[]))
-        m.customer_changes_ip(Script(_nic("rg-app1", "web-nic"), 0))
+        m.customer_changes_ip(Script(_nic("rg-app1", "web-nic"), 0, 20))
         m.block(Script(WEB1, WEB1, None, 22))
         m.delete_vm(Script(WEB1))
-        m.customer_changes_ip(Script(_nic("rg-app2", "web-nic"), 0))
+        m.customer_changes_ip(Script(_nic("rg-app2", "web-nic"), 0, 20))
         m.unblock(Script(WEB2, WEB2, None))
         m.orphans_are_reported()
         orphans = m.connector.find_orphan_rules()
@@ -205,3 +207,117 @@ def test_a_bare_nic_isolated_again_keeps_its_recorded_original(monkeypatch):
          ("someone_detaches_the_quarantine", _nic("rg-app1", "web-nic")),
          ("isolate", WEB1, WEB1, None),
          ("release", WEB1, WEB1, None))
+
+
+def _moved_behind_a_customer_allow(monkeypatch, net, act, prefix):
+    """Act, then move Glorfindel's OUTBOUND deny to 4000, behind a customer allow at
+    1200: each direction must be judged against its own deny (A0)."""
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(net)
+        act(m)
+        (nsg, name), = [(k, n) for k, g in m.fake.nsgs.items() for n in g["rules"]
+                        if n.startswith(prefix) and n.endswith("-out")]
+        m.tamper_with_our_rule(Script("priority", (nsg, name)))   # claims checked after
+        m.never_more_open_than_designed()
+    finally:
+        m.teardown()
+
+
+def test_an_isolation_moved_behind_a_customer_allow_is_bypassed(monkeypatch):
+    """The outbound isolation deny moved to 4000 by hand, the tier NSG allowing the
+    VNet out at 1200: verify_isolation used the INBOUND deny's priority (100) for both
+    directions and said isolated — lateral movement open."""
+    lateral = _rule("allow-lateral-out", 1200, dict(
+        access="Allow", direction="Outbound", source_address_prefix="*",
+        destination_address_prefix="VirtualNetwork", destination_port_range="*"))
+    _moved_behind_a_customer_allow(
+        monkeypatch, _net(tier_rules=[lateral], web_nic={"own": "tier"}),
+        lambda m: m.isolate(Script(WEB1, WEB1, None)), "glorfindel-iso-")
+
+
+def test_a_block_moved_behind_a_customer_allow_is_bypassed(monkeypatch):
+    """Same for a block: its outbound deny moved behind an allow-all out."""
+    out_all = _rule("allow-all-out", 1200, dict(
+        access="Allow", direction="Outbound", source_address_prefix="*",
+        destination_address_prefix="*", destination_port_range="*"))
+    _moved_behind_a_customer_allow(
+        monkeypatch, _net(web_nic={"own": "dedicated", "rules": [out_all]}),
+        lambda m: m.block(Script(WEB1, WEB1, None, 22)), "glorfindel-block-")
+
+
+def test_an_isolation_undone_by_another_host_is_not_reported_isolated(monkeypatch):
+    """Another host puts the NIC back right after the quarantine swap: nothing read the
+    NIC back, and isolate_vm said isolated on a NIC carrying no NSG at all (A0, M30)."""
+    _run(monkeypatch, _net(quarantine=True),
+         ("another_host_writes", WEB1, WEB1, None, "after-foreign", False))
+
+
+def test_a_release_undone_by_another_host_is_not_reported_released(monkeypatch):
+    """Another host keeps putting the quarantine back during the release: only the
+    read-back after the write tells (A0, M14 — the sweep re-reads too, once)."""
+    _run(monkeypatch, _net(quarantine=True),
+         ("another_host_writes", WEB1, WEB1, None, "always-foreign", True))
+
+
+def _legacy_world(monkeypatch, legacy, *steps, check):
+    """An older version's isolation in the world, steps, then the claims of `check`."""
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_net(legacy=legacy, web_nic={"own": "dedicated"}, api_nic={"own": "dedicated"}))
+        for rule, *draws in steps:
+            getattr(m, rule)(Script(*draws))
+        check(m)
+    finally:
+        m.teardown()
+
+
+_NEW_VM_ON = "/subscriptions/s/resourceGroups/{rg}/providers/Microsoft.Network/networkSecurityGroups/nsg-{nic}"
+
+
+def test_an_old_isolation_is_not_released_when_its_nsg_cant_be_read(monkeypatch):
+    """Old fixed names, state lost, and the NSG's associations unreadable: placed as
+    shared, the fixed names didn't count — verify_release said released, the VM still
+    cut off by the old deny any/any (A0)."""
+    _legacy_world(monkeypatch, ("api-nic", False),
+                  check=lambda m: m._check_claims(API, API, ("nsg.get", "always-429")))
+
+
+def test_an_old_isolation_on_an_nsg_shared_since_is_not_released(monkeypatch):
+    """Same, the NSG now shared with a new VM: whose the old deny is can't be told —
+    not "released" while it cuts the VM off (A0)."""
+    _legacy_world(monkeypatch, ("web-nic", False),
+                  ("create_vm", "westeurope", "rg-app1", "api", _NEW_VM_ON.format(rg="rg-app1", nic="web-nic"), "Linux"),
+                  check=lambda m: m._check_claims(WEB1, WEB1))
+
+
+def test_an_old_state_names_its_rules_for_the_verification_too(monkeypatch):
+    """The old single-NSG state kept, the NSG shared since: the release deletes the
+    recorded rules, verify_release ignored the record and said released (A0)."""
+    _legacy_world(monkeypatch, ("api-nic", True),
+                  ("create_vm", "northeurope", "rg-new", "web", _NEW_VM_ON.format(rg="rg-edge", nic="api-nic"), "Linux"),
+                  check=lambda m: m._check_claims(API, API))
+
+
+def test_an_interrupted_reset_is_a_release_under_way(monkeypatch):
+    """`reset --from-azure` cut off before any write, then the old outbound deny narrowed
+    by hand: with no marker of the reset's intent, the reassertion put the isolation
+    back under new names, mid-release (A0, I9)."""
+    nsg = "/subscriptions/s/resourcegroups/rg-edge/providers/microsoft.network/networksecuritygroups/nsg-api-nic"
+    _legacy_world(monkeypatch, ("api-nic", True),
+                  ("reset_from_azure", API, API, (2, "before-crash")),
+                  ("tamper_with_our_rule", "source", (nsg, "glorfindel-isolation-deny-all-out")),
+                  ("reassert", "non_disruptive", None),
+                  check=lambda m: None)
+
+
+def test_a_reset_with_unreadable_sharing_doesnt_skip_an_old_isolation(monkeypatch):
+    """`reset --from-azure` on an older version's isolation, the NSG's associations
+    unreadable: placed as shared, the fixed names didn't count — "swept", the VM still
+    cut off (state lost); state kept, its record was ignored and cleared (A0)."""
+    for keep in (False, True):
+        _legacy_world(monkeypatch, ("api-nic", keep),
+                      ("reset_from_azure", API, API, ("nsg.get", "always-429")),
+                      check=lambda m: None)

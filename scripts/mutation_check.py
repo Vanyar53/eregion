@@ -29,6 +29,8 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 A = "glorfindel/actions.py"
+R = "glorfindel/reassert.py"
+C = "glorfindel/config.py"
 
 # (id, bug class, file, text in the code today, text that re-introduces the bug[, why
 # the invariants can't see it])
@@ -132,6 +134,65 @@ MUTANTS = [
 ]
 
 
+# The auditor's control set (seventh review): plausible bugs the generation was never
+# shaped on. They only MEASURE whether the invariants generalise — never tailor a
+# composite rule or a world event to one of them. Run with --control.
+CONTROL = [
+    ("C01", "unreadable config => quarantine off", A,
+     "        from glorfindel.config import load_glorfindel_config\n        iso = load_glorfindel_config().isolation\n",
+     "        from glorfindel.config import load_glorfindel_config, ConfigError\n        try:\n            iso = load_glorfindel_config().isolation\n"
+     "        except ConfigError:\n            return False, \"\"\n"),
+    ("C02", "unreadable ownership tag => not ours", A,
+     "            return tags.get(\"managed-by\") == \"glorfindel\"\n        except Exception:\n            return True",
+     "            return tags.get(\"managed-by\") == \"glorfindel\"\n        except Exception:\n            return False"),
+    ("C03", "isolation deny without the peer-side check", A,
+     "    if not _side_is_any(rule, peer):\n        return False\n",
+     ""),
+    ("C04", "quarantine content without the DNS/IMDS denies", A,
+     "        for rule_name, priority, tag in QUARANTINE_PLATFORM_RULES:",
+     "        for rule_name, priority, tag in ():"),
+    ("C05", "a stale forensic allow never purged", A,
+     "            if low not in {w.lower() for w in wanted} and _opens_quarantine(current):",
+     "            if low not in {w.lower() for w in wanted} and _opens_quarantine(current) and low != QUARANTINE_FORENSIC_RULE:"),
+    ("C06", "block: one address of the NIC is enough", A,
+     "    return all(_side_covers(rule, own, [a]) for a in ips) if ips else _side_is_any(rule, own)",
+     "    return any(_side_covers(rule, own, [a]) for a in ips) if ips else _side_is_any(rule, own)"),
+    ("C07", "stateless release doesn't re-read the NICs", A,
+     "        if restored:\n",
+     "        if False:\n"),
+    ("C08", "no foreign rule counts as an alteration", A,
+     "                 if low not in {w.lower() for w in wanted} and _opens_quarantine(r)]",
+     "                 if False]"),
+    ("C09", "the release doesn't write its marker", A,
+     "            _save_isolation_state(resource_id, {**state, \"releasing_at\": datetime.now(timezone.utc).isoformat()})",
+     "            pass"),
+    ("C10", "the reassertion never puts a missing block back", R,
+     "    if b.get(\"reasserted_at\") or _mode(autonomy, vm, ref) == \"human_only\":",
+     "    if True:"),
+    ("C11", "a block doesn't check the access (an allow passes)", A,
+     "    if (_enum_text(getattr(rule, \"access\", \"\")) != \"deny\"\n            or _enum_text(getattr(rule, \"direction\", \"\")) != direction\n"
+     "            or _enum_text(getattr(rule, \"protocol\", \"*\")) not in (\"*\", \"any\", \"\")\n            or not _covers_all_ports(rule)):\n        return False\n    attacker, own",
+     "    if (_enum_text(getattr(rule, \"direction\", \"\")) != direction\n"
+     "            or _enum_text(getattr(rule, \"protocol\", \"*\")) not in (\"*\", \"any\", \"\")\n            or not _covers_all_ports(rule)):\n        return False\n    attacker, own"),
+    ("C12", "forensic exception dropped from the quarantine-as-block", A,
+     "            if any(addr in ipaddress.ip_network(s, strict=False) for s in self._forensic_sources()):",
+     "            if False:"),
+    ("C13", "a /16 forensic source accepted", C,
+     "_FORENSIC_MAX_ADDRESSES = 256",
+     "_FORENSIC_MAX_ADDRESSES = 65536"),
+    ("C14", "subscription guard removed from the release", A,
+     "for _name in (\"isolate_vm\", \"release_isolation\", \"verify_isolation\", \"verify_release\",",
+     "for _name in (\"isolate_vm\", \"verify_isolation\", \"verify_release\","),
+    ("C15", "reassertion over a stale marker", R,
+     "    if _held_by_an_operation(iso, \"release_failed\", \"releasing_at\"):\n        return",
+     "    if _held_by_an_operation(iso, \"release_failed\", \"releasing_at\") and not _stale(iso.get(\"releasing_at\")):\n        return"),
+    ("C16", "precedence ignores glorfindel-* allows", A,
+     "        if _enum_text(getattr(r, \"access\", \"\")) != \"allow\":\n            continue\n        direction = _enum_text(getattr(r, \"direction\", \"\"))",
+     "        if _enum_text(getattr(r, \"access\", \"\")) != \"allow\":\n            continue\n        if name.startswith(\"glorfindel-\"):\n            continue\n"
+     "        direction = _enum_text(getattr(r, \"direction\", \"\"))"),
+]
+
+
 def _copy_repo(dest: Path) -> None:
     files = subprocess.run(["git", "ls-files"], cwd=REPO, capture_output=True, text=True, check=True).stdout.split()
     for rel in files:
@@ -141,12 +202,12 @@ def _copy_repo(dest: Path) -> None:
             shutil.copy2(src, dest / rel)
 
 
-def _run(copy: Path, examples: int, show: bool = False) -> bool:
-    """True if the invariant suite FAILS on this copy (the mutant is caught)."""
+def _run(copy: Path, examples: int, show: bool = False, target: str = "tests/unit/test_invariants.py") -> bool:
+    """True if `target` FAILS on this copy (the mutant is caught)."""
     env = {**os.environ, "GLORFINDEL_INVARIANT_EXAMPLES": str(examples), "GLORFINDEL_INVARIANT_NO_SHRINK": "1",
            "PYTHONPATH": str(copy), "PYTHONDONTWRITEBYTECODE": "1"}
     proc = subprocess.run(
-        [sys.executable, "-m", "pytest", "tests/unit/test_invariants.py", "-q", "-x", "-p", "no:cacheprovider"],
+        [sys.executable, "-m", "pytest", target, "-q", "-x", "-p", "no:cacheprovider"],
         cwd=copy, env=env, capture_output=True, text=True)
     if "glorfindel" in proc.stdout and "ModuleNotFoundError" in proc.stdout:
         raise RuntimeError(proc.stdout[-2000:])
@@ -160,6 +221,8 @@ def main() -> int:
     ap.add_argument("--examples", type=int, default=60)
     ap.add_argument("--rounds", type=int, default=3)
     ap.add_argument("--only", default="")
+    ap.add_argument("--control", action="store_true",
+                    help="measure the control set (never used to shape the generation) instead")
     ap.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 2) // 2),
                     help="mutants measured at once")
     ap.add_argument("--min-caught", type=int, default=0,
@@ -185,15 +248,17 @@ def main() -> int:
             target.write_text(text.replace(old, new))
             started = time.monotonic()
             caught = sum(_run(copy, args.examples) for _ in range(args.rounds))
+            # Caught by a fixed sequence only (tests/unit/test_invariant_regressions.py)?
+            fixed = caught == 0 and _run(copy, 0, target="tests/unit/test_invariant_regressions.py")
             shutil.rmtree(copy, ignore_errors=True)
-            verdict = "CAUGHT" if caught == args.rounds else ("flaky" if caught else "SURVIVES")
+            verdict = "CAUGHT" if caught == args.rounds else ("flaky" if caught else ("FIXED-ONLY" if fixed else "SURVIVES"))
             if why and verdict != "CAUGHT":
                 verdict = why[0].split(":")[0]
             row = (mid, title, verdict, f"{caught}/{args.rounds} ({time.monotonic() - started:.0f}s)")
             print(f"{mid} {verdict:8} {row[3]:14} {title}", flush=True)
             return row
 
-        todo = [m for m in MUTANTS if not only or m[0] in only]
+        todo = [m for m in (CONTROL if args.control else MUTANTS) if not only or m[0] in only]
         with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
             rows = sorted(pool.map(measure, todo))
     print(f"\nbudget {args.examples} sequences, {args.rounds} rounds:")

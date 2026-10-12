@@ -32,7 +32,8 @@ What must hold whatever happens:
   I10 the configuration is honoured: no quarantine NSG when the operator turned it off
       or when the configuration can't be read, and only in the group it names;
   I11 two operations at once (the watch, the War Room, the CLI) end as one of them
-      after the other would: what the local state says is what Azure has (L27).
+      after the other would: what the local state says is what Azure has (L27);
+  I12 a VM of another subscription is never acted on — nor vouched for (A0).
 
 GLORFINDEL_INVARIANT_EXAMPLES raises the number of sequences (default 60);
 GLORFINDEL_INVARIANT_STEPS their length (default 30);
@@ -134,9 +135,26 @@ def _configs():
     return st.fixed_dictionaries({
         "quarantine": st.booleans(),
         "rg": st.sampled_from(["", "rg-sec"]),
-        "forensic": st.sampled_from([[], [LATERAL]]),
+        # A bastion, a whole /16 (must be refused), the attacker's own address.
+        "forensic": st.sampled_from([[], [LATERAL], ["10.9.0.0/16"], [ATTACKER]]),
         "readable": st.just(True),
     })
+
+
+def _valid_sources(values) -> list:
+    """What an operator may declare as an investigation source, by the test's own rule
+    (not the code's): one address or a prefix of 256 addresses at most, not reserved."""
+    import ipaddress
+    ok = []
+    for v in values or []:
+        try:
+            net = ipaddress.ip_network(str(v), strict=False)
+        except ValueError:
+            continue
+        if net.num_addresses <= 256 and not (net.is_loopback or net.is_reserved or net.is_link_local
+                                             or net.is_multicast or net.network_address.is_unspecified):
+            ok.append(net)
+    return ok
 
 
 # A fault on the n-th call of an operation, before it reaches Azure (a throttled read or
@@ -188,7 +206,7 @@ class _Chaos:
         raise throttled(op)
 
 
-_CURRENT = SimpleNamespace(chaos=None, mode="human_only", scheduler=None)
+_CURRENT = SimpleNamespace(chaos=None, mode="human_only", scheduler=None, clock=0)
 
 
 class _Scheduler:
@@ -317,6 +335,9 @@ class IsolationMachine(RuleBasedStateMachine):
         escalations._STORE = self.home / "escalations.jsonl"
         config._DEFAULT_PATHS = [self.home / "glorfindel-config.yaml"]
         self.chaos = _CURRENT.chaos = _Chaos()
+        _CURRENT.clock = 0                              # minutes the test clock is ahead
+        self.releasing: set[str] = set()                # the test's own journal (I9)
+        self.unblocking: set[str] = set()
         self.fake = FakeAzure(self.chaos)
         self.deleted: dict[str, list[str]] = {}         # VM id → its NIC ids, once deleted
         self.detached: set[str] = set()                 # NICs someone left without any NSG
@@ -346,6 +367,7 @@ class IsolationMachine(RuleBasedStateMachine):
         self._write_config()
         c = AzureConnector(dry_run=False)
         c._network, c._compute = f.network, f.compute
+        c._subscription_id = "s"                 # the subscription the clients act in
         c.recent_changes = lambda *a, **k: []
         self.connector = c
 
@@ -361,6 +383,9 @@ class IsolationMachine(RuleBasedStateMachine):
     def _write_config(self):
         path = config._DEFAULT_PATHS[0]
         c = self.config
+        if c["readable"]:
+            self.forensic_now = _valid_sources(c["forensic"])
+            self.forensic_ever = getattr(self, "forensic_ever", []) + self.forensic_now
         if not c["readable"]:
             path.write_text("isolation: [quarantine_nsg: true\n")      # broken YAML
             return
@@ -381,10 +406,13 @@ class IsolationMachine(RuleBasedStateMachine):
         f = self.fake
         return {"nsgs": f.nsgs, "nics": f.nics, "subnets": f.subnets, "vms": f.vms}
 
-    def _open(self, vm: str, own: bool = False) -> frozenset:
+    def _open(self, vm: str, own: bool = False, forensic: str | None = "ever") -> frozenset:
         """The VM's open flows, less the investigation access the operator configured
         (isolation.forensic_sources: TCP 22 and 3389 from those sources) on a NIC in
-        quarantine — open there on purpose, whatever the NIC's own NSG says.
+        quarantine — open there on purpose, whatever the NIC's own NSG says. Only valid
+        sources (_valid_sources), and only those configured: "ever" (I1 — an allow the
+        config no longer wants is the operator's own until it is purged), "now" (what an
+        isolation may claim), None (a block: the attacker gets no exemption).
 
         own=True: as if the rules named for OTHER NICs weren't there. A VM given the old
         IP of another, whose isolation was left behind (state lost, not yet released),
@@ -396,11 +424,15 @@ class IsolationMachine(RuleBasedStateMachine):
                 n: r for n, r in g["rules"].items()
                 if not (self._owned_by(n, others) and self._scoped(r))}}
                 for k, g in world["nsgs"].items()}}
+        import ipaddress
         quarantined = {n["id"].rsplit("/", 1)[-1] for n in self._nics(vm)
                        if n["nsg"] and actions._is_quarantine_nsg(n["nsg"])}
-        return frozenset(f for f in open_flows(world, vm)
-                         if not (f[0] in quarantined and f[2] == "in" and f[3] == LATERAL
-                                 and f[4] in (22, 3389)))
+        nets = {"ever": getattr(self, "forensic_ever", []), "now": getattr(self, "forensic_now", [])}.get(forensic, [])
+
+        def investigation(f) -> bool:
+            return (f[0] in quarantined and f[2] == "in" and f[4] in (22, 3389)
+                    and any(ipaddress.ip_address(f[3]) in n for n in nets))
+        return frozenset(f for f in open_flows(world, vm) if not investigation(f))
 
     def _other_marks(self, vm: str) -> set:
         mine = {_nic_hash(n) for n in self.fake.vms[key(vm)]["nics"]}
@@ -515,7 +547,7 @@ class IsolationMachine(RuleBasedStateMachine):
         """Open flows the claim doesn't admit: an isolation by rules can't deny Azure's DNS
         and IMDS to one VM (measured) — it must say so (`platform_open`), never hide it."""
         declared = set(claim.get("platform_open") or [])
-        return frozenset(f for f in self._open(vm)
+        return frozenset(f for f in self._open(vm, forensic="now")
                          if not (f[0] in declared and f[3] in (AZURE_DNS, AZURE_IMDS)))
 
     def _draw(self, data, deleted_too: bool = False):
@@ -597,6 +629,8 @@ class IsolationMachine(RuleBasedStateMachine):
         (flows, states), nics = self._before(), self._quarantined_nics()
         azure_before = self.fake.snapshot() if not self.config["readable"] else None
         out, err = self._run(fault, lambda: self.connector.isolate_vm(rid), "isolate")
+        if (out or {}).get("status") == "isolated":
+            self.releasing.discard(vm)          # a new isolation: the operator's call
         if azure_before is not None:
             # S1: the configuration can't be read — refused before any write.
             assert self.fake.snapshot() == azure_before, (
@@ -629,7 +663,10 @@ class IsolationMachine(RuleBasedStateMachine):
     def _release(self, vm, rid, fault):
         flows, states = self._before()
         states_before_release = self._state(vm)
+        self.releasing.add(vm)
         out, err = self._run(fault, lambda: self.connector.release_isolation(rid), "release")
+        if (out or {}).get("status") == "released":
+            self.releasing.discard(vm)
         if vm in self.deleted:
             recorded = self._recorded_rules(states_before_release)
             if out and out.get("status") == "released":
@@ -693,7 +730,7 @@ class IsolationMachine(RuleBasedStateMachine):
     def _attacker_flows(self, vm: str, port: int | None) -> frozenset:
         """What a block must close: the attacker's way in on the threat port (any port
         when unknown) and the VM's way out to it."""
-        return frozenset(f for f in self._open(vm)
+        return frozenset(f for f in self._open(vm, forensic=None)
                          if f[3] == ATTACKER and (f[2] == "out" or port is None or f[4] == port))
 
     def _block_rules_for(self, vm: str, own: bool = False) -> list[str]:
@@ -756,11 +793,34 @@ class IsolationMachine(RuleBasedStateMachine):
     def unblock(self, data):
         vm, rid, fault = self._draw(data)
         flows, states = self._before()
+        self.unblocking.add(vm)
         out, _ = self._run(fault, lambda: self.connector.unblock_ip(ATTACKER, rid), "unblock")
+        if (out or {}).get("status") in ("unblocked", "not_found"):
+            self.unblocking.discard(vm)
         if out and out.get("status") in ("unblocked", "not_found"):
             left = [r for r in self._block_rules_for(vm, own=True) if not self._perimeter_rule(r)]
             assert not left, f"I3: unblock said {out['status']}, rules left for {vm}: {left}"
         self._others_unchanged(vm, flows, states, perimeter=True)
+
+    def _block_vanished(self, vm: str) -> bool:
+        """The VM's block of the attacker is recorded, no operation holds it (the test's
+        journal, and the entry's own partial/failure marks), and none of its rules is on
+        Azure any more."""
+        entry = next((e for e in actions._load_block_entries(vm) if e.get("ip") == ATTACKER), None)
+        if (entry is None or vm in self.unblocking
+                or any(entry.get(k) for k in ("partial", "unblock_failed", "unblocking_at"))):
+            return False
+        where = [(p["nsg_rg"], p["nsg_name"], p["rule"]) for p in entry.get("placements") or [] if p.get("rule")]
+        if not where and entry.get("nsg") and entry.get("rule"):
+            where = [(*entry["nsg"].split("/", 1), entry["rule"])]
+        if not where:
+            return False
+        from .fake_azure import nsg_id
+        for rg, name, rule_name in where:
+            g = self.fake.nsgs.get(key(nsg_id(rg, name)))
+            if g and ({rule_name.lower(), f"{rule_name.lower()}-out"} & set(g["rules"])):
+                return False
+        return True
 
     @staticmethod
     def _perimeter_rule(name: str) -> bool:
@@ -789,15 +849,26 @@ class IsolationMachine(RuleBasedStateMachine):
         flows, _ = self._before()
         had_state = {vm: self._state(vm) is not None or bool(actions._load_block_entries(vm))
                      for vm in self.live}
-        releasing = [vm for vm in self.live if (self._state(vm) or {}).get("releasing_at")]
+        # I9 from the test's own journal: a release it started and didn't see finish —
+        # not from the marker the code writes (the property would trust what it judges).
+        releasing = [vm for vm in self.live if vm in self.releasing]
         footprints = {vm: self._footprint(vm) for vm in releasing}
         nics_before = {k: n["nsg"] for k, n in self.fake.nics.items()}
         # A perimeter block put back closes the attacker's flows of every VM on its
         # subnet, those without state included — by design.
         perimeter = any(e.get("scoped") is False for vm in self.vms for e in actions._load_block_entries(vm))
-        report, _ = self._run(fault, lambda: reassert.reassert_active(self.connector, None))
+        vanished = [vm for vm in self.live if self._block_vanished(vm)]
+        report, err = self._run(fault, lambda: reassert.reassert_active(self.connector, None))
         for r in report or []:
             _note(f"reassert ({_CURRENT.mode}): {r['outcome']}")
+        if fault is None and err is None:
+            # Liveness: a block whose rules all vanished from Azure is put back, or told
+            # about — not left gone in silence.
+            told = {key(e.get("resource_id", "")) for e in escalations.pending()
+                    if e.get("action") == "block_suspicious_ip"}
+            for vm in vanished:
+                assert not self._block_vanished(vm) or key(vm) in told, (
+                    f"L1: the block on {vm} vanished from Azure; the reassertion neither put it back nor said so")
         after = self._flows()
         for vm in self.live:
             reopenable = flows[("own", vm)] - flows[vm]
@@ -820,7 +891,10 @@ class IsolationMachine(RuleBasedStateMachine):
         vm, rid, fault = self._draw(data)
         flows, states = self._before()
         consistent = self._consistent(vm)
+        self.releasing.add(vm)
         out, err = self._run(fault, lambda: self.connector.sweep_vm_rules(rid), "reset --from-azure")
+        if (out or {}).get("status") == "swept":
+            self.releasing.discard(vm)
         if err is None and consistent:
             # I8/I11: swept or not, the state says what Azure has — a partial reset marks
             # what it couldn't finish, so the reassertion doesn't put back the rest.
@@ -830,6 +904,29 @@ class IsolationMachine(RuleBasedStateMachine):
                 f"I3: reset --from-azure said swept, {vm} is not back to its design")
             assert self._state(vm) is None
         self._others_unchanged(vm, flows, states, perimeter=True)
+
+    @rule(data=st.data())
+    def another_subscription(self, data):
+        """A VM of another subscription, same group and name as one of ours — Log
+        Analytics can be shared across subscriptions. The clients act in this one: any
+        action would land on the homonym. Refused, nothing written (I12)."""
+        vm = data.draw(st.sampled_from(self.live), label="vm")
+        rid = vm.replace("/subscriptions/s/", "/subscriptions/s2/")
+        kind = data.draw(st.sampled_from(["isolate", "release", "block", "unblock", "reset",
+                                          "verify_isolation", "verify_release", "verify_block"]), label="operation")
+        c = self.connector
+        fn = {"isolate": lambda: c.isolate_vm(rid), "release": lambda: c.release_isolation(rid),
+              "block": lambda: c.block_suspicious_ip(ATTACKER, rid, scope="vm", threat_port=22),
+              "unblock": lambda: c.unblock_ip(ATTACKER, rid), "reset": lambda: c.sweep_vm_rules(rid),
+              "verify_isolation": lambda: c.verify_isolation(rid), "verify_release": lambda: c.verify_release(rid),
+              "verify_block": lambda: c.verify_block_ip(ATTACKER, rid)}[kind]
+        azure, state, blocks = self.fake.snapshot(), self._state(vm), actions._load_block_entries(vm)
+        out, err = self._run(None, fn, f"another subscription: {kind}")
+        assert isinstance(err, actions.WrongSubscriptionError), (
+            f"I12: {kind} on a VM of another subscription was not refused: {out or err!r}")
+        assert self.fake.snapshot() == azure, f"I12: {kind} on another subscription wrote to Azure"
+        assert self._state(vm) == state and actions._load_block_entries(vm) == blocks, (
+            f"I12: {kind} on another subscription changed a local state")
 
     # ── two operations at once (L27) ────────────────────────────────────────────
 
@@ -896,11 +993,21 @@ class IsolationMachine(RuleBasedStateMachine):
         consistent = {vm: self._consistent(vm) for vm in involved}
         flows, states = self._before()
         self.chaos.arm(None)
+        for vm, kind, _ in (first, second):
+            if kind in ("release", "reset"):
+                self.releasing.add(vm)
         _CURRENT.scheduler = _Scheduler(order)
         try:
             results = _CURRENT.scheduler.run([("op-1", first[2]), ("op-2", second[2])])
         finally:
             _CURRENT.scheduler = None
+        # The journal: a release that ended released, or an isolation that ended
+        # isolated (the operator's call — its order against the release is unknown).
+        for name, (vm, kind, _) in (("op-1", first), ("op-2", second)):
+            status = ((results.get(name) or (None, None))[0] or {})
+            status = status.get("status") if isinstance(status, dict) else None
+            if (kind, status) in (("release", "released"), ("reset", "swept"), ("isolate", "isolated")):
+                self.releasing.discard(vm)
         errors = [e for _, e in results.values() if e is not None]
         for name, (out, err) in sorted(results.items()):
             kind = (first if name == "op-1" else second)[1]
@@ -1063,6 +1170,30 @@ class IsolationMachine(RuleBasedStateMachine):
         self._strip_quarantine_nsg(data)
         self._claims_after_a_change()
 
+    def _quarantine_intact(self, nsg_key: str) -> bool:
+        """Our quarantine NSG still denies everything, in and out — by the test's own
+        reading of its rules, not the code's."""
+        rules = self.fake.nsgs.get(nsg_key, {}).get("rules", {})
+
+        def denies_all(direction):
+            first = sorted((r for r in rules.values() if r["direction"].lower() == direction),
+                           key=lambda r: r["priority"])
+            for r in first:
+                if r["access"].lower() == "allow" and r["name"] != "glorfindel-quarantine-forensic-in":
+                    return False
+                if (r["access"].lower() == "deny" and r.get("source_address_prefix") == "*"
+                        and r.get("destination_address_prefix") == "*"
+                        and r.get("destination_port_range") in ("*", None) and not r.get("destination_port_ranges")):
+                    return True
+            return False
+        return denies_all("inbound") and denies_all("outbound")
+
+    def _foreign_open(self, vm: str) -> set:
+        """NICs of the VM on a quarantine NSG someone else has altered: whatever they let
+        through is that someone's doing, until Glorfindel repairs it (liveness)."""
+        return {n["id"].rsplit("/", 1)[-1] for n in self._nics(vm)
+                if n["nsg"] and actions._is_quarantine_nsg(n["nsg"]) and not self._quarantine_intact(key(n["nsg"]))}
+
     def _strip_quarantine_nsg(self, data):
         """Someone deletes the deny rules of Glorfindel's own quarantine NSG."""
         ours = sorted(k for k, n in self.fake.nsgs.items() if n["tags"].get("managed-by") == "glorfindel")
@@ -1119,6 +1250,11 @@ class IsolationMachine(RuleBasedStateMachine):
             r[f"{how}_address_prefix"], r[f"{how}_address_prefixes"] = "10.9.0.0/16", None
         elif len(values) > 1:
             r[f"{how}_address_prefix"], r[f"{how}_address_prefixes"] = values[0], None
+
+    @rule()
+    def time_passes(self):
+        """Forty minutes go by: an operation's marker left behind is stale now."""
+        _CURRENT.clock += 40
 
     @rule(data=st.data())
     def access_changes(self, data):
@@ -1244,6 +1380,7 @@ class IsolationMachine(RuleBasedStateMachine):
             # A NIC someone else left without an NSG is open by their doing, until a
             # release (or the reassertion) puts something back on it.
             gone = {n["id"].rsplit("/", 1)[-1] for n in self._nics(vm) if key(n["id"]) in self.detached}
+            gone |= self._foreign_open(vm)
             extra = {f for f in flows[vm] - self._designed(vm) if f[0] not in gone}
             assert not extra, f"I1: {vm} more reachable than designed: {sorted(extra)}"
 
@@ -1374,6 +1511,14 @@ def invariant_env(monkeypatch) -> None:
     monkeypatch.setattr(reassert, "_mode", lambda autonomy, vm, ref="": _CURRENT.mode)
     monkeypatch.setattr(config, "_DEFAULT_PATHS", list(config._DEFAULT_PATHS))
     monkeypatch.delenv("GLORFINDEL_QUARANTINE_NSG", raising=False)
+    from datetime import datetime as _dt, timedelta as _td
+
+    class _Clock(_dt):
+        """The reassertion's clock, which the sequence can move forward (time_passes)."""
+        @classmethod
+        def now(cls, tz=None):
+            return _dt.now(tz) + _td(minutes=_CURRENT.clock)
+    monkeypatch.setattr(reassert, "datetime", _Clock)
     monkeypatch.setattr(actions, "_vm_lock", _scheduled(actions._vm_lock))
     monkeypatch.setattr(actions, "_quarantine_lock", _scheduled(actions._quarantine_lock))
 

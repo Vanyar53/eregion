@@ -102,6 +102,9 @@ MUTANTS = [
     ("M21", "a block counted on an NSG that no longer governs the NIC (L26)", A,
      '                    off = [p for p in ps if (p["nsg_rg"].lower(), p["nsg_name"].lower()) not in governing]',
      "                    off = []"),
+    ("M22", "a partial release's flat fields read as a legacy state (L26)", A,
+     '        elif "placements" not in state and state.get("nsg_name") and not _is_quarantine_nsg(state["nsg_name"]):',
+     '        elif state.get("nsg_name"):'),
 ]
 
 

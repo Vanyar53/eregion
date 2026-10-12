@@ -1423,8 +1423,13 @@ class AzureConnector(CloudConnector):
                     # Keep the placement for a retry: its rule names (deleting an absent
                     # rule is a no-op) and only the bumps still to put back.
                     remaining.append({**p, "bumped": left})
-        elif state.get("nsg_name"):
+        elif "placements" not in state and state.get("nsg_name") and not _is_quarantine_nsg(state["nsg_name"]):
             # Legacy single-NSG state: recorded rule names + bumps live on the recorded NSG.
+            # Only a state written before placements existed: a partial release leaves
+            # `placements: []` next to the flat fields kept for /api/state, which name the
+            # FIRST placement — the shared quarantine NSG and its deny rules. Read as a
+            # legacy state, the next release deleted them: every VM in quarantine in the
+            # region was open again (L26, invariant machine).
             l_rg, l_name = state.get("nsg_rg", rg), state["nsg_name"]
             for name in state.get("rule_names", []):
                 err = self._delete_rule(l_rg, l_name, name)

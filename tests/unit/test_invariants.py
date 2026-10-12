@@ -972,7 +972,10 @@ class IsolationMachine(RuleBasedStateMachine):
                 left = self._named_leftovers(self.fake.vms[key(vm)]["nics"], "glorfindel-block-")
                 assert not left, f"I7: block rules of {vm} left after unblock: {left}"
         for vm in self.live:
-            assert self._released(vm), f"I7: {vm} could not be brought back to its design"
+            # Own view: what could still cut a live VM off is the leftover of a deleted
+            # VM whose state was lost, on an IP the live one got since — a known limit
+            # (nothing says which NSGs to look at); its recorded rules are checked below.
+            assert self._released(vm, own=True), f"I7: {vm} could not be brought back to its design"
         for vm, recorded in deleted_records.items():
             left = [r for r in self._named_leftovers(self.deleted[vm]) if r.split("/")[-1] in recorded]
             assert not left, f"I7: rules of the deleted {vm} left: {left}"

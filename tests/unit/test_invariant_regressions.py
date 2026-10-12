@@ -8,6 +8,7 @@ from .fake_azure import key
 from .test_invariants import IsolationMachine, invariant_env
 
 WEB1 = "/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/web"
+WEB2 = "/subscriptions/s/resourceGroups/rg-app2/providers/Microsoft.Compute/virtualMachines/web"
 DB = "/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/Db--01"
 
 
@@ -25,13 +26,13 @@ class Script:
         return self.values.pop(0)
 
 
-def _net(quarantine=False, subnet_nsg=None, **nics):
+def _net(quarantine=False, subnet_nsg=None, quarantine_rg="", **nics):
     plain = {"own": None, "rules": [], "policy": False}
     return {"subnet_nsg": subnet_nsg, "edge_nsg": None, "tier_rules": [],
             "nics": {n: {**plain, **nics.get(n.replace("-", "_"), {})}
                      for n in ("web-nic", "db-nic-0", "db-nic-1", "api-nic")},
             "windows": None,
-            "config": {"quarantine": quarantine, "rg": "", "forensic": [], "readable": True}}
+            "config": {"quarantine": quarantine, "rg": quarantine_rg, "forensic": [], "readable": True}}
 
 
 def _run(monkeypatch, net, *steps):
@@ -91,3 +92,16 @@ def test_a_block_hidden_behind_the_quarantine_is_not_a_block(monkeypatch):
          ("strip_quarantine_nsg",
           "/subscriptions/s/resourcegroups/rg-app1/providers/microsoft.network/networksecuritygroups/"
           "nsg-glorfindel-quarantine-westeurope"))
+
+
+def test_a_second_release_never_empties_the_shared_quarantine_nsg(monkeypatch):
+    """Two VMs in one quarantine NSG (a central quarantine group). A release that fails
+    partway (a subnet it can't read)
+    keeps a state with no placements left, next to the flat fields that name the
+    shared quarantine NSG and its deny rules. The next release read that as a legacy
+    single-NSG state and deleted those rules: the other VM was open again."""
+    _run(monkeypatch, _net(quarantine=True, quarantine_rg="rg-sec"),
+         ("isolate", WEB2, WEB2, None),
+         ("isolate", WEB1, WEB1, None),
+         ("release", WEB1, WEB1, ("subnet.get", "always-429")),
+         ("release", WEB1, WEB1, None))

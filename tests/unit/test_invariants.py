@@ -733,8 +733,11 @@ class IsolationMachine(RuleBasedStateMachine):
         flows, states = self._before()
         states_before_release = self._state(vm)
         self.releasing.add(vm)
+        writes = len(self.fake.journal)
         out, err = self._run(fault, lambda: self.connector.release_isolation(rid), "release")
-        if (out or {}).get("status") == "released":
+        if (out or {}).get("status") == "released" or (err is not None and len(self.fake.journal) == writes):
+            # Released — or failed before writing anything to Azure (its intent marker
+            # refused by a full disk): nothing was started, nothing to undo (I9).
             self.releasing.discard(vm)
         if vm in self.deleted:
             recorded = self._recorded_rules(states_before_release)
@@ -976,8 +979,9 @@ class IsolationMachine(RuleBasedStateMachine):
         flows, states = self._before()
         consistent = self._consistent(vm)
         self.releasing.add(vm)
+        writes = len(self.fake.journal)
         out, err = self._run(fault, lambda: self.connector.sweep_vm_rules(rid), "reset --from-azure")
-        if (out or {}).get("status") == "swept":
+        if (out or {}).get("status") == "swept" or (err is not None and len(self.fake.journal) == writes):
             self.releasing.discard(vm)
         if err is None and consistent:
             # I8/I11: swept or not, the state says what Azure has — a partial reset marks
@@ -1498,7 +1502,8 @@ class IsolationMachine(RuleBasedStateMachine):
             g = self.fake.nsgs.get(k)
             if g is None or n not in g["rules"]:
                 continue
-            shared = sum(key(c["nsg"]) == k for c in self.fake.nics.values()) > 1 or \
+            # By design too: a NIC away in quarantine comes back to it during the release.
+            shared = sum(k in (key(c["nsg"]), key(c["design_nsg"])) for c in self.fake.nics.values()) > 1 or \
                 any(key(s["nsg"]) == k for s in self.fake.subnets.values())
             st_ = self._state(owner) if owner not in self.deleted else None
             named = bool(st_) and "placements" not in st_ and n in {x.lower() for x in st_.get("rule_names", [])}

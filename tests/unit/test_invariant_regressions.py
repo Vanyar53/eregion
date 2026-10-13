@@ -302,13 +302,12 @@ def test_an_old_state_names_its_rules_for_the_verification_too(monkeypatch):
 
 
 def test_an_interrupted_reset_is_a_release_under_way(monkeypatch):
-    """`reset --from-azure` cut off before any write, then the old outbound deny narrowed
-    by hand: with no marker of the reset's intent, the reassertion put the isolation
-    back under new names, mid-release (A0, I9)."""
-    nsg = "/subscriptions/s/resourcegroups/rg-edge/providers/microsoft.network/networksecuritygroups/nsg-api-nic"
+    """`reset --from-azure` cut off right after it removed something from Azure: with no
+    marker of the reset's intent, the reassertion took the half-removed isolation for one
+    removed outside Glorfindel and put it back, mid-release (A0, I9). Its second write is
+    the first one on Azure when the intent is recorded (the first is the marker)."""
     _legacy_world(monkeypatch, ("api-nic", True),
-                  ("reset_from_azure", API, API, (2, "before-crash")),
-                  ("tamper_with_our_rule", "source", (nsg, "glorfindel-isolation-deny-all-out")),
+                  ("reset_from_azure", API, API, (2, "after-crash")),
                   ("reassert", "non_disruptive", None),
                   check=lambda m: None)
 

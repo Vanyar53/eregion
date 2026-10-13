@@ -10,6 +10,134 @@ Le pari assumé : la sécurité va vers la **réponse autonome** (vitesse machin
 
 ---
 
+## Vers la 1.0 — huitième passe (13/10)
+
+La 1.0 vise les fonctions d'un SOC pour les charges cloud des équipes sans SOC, **prouvées par l'attaque et par la panne**. Le cœur reste Glorfindel : détecter, enquêter, répondre. Annatar (attaque) et Gothmog (panne) l'éprouvent sur une copie jetable, depuis Orodruin, avec des moteurs publics — aucune logique offensive maison. L'objectif premier ci-dessus ne change pas : la 1.0 donne une finalité qui tranche les arbitrages, pas un plan d'affaires. Eregion tourne en local ou dans une VM ; le modèle économique SaaS viendra plus tard (1.x).
+
+Périmètre à rappeler partout : **les charges cloud**. L'astreinte humaine et les postes de travail restent à une équipe ou à un SOC managé.
+
+### La finalité et ses cinq indicateurs
+
+Les incidents cloud courants sont contenus seuls, en quelques minutes, de façon réversible et vérifiée ; le reste arrive à un humain, trié et expliqué ; à tout moment, on peut prouver que ça marche. Annatar et Gothmog servent la confiance dans Glorfindel ; ils ne sont pas une fin.
+
+| Indicateur | Ce qu'il mesure | Aujourd'hui |
+|---|---|---|
+| Temps pour contenir | de la première action malveillante à l'action vérifiée | détection par le RulePoller en 84 s à 3 min 30 (runs du 05 au 07/10) ; ransomware : RTO 21 à 25 min |
+| Part contenue seule | incidents contenus sans humain, sur tous les incidents | non mesurée |
+| Actions disruptives à tort | isolations et blocages jugés faux, parmi ceux qui sont jugés | outil livré (`glorfindel verdict`, `glorfindel report`, `docs/observation.md`) ; aucune carte jugée |
+| Couverture | techniques cloud pertinentes détectées, sur le catalogue | 6 TTPs validés en réel (`technique_catalog.yaml`) |
+| Âge de la dernière preuve | depuis le dernier run qui a prouvé détection et réponse | objectif : moins de 30 jours ; dernier run Azure de bout en bout : 07/10 |
+
+### La règle de production
+
+**Jamais de panne ni d'action destructive sur une charge réelle.** En production, seulement des techniques non destructives sur des VM inscrites, et la chaîne complète sur une VM sentinelle vide. Le destructif et les pannes restent sur le banc de référence ou le jumeau. La règle est codée dès O0 : chaque inscription porte sa zone.
+
+| Zone | Ce qui y tourne | Refusé |
+|---|---|---|
+| `bench` — banc de référence (Celebrimbor) | techniques, destructif, pannes, reprise | — |
+| `twin` — jumeau du client | idem, avec son rapport d'écart | — |
+| `production` | mode ombre ; techniques `destructive: false` sur VM inscrites ; chaîne complète sur la VM sentinelle | toute panne, toute expérience destructive |
+
+Seule la zone `bench` sert en 0.3 ; les deux autres sont codées et testées dès O0.
+
+### Glorfindel de base, Glorfindel adapté
+
+Glorfindel est le produit ; Annatar, Gothmog, Orodruin et Celebrimbor sont l'atelier qui l'éprouve. **Glorfindel de base** évolue par versions : surface surveillée, règles de base, actions, contrôles de préparation, garde-fous. **Glorfindel adapté** vit chez le client : ses règles, sa mémoire, sa retenue, ses marches ; une mise à jour ne doit jamais l'écraser (P1). Le modèle et les garde-fous ne s'adaptent jamais.
+
+| Composant | Rôle | État |
+|---|---|---|
+| Glorfindel | détecter, enquêter, répondre ; son IA est l'IA sous test | existe |
+| Annatar | adaptateurs vers les bibliothèques d'attaque publiques (Stratus Red Team, Atomic Red Team, Caldera) | existe, évolue (R1, R2) |
+| Gothmog | pannes déclarées en code ; éprouve d'abord Glorfindel (bruit bénin, dépendances, reprise) | nouveau (G0) |
+| Orodruin | hôte d'exécution jetable des injecteurs, contrat de garde-fous vérifié au démarrage | nouveau (O1) |
+| Celebrimbor | construit et inscrit les cibles du banc | existe |
+| IA d'analyse | explique, trie, rapporte ; n'écrit pas de règle | nouveau (IA0, IA1) |
+
+### Les jalons
+
+| Version | Contenu | Atteinte quand |
+|---|---|---|
+| 0.2.0 | version actuelle | — |
+| 0.3 | A0 ✅ ; O0, E1, O1, R1, G0 ; B1, B2, IA0 | la boucle complète tourne sur le banc et le rapport de campagne s'écrit seul |
+| 0.4 à 0.x | A1 (avec MC0), A2, A3, B3, B4 ; G1 à G3, R2, C1, D1, IA1 ; J1 à J4, P1, P2 | couverture, retenue, robustesse et reprise mesurées ; la preuve existe en production (ombre, détection non destructive, sentinelle) et sur jumeau ; les règles du client survivent aux mises à jour |
+| 1.0 | critères de maturité de la septième passe ; contrats figés ; profils | voir les critères ci-dessous |
+| 1.x | MC1 à MC3, G4, X1, O2 ; plus tard, le SaaS | nouveaux clouds et moteurs ajoutés sans rien casser |
+
+En 0.x, schémas, signaux et interface peuvent encore changer ; la 1.0 les fige.
+
+**Critères de la 1.0** :
+- Critères de maturité de Glorfindel remplis (liste « Critères avant le mode autonome », septième passe) : l'autonomie est permise en production, VM par VM.
+- Contrats publics figés et versionnés : signaux, schéma d'expérience, catalogue, interface de fournisseur.
+- Les cinq profils (découvrir ; ma détection marche-t-elle ? ; mon infra tient-elle ? ; défense éprouvée ; plusieurs équipes) s'installent et tournent seuls, prouvé en CI.
+- La preuve en production existe : mode ombre, détection non destructive, sentinelle.
+
+### Les lots
+
+Préfixes : **A** isolation et **B** IA (septième passe), **O** Orodruin, **E** schéma d'expérience, **R** adaptateurs d'Annatar vers une bibliothèque d'attaque publique, **G** Gothmog, **X** attaque et panne combinées, **C** couverture, **D** profils d'usage, **IA** IA d'analyse, **J** preuve en production et jumeau, **P** personnalisation (la couche du client), **MC** multi-cloud. Chaque lot ajoute ses mutants au harnais avant d'être fusionné ; aucune action sur le cloud hors du banc. Estimations en jours de travail effectif, à ±50 %.
+
+**0.3 — la boucle tourne** (20 à 33 jours avec A0 et IA0)
+
+| Lot | Contenu | Fini quand | Jours | État |
+|---|---|---|---|---|
+| A0 | Invariants v3 (septième passe) | jeu de contrôle attrapé au moins pour moitié au push | 5–8 | ✅ 13/10 (10 sur 16) |
+| O0 | **Inscription et périmètre communs.** Un module partagé réunit `annatar/campaign/scope.py` et `annatar/safety/guard.py`. Tag générique `eregion-target=<id du banc>`, posé par Celebrimbor (`annatar-test` lu le temps de la migration). Vérifié à la synthèse et à l'exécution. Chaque inscription porte sa zone ; en `production`, seule une expérience `kind: technique` et `destructive: false` passe. Mutants : contrôle à l'exécution retiré ; identifiant de banc vide accepté ; ressource hors des groupes du banc acceptée ; casse de la valeur du tag ignorée ; destructif ou panne accepté en `production` ; zone absente traitée comme `bench` | aucune injection hors cible inscrite, ni de destructif en production ; les six mutants attrapés | 3–4 | à faire |
+| E1 | **Schéma d'expérience et catalogue communs** : `id`, `kind` (`technique` ou `fault`), `engine`, `engine_ref`, `targets` (sélecteur sur l'inscription), `steady_state` (sondes et attendus), `abort_conditions`, `revert`, `detection.hints`, `destructive`, `status`. Les scénarios actuels deviennent `kind: technique`, `engine: local-script`, sans changement de comportement ; `technique_catalog.yaml` accueille les pannes ; schéma à côté de `schemas/scenario.schema.json` pendant la migration | tous les scénarios existants valident sous le nouveau schéma ; la CI valide le catalogue ; le schéma est versionné | 2–3 | à faire |
+| O1 | **Orodruin, mode VM dédiée.** `infra/orodruin/`, à côté de Celebrimbor, état Terraform séparé ; identité d'exécution limitée au groupe du banc ; sortie réseau limitée au banc, aux API du cloud et à celle du modèle ; `make orodruin-up`, `-down`, `-stop`, `-check`, `-kill` ; contrat non vérifié → injecteurs passifs ; `orodruin-kill` révoque l'identité et arrête la VM ; chaque appel d'un injecteur journalisé avant exécution. Mutants : contrat non vérifié mais mode actif ; journal écrit après l'appel ; arrêt d'urgence qui oublie la révocation | le contrat est vérifié au démarrage d'un vrai run ; l'arrêt d'urgence est prouvé par un test | 3–5 | à faire, avec Jonathan (infra réelle) |
+| R1 | **Premier adaptateur : Stratus Red Team.** Interface d'injecteur dans `annatar/executors/` (préparer, injecter, revenir, nettoyer) ; version épinglée, appel par identifiant de technique, cycle `warmup`, `detonate`, `revert`, `cleanup` ; seulement les techniques `implemented` au catalogue, sur cibles inscrites, depuis Orodruin ; `attack_started` et `detection_missed` inchangés | une technique de la bibliothèque tourne sur le banc, l'état initial est vérifié après coup, la détection est mesurée et enregistrée dans le run | 3–5 | à faire, avec Jonathan — voir les questions ouvertes |
+| G0 | **Gothmog v0, sur le moteur natif du banc.** Paquet `gothmog/` calqué sur `annatar/` (exécuteur, moteurs, signaux, rapport) ; moteur Chaos Studio, cibles inscrites auprès du moteur par Celebrimbor, expérience décrite en code dans le module du banc ; signal `fault_started` ; sondes d'état normal avant, pendant et après | un arrêt de VM tourne sur le banc ; l'état normal est vérifié avant et après ; le retour à l'état initial est vérifié ; le run est enregistré comme ceux d'Annatar | 2–4 | à faire, avec Jonathan (Chaos Studio) |
+| B1 | Mistral Large 4 face au modèle de référence dans le harnais (septième passe) | tableau intégration, jugement, sur-confiance pour les deux modèles | — | attend `MISTRAL_API_KEY` |
+| B2 | Injection par les logs (septième passe), **élargie à la mémoire** : un cycle faux ou piégé, relu comme « similaire », ne doit pas faire basculer la décision ; mémoire mélangée — aujourd'hui `memory.py` stocke un `run_id` mais `retrieve_similar` ne filtre ni n'étiquette rien, un cycle d'exercice peut remonter comme précédent d'un vrai incident : chaque cycle porte désormais sa source (`exercise` ou `real`), visible du modèle | aucun cas d'injection, par les logs ou par la mémoire, ne change l'action décidée ; une mémoire remplie d'exercices ne fait pas basculer une décision réelle (cas au harnais) | — | première moitié ✅ 13/10 (0 sur 12 détourné) |
+| IA0 | **Premier RAG : le rapport de campagne.** Collection ChromaDB distincte de celle de Glorfindel, runs indexés par campagne ; chaque affirmation du rapport cite le run qui la fonde ; un autre modèle que celui de Glorfindel ; aucune écriture de règle ; cas au harnais : fidélité (rien d'affirmé sans run cité), contenu piégé dans un run | le rapport de la première campagne s'écrit seul, chaque affirmation est vérifiable, les cas du harnais passent | 2–4 | attend les premiers runs de R1 et G0 |
+
+**0.4 à 0.x — la mesure, la preuve chez le client**
+
+| Lot | Contenu | Fini quand | Jours |
+|---|---|---|---|
+| A1 | Découper `actions.py` (septième passe), avec **MC0** : l'interface de fournisseur | aucun SDK de fournisseur hors de son adaptateur (CI) ; le harnais reste au-dessus de son seuil | 3–5 (MC0) |
+| A2, A3, B3, B4 | Septième passe, tableau ci-dessous | — | — |
+| G1 | Bruit bénin : écritures disque, CPU, redémarrages | taux de recommandations disruptives fausses publié | 3–5 |
+| G2 | Pannes des dépendances : modèle, API du cloud, télémétrie, configuration | chaque panne : échec fermé, test et mutant | 3–5 |
+| G3 | Exercice de reprise : VM détruite puis restaurée | temps de reprise dans le README | 2–3 |
+| R2 | Adaptateur Atomic Red Team (tests à l'intérieur de la VM) | un test par identifiant, nettoyage vérifié | 2–4 |
+| C1 | Run unifié, matrice de couverture, non-régression | matrice et son évolution dans la War Room | 4–6 |
+| D1 | Profils d'usage, CI par composant ; `CONTRIBUTING.md` : les adaptateurs comme porte d'entrée des contributeurs | cinq profils documentés ; chaque composant tourne seul | 3–5 |
+| J1 | Détection seule en production : techniques non destructives sur VM inscrites, Glorfindel forcé en mode ombre | couverture mesurée sur la vraie télémétrie, sans aucune réponse | 2–3 |
+| J2 | VM sentinelle : une VM vide dans le réseau de production, inscrite | isoler, bloquer, lever sur la sentinelle ; état d'origine vérifié | 3–5 |
+| J3 | Rapport d'écart : mêmes contrôles de posture et de préparation sur le jumeau et la production | chaque preuve sur jumeau porte son rapport d'écart | 3–5 |
+| J4 | Jumeau depuis la découverte : Celebrimbor compose un banc depuis la topologie découverte | un jumeau sans code d'infrastructure, rapport d'écart joint | 5–8 |
+| P1 | Couches de règles. Aujourd'hui `proposed_rules.approve` écrit la règle approuvée dans `detection_rules.yaml`, le fichier des règles livrées. À la place : la base livrée reste intacte, les règles du client vont dans une couche chargée par-dessus ; une règle du client peut désactiver une règle de base ; une commande exporte une règle généralisée, sans identifiant | une mise à jour de la base ne perd aucune règle du client (test) ; une règle exportée ne contient ni identifiant de ressource ni d'espace de travail (test et mutant) | 2–4 |
+| P2 | Remontée d'une règle vers la base, en six étapes : proposer (accord du client, 30 jours active sans fausse alerte) ; généraliser (l'IA peut proposer) ; contrôler la fuite (déterministe : identifiants, adresses, domaines, noms de l'inventaire, dans la requête comme dans l'explication) ; relecture du client ; épreuve sur le banc de référence (détecte la technique, se tait face au bruit bénin, aucune régression) ; publication anonyme avec un jeton opaque | une règle remontée de bout en bout ; mutants : un GUID, une adresse ou un nom de l'inventaire qui passe le contrôle ; le client retire sa règle sans doublon | 4–6 |
+| IA1 | IA d'analyse, mémoire et modèle séparés | cas d'analyse au harnais ; rien sans validation humaine | 4–6 |
+
+**1.x — nouveaux clouds, nouveaux moteurs**
+
+| Lot | Contenu | Fini quand | Jours |
+|---|---|---|---|
+| G4 | Moteur Kubernetes (Chaos Mesh ou LitmusChaos), puis générique (Chaos Toolkit) | une expérience, deux moteurs | 3–5 |
+| X1 | Attaque pendant une panne | détecte ou escalade, jamais à l'aveugle | 3–5 |
+| O2 | Orodruin, mode Kubernetes (un namespace par projet) | mêmes tests de contrat sur les deux modes | 5–8 |
+| MC1 | Un monde simulé par fournisseur | invariants et mutants de contrôle verts sur AWS | 8–12 |
+| MC2 | Adaptateur AWS + banc AWS | isoler-lever revient à l'état d'origine, vérifié | 10–15 |
+| MC3 | Adaptateur GCP + banc GCP | mêmes critères | 8–12 |
+
+Plan complet : 66 à 108 jours, plus 30 à 45 pour le multi-cloud. Coût du banc de développement : environ 55 à 130 € par mois (VM, disques et points de restauration, télémétrie, Orodruin, Chaos Studio, LLM).
+
+### L'ordre de la 0.3
+
+Socle : **O0 → E1 → O1 → R1 → G0**. Piste IA, en parallèle : **B1, B2 (élargi), puis IA0** (attend les premiers runs de R1 et G0). A1 (découpage d'`actions.py`, qui porte MC0) passe en 0.4+. O0 et E1 sont du code pur ; O1, R1 et G0 créent de l'infra réelle et se font avec Jonathan.
+
+Documents qui suivent les lots : `docs/architecture.md` (vocabulaire et zones, avec O0 et E1), `CLAUDE_ORODRUIN.md` et `CLAUDE_GOTHMOG.md` (sessions, créées le 13/10), `schemas/` (schéma d'expérience, E1), `docs/schemas/` (Gothmog, Orodruin, inscription, en 0.3), `CHANGELOG.md` (créé le 13/10 ; tag `v0.2.0` et première release GitHub : décision de Jonathan).
+
+### Questions ouvertes avant la 0.3 (soulevées le 13/10, à trancher par Jonathan)
+
+- **R1 : ce que Stratus attaque, ce que Glorfindel voit.** Les 15 techniques Azure de Stratus Red Team visent le plan de contrôle (stockage, identité, Run Command par l'API, export de disque). Sa documentation les détecte dans les **Activity Logs**, que Glorfindel ne lit pas (ses règles lisent Perf, Syslog et StorageBlobLogs), et le `warmup` crée sa propre VM, hors des cibles inscrites. La réponse à une attaque d'identité (révoquer) n'existe pas encore. Deux voies : R2 (Atomic Red Team, tests dans la VM, sur la télémétrie déjà lue) avant R1 ; ou R1 avec l'ingestion des Activity Logs, et une règle proposée par la boucle violette sur le premier raté. À trancher avant E1 : le schéma doit savoir décrire une cible que l'adaptateur crée lui-même.
+- **La mémoire avant les campagnes.** Les campagnes automatiques de la 0.3 vont remplir ChromaDB de cycles d'exercice, que `retrieve_similar` remonte comme précédents de vraies décisions. L'étiquette `exercise` / `real` (B2 élargi) doit donc précéder les premiers runs de R1 et G0. Elle change ce que le modèle voit : run de bout en bout exigé.
+- **Zone absente pendant la migration.** Le mutant « zone absente traitée comme `bench` » et le tag `annatar-test=true`, qui ne porte pas de zone, se contredisent. Proposition : `annatar-test=true` vaut `bench` (il n'a existé que sur Celebrimbor) ; un `eregion-target` sans zone est refusé.
+- **Le chronomètre d'observation.** Le critère « quatre semaines en `human_only` » ne se raccourcit pas ; il peut courir pendant la 0.3, sur un parc réel en lecture seule (voir les règles des environnements de test, plus bas).
+- **Point d'étape après la 0.3** : le premier rapport de campagne apprend-il sur Glorfindel quelque chose que le banc ne savait pas ? Si oui, la 0.x continue ; sinon, retour sur Glorfindel.
+
+---
+
 ## Contexte produit (scénario optionnel)
 Eregion est un CDR — Cloud Detection and Response. Détecte, répond et apprend — sans playbooks, sans équipe SOC dédiée.
 Pitch : "Teste ton infra avant que les autres le fassent pour toi."
@@ -129,7 +257,7 @@ Conception complète : [`docs/design/module-isolation-iac.md`](docs/design/modul
 |---|---|---|---|
 | L28 | **Immédiat.** U3 (config sous Docker : le changement de mode depuis la War Room échoue depuis #49), U2 (une carte détachée de la quarantaine perd son NSG d'origine — introduit par le correctif M20 de #50), U4 (deny de quarantaine vérifiés sans la config), première alerte sur les règles orphelines (U1) avec V-1, séquence figée de M18 réparée | le mode se change depuis la War Room en Docker ; une carte détachée retrouve son original ou fait escalader ; une règle orpheline est signalée ; la nuit est verte | ✅ (13/10) — U3 mesuré dans le conteneur (écriture en place sous `flock`, un lecteur d'un autre conteneur attend le verrou) ; escalade `orphan_rule` |
 | A0 | **Isolation — avant A1.** Invariants v3 : faire varier ce qui ne varie jamais (horloge, abonnements, protocole, altérations qui inversent une règle, noms d'avant l'empreinte, création de VM et réutilisation d'IP, sources forensiques) ; un écrivain étranger au milieu d'une opération (rend M14 observable) ; oracles indépendants du code (I9 sur le journal du test, exemption forensique conditionnelle, I2 par auteur) ; vivacité (un blocage manquant est reposé ou escaladé) ; taux par mutant, attrapés « seulement par séquence figée » comptés à part ; **jeu de mutants de contrôle** (les 16 de la septième passe), jamais utilisé pour orienter la génération | le jeu de contrôle est attrapé au moins pour moitié au push et aux trois quarts la nuit | ✅ 13/10 — contrôle 10/16 au push (3 au départ), M14 et M02 attrapés, 13 défauts du produit corrigés |
-| A1 | **Isolation.** Découper `actions.py` (~4 000 lignes) en un module : cœur (placements, noms, vérification par contenu), quarantaine, repli par règles, blocages, état ; un seul adaptateur Azure (garde d'abonnement, contrôle de version des écritures de carte) | le harnais reste au-dessus de son seuil à chaque étape ; aucun fichier au-delà de quelques centaines de lignes | à faire |
+| A1 | **Isolation.** Découper `actions.py` (~4 000 lignes) en un module : cœur (placements, noms, vérification par contenu), quarantaine, repli par règles, blocages, état ; un seul adaptateur Azure (garde d'abonnement, contrôle de version des écritures de carte) | le harnais reste au-dessus de son seuil à chaque étape ; aucun fichier au-delà de quelques centaines de lignes | différé en 0.4+, avec MC0 (huitième passe) |
 | A2 | **Isolation.** Un type d'identité de VM unique (fin de L18) ; un type à trois états pour les prédicats de sûreté | confondre « inconnu » et « faux » devient une erreur de type | à faire |
 | A3 | **Isolation.** Balayage des règles orphelines (U1 : retrait après alerte) ; liste blanche d'extensions au restore et secrets passés par nom (L23) ; validation stricte de la config (types, clés inconnues, `"false"`) | une VM qui reçoit l'IP d'une VM supprimée n'est jamais coupée ; une config mal écrite est refusée avec un message clair | à faire |
 | B1 | **IA.** Mistral Large 4 dans le harnais (`make llm-compare`), le modèle par défaut actuel en référence — première comparaison de deux modèles cloud ; hébergé en Europe. Demande `MISTRAL_API_KEY` | tableau intégration / jugement / sur-confiance, 8 cas × 3 runs, pour les deux modèles | à faire |
@@ -334,7 +462,9 @@ class DatadogDetector(DetectionConnector):
 
 ---
 
-## Phase 7 — SaaS MVP
+## Phase 7 — SaaS MVP (horizon 1.x)
+
+**Plus tard.** Eregion tourne en local ou dans une VM (sur Azure ou ailleurs) ; le modèle économique SaaS se construira sur la 1.x, à son rythme (huitième passe). Ce qui suit reste une esquisse.
 
 **Prérequis : 5+ utilisateurs externes actifs.**
 
@@ -368,22 +498,21 @@ War Room local              →  War Room SaaS multi-tenant
 
 ## Récapitulatif ordre de priorité global
 
+Depuis la huitième passe (13/10), l'ordre est celui des jalons (section « Vers la 1.0 ») : **0.3** (O0, E1, O1, R1, G0 ; B1, B2, IA0), puis la **0.x**, puis la **1.0**. L'ancien ordre se range ainsi :
+
 ```
-0. Module d'isolation compatible IaC        → L1–L7 + isolation JIT livrés et validés (06–07/10) ; reste L8 (module renfort optionnel)
-0b. Canary azurerm                           → ✅ `make canary-jit` + CI hebdo (secrets Azure du dépôt à configurer) ; PASS le 07/10 sur azurerm 4.81.0
-1. Premier utilisateur externe              → MAINTENANT, bloque tout
-2. Solidification (erreurs, cron)           → après feedback
-3. Entra ID / Service Principal             → vecteur #1 Azure 2025
-4. Storage misconfiguration + Key Vault     → objectifs finaux kill chain
-5. Schéma normalisé first_result_row        → prérequis connecteurs
-6. AWS + CloudWatch/GuardDuty               → 32% marché cloud
-7. Prometheus + Loki                        → stack open source dominante
-8. War Room UI                              → ✅ livré (http://localhost:7007)
-9. Datadog                                  → leader commercial mid-market
-10. AKS                                     → chantier complexe, après les autres
-11. Nouveaux scénarios TTP                  → selon demande utilisateurs
-12. GCP                                     → croissance forte, pas urgent
-13. SaaS MVP                                → après 5 utilisateurs externes
+Module d'isolation compatible IaC   → livré (L1–L7 + JIT, 06–07/10) ; L8 (module renfort) reste optionnel
+Canary azurerm                      → ✅ quotidien, 3.x / 4.x / 5.x
+Premier utilisateur externe         → la preuve chez le client devient J1–J4 (ombre, sentinelle, jumeau), 0.x
+Solidification (erreurs, cron)      → septième passe (A1–A3), 0.4+
+Entra ID / Service Principal        → hors des lots chiffrés ; R1 le rend pressant (Stratus attaque l'identité)
+Nouveaux scénarios TTP              → par les adaptateurs (R1 Stratus, R2 Atomic), plus de script maison
+Schéma normalisé first_result_row   → avec MC0 (interface de fournisseur), 0.4+
+AWS, GCP                            → MC2, MC3 (1.x)
+Prometheus + Loki, Datadog          → après MC0 : une source de télémétrie de plus derrière l'interface
+AKS                                 → O2 et G4 (Kubernetes), 1.x
+War Room UI                         → ✅ livré ; matrice de couverture en C1
+SaaS                                → plus tard, sur la 1.x
 ```
 
 ---
@@ -428,11 +557,12 @@ Les briques sont standard (deny NSG, snapshot, KQL à seuil, tri LLM) ; l'assemb
 ## Ce qu'on ne fait PAS
 - Pas compliance-oriented (NIS2, DORA)
 - Pas d'agent en roue libre sur actions destructives
-- Pas de tests sur infra prod sans consentement explicite
+- Jamais de panne ni d'action destructive sur une charge réelle ; pas de tests sur infra prod sans consentement explicite (règle de production, codée dès O0)
+- Pas de logique offensive maison : des bibliothèques publiques, version épinglée
 - Pas de dashboard monitoring — ce n'est pas le rôle de Glorfindel
-- Pas de fine-tuning LLM — la RAG ChromaDB suffit pour le MVP
-- Pas de multi-cloud avant que la boucle Azure soit solide
-- Pas de SaaS avant utilisateurs réels
+- Pas de fine-tuning LLM — la RAG ChromaDB suffit ; aucune donnée d'un client n'entraîne un modèle
+- Pas de multi-cloud avant que la boucle Azure soit solide (sauf MC0, l'interface de fournisseur)
+- Pas de modèle économique SaaS avant la 1.x — Eregion tourne en local ou dans une VM
 
 ---
 

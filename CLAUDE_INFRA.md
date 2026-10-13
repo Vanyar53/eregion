@@ -75,3 +75,16 @@ coûte (control plane + nodes) → détruire entre sessions. VMs : auto-shutdown
 - **Phase B** (Azure Virtual Network Manager + security admin rules, UDR/Azure Firewall) :
   setup lourd, à provisionner séparément si/quand priorisé. Pas dans le bench minimal.
 - Le code Python (corrections backend) — c'est Glorfindel/Annatar.
+
+## Huitième passe (13/10) — ce qui change pour Celebrimbor
+
+- **Inscription (O0)** : Celebrimbor pose le tag générique `eregion-target=<id du banc>` à la
+  construction, avec la zone `bench` (sa forme exacte se fixe dans O0) ; `annatar-test` reste posé le temps de la migration. Un
+  `terraform apply` sur le banc se fait avec Jonathan, `glorfindel list` vide avant.
+- **Gothmog (G0)** : Celebrimbor inscrit les cibles du banc auprès de Chaos Studio ; l'expérience
+  est décrite en code dans le module du banc.
+- **Orodruin (O1)** : module à part, `infra/orodruin/`, **état Terraform séparé** — session
+  Orodruin (`CLAUDE_ORODRUIN.md`). Celebrimbor fournit le groupe de ressources que l'identité
+  d'Orodruin a le droit de toucher.
+- **Plus tard** : jumeau depuis la découverte (J4) — Celebrimbor compose un banc depuis la
+  topologie découverte d'un client, avec son rapport d'écart.

@@ -1,11 +1,19 @@
 # Eregion — Cloud Detection & Response, for teams without a SOC
 
-Open-source CDR for cloud infrastructure (Azure today; the LLM layer is provider-agnostic). Two AI agents form a closed loop:
+**And the proof it works: measured in shadow on your production, with attacks and failures replayed on a disposable copy.**
 
-- **Annatar** (red) — launches real MITRE ATT&CK attacks to prove the defense actually works.
-- **Glorfindel** (blue) — does two jobs on your cloud logs:
+Three agents form a closed loop: Annatar attacks, Gothmog breaks, Glorfindel detects and responds. Open source, for cloud workloads — on-call humans and workstations stay with a team or a managed SOC. Azure today; a provider interface is planned for AWS and GCP (the LLM layer is already provider-agnostic).
+
+- **Glorfindel** (blue) — the product. It does two jobs on your cloud logs:
   - **Detects** — continuous rule-based polling (KQL / PromQL …), auto-discovers your assets from their own telemetry (no inventory to maintain), and proposes a new detection rule when an attack slips through (purple-team loop).
   - **Responds** — reasons from the raw signal to choose the minimum effective action and verifies it via the cloud API.
+- **Annatar** (red) — launches real MITRE ATT&CK attacks to prove the defense actually works. Today its own scenarios on Azure; from 0.3, adapters to public attack libraries (Stratus Red Team, Atomic Red Team) — no home-grown offensive logic.
+- **Gothmog** (faults — *coming in 0.3*) — declared failures run by a public chaos engine (Azure Chaos Studio first): benign noise Glorfindel must not act on, its own dependencies failing (it must fail closed), a recovery timed.
+- Around them, the workshop: **Celebrimbor** builds and enrolls the disposable bench (Terraform); **Orodruin** (*coming in 0.3*) hosts the injectors, with a guardrail contract checked at startup and a one-command kill switch.
+
+> **Production rule** — never a fault or a destructive action on a real workload. In production, only non-destructive techniques on enrolled VMs, and the full chain on an empty sentinel VM; destructive techniques and faults stay on the reference bench or a twin. *(Coded from 0.3: every enrolled target carries its zone — `bench`, `twin` or `production`.)*
+
+**Status — v0.2.0.** Glorfindel and Annatar run on Azure today (6 techniques validated in real runs). The **0.3** milestone closes the full loop: a public technique and a fault run from Orodruin, the bench returns to its initial state, and what Glorfindel saw is measured and reported. Milestones, lots and the five indicators the project is judged by: [`ROADMAP.md`](ROADMAP.md) (French).
 
 **The core — LLM reasoning + RAG, not playbooks.** Glorfindel never follows a TTP→action table. Every decision comes from an **LLM** (provider-agnostic via LiteLLM — Anthropic, OpenAI, Azure OpenAI, Ollama, self-hosted) reasoning over: the enriched signal (targeted follow-up queries run *before* deciding), a **RAG memory of past incidents** (ChromaDB — it learns every cycle, no fine-tuning), and production-validated few-shot examples. Two hard guardrails wrap the LLM: a **confidence gate** (low confidence → forced escalation) and a **safety graph** that blocks destructive actions without human approval regardless of what the LLM proposes. *(Annatar runs fixed scenarios deterministically and also has a generative campaign layer — `annatar campaign plan` composes an ATT&CK kill-chain from a shared technique catalog, optionally LLM-planned, and materializes replayable scenarios.)*
 

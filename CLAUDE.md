@@ -1,9 +1,18 @@
 # Eregion — Contexte projet pour Claude Code
 
 ## Concept
-Plateforme OSS (Apache 2.0) de défense active cloud. Deux agents IA en boucle :
-- **Annatar** (rouge) simule des attaques réelles sur l'infra cloud (MITRE ATT&CK)
-- **Glorfindel** (bleu) détecte, répond de façon autonome, vérifie, apprend via ChromaDB
+Plateforme OSS (Apache 2.0) de défense active cloud : un SOC pour les charges cloud des équipes sans SOC, prouvé par l'attaque et par la panne. Trois agents en boucle :
+- **Glorfindel** (bleu) — **le produit** : détecte, répond de façon autonome, vérifie, apprend via ChromaDB
+- **Annatar** (rouge) simule des attaques réelles sur l'infra cloud (MITRE ATT&CK) ; devient des adaptateurs vers des bibliothèques publiques (R1 Stratus Red Team, R2 Atomic Red Team)
+- **Gothmog** (pannes, *à venir — G0*) : pannes déclarées en code, par un moteur public (Chaos Studio d'abord) ; éprouve d'abord Glorfindel (bruit bénin, dépendances, reprise)
+
+L'atelier autour : **Celebrimbor** (`infra/terraform/`) construit et inscrit le banc ; **Orodruin** (`infra/orodruin/`, *à venir — O1*) héberge les injecteurs, contrat de garde-fous vérifié au démarrage.
+
+**Direction — huitième passe (13/10)** (détail : `ROADMAP.md`, « Vers la 1.0 ») :
+- **Finalité** : les incidents cloud courants contenus seuls, en quelques minutes, réversibles et vérifiés ; le reste à un humain, trié et expliqué ; la preuve à tout moment. Cinq indicateurs : temps pour contenir, part contenue seule, actions disruptives à tort, couverture des techniques cloud, âge de la dernière preuve (< 30 jours).
+- **Règle de production** (codée dès O0) : jamais de panne ni d'action destructive sur une charge réelle ; en production, techniques non destructives sur VM inscrites + chaîne complète sur une VM sentinelle vide ; destructif et pannes sur le banc ou le jumeau. Zones d'inscription : `bench`, `twin`, `production`.
+- **Jalon 0.3 — la boucle tourne** : socle O0 → E1 → O1 → R1 → G0 ; piste IA B1, B2 (élargi à la mémoire), IA0. **A1 (découpage d'`actions.py`, avec MC0) différé en 0.4+.** O1, R1, G0 (infra réelle), B1 (clé Mistral) et le tag `v0.2.0` se font avec Jonathan.
+- Le SaaS vient plus tard (1.x) ; Eregion tourne en local ou dans une VM.
 
 **Repo** : https://github.com/Vanyar53/eregion
 **Local** : `/home/jonathan/eregion/`, branch `main`, venv `.venv/` (créé par `make install`), `.envrc` charge les creds
@@ -701,7 +710,7 @@ az network nsg rule list -g rg-celebrimbor --nsg-name nsg-celebrimbor -o table
 
 ## Sessions Claude spécialisées (multi-agents)
 
-5 sessions spécialisées + 2 sessions transversales, coordonnées via `collab/`.
+7 sessions spécialisées (dont Orodruin et Gothmog, créées le 13/10 pour la 0.3) + 2 sessions transversales, coordonnées via `collab/`.
 
 | Session | Fichier de rôle | Périmètre |
 |---------|----------------|-----------|
@@ -710,6 +719,8 @@ az network nsg rule list -g rg-celebrimbor --nsg-name nsg-celebrimbor -o table
 | Tests | `CLAUDE_TESTS.md` | Chef d'orchestre — tests fonctionnels bout en bout sur Azure réel |
 | War Room | `CLAUDE_WARROOM.md` | UI/UX `glorfindel/static/index.html` + `glorfindel/api.py` |
 | Infra | `CLAUDE_INFRA.md` | `infra/terraform/` — module Celebrimbor : infra Azure modulaire, namespacée, jetable + topos de validation |
+| Orodruin | `CLAUDE_ORODRUIN.md` | `infra/orodruin/` — hôte d'exécution jetable des injecteurs, état Terraform séparé, contrat vérifié au démarrage (O1, O2) |
+| Gothmog | `CLAUDE_GOTHMOG.md` | `gothmog/` — pannes déclarées, moteur Chaos Studio d'abord (G0–G4, X1 avec Annatar) |
 | Review | `CLAUDE.md` (base) | Design review, architecture critique, BA sprint — ad hoc |
 | General | `CLAUDE.md` (base) | Coordination inter-sessions, inbox routing, CLAUDE.md/README/ROADMAP |
 
@@ -729,6 +740,12 @@ az network nsg rule list -g rg-celebrimbor --nsg-name nsg-celebrimbor -o table
 
 # Session Infra
 "Lis CLAUDE_INFRA.md pour tes instructions de session, puis commence par ton inbox."
+
+# Session Orodruin
+"Lis CLAUDE_ORODRUIN.md pour tes instructions de session, puis commence par ton inbox."
+
+# Session Gothmog
+"Lis CLAUDE_GOTHMOG.md pour tes instructions de session, puis commence par ton inbox."
 
 # Session Review (ad hoc — challenge design et implémentations)
 "Tu es la session Review d'Eregion. Lis CLAUDE.md. Ta mission : challenger les décisions architecturales, les implémentations critiques et les choix de sécurité. Commence par lire inbox_review.md."
@@ -783,14 +800,16 @@ L'escalade porte `action_params` (dict, vide par défaut) pour les actions param
 
 ## Prochaines priorités (voir ROADMAP.md pour détail complet)
 
-0. **Isolation compatible IaC** — isolation JIT par NSG de quarantaine livrée et validée (06/10, `docs/design/module-isolation-iac.md`) ; reste L6 (écran d'activation, la brique `check_permissions` existe) et L8 (module renfort optionnel). **Dépendance couverte** : le JIT repose sur un comportement mesuré d'azurerm (4.81.0) → `make canary-jit` (`infra/canary/jit-terraform/run.sh`, pile jetable ~5 min, ressources gratuites) le revérifie sur la dernière version du provider, et `.github/workflows/canary-azurerm.yml` chaque lundi (si les secrets Azure du dépôt sont configurés). Premier passage le 07/10 : PASS. Depuis la troisième passe : contrainte de version paramétrée (`AZURERM_CONSTRAINT`), code de sortie de l'`apply` vérifié, workflow **quotidien** en matrice 3.x / 4.x / 5.x et **rouge sans secrets** ; joué le 07/10 : **PASS sur azurerm 3.117.1 et 5.8.0**.
-1. **Utilisateur extérieur** — avant tout nouveau scénario ou provider
-2. **glorfindel check-ttl en cron** — crontab ou systemd timer
-3. **Entra ID / Service Principal** — vecteur #1 Azure 2025, `revoke_service_principal`
-4. **Tests + scénarios MITRE** — T1068, T1528, T1078, T1190
-5. **Schéma normalisé `first_result_row`** — prérequis tous connecteurs
-6. **AWS provider** — `AwsConnector` + CloudWatch/GuardDuty
-7. **Prometheus + Loki** — stack open source dominante
+Huitième passe (13/10) — jalon **0.3, la boucle complète tourne** : Orodruin lance une technique publique et une panne sur le banc, retour à l'état initial, on mesure ce que Glorfindel a vu.
+
+1. **O0** — inscription et périmètre communs (`annatar/campaign/scope.py` + `annatar/safety/guard.py` → module partagé), tag `eregion-target`, zones, refus du destructif et des pannes en `production`, 6 mutants
+2. **E1** — schéma d'expérience (technique ou panne) à côté de `schemas/scenario.schema.json`, catalogue étendu aux pannes
+3. **O1** — Orodruin, mode VM dédiée (état Terraform séparé) — avec Jonathan
+4. **R1** — adaptateur Stratus Red Team — avec Jonathan ; question ouverte : Stratus attaque le plan de contrôle (Activity Logs, non lus par Glorfindel) → R2 (Atomic) avant, ou ingestion des Activity Logs
+5. **G0** — Gothmog v0 sur Chaos Studio — avec Jonathan
+6. Piste IA en parallèle : **B1** (Mistral, clé requise), **B2** élargi (mémoire empoisonnée, source `exercise`/`real` de chaque cycle — avant les premiers runs R1/G0), **IA0** (rapport de campagne par RAG, après R1/G0)
+
+Ensuite (0.4+) : A1 avec MC0, A2, A3, B3, B4, G1–G3, R2, C1, D1, IA1, J1–J4, P1, P2. Toujours valable : le chronomètre d'observation (4 semaines en `human_only`, verdicts + `glorfindel report`).
 
 ## Boucle purple team — implémentée
 
@@ -873,8 +892,9 @@ Supprimés des scénarios : `cleanup`, `recovery`, `source`, `workspace_id`, `qu
 
 - Pas compliance-oriented (NIS2, DORA)
 - Pas d'agent en roue libre sur actions destructives
-- Pas de tests sur infra prod sans consentement explicite
+- Jamais de panne ni d'action destructive sur une charge réelle ; pas de tests sur infra prod sans consentement explicite
+- Pas de logique offensive maison — des bibliothèques publiques, version épinglée
 - Pas de dashboard monitoring — ce n'est pas le rôle de Glorfindel
-- Pas de fine-tuning LLM — RAG ChromaDB suffit
-- Pas de multi-cloud avant que la boucle Azure soit solide
-- Pas de SaaS avant utilisateurs réels
+- Pas de fine-tuning LLM — RAG ChromaDB suffit ; aucune donnée d'un client n'entraîne un modèle
+- Pas de multi-cloud avant que la boucle Azure soit solide (sauf MC0, l'interface de fournisseur)
+- Pas de modèle économique SaaS avant la 1.x — Eregion tourne en local ou dans une VM

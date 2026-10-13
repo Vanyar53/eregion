@@ -2,7 +2,8 @@
 
 Ce document montre comment les pièces s'emboîtent : la boucle rouge/bleu, les processus et
 l'état qu'ils partagent, le graphe de décision, les gardes qui encadrent le LLM, la vie
-d'une isolation et la réaffirmation. Les schémas sont en Mermaid (rendus par GitHub), avec un code couleur
+d'une isolation et la réaffirmation ; puis la cible de la 0.3 (composants, vocabulaire commun,
+les trois zones, l'arborescence). Les schémas sont en Mermaid (rendus par GitHub), avec un code couleur
 commun : rouge = attaque (Annatar), bleu = Glorfindel, ambre = garde ou vérification, vert = humain ou succès,
 violet = Azure, rose = escalade ou échec, gris = données.
 Pour **comment on prouve** que tout cela tient, voir [`design/preuves.md`](design/preuves.md) ;
@@ -251,3 +252,92 @@ sequenceDiagram
 
 Une isolation retirée par un `terraform apply` ou à la main est reposée une fois, puis
 Glorfindel alerte sans insister : il ne se bat pas contre un pipeline ou une décision humaine.
+
+## Vers la 0.3 : composants, vocabulaire et zones
+
+Cette section décrit la cible de la huitième passe (13/10, voir [`ROADMAP.md`](../ROADMAP.md),
+« Vers la 1.0 ») ; le code l'adopte lot par lot — l'inscription et la zone avec O0, l'expérience
+avec E1, Orodruin avec O1, Gothmog avec G0. Les schémas ci-dessus décrivent le code d'aujourd'hui.
+
+### Les composants
+
+Glorfindel est le produit ; le reste est l'atelier qui l'éprouve.
+
+| Composant | Rôle | Où | État |
+|---|---|---|---|
+| Glorfindel | détecter, enquêter, répondre ; son IA est l'IA sous test | `glorfindel/` | existe |
+| Annatar | attaques : ses scénarios aujourd'hui, puis des adaptateurs vers des bibliothèques publiques (R1 Stratus Red Team, R2 Atomic Red Team) | `annatar/`, interface d'injecteur dans `annatar/executors/` | existe, évolue |
+| Gothmog | pannes déclarées en code, exécutées par un moteur public (Chaos Studio d'abord) | `gothmog/` | G0 |
+| Orodruin | hôte d'exécution jetable des injecteurs : identité limitée, sortie réseau limitée, contrat vérifié au démarrage, arrêt d'urgence | `infra/orodruin/`, état Terraform séparé | O1 |
+| Celebrimbor | construit et inscrit les cibles du banc | `infra/terraform/` | existe |
+| Inscription et périmètre | un seul garde-fou de cible pour tout injecteur, présent ou futur | module partagé, nom fixé par O0 | O0 |
+| Schéma d'expérience | une même description pour une technique et pour une panne | `schemas/`, `technique_catalog.yaml` | E1 |
+| IA d'analyse | explique, trie, rapporte ; chaque affirmation cite son run ; n'écrit pas de règle | collection ChromaDB distincte, autre modèle | IA0 |
+
+### Le vocabulaire commun
+
+Le framework ne parle qu'avec ces mots ; la correspondance par cloud viendra avec l'interface de
+fournisseur (MC0).
+
+| Concept | Sens |
+|---|---|
+| Cible | ressource qu'on a le droit d'éprouver |
+| Inscription | marque posée à la construction (tag `eregion-target`) ; sans elle, aucun injecteur n'agit ; elle porte la zone de la cible |
+| Zone | `bench`, `twin` ou `production` — ce qu'une expérience a le droit d'y faire |
+| Contrôle réseau | ce qui autorise ou refuse le trafic : isoler, bloquer, lever |
+| Télémétrie | où arrivent les logs et les métriques |
+| Requête de détection | règle dans le langage de la télémétrie |
+| Point de restauration | sauvegarde ou instantané pour revenir à un état connu |
+| Moteur d'injection | outil public qui exécute une technique ou une panne, par identifiant |
+| Expérience | une technique (`kind: technique`) ou une panne (`kind: fault`), décrite par le même schéma |
+| Identité d'exécution | l'identité d'Orodruin, limitée aux cibles inscrites, révocable |
+| Mode ombre | Glorfindel décide sur le vrai trafic sans agir ; on mesure ses décisions (`human_only` + verdicts) |
+| VM sentinelle | une VM vide dans le réseau de production, inscrite, pour éprouver la chaîne complète |
+| Jumeau | réplique de la topologie du client, depuis son code ou la découverte, avec son rapport d'écart |
+| Banc de référence | nos topologies types (Celebrimbor), sur lesquelles nous publions nos preuves |
+| Glorfindel de base | le produit livré par versions : surface surveillée, règles de base, actions, garde-fous |
+| Glorfindel adapté | la couche du client : ses règles, sa mémoire, sa retenue, ses marches ; une mise à jour ne l'écrase jamais |
+
+### Les trois zones
+
+Règle de production : **jamais de panne ni d'action destructive sur une charge réelle.**
+
+| Zone | Ce qui y tourne | Refusé |
+|---|---|---|
+| `bench` | techniques, destructif, pannes, reprise | — |
+| `twin` | idem, avec le rapport d'écart au client | — |
+| `production` | mode ombre ; techniques `destructive: false` sur VM inscrites ; chaîne complète sur la VM sentinelle | toute panne, toute expérience destructive |
+
+Seule la zone `bench` sert en 0.3 ; les deux autres sont codées et testées dès O0. La feuille de
+route 1.0 envisage, en production, des pannes des seules dépendances de Glorfindel (modèle,
+télémétrie, configuration), jamais des charges du client : O0 les refuse comme toute panne ; une
+exception, si elle vient, viendra par un lot explicite.
+
+### Le cycle d'une expérience
+
+Une même boucle pour une technique et pour une panne.
+
+| Étape | Eregion aujourd'hui | Bibliothèques d'attaque | Moteurs de chaos |
+|---|---|---|---|
+| Préparer | `annatar/safety/guard.py`, `annatar/campaign/scope.py`, préflight | Stratus `warmup` | cible inscrite auprès du moteur |
+| État normal | `glorfindel/posture.py`, `glorfindel/readiness.py` | — | Chaos Toolkit `steady-state-hypothesis` |
+| Injecter | `annatar/executors/` | Stratus `detonate`, test Atomic, capacité Caldera | expérience ou objet de panne |
+| Observer | `annatar/collectors/`, signaux (`attack_started`, puis `fault_started`) | — | sondes pendant l'expérience |
+| Revenir | `annatar clean`, `glorfindel release` | Stratus `revert`, `cleanup` | Chaos Toolkit `rollbacks` |
+| Verdict | `annatar/runner/report.py`, War Room | — | — |
+
+### L'arborescence visée
+
+```
+glorfindel/              le produit (existe)
+annatar/                 attaque (existe) ; executors/ devient l'interface d'injecteur (R1)
+gothmog/                 pannes (G0) — emplacement réservé, README seul
+<module partagé>/        inscription et périmètre (O0) ; réunit annatar/campaign/scope.py et annatar/safety/guard.py
+schemas/                 scenario.schema.json (existe) + schéma d'expérience versionné (E1)
+technique_catalog.yaml   techniques (existe) + pannes (E1)
+infra/terraform/         Celebrimbor (existe) ; posera eregion-target (O0) et inscrira les cibles Chaos Studio (G0)
+infra/orodruin/          Orodruin, état Terraform séparé (O1) — emplacement réservé, README seul
+infra/canary/            canary azurerm (existe)
+CLAUDE_ORODRUIN.md       session Orodruin (O1, O2)
+CLAUDE_GOTHMOG.md        session Gothmog (G0 à G4)
+```

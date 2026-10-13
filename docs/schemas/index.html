@@ -79,7 +79,7 @@ p { margin: 0; }
 .stage.tall { height: 600px; }
 .stage.dragging { cursor: grabbing; }
 .canvas { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
-.canvas pre.mermaid { margin: 0; background: transparent; }
+.canvas pre.diagram { margin: 0; background: transparent; }
 .canvas svg { max-width: none !important; height: auto; display: block; }
 .hint { position: absolute; right: 10px; bottom: 8px; font: 12px var(--font-mono); color: #566273;
   background: rgba(255,255,255,.85); border: 1px solid #d5dde6; border-radius: 6px; padding: 2px 8px; pointer-events: none; }
@@ -124,7 +124,7 @@ footer { color: var(--muted); font-size: 14px; max-width: 72ch; border-top: 1px 
       <div class="board-head"><div class="txt"><h3>La boucle complète</h3>
         <p>Annatar attaque pour de vrai, Glorfindel détecte dans les journaux, raisonne, agit, relit sur Azure. Un humain approuve ce qui est destructif et ce que le mode de la VM retient. Une attaque ratée donne une règle de détection proposée.</p></div>
         <div class="tools"></div></div>
-      <div class="stage tall"><div class="canvas"><pre class="mermaid">
+      <div class="stage tall"><div class="canvas"><pre class="diagram">
 %%{init: {"theme":"base","themeVariables":{"fontFamily":"IBM Plex Sans","fontSize":"15px","lineColor":"#5b6676","primaryTextColor":"#18212b","edgeLabelBackground":"#ffffff","clusterBkg":"#f4f7fb","clusterBorder":"#aab4c3"}}}%%
 flowchart LR
   subgraph Red["Annatar · rouge"]
@@ -173,7 +173,7 @@ flowchart LR
       <div class="board-head"><div class="txt"><h3>Processus et état partagé</h3>
         <p>Trois processus sur l'hôte de l'opérateur partagent l'état local. Un seul écrit sur une VM à la fois : verrou de fil plus <code>flock</code>, testés entre vrais processus.</p></div>
         <div class="tools"></div></div>
-      <div class="stage"><div class="canvas"><pre class="mermaid">
+      <div class="stage"><div class="canvas"><pre class="diagram">
 %%{init: {"theme":"base","themeVariables":{"fontFamily":"IBM Plex Sans","fontSize":"15px","lineColor":"#5b6676","primaryTextColor":"#18212b","edgeLabelBackground":"#ffffff","clusterBkg":"#f4f7fb","clusterBorder":"#aab4c3"}}}%%
 flowchart TB
   subgraph Host["Hôte de l'opérateur"]
@@ -202,34 +202,35 @@ flowchart TB
 
     <article class="board-card" id="gardes">
       <div class="board-head"><div class="txt"><h3>Les gardes qui encadrent le LLM</h3>
-        <p>Le LLM propose ; une suite de gardes déterministes décide si l'action part seule. Chaque garde qui retient l'action donne son propre type d'escalade.</p></div>
+        <p>Le LLM propose ; une suite de gardes déterministes décide si l'action part seule. Une action destructive n'est jamais autonome, quel que soit le mode. Chaque garde qui retient une action autonome donne son propre type d'escalade.</p></div>
         <div class="tools"></div></div>
-      <div class="stage"><div class="canvas"><pre class="mermaid">
+      <div class="stage"><div class="canvas"><pre class="diagram">
 %%{init: {"theme":"base","themeVariables":{"fontFamily":"IBM Plex Sans","fontSize":"15px","lineColor":"#5b6676","primaryTextColor":"#18212b","edgeLabelBackground":"#ffffff"}}}%%
 flowchart LR
-  LLM["Réponse du LLM"] --> P{"décision<br/>lisible ?"}
-  P -->|non| E0["escalade"]
-  P -->|oui| X{"action<br/>implémentée ?"}
-  X -->|non| E1["proposed_action"]
+  LLM["Réponse du LLM<br/>tool call"] --> P{"décision<br/>lisible ?"}
+  P -->|non| E0["escalade forcée"]
+  P -->|oui| K{"quelle<br/>action ?"}
+  K -->|"destructive<br/>restore, delete…"| E7["destructive_action<br/>jamais autonome"]
+  K -->|"inconnue"| E1["proposed_action"]
+  K -->|"autonome"| X{"implémentée ?"}
+  X -->|non| E1
   X -->|oui| C{"confiance<br/>≥ 0,7 ?"}
   C -->|non| E2["low_confidence"]
-  C -->|oui| S{"signal<br/>caractérisé ?"}
+  C -->|oui| S{"isoler, bloquer :<br/>signal caractérisé ?"}
   S -->|non| E3["uncharacterized_signal"]
-  S -->|oui| A{"attribué à<br/>cette VM ?"}
+  S -->|oui| A{"isoler, bloquer :<br/>attribué à cette VM ?"}
   A -->|non| E4["unattributed_signal"]
-  A -->|oui| R{"levée sur<br/>recovery_complete ?"}
+  A -->|oui| R{"lever :<br/>après recovery_complete ?"}
   R -->|non| E5["release_hold"]
   R -->|oui| M{"mode effectif<br/>de la VM"}
-  M -->|"human_only<br/>ou pas prête"| E6["mode_hold<br/>readiness_hold"]
-  M -->|"non_disruptive"| D{"destructive ?"}
-  D -->|oui| E7["destructive_action"]
-  D -->|non| GO(("exécuter"))
+  M -->|"human_only, ou VM<br/>pas encore prête"| E6["mode_hold"]
+  M -->|"non_disruptive"| GO(("exécuter"))
   classDef blue fill:#2f6fd6,stroke:#1d4a9a,color:#ffffff
   classDef guard fill:#f2b33d,stroke:#b07a12,color:#2b1d00
   classDef warn fill:#fbe3e3,stroke:#d64545,color:#7a1f1f
   classDef go fill:#2e9e6a,stroke:#1d6b47,color:#ffffff
   class LLM blue
-  class P,X,C,S,A,R,M,D guard
+  class P,K,X,C,S,A,R,M guard
   class E0,E1,E2,E3,E4,E5,E6,E7 warn
   class GO go
 </pre></div><span class="hint">Ctrl + molette · glisser</span></div>
@@ -239,7 +240,7 @@ flowchart LR
       <div class="board-head"><div class="txt"><h3>La vie d'une isolation</h3>
         <p>Par quarantaine d'abord ; par règles quand une politique ou les droits refusent l'échange. La levée note son intention avant de toucher Azure, puis relit chaque carte.</p></div>
         <div class="tools"></div></div>
-      <div class="stage"><div class="canvas"><pre class="mermaid">
+      <div class="stage"><div class="canvas"><pre class="diagram">
 %%{init: {"theme":"base","themeVariables":{"fontFamily":"IBM Plex Sans","fontSize":"15px","lineColor":"#5b6676","primaryTextColor":"#18212b"}}}%%
 stateDiagram-v2
   direction LR
@@ -276,7 +277,7 @@ stateDiagram-v2
       <div class="board-head"><div class="txt"><h3>La quarantaine, avant, pendant, après</h3>
         <p>Le temps de l'isolation, la carte porte le NSG de quarantaine de Glorfindel. Le NSG du client reste intact ; un tag dit lequel remettre, même sans état local.</p></div>
         <div class="tools"></div></div>
-      <div class="stage"><div class="canvas"><pre class="mermaid">
+      <div class="stage"><div class="canvas"><pre class="diagram">
 %%{init: {"theme":"base","themeVariables":{"fontFamily":"IBM Plex Sans","fontSize":"15px","lineColor":"#5b6676","primaryTextColor":"#18212b","edgeLabelBackground":"#ffffff","clusterBkg":"#f4f7fb","clusterBorder":"#aab4c3"}}}%%
 flowchart LR
   subgraph Before["Avant"]
@@ -309,7 +310,7 @@ flowchart LR
       <div class="board-head"><div class="txt"><h3>La réaffirmation, toutes les 60 secondes</h3>
         <p>Chaque isolation et chaque blocage enregistrés sont relus sur Azure, sous le verrou de la VM. Ce qui a disparu est reposé une fois, puis Glorfindel alerte sans insister.</p></div>
         <div class="tools"></div></div>
-      <div class="stage tall"><div class="canvas"><pre class="mermaid">
+      <div class="stage tall"><div class="canvas"><pre class="diagram">
 %%{init: {"theme":"base","themeVariables":{"fontFamily":"IBM Plex Sans","fontSize":"15px","actorBkg":"#2f6fd6","actorTextColor":"#ffffff","actorBorder":"#1d4a9a","signalColor":"#3d4756","signalTextColor":"#18212b","noteBkgColor":"#fff4dc","noteBorderColor":"#e0a12e","labelBoxBkgColor":"#f2b33d","labelTextColor":"#2b1d00","loopTextColor":"#18212b"}}}%%
 sequenceDiagram
   participant W as watch
@@ -347,7 +348,7 @@ sequenceDiagram
       <div class="board-head"><div class="txt"><h3>Les couches de preuve</h3>
         <p>Chaque couche voit ce que les autres ne voient pas. Un comportement d'Azure ou de Terraform n'est affirmé qu'après une mesure sur le banc.</p></div>
         <div class="tools"></div></div>
-      <div class="stage"><div class="canvas"><pre class="mermaid">
+      <div class="stage"><div class="canvas"><pre class="diagram">
 %%{init: {"theme":"base","themeVariables":{"fontFamily":"IBM Plex Sans","fontSize":"15px","lineColor":"#5b6676","primaryTextColor":"#18212b","edgeLabelBackground":"#ffffff"}}}%%
 flowchart BT
   U["Tests unitaires<br/>~770, 25 s"]
@@ -380,7 +381,7 @@ flowchart BT
       <div class="board-head"><div class="txt"><h3>La machine à invariants</h3>
         <p>Des milliers de réseaux et de séquences tirés au hasard, onze propriétés vérifiées après chaque étape. Une séquence qui en casse une est réduite, puis figée en exemple.</p></div>
         <div class="tools"></div></div>
-      <div class="stage tall"><div class="canvas"><pre class="mermaid">
+      <div class="stage tall"><div class="canvas"><pre class="diagram">
 %%{init: {"theme":"base","themeVariables":{"fontFamily":"IBM Plex Sans","fontSize":"15px","lineColor":"#5b6676","primaryTextColor":"#18212b","edgeLabelBackground":"#ffffff","clusterBkg":"#f4f7fb","clusterBorder":"#aab4c3"}}}%%
 flowchart LR
   subgraph Draw["Hypothesis tire"]
@@ -422,7 +423,7 @@ flowchart LR
       <div class="board-head"><div class="txt"><h3>Deux écrivains à la fois</h3>
         <p>Un ordonnanceur fait avancer deux opérations un appel Azure à la fois, dans un ordre tiré d'une graine, avec les vrais verrous. Un verrou pris coûte un tour ; sans lui, l'état local finit par contredire Azure.</p></div>
         <div class="tools"></div></div>
-      <div class="stage tall"><div class="canvas"><pre class="mermaid">
+      <div class="stage tall"><div class="canvas"><pre class="diagram">
 %%{init: {"theme":"base","themeVariables":{"fontFamily":"IBM Plex Sans","fontSize":"15px","actorBkg":"#2f6fd6","actorTextColor":"#ffffff","actorBorder":"#1d4a9a","signalColor":"#3d4756","signalTextColor":"#18212b","noteBkgColor":"#fff4dc","noteBorderColor":"#e0a12e"}}}%%
 sequenceDiagram
   participant S as ordonnanceur
@@ -450,18 +451,18 @@ sequenceDiagram
       <div class="board-head"><div class="txt"><h3>La mesure par mutation, et la cadence</h3>
         <p>Un test qui passe ne dit rien de sa force : on réinjecte des bugs que Glorfindel a vraiment eus et on regarde s'ils sont attrapés. Chaque séquence trouvée la nuit est rejouée à chaque push jusqu'à sa correction.</p></div>
         <div class="tools"></div></div>
-      <div class="stage"><div class="canvas"><pre class="mermaid">
+      <div class="stage"><div class="canvas"><pre class="diagram">
 %%{init: {"theme":"base","themeVariables":{"fontFamily":"IBM Plex Sans","fontSize":"15px","lineColor":"#5b6676","primaryTextColor":"#18212b","edgeLabelBackground":"#ffffff"}}}%%
 flowchart LR
   B["bug réel connu<br/>revues, L24 à L28"] --> Mu["mutant<br/>le bug réinjecté"]
   Mu --> Cp["copie jetable<br/>du dépôt"]
-  Cp --> T["invariants<br/>500 séquences × 2 tours"]
+  Cp --> T["invariants<br/>1 000 séquences × 2 tours"]
   T -->|"échec"| Ok["attrapé"]
   T -->|"succès"| Ko["survit<br/>il manque une propriété"]
   push["chaque push"] --> ci["tests · invariants 500<br/>+ séquences de la nuit"]
   nuit["chaque nuit"] --> inv["invariants 10 000<br/>Linux et macOS"]
   inv -. "échecs gardés" .-> ci
-  lundi["chaque lundi"] --> mut["mutation<br/>rouge sous 14"]
+  lundi["chaque lundi"] --> mut["mutation, 1 000 séquences<br/>rouge sous 14 attrapés"]
   classDef red fill:#d64545,stroke:#9e2a2a,color:#ffffff
   classDef guard fill:#f2b33d,stroke:#b07a12,color:#2b1d00
   classDef good fill:#2e9e6a,stroke:#1d6b47,color:#ffffff
@@ -595,10 +596,18 @@ flowchart LR
 
 <script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js"></script>
 <script>
-  // Outside claude.ai nobody draws the diagrams for us: Mermaid does, then the
-  // zoom script above fits each one as soon as its SVG appears.
+  // Drawn here, and only once IBM Plex has loaded: Mermaid sizes each bubble from the
+  // text as it measures it — measured in the fallback font, the text then overflowed
+  // its bubble. The zoom script above fits each diagram as soon as its SVG appears.
+  // (Not `pre.mermaid`: claude.ai would draw those itself, at once, with its own theme.)
   mermaid.initialize({ startOnLoad: false });
-  mermaid.run({ querySelector: "pre.mermaid" });
+  const fontsIn = document.fonts
+    ? Promise.all([document.fonts.load('15px "IBM Plex Sans"'), document.fonts.load('600 15px "IBM Plex Sans"')])
+        .then(() => document.fonts.ready)
+    : Promise.resolve();
+  Promise.race([fontsIn, new Promise((ok) => setTimeout(ok, 3000))])
+    .catch(() => {})
+    .then(() => mermaid.run({ querySelector: "pre.diagram" }));
 </script>
 </body>
 </html>

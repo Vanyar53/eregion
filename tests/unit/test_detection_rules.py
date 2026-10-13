@@ -659,6 +659,42 @@ def test_an_unattributed_row_is_sent_once_and_flagged():
         dr._save_status({})
 
 
+def _connector_with_nics(*nics):
+    """An AzureConnector whose network lists these (vm id, [private ips]) NICs."""
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+    from glorfindel.actions import AzureConnector
+    c = AzureConnector(dry_run=False)
+    c._ensure_clients = lambda: None
+    c._network = MagicMock()
+    c._network.network_interfaces.list_all.return_value = [
+        SimpleNamespace(virtual_machine=SimpleNamespace(id=vm),
+                        ip_configurations=[SimpleNamespace(private_ip_address=ip) for ip in ips])
+        for vm, ips in nics]
+    return c
+
+
+def test_an_ip_two_vnets_reuse_names_no_vm():
+    """10.0.0.5 in two VNets: the last VM listed won — an exfiltration from one could be
+    pinned on the other, and isolated in non_disruptive (L21). Ambiguous → left out."""
+    c = _connector_with_nics((_vm("vm1"), ["10.0.0.5", "10.0.0.6"]), (_vm("vm2"), ["10.0.0.5"]),
+                             (_vm("vm3"), ["10.0.1.7"]), (_vm("vm3").upper(), ["10.0.1.8"]))
+    assert c.private_ip_owners() == {"10.0.0.6": _vm("vm1"), "10.0.1.7": _vm("vm3"),
+                                     "10.0.1.8": _vm("vm3").upper()}
+
+
+def test_a_row_from_an_ambiguous_ip_stays_unattributed():
+    rule = _auto_rule(name="data-exfiltration-blob", ttp="T1041",
+                      query="StorageBlobLogs | where TimeGenerated > ago(5m)")
+    c = _connector_with_nics((_vm("vm1"), ["10.0.0.5"]), (_vm("vm2"), ["10.0.0.5"]))
+    p, sent = _poller(_Det([{"CallerIpAddress": "10.0.0.5:51234", "AccountName": "st", "PutBlobCount": 3}]),
+                      [rule], registry=_Registry("vm1", "vm2"), ip_owners=c.private_ip_owners)
+    p.poll_once(rule)
+    assert len(sent) == 1 and sent[0]["context"]["attribution"] == "unattributed"
+    import glorfindel.detection_rules as dr
+    dr._save_status({})
+
+
 def test_aggregated_row_dispatched_once_while_its_counts_grow():
     rule = _auto_rule()
     det = _Det([{"Computer": "vm1", "SourceIP": "203.0.113.9", "FailedAttempts": 12}])

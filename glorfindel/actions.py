@@ -974,11 +974,15 @@ class AzureConnector(CloudConnector):
     def private_ip_owners(self) -> dict[str, str]:
         """Private IP → VM resource id, for every NIC of the subscription (one paged
         call). The RulePoller attributes a call made FROM a VM (a storage PutBlob, T1041)
-        to that VM by its address — such rows name no VM otherwise. Read-only."""
+        to that VM by its address — such rows name no VM otherwise. Read-only.
+
+        Two VNets can reuse an address (10.0.0.4 in each): an IP held by several VMs is
+        left out — the row it appears on stays unattributed, never a guess. The last VM
+        listed used to win, and an exfiltration could be pinned on the wrong VM (L21)."""
         if self.dry_run:
             return {}
         self._ensure_clients()
-        owners: dict[str, str] = {}
+        holders: dict[str, dict[str, str]] = {}          # ip → {lower id: id}
         for nic in self._network.network_interfaces.list_all():
             vm = getattr(getattr(nic, "virtual_machine", None), "id", None)
             if not vm:
@@ -986,8 +990,8 @@ class AzureConnector(CloudConnector):
             for ipc in getattr(nic, "ip_configurations", None) or []:
                 ip = getattr(ipc, "private_ip_address", None)
                 if ip:
-                    owners[ip] = vm
-        return owners
+                    holders.setdefault(ip, {})[vm.rstrip("/").lower()] = vm
+        return {ip: next(iter(vms.values())) for ip, vms in holders.items() if len(vms) == 1}
 
     def vm_os(self, resource_id: str) -> str:
         """"linux" / "windows" (lowercase os type of the OS disk), "" if unknown."""

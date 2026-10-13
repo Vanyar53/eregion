@@ -1030,6 +1030,32 @@ async def action_ack(esc_id: str) -> dict:
     return {"ok": True}
 
 
+@app.post("/api/escalations/{esc_id}/verdict")
+async def set_verdict(esc_id: str, body: dict) -> dict:
+    """The operator's judgement of a card: right / wrong / unsure (observation)."""
+    from glorfindel import escalations as esc_module
+    try:
+        e = esc_module.set_verdict(esc_id, str((body or {}).get("verdict", "")), str((body or {}).get("note", "")))
+    except (KeyError, ValueError) as exc:
+        return {"error": str(exc).strip("'")}
+    return {"ok": True, "verdict": e["verdict"]}
+
+
+@app.get("/api/report")
+async def observation_report(since: str = "7d") -> dict:
+    """The observation report: verdicts on recommendations, false disruptive rate."""
+    from datetime import datetime, timedelta, timezone
+    from glorfindel import escalations as esc_module
+    start = None
+    if since != "all":
+        units = {"h": "hours", "d": "days", "w": "weeks"}
+        try:
+            start = datetime.now(timezone.utc) - timedelta(**{units[since[-1]]: int(since[:-1])})
+        except (KeyError, ValueError, IndexError):
+            return {"error": "since: a number followed by h, d or w (7d, 24h, 4w), or 'all'"}
+    return esc_module.observation_report(start)
+
+
 @app.get("/api/audit/{vm_name}")
 async def audit_resource(vm_name: str) -> dict:
     """Remediation readiness audit for a single resource."""

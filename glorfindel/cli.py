@@ -1217,6 +1217,67 @@ def ack(escalation_id: str | None, all_pending: bool):
 
 
 @cli.command()
+@click.argument("escalation_id")
+@click.argument("judgement", type=click.Choice(["right", "wrong", "unsure"]))
+@click.option("--note", default="", help="Why — kept with the verdict.")
+def verdict(escalation_id: str, judgement: str, note: str):
+    """Say whether a card's recommendation was right (observation, docs/observation.md).
+
+    ESCALATION_ID: the id, or its first 6+ characters, from 'glorfindel pending'.
+    Independent of 'ack': a card can be judged before or after it is acknowledged.
+    """
+    from glorfindel import escalations
+    try:
+        e = escalations.set_verdict(escalation_id, judgement, note)
+    except (KeyError, ValueError) as exc:
+        console.print(f"[red]✗ {str(exc).strip(chr(39))}[/red]")
+        raise SystemExit(1)
+    console.print(f"[green]✓ {e['action']} on {e['resource_id'].rstrip('/').rsplit('/', 1)[-1]}: "
+                  f"{judgement}[/green]")
+
+
+def _since(value: str):
+    """'7d', '24h', '4w' or 'all' → a UTC datetime (None for all)."""
+    from datetime import datetime, timedelta, timezone
+    if value == "all":
+        return None
+    units = {"h": "hours", "d": "days", "w": "weeks"}
+    try:
+        n, unit = int(value[:-1]), units[value[-1]]
+    except (ValueError, KeyError, IndexError):
+        raise click.BadParameter("use a number followed by h, d or w (7d, 24h, 4w), or 'all'")
+    return datetime.now(timezone.utc) - timedelta(**{unit: n})
+
+
+@cli.command()
+@click.option("--since", "since_text", default="7d", show_default=True, help="Period: 24h, 7d, 4w or all.")
+@click.option("--json", "as_json", is_flag=True, help="Machine-readable output.")
+def report(since_text: str, as_json: bool):
+    """What the observation measured: the operator's verdicts on Glorfindel's
+    recommendations, and the false rate of the disruptive ones (isolate, block)."""
+    import json as _json
+    from glorfindel import escalations
+    r = escalations.observation_report(_since(since_text))
+    if as_json:
+        click.echo(_json.dumps(r, indent=2))
+        return
+    console.print(f"[bold]Observation — {since_text}[/bold]  ·  {r['cards']} recommendation(s), {r['judged']} judged")
+    d = r["disruptive"]
+    rate = "—" if d["false_rate"] is None else f"{d['false_rate']:.0%}"
+    console.print(f"Disruptive (isolate, block): {d['right']} right · {d['wrong']} wrong · {d['unsure']} unsure · "
+                  f"{d['unjudged']} not judged — [bold]false rate {rate}[/bold]")
+    for title, rows in (("By action", r["by_action"]), ("By detection rule", r["by_rule"])):
+        table = Table(title=title, title_justify="left")
+        for col in ("", "right", "wrong", "unsure", "not judged"):
+            table.add_column(col, justify="left" if not col else "right")
+        for name, b in sorted(rows.items()):
+            table.add_row(name, str(b["right"]), str(b["wrong"]), str(b["unsure"]), str(b["unjudged"]))
+        console.print(table)
+    if r["cards"] and r["judged"] < r["cards"]:
+        console.print(f"[dim]{r['cards'] - r['judged']} card(s) not judged: glorfindel verdict <id> right|wrong|unsure[/dim]")
+
+
+@cli.command()
 @click.argument("vm")
 @click.option("--yes", is_flag=True, help="Accept the reserves shown without prompting.")
 def activate(vm: str, yes: bool):

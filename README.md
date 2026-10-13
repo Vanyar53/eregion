@@ -465,6 +465,8 @@ glorfindel pending                              # list pending escalations
 glorfindel pending --watch                      # stay running, print new escalations as they arrive
 glorfindel ack <escalation_id>                  # acknowledge an escalation
 glorfindel ack --all                            # acknowledge all pending escalations
+glorfindel verdict <id> right|wrong|unsure      # was the recommendation right? (observation, docs/observation.md)
+glorfindel report --since 4w                    # verdicts by action and rule, false rate of disruptive recommendations
 glorfindel check-ttl                            # release isolations older than TTL (default 4h)
 glorfindel memory-stats                         # ChromaDB cycle count
 glorfindel bot                                  # start the interactive Discord bot
@@ -735,7 +737,7 @@ flowchart BT
 ```bash
 pip install eregion[dev]
 pytest
-# 784 tests (~30s) — 0 Azure calls, 0 LLM calls, 0 writes to ~/.glorfindel
+# 792 tests (~30s) — 0 Azure calls, 0 LLM calls, 0 writes to ~/.glorfindel
 GLORFINDEL_INVARIANT_EXAMPLES=5000 pytest tests/unit/test_invariants.py   # deep run (~8 min)
 python scripts/mutation_check.py --examples 500 --rounds 2                # measure the invariants
 ```

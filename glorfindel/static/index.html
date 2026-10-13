@@ -1058,6 +1058,17 @@ function _renderEscGroup(group) {
        <button class="action" onclick="event.stopPropagation();openCommandModal('${e.id}')" style="font-size:9px;padding:2px 7px">📋 Cmd</button>`
     : `<button class="action" onclick="event.stopPropagation();doAckAll('${ids}')" style="font-size:9px;padding:2px 7px">✓ Ack</button>
        <button class="action" onclick="event.stopPropagation();openCommandModal('${e.id}')" style="font-size:9px;padding:2px 7px">📋 Cmd</button>`;
+  // Observation (docs/observation.md): was this recommendation right? Decision cards only.
+  const isDecision = !isRule && !['posture_gap', 'orphan_rule', 'proposed_rule', 'readiness_hold',
+    'ttl_exceeded', 'detection_blocked'].includes(e.escalation_type)
+    && !String(e.signal_id || '').startsWith('reassert-');
+  const verdictBtns = isDecision
+    ? `<span style="display:inline-flex;gap:4px;align-items:center;margin-left:auto">
+         ${e.verdict ? `<span style="font-size:9px;color:var(--dim)">judged: ${_attr(e.verdict)}</span>` : ''}
+         <button class="action${e.verdict === 'right' ? ' ok' : ''}" title="The recommendation was right" onclick="event.stopPropagation();doVerdict('${e.id}','right')" style="font-size:9px;padding:2px 7px">✓ Right</button>
+         <button class="action" title="The recommendation was wrong (a false positive, or the wrong action)" onclick="event.stopPropagation();doVerdict('${e.id}','wrong')" style="font-size:9px;padding:2px 7px;color:var(--red)${e.verdict === 'wrong' ? ';font-weight:700' : ''}">✗ Wrong</button>
+       </span>`
+    : '';
   // mode_hold/write_blocked/action_failed: type already encoded in title, keep ctx lean
   const ctxParts = (isModeHold || isWriteBlocked || isActionFailed)
     ? [e.ttp, e.severity].filter(Boolean).join(' · ')
@@ -1070,7 +1081,7 @@ function _renderEscGroup(group) {
       <span style="color:var(--blue);font-size:10px;margin-left:auto;padding-top:1px;flex-shrink:0">▸ details</span>
     </div>
     ${ctxParts ? `<div class="esc-context">${ctxParts}</div>` : ''}
-    <div style="display:flex;gap:5px;margin-top:6px;flex-wrap:wrap" onclick="event.stopPropagation()">${actionBtns}</div>
+    <div style="display:flex;gap:5px;margin-top:6px;flex-wrap:wrap" onclick="event.stopPropagation()">${actionBtns}${verdictBtns}</div>
   </div>`;
 }
 
@@ -2453,6 +2464,21 @@ async function doRestore(vmName) {
   toast('🔄 Restore started for ' + vmName + ' (~20 min)…', 8000);
   try {
     await fetch(`/api/action/restore/${vmName}`, { method: 'POST' });
+  } catch (e) {
+    toast('✗ ' + e.message);
+  }
+}
+
+async function doVerdict(escId, verdict) {
+  try {
+    const r = await fetch(`/api/escalations/${escId}/verdict`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ verdict }),
+    });
+    const d = await r.json();
+    if (d.error) { toast('✗ ' + d.error); return; }
+    toast(verdict === 'right' ? '✓ Marked right' : '✗ Marked wrong');
+    refreshState();
   } catch (e) {
     toast('✗ ' + e.message);
   }

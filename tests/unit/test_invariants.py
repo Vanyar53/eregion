@@ -1,4 +1,4 @@
-"""Invariants of isolation, blocking, release, reassertion and crashes (L24, L26).
+"""Invariants of isolation, blocking, release, reassertion and crashes (L24, L26, A0).
 
 Random customer networks (fake_azure.FakeAzure) and random sequences of operations,
 with faults injected anywhere — a throttled call (429), a crash before a write, a crash
@@ -6,8 +6,12 @@ after a write whose answer never came back, a full disk on the local state — a
 world that moves under Glorfindel: the customer adds, narrows and removes rules,
 deletes an NSG, changes an IP, sets a policy, redeploys a NIC, runs `terraform apply`;
 someone edits Glorfindel's own rules or tags; the role is removed; the configuration
-changes or can't be read; a VM is deleted. Hypothesis shrinks any failure to the
-shortest sequence that breaks a property.
+changes or can't be read; a VM is deleted or created (on the lowest free address, often
+a deleted VM's); someone turns one of Glorfindel's rules around (an allow, behind a
+customer allow, another protocol, another target) or adds an allow under one of its
+names; another host writes a NIC right after Glorfindel did; an older version left
+its isolation (fixed names, single-NSG state); the clock moves on. Hypothesis shrinks
+any failure to the shortest sequence that breaks a property.
 
 What must hold whatever happens:
   I1  no VM is ever more reachable than its owner designed it — the design follows the
@@ -15,7 +19,9 @@ What must hold whatever happens:
       deliberate exception;
   I2  Glorfindel never changes the customer's configuration: the customer's rules are
       what the customer last wrote, a subnet keeps its NSG, a NIC carries the NSG the
-      customer gave it or Glorfindel's quarantine NSG, never none or another;
+      customer gave it or Glorfindel's quarantine NSG, never none or another — and, by
+      author (the fake's journal of API writes), it only writes rules it wrote, its own
+      NSG, and a NIC's NSG to or from its quarantine;
   I3  no success on a falsehood: "isolated" (no bypass reported) means isolated,
       "blocked" means the attacker is cut off, "released" means back to the design with
       nothing of Glorfindel's left on the NICs, a verification that says True is true;
@@ -33,7 +39,14 @@ What must hold whatever happens:
       or when the configuration can't be read, and only in the group it names;
   I11 two operations at once (the watch, the War Room, the CLI) end as one of them
       after the other would: what the local state says is what Azure has (L27);
-  I12 a VM of another subscription is never acted on — nor vouched for (A0).
+  I12 a VM of another subscription is never acted on — nor vouched for (A0);
+  L1  a block whose rules all vanished from Azure is put back, or said — even behind the
+      quarantine (A0);
+  U1  a rule left by a NIC that no longer exists, cutting a live NIC off, is reported (L28).
+
+Oracles are the test's own: what was released, what was lost and when, who wrote what
+— never the markers and records the code under test leaves (a bug that deletes them
+must not earn an exemption).
 
 GLORFINDEL_INVARIANT_EXAMPLES raises the number of sequences (default 60);
 GLORFINDEL_INVARIANT_STEPS their length (default 30);

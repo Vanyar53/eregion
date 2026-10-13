@@ -87,7 +87,7 @@ DOCKER_GLORFINDEL := docker run --rm $(GLORFINDEL_AZURE_ENV) $(GLORFINDEL_VOLS) 
 	$(GLORFINDEL_ENV) \
 	$(IMAGE_GLORFINDEL) glorfindel
 
-.PHONY: help build build-annatar build-glorfindel fix-state-ownership \
+.PHONY: help build build-annatar build-glorfindel fix-state-ownership check-azure-env \
 	annatar-run annatar-dry-run annatar-validate annatar-list \
 	glorfindel-respond glorfindel-dry-run glorfindel-watch \
 	glorfindel-release glorfindel-revert glorfindel-list \
@@ -244,7 +244,18 @@ glorfindel-release: build
 glorfindel-check-ttl: build
 	@$(DOCKER_GLORFINDEL) check-ttl
 
-glorfindel-start: build-glorfindel
+# Without AZURE_SUBSCRIPTION_ID the containers start but see nothing: discovery, posture and
+# detection fail with one warning in the logs, and an incident would go unnoticed (happened
+# on a redeploy from a shell without .envrc). Stop here — unless wanted (a demo without Azure).
+check-azure-env:
+	@if [ -z "$(AZURE_SUBSCRIPTION_ID)" ] && [ -z "$(ALLOW_NO_AZURE)" ]; then \
+	  echo "✗ AZURE_SUBSCRIPTION_ID is empty: Glorfindel would start blind (no discovery, no detection)."; \
+	  echo "  Load your credentials first (direnv allow, or: set -a; . ./.envrc; set +a),"; \
+	  echo "  or run with ALLOW_NO_AZURE=1 for a demo without Azure."; \
+	  exit 1; \
+	fi
+
+glorfindel-start: check-azure-env build-glorfindel
 	mkdir -p $(HOME)/.glorfindel $(HOME)/.cache/chroma runs
 	docker compose up -d
 	@echo ""
@@ -257,11 +268,11 @@ glorfindel-start: build-glorfindel
 glorfindel-stop:
 	docker compose down
 
-glorfindel-restart: build-glorfindel
+glorfindel-restart: check-azure-env build-glorfindel
 	docker compose up -d --build --force-recreate
 	@echo "  War Room  →  http://localhost:7007"
 
-glorfindel-dev: build-glorfindel
+glorfindel-dev: check-azure-env build-glorfindel
 	mkdir -p $(HOME)/.glorfindel $(HOME)/.cache/chroma runs
 	docker compose up -d
 	@echo "  War Room  →  http://localhost:7007  (watching for changes…)"

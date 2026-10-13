@@ -1430,6 +1430,15 @@ class AzureConnector(CloudConnector):
         ips = t.get("private_ips") or None
         return [r for r in rules if _nic_owns(r, {base, f"{base}-out"}, names, ips)]
 
+    def _original_view(self, t0: dict, original: str) -> dict:
+        """The NIC as seen from its original NSG (away while in quarantine, or not yet put
+        back on a bare NIC), placed as that NSG really is: fixed legacy names count only on
+        an NSG that governs one VM."""
+        o_rg, o_name = _parse_nsg_resource_id(original)
+        sharing = self._nsg_sharing(o_rg, o_name)
+        return {**t0, "nsg_rg": o_rg, "nsg_name": o_name, "scope": "nic", "ip_scoped": sharing is not False,
+                "shared_nsg": sharing is not False, **({"sharing_unknown": True} if sharing is None else {})}
+
     def _unattributable_fixed(self, t: dict, rules: list) -> list[str]:
         """An older version's fixed-name isolation (no VM in its name) that cuts this NIC
         off, on an NSG that isn't its own — shared since, a subnet's, or whose sharing
@@ -2115,13 +2124,15 @@ class AzureConnector(CloudConnector):
 
     def _list_rules(self, cache: dict, nsg_rg: str, nsg_name: str) -> list | None:
         """Security rules of an NSG, listed once per verification. None if unreadable:
-        an empty list would read as "nothing precedes our deny" (fail open)."""
+        an empty list would read as "nothing precedes our deny" (fail open). An NSG that
+        no longer exists (404) has no rules: empty — a block on an NSG the customer
+        deleted read as "unreadable" forever, never as gone (A0, L1)."""
         key = (nsg_rg, nsg_name)
         if key not in cache:
             try:
                 cache[key] = list(self._network.security_rules.list(nsg_rg, nsg_name))
-            except Exception:
-                cache[key] = None
+            except Exception as exc:
+                cache[key] = [] if _is_not_found(exc) else None
         return cache[key]
 
     def _shadowed_deny(
@@ -2595,6 +2606,7 @@ class AzureConnector(CloudConnector):
         unreadable += [f'{t0["nic_short"]}: NSG du subnet illisible' for t0 in targets if t0.get("subnet_unreadable")]
         originals: dict[str, str | None] = {}
         views = [v for t0 in targets for v in self._nic_nsg_views(t0)]
+        failed_early: list[str] = []
         for t0 in quarantined:
             try:
                 # The local state first, when there is one, then our tag — as the release
@@ -2610,8 +2622,31 @@ class AzureConnector(CloudConnector):
             if original:
                 # Hidden behind the quarantine: its own NSG, where an earlier fallback
                 # may have left rules (L24).
-                o_rg, o_name = _parse_nsg_resource_id(original)
-                views.append({**t0, "nsg_rg": o_rg, "nsg_name": o_name, "scope": "nic", "ip_scoped": True})
+                views.append(self._original_view(t0, original))
+        # A NIC left bare after our NSG was taken off it: its original comes back below
+        # (state first, then our tag — as the release does, L27/L28). Its rules are swept
+        # too: an older version's isolation there stayed, and the VM, "swept", was still
+        # cut off (A0). From the tag only, a lost tag made the reset skip the NIC, say
+        # `swept` and clear the state that knew it (A0, seed 3).
+        bare: dict = {}
+        for t0 in targets:
+            if t0.get("quarantine") or t0.get("own_nsg_id"):
+                continue
+            recorded = _recorded_original(t0["nic_id"])
+            try:
+                original, q_bare = self._bare_nic_original(t0, rg)
+            except Exception as exc:
+                if recorded is _UNKNOWN:
+                    failed_early.append(f'{t0["nic_short"]}: tag d\'origine illisible ({_first_line(exc)[:_ERR_MAX]})')
+                    continue
+                original, q_bare = _UNKNOWN, None
+            if recorded is not _UNKNOWN:
+                original = recorded
+            elif q_bare is None:
+                continue
+            bare[t0["nic_id"]] = (original, q_bare)
+            if original:
+                views.append(self._original_view(t0, original))
         for t in views:
             nsg_key = (t["nsg_rg"].lower(), t["nsg_name"].lower())
             h = hashlib.sha1(t["nic_id"].encode()).hexdigest()[:8]
@@ -2669,18 +2704,13 @@ class AzureConnector(CloudConnector):
                 deleted.append(label)
             except Exception as exc:
                 failed.append(f"{label} : {_first_line(exc)[:_ERR_MAX]}")
+        failed += failed_early
         for t0 in targets:
             # A NIC left bare after our NSG was taken off it: our tag says what it
-            # carried (seventh review, U2).
-            if t0.get("quarantine") or t0.get("own_nsg_id"):
+            # carried (seventh review, U2) — or the state (see above).
+            if t0["nic_id"] not in bare:
                 continue
-            try:
-                original, q_bare = self._bare_nic_original(t0, rg)
-            except Exception as exc:
-                failed.append(f'{t0["nic_short"]}: tag d\'origine illisible ({_first_line(exc)[:_ERR_MAX]})')
-                continue
-            if q_bare is None:
-                continue
+            original, q_bare = bare[t0["nic_id"]]
             label = (f'{t0["nic_short"]}: carte sans NSG'
                      + (f', remettre {original.rstrip("/").split("/")[-1]}' if original else ""))
             if dry_run:
@@ -2691,7 +2721,8 @@ class AzureConnector(CloudConnector):
                     self._set_nic_nsg(t0["nic_id"], original)
                     if not _same_id(self._nic_nsg_id(t0["nic_id"]) or "", original):
                         raise RuntimeError("NSG d'origine non remis")
-                self._forget_original(q_bare, t0["nic_id"])
+                if q_bare is not None:
+                    self._forget_original(q_bare, t0["nic_id"])
                 deleted.append(label)
             except Exception as exc:
                 failed.append(f"{label} : {_first_line(exc)[:_ERR_MAX]}")

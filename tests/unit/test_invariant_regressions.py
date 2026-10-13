@@ -367,3 +367,39 @@ def test_a_release_never_takes_an_old_isolation_on_a_shared_nsg(monkeypatch):
                   ("create_vm", "westeurope", "rg-app1", "api", _NEW_VM_ON.format(rg="rg-app1", nic="web-nic"), "Linux"),
                   ("release", new_vm, new_vm, None),
                   check=lambda m: None)
+
+
+_Q1 = _NSG.format(rg="rg-app1", name="nsg-glorfindel-quarantine-westeurope")
+
+
+def test_a_reset_puts_a_bare_nics_original_back_from_the_state(monkeypatch):
+    """Isolated, our NSG taken off the NIC by someone, our tags lost: the reset read a bare
+    NIC's original from the tag only — skipped it, said `swept` and cleared the state that
+    knew it: the NIC left without its NSG, in silence (A0, seed 3)."""
+    _run(monkeypatch, _net(quarantine=True, web_nic={"own": "dedicated"}),
+         ("isolate", WEB1, WEB1, None),
+         ("someone_detaches_the_quarantine", _nic("rg-app1", "web-nic")),
+         ("tags_lost", _Q1),
+         ("reset_from_azure", WEB1, WEB1, None))
+
+
+def test_a_block_on_a_deleted_nsg_is_gone_not_unreadable(monkeypatch):
+    """Blocked on the NIC's own NSG, isolated by quarantine, then the customer deletes that
+    NSG (it governs nothing any more): the listing failed (404) and read as "unreadable" —
+    the block gone and never said (A0, L1, seed 3)."""
+    _run(monkeypatch, _net(quarantine=True, web_nic={"own": "dedicated"}),
+         ("block", WEB1, WEB1, None, 22),
+         ("isolate", WEB1, WEB1, None),
+         ("customer_deletes_nsg", _NSG.format(rg="rg-app1", name="nsg-web-nic")),
+         ("reassert", "human_only", None))
+
+
+def test_a_reset_sweeps_the_original_it_puts_back(monkeypatch):
+    """An older version's isolation of `web` on its own NSG, then a quarantine, our NSG
+    taken off the NIC by someone, and a reset: it put the NIC's NSG back but never read
+    that NSG's rules — the old isolation stayed, the VM still cut off after `swept`, with
+    no state (A0, seed 20)."""
+    _run(monkeypatch, _net(quarantine=True, legacy=("web-nic", True), web_nic={"own": "dedicated"}),
+         ("isolate", WEB1, WEB1, None),
+         ("someone_detaches_the_quarantine", _nic("rg-app1", "web-nic")),
+         ("reset_from_azure", WEB1, WEB1, None))

@@ -157,6 +157,14 @@ MUTANTS = [
     ("M38", "a block gone behind the quarantine not reported (A0, L1)", A,
      "                                    held_missing += names",
      "                                    pass"),
+    ("M39", "reset reads a bare NIC's original from the tag only (A0)", A,
+     "            if recorded is not _UNKNOWN:\n                original = recorded\n            elif q_bare is None:",
+     "            if False:\n                original = recorded\n            elif q_bare is None:"),
+    ("M40", "a deleted NSG's listing read as unreadable (A0, L1)", A,
+     "                cache[key] = [] if _is_not_found(exc) else None",
+     "                cache[key] = None"),    ("M41", "reset doesn't sweep the original it puts back on a bare NIC (A0)", A,
+     '            bare[t0["nic_id"]] = (original, q_bare)\n            if original:\n                views.append(self._original_view(t0, original))',
+     '            bare[t0["nic_id"]] = (original, q_bare)'),
 ]
 
 

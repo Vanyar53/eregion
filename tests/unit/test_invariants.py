@@ -362,6 +362,7 @@ class IsolationMachine(RuleBasedStateMachine):
         self.recorded_at: dict[str, tuple[int, str]] = {}   # NIC → (tick, quarantine NSG)
         self.state_lost_at: dict[str, int] = {}             # VM → tick
         self.tags_lost_at: dict[str, int] = {}              # quarantine NSG → tick
+        self.state_had: dict[str, int] = {}                 # NIC → record a state once held
         self.before_quarantine: dict[str, str | None] = {}   # NIC → what it carried
         # (NSG, rule) someone turned into an allow → (the rule before, the rule after);
         # before = None for an allow they added under one of our names.
@@ -542,8 +543,9 @@ class IsolationMachine(RuleBasedStateMachine):
 
     def _untraceable(self, vm: str, nic: dict) -> bool:
         """A NIC someone left bare, whose original nothing records any more — the TEST
-        lost both the VM's state and the tags of the quarantine NSG after Glorfindel
-        recorded it: Glorfindel can't even tell it was in quarantine. Its release may say
+        lost the tags of the quarantine NSG after Glorfindel recorded it, and the VM's state
+        too (or a fault it injected cut the operation off before the state was written):
+        Glorfindel can't even tell it was in quarantine. Its release may say
         `released`; the operator puts the NSG back (_recover_everything). Judged from the
         test's journal, not from the records as the code left them (see __init__)."""
         if key(nic["id"]) not in self.detached or nic["nsg"] is not None:
@@ -553,7 +555,17 @@ class IsolationMachine(RuleBasedStateMachine):
         if rec is None:
             return False
         at, quarantine = rec
-        return self.state_lost_at.get(key(vm), -1) > at and self.tags_lost_at.get(quarantine, -1) > at
+        if self.tags_lost_at.get(quarantine, -1) <= at:
+            return False                      # the test didn't lose the tag: it traces it
+        if self.state_lost_at.get(key(vm), -1) > at:
+            return True
+        if self.state_had.get(key(nic["id"])) == at:
+            return False                      # a state held it: Glorfindel dropped it, a bug
+        # The state never had it either: the operation that swapped the NIC was cut off (a
+        # fault the test injected) before writing it. A record of "none" says nothing.
+        st = self._state(vm) or {}
+        return not any(key(p.get("nic_id")) == key(nic["id"]) and p.get("original_nsg_id")
+                       for p in st.get("placements") or [])
 
     def _back_to_design(self, vm: str, own: bool = False) -> bool:
         """Every flow as designed — the attacker's excepted while a block of it stands
@@ -1602,6 +1614,11 @@ class IsolationMachine(RuleBasedStateMachine):
                     f"I2: Glorfindel set {nic}'s NSG from {was} to {now} "
                     f"(before quarantine: {self.before_quarantine.get(nic, 'never in quarantine')})")
         self.journal_seen = len(journal)
+        for vm in self.live:                     # which records a state has held
+            for p in (self._state(vm) or {}).get("placements") or []:
+                nk = key(p.get("nic_id") or "")
+                if p.get("original_nsg_id") and nk in self.recorded_at:
+                    self.state_had[nk] = self.recorded_at[nk][0]
 
     @invariant()
     def never_more_open_than_designed(self):

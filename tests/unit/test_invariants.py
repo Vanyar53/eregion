@@ -354,6 +354,14 @@ class IsolationMachine(RuleBasedStateMachine):
         self.releasing: set[str] = set()                # the test's own journal (I9)
         self.unblocking: set[str] = set()
         self.journal_seen = 0                           # I2 by author: entries checked
+        # Untraceability from the test's own journal (A0): when Glorfindel recorded a NIC's
+        # original (moved it from a real NSG into quarantine), and when the test destroyed
+        # the records — never from the records as the code left them, or a bug that
+        # deletes them earns the exemption (M24–M26, M29 went unseen).
+        self.ticks = 0
+        self.recorded_at: dict[str, tuple[int, str]] = {}   # NIC → (tick, quarantine NSG)
+        self.state_lost_at: dict[str, int] = {}             # VM → tick
+        self.tags_lost_at: dict[str, int] = {}              # quarantine NSG → tick
         self.before_quarantine: dict[str, str | None] = {}   # NIC → what it carried
         # (NSG, rule) someone turned into an allow → (the rule before, the rule after);
         # before = None for an allow they added under one of our names.
@@ -533,21 +541,19 @@ class IsolationMachine(RuleBasedStateMachine):
         return all(key(n["nsg"]) == key(n["design_nsg"]) or self._untraceable(vm, n) for n in self._nics(vm))
 
     def _untraceable(self, vm: str, nic: dict) -> bool:
-        """A NIC someone left bare, whose original nothing records any more — not the
-        state, not a tag of ours: Glorfindel can't even tell it was in quarantine. Its
-        release may say `released`; the operator puts the NSG back (_recover_everything)."""
+        """A NIC someone left bare, whose original nothing records any more — the TEST
+        lost both the VM's state and the tags of the quarantine NSG after Glorfindel
+        recorded it: Glorfindel can't even tell it was in quarantine. Its release may say
+        `released`; the operator puts the NSG back (_recover_everything). Judged from the
+        test's journal, not from the records as the code left them (see __init__)."""
         if key(nic["id"]) not in self.detached or nic["nsg"] is not None:
             return False
-        # Only a real NSG on record traces it. A record of "none" for a NIC whose design
-        # has one was made while nothing knew better (a re-isolation of the bare NIC
-        # after state and tags were lost): no information either.
-        st = self._state(vm) or {}
-        if any(key(p.get("nic_id")) == key(nic["id"]) and p.get("original_nsg_id")
-               for p in st.get("placements") or []):
+        self._check_authors()
+        rec = self.recorded_at.get(key(nic["id"]))
+        if rec is None:
             return False
-        tag = self.connector._orig_tag(nic["id"])
-        return not any(g["tags"].get(tag) not in (None, self.connector._NO_ORIGINAL)
-                       for g in self.fake.nsgs.values() if g["tags"].get("managed-by") == "glorfindel")
+        at, quarantine = rec
+        return self.state_lost_at.get(key(vm), -1) > at and self.tags_lost_at.get(quarantine, -1) > at
 
     def _back_to_design(self, vm: str, own: bool = False) -> bool:
         """Every flow as designed — the attacker's excepted while a block of it stands
@@ -697,9 +703,12 @@ class IsolationMachine(RuleBasedStateMachine):
     def _isolate(self, vm, rid, fault):
         (flows, states), nics = self._before(), self._quarantined_nics()
         azure_before = self.fake.snapshot() if not self.config["readable"] else None
+        writes = len(self.fake.journal)
         out, err = self._run(fault, lambda: self.connector.isolate_vm(rid), "isolate")
-        if (out or {}).get("status") == "isolated":
-            self.releasing.discard(vm)          # a new isolation: the operator's call
+        if (out or {}).get("status") == "isolated" or len(self.fake.journal) > writes:
+            # A new isolation, the operator's call — even cut off midway, once it has
+            # written to Azure: the release it supersedes is no longer under way (I9).
+            self.releasing.discard(vm)
         if azure_before is not None:
             # S1: the configuration can't be read — refused before any write.
             assert self.fake.snapshot() == azure_before, (
@@ -1343,6 +1352,9 @@ class IsolationMachine(RuleBasedStateMachine):
         if ours:
             n = self.fake.nsgs[data.draw(st.sampled_from(ours), label="quarantine")]
             n["tags"] = {k: v for k, v in n["tags"].items() if not k.startswith("glorfindel-orig-")}
+            self._check_authors()
+            self.ticks += 1
+            self.tags_lost_at[key(n["id"])] = self.ticks
 
     @rule(data=st.data())
     def tamper_with_our_rule(self, data):
@@ -1424,6 +1436,9 @@ class IsolationMachine(RuleBasedStateMachine):
     def lose_state(self, data):
         """The state directory is lost (new container without its volume, disk wiped)."""
         vm = data.draw(st.sampled_from(self.vms), label="vm")
+        self._check_authors()                      # what Glorfindel recorded comes first
+        self.ticks += 1
+        self.state_lost_at[key(vm)] = self.ticks
         for f in (actions._ISOLATION_STATE_DIR.glob("*.json")
                   if actions._ISOLATION_STATE_DIR.exists() else []):
             if actions._file_rid(f) == key(vm):
@@ -1577,6 +1592,9 @@ class IsolationMachine(RuleBasedStateMachine):
                 if now and actions._is_quarantine_nsg(now):
                     if not (was and actions._is_quarantine_nsg(was)):
                         self.before_quarantine[nic] = was
+                        if was:
+                            self.ticks += 1
+                            self.recorded_at[nic] = (self.ticks, key(now))
                     continue
                 design = self.fake.nics[nic]["design_nsg"]
                 allowed = {key(design)} | ({key(self.before_quarantine[nic])} if nic in self.before_quarantine else set())

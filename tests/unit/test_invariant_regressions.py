@@ -135,12 +135,21 @@ def test_a_reset_reads_the_original_from_the_state_and_marks_what_it_left(monkey
     reset read the original NIC NSG from the tag only, stopped on it although the state
     knew it, deleted the block's rules anyway and kept the block's state unmarked — the
     reassertion would have put back what the operator had asked to remove."""
-    _run(monkeypatch, _net(quarantine=True, subnet_nsg=[]),
-         ("block", WEB1, WEB1, None, 22),
-         ("isolate", WEB1, WEB1, None),
-         ("tags_lost", "/subscriptions/s/resourcegroups/rg-app1/providers/microsoft.network/"
-                       "networksecuritygroups/nsg-glorfindel-quarantine-westeurope"),
-         ("reset_from_azure", WEB1, WEB1, None))
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_net(quarantine=True, subnet_nsg=[]))
+        m.block(Script(WEB1, WEB1, None, 22))
+        m.isolate(Script(WEB1, WEB1, None))
+        m.tags_lost(Script("/subscriptions/s/resourcegroups/rg-app1/providers/microsoft.network/"
+                           "networksecuritygroups/nsg-glorfindel-quarantine-westeurope"))
+        m.reset_from_azure(Script(WEB1, WEB1, None))
+        # The state knew the original: the reset finishes. Since A0 it records its intent
+        # first, so stopping on the lost tag no longer shows as a state that isn't Azure's:
+        # it shows here, as a reset that didn't do what it could (M24).
+        assert m._state(WEB1) is None and m._nics_as_designed(WEB1), m._state(WEB1)
+    finally:
+        m.teardown()
 
 
 def test_a_nic_left_without_an_nsg_gets_its_original_back(monkeypatch):
@@ -346,3 +355,15 @@ def test_a_block_gone_behind_the_quarantine_is_said(monkeypatch):
          ("isolate", WEB1, WEB1, None),
          ("terraform_apply", _NSG.format(rg="rg-app1", name="nsg-web-nic")),
          ("reassert", "human_only", None))
+
+
+def test_a_release_never_takes_an_old_isolation_on_a_shared_nsg(monkeypatch):
+    """An older version's isolation of `web` (fixed names, any/any, its state kept), then a
+    new VM attached to the same NSG — shared since. Releasing the NEW VM must leave web's
+    rule: fixed names only count on an NSG that governs one VM (M02, observable since the
+    machine has older versions' rules — A0)."""
+    new_vm = "/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/api"
+    _legacy_world(monkeypatch, ("web-nic", True),
+                  ("create_vm", "westeurope", "rg-app1", "api", _NEW_VM_ON.format(rg="rg-app1", nic="web-nic"), "Linux"),
+                  ("release", new_vm, new_vm, None),
+                  check=lambda m: None)

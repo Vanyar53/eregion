@@ -90,8 +90,8 @@ MUTANTS = [
      "        return method(self, *args, **kwargs)"),
     # Found by L26 itself (the world moving): kept so they stay found.
     ("M18", "a NIC's old-IP rule recognised by content only (L26)", A,
-     "    return name in hashed or (name in names and _deny_applies(rule, ips))",
-     "    return name in (hashed | names) and _deny_applies(rule, ips)"),
+     "    if name in hashed:\n        # Only Glorfindel names a rule with a NIC's hash",
+     "    if name in hashed and _deny_applies(rule, ips):\n        # Only Glorfindel names a rule with a NIC's hash"),
     ("M19", "a block verified against the IPs recorded at block time (L26)", A,
      "                now = current.get(nic) if current is not None and isinstance(nic, str) else None",
      "                now = None"),
@@ -114,7 +114,10 @@ MUTANTS = [
      "                originals[t0[\"nic_id\"]] = original = self._original_from_tags(t0[\"quarantine\"], t0[\"nic_id\"])"),
     ("M25", "a partial reset leaves the state unmarked (L27)", A,
      "        elif not dry_run:\n            # Part of it is gone from Azure",
-     "        elif False:\n            # Part of it is gone from Azure"),
+     "        elif False:\n            # Part of it is gone from Azure",
+     "EQUIVALENT: since A0 the reset records its intent (releasing_at / unblocking_at) before "
+     "touching Azure — a partial reset's state is held by that marker either way; the failure "
+     "mark only changes the operator's wording"),
     ("M26", "a NIC left without an NSG: the release moves on (L28, U2)", A,
      "                        if now is None:\n                            # Detached from our NSG",
      "                        if False:\n                            # Detached from our NSG"),
@@ -210,9 +213,9 @@ CONTROL = [
      "    if _held_by_an_operation(iso, \"release_failed\", \"releasing_at\"):\n        return",
      "    if _held_by_an_operation(iso, \"release_failed\", \"releasing_at\") and not _stale(iso.get(\"releasing_at\")):\n        return"),
     ("C16", "precedence ignores glorfindel-* allows", A,
-     "        if _enum_text(getattr(r, \"access\", \"\")) != \"allow\":\n            continue\n        direction = _enum_text(getattr(r, \"direction\", \"\"))",
+     "        if _enum_text(getattr(r, \"access\", \"\")) != \"allow\":\n            continue\n        if direction == \"inbound\":",
      "        if _enum_text(getattr(r, \"access\", \"\")) != \"allow\":\n            continue\n        if name.startswith(\"glorfindel-\"):\n            continue\n"
-     "        direction = _enum_text(getattr(r, \"direction\", \"\"))"),
+     "        if direction == \"inbound\":"),
 ]
 
 

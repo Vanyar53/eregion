@@ -321,3 +321,29 @@ def test_a_reset_with_unreadable_sharing_doesnt_skip_an_old_isolation(monkeypatc
         _legacy_world(monkeypatch, ("api-nic", keep),
                       ("reset_from_azure", API, API, ("nsg.get", "always-429")),
                       check=lambda m: None)
+
+
+_NSG = "/subscriptions/s/resourcegroups/{rg}/providers/microsoft.network/networksecuritygroups/{name}"
+
+
+def test_a_homonyms_alert_doesnt_close_the_other_card(monkeypatch):
+    """Two `web` blocked, both blocks removed by a `terraform apply`, reassertion in
+    human_only: the alert was keyed by the VM's NAME — the second one closed the first
+    card, and that block stayed "already alerted" with no card at all (A0, L1)."""
+    _run(monkeypatch, _net(web_nic={"own": "dedicated"}),
+         ("block", WEB1, WEB1, None, 22),
+         ("block", WEB2, WEB2, None, 22),
+         ("terraform_apply", _NSG.format(rg="rg-app1", name="nsg-web-nic")),
+         ("terraform_apply", _NSG.format(rg="rg-app2", name="nsg-web-nic")),
+         ("reassert", "human_only", None))
+
+
+def test_a_block_gone_behind_the_quarantine_is_said(monkeypatch):
+    """Blocked, then isolated by quarantine, then the block's rules removed from the NIC's
+    own NSG: the quarantine holds the attacker out, so the block read as verified — and
+    nothing was said until the release let the attacker back in (A0, L1)."""
+    _run(monkeypatch, _net(quarantine=True, web_nic={"own": "dedicated"}),
+         ("block", WEB1, WEB1, None, 22),
+         ("isolate", WEB1, WEB1, None),
+         ("terraform_apply", _NSG.format(rg="rg-app1", name="nsg-web-nic")),
+         ("reassert", "human_only", None))

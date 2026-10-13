@@ -2760,6 +2760,7 @@ class AzureConnector(CloudConnector):
                     continue                         # no longer one of the VM's NICs
                 groups.setdefault(nic or tuple(p.get("ips") or []), []).append(p)
             missing, unread, bypass, exposure, unknown = [], [], [], [], []
+            held_missing: list[str] = []
             if current is not None and any(p.get("nic_id") for p in entry["placements"]):
                 missing += [n.rsplit("/", 1)[-1] for n in current if n not in groups]   # a NIC added since
             cache: dict = {}
@@ -2776,6 +2777,15 @@ class AzureConnector(CloudConnector):
                     if t0.get("quarantine"):
                         q = self._quarantine_blocks(t0["quarantine"], ip, cache)
                         if q == "blocks":
+                            # Blocked now, by the quarantine. The block's own rules may
+                            # be gone (a `terraform apply`): said, so the reassertion puts
+                            # them back or alerts BEFORE the release opens the NIC (A0).
+                            own_ips = (current or {}).get(nic) or None
+                            for p in ps + off:
+                                st, names = self._block_pair_state(cache, p["nsg_rg"], p["nsg_name"],
+                                                                   p["rule"], ip, own_ips or p.get("ips") or None)
+                                if st in ("absent", "altered"):
+                                    held_missing += names
                             continue
                         if q == "unknown" and not ps:
                             unread.append(f'{t0["nic_short"]}: {t0["quarantine"]["nsg_name"]}')
@@ -2829,7 +2839,8 @@ class AzureConnector(CloudConnector):
                         "error": f"blocage non vérifiable : cartes illisibles ({nics_unread})"}
             # Threat port blocked; other ports the attacker still reaches are reported.
             return {"verified": True, "method": "nsg_check", "nics_covered": len(groups),
-                    **({"exposure": exposure} if exposure else {})}
+                    **({"exposure": exposure} if exposure else {}),
+                    **({"held_missing": held_missing} if held_missing else {})}
 
         # Perimeter (subnet) block, or legacy single-rule entry: check the recorded pair.
         if entry and entry.get("nsg") and entry.get("rule"):

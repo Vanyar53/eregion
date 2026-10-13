@@ -148,6 +148,12 @@ MUTANTS = [
     ("M36", "the old state file removed after the new one is written (A0)", A,
      "    if olds and not target.exists():",
      "    if False:"),
+    ("M37", "reassertion alerts keyed by the VM's name (A0, L1)", "glorfindel/reassert.py",
+     '    return f"reassert-{vm}-{_rid_hash(rid)}" + (f"-{ip}" if ip else "")',
+     '    return f"reassert-{vm}" + (f"-{ip}" if ip else "")'),
+    ("M38", "a block gone behind the quarantine not reported (A0, L1)", A,
+     "                                    held_missing += names",
+     "                                    pass"),
 ]
 
 

@@ -24,18 +24,35 @@ log = logging.getLogger(__name__)
 
 
 def _missing(verification: dict) -> bool:
-    return verification.get("verified") is False and bool(
-        verification.get("uncovered_nics") or verification.get("missing_rules"))
+    """Rules gone: the check fails on them — or holds only thanks to the quarantine while
+    the block's own rules are gone (`held_missing`, A0)."""
+    return (verification.get("verified") is False and bool(
+        verification.get("uncovered_nics") or verification.get("missing_rules"))) or bool(
+        verification.get("verified") is True and verification.get("held_missing"))
+
+
+def _alert_id(vm: str, rid: str, ip: str = "") -> str:
+    """One card per VM (and IP), keyed by the resource id too: keyed by name, an alert
+    about `web` in one group closed the card of its homonym in another, which then stayed
+    "already alerted" with no card at all (A0, invariant machine)."""
+    from glorfindel.actions import _rid_hash
+    return f"reassert-{vm}-{_rid_hash(rid)}" + (f"-{ip}" if ip else "")
 
 
 def _alert(signal_id: str, **kwargs) -> None:
     """Record a reassert alert as a NEW card. The escalation store merges a re-fire into
     the pending card of the same action/resource/type and keeps its text: the second
     removal ("no longer isolated, not re-applied") was folded into the first card, which
-    still said "re-applied once", and no notification went out (validation, 06/10)."""
+    still said "re-applied once", and no notification went out (validation, 06/10).
+    A card of the former name-only key is replaced too, when it is this VM's."""
     from glorfindel import escalations
+    rid = (kwargs.get("resource_id") or "").rstrip("/").lower()
+    ip = (kwargs.get("action_params") or {}).get("ip", "")
+    vm = rid.rsplit("/", 1)[-1]
+    legacy = f"reassert-{vm}" + (f"-{ip}" if ip else "")
     for e in escalations.pending():
-        if e.get("signal_id") == signal_id:
+        same_vm = (e.get("resource_id") or "").rstrip("/").lower() == rid
+        if e.get("signal_id") == signal_id or (same_vm and (e.get("signal_id") or "").lower() == legacy):
             escalations.resolve(e["id"])
     escalations.record(signal_id=signal_id, escalation_type="verification_failed", **kwargs)
 
@@ -137,7 +154,7 @@ def _reassert_isolation(connector, autonomy, vm: str, report: list[dict], ref: s
                   f"{iso['releasing_at']}, jamais terminée) : des cartes peuvent être levées et "
                   f"d'autres encore isolées. Relancer `glorfindel release {rid} --yes`, ou "
                   "ré-isoler si la levée n'était pas voulue.")
-        _alert(f"reassert-{vm}", resource_id=rid, action="isolate_vm", reason=reason)
+        _alert(_alert_id(vm, rid), resource_id=rid, action="isolate_vm", reason=reason)
         _save_isolation_state(ref or vm, {**state, "stale_alerted_at": now})
         report.append({"kind": "isolation", "vm": vm, "outcome": "escalated", "detail": reason})
         return
@@ -173,7 +190,7 @@ def _reassert_isolation(connector, autonomy, vm: str, report: list[dict], ref: s
             f"`glorfindel release {rid} --yes` si la levée est voulue, sinon ré-isoler."
             + who
         )
-        _alert(f"reassert-{vm}", resource_id=rid, action="isolate_vm", reason=reason)
+        _alert(_alert_id(vm, rid), resource_id=rid, action="isolate_vm", reason=reason)
         _mark_alerted(ref or vm, now)
         report.append({"kind": "isolation", "vm": vm, "outcome": "escalated", "detail": reason})
         return
@@ -191,7 +208,7 @@ def _reassert_isolation(connector, autonomy, vm: str, report: list[dict], ref: s
         reason = f"L'isolation de {vm} a disparu d'Azure ; la reposer a échoué : {exc}"
         outcome = "failed"
         _mark_alerted(ref or vm, now)        # no retry-and-alert every minute
-    _alert(f"reassert-{vm}", resource_id=rid, action="isolate_vm", reason=reason)
+    _alert(_alert_id(vm, rid), resource_id=rid, action="isolate_vm", reason=reason)
     report.append({"kind": "isolation", "vm": vm, "outcome": outcome, "detail": reason})
 
 
@@ -209,7 +226,7 @@ def _reassert_block(connector, autonomy, vm: str, ip: str, report: list[dict], r
         reason = (f"Le déblocage de {ip} sur {vm} a été interrompu (commencé le "
                   f"{b['unblocking_at']}) : des règles peuvent rester. Relancer "
                   f"`glorfindel unblock {ip} {rid} --yes`, ou re-bloquer.")
-        _alert(f"reassert-{vm}-{ip}", resource_id=rid, action="block_suspicious_ip",
+        _alert(_alert_id(vm, rid, ip), resource_id=rid, action="block_suspicious_ip",
                reason=reason, action_params={"ip": ip})
         _update_block_entry(ref or vm, ip, stale_alerted_at=now)
         report.append({"kind": "block", "vm": vm, "ip": ip, "outcome": "escalated", "detail": reason})
@@ -221,7 +238,7 @@ def _reassert_block(connector, autonomy, vm: str, ip: str, report: list[dict], r
     except Exception as exc:
         log.warning("reassert: block of %s on %s not checked (%s)", ip, vm, exc)
         return
-    if verification.get("verified") is True:
+    if verification.get("verified") is True and not verification.get("held_missing"):
         _update_block_entry(ref or vm, ip, verified_at=now, drift_alerted_at=None)
         return
     if not _missing(verification):
@@ -233,7 +250,7 @@ def _reassert_block(connector, autonomy, vm: str, ip: str, report: list[dict], r
                   + (" une deuxième fois" if b.get("reasserted_at") else "")
                   + " — l'IP n'est plus bloquée. Glorfindel ne le repose pas : "
                   f"`glorfindel unblock {ip} {rid} --yes` si c'est voulu, sinon re-bloquer.")
-        _alert(f"reassert-{vm}-{ip}", resource_id=rid, action="block_suspicious_ip",
+        _alert(_alert_id(vm, rid, ip), resource_id=rid, action="block_suspicious_ip",
                reason=reason, action_params={"ip": ip})
         _update_block_entry(ref or vm, ip, drift_alerted_at=now)
         report.append({"kind": "block", "vm": vm, "ip": ip, "outcome": "escalated", "detail": reason})
@@ -250,7 +267,7 @@ def _reassert_block(connector, autonomy, vm: str, ip: str, report: list[dict], r
         reason = f"Le blocage de {ip} sur {vm} a disparu d'Azure ; le reposer a échoué : {exc}"
         outcome = "failed"
         _update_block_entry(ref or vm, ip, drift_alerted_at=now)
-    _alert(f"reassert-{vm}-{ip}", resource_id=rid, action="block_suspicious_ip",
+    _alert(_alert_id(vm, rid, ip), resource_id=rid, action="block_suspicious_ip",
            reason=reason, action_params={"ip": ip})
     report.append({"kind": "block", "vm": vm, "ip": ip, "outcome": outcome, "detail": reason})
 

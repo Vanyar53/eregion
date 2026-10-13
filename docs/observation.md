@@ -1,0 +1,87 @@
+# Observer avant d'autoriser
+
+Le mode autonome d'une VM ne se décide pas sur une impression. Le dernier critère de
+maturité du ROADMAP le dit : **au moins quatre semaines en `human_only` sur un parc réel,
+avec un taux de recommandations disruptives fausses mesuré et jugé acceptable.** Cette page
+décrit comment mener cette observation et lire ce qu'elle mesure.
+
+Pendant l'observation, Glorfindel détecte, enquête et décide comme en production, mais
+n'exécute rien : chaque décision devient une carte (« isoler la VM, 92 % — retenu par le
+mode `human_only` »). L'opérateur dit, pour chaque carte, si la recommandation était juste.
+Le rapport compte.
+
+## Mise en place
+
+1. **Des identifiants en lecture seule.** Un principal de service avec les rôles *Reader*
+   et *Log Analytics Reader* sur le périmètre observé, rien de plus. Ses identifiants dans
+   `.envrc` (jamais dans le dépôt), et `GLORFINDEL_READ_ONLY=1` : toute tentative d'écriture
+   lèverait une erreur claire au lieu d'atteindre Azure.
+2. **Le mode `human_only` partout.** C'est le défaut ; vérifier qu'aucune section
+   `autonomy` de `glorfindel-config.yaml` ne passe un actif en `non_disruptive`.
+   `glorfindel list` affiche le mode résolu par VM.
+3. **Le workspace Log Analytics** dans `glorfindel-config.yaml` (`monitoring_backends`), et
+   les règles de détection livrées (`assets: [auto]`).
+4. **Une alerte qui arrive** : webhook (`GLORFINDEL_WEBHOOK_URL`) ou bot Discord. Sans elle,
+   les cartes s'accumulent sans que personne les voie.
+5. `make glorfindel-start` (il refuse de démarrer sans `AZURE_SUBSCRIPTION_ID`), puis
+   vérifier dans `make glorfindel-logs` que la découverte trouve les VMs
+   (`heartbeat → N VM(s)`).
+
+Les règles des environnements de test s'appliquent : lecture seule d'abord, et rien de ces
+environnements dans le dépôt public — ni nom, ni identifiant, ni rapport.
+
+## Juger chaque carte
+
+Pour chaque carte de décision, juger la recommandation **comme si elle avait été
+exécutée** :
+
+| Verdict | Quand |
+|---|---|
+| `right` | la menace était réelle et l'action proportionnée |
+| `wrong` | faux positif, ou action disproportionnée ou erronée (isoler une VM pour une sauvegarde nocturne) |
+| `unsure` | impossible de trancher avec ce qu'on sait |
+
+Dans la War Room, les boutons **✓ Right** / **✗ Wrong** des cartes de décision. En ligne de
+commande, avec l'identifiant (ou ses 6 premiers caractères) affiché par `glorfindel pending` :
+
+```bash
+glorfindel verdict 3f2a91c0 wrong --note "rattrapage apt du matin"
+glorfindel verdict 3f2a91c0 right
+```
+
+Le verdict est indépendant de l'acquittement : on peut juger une carte avant ou après
+l'avoir acquittée. Une carte qui se répète (« 12× depuis 3 h ») compte une seule fois. La
+note est gardée avec le verdict : c'est elle qui dira, plus tard, quelle règle affiner.
+
+Les cartes de posture, de règle proposée, de préparation, de TTL et les alertes de la
+réaffirmation ne sont pas des décisions sur une détection : elles n'entrent pas dans le
+rapport.
+
+## Le rapport
+
+```bash
+glorfindel report --since 7d       # la semaine
+glorfindel report --since 4w       # la période d'observation
+glorfindel report --since all --json
+```
+
+Il donne, par action recommandée et par règle de détection, le nombre de verdicts justes,
+faux, incertains et de cartes non jugées, et surtout le **taux de recommandations
+disruptives fausses** : parmi les recommandations d'isoler ou de bloquer qui ont été
+jugées, la part fausse. (`GET /api/report?since=7d` renvoie la même chose.)
+
+Une carte non jugée n'entre pas dans le taux. Un taux calculé sur trois cartes ne dit rien :
+le rapport donne aussi les effectifs.
+
+## Ce que les chiffres décident
+
+À fixer avant de commencer, pour ne pas les ajuster aux résultats :
+
+- **Le seuil** : à partir de quel taux de recommandations disruptives fausses une VM peut
+  passer en `non_disruptive` ? Avec combien de recommandations jugées au minimum ?
+- **Par règle** : une règle qui produit des verdicts `wrong` est-elle affinée (seuil,
+  exclusion) avant d'activer l'autonomie sur les actifs qu'elle couvre ?
+- **Les VMs** : l'autonomie s'active VM par VM (contrôle de préparation, réserves
+  confirmées) — lesquelles en premier ?
+
+Ces seuils sont une décision de l'opérateur, pas du code.

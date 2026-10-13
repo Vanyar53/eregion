@@ -432,6 +432,9 @@ glorfindel restore <resource_id> --yes --wait  # workflow complet : attend recov
 glorfindel jobs <vm-name> [--refresh]        # état du job snapshot/restore en cours
 glorfindel ack <escalation_id>               # acquitter escalade
 glorfindel ack --all                         # acquitter toutes
+glorfindel verdict <id> right|wrong|unsure [--note "…"]  # observation : la recommandation était-elle juste ?
+glorfindel report [--since 7d|4w|all] [--json]  # verdicts par action et par règle, taux de disruptives fausses
+                                             # (docs/observation.md — le critère « 4 semaines en human_only »)
 glorfindel check-ttl                         # escalade les isolations au-delà du TTL (ne lève JAMAIS — quatrième passe Q1)
 
 # Audit remédiation — vérifier que Glorfindel peut agir avant l'incident
@@ -486,7 +489,7 @@ GLORFINDEL_DISCOVERY_RETENTION_H=8  # rétention d'une VM éteinte dans le regis
 ## Tests
 
 ```bash
-pytest                    # 784 tests (~30s ; 60 séquences d'invariants, 500 en CI ~1 min), 0 appel Azure, 0 appel LLM, 0 écriture ~/.glorfindel/
+pytest                    # 792 tests (~30s ; 60 séquences d'invariants, 500 en CI ~1 min), 0 appel Azure, 0 appel LLM, 0 écriture ~/.glorfindel/
                           # Hermétique par construction (conftest) : TOUS les chemins ~/.glorfindel redirigés
                           # vers tmp, et le glorfindel-config.yaml local ignoré (avant : avec une config locale,
                           # les tests de graphe lançaient de vraies requêtes KQL via `investigate`, suite 5× plus lente).
@@ -745,6 +748,8 @@ az network nsg rule list -g rg-celebrimbor --nsg-name nsg-celebrimbor -o table
 Types d'escalade : `unattributed_signal` (détection non attribuable à cette VM — ligne sans ressource, plusieurs VMs surveillées — action ciblant la VM retenue), `low_confidence` (gate de confiance, ou escalade demandée par le LLM sur une action autonome — libellé « confiance insuffisante », ex-« detection timeout »), `uncharacterized_signal` (garde-fou signal non caractérisé), `release_hold` (levée proposée hors `recovery_complete`), `destructive_action` (HUMAN_APPROVAL_REQUIRED), `proposed_action` (action inconnue ou non implémentée), `verification_failed` (action exécutée mais vérification en échec : règle absente, NIC non couverte, allow évaluée avant le deny — boutons Revert/reset), `proposed_rule` (règle de détection proposée après detection_missed), `mode_hold` (action autonome retenue par le mode `human_only` de l'asset — pas un manque de confiance), `write_blocked` (action tentée mais credentials read-only / IAM 403 — capability gap, pas un choix de politique), `action_failed` (échec non-auth pendant l'exécution — **toute** exception, connecteur compris — toujours escaladé, jamais d'abort silencieux du cycle), `cycle_failed` (le cycle n'a pas pu aller au bout : appel LLM en échec après retries, erreur interne, backend de détection injoignable pendant le poll — le signal est réel mais **non analysé**, triage humain), `readiness_hold` (VM configurée autonome mais retenue en `human_only` par le verrou L6 : réserves à confirmer, pas prête, ou réserve apparue depuis l'activation — bouton « Review & turn on »), `detection_blocked` (raté sur un TTP **déjà couvert** par une règle : la détection a été **empêchée** — isolation résiduelle, latence d'ingestion, backend injoignable — pas un manque de règle ; action portée `investigate_detection_gap`).
 
 L'escalade porte `action_params` (dict, vide par défaut) pour les actions paramétrées — ex. `block_suspicious_ip` → `{"ip": ...}` extrait du signal via `_extract_suspicious_ip` (même source que `execute_action`). Permet à la War Room « Approve & execute » d'exécuter en 1 clic une action qui n'est pas à `resource_id` seul. Commit `9583ec6`.
+
+**Verdict d'observation** (`glorfindel verdict`, boutons ✓ Right / ✗ Wrong de la War Room, `POST /api/escalations/<id>/verdict`) : `verdict` (`right` / `wrong` / `unsure`), `verdict_at`, `verdict_note` sur la carte, indépendants de l'acquittement. La carte porte aussi `rule_name` (la règle du RulePoller ; pour les anciennes cartes, lue dans `signal_id`). `glorfindel report` / `GET /api/report` : cartes de décision seulement (ni posture, ni règle proposée, ni préparation, ni TTL, ni alerte de réaffirmation), une carte comptée une fois, taux de recommandations disruptives (isoler, bloquer) fausses parmi les jugées. Guide : `docs/observation.md`.
 
 `gf ack <id>` / `gf ack --all` → marque `resolved` dans `~/.glorfindel/escalations.jsonl`. Purement administratif — ne fait rien sur Azure. `restore_from_backup` auto-acquitte via `resolve_by_resource`. Les `posture_gap` s'**auto-résolvent** quand la condition disparaît (ex. backup nocturne comble « no recovery point yet ») — `PostureChecker.check_and_escalate` résout l'escalade au cycle suivant (commit `b208a0a`).
 

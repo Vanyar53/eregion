@@ -146,7 +146,7 @@ Conception complète : [`docs/design/module-isolation-iac.md`](docs/design/modul
 - [ ] Seuil ransomware réglé sur du bénin réel, plusieurs types de disques (L22)
 - [ ] Garde d'abonnement mesurée sur un second abonnement réel
 - [ ] Exercice réel sur des VMs de test dédiées, environnement proche de la production (NSG en IaC, homonymes, Windows) : isoler, bloquer, lever, retour à l'état d'origine vérifié
-- [ ] Au moins quatre semaines d'observation en `human_only` sur un parc réel, taux de recommandations disruptives fausses mesuré et jugé acceptable
+- [ ] Au moins quatre semaines d'observation en `human_only` sur un parc réel, taux de recommandations disruptives fausses mesuré et jugé acceptable — de quoi la mesurer : verdicts et `glorfindel report` (13/10, `docs/observation.md`)
 
 Puis activation VM par VM, par la préparation, en commençant par des VMs non critiques.
 

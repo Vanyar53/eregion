@@ -65,6 +65,7 @@ def record(
     proposed_query: str = "",
     confidence: float = 0.0,
     action_params: dict | None = None,
+    rule_name: str = "",
 ) -> str:
     """Append an escalation and return its id.
 
@@ -138,6 +139,7 @@ def record(
         "proposed_query": proposed_query,
         "confidence": confidence,
         "action_params": action_params or {},
+        "rule_name": rule_name,
         "status": "pending",
         "resolved_at": None,
     }
@@ -305,3 +307,127 @@ def _notify(esc: dict) -> None:
         }, timeout=5)
     except Exception:
         pass  # notification failure must never block the agent
+
+
+# ── Observation: was a recommendation right? ─────────────────────────────────────
+#
+# The decision to let Glorfindel act alone rests on a measured number: over weeks of
+# human_only, how often would a disruptive action have been wrong. The operator judges
+# each card (right / wrong / unsure); the report counts. See docs/observation.md.
+
+VERDICTS = ("right", "wrong", "unsure")
+# Recommended actions that disrupt the workload: a wrong one is the false positive the
+# autonomy decision weighs.
+DISRUPTIVE_ACTIONS = ("isolate_vm", "block_suspicious_ip")
+# Cards that are not a decision on a detection: posture, housekeeping, proposals.
+_NOT_DECISIONS = {"posture_gap", "orphan_rule", "proposed_rule", "readiness_hold",
+                  "ttl_exceeded", "detection_blocked"}
+
+
+def all_escalations() -> list[dict]:
+    """Every card, resolved ones included, in file order. Unreadable lines are skipped."""
+    if not _STORE.exists():
+        return []
+    out = []
+    for line in _STORE.read_text().splitlines():
+        if not line.strip():
+            continue
+        try:
+            out.append(json.loads(line))
+        except Exception:
+            continue
+    return out
+
+
+def set_verdict(escalation_id: str, verdict: str, note: str = "") -> dict:
+    """Record the operator's judgement of a card — independent of its acknowledgement.
+
+    `escalation_id`: the full id or a unique prefix of at least 6 characters (the War
+    Room and `pending` show 8). Raises ValueError on an unknown verdict or an ambiguous
+    prefix, KeyError when no card matches. Returns the updated card."""
+    if verdict not in VERDICTS:
+        raise ValueError(f"verdict must be one of {', '.join(VERDICTS)}")
+    ref = (escalation_id or "").strip().lower()
+    if len(ref) < 6:
+        raise ValueError("give the card id, or at least its first 6 characters")
+    lines = _STORE.read_text().splitlines() if _STORE.exists() else []
+    hits = []
+    for i, line in enumerate(lines):
+        try:
+            e = json.loads(line)
+        except Exception:
+            continue
+        if str(e.get("id", "")).lower().startswith(ref):
+            hits.append((i, e))
+    exact = [h for h in hits if str(h[1].get("id", "")).lower() == ref]
+    hits = exact or hits
+    if not hits:
+        raise KeyError(f"no card {escalation_id}")
+    if len(hits) > 1:
+        raise ValueError(f"{escalation_id} matches {len(hits)} cards — give more characters")
+    i, e = hits[0]
+    e["verdict"] = verdict
+    e["verdict_at"] = datetime.now(timezone.utc).isoformat()
+    e["verdict_note"] = note
+    lines[i] = json.dumps(e, default=str)
+    _STORE.write_text("\n".join(lines) + "\n")
+    return e
+
+
+def rule_of(e: dict) -> str:
+    """The detection rule behind a card: recorded since the observation kit, otherwise
+    read from the RulePoller's signal id (`rule-<name>-<8 hex>`)."""
+    if e.get("rule_name"):
+        return e["rule_name"]
+    sid = str(e.get("signal_id") or "")
+    if sid.startswith("rule-"):
+        parts = sid[len("rule-"):].rsplit("-", 1)
+        if len(parts) == 2 and len(parts[1]) == 8:
+            return parts[0]
+    return ""
+
+
+def is_decision(e: dict) -> bool:
+    """A card that carries a decision on a detection — not posture, housekeeping, a
+    proposal, or an alert of the reassertion."""
+    sid = str(e.get("signal_id") or "")
+    return (e.get("escalation_type") not in _NOT_DECISIONS
+            and not sid.startswith(("reassert-", "ttl-", "posture-")))
+
+
+def observation_report(since: datetime | None = None) -> dict:
+    """Counts of the operator's verdicts on decision cards since `since` (all if None).
+    A card counts once, however many times it re-fired (its `occurrences`)."""
+    def bucket() -> dict:
+        return {"right": 0, "wrong": 0, "unsure": 0, "unjudged": 0}
+
+    by_action: dict[str, dict] = {}
+    by_rule: dict[str, dict] = {}
+    disruptive = bucket()
+    cards = 0
+    for e in all_escalations():
+        if not is_decision(e):
+            continue
+        when = e.get("first_seen") or e.get("timestamp") or ""
+        if since is not None:
+            try:
+                if datetime.fromisoformat(str(when).replace("Z", "+00:00")) < since:
+                    continue
+            except ValueError:
+                continue
+        cards += 1
+        v = e.get("verdict") if e.get("verdict") in VERDICTS else "unjudged"
+        by_action.setdefault(e.get("action") or "?", bucket())[v] += 1
+        by_rule.setdefault(rule_of(e) or "(sans règle)", bucket())[v] += 1
+        if e.get("action") in DISRUPTIVE_ACTIONS:
+            disruptive[v] += 1
+    judged = disruptive["right"] + disruptive["wrong"]
+    return {
+        "since": since.isoformat() if since else None,
+        "cards": cards,
+        "judged": sum(b["right"] + b["wrong"] + b["unsure"] for b in by_action.values()),
+        "by_action": by_action,
+        "by_rule": by_rule,
+        "disruptive": {**disruptive, "false_rate": (disruptive["wrong"] / judged) if judged else None},
+    }
+

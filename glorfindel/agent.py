@@ -1214,6 +1214,7 @@ def escalate_to_human(state: GlorfindelState) -> GlorfindelState:
             proposed_query=(state.get("proposed_rule") or {}).get("query", ""),
             confidence=state.get("confidence", 0.0),
             action_params=action_params,
+            rule_name=(signal.get("context") or {}).get("rule_name", ""),
         )
 
     # An action that ran (verification failed, or it failed midway) keeps what its

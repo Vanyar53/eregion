@@ -274,7 +274,7 @@ make glorfindel-shell   # 🔵 interactive shell — alias: gf
 **Option C — Docker Compose (watch + War Room together)**
 
 ```bash
-make glorfindel-start   # start watch + war-room → http://localhost:7007
+make glorfindel-start   # start watch + war-room → http://localhost:7007  (refuses to start without AZURE_SUBSCRIPTION_ID; ALLOW_NO_AZURE=1 for a demo)
 make glorfindel-logs    # tail service logs
 make glorfindel-dev     # auto-reload on code change (docker compose watch)
 make glorfindel-stop    # stop all services

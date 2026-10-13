@@ -387,6 +387,7 @@ infra/terraform/              → module Celebrimbor : infra de test Azure modul
 ```bash
 # Workflow opérateur — Docker Compose (recommandé)
 make glorfindel-start                        # lance watch + war-room → http://localhost:7007
+                                             # refuse si AZURE_SUBSCRIPTION_ID est vide (watch aveugle) ; ALLOW_NO_AZURE=1 pour une démo
 make glorfindel-logs                         # tail logs des deux services
 make glorfindel-dev                          # auto-reload sur modification de code (docker compose watch)
 make glorfindel-stop                         # arrêt

@@ -95,6 +95,7 @@ def _rule_record(rule) -> dict:
     rec = {f: copy.deepcopy(getattr(rule, f, None)) for f in _RULE_FIELDS}
     rec["direction"] = _text(rec["direction"])
     rec["access"] = _text(rec["access"])
+    rec["protocol"] = _text(rec["protocol"]) or None
     return rec
 
 
@@ -117,6 +118,11 @@ class FakeAzure:
         self.subnets: dict[str, dict] = {}
         self.vms: dict[str, dict] = {}
         self.write_denied = False
+        # Every write that went through the API — Glorfindel's, since the test plays
+        # everyone else by editing the dicts — and the rules it wrote (nsg key, name):
+        # I2 by author, without asking the code what it meant to do.
+        self.journal: list[dict] = []
+        self.authored: set[tuple[str, str]] = set()
         self.network = SimpleNamespace(
             network_interfaces=_Nics(self), network_security_groups=_Nsgs(self),
             security_rules=_Rules(self), subnets=_Subnets(self))
@@ -247,7 +253,9 @@ class _Nics:
                 if n["policy"] and key(new) != key(n["design_nsg"]):
                     raise _error(HttpResponseError, 403,
                                  f"(RequestDisallowedByPolicy) NSG on {name} not allowed")
+            before = n["nsg"]
             n["nsg"] = self.az.nsgs[key(new)]["id"] if new else None
+            self.az.journal.append({"op": "nic.write", "nic": key(n["id"]), "before": before, "after": n["nsg"]})
             return _Done()
         return self.az.call("nic.write", True, write)
 
@@ -270,7 +278,11 @@ class _Nsgs:
                  "tags": dict(getattr(model, "tags", None) or {}), "rules": {}}
             for r in getattr(model, "security_rules", None) or []:
                 FakeAzure._put_rule(n, _rule_record(r))
+            before = self.az.nsgs.get(key(rid))
+            self.az.journal.append({"op": "nsg.write", "nsg": key(rid), "before_tags": (
+                dict(before["tags"]) if before else None)})
             self.az.nsgs[key(rid)] = n
+            self.az.authored |= {(key(rid), r) for r in n["rules"]}
             return _Done(self.az.nsg_view(n))
         return self.az.call("nsg.write", True, write)
 
@@ -280,6 +292,7 @@ class _Nsgs:
     def update_tags(self, rg, name, tags_object):
         def write():
             n = self.az.nsg(rg, name)
+            self.az.journal.append({"op": "nsg.tags", "nsg": key(n["id"]), "before_tags": dict(n["tags"])})
             n["tags"] = dict(getattr(tags_object, "tags", None) or {})
             return self.az.nsg_view(n)
         return self.az.call("nsg.tags", True, write)
@@ -305,13 +318,23 @@ class _Rules:
         def write():
             rec = _rule_record(rule)
             rec["name"] = name
-            FakeAzure._put_rule(self.az.nsg(rg, nsg_name), rec)
+            nsg = self.az.nsg(rg, nsg_name)
+            before = nsg["rules"].get(name.lower())
+            FakeAzure._put_rule(nsg, rec)
+            k = (key(nsg["id"]), name.lower())
+            self.az.journal.append({"op": "rule.write", "nsg": k[0], "rule": k[1],
+                                    "existed": before is not None, "authored": k in self.az.authored})
+            self.az.authored.add(k)
             return _Done(SimpleNamespace(**rec))
         return self.az.call("rule.write", True, write)
 
     def begin_delete(self, rg, nsg_name, name):
         def write():
-            self.az.nsg(rg, nsg_name)["rules"].pop(name.lower(), None)
+            nsg = self.az.nsg(rg, nsg_name)
+            k = (key(nsg["id"]), name.lower())
+            if nsg["rules"].pop(name.lower(), None) is not None:
+                self.az.journal.append({"op": "rule.delete", "nsg": k[0], "rule": k[1],
+                                        "existed": True, "authored": k in self.az.authored})
             return _Done()
         return self.az.call("rule.delete", True, write)
 
@@ -440,9 +463,15 @@ def _names_tag(rule: dict, tag: str) -> bool:
     return any((v or "").strip().lower() == tag for v in values)
 
 
+def _proto(rule: dict, port: int) -> bool:
+    """The rule's protocol covers the probe's: DNS (53) is UDP, the rest TCP."""
+    p = _text(rule.get("protocol") or "*").lower()
+    return p in ("*", "any") or p == ("udp" if port == 53 else "tcp")
+
+
 def _nsg_allows(nsg: dict, direction: str, src: str, dst: str, port: int) -> bool:
     rules = [(r["priority"], r["access"].lower(), r) for r in nsg["rules"].values()
-             if r["direction"].lower() == ("inbound" if direction == "in" else "outbound")]
+             if r["direction"].lower() == ("inbound" if direction == "in" else "outbound") and _proto(r, port)]
     if direction == "out" and dst in _PLATFORM:
         tag = _PLATFORM[dst]
         for _, access, r in sorted(rules, key=lambda x: x[0]):

@@ -58,12 +58,12 @@ flowchart LR
     end
     subgraph Steps["Étapes possibles"]
         O["Glorfindel<br/>isoler, lever, bloquer, débloquer<br/>vérifier, réaffirmer, reset"]
-        Wd["le monde bouge<br/>règles, IP, NSG ou VM supprimés<br/>redéploiement, terraform apply, tags"]
+        Wd["le monde bouge<br/>règles, IP, NSG ou VM supprimés ou créés<br/>redéploiement, terraform apply, tags<br/>règles de Glorfindel retournées, horloge"]
         F["pannes<br/>429, crash avant ou après écriture<br/>API saturée, 403, disque plein"]
-        Cc["deux opérations à la fois<br/>entrelacées appel par appel"]
+        Cc["deux opérations à la fois<br/>entrelacées appel par appel<br/>un autre hôte qui écrit la carte"]
     end
     FA[("faux Azure en mémoire<br/>évalue les NSG comme Azure")]
-    P{"11 propriétés<br/>après chaque étape"}
+    P{"14 propriétés<br/>après chaque étape"}
     N --> FA
     Q --> O & Wd & F & Cc
     O & Wd & F & Cc --> FA
@@ -91,7 +91,7 @@ Les propriétés, vérifiées après chaque étape :
 | | Propriété |
 |---|---|
 | I1 | aucune VM n'est plus joignable que son propriétaire ne l'a conçue |
-| I2 | la configuration du client est ce qu'il a écrit en dernier ; une carte porte son NSG ou celui de quarantaine, jamais aucun ni un autre |
+| I2 | la configuration du client est ce qu'il a écrit en dernier ; une carte porte son NSG ou celui de quarantaine, jamais aucun ni un autre ; et, par auteur (journal des écritures de l'API), Glorfindel n'écrit que ce qui est à lui |
 | I3 | aucun succès sur un mensonge : chaque vérification qui dit vrai est vraie, à chaque étape |
 | I4 | une opération sur une VM ne change rien pour une autre, homonymes compris |
 | I5 | la réaffirmation n'ouvre jamais rien, et n'écrit rien en `human_only` |
@@ -101,6 +101,14 @@ Les propriétés, vérifiées après chaque étape :
 | I9 | une levée commencée n'est jamais défaite par la réaffirmation |
 | I10 | la configuration est respectée ; illisible, l'isolation n'écrit rien |
 | I11 | deux opérations à la fois finissent comme l'une après l'autre : l'état local dit ce qu'Azure a |
+| I12 | une VM d'un autre abonnement n'est jamais touchée, ni déclarée isolée |
+| L1 | un blocage dont les règles ont disparu est reposé ou signalé, même derrière la quarantaine |
+| U1 | une règle laissée par une carte qui n'existe plus, et qui coupe une carte vivante, est signalée |
+
+**Des oracles qui ne demandent rien au code.** Ce qu'une propriété juge vient du journal du test :
+la levée qu'il a demandée (I9), ce qu'il a perdu et quand (une carte « intraçable »), qui a écrit
+quoi (I2 par auteur). Lire les marqueurs que le code pose revenait à le croire sur parole : un bug
+qui efface l'état d'une carte gagnait l'exemption prévue pour une carte dont l'état est perdu (A0).
 
 ### Deux opérations à la fois
 
@@ -165,13 +173,19 @@ flowchart LR
 | Invariants L24/L25, avant le monde qui bouge | 1 sur 17 |
 | L26 : le monde bouge, quatre propriétés de plus | 15 sur 17 |
 | L27 : deux opérations à la fois, verrou compris | 17 sur 22 (M01 à M25) |
+| A0 : monde v3 (voir plus bas), 41 mutants | 22 sur 36 par les séquences tirées, les autres par leur séquence figée |
 
-Quatre mutants sont écartés du décompte, avec leur raison écrite dans le harnais :
-- **deux équivalents** : M02 (le partage d'un NSG ne change plus la règle posée depuis L24) et
-  M11 (plus aucun appelant ne voit un « not found » autre qu'un 404) ;
-- **un qui demande deux hôtes**, M14 : la relecture après la levée ne sert que si un autre
-  hôte écrit entre notre écriture et notre relecture. Le verrou est par hôte, et un test
-  unitaire couvre ce cas.
+**Le jeu de contrôle.** Seize bugs plausibles proposés par la septième passe, jamais utilisés pour
+orienter la génération (`--control`) : il mesure si la suite trouve ce qu'on ne lui a pas appris.
+Au budget du push : 3 sur 16 à son arrivée, 6 après la première étape d'A0, **10 sur 16** à la fin
+d'A0 (et 2 intermittents).
+
+Écartés du décompte, avec leur raison écrite dans le harnais : **M11** (plus aucun appelant ne voit
+un « not found » autre qu'un 404) et **M25** (depuis A0 le reset note son intention avant de toucher
+Azure : l'état d'un reset partiel est tenu de toute façon). **M02** et **M14**, autrefois écartés,
+sont attrapés depuis A0 : M02 par les isolations d'une ancienne version dans le monde, M14 par un
+autre hôte qui écrit la carte juste après Glorfindel. M36 (fichier d'état ancien) n'est couvert que
+par un test unitaire : il faut un crash entre deux opérations de fichier.
 
 Les mutants M18 à M29 réinjectent les défauts trouvés par la machine elle-même. Les plus rares
 (M21 à M24, trouvés à des milliers de séquences) ne sont pas attrapés à chaque tour au budget
@@ -202,6 +216,18 @@ Aucun de ces défauts n'avait été vu en revue. Chacun a son test et sa séquen
 | L27 | reset partiel qui laissait l'état intact | la réaffirmation aurait reposé ce que l'opérateur retirait |
 | L28 | carte détachée vers « aucun NSG » à la levée (U2, septième passe) | `released`, carte laissée sans son NSG, tag effacé |
 | L28 | réisolation d'une carte nue | « aucun » enregistré par-dessus le vrai original, carte laissée sans NSG à la levée |
+| A0 | une seule priorité (l'entrante) pour juger les deux sens | deny sortant déplacé derrière une allow client : « isolée », mouvement latéral ouvert |
+| A0 | allow sortante avant le deny d'un blocage comptée comme « exposition » | « bloqué », la VM joignait encore l'attaquant |
+| A0 | carte pas relue après l'échange de NSG | un autre hôte défait l'échange : « isolée », carte sans NSG |
+| A0 | ancienne règle à nom fixe sur un NSG partagé ou au partage illisible | « levée », la VM encore coupée |
+| A0 | ancien état mono-NSG ignoré par `verify_release` | « levée », règles de l'ancienne version en place |
+| A0 | `reset --from-azure` sans intention notée | interrompu, la réaffirmation réisolait en pleine levée |
+| A0 | ancien fichier d'état réécrit avant d'être déplacé | crash : deux fichiers, la recherche par nom lisait l'ancien |
+| A0 | alertes de la réaffirmation clées par le nom | l'alerte d'un homonyme fermait la carte de l'autre : blocage disparu, rien de dit |
+| A0 | blocage disparu derrière la quarantaine | rien de dit avant que la levée rouvre la carte |
+| A0 | original d'une carte nue lu dans le seul tag par le reset | « swept », état effacé, carte sans NSG en silence |
+| A0 | NSG d'origine remis sans en lire les règles | « swept », VM encore coupée par une ancienne isolation |
+| A0 | NSG supprimé lu comme « illisible » | blocage disparu jamais signalé, levée partielle pour toujours |
 
 Le plus grave : après une levée qui échoue en partie, une seconde levée lisait les champs de
 rétro-compatibilité de l'état comme un ancien format, et supprimait les deny du NSG de
@@ -228,8 +254,8 @@ Une séquence trouvée la nuit est rejouée en premier à chaque push jusqu'à s
 
 ## Ce qui n'est pas couvert
 
-- **Deux hôtes** : les verrous sont par hôte. Deux déploiements de Glorfindel sur deux
-  machines qui visent la même VM ne sont pas modélisés.
+- **Deux hôtes** : les verrous sont par hôte. Un autre hôte qui écrit la carte juste après
+  Glorfindel est modélisé (A0) ; deux Glorfindel complets sur deux machines ne le sont pas.
 - **VM supprimée et état perdu** : les règles qu'une isolation par règles a laissées sur un
   NSG partagé sont introuvables, faute de cartes pour dire où chercher.
 - **Couches au-dessus du NSG** : règles d'administration d'Azure Virtual Network Manager,

@@ -379,7 +379,7 @@ flowchart BT
 
     <article class="board-card" id="machine">
       <div class="board-head"><div class="txt"><h3>La machine à invariants</h3>
-        <p>Des milliers de réseaux et de séquences tirés au hasard, onze propriétés vérifiées après chaque étape. Une séquence qui en casse une est réduite, puis figée en exemple.</p></div>
+        <p>Des milliers de réseaux et de séquences tirés au hasard, quatorze propriétés vérifiées après chaque étape. Une séquence qui en casse une est réduite, puis figée en exemple.</p></div>
         <div class="tools"></div></div>
       <div class="stage tall"><div class="canvas"><pre class="diagram">
 %%{init: {"theme":"base","themeVariables":{"fontFamily":"IBM Plex Sans","fontSize":"15px","lineColor":"#5b6676","primaryTextColor":"#18212b","edgeLabelBackground":"#ffffff","clusterBkg":"#f4f7fb","clusterBorder":"#aab4c3"}}}%%
@@ -390,12 +390,12 @@ flowchart LR
   end
   subgraph Steps["Étapes"]
     O["Glorfindel<br/>isoler · lever · bloquer<br/>vérifier · réaffirmer · reset"]
-    Wd["le monde bouge<br/>règles · IP · NSG ou VM supprimés<br/>redéploiement · terraform apply · tags"]
+    Wd["le monde bouge<br/>règles · IP · NSG ou VM supprimés ou créés<br/>redéploiement · terraform apply · tags<br/>règles de Glorfindel retournées · horloge"]
     F["pannes<br/>429 · crash avant ou après écriture<br/>API saturée · 403 · disque plein"]
-    Cc["deux opérations à la fois<br/>entrelacées appel par appel"]
+    Cc["deux opérations à la fois<br/>entrelacées appel par appel<br/>un autre hôte qui écrit la carte"]
   end
   FA[("faux Azure en mémoire<br/>évalue les NSG comme Azure")]
-  P{"11 propriétés<br/>après chaque étape"}
+  P{"14 propriétés<br/>après chaque étape"}
   N --> FA
   Q --> O & Wd & F & Cc
   O & Wd & F & Cc --> FA

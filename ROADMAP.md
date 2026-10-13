@@ -73,7 +73,7 @@ En 0.x, schémas, signaux et interface peuvent encore changer ; la 1.0 les fige.
 
 ### Les lots
 
-Préfixes : **A** isolation et **B** IA (septième passe), **O** Orodruin, **E** schéma d'expérience, **R** adaptateurs d'Annatar vers une bibliothèque d'attaque publique, **G** Gothmog, **X** attaque et panne combinées, **C** couverture, **D** profils d'usage, **IA** IA d'analyse, **J** preuve en production et jumeau, **P** personnalisation (la couche du client), **MC** multi-cloud. Chaque lot ajoute ses mutants au harnais avant d'être fusionné ; aucune action sur le cloud hors du banc. Estimations en jours de travail effectif, à ±50 %.
+Préfixes : **A** isolation et **B** IA (septième passe), **O** Orodruin, **E** schéma d'expérience, **R** adaptateurs d'Annatar vers une bibliothèque d'attaque publique, **G** Gothmog, **X** attaque et panne combinées, **C** couverture, **D** profils d'usage, **IA** IA d'analyse, **J** preuve en production et jumeau, **P** personnalisation (la couche du client — à ne pas confondre avec les points produit P1 à P4 de la septième passe), **MC** multi-cloud. Chaque lot ajoute ses mutants au harnais avant d'être fusionné ; aucune action sur le cloud hors du banc. Estimations en jours de travail effectif, à ±50 %.
 
 **0.3 — la boucle tourne** (20 à 33 jours avec A0 et IA0)
 
@@ -270,7 +270,7 @@ Conception complète : [`docs/design/module-isolation-iac.md`](docs/design/modul
 - [x] Concurrence couverte : M17 attrapé (✅ L27) ; M14 attrapé par un écrivain étranger simulé (✅ A0)
 - [ ] Suite mesurée : harnais au-dessus de son seuil, jeu de contrôle attrapé au moins pour moitié au push (✅ 10/16, A0) et aux trois quarts la nuit (à mesurer)
 - [ ] Aucun constat haut ouvert sur le chemin d'isolation (U1, U2 et leurs successeurs)
-- [ ] Détection fiable sur les VMs visées : attribution sans ambiguïté (✅ L21), pas de détection aveugle (P4)
+- [ ] Détection fiable sur les VMs visées : attribution sans ambiguïté (✅ L21), pas de détection aveugle (point produit P4 de la septième passe)
 - [ ] Seuil ransomware réglé sur du bénin réel, plusieurs types de disques (L22)
 - [ ] Garde d'abonnement mesurée sur un second abonnement réel
 - [ ] Exercice réel sur des VMs de test dédiées, environnement proche de la production (NSG en IaC, homonymes, Windows) : isoler, bloquer, lever, retour à l'état d'origine vérifié

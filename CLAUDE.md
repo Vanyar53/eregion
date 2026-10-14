@@ -350,7 +350,16 @@ annatar/scenarios/azure/
   account-creation.yaml       → T1136.001 (purple loop test — pas de règle initiale, règle proposée + approuvée)
   (cleanup/recovery/source/query/workspace_id supprimés — appartiennent à Glorfindel)
 
-schemas/scenario.schema.json  → JSON Schema validation IDE (mis à jour: prerequisites→detection.prerequisites)
+schemas/scenario.schema.json      → JSON Schema (technique Annatar, validation IDE)
+schemas/experiment.schema.json    → E1 : schéma d'EXPÉRIENCE versionné (v1) — technique OU panne, une
+                                    même forme. `kind` absent = technique, `engine` absent = local-script →
+                                    les scénarios actuels valident sans changement. Champs : id, kind, engine,
+                                    engine_ref, targets (sélecteur sur l'inscription), steady_state, abort_conditions,
+                                    revert, detection.hints, destructive, status. Vit À CÔTÉ de scenario.schema.json
+                                    pendant la migration.
+schemas/technique_catalog.schema.json → E1 : schéma du catalogue (accueille les pannes, kind: fault)
+eregion_core/experiment.py        → validate_experiment() / validate_catalog() (jsonschema, import paresseux ;
+                                    dev/CI, pas sur le hot-path) — la CI valide le catalogue via les tests
 infra/terraform/              → module Celebrimbor : infra de test Azure modulaire, namespacée, jetable.
                                 Celebrimbor = le bâtisseur (annatar=rouge, glorfindel=bleu, celebrimbor=infra).
                                 Pilotée par config.yaml (yamldecode + for_each). instance = WORKSPACE Terraform :
@@ -523,6 +532,7 @@ pytest tests/unit/test_detection_authoring.py # catalogue + getschema + author_r
 pytest tests/unit/test_audit.py              # NSG/backup/compute/IAM readiness
 pytest tests/unit/test_config.py             # GlorfindelConfig + ExceptionConfig
 pytest tests/unit/test_inscription.py        # O0 : périmètre, inscription, zones, règle de production
+pytest tests/unit/test_experiment_schema.py  # E1 : schéma d'expérience (technique/panne) + catalogue validés
 pytest tests/unit/test_discovery.py          # AssetRegistry + DiscoveryService + eviction
 pytest tests/unit/test_invariants.py         # L24/L26 : invariants (Hypothesis, machine à états) sur un faux Azure
                           # en mémoire (tests/unit/fake_azure.py : évaluation NSG comme Azure, politiques, régions,
@@ -814,7 +824,7 @@ L'escalade porte `action_params` (dict, vide par défaut) pour les actions param
 Huitième passe (13/10) — jalon **0.3, la boucle complète tourne** : Orodruin lance une technique publique et une panne sur le banc, retour à l'état initial, on mesure ce que Glorfindel a vu.
 
 1. **O0** ✅ (14/10) — `eregion_core/inscription.py` : périmètre, tags `eregion-target`/`eregion-zone`, zones, refus du destructif et des pannes en `production`, 6 mutants (M42–M47) ; tags du banc écrits dans `locals.tf`, **pas appliqués** (avec Jonathan)
-2. **E1** — schéma d'expérience (technique ou panne) à côté de `schemas/scenario.schema.json`, catalogue étendu aux pannes
+2. **E1** ✅ (14/10) — `schemas/experiment.schema.json` (versionné v1, technique ou panne, scénarios actuels valides sans changement) + `schemas/technique_catalog.schema.json` ; `eregion_core/experiment.py` ; catalogue validé en CI
 3. **O1** — Orodruin, mode VM dédiée (état Terraform séparé) — avec Jonathan
 4. **R1** — adaptateur Stratus Red Team — avec Jonathan ; question ouverte : Stratus attaque le plan de contrôle (Activity Logs, non lus par Glorfindel) → R2 (Atomic) avant, ou ingestion des Activity Logs
 5. **G0** — Gothmog v0 sur Chaos Studio — avec Jonathan

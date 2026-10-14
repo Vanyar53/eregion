@@ -1,0 +1,88 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/Vanyar53/eregion/schemas/technique_catalog.schema.v1.json",
+  "title": "Eregion Technique & Fault Catalog v1",
+  "description": "The shared Annatar↔Glorfindel contract (technique_catalog.yaml). Since E1 it also holds faults (kind: fault). Each entry carries a blue block (how it becomes observable) and, for techniques, a red block (how Annatar synthesizes it).",
+  "type": "object",
+  "required": ["version", "resource_types"],
+  "additionalProperties": false,
+  "properties": {
+    "version": { "type": "string" },
+    "resource_types": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["techniques"],
+        "additionalProperties": false,
+        "properties": {
+          "techniques": {
+            "type": "array",
+            "items": { "$ref": "#/definitions/entry" }
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "entry": {
+      "type": "object",
+      "required": ["ttp", "tactic", "status"],
+      "additionalProperties": false,
+      "properties": {
+        "ttp": { "type": "string", "pattern": "^T\\d{4}(\\.\\d{3})?$" },
+        "name": { "type": "string" },
+        "tactic": { "type": "string" },
+        "kind": { "type": "string", "enum": ["technique", "fault"], "default": "technique" },
+        "status": { "type": "string", "enum": ["implemented", "planned"] },
+        "log_source": { "type": "string" },
+        "indicator_key": { "type": "string" },
+        "indicator_columns": { "type": "array", "items": { "type": "string" } },
+        "expected_latency_s": { "type": "integer", "minimum": 0 },
+        "destructive": { "type": "boolean" },
+        "requires_testdata": { "type": "boolean" },
+        "safe_target": { "type": "string" },
+        "testdata_marker": { "type": "string" },
+        "reference_script": { "type": ["string", "null"] },
+        "setup_scripts": { "type": "array", "items": { "type": "string" } },
+        "engine": { "type": "string" },
+        "engine_ref": { "type": "string" },
+        "params": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "type"],
+            "additionalProperties": true,
+            "properties": {
+              "name": { "type": "string" },
+              "type": { "type": "string" },
+              "default": {},
+              "min": { "type": "number" },
+              "max": { "type": "number" }
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "description": "An implemented technique references a script; a fault names an engine and its reference.",
+          "if": {
+            "allOf": [
+              { "properties": { "status": { "const": "implemented" } }, "required": ["status"] },
+              { "not": { "properties": { "kind": { "const": "fault" } }, "required": ["kind"] } }
+            ]
+          },
+          "then": { "required": ["reference_script", "destructive"], "properties": { "reference_script": { "type": "string" } } }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "fault" } }, "required": ["kind"] },
+          "then": { "required": ["engine", "engine_ref"] }
+        },
+        {
+          "description": "A destructive technique must declare its containment.",
+          "if": { "properties": { "destructive": { "const": true } }, "required": ["destructive"] },
+          "then": { "required": ["safe_target"], "properties": { "safe_target": { "minLength": 1 } } }
+        }
+      ]
+    }
+  }
+}

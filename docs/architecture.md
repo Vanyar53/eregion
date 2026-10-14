@@ -332,8 +332,8 @@ Une même boucle pour une technique et pour une panne.
 glorfindel/              le produit (existe)
 annatar/                 attaque (existe) ; executors/ devient l'interface d'injecteur (R1)
 gothmog/                 pannes (G0) — emplacement réservé, README seul
-eregion_core/            inscription et périmètre (O0, existe) ; a réuni annatar/campaign/scope.py et annatar/safety/guard.py
-schemas/                 scenario.schema.json (existe) + schéma d'expérience versionné (E1)
+eregion_core/            inscription et périmètre (O0) ; validation des schémas d'expérience et du catalogue (E1) ; existent
+schemas/                 scenario.schema.json (existe) + experiment.schema.json + technique_catalog.schema.json (E1, existent)
 technique_catalog.yaml   techniques (existe) + pannes (E1)
 infra/terraform/         Celebrimbor (existe) ; posera eregion-target (O0) et inscrira les cibles Chaos Studio (G0)
 infra/orodruin/          Orodruin, état Terraform séparé (O1) — emplacement réservé, README seul

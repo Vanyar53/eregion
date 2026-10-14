@@ -14,6 +14,8 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+from annatar.campaign.scope import Budget, Scope
+
 SCHEMA_VERSION = "1.0"
 
 CAMPAIGN_STATES = ("planned", "ratified", "running", "done", "aborted")
@@ -45,23 +47,6 @@ class ScenarioEntry:
     started_at: str | None = None
     finished_at: str | None = None
     error: str | None = None
-
-
-@dataclass
-class Scope:
-    sandbox: str = "celebrimbor"
-    subscription_id: str = ""
-    allowed_resource_groups: list[str] = field(default_factory=list)
-    allowed_resource_ids: list[str] = field(default_factory=list)
-
-
-@dataclass
-class Budget:
-    max_scenarios: int = 10
-    max_cost_usd: float = 5.0
-    allow_destructive: bool = False
-    detection_window_s: int = 600
-    reset_nsg_between: bool = True
 
 
 @dataclass

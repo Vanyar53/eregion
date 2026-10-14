@@ -109,7 +109,7 @@ recovery: null
 cleanup: []
 ```
 
-**Safety**: Annatar will only run against resources tagged `annatar-test: "true"`. The safety guard in `annatar/safety/guard.py` blocks execution otherwise.
+**Safety**: an injector only acts on an **enrolled** target: the resource and its resource group tagged `eregion-target=<bench id>` with an `eregion-zone` (`bench`, `twin` or `production`), inside the bench's resource groups — and in `production`, only a technique declared non-destructive, never a fault. The shared guard in `eregion_core/inscription.py` blocks execution otherwise (the old `annatar-test: "true"` tag still enrolls a target on the bench during the migration).
 
 ## How to add an autonomous action
 

@@ -49,10 +49,13 @@ Tu es spécialisé sur l'agent offensif. Lis ce fichier en début de session.
   le plan de contrôle (Activity Logs, que Glorfindel ne lit pas) et crée sa propre VM — R2 avant
   R1, ou R1 avec l'ingestion des Activity Logs.
 - **R2 (0.x)** : adaptateur Atomic Red Team (tests dans la VM).
-- **O0 (0.3)** : `annatar/campaign/scope.py` et `annatar/safety/guard.py` fusionnent dans un
-  module d'inscription partagé ; tag `eregion-target` (`annatar-test` lu pendant la migration) ;
-  zone `bench` / `twin` / `production` ; en `production`, seulement `kind: technique` et
-  `destructive: false`.
+- **O0 (0.3, ✅ 14/10)** : le périmètre et le garde-fou de cible vivent dans
+  `eregion_core/inscription.py` (`annatar/safety/guard.py` supprimé, `annatar/campaign/scope.py`
+  ne garde que `Budget`). Tags `eregion-target=<banc>` + `eregion-zone` sur la VM ET son groupe
+  (`annatar-test=true` vaut zone `bench` pendant la migration) ; en `production`, seulement
+  `kind: technique` et `destructive: false` — `scenario_destructive()` lit le champ du scénario,
+  puis le catalogue ; inconnu = refusé en production. `run` et `clean` passent par
+  `check_target(resource_id, rg_tags, vm_tags, kind=, destructive=)`.
 - **E1 (0.3)** : schéma d'expérience commun ; les scénarios actuels deviennent `kind: technique`,
   `engine: local-script`, sans changement de comportement.
 - Le planificateur génératif existant n'est pas étendu.

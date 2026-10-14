@@ -12,10 +12,26 @@ from rich.prompt import Confirm
 
 from annatar.runner.parser import ScenarioParser
 from annatar.runner.report import RunReport
-from annatar.safety.guard import check_target
+from eregion_core.inscription import check_target
 from annatar.signals.emitter import SignalEmitter
 
 console = Console()
+
+
+def scenario_destructive(scenario) -> bool | None:
+    """Does this scenario destroy or alter data? ``None`` when nobody says.
+
+    The scenario's own ``destructive`` field first, then its technique in the shared
+    catalog. Unknown is refused in production (inscription), never assumed safe.
+    """
+    own = scenario.raw.get("destructive")
+    if isinstance(own, bool):
+        return own
+    from annatar.campaign.catalog import load_catalog
+
+    entry = load_catalog().get(scenario.mitre) or {}
+    flag = entry.get("destructive")
+    return flag if isinstance(flag, bool) else None
 
 
 @dataclass
@@ -61,12 +77,21 @@ class Engine:
 
         executor, collector = self._get_executor_collector(scenario)
 
-        # Safety check — the resource group AND the VM must be tagged for chaos testing
+        # Inscription (eregion_core/inscription.py): the target inside the bench, it AND
+        # its resource group enrolled, its zone allowing this technique.
         rg_tags = executor.get_resource_group_tags(scenario.target["resource_group"])
-        guard = check_target(rg_tags, executor.get_vm_tags())
+        guard = check_target(
+            executor.resource_id, rg_tags, executor.get_vm_tags(),
+            kind="technique", destructive=scenario_destructive(scenario),
+        )
         if not guard.allowed:
             console.print(f"[red]Safety check failed:[/red] {guard.reason}")
             return RunOutcome(run_id, "unknown", error=f"safety: {guard.reason}")
+        if guard.legacy:
+            console.print(
+                "[yellow]Target enrolled by the old 'annatar-test' tag (migration) — "
+                "Celebrimbor now tags 'eregion-target' and 'eregion-zone'.[/yellow]"
+            )
 
         # Preflight check — VM running + not isolated
         if not self.skip_preflight:

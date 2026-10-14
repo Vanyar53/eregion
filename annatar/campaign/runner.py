@@ -23,7 +23,6 @@ from typing import Callable
 from rich.console import Console
 
 from annatar.campaign.manifest import CampaignManifest
-from annatar.campaign.scope import Scope
 from annatar.runner.engine import Engine, RunOutcome
 
 console = Console()
@@ -59,7 +58,7 @@ class CampaignRunner:
 
     def run(self) -> CampaignManifest:
         m = CampaignManifest.load(self.campaign_dir)
-        scope = Scope(**_scope_dict(m))
+        scope = m.scope
         budget = m.budget
 
         # A dry-run is a no-op preview — allowed in any state, mutates nothing.
@@ -194,12 +193,3 @@ class CampaignRunner:
             f"allow_destructive={m.budget.allow_destructive}[/dim]"
         )
 
-
-def _scope_dict(m: CampaignManifest) -> dict:
-    s = m.scope
-    return {
-        "sandbox": s.sandbox,
-        "subscription_id": s.subscription_id,
-        "allowed_resource_groups": list(s.allowed_resource_groups),
-        "allowed_resource_ids": list(s.allowed_resource_ids),
-    }

@@ -7,8 +7,10 @@ Notable changes to Eregion. The format follows [Keep a Changelog](https://keepac
 ### Changed
 - Direction set for 1.0 (eighth pass): SOC functions for the cloud workloads of teams without a SOC, proven by attack and by failure. Three-agent loop — Annatar attacks, Gothmog breaks, Glorfindel detects and responds — with Orodruin as the disposable runner and Celebrimbor as the bench builder. Production rule: never a fault or a destructive action on a real workload. README, ROADMAP, `docs/architecture.md` (shared vocabulary, the three zones), session files for Orodruin and Gothmog, reserved folders `gothmog/` and `infra/orodruin/`.
 
+### Added
+- **O0 — one target guard for every injector** (`eregion_core/inscription.py`): the bench's perimeter (its resource groups, and the subscription the scope names — named before, never checked), enrollment by the tags `eregion-target=<bench id>` and `eregion-zone` on the target and its resource group, and the production rule — in `production`, only a technique declared non-destructive; a fault, never. Anything unknown is refused. Replaces `annatar/safety/guard.py` and the perimeter of `annatar/campaign/scope.py`; Celebrimbor tags its resources (`infra/terraform/locals.tf`). The old `annatar-test=true` tag still enrolls a target on the bench during the migration. Six mutants (M42–M47), all caught.
+
 ### Planned for 0.3
-- O0 — one enrollment and scope guard for every injector (tag `eregion-target`, zones `bench` / `twin` / `production`, destructive and faults refused in production).
 - E1 — one experiment schema for a technique and a fault.
 - O1 — Orodruin on a dedicated VM: limited identity and egress, contract checked at startup, kill switch.
 - R1 — first adapter to a public attack library (Stratus Red Team).

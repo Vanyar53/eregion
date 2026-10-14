@@ -11,7 +11,7 @@ Three agents form a closed loop: Annatar attacks, Gothmog breaks, Glorfindel det
 - **Gothmog** (faults — *coming in 0.3*) — declared failures run by a public chaos engine (Azure Chaos Studio first): benign noise Glorfindel must not act on, its own dependencies failing (it must fail closed), a recovery timed.
 - Around them, the workshop: **Celebrimbor** builds and enrolls the disposable bench (Terraform); **Orodruin** (*coming in 0.3*) hosts the injectors, with a guardrail contract checked at startup and a one-command kill switch.
 
-> **Production rule** — never a fault or a destructive action on a real workload. In production, only non-destructive techniques on enrolled VMs, and the full chain on an empty sentinel VM; destructive techniques and faults stay on the reference bench or a twin. *(Coded from 0.3: every enrolled target carries its zone — `bench`, `twin` or `production`.)*
+> **Production rule** — never a fault or a destructive action on a real workload. In production, only non-destructive techniques on enrolled VMs, and the full chain on an empty sentinel VM; destructive techniques and faults stay on the reference bench or a twin. *(Coded: every enrolled target carries its zone — `bench`, `twin` or `production` — and every injector goes through one guard, `eregion_core/inscription.py`; anything unknown is refused.)*
 
 **Status — v0.2.0.** Glorfindel and Annatar run on Azure today (6 techniques validated in real runs). The **0.3** milestone closes the full loop: a public technique and a fault run from Orodruin, the bench returns to its initial state, and what Glorfindel saw is measured and reported. Milestones, lots and the five indicators the project is judged by: [`ROADMAP.md`](ROADMAP.md) (French).
 
@@ -209,7 +209,7 @@ make celebrimbor-output      # → glorfindel-config.yaml fragment (workspace_id
 # → full test infrastructure in one command (~5 min). make celebrimbor-down to tear it down.
 ```
 
-**What gets deployed** (all in one resource group, tagged `annatar-test: true`):
+**What gets deployed** (all in one resource group, enrolled as the bench: `eregion-target=celebrimbor`, `eregion-zone=bench`):
 
 | Resource | SKU | Purpose |
 |---|---|---|
@@ -745,7 +745,7 @@ flowchart BT
 ```bash
 pip install eregion[dev]
 pytest
-# 794 tests (~30s) — 0 Azure calls, 0 LLM calls, 0 writes to ~/.glorfindel
+# 820 tests (~30s) — 0 Azure calls, 0 LLM calls, 0 writes to ~/.glorfindel
 GLORFINDEL_INVARIANT_EXAMPLES=5000 pytest tests/unit/test_invariants.py   # deep run (~8 min)
 python scripts/mutation_check.py --examples 500 --rounds 2                # measure the invariants
 ```
@@ -754,7 +754,7 @@ The suite is hermetic by construction: `tests/unit/conftest.py` redirects every 
 
 **Invariant tests** (`tests/unit/test_invariants.py`, Hypothesis): random customer networks in an in-memory Azure (`tests/unit/fake_azure.py` — NSG evaluation, policies, regions, case-insensitive names) and random sequences of isolate / release / block (VM and perimeter) / unblock / reassert / verify / `reset --from-azure`, with faults anywhere — a throttled call or API, a crash before a write or after it, a lost role (every write refused), a full disk — while the customer's world moves: rules added, narrowed or removed, an NSG deleted, an IP changed, a policy set, a VM deleted, a `terraform apply`, a NIC redeployed, a VM created on a deleted VM's address, Glorfindel's own rules or tags edited by hand (narrowed, or turned into an allow, moved behind a customer allow, given another protocol or target), another host writing a NIC right after Glorfindel did, an isolation left by an older version, the configuration changed or unreadable, the clock moving on, the local state lost. Fourteen properties must hold whatever happens: no VM more reachable than its owner designed it; the customer's configuration is what the customer last wrote, and Glorfindel only writes what is its own; no success claimed on a falsehood (every verification is checked at every step); an operation on one VM changes nothing for another (homonyms included); the reassertion never opens anything; one state file per VM; from any state, release brings every VM back to its design, or keeps it in quarantine and says what is unknown; what an operation leaves on Azure is in its state; a release that has started is never undone; the configuration is honoured; two operations at once end as one after the other; a VM of another subscription is never acted on; a vanished block is put back or reported; an orphan rule cutting a live VM off is reported. 500 sequences per push (failing sequences found at night are replayed first), 10,000 every night on Linux and macOS (`.github/workflows/invariants.yml`); the sequences found are kept as fixed examples (`tests/unit/test_invariant_regressions.py`).
 
-**Mutation check** (`scripts/mutation_check.py`, weekly in `.github/workflows/mutants.yml`, red below 14): re-introduces, one at a time, 41 bugs Glorfindel really had and checks the invariants catch each of them. At the push budget, 22 are caught by the random sequences in every round and the others by their fixed sequence at every push (one is covered by a unit test, two are equivalent since the code changed). `--control` measures the 16 bugs of the control set, never used to shape the generation: 10 caught in every round.
+**Mutation check** (`scripts/mutation_check.py`, weekly in `.github/workflows/mutants.yml`, red below 14): re-introduces, one at a time, 41 bugs Glorfindel really had and checks the invariants catch each of them — plus, for each lot since the eighth pass, the bugs its specification names, measured by that lot's own tests (the six of the inscription, O0: all caught). At the push budget, 22 are caught by the random sequences in every round and the others by their fixed sequence at every push (one is covered by a unit test, two are equivalent since the code changed). `--control` measures the 16 bugs of the control set, never used to shape the generation: 10 caught in every round.
 
 Coverage: 8 LangGraph nodes (incl. the propose_detection_rule branch), routing rules, signal schema, safety guard, YAML parser, ChromaDB memory, CLI escalation flow, detection rules (RulePoller + auto-apply + eviction), proposed rules lifecycle, grounded detection authoring, campaign planner/synthesizer/runner + replay, audit readiness checks, GlorfindelConfig + ExceptionConfig, AssetRegistry + DiscoveryService (replace-on-refresh, self-evicting threads), PostureChecker (dedup, re-escalation).
 

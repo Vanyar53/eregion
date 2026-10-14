@@ -4,6 +4,7 @@ WORKDIR /app
 
 COPY pyproject.toml .
 COPY annatar/ annatar/
+COPY eregion_core/ eregion_core/
 COPY glorfindel/ glorfindel/
 # Shared technique catalog (Annatar↔Glorfindel contract) — root-level, consumed by
 # detection_authoring.load_catalog(). Baked in so the image is self-contained; the

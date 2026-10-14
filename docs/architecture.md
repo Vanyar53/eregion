@@ -270,7 +270,7 @@ Glorfindel est le produit ; le reste est l'atelier qui l'éprouve.
 | Gothmog | pannes déclarées en code, exécutées par un moteur public (Chaos Studio d'abord) | `gothmog/` | G0 |
 | Orodruin | hôte d'exécution jetable des injecteurs : identité limitée, sortie réseau limitée, contrat vérifié au démarrage, arrêt d'urgence | `infra/orodruin/`, état Terraform séparé | O1 |
 | Celebrimbor | construit et inscrit les cibles du banc | `infra/terraform/` | existe |
-| Inscription et périmètre | un seul garde-fou de cible pour tout injecteur, présent ou futur | module partagé, nom fixé par O0 | O0 |
+| Inscription et périmètre | un seul garde-fou de cible pour tout injecteur, présent ou futur | `eregion_core/inscription.py` | existe (O0) |
 | Schéma d'expérience | une même description pour une technique et pour une panne | `schemas/`, `technique_catalog.yaml` | E1 |
 | IA d'analyse | explique, trie, rapporte ; chaque affirmation cite son run ; n'écrit pas de règle | collection ChromaDB distincte, autre modèle | IA0 |
 
@@ -282,7 +282,7 @@ fournisseur (MC0).
 | Concept | Sens |
 |---|---|
 | Cible | ressource qu'on a le droit d'éprouver |
-| Inscription | marque posée à la construction (tag `eregion-target`) ; sans elle, aucun injecteur n'agit ; elle porte la zone de la cible |
+| Inscription | marque posée à la construction (tags `eregion-target=<banc>` et `eregion-zone` sur la cible et son groupe) ; sans elle, aucun injecteur n'agit ; elle porte la zone de la cible |
 | Zone | `bench`, `twin` ou `production` — ce qu'une expérience a le droit d'y faire |
 | Contrôle réseau | ce qui autorise ou refuse le trafic : isoler, bloquer, lever |
 | Télémétrie | où arrivent les logs et les métriques |
@@ -308,7 +308,7 @@ Règle de production : **jamais de panne ni d'action destructive sur une charge 
 | `twin` | idem, avec le rapport d'écart au client | — |
 | `production` | mode ombre ; techniques `destructive: false` sur VM inscrites ; chaîne complète sur la VM sentinelle | toute panne, toute expérience destructive |
 
-Seule la zone `bench` sert en 0.3 ; les deux autres sont codées et testées dès O0. La feuille de
+Seule la zone `bench` sert en 0.3 ; les deux autres sont codées et testées (O0, `eregion_core/inscription.py`) : tout ce qui est inconnu est refusé — pas de tag, identifiant de banc vide, valeur dans une autre casse (Azure garde les valeurs telles qu'écrites, compare les noms sans casse), zone absente ou hors des trois, groupe et cible en désaccord, caractère destructif non déclaré en production. Pendant la migration, l'ancien tag `annatar-test=true` (posé seulement sur Celebrimbor) vaut zone `bench`. La feuille de
 route 1.0 envisage, en production, des pannes des seules dépendances de Glorfindel (modèle,
 télémétrie, configuration), jamais des charges du client : O0 les refuse comme toute panne ; une
 exception, si elle vient, viendra par un lot explicite.
@@ -319,7 +319,7 @@ Une même boucle pour une technique et pour une panne.
 
 | Étape | Eregion aujourd'hui | Bibliothèques d'attaque | Moteurs de chaos |
 |---|---|---|---|
-| Préparer | `annatar/safety/guard.py`, `annatar/campaign/scope.py`, préflight | Stratus `warmup` | cible inscrite auprès du moteur |
+| Préparer | `eregion_core/inscription.py` (périmètre, inscription, zone), préflight | Stratus `warmup` | cible inscrite auprès du moteur |
 | État normal | `glorfindel/posture.py`, `glorfindel/readiness.py` | — | Chaos Toolkit `steady-state-hypothesis` |
 | Injecter | `annatar/executors/` | Stratus `detonate`, test Atomic, capacité Caldera | expérience ou objet de panne |
 | Observer | `annatar/collectors/`, signaux (`attack_started`, puis `fault_started`) | — | sondes pendant l'expérience |
@@ -332,7 +332,7 @@ Une même boucle pour une technique et pour une panne.
 glorfindel/              le produit (existe)
 annatar/                 attaque (existe) ; executors/ devient l'interface d'injecteur (R1)
 gothmog/                 pannes (G0) — emplacement réservé, README seul
-<module partagé>/        inscription et périmètre (O0) ; réunit annatar/campaign/scope.py et annatar/safety/guard.py
+eregion_core/            inscription et périmètre (O0, existe) ; a réuni annatar/campaign/scope.py et annatar/safety/guard.py
 schemas/                 scenario.schema.json (existe) + schéma d'expérience versionné (E1)
 technique_catalog.yaml   techniques (existe) + pannes (E1)
 infra/terraform/         Celebrimbor (existe) ; posera eregion-target (O0) et inscrira les cibles Chaos Studio (G0)

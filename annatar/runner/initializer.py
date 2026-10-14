@@ -47,11 +47,14 @@ class InitRunner:
 
         executor = AzureVMExecutor(target)
 
-        # `clean` rewrites the VM's data disk: same chaos authorization as `run`.
-        from annatar.safety.guard import check_target
+        # `clean` rewrites the VM's data disk: the same inscription as `run`, and
+        # destructive — never in production.
+        from eregion_core.inscription import check_target
         guard = check_target(
+            executor.resource_id,
             executor.get_resource_group_tags(target["resource_group"]),
             executor.get_vm_tags(),
+            kind="technique", destructive=True,
         )
         if not guard.allowed:
             raise RuntimeError(f"Safety check failed: {guard.reason}")

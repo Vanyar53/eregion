@@ -1,8 +1,9 @@
 """Measure the invariant suite by mutation (sixth review, L26).
 
 Each mutant re-introduces a bug Glorfindel actually had — the classes the reviews
-found — as an exact text replacement in a throwaway copy of the repository, then runs
-tests/unit/test_invariants.py on it. A mutant the suite fails on is CAUGHT; one it
+found — or, for a lot of the eighth pass, a bug its specification names, as an exact
+text replacement in a throwaway copy of the repository, then runs its tests on it:
+tests/unit/test_invariants.py, or the tests named for it in TESTS. A mutant the suite fails on is CAUGHT; one it
 passes on SURVIVES. A mutant whose text no longer matches the code is STALE (fix the
 mutant, the code moved) — never counted as caught.
 
@@ -31,6 +32,10 @@ REPO = Path(__file__).resolve().parent.parent
 A = "glorfindel/actions.py"
 R = "glorfindel/reassert.py"
 C = "glorfindel/config.py"
+INS = "eregion_core/inscription.py"
+ENG = "annatar/runner/engine.py"
+INVARIANTS = "tests/unit/test_invariants.py"
+INSCRIPTION_TESTS = "tests/unit/test_inscription.py tests/unit/test_engine.py"
 
 # (id, bug class, file, text in the code today, text that re-introduces the bug[, why
 # the invariants can't see it])
@@ -162,10 +167,33 @@ MUTANTS = [
      "            if False:\n                original = recorded\n            elif q_bare is None:"),
     ("M40", "a deleted NSG's listing read as unreadable (A0, L1)", A,
      "                cache[key] = [] if _is_not_found(exc) else None",
-     "                cache[key] = None"),    ("M41", "reset doesn't sweep the original it puts back on a bare NIC (A0)", A,
+     "                cache[key] = None"),
+    ("M41", "reset doesn't sweep the original it puts back on a bare NIC (A0)", A,
      '            bare[t0["nic_id"]] = (original, q_bare)\n            if original:\n                views.append(self._original_view(t0, original))',
      '            bare[t0["nic_id"]] = (original, q_bare)'),
+    # O0 (eighth pass): the six bugs the inscription's specification names.
+    ("M42", "the execution-time inscription check removed (O0)", ENG,
+     '        if not guard.allowed:\n            console.print(f"[red]Safety check failed:[/red] {guard.reason}")',
+     '        if False:\n            console.print(f"[red]Safety check failed:[/red] {guard.reason}")'),
+    ("M43", "an empty bench id accepted (O0)", INS,
+     "    if not bench or not bench.strip():\n        return GuardResult(False, \"empty bench id",
+     "    if False:\n        return GuardResult(False, \"empty bench id"),
+    ("M44", "a resource outside the bench's resource groups accepted (O0)", INS,
+     "        if not (rg_ok or sandbox_ok):",
+     "        if False:"),
+    ("M45", "the tag value read without its case (O0)", INS,
+     "        if value != bench:",
+     "        if value.lower() != bench.lower():"),
+    ("M46", "a destructive technique or a fault accepted in production (O0)", INS,
+     '    if zone == "production":\n        if kind != "technique":',
+     '    if False:\n        if kind != "technique":'),
+    ("M47", "a missing zone read as the bench (O0)", INS,
+     '    zone = target.zone or ("bench" if target.legacy else "")',
+     '    zone = target.zone or "bench"'),
 ]
+
+# Mutants measured by other tests than the invariants (their lot's own).
+TESTS = {mid: INSCRIPTION_TESTS for mid in ("M42", "M43", "M44", "M45", "M46", "M47")}
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
@@ -236,12 +264,12 @@ def _copy_repo(dest: Path) -> None:
             shutil.copy2(src, dest / rel)
 
 
-def _run(copy: Path, examples: int, show: bool = False, target: str = "tests/unit/test_invariants.py") -> bool:
-    """True if `target` FAILS on this copy (the mutant is caught)."""
+def _run(copy: Path, examples: int, show: bool = False, target: str = INVARIANTS) -> bool:
+    """True if `target` (test paths, space-separated) FAILS on this copy (the mutant is caught)."""
     env = {**os.environ, "GLORFINDEL_INVARIANT_EXAMPLES": str(examples), "GLORFINDEL_INVARIANT_NO_SHRINK": "1",
            "PYTHONPATH": str(copy), "PYTHONDONTWRITEBYTECODE": "1"}
     proc = subprocess.run(
-        [sys.executable, "-m", "pytest", target, "-q", "-x", "-p", "no:cacheprovider"],
+        [sys.executable, "-m", "pytest", *target.split(), "-q", "-x", "-p", "no:cacheprovider"],
         cwd=copy, env=env, capture_output=True, text=True)
     if "glorfindel" in proc.stdout and "ModuleNotFoundError" in proc.stdout:
         raise RuntimeError(proc.stdout[-2000:])
@@ -267,10 +295,12 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix="glorfindel-mutants-") as tmp:
         base = Path(tmp) / "base"
         _copy_repo(base)
+        todo = [m for m in (CONTROL if args.control else MUTANTS) if not only or m[0] in only]
         # The unmutated copy must pass, or nothing below means anything.
-        if _run(base, args.examples, show=True):
-            print("the invariant suite fails on the UNMUTATED code — fix that first")
-            return 2
+        for target in sorted({TESTS.get(m[0], INVARIANTS) for m in todo}):
+            if _run(base, args.examples, show=True, target=target):
+                print(f"{target} fails on the UNMUTATED code — fix that first")
+                return 2
         def measure(mutant):
             mid, title, rel, old, new, *why = mutant
             copy = Path(tmp) / mid
@@ -281,9 +311,11 @@ def main() -> int:
                 return mid, title, "STALE", f"{text.count(old)} matches"
             target.write_text(text.replace(old, new))
             started = time.monotonic()
-            caught = sum(_run(copy, args.examples) for _ in range(args.rounds))
+            target = TESTS.get(mid, INVARIANTS)
+            caught = sum(_run(copy, args.examples, target=target) for _ in range(args.rounds))
             # Caught by a fixed sequence only (tests/unit/test_invariant_regressions.py)?
-            fixed = caught == 0 and _run(copy, 0, target="tests/unit/test_invariant_regressions.py")
+            fixed = (caught == 0 and target == INVARIANTS
+                     and _run(copy, 0, target="tests/unit/test_invariant_regressions.py"))
             shutil.rmtree(copy, ignore_errors=True)
             verdict = "CAUGHT" if caught == args.rounds else ("flaky" if caught else ("FIXED-ONLY" if fixed else "SURVIVES"))
             if why and verdict != "CAUGHT":
@@ -292,7 +324,6 @@ def main() -> int:
             print(f"{mid} {verdict:8} {row[3]:14} {title}", flush=True)
             return row
 
-        todo = [m for m in (CONTROL if args.control else MUTANTS) if not only or m[0] in only]
         with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
             rows = sorted(pool.map(measure, todo))
     print(f"\nbudget {args.examples} sequences, {args.rounds} rounds:")

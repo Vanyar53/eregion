@@ -4,6 +4,7 @@ WORKDIR /app
 
 COPY pyproject.toml .
 COPY annatar/ annatar/
+COPY eregion_core/ eregion_core/
 COPY scripts/ scripts/
 COPY technique_catalog.yaml .
 

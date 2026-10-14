@@ -33,8 +33,8 @@ def test_parse_duration_plain():
 # ── Signal emission integration ───────────────────────────────────────────────
 
 RESOURCE_ID = (
-    "/subscriptions/sub-123/resourceGroups/annatar"
-    "/providers/Microsoft.Compute/virtualMachines/vm-annatar-victim"
+    "/subscriptions/sub-123/resourceGroups/rg-celebrimbor"
+    "/providers/Microsoft.Compute/virtualMachines/vm-celebrimbor-gondolin"
 )
 
 
@@ -358,3 +358,64 @@ def test_clean_refuses_an_untagged_vm(monkeypatch):
     with pytest.raises(RuntimeError, match="Safety check failed"):
         initializer.InitRunner().clean(EXFIL_YAML)
     executor.run_script.assert_not_called()
+
+
+# ── O0 : inscription, zone et règle de production à l'exécution ──────────────
+
+PROD_TAGS = {"eregion-target": "celebrimbor", "eregion-zone": "production"}
+
+
+def _run(tmp_path, monkeypatch, executor, scenario):
+    monkeypatch.chdir(tmp_path)
+    engine = Engine()
+    with patch.object(engine, "_get_executor_collector", return_value=(executor, _make_collector())), \
+         patch.object(engine, "_wait_and_emit_feedback"):
+        return engine.run(scenario, skip_confirm=True)
+
+
+def test_engine_refuses_a_destructive_scenario_in_production(tmp_path, monkeypatch):
+    """T1486 is destructive in the catalog: never on a production target."""
+    executor = _make_executor(tags=PROD_TAGS, vm_tags=PROD_TAGS)
+    outcome = _run(tmp_path, monkeypatch, executor, RANSOMWARE_YAML)
+    assert outcome.error and "destructive technique never runs in production" in outcome.error
+    executor.run_script.assert_not_called()
+
+
+def test_engine_runs_a_non_destructive_scenario_in_production(tmp_path, monkeypatch):
+    """T1041 is declared non-destructive: detection-only in production is allowed (J1)."""
+    executor = _make_executor(tags=PROD_TAGS, vm_tags=PROD_TAGS)
+    _run(tmp_path, monkeypatch, executor, EXFIL_YAML)
+    executor.run_script.assert_called()
+
+
+def test_engine_refuses_a_target_outside_the_bench_groups(tmp_path, monkeypatch):
+    """Enrolled by its tags, but the resource group is not the bench's."""
+    executor = _make_executor()
+    executor.resource_id = RESOURCE_ID.replace("rg-celebrimbor", "rg-prod-payments")
+    outcome = _run(tmp_path, monkeypatch, executor, EXFIL_YAML)
+    assert outcome.error and "outside Celebrimbor" in outcome.error
+    executor.run_script.assert_not_called()
+
+
+def test_clean_refuses_a_production_target(monkeypatch):
+    """`clean` rewrites the data disk: destructive, never in production."""
+    from annatar.runner import initializer
+
+    executor = _make_executor(tags=PROD_TAGS, vm_tags=PROD_TAGS)
+    monkeypatch.setattr("annatar.executors.azure_vm.AzureVMExecutor", lambda target: executor)
+    import pytest
+    with pytest.raises(RuntimeError, match="never runs in production"):
+        initializer.InitRunner().clean(EXFIL_YAML)
+    executor.run_script.assert_not_called()
+
+
+def test_scenario_destructive_reads_the_scenario_then_the_catalog():
+    from types import SimpleNamespace
+
+    from annatar.runner.engine import scenario_destructive
+
+    assert scenario_destructive(SimpleNamespace(raw={"destructive": False}, mitre="T1486")) is False
+    assert scenario_destructive(SimpleNamespace(raw={}, mitre="T1486")) is True
+    assert scenario_destructive(SimpleNamespace(raw={}, mitre="T1041")) is False
+    assert scenario_destructive(SimpleNamespace(raw={}, mitre="T9999")) is None
+    assert scenario_destructive(SimpleNamespace(raw={"destructive": "no"}, mitre="T9999")) is None

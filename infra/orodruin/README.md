@@ -17,4 +17,7 @@ Premier lot, **O1** (mode VM dédiée) :
 Modes suivants : local (développement, aucune cible réelle), Kubernetes (O2, un namespace par
 projet), relais.
 
+Contrat détaillé (garanties, `orodruin-check`, `orodruin-kill`, mutants) :
+[`docs/design/orodruin-contract.md`](../../docs/design/orodruin-contract.md).
+
 Feuille de route : [`ROADMAP.md`](../../ROADMAP.md), « Vers la 1.0 ». Session : [`CLAUDE_ORODRUIN.md`](../../CLAUDE_ORODRUIN.md).

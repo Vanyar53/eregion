@@ -52,4 +52,7 @@ avant l'appel.
 **Si le contrat ou l'identité change :** préviens `collab/inbox_annatar.md`, `collab/inbox_gothmog.md`
 et `collab/inbox_infra.md`.
 
+Contrat (ce que `orodruin-check` vérifie, `orodruin-kill`, l'audit avant appel, les 3 mutants) :
+`docs/design/orodruin-contract.md` — **lis-le avant de commencer O1**.
+
 Feuille de route : `ROADMAP.md`, « Vers la 1.0 ». Emplacement : `infra/orodruin/README.md`.

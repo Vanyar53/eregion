@@ -1,0 +1,180 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/Vanyar53/eregion/schemas/experiment.schema.v1.json",
+  "title": "Eregion Experiment v1",
+  "description": "One description for a technique and a fault (E1, eighth pass). An experiment is what an injector runs against enrolled targets: a MITRE technique (Annatar) or a declared fault (Gothmog). `kind` absent means `technique`, `engine` absent means `local-script`, so the existing Annatar scenarios validate unchanged. Versioned by its $id (v1) and the optional `schema_version` field.",
+  "type": "object",
+  "required": ["name", "description"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "string", "const": "1" },
+    "id": { "type": "string", "description": "Stable identifier; falls back to `name`." },
+    "kind": { "type": "string", "enum": ["technique", "fault"], "default": "technique" },
+    "engine": {
+      "type": "string",
+      "default": "local-script",
+      "description": "The injection engine: local-script (today's Annatar scripts), stratus, atomic, chaos-studio, …"
+    },
+    "engine_ref": {
+      "type": "string",
+      "description": "The engine's identifier for this experiment — a Stratus technique id, a Chaos Studio experiment name. Unused by local-script (the steps carry the scripts)."
+    },
+    "name": { "type": "string" },
+    "description": { "type": "string" },
+    "version": { "type": "string" },
+    "mitre": { "type": "string", "pattern": "^T\\d{4}(\\.\\d{3})?$" },
+    "destructive": { "type": "boolean" },
+    "status": { "type": "string", "enum": ["implemented", "planned"] },
+    "target": {
+      "description": "Legacy single-target shape (technique, local-script). Prefer `targets` for new experiments.",
+      "type": "object",
+      "required": ["type", "resource_group"],
+      "additionalProperties": true,
+      "properties": {
+        "type": { "type": "string" },
+        "resource_group": { "type": "string" },
+        "vm_name": { "type": "string" }
+      }
+    },
+    "targets": {
+      "description": "Selector over enrolled targets (eregion_core/inscription.py). The injector resolves it to concrete resources at run time.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "resource_type": { "type": "string", "enum": ["azure_vm", "azure_storage", "entra_id"] },
+        "zone": { "type": "string", "enum": ["bench", "twin", "production"] },
+        "names": { "type": "array", "items": { "type": "string" } },
+        "resource_ids": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "setup": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "action"],
+        "additionalProperties": true,
+        "properties": {
+          "name": { "type": "string" },
+          "action": { "type": "string" },
+          "script": { "type": "string" }
+        }
+      }
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "action"],
+        "additionalProperties": true,
+        "properties": {
+          "name": { "type": "string" },
+          "action": { "type": "string" },
+          "script": { "type": "string" },
+          "record": { "type": "string" }
+        }
+      }
+    },
+    "steady_state": {
+      "description": "What 'normal' is, checked before, during and after a fault (Chaos Toolkit's steady-state-hypothesis). A probe plus the value it must hold.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "probes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "verify"],
+            "additionalProperties": true,
+            "properties": {
+              "name": { "type": "string" },
+              "verify": { "type": "string", "description": "KQL or a command whose result is the probe." },
+              "expect": { "type": "string", "description": "The value or condition that means 'normal'." }
+            }
+          }
+        }
+      }
+    },
+    "abort_conditions": {
+      "description": "Conditions that stop the experiment early (a steady-state probe failing where it must not, a budget reached).",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name"],
+        "additionalProperties": true,
+        "properties": {
+          "name": { "type": "string" },
+          "when": { "type": "string" }
+        }
+      }
+    },
+    "revert": {
+      "description": "How the experiment returns to the initial state (a fault's rollback, an attack's cleanup). local-script references a script; an engine uses its own revert (Stratus `revert`, Chaos Toolkit `rollbacks`).",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name"],
+        "additionalProperties": true,
+        "properties": {
+          "name": { "type": "string" },
+          "action": { "type": "string" },
+          "script": { "type": "string" }
+        }
+      }
+    },
+    "detection": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "timeout": { "type": "string", "pattern": "^\\d+(s|m|h)$" },
+        "time_max": { "type": "string", "pattern": "^\\d+(s|m|h)$" },
+        "prerequisites": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "why"],
+            "additionalProperties": true,
+            "properties": {
+              "name": { "type": "string" },
+              "table": { "type": "string" },
+              "why": { "type": "string" },
+              "verify": { "type": "string" },
+              "setup": { "type": "string" }
+            }
+          }
+        },
+        "hints": {
+          "description": "Context for Glorfindel's purple-team feedback loop (consumed only on a miss).",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "log_source": { "type": "string" },
+            "attack_commands_summary": { "type": "string" },
+            "expected_indicators": { "type": "array", "items": { "type": "string" } },
+            "failure_candidates": { "type": "array", "items": { "type": "string" } },
+            "source_ips": { "type": "array", "items": { "type": "string" } }
+          }
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "description": "A technique (the default kind, i.e. `kind` absent or `technique`) needs its MITRE id and steps — today's Annatar scenario shape.",
+      "if": {
+        "anyOf": [
+          { "not": { "required": ["kind"] } },
+          { "properties": { "kind": { "const": "technique" } } }
+        ]
+      },
+      "then": { "required": ["mitre", "steps"] }
+    },
+    {
+      "description": "A fault names its engine (never local-script), the engine's reference, and what 'normal' is.",
+      "if": { "properties": { "kind": { "const": "fault" } }, "required": ["kind"] },
+      "then": {
+        "required": ["engine", "engine_ref", "steady_state"],
+        "properties": { "engine": { "not": { "const": "local-script" } } }
+      }
+    }
+  ]
+}

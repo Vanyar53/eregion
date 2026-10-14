@@ -215,13 +215,12 @@ def campaign_plan(target, objective, max_scenarios, allow_destructive, use_llm, 
         new_campaign_id,
     )
     from annatar.campaign.planner import plan_campaign
-    from annatar.campaign.scope import Scope as GuardScope
-    from annatar.campaign.scope import _rg_from_id
     from annatar.campaign.synthesizer import synthesize
+    from eregion_core.inscription import rg_from_id, subscription_from_id
 
-    rg = _rg_from_id(target)
-    sub = _subscription_from_id(target)
-    guard = GuardScope(
+    rg = rg_from_id(target)
+    sub = subscription_from_id(target)
+    guard = Scope(
         subscription_id=sub,
         allowed_resource_groups=[rg] if rg else [],
         allowed_resource_ids=[target],
@@ -365,9 +364,3 @@ def campaign_show(campaign_id, runs_dir):
         )
 
 
-def _subscription_from_id(resource_id: str) -> str:
-    parts = resource_id.split("/")
-    for i, p in enumerate(parts):
-        if p.lower() == "subscriptions" and i + 1 < len(parts):
-            return parts[i + 1]
-    return ""

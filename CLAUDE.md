@@ -323,9 +323,18 @@ glorfindel/
                            monitoring_backends: [law-celebrimbor-amonsul] par rule → nom du backend
                            (OPTIONNEL : omis si un seul backend du type, cas mono-LAW → résolution fallback)
 
+eregion_core/
+  inscription.py      → O0 : LE garde-fou de cible de tout injecteur (Annatar, puis Gothmog). `Scope.check` (périmètre :
+                        abonnement s'il est nommé, groupes du banc `rg-celebrimbor*` ou liste, IDs) — à la synthèse ET à
+                        l'exécution ; `enrollment` (tags `eregion-target=<banc>` sur le groupe ET la VM, noms sans casse,
+                        valeurs exactes ; `eregion-zone` de la VM, celle du groupe doit concorder ; `annatar-test=true` =
+                        zone `bench`, migration) ; `check_zone` (production : technique non destructive seulement,
+                        `destructive=None` refusé, panne jamais) ; `check_target` = les trois. Banc : `EREGION_BENCH`
+                        (défaut `celebrimbor`, instance nommée `celebrimbor-<nom>`). Tout inconnu est refusé.
+
 annatar/
-  runner/engine.py    → garde RG + VM (`safety/guard.check_target`, tag annatar-test=true sur les DEUX — avant : RG seul,
-                        `check_vm` sans site d'appel ; `annatar clean` gardé aussi) → setup → integrity check → attack
+  runner/engine.py    → inscription (`eregion_core.inscription.check_target` : périmètre du banc + tags `eregion-target`/`eregion-zone`
+                        sur le groupe ET la VM + zone ; `scenario_destructive()` = champ du scénario puis catalogue ; `annatar clean` gardé aussi, destructif) → setup → integrity check → attack
                         → emit attack_started (sans query — Glorfindel résout via detection_rules.yaml)
                         → thread daemon feedback: si detection_timeout → emit detection_missed
   runner/parser.py    → Scenario dataclass simplifié (detection: timeout/prerequisites/hints)
@@ -498,7 +507,7 @@ GLORFINDEL_DISCOVERY_RETENTION_H=8  # rétention d'une VM éteinte dans le regis
 ## Tests
 
 ```bash
-pytest                    # 794 tests (~30s ; 60 séquences d'invariants, 500 en CI ~1 min), 0 appel Azure, 0 appel LLM, 0 écriture ~/.glorfindel/
+pytest                    # 820 tests (~30s ; 60 séquences d'invariants, 500 en CI ~1 min), 0 appel Azure, 0 appel LLM, 0 écriture ~/.glorfindel/
                           # Hermétique par construction (conftest) : TOUS les chemins ~/.glorfindel redirigés
                           # vers tmp, et le glorfindel-config.yaml local ignoré (avant : avec une config locale,
                           # les tests de graphe lançaient de vraies requêtes KQL via `investigate`, suite 5× plus lente).
@@ -513,6 +522,7 @@ pytest tests/unit/test_proposed_rules.py     # record/pending/approve/reject + r
 pytest tests/unit/test_detection_authoring.py # catalogue + getschema + author_rule + propose-rules
 pytest tests/unit/test_audit.py              # NSG/backup/compute/IAM readiness
 pytest tests/unit/test_config.py             # GlorfindelConfig + ExceptionConfig
+pytest tests/unit/test_inscription.py        # O0 : périmètre, inscription, zones, règle de production
 pytest tests/unit/test_discovery.py          # AssetRegistry + DiscoveryService + eviction
 pytest tests/unit/test_invariants.py         # L24/L26 : invariants (Hypothesis, machine à états) sur un faux Azure
                           # en mémoire (tests/unit/fake_azure.py : évaluation NSG comme Azure, politiques, régions,
@@ -526,7 +536,8 @@ pytest tests/unit/test_invariants.py         # L24/L26 : invariants (Hypothesis,
 pytest tests/unit/test_invariant_regressions.py  # séquences trouvées par la machine, figées (L26, L27)
 pytest tests/unit/test_locks.py               # L27 : _vm_lock / _quarantine_lock entre vrais processus (flock)
 python scripts/mutation_check.py [--examples 500 --rounds 2 --jobs 8]   # mesure des invariants par
-                          # mutation : 41 bugs réels réinjectés un par un ; chaque lundi (mutants.yml).
+                          # mutation : 41 bugs réels réinjectés un par un + les 6 de la spécification d'O0 (M42–M47,
+                          # mesurés par tests/unit/test_inscription.py + test_engine.py, table TESTS) ; chaque lundi (mutants.yml).
                           # --control : les 16 mutants du jeu de contrôle (jamais utilisés pour orienter la génération)
 ```
 
@@ -802,7 +813,7 @@ L'escalade porte `action_params` (dict, vide par défaut) pour les actions param
 
 Huitième passe (13/10) — jalon **0.3, la boucle complète tourne** : Orodruin lance une technique publique et une panne sur le banc, retour à l'état initial, on mesure ce que Glorfindel a vu.
 
-1. **O0** — inscription et périmètre communs (`annatar/campaign/scope.py` + `annatar/safety/guard.py` → module partagé), tag `eregion-target`, zones, refus du destructif et des pannes en `production`, 6 mutants
+1. **O0** ✅ (14/10) — `eregion_core/inscription.py` : périmètre, tags `eregion-target`/`eregion-zone`, zones, refus du destructif et des pannes en `production`, 6 mutants (M42–M47) ; tags du banc écrits dans `locals.tf`, **pas appliqués** (avec Jonathan)
 2. **E1** — schéma d'expérience (technique ou panne) à côté de `schemas/scenario.schema.json`, catalogue étendu aux pannes
 3. **O1** — Orodruin, mode VM dédiée (état Terraform séparé) — avec Jonathan
 4. **R1** — adaptateur Stratus Red Team — avec Jonathan ; question ouverte : Stratus attaque le plan de contrôle (Activity Logs, non lus par Glorfindel) → R2 (Atomic) avant, ou ingestion des Activity Logs

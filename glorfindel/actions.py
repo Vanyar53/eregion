@@ -591,8 +591,8 @@ class AzureConnector(CloudConnector):
     upstream, not in a tag allowlist: the per-asset autonomy mode (human_only by
     default) decides whether an action runs at all, and GLORFINDEL_READ_ONLY blocks
     every write (_guard_write). A defender limited to resources tagged as test targets
-    would not defend production; the `annatar-test` tag gates the RED side only
-    (annatar/safety/guard.py).
+    would not defend production; the inscription (`eregion-target`, its zone) gates
+    the injectors only (eregion_core/inscription.py).
     """
 
     ISOLATION_RULE_NAME = "glorfindel-isolation-deny-all"

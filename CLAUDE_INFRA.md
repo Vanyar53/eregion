@@ -78,8 +78,9 @@ coûte (control plane + nodes) → détruire entre sessions. VMs : auto-shutdown
 
 ## Huitième passe (13/10) — ce qui change pour Celebrimbor
 
-- **Inscription (O0)** : Celebrimbor pose le tag générique `eregion-target=<id du banc>` à la
-  construction, avec la zone `bench` (sa forme exacte se fixe dans O0) ; `annatar-test` reste posé le temps de la migration. Un
+- **Inscription (O0)** : Celebrimbor pose `eregion-target` (`celebrimbor`, ou
+  `celebrimbor-<instance>` pour une instance nommée) et `eregion-zone = "bench"` dans
+  `common_tags` (`locals.tf`, O0 — **écrit, pas encore appliqué**) ; `annatar-test` reste posé le temps de la migration. Un
   `terraform apply` sur le banc se fait avec Jonathan, `glorfindel list` vide avant.
 - **Gothmog (G0)** : Celebrimbor inscrit les cibles du banc auprès de Chaos Studio ; l'expérience
   est décrite en code dans le module du banc.

@@ -27,9 +27,14 @@ locals {
     managed-by = "terraform"
     eregion    = "test-infra"
     instance   = local.instance
-    # Autorisation de chaos versionnée : le garde-fou d'Annatar (safety/guard.py)
-    # refuse d'attaquer un RG sans ce tag. Tout RG Celebrimbor EST un sandbox de
-    # chaos → il doit porter l'autorisation par construction (survit aux rebuilds).
+    # Inscription (eregion_core/inscription.py, O0) : aucun injecteur n'agit sur un
+    # groupe ni une VM sans `eregion-target=<id du banc>` ; la zone dit ce qui peut y
+    # tourner. Tout Celebrimbor EST le banc de référence → inscrit par construction
+    # (survit aux rebuilds). Une instance nommée est un autre banc.
+    "eregion-target" = local.instance == "default" ? "celebrimbor" : "celebrimbor-${local.instance}"
+    "eregion-zone"   = "bench"
+    # Ancien tag de chaos, encore lu pendant la migration — à retirer quand le banc
+    # porte les tags ci-dessus (après un `make celebrimbor-up`).
     "annatar-test" = "true"
   }
 

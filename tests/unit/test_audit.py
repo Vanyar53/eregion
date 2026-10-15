@@ -325,9 +325,9 @@ def test_perf_sampling_fine_coarse_and_missing():
     without the counter — both silent. The audit says which mode the VM is in."""
     from glorfindel.audit import _check_perf_sampling
     rid = "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm"
-    fine = _check_perf_sampling(rid, "ws", _PerfDet([{"n": 361, "span_s": 3600}]))
+    fine = _check_perf_sampling(rid, "ws", _PerfDet([{"n": 361, "step": 10, "gaps": 360}]))
     assert fine.status == "ok" and "fin" in fine.message
-    coarse = _check_perf_sampling(rid, "ws", _PerfDet([{"n": 61, "span_s": 3600}]))
+    coarse = _check_perf_sampling(rid, "ws", _PerfDet([{"n": 61, "step": 60, "gaps": 60}]))
     assert coarse.status == "warn" and "grossier" in coarse.message
     missing = _check_perf_sampling(rid, "ws", _PerfDet([]))
     assert missing.status == "warn" and "aveugle" in missing.message and missing.fix
@@ -353,9 +353,22 @@ _SHIPPED = [
 ]
 
 
+def test_perf_sampling_does_not_read_a_cadence_from_the_boot_batch():
+    """Measured on the bench (15/10): the agent's first upload after a boot sends 6 samples
+    under one timestamp. The step read ~0 s and the check claimed the fine mode."""
+    from glorfindel.audit import _check_perf_sampling
+    boot = _check_perf_sampling(_RID, "ws", _PerfDet([{"n": 6, "step": None, "gaps": 0}]))
+    assert boot.status == "warn" and "pas encore mesurable" in boot.message
+    assert boot.data == {"present": True, "samples": 6, "step_s": None}
+    # The batch, then samples the agent sent with gaps of 25, 20, 10, 20 s (measured): the
+    # query keeps the smallest gap between single-sample seconds — 10 s, the real cadence.
+    later = _check_perf_sampling(_RID, "ws", _PerfDet([{"n": 10, "step": 10, "gaps": 3}]))
+    assert later.status == "ok" and later.data["step_s"] == 10
+
+
 def test_perf_sampling_says_whether_the_counter_is_present():
     from glorfindel.audit import _check_perf_sampling
-    assert _check_perf_sampling(_RID, "ws", _PerfDet([{"n": 361, "span_s": 3600}])).data == {
+    assert _check_perf_sampling(_RID, "ws", _PerfDet([{"n": 361, "step": 10, "gaps": 360}])).data == {
         "present": True, "samples": 361, "step_s": 10}
     assert _check_perf_sampling(_RID, "ws", _PerfDet([])).data == {"present": False}
 
@@ -432,7 +445,7 @@ def test_coverage_check_flags_a_blind_vm(monkeypatch):
 def test_audit_run_adds_the_detection_group_only_with_a_workspace(monkeypatch):
     from glorfindel import audit
     monkeypatch.setattr("glorfindel.detectors.detector_for",
-                        lambda kind, workspace_id: _PerfDet([{"n": 361, "span_s": 3600, "facilities": "auth"}]))
+                        lambda kind, workspace_id: _PerfDet([{"n": 361, "step": 10, "gaps": 360, "facilities": "auth"}]))
     monkeypatch.setattr(audit, "_load_rules", lambda: (_SHIPPED, None))
     with_ws = audit.run(RESOURCE_ID, _connector(), workspace_id="ws")
     det = [c.name for c in with_ws.checks if c.action == "detection"]

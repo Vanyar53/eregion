@@ -132,7 +132,7 @@ def run(
     if ws:
         # From what the two telemetry checks just read — no Azure call of its own.
         result.checks.append(_check_rule_coverage(resource_id, result.checks))
-    _align_precedence(result.checks)
+    _align_precedence(result.checks, resource_id)
 
     # Restore staging SA — pure config check (no Azure call), so it runs outside the pool.
     result.checks.append(_check_restore_staging(staging_storage))
@@ -423,7 +423,7 @@ def _check_precedence(issues: list[dict]) -> AuditCheck | None:
         data={"precedence": issues, "precedence_unreadable": unreadable},
     )
 
-def _align_precedence(checks: list) -> None:
+def _align_precedence(checks: list, resource_id: str = "") -> None:
     """Judge « NSG precedence » as the readiness gate does (seventh review, P2).
 
     The card showed ✗ NSG where the gate said ready: with the quarantine NSG available,
@@ -436,12 +436,13 @@ def _align_precedence(checks: list) -> None:
     prec = next((c for c in checks if c.name == "NSG precedence" and c.status == "fail"), None)
     if prec is None:
         return
-    from glorfindel.readiness import _quarantine_enabled, isolation_by_quarantine
+    from glorfindel.readiness import _quarantine_enabled, isolation_by_quarantine, quarantine_refusal
 
     perm = next((c for c in checks if c.name == "Isolation permissions"), None)
     missing = {m.get("action", "") for m in ((perm.data if perm else {}) or {}).get("missing_permissions") or []
                if m.get("used_by") != "release_isolation"}
-    jit = isolation_by_quarantine(_quarantine_enabled(), missing)
+    jit = isolation_by_quarantine(_quarantine_enabled(), missing,
+                                  refused=bool(resource_id and quarantine_refusal(resource_id)))
     issues = prec.data.get("precedence") or []
     iso = sorted({i["rule"] for i in issues if i.get("action") == "isolate_vm"})
     blk = sorted({i["rule"] for i in issues if i.get("action") == "block_suspicious_ip"})

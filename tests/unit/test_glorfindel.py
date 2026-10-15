@@ -3459,3 +3459,80 @@ def test_a_policy_deny_in_our_quarantine_nsg_is_left_alone(monkeypatch):
     assert connector.verify_isolation(_RID)["verified"] is True
     connector._ensure_quarantine_nsg("westeurope", "rg")
     net.security_rules.begin_delete.assert_not_called()
+
+
+# ── S7 (sixth review): an isolation by rules says Azure's DNS / IMDS stay open ──────
+
+def test_platform_open_nics_are_the_nics_without_a_quarantine():
+    from glorfindel.actions import platform_open_nics
+    q = {"kind": "quarantine", "nic_id": "/x/networkInterfaces/nic-a"}
+    rules_a = {"nic_id": "/x/networkInterfaces/nic-a", "scope": "nic"}
+    rules_b = {"nic_id": "/x/networkInterfaces/nic-b", "scope": "subnet"}
+    assert platform_open_nics([q]) == []
+    assert platform_open_nics([rules_b]) == ["nic-b"]
+    assert platform_open_nics([q, rules_a, rules_b]) == ["nic-b"]     # nic-a also has a quarantine
+    assert platform_open_nics(None) == [] and platform_open_nics([{}]) == []
+
+
+def test_list_says_dns_and_imds_stay_reachable_after_an_isolation_by_rules():
+    from glorfindel.cli import _state_warnings
+    rules = {"placements": [{"nic_id": "/x/networkInterfaces/nic-a", "scope": "subnet"}]}
+    assert any("DNS/IMDS reachable on nic-a" in w for w in _state_warnings(rules, "release_failed"))
+    quarantined = {"placements": [{"nic_id": "/x/networkInterfaces/nic-a", "kind": "quarantine"}]}
+    assert not any("DNS/IMDS" in w for w in _state_warnings(quarantined, "release_failed"))
+    assert not any("DNS/IMDS" in w for w in _state_warnings(rules, "unblock_failed"))   # a block
+
+
+def test_the_autonomous_isolation_notification_carries_the_platform_note(monkeypatch):
+    from glorfindel import escalations
+    from glorfindel.agent import _platform_note
+    sent = []
+    monkeypatch.setenv("GLORFINDEL_WEBHOOK_URL", "https://hooks.example.invalid/x")
+    monkeypatch.setattr("requests.post", lambda url, json=None, timeout=None: sent.append(json["text"]))
+    note = _platform_note({"platform_open": ["nic-a"]})
+    assert "DNS et IMDS" in note and "nic-a" in note and _platform_note({}) == ""
+    escalations.notify_action("isolate_vm", _RID, "run", 0.9, "isolated", True, note=note)
+    escalations.notify_action("isolate_vm", _RID, "run", 0.9, "isolated", True)
+    assert "⚠ DNS et IMDS" in sent[0] and "⚠" not in sent[1].split("\n")[2]
+
+
+def test_a_refused_swap_is_remembered_by_the_readiness_gate(monkeypatch):
+    """S7: the readiness gate didn't learn of a quarantine refused at execution — an Azure
+    Policy the permissions read can't see. Every isolation of that VM went by rules."""
+    from glorfindel import readiness
+    from glorfindel.actions import _remember_quarantine_outcome
+    connector, net, nic = _l4_env(monkeypatch, quarantine_exists=True)
+    net.network_interfaces.begin_create_or_update.side_effect = RuntimeError(
+        "(RequestDisallowedByPolicy) NSG on NIC not allowed")
+    connector.isolate_vm(_RID)
+    refusal = readiness.quarantine_refusal(_RID)
+    assert refusal and "RequestDisallowedByPolicy" in refusal["errors"][0]
+    # An isolation that puts the quarantine on every NIC clears it.
+    _remember_quarantine_outcome(_RID, [], [{"kind": "quarantine", "nic_id": "/x/nic"}])
+    assert readiness.quarantine_refusal(_RID) is None
+
+
+def test_remembering_a_refusal_never_stops_an_isolation(monkeypatch):
+    from glorfindel.actions import _remember_quarantine_outcome
+    def boom(*a, **k):
+        raise OSError("disk full")
+    monkeypatch.setattr("glorfindel.readiness.record_quarantine_refusal", boom)
+    _remember_quarantine_outcome(_RID, ["refused"], [])        # no exception
+
+
+def test_audit_precedence_counts_a_quarantine_refused_at_execution(monkeypatch):
+    """With the swap refused last time, the isolation goes by rules: the allow before its
+    deny is a real bypass for the card too, as for the gate (S7 + P2)."""
+    from glorfindel import audit, readiness
+    from glorfindel.audit import AuditCheck
+    monkeypatch.setattr("glorfindel.readiness._quarantine_enabled", lambda: True)
+    def prec():
+        return AuditCheck("isolate_vm, block_suspicious_ip", "NSG precedence", "fail", "allow first", "fix",
+                          data={"precedence": [{"rule": "allow-ssh", "action": "isolate_vm"}]})
+    ok = prec()
+    audit._align_precedence([ok], _RID)
+    assert ok.status == "ok"
+    readiness.record_quarantine_refusal(_RID, ["(RequestDisallowedByPolicy) no"])
+    held = prec()
+    audit._align_precedence([held], _RID)
+    assert held.status == "warn" and held.data["isolation_by_quarantine"] is False

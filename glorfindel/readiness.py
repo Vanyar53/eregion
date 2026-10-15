@@ -60,10 +60,17 @@ _RULE_RIGHTS = {
 _DRAIN_RIGHT = "Microsoft.Compute/virtualMachines/runCommand/action"
 
 
-def isolation_by_quarantine(quarantine_nsg: bool, missing_actions: set[str]) -> bool:
+def isolation_by_quarantine(quarantine_nsg: bool, missing_actions: set[str], refused: bool = False) -> bool:
     """Will an isolation go through the quarantine NSG (JIT)? Then no customer allow can get
-    in its way: the NIC carries our deny-all. Shared with the audit (seventh review, P2)."""
-    return bool(quarantine_nsg) and not (set(missing_actions) & _ISOLATION_RIGHTS)
+    in its way: the NIC carries our deny-all. Not when the swap was refused at the last
+    isolation (`refused`, S7). Shared with the audit (seventh review, P2)."""
+    return bool(quarantine_nsg) and not refused and not (set(missing_actions) & _ISOLATION_RIGHTS)
+
+
+def quarantine_refusal(resource_id: str) -> dict | None:
+    """The refusal the last isolation of this VM met, if any (S7)."""
+    rec = _raw(resource_id).get("quarantine_refused")
+    return rec if isinstance(rec, dict) else None
 
 
 def _reason(code: str, level: str, message: str, fix: str = "") -> dict:
@@ -127,7 +134,20 @@ def assess(resource_id: str, connector, quarantine_nsg: bool = True) -> dict:
         # What the isolation needs, apart from the release's own right (below).
         missing = {m["action"] for m in perms.get("missing") or [] if m.get("used_by") != "release_isolation"}
         release_missing = [m for m in perms.get("missing") or [] if m.get("used_by") == "release_isolation"]
-    jit_ok = isolation_by_quarantine(quarantine_nsg, missing)
+    # The rights read can't see an Azure Policy (or a deny assignment): an isolation that
+    # met a refused swap says so here, until one puts the quarantine on every NIC (S7) —
+    # and until then the isolation goes by rules, with what that exposes.
+    refusal = quarantine_refusal(resource_id) if quarantine_nsg else None
+    jit_ok = isolation_by_quarantine(quarantine_nsg, missing, refused=bool(refusal))
+    if refusal:
+        reasons.append(_reason(
+            "quarantine_refused", "reserve",
+            "La dernière isolation n'a pas pu poser le NSG de quarantaine (refusé à l'exécution, "
+            f"{str(refusal.get('at', ''))[:16]} : {'; '.join(refusal.get('errors') or [])[:200]}) — "
+            "une Azure Policy ou un droit que la lecture des permissions ne voit pas. Elle passe "
+            "alors par les règles : DNS / IMDS d'Azure joignables, exposée aux allow du client.",
+            "Exempter le NSG de quarantaine de Glorfindel de la politique, puis isoler à nouveau : "
+            "une isolation qui le pose sur chaque carte efface ce constat."))
     rules_ok = not (missing & _RULE_RIGHTS)
     if not jit_ok and not rules_ok:
         reasons.append(_reason(
@@ -368,6 +388,18 @@ def record_assessment(assessment: dict, resource_id: str = "") -> dict:
         resource_id or assessment["vm"], vm=assessment["vm"], resource_id=resource_id or None,
         verdict=assessment["verdict"], reserve_codes=list(assessment["reserve_codes"]),
         reasons=assessment["reasons"], checked_at=_now(), recheck=None)
+
+
+def record_quarantine_refusal(resource_id: str, errors: list) -> dict:
+    """The last isolation could not put the quarantine NSG on the VM (S7): its reasons."""
+    return _update(resource_id, quarantine_refused={
+        "at": _now(), "errors": [str(e)[:200] for e in (errors or [])][:3]})
+
+
+def clear_quarantine_refusal(resource_id: str) -> None:
+    """A later isolation put the quarantine on every NIC: the refusal is no longer true."""
+    if _raw(resource_id).get("quarantine_refused"):
+        _update(resource_id, quarantine_refused=None)
 
 
 def acknowledge(vm: str, codes: list[str], by: str) -> dict:

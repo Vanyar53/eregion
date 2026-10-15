@@ -1432,6 +1432,12 @@ def _state_warnings(entry: dict, failed_key: str) -> list[str]:
         out.append(f"partial: NIC {nic} not covered" if nic else "partial: not every NIC is covered")
     if entry.get(failed_key):
         out.append("rules still on Azure after a failed removal: " + ", ".join(entry[failed_key]))
+    if failed_key == "release_failed":
+        from glorfindel.actions import platform_open_nics
+        nics = platform_open_nics(entry.get("placements"))
+        if nics:
+            out.append("DNS/IMDS reachable on " + ", ".join(nics) + ": isolated by rules, not the "
+                       "quarantine NSG — Azure only lets a rule deny them for every NIC behind an NSG")
     drain = entry.get("drain") or {}
     if drain.get("status") in ("failed", "partial", "unsupported"):
         out.append("open sessions not cut: " + str(drain.get("error") or drain.get("note") or drain["status"]))

@@ -246,8 +246,10 @@ def notify_action(
     verified: bool | None,
     ttp: str = "",
     severity: str = "",
+    note: str = "",
 ) -> None:
-    """POST an autonomous action notification to the webhook if set."""
+    """POST an autonomous action notification to the webhook if set. `note`: what the
+    action left open (an isolation by rules: Azure's DNS / IMDS — S7)."""
     import os
     url = os.environ.get("GLORFINDEL_WEBHOOK_URL", "")
     if not url:
@@ -269,7 +271,8 @@ def notify_action(
                 f":robot_face: *{label}* {status}  |  `{resource_short}`\n"
                 f"`{action}` · {meta}\n"
                 f"> {explanation[:800]}\n"
-                f"`{run_id}`"
+                + (f"> ⚠ {note[:300]}\n" if note else "")
+                + f"`{run_id}`"
             )
         }, timeout=5)
     except Exception:

@@ -730,6 +730,16 @@ function _healthNote(s) {
       + s.shadowed.map(x => `${x.rule} (priority ${x.priority}, ${x.direction}, ports ${x.ports})`).join('\n');
     out += ` <span style="${base}" title="${_attr(why)}">⚠ bypassed</span>`;
   }
+  // Isolated by rules (the quarantine NSG was refused or is off): a known limit, not a
+  // failure — orange. Azure only lets a rule deny its DNS and IMDS for every NIC behind an
+  // NSG, so they stay reachable from this VM (measured; sixth review, S7).
+  if (Array.isArray(s.platform_open) && s.platform_open.length) {
+    const warn = 'font-size:8px;font-weight:700;padding:0 4px;border-radius:3px;flex-shrink:0;color:var(--orange);border:1px solid color-mix(in srgb,var(--orange) 45%,transparent);background:color-mix(in srgb,var(--orange) 10%,transparent)';
+    const why = 'Isolated by rules, not the quarantine NSG, on ' + s.platform_open.join(', ')
+      + ':\nAzure DNS and IMDS stay reachable (a rule can only deny them for every NIC behind an NSG).'
+      + '\nA DNS tunnel or a managed-identity token remains possible. The quarantine NSG closes both.';
+    out += ` <span style="${warn}" title="${_attr(why)}">⚠ DNS/IMDS</span>`;
+  }
   return out;
 }
 

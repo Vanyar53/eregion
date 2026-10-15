@@ -207,6 +207,13 @@ MUTANTS = [
     ("M51", "a verification that raises leaves the graph (S9)", "glorfindel/agent.py",
      "    except Exception as exc:\n        first = str(exc).strip().splitlines()[0]",
      "    except Exception as exc:\n        raise\n        first = str(exc).strip().splitlines()[0]"),
+    # Sixth review, S7: a quarantine refused at execution, unknown to the readiness gate.
+    ("M52", "a quarantine refused at execution is not remembered (S7)", A,
+     "        _remember_quarantine_outcome(resource_id, refused, placements)\n",
+     "        pass\n"),
+    ("M53", "the readiness gate ignores a remembered refusal (S7)", "glorfindel/readiness.py",
+     "    refusal = quarantine_refusal(resource_id) if quarantine_nsg else None",
+     "    refusal = None"),
 ]
 
 # Mutants measured by other tests than the invariants (their lot's own).
@@ -214,6 +221,8 @@ TESTS = {mid: INSCRIPTION_TESTS for mid in ("M42", "M43", "M44", "M45", "M46", "
 TESTS.update({mid: DOCS_TESTS for mid in ("M48", "M49")})
 TESTS["M50"] = "tests/unit/test_glorfindel.py -k drain"
 TESTS["M51"] = "tests/unit/test_agent_nodes.py -k raises"
+TESTS["M52"] = "tests/unit/test_glorfindel.py -k remembered"
+TESTS["M53"] = "tests/unit/test_readiness.py -k refused"
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

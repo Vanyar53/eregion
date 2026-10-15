@@ -186,6 +186,37 @@ PLATFORM_OPEN_NOTE = ("DNS et IMDS d'Azure encore joignables : le repli par règ
                       "pas les refuser à une seule VM (Azure exige la source « * »)")
 
 
+def _remember_quarantine_outcome(resource_id: str, refused: list, placements: list) -> None:
+    """Tell the readiness gate what the isolation met (sixth review, S7): a quarantine
+    swap refused at execution — an Azure Policy, a right the permissions read can't see —
+    becomes a reserve of the VM; an isolation that put the quarantine on every NIC clears
+    it. Best effort: never in the way of an isolation."""
+    try:
+        from glorfindel import readiness
+        if refused:
+            readiness.record_quarantine_refusal(resource_id, refused)
+        elif placements and all(p.get("kind") == "quarantine" for p in placements):
+            readiness.clear_quarantine_refusal(resource_id)
+    except Exception:
+        pass
+
+
+def platform_open_nics(placements) -> list[str]:
+    """The NICs (short names) an isolation holds by rules only — no quarantine placement:
+    Azure's DNS and IMDS stay reachable from them (Q15, measured). The War Room, `list` and
+    the autonomous isolation's notification say it (sixth review, S7): it was in the
+    outcome, and shown nowhere."""
+    held = {str(p.get("nic_id", "")).rstrip("/").lower()
+            for p in placements or [] if p.get("kind") == "quarantine"}
+    out: list[str] = []
+    for p in placements or []:
+        nic = str(p.get("nic_id", "")).rstrip("/")
+        short = nic.rsplit("/", 1)[-1]
+        if nic and nic.lower() not in held and short not in out:
+            out.append(short)
+    return out
+
+
 def _is_quarantine_nsg(nsg_id_or_name: str) -> bool:
     name = (nsg_id_or_name or "").rstrip("/").split("/")[-1].lower()
     return name.startswith(QUARANTINE_NSG_PREFIX)
@@ -843,6 +874,7 @@ class AzureConnector(CloudConnector):
         refused = [p["quarantine_error"] for p in placements if p.get("quarantine_error")]
         if refused:
             out["quarantine_refused"] = refused
+        _remember_quarantine_outcome(resource_id, refused, placements)
         by_rules = [p["nic_id"].rstrip("/").rsplit("/", 1)[-1] for p in placements if p.get("kind") != "quarantine"]
         if by_rules:
             out["platform_open"] = by_rules           # Q15: said, not hidden

@@ -1313,6 +1313,15 @@ def verify_action(state: GlorfindelState, *, connector: CloudConnector) -> Glorf
 _CHECKED_ACTIONS = ("isolate_vm", "release_isolation", "block_suspicious_ip")
 
 
+def _platform_note(outcome: dict) -> str:
+    """What an isolation by rules left open, for its notification (sixth review, S7)."""
+    nics = outcome.get("platform_open") or []
+    if not nics:
+        return ""
+    from glorfindel.actions import PLATFORM_OPEN_NOTE
+    return f"{PLATFORM_OPEN_NOTE} — {', '.join(map(str, nics))}"
+
+
 def store_cycle(state: GlorfindelState, *, memory: CycleMemory) -> GlorfindelState:
     """Persist the completed cycle to vector store and debug JSONL."""
     signal = state["signal"]
@@ -1364,6 +1373,9 @@ def store_cycle(state: GlorfindelState, *, memory: CycleMemory) -> GlorfindelSta
                 verified=outcome.get("verified"),
                 ttp=signal.get("ttp", ""),
                 severity=signal.get("severity", ""),
+                # An isolation by rules leaves Azure's DNS / IMDS reachable: said where the
+                # autonomous action is announced, not only buried in the outcome (S7).
+                note=(_platform_note(outcome) if state["action"] == "isolate_vm" else ""),
             )
     except Exception as exc:
         _console.print(f"[yellow]store_cycle: notify_action failed: {exc}[/yellow]")

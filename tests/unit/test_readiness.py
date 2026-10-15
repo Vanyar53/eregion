@@ -248,3 +248,16 @@ def test_revoke_by_name_matches_the_whole_name_and_every_homonym():
     assert readiness.get(w01)["acknowledged"] == ["no_drain"]
     readiness.revoke("web--01")
     assert not readiness.get(w01).get("acknowledged")
+
+
+def test_a_quarantine_refused_at_execution_is_a_reserve_until_one_succeeds():
+    """S7 (sixth review): the gate read rights, not policies — a swap refused at execution
+    left the VM « ready » while every isolation went by rules. Then an allow before the
+    isolation deny is a real bypass too."""
+    from glorfindel import readiness
+    readiness.record_quarantine_refusal(_RID, ["(RequestDisallowedByPolicy) NSG on NIC not allowed"])
+    a = assess(_RID, _conn(precedence=[{"rule": "allow-ssh", "action": "isolate_vm"}]))
+    assert {"quarantine_refused", "isolation_bypassed"} <= set(a["reserve_codes"])
+    assert "RequestDisallowedByPolicy" in next(r for r in a["reasons"] if r["code"] == "quarantine_refused")["message"]
+    readiness.clear_quarantine_refusal(_RID)
+    assert assess(_RID, _conn())["verdict"] == "ready"

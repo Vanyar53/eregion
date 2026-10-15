@@ -1978,7 +1978,10 @@ def test_check_nsg_access_reports_precedence_issues(monkeypatch):
     assert ("block_suspicious_ip", "allow-admin") not in by_action
 
 
-def test_audit_fails_on_nsg_precedence():
+def test_audit_judges_nsg_precedence_like_the_readiness_gate(monkeypatch):
+    """P2 (seventh review): an allow before the isolation deny is no bypass when the
+    isolation goes through the quarantine NSG — the card said ✗ where the gate said ready.
+    Without the quarantine, it stays a reserve, as in the gate."""
     from unittest.mock import MagicMock as _MM
     from glorfindel import audit
     connector = _MM()
@@ -1991,11 +1994,48 @@ def test_audit_fails_on_nsg_precedence():
     }
     connector.check_backup_points.return_value = {"ok": True, "points": 3, "latest_age_h": 1}
     connector.check_compute_access.return_value = {"ok": True, "vm": "vm", "disks": []}
+    monkeypatch.setattr("glorfindel.readiness._quarantine_enabled", lambda: True)
     result = audit.run(_RID, connector, vault="rsv", staging_storage="st")
     check = next(c for c in result.checks if c.name == "NSG precedence")
-    assert check.status == "fail"
-    assert "allow-ssh" in check.message
-    assert "--priority 1000" in check.fix
+    assert check.status == "ok" and "NSG de quarantaine" in check.message
+    assert check.data["isolation_by_quarantine"] is True and check.data["precedence"]
+
+    monkeypatch.setattr("glorfindel.readiness._quarantine_enabled", lambda: False)
+    result = audit.run(_RID, connector, vault="rsv", staging_storage="st")
+    check = next(c for c in result.checks if c.name == "NSG precedence")
+    assert check.status == "warn" and check.action == "isolate_vm"
+    assert "allow-ssh" in check.message and "--priority 1000" in check.fix
+
+
+def test_audit_precedence_on_a_block_is_a_reserve_and_missing_rights_lose_the_quarantine(monkeypatch):
+    from unittest.mock import MagicMock as _MM
+    from glorfindel import audit
+    monkeypatch.setattr("glorfindel.readiness._quarantine_enabled", lambda: True)
+    connector = _MM()
+    connector.dry_run = False
+    connector.read_only = False
+    connector.check_nsg_access.return_value = {
+        "ok": True, "nsg": "rg/nsg", "rules": 2, "nsgs": [],
+        "precedence": [
+            {"rule": "allow-ssh", "priority": 100, "direction": "Inbound", "ports": "22",
+             "nsg": "rg/nsg", "nic": "nic-a", "action": "isolate_vm"},
+            {"rule": "allow-ssh", "priority": 100, "direction": "Inbound", "ports": "22",
+             "nsg": "rg/nsg", "nic": "nic-a", "action": "block_suspicious_ip"}],
+    }
+    connector.check_backup_points.return_value = {"ok": True, "points": 3, "latest_age_h": 1}
+    connector.check_compute_access.return_value = {"ok": True, "vm": "vm", "disks": []}
+    connector.check_permissions.return_value = {"ok": True, "missing": []}
+    check = next(c for c in audit.run(_RID, connector, vault="rsv", staging_storage="st").checks
+                 if c.name == "NSG precedence")
+    assert check.status == "warn" and check.action == "block_suspicious_ip"
+    assert "port de l'attaque" in check.message
+    # The quarantine swap needs networkInterfaces/write: without it, the isolation goes by rules.
+    connector.check_permissions.return_value = {"ok": True, "missing": [
+        {"scope": "rg", "action": "Microsoft.Network/networkInterfaces/write", "used_by": "isolate_vm"}]}
+    check = next(c for c in audit.run(_RID, connector, vault="rsv", staging_storage="st").checks
+                 if c.name == "NSG precedence")
+    assert check.status == "warn" and check.action == "isolate_vm, block_suspicious_ip"
+    assert check.data["isolation_by_quarantine"] is False
 
 
 def test_unblock_deletes_each_rule_once(monkeypatch):

@@ -2039,7 +2039,7 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
         ? ''
         : `<button class="action" onclick="event.stopPropagation();doSnapshot('${vm_name}')" style="margin-left:auto;font-size:9px;padding:2px 7px">📸 Snapshot</button>`;
 
-  // Readiness checks (NSG / Backup / Compute) — shown in any expanded card. During an
+  // Readiness checks (NSG / Backup / Compute / Detection) — shown in any expanded card. During an
   // incident "can Glorfindel act on this VM?" matters more, not less → not gated on isClean.
   const readinessExpanded = auditEntry
     ? `<div style="display:flex;gap:14px;margin-top:6px;flex-wrap:wrap">
@@ -3200,6 +3200,9 @@ const ACTION_GROUPS = [
   { label: 'NSG',    actions: ['isolate_vm', 'block_suspicious_ip'] },
   { label: 'Backup', actions: ['restore_from_backup'] },
   { label: 'Compute',actions: ['snapshot'] },
+  // P4: can the rules see this VM? Disk write counter and its cadence, Syslog, and each
+  // rule that covers it — a blind VM no longer looks normal.
+  { label: 'Detection', actions: ['detection'] },
 ];
 
 function _worstStatus(checks, actions) {

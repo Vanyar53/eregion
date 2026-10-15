@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Literal
 
 AuditStatus = Literal["ok", "warn", "fail", "skip"]
@@ -120,12 +122,16 @@ def run(
     ws = _workspace_id() if workspace_id is None else workspace_id
     if ws:
         jobs.append((_check_perf_sampling, (resource_id, ws)))
+        jobs.append((_check_syslog, (resource_id, ws)))
     with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
         futures = [pool.submit(fn, *args) for fn, args in jobs]
         for f in futures:
             out = f.result()
             # _check_nsg may return two checks (access + precedence).
             result.checks.extend(out if isinstance(out, list) else [out])
+    if ws:
+        # From what the two telemetry checks just read — no Azure call of its own.
+        result.checks.append(_check_rule_coverage(resource_id, result.checks))
 
     # Restore staging SA — pure config check (no Azure call), so it runs outside the pool.
     result.checks.append(_check_restore_staging(staging_storage))
@@ -174,24 +180,156 @@ def _check_perf_sampling(resource_id: str, workspace_id: str, detector=None) -> 
             detector = detector_for("azure_monitor", workspace_id=workspace_id)
         rows = detector.run_query(query)
     except Exception as e:
-        return AuditCheck("detection", name, "warn", f"Échantillonnage illisible ({str(e)[:160]}).")
+        return AuditCheck("detection", name, "warn", f"Échantillonnage illisible ({str(e)[:160]}).",
+                          data={"present": None})
     fix = ("Collecter \\LogicalDisk(*)\\Disk Write Bytes/sec dans la DCR Perf, toutes les "
            "10 à 15 s.")
     if not rows or int(rows[0].get("n") or 0) < 2:
         return AuditCheck(
             "detection", name, "warn",
             "Aucun échantillon « Disk Write Bytes/sec » depuis 1 h : la détection ransomware est "
-            "aveugle pour cette VM (compteur absent de la DCR) — ou la VM est éteinte.", fix)
-    step = float(rows[0].get("span_s") or 0) / (int(rows[0]["n"]) - 1)
+            "aveugle pour cette VM (compteur absent de la DCR) — ou la VM est éteinte.", fix,
+            data={"present": False})
+    n = int(rows[0]["n"])
+    step = float(rows[0].get("span_s") or 0) / (n - 1)
+    data = {"present": True, "samples": n, "step_s": round(step)}
     if step <= _COARSE_STEP_S:
         return AuditCheck("detection", name, "ok",
                           f"Échantillonnage ~{step:.0f} s : règle ransomware en mode fin "
-                          "(2 échantillons > 45 Mo/s, calibré sur le banc).")
+                          "(2 échantillons > 45 Mo/s, calibré sur le banc).", data=data)
     return AuditCheck(
         "detection", name, "warn",
         f"Échantillonnage ~{step:.0f} s : règle ransomware en mode grossier (1 échantillon "
         "> 25 Mo/s) — seuil provisoire, marge mince ; une attaque courte ou un disque lent "
-        "peut passer sous le seuil.", fix)
+        "peut passer sous le seuil.", fix, data=data)
+
+
+def _check_syslog(resource_id: str, workspace_id: str, detector=None) -> AuditCheck:
+    """Does this VM send Syslog? Most shipped rules read it (brute force, sudo, account
+    creation): without it they are blind for this VM, without any error (P4)."""
+    name = "Syslog"
+    vm = resource_id.rstrip("/").split("/")[-1]
+    query = (
+        "Syslog | where TimeGenerated > ago(1h)"
+        f' | where _ResourceId =~ "{resource_id}" or Computer =~ "{vm}"'
+        " | summarize n = count(), facilities = strcat_array(make_set(Facility, 12), ', ')"
+    )
+    try:
+        if detector is None:
+            from glorfindel.detectors import detector_for
+            detector = detector_for("azure_monitor", workspace_id=workspace_id)
+        rows = detector.run_query(query)
+    except Exception as e:
+        return AuditCheck("detection", name, "warn", f"Syslog illisible ({str(e)[:160]}).",
+                          data={"present": None})
+    n = int((rows[0].get("n") if rows else 0) or 0)
+    if not n:
+        return AuditCheck(
+            "detection", name, "warn",
+            "Aucune ligne Syslog depuis 1 h : les règles qui lisent Syslog sont aveugles pour "
+            "cette VM (DCR Syslog absente) — ou la VM est éteinte.",
+            "Associer la VM à une DCR Syslog (facilities auth et authpriv au moins).",
+            data={"present": False})
+    facilities = str(rows[0].get("facilities") or "")
+    return AuditCheck("detection", name, "ok",
+                      f"{n} lignes Syslog depuis 1 h" + (f" ({facilities})" if facilities else "") + ".",
+                      data={"present": True, "rows": n, "facilities": facilities})
+
+
+# Tables a rule can read, in the order they are looked for in its query.
+_RULE_TABLES = ("Perf", "Syslog", "StorageBlobLogs", "AzureActivity", "SigninLogs", "AuditLogs", "Heartbeat")
+# Tables whose rows the VM itself sends: a rule on them is blind if the VM sends none.
+_VM_TELEMETRY = {"Perf": "perf", "Syslog": "syslog"}
+
+
+def rule_table(query: str) -> str:
+    """The table a detection rule reads: the first known table its query names."""
+    found = [(m.start(), tbl) for tbl in _RULE_TABLES
+             for m in [re.search(rf"\b{tbl}\b", query or "")] if m]
+    return min(found)[1] if found else ""
+
+
+def rule_coverage(rules, resource_id: str, telemetry: dict, status: dict, is_excluded=None) -> list[dict]:
+    """What each rule that applies to this VM can see (P4).
+
+    ``telemetry`` maps "perf"/"syslog" to True (the VM sends it), False (it doesn't) or
+    None (unreadable). State per rule: ``covered`` · ``blind`` (its table gets nothing from
+    this VM) · ``unknown`` · ``error`` (its last poll failed) · ``not_vm`` (its rows don't
+    come from the VM — storage, identity) · ``excluded`` · ``disabled``."""
+    vm = resource_id.rstrip("/").split("/")[-1]
+    out = []
+    for r in rules:
+        rid = getattr(r, "resource_id", "") or ""
+        if not getattr(r, "auto_apply", False) and rid.lower() != resource_id.lower():
+            continue
+        table = rule_table(getattr(r, "query", ""))
+        row = {"name": r.name, "ttp": getattr(r, "ttp", ""), "table": table}
+        error = (status.get(r.name) or {}).get("last_error", "")
+        if not getattr(r, "enabled", True):
+            row["state"] = "disabled"
+        elif is_excluded is not None and is_excluded(vm, r.name):
+            row["state"] = "excluded"
+        elif error:
+            row["state"], row["error"] = "error", str(error)[:200]
+        elif table not in _VM_TELEMETRY:
+            row["state"] = "not_vm"
+        else:
+            seen = telemetry.get(_VM_TELEMETRY[table])
+            row["state"] = "covered" if seen is True else "blind" if seen is False else "unknown"
+        out.append(row)
+    return out
+
+
+# (one rule, several rules) — a rule is « une règle ».
+_COVERAGE_LABEL = {
+    "covered": ("voit des données", "voient des données"), "blind": ("aveugle", "aveugles"),
+    "unknown": ("inconnue", "inconnues"), "error": ("en erreur", "en erreur"),
+    "not_vm": ("hors VM", "hors VM"), "excluded": ("exclue", "exclues"),
+    "disabled": ("désactivée", "désactivées"),
+}
+
+
+def _load_rules():
+    """The detection rules, resolved against glorfindel-config.yaml, and its exceptions."""
+    from glorfindel.config import load_glorfindel_config
+    from glorfindel.detection_rules import load_config
+
+    candidates = [Path("glorfindel/rules/azure/detection_rules.yaml"),
+                  Path(__file__).parent / "rules" / "azure" / "detection_rules.yaml"]
+    path = next((p for p in candidates if p.exists()), None)
+    if path is None:
+        return [], None
+    cfg = load_glorfindel_config()
+    return load_config(path, glorfindel_cfg=cfg).rules, getattr(cfg, "is_excluded", None)
+
+
+def _check_rule_coverage(resource_id: str, checks: list) -> AuditCheck:
+    """The rules that cover this VM, and whether each one sees anything (P4)."""
+    name = "Detection rules"
+    by_name = {c.name: c for c in checks}
+    telemetry = {"perf": (by_name.get("Disk write sampling") or AuditCheck("", "", "skip", "")).data.get("present"),
+                 "syslog": (by_name.get("Syslog") or AuditCheck("", "", "skip", "")).data.get("present")}
+    try:
+        from glorfindel.detection_rules import _load_status
+        rules, is_excluded = _load_rules()
+        cov = rule_coverage(rules, resource_id, telemetry, _load_status(), is_excluded)
+    except Exception as e:
+        return AuditCheck("detection", name, "warn", f"Règles illisibles ({str(e)[:160]}).")
+    data = {"rules": cov}
+    if not cov:
+        return AuditCheck("detection", name, "warn", "Aucune règle de détection ne s'applique à cette VM.",
+                          data=data)
+    counts: dict[str, int] = {}
+    for r in cov:
+        counts[r["state"]] = counts.get(r["state"], 0) + 1
+    summary = ", ".join(f"{n} {_COVERAGE_LABEL[s][n > 1]}" for s, n in counts.items())
+    weak = [r for r in cov if r["state"] in ("blind", "unknown", "error")]
+    if not weak:
+        return AuditCheck("detection", name, "ok", f"{len(cov)} règles : {summary}.", data=data)
+    detail = " ; ".join(f"{r['name']} ({r['table'] or '?'}) {_COVERAGE_LABEL[r['state']][0]}" for r in weak)
+    return AuditCheck("detection", name, "warn", f"{len(cov)} règles : {summary} — {detail}.",
+                      "Voir « Disk write sampling » et « Syslog » ci-dessus : la DCR de la VM doit "
+                      "collecter ce que lisent ses règles.", data=data)
 
 
 def _check_permissions(resource_id: str, connector) -> AuditCheck | list:

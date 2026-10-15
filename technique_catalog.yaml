@@ -53,6 +53,14 @@
 #                        le passage d'args nécessite `steps[].args` au schéma + l'engine (fast-follow).
 #                        Absent ⇒ le script tourne avec ses défauts figés.
 
+# ── Pannes (E1, Gothmog) ─────────────────────────────────────────────────────────
+# Une panne n'a pas d'identifiant ATT&CK : elle va dans une liste `faults:` à part, à côté de
+# `techniques:` (schemas/technique_catalog.schema.json, définition `fault`) — id, name, status,
+# engine (jamais local-script), engine_ref, destructive, et où elle s'observe. Les chargeurs
+# d'Annatar (planificateur) et de Glorfindel (autoring de règles) ne lisent que `techniques:` :
+# une panne ne devient ni une attaque planifiée, ni une règle de détection à rédiger.
+# Aucune panne déclarée pour l'instant — la première vient avec G0.
+
 version: "1.0"
 
 resource_types:

@@ -357,7 +357,9 @@ schemas/experiment.schema.json    → E1 : schéma d'EXPÉRIENCE versionné (v1)
                                     engine_ref, targets (sélecteur sur l'inscription), steady_state, abort_conditions,
                                     revert, detection.hints, destructive, status. Vit À CÔTÉ de scenario.schema.json
                                     pendant la migration.
-schemas/technique_catalog.schema.json → E1 : schéma du catalogue (accueille les pannes, kind: fault)
+schemas/technique_catalog.schema.json → E1 : schéma du catalogue. Pannes dans une liste `faults:` à part (id propre, pas
+                                    de TTP ATT&CK), invisible des chargeurs de techniques d'Annatar et de Glorfindel ;
+                                    une technique sur un autre moteur que local-script : `engine_ref`, pas de script ni d'étapes
 eregion_core/experiment.py        → validate_experiment() / validate_catalog() (jsonschema, import paresseux ;
                                     dev/CI, pas sur le hot-path) — la CI valide le catalogue via les tests
 infra/terraform/              → module Celebrimbor : infra de test Azure modulaire, namespacée, jetable.

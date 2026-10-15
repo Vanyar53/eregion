@@ -777,6 +777,12 @@ az network nsg rule list -g rg-celebrimbor --nsg-name nsg-celebrimbor -o table
 
 **Protocole :** chaque session lit son inbox (`collab/inbox_<role>.md`) en début de tâche, met à jour son status (`collab/<role>_status.md`) après chaque changement significatif, et écrit dans l'inbox de l'autre si un changement a un impact cross-cutting.
 
+**Mode orchestré, elrond** (`.claude/skills/elrond/`, documenté dans `docs/elrond.md`). Pour dérouler les lots de la feuille de route, une session principale lance `/elrond run`.
+- Chaque lot part dans un sous-agent Opus 5.5, dans son propre worktree (`.claude/worktrees/`, ignoré par Git).
+- Le journal palantir note les bascules de modèle.
+- Tout travail fait pendant une bascule est relu en Opus 5.5.
+- Les sous-agents lisent les `CLAUDE_<RÔLE>.md` de leur lot et n'écrivent pas dans `collab/` : c'est la session principale qui route leurs impacts transverses.
+
 ---
 
 ## escalations — comportement

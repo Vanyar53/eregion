@@ -141,3 +141,27 @@ test: short description
 docs: short description
 refactor: short description
 ```
+
+An optional scope names the area: `feat(inscription): …`, `fix(detection): …`.
+
+## Working with Claude Code
+
+This repository is developed with Claude Code. There are two ways to work on it:
+
+- **Specialised sessions**, one per component. Each has a role file (`CLAUDE_<ROLE>.md`), and they coordinate through the local `collab/` folder. See the "Sessions Claude spécialisées" section of `CLAUDE.md`.
+- **elrond**, an orchestration skill shipped in `.claude/` (`/elrond init`, `/elrond run`). The main session dispatches one subagent per roadmap lot, each in its own worktree. Any work done while a fallback model answered is reviewed by Opus 5.5 before it counts as done. See [docs/elrond.md](docs/elrond.md) (in French).
+
+Either way, the same rules hold:
+- no real infrastructure identifier (enable the local hooks above);
+- tests never call Azure or an LLM;
+- one lot or one fix per pull request.
+
+## Pull requests
+
+The title follows the commit convention, and the body follows `.github/pull_request_template.md`. That template asks for:
+- the lot and its "done when" criteria;
+- the tests and mutants;
+- the docs that were updated;
+- for work done with Claude Code, which model did it, and whether fallback work was reviewed.
+
+To avoid two people taking the same lot, announce it first, with a draft pull request or an assigned issue.

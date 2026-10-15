@@ -8,6 +8,7 @@ Notable changes to Eregion. The format follows [Keep a Changelog](https://keepac
 - Direction set for 1.0 (eighth pass): SOC functions for the cloud workloads of teams without a SOC, proven by attack and by failure. Three-agent loop — Annatar attacks, Gothmog breaks, Glorfindel detects and responds — with Orodruin as the disposable runner and Celebrimbor as the bench builder. Production rule: never a fault or a destructive action on a real workload. README, ROADMAP, `docs/architecture.md` (shared vocabulary, the three zones), session files for Orodruin and Gothmog, reserved folders `gothmog/` and `infra/orodruin/`.
 
 ### Fixed
+- **The War Room's root dot no longer reports a breakdown for a fleet posture** (seventh review, P3): a VM without a usable backup turned it red, « A module is in error ». It is now orange and says how many VMs lack a backup; red stays for a module that actually fails (a rule's poll, the audit itself).
 - **The audit read a 0-s cadence right after a boot** and claimed the ransomware rule's fine mode: the agent's first upload sends several samples under one timestamp (measured on the bench). The cadence is now the smallest gap between seconds that each carry one sample; until there is one, the audit says it can't tell yet. Measured: 10 s on the bench, the real cadence.
 
 ### Added

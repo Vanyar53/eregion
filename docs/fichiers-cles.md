@@ -72,7 +72,7 @@ glorfindel/
                             (l'asset matching de expand_for_discovered en dépend). start()/expand respectent enabled.
                           RulePoller.expand_for_discovered(registry, glorfindel_cfg) — démarre threads
                           par (règle auto_apply, asset découvert), thread s'arrête si asset évincé
-  audit.py              → « Disk write sampling » (`_check_perf_sampling`, si un workspace est configuré) : cadence réelle du compteur Disk Write Bytes/sec de la VM sur 1 h — ≤ 25 s mode fin, au-delà mode grossier (warn), aucun échantillon = détection ransomware aveugle (warn + correctif DCR)
+  audit.py              → « Disk write sampling » (`_check_perf_sampling`, si un workspace est configuré) : cadence réelle du compteur Disk Write Bytes/sec de la VM sur 1 h — ≤ 25 s mode fin, au-delà mode grossier (warn), aucun échantillon = détection ransomware aveugle (warn + correctif DCR) ; « Syslog » (`_check_syslog` : la VM envoie-t-elle du Syslog depuis 1 h, quelles facilities) ; « Detection rules » (`_check_rule_coverage` → `rule_coverage()`, pur : chaque règle qui s'applique à la VM, sa table (`rule_table`, la première que nomme la requête) et son état — `covered`, `blind` (sa table ne reçoit rien de la VM), `unknown`, `error` (dernier poll en échec, `rule_status.json`), `not_vm` (lignes venues d'ailleurs : stockage, identité), `excluded`, `disabled`). Tous trois en action `detection`, seulement avec un workspace (P4)
                           AuditCheck (+ champ `data` structuré : nsg/nsg_scope + nsgs[] multi-NIC, points/protected), AuditResult,
                           run() — NSG/backup/compute readiness checks en parallèle, IAM gap detection
   proposed_rules.py     → record/pending/approve()/reject() — detection rule proposal lifecycle
@@ -108,6 +108,8 @@ glorfindel/
                           Ack/Cmd restent actifs. Badge VM OFFLINE (heartbeat >15min, reste grisée, rétention 8h).
                           Approve & execute paramétré : block_suspicious_ip en 1-clic (action_params.ip ou invite)
                           section BACKUP par carte : nb de RPs, âge dernier backup, bouton 📸 Snapshot (fire-and-forget RSV)
+                          groupes de préparation par carte (ACTION_GROUPS) : NSG, Backup, Compute et Detection (P4 : compteur,
+                          cadence, Syslog, règles qui couvrent la VM — une VM aveugle ne paraît plus normale)
                           carte MONITORING : backends + assets découverts + règles cliquables (modal query)
                           panneau ⚙ Config : Azure credentials + LLM + mode autonomie global
   rules/azure/

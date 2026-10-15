@@ -334,6 +334,112 @@ def test_perf_sampling_fine_coarse_and_missing():
 
 
 
+
+# ── P4 : la couverture de détection d'une VM (septième passe) ────────────────────
+
+_RID = "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm"
+
+
+class _Rule:
+    def __init__(self, name, query, *, auto_apply=True, resource_id="", enabled=True, ttp="T0000"):
+        self.name, self.query, self.auto_apply = name, query, auto_apply
+        self.resource_id, self.enabled, self.ttp = resource_id, enabled, ttp
+
+
+_SHIPPED = [
+    _Rule("ransomware-disk-write", "let samples = Perf | where CounterName == 'Disk Write Bytes/sec'"),
+    _Rule("ssh-brute-force", "Syslog | where Facility == 'auth'"),
+    _Rule("data-exfiltration-blob", "StorageBlobLogs // chunked uploads | where OperationName == 'PutBlob'"),
+]
+
+
+def test_perf_sampling_says_whether_the_counter_is_present():
+    from glorfindel.audit import _check_perf_sampling
+    assert _check_perf_sampling(_RID, "ws", _PerfDet([{"n": 361, "span_s": 3600}])).data == {
+        "present": True, "samples": 361, "step_s": 10}
+    assert _check_perf_sampling(_RID, "ws", _PerfDet([])).data == {"present": False}
+
+
+class _Boom:
+    def run_query(self, query, timespan=None):
+        raise RuntimeError("LAW unreachable")
+
+
+def test_syslog_present_missing_and_unreadable():
+    from glorfindel.audit import _check_syslog
+    seen = _check_syslog(_RID, "ws", _PerfDet([{"n": 42, "facilities": "auth, authpriv"}]))
+    assert seen.status == "ok" and seen.data["present"] is True and "authpriv" in seen.message
+    none = _check_syslog(_RID, "ws", _PerfDet([{"n": 0, "facilities": ""}]))
+    assert none.status == "warn" and none.data == {"present": False} and "aveugles" in none.message and none.fix
+    assert _check_syslog(_RID, "ws", _Boom()).data == {"present": None}
+
+
+def test_rule_table_is_the_first_table_the_query_names():
+    from glorfindel.audit import rule_table
+    assert [rule_table(r.query) for r in _SHIPPED] == ["Perf", "Syslog", "StorageBlobLogs"]
+    assert rule_table("nothing here") == ""
+
+
+def test_shipped_rules_read_a_known_table():
+    """Every shipped rule maps to a table the coverage knows — a new one would show as « ? »."""
+    from glorfindel.audit import _load_rules, rule_table
+    rules, _ = _load_rules()
+    assert rules and all(rule_table(r.query) for r in rules)
+
+
+def test_coverage_says_what_each_rule_can_see():
+    from glorfindel.audit import rule_coverage
+    cov = rule_coverage(_SHIPPED, _RID, {"perf": False, "syslog": True}, {})
+    assert {r["name"]: r["state"] for r in cov} == {
+        "ransomware-disk-write": "blind", "ssh-brute-force": "covered", "data-exfiltration-blob": "not_vm"}
+    unknown = rule_coverage(_SHIPPED[:1], _RID, {"perf": None, "syslog": None}, {})
+    assert unknown[0]["state"] == "unknown"
+
+
+def test_coverage_errors_exclusions_disabled_and_other_vms():
+    from glorfindel.audit import rule_coverage
+    rules = [*_SHIPPED,
+             _Rule("off", "Syslog | x", enabled=False),
+             _Rule("pinned-elsewhere", "Syslog | x", auto_apply=False, resource_id=_RID + "-other"),
+             _Rule("pinned-here", "Syslog | x", auto_apply=False, resource_id=_RID.upper())]
+    status = {"ssh-brute-force": {"last_error": "Forbidden"}}
+    cov = {r["name"]: r for r in rule_coverage(
+        rules, _RID, {"perf": True, "syslog": True}, status,
+        is_excluded=lambda vm, rule: vm == "vm" and rule == "ransomware-disk-write")}
+    assert cov["ransomware-disk-write"]["state"] == "excluded"
+    assert cov["ssh-brute-force"]["state"] == "error" and cov["ssh-brute-force"]["error"] == "Forbidden"
+    assert cov["off"]["state"] == "disabled"
+    assert "pinned-elsewhere" not in cov and cov["pinned-here"]["state"] == "covered"
+
+
+def test_coverage_check_flags_a_blind_vm(monkeypatch):
+    """P4: a VM the rules can't see no longer looks normal on its card."""
+    from glorfindel import audit
+    from glorfindel.audit import AuditCheck
+    monkeypatch.setattr(audit, "_load_rules", lambda: (_SHIPPED, None))
+    monkeypatch.setattr("glorfindel.detection_rules._load_status", lambda: {})
+    perf = AuditCheck("detection", "Disk write sampling", "warn", "", data={"present": False})
+    syslog = AuditCheck("detection", "Syslog", "ok", "", data={"present": True})
+    blind = audit._check_rule_coverage(_RID, [perf, syslog])
+    assert blind.status == "warn" and "ransomware-disk-write (Perf) aveugle" in blind.message
+    assert [r["state"] for r in blind.data["rules"]] == ["blind", "covered", "not_vm"]
+    perf.data["present"] = True
+    assert audit._check_rule_coverage(_RID, [perf, syslog]).status == "ok"
+    monkeypatch.setattr(audit, "_load_rules", lambda: ([], None))
+    assert audit._check_rule_coverage(_RID, [perf, syslog]).status == "warn"
+
+
+def test_audit_run_adds_the_detection_group_only_with_a_workspace(monkeypatch):
+    from glorfindel import audit
+    monkeypatch.setattr("glorfindel.detectors.detector_for",
+                        lambda kind, workspace_id: _PerfDet([{"n": 361, "span_s": 3600, "facilities": "auth"}]))
+    monkeypatch.setattr(audit, "_load_rules", lambda: (_SHIPPED, None))
+    with_ws = audit.run(RESOURCE_ID, _connector(), workspace_id="ws")
+    det = [c.name for c in with_ws.checks if c.action == "detection"]
+    assert det == ["Disk write sampling", "Syslog", "Detection rules"]
+    without = audit.run(RESOURCE_ID, _connector(), workspace_id="")
+    assert not [c for c in without.checks if c.action == "detection"]
+
 def test_no_vault_configured_is_a_clear_failure():
     """The retired "rsv-annatar" default sent restores to a vault that no longer exists."""
     result = _audit_run(RESOURCE_ID, _connector())

@@ -344,7 +344,7 @@ glorfindel respond runs/test_signals.jsonl
 
 **Pre-deployment audit** — before going live, verify that Glorfindel can act:
 ```bash
-glorfindel audit --all   # checks NSG access, backup vault, compute permissions
+glorfindel audit --all   # checks NSG access, backup vault, compute permissions, and what the detection rules can see of each VM
 ```
 Annatar is only needed if you want to run controlled attack scenarios and measure detection time against a real attack baseline.
 
@@ -550,7 +550,8 @@ glorfindel/
   detectors.py         → DetectionConnector ABC + AzureMonitorDetector
   detection_rules.py   → DetectionRule + RulePoller: continuous polling, auto-apply via discovered assets
                          load_config(path, glorfindel_cfg=None) — workspace_id from glorfindel-config.yaml
-  audit.py             → AuditCheck, AuditResult, run(): NSG / backup / compute readiness checks
+  audit.py             → AuditCheck, AuditResult, run(): NSG / backup / compute readiness checks, and detection coverage
+                         (disk write counter and cadence, Syslog, each rule that covers the VM: sees data, blind, in error)
   proposed_rules.py    → record/pending/approve()/reject(): detection rule proposal lifecycle
   detection_authoring.py → grounded LLM rule authoring (technique catalog + real LAW getschema) — reactive on a miss, proactive via propose-rules
   campaign_replay.py   → blue-side closing of the generative purple loop: auto-activation + replay

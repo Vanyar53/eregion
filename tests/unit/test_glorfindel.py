@@ -2380,6 +2380,28 @@ def test_drain_cuts_established_sessions_but_spares_loopback_and_platform():
         assert f"not dst {spared}" in script
 
 
+
+def test_drain_spares_only_what_the_forensic_allow_lets_in(monkeypatch):
+    """S8 (sixth review): the drain spared every session with the forensic host — any port,
+    either direction — while the quarantine's allow only lets TCP in on the forensic ports.
+    A session the VM opened towards that host on another port survived the isolation."""
+    c = _drain_connector()
+    monkeypatch.setattr(c, "_forensic_sources", lambda: ["10.8.1.0/26"])
+    monkeypatch.setattr(c, "_forensic_ports", lambda: [22, 3389])
+    c.drain_connections(_RID)
+    script = " ".join(c._compute.virtual_machines.begin_run_command.call_args.args[2].script)
+    assert "not ( dst 10.8.1.0/26 and ( sport = :22 or sport = :3389 ) )" in script
+    assert "not dst 10.8.1.0/26 " not in script and "not dst 10.8.1.0/26)" not in script
+
+
+def test_drain_spares_no_forensic_session_without_forensic_ports(monkeypatch):
+    c = _drain_connector()
+    monkeypatch.setattr(c, "_forensic_sources", lambda: ["10.8.1.0/26"])
+    monkeypatch.setattr(c, "_forensic_ports", lambda: [])
+    c.drain_connections(_RID)
+    script = " ".join(c._compute.virtual_machines.begin_run_command.call_args.args[2].script)
+    assert "10.8.1.0/26" not in script
+
 def test_drain_reports_what_it_could_not_cut():
     assert _drain_connector("glorfindel-drain-remaining=2").drain_connections(_RID)["status"] == "partial"
     assert _drain_connector(error=RuntimeError("(AuthorizationFailed) runCommand/action"))\
@@ -3077,7 +3099,9 @@ def test_the_drain_command_quotes_its_filter():
     c._forensic_sources = lambda: ["10.8.1.0/26"]
     AzureConnector.drain_connections(c, _RID)
     script = c._compute.virtual_machines.begin_run_command.call_args.args[2].script
-    assert "and not dst 10.8.1.0/26 )'" in script[0] and script[0].count("'") == 2
+    # The forensic exception is part of the quoted filter, which stays one shell word.
+    assert "and not ( dst 10.8.1.0/26 and ( sport = :" in script[0] and script[0].count("'") == 2
+    assert script[0].rstrip().endswith(") ) )' >/dev/null 2>&1")
 
 
 def test_readiness_shows_forensic_access_and_rejected_sources(monkeypatch):

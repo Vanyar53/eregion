@@ -199,11 +199,16 @@ MUTANTS = [
      "## Ce qu'on ne fait PAS\n\n" + "<!-- padding -->\n" * 640),
     ("M49", "a docs/ file the index points to is renamed (DX1)", "docs/azure.md",
      RENAME, "docs/azure-renamed.md"),
+    # Sixth review, S8: the drain spared every session with the forensic host.
+    ("M50", "the drain spares any session with a forensic source (S8)", A,
+     'flt = flt[:-1] + f"and not ( dst {cidr} and ( {local} ) ) )"',
+     'flt = flt[:-1] + f"and not dst {cidr} )"'),
 ]
 
 # Mutants measured by other tests than the invariants (their lot's own).
 TESTS = {mid: INSCRIPTION_TESTS for mid in ("M42", "M43", "M44", "M45", "M46", "M47")}
 TESTS.update({mid: DOCS_TESTS for mid in ("M48", "M49")})
+TESTS["M50"] = "tests/unit/test_glorfindel.py -k drain"
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

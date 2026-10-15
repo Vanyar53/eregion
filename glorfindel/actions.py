@@ -1057,10 +1057,15 @@ class AzureConnector(CloudConnector):
             # or refused -H — "nothing left" on an unknown.
             import shlex
             flt = self._DRAIN_FILTER
-            # Investigation sessions survive. Validated networks only (Q5): the raw value
-            # went into this shell command as is.
-            for cidr in self._forensic_sources():
-                flt = flt[:-1] + f"and not dst {cidr} )"
+            # Investigation sessions survive — only what the forensic allow lets in: TCP
+            # from the source to a forensic port of the VM, i.e. the session's LOCAL port
+            # (sixth review, S8). Any other session with that host — another port, or one the
+            # VM opened towards it — is cut like the rest. Validated networks and ports only
+            # (Q5): the raw value went into this shell command as is.
+            ports = self._forensic_ports()
+            local = " or ".join(f"sport = :{int(port)}" for port in ports)
+            for cidr in (self._forensic_sources() if ports else []):
+                flt = flt[:-1] + f"and not ( dst {cidr} and ( {local} ) ) )"
             flt = shlex.quote(flt)
             script = [
                 f"ss -K state established {flt} >/dev/null 2>&1",

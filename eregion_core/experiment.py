@@ -3,7 +3,10 @@
 One schema (``schemas/experiment.schema.json``) describes a technique and a fault with
 the same shape: ``kind`` absent means ``technique``, ``engine`` absent means
 ``local-script``, so the existing Annatar scenarios validate unchanged. The catalog
-(``schemas/technique_catalog.schema.json``) now holds faults too.
+(``schemas/technique_catalog.schema.json``) now holds faults too, in their own ``faults``
+list: a fault has no ATT&CK id, and the technique loaders of Annatar and Glorfindel read
+``techniques`` only. A technique on another engine than local-script (Stratus, Atomic) is run
+by its ``engine_ref`` and needs no steps.
 
 Validation is a dev/CI concern (``tests/unit/test_experiment_schema.py`` — "the CI
 validates the catalog"), so ``jsonschema`` is imported lazily and the injectors do not

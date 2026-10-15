@@ -1,6 +1,6 @@
 # Orodruin — le contrat de garde-fous vérifié au démarrage
 
-_Conception — 2026-10-14 — statut : conception, avant O1. Aucune infrastructure créée.
+_Conception — 2026-10-14, relue en Opus 5.5 le 2026-10-15 — statut : conception, avant O1. Aucune infrastructure créée.
 La session Orodruin (`CLAUDE_ORODRUIN.md`) implémente O1 avec Jonathan ; ce document fixe
 le contrat que le code vérifiera, pour que l'implémentation ne reparte pas de zéro._
 
@@ -28,7 +28,7 @@ Six garanties. Chacune a un mécanisme, et une vérification qui ne demande **au
 | Garantie | Mécanisme | Vérifiée par |
 |---|---|---|
 | Périmètre réseau | sortie limitée au banc, aux API de contrôle du cloud et à l'API du modèle | une connexion hors périmètre échoue |
-| Identité limitée | identité d'exécution restreinte au groupe de ressources du banc | lecture des droits effectifs (API permissions, comme l'audit de Glorfindel) |
+| Identité limitée | identité d'exécution restreinte au groupe de ressources du banc | lecture de ses attributions de rôle, à toutes les portées, et de ses droits effectifs sur le banc |
 | Cibles inscrites | l'inscription est revérifiée à chaque injection | refus sans inscription (O0, déjà en place) |
 | Plafond | limite de l'orchestrateur, ou quota | configuration effective lue |
 | Arrêt d'urgence | révoquer l'identité, tout arrêter | essai à blanc en CI |
@@ -43,9 +43,18 @@ injecteur lancé depuis Orodruin reste passif — il ne touche aucune cible.
 
 Lectures du contrat, sans écriture :
 
-- **identité** : les droits effectifs de l'identité d'exécution sur le groupe du banc
-  (`Microsoft.Authorization/permissions`, toutes les pages — la brique existe déjà dans l'audit
-  de Glorfindel, `check_permissions`). Un droit d'écriture hors du groupe du banc = manque.
+- **identité**, deux lectures, parce qu'il faut prouver une absence autant qu'une présence :
+  - ses **attributions de rôle, à toutes les portées** (`Microsoft.Authorization/roleAssignments`,
+    filtrées sur le principal de l'identité) : chacune doit être contenue dans le groupe du banc.
+    Une attribution plus large (l'abonnement, un autre groupe) = manque. C'est ce qui prouve
+    qu'elle n'a **aucun** droit ailleurs ;
+  - ses **droits effectifs sur le groupe du banc** (`Microsoft.Authorization/permissions`, toutes
+    les pages) : elle peut faire ce que les injecteurs demandent. La brique existe dans l'audit de
+    Glorfindel (`check_permissions`), mais elle prouve la **présence** d'un droit sur une portée
+    donnée, jamais son absence ailleurs — d'où la première lecture.
+
+  Non couverts par ces lectures, à mesurer sur le banc à l'implémentation : les droits venus d'un
+  groupe Entra ID dont l'identité serait membre, les deny assignments, PIM.
 - **réseau** : une tentative de connexion vers une adresse hors périmètre doit échouer (timeout
   ou refus). Le périmètre autorisé : le banc, l'API de contrôle du cloud, l'API du modèle.
 - **plafond** : la configuration effective de l'orchestrateur (ou le quota) est lue et comparée

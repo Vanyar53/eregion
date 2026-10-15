@@ -18,7 +18,9 @@ from eregion_core.experiment import (
     validate_experiment_file,
 )
 
-SCENARIOS = sorted(glob.glob("annatar/scenarios/azure/*.yaml"))
+REPO = Path(__file__).resolve().parents[2]
+CATALOG_FILE = REPO / "technique_catalog.yaml"
+SCENARIOS = sorted(glob.glob(str(REPO / "annatar" / "scenarios" / "azure" / "*.yaml")))
 
 
 def test_there_are_scenarios_to_check():
@@ -40,7 +42,7 @@ def test_schemas_are_versioned():
     for schema_path in (EXPERIMENT_SCHEMA, CATALOG_SCHEMA):
         schema = json.loads(schema_path.read_text())
         assert schema["$id"].endswith(".v1.json")
-        assert "v1" in schema["title"].lower() or schema["title"].endswith("v1")
+        assert schema["title"].endswith("v1")
     exp = json.loads(EXPERIMENT_SCHEMA.read_text())
     assert exp["properties"]["schema_version"]["const"] == "1"
     assert exp["properties"]["kind"]["default"] == "technique"
@@ -67,10 +69,19 @@ def test_a_technique_without_mitre_is_refused():
     assert any("mitre" in e for e in validate_experiment(doc))
 
 
-def test_a_technique_without_steps_is_refused():
+def test_a_local_script_technique_without_steps_is_refused():
     doc = _technique()
     del doc["steps"]
     assert any("steps" in e for e in validate_experiment(doc))
+
+
+def test_an_engine_technique_needs_no_steps_but_its_reference():
+    """R1: a Stratus technique is run by the engine, by its id — no steps (Opus 5.5 review of E1)."""
+    doc = {"name": "t", "description": "d", "mitre": "T1651", "engine": "stratus",
+           "engine_ref": "azure.execution.vm-run-command", "targets": {"resource_type": "azure_vm", "zone": "bench"}}
+    assert validate_experiment(doc) == []
+    del doc["engine_ref"]
+    assert any("engine_ref" in e for e in validate_experiment(doc))
 
 
 def test_a_bad_mitre_id_is_refused():
@@ -142,28 +153,67 @@ def _from_catalog(path, ttp):
     raise AssertionError(ttp)
 
 
-def test_the_catalog_accepts_a_fault_entry():
+def _fault_entry(**over):
+    return {"id": "vm-shutdown", "name": "stop a VM", "status": "planned",
+            "engine": "chaos-studio", "engine_ref": "shutdown/2.0", "destructive": False,
+            "log_source": "Heartbeat", **over}
+
+
+def test_the_catalog_holds_faults_in_their_own_list():
+    """A fault has no ATT&CK id: it gets its own list and its own id (Opus 5.5 review of E1)."""
     from eregion_core.experiment import _errors
 
-    fault = {
-        "ttp": "T9999", "name": "stop a VM", "tactic": "impact", "kind": "fault",
-        "status": "planned", "engine": "chaos-studio", "engine_ref": "shutdown/2.0",
-        "log_source": "Heartbeat",
-    }
-    assert _errors(_catalog(fault), CATALOG_SCHEMA) == []
+    doc = _catalog(dict(_from_catalog(CATALOG_FILE, "T1041")))
+    doc["resource_types"]["azure_vm"]["faults"] = [_fault_entry()]
+    assert _errors(doc, CATALOG_SCHEMA) == []
 
 
-def test_a_catalog_fault_without_an_engine_is_refused():
+def test_a_fault_cannot_hide_among_the_techniques():
     from eregion_core.experiment import _errors
 
-    fault = {"ttp": "T9999", "tactic": "impact", "kind": "fault", "status": "planned"}
-    assert _errors(_catalog(fault), CATALOG_SCHEMA)
+    entry = {"ttp": "T9999", "tactic": "impact", "kind": "fault", "status": "planned"}
+    assert _errors(_catalog(entry), CATALOG_SCHEMA)
+
+
+@pytest.mark.parametrize("over", [{"engine_ref": None}, {"engine": "local-script"}, {"id": "Bad Id"}])
+def test_a_bad_catalog_fault_is_refused(over):
+    from eregion_core.experiment import _errors
+
+    fault = {k: v for k, v in _fault_entry(**over).items() if v is not None}
+    doc = {"version": "1.0", "resource_types": {"azure_vm": {"faults": [fault]}}}
+    assert _errors(doc, CATALOG_SCHEMA)
+
+
+def test_faults_are_invisible_to_both_technique_loaders(tmp_path):
+    """Annatar's planner and Glorfindel's rule authoring read `techniques` only: a fault never
+    becomes a planned attack nor a detection rule to author."""
+    import yaml
+
+    from annatar.campaign.catalog import load_catalog as red
+    from glorfindel.detection_authoring import load_catalog as blue
+
+    doc = _catalog(dict(_from_catalog(CATALOG_FILE, "T1041")))
+    doc["resource_types"]["azure_vm"]["faults"] = [_fault_entry()]
+    path = tmp_path / "catalog.yaml"
+    path.write_text(yaml.safe_dump(doc))
+    assert set(red(path)) == {"T1041"}
+    assert set(blue(path)) == {"T1041"}
+
+
+def test_an_implemented_engine_technique_needs_its_reference_not_a_script():
+    from eregion_core.experiment import _errors
+
+    entry = {"ttp": "T1651", "tactic": "execution", "status": "implemented", "engine": "stratus",
+             "engine_ref": "azure.execution.vm-run-command", "destructive": False}
+    assert _errors(_catalog(entry), CATALOG_SCHEMA) == []
+    del entry["engine_ref"]
+    assert _errors(_catalog(entry), CATALOG_SCHEMA)
 
 
 def test_an_implemented_technique_needs_a_reference_script():
     from eregion_core.experiment import _errors
 
-    entry = dict(_from_catalog("technique_catalog.yaml", "T1486"))
+    entry = dict(_from_catalog(CATALOG_FILE, "T1486"))
     entry["reference_script"] = None
     assert _errors(_catalog(entry), CATALOG_SCHEMA)
 
@@ -171,6 +221,6 @@ def test_an_implemented_technique_needs_a_reference_script():
 def test_a_destructive_technique_needs_a_safe_target():
     from eregion_core.experiment import _errors
 
-    entry = dict(_from_catalog("technique_catalog.yaml", "T1486"))
+    entry = dict(_from_catalog(CATALOG_FILE, "T1486"))
     entry["safe_target"] = ""
     assert _errors(_catalog(entry), CATALOG_SCHEMA)

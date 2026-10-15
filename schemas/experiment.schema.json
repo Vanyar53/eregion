@@ -159,20 +159,38 @@
   },
   "allOf": [
     {
-      "description": "A technique (the default kind, i.e. `kind` absent or `technique`) needs its MITRE id and steps — today's Annatar scenario shape.",
+      "description": "A technique (the default kind, i.e. `kind` absent or `technique`) needs its MITRE id.",
       "if": {
         "anyOf": [
           { "not": { "required": ["kind"] } },
           { "properties": { "kind": { "const": "technique" } } }
         ]
       },
-      "then": { "required": ["mitre", "steps"] }
+      "then": { "required": ["mitre"] }
     },
     {
-      "description": "A fault names its engine (never local-script), the engine's reference, and what 'normal' is.",
+      "description": "With the local-script engine (`engine` absent or `local-script`), the steps carry the experiment — today's Annatar scenarios.",
+      "if": {
+        "anyOf": [
+          { "not": { "required": ["engine"] } },
+          { "properties": { "engine": { "const": "local-script" } } }
+        ]
+      },
+      "then": { "required": ["steps"] }
+    },
+    {
+      "description": "Any other engine runs the experiment by its own reference (a Stratus technique id, a Chaos Studio experiment): no steps needed.",
+      "if": {
+        "required": ["engine"],
+        "properties": { "engine": { "not": { "const": "local-script" } } }
+      },
+      "then": { "required": ["engine_ref"] }
+    },
+    {
+      "description": "A fault names its engine (never local-script) and what 'normal' is.",
       "if": { "properties": { "kind": { "const": "fault" } }, "required": ["kind"] },
       "then": {
-        "required": ["engine", "engine_ref", "steady_state"],
+        "required": ["engine", "steady_state"],
         "properties": { "engine": { "not": { "const": "local-script" } } }
       }
     }

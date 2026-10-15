@@ -19,7 +19,7 @@ Tu relis un lot. Tu ne modifies rien : ni édition, ni commit, ni push.
 **Étapes :**
 1. **Lire.** Lis la fiche, puis les fichiers de rôle `CLAUDE_<RÔLE>.md` des sessions qu'elle indique. Lance `git log <base>..<branche>` et `git diff <base>...<branche>`.
 2. **Tester.** Lance `git checkout --detach <branche>` dans ton worktree : cette commande marche même si un autre worktree tient la branche. Lance ensuite `pytest` et `ruff check .`.
-3. **Commencer par le repli.** S'il y a eu des épisodes de repli, lis d'abord, ligne à ligne, les fichiers écrits pendant ces épisodes.
+3. **Commencer par le repli.** S'il y a eu des épisodes de repli, lis d'abord, ligne à ligne, les fichiers écrits pendant ces épisodes. Si un épisode a lancé des commandes shell (`files_complete: false`), sa liste est incomplète : ce que ces commandes ont écrit n'y est pas. Lis alors ses commandes, puis tout le diff de la branche, en traitant comme écrit pendant le repli tout fichier qu'elles ont pu toucher.
 4. **Relire,** en t'appuyant sur la fiche et sur `CLAUDE.md` :
    - **Critères :** chaque critère « Fini quand » est-il vraiment tenu, et avec quelle preuve ?
    - **Justesse :** cas limites, chemins d'échec, concurrence, gestion des erreurs.

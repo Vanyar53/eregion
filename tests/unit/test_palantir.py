@@ -131,3 +131,23 @@ def test_hook_ignores_sessions_without_elrond_agents(projects, monkeypatch):
 def test_hook_never_fails_nor_writes_on_bad_input(projects, monkeypatch, payload):
     assert _hook(monkeypatch, payload) == 0
     assert not palantir.JOURNAL.exists()
+
+
+def test_an_episode_that_ran_a_shell_command_says_its_files_are_incomplete(tmp_path):
+    """A shell command can write any file (heredoc, `sed -i`, redirection): measured on a real
+    session, the files a fallback wrote through Bash were missing from the list."""
+    f = tmp_path / "w.jsonl"
+    _write(f, WORKER)
+    [ep] = palantir.scan(f, PINNED)["fallback_episodes"]
+    assert ep["files_complete"] is False
+    assert ep["commands"] == ["pytest tests/unit -q"]
+    assert "review the whole diff" in palantir.render("w", palantir.scan(f, PINNED))
+
+
+def test_an_episode_with_edit_tools_only_has_a_complete_list(tmp_path):
+    f = tmp_path / "w.jsonl"
+    _write(f, [WORKER[0], _turn("x1", FALLBACK, "t4", [_tool("Write", file_path="a.py")]),
+               _turn("x2", FALLBACK, "t5", [_tool("Edit", file_path="b.py")]), WORKER[-1]])
+    [ep] = palantir.scan(f, PINNED)["fallback_episodes"]
+    assert ep["files_complete"] is True and ep["files"] == ["a.py", "b.py"] and ep["commands"] == []
+    assert "review the whole diff" not in palantir.render("w", palantir.scan(f, PINNED))

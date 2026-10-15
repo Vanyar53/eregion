@@ -70,7 +70,7 @@ Index :
    - Mets à jour sa ligne dans l'index : état et branche.
    - Lance `palantir.py agent "elrond <ID> · <titre>" --json`.
      - Verdict `expected-model-only` : le modèle est `5.5`. Relecture seulement si la politique est `always`.
-     - Verdict `review-needed` : le modèle est `5.5+repli` et la relecture passe à `pending`. Lance un `elrond-reviewer` avec la description `elrond <ID> · relecture`. Donne-lui l'ID, la fiche, la branche et la base, ainsi que chaque épisode de repli relevé par palantir : modèle, période, actions et fichiers écrits.
+     - Verdict `review-needed` : le modèle est `5.5+repli` et la relecture passe à `pending`. Lance un `elrond-reviewer` avec la description `elrond <ID> · relecture`. Donne-lui l'ID, la fiche, la branche et la base, ainsi que chaque épisode de repli relevé par palantir : modèle, période, actions, fichiers écrits et, si `files_complete` vaut `false`, les commandes shell de l'épisode (leurs écritures ne sont pas listées).
    - Range les impacts transverses de son rapport dans `collab/inbox_<rôle>.md`, pour chaque session concernée.
 
 4. **Au retour d'un relecteur, lance aussi palantir.**

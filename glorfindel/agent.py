@@ -1249,32 +1249,42 @@ def verify_action(state: GlorfindelState, *, connector: CloudConnector) -> Glorf
     if outcome.get("status") == "dry_run":
         return {**state, "outcome": {**outcome, "verified": None}, "escalate": False, "escalation_reason": ""}
 
-    if action == "isolate_vm":
-        # The drain's result counts: rules in place but sessions still open is not a
-        # contained VM (measured 2026-10-05).
-        from glorfindel.actions import isolation_verdict
-        verification = isolation_verdict(connector.verify_isolation(resource_id), outcome)
-    elif action == "release_isolation":
-        # verified=True only when NO NIC carries an isolation rule any more. The former
-        # `not verify_isolation()` meant "at least one NIC uncovered": a release that
-        # failed on one NIC (or one direction) passed as verified.
-        verification = connector.verify_release(resource_id)
-    elif action == "snapshot":
-        verification = connector.verify_snapshot(outcome.get("snapshot_id", ""))
-    elif action == "block_suspicious_ip":
-        raw_s = state["signal"].get("raw_signal", {})
-        detected_v = raw_s.get("detected_data", {})
-        ip = (
-            state["signal"].get("context", {}).get("suspicious_ip")
-            or detected_v.get("SourceIP")
-            or detected_v.get("DestIP_s")
-            or detected_v.get("DestinationIp")
-            or detected_v.get("DestinationIPAddress")
-            or outcome.get("ip", "")
-        )
-        verification = connector.verify_block_ip(ip, resource_id)
-    else:
-        verification = {"verified": None, "method": "not_implemented"}
+    # A check that raises (an Azure read failing mid-verification) used to leave the
+    # graph: the watch's safety net made it a cycle_failed with an empty action and
+    # executed False — an isolation that did happen, mislabelled, with no Revert
+    # (sixth review, S9). It is an action that could not be verified, like an
+    # unreadable list: the action and its outcome are kept.
+    try:
+        if action == "isolate_vm":
+            # The drain's result counts: rules in place but sessions still open is not a
+            # contained VM (measured 2026-10-05).
+            from glorfindel.actions import isolation_verdict
+            verification = isolation_verdict(connector.verify_isolation(resource_id), outcome)
+        elif action == "release_isolation":
+            # verified=True only when NO NIC carries an isolation rule any more. The former
+            # `not verify_isolation()` meant "at least one NIC uncovered": a release that
+            # failed on one NIC (or one direction) passed as verified.
+            verification = connector.verify_release(resource_id)
+        elif action == "snapshot":
+            verification = connector.verify_snapshot(outcome.get("snapshot_id", ""))
+        elif action == "block_suspicious_ip":
+            raw_s = state["signal"].get("raw_signal", {})
+            detected_v = raw_s.get("detected_data", {})
+            ip = (
+                state["signal"].get("context", {}).get("suspicious_ip")
+                or detected_v.get("SourceIP")
+                or detected_v.get("DestIP_s")
+                or detected_v.get("DestinationIp")
+                or detected_v.get("DestinationIPAddress")
+                or outcome.get("ip", "")
+            )
+            verification = connector.verify_block_ip(ip, resource_id)
+        else:
+            verification = {"verified": None, "method": "not_implemented"}
+    except Exception as exc:
+        first = str(exc).strip().splitlines()[0] if str(exc).strip() else type(exc).__name__
+        verification = {"verified": None, "method": "raised",
+                        "error": f"vérification en erreur : {first[:200]}"}
 
     verified = verification.get("verified")
     # An action that changes the network and can't be checked (a list unreadable, a

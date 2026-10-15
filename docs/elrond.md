@@ -44,7 +44,7 @@ Chaque lot produit une branche locale `lot/<id>-…`. elrond ne pousse rien et n
 - **Le journal est dans `~/.claude/elrond/journal/<session>.md`.** Pour chaque tâche, il note :
   - les modèles qui ont répondu ;
   - chaque arrêt des protections, avec l'heure, la catégorie et l'étape en cours ;
-  - chaque épisode de repli, avec sa période, ses actions et les fichiers écrits.
+  - chaque épisode de repli, avec sa période, ses actions et les fichiers écrits. Ces fichiers sont ceux des outils d'édition : si l'épisode a lancé une commande shell, ce qu'elle a écrit ne peut pas se lire dans le transcript. L'épisode le dit (`files_complete: false`, avec ses commandes), et le relecteur relit alors tout le diff.
 - **Pour lire le journal à la main :**
   - `python3 .claude/skills/elrond/palantir.py session` : la dernière session ;
   - `python3 .claude/skills/elrond/palantir.py agent "elrond R1"` : une tâche précise.

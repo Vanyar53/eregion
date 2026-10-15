@@ -5,6 +5,10 @@ Reads the session transcript and its subagent transcripts, and reports, per task
 which model answered, when safeguards stopped a response, and what was being done
 then. It only observes: it never re-runs or rewrites anything.
 
+The files written during a fallback episode are those of the edit tools. An episode that
+ran a shell command says so (files_complete: false, with its commands): what a shell
+command wrote is not knowable from the transcript, so the review reads the whole diff.
+
   palantir.py hook                  hook mode: JSON on stdin, rewrites the journal, silent;
                                     only sessions with elrond agents (or ELROND_JOURNAL_ALL=1)
   palantir.py session [SESSION]     report for a session (default: the latest one)
@@ -24,6 +28,9 @@ EXPECTED = os.environ.get("ELROND_MODEL", "claude-opus-5-5")
 PROJECTS = Path.home() / ".claude" / "projects"
 JOURNAL = Path(os.environ.get("ELROND_JOURNAL", Path.home() / ".claude" / "elrond" / "journal"))
 WRITE_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
+# A shell command can write any file (a heredoc, `sed -i`, a redirection): what it wrote
+# is not knowable from the transcript, so an episode that ran one has an incomplete list.
+SHELL_TOOLS = {"Bash", "PowerShell"}
 
 
 def summarize_action(block: dict) -> str:
@@ -76,7 +83,8 @@ def scan(path: Path, expected: str | None) -> dict:
         if model and model != expected:
             if episode is None:
                 episode = {"model": model, "from": ts, "to": ts, "responses": 0,
-                           "after": last_action or "(start of task)", "actions": [], "files": []}
+                           "after": last_action or "(start of task)", "actions": [], "files": [],
+                           "files_complete": True, "commands": []}
                 episodes.append(episode)
             episode["to"] = ts
             episode["responses"] += 1 if first else 0
@@ -86,6 +94,10 @@ def scan(path: Path, expected: str | None) -> dict:
                     fp = (b.get("input") or {}).get("file_path")
                     if b.get("name") in WRITE_TOOLS and fp and fp not in episode["files"]:
                         episode["files"].append(fp)
+                    if b.get("name") in SHELL_TOOLS:
+                        episode["files_complete"] = False
+                        cmd = " ".join(str((b.get("input") or {}).get("command", "")).split())
+                        episode["commands"].append(cmd[:300])
         elif model:
             episode = None
         if actions:
@@ -168,6 +180,9 @@ def render(label: str, r: dict) -> str:
                      f"({e['responses']} responses), after: {e['after']}")
         if e["files"]:
             lines.append(f"  - files written then: {', '.join(e['files'])}")
+        if not e.get("files_complete", True):
+            lines.append(f"  - {len(e['commands'])} shell command(s) ran then: the files they wrote are not "
+                         "listed — review the whole diff, starting with the files above")
     lines.append(f"- verdict: **{r['verdict']}**")
     return "\n".join(lines)
 

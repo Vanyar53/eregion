@@ -25,7 +25,8 @@ Orodruin ce qui les éprouve. Lis ce fichier en début de session, puis ton inbo
 ## Lots
 
 - **O1 — mode VM dédiée (0.3).** Une petite VM ; identité d'exécution limitée au groupe de
-  ressources du banc ; sortie réseau limitée au banc, aux API de contrôle du cloud et à l'API du
+  ressources du banc — une identité managée attachée à la VM (décision du 15/10, pas de
+  secret ; la révoquer = retirer son attribution de rôle) ; sortie réseau limitée au banc, aux API de contrôle du cloud et à l'API du
   modèle ; contrat non vérifié → injecteurs passifs ; `orodruin-kill` révoque l'identité et arrête
   la VM ; chaque appel d'un injecteur journalisé **avant** exécution. Mutants : contrat non vérifié
   mais mode actif ; journal écrit après l'appel ; arrêt d'urgence qui oublie la révocation.

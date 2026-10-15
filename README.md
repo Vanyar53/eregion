@@ -7,7 +7,7 @@ Three agents form a closed loop: Annatar attacks, Gothmog breaks, Glorfindel det
 - **Glorfindel** (blue) — the product. It does two jobs on your cloud logs:
   - **Detects** — continuous rule-based polling (KQL / PromQL …), auto-discovers your assets from their own telemetry (no inventory to maintain), and proposes a new detection rule when an attack slips through (purple-team loop).
   - **Responds** — reasons from the raw signal to choose the minimum effective action and verifies it via the cloud API.
-- **Annatar** (red) — launches real MITRE ATT&CK attacks to prove the defense actually works. Today its own scenarios on Azure; from 0.3, adapters to public attack libraries (Stratus Red Team, Atomic Red Team) — no home-grown offensive logic.
+- **Annatar** (red) — launches real MITRE ATT&CK attacks to prove the defense actually works. Today its own scenarios on Azure; from 0.3, adapters to public attack libraries (Atomic Red Team first, then Stratus Red Team) — no home-grown offensive logic.
 - **Gothmog** (faults — *coming in 0.3*) — declared failures run by a public chaos engine (Azure Chaos Studio first): benign noise Glorfindel must not act on, its own dependencies failing (it must fail closed), a recovery timed.
 - Around them, the workshop: **Celebrimbor** builds and enrolls the disposable bench (Terraform); **Orodruin** (*coming in 0.3*) hosts the injectors, with a guardrail contract checked at startup and a one-command kill switch.
 

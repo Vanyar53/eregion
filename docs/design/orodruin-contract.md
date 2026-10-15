@@ -111,9 +111,10 @@ mesuré par les tests d'Orodruin (table `TESTS`, comme O0) :
 
 ## Questions ouvertes (pour Jonathan, à l'implémentation)
 
-- **Identité d'exécution** : une identité managée attachée à la VM Orodruin, avec un rôle
-  personnalisé limité au groupe du banc ? Ou un principal de service dédié ? La première évite un
-  secret ; la seconde se révoque plus simplement (`orodruin-kill`). À trancher.
+- **Identité d'exécution** : ~~une identité managée ou un principal de service dédié ?~~
+  **Tranché le 15/10 : une identité managée attachée à la VM Orodruin**, avec un rôle limité au
+  groupe du banc. Pas de secret à gérer ; `orodruin-kill` retire son attribution de rôle (voir
+  « Révocation »).
 - **Périmètre réseau** : un NSG sur la VM Orodruin qui n'autorise en sortie que le banc + les
   préfixes des API du cloud (service tags `AzureResourceManager`, `AzureActiveDirectory`) + l'API
   du modèle ? Les service tags couvrent les API de contrôle ; l'API du modèle est une adresse

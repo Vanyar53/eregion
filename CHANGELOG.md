@@ -30,11 +30,12 @@ Notable changes to Eregion. The format follows [Keep a Changelog](https://keepac
 
 ### Planned for 0.3
 - O1 — Orodruin on a dedicated VM: limited identity and egress, contract checked at startup, kill switch.
-- R1 — first adapter to a public attack library (Stratus Red Team).
+- R1 — first adapter to a public attack library: Atomic Red Team, whose tests run inside the VM, on the telemetry Glorfindel already reads (decided 15/10; Stratus Red Team, with Activity Logs ingestion, moves to R2).
+- H0 — Glorfindel hosted on a small dedicated VM, the bench VM always on with a real workload: a pre-observation that calibrates benign noise (it does not count for the four weeks on a real fleet).
 - G0 — Gothmog v0 on Azure Chaos Studio.
-- B1, B2, IA0 — a second cloud model in the harness, injection through logs and memory, a campaign report whose every claim cites its run.
+- B2, IA0 — injection through logs and memory (an exercise is marked by a window file the injector writes), a campaign report whose every claim cites its run. B1 (a second cloud model in the harness) moves after 0.3.
 
-## [0.2.0] — not yet tagged
+## [0.2.0] — 2026-10-15
 
 First release to be tagged; earlier work is in the git history.
 

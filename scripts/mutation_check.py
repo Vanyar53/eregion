@@ -36,6 +36,9 @@ INS = "eregion_core/inscription.py"
 ENG = "annatar/runner/engine.py"
 INVARIANTS = "tests/unit/test_invariants.py"
 INSCRIPTION_TESTS = "tests/unit/test_inscription.py tests/unit/test_engine.py"
+DOCS_TESTS = "tests/unit/test_docs_budget.py"
+# A mutant whose "old" text is RENAME renames its file to "new" instead of editing it.
+RENAME = object()
 
 # (id, bug class, file, text in the code today, text that re-introduces the bug[, why
 # the invariants can't see it])
@@ -190,10 +193,17 @@ MUTANTS = [
     ("M47", "a missing zone read as the bench (O0)", INS,
      '    zone = target.zone or ("bench" if target.legacy else "")',
      '    zone = target.zone or "bench"'),
+    # DX1: the two bugs its specification names.
+    ("M48", "CLAUDE.md grows by 10 KB (DX1)", "CLAUDE.md",
+     "## Ce qu'on ne fait PAS\n",
+     "## Ce qu'on ne fait PAS\n\n" + "<!-- padding -->\n" * 640),
+    ("M49", "a docs/ file the index points to is renamed (DX1)", "docs/azure.md",
+     RENAME, "docs/azure-renamed.md"),
 ]
 
 # Mutants measured by other tests than the invariants (their lot's own).
 TESTS = {mid: INSCRIPTION_TESTS for mid in ("M42", "M43", "M44", "M45", "M46", "M47")}
+TESTS.update({mid: DOCS_TESTS for mid in ("M48", "M49")})
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
@@ -306,10 +316,15 @@ def main() -> int:
             copy = Path(tmp) / mid
             shutil.copytree(base, copy)
             target = copy / rel
-            text = target.read_text()
-            if text.count(old) != 1:
-                return mid, title, "STALE", f"{text.count(old)} matches"
-            target.write_text(text.replace(old, new))
+            if old is RENAME:
+                if not target.exists():
+                    return mid, title, "STALE", "file to rename is gone"
+                target.rename(copy / new)
+            else:
+                text = target.read_text()
+                if text.count(old) != 1:
+                    return mid, title, "STALE", f"{text.count(old)} matches"
+                target.write_text(text.replace(old, new))
             started = time.monotonic()
             target = TESTS.get(mid, INVARIANTS)
             caught = sum(_run(copy, args.examples, target=target) for _ in range(args.rounds))

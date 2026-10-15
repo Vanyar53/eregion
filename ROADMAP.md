@@ -128,6 +128,19 @@ Socle : **O0 → E1 → O1 → R1 → G0**. Piste IA, en parallèle : **B1, B2 (
 
 Documents qui suivent les lots : `docs/architecture.md` (vocabulaire et zones, avec O0 et E1), `CLAUDE_ORODRUIN.md` et `CLAUDE_GOTHMOG.md` (sessions, créées le 13/10), `schemas/` (schéma d'expérience, E1), `docs/schemas/` (Gothmog, Orodruin, inscription, en 0.3), `CHANGELOG.md` (créé le 13/10 ; tag `v0.2.0` et première release GitHub : décision de Jonathan).
 
+#### Suivi des priorités (déplacé de `CLAUDE.md` par DX1, le 15/10)
+
+Huitième passe (13/10) — jalon **0.3, la boucle complète tourne** : Orodruin lance une technique publique et une panne sur le banc, retour à l'état initial, on mesure ce que Glorfindel a vu.
+
+1. **O0** ✅ (14/10) — `eregion_core/inscription.py` : périmètre, tags `eregion-target`/`eregion-zone`, zones, refus du destructif et des pannes en `production`, 6 mutants (M42–M47) ; tags du banc écrits dans `locals.tf`, **pas appliqués** (avec Jonathan)
+2. **E1** ✅ (14/10) — `schemas/experiment.schema.json` (versionné v1, technique ou panne, scénarios actuels valides sans changement) + `schemas/technique_catalog.schema.json` ; `eregion_core/experiment.py` ; catalogue validé en CI
+3. **O1** — Orodruin, mode VM dédiée (état Terraform séparé) — avec Jonathan
+4. **R1** — adaptateur Stratus Red Team — avec Jonathan ; question ouverte : Stratus attaque le plan de contrôle (Activity Logs, non lus par Glorfindel) → R2 (Atomic) avant, ou ingestion des Activity Logs
+5. **G0** — Gothmog v0 sur Chaos Studio — avec Jonathan
+6. Piste IA en parallèle : **B1** (Mistral, clé requise), **B2** élargi (mémoire empoisonnée, source `exercise`/`real` de chaque cycle — avant les premiers runs R1/G0), **IA0** (rapport de campagne par RAG, après R1/G0)
+
+Ensuite (0.4+) : A1 avec MC0, A2, A3, B3, B4, G1–G3, R2, C1, D1, IA1, J1–J4, P1, P2. Toujours valable : le chronomètre d'observation (4 semaines en `human_only`, verdicts + `glorfindel report`).
+
 ### Questions ouvertes avant la 0.3 (soulevées le 13/10, à trancher par Jonathan)
 
 - **R1 : ce que Stratus attaque, ce que Glorfindel voit.** Les 15 techniques Azure de Stratus Red Team visent le plan de contrôle (stockage, identité, Run Command par l'API, export de disque). Sa documentation les détecte dans les **Activity Logs**, que Glorfindel ne lit pas (ses règles lisent Perf, Syslog et StorageBlobLogs), et le `warmup` crée sa propre VM, hors des cibles inscrites. La réponse à une attaque d'identité (révoquer) n'existe pas encore. Deux voies : R2 (Atomic Red Team, tests dans la VM, sur la télémétrie déjà lue) avant R1 ; ou R1 avec l'ingestion des Activity Logs, et une règle proposée par la boucle violette sur le premier raté. À trancher avant E1 : le schéma doit savoir décrire une cible que l'adaptateur crée lui-même.

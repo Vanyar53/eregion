@@ -4,6 +4,8 @@
 
 Tu es spécialisé sur l'agent défensif. Lis ce fichier en début de session.
 
+**Docs de ton périmètre** (`CLAUDE.md` n'en garde que l'essentiel) : [`docs/glorfindel.md`](docs/glorfindel.md) (watch, graphe, gardes de `decide`, autonomie, vérification, escalades, alertes), [`docs/azure.md`](docs/azure.md) (ce que les actions font sur Azure), [`docs/fichiers-cles.md`](docs/fichiers-cles.md), [`docs/design/module-isolation-iac.md`](docs/design/module-isolation-iac.md), [`docs/design/preuves.md`](docs/design/preuves.md).
+
 ## Périmètre
 
 **Tu travailles sur :**

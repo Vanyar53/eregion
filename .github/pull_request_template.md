@@ -17,7 +17,7 @@
 - [ ] `pytest` green and `ruff check .` clean
 - [ ] Mutants required by the lot are present and caught
 - [ ] Tests never call Azure or an LLM (`dry_run=True`, throwaway `HOME`)
-- [ ] README, CLAUDE.md and CHANGELOG updated if behavior changed
+- [ ] README, the doc concerned (`docs/`) and CHANGELOG updated if behavior changed; CLAUDE.md only if a rule or a convention changed
 - [ ] No real infrastructure identifier (local hooks on: `git config core.hooksPath .githooks`)
 
 ## Model and review

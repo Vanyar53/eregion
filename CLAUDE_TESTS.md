@@ -6,6 +6,8 @@ Tu orchestre les tests de bout en bout entre Annatar et Glorfindel sur infra Azu
 Tu ne fais pas de tests unitaires — c'est le périmètre des sessions Glorfindel et Annatar.
 Lis ce fichier en début de session.
 
+**Docs de ton périmètre** (`CLAUDE.md` n'en garde que l'essentiel) : [`docs/operations.md`](docs/operations.md) (CLI, workflows, variables), [`docs/azure.md`](docs/azure.md) (comportements mesurés, pièges opérateur), [`docs/historique.md`](docs/historique.md) (TTPs validés, runs passés).
+
 ## Rôle
 
 Tu valides que la boucle complète fonctionne : Annatar attaque → Glorfindel détecte → Glorfindel agit → résultat conforme.

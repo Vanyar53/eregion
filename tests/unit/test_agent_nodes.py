@@ -574,6 +574,36 @@ def test_verify_action_isolate_vm_success():
     assert result["escalate"] is False
 
 
+
+def test_a_verification_that_raises_keeps_the_action_and_escalates_as_unverified():
+    """S9 (sixth review): a check that raised left the graph — the watch's net made it a
+    cycle_failed with an empty action and executed False, for an isolation that did happen,
+    without a Revert button."""
+    from glorfindel.agent import escalate_to_human, verify_action
+    connector = MagicMock()
+    connector.verify_isolation.side_effect = RuntimeError("(TooManyRequests) throttled\nmore")
+    state = _state(action="isolate_vm")
+    state["outcome"] = {"status": "isolated", "executed": True}
+    result = verify_action(state, connector=connector)
+    assert result["action"] == "isolate_vm" and result["outcome"]["executed"] is True
+    assert result["outcome"]["verified"] is None and result["outcome"]["unverified"] is True
+    assert result["escalate"] is True and "TooManyRequests" in result["escalation_reason"]
+    assert "more" not in result["escalation_reason"]          # first line only
+    from glorfindel import escalations
+    escalate_to_human({**result, "dry_run": False})
+    [card] = [e for e in escalations.pending() if e.get("action") == "isolate_vm"]
+    assert card["escalation_type"] == "verification_failed"      # the Revert / reset buttons'
+
+
+def test_a_snapshot_check_that_raises_makes_no_claim():
+    from glorfindel.agent import verify_action
+    connector = MagicMock()
+    connector.verify_snapshot.side_effect = RuntimeError("boom")
+    state = _state(action="snapshot")
+    state["outcome"] = {"status": "InProgress", "executed": True, "snapshot_id": "j"}
+    result = verify_action(state, connector=connector)
+    assert result["outcome"]["verified"] is None and result["escalate"] is False
+
 def test_verify_action_isolate_vm_failure_sets_escalate():
     from glorfindel.agent import verify_action
     connector = MagicMock()

@@ -203,12 +203,17 @@ MUTANTS = [
     ("M50", "the drain spares any session with a forensic source (S8)", A,
      'flt = flt[:-1] + f"and not ( dst {cidr} and ( {local} ) ) )"',
      'flt = flt[:-1] + f"and not dst {cidr} )"'),
+    # Sixth review, S9: a verification that raised left the graph (cycle_failed, no Revert).
+    ("M51", "a verification that raises leaves the graph (S9)", "glorfindel/agent.py",
+     "    except Exception as exc:\n        first = str(exc).strip().splitlines()[0]",
+     "    except Exception as exc:\n        raise\n        first = str(exc).strip().splitlines()[0]"),
 ]
 
 # Mutants measured by other tests than the invariants (their lot's own).
 TESTS = {mid: INSCRIPTION_TESTS for mid in ("M42", "M43", "M44", "M45", "M46", "M47")}
 TESTS.update({mid: DOCS_TESTS for mid in ("M48", "M49")})
 TESTS["M50"] = "tests/unit/test_glorfindel.py -k drain"
+TESTS["M51"] = "tests/unit/test_agent_nodes.py -k raises"
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

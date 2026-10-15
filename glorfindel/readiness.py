@@ -60,6 +60,12 @@ _RULE_RIGHTS = {
 _DRAIN_RIGHT = "Microsoft.Compute/virtualMachines/runCommand/action"
 
 
+def isolation_by_quarantine(quarantine_nsg: bool, missing_actions: set[str]) -> bool:
+    """Will an isolation go through the quarantine NSG (JIT)? Then no customer allow can get
+    in its way: the NIC carries our deny-all. Shared with the audit (seventh review, P2)."""
+    return bool(quarantine_nsg) and not (set(missing_actions) & _ISOLATION_RIGHTS)
+
+
 def _reason(code: str, level: str, message: str, fix: str = "") -> dict:
     return {"code": code, "level": level, "message": message, "fix": fix}
 
@@ -121,7 +127,7 @@ def assess(resource_id: str, connector, quarantine_nsg: bool = True) -> dict:
         # What the isolation needs, apart from the release's own right (below).
         missing = {m["action"] for m in perms.get("missing") or [] if m.get("used_by") != "release_isolation"}
         release_missing = [m for m in perms.get("missing") or [] if m.get("used_by") == "release_isolation"]
-    jit_ok = quarantine_nsg and not (missing & _ISOLATION_RIGHTS)
+    jit_ok = isolation_by_quarantine(quarantine_nsg, missing)
     rules_ok = not (missing & _RULE_RIGHTS)
     if not jit_ok and not rules_ok:
         reasons.append(_reason(

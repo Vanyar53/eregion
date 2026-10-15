@@ -132,6 +132,7 @@ def run(
     if ws:
         # From what the two telemetry checks just read — no Azure call of its own.
         result.checks.append(_check_rule_coverage(resource_id, result.checks))
+    _align_precedence(result.checks)
 
     # Restore staging SA — pure config check (no Azure call), so it runs outside the pool.
     result.checks.append(_check_restore_staging(staging_storage))
@@ -421,6 +422,45 @@ def _check_precedence(issues: list[dict]) -> AuditCheck | None:
         fix=" ; ".join(fixes) + "  — placer les allow après la plage de Glorfindel (100–999)",
         data={"precedence": issues, "precedence_unreadable": unreadable},
     )
+
+def _align_precedence(checks: list) -> None:
+    """Judge « NSG precedence » as the readiness gate does (seventh review, P2).
+
+    The card showed ✗ NSG where the gate said ready: with the quarantine NSG available,
+    an allow before Glorfindel's deny can't get in an isolation's way (the NIC carries our
+    deny-all), and for a block it is a reserve — a real bypass only if it opens the attack's
+    port. The gate never fails on precedence; neither does the card now. Same inputs as the
+    gate: the quarantine setting and the isolation rights the permissions check found
+    missing (the release's own rights aside); unreadable permissions count as none missing,
+    as the gate does (it shows them as a reserve of their own)."""
+    prec = next((c for c in checks if c.name == "NSG precedence" and c.status == "fail"), None)
+    if prec is None:
+        return
+    from glorfindel.readiness import _quarantine_enabled, isolation_by_quarantine
+
+    perm = next((c for c in checks if c.name == "Isolation permissions"), None)
+    missing = {m.get("action", "") for m in ((perm.data if perm else {}) or {}).get("missing_permissions") or []
+               if m.get("used_by") != "release_isolation"}
+    jit = isolation_by_quarantine(_quarantine_enabled(), missing)
+    issues = prec.data.get("precedence") or []
+    iso = sorted({i["rule"] for i in issues if i.get("action") == "isolate_vm"})
+    blk = sorted({i["rule"] for i in issues if i.get("action") == "block_suspicious_ip"})
+    reserves = []
+    if iso and not jit:
+        reserves.append("isolation par règles contournée : " + ", ".join(iso))
+    if blk:
+        reserves.append("blocage d'IP contourné si l'allow ouvre le port de l'attaque : " + ", ".join(blk))
+    prec.data = {**prec.data, "isolation_by_quarantine": jit}
+    note = (" L'isolation passe par le NSG de quarantaine : son deny-all suffit, ces allow ne la "
+            "contournent pas." if iso and jit else "")
+    if not reserves:
+        prec.status, prec.action = "ok", "isolate_vm"
+        prec.message = prec.message + "." + note
+        return
+    prec.status = "warn"
+    prec.action = ", ".join(a for a, rules in (("isolate_vm", iso and not jit), ("block_suspicious_ip", blk)) if rules)
+    prec.message = "Réserve (comme la préparation) — " + " ; ".join(reserves) + ". " + prec.message + "." + note
+
 
 def _check_nsg(resource_id: str, connector) -> AuditCheck:
     rg = _rg(resource_id)

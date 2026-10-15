@@ -169,9 +169,15 @@ def _check_perf_sampling(resource_id: str, workspace_id: str, detector=None) -> 
         ' | where ObjectName == "Logical Disk" or ObjectName == "LogicalDisk"'
         ' | where CounterName == "Disk Write Bytes/sec"'
         f' | where _ResourceId =~ "{resource_id}" or Computer =~ "{vm}"'
-        " | summarize n = count(), t0 = min(TimeGenerated), t1 = max(TimeGenerated) by InstanceName"
-        # Seconds computed by KQL: the SDK returns a timespan column as text ("00:59:00").
-        " | extend span_s = datetime_diff('second', t1, t0)"
+        # The cadence is the smallest gap between two seconds that each carry ONE sample of
+        # the series. A second with several is an agent batch: its first upload after a boot
+        # sends them under one timestamp (measured, 15/10) — read as a 0-s step, it claimed
+        # the fine mode. Gaps above the cadence are samples the agent skipped under load.
+        " | summarize c = count() by InstanceName, s = bin(TimeGenerated, 1s)"
+        " | order by InstanceName asc, s asc"
+        " | extend gap = iff(prev(InstanceName) == InstanceName and c == 1 and prev(c) == 1,"
+        " datetime_diff('second', s, prev(s)), long(null))"
+        " | summarize n = sum(c), step = min(gap), gaps = countif(isnotnull(gap)) by InstanceName"
         " | order by n desc | take 1"
     )
     try:
@@ -191,7 +197,14 @@ def _check_perf_sampling(resource_id: str, workspace_id: str, detector=None) -> 
             "aveugle pour cette VM (compteur absent de la DCR) — ou la VM est éteinte.", fix,
             data={"present": False})
     n = int(rows[0]["n"])
-    step = float(rows[0].get("span_s") or 0) / (n - 1)
+    if not int(rows[0].get("gaps") or 0) or rows[0].get("step") is None:
+        return AuditCheck(
+            "detection", name, "warn",
+            f"Compteur présent, cadence pas encore mesurable : {n} échantillons, pas encore deux à "
+            "des instants distincts (premier envoi de l'agent après un démarrage). Relancer dans "
+            "quelques minutes.",
+            data={"present": True, "samples": n, "step_s": None})
+    step = float(rows[0]["step"])
     data = {"present": True, "samples": n, "step_s": round(step)}
     if step <= _COARSE_STEP_S:
         return AuditCheck("detection", name, "ok",

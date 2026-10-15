@@ -758,6 +758,10 @@ The suite is hermetic by construction: `tests/unit/conftest.py` redirects every 
 
 Coverage: 8 LangGraph nodes (incl. the propose_detection_rule branch), routing rules, signal schema, safety guard, YAML parser, ChromaDB memory, CLI escalation flow, detection rules (RulePoller + auto-apply + eviction), proposed rules lifecycle, grounded detection authoring, campaign planner/synthesizer/runner + replay, audit readiness checks, GlorfindelConfig + ExceptionConfig, AssetRegistry + DiscoveryService (replace-on-refresh, self-evicting threads), PostureChecker (dedup, re-escalation).
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). The project is developed with Claude Code: [docs/elrond.md](docs/elrond.md) describes how roadmap lots are dispatched to subagents and reviewed.
+
 ## License
 
 Apache 2.0 — see [LICENSE](LICENSE).

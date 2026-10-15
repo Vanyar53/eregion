@@ -1405,17 +1405,25 @@ function _renderAgentNode(rules, detectBackends, recoverBackends, discovered) {
   // heartbeat) and `live` (UI freshness) — three different questions, no redundancy.
   const ruleErr      = rules.some(r => r.last_error);
   const rulesPolling = rules.length && rules.every(r => r.last_poll && !r.last_error);
-  const auditChecks  = (_auditData?.audits || []).flatMap(a =>
+  const restoreByVm  = (_auditData?.audits || []).map(a =>
     (a.checks || []).filter(c => c.action === 'restore_from_backup'));
-  const auditErr  = !!_auditData?.error || auditChecks.some(c => c.status === 'fail');
-  const auditWarn = auditChecks.some(c => c.status === 'warn');
+  const auditChecks  = restoreByVm.flat();
+  // The audit failing to run is a module error. A VM without a usable backup is the
+  // fleet's posture, not a Glorfindel breakdown: orange, said as posture (seventh review, P3).
+  const auditErr    = !!_auditData?.error;
+  const postureGaps = restoreByVm.filter(cs => cs.some(c => c.status === 'fail')).length;
+  const degraded    = auditChecks.some(c => c.status === 'warn') || (rules.length && !rulesPolling);
   const health = (ruleErr || auditErr)                    ? 'err'
-               : (auditWarn || (rules.length && !rulesPolling)) ? 'warn'
+               : (postureGaps || degraded)                ? 'warn'
                : (rules.length || auditChecks.length)     ? 'ok'
                :                                            'idle';
+  const warnTitle = [
+    postureGaps ? `Posture: ${postureGaps} VM${postureGaps > 1 ? 's' : ''} without a usable backup — the fleet, not Glorfindel` : '',
+    degraded    ? 'A module is degraded' : '',
+  ].filter(Boolean).join(' · ');
   const [dotColor, dotTitle] =
       health === 'err'  ? ['var(--red)',    'A module is in error']
-    : health === 'warn' ? ['var(--orange)', 'A module is degraded']
+    : health === 'warn' ? ['var(--orange)', warnTitle]
     : health === 'ok'   ? ['var(--green)',  'All modules healthy']
     :                     ['var(--dim)',    'Awaiting data'];
   const dot = `<span style="color:${dotColor}" title="${dotTitle}">●</span>`;

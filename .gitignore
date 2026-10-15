@@ -44,3 +44,7 @@ infra/canary/**/.terraform/
 infra/canary/**/.terraform.lock.hcl
 infra/canary/**/terraform.tfstate*
 .hypothesis-invariants/
+
+# Claude Code — worktrees des sous-agents (elrond) et réglages locaux
+.claude/worktrees/
+.claude/settings.local.json

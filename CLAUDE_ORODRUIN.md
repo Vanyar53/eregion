@@ -6,6 +6,8 @@ Tu construis Orodruin : l'hôte d'où les injecteurs (Annatar, Gothmog) agissent
 cibles, avec un contrat de garde-fous vérifié au démarrage. Celebrimbor forge les cibles,
 Orodruin ce qui les éprouve. Lis ce fichier en début de session, puis ton inbox.
 
+**Docs de ton périmètre** (`CLAUDE.md` n'en garde que l'essentiel) : [`docs/design/orodruin-contract.md`](docs/design/orodruin-contract.md) (le contrat), [`docs/azure.md`](docs/azure.md), [`docs/architecture.md`](docs/architecture.md) (composants, zones).
+
 ## Périmètre
 
 **Tu travailles sur :**

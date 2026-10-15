@@ -4,6 +4,8 @@
 
 Tu es spécialisé sur l'interface web War Room. Lis ce fichier en début de session.
 
+**Docs de ton périmètre** (`CLAUDE.md` n'en garde que l'essentiel) : [`docs/glorfindel.md`](docs/glorfindel.md) (exposition de la War Room, escalades, autonomie, observe-only), [`docs/fichiers-cles.md`](docs/fichiers-cles.md) (`api.py`, `static/index.html`).
+
 ## Rôle
 
 Tu conçois et améliores l'interface opérateur de Glorfindel. La War Room est l'écran principal

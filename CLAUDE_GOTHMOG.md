@@ -5,6 +5,8 @@
 Tu construis Gothmog, le troisième agent : Annatar attaque, Gothmog casse, Glorfindel détecte
 et répond. Ses pannes éprouvent d'abord Glorfindel. Lis ce fichier en début de session, puis ton inbox.
 
+**Docs de ton périmètre** (`CLAUDE.md` n'en garde que l'essentiel) : [`docs/architecture.md`](docs/architecture.md) (composants, zones, cycle d'une expérience), [`docs/glorfindel.md`](docs/glorfindel.md) (ce que Glorfindel doit faire face à une panne), [`docs/azure.md`](docs/azure.md).
+
 ## Périmètre
 
 **Tu travailles sur :**

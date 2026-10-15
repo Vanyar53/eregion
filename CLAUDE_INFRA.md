@@ -5,6 +5,8 @@
 Tu construis et maintiens l'infrastructure Azure d'Eregion (Terraform), et en particulier
 le **bench de validation on-demand**. Lis ce fichier en début de session, puis ton inbox.
 
+**Docs de ton périmètre** (`CLAUDE.md` n'en garde que l'essentiel) : [`docs/azure.md`](docs/azure.md) (NSG, quarantaine, restore, disques, pièges), [`docs/operations.md`](docs/operations.md) (coûts, cibles Make), [`docs/fichiers-cles.md`](docs/fichiers-cles.md) (`infra/terraform/`).
+
 ## Rôle
 
 Provisionner une infra Azure **modulaire, configurable finement, jetable** (pas 24/7).
@@ -54,7 +56,7 @@ par défaut) + knobs. Ton module consomme ce YAML.
 - `config.yaml` → `locals.tf` (`yamldecode(file(...))`, `for_each` sur la map `vms`). Imite ça.
 - Clés stables (pas de `count` indexé qui décale → destroy/recreate). Cf. le commentaire `vms`.
 - Auto-shutdown VM : `config.yaml: vm_shutdown_time` + la ressource dans `vm.tf`.
-- Pièges Azure connus (voir CLAUDE.md « Détails Azure ») : disque orphelin LUN 10
+- Pièges Azure connus (voir [`docs/azure.md`](docs/azure.md)) : disque orphelin LUN 10
   (`null_resource.clean_lun10`), DCR `authpriv`, restore OriginalLocation.
 
 ## Protocole collab

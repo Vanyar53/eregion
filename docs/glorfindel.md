@@ -1,0 +1,176 @@
+# Glorfindel — fonctionnement détaillé
+
+_Extrait tel quel de `CLAUDE.md` le 2026-10-15 (lot DX1) : watch, graphe LangGraph, raisonnement, autonomie, exposition de la War Room, observe-only, vérification, incidents, escalades et alertes. Les règles de sûreté et les conventions restent dans `CLAUDE.md`._
+
+## Architecture watch — parallèle + sérialisé
+
+**Réaffirmation (lot L5, 2026-10-06)** : toutes les `GLORFINDEL_REASSERT_INTERVAL_S` (défaut 60 s, 0 = off ; jamais en dry-run ni read-only), le watch vérifie chaque isolation et blocage enregistrés (`glorfindel/reassert.py`). Règles **disparues** d'Azure (un `terraform apply` sur un NSG à règles en ligne, un retrait dans le portail) → reposées **une fois** + escalade `verification_failed` (l'heure d'isolation d'origine est gardée, `reasserted_at` noté) ; disparues **à nouveau** → escalade seule, Glorfindel ne se bat pas contre une suppression délibérée ou un pipeline. En `human_only`, jamais de repose : alerte seule. Un contournement (allow avant le deny) ou une liste illisible ne déclenche rien ici (la vérification les signale déjà). Les isolations/blocages `partial` sont laissés à l'opérateur. Chaque alerte de réaffirmation remplace la précédente pour la même VM/IP (nouvelle carte, nouvelle notification) : la dédup du store fusionnait « disparues à nouveau » dans la carte « reposées une fois », texte inchangé, sans notification. **Une alerte par disparition** (`drift_alerted_at`, effacé quand l'isolation/le blocage est de nouveau en place) : en `human_only`, chaque cycle de 60 s recréait une carte et une notification, et défaisait les acquittements (validation du 06/10). Le journal d'activité cité ne garde que les écritures `Succeeded` d'autres identités que Glorfindel. **Un seul écrivain par VM (L12, 07/10)** : isoler, lever, bloquer, débloquer et `reset --from-azure` tiennent le verrou de la VM (`_vm_lock` : thread + flock `~/.glorfindel/locks/`, réentrant) — la War Room et la CLI sont d'autres processus ; la réaffirmation prend ce verrou et **relit l'état** avant d'agir (une levée en cours finit d'abord, puis l'état effacé dit qu'il n'y a rien à reposer). Levée et déblocage notent leur intention avant de toucher Azure (`releasing_at` / `unblocking_at`) : coupés au milieu, ils ne sont pas pris pour un retrait hors Glorfindel. Levée/déblocage partiels (`release_failed` / `unblock_failed`) laissés à l'opérateur. Timeout des levées War Room : 600 s. La passe de réaffirmation tourne dans **son propre thread** (une réapplication coupe les sessions par Run Command, jusqu'à 300 s : elle bloquait la boucle principale — lecture des signaux, TTL, heartbeat) ; jamais deux passes à la fois.
+
+Robustesse (revue 2026-10) : une ligne JSONL corrompue ou une clé inconnue ne tue plus le démon (`_read_new_signals` / `_parse_signal_line` : ligne ignorée + signalée ; ligne encore en cours d'écriture par Annatar laissée pour le poll suivant) ; une itération en erreur est loggée et la boucle continue ; un poll de détection qui lève (backend injoignable) → `cycle_failed` au lieu d'un thread mort.
+
+```
+attack_started → thread poll-<vm>-<id>   (parallèle, N attaques × N threads)
+                      ↓ détecté
+               queue resource_id → decide+execute  (sérialisé, incident context partagé)
+```
+
+---
+
+## LangGraph — 8 nodes
+
+```
+load_context → poll_detection → investigate → decide → execute_action → verify_action → store_cycle
+                                                  ↓ (escalate)
+                                            escalate_to_human → store_cycle
+```
+
+- `poll_detection` : no-op sauf `attack_started` → poll Azure Monitor jusqu'à alerte ou timeout ; `detection_time_s` = temps depuis `attack_time` (T0 de l'attaque), plus depuis la réception du signal
+- **RulePoller — une requête par règle, lignes routées (troisième passe L13, 07/10)** : un thread **par règle** (plus par couple règle × VM) lance la requête **une fois** par cycle (`poll_once` → `run_query`), puis route chaque ligne : `_ResourceId` d'une VM, sinon `Computer` (nom d'hôte ou nom de VM), sinon l'IP privée qui a fait l'appel (`CallerIpAddress`, table IP → VM `AzureConnector.private_ip_owners`, cache 5 min — T1041 ; **une IP portée par plusieurs VMs** — deux VNets qui réutilisent la même adresse — **n'en nomme aucune**, la ligne reste non attribuée : la dernière VM listée l'emportait, L21, 13/10). Règle `data-exfiltration-blob` (L21) : `PutBlob`, `PutBlock`, `PutBlockList` (un envoi par blocs passait), adresse de l'appelant **sans son port** (une ligne, donc une détection, par connexion) ; colonnes de sortie inchangées. Vérifiée en lecture seule sur 14 jours du banc : la seule écriture d'une adresse privée (le T1041 du 07/10) est toujours trouvée ; `PutBlock` n'y est jamais apparu (non mesuré). Une ligne qui nomme une VM non surveillée (exclue, autre backend) est ignorée ; une ligne non attribuée est envoyée **une seule fois**, ancrée sur une VM surveillée, `context.attribution = "unattributed"` + `candidates` — même avec une seule VM (plus d'attribution par défaut) — et la garde d'attribution de `decide` retient l'isolation **et le blocage d'IP**. Déduplication : `dispatched[cible] = {identité: époque}` (ensemble avec expiration à la fenêtre ; ancienne forme relue), enregistrée **après** l'envoi ; lignes d'événement (`TimeGenerated`) : une seule par cycle et par VM (la plus récente), lignes agrégées : chacune (un attaquant B n'est plus masqué par A, l'alternance A/B ne renvoie plus rien). Le volume ne dépend plus du nombre de VMs ; le registre est relu à chaque cycle (VM découverte ou évincée prise en compte au cycle suivant). `ssh-brute-force` agrège `by SourceIP, Computer, _ResourceId` ; toutes les règles VM livrées sortent `_ResourceId` (routage non ambigu) ; un nom d'hôte porté par deux VMs surveillées n'attribue rien (jamais de supposition). Client Log Analytics créé une fois par détecteur. **Validé de bout en bout le 07/10** : T1110 Annatar → RulePoller (détection à T0+~125 s, routée vers gondolin) → `block_suspicious_ip` 95 % retenu par `human_only` ; T1041 → ligne PutBlob `CallerIpAddress = 10.10.1.4:50374` attribuée à gondolin par l'IP → `isolate_vm` 92 % retenu. `make annatar-run` monte `~/.glorfindel` en lecture seule : le retour purple (heartbeat du watch) manquait en Docker.
+- **RulePoller (run du 2026-10-05)** — trois défauts corrigés ensemble :
+  - **Fenêtre** : le timespan API vaut maintenant le plus long `ago()` de la requête + 5 min de marge (`_query_lookback_s`, défaut 10 min). Avant : `now - 2*interval_s` (60 s), qui l'emportait sur le `ago(10m)` → aveugle à toute ligne ingérée avec plus de ~84 s de retard.
+  - **Attribution (B8)** : une règle `assets: [auto]` est déclinée par VM découverte, mais la requête n'est pas filtrée sur la VM → une détection sur une VM était dispatchée pour **toutes** les VMs (isolation à tort possible en `non_disruptive`, masqué par le banc mono-VM). `poll_alert(match_row=…)` ne retient que les lignes de CETTE VM (`_ResourceId` / `Computer`) ou les lignes qui ne nomment aucune ressource (agrégées par IP attaquante / compte de stockage). Ces dernières portent `context.attribution = "unattributed"` quand plusieurs VMs sont surveillées → la garde d'attribution de `decide` retient `isolate_vm` (escalade `unattributed_signal`) ; un blocage d'IP reste autonome.
+  - **Nouvelles VMs (validation du 2026-10-06)** : le watch construisait son propre `AssetRegistry` (lu une fois sur disque) au lieu de celui que remplit le service de découverte, et ne déclinait les règles qu'une fois, 10 s après le démarrage → une VM allumée après le démarrage du watch (ou éteinte à ce moment) n'était **jamais** surveillée. Le RulePoller utilise maintenant `discovery.get_registry()` et `expand_for_discovered` tourne chaque minute (idempotent).
+  - **Déduplication** : identité = `TimeGenerated` si présent, sinon les colonnes non numériques (qui, où) — les lignes agrégées (`summarize … by Computer`/`SourceIP`) échappaient à la dédup et auraient été redispatchées à chaque poll avec la fenêtre élargie. Suppression tant que la même identité reste dans la fenêtre ; état **persisté** dans `rule_status.json` (`dispatched`) → un redémarrage du watch ne rejoue pas une détection encore dans la fenêtre (et ne perd plus celles survenues pendant la coupure).
+- `investigate` : requêtes KQL post-détection selon contenu du signal (pas le TTP label)
+  - MaxWrite présent → top_write_processes + backup_agent_check (ransomware vs backup légitime)
+  - FailedAttempts+SourceIP → successful_auth_from_ip (brute force a-t-il réussi ?)
+  - USER=root dans syslog → root_commands + disk_write_after_escalation
+  - Résultats dans `raw_signal.investigative_context` — le LLM les voit avant decide
+  - No-op si pas de workspace_id ou dry_run
+- `decide` : LLM via LiteLLM + few-shot anchors + RAG (3 cycles) + incident context + investigative_context
+  - Gate confidence : `confidence < GLORFINDEL_CONFIDENCE_THRESHOLD` (défaut 0.7) + action autonome → escalade forcée
+  - **Garde-fou déterministe (signal non caractérisé)** : indépendant du LLM — une action autonome **disruptive** (`isolate_vm`/`block_suspicious_ip`) sur un signal **sans indicateur de menace reconnu** (`normalize_row` → fallback générique/`"unknown"`, pas un label curé) → **escalade forcée**. Le gate de confiance fait confiance au modèle pour avouer une confiance basse, ce qu'un modèle faible ne fait pas (smoke : 0.85 sur un signal vague). Le garde-fou ne dépend pas de cette honnêteté. Un signal **caractérisé mais ambigu** (ex. account creation syslog) n'est PAS attrapé ici (c'est le job du gate confiance). `detection_rules.has_recognized_indicator()` + `RECOGNIZED_INDICATOR_KEYS` (= labels de `_INDICATOR_COLUMNS` **sauf `syslog_event`**). Pour « blesser » une nouvelle colonne d'indicateur → l'ajouter à `_INDICATOR_COLUMNS`. **Syslog (revue 2026-10)** : `SyslogMessage` est une *source*, pas une menace — toute règle Syslog (y compris autorée par le LLM) la produit, donc sa simple présence désactivait le garde-fou pour toute la famille. Une ligne Syslog n'est caractérisée que par un **motif curé** : `USER=root` (`privilege_escalation`, dans `normalize_row`) ou `_CURATED_SYSLOG_PATTERNS` (création de compte : `new user:` / `useradd` — vu sur les vrais runs T1136.001). Une ligne Syslog non curée + action disruptive → escalade. `normalize_row` est inchangé (le LLM voit la même chose → pas de run e2e requis).
+  - **Précondition release (déterministe)** : `release_isolation` autonome **uniquement** sur `event == "recovery_complete"` (émis par Glorfindel après un restore terminé). Sur tout autre signal → escalade, quelle que soit la confiance. Pas mise sous le garde-fou signal : un `recovery_complete` ne porte aucun indicateur de menace, ça aurait bloqué la levée légitime post-restore (flux RTO).
+  - **Échec de l'appel LLM** : `litellm.completion(..., num_retries=2)` dans un try → après les retries, escalade `cycle_failed` (le cycle continue jusqu'à `store_cycle`, debug écrit). Avant : l'exception remontait au worker du watch → une ligne console, menace détectée perdue, rien dans `pending` — y compris en `human_only` (le mode observe-only du premier testeur).
+  - Gates extraits en helpers purs testables un par un : `_parse_decision` → `_apply_executable_guard` → `_apply_confidence_gate` → `_apply_signal_guardrail` → `_apply_attribution_guard` → `_apply_release_precondition` → `_apply_autonomy_mode`. Le mode d'autonomie est résolu **avant** l'appel LLM (la ligne debug d'un `cycle_failed` le porte). Seuil invalide (`GLORFINDEL_CONFIDENCE_THRESHOLD=abc`) → 0.7 au lieu d'un crash.
+  - **Le type d'escalade vient de la garde qui a retenu l'action (seconde passe 2026-10-05)** : chaque garde note `held_by` dans l'état → `escalate_to_human` en tire le type (`_HELD_BY_TYPE`) : confiance → `low_confidence`, garde-fou signal → `uncharacterized_signal`, précondition de levée → `release_hold`, action non implémentée → `proposed_action`. Avant, les deux garde-fous tombaient dans `low_confidence`, libellé « detection timeout ».
+  - **Garde « action exécutable »** : `revoke_temp_access` était annoncée au LLM (dans `AUTONOMOUS_ACTIONS`, donc dans le prompt) sans implémentation — elle finissait en `no_op` marqué exécuté, puis notifié. **Retirée d'`AUTONOMOUS_ACTIONS` le 2026-10-06** (edit du prompt → run e2e T1486 + T1110). `_EXECUTABLE_ACTIONS` reste comme garde pour la prochaine ; `execute_action` lève sur une action sans branche ; `store_cycle` ne notifie jamais un `no_op`.
+  - **Parsing défensif de la décision AVANT les gates** (`_as_bool` + float safe + `.get` défauts) : un modèle non-conforme peut (a) **omettre un champ requis** → `d["reasoning"]` KeyError → crash, (b) renvoyer `escalate` en **string `"false"`** (truthy → bypasse le gate), (c) une confidence non-numérique → `float()` lève, (d) **aucun tool-call** (malgré `tool_choice`) → `tool_calls[0]` TypeError, ou un JSON malformé. Tous trouvés par le smoke multi-run (`scripts/llm_smoke.py` : llama3.2 string-bool, command-r7b champ omis, mistral-nemo no-tool-call). Extraction du tool-call protégée + tous les champs hard-défaultés/coercés ; **aucune action/décision parsée → escalade forcée**. Un modèle quirky ne peut ni crasher le cycle ni défaire un contrôle de sécurité.
+- `execute_action` : **toute** exception est escaladée (`write_blocked` si PermissionError/403/AuthorizationFailed, sinon `action_failed`) — avant, seules `PermissionError`/`HttpResponseError` l'étaient ; les `RuntimeError` du connecteur (snapshot 404, « no NSG », job introuvable) et `requests` finissaient en ligne console. `PartialActionError` (isolation/block partiel) → `outcome.partial` + NIC en échec. Aucun coffre configuré (`action_backends` / `GLORFINDEL_BACKUP_VAULT`) → `action_failed`, plus de repli silencieux sur `rsv-annatar` — **nulle part** depuis la troisième passe : `config.resolve_backup_vault()` (explicite > config > env > rien) sert la CLI, l'API, l'audit (`fail` « Aucun coffre ») et les jobs ; le connecteur lève si `snapshot`/`restore` sont appelés sans coffre (après la garde lecture seule). **Snapshot toujours fire-and-forget** (vault + vault_rg depuis la config, job suivi via `jobs.record_snapshot_job`) : un snapshot bloquant a tenu la file du VM **4h25** en run réel (`runs/watch-t1136-…-20260608T143425Z`, full backup initial).
+- `verify_action` : NSG check (isolate) **+ résultat de la coupure des sessions** (`isolation_verdict` : sessions encore ouvertes → `verified=False`), `verify_release` (release : **aucune** NIC ne porte de règle — pas `not verify_isolation()`, vrai dès qu'UNE NIC est libre), Compute API (snapshot), règles **entrante ET sortante** (block)
+- `respond()` / poll threads du watch : filet final `record_cycle_failure()` → escalade `cycle_failed` + ligne debug pour toute exception non prévue (graph, backend de détection injoignable pendant le poll d'un `attack_started`)
+- `store_cycle` : ChromaDB + `runs/{run_id}_debug.jsonl` (toujours écrit, même si ChromaDB/webhook échoue)
+- `dry_run: bool` dans `GlorfindelState` → skipe escalations.record() et actions réelles
+
+---
+
+## Raisonnement LLM — few-shot + signal enrichi
+
+Le LLM ne suit pas de routing table TTP→action. Il raisonne depuis :
+1. Les indicateurs bruts du signal (`first_result_row`) — normalisés via `normalize_row()` (indicateur sémantique uniforme)
+2. Le contexte investigatif (`investigative_context`) collecté par le noeud `investigate`
+3. Les exemples few-shot validés en prod dans `_SYSTEM_PROMPT` (prompt caching activé)
+4. Les cycles passés ChromaDB + l'incident context multi-signal (investigative_context des cycles précédents propagé)
+
+Exemples few-shot : 4 chaînes de raisonnement complètes (MaxWrite → encryption → restore ;
+CallerIP RFC-1918 → exfil, disk intact → isolate ; etc.). Le LLM peut dévier sur les cas
+ambigus — les exemples ancrent les cas validés.
+
+**Règle de sécurité** : action destructive sans `escalate=True` → bloquée par le graph, pas par confiance dans le LLM.
+
+---
+
+## Autonomie, War Room, observe-only
+
+### Modes d'autonomie par asset (commit 9154fc6)
+
+La gate destructive est nécessaire mais pas suffisante : le persona sans SOC craint l'action **réversible mais disruptive** (`isolate_vm`) décidée en autonome sur un faux positif. Réponse : 3 modes résolus **par asset** (escalier de confiance).
+
+| Mode | Comportement | Statut |
+|------|-------------|--------|
+| `human_only` | **Aucune** action exécutée — tout recommandé/escaladé (y compris réversibles). | **Défaut** |
+| `non_disruptive` | Comportement historique : `AUTONOMOUS_ACTIONS` autonomes, destructif gated. | Sélectionnable |
+| `full_auto` | Différé — **valeur refusée** par la validation config. | Différé |
+
+- Config : section `autonomy` dans `glorfindel-config.yaml` (résolution asset fnmatch > défaut global). `allow_destructive: []` = axe **séparé** du mode, `delete`/`wipe` jamais autonomes.
+- Couche politique **après `decide`** (jamais un bypass) : en `human_only`, action autonome → `escalate=True` + `mode_hold=True`. Gate destructive + gate confiance restent actives.
+- Nouveau type d'escalade `mode_hold` (≠ `low_confidence`/`destructive_action`) — porte l'action recommandée + confidence pour approbation en un clic.
+- `store_cycle` logue `resolved_autonomy_mode` (cycle + debug.jsonl) — trail d'audit.
+- `glorfindel watch --mode <m>` surcharge le défaut **global** d'une session (les règles par-asset restent prioritaires). `glorfindel list` affiche le mode résolu par VM. Warning au démarrage si `human_only` sans webhook/bot (gap de process : détection sans réponse tant qu'un humain n'agit pas).
+- ⚠️ **Défaut `human_only`** : les runs gate autonomes (T1486/T1548) nécessitent `--mode non_disruptive` ou une section `autonomy` dans le config live.
+- **Activation par VM (lot L6, 2026-10-07)** : passer une VM en `non_disruptive` depuis la War Room ouvre un **contrôle de préparation** (`glorfindel/readiness.py`, `GET /api/readiness/<vm>`, rien n'est écrit) : verdict `ready` / `reserve` / `not_ready` + raisons à code stable (droits via l'API de permissions, repli sur les règles si les droits du NSG de quarantaine manquent, sessions non coupées sans `runCommand` ou sous Windows, allow qui passent avant un blocage, NIC/subnet sans NSG ; AVNM et Azure Policy signalés non vérifiés). `POST /api/activate/<vm>` **recalcule** le verdict et refuse une VM pas prête ou dont une réserve n'a pas été confirmée (`acknowledged`) ; `POST /api/autonomy/<vm>` avec `non_disruptive` passe par la même vérification (retour à `human_only` : direct). Aucune VM ne quitte `human_only` sans que ses réserves aient été montrées. Banc : gondolin `ready`.
+- **Verrou de préparation (L6, seconde partie, 2026-10-07)** — le trou : le défaut global, un motif (`vm-*`) ou `watch --mode` rendaient autonomes toutes les VMs, **y compris celles créées ensuite**, sans contrôle. Désormais le mode configuré n'est qu'une intention ; le mode **effectif** (`readiness.effective_mode`) vaut `human_only` tant que la VM n'est pas contrôlée `ready`, ou `reserve` avec **toutes** ses réserves confirmées (`acknowledged`). `decide` (via `ReadinessGate`, actif dès que les actions sont réelles, jamais en dry-run ; une VM jamais contrôlée l'est à la volée ; erreur du verrou → `human_only`) et la réaffirmation lisent le mode effectif. `ReadinessTracker` (lancé par la découverte après chaque passe de 60 s) contrôle les VMs en mode autonome **dès leur découverte**, puis à la cadence de posture : prête → autonome sans rien demander ; réserves → retenue + **une** carte `readiness_hold` (« ⚡ Review & turn on » → écran L6, ou `glorfindel activate <vm>`) ; pas prête → retenue + correctif ; réserve apparue après l'activation → retour en `human_only` + carte (« repasse en observation ») ; une erreur de lecture (`permissions_unknown`, `nsg_unreadable`) sur une VM active est reconfirmée à la passe suivante avant de la retenir ; AKS/VMSS et identifiants read-only → retenus sans carte. Store `~/.glorfindel/readiness.json` (verdict, réserves, acquittements ; flock, écrit par le watch ET la War Room). Activation (War Room, `glorfindel activate`) → enregistre les réserves acceptées ; retour en `human_only` → acquittements effacés (réserves remontrées à la prochaine activation). War Room : chip `⏸ CONFIRM` / `NOT READY` / `CHECKING` à côté du mode, `/api/state.autonomy_holds`. `mode_hold` d'une VM retenue : la raison dit pourquoi et comment lever.
+- **Gate validée 2026-06-11** : T1486 human_only → `mode_hold` (NSG intact, approve War Room → `isolate_vm` exécuté) ✅ ; T1486 non_disruptive → `isolate_vm` autonome, `resolved_autonomy_mode=non_disruptive` dans debug.jsonl ✅. War Room : badge mode par VM, dropdown per-asset (hot-pickup `b7af4cc`), approve & execute (`/api/action/approve/{esc_id}`).
+
+### War Room — exposition (revue 2026-10)
+
+La War Room déclenche de vraies actions Azure (restore, release, approve & execute) et peut passer un asset en `non_disruptive`. Elle écoutait sur `0.0.0.0` sans authentification.
+- `glorfindel war-room` écoute sur **127.0.0.1** par défaut ; `docker-compose.yml` publie `127.0.0.1:7007:7007` (le `--host 0.0.0.0` reste nécessaire *dans* le conteneur).
+- `GLORFINDEL_WARROOM_TOKEN` (optionnel) : protège **toutes** les routes, WebSocket du feed compris (middleware ASGI). Ouvrir une fois `http://<hôte>:7007/?token=<jeton>` → cookie HttpOnly/SameSite=Strict + redirection sans le jeton ; scripts : `Authorization: Bearer <jeton>`. Sans jeton sur une adresse non-loopback → avertissement au démarrage.
+- Sans jeton, un **navigateur** reçoit une page de saisie (formulaire GET → cookie → redirection) ; les clients API gardent le 401 JSON.
+- **Approbation en un clic (quatrième passe, L19)** : `_approval_refusal` — types exécutables `mode_hold`, `low_confidence`, `uncharacterized_signal`, `release_hold` seulement (**jamais** `unattributed_signal` : sa carte est ancrée sur une VM que la détection ne nomme pas) ; carte plus vieille que `GLORFINDEL_APPROVAL_MAX_AGE_H` (2 h, sur `last_seen`) ou antérieure au dernier restore → refus ; IP d'un blocage = une seule adresse (`single_host_ip` : ni `*`, ni CIDR, ni tag). **TTL** : `reassert.ttl_alerts` escalade (`ttl_exceeded`, action `review_isolation`, `ttl_alerted_at`), ne lève jamais (avant : toute isolation levée au bout de 4 h, sans humain ni précondition).
+- **Nom ambigu** : `_find_resource_id` lève `AmbiguousVM` (409, `{error}`) quand un nom de VM désigne plusieurs VMs (homonymes dans deux groupes, possibles depuis le registre par ID) — avant, la première trouvée était visée (release, restore, snapshot, activate…).
+- Cartes : chip `shared NSG`, chips rouges **`⚠ partial`** (NICs partielles, ou release/unblock qui a laissé des règles) et **`⚠ bypassed`** (allow évaluée avant le deny) à côté de ISOLATED/BLOCKED — `/api/state` expose `partial`, `failed_nic`, `release_failed`/`unblock_failed`, `shared`, `shadowed`. Release/Revert en échec : le toast reprend les règles restantes (sortie CLI).
+- Corrigé au passage : `GET /api/audit/<vm>` (panneau readiness par VM) levait `NameError: os` **à chaque appel** depuis `053156b` (18/06) — `import os` manquant ; `ruff` le signalait.
+
+### Mode observe-only — credentials read-only (`GLORFINDEL_READ_ONLY=1`)
+
+`human_only` n'exécute que des chemins **lecture** (détection LAW, investigate KQL, discovery Heartbeat, decide LLM, escalade locale) → peut tourner sur un SP **Reader / Log Analytics Reader** (pas Contributor). C'est l'on-ramp du premier test externe : un pair donne un accès lecture seule, observe les recos une semaine, zéro risque.
+
+- `AzureConnector(read_only=...)` (défaut depuis `GLORFINDEL_READ_ONLY`). `_ensure_clients()` est déjà paresseux — aucun check write à l'init, `watch` démarre proprement sur Reader.
+- Méthodes write (`isolate_vm`/`block`/`snapshot`/`release`/`restore`/`unblock`) → `_guard_write()` lève un `PermissionError` clair si read-only (jamais atteint en human_only).
+- ⚠️ `non_disruptive` + read-only (mauvaise config) : `execute_action` catche le `PermissionError` → escalade type `write_blocked` (≠ mode_hold) → cycle complété, debug file + `pending` visibles (pas de perte silencieuse). Commit `902951a`.
+- `audit.run` sous read-only → check `Credentials` (warn, pas fail) : « capacité d'écriture non vérifiable, checks ci-dessous = accès lecture uniquement ». Déploiement reste `ready` pour son usage observe-only.
+- `glorfindel watch` logue le régime (`Credentials: read_only`) + warning si read-only combiné à un mode exécutant (les actions échoueront).
+- ⚠️ Bouton War Room « Approuver & exécuter » sous read-only → `PermissionError` (à surfacer côté UI).
+
+---
+
+## Vérification post-action
+
+| Action | Vérification | État |
+|---|---|---|
+| `isolate_vm` | Règles NSG deny-all sur **chaque** NIC + sessions établies coupées (`drain`) | ✅ |
+| `release_isolation` | `verify_release` : **aucune** règle d'isolation sur aucune NIC (une règle illisible = non vérifié) | ✅ |
+| `snapshot` | Job RSV (InProgress → `verified=None`, pas de claim) | ✅ |
+| `block_suspicious_ip` | Règles **entrante et sortante** pour l'IP sur chaque placement | ✅ |
+
+`verified=False` → escalade. `verified=None` → cycle stocké sans claim de succès.
+
+---
+
+## IncidentRegistry
+
+`glorfindel/incidents.py` → groupe signaux par `resource_id` dans TTL (défaut 300s, `GLORFINDEL_INCIDENT_TTL_S`).
+Persiste dans `~/.glorfindel/incidents.jsonl`. Thread-safe.
+Quand `signals_count > 1` ou `actions_taken` non vide → prompt injecte contexte incident.
+
+---
+
+## escalations — comportement
+
+`gf pending` affiche les escalades avec **next steps générés par le LLM** (`suggested_steps`), contextuels à l'historique ChromaDB. Fallback statique pour les anciennes escalades sans ce champ.
+
+**Escalade persistante — 1 carte vivante (pas N, pas figée).** La dédup `record()` (clé `action+resource_id+escalation_type` parmi les `pending`) garde **une seule** carte quand un finding re-déclenche, mais la rend vivante : `occurrences++` + `last_seen` à chaque re-fire (cheap, `first_seen` préservé → « 12× depuis 3h » d'un coup d'œil), et le contenu cher (reason/suggested_steps/confidence) **rafraîchi uniquement sur changement matériel** (delta de confiance ≥ `_MATERIAL_CONFIDENCE_DELTA`=0.1) — sinon le contenu reste stable (pas de flicker), et le **premier triage est préservé** (`first_reason`/`first_suggested_steps`/`first_confidence`). Avant : la sortie du re-`decide` était jetée → carte périmée sur un finding qui dure (constat terrain). ⚠️ Deux raffinements **différés** (touchent des hot-paths, validation run réel requise) : (a) throttle du re-`decide` LLM lui-même (risque de masquer un changement matériel si l'équivalence est trop lâche — `indicator_value` varie) ; (b) résolution du mismatch `Computer`≠`resource_id` via la map discovery (change l'input LLM via `normalize_row` → run end-to-end requis).
+
+Types d'escalade : `unattributed_signal` (détection non attribuable à cette VM — ligne sans ressource, plusieurs VMs surveillées — action ciblant la VM retenue), `low_confidence` (gate de confiance, ou escalade demandée par le LLM sur une action autonome — libellé « confiance insuffisante », ex-« detection timeout »), `uncharacterized_signal` (garde-fou signal non caractérisé), `release_hold` (levée proposée hors `recovery_complete`), `destructive_action` (HUMAN_APPROVAL_REQUIRED), `proposed_action` (action inconnue ou non implémentée), `verification_failed` (action exécutée mais vérification en échec : règle absente, NIC non couverte, allow évaluée avant le deny — boutons Revert/reset), `proposed_rule` (règle de détection proposée après detection_missed), `mode_hold` (action autonome retenue par le mode `human_only` de l'asset — pas un manque de confiance), `write_blocked` (action tentée mais credentials read-only / IAM 403 — capability gap, pas un choix de politique), `action_failed` (échec non-auth pendant l'exécution — **toute** exception, connecteur compris — toujours escaladé, jamais d'abort silencieux du cycle), `cycle_failed` (le cycle n'a pas pu aller au bout : appel LLM en échec après retries, erreur interne, backend de détection injoignable pendant le poll — le signal est réel mais **non analysé**, triage humain), `readiness_hold` (VM configurée autonome mais retenue en `human_only` par le verrou L6 : réserves à confirmer, pas prête, ou réserve apparue depuis l'activation — bouton « Review & turn on »), `detection_blocked` (raté sur un TTP **déjà couvert** par une règle : la détection a été **empêchée** — isolation résiduelle, latence d'ingestion, backend injoignable — pas un manque de règle ; action portée `investigate_detection_gap`).
+
+L'escalade porte `action_params` (dict, vide par défaut) pour les actions paramétrées — ex. `block_suspicious_ip` → `{"ip": ...}` extrait du signal via `_extract_suspicious_ip` (même source que `execute_action`). Permet à la War Room « Approve & execute » d'exécuter en 1 clic une action qui n'est pas à `resource_id` seul. Commit `9583ec6`.
+
+**Verdict d'observation** (`glorfindel verdict`, boutons ✓ Right / ✗ Wrong de la War Room, `POST /api/escalations/<id>/verdict`) : `verdict` (`right` / `wrong` / `unsure`), `verdict_at`, `verdict_note` sur la carte, indépendants de l'acquittement. La carte porte aussi `rule_name` (la règle du RulePoller ; pour les anciennes cartes, lue dans `signal_id`). `glorfindel report` / `GET /api/report` : cartes de décision seulement (ni posture, ni règle proposée, ni préparation, ni TTL, ni alerte de réaffirmation), une carte comptée une fois, taux de recommandations disruptives (isoler, bloquer) fausses parmi les jugées. Guide : `docs/observation.md`.
+
+`gf ack <id>` / `gf ack --all` → marque `resolved` dans `~/.glorfindel/escalations.jsonl`. Purement administratif — ne fait rien sur Azure. `restore_from_backup` auto-acquitte via `resolve_by_resource`. Les `posture_gap` s'**auto-résolvent** quand la condition disparaît (ex. backup nocturne comble « no recovery point yet ») — `PostureChecker.check_and_escalate` résout l'escalade au cycle suivant (commit `b208a0a`).
+
+⚠️ **Ack d'un posture_gap encore RÉEL** : l'ack ne fait que `resolve` l'escalade ; `posture_state.json` gardait `status: "pending"` → le cycle suivant voyait « mon escalade n'est plus pending mais le gap existe toujours » → **recréait une escalade à chaque cycle** (ack inutile sur un gap persistant, ex. 14 VMs vraiment sans backup). Fix : `_maybe_escalate` interprète « pending + escalade absente de `pending()` » comme **acquitté** → `status: "acknowledged"`, ne ré-escalade plus. Le gap n'est ré-alerté que s'il **se résout puis réapparaît** (`_resolve_cleared_gaps` transitionne `pending`/`acknowledged` → `resolved` quand la condition disparaît). Un gap `acknowledged` sort de `active_gaps()` (n'apparaît plus dans `/api/state`).
+
+⚠️ **Éviction ≠ condition résolue** : `_resolve_cleared_gaps` ne résout un gap que si son asset a été **réellement checké ce cycle** (`checked_vms`). Une VM éteinte > rétention (8h) → évincée de l'inventaire → **non checkée** → ses gaps sont **gelés** (ack préservé), PAS résolus. Sinon : VM éteinte le weekend → gap résolu à l'éviction → re-découverte lundi → **ré-escalade fraîche en masse** (le « flood du lundi », acks effacés). Avec le gel, un gap `acknowledged` reste silencieux au retour de la VM. Effet de bord assumé : une VM **supprimée** (pas juste éteinte) garde son gap gelé jusqu'à un ack (qui tient). Pour une VM intentionnellement sans backup → `exceptions:` dans `glorfindel-config.yaml` (sort du check, pas juste un ack).
+
+## alerting webhook + bot Discord
+
+**Webhook** (`GLORFINDEL_WEBHOOK_URL`) — one-way, Slack format :
+- **Escalade** (`:rotating_light:`) — action humaine requise
+- **Action autonome** (`:robot_face:`) — `isolate_vm ✓`, `block_suspicious_ip ✓`, etc. — skippé en dry-run et si `verified=False`
+- Discord : utiliser l'URL webhook Discord avec `/slack` à la fin
+
+**Bot Discord** (`glorfindel bot`, `DISCORD_BOT_TOKEN`) — bidirectionnel :
+- Un fil Discord par `resource_id` (`🔴 vm-name`), créé à la première escalade pour la VM
+- Chaque escalade posée dans le fil comme embed structuré (action, ressource, TTP, prochaines étapes LLM)
+- Bouton **✓ Acknowledge** → `escalations.resolve()` + archivage auto si plus d'escalades pour la VM
+- Bouton **📋 Command** → commande CLI à exécuter (éphémère)
+- Bouton **🔄 Restore** → exécute `glorfindel restore <rid> --yes` (`restore_from_backup`, `low_confidence`)
+- Bouton **↩️ Revert** → exécute `glorfindel reset <rid> --yes` (`verification_failed`) = reset complet (isolation + blocs IP)
+- `/pending` slash command → liste des escalades en attente
+- `DISCORD_PING_ROLE` → ping `@rôle` à l'ouverture d'un fil
+- `bot_posted.json` + `bot_threads.json` : persistance entre redémarrages (pas de doublons, même fil)
+- Si `DISCORD_BOT_TOKEN` set → webhook escalade supprimé (le bot gère dans les fils)
+- Thread supprimé sur Discord → bot recrée automatiquement (NotFound handling)

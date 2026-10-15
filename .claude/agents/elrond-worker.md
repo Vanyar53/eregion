@@ -17,7 +17,7 @@ Tu réalises un lot, et seulement celui-là.
 - pour une correction, les constats de la relecture.
 
 **Étapes :**
-1. **Lire.** `CLAUDE.md` est déjà chargé. Lis la fiche, puis les fichiers de rôle `CLAUDE_<RÔLE>.md` des sessions que la fiche indique, puis les fichiers qu'elle cite.
+1. **Lire.** `CLAUDE.md` est déjà chargé. Lis la fiche, puis les fichiers de rôle `CLAUDE_<RÔLE>.md` des sessions que la fiche indique, les docs que ces fichiers et l'index « Où trouver quoi » de `CLAUDE.md` désignent pour ton lot, puis les fichiers que la fiche cite.
 
    Si `<racine>/collab/inbox_<rôle>.md` existe, lis-le aussi : il peut contenir des points en attente qui touchent ton lot. Tu le lis seulement ; tu n'écris jamais dans `collab/`.
 2. **Créer la branche.** `git switch -c lot/<id>-<slug-court> <base>`.
@@ -28,7 +28,7 @@ Tu réalises un lot, et seulement celui-là.
    Suis `CLAUDE.md` et `CONTRIBUTING.md` :
    - aucun appel Azure ni LLM dans les tests ;
    - un `HOME` jetable ;
-   - README, `CLAUDE.md` et `CHANGELOG.md` mis à jour si le comportement change.
+   - README, la doc concernée (`docs/`) et `CHANGELOG.md` mis à jour si le comportement change ; `CLAUDE.md` seulement si une règle ou une convention change.
 
    Reste dans le lot : tout le reste va dans ton rapport.
 4. **Vérifier et commiter.** Lance `pytest` (ou le sous-ensemble que la fiche indique), puis `ruff check .`. Fais des commits petits et cohérents, au format du dépôt : `feat(<portée>): …`, en français.

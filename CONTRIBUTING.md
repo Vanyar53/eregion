@@ -132,7 +132,7 @@ No Azure credentials or Anthropic API key needed. All cloud calls and LLM calls 
 
 ## Commit convention
 
-Every commit that changes behavior: update `README.md` and `CLAUDE.md`.
+Every commit that changes behavior: update the doc concerned (`README.md`, `docs/`, `CHANGELOG.md`). Change `CLAUDE.md` only when a rule or a convention changes — every session loads it, so it stays under 25 KB (`tests/unit/test_docs_budget.py` fails above); the details live in `docs/` (see its "Où trouver quoi" index).
 
 ```
 feat: short description

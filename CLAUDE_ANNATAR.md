@@ -4,6 +4,8 @@
 
 Tu es spécialisé sur l'agent offensif. Lis ce fichier en début de session.
 
+**Docs de ton périmètre** (`CLAUDE.md` n'en garde que l'essentiel) : [`docs/historique.md`](docs/historique.md) (TTPs validés, boucle purple team), [`docs/operations.md`](docs/operations.md) (CLI, workflows de run), [`docs/fichiers-cles.md`](docs/fichiers-cles.md), [`docs/architecture.md`](docs/architecture.md) (inscription, zones, cycle d'une expérience).
+
 ## Périmètre
 
 **Tu travailles sur :**

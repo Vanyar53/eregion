@@ -9,7 +9,7 @@ chacune voit et ne voit pas, et ce qu'elles ont trouvé. Vue d'ensemble du produ
 
 ```mermaid
 flowchart BT
-    U["Tests unitaires<br/>~760, 20 s, aucun appel Azure ni LLM"]
+    U["Tests unitaires<br/>~870, 30 s, aucun appel Azure ni LLM"]
     I["Invariants Hypothesis<br/>faux Azure, monde qui bouge, pannes, concurrence<br/>500 séquences par push, 10 000 par nuit"]
     M["Mutation<br/>bugs réels réinjectés un par un<br/>chaque lundi"]
     L["Verrous entre processus<br/>vrais flock"]

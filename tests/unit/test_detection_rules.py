@@ -825,3 +825,21 @@ def test_query_lookback_reads_every_kql_timespan_and_ignores_comments():
     assert _query_lookback_s("T | where TimeGenerated > ago(1.5d)") == 129600
     assert _query_lookback_s("T | where TimeGenerated > ago(90sec)") == 90
     assert _query_lookback_s("T | where TimeGenerated > ago(5m)\n// was ago(1d)") == 300
+
+
+def test_account_creation_rule_keeps_only_real_creations():
+    """P1 (seventh review): the rule matched every useradd mention — failures, the « new
+    group » line, package-manager system accounts. On 14 days of the bench it matched only
+    Azure agents' own accounts (azuremetricsext UID 996, azureotelcollector UID 997, no
+    shell). Validated on the real KQL engine: those are excluded, Annatar's T1136 test
+    (UID 2001, nologin), a system UID with a shell and an agent name with a shell are kept."""
+    import yaml
+    from pathlib import Path
+    rules = yaml.safe_load((Path(__file__).resolve().parents[2] / "glorfindel/rules/azure/detection_rules.yaml").read_text())
+    q = next(r for r in rules["rules"] if r["ttp"] == "T1136.001")["query"]
+    assert 'has "new user: name="' in q                       # successful creations only
+    assert 'or SyslogMessage has "useradd"' not in q           # no more bare mentions
+    assert "Uid < 1000 and NoLogin" in q                       # system account without a shell
+    assert 'in ("azuremetricsext", "azureotelcollector") and NoLogin' in q   # agents, only without a shell
+    # Same output columns: what decide (and the LLM) sees does not change shape.
+    assert "| project TimeGenerated, Computer, _ResourceId, Facility, SeverityLevel, ProcessName, SyslogMessage" in q

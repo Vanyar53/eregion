@@ -60,3 +60,30 @@ def test_host_env_carries_no_azure_secret_and_is_read_only():
     assert env["GLORFINDEL_READ_ONLY"] == "1"
     assert env["GLORFINDEL_WEBHOOK_URL"] == "https://hook"
     assert len(env["GLORFINDEL_WARROOM_TOKEN"]) >= 24
+
+
+def test_empty_service_principal_vars_leave_room_for_the_managed_identity():
+    """docker compose passes AZURE_CLIENT_ID="" on the hosted VM: azure-identity then builds
+    ClientSecretCredential("") and never reaches the managed identity (measured, 16/10)."""
+    from glorfindel.cli import _drop_empty_service_principal_env
+
+    environ = {"AZURE_CLIENT_ID": "", "AZURE_CLIENT_SECRET": " ", "AZURE_TENANT_ID": "",
+               "AZURE_SUBSCRIPTION_ID": "sub"}
+    assert _drop_empty_service_principal_env(environ) == [
+        "AZURE_CLIENT_ID", "AZURE_CLIENT_SECRET", "AZURE_TENANT_ID"]
+    assert environ == {"AZURE_SUBSCRIPTION_ID": "sub"}
+
+    real = {"AZURE_CLIENT_ID": "app", "AZURE_CLIENT_SECRET": "s", "AZURE_TENANT_ID": "t"}
+    assert _drop_empty_service_principal_env(real) == [] and len(real) == 3
+
+
+def test_empty_vars_no_longer_break_the_credential_chain(monkeypatch):
+    from azure.identity import EnvironmentCredential
+
+    from glorfindel.cli import _drop_empty_service_principal_env
+
+    for k in ("AZURE_CLIENT_ID", "AZURE_CLIENT_SECRET", "AZURE_TENANT_ID"):
+        monkeypatch.setenv(k, "")
+    import os
+    _drop_empty_service_principal_env(os.environ)
+    EnvironmentCredential()  # raised ValueError("client_id should be …") before

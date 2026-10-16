@@ -219,6 +219,8 @@ MUTANTS = [
      '    out["autonomy"] = {"default": "human_only"}\n', ""),
     ("M55", "the host gets a write role on the bench (H0)", "infra/glorfindel-host/main.tf",
      'role_definition_name = "Reader"', 'role_definition_name = "Contributor"'),
+    ("M56", "empty service-principal vars stay set (H0: managed identity unreachable)", "glorfindel/cli.py",
+     "    for k in dropped:\n        del environ[k]\n", ""),
 ]
 
 # Mutants measured by other tests than the invariants (their lot's own).
@@ -228,7 +230,7 @@ TESTS["M50"] = "tests/unit/test_glorfindel.py -k drain"
 TESTS["M51"] = "tests/unit/test_agent_nodes.py -k raises"
 TESTS["M52"] = "tests/unit/test_glorfindel.py -k remembered"
 TESTS["M53"] = "tests/unit/test_readiness.py -k refused"
-TESTS.update({mid: "tests/unit/test_glorfindel_host.py" for mid in ("M54", "M55")})
+TESTS.update({mid: "tests/unit/test_glorfindel_host.py" for mid in ("M54", "M55", "M56")})
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

@@ -406,7 +406,11 @@ HOST_USER     ?= glorfindel
 OPERATOR_CIDR ?= $(shell curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null)/32
 HOST_VARS      = -var-file=../terraform/terraform.tfvars -var="operator_cidr=$(OPERATOR_CIDR)"
 HOST_IP        = $(shell $(HOST_TF) output -no-color -raw public_ip 2>/dev/null | grep -E '^[0-9.]+$$')
-HOST_SSH       = ssh $(HOST_USER)@$(HOST_IP)
+# HOST_SSH_KEY : la clé privée qui va avec admin_ssh_public_key (terraform.tfvars), si ton agent
+# SSH ne la propose pas. accept-new : la clé d'hôte d'une VM neuve est acceptée au premier contact.
+HOST_SSH_KEY  ?=
+SSH_OPTS       = -o StrictHostKeyChecking=accept-new $(if $(HOST_SSH_KEY),-i $(HOST_SSH_KEY) -o IdentitiesOnly=yes)
+HOST_SSH       = ssh $(SSH_OPTS) $(HOST_USER)@$(HOST_IP)
 
 glorfindel-host-init:
 	$(HOST_TF) init -upgrade
@@ -417,7 +421,7 @@ glorfindel-host-plan: glorfindel-host-init
 # YES=1 : sans confirmation (le plan n'est alors pas relu avant l'apply).
 glorfindel-host-up: glorfindel-host-init
 	$(HOST_TF) apply $(HOST_VARS)$(if $(YES), -auto-approve)
-	@echo "" && echo "  Ensuite : cp infra/glorfindel-host/host.env.example infra/glorfindel-host/host.env, remplir, make glorfindel-host-push"
+	@echo "" && echo "  Ensuite : make glorfindel-host-env (ou copier host.env.example et remplir), make glorfindel-host-push"
 
 glorfindel-host-down:
 	$(HOST_TF) destroy $(HOST_VARS)
@@ -434,8 +438,8 @@ glorfindel-host-push:
 	@test -n "$(HOST_IP)" || { echo "Pas de VM : make glorfindel-host-up d'abord"; exit 1; }
 	@cfg=$$(mktemp); \
 	 .venv/bin/python infra/glorfindel-host/host_config.py glorfindel-config.yaml $$cfg && \
-	 scp -q infra/glorfindel-host/host.env $(HOST_USER)@$(HOST_IP):eregion/.env && \
-	 scp -q $$cfg $(HOST_USER)@$(HOST_IP):eregion/glorfindel-config.yaml && \
+	 scp -q $(SSH_OPTS) infra/glorfindel-host/host.env $(HOST_USER)@$(HOST_IP):eregion/.env && \
+	 scp -q $(SSH_OPTS) $$cfg $(HOST_USER)@$(HOST_IP):eregion/glorfindel-config.yaml && \
 	 $(HOST_SSH) 'chmod 600 eregion/.env eregion/glorfindel-config.yaml'; \
 	 rc=$$?; rm -f $$cfg; exit $$rc
 	@echo "  host.env et glorfindel-config.yaml (human_only) poussés sur $(HOST_IP)"
@@ -457,7 +461,7 @@ glorfindel-host-report:
 	$(HOST_SSH) 'docker exec eregion-watch glorfindel report --since $(or $(SINCE),7d)'
 
 glorfindel-host-tunnel:
-	ssh -N -L 7007:127.0.0.1:7007 $(HOST_USER)@$(HOST_IP)
+	ssh $(SSH_OPTS) -N -L 7007:127.0.0.1:7007 $(HOST_USER)@$(HOST_IP)
 
 glorfindel-host-ssh:
 	$(HOST_SSH)

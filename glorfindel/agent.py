@@ -1200,6 +1200,7 @@ def escalate_to_human(state: GlorfindelState) -> GlorfindelState:
 
     if not state.get("dry_run", False):
         from glorfindel import escalations
+        source, exercise_run = _cycle_source(signal)
         escalations.record(
             signal_id=signal.get("signal_id", ""),
             resource_id=signal.get("resource_id", ""),
@@ -1215,6 +1216,8 @@ def escalate_to_human(state: GlorfindelState) -> GlorfindelState:
             confidence=state.get("confidence", 0.0),
             action_params=action_params,
             rule_name=(signal.get("context") or {}).get("rule_name", ""),
+            source=source,
+            exercise_run=exercise_run,
         )
 
     # An action that ran (verification failed, or it failed midway) keeps what its
@@ -1322,11 +1325,24 @@ def _platform_note(outcome: dict) -> str:
     return f"{PLATFORM_OPEN_NOTE} — {', '.join(map(str, nics))}"
 
 
+def _cycle_source(signal: dict) -> tuple[str, str]:
+    """B2: (`exercise`, run_id) when an injector's window covers the signal's VM at its
+    time, else (`real`, "") — eregion_core/exercise.py. Recorded in the memory and on the
+    card; never shown to the model yet. Unreadable → (`unknown`, "")."""
+    try:
+        from eregion_core.exercise import source_of
+        return source_of(signal.get("resource_id", ""), signal.get("timestamp"),
+                         run_id=(signal.get("context") or {}).get("run_id", ""))
+    except Exception:  # labelling must never break a cycle
+        return "unknown", ""
+
+
 def store_cycle(state: GlorfindelState, *, memory: CycleMemory) -> GlorfindelState:
     """Persist the completed cycle to vector store and debug JSONL."""
     signal = state["signal"]
     outcome = state.get("outcome") or {}
     run_id = signal.get("context", {}).get("run_id", "")
+    source, exercise_run = _cycle_source(signal)
 
     cycle = {
         "signal_id": signal.get("signal_id", ""),
@@ -1346,6 +1362,8 @@ def store_cycle(state: GlorfindelState, *, memory: CycleMemory) -> GlorfindelSta
         "past_cycles_used": [c.get("summary", "") for c in state.get("past_cycles", [])],
         "resolved_autonomy_mode": state.get("autonomy_mode", ""),
         "autonomy_gate": state.get("autonomy_gate") or {},
+        "source": source,
+        "exercise_run": exercise_run,
     }
     # ChromaDB write — non-fatal: debug JSONL must still be written on failure
     try:
@@ -1827,6 +1845,7 @@ def record_cycle_failure(
     if not dry_run:
         try:
             from glorfindel import escalations
+            source, exercise_run = _cycle_source(signal)
             escalations.record(
                 signal_id=signal.get("signal_id", ""),
                 resource_id=signal.get("resource_id", ""),
@@ -1837,6 +1856,8 @@ def record_cycle_failure(
                 suggested_steps=list(_CYCLE_FAILED_STEPS),
                 ttp=signal.get("ttp", ""),
                 severity=signal.get("severity", ""),
+                source=source,
+                exercise_run=exercise_run,
             )
         except Exception as rec_exc:  # the trace must not raise in turn
             _console.print(f"[red]cycle_failed: escalation non enregistrée — {rec_exc}[/red]")

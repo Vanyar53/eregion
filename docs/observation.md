@@ -82,6 +82,11 @@ faux, incertains et de cartes non jugées, et surtout le **taux de recommandatio
 disruptives fausses** : parmi les recommandations d'isoler ou de bloquer qui ont été
 jugées, la part fausse. (`GET /api/report?since=7d` renvoie la même chose.)
 
+Les cartes d'exercice n'y entrent pas (B2, 16/10) : une carte dont la VM était couverte par la
+fenêtre d'un injecteur (Annatar, puis Gothmog) porte `source: exercise` et le rapport la compte
+à part (« N exercise card(s) left out »). Un compte créé à la main pour un test, comme celui du
+16/10 sur bree, n'est pas un exercice déclaré : il compte, d'où la note du verdict.
+
 Une carte non jugée n'entre pas dans le taux. Un taux calculé sur trois cartes ne dit rien :
 le rapport donne aussi les effectifs.
 

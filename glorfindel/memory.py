@@ -39,6 +39,10 @@ class CycleMemory:
                 "outcome": str(cycle.get("outcome", "")),
                 "signal_id": cycle.get("signal_id", ""),
                 "run_id": cycle.get("run_id", ""),
+                # B2: `exercise` or `real` (eregion_core/exercise.py). Recorded, not yet
+                # shown to the model nor used to filter the retrieval.
+                "source": cycle.get("source", ""),
+                "exercise_run": cycle.get("exercise_run", ""),
                 "event": cycle.get("event", ""),
                 "detection_s": cycle.get("detection_s", 0),
                 "action_s": cycle.get("action_s", 0),

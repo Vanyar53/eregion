@@ -1049,19 +1049,38 @@ async def set_verdict(esc_id: str, body: dict) -> dict:
     return {"ok": True, "verdict": e["verdict"]}
 
 
+def _since_start(since: str):
+    """'7d', '24h', '4w' → the datetime that far back; 'all' → None. Raises ValueError."""
+    from datetime import datetime, timedelta, timezone
+    if since == "all":
+        return None
+    units = {"h": "hours", "d": "days", "w": "weeks"}
+    try:
+        return datetime.now(timezone.utc) - timedelta(**{units[since[-1]]: int(since[:-1])})
+    except (KeyError, ValueError, IndexError):
+        raise ValueError("since: a number followed by h, d or w (7d, 24h, 4w), or 'all'")
+
+
 @app.get("/api/report")
 async def observation_report(since: str = "7d") -> dict:
     """The observation report: verdicts on recommendations, false disruptive rate."""
-    from datetime import datetime, timedelta, timezone
     from glorfindel import escalations as esc_module
-    start = None
-    if since != "all":
-        units = {"h": "hours", "d": "days", "w": "weeks"}
-        try:
-            start = datetime.now(timezone.utc) - timedelta(**{units[since[-1]]: int(since[:-1])})
-        except (KeyError, ValueError, IndexError):
-            return {"error": "since: a number followed by h, d or w (7d, 24h, 4w), or 'all'"}
+    try:
+        start = _since_start(since)
+    except ValueError as exc:
+        return {"error": str(exc)}
     return esc_module.observation_report(start)
+
+
+@app.get("/api/to-judge")
+async def to_judge(since: str = "7d") -> dict:
+    """The decision cards still waiting for a verdict (exercises left out), newest first."""
+    from glorfindel import escalations as esc_module
+    try:
+        start = _since_start(since)
+    except ValueError as exc:
+        return {"error": str(exc)}
+    return {"cards": esc_module.to_judge(start)}
 
 
 @app.get("/api/audit/{vm_name}")

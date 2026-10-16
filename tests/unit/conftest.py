@@ -103,3 +103,9 @@ def no_local_glorfindel_config(monkeypatch):
     """
     import glorfindel.config as config
     monkeypatch.setattr(config, "_DEFAULT_PATHS", [])
+
+
+@pytest.fixture(autouse=True)
+def isolated_exercise_windows(tmp_path, monkeypatch):
+    """B2: the injectors' exercise windows live under tmp, never the real runs/exercises."""
+    monkeypatch.setenv("EREGION_EXERCISES_DIR", str(tmp_path / "exercises"))

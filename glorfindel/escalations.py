@@ -66,6 +66,8 @@ def record(
     confidence: float = 0.0,
     action_params: dict | None = None,
     rule_name: str = "",
+    source: str = "",
+    exercise_run: str = "",
 ) -> str:
     """Append an escalation and return its id.
 
@@ -80,6 +82,10 @@ def record(
         FIRST triage is preserved (`first_reason` / `first_suggested_steps`).
     This stops the re-decide output from being silently discarded on a persistent
     finding (the stale-card behaviour seen in the field).
+
+    `source` (B2, eregion_core/exercise.py): `exercise` when an injector's window covers
+    this VM, else `real` (empty on older cards = real). It is part of the dedup key: a
+    real detection never merges into a pending exercise card, nor the reverse.
     """
     rid_lower = resource_id.lower()
     now = datetime.now(timezone.utc).isoformat()
@@ -98,6 +104,7 @@ def record(
                 and e.get("resource_id", "").lower() == rid_lower
                 and e.get("action") == action
                 and e.get("escalation_type") == escalation_type
+                and (e.get("source") or "real") == (source or "real")
             ):
                 e["occurrences"] = int(e.get("occurrences", 1)) + 1
                 e["last_seen"] = now
@@ -140,6 +147,8 @@ def record(
         "confidence": confidence,
         "action_params": action_params or {},
         "rule_name": rule_name,
+        "source": source,
+        "exercise_run": exercise_run,
         "status": "pending",
         "resolved_at": None,
     }
@@ -400,7 +409,8 @@ def is_decision(e: dict) -> bool:
 
 def observation_report(since: datetime | None = None) -> dict:
     """Counts of the operator's verdicts on decision cards since `since` (all if None).
-    A card counts once, however many times it re-fired (its `occurrences`)."""
+    A card counts once, however many times it re-fired (its `occurrences`). An exercise
+    card (B2: an injector's window covered the VM) is left out — counted in `exercises`."""
     def bucket() -> dict:
         return {"right": 0, "wrong": 0, "unsure": 0, "unjudged": 0}
 
@@ -408,6 +418,7 @@ def observation_report(since: datetime | None = None) -> dict:
     by_rule: dict[str, dict] = {}
     disruptive = bucket()
     cards = 0
+    exercises = 0
     for e in all_escalations():
         if not is_decision(e):
             continue
@@ -418,6 +429,9 @@ def observation_report(since: datetime | None = None) -> dict:
                     continue
             except ValueError:
                 continue
+        if e.get("source") == "exercise":
+            exercises += 1
+            continue
         cards += 1
         v = e.get("verdict") if e.get("verdict") in VERDICTS else "unjudged"
         by_action.setdefault(e.get("action") or "?", bucket())[v] += 1
@@ -428,6 +442,7 @@ def observation_report(since: datetime | None = None) -> dict:
     return {
         "since": since.isoformat() if since else None,
         "cards": cards,
+        "exercises": exercises,
         "judged": sum(b["right"] + b["wrong"] + b["unsure"] for b in by_action.values()),
         "by_action": by_action,
         "by_rule": by_rule,

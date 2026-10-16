@@ -221,6 +221,20 @@ MUTANTS = [
      'role_definition_name = "Reader"', 'role_definition_name = "Contributor"'),
     ("M56", "empty service-principal vars stay set (H0: managed identity unreachable)", "glorfindel/cli.py",
      "    for k in dropped:\n        del environ[k]\n", ""),
+    # B2 (storage side): an exercise window labels only what it names, for a bounded time.
+    ("M57", "a window labels every VM, not its targets (B2)", "eregion_core/exercise.py",
+     "    if resource_id.lower() not in (window.get(\"targets\") or []):\n        return False\n", ""),
+    ("M58", "a window never closed never lapses (B2)", "eregion_core/exercise.py",
+     "    end = _parse(window.get(\"end\")) or expires\n    # A window closed late still lapses at its expiry.\n"
+     "    last = min(end, expires) + timedelta(seconds=GRACE_AFTER_S)\n",
+     "    end = _parse(window.get(\"end\")) or when\n    last = end + timedelta(seconds=GRACE_AFTER_S)\n"),
+    ("M59", "the observation report counts exercise cards (B2)", "glorfindel/escalations.py",
+     "            exercises += 1\n            continue\n", "            exercises += 1\n"),
+    ("M60", "an exercise card absorbs a real detection (B2)", "glorfindel/escalations.py",
+     "                and (e.get(\"source\") or \"real\") == (source or \"real\")\n", ""),
+    ("M61", "an Annatar run never closes its window (B2)", "annatar/runner/engine.py",
+     "        try:\n            return self._run_enrolled(scenario, executor, run_id)\n        finally:\n            close_window(run_id)\n",
+     "        return self._run_enrolled(scenario, executor, run_id)\n"),
 ]
 
 # Mutants measured by other tests than the invariants (their lot's own).
@@ -231,6 +245,7 @@ TESTS["M51"] = "tests/unit/test_agent_nodes.py -k raises"
 TESTS["M52"] = "tests/unit/test_glorfindel.py -k remembered"
 TESTS["M53"] = "tests/unit/test_readiness.py -k refused"
 TESTS.update({mid: "tests/unit/test_glorfindel_host.py" for mid in ("M54", "M55", "M56")})
+TESTS.update({mid: "tests/unit/test_exercise.py" for mid in ("M57", "M58", "M59", "M60", "M61")})
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

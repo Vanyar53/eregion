@@ -1293,6 +1293,8 @@ def report(since_text: str, as_json: bool):
         console.print(table)
     if r["cards"] and r["judged"] < r["cards"]:
         console.print(f"[dim]{r['cards'] - r['judged']} card(s) not judged: glorfindel verdict <id> right|wrong|unsure[/dim]")
+    if r.get("exercises"):
+        console.print(f"[dim]{r['exercises']} exercise card(s) left out (an injector's window covered the VM)[/dim]")
 
 
 @cli.command()

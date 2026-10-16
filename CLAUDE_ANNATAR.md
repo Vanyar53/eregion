@@ -53,8 +53,10 @@ Tu es spécialisé sur l'agent offensif. Lis ce fichier en début de session.
 - **R2 (0.x)** : adaptateur Stratus Red Team (cycle `warmup`, `detonate`, `revert`, `cleanup`),
   avec l'ingestion des Activity Logs : Stratus attaque le plan de contrôle, que Glorfindel ne lit
   pas encore, et son `warmup` crée sa propre VM.
-- **Marquage des exercices (B2, 15/10)** : l'injecteur écrit sa fenêtre d'exercice dans un
-  fichier que le `watch` de Glorfindel lit ; chaque cycle porte sa source (`exercise` / `real`).
+- **Marquage des exercices (B2, ✅ côté stockage 16/10)** : `Engine.run` ouvre une fenêtre
+  (`eregion_core/exercise.py`, `runs/exercises/<run_id>.json`) avant le setup et la ferme dans
+  un `finally` ; Glorfindel en tire la source de chaque cycle (`exercise` / `real`). Tout futur
+  injecteur (adaptateur Atomic de R1, Gothmog) fait de même — mutants M57–M61.
 - **O0 (0.3, ✅ 14/10)** : le périmètre et le garde-fou de cible vivent dans
   `eregion_core/inscription.py` (`annatar/safety/guard.py` supprimé, `annatar/campaign/scope.py`
   ne garde que `Budget`). Tags `eregion-target=<banc>` + `eregion-zone` sur la VM ET son groupe

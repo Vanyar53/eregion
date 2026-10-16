@@ -14,6 +14,7 @@ from annatar.runner.parser import ScenarioParser
 from annatar.runner.report import RunReport
 from eregion_core.inscription import check_target
 from annatar.signals.emitter import SignalEmitter
+from eregion_core.exercise import close_window, open_window
 
 console = Console()
 
@@ -106,6 +107,20 @@ class Engine:
                 )
                 return RunOutcome(run_id, "unknown", error="preflight failed")
 
+        # B2: an exercise window before the first touch of the target (setup included),
+        # closed whatever happens — what Glorfindel sees on this VM meanwhile is labelled
+        # `exercise` (eregion_core/exercise.py).
+        open_window(run_id, injector="annatar", kind="technique",
+                    experiment=f"{scenario.mitre} {scenario.name}",
+                    targets=[executor.resource_id])
+        try:
+            return self._run_enrolled(scenario, executor, run_id)
+        finally:
+            close_window(run_id)
+
+    def _run_enrolled(self, scenario, executor, run_id: str) -> RunOutcome:
+        """The run once its target is enrolled and ready: setup, integrity check, steps,
+        attack_started, then the wait for Glorfindel's result."""
         emitter = SignalEmitter(
             run_id=run_id,
             scenario_name=scenario.name,

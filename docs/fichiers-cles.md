@@ -20,6 +20,11 @@ technique_catalog.yaml          → CONTRAT PARTAGÉ Annatar↔Glorfindel (boucl
                                    Annatar. status: implemented | planned. Versionné (≠ config locale) ;
                                    monté en Docker (compose) + COPY Dockerfile (image autonome).
 
+eregion_core/exercise.py        → B2 : fenêtres d'exercice des injecteurs. Annatar en ouvre une avant de toucher sa
+                                   cible (setup compris) et la ferme en fin de run : runs/exercises/<run_id>.json
+                                   (run_id, injector, kind, experiment, targets, start, end, expires ; ou
+                                   EREGION_EXERCISES_DIR). Glorfindel en tire la source d'un cycle (exercise/real).
+
 glorfindel/
   config.py             → GlorfindelConfig + load_glorfindel_config() — charge glorfindel-config.yaml
                           ExceptionConfig.is_excluded(asset_name, rule_name) — opt-out fnmatch

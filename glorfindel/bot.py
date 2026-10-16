@@ -21,6 +21,11 @@ _THREADS_STORE = Path.home() / ".glorfindel" / "bot_threads.json"
 # answered « interaction failed » (16/10).
 _MESSAGES_STORE = Path.home() / ".glorfindel" / "bot_messages.json"
 _RESTORE_DAYS = 14
+# escalation id → the card state its Discord message last showed (status|verdict|count).
+# The bot only posted new cards: a card acknowledged or judged in the War Room kept live
+# buttons in Discord, and repeats never showed (16/10).
+_SYNCED_STORE = Path.home() / ".glorfindel" / "bot_synced.json"
+_SYNC_EVERY = 3  # watch-loop turns (5 s each) between two syncs of the posted messages
 
 
 def _load_posted() -> set[str]:
@@ -163,6 +168,36 @@ def _views_to_restore(escs: list[dict], messages: dict[str, int], now=None) -> l
     return out
 
 
+def _load_synced() -> dict[str, str]:
+    if _SYNCED_STORE.exists():
+        try:
+            return {k: str(v) for k, v in json.loads(_SYNCED_STORE.read_text()).items()}
+        except (ValueError, AttributeError):
+            return {}
+    return {}
+
+
+def _save_synced(synced: dict[str, str]) -> None:
+    _SYNCED_STORE.parent.mkdir(parents=True, exist_ok=True)
+    _SYNCED_STORE.write_text(json.dumps(synced))
+
+
+def _card_signature(esc: dict) -> str:
+    return f"{esc.get('status', '')}|{esc.get('verdict') or ''}|{int(esc.get('occurrences') or 1)}"
+
+
+def _card_state_line(esc: dict) -> str:
+    """What became of the card, wherever it was handled (Discord, War Room, CLI)."""
+    parts = []
+    if esc.get("verdict"):
+        parts.append(f"jugée {esc['verdict']}")
+    parts.append("acquittée" if esc.get("status") == "resolved" else "en attente")
+    n = int(esc.get("occurrences") or 1)
+    if n > 1:
+        parts.append(f"{n}× (dernière : {str(esc.get('last_seen') or '')[11:16]} UTC)")
+    return " · ".join(parts)
+
+
 def _glorfindel_bin() -> str:
     """Find the glorfindel CLI binary next to the current Python."""
     candidate = Path(sys.executable).parent / "glorfindel"
@@ -295,6 +330,9 @@ class _VerdictButton(discord.ui.Button):
         await interaction.followup.send(
             f"{_VERDICT_WORDS[self.verdict]} — jugé par **{interaction.user.display_name}**"
         )
+        remaining = [e for e in esc_module.pending() if e["resource_id"] == self.esc["resource_id"]]
+        if not remaining and isinstance(interaction.channel, discord.Thread):
+            await interaction.channel.edit(archived=True, reason="All escalations handled")
 
 
 class EscalationView(discord.ui.View):
@@ -349,6 +387,28 @@ class EscalationView(discord.ui.View):
         )
 
 
+def _build_embed(esc: dict) -> discord.Embed:
+    color = discord.Color.red() if esc.get("escalation_type") == "destructive_action" else discord.Color.orange()
+    if esc.get("status") == "resolved":
+        color = discord.Color.dark_grey()
+    description, fields = _embed_body(esc)
+    embed = discord.Embed(title=_embed_title(esc), description=description, color=color)
+    for name, value, inline in fields:
+        embed.add_field(name=name, value=value, inline=inline)
+    embed.add_field(name="État", value=_card_state_line(esc), inline=False)
+    embed.set_footer(text=f"Run: {esc.get('run_id', '')} · ID: {esc['id'][:8]}")
+    return embed
+
+
+def _build_view(esc: dict) -> EscalationView:
+    """A closed card keeps its buttons, greyed; a judged one, its verdict buttons greyed."""
+    view = EscalationView(esc)
+    for item in view.children:
+        if esc.get("status") == "resolved" or (esc.get("verdict") and isinstance(item, _VerdictButton)):
+            item.disabled = True  # type: ignore[attr-defined]
+    return view
+
+
 class GlorfindelBot(discord.Client):
     def __init__(self, channel_id: int, ping_role: int | None):
         intents = discord.Intents.default()
@@ -359,6 +419,7 @@ class GlorfindelBot(discord.Client):
         self._posted: set[str] = _load_posted()
         self._threads: dict[str, int] = _load_threads()
         self._messages: dict[str, int] = _load_messages()
+        self._synced: dict[str, str] = _load_synced()
 
     async def setup_hook(self) -> None:
         @self.tree.command(
@@ -461,9 +522,11 @@ class GlorfindelBot(discord.Client):
     async def _watch_escalations(self) -> None:
         channel: discord.TextChannel | None = None
         _console.print("[dim]Watch loop started[/dim]")
+        turn = 0
         while True:
             try:
                 await asyncio.sleep(5)
+                turn += 1
                 if channel is None:
                     channel = self.get_channel(self.channel_id)  # type: ignore
                     if channel is None:
@@ -492,6 +555,11 @@ class GlorfindelBot(discord.Client):
                         )
                     except Exception as e:
                         _console.print(f"[red]Bot post error: {e}[/red]")
+                if turn % _SYNC_EVERY == 0:
+                    try:
+                        await self._sync_messages()
+                    except Exception as e:
+                        _console.print(f"[red]Bot sync error: {e}[/red]")
             except Exception as e:
                 _console.print(f"[red]Watch loop error: {e}[/red]")
 
@@ -500,20 +568,53 @@ class GlorfindelBot(discord.Client):
     ) -> None:
         thread = await self._get_or_create_thread(channel, esc["resource_id"])
 
-        color = (
-            discord.Color.red()
-            if esc["escalation_type"] == "destructive_action"
-            else discord.Color.orange()
-        )
-        description, fields = _embed_body(esc)
-        embed = discord.Embed(title=_embed_title(esc), description=description, color=color)
-        for name, value, inline in fields:
-            embed.add_field(name=name, value=value, inline=inline)
-        embed.set_footer(text=f"Run: {esc['run_id']} · ID: {esc['id'][:8]}")
-        view = EscalationView(esc)
-        message = await thread.send(embed=embed, view=view)
+        message = await thread.send(embed=_build_embed(esc), view=_build_view(esc))
         self._messages[esc["id"]] = message.id
         _save_messages(self._messages)
+        self._synced[esc["id"]] = _card_signature(esc)
+        _save_synced(self._synced)
+
+    async def _sync_messages(self) -> int:
+        """Bring each posted message in line with its card: acknowledged or judged in the
+        War Room → buttons off and the state said; repeats → « N× »; a VM with nothing
+        left pending → its thread archived. Returns the number of messages edited."""
+        edited, touched = 0, set()
+        for esc, message_id in _views_to_restore(esc_module.all_escalations(), self._messages):
+            sig = _card_signature(esc)
+            if self._synced.get(esc["id"]) == sig:
+                continue
+            thread = await self._thread_of(esc.get("resource_id", ""))
+            if thread is None:
+                continue
+            try:
+                await thread.get_partial_message(message_id).edit(
+                    embed=_build_embed(esc), view=_build_view(esc))
+            except discord.HTTPException as exc:
+                _console.print(f"[yellow]Sync {esc['id'][:8]}: {exc}[/yellow]")
+                continue
+            self._synced[esc["id"]] = sig
+            edited += 1
+            touched.add(esc.get("resource_id", ""))
+        if edited:
+            _save_synced(self._synced)
+        pending_rids = {e.get("resource_id", "") for e in esc_module.pending()}
+        for rid in touched - pending_rids:
+            thread = await self._thread_of(rid)
+            if thread is not None and not thread.archived:
+                await thread.edit(archived=True, reason="All escalations handled")
+        return edited
+
+    async def _thread_of(self, resource_id: str):
+        tid = self._threads.get(resource_id)
+        if not tid:
+            return None
+        thread = self.get_channel(tid)
+        if thread is None:
+            try:
+                thread = await self.fetch_channel(tid)
+            except discord.HTTPException:
+                return None
+        return thread if isinstance(thread, discord.Thread) else None
 
 
 def run() -> None:

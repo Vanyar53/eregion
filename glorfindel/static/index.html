@@ -2498,6 +2498,7 @@ async function doVerdict(escId, verdict) {
     });
     const d = await r.json();
     if (d.error) { toast('✗ ' + d.error); return; }
+    await fetch(`/api/action/ack/${escId}`, { method: 'POST' });  // one click, like TO JUDGE
     toast(verdict === 'right' ? '✓ Marked right' : '✗ Marked wrong');
     refreshState();
     refreshObservation();

@@ -82,6 +82,7 @@ def test_a_verdict_from_discord_is_recorded():
 
     class _Interaction:
         response, followup = _Response(), _Followup()
+        channel = None
         user = type("U", (), {"display_name": "jonathan"})()
 
     async def click():
@@ -134,3 +135,57 @@ def test_a_posted_message_is_remembered_and_its_buttons_come_back_after_a_restar
     old = {"id": "old", "first_seen": (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()}
     recent = {"id": "new", "first_seen": datetime.now(timezone.utc).isoformat()}
     assert [e["id"] for e, _ in bot._views_to_restore([old, recent], {"old": 1, "new": 2})] == ["new"]
+
+
+def test_card_state_line_says_what_became_of_it():
+    assert bot._card_state_line({"status": "pending"}) == "en attente"
+    assert bot._card_state_line({"status": "resolved", "verdict": "right"}) == "jugée right · acquittée"
+    line = bot._card_state_line({"status": "pending", "occurrences": 3, "last_seen": "2026-10-16T14:05:00+00:00"})
+    assert line == "en attente · 3× (dernière : 14:05 UTC)"
+
+
+def test_a_card_handled_in_the_war_room_updates_its_discord_message():
+    """Acknowledged or judged in the War Room, a card kept live buttons in Discord; repeats
+    never showed. The bot now edits the message and archives the VM's thread (16/10)."""
+    import discord
+    esc_id = escalations.record("rule-ssh-brute-force-0123abcd", VM, "block_suspicious_ip",
+                                "mode_hold", "held", confidence=0.95)
+
+    class _Partial:
+        def __init__(self, log):
+            self.log = log
+
+        async def edit(self, embed, view):
+            self.log.append((embed, view))
+
+    class _Thread(discord.Thread):
+        def __init__(self):            # no Discord state: only what the sync uses
+            self.edits, self.archived, self.archive_calls = [], False, 0
+
+        def get_partial_message(self, mid):
+            return _Partial(self.edits)
+
+        async def edit(self, archived, reason):
+            self.archived, self.archive_calls = archived, self.archive_calls + 1
+
+    async def scenario():
+        b = bot.GlorfindelBot(channel_id=1, ping_role=None)
+        thread = _Thread()
+        b._threads = {VM: 99}
+        b.get_channel = lambda tid: thread
+        b._messages = {esc_id: 4242}
+        esc = next(e for e in escalations.all_escalations() if e["id"] == esc_id)
+        b._synced = {esc_id: bot._card_signature(esc)}
+        assert await b._sync_messages() == 0           # nothing changed: no edit
+        escalations.set_verdict(esc_id, "right", "")   # judged + acknowledged in the War Room
+        escalations.resolve(esc_id)
+        assert await b._sync_messages() == 1
+        assert await b._sync_messages() == 0           # synced once
+        return thread
+
+    thread = asyncio.run(scenario())
+    embed, view = thread.edits[0]
+    state = next(f.value for f in embed.fields if f.name == "État")
+    assert state == "jugée right · acquittée"
+    assert all(item.disabled for item in view.children)
+    assert thread.archived and thread.archive_calls == 1

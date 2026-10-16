@@ -66,6 +66,65 @@ def _cli_command(esc: dict) -> str:
     return f"glorfindel ack {esc_id}"
 
 
+# What a card asks for, as a recommendation: a held decision is not a done action. The
+# first real card of the pre-observation read « IP suspecte bloquée » for a block that
+# human_only had held (16/10) — _ACTION_LABELS are past participles, for what ran.
+_RECOMMEND_LABELS = {
+    "isolate_vm": "isoler la VM",
+    "release_isolation": "lever l'isolation",
+    "snapshot": "prendre un snapshot forensique",
+    "block_suspicious_ip": "bloquer l'IP suspecte",
+    "restore_from_backup": "restaurer depuis le backup",
+    "delete_resource": "supprimer la ressource",
+    "wipe_storage": "effacer le stockage",
+    "modify_network_rule": "modifier une règle réseau",
+    "escalate_permissions": "élever des permissions",
+}
+_RAN = {"verification_failed"}                   # the action ran; its check failed
+_ATTEMPTED = {"write_blocked", "action_failed"}  # tried, did not go through
+
+
+def _embed_title(esc: dict) -> str:
+    """Never a past participle for what did not run."""
+    action, etype = esc.get("action", ""), esc.get("escalation_type", "")
+    type_label = _ESCALATION_LABELS.get(etype, etype)
+    if etype in _RAN:
+        return f"🚨 {_ACTION_LABELS.get(action, action)} — {type_label}"
+    rec = _RECOMMEND_LABELS.get(action)
+    if etype in _ATTEMPTED:
+        return f"🚨 {(rec or action or '?').capitalize()} — {type_label}"
+    if not rec or not esc_module.is_decision(esc):
+        return f"🚨 {_ACTION_LABELS.get(action) or type_label[:1].upper() + type_label[1:]}"
+    return f"🚨 Recommandé : {rec} (non exécuté)"
+
+
+def _embed_body(esc: dict) -> tuple[str, list[tuple[str, str, bool]]]:
+    """The description and fields: the evidence to judge on (the model's explanation, the
+    IP a block targets, the rule, the confidence), then why it did not run."""
+    explanation = (esc.get("explanation") or "").strip()
+    reason = (esc.get("reason") or "").strip()
+    fields: list[tuple[str, str, bool]] = [
+        ("Action", f"`{esc.get('action') or '—'}`", True),
+        ("Ressource", f"`{(esc.get('resource_id') or '').split('/')[-1]}`", True),
+    ]
+    params = esc.get("action_params") or {}
+    if params.get("ip"):
+        target = params["ip"] + (f":{params['port']}" if params.get("port") else "")
+        fields.append(("Cible", f"`{target}`", True))
+    if esc.get("rule_name"):
+        fields.append(("Règle", f"`{esc['rule_name']}`", True))
+    if esc.get("confidence"):
+        fields.append(("Confiance", f"{round(float(esc['confidence']) * 100)} %", True))
+    type_label = _ESCALATION_LABELS.get(esc.get("escalation_type", ""), esc.get("escalation_type", ""))
+    fields.append(("Contexte", " · ".join(filter(None, [esc.get("ttp", ""), esc.get("severity", ""), type_label])), False))
+    if explanation and reason and reason != explanation:
+        fields.append(("Pourquoi rien n'est exécuté", reason[:1024], False))
+    if esc.get("suggested_steps"):
+        steps = "\n".join(f"• {s}" for s in esc["suggested_steps"][:3])
+        fields.append(("Prochaines étapes", steps[:1024], False))
+    return (explanation or reason)[:2048], fields
+
+
 def _glorfindel_bin() -> str:
     """Find the glorfindel CLI binary next to the current Python."""
     candidate = Path(sys.executable).parent / "glorfindel"
@@ -167,6 +226,38 @@ def _make_action_button(esc: dict) -> _ExecuteButton | None:
     return None
 
 
+_VERDICT_WORDS = {"right": "✓ Right", "wrong": "✗ Wrong", "unsure": "? Unsure"}
+
+
+class _VerdictButton(discord.ui.Button):
+    """The observation's verdict, from Discord (docs/observation.md): was the
+    recommendation right? Independent of the ack, like in the War Room."""
+
+    def __init__(self, esc: dict, verdict: str, style: discord.ButtonStyle) -> None:
+        super().__init__(
+            label=_VERDICT_WORDS[verdict],
+            style=style,
+            custom_id=f"glorfindel_verdict_{verdict}_{esc['id'][:8]}",
+            row=2,
+        )
+        self.esc = esc
+        self.verdict = verdict
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        try:
+            esc_module.set_verdict(self.esc["id"], self.verdict, "")
+        except (KeyError, ValueError) as exc:
+            await interaction.response.send_message(f"✗ {exc}", ephemeral=True)
+            return
+        for item in self.view.children:  # type: ignore[union-attr]
+            if isinstance(item, _VerdictButton):
+                item.disabled = True
+        await interaction.response.edit_message(view=self.view)  # type: ignore[union-attr]
+        await interaction.followup.send(
+            f"{_VERDICT_WORDS[self.verdict]} — jugé par **{interaction.user.display_name}**"
+        )
+
+
 class EscalationView(discord.ui.View):
     def __init__(self, esc: dict):
         super().__init__(timeout=None)
@@ -175,6 +266,10 @@ class EscalationView(discord.ui.View):
         btn = _make_action_button(esc)
         if btn:
             self.add_item(btn)
+        if esc_module.is_decision(esc):
+            self.add_item(_VerdictButton(esc, "right", discord.ButtonStyle.success))
+            self.add_item(_VerdictButton(esc, "wrong", discord.ButtonStyle.danger))
+            self.add_item(_VerdictButton(esc, "unsure", discord.ButtonStyle.secondary))
 
     @discord.ui.button(
         label="✓ Acknowledge",
@@ -351,37 +446,15 @@ class GlorfindelBot(discord.Client):
     ) -> None:
         thread = await self._get_or_create_thread(channel, esc["resource_id"])
 
-        label = _ACTION_LABELS.get(esc["action"], esc["action"])
-        type_label = _ESCALATION_LABELS.get(
-            esc["escalation_type"], esc["escalation_type"]
-        )
         color = (
             discord.Color.red()
             if esc["escalation_type"] == "destructive_action"
             else discord.Color.orange()
         )
-        embed = discord.Embed(
-            title=f"🚨 {label}",
-            description=esc["reason"][:2048],
-            color=color,
-        )
-        embed.add_field(name="Action", value=f"`{esc['action']}`", inline=True)
-        embed.add_field(
-            name="Ressource",
-            value=f"`{esc['resource_id'].split('/')[-1]}`",
-            inline=True,
-        )
-        parts = [esc.get("ttp", ""), esc.get("severity", ""), type_label]
-        embed.add_field(
-            name="Contexte",
-            value=" · ".join(filter(None, parts)),
-            inline=False,
-        )
-        if esc.get("suggested_steps"):
-            steps = "\n".join(f"• {s}" for s in esc["suggested_steps"][:3])
-            embed.add_field(
-                name="Prochaines étapes", value=steps[:1024], inline=False
-            )
+        description, fields = _embed_body(esc)
+        embed = discord.Embed(title=_embed_title(esc), description=description, color=color)
+        for name, value, inline in fields:
+            embed.add_field(name=name, value=value, inline=inline)
         embed.set_footer(text=f"Run: {esc['run_id']} · ID: {esc['id'][:8]}")
         view = EscalationView(esc)
         await thread.send(embed=embed, view=view)

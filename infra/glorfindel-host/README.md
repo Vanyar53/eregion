@@ -50,14 +50,25 @@ ses boutons) ; le webhook garde les notifications d'action. Un seul bot par
 La mémoire (ChromaDB) part vide sur la VM : la mémoire locale ne contient que des cycles
 d'exercice non marqués (B2), qui n'ont rien à faire dans une observation.
 
-## À mesurer au premier démarrage
+## Mesuré au premier démarrage (16/10)
 
-Rien de ceci n'est encore constaté (lecture de code et de doc = hypothèse) :
-
-- `DefaultAzureCredential` prend bien l'identité managée quand `AZURE_CLIENT_ID` est vide ;
-- `Reader` + `Log Analytics Reader` au niveau du groupe du banc suffisent à la découverte, à
-  l'audit (NSG, sauvegarde, calcul) et aux règles ;
-- la construction de l'image tient dans les 4 Go d'une B2als_v2.
+- **Identité managée** : prise par `DefaultAzureCredential` seulement depuis le correctif de la
+  CLI (`_drop_empty_service_principal_env`). Avant, docker compose passait `AZURE_CLIENT_ID=""`,
+  qu'azure-identity prend pour une variable définie : `ClientSecretCredential("")` levait et
+  la découverte échouait (« client_id should be the id of a Microsoft Entra application »).
+- **Droits** : `Reader` + `Log Analytics Reader` suffisent — découverte (bree vue), audit
+  complet (NSG, calcul, coffre, détection, règles : « All remediation capabilities confirmed »),
+  règles. Seuls rôles de l'identité : ces deux-là.
+- **Image** : construite en 2 min 44 s sur la VM (1,3 Go), 4 Go de RAM suffisent.
+- **Accès** : SSH depuis l'IP de l'opérateur seulement ; War Room injoignable en direct ; par le
+  tunnel, 401 sans jeton ou avec un faux, 200 avec le bon.
+- **Chaîne complète** : un compte créé puis supprimé sur bree → règle T1136 → décision (confiance
+  0,35 : snapshot recommandé, escalade) → carte dans le fil Discord de bree, en ~2 min ; rien
+  d'exécuté (`human_only`, lecture seule, aucun snapshot créé).
+- **Clé SSH** : celle de `admin_ssh_public_key` ; si ton agent SSH en propose une autre,
+  `HOST_SSH_KEY=~/.ssh/<clé>` sur les cibles `glorfindel-host-*`.
+- **Taille** : B2s sans capacité en francecentral, aucun quota Basv2 (B2als_v2) sur
+  l'abonnement : la VM tourne en D2als_v6 (`TF_VAR_vm_size`, ~61 €/mois) en attendant le quota.
 
 L'état Terraform est local (`infra/glorfindel-host/terraform.tfstate`, ignoré par git),
 séparé de celui de Celebrimbor.

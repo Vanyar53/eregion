@@ -38,6 +38,12 @@ locals {
     "annatar-test" = "true"
   }
 
+  # Une VM `enrolled: false` (config.yaml) porte les mêmes tags SAUF ceux de l'inscription :
+  # sans eregion-target ni annatar-test, eregion_core/inscription.py refuse toute injection
+  # contre elle (bree, la VM de la pré-observation). Seule la VM compte pour l'inscription.
+  inscription_tags = ["eregion-target", "eregion-zone", "annatar-test"]
+  unenrolled_tags  = { for k, v in local.common_tags : k => v if !contains(local.inscription_tags, k) }
+
   # ── Hôtes baseline ─────────────────────────────────────────────────────────
   vm_defaults = {
     vm_size      = local.cfg.vm_size
@@ -50,6 +56,7 @@ locals {
   # Knobs par hôte (dans config.yaml vms.<clé>) :
   #   enabled   (défaut true)  → false = hôte NON déployé (gate opt-in, ex. honeypot à la demande).
   #   always_on (défaut false) → true  = pas d'auto-shutdown (VM 24/7, ex. honeypot long-run).
+  #   enrolled  (défaut true)  → false = pas de tag d'inscription (aucun injecteur ne la vise).
   # Un hôte enabled:false disparaît de la map → aucune de ses ressources (for_each) n'est créée.
   vms = {
     for key, override in try(local.cfg.vms, {}) :

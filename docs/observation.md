@@ -32,11 +32,12 @@ environnements dans le dépôt public — ni nom, ni identifiant, ni rapport.
 
 ## Pré-observation sur le banc (H0)
 
-Avant le parc réel, l'observation tourne sur le banc (décision du 15/10) : gondolin allumée en
-continu (`always_on` dans `infra/terraform/config.yaml`) et Glorfindel sur une petite VM dédiée,
+Avant le parc réel, l'observation tourne sur le banc (décision du 15/10) : bree, une VM du banc
+allumée en continu et non inscrite (`always_on`, `enrolled: false` dans
+`infra/terraform/config.yaml`), et Glorfindel sur une petite VM dédiée,
 pour que le `watch` n'ait pas de trou (`infra/glorfindel-host/README.md`). Une VM allumée mais vide ne produit presque aucun bruit
-bénin : quatre semaines sans fausse alerte n'y prouveraient rien. Gondolin porte donc une vraie
-charge — un service utilisé, des crons, les mises à jour automatiques, la sauvegarde de la nuit.
+bénin : quatre semaines sans fausse alerte n'y prouveraient rien. Bree porte donc une vraie
+charge — un petit site, des crons, les mises à jour automatiques, la sauvegarde de la nuit.
 Les exercices d'Annatar et de Gothmog sont marqués (B2) et sortent du rapport. Cette
 pré-observation démarre l'outillage et calibre le bruit ; elle ne compte pas pour le critère
 « quatre semaines sur un parc réel ».

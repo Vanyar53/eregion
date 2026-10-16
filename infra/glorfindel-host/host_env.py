@@ -2,12 +2,11 @@
 
     python infra/glorfindel-host/host_env.py infra/glorfindel-host/host.env   # .envrc loaded
 
-Only what the VM needs: the subscription, the model's key, the webhook. Never an Azure
-secret — the VM authenticates by its managed identity, and AZURE_CLIENT_ID alone would
-make DefaultAzureCredential look for a user-assigned identity that doesn't exist. Never
-the Discord bot token: with it set, escalations wait for a bot (`glorfindel bot`) that the
-VM doesn't run, and the webhook stays silent. Always GLORFINDEL_READ_ONLY=1, and a War
-Room token drawn here. Refuses to overwrite an existing file (the token would change).
+Only what the VM needs: the subscription, the model's key, the Discord bot (the VM runs
+it: `docker compose --profile bot`) and the webhook. Never an Azure secret — the VM
+authenticates by its managed identity, and AZURE_CLIENT_ID alone would make
+DefaultAzureCredential look for a user-assigned identity that doesn't exist. Always
+GLORFINDEL_READ_ONLY=1, and a War Room token drawn here. Refuses to overwrite an existing file (the token would change).
 Prints the keys it wrote, never a value.
 """
 from __future__ import annotations
@@ -19,7 +18,8 @@ from pathlib import Path
 
 COPIED = ("AZURE_SUBSCRIPTION_ID", "AZURE_WORKSPACE_ID", "ANTHROPIC_API_KEY",
           "GLORFINDEL_LLM_MODEL", "GLORFINDEL_LLM_BASE_URL", "OPENAI_API_KEY",
-          "GLORFINDEL_WEBHOOK_URL", "GLORFINDEL_BACKUP_VAULT")
+          "GLORFINDEL_WEBHOOK_URL", "GLORFINDEL_BACKUP_VAULT",
+          "DISCORD_BOT_TOKEN", "DISCORD_CHANNEL_ID", "DISCORD_PING_ROLE")
 REQUIRED = ("AZURE_SUBSCRIPTION_ID", "ANTHROPIC_API_KEY")
 
 

@@ -161,7 +161,7 @@ help:
 	@echo "  make glorfindel-host-env                     host.env depuis ton .envrc (sans secret Azure)"
 	@echo "  make glorfindel-host-push                    host.env + config (human_only forcé) sur la VM"
 	@echo "  make glorfindel-host-report [SINCE=7d]       Rapport d'observation"
-	@echo "  make celebrimbor-workload                    Charge de gondolin (site + routine d'admin)"
+	@echo "  make celebrimbor-workload                    Charge de bree (site + routine d'admin)"
 	@echo "  make glorfindel-host-start / -stop / -logs   Glorfindel + War Room sur la VM"
 	@echo "  make glorfindel-host-tunnel                  War Room → http://localhost:7007"
 	@echo ""
@@ -381,11 +381,11 @@ celebrimbor-output:
 	@$(TF) workspace select $(INSTANCE)
 	@$(TF) output -raw glorfindel_config_fragment
 
-# H0 : la charge réelle de gondolin (petit site + routine d'admin), par Run Command —
+# H0 : la charge réelle de bree (petit site + routine d'admin), par Run Command —
 # jamais par le custom_data (le changer remplace la VM). Idempotent.
 celebrimbor-workload:
 	az vm run-command invoke -g rg-celebrimbor$(if $(filter-out default,$(INSTANCE)),-$(INSTANCE)) \
-	  -n vm-celebrimbor-gondolin$(if $(filter-out default,$(INSTANCE)),-$(INSTANCE)) \
+	  -n vm-celebrimbor-$(or $(VM),bree)$(if $(filter-out default,$(INSTANCE)),-$(INSTANCE)) \
 	  --command-id RunShellScript --scripts @infra/terraform/scripts/workload.sh \
 	  --query 'value[0].message' -o tsv | tail -5
 
@@ -440,9 +440,10 @@ glorfindel-host-push:
 	@echo "  host.env et glorfindel-config.yaml (human_only) poussés sur $(HOST_IP)"
 
 glorfindel-host-start:
-	$(HOST_SSH) 'test -f .eregion-host-ready && cd eregion && git pull -q --ff-only && make -s build-glorfindel && docker compose up -d watch war-room'
+	$(HOST_SSH) 'test -f .eregion-host-ready && cd eregion && git pull -q --ff-only && make -s build-glorfindel && docker compose --profile bot up -d watch war-room bot'
 	@echo ""
-	@echo "  ⚠ Arrête le Glorfindel local (make glorfindel-stop) : deux watch sur le même banc = cartes en double."
+	@echo "  ⚠ Arrête le Glorfindel local (make glorfindel-stop) : deux watch sur le même banc = cartes en double ;"
+	@echo "    et aucun autre bot avec le même DISCORD_BOT_TOKEN."
 	@echo "  War Room → make glorfindel-host-tunnel, puis http://localhost:7007/?token=<GLORFINDEL_WARROOM_TOKEN>"
 
 glorfindel-host-stop:

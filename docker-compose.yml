@@ -53,6 +53,27 @@ services:
         - action: rebuild
           path: ./pyproject.toml
 
+  # Bot Discord (escalades dans des fils par VM, boutons). Profil `bot` : ne démarre que si on
+  # le demande (`docker compose --profile bot up -d`, ce que fait la VM de Glorfindel, H0) —
+  # un seul bot par DISCORD_BOT_TOKEN. Avec le jeton défini, le webhook des escalades se tait.
+  bot:
+    image: eregion-glorfindel
+    container_name: eregion-bot
+    command: glorfindel bot
+    restart: unless-stopped
+    profiles: ["bot"]
+    environment:
+      <<: *env
+    volumes:
+      - ./runs:/app/runs
+      - ./glorfindel/rules:/app/glorfindel/rules
+      - ${HOME}/.glorfindel:/root/.glorfindel
+      - ${HOME}/.cache/chroma:/root/.cache/chroma
+      - ./glorfindel-config.yaml:/app/glorfindel-config.yaml:ro
+      - ./technique_catalog.yaml:/app/technique_catalog.yaml:ro
+    depends_on:
+      - watch
+
   war-room:
     image: eregion-glorfindel
     container_name: eregion-war-room

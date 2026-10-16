@@ -1,4 +1,5 @@
-# Glorfindel hébergé (H0) — une petite VM où Glorfindel tourne en continu, War Room comprise.
+# Glorfindel hébergé (H0) — une petite VM où Glorfindel tourne en continu, War Room et bot
+# Discord compris (groupe rg-glorfindel).
 #
 # État Terraform séparé de Celebrimbor : détruire le banc ne détruit pas le défenseur, et
 # inversement. La VM vit hors du groupe du banc, sans tag `eregion-target` et sans DCR vers le
@@ -24,7 +25,7 @@ provider "azurerm" {
 }
 
 locals {
-  name = "glorfindel-host"
+  name = "glorfindel"
   tags = {
     project    = local.name
     managed-by = "terraform"

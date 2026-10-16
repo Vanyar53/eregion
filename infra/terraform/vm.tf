@@ -5,7 +5,7 @@ resource "azurerm_linux_virtual_machine" "baseline" {
   location            = azurerm_resource_group.celebrimbor.location
   size                = each.value.vm_size
   admin_username      = local.cfg.admin_username
-  tags                = local.common_tags
+  tags                = try(each.value.enrolled, true) ? local.common_tags : local.unenrolled_tags
 
   network_interface_ids = [azurerm_network_interface.celebrimbor_vm[each.key].id]
 

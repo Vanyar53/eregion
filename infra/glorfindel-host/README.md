@@ -1,9 +1,10 @@
 # Glorfindel hébergé (H0)
 
-Une petite VM où Glorfindel tourne en continu, War Room comprise : le `docker compose` de la
-racine (`watch` + `war-room`), sur la même image et le même état. Premier usage : la
-**pré-observation** sur le banc (`ROADMAP.md`, lot H0 ; `docs/observation.md`) — gondolin
-allumée en continu avec une vraie charge, Glorfindel qui décide, toi qui juges chaque carte.
+Une petite VM, dans le groupe `rg-glorfindel`, où Glorfindel tourne en continu, War Room et
+bot Discord compris : le `docker compose` de la racine (`watch`, `war-room`, et `bot` par son
+profil), sur la même image et le même état. Premier usage : la **pré-observation** sur le banc
+(`ROADMAP.md`, lot H0 ; `docs/observation.md`) — bree allumée en continu avec une vraie
+charge, Glorfindel qui décide, toi qui juges chaque carte.
 
 ## Ce que la VM est, et n'est pas
 
@@ -42,9 +43,9 @@ Au quotidien : le tunnel, puis les boutons **✓ Right** / **✗ Wrong** des car
 (`docs/observation.md`) ; chaque semaine, `make glorfindel-host-report`. Rien à faire sur la
 VM elle-même.
 
-Les alertes passent par le webhook (`GLORFINDEL_WEBHOOK_URL`). `host.env` ne reprend pas
-`DISCORD_BOT_TOKEN` : avec lui, les escalades attendent le bot (`glorfindel bot`), que la VM ne
-fait pas tourner, et le webhook se tait.
+Les escalades arrivent dans Discord par le bot, qui tourne sur la VM (un fil par VM, avec
+ses boutons) ; le webhook garde les notifications d'action. Un seul bot par
+`DISCORD_BOT_TOKEN` : n'en lance pas d'autre en local.
 
 La mémoire (ChromaDB) part vide sur la VM : la mémoire locale ne contient que des cycles
 d'exercice non marqués (B2), qui n'ont rien à faire dans une observation.

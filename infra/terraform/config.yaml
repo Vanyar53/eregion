@@ -38,15 +38,21 @@ os_disk:        # disque OS des VMs (surcharge par hôte = bloc complet ; type :
 # vms + clusters : clé = nom propre Tolkien, format bloc, champ `kind`.
 #
 # Knobs vms : kind (vm), enabled (défaut true), always_on (défaut false → 24/7,
-# pas d'auto-shutdown), vm_size / disk_size_gb (défauts globaux surchargeables).
+# pas d'auto-shutdown), enrolled (défaut true ; false = pas de tag d'inscription, aucun
+# injecteur ne la vise), vm_size / disk_size_gb (défauts globaux surchargeables).
 # gondolin : cité défendue par Glorfindel. himring : forteresse-frontière → honeypot
 # (SSH exposé, always_on, opt-in via enabled:true ; ⚠ coût 24/7).
 vms:
   gondolin:
     kind: vm
-    # H0 (16/10) : allumée en continu pour la pré-observation, avec une vraie charge
-    # (scripts/workload.sh, `make celebrimbor-workload`). ⚠ coût 24/7 (~71 €/mois).
+  # bree : le village ordinaire, la vie de tous les jours → la VM de la pré-observation (H0) :
+  # allumée en continu, une vraie charge (scripts/workload.sh, `make celebrimbor-workload`),
+  # PAS inscrite (enrolled: false → ni eregion-target ni annatar-test : aucun injecteur ne la
+  # vise ; les exercices restent sur gondolin). ⚠ coût 24/7 (~71 €/mois en D2as_v6).
+  bree:
+    kind:      vm
     always_on: true
+    enrolled:  false
   himring:
     kind:      vm
     enabled:   false

@@ -3,7 +3,7 @@
 ## Concept
 Plateforme OSS (Apache 2.0) de défense active cloud : un SOC pour les charges cloud des équipes sans SOC, prouvé par l'attaque et par la panne. Trois agents en boucle :
 - **Glorfindel** (bleu) — **le produit** : détecte, répond de façon autonome, vérifie, apprend via ChromaDB
-- **Annatar** (rouge) simule des attaques réelles sur l'infra cloud (MITRE ATT&CK) ; devient des adaptateurs vers des bibliothèques publiques (R1 Stratus Red Team, R2 Atomic Red Team)
+- **Annatar** (rouge) simule des attaques réelles sur l'infra cloud (MITRE ATT&CK) ; devient des adaptateurs vers des bibliothèques publiques (R1 Atomic Red Team, R2 Stratus Red Team)
 - **Gothmog** (pannes, *à venir — G0*) : pannes déclarées en code, par un moteur public (Chaos Studio d'abord) ; éprouve d'abord Glorfindel (bruit bénin, dépendances, reprise)
 
 L'atelier autour : **Celebrimbor** (`infra/terraform/`) construit et inscrit le banc ; **Orodruin** (`infra/orodruin/`, *à venir — O1*) héberge les injecteurs, contrat de garde-fous vérifié au démarrage.
@@ -11,7 +11,7 @@ L'atelier autour : **Celebrimbor** (`infra/terraform/`) construit et inscrit le 
 **Direction — huitième passe (13/10)** (détail : `ROADMAP.md`, « Vers la 1.0 ») :
 - **Finalité** : les incidents cloud courants contenus seuls, en quelques minutes, réversibles et vérifiés ; le reste à un humain, trié et expliqué ; la preuve à tout moment. Cinq indicateurs : temps pour contenir, part contenue seule, actions disruptives à tort, couverture des techniques cloud, âge de la dernière preuve (< 30 jours).
 - **Règle de production** (codée dès O0) : jamais de panne ni d'action destructive sur une charge réelle ; en production, techniques non destructives sur VM inscrites + chaîne complète sur une VM sentinelle vide ; destructif et pannes sur le banc ou le jumeau. Zones d'inscription : `bench`, `twin`, `production`.
-- **Jalon 0.3 — la boucle tourne** : socle O0 → E1 → O1 → R1 → G0 ; piste IA B1, B2 (élargi à la mémoire), IA0. **A1 (découpage d'`actions.py`, avec MC0) différé en 0.4+.** O1, R1, G0 (infra réelle), B1 (clé Mistral) et le tag `v0.2.0` se font avec Jonathan.
+- **Jalon 0.3 — la boucle tourne** : socle O0 → E1 → O1 → R1 → G0, et H0 (Glorfindel sur une VM dédiée, pré-observation) ; piste IA B2 (élargi à la mémoire), IA0 ; B1 après la 0.3. **A1 (découpage d'`actions.py`, avec MC0) différé en 0.4+.** O1, H0, R1, G0 (infra réelle) se font avec Jonathan ; décisions du 15/10 dans `ROADMAP.md` ; `v0.2.0` publiée le 15/10.
 - Le SaaS vient plus tard (1.x) ; Eregion tourne en local ou dans une VM.
 
 **Repo** : https://github.com/Vanyar53/eregion

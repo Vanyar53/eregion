@@ -266,7 +266,7 @@ Glorfindel est le produit ; le reste est l'atelier qui l'éprouve.
 | Composant | Rôle | Où | État |
 |---|---|---|---|
 | Glorfindel | détecter, enquêter, répondre ; son IA est l'IA sous test | `glorfindel/` | existe |
-| Annatar | attaques : ses scénarios aujourd'hui, puis des adaptateurs vers des bibliothèques publiques (R1 Stratus Red Team, R2 Atomic Red Team) | `annatar/`, interface d'injecteur dans `annatar/executors/` | existe, évolue |
+| Annatar | attaques : ses scénarios aujourd'hui, puis des adaptateurs vers des bibliothèques publiques (R1 Atomic Red Team, R2 Stratus Red Team) | `annatar/`, interface d'injecteur dans `annatar/executors/` | existe, évolue |
 | Gothmog | pannes déclarées en code, exécutées par un moteur public (Chaos Studio d'abord) | `gothmog/` | G0 |
 | Orodruin | hôte d'exécution jetable des injecteurs : identité limitée, sortie réseau limitée, contrat vérifié au démarrage, arrêt d'urgence | `infra/orodruin/`, état Terraform séparé | O1 |
 | Celebrimbor | construit et inscrit les cibles du banc | `infra/terraform/` | existe |

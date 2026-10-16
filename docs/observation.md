@@ -30,6 +30,17 @@ Le rapport compte.
 Les règles des environnements de test s'appliquent : lecture seule d'abord, et rien de ces
 environnements dans le dépôt public — ni nom, ni identifiant, ni rapport.
 
+## Pré-observation sur le banc (H0)
+
+Avant le parc réel, l'observation tourne sur le banc (décision du 15/10) : gondolin allumée en
+continu (`always_on` dans `infra/terraform/config.yaml`) et Glorfindel sur une petite VM dédiée,
+pour que le `watch` n'ait pas de trou. Une VM allumée mais vide ne produit presque aucun bruit
+bénin : quatre semaines sans fausse alerte n'y prouveraient rien. Gondolin porte donc une vraie
+charge — un service utilisé, des crons, les mises à jour automatiques, la sauvegarde de la nuit.
+Les exercices d'Annatar et de Gothmog sont marqués (B2) et sortent du rapport. Cette
+pré-observation démarre l'outillage et calibre le bruit ; elle ne compte pas pour le critère
+« quatre semaines sur un parc réel ».
+
 ## Juger chaque carte
 
 Pour chaque carte de décision, juger la recommandation **comme si elle avait été

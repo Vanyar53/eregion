@@ -171,7 +171,8 @@ L'escalade porte `action_params` (dict, vide par défaut) pour les actions param
 
 **Bot Discord** (`glorfindel bot`, `DISCORD_BOT_TOKEN`) — bidirectionnel :
 - Un fil Discord par `resource_id` (`🔴 vm-name`), créé à la première escalade pour la VM
-- Chaque escalade posée dans le fil comme embed structuré (action, ressource, TTP, prochaines étapes LLM)
+- Chaque escalade posée dans le fil comme embed structuré : titre qui ne dit jamais « fait » pour ce qui n'a pas tourné (« Recommandé : bloquer l'IP suspecte (non exécuté) » pour une décision retenue ; « … — vérification échouée » pour une action qui a tourné), description = l'explication du modèle (`explanation`), champs Cible (IP:port), Règle, Confiance, Contexte, « Pourquoi rien n'est exécuté », prochaines étapes (`_embed_title`, `_embed_body`, 16/10)
+- Boutons **✓ Right / ✗ Wrong / ? Unsure** sur les cartes de décision : le verdict de l'observation, enregistré comme depuis la War Room (indépendant de l'acquittement)
 - Bouton **✓ Acknowledge** → `escalations.resolve()` + archivage auto si plus d'escalades pour la VM
 - Bouton **📋 Command** → commande CLI à exécuter (éphémère)
 - Bouton **🔄 Restore** → exécute `glorfindel restore <rid> --yes` (`restore_from_backup`, `low_confidence`)

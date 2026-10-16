@@ -97,7 +97,8 @@ DOCKER_GLORFINDEL := docker run --rm $(GLORFINDEL_AZURE_ENV) $(GLORFINDEL_VOLS) 
 	venv install test test-unit lint annatar-simulate annatar-simulate-gap clean \
 	canary-jit celebrimbor-init celebrimbor-plan celebrimbor-up celebrimbor-down celebrimbor-output celebrimbor-stop celebrimbor-start \
 	glorfindel-host-init glorfindel-host-plan glorfindel-host-up glorfindel-host-down glorfindel-host-push \
-	glorfindel-host-start glorfindel-host-stop glorfindel-host-logs glorfindel-host-tunnel glorfindel-host-ssh
+	glorfindel-host-start glorfindel-host-stop glorfindel-host-logs glorfindel-host-tunnel glorfindel-host-ssh \
+	glorfindel-host-env glorfindel-host-report celebrimbor-workload
 
 # ── Help ──────────────────────────────────────────────────────────────────
 
@@ -157,7 +158,10 @@ help:
 	@echo "Glorfindel hébergé (H0 : pré-observation, état Terraform séparé)"
 	@echo "  make glorfindel-host-plan [OPERATOR_CIDR=]   Plan (lecture seule)"
 	@echo "  make glorfindel-host-up   [OPERATOR_CIDR=]   Crée la VM (apply avec confirmation)"
+	@echo "  make glorfindel-host-env                     host.env depuis ton .envrc (sans secret Azure)"
 	@echo "  make glorfindel-host-push                    host.env + config (human_only forcé) sur la VM"
+	@echo "  make glorfindel-host-report [SINCE=7d]       Rapport d'observation"
+	@echo "  make celebrimbor-workload                    Charge de gondolin (site + routine d'admin)"
 	@echo "  make glorfindel-host-start / -stop / -logs   Glorfindel + War Room sur la VM"
 	@echo "  make glorfindel-host-tunnel                  War Room → http://localhost:7007"
 	@echo ""
@@ -377,6 +381,14 @@ celebrimbor-output:
 	@$(TF) workspace select $(INSTANCE)
 	@$(TF) output -raw glorfindel_config_fragment
 
+# H0 : la charge réelle de gondolin (petit site + routine d'admin), par Run Command —
+# jamais par le custom_data (le changer remplace la VM). Idempotent.
+celebrimbor-workload:
+	az vm run-command invoke -g rg-celebrimbor$(if $(filter-out default,$(INSTANCE)),-$(INSTANCE)) \
+	  -n vm-celebrimbor-gondolin$(if $(filter-out default,$(INSTANCE)),-$(INSTANCE)) \
+	  --command-id RunShellScript --scripts @infra/terraform/scripts/workload.sh \
+	  --query 'value[0].message' -o tsv | tail -5
+
 celebrimbor-stop:
 	@ids=$$(az vm list --query "[?tags.project=='celebrimbor' && tags.instance=='$(INSTANCE)'].id" -o tsv); \
 	 [ -n "$$ids" ] && az vm deallocate --ids $$ids || echo "Aucune VM celebrimbor pour l'instance '$(INSTANCE)'"
@@ -393,7 +405,7 @@ HOST_USER     ?= glorfindel
 # Sans OPERATOR_CIDR, ton IP publique du moment, en /32 (seule source SSH autorisée).
 OPERATOR_CIDR ?= $(shell curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null)/32
 HOST_VARS      = -var-file=../terraform/terraform.tfvars -var="operator_cidr=$(OPERATOR_CIDR)"
-HOST_IP        = $(shell $(HOST_TF) output -raw public_ip 2>/dev/null)
+HOST_IP        = $(shell $(HOST_TF) output -no-color -raw public_ip 2>/dev/null | grep -E '^[0-9.]+$$')
 HOST_SSH       = ssh $(HOST_USER)@$(HOST_IP)
 
 glorfindel-host-init:
@@ -408,6 +420,11 @@ glorfindel-host-up: glorfindel-host-init
 
 glorfindel-host-down:
 	$(HOST_TF) destroy $(HOST_VARS)
+
+# host.env depuis ton environnement (.envrc chargé) : abonnement, clé du modèle, webhook ;
+# jamais de secret Azure (identité managée) ; READ_ONLY=1 et un jeton War Room tiré au sort.
+glorfindel-host-env:
+	@.venv/bin/python infra/glorfindel-host/host_env.py infra/glorfindel-host/host.env
 
 # host.env → ~/eregion/.env (lu par docker compose), et la config locale avec
 # autonomy forcé à human_only (pré-observation : Glorfindel ne décide jamais seul).
@@ -433,6 +450,9 @@ glorfindel-host-stop:
 
 glorfindel-host-logs:
 	$(HOST_SSH) 'cd eregion && docker compose logs --tail 100'
+
+glorfindel-host-report:
+	$(HOST_SSH) 'docker exec eregion-watch glorfindel report --since $(or $(SINCE),7d)'
 
 glorfindel-host-tunnel:
 	ssh -N -L 7007:127.0.0.1:7007 $(HOST_USER)@$(HOST_IP)

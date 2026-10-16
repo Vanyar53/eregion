@@ -40,3 +40,22 @@ def test_host_terraform_reads_the_bench_and_is_no_target():
     assert sorted(roles) == ["Log Analytics Reader", "Reader"]
     assert not re.search(r'"eregion-(target|zone)"\s*=', tf)
     assert 'source_address_prefix      = var.operator_cidr' in tf
+
+
+_spec_env = importlib.util.spec_from_file_location("host_env", HOST / "host_env.py")
+host_env = importlib.util.module_from_spec(_spec_env)
+_spec_env.loader.exec_module(host_env)
+
+
+def test_host_env_carries_no_azure_secret_and_is_read_only():
+    operator = {
+        "AZURE_SUBSCRIPTION_ID": "sub", "ANTHROPIC_API_KEY": "key",
+        "AZURE_CLIENT_ID": "sp", "AZURE_CLIENT_SECRET": "secret", "AZURE_TENANT_ID": "t",
+        "GLORFINDEL_AZURE_CLIENT_SECRET": "secret2", "DISCORD_BOT_TOKEN": "bot",
+        "GLORFINDEL_WEBHOOK_URL": "https://hook", "GLORFINDEL_READ_ONLY": "",
+    }
+    env = host_env.host_env(operator)
+    assert not [k for k in env if "CLIENT" in k or "TENANT" in k or k == "DISCORD_BOT_TOKEN"]
+    assert env["GLORFINDEL_READ_ONLY"] == "1"
+    assert env["GLORFINDEL_WEBHOOK_URL"] == "https://hook"
+    assert len(env["GLORFINDEL_WARROOM_TOKEN"]) >= 24

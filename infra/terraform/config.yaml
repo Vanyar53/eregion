@@ -44,6 +44,9 @@ os_disk:        # disque OS des VMs (surcharge par hôte = bloc complet ; type :
 vms:
   gondolin:
     kind: vm
+    # H0 (16/10) : allumée en continu pour la pré-observation, avec une vraie charge
+    # (scripts/workload.sh, `make celebrimbor-workload`). ⚠ coût 24/7 (~71 €/mois).
+    always_on: true
   himring:
     kind:      vm
     enabled:   false

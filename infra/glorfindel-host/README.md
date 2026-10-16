@@ -28,14 +28,23 @@ le disque et l'IP publique.
 ```bash
 make glorfindel-host-plan            # lecture seule ; OPERATOR_CIDR=<ip>/32, sinon ton IP du moment
 make glorfindel-host-up              # crée la VM (confirmation demandée) ; cloud-init installe Docker et clone le dépôt
-cp infra/glorfindel-host/host.env.example infra/glorfindel-host/host.env   # remplir
+make glorfindel-host-env             # host.env depuis ton .envrc chargé (ou : copier host.env.example et remplir)
 make glorfindel-host-push            # host.env → ~/eregion/.env, config locale en human_only
 make glorfindel-stop                 # arrête le Glorfindel local : deux watch = cartes en double
 make glorfindel-host-start           # git pull, construit l'image, lance watch + war-room
 make glorfindel-host-tunnel          # puis http://localhost:7007/?token=<GLORFINDEL_WARROOM_TOKEN>
 make glorfindel-host-logs            # vérifier « heartbeat → N VM(s) » et l'absence d'erreur d'identité
+make glorfindel-host-report          # rapport d'observation (SINCE=4w pour la période)
 make glorfindel-host-down            # détruit la VM et son état (mémoire comprise)
 ```
+
+Au quotidien : le tunnel, puis les boutons **✓ Right** / **✗ Wrong** des cartes de la War Room
+(`docs/observation.md`) ; chaque semaine, `make glorfindel-host-report`. Rien à faire sur la
+VM elle-même.
+
+Les alertes passent par le webhook (`GLORFINDEL_WEBHOOK_URL`). `host.env` ne reprend pas
+`DISCORD_BOT_TOKEN` : avec lui, les escalades attendent le bot (`glorfindel bot`), que la VM ne
+fait pas tourner, et le webhook se tait.
 
 La mémoire (ChromaDB) part vide sur la VM : la mémoire locale ne contient que des cycles
 d'exercice non marqués (B2), qui n'ont rien à faire dans une observation.

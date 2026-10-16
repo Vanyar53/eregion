@@ -95,3 +95,41 @@ def test_a_verdict_from_discord_is_recorded():
     assert stored["verdict"] == "right"
     assert all(b.disabled for b in view.children if isinstance(b, bot._VerdictButton))
     assert _Followup.sent and "jugé par **jonathan**" in _Followup.sent[0]
+
+
+def test_a_posted_message_is_remembered_and_its_buttons_come_back_after_a_restart():
+    """Every button posted before a redeploy answered « interaction failed »: the bot now
+    keeps each card's message id and gives it its view back at startup (16/10)."""
+    from datetime import datetime, timedelta, timezone
+
+    esc_id = escalations.record("rule-ssh-brute-force-0123abcd", VM, "block_suspicious_ip",
+                                "mode_hold", "held", confidence=0.95)
+
+    class _Message:
+        id = 4242
+
+    class _Thread:
+        async def send(self, **kw):
+            return _Message()
+
+    async def post_then_restart():
+        first = bot.GlorfindelBot(channel_id=1, ping_role=None)
+
+        async def thread(channel, rid):
+            return _Thread()
+        first._get_or_create_thread = thread
+        esc = next(e for e in escalations.all_escalations() if e["id"] == esc_id)
+        await first._post_escalation(None, esc)
+
+        second = bot.GlorfindelBot(channel_id=1, ping_role=None)   # a restart: reads the store
+        added = []
+        second.add_view = lambda view, message_id=None: added.append((view.esc_id, message_id))
+        second._restore_views()
+        return added
+
+    assert asyncio.run(post_then_restart()) == [(esc_id, 4242)]
+
+    # Old cards are left alone: only the last two weeks come back.
+    old = {"id": "old", "first_seen": (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()}
+    recent = {"id": "new", "first_seen": datetime.now(timezone.utc).isoformat()}
+    assert [e["id"] for e, _ in bot._views_to_restore([old, recent], {"old": 1, "new": 2})] == ["new"]

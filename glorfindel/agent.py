@@ -1218,6 +1218,7 @@ def escalate_to_human(state: GlorfindelState) -> GlorfindelState:
             rule_name=(signal.get("context") or {}).get("rule_name", ""),
             source=source,
             exercise_run=exercise_run,
+            explanation=state.get("explanation", ""),
         )
 
     # An action that ran (verification failed, or it failed midway) keeps what its

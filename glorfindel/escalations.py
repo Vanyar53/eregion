@@ -68,6 +68,7 @@ def record(
     rule_name: str = "",
     source: str = "",
     exercise_run: str = "",
+    explanation: str = "",
 ) -> str:
     """Append an escalation and return its id.
 
@@ -122,6 +123,8 @@ def record(
                     e["reason"] = reason
                     e["suggested_steps"] = steps
                     e["confidence"] = confidence
+                    if explanation:
+                        e["explanation"] = explanation
                     e["updated_at"] = now
                 lines[i] = json.dumps(e, default=str)
                 _STORE.write_text("\n".join(lines) + "\n")
@@ -149,6 +152,9 @@ def record(
         "rule_name": rule_name,
         "source": source,
         "exercise_run": exercise_run,
+        # The model's plain-language explanation of the decision — what an operator judges
+        # on; `reason` is often the gate's wording (a mode hold, low confidence).
+        "explanation": explanation,
         "status": "pending",
         "resolved_at": None,
     }
@@ -424,7 +430,8 @@ def to_judge(since: datetime | None = None, limit: int = 100) -> list[dict]:
                 continue
         out.append({k: e.get(k) for k in (
             "id", "action", "escalation_type", "resource_id", "ttp", "severity", "confidence",
-            "reason", "first_seen", "last_seen", "occurrences", "status", "rule_name")})
+            "reason", "explanation", "action_params", "first_seen", "last_seen", "occurrences",
+            "status", "rule_name")})
     out.sort(key=lambda c: str(c.get("first_seen") or ""), reverse=True)
     return out[:limit]
 

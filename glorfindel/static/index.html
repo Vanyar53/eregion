@@ -116,7 +116,7 @@
   }
   .feed-entry:hover { background: var(--bg1); padding-left: 4px; padding-right: 4px; }
   .feed-ts   { color: var(--dim); font-size: 10px; flex-shrink: 0; width: 100px; }
-  .feed-event{ flex-shrink: 0; width: 160px; font-weight: 600; }
+  .feed-event{ flex-shrink: 0; width: 160px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .feed-meta { color: var(--dim); font-size: 10px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
   .feed-pct  { color: var(--dim); font-size: 10px; flex-shrink: 0; }
 
@@ -389,7 +389,7 @@
     border-radius: 8px;
     padding: 8px 12px;
     min-width: 140px;
-    max-width: 200px;
+    max-width: 280px;   /* names (rules, NSGs, VMs) were cut at 200 */
     font-size: 11px;
     position: relative;
   }
@@ -1502,7 +1502,7 @@ function _renderModules(rules, detectBackends, recoverBackends, resources) {
     const expandId  = `rules-${b.name.replace(/[^a-z0-9]/gi,'-')}`;
     const isExpanded = _expandedBackends.has(b.name);
     const ruleRows  = bRules.map(_ruleRow).join('');
-    return `<div class="node-backend detect ${unreachable ? 'state-error' : ''}" id="nb-${b.name}" style="cursor:pointer;max-width:240px"
+    return `<div class="node-backend detect ${unreachable ? 'state-error' : ''}" id="nb-${b.name}" style="cursor:pointer;max-width:320px"
       onclick="event.stopPropagation();toggleBackend('${b.name}')">
       <div class="node-backend-name">${dot} ${b.name}</div>
       <div class="node-backend-type">${b.type}</div>
@@ -1523,7 +1523,7 @@ function _renderModules(rules, detectBackends, recoverBackends, resources) {
   const orphanRules = rules.filter(r => r.enabled === false && !_backendNames.has(r.monitoring_backend_name));
   const orphanExpanded = _expandedBackends.has('__unbound__');
   const orphanNode = orphanRules.length
-    ? `<div class="node-backend detect state-warn" id="nb-__unbound__" style="cursor:pointer;max-width:240px;opacity:.85"
+    ? `<div class="node-backend detect state-warn" id="nb-__unbound__" style="cursor:pointer;max-width:320px;opacity:.85"
         onclick="event.stopPropagation();toggleBackend('__unbound__')">
         <div class="node-backend-name"><span style="color:var(--orange)">●</span> unbound rules</div>
         <div class="node-backend-type">no backend resolved</div>
@@ -2547,7 +2547,12 @@ function renderToJudge() {
   list.innerHTML = _toJudge.map(c => {
     const disruptive = ['isolate_vm', 'block_suspicious_ip'].includes(c.action);
     const pct = c.confidence ? ` ${Math.round(c.confidence * 100)}%` : '';
-    const what = (actionLabelVerb(c.action) || c.action || c.escalation_type || '?') + pct;
+    // Judge on the evidence: the IP a block targets, the rule that fired, and the model's
+    // own explanation — `reason` is often only the gate's wording (a mode hold).
+    const p = c.action_params || {};
+    const target = p.ip ? ` ${p.ip}${p.port ? ':' + p.port : ''}` : '';
+    const what = (actionLabelVerb(c.action) || c.action || c.escalation_type || '?') + target + pct;
+    const why = c.explanation || c.reason || '';
     const vm = (c.resource_id || '').split('/').pop();
     const times = c.occurrences > 1 ? ` · ${c.occurrences}×` : '';
     const id = _attr(c.id);
@@ -2557,7 +2562,8 @@ function renderToJudge() {
         <span class="judge-vm" title="${_attr(c.resource_id || '')}">${_attr(vm)}${c.ttp ? ` · ${_attr(c.ttp)}` : ''}</span>
         <span class="judge-ts">${c.first_seen ? _relTime(c.first_seen) : ''}${times}</span>
       </div>
-      <div class="judge-why" title="${_attr(c.reason || '')}">${_attr(c.reason || '')}</div>
+      ${c.rule_name ? `<div class="judge-why" style="-webkit-line-clamp:1">rule ${_attr(c.rule_name)}</div>` : ''}
+      <div class="judge-why" title="${_attr(why)}">${_attr(why)}</div>
       <div class="judge-actions">
         <input id="judge-note-${id}" placeholder="note (optional): why" maxlength="300">
         <button class="action" title="The recommendation was right" onclick="judgeCard('${id}','right')">✓ Right</button>

@@ -320,3 +320,17 @@ def test_to_judge_lists_unjudged_decisions_without_exercises(client):
     ids = [c["id"] for c in client.get("/api/to-judge?since=7d").json()["cards"]]
     assert set(ids) == {acked, open_card}
     assert "error" in client.get("/api/to-judge?since=7x").json()
+
+
+def test_to_judge_carries_the_evidence(client):
+    """A held block read « Mode human_only — action retenue » in the list: judge on the
+    model's explanation, the IP and the rule instead (first real card, 16/10)."""
+    from glorfindel import escalations
+    vm = "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm-a"
+    escalations.record("rule-ssh-brute-force-0123abcd", vm, "block_suspicious_ip", "mode_hold",
+                       "Mode human_only — retenue", action_params={"ip": "198.51.100.7", "port": 22},
+                       rule_name="ssh-brute-force", explanation="13 failed SSH logins from an external IP.")
+    card = client.get("/api/to-judge").json()["cards"][0]
+    assert card["explanation"] == "13 failed SSH logins from an external IP."
+    assert card["action_params"] == {"ip": "198.51.100.7", "port": 22}
+    assert card["rule_name"] == "ssh-brute-force"

@@ -98,7 +98,7 @@ DOCKER_GLORFINDEL := docker run --rm $(GLORFINDEL_AZURE_ENV) $(GLORFINDEL_VOLS) 
 	canary-jit celebrimbor-init celebrimbor-plan celebrimbor-up celebrimbor-down celebrimbor-output celebrimbor-stop celebrimbor-start \
 	glorfindel-host-init glorfindel-host-plan glorfindel-host-up glorfindel-host-down glorfindel-host-push \
 	glorfindel-host-start glorfindel-host-stop glorfindel-host-logs glorfindel-host-tunnel glorfindel-host-ssh \
-	glorfindel-host-env glorfindel-host-report celebrimbor-workload
+	glorfindel-host-env glorfindel-host-report glorfindel-host-url celebrimbor-workload
 
 # ── Help ──────────────────────────────────────────────────────────────────
 
@@ -163,7 +163,8 @@ help:
 	@echo "  make glorfindel-host-report [SINCE=7d]       Rapport d'observation"
 	@echo "  make celebrimbor-workload                    Charge de bree (site + routine d'admin)"
 	@echo "  make glorfindel-host-start / -stop / -logs   Glorfindel + War Room sur la VM"
-	@echo "  make glorfindel-host-tunnel                  War Room → http://localhost:7007"
+	@echo "  make glorfindel-host-tunnel                  Tunnel + URL de la War Room avec son jeton"
+	@echo "  make glorfindel-host-url                     L'URL de la War Room avec son jeton"
 	@echo ""
 	@echo "Variables"
 	@echo "  SCENARIO    Path to scenario YAML (default: $(SCENARIO))"
@@ -411,6 +412,9 @@ HOST_IP        = $(shell $(HOST_TF) output -no-color -raw public_ip 2>/dev/null 
 HOST_SSH_KEY  ?=
 SSH_OPTS       = -o StrictHostKeyChecking=accept-new $(if $(HOST_SSH_KEY),-i $(HOST_SSH_KEY) -o IdentitiesOnly=yes)
 HOST_SSH       = ssh $(SSH_OPTS) $(HOST_USER)@$(HOST_IP)
+HOST_ENV      ?= infra/glorfindel-host/host.env
+# L'URL de la War Room avec son jeton (GLORFINDEL_WARROOM_TOKEN de host.env), à ouvrir tunnel ouvert.
+WARROOM_URL    = http://localhost:7007/?token=$$(grep '^GLORFINDEL_WARROOM_TOKEN=' $(HOST_ENV) | cut -d= -f2-)
 
 glorfindel-host-init:
 	$(HOST_TF) init -upgrade
@@ -460,7 +464,13 @@ glorfindel-host-logs:
 glorfindel-host-report:
 	$(HOST_SSH) 'docker exec eregion-watch glorfindel report --since $(or $(SINCE),7d)'
 
+glorfindel-host-url:
+	@test -f $(HOST_ENV) || { echo "$(HOST_ENV) manquant (make glorfindel-host-env)"; exit 1; }
+	@echo "$(WARROOM_URL)"
+
+# Affiche l'URL avec son jeton, puis tient le tunnel ouvert (Ctrl+C pour fermer).
 glorfindel-host-tunnel:
+	@test -f $(HOST_ENV) && echo "  War Room → $(WARROOM_URL)" && echo "  (Ctrl+C ferme le tunnel)" || true
 	ssh $(SSH_OPTS) -N -L 7007:127.0.0.1:7007 $(HOST_USER)@$(HOST_IP)
 
 glorfindel-host-ssh:

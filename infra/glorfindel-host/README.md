@@ -33,13 +33,14 @@ make glorfindel-host-env             # host.env depuis ton .envrc chargé (ou : 
 make glorfindel-host-push            # host.env → ~/eregion/.env, config locale en human_only
 make glorfindel-stop                 # arrête le Glorfindel local : deux watch = cartes en double
 make glorfindel-host-start           # git pull, construit l'image, lance watch + war-room
-make glorfindel-host-tunnel          # puis http://localhost:7007/?token=<GLORFINDEL_WARROOM_TOKEN>
+make glorfindel-host-tunnel          # affiche l'URL avec son jeton, puis tient le tunnel (Ctrl+C)
+make glorfindel-host-url             # l'URL de la War Room avec son jeton, seule
 make glorfindel-host-logs            # vérifier « heartbeat → N VM(s) » et l'absence d'erreur d'identité
 make glorfindel-host-report          # rapport d'observation (SINCE=4w pour la période)
 make glorfindel-host-down            # détruit la VM et son état (mémoire comprise)
 ```
 
-Au quotidien : le tunnel, puis les boutons **✓ Right** / **✗ Wrong** des cartes de la War Room
+Au quotidien : `make glorfindel-host-tunnel`, l'URL qu'il affiche, puis les boutons **✓ Right** / **✗ Wrong** des cartes de la War Room
 (`docs/observation.md`) ; chaque semaine, `make glorfindel-host-report`. Rien à faire sur la
 VM elle-même.
 

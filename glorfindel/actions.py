@@ -3286,6 +3286,10 @@ class AzureConnector(CloudConnector):
                     vms.add(vm)
             for sid in subnet_ids:
                 vms |= subnet_to_vms.get(sid.lower(), set())
+            # The quarantine NSG carries Glorfindel's rules by construction: on standby
+            # (attached to nothing) it restricts nothing — it did read as "restricted".
+            quarantine = _is_quarantine_nsg(name)
+            attached = bool(nic_ids or subnet_ids)
             out.append({
                 "nsg": f"{rg}/{name}",
                 "id": nsg.id,
@@ -3295,8 +3299,9 @@ class AzureConnector(CloudConnector):
                 "nics": nic_ids,
                 "vms": sorted(vms),                # VM resource_ids this NSG governs
                 "rules": len(rules),
-                "restricted": bool(glor),          # carries an active Glorfindel rule
+                "restricted": bool(glor) and (attached or not quarantine),  # an active Glorfindel rule
                 "glorfindel_rules": len(glor),
+                "quarantine": quarantine,
             })
         return out
 

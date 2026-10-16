@@ -278,3 +278,26 @@ def test_an_approval_refuses_anything_but_one_ip(client, monkeypatch):
     for bad in ("*", "10.0.0.0/8", "Internet", "0.0.0.0"):
         r = client.post(f"/api/action/approve/{eid}", params={"ip": bad, "scope": "subnet"}).json()
         assert "IP" in r["error"], bad
+
+
+def test_observe_only_locks_the_autonomy_mode(client, monkeypatch):
+    """Read-only credentials (the hosted Glorfindel, H0): the War Room can't take a VM, or
+    the default, out of human_only — it undid the human_only forced at deployment, and
+    every attempt to act would have ended in a write_blocked card."""
+    monkeypatch.setenv("GLORFINDEL_READ_ONLY", "1")
+    switched = []
+    monkeypatch.setattr("glorfindel.config.set_asset_mode", lambda vm, mode: switched.append((vm, mode)) or "cfg.yaml")
+    monkeypatch.setattr("glorfindel.config.set_default_mode", lambda mode: switched.append(("*", mode)) or "cfg.yaml")
+    monkeypatch.setattr(api, "_assess_vm", lambda vm: pytest.fail("no readiness check in observe-only"))
+
+    assert "locked" in client.post("/api/activate/vm", json={"acknowledged": []}).json()["error"]
+    assert "locked" in client.post("/api/autonomy/vm", json={"mode": "non_disruptive"}).json()["error"]
+    assert "locked" in client.post("/api/autonomy/vm", json={"mode": "human_only"}).json()["error"]
+    assert "locked" in client.patch("/api/config/autonomy/default", json={"mode": "non_disruptive"}).json()["error"]
+    assert switched == []
+
+
+def test_the_scenario_route_is_gone(client):
+    """The War Room's Run button posted to /api/run/<name>, which never existed; the list
+    route that fed it goes with it — scenarios run from an injector host, not the defender."""
+    assert client.get("/api/scenarios").status_code == 404

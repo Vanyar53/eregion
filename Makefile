@@ -157,7 +157,7 @@ help:
 	@echo ""
 	@echo "Glorfindel hébergé (H0 : pré-observation, état Terraform séparé)"
 	@echo "  make glorfindel-host-plan [OPERATOR_CIDR=]   Plan (lecture seule)"
-	@echo "  make glorfindel-host-up   [OPERATOR_CIDR=]   Crée la VM (apply avec confirmation)"
+	@echo "  make glorfindel-host-up   [OPERATOR_CIDR=] [YES=1]  Crée la VM (confirmation, sauf YES=1)"
 	@echo "  make glorfindel-host-env                     host.env depuis ton .envrc (sans secret Azure)"
 	@echo "  make glorfindel-host-push                    host.env + config (human_only forcé) sur la VM"
 	@echo "  make glorfindel-host-report [SINCE=7d]       Rapport d'observation"
@@ -414,8 +414,9 @@ glorfindel-host-init:
 glorfindel-host-plan: glorfindel-host-init
 	$(HOST_TF) plan $(HOST_VARS)
 
+# YES=1 : sans confirmation (le plan n'est alors pas relu avant l'apply).
 glorfindel-host-up: glorfindel-host-init
-	$(HOST_TF) apply $(HOST_VARS)
+	$(HOST_TF) apply $(HOST_VARS)$(if $(YES), -auto-approve)
 	@echo "" && echo "  Ensuite : cp infra/glorfindel-host/host.env.example infra/glorfindel-host/host.env, remplir, make glorfindel-host-push"
 
 glorfindel-host-down:

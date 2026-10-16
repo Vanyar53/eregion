@@ -2583,6 +2583,9 @@ async function judgeCard(escId, verdict) {
     });
     const d = await r.json();
     if (d.error) { toast('✗ ' + d.error); return; }
+    // One click: a judged card is also acknowledged, so the next detection opens a new
+    // card to judge instead of piling onto this one (Jonathan, 16/10).
+    await fetch(`/api/action/ack/${escId}`, { method: 'POST' });
     toast({ right: '✓ Marked right', wrong: '✗ Marked wrong', unsure: '? Marked unsure' }[verdict] || '✓');
     refreshObservation();
     refreshState();

@@ -93,7 +93,8 @@ def test_a_verdict_from_discord_is_recorded():
     view = asyncio.run(click())
     stored = next(e for e in escalations.all_escalations() if e["id"] == esc_id)
     assert stored["verdict"] == "right"
-    assert all(b.disabled for b in view.children if isinstance(b, bot._VerdictButton))
+    assert stored["status"] == "resolved"          # one click: judged and acknowledged
+    assert all(b.disabled for b in view.children)
     assert _Followup.sent and "jugé par **jonathan**" in _Followup.sent[0]
 
 

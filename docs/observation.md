@@ -53,7 +53,7 @@ exécutée** :
 | `wrong` | faux positif, ou action disproportionnée ou erronée (isoler une VM pour une sauvegarde nocturne) |
 | `unsure` | impossible de trancher avec ce qu'on sait |
 
-Dans la War Room, la liste **TO JUDGE** (colonne de gauche, 16/10) : les cartes de décision des 7 derniers jours sans verdict — en attente ou déjà acquittées, exercices exclus —, chacune avec une note facultative et **✓ Right** / **✗ Wrong** / **? Unsure** ; l'en-tête affiche le compte de la semaine (cartes, jugées, part des isolations et blocages jugés faux). Les mêmes boutons restent sur les cartes de décision. En ligne de
+Dans la War Room, la liste **TO JUDGE** (colonne de gauche, 16/10) : les cartes de décision des 7 derniers jours sans verdict — en attente ou déjà acquittées, exercices exclus —, chacune avec une note facultative et **✓ Right** / **✗ Wrong** / **? Unsure** — un verdict donné là ou dans Discord acquitte aussi la carte (un seul clic) ; l'en-tête affiche le compte de la semaine (cartes, jugées, part des isolations et blocages jugés faux). Les mêmes boutons restent sur les cartes de décision. En ligne de
 commande, avec l'identifiant (ou ses 6 premiers caractères) affiché par `glorfindel pending` :
 
 ```bash

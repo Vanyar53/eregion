@@ -287,9 +287,10 @@ class _VerdictButton(discord.ui.Button):
         except (KeyError, ValueError) as exc:
             await interaction.response.send_message(f"✗ {exc}", ephemeral=True)
             return
+        # One click: a judged card is also acknowledged (Jonathan, 16/10).
+        esc_module.resolve(self.esc["id"])
         for item in self.view.children:  # type: ignore[union-attr]
-            if isinstance(item, _VerdictButton):
-                item.disabled = True
+            item.disabled = True  # type: ignore[attr-defined]
         await interaction.response.edit_message(view=self.view)  # type: ignore[union-attr]
         await interaction.followup.send(
             f"{_VERDICT_WORDS[self.verdict]} — jugé par **{interaction.user.display_name}**"

@@ -21,7 +21,7 @@ charge, Glorfindel qui décide, toi qui juges chaque carte.
 - **Sans secret dans Terraform.** La clé du modèle et les jetons sont dans `host.env`
   (ignoré par git), copié à la main sur la VM. Aucun secret Azure : l'identité managée.
 
-Coût : B2s, environ 30 € par mois en continu (API de tarifs Azure, francecentral, 16/10), plus
+Coût : B2als_v2 (2 vCPU, 4 Go), environ 27 € par mois en continu (API de tarifs Azure, 16/10), plus
 le disque et l'IP publique.
 
 ## Déroulé
@@ -57,7 +57,7 @@ Rien de ceci n'est encore constaté (lecture de code et de doc = hypothèse) :
 - `DefaultAzureCredential` prend bien l'identité managée quand `AZURE_CLIENT_ID` est vide ;
 - `Reader` + `Log Analytics Reader` au niveau du groupe du banc suffisent à la découverte, à
   l'audit (NSG, sauvegarde, calcul) et aux règles ;
-- la construction de l'image tient dans les 4 Go d'une B2s.
+- la construction de l'image tient dans les 4 Go d'une B2als_v2.
 
 L'état Terraform est local (`infra/glorfindel-host/terraform.tfstate`, ignoré par git),
 séparé de celui de Celebrimbor.

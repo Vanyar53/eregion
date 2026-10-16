@@ -27,9 +27,9 @@ variable "location" {
 }
 
 variable "vm_size" {
-  description = "Taille de la VM. B2s (4 Go, ~31 €/mois en continu, 16/10) : watch + War Room ~300 Mo au repos, la construction de l'image demande plus."
+  description = "Taille de la VM. B2als_v2 (2 vCPU, 4 Go, ~27 €/mois en continu, 16/10) : watch + War Room ~300 Mo au repos, la construction de l'image demande plus. B2s, d'abord prévue, manquait de capacité en francecentral (SkuNotAvailable, 16/10)."
   type        = string
-  default     = "Standard_B2s"
+  default     = "Standard_B2als_v2"
 }
 
 variable "admin_username" {

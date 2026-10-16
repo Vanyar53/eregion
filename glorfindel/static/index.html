@@ -55,7 +55,6 @@
 
   #clock { color: var(--dim); font-size: 11px; }
 
-  .scenario-row { display: flex; gap: 8px; align-items: center; }
   select, button {
     background: var(--bg2);
     border: 1px solid var(--border);
@@ -129,8 +128,37 @@
 
   .act-ok  { color: var(--green); }
   .act-esc { color: var(--red); }
+  .act-warn { color: var(--orange); }
   .act-run { color: var(--blue); }
   .act-err { color: var(--red); }
+
+  /* ── To judge (observation): decision cards waiting for the operator's verdict ── */
+  #judge-list {
+    flex-shrink: 0; max-height: 45vh; overflow-y: auto;
+    padding: 6px 12px 8px; border-bottom: 1px solid var(--border);
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .judge-empty { color: var(--dim); font-size: 10px; padding: 2px 0; }
+  .judge-item  { border-left: 2px solid var(--orange); padding: 4px 0 4px 8px; font-size: 11px; }
+  .judge-item.disruptive { border-left-color: var(--red); }
+  .judge-head  { display: flex; gap: 8px; align-items: baseline; }
+  .judge-what  { font-weight: 700; flex-shrink: 0; }
+  .judge-vm    { color: var(--text); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; flex: 1; min-width: 0; }
+  .judge-ts    { color: var(--dim); font-size: 10px; flex-shrink: 0; }
+  .judge-why   { color: var(--dim); font-size: 10px; margin-top: 2px; overflow: hidden;
+                 display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .judge-actions { display: flex; gap: 5px; margin-top: 5px; align-items: center; }
+  .judge-actions input {
+    flex: 1; min-width: 0; font-size: 10px; padding: 2px 6px; border-radius: 3px;
+    background: var(--bg2); border: 1px solid var(--border); color: var(--text);
+  }
+  .judge-actions button { font-size: 9px; padding: 2px 7px; }
+  #obs-counter { font-size: 10px; color: var(--dim); white-space: nowrap; cursor: default; }
+  .chip-exercise {
+    font-size: 8px; font-weight: 700; letter-spacing: .5px; padding: 1px 5px; border-radius: 3px;
+    color: var(--purple); border: 1px solid color-mix(in srgb, var(--purple) 40%, transparent);
+    margin-left: 6px; vertical-align: middle;
+  }
 
   /* ── Incidents column (RIGHT, flex:1) ── */
   #incidents-col {
@@ -424,7 +452,9 @@
     min-width: 160px; flex: 0 1 260px; max-width: 260px; height: 44px;
     border: 1px dashed color-mix(in srgb, var(--border) 50%, transparent);
     border-radius: 8px; opacity: 0.4; transition: opacity 0.15s, box-shadow 0.15s;
+    visibility: hidden;   /* a drop slot: shown only while a card is dragged */
   }
+  body.dnd .node-asset-empty { visibility: visible; }
   .node-asset-empty.drag-over {
     opacity: 1; border-color: var(--purple);
     box-shadow: 0 0 0 2px var(--purple), 0 0 12px color-mix(in srgb, var(--purple) 35%, transparent);
@@ -527,13 +557,10 @@
   <span style="color:var(--border);margin:0 4px">│</span>
   <span id="live-dot">●</span>
   <span id="live-label" style="color:var(--dim);font-size:11px">connecting…</span>
+  <span style="color:var(--border);margin:0 4px">│</span>
+  <span id="obs-counter"></span>
 
   <div class="spacer"></div>
-
-  <div class="scenario-row">
-    <select id="scenario-select"><option value="">Run scenario…</option></select>
-    <button class="primary" id="run-btn" disabled>▶ Run</button>
-  </div>
 
   <button id="config-toggle" class="action" onclick="toggleConfig()" title="Azure configuration">⚙ Config</button>
   <span id="clock" style="min-width:70px;text-align:right"></span>
@@ -542,6 +569,8 @@
 <main>
   <!-- Feed LEFT -->
   <div id="feed-col">
+    <div class="col-header">TO JUDGE <span id="judge-count"></span></div>
+    <div id="judge-list"><div class="judge-empty">…</div></div>
     <div class="col-header">LIVE FEED</div>
     <div id="feed-list"></div>
   </div>
@@ -562,7 +591,7 @@
       <div class="empty-state">
         <div class="check">✓</div>
         <div>All clear — no active incidents</div>
-        <div style="margin-top:6px;font-size:11px">Run a scenario to start</div>
+        <div style="margin-top:6px;font-size:11px">Glorfindel watches the VMs it discovers</div>
       </div>
     </div>
     <div id="config-panel" style="display:none;flex:1;overflow-y:auto;padding:16px;flex-direction:column;gap:16px;"></div>
@@ -960,48 +989,19 @@ setInterval(() => {
     new Date().toISOString().slice(11, 19) + ' UTC';
 }, 1000);
 
-// ── Scenarios ──────────────────────────────────────────────────────────────────
-
-async function loadScenarios() {
-  try {
-    const r = await fetch('/api/scenarios');
-    const data = await r.json();
-    const sel = document.getElementById('scenario-select');
-    data.scenarios.forEach(s => {
-      const opt = document.createElement('option');
-      opt.value = s.name;
-      opt.textContent = s.name;
-      sel.appendChild(opt);
-    });
-    sel.addEventListener('change', () => {
-      document.getElementById('run-btn').disabled = !sel.value;
-    });
-  } catch (e) {}
-}
-
-document.getElementById('run-btn').addEventListener('click', () => {
-  const name = document.getElementById('scenario-select').value;
-  if (!name) return;
-  openModal(
-    'Run scenario',
-    `This will launch annatar run scenarios/azure/${name}.yaml on the live Azure infrastructure.`,
-    `annatar run scenarios/azure/${name}.yaml`,
-    '▶ Run',
-    'primary',
-    () => runScenario(name),
-  );
-});
-
-async function runScenario(name) {
-  toast('⚡ Starting ' + name + '…');
-  try {
-    await fetch(`/api/run/${name}`, { method: 'POST' });
-  } catch (e) {
-    toast('✗ Failed to start scenario: ' + e.message);
-  }
-}
-
 // ── Infrastructure cards ───────────────────────────────────────────────────────
+
+// A vault item is named 'VM;iaasvmcontainerv2;<rg>;<vm>': the VM is its last segment.
+function _backupVmName(it) {
+  const raw = it.name || (it.resource_id || '').split('/').pop() || '';
+  return raw.split(';').pop();
+}
+
+// A rule match is news for half an hour, then history.
+function _matchColor(ts) {
+  const t = Date.parse(ts);
+  return (t && Date.now() - t < 30 * 60 * 1000) ? 'var(--orange)' : 'var(--dim)';
+}
 
 // Group escalations by action, render each group as one item (N dupes = single Ack All)
 function _groupEscs(escs) {
@@ -1085,7 +1085,7 @@ function _renderEscGroup(group) {
     : [e.ttp, pct, e.severity, escLabel(e.escalation_type)].filter(Boolean).join(' · ');
   return `<div class="esc-item section-group s-escalation" style="margin-top:5px" onclick="showEscModal('${vmName}')">
     <div style="display:flex;align-items:flex-start;gap:5px;margin-bottom:3px">
-      <span class="esc-action-label">${label}</span>
+      <span class="esc-action-label">${label}</span>${e.source === 'exercise' ? `<span class="chip-exercise" title="An injector's exercise window covered this VM (run ${_attr(e.exercise_run || '?')}) — left out of the observation report">EXERCISE</span>` : ''}
       ${countBadge}
       ${recurBadge}
       <span style="color:var(--blue);font-size:10px;margin-left:auto;padding-top:1px;flex-shrink:0">▸ details</span>
@@ -1465,18 +1465,18 @@ function _renderModules(rules, detectBackends, recoverBackends, resources) {
       return `<div class="row rule-item" onclick="event.stopPropagation();showRuleByIdx(${idx})"
         style="padding:3px 4px;font-size:10px;opacity:.55">
         <span style="color:var(--dim);font-size:9px">●</span>
-        <span style="flex:1">${r.name}</span>
+        <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${_attr(r.name)}">${r.name}</span>
         ${r.ttp ? `<span style="color:var(--dim);font-size:9px">${r.ttp}</span>` : ''}
         <span style="color:var(--orange);font-size:9px;margin-left:auto">⚠ unbound</span>
         <span style="color:var(--dim);font-size:9px">▸</span>
       </div>`;
     }
     const dc  = r.last_error ? 'var(--red)' : r.last_poll ? 'var(--green)' : 'var(--dim)';
-    const mt  = r.last_match ? `<span style="color:var(--orange);font-size:9px;margin-left:auto">${_relTime(r.last_match)}</span>` : '';
+    const mt  = r.last_match ? `<span style="color:${_matchColor(r.last_match)};font-size:9px;margin-left:auto;flex-shrink:0">${_relTime(r.last_match)}</span>` : '';
     return `<div class="row rule-item" onclick="event.stopPropagation();showRuleByIdx(${idx})"
       style="padding:3px 4px;font-size:10px">
       <span style="color:${dc};font-size:9px">●</span>
-      <span style="flex:1">${r.name}</span>
+      <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${_attr(r.name)}">${r.name}</span>
       ${r.ttp ? `<span style="color:var(--dim);font-size:9px">${r.ttp}</span>` : ''}
       ${mt}
       <span style="color:var(--dim);font-size:9px">▸</span>
@@ -1508,7 +1508,7 @@ function _renderModules(rules, detectBackends, recoverBackends, resources) {
       <div class="node-backend-type">${b.type}</div>
       <div class="node-backend-row" style="justify-content:space-between">
         <span>${liveRules.length} rule${liveRules.length>1?'s':''}${unboundN ? ` <span style="color:var(--orange)">· ${unboundN} unbound</span>` : ''}</span>
-        ${lastMatch ? `<span style="color:var(--orange);font-size:9px">match ${_relTime(lastMatch)}</span>` : ''}
+        ${lastMatch ? `<span style="color:${_matchColor(lastMatch)};font-size:9px">match ${_relTime(lastMatch)}</span>` : ''}
         <span style="color:var(--blue);font-size:9px">${isExpanded ? '▾' : '▸'}</span>
       </div>
       ${unreachable ? `<div class="node-backend-row" style="color:var(--red);font-size:9px" title="${_attr(backendErr)}">⚠ unreachable — detection blind</div>`
@@ -1577,7 +1577,7 @@ function _renderModules(rules, detectBackends, recoverBackends, resources) {
   const blindN    = nsgInv ? nsgInv.filter(n => (n.vms || []).length && !_nsgMon(n)).length : 0;
   const blindSuffix = blindN ? ` · <span style="color:var(--red)" title="NSG(s) governing only VMs not in Log Analytics — Glorfindel is blind there">${blindN} blind-spot</span>` : '';
   const protectSummary = nsgInv
-    ? `${nsgN} NSG${nsgN > 1 ? 's' : ''} · ${restrictedN ? `${restrictedN} with restriction${restrictedN > 1 ? 's' : ''}` : 'no restrictions'}${blindSuffix}${_nsgStale ? ' · stale' : ''}`
+    ? `${nsgN} NSG${nsgN > 1 ? 's' : ''} · ${restrictedN ? `${restrictedN} carrying a Glorfindel action` : 'no Glorfindel action'}${blindSuffix}${_nsgStale ? ' · stale' : ''}`
     : (nsgN
         ? `${nsgN} NSG · ${actionCount ? actionCount + ' action' + (actionCount > 1 ? 's' : '') : 'no restrictions'}`
         : (actionCount ? `${actionCount} action${actionCount > 1 ? 's' : ''}` : 'no restrictions'));
@@ -1607,7 +1607,11 @@ function _renderModules(rules, detectBackends, recoverBackends, resources) {
                 <span style="color:${n.restricted ? 'var(--orange)' : 'var(--dim)'};font-size:9px">●</span>
                 <span style="flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600" title="${_attr(n.nsg)}">${(n.nsg || '').split('/').pop()}</span>
                 ${blind ? `<span style="color:var(--red);font-size:9px;flex-shrink:0" title="Governs only VMs not in Log Analytics — blind spot">⚠ blind</span>` : ''}
-                ${n.restricted ? `<span style="color:var(--orange);font-size:9px;flex-shrink:0" title="Carries ${n.glorfindel_rules} Glorfindel rule(s) — active isolation/block">restricted</span>` : ''}
+                ${n.quarantine
+                  ? (n.restricted
+                      ? `<span style="color:var(--orange);font-size:9px;flex-shrink:0" title="Glorfindel's quarantine NSG, attached: a VM is isolated">quarantine · active</span>`
+                      : `<span style="color:var(--dim);font-size:9px;flex-shrink:0" title="Glorfindel's quarantine NSG, declared once and attached only to isolate a VM">quarantine · standby</span>`)
+                  : n.restricted ? `<span style="color:var(--orange);font-size:9px;flex-shrink:0" title="Carries ${n.glorfindel_rules} Glorfindel rule(s) — active isolation/block">restricted</span>` : ''}
               </div>
               <div style="color:var(--dim);font-size:9px;margin-left:15px">${assoc} · ${n.rules} rule${n.rules > 1 ? 's' : ''}</div>
             </div>`;
@@ -1672,8 +1676,7 @@ function _renderModules(rules, detectBackends, recoverBackends, resources) {
     // cards with NO backup. The count operators most want — "how many are NOT covered".
     // Denominator is _cardVmNames (deduped like the cards) so it matches the visible
     // card count, not the raw heartbeat count (AKS = 1 card, not N nodes).
-    const _protectedNames = new Set(items.map(it =>
-      (it.name || (it.resource_id || '').split('/').pop() || '').toLowerCase()).filter(Boolean));
+    const _protectedNames = new Set(items.map(it => _backupVmName(it).toLowerCase()).filter(Boolean));
     let unprotectedN = 0;
     _cardVmNames.forEach(n => { if (!_protectedNames.has(n)) unprotectedN++; });
     const staleSfx = _backupStale ? ` · <span style="color:var(--orange)">stale</span>` : '';
@@ -1689,8 +1692,8 @@ function _renderModules(rules, detectBackends, recoverBackends, resources) {
       const stopBadge = (st.includes('stop') || st.includes('paus'))
         ? ' <span style="color:var(--red);font-size:9px">⚠ stopped</span>' : '';
       return `<div class="row" style="padding:3px 4px;font-size:10px;display:flex;gap:6px;align-items:center">
-        <span style="flex:1">${it.name || (it.resource_id || '').split('/').pop()}</span>${stopBadge}
-        <span style="color:${col};font-size:9px">${age}</span>
+        <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${_attr(it.name || '')}">${_backupVmName(it)}</span>${stopBadge}
+        <span style="color:${col};font-size:9px;flex-shrink:0;white-space:nowrap">${age}</span>
       </div>`;
     }).join('');
     const body = expanded
@@ -1774,8 +1777,8 @@ function _renderClusterNode(cluster, slotIdx = 0) {
   return `<div class="node-asset s-clean ${isExpanded ? 'expanded' : ''}"
     id="asset-${vm_name}"
     draggable="true"
-    ondragstart="event.dataTransfer.setData('text/plain','${vm_name}');event.currentTarget.classList.add('dragging')"
-    ondragend="event.currentTarget.classList.remove('dragging');document.querySelectorAll('.drag-over').forEach(e=>e.classList.remove('drag-over'))"
+    ondragstart="event.dataTransfer.setData('text/plain','${vm_name}');event.currentTarget.classList.add('dragging');document.body.classList.add('dnd')"
+    ondragend="event.currentTarget.classList.remove('dragging');document.body.classList.remove('dnd');document.querySelectorAll('.drag-over').forEach(e=>e.classList.remove('drag-over'))"
     ondragover="event.preventDefault();event.currentTarget.classList.add('drag-over')"
     ondragleave="event.currentTarget.classList.remove('drag-over')"
     ondrop="event.preventDefault();event.currentTarget.classList.remove('drag-over');dropOnSlot(${slotIdx},event.dataTransfer.getData('text/plain'))">
@@ -2018,7 +2021,7 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
   const modeSelector = isExpanded
     ? `<div style="display:flex;align-items:center;gap:6px;margin-top:6px">
         <span style="font-size:9px;color:var(--dim);font-weight:600;letter-spacing:.5px">MODE</span>
-        <select onchange="this.value === 'non_disruptive' ? openActivation('${vm_name}') : setAutonomyMode('${vm_name}',this.value)" onclick="event.stopPropagation()"
+        <select onchange="this.value === 'non_disruptive' ? openActivation('${vm_name}') : setAutonomyMode('${vm_name}',this.value)" onclick="event.stopPropagation()"${_state?.read_only ? ' disabled title="Observe-only (read-only credentials): human-only is locked"' : ''}
           style="font-size:9px;background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:2px 5px;border-radius:3px;cursor:pointer">
           <option value="human_only"${autonomyMode === 'human_only' ? ' selected' : ''}>human-only (recommend)</option>
           <option value="non_disruptive"${autonomyMode === 'non_disruptive' ? ' selected' : ''}>non-disruptive (execute)</option>
@@ -2142,8 +2145,8 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
   return `<div class="node-asset ${stateClass} ${isExpanded ? 'expanded' : ''}"
     id="asset-${vm_name}"
     draggable="true"
-    ondragstart="event.dataTransfer.setData('text/plain','${vm_name}');event.currentTarget.classList.add('dragging')"
-    ondragend="event.currentTarget.classList.remove('dragging');document.querySelectorAll('.drag-over').forEach(e=>e.classList.remove('drag-over'))"
+    ondragstart="event.dataTransfer.setData('text/plain','${vm_name}');event.currentTarget.classList.add('dragging');document.body.classList.add('dnd')"
+    ondragend="event.currentTarget.classList.remove('dragging');document.body.classList.remove('dnd');document.querySelectorAll('.drag-over').forEach(e=>e.classList.remove('drag-over'))"
     ondragover="event.preventDefault();event.currentTarget.classList.add('drag-over')"
     ondragleave="event.currentTarget.classList.remove('drag-over')"
     ondrop="event.preventDefault();event.currentTarget.classList.remove('drag-over');dropOnSlot(${slotIdx},event.dataTransfer.getData('text/plain'))">
@@ -2497,6 +2500,86 @@ async function doVerdict(escId, verdict) {
     if (d.error) { toast('✗ ' + d.error); return; }
     toast(verdict === 'right' ? '✓ Marked right' : '✗ Marked wrong');
     refreshState();
+    refreshObservation();
+  } catch (e) {
+    toast('✗ ' + e.message);
+  }
+}
+
+// ── Observation: what to judge, and the week's count ───────────────────────────
+// The operator's daily task during an observation (docs/observation.md): give each
+// decision card a verdict. The list holds the last 7 days' cards without one — pending
+// or acknowledged — exercises left out; the header counts what `glorfindel report` counts.
+
+let _toJudge = [];
+
+async function refreshObservation() {
+  try {
+    const [q, r] = await Promise.all([
+      fetch('/api/to-judge?since=7d').then(x => x.json()),
+      fetch('/api/report?since=7d').then(x => x.json()),
+    ]);
+    if (q && Array.isArray(q.cards)) { _toJudge = q.cards; renderToJudge(); }
+    if (r && typeof r.cards === 'number') renderObsCounter(r);
+  } catch (e) {}
+}
+
+function renderObsCounter(r) {
+  const el = document.getElementById('obs-counter');
+  if (!el) return;
+  const d = r.disruptive || {};
+  const rate = d.false_rate == null ? '—' : Math.round(d.false_rate * 100) + '%';
+  el.textContent = `7 days · ${r.cards} card${r.cards === 1 ? '' : 's'} · ${r.judged} judged · `
+    + `isolate/block wrong ${rate}` + (r.exercises ? ` · ${r.exercises} exercise${r.exercises > 1 ? 's' : ''} left out` : '');
+  el.title = 'Observation (glorfindel report --since 7d): decision cards, verdicts given, and the '
+    + 'share of isolate/block recommendations judged wrong. Exercise cards are not counted.';
+}
+
+function renderToJudge() {
+  const list = document.getElementById('judge-list');
+  const count = document.getElementById('judge-count');
+  if (!list) return;
+  if (count) count.textContent = _toJudge.length ? `· ${_toJudge.length}` : '';
+  if (!_toJudge.length) {
+    list.innerHTML = '<div class="judge-empty">Nothing to judge — every recommendation of the last 7 days has a verdict.</div>';
+    return;
+  }
+  list.innerHTML = _toJudge.map(c => {
+    const disruptive = ['isolate_vm', 'block_suspicious_ip'].includes(c.action);
+    const pct = c.confidence ? ` ${Math.round(c.confidence * 100)}%` : '';
+    const what = (actionLabelVerb(c.action) || c.action || c.escalation_type || '?') + pct;
+    const vm = (c.resource_id || '').split('/').pop();
+    const times = c.occurrences > 1 ? ` · ${c.occurrences}×` : '';
+    const id = _attr(c.id);
+    return `<div class="judge-item${disruptive ? ' disruptive' : ''}">
+      <div class="judge-head">
+        <span class="judge-what" style="color:${disruptive ? 'var(--red)' : 'var(--orange)'}">${_attr(what)}</span>
+        <span class="judge-vm" title="${_attr(c.resource_id || '')}">${_attr(vm)}${c.ttp ? ` · ${_attr(c.ttp)}` : ''}</span>
+        <span class="judge-ts">${c.first_seen ? _relTime(c.first_seen) : ''}${times}</span>
+      </div>
+      <div class="judge-why" title="${_attr(c.reason || '')}">${_attr(c.reason || '')}</div>
+      <div class="judge-actions">
+        <input id="judge-note-${id}" placeholder="note (optional): why" maxlength="300">
+        <button class="action" title="The recommendation was right" onclick="judgeCard('${id}','right')">✓ Right</button>
+        <button class="action" style="color:var(--red)" title="False positive, or a disproportionate action" onclick="judgeCard('${id}','wrong')">✗ Wrong</button>
+        <button class="action" style="color:var(--dim)" title="Can't tell with what is known" onclick="judgeCard('${id}','unsure')">? Unsure</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function judgeCard(escId, verdict) {
+  const note = (document.getElementById('judge-note-' + escId)?.value || '').trim();
+  try {
+    const r = await fetch(`/api/escalations/${escId}/verdict`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ verdict, note }),
+    });
+    const d = await r.json();
+    if (d.error) { toast('✗ ' + d.error); return; }
+    toast({ right: '✓ Marked right', wrong: '✗ Marked wrong', unsure: '? Marked unsure' }[verdict] || '✓');
+    refreshObservation();
+    refreshState();
   } catch (e) {
     toast('✗ ' + e.message);
   }
@@ -2723,7 +2806,10 @@ function appendFeedEntry(entry) {
       <span class="feed-meta">${entry.ttp || ''} ${entry.vm || ''}</span>`;
   } else {
     const icon = entry.escalate ? '🚨' : entry.verified ? '✓' : entry.verified === false ? '✗' : '⚡';
-    const cls  = entry.escalate ? 'act-esc' : entry.verified ? 'act-ok' : entry.verified === false ? 'act-err' : 'act-run';
+    // Red for a recommendation to isolate or block; a snapshot or a hold is not an alarm.
+    const disruptive = ['isolate_vm', 'block_suspicious_ip'].includes(entry.action);
+    const cls  = entry.escalate ? (disruptive ? 'act-esc' : 'act-warn')
+               : entry.verified ? 'act-ok' : entry.verified === false ? 'act-err' : 'act-run';
     const label = entry.escalate ? 'escalate → ' + entry.action : entry.action;
     const pct = entry.confidence ? Math.round(entry.confidence * 100) + '%' : '';
     el.innerHTML = `
@@ -3149,9 +3235,16 @@ async function refreshConfig() {
     const d  = await cfgResp.json();
     const az = d.azure;
 
-    const azBadge = az.configured
-      ? '<span class="cfg-badge ok">✓ connected</span>'
-      : '<span class="cfg-badge err">✗ missing credentials</span>';
+    // No service-principal variables = a managed identity (the hosted VM) or az login:
+    // judge by what Azure answered to this War Room's own reads (NSG inventory, vault),
+    // not by the presence of AZURE_CLIENT_ID (a hosted Glorfindel showed "missing").
+    const keyless  = !az.client_id;
+    const readOk   = (_nsgItems && !_nsgItems.error) || (_backupItems && !_backupItems.error);
+    const readErr  = (_nsgItems && _nsgItems.error) || (_backupItems && _backupItems.error) || '';
+    const azBadge = !az.subscription_id ? '<span class="cfg-badge err">✗ AZURE_SUBSCRIPTION_ID not set</span>'
+      : readOk  ? '<span class="cfg-badge ok">✓ connected</span>'
+      : readErr ? `<span class="cfg-badge err" title="${_attr(String(readErr))}">✗ Azure read failed</span>`
+      :           '<span class="cfg-badge">… checking</span>';
 
     panel.innerHTML = `
       <div class="cfg-section">
@@ -3163,10 +3256,9 @@ async function refreshConfig() {
           <span class="cfg-key">subscription</span><span class="cfg-val">${mask(az.subscription_id)}</span>
         </div>
         <div class="cfg-row">
-          <span class="cfg-key">tenant</span><span class="cfg-val">${mask(az.tenant_id)}</span>
-        </div>
-        <div class="cfg-row">
-          <span class="cfg-key">client (SP)</span><span class="cfg-val">${mask(az.client_id)}</span>
+          <span class="cfg-key">identity</span><span class="cfg-val">${keyless
+            ? 'no secret — managed identity or az login'
+            : 'service principal ' + mask(az.client_id) + ' · tenant ' + mask(az.tenant_id)}</span>
         </div>
       </div>
 
@@ -3189,7 +3281,7 @@ async function refreshConfig() {
         <div class="cfg-row">
           <span class="cfg-key">default mode</span>
           <span class="cfg-val">
-            <select onchange="setDefaultMode(this.value)"
+            <select onchange="setDefaultMode(this.value)"${_state?.read_only ? ' disabled title="Observe-only (read-only credentials): human-only is locked"' : ''}
               style="font-size:11px;background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:2px 6px;border-radius:3px;cursor:pointer">
               <option value="human_only"${(_state?.autonomy_default||'human_only') === 'human_only' ? ' selected' : ''}>human-only (recommend)</option>
               <option value="non_disruptive"${(_state?.autonomy_default) === 'non_disruptive' ? ' selected' : ''}>non-disruptive (execute)</option>
@@ -3330,11 +3422,12 @@ async function refreshNsgs() {
 // ── Init ───────────────────────────────────────────────────────────────────────
 
 (async function init() {
-  await loadScenarios();
   await refreshCfgData();     // detection rules + known resources → renderInfra
   await refreshState();       // active incidents → renderInfra
   await refreshWatchStatus();
+  await refreshObservation();
   connectWS();
+  setInterval(refreshObservation, 30000);  // cards to judge + the week's count
   setInterval(refreshCfgData,   30000);  // rules polling status
   setInterval(refreshAuditData, 300000); // backup/compute readiness (slow, Azure API)
   setInterval(refreshBackups,   300000); // vault inventory for RECOVER (slow, Azure API)

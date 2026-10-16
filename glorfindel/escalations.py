@@ -407,6 +407,28 @@ def is_decision(e: dict) -> bool:
             and not sid.startswith(("reassert-", "ttl-", "posture-")))
 
 
+def to_judge(since: datetime | None = None, limit: int = 100) -> list[dict]:
+    """The decision cards still waiting for the operator's verdict, newest first — pending
+    or acknowledged (a verdict is independent of the ack), exercises left out (B2): what the
+    War Room's "To judge" list shows during an observation."""
+    out = []
+    for e in all_escalations():
+        if not is_decision(e) or e.get("verdict") in VERDICTS or e.get("source") == "exercise":
+            continue
+        when = e.get("first_seen") or e.get("timestamp") or ""
+        if since is not None:
+            try:
+                if datetime.fromisoformat(str(when).replace("Z", "+00:00")) < since:
+                    continue
+            except ValueError:
+                continue
+        out.append({k: e.get(k) for k in (
+            "id", "action", "escalation_type", "resource_id", "ttp", "severity", "confidence",
+            "reason", "first_seen", "last_seen", "occurrences", "status", "rule_name")})
+    out.sort(key=lambda c: str(c.get("first_seen") or ""), reverse=True)
+    return out[:limit]
+
+
 def observation_report(since: datetime | None = None) -> dict:
     """Counts of the operator's verdicts on decision cards since `since` (all if None).
     A card counts once, however many times it re-fired (its `occurrences`). An exercise

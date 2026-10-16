@@ -233,6 +233,38 @@ def test_list_nsgs_enumerates_all_including_subnet_and_restriction(monkeypatch):
     assert by["rg/vm-nsg"]["nics"] == ["/nic/x"]
 
 
+def test_the_quarantine_nsg_on_standby_restricts_nothing(monkeypatch):
+    """The quarantine NSG carries Glorfindel's rules by construction: attached to nothing,
+    the War Room showed it "restricted" (orange) next to a healthy fleet (16/10)."""
+    from glorfindel.actions import AzureConnector
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+
+    def _nsg(name, nics):
+        n = MagicMock()
+        n.id = f"/subscriptions/s/resourceGroups/rg/providers/Microsoft.Network/networkSecurityGroups/{name}"
+        n.subnets = []
+        n.network_interfaces = [MagicMock(id=x) for x in nics]
+        rule = MagicMock()
+        rule.name = "glorfindel-quarantine-deny-all-in"
+        n.security_rules = [rule]
+        return n
+
+    net = MagicMock()
+    net.network_security_groups.list_all.return_value = [
+        _nsg("nsg-glorfindel-quarantine-westeurope", []),
+        _nsg("nsg-glorfindel-quarantine-francecentral", ["/nic/isolated"]),
+    ]
+    net.network_interfaces.list_all.return_value = []
+    connector._network = net
+
+    by = {n["nsg"]: n for n in connector.list_nsgs()}
+    standby = by["rg/nsg-glorfindel-quarantine-westeurope"]
+    active = by["rg/nsg-glorfindel-quarantine-francecentral"]
+    assert standby["quarantine"] and standby["restricted"] is False
+    assert active["quarantine"] and active["restricted"] is True
+
+
 def test_list_nsgs_attributes_vms_nic_and_subnet(monkeypatch):
     """Each NSG carries the VMs it governs — NIC-level (nic→vm) and subnet-level
     (subnet→vms) — for the War Room monitored flag + hover glow."""

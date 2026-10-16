@@ -359,23 +359,6 @@ async def watch_status() -> dict:
         return {"status": "unknown"}
 
 
-@app.get("/api/scenarios")
-async def scenarios() -> dict:
-    candidates = [
-        Path("annatar/scenarios/azure"),
-        Path(__file__).parent.parent / "annatar" / "scenarios" / "azure",
-    ]
-    for d in candidates:
-        if d.exists():
-            return {
-                "scenarios": [
-                    {"name": f.stem, "path": str(f)}
-                    for f in sorted(d.glob("*.yaml"))
-                ]
-            }
-    return {"scenarios": []}
-
-
 @app.get("/api/config")
 async def config() -> dict:
     import os
@@ -713,11 +696,25 @@ async def readiness(vm_name: str) -> dict:
     return await asyncio.to_thread(_assess_vm, vm_name)
 
 
+def _read_only() -> bool:
+    import os
+    return os.environ.get("GLORFINDEL_READ_ONLY", "0") in ("1", "true", "True")
+
+
+# Observe-only: Glorfindel decides, a human judges, nothing acts — the autonomy mode stays
+# human_only. Changing it from the War Room would only produce write_blocked cards (and
+# undid the human_only forced on the hosted VM, H0).
+_READ_ONLY_MODE = ("observe-only (read-only credentials): the autonomy mode is locked to "
+                   "human-only")
+
+
 @app.post("/api/activate/{vm_name}")
 async def activate(vm_name: str, body: dict | None = None) -> dict:
     """Switch a VM to autonomous response (non_disruptive). Recomputes the readiness
     verdict and refuses a VM that isn't ready, or one whose reserves were not all
     acknowledged (`acknowledged`: the reserve codes the operator was shown)."""
+    if _read_only():
+        return {"error": _READ_ONLY_MODE}
     from glorfindel.readiness import activation_refusal
     assessment = await asyncio.to_thread(_assess_vm, vm_name)
     if "error" in assessment:
@@ -749,6 +746,8 @@ async def set_autonomy_mode(vm_name: str, body: dict) -> dict:
 
     Switching TO autonomous response goes through the readiness check, like
     /api/activate: no VM leaves human_only without its reserves having been shown."""
+    if _read_only():
+        return {"error": _READ_ONLY_MODE}
     mode = body.get("mode", "")
     if mode == "non_disruptive":
         return await activate(vm_name, body)
@@ -776,6 +775,8 @@ async def set_autonomy_default(body: dict) -> dict:
     Autonomous by default is safe for VMs created later: the watch checks each VM it
     discovers, and only a ready one acts alone (L6 gate); the others stay in human_only
     with a card asking to confirm their reserves."""
+    if _read_only():
+        return {"error": _READ_ONLY_MODE}
     mode = body.get("mode", "")
     try:
         from glorfindel.config import set_default_mode
@@ -1048,19 +1049,38 @@ async def set_verdict(esc_id: str, body: dict) -> dict:
     return {"ok": True, "verdict": e["verdict"]}
 
 
+def _since_start(since: str):
+    """'7d', '24h', '4w' → the datetime that far back; 'all' → None. Raises ValueError."""
+    from datetime import datetime, timedelta, timezone
+    if since == "all":
+        return None
+    units = {"h": "hours", "d": "days", "w": "weeks"}
+    try:
+        return datetime.now(timezone.utc) - timedelta(**{units[since[-1]]: int(since[:-1])})
+    except (KeyError, ValueError, IndexError):
+        raise ValueError("since: a number followed by h, d or w (7d, 24h, 4w), or 'all'")
+
+
 @app.get("/api/report")
 async def observation_report(since: str = "7d") -> dict:
     """The observation report: verdicts on recommendations, false disruptive rate."""
-    from datetime import datetime, timedelta, timezone
     from glorfindel import escalations as esc_module
-    start = None
-    if since != "all":
-        units = {"h": "hours", "d": "days", "w": "weeks"}
-        try:
-            start = datetime.now(timezone.utc) - timedelta(**{units[since[-1]]: int(since[:-1])})
-        except (KeyError, ValueError, IndexError):
-            return {"error": "since: a number followed by h, d or w (7d, 24h, 4w), or 'all'"}
+    try:
+        start = _since_start(since)
+    except ValueError as exc:
+        return {"error": str(exc)}
     return esc_module.observation_report(start)
+
+
+@app.get("/api/to-judge")
+async def to_judge(since: str = "7d") -> dict:
+    """The decision cards still waiting for a verdict (exercises left out), newest first."""
+    from glorfindel import escalations as esc_module
+    try:
+        start = _since_start(since)
+    except ValueError as exc:
+        return {"error": str(exc)}
+    return {"cards": esc_module.to_judge(start)}
 
 
 @app.get("/api/audit/{vm_name}")

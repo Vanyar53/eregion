@@ -88,8 +88,8 @@ coûte (control plane + nodes) → détruire entre sessions. VMs : auto-shutdown
   est décrite en code dans le module du banc.
 - **Pré-observation (H0, décidé le 15/10)** : gondolin passe en `always_on` (knob de
   `config.yaml`) avec une vraie charge ; Glorfindel tourne en continu sur une petite VM dédiée,
-  dans son propre état Terraform (jamais sur une VM qu'il surveille, ni sur Orodruin). Rien
-  n'est appliqué sans Jonathan.
+  dans son propre état Terraform (jamais sur une VM qu'il surveille, ni sur Orodruin) — module
+  `infra/glorfindel-host/` (16/10, écrit et planifié). Rien n'est appliqué sans Jonathan.
 - **Orodruin (O1)** : module à part, `infra/orodruin/`, **état Terraform séparé** — session
   Orodruin (`CLAUDE_ORODRUIN.md`). Celebrimbor fournit le groupe de ressources que l'identité
   d'Orodruin a le droit de toucher.

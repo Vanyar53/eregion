@@ -48,3 +48,10 @@ infra/canary/**/terraform.tfstate*
 # Claude Code — worktrees des sous-agents (elrond) et réglages locaux
 .claude/worktrees/
 .claude/settings.local.json
+
+# Glorfindel hébergé (H0) — état séparé, secrets jamais suivis
+infra/glorfindel-host/.terraform/
+infra/glorfindel-host/.terraform.lock.hcl
+infra/glorfindel-host/terraform.tfstate*
+infra/glorfindel-host/*.tfplan
+infra/glorfindel-host/host.env

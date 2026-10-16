@@ -95,7 +95,9 @@ DOCKER_GLORFINDEL := docker run --rm $(GLORFINDEL_AZURE_ENV) $(GLORFINDEL_VOLS) 
 	glorfindel-start glorfindel-stop glorfindel-restart glorfindel-dev glorfindel-logs glorfindel-ui \
 	annatar-shell glorfindel-shell \
 	venv install test test-unit lint annatar-simulate annatar-simulate-gap clean \
-	canary-jit celebrimbor-init celebrimbor-plan celebrimbor-up celebrimbor-down celebrimbor-output celebrimbor-stop celebrimbor-start
+	canary-jit celebrimbor-init celebrimbor-plan celebrimbor-up celebrimbor-down celebrimbor-output celebrimbor-stop celebrimbor-start \
+	glorfindel-host-init glorfindel-host-plan glorfindel-host-up glorfindel-host-down glorfindel-host-push \
+	glorfindel-host-start glorfindel-host-stop glorfindel-host-logs glorfindel-host-tunnel glorfindel-host-ssh
 
 # ── Help ──────────────────────────────────────────────────────────────────
 
@@ -151,6 +153,13 @@ help:
 	@echo "  make celebrimbor-down CONFIRM=<instance>    Teardown TOTAL (gardé, baseline inclus)"
 	@echo "  make celebrimbor-stop / celebrimbor-start         Éteint/rallume les VMs (sans détruire)"
 	@echo "  make celebrimbor-output [INSTANCE=]         Fragment glorfindel-config.yaml généré"
+	@echo ""
+	@echo "Glorfindel hébergé (H0 : pré-observation, état Terraform séparé)"
+	@echo "  make glorfindel-host-plan [OPERATOR_CIDR=]   Plan (lecture seule)"
+	@echo "  make glorfindel-host-up   [OPERATOR_CIDR=]   Crée la VM (apply avec confirmation)"
+	@echo "  make glorfindel-host-push                    host.env + config (human_only forcé) sur la VM"
+	@echo "  make glorfindel-host-start / -stop / -logs   Glorfindel + War Room sur la VM"
+	@echo "  make glorfindel-host-tunnel                  War Room → http://localhost:7007"
 	@echo ""
 	@echo "Variables"
 	@echo "  SCENARIO    Path to scenario YAML (default: $(SCENARIO))"
@@ -375,6 +384,61 @@ celebrimbor-stop:
 celebrimbor-start:
 	@ids=$$(az vm list --query "[?tags.project=='celebrimbor' && tags.instance=='$(INSTANCE)'].id" -o tsv); \
 	 [ -n "$$ids" ] && az vm start --ids $$ids || echo "Aucune VM celebrimbor pour l'instance '$(INSTANCE)'"
+
+# ── Glorfindel hébergé (H0) ───────────────────────────────────────────────
+# La VM du défenseur, hors du banc : infra/glorfindel-host/README.md. Lecture seule sur le
+# banc, human_only forcé au push. L'apply demande confirmation (pas d'--auto-approve).
+HOST_TF       := terraform -chdir=infra/glorfindel-host
+HOST_USER     ?= glorfindel
+# Sans OPERATOR_CIDR, ton IP publique du moment, en /32 (seule source SSH autorisée).
+OPERATOR_CIDR ?= $(shell curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null)/32
+HOST_VARS      = -var-file=../terraform/terraform.tfvars -var="operator_cidr=$(OPERATOR_CIDR)"
+HOST_IP        = $(shell $(HOST_TF) output -raw public_ip 2>/dev/null)
+HOST_SSH       = ssh $(HOST_USER)@$(HOST_IP)
+
+glorfindel-host-init:
+	$(HOST_TF) init -upgrade
+
+glorfindel-host-plan: glorfindel-host-init
+	$(HOST_TF) plan $(HOST_VARS)
+
+glorfindel-host-up: glorfindel-host-init
+	$(HOST_TF) apply $(HOST_VARS)
+	@echo "" && echo "  Ensuite : cp infra/glorfindel-host/host.env.example infra/glorfindel-host/host.env, remplir, make glorfindel-host-push"
+
+glorfindel-host-down:
+	$(HOST_TF) destroy $(HOST_VARS)
+
+# host.env → ~/eregion/.env (lu par docker compose), et la config locale avec
+# autonomy forcé à human_only (pré-observation : Glorfindel ne décide jamais seul).
+glorfindel-host-push:
+	@test -f infra/glorfindel-host/host.env || { echo "infra/glorfindel-host/host.env manquant (voir host.env.example)"; exit 1; }
+	@test -n "$(HOST_IP)" || { echo "Pas de VM : make glorfindel-host-up d'abord"; exit 1; }
+	@cfg=$$(mktemp); \
+	 .venv/bin/python infra/glorfindel-host/host_config.py glorfindel-config.yaml $$cfg && \
+	 scp -q infra/glorfindel-host/host.env $(HOST_USER)@$(HOST_IP):eregion/.env && \
+	 scp -q $$cfg $(HOST_USER)@$(HOST_IP):eregion/glorfindel-config.yaml && \
+	 $(HOST_SSH) 'chmod 600 eregion/.env eregion/glorfindel-config.yaml'; \
+	 rc=$$?; rm -f $$cfg; exit $$rc
+	@echo "  host.env et glorfindel-config.yaml (human_only) poussés sur $(HOST_IP)"
+
+glorfindel-host-start:
+	$(HOST_SSH) 'test -f .eregion-host-ready && cd eregion && git pull -q --ff-only && make -s build-glorfindel && docker compose up -d watch war-room'
+	@echo ""
+	@echo "  ⚠ Arrête le Glorfindel local (make glorfindel-stop) : deux watch sur le même banc = cartes en double."
+	@echo "  War Room → make glorfindel-host-tunnel, puis http://localhost:7007/?token=<GLORFINDEL_WARROOM_TOKEN>"
+
+glorfindel-host-stop:
+	$(HOST_SSH) 'cd eregion && docker compose stop'
+
+glorfindel-host-logs:
+	$(HOST_SSH) 'cd eregion && docker compose logs --tail 100'
+
+glorfindel-host-tunnel:
+	ssh -N -L 7007:127.0.0.1:7007 $(HOST_USER)@$(HOST_IP)
+
+glorfindel-host-ssh:
+	$(HOST_SSH)
 
 # ── Dev ───────────────────────────────────────────────────────────────────
 

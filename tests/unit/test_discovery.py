@@ -543,3 +543,13 @@ def test_a_failing_readiness_check_does_not_stop_discovery(tmp_path):
     svc = DiscoveryService(_law_cfg(), reg, dry_run=False, readiness_tracker=tracker)
     with patch("glorfindel.discovery._discover_from_backend", return_value=[]):
         svc.run_once()                                   # no exception
+
+
+def test_the_default_cache_path_follows_its_redirection(tmp_path, monkeypatch):
+    """AssetRegistry() bound the real ~/.glorfindel cache at import: redirecting the module's
+    _CACHE_FILE (as the conftest does) changed nothing, and a test wrote fake VMs into the
+    operator's discovery cache (16/10)."""
+    import glorfindel.discovery as discovery
+    target = tmp_path / "elsewhere.json"
+    monkeypatch.setattr(discovery, "_CACHE_FILE", target)
+    assert discovery.AssetRegistry()._path == target

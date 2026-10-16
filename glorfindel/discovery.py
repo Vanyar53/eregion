@@ -63,8 +63,11 @@ class AssetRegistry:
     Persisted to disk so discovery survives watch restarts.
     """
 
-    def __init__(self, path: Path = _CACHE_FILE) -> None:
-        self._path = path
+    def __init__(self, path: Path | None = None) -> None:
+        # Read at call time: a default bound at import kept the real ~/.glorfindel cache
+        # even when the module's _CACHE_FILE was redirected (the tests' conftest) — a test
+        # wrote fake VMs into the operator's discovery cache (16/10).
+        self._path = path or _CACHE_FILE
         self._lock = threading.Lock()
         self._assets: dict[str, DiscoveredAsset] = {}
         self._load()

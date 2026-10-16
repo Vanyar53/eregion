@@ -109,3 +109,15 @@ def no_local_glorfindel_config(monkeypatch):
 def isolated_exercise_windows(tmp_path, monkeypatch):
     """B2: the injectors' exercise windows live under tmp, never the real runs/exercises."""
     monkeypatch.setenv("EREGION_EXERCISES_DIR", str(tmp_path / "exercises"))
+
+
+@pytest.fixture(autouse=True)
+def isolated_bot_state(tmp_path, monkeypatch):
+    """The Discord bot's stores (posted ids, threads, message ids) under tmp, never ~/.glorfindel."""
+    try:
+        import glorfindel.bot as bot
+    except ImportError:  # discord.py not installed: no bot tests run
+        return
+    monkeypatch.setattr(bot, "_POSTED_STORE", tmp_path / "bot_posted.json")
+    monkeypatch.setattr(bot, "_THREADS_STORE", tmp_path / "bot_threads.json")
+    monkeypatch.setattr(bot, "_MESSAGES_STORE", tmp_path / "bot_messages.json")

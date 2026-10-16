@@ -255,3 +255,33 @@ def test_reset_from_azure_says_what_it_could_not_settle(monkeypatch):
     result = CliRunner().invoke(cli.cli, ["reset", _FULL, "--from-azure", "--yes"])
     assert result.exit_code == 2
     assert "glorfindel-orig-1234" in result.output and "Aucune règle" not in result.output
+
+
+def _discovered(*rids):
+    from datetime import datetime, timezone
+
+    from glorfindel.discovery import AssetRegistry, DiscoveredAsset
+    now = datetime.now(timezone.utc).isoformat()
+    AssetRegistry().replace_for_backend("law", [
+        DiscoveredAsset(name=r.rsplit("/", 1)[-1], resource_id=r, monitoring_backend="law", last_seen=now)
+        for r in rids])
+
+
+def test_resolve_short_name_via_discovery(monkeypatch):
+    """`glorfindel audit vm-celebrimbor-bree` answered « not found in ? » (16/10): a name
+    with no active state now resolves through the discovered VMs."""
+    monkeypatch.setattr("glorfindel.actions.active_isolations", lambda: [])
+    monkeypatch.setattr("glorfindel.actions.active_blocks", lambda: [])
+    _discovered(_FULL)
+    assert _resolve_resource_id("vm-x") == _FULL
+    assert _resolve_resource_id("vm-unknown") == "vm-unknown"
+
+
+def test_two_discovered_vms_of_the_same_name_are_refused(monkeypatch):
+    """Never the first of two homonyms (third review, T1): the command asks for the id."""
+    import pytest
+    monkeypatch.setattr("glorfindel.actions.active_isolations", lambda: [])
+    monkeypatch.setattr("glorfindel.actions.active_blocks", lambda: [])
+    _discovered(_FULL, _FULL.replace("/resourceGroups/rg/", "/resourceGroups/rg-clone/"))
+    with pytest.raises(click.ClickException, match="several VMs have this name"):
+        _resolve_resource_id("vm-x")

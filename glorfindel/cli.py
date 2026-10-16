@@ -99,9 +99,11 @@ def _resolve_resource_id(arg: str) -> str:
     The Azure calls parse the full resource path (resource group + VM name), so a bare
     name must be resolved to it — otherwise the command either silently matches nothing
     ("Nothing to reset" on a VM that IS blocked) or crashes in _parse_vm_resource_id.
-    Resolve via the active isolation/block state. A full id (contains '/') or an unknown
-    name is returned unchanged — the command then reports 'nothing to do' rather than
-    crash on an unresolvable name.
+    Resolve via the active isolation/block state, then the discovered VMs (`audit
+    vm-celebrimbor-bree` answered « not found in ? », 16/10). Two VMs of that name in two
+    resource groups → refused, never the first one (third review, T1). A full id (contains
+    '/') or an unknown name is returned unchanged — the command then reports 'nothing to
+    do' rather than crash on an unresolvable name.
     """
     if "/" in arg:
         return arg
@@ -111,7 +113,16 @@ def _resolve_resource_id(arg: str) -> str:
         rid = entry.get("resource_id", "")
         if rid and rid.rsplit("/", 1)[-1].lower() == target:
             return rid
-    return arg
+    try:
+        from glorfindel.discovery import AssetRegistry
+        found = sorted({a.resource_id for a in AssetRegistry().all()
+                        if a.resource_id and a.resource_id.rsplit("/", 1)[-1].lower() == target})
+    except Exception:  # an unreadable cache must not break a command
+        found = []
+    if len(found) > 1:
+        raise click.ClickException(
+            f"{arg}: several VMs have this name — pass the full id:\n  " + "\n  ".join(found))
+    return found[0] if found else arg
 
 
 class _GlorfindelCli(click.Group):
@@ -1313,10 +1324,6 @@ def activate(vm: str, yes: bool):
 
     rid = _resolve_resource_id(vm)
     if "/" not in rid:
-        from glorfindel.discovery import AssetRegistry
-        rid = next((a.resource_id for a in AssetRegistry().all()
-                    if a.resource_id.rsplit("/", 1)[-1].lower() == vm.lower()), rid)
-    if "/" not in rid:
         raise click.ClickException(
             f"{vm}: resource id unknown — pass the full id, or start `glorfindel watch` "
             "so discovery finds the VM.")
@@ -2040,7 +2047,7 @@ def audit(resource_id: str | None, audit_all: bool, vault: str, vault_rg: str, d
                 )
                 return
     else:
-        targets = [resource_id]
+        targets = [_resolve_resource_id(resource_id)]
 
     targets = list(dict.fromkeys(targets))  # deduplicate, preserve order
 

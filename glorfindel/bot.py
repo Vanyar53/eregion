@@ -16,6 +16,11 @@ from glorfindel.escalations import _ACTION_LABELS, _ESCALATION_LABELS
 _console = Console()
 _POSTED_STORE = Path.home() / ".glorfindel" / "bot_posted.json"
 _THREADS_STORE = Path.home() / ".glorfindel" / "bot_threads.json"
+# escalation id → the Discord message that carries its buttons. A restarted bot gives each
+# message its view back (add_view): without it, every button posted before a redeploy
+# answered « interaction failed » (16/10).
+_MESSAGES_STORE = Path.home() / ".glorfindel" / "bot_messages.json"
+_RESTORE_DAYS = 14
 
 
 def _load_posted() -> set[str]:
@@ -123,6 +128,39 @@ def _embed_body(esc: dict) -> tuple[str, list[tuple[str, str, bool]]]:
         steps = "\n".join(f"• {s}" for s in esc["suggested_steps"][:3])
         fields.append(("Prochaines étapes", steps[:1024], False))
     return (explanation or reason)[:2048], fields
+
+
+def _load_messages() -> dict[str, int]:
+    if _MESSAGES_STORE.exists():
+        try:
+            return {k: int(v) for k, v in json.loads(_MESSAGES_STORE.read_text()).items()}
+        except (ValueError, AttributeError):
+            return {}
+    return {}
+
+
+def _save_messages(messages: dict[str, int]) -> None:
+    _MESSAGES_STORE.parent.mkdir(parents=True, exist_ok=True)
+    _MESSAGES_STORE.write_text(json.dumps(messages))
+
+
+def _views_to_restore(escs: list[dict], messages: dict[str, int], now=None) -> list[tuple[dict, int]]:
+    """(escalation, message id) whose buttons must answer again after a restart: every card
+    posted in the last _RESTORE_DAYS days — pending, or acknowledged but still to judge."""
+    from datetime import datetime, timedelta, timezone
+    now = now or datetime.now(timezone.utc)
+    out = []
+    for e in escs:
+        mid = messages.get(e.get("id", ""))
+        if not mid:
+            continue
+        try:
+            when = datetime.fromisoformat(str(e.get("first_seen") or e.get("timestamp")).replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if now - when <= timedelta(days=_RESTORE_DAYS):
+            out.append((e, mid))
+    return out
 
 
 def _glorfindel_bin() -> str:
@@ -319,6 +357,7 @@ class GlorfindelBot(discord.Client):
         self.ping_role = ping_role
         self._posted: set[str] = _load_posted()
         self._threads: dict[str, int] = _load_threads()
+        self._messages: dict[str, int] = _load_messages()
 
     async def setup_hook(self) -> None:
         @self.tree.command(
@@ -345,6 +384,20 @@ class GlorfindelBot(discord.Client):
             )
 
         await self.tree.sync()
+        self._restore_views()
+
+    def _restore_views(self) -> int:
+        """Give the messages posted before this start their buttons back."""
+        restored = 0
+        for esc, message_id in _views_to_restore(esc_module.all_escalations(), self._messages):
+            try:
+                self.add_view(EscalationView(esc), message_id=message_id)
+                restored += 1
+            except Exception as exc:  # one bad card must not stop the bot
+                _console.print(f"[yellow]View not restored for {esc.get('id', '')[:8]}: {exc}[/yellow]")
+        if restored:
+            _console.print(f"[dim]  → {restored} message(s) given their buttons back[/dim]")
+        return restored
 
     async def on_ready(self) -> None:
         _console.print(
@@ -457,7 +510,9 @@ class GlorfindelBot(discord.Client):
             embed.add_field(name=name, value=value, inline=inline)
         embed.set_footer(text=f"Run: {esc['run_id']} · ID: {esc['id'][:8]}")
         view = EscalationView(esc)
-        await thread.send(embed=embed, view=view)
+        message = await thread.send(embed=embed, view=view)
+        self._messages[esc["id"]] = message.id
+        _save_messages(self._messages)
 
 
 def run() -> None:

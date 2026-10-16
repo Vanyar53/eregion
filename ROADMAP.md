@@ -120,7 +120,7 @@ Préfixes : **A** isolation et **B** IA (septième passe), **O** Orodruin, **H**
 | MC2 | Adaptateur AWS + banc AWS | isoler-lever revient à l'état d'origine, vérifié | 10–15 |
 | MC3 | Adaptateur GCP + banc GCP | mêmes critères | 8–12 |
 
-Plan complet : 66 à 108 jours, plus 30 à 45 pour le multi-cloud. Coût du banc de développement : environ 55 à 130 € par mois (VM, disques et points de restauration, télémétrie, Orodruin, Chaos Studio, LLM). En plus pour H0 : bree en continu (D2as_v6, ~71 €/mois) et la VM de Glorfindel (B2als_v2, ~27 €/mois), plus disques, IP et sauvegarde.
+Plan complet : 66 à 108 jours, plus 30 à 45 pour le multi-cloud. Coût du banc de développement : environ 55 à 130 € par mois (VM, disques et points de restauration, télémétrie, Orodruin, Chaos Studio, LLM). En plus pour H0 : bree en continu (D2as_v6, ~71 €/mois) et la VM de Glorfindel (D2als_v6, ~61 €/mois ; 27 € en B2als_v2 avec le quota Basv2), plus disques, IP et sauvegarde.
 
 ### L'ordre de la 0.3
 

@@ -21,7 +21,7 @@ charge, Glorfindel qui décide, toi qui juges chaque carte.
 - **Sans secret dans Terraform.** La clé du modèle et les jetons sont dans `host.env`
   (ignoré par git), copié à la main sur la VM. Aucun secret Azure : l'identité managée.
 
-Coût : B2als_v2 (2 vCPU, 4 Go), environ 27 € par mois en continu (API de tarifs Azure, 16/10), plus
+Coût : D2als_v6 (2 vCPU, 4 Go), environ 61 € par mois en continu (API de tarifs Azure, 16/10) — 27 € en B2als_v2 si le quota Basv2 est accordé —, plus
 le disque et l'IP publique.
 
 ## Déroulé
@@ -68,7 +68,7 @@ d'exercice non marqués (B2), qui n'ont rien à faire dans une observation.
 - **Clé SSH** : celle de `admin_ssh_public_key` ; si ton agent SSH en propose une autre,
   `HOST_SSH_KEY=~/.ssh/<clé>` sur les cibles `glorfindel-host-*`.
 - **Taille** : B2s sans capacité en francecentral, aucun quota Basv2 (B2als_v2) sur
-  l'abonnement : la VM tourne en D2als_v6 (`TF_VAR_vm_size`, ~61 €/mois) en attendant le quota.
+  l'abonnement : la VM tourne en D2als_v6 (défaut de `vm_size`, ~61 €/mois) ; B2als_v2 quand le quota sera accordé.
 
 L'état Terraform est local (`infra/glorfindel-host/terraform.tfstate`, ignoré par git),
 séparé de celui de Celebrimbor.

@@ -27,9 +27,9 @@ variable "location" {
 }
 
 variable "vm_size" {
-  description = "Taille de la VM. B2als_v2 (2 vCPU, 4 Go, ~27 €/mois en continu, 16/10) : watch + War Room ~300 Mo au repos, la construction de l'image demande plus. B2s, d'abord prévue, manquait de capacité en francecentral (SkuNotAvailable, 16/10)."
+  description = "Taille de la VM — celle déployée le 16/10 : D2als_v6 (2 vCPU, 4 Go, ~61 €/mois en continu). B2s manquait de capacité en francecentral, et le quota Basv2 de l'abonnement est à 0 : avec 2 cœurs Basv2 accordés, passer à Standard_B2als_v2 (~27 €/mois, même RAM). Image construite en 2 min 44 s, ~300 Mo au repos."
   type        = string
-  default     = "Standard_B2als_v2"
+  default     = "Standard_D2als_v6"
 }
 
 variable "admin_username" {

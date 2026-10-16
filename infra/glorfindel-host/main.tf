@@ -65,6 +65,13 @@ resource "azurerm_subnet" "host" {
   resource_group_name  = azurerm_resource_group.host.name
   virtual_network_name = azurerm_virtual_network.host.name
   address_prefixes     = ["10.20.0.0/26"]
+
+  # Un VNet recréé (changement de région, 16/10) emporte son sous-réseau, mais le nom ne change
+  # pas : sans ce lien, Terraform garde l'ancien sous-réseau dans son état et la carte réseau
+  # échoue (« subnet not found »).
+  lifecycle {
+    replace_triggered_by = [azurerm_virtual_network.host.id]
+  }
 }
 
 # Entrée : SSH depuis l'IP de l'opérateur seulement. La War Room reste sur 127.0.0.1 de la VM

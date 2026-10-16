@@ -21,7 +21,7 @@ charge, Glorfindel qui décide, toi qui juges chaque carte.
 - **Sans secret dans Terraform.** La clé du modèle et les jetons sont dans `host.env`
   (ignoré par git), copié à la main sur la VM. Aucun secret Azure : l'identité managée.
 
-Coût : B2s, environ 31 € par mois en continu (API de tarifs Azure, westeurope, 16/10), plus
+Coût : B2s, environ 30 € par mois en continu (API de tarifs Azure, francecentral, 16/10), plus
 le disque et l'IP publique.
 
 ## Déroulé

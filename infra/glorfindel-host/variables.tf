@@ -21,9 +21,9 @@ variable "operator_cidr" {
 }
 
 variable "location" {
-  description = "Région de la VM (celle du banc par défaut)."
+  description = "Région de la VM. francecentral (16/10, choix de Jonathan) ; elle peut différer de celle du banc (westeurope) : Glorfindel ne parle qu'aux API d'Azure."
   type        = string
-  default     = "westeurope"
+  default     = "francecentral"
 }
 
 variable "vm_size" {

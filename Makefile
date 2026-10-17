@@ -98,7 +98,7 @@ DOCKER_GLORFINDEL := docker run --rm $(GLORFINDEL_AZURE_ENV) $(GLORFINDEL_VOLS) 
 	canary-jit celebrimbor-init celebrimbor-plan celebrimbor-up celebrimbor-down celebrimbor-output celebrimbor-stop celebrimbor-start \
 	glorfindel-host-init glorfindel-host-plan glorfindel-host-up glorfindel-host-down glorfindel-host-push \
 	glorfindel-host-start glorfindel-host-stop glorfindel-host-logs glorfindel-host-tunnel glorfindel-host-ssh \
-	glorfindel-host-env glorfindel-host-report glorfindel-host-url glorfindel-host-status celebrimbor-workload
+	glorfindel-host-env glorfindel-host-report glorfindel-host-url glorfindel-host-status glorfindel-host-pull celebrimbor-workload
 
 # ── Help ──────────────────────────────────────────────────────────────────
 
@@ -161,6 +161,7 @@ help:
 	@echo "  make glorfindel-host-env                     host.env depuis ton .envrc (sans secret Azure)"
 	@echo "  make glorfindel-host-push                    host.env + config (human_only forcé) sur la VM"
 	@echo "  make glorfindel-host-report [SINCE=7d]       Rapport d'observation"
+	@echo "  make glorfindel-host-pull                    Copie locale des verdicts et de la mémoire (chaque semaine)"
 	@echo "  make celebrimbor-workload                    Charge de bree (site + routine d'admin)"
 	@echo "  make glorfindel-host-status                  Tout tourne ? VMs, sauvegardes, services, erreurs, cartes à juger"
 	@echo "  make glorfindel-host-start / -stop / -logs   Glorfindel + War Room sur la VM"
@@ -414,6 +415,9 @@ HOST_SSH_KEY  ?=
 SSH_OPTS       = -o StrictHostKeyChecking=accept-new $(if $(HOST_SSH_KEY),-i $(HOST_SSH_KEY) -o IdentitiesOnly=yes)
 HOST_SSH       = ssh $(SSH_OPTS) $(HOST_USER)@$(HOST_IP)
 HOST_ENV      ?= infra/glorfindel-host/host.env
+# Local copies of the VM's ~/.glorfindel (verdicts, memory, state): the observation's data
+# lives on one disk otherwise. Outside the repo — they hold real cards.
+HOST_BACKUPS  ?= $(HOME)/.eregion/host-backups
 # L'URL de la War Room avec son jeton (GLORFINDEL_WARROOM_TOKEN de host.env), à ouvrir tunnel ouvert.
 WARROOM_URL    = http://localhost:7007/?token=$$(grep '^GLORFINDEL_WARROOM_TOKEN=' $(HOST_ENV) | cut -d= -f2-)
 
@@ -466,7 +470,16 @@ glorfindel-host-logs:
 # to judge — read-only, one look (infra/glorfindel-host/status.sh).
 glorfindel-host-status:
 	@test -n "$(HOST_IP)" || { echo "Pas de VM : make glorfindel-host-up d'abord"; exit 1; }
-	@HOST_IP=$(HOST_IP) HOST_USER=$(HOST_USER) SSH_OPTS="$(SSH_OPTS)" bash infra/glorfindel-host/status.sh
+	@HOST_IP=$(HOST_IP) HOST_USER=$(HOST_USER) SSH_OPTS="$(SSH_OPTS)" HOST_BACKUPS=$(HOST_BACKUPS) bash infra/glorfindel-host/status.sh
+
+# A copy of the VM's ~/.glorfindel on this machine (the verdicts of the observation, the
+# memory, the state) — the 30 latest kept. The model cache (~/.cache/chroma) re-downloads.
+glorfindel-host-pull:
+	@test -n "$(HOST_IP)" || { echo "Pas de VM : make glorfindel-host-up d'abord"; exit 1; }
+	@mkdir -p $(HOST_BACKUPS) && f=$(HOST_BACKUPS)/glorfindel-$$(date -u +%Y%m%dT%H%M%SZ).tgz && \
+	 $(HOST_SSH) 'tar czf - -C $$HOME .glorfindel' > $$f && test -s $$f && \
+	 ls -1t $(HOST_BACKUPS)/glorfindel-*.tgz | tail -n +31 | xargs -r rm -f && \
+	 echo "  ✓ $$f ($$(du -h $$f | cut -f1)) — verdicts, mémoire, état ; les 30 dernières copies gardées"
 
 glorfindel-host-report:
 	$(HOST_SSH) 'docker exec eregion-watch glorfindel report --since $(or $(SINCE),7d)'

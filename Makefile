@@ -98,7 +98,7 @@ DOCKER_GLORFINDEL := docker run --rm $(GLORFINDEL_AZURE_ENV) $(GLORFINDEL_VOLS) 
 	canary-jit celebrimbor-init celebrimbor-plan celebrimbor-up celebrimbor-down celebrimbor-output celebrimbor-stop celebrimbor-start \
 	glorfindel-host-init glorfindel-host-plan glorfindel-host-up glorfindel-host-down glorfindel-host-push \
 	glorfindel-host-start glorfindel-host-stop glorfindel-host-logs glorfindel-host-tunnel glorfindel-host-ssh \
-	glorfindel-host-env glorfindel-host-report glorfindel-host-url celebrimbor-workload
+	glorfindel-host-env glorfindel-host-report glorfindel-host-url glorfindel-host-status celebrimbor-workload
 
 # ── Help ──────────────────────────────────────────────────────────────────
 
@@ -162,6 +162,7 @@ help:
 	@echo "  make glorfindel-host-push                    host.env + config (human_only forcé) sur la VM"
 	@echo "  make glorfindel-host-report [SINCE=7d]       Rapport d'observation"
 	@echo "  make celebrimbor-workload                    Charge de bree (site + routine d'admin)"
+	@echo "  make glorfindel-host-status                  Tout tourne ? VMs, sauvegardes, services, erreurs, cartes à juger"
 	@echo "  make glorfindel-host-start / -stop / -logs   Glorfindel + War Room sur la VM"
 	@echo "  make glorfindel-host-tunnel                  Tunnel + URL de la War Room avec son jeton"
 	@echo "  make glorfindel-host-url                     L'URL de la War Room avec son jeton"
@@ -460,6 +461,12 @@ glorfindel-host-stop:
 
 glorfindel-host-logs:
 	$(HOST_SSH) 'cd eregion && docker compose logs --tail 100'
+
+# Is everything running? Azure VMs and backups, containers, errors, discovery, bot, cards
+# to judge — read-only, one look (infra/glorfindel-host/status.sh).
+glorfindel-host-status:
+	@test -n "$(HOST_IP)" || { echo "Pas de VM : make glorfindel-host-up d'abord"; exit 1; }
+	@HOST_IP=$(HOST_IP) HOST_USER=$(HOST_USER) SSH_OPTS="$(SSH_OPTS)" bash infra/glorfindel-host/status.sh
 
 glorfindel-host-report:
 	$(HOST_SSH) 'docker exec eregion-watch glorfindel report --since $(or $(SINCE),7d)'

@@ -36,11 +36,12 @@ make glorfindel-host-start           # git pull, construit l'image, lance watch 
 make glorfindel-host-tunnel          # affiche l'URL avec son jeton, puis tient le tunnel (Ctrl+C)
 make glorfindel-host-url             # l'URL de la War Room avec son jeton, seule
 make glorfindel-host-logs            # vérifier « heartbeat → N VM(s) » et l'absence d'erreur d'identité
+make glorfindel-host-status          # tout tourne ? VMs, sauvegardes, services, erreurs 24 h, cartes à juger
 make glorfindel-host-report          # rapport d'observation (SINCE=4w pour la période)
 make glorfindel-host-down            # détruit la VM et son état (mémoire comprise)
 ```
 
-Au quotidien : `make glorfindel-host-tunnel`, l'URL qu'il affiche, puis les boutons **✓ Right** / **✗ Wrong** des cartes de la War Room
+Au quotidien : `make glorfindel-host-status` (lecture seule, une vue), puis `make glorfindel-host-tunnel`, l'URL qu'il affiche, puis les boutons **✓ Right** / **✗ Wrong** des cartes de la War Room
 (`docs/observation.md`) ; chaque semaine, `make glorfindel-host-report`. Rien à faire sur la
 VM elle-même.
 

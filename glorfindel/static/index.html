@@ -3329,11 +3329,11 @@ async function refreshConfig() {
           it was deployed for the observation. To let Glorfindel act, the deployment changes —
           write rights on the monitored resources and that variable removed — not this page.
         </div>` : ''}
-        <div style="color:var(--dim);font-size:10px;padding:4px 0 0">
+        ${_state?.read_only ? '' : `<div style="color:var(--dim);font-size:10px;padding:4px 0 0">
           Per-asset overrides are set from each VM card. In non-disruptive, each VM is
           checked first: a ready VM acts alone, a VM with reserves stays in human-only
           until you confirm them.
-        </div>
+        </div>`}
       </div>
 
       <div style="padding:12px 0 0;color:var(--dim);font-size:11px">

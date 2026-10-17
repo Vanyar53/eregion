@@ -1304,6 +1304,9 @@ def report(since_text: str, as_json: bool):
         console.print(table)
     if r["cards"] and r["judged"] < r["cards"]:
         console.print(f"[dim]{r['cards'] - r['judged']} card(s) not judged: glorfindel verdict <id> right|wrong|unsure[/dim]")
+    b = r.get("blocks") or {}
+    if b.get("cards"):
+        console.print(f"Block recommendations: {b['cards']} card(s) for {b['distinct_ips']} distinct IP(s)")
     if r.get("exercises"):
         console.print(f"[dim]{r['exercises']} exercise card(s) left out (an injector's window covered the VM)[/dim]")
 

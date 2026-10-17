@@ -334,3 +334,38 @@ def test_to_judge_carries_the_evidence(client):
     assert card["explanation"] == "13 failed SSH logins from an external IP."
     assert card["action_params"] == {"ip": "198.51.100.7", "port": 22}
     assert card["rule_name"] == "ssh-brute-force"
+
+
+def test_a_returning_scanner_is_recognised_never_judged(client):
+    """In observation nothing is blocked: a scanner came back and opened three cards on bree
+    (16–17/10). The card says it has been seen; the report counts the attackers."""
+    from glorfindel import escalations
+    vm = "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm-a"
+    first = escalations.record("rule-ssh-brute-force-0123abcd", vm, "block_suspicious_ip", "mode_hold",
+                               "held", action_params={"ip": "198.51.100.7", "port": 22})
+    escalations.set_verdict(first, "right", "")
+    escalations.resolve(first)
+    again = escalations.record("rule-ssh-brute-force-4567abcd", vm, "block_suspicious_ip", "mode_hold",
+                               "held", action_params={"ip": "198.51.100.7", "port": 22})
+    other = escalations.record("rule-ssh-brute-force-89abcdef", vm.replace("vm-a", "vm-b"), "block_suspicious_ip",
+                               "mode_hold", "held", action_params={"ip": "203.0.113.9", "port": 22})
+
+    cards = {c["id"]: c for c in client.get("/api/to-judge").json()["cards"]}
+    assert cards[again]["recurrence"]["previous"] == 1
+    assert cards[again]["recurrence"]["last_verdict"] == "right"
+    assert cards[again].get("verdict") is None            # never judged for the operator
+    assert cards[other]["recurrence"] is None
+    blocks = client.get("/api/report?since=7d").json()["blocks"]
+    assert blocks == {"cards": 3, "distinct_ips": 2}
+
+
+def test_recurrence_looks_back_seven_days_only():
+    from datetime import datetime, timedelta, timezone
+
+    from glorfindel import escalations
+    now = datetime.now(timezone.utc)
+    old = {"id": "a", "first_seen": (now - timedelta(days=9)).isoformat(), "action_params": {"ip": "198.51.100.7"}}
+    later = {"id": "c", "first_seen": (now + timedelta(hours=1)).isoformat(), "action_params": {"ip": "198.51.100.7"}}
+    me = {"id": "b", "first_seen": now.isoformat(), "action_params": {"ip": "198.51.100.7"}}
+    assert escalations.recurrence(me, [old, me, later]) is None
+    assert escalations.recurrence({"id": "x", "first_seen": now.isoformat()}, [old]) is None   # no IP

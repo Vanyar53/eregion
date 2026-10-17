@@ -240,3 +240,15 @@ def test_the_weekly_summary_is_posted_once_on_monday(monkeypatch):
     first, second, sent = asyncio.run(twice())
     assert first and not second and len(sent) == 1
     assert bot.GlorfindelBot(channel_id=1, ping_role=None)._weekly_last == "2026-10-19"  # survives a restart
+
+
+def test_the_embed_says_the_ip_was_seen_before_and_the_week_counts_attackers():
+    from datetime import datetime, timezone
+    _, fields = bot._embed_body(_held_block(recurrence={"previous": 2, "last_seen": "2026-10-17T07:35:00+00:00",
+                                                        "last_verdict": "right"}))
+    seen = dict((n, v) for n, v, _ in fields)["Déjà vue"]
+    assert seen == "↻ même IP 2× en 7 jours — dernière le 2026-10-17 07:35 UTC, jugée right"
+    text = bot._weekly_summary({"cards": 4, "judged": 4, "disruptive": {"false_rate": 0.0},
+                                "blocks": {"cards": 4, "distinct_ips": 2}}, 0,
+                               datetime(2026, 10, 19, 8, 0, tzinfo=timezone.utc))
+    assert "4 carte(s) pour 2 IP distincte(s)" in text

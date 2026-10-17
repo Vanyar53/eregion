@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 _STORE = Path.home() / ".glorfindel" / "escalations.jsonl"
@@ -413,12 +413,42 @@ def is_decision(e: dict) -> bool:
             and not sid.startswith(("reassert-", "ttl-", "posture-")))
 
 
+def _ip_of(e: dict) -> str:
+    return str((e.get("action_params") or {}).get("ip") or "").strip()
+
+
+def _when(e: dict) -> datetime | None:
+    try:
+        return datetime.fromisoformat(str(e.get("first_seen") or e.get("timestamp")).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def recurrence(e: dict, escs: list[dict] | None = None, days: int = 7) -> dict | None:
+    """The earlier cards on the same IP in the last `days` days — in observation nothing is
+    blocked, so a scanner comes back and opens a new card after each ack (three cards for
+    one attacker on bree, 16–17/10). Said on the card, never judged for the operator."""
+    ip, me = _ip_of(e), _when(e)
+    if not ip or me is None:
+        return None
+    window = timedelta(days=days)
+    prev = [x for x in (all_escalations() if escs is None else escs)
+            if x.get("id") != e.get("id") and _ip_of(x) == ip
+            and (w := _when(x)) is not None and w < me and me - w <= window]
+    if not prev:
+        return None
+    last = max(prev, key=_when)
+    return {"previous": len(prev), "last_id": last.get("id"), "last_seen": last.get("first_seen"),
+            "last_verdict": last.get("verdict")}
+
+
 def to_judge(since: datetime | None = None, limit: int = 100) -> list[dict]:
     """The decision cards still waiting for the operator's verdict, newest first — pending
     or acknowledged (a verdict is independent of the ack), exercises left out (B2): what the
     War Room's "To judge" list shows during an observation."""
     out = []
-    for e in all_escalations():
+    escs = all_escalations()
+    for e in escs:
         if not is_decision(e) or e.get("verdict") in VERDICTS or e.get("source") == "exercise":
             continue
         when = e.get("first_seen") or e.get("timestamp") or ""
@@ -428,10 +458,12 @@ def to_judge(since: datetime | None = None, limit: int = 100) -> list[dict]:
                     continue
             except ValueError:
                 continue
-        out.append({k: e.get(k) for k in (
+        card = {k: e.get(k) for k in (
             "id", "action", "escalation_type", "resource_id", "ttp", "severity", "confidence",
             "reason", "explanation", "action_params", "first_seen", "last_seen", "occurrences",
-            "status", "rule_name")})
+            "status", "rule_name")}
+        card["recurrence"] = recurrence(e, escs)
+        out.append(card)
     out.sort(key=lambda c: str(c.get("first_seen") or ""), reverse=True)
     return out[:limit]
 
@@ -448,6 +480,7 @@ def observation_report(since: datetime | None = None) -> dict:
     disruptive = bucket()
     cards = 0
     exercises = 0
+    block_ips: list[str] = []
     for e in all_escalations():
         if not is_decision(e):
             continue
@@ -467,11 +500,15 @@ def observation_report(since: datetime | None = None) -> dict:
         by_rule.setdefault(rule_of(e) or "(sans règle)", bucket())[v] += 1
         if e.get("action") in DISRUPTIVE_ACTIONS:
             disruptive[v] += 1
+        if e.get("action") == "block_suspicious_ip" and _ip_of(e):
+            block_ips.append(_ip_of(e))
     judged = disruptive["right"] + disruptive["wrong"]
     return {
         "since": since.isoformat() if since else None,
         "cards": cards,
         "exercises": exercises,
+        # A returning scanner opens a card per visit: how many attackers behind the blocks.
+        "blocks": {"cards": len(block_ips), "distinct_ips": len(set(block_ips))},
         "judged": sum(b["right"] + b["wrong"] + b["unsure"] for b in by_action.values()),
         "by_action": by_action,
         "by_rule": by_rule,

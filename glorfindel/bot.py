@@ -129,6 +129,11 @@ def _embed_body(esc: dict) -> tuple[str, list[tuple[str, str, bool]]]:
         fields.append(("Règle", f"`{esc['rule_name']}`", True))
     if esc.get("confidence"):
         fields.append(("Confiance", f"{round(float(esc['confidence']) * 100)} %", True))
+    rec = esc.get("recurrence")
+    if rec:
+        verdict = f", jugée {rec['last_verdict']}" if rec.get("last_verdict") else ""
+        fields.append(("Déjà vue", f"↻ même IP {rec['previous']}× en 7 jours — dernière le "
+                       f"{str(rec.get('last_seen') or '')[:16].replace('T', ' ')} UTC{verdict}", False))
     type_label = _ESCALATION_LABELS.get(esc.get("escalation_type", ""), esc.get("escalation_type", ""))
     fields.append(("Contexte", " · ".join(filter(None, [esc.get("ttp", ""), esc.get("severity", ""), type_label])), False))
     if explanation and reason and reason != explanation:
@@ -220,6 +225,9 @@ def _weekly_summary(report: dict, to_judge: int, now) -> str:
         f"isoler/bloquer jugés faux : **{rate}**"
         + (f" · {report['exercises']} exercice(s) écarté(s)" if report.get("exercises") else ""),
     ]
+    blocks = report.get("blocks") or {}
+    if blocks.get("cards"):
+        lines.append(f"🔁 blocages recommandés : {blocks['cards']} carte(s) pour {blocks['distinct_ips']} IP distincte(s)")
     rules = sorted((report.get("by_rule") or {}).items(), key=lambda kv: -sum(kv[1].values()))
     for name, b in rules[:5]:
         lines.append(f"• `{name}` : {b.get('right', 0)} right · {b.get('wrong', 0)} wrong · "
@@ -421,6 +429,10 @@ def _build_embed(esc: dict) -> discord.Embed:
     color = discord.Color.red() if esc.get("escalation_type") == "destructive_action" else discord.Color.orange()
     if esc.get("status") == "resolved":
         color = discord.Color.dark_grey()
+    try:
+        esc = {**esc, "recurrence": esc_module.recurrence(esc)}
+    except Exception:  # a label must never stop a post
+        pass
     description, fields = _embed_body(esc)
     embed = discord.Embed(title=_embed_title(esc), description=description, color=color)
     for name, value, inline in fields:

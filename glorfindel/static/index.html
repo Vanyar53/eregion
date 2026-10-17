@@ -2549,7 +2549,9 @@ function renderObsCounter(r) {
   const d = r.disruptive || {};
   const rate = d.false_rate == null ? '—' : Math.round(d.false_rate * 100) + '%';
   el.textContent = `7 days · ${r.cards} card${r.cards === 1 ? '' : 's'} · ${r.judged} judged · `
-    + `isolate/block wrong ${rate}` + (r.exercises ? ` · ${r.exercises} exercise${r.exercises > 1 ? 's' : ''} left out` : '');
+    + `isolate/block wrong ${rate}`
+    + (r.blocks && r.blocks.cards ? ` · blocks ${r.blocks.cards} for ${r.blocks.distinct_ips} IP${r.blocks.distinct_ips > 1 ? 's' : ''}` : '')
+    + (r.exercises ? ` · ${r.exercises} exercise${r.exercises > 1 ? 's' : ''} left out` : '');
   el.title = 'Observation (glorfindel report --since 7d): decision cards, verdicts given, and the '
     + 'share of isolate/block recommendations judged wrong. Exercise cards are not counted.';
 }
@@ -2582,6 +2584,7 @@ function renderToJudge() {
         <span class="judge-ts">${c.first_seen ? _relTime(c.first_seen) : ''}${times}</span>
       </div>
       <div class="judge-why" style="-webkit-line-clamp:1;color:var(--text)" title="${_attr(c.resource_id || '')}">${_attr(vm)}${c.rule_name ? ` · rule ${_attr(c.rule_name)}` : ''}${c.ttp ? ` · ${_attr(c.ttp)}` : ''}</div>
+      ${c.recurrence ? `<div class="judge-why" style="-webkit-line-clamp:1;color:var(--yellow)" title="An earlier card on the same IP: in observation nothing is blocked, so a scanner comes back">↻ same IP seen ${c.recurrence.previous}× in 7 days — last ${c.recurrence.last_seen ? _relTime(c.recurrence.last_seen) : ''}${c.recurrence.last_verdict ? ', judged ' + _attr(c.recurrence.last_verdict) : ''}</div>` : ''}
       <div class="judge-why" title="${_attr(why)}">${_attr(why)}</div>
       <div class="judge-actions">
         <input id="judge-note-${id}" placeholder="note (optional): why" maxlength="300">

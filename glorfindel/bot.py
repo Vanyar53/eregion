@@ -26,6 +26,10 @@ _RESTORE_DAYS = 14
 # buttons in Discord, and repeats never showed (16/10).
 _SYNCED_STORE = Path.home() / ".glorfindel" / "bot_synced.json"
 _SYNC_EVERY = 3  # watch-loop turns (5 s each) between two syncs of the posted messages
+# The observation's week, posted in the channel every Monday from 08:00 UTC — what
+# `glorfindel report --since 7d` says, without opening anything.
+_WEEKLY_STORE = Path.home() / ".glorfindel" / "bot_weekly.json"
+_WEEKLY_HOUR_UTC = 8
 
 
 def _load_posted() -> set[str]:
@@ -196,6 +200,32 @@ def _card_state_line(esc: dict) -> str:
     if n > 1:
         parts.append(f"{n}× (dernière : {str(esc.get('last_seen') or '')[11:16]} UTC)")
     return " · ".join(parts)
+
+
+def _weekly_due(now, last_sent: str | None) -> bool:
+    """Monday from 08:00 UTC, once per week."""
+    if now.weekday() != 0 or now.hour < _WEEKLY_HOUR_UTC:
+        return False
+    return last_sent != now.date().isoformat()
+
+
+def _weekly_summary(report: dict, to_judge: int, now) -> str:
+    from datetime import timedelta
+    start = (now - timedelta(days=7)).strftime("%d/%m")
+    d = report.get("disruptive") or {}
+    rate = "—" if d.get("false_rate") is None else f"{round(d['false_rate'] * 100)} %"
+    lines = [
+        f"📊 **Observation — semaine du {start} au {now.strftime('%d/%m')}**",
+        f"{report.get('cards', 0)} carte(s) de décision · {report.get('judged', 0)} jugée(s) · "
+        f"isoler/bloquer jugés faux : **{rate}**"
+        + (f" · {report['exercises']} exercice(s) écarté(s)" if report.get("exercises") else ""),
+    ]
+    rules = sorted((report.get("by_rule") or {}).items(), key=lambda kv: -sum(kv[1].values()))
+    for name, b in rules[:5]:
+        lines.append(f"• `{name}` : {b.get('right', 0)} right · {b.get('wrong', 0)} wrong · "
+                     f"{b.get('unsure', 0)} unsure · {b.get('unjudged', 0)} non jugée(s)")
+    lines.append(f"⚖️ **{to_judge} carte(s) à juger**" if to_judge else "✓ Rien à juger.")
+    return "\n".join(lines)
 
 
 def _glorfindel_bin() -> str:
@@ -420,6 +450,10 @@ class GlorfindelBot(discord.Client):
         self._threads: dict[str, int] = _load_threads()
         self._messages: dict[str, int] = _load_messages()
         self._synced: dict[str, str] = _load_synced()
+        try:
+            self._weekly_last: str | None = json.loads(_WEEKLY_STORE.read_text()).get("last")
+        except (OSError, ValueError, AttributeError):
+            self._weekly_last = None
 
     async def setup_hook(self) -> None:
         @self.tree.command(
@@ -555,6 +589,7 @@ class GlorfindelBot(discord.Client):
                         )
                     except Exception as e:
                         _console.print(f"[red]Bot post error: {e}[/red]")
+                await self._post_weekly(channel)
                 if turn % _SYNC_EVERY == 0:
                     try:
                         await self._sync_messages()
@@ -603,6 +638,19 @@ class GlorfindelBot(discord.Client):
             if thread is not None and not thread.archived:
                 await thread.edit(archived=True, reason="All escalations handled")
         return edited
+
+    async def _post_weekly(self, channel) -> bool:
+        from datetime import datetime, timedelta, timezone
+        now = datetime.now(timezone.utc)
+        if not _weekly_due(now, self._weekly_last):
+            return False
+        report = esc_module.observation_report(now - timedelta(days=7))
+        to_judge = len(esc_module.to_judge(now - timedelta(days=7)))
+        await channel.send(_weekly_summary(report, to_judge, now))
+        self._weekly_last = now.date().isoformat()
+        _WEEKLY_STORE.parent.mkdir(parents=True, exist_ok=True)
+        _WEEKLY_STORE.write_text(json.dumps({"last": self._weekly_last}))
+        return True
 
     async def _thread_of(self, resource_id: str):
         tid = self._threads.get(resource_id)

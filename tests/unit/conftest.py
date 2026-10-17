@@ -122,3 +122,4 @@ def isolated_bot_state(tmp_path, monkeypatch):
     monkeypatch.setattr(bot, "_THREADS_STORE", tmp_path / "bot_threads.json")
     monkeypatch.setattr(bot, "_MESSAGES_STORE", tmp_path / "bot_messages.json")
     monkeypatch.setattr(bot, "_SYNCED_STORE", tmp_path / "bot_synced.json")
+    monkeypatch.setattr(bot, "_WEEKLY_STORE", tmp_path / "bot_weekly.json")

@@ -189,3 +189,54 @@ def test_a_card_handled_in_the_war_room_updates_its_discord_message():
     assert state == "jugée right · acquittée"
     assert all(item.disabled for item in view.children)
     assert thread.archived and thread.archive_calls == 1
+
+
+def test_the_weekly_summary_is_due_on_monday_morning_once():
+    from datetime import datetime, timezone
+    monday_7 = datetime(2026, 10, 19, 7, 59, tzinfo=timezone.utc)
+    monday_8 = datetime(2026, 10, 19, 8, 0, tzinfo=timezone.utc)
+    tuesday = datetime(2026, 10, 20, 9, 0, tzinfo=timezone.utc)
+    assert not bot._weekly_due(monday_7, None)
+    assert bot._weekly_due(monday_8, None)
+    assert not bot._weekly_due(monday_8, "2026-10-19")          # already sent today
+    assert bot._weekly_due(monday_8, "2026-10-12")
+    assert not bot._weekly_due(tuesday, None)
+
+
+def test_the_weekly_summary_says_the_week():
+    from datetime import datetime, timezone
+    report = {"cards": 4, "judged": 3, "exercises": 1,
+              "disruptive": {"false_rate": 0.25},
+              "by_rule": {"ssh-brute-force": {"right": 3, "wrong": 1, "unsure": 0, "unjudged": 0}}}
+    text = bot._weekly_summary(report, 1, datetime(2026, 10, 19, 8, 0, tzinfo=timezone.utc))
+    assert "semaine du 12/10 au 19/10" in text and "**25 %**" in text
+    assert "`ssh-brute-force` : 3 right · 1 wrong" in text and "1 carte(s) à juger" in text
+    empty = bot._weekly_summary({"cards": 0, "judged": 0, "disruptive": {"false_rate": None}}, 0,
+                                datetime(2026, 10, 19, 8, 0, tzinfo=timezone.utc))
+    assert "**—**" in empty and "Rien à juger" in empty
+
+
+def test_the_weekly_summary_is_posted_once_on_monday(monkeypatch):
+    from datetime import datetime, timezone
+
+    class _FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 10, 19, 8, 30, tzinfo=timezone.utc)
+
+    monkeypatch.setattr("datetime.datetime", _FixedDatetime)
+
+    class _Channel:
+        sent = []
+
+        async def send(self, text):
+            self.sent.append(text)
+
+    async def twice():
+        b = bot.GlorfindelBot(channel_id=1, ping_role=None)
+        ch = _Channel()
+        return await b._post_weekly(ch), await b._post_weekly(ch), ch.sent
+
+    first, second, sent = asyncio.run(twice())
+    assert first and not second and len(sent) == 1
+    assert bot.GlorfindelBot(channel_id=1, ping_role=None)._weekly_last == "2026-10-19"  # survives a restart

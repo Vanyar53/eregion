@@ -42,6 +42,8 @@ Les exercices d'Annatar et de Gothmog sont marqués (B2) et sortent du rapport. 
 pré-observation démarre l'outillage et calibre le bruit ; elle ne compte pas pour le critère
 « quatre semaines sur un parc réel ».
 
+**Le résumé du lundi.** Avec le bot Discord, chaque lundi matin le salon reçoit le compte de la semaine — le même que `glorfindel report --since 7d`.
+
 **Garder les verdicts.** Ils ne vivent que sur l'hôte de Glorfindel : une copie par semaine
 (`make glorfindel-host-pull` sur la VM hébergée, H0) évite de perdre l'observation avec un disque.
 

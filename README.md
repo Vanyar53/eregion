@@ -20,6 +20,10 @@ Three agents form a closed loop: Annatar attacks, Gothmog breaks, Glorfindel det
 > **Observe-only by default** — Glorfindel recommends, you decide. Grant it autonomy per asset as you build trust.
 > With autonomous containment enabled: **~1 min to contain a ransomware VM, 21m29s to restored service** — the only human step is approving the backup restore.
 
+![The War Room in observe-only: a held recommendation waiting for the operator's verdict](docs/images/war-room-observation.png)
+
+*The War Room in observe-only, on the Eregion bench (October 2026). An Internet scanner tried SSH on a VM: Glorfindel recommended blocking its IP (95 %), the human-only mode held it, and the card waits in **TO JUDGE** for the operator's verdict — right, wrong or unsure. The header counts the week; nothing was executed. The scanner's IP is masked.*
+
 ## How it works
 
 ```mermaid
@@ -138,10 +142,6 @@ The full pipeline — rule → detection → investigate → decide → escalate
 ## Evaluate on your infrastructure — read-only, zero risk
 
 The fastest, safest way to see Glorfindel: point it at your existing Log Analytics Workspace with **read-only** credentials and watch a week of recommendations. It detects and reasons on your real signals but **cannot touch anything** — no Contributor role, no write API. The pitch to a colleague: *"see what I'd have done on your real signals; I can't touch a thing."*
-
-![The War Room in observe-only: a held recommendation waiting for the operator's verdict](docs/images/war-room-observation.png)
-
-*The War Room in observe-only on the Eregion bench (October 2026). An Internet scanner tried SSH on a VM: Glorfindel recommended blocking its IP (95 %), the human-only mode held it, and the card waits in **TO JUDGE** for the operator's verdict — right, wrong or unsure. The header counts the week; nothing was executed. The scanner's IP is masked.*
 
 **1. Create a Reader-only service principal** (no write permission anywhere):
 

@@ -58,6 +58,7 @@ def test_host_env_carries_no_azure_secret_and_is_read_only():
     assert not [k for k in env if "CLIENT" in k or "TENANT" in k]
     assert env["DISCORD_BOT_TOKEN"] == "bot"  # the VM runs the bot
     assert env["GLORFINDEL_READ_ONLY"] == "1"
+    assert env["GLORFINDEL_DISCOVERY_RETENTION_H"] == "168"   # gondolin, off, stays a week
     assert env["GLORFINDEL_WEBHOOK_URL"] == "https://hook"
     assert len(env["GLORFINDEL_WARROOM_TOKEN"]) >= 24
 

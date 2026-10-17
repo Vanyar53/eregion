@@ -38,6 +38,7 @@ make glorfindel-host-url             # l'URL de la War Room avec son jeton, seul
 make glorfindel-host-logs            # vérifier « heartbeat → N VM(s) » et l'absence d'erreur d'identité
 make glorfindel-host-status          # tout tourne ? VMs, sauvegardes, services, erreurs 24 h, cartes à juger
 make glorfindel-host-report          # rapport d'observation (SINCE=4w pour la période)
+make glorfindel-host-pull            # copie locale de ~/.glorfindel (verdicts, mémoire) — chaque semaine
 make glorfindel-host-down            # détruit la VM et son état (mémoire comprise)
 ```
 
@@ -48,6 +49,8 @@ VM elle-même.
 Les escalades arrivent dans Discord par le bot, qui tourne sur la VM (un fil par VM, avec
 ses boutons) ; le webhook garde les notifications d'action. Un seul bot par
 `DISCORD_BOT_TOKEN` : n'en lance pas d'autre en local.
+
+Les verdicts de l'observation et la mémoire ne vivent que sur le disque de la VM : `make glorfindel-host-pull` en garde une copie sur le poste (`~/.eregion/host-backups/`, les 30 dernières), et `make glorfindel-host-status` signale une copie de plus de 7 jours. Une VM éteinte (gondolin entre deux exercices) reste une semaine sur la carte (`GLORFINDEL_DISCOVERY_RETENTION_H=168` dans `host.env`, 8 h par défaut).
 
 La mémoire (ChromaDB) part vide sur la VM : la mémoire locale ne contient que des cycles
 d'exercice non marqués (B2), qui n'ont rien à faire dans une observation.

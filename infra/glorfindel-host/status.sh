@@ -62,3 +62,14 @@ rate = "—" if d["false_rate"] is None else "%d%%" % round(d["false_rate"] * 10
 print("  · 7 jours : %s carte(s), %s jugée(s), isoler/bloquer faux %s, exercices écartés %s" % (r["cards"], r["judged"], rate, r["exercises"]))'
 echo "  · disque $(df -h / | awk 'NR==2{print $5}') · mémoire dispo $(free -m | awk 'NR==2{print $7}') Mo · $(uptime -p)"
 REMOTE
+
+echo "== Poste"
+B="${HOST_BACKUPS:-$HOME/.eregion/host-backups}"
+last=$(ls -1t "$B"/glorfindel-*.tgz 2>/dev/null | head -1)
+if [ -z "$last" ]; then
+  echo "  ⚠ copie locale des verdicts : aucune — make glorfindel-host-pull"
+else
+  age_d=$(( ( $(date +%s) - $(stat -c %Y "$last") ) / 86400 ))
+  mark="✓"; [ "$age_d" -ge 7 ] && mark="⚠"
+  echo "  $mark copie locale des verdicts : il y a ${age_d} j ($(basename "$last"))"
+fi

@@ -29,6 +29,9 @@ def host_env(environ: dict) -> dict:
         raise SystemExit(f"missing in the environment (load .envrc): {', '.join(missing)}")
     out = {k: environ[k] for k in COPIED if environ.get(k)}
     out["GLORFINDEL_READ_ONLY"] = "1"
+    # A powered-off VM stays on the map a week (default 8 h): gondolin, off between
+    # exercises, kept vanishing from the observed fleet.
+    out.setdefault("GLORFINDEL_DISCOVERY_RETENTION_H", environ.get("GLORFINDEL_DISCOVERY_RETENTION_H") or "168")
     out["GLORFINDEL_WARROOM_TOKEN"] = secrets.token_urlsafe(24)
     return out
 

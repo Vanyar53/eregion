@@ -96,6 +96,7 @@ La gate destructive est nécessaire mais pas suffisante : le persona sans SOC cr
 ### War Room — observation (16/10)
 
 - **TO JUDGE** (colonne de gauche) : les cartes de décision des 7 derniers jours sans verdict, en attente ou acquittées, exercices exclus (`GET /api/to-judge?since=7d`, `escalations.to_judge`) ; note facultative + ✓ Right / ✗ Wrong / ? Unsure. L'en-tête compte la semaine (`/api/report?since=7d`). Puce **EXERCISE** sur une carte que la fenêtre d'un injecteur couvrait (B2).
+- **Pourquoi c'est verrouillé** (17/10) : en lecture seule, un bandeau sous l'en-tête dit que rien n'est exécuté et d'où vient le verrou (`GLORFINDEL_READ_ONLY=1`, droits Azure en lecture, fixés au déploiement) ; Config le répète (ligne « access », note sous « Autonomy » : le lever relève du déploiement, pas de la page).
 - **Lecture seule** : le mode d'autonomie est verrouillé à human-only (menus désactivés ; `/api/activate`, `/api/autonomy`, `/api/config/autonomy/default` refusent). Le statut Azure de Config vient de ce qu'Azure a répondu aux lectures de la War Room (identité managée comprise), plus de la présence d'un principal de service.
 - Retirés : le contrôle « Run scenario » (il postait vers `/api/run/<name>`, qui n'a jamais existé) et `/api/scenarios`.
 

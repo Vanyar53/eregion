@@ -132,6 +132,14 @@
   .act-run { color: var(--blue); }
   .act-err { color: var(--red); }
 
+  /* ── Observe-only banner: why nothing can be changed here ── */
+  #observe-banner {
+    display: none; flex-shrink: 0; padding: 5px 20px; font-size: 11px; color: var(--text);
+    background: color-mix(in srgb, var(--blue) 10%, var(--bg1));
+    border-bottom: 1px solid color-mix(in srgb, var(--blue) 35%, transparent);
+  }
+  #observe-banner code { font-size: 10px; color: var(--blue); }
+
   /* ── To judge (observation): decision cards waiting for the operator's verdict ── */
   #judge-list {
     flex-shrink: 0; max-height: 45vh; overflow-y: auto;
@@ -565,6 +573,16 @@
   <button id="config-toggle" class="action" onclick="toggleConfig()" title="Azure configuration">⚙ Config</button>
   <span id="clock" style="min-width:70px;text-align:right"></span>
 </header>
+
+<!-- Shown in observe-only (read-only credentials): the mode is locked by the deployment,
+     not by a setting of this page — said where the operator looks first (16/10). -->
+<div id="observe-banner">
+  <b>Observation</b> — Glorfindel detects and recommends; <b>nothing is executed</b>.
+  The autonomy mode is locked to <b>human-only</b> because this War Room runs with
+  <b>read-only credentials</b> (<code>GLORFINDEL_READ_ONLY=1</code> and read-only Azure
+  rights, set when it was deployed — not a setting of this page).
+  Give each card a verdict in <b>TO JUDGE</b>.
+</div>
 
 <main>
   <!-- Feed LEFT -->
@@ -2560,10 +2578,10 @@ function renderToJudge() {
     return `<div class="judge-item${disruptive ? ' disruptive' : ''}">
       <div class="judge-head">
         <span class="judge-what" style="color:${disruptive ? 'var(--red)' : 'var(--orange)'}">${_attr(what)}</span>
-        <span class="judge-vm" title="${_attr(c.resource_id || '')}">${_attr(vm)}${c.ttp ? ` · ${_attr(c.ttp)}` : ''}</span>
+        <span style="flex:1"></span>
         <span class="judge-ts">${c.first_seen ? _relTime(c.first_seen) : ''}${times}</span>
       </div>
-      ${c.rule_name ? `<div class="judge-why" style="-webkit-line-clamp:1">rule ${_attr(c.rule_name)}</div>` : ''}
+      <div class="judge-why" style="-webkit-line-clamp:1;color:var(--text)" title="${_attr(c.resource_id || '')}">${_attr(vm)}${c.rule_name ? ` · rule ${_attr(c.rule_name)}` : ''}${c.ttp ? ` · ${_attr(c.ttp)}` : ''}</div>
       <div class="judge-why" title="${_attr(why)}">${_attr(why)}</div>
       <div class="judge-actions">
         <input id="judge-note-${id}" placeholder="note (optional): why" maxlength="300">
@@ -2880,6 +2898,8 @@ function _autoFetchAuditOnNewVm() {
 // Colour language shared with the VM cards: blue = observe/recommend, orange = can act.
 function _updatePosture() {
   const ro = !!_state?.read_only;
+  const banner = document.getElementById('observe-banner');
+  if (banner) banner.style.display = ro ? 'block' : 'none';
   const regime = document.getElementById('regime-badge');
   if (regime) {
     regime.textContent = ro ? '👁 OBSERVE-ONLY' : '⚡ ACTIVE';
@@ -3266,6 +3286,11 @@ async function refreshConfig() {
           <span class="cfg-key">subscription</span><span class="cfg-val">${mask(az.subscription_id)}</span>
         </div>
         <div class="cfg-row">
+          <span class="cfg-key">access</span><span class="cfg-val">${_state?.read_only
+            ? '<span class="cfg-badge">👁 read-only</span> <span style="color:var(--dim)">GLORFINDEL_READ_ONLY=1</span>'
+            : 'read &amp; write'}</span>
+        </div>
+        <div class="cfg-row">
           <span class="cfg-key">identity</span><span class="cfg-val">${keyless
             ? 'no secret — managed identity or az login'
             : 'service principal ' + mask(az.client_id) + ' · tenant ' + mask(az.tenant_id)}</span>
@@ -3298,6 +3323,12 @@ async function refreshConfig() {
             </select>
           </span>
         </div>
+        ${_state?.read_only ? `<div style="color:var(--blue);font-size:10px;padding:4px 0 6px">
+          🔒 Locked to human-only. This War Room runs with read-only credentials
+          (<code>GLORFINDEL_READ_ONLY=1</code> in its environment, read-only Azure rights), set when
+          it was deployed for the observation. To let Glorfindel act, the deployment changes —
+          write rights on the monitored resources and that variable removed — not this page.
+        </div>` : ''}
         <div style="color:var(--dim);font-size:10px;padding:4px 0 0">
           Per-asset overrides are set from each VM card. In non-disruptive, each VM is
           checked first: a ready VM acts alone, a VM with reserves stays in human-only

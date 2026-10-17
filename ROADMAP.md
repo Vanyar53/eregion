@@ -24,7 +24,7 @@ Les incidents cloud courants sont contenus seuls, en quelques minutes, de façon
 |---|---|---|
 | Temps pour contenir | de la première action malveillante à l'action vérifiée | détection par le RulePoller en 84 s à 3 min 30 (runs du 05 au 07/10) ; ransomware : RTO 21 à 25 min |
 | Part contenue seule | incidents contenus sans humain, sur tous les incidents | non mesurée |
-| Actions disruptives à tort | isolations et blocages jugés faux, parmi ceux qui sont jugés | outil livré (`glorfindel verdict`, `glorfindel report`, `docs/observation.md`) ; aucune carte jugée |
+| Actions disruptives à tort | isolations et blocages jugés faux, parmi ceux qui sont jugés | pré-observation sur le banc depuis le 16/10 (H0, bree) : cartes jugées dans la War Room (TO JUDGE) ou Discord, résumé chaque lundi, `make glorfindel-host-report` ; le critère « parc réel » reste ouvert |
 | Couverture | techniques cloud pertinentes détectées, sur le catalogue | 6 TTPs validés en réel (`technique_catalog.yaml`) |
 | Âge de la dernière preuve | depuis le dernier run qui a prouvé détection et réponse | objectif : moins de 30 jours ; dernier run Azure de bout en bout : 07/10 |
 

@@ -497,7 +497,7 @@ annatar campaign run <campaign_id>                        # execute a planned ca
 
 # LLM provider — default: Anthropic Claude
 ANTHROPIC_API_KEY=...               # required for default Anthropic provider
-# GLORFINDEL_LLM_MODEL=anthropic/claude-sonnet-4-6  # default
+# GLORFINDEL_LLM_MODEL=anthropic/claude-sonnet-5-5  # default (eregion_core/models.py)
 # GLORFINDEL_LLM_MODEL=openai/gpt-4o               # OpenAI
 # GLORFINDEL_LLM_MODEL=azure/gpt-4o                # Azure OpenAI (+ AZURE_API_KEY, AZURE_API_BASE)
 # GLORFINDEL_LLM_MODEL=mistral/mistral-large-latest # Mistral cloud (EU) (+ MISTRAL_API_KEY)

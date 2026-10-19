@@ -15,7 +15,7 @@ tactic — no LLM needed, fully unit-testable, and the default in tests/dry runs
 
 from __future__ import annotations
 
-from eregion_core.models import DEFAULT_LLM_MODEL, annatar_model
+from eregion_core.models import DEFAULT_ANNATAR_MODEL, annatar_model
 
 import json
 import logging
@@ -31,7 +31,7 @@ from annatar.campaign.catalog import (
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = DEFAULT_LLM_MODEL  # eregion_core/models.py — one definition
+DEFAULT_MODEL = DEFAULT_ANNATAR_MODEL  # eregion_core/models.py — one definition
 
 
 @dataclass
@@ -150,7 +150,9 @@ def _llm_pick(
     mdl = model or annatar_model()
 
     try:
-        response = litellm.completion(
+        from eregion_core.llm_call import completion_with_tool
+        response = completion_with_tool(
+            litellm, "campaign_plan",
             model=mdl,
             max_tokens=1024,
             messages=[
@@ -158,11 +160,15 @@ def _llm_pick(
                 {"role": "user", "content": objective or "Plan a coherent campaign."},
             ],
             tools=[_PLAN_TOOL],
-            tool_choice={"type": "function", "function": {"name": "campaign_plan"}},
             **kwargs,
         )
         tool_calls = getattr(response.choices[0].message, "tool_calls", None) or []
         d = json.loads(tool_calls[0].function.arguments) if tool_calls else {}
+        if not tool_calls:
+            # Said, not silent: a model that declines (content_filter) or answers in text
+            # gave no plan — the caller falls back to the deterministic order (19/10).
+            logger.warning("planner: no plan from %s (finish_reason=%s) — deterministic fallback",
+                           mdl, getattr(response.choices[0], "finish_reason", "?"))
     except Exception as e:  # any LLM/parse failure → deterministic fallback
         logger.warning("planner LLM call failed (%s) — deterministic fallback", e)
         return []

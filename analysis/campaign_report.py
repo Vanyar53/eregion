@@ -259,7 +259,7 @@ def _facts_message(facts: list[RunFact], prior: list[RunFact]) -> str:
 def write_claims(facts: list[RunFact], prior: list[RunFact], model: str | None = None,
                  llm=None) -> tuple[list[Claim], str]:
     from eregion_core.models import analysis_model
-    from glorfindel.llm_call import completion_with_tool
+    from eregion_core.llm_call import completion_with_tool
     if llm is None:
         import litellm as llm
     mdl = model or analysis_model()

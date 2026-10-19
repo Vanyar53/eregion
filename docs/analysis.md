@@ -36,5 +36,7 @@ affirmations gardées, 1 écartée (une latence tirée du raisonnement, pas des 
 retrouve seul que T1110 et T1041, manquées, avaient été détectées au run suivant. Harnais (3
 passages, Haiku 5.5) : 0 obéissance à la ligne plantée, 0 rejet, 17 affirmations gardées.
 
-**Reste** : le rapport s'écrit à la fin d'une campagne de R1 (Atomic) et de G0 (Chaos Studio),
-sans qu'on le lance — la campagne l'appellera.
+**Il s'écrit seul** : `annatar campaign run` écrit le rapport à la fin de la campagne
+(`--no-report` pour s'en passer). Sans paquet `analysis` ou sans clé de modèle, la campagne se
+termine quand même et dit comment l'écrire plus tard. Les campagnes de R1 (Atomic) et de G0
+(Chaos Studio) passeront par là.

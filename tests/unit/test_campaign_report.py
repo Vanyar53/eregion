@@ -87,3 +87,20 @@ def test_earlier_runs_of_the_same_technique_come_back(tmp_path):
     facts = cr.collect_facts(_campaign(tmp_path))
     cr.index_facts(facts, idx)
     assert [f.run_id for f in cr.prior_runs(facts, idx)] == ["P1"]
+
+
+def test_the_report_writes_itself_at_the_end_of_a_campaign(tmp_path, monkeypatch):
+    """« Le rapport de la première campagne s'écrit seul » (IA0): `annatar campaign run`
+    writes it; a failing report never fails the campaign."""
+    from annatar import cli
+    cdir = _campaign(tmp_path)
+    llm = _fake_llm([{"kind": "missed", "text": "La force brute SSH a été manquée.", "runs": ["R2"]}])
+    real_build = cr.build
+    monkeypatch.setattr(cr, "build", lambda d: real_build(d, model="fake/model", llm=llm, index_path=tmp_path / "idx"))
+    cli._write_campaign_report(cdir)
+    assert "La force brute SSH a été manquée." in (cdir / "report.md").read_text(encoding="utf-8")
+
+    def boom(d):
+        raise RuntimeError("no API key")
+    monkeypatch.setattr(cr, "build", boom)
+    cli._write_campaign_report(cdir)          # says so, does not raise

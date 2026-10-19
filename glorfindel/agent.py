@@ -924,7 +924,7 @@ def decide(
         kwargs["base_url"] = base_url
 
     try:
-        from glorfindel.llm_call import completion_with_tool
+        from eregion_core.llm_call import completion_with_tool
         response = completion_with_tool(
             litellm, "security_decision",
             model=model,

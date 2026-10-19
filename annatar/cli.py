@@ -289,7 +289,9 @@ def campaign_plan(target, objective, max_scenarios, allow_destructive, use_llm, 
 @click.option("--yes", is_flag=True, help="Ratify the budget/scope and execute.")
 @click.option("--dry-run", is_flag=True, help="Preview the sequence without executing.")
 @click.option("--runs-dir", default="runs", help="Where campaigns are stored.")
-def campaign_run(campaign_id, yes, dry_run, runs_dir):
+@click.option("--report/--no-report", default=True,
+              help="Write the campaign report at the end (IA0, analysis/campaign_report.py).")
+def campaign_run(campaign_id, yes, dry_run, runs_dir, report):
     """Execute a planned campaign sequentially within its budget/scope."""
     from annatar.campaign.manifest import CampaignManifest, campaign_dir
     from annatar.campaign.runner import CampaignRunner
@@ -319,6 +321,23 @@ def campaign_run(campaign_id, yes, dry_run, runs_dir):
             f"executed={r['executed']} detected={r['detected']} "
             f"missed={r['missed']} skipped={r['skipped']} errors={r['errors']}"
         )
+        if report:
+            _write_campaign_report(cdir)
+
+
+def _write_campaign_report(cdir) -> None:
+    """IA0: the report writes itself at the end of a campaign. Never fails the campaign —
+    without the analysis package or a model key, it says so and how to write it later."""
+    try:
+        from analysis import campaign_report as cr
+        rep = cr.build(cdir)
+        out = cdir / "report.md"
+        out.write_text(cr.render(rep), encoding="utf-8")
+        console.print(f"[green]Campaign report → {out}[/green]  "
+                      f"{len(rep.kept)} claim(s) kept, {len(rep.rejected)} rejected by the check")
+    except Exception as exc:  # the campaign ran; its report can be written later
+        console.print(f"[yellow]Campaign report not written ({type(exc).__name__}: {str(exc)[:120]}) — "
+                      f"later: make campaign-report CAMPAIGN={cdir.name}[/yellow]")
 
 
 @campaign.command(name="list")

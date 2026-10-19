@@ -5,7 +5,7 @@ supported for this model ». A model that accepts the forced choice is called as
 """
 import pytest
 
-from glorfindel import llm_call
+from eregion_core import llm_call
 
 
 class _Litellm:

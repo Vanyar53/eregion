@@ -360,7 +360,7 @@ def author_rule(
     if base_url:
         kwargs["base_url"] = base_url
 
-    from glorfindel.llm_call import completion_with_tool
+    from eregion_core.llm_call import completion_with_tool
     response = completion_with_tool(
         litellm, "propose_detection_rule",
         model=model,

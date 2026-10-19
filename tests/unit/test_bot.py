@@ -252,3 +252,82 @@ def test_the_embed_says_the_ip_was_seen_before_and_the_week_counts_attackers():
                                 "blocks": {"cards": 4, "distinct_ips": 2}}, 0,
                                datetime(2026, 10, 19, 8, 0, tzinfo=timezone.utc))
     assert "4 carte(s) pour 2 IP distincte(s)" in text
+
+
+def _sync_bot(thread, esc_id):
+    b = bot.GlorfindelBot(channel_id=1, ping_role=None)
+    b._threads = {VM: 99}
+    b.get_channel = lambda tid: thread
+    b._messages = {esc_id: 4242}
+    b._synced = {esc_id: "stale"}
+    return b
+
+
+def test_a_card_in_an_archived_thread_is_updated_then_the_thread_closed_again():
+    """Discord archives an idle thread: the edit failed (50083) and was retried every 15 s —
+    10 800 errors in a day (19/10). The thread is reopened, the message edited, closed again."""
+    import discord
+    esc_id = escalations.record("rule-ssh-brute-force-0123abcd", VM, "block_suspicious_ip", "mode_hold", "held")
+    escalations.set_verdict(esc_id, "right", "")
+    escalations.resolve(esc_id)
+
+    class _Thread(discord.Thread):
+        def __init__(self):
+            self.archived, self.calls, self.edited = True, [], 0
+
+        def get_partial_message(self, mid):
+            thread = self
+
+            class _P:
+                async def edit(self, embed, view):
+                    assert not thread.archived, "edited in an archived thread"
+                    thread.edited += 1
+            return _P()
+
+        async def edit(self, archived, reason):
+            self.archived = archived
+            self.calls.append(archived)
+
+    thread = _Thread()
+    b = _sync_bot(thread, esc_id)
+    assert asyncio.run(b._sync_messages()) == 1
+    assert thread.edited == 1 and thread.calls == [False, True] and thread.archived
+
+
+def test_a_failing_edit_is_tried_once_and_a_deleted_message_forgotten():
+    from unittest.mock import MagicMock
+
+    import discord
+    esc_id = escalations.record("rule-ssh-brute-force-0123abcd", VM, "block_suspicious_ip", "mode_hold", "held")
+
+    def thread_raising(exc):
+        class _Thread(discord.Thread):
+            def __init__(self):
+                self.archived, self.attempts = False, 0
+
+            def get_partial_message(self, mid):
+                thread = self
+
+                class _P:
+                    async def edit(self, embed, view):
+                        thread.attempts += 1
+                        raise exc
+                return _P()
+
+            async def edit(self, archived, reason):
+                self.archived = archived
+        return _Thread()
+
+    gone = thread_raising(discord.NotFound(MagicMock(status=404, reason="Not Found"),
+                                           {"code": 10008, "message": "Unknown Message"}))
+    b = _sync_bot(gone, esc_id)
+    asyncio.run(b._sync_messages())
+    asyncio.run(b._sync_messages())
+    assert gone.attempts == 1 and esc_id not in b._messages
+
+    refused = thread_raising(discord.HTTPException(MagicMock(status=400, reason="Bad Request"),
+                                                   {"code": 50001, "message": "Missing Access"}))
+    b = _sync_bot(refused, esc_id)
+    asyncio.run(b._sync_messages())
+    asyncio.run(b._sync_messages())
+    assert refused.attempts == 1                       # once per state change, never a loop

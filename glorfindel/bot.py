@@ -625,7 +625,7 @@ class GlorfindelBot(discord.Client):
         """Bring each posted message in line with its card: acknowledged or judged in the
         War Room → buttons off and the state said; repeats → « N× »; a VM with nothing
         left pending → its thread archived. Returns the number of messages edited."""
-        edited, touched = 0, set()
+        edited, touched, changed = 0, set(), False
         for esc, message_id in _views_to_restore(esc_module.all_escalations(), self._messages):
             sig = _card_signature(esc)
             if self._synced.get(esc["id"]) == sig:
@@ -633,16 +633,29 @@ class GlorfindelBot(discord.Client):
             thread = await self._thread_of(esc.get("resource_id", ""))
             if thread is None:
                 continue
+            # One attempt per state change, whatever happens: a failing edit retried every
+            # 15 s logged 10 800 errors in a day (19/10).
+            self._synced[esc["id"]] = sig
+            changed = True
             try:
+                if getattr(thread, "archived", False):
+                    # Discord archives an idle thread on its own; a message in it can't be
+                    # edited until it is reopened (50083) — archived again below.
+                    await thread.edit(archived=False, reason="Card updated")
                 await thread.get_partial_message(message_id).edit(
                     embed=_build_embed(esc), view=_build_view(esc))
+            except discord.NotFound:
+                # The message is gone (deleted in Discord): forget it.
+                self._messages.pop(esc["id"], None)
+                _save_messages(self._messages)
+                continue
             except discord.HTTPException as exc:
                 _console.print(f"[yellow]Sync {esc['id'][:8]}: {exc}[/yellow]")
                 continue
-            self._synced[esc["id"]] = sig
+            finally:
+                touched.add(esc.get("resource_id", ""))
             edited += 1
-            touched.add(esc.get("resource_id", ""))
-        if edited:
+        if changed:
             _save_synced(self._synced)
         pending_rids = {e.get("resource_id", "") for e in esc_module.pending()}
         for rid in touched - pending_rids:

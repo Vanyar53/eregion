@@ -6,7 +6,7 @@ Plateforme OSS (Apache 2.0) de défense active cloud : un SOC pour les charges c
 - **Annatar** (rouge) simule des attaques réelles sur l'infra cloud (MITRE ATT&CK) ; devient des adaptateurs vers des bibliothèques publiques (R1 Atomic Red Team, R2 Stratus Red Team)
 - **Gothmog** (pannes, *à venir — G0*) : pannes déclarées en code, par un moteur public (Chaos Studio d'abord) ; éprouve d'abord Glorfindel (bruit bénin, dépendances, reprise)
 
-L'atelier autour : **Celebrimbor** (`infra/terraform/`) construit et inscrit le banc ; **Orodruin** (`infra/orodruin/`, O1 : code écrit, VM à venir) héberge les injecteurs, contrat de garde-fous vérifié au démarrage — **un injecteur n'agit que depuis un Orodruin armé** ; ailleurs (un poste d'opérateur), il reste passif.
+L'atelier autour : **Celebrimbor** (`infra/terraform/`) construit et inscrit le banc ; **Orodruin** (`infra/orodruin/`, O1 ✅ 19/10) héberge les injecteurs, contrat de garde-fous vérifié au démarrage — **un injecteur n'agit que depuis un Orodruin armé** ; ailleurs (un poste d'opérateur), il reste passif.
 
 **Direction — huitième passe (13/10)** (détail : `ROADMAP.md`, « Vers la 1.0 ») :
 - **Finalité** : les incidents cloud courants contenus seuls, en quelques minutes, réversibles et vérifiés ; le reste à un humain, trié et expliqué ; la preuve à tout moment. Cinq indicateurs : temps pour contenir, part contenue seule, actions disruptives à tort, couverture des techniques cloud, âge de la dernière preuve (< 30 jours).

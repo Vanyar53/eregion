@@ -62,9 +62,9 @@ seulement, avec sa provenance) : changer de modèle, c'est changer qui décide.
 
 1. Le comparer au harnais : `make llm-compare MODELS=anthropic/<actuel>,anthropic/<candidat> RUNS=3`.
 2. Le faire tourner de bout en bout sur le banc (T1486 et un autre TTP) avant toute autonomie.
-3. Le poser dans `infra/glorfindel-host/host.env` : `GLORFINDEL_LLM_MODEL=anthropic/<candidat>`.
-4. `make glorfindel-host-push` puis `make glorfindel-host-start` ; Config dans la War Room
-   affiche « set at deployment (GLORFINDEL_LLM_MODEL) ».
+3. `make glorfindel-host-model MODEL=anthropic/<candidat>` — le pose dans `host.env` et sur
+   la VM, redémarre Glorfindel, affiche le modèle en service ; Config dans la War Room dit
+   « set at deployment (GLORFINDEL_LLM_MODEL) ». `MODEL=default` revient au défaut du code.
 
 Sans la variable, le défaut du code (`eregion_core/models.py`, une seule définition). Depuis
 le 19/10, la VM d'observation tourne sur `claude-sonnet-5-5` (issue #139 pour en faire le défaut).

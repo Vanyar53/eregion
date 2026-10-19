@@ -43,7 +43,7 @@ glorfindel = [
     "azure-mgmt-recoveryservicesbackup>=9.0",
     "langgraph>=0.1",
     "anthropic>=0.25",
-    "litellm>=1.0",
+    "litellm==1.86.1",  # épinglée (19/10) : 1.106.0 voulait un module mcp absent → plus aucune décision
     "chromadb>=0.5",
     "requests>=2.31",
     "discord.py>=2.3",

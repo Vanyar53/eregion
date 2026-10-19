@@ -36,6 +36,15 @@ for s in watch war-room bot; do
   mark="✓"; [ "$n" -gt 0 ] && mark="⚠"
   printf "  %s erreurs 24 h %-9s %s\n" "$mark" "$s" "$n"
 done
+# A detection the model could not decide on (cycle_failed): services up, discovery fine,
+# and still no decision — a broken LLM dependency did exactly that on 19/10.
+nf=$(docker exec eregion-watch python -c '
+from datetime import datetime, timedelta, timezone
+from glorfindel import escalations as e
+since = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+print(sum(1 for x in e.all_escalations() if x.get("escalation_type") == "cycle_failed" and str(x.get("first_seen")) >= since))' 2>/dev/null || echo "?")
+mark="✓"; [ "$nf" != "0" ] && mark="⚠"
+echo "  $mark décisions impossibles 24 h : $nf"
 disc=$(docker compose logs --no-color --since 10m watch 2>&1 | grep -E "heartbeat" | tail -1 | sed -E 's/.*heartbeat/heartbeat/')
 [ -n "$disc" ] && echo "  ✓ découverte : $disc" || echo "  ✗ découverte : aucun heartbeat depuis 10 min"
 last=$(docker compose logs --no-color bot 2>&1 | grep -E "Posted" | tail -1 | sed -E 's/.*Posted/dernière carte postée :/')

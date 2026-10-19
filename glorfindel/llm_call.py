@@ -19,6 +19,9 @@ def _refuses_forced_choice(exc: Exception) -> bool:
 
 
 def completion_with_tool(litellm, tool_name: str, **kwargs):
+    # litellm prints a « Give Feedback / Get Help » banner on every refused call: the expected
+    # refusal of a forced choice read as an error in the logs (and in glorfindel-host-status).
+    litellm.suppress_debug_info = True
     model = str(kwargs.get("model", ""))
     if model not in _AUTO_TOOL_CHOICE:
         try:

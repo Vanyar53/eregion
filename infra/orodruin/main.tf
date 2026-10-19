@@ -244,7 +244,8 @@ resource "azurerm_linux_virtual_machine" "host" {
 # ── Droits : agir sur le banc, rien d'autre ───────────────────────────────────────────────
 # Les actions exactes que demandent les injecteurs, pas un rôle intégré plus large. La liste
 # est celle d'eregion_core/orodruin.py (REQUIRED_ACTIONS) — un test vérifie qu'elles
-# restent identiques.
+# restent identiques. Gothmog (G0) démarre, suit et annule une expérience Chaos Studio du
+# banc ; c'est l'identité de l'expérience, limitée à sa VM, qui agit sur la VM.
 resource "azurerm_role_definition" "injector" {
   name        = "eregion-orodruin-injector-${data.azurerm_resource_group.bench.name}"
   scope       = data.azurerm_resource_group.bench.id
@@ -257,6 +258,10 @@ resource "azurerm_role_definition" "injector" {
       "Microsoft.Compute/virtualMachines/start/action",
       "Microsoft.Compute/virtualMachines/runCommand/action",
       "Microsoft.Network/networkSecurityGroups/read",
+      "Microsoft.Chaos/experiments/read",
+      "Microsoft.Chaos/experiments/start/action",
+      "Microsoft.Chaos/experiments/cancel/action",
+      "Microsoft.Chaos/experiments/executions/read",
     ]
     not_actions = []
   }

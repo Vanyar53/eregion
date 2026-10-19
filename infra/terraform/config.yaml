@@ -70,6 +70,16 @@ clusters:
     # node_size: Standard_D4as_v6  # défaut = vm_size global
     # location:  francecentral      # défaut = location globale
 
+# ── Chaos Studio (G0) — les pannes que Gothmog lance depuis Orodruin (chaos.tf) ─
+# enabled: false par défaut. true → chaque VM de shutdown_vms est inscrite auprès de Chaos
+# Studio (cible + capacité Shutdown-1.0) et reçoit une expérience d'arrêt propre
+# (exp-celebrimbor-<clé>-shutdown), dont l'identité n'a de droits que sur elle. Seules des VM
+# inscrites (pas bree) ; le coût ne court que pendant une exécution.
+chaos:
+  enabled:           false
+  shutdown_vms:      [gondolin]
+  shutdown_duration: PT5M
+
 # ── Ressources nommées (baseline) ────────────────────────────────────────────
 law_name: amonsul # tour de guet (Weathertop) — observation/logs
 rsv_name: erebor  # la Montagne au trésor — coffre/sauvegarde

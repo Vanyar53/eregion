@@ -267,7 +267,7 @@ Glorfindel est le produit ; le reste est l'atelier qui l'éprouve.
 |---|---|---|---|
 | Glorfindel | détecter, enquêter, répondre ; son IA est l'IA sous test | `glorfindel/` | existe |
 | Annatar | attaques : ses scénarios aujourd'hui, puis des adaptateurs vers des bibliothèques publiques (R1 Atomic Red Team, R2 Stratus Red Team) | `annatar/`, interface d'injecteur dans `annatar/executors/` | existe, évolue |
-| Gothmog | pannes déclarées en code, exécutées par un moteur public (Chaos Studio d'abord) | `gothmog/` | G0 |
+| Gothmog | pannes déclarées en code, exécutées par un moteur public (Chaos Studio d'abord) | `gothmog/` ; l'expérience dans `infra/terraform/chaos.tf` | G0 : code ✅, run sur le banc à venir |
 | Orodruin | hôte d'exécution jetable des injecteurs : identité limitée, sortie réseau limitée, contrat vérifié au démarrage, arrêt d'urgence | `infra/orodruin/`, état Terraform séparé | O1 |
 | Celebrimbor | construit et inscrit les cibles du banc | `infra/terraform/` | existe |
 | Inscription et périmètre | un seul garde-fou de cible pour tout injecteur, présent ou futur | `eregion_core/inscription.py` | existe (O0) |
@@ -319,23 +319,23 @@ Une même boucle pour une technique et pour une panne.
 
 | Étape | Eregion aujourd'hui | Bibliothèques d'attaque | Moteurs de chaos |
 |---|---|---|---|
-| Préparer | `eregion_core/inscription.py` (périmètre, inscription, zone), préflight | Stratus `warmup` | cible inscrite auprès du moteur |
-| État normal | `glorfindel/posture.py`, `glorfindel/readiness.py` | — | Chaos Toolkit `steady-state-hypothesis` |
-| Injecter | `annatar/executors/` | Stratus `detonate`, test Atomic, capacité Caldera | expérience ou objet de panne |
-| Observer | `annatar/collectors/`, signaux (`attack_started`, puis `fault_started`) | — | sondes pendant l'expérience |
-| Revenir | `annatar clean`, `glorfindel release` | Stratus `revert`, `cleanup` | Chaos Toolkit `rollbacks` |
-| Verdict | `annatar/runner/report.py`, War Room | — | — |
+| Préparer | `eregion_core/inscription.py` (périmètre, inscription, zone), préflight ; `gothmog preflight` (cibles relues dans l'expérience) | Stratus `warmup` | cible inscrite auprès du moteur (`chaos.tf`) |
+| État normal | `glorfindel/posture.py`, `glorfindel/readiness.py` ; `gothmog/probes.py` (avant, pendant, après) | — | Chaos Toolkit `steady-state-hypothesis` |
+| Injecter | `annatar/executors/` ; `gothmog/engines/chaos_studio.py` | Stratus `detonate`, test Atomic, capacité Caldera | expérience ou objet de panne |
+| Observer | `annatar/collectors/`, signaux (`attack_started` ; `fault_started` dans `runs/gothmog/`, hors de ce que la watch lit) | — | sondes pendant l'expérience |
+| Revenir | `annatar clean`, `glorfindel release` ; retour d'une panne vérifié par sonde, repli `start_vm` | Stratus `revert`, `cleanup` | Chaos Toolkit `rollbacks` |
+| Verdict | `annatar/runner/report.py`, `gothmog report`, War Room | — | — |
 
 ### L'arborescence visée
 
 ```
 glorfindel/              le produit (existe)
 annatar/                 attaque (existe) ; executors/ devient l'interface d'injecteur (R1)
-gothmog/                 pannes (G0) — emplacement réservé, README seul
+gothmog/                 pannes (G0) : moteur Chaos Studio, sondes, exécuteur, signaux, rapport
 eregion_core/            inscription et périmètre (O0) ; validation des schémas d'expérience et du catalogue (E1) ; existent
 schemas/                 scenario.schema.json (existe) + experiment.schema.json + technique_catalog.schema.json (E1, existent)
 technique_catalog.yaml   techniques (existe) + pannes (E1)
-infra/terraform/         Celebrimbor (existe) ; posera eregion-target (O0) et inscrira les cibles Chaos Studio (G0)
+infra/terraform/         Celebrimbor (existe) ; pose eregion-target (O0), inscrit les cibles Chaos Studio (G0, chaos.tf)
 infra/orodruin/          Orodruin, état Terraform séparé (O1) — emplacement réservé, README seul
 infra/canary/            canary azurerm (existe)
 CLAUDE_ORODRUIN.md       session Orodruin (O1, O2)

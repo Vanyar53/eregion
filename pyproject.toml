@@ -65,6 +65,7 @@ dev = [
 [project.scripts]
 annatar = "annatar.cli:cli"
 glorfindel = "glorfindel.cli:cli"
+gothmog = "gothmog.cli:cli"
 
 [project.urls]
 Homepage = "https://github.com/Vanyar53/eregion"
@@ -72,7 +73,7 @@ Issues = "https://github.com/Vanyar53/eregion/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["annatar*", "glorfindel*", "scenarios*", "eregion_core*", "analysis*"]
+include = ["annatar*", "glorfindel*", "gothmog*", "scenarios*", "eregion_core*", "analysis*"]
 
 [tool.ruff]
 target-version = "py311"   # = requires-python : flags 3.12-only syntax

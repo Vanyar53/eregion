@@ -38,14 +38,19 @@ ARMED, PASSIVE = "armed", "passive"
 ARM = "https://management.azure.com"
 API_VERSION = "2022-04-01"
 
-# What Annatar asks of Azure on a bench VM (annatar/executors/azure_vm.py). Gothmog adds
-# its own with G0.
+# What the injectors ask of Azure on the bench: Annatar on a VM (annatar/executors/
+# azure_vm.py), Gothmog on a Chaos Studio experiment (gothmog/engines/chaos_studio.py —
+# it starts the experiment; the experiment's own identity acts on the VM).
 REQUIRED_ACTIONS = (
     "Microsoft.Resources/subscriptions/resourceGroups/read",
     "Microsoft.Compute/virtualMachines/read",
     "Microsoft.Compute/virtualMachines/start/action",
     "Microsoft.Compute/virtualMachines/runCommand/action",
     "Microsoft.Network/networkSecurityGroups/read",
+    "Microsoft.Chaos/experiments/read",
+    "Microsoft.Chaos/experiments/start/action",
+    "Microsoft.Chaos/experiments/cancel/action",
+    "Microsoft.Chaos/experiments/executions/read",
 )
 # The one kind of assignment allowed outside the bench: reading role assignments, so
 # the identity can prove it holds nothing else (a read at the bench's scope cannot see

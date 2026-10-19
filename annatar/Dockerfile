@@ -4,6 +4,8 @@ WORKDIR /app
 
 COPY pyproject.toml .
 COPY annatar/ annatar/
+# Gothmog (G0) shares this image: it is the injectors' image on Orodruin (make orodruin-push).
+COPY gothmog/ gothmog/
 COPY eregion_core/ eregion_core/
 COPY analysis/ analysis/
 COPY scripts/ scripts/

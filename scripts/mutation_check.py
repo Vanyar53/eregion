@@ -34,6 +34,7 @@ R = "glorfindel/reassert.py"
 C = "glorfindel/config.py"
 INS = "eregion_core/inscription.py"
 ENG = "annatar/runner/engine.py"
+GOTH = "gothmog/runner/engine.py"
 INVARIANTS = "tests/unit/test_invariants.py"
 INSCRIPTION_TESTS = "tests/unit/test_inscription.py tests/unit/test_engine.py"
 DOCS_TESTS = "tests/unit/test_docs_budget.py"
@@ -263,6 +264,17 @@ MUTANTS = [
      '    _write((directory or exercises_dir()) / f"{run_id}.json", window)\n'),
     ("M70", "the watch labels without pulling the channel (O1)", "eregion_core/exercise.py",
      "        exercise_channel.pull_if_due(exercises_dir())\n", "        pass\n"),
+    # G0: the three bugs its plan names (validated 19/10), and where its signals land.
+    ("M71", "a fault starts without the steady state verified before (G0)", GOTH,
+     '        if not before_ok:\n            return seen, "steady state not verified before the fault — nothing injected"\n',
+     ""),
+    ("M72", "an experiment target not enrolled is accepted (G0)", GOTH,
+     "            if not guard.allowed:\n", "            if False:\n"),
+    ("M73", "the return to the initial state is declared without being verified (G0)", GOTH,
+     "        revert_verified = all(holds(rs) for rs in after.values())\n", "        revert_verified = True\n"),
+    ("M74", "fault signals land where Glorfindel's watch decides on them (G0)", "gothmog/signals/emitter.py",
+     '        self.path = Path(runs_dir) / SIGNALS_SUBDIR / f"{run_id}_signals.jsonl"\n',
+     '        self.path = Path(runs_dir) / f"{run_id}_signals.jsonl"\n'),
 ]
 
 # Mutants measured by other tests than the invariants (their lot's own).
@@ -278,6 +290,7 @@ TESTS["M62"] = "tests/unit/test_detection_rules.py -k sampling_step"
 TESTS["M63"] = "tests/unit/test_campaign_report.py"
 TESTS.update({mid: "tests/unit/test_orodruin.py" for mid in ("M64", "M65", "M66", "M67")})
 TESTS.update({mid: "tests/unit/test_exercise_channel.py" for mid in ("M68", "M69", "M70")})
+TESTS.update({mid: "tests/unit/test_gothmog.py" for mid in ("M71", "M72", "M73", "M74")})
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

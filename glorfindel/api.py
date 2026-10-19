@@ -477,9 +477,8 @@ async def config() -> dict:
         except Exception:
             pass
 
-    llm_model = (
-        os.environ.get("GLORFINDEL_LLM_MODEL") or "anthropic/claude-sonnet-4-6"
-    )
+    from eregion_core.models import glorfindel_model
+    llm_model = glorfindel_model()
     llm_provider = llm_model.split("/")[0] if "/" in llm_model else llm_model
 
     return {

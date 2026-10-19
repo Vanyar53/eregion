@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from eregion_core.models import glorfindel_model
+
 import json
 import os
 import sys
@@ -188,7 +190,7 @@ def cli():
 @cli.command()
 @click.argument("signals_file", type=click.Path(exists=True))
 @click.option("--dry-run", is_flag=True, help="Reason and decide without executing actions.")
-@click.option("--model", default=lambda: os.environ.get("GLORFINDEL_LLM_MODEL", "anthropic/claude-sonnet-4-6"), show_default=True)
+@click.option("--model", default=lambda: glorfindel_model(), show_default=True)
 @click.option("--memory-path", default=None, help="Override default ChromaDB path.")
 def respond(signals_file: str, dry_run: bool, model: str, memory_path: str | None):
     """Process all signals in a JSONL file and respond to each."""
@@ -304,7 +306,7 @@ def unblock(ip: str, resource_id: str, dry_run: bool, yes: bool):
 @cli.command()
 @click.argument("runs_dir", type=click.Path(exists=True), default="runs")
 @click.option("--dry-run", is_flag=True)
-@click.option("--model", default=lambda: os.environ.get("GLORFINDEL_LLM_MODEL", "anthropic/claude-sonnet-4-6"), show_default=True)
+@click.option("--model", default=lambda: glorfindel_model(), show_default=True)
 @click.option("--memory-path", default=None)
 @click.option("--interval", default=2, show_default=True, help="Poll interval in seconds.")
 @click.option("--rules", "rules_file", default=None, metavar="PATH",
@@ -968,7 +970,7 @@ def jobs(resource_id: str, refresh: bool):
               help="Select recovery point before this timestamp (ISO8601). "
                    "Prevents restoring a backup taken after the attack. "
                    "Example: 2026-05-24T13:44:00+00:00")
-@click.option("--model", default=lambda: os.environ.get("GLORFINDEL_LLM_MODEL", "anthropic/claude-sonnet-4-6"), show_default=True)
+@click.option("--model", default=lambda: glorfindel_model(), show_default=True)
 @click.option("--memory-path", default=None)
 @click.option("--wait", is_flag=True, help="Block until restore completes (~15-30 min). Default: fire-and-forget.")
 def restore(resource_id: str, vault: str, dry_run: bool, yes: bool, keep_isolated: bool, before: str | None, model: str, memory_path: str | None, wait: bool):
@@ -1816,8 +1818,7 @@ def reject_rule(proposal_id: str) -> None:
               help="Also author for 'planned' techniques (best-effort — the table "
                    "may not exist yet, so no schema grounding).")
 @click.option("--model",
-              default=lambda: os.environ.get("GLORFINDEL_LLM_MODEL",
-                                             "anthropic/claude-sonnet-4-6"),
+              default=lambda: glorfindel_model(),
               show_default=True)
 @click.option("--rules", "rules_file", default=None, metavar="PATH",
               help="detection_rules.yaml (default: auto-detected) — TTPs already "

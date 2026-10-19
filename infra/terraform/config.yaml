@@ -96,7 +96,8 @@ backup_retention_days: 7
 
 # ── VM auto-shutdown (UTC — minuit Paris = 22:00 UTC été, 23:00 UTC hiver) ─────
 vm_shutdown_time:  "2300" # format HHMM UTC
-vm_shutdown_email: fontaine.jonathan@proton.me
+# vm_shutdown_email : dans terraform.tfvars (ignoré par git) — jamais une vraie adresse
+# dans ce fichier suivi (repo public). Vide → pas d'e-mail avant l'extinction.
 
 # ── Monitoring ───────────────────────────────────────────────────────────────
 log_retention_days:               30

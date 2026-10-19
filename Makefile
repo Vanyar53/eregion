@@ -231,6 +231,16 @@ llm-smoke:
 #   make llm-compare
 #   make llm-compare MODELS=ollama/gemma4,ollama/qwen3.5 RUNS=5
 MODELS ?= ollama/gemma4,ollama/qwen3.5,ollama/qwen3,ollama/gemma3,ollama/qwen2.5,ollama/command-r7b
+# IA0 — the campaign report: facts from the files, claims by the analysis model, each checked
+# against the runs it cites. Writes runs/campaigns/<id>/report.md. Needs the model's API key.
+campaign-report:
+	@test -n "$(CAMPAIGN)" || { echo "CAMPAIGN=<id> requis (ls runs/campaigns)"; exit 1; }
+	$(PYTHON) -m analysis.campaign_report runs/campaigns/$(CAMPAIGN)
+
+# IA0 harness: fidelity and a planted instruction, against the real analysis model.
+report-eval:
+	$(PYTHON) scripts/report_eval.py --runs $(or $(RUNS),3)
+
 llm-compare:
 	$(PYTHON) scripts/llm_smoke.py --models $(MODELS) --runs $(or $(RUNS),3)
 

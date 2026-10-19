@@ -238,6 +238,10 @@ MUTANTS = [
     # #105: the boot batch's sub-second gaps set the step again (blind 10 min after a boot).
     ("M62", "the ransomware step reads the boot batch (#105)", "glorfindel/rules/azure/detection_rules.yaml",
      "summarize Step = minif(Gap, Gap >= 1s) by Vm, InstanceName", "summarize Step = min(Gap) by Vm, InstanceName"),
+    # IA0: the check keeps a claim the cited runs contradict (« all detected » on a missed run).
+    ("M63", "the report keeps a detected/missed claim the runs contradict (IA0)", "analysis/campaign_report.py",
+     '        elif c.kind in ("detected", "missed") and any(x.detection != c.kind for x in cited):\n            c.rejected = f"a cited run was not {c.kind}"\n',
+     ""),
 ]
 
 # Mutants measured by other tests than the invariants (their lot's own).
@@ -250,6 +254,7 @@ TESTS["M53"] = "tests/unit/test_readiness.py -k refused"
 TESTS.update({mid: "tests/unit/test_glorfindel_host.py" for mid in ("M54", "M55", "M56")})
 TESTS.update({mid: "tests/unit/test_exercise.py" for mid in ("M57", "M58", "M59", "M60", "M61")})
 TESTS["M62"] = "tests/unit/test_detection_rules.py -k sampling_step"
+TESTS["M63"] = "tests/unit/test_campaign_report.py"
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

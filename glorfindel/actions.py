@@ -182,6 +182,9 @@ QUARANTINE_FORENSIC_RULE = "glorfindel-quarantine-forensic-in"
 # 2026-10-08, DNS and IMDS alike) — on a shared NSG that would cut every VM behind it.
 # The fallback says they stay reachable (fourth review, Q15); only the quarantine NSG,
 # attached to the isolated NIC alone, denies them.
+# Not on a NIC NSG that looks dedicated either (decision 19/10, docs/azure.md): a "*"
+# rule reaches every NIC on that NSG, now or later — a NIC away in quarantine (L24) or one
+# attached during the isolation would lose DNS/IMDS. Don't add it.
 PLATFORM_OPEN_NOTE = ("DNS et IMDS d'Azure encore joignables : le repli par règles ne peut "
                       "pas les refuser à une seule VM (Azure exige la source « * »)")
 

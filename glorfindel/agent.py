@@ -922,7 +922,9 @@ def decide(
         kwargs["base_url"] = base_url
 
     try:
-        response = litellm.completion(
+        from glorfindel.llm_call import completion_with_tool
+        response = completion_with_tool(
+            litellm, "security_decision",
             model=model,
             max_tokens=4096,
             messages=[
@@ -934,7 +936,6 @@ def decide(
                 {"role": "user", "content": user_content},
             ],
             tools=[_DECISION_TOOL],
-            tool_choice={"type": "function", "function": {"name": "security_decision"}},
             num_retries=_LLM_RETRIES,
             **kwargs,
         )

@@ -98,7 +98,8 @@ DOCKER_GLORFINDEL := docker run --rm $(GLORFINDEL_AZURE_ENV) $(GLORFINDEL_VOLS) 
 	canary-jit celebrimbor-init celebrimbor-plan celebrimbor-up celebrimbor-down celebrimbor-output celebrimbor-stop celebrimbor-start \
 	glorfindel-host-init glorfindel-host-plan glorfindel-host-up glorfindel-host-down glorfindel-host-push \
 	glorfindel-host-start glorfindel-host-stop glorfindel-host-logs glorfindel-host-tunnel glorfindel-host-ssh \
-	glorfindel-host-env glorfindel-host-report glorfindel-host-url glorfindel-host-status glorfindel-host-pull celebrimbor-workload
+	glorfindel-host-env glorfindel-host-report glorfindel-host-url glorfindel-host-status glorfindel-host-pull \
+	glorfindel-host-model celebrimbor-workload
 
 # ── Help ──────────────────────────────────────────────────────────────────
 
@@ -162,6 +163,7 @@ help:
 	@echo "  make glorfindel-host-push                    host.env + config (human_only forcé) sur la VM"
 	@echo "  make glorfindel-host-report [SINCE=7d]       Rapport d'observation"
 	@echo "  make glorfindel-host-pull                    Copie locale des verdicts et de la mémoire (chaque semaine)"
+	@echo "  make glorfindel-host-model MODEL=…           Changer le modèle qui décide (ou MODEL=default)"
 	@echo "  make celebrimbor-workload                    Charge de bree (site + routine d'admin)"
 	@echo "  make glorfindel-host-status                  Tout tourne ? VMs, sauvegardes, services, erreurs, cartes à juger"
 	@echo "  make glorfindel-host-start / -stop / -logs   Glorfindel + War Room sur la VM"
@@ -480,6 +482,20 @@ glorfindel-host-pull:
 	 $(HOST_SSH) 'tar czf - -C $$HOME .glorfindel' > $$f && test -s $$f && \
 	 ls -1t $(HOST_BACKUPS)/glorfindel-*.tgz | tail -n +31 | xargs -r rm -f && \
 	 echo "  ✓ $$f ($$(du -h $$f | cut -f1)) — verdicts, mémoire, état ; les 30 dernières copies gardées"
+
+# Change the model the hosted Glorfindel decides with, in one command: host.env here and the
+# VM's .env, then a restart. MODEL=default goes back to the code default (eregion_core/models.py).
+# Compare it first (make llm-compare) and run it end to end — README, « Changer de modèle ».
+glorfindel-host-model:
+	@test -n "$(MODEL)" || { echo "MODEL=anthropic/<modèle> requis (ou MODEL=default)"; exit 1; }
+	@case "$(MODEL)" in *[!A-Za-z0-9._/:-]*) echo "MODEL invalide : $(MODEL)"; exit 1;; esac
+	@test -n "$(HOST_IP)" || { echo "Pas de VM : make glorfindel-host-up d'abord"; exit 1; }
+	@f=$(HOST_ENV); sed -i '/^GLORFINDEL_LLM_MODEL=/d' $$f; \
+	 [ "$(MODEL)" = default ] || echo "GLORFINDEL_LLM_MODEL=$(MODEL)" >> $$f
+	@$(HOST_SSH) 'cd eregion && sed -i "/^GLORFINDEL_LLM_MODEL=/d" .env && \
+	 { [ "$(MODEL)" = default ] || echo "GLORFINDEL_LLM_MODEL=$(MODEL)" >> .env; } && \
+	 docker compose --profile bot up -d watch war-room bot >/dev/null 2>&1 && sleep 5 && \
+	 docker exec eregion-watch python -c "from eregion_core.models import glorfindel_model; print(\"  ✓ Glorfindel décide maintenant avec\", glorfindel_model())"'
 
 glorfindel-host-report:
 	$(HOST_SSH) 'docker exec eregion-watch glorfindel report --since $(or $(SINCE),7d)'

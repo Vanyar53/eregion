@@ -1,0 +1,56 @@
+# G0 — une panne déclarée : l'arrêt propre d'une VM du banc, 5 minutes, par Chaos Studio.
+#
+# L'expérience Chaos Studio est déclarée dans Celebrimbor (infra/terraform/chaos.tf) : cible et
+# capacité Shutdown-1.0 sur la VM, identité de l'expérience limitée à elle. Gothmog la lit (ses
+# cibles, sa durée), la démarre, la suit, l'annule au besoin ; il ne l'écrit jamais.
+# Schéma : schemas/experiment.schema.json (E1). Déroulé : gothmog/runner/engine.py.
+schema_version: "1"
+id: vm-shutdown
+kind: fault
+engine: chaos-studio
+engine_ref: exp-celebrimbor-gondolin-shutdown
+name: "VM shutdown (graceful, 5 min)"
+description: >
+  Arrête proprement la VM d'exercice (abruptShutdown = false) pendant 5 minutes ; Chaos Studio la
+  redémarre en fin de panne ou à l'annulation. Ce que Glorfindel doit montrer : rien de
+  disruptif — une VM éteinte n'est pas une attaque, et tout cycle sur elle pendant la fenêtre
+  est un exercice.
+version: "1.0"
+status: implemented
+# Arrêt propre, réversible, aucune donnée touchée. Une panne ne tourne jamais en production de
+# toute façon (inscription, O0) ; l'expérience qui s'arrêterait brutalement est refusée.
+destructive: false
+
+# Relues dans l'expérience elle-même au moment du run : elles doivent être exactement
+# celles-ci, inscrites, dans une zone qui accepte une panne.
+targets:
+  resource_type: azure_vm
+  zone: bench
+  names: [vm-celebrimbor-gondolin]
+
+# L'état normal, vérifié avant (sinon pas de panne), pendant et après (retour vérifié).
+steady_state:
+  probes:
+    - name: vm-running
+      verify: power_state
+      expect: PowerState/running
+    - name: guest-agent-ready
+      verify: vm_agent
+      expect: Ready
+    # La télémétrie que Glorfindel lit : après la panne, un Heartbeat postérieur à sa fin.
+    # La colonne s'appelle LastSeen : `last` est un mot de KQL (erreur de syntaxe, mesuré 19/10).
+    - name: heartbeat
+      verify: "Heartbeat | where _ResourceId =~ '{target}' | summarize LastSeen = max(TimeGenerated)"
+      expect: fresh 10m
+
+abort_conditions:
+  - name: past-duration
+    when: "l'exécution dépasse sa durée de plus de 5 minutes, ou le plafond du run : annulée"
+  - name: interrupted
+    when: "Ctrl-C ou erreur pendant la panne : annulée, puis le retour est vérifié"
+
+revert:
+  - name: engine-restart
+    action: chaos_studio
+  - name: start-vm
+    action: start_vm

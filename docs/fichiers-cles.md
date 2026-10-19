@@ -25,6 +25,13 @@ eregion_core/exercise.py        → B2 : fenêtres d'exercice des injecteurs. An
                                    (run_id, injector, kind, experiment, targets, start, end, expires ; ou
                                    EREGION_EXERCISES_DIR). Glorfindel en tire la source d'un cycle (exercise/real).
 
+gothmog/                        → G0 : pannes déclarées. experiments/<id>.yaml (schéma E1, kind fault) ;
+                                   engines/chaos_studio.py (ARM REST : lire l'expérience et ses cibles,
+                                   démarrer/suivre/annuler, chaque écriture journalisée par Orodruin avant
+                                   l'appel) ; probes.py (état normal) ; runner/engine.py (le déroulé) ;
+                                   runs/<run_id>.json (forme d'Annatar) + runs/gothmog/<run_id>_signals.jsonl
+                                   (hors du motif runs/*_signals.jsonl que la watch de Glorfindel lit).
+
 glorfindel/
   config.py             → GlorfindelConfig + load_glorfindel_config() — charge glorfindel-config.yaml
                           ExceptionConfig.is_excluded(asset_name, rule_name) — opt-out fnmatch

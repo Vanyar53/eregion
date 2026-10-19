@@ -59,7 +59,7 @@
 # engine (jamais local-script), engine_ref, destructive, et où elle s'observe. Les chargeurs
 # d'Annatar (planificateur) et de Glorfindel (autoring de règles) ne lisent que `techniques:` :
 # une panne ne devient ni une attaque planifiée, ni une règle de détection à rédiger.
-# Aucune panne déclarée pour l'instant — la première vient avec G0.
+# Première panne : vm-shutdown (G0), sous azure_vm.
 
 version: "1.0"
 
@@ -208,6 +208,20 @@ resource_types:
         requires_testdata: false
         reference_script: null
         setup_scripts: []
+
+    faults:
+
+      # G0 — l'arrêt propre d'une VM, 5 min, par Chaos Studio. La panne déclarée :
+      # gothmog/experiments/vm-shutdown.yaml ; l'expérience : infra/terraform/chaos.tf.
+      - id: vm-shutdown
+        name: "VM shutdown (graceful, 5 min)"
+        status: implemented
+        engine: chaos-studio
+        engine_ref: exp-celebrimbor-gondolin-shutdown
+        destructive: false
+        log_source: Heartbeat
+        expected_effect: "VM arrêtée puis redémarrée par le moteur ; Heartbeat absent pendant la panne"
+        expected_latency_s: 180
 
   # ───────────────────────────────────────────────────────────────────────────────
   # ⚠ target.type non encore autorisé par schemas/scenario.schema.json (enum: azure_vm).

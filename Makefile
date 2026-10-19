@@ -102,7 +102,8 @@ DOCKER_GLORFINDEL := docker run --rm $(GLORFINDEL_AZURE_ENV) $(GLORFINDEL_VOLS) 
 	glorfindel-host-env glorfindel-host-report glorfindel-host-url glorfindel-host-status glorfindel-host-pull \
 	glorfindel-host-model celebrimbor-workload \
 	orodruin-init orodruin-plan orodruin-up orodruin-lock orodruin-push orodruin-check \
-	orodruin-stop orodruin-start orodruin-kill orodruin-down orodruin-ssh
+	orodruin-stop orodruin-start orodruin-kill orodruin-down orodruin-ssh \
+	gothmog-preflight gothmog-run
 
 # ── Help ──────────────────────────────────────────────────────────────────
 
@@ -182,6 +183,10 @@ help:
 	@echo "  make orodruin-stop / orodruin-start          Désalloue / rallume la VM (entre les sessions)"
 	@echo "  make orodruin-kill [DRY_RUN=1]               URGENCE : révoque l'identité, puis désalloue"
 	@echo "  make orodruin-down                           Détruit la VM et l'identité"
+	@echo ""
+	@echo "Gothmog (G0) — une panne déclarée, depuis Orodruin (gothmog/README.md) :"
+	@echo "  make gothmog-preflight [FAULT=vm-shutdown]   Contrat, cibles, état normal — rien d'écrit"
+	@echo "  make gothmog-run [FAULT=vm-shutdown]         La panne, son retour vérifié (~15 min)"
 	@echo ""
 	@echo "Variables"
 	@echo "  SCENARIO    Path to scenario YAML (default: $(SCENARIO))"
@@ -594,6 +599,17 @@ orodruin-down:
 
 orodruin-ssh:
 	$(ORO_SSH)
+
+# ── Gothmog (G0) — une panne déclarée, lancée depuis Orodruin ─────────────────
+# Même image et même identité qu'Annatar sur Orodruin. ServerAliveInterval : la panne et la
+# vérification du retour durent ~15 min, plus que le délai d'inactivité d'une IP publique.
+FAULT ?= vm-shutdown
+
+gothmog-preflight:
+	$(ORO_SSH) '$(ORO_RUN) gothmog preflight $(FAULT)'
+
+gothmog-run:
+	ssh $(SSH_OPTS) -o ServerAliveInterval=60 $(ORO_USER)@$(ORO_IP) '$(ORO_RUN) gothmog run $(FAULT) --yes'
 
 # ── Dev ───────────────────────────────────────────────────────────────────
 

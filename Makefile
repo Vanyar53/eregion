@@ -100,7 +100,9 @@ DOCKER_GLORFINDEL := docker run --rm $(GLORFINDEL_AZURE_ENV) $(GLORFINDEL_VOLS) 
 	glorfindel-host-init glorfindel-host-plan glorfindel-host-up glorfindel-host-down glorfindel-host-push \
 	glorfindel-host-start glorfindel-host-stop glorfindel-host-logs glorfindel-host-tunnel glorfindel-host-ssh \
 	glorfindel-host-env glorfindel-host-report glorfindel-host-url glorfindel-host-status glorfindel-host-pull \
-	glorfindel-host-model celebrimbor-workload
+	glorfindel-host-model celebrimbor-workload \
+	orodruin-init orodruin-plan orodruin-up orodruin-lock orodruin-push orodruin-check \
+	orodruin-stop orodruin-start orodruin-kill orodruin-down orodruin-ssh
 
 # ── Help ──────────────────────────────────────────────────────────────────
 
@@ -170,6 +172,16 @@ help:
 	@echo "  make glorfindel-host-start / -stop / -logs   Glorfindel + War Room sur la VM"
 	@echo "  make glorfindel-host-tunnel                  Tunnel + URL de la War Room avec son jeton"
 	@echo "  make glorfindel-host-url                     L'URL de la War Room avec son jeton"
+	@echo ""
+	@echo "Orodruin (O1) — hôte des injecteurs, état séparé (infra/orodruin/README.md) :"
+	@echo "  make orodruin-plan [OPERATOR_CIDR=]          Plan (lecture seule)"
+	@echo "  make orodruin-up                             1er apply, sortie ouverte (installe Docker)"
+	@echo "  make orodruin-lock                           Referme la sortie (apply)"
+	@echo "  make orodruin-push                           Image d'Annatar + orodruin.env sur la VM"
+	@echo "  make orodruin-check                          Le contrat, lu depuis la VM : armed ou passive"
+	@echo "  make orodruin-stop / orodruin-start          Désalloue / rallume la VM (entre les sessions)"
+	@echo "  make orodruin-kill [DRY_RUN=1]               URGENCE : révoque l'identité, puis désalloue"
+	@echo "  make orodruin-down                           Détruit la VM et l'identité"
 	@echo ""
 	@echo "Variables"
 	@echo "  SCENARIO    Path to scenario YAML (default: $(SCENARIO))"
@@ -522,6 +534,63 @@ glorfindel-host-tunnel:
 
 glorfindel-host-ssh:
 	$(HOST_SSH)
+
+# ── Orodruin (O1) — l'hôte d'où les injecteurs agissent ───────────────────────
+# État séparé de Celebrimbor et de Glorfindel. Le contrat est relu par la VM elle-même (son
+# identité, son réseau) : docs/design/orodruin-contract.md.
+ORO_TF        := terraform -chdir=infra/orodruin
+ORO_USER      ?= orodruin
+ORO_VARS       = -var-file=../terraform/terraform.tfvars -var="operator_cidr=$(OPERATOR_CIDR)"
+ORO_IP         = $(shell $(ORO_TF) output -no-color -raw public_ip 2>/dev/null | grep -E '^[0-9.]+$$')
+ORO_SSH        = ssh $(SSH_OPTS) $(ORO_USER)@$(ORO_IP)
+ORO_IMAGE     := eregion-annatar:orodruin
+# Le conteneur prend l'identité de la VM (aucun secret Azure) ; orodruin.env porte
+# l'abonnement, le plafond et la clé du modèle.
+ORO_RUN        = docker run --rm --env-file orodruin.env -v $$HOME/runs:/app/runs $(ORO_IMAGE)
+# PRINCIPAL / VM_ID : pour un kill même si l'état Terraform est illisible.
+ORO_PRINCIPAL  = $(or $(PRINCIPAL),$(shell $(ORO_TF) output -no-color -raw principal_id 2>/dev/null))
+ORO_VM_ID      = $(or $(VM_ID),$(shell $(ORO_TF) output -no-color -raw vm_id 2>/dev/null))
+
+orodruin-init:
+	$(ORO_TF) init -upgrade
+
+orodruin-plan: orodruin-init
+	$(ORO_TF) plan $(ORO_VARS)
+
+# Premier apply : sortie ouverte, le temps d'installer Docker. Ensuite orodruin-lock.
+orodruin-up: orodruin-init
+	$(ORO_TF) apply $(ORO_VARS) -var="egress_locked=false"
+	@echo "" && echo "  VM prête quand ~/.orodruin-ready existe (make orodruin-ssh) ; puis make orodruin-lock"
+
+orodruin-lock: orodruin-init
+	$(ORO_TF) apply $(ORO_VARS)
+
+# L'image arrive par SSH : la sortie de la VM reste fermée. UID 1000 = l'utilisateur de la VM.
+orodruin-push:
+	@test -f infra/orodruin/orodruin.env || { echo "!! infra/orodruin/orodruin.env manquant (copier orodruin.env.example)"; exit 1; }
+	docker build -f annatar/Dockerfile --build-arg UID=1000 --build-arg GID=1000 -t $(ORO_IMAGE) .
+	docker save $(ORO_IMAGE) | gzip | $(ORO_SSH) 'gunzip | docker load'
+	scp $(SSH_OPTS) infra/orodruin/orodruin.env $(ORO_USER)@$(ORO_IP):orodruin.env
+
+orodruin-check:
+	$(ORO_SSH) '$(ORO_RUN) python -m eregion_core.orodruin'
+
+# @ : la commande porte l'identifiant d'abonnement, on ne la répète pas à l'écran.
+orodruin-stop:
+	@echo "az vm deallocate (vm-orodruin)" && az vm deallocate --ids "$(ORO_VM_ID)"
+
+orodruin-start:
+	@echo "az vm start (vm-orodruin)" && az vm start --ids "$(ORO_VM_ID)"
+
+# Urgence, depuis ton az login : révoquer d'abord, puis désallouer (infra/orodruin/kill.py).
+orodruin-kill:
+	@.venv/bin/python infra/orodruin/kill.py "$(ORO_PRINCIPAL)" "$(ORO_VM_ID)" $(if $(DRY_RUN),--dry-run)
+
+orodruin-down:
+	$(ORO_TF) destroy $(ORO_VARS)
+
+orodruin-ssh:
+	$(ORO_SSH)
 
 # ── Dev ───────────────────────────────────────────────────────────────────
 

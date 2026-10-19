@@ -55,3 +55,10 @@ infra/glorfindel-host/.terraform.lock.hcl
 infra/glorfindel-host/terraform.tfstate*
 infra/glorfindel-host/*.tfplan
 infra/glorfindel-host/host.env
+
+# Orodruin (O1) — état séparé, secrets jamais suivis
+infra/orodruin/.terraform/
+infra/orodruin/.terraform.lock.hcl
+infra/orodruin/terraform.tfstate*
+infra/orodruin/*.tfplan
+infra/orodruin/orodruin.env

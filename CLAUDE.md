@@ -6,7 +6,7 @@ Plateforme OSS (Apache 2.0) de défense active cloud : un SOC pour les charges c
 - **Annatar** (rouge) simule des attaques réelles sur l'infra cloud (MITRE ATT&CK) ; devient des adaptateurs vers des bibliothèques publiques (R1 Atomic Red Team, R2 Stratus Red Team)
 - **Gothmog** (pannes, *à venir — G0*) : pannes déclarées en code, par un moteur public (Chaos Studio d'abord) ; éprouve d'abord Glorfindel (bruit bénin, dépendances, reprise)
 
-L'atelier autour : **Celebrimbor** (`infra/terraform/`) construit et inscrit le banc ; **Orodruin** (`infra/orodruin/`, *à venir — O1*) héberge les injecteurs, contrat de garde-fous vérifié au démarrage.
+L'atelier autour : **Celebrimbor** (`infra/terraform/`) construit et inscrit le banc ; **Orodruin** (`infra/orodruin/`, O1 : code écrit, VM à venir) héberge les injecteurs, contrat de garde-fous vérifié au démarrage — **un injecteur n'agit que depuis un Orodruin armé** ; ailleurs (un poste d'opérateur), il reste passif.
 
 **Direction — huitième passe (13/10)** (détail : `ROADMAP.md`, « Vers la 1.0 ») :
 - **Finalité** : les incidents cloud courants contenus seuls, en quelques minutes, réversibles et vérifiés ; le reste à un humain, trié et expliqué ; la preuve à tout moment. Cinq indicateurs : temps pour contenir, part contenue seule, actions disruptives à tort, couverture des techniques cloud, âge de la dernière preuve (< 30 jours).
@@ -94,6 +94,7 @@ pytest tests/unit/test_detection_authoring.py # catalogue + getschema + author_r
 pytest tests/unit/test_audit.py              # NSG/backup/compute/IAM readiness
 pytest tests/unit/test_config.py             # GlorfindelConfig + ExceptionConfig
 pytest tests/unit/test_inscription.py        # O0 : périmètre, inscription, zones, règle de production
+pytest tests/unit/test_orodruin.py           # O1 : contrat armed/passive, audit avant appel, plafond, kill, module Terraform
 pytest tests/unit/test_experiment_schema.py  # E1 : schéma d'expérience (technique/panne) + catalogue validés
 pytest tests/unit/test_docs_budget.py        # DX1 : CLAUDE.md ≤ 25 Ko, liens de l'index et des fichiers de rôle valides
 pytest tests/unit/test_discovery.py          # AssetRegistry + DiscoveryService + eviction

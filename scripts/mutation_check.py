@@ -235,6 +235,9 @@ MUTANTS = [
     ("M61", "an Annatar run never closes its window (B2)", "annatar/runner/engine.py",
      "        try:\n            return self._run_enrolled(scenario, executor, run_id)\n        finally:\n            close_window(run_id)\n",
      "        return self._run_enrolled(scenario, executor, run_id)\n"),
+    # #105: the boot batch's sub-second gaps set the step again (blind 10 min after a boot).
+    ("M62", "the ransomware step reads the boot batch (#105)", "glorfindel/rules/azure/detection_rules.yaml",
+     "summarize Step = minif(Gap, Gap >= 1s) by Vm, InstanceName", "summarize Step = min(Gap) by Vm, InstanceName"),
 ]
 
 # Mutants measured by other tests than the invariants (their lot's own).
@@ -246,6 +249,7 @@ TESTS["M52"] = "tests/unit/test_glorfindel.py -k remembered"
 TESTS["M53"] = "tests/unit/test_readiness.py -k refused"
 TESTS.update({mid: "tests/unit/test_glorfindel_host.py" for mid in ("M54", "M55", "M56")})
 TESTS.update({mid: "tests/unit/test_exercise.py" for mid in ("M57", "M58", "M59", "M60", "M61")})
+TESTS["M62"] = "tests/unit/test_detection_rules.py -k sampling_step"
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

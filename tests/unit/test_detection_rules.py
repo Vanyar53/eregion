@@ -789,7 +789,10 @@ def test_ransomware_rule_reads_the_sampling_step_from_the_data():
     import yaml
     path = Path(__file__).resolve().parents[2] / "glorfindel/rules/azure/detection_rules.yaml"
     q = next(r["query"] for r in yaml.safe_load(path.read_text())["rules"] if r["name"] == "ransomware-disk-write")
-    assert "Step = min(Gap)" in q and "not(Fine) and Rate > 25000000" in q
+    assert "not(Fine) and Rate > 25000000" in q
+    # #105 (measured 19/10, 60-s DCR): the boot batch's sub-second gaps must not set the
+    # step — min(Gap) read ~0 and left 74 and 99 MB/s samples unseen for 10 min.
+    assert "Step = minif(Gap, Gap >= 1s)" in q and "Step = min(Gap)" not in q
 
 
 def test_a_host_name_shared_by_two_vms_attributes_nothing():

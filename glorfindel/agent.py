@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from eregion_core.models import glorfindel_model
+
 import os
 import time
 from pathlib import Path
@@ -1747,7 +1749,7 @@ class GlorfindelAgent:
         self.memory = CycleMemory(path=memory_path)
         self.connector = connector or AzureConnector(dry_run=dry_run)
         self.incidents = IncidentRegistry(path=incidents_path)
-        self.model = model or os.environ.get("GLORFINDEL_LLM_MODEL") or "anthropic/claude-sonnet-4-6"
+        self.model = model or glorfindel_model()
 
         # Autonomy policy. autonomy_default is the session override (watch --mode).
         # When an explicit AutonomyConfig is injected (tests), the graph uses it as-is.

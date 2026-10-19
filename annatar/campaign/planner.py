@@ -15,6 +15,8 @@ tactic — no LLM needed, fully unit-testable, and the default in tests/dry runs
 
 from __future__ import annotations
 
+from eregion_core.models import DEFAULT_LLM_MODEL, annatar_model
+
 import json
 import logging
 import os
@@ -29,7 +31,7 @@ from annatar.campaign.catalog import (
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "anthropic/claude-sonnet-4-6"
+DEFAULT_MODEL = DEFAULT_LLM_MODEL  # eregion_core/models.py — one definition
 
 
 @dataclass
@@ -145,7 +147,7 @@ def _llm_pick(
     base_url = os.environ.get("ANNATAR_LLM_BASE_URL")
     if base_url:
         kwargs["base_url"] = base_url
-    mdl = model or os.environ.get("ANNATAR_LLM_MODEL") or DEFAULT_MODEL
+    mdl = model or annatar_model()
 
     try:
         response = litellm.completion(

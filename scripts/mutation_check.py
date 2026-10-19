@@ -251,6 +251,10 @@ MUTANTS = [
     ("M66", "the kill stops the VM without revoking the identity (O1)", "eregion_core/orodruin.py",
      '    for name, step in (("revoke", revoke), ("stop", stop)):',
      '    for name, step in (("stop", stop),):'),
+    # O1, measured on the bench (19/10): Azure lists only what the caller may read — a
+    # listing without subscription-wide read proves no absence.
+    ("M67", "the identity check trusts a listing it cannot fully read (O1)", "eregion_core/orodruin.py",
+     "    if not sees_subscription:\n", "    if False:\n"),
 ]
 
 # Mutants measured by other tests than the invariants (their lot's own).
@@ -264,7 +268,7 @@ TESTS.update({mid: "tests/unit/test_glorfindel_host.py" for mid in ("M54", "M55"
 TESTS.update({mid: "tests/unit/test_exercise.py" for mid in ("M57", "M58", "M59", "M60", "M61")})
 TESTS["M62"] = "tests/unit/test_detection_rules.py -k sampling_step"
 TESTS["M63"] = "tests/unit/test_campaign_report.py"
-TESTS.update({mid: "tests/unit/test_orodruin.py" for mid in ("M64", "M65", "M66")})
+TESTS.update({mid: "tests/unit/test_orodruin.py" for mid in ("M64", "M65", "M66", "M67")})
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

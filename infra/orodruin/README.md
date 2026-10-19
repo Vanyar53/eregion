@@ -49,13 +49,16 @@ de contrôle) — c'est pour ça que la VM s'arrête aussi.
 
 ## À mesurer sur le banc (O1, partie B)
 
-1. L'identité peut-elle lire ses attributions au niveau de l'abonnement avec ses seuls droits
-   sur le banc ? Sinon : `contract_reader = true` (une lecture d'attributions, rien d'autre — la
-   seule attribution hors du banc que le contrat accepte).
-2. La sortie : une connexion hors périmètre échoue ; l'API de contrôle, Entra ID, l'API du
-   modèle, DNS et IMDS passent ; depuis un conteneur aussi.
-3. Le délai entre `orodruin-kill` et le premier refus de l'API.
-4. Un vrai run : contrat tenu → `armed`, un scénario non destructif sur gondolin ; sortie
-   rouverte exprès → `passive`, rien de touché.
+1. ~~L'identité peut-elle lire ses attributions au niveau de l'abonnement avec ses seuls droits
+   sur le banc ?~~ **Non, mesuré le 19/10** : Azure ne liste que ce qu'elle peut lire, et le
+   premier `armed` était aveugle. `contract_reader` est vrai par défaut (une lecture
+   d'attributions, rien d'autre) et le contrat refuse une liste qu'il ne voit pas en entier.
+2. ~~La sortie~~ **Mesurée le 19/10** : le hors-périmètre échoue ; l'API de contrôle, Entra ID,
+   l'API du modèle et IMDS passent, depuis l'hôte et depuis le conteneur.
+3. ~~Le délai entre `orodruin-kill` et le premier refus~~ **Mesuré le 19/10** : premier 403
+   moins de 3 s après le début de la révocation, avant l'extinction de la VM (une mesure).
+4. ~~Un vrai run~~ **Fait le 19/10** : sortie rouverte exprès → `passive` ; attribution hors du
+   banc → `passive` ; refermé → `armed`. T1136.001 sur gondolin : audit écrit 0,6 s avant le
+   Run Command, appelant = l'identité d'Orodruin.
 
 Modes suivants : Kubernetes (O2, un namespace par projet), relais.

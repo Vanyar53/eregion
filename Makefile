@@ -575,15 +575,16 @@ orodruin-push:
 orodruin-check:
 	$(ORO_SSH) '$(ORO_RUN) python -m eregion_core.orodruin'
 
+# @ : la commande porte l'identifiant d'abonnement, on ne la répète pas à l'écran.
 orodruin-stop:
-	az vm deallocate --ids "$(ORO_VM_ID)"
+	@echo "az vm deallocate (vm-orodruin)" && az vm deallocate --ids "$(ORO_VM_ID)"
 
 orodruin-start:
-	az vm start --ids "$(ORO_VM_ID)"
+	@echo "az vm start (vm-orodruin)" && az vm start --ids "$(ORO_VM_ID)"
 
 # Urgence, depuis ton az login : révoquer d'abord, puis désallouer (infra/orodruin/kill.py).
 orodruin-kill:
-	.venv/bin/python infra/orodruin/kill.py "$(ORO_PRINCIPAL)" "$(ORO_VM_ID)" $(if $(DRY_RUN),--dry-run)
+	@.venv/bin/python infra/orodruin/kill.py "$(ORO_PRINCIPAL)" "$(ORO_VM_ID)" $(if $(DRY_RUN),--dry-run)
 
 orodruin-down:
 	$(ORO_TF) destroy $(ORO_VARS)

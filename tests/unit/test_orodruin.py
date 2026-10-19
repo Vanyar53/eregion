@@ -65,7 +65,7 @@ def _assignment(scope, role="/providers/Microsoft.Authorization/roleDefinitions/
 def test_assignments_inside_the_bench_with_the_rights_hold():
     missing = orodruin.assess_identity(
         [_assignment(BENCH), _assignment(BENCH + "/providers/Microsoft.Compute/virtualMachines/v")],
-        lambda _: ["*"], ALL_RIGHTS, BENCH)
+        lambda _: ["*"], ALL_RIGHTS, BENCH, sees_subscription=True)
     assert missing == []
 
 
@@ -75,27 +75,35 @@ def test_assignments_inside_the_bench_with_the_rights_hold():
     BENCH + "-other",  # a prefix of the name is not the group
 ])
 def test_an_assignment_outside_the_bench_is_missing(scope):
-    missing = orodruin.assess_identity([_assignment(scope)], lambda _: ["*"], ALL_RIGHTS, BENCH)
+    missing = orodruin.assess_identity([_assignment(scope)], lambda _: ["*"], ALL_RIGHTS, BENCH, sees_subscription=True)
     assert [m["code"] for m in missing] == ["identity_outside_bench"]
 
 
 def test_only_a_role_assignment_read_may_sit_outside_the_bench():
     read_only = ["Microsoft.Authorization/roleAssignments/read"]
     assert orodruin.assess_identity(
-        [_assignment(f"/subscriptions/{SUB}")], lambda _: read_only, ALL_RIGHTS, BENCH) == []
+        [_assignment(f"/subscriptions/{SUB}")], lambda _: read_only, ALL_RIGHTS, BENCH, sees_subscription=True) == []
     write = read_only + ["Microsoft.Authorization/roleAssignments/write"]
     assert orodruin.assess_identity(
-        [_assignment(f"/subscriptions/{SUB}")], lambda _: write, ALL_RIGHTS, BENCH)
+        [_assignment(f"/subscriptions/{SUB}")], lambda _: write, ALL_RIGHTS, BENCH, sees_subscription=True)
     # an unreadable role definition proves nothing: outside
     assert orodruin.assess_identity(
-        [_assignment(f"/subscriptions/{SUB}")], lambda _: [], ALL_RIGHTS, BENCH)
+        [_assignment(f"/subscriptions/{SUB}")], lambda _: [], ALL_RIGHTS, BENCH, sees_subscription=True)
 
 
 def test_a_right_the_injectors_need_is_missing():
     perms = [{"actions": ["*"], "notActions": ["Microsoft.Compute/virtualMachines/runCommand/action"]}]
-    missing = orodruin.assess_identity([_assignment(BENCH)], lambda _: ["*"], perms, BENCH)
+    missing = orodruin.assess_identity([_assignment(BENCH)], lambda _: ["*"], perms, BENCH, sees_subscription=True)
     assert [m["code"] for m in missing] == ["identity_missing_right"]
     assert "runCommand" in missing[0]["detail"]
+
+
+def test_a_listing_the_identity_cannot_fully_read_proves_nothing():
+    """Measured 19/10: with read rights on the workspace only, Azure listed that
+    assignment and hid the bench's — an assignment elsewhere would hide the same way."""
+    missing = orodruin.assess_identity([_assignment(BENCH)], lambda _: ["*"], ALL_RIGHTS, BENCH,
+                                       sees_subscription=False)
+    assert [m["code"] for m in missing] == ["identity_unprovable"]
 
 
 def _token(oid):
@@ -116,6 +124,8 @@ def test_read_identity_asks_for_its_own_assignments_at_every_scope(monkeypatch):
             r.json.return_value = {"value": [_assignment(BENCH)], "nextLink": url + "?page=2"}
         elif "page=2" in url:
             r.json.return_value = {"value": [_assignment(f"/subscriptions/{SUB}")]}
+        elif url.endswith(f"/subscriptions/{SUB}/providers/Microsoft.Authorization/permissions"):
+            r.json.return_value = {"value": [{"actions": ["Microsoft.Authorization/roleAssignments/read"]}]}
         elif url.endswith("/permissions"):
             r.json.return_value = {"value": ALL_RIGHTS}
         else:  # the role definition of the subscription-wide assignment

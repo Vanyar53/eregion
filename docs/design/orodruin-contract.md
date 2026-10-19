@@ -1,9 +1,8 @@
 # Orodruin — le contrat de garde-fous vérifié au démarrage
 
-_Conception — 2026-10-14, relue en Opus 5.5 le 2026-10-15 — statut : **code écrit le 19/10**
-(O1, partie A : `eregion_core/orodruin.py`, `infra/orodruin/`, mutants M64–M66), **rien de
-mesuré** : la VM n'existe pas encore. Les comportements Azure (lecture des attributions,
-sortie réelle, délai de révocation) se mesurent sur le banc avec Jonathan (partie B)._
+_Conception — 2026-10-14, relue en Opus 5.5 le 2026-10-15 — statut : **implémenté et mesuré sur le banc le 19/10** (O1 : `eregion_core/orodruin.py`,
+`infra/orodruin/`, mutants M64–M67). Voir « L'implémentation » et ses mesures. Reste le canal
+des fenêtres d'exercice vers la watch hébergée._
 
 ## Ce qu'Orodruin est, et ce qu'il n'est pas
 
@@ -133,13 +132,41 @@ mesuré par les tests d'Orodruin (table `TESTS`, comme O0) :
   défaut). Le premier apply le lève, le temps d'installer Docker. L'image d'Annatar arrive
   ensuite par SSH.
 
+**Mesuré sur le banc le 19/10** (VM D2als_v6, francecentral) :
+- **Sortie** : depuis l'hôte et depuis le conteneur, `1.1.1.1`, GitHub et PyPI sont
+  injoignables. L'API de contrôle (400), Entra ID (200), l'API du modèle (401, sans clé) et le
+  jeton IMDS de l'identité (200) passent. `api.anthropic.com` se résout d'abord en IPv6 ; sans
+  IPv6 dans le VNet, curl retombe sur IPv4.
+- **Lecture de l'identité — la première vérification était aveugle.** Avec ses seuls droits (rôle
+  injecteur sur le banc, `Log Analytics Reader` sur le workspace), la liste filtrée
+  `assignedTo(oid)` au niveau de l'abonnement renvoyait **une** attribution, celle du workspace,
+  et cachait celle du banc. Azure ne liste que ce que l'appelant peut lire, et le rôle injecteur
+  n'a pas de lecture d'attributions. Le premier `orodruin-check` disait donc `armed` alors qu'une
+  attribution ailleurs, sans droit de lecture associé, aurait été invisible. Correctif : la
+  liste ne prouve une absence que si l'identité lit les attributions sur tout l'abonnement
+  (droits effectifs relus au niveau de l'abonnement) ; sinon `identity_unprovable` → `passive`.
+  `contract_reader` passe à vrai par défaut. Mutant M67.
+- **Le contrat tombe quand on le casse** : un `Reader` ajouté sur `rg-orodruin` →
+  `identity_outside_bench` ; la sortie rouverte (`egress_locked = false`) → `network_open`.
+  Chaque fois, refermé → `armed`.
+- **Kill réel** : une sonde sur la VM lisait le groupe du banc toutes les 3 s. La suppression
+  des attributions a commencé à 12:50:10,5 UTC ; dernier 200 à 12:50:08, **premier 403 à
+  12:50:11**, soit une révocation effective en moins de 3 s (une seule mesure). La VM s'est
+  éteinte vers 12:50:25 (désallocation terminée à 12:50:45). Dans le kill, c'est donc la
+  révocation qui coupe d'abord, et l'arrêt suit.
+- **Vrai run** (T1136.001, gondolin, lancé par Jonathan depuis Orodruin) : contrat `armed` au
+  démarrage ; ligne d'audit `about_to_call` à 12:58:06,54 UTC, Run Command démarré à
+  12:58:07,18 (journal d'activité, appelant : l'identité d'Orodruin), réussi à 12:58:28.
+- Limites qui restent : une autre souscription du même tenant, les groupes Entra ID, les deny
+  assignments, PIM.
+
 Décisions du 19/10 (go de Jonathan sur le plan) :
 - la porte est stricte partout ;
 - pas de peering avec le banc ;
 - le canal des fenêtres B2 vers la watch hébergée (un conteneur de stockage dans
   `rg-orodruin`, lu par Glorfindel) vient après la mesure ;
 - le rôle de lecture au niveau de l'abonnement (`contract_reader`) seulement si la mesure
-  l'exige.
+  l'exige — elle l'a exigé (ci-dessus).
 
 ## Questions ouvertes (pour Jonathan, à l'implémentation)
 

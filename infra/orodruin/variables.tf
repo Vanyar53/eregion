@@ -63,7 +63,7 @@ variable "egress_locked" {
 }
 
 variable "contract_reader" {
-  description = "Lecture de ses propres attributions au niveau de l'abonnement — seulement si la mesure montre que le contrat ne peut pas être lu sans elle."
+  description = "Lecture des attributions de rôle sur tout l'abonnement. Mesuré le 19/10 : sans elle, Azure ne liste que les attributions que l'identité peut lire (celle du workspace, pas celle du banc) — l'absence de droits ailleurs n'est pas prouvée, le contrat reste passive (identity_unprovable)."
   type        = bool
-  default     = false
+  default     = true
 }

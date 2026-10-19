@@ -264,10 +264,11 @@ resource "azurerm_role_assignment" "bench_logs_reader" {
   principal_id         = azurerm_linux_virtual_machine.host.identity[0].principal_id
 }
 
-# Prouver qu'elle n'a AUCUN droit ailleurs demande de lire ses attributions au niveau de
-# l'abonnement. Si la mesure montre qu'elle ne le peut pas avec ses seuls droits sur le banc,
-# contract_reader = true lui donne cette lecture et rien d'autre — la seule attribution hors
-# du banc que le contrat accepte (eregion_core/orodruin.py, AUTHZ_READ_ONLY).
+# Prouver qu'elle n'a AUCUN droit ailleurs demande de lire les attributions sur tout
+# l'abonnement : Azure ne liste que celles que l'appelant peut lire (mesuré le 19/10 — avec
+# ses seuls droits, la liste montrait l'attribution du workspace et cachait celle du banc).
+# contract_reader lui donne cette lecture et rien d'autre — la seule attribution hors du
+# banc que le contrat accepte (eregion_core/orodruin.py, AUTHZ_READ_ONLY).
 resource "azurerm_role_definition" "contract_reader" {
   count       = var.contract_reader ? 1 : 0
   name        = "eregion-orodruin-contract-reader"

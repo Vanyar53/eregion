@@ -126,10 +126,19 @@ def _allowed(action: str, perms: list[dict]) -> bool:
 
 
 def assess_identity(assignments: list[dict], role_actions: Callable[[str], list[str]],
-                    perms: list[dict], bench: str) -> list[dict]:
+                    perms: list[dict], bench: str, *, sees_subscription: bool) -> list[dict]:
     """The identity guarantee from what was read: every assignment inside the bench (or a
-    pure role-assignment read), and the injectors' actions allowed on the bench."""
+    pure role-assignment read), and the injectors' actions allowed on the bench.
+
+    Azure lists only the assignments the caller may read (measured on the bench, 19/10:
+    with read rights on the workspace alone, the listing showed that one and hid the
+    bench's). A listing is proof of absence only if the identity reads role assignments
+    over the whole subscription — otherwise nothing is proven (``contract_reader``)."""
     missing = []
+    if not sees_subscription:
+        missing.append(_miss("identity_unprovable",
+                             "cannot read role assignments over the subscription: an assignment "
+                             "elsewhere would not be listed (contract_reader)"))
     for a in assignments:
         props = a.get("properties") or {}
         scope = props.get("scope") or ""
@@ -190,7 +199,11 @@ def read_identity(*, credential=None, get=None) -> list[dict]:
 
     perms = pages(f"{ARM}{bench}/providers/Microsoft.Authorization/permissions",
                   {"api-version": API_VERSION})
-    return assess_identity(assignments, role_actions, perms, bench)
+    sub_perms = pages(f"{ARM}/subscriptions/{sub}/providers/Microsoft.Authorization/permissions",
+                      {"api-version": API_VERSION})
+    return assess_identity(
+        assignments, role_actions, perms, bench,
+        sees_subscription=_allowed("Microsoft.Authorization/roleAssignments/read", sub_perms))
 
 
 def read_network(*, probes=NETWORK_PROBES, connect=None) -> list[dict]:

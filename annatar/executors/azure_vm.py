@@ -10,12 +10,15 @@ console = Console()
 
 
 class AzureVMExecutor:
-    def __init__(self, target: dict):
+    def __init__(self, target: dict, session=None):
         self.resource_group = target["resource_group"]
         self.vm_name = target["vm_name"]
         self._credential = DefaultAzureCredential()
         self._subscription_id = target.get("subscription_id") or self._get_subscription_id()
         self._compute = ComputeManagementClient(self._credential, self._subscription_id)
+        # Orodruin's armed session (eregion_core/orodruin.py): every call that writes on
+        # the target is journaled through it first. None → passive, nothing written.
+        self._session = session
 
     @property
     def resource_id(self) -> str:
@@ -55,6 +58,7 @@ class AzureVMExecutor:
 
         Retries on Conflict (Run Command extension busy) with exponential backoff.
         """
+        self._before_call("run_script", script_path)
         self._ensure_vm_running()
 
         with open(script_path) as f:
@@ -91,6 +95,13 @@ class AzureVMExecutor:
                 time.sleep(delay)
 
         raise RuntimeError("RunCommand failed after all retries")
+
+    def _before_call(self, action: str, detail: str) -> None:
+        """The journal precedes the call (O1) — the start of a stopped VM included."""
+        from eregion_core.orodruin import Passive
+        if self._session is None:
+            raise Passive(f"{action} on {self.vm_name}: no armed Orodruin contract")
+        self._session.before_call(action, self.resource_id, detail)
 
     def check_preflight(self) -> list[str]:
         """Check VM state before running a scenario. Returns a list of blocking issues."""

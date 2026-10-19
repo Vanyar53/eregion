@@ -354,7 +354,7 @@ def test_clean_refuses_an_untagged_vm(monkeypatch):
     from annatar.runner import initializer
 
     executor = _make_executor(vm_tags={})
-    monkeypatch.setattr("annatar.executors.azure_vm.AzureVMExecutor", lambda target: executor)
+    monkeypatch.setattr("annatar.executors.azure_vm.AzureVMExecutor", lambda target, session=None: executor)
     with pytest.raises(RuntimeError, match="Safety check failed"):
         initializer.InitRunner().clean(EXFIL_YAML)
     executor.run_script.assert_not_called()
@@ -402,7 +402,7 @@ def test_clean_refuses_a_production_target(monkeypatch):
     from annatar.runner import initializer
 
     executor = _make_executor(tags=PROD_TAGS, vm_tags=PROD_TAGS)
-    monkeypatch.setattr("annatar.executors.azure_vm.AzureVMExecutor", lambda target: executor)
+    monkeypatch.setattr("annatar.executors.azure_vm.AzureVMExecutor", lambda target, session=None: executor)
     import pytest
     with pytest.raises(RuntimeError, match="never runs in production"):
         initializer.InitRunner().clean(EXFIL_YAML)

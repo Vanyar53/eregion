@@ -242,6 +242,15 @@ MUTANTS = [
     ("M63", "the report keeps a detected/missed claim the runs contradict (IA0)", "analysis/campaign_report.py",
      '        elif c.kind in ("detected", "missed") and any(x.detection != c.kind for x in cited):\n            c.rejected = f"a cited run was not {c.kind}"\n',
      ""),
+    # O1: the three bugs its specification names (docs/design/orodruin-contract.md).
+    ("M64", "a contract not verified still arms the run (O1)", "eregion_core/orodruin.py",
+     "    if not verdict.armed:\n        return verdict, None\n", ""),
+    ("M65", "the journal is written after the injector's first call (O1)", "annatar/executors/azure_vm.py",
+     '        self._before_call("run_script", script_path)\n        self._ensure_vm_running()\n',
+     '        self._ensure_vm_running()\n        self._before_call("run_script", script_path)\n'),
+    ("M66", "the kill stops the VM without revoking the identity (O1)", "eregion_core/orodruin.py",
+     '    for name, step in (("revoke", revoke), ("stop", stop)):',
+     '    for name, step in (("stop", stop),):'),
 ]
 
 # Mutants measured by other tests than the invariants (their lot's own).
@@ -255,6 +264,7 @@ TESTS.update({mid: "tests/unit/test_glorfindel_host.py" for mid in ("M54", "M55"
 TESTS.update({mid: "tests/unit/test_exercise.py" for mid in ("M57", "M58", "M59", "M60", "M61")})
 TESTS["M62"] = "tests/unit/test_detection_rules.py -k sampling_step"
 TESTS["M63"] = "tests/unit/test_campaign_report.py"
+TESTS.update({mid: "tests/unit/test_orodruin.py" for mid in ("M64", "M65", "M66")})
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

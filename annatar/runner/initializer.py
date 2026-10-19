@@ -45,7 +45,16 @@ class InitRunner:
         target = scenario.target
         vm_name = target["vm_name"]
 
-        executor = AzureVMExecutor(target)
+        # Orodruin (eregion_core/orodruin.py): `clean` writes on the target — an armed
+        # contract first, its calls journaled before they run.
+        from datetime import datetime, timezone
+        from eregion_core.orodruin import arm
+        verdict, session = arm(
+            "clean-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"), "annatar")
+        if session is None:
+            raise RuntimeError(f"Orodruin passive — nothing touched: {verdict.reasons()}")
+
+        executor = AzureVMExecutor(target, session)
 
         # `clean` rewrites the VM's data disk: the same inscription as `run`, and
         # destructive — never in production.

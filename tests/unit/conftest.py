@@ -11,6 +11,20 @@ def fake_anthropic_key(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def hermetic_orodruin(tmp_path, monkeypatch):
+    """Orodruin's contract (O1) without Azure or the network: its readers report a
+    contract that holds — check() and the gate still run — and the audit journal goes
+    to tmp. test_orodruin.py swaps in readers that fail."""
+    import eregion_core.orodruin as orodruin
+    monkeypatch.setattr(orodruin, "READERS", {
+        "identity": lambda: [],
+        "network": lambda: [],
+        "cap": lambda: ([], {"max_injections": 20, "max_run_s": 3600}),
+    })
+    monkeypatch.setenv(orodruin.AUDIT_ENV, str(tmp_path / "orodruin-audit.jsonl"))
+
+
+@pytest.fixture(autouse=True)
 def isolated_escalations_store(tmp_path, monkeypatch):
     """Redirect escalations._STORE to a temp file.
 

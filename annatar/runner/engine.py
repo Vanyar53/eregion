@@ -15,6 +15,7 @@ from annatar.runner.report import RunReport
 from eregion_core.inscription import check_target
 from annatar.signals.emitter import SignalEmitter
 from eregion_core.exercise import close_window, open_window
+from eregion_core.orodruin import arm
 
 console = Console()
 
@@ -76,7 +77,14 @@ class Engine:
                 console.print("Aborted.")
                 return
 
-        executor, collector = self._get_executor_collector(scenario)
+        # Orodruin (eregion_core/orodruin.py): the contract before the target is even read.
+        # Passive → the run touches nothing and says why.
+        verdict, session = arm(run_id, "annatar")
+        if session is None:
+            console.print(f"[red]Orodruin passive — nothing touched:[/red] {verdict.reasons()}")
+            return RunOutcome(run_id, "unknown", error=f"passive: {verdict.reasons()}")
+
+        executor, collector = self._get_executor_collector(scenario, session)
 
         # Inscription (eregion_core/inscription.py): the target inside the bench, it AND
         # its resource group enrolled, its zone allowing this technique.
@@ -235,12 +243,12 @@ class Engine:
             timeout = scenario.detection.get("timeout", "?")
             console.print(f"  -> Detection timeout: {timeout} — Glorfindel uses detection_rules.yaml")
 
-    def _get_executor_collector(self, scenario):
+    def _get_executor_collector(self, scenario, session=None):
         target_type = scenario.target.get("type")
         if target_type == "azure_vm":
             from annatar.executors.azure_vm import AzureVMExecutor
             from annatar.collectors.azure_monitor import AzureMonitorCollector
-            executor = AzureVMExecutor(scenario.target)
+            executor = AzureVMExecutor(scenario.target, session)
             collector = AzureMonitorCollector(scenario.target)
             return executor, collector
         raise ValueError(f"Unsupported target type: {target_type}")

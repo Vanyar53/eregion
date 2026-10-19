@@ -6,7 +6,7 @@ model » (measured 19/10) — every decision then failed before the model saw th
 that refusal the call is retried once with `tool_choice="auto"`, and the model remembered.
 A model that then answers without the tool gives no decision: the defensive parse
 (`agent._parse_decision`) makes it an escalation, never an action. A model that accepts the
-forced choice (the default, claude-sonnet-4-6) is called exactly as before.
+forced choice (claude-sonnet-4-6, the default until 19/10) is called exactly as before.
 """
 from __future__ import annotations
 

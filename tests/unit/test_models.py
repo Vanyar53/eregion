@@ -26,6 +26,7 @@ def test_an_empty_variable_means_the_default(monkeypatch):
     from eregion_core import models
     monkeypatch.setenv("GLORFINDEL_LLM_MODEL", "")
     monkeypatch.setenv("ANNATAR_LLM_MODEL", "")
-    assert models.glorfindel_model() == models.annatar_model() == models.DEFAULT_LLM_MODEL
+    assert models.glorfindel_model() == models.DEFAULT_LLM_MODEL
+    assert models.annatar_model() == models.DEFAULT_ANNATAR_MODEL   # its own (19/10)
     monkeypatch.setenv("GLORFINDEL_LLM_MODEL", "anthropic/claude-sonnet-5-5")
     assert models.glorfindel_model() == "anthropic/claude-sonnet-5-5"

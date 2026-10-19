@@ -46,7 +46,7 @@ pré-observation démarre l'outillage et calibre le bruit ; elle ne compte pas p
 
 **Le résumé du lundi.** Avec le bot Discord, chaque lundi matin le salon reçoit le compte de la semaine — le même que `glorfindel report --since 7d`.
 
-**Le modèle.** Depuis le 19/10, le Glorfindel de l'observation (VM hébergée) décide avec `claude-sonnet-5-5` (harnais : 36/36 bonnes décisions, 0 erreur sûre d'elle ; `claude-sonnet-4-6` : 32/36 et 4). Les cartes d'avant le 19/10 viennent de `claude-sonnet-4-6`. Le run de bout en bout (T1486 et un autre TTP) reste à faire avant toute autonomie.
+**Le modèle.** Depuis le 19/10, le Glorfindel de l'observation (VM hébergée) décide avec `claude-sonnet-5-5` (harnais : 36/36 bonnes décisions, 0 erreur sûre d'elle ; `claude-sonnet-4-6` : 32/36 et 4). Les cartes d'avant le 19/10 viennent de `claude-sonnet-4-6`. Run de bout en bout fait le 19/10 (T1486 → isoler 0,80 ; T1110.001 → bloquer 0,88) : c'est le défaut du code depuis (#139).
 
 **Garder les verdicts.** Ils ne vivent que sur l'hôte de Glorfindel : une copie par semaine
 (`make glorfindel-host-pull` sur la VM hébergée, H0) évite de perdre l'observation avec un disque.

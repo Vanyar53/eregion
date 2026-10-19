@@ -21,15 +21,20 @@ Contrat (garanties, vérifications, kill, mutants) :
   Run Command passe par l'API de contrôle.
 - **Entrée** : SSH depuis ton IP seulement.
 - Pas de tag `eregion-target` : Orodruin n'est pas une cible.
+- **Le canal des fenêtres d'exercice** : un conteneur `exercises` (compte `storodruin…`, sans clé
+  partagée). Orodruin y écrit, le Glorfindel hébergé le lit (`watch_principal_id`, lu dans l'état
+  de `infra/glorfindel-host`). Dans `orodruin.env` : `EREGION_EXERCISE_CHANNEL` (`terraform output
+  channel_url`) et `EREGION_CHANNEL_SCOPE` (`channel_scope`). Dans le `host.env` de Glorfindel :
+  `EREGION_EXERCISE_CHANNEL`.
 
 ## Déroulé (avec Jonathan — c'est lui qui lance les apply)
 
 ```bash
 # 0. Lecture seule : quota de la famille, SKU, prix → vm_size (repli : D2als_v6)
 make orodruin-plan                 # relire le plan
-make orodruin-up                   # 1er apply, sortie ouverte : la VM installe Docker
+make orodruin-up YES=1             # 1er apply, sortie ouverte : la VM installe Docker
 make orodruin-ssh                  # attendre ~/.orodruin-ready, puis exit
-make orodruin-lock                 # 2e apply : la sortie se referme
+make orodruin-lock YES=1           # 2e apply : la sortie se referme (YES=1 : sans confirmation)
 cp infra/orodruin/orodruin.env.example infra/orodruin/orodruin.env   # abonnement, plafond
 make orodruin-push                 # image d'Annatar (docker save | ssh) + orodruin.env
 make orodruin-check                # le contrat lu depuis la VM : armed ou passive

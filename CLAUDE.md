@@ -4,7 +4,7 @@
 Plateforme OSS (Apache 2.0) de défense active cloud : un SOC pour les charges cloud des équipes sans SOC, prouvé par l'attaque et par la panne. Trois agents en boucle :
 - **Glorfindel** (bleu) — **le produit** : détecte, répond de façon autonome, vérifie, apprend via ChromaDB
 - **Annatar** (rouge) simule des attaques réelles sur l'infra cloud (MITRE ATT&CK) ; devient des adaptateurs vers des bibliothèques publiques (R1 Atomic Red Team, R2 Stratus Red Team)
-- **Gothmog** (pannes, *à venir — G0*) : pannes déclarées en code, par un moteur public (Chaos Studio d'abord) ; éprouve d'abord Glorfindel (bruit bénin, dépendances, reprise)
+- **Gothmog** (pannes, G0 ✅ 19/10) : pannes déclarées en code, par un moteur public (Chaos Studio d'abord) ; éprouve d'abord Glorfindel (bruit bénin, dépendances, reprise)
 
 L'atelier autour : **Celebrimbor** (`infra/terraform/`) construit et inscrit le banc ; **Orodruin** (`infra/orodruin/`, O1 ✅ 19/10) héberge les injecteurs, contrat de garde-fous vérifié au démarrage — **un injecteur n'agit que depuis un Orodruin armé** ; ailleurs (un poste d'opérateur), il reste passif.
 

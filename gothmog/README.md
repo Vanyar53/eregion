@@ -61,6 +61,25 @@ Sur la VM : `gothmog run vm-shutdown [--yes] [--dry-run]`, `gothmog preflight vm
 `gothmog report <run_id>`. Ailleurs (un poste d'opérateur), le contrat est passif : rien ne
 part. `--dry-run` n'appelle pas Azure.
 
+### Mesuré sur le banc (19/10)
+
+Run `gothmog-20261019T200123Z`, depuis Orodruin armé : **PASS**.
+
+| Instant (UTC) | Ce qui s'est passé | Source |
+|---|---|---|
+| 20:01:34.32 | `chaos_start` écrit au journal d'audit | Orodruin, `runs/orodruin/audit.jsonl` |
+| 20:01:34.77 | début de l'exécution (0,45 s après le journal) | Chaos Studio |
+| 20:02:06 | gondolin vue arrêtée par Gothmog (`stopping` dès 20:01:57) | Gothmog ; relevé indépendant |
+| 20:07:30 | gondolin redémarrée par le moteur | relevé indépendant |
+| 20:07:31 | exécution `Success` | Chaos Studio |
+| 20:09:08 | premier Heartbeat après la panne | Log Analytics |
+| 20:09:44 | retour vérifié (les trois sondes), 133 s après la fin, sans repli | Gothmog |
+
+Glorfindel (la watch hébergée) n'a rien fait sur gondolin : aucun cycle, aucune escalade ; la
+fenêtre `fault` était sur le canal, lisible par son identité. Avant le run, la sonde Heartbeat
+avait **échoué fermé** : `last` est un mot de KQL (erreur de syntaxe) — l'état normal n'étant
+pas vérifié, rien n'aurait été injecté ; la colonne s'appelle `LastSeen`.
+
 ### Mutants
 
 M71 (panne lancée sans état normal vérifié avant), M72 (cible de l'expérience non inscrite

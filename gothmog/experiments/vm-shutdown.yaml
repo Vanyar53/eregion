@@ -38,8 +38,9 @@ steady_state:
       verify: vm_agent
       expect: Ready
     # La télémétrie que Glorfindel lit : après la panne, un Heartbeat postérieur à sa fin.
+    # La colonne s'appelle LastSeen : `last` est un mot de KQL (erreur de syntaxe, mesuré 19/10).
     - name: heartbeat
-      verify: "Heartbeat | where _ResourceId =~ '{target}' | summarize last = max(TimeGenerated)"
+      verify: "Heartbeat | where _ResourceId =~ '{target}' | summarize LastSeen = max(TimeGenerated)"
       expect: fresh 10m
 
 abort_conditions:

@@ -143,8 +143,9 @@ class World:
         if method == "post":
             audited = len(orodruin.audit_path().read_text().splitlines()) if orodruin.audit_path().exists() else 0
             if low.endswith("/api/query"):
-                return Resp(200, {"tables": [{"name": "PrimaryResult", "columns": [{"name": "last"}],
-                                              "rows": [[self._heartbeat().isoformat()]]}]})
+                # The shape ARM answers (measured 19/10): Tables / Columns / ColumnName / Rows.
+                return Resp(200, {"Tables": [{"TableName": "Table_0", "Columns": [{"ColumnName": "LastSeen"}],
+                                              "Rows": [[self._heartbeat().isoformat()]]}]})
             if low.endswith(f"/experiments/{EXPERIMENT}/start"):
                 self.writes.append(("start", audited))
                 self.started_at = self.clock.t
@@ -485,9 +486,10 @@ def _chaos_tf() -> str:
     return (ROOT / "infra" / "terraform" / "chaos.tf").read_text(encoding="utf-8")
 
 
-def test_chaos_studio_is_off_until_enabled_and_never_on_an_unenrolled_vm():
+def test_chaos_studio_never_targets_an_unenrolled_vm():
+    """On since the bench got it (19/10): the repo keeps the deployed state, or the next
+    celebrimbor-up would destroy the experiment. What must hold is who it may target."""
     cfg = yaml.safe_load((ROOT / "infra" / "terraform" / "config.yaml").read_text())
-    assert cfg["chaos"]["enabled"] is False
     assert all(cfg["vms"][k] is None or cfg["vms"][k].get("enrolled", True) for k in cfg["chaos"]["shutdown_vms"])
     tf = _chaos_tf()
     assert "condition     = try(each.value.enrolled, true)" in tf

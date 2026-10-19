@@ -71,12 +71,12 @@ clusters:
     # location:  francecentral      # défaut = location globale
 
 # ── Chaos Studio (G0) — les pannes que Gothmog lance depuis Orodruin (chaos.tf) ─
-# enabled: false par défaut. true → chaque VM de shutdown_vms est inscrite auprès de Chaos
+# enabled: true depuis le 19/10 (G0 ; false détruirait l'expérience au prochain apply). true → chaque VM de shutdown_vms est inscrite auprès de Chaos
 # Studio (cible + capacité Shutdown-1.0) et reçoit une expérience d'arrêt propre
 # (exp-celebrimbor-<clé>-shutdown), dont l'identité n'a de droits que sur elle. Seules des VM
 # inscrites (pas bree) ; le coût ne court que pendant une exécution.
 chaos:
-  enabled:           false
+  enabled:           true
   shutdown_vms:      [gondolin]
   shutdown_duration: PT5M
 

@@ -7,8 +7,9 @@ Three kinds, by ``verify``:
     power_state   the VM's power state (ARM, instanceView)        expect: PowerState/running
     vm_agent      the guest agent's status: the OS answers         expect: Ready
     <KQL>         a query on the bench's Log Analytics, ``{target}`` replaced by the VM's
-                  id; its first row's ``last`` must be younger than N minutes and, after
-                  a fault, later than its end                      expect: fresh <N>m
+                  id; its first row's ``LastSeen`` must be younger than N minutes and,
+                  after a fault, later than its end                expect: fresh <N>m
+                  (not ``last``: a KQL keyword, a syntax error — measured 19/10)
 
 The heartbeat matters on its own: Chaos Studio ignores extension errors when it restarts
 a VM (fault library, 09/2026) — a fault can "succeed" with the monitoring agent down, and
@@ -67,7 +68,7 @@ def evaluate(probes: list[dict], target: str, bench, *, since: datetime | None =
             else:
                 minutes = int(_FRESH.match(expect).group(1))
                 rows = bench.query(verify.replace("{target}", target.replace("'", "")))
-                last = _parse(rows[0].get("last")) if rows else None
+                last = _parse(rows[0].get("LastSeen")) if rows else None
                 observed = last.isoformat() if last else "no row"
                 ok = (last is not None and last >= now - timedelta(minutes=minutes)
                       and (since is None or last > since))

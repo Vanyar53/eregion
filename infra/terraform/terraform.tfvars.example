@@ -1,4 +1,6 @@
 admin_ssh_public_key = "ssh-ed25519 AAAA... your-key-comment"
+# Optionnel : prévenu 15 min avant l'extinction automatique des VMs (vide → pas d'e-mail).
+vm_shutdown_email    = "you@example.com"
 
 # Optionnel — sinon le provider lit ARM_SUBSCRIPTION_ID de l'env (le Makefile le
 # dérive de AZURE_SUBSCRIPTION_ID). Décommenter pour figer l'abonnement ici.

@@ -58,7 +58,7 @@ Glorfindel est le produit ; Annatar, Gothmog, Orodruin et Celebrimbor sont l'ate
 | Version | Contenu | Atteinte quand |
 |---|---|---|
 | 0.2.0 | publiée le 15/10 | — |
-| 0.3 | A0 ✅, O0 ✅, E1 ✅, O1 ✅ ; H0, R1, G0 ; B2, IA0 | la boucle complète tourne sur le banc et le rapport de campagne s'écrit seul |
+| 0.3 | A0 ✅, O0 ✅, E1 ✅, O1 ✅, G0 ✅, B2 ✅ ; H0, R1, IA0 | la boucle complète tourne sur le banc et le rapport de campagne s'écrit seul |
 | 0.4 à 0.x | A1 (avec MC0), A2, A3, B1, B3, B4 ; G1 à G3, R2, C1, D1, IA1 ; J1 à J4, P1, P2 | couverture, retenue, robustesse et reprise mesurées ; la preuve existe en production (ombre, détection non destructive, sentinelle) et sur jumeau ; les règles du client survivent aux mises à jour |
 | 1.0 | critères de maturité de la septième passe ; contrats figés ; profils | voir les critères ci-dessous |
 | 1.x | MC1 à MC3, G4, X1, O2 ; plus tard, le SaaS | nouveaux clouds et moteurs ajoutés sans rien casser |

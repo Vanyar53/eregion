@@ -168,9 +168,9 @@ resource "azurerm_dev_test_global_vm_shutdown_schedule" "multinic" {
   timezone              = "UTC"
 
   notification_settings {
-    enabled         = true
+    enabled         = var.vm_shutdown_email != ""
     time_in_minutes = 15
-    email           = local.cfg.vm_shutdown_email
+    email           = var.vm_shutdown_email != "" ? var.vm_shutdown_email : null
   }
 }
 

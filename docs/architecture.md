@@ -336,7 +336,7 @@ eregion_core/            inscription et périmètre (O0) ; validation des schém
 schemas/                 scenario.schema.json (existe) + experiment.schema.json + technique_catalog.schema.json (E1, existent)
 technique_catalog.yaml   techniques (existe) + pannes (E1)
 infra/terraform/         Celebrimbor (existe) ; pose eregion-target (O0), inscrit les cibles Chaos Studio (G0, chaos.tf)
-infra/orodruin/          Orodruin, état Terraform séparé (O1) — emplacement réservé, README seul
+infra/orodruin/          Orodruin, état Terraform séparé (O1, fait) : VM, identité, sortie fermée, canal des fenêtres
 infra/canary/            canary azurerm (existe)
 CLAUDE_ORODRUIN.md       session Orodruin (O1, O2)
 CLAUDE_GOTHMOG.md        session Gothmog (G0 à G4)

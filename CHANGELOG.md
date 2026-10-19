@@ -5,6 +5,7 @@ Notable changes to Eregion. The format follows [Keep a Changelog](https://keepac
 ## [Unreleased] — toward 0.3, "the full loop runs"
 
 ### Changed
+- **The observation's Glorfindel decides with claude-sonnet-5-5** (19/10): in the harness, 36/36 good calls and no overconfident error (claude-sonnet-4-6: 32/36, 4), about three times faster, more cautious on confidence (12 needless holds, harmless in human-only). Switched on the hosted, read-only VM; the code default stays claude-sonnet-4-6 until an end-to-end run.
 - Direction set for 1.0 (eighth pass): SOC functions for the cloud workloads of teams without a SOC, proven by attack and by failure. Three-agent loop — Annatar attacks, Gothmog breaks, Glorfindel detects and responds — with Orodruin as the disposable runner and Celebrimbor as the bench builder. Production rule: never a fault or a destructive action on a real workload. README, ROADMAP, `docs/architecture.md` (shared vocabulary, the three zones), session files for Orodruin and Gothmog, reserved folders `gothmog/` and `infra/orodruin/`.
 
 ### Fixed

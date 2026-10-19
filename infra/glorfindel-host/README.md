@@ -55,6 +55,20 @@ Les verdicts de l'observation et la mémoire ne vivent que sur le disque de la V
 La mémoire (ChromaDB) part vide sur la VM : la mémoire locale ne contient que des cycles
 d'exercice non marqués (B2), qui n'ont rien à faire dans une observation.
 
+## Changer de modèle
+
+Le modèle qui décide est un réglage du déploiement, jamais de la War Room (qui l'affiche
+seulement, avec sa provenance) : changer de modèle, c'est changer qui décide.
+
+1. Le comparer au harnais : `make llm-compare MODELS=anthropic/<actuel>,anthropic/<candidat> RUNS=3`.
+2. Le faire tourner de bout en bout sur le banc (T1486 et un autre TTP) avant toute autonomie.
+3. Le poser dans `infra/glorfindel-host/host.env` : `GLORFINDEL_LLM_MODEL=anthropic/<candidat>`.
+4. `make glorfindel-host-push` puis `make glorfindel-host-start` ; Config dans la War Room
+   affiche « set at deployment (GLORFINDEL_LLM_MODEL) ».
+
+Sans la variable, le défaut du code (`eregion_core/models.py`, une seule définition). Depuis
+le 19/10, la VM d'observation tourne sur `claude-sonnet-5-5` (issue #139 pour en faire le défaut).
+
 ## Mesuré au premier démarrage (16/10)
 
 - **Identité managée** : prise par `DefaultAzureCredential` seulement depuis le correctif de la

@@ -3306,7 +3306,14 @@ async function refreshConfig() {
           <span class="cfg-key">provider</span><span class="cfg-val">${d.llm.provider}</span>
         </div>
         <div class="cfg-row">
-          <span class="cfg-key">model</span><span class="cfg-val">${d.llm.model}</span>
+          <span class="cfg-key">model</span><span class="cfg-val">${_attr(d.llm.model)} <span style="color:var(--dim)">${d.llm.source === 'deployment'
+            ? '— set at deployment (GLORFINDEL_LLM_MODEL)'
+            : '— code default (eregion_core/models.py)'}</span></span>
+        </div>
+        <div style="color:var(--dim);font-size:10px;padding:2px 0 4px">
+          Not a setting of this page: changing the model changes who decides. Compare it first
+          (<code>make llm-compare</code>), run it end to end on the bench, then set
+          <code>GLORFINDEL_LLM_MODEL</code> in the deployment's environment and restart.
         </div>
         ${d.llm.base_url ? `<div class="cfg-row">
           <span class="cfg-key">base_url</span>

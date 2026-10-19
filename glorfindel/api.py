@@ -492,6 +492,9 @@ async def config() -> dict:
             "model": llm_model,
             "provider": llm_provider,
             "base_url": os.environ.get("GLORFINDEL_LLM_BASE_URL", ""),
+            # Where the model comes from — shown, never set here: changing who decides is a
+            # deployment change (harness, end-to-end run), not a War Room setting.
+            "source": "deployment" if os.environ.get("GLORFINDEL_LLM_MODEL") else "default",
         },
         "detection": {
             "rules": rules_info,

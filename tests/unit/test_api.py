@@ -369,3 +369,14 @@ def test_recurrence_looks_back_seven_days_only():
     me = {"id": "b", "first_seen": now.isoformat(), "action_params": {"ip": "198.51.100.7"}}
     assert escalations.recurrence(me, [old, me, later]) is None
     assert escalations.recurrence({"id": "x", "first_seen": now.isoformat()}, [old]) is None   # no IP
+
+
+def test_config_says_where_the_model_comes_from(client, monkeypatch):
+    """Shown, never set from the War Room: changing who decides is a deployment change."""
+    from eregion_core.models import DEFAULT_LLM_MODEL
+    monkeypatch.setenv("GLORFINDEL_LLM_MODEL", "")
+    llm = client.get("/api/config").json()["llm"]
+    assert llm["model"] == DEFAULT_LLM_MODEL and llm["source"] == "default"
+    monkeypatch.setenv("GLORFINDEL_LLM_MODEL", "anthropic/claude-sonnet-5-5")
+    llm = client.get("/api/config").json()["llm"]
+    assert llm["model"] == "anthropic/claude-sonnet-5-5" and llm["source"] == "deployment"

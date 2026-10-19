@@ -360,7 +360,9 @@ def author_rule(
     if base_url:
         kwargs["base_url"] = base_url
 
-    response = litellm.completion(
+    from glorfindel.llm_call import completion_with_tool
+    response = completion_with_tool(
+        litellm, "propose_detection_rule",
         model=model,
         max_tokens=2048,
         messages=[
@@ -372,7 +374,6 @@ def author_rule(
             {"role": "user", "content": user_msg},
         ],
         tools=[RULE_PROPOSAL_TOOL],
-        tool_choice={"type": "function", "function": {"name": "propose_detection_rule"}},
         **kwargs,
     )
 

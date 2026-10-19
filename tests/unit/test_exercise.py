@@ -146,3 +146,22 @@ def test_a_refused_target_opens_no_window(tmp_path, monkeypatch):
          patch.object(engine, "_wait_and_emit_feedback"):
         engine.run(EXFIL_YAML, skip_confirm=True)
     assert exercise.load_windows() == []
+
+
+def test_the_model_sees_each_past_cycle_s_source_never_the_current_one(tmp_path, monkeypatch):
+    """B2 model side: past cycles are tagged [EXERCICE] / [RÉEL] / [source inconnue]; the
+    system prompt says an exercise is no precedent; the current signal carries no source."""
+    from glorfindel.agent import _SYSTEM_PROMPT, _build_user_message
+    monkeypatch.chdir(tmp_path)
+    open_window("r1", injector="annatar", kind="technique", experiment="T1486", targets=[VM])
+    signal = {"signal_id": "s", "resource_id": VM, "ttp": "T1486", "event": "detection",
+              "raw_signal": {}, "context": {}}
+    past = [{"summary": "ransomware isolé", "source": "exercise"},
+            {"summary": "brute force bloquée", "source": "real"},
+            {"summary": "ancien cycle"}]
+    msg = _build_user_message(signal, past)
+    assert "**Cycle 1** [EXERCICE] : ransomware isolé" in msg
+    assert "**Cycle 2** [RÉEL] : brute force bloquée" in msg
+    assert "**Cycle 3** [source inconnue] : ancien cycle" in msg
+    assert msg.count("[EXERCICE]") == 1        # the current signal is never labelled
+    assert "never a precedent for a real" in _SYSTEM_PROMPT

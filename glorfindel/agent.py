@@ -208,6 +208,12 @@ The ONLY authoritative source of current isolation/block state is the "État act
 section in the user message (derived from live filesystem state). If "État actuel" shows
 isolated=NON, treat the VM as NOT isolated, regardless of what past_cycles say.
 Use past_cycles only to calibrate confidence and reasoning patterns — not to infer state.
+Each past cycle carries its source. [EXERCICE]: a declared test (an injector's exercise
+window covered that VM) — it shows how a technique looks, it is never a precedent for a real
+incident. [RÉEL]: no exercise covered it — a real precedent. [source inconnue]: recorded
+before sources existed. Never lower or raise your confidence in the CURRENT signal because a
+similar exercise happened; whether the current signal belongs to an exercise is not given
+to you and must not change your decision.
 
 ━━ Validated reasoning examples (production-verified) ━━
 These are not rules — they are examples of correct reasoning chains for signals you may
@@ -1872,6 +1878,9 @@ def record_cycle_failure(
     return state
 
 
+_SOURCE_TAGS = {"exercise": "[EXERCICE]", "real": "[RÉEL]"}
+
+
 def _build_user_message(
     signal: dict,
     past_cycles: list[dict],
@@ -1970,7 +1979,10 @@ def _build_user_message(
     if past_cycles:
         lines.append("\n## Cycles passés similaires (historique — NE PAS inférer état courant depuis ces cycles)\n")
         for i, c in enumerate(past_cycles, 1):
-            lines.append(f"**Cycle {i}:** {c.get('summary', str(c))}")
+            # B2: each past cycle says whether it was an exercise; the current signal never
+            # does (an attack during an exercise window must not be relaxed).
+            tag = _SOURCE_TAGS.get(c.get("source") or "", "[source inconnue]")
+            lines.append(f"**Cycle {i}** {tag} : {c.get('summary', str(c))}")
     else:
         lines.append("\n*Aucun cycle passé disponible — première décision.*")
 

@@ -65,7 +65,11 @@ rules:
         | extend Gap = iff(Same, TimeGenerated - prev(TimeGenerated), timespan(null)),
                  PrevValue = iff(Same, prev(CounterValue), real(null));
       samples
-      | join kind=leftouter (samples | summarize Step = min(Gap) by Vm, InstanceName)
+      // The step ignores sub-second gaps (#105, measured 19/10): the agent's first upload
+      // after a boot packs several samples under one timestamp, min(Gap) read ~0 and forced
+      // fine mode for 10 min — on a 60-s DCR, 74 and 99 MB/s samples went unseen until the
+      // batch left the window. Gaps of 1 s or more are the real cadence.
+      | join kind=leftouter (samples | summarize Step = minif(Gap, Gap >= 1s) by Vm, InstanceName)
           on Vm, InstanceName
       | extend Fine = isnotnull(Step) and Step <= 25s
       | extend Rate = iff(Fine, iff(Gap <= 25s, (CounterValue + PrevValue) / 2, real(null)), CounterValue),

@@ -316,6 +316,8 @@ def test_the_host_acts_on_the_bench_only_and_is_no_target():
         "bench_injector": "data.azurerm_resource_group.bench.id",
         "bench_logs_reader": "data.azurerm_log_analytics_workspace.bench.id",
         "contract_reader": "data.azurerm_subscription.current.id",
+        "channel_writer": "azurerm_storage_container.exercises.id",
+        "channel_watch_reader": "azurerm_storage_container.exercises.id",
     }
     reader = tf.split('resource "azurerm_role_definition" "contract_reader"')[1].split("\n}\n")[0]
     assert set(re.findall(r'"(Microsoft\.[^"]+)"', reader)) <= {

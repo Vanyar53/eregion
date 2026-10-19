@@ -22,6 +22,8 @@ def hermetic_orodruin(tmp_path, monkeypatch):
         "cap": lambda: ([], {"max_injections": 20, "max_run_s": 3600}),
     })
     monkeypatch.setenv(orodruin.AUDIT_ENV, str(tmp_path / "orodruin-audit.jsonl"))
+    # No exercise channel: windows stay local, nothing reaches Azure Storage.
+    monkeypatch.delenv("EREGION_EXERCISE_CHANNEL", raising=False)
 
 
 @pytest.fixture(autouse=True)

@@ -21,3 +21,13 @@ output "workspace_id" {
   description = "Log Analytics du banc, pour la cible des scénarios."
   value       = data.azurerm_log_analytics_workspace.bench.workspace_id
 }
+
+output "channel_url" {
+  description = "EREGION_EXERCISE_CHANNEL — dans orodruin.env et dans le host.env de Glorfindel."
+  value       = "${azurerm_storage_account.channel.primary_blob_endpoint}${azurerm_storage_container.exercises.name}"
+}
+
+output "channel_scope" {
+  description = "EREGION_CHANNEL_SCOPE — dans orodruin.env : la portée que le contrat accepte hors du banc."
+  value       = azurerm_storage_container.exercises.id
+}

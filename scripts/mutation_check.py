@@ -255,6 +255,14 @@ MUTANTS = [
     # listing without subscription-wide read proves no absence.
     ("M67", "the identity check trusts a listing it cannot fully read (O1)", "eregion_core/orodruin.py",
      "    if not sees_subscription:\n", "    if False:\n"),
+    # O1, part C: the exercise channel from Orodruin to the hosted watch.
+    ("M68", "a declared channel wider than a container is allowed (O1)", "eregion_core/orodruin.py",
+     '    return scope if _CONTAINER_SCOPE.match(scope.lower()) else ""\n', "    return scope\n"),
+    ("M69", "an injector's window never reaches the channel (O1)", "eregion_core/exercise.py",
+     '    _write((directory or exercises_dir()) / f"{run_id}.json", window)\n    _publish(window)\n',
+     '    _write((directory or exercises_dir()) / f"{run_id}.json", window)\n'),
+    ("M70", "the watch labels without pulling the channel (O1)", "eregion_core/exercise.py",
+     "        exercise_channel.pull_if_due(exercises_dir())\n", "        pass\n"),
 ]
 
 # Mutants measured by other tests than the invariants (their lot's own).
@@ -269,6 +277,7 @@ TESTS.update({mid: "tests/unit/test_exercise.py" for mid in ("M57", "M58", "M59"
 TESTS["M62"] = "tests/unit/test_detection_rules.py -k sampling_step"
 TESTS["M63"] = "tests/unit/test_campaign_report.py"
 TESTS.update({mid: "tests/unit/test_orodruin.py" for mid in ("M64", "M65", "M66", "M67")})
+TESTS.update({mid: "tests/unit/test_exercise_channel.py" for mid in ("M68", "M69", "M70")})
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

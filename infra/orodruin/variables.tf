@@ -67,3 +67,15 @@ variable "contract_reader" {
   type        = bool
   default     = true
 }
+
+variable "storage_service_tag" {
+  description = "Sortie vers le canal des fenêtres : le tag du stockage de la région d'Orodruin."
+  type        = string
+  default     = "Storage.FranceCentral"
+}
+
+variable "watch_principal_id" {
+  description = "Identité managée du Glorfindel hébergé (H0), lectrice du canal. Le Makefile la lit dans l'état de infra/glorfindel-host ; vide → pas de lecteur."
+  type        = string
+  default     = ""
+}

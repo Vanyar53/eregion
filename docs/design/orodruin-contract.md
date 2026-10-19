@@ -1,8 +1,8 @@
 # Orodruin — le contrat de garde-fous vérifié au démarrage
 
 _Conception — 2026-10-14, relue en Opus 5.5 le 2026-10-15 — statut : **implémenté et mesuré sur le banc le 19/10** (O1 : `eregion_core/orodruin.py`,
-`infra/orodruin/`, mutants M64–M67). Voir « L'implémentation » et ses mesures. Reste le canal
-des fenêtres d'exercice vers la watch hébergée._
+`infra/orodruin/`, mutants M64–M70), canal des fenêtres d'exercice compris (voir « Le canal
+des fenêtres d'exercice »)._
 
 ## Ce qu'Orodruin est, et ce qu'il n'est pas
 
@@ -167,6 +167,37 @@ Décisions du 19/10 (go de Jonathan sur le plan) :
   `rg-orodruin`, lu par Glorfindel) vient après la mesure ;
 - le rôle de lecture au niveau de l'abonnement (`contract_reader`) seulement si la mesure
   l'exige — elle l'a exigé (ci-dessus).
+
+## Le canal des fenêtres d'exercice (O1, partie C — 19/10)
+
+Les fenêtres B2 (`eregion_core/exercise.py`) disent à Glorfindel quels cycles sont des
+exercices. Avec Glorfindel hébergé (H0) et les injecteurs sur Orodruin, elles changent d'hôte
+par un conteneur de stockage à Orodruin (`eregion_core/exercise_channel.py`) :
+
+- **Côté Orodruin** : `open_window` et `close_window` publient la fenêtre
+  (`<run_id>.json`). Un échec ne casse jamais le run : la fenêtre reste locale, et les cycles
+  du run seront étiquetés « real ».
+- **Côté watch** : `load_windows` copie les fenêtres nouvelles ou changées dans
+  `runs/exercises/`, au plus toutes les 30 s. Seuls les noms simples sont acceptés, jamais un
+  chemin. Si le canal est injoignable, les fenêtres locales comptent toujours.
+- **Droits** : Orodruin a `Storage Blob Data Contributor`, Glorfindel `Storage Blob Data
+  Reader`, tous les deux **à la portée du conteneur**. L'accès passe par Entra ID uniquement,
+  sans clé partagée.
+- **Le contrat** accepte cette attribution hors du banc **seulement** si sa portée est le
+  conteneur déclaré (`EREGION_CHANNEL_SCOPE`) **et** que la déclaration a bien la forme d'une
+  portée de conteneur. Une portée plus large déclarée comme canal (abonnement, groupe, compte)
+  n'autorise rien (M68).
+- **Sortie** : `Storage.FranceCentral` en 443. Le tag couvre tous les comptes de la région :
+  c'est une voie de sortie possible, bornée à la région. À resserrer par un point de
+  terminaison privé si Orodruin quitte le banc.
+
+**Mesuré le 19/10** :
+- avec `EREGION_CHANNEL_SCOPE` déclarée, `armed` ; sans elle, `passive`
+  (`identity_outside_bench` sur le conteneur) ;
+- une fenêtre publiée depuis Orodruin a été listée et lue (200) par l'identité du Glorfindel
+  hébergé, dont l'écriture est refusée (403) ;
+- la création du compte sans clé partagée a attendu environ 4 minutes sur la vérification du
+  data plane par le provider, d'où `features.storage.data_plane_available = false`.
 
 ## Questions ouvertes (pour Jonathan, à l'implémentation)
 

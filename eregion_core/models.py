@@ -15,6 +15,9 @@ from __future__ import annotations
 import os
 
 DEFAULT_LLM_MODEL = "anthropic/claude-sonnet-4-6"
+# The analysis AI (IA0, the campaign report) reasons with another model than Glorfindel's:
+# a report must not share the defender's blind spots. EREGION_ANALYSIS_MODEL overrides it.
+DEFAULT_ANALYSIS_MODEL = "anthropic/claude-haiku-5-5"
 
 
 def glorfindel_model() -> str:
@@ -23,3 +26,7 @@ def glorfindel_model() -> str:
 
 def annatar_model() -> str:
     return os.environ.get("ANNATAR_LLM_MODEL") or DEFAULT_LLM_MODEL
+
+
+def analysis_model() -> str:
+    return os.environ.get("EREGION_ANALYSIS_MODEL") or DEFAULT_ANALYSIS_MODEL

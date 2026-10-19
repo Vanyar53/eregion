@@ -39,6 +39,7 @@ L'atelier autour : **Celebrimbor** (`infra/terraform/`) construit et inscrit le 
 | Contrat d'Orodruin | [docs/design/orodruin-contract.md](docs/design/orodruin-contract.md) |
 | elrond, sous-agents par lot | [docs/elrond.md](docs/elrond.md) |
 | Observation : verdicts et rapport | [docs/observation.md](docs/observation.md) |
+| IA d'analyse : le rapport de campagne (IA0) | [docs/analysis.md](docs/analysis.md) |
 
 ---
 

@@ -19,7 +19,15 @@ terraform {
 
 # subscription_id : jamais en dur (repo public). var.subscription_id, sinon ARM_SUBSCRIPTION_ID.
 provider "azurerm" {
-  features {}
+  # Le compte du canal n'a pas de clé partagée, et l'opérateur n'a pas de droit sur ses
+  # données : le provider ne touche que l'API de contrôle (le conteneur est créé par
+  # storage_account_id). Sans ce réglage, la création du compte a attendu ~4 min sur la
+  # vérification du data plane (19/10), le compte déjà créé mais hors de l'état.
+  features {
+    storage {
+      data_plane_available = false
+    }
+  }
   subscription_id = var.subscription_id != "" ? var.subscription_id : null
 }
 
@@ -104,6 +112,10 @@ locals {
     entra = { priority = 110, dest = "AzureActiveDirectory", port = "443" }
     dns   = { priority = 130, dest = "168.63.129.16", port = "53" }
     imds  = { priority = 140, dest = "169.254.169.254", port = "80" }
+    # Le canal des fenêtres d'exercice (ci-dessous). Le tag couvre tous les comptes de stockage
+    # de la région : une sortie possible, bornée à la région — à resserrer (point de
+    # terminaison privé) si Orodruin quitte le banc.
+    storage = { priority = 150, dest = var.storage_service_tag, port = "443" }
   }
 }
 
@@ -291,4 +303,43 @@ resource "azurerm_role_assignment" "contract_reader" {
   scope              = data.azurerm_subscription.current.id
   role_definition_id = azurerm_role_definition.contract_reader[0].role_definition_resource_id
   principal_id       = azurerm_linux_virtual_machine.host.identity[0].principal_id
+}
+
+# ── Le canal des fenêtres d'exercice (B2) vers la watch hébergée — O1, partie C ─────────────
+# Un conteneur à Orodruin : son identité y écrit les fenêtres (open_window, close_window),
+# celle de Glorfindel (H0) les lit. Entra ID seulement, pas de clé partagée. Détruit avec
+# Orodruin : la watch garde ses copies locales, et sans fenêtre un cycle reste « real ».
+resource "azurerm_storage_account" "channel" {
+  name                            = "storodruin${substr(md5(data.azurerm_subscription.current.subscription_id), 0, 10)}"
+  resource_group_name             = azurerm_resource_group.host.name
+  location                        = azurerm_resource_group.host.location
+  account_tier                    = "Standard"
+  account_replication_type        = "LRS"
+  min_tls_version                 = "TLS1_2"
+  shared_access_key_enabled       = false
+  default_to_oauth_authentication = true
+  allow_nested_items_to_be_public = false
+  tags                            = local.tags
+}
+
+resource "azurerm_storage_container" "exercises" {
+  name                  = "exercises"
+  storage_account_id    = azurerm_storage_account.channel.id
+  container_access_type = "private"
+}
+
+# Portée : le conteneur lui-même — la seule attribution hors du banc que le contrat accepte
+# avec la lecture des attributions (EREGION_CHANNEL_SCOPE, eregion_core/orodruin.py).
+resource "azurerm_role_assignment" "channel_writer" {
+  scope                = azurerm_storage_container.exercises.id
+  role_definition_name = "Storage Blob Data Contributor"
+  principal_id         = azurerm_linux_virtual_machine.host.identity[0].principal_id
+}
+
+resource "azurerm_role_assignment" "channel_watch_reader" {
+  count                = var.watch_principal_id != "" ? 1 : 0
+  scope                = azurerm_storage_container.exercises.id
+  role_definition_name = "Storage Blob Data Reader"
+  principal_id         = var.watch_principal_id
+  principal_type       = "ServicePrincipal"
 }

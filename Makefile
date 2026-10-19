@@ -175,8 +175,8 @@ help:
 	@echo ""
 	@echo "Orodruin (O1) — hôte des injecteurs, état séparé (infra/orodruin/README.md) :"
 	@echo "  make orodruin-plan [OPERATOR_CIDR=]          Plan (lecture seule)"
-	@echo "  make orodruin-up                             1er apply, sortie ouverte (installe Docker)"
-	@echo "  make orodruin-lock                           Referme la sortie (apply)"
+	@echo "  make orodruin-up   [YES=1]                   1er apply, sortie ouverte (installe Docker)"
+	@echo "  make orodruin-lock [YES=1]                   Referme la sortie (apply) ; YES=1 = sans confirmation"
 	@echo "  make orodruin-push                           Image d'Annatar + orodruin.env sur la VM"
 	@echo "  make orodruin-check                          Le contrat, lu depuis la VM : armed ou passive"
 	@echo "  make orodruin-stop / orodruin-start          Désalloue / rallume la VM (entre les sessions)"
@@ -540,7 +540,9 @@ glorfindel-host-ssh:
 # identité, son réseau) : docs/design/orodruin-contract.md.
 ORO_TF        := terraform -chdir=infra/orodruin
 ORO_USER      ?= orodruin
-ORO_VARS       = -var-file=../terraform/terraform.tfvars -var="operator_cidr=$(OPERATOR_CIDR)"
+# watch_principal_id : l'identité du Glorfindel hébergé, lectrice du canal des fenêtres (partie C).
+ORO_WATCH_ID   = $(shell $(HOST_TF) output -no-color -raw principal_id 2>/dev/null | grep -E '^[0-9a-f-]{36}$$')
+ORO_VARS       = -var-file=../terraform/terraform.tfvars -var="operator_cidr=$(OPERATOR_CIDR)" -var="watch_principal_id=$(ORO_WATCH_ID)"
 ORO_IP         = $(shell $(ORO_TF) output -no-color -raw public_ip 2>/dev/null | grep -E '^[0-9.]+$$')
 ORO_SSH        = ssh $(SSH_OPTS) $(ORO_USER)@$(ORO_IP)
 ORO_IMAGE     := eregion-annatar:orodruin
@@ -558,12 +560,13 @@ orodruin-plan: orodruin-init
 	$(ORO_TF) plan $(ORO_VARS)
 
 # Premier apply : sortie ouverte, le temps d'installer Docker. Ensuite orodruin-lock.
+# YES=1 : sans confirmation (-auto-approve), pour un lancement non interactif.
 orodruin-up: orodruin-init
-	$(ORO_TF) apply $(ORO_VARS) -var="egress_locked=false"
+	$(ORO_TF) apply $(ORO_VARS) -var="egress_locked=false"$(if $(YES), -auto-approve)
 	@echo "" && echo "  VM prête quand ~/.orodruin-ready existe (make orodruin-ssh) ; puis make orodruin-lock"
 
 orodruin-lock: orodruin-init
-	$(ORO_TF) apply $(ORO_VARS)
+	$(ORO_TF) apply $(ORO_VARS)$(if $(YES), -auto-approve)
 
 # L'image arrive par SSH : la sortie de la VM reste fermée. UID 1000 = l'utilisateur de la VM.
 orodruin-push:
@@ -587,7 +590,7 @@ orodruin-kill:
 	@.venv/bin/python infra/orodruin/kill.py "$(ORO_PRINCIPAL)" "$(ORO_VM_ID)" $(if $(DRY_RUN),--dry-run)
 
 orodruin-down:
-	$(ORO_TF) destroy $(ORO_VARS)
+	$(ORO_TF) destroy $(ORO_VARS)$(if $(YES), -auto-approve)
 
 orodruin-ssh:
 	$(ORO_SSH)

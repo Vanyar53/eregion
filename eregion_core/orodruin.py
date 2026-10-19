@@ -24,6 +24,7 @@ import base64
 import fnmatch
 import json
 import os
+import re
 import socket
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -63,6 +64,14 @@ PROBE_TIMEOUT_S = 3.0
 # leave its tail unlabelled (eregion_core/exercise.py).
 CEILING_INJECTIONS = 20
 CEILING_RUN_S = MAX_DURATION_S
+
+# The exercise channel (eregion_core/exercise_channel.py): the identity writes the windows
+# to one blob container of its own. That assignment is allowed outside the bench only if
+# its scope IS that container — a scope that bounds it whatever the role.
+CHANNEL_SCOPE_ENV = "EREGION_CHANNEL_SCOPE"
+_CONTAINER_SCOPE = re.compile(
+    r"^/subscriptions/[^/]+/resourcegroups/[^/]+/providers/microsoft\.storage"
+    r"/storageaccounts/[^/]+/blobservices/default/containers/[^/]+$")
 
 BENCH_RG_ENV = "EREGION_BENCH_RG"
 DEFAULT_BENCH_RG = "rg-celebrimbor"
@@ -108,6 +117,14 @@ def _inside(scope: str, bench: str) -> bool:
     return s == b or s.startswith(b + "/")
 
 
+def channel_scope(env=None) -> str:
+    """The declared channel container, or "" — anything but a container's scope is ignored
+    (a declared subscription must never become an allowed assignment)."""
+    env = os.environ if env is None else env
+    scope = (env.get(CHANNEL_SCOPE_ENV) or "").strip().rstrip("/")
+    return scope if _CONTAINER_SCOPE.match(scope.lower()) else ""
+
+
 def _token_oid(token: str) -> str:
     """The principal the token was issued to — who this host IS, read from the token
     itself rather than from a setting that could drift."""
@@ -126,7 +143,8 @@ def _allowed(action: str, perms: list[dict]) -> bool:
 
 
 def assess_identity(assignments: list[dict], role_actions: Callable[[str], list[str]],
-                    perms: list[dict], bench: str, *, sees_subscription: bool) -> list[dict]:
+                    perms: list[dict], bench: str, *, sees_subscription: bool,
+                    channel: str = "") -> list[dict]:
     """The identity guarantee from what was read: every assignment inside the bench (or a
     pure role-assignment read), and the injectors' actions allowed on the bench.
 
@@ -144,6 +162,8 @@ def assess_identity(assignments: list[dict], role_actions: Callable[[str], list[
         scope = props.get("scope") or ""
         if _inside(scope, bench):
             continue
+        if channel and scope.lower().rstrip("/") == channel.lower():
+            continue  # the exercise channel's own container
         actions = {x.lower() for x in role_actions(props.get("roleDefinitionId") or "")}
         if actions and actions <= AUTHZ_READ_ONLY:
             continue
@@ -203,7 +223,8 @@ def read_identity(*, credential=None, get=None) -> list[dict]:
                       {"api-version": API_VERSION})
     return assess_identity(
         assignments, role_actions, perms, bench,
-        sees_subscription=_allowed("Microsoft.Authorization/roleAssignments/read", sub_perms))
+        sees_subscription=_allowed("Microsoft.Authorization/roleAssignments/read", sub_perms),
+        channel=channel_scope())
 
 
 def read_network(*, probes=NETWORK_PROBES, connect=None) -> list[dict]:

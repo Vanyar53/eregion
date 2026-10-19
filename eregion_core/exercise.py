@@ -14,8 +14,9 @@ time: a window carries an expiry, so an injector that dies leaves a window that 
 never an open-ended one — a real incident a day later is never taken for an exercise.
 
 Files: one JSON per run under ``runs/exercises/`` (or ``EREGION_EXERCISES_DIR``), where
-the injector and the watch share ``runs/``. A watch on another host (H0) needs the file
-carried to it — the injectors' channel to Glorfindel is O1's to design.
+the injector and the watch share ``runs/``. A watch on another host (H0) gets them through
+the exercise channel (``eregion_core/exercise_channel.py``, O1): the injector publishes
+each window it writes, the watch pulls them before it reads.
 """
 from __future__ import annotations
 
@@ -58,6 +59,16 @@ def _write(path: Path, window: dict) -> None:
     tmp.replace(path)  # atomic: the watch never reads half a window
 
 
+def _publish(window: dict) -> None:
+    """Carry the window to a watch on another host, when a channel is configured. A failure
+    is reported, never raised: the run goes on, its cycles fall toward ``real``."""
+    from eregion_core import exercise_channel
+    try:
+        exercise_channel.publish(window)
+    except Exception as e:
+        print(f"[exercise-channel] window {window.get('run_id')} not published: {e}")
+
+
 def open_window(run_id: str, *, injector: str, kind: str, experiment: str,
                 targets: list[str], max_duration_s: float = MAX_DURATION_S,
                 now: datetime | None = None, directory: Path | None = None) -> dict:
@@ -74,6 +85,7 @@ def open_window(run_id: str, *, injector: str, kind: str, experiment: str,
         "expires": (start + timedelta(seconds=max_duration_s)).isoformat(),
     }
     _write((directory or exercises_dir()) / f"{run_id}.json", window)
+    _publish(window)
     return window
 
 
@@ -87,11 +99,16 @@ def close_window(run_id: str, *, now: datetime | None = None,
         return None
     window["end"] = (now or _now()).isoformat()
     _write(path, window)
+    _publish(window)
     return window
 
 
 def load_windows(directory: Path | None = None) -> list[dict]:
-    """Every readable window; a malformed file is skipped, never fatal."""
+    """Every readable window; a malformed file is skipped, never fatal. The default
+    directory is refreshed from the exercise channel first, when one is configured."""
+    if directory is None:
+        from eregion_core import exercise_channel
+        exercise_channel.pull_if_due(exercises_dir())
     d = directory or exercises_dir()
     if not d.is_dir():
         return []

@@ -264,3 +264,22 @@ def test_an_implemented_atomic_without_engine_ref_is_refused():
     entry = dict(_from_catalog(CATALOG_FILE, "T1136.001"))
     del entry["engine_ref"]
     assert any("engine_ref" in e for e in _errors(_catalog(entry), CATALOG_SCHEMA))
+
+
+@pytest.mark.parametrize("blank", ["verify", "expect"])
+def test_an_atomic_probe_made_of_spaces_is_refused_by_both_schemas(blank):
+    """The runner strips verify/expect (Engine._atomic_probe_error): a probe made of spaces
+    is empty to it — both schemas say so too (catalog entry and E1 experiment)."""
+    import yaml
+
+    from eregion_core.experiment import _errors
+
+    probe = {"name": "p", "verify": "true", "expect": "OK", blank: "   "}
+    entry = dict(_from_catalog(CATALOG_FILE, "T1136.001"))
+    entry["steady_state"] = {"probes": [probe]}
+    assert _errors(_catalog(entry), CATALOG_SCHEMA)
+
+    doc = yaml.safe_load((REPO / "annatar/scenarios/azure/account-creation-atomic.yaml").read_text())
+    assert validate_experiment(doc) == []
+    doc["steady_state"] = {"probes": [probe]}
+    assert validate_experiment(doc)

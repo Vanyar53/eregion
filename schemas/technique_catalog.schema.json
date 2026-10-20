@@ -316,10 +316,12 @@
                       ],
                       "properties": {
                         "verify": {
-                          "minLength": 1
+                          "minLength": 1,
+                          "pattern": "\\S"
                         },
                         "expect": {
-                          "minLength": 1
+                          "minLength": 1,
+                          "pattern": "\\S"
                         }
                       }
                     }

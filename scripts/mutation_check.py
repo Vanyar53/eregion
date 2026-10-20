@@ -299,6 +299,27 @@ MUTANTS = [
      '                checks["initial_state_after"] = "PASS"\n'),
     ("M80", "the atomic runs over a dirty initial state (R1)", ENG,
      "        if not all(ok for _, ok, _ in before):\n", "        if False:\n"),
+    # #158 — `annatar run` exits non-zero on a refusal (placed here, not at the end of the
+    # list, so the branch merges beside #157's M98–M102). M103: the CLI drops the code;
+    # M104–M108: one refusal or error no longer reaches RunOutcome.error, so the CLI exits 0.
+    ("M103", "annatar run exits 0 whatever the run's outcome (#158)", "annatar/cli.py",
+     '    if outcome is not None and getattr(outcome, "error", None):\n',
+     "    if False:\n"),
+    ("M104", "a passive Orodruin refusal exits 0 (#158)", ENG,
+     'return RunOutcome(run_id, "unknown", error=f"passive: {verdict.reasons()}")',
+     'return RunOutcome(run_id, "unknown")'),
+    ("M105", "a target not enrolled exits 0 (#158)", ENG,
+     'return RunOutcome(run_id, "unknown", error=f"safety: {guard.reason}")',
+     'return RunOutcome(run_id, "unknown")'),
+    ("M106", "a dirty start (atomic) exits 0 (#158)", ENG,
+     'run_id, "unknown", error="initial state not clean before the atomic"',
+     'run_id, "unknown"'),
+    ("M107", "an atomic the adapter refuses exits 0 (#158)", ENG,
+     'return RunOutcome(run_id, "unknown", error=f"atomic: {e}")',
+     'return RunOutcome(run_id, "unknown")'),
+    ("M108", "an initial state not restored exits 0 (#158)", ENG,
+     '            return RunOutcome(run_id, "unknown", error=error)\n',
+     '            return RunOutcome(run_id, "unknown")\n'),
     # R1 review (Annatar session): the X-probes the reviewer proved survive, plus one per
     # fix 1–6. engines/atomic.py = ATO, runner/engine.py = ENG, executors/azure_vm.py = EXE.
     ("M81", "run_command writes without the Orodruin journal (R1 review, X1)", EXE,
@@ -386,6 +407,8 @@ TESTS.update({mid: "tests/unit/test_exercise_channel.py" for mid in ("M68", "M69
 TESTS.update({mid: "tests/unit/test_gothmog.py" for mid in ("M71", "M72", "M73", "M74")})
 TESTS.update({mid: "tests/unit/test_annatar_atomic.py"
               for mid in ("M75", "M76", "M77", "M78", "M79", "M80")})
+TESTS.update({mid: "tests/unit/test_annatar_run_exit.py"
+              for mid in ("M103", "M104", "M105", "M106", "M107", "M108")})
 # R1 review: run_command's journal is proven in test_orodruin.py; the rest in test_annatar_atomic.py.
 TESTS.update({mid: "tests/unit/test_orodruin.py" for mid in ("M81", "M85")})
 TESTS.update({mid: "tests/unit/test_annatar_atomic.py"

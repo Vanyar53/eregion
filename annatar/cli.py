@@ -78,7 +78,59 @@ def run(scenario: str, dry_run: bool, yes: bool, skip_preflight: bool):
             raise SystemExit(1)
 
     engine = Engine(dry_run=dry_run, skip_preflight=skip_preflight)
-    engine.run(path, skip_confirm=yes)
+    outcome = engine.run(path, skip_confirm=yes)
+    code = run_exit_code(outcome)
+    if code:
+        _print_run_failure(outcome)
+        raise SystemExit(code)
+
+
+# `annatar run` exit codes (#158). A script or a CI chaining runs reads the code, not the
+# console: every refusal (Orodruin passive, target not enrolled, dirty start, an atomic the
+# adapter will not run faithfully, cap, preflight, invalid scenario) and every error after
+# the target was touched (no observable effect, initial state not restored or not verified)
+# exits non-zero. A run that raises goes through _AnnatarCli (exit 1, one line). The campaign
+# runner calls Engine.run itself and reads RunOutcome.error: it marks that scenario in error
+# and goes on — this code is the single-run CLI's only.
+EXIT_OK = 0
+EXIT_RUN_FAILED = 1
+
+# One hint per refusal, by the prefix Engine.run gives RunOutcome.error.
+_RUN_HINTS = (
+    ("passive:", "contrat d'Orodruin passif : lancer depuis un Orodruin armé "
+                 "(ailleurs, un injecteur reste passif)."),
+    ("safety:", "cible hors banc ou non inscrite : tags eregion-target et eregion-zone "
+                "sur la VM et son groupe."),
+    ("atomic:", "test atomic refusé (annatar/engines/atomic.py) ou sondes steady_state "
+                "incomplètes : rien n'a été joué."),
+    ("cap:", "plafond d'appels du contrat d'Orodruin (EREGION_MAX_INJECTIONS) atteint."),
+    ("scenario:", "scénario invalide : `annatar validate <scénario>`."),
+    ("engine:", "moteur que le runner ne sait pas jouer."),
+    ("preflight", "VM arrêtée ou isolée : corriger, ou --skip-preflight."),
+    ("integrity", "disque de test pas propre après le setup."),
+    ("initial state not clean", "départ sale : remettre la VM dans son état initial, "
+                                "rien n'a été joué."),
+    ("initial state not", "la VM peut être sale : jouer la commande de rattrapage "
+                          "affichée plus haut avant tout autre run."),
+    ("atomic ran", "aucun effet observé : pas d'attack_started, rien à détecter."),
+)
+
+
+def run_exit_code(outcome) -> int:
+    """The exit code of `annatar run` for an Engine.run result: 0 only for a run that went
+    through (or a dry run / an operator's « no », which return no outcome); any refusal or
+    error carried by ``RunOutcome.error`` is non-zero."""
+    if outcome is not None and getattr(outcome, "error", None):
+        return EXIT_RUN_FAILED
+    return EXIT_OK
+
+
+def _print_run_failure(outcome) -> None:
+    """One line, plus a hint when the refusal is a known one (like _AnnatarCli)."""
+    console.print(f"[red]✗ run {outcome.run_id}: {outcome.error}[/red]")
+    hint = next((h for prefix, h in _RUN_HINTS if outcome.error.startswith(prefix)), None)
+    if hint:
+        console.print(f"[dim]  → {hint}[/dim]")
 
 
 @cli.command(name="list")

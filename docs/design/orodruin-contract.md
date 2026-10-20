@@ -2,7 +2,7 @@
 
 _Conception — 2026-10-14, relue en Opus 5.5 le 2026-10-15 — statut : **implémenté et mesuré sur le banc le 19/10** (O1 : `eregion_core/orodruin.py`,
 `infra/orodruin/`, mutants M64–M70), canal des fenêtres d'exercice compris (voir « Le canal
-des fenêtres d'exercice »)._
+des fenêtres d'exercice ») ; canal retour de la watch (#159, M109–M113) le 20/10._
 
 ## Ce qu'Orodruin est, et ce qu'il n'est pas
 
@@ -198,6 +198,56 @@ par un conteneur de stockage à Orodruin (`eregion_core/exercise_channel.py`) :
   hébergé, dont l'écriture est refusée (403) ;
 - la création du compte sans clé partagée a attendu environ 4 minutes sur la vérification du
   data plane par le provider, d'où `features.storage.data_plane_available = false`.
+
+## Le canal retour : la watch hébergée parle au run (#159 — 20/10)
+
+Un run lancé depuis Orodruin ne voit pas la watch de H0 : ni son battement de cœur ni ses
+fichiers `watch-*` (premier run R1 sur le banc, 20/10 : `detection: unknown`). Une watch sur
+Orodruin ne détecterait pas : `api.loganalytics.io` est hors de sa sortie. Le canal retour est
+le canal des fenêtres dans l'autre sens : un conteneur `watch` dans le même compte
+(`eregion_core/watch_channel.py`).
+
+- **Deux sortes de blobs.**
+  - `heartbeat.json`, réécrit toutes les 60 s : `at`, `since` (démarrage de la watch),
+    `windows` (les `run_id` des fenêtres ouvertes ou en grâce que la watch connaît). Ce sont les
+    `run_id` d'Orodruin, rien du parc.
+  - `detections/<run_id>/<signal_id>.json` : `ttp`, `resource_id`, `detected_at`, `rule`,
+    `watch_run_id`. Un blob par couple (fenêtre, détection), seulement pour une VM à laquelle la
+    watch a attribué la détection et qu'une fenêtre couvre à son heure. Jamais le reste du parc,
+    jamais une ligne non attribuée.
+- **Côté watch** : le RulePoller note chaque détection en mémoire (aucune écriture, rien qui
+  puisse échouer). Un thread tire les fenêtres, publie les couples pas encore livrés, puis écrit
+  le battement de cœur **seulement quand plus rien n'attend** : un battement de cœur garantit que
+  tout ce qui le précède a été livré. Une détection vue avant sa fenêtre est publiée quand la
+  fenêtre arrive. Une détection qui n'a pas pu être notée avance `since`, comme un redémarrage.
+- **Côté run** (Annatar, après #157) : l'attente de la détection lit le battement de cœur et
+  liste `detections/<run_id>/` ; les détections passent par le même test que les fichiers
+  locaux.
+- **Échec vers `unknown`.** `detected` exige un blob de détection, que seule la watch peut
+  écrire. `missed` exige un battement de cœur écrit **après la fin de l'attente**, par une watch
+  **démarrée avant l'attaque**, qui **connaît la fenêtre du run**, et une liste lue sans erreur
+  (`miss_unprovable`). Tout le reste donne `unknown` : canal absent, injoignable ou refusé,
+  battement de cœur périmé, fenêtre jamais reçue par la watch (le canal des fenêtres en panne :
+  elle n'aurait rien publié), watch redémarrée, détection en attente de livraison.
+- **Droits.** La watch (`watch_principal_id`) a `Storage Blob Data Contributor` sur `watch`
+  seulement, et reste en lecture partout ailleurs. Orodruin a `Storage Blob Data Reader` sur
+  `watch`. **Le contrat** accepte cette attribution hors du banc seulement à la portée déclarée
+  (`EREGION_WATCH_CHANNEL_SCOPE`, même contrôle de forme que M68) et **seulement si le rôle est
+  en lecture** : actions et dataActions contenues dans celles de Storage Blob Data Reader.
+  Un rôle d'écriture, ou un joker, à cette portée → `identity_outside_bench` → `passive` (M113) :
+  un injecteur n'écrit jamais ce que dit la watch. Ce contrôle passe avant celui du canal des
+  fenêtres : déclarés sur le même conteneur, le rédacteur reste refusé. `REQUIRED_ACTIONS` et le
+  rôle `injector` ne changent pas ; `orodruin-kill` supprime toutes les attributions de
+  l'identité, celle-ci comprise.
+- **Sortie** : rien ne change (`Storage.FranceCentral` pour Orodruin ; la sortie de H0 n'est pas
+  filtrée). `GLORFINDEL_READ_ONLY` porte sur l'infra observée, pas sur le stockage d'Eregion.
+- **Mutants** : M109 (battement de cœur sur une détection en attente), M110 (une VM hors fenêtre
+  publiée), M111 (une fenêtre inconnue de la watch prouve un miss), M112 (une watch redémarrée
+  prouve un miss), M113 (le contrat accepte un rôle d'écriture sur `watch`).
+
+**Mesuré le 20/10** : la définition de Storage Blob Data Reader lue sur Azure (`az role
+definition list`) est exactement l'ensemble accepté ; Contributor y ajoute `blobs/write`,
+`blobs/delete`, `blobs/add/action`, `blobs/move/action`, refusés.
 
 ## Questions ouvertes (pour Jonathan, à l'implémentation)
 

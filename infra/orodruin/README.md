@@ -26,6 +26,12 @@ Contrat (garanties, vérifications, kill, mutants) :
   de `infra/glorfindel-host`). Dans `orodruin.env` : `EREGION_EXERCISE_CHANNEL` (`terraform output
   channel_url`) et `EREGION_CHANNEL_SCOPE` (`channel_scope`). Dans le `host.env` de Glorfindel :
   `EREGION_EXERCISE_CHANNEL`.
+- **Le canal retour** (#159) : un conteneur `watch` dans le même compte. Le Glorfindel hébergé y
+  écrit son battement de cœur et ses détections des VM d'une fenêtre ouverte ou en grâce ;
+  Orodruin le lit, et le contrat refuse tout rôle d'écriture d'Orodruin à cette portée. Dans
+  `orodruin.env` : `EREGION_WATCH_CHANNEL` (`watch_channel_url`) et `EREGION_WATCH_CHANNEL_SCOPE`
+  (`watch_channel_scope`). Dans le `host.env` de Glorfindel : `EREGION_WATCH_CHANNEL`. Canal
+  coupé → le run écrit `detection: unknown`, jamais `missed` (`docs/design/orodruin-contract.md`).
 
 ## Déroulé (avec Jonathan — c'est lui qui lance les apply)
 

@@ -31,3 +31,13 @@ output "channel_scope" {
   description = "EREGION_CHANNEL_SCOPE — dans orodruin.env : la portée que le contrat accepte hors du banc."
   value       = azurerm_storage_container.exercises.id
 }
+
+output "watch_channel_url" {
+  description = "EREGION_WATCH_CHANNEL — dans orodruin.env et dans le host.env de Glorfindel (#159)."
+  value       = "${azurerm_storage_account.channel.primary_blob_endpoint}${azurerm_storage_container.watch.name}"
+}
+
+output "watch_channel_scope" {
+  description = "EREGION_WATCH_CHANNEL_SCOPE — dans orodruin.env : le contrat n'y accepte qu'un rôle de lecture."
+  value       = azurerm_storage_container.watch.id
+}

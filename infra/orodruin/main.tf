@@ -348,3 +348,28 @@ resource "azurerm_role_assignment" "channel_watch_reader" {
   principal_id         = var.watch_principal_id
   principal_type       = "ServicePrincipal"
 }
+
+# ── Le canal retour (#159) : la watch hébergée parle au run ────────────────────────────────
+# Le battement de cœur de la watch et ses détections des VM d'une fenêtre ouverte ou en grâce
+# (eregion_core/watch_channel.py). La watch (H0) y écrit, Orodruin le lit : le contrat refuse
+# à Orodruin tout rôle d'écriture sur ce conteneur (EREGION_WATCH_CHANNEL_SCOPE), un injecteur
+# n'écrit jamais ce que dit la watch. Canal coupé → le run écrit `unknown`, jamais `missed`.
+resource "azurerm_storage_container" "watch" {
+  name                  = "watch"
+  storage_account_id    = azurerm_storage_account.channel.id
+  container_access_type = "private"
+}
+
+resource "azurerm_role_assignment" "watch_channel_reader" {
+  scope                = azurerm_storage_container.watch.id
+  role_definition_name = "Storage Blob Data Reader"
+  principal_id         = azurerm_linux_virtual_machine.host.identity[0].principal_id
+}
+
+resource "azurerm_role_assignment" "watch_channel_writer" {
+  count                = var.watch_principal_id != "" ? 1 : 0
+  scope                = azurerm_storage_container.watch.id
+  role_definition_name = "Storage Blob Data Contributor"
+  principal_id         = var.watch_principal_id
+  principal_type       = "ServicePrincipal"
+}

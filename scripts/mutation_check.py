@@ -36,6 +36,7 @@ INS = "eregion_core/inscription.py"
 ENG = "annatar/runner/engine.py"
 EXE = "annatar/executors/azure_vm.py"
 ATO = "annatar/engines/atomic.py"
+WCH = "eregion_core/watch_channel.py"
 GOTH = "gothmog/runner/engine.py"
 DET = "annatar/runner/detection.py"
 INVARIANTS = "tests/unit/test_invariants.py"
@@ -389,6 +390,20 @@ MUTANTS = [
     ("M102", "the atomic wait measures from its own start, not from T0 (#157, review R1 P12)", ENG,
      "                args=(run_id, emitter, scenario, detection_timeout_s, T0, threading.Event()),\n",
      "                args=(run_id, emitter, scenario, detection_timeout_s, time.time(), threading.Event()),\n"),
+    # #159: the return channel from the hosted watch to a run on Orodruin — every failure
+    # falls toward unknown, never a miss the watch did not vouch for.
+    ("M109", "the watch beats while a detection waits to be delivered (#159)", WCH,
+     "        if waiting:\n            return  # no heartbeat while a detection waits: it would vouch for a miss\n",
+     ""),
+    ("M110", "the watch publishes a VM no exercise window covers (#159)", WCH,
+     '            for run in covering_runs(r["resource_id"], r["detected_at"], windows):\n',
+     '            for run in [w["run_id"] for w in windows]:\n'),
+    ("M111", "a heartbeat vouches for a run whose window the watch never knew (#159)", WCH,
+     '    if run_id not in (heartbeat.get("windows") or []):\n', "    if False:\n"),
+    ("M112", "a heartbeat from a watch restarted after the attack vouches (#159)", WCH,
+     "    if since > attack:\n", "    if False:\n"),
+    ("M113", "the contract lets Orodruin write the watch's channel (#159)", "eregion_core/orodruin.py",
+     "            if actions and actions <= BLOB_READ_ONLY:\n", "            if True:\n"),
 ]
 
 # Mutants measured by other tests than the invariants (their lot's own).
@@ -415,6 +430,8 @@ TESTS.update({mid: "tests/unit/test_annatar_atomic.py"
               for mid in ("M82", "M83", "M84", "M86", "M87", "M88", "M89", "M90",
                           "M91", "M92", "M93", "M94", "M95", "M96", "M97")})
 TESTS.update({mid: DETECTION_TESTS for mid in ("M98", "M99", "M100", "M101", "M102")})
+TESTS.update({mid: "tests/unit/test_watch_channel.py"
+              for mid in ("M109", "M110", "M111", "M112", "M113")})
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

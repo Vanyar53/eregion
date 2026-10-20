@@ -11,6 +11,7 @@ from annatar.campaign.catalog import load_catalog
 from annatar.campaign.scope import Scope
 from annatar.campaign.synthesizer import synthesize
 from annatar.runner.parser import ScenarioParser
+from eregion_core.experiment import validate_experiment_file
 
 SANDBOX_VM = (
     "/subscriptions/sub-1/resourceGroups/rg-celebrimbor/providers/"
@@ -155,3 +156,96 @@ def test_missing_reference_script_refused(tmp_path, catalog):
     )
     assert not res.ok
     assert "not found" in res.reason
+
+
+# ── engine: atomic (R1) ──────────────────────────────────────────────────────
+
+ATOMIC_TTP = "T1136.001"
+
+
+def test_atomic_entry_is_atomic_in_catalog(catalog):
+    # Guard: T1136.001 is the atomic entry these tests rely on.
+    entry = catalog[ATOMIC_TTP]
+    assert entry.get("engine") == "atomic"
+    assert entry.get("engine_ref")
+    assert (entry.get("steady_state") or {}).get("probes")
+
+
+def test_synthesize_atomic_is_an_e1_experiment_no_steps(tmp_path, catalog):
+    # The atomic entry synthesizes an E1 experiment: no steps, the engine_ref, the probes —
+    # and it passes the E1 schema (the campaign runner then plays it through the atomic engine).
+    res = synthesize(
+        entry=catalog[ATOMIC_TTP], target_resource_id=SANDBOX_VM, scope=Scope(),
+        out_dir=tmp_path, seq=1,
+    )
+    assert res.ok, res.reason
+    assert validate_experiment_file(res.path) == []  # passes the E1 schema (M119 backstop)
+    data = yaml.safe_load(res.path.read_text())
+    assert data["engine"] == "atomic"
+    assert data["engine_ref"] == catalog[ATOMIC_TTP]["engine_ref"]
+    assert data["kind"] == "technique"
+    assert data["schema_version"] == "1"
+    assert "steps" not in data  # the engine of the entry decides; never a run_script step (M116)
+    assert data["steady_state"]["probes"][0]["expect"] == "USER_ABSENT"  # probes carried (M117)
+    # The ScenarioParser can still load it (what the campaign runner uses to run it).
+    assert ScenarioParser().validate(str(res.path)).valid
+
+
+def test_atomic_never_falls_back_to_a_script(tmp_path, catalog):
+    # Even with a reference_script lingering on the entry, an atomic is NEVER materialized as a
+    # run_script_on_vm scenario — the engine of the entry is authoritative (M116).
+    entry = dict(catalog[ATOMIC_TTP])
+    entry["reference_script"] = "scripts/vm/account_creation_sim.sh"  # exists on disk
+    res = synthesize(
+        entry=entry, target_resource_id=SANDBOX_VM, scope=Scope(), out_dir=tmp_path,
+    )
+    assert res.ok, res.reason
+    data = yaml.safe_load(res.path.read_text())
+    assert data["engine"] == "atomic"
+    assert "steps" not in data
+    assert "run_script_on_vm" not in res.path.read_text()
+
+
+def test_atomic_without_engine_ref_refused(tmp_path, catalog):
+    entry = dict(catalog[ATOMIC_TTP])
+    entry.pop("engine_ref", None)
+    res = synthesize(
+        entry=entry, target_resource_id=SANDBOX_VM, scope=Scope(), out_dir=tmp_path,
+    )
+    assert not res.ok
+    assert "engine_ref" in res.reason
+    assert not list(tmp_path.glob("*.yaml"))  # nothing materialized
+
+
+def test_atomic_with_unknown_engine_ref_refused(tmp_path, catalog):
+    # A ref the adapter cannot resolve (unknown guid) is refused at plan time — never
+    # synthesized, so it never reaches a run (M118).
+    entry = dict(catalog[ATOMIC_TTP])
+    entry["engine_ref"] = "T1136.001/00000000-0000-0000-0000-000000000000"
+    res = synthesize(
+        entry=entry, target_resource_id=SANDBOX_VM, scope=Scope(), out_dir=tmp_path,
+    )
+    assert not res.ok
+    assert "unresolved" in res.reason
+    assert not list(tmp_path.glob("*.yaml"))
+
+
+def test_atomic_without_probes_refused(tmp_path, catalog):
+    entry = dict(catalog[ATOMIC_TTP])
+    entry["steady_state"] = {"probes": []}
+    res = synthesize(
+        entry=entry, target_resource_id=SANDBOX_VM, scope=Scope(), out_dir=tmp_path,
+    )
+    assert not res.ok
+    assert "steady_state probe" in res.reason
+    assert not list(tmp_path.glob("*.yaml"))
+
+
+def test_atomic_out_of_scope_refused(tmp_path, catalog):
+    res = synthesize(
+        entry=catalog[ATOMIC_TTP], target_resource_id=PROD_VM, scope=Scope(),
+        out_dir=tmp_path,
+    )
+    assert not res.ok
+    assert "out of scope" in res.reason
+    assert not list(tmp_path.glob("*.yaml"))

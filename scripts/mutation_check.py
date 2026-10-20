@@ -36,6 +36,8 @@ INS = "eregion_core/inscription.py"
 ENG = "annatar/runner/engine.py"
 EXE = "annatar/executors/azure_vm.py"
 ATO = "annatar/engines/atomic.py"
+SYN = "annatar/campaign/synthesizer.py"
+CATSCHEMA = "schemas/technique_catalog.schema.json"
 WCH = "eregion_core/watch_channel.py"
 GOTH = "gothmog/runner/engine.py"
 DET = "annatar/runner/detection.py"
@@ -408,6 +410,18 @@ MUTANTS = [
      "        if result_event is None and channel and not _local_watch():\n", "        if False:\n"),
     ("M115", "an unreadable return channel is read as a miss (#159)", ENG,
      "                return None, None, why\n", '                return "detection_timeout", None, why\n'),
+    # #165 — a campaign plays an atomic from the catalog. The synthesizer writes an E1
+    # experiment for an atomic entry (SYN); the catalog schema requires its steady_state (CATSCHEMA).
+    ("M116", "the synthesizer falls back to run_script_on_vm for an atomic entry (#165)", SYN,
+     '    if engine == "atomic":\n', "    if False:\n"),
+    ("M117", "the synthesizer writes an atomic without its steady-state probes (#165)", SYN,
+     '        "steady_state": {"probes": [dict(p) for p in probes]},\n', ""),
+    ("M118", "the synthesizer accepts an engine_ref the adapter cannot resolve (#165)", SYN,
+     '    try:\n        resolve_ref(engine_ref)\n    except AtomicError as e:\n'
+     '        return SynthesisResult(False, f"{ttp}: engine_ref unresolved — {e}")\n',
+     "    pass\n"),
+    ("M119", "the catalog schema accepts an implemented atomic without steady_state (#165)", CATSCHEMA,
+     '                  "const": "atomic"\n', '                  "const": "atomic-never"\n'),
 ]
 
 # Mutants measured by other tests than the invariants (their lot's own).
@@ -436,6 +450,11 @@ TESTS.update({mid: "tests/unit/test_annatar_atomic.py"
 TESTS.update({mid: DETECTION_TESTS for mid in ("M98", "M99", "M100", "M101", "M102")})
 TESTS.update({mid: "tests/unit/test_watch_channel.py"
               for mid in ("M109", "M110", "M111", "M112", "M113", "M114", "M115")})
+# #165 — the atomic campaign: the synthesizer in test_campaign_synthesizer.py, the catalog
+# schema requirement in test_experiment_schema.py.
+TESTS.update({mid: "tests/unit/test_campaign_synthesizer.py"
+              for mid in ("M116", "M117", "M118")})
+TESTS["M119"] = "tests/unit/test_experiment_schema.py"
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

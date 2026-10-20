@@ -618,8 +618,9 @@ gothmog-run:
 
 # ── Campagne (R1 + IA0) — planifier puis lancer depuis Orodruin ───────────────
 # Même image, même identité qu'Annatar/Gothmog sur Orodruin. La campagne joue l'atomic
-# (T1136.001) avec d'autres techniques du catalogue ; le manifeste et le rapport se posent
-# dans ~/runs (bind-monté). Deux temps : `campaign plan` rend un id, `campaign run <id>` le
+# (T1136.001) avec d'autres techniques du catalogue ; le manifeste se pose dans ~/runs
+# (bind-monté). Le rapport (IA0) ne s'écrit pas sur Orodruin aujourd'hui : chromadb et litellm
+# manquent à l'image — rapatrier la campagne, puis make campaign-report (docs/operations.md). Deux temps : `campaign plan` rend un id, `campaign run <id>` le
 # joue (la watch sur H0 est en human_only — rien ne s'isole). ServerAliveInterval : un run de
 # campagne dure longtemps (plusieurs techniques + fenêtres de détection), plus que le délai
 # d'inactivité d'une IP publique.
@@ -627,9 +628,11 @@ gothmog-run:
 #   make orodruin-campaign-run  CAMPAIGN=<id rendu par le plan>
 CAMPAIGN_MAX ?= 5
 
+# @ : la commande porte CAMPAIGN_TARGET (un resource_id, avec l'abonnement) — on ne la répète
+# pas à l'écran (même convention qu'orodruin-stop).
 orodruin-campaign-plan:
 	@test -n "$(CAMPAIGN_TARGET)" || { echo "CAMPAIGN_TARGET=<resource_id de la VM inscrite> requis"; exit 1; }
-	$(ORO_SSH) '$(ORO_RUN) annatar campaign plan --target "$(CAMPAIGN_TARGET)" --max-scenarios $(CAMPAIGN_MAX)'
+	@echo "annatar campaign plan (Orodruin, max $(CAMPAIGN_MAX))" && $(ORO_SSH) '$(ORO_RUN) annatar campaign plan --target "$(CAMPAIGN_TARGET)" --max-scenarios $(CAMPAIGN_MAX)'
 
 orodruin-campaign-run:
 	@test -n "$(CAMPAIGN)" || { echo "CAMPAIGN=<id> requis (rendu par orodruin-campaign-plan)"; exit 1; }

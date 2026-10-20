@@ -65,6 +65,8 @@ class Engine:
 
         console.rule(f"[bold cyan]Annatar — {scenario.name}[/bold cyan]")
         console.print(f"  MITRE   : {scenario.mitre}")
+        if scenario.engine != "local-script":
+            console.print(f"  Engine  : {scenario.engine} / {scenario.engine_ref}")
         console.print(f"  Target  : {scenario.target.get('type')} / {scenario.target.get('resource_group')}")
         console.print(f"  Dry-run : {self.dry_run}\n")
 
@@ -122,6 +124,8 @@ class Engine:
                     experiment=f"{scenario.mitre} {scenario.name}",
                     targets=[executor.resource_id])
         try:
+            if scenario.engine == "atomic":
+                return self._run_atomic_enrolled(scenario, executor, run_id, session)
             return self._run_enrolled(scenario, executor, run_id)
         finally:
             close_window(run_id)
@@ -235,10 +239,165 @@ class Engine:
 
         return RunOutcome(run_id, self._detection_result)
 
+    def _run_atomic_enrolled(self, scenario, executor, run_id: str, session) -> RunOutcome:
+        """Run an Atomic Red Team test on the enrolled target (R1).
+
+        Verify the initial state, run the atomic's own command, emit ``attack_started``, run
+        its ``cleanup_command``, then verify the initial state was restored. The ``attack_started``
+        / ``detection_missed`` signals and the feedback wait are unchanged from the local-script
+        path — R1 adds a public-library engine, not a new signal.
+        """
+        from annatar.engines.atomic import AtomicError, resolve_ref
+
+        try:
+            resolved = resolve_ref(scenario.engine_ref)
+        except AtomicError as e:
+            console.print(f"[red]Atomic unresolved:[/red] {e}")
+            return RunOutcome(run_id, "unknown", error=f"atomic: {e}")
+
+        probes = (scenario.raw.get("steady_state") or {}).get("probes") or []
+        # One Run Command each: the atomic command, its cleanup, and every probe before + after.
+        needed = 2 + 2 * len(probes)
+        if session.max_injections < needed:
+            reason = (
+                f"cap of {session.max_injections} calls: this atomic needs {needed} "
+                "(command, cleanup, and the steady-state probes before and after)"
+            )
+            console.print(f"[red]Refused:[/red] {reason}")
+            return RunOutcome(run_id, "unknown", error=f"cap: {reason}")
+
+        emitter = SignalEmitter(
+            run_id=run_id,
+            scenario_name=scenario.name,
+            scenario_mitre=scenario.mitre,
+            target=scenario.target,
+            resource_id=executor.resource_id,
+        )
+        checks = {}
+        metrics = {
+            "engine": "atomic",
+            "engine_ref": scenario.engine_ref,
+            "atomic_guid": resolved.guid,
+        }
+
+        # Initial state before the attack — a dirty start is refused (never attack over residue).
+        if probes:
+            console.print("[cyan]->[/cyan] Initial-state check (before)...")
+            before = self._check_probes(executor, probes, resolved, "before")
+            if not all(ok for _, ok, _ in before):
+                console.print(
+                    "[red]Initial state not clean before the atomic — nothing run.[/red]"
+                )
+                return RunOutcome(
+                    run_id, "unknown", error="initial state not clean before the atomic"
+                )
+            checks["initial_state_before"] = "PASS"
+
+        # Run the atomic's own command.
+        T0 = time.time()
+        console.print(f"[cyan]->[/cyan] {resolved.name} ({resolved.guid})")
+        executor.run_command(resolved.command, label=f"atomic {resolved.guid}")
+        checks["attack"] = "PASS"
+
+        # attack_started — unchanged: Glorfindel looks its rule up by TTP and owns detection.
+        detection_timeout_s = 0.0
+        if scenario.detection:
+            detection_timeout_s = self._parse_duration(
+                scenario.detection.get("timeout", "300s")
+            )
+            emitter.emit(
+                event="attack_started",
+                raw_signal={
+                    "attack_time": T0,
+                    "detection_timeout_s": detection_timeout_s,
+                    "detection_max_s": self._parse_duration(
+                        scenario.detection.get("time_max", "9999s")
+                    ),
+                },
+            )
+            console.print(
+                "[cyan]->[/cyan] Signal 'attack_started' emitted"
+                " — Glorfindel will detect via detection_rules.yaml."
+            )
+
+        # Cleanup — the atomic's own cleanup_command, always run.
+        console.print("[cyan]->[/cyan] Cleanup (atomic cleanup_command)...")
+        executor.run_command(
+            resolved.cleanup_command, label=f"atomic {resolved.guid} cleanup"
+        )
+        checks["cleanup"] = "PASS"
+
+        # Initial state after cleanup — the return is verified, never assumed.
+        if probes:
+            console.print("[cyan]->[/cyan] Initial-state check (after cleanup)...")
+            after = self._check_probes(executor, probes, resolved, "after")
+            restored = all(ok for _, ok, _ in after)
+            checks["initial_state_after"] = "PASS" if restored else "FAIL"
+            metrics["initial_state_restored"] = restored
+
+        overall = "PASS" if all("PASS" in v for v in checks.values()) else "FAIL"
+        report = RunReport(
+            scenario=scenario.name,
+            run_id=run_id,
+            mitre=scenario.mitre,
+            result=overall,
+            metrics=metrics,
+            thresholds={},
+            checks=checks,
+        )
+        path = report.save()
+        report.render()
+        console.print(f"\n[dim]Report saved: {path}[/dim]")
+
+        # Purple-team feedback — identical to the local-script path (short-circuits with no watch).
+        if scenario.detection and detection_timeout_s > 0 and not self.dry_run:
+            t = threading.Thread(
+                target=self._wait_and_emit_feedback,
+                args=(run_id, emitter, scenario, detection_timeout_s, threading.Event()),
+                daemon=False,
+                name=f"annatar-feedback-{run_id}",
+            )
+            t.start()
+            t.join()
+
+        return RunOutcome(run_id, self._detection_result)
+
+    def _check_probes(self, executor, probes, resolved, phase: str) -> list[tuple]:
+        """Run each steady-state probe's ``verify`` on the VM; PASS if ``expect`` is in the
+        output. ``#{var}`` in verify/expect is filled with the atomic's resolved arguments."""
+        results = []
+        for probe in probes:
+            name = probe.get("name", "probe")
+            verify = resolved.substitute(probe.get("verify", ""))
+            expect = resolved.substitute(str(probe.get("expect", "")))
+            output = executor.run_command(verify, label=f"probe {name} ({phase})")
+            ok = expect in output if expect else True
+            mark = "[green]✓[/green]" if ok else "[red]✗[/red]"
+            console.print(f"  {mark} {name}: expect '{expect}' in output")
+            results.append((name, ok, output))
+        return results
+
     def _dry_run_display(self, scenario):
         console.print("[yellow]DRY RUN — no actions will be executed[/yellow]\n")
-        for i, step in enumerate(scenario.steps, 1):
-            console.print(f"  {i}. [{step.get('action')}] {step.get('name', '')}")
+        if scenario.engine == "atomic":
+            from annatar.engines.atomic import AtomicError, resolve_ref
+
+            try:
+                resolved = resolve_ref(scenario.engine_ref)
+            except AtomicError as e:
+                console.print(f"  [red]atomic unresolved:[/red] {e}")
+                return
+            console.print(f"  Atomic  : {resolved.name} ({resolved.guid})")
+            console.print(f"  command : {resolved.command.strip()}")
+            console.print(f"  cleanup : {resolved.cleanup_command.strip()}")
+            for p in (scenario.raw.get("steady_state") or {}).get("probes") or []:
+                console.print(
+                    f"  probe   : {p.get('name')} — "
+                    f"{resolved.substitute(p.get('verify', ''))} (expect {p.get('expect')})"
+                )
+        else:
+            for i, step in enumerate(scenario.steps, 1):
+                console.print(f"  {i}. [{step.get('action')}] {step.get('name', '')}")
         if scenario.detection:
             timeout = scenario.detection.get("timeout", "?")
             console.print(f"  -> Detection timeout: {timeout} — Glorfindel uses detection_rules.yaml")

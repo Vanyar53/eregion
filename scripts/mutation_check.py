@@ -234,8 +234,8 @@ MUTANTS = [
     ("M60", "an exercise card absorbs a real detection (B2)", "glorfindel/escalations.py",
      "                and (e.get(\"source\") or \"real\") == (source or \"real\")\n", ""),
     ("M61", "an Annatar run never closes its window (B2)", "annatar/runner/engine.py",
-     "        try:\n            return self._run_enrolled(scenario, executor, run_id)\n        finally:\n            close_window(run_id)\n",
-     "        return self._run_enrolled(scenario, executor, run_id)\n"),
+     "        try:\n            if scenario.engine == \"atomic\":\n                return self._run_atomic_enrolled(scenario, executor, run_id, session)\n            return self._run_enrolled(scenario, executor, run_id)\n        finally:\n            close_window(run_id)\n",
+     "        if scenario.engine == \"atomic\":\n            return self._run_atomic_enrolled(scenario, executor, run_id, session)\n        return self._run_enrolled(scenario, executor, run_id)\n"),
     # #105: the boot batch's sub-second gaps set the step again (blind 10 min after a boot).
     ("M62", "the ransomware step reads the boot batch (#105)", "glorfindel/rules/azure/detection_rules.yaml",
      "summarize Step = minif(Gap, Gap >= 1s) by Vm, InstanceName", "summarize Step = min(Gap) by Vm, InstanceName"),
@@ -275,6 +275,26 @@ MUTANTS = [
     ("M74", "fault signals land where Glorfindel's watch decides on them (G0)", "gothmog/signals/emitter.py",
      '        self.path = Path(runs_dir) / SIGNALS_SUBDIR / f"{run_id}_signals.jsonl"\n',
      '        self.path = Path(runs_dir) / f"{run_id}_signals.jsonl"\n'),
+    # R1: the Atomic Red Team adapter — a test is run faithfully or refused, the initial
+    # state is verified before and after the atomic's own cleanup.
+    ("M75", "a non-linux atomic is run on the Linux target anyway (R1)", "annatar/engines/atomic.py",
+     "    if LINUX not in platforms:\n", "    if False:\n"),
+    ("M76", "an unresolved #{var} is sent to the VM instead of refused (R1)", "annatar/engines/atomic.py",
+     '            raise AtomicError(f"unresolved atomic argument #{{{name}}} (no default, none given)")\n',
+     '            return ""\n'),
+    ("M77", "an atomic with no cleanup_command is accepted (R1)", "annatar/engines/atomic.py",
+     '    if not cleanup:\n        raise AtomicError(\n'
+     '            f"atomic {guid} has no cleanup_command — R1 requires a declared return to the "\n'
+     '            "initial state (we never leave the target changed)"\n        )\n',
+     ""),
+    ("M78", "the atomic's cleanup_command is never run (R1)", ENG,
+     "        executor.run_command(\n            resolved.cleanup_command, label=f\"atomic {resolved.guid} cleanup\"\n        )\n",
+     ""),
+    ("M79", "the return to the initial state is declared without being verified (R1)", ENG,
+     '            checks["initial_state_after"] = "PASS" if restored else "FAIL"\n',
+     '            checks["initial_state_after"] = "PASS"\n'),
+    ("M80", "the atomic runs over a dirty initial state (R1)", ENG,
+     "            if not all(ok for _, ok, _ in before):\n", "            if False:\n"),
 ]
 
 # Mutants measured by other tests than the invariants (their lot's own).
@@ -291,6 +311,8 @@ TESTS["M63"] = "tests/unit/test_campaign_report.py"
 TESTS.update({mid: "tests/unit/test_orodruin.py" for mid in ("M64", "M65", "M66", "M67")})
 TESTS.update({mid: "tests/unit/test_exercise_channel.py" for mid in ("M68", "M69", "M70")})
 TESTS.update({mid: "tests/unit/test_gothmog.py" for mid in ("M71", "M72", "M73", "M74")})
+TESTS.update({mid: "tests/unit/test_annatar_atomic.py"
+              for mid in ("M75", "M76", "M77", "M78", "M79", "M80")})
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

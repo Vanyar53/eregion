@@ -1,0 +1,25 @@
+# Atomic Red Team — pinned, vendored subset (R1)
+#
+# Source    : https://github.com/redcanaryco/atomic-red-team
+# Commit    : 9f6a1eab36d561272cf9f34c61dd80263db3ce8e   (path atomics/T1136.001, 2026-02-18)
+# Retrieved : 2026-10-20
+# License   : MIT — see LICENSE.atomic-red-team (kept with the files, as the license requires)
+#
+# The files under this directory are copied VERBATIM from upstream at the commit above.
+# Do not edit them. To update a technique: re-fetch its file at a new pinned commit, replace
+# it here, and bump the commit + date in this PIN.
+#
+# Why vendored (not fetched at run time): Orodruin has no Internet egress
+# (docs/design/orodruin-contract.md) — every atomic an injector runs must already be inside
+# the image that `make orodruin-push` loads. The whole upstream tree is not vendored: it is
+# large and mostly Windows; we keep only the techniques the catalog marks `implemented`.
+#
+# How they are used: annatar/engines/atomic.py reads the test's `command` and
+# `cleanup_command` by its `auto_generated_guid`, substitutes the input-argument defaults,
+# and runs them in the enrolled target VM through Azure Run Command (every call journaled by
+# the Orodruin contract). We do NOT run the upstream invoke-atomicredteam runner — the
+# adapter is the only thing that reads these files.
+#
+# Vendored techniques (engine_ref = "<technique>/<auto_generated_guid>"):
+#   T1136.001  Create Account: Local Account
+#     40d8eabd-e394-46f6-8785-b9bfa1d011d2  Create a user account on a Linux system

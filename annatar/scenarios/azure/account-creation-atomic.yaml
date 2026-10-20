@@ -1,0 +1,59 @@
+# R1 — the first experiment driven by a public attack library (Atomic Red Team).
+#
+# Same technique as account-creation.yaml (T1136.001), but instead of a home-grown script the
+# attack is a PINNED atomic test (annatar/atomics/T1136.001, see annatar/atomics/PIN), run in
+# the target VM through Run Command by the adapter (annatar/engines/atomic.py). The atomic's
+# own command and cleanup_command are used verbatim; the steady_state probes below verify the
+# initial state is clean before the attack and restored after cleanup.
+#
+# engine_ref = "<technique>/<auto_generated_guid>" — here the Linux "Create a user account"
+# test. Its command is `useradd -M -N -r -s /bin/bash -c evil_account evil_user`: a system UID
+# (-r) but WITH a login shell (-s /bin/bash), so Glorfindel's post-#109 rule still keeps it
+# (a system account is only dropped when it has no login shell).
+schema_version: "1"
+kind: technique
+engine: atomic
+engine_ref: T1136.001/40d8eabd-e394-46f6-8785-b9bfa1d011d2
+name: account-creation-atomic
+description: "T1136.001 — Create Account: Local Account, via a pinned Atomic Red Team test (useradd)"
+mitre: T1136.001
+version: "1.0.0"
+destructive: false
+
+target:
+  type: azure_vm
+  resource_group: rg-celebrimbor
+  vm_name: vm-celebrimbor-gondolin
+
+# Checked on the VM via Run Command before the attack (must hold — clean start) and after the
+# atomic's cleanup (must hold again — return verified). `#{username}` is filled from the
+# atomic's input-argument default (evil_user).
+steady_state:
+  probes:
+    - name: user-absent
+      verify: "id #{username} >/dev/null 2>&1 && echo USER_PRESENT || echo USER_ABSENT"
+      expect: USER_ABSENT
+
+detection:
+  timeout: "600s"
+  prerequisites:
+    - name: syslog_auth_dcr
+      table: Syslog
+      why: DCR must collect auth/authpriv facility — required for useradd Syslog events
+      verify: "Syslog | where Facility in ('auth', 'authpriv') | where TimeGenerated > ago(1h) | limit 1"
+  hints:
+    log_source: Syslog
+    attack_commands_summary: >
+      Atomic Red Team T1136.001 (Linux, guid 40d8eabd…): useradd -M -N -r -s /bin/bash -c
+      evil_account evil_user, then userdel evil_user to clean up. Generates PAM messages in
+      auth.log (facility auth or authpriv): "new user: name=evil_user". The account has a
+      login shell (/bin/bash) so it is kept despite its system UID.
+    expected_indicators:
+      - "Syslog Facility: 'auth' or 'authpriv'"
+      - "SyslogMessage contains 'new user' or 'useradd'"
+      - "ProcessName: 'useradd'"
+      - "SyslogMessage contains 'evil_user'"
+    failure_candidates:
+      - "Syslog | where Facility in ('auth', 'authpriv') | where SyslogMessage has 'new user' | where TimeGenerated > ago(10m)"
+      - "Syslog | where ProcessName == 'useradd' | where TimeGenerated > ago(10m)"
+      - "Ubuntu: facility peut être 'authpriv' plutôt que 'auth' pour les events useradd/PAM"

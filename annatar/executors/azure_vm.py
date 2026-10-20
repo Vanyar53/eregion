@@ -54,7 +54,7 @@ class AzureVMExecutor:
             console.print("  [dim]VM started.[/dim]")
 
     def run_script(self, script_path: str, params: list[str] | None = None) -> str:
-        """Execute a shell script on the VM via Azure Run Command.
+        """Execute a shell script file on the VM via Azure Run Command.
 
         Retries on Conflict (Run Command extension busy) with exponential backoff.
         """
@@ -63,8 +63,23 @@ class AzureVMExecutor:
 
         with open(script_path) as f:
             script_content = f.read()
+        return self._run_shell(script_content, script_path, params)
 
-        console.print(f"  [dim]RunCommand → {self.vm_name} : {script_path}[/dim]")
+    def run_command(self, command: str, label: str = "command",
+                    params: list[str] | None = None) -> str:
+        """Execute an inline shell command on the VM via Azure Run Command (R1 atomic adapter).
+
+        Journaled and capped by the Orodruin contract (``_before_call``) exactly like
+        ``run_script`` — every write on the target goes through the same gate.
+        """
+        self._before_call("run_command", label)
+        self._ensure_vm_running()
+        return self._run_shell(command, label, params)
+
+    def _run_shell(self, script_content: str, label: str,
+                   params: list[str] | None = None) -> str:
+        """The Run Command call itself, shared by run_script and run_command."""
+        console.print(f"  [dim]RunCommand → {self.vm_name} : {label}[/dim]")
 
         from azure.core.exceptions import HttpResponseError
         from azure.mgmt.compute.models import RunCommandInput, RunCommandInputParameter

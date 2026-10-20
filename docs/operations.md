@@ -117,14 +117,26 @@ make orodruin-campaign-plan CAMPAIGN_TARGET=<resource_id de la VM inscrite> [CAM
 #   E1 (aucune étape, engine_ref résolu au plan contre les atomics de l'image, sondes comprises) ;
 #   une entrée local-script devient un scénario de script. Le moteur de l'entrée fait foi (jamais de
 #   repli script pour un atomic). Une entrée atomic sans engine_ref valide ou sans sondes n'est pas
-#   synthétisée. Manifeste et scénarios dans ~/runs/campaigns/<id>/ (bind-monté).
+#   synthétisée. Le plan ne dépend ni de jsonschema ni de schemas/ (absents de l'image) : il valide
+#   l'expérience comme le run la lira (parser + sondes du moteur atomic) ; le schéma E1 est vérifié
+#   par les tests. Une entrée destructive (atomic ou script) demande --allow-destructive et un
+#   safe_target. Manifeste et scénarios dans ~/runs/campaigns/<id>/ (bind-monté). La commande n'est
+#   pas répétée à l'écran (CAMPAIGN_TARGET porte l'abonnement).
 make orodruin-campaign-run CAMPAIGN=<id>     # joue la campagne (watch H0 en human_only — rien ne s'isole)
 #   Chaque run passe par le moteur de son expérience (atomic ou script) ; sa détection (detected/
 #   missed/unknown) et sa latence (#157) arrivent dans le manifeste, comme pour un run seul. Le reset
 #   entre scénarios (glorfindel reset) est absent de l'image d'Orodruin : il est sauté proprement (ni
-#   échec, ni écriture) et le manifeste le note (scenarios[].reset). Le rapport s'écrit seul à la fin
-#   si la clé du modèle d'analyse est dans orodruin.env ; sinon la campagne dit comment l'écrire plus
-#   tard (make campaign-report CAMPAIGN=<id>).
+#   échec, ni écriture) et le manifeste le note (scenarios[].reset : reset, skipped: …, ou
+#   failed: exit <code> si glorfindel reset sort en erreur).
+#   Le rapport ne s'écrit PAS sur Orodruin aujourd'hui, même avec la clé du modèle d'analyse dans
+#   orodruin.env : il lui faut chromadb et litellm, absents de l'image (extra [annatar]). La campagne
+#   le dit à la fin (« Campaign report not written (ModuleNotFoundError…) ») et n'échoue pas. Pour
+#   l'écrire, rapatrier la campagne puis la lancer en local :
+#     mkdir -p runs/campaigns && scp -r <ORO_USER>@<ORO_IP>:runs/campaigns/<id> runs/campaigns/
+#     make campaign-report CAMPAIGN=<id>          # lit runs/campaigns/<id>/manifest.json ; clé du
+#                                                 # modèle d'analyse dans l'env local
+#   Les décisions de Glorfindel (runs/<run_id>_debug.jsonl) sont écrites là où tourne la watch (H0),
+#   pas sur Orodruin : sans elles, le rapport n'a que la détection et la latence de chaque run.
 annatar campaign plan --target <resource_id> [--llm]   # en local (banc) ; --llm pour le planner LLM
 annatar campaign run <campaign_id> --yes               # ratifie le budget/scope et exécute
 

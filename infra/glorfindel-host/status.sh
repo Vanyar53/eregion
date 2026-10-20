@@ -31,8 +31,10 @@ for s in eregion-watch eregion-war-room eregion-bot; do
   mark="✗"; case "$st" in running*) mark="✓";; esac
   printf "  %s %-18s %s\n" "$mark" "$s" "$(echo "$st" | cut -c1-38)"
 done
+# Les avertissements ne comptent pas (20/10 : LiteLLM signale à chaque démarrage l'absence de
+# botocore, « Error: No module named … » dans une ligne WARNING — 4 fausses erreurs par jour).
 for s in watch war-room bot; do
-  n=$(docker compose logs --no-color --since 24h "$s" 2>&1 | grep -ciE "error|traceback|exception")
+  n=$(docker compose logs --no-color --since 24h "$s" 2>&1 | grep -iE "error|traceback|exception" | grep -cviE "warning")
   mark="✓"; [ "$n" -gt 0 ] && mark="⚠"
   printf "  %s erreurs 24 h %-9s %s\n" "$mark" "$s" "$n"
 done

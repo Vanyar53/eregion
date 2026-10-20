@@ -50,6 +50,8 @@ Les escalades arrivent dans Discord par le bot, qui tourne sur la VM (un fil par
 ses boutons) ; le webhook garde les notifications d'action. Un seul bot par
 `DISCORD_BOT_TOKEN` : n'en lance pas d'autre en local.
 
+**Disque** : chaque `make glorfindel-host-start` reconstruit l'image ; les couches des anciennes images restaient dans containerd (Docker 29), jusqu'à 87 % d'un disque de 32 Go le 20/10, 25 Go récupérables. Le redéploiement purge maintenant les images orphelines (`docker image prune -f`), et `glorfindel-host-status` affiche l'occupation du disque.
+
 Les verdicts de l'observation et la mémoire ne vivent que sur le disque de la VM : `make glorfindel-host-pull` en garde une copie sur le poste (`~/.eregion/host-backups/`, les 30 dernières), et `make glorfindel-host-status` signale une copie de plus de 7 jours. Une VM éteinte (gondolin entre deux exercices) reste une semaine sur la carte (`GLORFINDEL_DISCOVERY_RETENTION_H=168` dans `host.env`, 8 h par défaut).
 
 La mémoire (ChromaDB) part vide sur la VM : la mémoire locale ne contient que des cycles

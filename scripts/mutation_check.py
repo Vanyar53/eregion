@@ -334,10 +334,8 @@ MUTANTS = [
     ("M90", "the atomic's probe requirement is dropped (R1 fix 3)", ENG,
      "            probe_error = self._atomic_probe_error(scenario)\n            if probe_error:\n",
      "            probe_error = self._atomic_probe_error(scenario)\n            if False:\n"),
-    ("M91", "a return not restored stays invisible to the caller (R1 fix 4)", ENG,
-     '        if restored is False:\n'
-     '            return RunOutcome(run_id, "unknown", error="initial state not restored")\n',
-     ""),
+    ("M91", "a return unverified (None) or not restored stays invisible (R1 fix 4, recheck P11)", ENG,
+     "        if restored is not True:\n", "        if restored is False:\n"),
     ("M92", "an unresolved #{...} after substitution is sent raw (R1 fix 5)", ATO,
      '    if "#{" in text:\n', "    if False:\n"),
     ("M93", "PathToAtomicsFolder is not refused (R1 fix 5)", ATO,

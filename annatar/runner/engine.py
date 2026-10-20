@@ -305,13 +305,12 @@ class Engine:
         else:
             stop_event.set()
 
-        # The detection result is recorded in the run itself, after the wait (review R1 minor).
+        # The detection result is recorded in the run itself, after the wait. The latency is
+        # not written (see _run_atomic_enrolled): a faithful measure is a later lot.
         metrics["detection"] = self._detection_result
-        if self._detection_latency_s is not None:
-            metrics["detection_latency_s"] = self._detection_latency_s
         report.metrics = metrics
         report.save()
-        return RunOutcome(run_id, self._detection_result, self._detection_latency_s)
+        return RunOutcome(run_id, self._detection_result)
 
     def _run_atomic_enrolled(self, scenario, executor, run_id: str, session,
                              resolved) -> RunOutcome:
@@ -422,8 +421,9 @@ class Engine:
                 checks["initial_state_after"] = "ERROR"
                 console.print(f"[red]After-probe failed:[/red] {e}")
 
-            # The target may be dirty — show the operator the resolved cleanup to run by hand.
-            if checks.get("cleanup") != "PASS" or restored is False:
+            # The target may be dirty (cleanup failed, or the return left unverified) — show
+            # the operator the resolved cleanup to run by hand.
+            if checks.get("cleanup") != "PASS" or restored is not True:
                 self._atomic_recovery_hint(scenario, resolved)
 
             overall = "PASS" if checks and all("PASS" in v for v in checks.values()) else "FAIL"
@@ -445,8 +445,13 @@ class Engine:
         # marked 'executed' then chained over a dirty VM (review R1 points 4 and 8).
         if attack_error:  # the command ran but left the steady state intact
             return RunOutcome(run_id, "unknown", error=attack_error)
-        if restored is False:
-            return RunOutcome(run_id, "unknown", error="initial state not restored")
+        # restored is True only when the after-probe ran and the steady state held again.
+        # False (it did not) or None (the after-probe itself could not run) both mean the
+        # return is not verified — the caller must see it, never chain over an unknown VM.
+        if restored is not True:
+            error = ("initial state not restored" if restored is False
+                     else "initial state not verified after cleanup")
+            return RunOutcome(run_id, "unknown", error=error)
 
         # Purple-team feedback — only when the attack actually started (short-circuits with no watch).
         if attack_started and detection_timeout_s > 0 and not self.dry_run:
@@ -460,13 +465,13 @@ class Engine:
             t.join()
 
         # The detection result (detected / missed / unknown) is recorded in the run itself,
-        # after the wait — the "Fini quand" of #65 (review R1 minor).
+        # after the wait — the "Fini quand" of #65. The latency is NOT written: measured from
+        # the start of the wait it was always ~0 on the atomic path (the wait begins only
+        # after cleanup); a faithful measure (detection timestamp − attack_time) is a later lot.
         metrics["detection"] = self._detection_result
-        if self._detection_latency_s is not None:
-            metrics["detection_latency_s"] = self._detection_latency_s
         report.metrics = metrics
         report.save()
-        return RunOutcome(run_id, self._detection_result, self._detection_latency_s)
+        return RunOutcome(run_id, self._detection_result)
 
     @staticmethod
     def _atomic_recovery_hint(scenario, resolved) -> None:
@@ -597,8 +602,7 @@ class Engine:
 
         wait_s = detection_timeout_s + 120
         poll_interval = 5.0
-        wait_start = time.time()
-        deadline = wait_start + wait_s
+        deadline = time.time() + wait_s
         # RulePoller watch files created within this window are from this run
         scan_since = time.time() - detection_timeout_s
 
@@ -635,7 +639,6 @@ class Engine:
         if result_event == "detection":
             console.print("[green]✓ Glorfindel detected the attack — no feedback needed.[/green]")
             self._detection_result = "detected"
-            self._detection_latency_s = round(time.time() - wait_start, 1)
             if stop_event is not None:
                 stop_event.set()
             return

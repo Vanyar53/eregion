@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -200,7 +201,7 @@ def test_pin_records_vendored_sha256():
 # ── Engine integration (mocked executor, armed by hermetic_orodruin) ──────────────────
 
 def _atomic_executor(before="USER_ABSENT", effect="USER_PRESENT", after="USER_ABSENT",
-                     command_raises=False, cleanup_raises=False):
+                     command_raises=False, cleanup_raises=False, after_raises=False):
     """A MagicMock executor. run_command returns per the probe phase in its label
     (before / effect / after); the atomic command and cleanup return "" (or raise)."""
     executor = MagicMock()
@@ -223,6 +224,8 @@ def _atomic_executor(before="USER_ABSENT", effect="USER_PRESENT", after="USER_AB
         if "(effect)" in label:
             return effect
         if "(after)" in label:
+            if after_raises:
+                raise RuntimeError("RunCommand failed after all retries")
             return after
         return ""
 
@@ -315,6 +318,46 @@ def test_p5_unrestored_state_surfaces_in_outcome(tmp_path, monkeypatch):
     assert _report(tmp_path)["checks"]["initial_state_after"] == "FAIL"
     assert _report(tmp_path)["result"] == "FAIL"
     assert outcome.error == "initial state not restored"
+
+
+# P11 — the after-probe RAISES: the return is unverified (restored is None) → the caller
+# must still see an error, never a silent 'executed' over an unknown VM (recheck, M91).
+def test_p11_after_probe_raises_is_an_error(tmp_path, monkeypatch):
+    executor = _atomic_executor(after_raises=True)
+    outcome = _run_atomic(tmp_path, monkeypatch, executor)
+
+    assert _report(tmp_path)["checks"]["initial_state_after"] == "ERROR"
+    assert outcome.error == "initial state not verified after cleanup"
+
+
+# P11b — cleanup AND the after-probe raise: still an error (a dirty-or-unknown VM).
+def test_p11b_cleanup_and_after_probe_raise(tmp_path, monkeypatch):
+    executor = _atomic_executor(cleanup_raises=True, after_raises=True)
+    outcome = _run_atomic(tmp_path, monkeypatch, executor)
+
+    assert _report(tmp_path)["checks"]["cleanup"] == "ERROR"
+    assert outcome.error  # never a silent 'executed'
+
+
+# P12 — the detection latency is not written: it stays None. Measured from the start of the
+# wait it was always ~0 on the atomic path; a faithful measure is a later lot.
+def test_p12_detection_latency_stays_none(tmp_path, monkeypatch):
+    import datetime as _dt
+    import time as _time
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "runs").mkdir()
+    attack_time = _time.time() - 90  # attacked 90 s ago, detected 30 s after it
+    det_ts = _dt.datetime.fromtimestamp(attack_time + 30, _dt.timezone.utc).isoformat()
+    (tmp_path / "runs" / "rid_debug.jsonl").write_text(
+        json.dumps({"signal": {"event": "detection", "timestamp": det_ts}}) + "\n")
+    engine = Engine()
+    scenario = SimpleNamespace(mitre="T1136.001", detection={}, detection_hints={})
+    emitter = SimpleNamespace(resource_id=RESOURCE_ID, emit=lambda **k: None)
+    engine._wait_and_emit_feedback("rid", emitter, scenario, 600.0)
+
+    assert engine._detection_result == "detected"
+    assert engine._detection_latency_s is None
 
 
 # P1 — the cleanup runs even when the atomic's command raises; the report is still written

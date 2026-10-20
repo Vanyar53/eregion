@@ -36,7 +36,8 @@ def _utcnow() -> str:
 def _default_reset(resource_id: str) -> str:
     """Reset NSG state (isolation + IP blocks) between scenarios.
 
-    Returns what happened, recorded in the manifest. ``glorfindel reset`` is absent from
+    Returns what happened, recorded in the manifest: ``"reset"``, ``"skipped: …"`` or
+    ``"failed: exit <rc>"`` (a non-zero exit did not reset). ``glorfindel reset`` is absent from
     the Orodruin image (and outside the ``injector`` role), so when the binary is not on
     PATH the reset is SKIPPED — quietly (no loud failure) and without writing anything;
     the manifest says so. On H0 nothing isolates (human_only, read-only), so there is
@@ -44,12 +45,15 @@ def _default_reset(resource_id: str) -> str:
     """
     if shutil.which("glorfindel") is None:
         return "skipped: glorfindel absent (reset is not in the Orodruin image)"
-    subprocess.run(
+    proc = subprocess.run(
         ["glorfindel", "reset", resource_id, "--yes"],
         check=False,
         capture_output=True,
         timeout=120,
     )
+    # A reset that exits non-zero did not reset: say so, never "reset".
+    if proc.returncode != 0:
+        return f"failed: exit {proc.returncode}"
     return "reset"
 
 
@@ -59,7 +63,7 @@ class CampaignRunner:
         campaign_dir: str | Path,
         *,
         dry_run: bool = False,
-        reset_fn: Callable[[str], None] | None = None,
+        reset_fn: Callable[[str], str | None] | None = None,
         engine_factory: Callable[[], Engine] | None = None,
     ):
         self.campaign_dir = Path(campaign_dir)

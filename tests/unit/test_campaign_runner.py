@@ -3,6 +3,8 @@
 Engine + NSG reset are injected (no Azure, no LLM, no subprocess).
 """
 
+import subprocess
+
 import pytest
 
 from annatar.campaign.manifest import (
@@ -232,7 +234,25 @@ def test_default_reset_runs_when_glorfindel_present(tmp_path, monkeypatch):
 
     monkeypatch.setattr(runner_mod.shutil, "which", lambda _name: "/usr/bin/glorfindel")
     calls = []
-    monkeypatch.setattr(runner_mod.subprocess, "run", lambda *a, **k: calls.append(a))
+
+    def _run(*a, **k):
+        calls.append(a)
+        return subprocess.CompletedProcess(a[0], 0)
+
+    monkeypatch.setattr(runner_mod.subprocess, "run", _run)
     status = runner_mod._default_reset("/subscriptions/s/…/vm")
     assert status == "reset"
     assert len(calls) == 1  # it did shell out
+
+
+def test_default_reset_failing_exit_is_recorded_as_failed(tmp_path, monkeypatch):
+    # `glorfindel reset` exiting non-zero did NOT reset: the manifest must say "failed",
+    # never "reset" (review #165 point 5, M123).
+    import annatar.campaign.runner as runner_mod
+
+    monkeypatch.setattr(runner_mod.shutil, "which", lambda _name: "/usr/bin/glorfindel")
+    monkeypatch.setattr(
+        runner_mod.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a[0], 2)
+    )
+    status = runner_mod._default_reset("/subscriptions/s/…/vm")
+    assert status == "failed: exit 2"

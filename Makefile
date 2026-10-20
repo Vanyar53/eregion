@@ -620,8 +620,9 @@ gothmog-run:
 # Même image, même identité qu'Annatar/Gothmog sur Orodruin. La campagne joue l'atomic
 # (T1136.001) avec d'autres techniques du catalogue ; le manifeste se pose dans ~/runs
 # (bind-monté). Le rapport (IA0) ne s'écrit pas sur Orodruin aujourd'hui : chromadb et litellm
-# manquent à l'image — rapatrier la campagne, puis make campaign-report (docs/operations.md). Deux temps : `campaign plan` rend un id, `campaign run <id>` le
-# joue (la watch sur H0 est en human_only — rien ne s'isole). ServerAliveInterval : un run de
+# manquent à l'image — rapatrier la campagne, puis make campaign-report (docs/operations.md).
+# Deux temps : `campaign plan` rend un id, `campaign run <id>` le joue (la watch sur H0 est en
+# human_only — rien ne s'isole). ServerAliveInterval : un run de
 # campagne dure longtemps (plusieurs techniques + fenêtres de détection), plus que le délai
 # d'inactivité d'une IP publique.
 #   make orodruin-campaign-plan CAMPAIGN_TARGET=<resource_id VM inscrite> [CAMPAIGN_MAX=5]

@@ -12,13 +12,19 @@ materialized, and an entry never falls back to another engine:
   - ``local-script`` (or absent) ⇒ today's script-driven scenario. It NEVER writes inline
     shell — it references only existing ``scripts/vm/`` scripts.
 
-Shared guards: the catalog entry exists and ``status == implemented``; the target resource
-is inside the campaign scope (hard allowlist); the produced YAML validates against its
-schema (E1 experiment for atomic, scenario schema for local-script). Script-only guards:
-``reference_script``/``setup_scripts`` exist on disk; destructive ⇒ ``safe_target`` present
-and ``requires_testdata`` ⇒ setup_scripts non-empty.
+Shared guards: the catalog entry exists and ``status == implemented``; destructive ⇒
+``budget.allow_destructive`` and a ``safe_target`` (checked before the engine dispatch); the
+target resource is inside the campaign scope (hard allowlist); the produced YAML is what the
+run accepts (``ScenarioParser().validate``, plus the atomic engine's probe check for an
+atomic). Script-only guards: ``reference_script``/``setup_scripts`` exist on disk;
+destructive + ``requires_testdata`` ⇒ setup_scripts non-empty.
 
-A failure yields ``SynthesisResult(ok=False, reason=...)`` — the scenario is not written.
+No ``jsonschema`` at plan time: the synthesizer runs in the Orodruin image, which ships
+neither ``jsonschema`` nor ``schemas/`` (schema validation is a dev/CI concern,
+``eregion_core/experiment.py``). The tests check that what it writes passes the E1 schema.
+
+A failure yields ``SynthesisResult(ok=False, reason=...)`` — the scenario is not written
+(and a file written before a failed or raising validation is removed).
 """
 
 from __future__ import annotations
@@ -26,6 +32,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import yaml
@@ -103,6 +110,17 @@ def synthesize(
     # another engine (the catalog's engine is authoritative, even if a reference_script
     # lingers on an atomic entry for history).
     engine = entry.get("engine") or "local-script"
+
+    # destructive guardrail — shared by every engine, BEFORE the dispatch: an atomic marked
+    # destructive needs budget.allow_destructive and a safe_target exactly like a script.
+    destructive = bool(entry.get("destructive"))
+    safe_target = entry.get("safe_target") or ""
+    if destructive:
+        if not allow_destructive:
+            return SynthesisResult(False, f"{ttp}: destructive but budget.allow_destructive is false")
+        if not safe_target:
+            return SynthesisResult(False, f"{ttp}: destructive without safe_target — refused")
+
     if engine == "atomic":
         return _synthesize_atomic(
             entry=entry, target_resource_id=target_resource_id, scope=scope,
@@ -124,18 +142,11 @@ def synthesize(
         if not _script_exists(s):
             return SynthesisResult(False, f"{ttp}: setup_script not found: {s}")
 
-    # 4. destructive guardrail
-    destructive = bool(entry.get("destructive"))
-    safe_target = entry.get("safe_target") or ""
-    if destructive:
-        if not allow_destructive:
-            return SynthesisResult(False, f"{ttp}: destructive but budget.allow_destructive is false")
-        if not safe_target:
-            return SynthesisResult(False, f"{ttp}: destructive without safe_target — refused")
-        if entry.get("requires_testdata") and not setup_scripts:
-            return SynthesisResult(
-                False, f"{ttp}: requires_testdata but no setup_scripts to provision it"
-            )
+    # 4. destructive testdata (the allow_destructive/safe_target guard ran before the dispatch)
+    if destructive and entry.get("requires_testdata") and not setup_scripts:
+        return SynthesisResult(
+            False, f"{ttp}: requires_testdata but no setup_scripts to provision it"
+        )
 
     # 5. scope (hard allowlist)
     rg, vm = _rg_and_vm(target_resource_id)
@@ -230,9 +241,8 @@ def _synthesize_atomic(
     a ref the adapter (``annatar/engines/atomic.py``) cannot resolve. The engine_ref is resolved
     AT PLAN TIME, so an unknown test never reaches a run.
     """
-    from eregion_core.experiment import validate_experiment_file
-
     from annatar.engines.atomic import AtomicError, resolve_ref
+    from annatar.runner.engine import Engine
 
     ttp = entry.get("ttp", "")
 
@@ -242,18 +252,12 @@ def _synthesize_atomic(
         return SynthesisResult(False, f"{ttp}: engine 'atomic' requires an engine_ref")
 
     # steady-state probes required, each with a non-empty verify + expect — the initial state
-    # is verified before and after (the schema asks for it too; the runner enforces it again).
-    steady_state = entry.get("steady_state") or {}
-    probes = steady_state.get("probes") or []
-    if not probes:
-        return SynthesisResult(
-            False, f"{ttp}: engine 'atomic' requires at least one steady_state probe"
-        )
-    for probe in probes:
-        if not str(probe.get("verify") or "").strip() or not str(probe.get("expect") or "").strip():
-            return SynthesisResult(
-                False, f"{ttp}: steady_state probe {probe.get('name', '?')!r} needs verify and expect"
-            )
+    # is verified before and after. The check is the atomic engine's own
+    # (Engine._atomic_probe_error), applied to the entry: the plan refuses what the run would.
+    probe_error = Engine._atomic_probe_error(SimpleNamespace(raw=entry))
+    if probe_error:
+        return SynthesisResult(False, f"{ttp}: {probe_error}")
+    probes = (entry.get("steady_state") or {}).get("probes") or []
 
     # resolve the ref against the vendored atomics — an unknown or refused test is NOT
     # synthesized (fail closed, at plan time).
@@ -303,13 +307,35 @@ def _synthesize_atomic(
         )
     )
 
-    # The produced experiment validates against the E1 experiment schema.
-    errors = validate_experiment_file(path)
+    # Validate the produced experiment the way the run will read it — the ScenarioParser plus
+    # the atomic engine's probe check — never with jsonschema: schema validation is a dev/CI
+    # concern (eregion_core/experiment.py), and the Orodruin image ships neither jsonschema
+    # nor schemas/. The E1 schema itself is checked by the tests. Nothing is left behind when
+    # the validation fails OR raises: no half-planned file without its manifest.
+    try:
+        errors = _runtime_atomic_errors(path)
+    except Exception as e:  # noqa: BLE001 — any failure here means "not synthesized"
+        path.unlink(missing_ok=True)
+        return SynthesisResult(False, f"{ttp}: produced experiment could not be validated — {e}")
     if errors:
         path.unlink(missing_ok=True)
-        return SynthesisResult(False, f"{ttp}: produced experiment failed E1 schema: {errors}")
+        return SynthesisResult(False, f"{ttp}: produced experiment is invalid: {errors}")
 
     return SynthesisResult(True, path=path, scenario=experiment)
+
+
+def _runtime_atomic_errors(path: Path) -> list[str]:
+    """What the run would refuse in this experiment file ([] if it would play it): the
+    ScenarioParser's validation, then the atomic engine's probe check on the loaded
+    scenario. No jsonschema — the injector image does not depend on it at run time."""
+    from annatar.runner.engine import Engine
+
+    parser = ScenarioParser()
+    res = parser.validate(str(path))
+    if not res.valid:
+        return list(res.errors)
+    probe_error = Engine._atomic_probe_error(parser.load(str(path)))
+    return [probe_error] if probe_error else []
 
 
 def _build_hints(entry: dict[str, Any]) -> dict[str, Any]:

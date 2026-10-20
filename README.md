@@ -687,6 +687,8 @@ The agent logic, scenarios, and RAG memory are provider-agnostic — they don't 
 
 **Before each run**, `annatar run` automatically checks that the VM is running and not isolated by Glorfindel. If either check fails, the run aborts with the exact fix command. Use `--skip-preflight` to bypass.
 
+**Exit code**: `annatar run` exits 0 only when the run went through (detected, missed or not measured) or with `--dry-run`; any refusal (Orodruin passive, target not enrolled, dirty start, an atomic the adapter refuses, preflight, invalid scenario) or error (no observable effect, initial state not restored) exits 1, with one line and a hint — so a script or a CI chaining runs can stop on it.
+
 To check manually:
 ```bash
 glorfindel list                            # active isolations + blocked IPs

@@ -404,6 +404,10 @@ MUTANTS = [
      "    if since > attack:\n", "    if False:\n"),
     ("M113", "the contract lets Orodruin write the watch's channel (#159)", "eregion_core/orodruin.py",
      "            if actions and actions <= BLOB_READ_ONLY:\n", "            if True:\n"),
+    ("M114", "the run reads the hosted watch's silence as a miss without its vouching (#159)", ENG,
+     "        if result_event is None and channel and not _local_watch():\n", "        if False:\n"),
+    ("M115", "an unreadable return channel is read as a miss (#159)", ENG,
+     "                return None, None, why\n", '                return "detection_timeout", None, why\n'),
 ]
 
 # Mutants measured by other tests than the invariants (their lot's own).
@@ -431,7 +435,7 @@ TESTS.update({mid: "tests/unit/test_annatar_atomic.py"
                           "M91", "M92", "M93", "M94", "M95", "M96", "M97")})
 TESTS.update({mid: DETECTION_TESTS for mid in ("M98", "M99", "M100", "M101", "M102")})
 TESTS.update({mid: "tests/unit/test_watch_channel.py"
-              for mid in ("M109", "M110", "M111", "M112", "M113")})
+              for mid in ("M109", "M110", "M111", "M112", "M113", "M114", "M115")})
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

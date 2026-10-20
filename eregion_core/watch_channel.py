@@ -45,6 +45,9 @@ HEARTBEAT_EVERY_S = 60.0
 FRESH_S = 90.0
 # A detection waits for its window as long as a window could still cover it.
 KEEP_S = MAX_DURATION_S + GRACE_AFTER_S
+# After its wait, a run waits this long for a heartbeat that covers it (one missed beat).
+SETTLE_S = 2 * HEARTBEAT_EVERY_S + 2 * TICK_S
+STALE = "no heartbeat since the end of the wait"
 # A blob name part: a run_id or a signal_id, never a path.
 _SAFE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 
@@ -58,6 +61,9 @@ def _now() -> datetime:
 
 
 def _when(value) -> datetime | None:
+    """A datetime, an ISO string, or an epoch (Annatar's ``attack_time``)."""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return datetime.fromtimestamp(value, timezone.utc)
     if isinstance(value, datetime):
         return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
     try:
@@ -242,6 +248,14 @@ def read_detections(run_id: str, *, channel: str | None = None, credential=None,
     return out
 
 
+def as_records(detections: list[dict]) -> list[dict]:
+    """The channel's detections in the shape of a watch debug line, for the run's own test
+    (annatar/runner/detection.py, ``detection_latency``)."""
+    return [{"signal": {"event": d.get("event"), "ttp": d.get("ttp"),
+                        "resource_id": d.get("resource_id"), "timestamp": d.get("detected_at")}}
+            for d in detections if isinstance(d, dict)]
+
+
 def alive(heartbeat: dict, now: datetime | None = None) -> bool:
     """A watch is running behind the channel: its heartbeat is recent."""
     at = _when(heartbeat.get("at"))
@@ -258,7 +272,7 @@ def miss_unprovable(heartbeat: dict, *, run_id: str, attack_time, until) -> str:
     if at is None or since is None or attack is None or end is None:
         return "heartbeat or times unreadable"
     if at < end:
-        return "no heartbeat since the end of the wait"
+        return STALE
     if since > attack:
         return "the watch restarted after the attack"
     if run_id not in (heartbeat.get("windows") or []):

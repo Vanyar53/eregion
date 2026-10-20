@@ -2,7 +2,7 @@
 
 _Conception — 2026-10-14, relue en Opus 5.5 le 2026-10-15 — statut : **implémenté et mesuré sur le banc le 19/10** (O1 : `eregion_core/orodruin.py`,
 `infra/orodruin/`, mutants M64–M70), canal des fenêtres d'exercice compris (voir « Le canal
-des fenêtres d'exercice ») ; canal retour de la watch (#159, M109–M113) le 20/10._
+des fenêtres d'exercice ») ; canal retour de la watch (#159, M109–M115) le 20/10._
 
 ## Ce qu'Orodruin est, et ce qu'il n'est pas
 
@@ -220,9 +220,13 @@ le canal des fenêtres dans l'autre sens : un conteneur `watch` dans le même co
   le battement de cœur **seulement quand plus rien n'attend** : un battement de cœur garantit que
   tout ce qui le précède a été livré. Une détection vue avant sa fenêtre est publiée quand la
   fenêtre arrive. Une détection qui n'a pas pu être notée avance `since`, comme un redémarrage.
-- **Côté run** (Annatar, après #157) : l'attente de la détection lit le battement de cœur et
-  liste `detections/<run_id>/` ; les détections passent par le même test que les fichiers
-  locaux.
+- **Côté run** (`annatar/runner/engine.py`, `_wait_and_emit_feedback`) : sans watch locale, un
+  battement de cœur frais dans le canal compte comme une watch active ; pendant l'attente, les
+  détections de `detections/<run_id>/` passent par la règle de #157 (`detection_latency` : même
+  TTP, même VM sans la casse, vue à partir de l'attaque, latence depuis `attack_time`). À la
+  fin, sans détection, le run attend jusqu'à 130 s un battement de cœur écrit après l'attente,
+  puis relit les détections une dernière fois (une détection vue tout à la fin, livrée après,
+  compte encore).
 - **Échec vers `unknown`.** `detected` exige un blob de détection, que seule la watch peut
   écrire. `missed` exige un battement de cœur écrit **après la fin de l'attente**, par une watch
   **démarrée avant l'attaque**, qui **connaît la fenêtre du run**, et une liste lue sans erreur
@@ -243,7 +247,8 @@ le canal des fenêtres dans l'autre sens : un conteneur `watch` dans le même co
   filtrée). `GLORFINDEL_READ_ONLY` porte sur l'infra observée, pas sur le stockage d'Eregion.
 - **Mutants** : M109 (battement de cœur sur une détection en attente), M110 (une VM hors fenêtre
   publiée), M111 (une fenêtre inconnue de la watch prouve un miss), M112 (une watch redémarrée
-  prouve un miss), M113 (le contrat accepte un rôle d'écriture sur `watch`).
+  prouve un miss), M113 (le contrat accepte un rôle d'écriture sur `watch`), M114 (le run conclut
+  à un miss sans demander au canal), M115 (un canal illisible lu comme un miss).
 
 **Mesuré le 20/10** : la définition de Storage Blob Data Reader lue sur Azure (`az role
 definition list`) est exactement l'ensemble accepté ; Contributor y ajoute `blobs/write`,

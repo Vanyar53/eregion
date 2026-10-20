@@ -15,6 +15,7 @@ from annatar.runner.parser import ScenarioParser
 from annatar.runner.report import RunReport
 from eregion_core.inscription import check_target
 from annatar.signals.emitter import SignalEmitter
+from eregion_core import watch_channel
 from eregion_core.exercise import close_window, open_window
 from eregion_core.orodruin import arm
 
@@ -580,16 +581,20 @@ class Engine:
         own file and the RulePoller's ``watch-*`` files, annatar/runner/detection.py). Its
         latency from ``attack_time`` is kept in ``_detection_latency_s``.
 
+        A watch on another host (Glorfindel hosted, the run on Orodruin) is reached through
+        the return channel (eregion_core/watch_channel.py, #159): its heartbeat, its
+        detections of the run's window, the same test. With no local watch, a miss needs a
+        heartbeat that vouches for the whole wait — else the run is ``unknown``.
+
         If Glorfindel times out (detection_timeout event), emit a
         detection_missed signal enriched with the scenario's detection_hints
         so Glorfindel can propose an improved detection rule.
         """
         debug_path = Path("runs") / f"{run_id}_debug.jsonl"
         heartbeat = Path.home() / ".glorfindel" / "watch_heartbeat"
+        channel = watch_channel.channel_url()
 
-        # Short-circuit: skip if no active glorfindel watch.
-        # Retry up to 30s to account for a watch that just started.
-        def _watch_active() -> bool:
+        def _local_watch() -> bool:
             if debug_path.exists():
                 return True  # watch already responded
             if not heartbeat.exists():
@@ -599,6 +604,20 @@ class Engine:
                 return (time.time() - ts.timestamp()) < 90
             except Exception:
                 return False
+
+        def _remote_watch() -> bool:
+            if not channel:
+                return False
+            try:
+                return watch_channel.alive(watch_channel.read_heartbeat(),
+                                           now=datetime.fromtimestamp(time.time(), timezone.utc))
+            except Exception:
+                return False  # an unreadable channel shows no watch
+
+        # Short-circuit: skip if no active glorfindel watch.
+        # Retry up to 30s to account for a watch that just started.
+        def _watch_active() -> bool:
+            return _local_watch() or _remote_watch()
 
         if not _watch_active():
             # Retry for up to 30s in case the watch just started
@@ -641,7 +660,28 @@ class Engine:
             if latency is not None:
                 result_event = "detection"
                 break
+            # 3. The return channel: the hosted watch's detections of this run's window
+            latency = self._channel_latency(run_id, scenario.mitre, emitter.resource_id,
+                                            attack_time) if channel else None
+            if latency is not None:
+                result_event = "detection"
+                break
             time.sleep(poll_interval)
+
+        if result_event is None and channel and not _local_watch():
+            # Only the hosted watch could have seen it: its silence is a miss only if a
+            # heartbeat vouches for the whole wait.
+            result_event, latency, why = self._settle_through_channel(
+                run_id, scenario.mitre, emitter.resource_id, attack_time)
+            if result_event is None:
+                console.print(
+                    f"[yellow]Detection not measured — the hosted watch cannot vouch for"
+                    f" this run ({why}). No detection_missed.[/yellow]"
+                )
+                self._detection_result = "unknown"
+                if stop_event is not None:
+                    stop_event.set()
+                return
 
         if result_event == "detection":
             console.print(
@@ -686,6 +726,46 @@ class Engine:
         )
         if stop_event is not None:
             stop_event.set()
+
+    @staticmethod
+    def _channel_latency(run_id: str, ttp: str, resource_id: str,
+                         attack_time: float) -> float | None:
+        """The latency of this run's detection in the return channel, else None — an
+        unreadable channel included: only the end of the wait decides what that means."""
+        try:
+            found = watch_channel.read_detections(run_id)
+        except Exception:
+            return None
+        return detection_latency(watch_channel.as_records(found), ttp, resource_id, attack_time)
+
+    @staticmethod
+    def _settle_through_channel(run_id: str, ttp: str, resource_id: str,
+                                attack_time: float) -> tuple[str | None, float | None, str]:
+        """The wait is over and the channel showed no detection. Wait (up to SETTLE_S) for a
+        heartbeat written after the wait: everything the watch noted before it was then
+        delivered, so a last read of the detections settles it. Returns ("detection",
+        latency, "") — ("detection_timeout", None, "") for a miss the watch vouches for —
+        or (None, None, why) when it cannot vouch: the run is unknown."""
+        until = time.time()
+        give_up = until + watch_channel.SETTLE_S
+        while True:
+            try:
+                why = watch_channel.miss_unprovable(
+                    watch_channel.read_heartbeat(), run_id=run_id,
+                    attack_time=attack_time, until=until)
+                if not why:
+                    latency = detection_latency(
+                        watch_channel.as_records(watch_channel.read_detections(run_id)),
+                        ttp, resource_id, attack_time)
+                    if latency is not None:
+                        return "detection", latency, ""
+                    return "detection_timeout", None, ""
+            except Exception as e:
+                why = f"channel unreadable: {e}"
+            transient = why == watch_channel.STALE or why.startswith("channel unreadable")
+            if not transient or time.time() >= give_up:
+                return None, None, why
+            time.sleep(watch_channel.TICK_S)
 
     @staticmethod
     def _check_watch_files(

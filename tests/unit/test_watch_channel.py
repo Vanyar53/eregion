@@ -333,3 +333,123 @@ def test_read_identity_reads_the_data_actions_of_the_role(monkeypatch, data_acti
 
     missing = orodruin.read_identity(credential=credential, get=get)
     assert (missing == []) is armed
+
+
+# ── the run's wait through the channel (Annatar, after #157) ──────────────────
+
+from tests.unit.test_annatar_detection import (  # noqa: E402
+    TTP as RUN_TTP, WATCH_RID, _iso, _wait, waiting)  # noqa: F401  (waiting: a fixture)
+
+
+def _epoch(iso):
+    return datetime.fromisoformat(iso).timestamp()
+
+
+class FakeChannel:
+    """The hosted watch seen from Orodruin: a heartbeat it keeps writing (``lag`` behind
+    the clock), its detections, a channel that can break at a given time."""
+
+    def __init__(self, clock, *, windows=("rid",), restarted_at=None, detections=(),
+                 break_at=None, beating=True):
+        self.clock, self.windows, self.detections = clock, list(windows), list(detections)
+        self.since = restarted_at if restarted_at is not None else clock.now - 86_400
+        self.break_at, self.beating, self.start = break_at, beating, clock.now
+        self.reads = 0
+
+    def _check(self):
+        if self.break_at is not None and self.clock.now >= self.break_at:
+            raise RuntimeError("HTTP 503 reading the watch channel")
+
+    def read_heartbeat(self):
+        """Like the real watch: no heartbeat while a detection it saw waits for delivery."""
+        self._check()
+        at = self.clock.now if self.beating else self.start
+        pending = [_epoch(d["detected_at"]) for d in self.detections
+                   if _epoch(d["detected_at"]) <= self.clock.now < d.get("_after", 0)]
+        if pending:
+            at = min(at, min(pending) - 1)
+        return {"at": _iso(at), "since": _iso(self.since), "windows": self.windows}
+
+    def read_detections(self, run_id):
+        self._check()
+        self.reads += 1
+        return [{k: v for k, v in d.items() if k != "_after"} for d in self.detections
+                if d.get("_after", 0) <= self.clock.now]
+
+
+@pytest.fixture
+def remote(waiting, monkeypatch):  # noqa: F811  (the imported fixture)
+    """The run on Orodruin: no local watch, the hosted one reached through the channel."""
+    (waiting.runs.parent / "home" / ".glorfindel" / "watch_heartbeat").unlink()
+    monkeypatch.setenv(wc.CHANNEL_ENV, URL)
+
+    def install(**kw):
+        fake = FakeChannel(waiting.clock, **kw)
+        monkeypatch.setattr(wc, "read_heartbeat", lambda **_: fake.read_heartbeat())
+        monkeypatch.setattr(wc, "read_detections", lambda run_id, **_: fake.read_detections(run_id))
+        return fake
+    waiting.install = install
+    return waiting
+
+
+def _channel_detection(seen):
+    return {"event": "detection", "ttp": RUN_TTP, "resource_id": WATCH_RID,
+            "detected_at": _iso(seen), "rule": "t1136-001-v1"}
+
+
+def test_a_detection_in_the_channel_is_the_run_s_with_its_latency(remote):
+    attack = remote.clock.now - 150
+    remote.install(detections=[_channel_detection(attack + 117.5)])
+    engine, emitted = _wait(attack)
+    assert (engine._detection_result, engine._detection_latency_s) == ("detected", 117.5)
+    assert emitted == []
+
+
+def test_a_detection_delivered_after_the_wait_still_counts(remote):
+    attack = remote.clock.now - 30
+    start = remote.clock.now
+    # Seen near the end of the wait, delivered only after it: the settling read finds it.
+    late = {**_channel_detection(attack + 700), "_after": start + 725}
+    remote.install(detections=[late])
+    engine, emitted = _wait(attack)
+    assert (engine._detection_result, engine._detection_latency_s) == ("detected", 700.0)
+    assert emitted == [] and remote.clock.now >= start + 720
+
+
+def test_a_miss_the_hosted_watch_vouches_for_is_a_miss(remote):
+    attack = remote.clock.now - 30
+    remote.install()
+    engine, emitted = _wait(attack)
+    assert engine._detection_result == "missed"
+    assert emitted == ["detection_missed"]
+
+
+@pytest.mark.parametrize("kw", [
+    {"break_at": "mid-wait"},                 # the channel is cut during the wait
+    {"windows": ["another-run"]},             # the window never reached the watch
+    {"restarted_at": "after the attack"},     # the watch lost what it noted before
+    {"beating": False},                       # no heartbeat after the wait
+], ids=["cut", "window-unknown", "restarted", "stale"])
+def test_a_silence_the_watch_cannot_vouch_for_is_unknown(remote, kw):
+    """M114, M115: a channel cut, a window the watch never had, a restart, a heartbeat that
+    stops — the run writes unknown and emits no detection_missed (which would make
+    Glorfindel propose a rule for a technique it may well have caught)."""
+    attack = remote.clock.now - 30
+    start = remote.clock.now
+    if kw.get("break_at") == "mid-wait":
+        kw["break_at"] = start + 300
+    if kw.get("restarted_at") == "after the attack":
+        kw["restarted_at"] = attack + 60
+    remote.install(**kw)
+    engine, emitted = _wait(attack)
+    assert engine._detection_result == "unknown"
+    assert engine._detection_latency_s is None
+    assert emitted == []
+    assert remote.clock.now <= start + 720 + wc.SETTLE_S + wc.TICK_S
+
+
+def test_an_unreachable_channel_and_no_local_watch_measure_nothing(remote):
+    attack = remote.clock.now - 30
+    remote.install(break_at=remote.clock.now)
+    engine, emitted = _wait(attack)
+    assert engine._detection_result == "unknown" and emitted == []

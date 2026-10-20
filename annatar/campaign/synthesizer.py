@@ -2,15 +2,21 @@
 
 Deterministic by design (Q2 answer): the *creativity* lives in the planner (which
 techniques, what order); the synthesizer only assembles a vetted attack from the
-catalog entry and refuses anything unsafe. It NEVER writes inline shell — it references
-only existing ``scripts/vm/`` scripts. Guards, in order:
+catalog entry and refuses anything unsafe. The **engine of the entry decides** how it is
+materialized, and an entry never falls back to another engine:
 
-  1. catalog entry exists and ``status == implemented``;
-  2. ``reference_script`` is set and exists on disk under scripts/vm/;
-  3. every ``setup_scripts`` entry exists on disk;
-  4. destructive ⇒ ``safe_target`` present; ``requires_testdata`` ⇒ setup_scripts non-empty;
-  5. target resource is inside the campaign scope (hard allowlist);
-  6. the produced YAML validates against the scenario schema.
+  - ``engine: atomic`` (R1) ⇒ an E1 experiment with NO steps; the attack is a pinned
+    Atomic Red Team test, resolved at plan time against the vendored atomics
+    (``annatar/engines/atomic.py``, ``resolve_ref``). An ``engine_ref`` that is unknown or
+    refused by the adapter, or an entry with no steady-state probes, is NOT synthesized.
+  - ``local-script`` (or absent) ⇒ today's script-driven scenario. It NEVER writes inline
+    shell — it references only existing ``scripts/vm/`` scripts.
+
+Shared guards: the catalog entry exists and ``status == implemented``; the target resource
+is inside the campaign scope (hard allowlist); the produced YAML validates against its
+schema (E1 experiment for atomic, scenario schema for local-script). Script-only guards:
+``reference_script``/``setup_scripts`` exist on disk; destructive ⇒ ``safe_target`` present
+and ``requires_testdata`` ⇒ setup_scripts non-empty.
 
 A failure yields ``SynthesisResult(ok=False, reason=...)`` — the scenario is not written.
 """
@@ -93,6 +99,20 @@ def synthesize(
     if entry.get("status") != "implemented":
         return SynthesisResult(False, f"{ttp}: status != implemented — not synthesizable")
 
+    # The engine of the entry decides how it is materialized — and it never falls back to
+    # another engine (the catalog's engine is authoritative, even if a reference_script
+    # lingers on an atomic entry for history).
+    engine = entry.get("engine") or "local-script"
+    if engine == "atomic":
+        return _synthesize_atomic(
+            entry=entry, target_resource_id=target_resource_id, scope=scope,
+            out_dir=out_dir, seq=seq,
+        )
+    if engine != "local-script":
+        return SynthesisResult(
+            False, f"{ttp}: engine {engine!r} is not synthesizable (local-script or atomic)"
+        )
+
     # 2/3. scripts must exist on disk (no inline shell, ever)
     ref = entry.get("reference_script")
     if not ref:
@@ -126,9 +146,7 @@ def synthesize(
         return SynthesisResult(False, f"{ttp}: cannot derive vm_name from {target_resource_id}")
 
     # ── build the scenario dict (schema: name/description/mitre/target/steps) ──
-    latency = int(entry.get("expected_latency_s") or 300)
-    log_source = entry.get("log_source", "")
-    timeout_s = max(latency + _LATENCY_MARGIN_S, _WINDOW_FLOOR_S.get(log_source, 0))
+    timeout_s = _detection_timeout(entry)
     name = entry.get("name", ttp)
     scenario: dict[str, Any] = {
         "name": f"campaign-{_slug(ttp)}-{_slug(name)}"[:80],
@@ -187,15 +205,127 @@ def synthesize(
     return SynthesisResult(True, path=path, scenario=scenario)
 
 
+def _detection_timeout(entry: dict[str, Any]) -> int:
+    """Detection window (seconds): the catalog P99 latency plus a margin, never below the
+    per-log-source floor (a slow-but-correct detection must not be mislabelled 'missed')."""
+    latency = int(entry.get("expected_latency_s") or 300)
+    log_source = entry.get("log_source", "")
+    return max(latency + _LATENCY_MARGIN_S, _WINDOW_FLOOR_S.get(log_source, 0))
+
+
+def _synthesize_atomic(
+    *,
+    entry: dict[str, Any],
+    target_resource_id: str,
+    scope: Scope,
+    out_dir: str | Path,
+    seq: int,
+) -> SynthesisResult:
+    """Materialize an ``engine: atomic`` entry (R1) as an E1 experiment with NO steps.
+
+    The attack is a pinned Atomic Red Team test named by ``engine_ref``; the runner plays it
+    through the atomic engine (Orodruin contract, exercise window, steady-state probes before
+    and after, return channel). We refuse here — nothing is written — what the run could not
+    play faithfully: a missing/invalid ``engine_ref``, an entry with no steady-state probes, or
+    a ref the adapter (``annatar/engines/atomic.py``) cannot resolve. The engine_ref is resolved
+    AT PLAN TIME, so an unknown test never reaches a run.
+    """
+    from eregion_core.experiment import validate_experiment_file
+
+    from annatar.engines.atomic import AtomicError, resolve_ref
+
+    ttp = entry.get("ttp", "")
+
+    # engine_ref required (an atomic is named by its test)
+    engine_ref = entry.get("engine_ref")
+    if not engine_ref:
+        return SynthesisResult(False, f"{ttp}: engine 'atomic' requires an engine_ref")
+
+    # steady-state probes required, each with a non-empty verify + expect — the initial state
+    # is verified before and after (the schema asks for it too; the runner enforces it again).
+    steady_state = entry.get("steady_state") or {}
+    probes = steady_state.get("probes") or []
+    if not probes:
+        return SynthesisResult(
+            False, f"{ttp}: engine 'atomic' requires at least one steady_state probe"
+        )
+    for probe in probes:
+        if not str(probe.get("verify") or "").strip() or not str(probe.get("expect") or "").strip():
+            return SynthesisResult(
+                False, f"{ttp}: steady_state probe {probe.get('name', '?')!r} needs verify and expect"
+            )
+
+    # resolve the ref against the vendored atomics — an unknown or refused test is NOT
+    # synthesized (fail closed, at plan time).
+    try:
+        resolve_ref(engine_ref)
+    except AtomicError as e:
+        return SynthesisResult(False, f"{ttp}: engine_ref unresolved — {e}")
+
+    # scope (hard allowlist)
+    rg, vm = _rg_and_vm(target_resource_id)
+    guard = scope.check(target_resource_id, rg)
+    if not guard.allowed:
+        return SynthesisResult(False, f"{ttp}: out of scope — {guard.reason}")
+    if not vm:
+        return SynthesisResult(False, f"{ttp}: cannot derive vm_name from {target_resource_id}")
+
+    name = entry.get("name", ttp)
+    timeout_s = _detection_timeout(entry)
+    experiment: dict[str, Any] = {
+        "schema_version": "1",
+        "kind": "technique",
+        "engine": "atomic",
+        "engine_ref": engine_ref,
+        "name": f"campaign-{_slug(ttp)}-{_slug(name)}"[:80],
+        "description": f"{ttp} — {name} (generated by Annatar campaign — proposition)",
+        "mitre": ttp,
+        "version": "1.0.0",
+        "destructive": bool(entry.get("destructive")),
+        "target": {
+            "type": "azure_vm",
+            "resource_group": rg,
+            "vm_name": vm,
+        },
+        "steady_state": {"probes": [dict(p) for p in probes]},
+        "detection": {
+            "timeout": f"{timeout_s}s",
+            "hints": _build_hints(entry),
+        },
+    }
+
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    path = out / f"{seq:02d}-{ttp}-{_slug(name)}.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            experiment, sort_keys=False, default_flow_style=False, allow_unicode=True
+        )
+    )
+
+    # The produced experiment validates against the E1 experiment schema.
+    errors = validate_experiment_file(path)
+    if errors:
+        path.unlink(missing_ok=True)
+        return SynthesisResult(False, f"{ttp}: produced experiment failed E1 schema: {errors}")
+
+    return SynthesisResult(True, path=path, scenario=experiment)
+
+
 def _build_hints(entry: dict[str, Any]) -> dict[str, Any]:
     """Build detection.hints from the catalog blue block (feeds propose_detection_rule
     only if the attack is MISSED — Annatar's own scenario metadata, not an announcement)."""
     cols = entry.get("indicator_columns") or []
+    via = (
+        f"atomic {entry.get('engine_ref')}"
+        if (entry.get("engine") or "local-script") == "atomic"
+        else entry.get("reference_script")
+    )
     hints: dict[str, Any] = {
         "log_source": entry.get("log_source", ""),
         "attack_commands_summary": (
             f"Generated campaign step for {entry.get('ttp')} "
-            f"({entry.get('name', '')}) via {entry.get('reference_script')}."
+            f"({entry.get('name', '')}) via {via}."
         ),
     }
     if cols:

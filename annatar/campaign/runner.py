@@ -15,6 +15,7 @@ into the manifest (read post-hoc by the blue replay engine).
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -32,14 +33,24 @@ def _utcnow() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _default_reset(resource_id: str) -> None:
-    """Reset NSG state (isolation + IP blocks) between scenarios."""
+def _default_reset(resource_id: str) -> str:
+    """Reset NSG state (isolation + IP blocks) between scenarios.
+
+    Returns what happened, recorded in the manifest. ``glorfindel reset`` is absent from
+    the Orodruin image (and outside the ``injector`` role), so when the binary is not on
+    PATH the reset is SKIPPED — quietly (no loud failure) and without writing anything;
+    the manifest says so. On H0 nothing isolates (human_only, read-only), so there is
+    nothing to reset between scenarios anyway.
+    """
+    if shutil.which("glorfindel") is None:
+        return "skipped: glorfindel absent (reset is not in the Orodruin image)"
     subprocess.run(
         ["glorfindel", "reset", resource_id, "--yes"],
         check=False,
         capture_output=True,
         timeout=120,
     )
+    return "reset"
 
 
 class CampaignRunner:
@@ -131,12 +142,17 @@ class CampaignRunner:
             if entry.status == "executed":
                 executed += 1
 
-            # NSG reset between scenarios (clean attribution for the next one)
+            # NSG reset between scenarios (clean attribution for the next one). What happened
+            # is recorded on the entry — including a quiet skip when glorfindel is absent.
             if budget.reset_nsg_between:
                 try:
-                    self.reset_fn(entry.target_resource_id)
+                    status = self.reset_fn(entry.target_resource_id)
                 except Exception as e:  # reset failure must not abort the campaign
+                    status = f"failed: {e}"
                     console.print(f"[yellow]NSG reset failed: {e}[/yellow]")
+                if isinstance(status, str):
+                    entry.reset = status
+                    m.save(self.campaign_dir)
 
         m.set_state("aborted" if aborted else "done")
         m.save(self.campaign_dir)

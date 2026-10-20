@@ -27,6 +27,8 @@ x-env: &env
   GLORFINDEL_BACKUP_VAULT: ${GLORFINDEL_BACKUP_VAULT:-}
   # O1 : le canal des fenêtres d'exercice d'Orodruin (eregion_core/exercise_channel.py).
   EREGION_EXERCISE_CHANNEL: ${EREGION_EXERCISE_CHANNEL:-}
+  # #159 : le canal retour — la watch hébergée y publie battement de cœur et détections.
+  EREGION_WATCH_CHANNEL: ${EREGION_WATCH_CHANNEL:-}
   ORT_LOGGING_LEVEL_DEFAULT: "3"
 
 services:

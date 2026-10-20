@@ -63,6 +63,20 @@ def test_host_env_carries_no_azure_secret_and_is_read_only():
     assert len(env["GLORFINDEL_WARROOM_TOKEN"]) >= 24
 
 
+def test_every_host_env_variable_reaches_the_containers():
+    """docker compose passes an explicit list (`x-env`), not the whole .env: a variable that
+    host.env carries but the list omits never reaches the watch. #160 added
+    EREGION_WATCH_CHANNEL to host.env and not to the list — the hosted watch would never
+    have published its heartbeat (found 20/10, before deployment)."""
+    import yaml
+
+    compose = yaml.safe_load((HOST.parents[1] / "docker-compose.yml").read_text(encoding="utf-8"))
+    passed = set(compose["x-env"])
+    operator = {k: "x" for k in host_env.COPIED}
+    carried = set(host_env.host_env(operator))
+    assert carried - passed == set()
+
+
 def test_empty_service_principal_vars_leave_room_for_the_managed_identity():
     """docker compose passes AZURE_CLIENT_ID="" on the hosted VM: azure-identity then builds
     ClientSecretCredential("") and never reaches the managed identity (measured, 16/10)."""

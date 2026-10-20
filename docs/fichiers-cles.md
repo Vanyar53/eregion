@@ -145,6 +145,9 @@ annatar/
                         sur le groupe ET la VM + zone ; `scenario_destructive()` = champ du scénario puis catalogue ; `annatar clean` gardé aussi, destructif) → setup → integrity check → attack
                         → emit attack_started (sans query — Glorfindel résout via detection_rules.yaml)
                         → thread daemon feedback: si detection_timeout → emit detection_missed
+                        → runs/<run_id>.json réécrit après l'attente : detection + detection_latency_s (#157)
+  runner/detection.py → règle pure : quelle détection compte pour un run (TTP, resource_id sans la casse, vue ≥ attack_time)
+                        et sa latence depuis attack_time — les deux chemins de l'attente, et le canal retour (#159)
   runner/parser.py    → Scenario dataclass simplifié (detection: timeout/prerequisites/hints)
   signals/schema.py   → Signal + severity_for_ttp (T1486/T1041/T1110/T1548)
   signals/emitter.py  → signal normalisé JSONL

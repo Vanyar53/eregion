@@ -37,9 +37,11 @@ ENG = "annatar/runner/engine.py"
 EXE = "annatar/executors/azure_vm.py"
 ATO = "annatar/engines/atomic.py"
 GOTH = "gothmog/runner/engine.py"
+DET = "annatar/runner/detection.py"
 INVARIANTS = "tests/unit/test_invariants.py"
 INSCRIPTION_TESTS = "tests/unit/test_inscription.py tests/unit/test_engine.py"
 DOCS_TESTS = "tests/unit/test_docs_budget.py"
+DETECTION_TESTS = "tests/unit/test_annatar_detection.py tests/unit/test_engine.py"
 # A mutant whose "old" text is RENAME renames its file to "new" instead of editing it.
 RENAME = object()
 
@@ -349,6 +351,23 @@ MUTANTS = [
     ("M97", "a vendored atomic is edited, the PIN no longer matches (R1 point 9)",
      "annatar/atomics/T1136.001/T1136.001.yaml",
      "attack_technique: T1136.001\n", "attack_technique: T1136.999\n"),
+    # #157 — the run's detection latency, and only this run's detections count.
+    ("M98", "the watch's resource id compared with its case (bench 20/10: every RulePoller detection missed)", DET,
+     '    a, b = str(a or "").strip().lower(), str(b or "").strip().lower()\n',
+     '    a, b = str(a or "").strip(), str(b or "").strip()\n'),
+    ("M99", "a detection before the attack counts for the run (#157)", DET,
+     "        if seen is None or seen < attack_time:", "        if seen is None:"),
+    ("M100", "the poll path's latency read from attack_started's timestamp, not detection_time_s (#157)", DET,
+     "        if _number(elapsed) and _number(start):\n", "        if False:\n"),
+    ("M101", "the latency is not written in the atomic run's report (#157)", ENG,
+     "        # proof, about a minute later).\n"
+     "        metrics[\"detection\"] = self._detection_result\n"
+     "        metrics[\"detection_latency_s\"] = self._detection_latency_s\n",
+     "        # proof, about a minute later).\n"
+     "        metrics[\"detection\"] = self._detection_result\n"),
+    ("M102", "the atomic wait measures from its own start, not from T0 (#157, review R1 P12)", ENG,
+     "                args=(run_id, emitter, scenario, detection_timeout_s, T0, threading.Event()),\n",
+     "                args=(run_id, emitter, scenario, detection_timeout_s, time.time(), threading.Event()),\n"),
 ]
 
 # Mutants measured by other tests than the invariants (their lot's own).
@@ -372,6 +391,7 @@ TESTS.update({mid: "tests/unit/test_orodruin.py" for mid in ("M81", "M85")})
 TESTS.update({mid: "tests/unit/test_annatar_atomic.py"
               for mid in ("M82", "M83", "M84", "M86", "M87", "M88", "M89", "M90",
                           "M91", "M92", "M93", "M94", "M95", "M96", "M97")})
+TESTS.update({mid: DETECTION_TESTS for mid in ("M98", "M99", "M100", "M101", "M102")})
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

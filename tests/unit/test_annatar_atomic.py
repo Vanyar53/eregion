@@ -339,25 +339,31 @@ def test_p11b_cleanup_and_after_probe_raise(tmp_path, monkeypatch):
     assert outcome.error  # never a silent 'executed'
 
 
-# P12 — the detection latency is not written: it stays None. Measured from the start of the
-# wait it was always ~0 on the atomic path; a faithful measure is a later lot.
-def test_p12_detection_latency_stays_none(tmp_path, monkeypatch):
+# P12 — the detection latency is measured from the attack, not from the start of the wait
+# (which on the atomic path begins only after cleanup — the old measure was always ~0).
+# Since #157 it is written: detection time − attack_time (tests/unit/test_annatar_detection.py).
+def test_p12_detection_latency_is_measured_from_the_attack(tmp_path, monkeypatch):
     import datetime as _dt
     import time as _time
 
     monkeypatch.chdir(tmp_path)
     (tmp_path / "runs").mkdir()
     attack_time = _time.time() - 90  # attacked 90 s ago, detected 30 s after it
-    det_ts = _dt.datetime.fromtimestamp(attack_time + 30, _dt.timezone.utc).isoformat()
-    (tmp_path / "runs" / "rid_debug.jsonl").write_text(
-        json.dumps({"signal": {"event": "detection", "timestamp": det_ts}}) + "\n")
+    # The watch's record of the run's attack_started: its timestamp is the attack_started
+    # emission (63 s after the command, after the effect proof), not the detection.
+    emitted_ts = _dt.datetime.fromtimestamp(attack_time + 63, _dt.timezone.utc).isoformat()
+    (tmp_path / "runs" / "rid_debug.jsonl").write_text(json.dumps({"signal": {
+        "event": "detection", "ttp": "T1136.001", "resource_id": RESOURCE_ID,
+        "timestamp": emitted_ts,
+        "raw_signal": {"attack_time": attack_time, "detection_time_s": 30},
+    }}) + "\n")
     engine = Engine()
     scenario = SimpleNamespace(mitre="T1136.001", detection={}, detection_hints={})
     emitter = SimpleNamespace(resource_id=RESOURCE_ID, emit=lambda **k: None)
-    engine._wait_and_emit_feedback("rid", emitter, scenario, 600.0)
+    engine._wait_and_emit_feedback("rid", emitter, scenario, 600.0, attack_time)
 
     assert engine._detection_result == "detected"
-    assert engine._detection_latency_s is None
+    assert engine._detection_latency_s == 30.0
 
 
 # P1 — the cleanup runs even when the atomic's command raises; the report is still written

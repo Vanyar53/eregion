@@ -89,6 +89,11 @@ annatar run annatar/scenarios/azure/account-creation-atomic.yaml  # R1 : un test
 #   écrit, attack: ERROR). Cycle : état initial vérifié avant (départ propre exigé), effet prouvé juste après (sinon pas
 #   d'attack_started), état restauré après le cleanup (sinon le run est une erreur + commande de rattrapage affichée). La
 #   détection (detected/missed/unknown) est écrite dans runs/<run_id>.json. Un moteur inconnu est refusé (pas de run vide).
+#   Les deux moteurs écrivent aussi metrics.detection_latency_s (#157) : secondes entre attack_time (T0, l'appel de la
+#   commande) et la détection notée par Glorfindel, null si non détecté (annatar report <run_id> l'affiche). Ne compte
+#   qu'une détection du même TTP, sur la même VM (resource_id comparé sans la casse : la watch écrit le _ResourceId de
+#   Log Analytics en minuscules), vue à partir de l'attaque — une détection antérieure est celle d'un autre run
+#   (annatar/runner/detection.py, même règle pour runs/<run_id>_debug.jsonl et les fichiers watch-*).
 
 # Gothmog (G0) — depuis Orodruin seulement (ailleurs le contrat est passif)
 make gothmog-preflight [FAULT=vm-shutdown]   # contrat, cibles relues dans l'expérience, état normal — rien d'écrit

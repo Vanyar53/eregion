@@ -152,25 +152,36 @@ def test_engine_skip_preflight_bypasses_check(tmp_path, monkeypatch):
 
 # ── RulePoller watch-file detection ──────────────────────────────────────────
 
+def _watch_record(ttp: str, seen: float, rid: str = RESOURCE_ID) -> dict:
+    from datetime import datetime, timezone
+
+    return {"signal": {"event": "detection", "ttp": ttp, "resource_id": rid,
+                       "timestamp": datetime.fromtimestamp(seen, timezone.utc).isoformat()}}
+
+
 def test_check_watch_files_finds_matching_detection(tmp_path):
-    """_check_watch_files returns 'detection' when a watch file has a match."""
+    """_check_watch_files returns the latency when a watch file has a match after the attack."""
     runs = tmp_path / "runs"
     runs.mkdir()
     watch_file = runs / "watch-sudo-privilege-escalation-20260601T134025Z_debug.jsonl"
-    rec = {
-        "signal": {
-            "event": "detection",
-            "ttp": "T1548.003",
-            "resource_id": RESOURCE_ID,
-        }
-    }
-    watch_file.write_text(json.dumps(rec) + "\n")
+    watch_file.write_text(json.dumps(_watch_record("T1548.003", 1000.0 + 42)) + "\n")
 
     engine = Engine()
-    result = engine._check_watch_files(
-        "T1548.003", RESOURCE_ID, since=0.0, runs_dir=runs
-    )
-    assert result == "detection"
+    result = engine._check_watch_files("T1548.003", RESOURCE_ID, 1000.0, runs_dir=runs)
+    assert result == 42.0
+
+
+def test_check_watch_files_matches_the_watch_lower_case_resource_id(tmp_path):
+    """The watch writes Log Analytics' _ResourceId in lower case; Annatar emits ARM's
+    casing. Measured on the bench (20/10): compared as is, every RulePoller detection was
+    a miss (M98). Both casings, both ways."""
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    (runs / "watch-a_debug.jsonl").write_text(
+        json.dumps(_watch_record("T1136.001", 1000.0 + 10, rid=RESOURCE_ID.lower())) + "\n")
+    assert Engine._check_watch_files("T1136.001", RESOURCE_ID, 1000.0, runs_dir=runs) == 10.0
+    assert Engine._check_watch_files("T1136.001", RESOURCE_ID.lower(), 1000.0, runs_dir=runs) == 10.0
+    assert Engine._check_watch_files("T1136.001", RESOURCE_ID.upper(), 1000.0, runs_dir=runs) == 10.0
 
 
 def test_check_watch_files_ignores_wrong_ttp(tmp_path):
@@ -178,42 +189,34 @@ def test_check_watch_files_ignores_wrong_ttp(tmp_path):
     runs = tmp_path / "runs"
     runs.mkdir()
     watch_file = runs / "watch-something-20260601T000000Z_debug.jsonl"
-    rec = {
-        "signal": {
-            "event": "detection",
-            "ttp": "T1041",
-            "resource_id": RESOURCE_ID,
-        }
-    }
-    watch_file.write_text(json.dumps(rec) + "\n")
+    watch_file.write_text(json.dumps(_watch_record("T1041", 1000.0 + 5)) + "\n")
 
     engine = Engine()
-    result = engine._check_watch_files(
-        "T1548.003", RESOURCE_ID, since=0.0, runs_dir=runs
-    )
+    result = engine._check_watch_files("T1548.003", RESOURCE_ID, 1000.0, runs_dir=runs)
     assert result is None
 
 
-def test_check_watch_files_ignores_old_files(tmp_path):
-    """_check_watch_files ignores files older than since."""
+def test_check_watch_files_ignores_files_older_than_the_attack(tmp_path):
+    """A file last written before the attack holds no detection of it."""
+    import time as _time
+
     runs = tmp_path / "runs"
     runs.mkdir()
     watch_file = runs / "watch-old-20260101T000000Z_debug.jsonl"
-    rec = {
-        "signal": {
-            "event": "detection",
-            "ttp": "T1548.003",
-            "resource_id": RESOURCE_ID,
-        }
-    }
-    watch_file.write_text(json.dumps(rec) + "\n")
+    attack = _time.time() + 120  # beyond the file system clock's slack
+    watch_file.write_text(json.dumps(_watch_record("T1548.003", attack + 5)) + "\n")
 
-    import time as _time
     engine = Engine()
-    result = engine._check_watch_files(
-        "T1548.003", RESOURCE_ID, since=_time.time() + 10, runs_dir=runs
-    )
+    result = engine._check_watch_files("T1548.003", RESOURCE_ID, attack, runs_dir=runs)
     assert result is None
+
+
+def test_check_watch_files_ignores_a_detection_before_the_attack(tmp_path):
+    """Same TTP, same VM, but seen before the attack: an earlier run's (M99)."""
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    (runs / "watch-a_debug.jsonl").write_text(json.dumps(_watch_record("T1548.003", 900.0)) + "\n")
+    assert Engine._check_watch_files("T1548.003", RESOURCE_ID, 1000.0, runs_dir=runs) is None
 
 
 # ── Block watcher ─────────────────────────────────────────────────────────────

@@ -10,6 +10,7 @@ from pathlib import Path
 from rich.console import Console
 from rich.prompt import Confirm
 
+from annatar.runner.detection import detection_latency, has_timeout, read_records
 from annatar.runner.parser import ScenarioParser
 from annatar.runner.report import RunReport
 from eregion_core.inscription import check_target
@@ -18,6 +19,9 @@ from eregion_core.exercise import close_window, open_window
 from eregion_core.orodruin import arm
 
 console = Console()
+
+# A watch file last written this long before the attack is not read (_check_watch_files).
+_MTIME_SLACK_S = 60.0
 
 
 def scenario_destructive(scenario) -> bool | None:
@@ -43,6 +47,8 @@ class RunOutcome:
     ``detection`` is the honest blind measure: "detected" (Glorfindel caught it),
     "missed" (active watch, no detection in window → detection_missed emitted), or
     "unknown" (no active glorfindel watch — detection was not measured).
+    ``detection_latency_s`` is set only when detected: seconds from the attack
+    (``attack_time``) to the detection Glorfindel recorded (annatar/runner/detection.py).
     """
 
     run_id: str
@@ -296,7 +302,7 @@ class Engine:
         if scenario.detection and detection_timeout_s > 0 and not self.dry_run:
             t = threading.Thread(
                 target=self._wait_and_emit_feedback,
-                args=(run_id, emitter, scenario, detection_timeout_s, stop_event),
+                args=(run_id, emitter, scenario, detection_timeout_s, T0, stop_event),
                 daemon=False,
                 name=f"annatar-feedback-{run_id}",
             )
@@ -305,12 +311,13 @@ class Engine:
         else:
             stop_event.set()
 
-        # The detection result is recorded in the run itself, after the wait. The latency is
-        # not written (see _run_atomic_enrolled): a faithful measure is a later lot.
+        # The detection result and its latency (from T0, #157) are recorded in the run
+        # itself, after the wait.
         metrics["detection"] = self._detection_result
+        metrics["detection_latency_s"] = self._detection_latency_s
         report.metrics = metrics
         report.save()
-        return RunOutcome(run_id, self._detection_result)
+        return RunOutcome(run_id, self._detection_result, self._detection_latency_s)
 
     def _run_atomic_enrolled(self, scenario, executor, run_id: str, session,
                              resolved) -> RunOutcome:
@@ -457,7 +464,7 @@ class Engine:
         if attack_started and detection_timeout_s > 0 and not self.dry_run:
             t = threading.Thread(
                 target=self._wait_and_emit_feedback,
-                args=(run_id, emitter, scenario, detection_timeout_s, threading.Event()),
+                args=(run_id, emitter, scenario, detection_timeout_s, T0, threading.Event()),
                 daemon=False,
                 name=f"annatar-feedback-{run_id}",
             )
@@ -465,13 +472,15 @@ class Engine:
             t.join()
 
         # The detection result (detected / missed / unknown) is recorded in the run itself,
-        # after the wait — the "Fini quand" of #65. The latency is NOT written: measured from
-        # the start of the wait it was always ~0 on the atomic path (the wait begins only
-        # after cleanup); a faithful measure (detection timestamp − attack_time) is a later lot.
+        # after the wait — the "Fini quand" of #65 — with its latency (#157): measured from
+        # T0 (the command's call) to the detection's own time, not from the start of the
+        # wait (which begins only after cleanup) nor from attack_started (after the effect
+        # proof, about a minute later).
         metrics["detection"] = self._detection_result
+        metrics["detection_latency_s"] = self._detection_latency_s
         report.metrics = metrics
         report.save()
-        return RunOutcome(run_id, self._detection_result)
+        return RunOutcome(run_id, self._detection_result, self._detection_latency_s)
 
     @staticmethod
     def _atomic_recovery_hint(scenario, resolved) -> None:
@@ -561,9 +570,15 @@ class Engine:
         emitter: SignalEmitter,
         scenario: object,
         detection_timeout_s: float,
+        attack_time: float,
         stop_event: threading.Event | None = None,
     ) -> None:
         """Poll Glorfindel's debug.jsonl for the detection result.
+
+        A detection counts only if it is of the run's technique, on its resource (without
+        case), and seen at or after ``attack_time`` — the same rule on both paths (the run's
+        own file and the RulePoller's ``watch-*`` files, annatar/runner/detection.py). Its
+        latency from ``attack_time`` is kept in ``_detection_latency_s``.
 
         If Glorfindel times out (detection_timeout event), emit a
         detection_missed signal enriched with the scenario's detection_hints
@@ -603,8 +618,6 @@ class Engine:
         wait_s = detection_timeout_s + 120
         poll_interval = 5.0
         deadline = time.time() + wait_s
-        # RulePoller watch files created within this window are from this run
-        scan_since = time.time() - detection_timeout_s
 
         console.print(
             f"\n[dim]Purple team feedback: monitoring Glorfindel response "
@@ -612,33 +625,31 @@ class Engine:
         )
 
         result_event: str | None = None
+        latency: float | None = None
         while time.time() < deadline:
             # 1. Direct Annatar debug file (poll_detection path)
-            if debug_path.exists():
-                for line in debug_path.read_text().splitlines():
-                    if not line.strip():
-                        continue
-                    try:
-                        rec = json.loads(line)
-                        evt = rec.get("signal", {}).get("event", "")
-                        if evt in ("detection", "detection_timeout"):
-                            result_event = evt
-                            break
-                    except Exception:
-                        pass
-            if result_event:
+            records = read_records(debug_path)
+            latency = detection_latency(records, scenario.mitre, emitter.resource_id, attack_time)
+            if latency is not None:
+                result_event = "detection"
+                break
+            if has_timeout(records):
+                result_event = "detection_timeout"
                 break
             # 2. RulePoller watch-* files (different run_id, same TTP + resource)
-            result_event = self._check_watch_files(
-                scenario.mitre, emitter.resource_id, scan_since
-            )
-            if result_event:
+            latency = self._check_watch_files(scenario.mitre, emitter.resource_id, attack_time)
+            if latency is not None:
+                result_event = "detection"
                 break
             time.sleep(poll_interval)
 
         if result_event == "detection":
-            console.print("[green]✓ Glorfindel detected the attack — no feedback needed.[/green]")
+            console.print(
+                f"[green]✓ Glorfindel detected the attack {latency:g} s after it"
+                " — no feedback needed.[/green]"
+            )
             self._detection_result = "detected"
+            self._detection_latency_s = latency
             if stop_event is not None:
                 stop_event.set()
             return
@@ -680,42 +691,29 @@ class Engine:
     def _check_watch_files(
         ttp: str,
         resource_id: str,
-        since: float,
+        attack_time: float,
         runs_dir: Path | None = None,
-    ) -> str | None:
-        """Scan runs/watch-*_debug.jsonl for a RulePoller detection.
+    ) -> float | None:
+        """Scan runs/watch-*_debug.jsonl for a RulePoller detection of this run.
 
-        Returns 'detection' if a matching event is found, else None.
-        Catches the case where RulePoller detects before poll_detection
-        runs — the watch file has a different run_id than the Annatar run.
+        Returns the latency (seconds from ``attack_time``) of the earliest detection of
+        ``ttp`` on ``resource_id`` (compared without case) seen at or after the attack, else
+        None. Catches the case where RulePoller detects before poll_detection runs — the
+        watch file has a different run_id than the Annatar run. A file last written well
+        before the attack holds no detection of it and is not read (a slack: the file
+        system's clock is coarser than time.time(); the records' own times decide).
         """
         base = runs_dir if runs_dir is not None else Path("runs")
         try:
             candidates = [
                 f for f in base.glob("watch-*_debug.jsonl")
-                if f.stat().st_mtime >= since
+                if f.stat().st_mtime >= attack_time - _MTIME_SLACK_S
             ]
         except OSError:
             return None
-        for path in candidates:
-            try:
-                for line in path.read_text().splitlines():
-                    if not line.strip():
-                        continue
-                    try:
-                        rec = json.loads(line)
-                        sig = rec.get("signal", {})
-                        if (
-                            sig.get("event") == "detection"
-                            and sig.get("ttp") == ttp
-                            and sig.get("resource_id") == resource_id
-                        ):
-                            return "detection"
-                    except Exception:
-                        pass
-            except OSError:
-                pass
-        return None
+        found = [lat for lat in (detection_latency(read_records(path), ttp, resource_id, attack_time)
+                                 for path in candidates) if lat is not None]
+        return min(found) if found else None
 
     def _watch_blocks(
         self,

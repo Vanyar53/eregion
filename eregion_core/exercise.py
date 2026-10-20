@@ -123,9 +123,8 @@ def load_windows(directory: Path | None = None) -> list[dict]:
     return out
 
 
-def _covers(window: dict, resource_id: str, when: datetime) -> bool:
-    if resource_id.lower() not in (window.get("targets") or []):
-        return False
+def live(window: dict, when: datetime) -> bool:
+    """The window is open at ``when``, or closed but still in its grace."""
     start, expires = _parse(window.get("start")), _parse(window.get("expires"))
     if start is None or expires is None:
         return False
@@ -133,6 +132,19 @@ def _covers(window: dict, resource_id: str, when: datetime) -> bool:
     # A window closed late still lapses at its expiry.
     last = min(end, expires) + timedelta(seconds=GRACE_AFTER_S)
     return start <= when <= last
+
+
+def _covers(window: dict, resource_id: str, when: datetime) -> bool:
+    return resource_id.lower() in (window.get("targets") or []) and live(window, when)
+
+
+def covering_runs(resource_id: str, when, windows: list[dict]) -> list[str]:
+    """The run_id of every window that covers this VM at ``when`` — all of them, where
+    ``source_of`` stops at the first."""
+    at = _parse(when)
+    if not resource_id or at is None:
+        return []
+    return [w["run_id"] for w in windows if _covers(w, resource_id, at)]
 
 
 def source_of(resource_id: str, when=None, *, run_id: str = "",

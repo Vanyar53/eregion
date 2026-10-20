@@ -75,7 +75,7 @@ variable "storage_service_tag" {
 }
 
 variable "watch_principal_id" {
-  description = "Identité managée du Glorfindel hébergé (H0), lectrice du canal. Le Makefile la lit dans l'état de infra/glorfindel-host ; vide → pas de lecteur."
+  description = "Identité managée du Glorfindel hébergé (H0) : lectrice du canal des fenêtres, rédactrice du canal retour (#159). Le Makefile la lit dans l'état de infra/glorfindel-host ; vide → ni lecteur ni rédacteur."
   type        = string
   default     = ""
 }

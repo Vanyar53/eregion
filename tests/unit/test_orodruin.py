@@ -355,7 +355,15 @@ def test_the_host_acts_on_the_bench_only_and_is_no_target():
         "contract_reader": "data.azurerm_subscription.current.id",
         "channel_writer": "azurerm_storage_container.exercises.id",
         "channel_watch_reader": "azurerm_storage_container.exercises.id",
+        "watch_channel_reader": "azurerm_storage_container.watch.id",
+        "watch_channel_writer": "azurerm_storage_container.watch.id",
     }
+    # The return channel (#159): Orodruin reads it, the hosted watch writes it.
+    reader_of_watch = tf.split('resource "azurerm_role_assignment" "watch_channel_reader"')[1].split("\n}\n")[0]
+    assert '"Storage Blob Data Reader"' in reader_of_watch
+    assert "azurerm_linux_virtual_machine.host.identity[0].principal_id" in reader_of_watch
+    writer_of_watch = tf.split('resource "azurerm_role_assignment" "watch_channel_writer"')[1].split("\n}\n")[0]
+    assert "var.watch_principal_id" in writer_of_watch
     reader = tf.split('resource "azurerm_role_definition" "contract_reader"')[1].split("\n}\n")[0]
     assert set(re.findall(r'"(Microsoft\.[^"]+)"', reader)) <= {
         "Microsoft.Authorization/roleAssignments/read", "Microsoft.Authorization/roleDefinitions/read"}

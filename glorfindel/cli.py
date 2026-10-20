@@ -659,6 +659,15 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
     _atexit.register(_remove_heartbeat)
     _signalmod.signal(_signalmod.SIGTERM, _on_sigterm)
 
+    # The return channel (#159): a run launched from Orodruin learns from it that this
+    # watch is up, and what it detected on the VMs that run exercises. Unset → None.
+    _watch_channel = None
+    if not dry_run:
+        from eregion_core import watch_channel as _wc
+        _watch_channel = _wc.start()
+        if _watch_channel is not None:
+            console.print(f"[dim]Canal retour : {_watch_channel.channel}[/dim]")
+
     if _rules_file:
         try:
             from glorfindel.config import load_glorfindel_config
@@ -688,6 +697,8 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
 
             if rules:
                 def _rule_dispatch(signal_data: dict) -> None:
+                    if _watch_channel is not None:
+                        _watch_channel.note(signal_data)  # memory only, never raises
                     from annatar.signals.schema import Signal as _Signal
                     sig = _Signal(**{
                         k: signal_data.get(k, "")

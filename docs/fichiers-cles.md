@@ -24,6 +24,10 @@ eregion_core/exercise.py        → B2 : fenêtres d'exercice des injecteurs. An
                                    cible (setup compris) et la ferme en fin de run : runs/exercises/<run_id>.json
                                    (run_id, injector, kind, experiment, targets, start, end, expires ; ou
                                    EREGION_EXERCISES_DIR). Glorfindel en tire la source d'un cycle (exercise/real).
+eregion_core/exercise_channel.py → O1 : les fenêtres d'Orodruin vers la watch hébergée (conteneur exercises).
+eregion_core/watch_channel.py   → #159 : le sens retour (conteneur watch) — heartbeat.json {at, since, windows} et
+                                   detections/<run_id>/<signal_id>.json, écrits par la watch hébergée (Publisher,
+                                   thread watch-channel), lus par l'attente d'Annatar ; miss_unprovable → unknown.
 
 gothmog/                        → G0 : pannes déclarées. experiments/<id>.yaml (schéma E1, kind fault) ;
                                    engines/chaos_studio.py (ARM REST : lire l'expérience et ses cibles,

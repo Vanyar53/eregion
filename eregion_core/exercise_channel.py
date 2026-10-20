@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import re
+import threading
 import time
 import xml.etree.ElementTree as ET
 from datetime import datetime
@@ -28,6 +29,7 @@ _SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*\.json$")
 PULL_EVERY_S = 30.0
 
 _last_pull = 0.0
+_pull_lock = threading.Lock()
 _credential = None
 
 
@@ -35,7 +37,8 @@ def channel_url() -> str:
     return (os.environ.get(CHANNEL_ENV) or "").strip().rstrip("/")
 
 
-def _headers(credential) -> dict:
+def auth_headers(credential) -> dict:
+    """Storage, by managed identity — shared with the return channel (watch_channel.py)."""
     global _credential
     if credential is None:
         if _credential is None:
@@ -57,7 +60,7 @@ def publish(window: dict, *, channel: str | None = None, credential=None, put=No
     name = f"{window['run_id']}.json"
     if not _SAFE_NAME.match(name):
         raise ValueError(f"unsafe window name: {name!r}")
-    headers = {**_headers(credential), "x-ms-blob-type": "BlockBlob",
+    headers = {**auth_headers(credential), "x-ms-blob-type": "BlockBlob",
                "Content-Type": "application/json"}
     r = (put or requests.put)(f"{url}/{name}", headers=headers,
                               data=json.dumps(window, indent=2).encode(), timeout=15)
@@ -75,7 +78,7 @@ def pull(directory: Path, *, channel: str | None = None, credential=None, get=No
     if not url:
         return 0
     get = get or requests.get
-    headers = _headers(credential)
+    headers = auth_headers(credential)
     r = get(url, headers=headers, params={"restype": "container", "comp": "list"}, timeout=15)
     if not r.ok:
         raise RuntimeError(f"HTTP {r.status_code} listing the channel")
@@ -102,15 +105,18 @@ def pull(directory: Path, *, channel: str | None = None, credential=None, get=No
 
 
 def pull_if_due(directory: Path, *, now: float | None = None) -> None:
-    """``pull`` at most every PULL_EVERY_S — load_windows runs on every cycle."""
+    """``pull`` at most every PULL_EVERY_S — load_windows runs on every cycle, and on the
+    return channel's thread (eregion_core/watch_channel.py): one pull at a time."""
     global _last_pull
     if not channel_url():
         return
     now = time.monotonic() if now is None else now
-    if now - _last_pull < PULL_EVERY_S:
+    if now - _last_pull < PULL_EVERY_S or not _pull_lock.acquire(blocking=False):
         return
-    _last_pull = now
     try:
+        _last_pull = now
         pull(directory)
     except Exception as e:  # the local windows still count; the rest falls toward real
         print(f"[exercise-channel] pull failed at {datetime.now():%H:%M:%S}: {e}")
+    finally:
+        _pull_lock.release()

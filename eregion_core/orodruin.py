@@ -3,8 +3,8 @@ guardrails hold — otherwise the injector stays passive and touches nothing.
 
         guarantee         checked by (nothing is written)
         identity          its role assignments, at every scope, all inside the bench's
-                          resource group; its effective rights there cover what the
-                          injectors ask
+                          resource group (but the two channels'); its effective rights
+                          there cover what the injectors ask
         network           a connection outside the perimeter fails
         cap               the declared cap is read and compared to the ceiling
         kill              revoke the identity, then stop the VM — ``kill``
@@ -78,6 +78,17 @@ _CONTAINER_SCOPE = re.compile(
     r"^/subscriptions/[^/]+/resourcegroups/[^/]+/providers/microsoft\.storage"
     r"/storageaccounts/[^/]+/blobservices/default/containers/[^/]+$")
 
+# The return channel (eregion_core/watch_channel.py, #159): the hosted watch writes its
+# heartbeat and detections to a container the identity may READ, never write — an
+# injector never writes what the watch says. Allowed outside the bench only at that
+# container's scope, and only with a read-only role.
+WATCH_SCOPE_ENV = "EREGION_WATCH_CHANNEL_SCOPE"
+BLOB_READ_ONLY = frozenset({
+    "microsoft.storage/storageaccounts/blobservices/containers/read",
+    "microsoft.storage/storageaccounts/blobservices/generateuserdelegationkey/action",
+    "data:microsoft.storage/storageaccounts/blobservices/containers/blobs/read",
+})
+
 BENCH_RG_ENV = "EREGION_BENCH_RG"
 DEFAULT_BENCH_RG = "rg-celebrimbor"
 AUDIT_ENV = "EREGION_AUDIT_FILE"
@@ -122,12 +133,17 @@ def _inside(scope: str, bench: str) -> bool:
     return s == b or s.startswith(b + "/")
 
 
-def channel_scope(env=None) -> str:
+def channel_scope(env=None, name: str = CHANNEL_SCOPE_ENV) -> str:
     """The declared channel container, or "" — anything but a container's scope is ignored
     (a declared subscription must never become an allowed assignment)."""
     env = os.environ if env is None else env
-    scope = (env.get(CHANNEL_SCOPE_ENV) or "").strip().rstrip("/")
+    scope = (env.get(name) or "").strip().rstrip("/")
     return scope if _CONTAINER_SCOPE.match(scope.lower()) else ""
+
+
+def watch_scope(env=None) -> str:
+    """The declared return-channel container (#159), or "" — same shape check."""
+    return channel_scope(env, WATCH_SCOPE_ENV)
 
 
 def _token_oid(token: str) -> str:
@@ -149,9 +165,10 @@ def _allowed(action: str, perms: list[dict]) -> bool:
 
 def assess_identity(assignments: list[dict], role_actions: Callable[[str], list[str]],
                     perms: list[dict], bench: str, *, sees_subscription: bool,
-                    channel: str = "") -> list[dict]:
+                    channel: str = "", watch: str = "") -> list[dict]:
     """The identity guarantee from what was read: every assignment inside the bench (or a
-    pure role-assignment read), and the injectors' actions allowed on the bench.
+    pure role-assignment read, the exercise channel's container, a read-only role on the
+    return channel's), and the injectors' actions allowed on the bench.
 
     Azure lists only the assignments the caller may read (measured on the bench, 19/10:
     with read rights on the workspace alone, the listing showed that one and hid the
@@ -167,9 +184,17 @@ def assess_identity(assignments: list[dict], role_actions: Callable[[str], list[
         scope = props.get("scope") or ""
         if _inside(scope, bench):
             continue
+        actions = {x.lower() for x in role_actions(props.get("roleDefinitionId") or "")}
+        # Checked before the exercise channel: declared on the same container, the
+        # return channel still refuses a writer.
+        if watch and scope.lower().rstrip("/") == watch.lower():
+            if actions and actions <= BLOB_READ_ONLY:
+                continue
+            missing.append(_miss("identity_outside_bench",
+                                 f"role assignment at {scope} is not read-only (the watch's channel)"))
+            continue
         if channel and scope.lower().rstrip("/") == channel.lower():
             continue  # the exercise channel's own container
-        actions = {x.lower() for x in role_actions(props.get("roleDefinitionId") or "")}
         if actions and actions <= AUTHZ_READ_ONLY:
             continue
         missing.append(_miss("identity_outside_bench", f"role assignment at {scope}"))
@@ -218,9 +243,9 @@ def read_identity(*, credential=None, get=None) -> list[dict]:
         if not r.ok:
             return []  # unreadable: not proven read-only, so it counts as outside
         perms = (r.json().get("properties") or {}).get("permissions") or []
-        if any(p.get("dataActions") for p in perms):
-            return ["dataActions"]
-        return [x for p in perms for x in (p.get("actions") or [])]
+        # Data actions marked "data:": never mistaken for a role-assignment read.
+        return [x for p in perms for x in (p.get("actions") or [])] + \
+            [f"data:{x}" for p in perms for x in (p.get("dataActions") or [])]
 
     perms = pages(f"{ARM}{bench}/providers/Microsoft.Authorization/permissions",
                   {"api-version": API_VERSION})
@@ -229,7 +254,7 @@ def read_identity(*, credential=None, get=None) -> list[dict]:
     return assess_identity(
         assignments, role_actions, perms, bench,
         sees_subscription=_allowed("Microsoft.Authorization/roleAssignments/read", sub_perms),
-        channel=channel_scope())
+        channel=channel_scope(), watch=watch_scope())
 
 
 def read_network(*, probes=NETWORK_PROBES, connect=None) -> list[dict]:

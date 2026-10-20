@@ -12,6 +12,11 @@ from rich.table import Table
 console = Console()
 
 REQUIRED_FIELDS = ["name", "description", "mitre", "target", "steps"]
+DEFAULT_ENGINE = "local-script"
+# The engines Annatar can actually run today. Anything else (a typo, or a future engine
+# like stratus/chaos-studio not wired here yet) is refused at authoring and at run time —
+# never a run with zero steps followed by a bogus attack_started (review R1, point 2).
+KNOWN_ENGINES = frozenset({"local-script", "atomic"})
 
 
 @dataclass
@@ -32,6 +37,8 @@ class Scenario:
     detection: dict       # timeout, time_max, prerequisites, hints
     detection_hints: dict  # shortcut to detection["hints"] for engine convenience
     raw: dict
+    engine: str = DEFAULT_ENGINE   # local-script (today's scripts) or atomic (R1)
+    engine_ref: str | None = None  # the engine's id for this experiment (atomic test ref)
 
 
 class ScenarioParser:
@@ -51,10 +58,12 @@ class ScenarioParser:
             version=data.get("version", "1.0.0"),
             target=data["target"],
             setup=data.get("setup", []),
-            steps=data["steps"],
+            steps=data.get("steps", []),
             detection=det,
             detection_hints=det.get("hints", {}),
             raw=data,
+            engine=data.get("engine", DEFAULT_ENGINE),
+            engine_ref=data.get("engine_ref"),
         )
 
     def validate(self, path: str) -> ValidationResult:
@@ -65,7 +74,21 @@ class ScenarioParser:
         except Exception as e:
             return ValidationResult(valid=False, errors=[f"YAML parse error: {e}"])
 
-        for field_name in REQUIRED_FIELDS:
+        # A non-local-script engine (atomic, R1) runs the experiment by its engine_ref;
+        # it carries no local steps. local-script still needs its steps.
+        engine = data.get("engine", DEFAULT_ENGINE) if isinstance(data, dict) else DEFAULT_ENGINE
+        if engine not in KNOWN_ENGINES:
+            errors.append(
+                f"engine '{engine}' is not one of {sorted(KNOWN_ENGINES)} — Annatar cannot "
+                "run it (no run with zero steps and a bogus attack_started)"
+            )
+        required = list(REQUIRED_FIELDS)
+        if engine != DEFAULT_ENGINE:
+            required.remove("steps")
+            if not (isinstance(data, dict) and data.get("engine_ref")):
+                errors.append(f"engine '{engine}' requires 'engine_ref'")
+
+        for field_name in required:
             if field_name not in data:
                 errors.append(f"Missing required field: '{field_name}'")
 

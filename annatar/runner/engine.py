@@ -57,14 +57,25 @@ class Engine:
         self.skip_preflight = skip_preflight
         self.parser = ScenarioParser()
         self._detection_result = "unknown"
+        self._detection_latency_s = None
 
     def run(self, scenario_path: str, skip_confirm: bool = False):
-        scenario = self.parser.load(scenario_path)
         run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         self._detection_result = "unknown"
+        self._detection_latency_s = None
+
+        # An invalid scenario (an unknown engine among them, review R1 point 2) is a clean
+        # refusal with an outcome the campaign can read, never a raw traceback.
+        try:
+            scenario = self.parser.load(scenario_path)
+        except ValueError as e:
+            console.print(f"[red]Invalid scenario:[/red] {e}")
+            return RunOutcome(run_id, "unknown", error=f"scenario: {e}")
 
         console.rule(f"[bold cyan]Annatar — {scenario.name}[/bold cyan]")
         console.print(f"  MITRE   : {scenario.mitre}")
+        if scenario.engine != "local-script":
+            console.print(f"  Engine  : {scenario.engine} / {scenario.engine_ref}")
         console.print(f"  Target  : {scenario.target.get('type')} / {scenario.target.get('resource_group')}")
         console.print(f"  Dry-run : {self.dry_run}\n")
 
@@ -77,12 +88,45 @@ class Engine:
                 console.print("Aborted.")
                 return
 
+        # The atomic engine's pure checks run BEFORE anything is armed or opened: a bad
+        # engine_ref or a bad probe set must never arm a contract or open an exercise window
+        # (review R1 point 8). The resolved test is carried into the run.
+        resolved = None
+        if scenario.engine == "atomic":
+            from annatar.engines.atomic import AtomicError, resolve_ref
+
+            try:
+                resolved = resolve_ref(scenario.engine_ref)
+            except AtomicError as e:
+                console.print(f"[red]Atomic unresolved:[/red] {e}")
+                return RunOutcome(run_id, "unknown", error=f"atomic: {e}")
+            probe_error = self._atomic_probe_error(scenario)
+            if probe_error:
+                console.print(f"[red]Refused:[/red] {probe_error}")
+                return RunOutcome(run_id, "unknown", error=f"atomic: {probe_error}")
+
         # Orodruin (eregion_core/orodruin.py): the contract before the target is even read.
         # Passive → the run touches nothing and says why.
         verdict, session = arm(run_id, "annatar")
         if session is None:
             console.print(f"[red]Orodruin passive — nothing touched:[/red] {verdict.reasons()}")
             return RunOutcome(run_id, "unknown", error=f"passive: {verdict.reasons()}")
+
+        # The cap is a pure check too — comparing what this run needs to what the contract
+        # still allows (max_injections minus the calls already journaled). It runs right
+        # after the contract holds and before the exercise window opens.
+        if scenario.engine == "atomic":
+            probes = (scenario.raw.get("steady_state") or {}).get("probes") or []
+            needed = self._atomic_calls_needed(len(probes))
+            available = session.max_injections - session.calls
+            if available < needed:
+                reason = (
+                    f"cap of {session.max_injections} calls ({session.calls} used): this "
+                    f"atomic needs {needed} (command, cleanup, and the steady-state probes "
+                    "before, right after the command, and after cleanup)"
+                )
+                console.print(f"[red]Refused:[/red] {reason}")
+                return RunOutcome(run_id, "unknown", error=f"cap: {reason}")
 
         executor, collector = self._get_executor_collector(scenario, session)
 
@@ -122,9 +166,37 @@ class Engine:
                     experiment=f"{scenario.mitre} {scenario.name}",
                     targets=[executor.resource_id])
         try:
-            return self._run_enrolled(scenario, executor, run_id)
+            if scenario.engine == "atomic":
+                return self._run_atomic_enrolled(scenario, executor, run_id, session, resolved)
+            if scenario.engine == "local-script":
+                return self._run_enrolled(scenario, executor, run_id)
+            # Unreachable once validate did its job — the explicit table refuses the rest.
+            console.print(f"[red]Engine not runnable:[/red] {scenario.engine!r}")
+            return RunOutcome(run_id, "unknown", error=f"engine: {scenario.engine!r} not runnable")
         finally:
             close_window(run_id)
+
+    @staticmethod
+    def _atomic_calls_needed(n_probes: int) -> int:
+        """Run Command calls an atomic run needs: the command, its cleanup, and each
+        steady-state probe three times (before, right after the command as the effect
+        proof, and after cleanup)."""
+        return 2 + 3 * n_probes
+
+    @staticmethod
+    def _atomic_probe_error(scenario) -> str | None:
+        """An atomic engine must verify the initial state before and after: at least one
+        steady-state probe, each with a non-empty ``verify`` and ``expect``. The check is
+        the runner's (the schema only runs in CI); ``None`` when it holds."""
+        probes = (scenario.raw.get("steady_state") or {}).get("probes") or []
+        if not probes:
+            return ("engine 'atomic' requires at least one steady_state probe "
+                    "(verify + expect) — the initial state is verified before and after")
+        for probe in probes:
+            if not str(probe.get("verify") or "").strip() or not str(probe.get("expect") or "").strip():
+                return (f"steady_state probe {probe.get('name', '?')!r} needs a non-empty "
+                        "verify and expect")
+        return None
 
     def _run_enrolled(self, scenario, executor, run_id: str) -> RunOutcome:
         """The run once its target is enrolled and ready: setup, integrity check, steps,
@@ -233,12 +305,224 @@ class Engine:
         else:
             stop_event.set()
 
+        # The detection result is recorded in the run itself, after the wait. The latency is
+        # not written (see _run_atomic_enrolled): a faithful measure is a later lot.
+        metrics["detection"] = self._detection_result
+        report.metrics = metrics
+        report.save()
         return RunOutcome(run_id, self._detection_result)
+
+    def _run_atomic_enrolled(self, scenario, executor, run_id: str, session,
+                             resolved) -> RunOutcome:
+        """Run an Atomic Red Team test on the enrolled target (R1).
+
+        Verify the initial state, run the atomic's own command, confirm it broke the steady
+        state (the effect proof), emit ``attack_started``, run its ``cleanup_command``, then
+        verify the initial state was restored. The command runs inside a ``try``; whatever it
+        does, the ``finally`` runs the cleanup, the after-probes and writes the report (the
+        atomic's command failing is ``attack: ERROR``, never a silent half-run). ``attack_started``
+        is emitted only once the effect is observed — a command that raised, or that did
+        nothing, never makes Glorfindel propose a rule for an attack that did not happen.
+        The signals and the feedback wait are otherwise unchanged from the local-script path.
+        """
+        probes = (scenario.raw.get("steady_state") or {}).get("probes") or []
+        emitter = SignalEmitter(
+            run_id=run_id,
+            scenario_name=scenario.name,
+            scenario_mitre=scenario.mitre,
+            target=scenario.target,
+            resource_id=executor.resource_id,
+        )
+        checks = {}
+        metrics = {
+            "engine": "atomic",
+            "engine_ref": scenario.engine_ref,
+            "atomic_guid": resolved.guid,
+        }
+
+        # Initial state before the attack — a dirty start is refused (never attack over residue).
+        console.print("[cyan]->[/cyan] Initial-state check (before)...")
+        before = self._check_probes(executor, probes, resolved, "before")
+        if not all(ok for _, ok, _ in before):
+            console.print(
+                "[red]Initial state not clean before the atomic — nothing run.[/red]"
+            )
+            return RunOutcome(
+                run_id, "unknown", error="initial state not clean before the atomic"
+            )
+        checks["initial_state_before"] = "PASS"
+
+        T0 = time.time()
+        detection_timeout_s = 0.0
+        attack_started = False
+        attack_error = None
+        restored = None
+        console.print(f"[cyan]->[/cyan] {resolved.name} ({resolved.guid})")
+        try:
+            executor.run_command(resolved.command, label=f"atomic {resolved.guid}")
+            checks["attack"] = "PASS"
+
+            # Effect proof — the steady state must be broken right after the command, or the
+            # atomic did nothing (missing binary, silent error, exit != 0 — Run Command does
+            # not raise on that). No effect → no attack_started and no detection_missed: never
+            # a rule proposed for an attack that did not happen (review R1 point 8).
+            effect = self._check_probes(executor, probes, resolved, "effect")
+            if not any(not ok for _, ok, _ in effect):
+                checks["attack"] = "FAIL"
+                attack_error = (
+                    "atomic ran but left the steady state intact — no observable effect "
+                    "(missing binary or a silent failure); no attack_started emitted"
+                )
+                console.print(f"[red]{attack_error}[/red]")
+            elif scenario.detection:
+                # attack_started — unchanged: Glorfindel looks its rule up by TTP and owns detection.
+                detection_timeout_s = self._parse_duration(
+                    scenario.detection.get("timeout", "300s")
+                )
+                emitter.emit(
+                    event="attack_started",
+                    raw_signal={
+                        "attack_time": T0,
+                        "detection_timeout_s": detection_timeout_s,
+                        "detection_max_s": self._parse_duration(
+                            scenario.detection.get("time_max", "9999s")
+                        ),
+                    },
+                )
+                attack_started = True
+                console.print(
+                    "[cyan]->[/cyan] Signal 'attack_started' emitted"
+                    " — Glorfindel will detect via detection_rules.yaml."
+                )
+        except Exception as e:  # the atomic's own command failed after all retries
+            checks["attack"] = "ERROR"
+            console.print(f"[red]Atomic command failed:[/red] {type(e).__name__}: {e}")
+            raise  # re-raised after the finally cleans up — the campaign marks it an error
+        finally:
+            # Cleanup and the return check always run, whatever the command did (even when it
+            # raised) — each guarded, so a cleanup or probe that raises still leaves a saved
+            # report. The command's own exception, if any, is re-raised once this has run.
+            try:
+                console.print("[cyan]->[/cyan] Cleanup (atomic cleanup_command)...")
+                executor.run_command(
+                    resolved.cleanup_command, label=f"atomic {resolved.guid} cleanup"
+                )
+                checks["cleanup"] = "PASS"
+            except Exception as e:
+                checks["cleanup"] = "ERROR"
+                console.print(f"[red]Cleanup failed:[/red] {e}")
+            try:
+                console.print("[cyan]->[/cyan] Initial-state check (after cleanup)...")
+                after = self._check_probes(executor, probes, resolved, "after")
+                restored = all(ok for _, ok, _ in after)
+                checks["initial_state_after"] = "PASS" if restored else "FAIL"
+                metrics["initial_state_restored"] = restored
+            except Exception as e:
+                checks["initial_state_after"] = "ERROR"
+                console.print(f"[red]After-probe failed:[/red] {e}")
+
+            # The target may be dirty (cleanup failed, or the return left unverified) — show
+            # the operator the resolved cleanup to run by hand.
+            if checks.get("cleanup") != "PASS" or restored is not True:
+                self._atomic_recovery_hint(scenario, resolved)
+
+            overall = "PASS" if checks and all("PASS" in v for v in checks.values()) else "FAIL"
+            report = RunReport(
+                scenario=scenario.name,
+                run_id=run_id,
+                mitre=scenario.mitre,
+                result=overall,
+                metrics=metrics,
+                thresholds={},
+                checks=checks,
+            )
+            path = report.save()
+            report.render()
+            console.print(f"\n[dim]Report saved: {path}[/dim]")
+
+        # Reached only when the command did not raise. A command with no observable effect,
+        # or a return not restored, reaches the caller (the campaign) as an error — never
+        # marked 'executed' then chained over a dirty VM (review R1 points 4 and 8).
+        if attack_error:  # the command ran but left the steady state intact
+            return RunOutcome(run_id, "unknown", error=attack_error)
+        # restored is True only when the after-probe ran and the steady state held again.
+        # False (it did not) or None (the after-probe itself could not run) both mean the
+        # return is not verified — the caller must see it, never chain over an unknown VM.
+        if restored is not True:
+            error = ("initial state not restored" if restored is False
+                     else "initial state not verified after cleanup")
+            return RunOutcome(run_id, "unknown", error=error)
+
+        # Purple-team feedback — only when the attack actually started (short-circuits with no watch).
+        if attack_started and detection_timeout_s > 0 and not self.dry_run:
+            t = threading.Thread(
+                target=self._wait_and_emit_feedback,
+                args=(run_id, emitter, scenario, detection_timeout_s, threading.Event()),
+                daemon=False,
+                name=f"annatar-feedback-{run_id}",
+            )
+            t.start()
+            t.join()
+
+        # The detection result (detected / missed / unknown) is recorded in the run itself,
+        # after the wait — the "Fini quand" of #65. The latency is NOT written: measured from
+        # the start of the wait it was always ~0 on the atomic path (the wait begins only
+        # after cleanup); a faithful measure (detection timestamp − attack_time) is a later lot.
+        metrics["detection"] = self._detection_result
+        report.metrics = metrics
+        report.save()
+        return RunOutcome(run_id, self._detection_result)
+
+    @staticmethod
+    def _atomic_recovery_hint(scenario, resolved) -> None:
+        """The target may be dirty — show the operator the atomic's own cleanup, resolved,
+        to run by hand (``annatar clean`` runs T1486's disk setup, not an atomic's cleanup)."""
+        import shlex
+
+        rg = scenario.target.get("resource_group", "<rg>")
+        vm = scenario.target.get("vm_name", "<vm>")
+        console.print(
+            "[yellow]The target may be dirty — run the atomic's cleanup by hand:[/yellow]\n"
+            f"  [bold]az vm run-command invoke -g {rg} -n {vm} --command-id RunShellScript "
+            f"--scripts {shlex.quote(resolved.cleanup_command)}[/bold]"
+        )
+
+    def _check_probes(self, executor, probes, resolved, phase: str) -> list[tuple]:
+        """Run each steady-state probe's ``verify`` on the VM; PASS if ``expect`` is in the
+        output. ``#{var}`` in verify/expect is filled with the atomic's resolved arguments."""
+        results = []
+        for probe in probes:
+            name = probe.get("name", "probe")
+            verify = resolved.substitute(probe.get("verify", ""))
+            expect = resolved.substitute(str(probe.get("expect", "")))
+            output = executor.run_command(verify, label=f"probe {name} ({phase})")
+            ok = expect in output if expect else True
+            mark = "[green]✓[/green]" if ok else "[red]✗[/red]"
+            console.print(f"  {mark} {name}: expect '{expect}' in output")
+            results.append((name, ok, output))
+        return results
 
     def _dry_run_display(self, scenario):
         console.print("[yellow]DRY RUN — no actions will be executed[/yellow]\n")
-        for i, step in enumerate(scenario.steps, 1):
-            console.print(f"  {i}. [{step.get('action')}] {step.get('name', '')}")
+        if scenario.engine == "atomic":
+            from annatar.engines.atomic import AtomicError, resolve_ref
+
+            try:
+                resolved = resolve_ref(scenario.engine_ref)
+            except AtomicError as e:
+                console.print(f"  [red]atomic unresolved:[/red] {e}")
+                return
+            console.print(f"  Atomic  : {resolved.name} ({resolved.guid})")
+            console.print(f"  command : {resolved.command.strip()}")
+            console.print(f"  cleanup : {resolved.cleanup_command.strip()}")
+            for p in (scenario.raw.get("steady_state") or {}).get("probes") or []:
+                console.print(
+                    f"  probe   : {p.get('name')} — "
+                    f"{resolved.substitute(p.get('verify', ''))} (expect {p.get('expect')})"
+                )
+        else:
+            for i, step in enumerate(scenario.steps, 1):
+                console.print(f"  {i}. [{step.get('action')}] {step.get('name', '')}")
         if scenario.detection:
             timeout = scenario.detection.get("timeout", "?")
             console.print(f"  -> Detection timeout: {timeout} — Glorfindel uses detection_rules.yaml")

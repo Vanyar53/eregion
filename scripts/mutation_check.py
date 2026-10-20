@@ -37,6 +37,8 @@ ENG = "annatar/runner/engine.py"
 EXE = "annatar/executors/azure_vm.py"
 ATO = "annatar/engines/atomic.py"
 SYN = "annatar/campaign/synthesizer.py"
+CRUN = "annatar/campaign/runner.py"
+MAKE = "Makefile"
 CATSCHEMA = "schemas/technique_catalog.schema.json"
 WCH = "eregion_core/watch_channel.py"
 GOTH = "gothmog/runner/engine.py"
@@ -413,7 +415,7 @@ MUTANTS = [
     # #165 — a campaign plays an atomic from the catalog. The synthesizer writes an E1
     # experiment for an atomic entry (SYN); the catalog schema requires its steady_state (CATSCHEMA).
     ("M116", "the synthesizer falls back to run_script_on_vm for an atomic entry (#165)", SYN,
-     '    if engine == "atomic":\n', "    if False:\n"),
+     '    engine = entry.get("engine") or "local-script"\n', '    engine = "local-script"\n'),
     ("M117", "the synthesizer writes an atomic without its steady-state probes (#165)", SYN,
      '        "steady_state": {"probes": [dict(p) for p in probes]},\n', ""),
     ("M118", "the synthesizer accepts an engine_ref the adapter cannot resolve (#165)", SYN,
@@ -422,6 +424,25 @@ MUTANTS = [
      "    pass\n"),
     ("M119", "the catalog schema accepts an implemented atomic without steady_state (#165)", CATSCHEMA,
      '                  "const": "atomic"\n', '                  "const": "atomic-never"\n'),
+    # #165, review — the plan runs in the Orodruin image (no jsonschema, no schemas/); the
+    # destructive guard is shared by every engine; a failed reset is not "reset"; the Make
+    # target does not echo the subscription.
+    ("M120", "the synthesizer validates the atomic with jsonschema at plan time (#165)", SYN,
+     "        errors = _runtime_atomic_errors(path)\n",
+     "        from eregion_core.experiment import validate_experiment_file\n"
+     "        errors = validate_experiment_file(path)\n"),
+    ("M121", "a raising validation leaves a half-planned experiment behind (#165)", SYN,
+     "        path.unlink(missing_ok=True)\n"
+     '        return SynthesisResult(False, f"{ttp}: produced experiment could not be validated — {e}")\n',
+     '        return SynthesisResult(False, f"{ttp}: produced experiment could not be validated — {e}")\n'),
+    ("M122", "a destructive atomic skips the allow_destructive/safe_target guard (#165)", SYN,
+     "    if destructive:\n        if not allow_destructive:\n",
+     '    if destructive and engine != "atomic":\n        if not allow_destructive:\n'),
+    ("M123", "a reset that exits non-zero is recorded as reset (#165)", CRUN,
+     "    if proc.returncode != 0:\n", "    if False:\n"),
+    ("M124", "orodruin-campaign-plan echoes its target, subscription included (#165)", MAKE,
+     '\t@echo "annatar campaign plan (Orodruin, max $(CAMPAIGN_MAX))" && $(ORO_SSH) ',
+     "\t$(ORO_SSH) "),
 ]
 
 # Mutants measured by other tests than the invariants (their lot's own).
@@ -453,7 +474,9 @@ TESTS.update({mid: "tests/unit/test_watch_channel.py"
 # #165 — the atomic campaign: the synthesizer in test_campaign_synthesizer.py, the catalog
 # schema requirement in test_experiment_schema.py.
 TESTS.update({mid: "tests/unit/test_campaign_synthesizer.py"
-              for mid in ("M116", "M117", "M118")})
+              for mid in ("M116", "M117", "M118", "M120", "M121", "M122")})
+TESTS["M123"] = "tests/unit/test_campaign_runner.py"
+TESTS["M124"] = "tests/unit/test_makefile_campaign.py"
 TESTS["M119"] = "tests/unit/test_experiment_schema.py"
 
 

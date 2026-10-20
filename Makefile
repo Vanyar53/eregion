@@ -484,7 +484,7 @@ glorfindel-host-push:
 	@echo "  host.env et glorfindel-config.yaml (human_only) poussés sur $(HOST_IP)"
 
 glorfindel-host-start:
-	$(HOST_SSH) 'test -f .eregion-host-ready && cd eregion && git pull -q --ff-only && make -s build-glorfindel && docker compose --profile bot up -d watch war-room bot'
+	$(HOST_SSH) 'test -f .eregion-host-ready && cd eregion && git pull -q --ff-only && make -s build-glorfindel && docker compose --profile bot up -d watch war-room bot && docker image prune -f >/dev/null'
 	@echo ""
 	@echo "  ⚠ Arrête le Glorfindel local (make glorfindel-stop) : deux watch sur le même banc = cartes en double ;"
 	@echo "    et aucun autre bot avec le même DISCORD_BOT_TOKEN."

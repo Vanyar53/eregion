@@ -18,6 +18,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 from datetime import datetime, timezone
+from importlib.util import find_spec
 from pathlib import Path
 from typing import Callable
 
@@ -37,14 +38,19 @@ def _default_reset(resource_id: str) -> str:
     """Reset NSG state (isolation + IP blocks) between scenarios.
 
     Returns what happened, recorded in the manifest: ``"reset"``, ``"skipped: …"`` or
-    ``"failed: exit <rc>"`` (a non-zero exit did not reset). ``glorfindel reset`` is absent from
-    the Orodruin image (and outside the ``injector`` role), so when the binary is not on
-    PATH the reset is SKIPPED — quietly (no loud failure) and without writing anything;
-    the manifest says so. On H0 nothing isolates (human_only, read-only), so there is
-    nothing to reset between scenarios anyway.
+    ``"failed: exit <rc>"`` (a non-zero exit did not reset). ``glorfindel reset`` is not in
+    the Orodruin image (and outside the ``injector`` role). There, the ``glorfindel`` launcher
+    IS on PATH — ``pip install -e ".[annatar]"`` installs every ``[project.scripts]`` entry —
+    but the ``glorfindel`` package is not copied (annatar/Dockerfile), so the launcher would
+    exit 1 on ``ModuleNotFoundError``. The guard therefore tests the PACKAGE first
+    (``find_spec``), then the launcher: when either is missing, the reset is SKIPPED — quietly
+    (no loud failure), without shelling out or writing anything — and the manifest says so.
+    On H0 nothing isolates (human_only, read-only), so there is nothing to reset anyway.
     """
+    if find_spec("glorfindel") is None:
+        return "skipped: glorfindel absent (package not installed — reset is not in the Orodruin image)"
     if shutil.which("glorfindel") is None:
-        return "skipped: glorfindel absent (reset is not in the Orodruin image)"
+        return "skipped: glorfindel absent (no launcher on PATH)"
     proc = subprocess.run(
         ["glorfindel", "reset", resource_id, "--yes"],
         check=False,

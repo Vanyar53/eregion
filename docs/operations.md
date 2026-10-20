@@ -125,9 +125,12 @@ make orodruin-campaign-plan CAMPAIGN_TARGET=<resource_id de la VM inscrite> [CAM
 make orodruin-campaign-run CAMPAIGN=<id>     # joue la campagne (watch H0 en human_only — rien ne s'isole)
 #   Chaque run passe par le moteur de son expérience (atomic ou script) ; sa détection (detected/
 #   missed/unknown) et sa latence (#157) arrivent dans le manifeste, comme pour un run seul. Le reset
-#   entre scénarios (glorfindel reset) est absent de l'image d'Orodruin : il est sauté proprement (ni
-#   échec, ni écriture) et le manifeste le note (scenarios[].reset : reset, skipped: …, ou
-#   failed: exit <code> si glorfindel reset sort en erreur).
+#   entre scénarios (glorfindel reset) n'est pas dans l'image d'Orodruin : le lanceur glorfindel y
+#   est (pip install -e ".[annatar]" installe tous les [project.scripts]) mais pas le paquet, qui
+#   n'est pas copié. Le runner teste donc le paquet (find_spec), puis le lanceur : s'il manque l'un
+#   ou l'autre, le reset est sauté proprement (ni appel, ni échec, ni écriture) et le manifeste le
+#   note (scenarios[].reset : reset, skipped: …, ou failed: exit <code> si un glorfindel installé
+#   sort en erreur).
 #   Le rapport ne s'écrit PAS sur Orodruin aujourd'hui, même avec la clé du modèle d'analyse dans
 #   orodruin.env : il lui faut chromadb et litellm, absents de l'image (extra [annatar]). La campagne
 #   le dit à la fin (« Campaign report not written (ModuleNotFoundError…) ») et n'échoue pas. Pour

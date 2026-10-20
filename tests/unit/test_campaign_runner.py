@@ -213,17 +213,33 @@ def test_reset_status_recorded_in_manifest(tmp_path):
     assert "skipped" in CampaignManifest.load(cdir).scenarios[0].reset
 
 
-def test_default_reset_skips_quietly_when_glorfindel_absent(tmp_path, monkeypatch):
-    # glorfindel is not in the Orodruin image (and outside the injector role): _default_reset
-    # must skip — no subprocess, no raise, no write — and say so (recorded in the manifest).
+def _no_shell_out(*a, **k):  # the reset must NOT shell out when glorfindel cannot run
+    raise AssertionError("subprocess.run must not be called when glorfindel is absent")
+
+
+def test_default_reset_skips_quietly_in_the_orodruin_image(tmp_path, monkeypatch):
+    # The Orodruin image as it is (annatar/Dockerfile, `pip install -e ".[annatar]"`): the
+    # `glorfindel` launcher IS on PATH (every [project.scripts] entry is installed) but the
+    # glorfindel package is not copied, so `glorfindel reset` would exit 1 on
+    # ModuleNotFoundError. _default_reset must test the package and skip — no subprocess, no
+    # raise, no write — and say so (recorded in the manifest), never "failed: exit 1" (M125).
     import annatar.campaign.runner as runner_mod
 
+    monkeypatch.setattr(runner_mod, "find_spec", lambda name: None)
+    monkeypatch.setattr(runner_mod.shutil, "which", lambda _name: "/usr/local/bin/glorfindel")
+    monkeypatch.setattr(runner_mod.subprocess, "run", _no_shell_out)
+    status = runner_mod._default_reset("/subscriptions/s/…/vm")
+    assert status.startswith("skipped")
+    assert "glorfindel absent" in status
+
+
+def test_default_reset_skips_quietly_without_launcher(tmp_path, monkeypatch):
+    # Package importable but no launcher on PATH: skipped as well, without shelling out.
+    import annatar.campaign.runner as runner_mod
+
+    monkeypatch.setattr(runner_mod, "find_spec", lambda name: object())
     monkeypatch.setattr(runner_mod.shutil, "which", lambda _name: None)
-
-    def _fail(*a, **k):  # the reset must NOT shell out when glorfindel is absent
-        raise AssertionError("subprocess.run must not be called when glorfindel is absent")
-
-    monkeypatch.setattr(runner_mod.subprocess, "run", _fail)
+    monkeypatch.setattr(runner_mod.subprocess, "run", _no_shell_out)
     status = runner_mod._default_reset("/subscriptions/s/…/vm")
     assert status.startswith("skipped")
     assert "glorfindel absent" in status
@@ -232,6 +248,7 @@ def test_default_reset_skips_quietly_when_glorfindel_absent(tmp_path, monkeypatc
 def test_default_reset_runs_when_glorfindel_present(tmp_path, monkeypatch):
     import annatar.campaign.runner as runner_mod
 
+    monkeypatch.setattr(runner_mod, "find_spec", lambda name: object())
     monkeypatch.setattr(runner_mod.shutil, "which", lambda _name: "/usr/bin/glorfindel")
     calls = []
 
@@ -250,6 +267,7 @@ def test_default_reset_failing_exit_is_recorded_as_failed(tmp_path, monkeypatch)
     # never "reset" (review #165 point 5, M123).
     import annatar.campaign.runner as runner_mod
 
+    monkeypatch.setattr(runner_mod, "find_spec", lambda name: object())
     monkeypatch.setattr(runner_mod.shutil, "which", lambda _name: "/usr/bin/glorfindel")
     monkeypatch.setattr(
         runner_mod.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a[0], 2)

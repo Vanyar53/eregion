@@ -49,6 +49,8 @@ DOCS_TESTS = "tests/unit/test_docs_budget.py"
 DETECTION_TESTS = "tests/unit/test_annatar_detection.py tests/unit/test_engine.py"
 # A mutant whose "old" text is RENAME renames its file to "new" instead of editing it.
 RENAME = object()
+# A mutant whose "old" and "new" are tuples makes several edits in its file, pair by pair
+# (old[i] -> new[i]), each old text matching exactly once — for a bug that needs two places.
 
 # (id, bug class, file, text in the code today, text that re-introduces the bug[, why
 # the invariants can't see it])
@@ -416,8 +418,14 @@ MUTANTS = [
     # experiment for an atomic entry (SYN); the catalog schema requires its steady_state (CATSCHEMA).
     ("M116", "the synthesizer falls back to run_script_on_vm for an atomic entry (#165)", SYN,
      '    engine = entry.get("engine") or "local-script"\n', '    engine = "local-script"\n'),
-    ("M117", "the synthesizer writes an atomic without its steady-state probes (#165)", SYN,
-     '        "steady_state": {"probes": [dict(p) for p in probes]},\n', ""),
+    # M117 also neutralizes the post-write check (_runtime_atomic_errors), which would refuse
+    # and delete the file on its own: the mutant measures the TESTS reading the written
+    # experiment, not the synthesizer's self-check (review #165, second correction).
+    ("M117", "the synthesizer writes an atomic without its steady-state probes, its post-write "
+     "check neutralized (#165)", SYN,
+     ('        "steady_state": {"probes": [dict(p) for p in probes]},\n',
+      "        errors = _runtime_atomic_errors(path)\n"),
+     ("", "        errors = []\n")),
     ("M118", "the synthesizer accepts an engine_ref the adapter cannot resolve (#165)", SYN,
      '    try:\n        resolve_ref(engine_ref)\n    except AtomicError as e:\n'
      '        return SynthesisResult(False, f"{ttp}: engine_ref unresolved — {e}")\n',
@@ -443,6 +451,10 @@ MUTANTS = [
     ("M124", "orodruin-campaign-plan echoes its target, subscription included (#165)", MAKE,
      '\t@echo "annatar campaign plan (Orodruin, max $(CAMPAIGN_MAX))" && $(ORO_SSH) ',
      "\t$(ORO_SSH) "),
+    # #165, second review — in the Orodruin image the glorfindel launcher is on PATH but the
+    # package is not: the guard tests the package, not the launcher alone.
+    ("M125", "the reset guard trusts the glorfindel launcher alone, not its package (#165)", CRUN,
+     '    if find_spec("glorfindel") is None:\n', "    if False:\n"),
 ]
 
 # Mutants measured by other tests than the invariants (their lot's own).
@@ -475,7 +487,7 @@ TESTS.update({mid: "tests/unit/test_watch_channel.py"
 # schema requirement in test_experiment_schema.py.
 TESTS.update({mid: "tests/unit/test_campaign_synthesizer.py"
               for mid in ("M116", "M117", "M118", "M120", "M121", "M122")})
-TESTS["M123"] = "tests/unit/test_campaign_runner.py"
+TESTS.update({mid: "tests/unit/test_campaign_runner.py" for mid in ("M123", "M125")})
 TESTS["M124"] = "tests/unit/test_makefile_campaign.py"
 TESTS["M119"] = "tests/unit/test_experiment_schema.py"
 
@@ -596,9 +608,12 @@ def main() -> int:
                 target.rename(copy / new)
             else:
                 text = target.read_text()
-                if text.count(old) != 1:
-                    return mid, title, "STALE", f"{text.count(old)} matches"
-                target.write_text(text.replace(old, new))
+                pairs = zip(old, new) if isinstance(old, tuple) else [(old, new)]
+                for o, n in pairs:
+                    if text.count(o) != 1:
+                        return mid, title, "STALE", f"{text.count(o)} matches"
+                    text = text.replace(o, n)
+                target.write_text(text)
             started = time.monotonic()
             target = TESTS.get(mid, INVARIANTS)
             caught = sum(_run(copy, args.examples, target=target) for _ in range(args.rounds))

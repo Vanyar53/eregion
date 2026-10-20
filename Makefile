@@ -103,7 +103,8 @@ DOCKER_GLORFINDEL := docker run --rm $(GLORFINDEL_AZURE_ENV) $(GLORFINDEL_VOLS) 
 	glorfindel-host-model celebrimbor-workload \
 	orodruin-init orodruin-plan orodruin-up orodruin-lock orodruin-push orodruin-check \
 	orodruin-stop orodruin-start orodruin-kill orodruin-down orodruin-ssh \
-	gothmog-preflight gothmog-run
+	gothmog-preflight gothmog-run \
+	orodruin-campaign-plan orodruin-campaign-run
 
 # ── Help ──────────────────────────────────────────────────────────────────
 
@@ -187,6 +188,10 @@ help:
 	@echo "Gothmog (G0) — une panne déclarée, depuis Orodruin (gothmog/README.md) :"
 	@echo "  make gothmog-preflight [FAULT=vm-shutdown]   Contrat, cibles, état normal — rien d'écrit"
 	@echo "  make gothmog-run [FAULT=vm-shutdown]         La panne, son retour vérifié (~15 min)"
+	@echo ""
+	@echo "Campagne (R1 + IA0) — kill-chain + rapport, depuis Orodruin :"
+	@echo "  make orodruin-campaign-plan CAMPAIGN_TARGET=<rid> [CAMPAIGN_MAX=5]  Planifie (rend un id)"
+	@echo "  make orodruin-campaign-run  CAMPAIGN=<id>    Joue la campagne (watch H0 en human_only)"
 	@echo ""
 	@echo "Variables"
 	@echo "  SCENARIO    Path to scenario YAML (default: $(SCENARIO))"
@@ -610,6 +615,25 @@ gothmog-preflight:
 
 gothmog-run:
 	ssh $(SSH_OPTS) -o ServerAliveInterval=60 $(ORO_USER)@$(ORO_IP) '$(ORO_RUN) gothmog run $(FAULT) --yes'
+
+# ── Campagne (R1 + IA0) — planifier puis lancer depuis Orodruin ───────────────
+# Même image, même identité qu'Annatar/Gothmog sur Orodruin. La campagne joue l'atomic
+# (T1136.001) avec d'autres techniques du catalogue ; le manifeste et le rapport se posent
+# dans ~/runs (bind-monté). Deux temps : `campaign plan` rend un id, `campaign run <id>` le
+# joue (la watch sur H0 est en human_only — rien ne s'isole). ServerAliveInterval : un run de
+# campagne dure longtemps (plusieurs techniques + fenêtres de détection), plus que le délai
+# d'inactivité d'une IP publique.
+#   make orodruin-campaign-plan CAMPAIGN_TARGET=<resource_id VM inscrite> [CAMPAIGN_MAX=5]
+#   make orodruin-campaign-run  CAMPAIGN=<id rendu par le plan>
+CAMPAIGN_MAX ?= 5
+
+orodruin-campaign-plan:
+	@test -n "$(CAMPAIGN_TARGET)" || { echo "CAMPAIGN_TARGET=<resource_id de la VM inscrite> requis"; exit 1; }
+	$(ORO_SSH) '$(ORO_RUN) annatar campaign plan --target "$(CAMPAIGN_TARGET)" --max-scenarios $(CAMPAIGN_MAX)'
+
+orodruin-campaign-run:
+	@test -n "$(CAMPAIGN)" || { echo "CAMPAIGN=<id> requis (rendu par orodruin-campaign-plan)"; exit 1; }
+	ssh $(SSH_OPTS) -o ServerAliveInterval=60 $(ORO_USER)@$(ORO_IP) '$(ORO_RUN) annatar campaign run $(CAMPAIGN) --yes'
 
 # ── Dev ───────────────────────────────────────────────────────────────────
 

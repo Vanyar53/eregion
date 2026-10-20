@@ -13,6 +13,10 @@ console = Console()
 
 REQUIRED_FIELDS = ["name", "description", "mitre", "target", "steps"]
 DEFAULT_ENGINE = "local-script"
+# The engines Annatar can actually run today. Anything else (a typo, or a future engine
+# like stratus/chaos-studio not wired here yet) is refused at authoring and at run time —
+# never a run with zero steps followed by a bogus attack_started (review R1, point 2).
+KNOWN_ENGINES = frozenset({"local-script", "atomic"})
 
 
 @dataclass
@@ -73,6 +77,11 @@ class ScenarioParser:
         # A non-local-script engine (atomic, R1) runs the experiment by its engine_ref;
         # it carries no local steps. local-script still needs its steps.
         engine = data.get("engine", DEFAULT_ENGINE) if isinstance(data, dict) else DEFAULT_ENGINE
+        if engine not in KNOWN_ENGINES:
+            errors.append(
+                f"engine '{engine}' is not one of {sorted(KNOWN_ENGINES)} — Annatar cannot "
+                "run it (no run with zero steps and a bogus attack_started)"
+            )
         required = list(REQUIRED_FIELDS)
         if engine != DEFAULT_ENGINE:
             required.remove("steps")

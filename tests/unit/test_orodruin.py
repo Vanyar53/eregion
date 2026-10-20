@@ -271,6 +271,43 @@ def test_the_cap_refuses_the_call_past_it(tmp_path):
     assert [r["outcome"] for r in _lines(audit)] == ["about_to_call", "refused_cap"]
 
 
+# ── run_command (R1 atomic adapter): the same gate as run_script (X1, X6) ──────────
+
+def test_run_command_journals_before_calling(tmp_path):
+    """R1's run_command goes through _before_call too — journalled before Azure (X1)."""
+    audit = tmp_path / "audit.jsonl"
+    ex, _ = _executor(orodruin.Session("r1", "annatar", 5, path=audit), tmp_path)
+    seen = []
+    ex._compute.virtual_machines.begin_run_command.side_effect = (
+        lambda *a: seen.append(_lines(audit)) or MagicMock())
+    ex.run_command("id", label="atomic g1")
+    assert seen and len(seen[0]) == 1
+    rec = seen[0][0]
+    assert rec["action"] == "run_command" and rec["outcome"] == "about_to_call"
+    assert rec["detail"] == "atomic g1"
+    assert rec["target"].endswith("/virtualMachines/vm-celebrimbor-gondolin")
+
+
+def test_run_command_journals_before_starting_a_stopped_vm(tmp_path):
+    """The journal precedes even the start of a stopped VM on the run_command path (X6)."""
+    audit = tmp_path / "audit.jsonl"
+    ex, _ = _executor(orodruin.Session("r1", "annatar", 5, path=audit), tmp_path)
+    ex._compute.virtual_machines.get.return_value.instance_view.statuses = []
+    seen = []
+    ex._compute.virtual_machines.begin_start.side_effect = (
+        lambda *a: seen.append(_lines(audit)) or MagicMock())
+    ex.run_command("id")
+    assert seen and len(seen[0]) == 1
+
+
+def test_run_command_is_passive_without_a_session(tmp_path):
+    ex, _ = _executor(None, tmp_path)
+    with pytest.raises(orodruin.Passive):
+        ex.run_command("id")
+    ex._compute.virtual_machines.begin_run_command.assert_not_called()
+    ex._compute.virtual_machines.begin_start.assert_not_called()
+
+
 # ── M66: the kill revokes, then stops ──────────────────────────────────────────
 
 def test_kill_revokes_before_it_stops():

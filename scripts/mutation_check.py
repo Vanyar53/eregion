@@ -34,6 +34,8 @@ R = "glorfindel/reassert.py"
 C = "glorfindel/config.py"
 INS = "eregion_core/inscription.py"
 ENG = "annatar/runner/engine.py"
+EXE = "annatar/executors/azure_vm.py"
+ATO = "annatar/engines/atomic.py"
 GOTH = "gothmog/runner/engine.py"
 INVARIANTS = "tests/unit/test_invariants.py"
 INSCRIPTION_TESTS = "tests/unit/test_inscription.py tests/unit/test_engine.py"
@@ -234,8 +236,8 @@ MUTANTS = [
     ("M60", "an exercise card absorbs a real detection (B2)", "glorfindel/escalations.py",
      "                and (e.get(\"source\") or \"real\") == (source or \"real\")\n", ""),
     ("M61", "an Annatar run never closes its window (B2)", "annatar/runner/engine.py",
-     "        try:\n            if scenario.engine == \"atomic\":\n                return self._run_atomic_enrolled(scenario, executor, run_id, session)\n            return self._run_enrolled(scenario, executor, run_id)\n        finally:\n            close_window(run_id)\n",
-     "        if scenario.engine == \"atomic\":\n            return self._run_atomic_enrolled(scenario, executor, run_id, session)\n        return self._run_enrolled(scenario, executor, run_id)\n"),
+     "        try:\n            if scenario.engine == \"atomic\":\n                return self._run_atomic_enrolled(scenario, executor, run_id, session, resolved)\n            if scenario.engine == \"local-script\":\n                return self._run_enrolled(scenario, executor, run_id)\n            # Unreachable once validate did its job — the explicit table refuses the rest.\n            console.print(f\"[red]Engine not runnable:[/red] {scenario.engine!r}\")\n            return RunOutcome(run_id, \"unknown\", error=f\"engine: {scenario.engine!r} not runnable\")\n        finally:\n            close_window(run_id)\n",
+     "        if scenario.engine == \"atomic\":\n            return self._run_atomic_enrolled(scenario, executor, run_id, session, resolved)\n        if scenario.engine == \"local-script\":\n            return self._run_enrolled(scenario, executor, run_id)\n        console.print(f\"[red]Engine not runnable:[/red] {scenario.engine!r}\")\n        return RunOutcome(run_id, \"unknown\", error=f\"engine: {scenario.engine!r} not runnable\")\n"),
     # #105: the boot batch's sub-second gaps set the step again (blind 10 min after a boot).
     ("M62", "the ransomware step reads the boot batch (#105)", "glorfindel/rules/azure/detection_rules.yaml",
      "summarize Step = minif(Gap, Gap >= 1s) by Vm, InstanceName", "summarize Step = min(Gap) by Vm, InstanceName"),
@@ -288,13 +290,67 @@ MUTANTS = [
      '            "initial state (we never leave the target changed)"\n        )\n',
      ""),
     ("M78", "the atomic's cleanup_command is never run (R1)", ENG,
-     "        executor.run_command(\n            resolved.cleanup_command, label=f\"atomic {resolved.guid} cleanup\"\n        )\n",
+     "                executor.run_command(\n                    resolved.cleanup_command, label=f\"atomic {resolved.guid} cleanup\"\n                )\n",
      ""),
     ("M79", "the return to the initial state is declared without being verified (R1)", ENG,
-     '            checks["initial_state_after"] = "PASS" if restored else "FAIL"\n',
-     '            checks["initial_state_after"] = "PASS"\n'),
+     '                checks["initial_state_after"] = "PASS" if restored else "FAIL"\n',
+     '                checks["initial_state_after"] = "PASS"\n'),
     ("M80", "the atomic runs over a dirty initial state (R1)", ENG,
-     "            if not all(ok for _, ok, _ in before):\n", "            if False:\n"),
+     "        if not all(ok for _, ok, _ in before):\n", "        if False:\n"),
+    # R1 review (Annatar session): the X-probes the reviewer proved survive, plus one per
+    # fix 1–6. engines/atomic.py = ATO, runner/engine.py = ENG, executors/azure_vm.py = EXE.
+    ("M81", "run_command writes without the Orodruin journal (R1 review, X1)", EXE,
+     '        self._before_call("run_command", label)\n', ""),
+    ("M82", "an atomic with dependencies is accepted (R1 review, X3)", ATO,
+     '    if test.get("dependencies"):\n', "    if False:\n"),
+    ("M83", "the cap ignores the probes (R1 review, X4 + fix 6)", ENG,
+     "        return 2 + 3 * n_probes\n", "        return 2\n"),
+    ("M84", "an atomic run happens outside its exercise window (R1 review, X5)", ENG,
+     '        open_window(run_id, injector="annatar", kind="technique",\n',
+     '        if scenario.engine == "atomic":\n'
+     '            return self._run_atomic_enrolled(scenario, executor, run_id, session, resolved)\n'
+     '        open_window(run_id, injector="annatar", kind="technique",\n'),
+    ("M85", "run_command starts the VM before journaling (R1 review, X6)", EXE,
+     '        self._before_call("run_command", label)\n        self._ensure_vm_running()\n'
+     '        return self._run_shell(command, label, params)\n',
+     '        self._ensure_vm_running()\n        self._before_call("run_command", label)\n'
+     '        return self._run_shell(command, label, params)\n'),
+    ("M86", "probes are sent with #{var} unsubstituted (R1 review, X7)", ENG,
+     '            verify = resolved.substitute(probe.get("verify", ""))\n',
+     '            verify = probe.get("verify", "")\n'),
+    ("M87", "cleanup and the report are skipped when the command raises (R1 fix 1)", ENG,
+     "        finally:\n            # Cleanup and the return check always run, whatever the command did (even when it\n",
+     "        else:\n            # Cleanup and the return check always run, whatever the command did (even when it\n"),
+    ("M88", "an unknown engine falls through to the local-script run (R1 fix 2)", ENG,
+     '            if scenario.engine == "local-script":\n                return self._run_enrolled(scenario, executor, run_id)\n',
+     "            return self._run_enrolled(scenario, executor, run_id)\n"),
+    ("M89", "an unknown engine passes validation (R1 fix 2)", "annatar/runner/parser.py",
+     "        if engine not in KNOWN_ENGINES:\n"
+     "            errors.append(\n"
+     "                f\"engine '{engine}' is not one of {sorted(KNOWN_ENGINES)} — Annatar cannot \"\n"
+     "                \"run it (no run with zero steps and a bogus attack_started)\"\n"
+     "            )\n",
+     ""),
+    ("M90", "the atomic's probe requirement is dropped (R1 fix 3)", ENG,
+     "            probe_error = self._atomic_probe_error(scenario)\n            if probe_error:\n",
+     "            probe_error = self._atomic_probe_error(scenario)\n            if False:\n"),
+    ("M91", "a return not restored stays invisible to the caller (R1 fix 4)", ENG,
+     '        if restored is False:\n'
+     '            return RunOutcome(run_id, "unknown", error="initial state not restored")\n',
+     ""),
+    ("M92", "an unresolved #{...} after substitution is sent raw (R1 fix 5)", ATO,
+     '    if "#{" in text:\n', "    if False:\n"),
+    ("M93", "PathToAtomicsFolder is not refused (R1 fix 5)", ATO,
+     "    if _NO_ATOMICS_FOLDER in text:\n", "    if False:\n"),
+    ("M94", "elevation_required: false is accepted (R1 fix 5)", ATO,
+     '    if executor.get("elevation_required") is False:\n', "    if False:\n"),
+    ("M95", "the declared executor's shebang is not applied (R1 fix 5)", ATO,
+     '    return f"#!/bin/{executor_name}\\n{text}"\n', "    return text\n"),
+    ("M96", "the attack's effect is assumed, never observed (R1 fix 6)", ENG,
+     "            if not any(not ok for _, ok, _ in effect):\n", "            if False:\n"),
+    ("M97", "a vendored atomic is edited, the PIN no longer matches (R1 point 9)",
+     "annatar/atomics/T1136.001/T1136.001.yaml",
+     "attack_technique: T1136.001\n", "attack_technique: T1136.999\n"),
 ]
 
 # Mutants measured by other tests than the invariants (their lot's own).
@@ -313,6 +369,11 @@ TESTS.update({mid: "tests/unit/test_exercise_channel.py" for mid in ("M68", "M69
 TESTS.update({mid: "tests/unit/test_gothmog.py" for mid in ("M71", "M72", "M73", "M74")})
 TESTS.update({mid: "tests/unit/test_annatar_atomic.py"
               for mid in ("M75", "M76", "M77", "M78", "M79", "M80")})
+# R1 review: run_command's journal is proven in test_orodruin.py; the rest in test_annatar_atomic.py.
+TESTS.update({mid: "tests/unit/test_orodruin.py" for mid in ("M81", "M85")})
+TESTS.update({mid: "tests/unit/test_annatar_atomic.py"
+              for mid in ("M82", "M83", "M84", "M86", "M87", "M88", "M89", "M90",
+                          "M91", "M92", "M93", "M94", "M95", "M96", "M97")})
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

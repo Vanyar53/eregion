@@ -22,17 +22,25 @@ The adapter [`annatar/engines/atomic.py`](../engines/atomic.py) is the *only* re
 files. For a given `engine_ref` (`"<technique>/<auto_generated_guid>"`) it:
 
 1. loads `<technique>/<technique>.yaml` and finds the test by its `auto_generated_guid`;
-2. refuses anything it will not run faithfully: a non-`linux` test, an executor other than
-   `sh`/`bash`, a test with `dependencies` (prereqs), or an argument left unresolved;
-3. substitutes the `input_arguments` defaults into `command` and `cleanup_command`;
+2. **fails closed** — refuses anything it will not run faithfully: a non-`linux` test, an
+   executor other than `sh`/`bash`, a test with `dependencies` (prereqs),
+   `elevation_required: false` (Run Command runs as root), an argument left unresolved, a
+   `#{…}` placeholder still present after substitution (a hyphenated `#{user-name}` would
+   otherwise reach the shell, where `#` opens a comment), or a command that points into
+   `PathToAtomicsFolder` (only the YAML is vendored — the upstream tree is not on the VM);
+3. substitutes the `input_arguments` defaults into `command` and `cleanup_command`, and gives
+   each an explicit `#!/bin/<executor>` shebang (Run Command's default shell is not the test's);
 4. runs both in the enrolled target VM through Azure Run Command — every call journaled and
    capped by the Orodruin contract (`AzureVMExecutor._before_call`).
 
 We do **not** run the upstream `invoke-atomicredteam` runner, and we never edit the vendored
-files. The experiment YAML that points at a test lives in
-[`annatar/scenarios/azure/`](../scenarios/azure/) as an `engine: atomic` experiment (schema
-E1); its `steady_state` probes verify the initial state before the attack and that cleanup
-restored it after.
+files — the sha256 of each is recorded in [`PIN`](PIN) and checked by a test. The experiment
+YAML that points at a test lives in [`annatar/scenarios/azure/`](../scenarios/azure/) as an
+`engine: atomic` experiment (schema E1); its `steady_state` probes (at least one, each with a
+`verify` and an `expect`) verify the initial state is clean before the attack, that the command
+actually broke it (the effect proof — no effect means no `attack_started`), and that the
+cleanup restored it after. The cleanup and the report always run (a `finally`), even when the
+command fails.
 
 ## Updating or adding a technique
 

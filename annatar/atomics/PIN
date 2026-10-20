@@ -6,8 +6,14 @@
 # License   : MIT — see LICENSE.atomic-red-team (kept with the files, as the license requires)
 #
 # The files under this directory are copied VERBATIM from upstream at the commit above.
-# Do not edit them. To update a technique: re-fetch its file at a new pinned commit, replace
-# it here, and bump the commit + date in this PIN.
+# Do not edit them — the sha256 of each is pinned below and checked by a test
+# (tests/unit/test_annatar_atomic.py::test_pin_records_vendored_sha256), so "do not edit"
+# is enforced, not just asked. To update a technique: re-fetch its file at a new pinned
+# commit, replace it here, bump the commit + date, and update the sha256 below.
+#
+# SHA256 (sha256sum of each vendored file, relative to this directory):
+#   1a6cd567e53bb42eb7564bd46bdf2299d3c805f2faa25a397a64886494ae5f3f  T1136.001/T1136.001.yaml
+#   65af6027045d23175366eab50e460ab3ee7790e591cb84cc32c78ac63a4c90e1  LICENSE.atomic-red-team
 #
 # Why vendored (not fetched at run time): Orodruin has no Internet egress
 # (docs/design/orodruin-contract.md) — every atomic an injector runs must already be inside

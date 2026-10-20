@@ -13,7 +13,18 @@ faithfully (fail closed), so a run never half-executes a test it could not prepa
   - a test whose platform is not ``linux`` (gondolin is Linux; Run Command runs a shell);
   - an executor other than ``sh`` / ``bash`` (a Windows/PowerShell test is not ours to run);
   - a test with ``dependencies`` (prereqs) — out of scope for R1, kept deterministic;
-  - an input argument that resolves to a leftover ``#{...}`` placeholder.
+  - a test declaring ``elevation_required: false`` (Run Command runs as root — that would
+    misrepresent a test written for an unprivileged user);
+  - a command/cleanup that still holds a ``#{...}`` placeholder after substitution (the
+    regex only fills ``#{word}``; ``#{user-name}`` would otherwise reach the shell, where
+    ``#`` opens a comment and the rest of the command vanishes);
+  - a command/cleanup referring to ``PathToAtomicsFolder`` (only the YAML is vendored — the
+    upstream atomics tree is not on the VM, so the path does not exist there).
+
+The command and cleanup we hand the runner carry an explicit ``#!/bin/<executor>`` shebang:
+Run Command's default interpreter is not guaranteed to be the test's executor (``bash`` vs
+``sh``/dash), so a bash-only test would otherwise run under the wrong shell. This is the
+adapter's equivalent of invoke-atomicredteam's ``bash -c``.
 """
 from __future__ import annotations
 
@@ -27,6 +38,9 @@ ATOMICS_DIR = Path(__file__).resolve().parents[1] / "atomics"
 SHELL_EXECUTORS = frozenset({"sh", "bash"})
 LINUX = "linux"
 _PLACEHOLDER = re.compile(r"#\{([a-zA-Z0-9_]+)\}")
+# The upstream tree is not on the VM — only the YAML is vendored — so a command that points
+# into it would run against a path that does not exist (bare or with a leading '$').
+_NO_ATOMICS_FOLDER = "PathToAtomicsFolder"
 
 
 class AtomicError(ValueError):
@@ -101,6 +115,23 @@ def _substitute(text: str, args: dict) -> str:
     return _PLACEHOLDER.sub(repl, text)
 
 
+def _finalize(executor_name: str, text: str, guid: str, what: str) -> str:
+    """The substituted command/cleanup, checked for anything we would not run faithfully,
+    then given an explicit interpreter (Run Command's default shell is not guaranteed)."""
+    if "#{" in text:
+        raise AtomicError(
+            f"atomic {guid} {what} still holds a '#{{...}}' placeholder after substitution: "
+            f"{text!r} — the regex only fills '#{{word}}'; refused rather than sent raw "
+            "(in a shell '#' opens a comment and the rest of the line is dropped)"
+        )
+    if _NO_ATOMICS_FOLDER in text:
+        raise AtomicError(
+            f"atomic {guid} {what} references {_NO_ATOMICS_FOLDER} — only the YAML is "
+            "vendored, the upstream atomics tree is not on the VM, so the path does not exist"
+        )
+    return f"#!/bin/{executor_name}\n{text}"
+
+
 def resolve_ref(engine_ref: str, args: dict | None = None,
                 atomics_dir: Path | None = None) -> ResolvedAtomic:
     """Load and resolve the test an ``engine_ref`` names — ready to run, or refused."""
@@ -122,6 +153,13 @@ def resolve_ref(engine_ref: str, args: dict | None = None,
         raise AtomicError(
             f"atomic {guid} executor is {name!r}, not one of {sorted(SHELL_EXECUTORS)}"
         )
+    # Run Command runs as root. A test written for an unprivileged user (elevation_required:
+    # false) would be misrepresented, so we refuse rather than silently escalate it.
+    if executor.get("elevation_required") is False:
+        raise AtomicError(
+            f"atomic {guid} declares elevation_required: false — Run Command runs as root, "
+            "which would misrepresent a test meant for an unprivileged user"
+        )
     command = (executor.get("command") or "").strip()
     cleanup = (executor.get("cleanup_command") or "").strip()
     if not command:
@@ -138,7 +176,9 @@ def resolve_ref(engine_ref: str, args: dict | None = None,
         guid=guid,
         name=str(test.get("name") or guid),
         executor=name,
-        command=_substitute(command, resolved_args),
-        cleanup_command=_substitute(cleanup, resolved_args),
+        command=_finalize(name, _substitute(command, resolved_args), guid, "command"),
+        cleanup_command=_finalize(
+            name, _substitute(cleanup, resolved_args), guid, "cleanup_command"
+        ),
         args=resolved_args,
     )

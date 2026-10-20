@@ -193,6 +193,30 @@
         "required": ["engine", "steady_state"],
         "properties": { "engine": { "not": { "const": "local-script" } } }
       }
+    },
+    {
+      "description": "An atomic test (engine: atomic, R1) verifies the initial state before and after: at least one steady-state probe, each with a non-empty verify and expect. The runner enforces this at run time too (the schema only runs in CI).",
+      "if": { "properties": { "engine": { "const": "atomic" } }, "required": ["engine"] },
+      "then": {
+        "required": ["steady_state"],
+        "properties": {
+          "steady_state": {
+            "required": ["probes"],
+            "properties": {
+              "probes": {
+                "minItems": 1,
+                "items": {
+                  "required": ["name", "verify", "expect"],
+                  "properties": {
+                    "verify": { "minLength": 1 },
+                    "expect": { "minLength": 1 }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     }
   ]
 }

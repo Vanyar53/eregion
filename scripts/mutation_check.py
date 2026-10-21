@@ -471,7 +471,7 @@ MUTANTS = [
     # and nothing else (XCH, ACLI); the thread beside the watch writes it once, and never
     # stops the watch (HREP, GCLI). M144–M148: the third review's findings; M159–M169 (after
     # #169's M150 and lot G2's M151–M158): the fourth review's; M180–M186 (after lot G2's
-    # M170–M178): the fifth review's.
+    # M170–M178): the fifth review's; M187–M188: the sixth review's.
     ("M126", "a decision seen after the run's window and its grace is attached to the run (#167)", CREP,
      "                          float(attack_time), until.timestamp()) or {}\n",
      "                          float(attack_time), None) or {}\n"),
@@ -581,6 +581,7 @@ MUTANTS = [
     ("M182", "a claim that Glorfindel quarantined, contained or neutralised a run whose decision "
      "is unknown is kept (#167, review 5)", CREP,
      '    r"|quarantaine|quarantine|conten|contain|interv|neutralis"\n', ""),
+    # M183 is caught by the reason shown (the rejection's text), not by a claim kept or dropped.
     ("M183", "an observation on the containment of a run whose decision is unknown is not read "
      "as speaking of the response (#167, review 5)", CREP,
      '    r"|quarantaine|quarantine|conten|contain|neutralis",\n', '    ,\n'),
@@ -595,6 +596,13 @@ MUTANTS = [
     ("M186", "a lock that cannot be opened again, after an open that went through, is not said "
      "(#167, review 5)", HREP,
      '    _said.pop((_key(cdir), "lock"), None)   # opened: a later failure is said again\n', ""),
+    # #167, sixth review: the call to the analysis model is bounded (LiteLLM's own default is
+    # 6000 s an attempt) — a hung provider held the campaign-report thread for hours.
+    ("M187", "the call to the analysis model is unbounded: LiteLLM's 6000 s apply (#167, review 6)", CREP,
+     "        timeout=timeout_s(),\n", ""),
+    ("M188", "EREGION_ANALYSIS_TIMEOUT_S never reaches the watch's container (#167, review 6)",
+     "docker-compose.yml",
+     "  EREGION_ANALYSIS_TIMEOUT_S: ${EREGION_ANALYSIS_TIMEOUT_S:-}\n", ""),
     # #169 — Discord archives an idle thread without telling the bot: the cached thread reads
     # open, the edit is refused (50083). M126–M149 are reserved for lot 167.
     ("M150", "a card edit refused because Discord archived its thread is not reopened (#169)",
@@ -710,7 +718,7 @@ TESTS.update({mid: "tests/unit/test_hosted_report.py"
                           "M135", "M137", "M140", "M141", "M142", "M143", "M144", "M145",
                           "M146", "M147", "M148", "M159", "M160", "M161", "M162", "M163",
                           "M164", "M165", "M166", "M167", "M168", "M169", "M180", "M181",
-                          "M182", "M183", "M184", "M185", "M186")})
+                          "M182", "M183", "M184", "M185", "M186", "M187", "M188")})
 TESTS.update({mid: "tests/unit/test_campaign_channel.py"
               for mid in ("M130", "M136", "M138", "M139", "M149")})
 TESTS["M150"] = "tests/unit/test_bot.py"

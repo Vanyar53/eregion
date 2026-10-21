@@ -497,11 +497,33 @@ def _facts_message(facts: list[RunFact], prior: list[RunFact]) -> str:
     return f"## This campaign\n{block(facts)}\n\n## Earlier runs of the same techniques\n{block(prior)}"
 
 
+# The call to the analysis model is bounded (#167, review 6): LiteLLM's own default is 6000 s
+# an attempt (measured by G2) — on H0 a hung provider held the `campaign-report` thread, and
+# every report after it, for hours without a word. Bounded, it raises: a failed attempt
+# (analysis/hosted_report.py), never the watch. Its own variable, not GLORFINDEL_LLM_TIMEOUT_S:
+# the report also runs where Glorfindel's package is not (the Annatar image), and writes up to
+# 2048 tokens off any cycle's path, where a decision writes a few hundred on it.
+TIMEOUT_ENV = "EREGION_ANALYSIS_TIMEOUT_S"
+TIMEOUT_S = 300.0
+_TIMEOUT_MAX_S = 3600.0
+
+
+def timeout_s() -> float:
+    """``EREGION_ANALYSIS_TIMEOUT_S``, in (0, 3600]. Unset, malformed, zero, negative,
+    infinite or NaN (both fail the range) → 300 s: a malformed value never unbounds the call."""
+    raw = os.environ.get(TIMEOUT_ENV, "").strip()
+    try:
+        value = float(raw) if raw else TIMEOUT_S
+    except ValueError:
+        return TIMEOUT_S
+    return value if 0 < value <= _TIMEOUT_MAX_S else TIMEOUT_S
+
+
 def write_claims(facts: list[RunFact], prior: list[RunFact], model: str | None = None,
                  llm=None, *, strict: bool = False) -> tuple[list[Claim], str]:
     """The model's claims. ``strict`` (the hosted report): an answer without the tool's call,
     or whose arguments cannot be read, raises — an attempt that failed, tried again, never an
-    empty report written for good."""
+    empty report written for good. The call is bounded (``timeout_s``): past it, it raises."""
     from eregion_core.models import analysis_model
     from eregion_core.llm_call import completion_with_tool
     if llm is None:
@@ -509,6 +531,7 @@ def write_claims(facts: list[RunFact], prior: list[RunFact], model: str | None =
     mdl = model or analysis_model()
     resp = completion_with_tool(
         llm, "campaign_report", model=mdl, max_tokens=2048, tools=[_REPORT_TOOL],
+        timeout=timeout_s(),
         messages=[{"role": "system", "content": _SYSTEM},
                   {"role": "user", "content": _facts_message(facts, prior)}])
     try:

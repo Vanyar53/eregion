@@ -20,7 +20,14 @@ permet une affirmation de tendance (« manquée ici, détectée au run précéde
 **Le modèle n'écrit que des affirmations typées, chacune citant ses runs** : `detected`,
 `missed`, `latency`, `decision`, `trend`, `observation`. Un autre modèle que celui de Glorfindel
 (`EREGION_ANALYSIS_MODEL`, Haiku 5.5 par défaut, `eregion_core/models.py`) : un rapport ne doit
-pas partager les angles morts du défenseur.
+pas partager les angles morts du défenseur. **L'appel est borné** : `EREGION_ANALYSIS_TIMEOUT_S`,
+300 s par tentative par défaut (illisible, nulle, négative, infinie ou au-delà de 3600 → 300 s ;
+`analysis/campaign_report.py`, `timeout_s`). Sans borne, LiteLLM attend 6000 s par tentative
+(mesuré par G2). Ce n'est pas `GLORFINDEL_LLM_TIMEOUT_S`, qui ne borne que les appels de
+Glorfindel (décision, autoring de règle) : le rapport s'écrit aussi là où le paquet de Glorfindel
+n'est pas (l'image d'Annatar, en fin de `campaign run`), et il écrit jusqu'à 2048 jetons hors du
+chemin d'un cycle, d'où une borne plus large. Passé la borne, l'appel lève : en local, la
+commande échoue avec le délai dépassé ; sur H0, c'est un essai raté (voir plus bas).
 
 **La vérification est déterministe** (`verify`) : une affirmation sans run cité, citant un run
 inconnu, ou que les faits contredisent (« détectée » sur un run manqué, une latence ou une
@@ -48,7 +55,7 @@ termine quand même et dit comment l'écrire plus tard. Les campagnes de R1 (Ato
 ## Une campagne lancée depuis Orodruin : le rapport s'écrit sur H0 (#167)
 
 _21/10 : le code, ses tests (`tests/unit/test_campaign_channel.py`, `test_hosted_report.py`, dont
-un bout en bout local) et ses mutants (M126–M149, M159–M169, M180–M186) sont écrits. La campagne sur le banc viendra
+un bout en bout local) et ses mutants (M126–M149, M159–M169, M180–M188) sont écrits. La campagne sur le banc viendra
 ensuite, avec Jonathan (session Tests) : rien de ceci n'est encore mesuré sur le banc._
 
 Orodruin n'a ni `chromadb`, ni `litellm`, ni la clé du modèle, ni les fichiers de la watch.
@@ -157,7 +164,9 @@ fenêtre d'un run manqué… » ne se retire pas, et l'affirmation est écartée
 `detected`, `missed` ou `latency`, dont la sorte ne dit rien de la décision.
 
 Un échec (canal, index, modèle, fichiers) est noté dans `report.error`, avec le nombre d'essais,
-et aussi compté en mémoire. Une réponse du modèle sans appel de l'outil `campaign_report`, ou
+et aussi compté en mémoire. Un fournisseur bloqué en est un : l'appel au modèle expire à sa borne
+(`EREGION_ANALYSIS_TIMEOUT_S`, 300 s) et l'essai compte, au lieu de figer le thread, et tous les
+rapports suivants, pendant des heures sans un mot (sixième relecture, mutants M187–M188). Une réponse du modèle sans appel de l'outil `campaign_report`, ou
 illisible, est un échec (`build(…, strict=True)`) : jamais un rapport vide écrit pour de bon.
 On prend le plus grand des deux compteurs, donc un `report.error` impossible à écrire ne relance
 pas le modèle sans fin. Le rapport est réessayé au plus 3 fois, puis abandonné et signalé dans le

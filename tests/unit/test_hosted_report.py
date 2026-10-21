@@ -4,12 +4,13 @@ rule of #157 (same technique, same VM without case, between the run's attack and
 its window, grace included), an unknown decision said as such, and no failure of the report
 ever reaching the watch. A fake model (no call), a fake index (no embedding, no download),
 the container in memory (tests/unit/fake_container.py), files in tmp. Mutants M126–M129,
-M131–M135, M137, M140–M148, M159–M169 and M180–M186 (scripts/mutation_check.py) are measured
+M131–M135, M137, M140–M148, M159–M169 and M180–M188 (scripts/mutation_check.py) are measured
 here."""
 import fcntl
 import json
 import os
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -540,6 +541,67 @@ def test_an_answer_without_the_tool_is_a_failed_attempt(tmp_path, index):
     assert out == "failed: the analysis model answered without calling campaign_report"
     assert not (cdir / hr.REPORT).exists()
     assert json.loads((cdir / hr.ERROR).read_text())["attempts"] == 1
+
+
+class _HungModel(_Model):
+    """A provider that hangs: the call ends only on its bound, as LiteLLM ends it."""
+    def completion(self, **kw):
+        self.calls.append(kw)
+        import litellm
+        raise litellm.Timeout("Request timed out.", model="fake/model", llm_provider="anthropic")
+
+
+def test_the_call_to_the_analysis_model_is_bounded(tmp_path, monkeypatch, index):
+    """M187 (review 6): LiteLLM's own default is 6000 s an attempt — a hung provider held the
+    ``campaign-report`` thread, and every report after it, for hours. The call carries its
+    bound; past it, a failed attempt, counted, never raised, given up after MAX_ATTEMPTS."""
+    monkeypatch.delenv(cr.TIMEOUT_ENV, raising=False)
+    cdir, _ = _h0(tmp_path)
+    model, said = _HungModel(CLAIMS), []
+    for n in range(1, hr.MAX_ATTEMPTS + 1):
+        out = _never_raises(hr.write_report, cdir, model="fake/model", llm=model, say=said.append)
+        assert out.startswith("failed: ") and "Request timed out." in out
+        assert json.loads((cdir / hr.ERROR).read_text())["attempts"] == n
+    assert [kw.get("timeout") for kw in model.calls] == [cr.TIMEOUT_S] * hr.MAX_ATTEMPTS
+    assert cr.TIMEOUT_S == 300.0
+    assert said[0].startswith("C1: attempt 1/3 failed (Timeout: ")
+    assert said[-1].startswith("C1: given up after 3 attempts (Timeout: ")
+    assert not (cdir / hr.REPORT).exists() and hr.ready(cdir.parent, say=lambda m: None) == []
+    monkeypatch.setenv(cr.TIMEOUT_ENV, "45")
+    import litellm
+    with pytest.raises(litellm.Timeout):            # the command line's path: bounded, it raises
+        cr.write_claims([], [], "fake/model", model)
+    assert model.calls[-1]["timeout"] == 45.0
+
+
+def test_a_hung_report_never_stops_the_thread(tmp_path, monkeypatch, index):
+    """The thread's pass over a campaign whose model hangs: it ends, and the next one runs."""
+    _, h0 = _published(tmp_path, monkeypatch,
+                       watch=[_decision(at=T + timedelta(minutes=3))])
+    model = _HungModel(CLAIMS)
+    kw = {"model": "fake/model", "llm": model, "say": lambda m: None,
+          "now": (T + timedelta(minutes=40)).timestamp()}
+    out = _never_raises(hr.tick, h0, **kw)
+    assert list(out) == ["C1"] and out["C1"].startswith("failed: ")
+    assert model.calls[0]["timeout"] == cr.TIMEOUT_S
+
+
+@pytest.mark.parametrize("raw, expected", [
+    ("", 300.0), (" 90 ", 90.0), ("3600", 3600.0), ("abc", 300.0), ("0", 300.0), ("-5", 300.0),
+    ("inf", 300.0), ("-inf", 300.0), ("nan", 300.0), ("86400", 300.0),
+])
+def test_the_analysis_bound_never_unbounds_on_a_malformed_value(monkeypatch, raw, expected):
+    monkeypatch.setenv(cr.TIMEOUT_ENV, raw)
+    assert cr.timeout_s() == expected
+
+
+def test_the_analysis_bound_reaches_the_containers():
+    """M188: docker compose passes an explicit list (``x-env``); empty is the reader's 300 s."""
+    import yaml
+    compose = yaml.safe_load((Path(__file__).resolve().parents[2] / "docker-compose.yml")
+                             .read_text(encoding="utf-8"))
+    assert compose["x-env"].get(cr.TIMEOUT_ENV) == "${%s:-}" % cr.TIMEOUT_ENV
+    assert cr.TIMEOUT_ENV in compose["services"]["watch"]["environment"]
 
 
 def test_a_report_written_clears_its_error(tmp_path, index):

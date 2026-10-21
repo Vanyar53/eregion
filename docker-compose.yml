@@ -36,6 +36,8 @@ x-env: &env
   EREGION_WATCH_CHANNEL: ${EREGION_WATCH_CHANNEL:-}
   # IA0 (#167) : le modèle d'analyse du rapport de campagne écrit par la watch (vide → défaut).
   EREGION_ANALYSIS_MODEL: ${EREGION_ANALYSIS_MODEL:-}
+  # Review 6 : borne d'un appel au modèle d'analyse, par tentative (vide → 300 s).
+  EREGION_ANALYSIS_TIMEOUT_S: ${EREGION_ANALYSIS_TIMEOUT_S:-}
   ORT_LOGGING_LEVEL_DEFAULT: "3"
 
 services:

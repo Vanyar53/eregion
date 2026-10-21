@@ -457,6 +457,13 @@ MUTANTS = [
     # package is not: the guard tests the package, not the launcher alone.
     ("M125", "the reset guard trusts the glorfindel launcher alone, not its package (#165)", CRUN,
      '    if find_spec("glorfindel") is None:\n', "    if False:\n"),
+    # #169 — Discord archives an idle thread without telling the bot: the cached thread reads
+    # open, the edit is refused (50083). M126–M149 are reserved for lot 167.
+    ("M150", "a card edit refused because Discord archived its thread is not reopened (#169)",
+     "glorfindel/bot.py",
+     "                    # THREAD_UPDATE (#169, 20/10): reopen it, try again once.\n"
+     '                    await thread.edit(archived=False, reason="Card updated")\n',
+     "                    # THREAD_UPDATE (#169, 20/10): reopen it, try again once.\n"),
 ]
 
 # Mutants measured by other tests than the invariants (their lot's own).
@@ -492,6 +499,7 @@ TESTS.update({mid: "tests/unit/test_campaign_synthesizer.py"
 TESTS.update({mid: "tests/unit/test_campaign_runner.py" for mid in ("M123", "M125")})
 TESTS["M124"] = "tests/unit/test_makefile_campaign.py"
 TESTS["M119"] = "tests/unit/test_experiment_schema.py"
+TESTS["M150"] = "tests/unit/test_bot.py"
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

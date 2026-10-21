@@ -331,3 +331,54 @@ def test_a_failing_edit_is_tried_once_and_a_deleted_message_forgotten():
     asyncio.run(b._sync_messages())
     asyncio.run(b._sync_messages())
     assert refused.attempts == 1                       # once per state change, never a loop
+
+
+def test_a_card_resolved_while_discord_archived_its_thread_is_still_greyed(monkeypatch):
+    """#169 — on H0 (20/10), a card acknowledged in the War Room: « Sync d1dde0fd: 400 Bad
+    Request (error code: 50083): Thread is archived ». Discord archives an idle thread without
+    telling the bot (no THREAD_UPDATE): the cached thread still reads open, so the reopen of
+    19/10 was skipped and the edit refused. On a 50083 the thread is reopened and the edit
+    tried again, once; the thread is closed after."""
+    import io
+    from unittest.mock import MagicMock
+
+    import discord
+    from rich.console import Console
+
+    log = io.StringIO()
+    monkeypatch.setattr(bot, "_console", Console(file=log, width=200))
+    esc_id = escalations.record("rule-ssh-brute-force-0123abcd", VM, "block_suspicious_ip", "mode_hold", "held")
+    escalations.resolve(esc_id)                        # acknowledged in the War Room
+
+    class _Thread(discord.Thread):
+        def __init__(self):
+            self.archived = False                      # the cache: still open
+            self.on_discord_archived = True            # Discord: archived when idle
+            self.calls, self.edits, self.refused = [], [], 0
+
+        def get_partial_message(self, mid):
+            thread = self
+
+            class _P:
+                async def edit(self, embed, view):
+                    if thread.on_discord_archived:     # what Discord answers
+                        thread.refused += 1
+                        raise discord.HTTPException(MagicMock(status=400, reason="Bad Request"),
+                                                    {"code": 50083, "message": "Thread is archived"})
+                    thread.edits.append((embed, view))
+            return _P()
+
+        async def edit(self, archived, reason):
+            self.archived = self.on_discord_archived = archived
+            self.calls.append(archived)
+
+    thread = _Thread()
+    b = _sync_bot(thread, esc_id)
+    assert asyncio.run(b._sync_messages()) == 1
+    assert thread.refused == 1 and len(thread.edits) == 1   # reopened, then edited once
+    embed, view = thread.edits[0]
+    assert next(f.value for f in embed.fields if f.name == "État") == "acquittée"
+    assert view.children and all(item.disabled for item in view.children)
+    assert thread.calls == [False, True] and thread.archived  # reopened, then closed again
+    assert "Sync" not in log.getvalue() and "50083" not in log.getvalue()
+    assert asyncio.run(b._sync_messages()) == 0             # synced: no second attempt

@@ -575,7 +575,7 @@ def test_the_call_to_the_analysis_model_is_bounded(tmp_path, monkeypatch, index)
 
 
 def test_a_hung_report_never_stops_the_thread(tmp_path, monkeypatch, index):
-    """The thread's pass over a campaign whose model hangs: it ends, and the next one runs."""
+    """The thread's pass over a campaign whose model hangs: it ends without raising."""
     _, h0 = _published(tmp_path, monkeypatch,
                        watch=[_decision(at=T + timedelta(minutes=3))])
     model = _HungModel(CLAIMS)

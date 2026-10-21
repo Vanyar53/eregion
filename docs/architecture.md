@@ -126,7 +126,10 @@ flowchart LR
 ```
 
 Toute exception d'un cycle finit en escalade (`action_failed`, `cycle_failed`), jamais en
-ligne de console : une menace détectée n'est pas perdue parce qu'un appel a échoué.
+ligne de console : une menace détectée n'est pas perdue parce qu'un appel a échoué. Plus
+largement, une dépendance qui tombe (modèle, API du cloud, télémétrie, configuration) fait
+échouer Glorfindel **fermé** : rien de disruptif ne part seul (G2,
+[`glorfindel.md`](glorfindel.md), « Pannes des dépendances »).
 
 ## Les gardes qui encadrent le LLM
 
@@ -150,7 +153,9 @@ flowchart LR
     S -->|non| E3["uncharacterized_signal"]
     S -->|oui| A{"isoler, bloquer :<br/>attribué à cette VM ?"}
     A -->|non| E4["unattributed_signal"]
-    A -->|oui| R{"lever :<br/>après recovery_complete ?"}
+    A -->|oui| T{"isoler, bloquer :<br/>télémétrie lue ?"}
+    T -->|"requête d'enquête<br/>en échec"| E8["telemetry_gap"]
+    T -->|oui| R{"lever :<br/>après recovery_complete ?"}
     R -->|non| E5["release_hold"]
     R -->|oui| M{"mode effectif<br/>de la VM"}
     M -->|"human_only, ou VM<br/>pas encore prête"| E6["mode_hold"]
@@ -160,8 +165,8 @@ flowchart LR
     classDef warn fill:#fbe3e3,stroke:#d64545,color:#7a1f1f
     classDef go fill:#2e9e6a,stroke:#1d6b47,color:#ffffff
     class LLM blue
-    class P,K,X,C,S,A,R,M guard
-    class E0,E1,E2,E3,E4,E5,E6,E7 warn
+    class P,K,X,C,S,A,T,R,M guard
+    class E0,E1,E2,E3,E4,E5,E6,E7,E8 warn
     class GO go
 ```
 

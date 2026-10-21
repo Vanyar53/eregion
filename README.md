@@ -522,7 +522,8 @@ DISCORD_PING_ROLE=...               # Role ID to ping on new incident thread (op
 GLORFINDEL_KEEP_ISOLATED=1          # forensic mode — VM stays isolated after restore
 GLORFINDEL_ISOLATION_TTL_H=4        # auto-release timeout in hours (default: 4)
 GLORFINDEL_INCIDENT_TTL_S=300       # incident grouping window in seconds (default: 300)
-GLORFINDEL_CONFIDENCE_THRESHOLD=0.7 # min LLM confidence for autonomous action (default: 0.7 — below this, escalate)
+GLORFINDEL_CONFIDENCE_THRESHOLD=0.7 # min LLM confidence for autonomous action (default: 0.7 — below this, escalate; unreadable or outside [0, 1]: every autonomous action is held)
+GLORFINDEL_LLM_TIMEOUT_S=120        # bound on one model call, per attempt (default: 120 s; a hung provider ends as a cycle_failed card)
 ```
 
 See [.envrc.example](.envrc.example) for a ready-to-fill template with provider examples.

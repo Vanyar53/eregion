@@ -86,6 +86,29 @@ M71 (panne lancée sans état normal vérifié avant), M72 (cible de l'expérien
 acceptée), M73 (retour déclaré sans être vérifié), M74 (signaux de panne là où la watch
 décide) — mesurés par `tests/unit/test_gothmog.py`.
 
+## G2 — les pannes des dépendances de Glorfindel
+
+**Côté Glorfindel, fait le 21/10 (code)** : chacune des quatre dépendances — le modèle, l'API
+du cloud, la télémétrie, la configuration — échoue fermé, prouvé par un cycle complet du graphe
+et un mutant par panne (M151–M158, `tests/unit/test_dependency_failures.py`). Détail :
+[`docs/glorfindel.md`](../docs/glorfindel.md), « Pannes des dépendances ».
+
+**Reste, sur le banc, avec Jonathan** : injecter ces pannes pour de vrai, depuis Orodruin, sur
+un Glorfindel du banc, et constater les cartes attendues. Proposition, **non mesurée** (le moteur
+ne sait aujourd'hui que l'arrêt de VM, `Shutdown-1.0`) :
+
+| Panne | Injection envisagée | Attendu de Glorfindel |
+|---|---|---|
+| Modèle | règle de sortie refusée vers le fournisseur du modèle, sur le NSG de la VM de Glorfindel (faute Chaos Studio « NSG security rule ») | `cycle_failed` sur chaque détection, au plus 3 × 120 s après |
+| API du cloud | règle de sortie refusée vers l'étiquette de service `AzureResourceManager` | VM jamais contrôlée tenue en `human_only` ; action tentée → `action_failed` |
+| Télémétrie | règle de sortie refusée vers `AzureMonitor` | RulePoller en `last_error`, nœud DETECT rouge ; aucune action disruptive sur une enquête incomplète |
+| Configuration | pas une faute de Chaos Studio (un fichier local) : reste un test | — |
+
+À décider avant : la cible (H0 n'est pas inscrite, et un Glorfindel d'exercice sur le banc
+serait plus sûr qu'une coupure de celui qui observe bree) ; l'inscription des NSG auprès de
+Chaos Studio et de l'inscription O0 (`kind="fault"`) ; si la faute NSG accepte bien une étiquette
+de service comme destination (à mesurer, pas à supposer).
+
 ## Règles
 
 Aucune panne en zone `production` (inscription, O0) ; exécution depuis Orodruin ; une panne est

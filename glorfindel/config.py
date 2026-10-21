@@ -46,6 +46,34 @@ def read_only_requested(value: str | None = None) -> bool:
     return str(raw).strip().lower() not in _SWITCH_OFF
 
 
+CONFIDENCE_THRESHOLD = 0.7
+
+
+def confidence_threshold() -> float:
+    """GLORFINDEL_CONFIDENCE_THRESHOLD: 0.7 when unset or empty; a value in [0, 1]
+    otherwise. Malformed, out of range or not a number → infinite: every autonomous
+    action is held (G2, configuration fails closed).
+
+    A malformed value used to raise inside decide() and drop the whole cycle, then fell
+    back to 0.7 — more permissive than the 0.95 an operator mistyped as "O.95" — and
+    `nan` parsed: `confidence < nan` is never true, the gate let everything through.
+    Here, next to read_only_requested, so the War Room reads the gate's own value
+    without importing the agent (G2 review): an import that failed there dropped the
+    whole capability matrix, silently."""
+    import math
+    import os
+    raw = (os.environ.get("GLORFINDEL_CONFIDENCE_THRESHOLD") or "").strip()
+    if not raw:
+        return CONFIDENCE_THRESHOLD
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        value = math.nan
+    if not 0.0 <= value <= 1.0:          # nan fails the comparison too
+        return math.inf
+    return value
+
+
 # A decision call is bounded: LiteLLM's own default is 6000 s per attempt (measured with
 # litellm 1.86.1), three attempts with the retries — a provider that hangs held the VM's
 # decision queue for hours, with no card. Bounded, it ends as a cycle_failed card.

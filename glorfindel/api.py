@@ -290,7 +290,7 @@ async def state() -> dict:
     capability: dict = {}
     try:
         from glorfindel.actions import AUTONOMOUS_ACTIONS, HUMAN_APPROVAL_REQUIRED
-        from glorfindel.agent import _confidence_threshold
+        from glorfindel.config import confidence_threshold
         _allow: list = []
         try:
             _allow = list(_acfg.autonomy.allow_destructive)
@@ -302,7 +302,9 @@ async def state() -> dict:
             "allow_destructive": _allow,
             # The gate's own reading (G2): a malformed value holds every action — shown
             # as 100 %, never as the 70 % it no longer is (nor a NaN in the JSON).
-            "confidence_threshold": min(_confidence_threshold(warn=False), 1.0),
+            # Read from config, not the agent: the War Room never imports the agent
+            # for it, and a failed import would drop the whole matrix (G2 review).
+            "confidence_threshold": min(confidence_threshold(), 1.0),
         }
     except Exception:
         pass
@@ -848,13 +850,17 @@ _APPROVABLE_TYPES = {"mode_hold", "low_confidence", "uncharacterized_signal", "r
 
 def _approval_max_age_h() -> float:
     """GLORFINDEL_APPROVAL_MAX_AGE_H, 2 h when unset or malformed. `nan` and `inf` parsed:
-    `age > nan` is never true, and a card of any age could be executed (G2)."""
+    `age > nan` is never true, and a card of any age could be executed (G2) — both are
+    2 h. Zero or negative stays as written: one-click approval closed on purpose
+    (`_approval_refusal` refuses every card), never reopened to 2 h."""
     import math
     try:
         value = float(os.environ.get("GLORFINDEL_APPROVAL_MAX_AGE_H") or "2")
     except ValueError:
         return 2.0
-    return value if math.isfinite(value) and value > 0 else 2.0
+    if math.isnan(value) or value == math.inf:
+        return 2.0
+    return value
 
 
 def _approval_refusal(esc: dict, vm_name: str) -> str | None:
@@ -871,8 +877,14 @@ def _approval_refusal(esc: dict, vm_name: str) -> str | None:
         seen_dt = datetime.fromisoformat(seen)
     except ValueError:
         return "Carte sans date lisible : relancer l'analyse plutôt que l'exécuter."
+    max_age_h = _approval_max_age_h()
+    if max_age_h <= 0:
+        # Closed on purpose: no card of any age — a card dated a little ahead of this
+        # clock included (`age > 0` let it through) — runs in one click.
+        return ("Approbation en un clic fermée (GLORFINDEL_APPROVAL_MAX_AGE_H ≤ 0) : "
+                "agir depuis la CLI.")
     age_h = (datetime.now(timezone.utc) - seen_dt).total_seconds() / 3600
-    if age_h > _approval_max_age_h():
+    if age_h > max_age_h:
         return (f"Carte vieille de {age_h:.1f} h : l'état de la VM a pu changer (restore, levée). "
                 "Acquitter et laisser la détection se reproduire, ou agir depuis la CLI.")
     try:

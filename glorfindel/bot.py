@@ -642,8 +642,17 @@ class GlorfindelBot(discord.Client):
                     # Discord archives an idle thread on its own; a message in it can't be
                     # edited until it is reopened (50083) — archived again below.
                     await thread.edit(archived=False, reason="Card updated")
-                await thread.get_partial_message(message_id).edit(
-                    embed=_build_embed(esc), view=_build_view(esc))
+                try:
+                    await thread.get_partial_message(message_id).edit(
+                        embed=_build_embed(esc), view=_build_view(esc))
+                except discord.HTTPException as exc:
+                    if exc.code != 50083:
+                        raise
+                    # The cached thread read open, Discord had archived it without a
+                    # THREAD_UPDATE (#169, 20/10): reopen it, try again once.
+                    await thread.edit(archived=False, reason="Card updated")
+                    await thread.get_partial_message(message_id).edit(
+                        embed=_build_embed(esc), view=_build_view(esc))
             except discord.NotFound:
                 # The message is gone (deleted in Discord): forget it.
                 self._messages.pop(esc["id"], None)

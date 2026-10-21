@@ -608,6 +608,9 @@ def main() -> int:
                 target.rename(copy / new)
             else:
                 text = target.read_text()
+                if isinstance(old, tuple) != isinstance(new, tuple) or (
+                        isinstance(old, tuple) and len(old) != len(new)):
+                    return mid, title, "STALE", "old and new replacements do not pair up"
                 pairs = zip(old, new) if isinstance(old, tuple) else [(old, new)]
                 for o, n in pairs:
                     if text.count(o) != 1:

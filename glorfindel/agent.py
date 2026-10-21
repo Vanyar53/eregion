@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from eregion_core.models import glorfindel_model
 
+import math
 import os
 import time
 from pathlib import Path
@@ -80,6 +81,7 @@ class GlorfindelState(TypedDict):
     autonomy_gate: dict         # set when the VM is configured autonomous but held by its readiness
     cycle_error: str            # set when the cycle could not complete normally (→ cycle_failed escalation)
     held_by: str                # deterministic gate that escalated (→ its own escalation type)
+    telemetry_gaps: list[str]   # investigative queries that FAILED (G2) — never shown to the model
 
 
 # ── LLM decision tool schema ──────────────────────────────────────────────────
@@ -459,14 +461,20 @@ Perf
 """
 
 
-def _run_investigative_query(workspace_id: str, query: str) -> list[dict]:
-    """Run a single investigative query. Returns [] on any failure."""
+def _run_investigative_query(workspace_id: str, query: str) -> list[dict] | None:
+    """Run a single investigative query: its rows, or None when it FAILED (workspace
+    unreachable, throttled, query refused).
+
+    A failure used to come back as [] — "no rows": no backup agent writing, no reboot,
+    no successful login. The model read an absence the telemetry never vouched for, and
+    that absence argues for the disruptive action (G2). The model still sees [] (what it
+    sees is unchanged); the failure is kept apart, for the telemetry guard of `decide`."""
     try:
         from glorfindel.detectors import detector_for
         det = detector_for("azure_monitor", workspace_id=workspace_id)
         return det.run_query(query.strip()) or []
     except Exception:
-        return []
+        return None
 
 
 def investigate(state: GlorfindelState) -> GlorfindelState:
@@ -475,7 +483,10 @@ def investigate(state: GlorfindelState) -> GlorfindelState:
     Only runs on event=detection with a resolvable workspace_id.
     Queries are chosen based on signal content (not TTP label).
     Results land in raw_signal.investigative_context — the LLM sees them.
-    Failures are silently swallowed: investigation is best-effort.
+    A failed query is best-effort for the model (it sees [] as before) but not for the
+    gates: its name goes to `telemetry_gaps` (state and debug line, never the signal),
+    a console line says so, and the telemetry guard of `decide` holds a disruptive
+    action decided on it (G2).
     """
     signal = state["signal"]
 
@@ -521,40 +532,43 @@ def investigate(state: GlorfindelState) -> GlorfindelState:
         )
 
     ctx: dict[str, list[dict]] = {}
+    gaps: list[str] = []
+
+    def run(name: str, query: str) -> None:
+        rows = _run_investigative_query(workspace_id, query)
+        if rows is None:              # failed: unknown, not "nothing found" (G2)
+            gaps.append(name)
+            rows = []
+        ctx[name] = rows
 
     # ── Disk write anomaly → which process is writing? backup agent present? recent reboot?
     if "MaxWrite" in first_row or "DiskWrite" in first_row:
-        ctx["top_write_processes"] = _run_investigative_query(
-            workspace_id, _IQ_DISK_PROCESSES.format(vm=vm)
-        )
-        ctx["backup_agent_check"] = _run_investigative_query(
-            workspace_id, _IQ_BACKUP_AGENT.format(vm=vm)
-        )
+        run("top_write_processes", _IQ_DISK_PROCESSES.format(vm=vm))
+        run("backup_agent_check", _IQ_BACKUP_AGENT.format(vm=vm))
         # Azure Backup OriginalLocation restore causes high I/O during boot rewrite.
         # A Heartbeat gap > 10min indicates a recent VM reboot — raises suspicion of
         # legitimate post-restore I/O rather than active ransomware encryption.
-        ctx["heartbeat_gap"] = _run_investigative_query(
-            workspace_id, _IQ_HEARTBEAT_GAP.format(vm=vm)
-        )
+        run("heartbeat_gap", _IQ_HEARTBEAT_GAP.format(vm=vm))
 
     # ── Brute force → did any attempt succeed from this IP?
     source_ip = first_row.get("SourceIP", "")
     if "FailedAttempts" in first_row and source_ip:
-        ctx["successful_auth_from_ip"] = _run_investigative_query(
-            workspace_id, _IQ_SUCCESS_AUTH.format(vm=vm, ip=source_ip)
-        )
+        run("successful_auth_from_ip", _IQ_SUCCESS_AUTH.format(vm=vm, ip=source_ip))
 
     # ── Privilege escalation → what ran as root after? disk writes?
     if "USER=root" in syslog_msg and "COMMAND=" in syslog_msg:
-        ctx["root_commands"] = _run_investigative_query(
-            workspace_id, _IQ_ROOT_COMMANDS.format(vm=vm)
-        )
-        ctx["disk_write_after_escalation"] = _run_investigative_query(
-            workspace_id, _IQ_DISK_AFTER_ESC.format(vm=vm)
-        )
+        run("root_commands", _IQ_ROOT_COMMANDS.format(vm=vm))
+        run("disk_write_after_escalation", _IQ_DISK_AFTER_ESC.format(vm=vm))
 
     if not ctx:
         return state
+
+    if gaps:
+        _console.print(
+            f"  [yellow]investigate: {len(gaps)} requête(s) en échec pour '{vm}' "
+            f"({', '.join(gaps)}) — télémétrie incomplète, aucune action disruptive "
+            f"autonome sur ce cycle[/yellow]"
+        )
 
     if all(len(v) == 0 for v in ctx.values()):
         if using_arm_fallback:
@@ -572,7 +586,9 @@ def investigate(state: GlorfindelState) -> GlorfindelState:
         **signal,
         "raw_signal": {**raw, "investigative_context": ctx},
     }
-    return {**state, "signal": enriched}
+    # The gaps stay in the state, never in the signal: the whole signal is the model's
+    # input (_build_user_message), and what the model sees is unchanged.
+    return {**state, "signal": enriched, "telemetry_gaps": gaps}
 
 
 # Autonomous actions that DISRUPT the VM / network / access (vs read-only `snapshot`
@@ -595,6 +611,7 @@ _HELD_BY_TYPE = {
     "signal_guardrail": "uncharacterized_signal",
     "release_precondition": "release_hold",
     "attribution": "unattributed_signal",
+    "telemetry": "telemetry_gap",
 }
 
 # Actions aimed at ONE VM. On a detection the RulePoller could not tie to that VM (a row
@@ -622,17 +639,17 @@ _LLM_RETRIES = 2
 
 
 def _confidence_threshold() -> float:
-    """GLORFINDEL_CONFIDENCE_THRESHOLD, defaulting to 0.7 when unset OR malformed.
-
-    A malformed value used to raise inside decide() and drop the whole cycle."""
-    raw = os.environ.get("GLORFINDEL_CONFIDENCE_THRESHOLD", "0.7")
-    try:
-        return float(raw)
-    except (TypeError, ValueError):
+    """The gate's threshold (`config.confidence_threshold`: infinite when malformed —
+    every autonomous action held), with a console line when it is."""
+    from glorfindel.config import confidence_threshold
+    value = confidence_threshold()
+    if math.isinf(value):
+        raw = os.environ.get("GLORFINDEL_CONFIDENCE_THRESHOLD", "")
         _console.print(
-            f"[yellow]GLORFINDEL_CONFIDENCE_THRESHOLD={raw!r} invalide — seuil 0.7 utilisé[/yellow]"
+            f"[yellow]GLORFINDEL_CONFIDENCE_THRESHOLD={raw!r} invalide — toute action "
+            f"autonome est retenue jusqu'à correction[/yellow]"
         )
-        return 0.7
+    return value
 
 
 def _parse_decision(response) -> tuple[dict, object]:
@@ -672,6 +689,10 @@ def _parse_decision(response) -> tuple[dict, object]:
     except (TypeError, ValueError):
         raw_conf = None
         confidence = 0.0
+    # Bounded to [0, 1] (G2 review): a 5.0 read as 500 % in the cards and the memory. NaN
+    # is kept as it came: the confidence gate's `not >=` holds it.
+    if not math.isnan(confidence):
+        confidence = min(max(confidence, 0.0), 1.0)
     d["confidence"] = confidence
     # No action parsed → cannot act safely → force human review. `if not` rather than
     # setdefault: the schema asks for "" when there is nothing to say, and an explicit ""
@@ -700,11 +721,16 @@ def _apply_executable_guard(d: dict) -> None:
 def _apply_confidence_gate(d: dict, raw_conf, threshold: float) -> None:
     """An autonomous action below the confidence threshold is escalated."""
     if not d["escalate"] and d["action"] in AUTONOMOUS_ACTIONS:
-        if raw_conf is None or d["confidence"] < threshold:
+        if raw_conf is None or not d["confidence"] >= threshold:
             shown = "unknown" if raw_conf is None else f"{d['confidence']:.0%}"
             d["escalate"] = True
             d["held_by"] = "confidence"
             d["escalation_reason"] = f"Low confidence ({shown}) — human review required"
+            if math.isinf(threshold):
+                d["escalation_reason"] = (
+                    f"Seuil de confiance invalide (GLORFINDEL_CONFIDENCE_THRESHOLD) — action "
+                    f"'{d['action']}' (confiance {shown}) retenue pour revue humaine. "
+                    "Corriger la valeur (entre 0 et 1) pour qu'une action puisse partir seule.")
 
 
 def _apply_signal_guardrail(d: dict, signal: dict) -> None:
@@ -753,6 +779,36 @@ def _apply_attribution_guard(d: dict, signal: dict) -> None:
         f"de VM surveillée n'est à l'origine) — '{d['action']}' retenue pour revue "
         f"humaine. VMs surveillées : {candidates}. Vérifier laquelle est concernée "
         "(ou bloquer au périmètre) avant d'agir."
+    )
+
+
+def _apply_telemetry_guard(d: dict, gaps: list[str]) -> None:
+    """A disruptive action decided while an investigative query failed is held (G2).
+
+    The model read the failed queries as empty — no backup agent, no reboot, no login
+    that succeeded — and those absences are what argue for isolating or blocking. The
+    detection itself was read; the evidence around it was not. Independent of the
+    model's confidence, like the signal guardrail. A snapshot stays autonomous.
+
+    Already held by an earlier gate (low confidence…): that gate keeps the card, and its
+    reason gains the failed queries — the operator approving it must know the evidence
+    around the detection was not read (G2 review)."""
+    if d["action"] not in _DISRUPTIVE_AUTONOMOUS or not gaps:
+        return
+    if d["escalate"]:
+        d["escalation_reason"] = (
+            f"{d.get('escalation_reason') or ''} — Télémétrie incomplète : {len(gaps)} "
+            f"requête(s) d'enquête en échec ({', '.join(gaps)}), lues comme vides par le "
+            "modèle. Les relancer dans Log Analytics avant d'approuver."
+        ).lstrip(" —")
+        return
+    d["escalate"] = True
+    d["held_by"] = "telemetry"
+    d["escalation_reason"] = (
+        f"Télémétrie incomplète : {len(gaps)} requête(s) d'enquête en échec "
+        f"({', '.join(gaps)}). Le modèle les a lues comme vides : '{d['action']}' "
+        "retenue pour revue humaine (garde déterministe, indépendante de sa confiance). "
+        "Relancer les requêtes dans Log Analytics avant d'agir."
     )
 
 
@@ -808,7 +864,20 @@ def _apply_autonomy_mode(d: dict, mode: str, gate: dict | None = None) -> bool:
     """
     if mode == "human_only" and not d["escalate"] and d["action"] in AUTONOMOUS_ACTIONS:
         d["escalate"] = True
-        if gate:
+        if gate and gate.get("reason") == "config_unreadable":
+            # The configured mode is unknown — the file holding it can't be read; only a
+            # session --mode is known, and it is not applied (G2 review).
+            session = gate.get("configured")
+            d["escalation_reason"] = (
+                f"{gate.get('message') or 'glorfindel-config.yaml illisible'} : mode "
+                "configuré de la VM inconnu"
+                + (f", `--mode {session}` de la session ignoré" if session else "")
+                + f" — VM en human_only. Action '{d['action']}' recommandée (confiance "
+                f"{d['confidence']:.0%}), approbation humaine requise. Corriger "
+                "glorfindel-config.yaml : tant qu'il est illisible, aucune VM n'agit seule, "
+                "`--mode` compris."
+            )
+        elif gate:
             lift = ("Corriger les points bloquants (`glorfindel activate`) pour qu'elle "
                     "agisse seule." if gate.get("reason") == "not_ready" else
                     "Confirmer la VM (War Room, Activer) pour qu'elle agisse seule la "
@@ -890,9 +959,11 @@ def decide(
 
     Gates, in order (each a pure helper, testable on its own): parsing defaults →
     executable guard → confidence gate → deterministic signal guardrail → attribution
-    guard → release precondition → autonomy mode. A failed LLM call (after retries) escalates as
+    guard → telemetry guard → release precondition → autonomy mode. A failed LLM call
+    (after retries, each bounded by GLORFINDEL_LLM_TIMEOUT_S) escalates as
     `cycle_failed`. The gate that escalates is recorded (`held_by`) and gives the
-    escalation its type.
+    escalation its type. An unreadable glorfindel-config.yaml runs every VM in
+    human_only, `--mode` included (G2).
     """
     import litellm
 
@@ -903,19 +974,26 @@ def decide(
     # Resolve the mode for this asset first: the debug line of a failed decision
     # (cycle_failed) carries it too. Reload config fresh per cycle (hot-pickup)
     # unless one is injected (tests).
+    config_error = ""
     if autonomy is None:
         try:
             autonomy = load_glorfindel_config().autonomy
-        except Exception:
+        except Exception as exc:
             from glorfindel.config import AutonomyConfig
             autonomy = AutonomyConfig()
-    if autonomy_override:
-        # Session --mode pins the GLOBAL default; per-asset rules still win in resolve().
+            config_error = _first_line(exc)
+    # Session --mode pins the GLOBAL default; per-asset rules still win in resolve().
+    # Not over an unreadable config (G2): its per-asset rules — a VM pinned human_only —
+    # are lost with it, and --mode made every VM autonomous.
+    if autonomy_override and not config_error:
         autonomy.default = autonomy_override
     resource_id = signal.get("resource_id", "")
     asset_name = resource_id.split("/")[-1] if resource_id else ""
     mode = autonomy.resolve(asset_name)
     gate: dict = {}
+    if config_error:
+        gate = {"configured": autonomy_override or "", "reason": "config_unreadable",
+                "message": f"glorfindel-config.yaml illisible ({config_error[:200]})"}
     if readiness_gate is not None and mode != "human_only":
         try:
             mode, gate = readiness_gate(asset_name, resource_id, mode)
@@ -931,6 +1009,7 @@ def decide(
 
     try:
         from eregion_core.llm_call import completion_with_tool
+        from glorfindel.config import llm_timeout_s
         response = completion_with_tool(
             litellm, "security_decision",
             model=model,
@@ -945,6 +1024,9 @@ def decide(
             ],
             tools=[_DECISION_TOOL],
             num_retries=_LLM_RETRIES,
+            # Bounded (G2): a provider that hangs ends as a cycle_failed card, not hours
+            # of a held decision queue (LiteLLM's own default is 6000 s an attempt).
+            timeout=llm_timeout_s(),
             **kwargs,
         )
     except Exception as exc:
@@ -958,6 +1040,7 @@ def decide(
     _apply_confidence_gate(d, raw_conf, _confidence_threshold())
     _apply_signal_guardrail(d, signal)
     _apply_attribution_guard(d, signal)
+    _apply_telemetry_guard(d, state.get("telemetry_gaps") or [])
     _apply_release_precondition(d, signal)
 
     mode_hold = _apply_autonomy_mode(d, mode, gate)
@@ -1440,6 +1523,8 @@ def _write_debug_record(state: GlorfindelState) -> None:
         debug_record["autonomy_gate"] = state["autonomy_gate"]
     if state.get("cycle_error"):
         debug_record["cycle_error"] = state["cycle_error"]
+    if state.get("telemetry_gaps"):
+        debug_record["telemetry_gaps"] = state["telemetry_gaps"]
     out = Path("runs") / f"{run_id}_debug.jsonl"
     out.parent.mkdir(parents=True, exist_ok=True)
     with open(out, "a") as f:
@@ -1763,14 +1848,18 @@ class GlorfindelAgent:
         # dropdown changes) — self.autonomy here is only for the startup banner / display.
         self._autonomy_explicit = autonomy if autonomy is not None else None
         self._autonomy_override = autonomy_default
+        # Set when glorfindel-config.yaml can't be read at startup: decide() then runs
+        # every VM in human_only, --mode included — the banner says so (G2 review).
+        self.config_error = ""
         if autonomy is None:
             try:
                 from glorfindel.config import load_glorfindel_config
                 autonomy = load_glorfindel_config().autonomy
-            except Exception:
+            except Exception as exc:
                 from glorfindel.config import AutonomyConfig
                 autonomy = AutonomyConfig()
-        if autonomy_default:
+                self.config_error = _first_line(exc)
+        if autonomy_default and not self.config_error:
             autonomy.default = autonomy_default
         self.autonomy = autonomy
 
@@ -1804,6 +1893,7 @@ class GlorfindelAgent:
             "autonomy_mode": "",
             "mode_hold": False,
             "cycle_error": "",
+            "telemetry_gaps": [],
         }
         try:
             return self._graph.invoke(initial)

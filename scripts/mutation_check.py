@@ -464,6 +464,72 @@ MUTANTS = [
      "                    # THREAD_UPDATE (#169, 20/10): reopen it, try again once.\n"
      '                    await thread.edit(archived=False, reason="Card updated")\n',
      "                    # THREAD_UPDATE (#169, 20/10): reopen it, try again once.\n"),
+    # G2 (#77) — the failures of Glorfindel's dependencies: each one fails closed. One
+    # mutant at least per dependency (model, cloud API, telemetry, configuration).
+    ("M151", "the model: the decision call is unbounded, a hung provider holds the VM's queue (G2)",
+     "glorfindel/agent.py",
+     "            timeout=llm_timeout_s(),\n", ""),
+    ("M152", "the cloud API: a VM whose readiness check could not reach Azure acts alone (G2)",
+     "glorfindel/readiness.py",
+     '    if rec is None:\n        return {"reason": "not_checked", "codes": [],\n',
+     '    if rec is None:\n        return {}\n        return {"reason": "not_checked", "codes": [],\n'),
+    ("M153", "the telemetry: a failed investigative query is read as no rows (G2)",
+     "glorfindel/agent.py",
+     "    except Exception:\n        return None\n", "    except Exception:\n        return []\n"),
+    ("M154", "the telemetry: a disruptive action runs on investigative queries that failed (G2)",
+     "glorfindel/agent.py",
+     '    _apply_telemetry_guard(d, state.get("telemetry_gaps") or [])\n', ""),
+    ("M155", "the configuration: --mode makes every VM autonomous over an unreadable config (G2)",
+     "glorfindel/agent.py",
+     "    if autonomy_override and not config_error:\n", "    if autonomy_override:\n"),
+    ("M156", "the configuration: a malformed confidence threshold lets the gate through (G2)",
+     C,
+     "    if not 0.0 <= value <= 1.0:          # nan fails the comparison too\n",
+     "    if False:\n"),
+    ("M157", "the configuration: a read-only switch not spelled 1/true/yes leaves the writes on (G2)",
+     C,
+     "    return str(raw).strip().lower() not in _SWITCH_OFF\n",
+     '    return str(raw).strip().lower() in ("1", "true", "yes")\n'),
+    ("M158", "the configuration: an approval age limit of nan or inf executes a card of any age (G2)",
+     "glorfindel/api.py",
+     "    if math.isnan(value) or value == math.inf:\n        return 2.0\n", ""),
+    # G2, after the Opus 5.5 review (M159–M169 belong to lot 167).
+    ("M170", "the configuration: an approval age limit of 0 or less is lifted to 2 h, reopening "
+             "the one-click approval closed on purpose (G2 review)",
+     "glorfindel/api.py",
+     "    if math.isnan(value) or value == math.inf:\n",
+     "    if math.isnan(value) or value == math.inf or value <= 0:\n"),
+    ("M171", "the configuration: an approval age limit of 0 or less refuses no card of its own — "
+             "a card dated ahead of the clock runs (G2 review)",
+     "glorfindel/api.py",
+     "    if max_age_h <= 0:\n", "    if False:\n"),
+    ("M172", "the model: a NaN confidence passes the confidence gate (G2 review)",
+     "glorfindel/agent.py",
+     '        if raw_conf is None or not d["confidence"] >= threshold:\n',
+     '        if raw_conf is None or d["confidence"] < threshold:\n'),
+    ("M173", "the model: a confidence outside [0, 1] is kept as sent — 500 % on the card (G2 review)",
+     "glorfindel/agent.py",
+     "    if not math.isnan(confidence):\n        confidence = min(max(confidence, 0.0), 1.0)\n", ""),
+    ("M174", "the telemetry: a card held by an earlier gate does not say the queries failed (G2 review)",
+     "glorfindel/agent.py",
+     '    if d["escalate"]:\n        d["escalation_reason"] = (\n',
+     '    if d["escalate"]:\n        return\n        d["escalation_reason"] = (\n'),
+    ("M175", "the configuration: GLORFINDEL_LLM_TIMEOUT_S never reaches the containers (G2 review)",
+     "docker-compose.yml",
+     "  GLORFINDEL_LLM_TIMEOUT_S: ${GLORFINDEL_LLM_TIMEOUT_S:-}\n", ""),
+    ("M176", "the War Room reads the threshold from the agent: a failed import drops the "
+             "capability matrix (G2 review)",
+     "glorfindel/api.py",
+     "        from glorfindel.config import confidence_threshold\n        _allow: list = []\n",
+     "        from glorfindel.agent import _confidence_threshold as confidence_threshold\n"
+     "        _allow: list = []\n"),
+    ("M177", "the configuration: the watch banner shows --mode over an unreadable config (G2 review)",
+     "glorfindel/agent.py",
+     "        if autonomy_default and not self.config_error:\n", "        if autonomy_default:\n"),
+    ("M178", "the configuration: the card of an unreadable config reads « Réponse autonome "
+             "configurée » (G2 review)",
+     "glorfindel/agent.py",
+     '        if gate and gate.get("reason") == "config_unreadable":\n', "        if False:\n"),
 ]
 
 # Mutants measured by other tests than the invariants (their lot's own).
@@ -500,6 +566,8 @@ TESTS.update({mid: "tests/unit/test_campaign_runner.py" for mid in ("M123", "M12
 TESTS["M124"] = "tests/unit/test_makefile_campaign.py"
 TESTS["M119"] = "tests/unit/test_experiment_schema.py"
 TESTS["M150"] = "tests/unit/test_bot.py"
+TESTS.update({f"M{n}": "tests/unit/test_dependency_failures.py" for n in range(151, 159)})
+TESTS.update({f"M{n}": "tests/unit/test_dependency_failures.py" for n in range(170, 179)})
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

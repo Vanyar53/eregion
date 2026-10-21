@@ -115,7 +115,12 @@ export AZURE_SUBSCRIPTION_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 # export GLORFINDEL_READ_ONLY=1
 
 # Gate de confiance — action autonome avec confidence < seuil → escaladée (défaut 0.7)
+# Une valeur illisible ou hors de [0, 1] retient toute action autonome (échec fermé, G2).
 # export GLORFINDEL_CONFIDENCE_THRESHOLD=0.7
+
+# Borne d'un appel au modèle, par tentative (défaut 120 s) : un fournisseur pendu finit en
+# carte cycle_failed au lieu de tenir la file de la VM (LiteLLM attendait 6000 s).
+# export GLORFINDEL_LLM_TIMEOUT_S=120
 
 # Rétention discovery — une VM éteinte (absente du Heartbeat) reste visible dans le
 # registre tant que son dernier heartbeat date de moins de X heures, puis est évincée

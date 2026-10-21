@@ -191,6 +191,40 @@ Les mutants M18 à M29 réinjectent les défauts trouvés par la machine elle-m�
 (M21 à M24, trouvés à des milliers de séquences) ne sont pas attrapés à chaque tour au budget
 du push ; leur séquence figée, elle, les attrape à chaque push.
 
+### Les pannes des dépendances (G2)
+
+Les invariants modélisent les pannes d'Azure sous l'isolation (429, crash, 403, disque plein).
+G2 couvre les autres dépendances de la décision — le modèle, l'API du cloud au contrôle de
+préparation, la télémétrie de l'enquête, la configuration — par dix-sept mutants mesurés par
+`tests/unit/test_dependency_failures.py` (table `TESTS`). Les pannes passent par un cycle
+complet du graphe, avec un témoin positif qui exécute quand rien ne tombe ; les lecteurs des
+réglages (borne de l'appel, seuil, âge d'approbation, lecture seule, `docker-compose.yml`)
+sont testés directement :
+
+| Mutant | Panne réinjectée | Effet |
+|---|---|---|
+| M151 | l'appel de décision sans borne | un modèle pendu tient la file de la VM des heures, sans carte |
+| M152 | VM jamais contrôlée tenue pour prête | Azure injoignable au contrôle : la VM agit seule |
+| M153 | requête d'enquête en échec lue comme « aucune ligne » | isolation décidée sur une absence que la télémétrie n'a pas dite |
+| M154 | garde de télémétrie retirée | idem, l'échec connu mais ignoré |
+| M155 | `--mode` appliqué sur une configuration illisible | une VM épinglée `human_only` devient autonome |
+| M156 | seuil de confiance illisible accepté | `nan` ou `-1` : la porte de confiance ne retient plus rien |
+| M157 | interrupteur de lecture seule lu strictement | `on`, `TRUE` : les écritures restent ouvertes |
+| M158 | âge maximal d'approbation `nan` ou `inf` accepté | une carte de tout âge s'exécute depuis la War Room |
+| M170 | âge maximal d'approbation ≤ 0 ramené à 2 h | une approbation en un clic fermée exprès se rouvre |
+| M171 | âge maximal ≤ 0 sans refus propre | une carte datée en avance sur l'horloge s'exécute |
+| M172 | porte de confiance écrite `confiance < seuil` | une confiance `NaN` du modèle passe la porte |
+| M173 | confiance du modèle non bornée | un 5.0 s'affiche 500 % sur la carte et dans la mémoire |
+| M174 | requêtes en échec tues sur une carte retenue plus tôt | l'opérateur approuve sans savoir que l'enquête n'a rien lu |
+| M175 | `GLORFINDEL_LLM_TIMEOUT_S` absent d'`x-env` | réglé dans `.envrc`, ignoré par les conteneurs |
+| M176 | seuil lu dans l'agent par la War Room | un import en échec fait disparaître la matrice de capacités |
+| M177 | `--mode` appliqué à la bannière sur une configuration illisible | la bannière annonce un mode que rien n'applique |
+| M178 | carte d'une configuration illisible lue « réponse autonome configurée » | elle annonce un mode que personne n'a configuré |
+
+M151–M158 : huit sur huit attrapés au premier tour (21/10) ; M170–M178, ajoutés après la
+relecture : neuf sur neuf (21/10). Détail des pannes et de ce que fait Glorfindel :
+[`../glorfindel.md`](../glorfindel.md), « Pannes des dépendances ».
+
 ## Ce que les invariants ont trouvé
 
 Aucun de ces défauts n'avait été vu en revue. Chacun a son test et sa séquence figée.

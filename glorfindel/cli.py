@@ -366,11 +366,21 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
     # Surface the resolved autonomy policy at startup — it determines whether
     # actions execute or are held for human approval.
     _autonomy = agent.autonomy
-    console.print(
-        f"[bold]Autonomy:[/bold] default = [cyan]{_autonomy.default}[/cyan]"
-        + (f"  ([dim]{len(_autonomy.assets)} per-asset override(s)[/dim])"
-           if _autonomy.assets else "")
-    )
+    if getattr(agent, "config_error", ""):
+        # Unreadable config: every VM runs in human_only, --mode included (G2) — not the
+        # `default = <--mode>` the banner showed.
+        console.print(
+            f"[bold]Autonomy:[/bold] [yellow]glorfindel-config.yaml illisible "
+            f"({agent.config_error[:200]}) — toutes les VM en human_only"
+            + (f", --mode {mode_override} ignoré" if mode_override else "")
+            + " jusqu'à correction[/yellow]"
+        )
+    else:
+        console.print(
+            f"[bold]Autonomy:[/bold] default = [cyan]{_autonomy.default}[/cyan]"
+            + (f"  ([dim]{len(_autonomy.assets)} per-asset override(s)[/dim])"
+               if _autonomy.assets else "")
+        )
     if not dry_run and (_autonomy.default != "human_only"
                         or any(a.mode != "human_only" for a in _autonomy.assets)):
         console.print(

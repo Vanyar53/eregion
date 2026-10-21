@@ -303,6 +303,18 @@ def unblock(ip: str, resource_id: str, dry_run: bool, yes: bool):
         _record_manual_action("unblock_ip", resource_id, {**result, "ip": ip})
 
 
+def _start_campaign_reports(runs_dir) -> bool:
+    """The thread that writes the report of each campaign Orodruin publishes (IA0, #167;
+    analysis/hosted_report.py) — only with an exercise channel. Never raises: a report,
+    or its thread failing to start, never stops the watch."""
+    try:
+        from analysis import hosted_report
+        return hosted_report.start(runs_dir) is not None
+    except Exception as exc:  # the watch goes on without campaign reports
+        console.print(f"[yellow]Rapports de campagne désactivés — {type(exc).__name__}: {exc}[/yellow]")
+        return False
+
+
 @cli.command()
 @click.argument("runs_dir", type=click.Path(exists=True), default="runs")
 @click.option("--dry-run", is_flag=True)
@@ -677,6 +689,9 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
         _watch_channel = _wc.start()
         if _watch_channel is not None:
             console.print(f"[dim]Canal retour : {_watch_channel.channel}[/dim]")
+        # IA0 (#167): the campaigns published by Orodruin get their report written here.
+        if _start_campaign_reports(runs_dir):
+            console.print("[dim]Rapports de campagne : runs/campaigns/<id>/report.md[/dim]")
 
     if _rules_file:
         try:

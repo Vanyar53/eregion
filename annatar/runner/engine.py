@@ -259,6 +259,9 @@ class Engine:
             self._execute_action(executor, step)
 
         checks["attack"] = "PASS"
+        # T0 in the run's report: the campaign report on H0 bounds the run's decision with
+        # it, the debug file of the run being on another host (#167).
+        metrics["attack_time"] = T0
 
         # Emit attack_started — Glorfindel looks up its own detection rule by TTP
         # and owns the full detection + response cycle.
@@ -398,6 +401,7 @@ class Engine:
                     },
                 )
                 attack_started = True
+                metrics["attack_time"] = T0  # the campaign report on H0 reads it (#167)
                 console.print(
                     "[cyan]->[/cyan] Signal 'attack_started' emitted"
                     " — Glorfindel will detect via detection_rules.yaml."

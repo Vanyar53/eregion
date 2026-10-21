@@ -100,7 +100,7 @@ DOCKER_GLORFINDEL := docker run --rm $(GLORFINDEL_AZURE_ENV) $(GLORFINDEL_VOLS) 
 	glorfindel-host-init glorfindel-host-plan glorfindel-host-up glorfindel-host-down glorfindel-host-push \
 	glorfindel-host-start glorfindel-host-stop glorfindel-host-logs glorfindel-host-tunnel glorfindel-host-ssh \
 	glorfindel-host-env glorfindel-host-report glorfindel-host-url glorfindel-host-status glorfindel-host-pull \
-	glorfindel-host-model celebrimbor-workload \
+	glorfindel-host-model glorfindel-host-campaign-report celebrimbor-workload \
 	orodruin-init orodruin-plan orodruin-up orodruin-lock orodruin-push orodruin-check \
 	orodruin-stop orodruin-start orodruin-kill orodruin-down orodruin-ssh \
 	gothmog-preflight gothmog-run \
@@ -192,6 +192,8 @@ help:
 	@echo "Campagne (R1 + IA0) — kill-chain + rapport, depuis Orodruin :"
 	@echo "  make orodruin-campaign-plan CAMPAIGN_TARGET=<rid> [CAMPAIGN_MAX=5]  Planifie (rend un id)"
 	@echo "  make orodruin-campaign-run  CAMPAIGN=<id>    Joue la campagne (watch H0 en human_only)"
+	@echo "  make glorfindel-host-campaign-report CAMPAIGN=<id>  Son rapport, écrit seul sur H0"
+	@echo "    (#167 : code, tests et mutants — rien de mesuré sur le banc)"
 	@echo ""
 	@echo "Variables"
 	@echo "  SCENARIO    Path to scenario YAML (default: $(SCENARIO))"
@@ -307,7 +309,7 @@ check-azure-env:
 	fi
 
 glorfindel-start: check-azure-env build-glorfindel
-	mkdir -p $(HOME)/.glorfindel $(HOME)/.cache/chroma runs
+	mkdir -p $(HOME)/.glorfindel $(HOME)/.cache/chroma $(HOME)/.eregion/analysis runs
 	docker compose up -d
 	@echo ""
 	@echo "  War Room  →  http://localhost:7007"
@@ -320,11 +322,12 @@ glorfindel-stop:
 	docker compose down
 
 glorfindel-restart: check-azure-env build-glorfindel
+	mkdir -p $(HOME)/.glorfindel $(HOME)/.cache/chroma $(HOME)/.eregion/analysis runs
 	docker compose up -d --build --force-recreate
 	@echo "  War Room  →  http://localhost:7007"
 
 glorfindel-dev: check-azure-env build-glorfindel
-	mkdir -p $(HOME)/.glorfindel $(HOME)/.cache/chroma runs
+	mkdir -p $(HOME)/.glorfindel $(HOME)/.cache/chroma $(HOME)/.eregion/analysis runs
 	docker compose up -d
 	@echo "  War Room  →  http://localhost:7007  (watching for changes…)"
 	docker compose watch
@@ -489,7 +492,7 @@ glorfindel-host-push:
 	@echo "  host.env et glorfindel-config.yaml (human_only) poussés sur $(HOST_IP)"
 
 glorfindel-host-start:
-	$(HOST_SSH) 'test -f .eregion-host-ready && cd eregion && git pull -q --ff-only && make -s build-glorfindel && docker compose --profile bot up -d watch war-room bot && docker image prune -f >/dev/null'
+	$(HOST_SSH) 'test -f .eregion-host-ready && mkdir -p .eregion/analysis && cd eregion && git pull -q --ff-only && make -s build-glorfindel && docker compose --profile bot up -d watch war-room bot && docker image prune -f >/dev/null'
 	@echo ""
 	@echo "  ⚠ Arrête le Glorfindel local (make glorfindel-stop) : deux watch sur le même banc = cartes en double ;"
 	@echo "    et aucun autre bot avec le même DISCORD_BOT_TOKEN."
@@ -532,6 +535,12 @@ glorfindel-host-model:
 
 glorfindel-host-report:
 	$(HOST_SSH) 'docker exec eregion-watch glorfindel report --since $(or $(SINCE),7d)'
+
+# IA0 (#167) : le rapport d'une campagne lancée depuis Orodruin, écrit par la watch de la VM.
+glorfindel-host-campaign-report:
+	@test -n "$(CAMPAIGN)" || { echo "CAMPAIGN=<id> requis (rendu par orodruin-campaign-plan)"; exit 1; }
+	@case "$(CAMPAIGN)" in *[!A-Za-z0-9._-]*) echo "CAMPAIGN invalide : $(CAMPAIGN)"; exit 1;; esac
+	$(HOST_SSH) 'cat eregion/runs/campaigns/$(CAMPAIGN)/report.md 2>/dev/null || { cat eregion/runs/campaigns/$(CAMPAIGN)/report.error 2>/dev/null; echo "pas encore de rapport pour $(CAMPAIGN)"; exit 1; }'
 
 glorfindel-host-url:
 	@test -f $(HOST_ENV) || { echo "$(HOST_ENV) manquant (make glorfindel-host-env)"; exit 1; }
@@ -619,8 +628,12 @@ gothmog-run:
 # ── Campagne (R1 + IA0) — planifier puis lancer depuis Orodruin ───────────────
 # Même image, même identité qu'Annatar/Gothmog sur Orodruin. La campagne joue l'atomic
 # (T1136.001) avec d'autres techniques du catalogue ; le manifeste se pose dans ~/runs
-# (bind-monté). Le rapport (IA0) ne s'écrit pas sur Orodruin aujourd'hui : chromadb et litellm
-# manquent à l'image — rapatrier la campagne, puis make campaign-report (docs/operations.md).
+# (bind-monté). Le rapport (IA0) s'écrit seul sur H0 (#167 — code, tests et mutants M126–M149, M159–M169, M180–M186 ;
+# rien de mesuré sur le banc) : à la fin, la campagne publie son
+# manifeste et les rapports de ses runs sur le canal des fenêtres (EREGION_EXERCISE_CHANNEL,
+# même conteneur, aucun droit de plus) ; la watch de H0 les tire et écrit
+# runs/campaigns/<id>/report.md, avec les décisions de Glorfindel — make
+# glorfindel-host-campaign-report CAMPAIGN=<id> pour le lire (docs/analysis.md).
 # Deux temps : `campaign plan` rend un id, `campaign run <id>` le joue (la watch sur H0 est en
 # human_only — rien ne s'isole). ServerAliveInterval : une campagne dure longtemps (plusieurs
 # techniques et leurs fenêtres de détection), plus que le délai d'inactivité d'une IP publique.

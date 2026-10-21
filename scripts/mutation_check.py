@@ -43,6 +43,11 @@ CATSCHEMA = "schemas/technique_catalog.schema.json"
 WCH = "eregion_core/watch_channel.py"
 GOTH = "gothmog/runner/engine.py"
 DET = "annatar/runner/detection.py"
+CREP = "analysis/campaign_report.py"
+HREP = "analysis/hosted_report.py"
+XCH = "eregion_core/exercise_channel.py"
+ACLI = "annatar/cli.py"
+GCLI = "glorfindel/cli.py"
 INVARIANTS = "tests/unit/test_invariants.py"
 INSCRIPTION_TESTS = "tests/unit/test_inscription.py tests/unit/test_engine.py"
 DOCS_TESTS = "tests/unit/test_docs_budget.py"
@@ -241,7 +246,10 @@ MUTANTS = [
     ("M58", "a window never closed never lapses (B2)", "eregion_core/exercise.py",
      "    end = _parse(window.get(\"end\")) or expires\n    # A window closed late still lapses at its expiry.\n"
      "    last = min(end, expires) + timedelta(seconds=GRACE_AFTER_S)\n",
-     "    end = _parse(window.get(\"end\")) or when\n    last = end + timedelta(seconds=GRACE_AFTER_S)\n"),
+     # #167: the bound now lives in last_moment, which has no `when` — a window never closed
+     # gets no upper bound at all, a closed one keeps its own.
+     "    end = _parse(window.get(\"end\"))\n"
+     "    last = (min(end, expires) + timedelta(seconds=GRACE_AFTER_S)) if end else datetime.max.replace(tzinfo=timezone.utc)\n"),
     ("M59", "the observation report counts exercise cards (B2)", "glorfindel/escalations.py",
      "            exercises += 1\n            continue\n", "            exercises += 1\n"),
     ("M60", "an exercise card absorbs a real detection (B2)", "glorfindel/escalations.py",
@@ -457,6 +465,136 @@ MUTANTS = [
     # package is not: the guard tests the package, not the launcher alone.
     ("M125", "the reset guard trusts the glorfindel launcher alone, not its package (#165)", CRUN,
      '    if find_spec("glorfindel") is None:\n', "    if False:\n"),
+    # #167 — a campaign launched from Orodruin gets its report on H0. The decision of a run
+    # comes from the watch's files by #157's rule (CREP; DET for the rule itself, measured
+    # here through the report: M128, and M129 = M98's text); Orodruin publishes the campaign
+    # and nothing else (XCH, ACLI); the thread beside the watch writes it once, and never
+    # stops the watch (HREP, GCLI). M144–M148: the third review's findings; M159–M169 (after
+    # #169's M150 and lot G2's M151–M158): the fourth review's; M180–M186 (after lot G2's
+    # M170–M178): the fifth review's.
+    ("M126", "a decision seen after the run's window and its grace is attached to the run (#167)", CREP,
+     "                          float(attack_time), until.timestamp()) or {}\n",
+     "                          float(attack_time), None) or {}\n"),
+    ("M127", "a decision seen before the run's attack is attached to the run (#167)", CREP,
+     "                          float(attack_time), until.timestamp()) or {}\n",
+     "                          0.0, until.timestamp()) or {}\n"),
+    ("M128", "a decision on another VM is attached to the run (#167)", DET,
+     '        if signal.get("ttp") != ttp or not same_resource(signal.get("resource_id"), resource_id):\n',
+     '        if signal.get("ttp") != ttp:\n'),
+    ("M129", "the resource id's case keeps the watch's decision from the run (#167)", DET,
+     '    a, b = str(a or "").strip().lower(), str(b or "").strip().lower()\n',
+     '    a, b = str(a or "").strip(), str(b or "").strip()\n'),
+    ("M130", "Orodruin publishes the runs' debug files with the campaign (#167)", XCH,
+     '_RUN_FILES = ("{run_id}.json",)\n', '_RUN_FILES = ("{run_id}.json", "{run_id}_debug.jsonl")\n'),
+    ("M131", "a campaign-report thread that fails to start stops the watch (#167)", GCLI,
+     "    except Exception as exc:  # the watch goes on without campaign reports\n",
+     "    except ImportError as exc:  # the watch goes on without campaign reports\n"),
+    ("M132", "a failing pass stops the campaign-report thread (#167)", HREP,
+     '            _say(f"pass failed: {type(e).__name__}: {e}")\n', "            raise\n"),
+    ("M133", "a failing report escapes write_report, its attempt not counted (#167)", HREP,
+     "        except Exception as e:  # the model, the index, the files: noted, tried again later\n",
+     "        except OSError as e:  # the model, the index, the files: noted, tried again later\n"),
+    ("M134", "a report already written is written again (#167)", HREP,
+     "        if (cdir / REPORT).exists():  # written by a pass that held the lock before us\n",
+     "        if False:  # written by a pass that held the lock before us\n"),
+    ("M135", "two passes write the same report at once, no lock (#167)", HREP,
+     "            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)\n", "            pass\n"),
+    ("M136", "a campaign's run reports published at the root, over the runs' windows (#167)", XCH,
+     '                out.append((f"{CAMPAIGNS}/{cid}/runs/{name}", runs / name))\n',
+     "                out.append((name, runs / name))\n"),
+    ("M137", "a detection without an action is attached as the run's decision (#167)", CREP,
+     '    decided = [r for r in watch_records(float(attack_time)) if r.get("action")]\n',
+     "    decided = watch_records(float(attack_time))\n"),
+    ("M138", "the windows' pull reads the listing's first page only (#167)", XCH,
+     '        marker = (root.findtext("NextMarker") or "").strip()\n', '        marker = ""\n'),
+    ("M139", "a campaign's manifest is pulled although one of its runs did not come (#167)", XCH,
+     '        if m["rid"] is None and m["cid"] in failed:\n', "        if False:\n"),
+    ("M140", "the thread writes the report of a local campaign, not pulled from the channel (#167)", HREP,
+     "        if (cdir.name in failed or not (cdir / exercise_channel.PULLED).exists()\n",
+     "        if (cdir.name in failed\n"),
+    ("M141", "an aborted campaign gets its report written on H0 (#167)", HREP,
+     '        if not isinstance(manifest, dict) or manifest.get("state") != "done":\n',
+     '        if not isinstance(manifest, dict) or manifest.get("state") not in ("done", "aborted"):\n'),
+    ("M142", "a failing report is tried again without end (#167)", HREP,
+     "                or (cdir / REPORT).exists() or attempts(cdir) >= MAX_ATTEMPTS):\n",
+     "                or (cdir / REPORT).exists()):\n"),
+    ("M143", "the attempts are counted in report.error only: unwritable, the model is called without end (#167)",
+     HREP, "        return max(noted, _failures.get(_key(cdir), 0))\n", "        return noted\n"),
+    ("M144", "a detected run's decision not yet in the watch's files does not hold the report back (#167)",
+     HREP, "            waiting = waits_for_decisions(cdir, runs_dir, now=now, say=say)\n",
+     "            waiting = False\n"),
+    ("M145", "a run of unknown detection without a decision reads as « none » (#167, review 3)", CREP,
+     '_DECISION_SOUGHT = ("detected", "unknown")\n', '_DECISION_SOUGHT = ("detected",)\n'),
+    ("M146", "the wait for a decision ends with the window, without the cycle's lag (#167, review 3)", HREP,
+     "        deadline = min(seen_by + DECISION_LAG_S, cap)\n", "        deadline = min(seen_by, cap)\n"),
+    ("M147", "a trend or an observation on an unknown decision is kept without saying so (#167, review 3)",
+     CREP, "            if c.kind not in _DETECTION_KINDS and _RESPONSE.search(c.text) and not _UNKNOWN.search(c.text):\n",
+     "            if False:\n"),
+    ("M148", "the thread's messages of a campaign share one slot, said again every pull (#167, review 3)",
+     HREP, "    k = (_key(cdir), sort)\n", "    k = _key(cdir)\n"),
+    ("M149", "a failed publication raises into the campaign (#167)", ACLI,
+     '    except Exception as exc:\n        console.print(f"[yellow]Campaign not published to H0',
+     '    except OSError as exc:\n        console.print(f"[yellow]Campaign not published to H0'),
+    # #167, fourth review — M151–M158 are lot G2's.
+    ("M159", "the report's table leaves Glorfindel's escalation out (#167, review 4)", CREP,
+     "        how += [_ESCALATED[x.escalated]] if isinstance(x.escalated, bool) else []\n",
+     "        how += []\n"),
+    ("M160", "the facts given to the model leave Glorfindel's escalation out (#167, review 4)", CREP,
+     '"confidence": f.confidence, "escalated": f.escalated,\n', '"confidence": f.confidence,\n'),
+    ("M161", "a claim that cites the reason given to the model reads as « Glorfindel did not act » "
+     "(#167, review 4)", CREP,
+     '    + "".join(r"|(?<!\\w)" + re.escape(r) for r in REASONS),\n',
+     '    + "".join(r"|(?<!\\w)" + re.escape(r) for r in ()),\n'),
+    ("M162", "a trend on the detection alone is removed because a cited run's decision is unknown "
+     "(#167, review 4)", CREP,
+     "            if c.kind not in _DETECTION_KINDS and _RESPONSE.search(c.text) and not _UNKNOWN.search(c.text):\n",
+     "            if c.kind not in _DETECTION_KINDS and not _UNKNOWN.search(c.text):\n"),
+    ("M163", "a claim that Glorfindel acted on a run whose decision is unknown is kept (#167, review 4)",
+     CREP, "            elif _ACTED.search(told):\n", "            elif False:\n"),
+    ("M164", "a missed run whose window holds a decision reads as « Glorfindel did not act » "
+     "(#167, review 4)", CREP,
+     '        return {}, (LATE_OR_OTHER if dec else ""), until\n', '        return {}, "", until\n'),
+    ("M165", "a report waits for a decision that no file can bring, without an attack time or a "
+     "resource (#167, review 4)", HREP,
+     '        if set(why.split(", ")) & never_attached:  # the files are whole: no wait changes it\n',
+     "        if False:\n"),
+    ("M166", "a report.error that cannot be removed escapes write_report (#167, review 4)", HREP,
+     "        except OSError:  # an error left behind: the report is written, its presence wins (ready)\n",
+     "        except FileNotFoundError:  # an error left behind: the report is written, its presence wins (ready)\n"),
+    ("M167", "a failed pull of the campaigns is said again every pass (#167, review 4)", HREP,
+     '        _say_once(root, "pull", f"pull failed: {e}", say, key=_error_key(e))\n',
+     '        say(f"pull failed: {e}")\n'),
+    ("M168", "a campaign not all pulled is said again every pass (#167, review 4)", HREP,
+     '        _say_once(root / cid, "pull", f"{cid}: not all pulled — its report waits for the next pull", say)\n',
+     '        say(f"{cid}: not all pulled — its report waits for the next pull")\n'),
+    ("M169", "a failed pull of the windows shares the campaigns' slot, said again every pass "
+     "(#167, review 4)", HREP,
+     '_say_once(root, "windows", f"windows not pulled', '_say_once(root, "pull", f"windows not pulled'),
+    # #167, fifth review — M170–M178 are lot G2's.
+    ("M180", "the reason given to the model reads as a nothing again: « Glorfindel n'a pris aucune "
+     "décision dans la fenêtre » passes (#167, review 5)", CREP,
+     'NONE_IN_WINDOW = "décision non retrouvée dans la fenêtre"\n',
+     'NONE_IN_WINDOW = "aucune décision dans la fenêtre"\n'),
+    ("M181", "a failure whose text changes at every call (a timed-out connection) is said again "
+     "every pass (#167, review 5)", HREP,
+     "    key = message if key is None else key\n", "    key = message\n"),
+    ("M182", "a claim that Glorfindel quarantined, contained or neutralised a run whose decision "
+     "is unknown is kept (#167, review 5)", CREP,
+     '    r"|quarantaine|quarantine|conten|contain|interv|neutralis"\n', ""),
+    ("M183", "an observation on the containment of a run whose decision is unknown is not read "
+     "as speaking of the response (#167, review 5)", CREP,
+     '    r"|quarantaine|quarantine|conten|contain|neutralis",\n', '    ,\n'),
+    ("M184", "a reason given to the model is taken out inside a word: « aucune décision dans la "
+     "fenêtre d'un run manqué… » passes (#167, review 5)", CREP,
+     '    + "".join(r"|(?<!\\w)" + re.escape(r) for r in REASONS),\n',
+     '    + "".join(r"|" + re.escape(r) for r in REASONS),\n'),
+    ("M185", "a lock that cannot be opened is said nowhere (#167, review 5)", HREP,
+     '        _say_once(cdir, "lock", f"{cdir.name}: report not written, its lock cannot be opened "\n'
+     '                                f"({type(e).__name__}: {e}) — tried again at the next pull",\n'
+     "                  say, key=_error_key(e))\n", ""),
+    ("M186", "a lock that cannot be opened again, after an open that went through, is not said "
+     "(#167, review 5)", HREP,
+     '    _said.pop((_key(cdir), "lock"), None)   # opened: a later failure is said again\n', ""),
     # #169 — Discord archives an idle thread without telling the bot: the cached thread reads
     # open, the edit is refused (50083). M126–M149 are reserved for lot 167.
     ("M150", "a card edit refused because Discord archived its thread is not reopened (#169)",
@@ -565,6 +703,16 @@ TESTS.update({mid: "tests/unit/test_campaign_synthesizer.py"
 TESTS.update({mid: "tests/unit/test_campaign_runner.py" for mid in ("M123", "M125")})
 TESTS["M124"] = "tests/unit/test_makefile_campaign.py"
 TESTS["M119"] = "tests/unit/test_experiment_schema.py"
+# #167 — the report on H0 in test_hosted_report.py; the publication, the pulls and the end
+# of `campaign run` in test_campaign_channel.py.
+TESTS.update({mid: "tests/unit/test_hosted_report.py"
+              for mid in ("M126", "M127", "M128", "M129", "M131", "M132", "M133", "M134",
+                          "M135", "M137", "M140", "M141", "M142", "M143", "M144", "M145",
+                          "M146", "M147", "M148", "M159", "M160", "M161", "M162", "M163",
+                          "M164", "M165", "M166", "M167", "M168", "M169", "M180", "M181",
+                          "M182", "M183", "M184", "M185", "M186")})
+TESTS.update({mid: "tests/unit/test_campaign_channel.py"
+              for mid in ("M130", "M136", "M138", "M139", "M149")})
 TESTS["M150"] = "tests/unit/test_bot.py"
 TESTS.update({f"M{n}": "tests/unit/test_dependency_failures.py" for n in range(151, 159)})
 TESTS.update({f"M{n}": "tests/unit/test_dependency_failures.py" for n in range(170, 179)})

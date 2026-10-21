@@ -131,15 +131,37 @@ make orodruin-campaign-run CAMPAIGN=<id>     # joue la campagne (watch H0 en hum
 #   ou l'autre, le reset est sauté proprement (ni appel, ni échec, ni écriture) et le manifeste le
 #   note (scenarios[].reset : reset, skipped: …, ou failed: exit <code> si un glorfindel installé
 #   sort en erreur).
-#   Le rapport ne s'écrit PAS sur Orodruin aujourd'hui, même avec la clé du modèle d'analyse dans
-#   orodruin.env : il lui faut chromadb et litellm, absents de l'image (extra [annatar]). La campagne
-#   le dit à la fin (« Campaign report not written (ModuleNotFoundError…) ») et n'échoue pas. Pour
-#   l'écrire, rapatrier la campagne puis la lancer en local :
-#     mkdir -p runs/campaigns && scp -r <ORO_USER>@<ORO_IP>:runs/campaigns/<id> runs/campaigns/
-#     make campaign-report CAMPAIGN=<id>          # lit runs/campaigns/<id>/manifest.json ; clé du
-#                                                 # modèle d'analyse dans l'env local
-#   Les décisions de Glorfindel (runs/<run_id>_debug.jsonl) sont écrites là où tourne la watch (H0),
-#   pas sur Orodruin : sans elles, le rapport n'a que la détection et la latence de chaque run.
+#   Le rapport s'écrit sur H0, pas sur Orodruin (#167, 21/10 : code, tests et mutants M126–M149,
+#   M159–M169, M180–M186 écrits, pas encore mesuré sur le banc). Orodruin n'a ni chromadb ni litellm. Avec
+#   EREGION_EXERCISE_CHANNEL (orodruin.env), la fin de la campagne publie son manifeste et le
+#   rapport de chacun de ses runs dans le conteneur des fenêtres (campaigns/<id>/…), sans rien
+#   d'autre et sans droit nouveau. La campagne affiche l'id publié et, pour une campagne done, où
+#   le rapport s'écrira ; pour une autre (aborted), elle renvoie à make campaign-report. Un run
+#   exécuté sans rapport à publier (campaign run --runs-dir X : les rapports de run restent dans
+#   runs/) est signalé, et le rapport sur H0 n'est pas annoncé : H0 l'attendrait sans fin. Un
+#   échec de publication est signalé et ne fait pas échouer la campagne. Avec --no-report
+#   (annatar campaign run), la campagne n'est pas publiée non plus : H0 n'en écrit pas le
+#   rapport. L'image d'Orodruin doit être reconstruite pour écrire l'attack_time dans le rapport
+#   de chaque run : sans lui, aucune décision de la watch n'est rattachée au run.
+make glorfindel-host-campaign-report CAMPAIGN=<id>   # lit runs/campaigns/<id>/report.md sur H0
+#   (à défaut, son report.error). Le thread campaign-report de la watch hébergée tire la campagne
+#   toutes les 30 s et écrit report.md une fois, quand elle est done et que le rapport de chaque run
+#   exécuté est arrivé, seulement pour une campagne tirée du canal (marqueur .pulled). Les
+#   décisions viennent des watch-*_debug.jsonl de H0 (règle de #157 bornée par la fenêtre du run,
+#   docs/analysis.md). Un run détecté (ou de détection inconnue) sans décision retrouvée fait
+#   attendre le rapport jusqu'à la fin de sa fenêtre (grâce comprise), ou 15 min après la fin de
+#   la campagne sans fenêtre, plus 10 min pour que le cycle écrive sa décision : environ 25 min
+#   après la fin de la campagne. Sans attack_time ou sans resource_id, aucune attente (rien ne pourra
+#   être rattaché). Ensuite, le rapport dit pourquoi la décision est inconnue ; il donne action,
+#   confiance et escalade pour les décisions retrouvées. Un tirage des fenêtres en échec reporte
+#   le rapport au tirage suivant ; un tirage en échec n'est journalisé qu'une fois tant qu'il dure. En cas d'échec (une réponse du modèle
+#   sans appel d'outil compte), 3 essais au plus, puis abandon signalé dans make
+#   glorfindel-host-logs ([campaign-report]). Le compteur d'essais vit aussi en mémoire : effacer
+#   report.error ne suffit pas à relancer : redémarrer la watch (docker restart eregion-watch
+#   sur la VM) ou lancer la commande à la main ci-dessous. Index campaign_runs dans
+#   ~/.eregion/analysis sur la VM (monté dans le conteneur ; montage et image au prochain
+#   redéploiement de H0). À la main, sur la VM, si le rapport automatique a été abandonné :
+#     docker exec eregion-watch python -m analysis.campaign_report runs/campaigns/<id>
 annatar campaign plan --target <resource_id> [--llm]   # en local (banc) ; --llm pour le planner LLM
 annatar campaign run <campaign_id> --yes               # ratifie le budget/scope et exécute
 
@@ -151,7 +173,8 @@ make annatar-simulate-gap
 ANTHROPIC_API_KEY=...               # requis si provider Anthropic (défaut)
 GLORFINDEL_LLM_MODEL=...            # ex: ollama/llama3.1, openai/gpt-4o, azure/gpt-4o (défaut : anthropic/claude-sonnet-5-5, eregion_core/models.py)
 ANNATAR_LLM_MODEL=...               # planificateur de campagne d'Annatar (défaut : anthropic/claude-sonnet-4-6 — claude-sonnet-5-5 refuse ce prompt, 19/10)
-EREGION_ANALYSIS_MODEL=...          # IA d'analyse, rapport de campagne (défaut : anthropic/claude-haiku-5-5 — un autre modèle que Glorfindel)
+EREGION_ANALYSIS_MODEL=...          # IA d'analyse, rapport de campagne (défaut : anthropic/claude-haiku-5-5 — un autre modèle que Glorfindel) ; passé à la watch par docker-compose.yml (rapport écrit sur H0, #167)
+EREGION_ANALYSIS_INDEX=...          # index campaign_runs du rapport de campagne (défaut : ~/.eregion/analysis/chroma ; sur H0, le disque de la VM, monté)
 GLORFINDEL_LLM_BASE_URL=...         # endpoint self-hosted/Ollama (ex: http://localhost:11434)
 GLORFINDEL_WEBHOOK_URL=...          # Slack/Teams/Discord webhook — escalades ET actions autonomes
                                     # Discord : https://discord.com/api/webhooks/<id>/<token>/slack
@@ -166,7 +189,7 @@ GLORFINDEL_CONFIDENCE_THRESHOLD=0.7 # gate autonomie LLM (défaut 0.7 — en des
 GLORFINDEL_LLM_TIMEOUT_S=120        # borne d'un appel au modèle, par tentative (défaut 120 ; illisible, ≤0, >3600 → 120)
 GLORFINDEL_READ_ONLY=1              # creds lecture seule (SP Reader) — mode observe-only ; toute valeur sauf vide/0/false/no/off = lecture seule
 GLORFINDEL_DISCOVERY_RETENTION_H=8  # rétention d'une VM éteinte dans le registre avant éviction (défaut 8h)
-EREGION_EXERCISE_CHANNEL=https://…/exercises  # O1 : canal des fenêtres d'exercice (Orodruin publie, la watch hébergée lit) ; vide → fenêtres locales
+EREGION_EXERCISE_CHANNEL=https://…/exercises  # O1 : canal des fenêtres d'exercice (Orodruin publie, la watch hébergée lit) ; vide → fenêtres locales. Porte aussi les campagnes finies (campaigns/<id>/…, #167) ; posé sur la watch, il démarre le thread campaign-report
 # Orodruin seulement (orodruin.env) : EREGION_CHANNEL_SCOPE (le conteneur, seule attribution hors du banc acceptée),
 # EREGION_MAX_INJECTIONS / EREGION_MAX_RUN_S (plafond du contrat), EREGION_BENCH_RG
 # Gothmog : EREGION_BENCH_WORKSPACE (Log Analytics du banc pour la sonde Heartbeat, défaut law-celebrimbor-amonsul)

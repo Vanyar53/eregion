@@ -34,6 +34,8 @@ x-env: &env
   EREGION_EXERCISE_CHANNEL: ${EREGION_EXERCISE_CHANNEL:-}
   # #159 : le canal retour — la watch hébergée y publie battement de cœur et détections.
   EREGION_WATCH_CHANNEL: ${EREGION_WATCH_CHANNEL:-}
+  # IA0 (#167) : le modèle d'analyse du rapport de campagne écrit par la watch (vide → défaut).
+  EREGION_ANALYSIS_MODEL: ${EREGION_ANALYSIS_MODEL:-}
   ORT_LOGGING_LEVEL_DEFAULT: "3"
 
 services:
@@ -49,6 +51,8 @@ services:
       - ./glorfindel/rules:/app/glorfindel/rules
       - ${HOME}/.glorfindel:/root/.glorfindel
       - ${HOME}/.cache/chroma:/root/.cache/chroma
+      # IA0 (#167) : l'index campaign_runs du rapport de campagne, sur le disque de l'hôte.
+      - ${HOME}/.eregion/analysis:/root/.eregion/analysis
       - ./glorfindel-config.yaml:/app/glorfindel-config.yaml:ro
       - ./technique_catalog.yaml:/app/technique_catalog.yaml:ro
     develop:
@@ -58,6 +62,8 @@ services:
           ignore:
             - ./glorfindel/static
             - ./glorfindel/rules
+        - action: rebuild
+          path: ./analysis
         - action: rebuild
           path: ./annatar
         - action: rebuild

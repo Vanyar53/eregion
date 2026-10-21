@@ -235,7 +235,9 @@ MUTANTS = [
      "    for k in dropped:\n        del environ[k]\n", ""),
     # B2 (storage side): an exercise window labels only what it names, for a bounded time.
     ("M57", "a window labels every VM, not its targets (B2)", "eregion_core/exercise.py",
-     "    if resource_id.lower() not in (window.get(\"targets\") or []):\n        return False\n", ""),
+     # The target check moved into _covers (O1 part C); the mutant follows it there.
+     "    return resource_id.lower() in (window.get(\"targets\") or []) and live(window, when)\n",
+     "    return live(window, when)\n"),
     ("M58", "a window never closed never lapses (B2)", "eregion_core/exercise.py",
      "    end = _parse(window.get(\"end\")) or expires\n    # A window closed late still lapses at its expiry.\n"
      "    last = min(end, expires) + timedelta(seconds=GRACE_AFTER_S)\n",

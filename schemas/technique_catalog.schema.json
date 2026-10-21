@@ -134,6 +134,35 @@
               }
             }
           }
+        },
+        "steady_state": {
+          "description": "What 'normal' is on the target, verified before and after an engine-run technique (atomic, R1) — same shape as the experiment schema's steady_state. A probe and the value it must hold.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "probes": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "verify"
+                ],
+                "additionalProperties": true,
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "verify": {
+                    "type": "string"
+                  },
+                  "expect": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
         }
       },
       "allOf": [
@@ -237,6 +266,67 @@
             "properties": {
               "safe_target": {
                 "minLength": 1
+              }
+            }
+          }
+        },
+        {
+          "description": "An implemented atomic technique (engine: atomic, R1) verifies the initial state before and after: at least one steady-state probe, each with a non-empty verify and expect — like the experiment schema for an atomic.",
+          "if": {
+            "allOf": [
+              {
+                "properties": {
+                  "status": {
+                    "const": "implemented"
+                  }
+                },
+                "required": [
+                  "status"
+                ]
+              },
+              {
+                "properties": {
+                  "engine": {
+                    "const": "atomic"
+                  }
+                },
+                "required": [
+                  "engine"
+                ]
+              }
+            ]
+          },
+          "then": {
+            "required": [
+              "steady_state"
+            ],
+            "properties": {
+              "steady_state": {
+                "required": [
+                  "probes"
+                ],
+                "properties": {
+                  "probes": {
+                    "minItems": 1,
+                    "items": {
+                      "required": [
+                        "name",
+                        "verify",
+                        "expect"
+                      ],
+                      "properties": {
+                        "verify": {
+                          "minLength": 1,
+                          "pattern": "\\S"
+                        },
+                        "expect": {
+                          "minLength": 1,
+                          "pattern": "\\S"
+                        }
+                      }
+                    }
+                  }
+                }
               }
             }
           }

@@ -15,8 +15,10 @@ into the manifest (read post-hoc by the blue replay engine).
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 from datetime import datetime, timezone
+from importlib.util import find_spec
 from pathlib import Path
 from typing import Callable
 
@@ -32,14 +34,33 @@ def _utcnow() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _default_reset(resource_id: str) -> None:
-    """Reset NSG state (isolation + IP blocks) between scenarios."""
-    subprocess.run(
+def _default_reset(resource_id: str) -> str:
+    """Reset NSG state (isolation + IP blocks) between scenarios.
+
+    Returns what happened, recorded in the manifest: ``"reset"``, ``"skipped: …"`` or
+    ``"failed: exit <rc>"`` (a non-zero exit did not reset). ``glorfindel reset`` is not in
+    the Orodruin image (and outside the ``injector`` role). There, the ``glorfindel`` launcher
+    IS on PATH — ``pip install -e ".[annatar]"`` installs every ``[project.scripts]`` entry —
+    but the ``glorfindel`` package is not copied (annatar/Dockerfile), so the launcher would
+    exit 1 on ``ModuleNotFoundError``. The guard therefore tests the PACKAGE first
+    (``find_spec``), then the launcher: when either is missing, the reset is SKIPPED — quietly
+    (no loud failure), without shelling out or writing anything — and the manifest says so.
+    On H0 nothing isolates (human_only, read-only), so there is nothing to reset anyway.
+    """
+    if find_spec("glorfindel") is None:
+        return "skipped: glorfindel absent (package not installed — reset is not in the Orodruin image)"
+    if shutil.which("glorfindel") is None:
+        return "skipped: glorfindel absent (no launcher on PATH)"
+    proc = subprocess.run(
         ["glorfindel", "reset", resource_id, "--yes"],
         check=False,
         capture_output=True,
         timeout=120,
     )
+    # A reset that exits non-zero did not reset: say so, never "reset".
+    if proc.returncode != 0:
+        return f"failed: exit {proc.returncode}"
+    return "reset"
 
 
 class CampaignRunner:
@@ -48,7 +69,7 @@ class CampaignRunner:
         campaign_dir: str | Path,
         *,
         dry_run: bool = False,
-        reset_fn: Callable[[str], None] | None = None,
+        reset_fn: Callable[[str], str | None] | None = None,
         engine_factory: Callable[[], Engine] | None = None,
     ):
         self.campaign_dir = Path(campaign_dir)
@@ -131,12 +152,17 @@ class CampaignRunner:
             if entry.status == "executed":
                 executed += 1
 
-            # NSG reset between scenarios (clean attribution for the next one)
+            # NSG reset between scenarios (clean attribution for the next one). What happened
+            # is recorded on the entry — including a quiet skip when glorfindel is absent.
             if budget.reset_nsg_between:
                 try:
-                    self.reset_fn(entry.target_resource_id)
+                    status = self.reset_fn(entry.target_resource_id)
                 except Exception as e:  # reset failure must not abort the campaign
+                    status = f"failed: {e}"
                     console.print(f"[yellow]NSG reset failed: {e}[/yellow]")
+                if isinstance(status, str):
+                    entry.reset = status
+                    m.save(self.campaign_dir)
 
         m.set_state("aborted" if aborted else "done")
         m.save(self.campaign_dir)

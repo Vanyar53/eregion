@@ -3,6 +3,8 @@
 Engine + NSG reset are injected (no Azure, no LLM, no subprocess).
 """
 
+import subprocess
+
 import pytest
 
 from annatar.campaign.manifest import (
@@ -180,3 +182,95 @@ def test_engine_error_marks_error_continues(tmp_path):
     assert r.scenarios[0].error == "preflight failed"
     assert r.scenarios[1].status == "executed"  # campaign continued
     assert r.state == "done"
+
+
+def test_atomic_run_records_detection_and_latency_in_manifest(tmp_path):
+    # An atomic run's outcome (detection + latency, #157) reaches the manifest exactly as a
+    # local-script run's does — the campaign reads it post-hoc, and the report uses it.
+    cdir = _make_campaign(tmp_path, [_entry(1, "T1136.001", tactic="persistence")])
+    engine = FakeEngine([RunOutcome("run-atomic", "detected", detection_latency_s=44.7)])
+    r = CampaignRunner(cdir, reset_fn=lambda x: None, engine_factory=lambda: engine).run()
+    entry = r.scenarios[0]
+    assert entry.status == "executed"
+    assert entry.detection == "detected"
+    assert entry.detection_latency_s == 44.7
+    # and it survives a reload from disk (the manifest is the audit artifact)
+    reloaded = CampaignManifest.load(cdir)
+    assert reloaded.scenarios[0].detection == "detected"
+    assert reloaded.scenarios[0].detection_latency_s == 44.7
+
+
+def test_reset_status_recorded_in_manifest(tmp_path):
+    # Whatever the reset did is written on the entry — here a quiet skip the runner records.
+    cdir = _make_campaign(tmp_path, [_entry(1, "T1110.001")])
+    engine = FakeEngine([RunOutcome("run-1", "detected")])
+    r = CampaignRunner(
+        cdir,
+        reset_fn=lambda x: "skipped: glorfindel absent (reset is not in the Orodruin image)",
+        engine_factory=lambda: engine,
+    ).run()
+    assert "skipped" in r.scenarios[0].reset
+    assert "skipped" in CampaignManifest.load(cdir).scenarios[0].reset
+
+
+def _no_shell_out(*a, **k):  # the reset must NOT shell out when glorfindel cannot run
+    raise AssertionError("subprocess.run must not be called when glorfindel is absent")
+
+
+def test_default_reset_skips_quietly_in_the_orodruin_image(tmp_path, monkeypatch):
+    # The Orodruin image as it is (annatar/Dockerfile, `pip install -e ".[annatar]"`): the
+    # `glorfindel` launcher IS on PATH (every [project.scripts] entry is installed) but the
+    # glorfindel package is not copied, so `glorfindel reset` would exit 1 on
+    # ModuleNotFoundError. _default_reset must test the package and skip — no subprocess, no
+    # raise, no write — and say so (recorded in the manifest), never "failed: exit 1" (M125).
+    import annatar.campaign.runner as runner_mod
+
+    monkeypatch.setattr(runner_mod, "find_spec", lambda name: None)
+    monkeypatch.setattr(runner_mod.shutil, "which", lambda _name: "/usr/local/bin/glorfindel")
+    monkeypatch.setattr(runner_mod.subprocess, "run", _no_shell_out)
+    status = runner_mod._default_reset("/subscriptions/s/…/vm")
+    assert status.startswith("skipped")
+    assert "glorfindel absent" in status
+
+
+def test_default_reset_skips_quietly_without_launcher(tmp_path, monkeypatch):
+    # Package importable but no launcher on PATH: skipped as well, without shelling out.
+    import annatar.campaign.runner as runner_mod
+
+    monkeypatch.setattr(runner_mod, "find_spec", lambda name: object())
+    monkeypatch.setattr(runner_mod.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(runner_mod.subprocess, "run", _no_shell_out)
+    status = runner_mod._default_reset("/subscriptions/s/…/vm")
+    assert status.startswith("skipped")
+    assert "glorfindel absent" in status
+
+
+def test_default_reset_runs_when_glorfindel_present(tmp_path, monkeypatch):
+    import annatar.campaign.runner as runner_mod
+
+    monkeypatch.setattr(runner_mod, "find_spec", lambda name: object())
+    monkeypatch.setattr(runner_mod.shutil, "which", lambda _name: "/usr/bin/glorfindel")
+    calls = []
+
+    def _run(*a, **k):
+        calls.append(a)
+        return subprocess.CompletedProcess(a[0], 0)
+
+    monkeypatch.setattr(runner_mod.subprocess, "run", _run)
+    status = runner_mod._default_reset("/subscriptions/s/…/vm")
+    assert status == "reset"
+    assert len(calls) == 1  # it did shell out
+
+
+def test_default_reset_failing_exit_is_recorded_as_failed(tmp_path, monkeypatch):
+    # `glorfindel reset` exiting non-zero did NOT reset: the manifest must say "failed",
+    # never "reset" (review #165 point 5, M123).
+    import annatar.campaign.runner as runner_mod
+
+    monkeypatch.setattr(runner_mod, "find_spec", lambda name: object())
+    monkeypatch.setattr(runner_mod.shutil, "which", lambda _name: "/usr/bin/glorfindel")
+    monkeypatch.setattr(
+        runner_mod.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a[0], 2)
+    )
+    status = runner_mod._default_reset("/subscriptions/s/…/vm")
+    assert status == "failed: exit 2"

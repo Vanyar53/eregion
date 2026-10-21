@@ -152,11 +152,27 @@ resource_types:
         name: "Create Account: Local Account"
         tactic: persistence
         status: implemented
-        # blue
+        # R1 : cette technique passe par une bibliothèque publique (Atomic Red Team), plus
+        # par un script maison. L'adaptateur (annatar/engines/atomic.py) résout l'engine_ref
+        # contre les atomics vendorisés (annatar/atomics/, épinglés par PIN) et exécute la
+        # commande et le cleanup du test par Run Command. Le synthétiseur, voyant engine: atomic,
+        # écrit une expérience E1 (aucune étape) ; le moteur de l'entrée fait foi — jamais de
+        # repli run_script_on_vm, même si le reference_script ci-dessous traîne (historique).
+        engine: atomic
+        engine_ref: T1136.001/40d8eabd-e394-46f6-8785-b9bfa1d011d2
+        # blue (inchangé — Glorfindel lit les mêmes champs pour propose-rules)
         log_source: Syslog          # facility auth/authpriv
         indicator_key: syslog_event
         indicator_columns: [SyslogMessage, ProcessName]
         expected_latency_s: 480     # ingestion Syslog peut spiker — couvre le P99
+        # État normal vérifié sur la VM avant l'attaque (départ propre) et après le cleanup de
+        # l'atomic (retour vérifié). Repris de annatar/scenarios/azure/account-creation-atomic.yaml ;
+        # `#{username}` est rempli depuis l'argument par défaut de l'atomic (evil_user).
+        steady_state:
+          probes:
+            - name: user-absent
+              verify: "id #{username} >/dev/null 2>&1 && echo USER_PRESENT || echo USER_ABSENT"
+              expect: USER_ABSENT
         # red (confirmed — Annatar 2026-06-30)
         # Mute l'état système (useradd) mais revert immédiat + idempotent → NON destructif au sens
         # perte de donnée. safe_target=sandbox_disposable serait abusif ici (réversible). Laissé false.

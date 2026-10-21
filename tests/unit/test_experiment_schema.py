@@ -224,3 +224,62 @@ def test_a_destructive_technique_needs_a_safe_target():
     entry = dict(_from_catalog(CATALOG_FILE, "T1486"))
     entry["safe_target"] = ""
     assert _errors(_catalog(entry), CATALOG_SCHEMA)
+
+
+# ── An atomic technique in the catalog (R1) ─────────────────────────────────
+
+def test_the_catalog_atomic_entry_validates():
+    """The real T1136.001 entry is engine: atomic with its engine_ref and steady_state —
+    it validates (test_catalog_validates covers the whole file; this names the entry)."""
+    from eregion_core.experiment import _errors
+
+    entry = _from_catalog(CATALOG_FILE, "T1136.001")
+    assert entry["engine"] == "atomic"
+    assert entry["engine_ref"]
+    assert entry["steady_state"]["probes"]
+    assert _errors(_catalog(dict(entry)), CATALOG_SCHEMA) == []
+
+
+def test_an_implemented_atomic_without_steady_state_is_refused():
+    """M119: the catalog schema must require steady_state for an implemented atomic —
+    like the experiment schema for an atomic experiment."""
+    from eregion_core.experiment import _errors
+
+    entry = dict(_from_catalog(CATALOG_FILE, "T1136.001"))
+    del entry["steady_state"]
+    assert any("steady_state" in e for e in _errors(_catalog(entry), CATALOG_SCHEMA))
+
+
+def test_an_implemented_atomic_with_an_empty_probe_is_refused():
+    from eregion_core.experiment import _errors
+
+    entry = dict(_from_catalog(CATALOG_FILE, "T1136.001"))
+    entry["steady_state"] = {"probes": [{"name": "p", "verify": "", "expect": ""}]}
+    assert _errors(_catalog(entry), CATALOG_SCHEMA)
+
+
+def test_an_implemented_atomic_without_engine_ref_is_refused():
+    from eregion_core.experiment import _errors
+
+    entry = dict(_from_catalog(CATALOG_FILE, "T1136.001"))
+    del entry["engine_ref"]
+    assert any("engine_ref" in e for e in _errors(_catalog(entry), CATALOG_SCHEMA))
+
+
+@pytest.mark.parametrize("blank", ["verify", "expect"])
+def test_an_atomic_probe_made_of_spaces_is_refused_by_both_schemas(blank):
+    """The runner strips verify/expect (Engine._atomic_probe_error): a probe made of spaces
+    is empty to it — both schemas say so too (catalog entry and E1 experiment)."""
+    import yaml
+
+    from eregion_core.experiment import _errors
+
+    probe = {"name": "p", "verify": "true", "expect": "OK", blank: "   "}
+    entry = dict(_from_catalog(CATALOG_FILE, "T1136.001"))
+    entry["steady_state"] = {"probes": [probe]}
+    assert _errors(_catalog(entry), CATALOG_SCHEMA)
+
+    doc = yaml.safe_load((REPO / "annatar/scenarios/azure/account-creation-atomic.yaml").read_text())
+    assert validate_experiment(doc) == []
+    doc["steady_state"] = {"probes": [probe]}
+    assert validate_experiment(doc)

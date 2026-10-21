@@ -36,6 +36,10 @@ INS = "eregion_core/inscription.py"
 ENG = "annatar/runner/engine.py"
 EXE = "annatar/executors/azure_vm.py"
 ATO = "annatar/engines/atomic.py"
+SYN = "annatar/campaign/synthesizer.py"
+CRUN = "annatar/campaign/runner.py"
+MAKE = "Makefile"
+CATSCHEMA = "schemas/technique_catalog.schema.json"
 WCH = "eregion_core/watch_channel.py"
 GOTH = "gothmog/runner/engine.py"
 DET = "annatar/runner/detection.py"
@@ -45,6 +49,8 @@ DOCS_TESTS = "tests/unit/test_docs_budget.py"
 DETECTION_TESTS = "tests/unit/test_annatar_detection.py tests/unit/test_engine.py"
 # A mutant whose "old" text is RENAME renames its file to "new" instead of editing it.
 RENAME = object()
+# A mutant whose "old" and "new" are tuples makes several edits in its file, pair by pair
+# (old[i] -> new[i]), each old text matching exactly once — for a bug that needs two places.
 
 # (id, bug class, file, text in the code today, text that re-introduces the bug[, why
 # the invariants can't see it])
@@ -408,6 +414,47 @@ MUTANTS = [
      "        if result_event is None and channel and not _local_watch():\n", "        if False:\n"),
     ("M115", "an unreadable return channel is read as a miss (#159)", ENG,
      "                return None, None, why\n", '                return "detection_timeout", None, why\n'),
+    # #165 — a campaign plays an atomic from the catalog. The synthesizer writes an E1
+    # experiment for an atomic entry (SYN); the catalog schema requires its steady_state (CATSCHEMA).
+    ("M116", "the synthesizer falls back to run_script_on_vm for an atomic entry (#165)", SYN,
+     '    engine = entry.get("engine") or "local-script"\n', '    engine = "local-script"\n'),
+    # M117 also neutralizes the post-write check (_runtime_atomic_errors), which would refuse
+    # and delete the file on its own: the mutant measures the TESTS reading the written
+    # experiment, not the synthesizer's self-check (review #165, second correction).
+    ("M117", "the synthesizer writes an atomic without its steady-state probes, its post-write "
+     "check neutralized (#165)", SYN,
+     ('        "steady_state": {"probes": [dict(p) for p in probes]},\n',
+      "        errors = _runtime_atomic_errors(path)\n"),
+     ("", "        errors = []\n")),
+    ("M118", "the synthesizer accepts an engine_ref the adapter cannot resolve (#165)", SYN,
+     '    try:\n        resolve_ref(engine_ref)\n    except AtomicError as e:\n'
+     '        return SynthesisResult(False, f"{ttp}: engine_ref unresolved — {e}")\n',
+     "    pass\n"),
+    ("M119", "the catalog schema accepts an implemented atomic without steady_state (#165)", CATSCHEMA,
+     '                  "const": "atomic"\n', '                  "const": "atomic-never"\n'),
+    # #165, review — the plan runs in the Orodruin image (no jsonschema, no schemas/); the
+    # destructive guard is shared by every engine; a failed reset is not "reset"; the Make
+    # target does not echo the subscription.
+    ("M120", "the synthesizer validates the atomic with jsonschema at plan time (#165)", SYN,
+     "        errors = _runtime_atomic_errors(path)\n",
+     "        from eregion_core.experiment import validate_experiment_file\n"
+     "        errors = validate_experiment_file(path)\n"),
+    ("M121", "a raising validation leaves a half-planned experiment behind (#165)", SYN,
+     "        path.unlink(missing_ok=True)\n"
+     '        return SynthesisResult(False, f"{ttp}: produced experiment could not be validated — {e}")\n',
+     '        return SynthesisResult(False, f"{ttp}: produced experiment could not be validated — {e}")\n'),
+    ("M122", "a destructive atomic skips the allow_destructive/safe_target guard (#165)", SYN,
+     "    if destructive:\n        if not allow_destructive:\n",
+     '    if destructive and engine != "atomic":\n        if not allow_destructive:\n'),
+    ("M123", "a reset that exits non-zero is recorded as reset (#165)", CRUN,
+     "    if proc.returncode != 0:\n", "    if False:\n"),
+    ("M124", "orodruin-campaign-plan echoes its target, subscription included (#165)", MAKE,
+     '\t@echo "annatar campaign plan (Orodruin, max $(CAMPAIGN_MAX))" && $(ORO_SSH) ',
+     "\t$(ORO_SSH) "),
+    # #165, second review — in the Orodruin image the glorfindel launcher is on PATH but the
+    # package is not: the guard tests the package, not the launcher alone.
+    ("M125", "the reset guard trusts the glorfindel launcher alone, not its package (#165)", CRUN,
+     '    if find_spec("glorfindel") is None:\n', "    if False:\n"),
 ]
 
 # Mutants measured by other tests than the invariants (their lot's own).
@@ -436,6 +483,13 @@ TESTS.update({mid: "tests/unit/test_annatar_atomic.py"
 TESTS.update({mid: DETECTION_TESTS for mid in ("M98", "M99", "M100", "M101", "M102")})
 TESTS.update({mid: "tests/unit/test_watch_channel.py"
               for mid in ("M109", "M110", "M111", "M112", "M113", "M114", "M115")})
+# #165 — the atomic campaign: the synthesizer in test_campaign_synthesizer.py, the catalog
+# schema requirement in test_experiment_schema.py.
+TESTS.update({mid: "tests/unit/test_campaign_synthesizer.py"
+              for mid in ("M116", "M117", "M118", "M120", "M121", "M122")})
+TESTS.update({mid: "tests/unit/test_campaign_runner.py" for mid in ("M123", "M125")})
+TESTS["M124"] = "tests/unit/test_makefile_campaign.py"
+TESTS["M119"] = "tests/unit/test_experiment_schema.py"
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
@@ -554,9 +608,15 @@ def main() -> int:
                 target.rename(copy / new)
             else:
                 text = target.read_text()
-                if text.count(old) != 1:
-                    return mid, title, "STALE", f"{text.count(old)} matches"
-                target.write_text(text.replace(old, new))
+                if isinstance(old, tuple) != isinstance(new, tuple) or (
+                        isinstance(old, tuple) and len(old) != len(new)):
+                    return mid, title, "STALE", "old and new replacements do not pair up"
+                pairs = zip(old, new) if isinstance(old, tuple) else [(old, new)]
+                for o, n in pairs:
+                    if text.count(o) != 1:
+                        return mid, title, "STALE", f"{text.count(o)} matches"
+                    text = text.replace(o, n)
+                target.write_text(text)
             started = time.monotonic()
             target = TESTS.get(mid, INVARIANTS)
             caught = sum(_run(copy, args.examples, target=target) for _ in range(args.rounds))

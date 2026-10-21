@@ -44,6 +44,7 @@ class ScenarioEntry:
     run_id: str | None = None
     detection: str | None = None  # "detected" | "missed" | "unknown"
     detection_latency_s: float | None = None
+    reset: str | None = None      # NSG reset after this scenario: "reset", "skipped: …", "failed: …"
     started_at: str | None = None
     finished_at: str | None = None
     error: str | None = None

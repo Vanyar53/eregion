@@ -208,8 +208,8 @@
                 "items": {
                   "required": ["name", "verify", "expect"],
                   "properties": {
-                    "verify": { "minLength": 1 },
-                    "expect": { "minLength": 1 }
+                    "verify": { "minLength": 1, "pattern": "\\S" },
+                    "expect": { "minLength": 1, "pattern": "\\S" }
                   }
                 }
               }

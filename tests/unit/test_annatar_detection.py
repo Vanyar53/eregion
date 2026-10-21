@@ -305,6 +305,8 @@ def test_atomic_run_writes_the_latency_in_the_run(tmp_path, monkeypatch):
     assert (metrics["detection"], metrics["detection_latency_s"]) == ("detected", 117.5)
     # the wait was given the run's T0 — the attack_time attack_started carries
     assert seen["attack_time"] == _attack_started(tmp_path)["raw_signal"]["attack_time"]
+    # and the report keeps it: the campaign report on H0 bounds the run's decision with it (#167)
+    assert metrics["attack_time"] == seen["attack_time"]
 
 
 def test_local_script_run_writes_the_latency_in_the_run(tmp_path, monkeypatch):
@@ -320,6 +322,7 @@ def test_local_script_run_writes_the_latency_in_the_run(tmp_path, monkeypatch):
     metrics = _report(tmp_path)["metrics"]
     assert (metrics["detection"], metrics["detection_latency_s"]) == ("detected", 84.0)
     assert seen["attack_time"] == _attack_started(tmp_path)["raw_signal"]["attack_time"]
+    assert metrics["attack_time"] == seen["attack_time"]  # #167
 
 
 def test_unmeasured_run_records_no_latency(tmp_path, monkeypatch):

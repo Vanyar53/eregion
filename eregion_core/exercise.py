@@ -34,8 +34,12 @@ GRACE_AFTER_S = 15 * 60
 EXERCISE, REAL, UNKNOWN = "exercise", "real", "unknown"
 
 
-def exercises_dir() -> Path:
-    return Path(os.environ.get("EREGION_EXERCISES_DIR") or Path("runs") / "exercises")
+def exercises_dir(runs_dir: Path | None = None) -> Path:
+    """``EREGION_EXERCISES_DIR``, else ``<runs_dir>/exercises`` (``runs`` from the current
+    directory by default — the injector's and the watch's; the campaign report passes its
+    own, analysis/campaign_report.py)."""
+    return Path(os.environ.get("EREGION_EXERCISES_DIR")
+                or Path(runs_dir if runs_dir is not None else "runs") / "exercises")
 
 
 def _now() -> datetime:
@@ -125,13 +129,25 @@ def load_windows(directory: Path | None = None) -> list[dict]:
 
 def live(window: dict, when: datetime) -> bool:
     """The window is open at ``when``, or closed but still in its grace."""
+    start, last = _parse(window.get("start")), last_moment(window)
+    if start is None or last is None:
+        return False
+    return start <= when <= last
+
+
+def last_moment(window: dict) -> datetime | None:
+    """The last moment a detection still counts for the window — the upper bound of
+    ``live``: its end (never closed: its expiry; the earlier of the two) plus the grace.
+    ``None`` when its start or expiry is unreadable: nothing can be said to fall inside it.
+    The campaign report bounds a run's decisions with it (analysis/campaign_report.py,
+    #167)."""
     start, expires = _parse(window.get("start")), _parse(window.get("expires"))
     if start is None or expires is None:
-        return False
+        return None
     end = _parse(window.get("end")) or expires
     # A window closed late still lapses at its expiry.
     last = min(end, expires) + timedelta(seconds=GRACE_AFTER_S)
-    return start <= when <= last
+    return last
 
 
 def _covers(window: dict, resource_id: str, when: datetime) -> bool:

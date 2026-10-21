@@ -342,7 +342,9 @@ def campaign_plan(target, objective, max_scenarios, allow_destructive, use_llm, 
 @click.option("--dry-run", is_flag=True, help="Preview the sequence without executing.")
 @click.option("--runs-dir", default="runs", help="Where campaigns are stored.")
 @click.option("--report/--no-report", default=True,
-              help="Write the campaign report at the end (IA0, analysis/campaign_report.py).")
+              help="Write the campaign report at the end (IA0, analysis/campaign_report.py); "
+                   "with EREGION_EXERCISE_CHANNEL, publish the campaign to H0, whose watch "
+                   "writes it (#167). --no-report: neither written nor published.")
 def campaign_run(campaign_id, yes, dry_run, runs_dir, report):
     """Execute a planned campaign sequentially within its budget/scope."""
     from annatar.campaign.manifest import CampaignManifest, campaign_dir
@@ -373,8 +375,52 @@ def campaign_run(campaign_id, yes, dry_run, runs_dir, report):
             f"executed={r['executed']} detected={r['detected']} "
             f"missed={r['missed']} skipped={r['skipped']} errors={r['errors']}"
         )
-        if report:
+        # From Orodruin (an exercise channel set), the campaign goes to H0, whose watch
+        # writes its report (#167); else, or if it could not go, written here if possible.
+        if report and not _publish_campaign(cdir, runs_dir, result.state):
             _write_campaign_report(cdir)
+
+
+def _publish_campaign(cdir, runs_dir, state) -> bool:
+    """#167: carry the finished campaign to H0 over the exercise channel — its manifest and
+    its runs' reports, nothing else (eregion_core/exercise_channel.py) — and say where its
+    report will be written: on H0 for a ``done`` campaign only (the hosted watch writes no
+    other) whose executed runs all had their report to publish, by hand otherwise (and an
+    executed run without a report is said). False without a channel (nothing sent) or when the
+    publication failed: reported, never raised (the campaign has run)."""
+    from pathlib import Path
+
+    from eregion_core import exercise_channel
+
+    if not exercise_channel.channel_url():
+        return False
+    try:
+        cid, names = exercise_channel.publish_campaign(cdir, Path(runs_dir))
+    except Exception as exc:
+        console.print(f"[yellow]Campaign not published to H0 ({type(exc).__name__}: "
+                      f"{str(exc)[:120]})[/yellow]")
+        return False
+    try:
+        missing = exercise_channel.unpublished_runs(cdir, Path(runs_dir))
+    except Exception:  # the manifest was just published from this very file
+        missing = []
+    if missing:
+        # H0 waits for the report of every executed run: without them, it never writes the
+        # campaign's (`--runs-dir` other than runs/: the runs' reports stay in runs/).
+        console.print(f"[yellow]Campaign published to H0[/yellow] ({len(names)} file(s)) — "
+                      f"{len(missing)} executed run(s) without a report under {runs_dir}/ "
+                      f"(not published): H0 will not write its report on its own. By hand, "
+                      f"where the campaign, its runs and the watch's files are: "
+                      f"make campaign-report CAMPAIGN={cid}")
+    elif state == "done":
+        console.print(f"[green]Campaign published to H0[/green] ({len(names)} file(s)) — the "
+                      f"hosted watch writes its report: runs/campaigns/{cid}/report.md on H0 "
+                      f"(make glorfindel-host-campaign-report CAMPAIGN={cid})")
+    else:
+        console.print(f"[yellow]Campaign published to H0[/yellow] ({len(names)} file(s)) — "
+                      f"'{state}': no report is written on its own; by hand, where the "
+                      f"campaign and the watch's files are: make campaign-report CAMPAIGN={cid}")
+    return True
 
 
 def _write_campaign_report(cdir) -> None:

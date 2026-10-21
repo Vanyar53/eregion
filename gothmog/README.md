@@ -90,7 +90,7 @@ décide) — mesurés par `tests/unit/test_gothmog.py`.
 
 **Côté Glorfindel, fait le 21/10 (code)** : chacune des quatre dépendances — le modèle, l'API
 du cloud, la télémétrie, la configuration — échoue fermé, prouvé par un cycle complet du graphe
-et un mutant par panne (M151–M158, `tests/unit/test_dependency_failures.py`). Détail :
+et un mutant par panne (M151–M158 et M170–M178, `tests/unit/test_dependency_failures.py`). Détail :
 [`docs/glorfindel.md`](../docs/glorfindel.md), « Pannes des dépendances ».
 
 **Reste, sur le banc, avec Jonathan** : injecter ces pannes pour de vrai, depuis Orodruin, sur

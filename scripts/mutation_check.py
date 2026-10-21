@@ -464,6 +464,35 @@ MUTANTS = [
      "                    # THREAD_UPDATE (#169, 20/10): reopen it, try again once.\n"
      '                    await thread.edit(archived=False, reason="Card updated")\n',
      "                    # THREAD_UPDATE (#169, 20/10): reopen it, try again once.\n"),
+    # G2 (#77) — the failures of Glorfindel's dependencies: each one fails closed. One
+    # mutant at least per dependency (model, cloud API, telemetry, configuration).
+    ("M151", "the model: the decision call is unbounded, a hung provider holds the VM's queue (G2)",
+     "glorfindel/agent.py",
+     "            timeout=llm_timeout_s(),\n", ""),
+    ("M152", "the cloud API: a VM whose readiness check could not reach Azure acts alone (G2)",
+     "glorfindel/readiness.py",
+     '    if rec is None:\n        return {"reason": "not_checked", "codes": [],\n',
+     '    if rec is None:\n        return {}\n        return {"reason": "not_checked", "codes": [],\n'),
+    ("M153", "the telemetry: a failed investigative query is read as no rows (G2)",
+     "glorfindel/agent.py",
+     "    except Exception:\n        return None\n", "    except Exception:\n        return []\n"),
+    ("M154", "the telemetry: a disruptive action runs on investigative queries that failed (G2)",
+     "glorfindel/agent.py",
+     '    _apply_telemetry_guard(d, state.get("telemetry_gaps") or [])\n', ""),
+    ("M155", "the configuration: --mode makes every VM autonomous over an unreadable config (G2)",
+     "glorfindel/agent.py",
+     "    if autonomy_override and not config_error:\n", "    if autonomy_override:\n"),
+    ("M156", "the configuration: a malformed confidence threshold lets the gate through (G2)",
+     "glorfindel/agent.py",
+     "    if not 0.0 <= value <= 1.0:          # nan fails the comparison too\n",
+     "    if False:\n"),
+    ("M157", "the configuration: a read-only switch not spelled 1/true/yes leaves the writes on (G2)",
+     C,
+     "    return str(raw).strip().lower() not in _SWITCH_OFF\n",
+     '    return str(raw).strip().lower() in ("1", "true", "yes")\n'),
+    ("M158", "the configuration: an approval age limit of nan or inf executes a card of any age (G2)",
+     "glorfindel/api.py",
+     "    return value if math.isfinite(value) and value > 0 else 2.0\n", "    return value\n"),
 ]
 
 # Mutants measured by other tests than the invariants (their lot's own).
@@ -500,6 +529,7 @@ TESTS.update({mid: "tests/unit/test_campaign_runner.py" for mid in ("M123", "M12
 TESTS["M124"] = "tests/unit/test_makefile_campaign.py"
 TESTS["M119"] = "tests/unit/test_experiment_schema.py"
 TESTS["M150"] = "tests/unit/test_bot.py"
+TESTS.update({f"M{n}": "tests/unit/test_dependency_failures.py" for n in range(151, 159)})
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

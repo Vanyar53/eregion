@@ -633,14 +633,16 @@ class AzureConnector(CloudConnector):
     ISOLATION_PRIORITY = 100
 
     def __init__(self, dry_run: bool = False, read_only: bool | None = None):
-        import os
         self.dry_run = dry_run
         # read_only: when the SP only has Reader/Log Analytics Reader, write actions
         # cannot run. human_only mode never calls them, so detection-only deployments
         # work on read-only credentials. Declared via GLORFINDEL_READ_ONLY=1 (the
         # operator knows the SP's role; auto-detection isn't reliable without a write).
         if read_only is None:
-            read_only = os.environ.get("GLORFINDEL_READ_ONLY", "").lower() in ("1", "true", "yes")
+            # Any value but a clear "off" keeps it read-only (G2): a typo never turns the
+            # writes on.
+            from glorfindel.config import read_only_requested
+            read_only = read_only_requested()
         self.read_only = read_only
         self._credential = None
         self._subscription_id = None

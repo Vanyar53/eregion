@@ -1962,15 +1962,16 @@ def test_graph_llm_failure_records_cycle_failed_escalation_and_debug(tmp_path, m
     assert '"resolved_autonomy_mode": ""' not in debug
 
 
-def test_decide_malformed_threshold_falls_back_to_default(monkeypatch):
-    """GLORFINDEL_CONFIDENCE_THRESHOLD='abc' used to raise inside decide → cycle lost."""
+def test_decide_malformed_threshold_holds_instead_of_raising(monkeypatch):
+    """GLORFINDEL_CONFIDENCE_THRESHOLD='abc' used to raise inside decide → cycle lost;
+    then it fell back to 0.7. Since G2 it holds every autonomous action (fails closed)."""
     from glorfindel.agent import decide
     monkeypatch.setenv("GLORFINDEL_CONFIDENCE_THRESHOLD", "abc")
-    resp = _mock_llm_response("isolate_vm", confidence=0.5)
+    resp = _mock_llm_response("isolate_vm", confidence=0.95)
     with patch("litellm.completion", return_value=resp):
         out = decide(_state(), model="x", autonomy_override="non_disruptive")
-    assert out["escalate"] is True            # 0.5 < default 0.7
-    assert "Low confidence" in out["escalation_reason"]
+    assert out["escalate"] is True            # 0.95 would have passed the old 0.7
+    assert "Seuil de confiance invalide" in out["escalation_reason"]
 
 
 def test_decide_empty_reason_with_no_action_gets_a_reason():

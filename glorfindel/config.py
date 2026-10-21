@@ -30,6 +30,46 @@ class ConfigError(ValueError):
     A missing file is not an error — the defaults apply."""
 
 
+# ── Environment switches (G2): a malformed value never makes Glorfindel bolder ──
+
+# GLORFINDEL_READ_ONLY is off only when it clearly says so. The connector accepted
+# "1/true/yes" and the War Room "1/true/True": `on`, `TRUE` or `y` left the writes on
+# — the observe-only deployment the operator asked for, silently not one.
+_SWITCH_OFF = {"", "0", "false", "no", "off", "n"}
+
+
+def read_only_requested(value: str | None = None) -> bool:
+    """GLORFINDEL_READ_ONLY (or `value`): read-only unless unset, empty, or clearly off
+    (0, false, no, off). Any other value — a typo included — keeps Glorfindel read-only."""
+    import os
+    raw = os.environ.get("GLORFINDEL_READ_ONLY", "") if value is None else value
+    return str(raw).strip().lower() not in _SWITCH_OFF
+
+
+# A decision call is bounded: LiteLLM's own default is 6000 s per attempt (measured with
+# litellm 1.86.1), three attempts with the retries — a provider that hangs held the VM's
+# decision queue for hours, with no card. Bounded, it ends as a cycle_failed card.
+LLM_TIMEOUT_S = 120.0
+_LLM_TIMEOUT_MAX_S = 3600.0
+
+
+def llm_timeout_s() -> float:
+    """GLORFINDEL_LLM_TIMEOUT_S, in (0, 3600]. Unset, malformed, zero, negative or
+    infinite → 120 s: a malformed value never unbounds the call."""
+    import math
+    import os
+    raw = os.environ.get("GLORFINDEL_LLM_TIMEOUT_S", "").strip()
+    if not raw:
+        return LLM_TIMEOUT_S
+    try:
+        value = float(raw)
+    except ValueError:
+        return LLM_TIMEOUT_S
+    if not math.isfinite(value) or not 0 < value <= _LLM_TIMEOUT_MAX_S:
+        return LLM_TIMEOUT_S
+    return value
+
+
 def _flock(f, exclusive: bool) -> None:
     try:
         import fcntl

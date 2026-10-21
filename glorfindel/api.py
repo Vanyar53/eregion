@@ -282,14 +282,15 @@ async def state() -> dict:
     except Exception:
         pass
 
-    import os as _os
-    read_only = _os.environ.get("GLORFINDEL_READ_ONLY", "0") in ("1", "true", "True")
+    from glorfindel.config import read_only_requested
+    read_only = read_only_requested()
 
     # Autonomy capability matrix — what runs alone vs is always gated (UI popover).
     # Constants are stable per Glorfindel; import from actions (single source).
     capability: dict = {}
     try:
         from glorfindel.actions import AUTONOMOUS_ACTIONS, HUMAN_APPROVAL_REQUIRED
+        from glorfindel.agent import _confidence_threshold
         _allow: list = []
         try:
             _allow = list(_acfg.autonomy.allow_destructive)
@@ -299,7 +300,9 @@ async def state() -> dict:
             "autonomous_actions": sorted(AUTONOMOUS_ACTIONS),
             "gated_actions": sorted(HUMAN_APPROVAL_REQUIRED),
             "allow_destructive": _allow,
-            "confidence_threshold": float(_os.environ.get("GLORFINDEL_CONFIDENCE_THRESHOLD", "0.7")),
+            # The gate's own reading (G2): a malformed value holds every action — shown
+            # as 100 %, never as the 70 % it no longer is (nor a NaN in the JSON).
+            "confidence_threshold": min(_confidence_threshold(warn=False), 1.0),
         }
     except Exception:
         pass
@@ -699,8 +702,10 @@ async def readiness(vm_name: str) -> dict:
 
 
 def _read_only() -> bool:
-    import os
-    return os.environ.get("GLORFINDEL_READ_ONLY", "0") in ("1", "true", "True")
+    # The connector's reading, not a stricter one of its own (G2): `on` or `TRUE` used to
+    # leave the War Room's autonomy menus open on a read-only deployment.
+    from glorfindel.config import read_only_requested
+    return read_only_requested()
 
 
 # Observe-only: Glorfindel decides, a human judges, nothing acts — the autonomy mode stays
@@ -837,14 +842,19 @@ def _verify_approved(connector, esc: dict, action: str, resource_id: str, result
 # Escalation types whose held action a human may run in one click. Not
 # unattributed_signal: its card is anchored on a VM the detection did NOT name —
 # approving isolated that VM (fourth review, Q4).
-_APPROVABLE_TYPES = {"mode_hold", "low_confidence", "uncharacterized_signal", "release_hold"}
+_APPROVABLE_TYPES = {"mode_hold", "low_confidence", "uncharacterized_signal", "release_hold",
+                     "telemetry_gap"}
 
 
 def _approval_max_age_h() -> float:
+    """GLORFINDEL_APPROVAL_MAX_AGE_H, 2 h when unset or malformed. `nan` and `inf` parsed:
+    `age > nan` is never true, and a card of any age could be executed (G2)."""
+    import math
     try:
-        return float(os.environ.get("GLORFINDEL_APPROVAL_MAX_AGE_H", "2"))
+        value = float(os.environ.get("GLORFINDEL_APPROVAL_MAX_AGE_H") or "2")
     except ValueError:
         return 2.0
+    return value if math.isfinite(value) and value > 0 else 2.0
 
 
 def _approval_refusal(esc: dict, vm_name: str) -> str | None:

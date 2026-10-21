@@ -361,6 +361,7 @@ def author_rule(
         kwargs["base_url"] = base_url
 
     from eregion_core.llm_call import completion_with_tool
+    from glorfindel.config import llm_timeout_s
     response = completion_with_tool(
         litellm, "propose_detection_rule",
         model=model,
@@ -374,6 +375,8 @@ def author_rule(
             {"role": "user", "content": user_msg},
         ],
         tools=[RULE_PROPOSAL_TOOL],
+        # Bounded like the decision (G2): it runs in the VM's queue on a detection_missed.
+        timeout=llm_timeout_s(),
         **kwargs,
     )
 

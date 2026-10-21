@@ -47,6 +47,7 @@ _ESCALATION_LABELS = {
     "release_hold": "levée retenue (restauration non terminée, ou rejeu possible au démarrage)",
     "ttl_exceeded": "isolation levée à l'expiration du TTL",
     "unattributed_signal": "détection non attribuée à cette VM",
+    "telemetry_gap": "télémétrie incomplète (requêtes d'enquête en échec)",
     "readiness_hold": "VM retenue en observation (préparation)",
 }
 

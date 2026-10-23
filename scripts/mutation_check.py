@@ -676,6 +676,10 @@ MUTANTS = [
              "configurée » (G2 review)",
      "glorfindel/agent.py",
      '        if gate and gate.get("reason") == "config_unreadable":\n', "        if False:\n"),
+    # The bench, all or part (21/10): `celebrimbor-stop` without VM= nor ALL=1 spares the VMs
+    # tagged always-on — bree, the real load the hosted Glorfindel (H0) watches.
+    ("M189", "make celebrimbor-stop also deallocates the always-on VMs (bree) without ALL=1", MAKE,
+     "BENCH_KEEP = $(if $(or $(VM),$(ALL)),, && tags.\\\"always-on\\\" != 'true')\n", "BENCH_KEEP =\n"),
 ]
 
 # Mutants measured by other tests than the invariants (their lot's own).
@@ -724,6 +728,7 @@ TESTS.update({mid: "tests/unit/test_campaign_channel.py"
 TESTS["M150"] = "tests/unit/test_bot.py"
 TESTS.update({f"M{n}": "tests/unit/test_dependency_failures.py" for n in range(151, 159)})
 TESTS.update({f"M{n}": "tests/unit/test_dependency_failures.py" for n in range(170, 179)})
+TESTS["M189"] = "tests/unit/test_makefile_bench.py"
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

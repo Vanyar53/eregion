@@ -5,7 +5,12 @@ resource "azurerm_linux_virtual_machine" "baseline" {
   location            = azurerm_resource_group.celebrimbor.location
   size                = each.value.vm_size
   admin_username      = local.cfg.admin_username
-  tags                = try(each.value.enrolled, true) ? local.common_tags : local.unenrolled_tags
+  # always_on (config.yaml) → tag always-on=true : `make celebrimbor-stop` épargne ces VM sans
+  # VM= ni ALL=1 (bree, la charge que le Glorfindel hébergé observe en continu).
+  tags = merge(
+    try(each.value.enrolled, true) ? local.common_tags : local.unenrolled_tags,
+    { for k, v in { "always-on" = "true" } : k => v if try(each.value.always_on, false) },
+  )
 
   network_interface_ids = [azurerm_network_interface.celebrimbor_vm[each.key].id]
 

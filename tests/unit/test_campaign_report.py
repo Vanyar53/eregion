@@ -104,3 +104,18 @@ def test_the_report_writes_itself_at_the_end_of_a_campaign(tmp_path, monkeypatch
         raise RuntimeError("no API key")
     monkeypatch.setattr(cr, "build", boom)
     cli._write_campaign_report(cdir)          # says so, does not raise
+
+
+def test_the_table_shows_each_runs_latency(tmp_path):
+    """#174 (M190): the table has a « Latence » column — the run's `detection_latency_s`, one
+    decimal with a comma, « — » without one; the facts given to the model are unchanged."""
+    facts = cr.collect_facts(_campaign(tmp_path))
+    late = cr.RunFact("R3", "C1", 3, "T1486", "Encrypt", "executed", "detected", latency_s=106.34)
+    md = cr.render(cr.Report("C1", facts + [late], model="fake/model"))
+    assert "| # | Technique | Run | Détection | Latence | Décision de Glorfindel |" in md
+    assert "| 1 | T1136.001 Create Account | `R1` | detected | 84,0 s | snapshot (35%, escaladé) |" in md
+    assert "| 2 | T1110.001 Brute Force | `R2` | missed | — | — |" in md
+    assert "| 3 | T1486 Encrypt | `R3` | detected | 106,3 s | — |" in md
+    rows = [json.loads(line) for line in cr._facts_message(facts + [late], []).splitlines()
+            if line.startswith("{")]
+    assert [r["latency_s"] for r in rows] == [84, None, 106.34]

@@ -159,7 +159,8 @@ help:
 	@echo "  make celebrimbor-up   [TOPO=] [INSTANCE=]   Apply baseline (+ topos)"
 	@echo "  make celebrimbor-down TOPO=x                Détruit UNE topo (baseline préservé)"
 	@echo "  make celebrimbor-down CONFIRM=<instance>    Teardown TOTAL (gardé, baseline inclus)"
-	@echo "  make celebrimbor-stop / celebrimbor-start         Éteint/rallume les VMs (sans détruire)"
+	@echo "  make celebrimbor-stop / celebrimbor-start         Éteint/rallume le banc (sans détruire) ; VM=<nom> pour une seule"
+	@echo "                                                    VM ; stop épargne les VM always-on (bree), sauf ALL=1"
 	@echo "  make celebrimbor-output [INSTANCE=]         Fragment glorfindel-config.yaml généré"
 	@echo ""
 	@echo "Glorfindel hébergé (H0 : pré-observation, état Terraform séparé)"
@@ -363,7 +364,8 @@ glorfindel-shell: build-glorfindel
 #   make celebrimbor-up TOPO="multinic,aks"   # n'active QUE ces topos
 #   make celebrimbor-up INSTANCE=ci-1234       # stack isolée (workspace dédié)
 #   make celebrimbor-plan TOPO=multinic        # plan seul (lecture, pas d'apply)
-#   make celebrimbor-stop / celebrimbor-start        # éteint/rallume les VMs sans détruire
+#   make celebrimbor-stop / celebrimbor-start        # éteint/rallume le banc sans détruire
+#     [VM=gondolin]                                  # une seule VM ; stop épargne les VM always-on (bree) sauf ALL=1
 #   make celebrimbor-output                    # fragment glorfindel-config.yaml généré
 #
 # ⚠ celebrimbor-down est GARDÉ (incident 2026-06-25 : un down non scopé a emporté tout
@@ -431,13 +433,28 @@ celebrimbor-workload:
 	  --command-id RunShellScript --scripts @infra/terraform/scripts/workload.sh \
 	  --query 'value[0].message' -o tsv | tail -5
 
+# Éteindre / rallumer le banc, tout ou partie, sans rien détruire. Les VM visées sont affichées
+# avant d'agir.
+#   VM=<nom>  une seule VM : nom court (gondolin, bree) ou complet (vm-celebrimbor-gondolin)
+#   ALL=1     (stop) éteint aussi les VM au tag always-on=true (config.yaml : always_on) — bree,
+#             la charge réelle que le Glorfindel hébergé (H0) observe ; sans VM ni ALL, stop les épargne.
+BENCH_VMS = [?tags.project=='celebrimbor' && tags.instance=='$(INSTANCE)'$(if $(VM), && (name=='$(VM)' || ends_with(name, '-$(VM)')))
+BENCH_KEEP = $(if $(or $(VM),$(ALL)),, && tags.\"always-on\" != 'true')
+
 celebrimbor-stop:
-	@ids=$$(az vm list --query "[?tags.project=='celebrimbor' && tags.instance=='$(INSTANCE)'].id" -o tsv); \
-	 [ -n "$$ids" ] && az vm deallocate --ids $$ids || echo "Aucune VM celebrimbor pour l'instance '$(INSTANCE)'"
+	@case "$(VM)" in *[!A-Za-z0-9-]*) echo "VM invalide : $(VM)"; exit 1;; esac; \
+	 vms=$$(az vm list --query "$(BENCH_VMS)$(BENCH_KEEP)].[id, name, tags.\"always-on\"]" -o tsv); \
+	 [ -n "$$vms" ] || { echo "Aucune VM celebrimbor à éteindre (instance '$(INSTANCE)'$(if $(VM), VM '$(VM)'))"; exit 0; }; \
+	 echo "$$vms" | awk -F'\t' '{ print "  az vm deallocate : " $$2 ($$3 == "true" ? "  (always-on)" : "") }'; \
+	 $(if $(or $(VM),$(ALL)),,echo "  (les VM always-on sont épargnées ; ALL=1 pour les éteindre aussi)";) \
+	 az vm deallocate --ids $$(echo "$$vms" | cut -f1)
 
 celebrimbor-start:
-	@ids=$$(az vm list --query "[?tags.project=='celebrimbor' && tags.instance=='$(INSTANCE)'].id" -o tsv); \
-	 [ -n "$$ids" ] && az vm start --ids $$ids || echo "Aucune VM celebrimbor pour l'instance '$(INSTANCE)'"
+	@case "$(VM)" in *[!A-Za-z0-9-]*) echo "VM invalide : $(VM)"; exit 1;; esac; \
+	 vms=$$(az vm list --query "$(BENCH_VMS)].[id, name]" -o tsv); \
+	 [ -n "$$vms" ] || { echo "Aucune VM celebrimbor à rallumer (instance '$(INSTANCE)'$(if $(VM), VM '$(VM)'))"; exit 0; }; \
+	 echo "$$vms" | awk -F'\t' '{ print "  az vm start : " $$2 }'; \
+	 az vm start --ids $$(echo "$$vms" | cut -f1)
 
 # ── Glorfindel hébergé (H0) ───────────────────────────────────────────────
 # La VM du défenseur, hors du banc : infra/glorfindel-host/README.md. Lecture seule sur le

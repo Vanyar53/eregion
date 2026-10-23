@@ -12,6 +12,9 @@ make report-eval                       # harnais : fidélité et instruction pla
 (techniques, runs, détectée / manquée, latence), et pour chaque run le rapport d'Annatar et le
 fichier de décision de Glorfindel (`runs/<run_id>_debug.jsonl`). Les chiffres d'en-tête et le
 tableau sont calculés.
+Le tableau donne, par run, la technique, le run, la détection, sa latence (`detection_latency_s`
+du manifeste, à une décimale : « 106,3 s » ; « — » sans latence, un run manqué par exemple) et
+la décision de Glorfindel.
 
 **L'index** : une collection ChromaDB à part (`campaign_runs`, `~/.eregion/analysis/chroma`),
 distincte de la mémoire de Glorfindel. Il ramène les runs passés des mêmes techniques, ce qui

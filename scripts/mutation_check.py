@@ -680,6 +680,9 @@ MUTANTS = [
     # tagged always-on — bree, the real load the hosted Glorfindel (H0) watches.
     ("M189", "make celebrimbor-stop also deallocates the always-on VMs (bree) without ALL=1", MAKE,
      "BENCH_KEEP = $(if $(or $(VM),$(ALL)),, && tags.\\\"always-on\\\" != 'true')\n", "BENCH_KEEP =\n"),
+    # #174 — the report's table shows each run's detection latency, « — » without one.
+    ("M190", "the report's table leaves the detection latency out (#174)", CREP,
+     "| {x.detection} | {_latency(x.latency_s)} | {dec} |\")\n", "| {x.detection} | {dec} |\")\n"),
 ]
 
 # Mutants measured by other tests than the invariants (their lot's own).
@@ -729,6 +732,7 @@ TESTS["M150"] = "tests/unit/test_bot.py"
 TESTS.update({f"M{n}": "tests/unit/test_dependency_failures.py" for n in range(151, 159)})
 TESTS.update({f"M{n}": "tests/unit/test_dependency_failures.py" for n in range(170, 179)})
 TESTS["M189"] = "tests/unit/test_makefile_bench.py"
+TESTS["M190"] = "tests/unit/test_campaign_report.py"
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

@@ -244,7 +244,7 @@ def test_a_missed_run_whose_window_holds_a_decision_is_unknown_not_none(tmp_path
                             cr.Claim("missed", "La création du compte a été manquée.", ["R1"])], [r1], [])
     assert none.rejected.startswith("the decision of a cited run is unknown") and not seen.rejected
     md = cr.render(cr.Report("C1", [r1], model="fake/model"))
-    assert f"| `R1` | missed | inconnue — {cr.LATE_OR_OTHER} |" in md
+    assert f"| `R1` | missed | — | inconnue — {cr.LATE_OR_OTHER} |" in md
     # no decision in its window (nor one past it): nothing to say, as before
     cdir, _ = _h0(tmp_path / "b", scenarios=missed, watch=[_decision(at=LAST + timedelta(seconds=1))])
     assert cr.collect_facts(cdir)[0].decision_unknown == ""
@@ -363,9 +363,9 @@ def test_the_report_and_the_model_see_the_unknown(tmp_path):
     alone = cr.RunFact("R3", "C1", 3, "T1486", "step 3", "executed", "detected",
                        decision="isolate_vm", confidence=0.9, escalated=False)
     md = cr.render(cr.Report("C1", [UNKNOWN, done, alone], model="fake/model"))
-    assert "| 1 | T1136.001 step 1 | `R1` | detected | inconnue — décision non retrouvée dans la fenêtre |" in md
-    assert "| 2 | T1110.001 step 2 | `R2` | detected | snapshot (40%) |" in md
-    assert "| 3 | T1486 step 3 | `R3` | detected | isolate_vm (90%, sans escalade) |" in md
+    assert "| 1 | T1136.001 step 1 | `R1` | detected | 120,0 s | inconnue — décision non retrouvée dans la fenêtre |" in md
+    assert "| 2 | T1110.001 step 2 | `R2` | detected | — | snapshot (40%) |" in md
+    assert "| 3 | T1486 step 3 | `R3` | detected | — | isolate_vm (90%, sans escalade) |" in md
     assert "ce n'est pas dire que Glorfindel n'a pas agi" in md
     rows = [json.loads(line) for line in cr._facts_message([UNKNOWN, done, alone], []).splitlines()
             if line.startswith("{")]
@@ -827,7 +827,7 @@ def test_a_detected_run_without_its_decision_holds_the_report_back(tmp_path, mon
     later = LAST.timestamp() + hr.DECISION_LAG_S + 1
     assert hr.tick(h0, now=later, **kw) == {"C1": "written"}
     md = (h0 / "campaigns" / "C1" / hr.REPORT).read_text()
-    assert "| `R1` | detected | inconnue — décision non retrouvée dans la fenêtre |" in md
+    assert "| `R1` | detected | — | inconnue — décision non retrouvée dans la fenêtre |" in md
 
 
 def test_end_to_end_a_campaign_from_orodruin_gets_its_report_on_h0(tmp_path, monkeypatch, index):
@@ -844,8 +844,8 @@ def test_end_to_end_a_campaign_from_orodruin_gets_its_report_on_h0(tmp_path, mon
     assert hr.tick(h0, **kw) == {"C1": "written"}
     assert sorted(os.listdir(h0 / "exercises")) == ["R1.json", "R2.json"]
     md = (h0 / "campaigns" / "C1" / hr.REPORT).read_text()
-    assert "| 1 | T1136.001 step 1 | `R1` | detected | snapshot (40%, escaladé) |" in md
-    assert f"| 2 | T1136.001 step 2 | `R2` | missed | inconnue — {cr.LATE_OR_OTHER} |" in md
+    assert "| 1 | T1136.001 step 1 | `R1` | detected | — | snapshot (40%, escaladé) |" in md
+    assert f"| 2 | T1136.001 step 2 | `R2` | missed | — | inconnue — {cr.LATE_OR_OTHER} |" in md
     assert "**1 détectée(s)** · **1 manquée(s)**" in md
     assert "## Ce que le rapport affirme (3)" in md and "Écarté par la vérification" not in md
     assert "- Glorfindel a pris un snapshot. — `R1`" in md

@@ -558,6 +558,12 @@ def write_claims(facts: list[RunFact], prior: list[RunFact], model: str | None =
 _ESCALATED = {True: "escaladé", False: "sans escalade"}
 
 
+def _latency(seconds: float | None) -> str:
+    """The detection latency in the table (#174): one decimal, a French comma — « 106,3 s »;
+    « — » without one (a missed run, or a detection without its latency)."""
+    return "—" if seconds is None else f"{seconds:.1f}".replace(".", ",") + " s"
+
+
 def render(report: Report) -> str:
     f = report.facts
     det = sum(1 for x in f if x.detection == "detected")
@@ -568,8 +574,8 @@ def render(report: Report) -> str:
         f"{len(f)} technique(s) jouée(s) · **{det} détectée(s)** · **{miss} manquée(s)** · "
         f"{len(f) - det - miss} sans mesure. *Ces chiffres sont calculés depuis les fichiers du run.*",
         "",
-        "| # | Technique | Run | Détection | Décision de Glorfindel |",
-        "|---|---|---|---|---|",
+        "| # | Technique | Run | Détection | Latence | Décision de Glorfindel |",
+        "|---|---|---|---|---|---|",
     ]
     for x in sorted(f, key=lambda x: x.seq):
         how = [f"{x.confidence:.0%}"] if x.confidence is not None else []
@@ -577,7 +583,7 @@ def render(report: Report) -> str:
         dec = (x.decision + (f" ({', '.join(how)})" if how else "")) if x.decision else "—"
         if x.decision_unknown:
             dec = f"inconnue — {x.decision_unknown}"
-        lines.append(f"| {x.seq} | {x.ttp} {x.name} | `{x.run_id}` | {x.detection} | {dec} |")
+        lines.append(f"| {x.seq} | {x.ttp} {x.name} | `{x.run_id}` | {x.detection} | {_latency(x.latency_s)} | {dec} |")
     if any(x.decision_unknown for x in f):
         lines += ["", "*Décision « inconnue » : elle n'a pas été rattachée au run depuis les fichiers "
                       "de la watch, pour la raison dite — ce n'est pas dire que Glorfindel n'a pas agi.*"]

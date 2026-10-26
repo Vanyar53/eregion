@@ -77,6 +77,11 @@
   button.action.ok { color: var(--green); }
   button.action.ok:hover { background: color-mix(in srgb, var(--green) 10%, var(--bg2)); }
   button:disabled { opacity: .4; cursor: not-allowed; }
+  .atelier-link {
+    font-size: 11px; padding: 3px 8px; border-radius: 6px; text-decoration: none;
+    background: var(--bg2); border: 1px solid var(--border); color: var(--purple);
+  }
+  .atelier-link:hover { border-color: var(--purple); }
 
   /* ── Main layout ── */
   main {
@@ -570,6 +575,7 @@
 
   <div class="spacer"></div>
 
+  <a href="/atelier" class="atelier-link" title="Atelier — what Annatar and Gothmog ran, and what Glorfindel made of it (read only)">⚒ Atelier</a>
   <button id="config-toggle" class="action" onclick="toggleConfig()" title="Azure configuration">⚙ Config</button>
   <span id="clock" style="min-width:70px;text-align:right"></span>
 </header>

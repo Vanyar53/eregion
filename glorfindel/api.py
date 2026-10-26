@@ -1557,6 +1557,325 @@ def _parse(data: dict, kind: str) -> dict:
     }
 
 
+# ── Atelier: Annatar and Gothmog, seen from the War Room (read only) ──────────────────────
+# What the injectors did and what Glorfindel made of it, from the files that reach this host:
+# the exercise windows (B2; on H0, pulled by the watch from Orodruin), the campaigns Orodruin
+# publishes (#167), the technique catalog, the watch's debug files and cards, and the return
+# channel the watch writes (#159). Every route here is a GET: a run starts from Orodruin, armed
+# (eregion_core/orodruin.py) — a launch button, later, goes through that contract, never around.
+
+_RUNS = Path("runs")
+# A cycle is slimmed once per debug file version: the files carry the model's past cycles.
+_cycle_cache: dict[Path, tuple[tuple[int, int], list[dict]]] = {}
+_HEARTBEAT_TTL_S = 20.0
+_heartbeat_cache: dict = {"at": 0.0, "value": None}
+
+
+def _iso(value) -> datetime | None:
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+@app.get("/atelier")
+async def atelier_page() -> FileResponse:
+    return FileResponse(_STATIC / "atelier.html")
+
+
+@app.get("/api/atelier/catalog")
+async def atelier_catalog() -> dict:
+    """The technique catalog, techniques and faults, every resource type (planned ones too)."""
+    import yaml
+    from eregion_core.experiment import CATALOG
+    try:
+        data = yaml.safe_load(CATALOG.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError) as exc:
+        return {"error": f"catalog unreadable: {exc}", "entries": []}
+    entries = []
+    for rtype, body in (data.get("resource_types") or {}).items():
+        for kind, key in (("technique", "techniques"), ("fault", "faults")):
+            for e in (body or {}).get(key) or []:
+                if not isinstance(e, dict):
+                    continue
+                entries.append({
+                    "resource_type": rtype, "kind": kind,
+                    "id": str(e.get("ttp") or e.get("id") or ""),
+                    "name": e.get("name", ""), "tactic": e.get("tactic", ""),
+                    "status": e.get("status", ""), "destructive": bool(e.get("destructive")),
+                    "engine": e.get("engine") or "local-script",
+                    "log_source": e.get("log_source", ""),
+                    "expected_latency_s": e.get("expected_latency_s"),
+                })
+    return {"entries": entries}
+
+
+def _slim_cycle(rec: dict) -> dict | None:
+    sig = rec.get("signal")
+    if not isinstance(sig, dict):
+        return None
+    ctx = sig.get("context") if isinstance(sig.get("context"), dict) else {}
+    outcome = rec.get("outcome") if isinstance(rec.get("outcome"), dict) else {}
+    return {
+        "at": rec.get("timestamp", ""), "signal_at": sig.get("timestamp", ""),
+        "event": sig.get("event", ""), "ttp": sig.get("ttp", ""),
+        "resource_id": sig.get("resource_id", ""), "rule": ctx.get("rule_name", ""),
+        "attribution": ctx.get("attribution", ""), "action": rec.get("action", ""),
+        "confidence": rec.get("confidence"), "escalate": bool(rec.get("escalate")),
+        "status": outcome.get("status", ""), "executed": outcome.get("executed"),
+        "verified": outcome.get("verified"), "mode": rec.get("resolved_autonomy_mode", ""),
+        "cycle_error": bool(rec.get("cycle_error")),
+    }
+
+
+def _watch_cycles(since_ts: float | None) -> list[dict]:
+    """Glorfindel's cycles from every debug file written since ``since_ts`` — the watch's
+    ``watch-*`` files, and a run's own on a host that has both."""
+    out = []
+    for path in sorted(_RUNS.glob("*_debug.jsonl")):
+        try:
+            st = path.stat()
+        except OSError:
+            continue
+        if since_ts is not None and st.st_mtime < since_ts - 60:  # a cycle ends after its signal
+            continue
+        key = (st.st_mtime_ns, st.st_size)
+        hit = _cycle_cache.get(path)
+        if not hit or hit[0] != key:
+            cycles = []
+            try:
+                lines = path.read_text(encoding="utf-8").splitlines()
+            except (OSError, UnicodeDecodeError):
+                lines = []
+            for line in lines:
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(rec, dict) and (c := _slim_cycle(rec)):
+                    cycles.append(c)
+            hit = _cycle_cache[path] = (key, cycles)
+        out += hit[1]
+    return out
+
+
+def _run_reports() -> dict[str, Path]:
+    """Where each run's report is on this host: ``runs/<run_id>.json`` (a run launched here),
+    else under the campaign Orodruin published it with (``runs/campaigns/<id>/runs/``)."""
+    found = {p.stem: p for p in _RUNS.glob("campaigns/*/runs/*.json")}
+    found.update({p.stem: p for p in _RUNS.glob("*.json")})
+    return found
+
+
+def _slim_run(path: Path) -> dict | None:
+    try:
+        r = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(r, dict):
+        return None
+    m = r.get("metrics") if isinstance(r.get("metrics"), dict) else {}
+    keep = ("injector", "detection", "detection_latency_s", "attack_time", "fault_start",
+            "fault_end", "seen_down_at", "time_to_restore_s", "fallback_used", "aborted")
+    return {"scenario": r.get("scenario", ""), "mitre": r.get("mitre", ""),
+            "result": r.get("result", ""),
+            "checks": r.get("checks") if isinstance(r.get("checks"), dict) else {},
+            "metrics": {k: m[k] for k in keep if k in m}}
+
+
+def _window_state(w: dict, now: datetime) -> str:
+    """``open`` (the injector runs), ``grace`` (ended, detections still count), ``closed``,
+    or ``lapsed`` — never closed: the injector died, the window ran out at its expiry."""
+    from eregion_core.exercise import live
+    start, expires = _iso(w.get("start")), _iso(w.get("expires"))
+    if start and now < start:
+        return "open"
+    if live(w, now):
+        return "open" if not w.get("end") and expires and now <= expires else "grace"
+    return "closed" if w.get("end") else "lapsed"
+
+
+@app.get("/api/atelier/exercises")
+async def atelier_exercises(since: str = "7d") -> dict:
+    """The exercise windows, newest first, each with what Glorfindel did during it: the cycles
+    on a target inside the window (the return channel's rule, ``covering_runs``), the cards
+    carrying its run, and the run's report when it reached this host."""
+    from eregion_core.exercise import covering_runs, exercises_dir, last_moment, load_windows
+    try:
+        start = _since_start(since)
+    except ValueError as exc:
+        return {"error": str(exc)}
+    now = datetime.now(timezone.utc)
+    # An explicit directory: the War Room reads what the watch pulled, it never pulls itself.
+    windows = [w for w in load_windows(exercises_dir(_RUNS))
+               if start is None or (_iso(w.get("start")) or now) >= start
+               or _window_state(w, now) in ("open", "grace")]
+    if not windows:
+        return {"exercises": []}
+    starts = [s for w in windows if (s := _iso(w.get("start")))]
+    cycles = await asyncio.to_thread(_watch_cycles, min(starts).timestamp() if starts else None)
+    by_run: dict[str, list[dict]] = {}
+    for c in cycles:
+        for rid in covering_runs(c["resource_id"], c["signal_at"], windows):
+            by_run.setdefault(rid, []).append(c)
+    from glorfindel import escalations as esc_module
+    cards: dict[str, list[dict]] = {}
+    for e in esc_module.all_escalations():
+        if e.get("exercise_run"):
+            cards.setdefault(e["exercise_run"], []).append({
+                k: e.get(k) for k in ("id", "timestamp", "action", "escalation_type", "status",
+                                      "verdict", "confidence", "ttp", "rule_name")})
+    reports = _run_reports()
+    out = []
+    for w in sorted(windows, key=lambda w: str(w.get("start")), reverse=True)[:200]:
+        rid = str(w["run_id"])
+        last = last_moment(w)
+        out.append({
+            **{k: w.get(k) for k in ("run_id", "injector", "kind", "experiment", "targets",
+                                     "start", "end", "expires", "closed_by")},
+            "experiment_id": str(w.get("experiment") or "").split(" ")[0],
+            "state": _window_state(w, now),
+            "last_moment": last.isoformat() if last else None,
+            "cycles": sorted(by_run.get(rid, []), key=lambda c: str(c["signal_at"])),
+            "cards": cards.get(rid, []),
+            "run": _slim_run(reports[rid]) if rid in reports else None,
+        })
+    return {"exercises": out}
+
+
+@app.get("/api/atelier/campaigns")
+async def atelier_campaigns(since: str = "30d") -> dict:
+    """The campaigns on this host, newest first: those Orodruin published (``.pulled``) and
+    those run here. On H0 a campaign appears once it is over (its manifest comes last)."""
+    try:
+        start = _since_start(since)
+    except ValueError as exc:
+        return {"error": str(exc)}
+    out = []
+    for mpath in _RUNS.glob("campaigns/*/manifest.json"):
+        cdir = mpath.parent
+        try:
+            m = json.loads(mpath.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            m = None
+        if not isinstance(m, dict):
+            out.append({"dir": cdir.name, "error": "manifest unreadable"})
+            continue
+        created = _iso(m.get("created_at"))
+        if start and created and created < start:
+            continue
+        budget = m.get("budget") if isinstance(m.get("budget"), dict) else {}
+        scope = m.get("scope") if isinstance(m.get("scope"), dict) else {}
+        out.append({
+            "dir": cdir.name,
+            **{k: m.get(k) for k in ("campaign_id", "created_at", "created_by", "objective",
+                                     "state", "kill_switch", "updated_at")},
+            "sandbox": scope.get("sandbox", ""),
+            "budget": {k: budget.get(k) for k in ("max_scenarios", "allow_destructive",
+                                                  "detection_window_s", "reset_nsg_between")},
+            "pulled": (cdir / ".pulled").exists(),
+            "report": (cdir / "report.md").exists(),
+            "scenarios": [
+                {k: s.get(k) for k in ("seq", "ttp", "tactic", "name", "status", "detection",
+                                       "detection_latency_s", "run_id", "started_at",
+                                       "finished_at", "error", "destructive",
+                                       "target_resource_id")}
+                for s in (m.get("scenarios") or []) if isinstance(s, dict)],
+        })
+    out.sort(key=lambda c: str(c.get("created_at") or ""), reverse=True)
+    return {"campaigns": out}
+
+
+@app.get("/api/atelier/campaigns/{cid}")
+async def atelier_campaign(cid: str) -> dict:
+    """One campaign's facts — each run with Glorfindel's decision, read from the files as the
+    campaign report reads them (analysis/campaign_report.py) — and its report, when written."""
+    from eregion_core.exercise_channel import safe_part
+    if not safe_part(cid):
+        return {"error": "campaign id: a plain name"}
+    cdir = _RUNS / "campaigns" / cid
+    if not (cdir / "manifest.json").is_file():
+        return {"error": f"unknown campaign: {cid}"}
+    from dataclasses import asdict
+    from analysis.campaign_report import collect_facts
+    try:
+        facts = await asyncio.to_thread(collect_facts, cdir, _RUNS, lambda _m: None)
+    except Exception as exc:
+        return {"error": f"campaign unreadable: {exc}"}
+    try:
+        report = (cdir / "report.md").read_text(encoding="utf-8")
+    except OSError:
+        report = ""
+    return {"campaign_id": cid, "facts": [asdict(f) for f in facts], "report_md": report}
+
+
+def _published_heartbeat() -> dict:
+    """The heartbeat on the return channel — what a run on Orodruin reads — cached briefly."""
+    import time as _time
+    from eregion_core import watch_channel
+    if _heartbeat_cache["value"] is not None and \
+            _time.monotonic() - _heartbeat_cache["at"] < _HEARTBEAT_TTL_S:
+        return _heartbeat_cache["value"]
+    try:
+        hb = watch_channel.read_heartbeat()
+        at = _iso(hb.get("at"))
+        value = {"heartbeat": {k: hb.get(k) for k in ("at", "since", "windows")},
+                 "age_s": int((datetime.now(timezone.utc) - at).total_seconds()) if at else None,
+                 "alive": watch_channel.alive(hb)}
+    except Exception as exc:
+        value = {"error": f"heartbeat unreadable: {exc}"[:300]}
+    _heartbeat_cache.update(at=_time.monotonic(), value=value)
+    return value
+
+
+@app.get("/api/atelier/channel")
+async def atelier_channel() -> dict:
+    """Both channels as this host sees them: the windows the watch pulled (which are live
+    now), and the heartbeat it publishes — with the live windows it does not list yet (a run
+    of such a window cannot conclude to a miss: ``watch_channel.miss_unprovable``)."""
+    from eregion_core import exercise_channel, watch_channel
+    from eregion_core.exercise import exercises_dir, live, load_windows
+    now = datetime.now(timezone.utc)
+    directory = exercises_dir(_RUNS)
+    windows = load_windows(directory)
+    mtimes = [p.stat().st_mtime for p in directory.glob("*.json")] if directory.is_dir() else []
+    live_ids = sorted(str(w["run_id"]) for w in windows if live(w, now))
+    out = {
+        "watch": await watch_status(),
+        "exercise_channel": {
+            "configured": bool(exercise_channel.channel_url()),
+            "newest_window_at": datetime.fromtimestamp(max(mtimes), timezone.utc).isoformat()
+            if mtimes else None,
+        },
+        "return_channel": {"configured": bool(watch_channel.channel_url())},
+        "live_windows": live_ids,
+    }
+    if out["return_channel"]["configured"]:
+        published = await asyncio.to_thread(_published_heartbeat)
+        out["return_channel"].update(published)
+        if "heartbeat" in published:
+            listed = set(published["heartbeat"].get("windows") or [])
+            out["return_channel"]["unlisted_windows"] = [r for r in live_ids if r not in listed]
+    return out
+
+
+@app.get("/api/atelier/channel/detections/{run_id}")
+async def atelier_delivered(run_id: str) -> dict:
+    """The detections the watch delivered on the return channel for this run's window — what
+    the run on Orodruin read, or will read."""
+    from eregion_core import watch_channel
+    if not watch_channel.channel_url():
+        return {"configured": False, "detections": []}
+    try:
+        detections = await asyncio.to_thread(watch_channel.read_detections, run_id)
+    except ValueError:
+        return {"error": "run id: a plain name"}
+    except Exception as exc:
+        return {"error": f"return channel unreadable: {exc}"[:300]}
+    return {"configured": True, "detections": detections}
+
+
 def serve(host: str = "127.0.0.1", port: int = 7007) -> None:
     try:
         import uvicorn

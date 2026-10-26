@@ -173,6 +173,24 @@ def test_an_entry_someone_changed_is_not_removed(world):
     assert v["verified"] is False and v["missing_rules"] == ["acl-app"]
     assert c.unblock_ip(ATTACKER, arn("i-web1"))["status"] == "unblocked"
     assert (False, 99) in f.acls["acl-app"]["entries"] and (True, 99) not in f.acls["acl-app"]["entries"]
+    # Aimed at another address now: not Glorfindel's either.
+    c.block_suspicious_ip(ATTACKER, arn("i-web1"))
+    n = next(p["rule_out"] for p in actions._load_block_entries(arn("i-web1"))[0]["placements"])
+    f.acls["acl-app"]["entries"][(True, n)]["cidr"] = "10.0.0.99/32"
+    c.unblock_ip(ATTACKER, arn("i-web1"))
+    assert f.acls["acl-app"]["entries"][(True, n)]["cidr"] == "10.0.0.99/32"
+
+
+def test_someone_s_allow_in_the_quarantine_group_goes_at_the_next_isolation(world):
+    f, c, _ = world
+    c.isolate_vm(arn("i-web1"))
+    q = next(s for s in f.sgs.values() if s["name"] == "glorfindel-quarantine")
+    q["ingress"].append(sg_rule(cidr="0.0.0.0/0"))
+    q["egress"].append(sg_rule(cidr="0.0.0.0/0"))
+    v = c.verify_isolation(arn("i-web1"))
+    assert v["verified"] is False and v["missing_rules"]
+    out = c.isolate_vm(arn("i-web1"))
+    assert out["verified"] is True and not out["bypass"] and not q["ingress"] and not q["egress"]
 
 
 def test_a_block_does_not_reuse_an_entry_a_customer_allow_now_precedes(world):

@@ -754,7 +754,7 @@ class AwsIsolationMachine(RuleBasedStateMachine):
         self._race(data, first, second)
 
     _RACES = [("release", "reassert"), ("isolate", "release"), ("release", "release"),
-              ("block", "unblock"), ("unblock", "reassert"), ("block", "block")]
+              ("block", "unblock"), ("unblock", "reassert"), ("block", "block"), ("unblock", "block")]
 
     @rule(data=st.data())
     def race(self, data):
@@ -762,8 +762,12 @@ class AwsIsolationMachine(RuleBasedStateMachine):
         self._isolate(vm, None)
         self._block(vm, None, 22)
         one, two = data.draw(st.sampled_from(self._RACES), label="race")
-        # Two blocks at once: on two instances, which may share an ACL.
-        other = data.draw(st.sampled_from(self.live), label="second vm") if (one, two) == ("block", "block") else vm
+        # Two blocks at once, or an unblock while another instance blocks: on two
+        # instances, mostly sharing an ACL — the entries one holds, the other may reuse.
+        other = vm
+        if (one, two) in (("block", "block"), ("unblock", "block")):
+            mates = [v for v in self.live if v != vm and self._vm_acls(v) & self._vm_acls(vm)]
+            other = data.draw(st.sampled_from(mates or self.live), label="second vm")
         _CURRENT.mode = "non_disruptive"
         self._race(data, self._concurrent_op(data, 1, vm, one), self._concurrent_op(data, 2, other, two))
 

@@ -297,13 +297,24 @@ def notify_action(
 
 
 def discord_bot_configured(environ=None) -> bool:
-    """The Discord bot posts the escalations (one thread per VM). Read from
-    DISCORD_CHANNEL_ID, which every container receives, and no longer from the bot's
-    token alone: only the bot's container holds the token (M-3, #183), so the watch and
-    the War Room would have posted every card to the webhook as well."""
+    """The Discord bot posts the escalations (one thread per VM): the webhook then stays
+    silent. A bot needs its token and its channel — a channel alone runs no bot, and an
+    escalation always goes somewhere, or the watch says it does not.
+
+    Only the bot's container holds the token (M-3, #183): docker compose tells the watch
+    and the War Room that it is set with GLORFINDEL_DISCORD_BOT ("1" or "", from
+    ${DISCORD_BOT_TOKEN:+1}), never its value. Outside compose, DISCORD_BOT_TOKEN itself."""
     import os
     env = os.environ if environ is None else environ
-    return bool(env.get("DISCORD_CHANNEL_ID") or env.get("DISCORD_BOT_TOKEN"))
+    token = env.get("GLORFINDEL_DISCORD_BOT") or env.get("DISCORD_BOT_TOKEN")
+    return bool(token and env.get("DISCORD_CHANNEL_ID"))
+
+
+def alerting_configured(environ=None) -> bool:
+    """An escalation reaches someone: the webhook, or the Discord bot."""
+    import os
+    env = os.environ if environ is None else environ
+    return bool(env.get("GLORFINDEL_WEBHOOK_URL") or discord_bot_configured(env))
 
 
 def _notify(esc: dict) -> None:

@@ -186,7 +186,7 @@ GLORFINDEL_LLM_BASE_URL=...         # endpoint self-hosted/Ollama (ex: http://lo
 GLORFINDEL_WEBHOOK_URL=...          # Slack/Teams/Discord webhook — escalades ET actions autonomes
                                     # Discord : https://discord.com/api/webhooks/<id>/<token>/slack
 DISCORD_BOT_TOKEN=...               # Bot Discord interactif (fils par VM, boutons Acquitter/Commande) ; le conteneur du bot seul (M-3)
-DISCORD_CHANNEL_ID=...              # ID du channel (clic droit → Copy Channel ID) ; défini, la watch et la War Room laissent les cartes au bot (webhook muet)
+DISCORD_CHANNEL_ID=...              # ID du channel (clic droit → Copy Channel ID) ; avec DISCORD_BOT_TOKEN, la watch et la War Room laissent les cartes au bot (webhook muet) ; seul, il ne fait taire rien
 DISCORD_PING_ROLE=...               # ID du rôle à pinger à l'ouverture d'un fil (optionnel)
 DISCORD_ALLOWED_USERS=111,222       # M-3 : ids des utilisateurs qui peuvent cliquer les boutons des cartes
 DISCORD_ALLOWED_ROLES=333           # M-3 : ids des rôles autorisés ; les deux vides → tous les boutons refusent (fermé par défaut), refus journalisé
@@ -208,8 +208,10 @@ EREGION_EXERCISE_CHANNEL=https://…/exercises  # O1 : canal des fenêtres d'exe
 Chaque conteneur ne reçoit que ses variables (M-3, `docker-compose.yml`) : les clés des modèles
 à la watch seule ; `DISCORD_BOT_TOKEN` et `DISCORD_ALLOWED_*` au bot seul ;
 `GLORFINDEL_WARROOM_TOKEN` à la War Room seule ; `GLORFINDEL_WEBHOOK_URL` à la watch et à la
-War Room ; le principal de service Azure aux trois (la watch, « Approve & execute », les boutons
-Restore / Revert du bot) ; les réglages sans secret aux trois. Une variable nouvelle s'ajoute
+War Room, avec `GLORFINDEL_DISCORD_BOT` (« 1 » si `DISCORD_BOT_TOKEN` est posé, vide sinon,
+jamais sa valeur : avec `DISCORD_CHANNEL_ID`, leur webhook se tait) ; le principal de service
+Azure aux trois (la watch, « Approve & execute », les boutons Restore / Revert du bot) ; les
+réglages sans secret aux trois. Une variable nouvelle s'ajoute
 dans le bloc de son conteneur, et dans `SECRETS` de `tests/unit/test_glorfindel_host.py` si elle
 porte un secret.
 

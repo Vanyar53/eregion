@@ -76,8 +76,9 @@ ses boutons) ; le webhook garde les notifications d'action. Un seul bot par
   `DISCORD_CHANNEL_ID`) : les trois. Pourquoi pas trois fichiers : compose ne passe à un
   conteneur que sa liste, et trois fichiers sur le même disque, au même propriétaire, ne
   protégeraient rien de plus ; la répartition est tenue par `tests/unit/test_glorfindel_host.py`.
-  La watch et la War Room savent que le bot poste les cartes par `DISCORD_CHANNEL_ID` (leur
-  webhook se tait), puisqu'elles n'ont plus le jeton.
+  La watch et la War Room n'ont plus le jeton du bot : compose leur dit seulement qu'il est posé
+  (`GLORFINDEL_DISCORD_BOT`, « 1 » ou vide, jamais la valeur). Avec lui et `DISCORD_CHANNEL_ID`,
+  le bot poste les cartes et leur webhook se tait ; un salon sans jeton, le webhook poste.
 - **Des boutons qui vérifient qui clique.** `DISCORD_ALLOWED_USERS` (ids d'utilisateurs) et
   `DISCORD_ALLOWED_ROLES` (ids de rôles), séparés par des virgules. Un clic d'un autre est refusé,
   avec un message visible de lui seul, et journalisé (« Button refused: user … »). **Fermé par
@@ -100,9 +101,10 @@ ses boutons) ; le webhook garde les notifications d'action. Un seul bot par
    ```
    DISCORD_ALLOWED_USERS=<ton id>
    ```
-   (ou `DISCORD_ALLOWED_ROLES=<id du rôle>`). Vérifier que `DISCORD_CHANNEL_ID` y est bien : c'est
-   lui, désormais, qui fait taire le webhook de la watch et de la War Room. Rien à retirer : les
-   variables ne changent pas de nom, compose les répartit.
+   (ou `DISCORD_ALLOWED_ROLES=<id du rôle>`). Vérifier que `DISCORD_BOT_TOKEN` et
+   `DISCORD_CHANNEL_ID` y sont tous deux : ensemble, ils font taire le webhook de la watch et de
+   la War Room (le bot poste les cartes) ; l'un sans l'autre, le webhook poste. Rien à retirer :
+   les variables ne changent pas de nom, compose les répartit.
 3. **Une référence à déployer.** Le dernier tag, `v0.3.0`, est antérieur à M-3 (et à tout ce qui
    a été fusionné depuis) : sans `REF`, c'est lui qui serait déployé. Poser un tag sur le commit de
    fusion (`git tag v0.3.1 <commit> && git push origin v0.3.1`, ou une release), ou passer le

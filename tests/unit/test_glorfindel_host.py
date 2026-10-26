@@ -7,6 +7,8 @@ import importlib.util
 import re
 from pathlib import Path
 
+import pytest
+
 from glorfindel.config import _parse_autonomy
 
 HOST = Path(__file__).resolve().parents[2] / "infra" / "glorfindel-host"
@@ -92,10 +94,12 @@ SECRETS = {
 NEEDED = {
     "watch": {"AZURE_SUBSCRIPTION_ID", "ANTHROPIC_API_KEY", "GLORFINDEL_LLM_MODEL", "GLORFINDEL_READ_ONLY",
               "EREGION_EXERCISE_CHANNEL", "EREGION_WATCH_CHANNEL", "EREGION_ANALYSIS_MODEL",
-              "DISCORD_CHANNEL_ID", "GLORFINDEL_WEBHOOK_URL", "GLORFINDEL_DISCOVERY_RETENTION_H"},
+              "DISCORD_CHANNEL_ID", "GLORFINDEL_DISCORD_BOT", "GLORFINDEL_WEBHOOK_URL",
+              "GLORFINDEL_DISCOVERY_RETENTION_H"},
     "war-room": {"GLORFINDEL_WARROOM_TOKEN", "AZURE_SUBSCRIPTION_ID", "GLORFINDEL_READ_ONLY",
                  "GLORFINDEL_LLM_MODEL", "GLORFINDEL_APPROVAL_MAX_AGE_H", "GLORFINDEL_BACKUP_VAULT",
-                 "EREGION_EXERCISE_CHANNEL", "EREGION_WATCH_CHANNEL", "DISCORD_CHANNEL_ID"},
+                 "EREGION_EXERCISE_CHANNEL", "EREGION_WATCH_CHANNEL", "DISCORD_CHANNEL_ID",
+                 "GLORFINDEL_DISCORD_BOT"},
     "bot": {"DISCORD_BOT_TOKEN", "DISCORD_CHANNEL_ID", "DISCORD_PING_ROLE", "DISCORD_ALLOWED_USERS",
             "DISCORD_ALLOWED_ROLES", "AZURE_SUBSCRIPTION_ID", "GLORFINDEL_READ_ONLY"},
 }
@@ -133,9 +137,16 @@ def test_each_container_receives_only_its_secrets():
 
 
 def _interpolate(spec: str, dotenv: dict) -> str:
-    """What docker compose puts in the container for `${VAR:-}` — or a literal value."""
-    m = re.fullmatch(r"\$\{(\w+)(?::-([^}]*))?\}", spec)
-    return dotenv.get(m.group(1)) or (m.group(2) or "") if m else spec
+    """What docker compose puts in the container for `${VAR:-default}` (VAR, or the default
+    when VAR is empty) and `${VAR:+word}` (word when VAR is set and not empty, else "") — or
+    a literal value. `docker compose config` renders both so (measured, 26/10)."""
+    m = re.fullmatch(r"\$\{(\w+)(?::([-+])([^}]*))?\}", spec)
+    if not m:
+        return spec
+    value = dotenv.get(m.group(1)) or ""
+    if m.group(2) == "+":
+        return m.group(3) if value else ""
+    return value or (m.group(3) or "")
 
 
 def test_the_generated_host_env_reaches_each_container_with_only_its_secrets():
@@ -153,6 +164,10 @@ def test_the_generated_host_env_reaches_each_container_with_only_its_secrets():
     assert rendered["bot"]["DISCORD_ALLOWED_USERS"] == "value-of-DISCORD_ALLOWED_USERS"
     assert rendered["watch"]["DISCORD_CHANNEL_ID"] == rendered["war-room"]["DISCORD_CHANNEL_ID"] \
         == "value-of-DISCORD_CHANNEL_ID"
+    # They learn that the bot runs, never its token: "1" with the token, "" without.
+    assert rendered["watch"]["GLORFINDEL_DISCORD_BOT"] == rendered["war-room"]["GLORFINDEL_DISCORD_BOT"] == "1"
+    dotenv["DISCORD_BOT_TOKEN"] = ""
+    assert _interpolate(_compose_env()["watch"]["GLORFINDEL_DISCORD_BOT"], dotenv) == ""
 
 
 def test_host_env_warns_when_nobody_may_press_the_buttons(tmp_path, monkeypatch, capsys):
@@ -169,23 +184,87 @@ def test_host_env_warns_when_nobody_may_press_the_buttons(tmp_path, monkeypatch,
     assert "DISCORD_ALLOWED_USERS=111" in (tmp_path / "b.env").read_text()
 
 
-def test_the_watch_leaves_the_cards_to_the_bot_without_its_token(monkeypatch):
-    """The watch no longer receives DISCORD_BOT_TOKEN: it reads DISCORD_CHANNEL_ID to know the
-    bot posts the cards, or every card would also go to the webhook."""
+_ESC = {"resource_id": "/x/vm", "action": "isolate_vm", "escalation_type": "mode_hold",
+        "reason": "held", "run_id": "r"}
+
+
+def _discord_env(monkeypatch, **env):
+    for k in ("DISCORD_BOT_TOKEN", "GLORFINDEL_DISCORD_BOT", "DISCORD_CHANNEL_ID", "GLORFINDEL_WEBHOOK_URL"):
+        monkeypatch.delenv(k, raising=False)
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+
+
+@pytest.mark.parametrize("env, to_webhook", [
+    # H0: the watch has the channel and GLORFINDEL_DISCORD_BOT=1 (compose), not the token.
+    ({"GLORFINDEL_DISCORD_BOT": "1", "DISCORD_CHANNEL_ID": "42"}, False),
+    # Outside compose (docker run, a local shell): the token itself.
+    ({"DISCORD_BOT_TOKEN": "t", "DISCORD_CHANNEL_ID": "42"}, False),
+    # A channel without a token runs no bot: the webhook posts (review of M-3).
+    ({"DISCORD_CHANNEL_ID": "42"}, True),
+    ({"DISCORD_CHANNEL_ID": "42", "GLORFINDEL_DISCORD_BOT": ""}, True),
+    # A token without a channel: the bot refuses to start (bot.run) — the webhook posts.
+    ({"GLORFINDEL_DISCORD_BOT": "1"}, True),
+    ({}, True),
+])
+def test_the_watch_leaves_the_cards_to_the_bot_only_when_a_bot_runs(monkeypatch, env, to_webhook):
+    """The watch no longer receives DISCORD_BOT_TOKEN: compose tells it the token is set
+    (GLORFINDEL_DISCORD_BOT), and the bot needs its channel too. Otherwise every card would
+    also go to the webhook — or, with a channel alone, go nowhere."""
     from glorfindel import escalations
 
     posted = []
     monkeypatch.setattr("requests.post", lambda url, **kw: posted.append(url))
-    monkeypatch.delenv("DISCORD_BOT_TOKEN", raising=False)
-    monkeypatch.setenv("GLORFINDEL_WEBHOOK_URL", "https://hook.example/x")
-    monkeypatch.setenv("DISCORD_CHANNEL_ID", "42")
-    esc = {"resource_id": "/x/vm", "action": "isolate_vm", "escalation_type": "mode_hold",
-           "reason": "held", "run_id": "r"}
-    escalations._notify(esc)
-    assert posted == []
-    monkeypatch.delenv("DISCORD_CHANNEL_ID")
-    escalations._notify(esc)
-    assert posted == ["https://hook.example/x"]
+    _discord_env(monkeypatch, GLORFINDEL_WEBHOOK_URL="https://hook.example/x", **env)
+    escalations._notify(dict(_ESC))
+    assert posted == (["https://hook.example/x"] if to_webhook else [])
+
+
+def _watch_banner(monkeypatch):
+    """`glorfindel watch`'s startup banner, up to its permission regime (a fake agent in
+    human_only stops it there): no Azure, no model, no loop."""
+    import io
+    from types import SimpleNamespace
+
+    from click.testing import CliRunner
+    from rich.console import Console
+
+    from glorfindel import cli
+
+    class _Stop(Exception):
+        pass
+
+    def _stop():
+        raise _Stop
+
+    class _Agent:
+        def __init__(self, **kw):
+            self.autonomy = SimpleNamespace(default="human_only", assets=[])
+            self.config_error = ""
+            self.connector = SimpleNamespace(permission_mode=_stop)
+
+    monkeypatch.setattr("glorfindel.agent.GlorfindelAgent", _Agent)
+    monkeypatch.setenv("GLORFINDEL_DEBUG", "1")       # the CLI re-raises _Stop as it is
+    out = io.StringIO()
+    monkeypatch.setattr(cli, "console", Console(file=out, width=200))
+    with CliRunner().isolated_filesystem():
+        Path("runs").mkdir()
+        res = CliRunner().invoke(cli.cli, ["watch", "runs", "--dry-run"])
+    assert isinstance(res.exception, _Stop), res.output
+    return out.getvalue()
+
+
+@pytest.mark.parametrize("env, warned", [
+    ({"DISCORD_CHANNEL_ID": "42"}, True),          # a channel alone alerts no one: said
+    ({}, True),
+    ({"GLORFINDEL_DISCORD_BOT": "1", "DISCORD_CHANNEL_ID": "42"}, False),
+    ({"DISCORD_CHANNEL_ID": "42", "GLORFINDEL_WEBHOOK_URL": "https://hook.example/x"}, False),
+])
+def test_the_watch_says_when_no_escalation_reaches_anyone(monkeypatch, env, warned):
+    """An escalation always goes somewhere, or the watch says it does not."""
+    _discord_env(monkeypatch, **env)
+    banner = _watch_banner(monkeypatch)
+    assert ("no alerting configured" in banner) is warned, banner
 
 
 def test_empty_service_principal_vars_leave_room_for_the_managed_identity():

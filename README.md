@@ -442,7 +442,7 @@ When an escalation fires, `glorfindel pending` shows **context-aware next steps 
 - **🔄 Restore** — executes `glorfindel restore` directly from Discord (for `restore_from_backup` and `low_confidence` escalations)
 - **↩️ Revert** — executes `glorfindel reset` directly from Discord (for `verification_failed`) — full reset (isolation + IP blocks)
 
-A `/pending` slash command lists open escalations. Set `DISCORD_PING_ROLE` to notify an on-call role on thread creation. When `DISCORD_CHANNEL_ID` (or `DISCORD_BOT_TOKEN`) is set, escalation webhook notifications are suppressed (bot handles them in threads).
+A `/pending` slash command lists open escalations. Set `DISCORD_PING_ROLE` to notify an on-call role on thread creation. When the bot has both its token and `DISCORD_CHANNEL_ID`, escalation webhook notifications are suppressed (bot handles them in threads); a channel without a token runs no bot, so the webhook still posts and `glorfindel watch` warns at startup when nothing alerts. In Docker Compose, only the bot's container gets the token: the watch and the War Room get `GLORFINDEL_DISCORD_BOT` (`1` when the token is set, never its value).
 
 **Who may click**: only the Discord users in `DISCORD_ALLOWED_USERS` or members of a role in `DISCORD_ALLOWED_ROLES` (ids, comma-separated). Anyone else gets an ephemeral refusal, logged by the bot. **Closed by default**: with neither set, every button refuses — the buttons judge, acknowledge and run restores, and Discord shows them to whoever reads the channel; the War Room (behind its token) still judges every card.
 

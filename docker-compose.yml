@@ -3,12 +3,14 @@
 # M-3 (#183) : chaque conteneur ne reçoit que ses secrets. docker compose lit `.env` (sur H0,
 # host.env poussé) pour remplacer les ${…} ci-dessous, et rien d'autre : un conteneur ne voit
 # que les variables de sa liste `environment`. Les blocs :
-#   env     : réglages sans secret, pour les trois (DISCORD_CHANNEL_ID dit à la watch et à la
-#             War Room que le bot poste les cartes : leur webhook se tait) ;
+#   env     : réglages sans secret, pour les trois ;
 #   azure   : le principal de service (vide sur H0 : l'identité managée) — watch, War Room
 #             (« Approve & execute ») et bot (boutons Restore / Revert) ;
 #   models  : les clés des modèles — la watch seule (décisions, rapport de campagne) ;
-#   webhook : son URL porte un jeton — watch et War Room (cartes enregistrées) ;
+#   webhook : son URL porte un jeton — watch et War Room (cartes enregistrées) ; avec elle,
+#             GLORFINDEL_DISCORD_BOT, "1" si DISCORD_BOT_TOKEN est posé, "" sinon (jamais sa
+#             valeur) : avec DISCORD_CHANNEL_ID, le bot poste les cartes et leur webhook se tait
+#             (escalations.discord_bot_configured) ; un salon sans jeton, le webhook poste ;
 # le jeton du bot et ses listes d'autorisés : le bot seul ; le jeton de la War Room : elle seule.
 # tests/unit/test_glorfindel_host.py tient cette répartition.
 x-env: &env
@@ -55,6 +57,7 @@ x-models: &models
 
 x-webhook: &webhook
   GLORFINDEL_WEBHOOK_URL: ${GLORFINDEL_WEBHOOK_URL:-}
+  GLORFINDEL_DISCORD_BOT: ${DISCORD_BOT_TOKEN:+1}
 
 services:
   watch:
@@ -89,7 +92,8 @@ services:
 
   # Bot Discord (escalades dans des fils par VM, boutons). Profil `bot` : ne démarre que si on
   # le demande (`docker compose --profile bot up -d`, ce que fait la VM de Glorfindel, H0) —
-  # un seul bot par DISCORD_BOT_TOKEN. Avec le jeton défini, le webhook des escalades se tait.
+  # un seul bot par DISCORD_BOT_TOKEN. Avec le jeton et DISCORD_CHANNEL_ID définis, le webhook
+  # des escalades se tait (GLORFINDEL_DISCORD_BOT, bloc webhook) : ce profil doit alors tourner.
   bot:
     image: eregion-glorfindel
     container_name: eregion-bot

@@ -405,14 +405,15 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
         _autonomy.default == "human_only"
         or any(a.mode == "human_only" for a in _autonomy.assets)
     )
-    from glorfindel.escalations import discord_bot_configured
-    _has_alerting = bool(os.environ.get("GLORFINDEL_WEBHOOK_URL") or discord_bot_configured())
+    from glorfindel.escalations import alerting_configured
+    _has_alerting = alerting_configured()
     if _has_human_only and not _has_alerting:
         console.print(
             "[yellow]⚠ human_only mode active but no alerting configured.[/yellow]\n"
             "  In human_only, Glorfindel detects and recommends but does NOT act — "
             "escalations need a human.\n"
-            "  Set GLORFINDEL_WEBHOOK_URL or the Discord bot (DISCORD_CHANNEL_ID), or watch the War Room, "
+            "  Set GLORFINDEL_WEBHOOK_URL or the Discord bot (DISCORD_BOT_TOKEN and "
+            "DISCORD_CHANNEL_ID), or watch the War Room, "
             "so escalations are seen."
         )
 

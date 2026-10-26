@@ -80,7 +80,7 @@
     border-bottom: 1px solid var(--border); flex-shrink: 0; display: flex; gap: 10px; align-items: baseline;
   }
   .col-header .count { font-weight: 400; letter-spacing: normal; }
-  .list { flex: 1; overflow-y: auto; }
+  .list { flex: 1; overflow-y: auto; overflow-x: hidden; }
   .empty { color: var(--dim); font-size: 11px; padding: 18px 16px; line-height: 1.6; }
   .err { color: var(--red); font-size: 11px; padding: 8px 16px; }
 
@@ -267,6 +267,12 @@ function decisionText(c) {
 function response(w) {
   const live = w.state === 'open' || w.state === 'grace';
   const cycles = w.cycles || [];
+  // H-1: a window Glorfindel does not believe, or on a VM not enrolled, marks nothing — its
+  // cycles are labelled real and are not attached here.
+  if (w.refusal) return { cls: 'bad', text: `not believed by Glorfindel — ${w.refusal}` };
+  const enrolled = Object.values(w.enrolled || {});
+  if (enrolled.length && !enrolled.some(Boolean))
+    return { cls: 'warn', text: 'target not enrolled — Glorfindel takes nothing here as an exercise' };
   if (w.kind === 'fault') {
     const disruptive = cycles.filter(c => DISRUPTIVE.includes(c.action));
     const done = disruptive.filter(c => c.executed === true);
@@ -346,6 +352,8 @@ function renderWindow(w) {
     <div class="row-head" data-toggle="${esc(key)}">
       <span class="twist">${isOpen ? '▾' : '▸'}</span>
       <span class="chip ${stateCls} ${w.state === 'open' ? 'pulse' : ''}">${esc(String(w.state || '').toUpperCase())}</span>
+      ${w.refusal ? `<span class="chip c-bad" title="${esc(w.refusal)}">NOT BELIEVED</span>` : ''}
+      ${Object.values(w.enrolled || {}).some(e => !e) ? `<span class="chip c-warn" title="Not enrolled: ${esc(Object.keys(w.enrolled).filter(k => !w.enrolled[k]).map(vmName).join(', '))}">NOT ENROLLED</span>` : ''}
       ${w.closed_by ? `<span class="chip c-bad" title="Closed by ${esc(w.closed_by)}, not by its injector: what was in flight may not have been cleaned up">${esc(w.closed_by)}</span>` : ''}
       <span class="chip c-${esc(w.injector)}">${esc(w.injector)}</span>
       <span class="exp" title="${esc(w.experiment)}">${esc(w.experiment)}</span>
@@ -461,8 +469,8 @@ function renderCampaign(c) {
       <span class="chip ${stateCls}">${esc(String(c.state || '?').toUpperCase())}</span>
       ${c.kill_switch ? '<span class="chip c-bad">KILL SWITCH</span>' : ''}
       <span class="exp">${esc(c.campaign_id || c.dir)}</span>
-      <span class="meta">${esc(c.objective || '')}</span>
-      <span class="meta" style="margin-left:auto">${hms(c.created_at)} · ${esc(c.created_by || '')}</span>
+      <span class="meta tgt" title="${esc(c.objective || '')}">${esc(c.objective || '')}</span>
+      <span class="meta tgt" style="margin-left:auto">${hms(c.created_at)} · ${esc(c.created_by || '')}</span>
     </div>
     <div class="row-sub"><span class="meta" style="width:10px"></span>
       <span>${summary}</span>

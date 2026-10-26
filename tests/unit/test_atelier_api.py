@@ -308,3 +308,30 @@ def test_delivered_detections(runs, client, monkeypatch):
         raise ValueError(rid)
     monkeypatch.setattr(watch_channel, "read_detections", _unsafe)
     assert "plain name" in client.get("/api/atelier/channel/detections/x..y").json()["error"]
+
+
+def test_the_war_room_reads_enrollment_as_the_watch_does(runs, monkeypatch):
+    """H-1: without the check, no window marks anything — the atelier would attach no cycle and
+    keep no run of a published campaign. The test suite enrolls every VM (conftest), so only
+    this test sees the War Room's own startup."""
+    from eregion_core import exercise
+    from eregion_core.inscription import TagEnrollment
+    monkeypatch.setattr(exercise, "_enrollment_check", None)
+    with TestClient(api.app):
+        assert isinstance(exercise._enrollment_check, TagEnrollment)
+
+
+def test_a_window_on_a_vm_not_enrolled_marks_nothing(runs, client, monkeypatch):
+    from eregion_core import exercise
+    monkeypatch.setattr(exercise, "_enrollment_check", lambda rid: False)
+    start = NOW - timedelta(minutes=10)
+    _window(runs, "run-x", start=start, end=start + timedelta(minutes=2))
+    _cycle(runs, "watch-ssh-x", at=start + timedelta(minutes=3))
+    w = client.get("/api/atelier/exercises").json()["exercises"][0]
+    assert w["cycles"] == [] and w["enrolled"] == {VM.lower(): False}
+
+
+def test_a_window_not_believed_is_shown_with_why(runs, client):
+    _window(runs, "too-long", start=NOW - timedelta(hours=1), expires=NOW + timedelta(hours=5))
+    w = client.get("/api/atelier/exercises").json()["exercises"][0]
+    assert w["run_id"] == "too-long" and "MAX_DURATION_S" in w["refusal"]

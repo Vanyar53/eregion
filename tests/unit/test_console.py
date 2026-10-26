@@ -246,6 +246,24 @@ def test_eregion_console_starts_the_console(monkeypatch):
     assert sections.override() == {"gothmog"}
 
 
+def test_eregion_console_reaches_the_managed_identity(monkeypatch):
+    """M408: compose passes AZURE_CLIENT_ID & co. empty on H0. The glorfindel command drops
+    them; `eregion console` did not, and azure-identity stopped on an empty secret before the
+    VM's managed identity — every read of the console failed (H0, 26/10: no NSG, no vault,
+    every window NOT ENROLLED, the return channel unreadable). A real one stays."""
+    import os
+    from eregion_console import cli
+    monkeypatch.setenv("AZURE_CLIENT_ID", "")
+    monkeypatch.setenv("AZURE_CLIENT_SECRET", " ")
+    monkeypatch.setenv("AZURE_TENANT_ID", "tenant")
+    seen = {}
+    monkeypatch.setattr(api, "serve", lambda host, port: seen.update(
+        {k: os.environ.get(k) for k in ("AZURE_CLIENT_ID", "AZURE_CLIENT_SECRET", "AZURE_TENANT_ID")}))
+    r = CliRunner().invoke(cli.cli, ["console"])
+    assert r.exit_code == 0, r.output
+    assert seen == {"AZURE_CLIENT_ID": None, "AZURE_CLIENT_SECRET": None, "AZURE_TENANT_ID": "tenant"}
+
+
 def test_eregion_console_refuses_an_unknown_section(monkeypatch):
     from eregion_console import cli
     monkeypatch.setattr(api, "serve", lambda **k: pytest.fail("served"))

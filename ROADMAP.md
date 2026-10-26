@@ -59,7 +59,7 @@ Glorfindel est le produit ; Annatar, Gothmog, Orodruin et Celebrimbor sont l'ate
 |---|---|---|
 | 0.2.0 | publiée le 15/10 | — |
 | 0.3 | A0 ✅, O0 ✅, E1 ✅, O1 ✅, R1 ✅, G0 ✅, B2 ✅, IA0 ✅ ; H0 en cours (4 semaines jusqu'au 13/11 environ) | la boucle complète tourne sur le banc et le rapport de campagne s'écrit seul — **✅ 23/10, v0.3.0** ; H0 continue, puis point d'étape #70 |
-| 0.4 à 0.x | A1 (avec MC0), A2, A3, B1, B3, B4 ; G1 à G3, R2, C1, D1, IA1 ; J1 à J4, P1, P2 | couverture, retenue, robustesse et reprise mesurées ; la preuve existe en production (ombre, détection non destructive, sentinelle) et sur jumeau ; les règles du client survivent aux mises à jour |
+| 0.4 à 0.x | A1 (avec MC0), A2, A3, B1, B3, B4 ; G1 à G3, R2, C1 à C3, D1, IA1 ; J1 à J4, P1, P2 | couverture, retenue, robustesse et reprise mesurées ; la preuve existe en production (ombre, détection non destructive, sentinelle) et sur jumeau ; les règles du client survivent aux mises à jour |
 | 1.0 | critères de maturité de la septième passe ; contrats figés ; profils | voir les critères ci-dessous |
 | 1.x | MC1 à MC3, G4, X1, O2 ; plus tard, le SaaS | nouveaux clouds et moteurs ajoutés sans rien casser |
 
@@ -100,6 +100,8 @@ Préfixes : **A** isolation et **B** IA (septième passe), **O** Orodruin, **H**
 | G3 | Exercice de reprise : VM détruite puis restaurée | temps de reprise dans le README | 2–3 |
 | R2 | **Adaptateur Stratus Red Team, avec l'ingestion des Activity Logs.** Version épinglée, cycle `warmup`, `detonate`, `revert`, `cleanup` ; le `warmup` crée sa propre cible, que l'inscription doit savoir décrire ; une règle sur les Activity Logs, proposée par la boucle violette sur le premier raté ; la réponse à une attaque d'identité (révoquer) reste à concevoir | une technique de la bibliothèque tourne sur le banc, et Glorfindel la voit dans les Activity Logs | 4–6 |
 | C1 | Run unifié, matrice de couverture, non-régression | matrice et son évolution dans la War Room | 4–6 |
+| C2 | **Identité : Entra ID en détection seule** (#199, décidé le 26/10). Journaux d'Entra vers le workspace du banc (tables, latence et licence mesurées) ; règles : identifiant ajouté à une application ou un principal de service (T1098.001), consentement et vol de jeton (T1528), rôle privilégié (T1098.003) ; escalade seulement, aucune action autonome sur l'identité ; inscription d'une identité du banc à définir (O0 ne lit que des tags) ; tenant de test à trancher. Après R2 | une technique d'une bibliothèque publique sur une identité inscrite, vue dans les journaux d'Entra et escaladée ; état initial vérifié | 5–8 |
+| C3 | **Charges IA d'Azure : Azure OpenAI et AI Foundry** (#200, décidé le 26/10). Une ressource d'IA inscrite au banc ; détection : `listKeys` par une identité inattendue, clé volée utilisée ailleurs (T1496), pic de jetons, accès public ouvert, filtre retiré ; détection seule d'abord ; attaque par une bibliothèque publique seulement (à trouver pour le plan de contrôle). Distinct de B2, qui protège Glorfindel lui-même. Après R2 | une technique d'une bibliothèque publique contre la ressource d'IA inscrite, détectée et escaladée ; coût du banc dans le README | 5–8 |
 | D1 | Profils d'usage, CI par composant ; `CONTRIBUTING.md` : les adaptateurs comme porte d'entrée des contributeurs | cinq profils documentés ; chaque composant tourne seul | 3–5 |
 | J1 | Détection seule en production : techniques non destructives sur VM inscrites, Glorfindel forcé en mode ombre | couverture mesurée sur la vraie télémétrie, sans aucune réponse | 2–3 |
 | J2 | VM sentinelle : une VM vide dans le réseau de production, inscrite | isoler, bloquer, lever sur la sentinelle ; état d'origine vérifié | 3–5 |
@@ -116,7 +118,7 @@ Préfixes : **A** isolation et **B** IA (septième passe), **O** Orodruin, **H**
 | G4 | Moteur Kubernetes (Chaos Mesh ou LitmusChaos), puis générique (Chaos Toolkit) | une expérience, deux moteurs | 3–5 |
 | X1 | Attaque pendant une panne | détecte ou escalade, jamais à l'aveugle | 3–5 |
 | O2 | Orodruin, mode Kubernetes (un namespace par projet) | mêmes tests de contrat sur les deux modes | 5–8 |
-| MC1 | Un monde simulé par fournisseur | invariants et mutants de contrôle verts sur AWS | 8–12 |
+| MC1 | Un monde simulé par fournisseur. **Avancé en code seul après A1 (décision du 26/10)** : faux AWS en mémoire et adaptateur écrit contre lui, rien sur un vrai compte ; la règle « pas de multi-cloud avant une boucle Azure solide » tient pour MC2 et MC3 | invariants et mutants de contrôle verts sur AWS | 8–12 |
 | MC2 | Adaptateur AWS + banc AWS | isoler-lever revient à l'état d'origine, vérifié | 10–15 |
 | MC3 | Adaptateur GCP + banc GCP | mêmes critères | 8–12 |
 
@@ -344,6 +346,8 @@ Eregion couvre aujourd'hui le milieu de la kill chain. La roadmap ressources ét
 ## Phase 3 — Extension ressources Azure (priorité kill chain)
 
 ### Ordre basé sur les vecteurs d'attaque réels Azure 2025
+
+Dans le plan 0.x (26/10) : les Activity Logs arrivent avec **R2** ; Entra ID devient **C2** (#199) et les charges IA d'Azure, absentes de ce tableau, **C3** (#200), tous deux après R2. Storage, Key Vault, AKS et App Service n'ont pas encore de lot.
 
 | Priorité | Ressource | Position kill chain | Nouvelles actions | Complexité |
 |---|---|---|---|---|

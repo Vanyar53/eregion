@@ -1,0 +1,32 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/Vanyar53/eregion/schemas/campaign_manifest.schema.json",
+  "title": "Campaign manifest, as H0 accepts it from the exercise channel (H-1)",
+  "description": "The fields the campaign report reads (analysis/campaign_report.py). Other fields are allowed. Checked at run time by analysis/campaign_schema.py (the watch's image has no jsonschema); tests/unit/test_campaign_schema.py keeps the two in step.",
+  "type": "object",
+  "required": ["campaign_id", "state", "scenarios"],
+  "properties": {
+    "campaign_id": {"$ref": "#/definitions/plain_name"},
+    "state": {"enum": ["planned", "ratified", "running", "done", "aborted"]},
+    "scenarios": {"type": "array", "items": {"$ref": "#/definitions/scenario"}}
+  },
+  "definitions": {
+    "plain_name": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$", "not": {"pattern": "\\.\\."}},
+    "scenario": {
+      "type": "object",
+      "required": ["seq", "ttp", "status", "target_resource_id"],
+      "properties": {
+        "seq": {"type": "integer", "minimum": 0},
+        "ttp": {"type": "string", "minLength": 1},
+        "status": {"enum": ["pending", "running", "executed", "skipped", "error"]},
+        "run_id": {"anyOf": [{"type": "null"}, {"const": ""}, {"$ref": "#/definitions/plain_name"}]},
+        "target_resource_id": {"type": "string"},
+        "detection": {"enum": [null, "detected", "missed", "unknown"]},
+        "detection_latency_s": {"anyOf": [{"type": "null"}, {"type": "number", "minimum": 0}]},
+        "name": {"type": ["string", "null"]},
+        "error": {"type": ["string", "null"]},
+        "finished_at": {"type": ["string", "null"]}
+      }
+    }
+  }
+}

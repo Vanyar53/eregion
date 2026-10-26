@@ -303,22 +303,26 @@ def test_the_scenario_route_is_gone(client):
     assert client.get("/api/scenarios").status_code == 404
 
 
-def test_to_judge_lists_unjudged_decisions_without_exercises(client):
+def test_to_judge_lists_unjudged_decisions_and_flags_exercises(client):
     """The War Room's "To judge" list: decision cards without a verdict — acknowledged ones
-    included (a verdict is independent of the ack), posture cards and exercises left out."""
+    included (a verdict is independent of the ack), posture cards left out. An exercise card
+    stays, flagged (H-1, M224): a window is the injectors' claim, never a reason to hide a
+    card from the operator."""
     from glorfindel import escalations
     vm = "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm-a"
     judged = escalations.record("rule-a-0123abcd", vm, "isolate_vm", "mode_hold", "r1")
     escalations.set_verdict(judged, "right", "")
     acked = escalations.record("rule-b-0123abcd", vm, "block_suspicious_ip", "mode_hold", "r2")
     escalations.resolve(acked)
-    escalations.record("rule-c-0123abcd", vm, "snapshot", "low_confidence", "r3",
-                       source="exercise", exercise_run="run1")
+    drill = escalations.record("rule-c-0123abcd", vm, "snapshot", "low_confidence", "r3",
+                               source="exercise", exercise_run="run1")
     escalations.record("posture-x", vm, "posture_gap", "posture_gap", "no backup")
     open_card = escalations.record("rule-d-0123abcd", vm, "snapshot", "low_confidence", "r4")
 
-    ids = [c["id"] for c in client.get("/api/to-judge?since=7d").json()["cards"]]
-    assert set(ids) == {acked, open_card}
+    cards = {c["id"]: c for c in client.get("/api/to-judge?since=7d").json()["cards"]}
+    assert set(cards) == {acked, drill, open_card}
+    assert (cards[drill]["exercise"], cards[drill]["exercise_run"]) == (True, "run1")
+    assert (cards[open_card]["exercise"], cards[open_card]["exercise_run"]) == (False, "")
     assert "error" in client.get("/api/to-judge?since=7x").json()
 
 

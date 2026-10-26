@@ -681,6 +681,13 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
     _atexit.register(_remove_heartbeat)
     _signalmod.signal(_signalmod.SIGTERM, _on_sigterm)
 
+    # H-1: an exercise window marks a VM only if this watch reads it enrolled — its tags and
+    # its resource group's, through Azure, cached (eregion_core/inscription.py). Without the
+    # read (no credential, no right), no window marks anything: every cycle is labelled real.
+    from eregion_core import exercise as _exercise
+    from eregion_core.inscription import TagEnrollment
+    _exercise.set_enrollment_check(TagEnrollment())
+
     # The return channel (#159): a run launched from Orodruin learns from it that this
     # watch is up, and what it detected on the VMs that run exercises. Unset → None.
     _watch_channel = None

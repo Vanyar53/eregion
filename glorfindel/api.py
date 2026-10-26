@@ -1098,7 +1098,8 @@ async def observation_report(since: str = "7d") -> dict:
 
 @app.get("/api/to-judge")
 async def to_judge(since: str = "7d") -> dict:
-    """The decision cards still waiting for a verdict (exercises left out), newest first."""
+    """The decision cards still waiting for a verdict, newest first — an exercise card
+    flagged (`exercise`, `exercise_run`), never left out (H-1)."""
     from glorfindel import escalations as esc_module
     try:
         start = _since_start(since)

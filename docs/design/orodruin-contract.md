@@ -180,6 +180,14 @@ par un conteneur de stockage à Orodruin (`eregion_core/exercise_channel.py`) :
 - **Côté watch** : `load_windows` copie les fenêtres nouvelles ou changées dans
   `runs/exercises/`, au plus toutes les 30 s. Seuls les noms simples sont acceptés, jamais un
   chemin. Si le canal est injoignable, les fenêtres locales comptent toujours.
+- **Le lecteur ne croit pas la fenêtre sur parole (H-1, 26/10)** : qui écrit dans le conteneur
+  pourrait faire passer une vraie attaque pour un exercice. La watch refuse une fenêtre de plus
+  de 2 h, déclarée pour plus tard (plus de 5 min après son écriture), ou nommée comme un run du
+  RulePoller ; elle ne marque une VM que si elle la lit inscrite, dans ses tags (droit Reader
+  sur le banc) ; elle purge une fenêtre une semaine après son dernier moment, en gardant une
+  pierre tombale pour que le tirage ne la ramène pas. Une carte d'exercice reste devant
+  l'opérateur, marquée. Une campagne tirée du canal est lue contre sa forme, et ses runs ne
+  sont gardés qu'avec une fenêtre connue nommant une VM inscrite (`docs/analysis.md`).
 - **Droits** : Orodruin a `Storage Blob Data Contributor`, Glorfindel `Storage Blob Data
   Reader`, tous les deux **à la portée du conteneur**. L'accès passe par Entra ID uniquement,
   sans clé partagée.

@@ -47,6 +47,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from analysis import campaign_schema
 from eregion_core import exercise_channel
 from eregion_core.exercise import GRACE_AFTER_S, MAX_DURATION_S
 
@@ -144,8 +145,9 @@ def _runs_awaited(manifest: dict, say=None) -> list[str]:
 
 def ready(campaigns_root: Path, *, failed=frozenset(), say=_say) -> list[Path]:
     """The campaigns whose report may be written, decisions aside: pulled from the channel
-    (``.pulled``), ``done``, no ``report.md``, attempts left, the report of each executed run
-    here (``runs/<run_id>.json``), and not in ``failed`` (its pull failed just now: the next
+    (``.pulled``), a manifest of the accepted shape (H-1, analysis/campaign_schema.py) and
+    ``done``, no ``report.md``, attempts left, the report of each executed run here
+    (``runs/<run_id>.json``), and not in ``failed`` (its pull failed just now: the next
     pull). An unreadable manifest is skipped (it may be half-pulled: the next pull)."""
     root = Path(campaigns_root)
     if not root.is_dir():
@@ -159,7 +161,12 @@ def ready(campaigns_root: Path, *, failed=frozenset(), say=_say) -> list[Path]:
             manifest = json.loads((cdir / "manifest.json").read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
-        if not isinstance(manifest, dict) or manifest.get("state") != "done":
+        # H-1: the manifest was written on another host — read against its shape first.
+        refused = campaign_schema.manifest_refusal(manifest)
+        if refused:
+            _say_once(cdir, "manifest", f"{cdir.name}: manifest refused ({refused}) — no report", say)
+            continue
+        if manifest.get("state") != "done":
             continue
         awaited = _runs_awaited(manifest,
                                 lambda m, c=cdir: _say_once(c, "run_id", f"{c.name}: {m}", say))

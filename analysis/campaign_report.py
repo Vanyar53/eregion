@@ -24,6 +24,13 @@ rejected); a claim without a citation is rejected. The header counts are compute
 written by the model. Run contents (Glorfindel's reasoning, signal text) are data: an
 instruction planted in a run can make the model write a wrong claim, never get it into the
 report. The model writes no rule and acts on nothing.
+
+A campaign that came through the exercise channel (its ``.pulled`` marker, H0) was written
+on another host, by whoever can write in the channel (H-1): its scenarios and its runs'
+reports are checked against their shape (analysis/campaign_schema.py), and an executed run
+is kept only if its window is known and believed and names its VM, and that VM is enrolled
+(eregion_core/exercise.py) — else it is left out of the facts, and the report says why. The
+report says which facts came through the channel and which H0 saw itself.
 """
 from __future__ import annotations
 
@@ -34,9 +41,10 @@ import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from analysis.campaign_schema import run_report_refusal, scenario_refusal
 from annatar.runner.detection import _number, first_detection, read_records
-from eregion_core.exercise import exercises_dir, last_moment
-from eregion_core.exercise_channel import safe_part
+from eregion_core.exercise import exercises_dir, is_enrolled, last_moment, window_refusal
+from eregion_core.exercise_channel import PULLED, safe_part
 
 CLAIM_KINDS = ("detected", "missed", "latency", "decision", "trend", "observation")
 
@@ -136,6 +144,7 @@ class Report:
     claims: list[Claim] = field(default_factory=list)
     model: str = ""
     skipped: list[str] = field(default_factory=list)   # scenarios left out of the facts, and why
+    channel: bool = False              # the campaign came through the exercise channel (H-1)
 
     @property
     def kept(self) -> list[Claim]:
@@ -263,7 +272,9 @@ def run_decision(scenario: dict, rid: str, campaign_dir: Path, runs_dir: Path,
     report = _read_json(campaign_dir / "runs" / f"{rid}.json", runs_dir / f"{rid}.json")
     attack_time = (report.get("metrics") or {}).get("attack_time")
     resource_id = scenario.get("target_resource_id") or ""
-    until = last_moment(_read_json(windows_dir(runs_dir) / f"{rid}.json"))
+    window = _read_json(windows_dir(runs_dir) / f"{rid}.json")
+    # A window not believed (H-1: longer than MAX_DURATION_S…) bounds nothing.
+    until = None if window_refusal(window) else last_moment(window)
     # A finite number only: a NaN would attach every detection up to ``until`` (#157's test).
     missing = [why for why, absent in ((NO_ATTACK_TIME, not _number(attack_time)),
                                        (NO_RESOURCE, not resource_id),
@@ -317,14 +328,53 @@ def undecided_runs(campaign_dir: Path, runs_dir: Path | None = None,
     return out
 
 
+def from_channel(campaign_dir: Path) -> bool:
+    """The campaign came through the exercise channel (its ``.pulled`` marker, written by
+    eregion_core/exercise_channel.py ``pull_campaigns``): written on another host."""
+    return (Path(campaign_dir) / PULLED).exists()
+
+
+def channel_refusal(scenario: dict, rid: str, campaign_dir: Path, runs_dir: Path) -> str:
+    """Why a scenario of a campaign that came through the channel is left out of the facts —
+    "" when it is kept (H-1). Its shape is checked; an executed run's report too, and the run
+    is kept only if its window is known and believed, names its VM, and that VM is enrolled."""
+    why = scenario_refusal(scenario)
+    if why:
+        return f"scénario refusé ({why})"
+    if not rid or scenario.get("status") != "executed":
+        return ""
+    report_why = run_report_refusal(
+        _read_json(campaign_dir / "runs" / f"{rid}.json", runs_dir / f"{rid}.json"), rid)
+    if report_why:
+        return f"run {rid} refusé : rapport du run ({report_why})"
+    window = _read_json(windows_dir(runs_dir) / f"{rid}.json")
+    if not window:
+        return f"run {rid} refusé : fenêtre d'exercice inconnue"
+    if window.get("purged_at"):
+        return f"run {rid} refusé : fenêtre purgée (plus d'une semaine après sa fin)"
+    window_why = window_refusal(window)
+    if window_why:
+        return f"run {rid} refusé : fenêtre refusée ({window_why})"
+    vm = str(scenario.get("target_resource_id") or "")
+    if not vm or vm.lower() not in (window.get("targets") or []):
+        return f"run {rid} refusé : sa VM n'est pas une cible de sa fenêtre"
+    if not is_enrolled(vm):
+        return f"run {rid} refusé : sa VM n'est pas inscrite"
+    return ""
+
+
 def collect_facts(campaign_dir: Path, runs_dir: Path | None = None, warn=_say) -> list[RunFact]:
     campaign_dir = Path(campaign_dir)
     runs_dir = Path(runs_dir) if runs_dir else campaign_dir.parent.parent
     manifest = json.loads((campaign_dir / "manifest.json").read_text(encoding="utf-8"))
     cid = manifest.get("campaign_id") or campaign_dir.name
     watch_records = _watch_files(runs_dir)
+    channel = from_channel(campaign_dir)
     facts = []
     for s, rid in _scenarios(manifest, warn):
+        if channel and (why := channel_refusal(s, rid, campaign_dir, runs_dir)):
+            warn(f"scénario {str(s.get('seq'))[:8]} : {why}")
+            continue
         dec, why = {}, ""
         if rid:
             dec, why, _ = run_decision(s, rid, campaign_dir, runs_dir, watch_records)
@@ -564,6 +614,16 @@ def _latency(seconds: float | None) -> str:
     return "—" if seconds is None else f"{seconds:.1f}".replace(".", ",") + " s"
 
 
+# H-1: what a campaign that came through the channel rests on — said in its report.
+CHANNEL_NOTE = (
+    "*Venu par le canal d'exercice, écrit sur l'hôte des injecteurs (Orodruin) et non vu par "
+    "H0 : la liste des runs, leur statut, leur détection et leur latence (le manifeste), "
+    "l'heure de chaque attaque (le rapport de chaque run) et les fenêtres d'exercice. Vu par "
+    "H0 : les décisions de Glorfindel, lues dans les fichiers de la watch, et l'inscription "
+    "de chaque VM, lue dans ses tags. Un run dont la fenêtre est inconnue ou refusée, ou dont "
+    "la VM n'est pas inscrite, est écarté des faits.*")
+
+
 def render(report: Report) -> str:
     f = report.facts
     det = sum(1 for x in f if x.detection == "detected")
@@ -589,6 +649,8 @@ def render(report: Report) -> str:
                       "de la watch, pour la raison dite — ce n'est pas dire que Glorfindel n'a pas agi.*"]
     if report.skipped:
         lines += ["", f"*Écarté des faits ({len(report.skipped)}) : " + " ; ".join(report.skipped) + ".*"]
+    if report.channel:
+        lines += ["", CHANNEL_NOTE]
     lines += ["", f"## Ce que le rapport affirme ({len(report.kept)})", "",
               f"*Écrit par `{report.model}` ; chaque affirmation cite ses runs et a été vérifiée contre eux.*", ""]
     lines += [f"- {c.text} — {', '.join(f'`{r}`' for r in c.runs)}" for c in report.kept] or ["- (aucune)"]
@@ -612,7 +674,7 @@ def build(campaign_dir: Path, model: str | None = None, llm=None, index_path: Pa
     claims, mdl = write_claims(facts, prior, model, llm, strict=strict)
     return Report(campaign_id=facts[0].campaign_id if facts else Path(campaign_dir).name,
                   facts=facts, prior=prior, claims=verify(claims, facts, prior), model=mdl,
-                  skipped=skipped)
+                  skipped=skipped, channel=from_channel(campaign_dir))
 
 
 def main(argv: list[str]) -> int:
@@ -620,6 +682,10 @@ def main(argv: list[str]) -> int:
         print(__doc__.strip().splitlines()[2].strip())
         return 2
     campaign_dir = Path(argv[0])
+    if from_channel(campaign_dir):  # H-1: its runs' VMs are checked enrolled, as by the watch
+        from eregion_core import exercise
+        from eregion_core.inscription import TagEnrollment
+        exercise.set_enrollment_check(TagEnrollment())
     report = build(campaign_dir)
     out = campaign_dir / "report.md"
     out.write_text(render(report), encoding="utf-8")

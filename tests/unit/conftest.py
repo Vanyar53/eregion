@@ -128,8 +128,14 @@ def no_local_glorfindel_config(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def isolated_exercise_windows(tmp_path, monkeypatch):
-    """B2: the injectors' exercise windows live under tmp, never the real runs/exercises."""
+    """B2: the injectors' exercise windows live under tmp, never the real runs/exercises.
+    H-1: the watch reads each VM's enrollment from its tags at startup (glorfindel/cli.py);
+    here every target is enrolled, and no Azure call is made — the tests of the guard pass
+    their own check (tests/unit/test_exercise_guard.py)."""
     monkeypatch.setenv("EREGION_EXERCISES_DIR", str(tmp_path / "exercises"))
+    from eregion_core import exercise
+    monkeypatch.setattr(exercise, "_enrollment_check", lambda resource_id: True)
+    monkeypatch.setattr(exercise, "_refused", {})
 
 
 @pytest.fixture(autouse=True)

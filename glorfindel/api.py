@@ -1680,6 +1680,18 @@ def _run_reports() -> dict[str, Path]:
     return found
 
 
+def _slim_probes(by_vm) -> dict:
+    """A Gothmog report's ``metrics.before`` / ``after``: ``{<vm>: [{name, ok, observed,
+    expect}]}`` (gothmog/probes.py). The report comes from Orodruin and its pull checks
+    neither: only that shape is kept, ``ok`` true only when it is ``true``."""
+    if not isinstance(by_vm, dict):
+        return {}
+    return {str(vm): [{"name": str(p.get("name") or ""), "ok": p.get("ok") is True,
+                       "observed": str(p.get("observed") or ""), "expect": str(p.get("expect") or "")}
+                      for p in probes if isinstance(p, dict)]
+            for vm, probes in by_vm.items() if isinstance(probes, list)}
+
+
 def _slim_run(path: Path) -> dict | None:
     try:
         r = json.loads(path.read_text(encoding="utf-8"))
@@ -1690,10 +1702,12 @@ def _slim_run(path: Path) -> dict | None:
     m = r.get("metrics") if isinstance(r.get("metrics"), dict) else {}
     keep = ("injector", "detection", "detection_latency_s", "attack_time", "fault_start",
             "fault_end", "seen_down_at", "time_to_restore_s", "fallback_used", "aborted")
+    metrics = {k: m[k] for k in keep if k in m}
+    metrics.update({k: _slim_probes(m[k]) for k in ("before", "after") if k in m})
     return {"scenario": r.get("scenario", ""), "mitre": r.get("mitre", ""),
             "result": r.get("result", ""),
             "checks": r.get("checks") if isinstance(r.get("checks"), dict) else {},
-            "metrics": {k: m[k] for k in keep if k in m}}
+            "metrics": metrics}
 
 
 def _window_state(w: dict, now: datetime) -> str:

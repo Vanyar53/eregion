@@ -87,6 +87,16 @@ moteur, `annatar/runner/report.py`) : la publication ne les trouve pas sous `X`.
 (`unpublished_runs`), et le message de fin n'annonce pas le rapport sur H0, qui attendrait ces
 runs sans fin : il renvoie à `make campaign-report`.
 
+**Un run seul (#193, 26/10 ; code, tests et mutants M240–M246, pas encore mesuré sur le
+banc).** `annatar run` et `gothmog run` publient aussi leur rapport, à la fin du run, après la
+fermeture de la fenêtre : `runs/<run_id>.json`, dans le même conteneur, sans droit de plus
+(`publish_run`). Un échec est signalé, jamais levé. Le thread `campaign-report` le tire à chaque
+passage vers `runs/<run_id>.json` sur H0, où la console de l'atelier le lit (`pull_runs`) :
+seulement un nom simple, et un rapport qui passe `run_report_refusal` (H-1). Il n'écrit jamais
+par-dessus un rapport que H0 n'a pas tiré lui-même : un marqueur `runs/.pulled-runs/<run_id>`
+dit lesquels viennent du canal. Un rapport refusé n'est pas écrit, et la raison est dite une
+fois. Une campagne ne change pas : ses runs ne partent qu'avec elle, sous `campaigns/<id>/`.
+
 **Quand H0 l'écrit.** `glorfindel watch` démarre le thread `campaign-report`
 (`analysis/hosted_report.py`), seulement avec `EREGION_EXERCISE_CHANNEL`. Toutes les 30 s, il :
 1. tire les campagnes dans `runs/campaigns/<id>/` (`pull_campaigns`). Il écrit les runs d'abord,

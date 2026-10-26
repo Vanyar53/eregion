@@ -35,6 +35,12 @@ written, and says for each such run why its decision is unknown
 act ». A pull of the windows that fails puts the reports off to the next pull.
 The report is visible in the watch's log (``make glorfindel-host-logs``) and on the VM
 (``make glorfindel-host-campaign-report CAMPAIGN=<id>``).
+
+The same pass pulls the report of each run launched alone from Orodruin (``annatar run``,
+``gothmog run``, #193) into ``runs/<run_id>.json``, where the console of the atelier reads
+its verdict (glorfindel/api.py): read against its shape first (H-1,
+analysis/campaign_schema.py), never over a report of a run of this host
+(eregion_core/exercise_channel.py ``pull_runs``). Why one was not pulled is said once.
 """
 from __future__ import annotations
 
@@ -320,18 +326,43 @@ def write_report(cdir: Path, *, model: str | None = None, llm=None,
         os.close(fd)
 
 
+def pull_runs(runs_dir: Path, *, channel: str | None = None, credential=None, get=None,
+              say=_say) -> int:
+    """The reports of the runs launched alone (#193), pulled into ``runs_dir`` once they
+    have the shape H0 accepts (``run_report_refusal``, H-1). How many were written. A run
+    not pulled is said once with why, the listing that fails too. Never raises."""
+    runs_dir = Path(runs_dir)
+    try:
+        written, skipped = exercise_channel.pull_runs(
+            runs_dir, refusal=campaign_schema.run_report_refusal,
+            channel=channel, credential=credential, get=get)
+    except Exception as e:  # the next pass tries again; the campaigns do not wait for it
+        _say_once(runs_dir, "runs", f"run reports not pulled: {e}", say, key=_error_key(e))
+        return 0
+    _said.pop((_key(runs_dir), "runs"), None)
+    for rid, why in sorted(skipped.items()):
+        _say_once(runs_dir / f"{rid}.json", "run", f"run report {rid} not pulled: {why}", say)
+    here = Path(_key(runs_dir))
+    for k in [k for k in _said if k[1] == "run" and Path(k[0]).parent == here
+              and Path(k[0]).stem not in skipped]:
+        del _said[k]                     # pulled this time: a later refusal is said again
+    return written
+
+
 def tick(runs_dir: Path, *, channel: str | None = None, credential=None, get=None,
          model: str | None = None, llm=None, index_path: Path | None = None,
          now: float | None = None, say=_say) -> dict[str, str]:
-    """One pass: pull the published campaigns, pull the windows once more (the last one
-    closed just before its campaign ended), then write the report of each one due. What
-    happened, by campaign: ``written``, ``waiting`` (a decision may still come, or the
-    windows were not pulled), or ``write_report``'s answer. Never raises."""
+    """One pass: pull the reports of the runs launched alone (``pull_runs``), pull the
+    published campaigns, pull the windows once more (the last one closed just before its
+    campaign ended), then write the report of each campaign due. What happened, by
+    campaign: ``written``, ``waiting`` (a decision may still come, or the windows were not
+    pulled), or ``write_report``'s answer. Never raises."""
     from analysis.campaign_report import windows_dir
 
     runs_dir = Path(runs_dir)
     root = runs_dir / exercise_channel.CAMPAIGNS
     kw = {"channel": channel, "credential": credential, "get": get}
+    pull_runs(runs_dir, say=say, **kw)
     # A failure is said once while it lasts (every 30 s, it would fill the watch's log), and
     # again if it comes back after a pull that went through.
     try:

@@ -39,6 +39,9 @@ Tu es spécialisé sur l'agent offensif. Lis ce fichier en début de session.
 - Thread daemon feedback : poll `runs/<run_id>_debug.jsonl` → émet `detection_missed` si timeout (déclenche propose_detection_rule dans Glorfindel)
 - Scénarios : `detection.hints` alimentent `propose_detection_rule` — soigner les `expected_indicators` et `failure_candidates`
 - `--dry-run` disponible, `--skip-preflight` pour bypasser le check VM
+- Fin de `annatar run` seul (#193) : avec `EREGION_EXERCISE_CHANNEL`, le rapport part vers H0
+  (`runs/<run_id>.json` dans `exercises`, `Engine(publish_report=True)`, la CLI seulement) ;
+  la watch hébergée le tire s'il passe `run_report_refusal`. Garder la forme de `RunReport`
 
 ## Huitième passe (13/10) — ce qui change pour Annatar
 

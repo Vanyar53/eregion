@@ -12,11 +12,12 @@ from rich.prompt import Confirm
 
 from annatar.runner.detection import detection_latency, has_timeout, read_records
 from annatar.runner.parser import ScenarioParser
-from annatar.runner.report import RunReport
+from annatar.runner.report import RUNS_DIR, RunReport
 from eregion_core.inscription import check_target
 from annatar.signals.emitter import SignalEmitter
 from eregion_core import watch_channel
 from eregion_core.exercise import close_window, open_window
+from eregion_core.exercise_channel import carry_run
 from eregion_core.orodruin import arm
 
 console = Console()
@@ -59,9 +60,13 @@ class RunOutcome:
 
 
 class Engine:
-    def __init__(self, dry_run: bool = False, skip_preflight: bool = False):
+    def __init__(self, dry_run: bool = False, skip_preflight: bool = False,
+                 publish_report: bool = False):
         self.dry_run = dry_run
         self.skip_preflight = skip_preflight
+        # `annatar run` alone (#193): the report goes to H0 with the window. A campaign
+        # leaves it False — it carries its runs' reports itself, at its end (annatar/cli.py).
+        self.publish_report = publish_report
         self.parser = ScenarioParser()
         self._detection_result = "unknown"
         self._detection_latency_s = None
@@ -182,6 +187,8 @@ class Engine:
             return RunOutcome(run_id, "unknown", error=f"engine: {scenario.engine!r} not runnable")
         finally:
             close_window(run_id)
+            if self.publish_report:  # its last save is done, the atomic's that raised too
+                carry_run(run_id, RUNS_DIR)
 
     @staticmethod
     def _atomic_calls_needed(n_probes: int) -> int:

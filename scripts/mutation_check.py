@@ -807,6 +807,29 @@ MUTANTS = [
     ("M238", "a window longer than MAX_DURATION_S bounds a run's decisions (H-1)", CREP,
      "    until = None if window_refusal(window) else last_moment(window)\n",
      "    until = last_moment(window)\n"),
+    # #193 — the report of a run launched alone goes to H0: published at the end of
+    # `annatar run` and `gothmog run`, a failure said and never raised; pulled on H0 by the
+    # watch's pass, refused when of the wrong shape, never over a report of H0's own. And
+    # the probes' values before the fault in Gothmog's report.
+    ("M240", "`annatar run` keeps its report on Orodruin (#193)", ACLI,
+     "    engine = Engine(dry_run=dry_run, skip_preflight=skip_preflight, publish_report=True)\n",
+     "    engine = Engine(dry_run=dry_run, skip_preflight=skip_preflight)\n"),
+    ("M241", "`gothmog run` keeps its report on Orodruin (#193)", GOTH,
+     "            carry_run(run_id, self.runs_dir)  # its report, to H0 with its window (#193)\n",
+     "            pass\n"),
+    ("M242", "a failed publication of a run's report raises into the run (#193)", XCH,
+     '    except Exception as e:\n        print(f"[exercise-channel] run report {run_id} not published: {e}")\n',
+     '    except ValueError as e:\n        print(f"[exercise-channel] run report {run_id} not published: {e}")\n'),
+    ("M243", "H0 pulls a run's report of the wrong shape: the console shows it (#193)", XCH,
+     "        why = refusal(report, rid)\n", '        why = ""\n'),
+    ("M244", "H0 writes a pulled report over the report of a run of its own (#193)", XCH,
+     "            if not mark.exists():\n", "            if False:\n"),
+    ("M245", "the hosted watch's pass never pulls the runs' reports (#193)", HREP,
+     "    pull_runs(runs_dir, say=say, **kw)\n", ""),
+    ("M246", "Gothmog's report leaves the probes' values before the fault out (#193)", GOTH,
+     '            **seen, "execution_id": (execution or {}).get("name"), "execution_status": status,\n',
+     '            **{k: v for k, v in seen.items() if k != "before"},\n'
+     '            "execution_id": (execution or {}).get("name"), "execution_status": status,\n'),
 ]
 
 # Mutants measured by other tests than the invariants (their lot's own).
@@ -860,6 +883,8 @@ TESTS["M190"] = "tests/unit/test_campaign_report.py"
 TESTS.update({mid: "tests/unit/test_orodruin_kill.py" for mid in ("M191", "M192", "M193")})
 TESTS.update({f"M{n}": "tests/unit/test_decision_stability.py" for n in range(200, 213)})
 TESTS.update({f"M{n}": "tests/unit/test_exercise_guard.py" for n in range(220, 239)})
+TESTS.update({f"M{n}": "tests/unit/test_run_channel.py" for n in range(240, 246)})
+TESTS.update({mid: "tests/unit/test_gothmog.py" for mid in ("M241", "M246")})
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

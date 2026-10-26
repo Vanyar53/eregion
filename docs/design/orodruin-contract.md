@@ -186,6 +186,10 @@ par un conteneur de stockage à Orodruin (`eregion_core/exercise_channel.py`) :
 - **Côté watch** : `load_windows` copie les fenêtres nouvelles ou changées dans
   `runs/exercises/`, au plus toutes les 30 s. Seuls les noms simples sont acceptés, jamais un
   chemin. Si le canal est injoignable, les fenêtres locales comptent toujours.
+- **Le même conteneur porte aussi** une campagne finie (`campaigns/<id>/…`, #167) et le
+  rapport d'un run seul (`runs/<run_id>.json`, #193), sous un préfixe que le tirage des
+  fenêtres ignore. Rien ne change au contrat : même conteneur, même attribution, même portée.
+  Seule la watch hébergée lit ces préfixes ; l'arrêt d'urgence ne relit que les fenêtres.
 - **Le lecteur ne croit pas la fenêtre sur parole (H-1, 26/10)** : qui écrit dans le conteneur
   pourrait faire passer une vraie attaque pour un exercice. La watch refuse une fenêtre de plus
   de 2 h, déclarée pour plus tard (plus de 5 min après son écriture), ou nommée comme un run du

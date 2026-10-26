@@ -296,14 +296,24 @@ def notify_action(
         pass  # notification failure must never block the agent
 
 
+def discord_bot_configured(environ=None) -> bool:
+    """The Discord bot posts the escalations (one thread per VM). Read from
+    DISCORD_CHANNEL_ID, which every container receives, and no longer from the bot's
+    token alone: only the bot's container holds the token (M-3, #183), so the watch and
+    the War Room would have posted every card to the webhook as well."""
+    import os
+    env = os.environ if environ is None else environ
+    return bool(env.get("DISCORD_CHANNEL_ID") or env.get("DISCORD_BOT_TOKEN"))
+
+
 def _notify(esc: dict) -> None:
     """POST an escalation notification to GLORFINDEL_WEBHOOK_URL if set.
 
-    Skipped when DISCORD_BOT_TOKEN is set — the bot handles escalations in
+    Skipped when the Discord bot is configured — the bot handles escalations in
     per-VM threads, which is a better UX than a flat channel message.
     """
     import os
-    if os.environ.get("DISCORD_BOT_TOKEN", ""):
+    if discord_bot_configured():
         return
     url = os.environ.get("GLORFINDEL_WEBHOOK_URL", "")
     if not url:

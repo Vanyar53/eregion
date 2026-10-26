@@ -9,6 +9,11 @@ from eregion_console import sections
 @click.group()
 def cli():
     """Eregion — Glorfindel defends, Annatar and Gothmog prove it."""
+    # The console reads Azure with the host's identity. Compose passes `${AZURE_CLIENT_ID:-}`:
+    # empty, it stops azure-identity before the VM's managed identity — the glorfindel
+    # command drops it, this one must too (H0, 26/10: every read of the console failed).
+    from glorfindel.cli import _drop_empty_service_principal_env
+    _drop_empty_service_principal_env()
 
 
 @cli.command()

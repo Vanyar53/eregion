@@ -1156,6 +1156,8 @@ MUTANTS = [
      '            sections.append({**s, "active": forced is None, "always": True, "setup": glorfindel_setup()})\n'),
     ("M407", "--sections is ignored: the detection wins (UI-1)", SEC,
      "        if forced is not None:\n", "        if False:\n"),
+    ("M408", "eregion console keeps compose's empty service principal: no managed identity (UI-1, H0)",
+     "eregion_console/cli.py", "    _drop_empty_service_principal_env()\n", ""),
 ]
 
 # Mutants measured by other tests than the invariants (their lot's own).
@@ -1229,7 +1231,7 @@ TESTS["M289"] = "tests/unit/test_dependency_lock.py"
 TESTS["M520"] = "tests/unit/test_bot.py"
 TESTS.update({f"M{n}": "tests/unit/test_glorfindel_host.py" for n in (521, 522, 523)})
 TESTS.update({f"M{n}": "tests/unit/test_host_deploy.py" for n in range(524, 529)})
-TESTS.update({f"M{n}": "tests/unit/test_console.py" for n in range(400, 408)})  # UI-1
+TESTS.update({f"M{n}": "tests/unit/test_console.py" for n in range(400, 409)})  # UI-1
 TESTS["M403"] = "tests/unit/test_console_exercises.py"
 
 

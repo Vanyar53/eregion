@@ -182,12 +182,21 @@ def _manifest(runs, cid, *, created, scenarios, state="done"):
 
 
 def test_campaigns_list_and_detail(runs, client):
-    cdir = _manifest(runs, "c-new", created=NOW - timedelta(hours=2), scenarios=[
+    """A campaign as Orodruin publishes it: its run's report and window are there, in the shape
+    H0 accepts from another host (H-1, analysis/campaign_schema.py)."""
+    attack = NOW - timedelta(hours=2)
+    cdir = _manifest(runs, "c-new", created=attack - timedelta(minutes=1), scenarios=[
         {"seq": 1, "ttp": "T1136.001", "name": "Create Account", "status": "executed",
          "run_id": "r1", "detection": "detected", "detection_latency_s": 90,
          "target_resource_id": VM},
         {"seq": 2, "ttp": "T1486", "name": "Ransomware", "status": "skipped",
-         "run_id": None, "detection": None, "destructive": True}])
+         "run_id": None, "detection": None, "destructive": True, "target_resource_id": VM}])
+    (cdir / "runs").mkdir()
+    (cdir / "runs" / "r1.json").write_text(json.dumps(
+        {"scenario": "acct", "run_id": "r1", "mitre": "T1136.001", "result": "PASS",
+         "metrics": {"attack_time": attack.timestamp(), "detection": "detected"},
+         "thresholds": {}, "checks": {}}))
+    _window(runs, "r1", start=attack, end=attack + timedelta(minutes=3))
     (cdir / ".pulled").write_text("")
     (cdir / "report.md").write_text("# Campagne c-new\n")
     _manifest(runs, "c-old", created=NOW - timedelta(days=40), scenarios=[])
@@ -206,6 +215,36 @@ def test_campaigns_list_and_detail(runs, client):
     assert detail["report_md"].startswith("# Campagne")
     assert [f["seq"] for f in detail["facts"]] == [1, 2]
     assert detail["facts"][0]["detection"] == "detected"
+    assert detail["skipped"] == []
+
+
+def test_campaign_detail_says_what_it_left_out(runs, client):
+    """The facts leave out what they cannot read safely — a run id that is not a plain name
+    (it comes from another host) — and the console says so, as the report does."""
+    _manifest(runs, "c-bad", created=NOW - timedelta(hours=1), scenarios=[
+        {"seq": 1, "ttp": "T1110.001", "name": "ssh", "status": "executed", "run_id": "a/b",
+         "detection": "detected", "target_resource_id": VM}])
+    detail = client.get("/api/atelier/campaigns/c-bad").json()
+    assert detail["facts"] == []
+    assert len(detail["skipped"]) == 1 and "run_id" in detail["skipped"][0]
+
+
+def test_the_console_never_writes_a_window(runs, client):
+    """The watch pulls the windows and may purge an old one (H-1, load_windows): the War Room
+    only reads — an old window stays as it is, a tombstone is skipped, odd targets ignored."""
+    old = _window(runs, "old", start=NOW - timedelta(days=10), end=NOW - timedelta(days=10))
+    (runs / "exercises" / "gone.json").write_text(json.dumps(
+        {"run_id": "gone", "purged_at": _iso(NOW - timedelta(days=1))}))
+    odd = dict(old, run_id="odd", targets="not-a-list")
+    (runs / "exercises" / "odd.json").write_text(json.dumps(odd))
+    before = {p.name: (p.read_text(), p.stat().st_mtime_ns) for p in (runs / "exercises").iterdir()}
+
+    ws = {w["run_id"]: w for w in client.get("/api/atelier/exercises?since=all").json()["exercises"]}
+    client.get("/api/atelier/channel")
+    assert set(ws) == {"old", "odd"}
+    assert ws["odd"]["targets"] == []
+    after = {p.name: (p.read_text(), p.stat().st_mtime_ns) for p in (runs / "exercises").iterdir()}
+    assert after == before
 
 
 def test_campaign_detail_refuses_a_path(client):

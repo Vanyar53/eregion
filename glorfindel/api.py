@@ -1696,19 +1696,38 @@ def _window_state(w: dict, now: datetime) -> str:
     return "closed" if w.get("end") else "lapsed"
 
 
+def _read_windows() -> list[dict]:
+    """The exercise windows as their files hold them. Read only: the watch pulls them, and its
+    ``load_windows`` may purge an old one (H-1) — the War Room never writes there. A file
+    without a run_id and a start (unreadable, or a purged window's tombstone) is skipped; the
+    targets are kept only as a list of strings."""
+    from eregion_core.exercise import exercises_dir
+    directory = exercises_dir(_RUNS)
+    out = []
+    for path in sorted(directory.glob("*.json")) if directory.is_dir() else []:
+        try:
+            w = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(w, dict) and w.get("run_id") and w.get("start"):
+            targets = w.get("targets") if isinstance(w.get("targets"), list) else []
+            out.append({**w, "run_id": str(w["run_id"]),
+                        "targets": [t.lower() for t in targets if isinstance(t, str)]})
+    return out
+
+
 @app.get("/api/atelier/exercises")
 async def atelier_exercises(since: str = "7d") -> dict:
     """The exercise windows, newest first, each with what Glorfindel did during it: the cycles
     on a target inside the window (the return channel's rule, ``covering_runs``), the cards
     carrying its run, and the run's report when it reached this host."""
-    from eregion_core.exercise import covering_runs, exercises_dir, last_moment, load_windows
+    from eregion_core.exercise import covering_runs, last_moment
     try:
         start = _since_start(since)
     except ValueError as exc:
         return {"error": str(exc)}
     now = datetime.now(timezone.utc)
-    # An explicit directory: the War Room reads what the watch pulled, it never pulls itself.
-    windows = [w for w in load_windows(exercises_dir(_RUNS))
+    windows = [w for w in _read_windows()
                if start is None or (_iso(w.get("start")) or now) >= start
                or _window_state(w, now) in ("open", "grace")]
     if not windows:
@@ -1790,7 +1809,8 @@ async def atelier_campaigns(since: str = "30d") -> dict:
 @app.get("/api/atelier/campaigns/{cid}")
 async def atelier_campaign(cid: str) -> dict:
     """One campaign's facts — each run with Glorfindel's decision, read from the files as the
-    campaign report reads them (analysis/campaign_report.py) — and its report, when written."""
+    campaign report reads them (analysis/campaign_report.py) — the scenarios it left out and
+    why, and its report, when written."""
     from eregion_core.exercise_channel import safe_part
     if not safe_part(cid):
         return {"error": "campaign id: a plain name"}
@@ -1799,15 +1819,17 @@ async def atelier_campaign(cid: str) -> dict:
         return {"error": f"unknown campaign: {cid}"}
     from dataclasses import asdict
     from analysis.campaign_report import collect_facts
+    skipped: list[str] = []
     try:
-        facts = await asyncio.to_thread(collect_facts, cdir, _RUNS, lambda _m: None)
+        facts = await asyncio.to_thread(collect_facts, cdir, _RUNS, skipped.append)
     except Exception as exc:
         return {"error": f"campaign unreadable: {exc}"}
     try:
         report = (cdir / "report.md").read_text(encoding="utf-8")
     except OSError:
         report = ""
-    return {"campaign_id": cid, "facts": [asdict(f) for f in facts], "report_md": report}
+    return {"campaign_id": cid, "facts": [asdict(f) for f in facts], "skipped": skipped,
+            "report_md": report}
 
 
 def _published_heartbeat() -> dict:
@@ -1835,10 +1857,10 @@ async def atelier_channel() -> dict:
     now), and the heartbeat it publishes — with the live windows it does not list yet (a run
     of such a window cannot conclude to a miss: ``watch_channel.miss_unprovable``)."""
     from eregion_core import exercise_channel, watch_channel
-    from eregion_core.exercise import exercises_dir, live, load_windows
+    from eregion_core.exercise import exercises_dir, live
     now = datetime.now(timezone.utc)
     directory = exercises_dir(_RUNS)
-    windows = load_windows(directory)
+    windows = _read_windows()
     mtimes = [p.stat().st_mtime for p in directory.glob("*.json")] if directory.is_dir() else []
     live_ids = sorted(str(w["run_id"]) for w in windows if live(w, now))
     out = {

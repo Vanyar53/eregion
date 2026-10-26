@@ -289,7 +289,12 @@ a un adaptateur, seul à importer son SDK, et y déclare ses capacités dans ces
 réseau en `network_quarantine` (isoler par un groupe de quarantaine) et `network_rules` (isoler par
 règles, bloquer), `session_drain` (couper les sessions déjà ouvertes), `restore_point`, chacune avec
 les droits qu'elle demande. La préparation de Glorfindel lit ces droits. Azure est le seul
-adaptateur (`glorfindel/providers/azure/`).
+adaptateur qui tourne (`glorfindel/providers/azure/`). Un second, AWS (`glorfindel/providers/aws/`,
+MC1, 26/10), est écrit contre un monde simulé et ne tourne sur aucun compte avant MC2 : il déclare
+`network_quarantine` (un groupe de sécurité de quarantaine par VPC) et `network_rules` pour les seuls
+blocages (ACL réseau du sous-réseau) — ni isolation par règles, ni `session_drain`, ni
+`restore_point`. Ce que les mots veulent dire sur AWS, et les hypothèses à mesurer :
+[`design/monde-aws.md`](design/monde-aws.md).
 
 | Concept | Sens |
 |---|---|

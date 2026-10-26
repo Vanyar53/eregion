@@ -118,7 +118,7 @@ Préfixes : **A** isolation et **B** IA (septième passe), **O** Orodruin, **H**
 | G4 | Moteur Kubernetes (Chaos Mesh ou LitmusChaos), puis générique (Chaos Toolkit) | une expérience, deux moteurs | 3–5 |
 | X1 | Attaque pendant une panne | détecte ou escalade, jamais à l'aveugle | 3–5 |
 | O2 | Orodruin, mode Kubernetes (un namespace par projet) | mêmes tests de contrat sur les deux modes | 5–8 |
-| MC1 | Un monde simulé par fournisseur. **Avancé en code seul après A1 (décision du 26/10)** : faux AWS en mémoire et adaptateur écrit contre lui, rien sur un vrai compte ; la règle « pas de multi-cloud avant une boucle Azure solide » tient pour MC2 et MC3 | invariants et mutants de contrôle verts sur AWS | 8–12 |
+| MC1 | Un monde simulé par fournisseur. **Avancé en code seul après A1 (décision du 26/10)** : faux AWS en mémoire et adaptateur écrit contre lui, rien sur un vrai compte ; la règle « pas de multi-cloud avant une boucle Azure solide » tient pour MC2 et MC3. **Fait en code le 26/10** (`tests/unit/fake_aws.py`, `glorfindel/providers/aws/`, `tests/unit/test_invariants_aws.py`) : invariants verts sur AWS jusqu'à 8 000 séquences, contrôle AWS 10 sur 16 (Azure 11 sur 16), mutants M600–M617 ; quatorze hypothèses d'AWS à mesurer en MC2 ([`docs/design/monde-aws.md`](docs/design/monde-aws.md)) | invariants et mutants de contrôle verts sur AWS | 8–12 |
 | MC2 | Adaptateur AWS + banc AWS | isoler-lever revient à l'état d'origine, vérifié | 10–15 |
 | MC3 | Adaptateur GCP + banc GCP | mêmes critères | 8–12 |
 

@@ -55,7 +55,9 @@ choisir pour chaque sens le plus grand numéro libre en dessous de la première 
 autorise l'attaquant ; **noter l'intention dans l'état avant de créer** (une entrée de NACL n'a ni
 nom ni description : seule la note dit qu'elle est à Glorfindel), créer, puis noter le résultat.
 Pas de numéro libre avant une autorisation de l'attaquant : rien n'est posé sur cette NACL, et le
-blocage le dit.
+blocage le dit. Une entrée d'un autre blocage n'est réutilisée que si elle passe encore avant toute
+autorisation de l'attaquant (le client a pu en ajouter une devant), et le blocage relit chaque NACL :
+si l'attaquant n'y est pas refusé partout, il le dit (`partial`).
 
 **Débloquer** (`unblock_ip`). Sous le verrou de chaque NACL : retirer les entrées notées, si
 elles disent encore « deny attaquant/32 », et si aucun autre blocage noté (une autre instance du
@@ -113,6 +115,16 @@ Firewall, routes, Gateway Load Balancer).
 | L1 | un blocage disparu est reposé ou signalé, même derrière la quarantaine | **tel quel** ; la quarantaine ne cache jamais un blocage sur AWS (la NACL est au sous-réseau) |
 | U1 | une règle laissée par une carte disparue, qui coupe une carte vivante, est signalée | **sans équivalent** : aucune règle de Glorfindel n'est adressée à l'IP d'une carte |
 
-Ce que la machine AWS ne joue pas encore : `reset --from-azure` (pas d'équivalent écrit pour AWS),
-les isolations d'une ancienne version, un autre hôte qui écrit l'ENI pendant une levée (il est
-joué pendant l'isolation et la levée), les instantanés et les restaurations (non déclarés).
+Ce que la machine AWS joue comme sur Azure : les pannes (appel limité, crash avant ou après une
+écriture, une API limitée pendant toute l'opération, disque plein sur l'état local), deux
+opérations à la fois avec les vrais verrous, un autre hôte qui réécrit l'ENI juste après
+Glorfindel (pendant l'isolation et pendant la levée), le rôle retiré, la configuration changée ou
+illisible, l'horloge. Le monde bouge à la manière d'AWS : règles des SG et entrées d'ACL du client,
+un SG qu'aucune ENI ne porte supprimé, une adresse changée, une SCP sur une ENI, `terraform apply`
+qui remet les groupes d'une ENI ou vide une ACL des entrées absentes du code (H11), quelqu'un qui
+ouvre le SG de quarantaine, sort une ENI de la quarantaine vers `default`, perd les tags, retourne
+une entrée d'ACL de Glorfindel, une instance créée ou supprimée.
+
+Ce qu'elle ne joue pas encore : `reset --from-azure` (pas d'équivalent écrit pour AWS), les
+isolations d'une ancienne version (il n'y en a pas sur AWS), les instantanés et les restaurations
+(non déclarés), et tout ce que le faux monde ne modélise pas (plus haut).

@@ -62,17 +62,38 @@ glorfindel/
   agent.py              → LangGraph 8 nodes + _SOURCE_LANGUAGES map (source → query lang)
                           load_context → [poll_detection | propose_detection_rule]
                           → investigate → decide → execute_action → verify_action → store_cycle
-  actions.py            → CloudConnector ABC + AzureConnector + check_nsg_access/check_backup_points/check_compute_access
-                          list_backup_items(vault, rg) → inventaire RSV vault-wide (protected items + last RP/state),
+  actions.py            → façade (A1, 26/10) : `from glorfindel.actions import X` marche pour chaque nom
+                          de l'ancien fichier de 4 394 lignes, découpé sans changer son texte. Un seul espace
+                          de noms : un nom écrit à travers elle (monkeypatch de `_ISOLATION_STATE_DIR`, `_vm_lock`…)
+                          l'est dans chaque module qui le lie ; un nom est lu dans son module, à jour.
+                          Sur glorfindel.actions : monkeypatch.setattr, jamais mock.patch (il supprime le nom
+                          en sortie : la façade refuse, la valeur patchée resterait partout) ; ou mock.patch
+                          sur le module d'origine (ce module seul).
+  response/             → cœur neutre : policy.py (AUTONOMOUS_ACTIONS, HUMAN_APPROVAL_REQUIRED, erreurs,
+                          isolation_verdict, single_host_ip), ids.py, state.py (~/.glorfindel/isolation, blocks),
+                          locks.py (_vm_lock, _quarantine_lock)
+  providers/interface.py → MC0 : CloudConnector, DetectionConnector, et les capacités qu'un fournisseur déclare
+                          (Capability : nom commun, actions servies, droits requis) ; capabilities_of(connector) —
+                          la préparation (readiness.py) lit les droits là, plus dans ses propres constantes
+  providers/azure/      → le seul adaptateur, le seul endroit de glorfindel/ qui importe le SDK Azure
+                          (tests/unit/test_provider_boundary.py, étape CI « Provider boundary ») :
+                          connector.py (AzureConnector = un mixin par préoccupation + garde d'abonnement + verrou
+                          de VM sur les écritures), nsg.py (règles lues par contenu), network.py, quarantine.py,
+                          isolation.py, release.py, verify.py, blocks.py, unblock.py, backup.py (+ restore_job_status,
+                          lu par jobs.py), restore.py, sweep.py, readers.py (check_permissions, check_nsg_access,
+                          list_nsgs, check_compute_access…), sdk.py (warm-up), capabilities.py, monitor.py
+                          (AzureMonitorDetector, réexporté par detectors.py)
+                          backup.py : check_backup_points ; list_backup_items(vault, rg) → inventaire RSV vault-wide (protected items + last RP/state),
                           indépendant de l'état des VMs (source de vérité backup même VM éteinte). Cheap leg : 1 appel
                           paginé, pas de count RP par item (count = check_backup_points par VM, opt-in). Read-only OK.
-                          list_nsgs() → inventaire NSG réel (network_security_groups.list_all) : tous les NSG +
+                          readers.py : list_nsgs() → inventaire NSG réel (network_security_groups.list_all) : tous les NSG +
                           associations (subnets/nics) + `vms` (resource_ids gouvernés, via nic→vm/subnet→vms d'un
                           network_interfaces.list_all) + restriction Glorfindel (rule `glorfindel-*`). Corrige le
                           sous-comptage de check_nsg_access (dérivé par-VM : rate le NSG subnet quand la NIC a le
                           sien, le NSG d'un subnet AKS, les VMs éteintes). `vms` → War Room : flag monitored
                           (VM hors-LAW = angle mort) + glow de la/les carte(s) VM au survol. Read-only OK.
-  detectors.py          → DetectionConnector ABC + AzureMonitorDetector (poll 10s) + run_query()
+  detectors.py          → detector_for() ; DetectionConnector et AzureMonitorDetector (poll 10s) + run_query()
+                          vivent dans providers/ depuis A1, réexportés ici
                           run_query/poll_alert REMONTENT les échecs de query (lèvent), ne les avalent
                           plus en `[]`/no-match : un LAW injoignable (supprimé/IAM/GUID faux) était
                           indistinguable d'un LAW sain sans détection → détection aveugle en silence +

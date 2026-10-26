@@ -41,6 +41,12 @@ jobs:
       - name: Lint
         run: ruff check .
 
+      # MC0 (A1): no provider SDK outside its adapter (glorfindel/providers/<name>/ in
+      # Glorfindel), and every provider declares its capabilities. Named on its own so a
+      # breach shows here, before the long tests (which run it again).
+      - name: Provider boundary
+        run: python -m pytest tests/unit/test_provider_boundary.py -q
+
       # The failing sequences the nightly run found (tests/unit/test_invariants.py)
       # are replayed first, until fixed. Restore only: the nightly run owns them.
       - uses: actions/cache/restore@v5

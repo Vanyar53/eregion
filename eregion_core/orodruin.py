@@ -7,7 +7,8 @@ guardrails hold — otherwise the injector stays passive and touches nothing.
                           there cover what the injectors ask
         network           a connection outside the perimeter fails
         cap               the declared cap is read and compared to the ceiling
-        kill              revoke the identity, then stop the VM — ``kill``
+        kill              revoke the identity, cancel the chaos experiments, stop the
+                          VM, close the exercise windows — ``kill``
         audit             every injector call is journaled BEFORE it runs — ``Session``
 
 Targets stay the inscription's business (``eregion_core/inscription.py``, O0): the two
@@ -356,13 +357,17 @@ def arm(run_id: str, injector: str, verdict: Verdict | None = None) -> tuple[Ver
 
 # ── Kill — revoke first, then stop ────────────────────────────────────────────────────
 
-def kill(revoke: Callable[[], None], stop: Callable[[], None]) -> list[str]:
-    """``orodruin-kill``: revoke the identity, then stop the VM — in that order, so a
-    running injector loses its rights even if the stop drags (a stopped VM keeps its
-    identity). A failed revocation still stops the VM, and is reported: never a kill
-    that claims success while the identity survives. Returns the failures."""
+def kill(revoke: Callable[[], None], cancel: Callable[[], None], stop: Callable[[], None],
+         close: Callable[[], None]) -> list[str]:
+    """``orodruin-kill``: revoke the identity, cancel the chaos experiments still running,
+    stop the VM, close the open exercise windows — in that order. Revoke first, so a
+    running injector loses its rights even if the rest drags (a stopped VM keeps its
+    identity); cancel next, since an experiment acts with its own identity and outlives
+    the revocation; close last, once nothing of Orodruin's can reopen a window (M-1).
+    A failed step does not stop the next ones, and is reported: never a kill that claims
+    success while something survives. Returns the failures."""
     failures = []
-    for name, step in (("revoke", revoke), ("stop", stop)):
+    for name, step in (("revoke", revoke), ("cancel", cancel), ("stop", stop), ("close", close)):
         try:
             step()
         except Exception as e:

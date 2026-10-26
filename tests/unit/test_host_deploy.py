@@ -158,6 +158,27 @@ def test_rules_approved_on_the_vm_ride_along(repo):
     assert "glorfindel/rules" in res.stderr and rules.read_text().endswith("approved: 1\n")
 
 
+def test_rules_approved_on_the_vm_that_the_reference_changes_stop_it_with_what_to_do(repo, tmp_path):
+    """The reference changes the very file the VM approved rules in: git would refuse the
+    checkout in its own words, just after the script said « gardé ». The script stops
+    first, names the file, says where the procedure is and what never to do (review of M-3)."""
+    rules = repo.vm / "glorfindel" / "rules" / "azure" / "detection_rules.yaml"
+    rules.write_text("rules: 3\napproved: 1\n")
+    before = repo.head()
+    bin_dir, log, fake = _fake_bin(tmp_path)
+    env = {**repo.env, **fake, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"}
+    res = repo.deploy("v0.2.0", env=env)                    # c1: its rules file differs
+    assert res.returncode != 0
+    assert "glorfindel/rules/azure/detection_rules.yaml" in res.stderr
+    assert "changé par v0.2.0" in res.stderr and "rien n'est déployé" in res.stderr
+    assert "Règles approuvées et nouvelle référence" in res.stderr
+    assert "gardé" not in res.stderr and "error:" not in res.stderr       # not git's words
+    assert repo.head() == before and not repo.detached() and log.read_text() == ""
+    assert rules.read_text() == "rules: 3\napproved: 1\n"               # nothing lost
+    readme = (ROOT / "infra" / "glorfindel-host" / "README.md").read_text(encoding="utf-8")
+    assert "Règles approuvées et nouvelle référence" in readme
+
+
 def _fake_bin(tmp_path, ref="", rev=""):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
@@ -222,7 +243,7 @@ def test_show_says_what_runs(repo, tmp_path, case):
 
 # ── the Makefile recipe, through a fake ssh that runs the remote command in the fake VM ──
 
-def _make_start(repo, tmp_path, *args):
+def _make_start(repo, tmp_path, *args, environ=None):
     vm_home = repo.vm.parent / "vmhome"
     vm_home.mkdir(exist_ok=True)
     (vm_home / ".eregion-host-ready").touch()
@@ -235,7 +256,7 @@ def _make_start(repo, tmp_path, *args):
     ssh_log = tmp_path / "ssh.log"
     ssh_log.write_text("")
     env = {**repo.env, **fake, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
-           "FAKE_VM_HOME": str(vm_home), "FAKE_SSH_LOG": str(ssh_log)}
+           "FAKE_VM_HOME": str(vm_home), "FAKE_SSH_LOG": str(ssh_log), **(environ or {})}
     res = subprocess.run(["make", "-s", "--no-print-directory", "-C", str(ROOT), "glorfindel-host-start",
                           "HOST_IP=203.0.113.9", *args], env=env, capture_output=True, text=True, timeout=120)
     return res, log.read_text().splitlines(), ssh_log.read_text()
@@ -254,14 +275,46 @@ def test_make_glorfindel_host_start_deploys_the_reference_it_is_given(repo, tmp_
 @pytest.mark.skipif(shutil.which("make") is None, reason="make not installed")
 def test_make_glorfindel_host_start_refuses_a_branch_or_a_shell_word(repo, tmp_path):
     before = repo.head()
-    for ref in ("main", "'v1;id'"):
+    pwned = tmp_path / "pwned"
+    for ref in ("main", "'v1;id'", f"$$(touch {pwned})", f"$(shell touch {pwned})", "v1$(id)"):
         res, docker_calls, _ = _make_start(repo, tmp_path, f"REF={ref}")
-        assert res.returncode != 0 and docker_calls == []
+        assert res.returncode != 0 and docker_calls == [], ref
     assert repo.head() == before
+    assert not pwned.exists()           # the refused word was never run, by make nor the shell
+
+
+@pytest.mark.skipif(shutil.which("make") is None, reason="make not installed")
+@pytest.mark.parametrize("ref", ["--checkout-only", "--show", "-x", "--checkout-only=v0.2.0"])
+def test_make_glorfindel_host_start_refuses_a_reference_that_reads_as_an_option(repo, tmp_path, ref):
+    """`REF=--checkout-only` checked out without building, and make then printed its
+    messages as if the deployment had happened; `REF=--show` only showed (review of M-3)."""
+    before = repo.head()
+    res, docker_calls, ssh_calls = _make_start(repo, tmp_path, f"REF={ref}")
+    assert res.returncode != 0 and "REF invalide" in res.stderr
+    assert ssh_calls == "" and docker_calls == []
+    assert repo.head() == before and not repo.detached()
+    assert "Arrête le Glorfindel local" not in res.stdout
+
+
+@pytest.mark.skipif(shutil.which("make") is None, reason="make not installed")
+def test_make_glorfindel_host_start_never_deploys_a_ref_from_the_environment(repo, tmp_path):
+    """REF is a generic name: one exported for something else must not be deployed in
+    silence. Given on the command line, it wins over the environment's."""
+    c1, c2 = repo.commits[:2]
+    res, docker_calls, ssh_calls = _make_start(repo, tmp_path, environ={"REF": "v0.2.0"})
+    assert res.returncode != 0 and "environnement" in res.stderr and "v0.2.0" in res.stderr
+    assert ssh_calls == "" and docker_calls == [] and not repo.detached()
+    # `make glorfindel-host-start REF=` : the latest v* tag, whatever the environment says.
+    res, docker_calls, _ = _make_start(repo, tmp_path, "REF=", environ={"REF": "v0.2.0"})
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert repo.head() == c2 and any(f"revision={c2}" in c for c in docker_calls)
+    res, docker_calls, _ = _make_start(repo, tmp_path, "REF=v0.2.0", environ={"REF": "main"})
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert repo.head() == c1
 
 
 def test_the_recipe_no_longer_pulls_a_branch():
-    recipe = (ROOT / "Makefile").read_text(encoding="utf-8").split("\nglorfindel-host-start:")[1].split("\n\n")[0]
+    recipe = (ROOT / "Makefile").read_text(encoding="utf-8").split("\nglorfindel-host-start:\n")[1].split("\n\n")[0]
     assert "git pull" not in recipe and "infra/glorfindel-host/deploy.sh" in recipe
     status = (ROOT / "infra" / "glorfindel-host" / "status.sh").read_text(encoding="utf-8")
     assert "--show" in status and "git log --oneline" not in status

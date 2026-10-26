@@ -239,7 +239,11 @@ verrou, chaque reconstruction de l'image prenait la dernière version de tout.
   la même commande donne le même verrou ; la date est dans l'en-tête du fichier.
 - Le premier verrou (26/10) fige la résolution de ce jour-là : celle qu'une reconstruction de
   l'image aurait prise ; la suite de tests passe dessus en 3.11 et en 3.12, et l'image se
-  construit. LiteLLM reste épinglée dans `pyproject.toml` (`==1.86.1`).
+  construit. LiteLLM reste épinglée dans `pyproject.toml` (`==1.86.1`). Il monte nettement de
+  versions par rapport aux postes et à la CI d'avant (anthropic 0.104 → 2.3, fastapi 0.136 →
+  0.162, langgraph 1.2.1 → 1.2.17) : **le harnais avant le premier redéploiement de H0 sur ce
+  verrou n'est pas facultatif** (`infra/glorfindel-host/README.md`, « Redéployer H0 après M-3 »,
+  étape 4).
 
 **Mettre à jour** (une PR, jamais directement sur H0) :
 

@@ -52,7 +52,7 @@ latest_tag() {
 }
 
 checkout() {
-  local want="${1:-}" pair dirty
+  local want="${1:-}" pair dirty rules clash
   git fetch -q --tags --force origin
   if [ -z "$want" ]; then
     want=$(latest_tag)
@@ -63,7 +63,13 @@ checkout() {
   # detection rules, which the containers write (approved rules, mounted read-write).
   dirty=$(git status --porcelain --untracked-files=no | awk '{print $NF}' | grep -v '^glorfindel/rules/' || true)
   [ -z "$dirty" ] || die "fichiers suivis modifiés sur la VM (rien n'est déployé) : $(echo "$dirty" | tr '\n' ' ')"
-  if git status --porcelain --untracked-files=no | grep -q 'glorfindel/rules/'; then
+  rules=$(git diff --name-only HEAD -- glorfindel/rules | sort)
+  if [ -n "$rules" ]; then
+    # Kept only if the reference leaves those files as they are. Otherwise git would refuse
+    # the checkout in its own words, just after « gardé »: said here, with what to do,
+    # before anything moves.
+    clash=$(comm -12 <(echo "$rules") <(git diff --name-only HEAD "${pair#* }" -- glorfindel/rules | sort))
+    [ -z "$clash" ] || die "$(echo "$clash" | tr '\n' ' ')— modifié sur la VM (règles approuvées) et changé par ${pair% *} : rien n'est déployé. Reporter les règles approuvées à la main : infra/glorfindel-host/README.md, « Règles approuvées et nouvelle référence ». Jamais git checkout -- glorfindel/rules : il les efface."
     echo "  · glorfindel/rules modifié sur la VM (règles approuvées) : gardé" >&2
   fi
   git -c advice.detachedHead=false checkout -q --detach "${pair#* }"

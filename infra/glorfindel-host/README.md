@@ -55,12 +55,16 @@ ses boutons) ; le webhook garde les notifications d'action. Un seul bot par
 - **Une référence nommée, jamais une branche.** `make glorfindel-host-start REF=v0.3.1` (un tag)
   ou `REF=<commit>` (7 à 40 chiffres hexadécimaux) ; sans `REF`, le dernier tag `v*` dans l'ordre
   des versions. `main`, `origin/main`, `HEAD` sont refusés : une branche bouge, et la VM
-  exécutait jusque-là ce qui venait d'être fusionné (`git pull` sur `main`). Le script
+  exécutait jusque-là ce qui venait d'être fusionné (`git pull` sur `main`). `REF` se donne sur
+  la ligne de commande : une variable `REF` de l'environnement (un nom générique, exporté pour
+  autre chose) est refusée, jamais déployée en silence (`REF=` sur la ligne de commande : le
+  dernier tag) ; une `REF` qui commence par `-` aussi (elle serait une option du script). Le script
   (`deploy.sh`, celui du poste, envoyé par ssh) fait `git fetch --tags`, un checkout détaché,
   puis construit l'image avec deux étiquettes, `org.opencontainers.image.version` (la référence)
   et `org.opencontainers.image.revision` (le commit complet). Un fichier suivi modifié sur la VM
   arrête le déploiement (il partirait dans l'image), sauf `glorfindel/rules/`, que les conteneurs
-  écrivent (règles approuvées) : gardé, et dit. `make glorfindel-host-status` relit les
+  écrivent (règles approuvées) : gardé, et dit — sauf si la référence change aussi ce fichier
+  (« Règles approuvées et nouvelle référence », plus bas). `make glorfindel-host-status` relit les
   étiquettes sur le conteneur de la watch : « ✓ référence déployée : v0.3.1 (abc…) », ⚠ si le
   checkout a bougé depuis, si la VM est sur une branche, ou si l'image n'a pas d'étiquette (une
   image d'avant M-3). Revenir en arrière : `REF=<le tag précédent>`.
@@ -109,9 +113,15 @@ ses boutons) ; le webhook garde les notifications d'action. Un seul bot par
    a été fusionné depuis) : sans `REF`, c'est lui qui serait déployé. Poser un tag sur le commit de
    fusion (`git tag v0.3.1 <commit> && git push origin v0.3.1`, ou une release), ou passer le
    commit : `REF=<commit de fusion>`.
-4. **Le harnais**, puisque l'image prend les versions du verrou (résolution du 26/10, peut-être
-   plus récentes que celles de la dernière image de H0) : `make llm-compare MODELS=<modèle en
-   service> RUNS=3` (appels payants) ; les décisions doivent rester celles d'avant.
+4. **Le harnais — obligatoire, avant l'étape 5.** L'image prend désormais les versions du
+   verrou (résolution du 26/10), nettement plus récentes que celles des postes et de la CI
+   jusqu'ici : anthropic 0.104 → 2.3, fastapi 0.136 → 0.162, langgraph 1.2.1 → 1.2.17 (LiteLLM
+   reste 1.86.1) ; celles de l'image qui tourne sur H0 dépendent du jour où elle a été construite
+   (`docker exec eregion-watch pip list` sur la VM). Sans le harnais, on ne sait pas si les
+   décisions de H0 restent les mêmes : `make llm-compare MODELS=<modèle en service> RUNS=3`
+   (appels payants, Jonathan) ; les décisions doivent rester celles d'avant. Sinon, ne pas
+   redéployer : ouvrir une PR qui ramène le verrou (`docs/operations.md`, « Verrou des
+   dépendances »).
 5. **Pousser, puis déployer** :
    ```bash
    make glorfindel-host-push                 # host.env (avec DISCORD_ALLOWED_USERS) → ~/eregion/.env
@@ -120,21 +130,50 @@ ses boutons) ; le webhook garde les notifications d'action. Un seul bot par
    La première fois, la VM est sur la branche `main` (clone de cloud-init) : le déploiement la
    passe en checkout détaché. S'il refuse pour « fichiers suivis modifiés », regarder
    (`make glorfindel-host-ssh`, puis `git -C eregion status --short`) avant de toucher quoi que ce
-   soit.
+   soit. S'il refuse pour « modifié sur la VM (règles approuvées) et changé par … » : « Règles
+   approuvées et nouvelle référence », plus bas. Dans les deux cas, rien n'a bougé : l'ancienne
+   image tourne toujours.
 6. **Vérifier** : `make glorfindel-host-status` → « ✓ référence déployée : v0.3.1 (…) », les trois
    conteneurs ✓, aucune erreur ; `make glorfindel-host-logs` → le bot dit « Boutons : 1
    utilisateur(s) … » (et non « fermé par défaut ») ; un clic sur ✓ Right d'une carte dans Discord
    passe. Que chaque conteneur n'a que ses secrets, sans en afficher la valeur :
    ```bash
    make glorfindel-host-ssh
-   for c in eregion-watch eregion-war-room eregion-bot; do echo "$c: $(docker exec $c env | cut -d= -f1 | grep -E 'KEY|TOKEN|SECRET|WEBHOOK' | sort | tr '\n' ' ')"; done
+   for c in eregion-watch eregion-war-room eregion-bot; do echo "$c: $(docker exec $c env | cut -d= -f1 | grep -E 'KEY|TOKEN|SECRET|WEBHOOK' | grep -v '^GPG_KEY$' | sort | tr '\n' ' ')"; done
    ```
-   Attendu : la watch, `ANTHROPIC_API_KEY` (et les autres clés de modèle, vides), `AZURE_CLIENT_SECRET`
-   (vide), `GLORFINDEL_WEBHOOK_URL` ; la War Room, `GLORFINDEL_WARROOM_TOKEN`, `AZURE_CLIENT_SECRET`,
-   `GLORFINDEL_WEBHOOK_URL` ; le bot, `DISCORD_BOT_TOKEN`, `AZURE_CLIENT_SECRET`. Aucune autre.
+   (`GPG_KEY` vient de l'image `python:3.12-slim` : l'empreinte publique de la clé qui signe
+   Python, pas un secret ; la commande l'écarte.) Attendu : la watch, `ANTHROPIC_API_KEY` (et les
+   autres clés de modèle, vides), `AZURE_CLIENT_SECRET` (vide), `GLORFINDEL_WEBHOOK_URL` ; la War
+   Room, `GLORFINDEL_WARROOM_TOKEN`, `AZURE_CLIENT_SECRET`, `GLORFINDEL_WEBHOOK_URL` ; le bot,
+   `DISCORD_BOT_TOKEN`, `AZURE_CLIENT_SECRET`. Aucune autre. La watch et la War Room ont aussi
+   `GLORFINDEL_DISCORD_BOT=1` (le jeton du bot est posé, sans sa valeur).
 7. **En cas de problème** : `make glorfindel-host-start REF=<commit déployé avant>` (affiché par
    l'ancien `glorfindel-host-status`, « commit déployé ») revient à l'image d'avant — sans
    étiquette, le statut le dira « inconnue ».
+
+### Règles approuvées et nouvelle référence
+
+Une règle approuvée sur la VM (`glorfindel approve-rule`) s'écrit dans
+`glorfindel/rules/azure/detection_rules.yaml`, un fichier suivi. Si la référence à déployer
+change aussi ce fichier, `deploy.sh` s'arrête avant de rien toucher : « … modifié sur la VM
+(règles approuvées) et changé par <ref> : rien n'est déployé ». Rien n'est perdu, l'ancienne
+image tourne toujours. **Jamais `git checkout -- glorfindel/rules`** (ni `git reset --hard`) : ils
+effacent les règles approuvées. Sur la VM (`make glorfindel-host-ssh`, puis `cd eregion`) :
+
+```bash
+cp glorfindel/rules/azure/detection_rules.yaml ~/regles-approuvees.yaml   # une copie, hors du dépôt
+git diff -- glorfindel/rules                                 # ce que la VM a approuvé
+git fetch -q --tags origin && git diff HEAD <ref> -- glorfindel/rules   # ce que la référence change
+git stash push -m regles-approuvees -- glorfindel/rules      # mises de côté : le fichier revient au checkout
+```
+
+Puis, depuis le poste, `make glorfindel-host-start REF=<ref>` : il passe, et la watch démarre
+avec les règles de la référence, sans celles de la VM. Enfin, sur la VM, reporter les règles
+approuvées à la main dans le nouveau fichier (`git stash show -p` les montre ; la copie est dans
+`~/regles-approuvees.yaml`), en gardant ce que la référence a changé ; puis
+`docker compose restart watch` (les règles se lisent au démarrage) et, une fois vérifié,
+`git stash drop`. Pas de `git stash pop` à l'aveugle : un conflit laisserait des marqueurs dans le
+fichier, que la watch ne lirait plus.
 
 **Disque** : chaque `make glorfindel-host-start` reconstruit l'image ; les couches des anciennes images restaient dans containerd (Docker 29), jusqu'à 87 % d'un disque de 32 Go le 20/10, 25 Go récupérables. Le redéploiement purge maintenant les images orphelines (`docker image prune -f`), et `glorfindel-host-status` affiche l'occupation du disque.
 

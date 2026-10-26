@@ -514,11 +514,19 @@ glorfindel-host-push:
 # M-3 (#183) : une référence nommée, jamais une branche — REF=<tag ou commit>, par défaut le
 # dernier tag v*. Checkout détaché, image étiquetée avec la référence (deploy.sh, envoyé par
 # ssh : celui du poste, quelle que soit la référence déployée).
+# REF se donne sur la ligne de commande : une variable REF de l'environnement (un nom
+# générique, posé pour autre chose) est refusée, jamais déployée en silence. Le shell la lit
+# dans son environnement (EREGION_DEPLOY_REF), jamais recopiée dans la commande avant d'être
+# validée, ni développée par make ($(value …), unexport) : « $(…) » n'y est pas exécuté. Une
+# REF qui commence par « - » serait une option de deploy.sh (--checkout-only, --show) : refusée.
 REF ?=
+unexport REF
+glorfindel-host-start: export EREGION_DEPLOY_REF = $(value REF)
 glorfindel-host-start:
 	@test -n "$(HOST_IP)" || { echo "Pas de VM : make glorfindel-host-up d'abord"; exit 1; }
-	@case "$(REF)" in *[!A-Za-z0-9._-]*) echo "REF invalide : $(REF) (un tag ou un commit)"; exit 1;; esac
-	$(HOST_SSH) 'test -f .eregion-host-ready && mkdir -p .eregion/analysis && cd eregion && bash -s -- $(REF)' < infra/glorfindel-host/deploy.sh
+	@case "$(origin REF)" in environment*) echo "REF vient de l'environnement (« $$EREGION_DEPLOY_REF ») : rien n'est déployé. La donner sur la ligne de commande : make glorfindel-host-start REF=<tag ou commit> (REF= : le dernier tag v*)." >&2; exit 1;; esac
+	@case "$$EREGION_DEPLOY_REF" in -*|*[!A-Za-z0-9._-]*) echo "REF invalide : « $$EREGION_DEPLOY_REF » (un tag ou un commit)" >&2; exit 1;; esac
+	$(HOST_SSH) 'test -f .eregion-host-ready && mkdir -p .eregion/analysis && cd eregion && bash -s -- '"$$EREGION_DEPLOY_REF" < infra/glorfindel-host/deploy.sh
 	@echo ""
 	@echo "  ⚠ Arrête le Glorfindel local (make glorfindel-stop) : deux watch sur le même banc = cartes en double ;"
 	@echo "    et aucun autre bot avec le même DISCORD_BOT_TOKEN."

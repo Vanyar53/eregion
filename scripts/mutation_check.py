@@ -834,6 +834,38 @@ MUTANTS = [
      '            **seen, "execution_id": (execution or {}).get("name"), "execution_status": status,\n',
      '            **{k: v for k, v in seen.items() if k != "before"},\n'
      '            "execution_id": (execution or {}).get("name"), "execution_status": status,\n'),
+    # M-3 (#183) — the host of Glorfindel: Discord buttons check who clicks (closed by
+    # default), each container gets only its secrets, H0 deploys a named reference whose
+    # image carries it, and the image installs from the lock.
+    ("M280", "a Discord button runs for whoever clicks it (M-3)", "glorfindel/bot.py",
+     "        if isinstance(policy, ButtonPolicy) and policy.allows(interaction.user):\n",
+     "        if True:\n"),
+    ("M281", "with no allowed users nor roles, every click passes (M-3)", "glorfindel/bot.py",
+     '        if getattr(user, "id", None) in self.users:\n',
+     '        if not self.configured or getattr(user, "id", None) in self.users:\n'),
+    ("M282", "any role allows a click, not only an allowed one (M-3)", "glorfindel/bot.py",
+     "        return bool(held & self.roles)\n", "        return bool(held)\n"),
+    ("M283", "a refused click is not logged (M-3)", "glorfindel/bot.py",
+     '    _console.print(\n        f"[yellow]Button refused:',
+     '    (lambda *a: None)(\n        f"[yellow]Button refused:'),
+    ("M284", "the bot's token reaches every container again (M-3)", "docker-compose.yml",
+     "  DISCORD_CHANNEL_ID: ${DISCORD_CHANNEL_ID:-}\n",
+     "  DISCORD_CHANNEL_ID: ${DISCORD_CHANNEL_ID:-}\n  DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}\n"),
+    ("M285", "the War Room receives the models' keys (M-3)", "docker-compose.yml",
+     "      <<: [*env, *azure, *webhook]\n", "      <<: [*env, *azure, *models, *webhook]\n"),
+    ("M286", "the watch knows the bot only by its token: every card also goes to the webhook (M-3)",
+     "glorfindel/escalations.py",
+     '    return bool(env.get("DISCORD_CHANNEL_ID") or env.get("DISCORD_BOT_TOKEN"))\n',
+     '    return bool(env.get("DISCORD_BOT_TOKEN"))\n'),
+    ("M287", "H0 deploys a branch: any revision resolves (M-3)", "infra/glorfindel-host/deploy.sh",
+     '  if commit=$(git rev-parse -q --verify "refs/tags/$ref^{commit}" 2>/dev/null); then\n',
+     '  if commit=$(git rev-parse -q --verify "$ref^{commit}" 2>/dev/null); then\n'),
+    ("M288", "the image does not carry the reference it was built from (M-3)",
+     "infra/glorfindel-host/deploy.sh",
+     '    --label "$LABEL_REF=$ref" --label "$LABEL_REV=$commit" \\\n', ""),
+    ("M289", "the image resolves its dependencies again, unlocked (M-3)", "glorfindel/Dockerfile",
+     "RUN pip install --no-cache-dir --no-deps --no-build-isolation -e .\n",
+     'RUN pip install --no-cache-dir -e ".[glorfindel,war-room]"\n'),
 ]
 
 # Mutants measured by other tests than the invariants (their lot's own).
@@ -890,6 +922,10 @@ TESTS.update({f"M{n}": "tests/unit/test_decision_stability.py" for n in range(20
 TESTS.update({f"M{n}": "tests/unit/test_exercise_guard.py" for n in range(220, 239)})
 TESTS.update({f"M{n}": "tests/unit/test_run_channel.py" for n in range(240, 246)})
 TESTS.update({mid: "tests/unit/test_gothmog.py" for mid in ("M241", "M246")})
+TESTS.update({f"M{n}": "tests/unit/test_bot.py" for n in range(280, 284)})
+TESTS.update({f"M{n}": "tests/unit/test_glorfindel_host.py" for n in range(284, 287)})
+TESTS.update({f"M{n}": "tests/unit/test_host_deploy.py" for n in (287, 288)})
+TESTS["M289"] = "tests/unit/test_dependency_lock.py"
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

@@ -31,11 +31,6 @@ class NetworkMixin:
                       key=lambda n: (n.get("Attachment") or {}).get("DeviceIndex", 0))
         return [self._eni_record(n) for n in nics]
 
-    def _instance_platform(self, instance_id: str) -> str:
-        reservations = self._ec2.describe_instances(InstanceIds=[instance_id]).get("Reservations") or []
-        instances = [i for r in reservations for i in r.get("Instances") or []]
-        return str((instances[0] if instances else {}).get("Platform") or "linux").lower()
-
     def _eni_groups(self, eni_id: str) -> list[str]:
         nics = self._ec2.describe_network_interfaces(NetworkInterfaceIds=[eni_id]).get("NetworkInterfaces") or []
         if not nics:

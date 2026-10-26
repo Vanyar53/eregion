@@ -19,7 +19,8 @@ AWS's documentation, numbered in docs/design/monde-aws.md, to be measured on the
 - H8  errors are botocore's ClientError shape (`response["Error"]["Code"]`, the status);
 - H9  authorize/revoke are all or nothing: a duplicate or a missing rule fails the call;
 - H12 a write has taken effect when it returns (no eventual consistency modelled);
-- H13 a policy (SCP, IAM condition) can refuse the group change of one ENI.
+- H13 a policy (SCP, IAM condition) can refuse the group change of one ENI;
+- H16 a terminated instance is still described a while, without network interfaces.
 
 `open_flows` evaluates traffic as AWS does, independently of the adapter: a probe gets
 through when one of the ENI's groups allows it (stateful: the request only) and the
@@ -235,7 +236,8 @@ class FakeAws:
                 if inst is None:
                     raise ClientError("InvalidInstanceID.NotFound", f"The instance ID '{iid}' does not exist",
                                       400, "DescribeInstances")
-                first = self.enis[inst["enis"][0]]
+                # A terminated instance is still described a while, without its ENIs (H16).
+                first = self.enis[inst["enis"][0]] if inst["enis"] else {"vpc": "", "subnet": ""}
                 out.append({"InstanceId": iid, "VpcId": first["vpc"], "SubnetId": first["subnet"],
                             **({"Platform": "windows"} if inst["platform"] == "windows" else {}),
                             "NetworkInterfaces": [self._eni_view(self.enis[e], i) for i, e in enumerate(inst["enis"])]})

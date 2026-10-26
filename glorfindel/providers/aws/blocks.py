@@ -1,8 +1,9 @@
 """IP blocks on AWS (MC1): deny entries in the network ACL of each subnet of the instance.
 
 A security group only allows, and an ACL entry names one side only (H5): a block on AWS
-cuts the attacker off from the whole subnet, never from one instance — and says so
-(`scope: subnet`). An ACL entry has no name nor description: only the local state says it
+cuts the attacker off from every subnet associated with the ACL — often the whole VPC, for
+its default ACL — never from one instance, and says so (`scope: network_acl`, with the
+subnets it reaches, read in the ACL's associations). An ACL entry has no name nor description: only the local state says it
 is Glorfindel's, so the state is written BEFORE the entries (intent first), and an entry is
 removed only while it still says what Glorfindel wrote and no other recorded block holds it.
 """
@@ -122,7 +123,8 @@ class BlockMixin:
                             threat_port: int | None = None) -> dict:
         """Deny `ip` (every protocol, both directions) in the ACL of each subnet of the
         instance, before the first entry that lets it through. `scope` is read but a
-        block is always subnet-wide on AWS; `replace` has nothing to replace."""
+        block always reaches every subnet associated with the ACL on AWS (`subnets_affected`);
+        `replace` has nothing to replace."""
         if self.dry_run:
             return {"status": "dry_run", "action": "block_suspicious_ip", "ip": ip, "resource_id": resource_id}
         self._guard_write("block_suspicious_ip")
@@ -155,15 +157,19 @@ class BlockMixin:
                                    f"{ip} : rien n'est posé sur cette ACL"})
                     continue
                 (n_in, new_in), (n_out, new_out) = numbers[False], numbers[True]
+                # Every subnet the ACL governs — the instance's and the others (the VPC's
+                # default ACL serves every subnet not associated elsewhere).
+                affected = sorted({a.get("SubnetId") for a in acl.get("Associations") or []
+                                   if a.get("SubnetId")} | set(acls[acl_id]))
                 placements.append({"nsg_rg": "aws-acl", "nsg_name": acl_id, "rule": f"{n_in}/{n_out}",
-                                   "acl_id": acl_id, "subnets": acls[acl_id], "rule_in": n_in, "rule_out": n_out,
-                                   "cidr": cidr})
+                                   "acl_id": acl_id, "subnets": affected, "instance_subnets": acls[acl_id],
+                                   "rule_in": n_in, "rule_out": n_out, "cidr": cidr})
                 creates += [(acl_id, n, eg) for eg, n, new in ((False, n_in, new_in), (True, n_out, new_out)) if new]
             if not placements:
                 return {"status": "failed", "action": "block_suspicious_ip", "ip": ip, "resource_id": resource_id,
-                        "scope": "subnet", "bypass": bypass}
+                        "scope": "network_acl", "bypass": bypass}
             first = placements[0]
-            record = dict(nsg=first["acl_id"], nsg_scope="subnet", rule=first["rule"], scoped=False,
+            record = dict(nsg=first["acl_id"], nsg_scope="network_acl", rule=first["rule"], scoped=False,
                           placements=placements, threat_port=threat_port)
             # Intent first: once created, nothing but this record says an entry is ours.
             _state._save_block_state(iid, ip, resource_id, partial=True, **record)
@@ -182,9 +188,11 @@ class BlockMixin:
                                    "à la relecture"})
             _state._save_block_state(iid, ip, resource_id, partial=bool(bypass), **record)
         return {"status": "partial" if bypass else "blocked", "action": "block_suspicious_ip", "ip": ip,
-                "resource_id": resource_id, "scope": "subnet", "scope_requested": scope,
+                "resource_id": resource_id, "scope": "network_acl", "scope_requested": scope,
+                "subnets_affected": sorted({s for p in placements for s in p["subnets"]}),
                 "placements": placements, "bypass": bypass,
-                "note": "sur AWS, un blocage vaut pour tout le sous-réseau (ACL réseau)"}
+                "note": "sur AWS, un blocage vaut pour tous les sous-réseaux associés à l'ACL réseau "
+                        "(souvent tout le VPC, pour son ACL par défaut)"}
 
     def unblock_ip(self, ip: str, resource_id: str) -> dict:
         """Remove the entries this instance's block recorded — those that still say what
@@ -264,5 +272,5 @@ class BlockMixin:
             elif not (cut(acl, False, ip) and cut(acl, True, ip)):
                 bypass.append(acl_id)
         verified = False if (missing or bypass) else (None if unknown else True)
-        return {"verified": verified, "method": "network_acl", "scope": "subnet",
+        return {"verified": verified, "method": "network_acl", "scope": "network_acl",
                 "missing_rules": missing, "bypass": bypass, "unknown": unknown}

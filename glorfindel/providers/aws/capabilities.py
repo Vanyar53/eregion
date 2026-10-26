@@ -34,10 +34,11 @@ CAPABILITIES = ProviderCapabilities(
             "ec2:CreateTags",
             "ec2:DeleteTags",
         }), note="simulated (MC1)"),
-        # Deny entries of the subnet's network ACL: a block reaches the whole subnet.
+        # Deny entries of the subnet's network ACL: a block reaches every subnet associated
+        # with that ACL (often the whole VPC, for its default ACL).
         Capability(NETWORK_RULES, ("block_suspicious_ip", "unblock_ip"), frozenset({
             "ec2:CreateNetworkAclEntry",
             "ec2:DeleteNetworkAclEntry",
-        }), note="subnet-wide (network ACL); simulated (MC1)"),
+        }), note="every subnet of the network ACL; simulated (MC1)"),
     ),
 )

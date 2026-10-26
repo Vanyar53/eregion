@@ -139,7 +139,7 @@ def test_a_customer_group_named_like_the_quarantine_is_never_adopted(world):
 def test_a_block_is_subnet_wide_placed_before_the_customer_allow_and_shared(world):
     f, c, _ = world
     out = c.block_suspicious_ip(ATTACKER, arn("i-web1"), scope="vm")
-    assert out["status"] == "blocked" and out["scope"] == "subnet"
+    assert out["status"] == "blocked" and out["scope"] == "network_acl" and out["subnets_affected"] == ["subnet-app"]
     assert {k for k in f.acls["acl-app"]["entries"]} == {(False, 100), (True, 100), (False, 99), (True, 99)}
     assert not [fl for fl in open_flows(f.world(), "i-web1") if fl[3] == ATTACKER]
     assert c.verify_block_ip(ATTACKER, arn("i-web1"))["verified"] is True
@@ -259,6 +259,57 @@ def test_an_unblock_waits_for_a_block_reusing_its_entries_on_the_same_acl(world,
     side["thread"].join(timeout=10)
     assert out["status"] == "blocked" and side["unblock"]["status"] == "unblocked"
     assert c.verify_block_ip(ATTACKER, arn("i-db"))["verified"] is True
+
+
+def test_a_block_names_every_subnet_its_acl_reaches(world):
+    """The VPC's default ACL serves every subnet associated with no other: a block of the
+    db's second ENI reaches a third subnet, and says so."""
+    f, c, _ = world
+    f.add_subnet("vpc-a", "subnet-other", "10.0.2.0/24", "acl-default-vpc-a")
+    f.add_instance("i-other", [{"id": "eni-o", "subnet": "subnet-other", "ips": ["10.0.2.4"], "groups": ["sg-web"]}])
+    assert [fl for fl in open_flows(f.world(), "i-other") if fl[3] == ATTACKER]
+    out = c.block_suspicious_ip(ATTACKER, arn("i-db"))
+    assert out["scope"] == "network_acl"
+    assert out["subnets_affected"] == ["subnet-app", "subnet-data", "subnet-other"]
+    p = next(p for p in out["placements"] if p["acl_id"] == "acl-default-vpc-a")
+    assert p["subnets"] == ["subnet-data", "subnet-other"] and p["instance_subnets"] == ["subnet-data"]
+    # What it said is what happened: the other instance is cut from the attacker too.
+    assert not [fl for fl in open_flows(f.world(), "i-other") if fl[3] == ATTACKER]
+
+
+def test_a_quarantine_group_that_lost_its_tag_is_not_released_over(world):
+    """Someone takes `managed-by` off our quarantine group: the release used to answer
+    « released » and clear the state, the ENI still in it. The state names the group."""
+    f, c, _ = world
+    c.isolate_vm(arn("i-web1"))
+    q = next(s for s in f.sgs.values() if s["name"] == "glorfindel-quarantine")
+    q["tags"].pop("managed-by")
+    assert c.release_isolation(arn("i-web1"))["status"] == "released"
+    assert f.enis["eni-web1"]["groups"] == ["sg-web"] and c.verify_release(arn("i-web1"))["verified"] is True
+    # Without a state to name it, a group called like ours keeps the ENI: never « released ».
+    f.enis["eni-web1"]["groups"] = [q["id"]]
+    out = c.release_isolation(arn("i-web1"))
+    assert out["status"] == "failed" and "managed-by" in out["failed"][0]["error"]
+    assert c.verify_release(arn("i-web1"))["verified"] is False
+    assert actions._load_isolation_state(arn("i-web1"))["release_failed"]
+
+
+def test_an_instance_without_interfaces_is_vouched_for_by_no_one(world):
+    f, c, _ = world
+    f.add_instance("i-gone", [])
+    assert c.verify_isolation(arn("i-gone"))["verified"] is None
+    assert c.verify_release(arn("i-gone"))["verified"] is None
+
+
+def test_without_an_account_or_a_region_nothing_is_done_nor_vouched_for(world):
+    f, _, _ = world
+    for c in (AwsConnector(ec2=f, read_only=False), AwsConnector(ec2=f, account=ACCOUNT, read_only=False),
+              AwsConnector(ec2=f, region=REGION, read_only=False)):
+        for call in (lambda: c.verify_isolation(arn("i-web1", account="999999999999", region="us-east-1")),
+                     lambda: c.isolate_vm(arn("i-web1")), lambda: c.verify_block_ip(ATTACKER, arn("i-web1"))):
+            with pytest.raises(WrongAccountError):
+                call()
+    assert not f.journal
 
 
 @pytest.mark.parametrize("rid", [

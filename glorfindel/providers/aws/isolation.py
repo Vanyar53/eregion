@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 
 from glorfindel.providers.aws.client import is_not_found, parse_instance_arn
 from glorfindel.providers.aws.network import same_groups
-from glorfindel.providers.aws.quarantine import _UNKNOWN, PLATFORM_OPEN_NOTE, OriginalUnknown
+from glorfindel.providers.aws.quarantine import _UNKNOWN, PLATFORM_OPEN_NOTE, QUARANTINE_SG_NAME, OriginalUnknown
 from glorfindel.response import state as _state
 from glorfindel.response.policy import _ERR_MAX, PartialActionError, _first_line
 
@@ -179,8 +179,10 @@ class IsolationMixin:
         """The ENI back to its original; its id when something was done, "" otherwise.
         Raises when it must stay in quarantine."""
         eni, cur = e["eni"], list(e["groups"])
-        q = self._quarantine_sg(e["vpc"])
+        q = self._quarantine_sg(e["vpc"]) or self._recorded_quarantine(eni, cur, state)
         qid = q["GroupId"] if q else None
+        if qid not in cur:
+            self._refuse_lookalike(eni, cur)
         rec = self._recorded_original(eni, state) if state is not None else _UNKNOWN
         tag = self._original_from_tag(q, eni)
         if qid is None or qid not in cur:
@@ -199,6 +201,32 @@ class IsolationMixin:
         self._put_back(eni, original, cur)
         self._forget_original(qid, eni)
         return eni
+
+    def _recorded_quarantine(self, eni: str, cur: list[str], state: dict | None) -> dict | None:
+        """The quarantine group the state recorded for this ENI, when the ENI carries it —
+        ours even if someone took its `managed-by` tag off."""
+        for p in (state or {}).get("placements") or []:
+            if p.get("nic_id") == eni and p.get("quarantine_sg") in cur:
+                return self._sg(p["quarantine_sg"])
+        return None
+
+    def _named_quarantine(self, groups: list[str]) -> list[str]:
+        """The groups named like our quarantine group, tag or not."""
+        found = []
+        for g in groups:
+            sg = self._sg(g)
+            if sg and sg.get("GroupName") == QUARANTINE_SG_NAME:
+                found.append(g)
+        return found
+
+    def _refuse_lookalike(self, eni: str, cur: list[str]) -> None:
+        """An ENI still carrying a group named like our quarantine is not released: its
+        tag lost, or a group nothing records — never « released » over it."""
+        named = self._named_quarantine(cur)
+        if named:
+            raise RuntimeError(
+                f"{eni} porte {','.join(named)}, nommé {QUARANTINE_SG_NAME} sans le tag managed-by=glorfindel "
+                "ni de trace dans l'état : rien n'est levé. Remettre le tag, ou les groupes de l'ENI à la main.")
 
     def _usable_original(self, eni: str, candidates: list, vpc: str, q: dict) -> list[str]:
         """The first known original whose groups all still exist in the VPC: the state's,
@@ -257,7 +285,7 @@ class IsolationMixin:
                     unknown.append(e["eni"])
             except Exception:
                 unknown.append(e["eni"])
-        verified = False if (uncovered or altered) else (None if unknown else True)
+        verified = False if (uncovered or altered) else (None if unknown or not enis else True)
         return {"verified": verified, "method": "quarantine_sg", "uncovered_nics": uncovered,
                 "missing_rules": sorted(set(altered)), "unknown": unknown,
                 "platform_open": [e["eni"] for e in enis], "platform_open_note": PLATFORM_OPEN_NOTE,
@@ -275,7 +303,7 @@ class IsolationMixin:
             pending = []
             for e in enis:
                 q = self._quarantine_sg(e["vpc"])
-                if q is not None and q["GroupId"] in e["groups"]:
+                if (q is not None and q["GroupId"] in e["groups"]) or self._named_quarantine(e["groups"]):
                     pending.append(e["eni"])
                     continue
                 rec = self._recorded_original(e["eni"], state) if state is not None else _UNKNOWN
@@ -285,4 +313,6 @@ class IsolationMixin:
         except Exception as exc:
             return {"verified": None, "method": "quarantine_sg",
                     "reason": "instance introuvable" if is_not_found(exc) else _first_line(exc)[:_ERR_MAX]}
+        if not enis:
+            return {"verified": None, "method": "quarantine_sg", "reason": "instance sans interface réseau"}
         return {"verified": not pending, "method": "quarantine_sg", "still_isolated": pending}

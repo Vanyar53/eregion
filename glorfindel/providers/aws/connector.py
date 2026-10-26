@@ -95,6 +95,10 @@ def _same_account(method):
                 region, account, _ = parse_instance_arn(rid)
             except ValueError as exc:
                 raise WrongAccountError(str(exc)) from None
+            if not (self.account and self.region):
+                raise WrongAccountError(
+                    "compte ou région de l'adaptateur AWS non configurés : rien n'est fait ni vérifié "
+                    f"sur {rid} (on ne saurait pas dans quel compte ni quelle région)")
             if (self.account and account != self.account) or (self.region and region != self.region):
                 raise WrongAccountError(
                     f"{rid} est dans le compte {account}, région {region} ; Glorfindel agit dans "

@@ -1198,6 +1198,26 @@ MUTANTS += [
      'for _name in ("isolate_vm", "release_isolation", "verify_isolation", "verify_release",\n',
      'for _name in ("isolate_vm", "release_isolation", "verify_release",\n'),
 ]
+# MC1, after its review: a block's reach is its ACL's, our quarantine group without its tag,
+# the guard without an account or a region, an instance without interfaces.
+MUTANTS += [
+    ("M618", "a block names the instance's subnets only, not every subnet of its ACL (MC1, review)", AWS_BLK,
+     '                affected = sorted({a.get("SubnetId") for a in acl.get("Associations") or []\n'
+     '                                   if a.get("SubnetId")} | set(acls[acl_id]))',
+     "                affected = sorted(acls[acl_id])"),
+    ("M619", "an ENI carrying a group named like the quarantine, nothing recording it, said released (MC1, review)",
+     AWS_ISO, "        named = self._named_quarantine(cur)\n        if named:", "        named = []\n        if named:"),
+    ("M620", "the account guard open when no account or region is configured (MC1, review, I12)", AWS_CON,
+     "            if not (self.account and self.region):", "            if False:"),
+    ("M621", "an instance without interfaces verified isolated (MC1, review)", AWS_ISO,
+     "(None if unknown or not enis else True)", "(None if unknown else True)"),
+    ("M622", "the quarantine group the state records ignored once its tag is gone (MC1, review)", AWS_ISO,
+     '        q = self._quarantine_sg(e["vpc"]) or self._recorded_quarantine(eni, cur, state)',
+     '        q = self._quarantine_sg(e["vpc"])'),
+    ("M623", "verify_release blind to a group named like the quarantine (MC1, review)", AWS_ISO,
+     'if (q is not None and q["GroupId"] in e["groups"]) or self._named_quarantine(e["groups"]):',
+     'if q is not None and q["GroupId"] in e["groups"]:'),
+]
 
 # Mutants measured by other tests than the invariants (their lot's own).
 TESTS = {mid: INSCRIPTION_TESTS for mid in ("M42", "M43", "M44", "M45", "M46", "M47")}
@@ -1274,6 +1294,7 @@ TESTS.update({f"M{n}": AWS_INVARIANTS for n in range(600, 650)})  # MC1
 TESTS["M617"] = AWS_UNIT              # MC1: a false alarm, no false claim
 # MC1: rare in the drawn sequences (M600, M601 found at 5 000) — their case written by hand too.
 TESTS.update({mid: f"{AWS_INVARIANTS} {AWS_UNIT}" for mid in ("M600", "M601", "M602", "M608", "M612", "M614")})
+TESTS.update({f"M{n}": AWS_UNIT for n in range(618, 624)})                  # MC1, after its review
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

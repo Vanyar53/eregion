@@ -161,7 +161,9 @@ class QuarantineMixin:
         try:
             self._ec2.delete_tags(Resources=[sg_id], Tags=[{"Key": self._orig_key(eni_id)}])
         except Exception:
-            pass      # a stale tag is harmless: it is read for an ENI in quarantine, or put back
+            # A stale tag is harmless for the release: it is read for an ENI in quarantine, or
+            # put back. It counts toward the group's 50 tags (H15), with one per ENI isolated.
+            pass
 
     @staticmethod
     def _recorded_original(eni_id: str, state: dict | None = None):

@@ -22,7 +22,7 @@ The properties of test_invariants.py, as docs/design/monde-aws.md transposes the
       ENI's groups to or from its quarantine, and ACL entries it created, unchanged;
   I3  no success on a falsehood — Amazon's DNS and IMDS always declared (H6);
   I4  an operation on one instance changes nothing for another, but the attacker's flows
-      on a shared ACL (every block is subnet-wide on AWS) — and the block another
+      on a shared ACL (every block reaches every subnet of its ACL on AWS) — and the block another
       instance holds intact still holds;
   I5  the reassertion never opens anything, never acts without state, writes nothing in
       human_only;
@@ -1155,7 +1155,9 @@ class AwsIsolationMachine(RuleBasedStateMachine):
                 assert _ours(self.fake.sgs.get(sg)), f"I2: Glorfindel wrote {op} on {sg}, not its quarantine group"
             elif op == "acl.create":
                 content = self.fake.authored.get((e["acl"], e["egress"], e["number"]))
-                assert content is None or content["action"] == "deny", f"I2: Glorfindel wrote an allow: {e}"
+                assert content is None or (content["action"] == "deny" and content["cidr"] == CIDR
+                                           and content["proto"] == "-1" and content["from"] is None), (
+                    f"I2: Glorfindel wrote an ACL entry that is not a deny of {CIDR}, every protocol: {content}")
             elif op == "acl.delete":
                 assert e["authored"], f"I2: Glorfindel deleted an ACL entry it did not write as it is: {e}"
             elif op == "eni.groups":

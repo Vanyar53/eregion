@@ -96,7 +96,7 @@ DOCKER_GLORFINDEL := docker run --rm $(GLORFINDEL_AZURE_ENV) $(GLORFINDEL_VOLS) 
 	glorfindel-pending glorfindel-check-ttl \
 	glorfindel-start glorfindel-stop glorfindel-restart glorfindel-dev glorfindel-logs glorfindel-ui \
 	annatar-shell glorfindel-shell \
-	venv install test test-unit lint annatar-simulate annatar-simulate-gap clean \
+	venv install lock test test-unit lint annatar-simulate annatar-simulate-gap clean \
 	canary-jit celebrimbor-init celebrimbor-plan celebrimbor-up celebrimbor-down celebrimbor-output celebrimbor-stop celebrimbor-start \
 	glorfindel-host-init glorfindel-host-plan glorfindel-host-up glorfindel-host-down glorfindel-host-push \
 	glorfindel-host-start glorfindel-host-stop glorfindel-host-logs glorfindel-host-tunnel glorfindel-host-ssh \
@@ -115,7 +115,8 @@ help:
 	@echo ""
 	@echo "Dev (local, no Docker)"
 	@echo "  make venv           Create .venv (python3 -m venv)"
-	@echo "  make install        Create .venv + install dev dependencies"
+	@echo "  make install        Create .venv + install dev dependencies (from the lock, hashes checked)"
+	@echo "  make lock           Regenerate the dependency lock (uv; UPGRADE=1 bumps all) — docs/operations.md"
 	@echo "  make test           Run all tests (104, 0 Azure, 0 LLM calls)"
 	@echo "  make lint           Ruff linter"
 	@echo "  make clean          Remove build artifacts"
@@ -173,7 +174,8 @@ help:
 	@echo "  make glorfindel-host-model MODEL=…           Changer le modèle qui décide (ou MODEL=default)"
 	@echo "  make celebrimbor-workload                    Charge de bree (site + routine d'admin)"
 	@echo "  make glorfindel-host-status                  Tout tourne ? VMs, sauvegardes, services, erreurs, cartes à juger"
-	@echo "  make glorfindel-host-start / -stop / -logs   Glorfindel + War Room sur la VM"
+	@echo "  make glorfindel-host-start [REF=tag|commit]  Déploie une référence (défaut : dernier tag v*), jamais une branche"
+	@echo "  make glorfindel-host-stop / -logs            Glorfindel + War Room sur la VM"
 	@echo "  make glorfindel-host-tunnel                  Tunnel + URL de la War Room avec son jeton"
 	@echo "  make glorfindel-host-url                     L'URL de la War Room avec son jeton"
 	@echo ""
@@ -509,8 +511,22 @@ glorfindel-host-push:
 	 rc=$$?; rm -f $$cfg; exit $$rc
 	@echo "  host.env et glorfindel-config.yaml (human_only) poussés sur $(HOST_IP)"
 
+# M-3 (#183) : une référence nommée, jamais une branche — REF=<tag ou commit>, par défaut le
+# dernier tag v*. Checkout détaché, image étiquetée avec la référence (deploy.sh, envoyé par
+# ssh : celui du poste, quelle que soit la référence déployée).
+# REF se donne sur la ligne de commande : une variable REF de l'environnement (un nom
+# générique, posé pour autre chose) est refusée, jamais déployée en silence. Le shell la lit
+# dans son environnement (EREGION_DEPLOY_REF), jamais recopiée dans la commande avant d'être
+# validée, ni développée par make ($(value …), unexport) : « $(…) » n'y est pas exécuté. Une
+# REF qui commence par « - » serait une option de deploy.sh (--checkout-only, --show) : refusée.
+REF ?=
+unexport REF
+glorfindel-host-start: export EREGION_DEPLOY_REF = $(value REF)
 glorfindel-host-start:
-	$(HOST_SSH) 'test -f .eregion-host-ready && mkdir -p .eregion/analysis && cd eregion && git pull -q --ff-only && make -s build-glorfindel && docker compose --profile bot up -d watch war-room bot && docker image prune -f >/dev/null'
+	@test -n "$(HOST_IP)" || { echo "Pas de VM : make glorfindel-host-up d'abord"; exit 1; }
+	@case "$(origin REF)" in environment*) echo "REF vient de l'environnement (« $$EREGION_DEPLOY_REF ») : rien n'est déployé. La donner sur la ligne de commande : make glorfindel-host-start REF=<tag ou commit> (REF= : le dernier tag v*)." >&2; exit 1;; esac
+	@case "$$EREGION_DEPLOY_REF" in -*|*[!A-Za-z0-9._-]*) echo "REF invalide : « $$EREGION_DEPLOY_REF » (un tag ou un commit)" >&2; exit 1;; esac
+	$(HOST_SSH) 'test -f .eregion-host-ready && mkdir -p .eregion/analysis && cd eregion && bash -s -- '"$$EREGION_DEPLOY_REF" < infra/glorfindel-host/deploy.sh
 	@echo ""
 	@echo "  ⚠ Arrête le Glorfindel local (make glorfindel-stop) : deux watch sur le même banc = cartes en double ;"
 	@echo "    et aucun autre bot avec le même DISCORD_BOT_TOKEN."
@@ -682,8 +698,22 @@ orodruin-campaign-run:
 venv:
 	python3 -m venv .venv
 
+# M-3 (#183) : les dépendances viennent du verrou, empreintes vérifiées (comme la CI et l'image).
 install: venv
-	$(PIP) install -e ".[dev]"
+	$(PIP) install --require-hashes -r requirements/dev.txt
+	$(PIP) install --no-deps --no-build-isolation -e .
+
+# Regénérer le verrou (uv, résolution universelle : Python 3.11 et 3.12, Linux et macOS).
+# Les versions déjà verrouillées restent ; UPGRADE=1 les monte toutes. Une PR, puis le harnais
+# (make llm-compare) avant de redéployer H0 : docs/operations.md, « Verrou des dépendances ».
+UV         ?= uv
+LOCK_DATE  ?= $(shell date -u +%Y-%m-%d)
+LOCK_FLAGS  = --universal --python-version 3.11 --generate-hashes \
+              --exclude-newer $(LOCK_DATE)T00:00:00Z $(if $(UPGRADE),--upgrade)
+lock:
+	$(UV) pip compile pyproject.toml requirements/build.in --extra dev $(LOCK_FLAGS) -o requirements/dev.txt
+	$(UV) pip compile pyproject.toml requirements/build.in --extra glorfindel --extra war-room \
+	  -c requirements/dev.txt $(LOCK_FLAGS) -o requirements/glorfindel.txt
 
 test:
 	$(PYTHON) -m pytest tests/ -v

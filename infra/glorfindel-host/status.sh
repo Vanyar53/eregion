@@ -2,7 +2,7 @@
 # `make glorfindel-host-status` — is the pre-observation running? One look, read-only.
 #
 # Azure side (local az): the VMs of the defender and of the bench, the last backups.
-# On the VM (one ssh): containers, deployed commit, errors of the last 24 h, discovery,
+# On the VM (two ssh: the deployed reference, then the rest): containers, errors of the last 24 h, discovery,
 # bot, cards to judge and the week's count, disk and memory. Nothing is written anywhere;
 # the War Room token is read on the VM and never printed.
 set -u
@@ -22,10 +22,14 @@ az backup item list -g "$BENCH_RG" -v "$VAULT" --backup-management-type AzureIaa
   | awk '{ mark = ($2 == "Completed") ? "✓" : "✗"; printf "  %s sauvegarde %-24s %s %s\n", mark, $1, $2, substr($3, 1, 16) }'
 
 echo "== VM $HOST_IP"
+# The reference the running watch was built from (M-3): deploy.sh --show reads the image's
+# labels and compares them with the checkout.
+# shellcheck disable=SC2086
+ssh $SSH_OPTS -o BatchMode=yes -o ConnectTimeout=10 "$HOST_USER@$HOST_IP" \
+  'cd eregion && bash -s -- --show' < "$(dirname "$0")/deploy.sh" || echo "  ✗ référence déployée : illisible"
 # shellcheck disable=SC2086
 ssh $SSH_OPTS -o BatchMode=yes -o ConnectTimeout=10 "$HOST_USER@$HOST_IP" 'bash -s' <<'REMOTE'
 cd eregion || { echo "  ✗ dépôt absent"; exit 1; }
-echo "  commit déployé : $(git log --oneline -1 | cut -c1-70)"
 for s in eregion-watch eregion-war-room eregion-bot; do
   st=$(docker inspect -f '{{.State.Status}} depuis {{.State.StartedAt}}' "$s" 2>/dev/null || echo "absent")
   mark="✗"; case "$st" in running*) mark="✓";; esac

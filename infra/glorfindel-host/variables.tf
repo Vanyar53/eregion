@@ -45,7 +45,7 @@ variable "eregion_repo" {
 }
 
 variable "eregion_ref" {
-  description = "Branche ou tag cloné au premier démarrage (ensuite : `make glorfindel-host-start` fait un git pull)."
+  description = "Branche ou tag cloné au premier démarrage ; ensuite `make glorfindel-host-start` déploie un tag ou un commit, détaché (M-3). Changer cette valeur remplace la VM (custom_data)."
   type        = string
   default     = "main"
 }

@@ -487,9 +487,12 @@ exécute » et « Redéployer H0 après M-3 ».
 
 La base livrée reste intacte ; les règles du client vivent dans leur couche,
 `~/.glorfindel/client_rules.yaml`, chargée par-dessus ; une règle exportée ne garde aucun
-identifiant. Dix-neuf mutants, mesurés par `tests/unit/test_rule_layers.py` et
-`test_proposed_rules.py` (M687 : `test_host_deploy.py`), tous attrapés au premier tour (26/10) ;
-M528 (M-3) suit le nouveau refus de `deploy.sh`, attrapé aussi :
+identifiant. Trente mutants (dix-neuf du lot, onze de sa relecture : M689–M699), mesurés par
+`tests/unit/test_rule_layers.py`, `test_proposed_rules.py` et `test_host_deploy.py`, tous
+attrapés au premier tour (26/10) ; M528 (M-3) suit le nouveau refus de `deploy.sh`, attrapé
+aussi. La relecture a trouvé l'export ouvert par défaut (une liste d'opérateurs : `has_any`,
+`matches regex`, `@"…"`, un `let` laissaient passer un nom) : il lit maintenant la requête en
+KQL, fermé par défaut ; M682 et M684 suivent ce code :
 
 | Mutant | Défaut réinjecté | Effet |
 |---|---|---|
@@ -512,6 +515,17 @@ M528 (M-3) suit le nouveau refus de `deploy.sh`, attrapé aussi :
 | M686 | la migration oublie une règle de base supprimée sur la VM | elle revient |
 | M687 | H0 : un fichier de règles modifié repart dans l'image | les règles approuvées avant P1 jamais migrées |
 | M688 | la base montée en écriture dans la watch | un conteneur peut de nouveau l'écrire |
+| M689 | l'export ne voit aucune colonne d'identité | `Computer has_any ("vm-…")` part |
+| M690 | un `let` utilisé contre une colonne d'identité pas suivi | `let t = "vm-…"; … Computer == t` part |
+| M691 | l'argument de `workspace()` / `resource()` / `app()` gardé | le nom d'un espace de travail part |
+| M692 | un chemin ARM partiel gardé | `resourceGroups/rg-…/…/virtualMachines/vm-…` part |
+| M693 | un nom connu derrière des échappements de regex gardé | `vm\-a1` : l'export refusé |
+| M694 | la dernière garde ne relit pas la requête en KQL | un littéral d'identité manqué part |
+| M695 | une entrée de la couche pas validée | `interval_s: 30s` : plus aucune règle, base comprise |
+| M696 | une clé de la couche qui n'est pas une liste pas dite | des règles absentes en silence |
+| M697 | la règle approuvée reprend la forme en ligne | elle ne s'applique à aucune VM |
+| M698 | la migration ne lie pas une règle en ligne à son backend | une règle d'avant P1 reste inerte |
+| M699 | une règle qui ne s'applique à aucune VM pas dite au chargement | inerte en silence |
 
 ## Ce que les invariants ont trouvé
 

@@ -299,6 +299,13 @@ KEPT = [
     {"kind": "trend", "text": "T1110.001 passe de block_suspicious_ip à isolate_vm, de 0,8 à 0,78.",
      "runs": ["R2", "P1"]},
     {"kind": "trend", "text": "Les 2 dernières campagnes détectent T1110.001.", "runs": ["R2", "P1"]},
+    # third review of D-2: a date in English (M543), a range after « du » (M544)
+    {"kind": "trend", "text": "Confidence on T1110.001 dropped by 2 points since October 21.",
+     "runs": ["R2", "P1"]},
+    {"kind": "trend", "text": "Confidence on T1110.001 dropped by 2 points since 21 October.",
+     "runs": ["R2", "P1"]},
+    {"kind": "trend", "text": "Du 21 au 23 octobre, la latence de T1110.001 augmente de 15 s.",
+     "runs": ["R2", "P1"]},
 ]
 REMOVED = [
     ({"kind": "change", "text": "La force brute est vue 40 s plus tard.", "runs": ["chg-2"]},
@@ -364,12 +371,15 @@ REMOVED = [
      "'wipe_storage' is not in the cited runs"),
     ({"kind": "observation", "text": "Glorfindel a pris un wipe_storage sur T1110.001.", "runs": ["chg-2"]},
      "'wipe_storage' is not in the cited change facts"),
+    # third review of D-2: a number before a date is no day of a range (M544)
+    ({"kind": "change", "text": "La confiance baisse de 12, le 23 octobre.", "runs": ["chg-2"]},
+     "a number is not in the cited facts (12)"),
 ]
 CLAIMS = KEPT + [c for c, _ in REMOVED]
 
 
 def test_a_difference_without_its_fact_is_removed(tmp_path, index):
-    """M273–M277, M510, M512–M518, M530–M539: a change claim cites a change fact, and each
+    """M273–M277, M510, M512–M518, M530–M539, M543, M544: a change claim cites a change fact, and each
     number it writes is one of the cited facts' (a latency, a confidence, a difference, in
     seconds, as a fraction or in percent, a relative change in percent) — of its unit's kind,
     a duration converted to seconds; a trend too, and an observation that cites a change fact.
@@ -548,3 +558,49 @@ def test_the_real_index_chooses_the_previous_campaign(tmp_path):
     report = cr.build(cdirs["C1"], model="fake/model", llm=_Model(), index_path=idx)
     assert report.comparison.previous == "C0"
     assert [c.side for c in report.comparison.changes] == ["after", "both", "after", "before"]
+
+
+def _three_campaigns():
+    """T1110.001 on 19/10 (Q1, blocked at 0.85 in 120 s), 21/10 (P1, blocked at 0.80 in
+    91.9 s) and 23/10 (R2, isolated at 0.78 in 106.9 s); T1041 blocked on 19/10 (Q2),
+    isolated on 21/10 (P2), blocked again on 23/10 (R3). R2 and R3 are this campaign's."""
+    def run(rid, cid, seq, ttp, latency, decision, confidence):
+        return cr.RunFact(rid, cid, seq, ttp, "", "executed", "detected", latency_s=latency,
+                          decision=decision, confidence=confidence, target=VM)
+    prior = [run("Q1", "Cm1", 1, "T1110.001", 120.0, "block_suspicious_ip", 0.85),
+             run("Q2", "Cm1", 2, "T1041", 140.0, "block_suspicious_ip", 0.70),
+             run("P1", "C0", 1, "T1110.001", 91.9, "block_suspicious_ip", 0.80),
+             run("P2", "C0", 2, "T1041", 130.1, "isolate_vm", 0.90)]
+    facts = [run("R2", "C1", 1, "T1110.001", 106.9, "isolate_vm", 0.78),
+             run("R3", "C1", 2, "T1041", 101.6, "block_suspicious_ip", 0.86)]
+    return facts, prior, cc.pair(prior[2:], facts, "C0")
+
+
+@pytest.mark.parametrize("text, runs, why", [
+    # a true trend over three campaigns is kept, cited in either order (M540, M541)
+    ("Sur T1110.001, la latence passe de 120 s (19/10) à 91,9 s (21/10), puis à 106,9 s (23/10).",
+     ["R2", "P1", "Q1"], ""),
+    ("Sur T1110.001, la latence passe de 120 s (19/10) à 91,9 s (21/10), puis à 106,9 s (23/10).",
+     ["R2", "Q1", "P1"], ""),
+    ("Sur T1110.001, la latence : 120 s → 91,9 s → 106,9 s.", ["R2", "P1", "Q1"], ""),
+    ("La confiance sur T1110.001 : 0,85 → 0,80 → 0,78.", ["R2", "P1", "Q1"], ""),
+    ("Sur T1110.001, la confiance passe de 85 % à 80 %, puis à 78 %.", ["R2", "P1", "Q1"], ""),
+    ("Sur T1041, du blocage à l'isolement (avant), puis retour au blocage.", ["R3", "P2", "Q2"], ""),
+    # a way inverted between an earlier run and one of this campaign stays removed…
+    ("Sur T1110.001, la latence passe de 106,9 s à 91,9 s.", ["R2", "P1", "Q1"],
+     "the change is said the wrong way round (106.9 → 91.9: it went from 91.9 to 106.9)"),
+    ("Sur T1110.001, la latence passe de 106,9 s à 120 s.", ["R2", "P1", "Q1"],
+     "the change is said the wrong way round (106.9 → 120: it went from 120 to 106.9)"),
+    ("T1110.001 passe de l'isolement au blocage.", ["R2", "P1", "Q1"],
+     "the cited change facts hold no change from isolate_vm to block_suspicious_ip"),
+    # … and two earlier runs face each other only on the same technique (M542)
+    ("T1110.001 passe de l'isolement au blocage.", ["R2", "P1", "P2"],
+     "the cited change facts hold no change from isolate_vm to block_suspicious_ip"),
+])
+def test_a_trend_over_three_campaigns(text, runs, why):
+    """M540–M542: a trend citing two earlier campaigns may say the way between them, in
+    either order — which came first is not known; between an earlier run and one of this
+    campaign, the way is still read."""
+    facts, prior, changes = _three_campaigns()
+    [claim] = cr.verify([cr.Claim("trend", text, runs)], facts, prior, changes)
+    assert claim.rejected == why

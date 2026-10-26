@@ -618,8 +618,9 @@ _NO_ACTION = re.compile(
 # fact, must be one of its cited facts' (D-2): a latency, a confidence, or a difference of
 # either — between the two sides of a change fact, or between two cited runs. Before the
 # numbers are read, what only names something is taken out of the sentence: the cited ids, a
-# technique (T1110.001), a run id (20261023T081120Z), a date (23/10, « 21 octobre », « entre
-# le 21 et le 23 octobre »), a year (2026, not followed by a unit), an hour (08:21), an ordinal
+# technique (T1110.001), a run id (20261023T081120Z), a date (23/10, « 21 octobre », « October
+# 21 », a range after « le », « entre », « du »… : « entre le 21 et le 23 octobre », never
+# « de 12, le 23 octobre »), a year (2026, not followed by a unit), an hour (08:21), an ordinal
 # (« 2ᵉ », « 1er »), and any word that begins with a letter and holds a digit (chg-1, a VM's
 # name). A count (« les 2 campagnes ») — a whole number followed by a word that names what is
 # counted (_COUNTED: runs, campaigns, techniques…, never a unit nor « fois ») — may be at most
@@ -629,7 +630,8 @@ _NO_ACTION = re.compile(
 # reading of the response below (docs/analysis.md): an invented count within that bound
 # passes, and so does a number written without a unit that happens to be a fact's.
 _MONTHS = ("janvier|février|fevrier|mars|avril|mai|juin|juillet|août|aout|septembre|octobre"
-           "|novembre|décembre|decembre")
+           "|novembre|décembre|decembre"
+           "|january|february|march|april|may|june|july|august|september|october|november|december")
 _UNITS = {  # a unit's words → its kind, and what one of it is in that kind
     "ms|millisecondes?|milliseconds?": (SECONDS, 0.001),
     "s|sec|secondes?|seconds?": (SECONDS, 1.0),
@@ -642,7 +644,10 @@ _UNIT_OF = re.compile(r"\s*(?:" + "|".join(f"(?P<u{i}>{u})" for i, u in enumerat
                       re.IGNORECASE)
 _NAMES = re.compile(
     r"\b\d{8}T\d{6}Z\b|\b\d{1,2}/\d{1,2}(?:/\d{2,4})?\b|\b\d{1,2}[:h]\d{2}(?::\d{2})?\b"
-    rf"|\b\d{{1,2}}(?:er)?(?:\s*(?:,|-|–|\bet\b|\bau\b|\bà\b)\s*(?:le\s+)?\d{{1,2}}(?:er)?)*\s+(?:{_MONTHS})\b"
+    rf"|(?:\b(?:le|les|entre|du|between|from|on)\s+\d{{1,2}}(?:er)?"
+    rf"(?:\s*(?:,|-|–|\bet\b|\bau\b|\bà\b|\band\b|\bto\b)\s*(?:le\s+)?\d{{1,2}}(?:er)?)+"
+    rf"|\b\d{{1,2}}(?:er|st|nd|rd|th)?)\s+(?:{_MONTHS})\b"
+    rf"|\b(?:{_MONTHS})\s+\d{{1,2}}(?:st|nd|rd|th)?\b"
     rf"|\b(?:19|20)\d{{2}}\b(?![.,]\d)(?!\s*{_UNIT})"
     r"|\b\d+(?:ᵉ|e|er|ère|re|ème|eme)\b"
     r"|(?<![\w.,])[^\W\d_][\w.-]*\d[\w.-]*", re.IGNORECASE)
@@ -769,7 +774,8 @@ def _alien_word(c: Claim, cited) -> str:
 # The way a change is said, before → after (D-2): « de X à Y » or « X → Y », with two
 # latencies or confidences (a unit or not, a date in brackets after the first), two actions
 # or two detections, read on a claim that cites a change fact, and on a trend — its runs of
-# an earlier campaign facing those of this one, of the same technique (_faced). Numbers the
+# an earlier campaign facing those of this one, of the same technique, and two earlier runs
+# facing each other both ways, their order unknown (_faced). Numbers the
 # wrong way round (« de 106,9 s à 91,9 s » when it went from 91,9 to 106,9, and no cited fact
 # went that way), or an action or a detection that no cited fact goes from and to (« de
 # l'isolement au blocage » when it went from blocking to isolating), are removed. The other
@@ -826,10 +832,15 @@ def _near(u: float, v: float, tol: float) -> bool:
 def _faced(cited, own: set[str]) -> list[ChangeFact]:
     """What a trend says changed: each cited run of an earlier campaign facing each cited run
     of this one (``own``) of the same technique — on any VM, from any earlier campaign, so
-    that a true trend is never barred for a pairing it did not mean."""
+    that a true trend is not barred for a pairing it did not mean — and two cited runs of
+    earlier campaigns of the same technique facing each other, both ways: which came first is
+    not known (a RunFact does not say), so « de 120 s (19/10) à 91,9 s (21/10), puis à
+    106,9 s » holds, and between two earlier runs the way is not read."""
     runs = [x for x in cited if isinstance(x, RunFact)]
-    return [facing(b, a) for a in runs if a.run_id in own
-            for b in runs if b.run_id not in own and b.ttp == a.ttp]
+    earlier = [b for b in runs if b.run_id not in own]
+    out = [facing(b, a) for a in runs if a.run_id in own for b in earlier if b.ttp == a.ttp]
+    out += [facing(x, y) for x in earlier for y in earlier if x is not y and x.ttp == y.ttp]
+    return out
 
 
 def verify(claims: list[Claim], facts: list[RunFact], prior: list[RunFact],

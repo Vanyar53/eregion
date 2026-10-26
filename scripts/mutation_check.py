@@ -59,10 +59,11 @@ RENAME = object()
 # A mutant whose "old" and "new" are tuples makes several edits in its file, pair by pair
 # (old[i] -> new[i]), each old text matching exactly once — for a bug that needs two places.
 
-# D-2: the line of analysis/campaign_report.py that reads a date in words, a range of them too
+# D-2: the lines of analysis/campaign_report.py that read a date in words, a range of them too
 # (M513, M537).
-_DATES_LINE = (r'''    rf"|\b\d{{1,2}}(?:er)?(?:\s*(?:,|-|–|\bet\b|\bau\b|\bà\b)\s*(?:le\s+)?\d{{1,2}}(?:er)?)*'''
-               r'''\s+(?:{_MONTHS})\b"''' + "\n")
+_DATES_LINE = (r'''    rf"|(?:\b(?:le|les|entre|du|between|from|on)\s+\d{{1,2}}(?:er)?"''' + "\n"
+               r'''    rf"(?:\s*(?:,|-|–|\bet\b|\bau\b|\bà\b|\band\b|\bto\b)\s*(?:le\s+)?\d{{1,2}}(?:er)?)+"''' + "\n"
+               r'''    rf"|\b\d{{1,2}}(?:er|st|nd|rd|th)?)\s+(?:{_MONTHS})\b"''' + "\n")
 
 # (id, bug class, file, text in the code today, text that re-introduces the bug[, why
 # the invariants can't see it])
@@ -975,6 +976,28 @@ MUTANTS = [
      "analysis/campaign_report.py",
      "        if any(_near(x, before, tol) for before, _, tol in sides) and not any(\n",
      "        if False and not any(\n"),
+    # D-2, after its third review: a trend over three campaigns says the way between its
+    # earlier runs, in either order, on the same technique; a date in English is a date; a
+    # number before a date is no day of a range.
+    ("M540", "a trend over three campaigns is barred: two earlier runs never face each other (D-2)",
+     "analysis/campaign_report.py",
+     "    out += [facing(x, y) for x in earlier for y in earlier if x is not y and x.ttp == y.ttp]\n", ""),
+    ("M541", "two earlier runs face each other in the order they are cited only (D-2)",
+     "analysis/campaign_report.py",
+     "    out += [facing(x, y) for x in earlier for y in earlier if x is not y and x.ttp == y.ttp]\n",
+     "    out += [facing(x, y) for i, x in enumerate(earlier) for y in earlier[i + 1:] if x.ttp == y.ttp]\n"),
+    ("M542", "two earlier runs of different techniques face each other (D-2)", "analysis/campaign_report.py",
+     "    out += [facing(x, y) for x in earlier for y in earlier if x is not y and x.ttp == y.ttp]\n",
+     "    out += [facing(x, y) for x in earlier for y in earlier if x is not y]\n"),
+    ("M543", "a date in English is read as a number: « since October 21 » barred (D-2)",
+     "analysis/campaign_report.py",
+     ('''           "|january|february|march|april|may|june|july|august|september|october|november|december")\n''',
+      r'''    rf"|\b(?:{_MONTHS})\s+\d{{1,2}}(?:st|nd|rd|th)?\b"''' + "\n"),
+     ('''           )\n''', "")),
+    ("M544", "a number before a date is a day of a range: « baisse de 12, le 23 octobre » kept (D-2)",
+     "analysis/campaign_report.py",
+     r'''    rf"|(?:\b(?:le|les|entre|du|between|from|on)\s+\d{{1,2}}(?:er)?"''' + "\n",
+     r'''    rf"|(?:\b\d{{1,2}}(?:er)?"''' + "\n"),
 ]
 
 # Mutants measured by other tests than the invariants (their lot's own).
@@ -1034,6 +1057,7 @@ TESTS.update({mid: "tests/unit/test_gothmog.py" for mid in ("M241", "M246")})
 TESTS.update({f"M{n}": "tests/unit/test_campaign_changes.py" for n in range(260, 280)})  # D-2
 TESTS.update({f"M{n}": "tests/unit/test_campaign_changes.py" for n in range(510, 520)})  # D-2, review
 TESTS.update({f"M{n}": "tests/unit/test_campaign_changes.py" for n in range(530, 540)})  # D-2, 2nd review
+TESTS.update({f"M{n}": "tests/unit/test_campaign_changes.py" for n in range(540, 545)})  # D-2, 3rd review
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

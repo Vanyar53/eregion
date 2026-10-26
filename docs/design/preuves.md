@@ -365,6 +365,27 @@ plus, dans la plage M530–M539 (M510–M519 est pleine), mesurés par le même 
 | M539 | « de X à Y » qui part d'un côté sans arriver à l'autre gardé | « de 91,9 s à 15 s » gardé |
 
 Les quarante (M260–M279, M510–M519, M530–M539) attrapés à chaque tour (26/10), aucun périmé.
+
+La troisième relecture de D-2 a trouvé un faux positif réel, introduit par M539 : une `trend`
+ne mettait face à face qu'un run antérieur et un run de cette campagne, si bien qu'une
+tendance juste sur trois campagnes (« de 120 s (19/10) à 91,9 s (21/10), puis à 106,9 s »,
+« 0,85 → 0,80 → 0,78 », « du blocage à l'isolement (avant), puis retour au blocage ») était
+barrée. Deux runs antérieurs de la même technique se font maintenant face aussi, dans les deux
+sens : leur ordre n'est pas connu. Un sens inversé entre un run antérieur et un run de cette
+campagne reste écarté. Et deux trous bon marché : une date en anglais (« since October 21 »)
+était lue comme un nombre, et un nombre nu avant une date (« baisse de 12, le 23 octobre »)
+était avalé comme premier jour d'une plage. M513 et M537 suivent le code corrigé. Cinq mutants
+de plus, M540–M544 (M530–M539 est pleine), mesurés par le même fichier :
+
+| Mutant | Défaut réinjecté | Effet |
+|---|---|---|
+| M540 | deux runs antérieurs jamais face à face | « 120 s → 91,9 s → 106,9 s » barré |
+| M541 | deux runs antérieurs face à face dans l'ordre cité seulement | la même tendance barrée selon l'ordre de ses runs |
+| M542 | deux runs antérieurs de techniques différentes face à face | « de l'isolement au blocage » gardé, l'isolement étant celui d'une autre technique |
+| M543 | mois anglais absents | « since October 21 » barré |
+| M544 | une plage de dates sans « le », « entre », « du »… | « baisse de 12, le 23 octobre » gardé |
+
+Les quarante-cinq (M260–M279, M510–M519, M530–M544) attrapés (26/10), aucun périmé.
 Détail : [`../analysis.md`](../analysis.md), « Ce qui a changé depuis la campagne précédente ».
 
 ## Ce que les invariants ont trouvé

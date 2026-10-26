@@ -175,6 +175,48 @@ def test_an_entry_someone_changed_is_not_removed(world):
     assert (False, 99) in f.acls["acl-app"]["entries"] and (True, 99) not in f.acls["acl-app"]["entries"]
 
 
+def test_a_block_does_not_reuse_an_entry_a_customer_allow_now_precedes(world):
+    """Found by the machine: the customer adds an allow ahead of the entries another
+    block placed; a new block reused them and said « blocked » while the instance still
+    reached the attacker on its high ports. It now places its own, ahead of the allow."""
+    f, c, _ = world
+    c.block_suspicious_ip(ATTACKER, arn("i-web1"))
+    f.acls["acl-app"]["entries"][(True, 10)] = acl_entry(10, True, "allow", "0.0.0.0/0", "tcp", 1024, 65535)
+    out = c.block_suspicious_ip(ATTACKER, arn("i-db"))
+    assert out["status"] == "blocked" and not out["bypass"]
+    assert any(p["acl_id"] == "acl-app" and p["rule_out"] < 10 for p in out["placements"])
+    assert c.verify_block_ip(ATTACKER, arn("i-db"))["verified"] is True
+
+
+def test_a_block_that_does_not_hold_at_the_read_back_says_so(world, monkeypatch):
+    f, c, _ = world
+    from glorfindel.providers.aws import blocks
+    monkeypatch.setattr(blocks, "_first_allow", lambda acl, egress, ip: 32767)   # blind to the allows
+    f.acls["acl-app"]["entries"][(False, 10)] = acl_entry(10, False, "allow", "0.0.0.0/0")
+    out = c.block_suspicious_ip(ATTACKER, arn("i-web1"))
+    assert out["status"] == "partial" and out["bypass"]
+    assert c.verify_block_ip(ATTACKER, arn("i-web1"))["verified"] is False
+
+
+def test_an_eni_left_on_default_gets_the_operator_s_group_when_its_own_was_deleted(world):
+    """Found by the machine: in quarantine, its own group deleted, then taken onto
+    `default` by someone — the release tried the state's original, a group that no longer
+    exists, for ever. The tag the operator sets is used."""
+    f, c, _ = world
+    f.add_sg("vpc-a", "sg-solo", "solo")
+    f.enis["eni-web1"]["groups"] = f.enis["eni-web1"]["design_groups"] = ["sg-solo"]
+    c.isolate_vm(arn("i-web1"))
+    assert f.delete_sg("sg-solo")
+    f.enis["eni-web1"]["groups"] = ["sg-default-vpc-a"]
+    out = c.release_isolation(arn("i-web1"))
+    assert out["status"] == "failed" and "n'existe plus" in out["failed"][0]["error"]
+    f.add_sg("vpc-a", "sg-solo2", "solo")
+    q = next(s for s in f.sgs.values() if s["name"] == "glorfindel-quarantine")
+    q["tags"]["glorfindel-orig-eni-web1"] = "sg-solo2"
+    assert c.release_isolation(arn("i-web1"))["status"] == "released"
+    assert f.enis["eni-web1"]["groups"] == ["sg-solo2"]
+
+
 @pytest.mark.parametrize("rid", [
     arn("i-web1", account="444455556666"), arn("i-web1", region="eu-central-1"), "i-web1",
     "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/web"])

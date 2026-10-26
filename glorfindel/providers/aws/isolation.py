@@ -188,7 +188,7 @@ class IsolationMixin:
             prior = rec if rec is not _UNKNOWN else tag
             if prior and default and same_groups(cur, [default]) and not same_groups(prior, cur):
                 # Taken out of our quarantine onto `default` by someone: its original back.
-                self._put_back(eni, prior, cur)
+                self._put_back(eni, self._usable_original(eni, [rec, tag], e["vpc"], q), cur)
                 if qid:
                     self._forget_original(qid, eni)
                 return eni
@@ -205,17 +205,17 @@ class IsolationMixin:
         else the tag's — the operator's answer when a group was deleted and recreated (a
         new id, H4)."""
         known = [c for c in candidates if c and c is not _UNKNOWN]
-        key = self._orig_key(eni)
+        key, where = self._orig_key(eni), (q or {}).get("GroupId", f"le groupe de quarantaine de {vpc}")
         if not known:
             raise OriginalUnknown(
-                f"groupes d'origine de {eni} inconnus : ni l'état local ni le tag {key} de {q['GroupId']} ne "
+                f"groupes d'origine de {eni} inconnus : ni l'état local ni le tag {key} de {where} ne "
                 f"les disent. L'ENI reste en quarantaine — poser le tag {key}=<sg-…,sg-…> puis relancer la levée.")
         for groups in known:
             if all((sg := self._sg(g)) is not None and sg.get("VpcId") == vpc for g in groups):
                 return list(groups)
         raise RuntimeError(
             f"un groupe d'origine de {eni} ({','.join(known[0])}) n'existe plus. L'ENI reste en quarantaine — "
-            f"recréer le groupe, poser le tag {key}=<ses groupes> sur {q['GroupId']}, puis relancer la levée.")
+            f"recréer le groupe, poser le tag {key}=<ses groupes> sur {where}, puis relancer la levée.")
 
     def _put_back(self, eni: str, original: list[str], cur: list[str]) -> None:
         if not self._set_groups(eni, original, expect=cur):

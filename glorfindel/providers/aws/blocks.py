@@ -139,12 +139,16 @@ class BlockMixin:
                 held = self._held_numbers(ip, acl_id)
                 numbers = {}
                 for egress in (False, True):
+                    # An entry another block recorded, intact, and still ahead of every allow
+                    # of the attacker — one the customer passed since is not reused.
+                    first = _first_allow(acl, egress, ip)
                     reuse = next((n for eg, n in sorted(held, key=lambda x: (x[0], x[1] or 0))
-                                  if eg == egress and n and _is_our_deny(_entry(acl, egress, n), cidr)), None)
+                                  if eg == egress and n and n < first
+                                  and _is_our_deny(_entry(acl, egress, n), cidr)), None)
                     if reuse is not None:
                         numbers[egress] = (reuse, False)
                     else:
-                        n = _free_number(acl, egress, _first_allow(acl, egress, ip))
+                        n = _free_number(acl, egress, first)
                         numbers[egress] = (n, True) if n is not None else None
                 if None in numbers.values():
                     bypass.append({"acl": acl_id, "reason": "aucun numéro libre avant l'entrée qui laisse passer "
@@ -166,6 +170,16 @@ class BlockMixin:
             for acl_id, n, egress in creates:
                 self._ec2.create_network_acl_entry(NetworkAclId=acl_id, RuleNumber=n, Protocol="-1",
                                                    RuleAction="deny", Egress=egress, CidrBlock=cidr)
+            # Read back: the attacker refused every protocol, both ways, on each ACL.
+            for p in placements:
+                try:
+                    acl = self._acl(p["acl_id"])
+                    held_back = acl is not None and cut(acl, False, ip) and cut(acl, True, ip)
+                except Exception:
+                    held_back = False
+                if not held_back:
+                    bypass.append({"acl": p["acl_id"], "reason": f"{ip} n'est pas refusé partout sur cette ACL "
+                                   "à la relecture"})
             _state._save_block_state(iid, ip, resource_id, partial=bool(bypass), **record)
         return {"status": "partial" if bypass else "blocked", "action": "block_suspicious_ip", "ip": ip,
                 "resource_id": resource_id, "scope": "subnet", "scope_requested": scope,

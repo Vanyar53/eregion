@@ -158,15 +158,41 @@ def test_a_run_report_is_found_beside_its_campaign(runs, client):
         {"scenario": "ssh", "run_id": "run-c", "mitre": "T1110.001", "result": "PASS",
          "metrics": {"attack_time": start.timestamp(), "detection": "detected",
                      "detection_latency_s": 84}, "thresholds": {}, "checks": {"attack": "PASS"}}))
+    probes = [{"name": "vm-running", "ok": True, "observed": "PowerState/running",
+               "expect": "PowerState/running"},
+              {"name": "heartbeat", "ok": True, "observed": _iso(start), "expect": "fresh 10m"}]
     (runs / "gothmog-1.json").write_text(json.dumps(
         {"scenario": "VM shutdown", "run_id": "gothmog-1", "mitre": "", "result": "PASS",
-         "metrics": {"injector": "gothmog", "time_to_restore_s": 133, "after": {"vm-a": []}},
+         "metrics": {"injector": "gothmog", "time_to_restore_s": 133, "execution_id": "x",
+                     "before": {"vm-a": probes}, "after": {"vm-a": probes}},
          "thresholds": {}, "checks": {"fault_effective": "PASS", "revert_verified": "PASS"}}))
     ws = {w["run_id"]: w for w in client.get("/api/atelier/exercises").json()["exercises"]}
     assert ws["run-c"]["run"]["metrics"]["detection"] == "detected"
+    assert "before" not in ws["run-c"]["run"]["metrics"]
     g = ws["gothmog-1"]["run"]
     assert g["checks"]["revert_verified"] == "PASS"
-    assert g["metrics"] == {"injector": "gothmog", "time_to_restore_s": 133}
+    assert g["metrics"] == {"injector": "gothmog", "time_to_restore_s": 133,
+                            "before": {"vm-a": probes}, "after": {"vm-a": probes}}
+
+
+def test_a_fault_report_keeps_its_probes_only_in_their_shape(runs, client):
+    """Before and after come from Orodruin and the pull checks neither (run_report_refusal):
+    a probe out of shape is dropped, ``ok`` is true only when it says true."""
+    start = NOW - timedelta(minutes=20)
+    _window(runs, "gothmog-2", injector="gothmog", kind="fault",
+            experiment="vm-shutdown VM shutdown", start=start, end=start + timedelta(minutes=8))
+    (runs / "gothmog-2.json").write_text(json.dumps(
+        {"scenario": "VM shutdown", "run_id": "gothmog-2", "mitre": "", "result": "FAIL",
+         "metrics": {"injector": "gothmog",
+                     "before": {"vm-a": [{"name": "heartbeat", "ok": "true", "observed": None,
+                                          "expect": "fresh 10m"}, "not a probe"],
+                                "vm-b": "not a list"},
+                     "after": ["not", "an", "object"]},
+         "thresholds": {}, "checks": {"revert_verified": "FAIL"}}))
+    m = client.get("/api/atelier/exercises").json()["exercises"][0]["run"]["metrics"]
+    assert m["before"] == {"vm-a": [{"name": "heartbeat", "ok": False, "observed": "",
+                                     "expect": "fresh 10m"}]}
+    assert m["after"] == {}
 
 
 def _manifest(runs, cid, *, created, scenarios, state="done"):

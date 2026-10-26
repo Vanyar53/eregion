@@ -370,6 +370,34 @@ function renderWindow(w) {
   </div>`;
 }
 
+// A fault's steady state (G0): each probe before the fault and after it, per target. A query's
+// value is its last row's time, which must come after the fault's end (gothmog/probes.py).
+function probeTable(m) {
+  const before = m.before || {}, after = m.after || {};
+  const vms = [...new Set([...Object.keys(before), ...Object.keys(after)])];
+  if (!vms.length) return '';
+  const end = toDate(m.fault_end);
+  const cell = (p, isAfter) => {
+    if (!p) return '<td style="color:var(--dim)">—</td>';
+    const t = /^fresh\s/.test(p.expect) ? toDate(p.observed) : null;
+    let shown = t ? hms(p.observed) : p.observed;
+    if (t && isAfter && end) shown += ` (end ${t >= end ? '+' : ''}${dur((t - end) / 1000)})`;
+    const long = shown.length > 30;   // "unreadable: …", in full on hover
+    if (long) shown = shown.slice(0, 29) + '…';
+    return `<td class="${long ? 'wrap ' : ''}${p.ok ? 'r-ok' : 'r-bad'}" title="${esc(p.observed)}">${p.ok ? '✓' : '✗'} ${esc(shown)}</td>`;
+  };
+  const rows = vms.map(vm => {
+    const b = before[vm] || [], a = after[vm] || [];
+    const names = [...new Set([...b, ...a].map(p => p.name))];
+    return (vms.length > 1 ? `<tr><td colspan="4" style="color:var(--dim)">${esc(vm)}</td></tr>` : '') +
+      names.map(n => {
+        const pb = b.find(p => p.name === n), pa = a.find(p => p.name === n);
+        return `<tr><td>${esc(n)}</td><td style="color:var(--dim)">${esc((pb || pa).expect)}</td>${cell(pb, false)}${cell(pa, true)}</tr>`;
+      }).join('');
+  }).join('');
+  return `<table class="t" style="margin-top:4px"><tr><th>probe${vms.length === 1 ? ' · ' + esc(vms[0]) : ''}</th><th>expect</th><th>before the fault</th><th>after</th></tr>${rows}</table>`;
+}
+
 function renderWindowDetail(w) {
   const parts = [];
   parts.push(`<div class="dsec s-purple"><div class="dtitle">WINDOW</div><div class="kv">
@@ -411,7 +439,7 @@ function renderWindowDetail(w) {
     if (m.time_to_restore_s != null) facts.push(`<span><b>restored</b> +${dur(m.time_to_restore_s)}${m.fallback_used ? ' (fallback start_vm)' : ''}</span>`);
     if (m.aborted) facts.push(`<span style="color:var(--red)"><b>aborted</b> ${esc(m.aborted)}</span>`);
     parts.push(`<div class="dsec ${w.injector === 'gothmog' ? 's-orange' : 's-purple'}"><div class="dtitle">RUN REPORT — ${esc(r.result)}</div>
-      <div class="kv">${facts.join('')}</div><div style="margin-top:3px">${checks}</div></div>`);
+      <div class="kv">${facts.join('')}</div><div style="margin-top:3px">${checks}</div>${probeTable(m)}</div>`);
   }
 
   const d = S.delivered[w.run_id];

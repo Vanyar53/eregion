@@ -32,7 +32,7 @@ my-real-resource-group
 
 ## How to add a detection source
 
-Implement `DetectionConnector` in `glorfindel/detectors.py` and register it in `detector_for()`:
+Implement `DetectionConnector` (`glorfindel/providers/interface.py`) in its provider's adapter, `glorfindel/providers/<name>/` — the only place its SDK may be imported (Azure Monitor: `glorfindel/providers/azure/monitor.py`) — and register it in `detector_for()` (`glorfindel/detectors.py`):
 
 ```python
 class PrometheusDetector(DetectionConnector):
@@ -50,7 +50,7 @@ def detector_for(source: str, **kwargs) -> DetectionConnector:
 
 ## How to add a cloud provider
 
-Implement `CloudConnector` in `glorfindel/actions.py`:
+Add an adapter under `glorfindel/providers/<name>/` — the only place its SDK may be imported (`tests/unit/test_provider_boundary.py`, run in CI) — that implements `CloudConnector` (`glorfindel/providers/interface.py`) and declares its capabilities (`CAPABILITIES`, see `glorfindel/providers/azure/capabilities.py`): the readiness check reads the rights each one needs from there.
 
 ```python
 class AwsConnector(CloudConnector):
@@ -63,6 +63,7 @@ class AwsConnector(CloudConnector):
     def verify_snapshot(self, snap_id: str) -> dict: ...
     def verify_block_ip(self, ip: str, resource_id: str) -> dict: ...
     def restore_from_backup(self, resource_id: str, vault: str, before_attack_time: str | None) -> dict: ...
+    def restore_job_status(self, vault: str, vault_rg: str, job_name: str) -> str: ...
 ```
 
 The agent, scenarios, and RAG memory don't change — only the connector.
@@ -113,8 +114,8 @@ cleanup: []
 
 ## How to add an autonomous action
 
-1. Implement `connector.my_action(resource_id)` and `connector.verify_my_action(resource_id)` in `AzureConnector`
-2. Add `"my_action"` to `AUTONOMOUS_ACTIONS` in `glorfindel/actions.py`
+1. Implement `connector.my_action(resource_id)` and `connector.verify_my_action(resource_id)` in `AzureConnector` (a mixin of `glorfindel/providers/azure/`)
+2. Add `"my_action"` to `AUTONOMOUS_ACTIONS` in `glorfindel/response/policy.py` (imported everywhere from `glorfindel.actions`)
 3. Wire it in `execute_action` and `verify_action` in `glorfindel/agent.py`
 4. Add a test in `tests/unit/test_agent_nodes.py`
 

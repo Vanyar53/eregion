@@ -552,8 +552,13 @@ glorfindel/
                          LAW Heartbeat query → replace_for_backend() evicts deleted VMs
   posture.py           → PostureChecker: backup linked, backup recent, NSG reachable — per discovered VM
                          Escalates posture_gap with exact az fix command. Dedup: pending → skip.
-  actions.py           → CloudConnector ABC + AzureConnector (isolate, release, block, unblock, snapshot, verify_*, audit checks)
-  detectors.py         → DetectionConnector ABC + AzureMonitorDetector
+  actions.py           → the import path of the response: every name below is still imported from here (A1)
+  response/            → provider-neutral core: action sets and errors, resource ids, local state, locks
+  providers/           → the provider interface (MC0): CloudConnector, DetectionConnector, declared capabilities
+    azure/             → the only adapter, the only place the Azure SDK is imported: AzureConnector (isolate,
+                         release, block, unblock, snapshot, verify_*, audit checks), one module per concern;
+                         AzureMonitorDetector; capabilities.py
+  detectors.py         → detector_for(): the detection source registry
   detection_rules.py   → DetectionRule + RulePoller: continuous polling, auto-apply via discovered assets
                          load_config(path, glorfindel_cfg=None) — workspace_id from glorfindel-config.yaml
   audit.py             → AuditCheck, AuditResult, run(): NSG / backup / compute readiness checks, and detection coverage
@@ -623,9 +628,11 @@ infra/terraform/           → Celebrimbor: modular, namespaced, disposable test
 
 **1. Implement `DetectionConnector` and register it in the factory:**
 
+In its provider's adapter (`glorfindel/providers/<name>/`, the only place its SDK may be imported), registered in `glorfindel/detectors.py`:
+
 ```python
-# glorfindel/detectors.py
-class PrometheusDetector(DetectionConnector):
+# glorfindel/providers/prometheus/detector.py
+class PrometheusDetector(DetectionConnector):   # glorfindel.providers.interface
     def __init__(self, workspace_id: str):   # workspace_id = Prometheus endpoint
         self.endpoint = workspace_id
 
@@ -676,6 +683,8 @@ monitoring_backends:
 
 ### Adding a cloud provider (AWS, GCP, ...)
 
+One adapter per provider under `glorfindel/providers/<name>/`, the only place its SDK is imported (a test in CI fails otherwise). It implements `CloudConnector` and declares its capabilities (`glorfindel/providers/interface.py`): the readiness check reads which rights an isolation, a block or a session cut needs from that declaration.
+
 ```python
 class AwsConnector(CloudConnector):
     def isolate_vm(self, resource_id) -> dict: ...
@@ -683,7 +692,7 @@ class AwsConnector(CloudConnector):
     def release_isolation(self, resource_id) -> dict: ...
 ```
 
-The agent logic, scenarios, and RAG memory are provider-agnostic — they don't change. The connector itself is more than a stub, though: real isolation has to handle the provider's network topology (on Azure that means NIC-level vs subnet NSGs, multi-NIC VMs, and rule priorities — see `actions.py`). Budget for the connector, not a one-liner.
+The agent logic, scenarios, and RAG memory are provider-agnostic — they don't change. The connector itself is more than a stub, though: real isolation has to handle the provider's network topology (on Azure that means NIC-level vs subnet NSGs, multi-NIC VMs, and rule priorities — see `glorfindel/providers/azure/`). Budget for the connector, not a one-liner.
 
 ## Operational notes
 

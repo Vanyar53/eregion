@@ -97,6 +97,8 @@ pytest tests/unit/test_inscription.py        # O0 : périmètre, inscription, zo
 pytest tests/unit/test_orodruin.py           # O1 : contrat armed/passive, audit avant appel, plafond, kill, module Terraform
 pytest tests/unit/test_experiment_schema.py  # E1 : schéma d'expérience (technique/panne) + catalogue validés
 pytest tests/unit/test_docs_budget.py        # DX1 : CLAUDE.md ≤ 25 Ko, liens de l'index et des fichiers de rôle valides
+pytest tests/unit/test_provider_boundary.py # MC0 (A1) : aucun SDK de fournisseur hors de son adaptateur (aussi étape CI), capacités déclarées
+pytest tests/unit/test_actions_split.py     # A1 : la façade glorfindel.actions reste un seul espace de noms ; aucun module > 500 lignes
 pytest tests/unit/test_discovery.py          # AssetRegistry + DiscoveryService + eviction
 pytest tests/unit/test_invariants.py         # L24/L26 : invariants (Hypothesis, machine à états) sur un faux Azure
                           # en mémoire (tests/unit/fake_azure.py : évaluation NSG comme Azure, politiques, régions,
@@ -126,6 +128,7 @@ python scripts/mutation_check.py [--examples 500 --rounds 2 --jobs 8]   # mesure
 - `setup_testdata.sh` uniquement dans T1486
 - RunCommand : 5 retries (15s, 30s, 60s, 90s, 120s) — pas de SSH, pas d'IP publique requise pour Annatar (Azure VM Agent via Wire Protocol)
 - `dry_run=True` dans tous les tests — jamais d'appel Azure ou LLM dans les tests
+- **SDK d'un fournisseur** (azure, boto3, google-cloud) : importé seulement dans son adaptateur — `glorfindel/providers/<nom>/` pour Glorfindel (A1, MC0). `glorfindel/actions.py` n'est plus qu'une façade d'import : le code est dans `glorfindel/response/` (cœur neutre) et `glorfindel/providers/azure/` (un module par préoccupation)
 - `tests/unit/conftest.py` : fixture `autouse` redirige `escalations._STORE` → `tmp_path/escalations.jsonl` (les tests n'écrivent jamais dans `~/.glorfindel/`)
 - `AZURE_SUBSCRIPTION_ID` obligatoire dans l'env (plus d'auto-détection via SubscriptionClient)
 - **Edit de `few_shot_examples.yaml`, `_SYSTEM_PROMPT` ou `_build_user_message()`** : requiert un run end-to-end T1486 + au moins un autre TTP avant merge. Ces trois zones contrôlent ce que le LLM voit et comment il raisonne — les tests unitaires (LLM mocké, dry_run=True) ne peuvent pas valider le comportement résultant. Un edit mal calibré peut introduire un raccourci critique (ex: ransomware non-isolé 20min, faux positif T1041, cycle 1 sauté). Voir c6fe0d0, 740659a.

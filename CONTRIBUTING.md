@@ -7,9 +7,15 @@ Eregion is open-core (Apache 2.0). Contributions are welcome — scenarios, clou
 ```bash
 git clone https://github.com/Vanyar53/eregion
 cd eregion
-pip install -e ".[dev]"
+pip install --require-hashes -r requirements/dev.txt   # the lock: what CI and the image run
+pip install --no-deps --no-build-isolation -e .
 pytest                  # 0 Azure calls, 0 Claude API calls
 ```
+
+(`make install` does the same in `.venv/`.) A new dependency goes into `pyproject.toml`, then
+`make lock` (needs [uv](https://docs.astral.sh/uv/)) updates `requirements/*.txt` in the same PR —
+`tests/unit/test_dependency_lock.py` fails until it does. See `docs/operations.md`, « Verrou des
+dépendances ».
 
 ## Local safety hooks (recommended)
 

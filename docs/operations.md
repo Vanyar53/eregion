@@ -185,9 +185,11 @@ EREGION_ANALYSIS_TIMEOUT_S=300      # borne d'un appel au modèle d'analyse (rap
 GLORFINDEL_LLM_BASE_URL=...         # endpoint self-hosted/Ollama (ex: http://localhost:11434)
 GLORFINDEL_WEBHOOK_URL=...          # Slack/Teams/Discord webhook — escalades ET actions autonomes
                                     # Discord : https://discord.com/api/webhooks/<id>/<token>/slack
-DISCORD_BOT_TOKEN=...               # Bot Discord interactif (fils par VM, boutons Acquitter/Commande)
-DISCORD_CHANNEL_ID=...              # ID du channel (clic droit → Copy Channel ID)
+DISCORD_BOT_TOKEN=...               # Bot Discord interactif (fils par VM, boutons Acquitter/Commande) ; le conteneur du bot seul (M-3)
+DISCORD_CHANNEL_ID=...              # ID du channel (clic droit → Copy Channel ID) ; défini, la watch et la War Room laissent les cartes au bot (webhook muet)
 DISCORD_PING_ROLE=...               # ID du rôle à pinger à l'ouverture d'un fil (optionnel)
+DISCORD_ALLOWED_USERS=111,222       # M-3 : ids des utilisateurs qui peuvent cliquer les boutons des cartes
+DISCORD_ALLOWED_ROLES=333           # M-3 : ids des rôles autorisés ; les deux vides → tous les boutons refusent (fermé par défaut), refus journalisé
 GLORFINDEL_KEEP_ISOLATED=1          # mode forensique
 GLORFINDEL_ISOLATION_TTL_H=4        # TTL isolation (défaut 4h) : au-delà, une carte ttl_exceeded — jamais de levée automatique
 GLORFINDEL_APPROVAL_MAX_AGE_H=2     # âge max d'une carte exécutable en un clic (War Room « Approve & execute ») ; nan/inf → 2 ; ≤0 → approbation en un clic fermée
@@ -202,6 +204,58 @@ EREGION_EXERCISE_CHANNEL=https://…/exercises  # O1 : canal des fenêtres d'exe
 # EREGION_MAX_INJECTIONS / EREGION_MAX_RUN_S (plafond du contrat), EREGION_BENCH_RG
 # Gothmog : EREGION_BENCH_WORKSPACE (Log Analytics du banc pour la sonde Heartbeat, défaut law-celebrimbor-amonsul)
 ```
+
+Chaque conteneur ne reçoit que ses variables (M-3, `docker-compose.yml`) : les clés des modèles
+à la watch seule ; `DISCORD_BOT_TOKEN` et `DISCORD_ALLOWED_*` au bot seul ;
+`GLORFINDEL_WARROOM_TOKEN` à la War Room seule ; `GLORFINDEL_WEBHOOK_URL` à la watch et à la
+War Room ; le principal de service Azure aux trois (la watch, « Approve & execute », les boutons
+Restore / Revert du bot) ; les réglages sans secret aux trois. Une variable nouvelle s'ajoute
+dans le bloc de son conteneur, et dans `SECRETS` de `tests/unit/test_glorfindel_host.py` si elle
+porte un secret.
+
+---
+
+## Verrou des dépendances
+
+`pyproject.toml` déclare des plages (`>=`) ; le verrou fixe ce qui s'installe vraiment (M-3,
+#183). Une version mineure de LiteLLM avait cassé toutes les décisions de H0 (19/10) : sans
+verrou, chaque reconstruction de l'image prenait la dernière version de tout.
+
+- `requirements/dev.txt` : la CI (3.11, 3.12, macOS), `make install`, les mutants et les
+  invariants de nuit. `requirements/glorfindel.txt` : l'image de Glorfindel (H0 compris),
+  contrainte par le premier — l'image tourne avec les versions que la CI a testées.
+  `requirements/build.in` : le backend de construction (setuptools, wheel), verrouillé aussi.
+- Installation : `pip install --require-hashes -r requirements/<fichier>.txt`, puis le projet
+  seul, `pip install --no-deps --no-build-isolation -e .`. pip vérifie l'empreinte SHA-256 de
+  chaque fichier téléchargé et refuse toute dépendance absente du verrou ou sans empreinte.
+- **L'outil : uv** (`uv pip compile`), seulement pour générer. Une résolution *universelle*
+  (`--universal`) : un seul fichier vaut pour Python 3.11 et 3.12, Linux et macOS, avec des
+  marqueurs là où les versions divergent (numpy). pip-tools résout pour l'interpréteur qui le
+  lance : un verrou fait en 3.12 peut manquer une dépendance que seul 3.11 tire, et pip la
+  refuserait en mode empreintes. Le fichier produit reste au format `requirements` : pip
+  l'installe sans uv, dans l'image, en CI et chez un contributeur. `--exclude-newer <date>` :
+  la même commande donne le même verrou ; la date est dans l'en-tête du fichier.
+- Le premier verrou (26/10) fige la résolution de ce jour-là : celle qu'une reconstruction de
+  l'image aurait prise ; la suite de tests passe dessus en 3.11 et en 3.12, et l'image se
+  construit. LiteLLM reste épinglée dans `pyproject.toml` (`==1.86.1`).
+
+**Mettre à jour** (une PR, jamais directement sur H0) :
+
+```bash
+pip install uv                          # ou pipx install uv ; seulement pour générer
+make lock                               # garde les versions verrouillées, ajoute ce qui manque (dépendance ajoutée à pyproject.toml)
+make lock UPGRADE=1                     # monte tout à la résolution du jour (LOCK_DATE=AAAA-MM-JJ pour une autre date)
+make install && pytest                  # la suite sur le nouveau verrou
+```
+
+La PR dit ce qui change (le diff du verrou : LiteLLM, anthropic, langgraph, chromadb surtout).
+Avant de la fusionner, puis de redéployer H0, **Jonathan relance le harnais** (appels payants) :
+`make llm-compare MODELS=<modèle en service> RUNS=3` (ou `python scripts/llm_smoke.py`) — les
+décisions doivent rester celles d'avant ; puis `make glorfindel-host-start REF=<tag>`
+(`infra/glorfindel-host/README.md`). Un test (`tests/unit/test_dependency_lock.py`) échoue si une
+dépendance de `pyproject.toml` manque au verrou ou n'y satisfait plus sa plage : `make lock`.
+
+L'image d'Annatar (Orodruin) s'installe encore depuis `pyproject.toml`, sans verrou.
 
 ---
 

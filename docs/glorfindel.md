@@ -230,8 +230,9 @@ L'escalade porte `action_params` (dict, vide par défaut) pour les actions param
 - Bouton **📋 Command** → commande CLI à exécuter (éphémère)
 - Bouton **🔄 Restore** → exécute `glorfindel restore <rid> --yes` (`restore_from_backup`, `low_confidence`)
 - Bouton **↩️ Revert** → exécute `glorfindel reset <rid> --yes` (`verification_failed`) = reset complet (isolation + blocs IP)
+- **Qui clique** (M-3, #183) : chaque bouton d'une carte passe d'abord par `EscalationView.interaction_check` — l'auteur du clic doit être dans `DISCORD_ALLOWED_USERS` (ids) ou porter un rôle de `DISCORD_ALLOWED_ROLES` (ids). Sinon : refus, message éphémère à l'auteur, ligne « Button refused: user <id> … » dans le journal du bot ; rien n'est jugé, acquitté ni exécuté. **Fermé par défaut** : sans liste, tous les boutons refusent (le bot l'annonce au démarrage) ; la War Room juge toujours. Ce qui n'est pas un id (un nom) est ignoré, avec un avertissement au démarrage.
 - `/pending` slash command → liste des escalades en attente
 - `DISCORD_PING_ROLE` → ping `@rôle` à l'ouverture d'un fil
 - `bot_posted.json` + `bot_threads.json` : persistance entre redémarrages (pas de doublons, même fil)
-- Si `DISCORD_BOT_TOKEN` set → webhook escalade supprimé (le bot gère dans les fils)
+- Si `DISCORD_CHANNEL_ID` (ou `DISCORD_BOT_TOKEN`) est défini → webhook escalade supprimé (le bot gère dans les fils). Depuis M-3, la watch et la War Room n'ont plus le jeton du bot (`docker-compose.yml`) : c'est `DISCORD_CHANNEL_ID` qui les fait se taire (`escalations.discord_bot_configured`).
 - Thread supprimé sur Discord → bot recrée automatiquement (NotFound handling)

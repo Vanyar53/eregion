@@ -342,7 +342,7 @@ seul : aucun appel AWS, aucun compte. **La sémantique d'AWS du faux monde est f
 tirées de la documentation, toutes à mesurer sur le banc AWS (MC2)** : leur liste (H1–H14), ce
 qu'isoler, bloquer et lever veulent dire sur AWS et la transposition de chaque invariant sont dans
 [`monde-aws.md`](monde-aws.md). I1–I12 et L1 tiennent, transposés là où AWS diffère (I4 : tout
-blocage est au sous-réseau, et le blocage d'une autre instance tient ; I10 : pas de repli par
+blocage est à l'échelle de l'ACL : tous les sous-réseaux qui lui sont associés, souvent tout le VPC pour l'ACL par défaut, et le blocage d'une autre instance tient ; I10 : pas de repli par
 règles ; I12 : compte et région) ; U1 n'a pas d'équivalent.
 
 Ce que la machine AWS a trouvé dans l'adaptateur en se construisant, avant toute revue :
@@ -380,11 +380,29 @@ fausse affirmation, par lui seul.
 | M616 | `verify_isolation` se porte garant d'une instance d'un autre compte (I12) | à chaque tour |
 | M617 | isolation vérifiée sur les ENI lues avant l'échange | à chaque tour |
 
+La relecture de MC1 a trouvé quatre trous, corrigés : un blocage annonçait le sous-réseau de
+l'instance alors qu'une ACL en sert souvent plusieurs (celle par défaut d'un VPC sert tous les
+sous-réseaux qu'on n'a pas associés ailleurs) ; un groupe de quarantaine privé de son tag
+`managed-by` laissait la levée dire `released`, état effacé, l'ENI encore dedans ; la garde de compte
+et de région s'ouvrait quand l'adaptateur n'en avait pas ; une instance sans interface était dite
+isolée. Six mutants de plus, M618–M623, mesurés par leurs cas de `tests/unit/test_aws_adapter.py` :
+
+| Mutant | Défaut réinjecté |
+|---|---|
+| M618 | un blocage ne nomme que les sous-réseaux de l'instance, pas tous ceux de son ACL |
+| M619 | une ENI qui porte un groupe nommé comme la quarantaine, que rien ne note, dite levée |
+| M620 | garde ouverte sans compte ni région configurés (I12) |
+| M621 | une instance sans interface dite isolée |
+| M622 | le groupe de quarantaine noté dans l'état ignoré une fois son tag perdu |
+| M623 | `verify_release` aveugle à un groupe nommé comme la quarantaine |
+
 **Le jeu de contrôle sur AWS.** Seize bugs plausibles de l'adaptateur, M630–M645, écrits et commités
 avant la machine AWS (dans le même commit que l'adaptateur) et jamais utilisés pour l'orienter, dans la
-discipline de C01–C16 (`--control`). Mesurés sur la machine finale : **10 sur 16** attrapés à chaque
-tour, M631 un tour sur deux (Azure : 11 sur 16, mesuré le même jour). Les survivants, ce qu'il manque
-pour les voir — non ajouté, pour ne pas orienter la génération sur eux :
+discipline de C01–C16 (`--control`). Au budget du lundi, **AWS 9 à 10 sur 16, Azure 9 à 11 sur 16,
+selon le tirage** : 10 sur 16 sur la machine finale (M631 un tour sur deux), 9 sur 16 à la relecture
+(M638 survit, M630 un tour sur deux, M631 attrapé) ; Azure 11 puis 10 sur 16 sur la base, 9 sur 16 sur
+la branche à la relecture, code identique. M630, M631 et M638 sont au bord du tirage. Les survivants
+constants, ce qu'il manque pour les voir — non ajouté, pour ne pas orienter la génération sur eux :
 
 | Mutant | Défaut | Ce que la machine ne joue pas |
 |---|---|---|
@@ -402,7 +420,7 @@ pour les voir — non ajouté, pour ne pas orienter la génération sur eux :
 | Suite complète | 1 654 | 1 680 (+ 26 tests de MC1) |
 | Invariants Azure à 500 séquences, rejeu, verrous | verts (31) | verts (31) |
 | Harnais, mutants d'Azure attrapés à chaque tour | 297 sur 311 | 299 sur 311 |
-| Jeu de contrôle d'Azure | 11 sur 16 | 10 sur 16 (C05) |
+| Jeu de contrôle d'Azure | 11 sur 16 (10 à la relecture) | 10 sur 16 (C05 ; 9 à la relecture) |
 
 Les écarts sont ceux du tirage : M34 passe de « attrapé » à « un tour sur deux », M21, M36, M41
 l'inverse ; C05 survit à 2 tours. Remesurés à 4 tours sur le code d'après, C05 et M34 sont attrapés
@@ -598,5 +616,5 @@ Une séquence trouvée la nuit est rejouée en premier à chaque push jusqu'à s
   routes, pare-feu. Elles peuvent contourner une isolation et ne sont pas encore lues.
 - **Hypothèses du faux Azure** non mesurées : le code d'erreur d'un NSG d'une autre région,
   le refus de supprimer un NSG attaché, Run Command shell refusé sous Windows.
-- **Le monde simulé AWS** (MC1) : rien n'y est mesuré. Ses quatorze hypothèses attendent le banc AWS
+- **Le monde simulé AWS** (MC1) : rien n'y est mesuré. Ses seize hypothèses attendent le banc AWS
   (MC2), et la cohérence à terme des lectures d'EC2 n'est pas modélisée ([`monde-aws.md`](monde-aws.md)).

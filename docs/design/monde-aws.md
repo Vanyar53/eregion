@@ -9,7 +9,7 @@ et les réponses de `boto3` ; en MC1 seul le faux monde l'implémente, en MC2 le
 `boto3` prendra sa place, sur un banc AWS.
 
 **Chaque sémantique d'AWS écrite ici est une hypothèse tirée de la documentation d'AWS, à
-mesurer sur le banc AWS (MC2).** Elles sont numérotées (H1…H14) ; le faux monde et
+mesurer sur le banc AWS (MC2).** Elles sont numérotées (H1…H16) ; le faux monde et
 l'adaptateur renvoient à ces numéros. La règle du dépôt tient : un comportement d'un cloud n'est
 affirmé qu'après une mesure ([`preuves.md`](preuves.md)). Rien de ce document n'est mesuré.
 
@@ -20,10 +20,10 @@ affirmé qu'après une mesure ([`preuves.md`](preuves.md)). Rien de ce document 
 | carte réseau (NIC) | interface réseau élastique (ENI) ; une instance peut en avoir plusieurs, dans des sous-réseaux différents du même VPC | rien pour Glorfindel : chaque carte est traitée |
 | NSG de carte, un au plus | groupes de sécurité (SG), **1 à 5 par ENI** (H2), du VPC de l'ENI | une ENI n'est jamais « sans groupe » : une carte « nue » d'Azure devient une ENI remise sur le groupe `default` |
 | règles allow et deny, par priorité | un SG **n'a que des autorisations**, l'union des règles de tous les groupes de l'ENI décide ; **à états** : la réponse d'un flux autorisé passe (H1) | un SG ne peut rien refuser |
-| NSG de sous-réseau | **ACL réseau** (NACL) du sous-réseau : **sans état**, entrées numérotées 1 à 32766, allow et deny, la plus petite qui correspond décide, la dernière (`*`) refuse (H5) | une entrée entrante ne nomme que la **source**, une sortante que la **destination** : une NACL ne peut pas viser une seule instance |
+| NSG de sous-réseau | **ACL réseau** (NACL) du sous-réseau — une NACL peut servir plusieurs sous-réseaux, et celle par défaut d'un VPC sert tous ceux qu'on n'a pas associés ailleurs : **sans état**, entrées numérotées 1 à 32766, allow et deny, la plus petite qui correspond décide, la dernière (`*`) refuse (H5) | une entrée entrante ne nomme que la **source**, une sortante que la **destination** : une NACL ne peut pas viser une seule instance |
 | NSG de quarantaine (un par région) | **SG de quarantaine** (un par VPC, `glorfindel-quarantine`), **sans aucune règle** : la règle de sortie par défaut d'un SG neuf (H3) est retirée | même principe : il remplace les groupes de l'ENI le temps de l'isolation |
-| repli par règles (deny sur les NSG du client) | **pas d'équivalent** : un SG ne refuse pas, et une NACL couperait tout le sous-réseau | sans quarantaine, pas d'isolation : refusée, rien d'écrit |
-| blocage d'une IP (deny sur le NSG, adressé aux IP de la carte) | entrées **deny** de la NACL du sous-réseau, attaquant en `/32`, tous protocoles, entrée et sortie, à un numéro libre **avant** la première entrée qui laisse passer l'attaquant | **toujours à l'échelle du sous-réseau** : le blocage coupe l'attaquant de toutes les instances du sous-réseau, et le dit (`scope: subnet`) |
+| repli par règles (deny sur les NSG du client) | **pas d'équivalent** : un SG ne refuse pas, et une NACL couperait tous ses sous-réseaux | sans quarantaine, pas d'isolation : refusée, rien d'écrit |
+| blocage d'une IP (deny sur le NSG, adressé aux IP de la carte) | entrées **deny** de la NACL du sous-réseau, attaquant en `/32`, tous protocoles, entrée et sortie, à un numéro libre **avant** la première entrée qui laisse passer l'attaquant | **toujours à l'échelle de l'ACL : tous les sous-réseaux qui lui sont associés, souvent tout le VPC pour l'ACL par défaut** : le blocage coupe l'attaquant de toutes les instances de ces sous-réseaux, et le dit (`scope: network_acl`, `subnets_affected` lus dans les associations de la NACL) |
 | DNS et IMDS d'Azure (refusables par étiquette de service) | résolveur DNS d'Amazon et IMDS : **ni les SG ni les NACL ne les filtrent** (H6) | toujours joignables, et toujours déclarés (`platform_open`) — le réseau ne peut pas les refuser |
 | coupure des sessions (`ss -K` par Run Command) | une connexion suivie survit au changement de groupes (H10) | MC1 ne coupe pas les sessions : AWS ne déclare pas `session_drain` |
 | tags réécrits en entier (`update_tags`) | `create_tags` fusionne par clé, `delete_tags` retire les clés nommées (H7) | la course qui effaçait le tag d'une autre isolation (Q7) n'existe pas ; le verrou reste |
@@ -42,15 +42,18 @@ ce qui a été lu — et relire l'ENI. L'état local garde l'origine de chaque E
 service refuse (une SCP, un droit manquant) laisse une isolation partielle, notée et dite.
 Configuration illisible ou quarantaine éteinte : refus avant toute écriture.
 
-**Lever** (`release_isolation`). Noter l'intention dans l'état, puis, pour chaque ENI en
+**Lever** (`release_isolation`). Le groupe de quarantaine d'une ENI est celui de son VPC qui porte
+`managed-by=glorfindel`, ou celui que l'état a noté pour elle s'il a perdu son tag ; une ENI qui
+porte un groupe nommé `glorfindel-quarantine` dont rien ne dit qu'il est à Glorfindel n'est pas
+levée, et la levée le dit — jamais `released` par-dessus. Noter l'intention dans l'état, puis, pour chaque ENI en
 quarantaine, remettre ses groupes d'origine (de l'état ; à défaut, du tag) et relire l'ENI.
 Origine inconnue (état et tag perdus), ou un groupe d'origine supprimé depuis : l'ENI reste en
 quarantaine et la levée dit quel tag poser — un SG recréé a un nouvel identifiant (H4), c'est
 l'opérateur qui le donne. Une ENI que quelqu'un a sortie de la quarantaine vers le groupe
 `default` (l'équivalent d'une carte laissée nue) retrouve son origine connue.
 
-**Bloquer** (`block_suspicious_ip`). Pour chaque NACL des sous-réseaux des ENI : sous un verrou par
-NACL, réutiliser les entrées qu'un autre blocage de la même IP a posées et qui sont intactes, sinon
+**Bloquer** (`block_suspicious_ip`). Un blocage est à l'échelle de l'ACL : tous les sous-réseaux qui lui sont associés, souvent tout le VPC pour l'ACL par défaut ; il nomme ces sous-réseaux
+(`subnets_affected`). Pour chaque NACL des sous-réseaux des ENI : sous un verrou par NACL, réutiliser les entrées qu'un autre blocage de la même IP a posées et qui sont intactes, sinon
 choisir pour chaque sens le plus grand numéro libre en dessous de la première entrée qui
 autorise l'attaquant ; **noter l'intention dans l'état avant de créer** (une entrée de NACL n'a ni
 nom ni description : seule la note dit qu'elle est à Glorfindel), créer, puis noter le résultat.
@@ -60,8 +63,8 @@ autorisation de l'attaquant (le client a pu en ajouter une devant), et le blocag
 si l'attaquant n'y est pas refusé partout, il le dit (`partial`).
 
 **Débloquer** (`unblock_ip`). Sous le verrou de chaque NACL : retirer les entrées notées, si
-elles disent encore « deny attaquant/32 », et si aucun autre blocage noté (une autre instance du
-même sous-réseau) ne les tient. Sans état, rien n'est retiré : `not_found`, rien ne dit quelles
+elles disent encore « deny attaquant/32 », et si aucun autre blocage noté (une autre instance
+derrière la même NACL) ne les tient. Sans état, rien n'est retiré : `not_found`, rien ne dit quelles
 entrées sont à Glorfindel.
 
 **Vérifier.** L'isolation est vraie si chaque ENI ne porte que le SG de quarantaine de son VPC et
@@ -88,7 +91,9 @@ l'attaquant dans chaque sens est un refus de tous les protocoles. Une lecture en
 | H11 | `terraform apply` sur `aws_network_interface` (ou `vpc_security_group_ids` d'`aws_instance`) remet les groupes du code : il défait la quarantaine ; `aws_network_acl` à entrées en ligne retire les entrées absentes du code | monde qui bouge, réaffirmation |
 | H12 | un appel d'écriture d'EC2 a pris effet quand il répond | relectures |
 | H13 | une SCP ou une condition IAM peut refuser l'échange de groupes d'une seule ENI (`UnauthorizedOperation`) | isolation partielle |
-| H14 | ARN d'instance `arn:aws:ec2:<région>:<compte>:instance/<id>` ; un client EC2 n'agit que dans sa région et son compte | I12 |
+| H14 | ARN d'instance `arn:aws:ec2:<région>:<compte>:instance/<id>` ; un client EC2 n'agit que dans sa région et son compte | I12 ; un adaptateur sans compte ni région configurés refuse tout |
+| H15 | quotas par défaut, ajustables : 5 SG par ENI (jusqu'à 16), 20 entrées de NACL par sens (jusqu'à 40) ; 50 tags par ressource. Le SG de quarantaine porte un tag `glorfindel-orig-<eni>` par ENI isolée dans son VPC, plus les siens : environ 48 ENI isolées à la fois par VPC ; un tag que la levée n'a pas pu retirer (`_forget_original`, au mieux) reste et compte | isolation de masse, origine en tag |
+| H16 | une instance terminée est encore décrite un temps, sans interface réseau | les vérifications ne disent ni oui ni non sur zéro ENI (`verified: None`) |
 
 Non modélisé, et à mesurer avant de s'y fier : **la cohérence à terme** des lectures d'EC2 (un
 `describe` juste après une écriture peut rendre l'état d'avant — les relectures de l'adaptateur
@@ -103,7 +108,7 @@ Firewall, routes, Gateway Load Balancer).
 | I1 | aucune VM plus joignable que conçue | **tel quel** |
 | I2 | configuration du client intacte ; par auteur, Glorfindel n'écrit que ce qui est à lui | **tel quel**, par le journal des appels : il crée et règle son seul SG de quarantaine, pose et retire ses tags sur lui, change les groupes d'une ENI vers sa quarantaine ou vers son origine, crée des entrées de NACL à des numéros libres et ne retire que celles qu'il a créées, contenu inchangé |
 | I3 | aucun succès sur un mensonge | **tel quel**, DNS et IMDS toujours déclarés |
-| I4 | une opération sur une VM ne change rien pour une autre (sauf les flux de l'attaquant d'un blocage de périmètre) | **change** : tout blocage est de périmètre (sous-réseau) ; en plus, le blocage noté d'une autre instance du même sous-réseau tient toujours (un déblocage ne retire pas des entrées qu'un autre blocage tient) |
+| I4 | une opération sur une VM ne change rien pour une autre (sauf les flux de l'attaquant d'un blocage de périmètre) | **change** : tout blocage est de périmètre, à l'échelle de l'ACL : tous les sous-réseaux qui lui sont associés, souvent tout le VPC pour l'ACL par défaut ; en plus, le blocage noté d'une autre instance derrière la même NACL tient toujours (un déblocage ne retire pas des entrées qu'un autre blocage tient) |
 | I5 | la réaffirmation n'ouvre rien, n'agit pas sans état, n'écrit rien en `human_only` | **tel quel** (`glorfindel/reassert.py` est commun) |
 | I6 | une VM, un fichier d'état | **tel quel** (l'identifiant d'instance est unique : pas d'homonymes) |
 | I7 | depuis tout état, la levée ramène à la conception, ou garde en quarantaine en disant ce qui manque | **tel quel** ; l'opérateur donne un SG recréé par le tag |

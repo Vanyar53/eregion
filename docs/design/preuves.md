@@ -286,6 +286,40 @@ Dix-neuf sur dix-neuf attrapés au premier tour (26/10), et M57 aussi. Détail :
 [`../glorfindel.md`](../glorfindel.md), « Une fenêtre n'est plus crue sur parole », et
 [`../analysis.md`](../analysis.md), « Ce que H0 accepte du canal ».
 
+### Ce qui a changé depuis la campagne précédente (D-2)
+
+Le rapport de campagne se compare à la campagne précédente. Le code la choisit par une règle :
+la dernière campagne `done` antérieure qui partage une clé (une technique sur une VM). Il joint
+les runs par clé en faits typés, rend la section, et écarte un écart qui ne vient pas d'un
+fait. Vingt mutants, mesurés par `tests/unit/test_campaign_changes.py`, sur des campagnes
+écrites sur le disque :
+
+| Mutant | Défaut réinjecté | Effet |
+|---|---|---|
+| M260 | campagne `aborted` choisie | le rapport se compare à une campagne interrompue |
+| M261 | campagne postérieure choisie | il se compare à l'avenir |
+| M262 | campagne sans clé commune choisie | aucune ligne à comparer, la vraie précédente ignorée |
+| M263 | clé sans la VM | une technique sur une autre VM passe pour la même |
+| M264 | la plus ancienne choisie | l'écart porte sur une campagne dépassée |
+| M265 | section muette sans précédente | le lecteur ne sait pas pourquoi rien n'est comparé |
+| M266 | VM comparée avec sa casse | la même VM, écrite autrement, n'a plus de précédent |
+| M267 | clés d'un seul côté tues | une technique qui n'est plus jouée disparaît sans un mot |
+| M268 | scénario sauté compté comme clé | une technique jamais jouée est comparée |
+| M269 | runs indexés sans l'état ni le début de leur campagne | aucun rapport n'a jamais de précédente |
+| M270 | deux runs d'une même clé appariés à l'envers | le premier fait face au dernier |
+| M271 | section absente du rapport | la comparaison calculée n'est pas rendue |
+| M272 | faits de changement absents du message au modèle | il ne peut pas les citer |
+| M273 | affirmation `change` sans fait de changement gardée | un écart affirmé sans fait |
+| M274 | nombre absent des faits cités gardé | « 40 s plus tard » quand l'écart est de 15 s |
+| M275 | nombres d'une tendance non contrôlés | le même écart inventé, écrit en `trend` |
+| M276 | noms lus comme des nombres | « T1110.001 » écarte une affirmation juste |
+| M277 | `value` d'un changement non contrôlé | une action qu'aucun fait ne porte |
+| M278 | campagne reversée : faits recalculés | une décision vue par le rapport devient inconnue après la purge |
+| M279 | campagne en cours versée dans l'index | des faits incomplets entrent dans l'index |
+
+Vingt sur vingt attrapés au premier tour (26/10). Détail : [`../analysis.md`](../analysis.md),
+« Ce qui a changé depuis la campagne précédente ».
+
 ## Ce que les invariants ont trouvé
 
 Aucun de ces défauts n'avait été vu en revue. Chacun a son test et sa séquence figée.

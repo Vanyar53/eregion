@@ -18,10 +18,12 @@ la décision de Glorfindel.
 
 **L'index** : une collection ChromaDB à part (`campaign_runs`, `~/.eregion/analysis/chroma`),
 distincte de la mémoire de Glorfindel. Il ramène les runs passés des mêmes techniques, ce qui
-permet une affirmation de tendance (« manquée ici, détectée au run précédent »).
+permet une affirmation de tendance (« manquée ici, détectée au run précédent »). Il garde aussi
+la campagne précédente, celle à laquelle le rapport se compare (D-2, plus bas).
 
 **Le modèle n'écrit que des affirmations typées, chacune citant ses runs** : `detected`,
-`missed`, `latency`, `decision`, `trend`, `observation`. Un autre modèle que celui de Glorfindel
+`missed`, `latency`, `decision`, `trend`, `observation`, et `change`, qui cite un fait de
+changement (D-2, plus bas). Un autre modèle que celui de Glorfindel
 (`EREGION_ANALYSIS_MODEL`, Haiku 5.5 par défaut, `eregion_core/models.py`) : un rapport ne doit
 pas partager les angles morts du défenseur. **L'appel est borné** : `EREGION_ANALYSIS_TIMEOUT_S`,
 300 s par tentative par défaut (illisible, nulle, négative, infinie ou au-delà de 3600 → 300 s ;
@@ -246,3 +248,103 @@ celle d'un autre run de la même technique sur la même VM ; elle n'est pas ratt
 décision de ce run devient inconnue (voir plus haut). Les extraits de raisonnement entrent
 dans les faits comme des données, jamais comme des instructions. Le harnais (fidélité, contenu
 piégé) ne change pas.
+
+## Ce qui a changé depuis la campagne précédente (D-2, #184)
+
+_26/10 : le code, ses tests (`tests/unit/test_campaign_changes.py`, et un cas de bout en bout
+dans `test_hosted_report.py`) et ses mutants (M260–M279) sont écrits. La mesure sur une vraie
+deuxième campagne viendra après la fusion, avec Jonathan._
+
+Le premier rapport écrit sur H0 (campagne `20261023T081120Z`) était fidèle, mais il n'apprenait
+rien : son index était vide. La seule nouveauté a été vue par une comparaison faite à la main.
+Sur T1110.001, Glorfindel a isolé à 0,78 le 23/10, alors qu'il avait bloqué à 0,80 le 21/10. La
+recherche des runs passés (`prior_runs`) ramène les runs des mêmes techniques, mais elle ne
+garantit pas de mettre face à face la même technique sur la même cible. La comparaison est donc
+calculée par le code (`analysis/campaign_changes.py`).
+
+**La campagne précédente est choisie par une règle, pas par l'index**
+(`analysis/campaign_report.py`, `previous_campaign`). C'est la dernière campagne `done` de
+l'index qui a commencé avant celle-ci, et qui partage avec elle au moins une **clé**. Une clé,
+c'est une technique jouée sur une VM cible ; la VM est comparée sans la casse.
+- Seuls les runs exécutés comptent : un scénario sauté ou en erreur n'a rien joué.
+- Une campagne `aborted` n'est jamais choisie, ni une campagne qui a commencé après celle-ci.
+  Une campagne sans clé commune ne l'est pas non plus, même si elle est plus récente.
+- Le début d'une campagne est le plus tôt des `started_at` de ses scénarios. À défaut, c'est
+  son `created_at`, puis son identifiant quand c'est une date (`YYYYMMDDTHHMMSSZ`). Sinon, le
+  début est inconnu, et la campagne n'a pas de précédente.
+- S'il n'y en a aucune, la section le dit, avec la raison.
+
+**Les runs sont joints par clé.** Le n-ième run d'une technique sur une VM, dans l'ordre des
+`seq`, fait face au n-ième run de la même clé dans la campagne précédente. Chaque paire devient
+un **fait de changement** typé, `ChangeFact` (`chg-1`, `chg-2`…). Il donne, avant et après :
+la détection, la latence, l'action, la confiance et l'escalade, ainsi que l'écart de latence et
+de confiance. Une clé présente d'un seul côté est aussi un fait, listé comme tel (« Seulement
+dans la campagne précédente », « Seulement dans celle-ci »). Une décision inconnue reste
+inconnue, avec sa raison, jamais « aucune ».
+
+**La section est rendue par le code** (`render_section`), entre le tableau des runs et les
+affirmations : la campagne précédente, une ligne par clé commune (« 91,9 s → 106,9 s
+(+15,0 s) », « block_suspicious_ip → isolate_vm », « 80% → 78% (−2 pts) »), puis les clés d'un
+seul côté. Le modèle n'en écrit rien. Il reçoit les mêmes faits, et il peut les citer.
+
+**La vérification contrôle les faits de changement comme les autres** (`verify`) :
+- une affirmation `change` doit citer au moins un fait de changement. Sinon, elle est écartée,
+  même si elle cite les deux runs ;
+- dans une affirmation `change` ou `trend`, chaque nombre doit être celui d'un fait cité : une
+  latence, une confiance (0,78 ou 78 %), un écart. Sinon, l'affirmation est écartée (« a number
+  is not in the cited facts (40) ») ;
+- avant de lire les nombres, la vérification retire ce qui ne fait que nommer : les
+  identifiants cités, une technique (T1110.001), un identifiant de run, une date (23/10), une
+  heure (08:21), et tout mot qui commence par une lettre et contient un chiffre (`chg-2`, le
+  nom d'une VM). C'est une heuristique : un décompte (« 3 runs ») est un nombre, et il doit
+  donc venir d'un fait ;
+- le `value` d'une affirmation `change`, quand ce n'est pas un nombre, doit être une action ou
+  une détection des faits cités ;
+- seules les affirmations `trend`, `change` et `observation` peuvent citer un fait de
+  changement ;
+- la règle de #167 vaut aussi sur un fait de changement dont une décision est inconnue. Une
+  affirmation sur la réponse doit dire que la décision est inconnue, et ne doit jamais dire
+  que Glorfindel n'a pas agi. En revanche, « a isolé » n'est pas écarté : le fait a deux côtés,
+  et l'action nommée peut être celle du côté connu.
+
+**L'index des campagnes passées** (`analysis/campaign_index.py`). Chaque run de l'index porte
+maintenant l'état et le début de sa campagne, ainsi que sa VM. Un rapport écrit avant D-2 les a
+indexés sans eux : ses runs ne sont jamais choisis. La commande les ajoute :
+
+```bash
+python -m analysis.campaign_index --all runs/campaigns      # chaque campagne done ou aborted
+python -m analysis.campaign_index runs/campaigns/<id> …     # celles-ci
+```
+
+- Un run déjà dans l'index garde les faits avec lesquels il y est entré : ceux du rapport de
+  sa campagne, vus quand sa fenêtre d'exercice était encore sur le disque. La commande y
+  ajoute seulement l'état et le début de la campagne, et la VM du run quand ses faits ne la
+  donnent pas (le `target_resource_id` du manifeste).
+- Un run absent de l'index est calculé depuis les fichiers, comme le rapport le calcule. Une
+  campagne venue du canal lit l'inscription de ses VM dans leurs tags (H-1).
+- La commande est idempotente : lancée deux fois, elle laisse le même index. Elle n'appelle
+  aucun modèle et n'écrit que dans l'index.
+- Une campagne encore en cours est laissée de côté, et la commande le dit.
+
+**Sur H0** (à lancer par Jonathan : c'est une écriture sur H0), après le redéploiement de H0
+avec ce code :
+
+```bash
+make glorfindel-host-ssh
+docker exec eregion-watch python -m analysis.campaign_index --all runs/campaigns
+```
+
+- **La campagne du 23/10** (`20261023T081120Z`) est déjà sur H0 et dans son index. La commande
+  lui ajoute l'état, le début et les VM, sans recalculer ses décisions.
+- **La campagne du 21/10** (`20261021T121643Z`) n'est jamais passée par H0 : son manifeste et
+  les rapports de ses runs sont restés sur Orodruin. Il faut d'abord les copier sur H0, dans
+  `eregion/runs/campaigns/20261021T121643Z/` (le manifeste, et les rapports des runs dans
+  `runs/`), puis lancer la commande. Ses décisions sont alors lues dans les `watch-*` de H0,
+  bornées par les fenêtres de `runs/exercises/`.
+- **Attention à la purge** : une fenêtre est vidée une semaine après sa fin
+  (`PURGE_AFTER_S`). Une fois les fenêtres du 21/10 vidées, la décision de chacun de ses runs
+  devient inconnue (« fenêtre absente »). La détection et la latence restent, puisqu'elles
+  viennent du manifeste. Il faut donc verser cette campagne avant la purge : copier le dossier
+  et lancer `python -m analysis.campaign_report runs/campaigns/<id>` (le code d'aujourd'hui
+  l'indexe, et un appel au modèle écrit son rapport), ou la commande ci-dessus, une fois ce
+  code déployé. Dans les deux cas, les faits entrés dans l'index ne sont plus recalculés.

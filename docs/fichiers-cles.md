@@ -121,8 +121,8 @@ glorfindel/
   proposed_rules.py     → record/pending/approve()/reject() — detection rule proposal lifecycle ; approve() écrit
                           la règle dans la couche du client (P1), jamais dans la base livrée
   rule_layers.py        → P1 : la couche du client — write_client_rule (atomique, verrou, refuse d'écrire sur une
-                          couche illisible), migrate (règles approuvées dans la base avant P1 → couche),
-                          export_rule (une règle généralisée, sans identifiant ; find_identifiers = dernière garde)
+                          couche illisible), migrate (règles approuvées dans la base avant P1 → couche ; une
+                          règle au workspace en ligne liée à son backend). P1 n'exporte pas : l'export d'une règle généralisée, sans identifiant, est reporté à un lot rattaché à P2 (relu par un humain avant tout envoi)
   detection_authoring.py → moteur d'autoring grounded (boucle purple GÉNÉRATIVE, côté bleu).
                           load_catalog()/catalog_entry() (lit technique_catalog.yaml),
                           fetch_table_schema() (KQL getschema — schéma RÉEL du LAW, best-effort),

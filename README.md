@@ -333,7 +333,7 @@ Glorfindel doesn't require Annatar. Its main standalone path — **continuous de
 - `action_backends` — Recovery Services Vault for restore
 - `exceptions` — fnmatch patterns to opt specific VMs out of auto-discovered rules
 
-`detection_rules.yaml` contains only detection rules (KQL queries, TTPs, backend references). VMs are discovered dynamically via LAW Heartbeat — no `resource_id` or `workspace_id` needed inline. It is the **shipped base**: nothing writes it, an update replaces it. Your own rules — approved after a miss, overriding a base rule (same name), or turning one off (`disable: [<name>]`) — live in the client's layer, `~/.glorfindel/client_rules.yaml`, loaded over the base; `glorfindel rules` shows each rule and its layer, `glorfindel export-rule <name>` gives one rule generalised, without any resource or workspace identifier, to propose upstream.
+`detection_rules.yaml` contains only detection rules (KQL queries, TTPs, backend references). VMs are discovered dynamically via LAW Heartbeat — no `resource_id` or `workspace_id` needed inline. It is the **shipped base**: nothing writes it, an update replaces it. Your own rules — approved after a miss, overriding a base rule (same name), or turning one off (`disable: [<name>]`) — live in the client's layer, `~/.glorfindel/client_rules.yaml`, loaded over the base; `glorfindel rules` shows each rule and its layer. Exporting a rule generalised, without any identifier, to propose it upstream is left to a later lot (P2), reviewed by a human before anything is sent.
 
 **Manual signal injection** — write a `detection` signal directly:
 ```bash
@@ -456,7 +456,6 @@ glorfindel audit <resource_id>                  # remediation readiness: NSG, ba
 glorfindel audit --all                          # audit all discovered VMs
 glorfindel approve-rule <id>                    # apply a proposed rule to the client's layer (~/.glorfindel/client_rules.yaml)
 glorfindel rules                                # rules loaded: the shipped base, then the client's layer over it
-glorfindel export-rule <name>                   # one rule generalised, without resource or workspace ids, for upstream
 glorfindel reject-rule <id>                     # dismiss a proposed rule without applying it
 glorfindel propose-rules [--ttp T..]            # proactively author detection for uncovered techniques (cold-start)
 glorfindel respond runs/<run_id>_signals.jsonl  # post-run processing
@@ -570,7 +569,7 @@ glorfindel/
   audit.py             → AuditCheck, AuditResult, run(): NSG / backup / compute readiness checks, and detection coverage
                          (disk write counter and cadence, Syslog, each rule that covers the VM: sees data, blind, in error)
   proposed_rules.py    → record/pending/approve()/reject(): detection rule proposal lifecycle (approve → client's layer)
-  rule_layers.py       → the client's layer of rules (P1): write, migrate rules approved before P1, export without ids
+  rule_layers.py       → the client's layer of rules (P1): write, migrate rules approved before P1
   detection_authoring.py → grounded LLM rule authoring (technique catalog + real LAW getschema) — reactive on a miss, proactive via propose-rules
   campaign_replay.py   → blue-side closing of the generative purple loop: auto-activation + replay
   jobs.py              → snapshot/restore job state shared by CLI + War Room (active_jobs/<vm>.json)
@@ -583,7 +582,7 @@ glorfindel/
   incidents.py         → IncidentRegistry: groups signals by resource_id within a TTL window
   memory.py            → CycleMemory: ChromaDB with confidence + past_cycles_used metadata
   cli.py               → watch, respond, restore, release, unblock, reset, snapshot, jobs, list,
-                         pending, ack, audit, approve-rule, reject-rule, propose-rules, rules, export-rule,
+                         pending, ack, audit, approve-rule, reject-rule, propose-rules, rules,
                          migrate-rules, check-ttl,
                          bot, dashboard, war-room
   escalations.py       → persistent escalation log (~/.glorfindel/escalations.jsonl)

@@ -382,3 +382,159 @@ def test_a_card_resolved_while_discord_archived_its_thread_is_still_greyed(monke
     assert thread.calls == [False, True] and thread.archived  # reopened, then closed again
     assert "Sync" not in log.getvalue() and "50083" not in log.getvalue()
     assert asyncio.run(b._sync_messages()) == 0             # synced: no second attempt
+
+
+# ── M-3 (#183) : qui clique ─────────────────────────────────────────────────────────────
+# The buttons set verdicts, acknowledge cards and run restores; Discord shows them to whoever
+# reads the channel. Each click goes through discord.py's own dispatch (View._scheduled_task:
+# the view's interaction_check, then the callback), so a refusal is proven where it acts.
+
+ALLOWED, STRANGER, MEMBER, ROLE = 111, 222, 333, 900
+
+
+class _Role:
+    def __init__(self, rid):
+        self.id = rid
+
+
+class _User:
+    def __init__(self, uid, roles=()):
+        self.id, self.display_name, self.roles = uid, f"user-{uid}", [_Role(r) for r in roles]
+
+
+class _Client:
+    def __init__(self, policy):
+        if policy is not None:
+            self.button_policy = policy
+
+
+class _Click:
+    """What a click on a card's button hands to the view: the clicker, the bot, the replies."""
+
+    def __init__(self, user, policy, custom_id="glorfindel_verdict_right"):
+        click = self
+        self.user, self.client, self.data, self.channel = user, _Client(policy), {"custom_id": custom_id}, None
+        self.ephemeral, self.edits, self.sent = [], [], []
+
+        class _Response:
+            async def send_message(self, text, ephemeral=False):
+                click.ephemeral.append((text, ephemeral))
+
+            async def edit_message(self, **kw):
+                click.edits.append(kw)
+
+            async def defer(self):
+                pass
+
+        class _Followup:
+            async def send(self, text):
+                click.sent.append(text)
+
+        self.response, self.followup = _Response(), _Followup()
+
+
+def _press(esc, user, policy, pick):
+    async def go():
+        view = bot.EscalationView(esc)
+        item = pick(view)
+        click = _Click(user, policy, getattr(item, "custom_id", "?"))
+        await view._scheduled_task(item, click)
+        return click
+    return asyncio.run(go())
+
+
+def _verdict_right(view):
+    return next(i for i in view.children if isinstance(i, bot._VerdictButton) and i.verdict == "right")
+
+
+def _stored(esc_id):
+    return next(e for e in escalations.all_escalations() if e["id"] == esc_id)
+
+
+def test_a_click_from_someone_not_allowed_is_refused_said_and_logged(monkeypatch):
+    import io
+
+    from rich.console import Console
+
+    log = io.StringIO()
+    monkeypatch.setattr(bot, "_console", Console(file=log, width=200))
+    esc_id = escalations.record("rule-ssh-brute-force-0123abcd", VM, "block_suspicious_ip",
+                                "mode_hold", "held", confidence=0.95)
+    policy = bot.ButtonPolicy(users=frozenset({ALLOWED}))
+
+    click = _press(_stored(esc_id), _User(STRANGER), policy, _verdict_right)
+    stored = _stored(esc_id)
+    assert stored.get("verdict") is None and stored["status"] == "pending"   # nothing happened
+    assert click.edits == [] and click.sent == []
+    assert len(click.ephemeral) == 1 and click.ephemeral[0][1] is True
+    assert "refusé" in click.ephemeral[0][0] and "DISCORD_ALLOWED_USERS" in click.ephemeral[0][0]
+    logged = log.getvalue()
+    assert "Button refused" in logged and str(STRANGER) in logged and esc_id[:8] in logged
+    assert "error" not in logged.lower()       # glorfindel-host-status counts errors
+
+    click = _press(_stored(esc_id), _User(ALLOWED), policy, _verdict_right)
+    assert _stored(esc_id)["verdict"] == "right" and click.ephemeral == []
+
+
+def test_a_role_allows_its_members_and_no_one_else():
+    esc_id = escalations.record("rule-ssh-brute-force-0123abcd", VM, "block_suspicious_ip", "mode_hold", "held")
+    policy = bot.ButtonPolicy(roles=frozenset({ROLE}))
+    _press(_stored(esc_id), _User(STRANGER, roles=(ROLE + 1,)), policy, _verdict_right)
+    assert _stored(esc_id).get("verdict") is None
+    _press(_stored(esc_id), _User(MEMBER, roles=(ROLE,)), policy, _verdict_right)
+    assert _stored(esc_id)["verdict"] == "right"
+
+
+def test_without_a_list_every_button_refuses():
+    """Closed by default: no DISCORD_ALLOWED_USERS nor DISCORD_ALLOWED_ROLES, nobody — and a
+    bot without a policy at all, nobody either."""
+    esc_id = escalations.record("rule-ssh-brute-force-0123abcd", VM, "block_suspicious_ip", "mode_hold", "held")
+    for policy in (bot.ButtonPolicy(), None):
+        click = _press(_stored(esc_id), _User(ALLOWED), policy, _verdict_right)
+        assert "fermé par défaut" in click.ephemeral[0][0]
+        click = _press(_stored(esc_id), _User(ALLOWED), policy,
+                       lambda v: next(i for i in v.children if getattr(i, "custom_id", "") == "glorfindel_ack"))
+        assert click.ephemeral and click.sent == []
+    assert _stored(esc_id)["status"] == "pending" and _stored(esc_id).get("verdict") is None
+    assert bot.GlorfindelBot(channel_id=1, ping_role=None).button_policy.configured is False
+
+
+def test_a_refused_restore_never_runs(monkeypatch):
+    esc_id = escalations.record("rule-ransomware-0123abcd", VM, "restore_from_backup",
+                                "destructive_action", "restore needs a human")
+    ran = []
+    monkeypatch.setattr(bot._ExecuteButton, "_run", lambda self: ran.append(self.cli_args) or "ok")
+    policy = bot.ButtonPolicy(users=frozenset({ALLOWED}))
+
+    def restore(view):
+        return next(i for i in view.children if isinstance(i, bot._ExecuteButton))
+
+    click = _press(_stored(esc_id), _User(STRANGER), policy, restore)
+    assert ran == [] and click.ephemeral and _stored(esc_id)["status"] == "pending"
+
+
+def test_the_allowed_ids_come_from_the_environment(monkeypatch):
+    policy, bad = bot.ButtonPolicy.from_env({"DISCORD_ALLOWED_USERS": "111, 112;113",
+                                             "DISCORD_ALLOWED_ROLES": "900 jonathan"})
+    assert policy.users == {111, 112, 113} and policy.roles == {900}
+    assert bad == ["jonathan"]                 # a name is never matched
+    assert not bot.ButtonPolicy.from_env({})[0].configured
+
+    import io
+
+    from rich.console import Console
+
+    for env, said in (({}, "fermé par défaut"), ({"DISCORD_ALLOWED_USERS": "111"}, "1 utilisateur(s)")):
+        log = io.StringIO()
+        monkeypatch.setattr(bot, "_console", Console(file=log, width=200))
+        for k in ("DISCORD_ALLOWED_USERS", "DISCORD_ALLOWED_ROLES"):
+            monkeypatch.delenv(k, raising=False)
+        monkeypatch.setenv("DISCORD_BOT_TOKEN", "t")
+        monkeypatch.setenv("DISCORD_CHANNEL_ID", "1")
+        for k, v in env.items():
+            monkeypatch.setenv(k, v)
+        started = []
+        monkeypatch.setattr(bot.GlorfindelBot, "run", lambda self, token, **kw: started.append(self.button_policy))
+        bot.run()
+        assert said in log.getvalue()
+        assert started[0].users == ({111} if env else frozenset())

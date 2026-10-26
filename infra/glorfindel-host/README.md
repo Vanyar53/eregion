@@ -32,7 +32,7 @@ make glorfindel-host-up              # crée la VM (confirmation demandée) ; cl
 make glorfindel-host-env             # host.env depuis ton .envrc chargé (ou : copier host.env.example et remplir)
 make glorfindel-host-push            # host.env → ~/eregion/.env, config locale en human_only
 make glorfindel-stop                 # arrête le Glorfindel local : deux watch = cartes en double
-make glorfindel-host-start           # git pull, construit l'image, lance watch + war-room
+make glorfindel-host-start [REF=…]   # un tag ou un commit (défaut : dernier tag v*), détaché ; construit l'image, lance watch + war-room + bot
 make glorfindel-host-tunnel          # affiche l'URL avec son jeton, puis tient le tunnel (Ctrl+C)
 make glorfindel-host-url             # l'URL de la War Room avec son jeton, seule
 make glorfindel-host-logs            # vérifier « heartbeat → N VM(s) » et l'absence d'erreur d'identité
@@ -49,6 +49,131 @@ VM elle-même.
 Les escalades arrivent dans Discord par le bot, qui tourne sur la VM (un fil par VM, avec
 ses boutons) ; le webhook garde les notifications d'action. Un seul bot par
 `DISCORD_BOT_TOKEN` : n'en lance pas d'autre en local.
+
+## Ce que la VM exécute (M-3, #183)
+
+- **Une référence nommée, jamais une branche.** `make glorfindel-host-start REF=v0.3.1` (un tag)
+  ou `REF=<commit>` (7 à 40 chiffres hexadécimaux) ; sans `REF`, le dernier tag `v*` dans l'ordre
+  des versions. `main`, `origin/main`, `HEAD` sont refusés : une branche bouge, et la VM
+  exécutait jusque-là ce qui venait d'être fusionné (`git pull` sur `main`). `REF` se donne sur
+  la ligne de commande : une variable `REF` de l'environnement (un nom générique, exporté pour
+  autre chose) est refusée, jamais déployée en silence (`REF=` sur la ligne de commande : le
+  dernier tag) ; une `REF` qui commence par `-` aussi (elle serait une option du script). Le script
+  (`deploy.sh`, celui du poste, envoyé par ssh) fait `git fetch --tags`, un checkout détaché,
+  puis construit l'image avec deux étiquettes, `org.opencontainers.image.version` (la référence)
+  et `org.opencontainers.image.revision` (le commit complet). Un fichier suivi modifié sur la VM
+  arrête le déploiement (il partirait dans l'image), sauf `glorfindel/rules/`, que les conteneurs
+  écrivent (règles approuvées) : gardé, et dit — sauf si la référence change aussi ce fichier
+  (« Règles approuvées et nouvelle référence », plus bas). `make glorfindel-host-status` relit les
+  étiquettes sur le conteneur de la watch : « ✓ référence déployée : v0.3.1 (abc…) », ⚠ si le
+  checkout a bougé depuis, si la VM est sur une branche, ou si l'image n'a pas d'étiquette (une
+  image d'avant M-3). Revenir en arrière : `REF=<le tag précédent>`.
+- **Des dépendances verrouillées.** L'image s'installe depuis `requirements/glorfindel.txt`
+  (versions et empreintes, `pip --require-hashes`) : une construction ne prend plus la dernière
+  version de chaque bibliothèque. Mettre à jour le verrou : `docs/operations.md`, « Verrou des
+  dépendances ».
+- **Un environnement par conteneur.** `host.env` reste un seul fichier (`~/eregion/.env` sur la
+  VM), que docker compose lit pour remplir `docker-compose.yml` ; chaque conteneur ne reçoit que
+  les variables de sa liste. La clé du modèle : la watch seule. Le jeton du bot : le bot seul.
+  Le jeton de la War Room : la War Room seule. L'URL du webhook (elle porte un jeton) : la watch
+  et la War Room. Les réglages sans secret (abonnement, modèle affiché, canaux, lecture seule,
+  `DISCORD_CHANNEL_ID`) : les trois. Pourquoi pas trois fichiers : compose ne passe à un
+  conteneur que sa liste, et trois fichiers sur le même disque, au même propriétaire, ne
+  protégeraient rien de plus ; la répartition est tenue par `tests/unit/test_glorfindel_host.py`.
+  La watch et la War Room n'ont plus le jeton du bot : compose leur dit seulement qu'il est posé
+  (`GLORFINDEL_DISCORD_BOT`, « 1 » ou vide, jamais la valeur). Avec lui et `DISCORD_CHANNEL_ID`,
+  le bot poste les cartes et leur webhook se tait ; un salon sans jeton, le webhook poste.
+- **Des boutons qui vérifient qui clique.** `DISCORD_ALLOWED_USERS` (ids d'utilisateurs) et
+  `DISCORD_ALLOWED_ROLES` (ids de rôles), séparés par des virgules. Un clic d'un autre est refusé,
+  avec un message visible de lui seul, et journalisé (« Button refused: user … »). **Fermé par
+  défaut** : sans liste, tous les boutons refusent. Les boutons jugent, acquittent et lancent des
+  restaurations, et Discord les montre à quiconque lit le salon : un oubli ne doit pas les
+  ouvrir à tout le serveur ; la War Room, derrière son jeton, juge toujours les cartes. Au
+  démarrage, le bot dit combien d'utilisateurs et de rôles il autorise, ou avertit que tout est
+  fermé.
+
+## Redéployer H0 après M-3 (avec Jonathan)
+
+À faire une fois, après la fusion. Pré-observation en cours jusqu'au ~13/11 : rien sans Jonathan,
+`.envrc` chargé.
+
+1. **Ton id Discord.** Discord → Paramètres → Avancés → Mode développeur ; puis clic droit sur
+   ton nom → « Copier l'identifiant de l'utilisateur ». (Pour un rôle : Paramètres du serveur →
+   Rôles → clic droit → « Copier l'identifiant ».)
+2. **host.env, sur le poste** (`infra/glorfindel-host/host.env`, pas besoin de le régénérer ni de
+   le séparer — le jeton de la War Room ne change pas) : ajouter
+   ```
+   DISCORD_ALLOWED_USERS=<ton id>
+   ```
+   (ou `DISCORD_ALLOWED_ROLES=<id du rôle>`). Vérifier que `DISCORD_BOT_TOKEN` et
+   `DISCORD_CHANNEL_ID` y sont tous deux : ensemble, ils font taire le webhook de la watch et de
+   la War Room (le bot poste les cartes) ; l'un sans l'autre, le webhook poste. Rien à retirer :
+   les variables ne changent pas de nom, compose les répartit.
+3. **Une référence à déployer.** Le dernier tag, `v0.3.0`, est antérieur à M-3 (et à tout ce qui
+   a été fusionné depuis) : sans `REF`, c'est lui qui serait déployé. Poser un tag sur le commit de
+   fusion (`git tag v0.3.1 <commit> && git push origin v0.3.1`, ou une release), ou passer le
+   commit : `REF=<commit de fusion>`.
+4. **Le harnais — obligatoire, avant l'étape 5.** L'image prend désormais les versions du
+   verrou (résolution du 26/10), nettement plus récentes que celles des postes et de la CI
+   jusqu'ici : anthropic 0.104 → 2.3, fastapi 0.136 → 0.162, langgraph 1.2.1 → 1.2.17 (LiteLLM
+   reste 1.86.1) ; celles de l'image qui tourne sur H0 dépendent du jour où elle a été construite
+   (`docker exec eregion-watch pip list` sur la VM). Sans le harnais, on ne sait pas si les
+   décisions de H0 restent les mêmes : `make llm-compare MODELS=<modèle en service> RUNS=3`
+   (appels payants, Jonathan) ; les décisions doivent rester celles d'avant. Sinon, ne pas
+   redéployer : ouvrir une PR qui ramène le verrou (`docs/operations.md`, « Verrou des
+   dépendances »).
+5. **Pousser, puis déployer** :
+   ```bash
+   make glorfindel-host-push                 # host.env (avec DISCORD_ALLOWED_USERS) → ~/eregion/.env
+   make glorfindel-host-start REF=v0.3.1     # ou REF=<commit>
+   ```
+   La première fois, la VM est sur la branche `main` (clone de cloud-init) : le déploiement la
+   passe en checkout détaché. S'il refuse pour « fichiers suivis modifiés », regarder
+   (`make glorfindel-host-ssh`, puis `git -C eregion status --short`) avant de toucher quoi que ce
+   soit. S'il refuse pour « modifié sur la VM (règles approuvées) et changé par … » : « Règles
+   approuvées et nouvelle référence », plus bas. Dans les deux cas, rien n'a bougé : l'ancienne
+   image tourne toujours.
+6. **Vérifier** : `make glorfindel-host-status` → « ✓ référence déployée : v0.3.1 (…) », les trois
+   conteneurs ✓, aucune erreur ; `make glorfindel-host-logs` → le bot dit « Boutons : 1
+   utilisateur(s) … » (et non « fermé par défaut ») ; un clic sur ✓ Right d'une carte dans Discord
+   passe. Que chaque conteneur n'a que ses secrets, sans en afficher la valeur :
+   ```bash
+   make glorfindel-host-ssh
+   for c in eregion-watch eregion-war-room eregion-bot; do echo "$c: $(docker exec $c env | cut -d= -f1 | grep -E 'KEY|TOKEN|SECRET|WEBHOOK' | grep -v '^GPG_KEY$' | sort | tr '\n' ' ')"; done
+   ```
+   (`GPG_KEY` vient de l'image `python:3.12-slim` : l'empreinte publique de la clé qui signe
+   Python, pas un secret ; la commande l'écarte.) Attendu : la watch, `ANTHROPIC_API_KEY` (et les
+   autres clés de modèle, vides), `AZURE_CLIENT_SECRET` (vide), `GLORFINDEL_WEBHOOK_URL` ; la War
+   Room, `GLORFINDEL_WARROOM_TOKEN`, `AZURE_CLIENT_SECRET`, `GLORFINDEL_WEBHOOK_URL` ; le bot,
+   `DISCORD_BOT_TOKEN`, `AZURE_CLIENT_SECRET`. Aucune autre. La watch et la War Room ont aussi
+   `GLORFINDEL_DISCORD_BOT=1` (le jeton du bot est posé, sans sa valeur).
+7. **En cas de problème** : `make glorfindel-host-start REF=<commit déployé avant>` (affiché par
+   l'ancien `glorfindel-host-status`, « commit déployé ») revient à l'image d'avant — sans
+   étiquette, le statut le dira « inconnue ».
+
+### Règles approuvées et nouvelle référence
+
+Une règle approuvée sur la VM (`glorfindel approve-rule`) s'écrit dans
+`glorfindel/rules/azure/detection_rules.yaml`, un fichier suivi. Si la référence à déployer
+change aussi ce fichier, `deploy.sh` s'arrête avant de rien toucher : « … modifié sur la VM
+(règles approuvées) et changé par <ref> : rien n'est déployé ». Rien n'est perdu, l'ancienne
+image tourne toujours. **Jamais `git checkout -- glorfindel/rules`** (ni `git reset --hard`) : ils
+effacent les règles approuvées. Sur la VM (`make glorfindel-host-ssh`, puis `cd eregion`) :
+
+```bash
+cp glorfindel/rules/azure/detection_rules.yaml ~/regles-approuvees.yaml   # une copie, hors du dépôt
+git diff -- glorfindel/rules                                 # ce que la VM a approuvé
+git fetch -q --tags origin && git diff HEAD <ref> -- glorfindel/rules   # ce que la référence change
+git stash push -m regles-approuvees -- glorfindel/rules      # mises de côté : le fichier revient au checkout
+```
+
+Puis, depuis le poste, `make glorfindel-host-start REF=<ref>` : il passe, et la watch démarre
+avec les règles de la référence, sans celles de la VM. Enfin, sur la VM, reporter les règles
+approuvées à la main dans le nouveau fichier (`git stash show -p` les montre ; la copie est dans
+`~/regles-approuvees.yaml`), en gardant ce que la référence a changé ; puis
+`docker compose restart watch` (les règles se lisent au démarrage) et, une fois vérifié,
+`git stash drop`. Pas de `git stash pop` à l'aveugle : un conflit laisserait des marqueurs dans le
+fichier, que la watch ne lirait plus.
 
 **Disque** : chaque `make glorfindel-host-start` reconstruit l'image ; les couches des anciennes images restaient dans containerd (Docker 29), jusqu'à 87 % d'un disque de 32 Go le 20/10, 25 Go récupérables. Le redéploiement purge maintenant les images orphelines (`docker image prune -f`), et `glorfindel-host-status` affiche l'occupation du disque.
 

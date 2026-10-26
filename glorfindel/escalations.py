@@ -296,14 +296,35 @@ def notify_action(
         pass  # notification failure must never block the agent
 
 
+def discord_bot_configured(environ=None) -> bool:
+    """The Discord bot posts the escalations (one thread per VM): the webhook then stays
+    silent. A bot needs its token and its channel — a channel alone runs no bot, and an
+    escalation always goes somewhere, or the watch says it does not.
+
+    Only the bot's container holds the token (M-3, #183): docker compose tells the watch
+    and the War Room that it is set with GLORFINDEL_DISCORD_BOT ("1" or "", from
+    ${DISCORD_BOT_TOKEN:+1}), never its value. Outside compose, DISCORD_BOT_TOKEN itself."""
+    import os
+    env = os.environ if environ is None else environ
+    token = env.get("GLORFINDEL_DISCORD_BOT") or env.get("DISCORD_BOT_TOKEN")
+    return bool(token and env.get("DISCORD_CHANNEL_ID"))
+
+
+def alerting_configured(environ=None) -> bool:
+    """An escalation reaches someone: the webhook, or the Discord bot."""
+    import os
+    env = os.environ if environ is None else environ
+    return bool(env.get("GLORFINDEL_WEBHOOK_URL") or discord_bot_configured(env))
+
+
 def _notify(esc: dict) -> None:
     """POST an escalation notification to GLORFINDEL_WEBHOOK_URL if set.
 
-    Skipped when DISCORD_BOT_TOKEN is set — the bot handles escalations in
+    Skipped when the Discord bot is configured — the bot handles escalations in
     per-VM threads, which is a better UX than a flat channel message.
     """
     import os
-    if os.environ.get("DISCORD_BOT_TOKEN", ""):
+    if discord_bot_configured():
         return
     url = os.environ.get("GLORFINDEL_WEBHOOK_URL", "")
     if not url:

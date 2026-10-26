@@ -882,6 +882,69 @@ MUTANTS = [
     ("M459", "a restore job read in the VM's group again, through the connector (A1)", "glorfindel/jobs.py",
      "            az_status = connector.restore_job_status(vault, rg, restore_job_name)\n",
      "            az_status = connector.restore_job_status(vault, job.get(\"rg\", \"\"), restore_job_name)\n"),
+    # M-3 (#183) — the host of Glorfindel: Discord buttons check who clicks (closed by
+    # default), each container gets only its secrets, H0 deploys a named reference whose
+    # image carries it, and the image installs from the lock.
+    ("M280", "a Discord button runs for whoever clicks it (M-3)", "glorfindel/bot.py",
+     "        if isinstance(policy, ButtonPolicy) and policy.allows(interaction.user):\n",
+     "        if True:\n"),
+    ("M281", "with no allowed users nor roles, every click passes (M-3)", "glorfindel/bot.py",
+     '        if getattr(user, "id", None) in self.users:\n',
+     '        if not self.configured or getattr(user, "id", None) in self.users:\n'),
+    ("M282", "any role allows a click, not only an allowed one (M-3)", "glorfindel/bot.py",
+     "        return bool(held & self.roles)\n", "        return bool(held)\n"),
+    ("M283", "a refused click is not logged (M-3)", "glorfindel/bot.py",
+     '    _console.print(\n        f"[yellow]Button refused:',
+     '    (lambda *a: None)(\n        f"[yellow]Button refused:'),
+    ("M284", "the bot's token reaches every container again (M-3)", "docker-compose.yml",
+     "  DISCORD_CHANNEL_ID: ${DISCORD_CHANNEL_ID:-}\n",
+     "  DISCORD_CHANNEL_ID: ${DISCORD_CHANNEL_ID:-}\n  DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}\n"),
+    ("M285", "the War Room receives the models' keys (M-3)", "docker-compose.yml",
+     "      <<: [*env, *azure, *webhook]\n", "      <<: [*env, *azure, *models, *webhook]\n"),
+    ("M286", "the watch knows the bot only by its token: every card also goes to the webhook (M-3)",
+     "glorfindel/escalations.py",
+     '    token = env.get("GLORFINDEL_DISCORD_BOT") or env.get("DISCORD_BOT_TOKEN")\n',
+     '    token = env.get("DISCORD_BOT_TOKEN")\n'),
+    ("M287", "H0 deploys a branch: any revision resolves (M-3)", "infra/glorfindel-host/deploy.sh",
+     '  if commit=$(git rev-parse -q --verify "refs/tags/$ref^{commit}" 2>/dev/null); then\n',
+     '  if commit=$(git rev-parse -q --verify "$ref^{commit}" 2>/dev/null); then\n'),
+    ("M288", "the image does not carry the reference it was built from (M-3)",
+     "infra/glorfindel-host/deploy.sh",
+     '    --label "$LABEL_REF=$ref" --label "$LABEL_REV=$commit" \\\n', ""),
+    ("M289", "the image resolves its dependencies again, unlocked (M-3)", "glorfindel/Dockerfile",
+     "RUN pip install --no-cache-dir --no-deps --no-build-isolation -e .\n",
+     'RUN pip install --no-cache-dir -e ".[glorfindel,war-room]"\n'),
+    # M-3, review: a refusal must stop the click; a Discord channel alone runs no bot, so the
+    # webhook still posts and the watch still warns; the watch learns only that the bot's
+    # token is set; REF is a tag or a commit given on make's command line; a rules file that
+    # both the VM and the reference change stops the deployment with what to do.
+    ("M520", "a refused click is said, then let through to its callback (M-3, review)", "glorfindel/bot.py",
+     "        await _refuse(interaction, self.esc_id, policy)\n        return False\n",
+     "        await _refuse(interaction, self.esc_id, policy)\n        return True\n"),
+    ("M521", "a Discord channel alone silences the webhook, no bot running (M-3, review)",
+     "glorfindel/escalations.py",
+     '    return bool(token and env.get("DISCORD_CHANNEL_ID"))\n',
+     '    return bool(token or env.get("DISCORD_CHANNEL_ID"))\n'),
+    ("M522", "the watch and the War Room receive the bot's token, not only that it is set (M-3, review)",
+     "docker-compose.yml",
+     "  GLORFINDEL_DISCORD_BOT: ${DISCORD_BOT_TOKEN:+1}\n",
+     "  GLORFINDEL_DISCORD_BOT: ${DISCORD_BOT_TOKEN:-}\n"),
+    ("M523", "the watch counts a Discord channel alone as alerting: no warning (M-3, review)", GCLI,
+     "    _has_alerting = alerting_configured()\n",
+     '    _has_alerting = bool(os.environ.get("GLORFINDEL_WEBHOOK_URL") '
+     'or os.environ.get("DISCORD_CHANNEL_ID"))\n'),
+    ("M524", "REF=--checkout-only reaches deploy.sh as an option (M-3, review)", MAKE,
+     'in -*|*[!A-Za-z0-9._-]*) echo "REF invalide', 'in *[!A-Za-z0-9._-]*) echo "REF invalide'),
+    ("M525", "a REF exported in the environment is deployed in silence (M-3, review)", MAKE,
+     '@case "$(origin REF)" in environment*)', '@case "$(origin REF)" in nowhere*)'),
+    ("M526", "make expands a refused REF while exporting it: $(shell …) runs (M-3, review)", MAKE,
+     "REF ?=\nunexport REF\n", "REF ?=\n"),
+    ("M527", "the ssh line copies REF into the recipe: make expands it before it is checked (M-3, review)",
+     MAKE, """bash -s -- '"$$EREGION_DEPLOY_REF" < infra/glorfindel-host/deploy.sh""",
+     "bash -s -- $(REF)' < infra/glorfindel-host/deploy.sh"),
+    ("M528", "rules the VM approved and the reference changes: « gardé », then git refuses (M-3, review)",
+     "infra/glorfindel-host/deploy.sh",
+     '    [ -z "$clash" ] || die "$(echo', '    [ -z "$clash" ] || true "$(echo'),
 ]
 
 # Mutants measured by other tests than the invariants (their lot's own).
@@ -942,6 +1005,13 @@ TESTS.update({mid: "tests/unit/test_gothmog.py" for mid in ("M241", "M246")})
 TESTS.update({mid: "tests/unit/test_actions_split.py" for mid in ("M450", "M451", "M452")})
 TESTS.update({f"M{n}": f"{BOUNDARY_TESTS} tests/unit/test_readiness.py" for n in range(453, 459)})
 TESTS["M459"] = "tests/unit/test_jobs.py"
+TESTS.update({f"M{n}": "tests/unit/test_bot.py" for n in range(280, 284)})
+TESTS.update({f"M{n}": "tests/unit/test_glorfindel_host.py" for n in range(284, 287)})
+TESTS.update({f"M{n}": "tests/unit/test_host_deploy.py" for n in (287, 288)})
+TESTS["M289"] = "tests/unit/test_dependency_lock.py"
+TESTS["M520"] = "tests/unit/test_bot.py"
+TESTS.update({f"M{n}": "tests/unit/test_glorfindel_host.py" for n in (521, 522, 523)})
+TESTS.update({f"M{n}": "tests/unit/test_host_deploy.py" for n in range(524, 529)})
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

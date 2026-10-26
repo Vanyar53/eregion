@@ -126,7 +126,8 @@ glorfindel/
   cli.py                → watch, respond, restore (--wait), release, unblock, reset (revert=alias), list, pending, ack, activate,
                           audit (--all), approve-rule, reject-rule, propose-rules, check-ttl, jobs, bot, dashboard, war-room
   escalations.py        → ~/.glorfindel/escalations.jsonl + labels (proposed_rule, improve_detection ajoutés)
-  bot.py                → Discord bot — un fil par VM, boutons Acquitter + Commande, /pending slash command
+  bot.py                → Discord bot — un fil par VM, boutons Acquitter + Commande, /pending slash command ;
+                          ButtonPolicy (M-3) : DISCORD_ALLOWED_USERS / _ROLES, fermé par défaut
   tui.py                → Rich TUI full-screen (glorfindel dashboard) : resources + feed + escalations, raccourcis a/r/x/u/v
   api.py                → FastAPI War Room — /api/state (expose autonomy_modes, autonomy_default,
                           read_only, capability), /api/feed (WS), /api/config, /api/audit[/<vm>],

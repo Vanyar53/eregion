@@ -1,15 +1,17 @@
 // The console's shared header (docs/design/console.md): EREGION, a tab per section —
-// Glorfindel always, Annatar and Gothmog active or greyed (/api/sections) —, the watch's beat,
-// the return channel when an injector is active, and the clock in UTC, like every time shown
-// in the console. Each page calls Console.init(<its tab>) before anything reads the header.
+// Glorfindel always, Annatar and Gothmog active or greyed (/api/sections) —, then on the right
+// the watch's beat, the return channel when an injector is active, Config, and the clock in
+// UTC, like every time shown in the console. The same on every page: what belongs to one page
+// (the live feed's dot) stays in that page. Each page calls Console.init(<its tab>) first.
 const Console = (() => {
   const TABS = [
     { id: 'overview',   label: 'Overview',   href: '/',           role: 'Eregion at a glance' },
     { id: 'glorfindel', label: 'Glorfindel', href: '/glorfindel' },
     { id: 'annatar',    label: 'Annatar',    href: '/annatar' },
     { id: 'gothmog',    label: 'Gothmog',    href: '/gothmog' },
-    { id: 'config',     label: 'Config',     href: '/config',     role: 'how Glorfindel and this console are set' },
   ];
+  // On the right, where the War Room had it (Jonathan, 26/10).
+  const CONFIG = { id: 'config', label: '⚙ Config', href: '/config', role: 'how Glorfindel and this console are set' };
   let active = null, sections = null, judge = null;
   const listeners = [];
 
@@ -21,16 +23,18 @@ const Console = (() => {
   const section = id => ((sections && sections.sections) || []).find(s => s.id === id);
   const injectorActive = () => ['annatar', 'gothmog'].some(id => (section(id) || {}).active);
 
+  function tab(t) {
+    const s = section(t.id);
+    const greyed = s && !s.active;
+    const title = s ? `${s.label} — ${s.role}${greyed ? ' · not set up here: what it would add' : ''}` : `${t.label.replace('⚙ ', '')} — ${t.role}`;
+    const badge = t.id === 'glorfindel' && judge ? `<span class="badge" title="Cards to judge (7 days)">${judge}</span>` : '';
+    return `<a class="tab${t.id === active ? ' active' : ''}${greyed ? ' greyed' : ''}" href="${t.href}" title="${esc(title)}">${esc(t.label)}${badge}</a>`;
+  }
+
   function renderTabs() {
-    const nav = $('c-nav');
-    if (!nav) return;
-    nav.innerHTML = TABS.map(t => {
-      const s = section(t.id);
-      const greyed = s && !s.active;
-      const title = s ? `${s.label} — ${s.role}${greyed ? ' · not set up here: what it would add' : ''}` : `${t.label} — ${t.role}`;
-      const badge = t.id === 'glorfindel' && judge ? `<span class="badge" title="Cards to judge (7 days)">${judge}</span>` : '';
-      return `<a class="tab${t.id === active ? ' active' : ''}${greyed ? ' greyed' : ''}" href="${t.href}" title="${esc(title)}">${esc(t.label)}${badge}</a>`;
-    }).join('');
+    const nav = $('c-nav'), cfg = $('c-config');
+    if (nav) nav.innerHTML = TABS.map(tab).join('');
+    if (cfg) cfg.innerHTML = tab(CONFIG);
   }
 
   async function getJSON(url) {
@@ -56,8 +60,8 @@ const Console = (() => {
       const w = await getJSON('/api/watch/status');
       const color = { running: 'var(--green)', stale: 'var(--orange)', stopped: 'var(--red)' }[w.status] || 'var(--dim)';
       dot.style.color = color; label.style.color = color;
-      label.textContent = w.status === 'running' ? `watch ${w.age_s}s`
-        : w.status === 'stale' ? `watch stale ${Math.round((w.age_s || 0) / 60)}m` : `watch ${w.status || 'unknown'}`;
+      label.textContent = w.status === 'running' ? `watch · ${w.age_s}s ago`
+        : w.status === 'stale' ? `watch stale · ${Math.round((w.age_s || 0) / 60)}m ago` : `watch ${w.status || 'unknown'}`;
     } catch (e) { label.textContent = 'watch unknown'; }
   }
 
@@ -72,7 +76,7 @@ const Console = (() => {
       let color = 'var(--dim)', text = 'return channel off';
       if (rc.configured) {
         if (rc.error) { color = 'var(--red)'; text = 'return channel unreadable'; }
-        else { color = rc.alive ? 'var(--green)' : 'var(--yellow)'; text = `return channel ${rc.age_s}s`; }
+        else { color = rc.alive ? 'var(--green)' : 'var(--yellow)'; text = `return channel · ${rc.age_s}s ago`; }
       }
       $('c-rc-dot').style.color = color;
       $('c-rc-label').textContent = text;
@@ -108,18 +112,17 @@ const Console = (() => {
       ? iso.slice(11, 19) : `${iso.slice(5, 10)} ${iso.slice(11, 16)}`;
   }
 
-  function init(tab, opts = {}) {
-    active = tab;
+  function init(page, opts = {}) {
+    active = page;
     const h = $('console-header');
     h.classList.add('console');
     h.innerHTML = `<a class="logo" href="/" title="Eregion — Glorfindel defends, Annatar and Gothmog prove it">EREGION</a>
       <nav id="c-nav"></nav>
-      <span id="c-slot" class="hstat"></span>
       <span class="spacer"></span>
       <span class="hstat" title="The watch's heartbeat (~/.glorfindel/watch_heartbeat)"><span id="c-watch-dot" class="dot">●</span> <span id="c-watch-label">watch…</span></span>
       <span class="hstat" id="c-rc" hidden><span class="sep">│</span> <span id="c-rc-dot" class="dot">●</span> <span id="c-rc-label">return channel…</span></span>
+      <nav id="c-config"></nav>
       <span id="c-clock"></span>`;
-    if (opts.slot) $('c-slot').innerHTML = opts.slot;
     renderTabs();
     tick(); setInterval(tick, 1000);
     refreshSections(); setInterval(refreshSections, 30000);

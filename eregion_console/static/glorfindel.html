@@ -562,7 +562,7 @@
   <div id="feed-col">
     <div class="col-header">TO JUDGE <span id="judge-count"></span></div>
     <div id="judge-list"><div class="judge-empty">…</div></div>
-    <div class="col-header">LIVE FEED</div>
+    <div class="col-header">LIVE FEED <span id="live-dot" title="The live feed's connection (WebSocket)">●</span> <span id="live-label" style="color:var(--dim);font-size:10px;font-weight:400;letter-spacing:normal">connecting…</span></div>
     <div id="feed-list"></div>
   </div>
 
@@ -610,11 +610,9 @@
 <script>
 // ── The console's header (console.js) ─────────────────────────────────────────
 // This page is Glorfindel's section (/glorfindel), or its configuration (/config). The live
-// feed's dot sits in the header.
+// feed's dot belongs to this page: it sits on the LIVE FEED column, not in the shared header.
 const _IS_CONFIG = location.pathname.replace(/\/+$/, '') === '/config';
-Console.init(_IS_CONFIG ? 'config' : 'glorfindel', {
-  slot: '<span id="live-dot">●</span> <span id="live-label" style="color:var(--dim);font-size:11px">connecting…</span>',
-});
+Console.init(_IS_CONFIG ? 'config' : 'glorfindel');
 if (_IS_CONFIG) document.title = 'Eregion — Config';
 // ?card=<id> (a link from Annatar's or Gothmog's page): that card, highlighted in TO JUDGE.
 let _focusCard = new URLSearchParams(location.search).get('card');

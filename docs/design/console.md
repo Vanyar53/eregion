@@ -144,9 +144,11 @@ Le tirage des rapports reste dans la watch de Glorfindel, qui est toujours là.
    d'observation y figure, comme sur Glorfindel : c'est la première page vue.
 7. **Config** est une page : Azure, le bloc de Glorfindel (modèle, autonomie), et les canaux si un
    injecteur est actif.
-8. **L'en-tête commun** (`console.js`, `console.css`) porte la navigation, le battement de la
-   watch, le canal retour si un injecteur est actif, le nombre de cartes à juger sur l'onglet
-   Glorfindel, et l'horloge en UTC.
+8. **L'en-tête commun** (`console.js`, `console.css`), le même sur toutes les pages : à gauche les
+   onglets (le nombre de cartes à juger sur celui de Glorfindel) ; à droite le battement de la watch,
+   le canal retour si un injecteur est actif, ⚙ Config (à droite, comme dans la War Room) et
+   l'horloge en UTC. Ce qui n'appartient qu'à une page reste dans la page : le point « live » du
+   fil est sur la colonne LIVE FEED (Jonathan, 26/10).
 9. **Les corrections du §1** :
    - le verdict seulement dans TO JUDGE ;
    - les liens carte ↔ run dans les deux sens ;
@@ -184,7 +186,7 @@ Les valeurs sont illustratives. L'onglet actif est entre crochets, l'onglet gris
 **Overview, tous les composants**
 
 ```
-EREGION  [Overview]  Glorfindel 3  Annatar  Gothmog  Config    ● watch 12s  ● return channel 18s   16:51 UTC
+EREGION  [Overview]  Glorfindel 3  Annatar  Gothmog    ● watch · 12s ago  ● return channel · 18s ago  ⚙ Config  16:51 UTC
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────
 Observation — Glorfindel detects and recommends; nothing is executed. The mode is locked to human-only by
 the deployment (read-only credentials), not by this page.
@@ -204,7 +206,7 @@ CHANNELS     exercise channel on · newest window 1h05 ago · live windows: none
 **Overview, Glorfindel seul**
 
 ```
-EREGION  [Overview]  Glorfindel 3  ░Annatar░  ░Gothmog░  Config                  ● watch 12s   16:51 UTC
+EREGION  [Overview]  Glorfindel 3  ░Annatar░  ░Gothmog░                 ● watch · 12s ago  ⚙ Config  16:51 UTC
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────
 GLORFINDEL   3 to judge ▸            wrong 0% of 13 judged (7 d)          mode OBSERVE-ONLY · human-only
 ANNATAR      not set up — no attack has tested Glorfindel here (what it adds ▸)
@@ -228,7 +230,7 @@ Found here      no Annatar run, window or campaign in runs/; no exercise channel
 **Glorfindel, `/glorfindel`**
 
 ```
-EREGION  Overview  [Glorfindel 3]  Annatar  Gothmog  Config    ● watch 12s  ● return channel 18s   16:51 UTC
+EREGION  Overview  [Glorfindel 3]  Annatar  Gothmog    ● watch · 12s ago  ● return channel · 18s ago  ⚙ Config  16:51 UTC
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────
 Observation — Glorfindel detects and recommends; nothing is executed. …
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -239,14 +241,14 @@ TO JUDGE · 3                         │ INFRASTRUCTURE                        
  Snapshot  40%               17s ago │    │ Block IP 82% — pending     │ │ Snapshot 40%               │
  ⚑ exercise · run …150000Z ▸ annatar │    │ ▸ Approve & execute   Ack  │ │ Ack   Cmd     to judge ▸   │
  [note……]  ✓ Right  ✗ Wrong  ? Unsure│    │ Cmd             to judge ▸ │ └────────────────────────────┘
-LIVE FEED                            │    └────────────────────────────┘
+LIVE FEED ● live                     │    └────────────────────────────┘
 ```
 
 **Annatar, `/annatar`** (Gothmog suit le même plan, avec FAULTS et le tableau des sondes avant et
 après)
 
 ```
-EREGION  Overview  Glorfindel 3  [Annatar]  Gothmog  Config    ● watch 12s  ● return channel 18s   16:51 UTC
+EREGION  Overview  Glorfindel 3  [Annatar]  Gothmog    ● watch · 12s ago  ● return channel · 18s ago  ⚙ Config  16:51 UTC
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────
 ANNATAR — attacks run from Orodruin, armed, and what Glorfindel did. This page never launches a run.
 EXERCISES · 11          windows [7 days ▾] │ CAMPAIGNS · 1    [30 days ▾] │ TECHNIQUES · 5 implemented

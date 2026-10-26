@@ -446,12 +446,15 @@ def recurrence(e: dict, escs: list[dict] | None = None, days: int = 7) -> dict |
 
 def to_judge(since: datetime | None = None, limit: int = 100) -> list[dict]:
     """The decision cards still waiting for the operator's verdict, newest first — pending
-    or acknowledged (a verdict is independent of the ack), exercises left out (B2): what the
-    War Room's "To judge" list shows during an observation."""
+    or acknowledged (a verdict is independent of the ack): what the War Room's "To judge"
+    list shows during an observation. An exercise card stays in the list, flagged
+    (``exercise``, ``exercise_run``) — H-1: a window is a claim from the injectors' host, and
+    whoever can write one could otherwise hide a real attack from the operator. The
+    observation report still counts it apart (``observation_report``)."""
     out = []
     escs = all_escalations()
     for e in escs:
-        if not is_decision(e) or e.get("verdict") in VERDICTS or e.get("source") == "exercise":
+        if not is_decision(e) or e.get("verdict") in VERDICTS:
             continue
         when = e.get("first_seen") or e.get("timestamp") or ""
         if since is not None:
@@ -464,6 +467,8 @@ def to_judge(since: datetime | None = None, limit: int = 100) -> list[dict]:
             "id", "action", "escalation_type", "resource_id", "ttp", "severity", "confidence",
             "reason", "explanation", "action_params", "first_seen", "last_seen", "occurrences",
             "status", "rule_name")}
+        card["exercise"] = e.get("source") == "exercise"
+        card["exercise_run"] = (e.get("exercise_run") or "") if card["exercise"] else ""
         card["recurrence"] = recurrence(e, escs)
         out.append(card)
     out.sort(key=lambda c: str(c.get("first_seen") or ""), reverse=True)

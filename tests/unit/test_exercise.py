@@ -10,7 +10,8 @@ from eregion_core.exercise import GRACE_AFTER_S, close_window, open_window, sour
 
 VM = "/subscriptions/s/resourceGroups/rg-celebrimbor/providers/Microsoft.Compute/virtualMachines/vm-celebrimbor-gondolin"
 OTHER = VM.replace("gondolin", "bree")
-T0 = datetime(2026, 10, 16, 10, 0, tzinfo=timezone.utc)
+# Recent: a window whose last moment is PURGE_AFTER_S old is purged when read (H-1).
+T0 = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(hours=1)
 
 
 def _at(minutes: float) -> datetime:
@@ -44,8 +45,12 @@ def test_a_window_never_closed_lapses_at_its_expiry():
 
 
 def test_the_injectors_own_signal_is_an_exercise_by_its_run_id():
+    """Whatever its time — but only on a VM the window names (H-1, M223)."""
     open_window("r1", injector="annatar", kind="technique", experiment="T1486", targets=[VM], now=T0)
-    assert source_of("", None, run_id="r1") == ("exercise", "r1")
+    assert source_of(VM, None, run_id="r1") == ("exercise", "r1")
+    assert source_of(VM, _at(24 * 60), run_id="r1") == ("exercise", "r1")
+    assert source_of(OTHER, _at(5), run_id="r1") == ("real", "")
+    assert source_of("", None, run_id="r1") == ("unknown", "")
     assert source_of(OTHER, _at(5), run_id="unknown-run") == ("real", "")
 
 

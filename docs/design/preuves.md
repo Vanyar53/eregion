@@ -253,6 +253,39 @@ carte compte :
 Treize sur treize attrapés au premier tour (26/10). Détail :
 [`../glorfindel.md`](../glorfindel.md), « Stabilité de la décision ».
 
+### Une fenêtre d'exercice n'est plus crue sur parole (H-1)
+
+Qui écrit dans `runs/exercises/` ou dans le canal pouvait faire passer une vraie attaque pour
+un exercice. H-1 met les gardes côté lecteur : la watch, et H0 pour les campagnes. Dix-neuf
+mutants, mesurés par `tests/unit/test_exercise_guard.py` (M57 suit la vérification des cibles
+dans `_targets`) :
+
+| Mutant | Défaut réinjecté | Effet |
+|---|---|---|
+| M220 | fenêtre plus longue que 2 h crue | une fenêtre d'un jour couvre toute la journée |
+| M221 | fenêtre déclarée pour plus tard crue | elle couvre ce qui viendra |
+| M222 | VM non inscrite marquée | la vraie charge passe pour un exercice |
+| M223 | raccourci par `run_id` sur une VM que la fenêtre ne nomme pas | n'importe quelle VM marquée par un nom de run |
+| M224 | carte d'exercice cachée de TO JUDGE | une vraie attaque couverte n'atteint jamais l'opérateur |
+| M225 | fenêtre jamais purgée | son `run_id` marque encore des semaines plus tard |
+| M226 | fenêtre nommée `watch-…` crue | une détection du RulePoller devient un exercice par son `run_id` |
+| M227 | sans vérification d'inscription, tout est inscrit | une watch qui ne peut pas lire les tags croit toutes les fenêtres |
+| M228 | lecture des tags en échec lue « inscrite » | un 403 ouvre la porte |
+| M229 | fenêtre écrite aujourd'hui pour demain crue demain | le refus du futur ne dure qu'un jour |
+| M230 | fenêtre purgée supprimée au lieu d'être vidée | le canal la ramène à chaque tirage |
+| M231 | manifeste d'une autre forme accepté par H0 | rapport écrit sur un fichier forgé |
+| M232 | run du canal sans fenêtre connue gardé | un run inventé entre dans les faits |
+| M233 | run du canal sur une VM non inscrite gardé | idem, sur la vraie charge |
+| M234 | run du canal sur une VM que sa fenêtre ne nomme pas gardé | idem |
+| M235 | provenance des faits tue dans le rapport | le lecteur prend le manifeste pour une observation |
+| M236 | scénario du canal mal formé gardé | des chiffres non typés dans les faits |
+| M237 | rapport de run d'un autre run gardé | l'heure d'attaque d'un autre run |
+| M238 | fenêtre de plus de 2 h bornant la recherche d'une décision | une décision de trois jours rattachée au run |
+
+Dix-neuf sur dix-neuf attrapés au premier tour (26/10), et M57 aussi. Détail :
+[`../glorfindel.md`](../glorfindel.md), « Une fenêtre n'est plus crue sur parole », et
+[`../analysis.md`](../analysis.md), « Ce que H0 accepte du canal ».
+
 ## Ce que les invariants ont trouvé
 
 Aucun de ces défauts n'avait été vu en revue. Chacun a son test et sa séquence figée.

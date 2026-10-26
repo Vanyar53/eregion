@@ -1,0 +1,17 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/Vanyar53/eregion/schemas/run_report.schema.json",
+  "title": "Report of one run, as H0 accepts it from the exercise channel (H-1)",
+  "description": "annatar/runner/report.py writes it; the campaign report reads its run id and its attack time. Other fields are allowed. Its run_id must also be the run's own (checked by analysis/campaign_schema.py, which runs on H0).",
+  "type": "object",
+  "required": ["run_id", "metrics"],
+  "properties": {
+    "run_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"},
+    "metrics": {
+      "type": "object",
+      "properties": {
+        "attack_time": {"type": ["number", "null"]}
+      }
+    }
+  }
+}

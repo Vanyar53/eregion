@@ -49,6 +49,7 @@ HREP = "analysis/hosted_report.py"
 XCH = "eregion_core/exercise_channel.py"
 ACLI = "annatar/cli.py"
 GCLI = "glorfindel/cli.py"
+XW = "eregion_core/exercise.py"
 INVARIANTS = "tests/unit/test_invariants.py"
 INSCRIPTION_TESTS = "tests/unit/test_inscription.py tests/unit/test_engine.py"
 DOCS_TESTS = "tests/unit/test_docs_budget.py"
@@ -241,9 +242,10 @@ MUTANTS = [
      "    for k in dropped:\n        del environ[k]\n", ""),
     # B2 (storage side): an exercise window labels only what it names, for a bounded time.
     ("M57", "a window labels every VM, not its targets (B2)", "eregion_core/exercise.py",
-     # The target check moved into _covers (O1 part C); the mutant follows it there.
-     "    return resource_id.lower() in (window.get(\"targets\") or []) and live(window, when)\n",
-     "    return live(window, when)\n"),
+     # The target check moved into _covers (O1 part C), then into _targets (H-1).
+     "    return (resource_id.lower() in (window.get(\"targets\") or [])\n"
+     "            and not window_refusal(window))\n",
+     "    return not window_refusal(window)\n"),
     ("M58", "a window never closed never lapses (B2)", "eregion_core/exercise.py",
      "    end = _parse(window.get(\"end\")) or expires\n    # A window closed late still lapses at its expiry.\n"
      "    last = min(end, expires) + timedelta(seconds=GRACE_AFTER_S)\n",
@@ -514,8 +516,9 @@ MUTANTS = [
      "        if (cdir.name in failed or not (cdir / exercise_channel.PULLED).exists()\n",
      "        if (cdir.name in failed\n"),
     ("M141", "an aborted campaign gets its report written on H0 (#167)", HREP,
-     '        if not isinstance(manifest, dict) or manifest.get("state") != "done":\n',
-     '        if not isinstance(manifest, dict) or manifest.get("state") not in ("done", "aborted"):\n'),
+     # H-1: the shape is checked first (campaign_schema.manifest_refusal), then the state.
+     '        if manifest.get("state") != "done":\n',
+     '        if manifest.get("state") not in ("done", "aborted"):\n'),
     ("M142", "a failing report is tried again without end (#167)", HREP,
      "                or (cdir / REPORT).exists() or attempts(cdir) >= MAX_ATTEMPTS):\n",
      "                or (cdir / REPORT).exists()):\n"),
@@ -749,6 +752,61 @@ MUTANTS = [
     ("M212", "GLORFINDEL_DECISION_DRAWS never reaches the watch's container (D-1)",
      "docker-compose.yml",
      "  GLORFINDEL_DECISION_DRAWS: ${GLORFINDEL_DECISION_DRAWS:-}\n", ""),
+    # H-1 (#187) — an exercise window is no longer believed on its word: refused when too
+    # long, declared for later or named like a RulePoller run; a VM only if enrolled; the
+    # run_id shortcut on a VM the window names; purged a week on; an exercise card kept in
+    # the list to judge; on H0, a campaign checked against its shape, its runs kept only with
+    # a known window naming an enrolled VM. M200–M212 are D-1's, M191–M193 M-1's.
+    ("M220", "a window longer than MAX_DURATION_S is believed (H-1)", XW,
+     "    if not 0 < lasts <= MAX_DURATION_S:\n", "    if not 0 < lasts:\n"),
+    ("M221", "a window that starts long after it was declared is believed (H-1)", XW,
+     "    if refs and start > min(refs) + timedelta(seconds=FUTURE_SKEW_S):\n", "    if False:\n"),
+    ("M222", "a window marks a VM that is not enrolled — the real load passed off as an "
+     "exercise (H-1)", XW,
+     "    return _targets(window, resource_id) and live(window, when) and enrolled(resource_id)\n",
+     "    return _targets(window, resource_id) and live(window, when)\n"),
+    ("M223", "the run_id shortcut marks a VM its window does not name (H-1)", XW,
+     '            w.get("run_id") == run_id and _targets(w, resource_id) for w in ws) \\\n',
+     '            w.get("run_id") == run_id for w in ws) \\\n'),
+    ("M224", "an exercise card is hidden from the list to judge (H-1)", "glorfindel/escalations.py",
+     '        if not is_decision(e) or e.get("verdict") in VERDICTS:\n',
+     '        if not is_decision(e) or e.get("verdict") in VERDICTS or e.get("source") == "exercise":\n'),
+    ("M225", "a window past its last moment by a week is never purged (H-1)", XW,
+     "        if last is not None and last < now - timedelta(seconds=PURGE_AFTER_S):\n",
+     "        if False:\n"),
+    ("M226", "a window may take the RulePoller's run name: a detection becomes an exercise by "
+     "its run_id (H-1)", XW,
+     "    if rid.lower().startswith(_WATCH_RUN_PREFIX):\n", "    if False:\n"),
+    ("M227", "without an enrollment check, every VM is enrolled (H-1)", XW,
+     "    if check is None or not resource_id:\n        return False\n",
+     "    if check is None or not resource_id:\n        return True\n"),
+    ("M228", "a tag read that fails counts as enrolled (H-1)", "eregion_core/inscription.py",
+     '            ok, ttl, why = False, self.FAIL_TTL_S, f"enrollment unreadable: {e}"\n',
+     '            ok, ttl, why = True, self.FAIL_TTL_S, f"enrollment unreadable: {e}"\n'),
+    ("M229", "a window written today for tomorrow is believed tomorrow (H-1)", XW,
+     "    refs = [t for t in (now, declared_at) if t is not None]\n",
+     "    refs = [t for t in (now,) if t is not None]\n"),
+    ("M230", "a purged window is deleted: the channel brings it back at every pull (H-1)", XW,
+     '        _write(path, {"run_id": window.get("run_id"), "purged_at": _now().isoformat()})\n'
+     "        os.utime(path, (st.st_atime, st.st_mtime))\n",
+     "        path.unlink()\n"),
+    ("M231", "H0 writes the report of a manifest of the wrong shape (H-1)", HREP,
+     "        if refused:\n", "        if False:\n"),
+    ("M232", "a channel run without a known window stays in the facts (H-1)", CREP,
+     "    if not window:\n        return f\"run {rid} refusé : fenêtre d'exercice inconnue\"\n", ""),
+    ("M233", "a channel run on a VM not enrolled stays in the facts (H-1)", CREP,
+     "    if not is_enrolled(vm):\n        return f\"run {rid} refusé : sa VM n'est pas inscrite\"\n", ""),
+    ("M234", "a channel run on a VM its window does not name stays in the facts (H-1)", CREP,
+     '    if not vm or vm.lower() not in (window.get("targets") or []):\n', "    if False:\n"),
+    ("M235", "the report does not say which facts came through the channel (H-1)", CREP,
+     '    if report.channel:\n        lines += ["", CHANNEL_NOTE]\n', ""),
+    ("M236", "a channel scenario of the wrong shape stays in the facts (H-1)", CREP,
+     "    why = scenario_refusal(scenario)\n", '    why = ""\n'),
+    ("M237", "a channel run whose report is another run's stays in the facts (H-1)", CREP,
+     "    report_why = run_report_refusal(\n", "    report_why = \"\" and run_report_refusal(\n"),
+    ("M238", "a window longer than MAX_DURATION_S bounds a run's decisions (H-1)", CREP,
+     "    until = None if window_refusal(window) else last_moment(window)\n",
+     "    until = last_moment(window)\n"),
 ]
 
 # Mutants measured by other tests than the invariants (their lot's own).
@@ -801,6 +859,7 @@ TESTS["M189"] = "tests/unit/test_makefile_bench.py"
 TESTS["M190"] = "tests/unit/test_campaign_report.py"
 TESTS.update({mid: "tests/unit/test_orodruin_kill.py" for mid in ("M191", "M192", "M193")})
 TESTS.update({f"M{n}": "tests/unit/test_decision_stability.py" for n in range(200, 213)})
+TESTS.update({f"M{n}": "tests/unit/test_exercise_guard.py" for n in range(220, 239)})
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

@@ -113,6 +113,10 @@ glorfindel/
                           /api/autonomy/{vm} (set_asset_mode) + /api/config/autonomy/default (set_default_mode)
                           /api/discovered — assets découverts (lecture fraîche JSON à chaque appel)
                           /api/jobs/<vm> — état du job snapshot/restore en cours (lit active_jobs/<vm>.json)
+                          /atelier + /api/atelier/{catalog,exercises,campaigns[/<id>],channel,
+                          channel/detections/<run_id>} — la console de l'atelier, GET seulement
+  static/atelier.html   → Atelier : fenêtres d'exercice et ce que Glorfindel a fait dans chacune,
+                          campagnes (faits + report.md), canaux (fenêtres, canal retour), catalogue
   static/index.html     → War Room web UI — cards VM expandables (compact + étendu), feed live
                           bandeau INFRASTRUCTURE (posture) : 2 axes orthogonaux — régime credentials
                           (👁 OBSERVE-ONLY ↔ ⚡ ACTIVE) + autonomy (⚡ non-disruptive / 👁 human-only).

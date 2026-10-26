@@ -879,9 +879,10 @@ MUTANTS = [
     ("M274", "a difference no cited fact holds stays (D-2)", "analysis/campaign_report.py",
      "(stray := _stray_numbers(c, cited)):", "(stray := []):"),
     ("M275", "a trend's numbers are not checked against its facts (D-2)", "analysis/campaign_report.py",
-     '        elif c.kind in ("trend", "change") and (stray', '        elif c.kind in ("change",) and (stray'),
+     '        elif (c.kind in ("trend", "change") or changed) and (stray',
+     '        elif (c.kind in ("change",) or changed) and (stray'),
     ("M276", "a technique, a run id or a VM name is read as a number (D-2)", "analysis/campaign_report.py",
-     '    text = _NAMES.sub(" ", text)\n', ""),
+     '    text = _NAMES.sub(" ", _without_ids(c))\n', "    text = _without_ids(c)\n"),
     ("M277", "a change claim's value names an action the cited facts do not hold (D-2)",
      "analysis/campaign_report.py",
      "              and c.value not in set().union(*(x.words() for x in changed))):",
@@ -891,6 +892,44 @@ MUTANTS = [
      "        if False:\n"),
     ("M279", "a campaign still running is put into the index (D-2)", "analysis/campaign_index.py",
      "    if info.state not in ENDED:\n", "    if False:\n"),
+    # D-2, after its review: an observation citing a change fact has its numbers checked; an
+    # unknown decision is never said acted through a change fact; a true trend is never
+    # barred (a difference of two cited runs, a date in words, a year, an ordinal, a count);
+    # a change names its facts' actions and detections, the way it went; a run without its id
+    # is on its side.
+    ("M510", "an observation citing a change fact has its numbers unchecked (D-2)", "analysis/campaign_report.py",
+     '        elif (c.kind in ("trend", "change") or changed) and (stray',
+     '        elif c.kind in ("trend", "change") and (stray'),
+    ("M511", "a change fact lets an unknown decision be said acted, whatever its sides (D-2)",
+     "analysis/campaign_report.py",
+     "            elif _ACTED.search(told) and not all(\n"
+     "                    isinstance(x, ChangeFact) and x.known_beside_unknown() for x in unknown):\n",
+     "            elif _ACTED.search(told) and not changed:\n"),
+    ("M512", "a trend may not write the difference of two cited runs (D-2)", "analysis/campaign_report.py",
+     "    allowed += _run_differences(runs)\n", ""),
+    ("M513", "a date in words, a year or an ordinal is read as a number (D-2)", "analysis/campaign_report.py",
+     (r'''    rf"|\b\d{{1,2}}(?:er)?\s+(?:{_MONTHS})\b"''' + "\n",
+      r'''    rf"|\b(?:19|20)\d{{2}}\b(?![.,]\d)(?!\s*{_UNIT})"''' + "\n",
+      r'''    r"|\b\d+(?:ᵉ|e|er|ère|re|ème|eme)\b"''' + "\n"),
+     ("", "", "")),
+    ("M514", "a count of what a claim cites is read as a number a fact must hold (D-2)",
+     "analysis/campaign_report.py",
+     "    most = len(runs) + 2 * (len(cited) - len(runs))\n", "    most = 0\n"),
+    ("M515", "a count above the runs a claim cites stays (D-2)", "analysis/campaign_report.py",
+     "            if not (count and 1 <= v <= most)\n", "            if not (count and 1 <= v)\n"),
+    ("M516", "a change claim names an action or a detection its facts do not hold (D-2)",
+     "analysis/campaign_report.py",
+     '        elif c.kind == "change" and (alien := _alien_word(c, cited)):\n'
+     '            c.rejected = f"{alien!r} is not in the cited change facts"\n', ""),
+    ("M517", "a change from one action or detection to another no fact holds stays (D-2)",
+     "analysis/campaign_report.py",
+     "        if a != b and (a, b) not in held:\n", "        if False:\n"),
+    ("M518", "a change said the wrong way round (« de 106,9 s à 91,9 s ») stays (D-2)",
+     "analysis/campaign_report.py",
+     "            if near(x, after) and near(y, before) and not (near(x, before) and near(y, after)):\n",
+     "            if False:\n"),
+    ("M519", "a run without its id is said only in the previous campaign (D-2)", "analysis/campaign_changes.py",
+     "        if self.played_before and self.played_after:\n", "        if self.before_run and self.after_run:\n"),
 ]
 
 # Mutants measured by other tests than the invariants (their lot's own).
@@ -948,6 +987,7 @@ TESTS.update({f"M{n}": "tests/unit/test_exercise_guard.py" for n in range(220, 2
 TESTS.update({f"M{n}": "tests/unit/test_run_channel.py" for n in range(240, 246)})
 TESTS.update({mid: "tests/unit/test_gothmog.py" for mid in ("M241", "M246")})
 TESTS.update({f"M{n}": "tests/unit/test_campaign_changes.py" for n in range(260, 280)})  # D-2
+TESTS.update({f"M{n}": "tests/unit/test_campaign_changes.py" for n in range(510, 520)})  # D-2, review
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

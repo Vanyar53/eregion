@@ -27,9 +27,22 @@ FRACTION_TOLERANCE = 0.005
 PERCENT_TOLERANCE = 0.5
 
 
+# The actions a decision may name (glorfindel/actions.py AUTONOMOUS_ACTIONS and
+# HUMAN_APPROVAL_REQUIRED, written again here: the report also runs where Glorfindel's
+# package is not, the Annatar image — tests/unit/test_campaign_changes.py keeps both the
+# same), and the detections a run may have. A claim citing a change fact names only those of
+# its cited facts (analysis/campaign_report.py ``verify``).
+ACTIONS = ("isolate_vm", "release_isolation", "snapshot", "block_suspicious_ip",
+           "delete_resource", "modify_network_rule", "escalate_permissions", "wipe_storage",
+           "restore_from_backup")
+DETECTIONS = ("detected", "missed", "unknown")
+
+
 def run_key(fact) -> tuple[str, str] | None:
     """The key a run is compared by: its technique and its target VM (lower case) — an
-    executed run only (a skipped or failed scenario played nothing), with both known."""
+    executed run only (a skipped or failed scenario played nothing), with both known. A run
+    without a run id has a key too: it was played (``ChangeFact.side`` reads the run, not its
+    id)."""
     if getattr(fact, "status", "") != "executed":
         return None
     ttp, vm = getattr(fact, "ttp", "") or "", (getattr(fact, "target", "") or "").lower()
@@ -44,8 +57,10 @@ def keys(facts) -> set[tuple[str, str]]:
 @dataclass
 class ChangeFact:
     """One key (a technique on a VM, its n-th run) before — in the previous campaign — and
-    after — in this one. A side without the key has no run (``before_run`` or ``after_run``
-    empty): the key is on the other side only."""
+    after — in this one. A side without the key has no run (``played_before`` or
+    ``played_after`` false): the key is on the other side only. A run played without a run id
+    is still played: its side is told by the run, never by its id (``before_run`` or
+    ``after_run`` empty)."""
     fact_id: str                       # what a claim cites: « chg-1 »
     ttp: str
     vm: str                            # the target VM's resource id, lower case
@@ -65,13 +80,15 @@ class ChangeFact:
     escalated_after: bool | None = None
     unknown_before: str = ""           # a decision sought, not found: why (an unknown, never « none »)
     unknown_after: str = ""
+    played_before: bool = False        # a run of the key in the previous campaign
+    played_after: bool = False         # one in this campaign
 
     @property
     def side(self) -> str:
         """``both``, or the only side the key is on: ``before`` or ``after``."""
-        if self.before_run and self.after_run:
+        if self.played_before and self.played_after:
             return "both"
-        return "before" if self.before_run else "after"
+        return "before" if self.played_before else "after"
 
     @property
     def latency_delta(self) -> float | None:
@@ -102,9 +119,42 @@ class ChangeFact:
         return out
 
     def words(self) -> set[str]:
-        """The actions and detections a claim citing this fact may name in its ``value``."""
-        return {w for w in (self.decision_before, self.decision_after,
-                            self.detection_before, self.detection_after) if w}
+        """The actions and detections a claim citing this fact may name, in its ``value`` or
+        its sentence — « unknown » too, when a side's decision is."""
+        out = {w for w in (self.decision_before, self.decision_after,
+                           self.detection_before, self.detection_after) if w}
+        return out | ({"unknown"} if self.decision_unknown else set())
+
+    def known_beside_unknown(self) -> bool:
+        """One side's decision is unknown, the other's known: an action a claim says
+        Glorfindel took may be the known side's (analysis/campaign_report.py ``verify``, the
+        rule of #167). Unknown on both sides, or beside a side with no action: not so."""
+        return any(unknown and not other_unknown and bool(other)
+                   for unknown, other_unknown, other in (
+                       (self.unknown_before, self.unknown_after, self.decision_after),
+                       (self.unknown_after, self.unknown_before, self.decision_before)))
+
+    def transitions(self) -> set[tuple[str, str]]:
+        """What a claim may say changed, before → after: the action, the detection, the
+        latency and the confidence (as a fraction and in percent), each with both sides
+        known."""
+        out: set = set()
+        if self.decision_before and self.decision_after and not self.decision_unknown:
+            out.add((self.decision_before, self.decision_after))
+        if self.detection_before and self.detection_after:
+            out.add((self.detection_before, self.detection_after))
+        return out
+
+    def ordered_numbers(self) -> list[tuple[float, float, float]]:
+        """The (before, after, tolerance) of the latency and the confidence (as a fraction
+        and in percent), each with both sides known: what « de X à Y » may say."""
+        out = []
+        if self.latency_before is not None and self.latency_after is not None:
+            out.append((self.latency_before, self.latency_after, SECONDS_TOLERANCE))
+        if self.confidence_before is not None and self.confidence_after is not None:
+            out += [(self.confidence_before, self.confidence_after, FRACTION_TOLERANCE),
+                    (self.confidence_before * 100, self.confidence_after * 100, PERCENT_TOLERANCE)]
+        return out
 
     def row(self) -> dict:
         """What the model sees of the fact (data)."""
@@ -164,7 +214,8 @@ def pair(before, after, previous: str) -> list[ChangeFact]:
             decision_before=x.decision if x else "", decision_after=y.decision if y else "",
             confidence_before=x.confidence if x else None, confidence_after=y.confidence if y else None,
             escalated_before=x.escalated if x else None, escalated_after=y.escalated if y else None,
-            unknown_before=x.decision_unknown if x else "", unknown_after=y.decision_unknown if y else ""))
+            unknown_before=x.decision_unknown if x else "", unknown_after=y.decision_unknown if y else "",
+            played_before=x is not None, played_after=y is not None))
     return out
 
 
@@ -234,7 +285,8 @@ def render_section(comparison: Comparison) -> list[str]:
         only = [c for c in comparison.changes if c.side == side]
         if only:
             lines += ["", f"{label} ({len(only)}) : " + " ; ".join(
-                f"`{c.fact_id}` {c.ttp} sur {_vm_name(c.vm)} (run `{c.before_run or c.after_run}`)"
+                f"`{c.fact_id}` {c.ttp} sur {_vm_name(c.vm)} ("
+                + (f"run `{rid}`" if (rid := c.before_run or c.after_run) else "run sans identifiant") + ")"
                 for c in only) + "."]
     if any(c.decision_unknown for c in both):
         lines += ["", "*Décision « inconnue » : non rattachée au run, pour la raison dite — ce "

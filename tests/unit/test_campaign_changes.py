@@ -271,8 +271,8 @@ def test_the_report_renders_the_section_from_the_facts(tmp_path, index):
 
 # ── The check: a difference comes from a fact ────────────────────────────────────────
 
-CLAIMS = [
-    # kept: each number is one of chg-2's
+KEPT = [
+    # each number is one of chg-2's
     {"kind": "change", "text": "Sur T1110.001, l'action passe de block_suspicious_ip à isolate_vm, "
                                "à 78 % au lieu de 80 %.", "runs": ["chg-2"]},
     {"kind": "change", "text": "La force brute est vue 15 s plus tard (106,9 s contre 91,9 s).",
@@ -280,39 +280,99 @@ CLAIMS = [
     {"kind": "change", "text": "La confiance baisse de 0,02.", "runs": ["chg-2"]},
     {"kind": "change", "text": "T1041 n'a pas été rejouée sur vm-bench-01.", "runs": ["chg-4"]},
     {"kind": "trend", "text": "La latence de T1110.001 passe de 91,9 s à 106,9 s.", "runs": ["R2", "P1"]},
-    # removed
-    {"kind": "change", "text": "La force brute est vue 40 s plus tard.", "runs": ["chg-2"]},
-    {"kind": "change", "text": "La force brute est vue 15 s plus tard.", "runs": ["R2", "P1"]},
-    {"kind": "change", "text": "Sa latence passe de 91,9 s à 106,9 s.", "runs": ["R2", "P1"]},
-    {"kind": "change", "text": "La confiance baisse de 12 points.", "runs": ["chg-2"]},
-    {"kind": "change", "text": "L'action devient snapshot.", "runs": ["chg-2"], "value": "snapshot"},
-    {"kind": "trend", "text": "La latence de T1110.001 passe de 91,9 s à 150 s.", "runs": ["R2", "P1"]},
-    {"kind": "detected", "text": "Détectée les deux fois.", "runs": ["chg-2"]},
-    {"kind": "change", "text": "Un fait inventé.", "runs": ["chg-9"]},
+    # review of D-2, point 3: true trends and changes, never barred (M512–M514)
+    {"kind": "trend", "text": "La latence de T1110.001 augmente de 15 s.", "runs": ["R2", "P1"]},
+    {"kind": "trend", "text": "La confiance sur T1110.001 baisse de 2 points.", "runs": ["R2", "P1"]},
+    {"kind": "trend", "text": "Bloquée le 21 octobre, la force brute est isolée le 23 octobre.",
+     "runs": ["R2", "P1"]},
+    # (on T1041, no fact holds a 2: the count alone lets it through)
+    {"kind": "trend", "text": "T1041 est détectée dans les 2 campagnes.", "runs": ["R3", "P2"]},
+    {"kind": "trend", "text": "Au 2ᵉ passage comme au 1er, T1110.001 est détectée.", "runs": ["R2", "P1"]},
+    {"kind": "change", "text": "En 2026, T1110.001 passe du blocage à l'isolement.", "runs": ["chg-2"]},
+    {"kind": "observation", "text": "Sur la force brute, la confiance baisse de 2 points.", "runs": ["chg-2"]},
 ]
+REMOVED = [
+    ({"kind": "change", "text": "La force brute est vue 40 s plus tard.", "runs": ["chg-2"]},
+     "a number is not in the cited facts (40)"),
+    ({"kind": "change", "text": "La force brute est vue 15 s plus tard.", "runs": ["R2", "P1"]},
+     "a change claim cites no change fact"),
+    ({"kind": "change", "text": "Sa latence passe de 91,9 s à 106,9 s.", "runs": ["R2", "P1"]},
+     "a change claim cites no change fact"),
+    ({"kind": "change", "text": "La confiance baisse de 12 points.", "runs": ["chg-2"]},
+     "a number is not in the cited facts (12)"),
+    ({"kind": "change", "text": "L'action devient un instantané.", "runs": ["chg-2"], "value": "snapshot"},
+     "'snapshot' is not in the cited change facts"),
+    ({"kind": "trend", "text": "La latence de T1110.001 passe de 91,9 s à 150 s.", "runs": ["R2", "P1"]},
+     "a number is not in the cited facts (150)"),
+    ({"kind": "detected", "text": "Détectée les deux fois.", "runs": ["chg-2"]},
+     "a detected claim cites a change fact (only a trend, a change or an observation may)"),
+    ({"kind": "change", "text": "Un fait inventé.", "runs": ["chg-9"]},
+     "cites a run that is not in the facts"),
+    # review of D-2: an observation citing a change fact has its numbers checked (M510)…
+    ({"kind": "observation", "text": "Glorfindel voit la force brute 40 s plus tard.", "runs": ["chg-2"]},
+     "a number is not in the cited facts (40)"),
+    # … a count is at most the runs cited (M515), a difference of runs a true one (M512)…
+    ({"kind": "trend", "text": "T1110.001 est détectée dans les 3 campagnes.", "runs": ["R2", "P1"]},
+     "a number is not in the cited facts (3)"),
+    ({"kind": "trend", "text": "La latence de T1110.001 augmente de 25 s.", "runs": ["R2", "P1"]},
+     "a number is not in the cited facts (25)"),
+    # … and a change names its facts' actions and detections, the right way round (M516–M518)
+    ({"kind": "change", "text": "T1110.001 passe de detected à missed.", "runs": ["chg-2"]},
+     "'missed' is not in the cited change facts"),
+    ({"kind": "change", "text": "Sur T1110.001, Glorfindel passe de l'isolement au blocage.", "runs": ["chg-2"]},
+     "the cited change facts hold no change from isolate_vm to block_suspicious_ip"),
+    ({"kind": "change", "text": "La latence de la force brute passe de 106,9 s à 91,9 s.", "runs": ["chg-2"]},
+     "the change is said the wrong way round (106.9 → 91.9: it went from 91.9 to 106.9)"),
+    ({"kind": "change", "text": "La confiance passe de 78 % à 80 %.", "runs": ["chg-2"]},
+     "the change is said the wrong way round (78 → 80: it went from 80 to 78)"),
+]
+CLAIMS = KEPT + [c for c, _ in REMOVED]
 
 
 def test_a_difference_without_its_fact_is_removed(tmp_path, index):
-    """M273–M277: a change claim cites a change fact, and each number it writes is one of
-    the cited facts' (a latency, a confidence, a difference, in seconds, as a fraction or in
-    percent); a trend too. Technique and run ids, dates, VM names are not numbers."""
+    """M273–M277, M510, M512–M518: a change claim cites a change fact, and each number it
+    writes is one of the cited facts' (a latency, a confidence, a difference, in seconds, as
+    a fraction or in percent); a trend too, and an observation that cites a change fact. A
+    trend may write the difference of two cited runs; a count, at most the runs it cites.
+    Technique and run ids, dates (in figures or in words), years, ordinals and VM names are
+    not numbers. A change names only its facts' actions and detections, and says a change
+    the way it went."""
     _, cdirs = _bench(tmp_path)
     _index_all(cdirs, "C0")
     report = _report(cdirs["C1"], CLAIMS)
     kept = [c.text for c in report.kept]
-    assert kept == [c["text"] for c in CLAIMS[:5]], [(c.text, c.rejected) for c in report.rejected]
-    why = {c.text: c.rejected for c in report.rejected}
-    assert why["La force brute est vue 40 s plus tard."] == "a number is not in the cited facts (40)"
-    assert why["La force brute est vue 15 s plus tard."] == "a change claim cites no change fact"
-    assert why["Sa latence passe de 91,9 s à 106,9 s."] == "a change claim cites no change fact"
-    assert why["La confiance baisse de 12 points."] == "a number is not in the cited facts (12)"
-    assert why["L'action devient snapshot."] == "'snapshot' is not in the cited change facts"
-    assert why["La latence de T1110.001 passe de 91,9 s à 150 s."] == "a number is not in the cited facts (150)"
-    assert why["Détectée les deux fois."].startswith("a detected claim cites a change fact")
-    assert why["Un fait inventé."] == "cites a run that is not in the facts"
+    assert kept == [c["text"] for c in KEPT], [(c.text, c.rejected) for c in report.rejected]
+    assert [(c.text, c.rejected) for c in report.rejected] == [(c["text"], why) for c, why in REMOVED]
     md = cr.render(report)
     assert "- Sur T1110.001, l'action passe de block_suspicious_ip à isolate_vm, à 78 % au lieu de 80 %. — `chg-2`" in md
     assert "~~La force brute est vue 40 s plus tard.~~ — a number is not in the cited facts (40)" in md
+
+
+def _swing(**after):
+    """chg-1: T1110.001 on vm-bench-01, detected, blocked at 0.80 in 91.9 s, then ``after``."""
+    run = dict(detection="detected", latency_s=106.9, decision="isolate_vm", confidence=0.78) | after
+    return cc.pair([cr.RunFact("P1", "C0", 1, "T1110.001", "", "executed", "detected", latency_s=91.9,
+                               decision="block_suspicious_ip", confidence=0.8, target=VM)],
+                   [cr.RunFact("R2", "C1", 1, "T1110.001", "", "executed", target=VM, **run)], "C0")
+
+
+@pytest.mark.parametrize("text, after, why", [
+    ("Détectée puis manquée : de detected à missed.", {"detection": "missed"}, ""),
+    ("De missed à detected.", {"detection": "missed"},
+     "the cited change facts hold no change from missed to detected"),
+    ("block_suspicious_ip → isolate_vm, 0,8 → 0,78.", {}, ""),
+    ("isolate_vm → block_suspicious_ip.", {}, "the cited change facts hold no change from isolate_vm to "
+                                              "block_suspicious_ip"),
+    ("91,9 s → 106,9 s.", {}, ""),
+    ("106,9 s → 91,9 s.", {}, "the change is said the wrong way round (106.9 → 91.9: it went from 91.9 to 106.9)"),
+    ("La latence reste de 91,9 s à 92 s près.", {"latency_s": 92.0}, ""),
+    ("Glorfindel garde snapshot.", {}, "'snapshot' is not in the cited change facts"),
+])
+def test_a_change_is_said_the_way_it_went(text, after, why):
+    """M516–M518: the actions and detections a change claim names are its facts'; « de X à
+    Y » and « X → Y » go the way the fact went."""
+    [claim] = cr.verify([cr.Claim("change", text, ["chg-1"])], [], [], _swing(**after))
+    assert claim.rejected == why
 
 
 @pytest.mark.parametrize("text", [
@@ -341,6 +401,48 @@ def test_a_change_on_an_unknown_decision_says_so():
         cr.Claim("change", "Décision inconnue avant : Glorfindel n'avait pas agi.", ["chg-1"]),
     ], [], [], [c])
     assert [bool(x.rejected) for x in claims] == [True, False, True]
+
+
+def test_a_change_fact_never_lets_an_unknown_decision_be_said_acted():
+    """M511: « a isolé » passes on a change fact only when its other side's decision is
+    known — never on a run cited directly whose decision is unknown, even beside a change
+    fact, nor on a change fact unknown on both sides (#167)."""
+    def run(rid, cid, **kw):
+        return cr.RunFact(rid, cid, 1, "T1110.001", "", "executed", "detected", target=VM, **kw)
+    p1 = run("P1", "C0", decision_unknown=cr.NO_WINDOW)
+    [one] = cc.pair([p1], [run("R1", "C1", decision="isolate_vm", confidence=0.78)], "C0")
+    [two] = cc.pair([p1], [run("R1", "C1", decision_unknown=cr.NONE_IN_WINDOW)], "C0")
+    acted = "Décision inconnue sur un côté ; Glorfindel a isolé la VM."
+    claims = cr.verify([
+        cr.Claim("observation", acted, ["P1"]),
+        cr.Claim("observation", acted, ["P1", "chg-1"]),
+    ], [], [p1], [one])
+    claims += cr.verify([
+        cr.Claim("change", "Décision inconnue des deux côtés, mais Glorfindel a isolé la VM les deux fois.",
+                 ["chg-1"])], [], [], [two])
+    claims += cr.verify([cr.Claim("change", acted, ["chg-1"])], [], [], [one])
+    assert [x.rejected.endswith("the claim says Glorfindel acted") for x in claims] == [True, True, True, False]
+
+
+def test_a_run_without_its_id_is_still_played():
+    """M519: a run played without a run id is on its side — never « only in the previous
+    campaign » when its key was played here too."""
+    def run(rid, cid, seq, ttp):
+        return cr.RunFact(rid, cid, seq, ttp, "", "executed", "detected", target=VM)
+    changes = cc.pair([run("P1", "C0", 1, "T1110.001")],
+                      [run("", "C1", 1, "T1110.001"), run("", "C1", 2, "T1041")], "C0")
+    assert [(c.ttp, c.side, c.before_run, c.after_run) for c in changes] == [
+        ("T1110.001", "both", "P1", ""), ("T1041", "after", "", "")]
+    md = "\n".join(cc.render_section(cc.Comparison("C0", "", changes)))
+    assert "Seulement dans celle-ci (1) : `chg-2` T1041 sur vm-bench-01 (run sans identifiant)." in md
+    assert "Seulement dans la campagne précédente" not in md
+
+
+def test_the_actions_named_are_glorfindels():
+    """The actions a change claim may name are Glorfindel's, written again for the report
+    (the Annatar image has no Glorfindel package)."""
+    from glorfindel.actions import AUTONOMOUS_ACTIONS, HUMAN_APPROVAL_REQUIRED
+    assert set(cc.ACTIONS) == AUTONOMOUS_ACTIONS | HUMAN_APPROVAL_REQUIRED
 
 
 # ── The index of past campaigns ──────────────────────────────────────────────────────

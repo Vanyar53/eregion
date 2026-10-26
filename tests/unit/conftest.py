@@ -107,7 +107,7 @@ def isolated_glorfindel_home(tmp_path, monkeypatch):
     monkeypatch.setattr(IncidentRegistry, "_DEFAULT_PATH", home / "incidents.jsonl")
     monkeypatch.setattr(readiness, "_STATE_FILE", home / "readiness.json")
     try:
-        import glorfindel.api as api
+        import eregion_console.api as api
         monkeypatch.setattr(api, "_RESTORE_TRACKING", home / "restore_in_progress.json")
     except ImportError:  # war-room extra not installed
         pass
@@ -124,6 +124,17 @@ def no_local_glorfindel_config(monkeypatch):
     """
     import glorfindel.config as config
     monkeypatch.setattr(config, "_DEFAULT_PATHS", [])
+
+
+@pytest.fixture(autouse=True)
+def no_console_settings(monkeypatch):
+    """The console's token and chosen sections never come from the developer's shell, and
+    the sections are read afresh in each test (they are cached a few seconds)."""
+    for name in ("EREGION_CONSOLE_TOKEN", "EREGION_CONSOLE_SECTIONS"):
+        monkeypatch.setenv(name, "")      # recorded, so restored even if a CLI test sets it
+        monkeypatch.delenv(name)
+    from eregion_console import sections
+    monkeypatch.setitem(sections._cache, "key", None)
 
 
 @pytest.fixture(autouse=True)

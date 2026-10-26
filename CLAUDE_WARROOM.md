@@ -2,9 +2,11 @@
 
 # Session War Room — UI/UX
 
-Tu es spécialisé sur l'interface web War Room. Lis ce fichier en début de session.
+Tu es spécialisé sur l'interface web d'Eregion — la console (`eregion console`), qui a remplacé la
+War Room et l'atelier le 26/10 ([`docs/design/console.md`](docs/design/console.md), #205). Le nom de
+cette session et de ce fichier reste à changer par General. Lis ce fichier en début de session.
 
-**Docs de ton périmètre** (`CLAUDE.md` n'en garde que l'essentiel) : [`docs/glorfindel.md`](docs/glorfindel.md) (exposition de la War Room, escalades, autonomie, observe-only), [`docs/fichiers-cles.md`](docs/fichiers-cles.md) (`api.py`, `static/index.html`).
+**Docs de ton périmètre** (`CLAUDE.md` n'en garde que l'essentiel) : [`docs/design/console.md`](docs/design/console.md) (décisions, sections, plan), [`docs/glorfindel.md`](docs/glorfindel.md) (exposition de la console, escalades, autonomie, observe-only), [`docs/fichiers-cles.md`](docs/fichiers-cles.md) (`eregion_console/`).
 
 ## Rôle
 
@@ -16,9 +18,10 @@ en 5 secondes et agir en 2 clics.
 ## Périmètre
 
 **Tu travailles sur :**
-- `glorfindel/static/index.html` — la War Room (~3500 lignes), vanilla JS + CSS variables
-- `glorfindel/static/atelier.html` — l'atelier (Annatar, Gothmog), même palette, lecture seule
-- `glorfindel/api.py` — tu peux proposer de nouveaux endpoints si le UI en a besoin
+- `eregion_console/static/` — `console.js` et `console.css` (l'en-tête commun), `overview.html` (`/`),
+  `glorfindel.html` (`/glorfindel`, `/config`, ~3500 lignes), `injector.html` (`/annatar`, `/gothmog`,
+  lecture seule), `exercises.js` ; vanilla JS + CSS variables, sans étape de build
+- `eregion_console/api.py`, `sections.py`, `cli.py` — tu peux proposer de nouveaux endpoints si l'UI en a besoin
 
 **Tu lis mais ne modifies pas :**
 - `glorfindel/tui.py` — TUI Rich (dashboard terminal) — inspiration pour la densité d'info
@@ -26,7 +29,7 @@ en 5 secondes et agir en 2 clics.
 - `glorfindel/incidents.py` — format des incidents
 
 **Tu ne touches pas :**
-- `glorfindel/*.py` sauf `api.py` (et uniquement pour ajouter des endpoints)
+- `glorfindel/*.py` (la ligne de `glorfindel/cli.py` qui lance la console exceptée, avec l'accord de Glorfindel)
 
 ## API disponible
 
@@ -42,13 +45,16 @@ GET  /api/actions/<vm>        → historique actions sur une VM (limit=5 par dé
 GET  /api/discovered          → assets découverts (AssetRegistry)
 GET  /api/pending/rules       → règles proposées en attente d'approbation
 
-GET  /atelier                         → page de l'atelier (static/atelier.html)
-GET  /api/atelier/catalog             → techniques + pannes du catalogue
-GET  /api/atelier/exercises?since=7d  → fenêtres d'exercice + cycles, cartes et rapport de run de chacune
-GET  /api/atelier/campaigns[/<id>]    → manifestes ; en détail, faits du rapport de campagne + report.md
-GET  /api/atelier/channel             → battement local, fenêtres vivantes, battement publié (canal retour)
-GET  /api/atelier/channel/detections/<run_id> → détections livrées au run
-     (atelier : GET seulement — un run part d'Orodruin armé, jamais d'une route de la War Room)
+GET  /  /glorfindel  /annatar  /gothmog  /config   → les pages (overview, glorfindel, injector)
+GET  /runs/<run_id>                   → 302 vers la page de son injecteur
+GET  /atelier, /api/atelier/*         → 308 vers / et /api/* (jusqu'à la 1.0)
+GET  /api/sections                    → Glorfindel, chaque injecteur actif ou grisé et pourquoi, read_only
+GET  /api/catalog[?kind=technique|fault]   → techniques + pannes du catalogue
+GET  /api/exercises?since=7d[&injector=…]  → fenêtres d'exercice + cycles, cartes et rapport de run de chacune
+GET  /api/campaigns[/<id>]            → manifestes ; en détail, faits du rapport de campagne + report.md
+GET  /api/channel                     → battement local, fenêtres vivantes, battement publié (canal retour)
+GET  /api/channel/detections/<run_id> → détections livrées au run
+     (injecteurs : GET seulement — un run part d'Orodruin armé, jamais d'une route de la console)
 
 POST /api/action/release/<vm>         → lever isolation NSG
 POST /api/action/revert/<vm>          → reset complet (release + unblock toutes IPs)
@@ -69,13 +75,14 @@ Feed WebSocket — événements possibles :
 ## Structure UI actuelle
 
 ```
-Header       → logo GLORFINDEL · subtitle · live dot · watch status
-Panneau VM   → cards par resource_id : état (ok/isolated/blocked/both), boutons action
-               ↩️ Release (si isolated) | ↩️ Unblock (si blocked) | ⟳ Reset (les deux) | 🔄 Restore
-Feed live    → stream WebSocket, scroll automatique, badge par kind
-Escalations  → liste pending, bouton Ack, suggested_steps LLM
-Monitoring ⚙ → backends LAW, assets découverts, règles cliquables (modal query KQL)
-Config ⚙     → Azure credentials + LLM (endpoint, modèle)
+En-tête (console.js) → EREGION · onglets Overview, Glorfindel (cartes à juger), Annatar, Gothmog
+                       (grisés sans run sur l'hôte), Config · battement de la watch · canal retour · UTC
+/            Overview → une ligne par section : à juger, part jugée fausse, dernier run, campagne, canaux
+/glorfindel  → TO JUDGE (seul endroit du verdict), fil live, carte de l'infra (DETECT/PROTECT/RECOVER,
+               cartes VM : état, Approve & execute, Ack, Cmd, « to judge ▸ », Release/Unblock/Reset/Restore)
+/annatar     → fenêtres d'exercice, campagnes, techniques ; grisé : ce qu'Annatar ajouterait
+/gothmog     → fenêtres de panne avec les sondes avant/après, pannes du catalogue ; grisé : idem
+/config      → Azure, LLM, autonomie, sections
 ```
 
 ## Règles de design

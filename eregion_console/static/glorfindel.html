@@ -3,7 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Glorfindel — War Room</title>
+<title>Eregion — Glorfindel</title>
+<link rel="stylesheet" href="/static/console.css">
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -35,25 +36,11 @@
     overflow: hidden;
   }
 
-  /* ── Header ── */
-  header {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    padding: 10px 20px;
-    background: var(--bg1);
-    border-bottom: 1px solid var(--border);
-    flex-shrink: 0;
-  }
-  .logo { color: var(--blue); font-weight: 700; font-size: 15px; letter-spacing: 2px; }
-  .subtitle { color: var(--dim); font-size: 12px; }
+  /* ── Header: the console's (console.css, console.js); the live feed's dot sits in it ── */
   #live-dot { color: var(--green); font-size: 10px; animation: pulse 2s infinite; }
   #live-dot.disconnected { color: var(--red); animation: none; }
   @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
 
-  .spacer { flex: 1; }
-
-  #clock { color: var(--dim); font-size: 11px; }
 
   select, button {
     background: var(--bg2);
@@ -77,11 +64,6 @@
   button.action.ok { color: var(--green); }
   button.action.ok:hover { background: color-mix(in srgb, var(--green) 10%, var(--bg2)); }
   button:disabled { opacity: .4; cursor: not-allowed; }
-  .atelier-link {
-    font-size: 11px; padding: 3px 8px; border-radius: 6px; text-decoration: none;
-    background: var(--bg2); border: 1px solid var(--border); color: var(--purple);
-  }
-  .atelier-link:hover { border-color: var(--purple); }
 
   /* ── Main layout ── */
   main {
@@ -166,7 +148,10 @@
     background: var(--bg2); border: 1px solid var(--border); color: var(--text);
   }
   .judge-actions button { font-size: 9px; padding: 2px 7px; }
-  #obs-counter { font-size: 10px; color: var(--dim); white-space: nowrap; cursor: default; }
+  .judge-why a { color: var(--blue); text-decoration: none; }
+  .judge-why a:hover { text-decoration: underline; }
+  .judge-item.focus { background: color-mix(in srgb, var(--blue) 10%, transparent); outline: 1px solid var(--blue); }
+  a.judge-link { font-size: 9px; color: var(--blue); cursor: pointer; margin-left: auto; white-space: nowrap; }
   .chip-exercise {
     font-size: 8px; font-weight: 700; letter-spacing: .5px; padding: 1px 5px; border-radius: 3px;
     color: var(--purple); border: 1px solid color-mix(in srgb, var(--purple) 40%, transparent);
@@ -309,8 +294,6 @@
     white-space: pre; overflow-x: auto; margin-bottom: 16px; line-height: 1.5;
     max-height: 220px; overflow-y: auto;
   }
-
-  button#config-toggle.active { border-color: var(--blue); color: var(--blue); }
 
   /* ── Topology Graph ── */
   .topo-graph {
@@ -562,29 +545,13 @@
 </head>
 <body>
 
-<header>
-  <span class="logo">GLORFINDEL</span>
-  <span class="subtitle">War Room</span>
-  <span id="watch-dot" style="font-size:10px;color:var(--dim)">●</span>
-  <span id="watch-label" style="color:var(--dim);font-size:11px">watch…</span>
-  <span style="color:var(--border);margin:0 4px">│</span>
-  <span id="live-dot">●</span>
-  <span id="live-label" style="color:var(--dim);font-size:11px">connecting…</span>
-  <span style="color:var(--border);margin:0 4px">│</span>
-  <span id="obs-counter"></span>
-
-  <div class="spacer"></div>
-
-  <a href="/atelier" class="atelier-link" title="Atelier — what Annatar and Gothmog ran, and what Glorfindel made of it (read only)">⚒ Atelier</a>
-  <button id="config-toggle" class="action" onclick="toggleConfig()" title="Azure configuration">⚙ Config</button>
-  <span id="clock" style="min-width:70px;text-align:right"></span>
-</header>
+<header id="console-header"></header>
 
 <!-- Shown in observe-only (read-only credentials): the mode is locked by the deployment,
      not by a setting of this page — said where the operator looks first (16/10). -->
 <div id="observe-banner">
   <b>Observation</b> — Glorfindel detects and recommends; <b>nothing is executed</b>.
-  The autonomy mode is locked to <b>human-only</b> because this War Room runs with
+  The autonomy mode is locked to <b>human-only</b> because this console runs with
   <b>read-only credentials</b> (<code>GLORFINDEL_READ_ONLY=1</code> and read-only Azure
   rights, set when it was deployed — not a setting of this page).
   Give each card a verdict in <b>TO JUDGE</b>.
@@ -639,7 +606,19 @@
   </div>
 </div>
 
+<script src="/static/console.js"></script>
 <script>
+// ── The console's header (console.js) ─────────────────────────────────────────
+// This page is Glorfindel's section (/glorfindel), or its configuration (/config). The live
+// feed's dot sits in the header.
+const _IS_CONFIG = location.pathname.replace(/\/+$/, '') === '/config';
+Console.init(_IS_CONFIG ? 'config' : 'glorfindel', {
+  slot: '<span id="live-dot">●</span> <span id="live-label" style="color:var(--dim);font-size:11px">connecting…</span>',
+});
+if (_IS_CONFIG) document.title = 'Eregion — Config';
+// ?card=<id> (a link from Annatar's or Gothmog's page): that card, highlighted in TO JUDGE.
+let _focusCard = new URLSearchParams(location.search).get('card');
+
 // ── Label maps (mirrors escalations.py) ────────────────────────────────────────
 
 const ACTION_LABELS = {
@@ -1008,13 +987,6 @@ let _nsgStale      = null;   // idem for /api/nsgs
 let _actionsCache = {};   // vm_name → {actions, fetchedAt}
 let _autoScroll = true;
 
-// ── Clock ──────────────────────────────────────────────────────────────────────
-
-setInterval(() => {
-  document.getElementById('clock').textContent =
-    new Date().toISOString().slice(11, 19) + ' UTC';
-}, 1000);
-
 // ── Infrastructure cards ───────────────────────────────────────────────────────
 
 // A vault item is named 'VM;iaasvmcontainerv2;<rg>;<vm>': the VM is its last segment.
@@ -1098,12 +1070,11 @@ function _renderEscGroup(group) {
   const isDecision = !isRule && !['posture_gap', 'orphan_rule', 'proposed_rule', 'readiness_hold',
     'ttl_exceeded', 'detection_blocked'].includes(e.escalation_type)
     && !String(e.signal_id || '').startsWith('reassert-');
+  // The verdict is given in one place, TO JUDGE (decision of 26/10): the card leads there.
   const verdictBtns = isDecision
-    ? `<span style="display:inline-flex;gap:4px;align-items:center;margin-left:auto">
-         ${e.verdict ? `<span style="font-size:9px;color:var(--dim)">judged: ${_attr(e.verdict)}</span>` : ''}
-         <button class="action${e.verdict === 'right' ? ' ok' : ''}" title="The recommendation was right" onclick="event.stopPropagation();doVerdict('${e.id}','right')" style="font-size:9px;padding:2px 7px">✓ Right</button>
-         <button class="action" title="The recommendation was wrong (a false positive, or the wrong action)" onclick="event.stopPropagation();doVerdict('${e.id}','wrong')" style="font-size:9px;padding:2px 7px;color:var(--red)${e.verdict === 'wrong' ? ';font-weight:700' : ''}">✗ Wrong</button>
-       </span>`
+    ? (e.verdict
+      ? `<span style="font-size:9px;color:var(--dim);margin-left:auto">judged: ${_attr(e.verdict)}</span>`
+      : `<a class="judge-link" onclick="event.stopPropagation();focusJudge('${e.id}')" title="Give it a verdict in TO JUDGE">to judge ▸</a>`)
     : '';
   // mode_hold/write_blocked/action_failed: type already encoded in title, keep ctx lean
   const ctxParts = (isModeHold || isWriteBlocked || isActionFailed)
@@ -2516,52 +2487,31 @@ async function doRestore(vmName) {
   }
 }
 
-async function doVerdict(escId, verdict) {
-  try {
-    const r = await fetch(`/api/escalations/${escId}/verdict`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ verdict }),
-    });
-    const d = await r.json();
-    if (d.error) { toast('✗ ' + d.error); return; }
-    await fetch(`/api/action/ack/${escId}`, { method: 'POST' });  // one click, like TO JUDGE
-    toast(verdict === 'right' ? '✓ Marked right' : '✗ Marked wrong');
-    refreshState();
-    refreshObservation();
-  } catch (e) {
-    toast('✗ ' + e.message);
-  }
+// A card's verdict is given in TO JUDGE: highlight it there. A card older than TO JUDGE's
+// 7 days is judged from the CLI.
+function focusJudge(escId) {
+  const el = document.getElementById('judge-' + escId);
+  if (!el) { toast(`Not in TO JUDGE (older than 7 days?) — glorfindel verdict ${escId} right|wrong|unsure`); return; }
+  document.querySelectorAll('.judge-item.focus').forEach(x => x.classList.remove('focus'));
+  el.classList.add('focus');
+  el.scrollIntoView({ block: 'nearest' });
 }
 
 // ── Observation: what to judge, and the week's count ───────────────────────────
 // The operator's daily task during an observation (docs/observation.md): give each
 // decision card a verdict. The list holds the last 7 days' cards without one — pending
-// or acknowledged — exercises left out; the header counts what `glorfindel report` counts.
+// or acknowledged —, exercises marked (H-1); the tab's badge counts them, the overview
+// shows what `glorfindel report` counts.
 
 let _toJudge = [];
 
 async function refreshObservation() {
   try {
-    const [q, r] = await Promise.all([
-      fetch('/api/to-judge?since=7d').then(x => x.json()),
-      fetch('/api/report?since=7d').then(x => x.json()),
-    ]);
-    if (q && Array.isArray(q.cards)) { _toJudge = q.cards; renderToJudge(); }
-    if (r && typeof r.cards === 'number') renderObsCounter(r);
+    const q = await fetch('/api/to-judge?since=7d').then(x => x.json());
+    if (q && Array.isArray(q.cards)) {
+      _toJudge = q.cards; renderToJudge(); Console.setJudgeCount(q.cards.length);
+    }
   } catch (e) {}
-}
-
-function renderObsCounter(r) {
-  const el = document.getElementById('obs-counter');
-  if (!el) return;
-  const d = r.disruptive || {};
-  const rate = d.false_rate == null ? '—' : Math.round(d.false_rate * 100) + '%';
-  el.textContent = `7 days · ${r.cards} card${r.cards === 1 ? '' : 's'} · ${r.judged} judged · `
-    + `isolate/block wrong ${rate}`
-    + (r.blocks && r.blocks.cards ? ` · blocks ${r.blocks.cards} for ${r.blocks.distinct_ips} IP${r.blocks.distinct_ips > 1 ? 's' : ''}` : '')
-    + (r.exercises ? ` · ${r.exercises} exercise${r.exercises > 1 ? 's' : ''} left out` : '');
-  el.title = 'Observation (glorfindel report --since 7d): decision cards, verdicts given, and the '
-    + 'share of isolate/block recommendations judged wrong. Exercise cards are not counted.';
 }
 
 function renderToJudge() {
@@ -2585,14 +2535,14 @@ function renderToJudge() {
     const vm = (c.resource_id || '').split('/').pop();
     const times = c.occurrences > 1 ? ` · ${c.occurrences}×` : '';
     const id = _attr(c.id);
-    return `<div class="judge-item${disruptive ? ' disruptive' : ''}">
+    return `<div class="judge-item${disruptive ? ' disruptive' : ''}${c.id === _focusCard ? ' focus' : ''}" id="judge-${id}">
       <div class="judge-head">
         <span class="judge-what" style="color:${disruptive ? 'var(--red)' : 'var(--orange)'}">${_attr(what)}</span>
         <span style="flex:1"></span>
         <span class="judge-ts">${c.first_seen ? _relTime(c.first_seen) : ''}${times}</span>
       </div>
       <div class="judge-why" style="-webkit-line-clamp:1;color:var(--text)" title="${_attr(c.resource_id || '')}">${_attr(vm)}${c.rule_name ? ` · rule ${_attr(c.rule_name)}` : ''}${c.ttp ? ` · ${_attr(c.ttp)}` : ''}</div>
-      ${c.exercise ? `<div class="judge-why" style="-webkit-line-clamp:1;color:var(--blue)" title="An injector's exercise window covered this VM at that time. A window is the injectors' claim: check the run before trusting it.">⚑ exercise${c.exercise_run ? ' · run ' + _attr(c.exercise_run) : ''} — check the run</div>` : ''}
+      ${c.exercise ? `<div class="judge-why" style="-webkit-line-clamp:1;color:var(--blue)" title="An injector's exercise window covered this VM at that time. A window is the injectors' claim: check the run before trusting it.">⚑ exercise${c.exercise_run ? ` · run <a href="/runs/${encodeURIComponent(c.exercise_run)}">${_attr(c.exercise_run)}</a> — check the run ▸` : ' — check the run'}</div>` : ''}
       ${c.recurrence ? `<div class="judge-why" style="-webkit-line-clamp:1;color:var(--yellow)" title="An earlier card on the same IP: in observation nothing is blocked, so a scanner comes back">↻ same IP seen ${c.recurrence.previous}× in 7 days — last ${c.recurrence.last_seen ? _relTime(c.recurrence.last_seen) : ''}${c.recurrence.last_verdict ? ', judged ' + _attr(c.recurrence.last_verdict) : ''}</div>` : ''}
       <div class="judge-why" title="${_attr(why)}">${_attr(why)}</div>
       <div class="judge-actions">
@@ -2603,6 +2553,11 @@ function renderToJudge() {
       </div>
     </div>`;
   }).join('');
+  // ?card=<id>: scrolled to once, the first time it is in the list.
+  if (_focusCard && document.getElementById('judge-' + _focusCard)) {
+    document.getElementById('judge-' + _focusCard).scrollIntoView({ block: 'nearest' });
+    _focusCard = null;
+  }
 }
 
 async function judgeCard(escId, verdict) {
@@ -3043,43 +2998,12 @@ function connectWS() {
   _ws.onerror = () => _ws.close();
 }
 
-// ── Watch status ───────────────────────────────────────────────────────────────
-
-async function refreshWatchStatus() {
-  try {
-    const r = await fetch('/api/watch/status');
-    const d = await r.json();
-    const dot   = document.getElementById('watch-dot');
-    const label = document.getElementById('watch-label');
-    if (d.status === 'running') {
-      dot.style.color   = 'var(--green)';
-      label.textContent = 'watch active';
-      label.style.color = 'var(--green)';
-    } else if (d.status === 'stale') {
-      dot.style.color   = 'var(--orange)';
-      label.textContent = 'watch stale';
-      label.style.color = 'var(--orange)';
-    } else if (d.status === 'stopped') {
-      dot.style.color   = 'var(--red)';
-      label.textContent = 'watch stopped';
-      label.style.color = 'var(--red)';
-    } else {
-      dot.style.color   = 'var(--dim)';
-      label.textContent = 'watch unknown';
-      label.style.color = 'var(--dim)';
-    }
-  } catch (e) {}
-}
-
-setInterval(refreshWatchStatus, 15000);
-
 // ── Config panel ───────────────────────────────────────────────────────────────
 
 let _configMode = false;
 
 function toggleConfig() {
   _configMode = !_configMode;
-  document.getElementById('config-toggle').classList.toggle('active', _configMode);
   document.getElementById('incidents-list').style.display = _configMode ? 'none' : '';
   const cfgPanel = document.getElementById('config-panel');
   cfgPanel.style.display = _configMode ? 'flex' : 'none';
@@ -3270,6 +3194,28 @@ function showEscModal(vmName) {
   _applyReadOnlyGuards(bodyEl);
 }
 
+// The console's sections (/api/sections): Glorfindel always, each injector active or greyed.
+function _sectionsConfig() {
+  const d = _sectionsSeen;
+  if (!d) return '';
+  const rows = (d.sections || []).map(x => `<div class="cfg-row">
+      <span class="cfg-key">${_attr(x.label)}</span>
+      <span class="cfg-val">${x.always ? 'always on — the product'
+        : x.active ? `<span class="cfg-badge ok">active</span> <span style="color:var(--dim)">${_attr(x.why)}</span>`
+        : `<span class="cfg-badge">not set up</span> <span style="color:var(--dim)">${_attr(x.why)}</span>`}</span>
+    </div>`).join('');
+  return `<div class="cfg-section">
+      <div class="cfg-section-title">Sections</div>${rows}
+      <div style="color:var(--dim);font-size:10px;padding:4px 0 0">
+        ${d.override ? 'Chosen at start (<code>--sections</code>).' : 'Detected from this host\'s runs.'}
+        Annatar and Gothmog require Glorfindel; to choose them: <code>eregion console --sections annatar,gothmog</code>
+        (or <code>EREGION_CONSOLE_SECTIONS</code>).
+      </div>
+    </div>`;
+}
+let _sectionsSeen = null;
+Console.onSections(d => { _sectionsSeen = d; if (_configMode) refreshConfig(); });
+
 async function refreshConfig() {
   const panel = document.getElementById('config-panel');
   try {
@@ -3278,7 +3224,7 @@ async function refreshConfig() {
     const az = d.azure;
 
     // No service-principal variables = a managed identity (the hosted VM) or az login:
-    // judge by what Azure answered to this War Room's own reads (NSG inventory, vault),
+    // judge by what Azure answered to this console's own reads (NSG inventory, vault),
     // not by the presence of AZURE_CLIENT_ID (a hosted Glorfindel showed "missing").
     const keyless  = !az.client_id;
     const readOk   = (_nsgItems && !_nsgItems.error) || (_backupItems && !_backupItems.error);
@@ -3343,7 +3289,7 @@ async function refreshConfig() {
           </span>
         </div>
         ${_state?.read_only ? `<div style="color:var(--blue);font-size:10px;padding:4px 0 6px">
-          🔒 Locked to human-only. This War Room runs with read-only credentials
+          🔒 Locked to human-only. This console runs with read-only credentials
           (<code>GLORFINDEL_READ_ONLY=1</code> in its environment, read-only Azure rights), set when
           it was deployed for the observation. To let Glorfindel act, the deployment changes —
           write rights on the monitored resources and that variable removed — not this page.
@@ -3355,8 +3301,10 @@ async function refreshConfig() {
         </div>`}
       </div>
 
+      ${_sectionsConfig()}
+
       <div style="padding:12px 0 0;color:var(--dim);font-size:11px">
-        Monitoring backends, detection rules and action backends are visible on the main infrastructure map.
+        Monitoring backends, detection rules and action backends are visible on Glorfindel's infrastructure map.
       </div>`;
 
   } catch (e) {
@@ -3484,7 +3432,7 @@ async function refreshNsgs() {
 (async function init() {
   await refreshCfgData();     // detection rules + known resources → renderInfra
   await refreshState();       // active incidents → renderInfra
-  await refreshWatchStatus();
+  if (_IS_CONFIG) toggleConfig();   // /config: this page, opened on its configuration
   await refreshObservation();
   connectWS();
   setInterval(refreshObservation, 30000);  // cards to judge + the week's count

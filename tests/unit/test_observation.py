@@ -90,7 +90,7 @@ def test_the_api_judges_and_reports(monkeypatch):
     pytest.importorskip("fastapi")
     pytest.importorskip("httpx")
     from fastapi.testclient import TestClient
-    import glorfindel.api as api
+    import eregion_console.api as api
     monkeypatch.delenv("GLORFINDEL_WARROOM_TOKEN", raising=False)
     client = TestClient(api.app)
     esc = _card()

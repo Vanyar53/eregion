@@ -420,7 +420,7 @@ def test_what_the_model_sees_is_unchanged_by_a_failed_query():
 def test_a_telemetry_gap_card_can_be_approved_in_one_click():
     """Held, not refused: the operator who re-ran the queries approves it like a
     low-confidence card."""
-    api = pytest.importorskip("glorfindel.api")
+    api = pytest.importorskip("eregion_console.api")
     assert "telemetry_gap" in api._APPROVABLE_TYPES
 
 
@@ -539,7 +539,7 @@ def test_a_read_only_switch_set_any_way_keeps_glorfindel_read_only(monkeypatch, 
     from glorfindel.actions import AzureConnector
     monkeypatch.setenv("GLORFINDEL_READ_ONLY", raw)
     assert AzureConnector(dry_run=False).read_only is True
-    api = pytest.importorskip("glorfindel.api")
+    api = pytest.importorskip("eregion_console.api")
     assert api._read_only() is True
 
 
@@ -569,7 +569,7 @@ def test_the_approval_age_limit_never_lifts_on_a_malformed_value(monkeypatch, ra
     """`nan` and `inf` parsed: `age > nan` is never true, a card of any age could be
     executed from the War Room — both read 2 h. Zero or negative is kept as written: it
     closes one-click approval (below), it is not lifted to 2 h."""
-    api = pytest.importorskip("glorfindel.api")
+    api = pytest.importorskip("eregion_console.api")
     monkeypatch.setenv("GLORFINDEL_APPROVAL_MAX_AGE_H", raw)
     assert api._approval_max_age_h() == expected
     assert not math.isnan(api._approval_max_age_h()) and api._approval_max_age_h() != math.inf
@@ -586,7 +586,7 @@ def test_an_approval_age_limit_of_zero_or_less_refuses_every_card(monkeypatch, r
     """Before G2, 0 or -1 refused every one-click approval (`age > 0`): closed on purpose.
     G2 brought them back to 2 h, reopening them. Closed again — a card dated a little
     ahead of this clock included (its age is negative)."""
-    api = pytest.importorskip("glorfindel.api")
+    api = pytest.importorskip("eregion_console.api")
     monkeypatch.setenv("GLORFINDEL_APPROVAL_MAX_AGE_H", raw)
     for card in (_fresh_card(1), _fresh_card(-5)):
         refusal = api._approval_refusal(card, "vm-g2")
@@ -594,7 +594,7 @@ def test_an_approval_age_limit_of_zero_or_less_refuses_every_card(monkeypatch, r
 
 
 def test_approval_control_a_fresh_card_is_approvable_by_default(monkeypatch):
-    api = pytest.importorskip("glorfindel.api")
+    api = pytest.importorskip("eregion_console.api")
     assert api._approval_refusal(_fresh_card(1), "vm-g2") is None
 
 
@@ -609,7 +609,7 @@ def test_the_war_room_shows_the_threshold_even_when_the_agent_cannot_load(monkey
     pytest.importorskip("httpx")
     import sys
     from fastapi.testclient import TestClient
-    import glorfindel.api as api
+    import eregion_console.api as api
     monkeypatch.delenv("GLORFINDEL_WARROOM_TOKEN", raising=False)
     monkeypatch.setenv("GLORFINDEL_CONFIDENCE_THRESHOLD", raw)
     monkeypatch.setitem(sys.modules, "glorfindel.agent", None)     # import fails
@@ -636,7 +636,7 @@ def test_the_g2_switches_reach_the_containers(monkeypatch):
     for var in switches:
         assert compose["x-env"].get(var) == "${%s:-}" % var, var
         monkeypatch.setenv(var, "")
-    api = pytest.importorskip("glorfindel.api")
+    api = pytest.importorskip("eregion_console.api")
     assert (confidence_threshold(), llm_timeout_s(), api._approval_max_age_h(),
             read_only_requested()) == (0.7, 120.0, 2.0, False)
     for service in ("watch", "bot", "war-room"):

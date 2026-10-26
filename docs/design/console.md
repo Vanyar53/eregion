@@ -1,6 +1,7 @@
 # La console d'Eregion
 
 Conception du 26/10/2026, session War Room. **Décidé par Jonathan le 26/10**, question par question.
+**UI-1 construit le 26/10** (branche `lot/205-console-socle`) ; UI-2 attend ses définitions.
 Ce document sert aux sessions qui implémentent : le lot UI-1 (le socle, #205), le lot UI-2 (les cinq
 indicateurs, #206), et le lot d'Annatar et de Gothmog qui vérifie, avant chaque run, que Glorfindel
 tourne.
@@ -132,8 +133,9 @@ Le tirage des rapports reste dans la watch de Glorfindel, qui est toujours là.
 2. **Glorfindel est toujours actif.** S'il n'est pas encore configuré (ni `glorfindel-config.yaml`,
    ni état dans `~/.glorfindel/`, ni battement), sa page dit ce qu'il manque pour commencer.
 3. **Annatar et Gothmog sont actifs** si `runs/` contient un rapport, une fenêtre ou une campagne de
-   cet injecteur, ou si le canal des exercices est configuré. C'est réévalué à chaque page : leurs
-   routes ne font que lire.
+   cet injecteur. Un canal des exercices configuré ne suffit pas : il ne dit pas lequel des deux
+   tourne, et la page grisée le signale (« Found here »). C'est réévalué à chaque page, avec un
+   cache de quelques secondes ; leurs routes ne font que lire.
 4. **`--sections annatar` ou `EREGION_CONSOLE_SECTIONS`** fixe les injecteurs actifs, même sans
    données (« no run yet »). Glorfindel ne s'enlève pas.
 5. **Un injecteur grisé** mène à sa page d'installation : ce qu'il ajoute, ce qu'il demande, comment
@@ -261,7 +263,7 @@ EXERCISES · 11          windows [7 days ▾] │ CAMPAIGNS · 1    [30 days ▾
 
 | Où | Changement | Qui |
 |---|---|---|
-| `eregion_console/` | `app.py` (registre, en-tête, accueil, jeton, redirections) ; une section par module (`glorfindel.py`, `annatar.py`, `gothmog.py`, `config.py`) ; `cli.py` (`eregion console [--sections]`) ; `static/` : `overview.html`, `glorfindel.html` (ex-`index.html`), `annatar.html` et `gothmog.html` (ex-`atelier.html`, script commun `exercises.js`), `setup.html`, `console.js`, `console.css`. L'existant passe par `git mv` | War Room |
+| `eregion_console/` | `api.py` (l'ancien `glorfindel/api.py`, déplacé tel quel puis complété : pages, redirections, jeton, `/api/sections`) ; `sections.py` (le registre) ; `cli.py` (`eregion console [--sections]`) ; `static/` : `overview.html`, `glorfindel.html` (ex-`index.html`, sert aussi `/config`), `injector.html` (ex-`atelier.html`, une seule page pour Annatar et Gothmog, filtrée par le chemin, qui montre aussi la vue « non installé »), `exercises.js`, `console.js`, `console.css`. Un module par section reste possible plus tard : comme Glorfindel est toujours là, aucune route n'a besoin d'être enregistrée sous condition | War Room |
 | Jeton | `EREGION_CONSOLE_TOKEN` s'il n'est pas vide, sinon `GLORFINDEL_WARROOM_TOKEN` ; avertissement si les deux diffèrent. Cookie inchangé | War Room |
 | Dans la même PR, hors périmètre | `pyproject.toml` : le paquet, le script `eregion`, l'extra `console` (`war-room` gardé), les pages en données du paquet (aucune n'est déclarée aujourd'hui : un `pip install` sans `-e` les perdrait). Le Dockerfile de Glorfindel : `COPY eregion_console/`. Depuis M-3, il installe les dépendances verrouillées (`requirements/glorfindel.txt`, avec FastAPI et uvicorn), puis le paquet sans dépendances : l'extra `console` reprend celles de `war-room`, à vérifier contre le verrou. `docker-compose.yml` : le montage de `static` et la commande. L'import de `glorfindel/cli.py`. Les imports des tests et de `scripts/mutation_check.py`, dont 5 mutants visent `glorfindel/api.py` | War Room, avec l'accord de General et de Glorfindel |
 | Glorfindel (UI-1b) | l'alias caché `glorfindel war-room` ; les textes « War Room » d'`agent.py`, `readiness.py` et `jobs.py`. Vérifier qu'aucun n'entre dans ce que voit le modèle | Glorfindel |

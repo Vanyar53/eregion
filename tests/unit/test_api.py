@@ -14,7 +14,7 @@ pytest.importorskip("httpx")
 from fastapi.testclient import TestClient  # noqa: E402
 from starlette.websockets import WebSocketDisconnect  # noqa: E402
 
-import glorfindel.api as api  # noqa: E402
+import eregion_console.api as api  # noqa: E402
 
 
 @pytest.fixture()

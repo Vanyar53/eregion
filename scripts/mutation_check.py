@@ -62,6 +62,8 @@ HREP = "analysis/hosted_report.py"
 XCH = "eregion_core/exercise_channel.py"
 ACLI = "annatar/cli.py"
 GCLI = "glorfindel/cli.py"
+CON = "eregion_console/api.py"
+SEC = "eregion_console/sections.py"
 XW = "eregion_core/exercise.py"
 INVARIANTS = "tests/unit/test_invariants.py"
 INSCRIPTION_TESTS = "tests/unit/test_inscription.py tests/unit/test_engine.py"
@@ -663,17 +665,17 @@ MUTANTS = [
      "    return str(raw).strip().lower() not in _SWITCH_OFF\n",
      '    return str(raw).strip().lower() in ("1", "true", "yes")\n'),
     ("M158", "the configuration: an approval age limit of nan or inf executes a card of any age (G2)",
-     "glorfindel/api.py",
+     "eregion_console/api.py",
      "    if math.isnan(value) or value == math.inf:\n        return 2.0\n", ""),
     # G2, after the Opus 5.5 review (M159–M169 belong to lot 167).
     ("M170", "the configuration: an approval age limit of 0 or less is lifted to 2 h, reopening "
              "the one-click approval closed on purpose (G2 review)",
-     "glorfindel/api.py",
+     "eregion_console/api.py",
      "    if math.isnan(value) or value == math.inf:\n",
      "    if math.isnan(value) or value == math.inf or value <= 0:\n"),
     ("M171", "the configuration: an approval age limit of 0 or less refuses no card of its own — "
              "a card dated ahead of the clock runs (G2 review)",
-     "glorfindel/api.py",
+     "eregion_console/api.py",
      "    if max_age_h <= 0:\n", "    if False:\n"),
     ("M172", "the model: a NaN confidence passes the confidence gate (G2 review)",
      "glorfindel/agent.py",
@@ -691,7 +693,7 @@ MUTANTS = [
      "  GLORFINDEL_LLM_TIMEOUT_S: ${GLORFINDEL_LLM_TIMEOUT_S:-}\n", ""),
     ("M176", "the War Room reads the threshold from the agent: a failed import drops the "
              "capability matrix (G2 review)",
-     "glorfindel/api.py",
+     "eregion_console/api.py",
      "        from glorfindel.config import confidence_threshold\n        _allow: list = []\n",
      "        from glorfindel.agent import _confidence_threshold as confidence_threshold\n"
      "        _allow: list = []\n"),
@@ -772,7 +774,7 @@ MUTANTS = [
      "glorfindel/agent.py",
      '    "agreement": "unstable_decision",\n', ""),
     ("M211", "an unstable decision's card cannot be approved in one click (D-1)",
-     "glorfindel/api.py",
+     "eregion_console/api.py",
      '                     "telemetry_gap", "unstable_decision"}\n',
      '                     "telemetry_gap"}\n'),
     ("M212", "GLORFINDEL_DECISION_DRAWS never reaches the watch's container (D-1)",
@@ -1132,6 +1134,28 @@ MUTANTS = [
     ("M528", "rules the VM approved and the reference changes: « gardé », then git refuses (M-3, review)",
      "infra/glorfindel-host/deploy.sh",
      '    [ -z "$clash" ] || die "$(echo', '    [ -z "$clash" ] || true "$(echo'),
+    # UI-1 (#205) — the Eregion console: the former addresses, the token's two names, the
+    # injectors' routes read only, every page behind the token, the sections.
+    ("M400", "the atelier's address no longer leads anywhere (UI-1)", CON,
+     '@app.get("/atelier", include_in_schema=False)\nasync def atelier_moved(',
+     "async def atelier_moved("),
+    ("M401", "a former address redirects without its query (UI-1)", CON,
+     '    return path + (f"?{q}" if q else "")\n', "    return path\n"),
+    ("M402", "compose's empty EREGION_CONSOLE_TOKEN drops the token on H0 (UI-1)", CON,
+     '    return os.environ.get(TOKEN_ENV, "") or os.environ.get(LEGACY_TOKEN_ENV, "")\n',
+     '    return os.environ[TOKEN_ENV] if TOKEN_ENV in os.environ else os.environ.get(LEGACY_TOKEN_ENV, "")\n'),
+    ("M403", "an injector's route accepts a POST (UI-1)", CON,
+     '@app.get("/api/exercises")\n', '@app.api_route("/api/exercises", methods=["GET", "POST"])\n'),
+    ("M404", "a new page is served without the token (UI-1)", CON,
+     '        if not token or scope["type"] not in ("http", "websocket"):\n',
+     '        if not token or scope["type"] not in ("http", "websocket") or scope.get("path") == "/annatar":\n'),
+    ("M405", "/runs/<id> takes a path for a run id (UI-1)", CON,
+     "    if not safe_part(run_id):\n", "    if not run_id:\n"),
+    ("M406", "--sections removes Glorfindel (UI-1)", SEC,
+     '            sections.append({**s, "active": True, "always": True, "setup": glorfindel_setup()})\n',
+     '            sections.append({**s, "active": forced is None, "always": True, "setup": glorfindel_setup()})\n'),
+    ("M407", "--sections is ignored: the detection wins (UI-1)", SEC,
+     "        if forced is not None:\n", "        if False:\n"),
 ]
 
 # Mutants measured by other tests than the invariants (their lot's own).
@@ -1205,6 +1229,8 @@ TESTS["M289"] = "tests/unit/test_dependency_lock.py"
 TESTS["M520"] = "tests/unit/test_bot.py"
 TESTS.update({f"M{n}": "tests/unit/test_glorfindel_host.py" for n in (521, 522, 523)})
 TESTS.update({f"M{n}": "tests/unit/test_host_deploy.py" for n in range(524, 529)})
+TESTS.update({f"M{n}": "tests/unit/test_console.py" for n in range(400, 408)})  # UI-1
+TESTS["M403"] = "tests/unit/test_console_exercises.py"
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

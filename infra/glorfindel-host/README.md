@@ -80,6 +80,11 @@ le 19/10, la VM d'observation tourne sur `claude-sonnet-5-5` (issue #139 pour en
 - **Droits** : `Reader` + `Log Analytics Reader` suffisent — découverte (bree vue), audit
   complet (NSG, calcul, coffre, détection, règles : « All remediation capabilities confirmed »),
   règles. Seuls rôles de l'identité : ces deux-là.
+- **Inscription (H-1, mesuré le 26/10)** : avec ces mêmes droits, l'identité managée lit
+  l'inscription du banc (tags `eregion-target`/`eregion-zone`) — gondolin inscrite, bree non,
+  donc jamais en exercice. Pour relire ça à la main dans un conteneur, préfixer la commande par
+  `env -u AZURE_CLIENT_ID -u AZURE_CLIENT_SECRET -u AZURE_TENANT_ID` : compose passe ces
+  variables vides et `DefaultAzureCredential` échoue sinon (la CLI `glorfindel` les retire déjà).
 - **Image** : construite en 2 min 44 s sur la VM (1,3 Go), 4 Go de RAM suffisent.
 - **Accès** : SSH depuis l'IP de l'opérateur seulement ; War Room injoignable en direct ; par le
   tunnel, 401 sans jeton ou avec un faux, 200 avec le bon.

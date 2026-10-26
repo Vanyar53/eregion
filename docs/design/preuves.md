@@ -317,8 +317,29 @@ fait. Vingt mutants, mesurés par `tests/unit/test_campaign_changes.py`, sur des
 | M278 | campagne reversée : faits recalculés | une décision vue par le rapport devient inconnue après la purge |
 | M279 | campagne en cours versée dans l'index | des faits incomplets entrent dans l'index |
 
-Vingt sur vingt attrapés au premier tour (26/10). Détail : [`../analysis.md`](../analysis.md),
-« Ce qui a changé depuis la campagne précédente ».
+Vingt sur vingt attrapés au premier tour (26/10). La relecture de D-2 a trouvé quatre trous dans
+la vérification : un écart inventé passait s'il était écrit en `observation` ; « a isolé » sur
+une décision inconnue passait dès qu'un fait de changement était cité ; des tendances justes
+étaient barrées (un écart entre deux runs, « le 21 octobre », « en 2026 », « au 2ᵉ run », « dans
+les 2 campagnes ») ; le sens d'un changement n'était pas lu. M275 et M276 suivent le code
+corrigé. Dix mutants de plus, dans la plage M510–M519 (M260–M279 est pleine), mesurés par le
+même fichier :
+
+| Mutant | Défaut réinjecté | Effet |
+|---|---|---|
+| M510 | nombres d'une `observation` qui cite un fait de changement non contrôlés | « vue 40 s plus tard » gardé en `observation` |
+| M511 | fait de changement cité : « a isolé » permis quels que soient ses côtés | une décision inconnue dite prise |
+| M512 | écart entre deux runs cités refusé | « augmente de 15 s » barré dans une tendance juste |
+| M513 | date en toutes lettres, année, ordinal lus comme des nombres | « le 21 octobre », « en 2026 », « au 2ᵉ run » barrés |
+| M514 | décompte lu comme un nombre de fait | « dans les 2 campagnes » barré |
+| M515 | décompte sans borne | « dans les 3 campagnes » gardé avec deux runs cités |
+| M516 | action ou détection absente des faits gardée | « de detected à missed » sur une clé détectée deux fois |
+| M517 | passage d'une action à une autre non contrôlé | « de l'isolement au blocage » quand c'est l'inverse |
+| M518 | nombres à l'envers gardés | « de 106,9 s à 91,9 s » quand la latence a augmenté |
+| M519 | côté d'un fait lu sur l'identifiant du run | un run sans `run_id` dit « seulement dans la précédente » |
+
+Les trente (M260–M279, M510–M519) attrapés au premier tour (26/10), aucun périmé. Détail :
+[`../analysis.md`](../analysis.md), « Ce qui a changé depuis la campagne précédente ».
 
 ## Ce que les invariants ont trouvé
 

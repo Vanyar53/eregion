@@ -37,8 +37,11 @@ commande échoue avec le délai dépassé ; sur H0, c'est un essai raté (voir p
 **La vérification est déterministe** (`verify`) : une affirmation sans run cité, citant un run
 inconnu, ou que les faits contredisent (« détectée » sur un run manqué, une latence ou une
 décision qui ne sont pas celles du run) est écartée — elle apparaît barrée, avec la raison, en
-fin de rapport. Une tendance doit citer cette campagne et une campagne antérieure. Les
-`trend` et `observation` ne sont vérifiées que sur leurs citations. Le contenu des runs
+fin de rapport. Une tendance doit citer cette campagne et une campagne antérieure. Une
+`observation` qui ne cite que des runs n'est vérifiée que sur ses citations, et sur la règle
+d'une décision inconnue (#167, plus bas). Les nombres d'une `trend`, d'une `change` et d'une
+`observation` qui cite un fait de changement sont contrôlés, ainsi que le sens d'une `change`
+(D-2, plus bas). Le contenu des runs
 (raisonnement de Glorfindel, texte des signaux) est une donnée : une instruction plantée peut
 faire écrire une fausse affirmation au modèle, jamais la faire entrer dans le rapport
 (mutant M63).
@@ -273,14 +276,22 @@ c'est une technique jouée sur une VM cible ; la VM est comparée sans la casse.
   son `created_at`, puis son identifiant quand c'est une date (`YYYYMMDDTHHMMSSZ`). Sinon, le
   début est inconnu, et la campagne n'a pas de précédente.
 - S'il n'y en a aucune, la section le dit, avec la raison.
+- **Limite connue** (relecture de D-2, reprise dans un lot suivant) : le début d'une campagne
+  venue du canal se lit dans son manifeste (`started_at`, `created_at`), écrit sur Orodruin.
+  H-1 ne contrôle pas ces dates. Une date fausse peut faire nommer à tort « la précédente » :
+  une autre campagne `done` qui partage une clé. Les faits comparés restent les vrais faits
+  indexés de la campagne nommée, et la section dit laquelle. Piste : borner le début par celui
+  des fenêtres d'exercice crues de ses runs, ou par la date du marqueur `.pulled`.
 
 **Les runs sont joints par clé.** Le n-ième run d'une technique sur une VM, dans l'ordre des
 `seq`, fait face au n-ième run de la même clé dans la campagne précédente. Chaque paire devient
 un **fait de changement** typé, `ChangeFact` (`chg-1`, `chg-2`…). Il donne, avant et après :
 la détection, la latence, l'action, la confiance et l'escalade, ainsi que l'écart de latence et
 de confiance. Une clé présente d'un seul côté est aussi un fait, listé comme tel (« Seulement
-dans la campagne précédente », « Seulement dans celle-ci »). Une décision inconnue reste
-inconnue, avec sa raison, jamais « aucune ».
+dans la campagne précédente », « Seulement dans celle-ci »). Le côté d'un fait se lit sur la
+présence du run, jamais sur son identifiant : un run exécuté sans `run_id` reste joué, et la
+section l'écrit « run sans identifiant ». Une décision inconnue reste inconnue, avec sa raison,
+jamais « aucune ».
 
 **La section est rendue par le code** (`render_section`), entre le tableau des runs et les
 affirmations : la campagne précédente, une ligne par clé commune (« 91,9 s → 106,9 s
@@ -290,22 +301,53 @@ seul côté. Le modèle n'en écrit rien. Il reçoit les mêmes faits, et il peu
 **La vérification contrôle les faits de changement comme les autres** (`verify`) :
 - une affirmation `change` doit citer au moins un fait de changement. Sinon, elle est écartée,
   même si elle cite les deux runs ;
-- dans une affirmation `change` ou `trend`, chaque nombre doit être celui d'un fait cité : une
-  latence, une confiance (0,78 ou 78 %), un écart. Sinon, l'affirmation est écartée (« a number
-  is not in the cited facts (40) ») ;
+- dans une affirmation `change` ou `trend`, et dans une `observation` qui cite un fait de
+  changement, chaque nombre doit être celui d'un fait cité : une latence, une confiance (0,78
+  ou 78 %), ou un écart. L'écart peut être celui des deux côtés d'un fait de changement, ou
+  celui de deux runs cités (« augmente de 15 s », « baisse de 2 points » dans une tendance qui
+  cite les deux runs). Sinon, l'affirmation est écartée (« a number is not in the cited facts
+  (40) ») ;
 - avant de lire les nombres, la vérification retire ce qui ne fait que nommer : les
-  identifiants cités, une technique (T1110.001), un identifiant de run, une date (23/10), une
-  heure (08:21), et tout mot qui commence par une lettre et contient un chiffre (`chg-2`, le
-  nom d'une VM). C'est une heuristique : un décompte (« 3 runs ») est un nombre, et il doit
-  donc venir d'un fait ;
+  identifiants cités, une technique (T1110.001), un identifiant de run, une date (23/10, « le
+  21 octobre », « le 1er octobre »), une année (2026, sauf suivie d'une unité : « 2000 s » reste
+  un nombre), une heure (08:21), un ordinal (« 2ᵉ », « 1er », « 3e »), et tout mot qui commence
+  par une lettre et contient un chiffre (`chg-2`, le nom d'une VM) ;
+- **un décompte** (« dans les 2 campagnes ») est un entier suivi d'un mot qui n'est pas une
+  unité (s, min, %, points…). Il est permis jusqu'au nombre de runs que l'affirmation cite (un
+  fait de changement compte ses deux côtés). Pourquoi ce choix plutôt qu'une consigne au
+  modèle de ne pas en écrire : une consigne ne lie pas le modèle, et un décompte juste serait
+  alors barré, alors que le rapport jugé au point d'étape (#70) ne doit barrer aucune
+  affirmation juste. La limite : un décompte inventé sous cette borne passe ;
 - le `value` d'une affirmation `change`, quand ce n'est pas un nombre, doit être une action ou
   une détection des faits cités ;
+- **le sens d'un changement** : une affirmation `change` ne nomme que les actions (les noms de
+  `glorfindel/actions.py` : `isolate_vm`, `block_suspicious_ip`…) et les détections
+  (`detected`, `missed`, `unknown`) de ses faits cités. « de detected à missed », sur une clé
+  détectée les deux fois, est écarté. Dans une affirmation qui cite un fait de changement, « de
+  X à Y » et « X → Y » doivent aller dans le sens du fait. Pour deux actions ou deux détections
+  (noms, ou formes françaises : isolement, blocage, instantané, libération), un fait cité doit
+  aller de X à Y : « de l'isolement au blocage » est écarté quand le fait va du blocage à
+  l'isolement. Pour deux latences ou deux confiances, « de 106,9 s à 91,9 s » est écarté quand
+  le fait va de 91,9 s à 106,9 s ;
 - seules les affirmations `trend`, `change` et `observation` peuvent citer un fait de
   changement ;
 - la règle de #167 vaut aussi sur un fait de changement dont une décision est inconnue. Une
   affirmation sur la réponse doit dire que la décision est inconnue, et ne doit jamais dire
-  que Glorfindel n'a pas agi. En revanche, « a isolé » n'est pas écarté : le fait a deux côtés,
-  et l'action nommée peut être celle du côté connu.
+  que Glorfindel n'a pas agi. « a isolé » n'est permis que si chaque décision inconnue citée
+  est celle d'un côté d'un fait de changement dont l'autre côté a une décision connue :
+  l'action nommée peut alors être celle de ce côté. Un run cité directement dont la décision
+  est inconnue, même à côté d'un fait de changement, ou un fait de changement inconnu des deux
+  côtés, écarte « a isolé ».
+
+**Limites connues de la vérification du sens** (heuristiques, comme la lecture de la
+réponse) :
+- seuls « de X à Y » et « X → Y » sont lus. « 15 s plus tôt » quand c'était plus tard, « a
+  escaladé cette fois, pas avant » quand il avait escaladé les deux fois, ou « isolée cette
+  fois, bloquée avant » à l'envers ne sont pas écartés ;
+- l'escalade n'est pas contrôlée, ni les formes françaises des détections (« manquée ») ;
+- le nom d'une action absente est écarté même dans une négation juste (« jamais snapshot »,
+  quand aucun côté n'a pris de snapshot) ;
+- le sens n'est pas contrôlé dans une `trend` : ses runs ne disent pas lequel vient avant.
 
 **L'index des campagnes passées** (`analysis/campaign_index.py`). Chaque run de l'index porte
 maintenant l'état et le début de sa campagne, ainsi que sa VM. Un rapport écrit avant D-2 les a
@@ -331,8 +373,22 @@ avec ce code :
 
 ```bash
 make glorfindel-host-ssh
+# aucun rapport en attente ? (liste vide attendue)
+docker exec eregion-watch python -c "from pathlib import Path; from analysis import hosted_report as h; print([p.name for p in h.ready(Path('runs/campaigns'))])"
 docker exec eregion-watch python -m analysis.campaign_index --all runs/campaigns
 ```
+
+- **Quand aucun rapport n'est en attente.** Le fil `campaign-report` de la watch écrit dans le
+  même index (un `PersistentClient` chromadb sur le même dossier) quand il écrit un rapport.
+  Deux processus qui écrivent en même temps dans ce dossier ne sont pas prévus par chromadb.
+  La première commande ci-dessus liste les campagnes dont le rapport est à écrire
+  (`hosted_report.ready` : venues du canal, `done`, sans `report.md`, avec des essais
+  restants). Une liste vide veut dire qu'aucun rapport n'est en cours ni à venir. Une campagne
+  qui attend encore les décisions de Glorfindel y figure aussi : la watch dit « waiting for
+  Glorfindel's decision » dans son journal (`make glorfindel-host-logs`). Si la liste n'est pas
+  vide, il faut attendre que le `report.md` soit écrit, puis relancer la vérification. Une
+  campagne arrivée pendant la commande : relancer la commande après son rapport (elle est
+  idempotente).
 
 - **La campagne du 23/10** (`20261023T081120Z`) est déjà sur H0 et dans son index. La commande
   lui ajoute l'état, le début et les VM, sans recalculer ses décisions.

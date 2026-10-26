@@ -389,13 +389,13 @@ function probeTable(m) {
   const rows = vms.map(vm => {
     const b = before[vm] || [], a = after[vm] || [];
     const names = [...new Set([...b, ...a].map(p => p.name))];
-    return (vms.length > 1 ? `<tr><td colspan="4" style="color:var(--dim)">${esc(vm)}</td></tr>` : '') +
+    return `<tr><td colspan="4" style="color:var(--dim)">${esc(vm)}</td></tr>` +
       names.map(n => {
         const pb = b.find(p => p.name === n), pa = a.find(p => p.name === n);
         return `<tr><td>${esc(n)}</td><td style="color:var(--dim)">${esc((pb || pa).expect)}</td>${cell(pb, false)}${cell(pa, true)}</tr>`;
       }).join('');
   }).join('');
-  return `<table class="t" style="margin-top:4px"><tr><th>probe${vms.length === 1 ? ' · ' + esc(vms[0]) : ''}</th><th>expect</th><th>before the fault</th><th>after</th></tr>${rows}</table>`;
+  return `<table class="t" style="margin-top:4px"><tr><th>probe</th><th>expect</th><th>before the fault</th><th>after</th></tr>${rows}</table>`;
 }
 
 function renderWindowDetail(w) {

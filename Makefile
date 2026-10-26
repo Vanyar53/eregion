@@ -96,7 +96,7 @@ DOCKER_GLORFINDEL := docker run --rm $(GLORFINDEL_AZURE_ENV) $(GLORFINDEL_VOLS) 
 	glorfindel-pending glorfindel-check-ttl \
 	glorfindel-start glorfindel-stop glorfindel-restart glorfindel-dev glorfindel-logs glorfindel-ui \
 	annatar-shell glorfindel-shell \
-	venv install test test-unit lint annatar-simulate annatar-simulate-gap clean \
+	venv install lock test test-unit lint annatar-simulate annatar-simulate-gap clean \
 	canary-jit celebrimbor-init celebrimbor-plan celebrimbor-up celebrimbor-down celebrimbor-output celebrimbor-stop celebrimbor-start \
 	glorfindel-host-init glorfindel-host-plan glorfindel-host-up glorfindel-host-down glorfindel-host-push \
 	glorfindel-host-start glorfindel-host-stop glorfindel-host-logs glorfindel-host-tunnel glorfindel-host-ssh \
@@ -115,7 +115,8 @@ help:
 	@echo ""
 	@echo "Dev (local, no Docker)"
 	@echo "  make venv           Create .venv (python3 -m venv)"
-	@echo "  make install        Create .venv + install dev dependencies"
+	@echo "  make install        Create .venv + install dev dependencies (from the lock, hashes checked)"
+	@echo "  make lock           Regenerate the dependency lock (uv; UPGRADE=1 bumps all) — docs/operations.md"
 	@echo "  make test           Run all tests (104, 0 Azure, 0 LLM calls)"
 	@echo "  make lint           Ruff linter"
 	@echo "  make clean          Remove build artifacts"
@@ -689,8 +690,22 @@ orodruin-campaign-run:
 venv:
 	python3 -m venv .venv
 
+# M-3 (#183) : les dépendances viennent du verrou, empreintes vérifiées (comme la CI et l'image).
 install: venv
-	$(PIP) install -e ".[dev]"
+	$(PIP) install --require-hashes -r requirements/dev.txt
+	$(PIP) install --no-deps --no-build-isolation -e .
+
+# Regénérer le verrou (uv, résolution universelle : Python 3.11 et 3.12, Linux et macOS).
+# Les versions déjà verrouillées restent ; UPGRADE=1 les monte toutes. Une PR, puis le harnais
+# (make llm-compare) avant de redéployer H0 : docs/operations.md, « Verrou des dépendances ».
+UV         ?= uv
+LOCK_DATE  ?= $(shell date -u +%Y-%m-%d)
+LOCK_FLAGS  = --universal --python-version 3.11 --generate-hashes \
+              --exclude-newer $(LOCK_DATE)T00:00:00Z $(if $(UPGRADE),--upgrade)
+lock:
+	$(UV) pip compile pyproject.toml requirements/build.in --extra dev $(LOCK_FLAGS) -o requirements/dev.txt
+	$(UV) pip compile pyproject.toml requirements/build.in --extra glorfindel --extra war-room \
+	  -c requirements/dev.txt $(LOCK_FLAGS) -o requirements/glorfindel.txt
 
 test:
 	$(PYTHON) -m pytest tests/ -v

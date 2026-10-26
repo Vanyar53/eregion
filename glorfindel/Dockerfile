@@ -2,6 +2,13 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
+# M-3 (#183): the dependencies come from the lock, every file checked against its hash
+# (pip refuses any unpinned or unhashed requirement); the build backend too, so the project
+# installs without fetching anything else. Before the code: a code change keeps this layer.
+# Regenerate with `make lock` (docs/operations.md, « Verrou des dépendances »).
+COPY requirements/glorfindel.txt requirements/glorfindel.txt
+RUN pip install --no-cache-dir --require-hashes -r requirements/glorfindel.txt
+
 COPY pyproject.toml .
 COPY annatar/ annatar/
 COPY eregion_core/ eregion_core/
@@ -14,7 +21,8 @@ COPY analysis/ analysis/
 # compose mount overrides it for live edits.
 COPY technique_catalog.yaml .
 
-RUN pip install --no-cache-dir -e ".[glorfindel,war-room]"
+# The project alone: its dependencies are all above (--no-deps), nothing resolved here.
+RUN pip install --no-cache-dir --no-deps --no-build-isolation -e .
 
 # `gf` alias for interactive shells — works for `docker exec -it <c> bash` and the
 # compose container, independent of any host-mounted ~/.glorfindel/.bashrc.

@@ -487,12 +487,17 @@ exécute » et « Redéployer H0 après M-3 ».
 
 La base livrée reste intacte ; les règles du client vivent dans leur couche,
 `~/.glorfindel/client_rules.yaml`, chargée par-dessus ; une règle exportée ne garde aucun
-identifiant. Trente mutants (dix-neuf du lot, onze de sa relecture : M689–M699), mesurés par
-`tests/unit/test_rule_layers.py`, `test_proposed_rules.py` et `test_host_deploy.py`, tous
-attrapés au premier tour (26/10) ; M528 (M-3) suit le nouveau refus de `deploy.sh`, attrapé
-aussi. La relecture a trouvé l'export ouvert par défaut (une liste d'opérateurs : `has_any`,
-`matches regex`, `@"…"`, un `let` laissaient passer un nom) : il lit maintenant la requête en
-KQL, fermé par défaut ; M682 et M684 suivent ce code :
+identifiant. Cinquante mutants (dix-neuf du lot, onze de sa première relecture : M689–M699,
+vingt de la seconde : M700–M719), mesurés par `tests/unit/test_rule_layers.py`,
+`test_proposed_rules.py` et `test_host_deploy.py`, tous attrapés au premier tour (26/10) ;
+M528 (M-3) suit le nouveau refus de `deploy.sh`, attrapé aussi. La première relecture a
+trouvé l'export ouvert (une liste d'opérateurs) ; la fermeture qui a suivi — tout littéral
+d'un prédicat qui touche une colonne d'identité, des `let` suivis — cassait des règles saines
+et laissait passer des formes détournées. L'export remplace maintenant ce qui est sûr (un
+littéral comparé directement à une colonne d'identité, l'argument de `workspace()`, les
+chemins d'instance, les noms connus) et refuse, en nommant la forme, tout intermédiaire (un
+`let`, un alias, une fonction de la requête, une expression) ; M682, M684 et M689–M691
+suivent ce code :
 
 | Mutant | Défaut réinjecté | Effet |
 |---|---|---|
@@ -526,6 +531,26 @@ KQL, fermé par défaut ; M682 et M684 suivent ce code :
 | M697 | la règle approuvée reprend la forme en ligne | elle ne s'applique à aucune VM |
 | M698 | la migration ne lie pas une règle en ligne à son backend | une règle d'avant P1 reste inerte |
 | M699 | une règle qui ne s'applique à aucune VM pas dite au chargement | inerte en silence |
+| M700 | un chemin de TYPE remplacé (`MICROSOFT.COMPUTE/VIRTUALMACHINES/RUNCOMMAND/ACTION`) | une règle saine cassée |
+| M701 | la garde compte un chemin de TYPE comme identifiant | une règle saine refusée |
+| M702 | un littéral qui ne nomme rien (`"@"`, `"/"`) remplacé | `Caller !has "@"` cassé |
+| M703 | un littéral comparé à une colonne d'identité gardé | `Computer has_any ("vm-…")` part |
+| M704 | un littéral à gauche d'une colonne d'identité gardé | `"vm-…" == Computer` part |
+| M705 | un `let` lié à une chaîne, comparé à une colonne d'identité, pas refusé | le nom part |
+| M706 | un `let` lié à un `let` pas suivi | le nom part |
+| M707 | un argument non littéral de `workspace()` pas refusé | `workspace(strcat(…))` part |
+| M708 | un alias d'une colonne d'identité pas vu | `extend h = Computer … h == "vm-…"` part |
+| M709 | un alias d'alias pas vu | `g2 = g`, `g = ResourceGroup` : le nom part |
+| M710 | une fonction de la requête qui touche une colonne d'identité pas refusée | le nom part |
+| M711 | une colonne d'identité comparée à une expression pas refusée | `Computer == strcat(…)` part |
+| M712 | l'export ne nomme pas la forme refusée | « généraliser à la main » jamais dit |
+| M713 | `glorfindel rules` cache le backend d'une règle auto | liée et inerte se confondent |
+| M714 | une règle approuvée d'un autre workspace prend le backend de la première règle | elle tourne sur le mauvais workspace |
+| M715 | une config illisible lue « aucun backend » par `migrate-rules` | la vraie cause tue |
+| M716 | une couche ignorée dite « absente » | contredit la note |
+| M717 | l'export garde les commentaires | un nom en commentaire part |
+| M718 | un `let` dans une liste comparée à une colonne d'identité pas refusé | `Computer in (hosts)` : le nom part |
+| M719 | un `let` donné à `workspace()` pas nommé | le refus ne dit pas quoi généraliser |
 
 ## Ce que les invariants ont trouvé
 

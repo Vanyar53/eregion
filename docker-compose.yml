@@ -1,17 +1,17 @@
-# make glorfindel-start  →  watch + war-room sur http://localhost:7007
+# make glorfindel-start  →  watch + la console d'Eregion (service war-room) sur http://localhost:7007
 
 # M-3 (#183) : chaque conteneur ne reçoit que ses secrets. docker compose lit `.env` (sur H0,
 # host.env poussé) pour remplacer les ${…} ci-dessous, et rien d'autre : un conteneur ne voit
 # que les variables de sa liste `environment`. Les blocs :
 #   env     : réglages sans secret, pour les trois ;
-#   azure   : le principal de service (vide sur H0 : l'identité managée) — watch, War Room
+#   azure   : le principal de service (vide sur H0 : l'identité managée) — watch, console
 #             (« Approve & execute ») et bot (boutons Restore / Revert) ;
 #   models  : les clés des modèles — la watch seule (décisions, rapport de campagne) ;
-#   webhook : son URL porte un jeton — watch et War Room (cartes enregistrées) ; avec elle,
+#   webhook : son URL porte un jeton — watch et console (cartes enregistrées) ; avec elle,
 #             GLORFINDEL_DISCORD_BOT, "1" si DISCORD_BOT_TOKEN est posé, "" sinon (jamais sa
 #             valeur) : avec DISCORD_CHANNEL_ID, le bot poste les cartes et leur webhook se tait
 #             (escalations.discord_bot_configured) ; un salon sans jeton, le webhook poste ;
-# le jeton du bot et ses listes d'autorisés : le bot seul ; le jeton de la War Room : elle seule.
+# le jeton du bot et ses listes d'autorisés : le bot seul ; le jeton de la console : elle seule.
 # tests/unit/test_glorfindel_host.py tient cette répartition.
 x-env: &env
   AZURE_SUBSCRIPTION_ID: ${AZURE_SUBSCRIPTION_ID:-}
@@ -81,7 +81,6 @@ services:
         - action: rebuild
           path: ./glorfindel
           ignore:
-            - ./glorfindel/static
             - ./glorfindel/rules
         - action: rebuild
           path: ./analysis
@@ -117,22 +116,27 @@ services:
     depends_on:
       - watch
 
+  # The Eregion console (`eregion console`, docs/design/console.md). The service keeps the War
+  # Room's name for now: H0's deploy.sh and status.sh start and read it by that name.
   war-room:
     image: eregion-glorfindel
     container_name: eregion-war-room
     # 0.0.0.0 INSIDE the container is required for the port mapping to work; what
-    # limits exposure is the HOST side of the mapping: loopback only. To reach the War
-    # Room from another machine, set GLORFINDEL_WARROOM_TOKEN and widen the mapping.
-    command: glorfindel war-room --host 0.0.0.0 --port 7007
+    # limits exposure is the HOST side of the mapping: loopback only. To reach the
+    # console from another machine, set EREGION_CONSOLE_TOKEN and widen the mapping.
+    command: eregion console --host 0.0.0.0 --port 7007
     restart: unless-stopped
     ports:
       - "127.0.0.1:7007:7007"
     environment:
       <<: [*env, *azure, *webhook]
+      # The console's token; its former name still works (H0's host.env has only that one):
+      # the console takes EREGION_CONSOLE_TOKEN when it is not empty, else the former.
+      EREGION_CONSOLE_TOKEN: ${EREGION_CONSOLE_TOKEN:-}
       GLORFINDEL_WARROOM_TOKEN: ${GLORFINDEL_WARROOM_TOKEN:-}
     volumes:
       - ./runs:/app/runs
-      - ./glorfindel/static:/app/glorfindel/static:ro
+      - ./eregion_console/static:/app/eregion_console/static:ro
       - ./glorfindel/rules:/app/glorfindel/rules
       - ${HOME}/.glorfindel:/root/.glorfindel
       - ${HOME}/.cache/chroma:/root/.cache/chroma
@@ -144,12 +148,14 @@ services:
     develop:
       watch:
         - action: sync
-          path: ./glorfindel/static
-          target: /app/glorfindel/static
+          path: ./eregion_console/static
+          target: /app/eregion_console/static
+        - action: rebuild
+          path: ./eregion_console
+          ignore:
+            - ./eregion_console/static
         - action: rebuild
           path: ./glorfindel
-          ignore:
-            - ./glorfindel/static
         - action: rebuild
           path: ./annatar
         - action: rebuild

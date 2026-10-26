@@ -1,7 +1,8 @@
-"""The atelier console (War Room): Annatar and Gothmog seen from the defender, read only.
+"""Annatar's and Gothmog's sections of the Eregion console: what they ran and what Glorfindel
+made of it, read only (until 26/10, the atelier's routes).
 
 No Azure, no LLM: the windows, campaigns and debug files are written to tmp, the return
-channel's reads are stubbed. Requires the war-room extra.
+channel's reads are stubbed. Requires the console extra.
 """
 from __future__ import annotations
 
@@ -15,7 +16,7 @@ pytest.importorskip("httpx")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-import glorfindel.api as api  # noqa: E402
+import eregion_console.api as api  # noqa: E402
 
 VM = "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm-a"
 OTHER = "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm-b"
@@ -71,25 +72,29 @@ def _cycle(runs, name, *, at, resource_id=VM, ttp="T1110.001", action="block_sus
     return rec
 
 
-def test_every_atelier_route_is_a_read():
+INJECTOR_ROUTES = ("/api/exercises", "/api/campaigns", "/api/catalog", "/api/channel",
+                   "/api/atelier", "/atelier", "/annatar", "/gothmog", "/runs/")
+
+
+def test_every_injector_route_is_a_read():
     """The console never launches: a run starts from Orodruin, armed — a button, later,
-    goes through that contract, never through a War Room route."""
-    routes = [r for r in api.app.routes
-              if getattr(r, "path", "").startswith(("/api/atelier", "/atelier"))]
-    assert len(routes) >= 6
+    goes through that contract, never through a console route (M403)."""
+    routes = [r for r in api.app.routes if getattr(r, "path", "").startswith(INJECTOR_ROUTES)]
+    assert len(routes) >= 11
     for r in routes:
         assert r.methods == {"GET"}, r.path
 
 
 def test_the_page_is_served_behind_the_token(client, monkeypatch):
-    assert "ATELIER" in client.get("/atelier").text
-    monkeypatch.setenv("GLORFINDEL_WARROOM_TOKEN", "s3cret")
-    assert client.get("/api/atelier/exercises").status_code == 401
-    assert client.get("/atelier", headers={"accept": "application/json"}).status_code == 401
+    assert "injector.html" not in client.get("/annatar").text  # the page itself, not a listing
+    assert "INJECTOR" in client.get("/annatar").text
+    monkeypatch.setenv("EREGION_CONSOLE_TOKEN", "s3cret")
+    assert client.get("/api/exercises").status_code == 401
+    assert client.get("/annatar", headers={"accept": "application/json"}).status_code == 401
 
 
 def test_catalog_lists_techniques_and_faults(client):
-    entries = client.get("/api/atelier/catalog").json()["entries"]
+    entries = client.get("/api/catalog").json()["entries"]
     by_id = {e["id"]: e for e in entries}
     assert by_id["T1486"]["kind"] == "technique" and by_id["T1486"]["destructive"] is True
     assert by_id["vm-shutdown"]["kind"] == "fault"
@@ -111,7 +116,7 @@ def test_a_window_carries_what_glorfindel_did_inside_it(runs, client):
                        source="exercise", exercise_run="run-a")
     escalations.record("rule-x-2", VM, "snapshot", "low_confidence", "real one")
 
-    w = client.get("/api/atelier/exercises").json()["exercises"][0]
+    w = client.get("/api/exercises").json()["exercises"][0]
     assert w["run_id"] == "run-a" and w["state"] == "grace"
     assert w["experiment_id"] == "T1110.001"
     assert [c["signal_at"] for c in w["cycles"]] == [_iso(start + timedelta(minutes=3))]
@@ -131,7 +136,7 @@ def test_window_states(runs, client):
     killed = _window(runs, "killed", start=NOW - timedelta(hours=4), end=NOW - timedelta(hours=3))
     killed["closed_by"] = "orodruin-kill"         # M-1: the kill closes what was left open
     (runs / "exercises" / "killed.json").write_text(json.dumps(killed))
-    ws = {w["run_id"]: w for w in client.get("/api/atelier/exercises").json()["exercises"]}
+    ws = {w["run_id"]: w for w in client.get("/api/exercises").json()["exercises"]}
     assert {r: w["state"] for r, w in ws.items()} == \
         {"open": "open", "grace": "grace", "closed": "closed", "lapsed": "lapsed", "killed": "closed"}
     assert ws["killed"]["closed_by"] == "orodruin-kill" and ws["closed"]["closed_by"] is None
@@ -140,10 +145,10 @@ def test_window_states(runs, client):
 def test_since_bounds_the_windows_but_keeps_the_live_ones(runs, client):
     _window(runs, "old", start=NOW - timedelta(days=10), end=NOW - timedelta(days=10))
     _window(runs, "new", start=NOW - timedelta(hours=1), end=NOW - timedelta(minutes=50))
-    ids = [w["run_id"] for w in client.get("/api/atelier/exercises?since=7d").json()["exercises"]]
+    ids = [w["run_id"] for w in client.get("/api/exercises?since=7d").json()["exercises"]]
     assert ids == ["new"]
-    assert len(client.get("/api/atelier/exercises?since=all").json()["exercises"]) == 2
-    assert "error" in client.get("/api/atelier/exercises?since=7x").json()
+    assert len(client.get("/api/exercises?since=all").json()["exercises"]) == 2
+    assert "error" in client.get("/api/exercises?since=7x").json()
 
 
 def test_a_run_report_is_found_beside_its_campaign(runs, client):
@@ -166,7 +171,7 @@ def test_a_run_report_is_found_beside_its_campaign(runs, client):
          "metrics": {"injector": "gothmog", "time_to_restore_s": 133, "execution_id": "x",
                      "before": {"vm-a": probes}, "after": {"vm-a": probes}},
          "thresholds": {}, "checks": {"fault_effective": "PASS", "revert_verified": "PASS"}}))
-    ws = {w["run_id"]: w for w in client.get("/api/atelier/exercises").json()["exercises"]}
+    ws = {w["run_id"]: w for w in client.get("/api/exercises").json()["exercises"]}
     assert ws["run-c"]["run"]["metrics"]["detection"] == "detected"
     assert "before" not in ws["run-c"]["run"]["metrics"]
     g = ws["gothmog-1"]["run"]
@@ -189,7 +194,7 @@ def test_a_fault_report_keeps_its_probes_only_in_their_shape(runs, client):
                                 "vm-b": "not a list"},
                      "after": ["not", "an", "object"]},
          "thresholds": {}, "checks": {"revert_verified": "FAIL"}}))
-    m = client.get("/api/atelier/exercises").json()["exercises"][0]["run"]["metrics"]
+    m = client.get("/api/exercises").json()["exercises"][0]["run"]["metrics"]
     assert m["before"] == {"vm-a": [{"name": "heartbeat", "ok": False, "observed": "",
                                      "expect": "fresh 10m"}]}
     assert m["after"] == {}
@@ -229,7 +234,7 @@ def test_campaigns_list_and_detail(runs, client):
     (runs / "campaigns" / "broken").mkdir()
     (runs / "campaigns" / "broken" / "manifest.json").write_text("{not json")
 
-    camps = client.get("/api/atelier/campaigns?since=30d").json()["campaigns"]
+    camps = client.get("/api/campaigns?since=30d").json()["campaigns"]
     good = [c for c in camps if not c.get("error")]
     assert [c["campaign_id"] for c in good] == ["c-new"]
     assert good[0]["pulled"] is True and good[0]["report"] is True
@@ -237,7 +242,7 @@ def test_campaigns_list_and_detail(runs, client):
     assert [s["seq"] for s in good[0]["scenarios"]] == [1, 2]
     assert any(c.get("error") == "manifest unreadable" for c in camps)
 
-    detail = client.get("/api/atelier/campaigns/c-new").json()
+    detail = client.get("/api/campaigns/c-new").json()
     assert detail["report_md"].startswith("# Campagne")
     assert [f["seq"] for f in detail["facts"]] == [1, 2]
     assert detail["facts"][0]["detection"] == "detected"
@@ -250,7 +255,7 @@ def test_campaign_detail_says_what_it_left_out(runs, client):
     _manifest(runs, "c-bad", created=NOW - timedelta(hours=1), scenarios=[
         {"seq": 1, "ttp": "T1110.001", "name": "ssh", "status": "executed", "run_id": "a/b",
          "detection": "detected", "target_resource_id": VM}])
-    detail = client.get("/api/atelier/campaigns/c-bad").json()
+    detail = client.get("/api/campaigns/c-bad").json()
     assert detail["facts"] == []
     assert len(detail["skipped"]) == 1 and "run_id" in detail["skipped"][0]
 
@@ -265,8 +270,8 @@ def test_the_console_never_writes_a_window(runs, client):
     (runs / "exercises" / "odd.json").write_text(json.dumps(odd))
     before = {p.name: (p.read_text(), p.stat().st_mtime_ns) for p in (runs / "exercises").iterdir()}
 
-    ws = {w["run_id"]: w for w in client.get("/api/atelier/exercises?since=all").json()["exercises"]}
-    client.get("/api/atelier/channel")
+    ws = {w["run_id"]: w for w in client.get("/api/exercises?since=all").json()["exercises"]}
+    client.get("/api/channel")
     assert set(ws) == {"old", "odd"}
     assert ws["odd"]["targets"] == []
     after = {p.name: (p.read_text(), p.stat().st_mtime_ns) for p in (runs / "exercises").iterdir()}
@@ -274,13 +279,13 @@ def test_the_console_never_writes_a_window(runs, client):
 
 
 def test_campaign_detail_refuses_a_path(client):
-    assert "plain name" in client.get("/api/atelier/campaigns/a..b").json()["error"]
-    assert "unknown" in client.get("/api/atelier/campaigns/nope").json()["error"]
+    assert "plain name" in client.get("/api/campaigns/a..b").json()["error"]
+    assert "unknown" in client.get("/api/campaigns/nope").json()["error"]
 
 
 def test_channel_without_a_return_channel(runs, client):
     _window(runs, "live", start=NOW - timedelta(minutes=1))
-    c = client.get("/api/atelier/channel").json()
+    c = client.get("/api/channel").json()
     assert c["return_channel"] == {"configured": False}
     assert c["exercise_channel"]["configured"] is False
     assert c["exercise_channel"]["newest_window_at"]
@@ -302,10 +307,10 @@ def test_channel_reads_the_published_heartbeat(runs, client, monkeypatch):
         return {"at": _iso(NOW - timedelta(seconds=30)), "since": _iso(NOW - timedelta(hours=1)),
                 "windows": ["known"]}
     monkeypatch.setattr(watch_channel, "read_heartbeat", _read)
-    rc = client.get("/api/atelier/channel").json()["return_channel"]
+    rc = client.get("/api/channel").json()["return_channel"]
     assert rc["configured"] is True and rc["alive"] is True
     assert rc["unlisted_windows"] == ["unknown"]
-    client.get("/api/atelier/channel")
+    client.get("/api/channel")
     assert len(reads) == 1                              # cached, not read on every poll
 
 
@@ -316,24 +321,24 @@ def test_channel_unreadable_is_said_never_raised(runs, client, monkeypatch):
     def _fail():
         raise RuntimeError("HTTP 403 reading the watch channel")
     monkeypatch.setattr(watch_channel, "read_heartbeat", _fail)
-    rc = client.get("/api/atelier/channel").json()["return_channel"]
+    rc = client.get("/api/channel").json()["return_channel"]
     assert "403" in rc["error"] and "alive" not in rc
 
 
 def test_delivered_detections(runs, client, monkeypatch):
     from eregion_core import watch_channel
-    assert client.get("/api/atelier/channel/detections/run-a").json() == \
+    assert client.get("/api/channel/detections/run-a").json() == \
         {"configured": False, "detections": []}
     monkeypatch.setenv("EREGION_WATCH_CHANNEL", "https://acct.blob.core.windows.net/watch")
     monkeypatch.setattr(watch_channel, "read_detections",
                         lambda rid: [{"signal_id": "s1", "exercise_run": rid}])
-    assert client.get("/api/atelier/channel/detections/run-a").json()["detections"] == \
+    assert client.get("/api/channel/detections/run-a").json()["detections"] == \
         [{"signal_id": "s1", "exercise_run": "run-a"}]
 
     def _unsafe(rid):
         raise ValueError(rid)
     monkeypatch.setattr(watch_channel, "read_detections", _unsafe)
-    assert "plain name" in client.get("/api/atelier/channel/detections/x..y").json()["error"]
+    assert "plain name" in client.get("/api/channel/detections/x..y").json()["error"]
 
 
 def test_the_war_room_reads_enrollment_as_the_watch_does(runs, monkeypatch):
@@ -353,11 +358,11 @@ def test_a_window_on_a_vm_not_enrolled_marks_nothing(runs, client, monkeypatch):
     start = NOW - timedelta(minutes=10)
     _window(runs, "run-x", start=start, end=start + timedelta(minutes=2))
     _cycle(runs, "watch-ssh-x", at=start + timedelta(minutes=3))
-    w = client.get("/api/atelier/exercises").json()["exercises"][0]
+    w = client.get("/api/exercises").json()["exercises"][0]
     assert w["cycles"] == [] and w["enrolled"] == {VM.lower(): False}
 
 
 def test_a_window_not_believed_is_shown_with_why(runs, client):
     _window(runs, "too-long", start=NOW - timedelta(hours=1), expires=NOW + timedelta(hours=5))
-    w = client.get("/api/atelier/exercises").json()["exercises"][0]
+    w = client.get("/api/exercises").json()["exercises"][0]
     assert w["run_id"] == "too-long" and "MAX_DURATION_S" in w["refusal"]

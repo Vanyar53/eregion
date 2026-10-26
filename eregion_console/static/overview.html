@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Eregion — Overview</title>
+<link rel="stylesheet" href="/static/console.css">
+<style>
+  /* Eregion at a glance (/): a line per section — Glorfindel always, each injector active or
+     greyed — and the channels. The five indicators of the finality come with UI-2 (#206). */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--text); font-family: var(--font); font-size: 13px;
+    min-height: 100vh; display: flex; flex-direction: column;
+  }
+  a { color: var(--blue); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  #observe-banner {
+    padding: 8px 20px; font-size: 11px; line-height: 1.5;
+    background: color-mix(in srgb, var(--blue) 8%, var(--bg1));
+    border-bottom: 1px solid color-mix(in srgb, var(--blue) 30%, transparent);
+  }
+  #observe-banner code { font-size: 10px; color: var(--blue); }
+
+  main { padding: 18px 20px; display: flex; flex-direction: column; gap: 2px; max-width: 1500px; }
+  .row { display: grid; grid-template-columns: 120px 1fr; gap: 14px; padding: 10px 12px;
+         border-left: 2px solid var(--border); background: var(--bg1); }
+  .row.s-glorfindel { border-left-color: var(--blue); }
+  .row.s-annatar { border-left-color: var(--purple); }
+  .row.s-gothmog { border-left-color: var(--orange); }
+  .row.greyed { background: transparent; border-left-color: var(--border); }
+  .row.greyed .name { color: var(--border); }
+  .name { font-weight: 700; letter-spacing: 1px; font-size: 12px; }
+  .name a { color: inherit; }
+  .lines { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .line { display: flex; gap: 14px; align-items: baseline; flex-wrap: wrap; font-size: 12px; min-width: 0; }
+  .k { color: var(--dim); font-size: 11px; }
+  .dim { color: var(--dim); }
+  .big { font-weight: 700; }
+  .ok { color: var(--green); } .bad { color: var(--red); } .warn { color: var(--yellow); }
+  .chip {
+    font-size: 9px; font-weight: 700; letter-spacing: .5px; padding: 1px 5px; border-radius: 3px;
+    border: 1px solid var(--border); color: var(--dim); white-space: nowrap;
+  }
+  .c-ok   { color: var(--green);  border-color: color-mix(in srgb, var(--green) 45%, transparent); }
+  .c-bad  { color: var(--red);    border-color: color-mix(in srgb, var(--red) 45%, transparent); }
+  .c-warn { color: var(--yellow); border-color: color-mix(in srgb, var(--yellow) 45%, transparent); }
+  .c-blue { color: var(--blue);   border-color: color-mix(in srgb, var(--blue) 45%, transparent); }
+  .meta { color: var(--dim); font-size: 10px; }
+  .r-ok { color: var(--green); } .r-bad { color: var(--red); } .r-warn { color: var(--yellow); }
+  .r-wait { color: var(--dim); } .r-blue { color: var(--blue); }
+</style>
+</head>
+<body>
+
+<header id="console-header"></header>
+
+<!-- Observe-only, said where the operator looks first: this page opens the console. -->
+<div id="observe-banner" hidden>
+  <b>Observation</b> — Glorfindel detects and recommends; <b>nothing is executed</b>.
+  The autonomy mode is locked to <b>human-only</b> because this console runs with
+  <b>read-only credentials</b> (<code>GLORFINDEL_READ_ONLY=1</code> and read-only Azure
+  rights, set when it was deployed — not a setting of this page).
+  Give each card a verdict in <a href="/glorfindel">Glorfindel's TO JUDGE</a>.
+</div>
+
+<main id="ov"><div class="dim">…</div></main>
+
+<script src="/static/console.js"></script>
+<script src="/static/exercises.js"></script>
+<script>
+Console.init('overview');
+
+const D = { sections: null, judge: null, report: null, ex: null, camp: null, chan: null };
+const ROLE_ROW = {
+  annatar: { absent: 'no attack has tested Glorfindel here' },
+  gothmog: { absent: 'no fault has tested Glorfindel here' },
+};
+
+function glorfindelRow(s) {
+  const lines = [];
+  const n = D.judge ? D.judge.length : null;
+  const d = (D.report && D.report.disruptive) || {};
+  const judged = (d.right || 0) + (d.wrong || 0);
+  const rate = d.false_rate == null ? '—' : Math.round(d.false_rate * 100) + '%';
+  lines.push(`<div class="line">
+    <a href="/glorfindel" class="big ${n ? 'warn' : 'ok'}">${n == null ? '…' : n ? `${n} to judge ▸` : 'nothing to judge'}</a>
+    <span title="Isolations and blocks judged wrong, among those judged — real traffic, the last 7 days (glorfindel report)"><span class="k">isolate/block judged wrong</span> ${rate}${judged ? ` <span class="dim">of ${judged}</span>` : ''} <span class="dim">· 7 d</span></span>
+    ${D.report && D.report.exercises ? `<span class="dim" title="Cards an exercise window covered: they are in TO JUDGE, never in this rate (glorfindel report)">not counted: ${D.report.exercises} exercise card${D.report.exercises > 1 ? 's' : ''}</span>` : ''}
+    <span class="dim">${D.sections && D.sections.read_only ? 'mode <b style="color:var(--blue)">OBSERVE-ONLY</b> · human-only' : 'each VM acts per its mode (Glorfindel, Config)'}</span>
+  </div>`);
+  if (s && s.setup && !s.setup.configured)
+    lines.push(`<div class="line warn"><span>not configured yet on this host — no glorfindel-config.yaml and no watch heartbeat: start with <code>glorfindel watch</code> (<a href="/glorfindel">Glorfindel ▸</a>)</span></div>`);
+  return lines.join('');
+}
+
+function lastRun(injector) {
+  const ws = ((D.ex && D.ex.exercises) || []).filter(w => w.injector === injector);
+  return ws.length ? ws[0] : null;
+}
+
+function runLine(w) {
+  const r = response(w);
+  return `<div class="line"><span class="k">last run</span>
+    <a href="/runs/${encodeURIComponent(w.run_id)}">${esc(w.experiment)}</a>
+    <span class="dim">${ago(w.start)} ago</span>
+    <span class="r-${r.cls}">${w.kind === 'fault' ? '⚡' : '⚔'} ${esc(r.text)}</span>
+    ${runChip(w)}</div>`;
+}
+
+function campaignLine() {
+  const c = ((D.camp && D.camp.campaigns) || []).find(x => !x.error);
+  if (!c) return '';
+  const sc = c.scenarios || [], ex = sc.filter(s => s.status === 'executed');
+  const n = k => ex.filter(s => (s.detection || 'unknown') === k).length;
+  return `<div class="line"><span class="k">last campaign</span>
+    <a href="/annatar?campaign=${encodeURIComponent(c.dir)}">${esc(c.campaign_id || c.dir)}</a>
+    <span class="dim">${hms(c.created_at)}</span>
+    <span>${ex.length}/${sc.length} executed · <span class="ok">${n('detected')} detected</span>${n('missed') ? ` · <span class="bad">${n('missed')} missed</span>` : ''}${n('unknown') ? ` · <span class="warn">${n('unknown')} unknown</span>` : ''}</span></div>`;
+}
+
+function injectorRow(s) {
+  if (!s.active)
+    return `<div class="line dim"><span>not set up — ${ROLE_ROW[s.id].absent} (<a href="/${s.id}">what it adds ▸</a>)</span></div>`;
+  const w = lastRun(s.id);
+  const lines = [w ? runLine(w) : `<div class="line dim"><span>no ${s.label} window in the last 7 days (<a href="/${s.id}">${s.label} ▸</a>)</span></div>`];
+  if (s.id === 'annatar') lines.push(campaignLine());
+  return lines.join('');
+}
+
+function channelsRow() {
+  const c = D.chan;
+  if (!c) return '<div class="line dim">…</div>';
+  const ec = c.exercise_channel || {}, rc = c.return_channel || {};
+  const live = c.live_windows || [];
+  let beat = '<span class="dim">return channel not configured — runs read the local watch files</span>';
+  if (rc.configured) beat = rc.error ? `<span class="bad" title="${esc(rc.error)}">return channel unreadable</span>`
+    : `<span class="${rc.alive ? 'ok' : 'warn'}">published beat ${dur(rc.age_s)} ago</span>${rc.alive ? '' : ' <span class="warn">— a run reads it as no watch</span>'}`;
+  const unlisted = rc.unlisted_windows || [];
+  return `<div class="line">
+    <span>${ec.configured ? '<span class="ok">exercise channel on</span>' : '<span class="dim">local only (no exercise channel)</span>'}${ec.newest_window_at ? ` <span class="dim">· newest window ${ago(ec.newest_window_at)} ago</span>` : ''}</span>
+    <span><span class="k">live windows</span> ${live.length ? live.map(esc).join(', ') : '<span class="dim">none</span>'}</span>
+    <span>${beat}</span>
+    ${unlisted.length ? `<span class="warn" title="A run of these windows cannot conclude to a miss yet">⚠ not listed: ${unlisted.map(esc).join(', ')}</span>` : ''}
+  </div>`;
+}
+
+function render() {
+  const sections = (D.sections && D.sections.sections) || [];
+  if (!sections.length) return;
+  document.getElementById('observe-banner').hidden = !(D.sections && D.sections.read_only);
+  const injectorsOn = sections.some(s => !s.always && s.active);
+  const rows = sections.map(s => {
+    const body = s.id === 'glorfindel' ? glorfindelRow(s) : injectorRow(s);
+    return `<div class="row s-${esc(s.id)}${s.active ? '' : ' greyed'}" title="${esc(s.label)} — ${esc(s.role)}">
+      <div class="name"><a href="/${esc(s.id)}">${esc(s.label.toUpperCase())}</a></div>
+      <div class="lines">${body}</div></div>`;
+  });
+  if (injectorsOn) rows.push(`<div class="row"><div class="name dim">CHANNELS</div><div class="lines">${channelsRow()}</div></div>`);
+  else rows.push(`<div class="row"><div class="name dim">PROOF</div><div class="lines"><div class="line dim">none yet: Glorfindel's detection and response are unproven on this infrastructure — Annatar and Gothmog prove it</div></div></div>`);
+  document.getElementById('ov').innerHTML = rows.join('');
+}
+
+async function refresh() {
+  const get = (url) => getJSON(url).catch(() => null);
+  const injectorsOn = ((D.sections && D.sections.sections) || []).some(s => !s.always && s.active);
+  const [judge, report, ex, camp, chan] = await Promise.all([
+    get('/api/to-judge?since=7d'), get('/api/report?since=7d'),
+    injectorsOn ? get('/api/exercises?since=7d') : null,
+    injectorsOn ? get('/api/campaigns?since=30d') : null,
+    injectorsOn ? get('/api/channel') : null,
+  ]);
+  if (judge && Array.isArray(judge.cards)) { D.judge = judge.cards; Console.setJudgeCount(judge.cards.length); }
+  if (report && typeof report.cards === 'number') D.report = report;
+  if (ex && !ex.error) D.ex = ex;
+  if (camp && !camp.error) D.camp = camp;
+  if (chan && !chan.error) D.chan = chan;
+  render();
+}
+
+let started = false;
+Console.onSections(d => {
+  D.sections = d;
+  render();
+  if (!started) { started = true; refresh(); setInterval(refresh, 30000); }
+});
+</script>
+</body>
+</html>

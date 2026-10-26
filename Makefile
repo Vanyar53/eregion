@@ -173,7 +173,8 @@ help:
 	@echo "  make glorfindel-host-model MODEL=…           Changer le modèle qui décide (ou MODEL=default)"
 	@echo "  make celebrimbor-workload                    Charge de bree (site + routine d'admin)"
 	@echo "  make glorfindel-host-status                  Tout tourne ? VMs, sauvegardes, services, erreurs, cartes à juger"
-	@echo "  make glorfindel-host-start / -stop / -logs   Glorfindel + War Room sur la VM"
+	@echo "  make glorfindel-host-start [REF=tag|commit]  Déploie une référence (défaut : dernier tag v*), jamais une branche"
+	@echo "  make glorfindel-host-stop / -logs            Glorfindel + War Room sur la VM"
 	@echo "  make glorfindel-host-tunnel                  Tunnel + URL de la War Room avec son jeton"
 	@echo "  make glorfindel-host-url                     L'URL de la War Room avec son jeton"
 	@echo ""
@@ -509,8 +510,14 @@ glorfindel-host-push:
 	 rc=$$?; rm -f $$cfg; exit $$rc
 	@echo "  host.env et glorfindel-config.yaml (human_only) poussés sur $(HOST_IP)"
 
+# M-3 (#183) : une référence nommée, jamais une branche — REF=<tag ou commit>, par défaut le
+# dernier tag v*. Checkout détaché, image étiquetée avec la référence (deploy.sh, envoyé par
+# ssh : celui du poste, quelle que soit la référence déployée).
+REF ?=
 glorfindel-host-start:
-	$(HOST_SSH) 'test -f .eregion-host-ready && mkdir -p .eregion/analysis && cd eregion && git pull -q --ff-only && make -s build-glorfindel && docker compose --profile bot up -d watch war-room bot && docker image prune -f >/dev/null'
+	@test -n "$(HOST_IP)" || { echo "Pas de VM : make glorfindel-host-up d'abord"; exit 1; }
+	@case "$(REF)" in *[!A-Za-z0-9._-]*) echo "REF invalide : $(REF) (un tag ou un commit)"; exit 1;; esac
+	$(HOST_SSH) 'test -f .eregion-host-ready && mkdir -p .eregion/analysis && cd eregion && bash -s -- $(REF)' < infra/glorfindel-host/deploy.sh
 	@echo ""
 	@echo "  ⚠ Arrête le Glorfindel local (make glorfindel-stop) : deux watch sur le même banc = cartes en double ;"
 	@echo "    et aucun autre bot avec le même DISCORD_BOT_TOKEN."

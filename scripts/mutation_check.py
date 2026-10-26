@@ -41,6 +41,8 @@ VER = "glorfindel/providers/azure/verify.py"
 UNB = "glorfindel/providers/azure/unblock.py"
 SWP = "glorfindel/providers/azure/sweep.py"
 SDK = "glorfindel/providers/azure/sdk.py"
+FAC = "glorfindel/actions.py"                 # the façade (A1)
+PIF = "glorfindel/providers/interface.py"
 R = "glorfindel/reassert.py"
 C = "glorfindel/config.py"
 INS = "eregion_core/inscription.py"
@@ -64,6 +66,7 @@ XW = "eregion_core/exercise.py"
 INVARIANTS = "tests/unit/test_invariants.py"
 INSCRIPTION_TESTS = "tests/unit/test_inscription.py tests/unit/test_engine.py"
 DOCS_TESTS = "tests/unit/test_docs_budget.py"
+BOUNDARY_TESTS = "tests/unit/test_provider_boundary.py"
 DETECTION_TESTS = "tests/unit/test_annatar_detection.py tests/unit/test_engine.py"
 # A mutant whose "old" text is RENAME renames its file to "new" instead of editing it.
 RENAME = object()
@@ -845,6 +848,40 @@ MUTANTS = [
      '            **seen, "execution_id": (execution or {}).get("name"), "execution_status": status,\n',
      '            **{k: v for k, v in seen.items() if k != "before"},\n'
      '            "execution_id": (execution or {}).get("name"), "execution_status": status,\n'),
+    # A1 — actions.py split, its import path a façade that is still one namespace; MC0 —
+    # each provider declares its capabilities, the readiness reads them, no SDK outside
+    # its adapter (tests/unit/test_actions_split.py, test_provider_boundary.py).
+    ("M450", "a write through the façade reaches one module only: the locks under the real home (A1)",
+     FAC,
+     "        for module in binders:\n            setattr(module, name, value)\n",
+     "        for module in binders[:1]:\n            setattr(module, name, value)\n"),
+    ("M451", "the façade binds copies: a value its module changes reads stale (A1)", FAC,
+     "_sys.modules[__name__].__class__ = _OneNamespace\n",
+     "globals().update({n: v for m in _MODULES for n, v in vars(m).items() if not n.startswith(\"__\")})\n"
+     "_sys.modules[__name__].__class__ = _OneNamespace\n"),
+    ("M452", "a module of the split left out of the façade: its names unreachable (A1)", FAC,
+     '    "glorfindel.providers.azure.sweep",\n', ""),
+    ("M453", "the readiness reads the rules' rights from the quarantine's (MC0)", "glorfindel/readiness.py",
+     "    rules_ok = caps.available(NETWORK_RULES, missing)\n",
+     "    rules_ok = caps.available(NETWORK_QUARANTINE, missing)\n"),
+    ("M454", "a capability whose rights are missing counts as available (MC0)", PIF,
+     "        return cap is not None and not (set(missing_rights) & cap.rights)\n",
+     "        return cap is not None\n"),
+    ("M455", "a capability the provider doesn't declare counts as available (MC0)", PIF,
+     "        return cap is not None and not (set(missing_rights) & cap.rights)\n",
+     "        return cap is None or not (set(missing_rights) & cap.rights)\n"),
+    ("M456", "a connector that declares nothing is read as Azure (MC0)", PIF,
+     "    if isinstance(connector, CloudConnector):\n        raise TypeError(",
+     "    if False:\n        raise TypeError("),
+    ("M457", "the boundary lets any provider's SDK into any adapter of glorfindel/ (MC0)", BOUNDARY_TESTS,
+     '        return rel.startswith(f"glorfindel/providers/{provider}/")\n',
+     '        return rel.startswith("glorfindel/providers/")\n'),
+    ("M458", "Azure's declaration drifts from what check_permissions reads (MC0)",
+     "glorfindel/providers/azure/capabilities.py",
+     '            "Microsoft.Network/networkSecurityGroups/securityRules/delete",\n', ""),
+    ("M459", "a restore job read in the VM's group again, through the connector (A1)", "glorfindel/jobs.py",
+     "            az_status = connector.restore_job_status(vault, rg, restore_job_name)\n",
+     "            az_status = connector.restore_job_status(vault, job.get(\"rg\", \"\"), restore_job_name)\n"),
 ]
 
 # Mutants measured by other tests than the invariants (their lot's own).
@@ -901,6 +938,10 @@ TESTS.update({f"M{n}": "tests/unit/test_decision_stability.py" for n in range(20
 TESTS.update({f"M{n}": "tests/unit/test_exercise_guard.py" for n in range(220, 239)})
 TESTS.update({f"M{n}": "tests/unit/test_run_channel.py" for n in range(240, 246)})
 TESTS.update({mid: "tests/unit/test_gothmog.py" for mid in ("M241", "M246")})
+# A1 / MC0: the façade's one namespace, the capabilities and the boundary.
+TESTS.update({mid: "tests/unit/test_actions_split.py" for mid in ("M450", "M451", "M452")})
+TESTS.update({f"M{n}": f"{BOUNDARY_TESTS} tests/unit/test_readiness.py" for n in range(453, 459)})
+TESTS["M459"] = "tests/unit/test_jobs.py"
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

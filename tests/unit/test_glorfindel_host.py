@@ -68,8 +68,6 @@ def test_every_host_env_variable_reaches_the_containers():
     host.env carries but the list omits never reaches the watch. #160 added
     EREGION_WATCH_CHANNEL to host.env and not to the list — the hosted watch would never
     have published its heartbeat (found 20/10, before deployment)."""
-    import yaml
-
     passed = set().union(*_compose_env().values())
     operator = {k: "x" for k in host_env.COPIED}
     carried = set(host_env.host_env(operator))

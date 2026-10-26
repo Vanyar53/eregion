@@ -81,6 +81,8 @@ def test_every_host_env_variable_reaches_the_containers():
 # secret, and what each container still needs to work.
 SECRETS = {
     "DISCORD_BOT_TOKEN": {"bot"},
+    # The console's token, and its former name (H0's host.env): the console alone.
+    "EREGION_CONSOLE_TOKEN": {"war-room"},
     "GLORFINDEL_WARROOM_TOKEN": {"war-room"},
     "ANTHROPIC_API_KEY": {"watch"}, "OPENAI_API_KEY": {"watch"},
     "MISTRAL_API_KEY": {"watch"}, "AZURE_API_KEY": {"watch"},
@@ -96,7 +98,7 @@ NEEDED = {
               "EREGION_EXERCISE_CHANNEL", "EREGION_WATCH_CHANNEL", "EREGION_ANALYSIS_MODEL",
               "DISCORD_CHANNEL_ID", "GLORFINDEL_DISCORD_BOT", "GLORFINDEL_WEBHOOK_URL",
               "GLORFINDEL_DISCOVERY_RETENTION_H"},
-    "war-room": {"GLORFINDEL_WARROOM_TOKEN", "AZURE_SUBSCRIPTION_ID", "GLORFINDEL_READ_ONLY",
+    "war-room": {"EREGION_CONSOLE_TOKEN", "GLORFINDEL_WARROOM_TOKEN", "AZURE_SUBSCRIPTION_ID", "GLORFINDEL_READ_ONLY",
                  "GLORFINDEL_LLM_MODEL", "GLORFINDEL_APPROVAL_MAX_AGE_H", "GLORFINDEL_BACKUP_VAULT",
                  "EREGION_EXERCISE_CHANNEL", "EREGION_WATCH_CHANNEL", "DISCORD_CHANNEL_ID",
                  "GLORFINDEL_DISCORD_BOT"},

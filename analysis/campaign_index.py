@@ -48,6 +48,7 @@ class Versed:
     computed: list[str] = field(default_factory=list)   # runs computed from the files
     missing: list[str] = field(default_factory=list)    # runs neither indexed nor computable
     left: str = ""                                      # why the campaign was not put in
+    start_refused: str = ""                             # its manifest's start not believed (D2b)
 
     def line(self) -> str:
         if self.left:
@@ -57,6 +58,8 @@ class Versed:
                f"{len(self.computed)} calculé(s) depuis les fichiers")
         if self.missing:
             out += f" ; absent(s) des faits : {', '.join(self.missing)}"
+        if self.start_refused:
+            out += f" ; {self.start_refused}"
         return out
 
 
@@ -80,7 +83,7 @@ def verse(campaign_dir: Path, path: Path | None = None, warn=cr._say) -> Versed:
     if not isinstance(manifest, dict):
         return Versed(campaign_dir.name, left="manifeste illisible")
     info = cr.campaign_info(campaign_dir)
-    out = Versed(info.campaign_id, info.state)
+    out = Versed(info.campaign_id, info.state, start_refused=info.start_refused)
     if info.state not in ENDED:
         out.left = f"état {info.state or 'inconnu'} : pas terminée"
         return out

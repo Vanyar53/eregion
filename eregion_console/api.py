@@ -8,21 +8,22 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import quote
 
 try:
-    from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-    from fastapi.responses import FileResponse
+    from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+    from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
     from fastapi.staticfiles import StaticFiles
 except ImportError as e:
     raise ImportError(
-        "War Room requires extra dependencies: pip install eregion[war-room]"
+        "The Eregion console requires extra dependencies: pip install eregion[console]"
     ) from e
 
-app = FastAPI(title="Glorfindel War Room", docs_url=None, redoc_url=None)
+app = FastAPI(title="Eregion console", docs_url=None, redoc_url=None)
 
 
 class AmbiguousVM(Exception):
-    """A VM name the War Room sent matches several VMs (same name, two resource groups)."""
+    """A VM name the console sent matches several VMs (same name, two resource groups)."""
 
 
 @app.exception_handler(AmbiguousVM)
@@ -30,17 +31,29 @@ async def _ambiguous_vm(_request, exc: AmbiguousVM):
     from fastapi.responses import JSONResponse
     return JSONResponse(status_code=409, content={"error": str(exc)})
 
+# The cookie keeps the War Room's name: it is invisible (HttpOnly), and renaming it would make
+# every open browser ask for the token again, for nothing (docs/design/console.md).
 _TOKEN_COOKIE = "glorfindel_warroom"
+TOKEN_ENV = "EREGION_CONSOLE_TOKEN"
+LEGACY_TOKEN_ENV = "GLORFINDEL_WARROOM_TOKEN"
+
+
+def console_token() -> str:
+    """The console's token: EREGION_CONSOLE_TOKEN when it is not empty, else its former name.
+    Not empty, not merely set: docker compose passes `${VAR:-}`, so the new variable is always
+    there, empty on a host whose host.env only has the old one (H0) — read as "set", it would
+    drop the token there."""
+    return os.environ.get(TOKEN_ENV, "") or os.environ.get(LEGACY_TOKEN_ENV, "")
 
 
 class _TokenAuthMiddleware:
-    """Shared-token gate for every War Room route (pages, API, live feed).
+    """Shared-token gate for every console route (pages, API, live feed).
 
-    The War Room triggers real Azure actions (restore, release, approve & execute) and
+    The console triggers real Azure actions (restore, release, approve & execute) and
     can switch an asset's autonomy mode. It used to listen on 0.0.0.0 with no
     authentication: anyone reaching the port could do all of that.
 
-    Active when GLORFINDEL_WARROOM_TOKEN is set (read per request, so tests and a
+    Active when the token is set (``console_token``, read per request, so tests and a
     restart pick it up). Accepted proofs: the `glorfindel_warroom` cookie, an
     `Authorization: Bearer <token>` header, or `?token=<token>` once — which sets the
     cookie (HttpOnly, SameSite=Strict: a cross-site page can't ride on it) and
@@ -52,7 +65,7 @@ class _TokenAuthMiddleware:
         self.app = app
 
     async def __call__(self, scope, receive, send):
-        token = os.environ.get("GLORFINDEL_WARROOM_TOKEN", "")
+        token = console_token()
         if not token or scope["type"] not in ("http", "websocket"):
             await self.app(scope, receive, send)
             return
@@ -91,16 +104,16 @@ class _TokenAuthMiddleware:
         else:
             from starlette.responses import JSONResponse
             resp = JSONResponse(
-                {"error": "War Room protégée : ouvrir /?token=<GLORFINDEL_WARROOM_TOKEN> "
-                          "ou envoyer Authorization: Bearer <token>."},
+                {"error": f"Eregion console: open /?token=<{TOKEN_ENV}> once, or send "
+                          "Authorization: Bearer <token>."},
                 status_code=401,
             )
         await resp(scope, receive, send)
 
 
-_TOKEN_PAGE = """<!doctype html><html lang="fr"><head><meta charset="utf-8">
+_TOKEN_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>War Room — accès</title>
+<title>Eregion — token</title>
 <style>
   :root { color-scheme: dark; }
   body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 16px;
@@ -116,12 +129,12 @@ _TOKEN_PAGE = """<!doctype html><html lang="fr"><head><meta charset="utf-8">
   button { background: #1f6feb; color: #fff; border: 0; cursor: pointer; }
 </style></head><body>
 <form method="get" action="">
-  <h1>Glorfindel War Room</h1>
-  <p>Cette War Room peut déclencher des actions Azure. Saisis le jeton défini dans
-     <code>GLORFINDEL_WARROOM_TOKEN</code> sur la machine qui l'héberge.</p>
-  <label for="token">Jeton</label>
+  <h1>EREGION</h1>
+  <p>This console can trigger Azure actions. Enter the token set in
+     <code>EREGION_CONSOLE_TOKEN</code> on the machine that hosts it.</p>
+  <label for="token">Token</label>
   <input id="token" name="token" type="password" autocomplete="current-password" required autofocus>
-  <button type="submit">Ouvrir la War Room</button>
+  <button type="submit">Open</button>
 </form></body></html>"""
 
 
@@ -129,6 +142,20 @@ app.add_middleware(_TokenAuthMiddleware)
 
 _STATIC = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=str(_STATIC)), name="static")
+# The pages, served as files: one per section (/config is the Glorfindel page, opened on its
+# configuration; /annatar and /gothmog share one page, filtered by the path).
+_PAGES = {"/": "overview.html", "/glorfindel": "glorfindel.html", "/config": "glorfindel.html",
+          "/annatar": "injector.html", "/gothmog": "injector.html"}
+
+
+@app.middleware("http")
+async def _revalidate_pages(request, call_next):
+    """Pages and their scripts revalidate on every load (ETag): after a redeployment, a page
+    left in the browser's cache showed the old console on H0 (#197)."""
+    response = await call_next(request)
+    if request.url.path in _PAGES or request.url.path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
 
 
 @app.on_event("startup")
@@ -149,17 +176,87 @@ async def _warm_up_azure() -> None:
 @app.on_event("startup")
 async def _read_enrollment() -> None:
     """H-1: a window marks a VM only if that VM is enrolled, read by the reader itself. The
-    watch sets that check at startup (glorfindel/cli.py); the War Room sets the same, with the
-    same identity on H0, so the atelier shows Glorfindel's reading — without it, no window
-    would mark anything here, and no run of a published campaign would be kept."""
+    watch sets that check at startup (glorfindel/cli.py); the console sets the same, with the
+    same identity on H0, so the injectors' pages show Glorfindel's reading — without it, no
+    window would mark anything here, and no run of a published campaign would be kept."""
     from eregion_core import exercise
     from eregion_core.inscription import TagEnrollment
     exercise.set_enrollment_check(TagEnrollment())
 
 
-@app.get("/")
-async def index() -> FileResponse:
-    return FileResponse(_STATIC / "index.html")
+@app.on_event("startup")
+async def _say_which_token() -> None:
+    """Both token variables set, with two values: the new one is the token — said once, so an
+    operator who still types the old one knows why it is refused."""
+    new, old = os.environ.get(TOKEN_ENV, ""), os.environ.get(LEGACY_TOKEN_ENV, "")
+    if new and old and new != old:
+        print(f"  ⚠ {TOKEN_ENV} and {LEGACY_TOKEN_ENV} differ: the console takes {TOKEN_ENV}.")
+
+
+def _page(name: str):
+    async def page() -> FileResponse:
+        return FileResponse(_STATIC / name)
+    return page
+
+
+for _path, _file in _PAGES.items():
+    app.add_api_route(_path, _page(_file), methods=["GET"], include_in_schema=False)
+
+
+def _with_query(path: str, request) -> str:
+    q = request.url.query
+    return path + (f"?{q}" if q else "")
+
+
+@app.get("/atelier", include_in_schema=False)
+async def atelier_moved(request: Request):
+    """The atelier became the injectors' sections: its address leads to the overview."""
+    return RedirectResponse(_with_query("/", request), status_code=308)
+
+
+@app.get("/api/atelier/{rest:path}", include_in_schema=False)
+async def atelier_api_moved(rest: str, request: Request):
+    """The atelier's API lost its prefix (/api/atelier/exercises → /api/exercises), until 1.0:
+    a page left in a browser's cache still reads."""
+    return RedirectResponse(_with_query(f"/api/{rest}", request), status_code=308)
+
+
+@app.get("/runs/{run_id}", include_in_schema=False)
+async def run_page(run_id: str):
+    """A run's page, in the section of its injector — what a card knows is the run id only."""
+    from eregion_core.exercise_channel import safe_part
+    if not safe_part(run_id):
+        return JSONResponse({"error": "run id: a plain name"}, status_code=400)
+    return RedirectResponse(f"/{_injector_of(run_id)}?run={quote(run_id)}", status_code=302)
+
+
+def _injector_of(run_id: str) -> str:
+    """Gothmog when its window or its report says so; Annatar otherwise (a purged window's
+    tombstone names no injector; Annatar's reports do not name theirs)."""
+    from eregion_core.exercise import exercises_dir
+    for path in (exercises_dir(_RUNS) / f"{run_id}.json", _run_reports().get(run_id)):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8")) if path else None
+        except (OSError, ValueError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        metrics = data.get("metrics") if isinstance(data.get("metrics"), dict) else {}
+        if "gothmog" in (data.get("injector"), metrics.get("injector")):
+            return "gothmog"
+    return "annatar"
+
+
+@app.get("/api/sections")
+async def sections_status() -> dict:
+    """Glorfindel, and each injector active or greyed on this host, and why
+    (eregion_console/sections.py); and whether this console only reads (observe-only)."""
+    from eregion_console import sections
+    try:
+        out = await asyncio.to_thread(sections.status, _RUNS)
+    except ValueError as exc:
+        return {"error": str(exc)}
+    return {**out, "read_only": _read_only()}
 
 
 @app.get("/api/state")
@@ -993,7 +1090,7 @@ async def action_approve(esc_id: str, ip: str = "", scope: str = "vm") -> dict:
                     "scope": block_scope, "result": result, "verification": verification}
 
         else:
-            return {"error": f"Action '{action}' non supportée via War Room — CLI : glorfindel respond {resource_id}"}
+            return {"error": f"Action '{action}' non supportée par la console — CLI : glorfindel respond {resource_id}"}
 
     except PermissionError as e:
         return {"error": str(e), "permission_denied": True}
@@ -1451,7 +1548,7 @@ def _find_resource_id(vm_name: str) -> str | None:
     if len(found) > 1:
         raise AmbiguousVM(
             f"{vm_name} désigne {len(found)} VMs ({', '.join(sorted(found))}) : action refusée "
-            "depuis la War Room — utiliser la CLI avec l'ID de ressource complet.")
+            "depuis la console — utiliser la CLI avec l'ID de ressource complet.")
     return next(iter(found.values()), None)
 
 
@@ -1569,12 +1666,13 @@ def _parse(data: dict, kind: str) -> dict:
     }
 
 
-# ── Atelier: Annatar and Gothmog, seen from the War Room (read only) ──────────────────────
-# What the injectors did and what Glorfindel made of it, from the files that reach this host:
-# the exercise windows (B2; on H0, pulled by the watch from Orodruin), the campaigns Orodruin
-# publishes (#167), the technique catalog, the watch's debug files and cards, and the return
-# channel the watch writes (#159). Every route here is a GET: a run starts from Orodruin, armed
-# (eregion_core/orodruin.py) — a launch button, later, goes through that contract, never around.
+# ── Annatar and Gothmog: what they ran, and what Glorfindel made of it (read only) ─────────
+# From the files that reach this host: the exercise windows (B2; on H0, pulled by the watch
+# from Orodruin), the campaigns Orodruin publishes (#167), the technique catalog, the watch's
+# debug files and cards, and the return channel the watch writes (#159). Every route here is a
+# GET: a run starts from Orodruin, armed (eregion_core/orodruin.py) — a launch button, later,
+# goes through that contract, never around. Until 26/10 these were the atelier's routes
+# (/api/atelier/*), which now redirect here.
 
 _RUNS = Path("runs")
 # A cycle is slimmed once per debug file version: the files carry the model's past cycles.
@@ -1591,14 +1689,10 @@ def _iso(value) -> datetime | None:
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
-@app.get("/atelier")
-async def atelier_page() -> FileResponse:
-    return FileResponse(_STATIC / "atelier.html")
-
-
-@app.get("/api/atelier/catalog")
-async def atelier_catalog() -> dict:
-    """The technique catalog, techniques and faults, every resource type (planned ones too)."""
+@app.get("/api/catalog")
+async def catalog(kind: str = "") -> dict:
+    """The technique catalog, techniques and faults, every resource type (planned ones too);
+    ``kind=technique`` (Annatar's) or ``kind=fault`` (Gothmog's) keeps one of them."""
     import yaml
     from eregion_core.experiment import CATALOG
     try:
@@ -1607,12 +1701,14 @@ async def atelier_catalog() -> dict:
         return {"error": f"catalog unreadable: {exc}", "entries": []}
     entries = []
     for rtype, body in (data.get("resource_types") or {}).items():
-        for kind, key in (("technique", "techniques"), ("fault", "faults")):
+        for entry_kind, key in (("technique", "techniques"), ("fault", "faults")):
+            if kind and kind != entry_kind:
+                continue
             for e in (body or {}).get(key) or []:
                 if not isinstance(e, dict):
                     continue
                 entries.append({
-                    "resource_type": rtype, "kind": kind,
+                    "resource_type": rtype, "kind": entry_kind,
                     "id": str(e.get("ttp") or e.get("id") or ""),
                     "name": e.get("name", ""), "tactic": e.get("tactic", ""),
                     "status": e.get("status", ""), "destructive": bool(e.get("destructive")),
@@ -1724,7 +1820,7 @@ def _window_state(w: dict, now: datetime) -> str:
 
 def _read_windows() -> list[dict]:
     """The exercise windows as their files hold them. Read only: the watch pulls them, and its
-    ``load_windows`` may purge an old one (H-1) — the War Room never writes there. A file
+    ``load_windows`` may purge an old one (H-1) — the console never writes there. A file
     without a run_id and a start (unreadable, or a purged window's tombstone) is skipped; the
     targets are kept only as a list of strings. ``refusal``: why Glorfindel does not believe
     the window, as written (``window_refusal``, H-1) — it is shown, never hidden."""
@@ -1746,11 +1842,13 @@ def _read_windows() -> list[dict]:
     return out
 
 
-@app.get("/api/atelier/exercises")
-async def atelier_exercises(since: str = "7d") -> dict:
+@app.get("/api/exercises")
+async def exercises(since: str = "7d", injector: str = "") -> dict:
     """The exercise windows, newest first, each with what Glorfindel did during it: the cycles
     on a target inside the window (the return channel's rule, ``covering_runs``), the cards
-    carrying its run, and the run's report when it reached this host."""
+    carrying its run, and the run's report when it reached this host. ``injector`` keeps one
+    injector's windows (its section); the cycles are attributed over every window either way,
+    so a window keeps only its own."""
     from eregion_core.exercise import covering_runs, is_enrolled, last_moment
     try:
         start = _since_start(since)
@@ -1778,10 +1876,11 @@ async def atelier_exercises(since: str = "7d") -> dict:
     reports = _run_reports()
     # Read as the watch reads it (TagEnrollment, cached): a target not enrolled is never in an
     # exercise for Glorfindel (H-1).
-    vms = sorted({t for w in windows for t in w["targets"]})
+    shown = [w for w in windows if not injector or w.get("injector") == injector]
+    vms = sorted({t for w in shown for t in w["targets"]})
     enrolled = await asyncio.to_thread(lambda: {t: is_enrolled(t) for t in vms})
     out = []
-    for w in sorted(windows, key=lambda w: str(w.get("start")), reverse=True)[:200]:
+    for w in sorted(shown, key=lambda w: str(w.get("start")), reverse=True)[:200]:
         rid = str(w["run_id"])
         last = last_moment(w)
         out.append({
@@ -1798,8 +1897,8 @@ async def atelier_exercises(since: str = "7d") -> dict:
     return {"exercises": out}
 
 
-@app.get("/api/atelier/campaigns")
-async def atelier_campaigns(since: str = "30d") -> dict:
+@app.get("/api/campaigns")
+async def campaigns(since: str = "30d") -> dict:
     """The campaigns on this host, newest first: those Orodruin published (``.pulled``) and
     those run here. On H0 a campaign appears once it is over (its manifest comes last)."""
     try:
@@ -1841,8 +1940,8 @@ async def atelier_campaigns(since: str = "30d") -> dict:
     return {"campaigns": out}
 
 
-@app.get("/api/atelier/campaigns/{cid}")
-async def atelier_campaign(cid: str) -> dict:
+@app.get("/api/campaigns/{cid}")
+async def campaign(cid: str) -> dict:
     """One campaign's facts — each run with Glorfindel's decision, read from the files as the
     campaign report reads them (analysis/campaign_report.py) — the scenarios it left out and
     why, and its report, when written."""
@@ -1886,8 +1985,8 @@ def _published_heartbeat() -> dict:
     return value
 
 
-@app.get("/api/atelier/channel")
-async def atelier_channel() -> dict:
+@app.get("/api/channel")
+async def channel() -> dict:
     """Both channels as this host sees them: the windows the watch pulled (which are live
     now), and the heartbeat it publishes — with the live windows it does not list yet (a run
     of such a window cannot conclude to a miss: ``watch_channel.miss_unprovable``)."""
@@ -1917,8 +2016,8 @@ async def atelier_channel() -> dict:
     return out
 
 
-@app.get("/api/atelier/channel/detections/{run_id}")
-async def atelier_delivered(run_id: str) -> dict:
+@app.get("/api/channel/detections/{run_id}")
+async def delivered(run_id: str) -> dict:
     """The detections the watch delivered on the return channel for this run's window — what
     the run on Orodruin read, or will read."""
     from eregion_core import watch_channel
@@ -1938,20 +2037,22 @@ def serve(host: str = "127.0.0.1", port: int = 7007) -> None:
         import uvicorn
     except ImportError as e:
         raise ImportError(
-            "War Room requires extra dependencies: "
-            "pip install eregion[war-room]"
+            "The Eregion console requires extra dependencies: "
+            "pip install eregion[console]"
         ) from e
-    token = os.environ.get("GLORFINDEL_WARROOM_TOKEN", "")
+    from eregion_console import sections
+    sections.override()   # an unknown section stops here, before anything listens
+    token = console_token()
     loopback = host in ("127.0.0.1", "localhost", "::1")
     if token:
-        print(f"  War Room  →  http://localhost:{port}/?token=$GLORFINDEL_WARROOM_TOKEN")
+        print(f"  Eregion console  →  http://localhost:{port}/?token=${TOKEN_ENV}")
     else:
-        print(f"  War Room  →  http://localhost:{port}")
+        print(f"  Eregion console  →  http://localhost:{port}")
     if not loopback and not token:
         print(
             f"  ⚠ Écoute sur {host} SANS jeton : quiconque joint ce port peut déclencher "
             "des actions Azure (restore, release, approve) et changer le mode "
-            "d'autonomie. Définir GLORFINDEL_WARROOM_TOKEN, ou limiter l'exposition "
+            f"d'autonomie. Définir {TOKEN_ENV}, ou limiter l'exposition "
             "(mapping Docker 127.0.0.1:7007:7007)."
         )
     uvicorn.run(app, host=host, port=port, log_level="warning")

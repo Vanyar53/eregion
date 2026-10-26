@@ -6,7 +6,7 @@ _Extrait tel quel de `CLAUDE.md` le 2026-10-15 (lot DX1) : la CLI, les workflows
 
 ```bash
 # Workflow opérateur — Docker Compose (recommandé)
-make glorfindel-start                        # lance watch + war-room → http://localhost:7007
+make glorfindel-start                        # lance watch + la console → http://localhost:7007
                                              # refuse si AZURE_SUBSCRIPTION_ID est vide (watch aveugle) ; ALLOW_NO_AZURE=1 pour une démo
 make glorfindel-logs                         # tail logs des deux services
 make glorfindel-dev                          # auto-reload sur modification de code (docker compose watch)
@@ -36,7 +36,7 @@ glorfindel pending --watch                   # alerting temps réel
 #   blocked  = règle NSG deny sur une IP     → glorfindel unblock (dé-bloquer l'IP)
 #   les deux → glorfindel reset (reset complet)
 #
-# War Room :  ↩️ Release (isolated) | ↩️ Unblock (blocked IP) | ⟳ Reset (les deux)
+# Console :   ↩️ Release (isolated) | ↩️ Unblock (blocked IP) | ⟳ Reset (les deux)
 # TUI :       x:release  u:unblock  v:reset  r:restore
 #
 glorfindel release <resource_id> --yes       # lever isolation NSG (post-restore, VM de retour)
@@ -81,7 +81,9 @@ glorfindel migrate-rules --from <modifié> --base <livré> [--dry-run]  # règle
 glorfindel memory-stats                      # ChromaDB cycle count
 glorfindel bot                               # démarrer le bot Discord interactif
 glorfindel dashboard                         # TUI full-screen : resources + feed + escalations
-glorfindel war-room                          # War Room web sur http://localhost:7007 (pip install eregion[war-room])
+eregion console [--sections annatar,gothmog] # la console web sur http://localhost:7007 (pip install eregion[console]) ;
+                                             # Glorfindel toujours, Annatar et Gothmog s'ils ont des runs sur l'hôte
+                                             # (ou --sections) ; `glorfindel war-room` reste un alias caché
 glorfindel --version                         # 0.2.0
 
 # Annatar
@@ -118,7 +120,7 @@ gothmog report <run_id>                      # runs/<run_id>.json (même forme q
 #   de `annatar run` comme de `gothmog run`, le rapport du run part vers H0 (runs/<run_id>.json dans
 #   le conteneur des fenêtres, sans droit nouveau), après la fermeture de sa fenêtre. La watch
 #   hébergée le tire dans son runs/ (une forme refusée n'est pas écrite, un rapport local jamais
-#   écrasé) : la console de l'atelier affiche son verdict. Un échec de publication est signalé
+#   écrasé) : la page de son injecteur, dans la console, affiche son verdict. Un échec de publication est signalé
 #   (« run report … not published ») et ne change ni le run ni son code de sortie.
 
 # Campagne (kill-chain générative + rapport IA0) — depuis Orodruin, sur le modèle de gothmog
@@ -198,13 +200,13 @@ GLORFINDEL_LLM_BASE_URL=...         # endpoint self-hosted/Ollama (ex: http://lo
 GLORFINDEL_WEBHOOK_URL=...          # Slack/Teams/Discord webhook — escalades ET actions autonomes
                                     # Discord : https://discord.com/api/webhooks/<id>/<token>/slack
 DISCORD_BOT_TOKEN=...               # Bot Discord interactif (fils par VM, boutons Acquitter/Commande) ; le conteneur du bot seul (M-3)
-DISCORD_CHANNEL_ID=...              # ID du channel (clic droit → Copy Channel ID) ; avec DISCORD_BOT_TOKEN, la watch et la War Room laissent les cartes au bot (webhook muet) ; seul, il ne fait taire rien
+DISCORD_CHANNEL_ID=...              # ID du channel (clic droit → Copy Channel ID) ; avec DISCORD_BOT_TOKEN, la watch et la console laissent les cartes au bot (webhook muet) ; seul, il ne fait taire rien
 DISCORD_PING_ROLE=...               # ID du rôle à pinger à l'ouverture d'un fil (optionnel)
 DISCORD_ALLOWED_USERS=111,222       # M-3 : ids des utilisateurs qui peuvent cliquer les boutons des cartes
 DISCORD_ALLOWED_ROLES=333           # M-3 : ids des rôles autorisés ; les deux vides → tous les boutons refusent (fermé par défaut), refus journalisé
 GLORFINDEL_KEEP_ISOLATED=1          # mode forensique
 GLORFINDEL_ISOLATION_TTL_H=4        # TTL isolation (défaut 4h) : au-delà, une carte ttl_exceeded — jamais de levée automatique
-GLORFINDEL_APPROVAL_MAX_AGE_H=2     # âge max d'une carte exécutable en un clic (War Room « Approve & execute ») ; nan/inf → 2 ; ≤0 → approbation en un clic fermée
+GLORFINDEL_APPROVAL_MAX_AGE_H=2     # âge max d'une carte exécutable en un clic (console, « Approve & execute ») ; nan/inf → 2 ; ≤0 → approbation en un clic fermée
 GLORFINDEL_INCIDENT_TTL_S=300       # TTL fenêtre incident
 GLORFINDEL_CONFIDENCE_THRESHOLD=0.7 # gate autonomie LLM (défaut 0.7 — en dessous → escalade forcée) ; illisible, hors [0, 1] → tout est retenu
 GLORFINDEL_LLM_TIMEOUT_S=120        # borne d'un appel au modèle de Glorfindel (décision, autoring de règle), par tentative (défaut 120 ; illisible, ≤0, >3600 → 120) ; pas le rapport de campagne : EREGION_ANALYSIS_TIMEOUT_S
@@ -219,8 +221,8 @@ EREGION_EXERCISE_CHANNEL=https://…/exercises  # O1 : canal des fenêtres d'exe
 
 Chaque conteneur ne reçoit que ses variables (M-3, `docker-compose.yml`) : les clés des modèles
 à la watch seule ; `DISCORD_BOT_TOKEN` et `DISCORD_ALLOWED_*` au bot seul ;
-`GLORFINDEL_WARROOM_TOKEN` à la War Room seule ; `GLORFINDEL_WEBHOOK_URL` à la watch et à la
-War Room, avec `GLORFINDEL_DISCORD_BOT` (« 1 » si `DISCORD_BOT_TOKEN` est posé, vide sinon,
+`EREGION_CONSOLE_TOKEN` (et son ancien nom, `GLORFINDEL_WARROOM_TOKEN`) à la console seule ;
+`GLORFINDEL_WEBHOOK_URL` à la watch et à la console, avec `GLORFINDEL_DISCORD_BOT` (« 1 » si `DISCORD_BOT_TOKEN` est posé, vide sinon,
 jamais sa valeur : avec `DISCORD_CHANNEL_ID`, leur webhook se tait) ; le principal de service
 Azure aux trois (la watch, « Approve & execute », les boutons Restore / Revert du bot) ; les
 réglages sans secret aux trois. Une variable nouvelle s'ajoute

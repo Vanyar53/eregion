@@ -2270,20 +2270,10 @@ def dashboard():
     run()
 
 
-@cli.command("war-room")
-@click.option("--host", default="127.0.0.1", show_default=True,
-              help="Listen address. Loopback by default: the War Room triggers real Azure "
-                   "actions. To expose it, set GLORFINDEL_WARROOM_TOKEN first.")
+@cli.command("war-room", hidden=True)
+@click.option("--host", default="127.0.0.1", show_default=True)
 @click.option("--port", default=7007, show_default=True)
 def war_room(host: str, port: int):
-    """Start the War Room web UI (cards + live feed + action buttons).
-
-    Requires: pip install eregion[war-room]
-    Then open http://localhost:7007 in a browser.
-
-    With GLORFINDEL_WARROOM_TOKEN set, every page and API call requires the token:
-    open http://<host>:7007/?token=<token> once (it is then kept in a cookie), or send
-    `Authorization: Bearer <token>` from scripts.
-    """
-    from glorfindel.api import serve
+    """Alias for 'eregion console' (former name: the War Room became the Eregion console)."""
+    from eregion_console.api import serve
     serve(host=host, port=port)

@@ -1,0 +1,49 @@
+/* The console's shared header (docs/design/console.md): every page includes this file and
+   console.js. Same palette as the pages — no colour outside it. */
+:root {
+  --bg:        #0d1117;
+  --bg1:       #161b22;
+  --bg2:       #21262d;
+  --border:    #30363d;
+  --text:      #e6edf3;
+  --dim:       #7d8590;
+  --green:     #3fb950;
+  --red:       #f85149;
+  --yellow:    #d29922;
+  --orange:    #e3b341;
+  --blue:      #58a6ff;
+  --cyan:      #39d353;
+  --purple:    #bc8cff;
+  --font:      ui-monospace, "Cascadia Code", "SF Mono", Consolas, monospace;
+}
+
+/* `hidden` wins over a page's display rule (a greyed section hides its columns). */
+[hidden] { display: none !important; }
+
+header.console {
+  display: flex; align-items: center; gap: 14px; padding: 8px 20px; flex-shrink: 0;
+  background: var(--bg1); border-bottom: 1px solid var(--border);
+  font-family: var(--font); min-width: 0;
+}
+header.console .logo {
+  color: var(--blue); font-weight: 700; font-size: 15px; letter-spacing: 2px; text-decoration: none;
+}
+header.console nav { display: flex; gap: 2px; align-items: center; }
+header.console .tab {
+  font-size: 12px; padding: 4px 10px; border-radius: 6px; color: var(--dim);
+  text-decoration: none; border: 1px solid transparent; white-space: nowrap;
+}
+header.console .tab:hover { color: var(--text); border-color: var(--border); text-decoration: none; }
+header.console .tab.active { color: var(--text); background: var(--bg2); border-color: var(--border); }
+/* A component not set up here: still a link — its page says what it would add. */
+header.console .tab.greyed { color: var(--border); }
+header.console .tab.greyed:hover { color: var(--dim); }
+header.console .badge {
+  font-size: 10px; font-weight: 700; margin-left: 5px; padding: 0 5px; border-radius: 8px;
+  color: var(--bg); background: var(--orange);
+}
+header.console .spacer { flex: 1; }
+header.console .hstat { font-size: 11px; color: var(--dim); white-space: nowrap; }
+header.console .hstat .dot { font-size: 10px; }
+header.console .sep { color: var(--border); }
+header.console #c-clock { color: var(--dim); font-size: 11px; min-width: 88px; text-align: right; white-space: nowrap; }

@@ -62,6 +62,8 @@ HREP = "analysis/hosted_report.py"
 XCH = "eregion_core/exercise_channel.py"
 ACLI = "annatar/cli.py"
 GCLI = "glorfindel/cli.py"
+CON = "eregion_console/api.py"
+SEC = "eregion_console/sections.py"
 XW = "eregion_core/exercise.py"
 INVARIANTS = "tests/unit/test_invariants.py"
 INSCRIPTION_TESTS = "tests/unit/test_inscription.py tests/unit/test_engine.py"
@@ -74,11 +76,13 @@ RENAME = object()
 # (old[i] -> new[i]), each old text matching exactly once — for a bug that needs two places.
 
 # D-2: the lines of analysis/campaign_report.py that read a date in words, a range of them too
-# (M513, M537).
-_DATES_FIRST = r'''    rf"|(?:\b(?:le|les|entre|du|des|aux|au|between|from|on|the)\s+{_DAY}(?:er)?"''' + "\n"
+# (M513, M537) — as D2b left them.
+_DATES_FIRST = r'''    rf"|(?:\b(?:le|les|entre|du|des|aux|(?:on|from|between)\s+the|between|from|on)\s+{_DAY}{_TH}"''' + "\n"
+_DATES_AU = r'''    rf"|\bau\s+{_DAY}{_TH}(?:\s*(?:,|\bet\b)\s*au\s+{_DAY}{_TH})+"''' + "\n"
 _DATES_LINE = (_DATES_FIRST
-               + r'''    rf"(?:\s*(?:,|-|–|\bet\b|\bau\b|\bà\b|\band\b|\bto\b)\s*(?:(?:le|du|des)\s+)?{_DAY}(?:er)?)+"''' + "\n"
-               r'''    rf"|\b\d{{1,2}}(?:er|st|nd|rd|th)?)\s+(?:{_MONTHS})\b"''' + "\n")
+               + r'''    rf"(?:\s*(?:,|-|–|\bet\b|\bau\b|\bà\b|\band\b|\bto\b)\s*(?:(?:le|du|des|au|aux|the)\s+)?{_DAY}{_TH})+"''' + "\n"
+               + _DATES_AU
+               + r'''    rf"|\b\d{{1,2}}(?:er|st|nd|rd|th)?)\s+(?:{_MONTHS})\b"''' + "\n")
 
 # (id, bug class, file, text in the code today, text that re-introduces the bug[, why
 # the invariants can't see it])
@@ -663,17 +667,17 @@ MUTANTS = [
      "    return str(raw).strip().lower() not in _SWITCH_OFF\n",
      '    return str(raw).strip().lower() in ("1", "true", "yes")\n'),
     ("M158", "the configuration: an approval age limit of nan or inf executes a card of any age (G2)",
-     "glorfindel/api.py",
+     "eregion_console/api.py",
      "    if math.isnan(value) or value == math.inf:\n        return 2.0\n", ""),
     # G2, after the Opus 5.5 review (M159–M169 belong to lot 167).
     ("M170", "the configuration: an approval age limit of 0 or less is lifted to 2 h, reopening "
              "the one-click approval closed on purpose (G2 review)",
-     "glorfindel/api.py",
+     "eregion_console/api.py",
      "    if math.isnan(value) or value == math.inf:\n",
      "    if math.isnan(value) or value == math.inf or value <= 0:\n"),
     ("M171", "the configuration: an approval age limit of 0 or less refuses no card of its own — "
              "a card dated ahead of the clock runs (G2 review)",
-     "glorfindel/api.py",
+     "eregion_console/api.py",
      "    if max_age_h <= 0:\n", "    if False:\n"),
     ("M172", "the model: a NaN confidence passes the confidence gate (G2 review)",
      "glorfindel/agent.py",
@@ -691,7 +695,7 @@ MUTANTS = [
      "  GLORFINDEL_LLM_TIMEOUT_S: ${GLORFINDEL_LLM_TIMEOUT_S:-}\n", ""),
     ("M176", "the War Room reads the threshold from the agent: a failed import drops the "
              "capability matrix (G2 review)",
-     "glorfindel/api.py",
+     "eregion_console/api.py",
      "        from glorfindel.config import confidence_threshold\n        _allow: list = []\n",
      "        from glorfindel.agent import _confidence_threshold as confidence_threshold\n"
      "        _allow: list = []\n"),
@@ -772,7 +776,7 @@ MUTANTS = [
      "glorfindel/agent.py",
      '    "agreement": "unstable_decision",\n', ""),
     ("M211", "an unstable decision's card cannot be approved in one click (D-1)",
-     "glorfindel/api.py",
+     "eregion_console/api.py",
      '                     "telemetry_gap", "unstable_decision"}\n',
      '                     "telemetry_gap"}\n'),
     ("M212", "GLORFINDEL_DECISION_DRAWS never reaches the watch's container (D-1)",
@@ -1040,17 +1044,17 @@ MUTANTS = [
      "        if False and not any(\n"),
     # D-2, after its third review: a trend over three campaigns says the way between its
     # earlier runs, in either order, on the same technique; a date in English is a date; a
-    # number before a date is no day of a range.
+    # number before a date is no day of a range. M540–M542 follow D2b's _faced (their order
+    # unknown, two earlier runs face each other both ways).
     ("M540", "a trend over three campaigns is barred: two earlier runs never face each other (D-2)",
      "analysis/campaign_report.py",
-     "    out += [facing(x, y) for x in earlier for y in earlier if x is not y and x.ttp == y.ttp]\n", ""),
+     "                out += [facing(x, y), facing(y, x)]\n", "                pass\n"),
     ("M541", "two earlier runs face each other in the order they are cited only (D-2)",
      "analysis/campaign_report.py",
-     "    out += [facing(x, y) for x in earlier for y in earlier if x is not y and x.ttp == y.ttp]\n",
-     "    out += [facing(x, y) for i, x in enumerate(earlier) for y in earlier[i + 1:] if x.ttp == y.ttp]\n"),
+     "                out += [facing(x, y), facing(y, x)]\n", "                out += [facing(x, y)]\n"),
     ("M542", "two earlier runs of different techniques face each other (D-2)", "analysis/campaign_report.py",
-     "    out += [facing(x, y) for x in earlier for y in earlier if x is not y and x.ttp == y.ttp]\n",
-     "    out += [facing(x, y) for x in earlier for y in earlier if x is not y]\n"),
+     "            if x is y or x.ttp != y.ttp or (x.run_id in own and y.run_id in own):\n",
+     "            if x is y or (x.run_id in own and y.run_id in own):\n"),
     ("M543", "a date in English is read as a number: « since October 21 » barred (D-2)",
      "analysis/campaign_report.py",
      ('''           "|january|february|march|april|may|june|july|august|september|october|november|december")\n''',
@@ -1058,17 +1062,70 @@ MUTANTS = [
      ('''           )\n''', "")),
     ("M544", "a number before a date is a day of a range: « baisse de 12, le 23 octobre » kept (D-2)",
      "analysis/campaign_report.py",
-     _DATES_FIRST, r'''    rf"|(?:\b{_DAY}(?:er)?"''' + "\n"),
+     _DATES_FIRST, r'''    rf"|(?:\b{_DAY}{_TH}"''' + "\n"),
     # D-2, after its fourth review: « des 21 et 23 octobre » and « du 21 et du 23 octobre » are
-    # ranges; a day of a range is from 1 to 31.
+    # ranges; a day of a range is from 1 to 31. M546 and M547 follow D2b's openings and
+    # articles.
     ("M545", "a day of a range is any number: « between 70 and 60, 23 October » kept (D-2)",
      "analysis/campaign_report.py",
      r'''_DAY = r"(?:3[01]|[12]\d|0?[1-9])(?!\d)"''', r'''_DAY = r"\d{1,2}"'''),
-    ("M546", "a range of dates after « des », « aux », « au » is read as numbers (D-2)",
+    ("M546", "a range of dates after « des », « aux », « from the » is read as numbers (D-2)",
      "analysis/campaign_report.py",
-     _DATES_FIRST, r'''    rf"|(?:\b(?:le|les|entre|du|between|from|on)\s+{_DAY}(?:er)?"''' + "\n"),
+     _DATES_FIRST, r'''    rf"|(?:\b(?:le|les|entre|du|between|from|on)\s+{_DAY}{_TH}"''' + "\n"),
     ("M547", "« du 21 et du 23 octobre » is read as numbers (D-2)", "analysis/campaign_report.py",
-     r"(?:(?:le|du|des)\s+)?{_DAY}(?:er)?)+", r"(?:le\s+)?{_DAY}(?:er)?)+"),
+     r"(?:(?:le|du|des|au|aux|the)\s+)?{_DAY}{_TH})+", r"(?:(?:le|des|au|aux|the)\s+)?{_DAY}{_TH})+"),
+    # D2b (#184, after D-2) — the runs a trend cites face each other the way they were played,
+    # read on their campaigns' starts; a manifest from the channel has its start bounded by
+    # what H0 saw; « au » and « the » alone open no range of dates, « au … et au … » and « from
+    # the … to the … » do, with their st, nd, rd.
+    ("M650", "the order of the runs a trend cites is not read: a pair of earlier runs is an alibi (D2b)",
+     CREP, "            first = _came_first(x, y)\n", "            first = None\n"),
+    ("M651", "the runs a trend cites face each other against time (D2b)", CREP,
+     "                out.append(facing(x, y) if first else facing(y, x))\n",
+     "                out.append(facing(y, x) if first else facing(x, y))\n"),
+    ("M652", "a run of the index comes without its campaign's start (D2b)", CREP,
+     '    fact.campaign_started = _seconds(meta.get("campaign_started"))\n', ""),
+    ("M653", "this campaign's runs come without its start: a later campaign's run is cited as earlier (D2b)",
+     CREP, "        f.campaign_started = info.started\n", "        pass\n"),
+    ("M654", "a campaign id that is a date gives no order (D2b)", CREP,
+     "    return f.campaign_started if f.campaign_started is not None else _id_date(f.campaign_id)\n",
+     "    return f.campaign_started\n"),
+    ("M655", "two runs of one campaign are not ordered by seq (D2b)", CREP,
+     "        return None if x.seq == y.seq else x.seq < y.seq\n", "        return None\n"),
+    ("M656", "a channel manifest's start after its first window is believed (D2b)", CREP,
+     "    if first_window is not None and started > first_window + FUTURE_SKEW_S:\n", "    if False:\n"),
+    ("M657", "a channel manifest's start long before its first window is believed (D2b)", CREP,
+     "    if first_window is not None and started < first_window - START_LEAD_S - FUTURE_SKEW_S:\n",
+     "    if False:\n"),
+    ("M658", "a channel manifest's start after H0 pulled it is believed (D2b)", CREP,
+     "    if pulled is not None and started > pulled + FUTURE_SKEW_S:\n", "    if False:\n"),
+    ("M659", "a refused start is not said in the report (D2b)", CREP,
+     "        warn(info.start_refused)\n", "        pass\n"),
+    ("M660", "a refused start is kept: the forged date chooses the previous campaign (D2b)", CREP,
+     "            info.started = first\n", "            pass\n"),
+    ("M661", "a window H-1 refuses bounds a manifest's start (D2b)", CREP,
+     '        if not window or window.get("purged_at") or window_refusal(window, declared_at=declared):\n',
+     '        if not window or window.get("purged_at"):\n'),
+    ("M662", "« au » opens a range: « tombe au 12, le 23 octobre » kept (D2b)", CREP,
+     r"des|aux|(?:on|from|between)\s+the", r"des|aux|au|(?:on|from|between)\s+the"),
+    ("M663", "« the » alone opens a range: « by the 12, 23 October » kept (D2b)", CREP,
+     r"aux|(?:on|from|between)\s+the|between", r"aux|the|between"),
+    ("M664", "« au 21 et au 23 octobre » is read as numbers (D2b)", CREP, _DATES_AU, ""),
+    ("M665", "« au », « aux », « the » refused inside a range: « from the 21 to the 23 October » barred (D2b)",
+     CREP, r"(?:(?:le|du|des|au|aux|the)\s+)?", r"(?:(?:le|du|des)\s+)?"),
+    ("M666", "a day of a range takes no st, nd, rd: « on the 21st and 23rd October » barred (D2b)", CREP,
+     '_TH = r"(?:er|st|nd|rd|th)?"', '_TH = r"(?:er)?"'),
+    # D2b, after its review: a date no UTC date holds is said, never raised; an unknown start
+    # replaces an indexed one; two runs of this campaign make no trend.
+    ("M667", "a manifest's date of year 10000 makes the report raise (D2b)", CREP,
+     "    except (ValueError, OverflowError, OSError):\n        return str(read)[:40]",
+     "    except ():\n        return str(read)[:40]"),
+    ("M668", "an unknown start is left out of the row: the start an earlier indexing gave stays (D2b)", CREP,
+     '        meta["campaign_started"] = float(campaign.started) if campaign.started is not None else ""\n',
+     '        if campaign.started is not None:\n            meta["campaign_started"] = float(campaign.started)\n'),
+    ("M669", "two runs of this campaign face each other in a trend (D2b)", CREP,
+     "            if x is y or x.ttp != y.ttp or (x.run_id in own and y.run_id in own):\n",
+     "            if x is y or x.ttp != y.ttp:\n"),
     # M-3 (#183) — the host of Glorfindel: Discord buttons check who clicks (closed by
     # default), each container gets only its secrets, H0 deploys a named reference whose
     # image carries it, and the image installs from the lock.
@@ -1210,6 +1267,30 @@ MUTANTS = [
      "        gcfg, config_error = None, str(exc)\n", '        gcfg, config_error = None, ""\n'),
     ("M716", "glorfindel rules says an ignored layer « absente » (P1, review 2)", GCLI,
      "    elif client_rules_path().exists():\n", "    elif False:\n"),
+    # UI-1 (#205) — the Eregion console: the former addresses, the token's two names, the
+    # injectors' routes read only, every page behind the token, the sections.
+    ("M400", "the atelier's address no longer leads anywhere (UI-1)", CON,
+     '@app.get("/atelier", include_in_schema=False)\nasync def atelier_moved(',
+     "async def atelier_moved("),
+    ("M401", "a former address redirects without its query (UI-1)", CON,
+     '    return path + (f"?{q}" if q else "")\n', "    return path\n"),
+    ("M402", "compose's empty EREGION_CONSOLE_TOKEN drops the token on H0 (UI-1)", CON,
+     '    return os.environ.get(TOKEN_ENV, "") or os.environ.get(LEGACY_TOKEN_ENV, "")\n',
+     '    return os.environ[TOKEN_ENV] if TOKEN_ENV in os.environ else os.environ.get(LEGACY_TOKEN_ENV, "")\n'),
+    ("M403", "an injector's route accepts a POST (UI-1)", CON,
+     '@app.get("/api/exercises")\n', '@app.api_route("/api/exercises", methods=["GET", "POST"])\n'),
+    ("M404", "a new page is served without the token (UI-1)", CON,
+     '        if not token or scope["type"] not in ("http", "websocket"):\n',
+     '        if not token or scope["type"] not in ("http", "websocket") or scope.get("path") == "/annatar":\n'),
+    ("M405", "/runs/<id> takes a path for a run id (UI-1)", CON,
+     "    if not safe_part(run_id):\n", "    if not run_id:\n"),
+    ("M406", "--sections removes Glorfindel (UI-1)", SEC,
+     '            sections.append({**s, "active": True, "always": True, "setup": glorfindel_setup()})\n',
+     '            sections.append({**s, "active": forced is None, "always": True, "setup": glorfindel_setup()})\n'),
+    ("M407", "--sections is ignored: the detection wins (UI-1)", SEC,
+     "        if forced is not None:\n", "        if False:\n"),
+    ("M408", "eregion console keeps compose's empty service principal: no managed identity (UI-1, H0)",
+     "eregion_console/cli.py", "    _drop_empty_service_principal_env()\n", ""),
 ]
 
 # Mutants measured by other tests than the invariants (their lot's own).
@@ -1276,6 +1357,7 @@ TESTS.update({f"M{n}": "tests/unit/test_campaign_changes.py" for n in range(260,
 TESTS.update({f"M{n}": "tests/unit/test_campaign_changes.py" for n in range(510, 520)})  # D-2, review
 TESTS.update({f"M{n}": "tests/unit/test_campaign_changes.py" for n in range(530, 540)})  # D-2, 2nd review
 TESTS.update({f"M{n}": "tests/unit/test_campaign_changes.py" for n in range(540, 548)})  # D-2, 3rd, 4th reviews
+TESTS.update({f"M{n}": "tests/unit/test_campaign_changes.py" for n in range(650, 670)})  # D2b
 TESTS.update({f"M{n}": "tests/unit/test_bot.py" for n in range(280, 284)})
 TESTS.update({f"M{n}": "tests/unit/test_glorfindel_host.py" for n in range(284, 287)})
 TESTS.update({f"M{n}": "tests/unit/test_host_deploy.py" for n in (287, 288)})
@@ -1289,6 +1371,8 @@ TESTS["M687"] = "tests/unit/test_host_deploy.py"
 TESTS["M688"] = "tests/unit/test_rule_layers.py"
 TESTS.update({f"M{n}": "tests/unit/test_rule_layers.py tests/unit/test_host_deploy.py" for n in range(689, 700)})
 TESTS.update({f"M{n}": "tests/unit/test_rule_layers.py" for n in range(700, 720)})
+TESTS.update({f"M{n}": "tests/unit/test_console.py" for n in range(400, 409)})  # UI-1
+TESTS["M403"] = "tests/unit/test_console_exercises.py"
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

@@ -52,7 +52,7 @@ glorfindel/
                           partagé par tous les nœuds) → kind="aks_node" + parent=<id cluster> (clé de groupage) ;
                           instance VMSS directe (.../virtualMachineScaleSets/<vmss>/virtualMachines/<n>) →
                           kind="vmss_instance" + parent=<id VMSS> ; VM standalone → ("vm",""). DiscoveredAsset
-                          porte kind/parent (defaults rétro-compat cache) → /api/state → War Room replie par parent.
+                          porte kind/parent (defaults rétro-compat cache) → /api/state → la console replie par parent.
                           Clé : l'ID de ressource pour une VM (troisième passe T1 : deux VMs de même nom
                           d'hôte dans deux groupes étaient fusionnées), le nom pour un nœud de cluster.
                           replace_for_backend() : refresh + rétention — une VM absente du Heartbeat (éteinte)
@@ -90,7 +90,7 @@ glorfindel/
                           associations (subnets/nics) + `vms` (resource_ids gouvernés, via nic→vm/subnet→vms d'un
                           network_interfaces.list_all) + restriction Glorfindel (rule `glorfindel-*`). Corrige le
                           sous-comptage de check_nsg_access (dérivé par-VM : rate le NSG subnet quand la NIC a le
-                          sien, le NSG d'un subnet AKS, les VMs éteintes). `vms` → War Room : flag monitored
+                          sien, le NSG d'un subnet AKS, les VMs éteintes). `vms` → console : flag monitored
                           (VM hors-LAW = angle mort) + glow de la/les carte(s) VM au survol. Read-only OK.
   detectors.py          → detector_for() ; DetectionConnector et AzureMonitorDetector (poll 10s) + run_query()
                           vivent dans providers/ depuis A1, réexportés ici
@@ -101,7 +101,7 @@ glorfindel/
                           un seul SUCCESS dans la fenêtre ; 0 row sur query réussie = no-match légitime).
                           Handlers en aval déjà prêts (discovery except→None garde cache ; poller
                           except→last_error ; investigate try→[]). /api/state.monitoring_backends porte
-                          `reachable`/`last_error` (dérivé du poll status) → War Room rougit le DETECT.
+                          `reachable`/`last_error` (dérivé du poll status) → la console rougit le DETECT.
   detection_rules.py    → DetectionRule dataclass + RulePoller (continuous polling, status persistence)
                           load_config(path, glorfindel_cfg=None, client_layer=True) — workspace_id résolu depuis
                           glorfindel_cfg ; P1 : la base `path`, puis la couche du client par-dessus (merge_layers :
@@ -133,27 +133,50 @@ glorfindel/
   memory.py             → CycleMemory ChromaDB (confidence + past_cycles_used)
   incidents.py          → IncidentRegistry (TTL, persist, thread-safe)
   cli.py                → watch, respond, restore (--wait), release, unblock, reset (revert=alias), list, pending, ack, activate,
-                          audit (--all), approve-rule, reject-rule, propose-rules, check-ttl, jobs, bot, dashboard, war-room
+                          audit (--all), approve-rule, reject-rule, propose-rules, check-ttl, jobs, bot, dashboard
+                          (war-room : alias caché d'`eregion console`)
   escalations.py        → ~/.glorfindel/escalations.jsonl + labels (proposed_rule, improve_detection ajoutés)
   bot.py                → Discord bot — un fil par VM, boutons Acquitter + Commande, /pending slash command ;
                           ButtonPolicy (M-3) : DISCORD_ALLOWED_USERS / _ROLES, fermé par défaut
   tui.py                → Rich TUI full-screen (glorfindel dashboard) : resources + feed + escalations, raccourcis a/r/x/u/v
-  api.py                → FastAPI War Room — /api/state (expose autonomy_modes, autonomy_default,
-                          read_only, capability), /api/feed (WS), /api/config, /api/audit[/<vm>],
-                          /api/pending/rules, /api/action/{release,revert,restore,ack,approve-rule,snapshot/<vm>}
+  rules/azure/
+    detection_rules.yaml → rules UNIQUEMENT — queries KQL, TTPs, noms de backends
+                           PAS de workspace_id, resource_id, ni section assets
+                           assets: [auto] → s'applique aux VMs découvertes par le backend
+                           monitoring_backends: [law-celebrimbor-amonsul] par rule → nom du backend
+                           (OPTIONNEL : omis si un seul backend du type, cas mono-LAW → résolution fallback)
+
+eregion_console/                → la console d'Eregion (`eregion console`, docs/design/console.md, #205) ; jusqu'au
+                                  26/10, glorfindel/api.py et glorfindel/static/ (la War Room et l'atelier)
+  api.py                → FastAPI — pages / (Overview), /glorfindel, /annatar, /gothmog, /config ; jeton
+                          (EREGION_CONSOLE_TOKEN s'il n'est pas vide, sinon GLORFINDEL_WARROOM_TOKEN) ;
+                          /api/state (autonomy_modes, autonomy_default, read_only, capability), /api/feed (WS),
+                          /api/config, /api/audit[/<vm>], /api/pending/rules,
+                          /api/action/{release,revert,restore,ack,approve-rule,snapshot/<vm>}
                           /api/action/approve/{esc_id} — exécute l'action retenue d'un mode_hold (action_params)
                           /api/autonomy/{vm} (set_asset_mode) + /api/config/autonomy/default (set_default_mode)
                           /api/discovered — assets découverts (lecture fraîche JSON à chaque appel)
                           /api/jobs/<vm> — état du job snapshot/restore en cours (lit active_jobs/<vm>.json)
-                          /atelier + /api/atelier/{catalog,exercises,campaigns[/<id>],channel,
-                          channel/detections/<run_id>} — la console de l'atelier, GET seulement
-  static/atelier.html   → Atelier : fenêtres d'exercice et ce que Glorfindel a fait dans chacune,
-                          campagnes (faits + report.md), canaux (fenêtres, canal retour), catalogue
-  static/index.html     → War Room web UI — cards VM expandables (compact + étendu), feed live
+                          /api/exercises[?injector=], /api/campaigns[/<id>], /api/catalog[?kind=], /api/channel,
+                          /api/channel/detections/<run_id> — Annatar et Gothmog, GET seulement ;
+                          /api/sections ; /runs/<id> → la section de l'injecteur ; /atelier → / et
+                          /api/atelier/* → /api/* (308, jusqu'à la 1.0)
+  sections.py           → sections actives : Glorfindel toujours, Annatar et Gothmog dès que l'hôte a leurs runs
+                          (fenêtre, rapport, campagne), ou ce que --sections / EREGION_CONSOLE_SECTIONS choisit
+  cli.py                → `eregion console [--host] [--port] [--sections]`
+  static/console.js     → en-tête commun : onglets (actifs ou grisés), battement de la watch, canal retour,
+                          cartes à juger, horloge UTC ; console.css, la palette
+  static/overview.html  → l'accueil : une ligne par section, les canaux ; les cinq indicateurs avec UI-2 (#206)
+  static/injector.html  → pages d'Annatar et de Gothmog (même page, filtrée par le chemin) : fenêtres
+                          d'exercice et ce que Glorfindel a fait dans chacune, campagnes (faits + report.md),
+                          techniques ou pannes du catalogue ; grisée, ce que l'injecteur ajouterait
+  static/exercises.js   → ce que Glorfindel a fait dans une fenêtre (partagé par l'accueil et les injecteurs)
+  static/glorfindel.html → page Glorfindel (/glorfindel, /config) — TO JUDGE (seul endroit où l'on juge
+                          une carte, 26/10), cards VM expandables (compact + étendu), feed live
                           bandeau INFRASTRUCTURE (posture) : 2 axes orthogonaux — régime credentials
                           (👁 OBSERVE-ONLY ↔ ⚡ ACTIVE) + autonomy (⚡ non-disruptive / 👁 human-only).
                           Langage couleur : orange = peut agir, bleu = observe. Tue « absence de badge = actif ».
-                          Mode autonomie : dropdown ⚙ Config (défaut global) + badge par carte cliquable
+                          Mode autonomie : dropdown de Config (défaut global) + badge par carte cliquable
                           → popover capacité (ce que Glorfindel fait seul par mode, lit /api/state.capability)
                           boutons ↩️ Release (isolated) | ↩️ Unblock (blocked IP) | ⟳ Reset (les deux) | 🔄 Restore
                           grisage read-only préventif (_applyReadOnlyGuards) : write désactivés en observe-only,
@@ -162,8 +185,8 @@ glorfindel/
                           section BACKUP par carte : nb de RPs, âge dernier backup, bouton 📸 Snapshot (fire-and-forget RSV)
                           groupes de préparation par carte (ACTION_GROUPS) : NSG, Backup, Compute et Detection (P4 : compteur,
                           cadence, Syslog, règles qui couvrent la VM — une VM aveugle ne paraît plus normale)
-                          carte MONITORING : backends + assets découverts + règles cliquables (modal query)
-                          panneau ⚙ Config : Azure credentials + LLM + mode autonomie global
+                          nœud DETECT : backends + assets découverts + règles cliquables (modal query)
+                          /config : Azure credentials + LLM + mode autonomie global + sections
   rules/azure/
     detection_rules.yaml → la BASE LIVRÉE (P1) : rien ne l'écrit plus, une mise à jour la remplace ;
                            les règles du déploiement vont dans ~/.glorfindel/client_rules.yaml
@@ -248,9 +271,9 @@ infra/terraform/              → module Celebrimbor : infra de test Azure modul
   rule_status.json            → état de polling des règles (last_poll, last_match, match_count, last_error)
   readiness.json              → verrou L6 par VM, clé `nom--hash(ID)` (quatrième passe Q3 : un homonyme héritait du
                                 verdict « prête ») ; un nom seul ambigu ne résout rien → VM retenue : dernier contrôle de préparation + réserves acceptées
-                                (active_since, alerted) — écrit par le watch (tracker) et la War Room
+                                (active_since, alerted) — écrit par le watch (tracker) et la console
   discovered_assets.json      → cache assets découverts (AssetRegistry) — survit aux redémarrages
-  active_jobs/<vm>.json       → état persisté du job snapshot/restore en cours (partagé CLI/War Room)
+  active_jobs/<vm>.json       → état persisté du job snapshot/restore en cours (partagé CLI/console)
                                 réconcilié par la boucle watch (`jobs.reconcile_jobs`, cadence TTL ~1min) :
                                 poll Azure (`refresh_job`, source unique CLI+API+watch) → Completed/Failed ;
                                 garde-fou déterministe → `Stale` si InProgress > 24h (job mort, sinon InProgress

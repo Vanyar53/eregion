@@ -799,6 +799,13 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
                     f"[dim]Detection rules:[/dim] {static_count} static, "
                     f"{auto_count} auto-apply — from [dim]{_rules_file}[/dim]"
                 )
+            # P1: the client's layer, and what it did to the base — said, not silent.
+            if det_cfg.client_file:
+                n_client = sum(1 for r in rules if r.layer == "client")
+                console.print(f"[dim]Couche du client :[/dim] {n_client} règle(s) — "
+                              f"[dim]{det_cfg.client_file}[/dim]")
+            for note in det_cfg.notes:
+                console.print(f"  [yellow]·[/yellow] {note}")
         except Exception as exc:
             console.print(f"[yellow]⚠ Could not load rules: {exc}[/yellow]")
 
@@ -1792,14 +1799,16 @@ def _render_decision(state: dict, dry_run: bool) -> None:
     "rules_file",
     default=None,
     metavar="PATH",
-    help="Path to detection_rules.yaml (default: auto-detected).",
+    help="The shipped base detection_rules.yaml, read to resolve the rule's asset "
+         "(default: auto-detected). Never written.",
 )
 def approve_rule(proposal_id: str, rules_file: str | None) -> None:
-    """Approve a proposed detection rule and append it to detection_rules.yaml.
+    """Approve a proposed detection rule into the client's layer.
 
     PROPOSAL_ID is the UUID shown by 'glorfindel pending' for a proposed_rule
-    escalation. The rule is appended to detection_rules.yaml and the proposal
-    is marked approved in ~/.glorfindel/proposed_rules.jsonl.
+    escalation. The rule is written to ~/.glorfindel/client_rules.yaml (P1: the
+    client's layer, loaded over the shipped base, which an update replaces) and the
+    proposal is marked approved in ~/.glorfindel/proposed_rules.jsonl.
     """
     from glorfindel.proposed_rules import approve
 
@@ -1820,7 +1829,8 @@ def approve_rule(proposal_id: str, rules_file: str | None) -> None:
             f"[green]✓ Rule '{proposal['rule_name']}' approved[/green] "
             f"for {vm} ({proposal['ttp']})."
         )
-        console.print(f"  Appended to [dim]{target}[/dim]")
+        verb = {"replaced": "Replaced in", "same": "Already in"}.get(proposal.get("rule_write"), "Written to")
+        console.print(f"  {verb} the client's layer [dim]{proposal.get('rules_file')}[/dim]")
         console.print(
             "  Restart 'glorfindel watch' to activate, "
             "then re-run the scenario to validate."
@@ -1850,6 +1860,117 @@ def reject_rule(proposal_id: str) -> None:
         )
     except ValueError as e:
         console.print(f"[red]Error:[/red] {e}")
+
+
+# ── P1: the client's layer of rules ──────────────────────────────────────────────
+
+@cli.command("rules")
+@click.option("--rules", "rules_file", default=None, metavar="PATH",
+              help="The shipped base detection_rules.yaml (default: auto-detected).")
+def rules_cmd(rules_file: str | None) -> None:
+    """The detection rules loaded: the shipped base, then the client's layer over it.
+
+    Each rule says its layer; what the client's layer does to the base (a rule replaced,
+    one disabled) is said under the table.
+    """
+    from glorfindel.detection_rules import client_rules_path, load_config
+
+    target = rules_file or _find_rules_file()
+    if not target:
+        console.print("[red]detection_rules.yaml not found.[/red] Pass --rules PATH.")
+        raise SystemExit(1)
+    cfg = load_config(target, client_layer=True)
+    table = Table(box=None, pad_edge=False)
+    for col in ("rule", "layer", "ttp", "assets"):
+        table.add_column(col)
+    for r in cfg.rules:
+        layer = "[cyan]client[/cyan]" if r.layer == "client" else "base"
+        table.add_row(r.name, layer, r.ttp, "auto" if r.auto_apply else (r.asset_name or r.resource_id.split("/")[-1]))
+    console.print(table)
+    console.print(f"[dim]Base :[/dim] {target}")
+    console.print(f"[dim]Couche du client :[/dim] {client_rules_path()}"
+                  + ("" if cfg.client_file else " [dim](absente)[/dim]"))
+    for note in cfg.notes:
+        console.print(f"  [yellow]·[/yellow] {note}")
+
+
+@cli.command("export-rule")
+@click.argument("name")
+@click.option("--rules", "rules_file", default=None, metavar="PATH",
+              help="The shipped base detection_rules.yaml (default: auto-detected).")
+@click.option("--out", "out_file", default=None, metavar="FILE",
+              help="Write the exported rule to FILE instead of printing it.")
+def export_rule_cmd(name: str, rules_file: str | None, out_file: str | None) -> None:
+    """Export one rule, generalised, without any identifier, to propose it upstream.
+
+    The rule (the client's layer first, then the base) loses its assets, backends,
+    workspace_id and resource_id, and any resource id, GUID, identifying literal
+    (Computer == "…") or name this deployment knows in its query or description is
+    replaced by a placeholder. If anything of the deployment would still leave,
+    nothing is exported.
+    """
+    from glorfindel.rule_layers import IdentifierLeft, export_rule
+
+    target = rules_file or _find_rules_file()
+    if not target:
+        console.print("[red]detection_rules.yaml not found.[/red] Pass --rules PATH.")
+        raise SystemExit(1)
+    try:
+        from glorfindel.config import load_glorfindel_config
+        gcfg = load_glorfindel_config()
+    except Exception:
+        gcfg = None
+    try:
+        text = export_rule(name, target, glorfindel_cfg=gcfg)
+    except KeyError:
+        console.print(f"[red]No rule named '{name}'[/red] (see: glorfindel rules)")
+        raise SystemExit(1)
+    except IdentifierLeft as e:
+        console.print(f"[red]✗ {e}[/red]")
+        for item in e.found:
+            console.print(f"  · {item}")
+        raise SystemExit(1)
+    if out_file:
+        Path(out_file).write_text(text)
+        console.print(f"[green]✓ '{name}' exported[/green] → {out_file}")
+    else:
+        click.echo(text, nl=False)
+
+
+@cli.command("migrate-rules")
+@click.option("--from", "from_file", required=True, metavar="PATH",
+              help="detection_rules.yaml as this deployment modified it (rules approved into it before P1).")
+@click.option("--base", "base_file", required=True, metavar="PATH",
+              help="The same file as shipped by the reference it was modified from "
+                   "(e.g. git show HEAD:glorfindel/rules/azure/detection_rules.yaml).")
+@click.option("--dry-run", is_flag=True, help="Say what would move, write nothing.")
+def migrate_rules(from_file: str, base_file: str, dry_run: bool) -> None:
+    """Move rules approved into the shipped base (before P1) to the client's layer.
+
+    What --from holds beyond --base goes to ~/.glorfindel/client_rules.yaml: a new rule
+    as is, a changed base rule as a client rule of the same name (it overrides), a base
+    rule --from removed as `disable`. Running it twice changes nothing more. Procedure on
+    H0: infra/glorfindel-host/README.md, « Migrer les règles approuvées vers la couche du
+    client ».
+    """
+    from glorfindel.rule_layers import ClientLayerError, migrate
+
+    try:
+        report = migrate(from_file, base_file, dry_run=dry_run)
+    except (FileNotFoundError, ClientLayerError) as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise SystemExit(1)
+    head = "[yellow]Dry run[/yellow] — would write" if dry_run else "[green]✓ Written[/green]"
+    console.print(f"{head} to the client's layer [dim]{report['dest']}[/dim]")
+    for key, label in (("added", "added"), ("replaced", "replaced"), ("same", "already there"),
+                       ("overrides", "overrides a base rule"), ("disable", "base rule disabled"),
+                       ("assets", "asset"), ("monitoring_backends", "monitoring backend")):
+        for name in report[key]:
+            console.print(f"  · {name}: {label}")
+    if not any(report[k] for k in ("added", "replaced", "same", "disable", "assets", "monitoring_backends")):
+        console.print("  nothing to move: --from holds nothing beyond --base")
+    elif not dry_run:
+        console.print("  Restart the watch and the War Room to load it (rules are read at start).")
 
 
 @cli.command("propose-rules")

@@ -338,8 +338,34 @@ même fichier :
 | M518 | nombres à l'envers gardés | « de 106,9 s à 91,9 s » quand la latence a augmenté |
 | M519 | côté d'un fait lu sur l'identifiant du run | un run sans `run_id` dit « seulement dans la précédente » |
 
-Les trente (M260–M279, M510–M519) attrapés au premier tour (26/10), aucun périmé. Détail :
-[`../analysis.md`](../analysis.md), « Ce qui a changé depuis la campagne précédente ».
+Les trente (M260–M279, M510–M519) attrapés au premier tour (26/10), aucun périmé.
+
+La deuxième relecture de D-2 a trouvé un bug et des trous bon marché : l'unité de « de X à Y »
+était obligatoire (un `?` portait sur le lookahead de l'unité), si bien que « de 0,78 à 0,8 »
+ou « de 107 à 92 secondes » n'étaient pas lus ; le sens et les actions d'une `trend` n'étaient
+pas contrôlés ; une durée inventée passait pour un décompte (« vue 1 heure plus tard ») ; un
+nombre était accepté quelle que soit son unité (« vue en 2 s » parce que 2 est un écart de
+points) ; « entre le 21 et le 23 octobre » était barré ; une `observation` qui cite un fait de
+changement pouvait nommer une action qu'aucun fait ne porte. La session principale a tranché :
+c'est la dernière correction de cette famille ; la section calculée fait foi, et ce qui reste
+est écrit dans les limites connues. M513, M516 et M518 suivent le code corrigé. Dix mutants de
+plus, dans la plage M530–M539 (M510–M519 est pleine), mesurés par le même fichier :
+
+| Mutant | Défaut réinjecté | Effet |
+|---|---|---|
+| M530 | unité obligatoire dans « de X à Y » | « de 0,78 à 0,8 » à l'envers gardé |
+| M531 | sens d'une `trend` non lu | « passe de 106,9 s à 91,9 s » gardé en tendance |
+| M532 | actions d'une `trend` non contrôlées | « wipe_storage cette fois » gardé en tendance |
+| M533 | actions d'une `observation` qui cite un fait de changement non contrôlées | « a pris un wipe_storage » gardé |
+| M534 | tout mot fait un décompte | « vue 1 heure plus tard » gardé |
+| M535 | unité ignorée | « vue en 2 s » gardé, 2 étant un écart de points |
+| M536 | durée non convertie | « 15 ms plus tard » lu 15 s, gardé |
+| M537 | plage de dates lue comme des nombres | « entre le 21 et le 23 octobre » barré |
+| M538 | écart relatif refusé | « +16 % » barré quand la latence passe de 91,9 s à 106,9 s |
+| M539 | « de X à Y » qui part d'un côté sans arriver à l'autre gardé | « de 91,9 s à 15 s » gardé |
+
+Les quarante (M260–M279, M510–M519, M530–M539) attrapés à chaque tour (26/10), aucun périmé.
+Détail : [`../analysis.md`](../analysis.md), « Ce qui a changé depuis la campagne précédente ».
 
 ## Ce que les invariants ont trouvé
 

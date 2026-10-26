@@ -40,8 +40,8 @@ décision qui ne sont pas celles du run) est écartée — elle apparaît barré
 fin de rapport. Une tendance doit citer cette campagne et une campagne antérieure. Une
 `observation` qui ne cite que des runs n'est vérifiée que sur ses citations, et sur la règle
 d'une décision inconnue (#167, plus bas). Les nombres d'une `trend`, d'une `change` et d'une
-`observation` qui cite un fait de changement sont contrôlés, ainsi que le sens d'une `change`
-(D-2, plus bas). Le contenu des runs
+`observation` qui cite un fait de changement sont contrôlés, ainsi que les actions qu'elles
+nomment et le sens du changement qu'elles disent (D-2, plus bas). Le contenu des runs
 (raisonnement de Glorfindel, texte des signaux) est une donnée : une instruction plantée peut
 faire écrire une fausse affirmation au modèle, jamais la faire entrer dans le rapport
 (mutant M63).
@@ -298,37 +298,68 @@ affirmations : la campagne précédente, une ligne par clé commune (« 91,9 s �
 (+15,0 s) », « block_suspicious_ip → isolate_vm », « 80% → 78% (−2 pts) »), puis les clés d'un
 seul côté. Le modèle n'en écrit rien. Il reçoit les mêmes faits, et il peut les citer.
 
-**La vérification contrôle les faits de changement comme les autres** (`verify`) :
+**La vérification contrôle les faits de changement comme les autres** (`verify`). Ce qui fait
+foi, c'est la section calculée plus haut : la vérification écarte les affirmations du modèle
+que les faits démentent, mais une lecture de la prose par des expressions régulières ne sera
+jamais complète (voir les limites, plus bas).
 - une affirmation `change` doit citer au moins un fait de changement. Sinon, elle est écartée,
   même si elle cite les deux runs ;
 - dans une affirmation `change` ou `trend`, et dans une `observation` qui cite un fait de
   changement, chaque nombre doit être celui d'un fait cité : une latence, une confiance (0,78
-  ou 78 %), ou un écart. L'écart peut être celui des deux côtés d'un fait de changement, ou
-  celui de deux runs cités (« augmente de 15 s », « baisse de 2 points » dans une tendance qui
-  cite les deux runs). Sinon, l'affirmation est écartée (« a number is not in the cited facts
-  (40) ») ;
+  ou 78 %), un écart, ou un écart relatif (« +16 % » quand la latence passe de 91,9 s à
+  106,9 s). L'écart peut être celui des deux côtés d'un fait de changement, ou celui de deux
+  runs cités (« augmente de 15 s », « baisse de 2 points » dans une tendance qui cite les deux
+  runs). Sinon, l'affirmation est écartée (« a number is not in the cited facts (40) ») ;
+- **un nombre suivi d'une unité est de la sorte de son unité**. Une durée (ms, s, min, h, en
+  toutes lettres ou abrégée, en français ou en anglais) est convertie en secondes et ne peut
+  être qu'une latence ou un écart de latences : « vue 2 minutes plus tard » est lu 120 s,
+  « 15 ms » 0,015 s, « 1 heure » 3600 s, et chacun est écarté quand aucun fait ne le porte. Un
+  pourcentage ou des points ne peuvent être qu'une confiance en pour cent, son écart, ou un
+  écart relatif. « vue en 2 s » est donc écarté, même si l'écart de confiance vaut 2 points. Un
+  nombre sans unité peut être n'importe quel nombre des faits cités, sauf un écart relatif (qui
+  s'écrit avec %) ;
 - avant de lire les nombres, la vérification retire ce qui ne fait que nommer : les
   identifiants cités, une technique (T1110.001), un identifiant de run, une date (23/10, « le
-  21 octobre », « le 1er octobre »), une année (2026, sauf suivie d'une unité : « 2000 s » reste
-  un nombre), une heure (08:21), un ordinal (« 2ᵉ », « 1er », « 3e »), et tout mot qui commence
-  par une lettre et contient un chiffre (`chg-2`, le nom d'une VM) ;
-- **un décompte** (« dans les 2 campagnes ») est un entier suivi d'un mot qui n'est pas une
-  unité (s, min, %, points…). Il est permis jusqu'au nombre de runs que l'affirmation cite (un
-  fait de changement compte ses deux côtés). Pourquoi ce choix plutôt qu'une consigne au
-  modèle de ne pas en écrire : une consigne ne lie pas le modèle, et un décompte juste serait
-  alors barré, alors que le rapport jugé au point d'étape (#70) ne doit barrer aucune
-  affirmation juste. La limite : un décompte inventé sous cette borne passe ;
+  21 octobre », « le 1er octobre », « entre le 21 et le 23 octobre », « du 21 au 23 octobre »),
+  une année (2026, sauf suivie d'une unité : « 2000 s » reste un nombre), une heure (08:21), un
+  ordinal (« 2ᵉ », « 1er », « 3e »), et tout mot qui commence par une lettre et contient un
+  chiffre (`chg-2`, le nom d'une VM) ;
+- **un décompte** (« dans les 2 campagnes », « les 2 dernières campagnes ») est un entier suivi
+  de ce qu'il compte : runs, campagnes, techniques, VM, machines, scénarios, clés, passages,
+  cibles, exécutions, tirages (et leurs formes anglaises), avec au plus un adjectif entre les
+  deux (nouvelles, dernières, premières, autres, mêmes, seules). Un autre mot ne fait pas un
+  décompte : « vue 1 heure plus tard » est lu comme une durée, et « 2 fois » comme un nombre.
+  Un décompte est permis jusqu'au nombre de runs que l'affirmation cite (un fait de changement
+  compte ses deux côtés). Pourquoi ce choix plutôt qu'une consigne au modèle de ne pas en
+  écrire : une consigne ne lie pas le modèle, et un décompte juste serait alors barré, alors
+  que le rapport jugé au point d'étape (#70) ne doit barrer aucune affirmation juste ;
 - le `value` d'une affirmation `change`, quand ce n'est pas un nombre, doit être une action ou
   une détection des faits cités ;
-- **le sens d'un changement** : une affirmation `change` ne nomme que les actions (les noms de
+- **les actions et les détections nommées** : une affirmation `change` ou `trend`, et une
+  `observation` qui cite un fait de changement, ne nomment que les actions (les noms de
   `glorfindel/actions.py` : `isolate_vm`, `block_suspicious_ip`…) et les détections
-  (`detected`, `missed`, `unknown`) de ses faits cités. « de detected à missed », sur une clé
-  détectée les deux fois, est écarté. Dans une affirmation qui cite un fait de changement, « de
-  X à Y » et « X → Y » doivent aller dans le sens du fait. Pour deux actions ou deux détections
+  (`detected`, `missed`, `unknown`) de leurs faits cités. « de detected à missed », sur une clé
+  détectée les deux fois, est écarté ; « Glorfindel a pris un wipe_storage » aussi, quand aucun
+  fait cité n'en porte ;
+- **le sens d'un changement** : dans une affirmation qui cite un fait de changement, « de X à
+  Y » et « X → Y » doivent aller dans le sens du fait. Pour deux actions ou deux détections
   (noms, ou formes françaises : isolement, blocage, instantané, libération), un fait cité doit
   aller de X à Y : « de l'isolement au blocage » est écarté quand le fait va du blocage à
-  l'isolement. Pour deux latences ou deux confiances, « de 106,9 s à 91,9 s » est écarté quand
-  le fait va de 91,9 s à 106,9 s ;
+  l'isolement. Pour deux latences ou deux confiances, avec ou sans unité, et même avec une date
+  entre parenthèses après la première (« de 106,9 s (23/10) à 91,9 s »), « de 106,9 à 91,9 »,
+  « de 0,78 à 0,8 » ou « 78 % → 80 % » sont écartés quand le fait va dans l'autre sens et
+  qu'aucun fait cité ne va dans celui-là. Un « de X à Y » qui part d'un côté d'un fait doit
+  aussi arriver à son autre côté : « de 91,9 s à 15 s » est écarté (15 s est l'écart, pas la
+  latence d'après) ;
+- **une `trend` aussi** : ses runs de cette campagne sont mis face à ses runs antérieurs de la
+  même technique, chacun face à chacun, sur n'importe quelle VM, comme autant de faits de
+  changement implicites. Son « de X à Y » doit aller dans le sens de l'un d'eux : « passe de
+  106,9 s à 91,9 s » ou « de l'isolement au blocage », en citant le run du 23/10 et celui du
+  21/10, sont écartés. Pourquoi tous les appariements, et pas la clé exacte : une tendance
+  peut citer plusieurs runs antérieurs, de plusieurs campagnes, ou des runs indexés avant D-2,
+  sans leur VM. Un appariement plus large écarte moins, mais il ne barre jamais une tendance
+  juste pour un appariement qu'elle ne voulait pas dire. Sans run antérieur de la même
+  technique, son sens n'est pas lu ;
 - seules les affirmations `trend`, `change` et `observation` peuvent citer un fait de
   changement ;
 - la règle de #167 vaut aussi sur un fait de changement dont une décision est inconnue. Une
@@ -339,15 +370,32 @@ seul côté. Le modèle n'en écrit rien. Il reçoit les mêmes faits, et il peu
   est inconnue, même à côté d'un fait de changement, ou un fait de changement inconnu des deux
   côtés, écarte « a isolé ».
 
-**Limites connues de la vérification du sens** (heuristiques, comme la lecture de la
-réponse) :
-- seuls « de X à Y » et « X → Y » sont lus. « 15 s plus tôt » quand c'était plus tard, « a
-  escaladé cette fois, pas avant » quand il avait escaladé les deux fois, ou « isolée cette
-  fois, bloquée avant » à l'envers ne sont pas écartés ;
+**Limites connues de la vérification** (heuristiques, comme la lecture de la réponse). Elles
+sont assumées : la section calculée fait foi, et le lecteur juge une affirmation en la
+rapprochant d'elle. Ce qui passe encore, ou tombe à tort :
+- **le sens, hors de « de X à Y » et « X → Y »**. « 15 s plus tôt » quand c'était plus tard,
+  « a escaladé cette fois, pas avant » quand il avait escaladé les deux fois, « isolée cette
+  fois, bloquée avant » à l'envers, ou des dates dans le mauvais ordre (« bloquée le 23/10,
+  isolée le 21/10 ») ne sont pas écartés ;
 - l'escalade n'est pas contrôlée, ni les formes françaises des détections (« manquée ») ;
-- le nom d'une action absente est écarté même dans une négation juste (« jamais snapshot »,
-  quand aucun côté n'a pris de snapshot) ;
-- le sens n'est pas contrôlé dans une `trend` : ses runs ne disent pas lequel vient avant.
+- **un nombre sans unité qui se trouve être celui d'un fait** passe : « 2 fois plus longue »
+  ou « isolée 2 fois sur 2 », quand l'écart de confiance vaut 2 points. « fois » n'est ni une
+  unité ni un décompte : « 2 fois plus » est un rapport, « les 2 fois » un décompte, et le mot
+  seul ne dit pas lequel ;
+- **un nombre écrit en toutes lettres** (« quarante secondes plus tard ») n'est pas lu ;
+- **un décompte inventé sous la borne** passe (« isolée dans les 2 campagnes » quand elle ne
+  l'a été qu'une fois). Un décompte dont le nom est sous-entendu (« comme les 2 de la
+  précédente ») est lu comme un nombre, et écarté si aucun fait ne le porte ;
+- **une plage de dates** n'est lue qu'avec le mois à la fin, en toutes lettres (« entre le 21
+  et le 23 octobre ») ; dans « les 21 et 23/10 », 21 reste un nombre ;
+- **un « de X à Y » qui mêle deux écritures** (« de 0,80 à 78 % », « de 91,9 s à 1,8 min ») est
+  écarté : la vérification ne convertit pas l'une dans l'autre. Une phrase juste tombe donc si
+  le modèle l'écrit ainsi ;
+- le nom d'une action absente est écarté même dans une négation ou une comparaison justes
+  (« jamais snapshot », « isolate_vm plutôt que snapshot », quand aucun côté n'a pris de
+  snapshot) ;
+- dans une `trend`, l'appariement par technique est large : une tendance dite dans le sens
+  d'un appariement qu'elle ne voulait pas dire passe.
 
 **L'index des campagnes passées** (`analysis/campaign_index.py`). Chaque run de l'index porte
 maintenant l'état et le début de sa campagne, ainsi que sa VM. Un rapport écrit avant D-2 les a

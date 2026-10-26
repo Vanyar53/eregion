@@ -275,11 +275,25 @@ def test_start_restore_passes_vault_rg_and_records_it(jobs_dir):
     assert job["vault_rg"] == "rg-backup"
 
 
-def test_refresh_job_restore_polls_the_vault_rg(jobs_dir, monkeypatch):
-    """refresh_job must query the job in the VAULT's RG, not the VM's."""
+def test_refresh_job_restore_polls_the_vault_rg(jobs_dir):
+    """refresh_job must query the job in the VAULT's RG, not the VM's — through the
+    connector (A1: the SDK call lives in the Azure adapter)."""
+    from glorfindel.jobs import refresh_job
+
+    connector = MagicMock()
+    connector.restore_job_status.return_value = "Completed"
+    job = {"type": "restore", "status": "InProgress", "vault": "rsv-central",
+           "rg": "rg-vm", "vault_rg": "rg-backup", "restore_job_name": "j1"}
+    refresh_job(job, connector)
+    connector.restore_job_status.assert_called_once_with("rsv-central", "rg-backup", "j1")
+    assert job["status"] == "Completed"
+
+
+def test_azure_restore_job_status_reads_the_vault(monkeypatch):
+    """The adapter asks the vault for that job, in the group it is given."""
     import sys
     import types
-    from glorfindel.jobs import refresh_job
+    from glorfindel.actions import AzureConnector
 
     calls = []
 
@@ -289,17 +303,15 @@ def test_refresh_job_restore_polls_the_vault_rg(jobs_dir, monkeypatch):
 
         def _get(self, vault, rg, name):
             calls.append((vault, rg, name))
-            return types.SimpleNamespace(properties=types.SimpleNamespace(status="Completed"))
+            return types.SimpleNamespace(properties=types.SimpleNamespace(status="Failed"))
 
     fake_mod = types.ModuleType("azure.mgmt.recoveryservicesbackup")
     fake_mod.RecoveryServicesBackupClient = _FakeClient
     monkeypatch.setitem(sys.modules, "azure.mgmt.recoveryservicesbackup", fake_mod)
-    connector = MagicMock()
-    job = {"type": "restore", "status": "InProgress", "vault": "rsv-central",
-           "rg": "rg-vm", "vault_rg": "rg-backup", "restore_job_name": "j1"}
-    refresh_job(job, connector)
+    conn = AzureConnector(read_only=False)
+    monkeypatch.setattr(conn, "_ensure_clients", lambda: None)
+    assert conn.restore_job_status("rsv-central", "rg-backup", "j1") == "Failed"
     assert calls == [("rsv-central", "rg-backup", "j1")]
-    assert job["status"] == "Completed"
 
 
 def test_record_snapshot_job_keeps_a_running_job(jobs_dir):

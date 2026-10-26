@@ -11,7 +11,7 @@ L'atelier autour : **Celebrimbor** (`infra/terraform/`) construit et inscrit le 
 **Direction — huitième passe (13/10)** (détail : `ROADMAP.md`, « Vers la 1.0 ») :
 - **Finalité** : les incidents cloud courants contenus seuls, en quelques minutes, réversibles et vérifiés ; le reste à un humain, trié et expliqué ; la preuve à tout moment. Cinq indicateurs : temps pour contenir, part contenue seule, actions disruptives à tort, couverture des techniques cloud, âge de la dernière preuve (< 30 jours).
 - **Règle de production** (codée dès O0) : jamais de panne ni d'action destructive sur une charge réelle ; en production, techniques non destructives sur VM inscrites + chaîne complète sur une VM sentinelle vide ; destructif et pannes sur le banc ou le jumeau. Zones d'inscription : `bench`, `twin`, `production`.
-- **Jalon 0.3 — la boucle tourne** : socle O0 → E1 → O1 → R1 → G0, et H0 (Glorfindel sur une VM dédiée, pré-observation) ; piste IA B2 (élargi à la mémoire), IA0 ; B1 après la 0.3. **A1 (découpage d'`actions.py`, avec MC0) différé en 0.4+.** O1, H0, R1, G0 (infra réelle) se font avec Jonathan ; décisions du 15/10 dans `ROADMAP.md` ; `v0.2.0` publiée le 15/10.
+- **Jalon 0.3 — la boucle tourne** : socle O0 → E1 → O1 → R1 → G0, et H0 (Glorfindel sur une VM dédiée, pré-observation) ; piste IA B2 (élargi à la mémoire), IA0 ; B1 après la 0.3. **A1 (découpage d'`actions.py`) et MC0 (interface de fournisseur) faits le 26/10.** O1, H0, R1, G0 (infra réelle) se font avec Jonathan ; décisions du 15/10 dans `ROADMAP.md` ; `v0.2.0` publiée le 15/10.
 - Le SaaS vient plus tard (1.x) ; Eregion tourne en local ou dans une VM.
 
 **Repo** : https://github.com/Vanyar53/eregion
@@ -97,6 +97,8 @@ pytest tests/unit/test_inscription.py        # O0 : périmètre, inscription, zo
 pytest tests/unit/test_orodruin.py           # O1 : contrat armed/passive, audit avant appel, plafond, kill, module Terraform
 pytest tests/unit/test_experiment_schema.py  # E1 : schéma d'expérience (technique/panne) + catalogue validés
 pytest tests/unit/test_docs_budget.py        # DX1 : CLAUDE.md ≤ 25 Ko, liens de l'index et des fichiers de rôle valides
+pytest tests/unit/test_provider_boundary.py # MC0 (A1) : aucun SDK de fournisseur hors de son adaptateur (aussi étape CI), capacités déclarées
+pytest tests/unit/test_actions_split.py     # A1 : la façade glorfindel.actions reste un seul espace de noms ; aucun module > 500 lignes
 pytest tests/unit/test_discovery.py          # AssetRegistry + DiscoveryService + eviction
 pytest tests/unit/test_invariants.py         # L24/L26 : invariants (Hypothesis, machine à états) sur un faux Azure
                           # en mémoire (tests/unit/fake_azure.py : évaluation NSG comme Azure, politiques, régions,
@@ -126,8 +128,10 @@ python scripts/mutation_check.py [--examples 500 --rounds 2 --jobs 8]   # mesure
 - `setup_testdata.sh` uniquement dans T1486
 - RunCommand : 5 retries (15s, 30s, 60s, 90s, 120s) — pas de SSH, pas d'IP publique requise pour Annatar (Azure VM Agent via Wire Protocol)
 - `dry_run=True` dans tous les tests — jamais d'appel Azure ou LLM dans les tests
+- **SDK d'un fournisseur** (azure, boto3, google-cloud) : importé seulement dans son adaptateur — `glorfindel/providers/<nom>/` pour Glorfindel (A1, MC0). `glorfindel/actions.py` n'est plus qu'une façade d'import : le code est dans `glorfindel/response/` (cœur neutre) et `glorfindel/providers/azure/` (un module par préoccupation)
 - `tests/unit/conftest.py` : fixture `autouse` redirige `escalations._STORE` → `tmp_path/escalations.jsonl` (les tests n'écrivent jamais dans `~/.glorfindel/`)
 - `AZURE_SUBSCRIPTION_ID` obligatoire dans l'env (plus d'auto-détection via SubscriptionClient)
+- **Dépendances verrouillées** (M-3) : `requirements/dev.txt` (CI, `make install`) et `requirements/glorfindel.txt` (image), uv + empreintes. Une dépendance ajoutée à `pyproject.toml` → `make lock` dans la même PR ; une montée de versions → PR + harnais (`make llm-compare`, par Jonathan) avant de redéployer H0 (`docs/operations.md`). H0 ne déploie qu'un tag ou un commit (`make glorfindel-host-start REF=…`)
 - **Edit de `few_shot_examples.yaml`, `_SYSTEM_PROMPT` ou `_build_user_message()`** : requiert un run end-to-end T1486 + au moins un autre TTP avant merge. Ces trois zones contrôlent ce que le LLM voit et comment il raisonne — les tests unitaires (LLM mocké, dry_run=True) ne peuvent pas valider le comportement résultant. Un edit mal calibré peut introduire un raccourci critique (ex: ransomware non-isolé 20min, faux positif T1041, cycle 1 sauté). Voir c6fe0d0, 740659a.
 - **`past_cycles` ChromaDB = historique uniquement** : ne jamais inférer l'état courant de la VM depuis les cycles passés. `_build_user_message()` injecte `## État actuel de la VM` depuis `~/.glorfindel/isolation/<vm>.json` — c'est la source de vérité. Voir commit 740659a (bug : LLM voyait `isolate_vm` dans past_cycles → concluait "VM déjà isolée" → sautait le cycle 1).
 

@@ -52,6 +52,32 @@ _Extrait tel quel de `CLAUDE.md` le 2026-10-15 (lot DX1) : le comportement d'Azu
 
 ---
 
+## Où vit le code Azure (A1, MC0, 26/10)
+
+Tout ce que Glorfindel fait sur Azure vit dans `glorfindel/providers/azure/`, le seul endroit de
+`glorfindel/` qui importe le SDK Azure ; `tests/unit/test_provider_boundary.py` (étape « Provider
+boundary » de la CI) échoue sinon. L'ancien `glorfindel/actions.py` (4 394 lignes) y est découpé
+sans changement de texte, un module par préoccupation, aucun au-delà de 430 lignes :
+
+| Module | Ce qu'il porte |
+|---|---|
+| `connector.py` | `AzureConnector` (un mixin par préoccupation), la garde d'abonnement, le verrou de VM sur les écritures |
+| `nsg.py` | lire une règle par son contenu : ce qu'elle couvre, ce qui l'ombre, si un deny isole ou bloque |
+| `network.py` | cartes et NSG : cibles d'une VM, écriture et suppression de règles, noms, partage d'un NSG |
+| `quarantine.py` | le NSG de quarantaine : pose, NSG d'origine (état et tag), contenu attendu |
+| `isolation.py`, `release.py`, `verify.py` | isoler (quarantaine, sinon règles), lever, vérifier |
+| `blocks.py`, `unblock.py` | bloquer une IP, vérifier, débloquer |
+| `backup.py`, `restore.py` | points de restauration, statut d'un job de restauration, restauration |
+| `sweep.py`, `readers.py` | `reset` et règles orphelines ; droits, inventaire NSG, lectures de l'audit |
+| `sdk.py`, `capabilities.py`, `monitor.py` | préchauffage du SDK ; capacités déclarées ; Log Analytics |
+
+Le cœur neutre (actions autonomes, état local, verrous) est dans `glorfindel/response/` ; tout
+s'importe toujours depuis `glorfindel.actions`. L'adaptateur déclare ses capacités
+(`capabilities.py`) : quarantaine (`networkInterfaces/write`, `subnets/join`, `networkSecurityGroups/write`
+et `join`), règles (`securityRules/write` et `delete`), coupure des sessions (`runCommand`), points
+de restauration. La préparation lit les droits là ; un test vérifie qu'ils sont ceux que
+`check_permissions` demande à Azure.
+
 ## Pitfalls opérateur
 
 `backup_agent_check` retourne toujours `[]` sur les Linux VMs — `\\Process(*)\\IO Write Bytes/sec` est un counter Windows-only, Linux AMA ne le collecte pas. Idem pour `top_write_processes` (même counter). **C'est le comportement voulu** : résultats vides → le LLM ne peut pas exclure le ransomware → escalade forcée. L'alternative (`az backup job list` via RunCommand) ajouterait latence 15-30s + dépendance AZ CLI in-guest pour un résultat qui rendrait le produit trop confiant sur des données incomplètes.

@@ -85,7 +85,7 @@ def test_run_query_propagates_exception():
 # ── poll_alert ─────────────────────────────────────────────────────────────────
 
 def _poll(det, qw_setup, time_seq):
-    with patch("glorfindel.detectors.time") as T, \
+    with patch("glorfindel.providers.azure.monitor.time") as T, \
          patch("azure.identity.DefaultAzureCredential"), \
          patch("azure.monitor.query.LogsQueryClient") as Client:
         T.time.side_effect = time_seq

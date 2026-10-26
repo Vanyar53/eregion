@@ -3,7 +3,10 @@
     python infra/glorfindel-host/host_env.py infra/glorfindel-host/host.env   # .envrc loaded
 
 Only what the VM needs: the subscription, the model's key, the Discord bot (the VM runs
-it: `docker compose --profile bot`) and the webhook. Never an Azure secret — the VM
+it: `docker compose --profile bot`), who may press its buttons, and the webhook. One file,
+read by docker compose to fill docker-compose.yml: each container then receives only the
+variables its own list names (M-3, #183) — the model's key the watch, the bot's token the
+bot, the War Room's token the War Room. Never an Azure secret — the VM
 authenticates by its managed identity, and AZURE_CLIENT_ID alone would make
 DefaultAzureCredential look for a user-assigned identity that doesn't exist. Always
 GLORFINDEL_READ_ONLY=1, and a War Room token drawn here. Refuses to overwrite an existing file (the token would change).
@@ -20,6 +23,7 @@ COPIED = ("AZURE_SUBSCRIPTION_ID", "AZURE_WORKSPACE_ID", "ANTHROPIC_API_KEY",
           "GLORFINDEL_LLM_MODEL", "GLORFINDEL_LLM_BASE_URL", "OPENAI_API_KEY",
           "GLORFINDEL_WEBHOOK_URL", "GLORFINDEL_BACKUP_VAULT",
           "DISCORD_BOT_TOKEN", "DISCORD_CHANNEL_ID", "DISCORD_PING_ROLE",
+          "DISCORD_ALLOWED_USERS", "DISCORD_ALLOWED_ROLES",
           "EREGION_EXERCISE_CHANNEL", "EREGION_WATCH_CHANNEL")
 REQUIRED = ("AZURE_SUBSCRIPTION_ID", "ANTHROPIC_API_KEY")
 
@@ -42,6 +46,9 @@ def main(dst: str) -> int:
     if path.exists():
         raise SystemExit(f"{dst} exists — remove it first to draw a new War Room token")
     env = host_env(dict(os.environ))
+    if env.get("DISCORD_BOT_TOKEN") and not (env.get("DISCORD_ALLOWED_USERS") or env.get("DISCORD_ALLOWED_ROLES")):
+        print("⚠ DISCORD_ALLOWED_USERS / DISCORD_ALLOWED_ROLES vides : les boutons du bot refuseront "
+              "tout clic (fermé par défaut). Ajoute ton id Discord à host.env.", file=sys.stderr)
     path.touch(mode=0o600)
     path.write_text("".join(f"{k}={v}\n" for k, v in env.items()), encoding="utf-8")
     print(f"{dst}: " + ", ".join(env))

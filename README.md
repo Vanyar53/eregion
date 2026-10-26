@@ -442,7 +442,9 @@ When an escalation fires, `glorfindel pending` shows **context-aware next steps 
 - **🔄 Restore** — executes `glorfindel restore` directly from Discord (for `restore_from_backup` and `low_confidence` escalations)
 - **↩️ Revert** — executes `glorfindel reset` directly from Discord (for `verification_failed`) — full reset (isolation + IP blocks)
 
-A `/pending` slash command lists open escalations. Set `DISCORD_PING_ROLE` to notify an on-call role on thread creation. When `DISCORD_BOT_TOKEN` is set, escalation webhook notifications are suppressed (bot handles them in threads).
+A `/pending` slash command lists open escalations. Set `DISCORD_PING_ROLE` to notify an on-call role on thread creation. When the bot has both its token and `DISCORD_CHANNEL_ID`, escalation webhook notifications are suppressed (bot handles them in threads); a channel without a token runs no bot, so the webhook still posts and `glorfindel watch` warns at startup when nothing alerts. In Docker Compose, only the bot's container gets the token: the watch and the War Room get `GLORFINDEL_DISCORD_BOT` (`1` when the token is set, never its value).
+
+**Who may click**: only the Discord users in `DISCORD_ALLOWED_USERS` or members of a role in `DISCORD_ALLOWED_ROLES` (ids, comma-separated). Anyone else gets an ephemeral refusal, logged by the bot. **Closed by default**: with neither set, every button refuses — the buttons judge, acknowledge and run restores, and Discord shows them to whoever reads the channel; the War Room (behind its token) still judges every card.
 
 ## CLI reference
 
@@ -518,6 +520,8 @@ GLORFINDEL_WEBHOOK_URL=...          # Slack / Teams / Discord — escalations + 
 DISCORD_BOT_TOKEN=...               # Bot token from discord.com/developers/applications
 DISCORD_CHANNEL_ID=...              # Channel ID (right-click → Copy Channel ID, Developer Mode on)
 DISCORD_PING_ROLE=...               # Role ID to ping on new incident thread (optional)
+DISCORD_ALLOWED_USERS=...           # User IDs allowed to click the buttons (comma-separated)
+DISCORD_ALLOWED_ROLES=...           # Role IDs allowed to click; both empty → every button refuses
 
 GLORFINDEL_KEEP_ISOLATED=1          # forensic mode — VM stays isolated after restore
 GLORFINDEL_ISOLATION_TTL_H=4        # auto-release timeout in hours (default: 4)
@@ -552,8 +556,13 @@ glorfindel/
                          LAW Heartbeat query → replace_for_backend() evicts deleted VMs
   posture.py           → PostureChecker: backup linked, backup recent, NSG reachable — per discovered VM
                          Escalates posture_gap with exact az fix command. Dedup: pending → skip.
-  actions.py           → CloudConnector ABC + AzureConnector (isolate, release, block, unblock, snapshot, verify_*, audit checks)
-  detectors.py         → DetectionConnector ABC + AzureMonitorDetector
+  actions.py           → the import path of the response: every name below is still imported from here (A1)
+  response/            → provider-neutral core: action sets and errors, resource ids, local state, locks
+  providers/           → the provider interface (MC0): CloudConnector, DetectionConnector, declared capabilities
+    azure/             → the only adapter, the only place the Azure SDK is imported: AzureConnector (isolate,
+                         release, block, unblock, snapshot, verify_*, audit checks), one module per concern;
+                         AzureMonitorDetector; capabilities.py
+  detectors.py         → detector_for(): the detection source registry
   detection_rules.py   → DetectionRule + RulePoller: continuous polling, auto-apply via discovered assets
                          load_config(path, glorfindel_cfg=None) — workspace_id from glorfindel-config.yaml
   audit.py             → AuditCheck, AuditResult, run(): NSG / backup / compute readiness checks, and detection coverage
@@ -623,9 +632,11 @@ infra/terraform/           → Celebrimbor: modular, namespaced, disposable test
 
 **1. Implement `DetectionConnector` and register it in the factory:**
 
+In its provider's adapter (`glorfindel/providers/<name>/`, the only place its SDK may be imported), registered in `glorfindel/detectors.py`:
+
 ```python
-# glorfindel/detectors.py
-class PrometheusDetector(DetectionConnector):
+# glorfindel/providers/prometheus/detector.py
+class PrometheusDetector(DetectionConnector):   # glorfindel.providers.interface
     def __init__(self, workspace_id: str):   # workspace_id = Prometheus endpoint
         self.endpoint = workspace_id
 
@@ -676,6 +687,8 @@ monitoring_backends:
 
 ### Adding a cloud provider (AWS, GCP, ...)
 
+One adapter per provider under `glorfindel/providers/<name>/`, the only place its SDK is imported (a test in CI fails otherwise). It implements `CloudConnector` and declares its capabilities (`glorfindel/providers/interface.py`): the readiness check reads which rights an isolation, a block or a session cut needs from that declaration.
+
 ```python
 class AwsConnector(CloudConnector):
     def isolate_vm(self, resource_id) -> dict: ...
@@ -683,7 +696,7 @@ class AwsConnector(CloudConnector):
     def release_isolation(self, resource_id) -> dict: ...
 ```
 
-The agent logic, scenarios, and RAG memory are provider-agnostic — they don't change. The connector itself is more than a stub, though: real isolation has to handle the provider's network topology (on Azure that means NIC-level vs subnet NSGs, multi-NIC VMs, and rule priorities — see `actions.py`). Budget for the connector, not a one-liner.
+The agent logic, scenarios, and RAG memory are provider-agnostic — they don't change. The connector itself is more than a stub, though: real isolation has to handle the provider's network topology (on Azure that means NIC-level vs subnet NSGs, multi-NIC VMs, and rule priorities — see `glorfindel/providers/azure/`). Budget for the connector, not a one-liner.
 
 ## Operational notes
 
@@ -752,14 +765,14 @@ flowchart BT
 ## Tests
 
 ```bash
-pip install eregion[dev]
+make install          # the locked dependencies, hashes checked (requirements/dev.txt) — as CI and the image
 pytest
 # ~870 tests (~30s) — 0 Azure calls, 0 LLM calls, 0 writes to ~/.glorfindel
 GLORFINDEL_INVARIANT_EXAMPLES=5000 pytest tests/unit/test_invariants.py   # deep run (~8 min)
 python scripts/mutation_check.py --examples 500 --rounds 2                # measure the invariants
 ```
 
-The suite is hermetic by construction: `tests/unit/conftest.py` redirects every `~/.glorfindel` path to a temp directory and ignores any local `glorfindel-config.yaml`. CI (`.github/workflows/ci.yml`) runs `ruff check` + `pytest` on Python 3.11 and 3.12, plus the state and identity tests on macOS (case-insensitive file system).
+The suite is hermetic by construction: `tests/unit/conftest.py` redirects every `~/.glorfindel` path to a temp directory and ignores any local `glorfindel-config.yaml`. CI (`.github/workflows/ci.yml`) installs the locked dependencies (`requirements/dev.txt`, every file checked against its hash — the Glorfindel image installs `requirements/glorfindel.txt`, the same versions; `make lock` regenerates them, `docs/operations.md`) and runs `ruff check` + `pytest` on Python 3.11 and 3.12, plus the state and identity tests on macOS (case-insensitive file system).
 
 **Invariant tests** (`tests/unit/test_invariants.py`, Hypothesis): random customer networks in an in-memory Azure (`tests/unit/fake_azure.py` — NSG evaluation, policies, regions, case-insensitive names) and random sequences of isolate / release / block (VM and perimeter) / unblock / reassert / verify / `reset --from-azure`, with faults anywhere — a throttled call or API, a crash before a write or after it, a lost role (every write refused), a full disk — while the customer's world moves: rules added, narrowed or removed, an NSG deleted, an IP changed, a policy set, a VM deleted, a `terraform apply`, a NIC redeployed, a VM created on a deleted VM's address, Glorfindel's own rules or tags edited by hand (narrowed, or turned into an allow, moved behind a customer allow, given another protocol or target), another host writing a NIC right after Glorfindel did, an isolation left by an older version, the configuration changed or unreadable, the clock moving on, the local state lost. Fourteen properties must hold whatever happens: no VM more reachable than its owner designed it; the customer's configuration is what the customer last wrote, and Glorfindel only writes what is its own; no success claimed on a falsehood (every verification is checked at every step); an operation on one VM changes nothing for another (homonyms included); the reassertion never opens anything; one state file per VM; from any state, release brings every VM back to its design, or keeps it in quarantine and says what is unknown; what an operation leaves on Azure is in its state; a release that has started is never undone; the configuration is honoured; two operations at once end as one after the other; a VM of another subscription is never acted on; a vanished block is put back or reported; an orphan rule cutting a live VM off is reported. 500 sequences per push (failing sequences found at night are replayed first), 10,000 every night on Linux and macOS (`.github/workflows/invariants.yml`); the sequences found are kept as fixed examples (`tests/unit/test_invariant_regressions.py`).
 

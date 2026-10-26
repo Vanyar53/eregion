@@ -236,6 +236,74 @@ def _weekly_summary(report: dict, to_judge: int, now) -> str:
     return "\n".join(lines)
 
 
+# M-3 (#183): who may press a card's buttons. They set verdicts, acknowledge cards and run
+# restores; Discord shows them to whoever reads the channel. Closed by default: with no list,
+# every click is refused, said to the clicker and logged — an open default would let a
+# forgotten variable hand the buttons to the whole server, and the War Room (behind its
+# token) still judges every card meanwhile.
+_ALLOWED_USERS_ENV = "DISCORD_ALLOWED_USERS"
+_ALLOWED_ROLES_ENV = "DISCORD_ALLOWED_ROLES"
+
+
+def _parse_ids(raw: str) -> tuple[frozenset[int], list[str]]:
+    """Discord ids, comma- or space-separated. What is not an id (a name, a mention) is
+    returned apart, never matched."""
+    ids, bad = set(), []
+    for part in (raw or "").replace(";", ",").replace(" ", ",").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if part.isdigit():
+            ids.add(int(part))
+        else:
+            bad.append(part)
+    return frozenset(ids), bad
+
+
+class ButtonPolicy:
+    """The users (by id) and the roles (by id) allowed to press the buttons."""
+
+    def __init__(self, users: frozenset[int] = frozenset(), roles: frozenset[int] = frozenset()):
+        self.users = frozenset(users)
+        self.roles = frozenset(roles)
+
+    @classmethod
+    def from_env(cls, environ) -> tuple["ButtonPolicy", list[str]]:
+        users, bad_users = _parse_ids(environ.get(_ALLOWED_USERS_ENV, ""))
+        roles, bad_roles = _parse_ids(environ.get(_ALLOWED_ROLES_ENV, ""))
+        return cls(users, roles), bad_users + bad_roles
+
+    @property
+    def configured(self) -> bool:
+        return bool(self.users or self.roles)
+
+    def allows(self, user) -> bool:
+        if user is None:
+            return False
+        if getattr(user, "id", None) in self.users:
+            return True
+        # A guild member carries its roles; a user outside a guild (a DM) has none.
+        held = {getattr(r, "id", None) for r in (getattr(user, "roles", None) or ())}
+        return bool(held & self.roles)
+
+
+async def _refuse(interaction: discord.Interaction, esc_id: str, policy) -> None:
+    user = interaction.user
+    why = ("aucun utilisateur ni rôle autorisé (fermé par défaut)"
+           if not isinstance(policy, ButtonPolicy) or not policy.configured
+           else "absent des utilisateurs et rôles autorisés")
+    custom_id = (getattr(interaction, "data", None) or {}).get("custom_id", "?")
+    _console.print(
+        f"[yellow]Button refused: user {getattr(user, 'id', '?')} "
+        f"({getattr(user, 'display_name', '?')}) on {esc_id[:8]} [{custom_id}] — {why}[/yellow]"
+    )
+    await interaction.response.send_message(
+        f"✗ Bouton refusé : {why}. Un opérateur ajoute ton id Discord à "
+        f"`{_ALLOWED_USERS_ENV}` (ou un de tes rôles à `{_ALLOWED_ROLES_ENV}`).",
+        ephemeral=True,
+    )
+
+
 def _glorfindel_bin() -> str:
     """Find the glorfindel CLI binary next to the current Python."""
     candidate = Path(sys.executable).parent / "glorfindel"
@@ -386,6 +454,15 @@ class EscalationView(discord.ui.View):
             self.add_item(_VerdictButton(esc, "wrong", discord.ButtonStyle.danger))
             self.add_item(_VerdictButton(esc, "unsure", discord.ButtonStyle.secondary))
 
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        """Every button of the card, before its callback (M-3): the clicker must be allowed
+        by the bot's ButtonPolicy. No policy, or an empty one: refused."""
+        policy = getattr(interaction.client, "button_policy", None)
+        if isinstance(policy, ButtonPolicy) and policy.allows(interaction.user):
+            return True
+        await _refuse(interaction, self.esc_id, policy)
+        return False
+
     @discord.ui.button(
         label="✓ Acknowledge",
         style=discord.ButtonStyle.green,
@@ -452,12 +529,14 @@ def _build_view(esc: dict) -> EscalationView:
 
 
 class GlorfindelBot(discord.Client):
-    def __init__(self, channel_id: int, ping_role: int | None):
+    def __init__(self, channel_id: int, ping_role: int | None,
+                 button_policy: ButtonPolicy | None = None):
         intents = discord.Intents.default()
         super().__init__(intents=intents)
         self.tree = app_commands.CommandTree(self)
         self.channel_id = channel_id
         self.ping_role = ping_role
+        self.button_policy = button_policy or ButtonPolicy()  # none given: closed
         self._posted: set[str] = _load_posted()
         self._threads: dict[str, int] = _load_threads()
         self._messages: dict[str, int] = _load_messages()
@@ -714,5 +793,16 @@ def run() -> None:
             "Copy Channel ID (Developer Mode required)"
         )
     ping_role = int(ping_role_str) if ping_role_str else None
-    bot = GlorfindelBot(channel_id=int(channel_id_str), ping_role=ping_role)
+    policy, bad = ButtonPolicy.from_env(os.environ)
+    for b in bad:
+        _console.print(f"[yellow]⚠ « {b} » n'est pas un id Discord : ignoré "
+                       f"({_ALLOWED_USERS_ENV} / {_ALLOWED_ROLES_ENV})[/yellow]")
+    if policy.configured:
+        _console.print(f"[dim]  → Boutons : {len(policy.users)} utilisateur(s), "
+                       f"{len(policy.roles)} rôle(s) autorisé(s)[/dim]")
+    else:
+        _console.print(
+            f"[yellow]⚠ {_ALLOWED_USERS_ENV} et {_ALLOWED_ROLES_ENV} vides : tous les boutons "
+            "refusent (fermé par défaut). Les cartes se jugent dans la War Room.[/yellow]")
+    bot = GlorfindelBot(channel_id=int(channel_id_str), ping_role=ping_role, button_policy=policy)
     bot.run(token, log_handler=None)

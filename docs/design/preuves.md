@@ -286,6 +286,170 @@ Dix-neuf sur dix-neuf attrapés au premier tour (26/10), et M57 aussi. Détail :
 [`../glorfindel.md`](../glorfindel.md), « Une fenêtre n'est plus crue sur parole », et
 [`../analysis.md`](../analysis.md), « Ce que H0 accepte du canal ».
 
+### Le découpage d'`actions.py` (A1, MC0)
+
+Un découpage ne doit rien changer : il est prouvé par ce qui précède, avant et après. Les
+4 394 lignes d'`actions.py` ont été déplacées sans changement de texte
+(`scripts/check_paragraphs.py --old 03b29ce:glorfindel/actions.py` retrouve chaque ligne, hors la
+ligne `class AzureConnector(...)`), dans `glorfindel/response/` et `glorfindel/providers/azure/`.
+Les mutants qui visaient `actions.py` visent maintenant le module où leur texte est arrivé (aucun
+STALE). `glorfindel/actions.py` reste le chemin d'import, et un seul espace de noms : un
+`monkeypatch` à travers lui atteint chaque module qui lit le nom — sans quoi le `conftest`
+hermétique n'aurait redirigé l'état que dans un module, et les verrous auraient écrit sous le
+vrai `~/.glorfindel`.
+
+Mesuré le 26/10 au budget du lundi (1 000 séquences, 2 tours), avant (`03b29ce`) et après :
+
+| | Avant | Après |
+|---|---|---|
+| Suite complète | 1 535 | 1 549 (+ 14 tests d'A1) |
+| Invariants à 500 séquences, rejeu, verrous | verts | verts (31) |
+| Harnais, attrapés à chaque tour | 216 sur 230 | 227 sur 240 (217 sur 230, et les 10 d'A1) |
+| Jeu de contrôle | 11 sur 16 | 11 sur 16 (C07, C10, C12 survivent avant comme après) |
+
+Les écarts sur M01–M41 sont ceux du tirage (M22, M23, M28, M31, M32, M36, M38, M39 passent
+de « flaky » à « figé seulement » ou l'inverse) : aucun mutant attrapé à chaque tour avant ne
+l'est plus après.
+
+Quatorze mutants pour ce qu'A1 et MC0 ajoutent (M460–M463 après la relecture), tous attrapés au premier tour (26/10), mesurés par
+`tests/unit/test_actions_split.py`, `test_provider_boundary.py`, `test_readiness.py` et
+`test_jobs.py` :
+
+| Mutant | Défaut réinjecté | Effet |
+|---|---|---|
+| M450 | une écriture à travers la façade n'atteint qu'un module | les verrous restent sous le vrai `~/.glorfindel` |
+| M451 | la façade lie des copies | une valeur que son module change (`_warmed_up`) se lit périmée |
+| M452 | un module du découpage oublié par la façade | ses noms injoignables par `glorfindel.actions` |
+| M453 | droits des règles lus sur ceux de la quarantaine | « blocage possible » sans droit sur les règles |
+| M454 | capacité disponible malgré ses droits manquants | « prête » sans les droits |
+| M455 | capacité non déclarée comptée disponible | un fournisseur sans coupure de sessions passe pour l'avoir |
+| M456 | connecteur sans déclaration lu comme Azure | un second fournisseur jugé sur les droits d'Azure |
+| M457 | la frontière laisse le SDK d'un fournisseur dans l'adaptateur d'un autre | le contrôle de CI ne voit plus la fuite |
+| M458 | la déclaration d'Azure dérive de `check_permissions` | la préparation lit un droit que personne ne vérifie |
+| M459 | job de restauration relu dans le groupe de la VM | le statut d'une restauration jamais trouvé |
+| M460 | capacités lues sur `type()` | un `MagicMock(spec=AzureConnector)` fait tomber la préparation |
+| M461 | la déclaration portée par l'instance ignorée | un connecteur jugé sur les droits de sa classe |
+| M462 | une dette du socle partagé déclarée adaptateur | la frontière ne la voit plus |
+| M463 | suppression à travers la façade ignorée en silence | `mock.patch` laisse sa valeur dans tous les modules |
+
+### Ce qui a changé depuis la campagne précédente (D-2)
+
+Le rapport de campagne se compare à la campagne précédente. Le code la choisit par une règle :
+la dernière campagne `done` antérieure qui partage une clé (une technique sur une VM). Il joint
+les runs par clé en faits typés, rend la section, et écarte un écart qui ne vient pas d'un
+fait. Vingt mutants, mesurés par `tests/unit/test_campaign_changes.py`, sur des campagnes
+écrites sur le disque :
+
+| Mutant | Défaut réinjecté | Effet |
+|---|---|---|
+| M260 | campagne `aborted` choisie | le rapport se compare à une campagne interrompue |
+| M261 | campagne postérieure choisie | il se compare à l'avenir |
+| M262 | campagne sans clé commune choisie | aucune ligne à comparer, la vraie précédente ignorée |
+| M263 | clé sans la VM | une technique sur une autre VM passe pour la même |
+| M264 | la plus ancienne choisie | l'écart porte sur une campagne dépassée |
+| M265 | section muette sans précédente | le lecteur ne sait pas pourquoi rien n'est comparé |
+| M266 | VM comparée avec sa casse | la même VM, écrite autrement, n'a plus de précédent |
+| M267 | clés d'un seul côté tues | une technique qui n'est plus jouée disparaît sans un mot |
+| M268 | scénario sauté compté comme clé | une technique jamais jouée est comparée |
+| M269 | runs indexés sans l'état ni le début de leur campagne | aucun rapport n'a jamais de précédente |
+| M270 | deux runs d'une même clé appariés à l'envers | le premier fait face au dernier |
+| M271 | section absente du rapport | la comparaison calculée n'est pas rendue |
+| M272 | faits de changement absents du message au modèle | il ne peut pas les citer |
+| M273 | affirmation `change` sans fait de changement gardée | un écart affirmé sans fait |
+| M274 | nombre absent des faits cités gardé | « 40 s plus tard » quand l'écart est de 15 s |
+| M275 | nombres d'une tendance non contrôlés | le même écart inventé, écrit en `trend` |
+| M276 | noms lus comme des nombres | « T1110.001 » écarte une affirmation juste |
+| M277 | `value` d'un changement non contrôlé | une action qu'aucun fait ne porte |
+| M278 | campagne reversée : faits recalculés | une décision vue par le rapport devient inconnue après la purge |
+| M279 | campagne en cours versée dans l'index | des faits incomplets entrent dans l'index |
+
+Vingt sur vingt attrapés au premier tour (26/10). La relecture de D-2 a trouvé quatre trous dans
+la vérification : un écart inventé passait s'il était écrit en `observation` ; « a isolé » sur
+une décision inconnue passait dès qu'un fait de changement était cité ; des tendances justes
+étaient barrées (un écart entre deux runs, « le 21 octobre », « en 2026 », « au 2ᵉ run », « dans
+les 2 campagnes ») ; le sens d'un changement n'était pas lu. M275 et M276 suivent le code
+corrigé. Dix mutants de plus, dans la plage M510–M519 (M260–M279 est pleine), mesurés par le
+même fichier :
+
+| Mutant | Défaut réinjecté | Effet |
+|---|---|---|
+| M510 | nombres d'une `observation` qui cite un fait de changement non contrôlés | « vue 40 s plus tard » gardé en `observation` |
+| M511 | fait de changement cité : « a isolé » permis quels que soient ses côtés | une décision inconnue dite prise |
+| M512 | écart entre deux runs cités refusé | « augmente de 15 s » barré dans une tendance juste |
+| M513 | date en toutes lettres, année, ordinal lus comme des nombres | « le 21 octobre », « en 2026 », « au 2ᵉ run » barrés |
+| M514 | décompte lu comme un nombre de fait | « dans les 2 campagnes » barré |
+| M515 | décompte sans borne | « dans les 3 campagnes » gardé avec deux runs cités |
+| M516 | action ou détection absente des faits gardée | « de detected à missed » sur une clé détectée deux fois |
+| M517 | passage d'une action à une autre non contrôlé | « de l'isolement au blocage » quand c'est l'inverse |
+| M518 | nombres à l'envers gardés | « de 106,9 s à 91,9 s » quand la latence a augmenté |
+| M519 | côté d'un fait lu sur l'identifiant du run | un run sans `run_id` dit « seulement dans la précédente » |
+
+Les trente (M260–M279, M510–M519) attrapés au premier tour (26/10), aucun périmé.
+
+La deuxième relecture de D-2 a trouvé un bug et des trous bon marché : l'unité de « de X à Y »
+était obligatoire (un `?` portait sur le lookahead de l'unité), si bien que « de 0,78 à 0,8 »
+ou « de 107 à 92 secondes » n'étaient pas lus ; le sens et les actions d'une `trend` n'étaient
+pas contrôlés ; une durée inventée passait pour un décompte (« vue 1 heure plus tard ») ; un
+nombre était accepté quelle que soit son unité (« vue en 2 s » parce que 2 est un écart de
+points) ; « entre le 21 et le 23 octobre » était barré ; une `observation` qui cite un fait de
+changement pouvait nommer une action qu'aucun fait ne porte. La session principale a tranché :
+c'est la dernière correction de cette famille ; la section calculée fait foi, et ce qui reste
+est écrit dans les limites connues. M513, M516 et M518 suivent le code corrigé. Dix mutants de
+plus, dans la plage M530–M539 (M510–M519 est pleine), mesurés par le même fichier :
+
+| Mutant | Défaut réinjecté | Effet |
+|---|---|---|
+| M530 | unité obligatoire dans « de X à Y » | « de 0,78 à 0,8 » à l'envers gardé |
+| M531 | sens d'une `trend` non lu | « passe de 106,9 s à 91,9 s » gardé en tendance |
+| M532 | actions d'une `trend` non contrôlées | « wipe_storage cette fois » gardé en tendance |
+| M533 | actions d'une `observation` qui cite un fait de changement non contrôlées | « a pris un wipe_storage » gardé |
+| M534 | tout mot fait un décompte | « vue 1 heure plus tard » gardé |
+| M535 | unité ignorée | « vue en 2 s » gardé, 2 étant un écart de points |
+| M536 | durée non convertie | « 15 ms plus tard » lu 15 s, gardé |
+| M537 | plage de dates lue comme des nombres | « entre le 21 et le 23 octobre » barré |
+| M538 | écart relatif refusé | « +16 % » barré quand la latence passe de 91,9 s à 106,9 s |
+| M539 | « de X à Y » qui part d'un côté sans arriver à l'autre gardé | « de 91,9 s à 15 s » gardé |
+
+Les quarante (M260–M279, M510–M519, M530–M539) attrapés à chaque tour (26/10), aucun périmé.
+
+La troisième relecture de D-2 a trouvé un faux positif réel, introduit par M539 : une `trend`
+ne mettait face à face qu'un run antérieur et un run de cette campagne, si bien qu'une
+tendance juste sur trois campagnes (« de 120 s (19/10) à 91,9 s (21/10), puis à 106,9 s »,
+« 0,85 → 0,80 → 0,78 », « du blocage à l'isolement (avant), puis retour au blocage ») était
+barrée. Deux runs antérieurs de la même technique se font maintenant face aussi, dans les deux
+sens : leur ordre n'est pas connu. Un sens inversé entre un run antérieur et un run de cette
+campagne reste écarté, sauf quand un autre run antérieur cité porte la même action, ou la même valeur, que le run de cette campagne : la tendance peut alors décrire le passage entre deux runs antérieurs, dont l'ordre n'est pas lu (limite
+connue, voir [`../analysis.md`](../analysis.md)). Et deux trous bon marché : une date en anglais (« since October 21 »)
+était lue comme un nombre, et un nombre nu avant une date (« baisse de 12, le 23 octobre »)
+était avalé comme premier jour d'une plage. M513 et M537 suivent le code corrigé. Cinq mutants
+de plus, M540–M544 (M530–M539 est pleine), mesurés par le même fichier :
+
+| Mutant | Défaut réinjecté | Effet |
+|---|---|---|
+| M540 | deux runs antérieurs jamais face à face | « 120 s → 91,9 s → 106,9 s » barré |
+| M541 | deux runs antérieurs face à face dans l'ordre cité seulement | la même tendance barrée selon l'ordre de ses runs |
+| M542 | deux runs antérieurs de techniques différentes face à face | « de l'isolement au blocage » gardé, l'isolement étant celui d'une autre technique |
+| M543 | mois anglais absents | « since October 21 » barré |
+| M544 | une plage de dates sans « le », « entre », « du », « des », « aux »… devant | « baisse de 12, le 23 octobre » gardé |
+
+Les quarante-cinq (M260–M279, M510–M519, M530–M544) attrapés (26/10), aucun périmé.
+
+La quatrième relecture a trouvé une régression de M544 : « les runs des 21 et 23 octobre »,
+« aux 21 et 23 octobre » étaient barrés (21 lu comme un nombre). « des », « aux », « au » (et
+« the ») ouvrent maintenant une plage, « de » toujours pas ; « du 21 et du 23 octobre » est
+lu ; un jour de plage va de 1 à 31, si bien que « between 70 and 60, 23 October » n'est plus
+avalé. Trois mutants de plus, M545–M547 :
+
+| Mutant | Défaut réinjecté | Effet |
+|---|---|---|
+| M545 | un jour de plage peut être n'importe quel nombre | « between 70 and 60, 23 October » gardé |
+| M546 | « des », « aux », « au » n'ouvrent pas une plage | « les campagnes des 21 et 23 octobre » barré |
+| M547 | « du » refusé à l'intérieur d'une plage | « du 21 et du 23 octobre » barré |
+
+Avec M280–M289 et M520–M528 de M-3, venus de main, tous attrapés au premier tour (26/10),
+aucun périmé.
+Détail : [`../analysis.md`](../analysis.md), « Ce qui a changé depuis la campagne précédente ».
+
 ## Ce que les invariants ont trouvé
 
 Aucun de ces défauts n'avait été vu en revue. Chacun a son test et sa séquence figée.

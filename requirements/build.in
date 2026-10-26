@@ -1,0 +1,4 @@
+# The build backend of pyproject.toml ([build-system] requires), locked like the rest:
+# the project is installed with --no-build-isolation, so nothing unhashed is fetched (M-3).
+setuptools>=61
+wheel

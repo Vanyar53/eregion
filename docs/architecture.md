@@ -283,8 +283,13 @@ Glorfindel est le produit ; le reste est l'atelier qui l'éprouve.
 
 ### Le vocabulaire commun
 
-Le framework ne parle qu'avec ces mots ; la correspondance par cloud viendra avec l'interface de
-fournisseur (MC0).
+Le framework ne parle qu'avec ces mots ; la correspondance par cloud passe par l'interface de
+fournisseur (MC0, livrée avec A1 le 26/10, `glorfindel/providers/interface.py`). Chaque fournisseur
+a un adaptateur, seul à importer son SDK, et y déclare ses capacités dans ces mots : le contrôle
+réseau en `network_quarantine` (isoler par un groupe de quarantaine) et `network_rules` (isoler par
+règles, bloquer), `session_drain` (couper les sessions déjà ouvertes), `restore_point`, chacune avec
+les droits qu'elle demande. La préparation de Glorfindel lit ces droits. Azure est le seul
+adaptateur (`glorfindel/providers/azure/`).
 
 | Concept | Sens |
 |---|---|

@@ -263,10 +263,10 @@ EXERCISES · 11          windows [7 days ▾] │ CAMPAIGNS · 1    [30 days ▾
 |---|---|---|
 | `eregion_console/` | `app.py` (registre, en-tête, accueil, jeton, redirections) ; une section par module (`glorfindel.py`, `annatar.py`, `gothmog.py`, `config.py`) ; `cli.py` (`eregion console [--sections]`) ; `static/` : `overview.html`, `glorfindel.html` (ex-`index.html`), `annatar.html` et `gothmog.html` (ex-`atelier.html`, script commun `exercises.js`), `setup.html`, `console.js`, `console.css`. L'existant passe par `git mv` | War Room |
 | Jeton | `EREGION_CONSOLE_TOKEN` s'il n'est pas vide, sinon `GLORFINDEL_WARROOM_TOKEN` ; avertissement si les deux diffèrent. Cookie inchangé | War Room |
-| Dans la même PR, hors périmètre | `pyproject.toml` : le paquet, le script `eregion`, l'extra `console` (`war-room` gardé), les pages en données du paquet (aucune n'est déclarée aujourd'hui : un `pip install` sans `-e` les perdrait). Le Dockerfile de Glorfindel. `docker-compose.yml` : le montage de `static` et la commande. L'import de `glorfindel/cli.py`. Les imports des tests et de `scripts/mutation_check.py`, dont 5 mutants visent `glorfindel/api.py` | War Room, avec l'accord de General et de Glorfindel |
+| Dans la même PR, hors périmètre | `pyproject.toml` : le paquet, le script `eregion`, l'extra `console` (`war-room` gardé), les pages en données du paquet (aucune n'est déclarée aujourd'hui : un `pip install` sans `-e` les perdrait). Le Dockerfile de Glorfindel : `COPY eregion_console/`. Depuis M-3, il installe les dépendances verrouillées (`requirements/glorfindel.txt`, avec FastAPI et uvicorn), puis le paquet sans dépendances : l'extra `console` reprend celles de `war-room`, à vérifier contre le verrou. `docker-compose.yml` : le montage de `static` et la commande. L'import de `glorfindel/cli.py`. Les imports des tests et de `scripts/mutation_check.py`, dont 5 mutants visent `glorfindel/api.py` | War Room, avec l'accord de General et de Glorfindel |
 | Glorfindel (UI-1b) | l'alias caché `glorfindel war-room` ; les textes « War Room » d'`agent.py`, `readiness.py` et `jobs.py`. Vérifier qu'aucun n'entre dans ce que voit le modèle | Glorfindel |
 | General (UI-1c) | Makefile, `status.sh`, `host_env.py`, `host.env.example` (les deux noms du jeton) ; `CLAUDE.md` (table des sessions, index des docs) et le fichier de rôle (une session « Console » ?) ; profils de la 1.0 et D1 dans la feuille de route ; doc hors console | General |
-| Plus tard (UI-1d) | le service compose `console` ; la sortie Terraform `war_room_tunnel` au prochain apply de H0 | General et Jonathan |
+| Plus tard (UI-1d) | le service compose `console`, nommé aussi dans `infra/glorfindel-host/deploy.sh` (`up -d watch war-room bot`) et `status.sh` ; la sortie Terraform `war_room_tunnel` au prochain apply de H0 | General et Jonathan |
 | Doc | README, `docs/glorfindel.md`, `operations.md`, `fichiers-cles.md`, `architecture.md`, `azure.md`, `design/preuves.md`, `observation.md`, `infra/glorfindel-host/README.md`. Le CHANGELOG passé et `historique.md` restent tels quels | War Room pour la console, General pour le reste |
 
 ### Pièges
@@ -325,8 +325,8 @@ EXERCISES · 11          windows [7 days ▾] │ CAMPAIGNS · 1    [30 days ▾
 
 - UI-1 se déploie seul : sur H0, la détection voit tous les composants, et l'alias du jeton suffit.
 - Les autres lots sont indépendants, sauf UI-2, qui suit UI-1.
-- H0 est en pré-observation jusqu'au 13/11 environ : chaque redéploiement se fait avec Jonathan,
-  `.envrc` chargé.
+- H0 est en pré-observation jusqu'au 13/11 environ. Chaque redéploiement se fait avec Jonathan,
+  `.envrc` chargé, sur une référence épinglée (`make glorfindel-host-start REF=<commit>`, M-3).
 
 ## 6. Hors périmètre
 

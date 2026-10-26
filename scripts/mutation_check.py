@@ -29,7 +29,20 @@ import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-A = "glorfindel/actions.py"
+# glorfindel/actions.py was split by concern (A1): each mutant follows its code.
+STA = "glorfindel/response/state.py"
+AZC = "glorfindel/providers/azure/connector.py"
+NSG = "glorfindel/providers/azure/nsg.py"
+NET = "glorfindel/providers/azure/network.py"
+QUA = "glorfindel/providers/azure/quarantine.py"
+ISO = "glorfindel/providers/azure/isolation.py"
+REL = "glorfindel/providers/azure/release.py"
+VER = "glorfindel/providers/azure/verify.py"
+UNB = "glorfindel/providers/azure/unblock.py"
+SWP = "glorfindel/providers/azure/sweep.py"
+SDK = "glorfindel/providers/azure/sdk.py"
+FAC = "glorfindel/actions.py"                 # the façade (A1)
+PIF = "glorfindel/providers/interface.py"
 R = "glorfindel/reassert.py"
 C = "glorfindel/config.py"
 INS = "eregion_core/inscription.py"
@@ -53,144 +66,152 @@ XW = "eregion_core/exercise.py"
 INVARIANTS = "tests/unit/test_invariants.py"
 INSCRIPTION_TESTS = "tests/unit/test_inscription.py tests/unit/test_engine.py"
 DOCS_TESTS = "tests/unit/test_docs_budget.py"
+BOUNDARY_TESTS = "tests/unit/test_provider_boundary.py"
 DETECTION_TESTS = "tests/unit/test_annatar_detection.py tests/unit/test_engine.py"
 # A mutant whose "old" text is RENAME renames its file to "new" instead of editing it.
 RENAME = object()
 # A mutant whose "old" and "new" are tuples makes several edits in its file, pair by pair
 # (old[i] -> new[i]), each old text matching exactly once — for a bug that needs two places.
 
+# D-2: the lines of analysis/campaign_report.py that read a date in words, a range of them too
+# (M513, M537).
+_DATES_FIRST = r'''    rf"|(?:\b(?:le|les|entre|du|des|aux|au|between|from|on|the)\s+{_DAY}(?:er)?"''' + "\n"
+_DATES_LINE = (_DATES_FIRST
+               + r'''    rf"(?:\s*(?:,|-|–|\bet\b|\bau\b|\bà\b|\band\b|\bto\b)\s*(?:(?:le|du|des)\s+)?{_DAY}(?:er)?)+"''' + "\n"
+               r'''    rf"|\b\d{{1,2}}(?:er|st|nd|rd|th)?)\s+(?:{_MONTHS})\b"''' + "\n")
+
 # (id, bug class, file, text in the code today, text that re-introduces the bug[, why
 # the invariants can't see it])
 MUTANTS = [
-    ("M01", "rule name without the NIC hash (homonyms share a name)", A,
+    ("M01", "rule name without the NIC hash (homonyms share a name)", NET,
      'base = f"{prefix}-{vm_name}-{nic_short}-{_nic_hash(nic_id, 6)}"',
      'base = f"{prefix}-{vm_name}-{nic_short}"'),
-    ("M02", "deny any/any on a shared NIC NSG", A,
+    ("M02", "deny any/any on a shared NIC NSG", NET,
      "        return len(nics) > 1 or len(subnets) > 0",
      "        return False"),
-    ("M03", "deny scoped to the NIC's first IP only", A,
+    ("M03", "deny scoped to the NIC's first IP only", ISO,
      'self._put_deny_rule(nsg_rg, nsg_name, in_name, "Inbound", priority, src="*", dsts=ips)',
      'self._put_deny_rule(nsg_rg, nsg_name, in_name, "Inbound", priority, src="*", dsts=ips[:1])'),
-    ("M04", "outbound allows ignored by the precedence check", A,
+    ("M04", "outbound allows ignored by the precedence check", NSG,
      '        elif direction == "outbound":\n            src, dst = outbound_src, outbound_dst',
      '        elif direction == "outbound":\n            continue'),
-    ("M05", "verify_release ignores a quarantine NSG still attached", A,
+    ("M05", "verify_release ignores a quarantine NSG still attached", VER,
      "                  for t0 in targets if t0.get(\"quarantine\")]",
      "                  for t0 in targets if False]"),
-    ("M06", "state deleted right after it is written (C1's effect)", A,
+    ("M06", "state deleted right after it is written (C1's effect)", STA,
      "    _atomic_write_text(target, json.dumps(payload))\n",
      "    _atomic_write_text(target, json.dumps(payload))\n    if name != name.lower():\n        target.unlink()\n"),
-    ("M07", "release sweeps the NICs only when there is no state", A,
+    ("M07", "release sweeps the NICs only when there is no state", REL,
      "        failed += self._sweep_isolation(rg, vm_name, remaining)",
      "        failed += [] if state.get(\"placements\") else self._sweep_isolation(rg, vm_name, remaining)"),
-    ("M08", "fallback deny any/any on an NSG that only looks dedicated", A,
+    ("M08", "fallback deny any/any on an NSG that only looks dedicated", NSG,
      '    return bool(target.get("private_ips")) or _ip_scoped(target)',
      "    return _ip_scoped(target)"),
-    ("M09", "a missing original tag read as 'no NSG' (Q7)", A,
+    ("M09", "a missing original tag read as 'no NSG' (Q7)", QUA,
      "        if not value:\n            raise OriginalUnknown(",
      "        if not value:\n            return None\n            raise OriginalUnknown("),
-    ("M10", "an unreadable subnet read as 'no subnet NSG'", A,
+    ("M10", "an unreadable subnet read as 'no subnet NSG'", NET,
      "                subnet_nsg, subnet_unreadable = None, True",
      "                subnet_nsg, subnet_unreadable = None, False"),
-    ("M11", "_is_not_found by substring", A,
+    ("M11", "_is_not_found by substring", SDK,
      "    # No substring guess:",
      "    if \"not found\" in str(exc).lower():\n        return True\n    # No substring guess:",
      "EQUIVALENT: no call site sees a non-404 'not found' since the release re-reads the NIC"),
-    ("M12", "isolation verified by rule name, not content", A,
+    ("M12", "isolation verified by rule name, not content", REL,
      '                    and _deny_isolates(r_in, "inbound", ips) and _deny_isolates(r_out, "outbound", ips)):',
      "                    ):"),
     ("M13", "reassertion ignores a release that has started", "glorfindel/reassert.py",
      "    return bool(state.get(\"partial\") or state.get(failed_key) or state.get(running_key))",
      "    return bool(state.get(\"partial\") or state.get(failed_key))"),
-    ("M14", "release does not read the NIC back", A,
+    ("M14", "release does not read the NIC back", QUA,
      "            if not _same_id(now or \"\", original or \"\"):",
      "            if False:"),
-    ("M15", "an unreadable config falls back to the defaults (S1)", A,
+    ("M15", "an unreadable config falls back to the defaults (S1)", QUA,
      "        from glorfindel.config import load_glorfindel_config\n        iso = load_glorfindel_config().isolation\n",
      "        from glorfindel.config import load_glorfindel_config\n        try:\n            iso = load_glorfindel_config().isolation\n"
      "        except Exception:\n            return True, \"\"\n"),
-    ("M16", "blocks verified by rule name, not content (S2)", A,
+    ("M16", "blocks verified by rule name, not content (S2)", UNB,
      "        altered = [n for n, r, d in zip(names, found, (\"inbound\", \"outbound\")) if not _deny_blocks(r, d, ip, ips)]",
      "        altered = []"),
-    ("M17", "per-VM lock inoperative", A,
+    ("M17", "per-VM lock inoperative", AZC,
      "        with _vm_lock(rid.rstrip(\"/\").rsplit(\"/\", 1)[-1]):\n            return method(self, *args, **kwargs)",
      "        return method(self, *args, **kwargs)"),
     # Found by L26 itself (the world moving): kept so they stay found.
-    ("M18", "a NIC's old-IP rule recognised by content only (L26)", A,
+    ("M18", "a NIC's old-IP rule recognised by content only (L26)", NSG,
      "    if name in hashed:\n        # Only Glorfindel names a rule with a NIC's hash",
      "    if name in hashed and _deny_applies(rule, ips):\n        # Only Glorfindel names a rule with a NIC's hash"),
-    ("M19", "a block verified against the IPs recorded at block time (L26)", A,
+    ("M19", "a block verified against the IPs recorded at block time (L26)", UNB,
      "                now = current.get(nic) if current is not None and isinstance(nic, str) else None",
      "                now = None"),
-    ("M20", "release asks for the original of a NIC no longer in quarantine (L26)", A,
+    ("M20", "release asks for the original of a NIC no longer in quarantine (L26)", REL,
      "                        if now and not _same_id(now, p[\"nsg_id\"]):",
      "                        if False:"),
-    ("M21", "a block counted on an NSG that no longer governs the NIC (L26)", A,
+    ("M21", "a block counted on an NSG that no longer governs the NIC (L26)", UNB,
      '                    off = [p for p in ps if (p["nsg_rg"].lower(), p["nsg_name"].lower()) not in governing]',
      "                    off = []"),
-    ("M22", "a partial release's flat fields read as a legacy state (L26)", A,
+    ("M22", "a partial release's flat fields read as a legacy state (L26)", REL,
      '        elif "placements" not in state and state.get("nsg_name") and not _is_quarantine_nsg(state["nsg_name"]):',
      '        elif state.get("nsg_name"):'),
-    ("M23", "an unblock doesn't look behind the quarantine (L27)", A,
+    ("M23", "an unblock doesn't look behind the quarantine (L27)", UNB,
      "            views = self._nic_nsg_views(t0)\n            if t0.get(\"quarantine\"):",
      "            views = self._nic_nsg_views(t0)\n            if False:"),
-    ("M24", "reset --from-azure reads the original from the tag only (L27)", A,
+    ("M24", "reset --from-azure reads the original from the tag only (L27)", SWP,
      "                original = _recorded_original(t0[\"nic_id\"])\n                if original is _UNKNOWN:\n"
      "                    original = self._original_from_tags(t0[\"quarantine\"], t0[\"nic_id\"])\n"
      "                originals[t0[\"nic_id\"]] = original",
      "                originals[t0[\"nic_id\"]] = original = self._original_from_tags(t0[\"quarantine\"], t0[\"nic_id\"])"),
-    ("M25", "a partial reset leaves the state unmarked (L27)", A,
+    ("M25", "a partial reset leaves the state unmarked (L27)", SWP,
      "        elif not dry_run:\n            # Part of it is gone from Azure",
      "        elif False:\n            # Part of it is gone from Azure",
      "EQUIVALENT: since A0 the reset records its intent (releasing_at / unblocking_at) before "
      "touching Azure — a partial reset's state is held by that marker either way; the failure "
      "mark only changes the operator's wording"),
-    ("M26", "a NIC left without an NSG: the release moves on (L28, U2)", A,
+    ("M26", "a NIC left without an NSG: the release moves on (L28, U2)", REL,
      "                        if now is None:\n                            # Detached from our NSG",
      "                        if False:\n                            # Detached from our NSG"),
-    ("M27", "an unreadable config hides an emptied quarantine NSG (L28, U4)", A,
+    ("M27", "an unreadable config hides an emptied quarantine NSG (L28, U4)", QUA,
      "            wanted = self._quarantine_wanted(with_forensic=False)\n            forensic_known = False",
      "            raise\n            forensic_known = False"),
-    ("M28", "orphan rules not reported (L28, U1)", A,
+    ("M28", "orphan rules not reported (L28, U1)", SWP,
      "                if len(mark) not in (6, 8) or any(c not in \"0123456789abcdef\" for c in mark) or mark in marks:",
      "                if True:"),
-    ("M29", "a bare NIC isolated again records 'none' over its original (L28, U2)", A,
+    ("M29", "a bare NIC isolated again records 'none' over its original (L28, U2)", QUA,
      "            if original is None:\n                # A bare NIC may have been in our quarantine before",
      "            if False:\n                # A bare NIC may have been in our quarantine before"),
-    ("M30", "the quarantine swap is not read back (A0)", A,
+    ("M30", "the quarantine swap is not read back (A0)", QUA,
      '            if not _same_id(now or "", q["nsg_id"]):',
      "            if False:"),
-    ("M31", "one deny's priority used for both directions (A0)", A,
+    ("M31", "one deny's priority used for both directions (A0)", VER,
      '        found = _shadowing_rules(rules, {"inbound": prio, "outbound": out if isinstance(out, int) else prio},',
      '        found = _shadowing_rules(rules, {"inbound": prio, "outbound": prio},'),
-    ("M32", "an outbound allow before a block counted as exposure (A0)", A,
+    ("M32", "an outbound allow before a block counted as exposure (A0)", NSG,
      '                    port is None or direction == "outbound" or _rule_covers_port(r, port)),',
      '                    port is None or (direction == "inbound" and _rule_covers_port(r, port))),'),
-    ("M33", "an unowned old fixed-name rule on a non-dedicated NSG ignored (A0)", A,
+    ("M33", "an unowned old fixed-name rule on a non-dedicated NSG ignored (A0)", REL,
      '        if not (t.get("sharing_unknown") or _ip_scoped(t)):\n            return []',
      '        if True:\n            return []'),
-    ("M34", "verify_release ignores the old single-NSG state (A0)", A,
+    ("M34", "verify_release ignores the old single-NSG state (A0)", VER,
      "            rules = self._list_rules(cache, l_rg, l_name)\n            names =",
      "            rules = []\n            names ="),
-    ("M35", "reset --from-azure records no intent (A0)", A,
+    ("M35", "reset --from-azure records no intent (A0)", SWP,
      '            if state:\n                _save_isolation_state(resource_id, {**state, "releasing_at": now})',
      '            if False:\n                _save_isolation_state(resource_id, {**state, "releasing_at": now})'),
-    ("M36", "the old state file removed after the new one is written (A0)", A,
+    ("M36", "the old state file removed after the new one is written (A0)", STA,
      "    if olds and not target.exists():",
      "    if False:"),
     ("M37", "reassertion alerts keyed by the VM's name (A0, L1)", "glorfindel/reassert.py",
      '    return f"reassert-{vm}-{_rid_hash(rid)}" + (f"-{ip}" if ip else "")',
      '    return f"reassert-{vm}" + (f"-{ip}" if ip else "")'),
-    ("M38", "a block gone behind the quarantine not reported (A0, L1)", A,
+    ("M38", "a block gone behind the quarantine not reported (A0, L1)", UNB,
      "                                    held_missing += names",
      "                                    pass"),
-    ("M39", "reset reads a bare NIC's original from the tag only (A0)", A,
+    ("M39", "reset reads a bare NIC's original from the tag only (A0)", SWP,
      "            if recorded is not _UNKNOWN:\n                original = recorded\n            elif q_bare is None:",
      "            if False:\n                original = recorded\n            elif q_bare is None:"),
-    ("M40", "a deleted NSG's listing read as unreadable (A0, L1)", A,
+    ("M40", "a deleted NSG's listing read as unreadable (A0, L1)", NET,
      "                cache[key] = [] if _is_not_found(exc) else None",
      "                cache[key] = None"),
-    ("M41", "reset doesn't sweep the original it puts back on a bare NIC (A0)", A,
+    ("M41", "reset doesn't sweep the original it puts back on a bare NIC (A0)", SWP,
      '            bare[t0["nic_id"]] = (original, q_bare)\n            if original:\n                views.append(self._original_view(t0, original))',
      '            bare[t0["nic_id"]] = (original, q_bare)'),
     # O0 (eighth pass): the six bugs the inscription's specification names.
@@ -219,7 +240,7 @@ MUTANTS = [
     ("M49", "a docs/ file the index points to is renamed (DX1)", "docs/azure.md",
      RENAME, "docs/azure-renamed.md"),
     # Sixth review, S8: the drain spared every session with the forensic host.
-    ("M50", "the drain spares any session with a forensic source (S8)", A,
+    ("M50", "the drain spares any session with a forensic source (S8)", ISO,
      'flt = flt[:-1] + f"and not ( dst {cidr} and ( {local} ) ) )"',
      'flt = flt[:-1] + f"and not dst {cidr} )"'),
     # Sixth review, S9: a verification that raised left the graph (cycle_failed, no Revert).
@@ -227,7 +248,7 @@ MUTANTS = [
      "    except Exception as exc:\n        first = str(exc).strip().splitlines()[0]",
      "    except Exception as exc:\n        raise\n        first = str(exc).strip().splitlines()[0]"),
     # Sixth review, S7: a quarantine refused at execution, unknown to the readiness gate.
-    ("M52", "a quarantine refused at execution is not remembered (S7)", A,
+    ("M52", "a quarantine refused at execution is not remembered (S7)", ISO,
      "        _remember_quarantine_outcome(resource_id, refused, placements)\n",
      "        pass\n"),
     ("M53", "the readiness gate ignores a remembered refusal (S7)", "glorfindel/readiness.py",
@@ -554,7 +575,8 @@ MUTANTS = [
      "            if c.kind not in _DETECTION_KINDS and _RESPONSE.search(c.text) and not _UNKNOWN.search(c.text):\n",
      "            if c.kind not in _DETECTION_KINDS and not _UNKNOWN.search(c.text):\n"),
     ("M163", "a claim that Glorfindel acted on a run whose decision is unknown is kept (#167, review 4)",
-     CREP, "            elif _ACTED.search(told):\n", "            elif False:\n"),
+     CREP, "            elif _ACTED.search(told) and not all(\n",
+     "            elif False and not all(\n"),   # followed D-2's change of the line (A1 merge)
     ("M164", "a missed run whose window holds a decision reads as « Glorfindel did not act » "
      "(#167, review 4)", CREP,
      '        return {}, (LATE_OR_OTHER if dec else ""), until\n', '        return {}, "", until\n'),
@@ -834,6 +856,282 @@ MUTANTS = [
      '            **seen, "execution_id": (execution or {}).get("name"), "execution_status": status,\n',
      '            **{k: v for k, v in seen.items() if k != "before"},\n'
      '            "execution_id": (execution or {}).get("name"), "execution_status": status,\n'),
+    # A1 — actions.py split, its import path a façade that is still one namespace; MC0 —
+    # each provider declares its capabilities, the readiness reads them, no SDK outside
+    # its adapter (tests/unit/test_actions_split.py, test_provider_boundary.py).
+    ("M450", "a write through the façade reaches one module only: the locks under the real home (A1)",
+     FAC,
+     "        for module in binders:\n            setattr(module, name, value)\n",
+     "        for module in binders[:1]:\n            setattr(module, name, value)\n"),
+    ("M451", "the façade binds copies: a value its module changes reads stale (A1)", FAC,
+     "_sys.modules[__name__].__class__ = _OneNamespace\n",
+     "globals().update({n: v for m in _MODULES for n, v in vars(m).items() if not n.startswith(\"__\")})\n"
+     "_sys.modules[__name__].__class__ = _OneNamespace\n"),
+    ("M452", "a module of the split left out of the façade: its names unreachable (A1)", FAC,
+     '    "glorfindel.providers.azure.sweep",\n', ""),
+    ("M453", "the readiness reads the rules' rights from the quarantine's (MC0)", "glorfindel/readiness.py",
+     "    rules_ok = caps.available(NETWORK_RULES, missing)\n",
+     "    rules_ok = caps.available(NETWORK_QUARANTINE, missing)\n"),
+    ("M454", "a capability whose rights are missing counts as available (MC0)", PIF,
+     "        return cap is not None and not (set(missing_rights) & cap.rights)\n",
+     "        return cap is not None\n"),
+    ("M455", "a capability the provider doesn't declare counts as available (MC0)", PIF,
+     "        return cap is not None and not (set(missing_rights) & cap.rights)\n",
+     "        return cap is None or not (set(missing_rights) & cap.rights)\n"),
+    ("M456", "a connector that declares nothing is read as Azure (MC0)", PIF,
+     "    if isinstance(connector, CloudConnector):\n        raise TypeError(",
+     "    if False:\n        raise TypeError("),
+    ("M457", "the boundary lets any provider's SDK into any adapter of glorfindel/ (MC0)", BOUNDARY_TESTS,
+     '        return rel.startswith(f"glorfindel/providers/{provider}/")\n',
+     '        return rel.startswith("glorfindel/providers/")\n'),
+    ("M458", "Azure's declaration drifts from what check_permissions reads (MC0)",
+     "glorfindel/providers/azure/capabilities.py",
+     '            "Microsoft.Network/networkSecurityGroups/securityRules/delete",\n', ""),
+    ("M459", "a restore job read in the VM's group again, through the connector (A1)", "glorfindel/jobs.py",
+     "            az_status = connector.restore_job_status(vault, rg, restore_job_name)\n",
+     "            az_status = connector.restore_job_status(vault, job.get(\"rg\", \"\"), restore_job_name)\n"),
+    # A1 review: a spec'd mock, an instance's declaration, the ceiling of the debt, mock.patch.
+    ("M460", "capabilities read on type(): a MagicMock(spec=AzureConnector) breaks the readiness (A1 review)",
+     PIF, '        declared = getattr(getattr(connector, "__class__", type(connector)), "CAPABILITIES", None)\n',
+     '        declared = getattr(type(connector), "CAPABILITIES", None)\n'),
+    ("M461", "an instance's own declaration ignored (A1 review)", PIF,
+     '    declared = getattr(connector, "CAPABILITIES", None)\n', "    declared = None\n"),
+    ("M462", "a debt of the shared core declared an adapter: the boundary no longer sees it (A1 review)",
+     BOUNDARY_TESTS,
+     ('ADAPTERS = {\n', '    "eregion_core/inscription.py": "credential for the ARM tag read of the inscription",\n'),
+     ('ADAPTERS = {\n    "eregion_core/inscription.py": "azure",\n', "")),
+    ("M463", "a delete through the façade silently ignored: mock.patch leaves its value everywhere (A1 review)",
+     FAC, "        if _binders(name):\n            home = ", "        if _binders(name):\n            return\n            home = "),
+    # D-2 (#184) — what changed since the previous campaign: the previous campaign chosen by
+    # its rule (done, earlier, a shared key: a technique on a VM), the runs joined exactly by
+    # key, the section rendered by the code, a difference that does not come from a fact
+    # removed by the check, and the index of past campaigns put in without losing a fact.
+    ("M260", "an aborted campaign is chosen as the previous one (D-2)", "analysis/campaign_report.py",
+     ('    res = coll.get(where={"campaign_state": "done"}, limit=_MAX_ROWS)\n',
+      '        if (meta.get("campaign_state") != "done" or not cid or cid == campaign.campaign_id\n'),
+     ("    res = coll.get(limit=_MAX_ROWS)\n",
+      "        if (not cid or cid == campaign.campaign_id\n")),
+    ("M261", "a later campaign is chosen as the previous one (D-2)", "analysis/campaign_report.py",
+     "                or not isinstance(started, (int, float)) or not started < campaign.started):\n",
+     "                or not isinstance(started, (int, float))):\n"),
+    ("M262", "a campaign with no key in common is chosen as the previous one (D-2)", "analysis/campaign_report.py",
+     "    shared = [(started, cid) for cid, (started, runs) in found.items() if keys(runs) & mine]\n",
+     "    shared = [(started, cid) for cid, (started, runs) in found.items()]\n"),
+    ("M263", "the key leaves the VM out: a technique on another VM faces it (D-2)", "analysis/campaign_changes.py",
+     "    return (ttp, vm) if ttp and vm else None\n", '    return (ttp, "") if ttp else None\n'),
+    ("M264", "the earliest qualifying campaign is chosen, not the latest (D-2)", "analysis/campaign_report.py",
+     "    _, cid = max(shared)\n", "    _, cid = min(shared)\n"),
+    ("M265", "without a previous campaign, the section says nothing of why (D-2)", "analysis/campaign_changes.py",
+     '        return lines + [f"*Aucune campagne précédente : {comparison.why_none}.*"]\n',
+     "        return lines\n"),
+    ("M266", "the VM of the key is compared with its case (D-2)", "analysis/campaign_changes.py",
+     '    ttp, vm = getattr(fact, "ttp", "") or "", (getattr(fact, "target", "") or "").lower()\n',
+     '    ttp, vm = getattr(fact, "ttp", "") or "", (getattr(fact, "target", "") or "")\n'),
+    ("M267", "the keys of one side only are not listed (D-2)", "analysis/campaign_changes.py",
+     "    order = sorted(set(b) | set(a),", "    order = sorted(set(b) & set(a),"),
+    ("M268", "a skipped scenario is a key: it played nothing (D-2)", "analysis/campaign_changes.py",
+     '    if getattr(fact, "status", "") != "executed":\n        return None\n', ""),
+    ("M269", "the report indexes its runs without the campaign's state and start (D-2)",
+     "analysis/campaign_report.py",
+     "    index_facts(facts, index_path, info)\n", "    index_facts(facts, index_path)\n"),
+    ("M270", "a key played twice pairs the last run with the first (D-2)", "analysis/campaign_changes.py",
+     "for n, f in enumerate(runs, 1)}", "for n, f in enumerate(reversed(runs), 1)}"),
+    ("M271", "the report leaves the computed section out (D-2)", "analysis/campaign_report.py",
+     '        lines += ["", *render_section(report.comparison)]\n', "        pass\n"),
+    ("M272", "the model never sees the change facts it may cite (D-2)", "analysis/campaign_report.py",
+     '            rows = "\\n".join(json.dumps(x.row(), ensure_ascii=False) for x in comparison.changes)\n',
+     '            rows = ""\n'),
+    ("M273", "a change claim that cites no change fact stays (D-2)", "analysis/campaign_report.py",
+     '        elif c.kind == "change" and not changed:\n            c.rejected = "a change claim cites no change fact"\n',
+     ""),
+    ("M274", "a difference no cited fact holds stays (D-2)", "analysis/campaign_report.py",
+     "(stray := _stray_numbers(c, cited)):", "(stray := []):"),
+    ("M275", "a trend's numbers are not checked against its facts (D-2)", "analysis/campaign_report.py",
+     '        elif (c.kind in ("trend", "change") or changed) and (stray',
+     '        elif (c.kind in ("change",) or changed) and (stray'),
+    ("M276", "a technique, a run id or a VM name is read as a number (D-2)", "analysis/campaign_report.py",
+     '    text = _NAMES.sub(" ", _without_ids(c))\n', "    text = _without_ids(c)\n"),
+    ("M277", "a change claim's value names an action the cited facts do not hold (D-2)",
+     "analysis/campaign_report.py",
+     "              and c.value not in set().union(*(x.words() for x in changed))):",
+     "              and False):"),
+    ("M278", "putting a campaign in again recomputes the facts its report saw (D-2)", "analysis/campaign_index.py",
+     "        if fact is not None and fact.run_id == rid and fact.campaign_id == info.campaign_id:\n",
+     "        if False:\n"),
+    ("M279", "a campaign still running is put into the index (D-2)", "analysis/campaign_index.py",
+     "    if info.state not in ENDED:\n", "    if False:\n"),
+    # D-2, after its review: an observation citing a change fact has its numbers checked; an
+    # unknown decision is never said acted through a change fact; a true trend is never
+    # barred (a difference of two cited runs, a date in words, a year, an ordinal, a count);
+    # a change names its facts' actions and detections, the way it went; a run without its id
+    # is on its side.
+    ("M510", "an observation citing a change fact has its numbers unchecked (D-2)", "analysis/campaign_report.py",
+     '        elif (c.kind in ("trend", "change") or changed) and (stray',
+     '        elif c.kind in ("trend", "change") and (stray'),
+    ("M511", "a change fact lets an unknown decision be said acted, whatever its sides (D-2)",
+     "analysis/campaign_report.py",
+     "            elif _ACTED.search(told) and not all(\n"
+     "                    isinstance(x, ChangeFact) and x.known_beside_unknown() for x in unknown):\n",
+     "            elif _ACTED.search(told) and not changed:\n"),
+    ("M512", "a trend may not write the difference of two cited runs (D-2)", "analysis/campaign_report.py",
+     "    allowed += _run_differences(runs)\n", ""),
+    ("M513", "a date in words, a year or an ordinal is read as a number (D-2)", "analysis/campaign_report.py",
+     (_DATES_LINE,
+      r'''    rf"|\b(?:19|20)\d{{2}}\b(?![.,]\d)(?!\s*{_UNIT})"''' + "\n",
+      r'''    r"|\b\d+(?:ᵉ|e|er|ère|re|ème|eme)\b"''' + "\n"),
+     ("", "", "")),
+    ("M514", "a count of what a claim cites is read as a number a fact must hold (D-2)",
+     "analysis/campaign_report.py",
+     "    most = len(runs) + 2 * (len(cited) - len(runs))\n", "    most = 0\n"),
+    ("M515", "a count above the runs a claim cites stays (D-2)", "analysis/campaign_report.py",
+     "            if not (count and 1 <= v <= most)\n", "            if not (count and 1 <= v)\n"),
+    ("M516", "a change claim names an action or a detection its facts do not hold (D-2)",
+     "analysis/campaign_report.py",
+     '        elif (c.kind in ("trend", "change") or changed) and (alien := _alien_word(c, cited)):\n'
+     """            c.rejected = f"{alien!r} is not in the cited {'change facts' if changed else 'runs'}"\n""", ""),
+    ("M517", "a change from one action or detection to another no fact holds stays (D-2)",
+     "analysis/campaign_report.py",
+     "        if a != b and (a, b) not in held:\n", "        if False:\n"),
+    ("M518", "a change said the wrong way round (« de 106,9 s à 91,9 s ») stays (D-2)",
+     "analysis/campaign_report.py",
+     "        if said and not any(_near(x, before, tol) and _near(y, after, tol) for before, after, tol in sides):\n",
+     "        if False:\n"),
+    ("M519", "a run without its id is said only in the previous campaign (D-2)", "analysis/campaign_changes.py",
+     "        if self.played_before and self.played_after:\n", "        if self.before_run and self.after_run:\n"),
+    # D-2, after its second review: « de X à Y » read without a unit; a trend says the way its
+    # runs went and names their actions only, an observation citing a change fact its facts';
+    # only what is counted makes a count; a number is of its unit's kind, a duration
+    # converted; a range of dates is a date; a relative change in percent is a fact's; « de X
+    # à Y » from a fact's side lands on its other side.
+    ("M530", "« de 0,78 à 0,8 », without a unit, is not read the wrong way round (D-2)",
+     "analysis/campaign_report.py",
+     (r'''    rf"\bde\s+(?P<a>{_NUM})\s*(?:{_UNIT})?{_BRACKETS}\s+à\s+(?P<b>{_NUM})"''' + "\n",
+      r'''    rf"|(?P<c>{_NUM})\s*(?:{_UNIT})?{_BRACKETS}\s*(?:→|->)\s*(?P<d>{_NUM})", re.IGNORECASE)''' + "\n"),
+     (r'''    rf"\bde\s+(?P<a>{_NUM})\s*{_UNIT}?{_BRACKETS}\s+à\s+(?P<b>{_NUM})"''' + "\n",
+      r'''    rf"|(?P<c>{_NUM})\s*{_UNIT}?{_BRACKETS}\s*(?:→|->)\s*(?P<d>{_NUM})", re.IGNORECASE)''' + "\n")),
+    ("M531", "a trend is not read for the way its runs went (D-2)", "analysis/campaign_report.py",
+     '        elif (sides := changed or (_faced(cited, own) if c.kind == "trend" else [])) and (\n',
+     "        elif (sides := changed) and (\n"),
+    ("M532", "a trend names an action or a detection its runs do not hold (D-2)", "analysis/campaign_report.py",
+     '        elif (c.kind in ("trend", "change") or changed) and (alien',
+     '        elif (c.kind in ("change",) or changed) and (alien'),
+    ("M533", "an observation citing a change fact names an action its facts do not hold (D-2)",
+     "analysis/campaign_report.py",
+     '        elif (c.kind in ("trend", "change") or changed) and (alien',
+     '        elif c.kind in ("trend", "change") and (alien'),
+    ("M534", "any word after a whole number makes it a count (« 1 heure plus tard ») (D-2)",
+     "analysis/campaign_report.py",
+     r'''    r"|passages?|cibles?|targets?|exécutions?|tirages?)(?![^\W\d_])", re.IGNORECASE)''' + "\n",
+     r'''    r"|passages?|cibles?|targets?|exécutions?|tirages?)(?![^\W\d_])|\s*[^\W\d_]", re.IGNORECASE)''' + "\n"),
+    ("M535", "a number's unit is not read: « 2 s » passes for a 2-point difference (D-2)",
+     "analysis/campaign_report.py",
+     '    return written in ("", held)\n', "    return True\n"),
+    ("M536", "a duration is not converted: « 15 ms » passes for 15 s (D-2)", "analysis/campaign_report.py",
+     '        out.append((float(m.group().replace(",", ".")) * one,\n',
+     '        out.append((float(m.group().replace(",", ".")),\n'),
+    ("M537", "a range of dates is read as numbers: « entre le 21 et le 23 octobre » barred (D-2)",
+     "analysis/campaign_report.py",
+     _DATES_LINE, r'''    rf"|\b\d{{1,2}}(?:er)?\s+(?:{_MONTHS})\b"''' + "\n"),
+    ("M538", "a relative change is no fact's number: « +16 % » barred (D-2)", "analysis/campaign_changes.py",
+     "        out += [(r, RELATIVE_TOLERANCE, RELATIVE)\n", "        out += [] and [(r, RELATIVE_TOLERANCE, RELATIVE)\n"),
+    ("M539", "« de 91,9 s à 15 s », from a fact's side to no other side, stays (D-2)",
+     "analysis/campaign_report.py",
+     "        if any(_near(x, before, tol) for before, _, tol in sides) and not any(\n",
+     "        if False and not any(\n"),
+    # D-2, after its third review: a trend over three campaigns says the way between its
+    # earlier runs, in either order, on the same technique; a date in English is a date; a
+    # number before a date is no day of a range.
+    ("M540", "a trend over three campaigns is barred: two earlier runs never face each other (D-2)",
+     "analysis/campaign_report.py",
+     "    out += [facing(x, y) for x in earlier for y in earlier if x is not y and x.ttp == y.ttp]\n", ""),
+    ("M541", "two earlier runs face each other in the order they are cited only (D-2)",
+     "analysis/campaign_report.py",
+     "    out += [facing(x, y) for x in earlier for y in earlier if x is not y and x.ttp == y.ttp]\n",
+     "    out += [facing(x, y) for i, x in enumerate(earlier) for y in earlier[i + 1:] if x.ttp == y.ttp]\n"),
+    ("M542", "two earlier runs of different techniques face each other (D-2)", "analysis/campaign_report.py",
+     "    out += [facing(x, y) for x in earlier for y in earlier if x is not y and x.ttp == y.ttp]\n",
+     "    out += [facing(x, y) for x in earlier for y in earlier if x is not y]\n"),
+    ("M543", "a date in English is read as a number: « since October 21 » barred (D-2)",
+     "analysis/campaign_report.py",
+     ('''           "|january|february|march|april|may|june|july|august|september|october|november|december")\n''',
+      r'''    rf"|\b(?:{_MONTHS})\s+\d{{1,2}}(?:st|nd|rd|th)?\b"''' + "\n"),
+     ('''           )\n''', "")),
+    ("M544", "a number before a date is a day of a range: « baisse de 12, le 23 octobre » kept (D-2)",
+     "analysis/campaign_report.py",
+     _DATES_FIRST, r'''    rf"|(?:\b{_DAY}(?:er)?"''' + "\n"),
+    # D-2, after its fourth review: « des 21 et 23 octobre » and « du 21 et du 23 octobre » are
+    # ranges; a day of a range is from 1 to 31.
+    ("M545", "a day of a range is any number: « between 70 and 60, 23 October » kept (D-2)",
+     "analysis/campaign_report.py",
+     r'''_DAY = r"(?:3[01]|[12]\d|0?[1-9])(?!\d)"''', r'''_DAY = r"\d{1,2}"'''),
+    ("M546", "a range of dates after « des », « aux », « au » is read as numbers (D-2)",
+     "analysis/campaign_report.py",
+     _DATES_FIRST, r'''    rf"|(?:\b(?:le|les|entre|du|between|from|on)\s+{_DAY}(?:er)?"''' + "\n"),
+    ("M547", "« du 21 et du 23 octobre » is read as numbers (D-2)", "analysis/campaign_report.py",
+     r"(?:(?:le|du|des)\s+)?{_DAY}(?:er)?)+", r"(?:le\s+)?{_DAY}(?:er)?)+"),
+    # M-3 (#183) — the host of Glorfindel: Discord buttons check who clicks (closed by
+    # default), each container gets only its secrets, H0 deploys a named reference whose
+    # image carries it, and the image installs from the lock.
+    ("M280", "a Discord button runs for whoever clicks it (M-3)", "glorfindel/bot.py",
+     "        if isinstance(policy, ButtonPolicy) and policy.allows(interaction.user):\n",
+     "        if True:\n"),
+    ("M281", "with no allowed users nor roles, every click passes (M-3)", "glorfindel/bot.py",
+     '        if getattr(user, "id", None) in self.users:\n',
+     '        if not self.configured or getattr(user, "id", None) in self.users:\n'),
+    ("M282", "any role allows a click, not only an allowed one (M-3)", "glorfindel/bot.py",
+     "        return bool(held & self.roles)\n", "        return bool(held)\n"),
+    ("M283", "a refused click is not logged (M-3)", "glorfindel/bot.py",
+     '    _console.print(\n        f"[yellow]Button refused:',
+     '    (lambda *a: None)(\n        f"[yellow]Button refused:'),
+    ("M284", "the bot's token reaches every container again (M-3)", "docker-compose.yml",
+     "  DISCORD_CHANNEL_ID: ${DISCORD_CHANNEL_ID:-}\n",
+     "  DISCORD_CHANNEL_ID: ${DISCORD_CHANNEL_ID:-}\n  DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}\n"),
+    ("M285", "the War Room receives the models' keys (M-3)", "docker-compose.yml",
+     "      <<: [*env, *azure, *webhook]\n", "      <<: [*env, *azure, *models, *webhook]\n"),
+    ("M286", "the watch knows the bot only by its token: every card also goes to the webhook (M-3)",
+     "glorfindel/escalations.py",
+     '    token = env.get("GLORFINDEL_DISCORD_BOT") or env.get("DISCORD_BOT_TOKEN")\n',
+     '    token = env.get("DISCORD_BOT_TOKEN")\n'),
+    ("M287", "H0 deploys a branch: any revision resolves (M-3)", "infra/glorfindel-host/deploy.sh",
+     '  if commit=$(git rev-parse -q --verify "refs/tags/$ref^{commit}" 2>/dev/null); then\n',
+     '  if commit=$(git rev-parse -q --verify "$ref^{commit}" 2>/dev/null); then\n'),
+    ("M288", "the image does not carry the reference it was built from (M-3)",
+     "infra/glorfindel-host/deploy.sh",
+     '    --label "$LABEL_REF=$ref" --label "$LABEL_REV=$commit" \\\n', ""),
+    ("M289", "the image resolves its dependencies again, unlocked (M-3)", "glorfindel/Dockerfile",
+     "RUN pip install --no-cache-dir --no-deps --no-build-isolation -e .\n",
+     'RUN pip install --no-cache-dir -e ".[glorfindel,war-room]"\n'),
+    # M-3, review: a refusal must stop the click; a Discord channel alone runs no bot, so the
+    # webhook still posts and the watch still warns; the watch learns only that the bot's
+    # token is set; REF is a tag or a commit given on make's command line; a rules file that
+    # both the VM and the reference change stops the deployment with what to do.
+    ("M520", "a refused click is said, then let through to its callback (M-3, review)", "glorfindel/bot.py",
+     "        await _refuse(interaction, self.esc_id, policy)\n        return False\n",
+     "        await _refuse(interaction, self.esc_id, policy)\n        return True\n"),
+    ("M521", "a Discord channel alone silences the webhook, no bot running (M-3, review)",
+     "glorfindel/escalations.py",
+     '    return bool(token and env.get("DISCORD_CHANNEL_ID"))\n',
+     '    return bool(token or env.get("DISCORD_CHANNEL_ID"))\n'),
+    ("M522", "the watch and the War Room receive the bot's token, not only that it is set (M-3, review)",
+     "docker-compose.yml",
+     "  GLORFINDEL_DISCORD_BOT: ${DISCORD_BOT_TOKEN:+1}\n",
+     "  GLORFINDEL_DISCORD_BOT: ${DISCORD_BOT_TOKEN:-}\n"),
+    ("M523", "the watch counts a Discord channel alone as alerting: no warning (M-3, review)", GCLI,
+     "    _has_alerting = alerting_configured()\n",
+     '    _has_alerting = bool(os.environ.get("GLORFINDEL_WEBHOOK_URL") '
+     'or os.environ.get("DISCORD_CHANNEL_ID"))\n'),
+    ("M524", "REF=--checkout-only reaches deploy.sh as an option (M-3, review)", MAKE,
+     'in -*|*[!A-Za-z0-9._-]*) echo "REF invalide', 'in *[!A-Za-z0-9._-]*) echo "REF invalide'),
+    ("M525", "a REF exported in the environment is deployed in silence (M-3, review)", MAKE,
+     '@case "$(origin REF)" in environment*)', '@case "$(origin REF)" in nowhere*)'),
+    ("M526", "make expands a refused REF while exporting it: $(shell …) runs (M-3, review)", MAKE,
+     "REF ?=\nunexport REF\n", "REF ?=\n"),
+    ("M527", "the ssh line copies REF into the recipe: make expands it before it is checked (M-3, review)",
+     MAKE, """bash -s -- '"$$EREGION_DEPLOY_REF" < infra/glorfindel-host/deploy.sh""",
+     "bash -s -- $(REF)' < infra/glorfindel-host/deploy.sh"),
+    ("M528", "rules the VM approved and the reference changes: « gardé », then git refuses (M-3, review)",
+     "infra/glorfindel-host/deploy.sh",
+     '    [ -z "$clash" ] || die "$(echo', '    [ -z "$clash" ] || true "$(echo'),
 ]
 
 # Mutants measured by other tests than the invariants (their lot's own).
@@ -890,61 +1188,78 @@ TESTS.update({f"M{n}": "tests/unit/test_decision_stability.py" for n in range(20
 TESTS.update({f"M{n}": "tests/unit/test_exercise_guard.py" for n in range(220, 239)})
 TESTS.update({f"M{n}": "tests/unit/test_run_channel.py" for n in range(240, 246)})
 TESTS.update({mid: "tests/unit/test_gothmog.py" for mid in ("M241", "M246")})
+# A1 / MC0: the façade's one namespace, the capabilities and the boundary.
+TESTS.update({mid: "tests/unit/test_actions_split.py" for mid in ("M450", "M451", "M452")})
+TESTS.update({f"M{n}": f"{BOUNDARY_TESTS} tests/unit/test_readiness.py" for n in range(453, 459)})
+TESTS["M459"] = "tests/unit/test_jobs.py"
+TESTS.update({mid: BOUNDARY_TESTS for mid in ("M460", "M461", "M462")})
+TESTS["M463"] = "tests/unit/test_actions_split.py"
+TESTS.update({f"M{n}": "tests/unit/test_campaign_changes.py" for n in range(260, 280)})  # D-2
+TESTS.update({f"M{n}": "tests/unit/test_campaign_changes.py" for n in range(510, 520)})  # D-2, review
+TESTS.update({f"M{n}": "tests/unit/test_campaign_changes.py" for n in range(530, 540)})  # D-2, 2nd review
+TESTS.update({f"M{n}": "tests/unit/test_campaign_changes.py" for n in range(540, 548)})  # D-2, 3rd, 4th reviews
+TESTS.update({f"M{n}": "tests/unit/test_bot.py" for n in range(280, 284)})
+TESTS.update({f"M{n}": "tests/unit/test_glorfindel_host.py" for n in range(284, 287)})
+TESTS.update({f"M{n}": "tests/unit/test_host_deploy.py" for n in (287, 288)})
+TESTS["M289"] = "tests/unit/test_dependency_lock.py"
+TESTS["M520"] = "tests/unit/test_bot.py"
+TESTS.update({f"M{n}": "tests/unit/test_glorfindel_host.py" for n in (521, 522, 523)})
+TESTS.update({f"M{n}": "tests/unit/test_host_deploy.py" for n in range(524, 529)})
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a
 # composite rule or a world event to one of them. Run with --control.
 CONTROL = [
-    ("C01", "unreadable config => quarantine off", A,
+    ("C01", "unreadable config => quarantine off", QUA,
      "        from glorfindel.config import load_glorfindel_config\n        iso = load_glorfindel_config().isolation\n",
      "        from glorfindel.config import load_glorfindel_config, ConfigError\n        try:\n            iso = load_glorfindel_config().isolation\n"
      "        except ConfigError:\n            return False, \"\"\n"),
-    ("C02", "unreadable ownership tag => not ours", A,
+    ("C02", "unreadable ownership tag => not ours", QUA,
      "            return tags.get(\"managed-by\") == \"glorfindel\"\n        except Exception:\n            return True",
      "            return tags.get(\"managed-by\") == \"glorfindel\"\n        except Exception:\n            return False"),
-    ("C03", "isolation deny without the peer-side check", A,
+    ("C03", "isolation deny without the peer-side check", NSG,
      "    if not _side_is_any(rule, peer):\n        return False\n",
      ""),
-    ("C04", "quarantine content without the DNS/IMDS denies", A,
+    ("C04", "quarantine content without the DNS/IMDS denies", QUA,
      "        for rule_name, priority, tag in QUARANTINE_PLATFORM_RULES:",
      "        for rule_name, priority, tag in ():"),
-    ("C05", "a stale forensic allow never purged", A,
+    ("C05", "a stale forensic allow never purged", QUA,
      "            if low not in {w.lower() for w in wanted} and _opens_quarantine(current):",
      "            if low not in {w.lower() for w in wanted} and _opens_quarantine(current) and low != QUARANTINE_FORENSIC_RULE:"),
-    ("C06", "block: one address of the NIC is enough", A,
+    ("C06", "block: one address of the NIC is enough", NSG,
      "    return all(_side_covers(rule, own, [a]) for a in ips) if ips else _side_is_any(rule, own)",
      "    return any(_side_covers(rule, own, [a]) for a in ips) if ips else _side_is_any(rule, own)"),
-    ("C07", "stateless release doesn't re-read the NICs", A,
+    ("C07", "stateless release doesn't re-read the NICs", REL,
      "        if restored:\n",
      "        if False:\n"),
-    ("C08", "no foreign rule counts as an alteration", A,
+    ("C08", "no foreign rule counts as an alteration", QUA,
      "                 if low not in {w.lower() for w in wanted} and _opens_quarantine(r)]",
      "                 if False]"),
-    ("C09", "the release doesn't write its marker", A,
+    ("C09", "the release doesn't write its marker", REL,
      "            _save_isolation_state(resource_id, {**state, \"releasing_at\": datetime.now(timezone.utc).isoformat()})",
      "            pass"),
     ("C10", "the reassertion never puts a missing block back", R,
      "    if b.get(\"reasserted_at\") or _mode(autonomy, vm, ref) == \"human_only\":",
      "    if True:"),
-    ("C11", "a block doesn't check the access (an allow passes)", A,
+    ("C11", "a block doesn't check the access (an allow passes)", NSG,
      "    if (_enum_text(getattr(rule, \"access\", \"\")) != \"deny\"\n            or _enum_text(getattr(rule, \"direction\", \"\")) != direction\n"
      "            or _enum_text(getattr(rule, \"protocol\", \"*\")) not in (\"*\", \"any\", \"\")\n            or not _covers_all_ports(rule)):\n        return False\n    attacker, own",
      "    if (_enum_text(getattr(rule, \"direction\", \"\")) != direction\n"
      "            or _enum_text(getattr(rule, \"protocol\", \"*\")) not in (\"*\", \"any\", \"\")\n            or not _covers_all_ports(rule)):\n        return False\n    attacker, own"),
-    ("C12", "forensic exception dropped from the quarantine-as-block", A,
+    ("C12", "forensic exception dropped from the quarantine-as-block", QUA,
      "            if any(addr in ipaddress.ip_network(s, strict=False) for s in self._forensic_sources()):",
      "            if False:"),
     ("C13", "a /16 forensic source accepted", C,
      "_FORENSIC_MAX_ADDRESSES = 256",
      "_FORENSIC_MAX_ADDRESSES = 65536"),
-    ("C14", "subscription guard removed from the release", A,
+    ("C14", "subscription guard removed from the release", AZC,
      "for _name in (\"isolate_vm\", \"release_isolation\", \"verify_isolation\", \"verify_release\",",
      "for _name in (\"isolate_vm\", \"verify_isolation\", \"verify_release\","),
     ("C15", "reassertion over a stale marker", R,
      "    if _held_by_an_operation(iso, \"release_failed\", \"releasing_at\"):\n        return",
      "    if _held_by_an_operation(iso, \"release_failed\", \"releasing_at\") and not _stale(iso.get(\"releasing_at\")):\n        return"),
-    ("C16", "precedence ignores glorfindel-* allows", A,
+    ("C16", "precedence ignores glorfindel-* allows", NSG,
      "        if _enum_text(getattr(r, \"access\", \"\")) != \"allow\":\n            continue\n        if direction == \"inbound\":",
      "        if _enum_text(getattr(r, \"access\", \"\")) != \"allow\":\n            continue\n        if name.startswith(\"glorfindel-\"):\n            continue\n"
      "        if direction == \"inbound\":"),

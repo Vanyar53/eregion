@@ -32,11 +32,20 @@ jobs:
           key: chroma-onnx-v1
 
       - name: Install
-        # ruff is pinned in the dev extra: the lint result must not depend on the day.
-        run: python -m pip install -e ".[dev]"
+        # The lock (M-3): the versions the image runs, every file checked against its hash;
+        # ruff among them — the lint result must not depend on the day.
+        run: |
+          python -m pip install --require-hashes -r requirements/dev.txt
+          python -m pip install --no-deps --no-build-isolation -e .
 
       - name: Lint
         run: ruff check .
+
+      # MC0 (A1): no provider SDK outside its adapter (glorfindel/providers/<name>/ in
+      # Glorfindel), and every provider declares its capabilities. Named on its own so a
+      # breach shows here, before the long tests (which run it again).
+      - name: Provider boundary
+        run: python -m pytest tests/unit/test_provider_boundary.py -q
 
       # The failing sequences the nightly run found (tests/unit/test_invariants.py)
       # are replayed first, until fixed. Restore only: the nightly run owns them.
@@ -67,7 +76,9 @@ jobs:
           cache: pip
 
       - name: Install
-        run: python -m pip install -e ".[dev]"
+        run: |
+          python -m pip install --require-hashes -r requirements/dev.txt
+          python -m pip install --no-deps --no-build-isolation -e .
 
       - uses: actions/cache/restore@v5
         with:

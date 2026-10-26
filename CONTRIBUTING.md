@@ -7,9 +7,15 @@ Eregion is open-core (Apache 2.0). Contributions are welcome — scenarios, clou
 ```bash
 git clone https://github.com/Vanyar53/eregion
 cd eregion
-pip install -e ".[dev]"
+pip install --require-hashes -r requirements/dev.txt   # the lock: what CI and the image run
+pip install --no-deps --no-build-isolation -e .
 pytest                  # 0 Azure calls, 0 Claude API calls
 ```
+
+(`make install` does the same in `.venv/`.) A new dependency goes into `pyproject.toml`, then
+`make lock` (needs [uv](https://docs.astral.sh/uv/)) updates `requirements/*.txt` in the same PR —
+`tests/unit/test_dependency_lock.py` fails until it does. See `docs/operations.md`, « Verrou des
+dépendances ».
 
 ## Local safety hooks (recommended)
 
@@ -32,7 +38,7 @@ my-real-resource-group
 
 ## How to add a detection source
 
-Implement `DetectionConnector` in `glorfindel/detectors.py` and register it in `detector_for()`:
+Implement `DetectionConnector` (`glorfindel/providers/interface.py`) in its provider's adapter, `glorfindel/providers/<name>/` — the only place its SDK may be imported (Azure Monitor: `glorfindel/providers/azure/monitor.py`) — and register it in `detector_for()` (`glorfindel/detectors.py`):
 
 ```python
 class PrometheusDetector(DetectionConnector):
@@ -50,7 +56,7 @@ def detector_for(source: str, **kwargs) -> DetectionConnector:
 
 ## How to add a cloud provider
 
-Implement `CloudConnector` in `glorfindel/actions.py`:
+Add an adapter under `glorfindel/providers/<name>/` — the only place its SDK may be imported (`tests/unit/test_provider_boundary.py`, run in CI) — that implements `CloudConnector` (`glorfindel/providers/interface.py`) and declares its capabilities (`CAPABILITIES`, see `glorfindel/providers/azure/capabilities.py`): the readiness check reads the rights each one needs from there.
 
 ```python
 class AwsConnector(CloudConnector):
@@ -63,6 +69,7 @@ class AwsConnector(CloudConnector):
     def verify_snapshot(self, snap_id: str) -> dict: ...
     def verify_block_ip(self, ip: str, resource_id: str) -> dict: ...
     def restore_from_backup(self, resource_id: str, vault: str, before_attack_time: str | None) -> dict: ...
+    def restore_job_status(self, vault: str, vault_rg: str, job_name: str) -> str: ...
 ```
 
 The agent, scenarios, and RAG memory don't change — only the connector.
@@ -113,14 +120,16 @@ cleanup: []
 
 ## How to add an autonomous action
 
-1. Implement `connector.my_action(resource_id)` and `connector.verify_my_action(resource_id)` in `AzureConnector`
-2. Add `"my_action"` to `AUTONOMOUS_ACTIONS` in `glorfindel/actions.py`
+1. Implement `connector.my_action(resource_id)` and `connector.verify_my_action(resource_id)` in `AzureConnector` (a mixin of `glorfindel/providers/azure/`)
+2. Add `"my_action"` to `AUTONOMOUS_ACTIONS` in `glorfindel/response/policy.py` (imported everywhere from `glorfindel.actions`)
 3. Wire it in `execute_action` and `verify_action` in `glorfindel/agent.py`
 4. Add a test in `tests/unit/test_agent_nodes.py`
 
 Actions not in `AUTONOMOUS_ACTIONS` are automatically escalated to the human — so Glorfindel can propose your new action before it's implemented.
 
 ## Tests
+
+Patching the response code (`glorfindel/actions.py` is a façade over `glorfindel/response/` and `glorfindel/providers/azure/`): on `glorfindel.actions`, use `monkeypatch.setattr` — it reaches every module that reads the name — never `mock.patch`, which deletes the name on exit (the façade refuses, and the patched value would stay everywhere). Or `mock.patch` the module of origin (`glorfindel.response.state._ISOLATION_STATE_DIR`…), which patches that module only.
 
 ```bash
 pytest                          # all tests

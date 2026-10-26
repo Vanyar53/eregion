@@ -863,3 +863,27 @@ def test_end_to_end_a_campaign_from_orodruin_gets_its_report_on_h0(tmp_path, mon
                         "the check, 1 decision(s) unknown")
     assert hr.tick(h0, **kw) == {}                       # once: the next pass has nothing due
     assert len(model.calls) == 1
+
+
+# ── D-2 (#184): the second campaign's report on H0 faces the first ───────────────
+
+def test_the_second_campaign_on_h0_says_what_changed_since_the_first(tmp_path, index):
+    """Two campaigns pulled from the channel, the same technique on the same VM: the second
+    report holds the comparison, computed by the code from the index the first one filled —
+    the decision of each run found in the watch's files, each in its own window."""
+    first, second = "20261001T100000Z", "20261002T100000Z"
+    later = T + timedelta(minutes=4)
+    _h0(tmp_path, name=first, scenarios=[_scen(1, "R1")], watch=[
+        _decision(at=T + timedelta(minutes=3), action="block_suspicious_ip", confidence=0.8),
+        _decision(at=later + timedelta(seconds=30), action="isolate_vm", confidence=0.78)])
+    cdir, runs = _h0(tmp_path, name=second, scenarios=[_scen(1, "S1"), _scen(2, "S2", ttp="T1041")],
+                     attack=later.timestamp())
+    kw = {"model": "fake/model", "llm": _Model(), "index_path": tmp_path / "idx", "say": lambda m: None}
+    assert hr.write_report(runs / "campaigns" / first, **kw) == "written"
+    assert "*Aucune campagne précédente : " in (runs / "campaigns" / first / hr.REPORT).read_text()
+    assert hr.write_report(cdir, **kw) == "written"
+    md = (cdir / hr.REPORT).read_text()
+    assert f"Campagne précédente : `{first}`." in md
+    assert ("| `chg-1` | T1136.001 | vm-bench-01 | detected → detected | — → — "
+            "| block_suspicious_ip → isolate_vm | 80% → 78% (−2 pts) | escaladé → escaladé |") in md
+    assert "Seulement dans celle-ci (1) : `chg-2` T1041 sur vm-bench-01 (run `S2`)." in md

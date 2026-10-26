@@ -146,6 +146,17 @@ async def _warm_up_azure() -> None:
         pass
 
 
+@app.on_event("startup")
+async def _read_enrollment() -> None:
+    """H-1: a window marks a VM only if that VM is enrolled, read by the reader itself. The
+    watch sets that check at startup (glorfindel/cli.py); the War Room sets the same, with the
+    same identity on H0, so the atelier shows Glorfindel's reading — without it, no window
+    would mark anything here, and no run of a published campaign would be kept."""
+    from eregion_core import exercise
+    from eregion_core.inscription import TagEnrollment
+    exercise.set_enrollment_check(TagEnrollment())
+
+
 @app.get("/")
 async def index() -> FileResponse:
     return FileResponse(_STATIC / "index.html")
@@ -1701,19 +1712,23 @@ def _read_windows() -> list[dict]:
     """The exercise windows as their files hold them. Read only: the watch pulls them, and its
     ``load_windows`` may purge an old one (H-1) — the War Room never writes there. A file
     without a run_id and a start (unreadable, or a purged window's tombstone) is skipped; the
-    targets are kept only as a list of strings."""
-    from eregion_core.exercise import exercises_dir
+    targets are kept only as a list of strings. ``refusal``: why Glorfindel does not believe
+    the window, as written (``window_refusal``, H-1) — it is shown, never hidden."""
+    from eregion_core.exercise import exercises_dir, window_refusal
     directory = exercises_dir(_RUNS)
+    now = datetime.now(timezone.utc)
     out = []
     for path in sorted(directory.glob("*.json")) if directory.is_dir() else []:
         try:
             w = json.loads(path.read_text(encoding="utf-8"))
+            declared = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc)
         except (OSError, ValueError):
             continue
         if isinstance(w, dict) and w.get("run_id") and w.get("start"):
             targets = w.get("targets") if isinstance(w.get("targets"), list) else []
             out.append({**w, "run_id": str(w["run_id"]),
-                        "targets": [t.lower() for t in targets if isinstance(t, str)]})
+                        "targets": [t.lower() for t in targets if isinstance(t, str)],
+                        "refusal": window_refusal(w, now, declared)})
     return out
 
 
@@ -1722,7 +1737,7 @@ async def atelier_exercises(since: str = "7d") -> dict:
     """The exercise windows, newest first, each with what Glorfindel did during it: the cycles
     on a target inside the window (the return channel's rule, ``covering_runs``), the cards
     carrying its run, and the run's report when it reached this host."""
-    from eregion_core.exercise import covering_runs, last_moment
+    from eregion_core.exercise import covering_runs, is_enrolled, last_moment
     try:
         start = _since_start(since)
     except ValueError as exc:
@@ -1747,13 +1762,18 @@ async def atelier_exercises(since: str = "7d") -> dict:
                 k: e.get(k) for k in ("id", "timestamp", "action", "escalation_type", "status",
                                       "verdict", "confidence", "ttp", "rule_name")})
     reports = _run_reports()
+    # Read as the watch reads it (TagEnrollment, cached): a target not enrolled is never in an
+    # exercise for Glorfindel (H-1).
+    vms = sorted({t for w in windows for t in w["targets"]})
+    enrolled = await asyncio.to_thread(lambda: {t: is_enrolled(t) for t in vms})
     out = []
     for w in sorted(windows, key=lambda w: str(w.get("start")), reverse=True)[:200]:
         rid = str(w["run_id"])
         last = last_moment(w)
         out.append({
             **{k: w.get(k) for k in ("run_id", "injector", "kind", "experiment", "targets",
-                                     "start", "end", "expires", "closed_by")},
+                                     "start", "end", "expires", "closed_by", "refusal")},
+            "enrolled": {t: enrolled.get(t, False) for t in w["targets"]},
             "experiment_id": str(w.get("experiment") or "").split(" ")[0],
             "state": _window_state(w, now),
             "last_moment": last.isoformat() if last else None,

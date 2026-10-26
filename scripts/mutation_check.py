@@ -1129,9 +1129,69 @@ MUTANTS = [
     ("M527", "the ssh line copies REF into the recipe: make expands it before it is checked (M-3, review)",
      MAKE, """bash -s -- '"$$EREGION_DEPLOY_REF" < infra/glorfindel-host/deploy.sh""",
      "bash -s -- $(REF)' < infra/glorfindel-host/deploy.sh"),
-    ("M528", "rules the VM approved and the reference changes: « gardé », then git refuses (M-3, review)",
+    # P1 moved this check: a rules file modified on the VM is refused with what to do (migrate).
+    ("M528", "rules the VM approved: refused in git's words, not with what to do (M-3, review; P1)",
      "infra/glorfindel-host/deploy.sh",
-     '    [ -z "$clash" ] || die "$(echo', '    [ -z "$clash" ] || true "$(echo'),
+     '  [ -z "$rules" ] || die "$(echo', '  [ -z "$rules" ] || true "$(echo'),
+    # P1 (#86): rule layers — the shipped base stays intact, the client's rules in their own
+    # layer (~/.glorfindel/client_rules.yaml), an exported rule without any identifier.
+    ("M670", "an approved rule is written into the shipped base again (P1)", "glorfindel/proposed_rules.py",
+     "    how = rule_layers.write_client_rule(rule)\n",
+     "    how = rule_layers.write_client_rule(rule, path=Path(rules_yaml_path))\n"),
+    ("M671", "the client's layer is not loaded: an update loses the client's rules (P1)",
+     "glorfindel/detection_rules.py",
+     "    if client_layer:\n        cpath =", "    if False:\n        cpath ="),
+    ("M672", "a base rule wins over the client's rule of the same name (P1)", "glorfindel/detection_rules.py",
+     "            rules[at] = entry\n", "            pass\n"),
+    ("M673", "`disable` ignored: a client cannot disable a base rule (P1)", "glorfindel/detection_rules.py",
+     '        if r["name"] in disabled:\n', "        if False:\n"),
+    ("M674", "a client rule replacing a base rule is not said (P1)", "glorfindel/detection_rules.py",
+     '                notes.append(f"règle de base « {name} » remplacée par celle de la couche du client")\n',
+     "                pass\n"),
+    ("M675", "the notes are not logged: the watch's log says nothing of the client's layer (P1)",
+     "glorfindel/detection_rules.py",
+     '            logger.warning("detection rules: %s", note)\n', "            pass\n"),
+    ("M676", "an unreadable client layer stops the base from loading (P1)", "glorfindel/detection_rules.py",
+     "        except Exception as exc:\n            client = {}\n",
+     "        except ImportError as exc:\n            client = {}\n"),
+    ("M677", "an unreadable client layer is read as empty, then written over (P1)", "glorfindel/rule_layers.py",
+     '        raise ClientLayerError(f"couche du client illisible ({path}) : {exc}") from exc\n',
+     "        return {}\n"),
+    ("M678", "a proposal is approved before its rule is written: approved without a rule (P1)",
+     "glorfindel/proposed_rules.py",
+     "    rule = rule_from_proposal(proposal, Path(rules_yaml_path))\n"
+     "    how = rule_layers.write_client_rule(rule)\n\n"
+     '    proposal["status"] = "approved"\n'
+     '    proposal["approved_at"] = datetime.now(timezone.utc).isoformat()\n'
+     '    _STORE.write_text("\\n".join(json.dumps(p) for p in updated) + "\\n")\n',
+     '    proposal["status"] = "approved"\n'
+     '    proposal["approved_at"] = datetime.now(timezone.utc).isoformat()\n'
+     '    _STORE.write_text("\\n".join(json.dumps(p) for p in updated) + "\\n")\n'
+     "    rule = rule_from_proposal(proposal, Path(rules_yaml_path))\n"
+     "    how = rule_layers.write_client_rule(rule)\n"),
+    ("M679", "an exported rule keeps every key: workspace_id, resource_id, assets (P1)", "glorfindel/rule_layers.py",
+     "    for key in _EXPORTED_KEYS:\n", "    for key in rule:\n"),
+    ("M680", "an exported rule keeps its resource ids (P1)", "glorfindel/rule_layers.py",
+     '    text = sub(_RESOURCE_ID_RE, "<resource_id>", "identifiant de ressource", text)\n', ""),
+    ("M681", "an exported rule keeps its workspace (GUID) ids (P1)", "glorfindel/rule_layers.py",
+     '    text = sub(_GUID_RE, "<id>", "GUID (espace de travail, abonnement…)", text)\n', ""),
+    ("M682", "an exported rule keeps the literals compared to an identity column (P1)", "glorfindel/rule_layers.py",
+     "    text = _ID_COMPARISON_RE.sub(literals, text)\n", ""),
+    ("M683", "an exported rule keeps the names the deployment knows (P1)", "glorfindel/rule_layers.py",
+     '            text = sub(_name_re(name), "<name>", "nom connu du déploiement", text)\n', "            pass\n"),
+    ("M684", "the last guard of the export checks nothing (P1)", "glorfindel/rule_layers.py",
+     "    left = find_identifiers(text, names)\n", "    left = []\n"),
+    ("M685", "migrate moves only new rules: a base rule changed on the VM is lost (P1)", "glorfindel/rule_layers.py",
+     "    moved = [r for name, r in src_rules.items() if base_rules.get(name) != r]\n",
+     "    moved = [r for name, r in src_rules.items() if name not in base_rules]\n"),
+    ("M686", "migrate forgets a base rule removed on the VM: it comes back (P1)", "glorfindel/rule_layers.py",
+     "    disable = [name for name in base_rules if name not in src_rules]\n", "    disable = []\n"),
+    ("M687", "H0: a rules file modified on the VM rides into the image again (P1)", "infra/glorfindel-host/deploy.sh",
+     "  dirty=$(git status --porcelain --untracked-files=no | awk '{print $NF}')\n",
+     "  dirty=$(git status --porcelain --untracked-files=no | awk '{print $NF}' | grep -v '^glorfindel/rules/' || true)\n"),
+    ("M688", "the watch's container mounts the shipped base read-write again (P1)", "docker-compose.yml",
+     "      # redéploiement ne la touche jamais.\n      - ./glorfindel/rules:/app/glorfindel/rules:ro\n",
+     "      # redéploiement ne la touche jamais.\n      - ./glorfindel/rules:/app/glorfindel/rules\n"),
 ]
 
 # Mutants measured by other tests than the invariants (their lot's own).
@@ -1205,6 +1265,10 @@ TESTS["M289"] = "tests/unit/test_dependency_lock.py"
 TESTS["M520"] = "tests/unit/test_bot.py"
 TESTS.update({f"M{n}": "tests/unit/test_glorfindel_host.py" for n in (521, 522, 523)})
 TESTS.update({f"M{n}": "tests/unit/test_host_deploy.py" for n in range(524, 529)})
+# P1 (#86): rule layers.
+TESTS.update({f"M{n}": "tests/unit/test_rule_layers.py tests/unit/test_proposed_rules.py" for n in range(670, 687)})
+TESTS["M687"] = "tests/unit/test_host_deploy.py"
+TESTS["M688"] = "tests/unit/test_rule_layers.py"
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

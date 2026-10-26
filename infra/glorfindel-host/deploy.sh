@@ -52,26 +52,22 @@ latest_tag() {
 }
 
 checkout() {
-  local want="${1:-}" pair dirty rules clash
+  local want="${1:-}" pair dirty rules
   git fetch -q --tags --force origin
   if [ -z "$want" ]; then
     want=$(latest_tag)
     [ -n "$want" ] || die "aucun tag v* : préciser REF=<commit>"
   fi
   pair=$(resolve "$want")
-  # A tracked file changed on the VM would ride along into the image: refused, except the
-  # detection rules, which the containers write (approved rules, mounted read-write).
-  dirty=$(git status --porcelain --untracked-files=no | awk '{print $NF}' | grep -v '^glorfindel/rules/' || true)
+  # A tracked file changed on the VM would ride along into the image: refused. The detection
+  # rules too (P1): the containers no longer write them (mounted read-only) — approved rules
+  # live in the client's layer, ~/.glorfindel/client_rules.yaml, which no checkout touches.
+  # A rules file modified on the VM holds rules approved before P1: to migrate first, said
+  # with what to do, before anything moves.
+  dirty=$(git status --porcelain --untracked-files=no | awk '{print $NF}')
+  rules=$(echo "$dirty" | grep '^glorfindel/rules/' || true)
+  [ -z "$rules" ] || die "$(echo "$rules" | tr '\n' ' ')— modifié sur la VM (règles approuvées avant P1) : rien n'est déployé. Les migrer vers la couche du client (~/.glorfindel/client_rules.yaml) : infra/glorfindel-host/README.md, « Migrer les règles approuvées vers la couche du client ». Jamais git checkout -- glorfindel/rules : il les efface."
   [ -z "$dirty" ] || die "fichiers suivis modifiés sur la VM (rien n'est déployé) : $(echo "$dirty" | tr '\n' ' ')"
-  rules=$(git diff --name-only HEAD -- glorfindel/rules | sort)
-  if [ -n "$rules" ]; then
-    # Kept only if the reference leaves those files as they are. Otherwise git would refuse
-    # the checkout in its own words, just after « gardé »: said here, with what to do,
-    # before anything moves.
-    clash=$(comm -12 <(echo "$rules") <(git diff --name-only HEAD "${pair#* }" -- glorfindel/rules | sort))
-    [ -z "$clash" ] || die "$(echo "$clash" | tr '\n' ' ')— modifié sur la VM (règles approuvées) et changé par ${pair% *} : rien n'est déployé. Reporter les règles approuvées à la main : infra/glorfindel-host/README.md, « Règles approuvées et nouvelle référence ». Jamais git checkout -- glorfindel/rules : il les efface."
-    echo "  · glorfindel/rules modifié sur la VM (règles approuvées) : gardé" >&2
-  fi
   git -c advice.detachedHead=false checkout -q --detach "${pair#* }"
   echo "$pair"
 }

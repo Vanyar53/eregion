@@ -62,9 +62,11 @@ ses boutons) ; le webhook garde les notifications d'action. Un seul bot par
   (`deploy.sh`, celui du poste, envoyé par ssh) fait `git fetch --tags`, un checkout détaché,
   puis construit l'image avec deux étiquettes, `org.opencontainers.image.version` (la référence)
   et `org.opencontainers.image.revision` (le commit complet). Un fichier suivi modifié sur la VM
-  arrête le déploiement (il partirait dans l'image), sauf `glorfindel/rules/`, que les conteneurs
-  écrivent (règles approuvées) : gardé, et dit — sauf si la référence change aussi ce fichier
-  (« Règles approuvées et nouvelle référence », plus bas). `make glorfindel-host-status` relit les
+  arrête le déploiement (il partirait dans l'image), `glorfindel/rules/` compris depuis P1 : les
+  conteneurs ne l'écrivent plus (montage en lecture seule), une règle approuvée va dans la couche
+  du client, `~/.glorfindel/client_rules.yaml`, qu'aucun checkout ne touche ; un fichier de règles
+  modifié tient des règles approuvées avant P1, à migrer (« Migrer les règles approuvées vers la
+  couche du client », plus bas). `make glorfindel-host-status` relit les
   étiquettes sur le conteneur de la watch : « ✓ référence déployée : v0.3.1 (abc…) », ⚠ si le
   checkout a bougé depuis, si la VM est sur une branche, ou si l'image n'a pas d'étiquette (une
   image d'avant M-3). Revenir en arrière : `REF=<le tag précédent>`.
@@ -130,9 +132,9 @@ ses boutons) ; le webhook garde les notifications d'action. Un seul bot par
    La première fois, la VM est sur la branche `main` (clone de cloud-init) : le déploiement la
    passe en checkout détaché. S'il refuse pour « fichiers suivis modifiés », regarder
    (`make glorfindel-host-ssh`, puis `git -C eregion status --short`) avant de toucher quoi que ce
-   soit. S'il refuse pour « modifié sur la VM (règles approuvées) et changé par … » : « Règles
-   approuvées et nouvelle référence », plus bas. Dans les deux cas, rien n'a bougé : l'ancienne
-   image tourne toujours.
+   soit. S'il refuse pour « modifié sur la VM (règles approuvées avant P1) » : « Migrer les
+   règles approuvées vers la couche du client », plus bas. Dans les deux cas, rien n'a bougé :
+   l'ancienne image tourne toujours.
 6. **Vérifier** : `make glorfindel-host-status` → « ✓ référence déployée : v0.3.1 (…) », les trois
    conteneurs ✓, aucune erreur ; `make glorfindel-host-logs` → le bot dit « Boutons : 1
    utilisateur(s) … » (et non « fermé par défaut ») ; un clic sur ✓ Right d'une carte dans Discord
@@ -151,29 +153,64 @@ ses boutons) ; le webhook garde les notifications d'action. Un seul bot par
    l'ancien `glorfindel-host-status`, « commit déployé ») revient à l'image d'avant — sans
    étiquette, le statut le dira « inconnue ».
 
-### Règles approuvées et nouvelle référence
+### Règles approuvées : la couche du client (P1)
 
-Une règle approuvée sur la VM (`glorfindel approve-rule`) s'écrit dans
-`glorfindel/rules/azure/detection_rules.yaml`, un fichier suivi. Si la référence à déployer
-change aussi ce fichier, `deploy.sh` s'arrête avant de rien toucher : « … modifié sur la VM
-(règles approuvées) et changé par <ref> : rien n'est déployé ». Rien n'est perdu, l'ancienne
-image tourne toujours. **Jamais `git checkout -- glorfindel/rules`** (ni `git reset --hard`) : ils
-effacent les règles approuvées. Sur la VM (`make glorfindel-host-ssh`, puis `cd eregion`) :
+Depuis P1, une règle approuvée (`glorfindel approve-rule`, ou « Approve » dans la War Room)
+s'écrit dans la couche du client, `~/.glorfindel/client_rules.yaml` sur la VM (monté dans les
+trois conteneurs), chargée par-dessus la base livrée, `glorfindel/rules/azure/detection_rules.yaml`.
+La base est montée en lecture seule : aucun conteneur ne l'écrit plus, et un redéploiement, quelle
+que soit la référence, ne touche jamais la couche du client. `docker exec eregion-watch glorfindel
+rules` montre chaque règle et sa couche ; au démarrage, la watch dit ce que la couche du client
+fait à la base (une règle remplacée, une désactivée). Revenir à une référence d'avant P1 : elle
+ne lit pas la couche — les règles du client manquent à la détection (rien n'est perdu, le
+fichier reste), jusqu'au retour à une référence avec P1.
 
-```bash
-cp glorfindel/rules/azure/detection_rules.yaml ~/regles-approuvees.yaml   # une copie, hors du dépôt
-git diff -- glorfindel/rules                                 # ce que la VM a approuvé
-git fetch -q --tags origin && git diff HEAD <ref> -- glorfindel/rules   # ce que la référence change
-git stash push -m regles-approuvees -- glorfindel/rules      # mises de côté : le fichier revient au checkout
-```
+### Migrer les règles approuvées vers la couche du client
 
-Puis, depuis le poste, `make glorfindel-host-start REF=<ref>` : il passe, et la watch démarre
-avec les règles de la référence, sans celles de la VM. Enfin, sur la VM, reporter les règles
-approuvées à la main dans le nouveau fichier (`git stash show -p` les montre ; la copie est dans
-`~/regles-approuvees.yaml`), en gardant ce que la référence a changé ; puis
-`docker compose restart watch` (les règles se lisent au démarrage) et, une fois vérifié,
-`git stash drop`. Pas de `git stash pop` à l'aveugle : un conflit laisserait des marqueurs dans le
-fichier, que la watch ne lirait plus.
+À faire une fois, avec Jonathan, au premier déploiement d'une référence avec P1. Avant P1, les
+règles approuvées s'écrivaient dans `glorfindel/rules/azure/detection_rules.yaml`, un fichier
+suivi : `deploy.sh` refuse maintenant un fichier de règles modifié sur la VM (« … modifié sur la
+VM (règles approuvées avant P1) : rien n'est déployé »), l'ancienne image tourne toujours.
+**Jamais `git checkout -- glorfindel/rules`** (ni `git reset --hard`) : ils effacent les règles
+approuvées. La procédure est rejouée par `tests/unit/test_rule_layers.py` sur un dépôt local.
+
+1. **Sur la VM** (`make glorfindel-host-ssh`, puis `cd eregion`) : mettre de côté le fichier
+   modifié et la base d'où il vient, dans `~/.glorfindel` (que les conteneurs voient), puis
+   rendre le checkout propre (le stash garde une seconde copie) :
+
+   ```bash
+   mkdir -p ~/.glorfindel/migration-p1
+   cp glorfindel/rules/azure/detection_rules.yaml ~/.glorfindel/migration-p1/approved.yaml
+   git show HEAD:glorfindel/rules/azure/detection_rules.yaml > ~/.glorfindel/migration-p1/base.yaml
+   git diff --stat -- glorfindel/rules
+   git stash push -m regles-approuvees-p1 -- glorfindel/rules
+   ```
+
+2. **Depuis le poste** : `make glorfindel-host-start REF=<tag avec P1>`. Il passe ; la watch
+   démarre avec la base seule, sans les règles approuvées (quelques minutes, jusqu'à l'étape 3).
+3. **Sur la VM** : ce qui part dans la couche (à sec), puis pour de bon, puis redémarrer la watch
+   (elle lit les règles au démarrage ; la War Room les relit à chaque rafraîchissement) :
+
+   ```bash
+   docker exec eregion-watch glorfindel migrate-rules --from /root/.glorfindel/migration-p1/approved.yaml --base /root/.glorfindel/migration-p1/base.yaml --dry-run
+   docker exec eregion-watch glorfindel migrate-rules --from /root/.glorfindel/migration-p1/approved.yaml --base /root/.glorfindel/migration-p1/base.yaml
+   docker compose restart watch
+   docker exec eregion-watch glorfindel rules
+   ```
+
+   `migrate-rules` met dans la couche ce que `approved.yaml` a de plus que `base.yaml` : une
+   règle ajoutée telle quelle ; une règle de base modifiée sur la VM, sous son nom (elle remplace
+   celle de la base, et la watch le dit) ; une règle de base supprimée sur la VM, dans `disable`.
+   Relancé, il ne change plus rien. `glorfindel rules` doit montrer chaque règle approuvée avec la
+   couche `client`.
+4. **Une fois vérifié** (la règle dans `glorfindel rules`, la watch sans erreur dans
+   `make glorfindel-host-logs`), sur la VM, jeter le stash (le premier de la liste doit être
+   `regles-approuvees-p1`) ; la copie reste dans `~/.glorfindel/migration-p1/` :
+
+   ```bash
+   git stash list
+   git stash drop
+   ```
 
 **Disque** : chaque `make glorfindel-host-start` reconstruit l'image ; les couches des anciennes images restaient dans containerd (Docker 29), jusqu'à 87 % d'un disque de 32 Go le 20/10, 25 Go récupérables. Le redéploiement purge maintenant les images orphelines (`docker image prune -f`), et `glorfindel-host-status` affiche l'occupation du disque.
 

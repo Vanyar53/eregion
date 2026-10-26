@@ -450,6 +450,39 @@ Avec M280–M289 et M520–M528 de M-3, venus de main, tous attrapés au premier
 aucun périmé.
 Détail : [`../analysis.md`](../analysis.md), « Ce qui a changé depuis la campagne précédente ».
 
+### L'hôte de Glorfindel : référence épinglée, verrou, un environnement par conteneur, boutons (M-3)
+
+H0 déployait la tête de `main`, sans verrou de dépendances ; les trois conteneurs recevaient tous
+les secrets ; un bouton Discord obéissait à qui cliquait. Dix-neuf mutants (dix du lot, neuf
+de sa relecture), mesurés par `tests/unit/test_bot.py`, `test_glorfindel_host.py`,
+`test_host_deploy.py` et `test_dependency_lock.py` :
+
+| Mutant | Défaut réinjecté | Effet |
+|---|---|---|
+| M280 | un bouton Discord obéit à qui clique | n'importe qui sur le serveur lance un Restore |
+| M281 | sans liste d'autorisés, tout clic passe | les boutons ouverts par défaut |
+| M282 | n'importe quel rôle autorise un clic | un rôle sans rapport suffit |
+| M283 | un clic refusé n'est pas journalisé | une tentative ne laisse pas de trace |
+| M284 | le jeton du bot revient à chaque conteneur | un conteneur compromis a le bot |
+| M285 | la War Room reçoit les clés des modèles | elle n'en appelle aucun et les tient quand même |
+| M286 | la watch ne connaît le bot que par son jeton | chaque carte part aussi au webhook |
+| M287 | H0 déploie une branche : toute révision se résout | la tête de `main` revient sur l'hôte |
+| M288 | l'image ne porte pas sa référence | on ne sait plus ce qui tourne |
+| M289 | l'image résout ses dépendances sans verrou | une version mineure change les décisions |
+| M520 | un clic refusé est dit, puis passe à son action | le refus n'empêche rien |
+| M521 | un salon Discord seul fait taire le webhook, sans bot | les escalades ne partent nulle part |
+| M522 | la watch et la War Room reçoivent le jeton du bot, pas seulement sa présence | le secret voyage |
+| M523 | la watch compte un salon seul comme une alerte | l'avertissement « aucune alerte » se tait |
+| M524 | `REF=--checkout-only` atteint `deploy.sh` comme une option | un checkout sans reconstruction, dit comme un déploiement |
+| M525 | une `REF` exportée dans l'environnement est déployée en silence | un nom générique choisit ce qui tourne |
+| M526 | make développe une `REF` refusée en l'exportant | `$(shell …)` s'exécute |
+| M527 | la ligne ssh recopie `REF` dans la recette | make la développe avant qu'elle soit vérifiée |
+| M528 | règles approuvées sur la VM que la référence change : « gardé », puis git refuse | l'opérateur répare et efface les règles |
+
+Dix-neuf sur dix-neuf attrapés, trois tours (26/10, #202). Détail :
+[`../../infra/glorfindel-host/README.md`](../../infra/glorfindel-host/README.md), « Ce que la VM
+exécute » et « Redéployer H0 après M-3 ».
+
 ## Ce que les invariants ont trouvé
 
 Aucun de ces défauts n'avait été vu en revue. Chacun a son test et sa séquence figée.

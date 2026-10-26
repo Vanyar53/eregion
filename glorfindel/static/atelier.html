@@ -91,8 +91,9 @@
   .row.inj-gothmog { border-left-color: var(--orange); }
   .row-head { display: flex; align-items: baseline; gap: 8px; cursor: pointer; min-width: 0; }
   .row-sub { display: flex; align-items: baseline; gap: 8px; margin-top: 3px; font-size: 11px; min-width: 0; flex-wrap: wrap; }
-  .exp { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .exp { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto; min-width: 16ch; }
   .meta { color: var(--dim); font-size: 10px; white-space: nowrap; }
+  .meta.tgt { flex: 0 3 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .twist { color: var(--dim); font-size: 10px; width: 10px; flex-shrink: 0; }
 
   .chip {
@@ -233,7 +234,7 @@ function dur(s) {
   if (s === null || s === undefined || isNaN(s)) return '—';
   s = Math.round(s);
   if (Math.abs(s) < 120) return `${s}s`;
-  if (Math.abs(s) < 7200) return `${Math.floor(s / 60)}m${String(Math.abs(s % 60)).padStart(2, '0')}`;
+  if (Math.abs(s) < 3600) return `${Math.floor(s / 60)}m${String(Math.abs(s % 60)).padStart(2, '0')}`;
   if (Math.abs(s) < 172800) return `${Math.floor(s / 3600)}h${String(Math.floor(Math.abs(s % 3600) / 60)).padStart(2, '0')}`;
   return `${Math.floor(s / 86400)}d`;
 }
@@ -250,6 +251,11 @@ async function getJSON(url) {
 function attackTime(w) {
   const at = w.run && w.run.metrics && w.run.metrics.attack_time;
   return toDate(at) ? { d: toDate(at), from: 'attack' } : { d: toDate(w.start), from: 'window start' };
+}
+// The ATT&CK id an Annatar window opens with (`<mitre> <scenario>`), else '' (a fault, an id
+// that is not one): then no cycle is set apart by its technique.
+function ownTtp(w) {
+  return w.kind === 'technique' && /^T\d{4}(\.\d{3})?$/.test(w.experiment_id || '') ? w.experiment_id : '';
 }
 function decisionText(c) {
   if (!c || !c.action) return '';
@@ -273,14 +279,19 @@ function response(w) {
   // channel never delivers it to the run (watch_channel.Publisher._note).
   const named = c => !c.attribution || c.attribution === 'asset';
   const det = cycles.filter(c => c.event === 'detection' && named(c));
-  if (!det.length && cycles.some(c => c.event === 'detection'))
-    return { cls: 'warn', text: 'a detection, not attributed to this VM' };
-  if (det.length) {
-    const t0 = attackTime(w), seen = toDate(det[0].signal_at);
+  // A run's detection is of its own technique (#157): in a campaign, the next run on the
+  // same VM falls in this window's grace.
+  const ttp = ownTtp(w);
+  const own = ttp ? det.filter(c => c.ttp === ttp) : det;
+  if (own.length) {
+    const t0 = attackTime(w), seen = toDate(own[0].signal_at);
     const lat = t0.d && seen ? ` +${dur((seen - t0.d) / 1000)} after ${t0.from}` : '';
-    const dec = cycles.find(c => c.action);
+    const dec = cycles.find(c => c.action && named(c) && (!ttp || c.ttp === ttp));
     return { cls: 'ok', text: `detected${lat}${dec ? ' → ' + decisionText(dec) : ''}` };
   }
+  if (det.length) return { cls: 'blue', text: `no ${ttp} detection · ${det.length} of other techniques` };
+  if (cycles.some(c => c.event === 'detection'))
+    return { cls: 'warn', text: 'a detection, not attributed to this VM' };
   if (cycles.length) return { cls: 'blue', text: `${cycles.length} cycle(s), no detection` };
   if (live) return { cls: 'wait', text: 'waiting for a detection' };
   // Only the run concludes to a miss — on a heartbeat that vouches for its wait
@@ -338,7 +349,7 @@ function renderWindow(w) {
       ${w.closed_by ? `<span class="chip c-bad" title="Closed by ${esc(w.closed_by)}, not by its injector: what was in flight may not have been cleaned up">${esc(w.closed_by)}</span>` : ''}
       <span class="chip c-${esc(w.injector)}">${esc(w.injector)}</span>
       <span class="exp" title="${esc(w.experiment)}">${esc(w.experiment)}</span>
-      <span class="meta">→ ${esc(targets)}</span>
+      <span class="meta tgt" title="${esc((w.targets || []).join('\n'))}">→ ${esc(targets)}</span>
       <span class="meta" style="margin-left:auto">${timing}</span>
     </div>
     <div class="row-sub">
@@ -364,8 +375,8 @@ function renderWindowDetail(w) {
   parts.push(`<div class="dsec s-blue"><div class="dtitle">GLORFINDEL — ${cycles.length} cycle(s) on a target inside the window</div>` +
     (cycles.length ? `<table class="t"><tr><th>seen</th><th>+${esc(t0.from)}</th><th>event</th><th>ttp</th><th>rule</th><th>decision</th></tr>` +
       cycles.map(c => {
-        const seen = toDate(c.signal_at);
-        return `<tr><td>${hms(c.signal_at)}</td><td>${t0.d && seen ? dur((seen - t0.d) / 1000) : '—'}</td>
+        const seen = toDate(c.signal_at), other = ownTtp(w) && c.ttp !== ownTtp(w);
+        return `<tr${other ? ' style="opacity:.5" title="Another technique: another run\'s, or a real one"' : ''}><td>${hms(c.signal_at)}</td><td>${t0.d && seen ? dur((seen - t0.d) / 1000) : '—'}</td>
           <td>${esc(c.event)}${c.attribution && c.attribution !== 'asset' ? ` <span style="color:var(--yellow)">(${esc(c.attribution)})</span>` : ''}</td>
           <td>${esc(c.ttp)}</td><td>${esc(c.rule)}</td>
           <td class="wrap" style="color:${DISRUPTIVE.includes(c.action) && c.executed === true ? 'var(--red)' : 'var(--text)'}">${esc(decisionText(c) || '—')}${c.cycle_error ? ' <span style="color:var(--red)">cycle error</span>' : ''}</td></tr>`;

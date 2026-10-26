@@ -619,8 +619,8 @@ _NO_ACTION = re.compile(
 # either — between the two sides of a change fact, or between two cited runs. Before the
 # numbers are read, what only names something is taken out of the sentence: the cited ids, a
 # technique (T1110.001), a run id (20261023T081120Z), a date (23/10, « 21 octobre », « October
-# 21 », a range after « le », « entre », « du »… : « entre le 21 et le 23 octobre », never
-# « de 12, le 23 octobre »), a year (2026, not followed by a unit), an hour (08:21), an ordinal
+# 21 », a range after « le », « entre », « du », « des », « aux »… : « entre le 21 et le 23
+# octobre », never « de 12, le 23 octobre », its days from 1 to 31), a year (2026, not followed by a unit), an hour (08:21), an ordinal
 # (« 2ᵉ », « 1er »), and any word that begins with a letter and holds a digit (chg-1, a VM's
 # name). A count (« les 2 campagnes ») — a whole number followed by a word that names what is
 # counted (_COUNTED: runs, campaigns, techniques…, never a unit nor « fois ») — may be at most
@@ -642,10 +642,11 @@ _UNITS = {  # a unit's words → its kind, and what one of it is in that kind
 _UNIT = "(?:" + "|".join(_UNITS) + r")(?![^\W\d_])"
 _UNIT_OF = re.compile(r"\s*(?:" + "|".join(f"(?P<u{i}>{u})" for i, u in enumerate(_UNITS)) + r")(?![^\W\d_])",
                       re.IGNORECASE)
+_DAY = r"(?:3[01]|[12]\d|0?[1-9])(?!\d)"  # a day of a range: « between 70 and 60, 23 October » has none
 _NAMES = re.compile(
     r"\b\d{8}T\d{6}Z\b|\b\d{1,2}/\d{1,2}(?:/\d{2,4})?\b|\b\d{1,2}[:h]\d{2}(?::\d{2})?\b"
-    rf"|(?:\b(?:le|les|entre|du|between|from|on)\s+\d{{1,2}}(?:er)?"
-    rf"(?:\s*(?:,|-|–|\bet\b|\bau\b|\bà\b|\band\b|\bto\b)\s*(?:le\s+)?\d{{1,2}}(?:er)?)+"
+    rf"|(?:\b(?:le|les|entre|du|des|aux|au|between|from|on|the)\s+{_DAY}(?:er)?"
+    rf"(?:\s*(?:,|-|–|\bet\b|\bau\b|\bà\b|\band\b|\bto\b)\s*(?:(?:le|du|des)\s+)?{_DAY}(?:er)?)+"
     rf"|\b\d{{1,2}}(?:er|st|nd|rd|th)?)\s+(?:{_MONTHS})\b"
     rf"|\b(?:{_MONTHS})\s+\d{{1,2}}(?:st|nd|rd|th)?\b"
     rf"|\b(?:19|20)\d{{2}}\b(?![.,]\d)(?!\s*{_UNIT})"

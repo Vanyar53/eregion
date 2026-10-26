@@ -360,8 +360,12 @@ jamais complète (voir les limites, plus bas).
   deux sens : un `RunFact` ne dit pas lequel est venu d'abord, si bien qu'entre deux runs
   antérieurs le sens n'est pas lu. Une tendance sur trois campagnes passe donc (« de 120 s
   (19/10) à 91,9 s (21/10), puis à 106,9 s », « 0,85 → 0,80 → 0,78 », « du blocage à
-  l'isolement (avant), puis retour au blocage ») ; un sens inversé entre un run antérieur et un
-  run de cette campagne reste écarté. Pourquoi tous les appariements, et pas la clé exacte :
+  l'isolement (avant), puis retour au blocage »). Un sens inversé entre un run antérieur et un
+  run de cette campagne reste écarté, sauf quand un autre run antérieur cité porte la même
+  action, ou la même valeur (à la tolérance près), que le run de cette campagne : la tendance
+  peut alors décrire le passage entre deux runs antérieurs, dont l'ordre n'est pas lu (avec
+  un run isolé le 19/10, bloqué le 21/10 et isolé le 23/10, « de l'isolement au blocage »
+  passe). Pourquoi tous les appariements, et pas la clé exacte :
   une tendance peut citer plusieurs runs antérieurs, de plusieurs campagnes, ou des runs
   indexés avant D-2, sans leur VM. Un appariement plus large écarte moins, et il évite de
   barrer une tendance juste pour un appariement qu'elle ne voulait pas dire. Sans run
@@ -395,10 +399,13 @@ rapprochant d'elle. Ce qui passe encore, ou tombe à tort :
 - **un décompte inventé sous la borne** passe (« isolée dans les 2 campagnes » quand elle ne
   l'a été qu'une fois). Un décompte dont le nom est sous-entendu (« comme les 2 de la
   précédente ») est lu comme un nombre, et écarté si aucun fait ne le porte ;
-- **une plage de dates** n'est lue qu'avec le mois à la fin, en toutes lettres, et « le »,
-  « les », « entre » ou « du » (« between », « from », « on ») devant son premier jour
-  (« entre le 21 et le 23 octobre ») : « baisse de 12, le 23 octobre » laisse 12 un nombre,
-  mais dans « 21, 22 et 23 octobre » ou « les 21 et 23/10 », 21 reste un nombre aussi. Une
+- **une plage de dates** n'est lue qu'avec le mois à la fin, en toutes lettres, des jours de
+  1 à 31, et « le », « les », « entre », « du », « des », « aux » ou « au » (« between »,
+  « from », « on », « the ») devant son premier jour (« entre le 21 et le 23 octobre », « les
+  runs des 21 et 23 octobre », « du 21 et du 23 octobre ») ; « de » n'en est pas, si bien que
+  « baisse de 12, le 23 octobre » laisse 12 un nombre, et « between 70 and 60, 23 October »
+  aussi (70 n'est pas un jour). Mais dans « 21, 22 et 23 octobre » ou « les 21 et 23/10 »,
+  21 reste un nombre aussi. Une
   date anglaise est lue (« October 21 », « 21 October »), pas une plage dont le mois vient
   d'abord (« October 21 to 23 ») ;
 - **un « de X à Y » qui mêle deux écritures** (« de 0,80 à 78 % », « de 91,9 s à 1,8 min ») est
@@ -409,7 +416,11 @@ rapprochant d'elle. Ce qui passe encore, ou tombe à tort :
   snapshot) ;
 - dans une `trend`, l'appariement par technique est large : une tendance dite dans le sens
   d'un appariement qu'elle ne voulait pas dire passe, et entre deux runs antérieurs les deux
-  sens passent ;
+  sens passent. Une paire de runs antérieurs peut ainsi servir d'alibi à un sens inversé entre
+  un run antérieur et un run de cette campagne, quand l'autre run antérieur porte la même
+  action ou la même valeur que celui-ci. Piste pour un lot suivant : lire l'ordre des runs
+  antérieurs (l'identifiant horodaté de leur campagne, ou `campaign_started` dans l'index),
+  pour ne garder qu'un sens entre eux ;
 - dans une chaîne (« de X à Y, puis à Z », « X → Y → Z »), seul le premier pas est lu pour
   le sens ; les suivants ne sont contrôlés que comme nombres des faits cités.
 

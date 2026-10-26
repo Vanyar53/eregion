@@ -306,6 +306,12 @@ KEPT = [
      "runs": ["R2", "P1"]},
     {"kind": "trend", "text": "Du 21 au 23 octobre, la latence de T1110.001 augmente de 15 s.",
      "runs": ["R2", "P1"]},
+    # fourth review of D-2: a range after « des », « aux » (M546), « du … et du … » (M547)
+    {"kind": "trend", "text": "Les campagnes des 21 et 23 octobre détectent T1110.001.", "runs": ["R2", "P1"]},
+    {"kind": "trend", "text": "T1110.001 est détectée aux 21 et 23 octobre.", "runs": ["R2", "P1"]},
+    {"kind": "trend", "text": "Sur T1110.001, les runs des 21 et 23 octobre sont détectés.", "runs": ["R2", "P1"]},
+    {"kind": "trend", "text": "La latence de T1110.001 augmente de 15 s entre les runs du 21 et du 23 octobre.",
+     "runs": ["R2", "P1"]},
 ]
 REMOVED = [
     ({"kind": "change", "text": "La force brute est vue 40 s plus tard.", "runs": ["chg-2"]},
@@ -374,12 +380,15 @@ REMOVED = [
     # third review of D-2: a number before a date is no day of a range (M544)
     ({"kind": "change", "text": "La confiance baisse de 12, le 23 octobre.", "runs": ["chg-2"]},
      "a number is not in the cited facts (12)"),
+    # fourth review of D-2: a day of a range is from 1 to 31 (M545)
+    ({"kind": "change", "text": "The latency moved between 70 and 60, 23 October.", "runs": ["chg-2"]},
+     "a number is not in the cited facts (70)"),
 ]
 CLAIMS = KEPT + [c for c, _ in REMOVED]
 
 
 def test_a_difference_without_its_fact_is_removed(tmp_path, index):
-    """M273–M277, M510, M512–M518, M530–M539, M543, M544: a change claim cites a change fact, and each
+    """M273–M277, M510, M512–M518, M530–M539, M543–M547: a change claim cites a change fact, and each
     number it writes is one of the cited facts' (a latency, a confidence, a difference, in
     seconds, as a fraction or in percent, a relative change in percent) — of its unit's kind,
     a duration converted to seconds; a trend too, and an observation that cites a change fact.

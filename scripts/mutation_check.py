@@ -61,8 +61,9 @@ RENAME = object()
 
 # D-2: the lines of analysis/campaign_report.py that read a date in words, a range of them too
 # (M513, M537).
-_DATES_LINE = (r'''    rf"|(?:\b(?:le|les|entre|du|between|from|on)\s+\d{{1,2}}(?:er)?"''' + "\n"
-               r'''    rf"(?:\s*(?:,|-|–|\bet\b|\bau\b|\bà\b|\band\b|\bto\b)\s*(?:le\s+)?\d{{1,2}}(?:er)?)+"''' + "\n"
+_DATES_FIRST = r'''    rf"|(?:\b(?:le|les|entre|du|des|aux|au|between|from|on|the)\s+{_DAY}(?:er)?"''' + "\n"
+_DATES_LINE = (_DATES_FIRST
+               + r'''    rf"(?:\s*(?:,|-|–|\bet\b|\bau\b|\bà\b|\band\b|\bto\b)\s*(?:(?:le|du|des)\s+)?{_DAY}(?:er)?)+"''' + "\n"
                r'''    rf"|\b\d{{1,2}}(?:er|st|nd|rd|th)?)\s+(?:{_MONTHS})\b"''' + "\n")
 
 # (id, bug class, file, text in the code today, text that re-introduces the bug[, why
@@ -996,8 +997,17 @@ MUTANTS = [
      ('''           )\n''', "")),
     ("M544", "a number before a date is a day of a range: « baisse de 12, le 23 octobre » kept (D-2)",
      "analysis/campaign_report.py",
-     r'''    rf"|(?:\b(?:le|les|entre|du|between|from|on)\s+\d{{1,2}}(?:er)?"''' + "\n",
-     r'''    rf"|(?:\b\d{{1,2}}(?:er)?"''' + "\n"),
+     _DATES_FIRST, r'''    rf"|(?:\b{_DAY}(?:er)?"''' + "\n"),
+    # D-2, after its fourth review: « des 21 et 23 octobre » and « du 21 et du 23 octobre » are
+    # ranges; a day of a range is from 1 to 31.
+    ("M545", "a day of a range is any number: « between 70 and 60, 23 October » kept (D-2)",
+     "analysis/campaign_report.py",
+     r'''_DAY = r"(?:3[01]|[12]\d|0?[1-9])(?!\d)"''', r'''_DAY = r"\d{1,2}"'''),
+    ("M546", "a range of dates after « des », « aux », « au » is read as numbers (D-2)",
+     "analysis/campaign_report.py",
+     _DATES_FIRST, r'''    rf"|(?:\b(?:le|les|entre|du|between|from|on)\s+{_DAY}(?:er)?"''' + "\n"),
+    ("M547", "« du 21 et du 23 octobre » is read as numbers (D-2)", "analysis/campaign_report.py",
+     r"(?:(?:le|du|des)\s+)?{_DAY}(?:er)?)+", r"(?:le\s+)?{_DAY}(?:er)?)+"),
     # M-3 (#183) — the host of Glorfindel: Discord buttons check who clicks (closed by
     # default), each container gets only its secrets, H0 deploys a named reference whose
     # image carries it, and the image installs from the lock.
@@ -1120,7 +1130,7 @@ TESTS.update({mid: "tests/unit/test_gothmog.py" for mid in ("M241", "M246")})
 TESTS.update({f"M{n}": "tests/unit/test_campaign_changes.py" for n in range(260, 280)})  # D-2
 TESTS.update({f"M{n}": "tests/unit/test_campaign_changes.py" for n in range(510, 520)})  # D-2, review
 TESTS.update({f"M{n}": "tests/unit/test_campaign_changes.py" for n in range(530, 540)})  # D-2, 2nd review
-TESTS.update({f"M{n}": "tests/unit/test_campaign_changes.py" for n in range(540, 545)})  # D-2, 3rd review
+TESTS.update({f"M{n}": "tests/unit/test_campaign_changes.py" for n in range(540, 548)})  # D-2, 3rd, 4th reviews
 TESTS.update({f"M{n}": "tests/unit/test_bot.py" for n in range(280, 284)})
 TESTS.update({f"M{n}": "tests/unit/test_glorfindel_host.py" for n in range(284, 287)})
 TESTS.update({f"M{n}": "tests/unit/test_host_deploy.py" for n in (287, 288)})

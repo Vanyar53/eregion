@@ -105,9 +105,9 @@ def _decision(*, at, vm=VM.lower(), ttp="T1136.001", action="snapshot", confiden
             "reasoning": "Un nouveau compte local avec un shell."}
 
 
-def _window(rid, *, start=T, end=END):
+def _window(rid, *, start=T, end=END, vm=VM):
     return {"run_id": rid, "injector": "annatar", "kind": "technique", "experiment": "T1136.001",
-            "targets": [VM.lower()], "start": _iso(start), "end": end and _iso(end),
+            "targets": [vm.lower()], "start": _iso(start), "end": end and _iso(end),
             "expires": _iso(start + timedelta(seconds=exercise.MAX_DURATION_S))}
 
 
@@ -131,7 +131,8 @@ def _h0(tmp_path, *, scenarios=None, watch=(), state="done", pulled=True, window
                 {"run_id": s["run_id"], "metrics": {"attack_time": attack}}))
             if windows:
                 (runs / "exercises").mkdir(exist_ok=True)
-                (runs / "exercises" / f"{s['run_id']}.json").write_text(json.dumps(_window(s["run_id"])))
+                (runs / "exercises" / f"{s['run_id']}.json").write_text(
+                    json.dumps(_window(s["run_id"], vm=s["target_resource_id"] or VM)))
     if watch:
         (runs / "watch-account-creation-20261001T100300Z_debug.jsonl").write_text(
             "".join(json.dumps(r) + "\n" for r in watch))

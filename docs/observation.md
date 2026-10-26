@@ -62,7 +62,7 @@ exécutée** :
 | `wrong` | faux positif, ou action disproportionnée ou erronée (isoler une VM pour une sauvegarde nocturne) |
 | `unsure` | impossible de trancher avec ce qu'on sait |
 
-Dans la War Room, la liste **TO JUDGE** (colonne de gauche, 16/10) : les cartes de décision des 7 derniers jours sans verdict — en attente ou déjà acquittées, exercices exclus —, chacune avec une note facultative et **✓ Right** / **✗ Wrong** / **? Unsure** — un verdict donné là ou dans Discord acquitte aussi la carte (un seul clic) ; l'en-tête affiche le compte de la semaine (cartes, jugées, part des isolations et blocages jugés faux). Les mêmes boutons restent sur les cartes de décision. En ligne de
+Dans la War Room, la liste **TO JUDGE** (colonne de gauche, 16/10) : les cartes de décision des 7 derniers jours sans verdict — en attente ou déjà acquittées, les cartes d'exercice comprises et marquées (H-1, 26/10) —, chacune avec une note facultative et **✓ Right** / **✗ Wrong** / **? Unsure** — un verdict donné là ou dans Discord acquitte aussi la carte (un seul clic) ; l'en-tête affiche le compte de la semaine (cartes, jugées, part des isolations et blocages jugés faux). Les mêmes boutons restent sur les cartes de décision. En ligne de
 commande, avec l'identifiant (ou ses 6 premiers caractères) affiché par `glorfindel pending` :
 
 ```bash
@@ -93,7 +93,9 @@ jugées, la part fausse. (`GET /api/report?since=7d` renvoie la même chose.)
 
 Les cartes d'exercice n'y entrent pas (B2, 16/10) : une carte dont la VM était couverte par la
 fenêtre d'un injecteur (Annatar, puis Gothmog) porte `source: exercise` et le rapport la compte
-à part (« N exercise card(s) left out »). Un compte créé à la main pour un test, comme celui du
+à part (« N exercise card(s) left out »). Elles restent pourtant dans la liste TO JUDGE, marquées
+(H-1) : une fenêtre d'exercice est l'affirmation de l'hôte des injecteurs, et une carte cachée
+sur cette seule foi laisserait passer une vraie attaque qu'une fenêtre forgée couvrirait. Un compte créé à la main pour un test, comme celui du
 16/10 sur bree, n'est pas un exercice déclaré : il compte, d'où la note du verdict.
 
 Une carte non jugée n'entre pas dans le taux. Un taux calculé sur trois cartes ne dit rien :

@@ -226,3 +226,81 @@ def subscription_from_id(resource_id: str) -> str:
         if p.lower() == "subscriptions" and i + 1 < len(parts):
             return parts[i + 1]
     return ""
+
+
+# ── The reader's side (H-1): is this VM enrolled, read by the watch itself ─────────────
+
+ARM = "https://management.azure.com"
+_ARM_SCOPE = "https://management.azure.com/.default"
+_VM_API = "2024-07-01"
+_RG_API = "2021-04-01"
+
+
+class TagEnrollment:
+    """Whether a VM is enrolled, by its tags and its resource group's (``enrollment``), read
+    through Azure Resource Manager with the reader's own identity — the hosted watch's is
+    Reader on the bench (infra/glorfindel-host/main.tf). An exercise window only names its
+    targets: the watch checks them here before a window marks a VM (eregion_core/exercise.py,
+    H-1), so the VM carrying a real load, never enrolled, is never in an exercise.
+
+    A read that fails (no credential, 403, a VM gone) is « not enrolled »: the window marks
+    nothing, the cycle is labelled real. A verdict is cached TTL_S, a failure FAIL_TTL_S —
+    the watch labels every cycle, and the tags of a bench seldom change."""
+
+    TTL_S = 600.0
+    FAIL_TTL_S = 60.0
+
+    def __init__(self, *, bench: str | None = None, credential=None, get=None, clock=None):
+        import threading
+        import time
+        self.bench = bench or os.environ.get(BENCH_ENV, DEFAULT_BENCH)
+        self._credential = credential
+        self._get = get
+        self._clock = clock or time.monotonic
+        self._cache: dict[str, tuple[float, bool]] = {}
+        self._lock = threading.Lock()
+        self._said: dict[str, str] = {}
+
+    def _headers(self) -> dict:
+        if self._credential is None:
+            from azure.identity import DefaultAzureCredential
+            self._credential = DefaultAzureCredential()
+        return {"Authorization": f"Bearer {self._credential.get_token(_ARM_SCOPE).token}"}
+
+    def tags(self, resource_id: str) -> tuple[dict, dict]:
+        """(the resource group's tags, the VM's), read now."""
+        import requests
+        get = self._get or requests.get
+        sub, rg = subscription_from_id(resource_id), rg_from_id(resource_id)
+        if not sub or not rg or "/virtualmachines/" not in resource_id.lower():
+            raise ValueError(f"not a VM resource id: {resource_id!r}")
+        headers = self._headers()
+        out = []
+        for url, api in ((f"{ARM}/subscriptions/{sub}/resourceGroups/{rg}", _RG_API),
+                         (f"{ARM}{resource_id}", _VM_API)):
+            r = get(url, headers=headers, params={"api-version": api}, timeout=15)
+            if not r.ok:
+                raise RuntimeError(f"HTTP {r.status_code} reading {url.rsplit('/', 1)[-1]}")
+            out.append(r.json().get("tags") or {})
+        return out[0], out[1]
+
+    def __call__(self, resource_id: str) -> bool:
+        key = resource_id.lower()
+        now = self._clock()
+        with self._lock:
+            hit = self._cache.get(key)
+        if hit is not None and hit[0] > now:
+            return hit[1]
+        try:
+            rg_tags, tags = self.tags(resource_id)
+            verdict = enrollment(rg_tags, tags, bench=self.bench)
+            ok, ttl, why = verdict.allowed, self.TTL_S, verdict.reason
+        except Exception as e:
+            ok, ttl, why = False, self.FAIL_TTL_S, f"enrollment unreadable: {e}"
+        if not ok and self._said.get(key) != why:
+            self._said[key] = why
+            print(f"[exercise] {resource_id.rsplit('/', 1)[-1]} not enrolled, no window marks "
+                  f"it: {why}")
+        with self._lock:
+            self._cache[key] = (now + ttl, ok)
+        return ok

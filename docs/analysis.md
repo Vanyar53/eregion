@@ -132,6 +132,30 @@ runs sans fin : il renvoie à `make campaign-report`.
 5. écrit `report.md` une fois, sous un verrou par campagne. Un `report.md` présent n'est jamais
    réécrit.
 
+**Ce que H0 accepte du canal (H-1, #187, 26/10).** Le manifeste et les rapports des runs sont
+écrits sur un autre hôte, par qui peut écrire dans le canal : H0 les lit contre leur forme, il ne
+les croit pas tels quels (`analysis/campaign_schema.py`, schémas `schemas/campaign_manifest.schema.json`
+et `schemas/run_report.schema.json`, tenus d'accord par les tests ; l'image de la watch n'a pas
+`jsonschema`).
+- Un manifeste d'une autre forme (identifiant qui n'est pas un nom simple, état inconnu, scénarios
+  qui ne sont pas une liste) ne rend pas sa campagne prête ; c'est dit une fois, sans rapport.
+- Un scénario d'une autre forme (`seq`, `status`, `detection`, `detection_latency_s`… mal typés)
+  est écarté des faits.
+- Un run exécuté n'est gardé que si son rapport est bien le sien (même `run_id`, `attack_time`
+  numérique), si sa fenêtre est **connue** et **crue** (`exercise.window_refusal` : au plus 2 h,
+  fin après le début…), si elle **nomme sa VM**, et si cette VM est **inscrite** (ses tags et
+  ceux de son groupe, lus par la watch : `eregion_core/inscription.py`, `TagEnrollment`).
+  Sinon il est écarté des faits, et la ligne « Écarté des faits » du rapport dit pourquoi
+  (« run R2 refusé : fenêtre d'exercice inconnue »).
+- Le rapport dit quels faits viennent du canal : la liste des runs, leur statut, leur détection
+  et leur latence, l'heure de chaque attaque et les fenêtres ; et ce que H0 a vu lui-même : les
+  décisions de Glorfindel et l'inscription de chaque VM (`CHANNEL_NOTE`).
+- L'attente des décisions (étape 4) ne change pas : une fenêtre absente peut encore arriver. Le
+  refus se décide à l'écriture.
+- Une fenêtre refusée (plus longue que 2 h…) ne borne plus la recherche d'une décision : la
+  raison devient « fenêtre absente ». Une campagne locale (sans `.pulled`) n'est pas concernée.
+- `make campaign-report` sur une campagne tirée du canal lit l'inscription de la même façon.
+
 Pour un run dont la décision est retrouvée, la table donne l'action, la confiance et
 l'escalade (« snapshot (40%, escaladé) », « isolate_vm (90%, sans escalade) ») ; le modèle les
 reçoit aussi (`decision`, `confidence`, `escalated`). Passé l'attente, le rapport s'écrit, et

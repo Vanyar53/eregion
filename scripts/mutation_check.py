@@ -1176,11 +1176,12 @@ MUTANTS = [
     ("M681", "an exported rule keeps its workspace (GUID) ids (P1)", "glorfindel/rule_layers.py",
      '    text = sub(_GUID_RE, "<id>", "GUID (espace de travail, abonnement…)", text)\n', ""),
     ("M682", "an exported rule keeps the literals compared to an identity column (P1)", "glorfindel/rule_layers.py",
-     "    text = _ID_COMPARISON_RE.sub(literals, text)\n", ""),
+     "                text = text[:s] + '\"<name>\"' + text[e:]\n", "                pass\n"),
     ("M683", "an exported rule keeps the names the deployment knows (P1)", "glorfindel/rule_layers.py",
      '            text = sub(_name_re(name), "<name>", "nom connu du déploiement", text)\n', "            pass\n"),
     ("M684", "the last guard of the export checks nothing (P1)", "glorfindel/rule_layers.py",
-     "    left = find_identifiers(text, names)\n", "    left = []\n"),
+     '    left = find_identifiers(text, names, kql=False) + find_identifiers(str(exported.get("query", "")), names)\n',
+     "    left = []\n"),
     ("M685", "migrate moves only new rules: a base rule changed on the VM is lost (P1)", "glorfindel/rule_layers.py",
      "    moved = [r for name, r in src_rules.items() if base_rules.get(name) != r]\n",
      "    moved = [r for name, r in src_rules.items() if name not in base_rules]\n"),
@@ -1192,6 +1193,37 @@ MUTANTS = [
     ("M688", "the watch's container mounts the shipped base read-write again (P1)", "docker-compose.yml",
      "      # redéploiement ne la touche jamais.\n      - ./glorfindel/rules:/app/glorfindel/rules:ro\n",
      "      # redéploiement ne la touche jamais.\n      - ./glorfindel/rules:/app/glorfindel/rules\n"),
+    # P1, review: the export reads KQL closed by default; a bad client entry never stops the
+    # detection; an approved rule binds to its backend.
+    ("M689", "the export sees no identity column: their literals leave (P1, review)", "glorfindel/rule_layers.py",
+     "    chosen = {span for span in spans if _ID_COL_RE.search(code[span[0]:span[1]])}\n",
+     "    chosen = set()\n"),
+    ("M690", "a `let` used against an identity column is not followed (P1, review)", "glorfindel/rule_layers.py",
+     "            if name in used and span not in chosen:\n", "            if False:\n"),
+    ("M691", "the argument of workspace()/resource()/app() leaves (P1, review)", "glorfindel/rule_layers.py",
+     "        if m.end() in starts:\n", "        if False:\n"),
+    ("M692", "a partial ARM path (resourceGroups/<x>…) is not replaced (P1, review)", "glorfindel/rule_layers.py",
+     "    text = _ARM_SEGMENT_RE.sub(segment, text)\n", ""),
+    ("M693", "a known name behind regex escapes (vm\\-a1) is not replaced (P1, review)", "glorfindel/rule_layers.py",
+     '    body = "".join(re.escape(c) if c.isalnum() else r"\\\\?" + re.escape(c) for c in name)\n',
+     "    body = re.escape(name)\n"),
+    ("M694", "the export's last guard does not read the query as KQL (P1, review)", "glorfindel/rule_layers.py",
+     ' + find_identifiers(str(exported.get("query", "")), names)\n', " + []\n"),
+    ("M695", "a client entry is not validated: `interval_s: 30s` stops every rule (P1, review)",
+     "glorfindel/detection_rules.py",
+     "            reason = _invalid_client_entry(key, entry)\n", "            reason = None\n"),
+    ("M696", "a key of the client's layer that is not a list is not said (P1, review)",
+     "glorfindel/detection_rules.py",
+     "            notes.append(f\"couche du client : `{key}` n'est pas une liste, ignoré\")\n", "            pass\n"),
+    ("M697", "an approved rule takes the inline form again: it applies to no VM (P1, review)",
+     "glorfindel/proposed_rules.py",
+     '                if backend_name:\n                    asset_name = "auto"\n',
+     '                if False:\n                    asset_name = "auto"\n'),
+    ("M698", "migrate does not bind a rule approved before P1 to its backend (P1, review)",
+     "glorfindel/rule_layers.py",
+     '            backend = backend_for_workspace(r["workspace_id"], backends)\n', '            backend = ""\n'),
+    ("M699", "a rule that applies to no VM is not said at load (P1, review)", "glorfindel/detection_rules.py",
+     "            notes.append(note)\n", "            pass\n"),
 ]
 
 # Mutants measured by other tests than the invariants (their lot's own).
@@ -1269,6 +1301,7 @@ TESTS.update({f"M{n}": "tests/unit/test_host_deploy.py" for n in range(524, 529)
 TESTS.update({f"M{n}": "tests/unit/test_rule_layers.py tests/unit/test_proposed_rules.py" for n in range(670, 687)})
 TESTS["M687"] = "tests/unit/test_host_deploy.py"
 TESTS["M688"] = "tests/unit/test_rule_layers.py"
+TESTS.update({f"M{n}": "tests/unit/test_rule_layers.py tests/unit/test_host_deploy.py" for n in range(689, 700)})
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

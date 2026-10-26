@@ -12,8 +12,10 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+import requests
 import yaml
 
+import eregion_core.exercise_channel as channel
 import eregion_core.orodruin as orodruin
 import gothmog.runner.engine as engine_mod
 from eregion_core.exercise import exercises_dir
@@ -22,6 +24,7 @@ from gothmog.engines.chaos_studio import (
     ChaosStudio, experiment_targets, fault_duration_s, latest_execution)
 from gothmog.probes import declared_errors
 from gothmog.runner.engine import Engine, fault_errors, load_fault
+from tests.unit.fake_container import CRED, URL, FakeContainer
 
 ROOT = Path(__file__).resolve().parents[2]
 SUB = "sub-123"
@@ -248,6 +251,37 @@ def test_a_fault_runs_and_its_return_is_verified(bench, tmp_path):
     window = _window(out.run_id)
     assert window["kind"] == "fault" and window["injector"] == "gothmog"
     assert window["targets"] == [VM.lower()] and window["end"]
+
+
+def test_the_probes_values_before_the_fault_are_in_the_report(bench, tmp_path):
+    """M246 (#193): the console shows the steady state before the fault as it shows it
+    after — the same form, by VM, each probe's observed value."""
+    clock, world, engine = bench
+    world()
+    out = engine().run("vm-shutdown", skip_confirm=True)
+    m = json.loads((tmp_path / "runs" / f"{out.run_id}.json").read_text())["metrics"]
+    assert set(m["before"]) == set(m["after"]) == {"vm-celebrimbor-gondolin"}
+    before = {p["name"]: p for p in m["before"]["vm-celebrimbor-gondolin"]}
+    assert set(before) == {p["name"] for p in m["after"]["vm-celebrimbor-gondolin"]}
+    assert all(set(p) == {"name", "ok", "observed", "expect"} and p["ok"] for p in before.values())
+    assert before["vm-running"]["observed"] == "PowerState/running"
+    assert before["guest-agent-ready"]["observed"] == "Ready"
+
+
+def test_the_report_goes_to_h0_with_its_window(bench, tmp_path, monkeypatch):
+    """M241 (#193): with an exercise channel, the report is published at the end of the run,
+    after its window closes — the last write of the run."""
+    container = FakeContainer()
+    monkeypatch.setenv(channel.CHANNEL_ENV, URL)
+    monkeypatch.setattr(channel, "_credential", CRED)
+    monkeypatch.setattr(requests, "put", container.put)
+    clock, world, engine = bench
+    world()
+    out = engine().run("vm-shutdown", skip_confirm=True)
+    assert container.puts == [f"{out.run_id}.json", f"{out.run_id}.json", f"runs/{out.run_id}.json"]
+    published = json.loads(container.body(f"runs/{out.run_id}.json"))
+    assert published == json.loads((tmp_path / "runs" / f"{out.run_id}.json").read_text())
+    assert published["checks"]["revert_verified"] == "PASS" and published["metrics"]["before"]
 
 
 def test_the_start_is_journaled_before_it_is_sent(bench):

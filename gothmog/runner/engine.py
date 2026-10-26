@@ -13,7 +13,9 @@ normal checked before, during and after, the return to the initial state verifie
     6  after     the probes again, the heartbeat later than the fault's end. If the engine
                  did not bring the VM back: the declared revert (start it), then the probes
                  again. The return is verified only by a probe, never by the engine's word
-    7  record    window closed; ``runs/<run_id>.json`` as Annatar's; signals in
+    7  record    ``runs/<run_id>.json`` as Annatar's, the probes' values before and after
+                 in ``metrics.before`` / ``metrics.after``; window closed, and with an
+                 exercise channel the report goes to H0 with it (#193); signals in
                  ``runs/gothmog/`` (``gothmog/signals/emitter.py``)
 
 ``preflight`` runs 1–3 with no session at all: a write there is refused by construction.
@@ -31,6 +33,7 @@ from rich.console import Console
 from rich.prompt import Confirm
 
 from eregion_core.exercise import close_window, open_window
+from eregion_core.exercise_channel import carry_run
 from eregion_core.inscription import BENCH_ENV, DEFAULT_BENCH, Scope, check_target, rg_from_id
 from eregion_core.orodruin import arm
 from gothmog.engines.chaos_studio import (
@@ -234,6 +237,7 @@ class Engine:
             return self._inject(fault, run_id, bench, vms, seen, verdict, start)
         finally:
             close_window(run_id)
+            carry_run(run_id, self.runs_dir)  # its report, to H0 with its window (#193)
 
     def _inject(self, fault, run_id, bench, vms, seen, verdict, run_start) -> RunOutcome:
         name = fault["engine_ref"]

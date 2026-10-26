@@ -16,6 +16,12 @@ The same container carries a finished campaign to H0, where its report is writte
 assignment, on this container: eregion_core/orodruin.py). The prefix keeps them out of the
 windows: a run's window is ``<run_id>.json`` at the root, and a name with a ``/`` never
 matches ``_SAFE_NAME``, so ``pull`` leaves the campaigns to ``pull_campaigns``.
+
+And the report of a run launched alone (``annatar run``, ``gothmog run``, #193), so that its
+verdict is seen on H0 too: ``runs/<run_id>.json``, under the same container and the same
+assignment — a prefix again, which neither ``pull`` nor ``pull_campaigns`` takes. H0 pulls
+it into its own ``runs/<run_id>.json`` (``pull_runs``), where the console of the atelier
+reads it, once it has the shape H0 accepts (H-1), and never over a file it did not pull.
 """
 from __future__ import annotations
 
@@ -47,6 +53,12 @@ _RUN_FILES = ("{run_id}.json",)
 # Beside a manifest pulled from the channel: H0 writes the report of these campaigns only,
 # never of a campaign of its own runs directory (analysis/hosted_report.py).
 PULLED = ".pulled"
+# The report of a run launched alone: ``runs/<run_id>.json``, the run id a plain name.
+RUNS = "runs"
+_RUN_BLOB = re.compile(r"^runs/(?P<rid>[A-Za-z0-9][A-Za-z0-9_.-]*)\.json$")
+# In H0's runs directory, one empty file per run report pulled from the channel: H0 writes
+# again only those, never the report of a run of its own.
+PULLED_RUNS = ".pulled-runs"
 
 _last_pull = 0.0
 _pull_lock = threading.Lock()
@@ -235,6 +247,47 @@ def publish_campaign(campaign_dir: Path, runs_dir: Path | None = None, *,
     return cid, written
 
 
+# ── The report of a run launched alone, carried to H0 (#193) ──────────────────────────
+
+def publish_run(run_id: str, runs_dir: Path | str = "runs", *, channel: str | None = None,
+                credential=None, put=None) -> str:
+    """Write the report of a run launched alone to the channel, as ``runs/<run_id>.json``:
+    its report only, never its debug or signal files. The blob's name, or "" when no channel
+    is configured or the run wrote no report. A refused write raises to its caller."""
+    import requests
+
+    url = channel if channel is not None else channel_url()
+    if not url:
+        return ""
+    if not safe_part(run_id):
+        raise ValueError(f"unsafe run id: {run_id!r}")
+    path = Path(runs_dir) / f"{run_id}.json"
+    if not path.is_file():
+        return ""
+    name = f"{RUNS}/{run_id}.json"
+    headers = {**auth_headers(credential), "x-ms-blob-type": "BlockBlob",
+               "Content-Type": "application/json"}
+    r = (put or requests.put)(f"{url}/{name}", headers=headers, data=path.read_bytes(),
+                              timeout=15)
+    if not r.ok:
+        raise RuntimeError(f"HTTP {r.status_code} publishing {name}")
+    return name
+
+
+def carry_run(run_id: str, runs_dir: Path | str = "runs") -> bool:
+    """``publish_run`` at the end of a run (``annatar run``, ``gothmog run``), beside its
+    closed window. A failure is said, never raised: the run is over, and its report stays
+    on this host. True once published."""
+    try:
+        name = publish_run(run_id, runs_dir)
+    except Exception as e:
+        print(f"[exercise-channel] run report {run_id} not published: {e}")
+        return False
+    if name:
+        print(f"[exercise-channel] run report published to H0: {name}")
+    return bool(name)
+
+
 def _blobs(get, url: str, headers: dict, prefix: str = ""):
     """Every blob of the channel (under ``prefix``, when one is given), page after page."""
     marker = ""
@@ -306,3 +359,62 @@ def pull_campaigns(directory: Path, *, channel: str | None = None, credential=No
             (local.parent / PULLED).touch()
         written += 1
     return written, failed
+
+
+def pull_runs(directory: Path, *, refusal, channel: str | None = None, credential=None,
+              get=None) -> tuple[int, dict[str, str]]:
+    """Copy into ``directory`` (``runs`` on H0) the published report of each run launched
+    alone, as ``<run_id>.json``, new or changed since the local copy, written whole (tmp,
+    then replace). Each one is read against the shape H0 accepts first — ``refusal(report,
+    run_id)`` says why not, "" when it does (analysis/campaign_schema.py
+    ``run_report_refusal``, H-1) — and a refused one is not written. A local file without
+    its ``PULLED_RUNS`` marker (a run of this host) is never written over. Returns how many
+    were written, and why each one that was not, by run id; the windows and the campaigns
+    are never touched."""
+    import json
+
+    import requests
+
+    url = channel if channel is not None else channel_url()
+    if not url:
+        return 0, {}
+    get = get or requests.get
+    headers = auth_headers(credential)
+    directory = Path(directory)
+    marks = directory / PULLED_RUNS
+    written, skipped = 0, {}
+    for blob in _blobs(get, url, headers, f"{RUNS}/"):
+        name = blob.findtext("Name") or ""
+        m = _RUN_BLOB.match(name)
+        if not m or not safe_part(m["rid"]):
+            continue
+        rid = m["rid"]
+        local, mark = directory / f"{rid}.json", marks / rid
+        if local.exists():
+            if not mark.exists():
+                skipped[rid] = "a report of this name is here already, not pulled: kept"
+                continue
+            modified = blob.findtext("Properties/Last-Modified")
+            if modified and parsedate_to_datetime(modified).timestamp() <= local.stat().st_mtime:
+                continue
+        body = get(f"{url}/{name}", headers=headers, timeout=15)
+        if not body.ok:
+            skipped[rid] = f"HTTP {body.status_code} downloading it"
+            continue
+        try:
+            report = json.loads(body.content)
+        except ValueError:
+            skipped[rid] = "refused: not JSON"
+            continue
+        why = refusal(report, rid)
+        if why:
+            skipped[rid] = f"refused: {why}"
+            continue
+        marks.mkdir(parents=True, exist_ok=True)
+        mark.touch()  # the marker first: cut before the file, the next pull still writes it
+        directory.mkdir(parents=True, exist_ok=True)
+        tmp = local.with_suffix(".json.tmp")
+        tmp.write_bytes(body.content)
+        tmp.replace(local)  # atomic: the console never reads half a report
+        written += 1
+    return written, skipped

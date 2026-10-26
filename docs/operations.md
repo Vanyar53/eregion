@@ -109,6 +109,12 @@ make gothmog-preflight [FAULT=vm-shutdown]   # contrat, cibles relues dans l'exp
 make gothmog-run [FAULT=vm-shutdown]         # la panne, son retour vérifié par sonde (~15 min)
 gothmog run vm-shutdown --dry-run            # la panne déclarée, sans appel Azure
 gothmog report <run_id>                      # runs/<run_id>.json (même forme qu'Annatar)
+#   Depuis Orodruin, avec EREGION_EXERCISE_CHANNEL (#193, pas encore mesuré sur le banc) : à la fin
+#   de `annatar run` comme de `gothmog run`, le rapport du run part vers H0 (runs/<run_id>.json dans
+#   le conteneur des fenêtres, sans droit nouveau), après la fermeture de sa fenêtre. La watch
+#   hébergée le tire dans son runs/ (une forme refusée n'est pas écrite, un rapport local jamais
+#   écrasé) : la console de l'atelier affiche son verdict. Un échec de publication est signalé
+#   (« run report … not published ») et ne change ni le run ni son code de sortie.
 
 # Campagne (kill-chain générative + rapport IA0) — depuis Orodruin, sur le modèle de gothmog
 make orodruin-campaign-plan CAMPAIGN_TARGET=<resource_id de la VM inscrite> [CAMPAIGN_MAX=5]
@@ -191,7 +197,7 @@ GLORFINDEL_LLM_TIMEOUT_S=120        # borne d'un appel au modèle de Glorfindel 
 GLORFINDEL_DECISION_DRAWS=3         # D-1 : tirages qui doivent s'accorder avant une action disruptive autonome (défaut 3 ; entier de 2 à 10 ; illisible, 1, >10 → toute action disruptive autonome retenue) ; aucun tirage de plus en human_only
 GLORFINDEL_READ_ONLY=1              # creds lecture seule (SP Reader) — mode observe-only ; toute valeur sauf vide/0/false/no/off = lecture seule
 GLORFINDEL_DISCOVERY_RETENTION_H=8  # rétention d'une VM éteinte dans le registre avant éviction (défaut 8h)
-EREGION_EXERCISE_CHANNEL=https://…/exercises  # O1 : canal des fenêtres d'exercice (Orodruin publie, la watch hébergée lit) ; vide → fenêtres locales. Porte aussi les campagnes finies (campaigns/<id>/…, #167) ; posé sur la watch, il démarre le thread campaign-report
+EREGION_EXERCISE_CHANNEL=https://…/exercises  # O1 : canal des fenêtres d'exercice (Orodruin publie, la watch hébergée lit) ; vide → fenêtres locales. Porte aussi les campagnes finies (campaigns/<id>/…, #167) et le rapport d'un run seul (runs/<run_id>.json, #193) ; posé sur la watch, il démarre le thread campaign-report, qui tire les deux
 # Orodruin seulement (orodruin.env) : EREGION_CHANNEL_SCOPE (le conteneur, seule attribution hors du banc acceptée),
 # EREGION_MAX_INJECTIONS / EREGION_MAX_RUN_S (plafond du contrat), EREGION_BENCH_RG
 # Gothmog : EREGION_BENCH_WORKSPACE (Log Analytics du banc pour la sonde Heartbeat, défaut law-celebrimbor-amonsul)

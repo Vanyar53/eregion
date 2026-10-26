@@ -77,7 +77,8 @@ def run(scenario: str, dry_run: bool, yes: bool, skip_preflight: bool):
             )
             raise SystemExit(1)
 
-    engine = Engine(dry_run=dry_run, skip_preflight=skip_preflight)
+    # With EREGION_EXERCISE_CHANNEL, the run's report goes to H0 at its end (#193).
+    engine = Engine(dry_run=dry_run, skip_preflight=skip_preflight, publish_report=True)
     outcome = engine.run(path, skip_confirm=yes)
     code = run_exit_code(outcome)
     if code:

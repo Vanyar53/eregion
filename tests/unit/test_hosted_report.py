@@ -718,6 +718,12 @@ def _windows_fail(c):
     return get
 
 
+def _but_runs(said):
+    """What a pass says of the campaigns and the windows: the runs' reports (#193, their own
+    listing, said once too) are left out — tests/unit/test_run_channel.py."""
+    return lambda m: None if m.startswith("run reports not pulled") else said.append(m)
+
+
 def test_a_failing_pull_is_said_once_while_it_lasts(tmp_path, monkeypatch, index):
     """M167–M169: every 30 s, a failure said each time would fill the watch's log — once
     while it lasts, and again if it comes back after a pull that went through."""
@@ -727,20 +733,20 @@ def test_a_failing_pull_is_said_once_while_it_lasts(tmp_path, monkeypatch, index
     def listing_fails(url, headers=None, params=None, timeout=None):
         return SimpleNamespace(ok=False, status_code=500, content=b"")
     for _ in range(3):
-        assert hr.tick(h0, get=listing_fails, say=said.append) == {}
+        assert hr.tick(h0, get=listing_fails, say=_but_runs(said)) == {}
     assert said == ["pull failed: HTTP 500 listing the channel"]
     for _ in range(3):
-        assert hr.tick(h0, get=_windows_fail(c), say=said.append) == {"C1": "waiting"}
+        assert hr.tick(h0, get=_windows_fail(c), say=_but_runs(said)) == {"C1": "waiting"}
     assert len(said) == 2 and said[1].startswith("windows not pulled (")
     assert said[1].endswith(") — 1 report(s) wait for the next pull")
-    hr.tick(h0, get=listing_fails, say=said.append)          # back after a pull that went through
+    hr.tick(h0, get=listing_fails, say=_but_runs(said))          # back after a pull that went through
     assert said[2:] == ["pull failed: HTTP 500 listing the channel"]
 
     answers = iter([set(), {"C1"}, {"C1"}, {"C1"}, set(), {"C1"}])
     monkeypatch.setattr(channel, "pull_campaigns", lambda root, **kw: (0, next(answers)))
     said.clear()
     for _ in range(6):
-        hr.tick(h0, get=_windows_fail(c), say=said.append)
+        hr.tick(h0, get=_windows_fail(c), say=_but_runs(said))
     assert [m for m in said if "not all pulled" in m] == [
         "C1: not all pulled — its report waits for the next pull"] * 2
 
@@ -764,13 +770,13 @@ def test_a_failure_whose_text_changes_is_said_once_while_it_lasts(tmp_path, monk
     c, h0 = _published(tmp_path, monkeypatch)
     said, timeout = [], _timeout()
     for _ in range(3):
-        assert hr.tick(h0, get=timeout, say=said.append) == {}
+        assert hr.tick(h0, get=timeout, say=_but_runs(said)) == {}
     assert len(said) == 1 and said[0].startswith("pull failed: HTTPSConnectionPool"), said
 
     def listing_fails(url, headers=None, params=None, timeout=None):
         return SimpleNamespace(ok=False, status_code=500, content=b"")
-    hr.tick(h0, get=listing_fails, say=said.append)
-    hr.tick(h0, get=timeout, say=said.append)
+    hr.tick(h0, get=listing_fails, say=_but_runs(said))
+    hr.tick(h0, get=timeout, say=_but_runs(said))
     assert said[1] == "pull failed: HTTP 500 listing the channel" and len(said) == 3
     assert said[2].startswith("pull failed: HTTPSConnectionPool")
 
@@ -782,7 +788,7 @@ def test_a_failure_whose_text_changes_is_said_once_while_it_lasts(tmp_path, monk
         return c.get(url, headers, params, timeout)
     fail = _timeout()
     for _ in range(3):
-        assert hr.tick(h0, get=windows_time_out, say=said.append) == {"C1": "waiting"}
+        assert hr.tick(h0, get=windows_time_out, say=_but_runs(said)) == {"C1": "waiting"}
     assert len(said) == 1 and said[0].startswith("windows not pulled (HTTPSConnectionPool"), said
 
 

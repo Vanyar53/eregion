@@ -33,7 +33,7 @@ préversion publique et hors du provider azurerm (09/2026).
 | 4. Injecter | fenêtre d'exercice ouverte (`kind: fault`, publiée vers la watch hébergée), démarrage **journalisé avant l'appel**, signal `fault_started` | — |
 | 5. Pendant | l'exécution suivie toutes les 30 s ; la panne doit être constatée (VM arrêtée) | au-delà de sa durée + 5 min, ou du plafond : l'expérience est **annulée** ; Ctrl-C : annulée aussi |
 | 6. Après | les sondes à nouveau, Heartbeat **postérieur à la fin** de la panne, 10 min au plus ; si le moteur n'a pas ramené la VM : le retour déclaré (`start_vm`, journalisé), puis les sondes encore | le retour n'est « vérifié » que par une sonde, jamais sur la parole du moteur |
-| 7. Enregistrer | fenêtre fermée ; `runs/<run_id>.json` comme Annatar ; signaux dans `runs/gothmog/` | — |
+| 7. Enregistrer | `runs/<run_id>.json` comme Annatar, avec les valeurs des sondes avant et après (`metrics.before`, `metrics.after`, par VM) ; fenêtre fermée, puis, avec le canal, le rapport publié vers H0 (#193) ; signaux dans `runs/gothmog/` | — |
 
 **Les sondes d'état normal** ([`probes.py`](probes.py)) : la VM en marche (`PowerState/running`),
 son agent `Ready` (le système répond), son Heartbeat dans Log Analytics de moins de 10 minutes.

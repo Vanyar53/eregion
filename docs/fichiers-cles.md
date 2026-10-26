@@ -25,6 +25,9 @@ eregion_core/exercise.py        → B2 : fenêtres d'exercice des injecteurs. An
                                    (run_id, injector, kind, experiment, targets, start, end, expires ; ou
                                    EREGION_EXERCISES_DIR). Glorfindel en tire la source d'un cycle (exercise/real).
 eregion_core/exercise_channel.py → O1 : les fenêtres d'Orodruin vers la watch hébergée (conteneur exercises).
+                                   Porte aussi les campagnes finies (campaigns/<id>/…, #167) et le rapport d'un
+                                   run seul (runs/<run_id>.json, #193) ; sur H0, runs/.pulled-runs/<run_id>
+                                   marque un rapport tiré du canal (jamais écrit par-dessus un run de H0).
 eregion_core/watch_channel.py   → #159 : le sens retour (conteneur watch) — heartbeat.json {at, since, windows} et
                                    detections/<run_id>/<signal_id>.json, écrits par la watch hébergée (Publisher,
                                    thread watch-channel), lus par l'attente d'Annatar ; miss_unprovable → unknown.

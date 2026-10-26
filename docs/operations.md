@@ -70,8 +70,16 @@ glorfindel propose-rules [--ttp T..] [--include-planned] [--dry-run]  # autoring
                                              # génère la détection depuis technique_catalog.yaml AVANT
                                              # l'attaque (getschema sur le vrai LAW → KQL groundée).
                                              # Skip les TTPs déjà couverts. Sortie = propositions.
-glorfindel approve-rule <id>                 # appliquer la règle → detection_rules.yaml
+glorfindel approve-rule <id>                 # appliquer la règle → couche du client (~/.glorfindel/client_rules.yaml, P1)
 glorfindel reject-rule <id>                  # écarter la règle sans l'approuver
+glorfindel rules                             # règles chargées : la base livrée, puis la couche du client (couche de chaque
+                                             # règle ; ce que la couche fait à la base : règle remplacée, désactivée)
+glorfindel export-rule <nom> [--out f.yaml]  # une règle généralisée, SANS identifiant de ressource ni d'espace de travail
+                                             # (ni assets, backends, workspace_id, resource_id ; IDs, GUID, noms connus et
+                                             # Computer == "…" remplacés) — pour la proposer en amont ; refusée si un
+                                             # identifiant resterait
+glorfindel migrate-rules --from <modifié> --base <livré> [--dry-run]  # règles approuvées DANS la base avant P1
+                                             # → couche du client (H0 : infra/glorfindel-host/README.md)
 
 glorfindel memory-stats                      # ChromaDB cycle count
 glorfindel bot                               # démarrer le bot Discord interactif

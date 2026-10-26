@@ -103,7 +103,10 @@ glorfindel/
                           except→last_error ; investigate try→[]). /api/state.monitoring_backends porte
                           `reachable`/`last_error` (dérivé du poll status) → War Room rougit le DETECT.
   detection_rules.py    → DetectionRule dataclass + RulePoller (continuous polling, status persistence)
-                          load_config(path, glorfindel_cfg=None) — workspace_id résolu depuis glorfindel_cfg
+                          load_config(path, glorfindel_cfg=None, client_layer=True) — workspace_id résolu depuis
+                          glorfindel_cfg ; P1 : la base `path`, puis la couche du client par-dessus (merge_layers :
+                          une règle du client du nom d'une règle de base la remplace, `disable: [nom]` la désactive,
+                          tout est dit — DetectionConfig.notes, journal une fois par processus ; DetectionRule.layer)
                           _resolve_backend_for_rule() — la règle se LIE au backend de glorfindel-config :
                             backend nommé s'il existe ; sinon fallback sur l'unique backend du type de la règle
                             (cas mono-LAW → le nom dans detection_rules.yaml devient optionnel). Échec bruyant
@@ -115,7 +118,11 @@ glorfindel/
   audit.py              → « Disk write sampling » (`_check_perf_sampling`, si un workspace est configuré) : cadence réelle du compteur Disk Write Bytes/sec de la VM sur 1 h — ≤ 25 s mode fin, au-delà mode grossier (warn), aucun échantillon = détection ransomware aveugle (warn + correctif DCR) ; « Syslog » (`_check_syslog` : la VM envoie-t-elle du Syslog depuis 1 h, quelles facilities) ; « Detection rules » (`_check_rule_coverage` → `rule_coverage()`, pur : chaque règle qui s'applique à la VM, sa table (`rule_table`, la première que nomme la requête) et son état — `covered`, `blind` (sa table ne reçoit rien de la VM), `unknown`, `error` (dernier poll en échec, `rule_status.json`), `not_vm` (lignes venues d'ailleurs : stockage, identité), `excluded`, `disabled`). Tous trois en action `detection`, seulement avec un workspace (P4). « NSG precedence » est relu après coup comme la préparation le fait (`_align_precedence`, P2) : ok si l'isolation passe par le NSG de quarantaine (`readiness.isolation_by_quarantine`), réserve (warn) sinon et pour un blocage — jamais un échec
                           AuditCheck (+ champ `data` structuré : nsg/nsg_scope + nsgs[] multi-NIC, points/protected), AuditResult,
                           run() — NSG/backup/compute readiness checks en parallèle, IAM gap detection
-  proposed_rules.py     → record/pending/approve()/reject() — detection rule proposal lifecycle
+  proposed_rules.py     → record/pending/approve()/reject() — detection rule proposal lifecycle ; approve() écrit
+                          la règle dans la couche du client (P1), jamais dans la base livrée
+  rule_layers.py        → P1 : la couche du client — write_client_rule (atomique, verrou, refuse d'écrire sur une
+                          couche illisible), migrate (règles approuvées dans la base avant P1 → couche),
+                          export_rule (une règle généralisée, sans identifiant ; find_identifiers = dernière garde)
   detection_authoring.py → moteur d'autoring grounded (boucle purple GÉNÉRATIVE, côté bleu).
                           load_catalog()/catalog_entry() (lit technique_catalog.yaml),
                           fetch_table_schema() (KQL getschema — schéma RÉEL du LAW, best-effort),
@@ -158,7 +165,9 @@ glorfindel/
                           carte MONITORING : backends + assets découverts + règles cliquables (modal query)
                           panneau ⚙ Config : Azure credentials + LLM + mode autonomie global
   rules/azure/
-    detection_rules.yaml → rules UNIQUEMENT — queries KQL, TTPs, noms de backends
+    detection_rules.yaml → la BASE LIVRÉE (P1) : rien ne l'écrit plus, une mise à jour la remplace ;
+                           les règles du déploiement vont dans ~/.glorfindel/client_rules.yaml
+                           rules UNIQUEMENT — queries KQL, TTPs, noms de backends
                            PAS de workspace_id, resource_id, ni section assets
                            assets: [auto] → s'applique aux VMs découvertes par le backend
                            monitoring_backends: [law-celebrimbor-amonsul] par rule → nom du backend
@@ -231,6 +240,9 @@ infra/terraform/              → module Celebrimbor : infra de test Azure modul
                                 CI : job macOS (APFS insensible à la casse) ; `main` protégée, checks requis.
   blocks/<vm>--<h>.json       → IPs bloquées par VM (même clé)
   proposed_rules.jsonl        → règles de détection proposées (en attente d'approbation)
+  client_rules.yaml           → P1 : la couche du client — règles approuvées (`approve-rule`, War Room), règles de
+                                base remplacées (même nom) ou désactivées (`disable:`), chargée par-dessus la base
+                                livrée. Hors du dépôt : une mise à jour ne la touche jamais (conteneurs : base `:ro`)
   bot_posted.json             → IDs escalades déjà postées (évite doublons au redémarrage du bot)
   bot_threads.json            → resource_id → thread_id Discord (persistance entre redémarrages)
   rule_status.json            → état de polling des règles (last_poll, last_match, match_count, last_error)

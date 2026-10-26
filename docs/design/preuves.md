@@ -477,11 +477,41 @@ de sa relecture), mesurés par `tests/unit/test_bot.py`, `test_glorfindel_host.p
 | M525 | une `REF` exportée dans l'environnement est déployée en silence | un nom générique choisit ce qui tourne |
 | M526 | make développe une `REF` refusée en l'exportant | `$(shell …)` s'exécute |
 | M527 | la ligne ssh recopie `REF` dans la recette | make la développe avant qu'elle soit vérifiée |
-| M528 | règles approuvées sur la VM que la référence change : « gardé », puis git refuse | l'opérateur répare et efface les règles |
+| M528 | règles approuvées sur la VM que la référence change : « gardé », puis git refuse (depuis P1 : un fichier de règles modifié refusé sans dire comment migrer) | l'opérateur répare et efface les règles |
 
 Dix-neuf sur dix-neuf attrapés, trois tours (26/10, #202). Détail :
 [`../../infra/glorfindel-host/README.md`](../../infra/glorfindel-host/README.md), « Ce que la VM
 exécute » et « Redéployer H0 après M-3 ».
+
+### Les couches de règles (P1)
+
+La base livrée reste intacte ; les règles du client vivent dans leur couche,
+`~/.glorfindel/client_rules.yaml`, chargée par-dessus ; une règle exportée ne garde aucun
+identifiant. Dix-neuf mutants, mesurés par `tests/unit/test_rule_layers.py` et
+`test_proposed_rules.py` (M687 : `test_host_deploy.py`), tous attrapés au premier tour (26/10) ;
+M528 (M-3) suit le nouveau refus de `deploy.sh`, attrapé aussi :
+
+| Mutant | Défaut réinjecté | Effet |
+|---|---|---|
+| M670 | la règle approuvée écrite dans la base livrée | une mise à jour la perd |
+| M671 | la couche du client pas chargée | une mise à jour « perd » toutes les règles du client |
+| M672 | la règle de base gagne sur celle du client de même nom | la version du client ignorée |
+| M673 | `disable:` ignoré | une règle de base que le client a désactivée tourne |
+| M674 | une règle de base remplacée sans le dire | rien dans les notes ni la bannière |
+| M675 | les notes pas journalisées | le journal de la watch ne dit rien de la couche |
+| M676 | une couche illisible empêche la base de charger | la watch ne détecte plus rien |
+| M677 | une couche illisible lue vide, puis écrite par-dessus | les règles du client effacées |
+| M678 | la proposition approuvée avant que sa règle soit écrite | « approuvée » sans règle |
+| M679 | l'export garde toutes les clés | `workspace_id`, `resource_id`, `assets` exportés |
+| M680 | l'export garde les ID de ressource | un ID d'abonnement ou de VM part en amont |
+| M681 | l'export garde les GUID | un espace de travail que le déploiement ne liste pas part |
+| M682 | l'export garde les littéraux comparés à une colonne d'identité | `Computer == "vm-…"` part |
+| M683 | l'export garde les noms que le déploiement connaît | un nom de VM dans le nom de la règle part |
+| M684 | la dernière garde de l'export ne vérifie rien | ce que le remplacement manque part |
+| M685 | la migration ne prend que les règles nouvelles | une règle de base modifiée sur la VM perdue |
+| M686 | la migration oublie une règle de base supprimée sur la VM | elle revient |
+| M687 | H0 : un fichier de règles modifié repart dans l'image | les règles approuvées avant P1 jamais migrées |
+| M688 | la base montée en écriture dans la watch | un conteneur peut de nouveau l'écrire |
 
 ## Ce que les invariants ont trouvé
 

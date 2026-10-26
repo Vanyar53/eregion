@@ -48,8 +48,9 @@ from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 from pathlib import Path
 
-from analysis.campaign_changes import (ACTIONS, DETECTIONS, ChangeFact, Comparison, keys, pair,
-                                       render_section)
+from analysis.campaign_changes import (ACTIONS, DETECTIONS, FRACTION, PERCENT, RELATIVE,
+                                       RELATIVE_TOLERANCE, SECONDS, ChangeFact, Comparison, facing,
+                                       keys, pair, relative, render_section)
 from analysis.campaign_schema import run_report_refusal, scenario_refusal
 from annatar.runner.detection import _number, first_detection, read_records
 from eregion_core.exercise import exercises_dir, is_enrolled, last_moment, window_refusal
@@ -617,23 +618,40 @@ _NO_ACTION = re.compile(
 # fact, must be one of its cited facts' (D-2): a latency, a confidence, or a difference of
 # either — between the two sides of a change fact, or between two cited runs. Before the
 # numbers are read, what only names something is taken out of the sentence: the cited ids, a
-# technique (T1110.001), a run id (20261023T081120Z), a date (23/10, « 21 octobre »), a year
-# (2026, not followed by a unit), an hour (08:21), an ordinal (« 2ᵉ », « 1er »), and any word
-# that begins with a letter and holds a digit (chg-1, a VM's name). A count (« les 2
-# campagnes ») — a whole number followed by a word that is not a unit — may be at most the
-# number of runs the claim cites (a change fact counts its two sides). A heuristic, like the
-# reading of the response below (docs/analysis.md): an invented count within that bound passes.
+# technique (T1110.001), a run id (20261023T081120Z), a date (23/10, « 21 octobre », « entre
+# le 21 et le 23 octobre »), a year (2026, not followed by a unit), an hour (08:21), an ordinal
+# (« 2ᵉ », « 1er »), and any word that begins with a letter and holds a digit (chg-1, a VM's
+# name). A count (« les 2 campagnes ») — a whole number followed by a word that names what is
+# counted (_COUNTED: runs, campaigns, techniques…, never a unit nor « fois ») — may be at most
+# the number of runs the claim cites (a change fact counts its two sides). A number written
+# with a unit is of its unit's kind (_UNITS: a duration, converted to seconds, or a percent)
+# and matches only a fact's number of that kind; without a unit, any. A heuristic, like the
+# reading of the response below (docs/analysis.md): an invented count within that bound
+# passes, and so does a number written without a unit that happens to be a fact's.
 _MONTHS = ("janvier|février|fevrier|mars|avril|mai|juin|juillet|août|aout|septembre|octobre"
            "|novembre|décembre|decembre")
-_UNIT = r"(?:s|sec|secondes?|ms|min|minutes?|%|pts?|points?|pourcents?)(?![^\W\d_])"
+_UNITS = {  # a unit's words → its kind, and what one of it is in that kind
+    "ms|millisecondes?|milliseconds?": (SECONDS, 0.001),
+    "s|sec|secondes?|seconds?": (SECONDS, 1.0),
+    "min|minutes?": (SECONDS, 60.0),
+    "h|heures?|hours?": (SECONDS, 3600.0),
+    "%|pts?|points?|pourcents?|percent": (PERCENT, 1.0),
+}
+_UNIT = "(?:" + "|".join(_UNITS) + r")(?![^\W\d_])"
+_UNIT_OF = re.compile(r"\s*(?:" + "|".join(f"(?P<u{i}>{u})" for i, u in enumerate(_UNITS)) + r")(?![^\W\d_])",
+                      re.IGNORECASE)
 _NAMES = re.compile(
     r"\b\d{8}T\d{6}Z\b|\b\d{1,2}/\d{1,2}(?:/\d{2,4})?\b|\b\d{1,2}[:h]\d{2}(?::\d{2})?\b"
-    rf"|\b\d{{1,2}}(?:er)?\s+(?:{_MONTHS})\b"
+    rf"|\b\d{{1,2}}(?:er)?(?:\s*(?:,|-|–|\bet\b|\bau\b|\bà\b)\s*(?:le\s+)?\d{{1,2}}(?:er)?)*\s+(?:{_MONTHS})\b"
     rf"|\b(?:19|20)\d{{2}}\b(?![.,]\d)(?!\s*{_UNIT})"
     r"|\b\d+(?:ᵉ|e|er|ère|re|ème|eme)\b"
     r"|(?<![\w.,])[^\W\d_][\w.-]*\d[\w.-]*", re.IGNORECASE)
 _NUMBER = re.compile(r"\d+(?:[.,]\d+)?")
-_COUNTED = re.compile(rf"\s*(?!{_UNIT})[^\W\d_]", re.IGNORECASE)
+_COUNTED = re.compile(
+    r"\s+(?:(?:nouvel(?:le)?s?|nouveaux|derni(?:er|ère)s?|premi(?:er|ère)s?|autres?|mêmes?|seule?s?"
+    r"|new|last|first|other)\s+)?"
+    r"(?:runs?|campagnes?|campaigns?|techniques?|vms?|machines?|scénarios?|scenarios?|clés?|keys?"
+    r"|passages?|cibles?|targets?|exécutions?|tirages?)(?![^\W\d_])", re.IGNORECASE)
 
 
 def _value_number(value: str) -> float | None:
@@ -653,57 +671,83 @@ def _without_ids(c: Claim) -> str:
     return text
 
 
-def _written_numbers(c: Claim) -> list[tuple[float, bool]]:
+def _unit(text: str, end: int) -> tuple[str, float]:
+    """The kind of the number that ends at ``end`` and what one of its unit is in that kind
+    (« 2 min » → seconds, 60), or no kind (``""``) when no unit follows it."""
+    if (m := _UNIT_OF.match(text, end)) is None:
+        return "", 1.0
+    return next(of for i, of in enumerate(_UNITS.values()) if m.group(f"u{i}"))
+
+
+def _written_numbers(c: Claim) -> list[tuple[float, bool, str]]:
     """The numbers a claim writes, in its sentence and its ``value``, names taken out: each
-    with whether it is a count (a whole number followed by a word that is not a unit)."""
+    with whether it is a count (a whole number followed by what it counts, _COUNTED) and its
+    kind (its unit's, the number converted to it: « 2 min » is 120 s; ``""`` without one)."""
     text = _NAMES.sub(" ", _without_ids(c))
-    out = [(float(m.group().replace(",", ".")),
-            m.group().isdigit() and bool(_COUNTED.match(text, m.end())))
-           for m in _NUMBER.finditer(text)]
+    out = []
+    for m in _NUMBER.finditer(text):
+        kind, one = _unit(text, m.end())
+        out.append((float(m.group().replace(",", ".")) * one,
+                    m.group().isdigit() and bool(_COUNTED.match(text, m.end())), kind))
     if (value := _value_number(c.value)) is not None:
-        out.append((value, False))
+        out.append((value, False, ""))
     return out
 
 
-def _run_numbers(f: RunFact) -> list[tuple[float, float]]:
-    out = [(abs(f.latency_s), 1.0)] if isinstance(f.latency_s, (int, float)) else []
+def _run_numbers(f: RunFact) -> list[tuple[float, float, str]]:
+    out = [(abs(f.latency_s), 1.0, SECONDS)] if isinstance(f.latency_s, (int, float)) else []
     if f.confidence is not None:
-        out += [(f.confidence, 0.005), (f.confidence * 100, 0.5)]
+        out += [(f.confidence, 0.005, FRACTION), (f.confidence * 100, 0.5, PERCENT)]
     return out
 
 
-def _run_differences(runs: list[RunFact]) -> list[tuple[float, float]]:
+def _run_differences(runs: list[RunFact]) -> list[tuple[float, float, str]]:
     """The differences between two cited runs: their latencies, their confidences (as a
-    fraction and in percent) — what « augmente de 15 s » or « baisse de 2 points » says."""
+    fraction and in percent), and each relative to either run (which came first is not
+    known) — what « augmente de 15 s », « baisse de 2 points » or « +16 % » says."""
     out = []
     for i, a in enumerate(runs):
         for b in runs[i + 1:]:
-            if isinstance(a.latency_s, (int, float)) and isinstance(b.latency_s, (int, float)):
-                out.append((abs(a.latency_s - b.latency_s), 1.0))
-            if a.confidence is not None and b.confidence is not None:
-                d = abs(a.confidence - b.confidence)
-                out += [(d, 0.005), (d * 100, 0.5)]
+            for x, y, tol, kind in ((a.latency_s, b.latency_s, 1.0, SECONDS),
+                                    (a.confidence, b.confidence, 0.005, FRACTION)):
+                if not (isinstance(x, (int, float)) and isinstance(y, (int, float))):
+                    continue
+                d = abs(x - y)
+                out.append((d, tol, kind))
+                if kind == FRACTION:
+                    out.append((d * 100, 0.5, PERCENT))
+                out += [(r, RELATIVE_TOLERANCE, RELATIVE) for r in (relative(x, d), relative(y, d)) if r is not None]
     return out
 
 
 def _stray_numbers(c: Claim, cited) -> list[float]:
-    """The numbers the claim writes that none of its cited facts holds, and the counts above
-    the number of runs it cites."""
+    """The numbers the claim writes that none of its cited facts holds — of the number's kind
+    when it has a unit — and the counts above the number of runs it cites."""
     runs = [x for x in cited if isinstance(x, RunFact)]
     allowed = [n for x in cited
                for n in (x.numbers() if isinstance(x, ChangeFact) else _run_numbers(x))]
     allowed += _run_differences(runs)
     most = len(runs) + 2 * (len(cited) - len(runs))
-    return [v for v, count in _written_numbers(c)
+    return [v for v, count, kind in _written_numbers(c)
             if not (count and 1 <= v <= most)
-            and not any(abs(v - x) <= tol + 1e-9 for x, tol in allowed)]
+            and not any(abs(v - x) <= tol + 1e-9 for x, tol, of in allowed if _of_kind(kind, of))]
 
 
-# A change claim names only the actions and detections of its cited facts (D-2): « de
-# detected à missed » on a run detected twice is removed. Said with an action's identifier or
-# a detection's (``ACTIONS``, ``DETECTIONS``), as the facts write them; a French form
-# (« blocage ») is not read here — a negated mention is read too: « jamais snapshot » on a
-# fact with no snapshot is removed (docs/analysis.md, limits).
+def _of_kind(written: str, held: str) -> bool:
+    """A number written of kind ``written`` (``""``: without a unit) may be a fact's number of
+    kind ``held``: of its kind, any without a unit — but a relative change only when written in
+    percent (« +16 % »: a bare 3 is no relative change of 2,6 %)."""
+    if held == RELATIVE:
+        return written == PERCENT
+    return written in ("", held)
+
+
+# A change claim, a trend, and an observation citing a change fact name only the actions and
+# detections of their cited facts (D-2): « de detected à missed » on a run detected twice is
+# removed. Said with an action's identifier or a detection's (``ACTIONS``, ``DETECTIONS``), as
+# the facts write them; a French form (« blocage ») is not read here — a negated mention is
+# read too: « jamais snapshot » on a fact with no snapshot is removed (docs/analysis.md,
+# limits).
 _FACT_WORD = re.compile(r"(?<![\w-])(" + "|".join(ACTIONS + DETECTIONS) + r")(?![\w-])", re.IGNORECASE)
 
 
@@ -723,11 +767,14 @@ def _alien_word(c: Claim, cited) -> str:
 
 
 # The way a change is said, before → after (D-2): « de X à Y » or « X → Y », with two
-# latencies or confidences, two actions or two detections, read on a claim that cites a
-# change fact. Numbers the wrong way round (« de 106,9 s à 91,9 s » when it went from 91,9 to
-# 106,9), or an action or a detection that no cited fact goes from and to (« de l'isolement au
-# blocage » when it went from blocking to isolating), are removed. The other ways of saying
-# it (« plus tard », « cette fois, pas avant », the escalation) are not read (docs/analysis.md).
+# latencies or confidences (a unit or not, a date in brackets after the first), two actions
+# or two detections, read on a claim that cites a change fact, and on a trend — its runs of
+# an earlier campaign facing those of this one, of the same technique (_faced). Numbers the
+# wrong way round (« de 106,9 s à 91,9 s » when it went from 91,9 to 106,9, and no cited fact
+# went that way), or an action or a detection that no cited fact goes from and to (« de
+# l'isolement au blocage » when it went from blocking to isolating), are removed. The other
+# ways of saying it (« plus tard », « cette fois, pas avant », the escalation, dates in the
+# wrong order) are not read (docs/analysis.md).
 _ACTION_FORMS = {
     "isolate_vm": ("isolement", "isolation", "isoler"),
     "block_suspicious_ip": ("blocage", "bloquer"),
@@ -743,9 +790,10 @@ _FROM_TO = re.compile(
     rf"{_ARTICLE}(?P<b>{_FORM})(?![\w-])"
     rf"|(?<![\w-])(?P<c>{_FORM})(?![\w-])\s*(?:→|->)\s*(?P<d>{_FORM})(?![\w-])", re.IGNORECASE)
 _NUM = r"\d+(?:[.,]\d+)?"
+_BRACKETS = r"(?:\s*\([^()]*\))?"
 _FROM_TO_NUMBERS = re.compile(
-    rf"\bde\s+(?P<a>{_NUM})\s*{_UNIT}?\s+à\s+(?P<b>{_NUM})"
-    rf"|(?P<c>{_NUM})\s*{_UNIT}?\s*(?:→|->)\s*(?P<d>{_NUM})", re.IGNORECASE)
+    rf"\bde\s+(?P<a>{_NUM})\s*(?:{_UNIT})?{_BRACKETS}\s+à\s+(?P<b>{_NUM})"
+    rf"|(?P<c>{_NUM})\s*(?:{_UNIT})?{_BRACKETS}\s*(?:→|->)\s*(?P<d>{_NUM})", re.IGNORECASE)
 
 
 def _wrong_way(c: Claim, changed: list[ChangeFact]) -> str:
@@ -757,13 +805,31 @@ def _wrong_way(c: Claim, changed: list[ChangeFact]) -> str:
         a, b = (_FORM_OF[w.lower()] for w in (m.group("a") or m.group("c"), m.group("b") or m.group("d")))
         if a != b and (a, b) not in held:
             return f"the cited change facts hold no change from {a} to {b}"
+    sides = [n for f in changed for n in f.ordered_numbers()]
     for m in _FROM_TO_NUMBERS.finditer(_NAMES.sub(" ", text)):
         x, y = (float(v.replace(",", ".")) for v in (m.group("a") or m.group("c"), m.group("b") or m.group("d")))
-        for before, after, tol in (n for f in changed for n in f.ordered_numbers()):
-            near = lambda u, v: abs(u - v) <= tol + 1e-9  # noqa: E731
-            if near(x, after) and near(y, before) and not (near(x, before) and near(y, after)):
-                return f"the change is said the wrong way round ({x:g} → {y:g}: it went from {before:g} to {after:g})"
+        said = [(before, after) for before, after, tol in sides
+                if _near(x, after, tol) and _near(y, before, tol)]
+        if said and not any(_near(x, before, tol) and _near(y, after, tol) for before, after, tol in sides):
+            before, after = said[0]
+            return f"the change is said the wrong way round ({x:g} → {y:g}: it went from {before:g} to {after:g})"
+        if any(_near(x, before, tol) for before, _, tol in sides) and not any(
+                _near(x, before, tol) and _near(y, after, tol) for before, after, tol in sides):
+            return f"the cited facts hold no change from {x:g} to {y:g}"
     return ""
+
+
+def _near(u: float, v: float, tol: float) -> bool:
+    return abs(u - v) <= tol + 1e-9
+
+
+def _faced(cited, own: set[str]) -> list[ChangeFact]:
+    """What a trend says changed: each cited run of an earlier campaign facing each cited run
+    of this one (``own``) of the same technique — on any VM, from any earlier campaign, so
+    that a true trend is never barred for a pairing it did not mean."""
+    runs = [x for x in cited if isinstance(x, RunFact)]
+    return [facing(b, a) for a in runs if a.run_id in own
+            for b in runs if b.run_id not in own and b.ttp == a.ttp]
 
 
 def verify(claims: list[Claim], facts: list[RunFact], prior: list[RunFact],
@@ -806,9 +872,10 @@ def verify(claims: list[Claim], facts: list[RunFact], prior: list[RunFact],
         elif (c.kind == "change" and c.value and _value_number(c.value) is None
               and c.value not in set().union(*(x.words() for x in changed))):
             c.rejected = f"{c.value!r} is not in the cited change facts"
-        elif c.kind == "change" and (alien := _alien_word(c, cited)):
-            c.rejected = f"{alien!r} is not in the cited change facts"
-        elif changed and (wrong := _wrong_way(c, changed)):
+        elif (c.kind in ("trend", "change") or changed) and (alien := _alien_word(c, cited)):
+            c.rejected = f"{alien!r} is not in the cited {'change facts' if changed else 'runs'}"
+        elif (sides := changed or (_faced(cited, own) if c.kind == "trend" else [])) and (
+                wrong := _wrong_way(c, sides)):
             c.rejected = wrong
         if not c.rejected and (unknown := [x for x in cited if x.decision_unknown]):
             # An unknown decision is never « none » (#167). A decision claim never gets

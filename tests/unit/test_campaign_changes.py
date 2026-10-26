@@ -290,6 +290,15 @@ KEPT = [
     {"kind": "trend", "text": "Au 2ᵉ passage comme au 1er, T1110.001 est détectée.", "runs": ["R2", "P1"]},
     {"kind": "change", "text": "En 2026, T1110.001 passe du blocage à l'isolement.", "runs": ["chg-2"]},
     {"kind": "observation", "text": "Sur la force brute, la confiance baisse de 2 points.", "runs": ["chg-2"]},
+    # second review of D-2: a range of dates is a date (M537), a relative change in percent a
+    # fact's (M538), a true trend said « de X à Y » is never barred
+    {"kind": "observation", "text": "La décision sur T1110.001 a changé entre le 21 et le 23 octobre.",
+     "runs": ["chg-2"]},
+    {"kind": "change", "text": "La latence augmente de 15,0 s (+16 %).", "runs": ["chg-2"]},
+    {"kind": "trend", "text": "La latence de T1110.001 augmente de 16 %.", "runs": ["R2", "P1"]},
+    {"kind": "trend", "text": "T1110.001 passe de block_suspicious_ip à isolate_vm, de 0,8 à 0,78.",
+     "runs": ["R2", "P1"]},
+    {"kind": "trend", "text": "Les 2 dernières campagnes détectent T1110.001.", "runs": ["R2", "P1"]},
 ]
 REMOVED = [
     ({"kind": "change", "text": "La force brute est vue 40 s plus tard.", "runs": ["chg-2"]},
@@ -325,18 +334,51 @@ REMOVED = [
      "the change is said the wrong way round (106.9 → 91.9: it went from 91.9 to 106.9)"),
     ({"kind": "change", "text": "La confiance passe de 78 % à 80 %.", "runs": ["chg-2"]},
      "the change is said the wrong way round (78 → 80: it went from 80 to 78)"),
+    # second review of D-2: « de X à Y » without a unit (M530), or with a date in brackets…
+    ({"kind": "change", "text": "La confiance passe de 0,78 à 0,8.", "runs": ["chg-2"]},
+     "the change is said the wrong way round (0.78 → 0.8: it went from 0.8 to 0.78)"),
+    ({"kind": "change", "text": "La latence passe de 106,9 à 91,9.", "runs": ["chg-2"]},
+     "the change is said the wrong way round (106.9 → 91.9: it went from 91.9 to 106.9)"),
+    ({"kind": "change", "text": "Elle passe de 106,9 s (23/10) à 91,9 s (21/10).", "runs": ["chg-2"]},
+     "the change is said the wrong way round (106.9 → 91.9: it went from 91.9 to 106.9)"),
+    # … from a fact's side to a number that is not its other side (M539)…
+    ({"kind": "change", "text": "La latence passe de 91,9 s à 15 s.", "runs": ["chg-2"]},
+     "the cited facts hold no change from 91.9 to 15"),
+    # … a number is of its unit's kind (M535), a duration converted (M536); only what is
+    # counted makes a count (M534)…
+    ({"kind": "change", "text": "T1110.001 est vue en 2 s.", "runs": ["chg-2"]},
+     "a number is not in the cited facts (2)"),
+    ({"kind": "change", "text": "La force brute est vue 15 ms plus tard.", "runs": ["chg-2"]},
+     "a number is not in the cited facts (0.015)"),
+    ({"kind": "change", "text": "La force brute est vue 1 heure plus tard.", "runs": ["chg-2"]},
+     "a number is not in the cited facts (3600)"),
+    # … a trend says the way its runs went (M531) and names their actions only (M532), an
+    # observation citing a change fact its facts' (M533)
+    ({"kind": "trend", "text": "La latence de T1110.001 passe de 106,9 s à 91,9 s.", "runs": ["R2", "P1"]},
+     "the change is said the wrong way round (106.9 → 91.9: it went from 91.9 to 106.9)"),
+    ({"kind": "trend", "text": "T1110.001 passe de l'isolement au blocage.", "runs": ["R2", "P1"]},
+     "the cited change facts hold no change from isolate_vm to block_suspicious_ip"),
+    ({"kind": "trend", "text": "T1136.001 passe de isolate_vm à snapshot.", "runs": ["R1", "R2", "P1", "P2"]},
+     "the cited change facts hold no change from isolate_vm to snapshot"),
+    ({"kind": "trend", "text": "Sur T1110.001, wipe_storage cette fois.", "runs": ["R2", "P1"]},
+     "'wipe_storage' is not in the cited runs"),
+    ({"kind": "observation", "text": "Glorfindel a pris un wipe_storage sur T1110.001.", "runs": ["chg-2"]},
+     "'wipe_storage' is not in the cited change facts"),
 ]
 CLAIMS = KEPT + [c for c, _ in REMOVED]
 
 
 def test_a_difference_without_its_fact_is_removed(tmp_path, index):
-    """M273–M277, M510, M512–M518: a change claim cites a change fact, and each number it
-    writes is one of the cited facts' (a latency, a confidence, a difference, in seconds, as
-    a fraction or in percent); a trend too, and an observation that cites a change fact. A
-    trend may write the difference of two cited runs; a count, at most the runs it cites.
-    Technique and run ids, dates (in figures or in words), years, ordinals and VM names are
-    not numbers. A change names only its facts' actions and detections, and says a change
-    the way it went."""
+    """M273–M277, M510, M512–M518, M530–M539: a change claim cites a change fact, and each
+    number it writes is one of the cited facts' (a latency, a confidence, a difference, in
+    seconds, as a fraction or in percent, a relative change in percent) — of its unit's kind,
+    a duration converted to seconds; a trend too, and an observation that cites a change fact.
+    A trend may write the difference of two cited runs; a count of runs, campaigns,
+    techniques…, at most the runs it cites. Technique and run ids, dates (in figures, in words,
+    a range), years, ordinals and VM names are not numbers. A change, a trend, and an
+    observation citing a change fact name only their facts' actions and detections, and say a
+    change the way it went: a trend, its earlier runs facing its runs of this campaign of the
+    same technique."""
     _, cdirs = _bench(tmp_path)
     _index_all(cdirs, "C0")
     report = _report(cdirs["C1"], CLAIMS)
@@ -361,6 +403,7 @@ def _swing(**after):
     ("De missed à detected.", {"detection": "missed"},
      "the cited change facts hold no change from missed to detected"),
     ("block_suspicious_ip → isolate_vm, 0,8 → 0,78.", {}, ""),
+    ("0,78 → 0,8.", {}, "the change is said the wrong way round (0.78 → 0.8: it went from 0.8 to 0.78)"),
     ("isolate_vm → block_suspicious_ip.", {}, "the cited change facts hold no change from isolate_vm to "
                                               "block_suspicious_ip"),
     ("91,9 s → 106,9 s.", {}, ""),

@@ -59,6 +59,11 @@ RENAME = object()
 # A mutant whose "old" and "new" are tuples makes several edits in its file, pair by pair
 # (old[i] -> new[i]), each old text matching exactly once — for a bug that needs two places.
 
+# D-2: the line of analysis/campaign_report.py that reads a date in words, a range of them too
+# (M513, M537).
+_DATES_LINE = (r'''    rf"|\b\d{{1,2}}(?:er)?(?:\s*(?:,|-|–|\bet\b|\bau\b|\bà\b)\s*(?:le\s+)?\d{{1,2}}(?:er)?)*'''
+               r'''\s+(?:{_MONTHS})\b"''' + "\n")
+
 # (id, bug class, file, text in the code today, text that re-introduces the bug[, why
 # the invariants can't see it])
 MUTANTS = [
@@ -908,7 +913,7 @@ MUTANTS = [
     ("M512", "a trend may not write the difference of two cited runs (D-2)", "analysis/campaign_report.py",
      "    allowed += _run_differences(runs)\n", ""),
     ("M513", "a date in words, a year or an ordinal is read as a number (D-2)", "analysis/campaign_report.py",
-     (r'''    rf"|\b\d{{1,2}}(?:er)?\s+(?:{_MONTHS})\b"''' + "\n",
+     (_DATES_LINE,
       r'''    rf"|\b(?:19|20)\d{{2}}\b(?![.,]\d)(?!\s*{_UNIT})"''' + "\n",
       r'''    r"|\b\d+(?:ᵉ|e|er|ère|re|ème|eme)\b"''' + "\n"),
      ("", "", "")),
@@ -919,17 +924,57 @@ MUTANTS = [
      "            if not (count and 1 <= v <= most)\n", "            if not (count and 1 <= v)\n"),
     ("M516", "a change claim names an action or a detection its facts do not hold (D-2)",
      "analysis/campaign_report.py",
-     '        elif c.kind == "change" and (alien := _alien_word(c, cited)):\n'
-     '            c.rejected = f"{alien!r} is not in the cited change facts"\n', ""),
+     '        elif (c.kind in ("trend", "change") or changed) and (alien := _alien_word(c, cited)):\n'
+     """            c.rejected = f"{alien!r} is not in the cited {'change facts' if changed else 'runs'}"\n""", ""),
     ("M517", "a change from one action or detection to another no fact holds stays (D-2)",
      "analysis/campaign_report.py",
      "        if a != b and (a, b) not in held:\n", "        if False:\n"),
     ("M518", "a change said the wrong way round (« de 106,9 s à 91,9 s ») stays (D-2)",
      "analysis/campaign_report.py",
-     "            if near(x, after) and near(y, before) and not (near(x, before) and near(y, after)):\n",
-     "            if False:\n"),
+     "        if said and not any(_near(x, before, tol) and _near(y, after, tol) for before, after, tol in sides):\n",
+     "        if False:\n"),
     ("M519", "a run without its id is said only in the previous campaign (D-2)", "analysis/campaign_changes.py",
      "        if self.played_before and self.played_after:\n", "        if self.before_run and self.after_run:\n"),
+    # D-2, after its second review: « de X à Y » read without a unit; a trend says the way its
+    # runs went and names their actions only, an observation citing a change fact its facts';
+    # only what is counted makes a count; a number is of its unit's kind, a duration
+    # converted; a range of dates is a date; a relative change in percent is a fact's; « de X
+    # à Y » from a fact's side lands on its other side.
+    ("M530", "« de 0,78 à 0,8 », without a unit, is not read the wrong way round (D-2)",
+     "analysis/campaign_report.py",
+     (r'''    rf"\bde\s+(?P<a>{_NUM})\s*(?:{_UNIT})?{_BRACKETS}\s+à\s+(?P<b>{_NUM})"''' + "\n",
+      r'''    rf"|(?P<c>{_NUM})\s*(?:{_UNIT})?{_BRACKETS}\s*(?:→|->)\s*(?P<d>{_NUM})", re.IGNORECASE)''' + "\n"),
+     (r'''    rf"\bde\s+(?P<a>{_NUM})\s*{_UNIT}?{_BRACKETS}\s+à\s+(?P<b>{_NUM})"''' + "\n",
+      r'''    rf"|(?P<c>{_NUM})\s*{_UNIT}?{_BRACKETS}\s*(?:→|->)\s*(?P<d>{_NUM})", re.IGNORECASE)''' + "\n")),
+    ("M531", "a trend is not read for the way its runs went (D-2)", "analysis/campaign_report.py",
+     '        elif (sides := changed or (_faced(cited, own) if c.kind == "trend" else [])) and (\n',
+     "        elif (sides := changed) and (\n"),
+    ("M532", "a trend names an action or a detection its runs do not hold (D-2)", "analysis/campaign_report.py",
+     '        elif (c.kind in ("trend", "change") or changed) and (alien',
+     '        elif (c.kind in ("change",) or changed) and (alien'),
+    ("M533", "an observation citing a change fact names an action its facts do not hold (D-2)",
+     "analysis/campaign_report.py",
+     '        elif (c.kind in ("trend", "change") or changed) and (alien',
+     '        elif c.kind in ("trend", "change") and (alien'),
+    ("M534", "any word after a whole number makes it a count (« 1 heure plus tard ») (D-2)",
+     "analysis/campaign_report.py",
+     r'''    r"|passages?|cibles?|targets?|exécutions?|tirages?)(?![^\W\d_])", re.IGNORECASE)''' + "\n",
+     r'''    r"|passages?|cibles?|targets?|exécutions?|tirages?)(?![^\W\d_])|\s*[^\W\d_]", re.IGNORECASE)''' + "\n"),
+    ("M535", "a number's unit is not read: « 2 s » passes for a 2-point difference (D-2)",
+     "analysis/campaign_report.py",
+     '    return written in ("", held)\n', "    return True\n"),
+    ("M536", "a duration is not converted: « 15 ms » passes for 15 s (D-2)", "analysis/campaign_report.py",
+     '        out.append((float(m.group().replace(",", ".")) * one,\n',
+     '        out.append((float(m.group().replace(",", ".")),\n'),
+    ("M537", "a range of dates is read as numbers: « entre le 21 et le 23 octobre » barred (D-2)",
+     "analysis/campaign_report.py",
+     _DATES_LINE, r'''    rf"|\b\d{{1,2}}(?:er)?\s+(?:{_MONTHS})\b"''' + "\n"),
+    ("M538", "a relative change is no fact's number: « +16 % » barred (D-2)", "analysis/campaign_changes.py",
+     "        out += [(r, RELATIVE_TOLERANCE, RELATIVE)\n", "        out += [] and [(r, RELATIVE_TOLERANCE, RELATIVE)\n"),
+    ("M539", "« de 91,9 s à 15 s », from a fact's side to no other side, stays (D-2)",
+     "analysis/campaign_report.py",
+     "        if any(_near(x, before, tol) for before, _, tol in sides) and not any(\n",
+     "        if False and not any(\n"),
 ]
 
 # Mutants measured by other tests than the invariants (their lot's own).
@@ -988,6 +1033,7 @@ TESTS.update({f"M{n}": "tests/unit/test_run_channel.py" for n in range(240, 246)
 TESTS.update({mid: "tests/unit/test_gothmog.py" for mid in ("M241", "M246")})
 TESTS.update({f"M{n}": "tests/unit/test_campaign_changes.py" for n in range(260, 280)})  # D-2
 TESTS.update({f"M{n}": "tests/unit/test_campaign_changes.py" for n in range(510, 520)})  # D-2, review
+TESTS.update({f"M{n}": "tests/unit/test_campaign_changes.py" for n in range(530, 540)})  # D-2, 2nd review
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

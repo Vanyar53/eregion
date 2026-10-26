@@ -21,10 +21,25 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 # A number of seconds written in a claim matches a fact's within this (a model rounds
-# 106,9 s to 107 s); a confidence, within half a point (0,78 → « 78 % »).
+# 106,9 s to 107 s); a confidence, within half a point (0,78 → « 78 % »); a relative change,
+# within half a percent (+16,3 % → « +16 % »).
 SECONDS_TOLERANCE = 1.0
 FRACTION_TOLERANCE = 0.005
 PERCENT_TOLERANCE = 0.5
+RELATIVE_TOLERANCE = 0.5
+
+# What a fact's number is: a duration, in seconds; a confidence, or a difference of two, as a
+# fraction (0,78) or in percent (78 %, « 2 points »); or a change relative to its before
+# (« +16 % »). A number written with a unit matches only a fact's number of its kind, a
+# relative change only a number written in percent (analysis/campaign_report.py).
+SECONDS, FRACTION, PERCENT, RELATIVE = "s", "f", "%", "r"
+
+
+def relative(before: float | None, delta: float | None) -> float | None:
+    """A change relative to its before, in percent: ``delta`` over ``before``."""
+    if not before or delta is None:
+        return None
+    return abs(delta / before) * 100
 
 
 # The actions a decision may name (glorfindel/actions.py AUTONOMOUS_ACTIONS and
@@ -107,15 +122,19 @@ class ChangeFact:
         """Why a side's decision is unknown, when one is."""
         return self.unknown_before or self.unknown_after
 
-    def numbers(self) -> list[tuple[float, float]]:
-        """The numbers a claim citing this fact may write, each with its tolerance: the
-        latencies and their difference (seconds), the confidences and their difference, as
-        a fraction (0,78) or in percent (78)."""
-        out = [(abs(v), SECONDS_TOLERANCE)
+    def numbers(self) -> list[tuple[float, float, str]]:
+        """The numbers a claim citing this fact may write, each with its tolerance and its
+        kind: the latencies and their difference (seconds), the confidences and their
+        difference, as a fraction (0,78) or in percent (78), and the relative change of each
+        (percent: « +16 % »)."""
+        out = [(abs(v), SECONDS_TOLERANCE, SECONDS)
                for v in (self.latency_before, self.latency_after, self.latency_delta) if v is not None]
         for v in (self.confidence_before, self.confidence_after, self.confidence_delta):
             if v is not None:
-                out += [(abs(v), FRACTION_TOLERANCE), (abs(v) * 100, PERCENT_TOLERANCE)]
+                out += [(abs(v), FRACTION_TOLERANCE, FRACTION), (abs(v) * 100, PERCENT_TOLERANCE, PERCENT)]
+        out += [(r, RELATIVE_TOLERANCE, RELATIVE)
+                for r in (relative(self.latency_before, self.latency_delta),
+                          relative(self.confidence_before, self.confidence_delta)) if r is not None]
         return out
 
     def words(self) -> set[str]:
@@ -203,20 +222,26 @@ def pair(before, after, previous: str) -> list[ChangeFact]:
     keys it does not have."""
     b, a = _by_key(before), _by_key(after)
     order = sorted(set(b) | set(a), key=lambda k: (0, a[k].seq) if k in a else (1, b[k].seq))
-    out = []
-    for i, (ttp, vm, n) in enumerate(order, 1):
-        x, y = b.get((ttp, vm, n)), a.get((ttp, vm, n))
-        out.append(ChangeFact(
-            fact_id=f"chg-{i}", ttp=ttp, vm=vm, nth=n, previous_campaign=previous,
-            before_run=x.run_id if x else "", after_run=y.run_id if y else "",
-            detection_before=x.detection if x else "", detection_after=y.detection if y else "",
-            latency_before=x.latency_s if x else None, latency_after=y.latency_s if y else None,
-            decision_before=x.decision if x else "", decision_after=y.decision if y else "",
-            confidence_before=x.confidence if x else None, confidence_after=y.confidence if y else None,
-            escalated_before=x.escalated if x else None, escalated_after=y.escalated if y else None,
-            unknown_before=x.decision_unknown if x else "", unknown_after=y.decision_unknown if y else "",
-            played_before=x is not None, played_after=y is not None))
-    return out
+    return [facing(b.get((ttp, vm, n)), a.get((ttp, vm, n)), f"chg-{i}", previous, (ttp, vm, n))
+            for i, (ttp, vm, n) in enumerate(order, 1)]
+
+
+def facing(x, y, fact_id: str = "", previous: str = "", key: tuple | None = None) -> ChangeFact:
+    """The change fact of run ``x`` (before, or ``None``) facing run ``y`` (after, or
+    ``None``). Without ``key``, the technique and VM are the runs' own: what a trend's two
+    cited runs say (analysis/campaign_report.py ``verify``)."""
+    run = y or x
+    ttp, vm, n = key or (run.ttp, (run.target or "").lower(), 1)
+    return ChangeFact(
+        fact_id=fact_id, ttp=ttp, vm=vm, nth=n, previous_campaign=previous,
+        before_run=x.run_id if x else "", after_run=y.run_id if y else "",
+        detection_before=x.detection if x else "", detection_after=y.detection if y else "",
+        latency_before=x.latency_s if x else None, latency_after=y.latency_s if y else None,
+        decision_before=x.decision if x else "", decision_after=y.decision if y else "",
+        confidence_before=x.confidence if x else None, confidence_after=y.confidence if y else None,
+        escalated_before=x.escalated if x else None, escalated_after=y.escalated if y else None,
+        unknown_before=x.decision_unknown if x else "", unknown_after=y.decision_unknown if y else "",
+        played_before=x is not None, played_after=y is not None)
 
 
 # ── The section, rendered by the code ───────────────────────────────────────────────────

@@ -73,6 +73,13 @@ RENAME = object()
 # A mutant whose "old" and "new" are tuples makes several edits in its file, pair by pair
 # (old[i] -> new[i]), each old text matching exactly once — for a bug that needs two places.
 
+# D-2: the lines of analysis/campaign_report.py that read a date in words, a range of them too
+# (M513, M537).
+_DATES_FIRST = r'''    rf"|(?:\b(?:le|les|entre|du|des|aux|au|between|from|on|the)\s+{_DAY}(?:er)?"''' + "\n"
+_DATES_LINE = (_DATES_FIRST
+               + r'''    rf"(?:\s*(?:,|-|–|\bet\b|\bau\b|\bà\b|\band\b|\bto\b)\s*(?:(?:le|du|des)\s+)?{_DAY}(?:er)?)+"''' + "\n"
+               r'''    rf"|\b\d{{1,2}}(?:er|st|nd|rd|th)?)\s+(?:{_MONTHS})\b"''' + "\n")
+
 # (id, bug class, file, text in the code today, text that re-introduces the bug[, why
 # the invariants can't see it])
 MUTANTS = [
@@ -568,7 +575,8 @@ MUTANTS = [
      "            if c.kind not in _DETECTION_KINDS and _RESPONSE.search(c.text) and not _UNKNOWN.search(c.text):\n",
      "            if c.kind not in _DETECTION_KINDS and not _UNKNOWN.search(c.text):\n"),
     ("M163", "a claim that Glorfindel acted on a run whose decision is unknown is kept (#167, review 4)",
-     CREP, "            elif _ACTED.search(told):\n", "            elif False:\n"),
+     CREP, "            elif _ACTED.search(told) and not all(\n",
+     "            elif False and not all(\n"),   # followed D-2's change of the line (A1 merge)
     ("M164", "a missed run whose window holds a decision reads as « Glorfindel did not act » "
      "(#167, review 4)", CREP,
      '        return {}, (LATE_OR_OTHER if dec else ""), until\n', '        return {}, "", until\n'),
@@ -894,6 +902,173 @@ MUTANTS = [
      ('ADAPTERS = {\n    "eregion_core/inscription.py": "azure",\n', "")),
     ("M463", "a delete through the façade silently ignored: mock.patch leaves its value everywhere (A1 review)",
      FAC, "        if _binders(name):\n            home = ", "        if _binders(name):\n            return\n            home = "),
+    # D-2 (#184) — what changed since the previous campaign: the previous campaign chosen by
+    # its rule (done, earlier, a shared key: a technique on a VM), the runs joined exactly by
+    # key, the section rendered by the code, a difference that does not come from a fact
+    # removed by the check, and the index of past campaigns put in without losing a fact.
+    ("M260", "an aborted campaign is chosen as the previous one (D-2)", "analysis/campaign_report.py",
+     ('    res = coll.get(where={"campaign_state": "done"}, limit=_MAX_ROWS)\n',
+      '        if (meta.get("campaign_state") != "done" or not cid or cid == campaign.campaign_id\n'),
+     ("    res = coll.get(limit=_MAX_ROWS)\n",
+      "        if (not cid or cid == campaign.campaign_id\n")),
+    ("M261", "a later campaign is chosen as the previous one (D-2)", "analysis/campaign_report.py",
+     "                or not isinstance(started, (int, float)) or not started < campaign.started):\n",
+     "                or not isinstance(started, (int, float))):\n"),
+    ("M262", "a campaign with no key in common is chosen as the previous one (D-2)", "analysis/campaign_report.py",
+     "    shared = [(started, cid) for cid, (started, runs) in found.items() if keys(runs) & mine]\n",
+     "    shared = [(started, cid) for cid, (started, runs) in found.items()]\n"),
+    ("M263", "the key leaves the VM out: a technique on another VM faces it (D-2)", "analysis/campaign_changes.py",
+     "    return (ttp, vm) if ttp and vm else None\n", '    return (ttp, "") if ttp else None\n'),
+    ("M264", "the earliest qualifying campaign is chosen, not the latest (D-2)", "analysis/campaign_report.py",
+     "    _, cid = max(shared)\n", "    _, cid = min(shared)\n"),
+    ("M265", "without a previous campaign, the section says nothing of why (D-2)", "analysis/campaign_changes.py",
+     '        return lines + [f"*Aucune campagne précédente : {comparison.why_none}.*"]\n',
+     "        return lines\n"),
+    ("M266", "the VM of the key is compared with its case (D-2)", "analysis/campaign_changes.py",
+     '    ttp, vm = getattr(fact, "ttp", "") or "", (getattr(fact, "target", "") or "").lower()\n',
+     '    ttp, vm = getattr(fact, "ttp", "") or "", (getattr(fact, "target", "") or "")\n'),
+    ("M267", "the keys of one side only are not listed (D-2)", "analysis/campaign_changes.py",
+     "    order = sorted(set(b) | set(a),", "    order = sorted(set(b) & set(a),"),
+    ("M268", "a skipped scenario is a key: it played nothing (D-2)", "analysis/campaign_changes.py",
+     '    if getattr(fact, "status", "") != "executed":\n        return None\n', ""),
+    ("M269", "the report indexes its runs without the campaign's state and start (D-2)",
+     "analysis/campaign_report.py",
+     "    index_facts(facts, index_path, info)\n", "    index_facts(facts, index_path)\n"),
+    ("M270", "a key played twice pairs the last run with the first (D-2)", "analysis/campaign_changes.py",
+     "for n, f in enumerate(runs, 1)}", "for n, f in enumerate(reversed(runs), 1)}"),
+    ("M271", "the report leaves the computed section out (D-2)", "analysis/campaign_report.py",
+     '        lines += ["", *render_section(report.comparison)]\n', "        pass\n"),
+    ("M272", "the model never sees the change facts it may cite (D-2)", "analysis/campaign_report.py",
+     '            rows = "\\n".join(json.dumps(x.row(), ensure_ascii=False) for x in comparison.changes)\n',
+     '            rows = ""\n'),
+    ("M273", "a change claim that cites no change fact stays (D-2)", "analysis/campaign_report.py",
+     '        elif c.kind == "change" and not changed:\n            c.rejected = "a change claim cites no change fact"\n',
+     ""),
+    ("M274", "a difference no cited fact holds stays (D-2)", "analysis/campaign_report.py",
+     "(stray := _stray_numbers(c, cited)):", "(stray := []):"),
+    ("M275", "a trend's numbers are not checked against its facts (D-2)", "analysis/campaign_report.py",
+     '        elif (c.kind in ("trend", "change") or changed) and (stray',
+     '        elif (c.kind in ("change",) or changed) and (stray'),
+    ("M276", "a technique, a run id or a VM name is read as a number (D-2)", "analysis/campaign_report.py",
+     '    text = _NAMES.sub(" ", _without_ids(c))\n', "    text = _without_ids(c)\n"),
+    ("M277", "a change claim's value names an action the cited facts do not hold (D-2)",
+     "analysis/campaign_report.py",
+     "              and c.value not in set().union(*(x.words() for x in changed))):",
+     "              and False):"),
+    ("M278", "putting a campaign in again recomputes the facts its report saw (D-2)", "analysis/campaign_index.py",
+     "        if fact is not None and fact.run_id == rid and fact.campaign_id == info.campaign_id:\n",
+     "        if False:\n"),
+    ("M279", "a campaign still running is put into the index (D-2)", "analysis/campaign_index.py",
+     "    if info.state not in ENDED:\n", "    if False:\n"),
+    # D-2, after its review: an observation citing a change fact has its numbers checked; an
+    # unknown decision is never said acted through a change fact; a true trend is never
+    # barred (a difference of two cited runs, a date in words, a year, an ordinal, a count);
+    # a change names its facts' actions and detections, the way it went; a run without its id
+    # is on its side.
+    ("M510", "an observation citing a change fact has its numbers unchecked (D-2)", "analysis/campaign_report.py",
+     '        elif (c.kind in ("trend", "change") or changed) and (stray',
+     '        elif c.kind in ("trend", "change") and (stray'),
+    ("M511", "a change fact lets an unknown decision be said acted, whatever its sides (D-2)",
+     "analysis/campaign_report.py",
+     "            elif _ACTED.search(told) and not all(\n"
+     "                    isinstance(x, ChangeFact) and x.known_beside_unknown() for x in unknown):\n",
+     "            elif _ACTED.search(told) and not changed:\n"),
+    ("M512", "a trend may not write the difference of two cited runs (D-2)", "analysis/campaign_report.py",
+     "    allowed += _run_differences(runs)\n", ""),
+    ("M513", "a date in words, a year or an ordinal is read as a number (D-2)", "analysis/campaign_report.py",
+     (_DATES_LINE,
+      r'''    rf"|\b(?:19|20)\d{{2}}\b(?![.,]\d)(?!\s*{_UNIT})"''' + "\n",
+      r'''    r"|\b\d+(?:ᵉ|e|er|ère|re|ème|eme)\b"''' + "\n"),
+     ("", "", "")),
+    ("M514", "a count of what a claim cites is read as a number a fact must hold (D-2)",
+     "analysis/campaign_report.py",
+     "    most = len(runs) + 2 * (len(cited) - len(runs))\n", "    most = 0\n"),
+    ("M515", "a count above the runs a claim cites stays (D-2)", "analysis/campaign_report.py",
+     "            if not (count and 1 <= v <= most)\n", "            if not (count and 1 <= v)\n"),
+    ("M516", "a change claim names an action or a detection its facts do not hold (D-2)",
+     "analysis/campaign_report.py",
+     '        elif (c.kind in ("trend", "change") or changed) and (alien := _alien_word(c, cited)):\n'
+     """            c.rejected = f"{alien!r} is not in the cited {'change facts' if changed else 'runs'}"\n""", ""),
+    ("M517", "a change from one action or detection to another no fact holds stays (D-2)",
+     "analysis/campaign_report.py",
+     "        if a != b and (a, b) not in held:\n", "        if False:\n"),
+    ("M518", "a change said the wrong way round (« de 106,9 s à 91,9 s ») stays (D-2)",
+     "analysis/campaign_report.py",
+     "        if said and not any(_near(x, before, tol) and _near(y, after, tol) for before, after, tol in sides):\n",
+     "        if False:\n"),
+    ("M519", "a run without its id is said only in the previous campaign (D-2)", "analysis/campaign_changes.py",
+     "        if self.played_before and self.played_after:\n", "        if self.before_run and self.after_run:\n"),
+    # D-2, after its second review: « de X à Y » read without a unit; a trend says the way its
+    # runs went and names their actions only, an observation citing a change fact its facts';
+    # only what is counted makes a count; a number is of its unit's kind, a duration
+    # converted; a range of dates is a date; a relative change in percent is a fact's; « de X
+    # à Y » from a fact's side lands on its other side.
+    ("M530", "« de 0,78 à 0,8 », without a unit, is not read the wrong way round (D-2)",
+     "analysis/campaign_report.py",
+     (r'''    rf"\bde\s+(?P<a>{_NUM})\s*(?:{_UNIT})?{_BRACKETS}\s+à\s+(?P<b>{_NUM})"''' + "\n",
+      r'''    rf"|(?P<c>{_NUM})\s*(?:{_UNIT})?{_BRACKETS}\s*(?:→|->)\s*(?P<d>{_NUM})", re.IGNORECASE)''' + "\n"),
+     (r'''    rf"\bde\s+(?P<a>{_NUM})\s*{_UNIT}?{_BRACKETS}\s+à\s+(?P<b>{_NUM})"''' + "\n",
+      r'''    rf"|(?P<c>{_NUM})\s*{_UNIT}?{_BRACKETS}\s*(?:→|->)\s*(?P<d>{_NUM})", re.IGNORECASE)''' + "\n")),
+    ("M531", "a trend is not read for the way its runs went (D-2)", "analysis/campaign_report.py",
+     '        elif (sides := changed or (_faced(cited, own) if c.kind == "trend" else [])) and (\n',
+     "        elif (sides := changed) and (\n"),
+    ("M532", "a trend names an action or a detection its runs do not hold (D-2)", "analysis/campaign_report.py",
+     '        elif (c.kind in ("trend", "change") or changed) and (alien',
+     '        elif (c.kind in ("change",) or changed) and (alien'),
+    ("M533", "an observation citing a change fact names an action its facts do not hold (D-2)",
+     "analysis/campaign_report.py",
+     '        elif (c.kind in ("trend", "change") or changed) and (alien',
+     '        elif c.kind in ("trend", "change") and (alien'),
+    ("M534", "any word after a whole number makes it a count (« 1 heure plus tard ») (D-2)",
+     "analysis/campaign_report.py",
+     r'''    r"|passages?|cibles?|targets?|exécutions?|tirages?)(?![^\W\d_])", re.IGNORECASE)''' + "\n",
+     r'''    r"|passages?|cibles?|targets?|exécutions?|tirages?)(?![^\W\d_])|\s*[^\W\d_]", re.IGNORECASE)''' + "\n"),
+    ("M535", "a number's unit is not read: « 2 s » passes for a 2-point difference (D-2)",
+     "analysis/campaign_report.py",
+     '    return written in ("", held)\n', "    return True\n"),
+    ("M536", "a duration is not converted: « 15 ms » passes for 15 s (D-2)", "analysis/campaign_report.py",
+     '        out.append((float(m.group().replace(",", ".")) * one,\n',
+     '        out.append((float(m.group().replace(",", ".")),\n'),
+    ("M537", "a range of dates is read as numbers: « entre le 21 et le 23 octobre » barred (D-2)",
+     "analysis/campaign_report.py",
+     _DATES_LINE, r'''    rf"|\b\d{{1,2}}(?:er)?\s+(?:{_MONTHS})\b"''' + "\n"),
+    ("M538", "a relative change is no fact's number: « +16 % » barred (D-2)", "analysis/campaign_changes.py",
+     "        out += [(r, RELATIVE_TOLERANCE, RELATIVE)\n", "        out += [] and [(r, RELATIVE_TOLERANCE, RELATIVE)\n"),
+    ("M539", "« de 91,9 s à 15 s », from a fact's side to no other side, stays (D-2)",
+     "analysis/campaign_report.py",
+     "        if any(_near(x, before, tol) for before, _, tol in sides) and not any(\n",
+     "        if False and not any(\n"),
+    # D-2, after its third review: a trend over three campaigns says the way between its
+    # earlier runs, in either order, on the same technique; a date in English is a date; a
+    # number before a date is no day of a range.
+    ("M540", "a trend over three campaigns is barred: two earlier runs never face each other (D-2)",
+     "analysis/campaign_report.py",
+     "    out += [facing(x, y) for x in earlier for y in earlier if x is not y and x.ttp == y.ttp]\n", ""),
+    ("M541", "two earlier runs face each other in the order they are cited only (D-2)",
+     "analysis/campaign_report.py",
+     "    out += [facing(x, y) for x in earlier for y in earlier if x is not y and x.ttp == y.ttp]\n",
+     "    out += [facing(x, y) for i, x in enumerate(earlier) for y in earlier[i + 1:] if x.ttp == y.ttp]\n"),
+    ("M542", "two earlier runs of different techniques face each other (D-2)", "analysis/campaign_report.py",
+     "    out += [facing(x, y) for x in earlier for y in earlier if x is not y and x.ttp == y.ttp]\n",
+     "    out += [facing(x, y) for x in earlier for y in earlier if x is not y]\n"),
+    ("M543", "a date in English is read as a number: « since October 21 » barred (D-2)",
+     "analysis/campaign_report.py",
+     ('''           "|january|february|march|april|may|june|july|august|september|october|november|december")\n''',
+      r'''    rf"|\b(?:{_MONTHS})\s+\d{{1,2}}(?:st|nd|rd|th)?\b"''' + "\n"),
+     ('''           )\n''', "")),
+    ("M544", "a number before a date is a day of a range: « baisse de 12, le 23 octobre » kept (D-2)",
+     "analysis/campaign_report.py",
+     _DATES_FIRST, r'''    rf"|(?:\b{_DAY}(?:er)?"''' + "\n"),
+    # D-2, after its fourth review: « des 21 et 23 octobre » and « du 21 et du 23 octobre » are
+    # ranges; a day of a range is from 1 to 31.
+    ("M545", "a day of a range is any number: « between 70 and 60, 23 October » kept (D-2)",
+     "analysis/campaign_report.py",
+     r'''_DAY = r"(?:3[01]|[12]\d|0?[1-9])(?!\d)"''', r'''_DAY = r"\d{1,2}"'''),
+    ("M546", "a range of dates after « des », « aux », « au » is read as numbers (D-2)",
+     "analysis/campaign_report.py",
+     _DATES_FIRST, r'''    rf"|(?:\b(?:le|les|entre|du|between|from|on)\s+{_DAY}(?:er)?"''' + "\n"),
+    ("M547", "« du 21 et du 23 octobre » is read as numbers (D-2)", "analysis/campaign_report.py",
+     r"(?:(?:le|du|des)\s+)?{_DAY}(?:er)?)+", r"(?:le\s+)?{_DAY}(?:er)?)+"),
     # M-3 (#183) — the host of Glorfindel: Discord buttons check who clicks (closed by
     # default), each container gets only its secrets, H0 deploys a named reference whose
     # image carries it, and the image installs from the lock.
@@ -1019,6 +1194,10 @@ TESTS.update({f"M{n}": f"{BOUNDARY_TESTS} tests/unit/test_readiness.py" for n in
 TESTS["M459"] = "tests/unit/test_jobs.py"
 TESTS.update({mid: BOUNDARY_TESTS for mid in ("M460", "M461", "M462")})
 TESTS["M463"] = "tests/unit/test_actions_split.py"
+TESTS.update({f"M{n}": "tests/unit/test_campaign_changes.py" for n in range(260, 280)})  # D-2
+TESTS.update({f"M{n}": "tests/unit/test_campaign_changes.py" for n in range(510, 520)})  # D-2, review
+TESTS.update({f"M{n}": "tests/unit/test_campaign_changes.py" for n in range(530, 540)})  # D-2, 2nd review
+TESTS.update({f"M{n}": "tests/unit/test_campaign_changes.py" for n in range(540, 548)})  # D-2, 3rd, 4th reviews
 TESTS.update({f"M{n}": "tests/unit/test_bot.py" for n in range(280, 284)})
 TESTS.update({f"M{n}": "tests/unit/test_glorfindel_host.py" for n in range(284, 287)})
 TESTS.update({f"M{n}": "tests/unit/test_host_deploy.py" for n in (287, 288)})

@@ -18,10 +18,12 @@ la décision de Glorfindel.
 
 **L'index** : une collection ChromaDB à part (`campaign_runs`, `~/.eregion/analysis/chroma`),
 distincte de la mémoire de Glorfindel. Il ramène les runs passés des mêmes techniques, ce qui
-permet une affirmation de tendance (« manquée ici, détectée au run précédent »).
+permet une affirmation de tendance (« manquée ici, détectée au run précédent »). Il garde aussi
+la campagne précédente, celle à laquelle le rapport se compare (D-2, plus bas).
 
 **Le modèle n'écrit que des affirmations typées, chacune citant ses runs** : `detected`,
-`missed`, `latency`, `decision`, `trend`, `observation`. Un autre modèle que celui de Glorfindel
+`missed`, `latency`, `decision`, `trend`, `observation`, et `change`, qui cite un fait de
+changement (D-2, plus bas). Un autre modèle que celui de Glorfindel
 (`EREGION_ANALYSIS_MODEL`, Haiku 5.5 par défaut, `eregion_core/models.py`) : un rapport ne doit
 pas partager les angles morts du défenseur. **L'appel est borné** : `EREGION_ANALYSIS_TIMEOUT_S`,
 300 s par tentative par défaut (illisible, nulle, négative, infinie ou au-delà de 3600 → 300 s ;
@@ -35,8 +37,11 @@ commande échoue avec le délai dépassé ; sur H0, c'est un essai raté (voir p
 **La vérification est déterministe** (`verify`) : une affirmation sans run cité, citant un run
 inconnu, ou que les faits contredisent (« détectée » sur un run manqué, une latence ou une
 décision qui ne sont pas celles du run) est écartée — elle apparaît barrée, avec la raison, en
-fin de rapport. Une tendance doit citer cette campagne et une campagne antérieure. Les
-`trend` et `observation` ne sont vérifiées que sur leurs citations. Le contenu des runs
+fin de rapport. Une tendance doit citer cette campagne et une campagne antérieure. Une
+`observation` qui ne cite que des runs n'est vérifiée que sur ses citations, et sur la règle
+d'une décision inconnue (#167, plus bas). Les nombres d'une `trend`, d'une `change` et d'une
+`observation` qui cite un fait de changement sont contrôlés, ainsi que les actions qu'elles
+nomment et le sens du changement qu'elles disent (D-2, plus bas). Le contenu des runs
 (raisonnement de Glorfindel, texte des signaux) est une donnée : une instruction plantée peut
 faire écrire une fausse affirmation au modèle, jamais la faire entrer dans le rapport
 (mutant M63).
@@ -246,3 +251,231 @@ celle d'un autre run de la même technique sur la même VM ; elle n'est pas ratt
 décision de ce run devient inconnue (voir plus haut). Les extraits de raisonnement entrent
 dans les faits comme des données, jamais comme des instructions. Le harnais (fidélité, contenu
 piégé) ne change pas.
+
+## Ce qui a changé depuis la campagne précédente (D-2, #184)
+
+_26/10 : le code, ses tests (`tests/unit/test_campaign_changes.py`, et un cas de bout en bout
+dans `test_hosted_report.py`) et ses mutants (M260–M279) sont écrits. La mesure sur une vraie
+deuxième campagne viendra après la fusion, avec Jonathan._
+
+Le premier rapport écrit sur H0 (campagne `20261023T081120Z`) était fidèle, mais il n'apprenait
+rien : son index était vide. La seule nouveauté a été vue par une comparaison faite à la main.
+Sur T1110.001, Glorfindel a isolé à 0,78 le 23/10, alors qu'il avait bloqué à 0,80 le 21/10. La
+recherche des runs passés (`prior_runs`) ramène les runs des mêmes techniques, mais elle ne
+garantit pas de mettre face à face la même technique sur la même cible. La comparaison est donc
+calculée par le code (`analysis/campaign_changes.py`).
+
+**La campagne précédente est choisie par une règle, pas par l'index**
+(`analysis/campaign_report.py`, `previous_campaign`). C'est la dernière campagne `done` de
+l'index qui a commencé avant celle-ci, et qui partage avec elle au moins une **clé**. Une clé,
+c'est une technique jouée sur une VM cible ; la VM est comparée sans la casse.
+- Seuls les runs exécutés comptent : un scénario sauté ou en erreur n'a rien joué.
+- Une campagne `aborted` n'est jamais choisie, ni une campagne qui a commencé après celle-ci.
+  Une campagne sans clé commune ne l'est pas non plus, même si elle est plus récente.
+- Le début d'une campagne est le plus tôt des `started_at` de ses scénarios. À défaut, c'est
+  son `created_at`, puis son identifiant quand c'est une date (`YYYYMMDDTHHMMSSZ`). Sinon, le
+  début est inconnu, et la campagne n'a pas de précédente.
+- S'il n'y en a aucune, la section le dit, avec la raison.
+- **Limite connue** (relecture de D-2, reprise dans un lot suivant) : le début d'une campagne
+  venue du canal se lit dans son manifeste (`started_at`, `created_at`), écrit sur Orodruin.
+  H-1 ne contrôle pas ces dates. Une date fausse peut faire nommer à tort « la précédente » :
+  une autre campagne `done` qui partage une clé. Les faits comparés restent les vrais faits
+  indexés de la campagne nommée, et la section dit laquelle. Piste : borner le début par celui
+  des fenêtres d'exercice crues de ses runs, ou par la date du marqueur `.pulled`.
+
+**Les runs sont joints par clé.** Le n-ième run d'une technique sur une VM, dans l'ordre des
+`seq`, fait face au n-ième run de la même clé dans la campagne précédente. Chaque paire devient
+un **fait de changement** typé, `ChangeFact` (`chg-1`, `chg-2`…). Il donne, avant et après :
+la détection, la latence, l'action, la confiance et l'escalade, ainsi que l'écart de latence et
+de confiance. Une clé présente d'un seul côté est aussi un fait, listé comme tel (« Seulement
+dans la campagne précédente », « Seulement dans celle-ci »). Le côté d'un fait se lit sur la
+présence du run, jamais sur son identifiant : un run exécuté sans `run_id` reste joué, et la
+section l'écrit « run sans identifiant ». Une décision inconnue reste inconnue, avec sa raison,
+jamais « aucune ».
+
+**La section est rendue par le code** (`render_section`), entre le tableau des runs et les
+affirmations : la campagne précédente, une ligne par clé commune (« 91,9 s → 106,9 s
+(+15,0 s) », « block_suspicious_ip → isolate_vm », « 80% → 78% (−2 pts) »), puis les clés d'un
+seul côté. Le modèle n'en écrit rien. Il reçoit les mêmes faits, et il peut les citer.
+
+**La vérification contrôle les faits de changement comme les autres** (`verify`). Ce qui fait
+foi, c'est la section calculée plus haut : la vérification écarte les affirmations du modèle
+que les faits démentent, mais une lecture de la prose par des expressions régulières ne sera
+jamais complète (voir les limites, plus bas).
+- une affirmation `change` doit citer au moins un fait de changement. Sinon, elle est écartée,
+  même si elle cite les deux runs ;
+- dans une affirmation `change` ou `trend`, et dans une `observation` qui cite un fait de
+  changement, chaque nombre doit être celui d'un fait cité : une latence, une confiance (0,78
+  ou 78 %), un écart, ou un écart relatif (« +16 % » quand la latence passe de 91,9 s à
+  106,9 s). L'écart peut être celui des deux côtés d'un fait de changement, ou celui de deux
+  runs cités (« augmente de 15 s », « baisse de 2 points » dans une tendance qui cite les deux
+  runs). Sinon, l'affirmation est écartée (« a number is not in the cited facts (40) ») ;
+- **un nombre suivi d'une unité est de la sorte de son unité**. Une durée (ms, s, min, h, en
+  toutes lettres ou abrégée, en français ou en anglais) est convertie en secondes et ne peut
+  être qu'une latence ou un écart de latences : « vue 2 minutes plus tard » est lu 120 s,
+  « 15 ms » 0,015 s, « 1 heure » 3600 s, et chacun est écarté quand aucun fait ne le porte. Un
+  pourcentage ou des points ne peuvent être qu'une confiance en pour cent, son écart, ou un
+  écart relatif. « vue en 2 s » est donc écarté, même si l'écart de confiance vaut 2 points. Un
+  nombre sans unité peut être n'importe quel nombre des faits cités, sauf un écart relatif (qui
+  s'écrit avec %) ;
+- avant de lire les nombres, la vérification retire ce qui ne fait que nommer : les
+  identifiants cités, une technique (T1110.001), un identifiant de run, une date (23/10, « le
+  21 octobre », « le 1er octobre », « entre le 21 et le 23 octobre », « du 21 au 23 octobre »,
+  « October 21 », « 21 October »),
+  une année (2026, sauf suivie d'une unité : « 2000 s » reste un nombre), une heure (08:21), un
+  ordinal (« 2ᵉ », « 1er », « 3e »), et tout mot qui commence par une lettre et contient un
+  chiffre (`chg-2`, le nom d'une VM) ;
+- **un décompte** (« dans les 2 campagnes », « les 2 dernières campagnes ») est un entier suivi
+  de ce qu'il compte : runs, campagnes, techniques, VM, machines, scénarios, clés, passages,
+  cibles, exécutions, tirages (et leurs formes anglaises), avec au plus un adjectif entre les
+  deux (nouvelles, dernières, premières, autres, mêmes, seules). Un autre mot ne fait pas un
+  décompte : « vue 1 heure plus tard » est lu comme une durée, et « 2 fois » comme un nombre.
+  Un décompte est permis jusqu'au nombre de runs que l'affirmation cite (un fait de changement
+  compte ses deux côtés). Pourquoi ce choix plutôt qu'une consigne au modèle de ne pas en
+  écrire : une consigne ne lie pas le modèle, et un décompte juste serait alors barré, alors
+  que le rapport jugé au point d'étape (#70) ne doit barrer aucune affirmation juste ;
+- le `value` d'une affirmation `change`, quand ce n'est pas un nombre, doit être une action ou
+  une détection des faits cités ;
+- **les actions et les détections nommées** : une affirmation `change` ou `trend`, et une
+  `observation` qui cite un fait de changement, ne nomment que les actions (les noms de
+  `glorfindel/actions.py` : `isolate_vm`, `block_suspicious_ip`…) et les détections
+  (`detected`, `missed`, `unknown`) de leurs faits cités. « de detected à missed », sur une clé
+  détectée les deux fois, est écarté ; « Glorfindel a pris un wipe_storage » aussi, quand aucun
+  fait cité n'en porte ;
+- **le sens d'un changement** : dans une affirmation qui cite un fait de changement, « de X à
+  Y » et « X → Y » doivent aller dans le sens du fait. Pour deux actions ou deux détections
+  (noms, ou formes françaises : isolement, blocage, instantané, libération), un fait cité doit
+  aller de X à Y : « de l'isolement au blocage » est écarté quand le fait va du blocage à
+  l'isolement. Pour deux latences ou deux confiances, avec ou sans unité, et même avec une date
+  entre parenthèses après la première (« de 106,9 s (23/10) à 91,9 s »), « de 106,9 à 91,9 »,
+  « de 0,78 à 0,8 » ou « 78 % → 80 % » sont écartés quand le fait va dans l'autre sens et
+  qu'aucun fait cité ne va dans celui-là. Un « de X à Y » qui part d'un côté d'un fait doit
+  aussi arriver à son autre côté : « de 91,9 s à 15 s » est écarté (15 s est l'écart, pas la
+  latence d'après) ;
+- **une `trend` aussi** : ses runs de cette campagne sont mis face à ses runs antérieurs de la
+  même technique, chacun face à chacun, sur n'importe quelle VM, comme autant de faits de
+  changement implicites. Son « de X à Y » doit aller dans le sens de l'un d'eux : « passe de
+  106,9 s à 91,9 s » ou « de l'isolement au blocage », en citant le run du 23/10 et celui du
+  21/10, sont écartés. Deux runs antérieurs de la même technique se font face aussi, dans les
+  deux sens : un `RunFact` ne dit pas lequel est venu d'abord, si bien qu'entre deux runs
+  antérieurs le sens n'est pas lu. Une tendance sur trois campagnes passe donc (« de 120 s
+  (19/10) à 91,9 s (21/10), puis à 106,9 s », « 0,85 → 0,80 → 0,78 », « du blocage à
+  l'isolement (avant), puis retour au blocage »). Un sens inversé entre un run antérieur et un
+  run de cette campagne reste écarté, sauf quand un autre run antérieur cité porte la même
+  action, ou la même valeur (à la tolérance près), que le run de cette campagne : la tendance
+  peut alors décrire le passage entre deux runs antérieurs, dont l'ordre n'est pas lu (avec
+  un run isolé le 19/10, bloqué le 21/10 et isolé le 23/10, « de l'isolement au blocage »
+  passe). Pourquoi tous les appariements, et pas la clé exacte :
+  une tendance peut citer plusieurs runs antérieurs, de plusieurs campagnes, ou des runs
+  indexés avant D-2, sans leur VM. Un appariement plus large écarte moins, et il évite de
+  barrer une tendance juste pour un appariement qu'elle ne voulait pas dire. Sans run
+  antérieur de la même technique, son sens n'est pas lu ;
+- seules les affirmations `trend`, `change` et `observation` peuvent citer un fait de
+  changement ;
+- la règle de #167 vaut aussi sur un fait de changement dont une décision est inconnue. Une
+  affirmation sur la réponse doit dire que la décision est inconnue, et ne doit jamais dire
+  que Glorfindel n'a pas agi. « a isolé » n'est permis que si chaque décision inconnue citée
+  est celle d'un côté d'un fait de changement dont l'autre côté a une décision connue :
+  l'action nommée peut alors être celle de ce côté. Un run cité directement dont la décision
+  est inconnue, même à côté d'un fait de changement, ou un fait de changement inconnu des deux
+  côtés, écarte « a isolé ».
+
+**Limites connues de la vérification** (heuristiques, comme la lecture de la réponse). Elles
+sont assumées : la section calculée fait foi, et le lecteur juge une affirmation en la
+rapprochant d'elle. Ce qui passe encore, ou tombe à tort :
+- **le sens, hors de « de X à Y » et « X → Y »**. « 15 s plus tôt » quand c'était plus tard,
+  « a escaladé cette fois, pas avant » quand il avait escaladé les deux fois, « isolée cette
+  fois, bloquée avant » à l'envers, ou des dates dans le mauvais ordre (« bloquée le 23/10,
+  isolée le 21/10 ») ne sont pas écartés ;
+- l'escalade n'est pas contrôlée, ni les formes françaises des détections (« manquée ») ;
+- **un nombre sans unité qui se trouve être celui d'un fait** passe : « 2 fois plus longue »
+  ou « isolée 2 fois sur 2 », quand l'écart de confiance vaut 2 points. « fois » n'est ni une
+  unité ni un décompte : « 2 fois plus » est un rapport, « les 2 fois » un décompte, et le mot
+  seul ne dit pas lequel. À l'inverse, un décompte juste en « fois » (« bloquée les 2 fois »)
+  est écarté quand aucun fait cité ne vaut 2 ;
+- **« 0,02 point »** est écarté : les points ne sont lus qu'en pourcentage (« 2 points »), et
+  l'écart de confiance en fraction (0,02) ne s'écrit pas en points ;
+- **un nombre écrit en toutes lettres** (« quarante secondes plus tard ») n'est pas lu ;
+- **un décompte inventé sous la borne** passe (« isolée dans les 2 campagnes » quand elle ne
+  l'a été qu'une fois). Un décompte dont le nom est sous-entendu (« comme les 2 de la
+  précédente ») est lu comme un nombre, et écarté si aucun fait ne le porte ;
+- **une plage de dates** n'est lue qu'avec le mois à la fin, en toutes lettres, des jours de
+  1 à 31, et « le », « les », « entre », « du », « des », « aux » ou « au » (« between »,
+  « from », « on », « the ») devant son premier jour (« entre le 21 et le 23 octobre », « les
+  runs des 21 et 23 octobre », « du 21 et du 23 octobre ») ; « de » n'en est pas, si bien que
+  « baisse de 12, le 23 octobre » laisse 12 un nombre, et « between 70 and 60, 23 October »
+  aussi (70 n'est pas un jour). Mais dans « 21, 22 et 23 octobre » ou « les 21 et 23/10 »,
+  21 reste un nombre aussi. Une
+  date anglaise est lue (« October 21 », « 21 October »), pas une plage dont le mois vient
+  d'abord (« October 21 to 23 ») ;
+- **un « de X à Y » qui mêle deux écritures** (« de 0,80 à 78 % », « de 91,9 s à 1,8 min ») est
+  écarté : la vérification ne convertit pas l'une dans l'autre. Une phrase juste tombe donc si
+  le modèle l'écrit ainsi ;
+- le nom d'une action absente est écarté même dans une négation ou une comparaison justes
+  (« jamais snapshot », « isolate_vm plutôt que snapshot », quand aucun côté n'a pris de
+  snapshot) ;
+- dans une `trend`, l'appariement par technique est large : une tendance dite dans le sens
+  d'un appariement qu'elle ne voulait pas dire passe, et entre deux runs antérieurs les deux
+  sens passent. Une paire de runs antérieurs peut ainsi servir d'alibi à un sens inversé entre
+  un run antérieur et un run de cette campagne, quand l'autre run antérieur porte la même
+  action ou la même valeur que celui-ci. Piste pour un lot suivant : lire l'ordre des runs
+  antérieurs (l'identifiant horodaté de leur campagne, ou `campaign_started` dans l'index),
+  pour ne garder qu'un sens entre eux ;
+- dans une chaîne (« de X à Y, puis à Z », « X → Y → Z »), seul le premier pas est lu pour
+  le sens ; les suivants ne sont contrôlés que comme nombres des faits cités.
+
+**L'index des campagnes passées** (`analysis/campaign_index.py`). Chaque run de l'index porte
+maintenant l'état et le début de sa campagne, ainsi que sa VM. Un rapport écrit avant D-2 les a
+indexés sans eux : ses runs ne sont jamais choisis. La commande les ajoute :
+
+```bash
+python -m analysis.campaign_index --all runs/campaigns      # chaque campagne done ou aborted
+python -m analysis.campaign_index runs/campaigns/<id> …     # celles-ci
+```
+
+- Un run déjà dans l'index garde les faits avec lesquels il y est entré : ceux du rapport de
+  sa campagne, vus quand sa fenêtre d'exercice était encore sur le disque. La commande y
+  ajoute seulement l'état et le début de la campagne, et la VM du run quand ses faits ne la
+  donnent pas (le `target_resource_id` du manifeste).
+- Un run absent de l'index est calculé depuis les fichiers, comme le rapport le calcule. Une
+  campagne venue du canal lit l'inscription de ses VM dans leurs tags (H-1).
+- La commande est idempotente : lancée deux fois, elle laisse le même index. Elle n'appelle
+  aucun modèle et n'écrit que dans l'index.
+- Une campagne encore en cours est laissée de côté, et la commande le dit.
+
+**Sur H0** (à lancer par Jonathan : c'est une écriture sur H0), après le redéploiement de H0
+avec ce code :
+
+```bash
+make glorfindel-host-ssh
+# aucun rapport en attente ? (liste vide attendue)
+docker exec eregion-watch python -c "from pathlib import Path; from analysis import hosted_report as h; print([p.name for p in h.ready(Path('runs/campaigns'))])"
+docker exec eregion-watch python -m analysis.campaign_index --all runs/campaigns
+```
+
+- **Quand aucun rapport n'est en attente.** Le fil `campaign-report` de la watch écrit dans le
+  même index (un `PersistentClient` chromadb sur le même dossier) quand il écrit un rapport.
+  Deux processus qui écrivent en même temps dans ce dossier ne sont pas prévus par chromadb.
+  La première commande ci-dessus liste les campagnes dont le rapport est à écrire
+  (`hosted_report.ready` : venues du canal, `done`, sans `report.md`, avec des essais
+  restants). Une liste vide veut dire qu'aucun rapport n'est en cours ni à venir. Une campagne
+  qui attend encore les décisions de Glorfindel y figure aussi : la watch dit « waiting for
+  Glorfindel's decision » dans son journal (`make glorfindel-host-logs`). Si la liste n'est pas
+  vide, il faut attendre que le `report.md` soit écrit, puis relancer la vérification. Une
+  campagne arrivée pendant la commande : relancer la commande après son rapport (elle est
+  idempotente).
+
+- **La campagne du 23/10** (`20261023T081120Z`) est déjà sur H0 et dans son index. La commande
+  lui ajoute l'état, le début et les VM, sans recalculer ses décisions.
+- **La campagne du 21/10** (`20261021T121643Z`) n'est jamais passée par H0 : son manifeste et
+  les rapports de ses runs sont restés sur Orodruin. Il faut d'abord les copier sur H0, dans
+  `eregion/runs/campaigns/20261021T121643Z/` (le manifeste, et les rapports des runs dans
+  `runs/`), puis lancer la commande. Ses décisions sont alors lues dans les `watch-*` de H0,
+  bornées par les fenêtres de `runs/exercises/`.
+- **Attention à la purge** : une fenêtre est vidée une semaine après sa fin
+  (`PURGE_AFTER_S`). Une fois les fenêtres du 21/10 vidées, la décision de chacun de ses runs
+  devient inconnue (« fenêtre absente »). La détection et la latence restent, puisqu'elles
+  viennent du manifeste. Il faut donc verser cette campagne avant la purge : copier le dossier
+  et lancer `python -m analysis.campaign_report runs/campaigns/<id>` (le code d'aujourd'hui
+  l'indexe, et un appel au modèle écrit son rapport), ou la commande ci-dessus, une fois ce
+  code déployé. Dans les deux cas, les faits entrés dans l'index ne sont plus recalculés.

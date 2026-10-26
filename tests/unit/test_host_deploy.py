@@ -247,6 +247,11 @@ def test_the_migration_procedure_of_the_readme_runs_as_written(repo, tmp_path, m
 
     home = Path(repo.env["HOME"])
     monkeypatch.setattr(dr, "_CLIENT_RULES_FILE", home / ".glorfindel" / "client_rules.yaml")
+    # H0's glorfindel-config.yaml: the backend that watches the approved rule's workspace.
+    import glorfindel.config as config
+    monkeypatch.setattr(config, "load_glorfindel_config", lambda *a, **k: config.GlorfindelConfig(
+        monitoring_backends=[config.MonitoringBackendConfig(
+            name="law-main", type="azure_monitor", workspace_id="ws-example")]))
     monkeypatch.chdir(repo.vm)                    # the container's cwd holds glorfindel/rules
     steps, outputs, shell = _migration_steps(), [], []
 
@@ -275,12 +280,15 @@ def test_the_migration_procedure_of_the_readme_runs_as_written(repo, tmp_path, m
     flush()
 
     assert any("log-clearing: added" in o for o in outputs)              # dry run, then for good
+    assert any("bound" in o and "law-main" in o for o in outputs), outputs   # inert before, bound now
     assert _git(repo.vm, repo.env, "status", "--porcelain", "--untracked-files=no") == ""
     assert _git(repo.vm, repo.env, "stash", "list") == ""                 # step 4: dropped
     layer = yaml.safe_load((home / ".glorfindel" / "client_rules.yaml").read_text())
     assert [r["name"] for r in layer["rules"]] == ["log-clearing"] and "disable" not in layer
-    rules = {r.name: r for r in load_config(repo.vm / rel).rules}
+    assert layer["rules"][0]["assets"] == ["auto"] and layer["rules"][0]["monitoring_backends"] == ["law-main"]
+    rules = {r.name: r for r in load_config(repo.vm / rel, glorfindel_cfg=config.load_glorfindel_config()).rules}
     assert rules["log-clearing"].layer == "client"
+    assert rules["log-clearing"].auto_apply and rules["log-clearing"].monitoring_backend_name == "law-main"
     assert "Invalid user" in rules["ssh-brute-force"].query                # the reference's base
     assert (home / ".glorfindel" / "migration-p1" / "approved.yaml").exists()
 

@@ -130,8 +130,36 @@ def write_client_rule(rule: dict, path: Path | None = None) -> str:
 
 # ── Migration: rules approved into the base before P1 ─────────────────────────────
 
+def backend_for_workspace(workspace_id: str, backends) -> str:
+    """The name of the one monitoring backend (objects or dicts) that watches this workspace,
+    "" if none or several do."""
+    ws = os.path.expandvars(str(workspace_id or "")).strip().lower()
+    if not ws or "${" in ws:
+        return ""
+    names = {(b.get("name") if isinstance(b, dict) else getattr(b, "name", "")) for b in backends or []
+             if str((b.get("workspace_id") if isinstance(b, dict) else getattr(b, "workspace_id", "")) or "")
+             .strip().lower() == ws}
+    names.discard("")
+    names.discard(None)
+    return names.pop() if len(names) == 1 else ""
+
+
+def _legacy(rule: dict) -> bool:
+    """A rule in the inline form an approval wrote before P1: workspace in line, no assets —
+    loaded as auto-apply on no backend, it applies to no discovered VM."""
+    return bool(rule.get("workspace_id")) and not rule.get("assets")
+
+
+def _bound(rule: dict, backend: str) -> dict:
+    """The legacy rule bound to its backend: every discovered VM it watches (assets: [auto])."""
+    out = {k: v for k, v in rule.items() if k not in ("workspace_id", "resource_id", "source", "monitoring_backend")}
+    out["monitoring_backends"] = [backend]
+    out["assets"] = ["auto"]
+    return out
+
+
 def migrate(from_path: str | Path, base_path: str | Path, dest: Path | None = None,
-            dry_run: bool = False) -> dict:
+            dry_run: bool = False, glorfindel_cfg=None) -> dict:
     """Move what a modified base holds beyond the pristine base into the client's layer.
 
     `from_path`: the base file as the deployment modified it (rules approved into it before
@@ -141,14 +169,32 @@ def migrate(from_path: str | Path, base_path: str | Path, dest: Path | None = No
     name: it overrides); a base rule `from` no longer has goes to `disable`; same for assets
     and monitoring_backends (no disable). Nothing else changes; running it twice changes
     nothing more. Returns what it did, per name.
+
+    A moved rule in the inline form approvals wrote before P1 (workspace in line, no
+    assets: it applied to no VM) is bound to the backend that watches its workspace
+    (glorfindel-config.yaml's, or the files'): `assets: [auto]` — it detects from now on
+    ("converted"). When no single backend watches it, it moves as it is and that is said
+    ("legacy", with why).
     """
     src, base = _read_layer_raw(Path(from_path)), _read_layer_raw(Path(base_path))
     report: dict = {"added": [], "replaced": [], "same": [], "overrides": [], "disable": [],
-                    "assets": [], "monitoring_backends": [],
+                    "assets": [], "monitoring_backends": [], "converted": [], "legacy": [],
                     "dest": str(Path(dest) if dest else client_rules_path())}
     base_rules = {r["name"]: r for r in _named(base.get("rules"))}
     src_rules = {r["name"]: r for r in _named(src.get("rules"))}
     moved = [r for name, r in src_rules.items() if base_rules.get(name) != r]
+    backends = list(getattr(glorfindel_cfg, "monitoring_backends", None) or []) \
+        + _named(src.get("monitoring_backends")) + _named(base.get("monitoring_backends"))
+    for i, r in enumerate(moved):
+        if _legacy(r):
+            backend = backend_for_workspace(r["workspace_id"], backends)
+            if backend:
+                moved[i] = _bound(r, backend)
+                report["converted"].append(f"{r['name']} → monitoring_backends: [{backend}], assets: [auto]")
+            else:
+                report["legacy"].append(f"{r['name']} : aucun backend unique ne surveille son workspace "
+                                        "(glorfindel-config.yaml, monitoring_backends) — migrée telle quelle, "
+                                        "elle ne s'applique à aucune VM découverte")
     report["overrides"] = [r["name"] for r in moved if r["name"] in base_rules]
     disable = [name for name in base_rules if name not in src_rules]
     extra = {}
@@ -183,8 +229,13 @@ def migrate(from_path: str | Path, base_path: str | Path, dest: Path | None = No
 def _read_layer_raw(path: Path) -> dict:
     if not path.exists():
         raise FileNotFoundError(path)
-    data = yaml.safe_load(path.read_text())
-    return data if isinstance(data, dict) else {}
+    try:
+        data = yaml.safe_load(path.read_text())
+    except yaml.YAMLError as exc:
+        raise ClientLayerError(f"{path} : YAML illisible — {exc}") from exc
+    if data is not None and not isinstance(data, dict):
+        raise ClientLayerError(f"{path} : pas un fichier de règles (un dictionnaire YAML)")
+    return data or {}
 
 
 # ── Export: one rule, generalised, without any identifier ─────────────────────────
@@ -200,17 +251,39 @@ _EXPORTED_KEYS = ("name", "description", "source", "ttp", "interval_s", "expecte
 _RESOURCE_ID_RE = re.compile(r"/subscriptions/[^\s\"'`,;|()\[\]{}]+", re.IGNORECASE)
 # A GUID: a workspace (customerId), a subscription, a tenant.
 _GUID_RE = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", re.IGNORECASE)
-# KQL columns whose literal value names a resource of the deployment.
-_ID_COLUMNS = ("Computer", "_ResourceId", "ResourceId", "Resource", "ResourceGroup", "_ResourceGroup",
-               "SubscriptionId", "_SubscriptionId", "TenantId", "WorkspaceId", "_WorkspaceId",
-               "AccountName", "StorageAccountName", "VaultName", "HostName", "Hostname", "VMName",
-               "VmName", "ResourceName", "HostIP")
-_ID_COMPARISON_RE = re.compile(
-    r"\b(?P<col>" + "|".join(_ID_COLUMNS) + r")\b(?P<op>\)?\s*(?:==|=~|!=|!~|"
-    r"!?has(?:_cs)?|!?contains(?:_cs)?|!?startswith(?:_cs)?|!?endswith(?:_cs)?|!?in~?)\s*)"
-    r"(?P<val>\"[^\"]*\"|'[^']*'|\([^)]*\))",
+# The segments of an ARM path, anywhere in the text — in a literal compared to any column, in a
+# message: `resourceGroups/<x>`, `subscriptions/<x>`, `virtualMachines/<x>`…, and every name of
+# a `providers/Microsoft.<A>/<type>/<x>[/<type>/<x>…]` path.
+_ARM_SEGMENT_RE = re.compile(
+    r"\b(?P<kind>subscriptions|resourceGroups|virtualMachines|virtualMachineScaleSets|"
+    r"networkInterfaces|networkSecurityGroups|storageAccounts|vaults|workspaces|disks|"
+    r"publicIPAddresses|virtualNetworks|subnets|managedClusters)/(?P<val>[^/\s\"'`,;|()\[\]{}\\]+)", re.IGNORECASE)
+_PROVIDERS_RE = re.compile(
+    r"\bproviders/(?P<ns>microsoft\.[a-z0-9]+)(?P<path>(?:/[a-z0-9]+/[^/\s\"'`,;|()\[\]{}\\]+)+)",
     re.IGNORECASE)
-_LITERAL_RE = re.compile(r"\"[^\"]*\"|'[^']*'")
+
+# KQL columns whose value names a resource or an identity of the deployment. Closed by
+# default: in a predicate where one of them appears, EVERY literal is replaced, whatever the
+# operator (==, in~, has_any, has_all, matches regex, startswith, a function around the column…).
+_ID_COLUMNS = ("Computer", "ComputerName", "_ResourceId", "ResourceId", "ResourceUri", "Resource",
+               "ResourceGroup", "ResourceGroupName", "_ResourceGroup", "ResourceName",
+               "SubscriptionId", "_SubscriptionId", "TenantId", "_TenantId", "AADTenantId",
+               "WorkspaceId", "_WorkspaceId", "AccountName", "StorageAccountName", "VaultName",
+               "HostName", "Hostname", "Host", "DeviceName", "VMName", "VmName", "HostIP",
+               "Caller", "UserPrincipalName", "Identity")
+_ID_COL_RE = re.compile(r"(?<!\w)(?:" + "|".join(_ID_COLUMNS) + r")(?!\w)", re.IGNORECASE)
+# A KQL string literal: "…", '…', verbatim @"…", obfuscated h"…" / h@"…" / H'…', and the
+# multi-line ```…``` / ~~~…~~~ — a prefix only where no word goes on before it
+# (`startswith"x"` is an operator, then a literal). Comments: // to the end of the line.
+_KQL_TOKEN_RE = re.compile(
+    r"(?P<lit>(?:(?<![\w@])(?:[hH]@?|@[hH]?))?(?:\"(?:[^\"\\\n]|\\.)*\"|'(?:[^'\\\n]|\\.)*')"
+    r"|```.*?```|~~~.*?~~~)"
+    r"|(?P<comment>//[^\n]*)", re.DOTALL)
+# What ends a predicate: a pipe, a statement, `and`, `or`.
+_KQL_BOUND_RE = re.compile(r"\||;|\band\b|\bor\b")
+_KQL_LET_RE = re.compile(r"^\s*let\s+(\w+)\s*=")
+# Functions whose argument names a workspace, a resource, an application, a cluster.
+_KQL_SCOPE_FN_RE = re.compile(r"\b(?:workspace|resource|app|cluster|database)\s*\(\s*", re.IGNORECASE)
 _PLACEHOLDER_RE = re.compile(r"^<[a-z_]+>$")
 _MIN_NAME = 3   # shorter names would cut words of the query
 
@@ -221,46 +294,138 @@ class IdentifierLeft(ValueError):
     found: list[str] = []
 
 
+def _literal_value(lit: str) -> str:
+    body = lit.lstrip("hH@")
+    q = 3 if body[:3] in ("```", "~~~") else 1
+    return body[q:-q]
+
+
 def _real_literal(lit: str) -> bool:
-    inner = lit[1:-1]
-    return bool(inner) and not _PLACEHOLDER_RE.match(inner)
+    value = _literal_value(lit)
+    return bool(value) and not _PLACEHOLDER_RE.match(value)
+
+
+def _kql_lex(query: str) -> tuple[str, list[tuple[int, int]], list[tuple[int, int]]]:
+    """→ (code, literals, comments): `code` is the query with every literal and comment
+    blanked (same length), so that operators, columns and boundaries are read in code only."""
+    code = list(query)
+    literals, comments = [], []
+    for m in _KQL_TOKEN_RE.finditer(query):
+        s, e = m.span()
+        (literals if m.group("lit") else comments).append((s, e))
+        code[s:e] = ("\x00" if m.group("lit") else " ") * (e - s)
+    return "".join(code), literals, comments
+
+
+def _kql_targets(query: str) -> list[tuple[int, int]]:
+    """The literals of a query that may name the deployment, closed by default:
+    - every literal of a predicate (between `|`, `;`, `and`, `or`) where an identity column
+      appears, whatever the operator and the literal's form;
+    - every literal of a `let` that such a predicate uses — directly or through another `let`;
+    - the argument of workspace(), resource(), app(), cluster(), database()."""
+    code, literals, _ = _kql_lex(query)
+    spans, start = [], 0
+    for m in _KQL_BOUND_RE.finditer(code):
+        spans.append((start, m.start()))
+        start = m.end()
+    spans.append((start, len(code)))
+
+    def words(span):
+        return set(re.findall(r"\w+", code[span[0]:span[1]]))
+
+    lets = {}
+    for span in spans:
+        m = _KQL_LET_RE.match(code[span[0]:span[1]])
+        if m:
+            lets[m.group(1)] = span
+    chosen = {span for span in spans if _ID_COL_RE.search(code[span[0]:span[1]])}
+    todo = list(chosen)
+    while todo:
+        used = words(todo.pop())
+        for name, span in lets.items():
+            if name in used and span not in chosen:
+                chosen.add(span)
+                todo.append(span)
+    targets = {lit for lit in literals for a, b in chosen if a <= lit[0] and lit[1] <= b}
+    starts = {lit[0]: lit for lit in literals}
+    for m in _KQL_SCOPE_FN_RE.finditer(code):
+        if m.end() in starts:
+            targets.add(starts[m.end()])
+    return sorted(targets)
 
 
 def _name_re(name: str) -> re.Pattern:
     # A hyphen or a dot is a boundary: "vm-a1-log-clearing" names vm-a1 (better a word too
-    # many replaced than a name that leaves).
-    return re.compile(r"(?<![A-Za-z0-9_])" + re.escape(name) + r"(?![A-Za-z0-9_])", re.IGNORECASE)
+    # many replaced than a name that leaves). A regex escape is allowed before any character
+    # that is not a letter or a digit (`vm\-a1`).
+    body = "".join(re.escape(c) if c.isalnum() else r"\\?" + re.escape(c) for c in name)
+    return re.compile(r"(?<![A-Za-z0-9_])" + body + r"(?![A-Za-z0-9_])", re.IGNORECASE)
 
 
-def find_identifiers(text: str, known_names=()) -> list[str]:
-    """Every identifier of a deployment still in `text`: a resource id, a GUID, a literal
-    compared to an identifying column (Computer == "…"), a name the deployment knows."""
-    found = _RESOURCE_ID_RE.findall(text) + _GUID_RE.findall(text)
-    for m in _ID_COMPARISON_RE.finditer(text):
-        found += [lit for lit in _LITERAL_RE.findall(m.group("val")) if _real_literal(lit)]
+def _arm_left(text: str) -> list[str]:
+    found = [m.group(0) for m in _ARM_SEGMENT_RE.finditer(text) if not _PLACEHOLDER_RE.match(m.group("val"))]
+    for m in _PROVIDERS_RE.finditer(text):
+        names = m.group("path").split("/")[2::2]
+        if any(not _PLACEHOLDER_RE.match(n) for n in names):
+            found.append(m.group(0))
+    return found
+
+
+def find_identifiers(text: str, known_names=(), kql: bool = True) -> list[str]:
+    """Every identifier of a deployment still in `text`: a resource id or a part of one, a
+    GUID, a name the deployment knows (also behind regex escapes) and, `kql`: a literal the
+    query compares to an identity column, uses through a `let`, or gives workspace()…"""
+    found = _RESOURCE_ID_RE.findall(text) + _GUID_RE.findall(text) + _arm_left(text)
+    if kql:
+        found += [text[s:e] for s, e in _kql_targets(text) if _real_literal(text[s:e])]
+    unescaped = text.replace("\\", "")
     for name in known_names:
-        if len(name) >= _MIN_NAME and _name_re(name).search(text):
+        if len(name) >= _MIN_NAME and (_name_re(name).search(text) or _name_re(name).search(unescaped)):
             found.append(name)
     return found
 
 
-def _scrub(text: str, known_names, counts: dict) -> str:
+def _scrub(text: str, known_names, counts: dict, kql: bool = False) -> str:
     def sub(pattern, placeholder, key, s):
         out, n = pattern.subn(placeholder, s)
         counts[key] = counts.get(key, 0) + n
         return out
 
+    def count(key, n=1):
+        counts[key] = counts.get(key, 0) + n
+
+    if kql:   # comments go: free text, nothing can tell what they name
+        _, _, comments = _kql_lex(text)
+        for s, e in reversed(comments):
+            text = text[:s] + "\x01" + text[e:]
+        if comments:   # a line that held only a comment goes with it
+            text = "\n".join(line.replace("\x01", "").rstrip() for line in text.split("\n")
+                             if "\x01" not in line or line.replace("\x01", "").strip())
+            count("commentaire retiré", len(comments))
     text = sub(_RESOURCE_ID_RE, "<resource_id>", "identifiant de ressource", text)
     text = sub(_GUID_RE, "<id>", "GUID (espace de travail, abonnement…)", text)
 
-    def literals(m):
-        val = m.group("val")
-        new = _LITERAL_RE.sub(lambda lm: '"<name>"' if _real_literal(lm.group(0)) else lm.group(0), val)
-        if new != val:
-            counts["valeur d'une colonne d'identité"] = counts.get("valeur d'une colonne d'identité", 0) + 1
-        return m.group("col") + m.group("op") + new
+    def segment(m):
+        if _PLACEHOLDER_RE.match(m.group("val")):
+            return m.group(0)
+        count("partie d'un chemin de ressource")
+        return f"{m.group('kind')}/<name>"
 
-    text = _ID_COMPARISON_RE.sub(literals, text)
+    def providers(m):
+        parts = m.group("path").split("/")
+        for i in range(2, len(parts), 2):
+            if not _PLACEHOLDER_RE.match(parts[i]):
+                parts[i] = "<name>"
+                count("partie d'un chemin de ressource")
+        return f"providers/{m.group('ns')}" + "/".join(parts)
+
+    text = _PROVIDERS_RE.sub(providers, text)
+    text = _ARM_SEGMENT_RE.sub(segment, text)
+    if kql:
+        for s, e in reversed(_kql_targets(text)):
+            if _real_literal(text[s:e]):
+                text = text[:s] + '"<name>"' + text[e:]
+                count("littéral d'une colonne d'identité, d'un let ou de workspace()")
     for name in sorted(known_names, key=len, reverse=True):
         if len(name) >= _MIN_NAME:
             text = sub(_name_re(name), "<name>", "nom connu du déploiement", text)
@@ -335,7 +500,7 @@ def generalize(rule: dict, names=()) -> tuple[dict, dict]:
     for key in _EXPORTED_KEYS:
         if key in rule and rule[key] not in (None, ""):
             value = rule[key]
-            out[key] = _scrub(value, names, counts) if isinstance(value, str) else value
+            out[key] = _scrub(value, names, counts, kql=key == "query") if isinstance(value, str) else value
     out["enabled"] = True
     return out, {k: v for k, v in counts.items() if v}
 
@@ -358,7 +523,9 @@ def export_rule(name: str, base_path: str | Path, client_path: Path | None = Non
             "# de ressource ni d'espace de travail ; sans `assets`, elle s'applique à toute VM\n"
             f"# découverte. Remplacé : {replaced}.\n"
             "rules:\n" + _indent(_dump([general])))
-    left = find_identifiers(text, names)
+    # The last guard reads what is written: the whole text, and the query as KQL.
+    [exported] = yaml.safe_load(text)["rules"]
+    left = find_identifiers(text, names, kql=False) + find_identifiers(str(exported.get("query", "")), names)
     if left:
         err = IdentifierLeft(f"« {name} » garde {len(left)} identifiant(s) du déploiement : rien n'est exporté")
         err.found = sorted(set(left))

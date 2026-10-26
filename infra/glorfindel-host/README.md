@@ -172,7 +172,18 @@ règles approuvées s'écrivaient dans `glorfindel/rules/azure/detection_rules.y
 suivi : `deploy.sh` refuse maintenant un fichier de règles modifié sur la VM (« … modifié sur la
 VM (règles approuvées avant P1) : rien n'est déployé »), l'ancienne image tourne toujours.
 **Jamais `git checkout -- glorfindel/rules`** (ni `git reset --hard`) : ils effacent les règles
-approuvées. La procédure est rejouée par `tests/unit/test_rule_layers.py` sur un dépôt local.
+approuvées. La procédure est rejouée telle qu'écrite, sur un dépôt local, par
+`tests/unit/test_host_deploy.py::test_the_migration_procedure_of_the_readme_runs_as_written`.
+
+**Les règles approuvées avant P1 étaient inertes ; après la migration, elles détectent — à
+surveiller les premiers jours.** Avant P1, une approbation écrivait la règle avec son workspace
+en ligne, sans `assets` ni backend (`rule_from_proposal` lisait un champ que `DetectionRule`
+n'a pas) : chargée comme « toutes les VM d'aucun backend », elle ne s'appliquait à aucune VM
+découverte, sans rien dire. `migrate-rules` lie une telle règle au backend de
+`glorfindel-config.yaml` qui surveille son workspace (`assets: [auto]`) : elle tourne alors sur
+toutes les VM de ce backend. Une règle approuvée pour une détection manquée peut se révéler
+bruyante : regarder ses détections et ses cartes les premiers jours (`make glorfindel-host-logs`,
+la War Room), et la désactiver au besoin (`disable: [<nom>]` dans la couche).
 
 1. **Sur la VM** (`make glorfindel-host-ssh`, puis `cd eregion`) : mettre de côté le fichier
    modifié et la base d'où il vient, dans `~/.glorfindel` (que les conteneurs voient), puis
@@ -201,8 +212,12 @@ approuvées. La procédure est rejouée par `tests/unit/test_rule_layers.py` sur
    `migrate-rules` met dans la couche ce que `approved.yaml` a de plus que `base.yaml` : une
    règle ajoutée telle quelle ; une règle de base modifiée sur la VM, sous son nom (elle remplace
    celle de la base, et la watch le dit) ; une règle de base supprimée sur la VM, dans `disable`.
+   Une règle au workspace en ligne est liée à son backend (« bound … monitoring_backends:
+   [<backend>], assets: [auto] ») ; si aucun backend unique de `glorfindel-config.yaml` ne
+   surveille son workspace, elle part telle quelle et `migrate-rules` le dit (⚠ : elle reste
+   inerte — à lier à la main dans la couche). Un fichier illisible : rien n'est écrit, et c'est dit.
    Relancé, il ne change plus rien. `glorfindel rules` doit montrer chaque règle approuvée avec la
-   couche `client`.
+   couche `client` et, en `assets`, `auto`.
 4. **Une fois vérifié** (la règle dans `glorfindel rules`, la watch sans erreur dans
    `make glorfindel-host-logs`), sur la VM, jeter le stash (le premier de la liste doit être
    `regles-approuvees-p1`) ; la copie reste dans `~/.glorfindel/migration-p1/` :

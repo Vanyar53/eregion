@@ -103,7 +103,8 @@ def approve(proposal_id: str, rules_yaml_path: str | Path) -> dict:
     proposal["status"] = "approved"
     proposal["approved_at"] = datetime.now(timezone.utc).isoformat()
     _STORE.write_text("\n".join(json.dumps(p) for p in updated) + "\n")
-    return {**proposal, "rules_file": str(rule_layers.client_rules_path()), "rule_write": how}
+    return {**proposal, "rules_file": str(rule_layers.client_rules_path()), "rule_write": how,
+            "rule_bound": "assets" in rule}
 
 
 def reject(proposal_id: str) -> dict:
@@ -158,12 +159,16 @@ def rule_from_proposal(proposal: dict, rules_path: Path) -> dict:
                 if match.monitoring_backends:
                     backend_name = match.monitoring_backends[0]
             else:
-                # No static asset — borrow backend from first existing rule, use auto discovery
-                for r in cfg.rules:
-                    if r.monitoring_backends:
-                        asset_name = "auto"
-                        backend_name = r.monitoring_backends[0]
-                        break
+                # No static asset: every discovered VM of the backend that watches the
+                # proposal's workspace — or, none matching, the first rule's backend. This
+                # read `r.monitoring_backends`, which DetectionRule does not have: the error
+                # was swallowed, every approved rule took the inline form below, and loaded
+                # as auto-apply on no backend it applied to no VM, silently (P1 review).
+                from glorfindel.rule_layers import backend_for_workspace
+                backend_name = backend_for_workspace(proposal.get("workspace_id", ""), cfg.backends) or next(
+                    (r.monitoring_backend_name for r in cfg.rules if r.monitoring_backend_name), "")
+                if backend_name:
+                    asset_name = "auto"
         except Exception:
             pass
 
@@ -179,7 +184,8 @@ def rule_from_proposal(proposal: dict, rules_path: Path) -> dict:
             rule["monitoring_backends"] = [backend_name]
         rule["assets"] = [asset_name]
     else:
-        # Legacy fallback — inline workspace and target
+        # Legacy fallback — inline workspace and target: no backend to bind to (no
+        # monitoring_backends in glorfindel-config.yaml). Said by approve and at load.
         rule.update({
             "source": proposal["source"],
             "workspace_id": proposal["workspace_id"],

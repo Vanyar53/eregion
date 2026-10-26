@@ -12,6 +12,7 @@ import click
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
+from rich.markup import escape as _esc_markup
 
 console = Console()
 
@@ -805,7 +806,7 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
                 console.print(f"[dim]Couche du client :[/dim] {n_client} règle(s) — "
                               f"[dim]{det_cfg.client_file}[/dim]")
             for note in det_cfg.notes:
-                console.print(f"  [yellow]·[/yellow] {note}")
+                console.print(f"  [yellow]·[/yellow] {_esc_markup(note)}")
         except Exception as exc:
             console.print(f"[yellow]⚠ Could not load rules: {exc}[/yellow]")
 
@@ -1831,6 +1832,11 @@ def approve_rule(proposal_id: str, rules_file: str | None) -> None:
         )
         verb = {"replaced": "Replaced in", "same": "Already in"}.get(proposal.get("rule_write"), "Written to")
         console.print(f"  {verb} the client's layer [dim]{proposal.get('rules_file')}[/dim]")
+        if not proposal.get("rule_bound", True):
+            console.print("  [yellow]⚠ No monitoring backend of glorfindel-config.yaml watches its "
+                          "workspace: written with the workspace in line, it applies to no "
+                          "discovered VM — bind it in ~/.glorfindel/client_rules.yaml: "
+                          "monitoring_backends: \\[<backend>], assets: \\[auto].[/yellow]")
         console.print(
             "  Restart 'glorfindel watch' to activate, "
             "then re-run the scenario to validate."
@@ -1896,7 +1902,7 @@ def rules_cmd(rules_file: str | None) -> None:
     console.print(f"[dim]Couche du client :[/dim] {client_rules_path()}"
                   + ("" if cfg.client_file else " [dim](absente)[/dim]"))
     for note in cfg.notes:
-        console.print(f"  [yellow]·[/yellow] {note}")
+        console.print(f"  [yellow]·[/yellow] {_esc_markup(note)}")
 
 
 @cli.command("export-rule")
@@ -1933,7 +1939,7 @@ def export_rule_cmd(name: str, rules_file: str | None, out_file: str | None) -> 
     except IdentifierLeft as e:
         console.print(f"[red]✗ {e}[/red]")
         for item in e.found:
-            console.print(f"  · {item}")
+            console.print(f"  · {_esc_markup(item)}")
         raise SystemExit(1)
     if out_file:
         Path(out_file).write_text(text)
@@ -1961,9 +1967,14 @@ def migrate_rules(from_file: str, base_file: str, dry_run: bool) -> None:
     from glorfindel.rule_layers import ClientLayerError, migrate
 
     try:
-        report = migrate(from_file, base_file, dry_run=dry_run)
+        from glorfindel.config import load_glorfindel_config
+        gcfg = load_glorfindel_config()
+    except Exception:
+        gcfg = None
+    try:
+        report = migrate(from_file, base_file, dry_run=dry_run, glorfindel_cfg=gcfg)
     except (FileNotFoundError, ClientLayerError) as e:
-        console.print(f"[red]Error:[/red] {e}")
+        console.print(f"[red]Error:[/red] {e} — nothing written")
         raise SystemExit(1)
     head = "[yellow]Dry run[/yellow] — would write" if dry_run else "[green]✓ Written[/green]"
     console.print(f"{head} to the client's layer [dim]{report['dest']}[/dim]")
@@ -1971,7 +1982,11 @@ def migrate_rules(from_file: str, base_file: str, dry_run: bool) -> None:
                        ("overrides", "overrides a base rule"), ("disable", "base rule disabled"),
                        ("assets", "asset"), ("monitoring_backends", "monitoring backend")):
         for name in report[key]:
-            console.print(f"  · {name}: {label}")
+            console.print(f"  · {_esc_markup(name)}: {label}")
+    for line in report["converted"]:
+        console.print(f"  · [cyan]bound[/cyan] {_esc_markup(line)} — inert before (no VM), it detects from now on")
+    for line in report["legacy"]:
+        console.print(f"  [yellow]⚠ {_esc_markup(line)}[/yellow]")
     if not any(report[k] for k in ("added", "replaced", "same", "disable", "assets", "monitoring_backends")):
         console.print("  nothing to move: --from holds nothing beyond --base")
     elif not dry_run:

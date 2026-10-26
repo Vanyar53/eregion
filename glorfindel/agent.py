@@ -82,6 +82,8 @@ class GlorfindelState(TypedDict):
     cycle_error: str            # set when the cycle could not complete normally (→ cycle_failed escalation)
     held_by: str                # deterministic gate that escalated (→ its own escalation type)
     telemetry_gaps: list[str]   # investigative queries that FAILED (G2) — never shown to the model
+    decision_temperature: float | None  # temperature of the first draw; None = model's default (D-1)
+    decision_draws: list[dict]  # every draw asked before a disruptive autonomous action (D-1)
 
 
 # ── LLM decision tool schema ──────────────────────────────────────────────────
@@ -612,6 +614,7 @@ _HELD_BY_TYPE = {
     "release_precondition": "release_hold",
     "attribution": "unattributed_signal",
     "telemetry": "telemetry_gap",
+    "agreement": "unstable_decision",
 }
 
 # Actions aimed at ONE VM. On a detection the RulePoller could not tie to that VM (a row
@@ -897,6 +900,106 @@ def _apply_autonomy_mode(d: dict, mode: str, gate: dict | None = None) -> bool:
     return False
 
 
+# The first draw of a decision is asked at temperature 0 (D-1): reproducible where the
+# model accepts it (claude-sonnet-4-6, local models). claude-sonnet-5-5, the default,
+# refuses any temperature but its own (measured 26/10): there the first draw is the
+# provider's default sampling, and the cycle records it (decision_temperature: None).
+_DECISION_TEMPERATURE = 0.0
+
+
+def _decision_draws() -> int:
+    """The number of draws that must agree (`config.decision_draws`: 0 when malformed —
+    every disruptive autonomous action held), with a console line when it is."""
+    from glorfindel.config import decision_draws
+    value = decision_draws()
+    if not value:
+        raw = os.environ.get("GLORFINDEL_DECISION_DRAWS", "")
+        _console.print(
+            f"[yellow]GLORFINDEL_DECISION_DRAWS={raw!r} invalide — toute action disruptive "
+            f"autonome est retenue jusqu'à correction[/yellow]"
+        )
+    return value
+
+
+def _draw_summary(d: dict) -> dict:
+    return {"action": d["action"], "confidence": d["confidence"], "escalate": d["escalate"]}
+
+
+def _draw_label(x: dict) -> str:
+    if x.get("error"):
+        return f"appel en échec ({x['error'][:80]})"
+    label = f"{x.get('action') or 'aucune action'} {x.get('confidence', 0.0):.0%}"
+    return f"{label}, escaladée" if x.get("escalate") else label
+
+
+def _confirming_draws(litellm, call: dict, n: int, threshold: float) -> tuple[list[dict], list]:
+    """`n` more draws of the same decision (same messages, same tool), at the model's default
+    sampling: the variance the first draw's temperature removes is the one they probe. Each
+    is parsed and passed through the executable guard and the confidence gate, like the
+    first. A call that fails is a draw that did not agree. Returns (draws, responses)."""
+    from concurrent.futures import ThreadPoolExecutor
+    from eregion_core.llm_call import completion_with_tool
+
+    def one(_):
+        try:
+            resp = completion_with_tool(litellm, "security_decision", **call)
+        except Exception as exc:
+            return {"action": "", "confidence": 0.0, "escalate": True,
+                    "error": _first_line(exc)}, None
+        x, raw_conf = _parse_decision(resp)
+        _apply_executable_guard(x)
+        _apply_confidence_gate(x, raw_conf, threshold)
+        return _draw_summary(x), resp
+
+    if n <= 0:
+        return [], []
+    with ThreadPoolExecutor(max_workers=n) as pool:
+        results = list(pool.map(one, range(n)))
+    return [r[0] for r in results], [r[1] for r in results if r[1] is not None]
+
+
+def _apply_agreement_guard(d: dict, draws: list[dict], required: int) -> None:
+    """A disruptive autonomous action runs only when every draw agrees (D-1).
+
+    `draws`: the first draw, then the confirming ones. A draw agrees when it would have
+    taken the same action alone — same action, not escalated (above the confidence
+    threshold). Fewer draws than required, a failed call, or `required` 0 (malformed
+    GLORFINDEL_DECISION_DRAWS): held. Independent of the first draw's confidence: the same
+    brute force drew a block at 0.80 on 21/10 and an isolation at 0.78 on 23/10, both
+    above the gate."""
+    if d["escalate"] or d["action"] not in _DISRUPTIVE_AUTONOMOUS:
+        return
+    agree = [x for x in draws if not x.get("escalate") and x.get("action") == d["action"]]
+    if required and len(draws) >= required and len(agree) == len(draws):
+        return
+    d["escalate"] = True
+    d["held_by"] = "agreement"
+    if not required:
+        d["escalation_reason"] = (
+            f"Nombre de tirages invalide (GLORFINDEL_DECISION_DRAWS) — action disruptive "
+            f"'{d['action']}' (confiance {d['confidence']:.0%}) retenue pour revue humaine. "
+            "Corriger la valeur (un entier de 2 à 10) pour qu'une action puisse partir seule.")
+        return
+    others = "; ".join(_draw_label(x) for x in draws if x not in agree) or "aucun"
+    d["escalation_reason"] = (
+        f"Décision instable : {len(agree)} tirage(s) sur {len(draws)} proposent "
+        f"'{d['action']}' (les autres : {others}) — action disruptive retenue pour revue "
+        "humaine (garde déterministe, indépendante de la confiance du LLM). Juger le signal "
+        "avant d'agir."
+    )
+
+
+def _usage(responses: list) -> dict | None:
+    """Token usage summed over every draw of the decision (P1 observability)."""
+    usages = [u for u in (getattr(r, "usage", None) for r in responses) if u is not None]
+    if not usages:
+        return None
+    fields = {"input_tokens": "prompt_tokens", "output_tokens": "completion_tokens",
+              "cache_read_input_tokens": "cache_read_input_tokens",
+              "cache_creation_input_tokens": "cache_creation_input_tokens"}
+    return {k: sum(getattr(u, a, 0) or 0 for u in usages) for k, a in fields.items()}
+
+
 _CYCLE_FAILED_STEPS = [
     "Trier le signal à la main : la menace a été détectée mais pas analysée jusqu'au bout.",
     "Vérifier le fournisseur LLM (GLORFINDEL_LLM_MODEL, clé API, quota, réseau) "
@@ -959,7 +1062,10 @@ def decide(
 
     Gates, in order (each a pure helper, testable on its own): parsing defaults →
     executable guard → confidence gate → deterministic signal guardrail → attribution
-    guard → telemetry guard → release precondition → autonomy mode. A failed LLM call
+    guard → telemetry guard → release precondition → autonomy mode → agreement of the
+    draws (D-1: a disruptive action about to run alone is drawn again, at the model's
+    default sampling, and held unless every draw agrees). The first draw is asked at
+    temperature 0, or at the model's default when it refuses one. A failed LLM call
     (after retries, each bounded by GLORFINDEL_LLM_TIMEOUT_S) escalates as
     `cycle_failed`. The gate that escalates is recorded (`held_by`) and gives the
     escalation its type. An unreadable glorfindel-config.yaml runs every VM in
@@ -1007,37 +1113,40 @@ def decide(
     if base_url:
         kwargs["base_url"] = base_url
 
+    from eregion_core.llm_call import completion_with_tool, temperature_refused
+    from glorfindel.config import llm_timeout_s
+    call = dict(
+        model=model,
+        max_tokens=4096,
+        messages=[
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": _SYSTEM_PROMPT,
+                              "cache_control": {"type": "ephemeral"}}],
+            },
+            {"role": "user", "content": user_content},
+        ],
+        tools=[_DECISION_TOOL],
+        num_retries=_LLM_RETRIES,
+        # Bounded (G2): a provider that hangs ends as a cycle_failed card, not hours
+        # of a held decision queue (LiteLLM's own default is 6000 s an attempt).
+        timeout=llm_timeout_s(),
+        **kwargs,
+    )
     try:
-        from eregion_core.llm_call import completion_with_tool
-        from glorfindel.config import llm_timeout_s
         response = completion_with_tool(
-            litellm, "security_decision",
-            model=model,
-            max_tokens=4096,
-            messages=[
-                {
-                    "role": "system",
-                    "content": [{"type": "text", "text": _SYSTEM_PROMPT,
-                                  "cache_control": {"type": "ephemeral"}}],
-                },
-                {"role": "user", "content": user_content},
-            ],
-            tools=[_DECISION_TOOL],
-            num_retries=_LLM_RETRIES,
-            # Bounded (G2): a provider that hangs ends as a cycle_failed card, not hours
-            # of a held decision queue (LiteLLM's own default is 6000 s an attempt).
-            timeout=llm_timeout_s(),
-            **kwargs,
-        )
+            litellm, "security_decision", temperature=_DECISION_TEMPERATURE, **call)
     except Exception as exc:
         # Rate limit, timeout, auth, network: previously this escaped the graph and
         # ended as one console line in the watch worker — a detected threat dropped
         # with no escalation and no debug file.
         return {**_decision_failed(state, exc, mode), "autonomy_gate": gate}
+    temperature = None if temperature_refused(model) else _DECISION_TEMPERATURE
 
     d, raw_conf = _parse_decision(response)
+    threshold = _confidence_threshold()
     _apply_executable_guard(d)
-    _apply_confidence_gate(d, raw_conf, _confidence_threshold())
+    _apply_confidence_gate(d, raw_conf, threshold)
     _apply_signal_guardrail(d, signal)
     _apply_attribution_guard(d, signal)
     _apply_telemetry_guard(d, state.get("telemetry_gaps") or [])
@@ -1045,15 +1154,18 @@ def decide(
 
     mode_hold = _apply_autonomy_mode(d, mode, gate)
 
-    usage = getattr(response, "usage", None)
-    llm_usage: dict | None = None
-    if usage is not None:
-        llm_usage = {
-            "input_tokens": getattr(usage, "prompt_tokens", 0),
-            "output_tokens": getattr(usage, "completion_tokens", 0),
-            "cache_read_input_tokens": getattr(usage, "cache_read_input_tokens", 0),
-            "cache_creation_input_tokens": getattr(usage, "cache_creation_input_tokens", 0),
-        }
+    # Agreement last (D-1): only a disruptive action about to run alone pays for the other
+    # draws — never a human_only VM (H0), never an action a gate already held.
+    draws: list[dict] = []
+    responses = [response]
+    if not d["escalate"] and d["action"] in _DISRUPTIVE_AUTONOMOUS:
+        required = _decision_draws()
+        draws = [_draw_summary(d)]
+        if required:
+            more, more_responses = _confirming_draws(litellm, call, required - 1, threshold)
+            draws += more
+            responses += more_responses
+        _apply_agreement_guard(d, draws, required)
 
     return {
         **state,
@@ -1065,11 +1177,13 @@ def decide(
         "escalate": d["escalate"],
         "escalation_reason": d.get("escalation_reason", ""),
         "suggested_steps": d.get("suggested_steps") or [],
-        "llm_usage": llm_usage,
+        "llm_usage": _usage(responses),
         "autonomy_mode": mode,
         "mode_hold": mode_hold,
         "held_by": d.get("held_by", ""),
         "autonomy_gate": gate,
+        "decision_temperature": temperature,
+        "decision_draws": draws,
     }
 
 
@@ -1525,6 +1639,12 @@ def _write_debug_record(state: GlorfindelState) -> None:
         debug_record["cycle_error"] = state["cycle_error"]
     if state.get("telemetry_gaps"):
         debug_record["telemetry_gaps"] = state["telemetry_gaps"]
+    # D-1: whether the first draw was fixed (0) or the model's default sampling (None), and
+    # the draws asked before a disruptive autonomous action.
+    if "decision_temperature" in state:
+        debug_record["decision_temperature"] = state["decision_temperature"]
+    if state.get("decision_draws"):
+        debug_record["decision_draws"] = state["decision_draws"]
     out = Path("runs") / f"{run_id}_debug.jsonl"
     out.parent.mkdir(parents=True, exist_ok=True)
     with open(out, "a") as f:

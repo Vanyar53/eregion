@@ -98,6 +98,30 @@ def llm_timeout_s() -> float:
     return value
 
 
+# A disruptive autonomous action runs only when this many draws of the decision agree
+# (D-1): the first, then the others at the model's default sampling. The same brute force
+# drew a block at 0.80 on 21/10 and an isolation at 0.78 on 23/10.
+DECISION_DRAWS = 3
+_DECISION_DRAWS_MAX = 10
+
+
+def decision_draws() -> int:
+    """GLORFINDEL_DECISION_DRAWS: 3 when unset or empty; an integer in [2, 10] otherwise.
+    Malformed, 1 or less, or above 10 → 0: every disruptive autonomous action is held
+    (configuration fails closed, like the confidence threshold). One draw is no agreement."""
+    import os
+    raw = (os.environ.get("GLORFINDEL_DECISION_DRAWS") or "").strip()
+    if not raw:
+        return DECISION_DRAWS
+    try:
+        value = int(raw)
+    except ValueError:
+        return 0
+    if not 2 <= value <= _DECISION_DRAWS_MAX:
+        return 0
+    return value
+
+
 def _flock(f, exclusive: bool) -> None:
     try:
         import fcntl

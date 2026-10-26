@@ -188,6 +188,7 @@ GLORFINDEL_APPROVAL_MAX_AGE_H=2     # âge max d'une carte exécutable en un cli
 GLORFINDEL_INCIDENT_TTL_S=300       # TTL fenêtre incident
 GLORFINDEL_CONFIDENCE_THRESHOLD=0.7 # gate autonomie LLM (défaut 0.7 — en dessous → escalade forcée) ; illisible, hors [0, 1] → tout est retenu
 GLORFINDEL_LLM_TIMEOUT_S=120        # borne d'un appel au modèle de Glorfindel (décision, autoring de règle), par tentative (défaut 120 ; illisible, ≤0, >3600 → 120) ; pas le rapport de campagne : EREGION_ANALYSIS_TIMEOUT_S
+GLORFINDEL_DECISION_DRAWS=3         # D-1 : tirages qui doivent s'accorder avant une action disruptive autonome (défaut 3 ; entier de 2 à 10 ; illisible, 1, >10 → toute action disruptive autonome retenue) ; aucun tirage de plus en human_only
 GLORFINDEL_READ_ONLY=1              # creds lecture seule (SP Reader) — mode observe-only ; toute valeur sauf vide/0/false/no/off = lecture seule
 GLORFINDEL_DISCOVERY_RETENTION_H=8  # rétention d'une VM éteinte dans le registre avant éviction (défaut 8h)
 EREGION_EXERCISE_CHANNEL=https://…/exercises  # O1 : canal des fenêtres d'exercice (Orodruin publie, la watch hébergée lit) ; vide → fenêtres locales. Porte aussi les campagnes finies (campaigns/<id>/…, #167) ; posé sur la watch, il démarre le thread campaign-report

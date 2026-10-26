@@ -618,7 +618,7 @@ MUTANTS = [
     # mutant at least per dependency (model, cloud API, telemetry, configuration).
     ("M151", "the model: the decision call is unbounded, a hung provider holds the VM's queue (G2)",
      "glorfindel/agent.py",
-     "            timeout=llm_timeout_s(),\n", ""),
+     "        timeout=llm_timeout_s(),\n", ""),
     ("M152", "the cloud API: a VM whose readiness check could not reach Azure acts alone (G2)",
      "glorfindel/readiness.py",
      '    if rec is None:\n        return {"reason": "not_checked", "codes": [],\n',
@@ -697,6 +697,61 @@ MUTANTS = [
     ("M193", "the kill leaves the open exercise windows open (M-1)", KILL,
      "                exercise_channel.publish(closed, channel=channel, credential=cred, put=put)\n",
      "                pass\n"),
+    # D-1 (#186) — the stability of the decision: the first draw at temperature 0 (the
+    # model's default when it refuses one), a disruptive action run alone only when every
+    # draw agrees. M191–M193 are lot M-1's (Orodruin).
+    ("M200", "the first draw is asked at the provider's default sampling: nothing fixes it (D-1)",
+     "glorfindel/agent.py",
+     '            litellm, "security_decision", temperature=_DECISION_TEMPERATURE, **call)\n',
+     '            litellm, "security_decision", **call)\n'),
+    ("M201", "a model refusing the temperature fails every decision — claude-sonnet-5-5, the "
+     "default, refuses it (D-1)", "eregion_core/llm_call.py",
+     "            if not _refuses_temperature(exc):\n                raise\n"
+     "            _NO_TEMPERATURE.add(model)\n",
+     "            raise\n"),
+    ("M202", "the cycle records a fixed draw on a model that refused the temperature (D-1)",
+     "glorfindel/agent.py",
+     "    temperature = None if temperature_refused(model) else _DECISION_TEMPERATURE\n",
+     "    temperature = _DECISION_TEMPERATURE\n"),
+    ("M203", "a disruptive action runs on one draw: the draws' agreement is never checked (D-1)",
+     "glorfindel/agent.py",
+     "        _apply_agreement_guard(d, draws, required)\n", ""),
+    ("M204", "the confirming draws repeat the first draw's temperature: they probe nothing (D-1)",
+     "glorfindel/agent.py",
+     '            resp = completion_with_tool(litellm, "security_decision", **call)\n',
+     '            resp = completion_with_tool(litellm, "security_decision", '
+     "temperature=_DECISION_TEMPERATURE, **call)\n"),
+    ("M205", "a confirming draw below the confidence threshold agrees (D-1)",
+     "glorfindel/agent.py",
+     "        _apply_confidence_gate(x, raw_conf, threshold)\n", ""),
+    ("M206", "a confirming draw that failed is dropped, the ones that answered agree (D-1)",
+     "glorfindel/agent.py",
+     ("    return [r[0] for r in results], [r[1] for r in results if r[1] is not None]\n",
+      "    if required and len(draws) >= required and len(agree) == len(draws):\n"),
+     ("    return [r[0] for r in results if r[1] is not None], "
+      "[r[1] for r in results if r[1] is not None]\n",
+      "    if required and len(agree) == len(draws):\n")),
+    ("M207", "fewer draws than required are an agreement (D-1)",
+     "glorfindel/agent.py",
+     "    if required and len(draws) >= required and len(agree) == len(draws):\n",
+     "    if required and len(agree) == len(draws):\n"),
+    ("M208", "the configuration: GLORFINDEL_DECISION_DRAWS=1 is one draw, no agreement (D-1)", C,
+     "    if not 2 <= value <= _DECISION_DRAWS_MAX:\n",
+     "    if not 1 <= value <= _DECISION_DRAWS_MAX:\n"),
+    ("M209", "the configuration: a malformed GLORFINDEL_DECISION_DRAWS reads as the default "
+     "instead of holding (D-1)", C,
+     "    except ValueError:\n        return 0\n",
+     "    except ValueError:\n        return DECISION_DRAWS\n"),
+    ("M210", "an unstable decision's card reads « confiance insuffisante » (D-1)",
+     "glorfindel/agent.py",
+     '    "agreement": "unstable_decision",\n', ""),
+    ("M211", "an unstable decision's card cannot be approved in one click (D-1)",
+     "glorfindel/api.py",
+     '                     "telemetry_gap", "unstable_decision"}\n',
+     '                     "telemetry_gap"}\n'),
+    ("M212", "GLORFINDEL_DECISION_DRAWS never reaches the watch's container (D-1)",
+     "docker-compose.yml",
+     "  GLORFINDEL_DECISION_DRAWS: ${GLORFINDEL_DECISION_DRAWS:-}\n", ""),
     # H-1 (#187) — an exercise window is no longer believed on its word: refused when too
     # long, declared for later or named like a RulePoller run; a VM only if enrolled; the
     # run_id shortcut on a VM the window names; purged a week on; an exercise card kept in
@@ -803,6 +858,7 @@ TESTS.update({f"M{n}": "tests/unit/test_dependency_failures.py" for n in range(1
 TESTS["M189"] = "tests/unit/test_makefile_bench.py"
 TESTS["M190"] = "tests/unit/test_campaign_report.py"
 TESTS.update({mid: "tests/unit/test_orodruin_kill.py" for mid in ("M191", "M192", "M193")})
+TESTS.update({f"M{n}": "tests/unit/test_decision_stability.py" for n in range(200, 213)})
 TESTS.update({f"M{n}": "tests/unit/test_exercise_guard.py" for n in range(220, 239)})
 
 

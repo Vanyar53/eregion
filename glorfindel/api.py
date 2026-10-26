@@ -856,7 +856,7 @@ def _verify_approved(connector, esc: dict, action: str, resource_id: str, result
 # unattributed_signal: its card is anchored on a VM the detection did NOT name —
 # approving isolated that VM (fourth review, Q4).
 _APPROVABLE_TYPES = {"mode_hold", "low_confidence", "uncharacterized_signal", "release_hold",
-                     "telemetry_gap"}
+                     "telemetry_gap", "unstable_decision"}
 
 
 def _approval_max_age_h() -> float:

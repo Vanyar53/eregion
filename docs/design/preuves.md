@@ -225,6 +225,34 @@ M151–M158 : huit sur huit attrapés au premier tour (21/10) ; M170–M178, ajo
 relecture : neuf sur neuf (21/10). Détail des pannes et de ce que fait Glorfindel :
 [`../glorfindel.md`](../glorfindel.md), « Pannes des dépendances ».
 
+### La stabilité de la décision (D-1)
+
+La même force brute a reçu un blocage à 0,80 le 21/10, puis une isolation à 0,78 le 23/10.
+D-1 fixe la température du premier tirage (0, ou l'échantillonnage par défaut d'un modèle
+qui la refuse, comme `claude-sonnet-5-5`), et ne laisse partir seule une action disruptive
+que si plusieurs tirages s'accordent. Treize mutants, mesurés par
+`tests/unit/test_decision_stability.py` ; les cycles passent par le graphe complet là où la
+carte compte :
+
+| Mutant | Défaut réinjecté | Effet |
+|---|---|---|
+| M200 | premier tirage sans température | rien ne fixe le tirage, même sur un modèle qui l'accepte |
+| M201 | refus de la température non rattrapé | `claude-sonnet-5-5`, le modèle par défaut : toute décision échoue |
+| M202 | tirage dit fixé sur un modèle qui a refusé | la ligne de debug ment sur la reproductibilité |
+| M203 | accord des tirages jamais vérifié | une action disruptive part sur un seul tirage |
+| M204 | tirages de confirmation à la température du premier | ils répètent le premier au lieu de sonder la variance |
+| M205 | tirage de confirmation sous le seuil compté d'accord | une isolation à 40 % confirme une isolation à 95 % |
+| M206 | tirage en échec écarté, les autres comptés | un fournisseur qui tombe à mi-chemin laisse passer l'action |
+| M207 | moins de tirages que demandé comptés d'accord | idem, sans même un échec |
+| M208 | `GLORFINDEL_DECISION_DRAWS=1` accepté | un seul tirage, aucun accord |
+| M209 | valeur illisible lue comme le défaut | une faute de frappe n'est plus vue |
+| M210 | garde d'accord sans type de carte | la carte dit « confiance insuffisante » |
+| M211 | carte instable non approuvable en un clic | l'opérateur ne peut pas exécuter le premier tirage qu'il juge bon |
+| M212 | `GLORFINDEL_DECISION_DRAWS` absent d'`x-env` | réglé dans `.envrc`, ignoré par la watch |
+
+Treize sur treize attrapés au premier tour (26/10). Détail :
+[`../glorfindel.md`](../glorfindel.md), « Stabilité de la décision ».
+
 ### Une fenêtre d'exercice n'est plus crue sur parole (H-1)
 
 Qui écrit dans `runs/exercises/` ou dans le canal pouvait faire passer une vraie attaque pour

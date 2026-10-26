@@ -76,11 +76,13 @@ RENAME = object()
 # (old[i] -> new[i]), each old text matching exactly once — for a bug that needs two places.
 
 # D-2: the lines of analysis/campaign_report.py that read a date in words, a range of them too
-# (M513, M537).
-_DATES_FIRST = r'''    rf"|(?:\b(?:le|les|entre|du|des|aux|au|between|from|on|the)\s+{_DAY}(?:er)?"''' + "\n"
+# (M513, M537) — as D2b left them.
+_DATES_FIRST = r'''    rf"|(?:\b(?:le|les|entre|du|des|aux|(?:on|from|between)\s+the|between|from|on)\s+{_DAY}{_TH}"''' + "\n"
+_DATES_AU = r'''    rf"|\bau\s+{_DAY}{_TH}(?:\s*(?:,|\bet\b)\s*au\s+{_DAY}{_TH})+"''' + "\n"
 _DATES_LINE = (_DATES_FIRST
-               + r'''    rf"(?:\s*(?:,|-|–|\bet\b|\bau\b|\bà\b|\band\b|\bto\b)\s*(?:(?:le|du|des)\s+)?{_DAY}(?:er)?)+"''' + "\n"
-               r'''    rf"|\b\d{{1,2}}(?:er|st|nd|rd|th)?)\s+(?:{_MONTHS})\b"''' + "\n")
+               + r'''    rf"(?:\s*(?:,|-|–|\bet\b|\bau\b|\bà\b|\band\b|\bto\b)\s*(?:(?:le|du|des|au|aux|the)\s+)?{_DAY}{_TH})+"''' + "\n"
+               + _DATES_AU
+               + r'''    rf"|\b\d{{1,2}}(?:er|st|nd|rd|th)?)\s+(?:{_MONTHS})\b"''' + "\n")
 
 # (id, bug class, file, text in the code today, text that re-introduces the bug[, why
 # the invariants can't see it])
@@ -1042,17 +1044,17 @@ MUTANTS = [
      "        if False and not any(\n"),
     # D-2, after its third review: a trend over three campaigns says the way between its
     # earlier runs, in either order, on the same technique; a date in English is a date; a
-    # number before a date is no day of a range.
+    # number before a date is no day of a range. M540–M542 follow D2b's _faced (their order
+    # unknown, two earlier runs face each other both ways).
     ("M540", "a trend over three campaigns is barred: two earlier runs never face each other (D-2)",
      "analysis/campaign_report.py",
-     "    out += [facing(x, y) for x in earlier for y in earlier if x is not y and x.ttp == y.ttp]\n", ""),
+     "                out += [facing(x, y), facing(y, x)]\n", "                pass\n"),
     ("M541", "two earlier runs face each other in the order they are cited only (D-2)",
      "analysis/campaign_report.py",
-     "    out += [facing(x, y) for x in earlier for y in earlier if x is not y and x.ttp == y.ttp]\n",
-     "    out += [facing(x, y) for i, x in enumerate(earlier) for y in earlier[i + 1:] if x.ttp == y.ttp]\n"),
+     "                out += [facing(x, y), facing(y, x)]\n", "                out += [facing(x, y)]\n"),
     ("M542", "two earlier runs of different techniques face each other (D-2)", "analysis/campaign_report.py",
-     "    out += [facing(x, y) for x in earlier for y in earlier if x is not y and x.ttp == y.ttp]\n",
-     "    out += [facing(x, y) for x in earlier for y in earlier if x is not y]\n"),
+     "            if x is y or x.ttp != y.ttp or (x.run_id in own and y.run_id in own):\n",
+     "            if x is y or (x.run_id in own and y.run_id in own):\n"),
     ("M543", "a date in English is read as a number: « since October 21 » barred (D-2)",
      "analysis/campaign_report.py",
      ('''           "|january|february|march|april|may|june|july|august|september|october|november|december")\n''',
@@ -1060,17 +1062,70 @@ MUTANTS = [
      ('''           )\n''', "")),
     ("M544", "a number before a date is a day of a range: « baisse de 12, le 23 octobre » kept (D-2)",
      "analysis/campaign_report.py",
-     _DATES_FIRST, r'''    rf"|(?:\b{_DAY}(?:er)?"''' + "\n"),
+     _DATES_FIRST, r'''    rf"|(?:\b{_DAY}{_TH}"''' + "\n"),
     # D-2, after its fourth review: « des 21 et 23 octobre » and « du 21 et du 23 octobre » are
-    # ranges; a day of a range is from 1 to 31.
+    # ranges; a day of a range is from 1 to 31. M546 and M547 follow D2b's openings and
+    # articles.
     ("M545", "a day of a range is any number: « between 70 and 60, 23 October » kept (D-2)",
      "analysis/campaign_report.py",
      r'''_DAY = r"(?:3[01]|[12]\d|0?[1-9])(?!\d)"''', r'''_DAY = r"\d{1,2}"'''),
-    ("M546", "a range of dates after « des », « aux », « au » is read as numbers (D-2)",
+    ("M546", "a range of dates after « des », « aux », « from the » is read as numbers (D-2)",
      "analysis/campaign_report.py",
-     _DATES_FIRST, r'''    rf"|(?:\b(?:le|les|entre|du|between|from|on)\s+{_DAY}(?:er)?"''' + "\n"),
+     _DATES_FIRST, r'''    rf"|(?:\b(?:le|les|entre|du|between|from|on)\s+{_DAY}{_TH}"''' + "\n"),
     ("M547", "« du 21 et du 23 octobre » is read as numbers (D-2)", "analysis/campaign_report.py",
-     r"(?:(?:le|du|des)\s+)?{_DAY}(?:er)?)+", r"(?:le\s+)?{_DAY}(?:er)?)+"),
+     r"(?:(?:le|du|des|au|aux|the)\s+)?{_DAY}{_TH})+", r"(?:(?:le|des|au|aux|the)\s+)?{_DAY}{_TH})+"),
+    # D2b (#184, after D-2) — the runs a trend cites face each other the way they were played,
+    # read on their campaigns' starts; a manifest from the channel has its start bounded by
+    # what H0 saw; « au » and « the » alone open no range of dates, « au … et au … » and « from
+    # the … to the … » do, with their st, nd, rd.
+    ("M650", "the order of the runs a trend cites is not read: a pair of earlier runs is an alibi (D2b)",
+     CREP, "            first = _came_first(x, y)\n", "            first = None\n"),
+    ("M651", "the runs a trend cites face each other against time (D2b)", CREP,
+     "                out.append(facing(x, y) if first else facing(y, x))\n",
+     "                out.append(facing(y, x) if first else facing(x, y))\n"),
+    ("M652", "a run of the index comes without its campaign's start (D2b)", CREP,
+     '    fact.campaign_started = _seconds(meta.get("campaign_started"))\n', ""),
+    ("M653", "this campaign's runs come without its start: a later campaign's run is cited as earlier (D2b)",
+     CREP, "        f.campaign_started = info.started\n", "        pass\n"),
+    ("M654", "a campaign id that is a date gives no order (D2b)", CREP,
+     "    return f.campaign_started if f.campaign_started is not None else _id_date(f.campaign_id)\n",
+     "    return f.campaign_started\n"),
+    ("M655", "two runs of one campaign are not ordered by seq (D2b)", CREP,
+     "        return None if x.seq == y.seq else x.seq < y.seq\n", "        return None\n"),
+    ("M656", "a channel manifest's start after its first window is believed (D2b)", CREP,
+     "    if first_window is not None and started > first_window + FUTURE_SKEW_S:\n", "    if False:\n"),
+    ("M657", "a channel manifest's start long before its first window is believed (D2b)", CREP,
+     "    if first_window is not None and started < first_window - START_LEAD_S - FUTURE_SKEW_S:\n",
+     "    if False:\n"),
+    ("M658", "a channel manifest's start after H0 pulled it is believed (D2b)", CREP,
+     "    if pulled is not None and started > pulled + FUTURE_SKEW_S:\n", "    if False:\n"),
+    ("M659", "a refused start is not said in the report (D2b)", CREP,
+     "        warn(info.start_refused)\n", "        pass\n"),
+    ("M660", "a refused start is kept: the forged date chooses the previous campaign (D2b)", CREP,
+     "            info.started = first\n", "            pass\n"),
+    ("M661", "a window H-1 refuses bounds a manifest's start (D2b)", CREP,
+     '        if not window or window.get("purged_at") or window_refusal(window, declared_at=declared):\n',
+     '        if not window or window.get("purged_at"):\n'),
+    ("M662", "« au » opens a range: « tombe au 12, le 23 octobre » kept (D2b)", CREP,
+     r"des|aux|(?:on|from|between)\s+the", r"des|aux|au|(?:on|from|between)\s+the"),
+    ("M663", "« the » alone opens a range: « by the 12, 23 October » kept (D2b)", CREP,
+     r"aux|(?:on|from|between)\s+the|between", r"aux|the|between"),
+    ("M664", "« au 21 et au 23 octobre » is read as numbers (D2b)", CREP, _DATES_AU, ""),
+    ("M665", "« au », « aux », « the » refused inside a range: « from the 21 to the 23 October » barred (D2b)",
+     CREP, r"(?:(?:le|du|des|au|aux|the)\s+)?", r"(?:(?:le|du|des)\s+)?"),
+    ("M666", "a day of a range takes no st, nd, rd: « on the 21st and 23rd October » barred (D2b)", CREP,
+     '_TH = r"(?:er|st|nd|rd|th)?"', '_TH = r"(?:er)?"'),
+    # D2b, after its review: a date no UTC date holds is said, never raised; an unknown start
+    # replaces an indexed one; two runs of this campaign make no trend.
+    ("M667", "a manifest's date of year 10000 makes the report raise (D2b)", CREP,
+     "    except (ValueError, OverflowError, OSError):\n        return str(read)[:40]",
+     "    except ():\n        return str(read)[:40]"),
+    ("M668", "an unknown start is left out of the row: the start an earlier indexing gave stays (D2b)", CREP,
+     '        meta["campaign_started"] = float(campaign.started) if campaign.started is not None else ""\n',
+     '        if campaign.started is not None:\n            meta["campaign_started"] = float(campaign.started)\n'),
+    ("M669", "two runs of this campaign face each other in a trend (D2b)", CREP,
+     "            if x is y or x.ttp != y.ttp or (x.run_id in own and y.run_id in own):\n",
+     "            if x is y or x.ttp != y.ttp:\n"),
     # M-3 (#183) — the host of Glorfindel: Discord buttons check who clicks (closed by
     # default), each container gets only its secrets, H0 deploys a named reference whose
     # image carries it, and the image installs from the lock.
@@ -1222,6 +1277,7 @@ TESTS.update({f"M{n}": "tests/unit/test_campaign_changes.py" for n in range(260,
 TESTS.update({f"M{n}": "tests/unit/test_campaign_changes.py" for n in range(510, 520)})  # D-2, review
 TESTS.update({f"M{n}": "tests/unit/test_campaign_changes.py" for n in range(530, 540)})  # D-2, 2nd review
 TESTS.update({f"M{n}": "tests/unit/test_campaign_changes.py" for n in range(540, 548)})  # D-2, 3rd, 4th reviews
+TESTS.update({f"M{n}": "tests/unit/test_campaign_changes.py" for n in range(650, 670)})  # D2b
 TESTS.update({f"M{n}": "tests/unit/test_bot.py" for n in range(280, 284)})
 TESTS.update({f"M{n}": "tests/unit/test_glorfindel_host.py" for n in range(284, 287)})
 TESTS.update({f"M{n}": "tests/unit/test_host_deploy.py" for n in (287, 288)})

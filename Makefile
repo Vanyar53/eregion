@@ -184,7 +184,7 @@ help:
 	@echo "  make orodruin-push                           Image d'Annatar + orodruin.env sur la VM"
 	@echo "  make orodruin-check                          Le contrat, lu depuis la VM : armed ou passive"
 	@echo "  make orodruin-stop / orodruin-start          Désalloue / rallume la VM (entre les sessions)"
-	@echo "  make orodruin-kill [DRY_RUN=1]               URGENCE : révoque l'identité, puis désalloue"
+	@echo "  make orodruin-kill [DRY_RUN=1]               URGENCE : révoque l'identité, annule le chaos, désalloue, ferme les fenêtres"
 	@echo "  make orodruin-down                           Détruit la VM et l'identité"
 	@echo ""
 	@echo "Gothmog (G0) — une panne déclarée, depuis Orodruin (gothmog/README.md) :"
@@ -589,6 +589,12 @@ ORO_RUN        = docker run --rm --env-file orodruin.env -v $$HOME/runs:/app/run
 # PRINCIPAL / VM_ID : pour un kill même si l'état Terraform est illisible.
 ORO_PRINCIPAL  = $(or $(PRINCIPAL),$(shell $(ORO_TF) output -no-color -raw principal_id 2>/dev/null))
 ORO_VM_ID      = $(or $(VM_ID),$(shell $(ORO_TF) output -no-color -raw vm_id 2>/dev/null))
+# Le kill vise l'abonnement du contrat (AZURE_SUBSCRIPTION_ID d'orodruin.env), jamais le contexte
+# courant de ta CLI (M-1) ; SUBSCRIPTION= pour le forcer. CHANNEL= : le canal des fenêtres à fermer.
+ORO_ENV        = infra/orodruin/orodruin.env
+ORO_SUB        = $(or $(SUBSCRIPTION),$(shell sed -n 's/^AZURE_SUBSCRIPTION_ID=//p' $(ORO_ENV) 2>/dev/null))
+ORO_BENCH_RG   = $(or $(shell sed -n 's/^EREGION_BENCH_RG=//p' $(ORO_ENV) 2>/dev/null),rg-celebrimbor)
+ORO_CHANNEL    = $(or $(CHANNEL),$(shell $(ORO_TF) output -no-color -raw channel_url 2>/dev/null | grep -E '^https://'),$(shell sed -n 's/^EREGION_EXERCISE_CHANNEL=//p' $(ORO_ENV) 2>/dev/null))
 
 orodruin-init:
 	$(ORO_TF) init -upgrade
@@ -622,9 +628,11 @@ orodruin-stop:
 orodruin-start:
 	@echo "az vm start (vm-orodruin)" && az vm start --ids "$(ORO_VM_ID)"
 
-# Urgence, depuis ton az login : révoquer d'abord, puis désallouer (infra/orodruin/kill.py).
+# Urgence, depuis ton az login : révoquer d'abord, puis annuler le chaos en cours, désallouer, fermer
+# les fenêtres d'exercice ouvertes, et dire ce qui reste en vol (infra/orodruin/kill.py).
 orodruin-kill:
-	@.venv/bin/python infra/orodruin/kill.py "$(ORO_PRINCIPAL)" "$(ORO_VM_ID)" $(if $(DRY_RUN),--dry-run)
+	@.venv/bin/python infra/orodruin/kill.py "$(ORO_PRINCIPAL)" "$(ORO_VM_ID)" --subscription "$(ORO_SUB)" \
+		--bench-rg "$(ORO_BENCH_RG)" --channel "$(ORO_CHANNEL)" $(if $(DRY_RUN),--dry-run)
 
 orodruin-down:
 	$(ORO_TF) destroy $(ORO_VARS)$(if $(YES), -auto-approve)

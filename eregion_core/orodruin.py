@@ -119,8 +119,13 @@ class Verdict:
         return "; ".join(f"{m['code']}: {m['detail']}" for m in self.missing)
 
 
+# A detail is shown (orodruin-check, a passive run's reasons): a scope or a URL in it never
+# names the subscription (seen on the bench, 26/10, in an unreadable listing's URL).
+_SUBSCRIPTION_PART = re.compile(r"/subscriptions/[^/\s'\"]+", re.IGNORECASE)
+
+
 def _miss(code: str, detail: str) -> dict:
-    return {"code": code, "detail": detail}
+    return {"code": code, "detail": _SUBSCRIPTION_PART.sub("/subscriptions/…", detail)}
 
 
 # ── Readers — each returns what is missing (empty: the guarantee holds) ───────────────

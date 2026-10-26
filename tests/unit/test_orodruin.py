@@ -308,6 +308,22 @@ def test_run_command_is_passive_without_a_session(tmp_path):
     ex._compute.virtual_machines.begin_start.assert_not_called()
 
 
+# ── M194: what the contract shows never names the subscription ─────────────────────
+
+def test_a_missing_guarantee_never_names_the_subscription():
+    """Seen on the bench (26/10): an unreadable listing printed its URL, subscription and all."""
+    def unreadable():
+        raise RuntimeError(f"HTTP 403 on https://management.azure.com/subscriptions/{SUB}"
+                           "/providers/Microsoft.Authorization/roleAssignments")
+    verdict = orodruin.check(_readers(identity=unreadable))
+    outside = orodruin.assess_identity(
+        [_assignment(f"/subscriptions/{SUB}/resourceGroups/rg-other")], lambda _: [], [], BENCH,
+        sees_subscription=True)
+    shown = verdict.reasons() + " ".join(m["detail"] for m in outside)
+    assert "identity_unreadable" in shown and "/subscriptions/…/providers" in shown
+    assert SUB not in shown
+
+
 # ── M66: the kill revokes first, then cancels, stops, closes ─────────────────────
 
 def _step(order, name, error=None):

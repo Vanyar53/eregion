@@ -67,6 +67,10 @@ peut laisser arrêtée. Il sort en 1 si une étape a échoué.
 
 Le kill retire les droits hors de Terraform : `make orodruin-lock` les repose. Retirer un rôle ne
 prend pas effet à l'instant (cache du plan de contrôle) : c'est pour ça que la VM s'arrête aussi.
+**Mesuré le 26/10** pendant une `vm-shutdown` : révocation, annulation, fenêtre fermée et tirée par
+H0 en 11 s ; gondolin redémarrée par Chaos Studio. Après le réarmement, `orodruin-check` dit
+`armed` tout de suite, mais Log Analytics a refusé Gothmog encore quelques minutes :
+`make gothmog-preflight` avant de relancer une panne.
 Détail : [« L'arrêt d'urgence arrête ce qui tourne »](../../docs/design/orodruin-contract.md).
 
 ## À mesurer sur le banc (O1, partie B)

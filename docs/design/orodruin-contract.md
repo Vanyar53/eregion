@@ -3,7 +3,7 @@
 _Conception — 2026-10-14, relue en Opus 5.5 le 2026-10-15 — statut : **implémenté et mesuré sur le banc le 19/10** (O1 : `eregion_core/orodruin.py`,
 `infra/orodruin/`, mutants M64–M70), canal des fenêtres d'exercice compris (voir « Le canal
 des fenêtres d'exercice ») ; canal retour de la watch (#159, M109–M115) le 20/10 ; arrêt
-d'urgence revu le 26/10 (M-1, M191–M193, pas encore mesuré sur le banc)._
+d'urgence revu et mesuré sur le banc le 26/10 (M-1, M191–M194)._
 
 ## Ce qu'Orodruin est, et ce qu'il n'est pas
 
@@ -319,13 +319,36 @@ rédacteur de plus sur le canal : c'est la surface que H-1 (#180) borne côté l
 **Rien d'imprimé ne nomme l'abonnement** (commandes, erreurs), comme les cibles Make (M124).
 
 **Mutants** : M191 (la liste dans le contexte courant de la CLI : le bug d'origine), M192 (une
-expérience en cours laissée en cours), M193 (les fenêtres ouvertes laissées ouvertes) ; M66 suit
-la nouvelle boucle. Tests : `tests/unit/test_orodruin_kill.py`, avec un faux `az` dont le
+expérience en cours laissée en cours), M193 (les fenêtres ouvertes laissées ouvertes), M194 (ce
+que montre le contrat nomme l'abonnement) ; M66 suit la nouvelle boucle. Tests : `tests/unit/test_orodruin_kill.py`, avec un faux `az` dont le
 contexte courant est un autre abonnement.
 
-**À mesurer sur le banc** (pas encore fait) : la liste relue juste après la suppression (cohérence
-de l'API) ; l'annulation d'une panne `vm-shutdown` en cours (la VM revient-elle ?) ; la fenêtre
-fermée par l'opérateur, tirée par la watch de H0.
+**Mesuré sur le banc le 26/10** (kill lancé pendant une `vm-shutdown` de gondolin) :
+
+| Heure (UTC) | Événement |
+|---|---|
+| 14:57:13 | l'expérience démarre ; gondolin éteinte à 14:58:00 |
+| 14:58:23–14:58:31 | les 5 attributions d'Orodruin supprimées ; la liste relue juste après est vide |
+| juste après | annulation demandée ; l'exécution est encore `Running` (le kill le dit) |
+| 14:58:37 | la fenêtre fermée par le kill (`closed_by: orodruin-kill`) |
+| 14:58:48 | la watch de H0 a tiré la fenêtre fermée (11 s) |
+| 14:58:56 | Orodruin désallouée |
+| 14:59:19 | gondolin redémarrée **par Chaos Studio** : l'annulation ramène la VM, sans `az vm start` |
+| 14:59:25 | l'exécution passe à `Cancelled` |
+
+Le kill est sorti en 0. Ce qu'il disait en vol était juste. Un premier kill, lancé en même temps
+que la panne (14:44), était passé avant son démarrage. La révocation a gagné : le démarrage de
+l'expérience a été refusé, et la fenêtre fermée par le run une seconde après son ouverture.
+
+**Au réarmement** (`make orodruin-lock YES=1`, attributions recréées à 14:53:20) :
+`orodruin-check` dit `armed` tout de suite. Mais la requête Log Analytics de Gothmog (heartbeat,
+par ARM) était encore refusée 76 s plus tard (HTTP 502 `InsufficientAccessError`), et acceptée
+moins de 4 min après. Après un kill, `make gothmog-preflight` dit quand on peut relancer une
+panne. Un `orodruin-check` refusé affichait l'abonnement dans l'URL de la liste : ce que montre
+le contrat le masque désormais (M194).
+
+Non mesuré au banc : le mauvais contexte CLI lui-même (un seul abonnement utilisé). C'est le
+test `test_a_wrong_cli_context_never_concludes_nothing_to_revoke` qui le couvre.
 
 Limites : un Run Command ne se liste pas (action, pas ressource) : le kill le déduit des fenêtres,
 il ne le voit pas. Une expérience hors du groupe du banc n'est pas lue : l'identité d'Orodruin

@@ -103,8 +103,12 @@ def approve(proposal_id: str, rules_yaml_path: str | Path) -> dict:
     proposal["status"] = "approved"
     proposal["approved_at"] = datetime.now(timezone.utc).isoformat()
     _STORE.write_text("\n".join(json.dumps(p) for p in updated) + "\n")
+    bound = "assets" in rule
+    reason = "" if bound else (
+        "aucun backend unique de glorfindel-config.yaml ne surveille son workspace"
+        if proposal.get("workspace_id") else "aucun backend de glorfindel-config.yaml")
     return {**proposal, "rules_file": str(rule_layers.client_rules_path()), "rule_write": how,
-            "rule_bound": "assets" in rule}
+            "rule_bound": bound, "rule_unbound_reason": reason}
 
 
 def reject(proposal_id: str) -> dict:
@@ -164,8 +168,11 @@ def rule_from_proposal(proposal: dict, rules_path: Path) -> dict:
                 # read `r.monitoring_backends`, which DetectionRule does not have: the error
                 # was swallowed, every approved rule took the inline form below, and loaded
                 # as auto-apply on no backend it applied to no VM, silently (P1 review).
+                # The first rule's backend only when the proposal names no workspace: one
+                # that names another would be bound to a workspace it does not watch.
                 from glorfindel.rule_layers import backend_for_workspace
-                backend_name = backend_for_workspace(proposal.get("workspace_id", ""), cfg.backends) or next(
+                workspace = proposal.get("workspace_id", "")
+                backend_name = backend_for_workspace(workspace, cfg.backends) if workspace else next(
                     (r.monitoring_backend_name for r in cfg.rules if r.monitoring_backend_name), "")
                 if backend_name:
                     asset_name = "auto"

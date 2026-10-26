@@ -217,7 +217,8 @@ la War Room), et la désactiver au besoin (`disable: [<nom>]` dans la couche).
    surveille son workspace, elle part telle quelle et `migrate-rules` le dit (⚠ : elle reste
    inerte — à lier à la main dans la couche). Un fichier illisible : rien n'est écrit, et c'est dit.
    Relancé, il ne change plus rien. `glorfindel rules` doit montrer chaque règle approuvée avec la
-   couche `client` et, en `assets`, `auto`.
+   couche `client` et, en `assets`, `auto (<backend>)` — `auto (aucun backend : inerte)` dit une
+   règle restée inerte, avec sous le tableau la note « ne s'applique à aucune VM découverte ».
 4. **Une fois vérifié** (la règle dans `glorfindel rules`, la watch sans erreur dans
    `make glorfindel-host-logs`), sur la VM, jeter le stash (le premier de la liste doit être
    `regles-approuvees-p1`) ; la copie reste dans `~/.glorfindel/migration-p1/` :

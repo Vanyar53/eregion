@@ -159,7 +159,7 @@ def _bound(rule: dict, backend: str) -> dict:
 
 
 def migrate(from_path: str | Path, base_path: str | Path, dest: Path | None = None,
-            dry_run: bool = False, glorfindel_cfg=None) -> dict:
+            dry_run: bool = False, glorfindel_cfg=None, config_error: str = "") -> dict:
     """Move what a modified base holds beyond the pristine base into the client's layer.
 
     `from_path`: the base file as the deployment modified it (rules approved into it before
@@ -192,8 +192,10 @@ def migrate(from_path: str | Path, base_path: str | Path, dest: Path | None = No
                 moved[i] = _bound(r, backend)
                 report["converted"].append(f"{r['name']} → monitoring_backends: [{backend}], assets: [auto]")
             else:
-                report["legacy"].append(f"{r['name']} : aucun backend unique ne surveille son workspace "
-                                        "(glorfindel-config.yaml, monitoring_backends) — migrée telle quelle, "
+                why = (f"glorfindel-config.yaml illisible ({config_error})" if config_error else
+                       "aucun backend unique ne surveille son workspace (glorfindel-config.yaml, "
+                       "monitoring_backends)")
+                report["legacy"].append(f"{r['name']} : {why} — migrée telle quelle, "
                                         "elle ne s'applique à aucune VM découverte")
     report["overrides"] = [r["name"] for r in moved if r["name"] in base_rules]
     disable = [name for name in base_rules if name not in src_rules]
@@ -262,16 +264,19 @@ _PROVIDERS_RE = re.compile(
     r"\bproviders/(?P<ns>microsoft\.[a-z0-9]+)(?P<path>(?:/[a-z0-9]+/[^/\s\"'`,;|()\[\]{}\\]+)+)",
     re.IGNORECASE)
 
-# KQL columns whose value names a resource or an identity of the deployment. Closed by
-# default: in a predicate where one of them appears, EVERY literal is replaced, whatever the
-# operator (==, in~, has_any, has_all, matches regex, startswith, a function around the column…).
+# KQL columns whose value names a resource or an identity of the deployment. A literal
+# DIRECTLY compared to one of them (either side, any operator, the column bare or in one
+# function call: `tolower(Computer)`) is replaced; anything that reaches such a column through
+# an intermediate — a `let`, an alias, a function defined in the query, an expression — makes
+# the export refuse: generalise that rule by hand (P1, second review: following KQL by regex
+# does not converge, so what is not sure is refused, never guessed).
 _ID_COLUMNS = ("Computer", "ComputerName", "_ResourceId", "ResourceId", "ResourceUri", "Resource",
                "ResourceGroup", "ResourceGroupName", "_ResourceGroup", "ResourceName",
                "SubscriptionId", "_SubscriptionId", "TenantId", "_TenantId", "AADTenantId",
                "WorkspaceId", "_WorkspaceId", "AccountName", "StorageAccountName", "VaultName",
                "HostName", "Hostname", "Host", "DeviceName", "VMName", "VmName", "HostIP",
                "Caller", "UserPrincipalName", "Identity")
-_ID_COL_RE = re.compile(r"(?<!\w)(?:" + "|".join(_ID_COLUMNS) + r")(?!\w)", re.IGNORECASE)
+_ID_COL_RE = re.compile(r"(?<![\w.])(?:" + "|".join(_ID_COLUMNS) + r")(?!\w)", re.IGNORECASE)
 # A KQL string literal: "…", '…', verbatim @"…", obfuscated h"…" / h@"…" / H'…', and the
 # multi-line ```…``` / ~~~…~~~ — a prefix only where no word goes on before it
 # (`startswith"x"` is an operator, then a literal). Comments: // to the end of the line.
@@ -279,11 +284,15 @@ _KQL_TOKEN_RE = re.compile(
     r"(?P<lit>(?:(?<![\w@])(?:[hH]@?|@[hH]?))?(?:\"(?:[^\"\\\n]|\\.)*\"|'(?:[^'\\\n]|\\.)*')"
     r"|```.*?```|~~~.*?~~~)"
     r"|(?P<comment>//[^\n]*)", re.DOTALL)
-# What ends a predicate: a pipe, a statement, `and`, `or`.
-_KQL_BOUND_RE = re.compile(r"\||;|\band\b|\bor\b")
-_KQL_LET_RE = re.compile(r"^\s*let\s+(\w+)\s*=")
+# The comparison operators of KQL (word operators not followed by a word character).
+_KQL_OP = (r"(?:==|!=|=~|!~|<>|(?:matches\s+regex|!?(?:has_any|has_all|has_cs|hasprefix_cs|hasprefix|"
+           r"hassuffix_cs|hassuffix|has|contains_cs|contains|startswith_cs|startswith|endswith_cs|"
+           r"endswith|in~|in|between))(?![\w~]))")
+_KQL_LET_RE = re.compile(r"\blet\s+(\w+)\s*=\s*")
+_KQL_UDF_RE = re.compile(r"\([^()]*\)\s*\{")
+_KQL_ALIAS_RE = re.compile(r"(?<![\w.!<>=~])(\w+)\s*=(?![=~])\s*")
 # Functions whose argument names a workspace, a resource, an application, a cluster.
-_KQL_SCOPE_FN_RE = re.compile(r"\b(?:workspace|resource|app|cluster|database)\s*\(\s*", re.IGNORECASE)
+_KQL_SCOPE_FN_RE = re.compile(r"\b(workspace|resource|app|cluster|database)\s*\(\s*", re.IGNORECASE)
 _PLACEHOLDER_RE = re.compile(r"^<[a-z_]+>$")
 _MIN_NAME = 3   # shorter names would cut words of the query
 
@@ -292,6 +301,11 @@ class IdentifierLeft(ValueError):
     """The generalised rule still names something of the deployment: not exported.
     `found`: what is left (shown to the operator, never written anywhere)."""
     found: list[str] = []
+
+
+class NotGeneralizable(IdentifierLeft):
+    """The query reaches an identity through a form the export does not follow (a `let`, an
+    alias, a function of the query, an expression): to generalise by hand, nothing exported."""
 
 
 def _literal_value(lit: str) -> str:
@@ -305,9 +319,16 @@ def _real_literal(lit: str) -> bool:
     return bool(value) and not _PLACEHOLDER_RE.match(value)
 
 
+def _names_something(lit: str) -> bool:
+    """A literal that can name something: not a placeholder, at least _MIN_NAME long, with a
+    letter or a digit (`"/"`, `"@"`, `""` name nothing)."""
+    value = _literal_value(lit)
+    return _real_literal(lit) and len(value) >= _MIN_NAME and any(c.isalnum() for c in value)
+
+
 def _kql_lex(query: str) -> tuple[str, list[tuple[int, int]], list[tuple[int, int]]]:
     """→ (code, literals, comments): `code` is the query with every literal and comment
-    blanked (same length), so that operators, columns and boundaries are read in code only."""
+    blanked (same length), so that operators, columns and names are read in code only."""
     code = list(query)
     literals, comments = [], []
     for m in _KQL_TOKEN_RE.finditer(query):
@@ -317,41 +338,172 @@ def _kql_lex(query: str) -> tuple[str, list[tuple[int, int]], list[tuple[int, in
     return "".join(code), literals, comments
 
 
-def _kql_targets(query: str) -> list[tuple[int, int]]:
-    """The literals of a query that may name the deployment, closed by default:
-    - every literal of a predicate (between `|`, `;`, `and`, `or`) where an identity column
-      appears, whatever the operator and the literal's form;
-    - every literal of a `let` that such a predicate uses — directly or through another `let`;
-    - the argument of workspace(), resource(), app(), cluster(), database()."""
+def _closing(code: str, start: int, opening: str = "(", closing: str = ")") -> int:
+    """The index of the bracket that closes the one at `start` (len(code) if none)."""
+    depth = 0
+    for i in range(start, len(code)):
+        if code[i] == opening:
+            depth += 1
+        elif code[i] == closing:
+            depth -= 1
+            if depth == 0:
+                return i
+    return len(code)
+
+
+def _expression_end(code: str, start: int) -> int:
+    """Where an expression that starts at `start` ends: `,` `|` `;` or `by` at depth 0."""
+    depth = 0
+    i = start
+    while i < len(code):
+        c = code[i]
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            if depth == 0:
+                return i
+            depth -= 1
+        elif depth == 0 and (c in ",|;\n" or re.match(r"by\b", code[i:]) and not code[i - 1:i].isalnum()):
+            return i
+        i += 1
+    return i
+
+
+def _kql_analysis(query: str) -> tuple[list[tuple[int, int]], list[str]]:
+    """→ (literals to replace, forms that make the export refuse).
+
+    Replaced, because sure: a literal directly compared to an identity column (either side,
+    a list of literals too), and the literal argument of workspace()/resource()/app()/
+    cluster()/database(). Refused, because they reach an identity through an intermediate:
+    a `let` bound to a string (directly or through another `let`) used against an identity
+    column or in such a function; a non-literal argument of such a function; an alias of an
+    identity column compared to a value; a function defined in the query whose body touches
+    an identity column; an identity column compared to an expression holding a literal."""
     code, literals, _ = _kql_lex(query)
-    spans, start = [], 0
-    for m in _KQL_BOUND_RE.finditer(code):
-        spans.append((start, m.start()))
-        start = m.end()
-    spans.append((start, len(code)))
+    lit_at = {s: (s, e) for s, e in literals}
+    replace: set[tuple[int, int]] = set()
+    refused: list[str] = []
 
-    def words(span):
-        return set(re.findall(r"\w+", code[span[0]:span[1]]))
+    def has_literal(a: int, b: int) -> bool:
+        return "\x00" in code[a:b]
 
-    lets = {}
-    for span in spans:
-        m = _KQL_LET_RE.match(code[span[0]:span[1]])
-        if m:
-            lets[m.group(1)] = span
-    chosen = {span for span in spans if _ID_COL_RE.search(code[span[0]:span[1]])}
-    todo = list(chosen)
-    while todo:
-        used = words(todo.pop())
-        for name, span in lets.items():
-            if name in used and span not in chosen:
-                chosen.add(span)
-                todo.append(span)
-    targets = {lit for lit in literals for a, b in chosen if a <= lit[0] and lit[1] <= b}
-    starts = {lit[0]: lit for lit in literals}
+    # `let`: functions defined in the query, and the names bound to a string.
+    string_lets: set[str] = set()
+    pending: dict[str, str] = {}
+    for m in _KQL_LET_RE.finditer(code):
+        name, start = m.group(1), m.end()
+        udf = _KQL_UDF_RE.match(code, start)
+        if udf:
+            body_end = _closing(code, udf.end() - 1, "{", "}")
+            if _ID_COL_RE.search(code, udf.end(), body_end):
+                refused.append(f"fonction « {name} » définie dans la requête, dont le corps touche une colonne d'identité")
+            continue
+        end = code.find(";", start)
+        rhs = code[start:end if end >= 0 else len(code)]
+        if "\x00" in rhs:
+            string_lets.add(name)
+        else:
+            pending[name] = rhs
+    grew = True
+    while grew:   # a `let` bound to a `let` bound to a string
+        grew = False
+        for name, rhs in list(pending.items()):
+            if set(re.findall(r"\w+", rhs)) & string_lets:
+                string_lets.add(name)
+                del pending[name]
+                grew = True
+
+    # Aliases of an identity column (or of an alias): `extend h = Computer`, `by M=Computer`…
+    aliases: set[str] = set()
+    found_alias = True
+    while found_alias:
+        found_alias = False
+        for m in _KQL_ALIAS_RE.finditer(code):
+            name = m.group(1)
+            if name in aliases or name in string_lets or name.lower() == "let":
+                continue
+            if re.search(r"\blet\s*$", code[:m.start()]):
+                continue
+            rhs = code[m.end():_expression_end(code, m.end())]
+            words = set(re.findall(r"\w+", rhs))
+            if _ID_COL_RE.search(rhs) or words & aliases:
+                aliases.add(name)
+                found_alias = True
+
+    def operand(pos: int, column: str, alias: bool) -> None:
+        """The value compared to `column`, from `pos` (past the operator)."""
+        while pos < len(code) and code[pos] in " \t\n":
+            pos += 1
+        if pos in lit_at:
+            span = lit_at[pos]
+            if _names_something(query[span[0]:span[1]]):
+                if alias:
+                    refused.append(f"alias « {column} » d'une colonne d'identité comparé à une valeur")
+                else:
+                    replace.add(span)
+            return
+        if code[pos:pos + 1] == "(":
+            end = _closing(code, pos)
+            inner = code[pos + 1:end]
+            spans = [lit_at[s] for s in lit_at if pos < s < end]
+            if spans and not re.sub(r"[\x00,\s]", "", inner):
+                for span in spans:
+                    if _names_something(query[span[0]:span[1]]):
+                        if alias:
+                            refused.append(f"alias « {column} » d'une colonne d'identité comparé à une valeur")
+                        else:
+                            replace.add(span)
+            elif spans:
+                refused.append(f"{column} comparé à une expression : {query[pos:end + 1].strip()[:60]}")
+            else:
+                for word in set(re.findall(r"\w+", inner)) & string_lets:
+                    refused.append(f"let « {word} » (une chaîne) utilisé contre {column}")
+            return
+        m = re.match(r"(\w+)\s*(\()?", code[pos:])
+        if not m:
+            return
+        if m.group(2):
+            end = _closing(code, pos + m.end() - 1)
+            if has_literal(pos, end) or set(re.findall(r"\w+", code[pos:end])) & string_lets:
+                refused.append(f"{column} comparé à une expression : {query[pos:end + 1].strip()[:60]}")
+        elif m.group(1) in string_lets:
+            refused.append(f"let « {m.group(1)} » (une chaîne) utilisé contre {column}")
+
+    def compared(names_re: str, alias: bool) -> None:
+        side = r"(?<![\w.])(?:\w+\s*\(\s*)?(?P<col>" + names_re + r")(?!\w)(?:\s*\))?"
+        for m in re.finditer(side + r"\s*" + _KQL_OP + r"\s*", code, re.IGNORECASE):
+            operand(m.end(), m.group("col"), alias)
+        # A literal on the left: "vm-1" == Computer.
+        for s, e in literals:
+            if re.match(r"\s*" + _KQL_OP + r"\s*" + side, code[e:], re.IGNORECASE) and \
+                    _names_something(query[s:e]):
+                if alias:
+                    refused.append("alias d'une colonne d'identité comparé à une valeur")
+                else:
+                    replace.add((s, e))
+
+    compared("|".join(_ID_COLUMNS), alias=False)
+    if aliases:
+        compared("|".join(re.escape(a) for a in sorted(aliases)), alias=True)
+
     for m in _KQL_SCOPE_FN_RE.finditer(code):
-        if m.end() in starts:
-            targets.add(starts[m.end()])
-    return sorted(targets)
+        pos, fn = m.end(), m.group(1).lower()
+        if pos in lit_at:
+            if _real_literal(query[lit_at[pos][0]:lit_at[pos][1]]):
+                replace.add(lit_at[pos])
+        elif code[pos:pos + 1] != ")":
+            end = _closing(code, m.end() - 1)
+            words = set(re.findall(r"\w+", code[pos:end]))
+            if words & string_lets:
+                refused.append(f"let « {sorted(words & string_lets)[0]} » (une chaîne) utilisé dans {fn}()")
+            else:
+                refused.append(f"argument non littéral de {fn}() : {query[pos:end].strip()[:60]}")
+    return sorted(replace), sorted(set(refused))
+
+
+def kql_refusals(query: str) -> list[str]:
+    """The forms that make the export refuse this query (see _kql_analysis)."""
+    return _kql_analysis(query)[1]
 
 
 def _name_re(name: str) -> re.Pattern:
@@ -362,8 +514,19 @@ def _name_re(name: str) -> re.Pattern:
     return re.compile(r"(?<![A-Za-z0-9_])" + body + r"(?![A-Za-z0-9_])", re.IGNORECASE)
 
 
+def _resource_type(text: str, m: re.Match) -> bool:
+    """A `<type>/<x>` that is a resource TYPE, not an instance: in an operation name
+    (`MICROSOFT.COMPUTE/VIRTUALMACHINES/RUNCOMMAND/ACTION`, `Microsoft.Network/
+    networkSecurityGroups/securityRules/write`) or followed by an operation verb
+    (`storageAccounts/listKeys/action`) — never an identifier."""
+    if re.search(r"microsoft\.\w+/$", text[max(0, m.start() - 64):m.start()], re.IGNORECASE):
+        return True
+    return bool(re.match(r"/(?:action|write|read|delete)\b", text[m.end():], re.IGNORECASE))
+
+
 def _arm_left(text: str) -> list[str]:
-    found = [m.group(0) for m in _ARM_SEGMENT_RE.finditer(text) if not _PLACEHOLDER_RE.match(m.group("val"))]
+    found = [m.group(0) for m in _ARM_SEGMENT_RE.finditer(text)
+             if not _PLACEHOLDER_RE.match(m.group("val")) and not _resource_type(text, m)]
     for m in _PROVIDERS_RE.finditer(text):
         names = m.group("path").split("/")[2::2]
         if any(not _PLACEHOLDER_RE.match(n) for n in names):
@@ -372,12 +535,14 @@ def _arm_left(text: str) -> list[str]:
 
 
 def find_identifiers(text: str, known_names=(), kql: bool = True) -> list[str]:
-    """Every identifier of a deployment still in `text`: a resource id or a part of one, a
-    GUID, a name the deployment knows (also behind regex escapes) and, `kql`: a literal the
-    query compares to an identity column, uses through a `let`, or gives workspace()…"""
+    """Every identifier of a deployment still in `text`: a resource id or an instance part of
+    one, a GUID, a name the deployment knows (also behind regex escapes) and, `kql`: a literal
+    the query compares directly to an identity column or gives workspace()…, and every form
+    that reaches an identity through an intermediate (refused, see _kql_analysis)."""
     found = _RESOURCE_ID_RE.findall(text) + _GUID_RE.findall(text) + _arm_left(text)
     if kql:
-        found += [text[s:e] for s, e in _kql_targets(text) if _real_literal(text[s:e])]
+        replace, refused = _kql_analysis(text)
+        found += [text[s:e] for s, e in replace if _real_literal(text[s:e])] + refused
     unescaped = text.replace("\\", "")
     for name in known_names:
         if len(name) >= _MIN_NAME and (_name_re(name).search(text) or _name_re(name).search(unescaped)):
@@ -406,7 +571,7 @@ def _scrub(text: str, known_names, counts: dict, kql: bool = False) -> str:
     text = sub(_GUID_RE, "<id>", "GUID (espace de travail, abonnement…)", text)
 
     def segment(m):
-        if _PLACEHOLDER_RE.match(m.group("val")):
+        if _PLACEHOLDER_RE.match(m.group("val")) or _resource_type(m.string, m):
             return m.group(0)
         count("partie d'un chemin de ressource")
         return f"{m.group('kind')}/<name>"
@@ -422,10 +587,10 @@ def _scrub(text: str, known_names, counts: dict, kql: bool = False) -> str:
     text = _PROVIDERS_RE.sub(providers, text)
     text = _ARM_SEGMENT_RE.sub(segment, text)
     if kql:
-        for s, e in reversed(_kql_targets(text)):
+        for s, e in reversed(_kql_analysis(text)[0]):
             if _real_literal(text[s:e]):
                 text = text[:s] + '"<name>"' + text[e:]
-                count("littéral d'une colonne d'identité, d'un let ou de workspace()")
+                count("littéral comparé à une colonne d'identité ou argument de workspace()")
     for name in sorted(known_names, key=len, reverse=True):
         if len(name) >= _MIN_NAME:
             text = sub(_name_re(name), "<name>", "nom connu du déploiement", text)
@@ -516,6 +681,12 @@ def export_rule(name: str, base_path: str | Path, client_path: Path | None = Non
         or next((r for r in _named(base.get("rules")) if r["name"] == name), None)
     if rule is None:
         raise KeyError(name)
+    refused = kql_refusals(str(rule.get("query") or ""))
+    if refused:
+        err = NotGeneralizable(f"« {name} » atteint une identité par une forme que l'export ne suit pas "
+                               f"({len(refused)}) : généraliser la règle à la main — rien n'est exporté")
+        err.found = refused
+        raise err
     names = known_names([base, client], glorfindel_cfg=glorfindel_cfg, extra=extra_names)
     general, counts = generalize(rule, names)
     replaced = ", ".join(f"{what} ×{n}" for what, n in counts.items()) or "rien"

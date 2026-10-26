@@ -1833,8 +1833,8 @@ def approve_rule(proposal_id: str, rules_file: str | None) -> None:
         verb = {"replaced": "Replaced in", "same": "Already in"}.get(proposal.get("rule_write"), "Written to")
         console.print(f"  {verb} the client's layer [dim]{proposal.get('rules_file')}[/dim]")
         if not proposal.get("rule_bound", True):
-            console.print("  [yellow]⚠ No monitoring backend of glorfindel-config.yaml watches its "
-                          "workspace: written with the workspace in line, it applies to no "
+            console.print(f"  [yellow]⚠ Not bound ({_esc_markup(proposal.get('rule_unbound_reason', ''))}): "
+                          "written with the workspace in line, it applies to no "
                           "discovered VM — bind it in ~/.glorfindel/client_rules.yaml: "
                           "monitoring_backends: \\[<backend>], assets: \\[auto].[/yellow]")
         console.print(
@@ -1896,11 +1896,21 @@ def rules_cmd(rules_file: str | None) -> None:
         table.add_column(col)
     for r in cfg.rules:
         layer = "[cyan]client[/cyan]" if r.layer == "client" else "base"
-        table.add_row(r.name, layer, r.ttp, "auto" if r.auto_apply else (r.asset_name or r.resource_id.split("/")[-1]))
+        if r.auto_apply:   # the backend whose VMs it applies to: a rule on none is inert
+            assets = (f"auto ({r.monitoring_backend_name})" if r.monitoring_backend_name
+                      else "[yellow]auto (aucun backend : inerte)[/yellow]")
+        else:
+            assets = r.asset_name or r.resource_id.split("/")[-1]
+        table.add_row(_esc_markup(r.name), layer, r.ttp, assets)
     console.print(table)
     console.print(f"[dim]Base :[/dim] {target}")
-    console.print(f"[dim]Couche du client :[/dim] {client_rules_path()}"
-                  + ("" if cfg.client_file else " [dim](absente)[/dim]"))
+    if cfg.client_file:
+        state = ""
+    elif client_rules_path().exists():
+        state = " [yellow](ignorée : voir la note)[/yellow]"
+    else:
+        state = " [dim](absente)[/dim]"
+    console.print(f"[dim]Couche du client :[/dim] {client_rules_path()}{state}")
     for note in cfg.notes:
         console.print(f"  [yellow]·[/yellow] {_esc_markup(note)}")
 
@@ -1966,13 +1976,17 @@ def migrate_rules(from_file: str, base_file: str, dry_run: bool) -> None:
     """
     from glorfindel.rule_layers import ClientLayerError, migrate
 
+    config_error = ""
     try:
         from glorfindel.config import load_glorfindel_config
         gcfg = load_glorfindel_config()
-    except Exception:
-        gcfg = None
+    except Exception as exc:   # said: a rule in line would otherwise read "no backend"
+        gcfg, config_error = None, str(exc)
+        console.print(f"[yellow]⚠ glorfindel-config.yaml illisible : {_esc_markup(config_error)} — "
+                      "aucune règle au workspace en ligne ne peut être liée à son backend[/yellow]")
     try:
-        report = migrate(from_file, base_file, dry_run=dry_run, glorfindel_cfg=gcfg)
+        report = migrate(from_file, base_file, dry_run=dry_run, glorfindel_cfg=gcfg,
+                         config_error=config_error)
     except (FileNotFoundError, ClientLayerError) as e:
         console.print(f"[red]Error:[/red] {e} — nothing written")
         raise SystemExit(1)

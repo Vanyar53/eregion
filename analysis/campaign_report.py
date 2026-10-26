@@ -53,7 +53,8 @@ from analysis.campaign_changes import (ACTIONS, DETECTIONS, FRACTION, PERCENT, R
                                        keys, pair, relative, render_section)
 from analysis.campaign_schema import run_report_refusal, scenario_refusal
 from annatar.runner.detection import _number, first_detection, read_records
-from eregion_core.exercise import exercises_dir, is_enrolled, last_moment, window_refusal
+from eregion_core.exercise import (FUTURE_SKEW_S, exercises_dir, is_enrolled, last_moment,
+                                   window_refusal)
 from eregion_core.exercise_channel import PULLED, safe_part
 
 CLAIM_KINDS = ("detected", "missed", "latency", "decision", "trend", "observation", "change")
@@ -131,6 +132,7 @@ class RunFact:
     error: str = ""
     decision_unknown: str = ""         # a run whose decision was sought, not found: why (an unknown)
     target: str = ""                   # the run's target VM (resource id), its key with the technique (D-2)
+    campaign_started: float | None = None  # when its campaign started, as the index keeps it (D2b)
 
     def summary(self) -> str:
         bits = [f"run {self.run_id}", f"campaign {self.campaign_id}", f"technique {self.ttp} ({self.name})",
@@ -386,10 +388,13 @@ def channel_refusal(scenario: dict, rid: str, campaign_dir: Path, runs_dir: Path
 @dataclass
 class CampaignInfo:
     """What the index keeps of a campaign beside its runs (D-2): its state and when it
-    started — what the choice of the previous campaign reads."""
+    started — what the choice of the previous campaign reads. ``start_refused``: the start
+    its manifest gave was not believed (D2b, ``start_refusal``), and why — said in the
+    report; ``started`` is then what H0 saw itself."""
     campaign_id: str
     state: str = ""
     started: float | None = None       # seconds since the epoch; None: unknown
+    start_refused: str = ""
 
 
 def _timestamp(value) -> float | None:
@@ -400,11 +405,84 @@ def _timestamp(value) -> float | None:
     return (dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)).timestamp()
 
 
-def campaign_info(campaign_dir: Path) -> CampaignInfo:
+def _seconds(value) -> float | None:
+    """A number of seconds since the epoch as the index keeps it, else ``None``."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value != value:
+        return None
+    return float(value)
+
+
+def _id_date(cid) -> float | None:
+    """A campaign id that is a date (``annatar/campaign/manifest.py`` ``new_campaign_id``:
+    ``YYYYMMDDTHHMMSSZ``, UTC), in seconds since the epoch — else ``None``."""
+    try:
+        return datetime.strptime(str(cid), "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc).timestamp()
+    except ValueError:
+        return None
+
+
+def _iso(ts: float) -> str:
+    return datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+# D2b: a campaign starts with its first scenario, a few seconds before its first window opens
+# (annatar/runner/engine.py opens it after the guard and the preflight). Scenarios that fail
+# before the first run that plays leave a gap; more than this is not a campaign's start.
+START_LEAD_S = 3600.0
+
+
+def start_refusal(started: float | None, first_window: float | None,
+                  pulled: float | None) -> str:
+    """Why the start a campaign that came through the channel gives in its manifest is not
+    believed — "" when it is, or unknown (D2b). The manifest is written on Orodruin, by
+    whoever can write in the channel (H-1); H0 bounds it by what it saw itself: the campaign
+    did not start after H0 pulled it (``pulled``, its ``.pulled`` marker), nor after the
+    first window of its runs that H-1 believes (``first_window``), nor more than
+    START_LEAD_S before it — each to FUTURE_SKEW_S, the clocks of two hosts."""
+    if started is None:
+        return ""
+    if pulled is not None and started > pulled + FUTURE_SKEW_S:
+        return f"il est postérieur au tirage de la campagne par H0 ({_iso(pulled)})"
+    if first_window is not None and started > first_window + FUTURE_SKEW_S:
+        return f"il est postérieur à la première fenêtre d'exercice de ses runs ({_iso(first_window)})"
+    if first_window is not None and started < first_window - START_LEAD_S - FUTURE_SKEW_S:
+        return (f"il précède de plus de {START_LEAD_S / 3600:g} h la première fenêtre d'exercice "
+                f"de ses runs ({_iso(first_window)})")
+    return ""
+
+
+def first_window(manifest: dict, runs_dir: Path) -> float | None:
+    """The start of the first window of the campaign's runs that H-1 believes
+    (``window_refusal``, declared when its file was written on this host), else ``None``. A
+    purged window holds no start."""
+    wdir = windows_dir(runs_dir)
+    starts = []
+    for s in manifest.get("scenarios") or []:
+        rid = str(s.get("run_id") or "") if isinstance(s, dict) else ""
+        if not rid or not safe_part(rid):
+            continue
+        path = wdir / f"{rid}.json"
+        window = _read_json(path)
+        try:
+            declared = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc)
+        except OSError:
+            continue
+        if not window or window.get("purged_at") or window_refusal(window, declared_at=declared):
+            continue
+        if (start := _timestamp(window.get("start"))) is not None:
+            starts.append(start)
+    return min(starts) if starts else None
+
+
+def campaign_info(campaign_dir: Path, runs_dir: Path | None = None) -> CampaignInfo:
     """The campaign's id and state, from its manifest, and when it started: the earliest
     ``started_at`` of its scenarios, else its ``created_at``, else its id when it is a date
-    (``annatar/campaign/manifest.py``: ``YYYYMMDDTHHMMSSZ``) — else unknown."""
+    (``annatar/campaign/manifest.py``: ``YYYYMMDDTHHMMSSZ``) — else unknown. A campaign that
+    came through the channel has that start checked against what H0 saw (D2b,
+    ``start_refusal``): refused, it is the start of the first window of its runs H-1
+    believes — unknown without one — and ``start_refused`` says why."""
     campaign_dir = Path(campaign_dir)
+    runs_dir = Path(runs_dir) if runs_dir else campaign_dir.parent.parent
     manifest = _read_json(campaign_dir / "manifest.json")
     cid = manifest.get("campaign_id")
     cid = cid if isinstance(cid, str) and cid else campaign_dir.name
@@ -413,11 +491,21 @@ def campaign_info(campaign_dir: Path) -> CampaignInfo:
               if (t := _timestamp(s.get("started_at"))) is not None]
     started = min(starts) if starts else _timestamp(manifest.get("created_at"))
     if started is None:
+        started = _id_date(cid)
+    info = CampaignInfo(cid, state if isinstance(state, str) else "", started)
+    if from_channel(campaign_dir):
+        first = first_window(manifest, runs_dir)
         try:
-            started = datetime.strptime(cid, "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc).timestamp()
-        except ValueError:
-            pass
-    return CampaignInfo(cid, state if isinstance(state, str) else "", started)
+            pulled = (campaign_dir / PULLED).stat().st_mtime
+        except OSError:
+            pulled = None
+        if why := start_refusal(started, first, pulled):
+            info.started = first
+            info.start_refused = (
+                f"début de la campagne lu dans son manifeste ({_iso(started)}) refusé : {why} ; "
+                + (f"pris : le début de sa première fenêtre ({_iso(first)})" if first is not None
+                   else "début inconnu"))
+    return info
 
 
 def collect_facts(campaign_dir: Path, runs_dir: Path | None = None, warn=_say) -> list[RunFact]:
@@ -486,8 +574,16 @@ def index_facts(facts: list[RunFact], path: Path | None = None,
         ids=[f.run_id for f in rows], documents=[f.summary() for f in rows],
         metadatas=[{"campaign_id": f.campaign_id, "run_id": f.run_id, "ttp": f.ttp,
                     "detection": f.detection, "vm": f.target.lower(), **meta,
-                    "fact": json.dumps(asdict(f))} for f in rows])
+                    "fact": json.dumps(_stored(f))} for f in rows])
     return len(rows)
+
+
+def _stored(f: RunFact) -> dict:
+    """The run's facts as the index keeps them: its campaign's start beside them
+    (``campaign_started``), never in them — one place, which ``campaign_index`` updates."""
+    out = asdict(f)
+    out.pop("campaign_started")
+    return out
 
 
 _FACT_FIELDS = {f.name for f in fields(RunFact)}
@@ -496,12 +592,16 @@ _FACT_FIELDS = {f.name for f in fields(RunFact)}
 def fact_of(meta) -> RunFact | None:
     """The run's facts as the index keeps them — ``None`` when the row cannot be read. A
     field this version does not know is dropped, one it lacks takes its default (a row
-    written before D-2 has no ``target``)."""
+    written before D-2 has no ``target``). Its campaign's start is the row's
+    (``campaign_started``, beside the facts: what ``campaign_index`` updates), else unknown
+    — what orders it among the runs a trend cites (D2b, ``_faced``)."""
     try:
         raw = json.loads((meta or {})["fact"])
-        return RunFact(**{k: v for k, v in raw.items() if k in _FACT_FIELDS})
+        fact = RunFact(**{k: v for k, v in raw.items() if k in _FACT_FIELDS})
     except (KeyError, TypeError, ValueError):
         return None
+    fact.campaign_started = _seconds(meta.get("campaign_started"))
+    return fact
 
 
 def prior_runs(facts: list[RunFact], path: Path | None = None, per_ttp: int = 3) -> list[RunFact]:
@@ -619,8 +719,9 @@ _NO_ACTION = re.compile(
 # either — between the two sides of a change fact, or between two cited runs. Before the
 # numbers are read, what only names something is taken out of the sentence: the cited ids, a
 # technique (T1110.001), a run id (20261023T081120Z), a date (23/10, « 21 octobre », « October
-# 21 », a range after « le », « entre », « du », « des », « aux »… : « entre le 21 et le 23
-# octobre », never « de 12, le 23 octobre », its days from 1 to 31), a year (2026, not followed by a unit), an hour (08:21), an ordinal
+# 21 », a range after « le », « entre », « du », « des », « aux », « from the »… : « entre le 21
+# et le 23 octobre », « au 21 et au 23 octobre », « On the 21st and 23rd October », never « de
+# 12, le 23 octobre » nor « au 12, le 23 octobre », its days from 1 to 31), a year (2026, not followed by a unit), an hour (08:21), an ordinal
 # (« 2ᵉ », « 1er »), and any word that begins with a letter and holds a digit (chg-1, a VM's
 # name). A count (« les 2 campagnes ») — a whole number followed by a word that names what is
 # counted (_COUNTED: runs, campaigns, techniques…, never a unit nor « fois ») — may be at most
@@ -643,10 +744,15 @@ _UNIT = "(?:" + "|".join(_UNITS) + r")(?![^\W\d_])"
 _UNIT_OF = re.compile(r"\s*(?:" + "|".join(f"(?P<u{i}>{u})" for i, u in enumerate(_UNITS)) + r")(?![^\W\d_])",
                       re.IGNORECASE)
 _DAY = r"(?:3[01]|[12]\d|0?[1-9])(?!\d)"  # a day of a range: « between 70 and 60, 23 October » has none
+_TH = r"(?:er|st|nd|rd|th)?"             # « 1er », « 21st », « 23rd »
+# What opens a range: never « de » (« baisse de 12, le 23 octobre »), nor « au » or « the »
+# alone (« tombe au 12, le 23 octobre »); « au » opens one only when each of its days has it
+# (« au 21 et au 23 octobre »), « the » after « on », « from », « between » (D2b).
 _NAMES = re.compile(
     r"\b\d{8}T\d{6}Z\b|\b\d{1,2}/\d{1,2}(?:/\d{2,4})?\b|\b\d{1,2}[:h]\d{2}(?::\d{2})?\b"
-    rf"|(?:\b(?:le|les|entre|du|des|aux|au|between|from|on|the)\s+{_DAY}(?:er)?"
-    rf"(?:\s*(?:,|-|–|\bet\b|\bau\b|\bà\b|\band\b|\bto\b)\s*(?:(?:le|du|des)\s+)?{_DAY}(?:er)?)+"
+    rf"|(?:\b(?:le|les|entre|du|des|aux|(?:on|from|between)\s+the|between|from|on)\s+{_DAY}{_TH}"
+    rf"(?:\s*(?:,|-|–|\bet\b|\bau\b|\bà\b|\band\b|\bto\b)\s*(?:(?:le|du|des|au|aux|the)\s+)?{_DAY}{_TH})+"
+    rf"|\bau\s+{_DAY}{_TH}(?:\s*(?:,|\bet\b)\s*au\s+{_DAY}{_TH})+"
     rf"|\b\d{{1,2}}(?:er|st|nd|rd|th)?)\s+(?:{_MONTHS})\b"
     rf"|\b(?:{_MONTHS})\s+\d{{1,2}}(?:st|nd|rd|th)?\b"
     rf"|\b(?:19|20)\d{{2}}\b(?![.,]\d)(?!\s*{_UNIT})"
@@ -774,9 +880,10 @@ def _alien_word(c: Claim, cited) -> str:
 
 # The way a change is said, before → after (D-2): « de X à Y » or « X → Y », with two
 # latencies or confidences (a unit or not, a date in brackets after the first), two actions
-# or two detections, read on a claim that cites a change fact, and on a trend — its runs of
-# an earlier campaign facing those of this one, of the same technique, and two earlier runs
-# facing each other both ways, their order unknown (_faced). Numbers the
+# or two detections, read on a claim that cites a change fact, and on a trend — its cited
+# runs of the same technique facing each other in the order they were played, their order
+# read on their campaigns' starts (D2b), both ways between two earlier runs only when it is
+# unknown (_faced). Numbers the
 # wrong way round (« de 106,9 s à 91,9 s » when it went from 91,9 to 106,9, and no cited fact
 # went that way), or an action or a detection that no cited fact goes from and to (« de
 # l'isolement au blocage » when it went from blocking to isolating), are removed. The other
@@ -830,17 +937,44 @@ def _near(u: float, v: float, tol: float) -> bool:
     return abs(u - v) <= tol + 1e-9
 
 
+def _when(f: RunFact) -> float | None:
+    """When the run's campaign started: as the index keeps it (``campaign_started``, the
+    report's own for this campaign), else its id when it is a date (``new_campaign_id``) —
+    else unknown (D2b)."""
+    return f.campaign_started if f.campaign_started is not None else _id_date(f.campaign_id)
+
+
+def _came_first(x: RunFact, y: RunFact) -> bool | None:
+    """Whether run ``x`` was played before run ``y``: two runs of one campaign in ``seq``
+    order, two of different campaigns in the order their campaigns started — ``None`` when
+    that is not known (a row indexed before D-2, an id that is no date, equal starts)."""
+    if x.campaign_id and x.campaign_id == y.campaign_id:
+        return None if x.seq == y.seq else x.seq < y.seq
+    a, b = _when(x), _when(y)
+    return None if a is None or b is None or a == b else a < b
+
+
 def _faced(cited, own: set[str]) -> list[ChangeFact]:
-    """What a trend says changed: each cited run of an earlier campaign facing each cited run
-    of this one (``own``) of the same technique — on any VM, from any earlier campaign, so
-    that a true trend is not barred for a pairing it did not mean — and two cited runs of
-    earlier campaigns of the same technique facing each other, both ways: which came first is
-    not known (a RunFact does not say), so « de 120 s (19/10) à 91,9 s (21/10), puis à
-    106,9 s » holds, and between two earlier runs the way is not read."""
+    """What a trend says changed: each two cited runs of the same technique, one of them at
+    least of an earlier campaign (two runs of this one, ``own``, are not a trend), the earlier
+    played facing the later (D2b) — on any VM, from any earlier campaign, so that a true trend
+    is not barred for a pairing it did not mean: « de 120 s (19/10) à 91,9 s (21/10), puis à
+    106,9 s » holds, and a pair of earlier runs is no alibi for a way they did not go. When
+    which came first is not known: an earlier run before this campaign's, and two earlier
+    runs both ways — between them the way is then not read."""
     runs = [x for x in cited if isinstance(x, RunFact)]
-    earlier = [b for b in runs if b.run_id not in own]
-    out = [facing(b, a) for a in runs if a.run_id in own for b in earlier if b.ttp == a.ttp]
-    out += [facing(x, y) for x in earlier for y in earlier if x is not y and x.ttp == y.ttp]
+    out = []
+    for i, x in enumerate(runs):
+        for y in runs[i + 1:]:
+            if x is y or x.ttp != y.ttp or (x.run_id in own and y.run_id in own):
+                continue
+            first = _came_first(x, y)
+            if first is None and x.run_id not in own and y.run_id not in own:
+                out += [facing(x, y), facing(y, x)]
+            elif first is None:
+                out.append(facing(y, x) if x.run_id in own else facing(x, y))
+            else:
+                out.append(facing(x, y) if first else facing(y, x))
     return out
 
 
@@ -1059,7 +1193,11 @@ def build(campaign_dir: Path, model: str | None = None, llm=None, index_path: Pa
         _say(f"{Path(campaign_dir).name}: {message}")
 
     info = campaign_info(campaign_dir)
+    if info.start_refused:   # a manifest's date H0 does not believe (D2b): said, like a scenario
+        warn(info.start_refused)
     facts = collect_facts(campaign_dir, warn=warn)
+    for f in facts:          # what orders this campaign's runs among those a trend cites (D2b)
+        f.campaign_started = info.started
     index_facts(facts, index_path, info)
     prior = prior_runs(facts, index_path)
     previous, before, why = previous_campaign(facts, info, index_path)

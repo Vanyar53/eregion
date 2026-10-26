@@ -448,6 +448,39 @@ avalé. Trois mutants de plus, M545–M547 :
 
 Avec M280–M289 et M520–M528 de M-3, venus de main, tous attrapés au premier tour (26/10),
 aucun périmé.
+
+D2b a repris les trois points que les relectures de D-2 avaient laissés. Une tendance met
+désormais ses runs face à face dans l'ordre où ils ont été joués (le début de leur campagne,
+gardé dans l'index, ou son identifiant quand c'est une date ; le `seq` dans une campagne) : une
+paire de runs antérieurs ne sert plus d'alibi. Le début d'une campagne venue du canal est borné
+par ce que H0 a vu (la première fenêtre crue de ses runs, le marqueur `.pulled`) : une date
+forgée ne change plus la campagne précédente. « au » et « the » seuls n'ouvrent plus une plage
+de dates ; « au 21 et au 23 », « from the 21 to the 23 », « on the 21st and 23rd » en sont.
+M540–M542, M546 et M547 suivent le code corrigé. Dix-sept mutants, M650–M666, mesurés par le
+même fichier :
+
+| Mutant | Défaut réinjecté | Effet |
+|---|---|---|
+| M650 | ordre des runs d'une tendance non lu | une paire de runs antérieurs sert d'alibi à « de l'isolement au blocage » |
+| M651 | runs face à face à rebours du temps | « de 120 s (19/10) à 91,9 s (21/10) » barré |
+| M652 | début de campagne de l'index non lu avec le run | l'ordre retombe sur l'inconnu |
+| M653 | runs de cette campagne sans son début | le run d'une campagne postérieure passe pour antérieur |
+| M654 | identifiant daté ignoré | des runs indexés sans début restent sans ordre |
+| M655 | deux runs d'une campagne non ordonnés par `seq` | l'alibi revient dans une seule campagne |
+| M656 | début du manifeste après la première fenêtre cru | une date forgée choisit une campagne postérieure |
+| M657 | début du manifeste bien avant la première fenêtre cru | une date forgée saute la vraie précédente |
+| M658 | début du manifeste après le tirage par H0 cru | sans fenêtre, rien ne borne la date |
+| M659 | début refusé tu | le lecteur ne sait pas que la date a été écartée |
+| M660 | début refusé gardé | la date forgée choisit quand même |
+| M661 | fenêtre refusée par H-1 prise pour borne | une fenêtre forgée couvre une date forgée |
+| M662 | « au » ouvre une plage | « tombe au 12, le 23 octobre » gardé |
+| M663 | « the » seul ouvre une plage | « by the 12, 23 October » gardé |
+| M664 | « au 21 et au 23 octobre » lu comme des nombres | une tendance juste barrée |
+| M665 | « au », « aux », « the » refusés dans la suite d'une plage | « From the 21 to the 23 October » barré |
+| M666 | jours sans « st », « nd », « rd » | « On the 21st and 23rd October » barré |
+
+Avec M163, M260–M279, M510–M519 et M530–M547, les soixante-six attrapés au premier tour
+(26/10), aucun périmé.
 Détail : [`../analysis.md`](../analysis.md), « Ce qui a changé depuis la campagne précédente ».
 
 ## Ce que les invariants ont trouvé

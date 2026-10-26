@@ -256,7 +256,9 @@ piégé) ne change pas.
 
 _26/10 : le code, ses tests (`tests/unit/test_campaign_changes.py`, et un cas de bout en bout
 dans `test_hosted_report.py`) et ses mutants (M260–M279) sont écrits. La mesure sur une vraie
-deuxième campagne viendra après la fusion, avec Jonathan._
+deuxième campagne viendra après la fusion, avec Jonathan. Suite (D2b, 26/10) : l'ordre des
+runs qu'une tendance cite est lu, le début d'une campagne venue du canal est contrôlé, et les
+dernières tournures de dates sont lues (mutants M650–M666)._
 
 Le premier rapport écrit sur H0 (campagne `20261023T081120Z`) était fidèle, mais il n'apprenait
 rien : son index était vide. La seule nouveauté a été vue par une comparaison faite à la main.
@@ -276,12 +278,20 @@ c'est une technique jouée sur une VM cible ; la VM est comparée sans la casse.
   son `created_at`, puis son identifiant quand c'est une date (`YYYYMMDDTHHMMSSZ`). Sinon, le
   début est inconnu, et la campagne n'a pas de précédente.
 - S'il n'y en a aucune, la section le dit, avec la raison.
-- **Limite connue** (relecture de D-2, reprise dans un lot suivant) : le début d'une campagne
-  venue du canal se lit dans son manifeste (`started_at`, `created_at`), écrit sur Orodruin.
-  H-1 ne contrôle pas ces dates. Une date fausse peut faire nommer à tort « la précédente » :
-  une autre campagne `done` qui partage une clé. Les faits comparés restent les vrais faits
-  indexés de la campagne nommée, et la section dit laquelle. Piste : borner le début par celui
-  des fenêtres d'exercice crues de ses runs, ou par la date du marqueur `.pulled`.
+- **Le début d'une campagne venue du canal est contrôlé** (D2b, `start_refusal`). Son
+  manifeste (`started_at`, `created_at`, l'identifiant) est écrit sur Orodruin, par quiconque
+  peut écrire dans le canal (H-1) : une date fausse ferait nommer à tort « la précédente ». H0
+  la borne par ce qu'il a vu lui-même. Une campagne n'a pas commencé après que H0 l'a tirée
+  (la date du marqueur `.pulled`), ni après la première fenêtre d'exercice de ses runs que H-1
+  croit, ni plus d'une heure avant elle (le temps de quelques scénarios en échec avant le
+  premier run joué), à 5 minutes près (`FUTURE_SKEW_S`, l'écart d'horloge de deux hôtes). Une
+  date hors de ces bornes est refusée, et le rapport le dit, parmi ce qui est « écarté des
+  faits » (`analysis.campaign_index` aussi). Le début pris est alors celui de la première
+  fenêtre, ou inconnu sans fenêtre. Une campagne locale garde les dates de son manifeste,
+  écrit sur cet hôte. **Limite** : une fois les fenêtres d'une campagne purgées (une semaine
+  après leur fin), seul le marqueur `.pulled` borne son début, et seulement par le haut ; une
+  campagne déjà dans l'index garde le début avec lequel elle y est entrée, sauf si on la
+  reverse.
 
 **Les runs sont joints par clé.** Le n-ième run d'une technique sur une VM, dans l'ordre des
 `seq`, fait face au n-ième run de la même clé dans la campagne précédente. Chaque paire devient
@@ -352,20 +362,27 @@ jamais complète (voir les limites, plus bas).
   qu'aucun fait cité ne va dans celui-là. Un « de X à Y » qui part d'un côté d'un fait doit
   aussi arriver à son autre côté : « de 91,9 s à 15 s » est écarté (15 s est l'écart, pas la
   latence d'après) ;
-- **une `trend` aussi** : ses runs de cette campagne sont mis face à ses runs antérieurs de la
-  même technique, chacun face à chacun, sur n'importe quelle VM, comme autant de faits de
-  changement implicites. Son « de X à Y » doit aller dans le sens de l'un d'eux : « passe de
-  106,9 s à 91,9 s » ou « de l'isolement au blocage », en citant le run du 23/10 et celui du
-  21/10, sont écartés. Deux runs antérieurs de la même technique se font face aussi, dans les
-  deux sens : un `RunFact` ne dit pas lequel est venu d'abord, si bien qu'entre deux runs
-  antérieurs le sens n'est pas lu. Une tendance sur trois campagnes passe donc (« de 120 s
-  (19/10) à 91,9 s (21/10), puis à 106,9 s », « 0,85 → 0,80 → 0,78 », « du blocage à
-  l'isolement (avant), puis retour au blocage »). Un sens inversé entre un run antérieur et un
-  run de cette campagne reste écarté, sauf quand un autre run antérieur cité porte la même
-  action, ou la même valeur (à la tolérance près), que le run de cette campagne : la tendance
-  peut alors décrire le passage entre deux runs antérieurs, dont l'ordre n'est pas lu (avec
-  un run isolé le 19/10, bloqué le 21/10 et isolé le 23/10, « de l'isolement au blocage »
-  passe). Pourquoi tous les appariements, et pas la clé exacte :
+- **une `trend` aussi** : ses runs cités de la même technique sont mis face à face deux à
+  deux, sur n'importe quelle VM, comme autant de faits de changement implicites, le run joué
+  d'abord face au suivant (D2b) ; deux runs de cette campagne ne font pas une tendance. Son
+  « de X à Y » doit aller dans le sens de l'un d'eux : « passe de 106,9 s à 91,9 s » ou « de
+  l'isolement au blocage », en citant le run du 23/10 et celui du 21/10, sont écartés.
+  **L'ordre est lu** : deux runs d'une même campagne dans l'ordre des `seq`, deux runs de
+  campagnes différentes dans l'ordre du début de leur campagne. Ce début est celui que l'index
+  garde à côté de chaque run (`campaign_started`, contrôlé pour une campagne venue du canal),
+  celui du rapport pour cette campagne-ci, ou, à défaut, l'identifiant de la campagne quand
+  c'est une date (`new_campaign_id` : `YYYYMMDDTHHMMSSZ`, UTC). Une tendance sur trois
+  campagnes passe donc (« de 120 s (19/10) à 91,9 s (21/10), puis à 106,9 s », « 0,85 → 0,80 →
+  0,78 », « du blocage à l'isolement (avant), puis retour au blocage »), et une paire de runs
+  antérieurs ne sert plus d'alibi à un sens qu'ils n'ont pas pris : bloqué le 19/10, isolé le
+  21/10 et le 23/10, « de l'isolement au blocage » est écarté. Avec un run isolé le 19/10,
+  bloqué le 21/10 et isolé le 23/10, il passe : c'est ce qui s'est passé entre le 19/10 et le
+  21/10. Un run d'une campagne postérieure cité dans le rapport d'une campagne plus ancienne
+  (un rapport refait) vient après elle. **Quand l'ordre n'est pas connu** (une ligne indexée
+  avant D-2, dont l'identifiant de campagne n'est pas une date), un run antérieur vient avant
+  ceux de cette campagne, et deux runs antérieurs se font face dans les deux sens : entre eux,
+  le sens n'est alors pas lu (voir les limites). Pourquoi tous les appariements, et pas la clé
+  exacte :
   une tendance peut citer plusieurs runs antérieurs, de plusieurs campagnes, ou des runs
   indexés avant D-2, sans leur VM. Un appariement plus large écarte moins, et il évite de
   barrer une tendance juste pour un appariement qu'elle ne voulait pas dire. Sans run
@@ -400,14 +417,17 @@ rapprochant d'elle. Ce qui passe encore, ou tombe à tort :
   l'a été qu'une fois). Un décompte dont le nom est sous-entendu (« comme les 2 de la
   précédente ») est lu comme un nombre, et écarté si aucun fait ne le porte ;
 - **une plage de dates** n'est lue qu'avec le mois à la fin, en toutes lettres, des jours de
-  1 à 31, et « le », « les », « entre », « du », « des », « aux » ou « au » (« between »,
-  « from », « on », « the ») devant son premier jour (« entre le 21 et le 23 octobre », « les
-  runs des 21 et 23 octobre », « du 21 et du 23 octobre ») ; « de » n'en est pas, si bien que
-  « baisse de 12, le 23 octobre » laisse 12 un nombre, et « between 70 and 60, 23 October »
-  aussi (70 n'est pas un jour). Mais dans « 21, 22 et 23 octobre » ou « les 21 et 23/10 »,
-  21 reste un nombre aussi. Une
-  date anglaise est lue (« October 21 », « 21 October »), pas une plage dont le mois vient
-  d'abord (« October 21 to 23 ») ;
+  1 à 31 (avec « er », « st », « nd », « rd » ou « th »), et « le », « les », « entre », « du »,
+  « des », « aux » (« between », « from », « on », « on the », « from the », « between the »)
+  devant son premier jour (« entre le 21 et le 23 octobre », « les runs des 21 et 23
+  octobre », « du 21 et du 23 octobre », « From the 21 to the 23 October », « On the 21st and
+  23rd October »). « au » n'ouvre une plage que s'il revient devant chaque jour (« au 21 et au
+  23 octobre »), et « the » seul n'en ouvre pas (D2b) ; « de » non plus, si bien que « baisse
+  de 12, le 23 octobre », « tombe au 12, le 23 octobre » ou « by the 12, 23 October » laissent
+  12 un nombre, et « between 70 and 60, 23 October » aussi (70 n'est pas un jour). Mais dans
+  « 21, 22 et 23 octobre » ou « les 21 et 23/10 », 21 reste un nombre aussi, et « from the
+  12, 23 October » avale 12. Une date anglaise est lue (« October 21 », « 21 October »), pas
+  une plage dont le mois vient d'abord (« October 21 to 23 ») ;
 - **un « de X à Y » qui mêle deux écritures** (« de 0,80 à 78 % », « de 91,9 s à 1,8 min ») est
   écarté : la vérification ne convertit pas l'une dans l'autre. Une phrase juste tombe donc si
   le modèle l'écrit ainsi ;
@@ -415,12 +435,13 @@ rapprochant d'elle. Ce qui passe encore, ou tombe à tort :
   (« jamais snapshot », « isolate_vm plutôt que snapshot », quand aucun côté n'a pris de
   snapshot) ;
 - dans une `trend`, l'appariement par technique est large : une tendance dite dans le sens
-  d'un appariement qu'elle ne voulait pas dire passe, et entre deux runs antérieurs les deux
-  sens passent. Une paire de runs antérieurs peut ainsi servir d'alibi à un sens inversé entre
-  un run antérieur et un run de cette campagne, quand l'autre run antérieur porte la même
-  action ou la même valeur que celui-ci. Piste pour un lot suivant : lire l'ordre des runs
-  antérieurs (l'identifiant horodaté de leur campagne, ou `campaign_started` dans l'index),
-  pour ne garder qu'un sens entre eux ;
+  d'un appariement qu'elle ne voulait pas dire passe (« de 120 s à 106,9 s » entre le 19/10 et
+  le 23/10, en citant aussi le 21/10). Quand l'ordre de deux runs antérieurs n'est pas connu
+  (une ligne indexée avant D-2, dont l'identifiant n'est pas une date), les deux sens passent
+  entre eux, et la paire peut encore servir d'alibi à un sens inversé vers le run de cette
+  campagne, quand l'autre run antérieur porte la même action ou la même valeur que celui-ci.
+  Reverser la campagne dans l'index (`analysis.campaign_index`) lui donne son début, et l'ordre
+  est alors lu ;
 - dans une chaîne (« de X à Y, puis à Z », « X → Y → Z »), seul le premier pas est lu pour
   le sens ; les suivants ne sont contrôlés que comme nombres des faits cités.
 

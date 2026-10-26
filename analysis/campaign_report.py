@@ -31,6 +31,12 @@ reports are checked against their shape (analysis/campaign_schema.py), and an ex
 is kept only if its window is known and believed and names its VM, and that VM is enrolled
 (eregion_core/exercise.py) — else it is left out of the facts, and the report says why. The
 report says which facts came through the channel and which H0 saw itself.
+
+What changed since the previous campaign (D-2, #184) is computed by the code, never found by
+similarity: the previous campaign is the latest ``done`` campaign of the index that started
+before this one and shares at least one key — a technique on a target VM — with it
+(``previous_campaign``); its runs and this campaign's are joined by key into typed facts
+(analysis/campaign_changes.py) that the report renders and the model may only cite.
 """
 from __future__ import annotations
 
@@ -38,15 +44,17 @@ import json
 import os
 import re
 import sys
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
+from datetime import datetime, timezone
 from pathlib import Path
 
+from analysis.campaign_changes import ChangeFact, Comparison, keys, pair, render_section
 from analysis.campaign_schema import run_report_refusal, scenario_refusal
 from annatar.runner.detection import _number, first_detection, read_records
 from eregion_core.exercise import exercises_dir, is_enrolled, last_moment, window_refusal
 from eregion_core.exercise_channel import PULLED, safe_part
 
-CLAIM_KINDS = ("detected", "missed", "latency", "decision", "trend", "observation")
+CLAIM_KINDS = ("detected", "missed", "latency", "decision", "trend", "observation", "change")
 
 _REPORT_TOOL = {
     "type": "function",
@@ -63,7 +71,8 @@ _REPORT_TOOL = {
                         "properties": {
                             "kind": {"type": "string", "enum": list(CLAIM_KINDS)},
                             "text": {"type": "string", "description": "One sentence, in French."},
-                            "runs": {"type": "array", "items": {"type": "string"}},
+                            "runs": {"type": "array", "items": {"type": "string"},
+                                     "description": "The run ids, or change fact ids (chg-…), it rests on."},
                             "value": {"type": "string",
                                       "description": "Required for latency (seconds) and decision (the action name)."},
                         },
@@ -86,7 +95,13 @@ French and cites the run ids it rests on (the `run` field of the facts). Kinds:
 - latency: `value` = the detection latency in seconds, as in the cited run;
 - decision: `value` = the action Glorfindel chose in the cited run;
 - trend: compares this campaign with earlier runs (cite both);
+- change: what changed since the previous campaign on a key (a technique on a VM): cite the
+  change facts it rests on (the `fact` field, chg-…);
 - observation: anything else worth the operator's attention, cited.
+
+In a trend or a change claim, every number you write (a latency, a confidence, a difference)
+must be one of the cited facts' numbers. The section that lists the changes since the previous
+campaign is written by the code, not by you: say what matters in it, do not copy it.
 
 A run whose `decision` is null and that carries `decision_unknown_because`: what Glorfindel
 did on it is unknown — never claim it acted, nor that it did not.
@@ -112,6 +127,7 @@ class RunFact:
     excerpt: str = ""                  # Glorfindel's reasoning (data, never instructions)
     error: str = ""
     decision_unknown: str = ""         # a run whose decision was sought, not found: why (an unknown)
+    target: str = ""                   # the run's target VM (resource id), its key with the technique (D-2)
 
     def summary(self) -> str:
         bits = [f"run {self.run_id}", f"campaign {self.campaign_id}", f"technique {self.ttp} ({self.name})",
@@ -145,6 +161,7 @@ class Report:
     model: str = ""
     skipped: list[str] = field(default_factory=list)   # scenarios left out of the facts, and why
     channel: bool = False              # the campaign came through the exercise channel (H-1)
+    comparison: Comparison | None = None   # against the previous campaign (D-2); None: not computed
 
     @property
     def kept(self) -> list[Claim]:
@@ -363,6 +380,43 @@ def channel_refusal(scenario: dict, rid: str, campaign_dir: Path, runs_dir: Path
     return ""
 
 
+@dataclass
+class CampaignInfo:
+    """What the index keeps of a campaign beside its runs (D-2): its state and when it
+    started — what the choice of the previous campaign reads."""
+    campaign_id: str
+    state: str = ""
+    started: float | None = None       # seconds since the epoch; None: unknown
+
+
+def _timestamp(value) -> float | None:
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    return (dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)).timestamp()
+
+
+def campaign_info(campaign_dir: Path) -> CampaignInfo:
+    """The campaign's id and state, from its manifest, and when it started: the earliest
+    ``started_at`` of its scenarios, else its ``created_at``, else its id when it is a date
+    (``annatar/campaign/manifest.py``: ``YYYYMMDDTHHMMSSZ``) — else unknown."""
+    campaign_dir = Path(campaign_dir)
+    manifest = _read_json(campaign_dir / "manifest.json")
+    cid = manifest.get("campaign_id")
+    cid = cid if isinstance(cid, str) and cid else campaign_dir.name
+    state = manifest.get("state")
+    starts = [t for s in manifest.get("scenarios") or [] if isinstance(s, dict)
+              if (t := _timestamp(s.get("started_at"))) is not None]
+    started = min(starts) if starts else _timestamp(manifest.get("created_at"))
+    if started is None:
+        try:
+            started = datetime.strptime(cid, "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc).timestamp()
+        except ValueError:
+            pass
+    return CampaignInfo(cid, state if isinstance(state, str) else "", started)
+
+
 def collect_facts(campaign_dir: Path, runs_dir: Path | None = None, warn=_say) -> list[RunFact]:
     campaign_dir = Path(campaign_dir)
     runs_dir = Path(runs_dir) if runs_dir else campaign_dir.parent.parent
@@ -387,7 +441,7 @@ def collect_facts(campaign_dir: Path, runs_dir: Path | None = None, warn=_say) -
             confidence=float(conf) if isinstance(conf, (int, float)) else None,
             escalated=esc if isinstance(esc := dec.get("escalate"), bool) else None,
             excerpt=str(dec.get("reasoning") or "")[:600], error=s.get("error") or "",
-            decision_unknown="" if dec else why))
+            decision_unknown="" if dec else why, target=str(s.get("target_resource_id") or "")))
     return facts
 
 
@@ -411,14 +465,40 @@ def _collection(path: Path | None = None):
         name="campaign_runs", metadata={"hnsw:space": "cosine"})
 
 
-def index_facts(facts: list[RunFact], path: Path | None = None) -> int:
+def index_facts(facts: list[RunFact], path: Path | None = None,
+                campaign: CampaignInfo | None = None) -> int:
+    """Upsert the runs into the index, by run id. With ``campaign`` (D-2), each row also
+    carries the campaign's state and start, and the run's VM: what ``previous_campaign``
+    reads. A row without them is never chosen as a previous campaign's
+    (analysis/campaign_index.py adds them to the campaigns indexed before)."""
     rows = [f for f in facts if f.run_id]
-    if rows:
-        _collection(path).upsert(
-            ids=[f.run_id for f in rows], documents=[f.summary() for f in rows],
-            metadatas=[{"campaign_id": f.campaign_id, "run_id": f.run_id, "ttp": f.ttp,
-                        "detection": f.detection, "fact": json.dumps(asdict(f))} for f in rows])
+    if not rows:
+        return 0
+    meta = {}
+    if campaign is not None:
+        meta["campaign_state"] = campaign.state
+        if campaign.started is not None:   # the index takes no None
+            meta["campaign_started"] = float(campaign.started)
+    _collection(path).upsert(
+        ids=[f.run_id for f in rows], documents=[f.summary() for f in rows],
+        metadatas=[{"campaign_id": f.campaign_id, "run_id": f.run_id, "ttp": f.ttp,
+                    "detection": f.detection, "vm": f.target.lower(), **meta,
+                    "fact": json.dumps(asdict(f))} for f in rows])
     return len(rows)
+
+
+_FACT_FIELDS = {f.name for f in fields(RunFact)}
+
+
+def fact_of(meta) -> RunFact | None:
+    """The run's facts as the index keeps them — ``None`` when the row cannot be read. A
+    field this version does not know is dropped, one it lacks takes its default (a row
+    written before D-2 has no ``target``)."""
+    try:
+        raw = json.loads((meta or {})["fact"])
+        return RunFact(**{k: v for k, v in raw.items() if k in _FACT_FIELDS})
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 def prior_runs(facts: list[RunFact], path: Path | None = None, per_ttp: int = 3) -> list[RunFact]:
@@ -433,12 +513,55 @@ def prior_runs(facts: list[RunFact], path: Path | None = None, per_ttp: int = 3)
         for meta in res.get("metadatas") or []:
             if meta.get("campaign_id") == cid:
                 continue
-            fact = RunFact(**json.loads(meta["fact"]))
-            out.setdefault(fact.run_id, fact)
+            fact = fact_of(meta)
+            if fact is not None:
+                out.setdefault(fact.run_id, fact)
     by_ttp: dict[str, list[RunFact]] = {}
     for f in sorted(out.values(), key=lambda f: f.run_id, reverse=True):
         by_ttp.setdefault(f.ttp, []).append(f)
     return [f for runs in by_ttp.values() for f in runs[:per_ttp]]
+
+
+# The most rows the choice of the previous campaign reads: every run of every done campaign
+# (a few per campaign, a few campaigns a month).
+_MAX_ROWS = 100_000
+NO_KEYS = "cette campagne n'a aucun run exécuté dont la technique et la VM sont connues"
+NO_START = "on ne sait pas quand cette campagne a commencé"
+NO_PREVIOUS = ("aucune campagne `done` antérieure de l'index ne partage une clé (une technique "
+               "jouée sur la même VM) avec celle-ci")
+
+
+def previous_campaign(facts: list[RunFact], campaign: CampaignInfo,
+                      path: Path | None = None) -> tuple[str, list[RunFact], str]:
+    """The previous campaign, chosen by the code (D-2), never by a similarity search: among
+    the campaigns of the index, the latest ``done`` one that started strictly before this
+    one and shares at least one key — a technique on a target VM, VM without case
+    (analysis/campaign_changes.py ``keys``) — with it; on a tie of starts, the larger id.
+    ``(its id, its runs' facts as indexed, "")``, or ``("", [], why there is none)``. A row
+    without the campaign's state or start (indexed before D-2) is never read here."""
+    mine = keys(facts)
+    if not mine:
+        return "", [], NO_KEYS
+    if campaign.started is None:
+        return "", [], NO_START
+    coll = _collection(path)
+    if coll.count() == 0:
+        return "", [], NO_PREVIOUS
+    found: dict[str, tuple[float, list[RunFact]]] = {}
+    res = coll.get(where={"campaign_state": "done"}, limit=_MAX_ROWS)
+    for meta in res.get("metadatas") or []:
+        cid, started = meta.get("campaign_id"), meta.get("campaign_started")
+        if (meta.get("campaign_state") != "done" or not cid or cid == campaign.campaign_id
+                or not isinstance(started, (int, float)) or not started < campaign.started):
+            continue
+        fact = fact_of(meta)
+        if fact is not None and fact.campaign_id == cid:
+            found.setdefault(cid, (float(started), []))[1].append(fact)
+    shared = [(started, cid) for cid, (started, runs) in found.items() if keys(runs) & mine]
+    if not shared:
+        return "", [], NO_PREVIOUS
+    _, cid = max(shared)
+    return cid, sorted(found[cid][1], key=lambda f: (f.seq, f.run_id)), ""
 
 
 # ── The check: a claim stays only if the facts bear it out ──────────────────────────────
@@ -488,17 +611,70 @@ _NO_ACTION = re.compile(
     re.IGNORECASE)
 
 
-def verify(claims: list[Claim], facts: list[RunFact], prior: list[RunFact]) -> list[Claim]:
-    known = {f.run_id: f for f in [*facts, *prior] if f.run_id}
+# A number written in a trend or a change claim must be one of its cited facts' (D-2): a
+# latency, a confidence, or a difference of either. Before the numbers are read, what only
+# names something is taken out of the sentence: the cited ids, a technique (T1110.001), a
+# run id (20261023T081120Z), a date (23/10), an hour (08:21), and any word that begins with a
+# letter and holds a digit (chg-1, a VM's name) — a heuristic, like the reading of the
+# response below: a count (« 3 runs ») is a number, and must be a fact's too.
+_NAMES = re.compile(
+    r"\b\d{8}T\d{6}Z\b|\b\d{1,2}/\d{1,2}(?:/\d{2,4})?\b|\b\d{1,2}[:h]\d{2}(?::\d{2})?\b"
+    r"|(?<![\w.,])[^\W\d_][\w.-]*\d[\w.-]*")
+_NUMBER = re.compile(r"\d+(?:[.,]\d+)?")
+
+
+def _value_number(value: str) -> float | None:
+    """A claim's ``value`` read as a number (« 15 s », « -2 », « 0,78 »), else ``None``."""
+    try:
+        return abs(float(value.strip().rstrip("s%").strip().replace(",", ".")))
+    except ValueError:
+        return None
+
+
+def _written_numbers(c: Claim) -> list[float]:
+    """The numbers a claim writes, in its sentence and its ``value``, names taken out."""
+    text = c.text
+    for rid in sorted(set(c.runs), key=len, reverse=True):
+        if rid:
+            text = text.replace(rid, " ")
+    text = _NAMES.sub(" ", text)
+    out = [float(n.replace(",", ".")) for n in _NUMBER.findall(text)]
+    if (value := _value_number(c.value)) is not None:
+        out.append(value)
+    return out
+
+
+def _run_numbers(f: RunFact) -> list[tuple[float, float]]:
+    out = [(abs(f.latency_s), 1.0)] if isinstance(f.latency_s, (int, float)) else []
+    if f.confidence is not None:
+        out += [(f.confidence, 0.005), (f.confidence * 100, 0.5)]
+    return out
+
+
+def _stray_numbers(c: Claim, cited) -> list[float]:
+    """The numbers the claim writes that none of its cited facts holds."""
+    allowed = [n for x in cited
+               for n in (x.numbers() if isinstance(x, ChangeFact) else _run_numbers(x))]
+    return [v for v in _written_numbers(c)
+            if not any(abs(v - x) <= tol + 1e-9 for x, tol in allowed)]
+
+
+def verify(claims: list[Claim], facts: list[RunFact], prior: list[RunFact],
+           changes: list[ChangeFact] = ()) -> list[Claim]:
+    known: dict[str, object] = {f.run_id: f for f in [*facts, *prior] if f.run_id}
+    known.update({x.fact_id: x for x in changes})
     own = {f.run_id for f in facts}
     for c in claims:
         cited = [known.get(r) for r in c.runs]
+        changed = [x for x in cited if isinstance(x, ChangeFact)]
         if c.kind not in CLAIM_KINDS:
             c.rejected = f"unknown kind {c.kind!r}"
         elif not c.runs:
             c.rejected = "no run cited"
         elif any(x is None for x in cited):
             c.rejected = "cites a run that is not in the facts"
+        elif changed and c.kind not in ("trend", "change", "observation"):
+            c.rejected = f"a {c.kind} claim cites a change fact (only a trend, a change or an observation may)"
         elif c.kind in ("detected", "missed") and any(x.detection != c.kind for x in cited):
             c.rejected = f"a cited run was not {c.kind}"
         elif c.kind == "latency":
@@ -515,6 +691,13 @@ def verify(claims: list[Claim], facts: list[RunFact], prior: list[RunFact]) -> l
                 c.rejected = "the cited runs' decision is not in the claim"
         elif c.kind == "trend" and not (set(c.runs) & own and set(c.runs) - own):
             c.rejected = "a trend cites this campaign and an earlier one"
+        elif c.kind == "change" and not changed:
+            c.rejected = "a change claim cites no change fact"
+        elif c.kind in ("trend", "change") and (stray := _stray_numbers(c, cited)):
+            c.rejected = f"a number is not in the cited facts ({stray[0]:g})"
+        elif (c.kind == "change" and c.value and _value_number(c.value) is None
+              and c.value not in set().union(*(x.words() for x in changed))):
+            c.rejected = f"{c.value!r} is not in the cited change facts"
         if not c.rejected and (unknown := [x for x in cited if x.decision_unknown]):
             # An unknown decision is never « none » (#167). A decision claim never gets
             # here: its run has no action, the branch above removed it.
@@ -524,14 +707,16 @@ def verify(claims: list[Claim], facts: list[RunFact], prior: list[RunFact]) -> l
                 c.rejected = f"the decision of a cited run is unknown ({why}): the claim does not say so"
             elif _NO_ACTION.search(told):
                 c.rejected = f"the decision of a cited run is unknown ({why}), not « none »"
-            elif _ACTED.search(told):
+            elif _ACTED.search(told) and not changed:
+                # A change fact has two sides: the action named may be the known one's.
                 c.rejected = f"the decision of a cited run is unknown ({why}): the claim says Glorfindel acted"
     return claims
 
 
 # ── The model writes the claims ─────────────────────────────────────────────────────────
 
-def _facts_message(facts: list[RunFact], prior: list[RunFact]) -> str:
+def _facts_message(facts: list[RunFact], prior: list[RunFact],
+                   comparison: Comparison | None = None) -> str:
     def row(f):
         out = {"run": f.run_id, "seq": f.seq, "technique": f.ttp, "name": f.name,
                "status": f.status, "detection": f.detection, "latency_s": f.latency_s,
@@ -544,7 +729,15 @@ def _facts_message(facts: list[RunFact], prior: list[RunFact]) -> str:
 
     def block(rows):
         return "\n".join(json.dumps(row(f), ensure_ascii=False) for f in rows) or "(none)"
-    return f"## This campaign\n{block(facts)}\n\n## Earlier runs of the same techniques\n{block(prior)}"
+    out = f"## This campaign\n{block(facts)}\n\n## Earlier runs of the same techniques\n{block(prior)}"
+    if comparison is not None:  # D-2: computed by the code, cited by the model
+        if comparison.previous:
+            rows = "\n".join(json.dumps(x.row(), ensure_ascii=False) for x in comparison.changes)
+            out += (f"\n\n## Changes since the previous campaign {comparison.previous} "
+                    f"(computed; cite their `fact` ids)\n{rows or '(none)'}")
+        else:
+            out += f"\n\n## Changes since the previous campaign\n(no previous campaign: {comparison.why_none})"
+    return out
 
 
 # The call to the analysis model is bounded (#167, review 6): LiteLLM's own default is 6000 s
@@ -570,7 +763,8 @@ def timeout_s() -> float:
 
 
 def write_claims(facts: list[RunFact], prior: list[RunFact], model: str | None = None,
-                 llm=None, *, strict: bool = False) -> tuple[list[Claim], str]:
+                 llm=None, *, strict: bool = False,
+                 comparison: Comparison | None = None) -> tuple[list[Claim], str]:
     """The model's claims. ``strict`` (the hosted report): an answer without the tool's call,
     or whose arguments cannot be read, raises — an attempt that failed, tried again, never an
     empty report written for good. The call is bounded (``timeout_s``): past it, it raises."""
@@ -583,7 +777,7 @@ def write_claims(facts: list[RunFact], prior: list[RunFact], model: str | None =
         llm, "campaign_report", model=mdl, max_tokens=2048, tools=[_REPORT_TOOL],
         timeout=timeout_s(),
         messages=[{"role": "system", "content": _SYSTEM},
-                  {"role": "user", "content": _facts_message(facts, prior)}])
+                  {"role": "user", "content": _facts_message(facts, prior, comparison)}])
     try:
         calls = resp.choices[0].message.tool_calls or []
     except (AttributeError, IndexError, TypeError):
@@ -651,6 +845,8 @@ def render(report: Report) -> str:
         lines += ["", f"*Écarté des faits ({len(report.skipped)}) : " + " ; ".join(report.skipped) + ".*"]
     if report.channel:
         lines += ["", CHANNEL_NOTE]
+    if report.comparison is not None:  # D-2: rendered by the code, never by the model
+        lines += ["", *render_section(report.comparison)]
     lines += ["", f"## Ce que le rapport affirme ({len(report.kept)})", "",
               f"*Écrit par `{report.model}` ; chaque affirmation cite ses runs et a été vérifiée contre eux.*", ""]
     lines += [f"- {c.text} — {', '.join(f'`{r}`' for r in c.runs)}" for c in report.kept] or ["- (aucune)"]
@@ -668,13 +864,28 @@ def build(campaign_dir: Path, model: str | None = None, llm=None, index_path: Pa
         skipped.append(message)
         _say(f"{Path(campaign_dir).name}: {message}")
 
+    info = campaign_info(campaign_dir)
     facts = collect_facts(campaign_dir, warn=warn)
-    index_facts(facts, index_path)
+    index_facts(facts, index_path, info)
     prior = prior_runs(facts, index_path)
-    claims, mdl = write_claims(facts, prior, model, llm, strict=strict)
+    previous, before, why = previous_campaign(facts, info, index_path)
+    comparison = Comparison(previous, why, pair(before, facts, previous) if previous else [])
+    # The previous campaign's runs can be cited, by a trend too.
+    prior = before + [f for f in prior if f.run_id not in {b.run_id for b in before}]
+    claims, mdl = write_claims(facts, prior, model, llm, strict=strict, comparison=comparison)
     return Report(campaign_id=facts[0].campaign_id if facts else Path(campaign_dir).name,
-                  facts=facts, prior=prior, claims=verify(claims, facts, prior), model=mdl,
-                  skipped=skipped, channel=from_channel(campaign_dir))
+                  facts=facts, prior=prior,
+                  claims=verify(claims, facts, prior, comparison.changes), model=mdl,
+                  skipped=skipped, channel=from_channel(campaign_dir), comparison=comparison)
+
+
+def check_enrollment(campaign_dir: Path) -> None:
+    """A campaign that came through the channel: its runs' VMs are checked enrolled, as by
+    the watch (H-1) — their tags read from Azure, by the host's identity."""
+    if from_channel(campaign_dir):
+        from eregion_core import exercise
+        from eregion_core.inscription import TagEnrollment
+        exercise.set_enrollment_check(TagEnrollment())
 
 
 def main(argv: list[str]) -> int:
@@ -682,10 +893,7 @@ def main(argv: list[str]) -> int:
         print(__doc__.strip().splitlines()[2].strip())
         return 2
     campaign_dir = Path(argv[0])
-    if from_channel(campaign_dir):  # H-1: its runs' VMs are checked enrolled, as by the watch
-        from eregion_core import exercise
-        from eregion_core.inscription import TagEnrollment
-        exercise.set_enrollment_check(TagEnrollment())
+    check_enrollment(campaign_dir)
     report = build(campaign_dir)
     out = campaign_dir / "report.md"
     out.write_text(render(report), encoding="utf-8")

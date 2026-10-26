@@ -1,0 +1,405 @@
+"""D-2 (#184): what changed since the previous campaign, computed by the code.
+
+Campaigns on disk, in tmp: the previous one is chosen by the rule (the latest ``done``
+campaign of the index that started before this one and shares a key — a technique on a
+VM), never by similarity; an aborted one, a later one, and one without a shared key are not
+it. The runs are joined exactly by key into typed facts; the section is rendered by the
+code; a claim of a difference without its fact, or with a number no fact holds, is removed
+by ``verify``. And the index of past campaigns: put in again, idempotent, never losing the
+facts a report saw. A fake model (no call), an index in memory (no embedding, no download).
+Mutants M260–M279 (scripts/mutation_check.py) are measured here."""
+import json
+from types import SimpleNamespace
+
+import pytest
+
+from analysis import campaign_changes as cc
+from analysis import campaign_index as ci
+from analysis import campaign_report as cr
+
+VM = "/subscriptions/s/resourceGroups/rg-bench/providers/Microsoft.Compute/virtualMachines/vm-bench-01"
+OTHER_VM = VM.replace("vm-bench-01", "vm-bench-02")
+
+
+class _Index:
+    """The ``campaign_runs`` collection in memory: ``upsert``, ``count`` and ``get`` by ids
+    or by equal metadata, as chromadb answers them."""
+    def __init__(self):
+        self.rows = {}
+
+    def __call__(self, path=None):
+        return self
+
+    def upsert(self, ids, documents, metadatas):
+        self.rows.update(zip(ids, (dict(m) for m in metadatas)))
+
+    def count(self):
+        return len(self.rows)
+
+    def get(self, ids=None, where=None, limit=None):
+        keys = [i for i in (ids if ids is not None else self.rows) if i in self.rows]
+        keys = [i for i in keys if all(self.rows[i].get(k) == v for k, v in (where or {}).items())]
+        keys = keys[:limit] if limit else keys
+        return {"ids": keys, "metadatas": [self.rows[i] for i in keys]}
+
+
+class _Model:
+    def __init__(self, claims=()):
+        self.claims, self.calls = list(claims), []
+
+    def completion(self, **kw):
+        self.calls.append(kw)
+        msg = SimpleNamespace(tool_calls=[SimpleNamespace(function=SimpleNamespace(
+            arguments=json.dumps({"claims": self.claims})))])
+        return SimpleNamespace(choices=[SimpleNamespace(message=msg)])
+
+
+@pytest.fixture
+def index(monkeypatch):
+    idx = _Index()
+    monkeypatch.setattr(cr, "_collection", idx)
+    return idx
+
+
+def _run(seq, rid, ttp, *, vm=VM, detection="detected", latency=None, action="", confidence=None,
+         escalate=None, status="executed"):
+    return {"seq": seq, "ttp": ttp, "name": f"step {seq}", "target_resource_id": vm,
+            "status": status, "run_id": rid, "detection": detection,
+            "detection_latency_s": latency,
+            "_decision": {"action": action, "confidence": confidence, "escalate": escalate}}
+
+
+def _campaign(runs, cid, created, scenarios, *, state="done"):
+    """A campaign as ``annatar campaign run`` leaves it: its manifest, and each run's own
+    decision file beside it (a watch beside the run)."""
+    cdir = runs / "campaigns" / cid
+    cdir.mkdir(parents=True)
+    for s in scenarios:
+        dec = s.pop("_decision")
+        if dec["action"]:
+            (runs / f"{s['run_id']}_debug.jsonl").write_text(json.dumps(
+                {"signal": {"event": "detection"}, **dec, "reasoning": "data"}) + "\n")
+    manifest = {"campaign_id": cid, "state": state, "scenarios": scenarios}
+    if created:
+        manifest["created_at"] = created
+    (cdir / "manifest.json").write_text(json.dumps(manifest))
+    return cdir
+
+
+def _bench(tmp_path):
+    """C0 (21/10) and C1 (23/10) share T1110.001 on vm-bench-01; C0 alone played T1041 on it,
+    C1 alone T1136.001 on it and T1041 on vm-bench-02. Between them, CA (aborted) and CX
+    (done, nothing in common); after C1, C2 (done, the same key)."""
+    runs = tmp_path / "runs"
+    c0 = _campaign(runs, "C0", "2026-10-21T12:16:43Z", [
+        _run(1, "P1", "T1110.001", latency=91.9, action="block_suspicious_ip", confidence=0.80, escalate=True),
+        _run(2, "P2", "T1041", latency=130.1, action="isolate_vm", confidence=0.9, escalate=True)])
+    ca = _campaign(runs, "CA", "2026-10-22T09:00:00Z", [
+        _run(1, "A1", "T1110.001", latency=50.0, action="snapshot", confidence=0.3)], state="aborted")
+    cx = _campaign(runs, "CX", "2026-10-22T10:00:00Z", [
+        _run(1, "X1", "T1486", vm=OTHER_VM, latency=60.0, action="isolate_vm", confidence=0.95)])
+    c1 = _campaign(runs, "C1", "2026-10-23T08:11:20Z", [
+        _run(1, "R1", "T1136.001", latency=106.3, action="snapshot", confidence=0.4, escalate=True),
+        _run(2, "R2", "T1110.001", latency=106.9, action="isolate_vm", confidence=0.78, escalate=True),
+        _run(3, "R3", "T1041", vm=OTHER_VM, latency=101.6, action="isolate_vm", confidence=0.86),
+        _run(4, "R4", "T1486", status="skipped", detection=None)])
+    c2 = _campaign(runs, "C2", "2026-10-24T08:00:00Z", [
+        _run(1, "Z1", "T1110.001", latency=10.0, action="snapshot", confidence=0.5)])
+    return runs, {"C0": c0, "CA": ca, "CX": cx, "C1": c1, "C2": c2}
+
+
+def _report(cdir, claims=(), model=None):
+    return cr.build(cdir, model="fake/model", llm=model or _Model(claims), index_path=None)
+
+
+def _index_all(cdirs, *names):
+    for name in names:
+        _report(cdirs[name])
+
+
+# ── The previous campaign: chosen by a rule ──────────────────────────────────────────
+
+def test_the_previous_campaign_is_the_latest_done_earlier_one_sharing_a_key(tmp_path, index):
+    """M260–M263: CA is later than C0 and shares its key, but aborted; CX is done and later,
+    but shares no key; C2 shares it, but started after C1. The previous campaign is C0."""
+    _, cdirs = _bench(tmp_path)
+    _index_all(cdirs, "C0", "CA", "CX", "C2")
+    report = _report(cdirs["C1"])
+    assert report.comparison.previous == "C0"
+    assert {f.run_id for f in report.prior} >= {"P1", "P2"}   # citable, by a trend too
+
+
+def test_of_two_earlier_campaigns_sharing_a_key_the_latest(tmp_path, index):
+    """M264: the latest of the campaigns that qualify, not the first one found."""
+    runs, cdirs = _bench(tmp_path)
+    cb = _campaign(runs, "CB", "2026-10-22T12:00:00Z", [
+        _run(1, "B1", "T1110.001", latency=80.0, action="block_suspicious_ip", confidence=0.8)])
+    _report(cb)
+    _index_all(cdirs, "C0")
+    assert _report(cdirs["C1"]).comparison.previous == "CB"
+
+
+def test_without_a_previous_campaign_the_section_says_so(tmp_path, index):
+    """M265: the first campaign, or one with nothing in common with the earlier ones — the
+    section says there is none, and why."""
+    _, cdirs = _bench(tmp_path)
+    _index_all(cdirs, "CA", "CX", "C2")      # aborted, no shared key, later
+    report = _report(cdirs["C1"])
+    assert (report.comparison.previous, report.comparison.why_none) == ("", cr.NO_PREVIOUS)
+    md = cr.render(report)
+    assert f"{cc.TITLE}\n\n*Aucune campagne précédente : {cr.NO_PREVIOUS}.*" in md
+    assert "Campagne précédente" not in md
+    assert cr._facts_message(report.facts, report.prior, report.comparison).endswith(
+        f"(no previous campaign: {cr.NO_PREVIOUS})")
+
+
+def test_a_campaign_whose_start_is_unknown_has_no_previous_one(tmp_path, index):
+    runs, cdirs = _bench(tmp_path)
+    _index_all(cdirs, "C0")
+    nodate = _campaign(runs, "lab", None, [_run(1, "N1", "T1110.001", latency=5.0)])
+    assert _report(nodate).comparison.why_none == cr.NO_START
+
+
+def test_when_a_campaign_started(tmp_path):
+    """Its first scenario's start, else its creation, else its id when it is a date."""
+    runs = tmp_path / "runs"
+    first = _campaign(runs, "S", "2026-10-20T00:00:00Z", [
+        {**_run(1, "S1", "T1041"), "started_at": "2026-10-21T10:00:00Z"},
+        {**_run(2, "S2", "T1041"), "started_at": "2026-10-21T09:00:00Z"}])
+    assert cr.campaign_info(first).started == pytest.approx(1792573200.0)    # 2026-10-21T09:00Z
+    assert cr.campaign_info(_campaign(runs, "D", "2026-10-21T09:00:00Z", [])).started == pytest.approx(1792573200.0)
+    assert cr.campaign_info(_campaign(runs, "20261021T090000Z", None, [])).started == pytest.approx(1792573200.0)
+    assert cr.campaign_info(_campaign(runs, "x", "not a date", [])).started is None
+
+
+def test_rows_indexed_before_d2_are_never_chosen(tmp_path, index):
+    """A row without its campaign's state and start (written before D-2) is not read: no
+    guess. Putting the campaign in again (analysis/campaign_index.py) adds them."""
+    _, cdirs = _bench(tmp_path)
+    old = cr.collect_facts(cdirs["C0"])
+    for f in old:
+        f.target = ""
+    cr.index_facts(old)                       # as before D-2: no campaign, no VM
+    assert _report(cdirs["C1"]).comparison.previous == ""
+    ci.verse(cdirs["C0"])
+    assert _report(cdirs["C1"]).comparison.previous == "C0"
+
+
+# ── The facts: joined exactly by key ─────────────────────────────────────────────────
+
+def test_each_shared_key_faces_its_previous_run(tmp_path, index):
+    """M266–M269: the n-th run of a technique on a VM faces the n-th of the previous
+    campaign on the same VM; a key on one side only is listed as such — T1041 on another VM
+    is another key. A skipped scenario played nothing: no key."""
+    _, cdirs = _bench(tmp_path)
+    _index_all(cdirs, "C0")
+    changes = {c.fact_id: c for c in _report(cdirs["C1"]).comparison.changes}
+    assert [(c.ttp, c.vm.rsplit("/", 1)[-1], c.side, c.before_run, c.after_run)
+            for c in changes.values()] == [
+        ("T1136.001", "vm-bench-01", "after", "", "R1"),
+        ("T1110.001", "vm-bench-01", "both", "P1", "R2"),
+        ("T1041", "vm-bench-02", "after", "", "R3"),
+        ("T1041", "vm-bench-01", "before", "P2", "")]
+    brute = changes["chg-2"]
+    assert (brute.detection_before, brute.detection_after) == ("detected", "detected")
+    assert (brute.latency_before, brute.latency_after) == (91.9, 106.9)
+    assert brute.latency_delta == pytest.approx(15.0)
+    assert (brute.decision_before, brute.decision_after) == ("block_suspicious_ip", "isolate_vm")
+    assert (brute.confidence_before, brute.confidence_after) == (0.80, 0.78)
+    assert brute.confidence_delta == pytest.approx(-0.02)
+    assert (brute.escalated_before, brute.escalated_after) == (True, True)
+
+
+def test_the_vm_is_compared_without_its_case():
+    before = [cr.RunFact("P1", "C0", 1, "T1110.001", "", "executed", "detected", target=VM.upper())]
+    after = [cr.RunFact("R1", "C1", 1, "T1110.001", "", "executed", "missed", target=VM)]
+    [c] = cc.pair(before, after, "C0")
+    assert (c.side, c.detection_before, c.detection_after) == ("both", "detected", "missed")
+
+
+def test_a_key_played_twice_pairs_in_order():
+    """M270: the first run faces the first, the second the second — never the last with the
+    first."""
+    def run(rid, seq, cid, latency):
+        return cr.RunFact(rid, cid, seq, "T1110.001", "", "executed", "detected",
+                          latency_s=latency, target=VM)
+    changes = cc.pair([run("P1", 1, "C0", 10.0), run("P2", 2, "C0", 20.0)],
+                      [run("R1", 1, "C1", 11.0), run("R2", 2, "C1", 22.0), run("R3", 3, "C1", 33.0)], "C0")
+    assert [(c.nth, c.before_run, c.after_run) for c in changes] == [
+        (1, "P1", "R1"), (2, "P2", "R2"), (3, "", "R3")]
+
+
+def test_an_unknown_decision_stays_unknown_in_the_change():
+    before = [cr.RunFact("P1", "C0", 1, "T1110.001", "", "executed", "detected", target=VM,
+                         decision_unknown=cr.NONE_IN_WINDOW)]
+    after = [cr.RunFact("R1", "C1", 1, "T1110.001", "", "executed", "detected", target=VM,
+                        decision="isolate_vm", confidence=0.78)]
+    [c] = cc.pair(before, after, "C0")
+    row = c.row()
+    assert row["decision"] == [None, "isolate_vm"]
+    assert row["decision_unknown_because"] == [cr.NONE_IN_WINDOW, None]
+    md = "\n".join(cc.render_section(cc.Comparison("C0", "", [c])))
+    assert f"inconnue ({cr.NONE_IN_WINDOW}) → isolate_vm" in md
+    assert "ce n'est pas dire que Glorfindel n'a pas agi" in md
+
+
+# ── The section, rendered by the code ────────────────────────────────────────────────
+
+def test_the_report_renders_the_section_from_the_facts(tmp_path, index):
+    """M271, M272: the section is the code's — the previous campaign, a row per shared key
+    (detection, latency, action, confidence, escalation, before → after), then the keys of
+    one side only; the model gets the same facts, to cite."""
+    _, cdirs = _bench(tmp_path)
+    _index_all(cdirs, "C0")
+    model = _Model()
+    md = cr.render(_report(cdirs["C1"], model=model))
+    assert "Campagne précédente : `C0`." in md
+    assert ("| `chg-2` | T1110.001 | vm-bench-01 | detected → detected | 91,9 s → 106,9 s (+15,0 s) "
+            "| block_suspicious_ip → isolate_vm | 80% → 78% (−2 pts) | escaladé → escaladé |") in md
+    assert ("Seulement dans la campagne précédente (1) : `chg-4` T1041 sur vm-bench-01 (run `P2`).") in md
+    assert ("Seulement dans celle-ci (2) : `chg-1` T1136.001 sur vm-bench-01 (run `R1`) ; "
+            "`chg-3` T1041 sur vm-bench-02 (run `R3`).") in md
+    assert md.index(cc.TITLE) < md.index("## Ce que le rapport affirme")
+    sent = model.calls[0]["messages"][1]["content"]
+    assert "## Changes since the previous campaign C0" in sent
+    rows = [json.loads(line) for line in sent.split("## Changes since the previous campaign C0")[1].splitlines()
+            if line.startswith("{")]
+    assert [r["fact"] for r in rows] == ["chg-1", "chg-2", "chg-3", "chg-4"]
+    assert rows[1]["decision"] == ["block_suspicious_ip", "isolate_vm"]
+    assert rows[1]["latency_delta_s"] == pytest.approx(15.0)
+
+
+# ── The check: a difference comes from a fact ────────────────────────────────────────
+
+CLAIMS = [
+    # kept: each number is one of chg-2's
+    {"kind": "change", "text": "Sur T1110.001, l'action passe de block_suspicious_ip à isolate_vm, "
+                               "à 78 % au lieu de 80 %.", "runs": ["chg-2"]},
+    {"kind": "change", "text": "La force brute est vue 15 s plus tard (106,9 s contre 91,9 s).",
+     "runs": ["chg-2"], "value": "15"},
+    {"kind": "change", "text": "La confiance baisse de 0,02.", "runs": ["chg-2"]},
+    {"kind": "change", "text": "T1041 n'a pas été rejouée sur vm-bench-01.", "runs": ["chg-4"]},
+    {"kind": "trend", "text": "La latence de T1110.001 passe de 91,9 s à 106,9 s.", "runs": ["R2", "P1"]},
+    # removed
+    {"kind": "change", "text": "La force brute est vue 40 s plus tard.", "runs": ["chg-2"]},
+    {"kind": "change", "text": "La force brute est vue 15 s plus tard.", "runs": ["R2", "P1"]},
+    {"kind": "change", "text": "Sa latence passe de 91,9 s à 106,9 s.", "runs": ["R2", "P1"]},
+    {"kind": "change", "text": "La confiance baisse de 12 points.", "runs": ["chg-2"]},
+    {"kind": "change", "text": "L'action devient snapshot.", "runs": ["chg-2"], "value": "snapshot"},
+    {"kind": "trend", "text": "La latence de T1110.001 passe de 91,9 s à 150 s.", "runs": ["R2", "P1"]},
+    {"kind": "detected", "text": "Détectée les deux fois.", "runs": ["chg-2"]},
+    {"kind": "change", "text": "Un fait inventé.", "runs": ["chg-9"]},
+]
+
+
+def test_a_difference_without_its_fact_is_removed(tmp_path, index):
+    """M273–M277: a change claim cites a change fact, and each number it writes is one of
+    the cited facts' (a latency, a confidence, a difference, in seconds, as a fraction or in
+    percent); a trend too. Technique and run ids, dates, VM names are not numbers."""
+    _, cdirs = _bench(tmp_path)
+    _index_all(cdirs, "C0")
+    report = _report(cdirs["C1"], CLAIMS)
+    kept = [c.text for c in report.kept]
+    assert kept == [c["text"] for c in CLAIMS[:5]], [(c.text, c.rejected) for c in report.rejected]
+    why = {c.text: c.rejected for c in report.rejected}
+    assert why["La force brute est vue 40 s plus tard."] == "a number is not in the cited facts (40)"
+    assert why["La force brute est vue 15 s plus tard."] == "a change claim cites no change fact"
+    assert why["Sa latence passe de 91,9 s à 106,9 s."] == "a change claim cites no change fact"
+    assert why["La confiance baisse de 12 points."] == "a number is not in the cited facts (12)"
+    assert why["L'action devient snapshot."] == "'snapshot' is not in the cited change facts"
+    assert why["La latence de T1110.001 passe de 91,9 s à 150 s."] == "a number is not in the cited facts (150)"
+    assert why["Détectée les deux fois."].startswith("a detected claim cites a change fact")
+    assert why["Un fait inventé."] == "cites a run that is not in the facts"
+    md = cr.render(report)
+    assert "- Sur T1110.001, l'action passe de block_suspicious_ip à isolate_vm, à 78 % au lieu de 80 %. — `chg-2`" in md
+    assert "~~La force brute est vue 40 s plus tard.~~ — a number is not in the cited facts (40)" in md
+
+
+@pytest.mark.parametrize("text", [
+    "Le 23/10 à 08:21, T1110.001 sur vm-bench-01 (run 20261023T081719Z) : isolée à 78 %.",
+    "Écart de 15,0 s sur chg-2.",
+])
+def test_names_are_not_numbers(text):
+    [c] = cc.pair([cr.RunFact("P1", "C0", 1, "T1110.001", "", "executed", "detected", latency_s=91.9,
+                              decision="block_suspicious_ip", confidence=0.8, target=VM)],
+                  [cr.RunFact("R2", "C1", 1, "T1110.001", "", "executed", "detected", latency_s=106.9,
+                              decision="isolate_vm", confidence=0.78, target=VM)], "C0")
+    [claim] = cr.verify([cr.Claim("change", text, ["chg-1"])], [], [], [c])
+    assert not claim.rejected, claim.rejected
+
+
+def test_a_change_on_an_unknown_decision_says_so():
+    """The rule of #167 holds on a change fact: a claim on the response of a side whose
+    decision is unknown says it is unknown, and never that Glorfindel did not act."""
+    [c] = cc.pair([cr.RunFact("P1", "C0", 1, "T1110.001", "", "executed", "detected", target=VM,
+                              decision_unknown=cr.NO_WINDOW)],
+                  [cr.RunFact("R1", "C1", 1, "T1110.001", "", "executed", "detected", target=VM,
+                              decision="isolate_vm", confidence=0.78)], "C0")
+    claims = cr.verify([
+        cr.Claim("change", "La décision passe à isolate_vm.", ["chg-1"]),
+        cr.Claim("change", "Décision inconnue avant, isolate_vm cette fois.", ["chg-1"]),
+        cr.Claim("change", "Décision inconnue avant : Glorfindel n'avait pas agi.", ["chg-1"]),
+    ], [], [], [c])
+    assert [bool(x.rejected) for x in claims] == [True, False, True]
+
+
+# ── The index of past campaigns ──────────────────────────────────────────────────────
+
+def test_putting_a_campaign_in_keeps_the_facts_its_report_saw(tmp_path, index):
+    """M278: a run already indexed keeps its facts — its window may be gone by now, and its
+    decision with it; only the campaign's state and start, and the run's VM, are added."""
+    runs, cdirs = _bench(tmp_path)
+    old = cr.collect_facts(cdirs["C0"])
+    for f in old:
+        f.target = ""
+    cr.index_facts(old)                                   # its report, before D-2
+    for rid in ("P1", "P2"):
+        (runs / f"{rid}_debug.jsonl").unlink()            # what the files say now: no decision
+    result = ci.verse(cdirs["C0"])
+    assert (result.kept, result.computed, result.missing) == (["P1", "P2"], [], [])
+    row = index.rows["P1"]
+    assert (row["campaign_state"], row["vm"]) == ("done", VM.lower())
+    assert row["campaign_started"] == pytest.approx(cr.campaign_info(cdirs["C0"]).started)
+    fact = cr.fact_of(row)
+    assert (fact.decision, fact.confidence, fact.target) == ("block_suspicious_ip", 0.8, VM)
+
+
+def test_a_run_not_yet_indexed_is_computed_from_the_files(tmp_path, index):
+    _, cdirs = _bench(tmp_path)
+    result = ci.verse(cdirs["C1"])
+    assert (result.kept, result.computed) == ([], ["R1", "R2", "R3", "R4"])
+    assert cr.fact_of(index.rows["R2"]).decision == "isolate_vm"
+
+
+def test_putting_campaigns_in_is_idempotent(tmp_path, index, capsys):
+    """M279: run twice, the index is the same; a campaign still running is left, and said."""
+    runs, cdirs = _bench(tmp_path)
+    _campaign(runs, "CR", "2026-10-25T08:00:00Z", [_run(1, "Q1", "T1041")], state="running")
+    assert ci.main(["--all", str(runs / "campaigns")]) == 0
+    first = json.loads(json.dumps(index.rows))
+    assert ci.main(["--all", str(runs / "campaigns")]) == 0
+    assert index.rows == first
+    assert "Q1" not in index.rows
+    out = capsys.readouterr().out
+    assert "CR : laissée (état running : pas terminée)" in out
+    assert "C1 (done) : 4 run(s) dans l'index — 4 gardé(s) tel(s) quel(s), 0 calculé(s)" in out
+    assert _report(cdirs["C1"]).comparison.previous == "C0"
+
+
+def test_the_command_says_how_to_use_it(capsys):
+    assert ci.main([]) == 2
+    assert ci.main([str("/nonexistent/campaign")]) == 1
+    assert "manifeste illisible" in capsys.readouterr().out
+
+
+def test_the_real_index_chooses_the_previous_campaign(tmp_path):
+    """The same rule against chromadb itself: its ``where`` on the campaign's state, its
+    float metadata."""
+    pytest.importorskip("chromadb")
+    _, cdirs = _bench(tmp_path)
+    idx = tmp_path / "idx"
+    for name in ("C0", "CA", "C2"):
+        cr.build(cdirs[name], model="fake/model", llm=_Model(), index_path=idx)
+    report = cr.build(cdirs["C1"], model="fake/model", llm=_Model(), index_path=idx)
+    assert report.comparison.previous == "C0"
+    assert [c.side for c in report.comparison.changes] == ["after", "both", "after", "before"]

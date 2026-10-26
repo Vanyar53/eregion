@@ -834,6 +834,63 @@ MUTANTS = [
      '            **seen, "execution_id": (execution or {}).get("name"), "execution_status": status,\n',
      '            **{k: v for k, v in seen.items() if k != "before"},\n'
      '            "execution_id": (execution or {}).get("name"), "execution_status": status,\n'),
+    # D-2 (#184) — what changed since the previous campaign: the previous campaign chosen by
+    # its rule (done, earlier, a shared key: a technique on a VM), the runs joined exactly by
+    # key, the section rendered by the code, a difference that does not come from a fact
+    # removed by the check, and the index of past campaigns put in without losing a fact.
+    ("M260", "an aborted campaign is chosen as the previous one (D-2)", "analysis/campaign_report.py",
+     ('    res = coll.get(where={"campaign_state": "done"}, limit=_MAX_ROWS)\n',
+      '        if (meta.get("campaign_state") != "done" or not cid or cid == campaign.campaign_id\n'),
+     ("    res = coll.get(limit=_MAX_ROWS)\n",
+      "        if (not cid or cid == campaign.campaign_id\n")),
+    ("M261", "a later campaign is chosen as the previous one (D-2)", "analysis/campaign_report.py",
+     "                or not isinstance(started, (int, float)) or not started < campaign.started):\n",
+     "                or not isinstance(started, (int, float))):\n"),
+    ("M262", "a campaign with no key in common is chosen as the previous one (D-2)", "analysis/campaign_report.py",
+     "    shared = [(started, cid) for cid, (started, runs) in found.items() if keys(runs) & mine]\n",
+     "    shared = [(started, cid) for cid, (started, runs) in found.items()]\n"),
+    ("M263", "the key leaves the VM out: a technique on another VM faces it (D-2)", "analysis/campaign_changes.py",
+     "    return (ttp, vm) if ttp and vm else None\n", '    return (ttp, "") if ttp else None\n'),
+    ("M264", "the earliest qualifying campaign is chosen, not the latest (D-2)", "analysis/campaign_report.py",
+     "    _, cid = max(shared)\n", "    _, cid = min(shared)\n"),
+    ("M265", "without a previous campaign, the section says nothing of why (D-2)", "analysis/campaign_changes.py",
+     '        return lines + [f"*Aucune campagne précédente : {comparison.why_none}.*"]\n',
+     "        return lines\n"),
+    ("M266", "the VM of the key is compared with its case (D-2)", "analysis/campaign_changes.py",
+     '    ttp, vm = getattr(fact, "ttp", "") or "", (getattr(fact, "target", "") or "").lower()\n',
+     '    ttp, vm = getattr(fact, "ttp", "") or "", (getattr(fact, "target", "") or "")\n'),
+    ("M267", "the keys of one side only are not listed (D-2)", "analysis/campaign_changes.py",
+     "    order = sorted(set(b) | set(a),", "    order = sorted(set(b) & set(a),"),
+    ("M268", "a skipped scenario is a key: it played nothing (D-2)", "analysis/campaign_changes.py",
+     '    if getattr(fact, "status", "") != "executed":\n        return None\n', ""),
+    ("M269", "the report indexes its runs without the campaign's state and start (D-2)",
+     "analysis/campaign_report.py",
+     "    index_facts(facts, index_path, info)\n", "    index_facts(facts, index_path)\n"),
+    ("M270", "a key played twice pairs the last run with the first (D-2)", "analysis/campaign_changes.py",
+     "for n, f in enumerate(runs, 1)}", "for n, f in enumerate(reversed(runs), 1)}"),
+    ("M271", "the report leaves the computed section out (D-2)", "analysis/campaign_report.py",
+     '        lines += ["", *render_section(report.comparison)]\n', "        pass\n"),
+    ("M272", "the model never sees the change facts it may cite (D-2)", "analysis/campaign_report.py",
+     '            rows = "\\n".join(json.dumps(x.row(), ensure_ascii=False) for x in comparison.changes)\n',
+     '            rows = ""\n'),
+    ("M273", "a change claim that cites no change fact stays (D-2)", "analysis/campaign_report.py",
+     '        elif c.kind == "change" and not changed:\n            c.rejected = "a change claim cites no change fact"\n',
+     ""),
+    ("M274", "a difference no cited fact holds stays (D-2)", "analysis/campaign_report.py",
+     "(stray := _stray_numbers(c, cited)):", "(stray := []):"),
+    ("M275", "a trend's numbers are not checked against its facts (D-2)", "analysis/campaign_report.py",
+     '        elif c.kind in ("trend", "change") and (stray', '        elif c.kind in ("change",) and (stray'),
+    ("M276", "a technique, a run id or a VM name is read as a number (D-2)", "analysis/campaign_report.py",
+     '    text = _NAMES.sub(" ", text)\n', ""),
+    ("M277", "a change claim's value names an action the cited facts do not hold (D-2)",
+     "analysis/campaign_report.py",
+     "              and c.value not in set().union(*(x.words() for x in changed))):",
+     "              and False):"),
+    ("M278", "putting a campaign in again recomputes the facts its report saw (D-2)", "analysis/campaign_index.py",
+     "        if fact is not None and fact.run_id == rid and fact.campaign_id == info.campaign_id:\n",
+     "        if False:\n"),
+    ("M279", "a campaign still running is put into the index (D-2)", "analysis/campaign_index.py",
+     "    if info.state not in ENDED:\n", "    if False:\n"),
 ]
 
 # Mutants measured by other tests than the invariants (their lot's own).
@@ -890,6 +947,7 @@ TESTS.update({f"M{n}": "tests/unit/test_decision_stability.py" for n in range(20
 TESTS.update({f"M{n}": "tests/unit/test_exercise_guard.py" for n in range(220, 239)})
 TESTS.update({f"M{n}": "tests/unit/test_run_channel.py" for n in range(240, 246)})
 TESTS.update({mid: "tests/unit/test_gothmog.py" for mid in ("M241", "M246")})
+TESTS.update({f"M{n}": "tests/unit/test_campaign_changes.py" for n in range(260, 280)})  # D-2
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

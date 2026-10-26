@@ -66,6 +66,9 @@ glorfindel/
                           de l'ancien fichier de 4 394 lignes, découpé sans changer son texte. Un seul espace
                           de noms : un nom écrit à travers elle (monkeypatch de `_ISOLATION_STATE_DIR`, `_vm_lock`…)
                           l'est dans chaque module qui le lie ; un nom est lu dans son module, à jour.
+                          Sur glorfindel.actions : monkeypatch.setattr, jamais mock.patch (il supprime le nom
+                          en sortie : la façade refuse, la valeur patchée resterait partout) ; ou mock.patch
+                          sur le module d'origine (ce module seul).
   response/             → cœur neutre : policy.py (AUTONOMOUS_ACTIONS, HUMAN_APPROVAL_REQUIRED, erreurs,
                           isolation_verdict, single_host_ip), ids.py, state.py (~/.glorfindel/isolation, blocks),
                           locks.py (_vm_lock, _quarantine_lock)
@@ -80,11 +83,10 @@ glorfindel/
                           lu par jobs.py), restore.py, sweep.py, readers.py (check_permissions, check_nsg_access,
                           list_nsgs, check_compute_access…), sdk.py (warm-up), capabilities.py, monitor.py
                           (AzureMonitorDetector, réexporté par detectors.py)
-                          check_nsg_access/check_backup_points/check_compute_access ;
-                          list_backup_items(vault, rg) → inventaire RSV vault-wide (protected items + last RP/state),
+                          backup.py : check_backup_points ; list_backup_items(vault, rg) → inventaire RSV vault-wide (protected items + last RP/state),
                           indépendant de l'état des VMs (source de vérité backup même VM éteinte). Cheap leg : 1 appel
                           paginé, pas de count RP par item (count = check_backup_points par VM, opt-in). Read-only OK.
-                          list_nsgs() → inventaire NSG réel (network_security_groups.list_all) : tous les NSG +
+                          readers.py : list_nsgs() → inventaire NSG réel (network_security_groups.list_all) : tous les NSG +
                           associations (subnets/nics) + `vms` (resource_ids gouvernés, via nic→vm/subnet→vms d'un
                           network_interfaces.list_all) + restriction Glorfindel (rule `glorfindel-*`). Corrige le
                           sous-comptage de check_nsg_access (dérivé par-VM : rate le NSG subnet quand la NIC a le

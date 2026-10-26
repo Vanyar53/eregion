@@ -11,7 +11,7 @@ L'atelier autour : **Celebrimbor** (`infra/terraform/`) construit et inscrit le 
 **Direction — huitième passe (13/10)** (détail : `ROADMAP.md`, « Vers la 1.0 ») :
 - **Finalité** : les incidents cloud courants contenus seuls, en quelques minutes, réversibles et vérifiés ; le reste à un humain, trié et expliqué ; la preuve à tout moment. Cinq indicateurs : temps pour contenir, part contenue seule, actions disruptives à tort, couverture des techniques cloud, âge de la dernière preuve (< 30 jours).
 - **Règle de production** (codée dès O0) : jamais de panne ni d'action destructive sur une charge réelle ; en production, techniques non destructives sur VM inscrites + chaîne complète sur une VM sentinelle vide ; destructif et pannes sur le banc ou le jumeau. Zones d'inscription : `bench`, `twin`, `production`.
-- **Jalon 0.3 — la boucle tourne** : socle O0 → E1 → O1 → R1 → G0, et H0 (Glorfindel sur une VM dédiée, pré-observation) ; piste IA B2 (élargi à la mémoire), IA0 ; B1 après la 0.3. **A1 (découpage d'`actions.py`, avec MC0) différé en 0.4+.** O1, H0, R1, G0 (infra réelle) se font avec Jonathan ; décisions du 15/10 dans `ROADMAP.md` ; `v0.2.0` publiée le 15/10.
+- **Jalon 0.3 — la boucle tourne** : socle O0 → E1 → O1 → R1 → G0, et H0 (Glorfindel sur une VM dédiée, pré-observation) ; piste IA B2 (élargi à la mémoire), IA0 ; B1 après la 0.3. **A1 (découpage d'`actions.py`) et MC0 (interface de fournisseur) faits le 26/10.** O1, H0, R1, G0 (infra réelle) se font avec Jonathan ; décisions du 15/10 dans `ROADMAP.md` ; `v0.2.0` publiée le 15/10.
 - Le SaaS vient plus tard (1.x) ; Eregion tourne en local ou dans une VM.
 
 **Repo** : https://github.com/Vanyar53/eregion

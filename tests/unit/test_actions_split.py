@@ -96,3 +96,21 @@ def test_no_module_of_the_split_beyond_a_few_hundred_lines():
     too_long = {str(p.relative_to(ROOT)): n for p in files
                 if (n := len(p.read_text().splitlines())) > 500}
     assert not too_long
+
+
+def test_mock_patch_on_the_facade_fails_loudly_and_says_what_to_use(monkeypatch):
+    """mock.patch deletes the name on exit, and the façade can't put an « original » back
+    (under conftest it would be the real home): it refuses, naming monkeypatch.setattr
+    and the module of origin."""
+    from unittest import mock
+
+    import pytest
+
+    monkeypatch.setattr(actions, "_ERR_MAX", actions._ERR_MAX)   # restores after the test
+    with pytest.raises(AttributeError, match=r"monkeypatch\.setattr.*glorfindel\.response\.policy\._ERR_MAX"):
+        with mock.patch("glorfindel.actions._ERR_MAX", 1):
+            pass
+    # Patching the module of origin works, for that module only.
+    policy = importlib.import_module("glorfindel.response.policy")
+    with mock.patch("glorfindel.response.policy._ERR_MAX", 2):
+        assert policy._ERR_MAX == 2

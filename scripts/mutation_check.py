@@ -882,6 +882,18 @@ MUTANTS = [
     ("M459", "a restore job read in the VM's group again, through the connector (A1)", "glorfindel/jobs.py",
      "            az_status = connector.restore_job_status(vault, rg, restore_job_name)\n",
      "            az_status = connector.restore_job_status(vault, job.get(\"rg\", \"\"), restore_job_name)\n"),
+    # A1 review: a spec'd mock, an instance's declaration, the ceiling of the debt, mock.patch.
+    ("M460", "capabilities read on type(): a MagicMock(spec=AzureConnector) breaks the readiness (A1 review)",
+     PIF, '        declared = getattr(getattr(connector, "__class__", type(connector)), "CAPABILITIES", None)\n',
+     '        declared = getattr(type(connector), "CAPABILITIES", None)\n'),
+    ("M461", "an instance's own declaration ignored (A1 review)", PIF,
+     '    declared = getattr(connector, "CAPABILITIES", None)\n', "    declared = None\n"),
+    ("M462", "a debt of the shared core declared an adapter: the boundary no longer sees it (A1 review)",
+     BOUNDARY_TESTS,
+     ('ADAPTERS = {\n', '    "eregion_core/inscription.py": "credential for the ARM tag read of the inscription",\n'),
+     ('ADAPTERS = {\n    "eregion_core/inscription.py": "azure",\n', "")),
+    ("M463", "a delete through the façade silently ignored: mock.patch leaves its value everywhere (A1 review)",
+     FAC, "        if _binders(name):\n            home = ", "        if _binders(name):\n            return\n            home = "),
     # M-3 (#183) — the host of Glorfindel: Discord buttons check who clicks (closed by
     # default), each container gets only its secrets, H0 deploys a named reference whose
     # image carries it, and the image installs from the lock.
@@ -1005,6 +1017,8 @@ TESTS.update({mid: "tests/unit/test_gothmog.py" for mid in ("M241", "M246")})
 TESTS.update({mid: "tests/unit/test_actions_split.py" for mid in ("M450", "M451", "M452")})
 TESTS.update({f"M{n}": f"{BOUNDARY_TESTS} tests/unit/test_readiness.py" for n in range(453, 459)})
 TESTS["M459"] = "tests/unit/test_jobs.py"
+TESTS.update({mid: BOUNDARY_TESTS for mid in ("M460", "M461", "M462")})
+TESTS["M463"] = "tests/unit/test_actions_split.py"
 TESTS.update({f"M{n}": "tests/unit/test_bot.py" for n in range(280, 284)})
 TESTS.update({f"M{n}": "tests/unit/test_glorfindel_host.py" for n in range(284, 287)})
 TESTS.update({f"M{n}": "tests/unit/test_host_deploy.py" for n in (287, 288)})

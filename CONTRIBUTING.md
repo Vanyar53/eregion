@@ -129,6 +129,8 @@ Actions not in `AUTONOMOUS_ACTIONS` are automatically escalated to the human —
 
 ## Tests
 
+Patching the response code (`glorfindel/actions.py` is a façade over `glorfindel/response/` and `glorfindel/providers/azure/`): on `glorfindel.actions`, use `monkeypatch.setattr` — it reaches every module that reads the name — never `mock.patch`, which deletes the name on exit (the façade refuses, and the patched value would stay everywhere). Or `mock.patch` the module of origin (`glorfindel.response.state._ISOLATION_STATE_DIR`…), which patches that module only.
+
 ```bash
 pytest                          # all tests
 pytest tests/unit/test_agent_nodes.py -v    # LangGraph nodes only

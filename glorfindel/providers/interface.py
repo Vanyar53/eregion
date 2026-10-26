@@ -56,10 +56,14 @@ RESTORE_POINT = "restore_point"              # snapshot, restore
 
 
 def capabilities_of(connector=None) -> ProviderCapabilities:
-    """What the connector's provider declares. A connector that is no CloudConnector (a
-    test double, or none at all: the audit) reads as the only adapter, Azure; a
-    CloudConnector that declares nothing is a programming error."""
-    declared = getattr(type(connector), "CAPABILITIES", None)
+    """What the connector's provider declares: on the instance when it carries a
+    declaration, else on its class — `__class__`, which a `MagicMock(spec=AzureConnector)`
+    reports as AzureConnector. A connector that is no CloudConnector (a plain test double,
+    or none at all: the audit) reads as the only adapter, Azure; a CloudConnector that
+    declares nothing is a programming error."""
+    declared = getattr(connector, "CAPABILITIES", None)
+    if not isinstance(declared, ProviderCapabilities):
+        declared = getattr(getattr(connector, "__class__", type(connector)), "CAPABILITIES", None)
     if isinstance(declared, ProviderCapabilities):
         return declared
     if isinstance(connector, CloudConnector):

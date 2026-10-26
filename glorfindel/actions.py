@@ -87,10 +87,16 @@ class _OneNamespace(_types.ModuleType):
             setattr(module, name, value)
 
     def __delattr__(self, name: str) -> None:
+        # No original to put back here: under a conftest patch, « the original » would be
+        # the real ~/.glorfindel. mock.patch("glorfindel.actions.X") deletes on exit, so it
+        # fails loudly — with the patched value left in every module until the test ends.
         if _binders(name):
+            home = _binders(name)[0].__name__
             raise AttributeError(
-                f"{name} lives in {_binders(name)[0].__name__}: patch it with monkeypatch.setattr "
-                "(this module forwards writes), not by deleting it")
+                f"glorfindel.actions.{name} can't be deleted: this module forwards writes to every "
+                f"module that binds it. mock.patch('glorfindel.actions.{name}') deletes on exit — "
+                f"use monkeypatch.setattr(glorfindel.actions, '{name}', …), or mock.patch "
+                f"'{home}.{name}' (only that module).")
         super().__delattr__(name)
 
 

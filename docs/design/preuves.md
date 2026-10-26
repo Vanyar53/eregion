@@ -311,7 +311,7 @@ Les écarts sur M01–M41 sont ceux du tirage (M22, M23, M28, M31, M32, M36, M38
 de « flaky » à « figé seulement » ou l'inverse) : aucun mutant attrapé à chaque tour avant ne
 l'est plus après.
 
-Dix mutants pour ce qu'A1 et MC0 ajoutent, tous attrapés au premier tour (26/10), mesurés par
+Quatorze mutants pour ce qu'A1 et MC0 ajoutent (M460–M463 après la relecture), tous attrapés au premier tour (26/10), mesurés par
 `tests/unit/test_actions_split.py`, `test_provider_boundary.py`, `test_readiness.py` et
 `test_jobs.py` :
 
@@ -327,6 +327,10 @@ Dix mutants pour ce qu'A1 et MC0 ajoutent, tous attrapés au premier tour (26/10
 | M457 | la frontière laisse le SDK d'un fournisseur dans l'adaptateur d'un autre | le contrôle de CI ne voit plus la fuite |
 | M458 | la déclaration d'Azure dérive de `check_permissions` | la préparation lit un droit que personne ne vérifie |
 | M459 | job de restauration relu dans le groupe de la VM | le statut d'une restauration jamais trouvé |
+| M460 | capacités lues sur `type()` | un `MagicMock(spec=AzureConnector)` fait tomber la préparation |
+| M461 | la déclaration portée par l'instance ignorée | un connecteur jugé sur les droits de sa classe |
+| M462 | une dette du socle partagé déclarée adaptateur | la frontière ne la voit plus |
+| M463 | suppression à travers la façade ignorée en silence | `mock.patch` laisse sa valeur dans tous les modules |
 
 ## Ce que les invariants ont trouvé
 

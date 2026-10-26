@@ -114,6 +114,19 @@ def test_the_scan_sees_what_it_must_refuse():
     assert not any(f.startswith("tests/") for f in files)
 
 
+# The ceiling of KNOWN_DEBT: a file added there would pass the boundary unseen.
+_KNOWN_DEBT_CEILING = frozenset({
+    "eregion_core/inscription.py", "eregion_core/exercise_channel.py", "eregion_core/orodruin.py"})
+
+
+def test_the_known_debt_cannot_grow_and_no_shared_core_file_is_an_adapter():
+    """KNOWN_DEBT stays within its ceiling of 26/10; ADAPTERS may grow (a new injector or
+    engine is a new adapter) but never with a file of the shared core or of glorfindel/ —
+    moving a debt entry there would hide it."""
+    assert set(KNOWN_DEBT) <= _KNOWN_DEBT_CEILING
+    assert not [a for a in ADAPTERS if a.startswith(("eregion_core/", "glorfindel/"))]
+
+
 def test_the_known_debt_only_shrinks():
     """An entry whose file no longer imports the SDK goes: the list must say the truth."""
     for rel in KNOWN_DEBT:
@@ -158,6 +171,30 @@ def test_every_connector_declares_its_capabilities():
     assert issubclass(AzureConnector, CloudConnector)
     # A test double (no CloudConnector) reads as the only adapter.
     assert capabilities_of(object()).provider == "azure"
+
+
+def test_a_spec_mock_and_an_instance_declaration_are_read():
+    """A MagicMock(spec=AzureConnector) reports AzureConnector as its class: it reads as
+    Azure, and the readiness runs on it; an instance that carries its own declaration is
+    read before its class's."""
+    from unittest.mock import MagicMock
+
+    from glorfindel.actions import AzureConnector
+    from glorfindel.providers import ProviderCapabilities, capabilities_of
+    from glorfindel.readiness import assess
+
+    mock = MagicMock(spec=AzureConnector)
+    assert capabilities_of(mock).provider == "azure"
+    mock.read_only, mock._subscription_id = False, None
+    mock.check_permissions.return_value = {"ok": True, "missing": []}
+    mock.check_nsg_access.return_value = {"ok": True, "precedence": []}
+    mock.vm_os.return_value = "linux"
+    assert assess(RID, mock)["verdict"] == "ready"
+
+    own = ProviderCapabilities("other", ())
+    conn = AzureConnector(dry_run=True, read_only=False)
+    conn.CAPABILITIES = own
+    assert capabilities_of(conn) is own
 
 
 def _readiness_conn(caps, missing=()):

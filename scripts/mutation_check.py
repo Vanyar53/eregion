@@ -1134,6 +1134,16 @@ MUTANTS = [
      '    [ -z "$clash" ] || die "$(echo', '    [ -z "$clash" ] || true "$(echo'),
 ]
 
+# MC1 — the AWS adapter, written against the simulated world (tests/unit/fake_aws.py) and
+# measured by the invariants on AWS (tests/unit/test_invariants_aws.py). Range M600–M649:
+# M600–M629 the bugs met or named while building it, M630–M649 its control set (below).
+AWS_NET = "glorfindel/providers/aws/network.py"
+AWS_QUA = "glorfindel/providers/aws/quarantine.py"
+AWS_ISO = "glorfindel/providers/aws/isolation.py"
+AWS_BLK = "glorfindel/providers/aws/blocks.py"
+AWS_CON = "glorfindel/providers/aws/connector.py"
+AWS_INVARIANTS = "tests/unit/test_invariants_aws.py"
+
 # Mutants measured by other tests than the invariants (their lot's own).
 TESTS = {mid: INSCRIPTION_TESTS for mid in ("M42", "M43", "M44", "M45", "M46", "M47")}
 TESTS.update({mid: DOCS_TESTS for mid in ("M48", "M49")})
@@ -1205,6 +1215,7 @@ TESTS["M289"] = "tests/unit/test_dependency_lock.py"
 TESTS["M520"] = "tests/unit/test_bot.py"
 TESTS.update({f"M{n}": "tests/unit/test_glorfindel_host.py" for n in (521, 522, 523)})
 TESTS.update({f"M{n}": "tests/unit/test_host_deploy.py" for n in range(524, 529)})
+TESTS.update({f"M{n}": AWS_INVARIANTS for n in range(600, 650)})  # MC1
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
@@ -1263,6 +1274,57 @@ CONTROL = [
      "        if _enum_text(getattr(r, \"access\", \"\")) != \"allow\":\n            continue\n        if direction == \"inbound\":",
      "        if _enum_text(getattr(r, \"access\", \"\")) != \"allow\":\n            continue\n        if name.startswith(\"glorfindel-\"):\n            continue\n"
      "        if direction == \"inbound\":"),
+]
+
+
+# MC1 — the control set on AWS: plausible bugs of the AWS adapter, written before the
+# machine on AWS was shaped, never used to shape it (same discipline as C01–C16). The
+# Azure figure is still counted on C01–C16 alone.
+CONTROL += [
+    ("M630", "the original groups only in the local state, no tag (MC1, control)", AWS_ISO,
+     "        if original is not _UNKNOWN:\n            self._record_original(qid, eni, original)\n",
+     "        if False:\n            self._record_original(qid, eni, original)\n"),
+    ("M631", "an egress allow in the quarantine group not seen as an alteration (MC1, control)", AWS_QUA,
+     """diff = [f"sortie {r.get('cidr') or r.get('group')}" for r in sg_rules(sg.get("IpPermissionsEgress"))]""",
+     "diff = []"),
+    ("M632", "a new quarantine group keeps its default egress (MC1, control)", AWS_QUA,
+     "            if egress:\n                self._ec2.revoke_security_group_egress(",
+     "            if False:\n                self._ec2.revoke_security_group_egress("),
+    ("M633", "an ENI's groups written without checking what it carries (MC1, control)", AWS_NET,
+     "        if not same_groups(self._eni_groups(eni_id), expect):\n            return False\n", ""),
+    ("M634", "the release does not read the ENI back (MC1, control)", AWS_ISO,
+     "        if not same_groups(now, original):\n            raise RuntimeError(f\"groupes d'origine non remis",
+     "        if False:\n            raise RuntimeError(f\"groupes d'origine non remis"),
+    ("M635", "an unknown original read as the default group (MC1, control)", AWS_ISO,
+     "        if not known:\n            raise OriginalUnknown(",
+     "        if not known:\n            return [self._default_sg(vpc)]\n            raise OriginalUnknown("),
+    ("M636", "a block's entry numbered without looking at the customer's allows (MC1, control)", AWS_BLK,
+     "n = _free_number(acl, egress, _first_allow(acl, egress, ip))", "n = _free_number(acl, egress, 32767)"),
+    ("M637", "an unblock removes entries another block holds (MC1, control)", AWS_BLK,
+     "held = self._held_numbers(ip, acl_id, but_rid=resource_id)", "held = set()"),
+    ("M638", "an unblock removes an entry whatever it says now (MC1, control)", AWS_BLK,
+     "                        if not _is_our_deny(_entry(acl, egress, n), cidr):\n                            continue",
+     "                        if _entry(acl, egress, n) is None:\n                            continue"),
+    ("M639", "a block's entries created before they are recorded (MC1, control)", AWS_BLK,
+     "            _state._save_block_state(iid, ip, resource_id, partial=True, **record)\n", ""),
+    ("M640", "a block verified without the entries before it (MC1, control)", AWS_BLK,
+     "            elif not (cut(acl, False, ip) and cut(acl, True, ip)):", "            elif False:"),
+    ("M641", "an ENI with the quarantine group among others read as isolated (MC1, control)", AWS_ISO,
+     'if q is None or not same_groups(e["groups"], [q["GroupId"]]):',
+     'if q is None or q["GroupId"] not in e["groups"]:'),
+    ("M642", "the account guard ignores the region (MC1, control)", AWS_CON,
+     "if (self.account and account != self.account) or (self.region and region != self.region):",
+     "if self.account and account != self.account:"),
+    ("M643", "the release does not write its intent (MC1, control)", AWS_ISO,
+     '            _state._save_isolation_state(resource_id, {**state, "releasing_at": _now()})',
+     "            pass"),
+    ("M644", "a group named like the quarantine adopted without its tag (MC1, control)", AWS_QUA,
+     '        return bool(sg) and sg.get("GroupName") == QUARANTINE_SG_NAME and \\\n'
+     '            tags_of(sg).get("managed-by") == "glorfindel"',
+     '        return bool(sg) and sg.get("GroupName") == QUARANTINE_SG_NAME'),
+    ("M645", "verify_release ignores an ENI that is not back on its known original (MC1, control)", AWS_ISO,
+     '                if prior and not same_groups(prior, e["groups"]):\n                    pending.append(e["eni"])',
+     '                if False:\n                    pending.append(e["eni"])'),
 ]
 
 

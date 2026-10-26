@@ -286,6 +286,48 @@ Dix-neuf sur dix-neuf attrapés au premier tour (26/10), et M57 aussi. Détail :
 [`../glorfindel.md`](../glorfindel.md), « Une fenêtre n'est plus crue sur parole », et
 [`../analysis.md`](../analysis.md), « Ce que H0 accepte du canal ».
 
+### Le découpage d'`actions.py` (A1, MC0)
+
+Un découpage ne doit rien changer : il est prouvé par ce qui précède, avant et après. Les
+4 394 lignes d'`actions.py` ont été déplacées sans changement de texte
+(`scripts/check_paragraphs.py --old 03b29ce:glorfindel/actions.py` retrouve chaque ligne, hors la
+ligne `class AzureConnector(...)`), dans `glorfindel/response/` et `glorfindel/providers/azure/`.
+Les mutants qui visaient `actions.py` visent maintenant le module où leur texte est arrivé (aucun
+STALE). `glorfindel/actions.py` reste le chemin d'import, et un seul espace de noms : un
+`monkeypatch` à travers lui atteint chaque module qui lit le nom — sans quoi le `conftest`
+hermétique n'aurait redirigé l'état que dans un module, et les verrous auraient écrit sous le
+vrai `~/.glorfindel`.
+
+Mesuré le 26/10 au budget du lundi (1 000 séquences, 2 tours), avant (`03b29ce`) et après :
+
+| | Avant | Après |
+|---|---|---|
+| Suite complète | 1 535 | 1 549 (+ 14 tests d'A1) |
+| Invariants à 500 séquences, rejeu, verrous | verts | verts (31) |
+| Harnais, attrapés à chaque tour | 216 sur 230 | 227 sur 240 (217 sur 230, et les 10 d'A1) |
+| Jeu de contrôle | 11 sur 16 | 11 sur 16 (C07, C10, C12 survivent avant comme après) |
+
+Les écarts sur M01–M41 sont ceux du tirage (M22, M23, M28, M31, M32, M36, M38, M39 passent
+de « flaky » à « figé seulement » ou l'inverse) : aucun mutant attrapé à chaque tour avant ne
+l'est plus après.
+
+Dix mutants pour ce qu'A1 et MC0 ajoutent, tous attrapés au premier tour (26/10), mesurés par
+`tests/unit/test_actions_split.py`, `test_provider_boundary.py`, `test_readiness.py` et
+`test_jobs.py` :
+
+| Mutant | Défaut réinjecté | Effet |
+|---|---|---|
+| M450 | une écriture à travers la façade n'atteint qu'un module | les verrous restent sous le vrai `~/.glorfindel` |
+| M451 | la façade lie des copies | une valeur que son module change (`_warmed_up`) se lit périmée |
+| M452 | un module du découpage oublié par la façade | ses noms injoignables par `glorfindel.actions` |
+| M453 | droits des règles lus sur ceux de la quarantaine | « blocage possible » sans droit sur les règles |
+| M454 | capacité disponible malgré ses droits manquants | « prête » sans les droits |
+| M455 | capacité non déclarée comptée disponible | un fournisseur sans coupure de sessions passe pour l'avoir |
+| M456 | connecteur sans déclaration lu comme Azure | un second fournisseur jugé sur les droits d'Azure |
+| M457 | la frontière laisse le SDK d'un fournisseur dans l'adaptateur d'un autre | le contrôle de CI ne voit plus la fuite |
+| M458 | la déclaration d'Azure dérive de `check_permissions` | la préparation lit un droit que personne ne vérifie |
+| M459 | job de restauration relu dans le groupe de la VM | le statut d'une restauration jamais trouvé |
+
 ## Ce que les invariants ont trouvé
 
 Aucun de ces défauts n'avait été vu en revue. Chacun a son test et sa séquence figée.

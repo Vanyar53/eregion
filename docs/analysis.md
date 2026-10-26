@@ -320,7 +320,8 @@ jamais complète (voir les limites, plus bas).
   s'écrit avec %) ;
 - avant de lire les nombres, la vérification retire ce qui ne fait que nommer : les
   identifiants cités, une technique (T1110.001), un identifiant de run, une date (23/10, « le
-  21 octobre », « le 1er octobre », « entre le 21 et le 23 octobre », « du 21 au 23 octobre »),
+  21 octobre », « le 1er octobre », « entre le 21 et le 23 octobre », « du 21 au 23 octobre »,
+  « October 21 », « 21 October »),
   une année (2026, sauf suivie d'une unité : « 2000 s » reste un nombre), une heure (08:21), un
   ordinal (« 2ᵉ », « 1er », « 3e »), et tout mot qui commence par une lettre et contient un
   chiffre (`chg-2`, le nom d'une VM) ;
@@ -355,11 +356,16 @@ jamais complète (voir les limites, plus bas).
   même technique, chacun face à chacun, sur n'importe quelle VM, comme autant de faits de
   changement implicites. Son « de X à Y » doit aller dans le sens de l'un d'eux : « passe de
   106,9 s à 91,9 s » ou « de l'isolement au blocage », en citant le run du 23/10 et celui du
-  21/10, sont écartés. Pourquoi tous les appariements, et pas la clé exacte : une tendance
-  peut citer plusieurs runs antérieurs, de plusieurs campagnes, ou des runs indexés avant D-2,
-  sans leur VM. Un appariement plus large écarte moins, mais il ne barre jamais une tendance
-  juste pour un appariement qu'elle ne voulait pas dire. Sans run antérieur de la même
-  technique, son sens n'est pas lu ;
+  21/10, sont écartés. Deux runs antérieurs de la même technique se font face aussi, dans les
+  deux sens : un `RunFact` ne dit pas lequel est venu d'abord, si bien qu'entre deux runs
+  antérieurs le sens n'est pas lu. Une tendance sur trois campagnes passe donc (« de 120 s
+  (19/10) à 91,9 s (21/10), puis à 106,9 s », « 0,85 → 0,80 → 0,78 », « du blocage à
+  l'isolement (avant), puis retour au blocage ») ; un sens inversé entre un run antérieur et un
+  run de cette campagne reste écarté. Pourquoi tous les appariements, et pas la clé exacte :
+  une tendance peut citer plusieurs runs antérieurs, de plusieurs campagnes, ou des runs
+  indexés avant D-2, sans leur VM. Un appariement plus large écarte moins, et il évite de
+  barrer une tendance juste pour un appariement qu'elle ne voulait pas dire. Sans run
+  antérieur de la même technique, son sens n'est pas lu ;
 - seules les affirmations `trend`, `change` et `observation` peuvent citer un fait de
   changement ;
 - la règle de #167 vaut aussi sur un fait de changement dont une décision est inconnue. Une
@@ -381,13 +387,20 @@ rapprochant d'elle. Ce qui passe encore, ou tombe à tort :
 - **un nombre sans unité qui se trouve être celui d'un fait** passe : « 2 fois plus longue »
   ou « isolée 2 fois sur 2 », quand l'écart de confiance vaut 2 points. « fois » n'est ni une
   unité ni un décompte : « 2 fois plus » est un rapport, « les 2 fois » un décompte, et le mot
-  seul ne dit pas lequel ;
+  seul ne dit pas lequel. À l'inverse, un décompte juste en « fois » (« bloquée les 2 fois »)
+  est écarté quand aucun fait cité ne vaut 2 ;
+- **« 0,02 point »** est écarté : les points ne sont lus qu'en pourcentage (« 2 points »), et
+  l'écart de confiance en fraction (0,02) ne s'écrit pas en points ;
 - **un nombre écrit en toutes lettres** (« quarante secondes plus tard ») n'est pas lu ;
 - **un décompte inventé sous la borne** passe (« isolée dans les 2 campagnes » quand elle ne
   l'a été qu'une fois). Un décompte dont le nom est sous-entendu (« comme les 2 de la
   précédente ») est lu comme un nombre, et écarté si aucun fait ne le porte ;
-- **une plage de dates** n'est lue qu'avec le mois à la fin, en toutes lettres (« entre le 21
-  et le 23 octobre ») ; dans « les 21 et 23/10 », 21 reste un nombre ;
+- **une plage de dates** n'est lue qu'avec le mois à la fin, en toutes lettres, et « le »,
+  « les », « entre » ou « du » (« between », « from », « on ») devant son premier jour
+  (« entre le 21 et le 23 octobre ») : « baisse de 12, le 23 octobre » laisse 12 un nombre,
+  mais dans « 21, 22 et 23 octobre » ou « les 21 et 23/10 », 21 reste un nombre aussi. Une
+  date anglaise est lue (« October 21 », « 21 October »), pas une plage dont le mois vient
+  d'abord (« October 21 to 23 ») ;
 - **un « de X à Y » qui mêle deux écritures** (« de 0,80 à 78 % », « de 91,9 s à 1,8 min ») est
   écarté : la vérification ne convertit pas l'une dans l'autre. Une phrase juste tombe donc si
   le modèle l'écrit ainsi ;
@@ -395,7 +408,10 @@ rapprochant d'elle. Ce qui passe encore, ou tombe à tort :
   (« jamais snapshot », « isolate_vm plutôt que snapshot », quand aucun côté n'a pris de
   snapshot) ;
 - dans une `trend`, l'appariement par technique est large : une tendance dite dans le sens
-  d'un appariement qu'elle ne voulait pas dire passe.
+  d'un appariement qu'elle ne voulait pas dire passe, et entre deux runs antérieurs les deux
+  sens passent ;
+- dans une chaîne (« de X à Y, puis à Z », « X → Y → Z »), seul le premier pas est lu pour
+  le sens ; les suivants ne sont contrôlés que comme nombres des faits cités.
 
 **L'index des campagnes passées** (`analysis/campaign_index.py`). Chaque run de l'index porte
 maintenant l'état et le début de sa campagne, ainsi que sa VM. Un rapport écrit avant D-2 les a

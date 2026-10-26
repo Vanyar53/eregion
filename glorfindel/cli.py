@@ -1915,49 +1915,6 @@ def rules_cmd(rules_file: str | None) -> None:
         console.print(f"  [yellow]·[/yellow] {_esc_markup(note)}")
 
 
-@cli.command("export-rule")
-@click.argument("name")
-@click.option("--rules", "rules_file", default=None, metavar="PATH",
-              help="The shipped base detection_rules.yaml (default: auto-detected).")
-@click.option("--out", "out_file", default=None, metavar="FILE",
-              help="Write the exported rule to FILE instead of printing it.")
-def export_rule_cmd(name: str, rules_file: str | None, out_file: str | None) -> None:
-    """Export one rule, generalised, without any identifier, to propose it upstream.
-
-    The rule (the client's layer first, then the base) loses its assets, backends,
-    workspace_id and resource_id, and any resource id, GUID, identifying literal
-    (Computer == "…") or name this deployment knows in its query or description is
-    replaced by a placeholder. If anything of the deployment would still leave,
-    nothing is exported.
-    """
-    from glorfindel.rule_layers import IdentifierLeft, export_rule
-
-    target = rules_file or _find_rules_file()
-    if not target:
-        console.print("[red]detection_rules.yaml not found.[/red] Pass --rules PATH.")
-        raise SystemExit(1)
-    try:
-        from glorfindel.config import load_glorfindel_config
-        gcfg = load_glorfindel_config()
-    except Exception:
-        gcfg = None
-    try:
-        text = export_rule(name, target, glorfindel_cfg=gcfg)
-    except KeyError:
-        console.print(f"[red]No rule named '{name}'[/red] (see: glorfindel rules)")
-        raise SystemExit(1)
-    except IdentifierLeft as e:
-        console.print(f"[red]✗ {e}[/red]")
-        for item in e.found:
-            console.print(f"  · {_esc_markup(item)}")
-        raise SystemExit(1)
-    if out_file:
-        Path(out_file).write_text(text)
-        console.print(f"[green]✓ '{name}' exported[/green] → {out_file}")
-    else:
-        click.echo(text, nl=False)
-
-
 @cli.command("migrate-rules")
 @click.option("--from", "from_file", required=True, metavar="PATH",
               help="detection_rules.yaml as this deployment modified it (rules approved into it before P1).")

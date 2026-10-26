@@ -4,8 +4,8 @@
 with Glorfindel: an update replaced it (rule lost), and on H0 the modified checkout stopped
 the deployment (M-3). Now the rule goes to the client's layer (~/.glorfindel/client_rules.yaml,
 redirected to tmp by the conftest), loaded over the base: a client rule of a base rule's name
-wins (said), a client rule can disable a base rule by name, and `export-rule` gives one rule
-generalised, without any resource or workspace identifier.
+wins (said), a client rule can disable a base rule by name. (Exporting a rule generalised,
+without any identifier, is left to a lot of P2, reviewed by a human before anything is sent.)
 
 Every identifier here is made up (repository public): 00000000-… GUIDs, example names.
 """
@@ -79,7 +79,7 @@ def _names(cfg) -> dict:
     return {r.name: r for r in cfg.rules}
 
 
-# ── Fini quand (1/2): an update of the base loses no client rule ─────────────────
+# ── Fini quand: an update of the base loses no client rule ─────────────────
 
 def test_an_update_of_the_base_loses_no_client_rule(tmp_path):
     base = tmp_path / "detection_rules.yaml"
@@ -232,126 +232,6 @@ def test_the_layer_written_keeps_the_query_as_lines_and_reads_back():
     assert rule_layers.write_client_rule(rule) == "same"
 
 
-# ── Fini quand (2/2): an exported rule holds no resource or workspace identifier ───
-
-def _identified_client_rule() -> dict:
-    """A client rule as a deployment writes it: everything that names the deployment."""
-    return {
-        "name": "vm-example-01-log-clearing",
-        "description": f"Proposed after a miss on vm-example-01 (workspace {WS}).",
-        "enabled": True,
-        "source": "azure_monitor",
-        "workspace_id": WS,
-        "ttp": "T1070.002",
-        "resource_id": VM_ID,
-        "monitoring_backends": ["law-main"],
-        "assets": ["vm-example-01"],
-        "interval_s": 30,
-        "query": (
-            "Syslog\n"
-            '| where Computer == "vm-example-01"\n'
-            f'| where _ResourceId =~ "{VM_ID.lower()}"\n'
-            '| where Computer in ("vm-example-02", "")\n'
-            f'| where TenantId == "{SUB}"\n'
-            '| where SyslogMessage has "rm -f /var/log" and HostName != "db-example"\n'
-        ),
-    }
-
-
-def _export(tmp_path, rule=None, **kw) -> str:
-    base = tmp_path / "base.yaml"
-    base.write_text(BASE_V1 + "assets:\n  - name: vm-example-01\n"
-                    f"    resource_id: {VM_ID}\n")
-    rule_layers.write_client_rule(rule or _identified_client_rule())
-    return rule_layers.export_rule((rule or _identified_client_rule())["name"], base,
-                                   glorfindel_cfg=_gcfg(), **kw)
-
-
-def test_an_exported_rule_holds_no_resource_or_workspace_identifier(tmp_path):
-    text = _export(tmp_path)
-    for leaked in (WS, SUB, VM_ID, VM_ID.lower(), "vm-example-01", "vm-example-02",
-                   "db-example", "rg-example", "law-main", "/subscriptions/"):
-        assert leaked.lower() not in text.lower(), leaked
-    assert rule_layers.find_identifiers(text) == []
-    exported = yaml.safe_load(text)["rules"][0]
-    assert set(exported) <= {"name", "description", "enabled", "source", "ttp", "interval_s",
-                             "expected_latency_s", "query"}
-    for key in ("workspace_id", "resource_id", "assets", "monitoring_backends"):
-        assert key not in exported
-    # What generalises it is kept: the logic of the query, the technique.
-    assert 'SyslogMessage has "rm -f /var/log"' in exported["query"]
-    assert exported["ttp"] == "T1070.002" and exported["interval_s"] == 30
-    assert 'Computer in ("<name>", "")' in exported["query"]
-    assert "Remplacé :" in text and "identifiant de ressource" in text
-
-
-def test_an_exported_rule_loads_as_a_rule_for_every_discovered_vm(tmp_path):
-    text = _export(tmp_path)
-    shipped = tmp_path / "upstream.yaml"
-    shipped.write_text(text)
-    [rule] = load_config(shipped, glorfindel_cfg=_gcfg(), client_layer=False).rules
-    assert rule.auto_apply and rule.resource_id == "" and rule.workspace_id == WS   # bound at load
-
-
-def test_a_vm_name_the_deployment_knows_is_replaced_wherever_it_appears(tmp_path):
-    """A discovered VM, a proposal's target: names a deployment gives, in any column."""
-    from glorfindel.discovery import AssetRegistry, DiscoveredAsset
-    AssetRegistry().update([DiscoveredAsset(name="web-example-07", resource_id="",
-                                            monitoring_backend="law-main", last_seen="x")])
-    rule = {"name": "proc", "ttp": "T1059", "assets": ["auto"],
-            "query": 'Syslog | where ProcessName has "web-example-07"\n'}
-    text = _export(tmp_path, rule=rule)
-    assert "web-example-07" not in text and '"<name>"' in text
-
-
-def test_a_workspace_the_deployment_does_not_list_is_replaced_too(tmp_path):
-    """Another workspace, named only in the query (cross-workspace union): a GUID, whoever
-    it belongs to, never leaves."""
-    other = "00000000-0000-0000-0000-0000000000cc"
-    rule = {"name": "cross", "ttp": "T1110", "assets": ["auto"],
-            "query": f'union Syslog, workspace("{other}").Syslog\n| where SyslogMessage has "x"\n'}
-    text = _export(tmp_path, rule=rule)
-    assert other not in text and 'workspace("<id>").Syslog' in text
-
-
-def test_nothing_is_exported_when_an_identifier_would_leave(tmp_path, monkeypatch):
-    """The last guard: whatever the replacement misses, the exported text is checked."""
-    monkeypatch.setattr(rule_layers, "_scrub", lambda text, names, counts, kql=False: text)
-    with pytest.raises(rule_layers.IdentifierLeft) as err:
-        _export(tmp_path)
-    assert VM_ID in err.value.found and WS in err.value.found
-
-
-@pytest.mark.parametrize("text, found", [
-    (f"x {VM_ID} y", VM_ID),
-    ('"/subscriptions/<id>/resourceGroups/<name>"', "/subscriptions/<id>/resourceGroups/<name>"),
-    (f'workspace("{WS}")', WS),
-    ('| where Computer == "vm-a1"', '"vm-a1"'),
-    ("| where tolower(Computer) =~ 'vm-a1'", "'vm-a1'"),
-    ('| where _ResourceId has "rg-x"', '"rg-x"'),
-    ('| where AccountName in ("sa1", "sa2")', '"sa1"'),
-])
-def test_find_identifiers_sees_each_kind(text, found):
-    assert found in rule_layers.find_identifiers(text)
-
-
-@pytest.mark.parametrize("text", [
-    '| where Computer != ""', '| where Computer == "<name>"', "Perf | where CounterValue > 5",
-    "| summarize count() by Computer, _ResourceId",
-])
-def test_find_identifiers_lets_a_general_query_through(text):
-    assert rule_layers.find_identifiers(text) == []
-
-
-def test_export_of_an_unknown_rule(tmp_path):
-    base = tmp_path / "base.yaml"
-    base.write_text(BASE_V1)
-    with pytest.raises(KeyError):
-        rule_layers.export_rule("nope", base)
-    # A base rule exports too (nothing of the deployment in it).
-    assert "ssh-brute-force" in rule_layers.export_rule("ssh-brute-force", base)
-
-
 # ── Migration: rules approved into the base before P1 ────────────────────────────
 
 def _pre_p1_approved(base_text: str) -> str:
@@ -424,21 +304,6 @@ def test_cli_rules_shows_each_rule_and_its_layer(tmp_path):
     assert "sudo-root" in res.output and "désactivée" in res.output
 
 
-def test_cli_export_rule_prints_it_generalised_or_refuses(tmp_path, monkeypatch):
-    base = tmp_path / "base.yaml"
-    base.write_text(BASE_V1)
-    rule_layers.write_client_rule(_identified_client_rule())
-    res = _cli("export-rule", "vm-example-01-log-clearing", "--rules", str(base))
-    assert res.exit_code == 0 and WS not in res.output and VM_ID not in res.output
-    assert yaml.safe_load(res.output)["rules"][0]["ttp"] == "T1070.002"
-    out = tmp_path / "out.yaml"
-    res = _cli("export-rule", "vm-example-01-log-clearing", "--rules", str(base), "--out", str(out))
-    assert res.exit_code == 0 and WS not in out.read_text()
-    monkeypatch.setattr(rule_layers, "_scrub", lambda text, names, counts, kql=False: text)
-    res = _cli("export-rule", "vm-example-01-log-clearing", "--rules", str(base), "--out", str(out))
-    assert res.exit_code == 1 and "exporté" in res.output and WS in res.output
-
-
 def test_cli_migrate_rules(tmp_path):
     base = tmp_path / "base.yaml"
     base.write_text(BASE_V1)
@@ -462,154 +327,6 @@ def test_the_containers_mount_the_base_read_only_and_the_state_read_write():
         assert "${HOME}/.glorfindel:/root/.glorfindel" in vols, name
     make = (ROOT / "Makefile").read_text()
     assert "-v $(PWD)/glorfindel/rules:/app/glorfindel/rules:ro" in make
-
-
-# ── Reviews: the export replaces what is sure, refuses what it does not follow ────
-
-# (form in the query, what must not leave). Names the deployment does not list (vm-other-9,
-# rg-other, law-other) are caught by where they stand: a literal directly compared to an
-# identity column, the argument of workspace()/resource()/app(), an ARM instance path.
-_LEAKS = [
-    ('Computer has_any ("vm-other-9", "vm-other-8")', "vm-other-"),
-    ('Computer has_all ("vm-other-9")', "vm-other-9"),
-    ('Computer matches regex "^vm-other-9$"', "vm-other-9"),
-    ('Computer matches regex "^vm-example-0[1-3]$"', "vm-example-0[1-3]"),
-    ('Computer matches regex @"vm\\-example\\-01"', "example"),
-    ('Computer == @"vm-other-9"', "vm-other-9"),
-    ("Computer == h'vm-other-9'", "vm-other-9"),
-    ('Computer =~ H@"vm-other-9"', "vm-other-9"),
-    ('Computer in~ ("vm-other-9")', "vm-other-9"),
-    ('Computer startswith "vm-other"', "vm-other"),
-    ('"vm-other-9" == Computer', "vm-other-9"),
-    ('tolower(Computer) == "vm-other-9"', "vm-other-9"),
-    ('_ResourceId endswith "/virtualMachines/vm-other-9"', "vm-other-9"),
-    ('TenantId == "tenant-other"', "tenant-other"),
-    ('Caller == "admin@other.example"', "admin@other"),
-    ('SyslogMessage has "resourceGroups/rg-other/providers/Microsoft.Compute/virtualMachines/vm-other-9"',
-     "other"),
-    ('SyslogMessage matches regex @"vm\\-example\\-01"', "example"),
-]
-
-
-@pytest.mark.parametrize("form, secret", _LEAKS)
-def test_every_identifying_form_is_replaced_and_seen_by_the_guard(tmp_path, form, secret):
-    query = f"Syslog\n| where {form}\n| project TimeGenerated\n"
-    names = rule_layers.known_names([{"assets": [{"name": "vm-example-01", "resource_id": VM_ID}]}])
-    assert rule_layers.find_identifiers(query, names), form            # the guard sees it raw
-    text = _export(tmp_path, rule={"name": "form", "ttp": "T1", "assets": ["auto"], "query": query})
-    assert secret.lower() not in text.lower(), text
-    assert "| project TimeGenerated" in text                            # the rest stays
-
-
-@pytest.mark.parametrize("query, secret", [
-    ('union Syslog, workspace("law-other").Syslog\n| where SyslogMessage has "x"\n', "law-other"),
-    ('resource("vm-other-9").Heartbeat\n| take 1\n', "vm-other-9"),
-    ('app("appi-other").requests\n| take 1\n', "appi-other"),
-    ('Syslog // only vm-other-9 for now\n| where SyslogMessage has "x"\n', "vm-other-9"),
-])
-def test_a_scope_function_or_a_comment_lets_nothing_out(tmp_path, query, secret):
-    if "//" not in query:
-        assert rule_layers.find_identifiers(query), query
-    text = _export(tmp_path, rule={"name": "q", "ttp": "T1", "assets": ["auto"], "query": query})
-    assert secret not in text, text
-
-
-# Forms that reach an identity through an intermediate: the export refuses, names the form,
-# and says to generalise by hand — it never guesses (second review).
-_REFUSED = [
-    ("let", 'let target = "vm-other-9";\nSyslog\n| where Computer == target\n', "let « target »"),
-    ("let", 'Syslog\n| where TimeGenerated > ago(1h)\n| where Computer == t\n| extend x = 1;\nlet t = "vm-other-9"\n',
-     "let « t »"),
-    ("let in let", 'let a = "vm-other-9";\nlet b = a;\nSyslog\n| where Computer == b\n', "let « b »"),
-    ("let", 'let hosts = dynamic(["vm-other-9"]);\nSyslog\n| where Computer in (hosts)\n', "let « hosts »"),
-    ("let", 'let ws = "law-other";\nunion workspace(ws).Syslog\n', "let « ws »"),
-    ("scope", 'union workspace(strcat("law-", "other")).Syslog\n', "argument non littéral de workspace()"),
-    ("scope", 'let w = toscalar(Heartbeat | take 1 | project Computer);\nunion workspace(w).Syslog\n',
-     "argument non littéral de workspace()"),
-    ("alias", 'Syslog\n| extend h = Computer\n| where h == "vm-other-9"\n', "alias « h »"),
-    ("alias", 'Syslog\n| project-rename Machine = Computer\n| where Machine has "vm-other"\n', "alias « Machine »"),
-    ("alias", 'Syslog\n| project M = Computer, SyslogMessage\n| where M in ("vm-other-9")\n', "alias « M »"),
-    ("alias", 'Syslog\n| summarize n = count() by Machine=Computer\n| where Machine =~ "vm-other-9"\n',
-     "alias « Machine »"),
-    ("alias", 'AzureActivity\n| extend g = ResourceGroup\n| extend g2 = g\n| where g2 == "rg-other"\n', "alias « g2 »"),
-    ("udf", 'let f = (c:string) { Syslog | where Computer == c };\nf("vm-other-9")\n', "fonction « f »"),
-    ("udf", 'let f = () { Heartbeat | where Computer startswith "vm" };\nf()\n', "fonction « f »"),
-    ("expression", 'Syslog\n| where Computer == strcat("vm-", "other-9")\n', "Computer comparé à une expression"),
-]
-
-
-@pytest.mark.parametrize("family, query, said", _REFUSED)
-def test_a_form_the_export_does_not_follow_is_refused_and_named(tmp_path, family, query, said):
-    with pytest.raises(rule_layers.NotGeneralizable) as err:
-        _export(tmp_path, rule={"name": "q", "ttp": "T1", "assets": ["auto"], "query": query})
-    assert "à la main" in str(err.value) and "rien n'est exporté" in str(err.value)
-    assert any(said in f for f in err.value.found), err.value.found
-    assert rule_layers.find_identifiers(query), family                 # the guard refuses it too
-
-
-def test_cli_export_rule_names_the_form_to_generalise_by_hand(tmp_path):
-    base = tmp_path / "base.yaml"
-    base.write_text(BASE_V1)
-    rule_layers.write_client_rule({"name": "q", "ttp": "T1", "assets": ["auto"],
-                                   "query": 'let t = "vm-other-9";\nSyslog\n| where Computer == t\n'})
-    res = _cli("export-rule", "q", "--rules", str(base))
-    assert res.exit_code == 1 and "à la main" in res.output and "let « t »" in res.output
-    assert "vm-other-9" not in res.output
-
-
-# Sound rules: nothing in them names the deployment — they export as written (comments aside).
-_SANE = [
-    'Syslog\n| where TimeGenerated > ago(10m)\n| summarize FailedAttempts = countif(SyslogMessage has '
-    '"Failed password") by Computer, _ResourceId\n| where FailedAttempts >= 10\n',
-    'Syslog\n| summarize n = count() by Computer, SourceIP = extract(@"from (\\d+\\.\\d+\\.\\d+\\.\\d+)", 1, '
-    'SyslogMessage)\n',
-    'Perf\n| extend Vm = tostring(split(_ResourceId, "/")[8])\n| where CounterName == "Disk Write Bytes/sec"\n',
-    'Perf\n| extend Vm = iff(isnotempty(_ResourceId), tolower(_ResourceId), Computer)\n'
-    '| where ObjectName == "Logical Disk"\n',
-    'Syslog\n| where SyslogMessage has_any ("history -c", "shred")\n'
-    '| project TimeGenerated, Computer, _ResourceId, SyslogMessage\n',
-    'Syslog\n| where Computer != "" and Facility == "authpriv"\n',
-    'AzureActivity\n| where OperationNameValue =~ "MICROSOFT.COMPUTE/VIRTUALMACHINES/RUNCOMMAND/ACTION"\n'
-    '| where ActivityStatusValue == "Success"\n| project TimeGenerated, Caller, _ResourceId\n',
-    'AzureActivity\n| where Caller !has "@" and OperationNameValue has "roleAssignments/write"\n',
-    'AzureActivity\n| where OperationNameValue in~ ("Microsoft.Storage/storageAccounts/listKeys/action", '
-    '"Microsoft.Network/networkSecurityGroups/securityRules/write", "Microsoft.KeyVault/vaults/secrets/write", '
-    '"Microsoft.Compute/disks/beginGetAccess/action")\n',
-    'AzureActivity\n| where OperationNameValue has "storageAccounts/listKeys/action"\n',
-    # A rule as detection_authoring writes them.
-    'Syslog\n| where TimeGenerated > ago(10m)\n| where Facility in ("auth", "authpriv", "user")\n'
-    '| where SyslogMessage has_any ("rm -f /var/log", "shred", "history -c", "truncate -s 0")\n'
-    '| summarize Count = count(), First = min(TimeGenerated) by Computer, _ResourceId, ProcessName\n'
-    '| where Count >= 1\n| project TimeGenerated = First, Computer, _ResourceId, ProcessName, Count\n',
-]
-
-
-@pytest.mark.parametrize("query", _SANE)
-def test_a_sound_rule_exports_as_written(tmp_path, query):
-    text = _export(tmp_path, rule={"name": "sane", "ttp": "T1", "assets": ["auto"], "query": query})
-    assert yaml.safe_load(text)["rules"][0]["query"] == query
-    assert rule_layers.find_identifiers(query) == []
-
-
-def test_the_shipped_rules_export_as_written_but_their_comments():
-    """Every rule of the base exports, equal to its query without its comment lines."""
-    data = yaml.safe_load(SHIPPED_BASE.read_text())
-    for rule in data["rules"]:
-        text = rule_layers.export_rule(rule["name"], SHIPPED_BASE)
-        exported = yaml.safe_load(text)["rules"][0]["query"]
-        without_comments = "".join(line for line in rule["query"].splitlines(keepends=True)
-                                   if not line.strip().startswith("//"))
-        assert exported.rstrip("\n") == without_comments.rstrip("\n"), rule["name"]
-
-
-def test_the_guard_reads_the_exported_query_as_kql(tmp_path, monkeypatch):
-    """A literal compared to an identity column, unknown to the deployment, that the
-    replacement missed: only the guard's KQL reading sees it — nothing is exported."""
-    monkeypatch.setattr(rule_layers, "_scrub", lambda text, names, counts, kql=False: text)
-    rule = {"name": "q", "ttp": "T1", "assets": ["auto"], "query": 'Syslog\n| where Computer has_any ("vm-other-9")\n'}
-    with pytest.raises(rule_layers.IdentifierLeft) as err:
-        _export(tmp_path, rule=rule)
-    assert '"vm-other-9"' in err.value.found
 
 
 # ── Review: one bad entry of the client's layer never stops the detection ────────

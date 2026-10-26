@@ -413,8 +413,22 @@ class _Click:
 
     def __init__(self, user, policy, custom_id="glorfindel_verdict_right"):
         click = self
-        self.user, self.client, self.data, self.channel = user, _Client(policy), {"custom_id": custom_id}, None
+        self.user, self.client, self.data = user, _Client(policy), {"custom_id": custom_id}
         self.ephemeral, self.edits, self.sent = [], [], []
+        self.card_edits, self.posted = [], []        # the card's message, the thread
+
+        class _Message:
+            async def edit(self, **kw):
+                click.card_edits.append(kw)
+
+        class _Channel:
+            async def send(self, text):
+                click.posted.append(text)
+
+        # A click that passes must be able to run to its end: without them, an allowed
+        # restore crashed in its callback (into View.on_error) before running anything,
+        # and a refusal that let it through looked like one that stopped it (review of M-3).
+        self.message, self.channel = _Message(), _Channel()
 
         class _Response:
             async def send_message(self, text, ephemeral=False):
@@ -434,11 +448,20 @@ class _Click:
 
 
 def _press(esc, user, policy, pick):
+    """One click through discord.py's dispatch. A callback's failure is raised, not left to
+    View.on_error (which only logs it); what the callback started (the restore's
+    asyncio.create_task) is awaited before the loop closes."""
     async def go():
         view = bot.EscalationView(esc)
+
+        async def on_error(interaction, error, item):
+            raise error
+        view.on_error = on_error
         item = pick(view)
         click = _Click(user, policy, getattr(item, "custom_id", "?"))
         await view._scheduled_task(item, click)
+        started = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+        await asyncio.gather(*started)
         return click
     return asyncio.run(go())
 
@@ -511,6 +534,15 @@ def test_a_refused_restore_never_runs(monkeypatch):
 
     click = _press(_stored(esc_id), _User(STRANGER), policy, restore)
     assert ran == [] and click.ephemeral and _stored(esc_id)["status"] == "pending"
+    assert click.card_edits == [] and click.posted == []
+
+    # The witness: the same click by an allowed user runs the restore — so the refusal
+    # above is what stopped it, not the fake click.
+    click = _press(_stored(esc_id), _User(ALLOWED), policy, restore)
+    assert ran == [["restore", VM, "--yes"]] and click.ephemeral == []
+    assert _stored(esc_id)["status"] != "pending"            # the card is resolved
+    assert click.card_edits and all(i.disabled for i in click.card_edits[0]["view"].children)
+    assert click.posted[-1] == "```\nok\n```"
 
 
 def test_the_allowed_ids_come_from_the_environment(monkeypatch):

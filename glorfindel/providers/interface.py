@@ -1,14 +1,110 @@
-"""The provider interface: what Glorfindel asks of a cloud (moved from actions.py, A1).
+"""The provider interface (MC0): what Glorfindel asks of a cloud, and what each cloud
+declares it can do.
 
+A provider is one adapter (`glorfindel/providers/<name>/`), the only place its SDK is
+imported (`tests/unit/test_provider_boundary.py`). It implements `CloudConnector` and
+declares its capabilities: each one names the response actions it serves and the
+rights it needs. The readiness check reads that declaration — which rights a VM's
+isolation, blocks and session cut need — instead of knowing a cloud's permission names.
 Azure is the only adapter today (`glorfindel/providers/azure/`).
 """
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class Capability:
+    """One thing a provider can do for Glorfindel, in the common vocabulary
+    (docs/architecture.md): `name` is stable (the readiness check reads it), `actions`
+    the response actions it serves, `rights` what the identity must hold — read without
+    writing anything (`check_permissions`). Empty `rights`: not checked by the readiness."""
+
+    name: str
+    actions: tuple[str, ...]
+    rights: frozenset[str] = frozenset()
+    note: str = ""
+
+
+@dataclass(frozen=True)
+class ProviderCapabilities:
+    """Everything one provider declares."""
+
+    provider: str
+    capabilities: tuple[Capability, ...]
+
+    def get(self, name: str) -> Capability | None:
+        return next((c for c in self.capabilities if c.name == name), None)
+
+    def rights(self, name: str) -> frozenset[str]:
+        """The rights a capability needs; none if the provider doesn't declare it."""
+        cap = self.get(name)
+        return cap.rights if cap else frozenset()
+
+    def available(self, name: str, missing_rights) -> bool:
+        """Declared, and none of its rights is among `missing_rights`."""
+        cap = self.get(name)
+        return cap is not None and not (set(missing_rights) & cap.rights)
+
+
+# The common names (docs/architecture.md, « Le vocabulaire commun »).
+NETWORK_QUARANTINE = "network_quarantine"    # isolate by a quarantine group of the provider's
+NETWORK_RULES = "network_rules"              # isolate by rules, block an address
+SESSION_DRAIN = "session_drain"              # cut the sessions an isolation leaves open
+RESTORE_POINT = "restore_point"              # snapshot, restore
+
+
+def capabilities_of(connector=None) -> ProviderCapabilities:
+    """What the connector's provider declares. A connector that is no CloudConnector (a
+    test double, or none at all: the audit) reads as the only adapter, Azure; a
+    CloudConnector that declares nothing is a programming error."""
+    declared = getattr(type(connector), "CAPABILITIES", None)
+    if isinstance(declared, ProviderCapabilities):
+        return declared
+    if isinstance(connector, CloudConnector):
+        raise TypeError(f"{type(connector).__name__} declares no capabilities (CAPABILITIES)")
+    from glorfindel.providers.azure.capabilities import CAPABILITIES
+    return CAPABILITIES
+
+
+class DetectionConnector(ABC):
+    """Provider-agnostic interface for polling alert/detection sources."""
+
+    @abstractmethod
+    def poll_alert(
+        self,
+        query: str,
+        since: float,
+        timeout_s: float,
+        interval_s: float = 10.0,
+        match_row=None,
+    ) -> tuple[float, dict] | None:
+        """Poll until the query returns results or timeout expires.
+
+        since: Unix timestamp — only match events after this time.
+        match_row: optional predicate; only a row it accepts counts as a match (the
+        first accepted row is returned). None = the first row of the result.
+        Returns (elapsed_seconds, first_result_row_as_dict) or None on timeout.
+        """
+        ...
+
+    def run_query(self, query: str, timespan=None) -> list[dict]:
+        """Run a query and return ALL result rows (not just the first).
+
+        Used for discovery queries (e.g. Heartbeat) and campaign replay. timespan is
+        an optional (start_dt, end_dt) window. Default implementation returns an empty
+        list — backends that support it override this.
+        """
+        return []
 
 
 class CloudConnector(ABC):
-    """Provider-agnostic interface. Azure now, AWS/GCP later."""
+    """Provider-agnostic interface. Azure now, AWS/GCP later.
+
+    Each implementation sets `CAPABILITIES` (see capabilities_of)."""
+
+    CAPABILITIES: ProviderCapabilities | None = None
 
     @abstractmethod
     def isolate_vm(self, resource_id: str) -> dict:
@@ -94,3 +190,9 @@ class CloudConnector(ABC):
         """Remove the deny rules created by block_suspicious_ip for this IP."""
         ...
 
+    @abstractmethod
+    def restore_job_status(self, vault: str, vault_rg: str, job_name: str) -> str:
+        """The provider's status of a restore job ("InProgress", "Completed", "Failed",
+        "Cancelled"…), read in the vault's group. The job tracker (glorfindel/jobs.py)
+        reconciles its records with it."""
+        ...

@@ -9,6 +9,7 @@ import threading
 
 from glorfindel.providers.azure.backup import BackupMixin
 from glorfindel.providers.azure.blocks import BlockMixin
+from glorfindel.providers.azure.capabilities import CAPABILITIES as AZURE_CAPABILITIES
 from glorfindel.providers.azure.isolation import IsolationMixin
 from glorfindel.providers.azure.network import NetworkMixin
 from glorfindel.providers.azure.quarantine import QuarantineMixin
@@ -50,6 +51,7 @@ class AzureConnector(
 
     ISOLATION_RULE_NAME = "glorfindel-isolation-deny-all"
     ISOLATION_PRIORITY = 100
+    CAPABILITIES = AZURE_CAPABILITIES      # MC0: what this adapter can do, read by the readiness check
 
     def __init__(self, dry_run: bool = False, read_only: bool | None = None):
         self.dry_run = dry_run

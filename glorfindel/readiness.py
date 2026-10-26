@@ -47,24 +47,19 @@ _INCONCLUSIVE = {"permissions_unknown", "nsg_unreadable"}
 # card per VM would bury the rest) and resources Glorfindel does not isolate.
 _SILENT = {"read_only", "unsupported_asset"}
 
-_ISOLATION_RIGHTS = {
-    "Microsoft.Network/networkInterfaces/write",
-    "Microsoft.Network/virtualNetworks/subnets/join/action",
-    "Microsoft.Network/networkSecurityGroups/write",
-    "Microsoft.Network/networkSecurityGroups/join/action",
-}
-_RULE_RIGHTS = {
-    "Microsoft.Network/networkSecurityGroups/securityRules/write",
-    "Microsoft.Network/networkSecurityGroups/securityRules/delete",
-}
-_DRAIN_RIGHT = "Microsoft.Compute/virtualMachines/runCommand/action"
+# The rights each response needs are the provider's (MC0): read from what its adapter
+# declares (glorfindel/providers/<name>/capabilities.py), not written here.
 
 
-def isolation_by_quarantine(quarantine_nsg: bool, missing_actions: set[str], refused: bool = False) -> bool:
+def isolation_by_quarantine(quarantine_nsg: bool, missing_actions: set[str], refused: bool = False,
+                            connector=None) -> bool:
     """Will an isolation go through the quarantine NSG (JIT)? Then no customer allow can get
     in its way: the NIC carries our deny-all. Not when the swap was refused at the last
-    isolation (`refused`, S7). Shared with the audit (seventh review, P2)."""
-    return bool(quarantine_nsg) and not refused and not (set(missing_actions) & _ISOLATION_RIGHTS)
+    isolation (`refused`, S7), nor when the provider can't (its declared rights are
+    missing, or it declares no quarantine). Shared with the audit (seventh review, P2)."""
+    from glorfindel.providers.interface import NETWORK_QUARANTINE, capabilities_of
+    return (bool(quarantine_nsg) and not refused
+            and capabilities_of(connector).available(NETWORK_QUARANTINE, missing_actions))
 
 
 def quarantine_refusal(resource_id: str) -> dict | None:
@@ -121,7 +116,11 @@ def assess(resource_id: str, connector, quarantine_nsg: bool = True) -> dict:
             "Corriger le fichier (une liste pour isolation.forensic_ports, par exemple)."))
         return _verdict(vm, reasons)
 
-    # Rights, read from Azure's permissions API.
+    # Rights, read from Azure's permissions API, against what the provider declares (MC0).
+    from glorfindel.providers.interface import (
+        NETWORK_QUARANTINE, NETWORK_RULES, SESSION_DRAIN, capabilities_of)
+    caps = capabilities_of(connector)
+    iso_rights, rule_rights = caps.rights(NETWORK_QUARANTINE), caps.rights(NETWORK_RULES)
     perms = connector.check_permissions(resource_id)
     if not isinstance(perms, dict) or not perms.get("ok"):
         reasons.append(_reason(
@@ -138,7 +137,7 @@ def assess(resource_id: str, connector, quarantine_nsg: bool = True) -> dict:
     # met a refused swap says so here, until one puts the quarantine on every NIC (S7) —
     # and until then the isolation goes by rules, with what that exposes.
     refusal = quarantine_refusal(resource_id) if quarantine_nsg else None
-    jit_ok = isolation_by_quarantine(quarantine_nsg, missing, refused=bool(refusal))
+    jit_ok = isolation_by_quarantine(quarantine_nsg, missing, refused=bool(refusal), connector=connector)
     if refusal:
         reasons.append(_reason(
             "quarantine_refused", "reserve",
@@ -148,12 +147,12 @@ def assess(resource_id: str, connector, quarantine_nsg: bool = True) -> dict:
             "alors par les règles : DNS / IMDS d'Azure joignables, exposée aux allow du client.",
             "Exempter le NSG de quarantaine de Glorfindel de la politique, puis isoler à nouveau : "
             "une isolation qui le pose sur chaque carte efface ce constat."))
-    rules_ok = not (missing & _RULE_RIGHTS)
+    rules_ok = caps.available(NETWORK_RULES, missing)
     if not jit_ok and not rules_ok:
         reasons.append(_reason(
             "cannot_isolate", "not_ready",
             "Ni l'isolation par NSG de quarantaine ni les règles de repli ne sont possibles : "
-            "droits manquants (" + ", ".join(sorted(missing & (_ISOLATION_RIGHTS | _RULE_RIGHTS))) + ").",
+            "droits manquants (" + ", ".join(sorted(missing & (iso_rights | rule_rights))) + ").",
             "Network Contributor sur le resource group de la VM, ou un rôle personnalisé avec ces actions."))
     elif quarantine_nsg and not jit_ok:
         reasons.append(_reason(
@@ -161,7 +160,7 @@ def assess(resource_id: str, connector, quarantine_nsg: bool = True) -> dict:
             "Isolation par règles seulement (droits manquants pour le NSG de quarantaine) : "
             "exposée aux règles allow du client et aux `terraform apply`, et les DNS / IMDS "
             "d'Azure restent joignables (un NSG ne peut les refuser qu'à toutes ses cartes).",
-            "Ajouter " + ", ".join(sorted(missing & _ISOLATION_RIGHTS)) + "."))
+            "Ajouter " + ", ".join(sorted(missing & iso_rights)) + "."))
     elif not quarantine_nsg and rules_ok:
         reasons.append(_reason(
             "platform_open", "reserve",
@@ -174,7 +173,7 @@ def assess(resource_id: str, connector, quarantine_nsg: bool = True) -> dict:
         reasons.append(_reason(
             "no_block", "reserve",
             "Blocage d'IP impossible (droits sur les règles NSG manquants).",
-            "Ajouter " + ", ".join(sorted(missing & _RULE_RIGHTS)) + "."))
+            "Ajouter " + ", ".join(sorted(missing & rule_rights)) + "."))
     if release_missing and jit_ok:
         reasons.append(_reason(
             "release_blocked", "reserve",
@@ -182,12 +181,12 @@ def assess(resource_id: str, connector, quarantine_nsg: bool = True) -> dict:
             + ", ".join(sorted({m["scope"] for m in release_missing}))
             + ") : la carte resterait en quarantaine jusqu'à une intervention.",
             "Ajouter Microsoft.Network/networkSecurityGroups/join/action sur le groupe du NSG du client."))
-    if _DRAIN_RIGHT in missing:
+    if not caps.available(SESSION_DRAIN, missing):
         reasons.append(_reason(
             "no_drain", "reserve",
             "Les sessions déjà ouvertes ne seront pas coupées à l'isolation (droit Run Command "
             "manquant) : un attaquant connecté garde la main.",
-            f"Ajouter {_DRAIN_RIGHT} (Virtual Machine Contributor)."))
+            f"Ajouter {', '.join(sorted(caps.rights(SESSION_DRAIN)))} (Virtual Machine Contributor)."))
 
     # Windows: no session drain (Linux `ss -K` only).
     try:

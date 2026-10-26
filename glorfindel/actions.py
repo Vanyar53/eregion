@@ -8,7 +8,7 @@ The code that lived here (4 394 lines) is split by concern, nothing changed in i
     state.py                    local state (~/.glorfindel/isolation, blocks)
     locks.py                    one writer per VM, per quarantine NSG
   glorfindel/providers/         the provider interface (MC0)
-    interface.py                CloudConnector
+    interface.py                CloudConnector, DetectionConnector, declared capabilities
   glorfindel/providers/azure/   the only adapter, and the only place the Azure SDK is imported
     connector.py                AzureConnector, the subscription guard, the VM lock on writes
     nsg.py                      reading security rules by content
@@ -19,6 +19,8 @@ The code that lived here (4 394 lines) is split by concern, nothing changed in i
     backup.py, restore.py       restore points
     sweep.py, readers.py        reset and orphans; rights, inventory, audit reads
     sdk.py                      SDK warm-up, error and enum helpers
+    capabilities.py             what the adapter declares (read by the readiness check)
+    monitor.py                  Log Analytics as a detection source (glorfindel.detectors)
 
 `from glorfindel.actions import X` keeps working for every name that lived here: the CLI,
 the War Room, the agent and the tests import from this path.
@@ -43,6 +45,7 @@ _MODULES = tuple(_importlib.import_module(name) for name in (
     "glorfindel.response.locks",
     "glorfindel.providers.interface",
     "glorfindel.providers.azure.sdk",
+    "glorfindel.providers.azure.capabilities",
     "glorfindel.providers.azure.nsg",
     "glorfindel.providers.azure.quarantine",
     "glorfindel.providers.azure.network",

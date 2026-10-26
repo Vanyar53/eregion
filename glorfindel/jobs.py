@@ -101,11 +101,7 @@ def refresh_job(job: dict, connector) -> dict:
         # Job lookups run in the VAULT's resource group (central vault ≠ VM RG).
         rg = job.get("vault_rg") or job.get("rg", "")
         if restore_job_name and rg:
-            from azure.mgmt.recoveryservicesbackup import RecoveryServicesBackupClient
-            connector._ensure_clients()
-            bc = RecoveryServicesBackupClient(connector._credential, connector._subscription_id)
-            j = bc.job_details.get(vault, rg, restore_job_name)
-            az_status = getattr(j.properties, "status", "Unknown")
+            az_status = connector.restore_job_status(vault, rg, restore_job_name)
             if az_status == "Completed":
                 job.update({"status": "Completed", "completed_at": now})
             elif az_status in ("Failed", "Cancelled"):

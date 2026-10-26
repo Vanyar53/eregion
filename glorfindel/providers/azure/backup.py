@@ -326,3 +326,12 @@ class BackupMixin:
             })
         return items
 
+    def restore_job_status(self, vault: str, vault_rg: str, job_name: str) -> str:
+        """The vault's status of a restore job, read in the vault's group (central vault ≠
+        VM RG). glorfindel/jobs.py reconciles its record with it (moved from there, A1:
+        no SDK outside the adapter)."""
+        from azure.mgmt.recoveryservicesbackup import RecoveryServicesBackupClient
+        self._ensure_clients()
+        bc = RecoveryServicesBackupClient(self._credential, self._subscription_id)
+        j = bc.job_details.get(vault, vault_rg, job_name)
+        return getattr(j.properties, "status", "Unknown")

@@ -16,7 +16,8 @@ en 5 secondes et agir en 2 clics.
 ## Périmètre
 
 **Tu travailles sur :**
-- `glorfindel/static/index.html` — SPA unique (~1600 lignes), vanilla JS + CSS variables
+- `glorfindel/static/index.html` — la War Room (~3500 lignes), vanilla JS + CSS variables
+- `glorfindel/static/atelier.html` — l'atelier (Annatar, Gothmog), même palette, lecture seule
 - `glorfindel/api.py` — tu peux proposer de nouveaux endpoints si le UI en a besoin
 
 **Tu lis mais ne modifies pas :**
@@ -32,7 +33,6 @@ en 5 secondes et agir en 2 clics.
 ```
 GET  /api/state              → { vms: [...], escalations: [...], incidents: [...] }
 GET  /api/watch/status        → { running: bool, uptime_s: float, threads: [...] }
-GET  /api/scenarios           → liste scénarios Annatar disponibles
 GET  /api/config              → { azure: {...}, llm: {...} }
 GET  /api/feed/history        → derniers événements du feed
 WS   /api/feed                → stream temps réel (connect + events)
@@ -41,6 +41,14 @@ GET  /api/audit               → audit toutes VMs
 GET  /api/actions/<vm>        → historique actions sur une VM (limit=5 par défaut)
 GET  /api/discovered          → assets découverts (AssetRegistry)
 GET  /api/pending/rules       → règles proposées en attente d'approbation
+
+GET  /atelier                         → page de l'atelier (static/atelier.html)
+GET  /api/atelier/catalog             → techniques + pannes du catalogue
+GET  /api/atelier/exercises?since=7d  → fenêtres d'exercice + cycles, cartes et rapport de run de chacune
+GET  /api/atelier/campaigns[/<id>]    → manifestes ; en détail, faits du rapport de campagne + report.md
+GET  /api/atelier/channel             → battement local, fenêtres vivantes, battement publié (canal retour)
+GET  /api/atelier/channel/detections/<run_id> → détections livrées au run
+     (atelier : GET seulement — un run part d'Orodruin armé, jamais d'une route de la War Room)
 
 POST /api/action/release/<vm>         → lever isolation NSG
 POST /api/action/revert/<vm>          → reset complet (release + unblock toutes IPs)

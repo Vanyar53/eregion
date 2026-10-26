@@ -1,0 +1,652 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Eregion — Atelier</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  /* Same palette as the War Room (index.html) — no colour outside it. */
+  :root {
+    --bg:        #0d1117;
+    --bg1:       #161b22;
+    --bg2:       #21262d;
+    --border:    #30363d;
+    --text:      #e6edf3;
+    --dim:       #7d8590;
+    --green:     #3fb950;
+    --red:       #f85149;
+    --yellow:    #d29922;
+    --orange:    #e3b341;
+    --blue:      #58a6ff;
+    --cyan:      #39d353;
+    --purple:    #bc8cff;
+    --font:      ui-monospace, "Cascadia Code", "SF Mono", Consolas, monospace;
+  }
+
+  body {
+    background: var(--bg); color: var(--text); font-family: var(--font); font-size: 13px;
+    height: 100vh; display: flex; flex-direction: column; overflow: hidden;
+  }
+  a { color: var(--blue); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+  header {
+    display: flex; align-items: center; gap: 14px; padding: 10px 20px; flex-shrink: 0;
+    background: var(--bg1); border-bottom: 1px solid var(--border);
+  }
+  .logo { color: var(--purple); font-weight: 700; font-size: 15px; letter-spacing: 2px; }
+  .subtitle { color: var(--dim); font-size: 12px; }
+  .sep { color: var(--border); }
+  .hstat { font-size: 11px; color: var(--dim); white-space: nowrap; }
+  .dot { font-size: 10px; }
+  .spacer { flex: 1; }
+  #clock { color: var(--dim); font-size: 11px; min-width: 70px; text-align: right; }
+  select {
+    background: var(--bg2); border: 1px solid var(--border); color: var(--text);
+    font-family: var(--font); font-size: 11px; padding: 3px 8px; border-radius: 6px; outline: none;
+  }
+  select:hover { border-color: var(--blue); }
+  .navlink {
+    font-size: 11px; padding: 3px 8px; border-radius: 6px; border: 1px solid var(--border);
+    background: var(--bg2); color: var(--text);
+  }
+  .navlink:hover { border-color: var(--dim); text-decoration: none; }
+  button.mini {
+    background: var(--bg2); border: 1px solid var(--border); color: var(--text); cursor: pointer;
+    font-family: var(--font); font-size: 10px; padding: 2px 7px; border-radius: 4px;
+  }
+  button.mini:hover { border-color: var(--dim); }
+
+  #ro-banner {
+    flex-shrink: 0; padding: 5px 20px; font-size: 11px; color: var(--dim);
+    background: color-mix(in srgb, var(--purple) 6%, var(--bg1));
+    border-bottom: 1px solid color-mix(in srgb, var(--purple) 25%, transparent);
+  }
+  #ro-banner b { color: var(--text); }
+
+  main { display: flex; flex: 1; min-height: 0; overflow: hidden; }
+  .col { display: flex; flex-direction: column; overflow: hidden; border-right: 1px solid var(--border); }
+  .col:last-child { border-right: 0; }
+  #col-ex { flex: 1.25; min-width: 0; }
+  #col-camp { flex: 1; min-width: 0; }
+  #col-side { width: 400px; flex-shrink: 0; }
+  .col-header {
+    padding: 10px 16px 8px; font-size: 10px; font-weight: 700; letter-spacing: 1px; color: var(--dim);
+    border-bottom: 1px solid var(--border); flex-shrink: 0; display: flex; gap: 10px; align-items: baseline;
+  }
+  .col-header .count { font-weight: 400; letter-spacing: normal; }
+  .list { flex: 1; overflow-y: auto; }
+  .empty { color: var(--dim); font-size: 11px; padding: 18px 16px; line-height: 1.6; }
+  .err { color: var(--red); font-size: 11px; padding: 8px 16px; }
+
+  /* ── Rows (windows, campaigns) ── */
+  .row { border-bottom: 1px solid var(--border); padding: 7px 14px 7px 12px; border-left: 2px solid transparent; }
+  .row:hover { background: var(--bg1); }
+  .row.inj-annatar { border-left-color: var(--purple); }
+  .row.inj-gothmog { border-left-color: var(--orange); }
+  .row-head { display: flex; align-items: baseline; gap: 8px; cursor: pointer; min-width: 0; }
+  .row-sub { display: flex; align-items: baseline; gap: 8px; margin-top: 3px; font-size: 11px; min-width: 0; flex-wrap: wrap; }
+  .exp { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto; min-width: 16ch; }
+  .meta { color: var(--dim); font-size: 10px; white-space: nowrap; }
+  .meta.tgt { flex: 0 3 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .twist { color: var(--dim); font-size: 10px; width: 10px; flex-shrink: 0; }
+
+  .chip {
+    font-size: 9px; font-weight: 700; letter-spacing: .5px; padding: 1px 5px; border-radius: 3px;
+    border: 1px solid var(--border); color: var(--dim); white-space: nowrap; flex-shrink: 0;
+  }
+  .c-open    { color: var(--yellow); border-color: color-mix(in srgb, var(--yellow) 45%, transparent); }
+  .c-grace   { color: var(--blue);   border-color: color-mix(in srgb, var(--blue) 45%, transparent); }
+  .c-closed  { color: var(--dim); }
+  .c-lapsed  { color: var(--red);    border-color: color-mix(in srgb, var(--red) 45%, transparent); }
+  .c-annatar { color: var(--purple); border-color: color-mix(in srgb, var(--purple) 45%, transparent); }
+  .c-gothmog { color: var(--orange); border-color: color-mix(in srgb, var(--orange) 45%, transparent); }
+  .c-ok      { color: var(--green);  border-color: color-mix(in srgb, var(--green) 45%, transparent); }
+  .c-bad     { color: var(--red);    border-color: color-mix(in srgb, var(--red) 45%, transparent); }
+  .c-warn    { color: var(--yellow); border-color: color-mix(in srgb, var(--yellow) 45%, transparent); }
+  .c-blue    { color: var(--blue);   border-color: color-mix(in srgb, var(--blue) 45%, transparent); }
+  .pulse { animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.35} }
+
+  .resp { font-size: 11px; }
+  .r-ok { color: var(--green); } .r-bad { color: var(--red); } .r-warn { color: var(--yellow); }
+  .r-wait { color: var(--dim); } .r-blue { color: var(--blue); }
+
+  /* ── Detail (expanded) ── */
+  .detail { margin: 6px 0 2px 18px; font-size: 10px; display: flex; flex-direction: column; gap: 6px; }
+  .dsec { border-left: 2px solid var(--border); padding: 3px 8px; }
+  .dsec.s-blue { border-color: var(--blue); }
+  .dsec.s-purple { border-color: var(--purple); }
+  .dsec.s-orange { border-color: var(--orange); }
+  .dsec.s-green { border-color: var(--green); }
+  .dtitle { color: var(--dim); font-weight: 700; letter-spacing: .5px; margin-bottom: 2px; }
+  table.t { border-collapse: collapse; width: 100%; }
+  table.t td, table.t th { padding: 1px 6px 1px 0; text-align: left; white-space: nowrap; vertical-align: top; }
+  table.t th { color: var(--dim); font-weight: 400; }
+  table.t td.wrap { white-space: normal; }
+  .kv { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+  .kv span b { color: var(--dim); font-weight: 400; }
+  pre.report {
+    white-space: pre-wrap; word-break: break-word; font-family: var(--font); font-size: 10px;
+    color: var(--text); background: var(--bg1); border: 1px solid var(--border); border-radius: 4px;
+    padding: 8px; max-height: 420px; overflow-y: auto;
+  }
+
+  /* ── Side column: channel + catalogue ── */
+  .panel { padding: 8px 14px; border-bottom: 1px solid var(--border); font-size: 11px; }
+  .panel .line { display: flex; gap: 8px; align-items: baseline; padding: 2px 0; }
+  .panel .k { color: var(--dim); width: 110px; flex-shrink: 0; }
+  .panel .v { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .cat-group { padding: 6px 14px 2px; font-size: 9px; font-weight: 700; letter-spacing: 1px; color: var(--dim); }
+  .cat { display: grid; grid-template-columns: 12px 78px 1fr auto; gap: 6px; align-items: baseline;
+         padding: 2px 14px; font-size: 11px; }
+  .cat:hover { background: var(--bg1); }
+  .cat.planned { opacity: .45; }
+  .cat .id { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cat .nm { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text); }
+  .cat .nm small { color: var(--dim); }
+  .cat .last { font-size: 10px; white-space: nowrap; }
+</style>
+</head>
+<body>
+
+<header>
+  <span class="logo">ATELIER</span>
+  <span class="subtitle">Annatar · Gothmog</span>
+  <span class="sep">│</span>
+  <span class="hstat" title="The watch's local heartbeat (~/.glorfindel/watch_heartbeat)"><span id="watch-dot" class="dot">●</span> <span id="watch-label">watch…</span></span>
+  <span class="sep">│</span>
+  <span class="hstat" title="The heartbeat the watch publishes on the return channel — what a run on Orodruin reads"><span id="rc-dot" class="dot">●</span> <span id="rc-label">return channel…</span></span>
+  <div class="spacer"></div>
+  <label class="hstat">since
+    <select id="since">
+      <option value="24h">24 h</option>
+      <option value="7d" selected>7 days</option>
+      <option value="30d">30 days</option>
+      <option value="all">all</option>
+    </select>
+  </label>
+  <a class="navlink" href="/">◂ War Room</a>
+  <span id="clock"></span>
+</header>
+
+<div id="ro-banner">
+  <b>Read only.</b> What the injectors ran and what Glorfindel made of it. A run starts from
+  <b>Orodruin, armed</b> (contract, inscription, audit before each call) — this page never launches one.
+</div>
+
+<main>
+  <div class="col" id="col-ex">
+    <div class="col-header">EXERCISES <span class="count" id="ex-count"></span>
+      <span class="count" style="margin-left:auto">windows · what Glorfindel did inside each</span></div>
+    <div class="list" id="ex-list"><div class="empty">…</div></div>
+  </div>
+  <div class="col" id="col-camp">
+    <div class="col-header">CAMPAIGNS <span class="count" id="camp-count"></span>
+      <span class="count" style="margin-left:auto">on this host once over</span></div>
+    <div class="list" id="camp-list"><div class="empty">…</div></div>
+  </div>
+  <div class="col" id="col-side">
+    <div class="col-header">CHANNELS</div>
+    <div id="chan-panel" class="panel"><span style="color:var(--dim)">…</span></div>
+    <div class="col-header">CATALOGUE <span class="count" id="cat-count"></span></div>
+    <div class="list" id="cat-list"><div class="empty">…</div></div>
+  </div>
+</main>
+
+<script>
+// ── State ─────────────────────────────────────────────────────────────────────────────
+const S = {
+  since: '7d',
+  ex: null, camp: null, cat: null, chan: null,
+  errors: {},
+  open: new Set(),          // expanded rows: 'w:<run_id>' / 'c:<dir>'
+  campDetail: {},           // dir → {facts, report_md} | {error} | 'loading'
+  delivered: {},            // run_id → {detections} | {error} | 'loading'
+  showReport: new Set(),    // campaign dirs whose report.md is shown
+};
+const DISRUPTIVE = ['isolate_vm', 'block_suspicious_ip'];
+
+// ── Helpers ───────────────────────────────────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g,
+    c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+const vmName = rid => String(rid || '').split('/').pop();
+function toDate(v) {
+  if (v === null || v === undefined || v === '') return null;
+  const d = typeof v === 'number' ? new Date(v * 1000) : new Date(v);
+  return isNaN(d) ? null : d;
+}
+function hms(v) {
+  const d = toDate(v); if (!d) return '—';
+  const sameDay = d.toDateString() === new Date().toDateString();
+  const t = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+  return sameDay ? t : `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${t.slice(0, 5)}`;
+}
+function dur(s) {
+  if (s === null || s === undefined || isNaN(s)) return '—';
+  s = Math.round(s);
+  if (Math.abs(s) < 120) return `${s}s`;
+  if (Math.abs(s) < 3600) return `${Math.floor(s / 60)}m${String(Math.abs(s % 60)).padStart(2, '0')}`;
+  if (Math.abs(s) < 172800) return `${Math.floor(s / 3600)}h${String(Math.floor(Math.abs(s % 3600) / 60)).padStart(2, '0')}`;
+  return `${Math.floor(s / 86400)}d`;
+}
+function ago(v) { const d = toDate(v); return d ? dur((Date.now() - d) / 1000) : '—'; }
+const pct = c => (typeof c === 'number' ? `${Math.round(c * 100)}%` : '');
+async function getJSON(url) {
+  const r = await fetch(url, { cache: 'no-store' });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+}
+
+// ── What Glorfindel did inside a window ─────────────────────────────────────────────
+// A technique expects a detection; a fault expects nothing disruptive (G0, G1).
+function attackTime(w) {
+  const at = w.run && w.run.metrics && w.run.metrics.attack_time;
+  return toDate(at) ? { d: toDate(at), from: 'attack' } : { d: toDate(w.start), from: 'window start' };
+}
+// The ATT&CK id an Annatar window opens with (`<mitre> <scenario>`), else '' (a fault, an id
+// that is not one): then no cycle is set apart by its technique.
+function ownTtp(w) {
+  return w.kind === 'technique' && /^T\d{4}(\.\d{3})?$/.test(w.experiment_id || '') ? w.experiment_id : '';
+}
+function decisionText(c) {
+  if (!c || !c.action) return '';
+  let how = c.status || '';
+  if (c.executed === true) how = c.verified === true ? 'executed ✓' : c.verified === false ? 'executed, not verified' : 'executed';
+  else if (c.escalate) how = c.status === 'escalated' ? 'held' : (c.status || 'escalated');
+  return `${c.action} ${pct(c.confidence)}${how ? ' · ' + how : ''}${c.mode ? ' (' + c.mode + ')' : ''}`;
+}
+function response(w) {
+  const live = w.state === 'open' || w.state === 'grace';
+  const cycles = w.cycles || [];
+  if (w.kind === 'fault') {
+    const disruptive = cycles.filter(c => DISRUPTIVE.includes(c.action));
+    const done = disruptive.filter(c => c.executed === true);
+    if (done.length) return { cls: 'bad', text: `${done[0].action} executed during a fault` };
+    if (disruptive.length) return { cls: 'warn', text: `${disruptive[0].action} recommended during a fault, held` };
+    if (cycles.length) return { cls: 'ok', text: `${cycles.length} cycle(s), nothing disruptive` };
+    return live ? { cls: 'wait', text: 'nothing so far' } : { cls: 'ok', text: 'nothing — as expected' };
+  }
+  // An unattributed row is anchored on an arbitrary VM: it names none, and the return
+  // channel never delivers it to the run (watch_channel.Publisher._note).
+  const named = c => !c.attribution || c.attribution === 'asset';
+  const det = cycles.filter(c => c.event === 'detection' && named(c));
+  // A run's detection is of its own technique (#157): in a campaign, the next run on the
+  // same VM falls in this window's grace.
+  const ttp = ownTtp(w);
+  const own = ttp ? det.filter(c => c.ttp === ttp) : det;
+  if (own.length) {
+    const t0 = attackTime(w), seen = toDate(own[0].signal_at);
+    const lat = t0.d && seen ? ` +${dur((seen - t0.d) / 1000)} after ${t0.from}` : '';
+    const dec = cycles.find(c => c.action && named(c) && (!ttp || c.ttp === ttp));
+    return { cls: 'ok', text: `detected${lat}${dec ? ' → ' + decisionText(dec) : ''}` };
+  }
+  if (det.length) return { cls: 'blue', text: `no ${ttp} detection · ${det.length} of other techniques` };
+  if (cycles.some(c => c.event === 'detection'))
+    return { cls: 'warn', text: 'a detection, not attributed to this VM' };
+  if (cycles.length) return { cls: 'blue', text: `${cycles.length} cycle(s), no detection` };
+  if (live) return { cls: 'wait', text: 'waiting for a detection' };
+  // Only the run concludes to a miss — on a heartbeat that vouches for its wait
+  // (eregion_core/watch_channel.py): an absence in this host's files is not one.
+  const verdict = w.run && w.run.metrics && w.run.metrics.detection;
+  if (verdict === 'missed') return { cls: 'bad', text: 'missed (the run\'s verdict)' };
+  if (verdict === 'detected') return { cls: 'blue', text: 'detected per the run · no cycle in this host\'s files' };
+  return { cls: 'warn', text: 'no detection seen by this watch' };
+}
+function runChip(w) {
+  const r = w.run;
+  if (!r) return `<span class="meta" title="Run reports stay on Orodruin unless a campaign carries them">run report not on this host</span>`;
+  const cls = { PASS: 'c-ok', FAIL: 'c-bad', REFUSED: 'c-warn' }[r.result] || '';
+  const det = r.metrics && r.metrics.detection;
+  const dcls = { detected: 'c-ok', missed: 'c-bad', unknown: 'c-warn' }[det] || '';
+  return `<span class="chip ${cls}">RUN ${esc(r.result || '?')}</span>` +
+    (det ? ` <span class="chip ${dcls}" title="The run's own verdict (return channel)">${esc(String(det).toUpperCase())}</span>` : '');
+}
+
+// ── Exercises ─────────────────────────────────────────────────────────────────────────
+function renderExercises() {
+  const list = $('ex-list');
+  if (S.errors.ex) { list.innerHTML = `<div class="err">${esc(S.errors.ex)}</div>`; return; }
+  if (!S.ex) return;
+  const items = S.ex.exercises || [];
+  const live = items.filter(w => w.state === 'open' || w.state === 'grace').length;
+  $('ex-count').textContent = `${items.length}${live ? ` · ${live} live` : ''}`;
+  if (!items.length) {
+    list.innerHTML = `<div class="empty">No exercise window in this period.<br>
+      A window opens when Annatar or Gothmog starts a run against an inscribed target
+      (runs/exercises/, pulled from Orodruin by the watch).</div>`;
+    return;
+  }
+  const top = list.scrollTop;
+  list.innerHTML = items.map(renderWindow).join('');
+  list.scrollTop = top;
+}
+
+function renderWindow(w) {
+  const key = 'w:' + w.run_id, isOpen = S.open.has(key);
+  const stateCls = 'c-' + (w.state || 'closed');
+  const end = toDate(w.end), start = toDate(w.start);
+  let timing = `${hms(w.start)}`;
+  if (w.state === 'open') timing += ` → running ${dur((Date.now() - start) / 1000)}`;
+  else if (end && start) timing += ` → ${hms(w.end)} (${dur((end - start) / 1000)})`;
+  else if (w.state === 'lapsed') timing += ` → never closed, lapsed ${hms(w.expires)}`;
+  if (w.state === 'grace' && toDate(w.last_moment)) timing += ` · grace ${dur((toDate(w.last_moment) - Date.now()) / 1000)} left`;
+  const resp = response(w);
+  const targets = (w.targets || []).map(vmName).join(', ');
+  const cards = (w.cards || []).length;
+  return `<div class="row inj-${esc(w.injector)}">
+    <div class="row-head" data-toggle="${esc(key)}">
+      <span class="twist">${isOpen ? '▾' : '▸'}</span>
+      <span class="chip ${stateCls} ${w.state === 'open' ? 'pulse' : ''}">${esc(String(w.state || '').toUpperCase())}</span>
+      ${w.closed_by ? `<span class="chip c-bad" title="Closed by ${esc(w.closed_by)}, not by its injector: what was in flight may not have been cleaned up">${esc(w.closed_by)}</span>` : ''}
+      <span class="chip c-${esc(w.injector)}">${esc(w.injector)}</span>
+      <span class="exp" title="${esc(w.experiment)}">${esc(w.experiment)}</span>
+      <span class="meta tgt" title="${esc((w.targets || []).join('\n'))}">→ ${esc(targets)}</span>
+      <span class="meta" style="margin-left:auto">${timing}</span>
+    </div>
+    <div class="row-sub">
+      <span class="meta" style="width:10px"></span>
+      <span class="resp r-${resp.cls}">${w.kind === 'fault' ? '⚡' : '⚔'} ${esc(resp.text)}</span>
+      ${cards ? `<span class="chip c-blue">${cards} card${cards > 1 ? 's' : ''}</span>` : ''}
+      <span style="margin-left:auto">${runChip(w)}</span>
+    </div>
+    ${isOpen ? renderWindowDetail(w) : ''}
+  </div>`;
+}
+
+function renderWindowDetail(w) {
+  const parts = [];
+  parts.push(`<div class="dsec s-purple"><div class="dtitle">WINDOW</div><div class="kv">
+    <span><b>run</b> ${esc(w.run_id)}</span><span><b>kind</b> ${esc(w.kind)}</span>
+    <span><b>start</b> ${hms(w.start)}</span><span><b>end</b> ${w.end ? hms(w.end) : '—'}</span>
+    <span><b>expires</b> ${hms(w.expires)}</span><span><b>counts until</b> ${hms(w.last_moment)}</span>
+  </div><div style="color:var(--dim);margin-top:2px">${(w.targets || []).map(esc).join('<br>')}</div></div>`);
+
+  const cycles = w.cycles || [];
+  const t0 = attackTime(w);
+  parts.push(`<div class="dsec s-blue"><div class="dtitle">GLORFINDEL — ${cycles.length} cycle(s) on a target inside the window</div>` +
+    (cycles.length ? `<table class="t"><tr><th>seen</th><th>+${esc(t0.from)}</th><th>event</th><th>ttp</th><th>rule</th><th>decision</th></tr>` +
+      cycles.map(c => {
+        const seen = toDate(c.signal_at), other = ownTtp(w) && c.ttp !== ownTtp(w);
+        return `<tr${other ? ' style="opacity:.5" title="Another technique: another run\'s, or a real one"' : ''}><td>${hms(c.signal_at)}</td><td>${t0.d && seen ? dur((seen - t0.d) / 1000) : '—'}</td>
+          <td>${esc(c.event)}${c.attribution && c.attribution !== 'asset' ? ` <span style="color:var(--yellow)">(${esc(c.attribution)})</span>` : ''}</td>
+          <td>${esc(c.ttp)}</td><td>${esc(c.rule)}</td>
+          <td class="wrap" style="color:${DISRUPTIVE.includes(c.action) && c.executed === true ? 'var(--red)' : 'var(--text)'}">${esc(decisionText(c) || '—')}${c.cycle_error ? ' <span style="color:var(--red)">cycle error</span>' : ''}</td></tr>`;
+      }).join('') + '</table>'
+      : `<div style="color:var(--dim)">No cycle of the watch on these targets between the window's start and its last moment.</div>`) +
+    `</div>`);
+
+  const cards = w.cards || [];
+  if (cards.length) {
+    parts.push(`<div class="dsec s-blue"><div class="dtitle">CARDS CARRYING THIS RUN (exercise)</div><table class="t">` +
+      cards.map(c => `<tr><td>${hms(c.timestamp)}</td><td>${esc(c.escalation_type)}</td><td>${esc(c.action)} ${pct(c.confidence)}</td>
+        <td>${esc(c.status)}</td><td>${c.verdict ? 'verdict ' + esc(c.verdict) : ''}</td></tr>`).join('') + '</table></div>');
+  }
+
+  if (w.run) {
+    const r = w.run, m = r.metrics || {};
+    const checks = Object.entries(r.checks || {}).map(([k, v]) =>
+      `<span class="chip ${v === 'PASS' ? 'c-ok' : 'c-bad'}" title="${esc(v)}">${esc(k)}</span>`).join(' ');
+    const facts = [];
+    if (m.attack_time) facts.push(`<span><b>attack</b> ${hms(m.attack_time)}</span>`);
+    if (m.detection) facts.push(`<span><b>detection</b> ${esc(m.detection)}${m.detection_latency_s != null ? ' +' + dur(m.detection_latency_s) : ''}</span>`);
+    if (m.fault_start) facts.push(`<span><b>fault</b> ${hms(m.fault_start)} → ${hms(m.fault_end)}</span>`);
+    if (m.seen_down_at) facts.push(`<span><b>seen down</b> ${hms(m.seen_down_at)}</span>`);
+    if (m.time_to_restore_s != null) facts.push(`<span><b>restored</b> +${dur(m.time_to_restore_s)}${m.fallback_used ? ' (fallback start_vm)' : ''}</span>`);
+    if (m.aborted) facts.push(`<span style="color:var(--red)"><b>aborted</b> ${esc(m.aborted)}</span>`);
+    parts.push(`<div class="dsec ${w.injector === 'gothmog' ? 's-orange' : 's-purple'}"><div class="dtitle">RUN REPORT — ${esc(r.result)}</div>
+      <div class="kv">${facts.join('')}</div><div style="margin-top:3px">${checks}</div></div>`);
+  }
+
+  const d = S.delivered[w.run_id];
+  let rc = `<button class="mini" data-delivered="${esc(w.run_id)}">read the return channel</button>`;
+  if (d === 'loading') rc = '<span style="color:var(--dim)">reading…</span>';
+  else if (d && d.error) rc = `<span style="color:var(--red)">${esc(d.error)}</span>`;
+  else if (d && d.configured === false) rc = '<span style="color:var(--dim)">no return channel configured on this host</span>';
+  else if (d) rc = d.detections.length
+    ? `<table class="t">${d.detections.map(x => `<tr><td>${hms(x.detected_at)}</td><td>${esc(x.ttp)}</td><td>${esc(x.rule)}</td><td>${esc(vmName(x.resource_id))}</td></tr>`).join('')}</table>`
+    : '<span style="color:var(--dim)">nothing delivered for this run</span>';
+  parts.push(`<div class="dsec s-green"><div class="dtitle">DELIVERED TO THE RUN (return channel)</div>${rc}</div>`);
+  return `<div class="detail">${parts.join('')}</div>`;
+}
+
+// ── Campaigns ─────────────────────────────────────────────────────────────────────────
+function renderCampaigns() {
+  const list = $('camp-list');
+  if (S.errors.camp) { list.innerHTML = `<div class="err">${esc(S.errors.camp)}</div>`; return; }
+  if (!S.camp) return;
+  const items = S.camp.campaigns || [];
+  $('camp-count').textContent = items.length ? String(items.length) : '';
+  if (!items.length) {
+    list.innerHTML = `<div class="empty">No campaign in this period.<br>
+      A campaign launched from Orodruin reaches this host when it is over (runs/campaigns/,
+      published on the exercise channel); its report is written here.</div>`;
+    return;
+  }
+  const top = list.scrollTop;
+  list.innerHTML = items.map(renderCampaign).join('');
+  list.scrollTop = top;
+}
+
+function renderCampaign(c) {
+  if (c.error) return `<div class="row"><span class="meta">${esc(c.dir)}</span> <span style="color:var(--red)">${esc(c.error)}</span></div>`;
+  const key = 'c:' + c.dir, isOpen = S.open.has(key);
+  const sc = c.scenarios || [];
+  const executed = sc.filter(s => s.status === 'executed');
+  const n = k => executed.filter(s => (s.detection || 'unknown') === k).length;
+  const stateCls = { done: 'c-ok', aborted: 'c-bad', running: 'c-open' }[c.state] || 'c-closed';
+  const summary = `${executed.length}/${sc.length} executed · <span class="r-ok">${n('detected')} detected</span>` +
+    (n('missed') ? ` · <span class="r-bad">${n('missed')} missed</span>` : '') +
+    (n('unknown') ? ` · <span class="r-warn">${n('unknown')} unknown</span>` : '');
+  const rows = sc.map(s => {
+    const det = s.status === 'executed' ? (s.detection || 'unknown') : '';
+    const dcls = { detected: 'r-ok', missed: 'r-bad', unknown: 'r-warn' }[det] || 'r-wait';
+    return `<tr><td>${esc(s.seq)}</td><td>${esc(s.ttp)}</td><td style="color:var(--dim)">${esc(s.tactic)}</td>
+      <td>${esc(s.status)}${s.destructive ? ' <span style="color:var(--red)">D</span>' : ''}</td>
+      <td class="${dcls}">${esc(det)}${s.detection_latency_s != null ? ' +' + dur(s.detection_latency_s) : ''}</td>
+      <td style="color:var(--dim)">${hms(s.started_at)}</td>
+      <td class="wrap" style="color:var(--red)">${esc(s.error || '')}</td></tr>`;
+  }).join('');
+  return `<div class="row inj-annatar">
+    <div class="row-head" data-toggle="${esc(key)}">
+      <span class="twist">${isOpen ? '▾' : '▸'}</span>
+      <span class="chip ${stateCls}">${esc(String(c.state || '?').toUpperCase())}</span>
+      ${c.kill_switch ? '<span class="chip c-bad">KILL SWITCH</span>' : ''}
+      <span class="exp">${esc(c.campaign_id || c.dir)}</span>
+      <span class="meta">${esc(c.objective || '')}</span>
+      <span class="meta" style="margin-left:auto">${hms(c.created_at)} · ${esc(c.created_by || '')}</span>
+    </div>
+    <div class="row-sub"><span class="meta" style="width:10px"></span>
+      <span>${summary}</span>
+      <span class="meta">${esc(c.sandbox || '')}${c.budget && c.budget.allow_destructive ? ' · destructive allowed' : ''}</span>
+      <span style="margin-left:auto">${c.report ? '<span class="chip c-blue" title="report.md written by the analysis AI (IA0)">REPORT</span>' : ''}
+        ${c.pulled ? '<span class="chip" title="Published by Orodruin">FROM ORODRUIN</span>' : ''}</span>
+    </div>
+    <div class="detail"><table class="t"><tr><th>#</th><th>ttp</th><th>tactic</th><th>status</th><th>detection</th><th>started</th><th></th></tr>${rows}</table></div>
+    ${isOpen ? renderCampaignDetail(c) : ''}
+  </div>`;
+}
+
+function renderCampaignDetail(c) {
+  const d = S.campDetail[c.dir];
+  if (!d || d === 'loading') return '<div class="detail" style="color:var(--dim)">reading the facts…</div>';
+  if (d.error) return `<div class="detail" style="color:var(--red)">${esc(d.error)}</div>`;
+  const facts = d.facts || [];
+  const rows = facts.map(f => `<tr><td>${esc(f.seq)}</td><td>${esc(f.ttp)}</td>
+    <td>${f.decision ? esc(f.decision) + ' ' + pct(f.confidence) + (f.escalated === true ? ' · escalated' : f.escalated === false ? ' · not escalated' : '')
+      : `<span style="color:var(--dim)">${esc(f.decision_unknown ? 'unknown — ' + f.decision_unknown : '—')}</span>`}</td>
+    <td class="wrap" style="color:var(--dim)">${esc((f.excerpt || '').slice(0, 220))}${(f.excerpt || '').length > 220 ? '…' : ''}</td></tr>`).join('');
+  const showing = S.showReport.has(c.dir);
+  return `<div class="detail">
+    <div class="dsec s-blue"><div class="dtitle">GLORFINDEL'S DECISION ON EACH RUN (read from the files, as the campaign report reads them)</div>
+      <table class="t"><tr><th>#</th><th>ttp</th><th>decision</th><th>reasoning (excerpt)</th></tr>${rows}</table></div>
+    ${(d.skipped || []).length ? `<div class="dsec" style="border-color:var(--yellow)"><div class="dtitle">LEFT OUT OF THE FACTS (and of the report)</div>
+      ${(d.skipped || []).map(s => `<div style="color:var(--yellow)">${esc(s)}</div>`).join('')}</div>` : ''}
+    <div class="dsec s-purple"><div class="dtitle">REPORT</div>${d.report_md
+      ? `<button class="mini" data-report="${esc(c.dir)}">${showing ? 'hide' : 'show'} report.md</button>${showing ? `<pre class="report">${esc(d.report_md)}</pre>` : ''}`
+      : '<span style="color:var(--dim)">not written (yet) — on H0 it waits for the decisions, up to ~25 min after the end</span>'}</div>
+  </div>`;
+}
+
+// ── Channels ──────────────────────────────────────────────────────────────────────────
+function renderChannel() {
+  const p = $('chan-panel');
+  if (S.errors.chan) { p.innerHTML = `<span style="color:var(--red)">${esc(S.errors.chan)}</span>`; return; }
+  const c = S.chan; if (!c) return;
+  const w = c.watch || {};
+  const wColor = { running: 'var(--green)', stale: 'var(--yellow)', stopped: 'var(--red)' }[w.status] || 'var(--dim)';
+  $('watch-dot').style.color = wColor;
+  $('watch-label').textContent = w.status === 'running' ? `watch running · beat ${w.age_s}s ago`
+    : w.status === 'stale' ? `watch stale · ${dur(w.age_s)}` : `watch ${w.status || 'unknown'}`;
+
+  const rc = c.return_channel || {};
+  let rcColor = 'var(--dim)', rcText = 'return channel off';
+  if (rc.configured) {
+    if (rc.error) { rcColor = 'var(--red)'; rcText = 'return channel unreadable'; }
+    else if (rc.alive) { rcColor = 'var(--green)'; rcText = `return channel · beat ${rc.age_s}s ago`; }
+    else { rcColor = 'var(--yellow)'; rcText = `return channel · beat ${dur(rc.age_s)} ago`; }
+  }
+  $('rc-dot').style.color = rcColor;
+  $('rc-label').textContent = rcText;
+
+  const ec = c.exercise_channel || {};
+  const lines = [];
+  lines.push(`<div class="line"><span class="k">watch</span><span class="v" style="color:${wColor}">${esc(w.status || '?')}${w.since ? ' · last beat ' + hms(w.since) : ''}</span></div>`);
+  lines.push(`<div class="line"><span class="k">windows in</span><span class="v">${ec.configured
+    ? `<span class="r-ok">exercise channel on</span>` : '<span style="color:var(--dim)">local only (no exercise channel)</span>'}${ec.newest_window_at ? ` · newest ${ago(ec.newest_window_at)} ago` : ''}</span></div>`);
+  lines.push(`<div class="line"><span class="k">live windows</span><span class="v">${(c.live_windows || []).length
+    ? (c.live_windows || []).map(esc).join(', ') : '<span style="color:var(--dim)">none</span>'}</span></div>`);
+  if (!rc.configured) {
+    lines.push(`<div class="line"><span class="k">return channel</span><span class="v" style="color:var(--dim)">not configured — runs read the local watch files</span></div>`);
+  } else if (rc.error) {
+    lines.push(`<div class="line"><span class="k">return channel</span><span class="v" style="color:var(--red)" title="${esc(rc.error)}">${esc(rc.error)}</span></div>`);
+  } else {
+    const hb = rc.heartbeat || {};
+    lines.push(`<div class="line"><span class="k">published beat</span><span class="v" style="color:${rcColor}">${hms(hb.at)} (${dur(rc.age_s)} ago)${rc.alive ? '' : ' — a run reads it as no watch'}</span></div>`);
+    lines.push(`<div class="line"><span class="k">watch up since</span><span class="v">${hms(hb.since)}</span></div>`);
+    const un = rc.unlisted_windows || [];
+    lines.push(`<div class="line"><span class="k">windows listed</span><span class="v">${(hb.windows || []).length}${un.length
+      ? ` · <span class="r-warn" title="A run of these windows cannot conclude to a miss yet">⚠ not listed: ${un.map(esc).join(', ')}</span>` : ''}</span></div>`);
+  }
+  p.innerHTML = lines.join('');
+}
+
+// ── Catalogue ─────────────────────────────────────────────────────────────────────────
+function lastExercised(id) {
+  const ws = ((S.ex && S.ex.exercises) || []).filter(w => w.experiment_id === id);
+  return ws.length ? ws[0] : null;   // newest first
+}
+function renderCatalog() {
+  const list = $('cat-list');
+  if (S.errors.cat) { list.innerHTML = `<div class="err">${esc(S.errors.cat)}</div>`; return; }
+  if (!S.cat) return;
+  if (S.cat.error) { list.innerHTML = `<div class="err">${esc(S.cat.error)}</div>`; return; }
+  const entries = S.cat.entries || [];
+  const impl = entries.filter(e => e.status === 'implemented');
+  const exercised = impl.filter(e => lastExercised(e.id)).length;
+  $('cat-count').textContent = `${impl.length} implemented · ${exercised} exercised in period`;
+  const groups = {};
+  for (const e of entries) (groups[e.resource_type] = groups[e.resource_type] || []).push(e);
+  const order = e => (e.status === 'implemented' ? 0 : 1) * 10 + (e.kind === 'fault' ? 1 : 0);
+  list.innerHTML = Object.entries(groups).map(([rt, es]) => {
+    es.sort((a, b) => order(a) - order(b) || String(a.id).localeCompare(String(b.id)));
+    return `<div class="cat-group">${esc(rt.toUpperCase())}</div>` + es.map(e => {
+      const w = lastExercised(e.id);
+      let last = '<span style="color:var(--dim)">—</span>';
+      if (w) { const r = response(w); last = `<span class="r-${r.cls}" title="${esc(r.text)}">${ago(w.start)} ago</span>`; }
+      return `<div class="cat ${e.status === 'implemented' ? '' : 'planned'}" title="${esc(e.name)} — ${esc(e.engine)} · ${esc(e.log_source || '')}${e.expected_latency_s ? ' · ~' + esc(e.expected_latency_s) + 's' : ''}">
+        <span style="color:${e.kind === 'fault' ? 'var(--orange)' : 'var(--purple)'}">${e.kind === 'fault' ? '⚡' : '⚔'}</span>
+        <span class="id">${esc(e.id)}</span>
+        <span class="nm">${esc(e.name)} <small>${esc(e.tactic || e.engine)}${e.destructive ? ' · <span style="color:var(--red)">destructive</span>' : ''}${e.status !== 'implemented' ? ' · ' + esc(e.status) : ''}</small></span>
+        <span class="last">${last}</span></div>`;
+    }).join('');
+  }).join('');
+}
+
+// ── Fetching ──────────────────────────────────────────────────────────────────────────
+const last = {};   // the last JSON text per source: render only on change
+async function load(name, url, render) {
+  try {
+    const data = await getJSON(url);
+    if (data && data.error && name !== 'cat') throw new Error(data.error);
+    const text = JSON.stringify(data);
+    delete S.errors[name];
+    if (last[name] === text) return false;
+    last[name] = text; S[name] = data;
+  } catch (e) {
+    S.errors[name] = `${url} — ${e.message}`;
+  }
+  render();
+  return true;
+}
+async function refreshFast() {
+  const changed = await load('ex', `/api/atelier/exercises?since=${S.since}`, renderExercises);
+  if (changed) renderCatalog();   // "last exercised" follows the windows
+  await load('chan', '/api/atelier/channel', renderChannel);
+}
+async function refreshSlow() {
+  await load('camp', `/api/atelier/campaigns?since=${S.since}`, renderCampaigns);
+}
+async function refreshCatalog() { await load('cat', '/api/atelier/catalog', renderCatalog); }
+
+async function loadCampaignDetail(dir) {
+  S.campDetail[dir] = 'loading'; renderCampaigns();
+  try { S.campDetail[dir] = await getJSON(`/api/atelier/campaigns/${encodeURIComponent(dir)}`); }
+  catch (e) { S.campDetail[dir] = { error: e.message }; }
+  renderCampaigns();
+}
+async function loadDelivered(runId) {
+  S.delivered[runId] = 'loading'; renderExercises();
+  try { S.delivered[runId] = await getJSON(`/api/atelier/channel/detections/${encodeURIComponent(runId)}`); }
+  catch (e) { S.delivered[runId] = { error: e.message }; }
+  renderExercises();
+}
+
+// ── Events (delegated: no data inside inline handlers) ───────────────────────────────
+document.addEventListener('click', ev => {
+  const t = ev.target.closest('[data-toggle],[data-delivered],[data-report]');
+  if (!t) return;
+  if (t.dataset.toggle) {
+    const key = t.dataset.toggle;
+    S.open.has(key) ? S.open.delete(key) : S.open.add(key);
+    if (key.startsWith('c:')) {
+      const dir = key.slice(2);
+      if (S.open.has(key) && !S.campDetail[dir]) loadCampaignDetail(dir); else renderCampaigns();
+    } else renderExercises();
+  } else if (t.dataset.delivered) {
+    loadDelivered(t.dataset.delivered);
+  } else if (t.dataset.report) {
+    const dir = t.dataset.report;
+    S.showReport.has(dir) ? S.showReport.delete(dir) : S.showReport.add(dir);
+    renderCampaigns();
+  }
+});
+$('since').addEventListener('change', e => {
+  S.since = e.target.value;
+  try { localStorage.setItem('atelier.since', S.since); } catch (_) { /* private mode */ }
+  refreshFast(); refreshSlow();
+});
+
+function tick() { $('clock').textContent = new Date().toLocaleTimeString([], { hour12: false }); }
+
+(function init() {
+  try { const s = localStorage.getItem('atelier.since'); if (s) { S.since = s; $('since').value = s; } } catch (_) { /* private mode */ }
+  tick(); setInterval(tick, 1000);
+  refreshCatalog(); refreshFast(); refreshSlow();
+  setInterval(refreshFast, 10000);
+  setInterval(refreshSlow, 30000);
+  setInterval(refreshCatalog, 300000);
+  // Running timers and grace countdowns move without new data.
+  setInterval(() => { if (S.ex && (S.ex.exercises || []).some(w => w.state === 'open' || w.state === 'grace')) renderExercises(); }, 5000);
+})();
+</script>
+</body>
+</html>

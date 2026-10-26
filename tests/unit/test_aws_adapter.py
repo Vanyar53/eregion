@@ -235,6 +235,32 @@ def test_an_eni_left_on_default_gets_the_operator_s_group_when_its_own_was_delet
     assert f.enis["eni-web1"]["groups"] == ["sg-solo2"]
 
 
+def test_an_unblock_waits_for_a_block_reusing_its_entries_on_the_same_acl(world, monkeypatch):
+    """The ACL's lock: i-db plans to reuse the entries i-web1's block holds; i-web1's
+    unblock, started right then, must wait — else it removes them (no other block holds
+    them yet) and i-db records a block that isn't there."""
+    import threading
+
+    from glorfindel.providers.aws import blocks
+    f, c, _ = world
+    c.block_suspicious_ip(ATTACKER, arn("i-web1"))
+    real, side = blocks.BlockMixin._held_numbers, {}
+
+    def held_then_unblock(ip, acl_id, but_rid=""):
+        out = real(ip, acl_id, but_rid)
+        if not but_rid and acl_id == "acl-app" and "thread" not in side:
+            side["thread"] = threading.Thread(
+                target=lambda: side.setdefault("unblock", c.unblock_ip(ATTACKER, arn("i-web1"))))
+            side["thread"].start()
+            side["thread"].join(timeout=1.0)          # it must be waiting for the ACL
+        return out
+    monkeypatch.setattr(blocks.BlockMixin, "_held_numbers", staticmethod(held_then_unblock))
+    out = c.block_suspicious_ip(ATTACKER, arn("i-db"))
+    side["thread"].join(timeout=10)
+    assert out["status"] == "blocked" and side["unblock"]["status"] == "unblocked"
+    assert c.verify_block_ip(ATTACKER, arn("i-db"))["verified"] is True
+
+
 @pytest.mark.parametrize("rid", [
     arn("i-web1", account="444455556666"), arn("i-web1", region="eu-central-1"), "i-web1",
     "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/web"])

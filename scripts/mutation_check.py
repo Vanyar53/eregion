@@ -1143,6 +1143,61 @@ AWS_ISO = "glorfindel/providers/aws/isolation.py"
 AWS_BLK = "glorfindel/providers/aws/blocks.py"
 AWS_CON = "glorfindel/providers/aws/connector.py"
 AWS_INVARIANTS = "tests/unit/test_invariants_aws.py"
+AWS_UNIT = "tests/unit/test_aws_adapter.py"
+MUTANTS += [
+    # Found by the machine on AWS while it was built.
+    ("M600", "a block reuses an entry the customer's allow now precedes (MC1)", AWS_BLK,
+     "                                  if eg == egress and n and n < first\n",
+     "                                  if eg == egress and n\n"),
+    ("M601", "a block is not read back: « blocked » with an allow ahead (MC1)", AWS_BLK,
+     "                    held_back = acl is not None and cut(acl, False, ip) and cut(acl, True, ip)",
+     "                    held_back = True"),
+    ("M602", "an ENI left on `default` gets the state's original back, a group of it deleted (MC1)", AWS_ISO,
+     '                self._put_back(eni, self._usable_original(eni, [rec, tag], e["vpc"], q), cur)',
+     "                self._put_back(eni, prior, cur)"),
+    ("M617", "the isolation verified on the ENIs as read before the swap (MC1)", AWS_ISO,
+     "            check = self._check_isolation(self._instance_enis(iid))      # as it is now",
+     "            check = self._check_isolation(enis)"),
+    # Named by the design note (docs/design/monde-aws.md) and the classes Azure had.
+    ("M603", "the quarantine turned off by the configuration is ignored: no fallback, but writes (MC1, I10)",
+     AWS_QUA, "        return bool(load_glorfindel_config().isolation.quarantine_nsg)", "        return True"),
+    ("M604", "Amazon's DNS and IMDS not declared by the isolation (MC1, H6)", AWS_ISO,
+     '"bypass": bypass, "platform_open": [e["eni"] for e in enis],', '"bypass": bypass, "platform_open": [],'),
+    ("M605", "an ENI someone left on `default` is not given its original back (MC1, U2)", AWS_ISO,
+     "            if prior and default and same_groups(cur, [default]) and not same_groups(prior, cur):\n"
+     "                # Taken out",
+     "            if False:\n                # Taken out"),
+    ("M606", "re-isolating an ENI left on `default` records `default` as its original (MC1, U2)", AWS_ISO,
+     "            if prior is not _UNKNOWN and default and same_groups(cur, [default]) and not same_groups(prior, cur):\n"
+     "                original = prior",
+     "            if False:\n                original = prior"),
+    ("M607", "an ENI already in quarantine: what it carries read as its original (MC1, S1)", AWS_ISO,
+     "            original = prior\n            if same_groups(cur, [qid]):",
+     "            original = cur\n            if same_groups(cur, [qid]):"),
+    ("M608", "an allow someone added to the quarantine group is left there (MC1)", AWS_QUA,
+     "            extra = [r for r in ingress if r not in wanted]", "            extra = []"),
+    ("M609", "a verification that can't read an ENI says isolated (MC1)", AWS_ISO,
+     '            except Exception:\n                unknown.append(e["eni"])\n        verified',
+     "            except Exception:\n                pass\n        verified"),
+    ("M610", "the isolation is not recorded (MC1, I8)", AWS_ISO,
+     "        _state._save_isolation_state(resource_id, state)\n        try:", "        try:"),
+    ("M611", "a release that failed clears the state (MC1, I8)", AWS_ISO,
+     "        if failed:\n            _state._save_isolation_state(resource_id, {",
+     "        if False:\n            _state._save_isolation_state(resource_id, {"),
+    ("M612", "no lock on the network ACL: an unblock removes the entries a concurrent block reuses (MC1, I11)",
+     AWS_BLK,
+     '                stack.enter_context(_locks._quarantine_lock(f"aws/acl/{acl_id}"))', "                pass"),
+    ("M613", "the instance's lock inoperative (MC1, the M17 of AWS)", AWS_CON,
+     '        with _locks._vm_lock(rid.rstrip("/").rsplit("/", 1)[-1]):\n            return method(self, *args, **kwargs)',
+     "        return method(self, *args, **kwargs)"),
+    ("M614", "an entry read as Glorfindel's whatever address it refuses (MC1)", AWS_BLK,
+     ' \\\n        and e.get("CidrBlock") == cidr', ""),
+    ("M615", "an unblock keeps the block recorded (MC1)", AWS_BLK,
+     "        _state._clear_block_state(resource_id, ip)\n", ""),
+    ("M616", "verify_isolation vouches for an instance of another account (MC1, I12)", AWS_CON,
+     'for _name in ("isolate_vm", "release_isolation", "verify_isolation", "verify_release",\n',
+     'for _name in ("isolate_vm", "release_isolation", "verify_release",\n'),
+]
 
 # Mutants measured by other tests than the invariants (their lot's own).
 TESTS = {mid: INSCRIPTION_TESTS for mid in ("M42", "M43", "M44", "M45", "M46", "M47")}
@@ -1216,6 +1271,9 @@ TESTS["M520"] = "tests/unit/test_bot.py"
 TESTS.update({f"M{n}": "tests/unit/test_glorfindel_host.py" for n in (521, 522, 523)})
 TESTS.update({f"M{n}": "tests/unit/test_host_deploy.py" for n in range(524, 529)})
 TESTS.update({f"M{n}": AWS_INVARIANTS for n in range(600, 650)})  # MC1
+TESTS["M617"] = AWS_UNIT              # MC1: a false alarm, no false claim
+# MC1: rare in the drawn sequences (M600, M601 found at 5 000) — their case written by hand too.
+TESTS.update({mid: f"{AWS_INVARIANTS} {AWS_UNIT}" for mid in ("M600", "M601", "M602", "M608", "M612", "M614")})
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
@@ -1299,7 +1357,7 @@ CONTROL += [
      "        if not known:\n            raise OriginalUnknown(",
      "        if not known:\n            return [self._default_sg(vpc)]\n            raise OriginalUnknown("),
     ("M636", "a block's entry numbered without looking at the customer's allows (MC1, control)", AWS_BLK,
-     "n = _free_number(acl, egress, _first_allow(acl, egress, ip))", "n = _free_number(acl, egress, 32767)"),
+     "n = _free_number(acl, egress, first)", "n = _free_number(acl, egress, 32767)"),
     ("M637", "an unblock removes entries another block holds (MC1, control)", AWS_BLK,
      "held = self._held_numbers(ip, acl_id, but_rid=resource_id)", "held = set()"),
     ("M638", "an unblock removes an entry whatever it says now (MC1, control)", AWS_BLK,

@@ -13,6 +13,8 @@ COPY pyproject.toml .
 COPY annatar/ annatar/
 COPY eregion_core/ eregion_core/
 COPY glorfindel/ glorfindel/
+# The Eregion console (`eregion console`): its API and pages, served from this image.
+COPY eregion_console/ eregion_console/
 # The analysis AI (IA0): the watch on H0 writes the report of the campaigns Orodruin
 # publishes (#167, analysis/hosted_report.py) — chromadb and litellm come with [glorfindel].
 COPY analysis/ analysis/

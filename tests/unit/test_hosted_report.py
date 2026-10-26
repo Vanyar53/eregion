@@ -112,7 +112,7 @@ def _window(rid, *, start=T, end=END, vm=VM):
 
 
 def _h0(tmp_path, *, scenarios=None, watch=(), state="done", pulled=True, windows=True,
-        attack=ATTACK.timestamp(), name="C1"):
+        attack=ATTACK.timestamp(), name="C1", start=T):
     """A campaign as H0 holds it once pulled: its manifest and its runs' reports under
     ``runs/campaigns/<id>/``, the runs' windows in ``runs/exercises/``, the watch's file."""
     runs = tmp_path / "h0" / "runs"
@@ -132,7 +132,8 @@ def _h0(tmp_path, *, scenarios=None, watch=(), state="done", pulled=True, window
             if windows:
                 (runs / "exercises").mkdir(exist_ok=True)
                 (runs / "exercises" / f"{s['run_id']}.json").write_text(
-                    json.dumps(_window(s["run_id"], vm=s["target_resource_id"] or VM)))
+                    json.dumps(_window(s["run_id"], vm=s["target_resource_id"] or VM, start=start,
+                                       end=END + (start - T))))
     if watch:
         (runs / "watch-account-creation-20261001T100300Z_debug.jsonl").write_text(
             "".join(json.dumps(r) + "\n" for r in watch))
@@ -871,13 +872,16 @@ def test_the_second_campaign_on_h0_says_what_changed_since_the_first(tmp_path, i
     """Two campaigns pulled from the channel, the same technique on the same VM: the second
     report holds the comparison, computed by the code from the index the first one filled —
     the decision of each run found in the watch's files, each in its own window."""
+    # Each campaign's id is when it started, and its windows open then (D2b: a campaign that
+    # came through the channel does not start after its first window).
     first, second = "20261001T100000Z", "20261002T100000Z"
-    later = T + timedelta(minutes=4)
+    day = timedelta(days=1)
+    later = T + day + timedelta(minutes=1)
     _h0(tmp_path, name=first, scenarios=[_scen(1, "R1")], watch=[
         _decision(at=T + timedelta(minutes=3), action="block_suspicious_ip", confidence=0.8),
-        _decision(at=later + timedelta(seconds=30), action="isolate_vm", confidence=0.78)])
+        _decision(at=later + timedelta(minutes=2), action="isolate_vm", confidence=0.78)])
     cdir, runs = _h0(tmp_path, name=second, scenarios=[_scen(1, "S1"), _scen(2, "S2", ttp="T1041")],
-                     attack=later.timestamp())
+                     attack=later.timestamp(), start=T + day)
     kw = {"model": "fake/model", "llm": _Model(), "index_path": tmp_path / "idx", "say": lambda m: None}
     assert hr.write_report(runs / "campaigns" / first, **kw) == "written"
     assert "*Aucune campagne précédente : " in (runs / "campaigns" / first / hr.REPORT).read_text()

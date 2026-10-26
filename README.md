@@ -20,9 +20,9 @@ Three agents form a closed loop: Annatar attacks, Gothmog breaks, Glorfindel det
 > **Observe-only by default** — Glorfindel recommends, you decide. Grant it autonomy per asset as you build trust.
 > With autonomous containment enabled: **~1 min to contain a ransomware VM, 21m29s to restored service** — the only human step is approving the backup restore.
 
-![The War Room in observe-only: a held recommendation waiting for the operator's verdict](docs/images/war-room-observation.png)
+![Glorfindel's page of the Eregion console in observe-only (then called the War Room): a held recommendation waiting for the operator's verdict](docs/images/war-room-observation.png)
 
-*The War Room in observe-only, on the Eregion bench (October 2026). An Internet scanner tried SSH on a VM: Glorfindel recommended blocking its IP (95 %), the human-only mode held it, and the card waits in **TO JUDGE** for the operator's verdict — right, wrong or unsure. The header counts the week; nothing was executed. The scanner's IP is masked.*
+*Glorfindel's page of the console in observe-only — then called the War Room —, on the Eregion bench (October 2026). An Internet scanner tried SSH on a VM: Glorfindel recommended blocking its IP (95 %), the human-only mode held it, and the card waits in **TO JUDGE** for the operator's verdict — right, wrong or unsure. The header counts the week; nothing was executed. The scanner's IP is masked.*
 
 ## How it works
 
@@ -42,7 +42,7 @@ flowchart LR
         EX --> VER["verify<br/>read back from Azure"]
         G -->|"held"| ESC["escalate"]
     end
-    H["Human<br/>War Room, Discord, CLI"]
+    H["Human<br/>console, Discord, CLI"]
     A2 --> VM
     LAW --> RP
     EX -->|"quarantine, deny, snapshot"| VM
@@ -185,7 +185,7 @@ glorfindel watch runs/ --rules glorfindel/rules/azure/detection_rules.yaml
 `GLORFINDEL_READ_ONLY=1` guarantees no write API is ever called; `human_only` holds every recommended action *before* the connector is touched (you see `mode_hold` escalations, never permission errors).
 
 **5. Read the recommendations** — the value is in what Glorfindel *would* have done:
-- **War Room** (`glorfindel war-room` → http://localhost:7007) — live cards, `OBSERVE-ONLY` badge, each escalation shows the held action + confidence + forensic steps. It listens on `127.0.0.1` by default (Docker publishes `127.0.0.1:7007`). To reach it from another machine, set `GLORFINDEL_WARROOM_TOKEN` first, then open `http://<host>:7007/?token=<token>` once (scripts: `Authorization: Bearer <token>`) — the War Room can trigger real Azure actions.
+- **The Eregion console** (`eregion console` → http://localhost:7007; formerly the War Room, `glorfindel war-room` still works) — an overview, then a page per agent: **Glorfindel** (live cards, `OBSERVE-ONLY` badge, each escalation with the held action + confidence + forensic steps, the cards to judge), **Annatar** and **Gothmog** (what they ran and what Glorfindel made of it — greyed until this host holds their runs), and **Config**. Glorfindel is always there; Annatar and Gothmog require it. It listens on `127.0.0.1` by default (Docker publishes `127.0.0.1:7007`). To reach it from another machine, set `EREGION_CONSOLE_TOKEN` first (its former name, `GLORFINDEL_WARROOM_TOKEN`, is still read), then open `http://<host>:7007/?token=<token>` once (scripts: `Authorization: Bearer <token>`) — the console can trigger real Azure actions. Design: [`docs/design/console.md`](docs/design/console.md).
 - **`glorfindel pending`** — same on the CLI.
 
 > ⚠ **For the first observe run, disable `data-exfiltration-blob`** — it fires on `PutBlobCount >= 1` from any RFC-1918 source, too noisy on real workloads. Set `enabled: false` on that rule in [`detection_rules.yaml`](glorfindel/rules/azure/detection_rules.yaml) until the allowlist hardening lands. The other rules are safe to leave on.
@@ -283,10 +283,10 @@ make annatar-shell      # 🔴 interactive shell — alias: ar
 make glorfindel-shell   # 🔵 interactive shell — alias: gf
 ```
 
-**Option C — Docker Compose (watch + War Room together)**
+**Option C — Docker Compose (watch + console together)**
 
 ```bash
-make glorfindel-start   # start watch + war-room → http://localhost:7007  (refuses to start without AZURE_SUBSCRIPTION_ID; ALLOW_NO_AZURE=1 for a demo)
+make glorfindel-start   # start watch + the console → http://localhost:7007  (refuses to start without AZURE_SUBSCRIPTION_ID; ALLOW_NO_AZURE=1 for a demo)
 make glorfindel-logs    # tail service logs
 make glorfindel-dev     # auto-reload on code change (docker compose watch)
 make glorfindel-stop    # stop all services
@@ -378,12 +378,12 @@ Three modes, resolved per asset. The default is intentionally conservative.
 
 Modes resolve per asset via `glorfindel-config.yaml` (fnmatch pattern matching). Run `non_disruptive` on test VMs, `human_only` on production assets, in the same `watch` session.
 
-**A configured mode is an intention; readiness decides.** However a VM becomes autonomous (its own switch in the War Room, a pattern, the global default, `watch --mode`), it acts alone only once Glorfindel has checked it can actually defend it: rights to isolate (permissions API), session cut available, no customer ALLOW evaluated before a block, a VM type it supports. The watch checks each VM in an autonomous mode as soon as discovery finds it, then at the posture cadence:
+**A configured mode is an intention; readiness decides.** However a VM becomes autonomous (its own switch in the console, a pattern, the global default, `watch --mode`), it acts alone only once Glorfindel has checked it can actually defend it: rights to isolate (permissions API), session cut available, no customer ALLOW evaluated before a block, a VM type it supports. The watch checks each VM in an autonomous mode as soon as discovery finds it, then at the posture cadence:
 
 | Readiness | What happens |
 |---|---|
 | Ready | Acts alone, nothing to confirm |
-| Reserves (e.g. no Run Command right: open sessions survive) | Stays in `human_only`; one card asks you to read and accept the reserves (War Room *Review & turn on*, or `glorfindel activate <vm>`) |
+| Reserves (e.g. no Run Command right: open sessions survive) | Stays in `human_only`; one card asks you to read and accept the reserves (console *Review & turn on*, or `glorfindel activate <vm>`) |
 | Not ready (no right to isolate, read-only credentials) | Stays in `human_only`, with the fix |
 
 A reserve that appears after activation puts the VM back in `human_only`, with an alert. So setting the global default to `non_disruptive` is safe for VMs created later: none of them acts alone without that check.
@@ -403,7 +403,7 @@ export GLORFINDEL_READ_ONLY=1   # Azure Reader + Log Analytics Reader SP
 glorfindel watch runs/           # detects, investigates, recommends — never writes
 ```
 
-The War Room and Discord bot still work — every escalation includes the recommended action and suggested forensic steps. Zero risk for a first evaluation: give a peer read-only access to your LAW and let them observe a week of Glorfindel decisions before granting Contributor.
+The console and Discord bot still work — every escalation includes the recommended action and suggested forensic steps. Zero risk for a first evaluation: give a peer read-only access to your LAW and let them observe a week of Glorfindel decisions before granting Contributor.
 
 The full read-only evaluation walkthrough (Reader SP → workspace config → observe) is the **Evaluate on your infrastructure** section near the top of this README.
 
@@ -473,7 +473,7 @@ glorfindel restore <resource_id> --yes          # trigger Azure Backup restore (
 glorfindel jobs <vm-name> [--refresh]           # snapshot/restore job status
 glorfindel list                                 # all VMs with active actions (isolation + blocked IPs)
 #
-# War Room buttons:   ↩️ Release (isolated) | ↩️ Unblock (blocked IP) | ⟳ Reset (both)
+# Console buttons:    ↩️ Release (isolated) | ↩️ Unblock (blocked IP) | ⟳ Reset (both)
 # TUI keyboard:       x:release  u:unblock  v:reset  r:restore
 glorfindel pending                              # list pending escalations
 glorfindel pending --watch                      # stay running, print new escalations as they arrive
@@ -485,7 +485,7 @@ glorfindel check-ttl                            # release isolations older than 
 glorfindel memory-stats                         # ChromaDB cycle count
 glorfindel bot                                  # start the interactive Discord bot
 glorfindel dashboard                            # full-screen TUI: resources + feed + escalations
-glorfindel war-room                             # web UI on http://localhost:7007 (pip install eregion[war-room]); loopback by default, GLORFINDEL_WARROOM_TOKEN to expose it
+eregion console [--sections annatar,gothmog]    # web console on http://localhost:7007 (pip install eregion[console]); loopback by default, EREGION_CONSOLE_TOKEN to expose it
 
 # Annatar
 annatar run annatar/scenarios/azure/ransomware-vm.yaml            # run a scenario (--dry-run available)
@@ -570,7 +570,7 @@ glorfindel/
   proposed_rules.py    → record/pending/approve()/reject(): detection rule proposal lifecycle
   detection_authoring.py → grounded LLM rule authoring (technique catalog + real LAW getschema) — reactive on a miss, proactive via propose-rules
   campaign_replay.py   → blue-side closing of the generative purple loop: auto-activation + replay
-  jobs.py              → snapshot/restore job state shared by CLI + War Room (active_jobs/<vm>.json)
+  jobs.py              → snapshot/restore job state shared by CLI + console (active_jobs/<vm>.json)
   rules/azure/
     detection_rules.yaml → rules only: KQL queries, TTP tags, backend references
                            assets: [auto] + monitoring_backends: [law-celebrimbor-amonsul] per rule (optional — omit for single-LAW)
@@ -579,7 +579,7 @@ glorfindel/
   memory.py            → CycleMemory: ChromaDB with confidence + past_cycles_used metadata
   cli.py               → watch, respond, restore, release, unblock, reset, snapshot, jobs, list,
                          pending, ack, audit, approve-rule, reject-rule, propose-rules, check-ttl,
-                         bot, dashboard, war-room
+                         bot, dashboard (war-room: hidden alias of `eregion console`)
   escalations.py       → persistent escalation log (~/.glorfindel/escalations.jsonl)
                          types: low_confidence, destructive_action, verification_failed,
                                 proposed_rule, proposed_action, posture_gap,
@@ -587,19 +587,25 @@ glorfindel/
                                 detection_blocked
   bot.py               → Discord bot: one thread per VM, Ack/Restore/Revert buttons, /pending command
   tui.py               → Rich full-screen TUI: resources + feed + escalations, keyboard shortcuts a/r/v
-  api.py               → FastAPI War Room: /api/state (autonomy_modes, read_only, capability),
-                         /api/feed (WS), /api/config, /api/audit, /api/discovered (fresh JSON per call),
-                         /api/pending/rules, /api/autonomy/{vm}, /api/config/autonomy/default,
-                         /api/action/{release,revert,restore,ack,approve-rule,approve/<esc_id>,snapshot/<vm>}
-  static/index.html    → War Room: expandable VM cards (compact + expanded), live feed, action buttons
-                         INFRASTRUCTURE banner: credentials regime (OBSERVE-ONLY ↔ ACTIVE) + autonomy mode,
-                         color language (orange = can act, blue = observes) — kills "no badge = active"
-                         per-card autonomy badge → capability popover; global mode dropdown in Config
-                         read-only guards (write buttons disabled in observe-only); OFFLINE badge (no heartbeat)
-                         parametrized Approve & execute (block_suspicious_ip in one click)
-                         BACKUP section per card: recovery point count, last backup age, 📸 Snapshot
-                         MONITORING zone: backends + discovered VMs + posture gaps + rules (clickable)
-                         Config panel: Azure credentials + LLM + global autonomy mode
+
+eregion_console/       → the Eregion console (`eregion console`, docs/design/console.md)
+  api.py               → FastAPI: the pages (/, /glorfindel, /annatar, /gothmog, /config), the token
+                         (EREGION_CONSOLE_TOKEN, else GLORFINDEL_WARROOM_TOKEN), Glorfindel's API
+                         (/api/state, /api/feed WS, /api/config, /api/audit, /api/discovered, /api/pending/rules,
+                         /api/autonomy/{vm}, /api/action/{release,revert,restore,ack,approve-rule,approve/<id>,…}),
+                         the injectors' (/api/exercises, /api/campaigns, /api/catalog, /api/channel, GET only),
+                         /api/sections; /atelier and /api/atelier/* redirect
+  sections.py          → which sections are active: Glorfindel always, Annatar and Gothmog when this host
+                         holds their runs, or as --sections / EREGION_CONSOLE_SECTIONS chooses
+  cli.py               → `eregion console [--host] [--port] [--sections]`
+  static/              → console.js + console.css (the shared header), overview.html, injector.html
+                         (Annatar's and Gothmog's pages), exercises.js (what Glorfindel did in an exercise),
+                         glorfindel.html — TO JUDGE (the only place a card is judged), expandable VM cards,
+                         live feed, action buttons; INFRASTRUCTURE banner: credentials regime
+                         (OBSERVE-ONLY ↔ ACTIVE) + autonomy mode; per-card autonomy badge → capability
+                         popover; read-only guards; OFFLINE badge; parametrized Approve & execute;
+                         BACKUP section per card; DETECT / PROTECT / RECOVER nodes; /config: Azure, LLM,
+                         global autonomy mode, the sections
 
 annatar/
   runner/engine.py    → setup → integrity check → attack → emit attack_started → purple-team feedback thread

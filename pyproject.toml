@@ -48,12 +48,13 @@ glorfindel = [
     "requests>=2.31",
     "discord.py>=2.3",
 ]
-war-room = [
+console = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.27",
 ]
+war-room = ["eregion[console]"]   # former name of the console (26/10), kept for existing installs
 dev = [
-    "eregion[annatar,glorfindel,war-room]",
+    "eregion[annatar,glorfindel,console]",
     "pytest>=8.0",
     "pytest-cov>=5.0",
     "pytest-mock>=3.12",
@@ -66,6 +67,7 @@ dev = [
 annatar = "annatar.cli:cli"
 glorfindel = "glorfindel.cli:cli"
 gothmog = "gothmog.cli:cli"
+eregion = "eregion_console.cli:cli"
 
 [project.urls]
 Homepage = "https://github.com/Vanyar53/eregion"
@@ -73,7 +75,12 @@ Issues = "https://github.com/Vanyar53/eregion/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["annatar*", "glorfindel*", "gothmog*", "scenarios*", "eregion_core*", "analysis*"]
+include = ["annatar*", "glorfindel*", "gothmog*", "scenarios*", "eregion_core*", "analysis*",
+           "eregion_console*"]
+
+# The console's pages: without them, an install that is not editable serves no page.
+[tool.setuptools.package-data]
+eregion_console = ["static/*"]
 
 [tool.ruff]
 target-version = "py311"   # = requires-python : flags 3.12-only syntax

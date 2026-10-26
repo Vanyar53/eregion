@@ -38,7 +38,7 @@ The report is visible in the watch's log (``make glorfindel-host-logs``) and on 
 
 The same pass pulls the report of each run launched alone from Orodruin (``annatar run``,
 ``gothmog run``, #193) into ``runs/<run_id>.json``, where the console of the atelier reads
-its verdict (glorfindel/api.py): read against its shape first (H-1,
+its verdict (eregion_console/api.py): read against its shape first (H-1,
 analysis/campaign_schema.py), never over a report of a run of this host
 (eregion_core/exercise_channel.py ``pull_runs``). Why one was not pulled is said once.
 """

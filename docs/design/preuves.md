@@ -543,7 +543,86 @@ avalé. Trois mutants de plus, M545–M547 :
 
 Avec M280–M289 et M520–M528 de M-3, venus de main, tous attrapés au premier tour (26/10),
 aucun périmé.
+
+D2b a repris les trois points que les relectures de D-2 avaient laissés. Une tendance met
+désormais ses runs face à face dans l'ordre où ils ont été joués (le début de leur campagne,
+gardé dans l'index, ou son identifiant quand c'est une date ; le `seq` dans une campagne) : une
+paire de runs antérieurs ne sert plus d'alibi. Le début d'une campagne venue du canal est borné
+par ce que H0 a vu (la première fenêtre crue de ses runs, le marqueur `.pulled`) : une date
+forgée ne change plus la campagne précédente. « au » et « the » seuls n'ouvrent plus une plage
+de dates ; « au 21 et au 23 », « from the 21 to the 23 », « on the 21st and 23rd » en sont.
+M540–M542, M546 et M547 suivent le code corrigé. Dix-sept mutants, M650–M666, mesurés par le
+même fichier :
+
+| Mutant | Défaut réinjecté | Effet |
+|---|---|---|
+| M650 | ordre des runs d'une tendance non lu | une paire de runs antérieurs sert d'alibi à « de l'isolement au blocage » |
+| M651 | runs face à face à rebours du temps | « de 120 s (19/10) à 91,9 s (21/10) » barré |
+| M652 | début de campagne de l'index non lu avec le run | l'ordre retombe sur l'inconnu |
+| M653 | runs de cette campagne sans son début | le run d'une campagne postérieure passe pour antérieur |
+| M654 | identifiant daté ignoré | des runs indexés sans début restent sans ordre |
+| M655 | deux runs d'une campagne non ordonnés par `seq` | l'alibi revient dans une seule campagne |
+| M656 | début du manifeste après la première fenêtre cru | une date forgée choisit une campagne postérieure |
+| M657 | début du manifeste bien avant la première fenêtre cru | une date forgée saute la vraie précédente |
+| M658 | début du manifeste après le tirage par H0 cru | sans fenêtre, rien ne borne la date |
+| M659 | début refusé tu | le lecteur ne sait pas que la date a été écartée |
+| M660 | début refusé gardé | la date forgée choisit quand même |
+| M661 | fenêtre refusée par H-1 prise pour borne | une fenêtre forgée couvre une date forgée |
+| M662 | « au » ouvre une plage | « tombe au 12, le 23 octobre » gardé |
+| M663 | « the » seul ouvre une plage | « by the 12, 23 October » gardé |
+| M664 | « au 21 et au 23 octobre » lu comme des nombres | une tendance juste barrée |
+| M665 | « au », « aux », « the » refusés dans la suite d'une plage | « From the 21 to the 23 October » barré |
+| M666 | jours sans « st », « nd », « rd » | « On the 21st and 23rd October » barré |
+
+La relecture de D2b a trouvé un bug : une date que le manifeste donne et qu'aucune date UTC ne
+tient (« 9999-12-31T23:59:59-05:00 », l'an 10000 en UTC) était bien refusée, puis le message
+qui le disait levait, et le rapport n'était jamais écrit. Elle a aussi noté qu'un début devenu
+inconnu laissait l'ancien dans l'index (ChromaDB fusionne les métadonnées d'une ligne), et que
+la condition « deux runs de cette campagne ne font pas une tendance » n'était pas mesurée.
+Trois mutants de plus :
+
+| Mutant | Défaut réinjecté | Effet |
+|---|---|---|
+| M667 | date hors de portée UTC non rattrapée | le rapport de la campagne n'est jamais écrit |
+| M668 | début inconnu absent de la ligne | le début forgé d'une indexation antérieure reste, et peut être choisi |
+| M669 | deux runs de cette campagne face à face dans une tendance | un sens pris dans la seule campagne passe pour une tendance |
+
+Avec M163, M260–M279, M510–M519 et M530–M547, les soixante-neuf attrapés au premier tour
+(26/10), aucun périmé.
 Détail : [`../analysis.md`](../analysis.md), « Ce qui a changé depuis la campagne précédente ».
+
+### L'hôte de Glorfindel : référence épinglée, verrou, un environnement par conteneur, boutons (M-3)
+
+H0 déployait la tête de `main`, sans verrou de dépendances ; les trois conteneurs recevaient tous
+les secrets ; un bouton Discord obéissait à qui cliquait. Dix-neuf mutants (dix du lot, neuf
+de sa relecture), mesurés par `tests/unit/test_bot.py`, `test_glorfindel_host.py`,
+`test_host_deploy.py` et `test_dependency_lock.py` :
+
+| Mutant | Défaut réinjecté | Effet |
+|---|---|---|
+| M280 | un bouton Discord obéit à qui clique | n'importe qui sur le serveur lance un Restore |
+| M281 | sans liste d'autorisés, tout clic passe | les boutons ouverts par défaut |
+| M282 | n'importe quel rôle autorise un clic | un rôle sans rapport suffit |
+| M283 | un clic refusé n'est pas journalisé | une tentative ne laisse pas de trace |
+| M284 | le jeton du bot revient à chaque conteneur | un conteneur compromis a le bot |
+| M285 | la War Room reçoit les clés des modèles | elle n'en appelle aucun et les tient quand même |
+| M286 | la watch ne connaît le bot que par son jeton | chaque carte part aussi au webhook |
+| M287 | H0 déploie une branche : toute révision se résout | la tête de `main` revient sur l'hôte |
+| M288 | l'image ne porte pas sa référence | on ne sait plus ce qui tourne |
+| M289 | l'image résout ses dépendances sans verrou | une version mineure change les décisions |
+| M520 | un clic refusé est dit, puis passe à son action | le refus n'empêche rien |
+| M521 | un salon Discord seul fait taire le webhook, sans bot | les escalades ne partent nulle part |
+| M522 | la watch et la War Room reçoivent le jeton du bot, pas seulement sa présence | le secret voyage |
+| M523 | la watch compte un salon seul comme une alerte | l'avertissement « aucune alerte » se tait |
+| M524 | `REF=--checkout-only` atteint `deploy.sh` comme une option | un checkout sans reconstruction, dit comme un déploiement |
+| M525 | une `REF` exportée dans l'environnement est déployée en silence | un nom générique choisit ce qui tourne |
+| M526 | make développe une `REF` refusée en l'exportant | `$(shell …)` s'exécute |
+| M527 | la ligne ssh recopie `REF` dans la recette | make la développe avant qu'elle soit vérifiée |
+| M528 | règles approuvées sur la VM que la référence change : « gardé », puis git refuse | l'opérateur répare et efface les règles |
+
+Dix-neuf sur dix-neuf attrapés, trois tours (26/10, #202). Détail :
+[`../../infra/glorfindel-host/README.md`](../../infra/glorfindel-host/README.md), « Ce que la VM
+exécute » et « Redéployer H0 après M-3 ».
 
 ## Ce que les invariants ont trouvé
 

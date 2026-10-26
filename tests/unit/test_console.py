@@ -1,0 +1,282 @@
+"""The Eregion console (docs/design/console.md): its pages, the former addresses, the token and
+its former name, and the sections — Glorfindel always, Annatar and Gothmog when this host
+holds their runs, or as --sections chooses.
+
+No Azure, no LLM: runs/ is a tmp directory, the windows are written there.
+"""
+from __future__ import annotations
+
+import json
+from datetime import datetime, timedelta, timezone
+
+import pytest
+
+pytest.importorskip("fastapi")
+pytest.importorskip("httpx")
+
+from click.testing import CliRunner  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
+
+import eregion_console.api as api  # noqa: E402
+from eregion_console import sections  # noqa: E402
+
+PAGES = ("/", "/glorfindel", "/annatar", "/gothmog", "/config")
+NOW = datetime.now(timezone.utc)
+
+
+@pytest.fixture()
+def runs(tmp_path, monkeypatch):
+    """runs/ in tmp, the console's working directory; the windows where the conftest puts them."""
+    monkeypatch.delenv("GLORFINDEL_WARROOM_TOKEN", raising=False)
+    monkeypatch.chdir(tmp_path)
+    d = tmp_path / "runs"
+    d.mkdir()
+    return d
+
+
+@pytest.fixture()
+def client(runs):
+    return TestClient(api.app)
+
+
+def _window(tmp_path, run_id, injector, kind="technique"):
+    exercises = tmp_path / "exercises"
+    exercises.mkdir(exist_ok=True)
+    start = NOW - timedelta(minutes=30)
+    (exercises / f"{run_id}.json").write_text(json.dumps({
+        "run_id": run_id, "injector": injector, "kind": kind, "experiment": "x y",
+        "targets": ["/subscriptions/s/resourcegroups/rg/providers/microsoft.compute/virtualmachines/vm-a"],
+        "start": start.isoformat(), "end": (start + timedelta(minutes=3)).isoformat(),
+        "expires": (start + timedelta(hours=2)).isoformat()}))
+
+
+# ── Pages ─────────────────────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("path, page", [("/", "overview.html"), ("/glorfindel", "glorfindel.html"),
+                                        ("/config", "glorfindel.html"), ("/annatar", "injector.html"),
+                                        ("/gothmog", "injector.html")])
+def test_each_section_has_its_page(client, path, page):
+    r = client.get(path)
+    assert r.status_code == 200
+    assert r.text == (api._STATIC / page).read_text(encoding="utf-8")
+    assert 'id="console-header"' in r.text and "/static/console.js" in r.text
+
+
+def test_pages_and_their_scripts_revalidate_on_each_load(client):
+    """A page left in the browser's cache showed the old console on H0 after a redeployment
+    (#197): pages and scripts revalidate (ETag), the API is left alone."""
+    for path in (*PAGES, "/static/console.js"):
+        assert client.get(path).headers.get("cache-control") == "no-cache", path
+    assert "cache-control" not in client.get("/api/sections").headers
+
+
+# ── The former addresses ──────────────────────────────────────────────────────────────
+
+def test_the_atelier_leads_to_the_overview_with_its_query(client):
+    """M400, M401: a bookmark of the atelier still opens the console."""
+    r = client.get("/atelier?since=30d", follow_redirects=False)
+    assert r.status_code == 308 and r.headers["location"] == "/?since=30d"
+    assert client.get("/atelier", follow_redirects=False).headers["location"] == "/"
+
+
+def test_the_atelier_api_redirects_to_its_resource_with_its_query(client):
+    """Until 1.0: a page left in a browser's cache still reads (M401)."""
+    r = client.get("/api/atelier/exercises?since=7d", follow_redirects=False)
+    assert r.status_code == 308 and r.headers["location"] == "/api/exercises?since=7d"
+    r = client.get("/api/atelier/channel/detections/run-a", follow_redirects=False)
+    assert r.headers["location"] == "/api/channel/detections/run-a"
+    assert client.get("/api/atelier/exercises?since=7d").json() == {"exercises": []}
+
+
+def test_a_run_opens_in_the_section_of_its_injector(client, runs, tmp_path):
+    """A card knows only its run id: /runs/<id> finds the injector in the window, else in the
+    report (Gothmog's names itself), else Annatar."""
+    _window(tmp_path, "g-1", "gothmog", kind="fault")
+    _window(tmp_path, "a-1", "annatar")
+    (runs / "g-2.json").write_text(json.dumps({"metrics": {"injector": "gothmog"}}))
+    go = lambda rid: client.get(f"/runs/{rid}", follow_redirects=False)  # noqa: E731
+    assert go("g-1").headers["location"] == "/gothmog?run=g-1"
+    assert go("a-1").headers["location"] == "/annatar?run=a-1"
+    assert go("g-2").headers["location"] == "/gothmog?run=g-2"
+    assert go("unknown").headers["location"] == "/annatar?run=unknown"
+    assert go("g-1").status_code == 302
+
+
+def test_a_run_id_is_a_plain_name(client):
+    """M405: the id names a file (the window, the report) — never a path."""
+    for rid in ("..x", "a..b", "%2E%2E"):     # a bare ".." never reaches the route: the client resolves it
+        assert client.get(f"/runs/{rid}", follow_redirects=False).status_code == 400, rid
+
+
+# ── The token, and its former name ────────────────────────────────────────────────────
+
+def test_every_page_is_behind_the_token(runs, monkeypatch):
+    """M404: a new page is no way around the token — a browser gets the token page, a
+    script the JSON refusal."""
+    monkeypatch.setenv("EREGION_CONSOLE_TOKEN", "s3cret")
+    c = TestClient(api.app)
+    for path in (*PAGES, "/atelier", "/runs/a-1", "/api/sections", "/api/exercises"):
+        browser = c.get(path, headers={"accept": "text/html"}, follow_redirects=False)
+        assert browser.status_code == 401 and 'name="token"' in browser.text, path
+        script = c.get(path, headers={"accept": "application/json"}, follow_redirects=False)
+        assert script.status_code == 401 and "error" in script.json(), path
+    assert c.get("/", headers={"Authorization": "Bearer s3cret"}).status_code == 200
+
+
+def test_the_token_page_names_the_console_and_its_variable(runs, monkeypatch):
+    monkeypatch.setenv("EREGION_CONSOLE_TOKEN", "s3cret")
+    page = TestClient(api.app).get("/", headers={"accept": "text/html"}).text
+    assert "EREGION_CONSOLE_TOKEN" in page and 'lang="en"' in page
+    assert "War Room" not in page
+
+
+@pytest.mark.parametrize("new, old, works, refused", [
+    ("s3cret", None, "s3cret", "other"),       # the new name
+    (None, "legacy", "legacy", "other"),       # the former name alone (H0's host.env)
+    ("", "legacy", "legacy", ""),              # compose passes ${VAR:-}: empty is not set (M402)
+    ("s3cret", "legacy", "s3cret", "legacy"),  # both: the new one wins
+])
+def test_the_token_under_its_new_name_or_its_former_one(runs, monkeypatch, new, old, works, refused):
+    for name, value in (("EREGION_CONSOLE_TOKEN", new), ("GLORFINDEL_WARROOM_TOKEN", old)):
+        if value is None:
+            monkeypatch.delenv(name, raising=False)
+        else:
+            monkeypatch.setenv(name, value)
+    assert api.console_token() == works
+    c = TestClient(api.app)
+    assert c.get("/api/sections", headers={"Authorization": f"Bearer {works}"}).status_code == 200
+    assert c.get("/api/sections", headers={"Authorization": f"Bearer {refused}"}).status_code == 401
+
+
+def test_two_tokens_that_differ_are_said_at_startup(runs, monkeypatch, capsys):
+    monkeypatch.setenv("EREGION_CONSOLE_TOKEN", "new")
+    monkeypatch.setenv("GLORFINDEL_WARROOM_TOKEN", "old")
+    with TestClient(api.app):
+        pass
+    assert "the console takes EREGION_CONSOLE_TOKEN" in capsys.readouterr().out
+
+
+# ── Sections ──────────────────────────────────────────────────────────────────────────
+
+def _status(client):
+    return {s["id"]: s for s in client.get("/api/sections").json()["sections"]}
+
+
+def test_glorfindel_is_always_active_even_unconfigured(client):
+    """Glorfindel is the product: active before anything is set up — its page says what is
+    missing; the injectors are greyed on a host without their runs."""
+    s = _status(client)
+    assert s["glorfindel"]["active"] is True and s["glorfindel"]["always"] is True
+    assert s["glorfindel"]["setup"]["configured"] is False
+    assert s["annatar"]["active"] is False and s["gothmog"]["active"] is False
+
+
+def test_an_injector_is_active_once_this_host_holds_its_runs(client, runs, tmp_path):
+    """A window, a run report or a campaign of the injector; a purged window's tombstone
+    names no injector and counts for none."""
+    (tmp_path / "exercises").mkdir()
+    (tmp_path / "exercises" / "old.json").write_text(json.dumps({"run_id": "old", "purged_at": "x"}))
+    assert _status(client)["annatar"]["active"] is False
+    _window(tmp_path, "g-1", "gothmog", kind="fault")
+    sections._cache["key"] = None
+    s = _status(client)
+    assert s["gothmog"]["active"] is True and s["gothmog"]["found"]["windows"] == 1
+    assert s["annatar"]["active"] is False
+    (runs / "campaigns" / "c1").mkdir(parents=True)
+    (runs / "campaigns" / "c1" / "manifest.json").write_text("{}")
+    sections._cache["key"] = None
+    assert _status(client)["annatar"]["active"] is True
+
+
+def test_sections_chosen_at_start_win_and_never_remove_glorfindel(client, runs, tmp_path, monkeypatch):
+    """M406, M407: --sections fixes the injectors shown, whatever the host holds; Glorfindel
+    stays, listed or not."""
+    _window(tmp_path, "g-1", "gothmog", kind="fault")
+    monkeypatch.setenv("EREGION_CONSOLE_SECTIONS", "annatar")
+    body = client.get("/api/sections").json()
+    s = {x["id"]: x for x in body["sections"]}
+    assert s["annatar"]["active"] is True and s["annatar"]["why"] == "listed in --sections"
+    assert s["gothmog"]["active"] is False
+    assert s["glorfindel"]["active"] is True
+    assert body["override"] == ["annatar"]
+
+
+def test_an_unknown_section_is_refused_by_name(monkeypatch):
+    monkeypatch.setenv("EREGION_CONSOLE_SECTIONS", "annatar,saruman")
+    with pytest.raises(ValueError, match="saruman"):
+        sections.override()
+    with pytest.raises(ValueError, match="saruman"):
+        api.serve()                      # refused before anything listens
+    monkeypatch.setenv("EREGION_CONSOLE_SECTIONS", "glorfindel, ANNATAR")
+    assert sections.override() == {"annatar"}
+
+
+def test_the_sections_say_whether_the_console_only_reads(client, monkeypatch):
+    monkeypatch.setenv("GLORFINDEL_READ_ONLY", "1")
+    assert client.get("/api/sections").json()["read_only"] is True
+
+
+# ── What each injector's section reads ────────────────────────────────────────────────
+
+def test_the_exercises_of_one_injector(client, tmp_path):
+    _window(tmp_path, "g-1", "gothmog", kind="fault")
+    _window(tmp_path, "a-1", "annatar")
+    ids = lambda q: [w["run_id"] for w in client.get(f"/api/exercises{q}").json()["exercises"]]  # noqa: E731
+    assert sorted(ids("")) == ["a-1", "g-1"]
+    assert ids("?injector=gothmog") == ["g-1"]
+    assert ids("?injector=annatar") == ["a-1"]
+
+
+def test_the_catalog_of_one_kind(client):
+    kinds = lambda q: {e["kind"] for e in client.get(f"/api/catalog{q}").json()["entries"]}  # noqa: E731
+    assert kinds("") == {"technique", "fault"}
+    assert kinds("?kind=technique") == {"technique"}
+    assert kinds("?kind=fault") == {"fault"}
+
+
+# ── The command ───────────────────────────────────────────────────────────────────────
+
+def test_eregion_console_starts_the_console(monkeypatch):
+    from eregion_console import cli
+    served = []
+    monkeypatch.setattr(api, "serve", lambda host, port: served.append((host, port)))
+    r = CliRunner().invoke(cli.cli, ["console", "--sections", "gothmog", "--port", "7010"])
+    assert r.exit_code == 0, r.output
+    assert served == [("127.0.0.1", 7010)]
+    assert sections.override() == {"gothmog"}
+
+
+def test_eregion_console_reaches_the_managed_identity(monkeypatch):
+    """M408: compose passes AZURE_CLIENT_ID & co. empty on H0. The glorfindel command drops
+    them; `eregion console` did not, and azure-identity stopped on an empty secret before the
+    VM's managed identity — every read of the console failed (H0, 26/10: no NSG, no vault,
+    every window NOT ENROLLED, the return channel unreadable). A real one stays."""
+    import os
+    from eregion_console import cli
+    monkeypatch.setenv("AZURE_CLIENT_ID", "")
+    monkeypatch.setenv("AZURE_CLIENT_SECRET", " ")
+    monkeypatch.setenv("AZURE_TENANT_ID", "tenant")
+    seen = {}
+    monkeypatch.setattr(api, "serve", lambda host, port: seen.update(
+        {k: os.environ.get(k) for k in ("AZURE_CLIENT_ID", "AZURE_CLIENT_SECRET", "AZURE_TENANT_ID")}))
+    r = CliRunner().invoke(cli.cli, ["console"])
+    assert r.exit_code == 0, r.output
+    assert seen == {"AZURE_CLIENT_ID": None, "AZURE_CLIENT_SECRET": None, "AZURE_TENANT_ID": "tenant"}
+
+
+def test_eregion_console_refuses_an_unknown_section(monkeypatch):
+    from eregion_console import cli
+    monkeypatch.setattr(api, "serve", lambda **k: pytest.fail("served"))
+    r = CliRunner().invoke(cli.cli, ["console", "--sections", "saruman"])
+    assert r.exit_code != 0 and "saruman" in r.output
+
+
+def test_glorfindel_war_room_is_still_the_console(monkeypatch):
+    """The former command keeps working (H0, habits, docs of the time), hidden from the help."""
+    from glorfindel.cli import cli as gcli
+    served = []
+    monkeypatch.setattr(api, "serve", lambda host, port: served.append((host, port)))
+    r = CliRunner().invoke(gcli, ["war-room"])
+    assert r.exit_code == 0, r.output
+    assert served == [("127.0.0.1", 7007)]
+    assert "war-room" not in CliRunner().invoke(gcli, ["--help"]).output

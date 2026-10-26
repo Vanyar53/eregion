@@ -329,7 +329,8 @@ def test_fewer_draws_than_required_hold_the_action():
 
 def test_an_unstable_decision_card_is_approvable_in_one_click():
     """A human judging the card may run the first draw's action, like every held type."""
-    from glorfindel import api, escalations
+    from eregion_console import api
+    from glorfindel import escalations
     assert "unstable_decision" in api._APPROVABLE_TYPES
     assert "unstable_decision" in escalations._ESCALATION_LABELS
 

@@ -32,7 +32,7 @@ flowchart LR
         VER --> ST["store_cycle<br/>ChromaDB + journal"]
         G -->|retenu| ESC["escalade"]
     end
-    H["Humain<br/>War Room, Discord, CLI"]
+    H["Humain<br/>console, Discord, CLI"]
     A2 --> VM
     LAW --> RP
     EX -->|"quarantaine, deny, snapshot"| VM
@@ -67,14 +67,14 @@ quand c'est le LLM qui les a écrites, elles restent des propositions qu'un huma
 
 ## Processus et état partagé
 
-Le watch, la War Room et la CLI sont trois processus distincts sur l'hôte de l'opérateur. Ils
+Le watch, la console et la CLI sont trois processus distincts sur l'hôte de l'opérateur. Ils
 partagent l'état local et ne touchent une VM qu'un à la fois.
 
 ```mermaid
 flowchart TB
     subgraph Host["Hôte de l'opérateur"]
         W["watch — conteneur<br/>RulePoller, découverte,<br/>préparation, réaffirmation"]
-        WR["War Room — conteneur<br/>127.0.0.1:7007, jeton optionnel"]
+        WR["Console — conteneur<br/>127.0.0.1:7007, jeton optionnel"]
         CLI["CLI glorfindel"]
         S[("~/.glorfindel<br/>isolation/ et blocks/ par VM<br/>escalations.jsonl, readiness.json<br/>locks/")]
     end
@@ -135,7 +135,7 @@ largement, une dépendance qui tombe (modèle, API du cloud, télémétrie, conf
 
 Le LLM propose ; une suite de gardes déterministes décide si l'action part seule. Une action
 destructive n'est jamais autonome, quel que soit le mode. Chaque garde qui retient une action
-autonome donne son propre type d'escalade, que la War Room affiche. Une VM retenue parce
+autonome donne son propre type d'escalade, que la console affiche. Une VM retenue parce
 qu'elle n'est pas prête reçoit en plus, du contrôle de préparation, une carte `readiness_hold`.
 
 ```mermaid
@@ -341,7 +341,7 @@ Une même boucle pour une technique et pour une panne.
 | Injecter | `annatar/executors/` ; `gothmog/engines/chaos_studio.py` | Stratus `detonate`, test Atomic, capacité Caldera | expérience ou objet de panne |
 | Observer | `annatar/collectors/`, signaux (`attack_started` ; `fault_started` dans `runs/gothmog/`, hors de ce que la watch lit) | — | sondes pendant l'expérience |
 | Revenir | `annatar clean`, `glorfindel release` ; retour d'une panne vérifié par sonde, repli `start_vm` | Stratus `revert`, `cleanup` | Chaos Toolkit `rollbacks` |
-| Verdict | `annatar/runner/report.py`, `gothmog report`, War Room | — | — |
+| Verdict | `annatar/runner/report.py`, `gothmog report`, la console (Annatar, Gothmog) | — | — |
 
 ### L'arborescence visée
 

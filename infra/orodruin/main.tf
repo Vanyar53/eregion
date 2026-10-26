@@ -19,9 +19,9 @@ terraform {
 
 # subscription_id : jamais en dur (repo public). var.subscription_id, sinon ARM_SUBSCRIPTION_ID.
 provider "azurerm" {
-  # Le compte du canal n'a pas de clé partagée, et l'opérateur n'a pas de droit sur ses
-  # données : le provider ne touche que l'API de contrôle (le conteneur est créé par
-  # storage_account_id). Sans ce réglage, la création du compte a attendu ~4 min sur la
+  # Le compte du canal n'a pas de clé partagée, et l'opérateur n'a de droit sur ses données
+  # que sur `exercises` (channel_operator, pour l'arrêt d'urgence) : le provider ne touche que
+  # l'API de contrôle (le conteneur est créé par storage_account_id). Sans ce réglage, la création du compte a attendu ~4 min sur la
   # vérification du data plane (19/10), le compte déjà créé mais hors de l'état.
   features {
     storage {
@@ -339,6 +339,17 @@ resource "azurerm_role_assignment" "channel_writer" {
   scope                = azurerm_storage_container.exercises.id
   role_definition_name = "Storage Blob Data Contributor"
   principal_id         = azurerm_linux_virtual_machine.host.identity[0].principal_id
+}
+
+# L'arrêt d'urgence (M-1) ferme les fenêtres encore ouvertes depuis le az login de l'opérateur :
+# l'identité d'Orodruin vient d'être révoquée, elle ne peut plus les fermer. L'opérateur = qui
+# applique ce module (déjà propriétaire de l'abonnement). Ce conteneur seulement, jamais `watch`.
+data "azurerm_client_config" "operator" {}
+
+resource "azurerm_role_assignment" "channel_operator" {
+  scope                = azurerm_storage_container.exercises.id
+  role_definition_name = "Storage Blob Data Contributor"
+  principal_id         = data.azurerm_client_config.operator.object_id
 }
 
 resource "azurerm_role_assignment" "channel_watch_reader" {

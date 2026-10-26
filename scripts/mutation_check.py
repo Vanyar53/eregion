@@ -1113,6 +1113,17 @@ MUTANTS = [
      CREP, r"(?:(?:le|du|des|au|aux|the)\s+)?", r"(?:(?:le|du|des)\s+)?"),
     ("M666", "a day of a range takes no st, nd, rd: « on the 21st and 23rd October » barred (D2b)", CREP,
      '_TH = r"(?:er|st|nd|rd|th)?"', '_TH = r"(?:er)?"'),
+    # D2b, after its review: a date no UTC date holds is said, never raised; an unknown start
+    # replaces an indexed one; two runs of this campaign make no trend.
+    ("M667", "a manifest's date of year 10000 makes the report raise (D2b)", CREP,
+     "    except (ValueError, OverflowError, OSError):\n        return str(read)[:40]",
+     "    except ():\n        return str(read)[:40]"),
+    ("M668", "an unknown start is left out of the row: the start an earlier indexing gave stays (D2b)", CREP,
+     '        meta["campaign_started"] = float(campaign.started) if campaign.started is not None else ""\n',
+     '        if campaign.started is not None:\n            meta["campaign_started"] = float(campaign.started)\n'),
+    ("M669", "two runs of this campaign face each other in a trend (D2b)", CREP,
+     "            if x is y or x.ttp != y.ttp or (x.run_id in own and y.run_id in own):\n",
+     "            if x is y or x.ttp != y.ttp:\n"),
     # M-3 (#183) — the host of Glorfindel: Discord buttons check who clicks (closed by
     # default), each container gets only its secrets, H0 deploys a named reference whose
     # image carries it, and the image installs from the lock.
@@ -1242,7 +1253,7 @@ TESTS.update({f"M{n}": "tests/unit/test_campaign_changes.py" for n in range(260,
 TESTS.update({f"M{n}": "tests/unit/test_campaign_changes.py" for n in range(510, 520)})  # D-2, review
 TESTS.update({f"M{n}": "tests/unit/test_campaign_changes.py" for n in range(530, 540)})  # D-2, 2nd review
 TESTS.update({f"M{n}": "tests/unit/test_campaign_changes.py" for n in range(540, 548)})  # D-2, 3rd, 4th reviews
-TESTS.update({f"M{n}": "tests/unit/test_campaign_changes.py" for n in range(650, 667)})  # D2b
+TESTS.update({f"M{n}": "tests/unit/test_campaign_changes.py" for n in range(650, 670)})  # D2b
 TESTS.update({f"M{n}": "tests/unit/test_bot.py" for n in range(280, 284)})
 TESTS.update({f"M{n}": "tests/unit/test_glorfindel_host.py" for n in range(284, 287)})
 TESTS.update({f"M{n}": "tests/unit/test_host_deploy.py" for n in (287, 288)})

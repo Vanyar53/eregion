@@ -9,7 +9,7 @@ by ``verify``. And the index of past campaigns: put in again, idempotent, never 
 facts a report saw. A fake model (no call), an index in memory (no embedding, no download).
 D2b: the runs a trend cites face each other in the order they were played, when it is known;
 a campaign that came through the channel has its manifest's start checked against what H0
-saw. Mutants M260–M279, M510–M519, M530–M547 and M650–M666 (scripts/mutation_check.py) are
+saw. Mutants M260–M279, M510–M519, M530–M547 and M650–M669 (scripts/mutation_check.py) are
 measured here."""
 import json
 import os
@@ -36,7 +36,9 @@ class _Index:
         return self
 
     def upsert(self, ids, documents, metadatas):
-        self.rows.update(zip(ids, (dict(m) for m in metadatas)))
+        # as chromadb (1.5): a row's metadata is merged, a key left out kept
+        for i, m in zip(ids, metadatas):
+            self.rows[i] = {**self.rows.get(i, {}), **m}
 
     def count(self):
         return len(self.rows)
@@ -727,6 +729,34 @@ def test_the_start_of_a_campaign_is_kept_beside_its_runs_not_in_their_facts(tmp_
     assert cr.fact_of(row).campaign_started == pytest.approx(cr.campaign_info(cdirs["C0"]).started)
 
 
+def test_two_runs_of_this_campaign_are_no_trend():
+    """M669: blocked on an earlier campaign (P1), then isolated (R1) and blocked (R2) in this
+    one: « de l'isolement au blocage » is only between this campaign's two runs — no trend,
+    which compares this campaign with earlier runs: removed."""
+    def run(rid, cid, seq, decision):
+        return cr.RunFact(rid, cid, seq, "T1110.001", "", "executed", "detected", decision=decision,
+                          target=VM, campaign_started=STARTED[cid])
+    facts = [run("R1", "C1", 1, "isolate_vm"), run("R2", "C1", 2, "block_suspicious_ip")]
+    [claim] = cr.verify([cr.Claim("trend", "T1110.001 passe de l'isolement au blocage.", ["R1", "R2", "P1"])],
+                        facts, [run("P1", "C0", 1, "block_suspicious_ip")])
+    assert claim.rejected == "the cited change facts hold no change from isolate_vm to block_suspicious_ip"
+
+
+def test_the_real_index_forgets_a_start_now_unknown(tmp_path):
+    """chromadb itself: an upsert merges a row's metadata — the unknown start, written "",
+    replaces the one an earlier indexing gave, and the row is never chosen (D2b)."""
+    pytest.importorskip("chromadb")
+    idx = tmp_path / "idx"
+    fact = cr.RunFact("H1", "CH", 1, "T1110.001", "", "executed", "detected", target=VM)
+    cr.index_facts([fact], idx, cr.CampaignInfo("CH", "done", cr._timestamp("2026-10-25T00:00:00Z")))
+    cr.index_facts([fact], idx, cr.CampaignInfo("CH", "done", None))
+    [meta] = cr._collection(idx).get(ids=["H1"])["metadatas"]
+    assert meta["campaign_started"] == ""
+    later = cr.RunFact("L1", "CL", 1, "T1110.001", "", "executed", "detected", target=VM)
+    assert cr.previous_campaign([later], cr.CampaignInfo("CL", "done", cr._timestamp("2026-10-26T00:00:00Z")),
+                                idx)[2] == cr.NO_PREVIOUS
+
+
 # ── D2b: the dates of a manifest that came through the channel, checked ─────────────────
 
 WINDOW = "2026-10-23T08:12:00Z"           # when the first run of CH opened its window
@@ -761,23 +791,30 @@ def _from_channel(runs, cid, created, scenarios, *, pulled="2026-10-26T06:00:00Z
     return cdir
 
 
+_AFTER_WINDOW = f"il est postérieur à la première fenêtre d'exercice de ses runs ({WINDOW})"
+_BEFORE_WINDOW = f"il précède de plus de 1 h la première fenêtre d'exercice de ses runs ({WINDOW})"
+
+
 @pytest.mark.parametrize("created, forged, said", [
     # the date it gives: the start H0 saw, give or take — believed, nothing said
     ("2026-10-23T08:11:20Z", (), ""),
     # after C2 (24/10): unchecked, C2 would be « the previous one »
-    ("2026-10-25T00:00:00Z", (), "il est postérieur à la première fenêtre d'exercice de ses runs"),
+    ("2026-10-25T00:00:00Z", (), _AFTER_WINDOW),
     # before C0 (21/10, 12:16), after CM (18/10): unchecked, CM would be
-    ("2026-10-21T00:00:00Z", (), "il précède de plus de 1 h la première fenêtre d'exercice de ses runs"),
+    ("2026-10-21T00:00:00Z", (), _BEFORE_WINDOW),
     # the same, with a window of its own that H-1 refuses (it lasts 3 h): it bounds nothing
-    ("2026-10-18T10:00:00Z", (("HX", "2026-10-18T10:05:00Z", 3 * 3600.0),),
-     "il précède de plus de 1 h la première fenêtre d'exercice de ses runs"),
+    ("2026-10-18T10:00:00Z", (("HX", "2026-10-18T10:05:00Z", 3 * 3600.0),), _BEFORE_WINDOW),
+    # dates no UTC date holds (year 10000, year 0): refused, said as read, never raised (M667)
+    ("9999-12-31T23:59:59-05:00", (), "il est postérieur au tirage de la campagne par H0 (2026-10-26T06:00:00Z)"),
+    ("0001-01-01T00:00:00+05:00", (), _BEFORE_WINDOW),
 ])
 def test_a_forged_manifest_date_does_not_change_the_previous_campaign(tmp_path, index, created, forged,
                                                                       said):
-    """M656, M657, M659–M661: a campaign that came through the channel gives its start in
-    its manifest, written by whoever can write in the channel. H0 bounds it by what it saw:
-    the first window of its runs that H-1 believes. A date that does not fit is refused, said
-    in the report, and the window's start taken: the previous campaign stays C0."""
+    """M656, M657, M659–M661, M667: a campaign that came through the channel gives its start
+    in its manifest, written by whoever can write in the channel. H0 bounds it by what it
+    saw: the first window of its runs that H-1 believes. A date that does not fit is refused,
+    said in the report and by the index's command, and the window's start taken: the previous
+    campaign stays C0."""
     runs, cdirs = _bench(tmp_path)
     cm = _campaign(runs, "CM", "2026-10-18T09:00:00Z", [
         _run(1, "M1", "T1110.001", latency=70.0, action="block_suspicious_ip", confidence=0.7)])
@@ -796,23 +833,34 @@ def test_a_forged_manifest_date_does_not_change_the_previous_campaign(tmp_path, 
     assert info.started == cr._timestamp(WINDOW)
     assert refused == [info.start_refused]
     assert info.start_refused == (f"début de la campagne lu dans son manifeste ({created}) refusé : "
-                                  f"{said} ({WINDOW}) ; pris : le début de sa première fenêtre ({WINDOW})")
+                                  f"{said} ; pris : le début de sa première fenêtre ({WINDOW})")
     assert f"*Écarté des faits (1) : {info.start_refused}.*" in cr.render(report)
     assert index.rows["H1"]["campaign_started"] == cr._timestamp(WINDOW)
+    assert ci.verse(cdir).line().endswith(f" ; {info.start_refused}")
 
 
 def test_a_channel_campaign_did_not_start_after_h0_pulled_it(tmp_path, index):
-    """M658: without a window (purged a week after its end), the ``.pulled`` marker still
-    bounds it: a campaign cannot have started after H0 pulled it. Refused, its start is
-    unknown — never the date it gave — and putting it in the index says so."""
+    """M658, M668: without a window (purged a week after its end), the ``.pulled`` marker
+    still bounds it: a campaign cannot have started after H0 pulled it. Refused, its start is
+    unknown — never the date it gave — and putting it in the index says so. Indexed before
+    with that date (before D2b), it loses it: an upsert keeps a key it leaves out, so the
+    unknown start is written ("")."""
     runs = tmp_path / "runs"
     cdir = _from_channel(runs, "CH", "2026-10-25T00:00:00Z",
                          [_run(1, "H1", "T1110.001", latency=106.9)], pulled="2026-10-24T00:00:00Z")
+    forged = cr._timestamp("2026-10-25T00:00:00Z")
+    cr.index_facts([cr.RunFact("H1", "CH", 1, "T1110.001", "", "executed", "detected", target=VM)],
+                   campaign=cr.CampaignInfo("CH", "done", forged))    # its window there, then
+    assert index.rows["H1"]["campaign_started"] == forged
     info = cr.campaign_info(cdir)
     assert (info.started, info.start_refused) == (None, (
         "début de la campagne lu dans son manifeste (2026-10-25T00:00:00Z) refusé : il est postérieur "
         "au tirage de la campagne par H0 (2026-10-24T00:00:00Z) ; début inconnu"))
     assert ci.verse(cdir).line().endswith(f" ; {info.start_refused}")
+    assert index.rows["H1"]["campaign_started"] == ""
+    assert cr.fact_of(index.rows["H1"]).campaign_started is None
+    later = _campaign(runs, "CL", "2026-10-26T08:00:00Z", [_run(1, "L1", "T1110.001", latency=5.0)])
+    assert _report(later).comparison.why_none == cr.NO_PREVIOUS
     honest = _from_channel(runs, "CK", "2026-10-23T08:00:00Z",
                            [_run(1, "K1", "T1110.001", latency=106.9)], pulled="2026-10-24T00:00:00Z")
     assert (cr.campaign_info(honest).started, cr.campaign_info(honest).start_refused) == (

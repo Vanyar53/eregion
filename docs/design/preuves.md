@@ -479,7 +479,20 @@ même fichier :
 | M665 | « au », « aux », « the » refusés dans la suite d'une plage | « From the 21 to the 23 October » barré |
 | M666 | jours sans « st », « nd », « rd » | « On the 21st and 23rd October » barré |
 
-Avec M163, M260–M279, M510–M519 et M530–M547, les soixante-six attrapés au premier tour
+La relecture de D2b a trouvé un bug : une date que le manifeste donne et qu'aucune date UTC ne
+tient (« 9999-12-31T23:59:59-05:00 », l'an 10000 en UTC) était bien refusée, puis le message
+qui le disait levait, et le rapport n'était jamais écrit. Elle a aussi noté qu'un début devenu
+inconnu laissait l'ancien dans l'index (ChromaDB fusionne les métadonnées d'une ligne), et que
+la condition « deux runs de cette campagne ne font pas une tendance » n'était pas mesurée.
+Trois mutants de plus :
+
+| Mutant | Défaut réinjecté | Effet |
+|---|---|---|
+| M667 | date hors de portée UTC non rattrapée | le rapport de la campagne n'est jamais écrit |
+| M668 | début inconnu absent de la ligne | le début forgé d'une indexation antérieure reste, et peut être choisi |
+| M669 | deux runs de cette campagne face à face dans une tendance | un sens pris dans la seule campagne passe pour une tendance |
+
+Avec M163, M260–M279, M510–M519 et M530–M547, les soixante-neuf attrapés au premier tour
 (26/10), aucun périmé.
 Détail : [`../analysis.md`](../analysis.md), « Ce qui a changé depuis la campagne précédente ».
 

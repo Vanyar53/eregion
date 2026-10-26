@@ -421,8 +421,14 @@ def _id_date(cid) -> float | None:
         return None
 
 
-def _iso(ts: float) -> str:
-    return datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+def _iso(ts: float, read=None) -> str:
+    """``ts`` written as a UTC date — or, when no date can hold it (a manifest from the
+    channel may give « 9999-12-31T23:59:59-05:00 », year 10000 in UTC), the value as it was
+    read (``read``), else the number of seconds: said, never raised."""
+    try:
+        return datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    except (ValueError, OverflowError, OSError):
+        return str(read)[:40] if read is not None else f"{ts:.0f} s"
 
 
 # D2b: a campaign starts with its first scenario, a few seconds before its first window opens
@@ -487,11 +493,12 @@ def campaign_info(campaign_dir: Path, runs_dir: Path | None = None) -> CampaignI
     cid = manifest.get("campaign_id")
     cid = cid if isinstance(cid, str) and cid else campaign_dir.name
     state = manifest.get("state")
-    starts = [t for s in manifest.get("scenarios") or [] if isinstance(s, dict)
+    starts = [(t, s.get("started_at")) for s in manifest.get("scenarios") or [] if isinstance(s, dict)
               if (t := _timestamp(s.get("started_at"))) is not None]
-    started = min(starts) if starts else _timestamp(manifest.get("created_at"))
+    read = manifest.get("created_at")
+    started, read = min(starts, key=lambda p: p[0]) if starts else (_timestamp(read), read)
     if started is None:
-        started = _id_date(cid)
+        started, read = _id_date(cid), cid
     info = CampaignInfo(cid, state if isinstance(state, str) else "", started)
     if from_channel(campaign_dir):
         first = first_window(manifest, runs_dir)
@@ -502,7 +509,7 @@ def campaign_info(campaign_dir: Path, runs_dir: Path | None = None) -> CampaignI
         if why := start_refusal(started, first, pulled):
             info.started = first
             info.start_refused = (
-                f"début de la campagne lu dans son manifeste ({_iso(started)}) refusé : {why} ; "
+                f"début de la campagne lu dans son manifeste ({_iso(started, read)}) refusé : {why} ; "
                 + (f"pris : le début de sa première fenêtre ({_iso(first)})" if first is not None
                    else "début inconnu"))
     return info
@@ -568,8 +575,9 @@ def index_facts(facts: list[RunFact], path: Path | None = None,
     meta = {}
     if campaign is not None:
         meta["campaign_state"] = campaign.state
-        if campaign.started is not None:   # the index takes no None
-            meta["campaign_started"] = float(campaign.started)
+        # The index takes no None, and an upsert keeps a key it leaves out: an unknown start
+        # is written "" — never a start an earlier indexing gave, now refused (D2b).
+        meta["campaign_started"] = float(campaign.started) if campaign.started is not None else ""
     _collection(path).upsert(
         ids=[f.run_id for f in rows], documents=[f.summary() for f in rows],
         metadatas=[{"campaign_id": f.campaign_id, "run_id": f.run_id, "ttp": f.ttp,

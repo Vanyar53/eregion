@@ -258,7 +258,7 @@ _26/10 : le code, ses tests (`tests/unit/test_campaign_changes.py`, et un cas de
 dans `test_hosted_report.py`) et ses mutants (M260–M279) sont écrits. La mesure sur une vraie
 deuxième campagne viendra après la fusion, avec Jonathan. Suite (D2b, 26/10) : l'ordre des
 runs qu'une tendance cite est lu, le début d'une campagne venue du canal est contrôlé, et les
-dernières tournures de dates sont lues (mutants M650–M666)._
+dernières tournures de dates sont lues (mutants M650–M669)._
 
 Le premier rapport écrit sur H0 (campagne `20261023T081120Z`) était fidèle, mais il n'apprenait
 rien : son index était vide. La seule nouveauté a été vue par une comparaison faite à la main.
@@ -281,17 +281,24 @@ c'est une technique jouée sur une VM cible ; la VM est comparée sans la casse.
 - **Le début d'une campagne venue du canal est contrôlé** (D2b, `start_refusal`). Son
   manifeste (`started_at`, `created_at`, l'identifiant) est écrit sur Orodruin, par quiconque
   peut écrire dans le canal (H-1) : une date fausse ferait nommer à tort « la précédente ». H0
-  la borne par ce qu'il a vu lui-même. Une campagne n'a pas commencé après que H0 l'a tirée
-  (la date du marqueur `.pulled`), ni après la première fenêtre d'exercice de ses runs que H-1
-  croit, ni plus d'une heure avant elle (le temps de quelques scénarios en échec avant le
-  premier run joué), à 5 minutes près (`FUTURE_SKEW_S`, l'écart d'horloge de deux hôtes). Une
-  date hors de ces bornes est refusée, et le rapport le dit, parmi ce qui est « écarté des
-  faits » (`analysis.campaign_index` aussi). Le début pris est alors celui de la première
-  fenêtre, ou inconnu sans fenêtre. Une campagne locale garde les dates de son manifeste,
-  écrit sur cet hôte. **Limite** : une fois les fenêtres d'une campagne purgées (une semaine
-  après leur fin), seul le marqueur `.pulled` borne son début, et seulement par le haut ; une
-  campagne déjà dans l'index garde le début avec lequel elle y est entrée, sauf si on la
-  reverse.
+  la confronte à ce qu'il tient : la date du marqueur `.pulled`, qu'il écrit lui-même, et les
+  fenêtres d'exercice de ses runs que H-1 croit. Une campagne n'a pas commencé après que H0
+  l'a tirée, ni après la première de ces fenêtres, ni plus d'une heure avant elle (le temps
+  de quelques scénarios en échec avant le premier run joué), à 5 minutes près
+  (`FUTURE_SKEW_S`, l'écart d'horloge de deux hôtes). Une date hors de ces bornes est refusée,
+  et le rapport le dit, parmi ce qui est « écarté des faits » (`analysis.campaign_index`
+  aussi), telle qu'elle a été lue quand aucune date UTC ne peut la tenir (« 9999-12-31T23:59:59-05:00 »).
+  Le début pris est alors celui de la première fenêtre, ou inconnu sans fenêtre ; inconnu, il
+  est écrit dans l'index (vide) à la place d'un début qu'une indexation antérieure avait
+  donné, sans quoi ChromaDB, qui fusionne les métadonnées d'une ligne, le garderait. Une
+  campagne sans marqueur `.pulled` garde les dates de son manifeste : écrite sur cet hôte, ou
+  copiée à la main par l'opérateur (celle du 21/10 sur H0), elle est crue comme l'opérateur
+  qui l'a posée là. **Limites** : les fenêtres passent par le même canal que le manifeste, et
+  H-1 ne borne leur début que vers le futur. Qui forge le manifeste **et** les fenêtres peut
+  donc antidater une campagne : seul le marqueur `.pulled` la borne alors, et seulement par le
+  haut. De même, une fois les fenêtres purgées (une semaine après leur fin), seul `.pulled`
+  borne le début ; une campagne déjà dans l'index garde le début avec lequel elle y est
+  entrée, sauf si on la reverse.
 
 **Les runs sont joints par clé.** Le n-ième run d'une technique sur une VM, dans l'ordre des
 `seq`, fait face au n-ième run de la même clé dans la campagne précédente. Chaque paire devient

@@ -133,14 +133,17 @@ glorfindel/
   memory.py             → CycleMemory ChromaDB (confidence + past_cycles_used)
   incidents.py          → IncidentRegistry (TTL, persist, thread-safe)
   cli.py                → watch, respond, restore (--wait), release, unblock, reset (revert=alias), list, pending, ack, activate,
-                          audit (--all), approve-rule, reject-rule, propose-rules, check-ttl, jobs, bot, dashboard
+                          audit (--all), approve-rule, reject-rule, propose-rules, rules, migrate-rules, check-ttl, jobs,
+                          bot, dashboard
                           (war-room : alias caché d'`eregion console`)
   escalations.py        → ~/.glorfindel/escalations.jsonl + labels (proposed_rule, improve_detection ajoutés)
   bot.py                → Discord bot — un fil par VM, boutons Acquitter + Commande, /pending slash command ;
                           ButtonPolicy (M-3) : DISCORD_ALLOWED_USERS / _ROLES, fermé par défaut
   tui.py                → Rich TUI full-screen (glorfindel dashboard) : resources + feed + escalations, raccourcis a/r/x/u/v
   rules/azure/
-    detection_rules.yaml → rules UNIQUEMENT — queries KQL, TTPs, noms de backends
+    detection_rules.yaml → la BASE LIVRÉE (P1) : rien ne l'écrit plus, une mise à jour la remplace ;
+                           les règles du déploiement vont dans ~/.glorfindel/client_rules.yaml
+                           rules UNIQUEMENT — queries KQL, TTPs, noms de backends
                            PAS de workspace_id, resource_id, ni section assets
                            assets: [auto] → s'applique aux VMs découvertes par le backend
                            monitoring_backends: [law-celebrimbor-amonsul] par rule → nom du backend
@@ -187,14 +190,6 @@ eregion_console/                → la console d'Eregion (`eregion console`, doc
                           cadence, Syslog, règles qui couvrent la VM — une VM aveugle ne paraît plus normale)
                           nœud DETECT : backends + assets découverts + règles cliquables (modal query)
                           /config : Azure credentials + LLM + mode autonomie global + sections
-  rules/azure/
-    detection_rules.yaml → la BASE LIVRÉE (P1) : rien ne l'écrit plus, une mise à jour la remplace ;
-                           les règles du déploiement vont dans ~/.glorfindel/client_rules.yaml
-                           rules UNIQUEMENT — queries KQL, TTPs, noms de backends
-                           PAS de workspace_id, resource_id, ni section assets
-                           assets: [auto] → s'applique aux VMs découvertes par le backend
-                           monitoring_backends: [law-celebrimbor-amonsul] par rule → nom du backend
-                           (OPTIONNEL : omis si un seul backend du type, cas mono-LAW → résolution fallback)
 
 eregion_core/
   inscription.py      → O0 : LE garde-fou de cible de tout injecteur (Annatar, puis Gothmog). `Scope.check` (périmètre :

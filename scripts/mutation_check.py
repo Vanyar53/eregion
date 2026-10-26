@@ -1191,7 +1191,7 @@ MUTANTS = [
      "infra/glorfindel-host/deploy.sh",
      '  [ -z "$rules" ] || die "$(echo', '  [ -z "$rules" ] || true "$(echo'),
     # P1 (#86): rule layers — the shipped base stays intact, the client's rules in their own
-    # layer (~/.glorfindel/client_rules.yaml), an exported rule without any identifier.
+    # layer (~/.glorfindel/client_rules.yaml), an approved rule binds to its backend.
     ("M670", "an approved rule is written into the shipped base again (P1)", "glorfindel/proposed_rules.py",
      "    how = rule_layers.write_client_rule(rule)\n",
      "    how = rule_layers.write_client_rule(rule, path=Path(rules_yaml_path))\n"),
@@ -1366,11 +1366,12 @@ TESTS["M520"] = "tests/unit/test_bot.py"
 TESTS.update({f"M{n}": "tests/unit/test_glorfindel_host.py" for n in (521, 522, 523)})
 TESTS.update({f"M{n}": "tests/unit/test_host_deploy.py" for n in range(524, 529)})
 # P1 (#86): rule layers.
-TESTS.update({f"M{n}": "tests/unit/test_rule_layers.py tests/unit/test_proposed_rules.py" for n in range(670, 687)})
+TESTS.update({f"M{n}": "tests/unit/test_rule_layers.py tests/unit/test_proposed_rules.py"
+              for n in (*range(670, 679), 685, 686)})
 TESTS["M687"] = "tests/unit/test_host_deploy.py"
 TESTS["M688"] = "tests/unit/test_rule_layers.py"
-TESTS.update({f"M{n}": "tests/unit/test_rule_layers.py tests/unit/test_host_deploy.py" for n in range(689, 700)})
-TESTS.update({f"M{n}": "tests/unit/test_rule_layers.py" for n in range(700, 720)})
+TESTS.update({f"M{n}": "tests/unit/test_rule_layers.py tests/unit/test_host_deploy.py" for n in range(695, 700)})
+TESTS.update({f"M{n}": "tests/unit/test_rule_layers.py" for n in range(713, 717)})
 TESTS.update({f"M{n}": "tests/unit/test_console.py" for n in range(400, 409)})  # UI-1
 TESTS["M403"] = "tests/unit/test_console_exercises.py"
 

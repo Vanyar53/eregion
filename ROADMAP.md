@@ -152,7 +152,7 @@ Ensuite (0.4+) : A1 avec MC0, A2, A3, B1, B3, B4, G1–G3, R2 (Stratus, Activity
 
 ### Neuvième passe (23/10, sur la v0.3.0)
 
-Relecture de l'atelier (partie 1, écrite le 20/10) et de ce que la 0.3.0 a mesuré (partie 2). Deux lots livrés le 26/10 : **D-1** (stabilité de la décision, #186, #190) et **H-1** (une fenêtre d'exercice n'est plus crue sur parole, #187, #191). Constats encore ouverts, routés en issues : **M-1** arrêt d'urgence (#181, code fusionné #189, reste banc), **M-2** rôle d'injection sur la VM à vraie charge (#182, session banc), **M-3** épingle de déploiement et verrou de dépendances de l'hôte (#183), **D-2** comparaison entre campagnes calculée par le code, avant le point d'étape rejoué (#184). Avant la prochaine campagne : H-1 et M-1 ; avant toute autonomie : D-1 ; avant le ~13/11 : D-2.
+Relecture de l'atelier (partie 1, écrite le 20/10) et de ce que la 0.3.0 a mesuré (partie 2). Livrés le 26/10 : **D-1** (stabilité de la décision, #186, #190), **H-1** (une fenêtre d'exercice n'est plus crue sur parole, #187, #191, mesurée sur H0), **M-1** (l'arrêt d'urgence arrête ce qui tourne, #181, #189, mesuré au banc #196) et la console de l'atelier en lecture seule (#185) ; le rapport d'un run seul arrive sur H0 (#193, #194, vu sur H0 le 26/10 pour un run d'Annatar et un run de Gothmog ; reste l'affichage des sondes). Constats encore ouverts, routés en issues : **M-2** rôle d'injection sur la VM à vraie charge (#182, à la prochaine session banc), **D-2** comparaison entre campagnes calculée par le code, avant le point d'étape rejoué (#184, avant le ~13/11), **M-3** épingle de déploiement et verrou de dépendances de l'hôte (#183, avant de passer l'hôte en écriture).
 
 ---
 

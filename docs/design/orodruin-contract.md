@@ -2,7 +2,8 @@
 
 _Conception — 2026-10-14, relue en Opus 5.5 le 2026-10-15 — statut : **implémenté et mesuré sur le banc le 19/10** (O1 : `eregion_core/orodruin.py`,
 `infra/orodruin/`, mutants M64–M70), canal des fenêtres d'exercice compris (voir « Le canal
-des fenêtres d'exercice ») ; canal retour de la watch (#159, M109–M115) le 20/10._
+des fenêtres d'exercice ») ; canal retour de la watch (#159, M109–M115) le 20/10 ; arrêt
+d'urgence revu le 26/10 (M-1, M191–M193, pas encore mesuré sur le banc)._
 
 ## Ce qu'Orodruin est, et ce qu'il n'est pas
 
@@ -85,6 +86,10 @@ qui arrêterait la VM sans révoquer l'identité serait un faux arrêt (l'identi
 redémarrage). L'essai à blanc en CI vérifie que l'ordre tient et que la révocation est bien
 tentée avant l'arrêt.
 
+Depuis M-1 (26/10), le kill arrête aussi ce qui tourne sans l'identité d'Orodruin : il annule
+les expériences de chaos en cours et ferme les fenêtres d'exercice ouvertes, puis dit ce qui
+reste en vol. Voir « L'arrêt d'urgence arrête ce qui tourne ».
+
 ## Les cibles Make
 
 | Cible | Fait |
@@ -93,7 +98,7 @@ tentée avant l'arrêt.
 | `orodruin-check` | vérifie le contrat, affiche le verdict, n'écrit rien |
 | `orodruin-stop` | éteint la VM sans la détruire (pause) |
 | `orodruin-down` | détruit la VM et l'identité |
-| `orodruin-kill` | révoque l'identité, puis arrête la VM (urgence) |
+| `orodruin-kill` | révoque l'identité, annule le chaos en cours, arrête la VM, ferme les fenêtres ouvertes (urgence) |
 
 État Terraform séparé : Orodruin ne partage pas le `terraform.tfstate` de Celebrimbor, pour
 qu'un `apply` ou un `down` de l'un ne touche jamais l'autre (même règle que les topologies).
@@ -127,7 +132,8 @@ mesuré par les tests d'Orodruin (table `TESTS`, comme O0) :
   par adresse (le DNS reste autorisé).
 - **Kill** : `infra/orodruin/kill.py`, depuis le `az login` de l'opérateur. Il supprime toutes
   les attributions de l'identité (filtrées sur `principalId`, à toutes les portées), puis
-  désalloue la VM sans attendre.
+  désalloue la VM sans attendre. Revu par M-1 (26/10) : l'abonnement du contrat, pas celui de
+  la CLI, et ce qui tourne encore (section dédiée plus bas).
 - **Sortie** : règles NSG séparées, avec le refus d'Internet posé par `egress_locked` (vrai par
   défaut). Le premier apply le lève, le temps d'installer Docker. L'image d'Annatar arrive
   ensuite par SSH.
@@ -253,6 +259,65 @@ le canal des fenêtres dans l'autre sens : un conteneur `watch` dans le même co
 **Mesuré le 20/10** : la définition de Storage Blob Data Reader lue sur Azure (`az role
 definition list`) est exactement l'ensemble accepté ; Contributor y ajoute `blobs/write`,
 `blobs/delete`, `blobs/add/action`, `blobs/move/action`, refusés.
+
+## L'arrêt d'urgence arrête ce qui tourne (M-1 — 26/10)
+
+La neuvième passe a trouvé deux trous dans le kill du 19/10 :
+- `az role assignment list --all` ne liste que l'abonnement **courant** de la CLI. Dans un autre
+  contexte, la liste revenait vide : le kill disait « no role assignment left » et sortait en 0,
+  sans rien révoquer.
+- La révocation ne coupe que ce qui passe par l'identité d'Orodruin. Une expérience de chaos agit
+  avec sa propre identité ; un Run Command déjà parti tourne sur sa VM ; une fenêtre d'exercice
+  restée ouverte fait étiqueter « exercice » ce que ses cibles font, jusqu'à son expiration plus
+  la grâce (2 h 15).
+
+Le kill a maintenant quatre étapes, dans cet ordre (`eregion_core.orodruin.kill`, toutes
+requises). Une étape qui échoue n'arrête pas les suivantes. Elle est rapportée, et le kill sort
+en 1.
+
+| Étape | Fait | Pourquoi à ce rang |
+|---|---|---|
+| `revoke` | supprime les attributions de l'identité sur l'**abonnement du contrat** (`--subscription`, l'`AZURE_SUBSCRIPTION_ID` d'`orodruin.env`), et sur celui de la VM s'il diffère | d'abord : l'injecteur perd ses droits même si le reste traîne |
+| `cancel` | annule chaque expérience du groupe du banc dont une exécution n'est pas terminée | une expérience survit à la révocation |
+| `stop` | désalloue la VM, sans attendre | ceinture et bretelles, comme avant |
+| `close` | ferme les fenêtres encore ouvertes du canal (`end` = maintenant, `closed_by: orodruin-kill`) | en dernier : plus rien d'Orodruin ne peut en rouvrir une |
+
+« Rien à révoquer » ne se conclut que d'une liste de l'abonnement du contrat, **relue après la
+suppression**. Si elle était vide dès le départ, le kill vérifie aussi que le principal donné est
+bien l'identité de la VM. Un `PRINCIPAL=` mal tapé ne passe donc pas pour « déjà révoqué ». Sans
+abonnement connu, rien n'est prouvé : échec.
+
+**Ce qui reste en vol**, dit à la fin, parce qu'aucune étape ne l'arrête. Le kill le tire des
+fenêtres qu'il a fermées : chaque injecteur ouvre la sienne avant de toucher sa cible.
+- Annatar : un Run Command déjà envoyé va au bout sur sa VM. Le nettoyage de l'atomic peut ne pas
+  avoir tourné ; `annatar run <scénario> --dry-run` l'affiche, à rejouer à la main.
+- Gothmog : une panne annulée peut laisser sa VM arrêtée (`az vm start`). Une exécution encore
+  en `Cancelling` après l'annulation est signalée.
+- Une fenêtre fermée étiquette encore ses cibles pendant sa grâce (15 min, le décalage de
+  détection), et non plus jusqu'à 2 h 15.
+
+**Qui ferme les fenêtres.** L'identité d'Orodruin vient d'être révoquée. Le compte du canal n'a
+pas de clé partagée, et l'opérateur n'avait aucun droit sur ses données. D'où une attribution de
+plus : `channel_operator`, Storage Blob Data Contributor sur le seul conteneur `exercises`, pour
+celui qui applique `infra/orodruin` (`azurerm_client_config`), déjà propriétaire de l'abonnement.
+Jamais sur `watch`. Le contrat d'Orodruin ne la voit pas : elle n'est pas à son identité. Avant
+cet apply, le kill dit que les fenêtres n'ont pas pu être fermées, et quand elles expirent. Un
+rédacteur de plus sur le canal : c'est la surface que H-1 (#180) borne côté lecteur.
+
+**Rien d'imprimé ne nomme l'abonnement** (commandes, erreurs), comme les cibles Make (M124).
+
+**Mutants** : M191 (la liste dans le contexte courant de la CLI : le bug d'origine), M192 (une
+expérience en cours laissée en cours), M193 (les fenêtres ouvertes laissées ouvertes) ; M66 suit
+la nouvelle boucle. Tests : `tests/unit/test_orodruin_kill.py`, avec un faux `az` dont le
+contexte courant est un autre abonnement.
+
+**À mesurer sur le banc** (pas encore fait) : la liste relue juste après la suppression (cohérence
+de l'API) ; l'annulation d'une panne `vm-shutdown` en cours (la VM revient-elle ?) ; la fenêtre
+fermée par l'opérateur, tirée par la watch de H0.
+
+Limites : un Run Command ne se liste pas (action, pas ressource) : le kill le déduit des fenêtres,
+il ne le voit pas. Une expérience hors du groupe du banc n'est pas lue : l'identité d'Orodruin
+n'agit que sur le banc.
 
 ## Questions ouvertes (pour Jonathan, à l'implémentation)
 

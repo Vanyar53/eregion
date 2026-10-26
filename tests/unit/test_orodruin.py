@@ -308,29 +308,32 @@ def test_run_command_is_passive_without_a_session(tmp_path):
     ex._compute.virtual_machines.begin_start.assert_not_called()
 
 
-# ── M66: the kill revokes, then stops ──────────────────────────────────────────
+# ── M66: the kill revokes first, then cancels, stops, closes ─────────────────────
 
-def test_kill_revokes_before_it_stops():
+def _step(order, name, error=None):
+    def step():
+        order.append(name)
+        if error:
+            raise error
+    return step
+
+
+def test_kill_revokes_then_cancels_stops_and_closes():
     order = []
-    failures = orodruin.kill(lambda: order.append("revoke"), lambda: order.append("stop"))
-    assert order == ["revoke", "stop"] and failures == []
+    failures = orodruin.kill(*(_step(order, n) for n in ("revoke", "cancel", "stop", "close")))
+    assert order == ["revoke", "cancel", "stop", "close"] and failures == []
 
 
-def test_a_failed_revocation_still_stops_and_is_reported():
+def test_a_failed_revocation_still_runs_the_rest_and_is_reported():
     order = []
-
-    def revoke():
-        order.append("revoke")
-        raise RuntimeError("403")
-
-    failures = orodruin.kill(revoke, lambda: order.append("stop"))
-    assert order == ["revoke", "stop"]
-    assert failures and failures[0].startswith("revoke:")
+    failures = orodruin.kill(_step(order, "revoke", RuntimeError("403")),
+                             *(_step(order, n) for n in ("cancel", "stop", "close")))
+    assert order == ["revoke", "cancel", "stop", "close"]
+    assert len(failures) == 1 and failures[0].startswith("revoke:")
 
 
-# ── The Terraform module and the kill script ──────────────────────────────────
+# ── The Terraform module (the kill script: test_orodruin_kill.py) ─────────────
 
-import importlib.util  # noqa: E402
 import re  # noqa: E402
 
 ORODRUIN = Path(__file__).resolve().parents[2] / "infra" / "orodruin"
@@ -355,6 +358,7 @@ def test_the_host_acts_on_the_bench_only_and_is_no_target():
         "contract_reader": "data.azurerm_subscription.current.id",
         "channel_writer": "azurerm_storage_container.exercises.id",
         "channel_watch_reader": "azurerm_storage_container.exercises.id",
+        "channel_operator": "azurerm_storage_container.exercises.id",
         "watch_channel_reader": "azurerm_storage_container.watch.id",
         "watch_channel_writer": "azurerm_storage_container.watch.id",
     }
@@ -364,6 +368,10 @@ def test_the_host_acts_on_the_bench_only_and_is_no_target():
     assert "azurerm_linux_virtual_machine.host.identity[0].principal_id" in reader_of_watch
     writer_of_watch = tf.split('resource "azurerm_role_assignment" "watch_channel_writer"')[1].split("\n}\n")[0]
     assert "var.watch_principal_id" in writer_of_watch
+    # The kill (M-1) closes the open windows as the operator: writer on `exercises` alone.
+    operator = tf.split('resource "azurerm_role_assignment" "channel_operator"')[1].split("\n}\n")[0]
+    assert '"Storage Blob Data Contributor"' in operator
+    assert "data.azurerm_client_config.operator.object_id" in operator
     reader = tf.split('resource "azurerm_role_definition" "contract_reader"')[1].split("\n}\n")[0]
     assert set(re.findall(r'"(Microsoft\.[^"]+)"', reader)) <= {
         "Microsoft.Authorization/roleAssignments/read", "Microsoft.Authorization/roleDefinitions/read"}
@@ -380,35 +388,3 @@ def test_the_egress_is_closed_by_default_and_the_state_is_its_own():
     locked = variables.split('variable "egress_locked"')[1].split("\n}\n")[0]
     assert "default     = true" in locked
     assert "backend" not in tf  # local state in infra/orodruin, never Celebrimbor's
-
-
-def _kill_module():
-    spec = importlib.util.spec_from_file_location("orodruin_kill", ORODRUIN / "kill.py")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def test_the_kill_script_revokes_every_assignment_then_deallocates():
-    kill_script = _kill_module()
-    calls = []
-
-    def run(args):
-        calls.append(args)
-        return json.dumps(["/a/1", "/a/2"]) if args[:3] == ["role", "assignment", "list"] else ""
-
-    revoke, stop = kill_script.steps("oid-1", "/vm/id", run=run, say=lambda _: None)
-    assert orodruin.kill(revoke, stop) == []
-    assert "[?principalId=='oid-1'].id" in calls[0] and "--all" in calls[0]
-    assert calls[1] == ["role", "assignment", "delete", "--ids", "/a/1", "/a/2"]
-    assert calls[2][:2] == ["vm", "deallocate"] and "/vm/id" in calls[2]
-
-
-def test_the_kill_dry_run_calls_nothing(capsys):
-    kill_script = _kill_module()
-    run = MagicMock()
-    revoke, stop = kill_script.steps("oid-1", "/vm/id", run=run, dry_run=True)
-    assert orodruin.kill(revoke, stop) == []
-    run.assert_not_called()
-    out = capsys.readouterr().out
-    assert out.index("role assignment list") < out.index("vm deallocate")

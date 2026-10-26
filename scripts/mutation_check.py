@@ -44,6 +44,7 @@ WCH = "eregion_core/watch_channel.py"
 GOTH = "gothmog/runner/engine.py"
 DET = "annatar/runner/detection.py"
 CREP = "analysis/campaign_report.py"
+KILL = "infra/orodruin/kill.py"
 HREP = "analysis/hosted_report.py"
 XCH = "eregion_core/exercise_channel.py"
 ACLI = "annatar/cli.py"
@@ -271,8 +272,8 @@ MUTANTS = [
      '        self._before_call("run_script", script_path)\n        self._ensure_vm_running()\n',
      '        self._ensure_vm_running()\n        self._before_call("run_script", script_path)\n'),
     ("M66", "the kill stops the VM without revoking the identity (O1)", "eregion_core/orodruin.py",
-     '    for name, step in (("revoke", revoke), ("stop", stop)):',
-     '    for name, step in (("stop", stop),):'),
+     '    for name, step in (("revoke", revoke), ("cancel", cancel), ("stop", stop), ("close", close)):',
+     '    for name, step in (("cancel", cancel), ("stop", stop), ("close", close)):'),
     # O1, measured on the bench (19/10): Azure lists only what the caller may read — a
     # listing without subscription-wide read proves no absence.
     ("M67", "the identity check trusts a listing it cannot fully read (O1)", "eregion_core/orodruin.py",
@@ -683,6 +684,16 @@ MUTANTS = [
     # #174 — the report's table shows each run's detection latency, « — » without one.
     ("M190", "the report's table leaves the detection latency out (#174)", CREP,
      "| {x.detection} | {_latency(x.latency_s)} | {dec} |\")\n", "| {x.detection} | {dec} |\")\n"),
+    # M-1 (ninth pass): the kill stops what runs, whatever the operator's CLI context.
+    ("M191", "the kill lists the identity's assignments in the CLI's current subscription (M-1)", KILL,
+     '        return json.loads(call(["role", "assignment", "list", "--all", "--subscription", sub,\n',
+     '        return json.loads(call(["role", "assignment", "list", "--all",\n'),
+    ("M192", "the kill leaves a running chaos experiment running (M-1)", KILL,
+     '            call(["rest", "--method", "post", "--url", f"{ARM}{eid}/cancel?api-version={CHAOS_API}"])\n',
+     ""),
+    ("M193", "the kill leaves the open exercise windows open (M-1)", KILL,
+     "                exercise_channel.publish(closed, channel=channel, credential=cred, put=put)\n",
+     "                pass\n"),
 ]
 
 # Mutants measured by other tests than the invariants (their lot's own).
@@ -733,6 +744,7 @@ TESTS.update({f"M{n}": "tests/unit/test_dependency_failures.py" for n in range(1
 TESTS.update({f"M{n}": "tests/unit/test_dependency_failures.py" for n in range(170, 179)})
 TESTS["M189"] = "tests/unit/test_makefile_bench.py"
 TESTS["M190"] = "tests/unit/test_campaign_report.py"
+TESTS.update({mid: "tests/unit/test_orodruin_kill.py" for mid in ("M191", "M192", "M193")})
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

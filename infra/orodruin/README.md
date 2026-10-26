@@ -25,7 +25,8 @@ Contrat (garanties, vérifications, kill, mutants) :
   partagée). Orodruin y écrit, le Glorfindel hébergé le lit (`watch_principal_id`, lu dans l'état
   de `infra/glorfindel-host`). Dans `orodruin.env` : `EREGION_EXERCISE_CHANNEL` (`terraform output
   channel_url`) et `EREGION_CHANNEL_SCOPE` (`channel_scope`). Dans le `host.env` de Glorfindel :
-  `EREGION_EXERCISE_CHANNEL`.
+  `EREGION_EXERCISE_CHANNEL`. L'opérateur (qui applique ce module) y écrit aussi, pour que
+  `orodruin-kill` ferme les fenêtres restées ouvertes (`channel_operator`, M-1).
 - **Le canal retour** (#159) : un conteneur `watch` dans le même compte. Le Glorfindel hébergé y
   écrit son battement de cœur et ses détections des VM d'une fenêtre ouverte ou en grâce ;
   Orodruin le lit, et le contrat refuse tout rôle d'écriture d'Orodruin à cette portée. Dans
@@ -52,11 +53,21 @@ avant de l'exécuter, et s'arrête au plafond déclaré.
 
 Entre les sessions : `make orodruin-stop` (désalloue), `make orodruin-start`.
 
-**Urgence** : `make orodruin-kill` — depuis ton `az login`, révoque toutes les attributions de
-rôle de l'identité, puis désalloue la VM (`DRY_RUN=1` pour voir les commandes ; `PRINCIPAL=`
-et `VM_ID=` si l'état Terraform est illisible). Le kill retire les droits hors de Terraform :
-`make orodruin-lock` les repose. Retirer un rôle ne prend pas effet à l'instant (cache du plan
-de contrôle) — c'est pour ça que la VM s'arrête aussi.
+**Urgence** : `make orodruin-kill` — depuis ton `az login`, quel que soit son abonnement
+courant. Le kill révoque toutes les attributions de rôle de l'identité **sur l'abonnement du
+contrat** (`AZURE_SUBSCRIPTION_ID` d'`orodruin.env`). Il annule ensuite les expériences de chaos
+en cours sur le banc, désalloue la VM et ferme les fenêtres d'exercice encore ouvertes. Enfin, il
+dit ce qui reste en vol : Run Command déjà parti, nettoyage atomic à rejouer, VM qu'une panne
+peut laisser arrêtée. Il sort en 1 si une étape a échoué.
+- `DRY_RUN=1` montre les commandes.
+- `PRINCIPAL=`, `VM_ID=`, `SUBSCRIPTION=`, `CHANNEL=` servent si l'état Terraform ou
+  `orodruin.env` est illisible.
+- Pour fermer les fenêtres, l'opérateur écrit sur le conteneur `exercises` (`channel_operator`,
+  posé par `make orodruin-lock YES=1`).
+
+Le kill retire les droits hors de Terraform : `make orodruin-lock` les repose. Retirer un rôle ne
+prend pas effet à l'instant (cache du plan de contrôle) : c'est pour ça que la VM s'arrête aussi.
+Détail : [« L'arrêt d'urgence arrête ce qui tourne »](../../docs/design/orodruin-contract.md).
 
 ## À mesurer sur le banc (O1, partie B)
 

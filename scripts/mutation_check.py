@@ -1196,12 +1196,12 @@ MUTANTS = [
     # P1, review: the export reads KQL closed by default; a bad client entry never stops the
     # detection; an approved rule binds to its backend.
     ("M689", "the export sees no identity column: their literals leave (P1, review)", "glorfindel/rule_layers.py",
-     "    chosen = {span for span in spans if _ID_COL_RE.search(code[span[0]:span[1]])}\n",
-     "    chosen = set()\n"),
+     '    compared("|".join(_ID_COLUMNS), alias=False)\n', '    compared("NoSuchColumn", alias=False)\n'),
     ("M690", "a `let` used against an identity column is not followed (P1, review)", "glorfindel/rule_layers.py",
-     "            if name in used and span not in chosen:\n", "            if False:\n"),
+     '        if "\\x00" in rhs:\n            string_lets.add(name)\n',
+     "        if False:\n            string_lets.add(name)\n"),
     ("M691", "the argument of workspace()/resource()/app() leaves (P1, review)", "glorfindel/rule_layers.py",
-     "        if m.end() in starts:\n", "        if False:\n"),
+     "                replace.add(lit_at[pos])\n", "                pass\n"),
     ("M692", "a partial ARM path (resourceGroups/<x>…) is not replaced (P1, review)", "glorfindel/rule_layers.py",
      "    text = _ARM_SEGMENT_RE.sub(segment, text)\n", ""),
     ("M693", "a known name behind regex escapes (vm\\-a1) is not replaced (P1, review)", "glorfindel/rule_layers.py",
@@ -1224,6 +1224,68 @@ MUTANTS = [
      '            backend = backend_for_workspace(r["workspace_id"], backends)\n', '            backend = ""\n'),
     ("M699", "a rule that applies to no VM is not said at load (P1, review)", "glorfindel/detection_rules.py",
      "            notes.append(note)\n", "            pass\n"),
+    # P1, second review: the export replaces only what is sure, refuses the forms it does not
+    # follow, and leaves a sound rule as written; an approved rule is bound only to its own
+    # workspace's backend; what is inert or unreadable is said.
+    ("M700", "a resource TYPE path (MICROSOFT.COMPUTE/VIRTUALMACHINES/RUNCOMMAND) is replaced (P1, review 2)",
+     "glorfindel/rule_layers.py",
+     '        if _PLACEHOLDER_RE.match(m.group("val")) or _resource_type(m.string, m):\n',
+     '        if _PLACEHOLDER_RE.match(m.group("val")):\n'),
+    ("M701", "the guard counts a resource TYPE path as an identifier: a sound rule refused (P1, review 2)",
+     "glorfindel/rule_layers.py",
+     '             if not _PLACEHOLDER_RE.match(m.group("val")) and not _resource_type(text, m)]\n',
+     '             if not _PLACEHOLDER_RE.match(m.group("val"))]\n'),
+    ("M702", "a literal that names nothing (\"@\", \"/\") is replaced (P1, review 2)", "glorfindel/rule_layers.py",
+     "    return _real_literal(lit) and len(value) >= _MIN_NAME and any(c.isalnum() for c in value)\n",
+     "    return _real_literal(lit)\n"),
+    ("M703", "a literal compared to an identity column is not replaced (P1, review 2)", "glorfindel/rule_layers.py",
+     '            operand(m.end(), m.group("col"), alias)\n', "            pass\n"),
+    ("M704", "a literal on the left of an identity column is not replaced (P1, review 2)",
+     "glorfindel/rule_layers.py",
+     "                    replace.add((s, e))\n", "                    pass\n"),
+    ("M705", "a `let` bound to a string, compared to an identity column, is not refused (P1, review 2)",
+     "glorfindel/rule_layers.py",
+     "        elif m.group(1) in string_lets:\n", "        elif False:\n"),
+    ("M706", "a `let` bound to a `let` bound to a string is not followed (P1, review 2)",
+     "glorfindel/rule_layers.py",
+     '            if set(re.findall(r"\\w+", rhs)) & string_lets:\n', "            if False:\n"),
+    ("M707", "a non-literal argument of workspace() is not refused (P1, review 2)", "glorfindel/rule_layers.py",
+     '                refused.append(f"argument non littéral de {fn}() : {query[pos:end].strip()[:60]}")\n',
+     "                pass\n"),
+    ("M708", "an alias of an identity column is not seen (P1, review 2)", "glorfindel/rule_layers.py",
+     "            if _ID_COL_RE.search(rhs) or words & aliases:\n", "            if False:\n"),
+    ("M709", "an alias of an alias is not seen (P1, review 2)", "glorfindel/rule_layers.py",
+     "            if _ID_COL_RE.search(rhs) or words & aliases:\n", "            if _ID_COL_RE.search(rhs):\n"),
+    ("M710", "a function of the query touching an identity column is not refused (P1, review 2)",
+     "glorfindel/rule_layers.py",
+     "                refused.append(f\"fonction « {name} » définie dans la requête, dont le corps touche une "
+     "colonne d'identité\")\n", "                pass\n"),
+    ("M711", "an identity column compared to an expression is not refused (P1, review 2)",
+     "glorfindel/rule_layers.py",
+     '            if has_literal(pos, end) or set(re.findall(r"\\w+", code[pos:end])) & string_lets:\n',
+     "            if False:\n"),
+    ("M712", "export does not refuse by name the forms it does not follow (P1, review 2)",
+     "glorfindel/rule_layers.py",
+     "    if refused:\n        err = NotGeneralizable(", "    if False:\n        err = NotGeneralizable("),
+    ("M713", "glorfindel rules hides the backend of an auto rule: bound and inert look alike (P1, review 2)",
+     GCLI, '            assets = (f"auto ({r.monitoring_backend_name})" if r.monitoring_backend_name\n',
+     '            assets = ("auto" if r.monitoring_backend_name\n'),
+    ("M714", "an approved rule of another workspace borrows the first rule's backend (P1, review 2)",
+     "glorfindel/proposed_rules.py",
+     "backend_for_workspace(workspace, cfg.backends) if workspace else next(",
+     "backend_for_workspace(workspace, cfg.backends) or next("),
+    ("M715", "migrate-rules reads an unreadable config as « no backend » (P1, review 2)", GCLI,
+     "        gcfg, config_error = None, str(exc)\n", '        gcfg, config_error = None, ""\n'),
+    ("M716", "glorfindel rules says an ignored layer « absente » (P1, review 2)", GCLI,
+     "    elif client_rules_path().exists():\n", "    elif False:\n"),
+    ("M717", "the export keeps the query's comments (P1, review 2)", "glorfindel/rule_layers.py",
+     "    if kql:   # comments go", "    if False:   # comments go"),
+    ("M718", "a `let` in a list compared to an identity column is not refused (P1, review 2)",
+     "glorfindel/rule_layers.py",
+     '                for word in set(re.findall(r"\\w+", inner)) & string_lets:\n',
+     "                for word in set():\n"),
+    ("M719", "a `let` given to workspace() is not named (P1, review 2)", "glorfindel/rule_layers.py",
+     "            if words & string_lets:\n", "            if False:\n"),
 ]
 
 # Mutants measured by other tests than the invariants (their lot's own).
@@ -1302,6 +1364,7 @@ TESTS.update({f"M{n}": "tests/unit/test_rule_layers.py tests/unit/test_proposed_
 TESTS["M687"] = "tests/unit/test_host_deploy.py"
 TESTS["M688"] = "tests/unit/test_rule_layers.py"
 TESTS.update({f"M{n}": "tests/unit/test_rule_layers.py tests/unit/test_host_deploy.py" for n in range(689, 700)})
+TESTS.update({f"M{n}": "tests/unit/test_rule_layers.py" for n in range(700, 720)})
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

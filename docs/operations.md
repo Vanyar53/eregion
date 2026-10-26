@@ -168,6 +168,13 @@ make glorfindel-host-campaign-report CAMPAIGN=<id>   # lit runs/campaigns/<id>/r
 #   ~/.eregion/analysis sur la VM (monté dans le conteneur ; montage et image au prochain
 #   redéploiement de H0). À la main, sur la VM, si le rapport automatique a été abandonné :
 #     docker exec eregion-watch python -m analysis.campaign_report runs/campaigns/<id>
+#   D-2 (#184) : le rapport se compare à la campagne précédente, choisie dans l'index. Pour y
+#   verser les campagnes passées (idempotent, aucun appel au modèle), sur la VM :
+#     docker exec eregion-watch python -m analysis.campaign_index --all runs/campaigns
+#   quand aucun rapport n'est en attente (le fil campaign-report écrit dans le même index
+#   chromadb) : la liste de hosted_report.ready doit être vide —
+#     docker exec eregion-watch python -c "from pathlib import Path; from analysis import hosted_report as h; print([p.name for p in h.ready(Path('runs/campaigns'))])"
+#   (en local : python -m analysis.campaign_index --all runs/campaigns ; docs/analysis.md)
 annatar campaign plan --target <resource_id> [--llm]   # en local (banc) ; --llm pour le planner LLM
 annatar campaign run <campaign_id> --yes               # ratifie le budget/scope et exécute
 

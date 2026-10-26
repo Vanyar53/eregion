@@ -697,9 +697,13 @@ MUTANTS = [
     ("M193", "the kill leaves the open exercise windows open (M-1)", KILL,
      "                exercise_channel.publish(closed, channel=channel, credential=cred, put=put)\n",
      "                pass\n"),
+    # M-1, measured on the bench (26/10): orodruin-check printed the subscription.
+    ("M194", "what the contract shows names the subscription (M-1)", "eregion_core/orodruin.py",
+     '    return {"code": code, "detail": _SUBSCRIPTION_PART.sub("/subscriptions/…", detail)}\n',
+     '    return {"code": code, "detail": detail}\n'),
     # D-1 (#186) — the stability of the decision: the first draw at temperature 0 (the
     # model's default when it refuses one), a disruptive action run alone only when every
-    # draw agrees. M191–M193 are lot M-1's (Orodruin).
+    # draw agrees. M191–M194 are lot M-1's (Orodruin).
     ("M200", "the first draw is asked at the provider's default sampling: nothing fixes it (D-1)",
      "glorfindel/agent.py",
      '            litellm, "security_decision", temperature=_DECISION_TEMPERATURE, **call)\n',
@@ -756,7 +760,7 @@ MUTANTS = [
     # long, declared for later or named like a RulePoller run; a VM only if enrolled; the
     # run_id shortcut on a VM the window names; purged a week on; an exercise card kept in
     # the list to judge; on H0, a campaign checked against its shape, its runs kept only with
-    # a known window naming an enrolled VM. M200–M212 are D-1's, M191–M193 M-1's.
+    # a known window naming an enrolled VM. M200–M212 are D-1's, M191–M194 M-1's.
     ("M220", "a window longer than MAX_DURATION_S is believed (H-1)", XW,
      "    if not 0 < lasts <= MAX_DURATION_S:\n", "    if not 0 < lasts:\n"),
     ("M221", "a window that starts long after it was declared is believed (H-1)", XW,
@@ -858,6 +862,7 @@ TESTS.update({f"M{n}": "tests/unit/test_dependency_failures.py" for n in range(1
 TESTS["M189"] = "tests/unit/test_makefile_bench.py"
 TESTS["M190"] = "tests/unit/test_campaign_report.py"
 TESTS.update({mid: "tests/unit/test_orodruin_kill.py" for mid in ("M191", "M192", "M193")})
+TESTS["M194"] = "tests/unit/test_orodruin.py"
 TESTS.update({f"M{n}": "tests/unit/test_decision_stability.py" for n in range(200, 213)})
 TESTS.update({f"M{n}": "tests/unit/test_exercise_guard.py" for n in range(220, 239)})
 

@@ -86,9 +86,11 @@ def _names(ids) -> str:
     return ", ".join(i.rstrip("/").rsplit("/", 1)[-1] for i in ids) or "no target"
 
 
-def _in_flight(window: dict, at: datetime) -> list[str]:
-    """What a closed window says may still run: the injector's own leftovers."""
-    run_id, targets = window["run_id"], _names(window.get("targets") or [])
+def _in_flight(window: dict, at: datetime, said_down: set[str] = frozenset()) -> list[str]:
+    """What a closed window says may still run: the injector's own leftovers — a VM the
+    cancel step already said may stay down is not said twice."""
+    names = [i.rstrip("/").rsplit("/", 1)[-1] for i in window.get("targets") or []]
+    run_id, targets = window["run_id"], ", ".join(names) or "no target"
     grace = (at + timedelta(seconds=exercise.GRACE_AFTER_S)).strftime("%H:%M UTC")
     out = [f"{run_id} ({window.get('injector')}, {window.get('experiment')}): detections on "
            f"{targets} are still labelled exercise until {grace} (the window's grace)"]
@@ -97,7 +99,7 @@ def _in_flight(window: dict, at: datetime) -> list[str]:
                    "revocation does not stop it; the atomic's cleanup may not have run: "
                    "`annatar run <scenario> --dry-run` prints it, to replay by hand "
                    "(az vm run-command invoke)")
-    elif window.get("injector") == "gothmog":
+    elif window.get("injector") == "gothmog" and not set(names) <= said_down:
         out.append(f"{run_id}: the fault may leave {targets} down — `az vm start` it if the "
                    "cancelled experiment did not bring it back")
     return out
@@ -111,6 +113,7 @@ def steps(principal_id: str, vm_id: str, *, subscription: str = "",
     see still running and cannot stop is appended to ``inflight``."""
     run = run or az
     inflight = [] if inflight is None else inflight
+    said_down: set[str] = set()  # the VMs the cancel step said a fault may leave down
     subs = subscriptions(subscription, vm_id)
 
     def call(args: list[str]) -> str:
@@ -174,14 +177,19 @@ def steps(principal_id: str, vm_id: str, *, subscription: str = "",
             call(["rest", "--method", "post", "--url", f"{ARM}{eid}/cancel?api-version={CHAOS_API}"])
             cancelled += 1
             try:
-                vms = _names(experiment_targets(experiment))
+                targets = experiment_targets(experiment)
             except ValueError:
-                vms = "its targets"
-            inflight.append(f"chaos {name}: cancelled — the fault may leave {vms} down; "
+                targets = []
+            said_down.update(t.rstrip("/").rsplit("/", 1)[-1] for t in targets)
+            inflight.append(f"chaos {name}: cancelled — the fault may leave "
+                            f"{_names(targets) if targets else 'its targets'} down; "
                             "`az vm start` it if the cancel did not bring it back")
             for e in running(eid):
                 status = (e.get("properties") or {}).get("status")
-                inflight.append(f"chaos {name}: execution still {status} after the cancel")
+                # Measured on the bench (26/10): Running right after the cancel, Cancelled
+                # about 50 s later, the VM restarted by Chaos Studio itself.
+                inflight.append(f"chaos {name}: execution still {status} right after the "
+                                "cancel (it usually ends within a minute)")
         if not cancelled:
             say("no chaos experiment running on the bench")
 
@@ -220,7 +228,7 @@ def steps(principal_id: str, vm_id: str, *, subscription: str = "",
                 still_open.append(f"{w['run_id']} ({e})")
                 continue
             say(f"window {w['run_id']} closed ({w.get('injector')}: {w.get('experiment')})")
-            inflight.extend(_in_flight(closed, at))
+            inflight.extend(_in_flight(closed, at, said_down))
         if still_open:
             raise RuntimeError("windows still open: " + ", ".join(still_open))
 

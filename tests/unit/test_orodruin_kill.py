@@ -237,6 +237,16 @@ def test_the_open_windows_are_closed_and_what_ran_is_said(kill_script):
     assert "until 10:15 UTC" in text  # the grace after the close
 
 
+def test_a_vm_a_fault_may_leave_down_is_said_once(kill_script):
+    """The cancel step and the fault's window both know gondolin may stay down: one line
+    (seen twice in the bench's kill, 26/10)."""
+    az = FakeAz(experiments={"exp-vm-shutdown": ["Running"]})
+    channel = FakeChannel([_window("r-fault", injector="gothmog")])
+    failures, inflight, _ = _kill(kill_script, az, channel=channel)
+    assert failures == [] and set(channel.puts) == {"r-fault.json"}
+    assert sum("vm-celebrimbor-gondolin down" in line for line in inflight) == 1
+
+
 def test_a_channel_the_operator_cannot_read_is_a_failure_that_says_when_windows_lapse(kill_script):
     failures, _, _ = _kill(kill_script, FakeAz(), channel=FakeChannel([], status=403))
     assert len(failures) == 1 and failures[0].startswith("close:")

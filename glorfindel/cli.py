@@ -1879,7 +1879,12 @@ def rules_cmd(rules_file: str | None) -> None:
     if not target:
         console.print("[red]detection_rules.yaml not found.[/red] Pass --rules PATH.")
         raise SystemExit(1)
-    cfg = load_config(target, client_layer=True)
+    try:  # with the config, rules bind to its backends (no misleading "rule disabled")
+        from glorfindel.config import load_glorfindel_config
+        gcfg = load_glorfindel_config()
+    except Exception:
+        gcfg = None
+    cfg = load_config(target, glorfindel_cfg=gcfg)
     table = Table(box=None, pad_edge=False)
     for col in ("rule", "layer", "ttp", "assets"):
         table.add_column(col)

@@ -48,6 +48,7 @@ _ESCALATION_LABELS = {
     "ttl_exceeded": "isolation levée à l'expiration du TTL",
     "unattributed_signal": "détection non attribuée à cette VM",
     "telemetry_gap": "télémétrie incomplète (requêtes d'enquête en échec)",
+    "unstable_decision": "décision instable (les tirages ne s'accordent pas)",
     "readiness_hold": "VM retenue en observation (préparation)",
 }
 

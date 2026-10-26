@@ -226,14 +226,16 @@ flowchart LR
   R -->|non| E5["release_hold"]
   R -->|oui| M{"mode effectif<br/>de la VM"}
   M -->|"human_only, ou VM<br/>pas encore prête"| E6["mode_hold"]
-  M -->|"non_disruptive"| GO(("exécuter"))
+  M -->|"non_disruptive"| D{"isoler, bloquer :<br/>les tirages s'accordent ?"}
+  D -->|non| E9["unstable_decision"]
+  D -->|oui| GO(("exécuter"))
   classDef blue fill:#2f6fd6,stroke:#1d4a9a,color:#ffffff
   classDef guard fill:#f2b33d,stroke:#b07a12,color:#2b1d00
   classDef warn fill:#fbe3e3,stroke:#d64545,color:#7a1f1f
   classDef go fill:#2e9e6a,stroke:#1d6b47,color:#ffffff
   class LLM blue
-  class P,K,X,C,S,A,T,R,M guard
-  class E0,E1,E2,E3,E4,E5,E6,E7,E8 warn
+  class P,K,X,C,S,A,T,R,M,D guard
+  class E0,E1,E2,E3,E4,E5,E6,E7,E8,E9 warn
   class GO go
 </pre></div><span class="hint">Ctrl + molette · glisser</span></div>
     </article>

@@ -122,6 +122,13 @@ export AZURE_SUBSCRIPTION_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 # carte cycle_failed au lieu de tenir la file de la VM (LiteLLM attendait 6000 s).
 # export GLORFINDEL_LLM_TIMEOUT_S=120
 
+# Accord des tirages (D-1) : une action disruptive (isolate_vm, block_suspicious_ip) prête à
+# partir seule est redemandée au modèle, à son échantillonnage par défaut ; elle ne part
+# que si tous les tirages la reprennent au-dessus du seuil, sinon carte unstable_decision.
+# Défaut 3 ; un entier de 2 à 10 ; illisible, 1 ou plus de 10 → toute action disruptive
+# autonome est retenue (échec fermé). Sans coût en human_only (rien ne part seul).
+# export GLORFINDEL_DECISION_DRAWS=3
+
 # Rétention discovery — une VM éteinte (absente du Heartbeat) reste visible dans le
 # registre tant que son dernier heartbeat date de moins de X heures, puis est évincée
 # (défaut 8h). Évite qu'une VM juste éteinte disparaisse de la War Room.

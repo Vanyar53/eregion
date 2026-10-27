@@ -30,6 +30,7 @@ def test_every_module_of_the_split_is_in_the_facade():
     }
     on_disk.discard("glorfindel.providers.azure.monitor")     # the detector: not an action
     on_disk.discard("glorfindel.providers.azure.activity")    # the Activity Log's (AL1): neither
+    on_disk.discard("glorfindel.providers.azure.entra")       # Entra ID's logs (C2): neither
     assert on_disk == set(SPLIT)
 
 

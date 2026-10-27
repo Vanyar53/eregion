@@ -22,6 +22,8 @@ from glorfindel.detectors import (  # noqa: E402  (after optional deps)
     detector_class,
     detector_for,
     is_control_plane_source,
+    is_identity_source,
+    plane_of,
 )
 
 logger = logging.getLogger("glorfindel.detection_rules")
@@ -181,7 +183,21 @@ def normalize_row(row: dict, ttp: str = "") -> dict:
     `caller_ip`, and whether its target is Glorfindel's (`glorfindel_managed`) or its
     caller Glorfindel's own identity (`glorfindel_identity`). Every other row keeps the
     three keys it had.
+
+    An identity row (Entra ID, C2: it has `EntraOperation`) gives the operation as its
+    indicator (`identity_operation`), the identity it targets as its resource, its actor and
+    the actor's address, and the same two marks.
     """
+    if row.get("EntraOperation"):
+        return {
+            "resource": str(row.get("TargetId") or row.get("TargetName") or ""),
+            "indicator_key": "identity_operation",
+            "indicator_value": row["EntraOperation"],
+            "actor": row.get("ActorName") or row.get("ActorId") or "",
+            "actor_ip": row.get("ActorIp") or "",
+            "glorfindel_managed": row.get("GlorfindelManaged") is True,
+            "glorfindel_identity": row.get("GlorfindelIdentity") is True,
+        }
     if row.get("OperationNameValue"):
         return {
             "resource": str(row.get("_ResourceId") or row.get("ResourceId") or ""),
@@ -614,6 +630,20 @@ def load_config(path: str | Path, glorfindel_cfg=None, client_layer: str | Path 
                 f"règle « {item['name']} » ({source}) : la requête ne projette pas "
                 f"CorrelationId — deux opérations au même horodatage n'y font qu'une détection, "
                 f"la seconde jamais vue (projeter CorrelationId, OperationNameValue, _ResourceId)")
+        # An identity finding's dedup key is its EventId (C2): without it, two findings at
+        # the same instant fold into one card, the second never seen.
+        if rule_enabled and is_identity_source(source) and "eventid" not in item["query"].lower():
+            notes.append(
+                f"règle « {item['name']} » ({source}) : la requête ne projette pas EventId — "
+                f"deux opérations au même horodatage n'y font qu'une détection, la seconde "
+                f"jamais vue (projeter EntraKind, EntraOperation, EventId)")
+        # Entra's tables read by another source: none of its thresholds, none of its marks
+        # (Glorfindel's identity) — its rows are still decided by the code, without action.
+        if rule_enabled and not is_identity_source(source) and _reads_entra_table(item["query"]):
+            notes.append(
+                f"règle « {item['name']} » ({source}) : lit un journal d'Entra ID sans la source "
+                f"azure_entra — ni ses seuils ni ses marques (identité de Glorfindel) ; "
+                f"utiliser source: azure_entra")
 
         if auto_apply and _truncates_before_vm_filter(item["query"]):
             logger.warning(
@@ -723,6 +753,17 @@ def _query_lookback_s(query: str) -> float:
     return max(spans) if spans else _DEFAULT_LOOKBACK_S
 
 
+_ENTRA_TABLE_RE = re.compile(
+    r"\b(auditlogs|signinlogs|aadserviceprincipalsigninlogs|aadnoninteractiveusersigninlogs|"
+    r"aadmanagedidentitysigninlogs)\b", re.IGNORECASE)
+
+
+def _reads_entra_table(query: str) -> bool:
+    """The query reads one of Entra ID's tables (comments left out)."""
+    code = "\n".join(line.split("//", 1)[0] for line in (query or "").splitlines())
+    return bool(_ENTRA_TABLE_RE.search(code))
+
+
 def _looks_numeric(value: str) -> bool:
     try:
         float(value)
@@ -739,6 +780,10 @@ def _row_identity(row: dict) -> str:
     its non-numeric columns (who, where) — the same attacker on the same VM is one
     detection for the length of the query window.
     """
+    # An identity finding (Entra ID, C2) is its EventId — its CorrelationId and target, or
+    # a service principal and an address: a line ingested late is the same one.
+    if row.get("EntraOperation") and row.get("EventId"):
+        return "entra:" + str(row["EventId"]).lower()
     # A control-plane operation (AzureActivity, AL1) is its correlation id, operation and
     # target: its Start, Accept and Success lines — and a line ingested late — are one.
     if row.get("OperationNameValue") and row.get("CorrelationId"):
@@ -790,7 +835,12 @@ def _control_plane_summary(rest: list[dict]) -> dict:
              "Caller": r.get("Caller") or "",
              "_ResourceId": r.get("_ResourceId") or r.get("ResourceId") or "",
              "GlorfindelManaged": r.get("GlorfindelManaged") is True,
-             "GlorfindelIdentity": r.get("GlorfindelIdentity") is True}
+             "GlorfindelIdentity": r.get("GlorfindelIdentity") is True,
+             # An identity finding (C2): what its card would have said.
+             **({"EntraOperation": r.get("EntraOperation") or "",
+                 "ActorName": r.get("ActorName") or r.get("ActorId") or "",
+                 "TargetName": r.get("TargetName") or "", "TargetId": r.get("TargetId") or ""}
+                if r.get("EntraOperation") else {})}
             for r in rest],
     }
 
@@ -1070,7 +1120,8 @@ class RulePoller:
                     seen = {seen["id"]: seen["at"]}
                 dispatched[key] = {i: at for i, at in (seen or {}).items() if float(at) >= cutoff}
             plan = []
-            control = is_control_plane_source(rule.source)
+            # The control plane (AL1) and identities (C2): one card per operation.
+            control = is_control_plane_source(rule.source) or is_identity_source(rule.source)
             budget = _CONTROL_PLANE_CARDS_PER_POLL
             for key, (tgt, krows) in routed.items():
                 seen = dispatched.get(key, {})
@@ -1136,8 +1187,10 @@ class RulePoller:
             resource_id, asset_name = sorted(targets, key=lambda t: t[1])[0]
             attribution = "unattributed"
         ts_compact = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        # Control plane (AL1): detection only — `plane` is what `decide` reads.
-        control = is_control_plane_source(rule.source)
+        # Control plane (AL1), identities (C2): detection only — `plane` is what `decide`
+        # reads.
+        plane = plane_of(rule.source)
+        control = plane in ("control", "identity")
         grave = control and (row.get("GlorfindelManaged") is True or row.get("GlorfindelIdentity") is True)
         return {
             "signal_id": f"rule-{rule.name}-{uuid.uuid4().hex[:8]}",
@@ -1157,7 +1210,7 @@ class RulePoller:
                 "run_id": f"watch-{rule.name}-{ts_compact}",
                 "attribution": attribution,
                 **({"candidates": sorted(n for _, n in targets)} if attribution == "unattributed" else {}),
-                **({"plane": "control"} if control else {}),
+                **({"plane": plane} if control else {}),
             },
             "raw_signal": {
                 "detection_source": rule.source,

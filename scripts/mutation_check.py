@@ -1621,7 +1621,7 @@ MUTANTS += [
     ("M857", "an unattributed control-plane signal opens the anchor VM's incident (AL1)", AGT,
      "        if (signal.get(\"context\") or {}).get(\"attribution\") != \"asset\":", "        if False:"),
     ("M858", "a control-plane cycle stored in the decision memory: a precedent for a data-plane decision (AL1)",
-     AGT, "        if not _is_control_plane(signal):\n            memory.store(cycle)",
+     AGT, "        if not (_is_control_plane(signal) or _is_identity(signal)):\n            memory.store(cycle)",
      "        if True:\n            memory.store(cycle)"),
     ("M859", "what an isolation state recorded forgotten once the state is gone: the release escalates (AL1)",
      ACT, "            return frozenset(self._recorded)\n", "            return current\n"),
@@ -1643,6 +1643,64 @@ MUTANTS += [
      "    return False"),
     ("M894", "a control-plane rule without CorrelationId loads in silence: two operations fold into one (AL1)",
      DRU, "                and \"correlationid\" not in item[\"query\"].lower():", "                and False:"),
+]
+
+# C2 (#199), the defensive half — Entra ID's logs, detection only: each rule escalates with
+# its steps, never the model, never an action on an identity; thresholds in code; Glorfindel's
+# identity marked, never an excuse to silence. Range M920–M939, measured by
+# tests/unit/test_entra_detection.py.
+ENT = "glorfindel/providers/azure/entra.py"
+MUTANTS += [
+    ("M920", "an identity detection decided by the model: it is called, with an administrator's UPN (C2)", AGT,
+     "    if _is_identity(state[\"signal\"]):\n        return _identity_decision(state)\n", ""),
+    ("M921", "the route after decide sends an identity detection to an action: a bypassed decide isolates (C2)",
+     AGT, "    if _is_identity(state[\"signal\"]):\n        return \"escalate_to_human\"\n", ""),
+    ("M922", "an identity detection known by its plane only: a row whose columns say nothing goes to the model (C2)",
+     AGT, "    if ctx.get(\"plane\") == \"identity\" or is_identity_source(str(raw.get(\"detection_source\") or \"\")):",
+     "    if ctx.get(\"plane\") == \"identity\":"),
+    ("M923", "an Entra row read by another source goes to the model: no plane, no source (C2)", AGT,
+     "    return (any(r.get(c) for r in rows for c in IDENTITY_COLUMNS)\n"
+     "            or any(str(r.get(\"Type\") or \"\").lower() in ENTRA_TABLES for r in rows)\n"
+     "            or (raw.get(\"normalized_signal\") or {}).get(\"indicator_key\") == \"identity_operation\")",
+     "    return False"),
+    ("M924", "every directory role a finding: Directory Readers escalates like Global Administrator (C2)", ENT,
+     "        return not role or role in PRIVILEGED_ROLES", "        return True"),
+    ("M925", "a service principal without history unusual: the first days after the setting flood (C2)", ENT,
+     "        return days is None or days >= MIN_BASELINE_DAYS", "        return True"),
+    ("M926", "a failed operation a finding (C2)", ENT, "    if not _succeeded(row):\n        return False\n", ""),
+    ("M927", "Glorfindel's identity as the actor not marked: its stolen credential not critical (C2)", ENT,
+     "\"GlorfindelIdentity\": bool(own) and bool(actor_ids(row) & own),", "\"GlorfindelIdentity\": False,"),
+    ("M928", "Glorfindel's identity as the target not marked: a credential added to it not critical (C2)", ENT,
+     "\"GlorfindelManaged\": bool(own) and bool(target_ids(row) & own)})", "\"GlorfindelManaged\": False})"),
+    ("M929", "an identity card folded into the pending one: a credential added to Glorfindel unseen (C2)",
+     "glorfindel/escalations.py", "                and escalation_type != \"identity_change\"\n", ""),
+    ("M930", "an identity escalation past a bypassed decide typed low_confidence: approvable in one click (C2)",
+     AGT, "    if _is_identity(state[\"signal\"]):\n        escalation_type = \"identity_change\"\n"
+          "    elif _out_status in (\"write_blocked\", \"action_failed\"):",
+     "    if _out_status in (\"write_blocked\", \"action_failed\"):"),
+    ("M931", "a command aimed at the anchor VM on an identity card (C2)", "glorfindel/bot.py",
+     "_ANCHORED_TYPES = {\"control_plane_change\", \"identity_change\", \"unattributed_signal\"}",
+     "_ANCHORED_TYPES = {\"control_plane_change\", \"unattributed_signal\"}"),
+    ("M932", "an identity cycle stored in the decision memory: its UPN served to the model later (C2)", AGT,
+     "        if not (_is_control_plane(signal) or _is_identity(signal)):\n            memory.store(cycle)",
+     "        if not _is_control_plane(signal):\n            memory.store(cycle)"),
+    ("M933", "an identity detection opens the anchor VM's incident (C2)", AGT,
+     "    if _is_identity(signal):\n        return {**state, \"past_cycles\": [], \"incident\": None}\n", ""),
+    ("M934", "an identity finding deduplicated by its time: two consents in the same second, one card (C2)", DRU,
+     "    if row.get(\"EntraOperation\") and row.get(\"EventId\"):", "    if False:"),
+    ("M935", "identity findings one card per cycle: the second credential added in a poll never seen (C2)", DRU,
+     "            control = is_control_plane_source(rule.source) or is_identity_source(rule.source)",
+     "            control = is_control_plane_source(rule.source)"),
+    ("M936", "an identity signal without its plane: a finding on Glorfindel's identity not critical (C2)", DRU,
+     "        control = plane in (\"control\", \"identity\")", "        control = plane == \"control\""),
+    ("M937", "an identity rule without EventId loads in silence (C2)", DRU,
+     "        if rule_enabled and is_identity_source(source) and \"eventid\" not in item[\"query\"].lower():",
+     "        if False:"),
+    ("M938", "a role card without how to revoke the assignment (C2)", ENT,
+     "            \"Non voulue : retirer l'attribution — portail, ou `az rest --method DELETE --url \"\n"
+     "            \"https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignments/<id>`.\",\n", ""),
+    ("M939", "the tenant's diagnostic setting always on: the whole tenant's logs sent (C2)",
+     "infra/terraform/entra_logs.tf", "  count = local.entra_logs_enabled ? 1 : 0", "  count = 1"),
 ]
 
 # Mutants measured by other tests than the invariants (their lot's own).
@@ -1739,6 +1797,7 @@ TESTS.update({f"M{n}": "tests/unit/test_watch_gate.py" for n in (*range(720, 740
 TESTS.update({f"M{n}": "tests/unit/test_gothmog.py" for n in (724, 725, 726, 727)})
 TESTS.update({f"M{n}": "tests/unit/test_host_console.py" for n in range(740, 750)})  # UI-1c
 TESTS.update({f"M{n}": "tests/unit/test_activity_logs.py" for n in (*range(810, 830), *range(850, 860), *range(890, 895))})  # AL1
+TESTS.update({f"M{n}": "tests/unit/test_entra_detection.py" for n in range(920, 940)})  # C2
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

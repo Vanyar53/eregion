@@ -275,3 +275,167 @@ rules:
       | where ActivityStatusValue !in~ ("Failure", "Failed")
       | project TimeGenerated, OperationNameValue, ActivityStatusValue, Caller, CallerIpAddress,
                 CallerAppId, CallerObjectId, _ResourceId, ResourceGroup, CorrelationId
+
+  # ── Identités : les journaux d'Entra ID (AuditLogs, AADServicePrincipalSignInLogs, C2) ──
+  # Détection seule : une détection sur Entra ID n'entraîne JAMAIS d'action autonome —
+  # `decide` construit la décision par le code, sans appel au modèle (aucun UPN ne part au
+  # fournisseur) : escalade `identity_change`, aucune action recommandée, des étapes pour
+  # vérifier et révoquer. `revoke_service_principal` n'existe pas (hors lot).
+  # source: azure_entra lit le même workspace que Perf, Syslog et AzureActivity (backend
+  # azure_monitor), à condition que les journaux d'Entra y soient envoyés : paramètre de
+  # diagnostic du TENANT (pas de l'abonnement), catégories AuditLogs et
+  # ServicePrincipalSignInLogs — pas par défaut ; infra/terraform/entra_logs.tf le
+  # propose, désactivé. Licence : les journaux de connexion dans un workspace demandent
+  # Entra ID P1 ou P2 (hypothèse de la documentation, à vérifier sur le tenant du banc).
+  # Chaque règle projette les mêmes colonnes (EntraKind, EntraOperation, EventId, Result,
+  # Actor*, Target*) : l'adaptateur (glorfindel/providers/azure/entra.py) y applique les
+  # seuils écrits en code (rôle privilégié, historique d'un principal, échecs écartés) et
+  # marque l'identité de Glorfindel, acteur (GlorfindelIdentity) ou cible
+  # (GlorfindelManaged) — critique ; il n'écarte rien sous son identité : Glorfindel
+  # n'écrit rien dans Entra ID. Une carte par constat (EventId), plafond par relevé.
+  # Hypothèses, à mesurer sur le banc : noms d'opérations, forme de TargetResources et de
+  # modifiedProperties, latence (quelques minutes, parfois plus : fenêtre d'une heure).
+
+  - name: entra-credential-added
+    description: >
+      Identifiant (secret, certificat, identifiant fédéré) ajouté à une application ou à un
+      principal de service — T1098.001 (Account Manipulation: Additional Cloud Credentials).
+      Seuil : chaque ajout réussi ; un retrait (ensemble nouveau inclus dans l'ancien) n'est
+      pas un constat. Exclusion : un pipeline de rotation connu s'exclut dans la couche du
+      client.
+    enabled: true
+    source: azure_entra
+    ttp: T1098.001
+    assets: [auto]
+    interval_s: 120
+    expected_latency_s: 1800
+    query: |
+      AuditLogs
+      | where TimeGenerated > ago(1h)
+      | where OperationName has_any ("Add service principal", "Certificates and secrets management", "Update application")
+      | where Result =~ "success"
+      | mv-apply Target = TargetResources on (
+          where tostring(Target.type) in~ ("Application", "ServicePrincipal")
+          | extend TargetName = tostring(Target.displayName), TargetId = tostring(Target.id),
+                   TargetType = tostring(Target.type), Props = Target.modifiedProperties)
+      | mv-apply Prop = Props on (
+          where tostring(Prop.displayName) in~ ("KeyDescription", "FederatedIdentityCredentials")
+          | extend NewSet = parse_json(tostring(Prop.newValue)), OldSet = parse_json(tostring(Prop.oldValue)))
+      | extend OldSet = iff(isnull(OldSet), dynamic([]), OldSet)
+      | extend Added = set_difference(NewSet, OldSet)
+      | where array_length(Added) > 0
+      // One row per operation and target.
+      | summarize arg_max(TimeGenerated, *) by CorrelationId, TargetId
+      | project TimeGenerated, EntraKind = "credential", EntraOperation = OperationName,
+                EventId = strcat(CorrelationId, "|", TargetId), Result,
+                ActorName = coalesce(tostring(InitiatedBy.user.userPrincipalName), tostring(InitiatedBy.app.displayName)),
+                ActorId = coalesce(tostring(InitiatedBy.user.id), tostring(InitiatedBy.app.servicePrincipalId)),
+                ActorAppId = tostring(InitiatedBy.app.appId), ActorIp = tostring(InitiatedBy.user.ipAddress),
+                TargetName, TargetId, TargetType, CredentialAdded = tostring(Added), CorrelationId
+
+  - name: entra-app-consent
+    description: >
+      Consentement accordé à une application (délégué ou d'application) — T1528 (Steal
+      Application Access Token : l'application consentie obtient des jetons au nom de
+      l'utilisateur, ou du tenant pour un consentement d'administrateur). Seuil : chaque
+      consentement réussi, une carte par opération (CorrelationId). Exclusion : une
+      application approuvée s'exclut dans la couche du client.
+    enabled: true
+    source: azure_entra
+    ttp: T1528
+    assets: [auto]
+    interval_s: 120
+    expected_latency_s: 1800
+    query: |
+      AuditLogs
+      | where TimeGenerated > ago(1h)
+      | where OperationName in~ ("Consent to application", "Add app role assignment to service principal", "Add delegated permission grant")
+      | where Result =~ "success"
+      | extend Target = TargetResources[0]
+      | mv-apply Prop = Target.modifiedProperties on (
+          where tostring(Prop.displayName) in~ ("ConsentAction.Permissions", "ConsentContext.IsAdminConsent", "AppRole.Value", "DelegatedPermissionGrant.Scope")
+          | summarize Props = make_bag(bag_pack(tostring(Prop.displayName), tostring(Prop.newValue))))
+      // One row per operation: its « Consent to application » line first.
+      | extend Rank = iff(OperationName =~ "Consent to application", 0, 1)
+      | summarize arg_min(Rank, *) by CorrelationId
+      | project TimeGenerated, EntraKind = "consent", EntraOperation = OperationName,
+                EventId = CorrelationId, Result,
+                ActorName = coalesce(tostring(InitiatedBy.user.userPrincipalName), tostring(InitiatedBy.app.displayName)),
+                ActorId = coalesce(tostring(InitiatedBy.user.id), tostring(InitiatedBy.app.servicePrincipalId)),
+                ActorAppId = tostring(InitiatedBy.app.appId), ActorIp = tostring(InitiatedBy.user.ipAddress),
+                TargetName = tostring(Target.displayName), TargetId = tostring(Target.id), TargetType = tostring(Target.type),
+                Permissions = trim(@'"', coalesce(tostring(Props["ConsentAction.Permissions"]), tostring(Props["AppRole.Value"]), tostring(Props["DelegatedPermissionGrant.Scope"]))),
+                AdminConsent = tostring(Props["ConsentContext.IsAdminConsent"]) has "True", CorrelationId
+
+  - name: entra-privileged-role-assigned
+    description: >
+      Rôle d'annuaire privilégié attribué (permanent, éligible ou à portée d'une unité
+      administrative) — T1098.003 (Account Manipulation: Additional Cloud Roles). Seuil :
+      un rôle qu'Entra ID marque privilégié (liste PRIVILEGED_ROLES de l'adaptateur, par nom
+      d'affichage). Exclusion : les activations PIM d'un rôle déjà éligible (l'attribution
+      éligible a eu sa carte).
+    enabled: true
+    source: azure_entra
+    ttp: T1098.003
+    assets: [auto]
+    interval_s: 120
+    expected_latency_s: 1800
+    query: |
+      AuditLogs
+      | where TimeGenerated > ago(1h)
+      | where Category =~ "RoleManagement"
+      | where OperationName has_any ("Add member to role", "Add eligible member to role", "Add scoped member to role")
+      | where OperationName !has "PIM activation"
+      | where Result =~ "success"
+      | mv-apply Target = TargetResources on (
+          where tostring(Target.type) in~ ("User", "ServicePrincipal", "Group")
+          | extend TargetName = coalesce(tostring(Target.userPrincipalName), tostring(Target.displayName)),
+                   TargetId = tostring(Target.id), TargetType = tostring(Target.type), Props = Target.modifiedProperties)
+      | mv-apply Prop = Props on (
+          where tostring(Prop.displayName) =~ "Role.DisplayName"
+          | extend RoleName = trim(@'"', tostring(Prop.newValue)))
+      // One row per operation and member; the privileged roles are filtered by the adapter.
+      | summarize arg_max(TimeGenerated, *) by CorrelationId, TargetId
+      | project TimeGenerated, EntraKind = "role", EntraOperation = OperationName,
+                EventId = strcat(CorrelationId, "|", TargetId), Result, RoleName,
+                ActorName = coalesce(tostring(InitiatedBy.user.userPrincipalName), tostring(InitiatedBy.app.displayName)),
+                ActorId = coalesce(tostring(InitiatedBy.user.id), tostring(InitiatedBy.app.servicePrincipalId)),
+                ActorAppId = tostring(InitiatedBy.app.appId), ActorIp = tostring(InitiatedBy.user.ipAddress),
+                TargetName, TargetId, TargetType, CorrelationId
+
+  - name: entra-sp-unusual-signin
+    description: >
+      Connexion réussie d'un principal de service depuis une adresse jamais vue dans sa base
+      (14 jours, la dernière heure exclue) — T1078.004 (Valid Accounts: Cloud Accounts : un
+      identifiant volé utilisé ailleurs). Seuils : le principal a un historique (vu au moins
+      MIN_BASELINE_DAYS jours de la base, sinon un principal nouveau, ou les premiers jours
+      après le paramètre de diagnostic, inonderaient) ; échecs écartés ; une carte par
+      principal et adresse. Exclusion : les identités managées (autre table, non lue) ; un
+      runner aux adresses tournantes s'exclut dans la couche du client.
+    enabled: true
+    source: azure_entra
+    ttp: T1078.004
+    assets: [auto]
+    interval_s: 300
+    expected_latency_s: 1800
+    query: |
+      let baseline = AADServicePrincipalSignInLogs
+          | where TimeGenerated between (ago(14d) .. ago(1h))
+          | where ResultType == "0";
+      let known = baseline | distinct ServicePrincipalId, IPAddress;
+      let history = baseline
+          | summarize BaselineSignIns = count(), BaselineDays = dcount(bin(TimeGenerated, 1d)) by ServicePrincipalId;
+      AADServicePrincipalSignInLogs
+      | where TimeGenerated > ago(1h)
+      | where ResultType == "0"
+      | join kind=leftanti known on ServicePrincipalId, IPAddress
+      | summarize TimeGenerated = min(TimeGenerated), SignIns = count(), Resources = make_set(ResourceDisplayName, 5),
+                  ServicePrincipalName = take_any(ServicePrincipalName), AppId = take_any(AppId),
+                  Location = take_any(Location), CorrelationId = take_any(CorrelationId)
+                  by ServicePrincipalId, IPAddress
+      | join kind=inner history on ServicePrincipalId
+      | project TimeGenerated, EntraKind = "signin", EntraOperation = "Service principal sign-in",
+                EventId = strcat(ServicePrincipalId, "|", IPAddress), Result = "success",
+                ActorName = ServicePrincipalName, ActorId = ServicePrincipalId, ActorAppId = AppId,
+                ActorIp = IPAddress, Location, TargetName = strcat_array(Resources, ", "),
+                SignIns, BaselineSignIns, BaselineDays, CorrelationId

@@ -39,8 +39,8 @@ jobs:
 
       - name: Discord
         env:
-          ATELIER_WEBHOOK_CI: ${{ secrets.ATELIER_WEBHOOK_CI }}
-          ATELIER_BOT_TOKEN: ${{ secrets.ATELIER_BOT_TOKEN }}
-          ATELIER_LOTS_FORUM: ${{ secrets.ATELIER_LOTS_FORUM }}
+          EREGION_DISCORD_WEBHOOK_CI: ${{ secrets.EREGION_DISCORD_WEBHOOK_CI }}
+          EREGION_DISCORD_BOT_TOKEN: ${{ secrets.EREGION_DISCORD_BOT_TOKEN }}
+          EREGION_DISCORD_LOTS_FORUM: ${{ secrets.EREGION_DISCORD_LOTS_FORUM }}
           GITHUB_TOKEN: ${{ github.token }}
         run: python3 scripts/notify_discord.py github

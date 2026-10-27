@@ -130,27 +130,27 @@ class FakeDiscord:
 @pytest.fixture
 def fake(tmp_path, monkeypatch):
     for k in list(os.environ):
-        if k.startswith("ATELIER_"):
+        if k.startswith("EREGION_DISCORD_"):
             monkeypatch.delenv(k)
-    monkeypatch.setenv("ATELIER_ENV", str(tmp_path / "absent.env"))  # never the operator's file
+    monkeypatch.setenv("EREGION_DISCORD_ENV", str(tmp_path / "absent.env"))  # never the operator's file
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
-    monkeypatch.setenv("ATELIER_SYNC", "1")
+    monkeypatch.setenv("EREGION_DISCORD_SYNC", "1")
     f = FakeDiscord()
     yield f
     f.close()
 
 
 def configure(monkeypatch, f, *, ci=True, agents=True, bot=True, mention="42"):
-    monkeypatch.setenv("ATELIER_DISCORD_API", f.base + "/api")
+    monkeypatch.setenv("EREGION_DISCORD_API", f.base + "/api")
     if ci:
-        monkeypatch.setenv("ATELIER_WEBHOOK_CI", f"{f.base}/api/webhooks/1/{CI_TOKEN}")
+        monkeypatch.setenv("EREGION_DISCORD_WEBHOOK_CI", f"{f.base}/api/webhooks/1/{CI_TOKEN}")
     if agents:
-        monkeypatch.setenv("ATELIER_WEBHOOK_AGENTS", f"{f.base}/api/webhooks/2/{AGENTS_TOKEN}")
+        monkeypatch.setenv("EREGION_DISCORD_WEBHOOK_AGENTS", f"{f.base}/api/webhooks/2/{AGENTS_TOKEN}")
     if bot:
-        monkeypatch.setenv("ATELIER_BOT_TOKEN", BOT_TOKEN)
-        monkeypatch.setenv("ATELIER_LOTS_FORUM", "FORUM")
+        monkeypatch.setenv("EREGION_DISCORD_BOT_TOKEN", BOT_TOKEN)
+        monkeypatch.setenv("EREGION_DISCORD_LOTS_FORUM", "FORUM")
     if mention:
-        monkeypatch.setenv("ATELIER_MENTION", mention)
+        monkeypatch.setenv("EREGION_DISCORD_MENTION", mention)
 
 
 def run_github(monkeypatch, tmp_path, name, event, f=None):
@@ -219,13 +219,13 @@ def test_nothing_configured_sends_nothing_and_exits_zero(fake, monkeypatch, tmp_
 
 
 def test_the_file_fills_what_the_environment_leaves_out(fake, monkeypatch, tmp_path):
-    env = tmp_path / "atelier.env"
-    env.write_text("export ATELIER_WEBHOOK_AGENTS='from-file'\nATELIER_MENTION=7\nOTHER=x\n", encoding="utf-8")
-    monkeypatch.setenv("ATELIER_ENV", str(env))
-    monkeypatch.setenv("ATELIER_MENTION", "42")
+    env = tmp_path / "discord.env"
+    env.write_text("export EREGION_DISCORD_WEBHOOK_AGENTS='from-file'\nEREGION_DISCORD_MENTION=7\nOTHER=x\n", encoding="utf-8")
+    monkeypatch.setenv("EREGION_DISCORD_ENV", str(env))
+    monkeypatch.setenv("EREGION_DISCORD_MENTION", "42")
     cfg = nd.load_config()
     assert (cfg.agents, cfg.mention, cfg.ci) == ("from-file", "42", "")
-    monkeypatch.setenv("ATELIER_MENTION", "not-an-id")
+    monkeypatch.setenv("EREGION_DISCORD_MENTION", "not-an-id")
     assert nd.load_config().mention == ""
 
 
@@ -452,7 +452,7 @@ def test_a_blocked_lot_and_the_end_of_a_run_alert_jonathan(fake, monkeypatch, tm
 
 def test_the_hook_delivers_in_the_background(fake, monkeypatch, tmp_path):
     configure(monkeypatch, fake, bot=False)
-    monkeypatch.delenv("ATELIER_SYNC")
+    monkeypatch.delenv("EREGION_DISCORD_SYNC")
     start = time.monotonic()
     assert nd.hook(launch("elrond A3 · x")) == 0
     assert time.monotonic() - start < 2
@@ -498,3 +498,11 @@ def test_the_user_hooks_never_block_and_leave_the_others_alone(tmp_path):
     assert all(c.endswith("|| true") for _, _, c in ours)
     assert rtk in hooks["PreToolUse"]
     assert _hooks(home, "uninstall") == {"PreToolUse": [rtk]}
+
+
+@pytest.mark.parametrize("path", ["docker-compose.yml", "infra/glorfindel-host/host_env.py",
+                                  "infra/glorfindel-host/host.env.example"])
+def test_the_workshop_variables_never_reach_the_containers_nor_h0(path):
+    """EREGION_DISCORD_* is the workshop's (the CI, elrond), not the product's: the Eregion bot's
+    token never goes into a container nor onto H0 — only Glorfindel's DISCORD_* do."""
+    assert "EREGION_DISCORD_" not in (ROOT / path).read_text(encoding="utf-8")

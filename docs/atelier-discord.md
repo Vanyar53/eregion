@@ -40,8 +40,8 @@ Ce qui ne mérite rien n'envoie rien : un run vert sur une PR, un run annulé, u
   - les états : `à faire`, `en cours`, `en relecture`, `en correction`, `fait`, `bloqué`.
 - Un webhook par salon textuel : Paramètres du salon → Intégrations → Webhooks → Nouveau → Copier l'URL. L'URL contient le jeton du webhook : c'est un secret.
 
-**2. Le bot « Atelier »**, une seconde application, pas celle de Glorfindel :
-- https://discord.com/developers/applications → New Application « Eregion Atelier » → Bot → Reset Token (copier le jeton). Aucun intent privilégié n'est nécessaire.
+**2. Le bot « Eregion »**, celui de l'atelier : une seconde application, pas celle de Glorfindel :
+- https://discord.com/developers/applications → New Application « Eregion » → Bot → Reset Token (copier le jeton). Aucun intent privilégié n'est nécessaire.
 - OAuth2 → URL Generator : scope `bot`, **aucune permission** cochée (permissions=0). Ouvrir l'URL et inviter le bot.
 - Catégorie → Modifier → Permissions → ajouter le bot, et autoriser seulement :
   - Voir le salon ;
@@ -50,25 +50,25 @@ Ce qui ne mérite rien n'envoie rien : un run vert sur une PR, un run annulé, u
   - Gérer les fils ;
   - Lire l'historique ;
   - Intégrer des liens.
-- **Si le salon de la défense est dans la même catégorie**, y refuser au bot Atelier « Voir le salon ». Un refus posé sur le salon pour ce membre l'emporte sur l'autorisation de la catégorie. Ne pas resynchroniser ce salon avec la catégorie : le bot de Glorfindel y garde ses droits.
+- **Si le salon de la défense est dans la même catégorie**, y refuser au bot Eregion « Voir le salon ». Un refus posé sur le salon pour ce membre l'emporte sur l'autorisation de la catégorie. Ne pas resynchroniser ce salon avec la catégorie : le bot de Glorfindel y garde ses droits.
 - Le bot ne reçoit rien au niveau du serveur. Ailleurs, il ne voit que ce que `@everyone` voit.
 - **Mode développeur** (Paramètres → Avancés). Clic droit sur `#lots` → Copier l'identifiant du salon. Clic droit sur ton nom → Copier l'identifiant de l'utilisateur.
 
-**3. Les secrets.** Ce sont des URL et des jetons : jamais dans le dépôt (public), jamais sur H0. `host_env.py` ne recopie aucune variable `ATELIER_*`.
+**3. Les secrets.** Ce sont des URL et des jetons : jamais dans le dépôt (public), jamais sur H0. `host_env.py` ne recopie aucune variable `EREGION_DISCORD_*`.
 
 ```bash
-gh secret set ATELIER_WEBHOOK_CI          # l'URL du webhook de #ci (collée au prompt, pas dans l'historique)
-gh secret set ATELIER_BOT_TOKEN           # le jeton du bot Atelier
-gh secret set ATELIER_LOTS_FORUM          # l'id du forum #lots
+gh secret set EREGION_DISCORD_WEBHOOK_CI          # l'URL du webhook de #ci (collée au prompt, pas dans l'historique)
+gh secret set EREGION_DISCORD_BOT_TOKEN           # le jeton du bot Eregion
+gh secret set EREGION_DISCORD_LOTS_FORUM          # l'id du forum #lots
 ```
 
-Sur ton poste, pour les hooks d'elrond : `~/.config/eregion/atelier.env`, en `chmod 600`. Les hooks tournent dans l'environnement de Claude Code, qui n'a pas forcément chargé `.envrc` (VS Code). Une variable posée dans l'environnement l'emporte sur le fichier.
+Sur ton poste, pour les hooks d'elrond : `~/.config/eregion/discord.env`, en `chmod 600`. Les hooks tournent dans l'environnement de Claude Code, qui n'a pas forcément chargé `.envrc` (VS Code). Une variable posée dans l'environnement l'emporte sur le fichier.
 
 ```
-ATELIER_WEBHOOK_AGENTS=https://discord.com/api/webhooks/…
-ATELIER_BOT_TOKEN=…
-ATELIER_LOTS_FORUM=…
-ATELIER_MENTION=<ton id d'utilisateur>
+EREGION_DISCORD_WEBHOOK_AGENTS=https://discord.com/api/webhooks/…
+EREGION_DISCORD_BOT_TOKEN=…
+EREGION_DISCORD_LOTS_FORUM=…
+EREGION_DISCORD_MENTION=<ton id d'utilisateur>
 ```
 
 **4. Les hooks**, chez toi et jamais dans le dépôt (ils s'exécuteraient chez chaque contributeur) : `bash scripts/elrond-hooks.sh install`. La commande ajoute palantir sur `Stop` et `SubagentStop`, et `notify_discord.py hook` sur `PreToolUse` (`Agent`) et `SubagentStop` (`elrond-worker|elrond-reviewer`). Chaque commande finit par `|| true` : un hook `PreToolUse` qui sort en 2 bloquerait l'outil, et `python3` sort en 2 si le fichier manque. `uninstall` les retire et garde les autres hooks (rtk compris).
@@ -96,9 +96,9 @@ EOF
 ## Les règles du script
 
 `scripts/notify_discord.py`, sans dépendance hors de la bibliothèque standard :
-- **Sans configuration, rien n'est envoyé**, et le code de sortie est 0. Ce qui n'est pas configuré n'est pas envoyé : sans bot, pas de fils ; sans `ATELIER_WEBHOOK_AGENTS`, pas de `#agents`.
+- **Sans configuration, rien n'est envoyé**, et le code de sortie est 0. Ce qui n'est pas configuré n'est pas envoyé : sans bot, pas de fils ; sans `EREGION_DISCORD_WEBHOOK_AGENTS`, pas de `#agents`.
 - **Une erreur de Discord ne fait jamais échouer l'appelant** : le job reste vert, l'agent continue. Elle donne une ligne sur stderr, `atelier: not sent — webhook #ci: HTTP 500`, sans URL ni jeton. Après un 429 qui demande 5 s ou moins, le script fait un second essai.
-- **Aucune mention venue d'un texte.** `allowed_mentions` est vide sur chaque message : un titre de PR « @everyone » reste du texte. Seules les alertes de `#agents` mentionnent `ATELIER_MENTION`.
-- **Le hook rend la main tout de suite.** L'envoi part dans un processus détaché, qui écrit ses erreurs dans `~/.local/state/eregion/atelier.log`. L'état local (les agents en cours, l'id du message « En cours ») est dans `~/.local/state/eregion/atelier.json`, sous verrou. Un message « En cours » supprimé dans Discord est recréé. Un lancement refusé après le hook disparaît au bout de 24 h.
+- **Aucune mention venue d'un texte.** `allowed_mentions` est vide sur chaque message : un titre de PR « @everyone » reste du texte. Seules les alertes de `#agents` mentionnent `EREGION_DISCORD_MENTION`.
+- **Le hook rend la main tout de suite.** L'envoi part dans un processus détaché, qui écrit ses erreurs dans `~/.local/state/eregion/discord.log`. L'état local (les agents en cours, l'id du message « En cours ») est dans `~/.local/state/eregion/discord.json`, sous verrou. Un message « En cours » supprimé dans Discord est recréé. Un lancement refusé après le hook disparaît au bout de 24 h.
 
 Tests : `tests/unit/test_notify_discord.py`, contre un faux Discord, un serveur HTTP sur la boucle locale (rien ne sort de la machine). Mutants M970–M979 (`scripts/mutation_check.py --only M970,…`).

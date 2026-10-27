@@ -6,7 +6,7 @@
                                   issues to #ci, and a lot's events to its thread as well
   notify_discord.py hook          Claude Code hook (PreToolUse on Agent, SubagentStop): JSON on
                                   stdin, elrond's agents only; returns at once and delivers in
-                                  the background (ATELIER_SYNC=1: inline)
+                                  the background (EREGION_DISCORD_SYNC=1: inline)
   notify_discord.py lot ID blocked [--note TEXT]   elrond: a lot it cannot go on with
   notify_discord.py run-end TEXT  elrond: the end-of-run summary
   notify_discord.py check         what is configured (names, never values), what the forum lacks
@@ -16,12 +16,12 @@ nightly runs), main green again after red, a published release, a closed issue. 
 thread per lot, every event of the lot, its tags (milestone, state) kept true. #agents: one
 message rewritten in place (the agents running), and what needs Jonathan — a model fallback,
 a review with changes, blocking or not obtained, a blocked lot, the end of a run — which
-mentions ATELIER_MENTION. Only a red CI, a release and those alerts notify; the rest is silent.
+mentions EREGION_DISCORD_MENTION. Only a red CI, a release and those alerts notify; the rest is silent.
 
-Configuration: the environment, over ~/.config/eregion/atelier.env (KEY=value lines; another
-file: ATELIER_ENV) — ATELIER_WEBHOOK_CI, ATELIER_WEBHOOK_AGENTS (webhook URLs),
-ATELIER_BOT_TOKEN and ATELIER_LOTS_FORUM (the Atelier bot, never Glorfindel's, and the forum's
-id), ATELIER_MENTION (a user id). What is not configured is not sent. A Discord error never
+Configuration: the environment, over ~/.config/eregion/discord.env (KEY=value lines; another
+file: EREGION_DISCORD_ENV) — EREGION_DISCORD_WEBHOOK_CI, EREGION_DISCORD_WEBHOOK_AGENTS (webhook URLs),
+EREGION_DISCORD_BOT_TOKEN and EREGION_DISCORD_LOTS_FORUM (the Eregion bot, the workshop's, never Glorfindel's, and the forum's
+id), EREGION_DISCORD_MENTION (a user id). What is not configured is not sent. A Discord error never
 fails the caller: one line on stderr, without the URL or the token, and exit 0.
 """
 from __future__ import annotations
@@ -43,8 +43,8 @@ from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-KEYS = ("ATELIER_WEBHOOK_CI", "ATELIER_WEBHOOK_AGENTS", "ATELIER_BOT_TOKEN",
-        "ATELIER_LOTS_FORUM", "ATELIER_MENTION", "ATELIER_DISCORD_API")
+KEYS = ("EREGION_DISCORD_WEBHOOK_CI", "EREGION_DISCORD_WEBHOOK_AGENTS", "EREGION_DISCORD_BOT_TOKEN",
+        "EREGION_DISCORD_LOTS_FORUM", "EREGION_DISCORD_MENTION", "EREGION_DISCORD_API")
 UA = "DiscordBot (https://github.com/Vanyar53/eregion, 1)"
 SILENT = 1 << 12  # SUPPRESS_NOTIFICATIONS: shown in the channel, no push, no sound
 RED, GREEN, BLUE, PURPLE, ORANGE, GREY = 0xE5484D, 0x30A46C, 0x3E63DD, 0x8E4EC6, 0xF76B15, 0x8B8D98
@@ -81,7 +81,7 @@ class Config:
 def load_config(environ=os.environ) -> Config:
     """The environment over the file: each key from the first place that has it."""
     values: dict[str, str] = {}
-    path = Path(environ.get("ATELIER_ENV") or Path.home() / ".config" / "eregion" / "atelier.env")
+    path = Path(environ.get("EREGION_DISCORD_ENV") or Path.home() / ".config" / "eregion" / "discord.env")
     try:
         for line in path.expanduser().read_text(encoding="utf-8").splitlines():
             key, sep, value = line.strip().removeprefix("export ").partition("=")
@@ -90,12 +90,12 @@ def load_config(environ=os.environ) -> Config:
     except OSError:
         pass
     values.update({k: environ[k] for k in KEYS if environ.get(k)})
-    mention = values.get("ATELIER_MENTION", "")
-    return Config(ci=values.get("ATELIER_WEBHOOK_CI", "").rstrip("/"),
-                  agents=values.get("ATELIER_WEBHOOK_AGENTS", "").rstrip("/"),
-                  token=values.get("ATELIER_BOT_TOKEN", ""), forum=values.get("ATELIER_LOTS_FORUM", ""),
+    mention = values.get("EREGION_DISCORD_MENTION", "")
+    return Config(ci=values.get("EREGION_DISCORD_WEBHOOK_CI", "").rstrip("/"),
+                  agents=values.get("EREGION_DISCORD_WEBHOOK_AGENTS", "").rstrip("/"),
+                  token=values.get("EREGION_DISCORD_BOT_TOKEN", ""), forum=values.get("EREGION_DISCORD_LOTS_FORUM", ""),
                   mention=mention if mention.isdigit() else "",
-                  api=(values.get("ATELIER_DISCORD_API") or Config.api).rstrip("/"))
+                  api=(values.get("EREGION_DISCORD_API") or Config.api).rstrip("/"))
 
 
 def fetch(method: str, url: str, label: str, body=None, headers=None):
@@ -163,7 +163,7 @@ def _norm(name: str) -> str:
 
 
 class Forum:
-    """The #lots forum, through the Atelier bot: a thread per lot, named « <ID> · <title> »."""
+    """The #lots forum, through the Eregion bot: a thread per lot, named « <ID> · <title> »."""
 
     def __init__(self, cfg: Config):
         self.cfg, self._channel = cfg, None
@@ -403,7 +403,7 @@ def verdict_of(text: str) -> str:
 
 def _state_path() -> Path:
     base = os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state"
-    return Path(base) / "eregion" / "atelier.json"
+    return Path(base) / "eregion" / "discord.json"
 
 
 @contextmanager
@@ -539,7 +539,7 @@ def hook(text: str, environ=os.environ) -> int:
         cfg = load_config(environ)
         if not isinstance(data, dict) or not wanted(data) or not (cfg.agents or cfg.lots):
             return 0
-        if environ.get("ATELIER_SYNC"):
+        if environ.get("EREGION_DISCORD_SYNC"):
             deliver_hook(data, cfg)
             return 0
         log = _state_path().with_suffix(".log")
@@ -572,8 +572,8 @@ def lot_blocked(lot: str, note: str, cfg: Config) -> int:
 
 
 def check(cfg: Config) -> int:
-    names = {"ATELIER_WEBHOOK_CI": cfg.ci, "ATELIER_WEBHOOK_AGENTS": cfg.agents,
-             "ATELIER_BOT_TOKEN": cfg.token, "ATELIER_LOTS_FORUM": cfg.forum, "ATELIER_MENTION": cfg.mention}
+    names = {"EREGION_DISCORD_WEBHOOK_CI": cfg.ci, "EREGION_DISCORD_WEBHOOK_AGENTS": cfg.agents,
+             "EREGION_DISCORD_BOT_TOKEN": cfg.token, "EREGION_DISCORD_LOTS_FORUM": cfg.forum, "EREGION_DISCORD_MENTION": cfg.mention}
     for k, v in names.items():
         print(f"  {'✓' if v else '·'} {k}")
     if cfg.lots:

@@ -249,12 +249,12 @@ DISCORD_PING_ROLE=...               # ID du rôle à pinger à l'ouverture d'un 
 DISCORD_ALLOWED_USERS=111,222       # M-3 : ids des utilisateurs qui peuvent cliquer les boutons des cartes
 DISCORD_ALLOWED_ROLES=333           # M-3 : ids des rôles autorisés ; les deux vides → tous les boutons refusent (fermé par défaut), refus journalisé
 # L'atelier dans Discord (N1, docs/atelier-discord.md) — à part de la défense : jamais sur H0, host_env.py ne les recopie pas
-ATELIER_WEBHOOK_CI=...              # webhook de #ci (secret GitHub : notify.yml)
-ATELIER_WEBHOOK_AGENTS=...          # webhook de #agents (poste de l'opérateur : hooks d'elrond)
-ATELIER_BOT_TOKEN=...               # le bot « Atelier » (pas celui de Glorfindel) : fils du forum #lots et leurs étiquettes
-ATELIER_LOTS_FORUM=...              # id du forum #lots
-ATELIER_MENTION=...                 # id de l'utilisateur que mentionnent les alertes de #agents
-                                    # sur le poste : ~/.config/eregion/atelier.env (600) si l'environnement ne les a pas
+EREGION_DISCORD_WEBHOOK_CI=...              # webhook de #ci (secret GitHub : notify.yml)
+EREGION_DISCORD_WEBHOOK_AGENTS=...          # webhook de #agents (poste de l'opérateur : hooks d'elrond)
+EREGION_DISCORD_BOT_TOKEN=...               # le bot « Eregion », celui de l'atelier (pas celui de Glorfindel) : fils du forum #lots et leurs étiquettes
+EREGION_DISCORD_LOTS_FORUM=...              # id du forum #lots
+EREGION_DISCORD_MENTION=...                 # id de l'utilisateur que mentionnent les alertes de #agents
+                                    # sur le poste : ~/.config/eregion/discord.env (600) si l'environnement ne les a pas
 GLORFINDEL_KEEP_ISOLATED=1          # mode forensique
 GLORFINDEL_ISOLATION_TTL_H=4        # TTL isolation (défaut 4h) : au-delà, une carte ttl_exceeded — jamais de levée automatique
 GLORFINDEL_APPROVAL_MAX_AGE_H=2     # âge max d'une carte exécutable en un clic (console, « Approve & execute ») ; nan/inf → 2 ; ≤0 → approbation en un clic fermée

@@ -75,23 +75,7 @@ EREGION_DISCORD_MENTION=<ton id d'utilisateur>
 
 **5. Vérifier** : `python3 scripts/notify_discord.py check`. La commande dit ce qui est configuré (les noms, jamais les valeurs), si le forum est lisible et quelles étiquettes manquent.
 
-**À mesurer au premier essai** : je ne sais pas encore si un bot qui ne s'est jamais connecté au gateway peut créer et modifier des fils en REST seul. Si la création d'un fil échoue alors que `check` passe, il faut une connexion unique au gateway. discord.py est dans l'image de Glorfindel :
-
-```bash
-docker run --rm -i -e T eregion-glorfindel python - <<'EOF'
-import os, discord
-client = discord.Client(intents=discord.Intents.none())
-
-@client.event
-async def on_ready():
-    print("connecté une fois :", client.user)
-    await client.close()
-
-client.run(os.environ["T"])
-EOF
-```
-
-(`T` exporté à la main dans le shell, puis `unset T`.)
+**Mesuré le 27/10** : le bot n'a jamais besoin de se connecter au gateway. Sans connexion, il a créé un fil de forum et posé ses étiquettes en REST seul (essai de mise en place : `lot ESSAI blocked`, puis `run-end`).
 
 ## Les règles du script
 

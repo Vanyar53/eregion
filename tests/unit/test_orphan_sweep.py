@@ -81,6 +81,8 @@ def test_a_vm_given_a_deleted_vms_address_is_not_left_cut_off(monkeypatch):
     so, takes the rule off, and the new VM is back to its design. `app` is untouched."""
     f, c, subnet = _world(monkeypatch)
     assert c.isolate_vm(WEB)["status"] == "isolated"
+    assert c.isolate_vm(APP)["status"] == "isolated"          # its rules share the NSG
+    app_rules = _glorfindel_rules(f)
     _delete(f, WEB)
     new = _new_vm_at(f, subnet, "10.0.0.4")
     assert open_flows(_world_view(f), new) != _designed(f, new)          # cut off
@@ -88,7 +90,8 @@ def test_a_vm_given_a_deleted_vms_address_is_not_left_cut_off(monkeypatch):
     _posture_pass(c)
     assert open_flows(_world_view(f), new) == _designed(f, new)
     assert open_flows(_world_view(f), APP) == app_before
-    assert not _glorfindel_rules(f)
+    assert c.verify_isolation(APP)["verified"] is True
+    assert _glorfindel_rules(f) == {r for r in app_rules if "-web-" not in r[1]}   # web's only went
     cards = _orphan_cards()                      # one per rule (in, out): alerted, then resolved
     assert len(cards) == 2
     assert all(e["status"] == "resolved" and "retirée" in e["resolution"] for e in cards)

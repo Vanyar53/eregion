@@ -1695,6 +1695,7 @@ TESTS.update({f"M{n}": "tests/unit/test_gothmog.py" for n in (724, 725, 726, 727
 TESTS.update({f"M{n}": "tests/unit/test_host_console.py" for n in range(740, 750)})  # UI-1c
 # A3 (#73): the orphan sweep's guards, the strict config, the restore's extensions.
 TESTS.update({f"M{n}": "tests/unit/test_orphan_sweep.py" for n in range(764, 770)})
+TESTS["M762"] = f"{INVARIANTS} tests/unit/test_orphan_sweep.py"   # rare in the drawn sequences
 TESTS.update({f"M{n}": "tests/unit/test_config.py" for n in range(770, 774)})
 TESTS.update({f"M{n}": "tests/unit/test_glorfindel.py -k extensions" for n in (774, 775)})
 

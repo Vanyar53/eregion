@@ -777,6 +777,21 @@ tous attrapés (27/10).
 | M938 | une carte de rôle sans la façon de retirer l'attribution | l'humain ne sait pas révoquer |
 | M939 | le paramètre de diagnostic du tenant toujours posé | les journaux de tout le tenant envoyés |
 
+Après la relecture 5.5 (27/10), dix de plus (M940–M949), tous attrapés :
+
+| Mutant | Défaut réinjecté | Effet |
+|---|---|---|
+| M940 | sous `az login`, l'`oid` de l'opérateur pris pour Glorfindel dans Entra | ses actions lues comme un vol |
+| M941 | un jeton d'utilisateur pris pour celui d'une application | idem |
+| M942 | la règle de rôle filtre sur `Role.DisplayName` | une attribution sans lui disparaît avant l'adaptateur |
+| M943 | l'ancienne valeur d'un premier identifiant n'est pas un tableau | `set_difference` tait la ligne |
+| M944 | une règle du client sur une table d'Entra, sans colonne révélatrice, va au modèle | son UPN envoyé |
+| M945 | `respond` sur une requête d'Entra d'une autre source va au modèle | idem |
+| M946 | une carte de consentement propose de désactiver le principal de la ressource | tout le tenant coupé |
+| M947 | une carte d'identité étiquetée exercice par une fenêtre sur sa VM d'ancrage | un vrai constat pris pour un exercice |
+| M948 | l'ancien nom de Global Administrator pas privilégié | une attribution lue sous ce nom, tue |
+| M949 | le nom du rôle pas repris de sa cible | une attribution sans `Role.DisplayName`, sans nom |
+
 ## Ce que les invariants ont trouvé
 
 Aucun de ces défauts n'avait été vu en revue. Chacun a son test et sa séquence figée.

@@ -1563,7 +1563,7 @@ MUTANTS += [
      '            elif ch == "#" or two == "//":\n                break\n',
      "            elif False:\n                break\n"),
     ("M788", "a base rule the client's layer disables still watches its technique (IA1)", TRI,
-     '    for name in c.get("disable") or []:\n', "    for name in []:\n"),
+     '        merged = [r for r in merged if r["name"] not in disabled]\n', "        merged = list(merged)\n"),
     ("M789", "a proposal the computed facts do not support is kept (IA1)", TRI,
      '        elif (not_here := item.allowed()[e["proposal"]]):\n', '        elif (not_here := ""):\n'),
     ("M790", "a proposal that carries a rule is kept: the analysis writes a rule (IA1)", TRI,
@@ -1574,7 +1574,7 @@ MUTANTS += [
     ("M792", "a decision that names no human is recorded (IA1)", TRI,
      '    if not str(by).strip():\n        raise ValueError("a decision names the human who takes it (--by)")\n', ""),
     ("M793", "a decided proposal is decided again (IA1)", TRI,
-     "    if item.proposal.status != PENDING:\n", "    if False:\n"),
+     "        if item.proposal.status != PENDING:\n", "        if False:\n"),
     ("M794", "a new triage writes over a human's decision (IA1)", TRI,
      "    if not replace_decided and old is not None and any(\n", "    if False and old is not None and any(\n"),
     ("M795", "an unknown decision said taken is kept (IA1)", TRI,
@@ -1588,6 +1588,23 @@ MUTANTS += [
     ("M799", "a collection that cannot be read is called « not collected » (IA1)", TRI,
      '            elif coll.collected is None:\n                causes.append("collection_unknown")\n',
      '            elif coll.collected is None:\n                causes.append("not_collected")\n'),
+]
+
+# IA1, after the review (M840–M844): the rules as the watch loads them, one decision at a
+# time, an unreadable triage refused, no decision said by the model.
+MUTANTS += [
+    ("M840", "an entry of the client's layer the watch skips replaces a base rule in the triage (IA1)", TRI,
+     "            if why := _invalid_client_rule(entry):\n", '            if why := "":\n'),
+    ("M841", "two decisions taken at once: the second write loses the first (IA1)", TRI,
+     "    with _locked(campaign_dir):\n        t = load(campaign_dir)\n",
+     "    with open(os.devnull):\n        t = load(campaign_dir)\n"),
+    ("M842", "an unreadable triage.json ends in a trace, not a refusal (IA1)", TRI,
+     "    except (OSError, ValueError, TypeError, AttributeError, KeyError) as e:",
+     "    except OSError as e:"),
+    ("M843", "an entry that says a human decided is kept (IA1)", TRI,
+     '        elif _APPROVAL.search(e["explanation"]) or _APPROVAL.search(e["text"]):\n', "        elif False:\n"),
+    ("M844", "the reason of a removed entry, quoting the model, breaks triage.md (IA1)", TRI,
+     "{_cell(neutral(r.get('rejected')))}", "{r['rejected']}"),
 ]
 
 # Mutants measured by other tests than the invariants (their lot's own).
@@ -1686,6 +1703,8 @@ TESTS.update({f"M{n}": "tests/unit/test_host_console.py" for n in range(740, 750
 # IA1 (#88): the separation in test_analysis_separation.py, the triage in test_analysis_triage.py.
 TESTS.update({f"M{n}": "tests/unit/test_analysis_separation.py" for n in range(780, 786)})
 TESTS.update({f"M{n}": "tests/unit/test_analysis_triage.py" for n in range(786, 800)})
+TESTS["M840"] = "tests/unit/test_analysis_rules_parity.py"      # against the watch's own loader
+TESTS.update({f"M{n}": "tests/unit/test_analysis_triage.py" for n in range(841, 845)})
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

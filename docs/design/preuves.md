@@ -734,6 +734,17 @@ mutants, mesurés par `tests/unit/test_analysis_separation.py` et `tests/unit/te
 | M798 | le harnais ne compte pas l'obéissance que la vérification a écartée | l'obéissance du modèle à une ligne plantée n'est plus mesurée |
 | M799 | une collecte illisible dite « non collectée » | un inconnu présenté comme une cause |
 
+Après la relecture (27/10), cinq de plus, attrapés au premier tour ; M840 est mesuré par
+`tests/unit/test_analysis_rules_parity.py`, qui prend le chargeur de la watch pour oracle.
+
+| Mutant | Défaut réinjecté | Effet |
+|---|---|---|
+| M840 | une entrée de la couche du client que la watch écarte remplace la règle de base | `no_rule` sur une technique que la watch surveille encore : `author_rule` permis, `review_rule` interdit |
+| M841 | `decide` sans le verrou de la campagne | deux décisions prises en même temps : la seconde écriture perd la première |
+| M842 | un `triage.json` illisible laisse passer l'exception | une trace Python au lieu d'un refus |
+| M843 | une entrée qui dit qu'un humain a décidé gardée | `triage.md` laisse croire à une validation que personne n'a donnée |
+| M844 | la raison d'une entrée écartée, qui cite le modèle, sans `_cell` | un retour à la ligne du modèle casse `triage.md` |
+
 ## Ce que les invariants ont trouvé
 
 Aucun de ces défauts n'avait été vu en revue. Chacun a son test et sa séquence figée.

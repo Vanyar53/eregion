@@ -634,7 +634,8 @@ mutants, mesurés par `tests/unit/test_rule_layers.py`, `test_proposed_rules.py`
 `test_host_deploy.py`, tous attrapés au premier tour (26/10) ; M528 (M-3) suit le nouveau refus
 de `deploy.sh`, attrapé aussi. L'export d'une règle généralisée, sans identifiant, est reporté à
 un lot rattaché à P2 (relu par un humain avant tout envoi) : ses mutants (M679–M684, M689–M694,
-M700–M712, M717–M719) sont partis avec lui ; les numéros laissent un trou.
+M702–M712, M717–M719) sont partis avec lui ; les numéros laissent un trou (M700–M701 ont été
+réattribués à A3 le 27/10).
 
 | Mutant | Défaut réinjecté | Effet |
 |---|---|---|

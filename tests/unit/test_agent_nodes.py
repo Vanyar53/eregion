@@ -2211,3 +2211,23 @@ def test_bot_offers_restore_only_after_a_snapshot():
     assert _make_action_button(snap) is None and "restore" not in _cli_command(snap)
     restore = {**held, "action": "restore_from_backup", "escalation_type": "destructive_action"}
     assert "restore" in _cli_command(restore)
+
+
+def test_a_release_held_by_an_extension_says_which():
+    """A3, first review: Run Command v1 neutralized, an extension outside the allowlist
+    holds the release — the card names it, instead of saying the last command could not
+    be neutralized."""
+    from glorfindel.agent import _apply_release_precondition
+    from glorfindel.cli import _build_recovery_signal
+    signal = _build_recovery_signal(
+        "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/web",
+        {"run_command_neutralized": False,
+         "replay_vectors": ["extension enablevmaccess", "run command managé nightly"]}, 60)
+    assert signal["raw_signal"]["replay_vectors"] == ["extension enablevmaccess", "run command managé nightly"]
+    d = {"escalate": False, "action": "release_isolation"}
+    _apply_release_precondition(d, signal)
+    assert d["escalate"] is True and d["held_by"] == "release_precondition"
+    assert "extension enablevmaccess, run command managé nightly" in d["escalation_reason"]
+    assert "dernière commande" not in d["escalation_reason"]
+    plain = _build_recovery_signal("/subscriptions/s/x", {"run_command_neutralized": True}, 60)
+    assert "replay_vectors" not in plain["raw_signal"]

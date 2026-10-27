@@ -61,9 +61,9 @@ class ReleaseMixin:
     def _original_view(self, t0: dict, original: str) -> dict:
         """The NIC as seen from its original NSG (away while in quarantine, or not yet put
         back on a bare NIC), placed as that NSG really is: fixed legacy names count only on
-        an NSG that governs one VM."""
+        an NSG that governs one VM — this NIC, away, counted among its NICs (I4F)."""
         o_rg, o_name = _parse_nsg_resource_id(original)
-        sharing = self._nsg_sharing(o_rg, o_name)
+        sharing = self._nsg_sharing(o_rg, o_name, away_nic=t0["nic_id"])
         return {**t0, "nsg_rg": o_rg, "nsg_name": o_name, "scope": "nic", "ip_scoped": sharing is not False,
                 "shared_nsg": sharing is not False, **({"sharing_unknown": True} if sharing is None else {})}
 

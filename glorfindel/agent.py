@@ -1036,6 +1036,16 @@ def _apply_release_precondition(d: dict, signal: dict) -> None:
         # (seen 2026-10-05: the ransomware ran again, then the VM was released).
         d["escalate"] = True
         d["held_by"] = "release_precondition"
+        vectors = [str(v) for v in (signal.get("raw_signal") or {}).get("replay_vectors") or []]
+        if vectors:
+            # Run Command v1 neutralized; what holds is another script the disk can run
+            # again at boot (A3): say which, not "the last command".
+            d["escalation_reason"] = (
+                "Restauration terminée, mais la VM porte ce qu'un disque restauré peut rejouer au "
+                "démarrage et que Glorfindel ne peut pas garantir : " + ", ".join(vectors) + ". "
+                "Vérifier ces extensions (ou les retirer) et l'intégrité de la VM avant de lever "
+                "l'isolation.")
+            return
         d["escalation_reason"] = (
             ("Restauration terminée, mais la dernière commande Run Command n'a pas pu être "
              "neutralisée avant : " if neutralized is False else

@@ -349,3 +349,161 @@ def test_a_config_that_can_be_replaced_still_is(tmp_path):
     assert cfg.stat().st_ino != inode
     auto = config.load_glorfindel_config(cfg).autonomy
     assert auto.default == "human_only" and auto.assets[0].mode == "non_disruptive"
+
+
+# ── A3: a badly written config is refused, with a clear message ─────────────────
+
+def _refused(tmp_path, text: str) -> str:
+    from glorfindel.config import ConfigError
+    cfg = tmp_path / "glorfindel-config.yaml"
+    cfg.write_text(textwrap.dedent(text))
+    with pytest.raises(ConfigError) as exc:
+        load_glorfindel_config(cfg)
+    return str(exc.value)
+
+
+def test_an_unknown_key_is_refused_with_the_key_it_resembles(tmp_path):
+    """`quarantaine_nsg: false` was ignored: the quarantine stayed on, nothing said."""
+    msg = _refused(tmp_path, """
+        isolation:
+          quarantaine_nsg: false
+    """)
+    assert "isolation.quarantaine_nsg" in msg and "clé inconnue" in msg and "« quarantine_nsg »" in msg
+
+
+@pytest.mark.parametrize("where, text", [
+    ("", "notifications: {}\n"),
+    ("monitoring_backends[0].workspaceid", "monitoring_backends:\n  - name: law\n    workspaceid: ws\n"),
+    ("monitoring_backends[0].discovery.interval", "monitoring_backends:\n  - name: law\n"
+                                                  "    discovery:\n      interval: 60\n"),
+    ("action_backends[0].staging_storage", "action_backends:\n  - name: rsv\n    staging_storage: st\n"),
+    ("exceptions[0].rules", "exceptions:\n  - asset_pattern: vm-*\n    rules: [x]\n"),
+    ("autonomy.assets[0].modes", "autonomy:\n  assets:\n    - match: vm-a\n      mode: human_only\n"
+                                 "      modes: x\n"),
+    ("autonomy.allow_destructives", "autonomy:\n  allow_destructives: []\n"),
+])
+def test_unknown_keys_are_refused_at_every_level(tmp_path, where, text):
+    msg = _refused(tmp_path, text)
+    assert "clé inconnue" in msg and (where or "notifications") in msg
+
+
+@pytest.mark.parametrize("where, text, close", [
+    ("monitoring_backends[0].type", "monitoring_backends:\n  - name: law\n    type: azure_monitr\n",
+     "azure_monitor"),
+    ("action_backends[0].type", "action_backends:\n  - name: rsv\n    type: azure_backup\n",
+     "azure_backup_vault"),
+])
+def test_an_unknown_backend_type_is_refused(tmp_path, where, text, close):
+    """A3, first review: `type: azure_monitr` was a backend nothing read — no discovery,
+    no rule bound to it — in silence."""
+    msg = _refused(tmp_path, text)
+    assert f"{where} : type inconnu" in msg and f"« {close} »" in msg
+
+
+def test_the_known_backend_types_load(tmp_path):
+    cfg = tmp_path / "glorfindel-config.yaml"
+    cfg.write_text("monitoring_backends:\n  - name: law\n    type: azure_monitor\n"
+                   "  - name: prom\n    type: prometheus\n"
+                   "action_backends:\n  - name: rsv\n    type: azure_backup_vault\n")
+    c = load_glorfindel_config(cfg)
+    assert [b.type for b in c.monitoring_backends] == ["azure_monitor", "prometheus"]
+    assert c.backup_vault().name == "rsv"
+
+
+@pytest.mark.parametrize("key, text", [
+    ("isolation.quarantine_nsg", "isolation:\n  quarantine_nsg: \"false\"\n"),
+    ("exceptions[0].exclude_all", "exceptions:\n  - asset_pattern: vm-*\n    exclude_all: \"false\"\n"),
+    ("monitoring_backends[0].discovery.enabled", "monitoring_backends:\n  - name: law\n"
+                                                 "    discovery:\n      enabled: \"false\"\n"),
+])
+def test_false_in_quotes_is_refused(tmp_path, key, text):
+    """"false" in quotes is a non-empty string, true for Python: `exclude_all: "false"`
+    took the VM out of every rule."""
+    msg = _refused(tmp_path, text)
+    assert key in msg and "écrire false sans guillemets" in msg
+
+
+@pytest.mark.parametrize("key, text, said", [
+    ("autonomy.allow_destructive", "autonomy:\n  allow_destructive: \"vm-*\"\n", "écrire [vm-*]"),
+    ("exceptions[0].exclude_rules", "exceptions:\n  - asset_pattern: vm-*\n    exclude_rules: ssh-brute-force\n",
+     "une liste est attendue"),
+    ("isolation.forensic_sources", "isolation:\n  forensic_sources: 10.0.0.4\n", "une liste est attendue"),
+    ("monitoring_backends[0].discovery.interval_s", "monitoring_backends:\n  - name: law\n"
+                                                    "    discovery:\n      interval_s: \"900\"\n", "nombre"),
+    ("monitoring_backends[0].discovery.interval_s", "monitoring_backends:\n  - name: law\n"
+                                                    "    discovery:\n      interval_s: 0\n", "positif"),
+    ("monitoring_backends[0].name", "monitoring_backends:\n  - type: azure_monitor\n", "obligatoire"),
+    ("monitoring_backends[0].workspace_id", "monitoring_backends:\n  - name: law\n    workspace_id: 42\n",
+     "un texte est attendu"),
+    ("autonomy.assets", "autonomy:\n  assets: {match: vm-a, mode: human_only}\n", "une liste"),
+    ("exceptions[0]", "exceptions:\n  - vm-dev-*\n", "une table"),
+    ("autonomy.assets[0].mode", "autonomy:\n  assets:\n    - match: vm-a\n", "obligatoire"),
+])
+def test_wrong_types_are_refused(tmp_path, key, text, said):
+    """`allow_destructive: "vm-*"` was read as the patterns v, m, - and * — the last one
+    matching every VM; `exclude_rules: ssh-brute-force` matched by substring."""
+    msg = _refused(tmp_path, text)
+    assert key in msg and said in msg
+
+
+def test_every_problem_is_said_at_once(tmp_path):
+    msg = _refused(tmp_path, """
+        isolation:
+          quarantaine_nsg: false
+          forensic_ports: [ssh]
+        exceptions:
+          - asset_pattern: vm-*
+            exclude_all: "true"
+        autonomy:
+          default: full_auto
+    """)
+    assert "4 problèmes" in msg
+    for part in ("quarantaine_nsg", "forensic_ports", "exclude_all", "full_auto"):
+        assert part in msg
+    assert str(tmp_path / "glorfindel-config.yaml") in msg
+
+
+def test_empty_sections_written_as_comments_are_fine(tmp_path):
+    """`exceptions:` with every item commented out reads as null: empty, not an error."""
+    cfg = tmp_path / "glorfindel-config.yaml"
+    cfg.write_text("exceptions:\n  # - asset_pattern: vm-dev-*\nautonomy:\n  assets:\n  allow_destructive:\n")
+    loaded = load_glorfindel_config(cfg)
+    assert loaded.exceptions == [] and loaded.autonomy.assets == [] and loaded.autonomy.allow_destructive == []
+
+
+def test_the_shipped_example_and_the_terraform_fragment_load(tmp_path):
+    """What an operator starts from must pass the strict reading."""
+    import re
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[2]
+    example = load_glorfindel_config(root / "glorfindel-config.yaml.example")
+    assert example.monitoring_backends and example.action_backends
+    tf = (root / "infra" / "terraform" / "outputs.tf").read_text()
+    fragment = re.search(r"<<-YAML\n(.*?)\n\s*YAML", tf, re.S).group(1)
+    fragment = re.sub(r"\$\{[^}]+\}", "x", textwrap.dedent(fragment))
+    cfg = tmp_path / "glorfindel-config.yaml"
+    cfg.write_text(fragment)
+    assert load_glorfindel_config(cfg).backup_vault().restore_staging_storage == "x"
+
+
+def test_the_watch_does_not_start_on_a_refused_config(tmp_path, monkeypatch):
+    from click.testing import CliRunner
+    from glorfindel import config
+    from glorfindel.cli import cli
+    cfg = tmp_path / "glorfindel-config.yaml"
+    cfg.write_text("isolation:\n  quarantine_nsg: \"false\"\n")
+    monkeypatch.setattr(config, "_DEFAULT_PATHS", [cfg])
+    runs = tmp_path / "runs"
+    runs.mkdir()
+
+    class Started(Exception):
+        pass
+
+    def started(*a, **k):
+        raise Started("the watch went on")      # past the check: stop here, never loop
+    monkeypatch.setattr("glorfindel.agent.GlorfindelAgent", started)
+    monkeypatch.setattr("glorfindel.actions.migrate_state_files", started)
+    result = CliRunner().invoke(cli, ["watch", str(runs), "--dry-run"])
+    assert not isinstance(result.exception, Started)
+    assert result.exit_code == 2
+    assert "refusé" in result.output and "isolation.quarantine_nsg" in result.output

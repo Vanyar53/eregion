@@ -432,7 +432,7 @@ class QuarantineMixin:
                  if low not in {w.lower() for w in wanted} and _opens_quarantine(r)]
         return ("altered" if diff else "ok"), diff
 
-    def find_altered_quarantines(self) -> list[dict]:
+    def find_altered_quarantines(self, nsgs: list | None = None) -> list[dict]:
         """Glorfindel's quarantine NSGs as they read now, with the NICs they hold (I1F).
         The reassertion reads each isolation from its state: a NIC whose state was lost
         stays in a quarantine nobody checked — its deny turned to Udp by hand, the VM was
@@ -444,12 +444,13 @@ class QuarantineMixin:
         hold (the forensic access can't be checked). An NSG that only has our name is not
         ours. The whole subscription, always: listed in `quarantine_rg` only, an NSG made
         in another group before the setting changed went unseen (I1F, second review).
-        Raises if the NSGs can't be listed: none altered is not unknown."""
+        Raises if the NSGs can't be listed: none altered is not unknown. `nsgs`: the
+        NSGs the watch's pass already listed (shared with the orphan sweep, A3)."""
         if self.dry_run:
             return []
         self._ensure_clients()
         out: list[dict] = []
-        for nsg in self._network.network_security_groups.list_all():
+        for nsg in (self._network.network_security_groups.list_all() if nsgs is None else nsgs):
             nsg_id = getattr(nsg, "id", "") or ""
             if (not _is_quarantine_nsg(nsg_id)
                     or (getattr(nsg, "tags", None) or {}).get("managed-by") != "glorfindel"):

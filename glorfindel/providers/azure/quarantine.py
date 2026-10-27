@@ -119,15 +119,20 @@ class QuarantineMixin:
                 # Re-isolating it recorded "none" over it, and the release then left it
                 # with no NSG (seventh review, U2).
                 recorded = prior = _recorded_original(t["nic_id"])
+                unread = False
                 if prior is _UNKNOWN or prior is None:
                     try:
                         prior = self._bare_nic_original(t, default_rg)[0]
                     except Exception:
-                        # The tag unreadable (a 429): an unknown when our state holds
-                        # the NIC in quarantine — read as "none", it was written (I8F).
-                        prior = _UNKNOWN if _held_in_quarantine(t["nic_id"]) else None
+                        # Our tag unreadable (a 429): what it says is unknown. Read as
+                        # "none", it was written over the tag — a valid original lost
+                        # with the state, the NIC released bare (I8F). The state's own
+                        # explicit "none" still holds.
+                        prior, unread = _UNKNOWN, True
                 if prior and prior is not _UNKNOWN:
                     original = prior
+                elif unread and recorded is _UNKNOWN:
+                    original = _UNKNOWN
                 elif recorded is _UNKNOWN and prior is _UNKNOWN and _held_in_quarantine(t["nic_id"]):
                     # Our state has it in quarantine, its original unknown (state and
                     # tags lost before a re-isolation), and someone left it bare: the

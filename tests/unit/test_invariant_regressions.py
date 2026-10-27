@@ -617,3 +617,16 @@ def test_a_bare_nic_nothing_ties_to_its_nsg_doesnt_carry_its_rules(monkeypatch):
          ("lose_state", WEB1),
          ("tags_lost", _Q1),
          ("release", WEB1, WEB1, None))
+
+
+def test_a_429_on_our_tag_doesnt_overwrite_a_valid_original(monkeypatch):
+    """The state lost but our tag intact, someone leaves the NIC bare, and a single 429 as
+    the next isolation reads the tag: the error read as "none" — and, no state holding the
+    NIC, "none" was written over the valid tag. The original was gone from Azure, the
+    release said `released`, the NIC left without its NSG (I3; I8F, second relecture)."""
+    _run(monkeypatch, _net(quarantine=True, web_nic={"own": "dedicated"}),
+         ("isolate", WEB1, WEB1, None),
+         ("lose_state", WEB1),
+         ("someone_detaches_the_quarantine", _nic("rg-app1", "web-nic")),
+         ("isolate", WEB1, WEB1, (5, "before-429")),
+         ("release", WEB1, WEB1, None))

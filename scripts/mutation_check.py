@@ -1540,8 +1540,12 @@ MUTANTS += [
      "                                remaining.append(p)\n"),
     ("M863", "an unreadable tag on a bare NIC reads as 'none': a 429 writes it over an unknown "
              "original (I8F, relecture)", QUA,
-     '                        prior = _UNKNOWN if _held_in_quarantine(t["nic_id"]) else None\n',
+     "                        prior, unread = _UNKNOWN, True\n",
      "                        prior = None\n"),
+    ("M864", "an unreadable tag counts as unknown only when a state holds the NIC: the state lost, a "
+             "429 writes 'none' over a valid tag (I8F, second relecture)", QUA,
+     "                elif unread and recorded is _UNKNOWN:\n",
+     '                elif unread and recorded is _UNKNOWN and _held_in_quarantine(t["nic_id"]):\n'),
 ]
 
 # MC1 — the AWS adapter, written against the simulated world (tests/unit/fake_aws.py) and

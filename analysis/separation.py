@@ -43,9 +43,10 @@ def check_model(model: str) -> str:
     from eregion_core.models import glorfindel_model
     defender = glorfindel_model()
     if _model_name(model) == _model_name(defender):
+        # The instruction first: a caller that cuts the message (annatar/cli.py) keeps it.
         raise SharedWithGlorfindel(
-            f"the analysis model ({model}) is Glorfindel's decision model ({defender}): "
-            "set EREGION_ANALYSIS_MODEL to another model — an analysis must not share the "
+            f"set EREGION_ANALYSIS_MODEL to another model than Glorfindel's: the analysis model "
+            f"({model}) is its decision model ({defender}) — an analysis must not share the "
             "defender's blind spots")
     return model
 
@@ -56,9 +57,8 @@ def check_index(path: Path) -> Path:
     state = glorfindel_state().resolve()
     if p == state or state in p.parents:
         raise SharedWithGlorfindel(
-            f"the analysis index ({path}) lies in Glorfindel's state ({state}): set "
-            "EREGION_ANALYSIS_INDEX elsewhere — the analysis never reads nor writes the "
-            "defender's memory")
+            f"set EREGION_ANALYSIS_INDEX outside Glorfindel's state: the analysis index ({path}) "
+            f"lies in it ({state}) — the analysis never reads nor writes the defender's memory")
     return Path(path)
 
 
@@ -67,3 +67,22 @@ def check_collection(name: str) -> str:
     if str(name).strip().lower() == GLORFINDEL_COLLECTION:
         raise SharedWithGlorfindel(f"the analysis collection would be Glorfindel's ({name})")
     return name
+
+
+def main() -> int:
+    """``python -m analysis.separation``: does the analysis AI, where it runs, reason with
+    another model than Glorfindel's? 0 when it does, else 1 and what to set. ``make
+    glorfindel-host-model`` runs it in H0's watch: a model shared with the analysis there
+    makes every campaign report refused (and given up after 3 attempts)."""
+    from eregion_core.models import analysis_model
+    try:
+        check_model(analysis_model())
+    except SharedWithGlorfindel as e:
+        print(f"  ⚠ les rapports et les tris de campagne seront refusés : {e}")
+        return 1
+    print(f"  ✓ l'IA d'analyse raisonne avec un autre modèle ({analysis_model()})")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

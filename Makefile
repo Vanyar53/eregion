@@ -24,13 +24,15 @@ TOPO     ?=
 # Annatar a besoin de Contributor (RunCommand). Définir ANNATAR_AZURE_CLIENT_*
 # pour séparer ses creds de ceux de Glorfindel (Reader pour observe-only).
 # AZURE_TENANT_ID et AZURE_SUBSCRIPTION_ID sont toujours partagés (même tenant).
+# GLORFINDEL_LLM_MODEL : le rapport de fin de `campaign run` s'écrit dans ce conteneur, et
+# l'IA d'analyse y refuse le modèle de Glorfindel (IA1) — sans lui, elle ne verrait que le défaut.
 ANNATAR_AZURE_ENV := \
 	-e AZURE_CLIENT_ID=$(or $(ANNATAR_AZURE_CLIENT_ID),$(AZURE_CLIENT_ID)) \
 	-e AZURE_CLIENT_SECRET=$(or $(ANNATAR_AZURE_CLIENT_SECRET),$(AZURE_CLIENT_SECRET)) \
 	-e AZURE_TENANT_ID=$(AZURE_TENANT_ID) \
 	-e AZURE_SUBSCRIPTION_ID=$(AZURE_SUBSCRIPTION_ID) \
 	-e ANTHROPIC_API_KEY -e ANNATAR_LLM_MODEL -e EREGION_ANALYSIS_MODEL \
-	-e EREGION_ANALYSIS_TIMEOUT_S
+	-e EREGION_ANALYSIS_TIMEOUT_S -e GLORFINDEL_LLM_MODEL
 
 # Glorfindel — GLORFINDEL_AZURE_CLIENT_* si définis, sinon fallback AZURE_CLIENT_*
 # Glorfindel peut tourner en Reader (GLORFINDEL_READ_ONLY=1 + SP Reader).
@@ -564,6 +566,8 @@ glorfindel-host-pull:
 # Change the model the hosted Glorfindel decides with, in one command: host.env here and the
 # VM's .env, then a restart. MODEL=default goes back to the code default (eregion_core/models.py).
 # Compare it first (make llm-compare) and run it end to end — README, « Changer de modèle ».
+# IA1: then says whether the analysis AI still reasons with another model (analysis/separation.py):
+# Glorfindel's model shared with the analysis makes every campaign report refused on H0.
 glorfindel-host-model:
 	@test -n "$(MODEL)" || { echo "MODEL=anthropic/<modèle> requis (ou MODEL=default)"; exit 1; }
 	@case "$(MODEL)" in *[!A-Za-z0-9._/:-]*) echo "MODEL invalide : $(MODEL)"; exit 1;; esac
@@ -573,7 +577,9 @@ glorfindel-host-model:
 	@$(HOST_SSH) 'cd eregion && sed -i "/^GLORFINDEL_LLM_MODEL=/d" .env && \
 	 { [ "$(MODEL)" = default ] || echo "GLORFINDEL_LLM_MODEL=$(MODEL)" >> .env; } && \
 	 docker compose --profile bot up -d watch war-room bot >/dev/null 2>&1 && sleep 5 && \
-	 docker exec eregion-watch python -c "from eregion_core.models import glorfindel_model; print(\"  ✓ Glorfindel décide maintenant avec\", glorfindel_model())"'
+	 docker exec eregion-watch python -c "from eregion_core.models import glorfindel_model; print(\"  ✓ Glorfindel décide maintenant avec\", glorfindel_model())" && \
+	 { docker exec eregion-watch python -m analysis.separation || \
+	   echo "  → pose EREGION_ANALYSIS_MODEL=<un autre modèle> dans host.env (ici) et dans ~/eregion/.env (VM), puis docker compose up -d watch — docs/analysis.md"; }'
 
 glorfindel-host-report:
 	$(HOST_SSH) 'docker exec eregion-watch glorfindel report --since $(or $(SINCE),7d)'

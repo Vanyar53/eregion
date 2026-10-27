@@ -66,6 +66,22 @@ def test_host_env_carries_no_azure_secret_and_is_read_only():
     assert len(env["EREGION_CONSOLE_TOKEN"]) >= 24 and "GLORFINDEL_WARROOM_TOKEN" not in env
 
 
+def test_host_env_carries_the_analysis_model_to_the_watch():
+    """IA1: the hosted watch writes the campaign reports with the analysis model, never
+    Glorfindel's. Set by the operator, it reaches host.env, then the watch through compose (a
+    model's name, no secret: the common block); unset, it stays out (the code's default,
+    another model than Glorfindel's). Before, it was never copied: on H0, only by hand."""
+    operator = {"AZURE_SUBSCRIPTION_ID": "sub", "ANTHROPIC_API_KEY": "key",
+                "GLORFINDEL_LLM_MODEL": "anthropic/claude-haiku-5-5",
+                "EREGION_ANALYSIS_MODEL": "anthropic/claude-opus-4-7"}
+    env = host_env.host_env(operator)
+    assert env["EREGION_ANALYSIS_MODEL"] == "anthropic/claude-opus-4-7"
+    rendered = {s: {k: _interpolate(v, env) for k, v in e.items()} for s, e in _compose_env().items()}
+    assert rendered["watch"]["EREGION_ANALYSIS_MODEL"] == "anthropic/claude-opus-4-7"
+    del operator["EREGION_ANALYSIS_MODEL"]
+    assert "EREGION_ANALYSIS_MODEL" not in host_env.host_env(operator)
+
+
 def test_every_host_env_variable_reaches_the_containers():
     """docker compose passes an explicit list (`x-env`), not the whole .env: a variable that
     host.env carries but the list omits never reaches the watch. #160 added

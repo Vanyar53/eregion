@@ -50,6 +50,62 @@ def test_the_report_refuses_glorfindel_s_model_before_any_call(monkeypatch):
     assert calls == []
 
 
+def test_the_refusal_says_what_to_set_before_anything_else(monkeypatch):
+    """annatar/cli.py cuts the message at 120 characters (the end of `campaign run`): the
+    instruction comes first, so that long model names never cut it off."""
+    long = "bedrock/anthropic.claude-sonnet-5-5-20261001-v1:0-with-a-long-suffix"
+    monkeypatch.setenv("GLORFINDEL_LLM_MODEL", long)
+    with pytest.raises(separation.SharedWithGlorfindel) as e:
+        separation.check_model(long)
+    assert "set EREGION_ANALYSIS_MODEL" in f"{type(e.value).__name__}: {str(e.value)[:120]}"
+
+
+def test_the_end_of_a_campaign_run_says_what_to_set(monkeypatch, tmp_path):
+    from annatar import cli
+
+    said = []
+    monkeypatch.setattr(cli.console, "print", lambda *a, **k: said.append(" ".join(map(str, a))))
+    long = "openai/a-deployment-name-long-enough-to-push-the-instruction-out-of-the-line"
+    monkeypatch.setenv("GLORFINDEL_LLM_MODEL", long)
+    monkeypatch.setattr(cr, "build", lambda cdir: separation.check_model(long))
+    cli._write_campaign_report(tmp_path)
+    assert "set EREGION_ANALYSIS_MODEL" in said[0] and not (tmp_path / "report.md").exists()
+
+
+@pytest.mark.parametrize("glorfindel, analysis, code", [
+    ("anthropic/claude-haiku-5-5", "", 1),                       # the analysis' default, taken
+    ("anthropic/claude-sonnet-5-5", "claude-sonnet-5-5", 1),
+    ("anthropic/claude-haiku-5-5", "anthropic/claude-opus-4-7", 0),
+    ("", "", 0),                                                 # both defaults: two models
+])
+def test_the_check_said_after_a_change_of_glorfindel_s_model(monkeypatch, capsys, glorfindel, analysis, code):
+    """`make glorfindel-host-model` runs ``python -m analysis.separation`` in H0's watch: a
+    model shared with the analysis there would make every campaign report refused."""
+    for name, value in (("GLORFINDEL_LLM_MODEL", glorfindel), ("EREGION_ANALYSIS_MODEL", analysis)):
+        if value:
+            monkeypatch.setenv(name, value)
+        else:
+            monkeypatch.delenv(name, raising=False)
+    assert separation.main() == code
+    out = capsys.readouterr().out
+    assert ("EREGION_ANALYSIS_MODEL" in out) is bool(code)
+
+
+def test_glorfindel_host_model_runs_the_check_in_the_watch():
+    make = (ANALYSIS.parent / "Makefile").read_text(encoding="utf-8")
+    recipe = make.split("\nglorfindel-host-model:", 1)[1].split("\n\n", 1)[0]
+    assert "docker exec eregion-watch python -m analysis.separation ||" in recipe
+
+
+def test_the_campaign_run_container_knows_glorfindel_s_model():
+    """The end of `campaign run` writes its report in Annatar's container: without
+    GLORFINDEL_LLM_MODEL there, the check compares with the default and lets the same model
+    through."""
+    make = (ANALYSIS.parent / "Makefile").read_text(encoding="utf-8")
+    block = make.split("ANNATAR_AZURE_ENV := \\\n", 1)[1].split("\n\n", 1)[0]
+    assert "-e GLORFINDEL_LLM_MODEL" in block and "-e EREGION_ANALYSIS_MODEL" in block
+
+
 # ── The memory ──────────────────────────────────────────────────────────────────────────
 
 @pytest.fixture

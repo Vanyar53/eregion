@@ -1564,9 +1564,10 @@ class IsolationMachine(RuleBasedStateMachine):
             self._release(vm, rid, None)
             self._release(vm, rid, None)
         else:
-            # Isolated again, under a fault of its own — a single 429 reading our tag
-            # read as "none" (M863).
-            self._isolate(vm, rid, data.draw(_FAULTS, label="isolate fault"))
+            # Isolated again, under a fault of its own — often a single 429 among the
+            # first calls, where it reads our tag: read as "none" (M863).
+            self._isolate(vm, rid, data.draw(st.one_of(_FAULTS, st.tuples(
+                st.integers(3, 8), st.just("before-429"))), label="isolate fault"))
             self._release(vm, rid, None)
 
     @rule()

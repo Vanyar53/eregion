@@ -50,7 +50,7 @@ def _parse_signal_line(raw: str):
 
     Unknown keys are dropped (same filtering as the RulePoller dispatch) so a field
     added by a newer Annatar can't make Signal(**data) raise."""
-    from annatar.signals.schema import Signal
+    from eregion_core.signals import Signal
     data = json.loads(raw)
     if not isinstance(data, dict):
         raise ValueError("not a JSON object")
@@ -304,12 +304,54 @@ def unblock(ip: str, resource_id: str, dry_run: bool, yes: bool):
         _record_manual_action("unblock_ip", resource_id, {**result, "ip": ip})
 
 
+def _watch_reassert_pass(connector, mode_override=None, lock=None, seen: dict | None = None) -> list[dict]:
+    """One reassertion pass of the watch (its own thread, every
+    GLORFINDEL_REASSERT_INTERVAL_S): the recorded isolations and blocks, and our
+    quarantine NSGs whatever the local state says — a state lost is what that check is
+    for (I1F, #226: the pass stopped before any Azure call when nothing was recorded).
+    Never raises. An unreadable configuration is said once until it reads again (`seen`
+    is the watch's memory between passes), not every minute."""
+    import contextlib
+    from glorfindel.reassert import reassert_pass
+    lock = lock if lock is not None else contextlib.nullcontext()
+    seen = seen if seen is not None else {}
+    try:
+        from glorfindel.config import load_glorfindel_config as _lgc
+        autonomy = _lgc().autonomy              # fresh: a War Room mode change applies
+        if mode_override:
+            autonomy.default = mode_override    # --mode stays pinned, as in decide
+        seen.pop("config_error", None)
+    except Exception as exc:
+        # Unreadable config: the mode loaded when the watch started may be stale —
+        # alert only, never act on it (seventh review, U4).
+        autonomy = None
+        if seen.get("config_error") != str(exc):
+            seen["config_error"] = str(exc)
+            with lock:
+                console.print(f"[yellow]reassert: config illisible, alertes seulement ({exc})[/yellow]")
+    report: list[dict] = []
+    try:
+        report = reassert_pass(connector, autonomy)
+        for r in report:
+            target = r["vm"] + (f" {r['ip']}" if r.get("ip") else "")
+            with lock:
+                console.print(f"[yellow]reassert {r['kind']} {target} → {r['outcome']}[/yellow]")
+    except Exception as exc:
+        with lock:
+            console.print(f"[red]reassert pass failed:[/red] {exc}")
+    return report
+
+
 def _start_campaign_reports(runs_dir) -> bool:
     """The thread that writes the report of each campaign Orodruin publishes (IA0, #167;
     analysis/hosted_report.py) — only with an exercise channel. Never raises: a report,
     or its thread failing to start, never stops the watch."""
     try:
         from analysis import hosted_report
+        # Before the thread: the report reads a run's detections with Annatar's reader, a
+        # bridge (scripts/component_check.py). Without Annatar it is said here, once — not by
+        # every pass of a thread that could never write a report.
+        from analysis import campaign_report  # noqa: F401
         return hosted_report.start(runs_dir) is not None
     except Exception as exc:  # the watch goes on without campaign reports
         console.print(f"[yellow]Rapports de campagne désactivés — {type(exc).__name__}: {exc}[/yellow]")
@@ -341,7 +383,7 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
     import queue as _queue
     import threading as _threading
 
-    from annatar.signals.schema import Signal
+    from eregion_core.signals import Signal
     from glorfindel.agent import GlorfindelAgent
 
     # Surface library logs (discovery cycles, posture, query failures) on stdout so
@@ -566,7 +608,7 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
                 _dispatch(data, sig)   # non-blocking — worker thread takes over
 
     from datetime import datetime, timezone
-    from glorfindel.actions import AzureConnector, active_isolations
+    from glorfindel.actions import AzureConnector
 
     ttl_h = float(os.environ.get("GLORFINDEL_ISOLATION_TTL_H") or "4")
     ttl_connector = AzureConnector(dry_run=dry_run)
@@ -618,30 +660,10 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
         _reassert_thread[0] = _thr.Thread(target=_reassert_pass, daemon=True, name="reassert")
         _reassert_thread[0].start()
 
+    _reassert_seen: dict = {}
+
     def _reassert_pass() -> None:
-        from glorfindel.actions import active_blocks
-        if not active_isolations() and not active_blocks():
-            return      # cheap local check — no Azure call when nothing is active
-        from glorfindel.reassert import reassert_active
-        try:
-            from glorfindel.config import load_glorfindel_config as _lgc
-            autonomy = _lgc().autonomy          # fresh: a War Room mode change applies
-            if mode_override:
-                autonomy.default = mode_override  # --mode stays pinned, as in decide
-        except Exception as exc:
-            # Unreadable config: the mode loaded when the watch started may be stale —
-            # alert only, never act on it (seventh review, U4).
-            autonomy = None
-            with _output_lock:
-                console.print(f"[yellow]reassert: config illisible, alertes seulement ({exc})[/yellow]")
-        try:
-            for r in reassert_active(ttl_connector, autonomy):
-                target = r["vm"] + (f" {r['ip']}" if r.get("ip") else "")
-                with _output_lock:
-                    console.print(f"[yellow]reassert {r['kind']} {target} → {r['outcome']}[/yellow]")
-        except Exception as exc:
-            with _output_lock:
-                console.print(f"[red]reassert pass failed:[/red] {exc}")
+        _watch_reassert_pass(ttl_connector, mode_override, _output_lock, _reassert_seen)
 
     _HEARTBEAT = Path.home() / ".glorfindel" / "watch_heartbeat"
 
@@ -732,7 +754,7 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
                 def _rule_dispatch(signal_data: dict) -> None:
                     if _watch_channel is not None:
                         _watch_channel.note(signal_data)  # memory only, never raises
-                    from annatar.signals.schema import Signal as _Signal
+                    from eregion_core.signals import Signal as _Signal
                     sig = _Signal(**{
                         k: signal_data.get(k, "")
                         for k in _Signal.__dataclass_fields__

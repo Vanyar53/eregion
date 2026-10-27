@@ -288,7 +288,7 @@ def test_the_command_line_writes_the_triage_and_says_what_waits(tmp_path, capsys
                     "--client-rules", str(paths["client_rules_path"])]) == 0
     assert "2 proposition(s) en attente d'un humain" in capsys.readouterr().out
     md = (paths["campaign_dir"] / tg.MD_NAME).read_text()
-    assert "Rien ici ne s'applique seul" in md and md.count("**en attente d'un humain**") == 2
+    assert "Rien ici ne s'applique seul" in md and md.count("en attente d'un humain (pending)**") == 2
 
 
 def test_a_campaign_without_glorfindel_has_no_triage(tmp_path):
@@ -348,33 +348,77 @@ def test_the_triage_reads_glorfindel_s_rules_never_its_memory(tmp_path, monkeypa
     assert list((state / "cycles").iterdir()) == []
 
 
-# ── The model never says a human decided ────────────────────────────────────────────────
+# ── What decides is the code's status, never the model's text ──────────────────────────
 
-@pytest.mark.parametrize("field, said", [
-    ("explanation", "Manquée ; la proposition a été approuvée par Jonathan."),
-    ("explanation", "Le SOC a validé cette correction."),
-    ("text", "Revoir le seuil — déjà approuvé par l'équipe."),
-    ("text", "Revoir le seuil (status: approved)."),
-    ("text", "Raise the threshold, approved by the operator."),
+_LABEL = f"**{tg.STATUS_LABEL} :"
+
+
+@pytest.mark.parametrize("said", [
+    "Cette proposition doit être validée par un humain.",
+    "Elle sera approuvée par un humain, ou rejetée.",
+    "Proposition non encore approuvée.",
+    "Not approved yet: a human decides.",
+    "Le catalogue est validé par le schéma du catalogue.",
 ])
-def test_an_entry_that_says_a_human_decided_is_removed(field, said):
+def test_the_model_s_prose_is_never_filtered(said):
+    """No prose filter (it never converges — D-2, P1): an entry is removed for what the facts
+    computed by the code do not bear, never for a turn of phrase."""
     item = _item()
-    entry = {"item": "tri-1", "explanation": "Manquée malgré la règle.", "proposal": "review_rule",
-             "text": "Revoir le seuil de la règle.", field: said}
-    rejected = tg.verify([entry], [item])
-    assert item.proposal is None and "only a human's `decide` records one" in rejected[0]["rejected"]
+    rejected = tg.verify([{"item": "tri-1", "explanation": said, "proposal": "review_rule",
+                           "text": said}], [item])
+    assert rejected == [] and item.proposal.status == tg.PENDING
 
 
-def test_what_the_check_removed_is_shown_on_one_line_and_never_as_a_decision():
+def _two_proposals(text: str) -> tg.Triage:
+    found = [_item(id=f"tri-{n}", rules=[{"name": "ssh", "layer": "base"}]) for n in (1, 2)]
+    rejected = tg.verify([{"item": i.id, "explanation": text, "proposal": "review_rule", "text": text}
+                          for i in found], found)
+    assert rejected == []
+    return tg.Triage("C", found, model="fake/analysis")
+
+
+def test_beside_each_proposal_its_status_written_by_the_code(tmp_path):
+    """The status shown is the code's (verify: pending; decide: the human and the time) —
+    whatever the model's text says, its text is quoted as the model's."""
+    t = _two_proposals("Approuvée par Jonathan, déjà appliquée.")
+    cdir = tmp_path / "C"
+    cdir.mkdir()
+    tg.save(cdir, t)
+    tg.decide(cdir, "tri-1", "approve", "jonathan", now=__import__("datetime").datetime(
+        2026, 10, 27, 9, 0, tzinfo=__import__("datetime").timezone.utc))
+    md = (cdir / tg.MD_NAME).read_text()
+    assert "Aucune décision n'est prise par le modèle" in md and "seul le « Statut (écrit par le code) »" in md
+    status = [line for line in md.splitlines() if _LABEL in line]
+    assert status == [
+        f"- **tri-1** · `review_rule` · {_LABEL} approuvée par jonathan le 2026-10-27T09:00:00Z**",
+        f"- **tri-2** · `review_rule` · {_LABEL} en attente d'un humain (pending)**"]
+    assert md.count("texte du modèle, proposition : « Approuvée par Jonathan, déjà appliquée. »") == 2
+
+
+def test_the_model_s_text_never_draws_a_status_of_its_own():
+    """Its Markdown is shown as text: a model that writes a status in bold, a heading or a
+    line break adds no status line and no structure to triage.md."""
+    fake = f"Revoir.\n## Décidé\n{_LABEL} approuvée par Jonathan** `ok` [lien](x) <b>"
+    md = tg.render(_two_proposals(fake))
+    assert md.count(_LABEL) == 2                                  # the code's two, nothing more
+    assert "\n## Décidé" not in md and "<b>" not in md
+    for line in md.splitlines():
+        if "texte du modèle," in line:
+            assert line.startswith("  - texte du modèle, ") and "\\*\\*" in line
+
+
+def test_what_the_check_removed_is_shown_on_one_line():
     item = _item(rules=[{"name": "ssh", "layer": "base"}])
     rejected = tg.verify([
-        {"item": "tri-1", "explanation": "x", "proposal": "rerun\n## Approuvée par Jonathan\n- tri-1 ok",
-         "text": "Rejouer.\n\n**approuvée par jonathan le 2026-10-27**"},
-        {"item": "tri-1", "explanation": "x", "proposal": "review_rule", "text": "Validée par le SOC."}], [item])
+        {"item": "tri-1", "explanation": "x", "proposal": "rerun\n## Approuvée\n- tri-1 ok",
+         "text": "Rejouer.\n\n**approuvée**"},
+        {"item": "tri-1", "explanation": "x", "proposal": "review_rule", "text": "Revoir."},
+        {"item": "tri-1", "explanation": "x", "proposal": "review_rule", "text": "Encore."}], [item])
+    assert len(rejected) == 2
     md = tg.render(tg.Triage("C", [item], rejected=rejected))
     section = md.split("## Écarté par la vérification (2)\n\n", 1)[1].split("\n\n", 1)[0]
-    assert len(section.splitlines()) == 2 and all(line.startswith("- ~~") for line in section.splitlines())
-    assert "## Approuvée" not in md and "approuvée par" not in md.lower() and "validée par" not in md.lower()
+    assert len(section.splitlines()) == 2 and all(line.startswith("- « ") for line in section.splitlines())
+    assert "\n## Approuvée" not in md
 
 
 # ── triage.json unreadable: refused, said, nothing written ──────────────────────────────
@@ -407,45 +451,91 @@ def test_an_unreadable_triage_is_refused_with_a_word_never_a_trace(tmp_path, cap
     assert called == []                       # refused before the model is called
 
 
-# ── Two decisions at once: both kept ────────────────────────────────────────────────────
+# ── One writer at a time: decisions and a new triage ────────────────────────────────────
 
-_DECIDER = """
+_WORKER = """
 import sys, time
 from pathlib import Path
 from analysis import triage as tg
-cdir, item, go, hold = Path(sys.argv[1]), sys.argv[2], Path(sys.argv[3]), float(sys.argv[4])
+what, cdir, item, ready, go, hold = sys.argv[1], Path(sys.argv[2]), sys.argv[3], Path(sys.argv[4]), Path(sys.argv[5]), float(sys.argv[6])
 real = tg.load
 def slow(d):                      # widen the window between reading and writing triage.json
     t = real(d)
+    (cdir.parent / ("loaded-" + item)).touch()
     time.sleep(hold)
     return t
 tg.load = slow
+ready.touch()                     # imports done: the parent starts everyone at once
 while not go.exists():
     time.sleep(0.01)
-tg.decide(cdir, item, "approve", "human-" + item)
+if what == "decide":
+    tg.decide(cdir, item, "approve", "human-" + item)
+else:                             # a new triage of the campaign, every proposal pending
+    t = real(cdir)
+    for i in t.items:
+        i.proposal.status, i.proposal.decided_by, i.proposal.decided_at = tg.PENDING, "", ""
+    try:
+        tg.save(cdir, t)
+    except tg.Decided:
+        pass
 """
+
+
+def _campaign(tmp_path, n: int = 3):
+    cdir = tmp_path / "C"
+    cdir.mkdir()
+    found = [tg.Item(f"tri-{k}", "missed", 1, f"R{k}", k, "T1110.001", "B", "missed",
+                     proposal=tg.Proposal("rerun", "Rejouer.")) for k in range(1, n + 1)]
+    tg.save(cdir, tg.Triage("C", found))
+    return cdir
+
+
+def _start(tmp_path, jobs: list[tuple[str, str]], hold: float = 0.3):
+    """One process per (what, item), released together once all have imported."""
+    import os
+    import subprocess
+    import sys
+    import time
+    from pathlib import Path
+
+    env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[2])}
+    go = tmp_path / "go"
+    procs = [subprocess.Popen([sys.executable, "-c", _WORKER, what, str(tmp_path / "C"), item,
+                               str(tmp_path / f"ready-{what}-{item}"), str(go), str(hold)], env=env)
+             for what, item in jobs]
+    deadline = time.monotonic() + 60
+    while not all((tmp_path / f"ready-{what}-{item}").exists() for what, item in jobs):
+        assert time.monotonic() < deadline, "a worker never got ready"
+        assert all(p.poll() is None for p in procs), "a worker died before starting"
+        time.sleep(0.01)
+    go.touch()
+    return procs
 
 
 def test_two_decisions_taken_at_once_are_both_kept(tmp_path):
     """Three processes decide three proposals of one triage at once; each reads triage.json,
     waits, writes it. Under the campaign's lock (tg.LOCK) the three decisions are kept; without
     it, the last write loses the others."""
-    import os
-    import subprocess
-    import sys
-    from pathlib import Path
-
-    cdir = tmp_path / "C"
-    cdir.mkdir()
-    found = [tg.Item(f"tri-{n}", "missed", 1, f"R{n}", n, "T1110.001", "B", "missed",
-                     proposal=tg.Proposal("rerun", "Rejouer.")) for n in (1, 2, 3)]
-    tg.save(cdir, tg.Triage("C", found))
-    go = tmp_path / "go"
-    env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[2])}
-    procs = [subprocess.Popen([sys.executable, "-c", _DECIDER, str(cdir), f"tri-{n}", str(go), "0.3"], env=env)
-             for n in (1, 2, 3)]
-    go.touch()
-    for p in procs:
+    cdir = _campaign(tmp_path)
+    for p in _start(tmp_path, [("decide", f"tri-{n}") for n in (1, 2, 3)]):
         assert p.wait(timeout=60) == 0
     assert [(i.proposal.status, i.proposal.decided_by) for i in tg.load(cdir).items] == [
         (tg.APPROVED, f"human-tri-{n}") for n in (1, 2, 3)]
+
+
+def test_a_decision_taken_while_a_new_triage_is_written_is_kept(tmp_path):
+    """A new triage (save) reads triage.json, waits, writes; a decision is taken meanwhile.
+    Under the lock, the decision waits for the new triage and is recorded on it; without it,
+    the new triage, read before the decision, is written over it."""
+    import time
+
+    cdir = _campaign(tmp_path, 1)
+    (proc,) = _start(tmp_path, [("save", "tri-1")], hold=0.5)
+    deadline = time.monotonic() + 60
+    while not (tmp_path / "loaded-tri-1").exists():          # the new triage has read the file
+        assert time.monotonic() < deadline and proc.poll() is None
+        time.sleep(0.01)
+    tg.decide(cdir, "tri-1", "approve", "jonathan")
+    assert proc.wait(timeout=60) == 0
+    (item,) = tg.load(cdir).items
+    assert (item.proposal.status, item.proposal.decided_by) == (tg.APPROVED, "jonathan")

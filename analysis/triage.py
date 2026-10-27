@@ -36,7 +36,9 @@ removed too (the reading of analysis/campaign_report.py, a heuristic).
 **Nothing without a human's decision**: every kept proposal is written ``pending``, by the
 code, whatever the model wrote. ``decide`` records a human's ``approve`` or ``reject``, with
 their name and the time — and nothing else: an approved proposal is work for a human, never
-carried out here. A triage that holds a decision is never written over.
+carried out here. A triage that holds a decision is never written over. What counts is that
+status, written by the code; ``triage.md`` shows it beside each proposal, and the model's text
+as its text (quoted, its Markdown escaped) — no turn of its prose is filtered.
 """
 from __future__ import annotations
 
@@ -526,23 +528,6 @@ _RULE = re.compile(
     r"|```",
     re.IGNORECASE)
 
-# A decision, said by the model: « approuvée par … », « Jonathan a validé », « approved by »,
-# « status: approved ». Only ``decide`` records a human's decision; a model that says one was
-# taken would let triage.md suggest a human validated what nobody has looked at.
-_APPROVAL = re.compile(
-    r"\b(approuvé|validé|entériné)e?s?\s+(par|by)\b"
-    r"|\b(a|as|ai|ont|avons|avez|est|sont|été)\s+(déjà\s+)?(été\s+)?(approuvé|validé|entériné)e?s?\b"
-    r"|\b(approved|signed\s+off)\b|\b(validated|accepted|authori[sz]ed)\s+by\b"
-    r"|\b(status|statut)\s*[:=]\s*(approved|approuvée?|validée?|rejected|rejetée?)\b",
-    re.IGNORECASE)
-
-
-def neutral(text: str) -> str:
-    """``text`` with any decision it claims struck out — for what triage.md shows of an entry
-    the check removed: the model's words, never a decision."""
-    return _APPROVAL.sub("[décision affirmée par le modèle, sans valeur]", str(text))
-
-
 def verify(entries: list[dict], items_: list[Item]) -> list[dict]:
     """Attach each entry the facts support to its item — its proposal ``pending`` — and return
     the entries removed, each with why."""
@@ -562,8 +547,6 @@ def verify(entries: list[dict], items_: list[Item]) -> list[dict]:
             why = f"the facts do not support {e['proposal']}: {not_here}"
         elif _RULE.search(e["explanation"]) or _RULE.search(e["text"]):
             why = "it carries a rule: the analysis writes none, a human does"
-        elif _APPROVAL.search(e["explanation"]) or _APPROVAL.search(e["text"]):
-            why = "it says a decision was taken: only a human's `decide` records one"
         elif item.decision_unknown:
             told = cr._UNKNOWN.sub(" ", e["explanation"])
             if cr._NO_ACTION.search(told):
@@ -604,16 +587,35 @@ def build(campaign_dir: Path, model: str | None = None, llm=None, *,
 
 
 def _status(p: Proposal | None) -> str:
+    """The proposal's status, as the code wrote it (``verify``: pending; ``decide``: who)."""
     if p is None:
         return "—"
     if p.status == PENDING:
-        return "**en attente d'un humain**"
+        return "en attente d'un humain (pending)"
     word = "approuvée" if p.status == APPROVED else "rejetée"
-    return f"{word} par {p.decided_by} le {p.decided_at}" + (f" ({p.note})" if p.note else "")
+    # The human's name and note on one line, never as Markdown (they are typed, not checked).
+    by, note = (_cell(str(v).translate(_MARKUP)) for v in (p.decided_by, p.note))
+    return f"{word} par {by} le {p.decided_at}" + (f" ({note})" if note else "")
 
 
 def _cell(text: str) -> str:
+    """One line, in a table or a list: one entry is one line."""
     return str(text).replace("|", "\\|").replace("\n", " ")
+
+
+# What Markdown would turn into structure: emphasis, code, a heading, a link, a quote, HTML.
+_MARKUP = str.maketrans({c: "\\" + c for c in "\\*_`#[]<>~"})
+
+
+def _model(text: str) -> str:
+    """The model's words as text, never as structure: on one line (``_cell``), and without
+    the Markdown that could draw a status of its own (``**Statut …**``)."""
+    return f"« {_cell(str(text).translate(_MARKUP))} »"
+
+
+# Beside each proposal, its status, written by the code — the only thing that says whether a
+# human decided. The model's text is an explanation, never a decision.
+STATUS_LABEL = "Statut (écrit par le code)"
 
 
 def _rules_cell(i: Item) -> str:
@@ -636,6 +638,10 @@ def render(t: Triage) -> str:
         "(`python -m analysis.triage decide <campagne> <tri-N> approve|reject --by <nom>`). "
         "L'IA d'analyse n'écrit pas de règle et n'agit pas ; une proposition approuvée reste à "
         "faire par un humain.*", "",
+        f"**Aucune décision n'est prise par le modèle : seul le « {STATUS_LABEL} » de chaque "
+        "proposition fait foi** — `pending` tant qu'un humain n'a pas décidé, sinon la décision "
+        "enregistrée par `decide`, avec son nom (`triage.json`). Ce qui est entre « » est le "
+        "texte du modèle : une explication, jamais une décision.", "",
         f"{len(t.items)} item(s) à trier · {t.untriaged} run(s) exécuté(s) sans rien à trier. "
         "*Les items, leur ordre et leurs causes sont calculés depuis les fichiers.*", "",
     ]
@@ -646,19 +652,19 @@ def render(t: Triage) -> str:
             causes = "; ".join(CAUSES[c] for c in i.causes) or "—"
             lines.append(f"| {i.id} | {i.priority} | `{i.run_id}` | {i.ttp} {_cell(i.name)} | "
                          f"{PRIORITY[i.kind][1]} | {_rules_cell(i)} | {_cell(_collection_cell(i))} | {causes} |")
-        lines += ["", f"## Explications et propositions (écrites par `{t.model}`, vérifiées contre les faits)", ""]
+        lines += ["", f"## Propositions (texte de `{_cell(t.model)}`, vérifié contre les faits)", ""]
         for i in t.items:
             if i.proposal is None:
                 lines.append(f"- **{i.id}** — aucune proposition gardée.")
                 continue
-            lines.append(f"- **{i.id}** — {_cell(i.explanation)}")
-            lines.append(f"  - Proposition `{i.proposal.kind}` : {_cell(i.proposal.text)} — {_status(i.proposal)}")
+            lines.append(f"- **{i.id}** · `{i.proposal.kind}` · **{STATUS_LABEL} : {_status(i.proposal)}**")
+            lines.append(f"  - texte du modèle, explication : {_model(i.explanation)}")
+            lines.append(f"  - texte du modèle, proposition : {_model(i.proposal.text)}")
     if t.rejected:
         lines += ["", f"## Écarté par la vérification ({len(t.rejected)})", ""]
-        # The model's words, removed: on one line each (_cell), any decision they claim struck
-        # out (neutral) — the reason too, which may quote the model's proposal.
-        lines += [f"- ~~{_cell(neutral(r.get('item')))} · {_cell(neutral(r.get('proposal')))} : "
-                  f"{_cell(neutral(r.get('text')))}~~ — {_cell(neutral(r.get('rejected')))}"
+        # The model's words, removed — one line each, the reason too (it may quote the model).
+        lines += [f"- {_model(r.get('item'))} · {_model(r.get('proposal'))} : {_model(r.get('text'))} "
+                  f"— écarté : {_cell(r.get('rejected'))}"
                   for r in t.rejected]
     lines += ["", "*Lu : " + " ; ".join(t.notes) + ".*"]
     return "\n".join(lines) + "\n"

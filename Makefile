@@ -18,30 +18,35 @@ TF       := terraform -chdir=infra/terraform
 INSTANCE ?= default
 TOPO     ?=
 
+# L23 (#228) : chaque secret passe au conteneur PAR SON NOM (`-e AZURE_CLIENT_SECRET`), jamais
+# par sa valeur (`-e AZURE_CLIENT_SECRET=…`, visible dans `ps`, l'historique et `make -n`).
+# La valeur est choisie par le shell de la recette et posée dans l'environnement de
+# `docker run` seulement (*_AZURE_PICK, devant la commande) : la ligne de commande ne porte
+# que des noms. Le canary : tests/unit/test_makefile_secrets.py rend chaque cible par
+# `make -n` avec des secrets factices, et aucune valeur ne doit y paraître.
+#
 # Annatar — ANNATAR_AZURE_CLIENT_* si définis, sinon fallback AZURE_CLIENT_*
-# ⚠ Les recettes qui les utilisent commencent par @ : make afficherait sinon la commande
-# développée, secret compris (constaté le 2026-10-07).
 # Annatar a besoin de Contributor (RunCommand). Définir ANNATAR_AZURE_CLIENT_*
 # pour séparer ses creds de ceux de Glorfindel (Reader pour observe-only).
 # AZURE_TENANT_ID et AZURE_SUBSCRIPTION_ID sont toujours partagés (même tenant).
+ANNATAR_AZURE_PICK = \
+	AZURE_CLIENT_ID="$${ANNATAR_AZURE_CLIENT_ID:-$${AZURE_CLIENT_ID:-}}" \
+	AZURE_CLIENT_SECRET="$${ANNATAR_AZURE_CLIENT_SECRET:-$${AZURE_CLIENT_SECRET:-}}"
 # GLORFINDEL_LLM_MODEL : le rapport de fin de `campaign run` s'écrit dans ce conteneur, et
 # l'IA d'analyse y refuse le modèle de Glorfindel (IA1) — sans lui, elle ne verrait que le défaut.
 ANNATAR_AZURE_ENV := \
-	-e AZURE_CLIENT_ID=$(or $(ANNATAR_AZURE_CLIENT_ID),$(AZURE_CLIENT_ID)) \
-	-e AZURE_CLIENT_SECRET=$(or $(ANNATAR_AZURE_CLIENT_SECRET),$(AZURE_CLIENT_SECRET)) \
-	-e AZURE_TENANT_ID=$(AZURE_TENANT_ID) \
-	-e AZURE_SUBSCRIPTION_ID=$(AZURE_SUBSCRIPTION_ID) \
+	-e AZURE_CLIENT_ID -e AZURE_CLIENT_SECRET -e AZURE_TENANT_ID -e AZURE_SUBSCRIPTION_ID \
 	-e ANTHROPIC_API_KEY -e ANNATAR_LLM_MODEL -e EREGION_ANALYSIS_MODEL \
 	-e EREGION_ANALYSIS_TIMEOUT_S -e GLORFINDEL_LLM_MODEL
 
 # Glorfindel — GLORFINDEL_AZURE_CLIENT_* si définis, sinon fallback AZURE_CLIENT_*
 # Glorfindel peut tourner en Reader (GLORFINDEL_READ_ONLY=1 + SP Reader).
 # AZURE_TENANT_ID et AZURE_SUBSCRIPTION_ID sont toujours partagés (même tenant).
+GLORFINDEL_AZURE_PICK = \
+	AZURE_CLIENT_ID="$${GLORFINDEL_AZURE_CLIENT_ID:-$${AZURE_CLIENT_ID:-}}" \
+	AZURE_CLIENT_SECRET="$${GLORFINDEL_AZURE_CLIENT_SECRET:-$${AZURE_CLIENT_SECRET:-}}"
 GLORFINDEL_AZURE_ENV := \
-	-e AZURE_CLIENT_ID=$(or $(GLORFINDEL_AZURE_CLIENT_ID),$(AZURE_CLIENT_ID)) \
-	-e AZURE_CLIENT_SECRET=$(or $(GLORFINDEL_AZURE_CLIENT_SECRET),$(AZURE_CLIENT_SECRET)) \
-	-e AZURE_TENANT_ID=$(AZURE_TENANT_ID) \
-	-e AZURE_SUBSCRIPTION_ID=$(AZURE_SUBSCRIPTION_ID)
+	-e AZURE_CLIENT_ID -e AZURE_CLIENT_SECRET -e AZURE_TENANT_ID -e AZURE_SUBSCRIPTION_ID
 
 GLORFINDEL_STATE := \
 	-v $(HOME)/.glorfindel:/root/.glorfindel \
@@ -67,7 +72,7 @@ GLORFINDEL_VOLS := \
 
 # The images' CMD is the CLI itself: arguments REPLACE it, so the binary is named here
 # (`make annatar-run` ran `run` as a command and failed).
-DOCKER_ANNATAR := docker run --rm $(ANNATAR_AZURE_ENV) $(ANNATAR_VOLS) $(IMAGE_ANNATAR) annatar
+DOCKER_ANNATAR = $(ANNATAR_AZURE_PICK) docker run --rm $(ANNATAR_AZURE_ENV) $(ANNATAR_VOLS) $(IMAGE_ANNATAR) annatar
 GLORFINDEL_ENV := \
 	-e AZURE_WORKSPACE_ID \
 	-e AZURE_VM_RESOURCE_ID \
@@ -87,7 +92,7 @@ GLORFINDEL_ENV := \
 	-e GLORFINDEL_INCIDENT_TTL_S \
 	-e ORT_LOGGING_LEVEL_DEFAULT=3
 
-DOCKER_GLORFINDEL := docker run --rm $(GLORFINDEL_AZURE_ENV) $(GLORFINDEL_VOLS) $(GLORFINDEL_STATE) \
+DOCKER_GLORFINDEL = $(GLORFINDEL_AZURE_PICK) docker run --rm $(GLORFINDEL_AZURE_ENV) $(GLORFINDEL_VOLS) $(GLORFINDEL_STATE) \
 	$(GLORFINDEL_ENV) \
 	$(IMAGE_GLORFINDEL) glorfindel
 
@@ -364,14 +369,14 @@ annatar-shell: build-annatar
 	@mkdir -p $(HOME)/.annatar
 	@touch $(HOME)/.annatar/.bashrc
 	@grep -q "alias ar=" $(HOME)/.annatar/.bashrc || echo "alias ar='annatar'" >> $(HOME)/.annatar/.bashrc
-	@docker run --rm -it $(ANNATAR_AZURE_ENV) $(ANNATAR_VOLS) $(ANNATAR_STATE) \
+	@$(ANNATAR_AZURE_PICK) docker run --rm -it $(ANNATAR_AZURE_ENV) $(ANNATAR_VOLS) $(ANNATAR_STATE) \
 		$(IMAGE_ANNATAR) bash --init-file /root/.annatar/.bashrc
 
 glorfindel-shell: build-glorfindel
 	@mkdir -p $(HOME)/.glorfindel
 	@touch $(HOME)/.glorfindel/.bashrc
 	@grep -q "alias gf=" $(HOME)/.glorfindel/.bashrc || echo "alias gf='glorfindel'" >> $(HOME)/.glorfindel/.bashrc
-	@docker run --rm -it $(GLORFINDEL_AZURE_ENV) $(GLORFINDEL_VOLS) $(GLORFINDEL_STATE) \
+	@$(GLORFINDEL_AZURE_PICK) docker run --rm -it $(GLORFINDEL_AZURE_ENV) $(GLORFINDEL_VOLS) $(GLORFINDEL_STATE) \
 		$(GLORFINDEL_ENV) \
 		$(IMAGE_GLORFINDEL) bash --init-file /root/.glorfindel/.bashrc
 
@@ -844,6 +849,8 @@ lock:
 	$(UV) pip compile pyproject.toml requirements/build.in --extra dev $(LOCK_FLAGS) -o requirements/dev.txt
 	$(UV) pip compile pyproject.toml requirements/build.in --extra glorfindel --extra war-room \
 	  -c requirements/dev.txt $(LOCK_FLAGS) -o requirements/glorfindel.txt
+	$(UV) pip compile pyproject.toml requirements/build.in --extra annatar \
+	  -c requirements/dev.txt $(LOCK_FLAGS) -o requirements/annatar.txt
 
 test:
 	$(PYTHON) -m pytest tests/ -v

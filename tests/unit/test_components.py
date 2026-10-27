@@ -114,6 +114,16 @@ def _mutation_check():
     return module
 
 
+def test_every_mutant_has_its_own_id():
+    """HY1: the merge of a squashed lot once copied its block of mutants twice — sixteen ids
+    measured twice, and the harness, which copies each mutant into a folder named by its id,
+    stopped on FileExistsError. Every id of MUTANTS + CONTROL appears once."""
+    import collections
+    mc = _mutation_check()
+    ids = collections.Counter(m[0] for m in mc.MUTANTS + mc.CONTROL)
+    assert sorted(i for i, n in ids.items() if n > 1) == []
+
+
 def test_a_missing_module_is_no_measure_unless_the_component_check_made_it_absent():
     """Line by line: a module the component check made absent never covers another that is
     missing from the copy (scripts/mutation_check.py, unmeasurable)."""

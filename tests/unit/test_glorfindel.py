@@ -3035,6 +3035,37 @@ def test_restore_allows_only_the_listed_extensions(monkeypatch):
                                      "extension odd (éditeur ou type illisible)"]
 
 
+def test_restore_lets_the_common_benign_extensions_through(monkeypatch):
+    """A3, first review: patching, update management, attestation, inventory, BGInfo
+    take no command from the VM model — they don't hold the release. Guest
+    Configuration applies what a policy assigns: it holds it (docs/azure.md). Names as
+    documented, to measure on the bench (it only has AMA)."""
+    from types import SimpleNamespace
+    connector, posted = _restore_ready(monkeypatch)
+
+    def ext(name, publisher, typ):
+        d = {"name": name, "properties": {"publisher": publisher, "type": typ}}
+        return SimpleNamespace(name=name, as_dict=lambda: d)
+
+    benign = [ext(t, p, t) for p, t in (
+        ("Microsoft.CPlat.Core", "LinuxPatchExtension"), ("Microsoft.CPlat.Core", "WindowsPatchExtension"),
+        ("Microsoft.SoftwareUpdateManagement", "LinuxOsUpdateExtension"),
+        ("Microsoft.SoftwareUpdateManagement", "WindowsOsUpdateExtension"),
+        ("Microsoft.Azure.Security.LinuxAttestation", "GuestAttestation"),
+        ("Microsoft.Azure.Security.WindowsAttestation", "GuestAttestation"),
+        ("Microsoft.Azure.ChangeTrackingAndInventory", "ChangeTracking-Linux"),
+        ("Microsoft.Azure.ChangeTrackingAndInventory", "ChangeTracking-Windows"),
+        ("Microsoft.Compute", "BGInfo"))]
+    extensions = connector._compute.virtual_machine_extensions.list.return_value = SimpleNamespace(value=list(benign))
+    connector._compute.virtual_machine_run_commands.list_by_virtual_machine.return_value = []
+    out = connector.restore_from_backup(_RID, vault="rsv", wait=False, staging_storage="st")
+    assert out["run_command_neutralized"] is True and "replay_vectors" not in out
+    extensions.value = benign + [ext("AzurePolicyforLinux", "Microsoft.GuestConfiguration",
+                                     "ConfigurationforLinux")]
+    out = connector.restore_from_backup(_RID, vault="rsv", wait=False, staging_storage="st")
+    assert out["replay_vectors"] == ["extension AzurePolicyforLinux"]
+
+
 
 def test_a_customer_nsg_named_like_ours_is_not_treated_as_quarantine(monkeypatch):
     """Recognised by its name prefix only, a customer NSG named like ours would have

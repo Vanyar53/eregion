@@ -1745,6 +1745,10 @@ def _build_recovery_signal(resource_id: str, restore_result: dict, restore_time_
             "recovery_point_time": restore_result.get("recovery_point_time", ""),
             "restore_time_s": restore_time_s,
             "run_command_neutralized": restore_result.get("run_command_neutralized"),
+            # What holds the release, when it isn't Run Command v1 itself: an extension
+            # outside the allowlist, a managed Run Command (A3) — the card names it.
+            **({"replay_vectors": list(restore_result["replay_vectors"])}
+               if restore_result.get("replay_vectors") else {}),
         },
         "context": {"run_id": run_id},
     }

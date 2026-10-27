@@ -238,10 +238,13 @@ class RestoreMixin:
 
     # Extensions a restored disk may run again without Glorfindel vouching for a script:
     # agents that take no command from the VM model — monitoring, security, backup,
-    # sign-in. Any other holds the release: CustomScript, VMAccess (it resets users and
-    # SSH keys: an attacker's key comes back), DSC, Chef, a third party's. The list of
-    # the dangerous ones it replaces (three CustomScript names) missed every one of
-    # those (L23, A3).
+    # sign-in, patching, attestation, inventory. Any other holds the release:
+    # CustomScript, VMAccess (it resets users and SSH keys: an attacker's key comes
+    # back), DSC, Chef, a third party's — and Guest Configuration, which applies what a
+    # policy assigns (a configuration, a script through it): kept out on purpose. The
+    # list of the dangerous ones it replaces (three CustomScript names) missed every one
+    # of those (L23, A3). Publisher and type names as documented — to measure on the
+    # bench, which only has AMA (A3, first review).
     _REPLAY_SAFE_EXTENSIONS = frozenset({
         ("microsoft.azure.monitor", "azuremonitorlinuxagent"),
         ("microsoft.azure.monitor", "azuremonitorwindowsagent"),
@@ -260,6 +263,15 @@ class RestoreMixin:
         ("microsoft.azure.azuredefenderforservers", "mde.linux"),
         ("microsoft.azure.azuredefenderforservers", "mde.windows"),
         ("microsoft.azure.security", "iaasantimalware"),
+        ("microsoft.azure.security.linuxattestation", "guestattestation"),
+        ("microsoft.azure.security.windowsattestation", "guestattestation"),
+        ("microsoft.cplat.core", "linuxpatchextension"),
+        ("microsoft.cplat.core", "windowspatchextension"),
+        ("microsoft.softwareupdatemanagement", "linuxosupdateextension"),
+        ("microsoft.softwareupdatemanagement", "windowsosupdateextension"),
+        ("microsoft.azure.changetrackingandinventory", "changetracking-linux"),
+        ("microsoft.azure.changetrackingandinventory", "changetracking-windows"),
+        ("microsoft.compute", "bginfo"),
         # Run Command's handlers: v1's last command is the harmless one just run; v2's
         # commands are resources of their own, listed below.
         ("microsoft.cplat.core", "runcommandlinux"),

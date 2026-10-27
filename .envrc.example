@@ -141,6 +141,9 @@ export AZURE_SUBSCRIPTION_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 # Option A (un seul SP pour Annatar et Glorfindel) : les écritures d'Annatar sur les
 # ressources de Glorfindel (ses règles, ses NSG de quarantaine) seraient écartées comme
 # les siennes — l'option B (SP séparés) les garde visibles.
+# Journaux d'Entra ID (C2) : rien n'y est écarté sous ces identités, elles y sont marquées
+# (acteur ou cible, critique) ; ajouter ici l'objet de l'application de Glorfindel pour
+# qu'un identifiant ajouté à son inscription soit marqué.
 # export GLORFINDEL_OWN_CALLERS=
 
 # Rétention discovery — une VM éteinte (absente du Heartbeat) reste visible dans le

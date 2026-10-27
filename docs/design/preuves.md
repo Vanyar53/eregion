@@ -747,6 +747,36 @@ simulé. Trente-cinq mutants (M810–M829, puis M850–M859 et M890–M894 aprè
 | M893 | une ligne `AzureActivity` lue par une autre source va au modèle | un snapshot part seul |
 | M894 | une règle du plan de contrôle sans `CorrelationId`, en silence | deux opérations n'en font qu'une |
 
+### Les identités : Entra ID, détection seule (C2)
+
+De faux journaux d'Entra ID (des lignes comme celles que projettent les règles livrées, rendues par
+la requête du détecteur parent) traversent le vrai `AzureEntraDetector`, le RulePoller et le
+graphe, modèle simulé. Vingt mutants (M920–M939), mesurés par `tests/unit/test_entra_detection.py`,
+tous attrapés (27/10).
+
+| Mutant | Défaut réinjecté | Effet |
+|---|---|---|
+| M920 | une détection d'identité décidée par le modèle | il est appelé, avec l'UPN d'un administrateur |
+| M921 | la route après `decide` envoie une détection d'identité vers une action | un `decide` contourné isole |
+| M922 | la détection d'identité reconnue par son seul plan | une ligne aux colonnes muettes va au modèle |
+| M923 | une ligne d'Entra lue par une autre source va au modèle | ni plan ni source |
+| M924 | tout rôle d'annuaire est un constat | Lecteurs d'annuaire comme Administrateur général |
+| M925 | un principal sans historique, inhabituel | les premiers jours après le paramètre inondent |
+| M926 | une opération échouée est un constat | des cartes pour rien |
+| M927 | l'identité de Glorfindel, acteur, pas marquée | son identifiant volé, pas critique |
+| M928 | l'identité de Glorfindel, cible, pas marquée | un identifiant ajouté à Glorfindel, banal |
+| M929 | une carte d'identité fusionnée dans la précédente | l'identifiant ajouté à Glorfindel, invisible |
+| M930 | après un `decide` contourné, le type `low_confidence` | approuvable en un clic |
+| M931 | une commande sur la VM d'ancrage d'une carte d'identité | `glorfindel restore` proposé |
+| M932 | un cycle d'identité dans la mémoire de décision | son UPN servi au modèle plus tard |
+| M933 | une détection d'identité ouvre l'incident de la VM d'ancrage | le cycle suivant y lit « 2 signaux » |
+| M934 | un constat dédupliqué par son heure | deux consentements dans la même seconde : une carte |
+| M935 | une carte par cycle pour les identités | le second identifiant ajouté du relevé, jamais vu |
+| M936 | un signal d'identité sans son plan | un constat sur Glorfindel, pas critique |
+| M937 | une règle d'identité sans `EventId`, en silence | deux constats n'en font qu'un |
+| M938 | une carte de rôle sans la façon de retirer l'attribution | l'humain ne sait pas révoquer |
+| M939 | le paramètre de diagnostic du tenant toujours posé | les journaux de tout le tenant envoyés |
+
 ## Ce que les invariants ont trouvé
 
 Aucun de ces défauts n'avait été vu en revue. Chacun a son test et sa séquence figée.

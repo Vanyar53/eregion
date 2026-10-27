@@ -1703,7 +1703,7 @@ MUTANTS += [
     ("M910", "the store_cycle test writes runs/ in the repository again (HY1)", "tests/unit/test_agent_nodes.py",
      "    monkeypatch.chdir(tmp_path)   # store_cycle writes runs/<run_id>_debug.jsonl where it runs (HY1)\n", ""),
     ("M911", "the guard no longer watches the test process's writes (HY1)", CONF,
-     "    _watching[0] = True\n    yield\n", "    yield\n"),
+     "    _checked[0] = False\n    _watching[0] = True\n", "    _checked[0] = False\n"),
     ("M912", "a runs/ made at the root passes: git ignores it (HY1)", CONF,
      'left = [n for n in new if n == "runs" or (', 'left = [n for n in new if ('),
     ("M913", "any new entry at the root passes, whatever git says (HY1)", CONF,
@@ -1718,9 +1718,9 @@ MUTANTS += [
      "RUN pip install --no-cache-dir --no-deps --no-build-isolation -e .\n",
      'RUN pip install --no-cache-dir -e ".[annatar]"\n'),
     ("M917", "Annatar's extra without litellm: the planner fails in the image (HY1)", "pyproject.toml",
-     '    "azure-monitor-query>=1.3",\n    # The campaign planner (`annatar campaign plan --llm`) — the same pin as Glorfindel\'s (HY1).\n'
-     '    "litellm==1.86.1",\n]\nglorfindel = [',
-     '    "azure-monitor-query>=1.3",\n]\nglorfindel = ['),
+     "    # The campaign planner (`annatar campaign plan --llm`) — the same pin as Glorfindel's (HY1).\n"
+     '    "litellm==1.86.1",\n',
+     ""),
     ("M918", "Annatar's targets pass the client secret by value again (L23)", MAKE,
      "\t-e AZURE_CLIENT_ID -e AZURE_CLIENT_SECRET -e AZURE_TENANT_ID -e AZURE_SUBSCRIPTION_ID \\\n\t-e ANTHROPIC_API_KEY",
      "\t-e AZURE_CLIENT_ID -e AZURE_CLIENT_SECRET=$(or $(ANNATAR_AZURE_CLIENT_SECRET),$(AZURE_CLIENT_SECRET)) "
@@ -1734,6 +1734,26 @@ TESTS.update({f"M{n}": HY1_GUARD for n in range(911, 915)})
 TESTS["M915"] = "tests/unit/test_glorfindel.py -k quarantine_lock"
 TESTS.update({f"M{n}": HY1_LOCK for n in (916, 917)})
 TESTS.update({f"M{n}": HY1_SECRETS for n in (918, 919)})
+# HY1, after its review: the guard armed at the conftest's import (collection included), the
+# writes other than an open, a secret's value the shell expands.
+MUTANTS += [
+    ("M950", "the guard armed at the first test again: a module's writes at collection go unseen (HY1)", CONF,
+     "\n_arm()\n",
+     '\n@pytest.fixture(scope="session", autouse=True)\ndef _armed_late():\n    _arm()\n'),
+    ("M951", "a rename or a replace into the repository goes unseen (HY1)", CONF,
+     '    "os.rename": ((0, 1), (2, 3)),', ""),
+    ("M952", "sqlite3.connect (ChromaDB's store) in the repository goes unseen (HY1)", CONF,
+     '    "sqlite3.connect": ((0,), ()),', ""),
+    ("M953", "annatar-shell passes the secret as a value the shell expands (L23)", MAKE,
+     "\t@$(ANNATAR_AZURE_PICK) docker run --rm -it $(ANNATAR_AZURE_ENV)",
+     '\t@docker run --rm -it -e AZURE_CLIENT_SECRET="$$AZURE_CLIENT_SECRET" $(ANNATAR_AZURE_ENV)'),
+    ("M954", "a remote command line exports a model key over ssh (L23)", MAKE,
+     "\t$(HOST_SSH) 'docker exec eregion-watch glorfindel report --since $(or $(SINCE),7d)'",
+     '\t$(HOST_SSH) "export ANTHROPIC_API_KEY=$$ANTHROPIC_API_KEY; '
+     'docker exec eregion-watch glorfindel report --since $(or $(SINCE),7d)"'),
+]
+TESTS.update({f"M{n}": HY1_GUARD for n in (950, 951, 952)})
+TESTS.update({f"M{n}": HY1_SECRETS for n in (953, 954)})
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

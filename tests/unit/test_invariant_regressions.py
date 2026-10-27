@@ -486,6 +486,18 @@ def test_our_rules_on_an_nsg_nothing_ties_to_a_bare_nic_any_more(monkeypatch):
          ("bare_with_an_unknown_original", DB, DB, None, _Q1, "release twice"))
 
 
+def test_a_state_is_azures_without_an_nsg_nothing_ties_to_a_bare_nic(monkeypatch):
+    """The third place of the same defect (2 000 sequences, seed 303): web left bare in our
+    quarantine's state, then the test loses that state (lose_state, drawn for web while
+    another VM is isolated). _consistent (I8 of the reset, I11) counted the old isolation
+    on the NSG the NIC lost, against a state the code can't have. Same exemption (_untied)."""
+    _run(monkeypatch, _net(web_nic={"own": "dedicated"}),
+         ("bare_with_an_unknown_original", WEB1, WEB1, None, _nic("rg-app1", "web-nic"), "isolate+release",
+          (1, "before-429")),
+         ("lose_everything", WEB2, WEB2, None, WEB1, _Q1, "stop"),
+         ("race", WEB1, ("release", "reassert"), 0))
+
+
 def test_a_reset_doesnt_skip_a_bare_nic_whose_original_is_unknown(monkeypatch):
     """The same, a reset in place of the second isolation: the bare NIC, in quarantine for
     the state but its original unknown there and on no tag, was skipped — `swept`, the

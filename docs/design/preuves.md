@@ -764,7 +764,7 @@ quarantaine pendant qu'elle était nue (`quarantine_held`, son journal) : cet é
 avait retiré notre NSG. Une carte isolée nue après la perte, que rien ne dit nôtre, garde
 l'exemption (2 000 séquences, figé). I3 avait le même défaut (`_named_leftovers` : les règles de Glorfindel nommées pour une
 carte nue, sur son NSG d'origine hors d'elle) : même exemption, même journal (`_untied`, 500
-séquences, figé). Une première version lisait l'état dont la levée
+séquences, figé), et `_consistent` (I8 du reset, I11) aussi (2 000 séquences, figé). Une première version lisait l'état dont la levée
 partait : une levée qui jetait le placement qu'elle n'avait pas su défaire gagnait l'exemption
 (relecture ; M862, figé).
 Une règle composée (`bare_with_an_unknown_original`) rend la séquence courante : tirées une à

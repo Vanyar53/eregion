@@ -1093,10 +1093,10 @@ class IsolationMachine(RuleBasedStateMachine):
     def _consistent(self, vm: str) -> bool:
         """The local state says what Azure has: an isolation on Azure is in the state and
         a state that claims one has it (unless it says it is partial or in progress), a
-        block likewise."""
+        block likewise. Not what sits on the own NSG of an untied NIC (_untied, I8F)."""
         st = self._state(vm)
         held = bool(st and (st.get("partial") or st.get("release_failed") or st.get("releasing_at")))
-        if bool(self._footprint(vm)) != (st is not None) and not (held and st is not None):
+        if bool(self._footprint(vm, self._untied(vm))) != (st is not None) and not (held and st is not None):
             return False
         rules = [r for r in self._block_rules_for(vm, own=True) if not self._perimeter_rule(r)]
         # An entry holds the VM's placements, and the perimeter rule too when the same

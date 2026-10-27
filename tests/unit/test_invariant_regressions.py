@@ -403,3 +403,16 @@ def test_a_reset_sweeps_the_original_it_puts_back(monkeypatch):
          ("isolate", WEB1, WEB1, None),
          ("someone_detaches_the_quarantine", _nic("rg-app1", "web-nic")),
          ("reset_from_azure", WEB1, WEB1, None))
+
+
+def test_a_block_that_could_not_be_put_back_is_said_even_after_a_crash(monkeypatch):
+    """Blocked on the subnet's NSG, the role removed, then a `terraform apply` deletes the
+    block's rule. The reassertion tries to put it back (refused, 403) and dies right after
+    writing "already alerted" — before the card. Every later pass returned on that marker:
+    the attacker back in, and nothing said (L1F, seed of I8F)."""
+    _run(monkeypatch, _net(subnet_nsg=[]),
+         ("block", WEB1, WEB1, None, 22),
+         ("access_changes", True),
+         ("terraform_apply", _NSG.format(rg="rg-net", name="nsg-subnet")),
+         ("reassert", "non_disruptive", (1, "after-crash")),
+         ("reassert", "human_only", None))

@@ -267,3 +267,53 @@ def test_reassertion_skips_a_vm_whose_lock_is_busy():
         release.set()
         t.join(5)
     c.verify_isolation.assert_not_called()
+
+
+# ── L1F : « déjà alerté » seulement une fois la carte écrite ──────────────────────────
+
+class _Died(BaseException):
+    """The process dies here (not an Exception: nothing in the code catches it)."""
+
+
+def test_a_block_that_could_not_be_put_back_keeps_its_card_through_a_crash(monkeypatch):
+    """Putting the block back failed (role removed), and the process died on the next state
+    write. The "already alerted" marker was written before the card: it survived, the card
+    never existed, and every later pass returned on the marker — the block gone in silence
+    (L1F, invariant machine). The card comes first now."""
+    import glorfindel.actions as actions
+    _save_block_state("vm", "203.0.113.9", _RID, nsg="rg/nsg", nsg_scope="subnet", rule="r",
+                      placements=[{"nsg_rg": "rg", "nsg_name": "nsg", "rule": "r"}], threat_port=22)
+    c = _connector(verify_blk={"verified": False, "missing_rules": ["r"]})
+    c.block_suspicious_ip.side_effect = RuntimeError("AuthorizationFailed")
+    real = actions._update_block_entry
+
+    def dies_on_the_marker(vm, ip, **fields):
+        real(vm, ip, **fields)
+        if "drift_alerted_at" in fields:
+            raise _Died()
+    monkeypatch.setattr(actions, "_update_block_entry", dies_on_the_marker)
+    with pytest.raises(_Died):
+        reassert_active(c, _ACT)
+    monkeypatch.setattr(actions, "_update_block_entry", real)
+    cards = [e for e in escalations.pending() if e.get("action") == "block_suspicious_ip"]
+    assert cards and "a échoué" in cards[0]["reason"]
+    reassert_active(c, AutonomyConfig(default="human_only"))       # the next pass: still said
+    assert [e for e in escalations.pending() if e.get("action") == "block_suspicious_ip"]
+
+
+def test_an_isolation_that_could_not_be_put_back_keeps_its_card_through_a_crash(monkeypatch):
+    """The same order for an isolation: the card, then "already alerted" (L1F)."""
+    import glorfindel.reassert as ra
+    _isolated()
+    c = _connector({"verified": False, "uncovered_nics": ["nic-a"]})
+    c.isolate_vm.side_effect = RuntimeError("AuthorizationFailed")
+    real = ra._mark_alerted
+
+    def dies_on_the_marker(vm, now):
+        real(vm, now)
+        raise _Died()
+    monkeypatch.setattr(ra, "_mark_alerted", dies_on_the_marker)
+    with pytest.raises(_Died):
+        reassert_active(c, _ACT)
+    cards = [e for e in escalations.pending() if e.get("action") == "isolate_vm"]
+    assert cards and "a échoué" in cards[0]["reason"]

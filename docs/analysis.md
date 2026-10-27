@@ -526,7 +526,7 @@ docker exec eregion-watch python -m analysis.campaign_index --all runs/campaigns
 _27/10 : le code, ses tests (`tests/unit/test_analysis_separation.py`,
 `tests/unit/test_analysis_triage.py`, où les cas du harnais tournent avec un modèle simulé,
 `tests/unit/test_analysis_rules_parity.py`) et ses mutants (M780–M799 ; M840–M842 et M844,
-puis M871–M875, après les relectures) sont écrits. Le harnais avec le vrai modèle (`scripts/analysis_eval.py`) est
+puis M871–M878, après les relectures) sont écrits. Le harnais avec le vrai modèle (`scripts/analysis_eval.py`) est
 à lancer par Jonathan : rien de ceci n'est encore mesuré sur un modèle réel._
 
 L'IA d'analyse explique, trie et rapporte. Elle lit les runs, le catalogue, les schémas et le
@@ -643,8 +643,10 @@ est borné comme celui du rapport (`EREGION_ANALYSIS_TIMEOUT_S`).
 La vérification ne filtre aucune tournure de la prose du modèle : une proposition légitime
 s'écrit « doit être validée par un humain », « non encore approuvée », et contrôler de la prose
 par une expression régulière ne converge pas (les leçons de D-2 et de P1). Ce qui est écarté est
-montré en fin de `triage.md`, une ligne par entrée, la raison comprise (les retours à la ligne du
-modèle n'y cassent rien).
+montré en fin de `triage.md`, une ligne par entrée. La raison est écrite par le code et ne cite
+jamais le texte du modèle (une proposition inconnue est « unknown proposal » : la proposition est
+montrée à côté, échappée) ; elle est échappée elle aussi, par défense (un `triage.json` édité à la
+main).
 
 ### Rien sans la décision d'un humain
 
@@ -656,9 +658,13 @@ décision que `decide` a enregistrée, avec le nom de l'humain et l'heure. `tria
 côté de chaque proposition, en gras (« Statut (écrit par le code) : en attente d'un humain
 (pending) », ou « approuvée par … le … »), et le dit en tête : aucune décision n'est prise par le
 modèle, seul ce statut fait foi. Le texte du modèle n'est qu'une explication : il est présenté
-comme tel (« texte du modèle, explication : « … » »), sur une ligne, et son Markdown est montré
-comme du texte (`*`, `#`, `` ` ``, `[`, `<`… échappés), si bien qu'il ne peut pas dessiner un
-statut à lui. Ce que dit sa prose (« approuvée », « validée »…) n'engage personne.
+comme tel (« texte du modèle, explication : « … » »), sur une ligne — tout ce qui finit une ligne
+devient une espace : `\n`, `\r` seul, `\r\n`, `\v`, `\f`, U+0085, U+2028, U+2029 —, et son
+Markdown est montré comme du texte (`*`, `_`, `#`, `` ` ``, `[`, `]`, `<`, `>`, `~`, `\`
+échappés). Placé après le préfixe du code, rien en lui ne commence une ligne : ni titre, ni
+item de liste, ni citation, ni bloc. Il ne peut donc pas dessiner un statut à lui : un test rend
+`triage.md` avec un vrai moteur CommonMark (markdown-it, du verrou de dev) sur une table
+d'entrées hostiles, et compare sa structure à celle d'un tri au texte anodin. Ce que dit sa prose (« approuvée », « validée »…) n'engage personne.
 `python -m analysis.triage decide <campagne> <tri-N> approve|reject --by <nom> [--note …]`
 enregistre la décision d'un humain : son nom (obligatoire), l'heure (UTC), la note. Rien
 d'autre : une proposition approuvée reste à faire par un humain. Le tri n'écrit aucune règle et

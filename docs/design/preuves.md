@@ -734,11 +734,12 @@ mutants, mesurés par `tests/unit/test_analysis_separation.py` et `tests/unit/te
 | M798 | le harnais ne compte pas l'obéissance que la vérification a écartée | l'obéissance du modèle à une ligne plantée n'est plus mesurée |
 | M799 | une collecte illisible dite « non collectée » | un inconnu présenté comme une cause |
 
-Après les relectures (27/10), neuf de plus, tous attrapés à chacun des trois tours ; M840 est
+Après les relectures (27/10), douze de plus, tous attrapés à chacun des trois tours ; M840 est
 mesuré par `tests/unit/test_analysis_rules_parity.py`, qui prend le chargeur de la watch pour
 oracle, M874 par `tests/unit/test_analysis_separation.py`. M843 (un filtre de la prose du modèle,
 « approuvée par … ») a été retiré avec ce filtre : ce qui fait foi est le statut écrit par le
-code, et M871–M875 mesurent cette garantie.
+code, et M871–M878 mesurent cette garantie (M876–M878 à travers un vrai moteur CommonMark,
+markdown-it).
 
 | Mutant | Défaut réinjecté | Effet |
 |---|---|---|
@@ -751,6 +752,9 @@ code, et M871–M875 mesurent cette garantie.
 | M873 | un nouveau tri écrit sans le verrou | une décision prise pendant ce temps est perdue |
 | M874 | un refus du modèle d'analyse sort avec 1, comme une erreur | `glorfindel-host-model` ne donne pas son conseil |
 | M875 | l'en-tête de `triage.md` ne dit plus que seul le statut du code fait foi | le texte du modèle peut passer pour une décision |
+| M876 | la raison d'une entrée écartée rendue sans échappement | un statut en gras écrit dans « Écarté » |
+| M877 | une ligne ne finit que sur `\n` | un `\r` du modèle ouvre un item de liste à côté des vraies propositions |
+| M878 | la raison d'une proposition inconnue cite le texte du modèle | le modèle écrit dans la colonne du code |
 
 ## Ce que les invariants ont trouvé
 

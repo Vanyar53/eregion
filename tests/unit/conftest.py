@@ -1,4 +1,5 @@
 import importlib.util
+import os
 
 import pytest
 
@@ -107,6 +108,86 @@ def no_write_outside_the_sandbox():
     yield
     if not existed and real.exists():
         pytest.fail(f"the test suite wrote outside its sandbox: {sorted(p.name for p in real.iterdir())}")
+
+
+REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+# What a test run may leave in the repository: the caches of Python, pytest and Hypothesis
+# (ignored by git, or by their own .gitignore). Anything else is a test writing where it must not.
+CACHES = frozenset({"__pycache__", ".pytest_cache", ".hypothesis", ".hypothesis-invariants",
+                    ".ruff_cache", ".coverage"})
+_WRITE_FLAGS = os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_APPEND | os.O_TRUNC
+_writes_in_the_repo: list[tuple[str, str]] = []
+_watching = [False]
+
+
+def _in_the_repo(path) -> str | None:
+    """The path relative to the repository, if a test would write there (caches aside)."""
+    if isinstance(path, int):
+        return None
+    full = os.path.abspath(os.fsdecode(path))
+    if not full.startswith(REPO + os.sep):
+        return None
+    rel = full[len(REPO) + 1:]
+    parts = rel.split(os.sep)
+    if CACHES & set(parts) or parts[0].startswith(".coverage"):
+        return None
+    return rel
+
+
+def _audit(event, args):
+    """HY1: every write the test process makes inside the repository, as it happens — a file
+    opened for writing, a directory made — with the test that made it. Python's audit hook sees
+    them all, whatever the code (open, pathlib, os.open, shutil), relative paths included."""
+    if not _watching[0]:
+        return
+    if event == "open":
+        path, mode, flags = args
+        writes = any(c in mode for c in "wax+") if isinstance(mode, str) else bool((flags or 0) & _WRITE_FLAGS)
+    elif event == "os.mkdir":
+        path, writes = args[0], True
+    else:
+        return
+    if writes:
+        rel = _in_the_repo(path)
+        if rel is not None:
+            _writes_in_the_repo.append((rel, os.environ.get("PYTEST_CURRENT_TEST", "?").split(" ")[0]))
+
+
+def _ignored_by_git(name: str) -> bool | None:
+    """True/False as git sees it; None without git or outside a repository (a mutant's copy)."""
+    import subprocess
+    try:
+        proc = subprocess.run(["git", "-C", REPO, "check-ignore", "-q", "--", name],
+                              capture_output=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return {0: True, 1: False}.get(proc.returncode)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def nothing_written_in_the_repository():
+    """HY1: no test writes in the repository's folder. A test that called store_cycle left
+    runs/run001_debug.jsonl at the root (it writes Path("runs") relative to the current
+    folder); nothing said so. Two checks, failing the run:
+    - in the test process, every write under the repository (_audit), caches aside — this holds
+      even where runs/ already exists (an operator's checkout, the watch writing there);
+    - at the root, whatever wrote it (a subprocess too): a runs/ that was not there before, or
+      any new entry git does not ignore."""
+    import sys
+    if not getattr(sys, "_eregion_repo_audit", False):   # one hook per interpreter, never removed
+        sys.addaudithook(_audit)
+        sys._eregion_repo_audit = True
+    before = set(os.listdir(REPO))
+    _writes_in_the_repo.clear()
+    _watching[0] = True
+    yield
+    _watching[0] = False
+    new = sorted(set(os.listdir(REPO)) - before)
+    left = [n for n in new if n == "runs" or (n not in CACHES and _ignored_by_git(n) is not True)]
+    found = sorted({f"{rel} ({test})" for rel, test in _writes_in_the_repo})
+    if found or left:
+        pytest.fail("the test suite wrote in the repository's folder: "
+                    + "; ".join(found + [f"{n} (new at the root)" for n in left]))
 
 
 @pytest.fixture(autouse=True)

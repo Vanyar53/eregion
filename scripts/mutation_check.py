@@ -2376,6 +2376,134 @@ MUTANTS += [
 ]
 TESTS.update({f"M{n}": HY1_GUARD for n in (950, 951, 952)})
 TESTS.update({f"M{n}": HY1_SECRETS for n in (953, 954)})
+# The identifier hooks read their denylist from git's common directory: from --git-dir they
+# found no list in a worktree and let everything through (27/10).
+MUTANTS += [
+    ("M903", "pre-commit reads its denylist from --git-dir again: nothing checked in a worktree", ".githooks/pre-commit",
+     'denylist="$(git rev-parse --git-common-dir)/infra-denylist.txt"', 'denylist="$(git rev-parse --git-dir)/infra-denylist.txt"'),
+    ("M904", "commit-msg reads its denylist from --git-dir again: nothing checked in a worktree", ".githooks/commit-msg",
+     'denylist="$(git rev-parse --git-common-dir)/infra-denylist.txt"', 'denylist="$(git rev-parse --git-dir)/infra-denylist.txt"'),
+]
+TESTS.update({f"M{n}": "tests/unit/test_githooks.py" for n in (903, 904)})
+
+# N1 (#242): the workshop's news in Discord, scripts/notify_discord.py, measured by its tests
+# against a fake Discord (tests/unit/test_notify_discord.py). Range M970–M979.
+NOTIFY = "scripts/notify_discord.py"
+MUTANTS += [
+    ("M970", "a message without allowed_mentions: a title with @everyone pings the server (N1)", NOTIFY,
+     ('    out = {"embeds": [card], "allowed_mentions": {"parse": []}}\n',
+      '        out["allowed_mentions"]["users"] = [mention]\n'),
+     ('    out = {"embeds": [card]}\n',
+      '        out["allowed_mentions"] = {"users": [mention]}\n')),
+    ("M971", "a failed request names its URL: a webhook's token in the CI's log (N1)", NOTIFY,
+     "            raise Failure(label, e.code) from None\n",
+     '            raise Failure(f"{label} {url}", e.code) from None\n'),
+    ("M972", "a Discord failure raised to the caller: the notify job red, the hook in error (N1)", NOTIFY,
+     '                post_webhook(cfg.ci, message(n.card, silent=n.silent), "webhook #ci")\n'
+     "            except Failure as e:\n                say(e)\n",
+     '                post_webhook(cfg.ci, message(n.card, silent=n.silent), "webhook #ci")\n'
+     "            except Failure:\n                raise\n"),
+    ("M973", "a lot's detail not silent: every event of every lot notifies (N1)", NOTIFY,
+     '    if silent:\n        out["flags"] = SILENT\n', ""),
+    ("M974", "a cancelled run said red (N1)", NOTIFY,
+     'RED_CONCLUSIONS = {"failure", "timed_out", "startup_failure"}\n',
+     'RED_CONCLUSIONS = {"failure", "timed_out", "startup_failure", "cancelled"}\n'),
+    ("M975", "the run before read as this very run: main green again never said (N1)", NOTIFY,
+     '        if r.get("run_number", 0) < run.get("run_number", 0) and r.get("conclusion") in RED_CONCLUSIONS | {"success"}:\n',
+     '        if r.get("conclusion") in RED_CONCLUSIONS | {"success"}:\n'),
+    ("M976", "a new state replaces every tag: the thread loses its milestone (N1)", NOTIFY,
+     "        names, out = self.tags(), [str(x) for x in current]\n",
+     "        names, out = self.tags(), []\n"),
+    ("M977", "archived threads not searched: a closed lot gets a second thread (N1)", NOTIFY,
+     '            found += page.get("threads") or []\n', "            pass\n"),
+    ("M978", "palantir's verdict misread: a model fallback neither alerted nor reviewed (N1)", NOTIFY,
+     '    fell = scan.get("verdict") == "review-needed"\n',
+     '    fell = scan.get("verdict") == "review_needed"\n'),
+    ("M979", "every subagent's stop followed, not only elrond's: #agents rewritten for any agent (N1)", NOTIFY,
+     '    return data.get("hook_event_name") == "SubagentStop" and data.get("agent_type") in ELROND_AGENTS\n',
+     '    return data.get("hook_event_name") == "SubagentStop"\n'),
+]
+TESTS.update({f"M{n}": "tests/unit/test_notify_discord.py" for n in range(970, 980)})
+
+# N1 after its review (27/10, F1–F8): M990–M994, taken from this session's range (M970–M999).
+MUTANTS += [
+    ("M990", "the verdict read only in last_assistant_message: elrond's reviewers hand it back by a tool (N1, F1)",
+     NOTIFY, "        verdict = verdict_of(final_report(transcript, data))\n",
+     '        verdict = verdict_of(data.get("last_assistant_message", ""))\n'),
+    ("M991", "a fork's pull request posts in the lot its title names (N1, F5)", NOTIFY,
+     "            lot = issue = \"\"   # a fork's pull request: #ci only, never a lot's thread (its title names any lot)\n",
+     "            pass\n"),
+    ("M992", "every closed issue creates a thread, a lot or not (N1, F5)", NOTIFY,
+     "archive=True, create=bool(lot))]", "archive=True)]"),
+    ("M993", "http.client's errors not caught: InvalidURL quotes the webhook's token (N1, F6)", NOTIFY,
+     "        except Exception as e:  # URLError, http.client's errors: InvalidURL quotes the URL, token and all\n",
+     "        except (OSError, ValueError) as e:\n"),
+    ("M994", "a blocked lot without configuration writes the local state (N1, F7)", NOTIFY,
+     "    if not (cfg.agents or cfg.lots):   # nothing configured: nothing written, not even the local state\n"
+     "        return 0\n", ""),
+]
+TESTS.update({f"M{n}": "tests/unit/test_notify_discord.py" for n in range(990, 995)})
+
+# N2 (#243): the road to 1.0 in Discord, scripts/roadmap_discord.py (and the thread matching it
+# shares with notify_discord.py), measured by tests/unit/test_roadmap_discord.py. Range M980–M989.
+ROADMAP_D = "scripts/roadmap_discord.py"
+MUTANTS += [
+    ("M980", "a closed issue gets a thread like an open one: the forum fills with finished lots (N2)", ROADMAP_D,
+     "        if not lot.open:\n            if t and not", "        if False:\n            if t and not"),
+    ("M981", "the sync overwrites elrond's states: a lot in review reads « à faire » (N2)", ROADMAP_D,
+     '    if current in KEPT:   # elrond\'s, kept until GitHub says more\n'
+     "        return current\n", ""),
+    ("M982", "a closed lot's thread never archived (N2)", ROADMAP_D,
+     '                write(f"{lot.key} archivé", "PATCH", f"/channels/{t[\'id\']}", {"archived": True})\n', ""),
+    ("M983", "two issues of one lot id share a thread: I1F suite lands in the closed I1F's (N2)", NOTIFY,
+     "and not (issue and other and other.group(1) != issue)", ""),
+    ("M984", "the roadmap message never looked up: a new one at every run (N2)", ROADMAP_D,
+     '    for where in ("pins", "messages?limit=50"):\n', "    for where in ():\n"),
+    ("M985", "someone else's message with the same title taken for the bot's (N2)", ROADMAP_D,
+     '            if str((m.get("author") or {}).get("id")) == me and title.startswith(TITLE):\n',
+     "            if title.startswith(TITLE):\n"),
+    ("M986", "a dry run writes to the forum (N2)", ROADMAP_D,
+     "        if dry:\n            return {}\n", ""),
+    ("M987", "a milestone's bar counts its open issues as done (N2)", ROADMAP_D,
+     "        closed = sum(not x.open for x in mine)\n", "        closed = sum(x.open for x in mine)\n"),
+    ("M988", "a ROADMAP.md without its criteria breaks the whole message (N2)", ROADMAP_D,
+     '    out += ["", "**Pour la 1.0**"] + (crit if crit is not None else ["_section introuvable dans ROADMAP.md_"])\n',
+     '    out += ["", "**Pour la 1.0**"] + crit\n'),
+    ("M989", "a pull request counted as an issue of its milestone (N2)", ROADMAP_D,
+     '        if "pull_request" in i or milestone not in nd.MILESTONE_TAGS:',
+     "        if milestone not in nd.MILESTONE_TAGS:"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_roadmap_discord.py" for n in range(980, 990)})
+
+# N2 after its review (27/10): M995–M999, the end of this session's range (M970–M999).
+MUTANTS += [
+    ("M995", "the issues read on one page only: past the 100th, lots vanish from the roadmap (N2)", ROADMAP_D,
+     "        if len(batch) < 100:\n            break\n", "        break\n"),
+    ("M996", "a merged lot whose issue is still open falls back to « à faire » (N2)", ROADMAP_D,
+     '    if current == "fait" and not lot.reopened:   # merged or reviewed ok, its issue open until « Fini quand »\n',
+     '    if current == "fait" and lot.pr:\n'),
+    ("M997", "the roadmap message posted again when its lookup failed: a second, stale one (N2)", ROADMAP_D,
+     "    if not looked:   # neither list read: posting would leave a second message, stale from then on\n"
+     '        raise nd.Failure("#roadmap", why="message not looked up (pins and messages failed): nothing posted")\n',
+     ""),
+    ("M998", "a follow-up issue (#70, #95, a finding) gets a thread like a lot (N2, Jonathan's decision)", ROADMAP_D,
+     "        if not lot.thread:   # not a lot (#70, #95, a finding): no thread; one made before is archived\n",
+     "        if False:\n"),
+    ("M999", "every thread Discord archived for idleness reopened at each pass (N2)", ROADMAP_D,
+     '        if change and (t.get("thread_metadata") or {}).get("archived"):\n',
+     '        if (t.get("thread_metadata") or {}).get("archived"):\n'),
+]
+TESTS.update({f"M{n}": "tests/unit/test_roadmap_discord.py" for n in range(995, 1000)})
+
+# N2 after its second review (27/10): M1000–M1004, given by the General session (H1: M1005–M1019).
+MUTANTS += [
+    ("M1000", "the roadmap creates threads on issue and PR events too: with notify.yml, two threads for one lot (N2)",
+     ROADMAP_D, "            if not create:\n                continue\n", ""),
+    ("M1001", "an issue number matched anywhere in a name: a lot's title quoting #70 taken for #70's thread (N2)",
+     NOTIFY, '            if re.search(rf"^#{issue} · |· #{issue}$", t.get("name", "")):',
+     '            if re.search(rf"#{issue}\\b", t.get("name", "")):'),
+]
+TESTS.update({f"M{n}": "tests/unit/test_roadmap_discord.py" for n in (1000, 1001)})
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

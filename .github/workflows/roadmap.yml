@@ -1,0 +1,57 @@
+name: Roadmap
+
+# N2 (#243): the road to 1.0 in Discord (docs/atelier-discord.md). #roadmap: one message of the
+# Eregion bot, rewritten in place — a bar per milestone, the lots in progress, blocked, to do,
+# the 1.0 criteria and the five indicators (ROADMAP.md). #lots: a thread per open issue of the
+# milestones, its tags true; a closed one tagged « fait » and archived. scripts/roadmap_discord.py.
+#
+# Reads the default branch's ROADMAP.md and GitHub's issues; never checks out a pull request's
+# code. Without the secrets it sends nothing and stays green; a Discord or GitHub error is one
+# line in the log, and the job stays green.
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "23 6 * * *"
+  issues:
+    types: [opened, closed, reopened, milestoned, demilestoned]
+  pull_request_target:
+    types: [opened, closed, reopened]
+    branches: [main]   # a PR stacked on a lot's branch is not the road to main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+# One run at a time, in its own group (a notification is never cancelled by a roadmap run). A
+# pending run replaced by a newer one costs nothing: each pass rewrites everything. Threads are
+# created only on a push, the daily run or by hand — never on an issue or pull request event,
+# where notify.yml creates the lot's thread (scripts/roadmap_discord.py, creates()).
+concurrency:
+  group: roadmap-discord
+  cancel-in-progress: false
+
+jobs:
+  roadmap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # Pinned by commit: this job holds the Discord secrets on events a fork can trigger.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5.1.0
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            ROADMAP.md
+            scripts/notify_discord.py
+            scripts/roadmap_discord.py
+          sparse-checkout-cone-mode: false
+
+      - name: Discord
+        env:
+          EREGION_DISCORD_BOT_TOKEN: ${{ secrets.EREGION_DISCORD_BOT_TOKEN }}
+          EREGION_DISCORD_LOTS_FORUM: ${{ secrets.EREGION_DISCORD_LOTS_FORUM }}
+          EREGION_DISCORD_ROADMAP_CHANNEL: ${{ secrets.EREGION_DISCORD_ROADMAP_CHANNEL }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/roadmap_discord.py

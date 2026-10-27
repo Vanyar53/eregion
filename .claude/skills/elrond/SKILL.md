@@ -87,6 +87,16 @@ Index :
    - les verdicts de relecture ;
    - ce qui attend une décision de l'utilisateur : fusion, push, PR.
 
+   Envoie aussi ce bilan, en quelques lignes, à Discord : `python3 scripts/notify_discord.py run-end "<bilan>"`.
+
+## Discord (facultatif)
+
+Si les hooks de `scripts/elrond-hooks.sh` sont installés, chaque lancement, retour, verdict et repli part seul dans le fil du lot (`docs/atelier-discord.md`). Les descriptions `elrond <ID> · …` servent à reconnaître le lot : garde-les telles quelles. Toi, tu n'envoies que deux choses :
+- **un lot qui passe à `blocked`** : `python3 scripts/notify_discord.py lot <ID> blocked --note "<pourquoi>"` ;
+- **la fin du run** : `run-end`, à l'étape 6.
+
+Sans configuration, ces commandes ne font rien et sortent en 0.
+
 ## `status`
 
 Lis `plan.md` et le journal de la session. Résume l'avancement par jalon, puis ce qui attend une relecture ou une décision de l'utilisateur.

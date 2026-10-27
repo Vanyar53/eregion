@@ -1,0 +1,58 @@
+name: Notify
+
+# N1 (#242): the workshop's news in Discord (docs/atelier-discord.md). #ci: a pull request
+# opened or merged, a red run (pull request, main, nightly), main green again after red, a
+# published release, a closed issue; a lot's events in its #lots thread too. What is worth
+# saying is decided by scripts/notify_discord.py (`github`), from the event's JSON.
+#
+# Never checks out nor runs a pull request's code: pull_request_target and workflow_run run
+# the default branch's files, and the script only reads the event. A fork's pull request is
+# announced in #ci (its title as inert text: no mention parsed, nothing put into `run:`), never
+# in a lot's thread. Without the secrets (before the setup) it sends nothing and the job stays
+# green; a Discord error is one line in the log, without the URL or the token, and the job
+# stays green too. A `release` event runs the workflow of the tag's commit: a release tagged
+# before this file existed is not announced.
+on:
+  workflow_run:
+    workflows: [CI, Components, "Invariants (deep)", Mutants, canary-azurerm]
+    types: [completed]
+  pull_request_target:
+    types: [opened, closed]
+  release:
+    types: [published]
+  issues:
+    types: [closed]
+
+permissions:
+  contents: read
+  actions: read   # the run before, to say « main green again »
+
+# One run at a time: a merge that closes an issue fires pull_request_target and issues together,
+# and two runs could each create the lot's thread. Known limit: GitHub keeps ONE pending run per
+# group, and a newer one cancels it — with three events at once, the middle one is lost. Its own
+# group (roadmap.yml has another): a roadmap run must never cancel a notification.
+concurrency:
+  group: notify-discord
+  cancel-in-progress: false
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Pinned by commit: this job holds the Discord secrets on events a fork can trigger.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5.1.0
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            scripts/notify_discord.py
+            .claude/skills/elrond/palantir.py
+          sparse-checkout-cone-mode: false
+
+      - name: Discord
+        env:
+          EREGION_DISCORD_WEBHOOK_CI: ${{ secrets.EREGION_DISCORD_WEBHOOK_CI }}
+          EREGION_DISCORD_BOT_TOKEN: ${{ secrets.EREGION_DISCORD_BOT_TOKEN }}
+          EREGION_DISCORD_LOTS_FORUM: ${{ secrets.EREGION_DISCORD_LOTS_FORUM }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/notify_discord.py github

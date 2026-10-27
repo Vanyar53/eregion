@@ -739,6 +739,26 @@ Aucun de ces défauts n'avait été vu en revue. Chacun a son test et sa séquen
 | A0 | original d'une carte nue lu dans le seul tag par le reset | « swept », état effacé, carte sans NSG en silence |
 | A0 | NSG d'origine remis sans en lire les règles | « swept », VM encore coupée par une ancienne isolation |
 | A0 | NSG supprimé lu comme « illisible » | blocage disparu jamais signalé, levée partielle pour toujours |
+| I8F | original inconnu (état et tags perdus), carte laissée nue puis réisolée | « aucun NSG » écrit par-dessus l'inconnu : `released`, carte sans son NSG, une ancienne isolation restée sur ce NSG sans état |
+| I8F | même carte nue, `reset --from-azure` | carte sautée : `swept`, état effacé, même reste |
+
+**I8F (27/10, #227) : un inconnu devenu « aucun ».** A3 a fait tomber I8 sur le code non muté
+(500 séquences, 186 étapes, dont des 429 sur la carte et les NSG). Réduite, la séquence tient en
+quatre étapes : une quarantaine dont l'état et les tags sont perdus, réisolée (l'original est
+inconnu, Q7) ; quelqu'un retire notre NSG et laisse la carte nue ; une nouvelle isolation ; la
+levée. Le correctif d'U2 (septième passe) reprenait l'original noté pour une carte nue ; noté
+nulle part, il écrivait « aucun NSG », alors que l'état tenait la carte en quarantaine avec un
+original inconnu. La levée, fidèle à son état, ne remettait rien et disait `released`. I8 le
+voyait parce que le monde avait une isolation d'une ancienne version sur le NSG de la carte :
+plus rien ne la notait. La réisolation garde maintenant l'inconnu (M860), le reset aussi (M861,
+même trou, voisin). Les 429 étaient des restes du rétrécissement. **L'oracle avait un défaut à
+côté** : I8 comptait les règles du NSG propre d'une carte laissée nue que rien ne relie plus à ce
+NSG (le journal du test le dit : `_untraceable`), là où I3 et les blocages l'excluent déjà ;
+l'état et les tags perdus, la levée ne peut pas le savoir. Il ne les compte plus, sauf si l'état
+dont la levée est partie tenait la carte en quarantaine : Glorfindel le savait, il doit le dire.
+Une règle composée (`bare_with_an_unknown_original`) rend la séquence courante : tirées une à
+une, ses étapes ne se rencontraient qu'avec l'isolation d'une ancienne version (un monde sur
+quinze environ) ; la règle la pose sur une VM que rien n'a encore touchée, comme `build`.
 
 Le plus grave : après une levée qui échoue en partie, une seconde levée lisait les champs de
 rétro-compatibilité de l'état comme un ancien format, et supprimait les deny du NSG de

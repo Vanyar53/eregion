@@ -1749,12 +1749,16 @@ def _cycle_source(signal: dict) -> tuple[str, str]:
     time, else (`real`, "") — eregion_core/exercise.py. Recorded in the memory and on the
     card; never shown to the model yet. Unreadable → (`unknown`, "").
 
-    An identity detection (C2), and an unattributed control-plane one (AL1), are `real`:
+    An identity detection (C2), and a control-plane one the RulePoller says
+    `unattributed` (AL1), are `real` (a `respond` signal on the Activity Log has no
+    attribution, and keeps its declared window):
     their VM is an anchor, and an exercise window on it says nothing of an identity or of
     an operation elsewhere — until an identity can be enrolled, nothing ties one to an
     exercise (an attack on it would otherwise be labelled one)."""
     if _is_identity(signal) or (
-            _is_control_plane(signal) and (signal.get("context") or {}).get("attribution") != "asset"):
+            # `unattributed` is the RulePoller's own word; a respond signal (an
+            # attack_started resolved on the Activity Log) has none, and keeps its window.
+            _is_control_plane(signal) and (signal.get("context") or {}).get("attribution") == "unattributed"):
         return "real", ""
     try:
         from eregion_core.exercise import source_of

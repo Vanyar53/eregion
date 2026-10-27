@@ -1730,11 +1730,21 @@ MUTANTS += [
      "        client = tid"),
     ("M947", "an identity card labelled exercise by a window on its anchor VM (C2)", AGT,
      "    if _is_identity(signal) or (\n"
-     "            _is_control_plane(signal) and (signal.get(\"context\") or {}).get(\"attribution\") != \"asset\"):\n"
+     "            # `unattributed` is the RulePoller's own word; a respond signal (an\n"
+     "            # attack_started resolved on the Activity Log) has none, and keeps its window.\n"
+     "            _is_control_plane(signal) and (signal.get(\"context\") or {}).get(\"attribution\") == \"unattributed\"):\n"
      "        return \"real\", \"\"\n", ""),
     ("M948", "Global Administrator's former name not privileged (C2)", ENT, "    \"Company Administrator\",\n", ""),
     ("M949", "the role's target not the fallback name: an assignment without Role.DisplayName unnamed (C2)", RUL,
      "      | extend RoleName = coalesce(RoleName, RoleTargetName)\n", ""),
+]
+
+# C2, after the second 5.5 review (27/10): range M955–M959, measured by
+# tests/unit/test_entra_detection.py.
+MUTANTS += [
+    ("M955", "a respond signal on the Activity Log forced real: a declared exercise counted as an incident (C2)",
+     AGT, "(signal.get(\"context\") or {}).get(\"attribution\") == \"unattributed\"):",
+     "(signal.get(\"context\") or {}).get(\"attribution\") != \"asset\"):"),
 ]
 
 # Mutants measured by other tests than the invariants (their lot's own).
@@ -1831,7 +1841,7 @@ TESTS.update({f"M{n}": "tests/unit/test_watch_gate.py" for n in (*range(720, 740
 TESTS.update({f"M{n}": "tests/unit/test_gothmog.py" for n in (724, 725, 726, 727)})
 TESTS.update({f"M{n}": "tests/unit/test_host_console.py" for n in range(740, 750)})  # UI-1c
 TESTS.update({f"M{n}": "tests/unit/test_activity_logs.py" for n in (*range(810, 830), *range(850, 860), *range(890, 895))})  # AL1
-TESTS.update({f"M{n}": "tests/unit/test_entra_detection.py" for n in range(920, 950)})  # C2
+TESTS.update({f"M{n}": "tests/unit/test_entra_detection.py" for n in (*range(920, 950), 955)})  # C2
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

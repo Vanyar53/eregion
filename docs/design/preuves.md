@@ -791,6 +791,7 @@ Après la relecture 5.5 (27/10), dix de plus (M940–M949), tous attrapés :
 | M947 | une carte d'identité étiquetée exercice par une fenêtre sur sa VM d'ancrage | un vrai constat pris pour un exercice |
 | M948 | l'ancien nom de Global Administrator pas privilégié | une attribution lue sous ce nom, tue |
 | M949 | le nom du rôle pas repris de sa cible | une attribution sans `Role.DisplayName`, sans nom |
+| M955 | un signal de `respond` sur le journal d'activité forcé `real` (seconde relecture) | un exercice déclaré compté comme un incident |
 
 ## Ce que les invariants ont trouvé
 

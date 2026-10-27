@@ -736,5 +736,11 @@ def test_an_identity_card_or_an_unattributed_control_plane_one_is_never_an_exerc
     assert _cycle_source(control) == ("real", "")
     attributed = {**control, "context": {"plane": "control", "attribution": "asset"}}
     assert _cycle_source(attributed) == ("exercise", "run-1")
+    # `respond`: an Annatar attack_started resolved on the Activity Log — no attribution
+    # (only the RulePoller sets one), the run_id of its declared window: still an exercise.
+    respond = {"resource_id": VM1, "context": {"run_id": "run-1"},
+               "raw_signal": {"detection_source": "azure_activity",
+                              "detected_data": {"OperationNameValue": "MICROSOFT.NETWORK/X/WRITE"}}}
+    assert _cycle_source(respond) == ("exercise", "run-1")
     data = {"resource_id": VM1, "context": {}, "raw_signal": {"first_result_row": {"Computer": "vm1"}}}
     assert _cycle_source(data) == ("exercise", "run-1")

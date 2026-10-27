@@ -408,6 +408,11 @@ def test_the_manifest_schema_and_its_runtime_check_agree(manifest):
     ({"run_id": "R1", "metrics": {"attack_time": "soon"}}, False),
     ({"run_id": "R1", "metrics": []}, False),
     ({"metrics": {}}, False),
+    # V1 (#214): a run --without-glorfindel, accepted — never with a verdict.
+    ({"run_id": "R1", "metrics": {"without_glorfindel": True, "detection": "unknown"}}, True),
+    ({"run_id": "R1", "metrics": {"without_glorfindel": False, "detection": "missed"}}, True),
+    ({"run_id": "R1", "metrics": {"without_glorfindel": True, "detection": "detected"}}, False),
+    ({"run_id": "R1", "metrics": {"without_glorfindel": "yes"}}, False),
 ])
 def test_the_run_report_schema_and_its_runtime_check_agree(report, ok):
     jsonschema = pytest.importorskip("jsonschema")

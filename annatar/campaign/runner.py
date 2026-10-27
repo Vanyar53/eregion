@@ -26,6 +26,7 @@ from rich.console import Console
 
 from annatar.campaign.manifest import CampaignManifest
 from annatar.runner.engine import Engine, RunOutcome
+from eregion_core import watch_gate
 
 console = Console()
 
@@ -71,11 +72,15 @@ class CampaignRunner:
         dry_run: bool = False,
         reset_fn: Callable[[str], str | None] | None = None,
         engine_factory: Callable[[], Engine] | None = None,
+        without_glorfindel: bool = False,
     ):
         self.campaign_dir = Path(campaign_dir)
         self.dry_run = dry_run
         self.reset_fn = reset_fn or _default_reset
-        self.engine_factory = engine_factory or (lambda: Engine(skip_preflight=False))
+        # V1 (#214): each run checks the watch itself; --without-glorfindel reaches each one.
+        self.without_glorfindel = without_glorfindel
+        self.engine_factory = engine_factory or (
+            lambda: Engine(skip_preflight=False, without_glorfindel=without_glorfindel))
 
     def run(self) -> CampaignManifest:
         m = CampaignManifest.load(self.campaign_dir)
@@ -95,6 +100,15 @@ class CampaignRunner:
             raise ValueError(
                 f"campaign {m.campaign_id} is '{m.state}' — {hint}"
             )
+
+        # V1 (#214): no live Glorfindel watch, no campaign — refused before its first run, its
+        # state left as it was (ratified: it can run once the watch is up).
+        if not self.without_glorfindel:
+            no_watch = watch_gate.refusal()
+            if no_watch:
+                raise ValueError(
+                    f"campaign {m.campaign_id} refused — no live Glorfindel watch: {no_watch}. "
+                    f"Start the watch, or {watch_gate.FLAG} for a development campaign")
 
         m.set_state("running")
         m.save(self.campaign_dir)
@@ -151,6 +165,10 @@ class CampaignRunner:
             self._execute(entry, m)
             if entry.status == "executed":
                 executed += 1
+            elif (entry.error or "").startswith("glorfindel:"):
+                # The watch died mid-campaign: every next run would be refused too.
+                aborted = True
+                break
 
             # NSG reset between scenarios (clean attribution for the next one). What happened
             # is recorded on the entry — including a quiet skip when glorfindel is absent.

@@ -80,4 +80,11 @@ def run_report_refusal(report, run_id: str) -> str:
     attack = metrics.get("attack_time")
     if attack is not None and not _finite(attack):
         return "its attack_time is not a number of seconds"
+    # V1 (#214): a run without Glorfindel, by choice, is accepted — said as such, never with
+    # a verdict only a watch could have given.
+    without = metrics.get("without_glorfindel")
+    if without is not None and not isinstance(without, bool):
+        return "its without_glorfindel is not true or false"
+    if without is True and metrics.get("detection") in ("detected", "missed"):
+        return "it ran without Glorfindel, yet its detection is a verdict"
     return ""

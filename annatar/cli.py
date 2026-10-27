@@ -52,7 +52,14 @@ def cli():
     is_flag=True,
     help="Skip VM state checks (power + isolation).",
 )
-def run(scenario: str, dry_run: bool, yes: bool, skip_preflight: bool):
+@click.option(
+    "--without-glorfindel",
+    is_flag=True,
+    help="Development run: no live Glorfindel watch required. The report says the "
+         "detection was not measured, by choice.",
+)
+def run(scenario: str, dry_run: bool, yes: bool, skip_preflight: bool,
+        without_glorfindel: bool):
     """Run a chaos scenario (path or scenario name).
 
     SCENARIO can be a file path or the scenario name from 'annatar list'.
@@ -78,7 +85,8 @@ def run(scenario: str, dry_run: bool, yes: bool, skip_preflight: bool):
             raise SystemExit(1)
 
     # With EREGION_EXERCISE_CHANNEL, the run's report goes to H0 at its end (#193).
-    engine = Engine(dry_run=dry_run, skip_preflight=skip_preflight, publish_report=True)
+    engine = Engine(dry_run=dry_run, skip_preflight=skip_preflight, publish_report=True,
+                    without_glorfindel=without_glorfindel)
     outcome = engine.run(path, skip_confirm=yes)
     code = run_exit_code(outcome)
     if code:
@@ -98,6 +106,9 @@ EXIT_RUN_FAILED = 1
 
 # One hint per refusal, by the prefix Engine.run gives RunOutcome.error.
 _RUN_HINTS = (
+    ("glorfindel:", "aucune watch de Glorfindel vivante : lancer `glorfindel watch` (ou la watch "
+                    "hébergée, vue par EREGION_WATCH_CHANNEL) ; rien n'a été touché. Run de "
+                    "développement : --without-glorfindel (le rapport le dit)."),
     ("passive:", "contrat d'Orodruin passif : lancer depuis un Orodruin armé "
                  "(ailleurs, un injecteur reste passif)."),
     ("safety:", "cible hors banc ou non inscrite : tags eregion-target et eregion-zone "
@@ -342,11 +353,14 @@ def campaign_plan(target, objective, max_scenarios, allow_destructive, use_llm, 
 @click.option("--yes", is_flag=True, help="Ratify the budget/scope and execute.")
 @click.option("--dry-run", is_flag=True, help="Preview the sequence without executing.")
 @click.option("--runs-dir", default="runs", help="Where campaigns are stored.")
+@click.option("--without-glorfindel", is_flag=True,
+              help="Development campaign: no live Glorfindel watch required. Each run's "
+                   "report says the detection was not measured, by choice.")
 @click.option("--report/--no-report", default=True,
               help="Write the campaign report at the end (IA0, analysis/campaign_report.py); "
                    "with EREGION_EXERCISE_CHANNEL, publish the campaign to H0, whose watch "
                    "writes it (#167). --no-report: neither written nor published.")
-def campaign_run(campaign_id, yes, dry_run, runs_dir, report):
+def campaign_run(campaign_id, yes, dry_run, runs_dir, without_glorfindel, report):
     """Execute a planned campaign sequentially within its budget/scope."""
     from annatar.campaign.manifest import CampaignManifest, campaign_dir
     from annatar.campaign.runner import CampaignRunner
@@ -368,7 +382,7 @@ def campaign_run(campaign_id, yes, dry_run, runs_dir, report):
             m.set_state("ratified")
             m.save(cdir)
 
-    result = CampaignRunner(cdir, dry_run=dry_run).run()
+    result = CampaignRunner(cdir, dry_run=dry_run, without_glorfindel=without_glorfindel).run()
     if not dry_run:
         r = result.results
         console.print(

@@ -41,7 +41,8 @@ HEARTBEAT = "heartbeat.json"
 DETECTIONS = "detections"
 TICK_S = 5.0
 HEARTBEAT_EVERY_S = 60.0
-# The local heartbeat's own test (annatar/runner/engine.py): older than this, no watch.
+# A heartbeat older than this is no watch — the channel's and the local file's alike
+# (eregion_core/watch_gate.py, V1).
 FRESH_S = 90.0
 # A detection waits for its window as long as a window could still cover it.
 KEEP_S = MAX_DURATION_S + GRACE_AFTER_S

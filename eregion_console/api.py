@@ -1799,6 +1799,8 @@ def _slim_run(path: Path) -> dict | None:
     keep = ("injector", "detection", "detection_latency_s", "attack_time", "fault_start",
             "fault_end", "seen_down_at", "time_to_restore_s", "fallback_used", "aborted")
     metrics = {k: m[k] for k in keep if k in m}
+    if m.get("without_glorfindel") is True:  # V1: run --without-glorfindel, shown apart
+        metrics["without_glorfindel"] = True
     metrics.update({k: _slim_probes(m[k]) for k in ("before", "after") if k in m})
     return {"scenario": r.get("scenario", ""), "mitre": r.get("mitre", ""),
             "result": r.get("result", ""),

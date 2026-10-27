@@ -286,6 +286,17 @@ défaut `eregion`), `EREGION_CONSOLE_PORT` (défaut 7007), `EREGION_RUNS` (défa
 rendait avant D1 (H0 lit `eregion-watch`, `eregion-war-room`). `make team-start` les pose, et le
 `HOME` de l'équipe, sous `env -i`.
 
+**Les secrets passent par leur nom** (L23, #228). Les cibles du `Makefile` qui lancent un conteneur
+(`annatar-run`, `annatar-dry-run`, `annatar-shell`, `glorfindel-watch`, `-list`, `-shell`…)
+donnent chaque secret à `docker run` par son nom, `-e AZURE_CLIENT_SECRET`, jamais par sa valeur :
+`-e AZURE_CLIENT_SECRET=…` se lisait dans `ps`, l'historique du shell et `make -n`. Le shell de la
+recette choisit la valeur (`ANNATAR_AZURE_CLIENT_*` ou `GLORFINDEL_AZURE_CLIENT_*` d'abord, puis
+`AZURE_CLIENT_*`) et la pose dans l'environnement de `docker run` seulement (`*_AZURE_PICK`, devant
+la commande). Le canary, `tests/unit/test_makefile_secrets.py` : chaque cible rendue par `make -n`
+avec des secrets factices, aucune valeur sur une ligne de commande ; puis les recettes des
+conteneurs lancées contre un faux `docker` (le bon principal dans son environnement, rien dans
+ses arguments). Une cible nouvelle qui passe un secret fait de même.
+
 ---
 
 ## Verrou des dépendances
@@ -295,8 +306,11 @@ rendait avant D1 (H0 lit `eregion-watch`, `eregion-war-room`). `make team-start`
 verrou, chaque reconstruction de l'image prenait la dernière version de tout.
 
 - `requirements/dev.txt` : la CI (3.11, 3.12, macOS), `make install`, les mutants et les
-  invariants de nuit. `requirements/glorfindel.txt` : l'image de Glorfindel (H0 compris),
-  contrainte par le premier — l'image tourne avec les versions que la CI a testées.
+  invariants de nuit. `requirements/glorfindel.txt` : l'image de Glorfindel (H0 compris).
+  `requirements/annatar.txt` (HY1) : l'image des injecteurs, Annatar et Gothmog, celle que
+  `make orodruin-push` envoie à Orodruin — avec `litellm`, dont le planificateur a besoin
+  (`annatar campaign plan --llm`). Les deux images sont contraintes par le premier : elles
+  tournent avec les versions que la CI a testées.
   `requirements/build.in` : le backend de construction (setuptools, wheel), verrouillé aussi.
 - Installation : `pip install --require-hashes -r requirements/<fichier>.txt`, puis le projet
   seul, `pip install --no-deps --no-build-isolation -e .`. pip vérifie l'empreinte SHA-256 de

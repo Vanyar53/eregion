@@ -65,6 +65,8 @@ def fake(tmp_path, monkeypatch):
                           {"title": "v0.x", "description": "La mesure ; la preuve"}]
     f.gh["issues"] = [
         issue(10, "O1 — Orodruin", "closed", "v0.3"), issue(11, "H0 — Glorfindel hébergé", "open", "v0.3"),
+        issue(70, "Point d'étape après la 0.3", "open", "v0.3"),               # a follow-up, not a lot
+        issue(206, "Console Eregion (UI-2) : les indicateurs"),                 # its id in brackets only
         issue(73, "A3 — Retrait des règles orphelines"), issue(67, "B1 — Mistral"),
         issue(226, "I1F : un NSG modifié", "closed"), issue(231, "I1F suite : une carte"),
         issue(200, "Sans jalon", milestone=None),
@@ -104,7 +106,8 @@ def test_a_github_or_discord_error_is_said_never_raised(fake, monkeypatch, capsy
     fake.fail = {"/api/channels/ROADMAP": 500}
     assert rd.main([]) == 0
     err = capsys.readouterr().err
-    assert "GitHub API: HTTP 502" in err and "#roadmap: HTTP 500" in err and "BOT-SECRET" not in err
+    assert "GitHub API: HTTP 502" in err and "#roadmap: message not looked up" in err and "BOT-SECRET" not in err
+    assert not [r for r in fake.writes("/api/channels/ROADMAP") if r["method"] == "POST"]
 
 
 def test_a_dry_run_reads_but_never_writes(fake, monkeypatch, capsys):
@@ -162,8 +165,8 @@ def test_a_bar_per_milestone_counts_its_closed_issues(fake):
     lots = rd.lots_of(fake.gh["issues"], fake.gh["pulls"])
     states = {x.number: rd.wanted_state(x, "") for x in lots}
     text = rd.render(fake.gh["milestones"], lots, states, ROADMAP)["description"]
-    assert f"`v0.3` `{rd.bar(1, 2)}` **1/2** · La boucle tourne" in text
-    assert f"`v0.x` `{rd.bar(1, 4)}` **1/4** · La mesure" in text         # the PR and the issue without milestone left out
+    assert f"`v0.3` `{rd.bar(1, 3)}` **1/3** · La boucle tourne" in text
+    assert f"`v0.x` `{rd.bar(1, 5)}` **1/5** · La mesure" in text         # the PR and the issue without milestone left out
     assert "`v1.0` `░░░░░░░░░░░░░░░░░░░░` **0/0**" in text
 
 
@@ -215,7 +218,7 @@ def test_open_lots_get_a_thread_closed_ones_none(fake, monkeypatch):
     configure(monkeypatch, fake, roadmap=False)
     rd.main([])
     threads = by_number(fake)
-    assert sorted(threads) == ["11", "231", "67", "73"]               # O1 and I1F (#226) are closed
+    assert sorted(threads) == ["11", "231", "67", "73"]   # O1 and I1F (#226) closed; #70, #206 not lots
     assert threads["73"]["name"] == "A3 · Retrait des règles orphelines · #73"
     assert sorted(threads["73"]["applied_tags"]) == sorted([TAG["en cours"], TAG["v0.x"]])
     assert sorted(threads["67"]["applied_tags"]) == sorted([TAG["à faire"], TAG["v0.x"]])
@@ -234,6 +237,7 @@ def test_elronds_finer_states_are_kept(fake, monkeypatch):
 
 def test_a_closed_lot_is_done_and_archived_a_reopened_one_comes_back(fake, monkeypatch):
     configure(monkeypatch, fake, roadmap=False)
+    next(i for i in fake.gh["issues"] if i["number"] == 67)["state_reason"] = "reopened"
     gone = fake.thread("O1 · Orodruin · #10", [TAG["en cours"], TAG["v0.3"]])
     back = fake.thread("B1 · Mistral · #67", [TAG["fait"], TAG["v0.x"]], archived=True)
     rd.main([])
@@ -263,8 +267,6 @@ def test_two_issues_of_one_lot_id_get_two_threads(fake, monkeypatch):
     ("A3", "73", "A3 — Retrait des règles orphelines", "A3 · Retrait des règles orphelines · #73"),
     ("A3", "", "règles orphelines", "A3 · règles orphelines"),
     ("I1F", "226", "fix(glorfindel): un NSG modifié (I1F, #226)", "I1F · un NSG modifié · #226"),
-    ("", "222", "Console : finitions", "#222 · Console : finitions"),
-    ("UI-2", "206", "Console Eregion (UI-2) : les indicateurs", "UI-2 · Console Eregion (UI-2) : les indicateurs · #206"),
 ])
 def test_a_thread_is_named_id_title_number(lot, issue, title, name):
     assert nd.thread_name(lot, issue, title) == name
@@ -277,3 +279,57 @@ def test_a_long_title_keeps_its_number():
 
 def test_the_bot_is_the_author_it_looks_for():
     assert BOT_ID == "BOT"   # the fake's /users/@me — upsert matches on it, never on a name
+
+
+# ── after the review of 27/10 ──────────────────────────────────────────────────────
+
+def test_only_a_lot_has_a_thread_one_made_before_is_archived(fake, monkeypatch):
+    """Jonathan, 27/10: a thread for an issue whose title starts with a lot id — not #70, nor
+    an issue naming its lot only in brackets; a thread made for one before is archived."""
+    configure(monkeypatch, fake, roadmap=False)
+    old = fake.thread("#70 · Point d'étape après la 0.3", [TAG["à faire"], TAG["v0.3"]])
+    rd.main([])
+    assert old["thread_metadata"]["archived"] and old["applied_tags"] == [TAG["v0.3"], TAG["à faire"]]
+    assert "206" not in by_number(fake) and len(fake.threads) == 5
+
+
+def test_a_done_lot_stays_done_while_its_issue_is_open(fake, monkeypatch):
+    """Merged (N1 tags it « fait »), its issue open until « Fini quand » is proven: kept."""
+    configure(monkeypatch, fake, roadmap=False)
+    t = fake.thread("B1 · Mistral · #67", [TAG["fait"], TAG["v0.x"]])
+    rd.main([])
+    assert TAG["fait"] in t["applied_tags"]
+    lots = rd.lots_of(fake.gh["issues"], fake.gh["pulls"])
+    text = rd.render([], lots, {"67": "fait"}, ROADMAP)["description"]
+    assert "**Faits, issue ouverte** — [B1]" in text
+
+
+def test_an_idle_thread_discord_archived_stays_archived(fake, monkeypatch):
+    configure(monkeypatch, fake, roadmap=False)
+    t = fake.thread("B1 · Mistral · #67", [TAG["à faire"], TAG["v0.x"]], archived=True)
+    rd.main([])
+    assert t["thread_metadata"]["archived"]
+    assert not [r for r in fake.writes(f"/api/channels/{t['id']}")]
+
+
+def test_no_second_message_when_the_lookup_fails(fake, monkeypatch, capsys):
+    configure(monkeypatch, fake, forum=False)
+    fake.roadmap_message(rd.TITLE, pinned=True)
+    fake.fail.update({"/api/channels/ROADMAP/pins": 500, "/api/channels/ROADMAP/messages?limit": 503})
+    assert rd.main([]) == 0
+    assert not fake.writes("/api/channels/ROADMAP") and len(fake.roadmap) == 1
+    assert "#roadmap" in capsys.readouterr().err
+
+
+def test_a_dry_run_without_the_forum_says_so(fake, monkeypatch, capsys):
+    configure(monkeypatch, fake, forum=False)
+    rd.main(["--dry-run"])
+    assert capsys.readouterr().out.endswith("#lots :\n  non configuré\n")
+
+
+def test_issues_are_read_past_the_first_page(fake, monkeypatch):
+    configure(monkeypatch, fake, forum=False)
+    fake.gh["issues"] = [issue(n, f"Z{n} — lot {n}") for n in range(150, 0, -1)]   # newest first, 2 pages
+    rd.main([])
+    text = fake.roadmap[0]["embeds"][0]["description"]
+    assert "**0/150**" in text

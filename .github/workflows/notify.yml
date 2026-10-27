@@ -27,10 +27,10 @@ permissions:
   contents: read
   actions: read   # the run before, to say « main green again »
 
-# One run at a time: a merge that closes an issue fires pull_request_target and issues together,
-# and two runs could each create the lot's thread.
+# One run at a time, shared with roadmap.yml: a merge that closes an issue fires several events
+# at once, and two runs could each create the lot's thread.
 concurrency:
-  group: notify-discord
+  group: discord-atelier
   cancel-in-progress: false
 
 jobs:

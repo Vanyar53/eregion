@@ -11,11 +11,13 @@ over all of them), the lots in progress, blocked and still to do, the 1.0 criter
 indicators (ROADMAP.md). A ROADMAP.md that changed shape loses that section, and the message
 says so; the run goes on.
 
-#lots — a thread per OPEN issue of the four milestones, « <ID> · <title> · #<n> », created when
-missing, its tags true; a closed issue gets no thread, and its open one is tagged « fait » and
-archived. The state: « fait » for a closed issue; an open pull request naming the lot makes it
-at least « en cours »; elrond's finer states (en relecture, en correction, bloqué, « fait »
-while its pull request is open — written by notify_discord.py) are kept; else « à faire ».
+#lots — a thread per OPEN lot of the four milestones (an issue whose title starts with its lot
+id; #70, #95 and the findings have none), « <ID> · <title> · #<n> », created when missing, its
+tags true; a closed issue gets no thread, and its open one is tagged « fait » and archived. The
+state: « fait » for a closed issue, and kept for an open one unless it was reopened (merged,
+waiting for its « Fini quand »); an open pull request of the repository naming the lot makes
+it at least « en cours »; elrond's finer states (en relecture, en correction, bloqué, written
+by notify_discord.py) are kept; else « à faire ». An idle thread Discord archived stays so.
 
 Configuration (notify_discord.load_config): EREGION_DISCORD_BOT_TOKEN, EREGION_DISCORD_LOTS_FORUM,
 EREGION_DISCORD_ROADMAP_CHANNEL; GITHUB_REPOSITORY, GITHUB_TOKEN, GITHUB_API_URL. What is not
@@ -48,6 +50,12 @@ class Lot:
     lot: str
     url: str
     pr: bool = False
+    reopened: bool = False
+
+    @property
+    def thread(self) -> bool:
+        """Jonathan, 27/10: only a lot has a thread — an issue whose title starts with its id."""
+        return bool(self.lot) and bool(re.match(rf"\s*{re.escape(self.lot)}\b", self.title))
 
     @property
     def key(self) -> str:
@@ -91,7 +99,8 @@ def lots_of(issues: list, pulls: list) -> list[Lot]:
         n, lot = str(i["number"]), nd.lot_of(title=i.get("title", ""))[0]
         is_open = i.get("state") == "open"
         out.append(Lot(n, i.get("title", ""), is_open, milestone, lot, i.get("html_url", ""),
-                       is_open and (n in pr_issues or bool(lot and lot in pr_lots))))
+                       is_open and (n in pr_issues or bool(lot and lot in pr_lots)),
+                       i.get("state_reason") == "reopened"))
     return sorted(out, key=lambda x: (nd.MILESTONE_TAGS.index(x.milestone), int(x.number)))
 
 
@@ -100,7 +109,9 @@ def lots_of(issues: list, pulls: list) -> list[Lot]:
 def wanted_state(lot: Lot, current: str) -> str:
     if not lot.open:
         return "fait"
-    if current in KEPT or (current == "fait" and lot.pr):   # elrond's, kept until GitHub says more
+    if current in KEPT:   # elrond's, kept until GitHub says more
+        return current
+    if current == "fait" and not lot.reopened:   # merged or reviewed ok, its issue open until « Fini quand »
         return current
     return "en cours" if lot.pr else "à faire"
 
@@ -135,6 +146,12 @@ def sync_forum(forum: nd.Forum, lots: list[Lot], dry: bool = False) -> tuple[lis
             return {}
 
     for lot in lots:
+        if not lot.thread:   # not a lot (#70, #95, a finding): no thread; one made before is archived
+            t = nd.match_thread(threads, "", lot.number)
+            states[lot.number] = wanted_state(lot, "")
+            if t and not (t.get("thread_metadata") or {}).get("archived"):
+                write(f"#{lot.number} archivé (pas un lot)", "PATCH", f"/channels/{t['id']}", {"archived": True})
+            continue
         t = nd.match_thread(threads, lot.lot, lot.number)
         want = wanted_state(lot, state_of(t, names))
         states[lot.number] = want
@@ -156,10 +173,11 @@ def sync_forum(forum: nd.Forum, lots: list[Lot], dry: bool = False) -> tuple[lis
         tags = forum.apply(t.get("applied_tags") or [], want, lot.milestone)
         if not nd.same_tags(tags, t.get("applied_tags") or []):
             change["applied_tags"] = tags
-        if (t.get("thread_metadata") or {}).get("archived"):
-            change["archived"] = False
         if t.get("name") != name:
             change["name"] = name
+        # Discord archives an idle thread: left so unless it must change (only reopened can it be edited).
+        if change and (t.get("thread_metadata") or {}).get("archived"):
+            change["archived"] = False
         if change:
             write(f"{name} : {', '.join(change)}", "PATCH", f"/channels/{t['id']}", change)
     return done, states
@@ -223,13 +241,13 @@ def render(milestones: list, lots: list[Lot], states: dict[str, str], roadmap: s
         out.append(f"`{m:<4}` `{bar(closed, len(mine))}` **{closed}/{len(mine)}** · {nd._cut(what, 48)}")
     working = [x for x in lots if x.open and states.get(x.number) in WORKING]
     blocked = [x for x in lots if x.open and states.get(x.number) == "bloqué"]
-    ready = [x for x in lots if x.open and states.get(x.number) == "fait"]
+    done_open = [x for x in lots if x.open and states.get(x.number) == "fait"]
     todo = [x for x in lots if x.open and states.get(x.number, "à faire") == "à faire"]
     out += ["", "**En cours** — " + (" · ".join(
         f"[{x.key}]({x.url})" + ("" if states[x.number] == "en cours" else f" ({states[x.number]})")
         for x in working) or "rien")]
-    if ready:
-        out.append("**Relus, à fusionner** — " + _keys(ready, 15))
+    if done_open:
+        out.append("**Faits, issue ouverte** — " + _keys(done_open, 15))
     if blocked:
         out.append("**Bloqués** — " + _keys(blocked, 15))
     out.append("**À faire**")
@@ -257,16 +275,20 @@ def upsert(forum: nd.Forum, channel: str, card_: dict) -> str:
     """The bot's own roadmap message: pinned first, else among the last 50; else a new one."""
     me = str(forum.call("GET", "/users/@me", label="#roadmap").get("id"))
     payload = {"embeds": [card_], "allowed_mentions": {"parse": []}}
+    looked = False
     for where in ("pins", "messages?limit=50"):
         try:
             found = forum.call("GET", f"/channels/{channel}/{where}", label="#roadmap")
         except nd.Failure:
             continue
+        looked = looked or isinstance(found, list)
         for m in found if isinstance(found, list) else []:
             title = ((m.get("embeds") or [{}])[0] or {}).get("title", "")
             if str((m.get("author") or {}).get("id")) == me and title.startswith(TITLE):
                 forum.call("PATCH", f"/channels/{channel}/messages/{m['id']}", payload, label="#roadmap")
                 return "edited"
+    if not looked:   # neither list read: posting would leave a second message, stale from then on
+        raise nd.Failure("#roadmap", why="message not looked up (pins and messages failed): nothing posted")
     forum.call("POST", f"/channels/{channel}/messages", {**payload, "flags": nd.SILENT}, label="#roadmap")
     return "posted"
 
@@ -299,7 +321,8 @@ def main(argv=None, environ=os.environ) -> int:
                      sha=environ.get("GITHUB_SHA", ""), now=now)
     if dry:
         print(message["description"])
-        print("\n#lots :\n" + ("\n".join(f"  {x}" for x in done) or "  rien à changer"))
+        print("\n#lots :\n" + ("\n".join(f"  {x}" for x in done) or ("  rien à changer" if cfg.lots
+                                                                       else "  non configuré")))
         return 0
     if cfg.roadmap and cfg.token:
         try:

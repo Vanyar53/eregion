@@ -17,6 +17,7 @@ on:
     types: [opened, closed, reopened, milestoned, demilestoned]
   pull_request_target:
     types: [opened, closed, reopened]
+    branches: [main]   # a PR stacked on a lot's branch is not the road to main
   workflow_dispatch:
 
 permissions:
@@ -24,9 +25,10 @@ permissions:
   issues: read
   pull-requests: read
 
-# One run at a time: two runs editing the same message and threads would race.
+# One run at a time, shared with notify.yml: both write the same #lots threads, and two runs
+# could each create one.
 concurrency:
-  group: roadmap
+  group: discord-atelier
   cancel-in-progress: false
 
 jobs:

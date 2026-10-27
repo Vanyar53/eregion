@@ -109,7 +109,7 @@ pytest tests/unit/test_invariants.py         # L24/L26 : invariants (Hypothesis,
                           # noms insensibles à la casse, 429/crash avant ou après une écriture, API throttlée,
                           # 403 persistant, disque plein) et un monde client qui bouge (règles, IP, NSG supprimé,
                           # VM supprimée ou créée, tags, config illisible, règles de Glorfindel retournées, autre hôte,
-                          # anciennes isolations, horloge). 14 propriétés (I1–I12, L1, U1 — docstring du fichier),
+                          # anciennes isolations, horloge). 15 propriétés (I1–I12, L1, L2, U1 — docstring du fichier),
                           # oracles tirés du journal du test, jamais des marqueurs du code (A0).
                           # GLORFINDEL_INVARIANT_EXAMPLES (défaut 60 ; push 500, nuit 10 000), _STEPS (30),
                           # _DB (base Hypothesis : rejoue les échecs mémorisés), _STATS=1 -s, _NO_SHRINK=1.

@@ -1,4 +1,20 @@
+import importlib.util
+import os
+
 import pytest
+
+
+def _present(package: str) -> bool:
+    """D1: a component's tests also run with the other components absent
+    (scripts/component_check.py) — a fixture of an absent one has nothing to redirect."""
+    try:
+        return importlib.util.find_spec(package) is not None
+    except ModuleNotFoundError:   # made absent by the component check
+        return False
+
+
+GLORFINDEL = _present("glorfindel")
+CONSOLE = _present("eregion_console")
 
 
 @pytest.fixture(autouse=True)
@@ -53,6 +69,8 @@ def isolated_escalations_store(tmp_path, monkeypatch):
     Prevents test runs from writing pending escalations to ~/.glorfindel/,
     which the Discord bot would then pick up as real incidents.
     """
+    if not GLORFINDEL:
+        return
     import glorfindel.escalations as esc_module
     monkeypatch.setattr(esc_module, "_STORE", tmp_path / "escalations.jsonl")
 
@@ -60,6 +78,8 @@ def isolated_escalations_store(tmp_path, monkeypatch):
 @pytest.fixture(autouse=True)
 def isolated_rule_status(tmp_path, monkeypatch):
     """Redirect rule_status.json to a temp file — avoids root-owned Docker file."""
+    if not GLORFINDEL:
+        return
     import glorfindel.detection_rules as dr_module
     monkeypatch.setattr(dr_module, "_STATUS_FILE", tmp_path / "rule_status.json")
 
@@ -70,6 +90,8 @@ def stop_rule_pollers(isolated_rule_status):
     undone (this fixture's teardown runs first): a poll thread outlived its test and
     wrote the operator's real ~/.glorfindel/rule_status.json (sixth review, S5)."""
     yield
+    if not GLORFINDEL:
+        return
     import glorfindel.detection_rules as dr_module
     for poller in list(dr_module.RulePoller._live):
         poller.stop(join_s=2.0)
@@ -88,9 +110,176 @@ def no_write_outside_the_sandbox():
         pytest.fail(f"the test suite wrote outside its sandbox: {sorted(p.name for p in real.iterdir())}")
 
 
+REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+# What a test run may leave in the repository: the caches of Python, pytest and Hypothesis
+# (ignored by git, or by their own .gitignore). Anything else is a test writing where it must not.
+CACHES = frozenset({"__pycache__", ".pytest_cache", ".hypothesis", ".hypothesis-invariants",
+                    ".ruff_cache", ".coverage"})
+_WRITE_FLAGS = os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_APPEND | os.O_TRUNC
+# The audit events of a write other than `open`: the positions of the paths written, then of the
+# dir_fd arguments (-1 when there is none). A path relative to a dir_fd cannot be placed: skipped.
+_WRITE_EVENTS = {
+    "os.mkdir": ((0,), (2,)),
+    "os.rmdir": ((0,), (1,)),
+    "os.remove": ((0,), (1,)),              # os.unlink too
+    "os.rename": ((0, 1), (2, 3)),          # os.replace, shutil.move on one file system
+    "os.symlink": ((1,), (2,)),
+    "os.link": ((1,), (2, 3)),
+    "os.utime": ((0,), (3,)),               # Path.touch() on a file that exists
+    "os.truncate": ((0,), ()),
+    "shutil.rmtree": ((0,), ()),            # it then removes by dir_fd, which is not placed
+    "sqlite3.connect": ((0,), ()),          # it may create the file
+}
+_writes_in_the_repo: list[tuple[str, str]] = []
+_watching = [False]
+_before: set[str] = set()
+_checked = [False]
+
+
+def _in_the_repo(path) -> str | None:
+    """The path relative to the repository, if a test would write there (caches aside)."""
+    if isinstance(path, int) or path is None:
+        return None
+    full = os.path.abspath(os.fsdecode(path))
+    if not full.startswith(REPO + os.sep):
+        return None
+    rel = full[len(REPO) + 1:]
+    parts = rel.split(os.sep)
+    if CACHES & set(parts) or parts[0].startswith(".coverage"):
+        return None
+    return rel
+
+
+def _written(event, args) -> list:
+    """The paths an audit event writes (created, changed, renamed or removed), as given."""
+    if event == "open":
+        path, mode, flags = args
+        writes = any(c in mode for c in "wax+") if isinstance(mode, str) else bool((flags or 0) & _WRITE_FLAGS)
+        return [path] if writes else []
+    if event not in _WRITE_EVENTS:
+        return []
+    paths, dir_fds = _WRITE_EVENTS[event]
+    if any(args[i] not in (None, -1) for i in dir_fds if i < len(args)):
+        return []
+    if event == "sqlite3.connect":
+        db = args[0]
+        if isinstance(db, (str, bytes, os.PathLike)):
+            db = os.fsdecode(db)
+            if db.startswith("file:"):
+                db = db[5:].split("?")[0]
+            return [] if db in ("", ":memory:") else [db]
+        return []
+    return [args[i] for i in paths if i < len(args)]
+
+
+def _audit(event, args):
+    """HY1: the writes the test process makes inside the repository, as they happen, with the
+    test that made them. Python's audit hook sees them whatever the code (open, pathlib,
+    os, shutil, sqlite3), relative paths included."""
+    if not _watching[0]:
+        return
+    for path in _written(event, args):
+        rel = _in_the_repo(path)
+        if rel is not None:
+            _writes_in_the_repo.append((rel, os.environ.get("PYTEST_CURRENT_TEST", "outside a test").split(" (")[0]))
+
+
+def _ignored_by_git(name: str) -> bool | None:
+    """True/False as git sees it; None without git or outside a repository (a mutant's copy)."""
+    import subprocess
+    try:
+        proc = subprocess.run(["git", "-C", REPO, "check-ignore", "-q", "--", name],
+                              capture_output=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return {0: True, 1: False}.get(proc.returncode)
+
+
+def _arm():
+    import sys
+    if not getattr(sys, "_eregion_repo_audit", False):   # one hook per interpreter, never removed
+        sys.addaudithook(_audit)
+        sys._eregion_repo_audit = True
+    _before.clear()
+    _before.update(os.listdir(REPO))
+    _writes_in_the_repo.clear()
+    _checked[0] = False
+    _watching[0] = True
+
+
+def _what_was_written() -> str | None:
+    """Stops the watch; what the run wrote in the repository, or None."""
+    _watching[0] = False
+    _checked[0] = True
+    new = sorted(set(os.listdir(REPO)) - _before)
+    left = [n for n in new if n == "runs" or (n not in CACHES and _ignored_by_git(n) is not True)]
+    found = sorted({f"{rel} ({test})" for rel, test in _writes_in_the_repo})
+    if not (found or left):
+        return None
+    return ("the test suite wrote in the repository's folder: "
+            + "; ".join(found + [f"{n} (new at the root)" for n in left]))
+
+
+# Armed when this conftest is imported, before pytest imports a test module: what a module
+# writes at collection is seen too.
+_arm()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def nothing_written_in_the_repository():
+    """HY1: no test writes in the repository's folder. A test that called store_cycle left
+    runs/run001_debug.jsonl at the root (it writes Path("runs") relative to the current
+    folder); nothing said so. Two checks, from this conftest's import (collection included) to
+    the end of the session, failing the run:
+
+    - in the test process, the writes under the repository, caches aside (_audit) — this holds
+      even where runs/ already exists (an operator's checkout, the watch writing there).
+      Seen: a file opened for writing (open, pathlib, os.open, shutil's copies), a folder made
+      or removed, a file removed, renamed or replaced (os.replace, shutil.move), a link made
+      (os.symlink, os.link), its times or size changed (Path.touch on a file that exists,
+      os.utime, os.truncate), shutil.rmtree, sqlite3.connect.
+      NOT seen: what a C library writes once a file is open (sqlite's pages, a write through
+      a file descriptor, mmap); ChromaDB 1.x's store (written by its Rust core, no audit
+      event); a path given relative to a dir_fd, or as a descriptor; any
+      write by a subprocess below the root.
+    - at the root, whatever wrote it (a subprocess too): a runs/ that was not there before, or
+      any new entry git does not ignore.
+
+    Known limits:
+    - in the main checkout, another process that creates an entry git does not ignore at the
+      root while the suite runs (another session, an editor) fails the run wrongly;
+    - a TMPDIR or a --basetemp inside the repository makes every tmp_path a write there;
+    - os.makedirs(exist_ok=True) on a folder that exists counts as a write (Python raises the
+      event before the folder is found), as does os.remove of a file that is not there;
+    - only tests/unit/ is guarded (this conftest); tests/integration/ is not;
+    - a repository opened through a symbolic link: paths are compared as given, not resolved,
+      so a write through the link's other name is not seen.
+
+    Where no test ran (all deselected), pytest_sessionfinish checks instead."""
+    yield
+    found = _what_was_written()
+    if found:
+        pytest.fail(found)
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_sessionfinish(session, exitstatus):
+    if _checked[0]:
+        return
+    found = _what_was_written()
+    if found:
+        reporter = session.config.pluginmanager.get_plugin("terminalreporter")
+        if reporter is not None:
+            reporter.write_line(found, red=True)
+        if session.exitstatus in (pytest.ExitCode.OK, pytest.ExitCode.NO_TESTS_COLLECTED):
+            session.exitstatus = pytest.ExitCode.TESTS_FAILED
+
+
 @pytest.fixture(autouse=True)
 def isolated_posture_state(tmp_path, monkeypatch):
     """Redirect posture_state.json to a temp file."""
+    if not GLORFINDEL:
+        return
     import glorfindel.posture as posture_module
     monkeypatch.setattr(posture_module, "_STATE_FILE", tmp_path / "posture_state.json")
 
@@ -105,6 +294,8 @@ def isolated_glorfindel_home(tmp_path, monkeypatch):
     War Room and the LLM prompt read that directory). One fixture for all the others,
     so "0 écriture dans ~/.glorfindel" holds by construction.
     """
+    if not GLORFINDEL:
+        return
     home = tmp_path / "glorfindel-home"
     import glorfindel.actions as actions
     import glorfindel.jobs as jobs
@@ -140,6 +331,8 @@ def no_local_glorfindel_config(monkeypatch):
     Azure" held only on a machine without that file, and the suite ran ~5x slower.
     Tests that need a config build or inject one explicitly.
     """
+    if not GLORFINDEL:
+        return
     import glorfindel.config as config
     monkeypatch.setattr(config, "_DEFAULT_PATHS", [])
 
@@ -151,6 +344,8 @@ def no_console_settings(monkeypatch):
     for name in ("EREGION_CONSOLE_TOKEN", "EREGION_CONSOLE_SECTIONS"):
         monkeypatch.setenv(name, "")      # recorded, so restored even if a CLI test sets it
         monkeypatch.delenv(name)
+    if not CONSOLE:
+        return
     from eregion_console import sections
     monkeypatch.setitem(sections._cache, "key", None)
 

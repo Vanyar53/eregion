@@ -18,28 +18,35 @@ TF       := terraform -chdir=infra/terraform
 INSTANCE ?= default
 TOPO     ?=
 
+# L23 (#228) : chaque secret passe au conteneur PAR SON NOM (`-e AZURE_CLIENT_SECRET`), jamais
+# par sa valeur (`-e AZURE_CLIENT_SECRET=…`, visible dans `ps`, l'historique et `make -n`).
+# La valeur est choisie par le shell de la recette et posée dans l'environnement de
+# `docker run` seulement (*_AZURE_PICK, devant la commande) : la ligne de commande ne porte
+# que des noms. Le canary : tests/unit/test_makefile_secrets.py rend chaque cible par
+# `make -n` avec des secrets factices, et aucune valeur ne doit y paraître.
+#
 # Annatar — ANNATAR_AZURE_CLIENT_* si définis, sinon fallback AZURE_CLIENT_*
-# ⚠ Les recettes qui les utilisent commencent par @ : make afficherait sinon la commande
-# développée, secret compris (constaté le 2026-10-07).
 # Annatar a besoin de Contributor (RunCommand). Définir ANNATAR_AZURE_CLIENT_*
 # pour séparer ses creds de ceux de Glorfindel (Reader pour observe-only).
 # AZURE_TENANT_ID et AZURE_SUBSCRIPTION_ID sont toujours partagés (même tenant).
+ANNATAR_AZURE_PICK = \
+	AZURE_CLIENT_ID="$${ANNATAR_AZURE_CLIENT_ID:-$${AZURE_CLIENT_ID:-}}" \
+	AZURE_CLIENT_SECRET="$${ANNATAR_AZURE_CLIENT_SECRET:-$${AZURE_CLIENT_SECRET:-}}"
+# GLORFINDEL_LLM_MODEL : le rapport de fin de `campaign run` s'écrit dans ce conteneur, et
+# l'IA d'analyse y refuse le modèle de Glorfindel (IA1) — sans lui, elle ne verrait que le défaut.
 ANNATAR_AZURE_ENV := \
-	-e AZURE_CLIENT_ID=$(or $(ANNATAR_AZURE_CLIENT_ID),$(AZURE_CLIENT_ID)) \
-	-e AZURE_CLIENT_SECRET=$(or $(ANNATAR_AZURE_CLIENT_SECRET),$(AZURE_CLIENT_SECRET)) \
-	-e AZURE_TENANT_ID=$(AZURE_TENANT_ID) \
-	-e AZURE_SUBSCRIPTION_ID=$(AZURE_SUBSCRIPTION_ID) \
+	-e AZURE_CLIENT_ID -e AZURE_CLIENT_SECRET -e AZURE_TENANT_ID -e AZURE_SUBSCRIPTION_ID \
 	-e ANTHROPIC_API_KEY -e ANNATAR_LLM_MODEL -e EREGION_ANALYSIS_MODEL \
-	-e EREGION_ANALYSIS_TIMEOUT_S
+	-e EREGION_ANALYSIS_TIMEOUT_S -e GLORFINDEL_LLM_MODEL
 
 # Glorfindel — GLORFINDEL_AZURE_CLIENT_* si définis, sinon fallback AZURE_CLIENT_*
 # Glorfindel peut tourner en Reader (GLORFINDEL_READ_ONLY=1 + SP Reader).
 # AZURE_TENANT_ID et AZURE_SUBSCRIPTION_ID sont toujours partagés (même tenant).
+GLORFINDEL_AZURE_PICK = \
+	AZURE_CLIENT_ID="$${GLORFINDEL_AZURE_CLIENT_ID:-$${AZURE_CLIENT_ID:-}}" \
+	AZURE_CLIENT_SECRET="$${GLORFINDEL_AZURE_CLIENT_SECRET:-$${AZURE_CLIENT_SECRET:-}}"
 GLORFINDEL_AZURE_ENV := \
-	-e AZURE_CLIENT_ID=$(or $(GLORFINDEL_AZURE_CLIENT_ID),$(AZURE_CLIENT_ID)) \
-	-e AZURE_CLIENT_SECRET=$(or $(GLORFINDEL_AZURE_CLIENT_SECRET),$(AZURE_CLIENT_SECRET)) \
-	-e AZURE_TENANT_ID=$(AZURE_TENANT_ID) \
-	-e AZURE_SUBSCRIPTION_ID=$(AZURE_SUBSCRIPTION_ID)
+	-e AZURE_CLIENT_ID -e AZURE_CLIENT_SECRET -e AZURE_TENANT_ID -e AZURE_SUBSCRIPTION_ID
 
 GLORFINDEL_STATE := \
 	-v $(HOME)/.glorfindel:/root/.glorfindel \
@@ -65,7 +72,7 @@ GLORFINDEL_VOLS := \
 
 # The images' CMD is the CLI itself: arguments REPLACE it, so the binary is named here
 # (`make annatar-run` ran `run` as a command and failed).
-DOCKER_ANNATAR := docker run --rm $(ANNATAR_AZURE_ENV) $(ANNATAR_VOLS) $(IMAGE_ANNATAR) annatar
+DOCKER_ANNATAR = $(ANNATAR_AZURE_PICK) docker run --rm $(ANNATAR_AZURE_ENV) $(ANNATAR_VOLS) $(IMAGE_ANNATAR) annatar
 GLORFINDEL_ENV := \
 	-e AZURE_WORKSPACE_ID \
 	-e AZURE_VM_RESOURCE_ID \
@@ -85,7 +92,7 @@ GLORFINDEL_ENV := \
 	-e GLORFINDEL_INCIDENT_TTL_S \
 	-e ORT_LOGGING_LEVEL_DEFAULT=3
 
-DOCKER_GLORFINDEL := docker run --rm $(GLORFINDEL_AZURE_ENV) $(GLORFINDEL_VOLS) $(GLORFINDEL_STATE) \
+DOCKER_GLORFINDEL = $(GLORFINDEL_AZURE_PICK) docker run --rm $(GLORFINDEL_AZURE_ENV) $(GLORFINDEL_VOLS) $(GLORFINDEL_STATE) \
 	$(GLORFINDEL_ENV) \
 	$(IMAGE_GLORFINDEL) glorfindel
 
@@ -105,7 +112,9 @@ DOCKER_GLORFINDEL := docker run --rm $(GLORFINDEL_AZURE_ENV) $(GLORFINDEL_VOLS) 
 	orodruin-init orodruin-plan orodruin-up orodruin-lock orodruin-push orodruin-check \
 	orodruin-stop orodruin-start orodruin-kill orodruin-down orodruin-ssh \
 	gothmog-preflight gothmog-run \
-	orodruin-campaign-plan orodruin-campaign-run
+	orodruin-campaign-plan orodruin-campaign-run \
+	profile-discover profile-detection profile-resilience profile-proven profiles-check \
+	team-check team-init team-start team-stop team-logs team-config components-check
 
 # ── Help ──────────────────────────────────────────────────────────────────
 
@@ -199,6 +208,16 @@ help:
 	@echo "  make orodruin-campaign-run  CAMPAIGN=<id>    Joue la campagne (watch H0 en human_only)"
 	@echo "  make glorfindel-host-campaign-report CAMPAIGN=<id>  Son rapport, écrit seul sur H0"
 	@echo "    (#167 : code, tests et mutants — rien de mesuré sur le banc)"
+	@echo ""
+	@echo "Profils d'usage (D1) — Glorfindel toujours là ; docs/profils/ :"
+	@echo "  make profile-discover       Glorfindel seul, en observation : découvrir"
+	@echo "  make profile-detection      + Annatar : ma détection marche-t-elle ?"
+	@echo "  make profile-resilience     + Gothmog : mon infra tient-elle ?"
+	@echo "  make profile-proven         Tout : défense éprouvée (comme H0)"
+	@echo "  make team-init  TEAM=<nom>  Plusieurs équipes : ~/.eregion/teams/<nom>/ (team.env, config)"
+	@echo "  make team-start TEAM=<nom> [BOT=1]  Son Glorfindel, sa console sur son port ; team-stop, team-logs"
+	@echo "  make profiles-check         Chaque profil compose rend ses services (docker, rien ne démarre)"
+	@echo "  make components-check [COMPONENT=annatar]  Chaque composant tourne seul (ses tests, les autres absents)"
 	@echo ""
 	@echo "Variables"
 	@echo "  SCENARIO    Path to scenario YAML (default: $(SCENARIO))"
@@ -350,14 +369,14 @@ annatar-shell: build-annatar
 	@mkdir -p $(HOME)/.annatar
 	@touch $(HOME)/.annatar/.bashrc
 	@grep -q "alias ar=" $(HOME)/.annatar/.bashrc || echo "alias ar='annatar'" >> $(HOME)/.annatar/.bashrc
-	@docker run --rm -it $(ANNATAR_AZURE_ENV) $(ANNATAR_VOLS) $(ANNATAR_STATE) \
+	@$(ANNATAR_AZURE_PICK) docker run --rm -it $(ANNATAR_AZURE_ENV) $(ANNATAR_VOLS) $(ANNATAR_STATE) \
 		$(IMAGE_ANNATAR) bash --init-file /root/.annatar/.bashrc
 
 glorfindel-shell: build-glorfindel
 	@mkdir -p $(HOME)/.glorfindel
 	@touch $(HOME)/.glorfindel/.bashrc
 	@grep -q "alias gf=" $(HOME)/.glorfindel/.bashrc || echo "alias gf='glorfindel'" >> $(HOME)/.glorfindel/.bashrc
-	@docker run --rm -it $(GLORFINDEL_AZURE_ENV) $(GLORFINDEL_VOLS) $(GLORFINDEL_STATE) \
+	@$(GLORFINDEL_AZURE_PICK) docker run --rm -it $(GLORFINDEL_AZURE_ENV) $(GLORFINDEL_VOLS) $(GLORFINDEL_STATE) \
 		$(GLORFINDEL_ENV) \
 		$(IMAGE_GLORFINDEL) bash --init-file /root/.glorfindel/.bashrc
 
@@ -564,6 +583,9 @@ glorfindel-host-pull:
 # Change the model the hosted Glorfindel decides with, in one command: host.env here and the
 # VM's .env, then a restart. MODEL=default goes back to the code default (eregion_core/models.py).
 # Compare it first (make llm-compare) and run it end to end — README, « Changer de modèle ».
+# IA1: then says whether the analysis AI still reasons with another model (analysis/separation.py):
+# Glorfindel's model shared with the analysis makes every campaign report refused on H0. Its
+# advice on a refusal (exit 2) only; an error (1, an image before IA1) is said; never fails.
 glorfindel-host-model:
 	@test -n "$(MODEL)" || { echo "MODEL=anthropic/<modèle> requis (ou MODEL=default)"; exit 1; }
 	@case "$(MODEL)" in *[!A-Za-z0-9._/:-]*) echo "MODEL invalide : $(MODEL)"; exit 1;; esac
@@ -573,7 +595,11 @@ glorfindel-host-model:
 	@$(HOST_SSH) 'cd eregion && sed -i "/^GLORFINDEL_LLM_MODEL=/d" .env && \
 	 { [ "$(MODEL)" = default ] || echo "GLORFINDEL_LLM_MODEL=$(MODEL)" >> .env; } && \
 	 docker compose --profile bot up -d watch war-room bot >/dev/null 2>&1 && sleep 5 && \
-	 docker exec eregion-watch python -c "from eregion_core.models import glorfindel_model; print(\"  ✓ Glorfindel décide maintenant avec\", glorfindel_model())"'
+	 docker exec eregion-watch python -c "from eregion_core.models import glorfindel_model; print(\"  ✓ Glorfindel décide maintenant avec\", glorfindel_model())" && \
+	 { docker exec eregion-watch python -m analysis.separation; rc=$$?; \
+	   [ $$rc -ne 2 ] || echo "  → pose EREGION_ANALYSIS_MODEL=<un autre modèle> dans host.env (ici) et dans ~/eregion/.env (VM), puis docker compose up -d watch — docs/analysis.md"; \
+	   [ $$rc -ne 1 ] || echo "  (contrôle de séparation indisponible sur cette image : avant IA1 ?)"; \
+	   true; }'
 
 glorfindel-host-report:
 	$(HOST_SSH) 'docker exec eregion-watch glorfindel report --since $(or $(SINCE),7d)'
@@ -709,6 +735,99 @@ orodruin-campaign-run:
 	@test -n "$(CAMPAIGN)" || { echo "CAMPAIGN=<id> requis (rendu par orodruin-campaign-plan)"; exit 1; }
 	ssh $(SSH_OPTS) -o ServerAliveInterval=60 $(ORO_USER)@$(ORO_IP) '$(ORO_RUN) annatar campaign run $(CAMPAIGN) --yes$(ORO_WITHOUT)'
 
+# ── Profils d'usage (D1) — docs/profils/ ──────────────────────────────────────
+# Glorfindel est toujours là (docs/design/console.md, §2) : chaque profil démarre sa watch et la
+# console (glorfindel-start), puis prépare ce qu'il ajoute. Un injecteur n'agit que depuis un
+# Orodruin armé : sur ce poste, son image et les commandes qui ne touchent rien.
+# Les dossiers montés (~/.glorfindel, ~/.cache/chroma par glorfindel-start, ~/.annatar ici) sont
+# créés au nom de l'opérateur : laissés à docker, ils seraient à root. depends_on démarre la
+# watch, sans attendre son battement : la première minute, un injecteur peut refuser (V1).
+profile-discover: glorfindel-start
+	@echo "  Profil « découvrir » : Glorfindel seul, en observation — docs/profils/decouvrir.md"
+
+profile-detection: glorfindel-start build-annatar
+	@mkdir -p $(HOME)/.annatar
+	@echo "  Profil « ma détection marche-t-elle ? » : Glorfindel + Annatar — docs/profils/detection.md"
+	@echo "  Ici, rien ne touche le cloud : docker compose --profile annatar run --rm annatar list"
+	@echo "  Les attaques : depuis Orodruin (make orodruin-up, orodruin-push, orodruin-campaign-plan)"
+
+profile-resilience: glorfindel-start build-annatar
+	@echo "  Profil « mon infra tient-elle ? » : Glorfindel + Gothmog — docs/profils/resilience.md"
+	@echo "  Ici, le verdict sans rien écrire : docker compose --profile gothmog run --rm gothmog preflight vm-shutdown"
+	@echo "  Les pannes : depuis Orodruin (make gothmog-preflight, gothmog-run)"
+
+profile-proven: glorfindel-start build-annatar
+	@mkdir -p $(HOME)/.annatar
+	@echo "  Profil « défense éprouvée » : Glorfindel + Annatar + Gothmog — docs/profils/eprouvee.md"
+	@echo "  Glorfindel hébergé : make glorfindel-host-up, glorfindel-host-start ; injecteurs : Orodruin"
+
+# CI (.github/workflows/components.yml) : chaque profil compose rend ses services, Glorfindel
+# dans tous ; une instance d'équipe prend son nom. docker compose config : rien ne démarre.
+profiles-check:
+	@check() { got=$$(docker compose $$1 config --services | LC_ALL=C sort | tr '\n' ' '); \
+	  if [ "$$got" = "$$2" ]; then echo "  ✓ [$$1] $$got"; else echo "  ✗ [$$1] $$got (attendu : $$2)"; exit 1; fi; }; \
+	check "" "war-room watch " && \
+	check "--profile annatar" "annatar war-room watch " && \
+	check "--profile gothmog" "gothmog war-room watch " && \
+	check "--profile annatar --profile gothmog" "annatar gothmog war-room watch " && \
+	check "--profile bot" "bot war-room watch "
+	@d=$$(mktemp -d) && printf 'AZURE_SUBSCRIPTION_ID=team-sub\nEREGION_CONSOLE_PORT=7998\n' > "$$d/team.env" \
+	  && AZURE_SUBSCRIPTION_ID=shell-sub $(MAKE) -s --no-print-directory team-config TEAM=check TEAM_DIR="$$d" > "$$d/out"; \
+	  ok=0; grep -q "container_name: eregion-check-watch" "$$d/out" && grep -q 'published: "7998"' "$$d/out" \
+	  && grep -q "AZURE_SUBSCRIPTION_ID: team-sub" "$$d/out" && ! grep -q "shell-sub" "$$d/out" && ok=1; rm -rf "$$d"; \
+	  if [ $$ok = 1 ]; then echo "  ✓ une instance par équipe : ses noms, son port, son abonnement — pas celui du shell"; \
+	  else echo "  ✗ l'instance d'une équipe ne prend pas son team.env seul"; exit 1; fi
+
+# Plusieurs équipes : une instance de Glorfindel par équipe, tout son état dans
+# ~/.eregion/teams/<équipe>/ — team.env, glorfindel-config.yaml, runs/, et le HOME que lit
+# docker-compose.yml (.glorfindel, .cache/chroma, .eregion/analysis). env -i : ton shell (ton
+# .envrc, ton abonnement) n'atteint jamais l'instance d'une équipe — docker compose préfère
+# l'environnement au fichier --env-file ; seuls passent le PATH et l'accès à docker.
+TEAM_DIR     = $(HOME)/.eregion/teams/$(TEAM)
+TEAM_COMPOSE = env -i PATH="$$PATH" HOME="$(TEAM_DIR)" DOCKER_CONFIG="$${DOCKER_CONFIG:-$$HOME/.docker}" \
+	DOCKER_HOST="$${DOCKER_HOST:-}" DOCKER_CONTEXT="$${DOCKER_CONTEXT:-}" \
+	EREGION_INSTANCE="eregion-$(TEAM)" EREGION_RUNS="$(TEAM_DIR)/runs" \
+	EREGION_CONFIG="$(TEAM_DIR)/glorfindel-config.yaml" \
+	docker compose -p "eregion-$(TEAM)" --env-file "$(TEAM_DIR)/team.env"
+
+# Le nom fait un chemin, un projet compose et des noms de conteneurs : minuscules, chiffres, tirets.
+team-check:
+	@case "$(TEAM)" in ""|-*|*[!a-z0-9-]*) echo "✗ TEAM=<nom> requis : minuscules, chiffres, tirets"; exit 1;; esac
+
+team-init: team-check
+	mkdir -p "$(TEAM_DIR)/runs"
+	@[ -f "$(TEAM_DIR)/team.env" ] || { cp team.env.example "$(TEAM_DIR)/team.env" && chmod 600 "$(TEAM_DIR)/team.env"; }
+	@[ -f "$(TEAM_DIR)/glorfindel-config.yaml" ] || cp glorfindel-config.yaml.example "$(TEAM_DIR)/glorfindel-config.yaml"
+	@echo "  À remplir : $(TEAM_DIR)/team.env (abonnement, principal, port) et glorfindel-config.yaml"
+
+team-start: team-check build-glorfindel
+	@[ -f "$(TEAM_DIR)/team.env" ] && [ -f "$(TEAM_DIR)/glorfindel-config.yaml" ] \
+	  || { echo "✗ $(TEAM_DIR)/team.env ou glorfindel-config.yaml manquant : make team-init TEAM=$(TEAM)"; exit 1; }
+	@grep -qE '^AZURE_SUBSCRIPTION_ID=[^[:space:]#]' "$(TEAM_DIR)/team.env" || [ -n "$(ALLOW_NO_AZURE)" ] \
+	  || { echo "✗ AZURE_SUBSCRIPTION_ID vide dans team.env : son Glorfindel démarrerait aveugle (ALLOW_NO_AZURE=1 : démo)"; exit 1; }
+	@grep -qE '^EREGION_CONSOLE_PORT=[0-9]+' "$(TEAM_DIR)/team.env" \
+	  || { echo "✗ EREGION_CONSOLE_PORT absent de team.env : un port par équipe (7007 : make glorfindel-start)"; exit 1; }
+	mkdir -p "$(TEAM_DIR)/runs" "$(TEAM_DIR)/.glorfindel" "$(TEAM_DIR)/.cache/chroma" "$(TEAM_DIR)/.eregion/analysis"
+	$(TEAM_COMPOSE)$(if $(BOT), --profile bot) up -d watch war-room$(if $(BOT), bot)
+	@echo "  Console de $(TEAM) → http://localhost:$$(sed -n 's/^EREGION_CONSOLE_PORT=//p' "$(TEAM_DIR)/team.env" | tail -1)"
+
+team-stop: team-check
+	$(TEAM_COMPOSE) --profile bot down
+
+team-logs: team-check
+	$(TEAM_COMPOSE) logs -f
+
+# Ce que reçoit l'instance d'une équipe, rendu par docker compose — les valeurs de team.env
+# comprises : à ne pas coller ailleurs.
+team-config: team-check
+	@$(TEAM_COMPOSE) --profile bot config
+
+# D1 : chaque composant tourne seul — ses tests, les autres composants et les dépendances de
+# Glorfindel absents (scripts/component_check.py ; la CI : .github/workflows/components.yml).
+components-check:
+	@for c in $(or $(COMPONENT),core glorfindel annatar gothmog); do \
+	  $(PYTHON) scripts/component_check.py $$c --imports && $(PYTHON) scripts/component_check.py $$c || exit 1; done
+
 # ── Dev ───────────────────────────────────────────────────────────────────
 
 venv:
@@ -730,6 +849,8 @@ lock:
 	$(UV) pip compile pyproject.toml requirements/build.in --extra dev $(LOCK_FLAGS) -o requirements/dev.txt
 	$(UV) pip compile pyproject.toml requirements/build.in --extra glorfindel --extra war-room \
 	  -c requirements/dev.txt $(LOCK_FLAGS) -o requirements/glorfindel.txt
+	$(UV) pip compile pyproject.toml requirements/build.in --extra annatar \
+	  -c requirements/dev.txt $(LOCK_FLAGS) -o requirements/annatar.txt
 
 test:
 	$(PYTHON) -m pytest tests/ -v

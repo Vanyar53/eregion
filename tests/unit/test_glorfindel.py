@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from annatar.signals.schema import Signal
+from eregion_core.signals import Signal
 from glorfindel.actions import (
     AUTONOMOUS_ACTIONS,
     HUMAN_APPROVAL_REQUIRED,
@@ -3197,15 +3197,45 @@ def test_a_nic_without_nsg_gets_an_explicit_none_tag(monkeypatch):
     assert net.network_security_groups.get.return_value.tags[AzureConnector._orig_tag(_NIC_ID)] == "none"
 
 
-def test_the_quarantine_lock_is_one_lock_for_an_id_and_its_name():
+@pytest.fixture
+def fresh_quarantine_locks(monkeypatch):
+    """The process's quarantine locks, empty for this test (HY1). They are global: a test that
+    ran before (another resource group's quarantine NSG, same name) left its own, and the check
+    below read them — it failed or passed by the order of the files."""
+    import glorfindel.actions as actions
+    locks: dict = {}
+    monkeypatch.setattr(actions, "_QUARANTINE_LOCKS", locks)
+    return locks
+
+
+def test_one_quarantine_lock_per_resource_group_for_one_name(fresh_quarantine_locks):
+    """Two resource groups' quarantine NSGs share a name (one per region), not a lock: the
+    watch isolating in one never waits for the other. Before the test below on purpose — it
+    leaves a second lock of that name; without the fixture, that one would read it."""
+    import glorfindel.actions as actions
+    other = _Q_ID.replace("/resourceGroups/rg/", "/resourceGroups/rg-app1/")
+    with actions._quarantine_lock(_Q_ID):
+        with actions._quarantine_lock(other, timeout=0.05):
+            pass
+    assert sorted(fresh_quarantine_locks) == ["rg-app1/nsg-glorfindel-quarantine-westeurope",
+                                              "rg/nsg-glorfindel-quarantine-westeurope"]
+
+
+def test_the_quarantine_lock_is_one_lock_for_an_id_and_its_name(fresh_quarantine_locks):
     """The NSG's creation (by name) and its tags (by id) must exclude each other (Q7)."""
     import glorfindel.actions as actions
     with actions._quarantine_lock(_Q_ID):
-        pass
+        by_id = dict(fresh_quarantine_locks)
     with actions._quarantine_lock("rg/nsg-glorfindel-quarantine-westeurope"):
-        pass
-    locks = [k for k in actions._QUARANTINE_LOCKS if "nsg-glorfindel-quarantine-westeurope" in k]
-    assert locks == ["rg/nsg-glorfindel-quarantine-westeurope"]
+        by_name = dict(fresh_quarantine_locks)
+    # One key, one lock object, whichever way the NSG was named.
+    assert list(fresh_quarantine_locks) == ["rg/nsg-glorfindel-quarantine-westeurope"]
+    assert by_id == by_name == fresh_quarantine_locks
+    # And it excludes: held through the id, the name cannot take it.
+    with actions._quarantine_lock(_Q_ID):
+        with pytest.raises(TimeoutError):
+            with actions._quarantine_lock("RG/nsg-glorfindel-quarantine-westeurope", timeout=0.05):
+                pass
 
 
 def test_the_rules_fallback_says_azure_dns_and_imds_stay_open(monkeypatch):

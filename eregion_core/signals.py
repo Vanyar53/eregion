@@ -1,3 +1,10 @@
+"""The signal contract: what an injector writes in ``runs/<run_id>_signals.jsonl`` and
+Glorfindel's watch reads (``attack_started``, ``detection_missed``…).
+
+It lived in ``annatar/signals/schema.py`` until D1: Glorfindel imported it from Annatar, so
+Glorfindel — the product, always present — could not run without Annatar's package. A
+contract both sides read belongs to the shared core (``tests/unit/test_components.py``).
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass, field

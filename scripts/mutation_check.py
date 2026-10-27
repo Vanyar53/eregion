@@ -1335,6 +1335,12 @@ MUTANTS = [
      '    --build-arg "EREGION_REF=$ref" --build-arg "EREGION_REVISION=$commit" \\\n', ""),
     ("M567", "the header shows the package's version over the deployed tag (UI-2)", SEC,
      '    label = ref or (f"v{package}" if package else "")', '    label = (f"v{package}" if package else "")'),
+    # #222 — finitions: the content security policy on every response.
+    ("M568", "the console's pages can be framed by another site, and talk to another origin (#222)", CON,
+     '    response.headers["Content-Security-Policy"] = _CSP\n', ""),
+    ("M569", "glorfindel --version written by hand again: it drifts from the package (#222)", GCLI,
+     '@click.version_option(package_name="eregion", prog_name="glorfindel")',
+     '@click.version_option(version="0.2.0", prog_name="glorfindel")'),
     ("M408", "eregion console keeps compose's empty service principal: no managed identity (UI-1, H0)",
      "eregion_console/cli.py", "    _drop_empty_service_principal_env()\n", ""),
     ("M409", "the console looks for the shipped rules beside itself: none outside the repo's root (UI-1, P1 review)",
@@ -1453,6 +1459,67 @@ MUTANTS = [
      "    for name in (TOKEN, LEGACY_TOKEN):\n", "    for name in (TOKEN,):\n"),
 ]
 
+# I1F (#226): our quarantine NSG altered while its NICs' state is lost — read, and said.
+MUTANTS += [
+    ("M830", "the reassertion doesn't read the quarantine NSGs: one altered, its NICs' state lost, "
+             "goes unsaid (I1F, L2)", R,
+     "    _report_altered_quarantines(connector, report)\n    return report\n\n\ndef reassert_pass(",
+     "    return report\n\n\ndef reassert_pass("),
+    ("M831", "a rule's signature leaves its protocol out: our quarantine deny turned to Udp reads as "
+             "ours (I1F)", NSG,
+     '            getattr(rule, "priority", None), _enum_text(getattr(rule, "protocol", "")),\n',
+     '            getattr(rule, "priority", None),\n'),
+    ("M832", "the quarantine denies are written for UDP only: TCP from the VNet reaches a VM "
+             "in quarantine (I1F)", QUA,
+     '                protocol="*", source_address_prefix="*", destination_address_prefix="*",\n',
+     '                protocol="Udp", source_address_prefix="*", destination_address_prefix="*",\n'),
+    ("M833", "the altered quarantine's card is closed at the next pass, its change standing (I1F)", R,
+     "        if k in altered and altered[k][0] == sid:\n            said.add(sid)\n"
+     "        elif k in altered or settled(k):\n",
+     "        if k in altered or settled(k):\n"),
+    # After the review (5.5): the watch's pass, an acknowledgement, an unknown.
+    ("M834", "nothing recorded: the pass reads no quarantine NSG (I1F, review)", R,
+     "    report: list[dict] = []\n    _report_altered_quarantines(connector, report)\n    return report\n",
+     "    return []\n"),
+    ("M836", "an acknowledged quarantine card comes back at every pass (I1F, review)", R,
+     "        if signal_id in said or alerts.get(k) == signal_id:\n",
+     "        if signal_id in said:\n"),
+    ("M837", "a quarantine card closed on an NSG read as unknown (I1F, review)", R,
+     '            return seen[k].get("status") != "unknown" and k not in altered\n',
+     "            return k not in altered\n"),
+    ("M835", "the watch's thread hands over only when something is recorded (I1F, review)", GCLI,
+     "        _watch_reassert_pass(ttl_connector, mode_override, _output_lock, _reassert_seen)\n",
+     "        from glorfindel.actions import active_blocks, active_isolations\n"
+     "        if active_isolations() or active_blocks():\n"
+     "            _watch_reassert_pass(ttl_connector, mode_override, _output_lock, _reassert_seen)\n"),
+    ("M838", "the quarantine NSGs read in `quarantine_rg` only: one made in another group goes unseen "
+             "(I1F, second review)", QUA,
+     "            if (not _is_quarantine_nsg(nsg_id)\n",
+     "            if (not _is_quarantine_nsg(nsg_id) or (self._quarantine_settings()[1] and "
+     "f\"/resourcegroups/{self._quarantine_settings()[1].lower()}/\" not in nsg_id.lower())\n"),
+    ("M839", "the watch's pass stops on an empty local state (I1F, second review)", GCLI,
+     "    seen = seen if seen is not None else {}\n",
+     "    seen = seen if seen is not None else {}\n"
+     "    from glorfindel.actions import active_blocks, active_isolations\n"
+     "    if not active_isolations() and not active_blocks():\n        return []\n"),
+    ("M895", "the watch's pass raises on an empty local state, the error swallowed (I1F, second review)", GCLI,
+     "        report = reassert_pass(connector, autonomy)\n",
+     "        from glorfindel.actions import active_blocks, active_isolations\n"
+     "        if not active_isolations() and not active_blocks():\n"
+     "            raise RuntimeError(\"nothing recorded\")\n"
+     "        report = reassert_pass(connector, autonomy)\n"),
+    ("M896", "the watch's timer starts no pass when nothing is recorded (I1F, second review)", GCLI,
+     "        if time.time() - _last_reassert[0] < _reassert_every_s:\n            return\n",
+     "        if time.time() - _last_reassert[0] < _reassert_every_s:\n            return\n"
+     "        from glorfindel.actions import active_blocks, active_isolations\n        if not active_isolations() and not active_blocks():\n"
+     "            return\n"),
+    ("M897", "a listing that fails reads as empty: every quarantine card closed (I1F, second review)", R,
+     '        log.warning("reassert: quarantine NSGs not checked (%s)", exc)\n        return\n',
+     '        log.warning("reassert: quarantine NSGs not checked (%s)", exc)\n        listing = []\n'),
+    ("M898", "an unreadable configuration said at every pass (I1F, second review)", GCLI,
+     '        if seen.get("config_error") != str(exc):\n', "        if True:\n"),
+]
+
 # I8F (#227): a bare NIC our state holds in quarantine, its original unknown — never "none".
 MUTANTS += [
     ("M860", "a bare NIC isolated again records 'none' over an unknown original: released bare, an old "
@@ -1561,6 +1628,335 @@ MUTANTS += [
      'if (q is not None and q["GroupId"] in e["groups"]) or self._named_quarantine(e["groups"]):',
      'if q is not None and q["GroupId"] in e["groups"]:'),
 ]
+# L1F (#229): "already alerted" written before the card — a crash in between leaves the
+# marker without the card, and every later pass is silent on a block gone from Azure.
+MUTANTS += [
+    ("M900", "a block that could not be put back marked alerted before its card (L1F, L1)", R,
+     ('        outcome = "failed"\n    _alert(_alert_id(vm, rid, ip),',
+      "        # silence (L1F, invariant machine).\n        _update_block_entry(ref or vm, ip, drift_alerted_at=now)\n"),
+     ('        outcome = "failed"\n        _update_block_entry(ref or vm, ip, drift_alerted_at=now)\n'
+      "    _alert(_alert_id(vm, rid, ip),",
+      "        # silence (L1F, invariant machine).\n        pass\n")),
+    ("M901", "an isolation that could not be put back marked alerted before its card (L1F)", R,
+     ('        outcome = "failed"\n    _alert(_alert_id(vm, rid), resource_id=rid, action="isolate_vm"',
+      "(see blocks).\n        _mark_alerted(ref or vm, now)\n"),
+     ('        outcome = "failed"\n        _mark_alerted(ref or vm, now)\n'
+      '    _alert(_alert_id(vm, rid), resource_id=rid, action="isolate_vm"',
+      "(see blocks).\n        pass\n")),
+    ("M902", "a block gone in human_only marked alerted before its card (L1F, L1)", R,
+     ('        _alert(_alert_id(vm, rid, ip), resource_id=rid, action="block_suspicious_ip",\n'
+      '               reason=reason, action_params={"ip": ip})\n'
+      "        _update_block_entry(ref or vm, ip, drift_alerted_at=now)\n        report.append(",),
+     ("        _update_block_entry(ref or vm, ip, drift_alerted_at=now)\n"
+      '        _alert(_alert_id(vm, rid, ip), resource_id=rid, action="block_suspicious_ip",\n'
+      '               reason=reason, action_params={"ip": ip})\n        report.append(',)),
+]
+
+# AL1 (#225) — Azure's Activity Log, detection only: Glorfindel's own writes excluded by its
+# identity and its declared operations, its own rules marked, no autonomous action on the
+# control plane, a row arriving late neither missed nor dispatched twice. Range M810–M829,
+# measured by tests/unit/test_activity_logs.py.
+ACT = "glorfindel/providers/azure/activity.py"
+AGT = "glorfindel/agent.py"
+DRU = "glorfindel/detection_rules.py"
+MUTANTS += [
+    ("M810", "Glorfindel's own writes not excluded: its own isolation escalates itself (AL1)", ACT,
+     "        if is_own_call(row, own, recorded):\n            continue\n", ""),
+    ("M811", "a control-plane detection decided by the model: it is called, and isolate_vm runs (AL1)", AGT,
+     "    if _is_control_plane(state[\"signal\"]):\n        return _control_plane_decision(state)\n", ""),
+    ("M812", "a user's token without idtyp read as an application's: the CLI's appid excludes everyone (AL1)",
+     ACT, "    return not claims.get(\"scp\") and not claims.get(\"upn\")", "    return True"),
+    ("M813", "a control-plane card folded into the pending one: a write on Glorfindel's rules unseen (AL1)",
+     "glorfindel/escalations.py",
+     "                and escalation_type != \"control_plane_change\"\n", ""),
+    ("M814", "the control-plane decision ignores the source it read: respond asks the model (AL1)", AGT,
+     "    if ctx.get(\"plane\") == \"control\" or is_control_plane_source(str(raw.get(\"detection_source\") or \"\")):",
+     "    if ctx.get(\"plane\") == \"control\":"),
+    ("M815", "a held control-plane decision typed low_confidence: approvable in one click (AL1)", AGT,
+     "    \"control_plane\": \"control_plane_change\",\n", ""),
+    ("M816", "a write on a glorfindel-* rule not seen as Glorfindel's (AL1)", ACT,
+     "    if \"/securityrules/glorfindel-\" in rid:\n        return True\n", ""),
+    ("M817", "a write on the quarantine NSG not seen as Glorfindel's (AL1)", ACT,
+     "        return nsg.startswith(QUARANTINE_NSG_PREFIX)\n", "        return False\n"),
+    ("M818", "Glorfindel's identity excluded whatever it does on its own: a role it assigns there is dropped (AL1)",
+     ACT, "    return (bool(own) and bool(caller_ids(row) & own) and operation(row) in own_operations()\n",
+     "    return (bool(own) and bool(caller_ids(row) & own)\n"),
+    ("M819", "the identity in Glorfindel's token ignored (AL1)", ACT,
+     "            return ids | self._token_ids\n", "            return ids\n"),
+    ("M820", "the caller's ids in Claims ignored (AL1)", ACT,
+     "    ids |= {str(claims[k]).strip().lower() for k in _CLAIM_KEYS if claims.get(k)}\n", ""),
+    ("M821", "the caller compared case-sensitively (AL1)", ACT,
+     "    ids = {str(row[c]).strip().lower() for c in _CALLER_COLUMNS if row.get(c)}",
+     "    ids = {str(row[c]).strip() for c in _CALLER_COLUMNS if row.get(c)}"),
+    ("M822", "a control-plane operation deduplicated by its line: Start then Success dispatched twice (AL1)", DRU,
+     "    if row.get(\"OperationNameValue\") and row.get(\"CorrelationId\"):", "    if False:"),
+    ("M823", "a control-plane rule shorter than the ingestion latency loads in silence (AL1)", DRU,
+     "        if rule_enabled and _query_lookback_s(item[\"query\"]) < min_lookback:",
+     "        if False:"),
+    ("M824", "the shipped NSG rule looks back 10 minutes: a row ingested late is never seen (AL1)",
+     "glorfindel/rules/azure/detection_rules.yaml",
+     "      AzureActivity\n      | where TimeGenerated > ago(1h)\n      | where OperationNameValue in~ (\n"
+     "          \"MICROSOFT.NETWORK",
+     "      AzureActivity\n      | where TimeGenerated > ago(10m)\n      | where OperationNameValue in~ (\n"
+     "          \"MICROSOFT.NETWORK"),
+    ("M825", "a row on a VM's sub-resource (a role scoped on the VM) dropped, not attributed (AL1)", DRU,
+     "                named, tgt = True, by_rid.get(_vm_id_of(rid))",
+     "                named, tgt = True, by_rid.get(rid.lower())"),
+    ("M826", "the newest operation first, before a write on Glorfindel's rules (AL1)", DRU,
+     "    return sorted(by_op.values(), key=lambda r: (_grave(r), str(r.get(\"TimeGenerated\") or \"\")),",
+     "    return sorted(by_op.values(), key=lambda r: str(r.get(\"TimeGenerated\") or \"\"),"),
+    ("M827", "a write on Glorfindel's rules not critical (AL1)", DRU,
+     "            \"severity\": \"critical\" if grave else \"high\",", "            \"severity\": \"high\","),
+    ("M828", "a control-plane row normalised as a caller IP: no operation, no caller (AL1)", DRU,
+     "    if row.get(\"OperationNameValue\"):\n        return {", "    if False:\n        return {"),
+    ("M829", "an AzureActivity rule bound to no backend: disabled, it never polls (AL1)", DRU,
+     "                backend_type_of(rule_source),\n            )", "                rule_source,\n            )"),
+]
+
+# AL1, after the 5.5 review (27/10): range M850–M859, measured by tests/unit/test_activity_logs.py.
+MUTANTS += [
+    ("M850", "a user's token: the Azure CLI's appid taken as Glorfindel's, everyone's az writes dropped (AL1)",
+     ACT, "    keys = _CLAIM_KEYS if is_app_token(claims) else _OID_CLAIMS", "    keys = _CLAIM_KEYS"),
+    ("M851", "its identity's write on a customer's rule dropped: a stolen credential unseen (AL1)", ACT,
+     "    return (bool(own) and bool(caller_ids(row) & own) and operation(row) in own_operations()\n"
+     "            and owned_target(row, recorded))",
+     "    return (bool(own) and bool(caller_ids(row) & own) and operation(row) in own_operations())"),
+    ("M852", "a customer rule its isolation moved not its own: its release escalates, critical (AL1)", ACT,
+     "                    rule(sub, rg, nsg, b.get(\"name\"))\n", "                    pass\n"),
+    ("M853", "control plane, one card per poll: the other operations marked sent, never seen (AL1)", DRU,
+     "                    ops = _control_plane_operations(new)\n",
+     "                    ops = _control_plane_operations(new)[:1]\n"),
+    ("M854", "past the cap, no summary card: operations marked sent without a card (AL1)", DRU,
+     "                    if rest:\n                        send.append(_control_plane_summary(rest))\n", ""),
+    ("M855", "a button on a card anchored on a VM: one click restores a VM the detection never named (AL1)",
+     "glorfindel/bot.py", "    if esc_type in _ANCHORED_TYPES:\n        return None\n", ""),
+    ("M856", "the control-plane decision recommends isolating the anchor VM (AL1)", AGT,
+     "        \"explanation\": what,\n", "        \"explanation\": what,\n        \"action\": \"isolate_vm\",\n"),
+    ("M857", "an unattributed control-plane signal opens the anchor VM's incident (AL1)", AGT,
+     "        if (signal.get(\"context\") or {}).get(\"attribution\") != \"asset\":", "        if False:"),
+    ("M858", "a control-plane cycle stored in the decision memory: a precedent for a data-plane decision (AL1)",
+     AGT, "        if not (_is_control_plane(signal) or _is_identity(signal)):\n            memory.store(cycle)",
+     "        if True:\n            memory.store(cycle)"),
+    ("M859", "what an isolation state recorded forgotten once the state is gone: the release escalates (AL1)",
+     ACT, "            return frozenset(self._recorded)\n", "            return current\n"),
+]
+
+# AL1, after the second 5.5 review (27/10): range M890–M894, measured by tests/unit/test_activity_logs.py.
+MUTANTS += [
+    ("M890", "a glorfindel-* name is proof enough: a stolen credential hides an allow rule behind it (AL1)",
+     ACT, "    if _in_quarantine_nsg(rid):\n        return True\n",
+     "    if _in_quarantine_nsg(rid) or \"/securityrules/glorfindel-\" in rid:\n        return True\n"),
+    ("M891", "the block states ignored: its own block escalates itself (AL1)", ACT,
+     "    for e in blocks:\n", "    for e in []:\n"),
+    ("M892", "the subscription left out of a recorded rule: the same names elsewhere taken as its own (AL1)",
+     ACT, "    return (f\"{sub}/{rg}/{nsg}/{rule}\" if sub else f\"{rg}/{nsg}/{rule}\").lower()",
+     "    return f\"{rg}/{nsg}/{rule}\".lower()"),
+    ("M893", "an AzureActivity row read by another source goes to the model: a snapshot runs alone (AL1)", AGT,
+     "    return (any(isinstance(r, dict) and r.get(\"OperationNameValue\") for r in rows)\n"
+     "            or (raw.get(\"normalized_signal\") or {}).get(\"indicator_key\") == \"control_plane_operation\")",
+     "    return False"),
+    ("M894", "a control-plane rule without CorrelationId loads in silence: two operations fold into one (AL1)",
+     DRU, "                and \"correlationid\" not in item[\"query\"].lower():", "                and False:"),
+]
+
+# C2 (#199), the defensive half — Entra ID's logs, detection only: each rule escalates with
+# its steps, never the model, never an action on an identity; thresholds in code; Glorfindel's
+# identity marked, never an excuse to silence. Range M920–M939, measured by
+# tests/unit/test_entra_detection.py.
+ENT = "glorfindel/providers/azure/entra.py"
+MUTANTS += [
+    ("M920", "an identity detection decided by the model: it is called, with an administrator's UPN (C2)", AGT,
+     "    if _is_identity(state[\"signal\"]):\n        return _identity_decision(state)\n", ""),
+    ("M921", "the route after decide sends an identity detection to an action: a bypassed decide isolates (C2)",
+     AGT, "    if _is_identity(state[\"signal\"]):\n        return \"escalate_to_human\"\n", ""),
+    ("M922", "an identity detection known by its plane only: a row whose columns say nothing goes to the model (C2)",
+     AGT, "    if ctx.get(\"plane\") == \"identity\" or is_identity_source(str(raw.get(\"detection_source\") or \"\")):",
+     "    if ctx.get(\"plane\") == \"identity\":"),
+    ("M923", "an Entra row read by another source goes to the model: no plane, no source (C2)", AGT,
+     "    return (any(r.get(c) for r in rows for c in IDENTITY_COLUMNS)\n"
+     "            or any(str(r.get(\"Type\") or \"\").lower() in ENTRA_TABLES for r in rows)\n"
+     "            or (raw.get(\"normalized_signal\") or {}).get(\"indicator_key\") == \"identity_operation\")",
+     "    return False"),
+    ("M924", "every directory role a finding: Directory Readers escalates like Global Administrator (C2)", ENT,
+     "        return not role or role in PRIVILEGED_ROLES", "        return True"),
+    ("M925", "a service principal without history unusual: the first days after the setting flood (C2)", ENT,
+     "        return days is None or days >= MIN_BASELINE_DAYS", "        return True"),
+    ("M926", "a failed operation a finding (C2)", ENT, "    if not _succeeded(row):\n        return False\n", ""),
+    ("M927", "Glorfindel's identity as the actor not marked: its stolen credential not critical (C2)", ENT,
+     "\"GlorfindelIdentity\": bool(own) and bool(actor_ids(row) & own),", "\"GlorfindelIdentity\": False,"),
+    ("M928", "Glorfindel's identity as the target not marked: a credential added to it not critical (C2)", ENT,
+     "\"GlorfindelManaged\": bool(own) and bool(target_ids(row) & own)})", "\"GlorfindelManaged\": False})"),
+    ("M929", "an identity card folded into the pending one: a credential added to Glorfindel unseen (C2)",
+     "glorfindel/escalations.py", "                and escalation_type != \"identity_change\"\n", ""),
+    ("M930", "an identity escalation past a bypassed decide typed low_confidence: approvable in one click (C2)",
+     AGT, "    if _is_identity(state[\"signal\"]):\n        escalation_type = \"identity_change\"\n"
+          "    elif _out_status in (\"write_blocked\", \"action_failed\"):",
+     "    if _out_status in (\"write_blocked\", \"action_failed\"):"),
+    ("M931", "a command aimed at the anchor VM on an identity card (C2)", "glorfindel/bot.py",
+     "_ANCHORED_TYPES = {\"control_plane_change\", \"identity_change\", \"unattributed_signal\"}",
+     "_ANCHORED_TYPES = {\"control_plane_change\", \"unattributed_signal\"}"),
+    ("M932", "an identity cycle stored in the decision memory: its UPN served to the model later (C2)", AGT,
+     "        if not (_is_control_plane(signal) or _is_identity(signal)):\n            memory.store(cycle)",
+     "        if not _is_control_plane(signal):\n            memory.store(cycle)"),
+    ("M933", "an identity detection opens the anchor VM's incident (C2)", AGT,
+     "    if _is_identity(signal):\n        return {**state, \"past_cycles\": [], \"incident\": None}\n", ""),
+    ("M934", "an identity finding deduplicated by its time: two consents in the same second, one card (C2)", DRU,
+     "    if row.get(\"EntraOperation\") and row.get(\"EventId\"):", "    if False:"),
+    ("M935", "identity findings one card per cycle: the second credential added in a poll never seen (C2)", DRU,
+     "            control = is_control_plane_source(rule.source) or is_identity_source(rule.source)",
+     "            control = is_control_plane_source(rule.source)"),
+    ("M936", "an identity signal without its plane: a finding on Glorfindel's identity not critical (C2)", DRU,
+     "        control = plane in (\"control\", \"identity\")", "        control = plane == \"control\""),
+    ("M937", "an identity rule without EventId loads in silence (C2)", DRU,
+     "        if rule_enabled and is_identity_source(source) and \"eventid\" not in item[\"query\"].lower():",
+     "        if False:"),
+    ("M938", "a role card without how to revoke the assignment (C2)", ENT,
+     "            \"Non voulue : retirer l'attribution — portail, ou `az rest --method DELETE --url \"\n"
+     "            \"https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignments/<id>`.\",\n", ""),
+    ("M939", "the tenant's diagnostic setting always on: the whole tenant's logs sent (C2)",
+     "infra/terraform/entra_logs.tf", "  count = local.entra_logs_enabled ? 1 : 0", "  count = 1"),
+]
+
+# C2, after the 5.5 review (27/10): range M940–M949, measured by tests/unit/test_entra_detection.py.
+RUL = "glorfindel/rules/azure/detection_rules.yaml"
+MUTANTS += [
+    ("M940", "under az login, the operator's oid taken as Glorfindel's in Entra: his actions read as theft (C2)",
+     ENT, "        return prepare_rows(rows, self.app_identities())",
+     "        return prepare_rows(rows, self.own_identities())"),
+    ("M941", "a user's token taken as an application's: the operator marked as Glorfindel (C2)", ACT,
+     "                    self._token_is_app = bool(claims) and is_app_token(claims)\n",
+     "                    self._token_is_app = True\n"),
+    ("M942", "the role rule filters on Role.DisplayName: an assignment without it gone before the adapter (C2)",
+     RUL, "          summarize RoleName = take_anyif(trim(@'\"', tostring(Prop.newValue)), "
+          "tostring(Prop.displayName) =~ \"Role.DisplayName\"))",
+     "          where tostring(Prop.displayName) =~ \"Role.DisplayName\"\n"
+     "          | extend RoleName = trim(@'\"', tostring(Prop.newValue)))"),
+    ("M943", "a first credential's old value not an array: set_difference silences the row (C2)", RUL,
+     "iff(isnull(array_length(OldSet)), dynamic([]), OldSet)", "iff(isnull(OldSet), dynamic([]), OldSet)"),
+    ("M944", "a client rule on an Entra table without telling columns goes to the model: its UPN sent (C2)", DRU,
+     "        if plane == \"data\" and _reads_entra_table(rule.query):\n            plane = \"identity\"\n", ""),
+    ("M945", "respond on an Entra query of another source goes to the model (C2)", AGT,
+     "        entra_query = _reads_entra_table(query) and not is_control_plane_source(source)",
+     "        entra_query = False"),
+    ("M946", "a consent card proposes to disable the resource's principal: the whole tenant cut (C2)", ENT,
+     "        client = (tid if op.lower() == \"consent to application\" and row.get(\"TargetId\")\n"
+     "                  else str(row.get(\"ClientId\") or \"\").strip())",
+     "        client = tid"),
+    ("M947", "an identity card labelled exercise by a window on its anchor VM (C2)", AGT,
+     "    if _is_identity(signal) or (\n"
+     "            # `unattributed` is the RulePoller's own word; a respond signal (an\n"
+     "            # attack_started resolved on the Activity Log) has none, and keeps its window.\n"
+     "            _is_control_plane(signal) and (signal.get(\"context\") or {}).get(\"attribution\") == \"unattributed\"):\n"
+     "        return \"real\", \"\"\n", ""),
+    ("M948", "Global Administrator's former name not privileged (C2)", ENT, "    \"Company Administrator\",\n", ""),
+    ("M949", "the role's target not the fallback name: an assignment without Role.DisplayName unnamed (C2)", RUL,
+     "      | extend RoleName = coalesce(RoleName, RoleTargetName)\n", ""),
+]
+
+# C2, after the second 5.5 review (27/10): range M955–M959, measured by
+# tests/unit/test_entra_detection.py.
+MUTANTS += [
+    ("M955", "a respond signal on the Activity Log forced real: a declared exercise counted as an incident (C2)",
+     AGT, "(signal.get(\"context\") or {}).get(\"attribution\") == \"unattributed\"):",
+     "(signal.get(\"context\") or {}).get(\"attribution\") != \"asset\"):"),
+]
+
+
+# IA1 (#88): the analysis AI's own model and memory, never Glorfindel's; the triage computed
+# from the runs, the catalog, the rules and the infrastructure code; nothing without a human.
+SEP = "analysis/separation.py"
+TRI = "analysis/triage.py"
+MUTANTS += [
+    ("M780", "the analysis may reason with Glorfindel's decision model (IA1)", SEP,
+     "    if _model_name(model) == _model_name(defender):\n", "    if False:\n"),
+    ("M781", "Glorfindel's model under another provider's prefix passes as another model (IA1)", SEP,
+     '    return str(model or "").strip().lower().rsplit("/", 1)[-1]\n', '    return str(model or "")\n'),
+    ("M782", "an index reaching Glorfindel's state through « .. » or a link is let through (IA1)", SEP,
+     "    p = Path(path).expanduser().resolve()\n", "    p = Path(path).expanduser()\n"),
+    ("M783", "the analysis index may lie in Glorfindel's memory (IA1)", SEP,
+     "    if p == state or state in p.parents:\n", "    if False:\n"),
+    ("M784", "the report opens its index without the separation's check (IA1)", CREP,
+     "    p = separation.check_index(Path(path) if path else index_path())\n",
+     "    p = Path(path) if path else index_path()\n"),
+    ("M785", "the report calls its model without the separation's check (IA1)", CREP,
+     "    mdl = separation.check_model(model or analysis_model())   # IA1: never Glorfindel's\n",
+     "    mdl = model or analysis_model()\n"),
+    ("M786", "an escalation is triaged before a missed technique (IA1)", TRI,
+     '    "missed": (1, ', '    "missed": (3, '),
+    ("M787", "a comment in the infrastructure code counts as collection (IA1)", TRI,
+     '            elif ch == "#" or two == "//":\n                break\n',
+     "            elif False:\n                break\n"),
+    ("M788", "a base rule the client's layer disables still watches its technique (IA1)", TRI,
+     '        merged = [r for r in merged if r["name"] not in disabled]\n', "        merged = list(merged)\n"),
+    ("M789", "a proposal the computed facts do not support is kept (IA1)", TRI,
+     '        elif (not_here := item.allowed()[e["proposal"]]):\n', '        elif (not_here := ""):\n'),
+    ("M790", "a proposal that carries a rule is kept: the analysis writes a rule (IA1)", TRI,
+     '        elif _RULE.search(e["explanation"]) or _RULE.search(e["text"]):\n', "        elif False:\n"),
+    ("M791", "the model's status is kept: a proposal approved without a human (IA1)", TRI,
+     '        item.proposal = Proposal(kind=e["proposal"], text=e["text"], status=PENDING)\n',
+     '        item.proposal = Proposal(kind=e["proposal"], text=e["text"], status=str(raw.get("status") or PENDING))\n'),
+    ("M792", "a decision that names no human is recorded (IA1)", TRI,
+     '    if not str(by).strip():\n        raise ValueError("a decision names the human who takes it (--by)")\n', ""),
+    ("M793", "a decided proposal is decided again (IA1)", TRI,
+     "        if item.proposal.status != PENDING:\n", "        if False:\n"),
+    ("M794", "a new triage writes over a human's decision (IA1)", TRI,
+     "    if not replace_decided and old is not None and any(\n", "    if False and old is not None and any(\n"),
+    ("M795", "an unknown decision said taken is kept (IA1)", TRI,
+     "            elif cr._ACTED.search(told):\n", "            elif False:\n"),
+    ("M796", "a second entry for an item replaces the first (IA1)", TRI,
+     "        elif item.proposal is not None or item.explanation:\n", "        elif False:\n"),
+    ("M797", "the triage calls Glorfindel's model (IA1)", TRI,
+     "    mdl = separation.check_model(model or analysis_model())\n", "    mdl = model or analysis_model()\n"),
+    ("M798", "the harness does not count an obeyed planted line the check removed (IA1)",
+     "analysis/triage_cases.py", "    entries = [r for r in t.rejected] + [\n", "    entries = [] + [\n"),
+    ("M799", "a collection that cannot be read is called « not collected » (IA1)", TRI,
+     '            elif coll.collected is None:\n                causes.append("collection_unknown")\n',
+     '            elif coll.collected is None:\n                causes.append("not_collected")\n'),
+]
+
+# IA1, after the review (M840–M842, M844): the rules as the watch loads them, one decision at
+# a time, an unreadable triage refused, one entry per line. (M843, a prose filter, is gone with
+# it: no turn of phrase is filtered — the code's status decides, M871–M878.)
+MUTANTS += [
+    ("M840", "an entry of the client's layer the watch skips replaces a base rule in the triage (IA1)", TRI,
+     "            if why := _invalid_client_rule(entry):\n", '            if why := "":\n'),
+    ("M841", "two decisions taken at once: the second write loses the first (IA1)", TRI,
+     "    with _locked(campaign_dir):\n        t = load(campaign_dir)\n",
+     "    with open(os.devnull):\n        t = load(campaign_dir)\n"),
+    ("M842", "an unreadable triage.json ends in a trace, not a refusal (IA1)", TRI,
+     "    except (OSError, ValueError, TypeError, AttributeError, KeyError) as e:",
+     "    except OSError as e:"),
+    ("M844", "the reason of a removed entry, quoting the model, breaks triage.md (IA1)", TRI,
+     "— écarté : {_plain(r.get('rejected'))}", "— écarté : {r['rejected']}"),
+]
+
+# IA1, second review (M871–M875): beside each proposal, the status the code wrote — the only
+# thing that says a human decided; the model's text shown as its text; the save locked too.
+MUTANTS += [
+    ("M871", "the status shown beside a proposal comes from the model's text, not the code (IA1)", TRI,
+     "· **{STATUS_LABEL} : {_status(i.proposal)}**", "· **{STATUS_LABEL} : {_cell(i.proposal.text)}**"),
+    ("M872", "the model's Markdown is rendered: its text can draw a status of its own (IA1)", TRI,
+     "    return _cell(str(text).translate(_MARKUP))\n", "    return _cell(text)\n"),
+    ("M873", "a new triage written without the lock: a decision taken meanwhile is lost (IA1)", TRI,
+     "    with _locked(campaign_dir):\n        return _save(campaign_dir, t, replace_decided)\n",
+     "    with open(os.devnull):\n        return _save(campaign_dir, t, replace_decided)\n"),
+    ("M874", "a refusal of the analysis model exits 1, as an error: H0 gives no advice (IA1)", SEP,
+     "        return REFUSED\n", "        return 1\n"),
+    ("M875", "triage.md no longer says that only the code's status counts (IA1)", TRI,
+     "\"**Aucune décision n'est prise par le modèle : seul", "\"**Le modèle propose : seul"),
+]
+
+# IA1, third review (M876–M878): measured through a real CommonMark engine (markdown-it).
+MUTANTS += [
+    ("M876", "the reason of a removed entry rendered without escaping: a bold status from it (IA1)", TRI,
+     "— écarté : {_plain(r.get('rejected'))}", "— écarté : {_cell(r.get('rejected'))}"),
+    ("M877", "a line ends on \\n only: a \\r of the model starts a list item of its own (IA1)", TRI,
+     '    return " ".join(str(text).splitlines()).replace("|", "\\\\|")\n',
+     '    return str(text).replace("|", "\\\\|").replace("\\n", " ")\n'),
+    ("M878", "the reason of an unknown proposal quotes the model's text (IA1)", TRI,
+     '            why = "unknown proposal"   # never the model\'s text: it is shown beside, escaped\n',
+     "            why = f\"unknown proposal ({e['proposal'] or 'none'})\"\n"),
+]
 
 # Mutants measured by other tests than the invariants (their lot's own).
 TESTS = {mid: INSCRIPTION_TESTS for mid in ("M42", "M43", "M44", "M45", "M46", "M47")}
@@ -1650,11 +2046,158 @@ TESTS.update({f"M{n}": "tests/unit/test_console.py" for n in range(400, 410)})  
 TESTS.update({f"M{n}": "tests/unit/test_indicators.py" for n in range(560, 566)})  # UI-2
 TESTS["M566"] = "tests/unit/test_host_deploy.py"
 TESTS["M567"] = "tests/unit/test_console.py"
+TESTS["M568"] = "tests/unit/test_console.py"
+TESTS["M569"] = "tests/unit/test_cli.py -k version"
 TESTS["M403"] = "tests/unit/test_console_exercises.py"
 # V1 (#214): Annatar's side and the shared gate in test_watch_gate.py, Gothmog's in test_gothmog.py.
 TESTS.update({f"M{n}": "tests/unit/test_watch_gate.py" for n in (*range(720, 740), *range(750, 760))})
 TESTS.update({f"M{n}": "tests/unit/test_gothmog.py" for n in (724, 725, 726, 727)})
 TESTS.update({f"M{n}": "tests/unit/test_host_console.py" for n in range(740, 750)})  # UI-1c
+# L1F (#229): no liveness property on a vanished ISOLATION in the machine — its unit test.
+TESTS["M901"] = "tests/unit/test_reassert.py"
+# L1F: a crash between the card and the marker is rare in the drawn sequences (M900 and M902
+# survive the machine alone at 500 and 2 000, 27/10) — M900's case frozen, both written by hand.
+TESTS.update({mid: f"tests/unit/test_reassert.py tests/unit/test_invariant_regressions.py {INVARIANTS}"
+              for mid in ("M900", "M902")})
+TESTS.update({f"M{n}": "tests/unit/test_activity_logs.py" for n in (*range(810, 830), *range(850, 860), *range(890, 895))})  # AL1
+TESTS.update({f"M{n}": "tests/unit/test_entra_detection.py" for n in (*range(920, 950), 955)})  # C2
+# IA1 (#88): the separation in test_analysis_separation.py, the triage in test_analysis_triage.py.
+TESTS.update({f"M{n}": "tests/unit/test_analysis_separation.py" for n in range(780, 786)})
+TESTS.update({f"M{n}": "tests/unit/test_analysis_triage.py" for n in range(786, 800)})
+TESTS["M840"] = "tests/unit/test_analysis_rules_parity.py"      # against the watch's own loader
+TESTS.update({f"M{n}": "tests/unit/test_analysis_triage.py" for n in (841, 842, 844, 871, 872, 873, 875, 876, 877, 878)})
+TESTS["M874"] = "tests/unit/test_analysis_separation.py"
+# I1F (#226): M830–M832 by the machine (their frozen sequences catch them too); M833 is no
+# property of the world (a card closed too soon), its regression and unit tests only.
+TESTS["M833"] = "tests/unit/test_invariant_regressions.py -k altered_quarantine tests/unit/test_reassert.py"
+TESTS.update({f"M{n}": "tests/unit/test_reassert.py" for n in (835, 836, 837, 839, 895, 896, 897, 898)})
+# M838: the frozen sequence of the second review; the machine found it once in 11 runs at 500.
+TESTS["M838"] = f"{INVARIANTS} tests/unit/test_invariant_regressions.py"
+# M834 needs a world with no state at all: rare in the drawn sequences (2/4 at 500).
+TESTS["M834"] = f"{INVARIANTS} tests/unit/test_reassert.py"
+
+# D1 (#81): each component runs alone (scripts/component_check.py), and every usage profile
+# keeps Glorfindel (docker-compose.yml, the Makefile's profile and team targets).
+D1_COMPONENTS = "tests/unit/test_components.py"
+D1_PROFILES = "tests/unit/test_profiles.py"
+MUTANTS += [
+    ("M800", "Glorfindel reads the signal contract from Annatar again: it cannot run alone (D1)",
+     "glorfindel/signals.py", "from eregion_core.signals import Signal\n",
+     "from annatar.signals.emitter import Signal\n"),
+    ("M801", "the component check's finder lets every package through: it proves nothing (D1)",
+     "scripts/component_check.py", "        if self.blocks(fullname):\n            raise ModuleNotFoundError(",
+     "        if False:\n            raise ModuleNotFoundError("),
+    ("M802", "a listed crossing allowed at module level: the component imports the other on load (D1)",
+     "scripts/component_check.py", "((rel, pkg) in CROSSINGS and not at_top)", "((rel, pkg) in CROSSINGS)"),
+    ("M803", "Annatar's compose service no longer starts Glorfindel's watch (D1, V1)", "docker-compose.yml",
+     "      - ${HOME}/.annatar:/root/.annatar\n      - ${HOME}/.glorfindel:/root/.glorfindel:ro\n"
+     "    depends_on:\n      - watch\n",
+     "      - ${HOME}/.annatar:/root/.annatar\n      - ${HOME}/.glorfindel:/root/.glorfindel:ro\n"),
+    ("M804", "Gothmog's compose service may write Glorfindel's state (D1)", "docker-compose.yml",
+     "      - ${HOME}/.glorfindel:/root/.glorfindel:ro\n    depends_on:\n      - watch\n"
+     "\n  # D1 : Gothmog",
+     "      - ${HOME}/.glorfindel:/root/.glorfindel\n    depends_on:\n      - watch\n"
+     "\n  # D1 : Gothmog"),
+    ("M805", "the injectors receive Glorfindel's service principal (D1, M-3)", "docker-compose.yml",
+     "  AZURE_CLIENT_SECRET: ${ANNATAR_AZURE_CLIENT_SECRET:-}\n",
+     "  AZURE_CLIENT_SECRET: ${AZURE_CLIENT_SECRET:-}\n"),
+    ("M806", "make profile-detection starts Annatar's side without Glorfindel (D1)", MAKE,
+     "profile-detection: glorfindel-start build-annatar\n", "profile-detection: build-annatar\n"),
+    ("M807", "a team's Glorfindel inherits the operator's shell: its subscription, its keys (D1)", MAKE,
+     'TEAM_COMPOSE = env -i PATH="$$PATH"', 'TEAM_COMPOSE = env PATH="$$PATH"'),
+    ("M808", "any team name accepted: a path, a compose project, container names (D1)", MAKE,
+     '@case "$(TEAM)" in ""|-*|*[!a-z0-9-]*) echo', '@case "$(TEAM)" in "") echo'),
+    ("M809", "without a team, the watch's container is no longer eregion-watch: H0's scripts lose it (D1)",
+     "docker-compose.yml", "    container_name: ${EREGION_INSTANCE:-eregion}-watch\n",
+     "    container_name: ${EREGION_INSTANCE:-eregion-glorfindel}-watch\n"),
+]
+TESTS.update({f"M{n}": D1_COMPONENTS for n in range(800, 803)})
+TESTS.update({f"M{n}": D1_PROFILES for n in range(803, 810)})
+# D1, after its review: the conftest's redirections, the analysis AI scanned, the guard of
+# this harness line by line.
+MUTANTS += [
+    ("M845", "the conftest believes Glorfindel absent: no redirection, the suite writes ~/.glorfindel (D1)",
+     "tests/unit/conftest.py", 'GLORFINDEL = _present("glorfindel")\n', "GLORFINDEL = False\n"),
+    ("M846", "the conftest believes the console absent: its settings cache leaks between tests (D1)",
+     "tests/unit/conftest.py", 'CONSOLE = _present("eregion_console")\n', "CONSOLE = False\n"),
+    ("M847", "the analysis AI no longer scanned: its import of Annatar on load goes unlisted (D1)",
+     "scripts/component_check.py",
+     ',\n           "analysis": ("analysis", "eregion_core")}', "}"),
+    ("M848", "one module made absent covers every other missing one: the harness measures a broken copy (D1)",
+     "scripts/mutation_check.py",
+     "COMPONENT_ABSENT not in line:\n            return line.strip()",
+     "COMPONENT_ABSENT not in stdout:\n            return line.strip()"),
+    ("M849", "make profile-detection leaves ~/.annatar to docker: created as root (D1)", MAKE,
+     "profile-detection: glorfindel-start build-annatar\n\t@mkdir -p $(HOME)/.annatar\n",
+     "profile-detection: glorfindel-start build-annatar\n"),
+    ("M870", "without Annatar, the reports' thread starts and fails every pass, never said at start (D1)",
+     "glorfindel/cli.py", "        from analysis import campaign_report  # noqa: F401\n", ""),
+]
+TESTS.update({f"M{n}": D1_COMPONENTS for n in range(845, 849)})
+TESTS["M849"] = D1_PROFILES
+TESTS["M870"] = "tests/unit/test_hosted_report.py"
+
+# HY1: no test writes in the repository (the conftest's guard), the quarantine locks' test on
+# its own locks, the injectors' image from its lock, every secret passed by name (L23, #228).
+HY1_GUARD = "tests/unit/test_repo_hermetic.py"
+HY1_LOCK = "tests/unit/test_dependency_lock.py"
+HY1_SECRETS = "tests/unit/test_makefile_secrets.py"
+CONF = "tests/unit/conftest.py"
+MUTANTS += [
+    ("M910", "the store_cycle test writes runs/ in the repository again (HY1)", "tests/unit/test_agent_nodes.py",
+     "    monkeypatch.chdir(tmp_path)   # store_cycle writes runs/<run_id>_debug.jsonl where it runs (HY1)\n", ""),
+    ("M911", "the guard no longer watches the test process's writes (HY1)", CONF,
+     "    _checked[0] = False\n    _watching[0] = True\n", "    _checked[0] = False\n"),
+    ("M912", "a runs/ made at the root passes: git ignores it (HY1)", CONF,
+     'left = [n for n in new if n == "runs" or (', 'left = [n for n in new if ('),
+    ("M913", "any new entry at the root passes, whatever git says (HY1)", CONF,
+     "_ignored_by_git(n) is not True)]", "False)]"),
+    ("M914", "a write by a relative path is not seen as in the repository (HY1)", CONF,
+     "    full = os.path.abspath(os.fsdecode(path))\n", "    full = os.fsdecode(path)\n"),
+    ("M915", "the quarantine locks' test reads the process's global locks again (HY1)",
+     "tests/unit/test_glorfindel.py",
+     '    monkeypatch.setattr(actions, "_QUARANTINE_LOCKS", locks)\n    return locks\n',
+     "    return actions._QUARANTINE_LOCKS\n"),
+    ("M916", "the injectors' image resolves its dependencies again, unlocked (HY1)", "annatar/Dockerfile",
+     "RUN pip install --no-cache-dir --no-deps --no-build-isolation -e .\n",
+     'RUN pip install --no-cache-dir -e ".[annatar]"\n'),
+    ("M917", "Annatar's extra without litellm: the planner fails in the image (HY1)", "pyproject.toml",
+     "    # The campaign planner (`annatar campaign plan --llm`) — the same pin as Glorfindel's (HY1).\n"
+     '    "litellm==1.86.1",\n',
+     ""),
+    ("M918", "Annatar's targets pass the client secret by value again (L23)", MAKE,
+     "\t-e AZURE_CLIENT_ID -e AZURE_CLIENT_SECRET -e AZURE_TENANT_ID -e AZURE_SUBSCRIPTION_ID \\\n\t-e ANTHROPIC_API_KEY",
+     "\t-e AZURE_CLIENT_ID -e AZURE_CLIENT_SECRET=$(or $(ANNATAR_AZURE_CLIENT_SECRET),$(AZURE_CLIENT_SECRET)) "
+     "-e AZURE_TENANT_ID -e AZURE_SUBSCRIPTION_ID \\\n\t-e ANTHROPIC_API_KEY"),
+    ("M919", "one target, glorfindel-shell, passes the client secret by value (L23)", MAKE,
+     "\t@$(GLORFINDEL_AZURE_PICK) docker run --rm -it $(GLORFINDEL_AZURE_ENV)",
+     "\t@docker run --rm -it -e AZURE_CLIENT_SECRET=$(AZURE_CLIENT_SECRET) $(GLORFINDEL_AZURE_ENV)"),
+]
+TESTS["M910"] = "tests/unit/test_agent_nodes.py -k no_op"
+TESTS.update({f"M{n}": HY1_GUARD for n in range(911, 915)})
+TESTS["M915"] = "tests/unit/test_glorfindel.py -k quarantine_lock"
+TESTS.update({f"M{n}": HY1_LOCK for n in (916, 917)})
+TESTS.update({f"M{n}": HY1_SECRETS for n in (918, 919)})
+# HY1, after its review: the guard armed at the conftest's import (collection included), the
+# writes other than an open, a secret's value the shell expands.
+MUTANTS += [
+    ("M950", "the guard armed at the first test again: a module's writes at collection go unseen (HY1)", CONF,
+     "\n_arm()\n",
+     '\n@pytest.fixture(scope="session", autouse=True)\ndef _armed_late():\n    _arm()\n'),
+    ("M951", "a rename or a replace into the repository goes unseen (HY1)", CONF,
+     '    "os.rename": ((0, 1), (2, 3)),', ""),
+    ("M952", "sqlite3.connect in the repository goes unseen (HY1)", CONF,
+     '    "sqlite3.connect": ((0,), ()),', ""),
+    ("M953", "annatar-shell passes the secret as a value the shell expands (L23)", MAKE,
+     "\t@$(ANNATAR_AZURE_PICK) docker run --rm -it $(ANNATAR_AZURE_ENV)",
+     '\t@docker run --rm -it -e AZURE_CLIENT_SECRET="$$AZURE_CLIENT_SECRET" $(ANNATAR_AZURE_ENV)'),
+    ("M954", "a remote command line exports a model key over ssh (L23)", MAKE,
+     "\t$(HOST_SSH) 'docker exec eregion-watch glorfindel report --since $(or $(SINCE),7d)'",
+     '\t$(HOST_SSH) "export ANTHROPIC_API_KEY=$$ANTHROPIC_API_KEY; '
+     'docker exec eregion-watch glorfindel report --since $(or $(SINCE),7d)"'),
+]
+TESTS.update({f"M{n}": HY1_GUARD for n in (950, 951, 952)})
+TESTS.update({f"M{n}": HY1_SECRETS for n in (953, 954)})
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
@@ -1776,6 +2319,20 @@ def _copy_repo(dest: Path) -> None:
             shutil.copy2(src, dest / rel)
 
 
+# What the component check (scripts/component_check.py, D1) adds to the module it makes absent.
+COMPONENT_ABSENT = "absent: component check"
+
+
+def unmeasurable(stdout: str) -> str | None:
+    """The first line of a test run saying a module could not be found, other than one the
+    component check made absent on purpose (D1) — a copy that cannot import its code is no
+    measure. Line by line: one module made absent must not cover another that is missing."""
+    for line in stdout.splitlines():
+        if "ModuleNotFoundError: No module named" in line and COMPONENT_ABSENT not in line:
+            return line.strip()
+    return None
+
+
 def _run(copy: Path, examples: int, show: bool = False, target: str = INVARIANTS) -> bool:
     """True if `target` (test paths, space-separated) FAILS on this copy (the mutant is caught)."""
     env = {**os.environ, "GLORFINDEL_INVARIANT_EXAMPLES": str(examples), "GLORFINDEL_INVARIANT_NO_SHRINK": "1",
@@ -1783,8 +2340,9 @@ def _run(copy: Path, examples: int, show: bool = False, target: str = INVARIANTS
     proc = subprocess.run(
         [sys.executable, "-m", "pytest", *target.split(), "-q", "-x", "-p", "no:cacheprovider"],
         cwd=copy, env=env, capture_output=True, text=True)
-    if "glorfindel" in proc.stdout and "ModuleNotFoundError" in proc.stdout:
-        raise RuntimeError(proc.stdout[-2000:])
+    missing = unmeasurable(proc.stdout)
+    if missing:
+        raise RuntimeError(f"{missing}\n{proc.stdout[-2000:]}")
     if show and proc.returncode != 0:
         print("\n".join(line for line in proc.stdout.splitlines() if line.startswith("E ")) or proc.stdout[-3000:])
     return proc.returncode != 0

@@ -16,7 +16,7 @@ Tu es spécialisé sur l'agent offensif. Lis ce fichier en début de session.
 
 **Tu lis mais ne modifies pas :**
 - `glorfindel/rules/azure/detection_rules.yaml` — pour comprendre ce que Glorfindel détecte (et ce qu'il ne détecte pas encore)
-- `annatar/signals/schema.py` — pour t'assurer que tes signaux sont bien formés
+- `eregion_core/signals.py` — le contrat des signaux (D1 : sorti d'Annatar), pour t'assurer que tes signaux sont bien formés
 
 **Tu ne touches pas :**
 - `glorfindel/` (sauf lecture des interfaces)

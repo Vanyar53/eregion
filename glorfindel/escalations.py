@@ -38,6 +38,7 @@ _ESCALATION_LABELS = {
     "proposed_rule": "règle de détection proposée",
     "posture_gap": "gap de posture",
     "orphan_rule": "règle orpheline (carte disparue)",
+    "quarantine_altered": "NSG de quarantaine modifié",
     "detection_blocked": "détection empêchée (règle déjà en place)",
     "mode_hold": "action retenue (mode human_only)",
     "write_blocked": "écriture refusée (droits)",
@@ -50,6 +51,8 @@ _ESCALATION_LABELS = {
     "telemetry_gap": "télémétrie incomplète (requêtes d'enquête en échec)",
     "unstable_decision": "décision instable (les tirages ne s'accordent pas)",
     "readiness_hold": "VM retenue en observation (préparation)",
+    "control_plane_change": "plan de contrôle modifié (détection seule)",
+    "identity_change": "identité modifiée dans Entra ID (détection seule)",
 }
 
 
@@ -89,6 +92,8 @@ def record(
     `source` (B2, eregion_core/exercise.py): `exercise` when an injector's window covers
     this VM, else `real` (empty on older cards = real). It is part of the dedup key: a
     real detection never merges into a pending exercise card, nor the reverse.
+    A `control_plane_change` card (AL1) never merges: each is one operation. Nor an
+    `identity_change` card (C2): each is one finding on one identity.
     """
     rid_lower = resource_id.lower()
     now = datetime.now(timezone.utc).isoformat()
@@ -108,6 +113,11 @@ def record(
                 and e.get("action") == action
                 and e.get("escalation_type") == escalation_type
                 and (e.get("source") or "real") == (source or "real")
+                # A control-plane card is one operation (who, what, which resource — AL1):
+                # the next one, perhaps on Glorfindel's own rules, is never folded into it.
+                and escalation_type != "control_plane_change"
+                # Nor an identity card (C2): the next, perhaps on Glorfindel's own identity.
+                and escalation_type != "identity_change"
             ):
                 e["occurrences"] = int(e.get("occurrences", 1)) + 1
                 e["last_seen"] = now
@@ -361,7 +371,7 @@ VERDICTS = ("right", "wrong", "unsure")
 # autonomy decision weighs.
 DISRUPTIVE_ACTIONS = ("isolate_vm", "block_suspicious_ip")
 # Cards that are not a decision on a detection: posture, housekeeping, proposals.
-_NOT_DECISIONS = {"posture_gap", "orphan_rule", "proposed_rule", "readiness_hold",
+_NOT_DECISIONS = {"posture_gap", "orphan_rule", "quarantine_altered", "proposed_rule", "readiness_hold",
                   "ttl_exceeded", "detection_blocked"}
 
 

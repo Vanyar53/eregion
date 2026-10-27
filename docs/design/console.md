@@ -363,5 +363,6 @@ EXERCISES · 11          windows [7 days ▾] │ CAMPAIGNS · 1    [30 days ▾
 - **Les rôles** : avec le multi-opérateur.
 - **Un statut d'Orodruin** : le registre lui garde une place.
 - **Les packs d'un SaaS** : la page d'installation en est l'emplacement.
-- **Une Content-Security-Policy** : à mesurer, car les `onclick` en ligne la limitent.
-  `frame-ancestors 'none'` et `connect-src 'self'` serviraient dès maintenant.
+- **Une Content-Security-Policy complète** : `frame-ancestors 'none'`, `connect-src 'self'`,
+  `base-uri 'none'` et `form-action 'self'` sont en place depuis #222. Un `script-src` attendra que
+  les gestionnaires `onclick` en ligne de la page Glorfindel disparaissent.

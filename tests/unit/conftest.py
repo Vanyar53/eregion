@@ -128,7 +128,7 @@ _WRITE_EVENTS = {
     "os.utime": ((0,), (3,)),               # Path.touch() on a file that exists
     "os.truncate": ((0,), ()),
     "shutil.rmtree": ((0,), ()),            # it then removes by dir_fd, which is not placed
-    "sqlite3.connect": ((0,), ()),          # ChromaDB's store too; it may create the file
+    "sqlite3.connect": ((0,), ()),          # it may create the file
 }
 _writes_in_the_repo: list[tuple[str, str]] = []
 _watching = [False]
@@ -237,9 +237,10 @@ def nothing_written_in_the_repository():
       Seen: a file opened for writing (open, pathlib, os.open, shutil's copies), a folder made
       or removed, a file removed, renamed or replaced (os.replace, shutil.move), a link made
       (os.symlink, os.link), its times or size changed (Path.touch on a file that exists,
-      os.utime, os.truncate), shutil.rmtree, sqlite3.connect (ChromaDB's store too).
+      os.utime, os.truncate), shutil.rmtree, sqlite3.connect.
       NOT seen: what a C library writes once a file is open (sqlite's pages, a write through
-      a file descriptor, mmap); a path given relative to a dir_fd, or as a descriptor; any
+      a file descriptor, mmap); ChromaDB 1.x's store (written by its Rust core, no audit
+      event); a path given relative to a dir_fd, or as a descriptor; any
       write by a subprocess below the root.
     - at the root, whatever wrote it (a subprocess too): a runs/ that was not there before, or
       any new entry git does not ignore.

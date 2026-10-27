@@ -883,8 +883,8 @@ def _apply_autonomy_mode(d: dict, mode: str, gate: dict | None = None) -> bool:
         elif gate:
             lift = ("Corriger les points bloquants (`glorfindel activate`) pour qu'elle "
                     "agisse seule." if gate.get("reason") == "not_ready" else
-                    "Confirmer la VM (War Room, Activer) pour qu'elle agisse seule la "
-                    "prochaine fois.")
+                    "Confirmer la VM (console, page Glorfindel : « Review & turn on ») pour "
+                    "qu'elle agisse seule la prochaine fois.")
             d["escalation_reason"] = (
                 f"Réponse autonome configurée ({gate.get('configured', '?')}) mais VM "
                 f"retenue en human_only — {gate.get('message', '')}. Action "
@@ -1012,7 +1012,7 @@ def _decision_failed(state: GlorfindelState, exc: BaseException, mode: str = "")
     """State for a decision that could not be obtained (LLM call failed after retries).
 
     The cycle continues to escalate_to_human → store_cycle, so the detected threat
-    reaches `pending` / the War Room / the debug file instead of one console line."""
+    reaches `pending` / the console / the debug file instead of one console line."""
     err = _first_line(exc)
     reason = (
         f"Décision impossible : l'appel LLM a échoué après {_LLM_RETRIES} nouvelles "
@@ -1050,7 +1050,7 @@ def decide(
     is held back and escalated instead of executed.
 
     Hot-pickup: when autonomy is None (production), the config is reloaded FRESH
-    each cycle from glorfindel-config.yaml — so a War Room dropdown change (which
+    each cycle from glorfindel-config.yaml — so a console dropdown change (which
     persists to disk) takes effect on the next signal without restarting watch.
     Tests inject an explicit AutonomyConfig to bypass the disk read.
     autonomy_override (session `glorfindel watch --mode`) is re-applied on top of
@@ -1217,7 +1217,7 @@ def _extract_suspicious_ip(signal: dict) -> str:
     Checks an explicit context override, then both the detected row (detected_data)
     and the raw source row (first_result_row) for the common source/destination IP
     fields. Shared by execute_action (to act) and escalate_to_human (to carry the IP
-    in the escalation payload so the War Room can approve & execute in one click).
+    in the escalation payload so the console can approve & execute in one click).
     """
     raw = signal.get("raw_signal", {})
     explicit = signal.get("context", {}).get("suspicious_ip")
@@ -1307,7 +1307,7 @@ def execute_action(
         out_status = "write_blocked" if is_auth else "action_failed"
         # Azure HttpResponseError.__str__ repeats the message (summary line + a
         # "Message:" section) — take only the first line for the escalation reason so
-        # the War Room modal doesn't show the same text twice. Full text → outcome.error.
+        # the console's modal doesn't show the same text twice. Full text → outcome.error.
         err_summary = _first_line(e)
         outcome = {
             "status": out_status,
@@ -1391,7 +1391,7 @@ def escalate_to_human(state: GlorfindelState) -> GlorfindelState:
             f"`glorfindel snapshot {resource_id} --yes` pour capturer l'état forensique."
         )
 
-    # Carry action parameters so the War Room can approve & execute parameterised
+    # Carry action parameters so the console can approve & execute parameterised
     # actions in one click (not just resource_id-only actions like isolate_vm).
     # block_suspicious_ip needs the IP — extracted from the signal, same source as
     # execute_action uses, so the approved action matches what would have run.
@@ -1702,7 +1702,7 @@ def _detection_blocked(
             f"glorfindel reset {resource_id} --yes  — si l'isolation est résiduelle",
             f"Rejouer la query de '{rule.name}' dans Log Analytics sur la fenêtre "
             f"de l'attaque (latence d'ingestion > expected_latency_s ?)",
-            "Vérifier l'état du backend (carte MONITORING War Room / rule_status.json)",
+            "Vérifier l'état du backend (nœud DETECT de la console, page Glorfindel / rule_status.json)",
         ],
         "proposed_rule": None,
         "proposal_id": "",
@@ -1847,7 +1847,7 @@ The existing rule may be correct and no change needed."""
         "suggested_steps": [
             f"Review the proposed query for {signal.get('ttp', '')}",
             "Test it in Log Analytics against recent data",
-            f"glorfindel approve-rule {pid or '<id>'}  (or Approve in War Room Incidents)",
+            f"glorfindel approve-rule {pid or '<id>'}  (or Approve on its card in the console, Glorfindel page)",
             "Re-run the scenario to validate detection",
         ],
         "proposed_rule": proposed_rule,
@@ -1964,7 +1964,7 @@ class GlorfindelAgent:
 
         # Autonomy policy. autonomy_default is the session override (watch --mode).
         # When an explicit AutonomyConfig is injected (tests), the graph uses it as-is.
-        # Otherwise the graph reloads config FRESH each cycle (hot-pickup of War Room
+        # Otherwise the graph reloads config FRESH each cycle (hot-pickup of console
         # dropdown changes) — self.autonomy here is only for the startup banner / display.
         self._autonomy_explicit = autonomy if autonomy is not None else None
         self._autonomy_override = autonomy_default
@@ -2029,7 +2029,7 @@ def record_cycle_failure(
     Before this, an exception anywhere in a cycle (an unreadable file, a connector
     error in verify, a detection backend down while polling an attack) reached the
     watch worker's catch-all and ended as a single console line: a detected threat
-    dropped with no escalation, invisible in `pending` and the War Room. Records a
+    dropped with no escalation, invisible in `pending` and the console. Records a
     `cycle_failed` escalation (unless dry-run) and the debug line, then returns a
     terminal state. Also used by the watch poll threads (stage="detection").
     """

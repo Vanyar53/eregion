@@ -81,7 +81,7 @@ def _by_value(text: str, names) -> list[str]:
     reaches `make -n`'s text, yet `ps` shows it. Refused: `-e NAME=` and `--env NAME=` for docker,
     and `export NAME=` in a line that runs ssh (the remote command line carries it)."""
     alt = "|".join(re.escape(n) for n in sorted(names, key=len, reverse=True))
-    docker = re.compile(rf"(?:^|\s)(?:-e|--env)(?:\s+|=)[\"']?(?:{alt})=")
+    docker = re.compile(rf"(?:^|\s)(?:-e\s*|--env(?:\s+|=))[\"']?(?:{alt})=")   # -eNAME= too
     export = re.compile(rf"\bexport\s+(?:{alt})=")
     return [line.strip()[:200] for line in text.replace("\\\n", " ").splitlines()   # a recipe line continued
             if docker.search(line) or ("ssh" in line and export.search(line))]
@@ -104,6 +104,7 @@ def test_no_target_puts_a_secret_s_value_on_a_command_line(tmp_path):
     'docker run -e AZURE_CLIENT_SECRET="$AZURE_CLIENT_SECRET" eregion-annatar',
     "docker run --env=DISCORD_BOT_TOKEN=$DISCORD_BOT_TOKEN img",
     "docker run --env 'ANTHROPIC_API_KEY=x' img",
+    "docker run -eAZURE_CLIENT_SECRET=$AZURE_CLIENT_SECRET img",
     'ssh host "export ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY; docker compose up -d"',
 ])
 def test_a_value_the_shell_expands_is_refused_too(line):

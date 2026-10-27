@@ -525,8 +525,8 @@ docker exec eregion-watch python -m analysis.campaign_index --all runs/campaigns
 
 _27/10 : le code, ses tests (`tests/unit/test_analysis_separation.py`,
 `tests/unit/test_analysis_triage.py`, où les cas du harnais tournent avec un modèle simulé,
-`tests/unit/test_analysis_rules_parity.py`) et ses mutants (M780–M799, M840–M844 après la
-relecture) sont écrits. Le harnais avec le vrai modèle (`scripts/analysis_eval.py`) est
+`tests/unit/test_analysis_rules_parity.py`) et ses mutants (M780–M799 ; M840–M842 et M844,
+puis M871–M875, après les relectures) sont écrits. Le harnais avec le vrai modèle (`scripts/analysis_eval.py`) est
 à lancer par Jonathan : rien de ceci n'est encore mesuré sur un modèle réel._
 
 L'IA d'analyse explique, trie et rapporte. Elle lit les runs, le catalogue, les schémas et le
@@ -565,9 +565,13 @@ doivent donc y être :
   `EREGION_ANALYSIS_MODEL=<un autre modèle que celui de Glorfindel>` dans
   `infra/glorfindel-host/host.env` et dans `~/eregion/.env`, puis `docker compose up -d watch`.
   `make glorfindel-host-model MODEL=…` lance ensuite `python -m analysis.separation` dans la
-  watch : si le modèle choisi pour Glorfindel est celui de l'analyse, il le dit (« les rapports
-  et les tris de campagne seront refusés ») et dit quoi poser. Sans cela, chaque rapport était
-  refusé, puis abandonné après 3 essais. Aucun module de `analysis/` n'importe Glorfindel, ni de
+  watch. Il sort avec 0 quand les deux modèles diffèrent, et avec 2 quand le modèle choisi pour
+  Glorfindel est celui de l'analyse : il le dit (« les rapports et les tris de campagne seront
+  refusés »), et la cible dit quoi poser. Le code 1 reste celui d'une erreur (une image d'avant
+  IA1, sans le module) : la cible le signale à part. Elle n'échoue jamais sur ce contrôle. Sans
+  lui, chaque rapport était refusé, puis abandonné après 3 essais.
+
+Aucun module de `analysis/` n'importe Glorfindel, ni de
 quoi lancer une commande (`subprocess`, `os.system`), et seul `separation.py` nomme l'état de
 Glorfindel : un test le vérifie sur le code (`test_analysis_separation.py`). L'analyse lit les
 règles de Glorfindel comme des données, jamais sa mémoire.
@@ -633,20 +637,28 @@ est borné comme celui du rapport (`EREGION_ANALYSIS_TIMEOUT_S`).
 - qui porte une règle : une requête KQL (`| where`, `| summarize`, `let x =`…), les champs d'une
   règle en YAML (`query:`, `ttp:`…), un bloc de code. L'analyse n'écrit pas de règle ; un humain
   le fait ;
-- qui dit qu'une décision a été prise (« approuvée par … », « Jonathan a validé », « approved
-  by », « status: approved ») : seul `decide` enregistre la décision d'un humain ;
 - sur un item dont la décision est inconnue, une explication qui dit que Glorfindel a agi, ou
   qu'il n'a pas agi (la lecture du rapport, plus haut : une heuristique).
 
-Ce qui est écarté est montré en fin de `triage.md`, barré, une ligne par entrée (les retours à la
-ligne du modèle n'y cassent rien), et une décision qu'il affirmerait y est remplacée par « [décision
-affirmée par le modèle, sans valeur] » : `triage.md` ne peut pas laisser croire qu'un humain a
-validé.
+La vérification ne filtre aucune tournure de la prose du modèle : une proposition légitime
+s'écrit « doit être validée par un humain », « non encore approuvée », et contrôler de la prose
+par une expression régulière ne converge pas (les leçons de D-2 et de P1). Ce qui est écarté est
+montré en fin de `triage.md`, une ligne par entrée, la raison comprise (les retours à la ligne du
+modèle n'y cassent rien).
 
 ### Rien sans la décision d'un humain
 
 Chaque proposition gardée est écrite `pending` par le code, quoi que le modèle ait écrit : le
 schéma de son outil n'a pas de statut, et un statut glissé dans sa réponse est ignoré.
+
+**Ce qui fait foi est le statut écrit par le code**, dans `triage.json` : `pending`, ou la
+décision que `decide` a enregistrée, avec le nom de l'humain et l'heure. `triage.md` l'affiche à
+côté de chaque proposition, en gras (« Statut (écrit par le code) : en attente d'un humain
+(pending) », ou « approuvée par … le … »), et le dit en tête : aucune décision n'est prise par le
+modèle, seul ce statut fait foi. Le texte du modèle n'est qu'une explication : il est présenté
+comme tel (« texte du modèle, explication : « … » »), sur une ligne, et son Markdown est montré
+comme du texte (`*`, `#`, `` ` ``, `[`, `<`… échappés), si bien qu'il ne peut pas dessiner un
+statut à lui. Ce que dit sa prose (« approuvée », « validée »…) n'engage personne.
 `python -m analysis.triage decide <campagne> <tri-N> approve|reject --by <nom> [--note …]`
 enregistre la décision d'un humain : son nom (obligatoire), l'heure (UTC), la note. Rien
 d'autre : une proposition approuvée reste à faire par un humain. Le tri n'écrit aucune règle et
@@ -656,7 +668,9 @@ porte une décision n'est jamais réécrit par un nouveau tri (`Decided`).
 **Un seul écrivain à la fois** : `decide` et l'écriture d'un tri prennent un verrou `flock` sur
 `runs/campaigns/<id>/.triage.lock` (comme `.report.lock` du rapport sur H0). Deux décisions prises
 en même temps sont gardées toutes les deux ; sans verrou, la seconde écriture perdait la première
-(un test le joue entre trois processus). **Un `triage.json` illisible** (pas du JSON, une clé
+(un test le joue entre trois processus) ; un nouveau tri écrit pendant une décision ne la perd
+pas non plus (la décision attend, puis s'inscrit sur le nouveau tri ; un test le joue entre deux
+processus). **Un `triage.json` illisible** (pas du JSON, une clé
 inconnue, une sorte ou un statut inconnu) est refusé en une ligne (« refusé : triage.json
 illisible … »), code de sortie 1 : rien n'est décidé ni écrit, et aucun modèle n'est appelé.
 

@@ -1,20 +1,19 @@
 """notify_discord (N1, #242) — the workshop's news in Discord, against a fake Discord.
 
-The fake is an HTTP server on the loopback (the webhooks, the bot's forum calls, GitHub's
-runs): nothing leaves the machine, and the requests are read back as Discord would get them.
+The fake (tests/unit/fake_discord.py) is an HTTP server on the loopback: nothing leaves the
+machine, and the requests are read back as Discord would get them.
 """
 import importlib.util
 import json
 import os
 import subprocess
 import sys
-import threading
 import time
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlsplit
 
 import pytest
+
+from .fake_discord import TAG, TAG_NAMES, FakeDiscord
 
 ROOT = Path(__file__).resolve().parents[2]
 _SPEC = importlib.util.spec_from_file_location("notify_discord", ROOT / "scripts" / "notify_discord.py")
@@ -24,107 +23,7 @@ _SPEC.loader.exec_module(nd)
 
 PINNED, FALLBACK = "claude-opus-5-5", "claude-opus-4-8"
 CI_TOKEN, AGENTS_TOKEN, BOT_TOKEN = "CI-SECRET-abc", "AGENTS-SECRET-def", "BOT-SECRET-ghi"
-TAGS = [{"id": f"t{i}", "name": n} for i, n in enumerate(nd.STATE_TAGS + nd.MILESTONE_TAGS)]
-TAG = {t["name"]: t["id"] for t in TAGS}
-
-
-class FakeDiscord:
-    """Discord's routes that the script uses, plus GitHub's workflow runs."""
-
-    def __init__(self):
-        self.requests, self.messages, self.threads, self.runs = [], {}, [], []
-        self.fail: dict[str, int] = {}   # path prefix → status, once per entry if in self.once
-        self.once: set[str] = set()
-        self.lock, self.next_id = threading.Lock(), 100
-        fake = self
-
-        class Handler(BaseHTTPRequestHandler):
-            def log_message(self, *a):
-                pass
-
-            def _serve(self):
-                n = int(self.headers.get("Content-Length") or 0)
-                body = json.loads(self.rfile.read(n)) if n else None
-                status, out, headers = fake.handle(self.command, self.path, body, dict(self.headers))
-                raw = json.dumps(out).encode()
-                self.send_response(status)
-                for k, v in headers.items():
-                    self.send_header(k, v)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(raw)))
-                self.end_headers()
-                self.wfile.write(raw)
-            do_GET = do_POST = do_PATCH = _serve
-
-        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        threading.Thread(target=self.server.serve_forever, args=(0.01,), daemon=True).start()
-        self.base = f"http://127.0.0.1:{self.server.server_address[1]}"
-
-    def close(self):
-        self.server.shutdown()
-        self.server.server_close()
-
-    def _id(self):
-        self.next_id += 1
-        return str(self.next_id)
-
-    def thread(self, name, tags=(), archived=False):
-        t = {"id": self._id(), "name": name, "parent_id": "FORUM", "applied_tags": list(tags),
-             "thread_metadata": {"archived": archived, "archive_timestamp": "2026-10-01T00:00:00+00:00"},
-             "posts": []}
-        self.threads.append(t)
-        return t
-
-    def handle(self, method, path, body, headers):
-        with self.lock:
-            self.requests.append({"method": method, "path": path, "body": body, "headers": headers})
-            for prefix, status in list(self.fail.items()):
-                if path.startswith(prefix):
-                    if prefix in self.once:
-                        del self.fail[prefix]
-                    return status, {"retry_after": 0}, {"Retry-After": "0"} if status == 429 else {}
-            p = urlsplit(path).path
-            parts = p.strip("/").split("/")
-            if parts[:2] == ["api", "webhooks"]:
-                if method == "POST":
-                    mid = self._id()
-                    self.messages[mid] = body
-                    return 200, {"id": mid}, {}
-                mid = parts[-1]
-                if mid not in self.messages:
-                    return 404, {"message": "Unknown Message"}, {}
-                self.messages[mid] = body
-                return 200, {"id": mid}, {}
-            if p == "/api/channels/FORUM" and method == "GET":
-                return 200, {"id": "FORUM", "guild_id": "GUILD", "type": 15, "available_tags": TAGS}, {}
-            if p == "/api/guilds/GUILD/threads/active":
-                return 200, {"threads": [t for t in self.threads if not t["thread_metadata"]["archived"]]}, {}
-            if p == "/api/channels/FORUM/threads/archived/public":
-                return 200, {"threads": [t for t in self.threads if t["thread_metadata"]["archived"]],
-                             "has_more": False}, {}
-            if p == "/api/channels/FORUM/threads" and method == "POST":
-                t = self.thread(body["name"], body.get("applied_tags") or [])
-                t["posts"].append(body["message"])
-                return 201, t, {}
-            if parts[:2] == ["api", "channels"] and len(parts) >= 3:
-                t = next((t for t in self.threads if t["id"] == parts[2]), None)
-                if t is None:
-                    return 404, {}, {}
-                if parts[3:] == ["messages"] and method == "POST":
-                    t["posts"].append(body)
-                    return 200, {"id": self._id()}, {}
-                if method == "PATCH":
-                    if "applied_tags" in body:
-                        t["applied_tags"] = body["applied_tags"]
-                    if "archived" in body:
-                        t["thread_metadata"]["archived"] = body["archived"]
-                    return 200, t, {}
-            if p.startswith("/gh/repos/o/r/actions/workflows/"):
-                return 200, {"workflow_runs": self.runs}, {}
-            return 404, {}, {}
-
-    def webhook_posts(self, token):
-        return [r["body"] for r in self.requests if r["method"] == "POST" and token in r["path"]]
+assert TAG_NAMES == nd.STATE_TAGS + nd.MILESTONE_TAGS   # the fake forum has the script's tags
 
 
 @pytest.fixture

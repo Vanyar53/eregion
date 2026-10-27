@@ -62,7 +62,8 @@ def test_host_env_carries_no_azure_secret_and_is_read_only():
     assert env["GLORFINDEL_READ_ONLY"] == "1"
     assert env["GLORFINDEL_DISCOVERY_RETENTION_H"] == "168"   # gondolin, off, stays a week
     assert env["GLORFINDEL_WEBHOOK_URL"] == "https://hook"
-    assert len(env["GLORFINDEL_WARROOM_TOKEN"]) >= 24
+    # UI-1c: a new host gets the console's token under its name, never the former one.
+    assert len(env["EREGION_CONSOLE_TOKEN"]) >= 24 and "GLORFINDEL_WARROOM_TOKEN" not in env
 
 
 def test_every_host_env_variable_reaches_the_containers():
@@ -159,7 +160,7 @@ def test_the_generated_host_env_reaches_each_container_with_only_its_secrets():
     rendered = {s: {k: _interpolate(v, dotenv) for k, v in e.items()} for s, e in _compose_env().items()}
     values = {s: set(e.values()) for s, e in rendered.items()}
     secrets = {k: dotenv[k] for k in dotenv if k in SECRETS}
-    assert set(secrets) >= {"DISCORD_BOT_TOKEN", "GLORFINDEL_WARROOM_TOKEN", "ANTHROPIC_API_KEY",
+    assert set(secrets) >= {"DISCORD_BOT_TOKEN", "EREGION_CONSOLE_TOKEN", "ANTHROPIC_API_KEY",
                             "OPENAI_API_KEY", "GLORFINDEL_WEBHOOK_URL"}
     for secret, value in secrets.items():
         assert {s for s, v in values.items() if value in v} == SECRETS[secret], secret
@@ -170,6 +171,24 @@ def test_the_generated_host_env_reaches_each_container_with_only_its_secrets():
     assert rendered["watch"]["GLORFINDEL_DISCORD_BOT"] == rendered["war-room"]["GLORFINDEL_DISCORD_BOT"] == "1"
     dotenv["DISCORD_BOT_TOKEN"] = ""
     assert _interpolate(_compose_env()["watch"]["GLORFINDEL_DISCORD_BOT"], dotenv) == ""
+
+
+@pytest.mark.parametrize("dotenv", [
+    {"GLORFINDEL_WARROOM_TOKEN": "fake-h0-token"},                 # H0's host.env, before UI-1c
+    {"EREGION_CONSOLE_TOKEN": "fake-h0-token"},                    # a new host's
+    {"EREGION_CONSOLE_TOKEN": "", "GLORFINDEL_WARROOM_TOKEN": "fake-h0-token"},
+])
+def test_either_name_of_the_token_reaches_the_console_through_compose(monkeypatch, dotenv):
+    """UI-1c: no forced rename. Rendered as compose renders it, the console's environment
+    gives `console_token()` the host.env's token under either name — and no other container
+    receives it."""
+    from eregion_console import api
+
+    rendered = {s: {k: _interpolate(v, dotenv) for k, v in e.items()} for s, e in _compose_env().items()}
+    for name in ("EREGION_CONSOLE_TOKEN", "GLORFINDEL_WARROOM_TOKEN"):
+        monkeypatch.setenv(name, rendered["war-room"][name])
+    assert api.console_token() == "fake-h0-token"
+    assert not [s for s in ("watch", "bot") if "fake-h0-token" in rendered[s].values()]
 
 
 def test_host_env_warns_when_nobody_may_press_the_buttons(tmp_path, monkeypatch, capsys):

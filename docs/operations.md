@@ -12,6 +12,13 @@ make glorfindel-logs                         # tail logs des deux services
 make glorfindel-dev                          # auto-reload sur modification de code (docker compose watch)
 make glorfindel-stop                         # arrêt
 
+# Glorfindel hébergé (H0) — infra/glorfindel-host/README.md
+make glorfindel-host-tunnel                  # tunnel + « Console → http://localhost:7007/?token=… » ; le jeton de host.env :
+                                             # EREGION_CONSOLE_TOKEN s'il n'est pas vide, sinon GLORFINDEL_WARROOM_TOKEN
+                                             # (l'ancien nom reste valide, rien à renommer) ; -url : l'URL seule
+make glorfindel-host-status                  # tout tourne ? lit le jeton sur la VM sous l'un ou l'autre nom, sans l'afficher
+make glorfindel-host-push                    # host_env.py --check d'abord : refuse un host.env sans jeton de la console
+
 # Workflow opérateur — 3 terminaux (local sans Docker Compose)
 glorfindel watch runs/                       # terminal 1 — réponses automatiques
 annatar run annatar/scenarios/azure/ransomware-vm.yaml  # terminal 2 — attaque
@@ -244,7 +251,8 @@ EREGION_EXERCISE_CHANNEL=https://…/exercises  # O1 : canal des fenêtres d'exe
 
 Chaque conteneur ne reçoit que ses variables (M-3, `docker-compose.yml`) : les clés des modèles
 à la watch seule ; `DISCORD_BOT_TOKEN` et `DISCORD_ALLOWED_*` au bot seul ;
-`EREGION_CONSOLE_TOKEN` (et son ancien nom, `GLORFINDEL_WARROOM_TOKEN`) à la console seule ;
+`EREGION_CONSOLE_TOKEN` (et son ancien nom, `GLORFINDEL_WARROOM_TOKEN` ; un nouveau `host.env`
+reçoit le nouveau, celui de H0 garde l'ancien) à la console seule ;
 `GLORFINDEL_WEBHOOK_URL` à la watch et à la console, avec `GLORFINDEL_DISCORD_BOT` (« 1 » si `DISCORD_BOT_TOKEN` est posé, vide sinon,
 jamais sa valeur : avec `DISCORD_CHANNEL_ID`, leur webhook se tait) ; le principal de service
 Azure aux trois (la watch, « Approve & execute », les boutons Restore / Revert du bot) ; les

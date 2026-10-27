@@ -103,7 +103,7 @@ Les propriétés, vérifiées après chaque étape :
 | I11 | deux opérations à la fois finissent comme l'une après l'autre : l'état local dit ce qu'Azure a |
 | I12 | une VM d'un autre abonnement n'est jamais touchée, ni déclarée isolée |
 | L1 | un blocage dont les règles ont disparu est reposé ou signalé, même derrière la quarantaine |
-| U1 | une règle laissée par une carte qui n'existe plus, et qui coupe une carte vivante, est signalée |
+| U1 | une règle laissée par une carte qui n'existe plus, et qui coupe une carte vivante, est signalée, puis retirée par le balayage — rien d'autre ne bouge ; en fin de séquence, chaque VM vivante revient à sa conception en entier (A3) |
 
 **Des oracles qui ne demandent rien au code.** Ce qu'une propriété juge vient du journal du test :
 la levée qu'il a demandée (I9), ce qu'il a perdu et quand (une carte « intraçable »), qui a écrit
@@ -702,6 +702,51 @@ de la cible et le réseau lèvent, et chaque tentative est notée. Trente mutant
 | M758 | un fichier local vivant compte malgré le canal | une watch locale prise pour la watch hébergée |
 | M759 | la console compte une campagne sans Glorfindel en `unknown` | un run de dév pris pour un trou |
 
+### Les règles orphelines, la restauration, la configuration (A3)
+
+Le contrôle de posture alerte, puis retire la règle d'une carte disparue qui coupe une carte
+vivante derrière son NSG (U1). La machine le prouve : règle `orphan_sweep` (après elle, plus
+aucune VM vivante coupée par une orpheline ; aucune autre VM, aucun état, aucune carte ne
+bouge ; rien de plus ouvert que ce que les orphelines fermaient), composite `address_reused`
+(une VM bloquée ou isolée, supprimée avec ou sans son état, une VM créée à son adresse, sur le
+NSG de sa devancière ou non) — sans elle, aucun des 313 balayages tirés à 500 séquences ne
+trouvait une orpheline qui coupe ; avec, 47 sur 356. En fin de séquence, après la levée de tout, chaque VM vivante
+revient à sa conception en entier, plus seulement « à ses yeux » : la limite connue d'I7 est
+levée. Mesuré avant (`6c958e1`) et après, au même budget (500 séquences, 1 tour) :
+
+| | Avant | Après |
+|---|---|---|
+| Invariants à 500 séquences, rejeu | verts | verts |
+| M01–M41, attrapés au tour | 26 sur 39 | 23 sur 39 |
+| Jeu de contrôle (C01–C16) | 10 sur 16 | 11 sur 16 |
+
+Les sept écarts de M01–M41 (M17, M18, M20, M21, M22, M29, M38) remesurés sur trois tours des
+deux côtés : identiques (M17 et M20 2 sur 3, M21 3 sur 3, M22 et M38 figés seulement), ou
+meilleurs après (M18 et M29 3 sur 3, contre 2 et 1 avant) — le tirage, pas une perte.
+
+Seize mutants (M760–M775), tous attrapés au premier tour (27/10) ; M760–M763 par les
+invariants, les autres par `test_orphan_sweep.py`, `test_config.py` et `test_glorfindel.py`.
+M28 suit le code (sa condition a deux lignes).
+
+| Mutant | Défaut réinjecté | Effet |
+|---|---|---|
+| M760 | le balayage alerte et ne retire jamais | la VM reste coupée (L28) |
+| M761 | la règle d'une carte vivante prise pour une orpheline | une isolation levée en silence |
+| M762 | le retrait vide toutes les règles de Glorfindel du NSG | les isolations des voisines levées |
+| M763 | l'adresse visée lue du mauvais côté de la règle | l'orpheline jamais retirée |
+| M764 | le NSG de la carte visée pas comparé | une règle qui ne coupe personne retirée |
+| M765 | une carte attachée au NSG manque à la liste : retrait quand même | une isolation d'une carte invisible levée |
+| M766 | une carte de l'état, présente, prise pour disparue | idem, la carte que Glorfindel a isolée |
+| M767 | anciens noms d'une carte vivante pris pour des orphelines | une isolation d'avant L24 levée |
+| M768 | identifiants en lecture seule : retrait tenté | une écriture refusée à chaque passage |
+| M769 | carte résolue malgré un retrait en échec | la VM coupée, plus rien ne le dit |
+| M770 | une clé que rien ne lit acceptée | `quarantaine_nsg: false` laisse la quarantaine |
+| M771 | `"false"` entre guillemets lu vrai | `exclude_all: "false"` sort la VM des règles |
+| M772 | un texte seul pris pour une liste, lettre par lettre | `allow_destructive: "vm-*"` donne `*` |
+| M773 | la watch démarre sur une config refusée | « Could not load rules », aucune détection |
+| M774 | la restauration revient à trois noms CustomScript | VMAccess ramène la clé de l'attaquant |
+| M775 | une extension au type illisible acceptée | l'inconnu passe pour sûr |
+
 ## Ce que les invariants ont trouvé
 
 Aucun de ces défauts n'avait été vu en revue. Chacun a son test et sa séquence figée.
@@ -768,7 +813,10 @@ Une séquence trouvée la nuit est rejouée en premier à chaque push jusqu'à s
 - **Deux hôtes** : les verrous sont par hôte. Un autre hôte qui écrit la carte juste après
   Glorfindel est modélisé (A0) ; deux Glorfindel complets sur deux machines ne le sont pas.
 - **VM supprimée et état perdu** : les règles qu'une isolation par règles a laissées sur un
-  NSG partagé sont introuvables, faute de cartes pour dire où chercher.
+  NSG partagé se retrouvent par l'empreinte de leur nom et sont retirées quand elles coupent une
+  VM vivante (A3) ; la VM reste coupée jusqu'au passage suivant du contrôle de posture. Une liste
+  des cartes partielle (droits de lecture) et des VNets qui se recouvrent ne sont pas dans la
+  machine : des tests unitaires couvrent les gardes (`test_orphan_sweep.py`).
 - **Couches au-dessus du NSG** : règles d'administration d'Azure Virtual Network Manager,
   routes, pare-feu. Elles peuvent contourner une isolation et ne sont pas encore lues.
 - **Hypothèses du faux Azure** non mesurées : le code d'erreur d'un NSG d'une autre région,

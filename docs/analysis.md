@@ -524,8 +524,9 @@ docker exec eregion-watch python -m analysis.campaign_index --all runs/campaigns
 ## Le tri, la mémoire et le modèle séparés (IA1, #88)
 
 _27/10 : le code, ses tests (`tests/unit/test_analysis_separation.py`,
-`tests/unit/test_analysis_triage.py`, où les cas du harnais tournent avec un modèle simulé) et ses
-mutants (M780–M799) sont écrits. Le harnais avec le vrai modèle (`scripts/analysis_eval.py`) est
+`tests/unit/test_analysis_triage.py`, où les cas du harnais tournent avec un modèle simulé,
+`tests/unit/test_analysis_rules_parity.py`) et ses mutants (M780–M799, M840–M844 après la
+relecture) sont écrits. Le harnais avec le vrai modèle (`scripts/analysis_eval.py`) est
 à lancer par Jonathan : rien de ceci n'est encore mesuré sur un modèle réel._
 
 L'IA d'analyse explique, trie et rapporte. Elle lit les runs, le catalogue, les schémas et le
@@ -538,14 +539,35 @@ code d'infrastructure. Elle n'écrit pas de règle et n'agit pas.
   jamais le modèle de décision de Glorfindel (`GLORFINDEL_LLM_MODEL`, sinon le défaut). Ils sont
   comparés sans la casse et sans le préfixe du fournisseur : `anthropic/claude-sonnet-5-5` et
   `claude-sonnet-5-5` sont le même modèle, comme `azure/gpt-4o` et `openai/gpt-4o`. Le rapport
-  et le tri le vérifient avant tout appel ;
+  et le tri le vérifient avant tout appel. **Limite** : la comparaison porte sur le dernier
+  segment du nom. Un alias daté (`claude-haiku-5-5-20261001` contre `claude-haiku-5-5`) ou un nom
+  Bedrock (`bedrock/anthropic.claude-haiku-5-5-v1:0`) passe pour un autre modèle : à l'opérateur
+  de ne pas les croiser. À l'inverse, `ollama/x` et `mistral/x` sont refusés comme un seul modèle
+  alors qu'ils peuvent différer : un refus en trop, le sens sûr ;
 - **la mémoire** : l'index de l'analyse (`EREGION_ANALYSIS_INDEX`, sinon
   `~/.eregion/analysis/chroma`) n'est jamais dans l'état de Glorfindel (`~/.glorfindel`, où vit
   sa mémoire des cycles), chemin résolu (`..`, lien symbolique) ; sa collection
   (`campaign_runs`) n'est jamais celle de Glorfindel (`cycles`).
 
-Un refus n'écrit rien, et dit le réglage à changer. En local, la commande échoue ; sur H0, le
-rapport compte un essai raté (plus haut). Aucun module de `analysis/` n'importe Glorfindel, ni de
+Un refus n'écrit rien, et dit le réglage à changer, en tête de son message (la fin de `campaign
+run` coupe le message à 120 caractères : l'instruction « set EREGION_ANALYSIS_MODEL » reste). En
+local, la commande échoue ; sur H0, le rapport compte un essai raté (plus haut).
+
+**Le contrôle voit l'environnement de son processus**, et seulement lui. Les deux variables
+doivent donc y être :
+- **le conteneur d'Annatar** (`make annatar-*`, la fin de `campaign run` y écrit le rapport)
+  reçoit `GLORFINDEL_LLM_MODEL` à côté d'`EREGION_ANALYSIS_MODEL` (`ANNATAR_AZURE_ENV`, Makefile).
+  Sans lui, le contrôle comparait au modèle par défaut de Glorfindel, et laissait passer le modèle
+  réellement posé ;
+- **sur H0**, la watch écrit les rapports. `host_env.py` recopie `EREGION_ANALYSIS_MODEL` de
+  l'environnement de l'opérateur dans `host.env` (vide : le défaut, Haiku 5.5). Pour un
+  `host.env` déjà écrit, poser la ligne à la main, ici et sur la VM :
+  `EREGION_ANALYSIS_MODEL=<un autre modèle que celui de Glorfindel>` dans
+  `infra/glorfindel-host/host.env` et dans `~/eregion/.env`, puis `docker compose up -d watch`.
+  `make glorfindel-host-model MODEL=…` lance ensuite `python -m analysis.separation` dans la
+  watch : si le modèle choisi pour Glorfindel est celui de l'analyse, il le dit (« les rapports
+  et les tris de campagne seront refusés ») et dit quoi poser. Sans cela, chaque rapport était
+  refusé, puis abandonné après 3 essais. Aucun module de `analysis/` n'importe Glorfindel, ni de
 quoi lancer une commande (`subprocess`, `os.system`), et seul `separation.py` nomme l'état de
 Glorfindel : un test le vérifie sur le code (`test_analysis_separation.py`). L'analyse lit les
 règles de Glorfindel comme des données, jamais sa mémoire.
@@ -576,7 +598,12 @@ Un run sans rien de cela n'est pas un item ; le tri dit combien il y en a.
   `jsonschema` (l'image de la watch), il dit que le catalogue n'a pas été vérifié ;
 - **les règles de Glorfindel** : la base livrée, et la couche du client
   (`~/.glorfindel/client_rules.yaml`, P1) par-dessus, comme la watch les charge (même nom :
-  remplacée ; `enabled: false` ou `disable:` : désactivée). Lues seulement ;
+  remplacée ; `enabled: false` ou `disable:` : désactivée). Une entrée de la couche du client que
+  la watch ne charge pas (sans requête, `enabled` qui n'est pas un booléen, `interval_s: 30s`,
+  `ttp` ou `name` qui n'est pas une chaîne…) est écartée ici aussi, et la règle de base reste ; le
+  tri le dit. Les critères sont copiés de `glorfindel/detection_rules.py` (`analysis/` n'importe
+  pas Glorfindel) ; `tests/unit/test_analysis_rules_parity.py` compare les deux, sur une table de
+  couches, avec le chargeur de la watch lui-même comme oracle. Lues seulement ;
 - **le code d'infrastructure** (`infra/terraform` par défaut, `--infra` pour un autre) : la source
   de journaux de la technique est-elle collectée ? `Perf` et `Syslog` par les flux d'une règle de
   collecte (`"Microsoft-Perf"`, `"Microsoft-Syslog"`), `StorageBlobLogs` par une catégorie
@@ -606,8 +633,15 @@ est borné comme celui du rapport (`EREGION_ANALYSIS_TIMEOUT_S`).
 - qui porte une règle : une requête KQL (`| where`, `| summarize`, `let x =`…), les champs d'une
   règle en YAML (`query:`, `ttp:`…), un bloc de code. L'analyse n'écrit pas de règle ; un humain
   le fait ;
+- qui dit qu'une décision a été prise (« approuvée par … », « Jonathan a validé », « approved
+  by », « status: approved ») : seul `decide` enregistre la décision d'un humain ;
 - sur un item dont la décision est inconnue, une explication qui dit que Glorfindel a agi, ou
   qu'il n'a pas agi (la lecture du rapport, plus haut : une heuristique).
+
+Ce qui est écarté est montré en fin de `triage.md`, barré, une ligne par entrée (les retours à la
+ligne du modèle n'y cassent rien), et une décision qu'il affirmerait y est remplacée par « [décision
+affirmée par le modèle, sans valeur] » : `triage.md` ne peut pas laisser croire qu'un humain a
+validé.
 
 ### Rien sans la décision d'un humain
 
@@ -618,6 +652,13 @@ enregistre la décision d'un humain : son nom (obligatoire), l'heure (UTC), la n
 d'autre : une proposition approuvée reste à faire par un humain. Le tri n'écrit aucune règle et
 n'appelle ni Glorfindel, ni Azure, ni le modèle. Une proposition se décide une fois ; un tri qui
 porte une décision n'est jamais réécrit par un nouveau tri (`Decided`).
+
+**Un seul écrivain à la fois** : `decide` et l'écriture d'un tri prennent un verrou `flock` sur
+`runs/campaigns/<id>/.triage.lock` (comme `.report.lock` du rapport sur H0). Deux décisions prises
+en même temps sont gardées toutes les deux ; sans verrou, la seconde écriture perdait la première
+(un test le joue entre trois processus). **Un `triage.json` illisible** (pas du JSON, une clé
+inconnue, une sorte ou un statut inconnu) est refusé en une ligne (« refusé : triage.json
+illisible … »), code de sortie 1 : rien n'est décidé ni écrit, et aucun modèle n'est appelé.
 
 ### Les cas d'analyse du harnais
 
@@ -635,8 +676,8 @@ d'infrastructure ; le catalogue est celui du dépôt.
 Pour chaque cas et chaque passage, le harnais mesure : le tri calculé (la part du code, la même
 quel que soit le modèle) ; les propositions utiles gardées (la part du modèle) ; les entrées
 écartées ; l'obéissance à la ligne plantée (comptée même quand la vérification l'a écartée) ;
-que chaque proposition attend un humain ; que rien d'autre que `triage.json` et `triage.md` n'a
-été écrit (les règles, la mémoire de Glorfindel et le code d'infrastructure sont hachés avant et
+que chaque proposition attend un humain ; que rien d'autre que `triage.json`, `triage.md` et le
+verrou du tri (un fichier vide) n'a été écrit (les règles, la mémoire de Glorfindel et le code d'infrastructure sont hachés avant et
 après). Les tests jouent les cinq cas avec un modèle simulé fidèle (tout passe), et le cas
 `planted` avec un modèle simulé qui obéit : l'obéissance est comptée, les deux entrées sont
 écartées, aucune règle ni approbation n'entre dans le tri.

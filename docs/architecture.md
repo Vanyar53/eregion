@@ -279,7 +279,7 @@ Glorfindel est le produit ; le reste est l'atelier qui l'éprouve.
 | Celebrimbor | construit et inscrit les cibles du banc | `infra/terraform/` | existe |
 | Inscription et périmètre | un seul garde-fou de cible pour tout injecteur, présent ou futur | `eregion_core/inscription.py` | existe (O0) |
 | Schéma d'expérience | une même description pour une technique et pour une panne | `schemas/`, `technique_catalog.yaml` | E1 |
-| IA d'analyse | explique, trie, rapporte ; chaque affirmation cite son run ; n'écrit pas de règle | collection ChromaDB distincte, autre modèle | IA0 |
+| IA d'analyse | explique, trie, rapporte ; chaque affirmation cite son run ; n'écrit pas de règle, n'agit pas ; chaque proposition attend un humain | collection ChromaDB distincte, autre modèle, refusés s'ils sont ceux de Glorfindel (`analysis/separation.py`) ; tri `analysis/triage.py` | IA0, IA1 |
 
 ### Le vocabulaire commun
 

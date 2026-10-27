@@ -85,11 +85,14 @@ SECRETS = {
     # The console's token, and its former name (H0's host.env): the console alone.
     "EREGION_CONSOLE_TOKEN": {"war-room"},
     "GLORFINDEL_WARROOM_TOKEN": {"war-room"},
-    "ANTHROPIC_API_KEY": {"watch"}, "OPENAI_API_KEY": {"watch"},
+    # D1: Annatar's campaign planner (`--llm`) too, as on Orodruin; never Gothmog.
+    "ANTHROPIC_API_KEY": {"watch", "annatar"}, "OPENAI_API_KEY": {"watch"},
     "MISTRAL_API_KEY": {"watch"}, "AZURE_API_KEY": {"watch"},
     # The service principal (empty on H0: managed identity): the watch, the War Room's
-    # « Approve & execute », the bot's Restore / Revert buttons.
-    "AZURE_CLIENT_SECRET": {"watch", "war-room", "bot"},
+    # « Approve & execute », the bot's Restore / Revert buttons. D1: the injectors receive
+    # theirs under the same name, filled from ANNATAR_AZURE_CLIENT_SECRET, never Glorfindel's
+    # (tests/unit/test_profiles.py).
+    "AZURE_CLIENT_SECRET": {"watch", "war-room", "bot", "annatar", "gothmog"},
     # A webhook URL carries its token: the watch (decisions, actions) and the War Room (cards
     # it records), never the bot.
     "GLORFINDEL_WEBHOOK_URL": {"watch", "war-room"},
@@ -105,6 +108,12 @@ NEEDED = {
                  "GLORFINDEL_DISCORD_BOT"},
     "bot": {"DISCORD_BOT_TOKEN", "DISCORD_CHANNEL_ID", "DISCORD_PING_ROLE", "DISCORD_ALLOWED_USERS",
             "DISCORD_ALLOWED_ROLES", "AZURE_SUBSCRIPTION_ID", "GLORFINDEL_READ_ONLY"},
+    # D1: the injectors read the watch's heartbeat on the return channel (V1) and publish their
+    # windows on the exercise channel.
+    "annatar": {"AZURE_SUBSCRIPTION_ID", "EREGION_WATCH_CHANNEL", "EREGION_EXERCISE_CHANNEL",
+                "ANNATAR_LLM_MODEL"},
+    "gothmog": {"AZURE_SUBSCRIPTION_ID", "EREGION_WATCH_CHANNEL", "EREGION_EXERCISE_CHANNEL",
+                "EREGION_BENCH_WORKSPACE"},
 }
 _SECRET_WORDS = re.compile(r"KEY|TOKEN|SECRET|PASSWORD|WEBHOOK|SAS", re.I)
 
@@ -124,7 +133,7 @@ def _compose_env() -> dict[str, dict[str, str]]:
 
 def test_each_container_receives_only_its_secrets():
     env = _compose_env()
-    assert set(env) == {"watch", "bot", "war-room"}
+    assert set(env) == {"watch", "bot", "war-room", "annatar", "gothmog"}
     for secret, owners in SECRETS.items():
         assert {s for s, e in env.items() if secret in e} == owners, secret
     # A new secret-looking variable must be placed above, never handed to every container.

@@ -1,5 +1,12 @@
 # make glorfindel-start  →  watch + la console d'Eregion (service war-room) sur http://localhost:7007
 
+# D1 : les profils d'usage (docs/profils/). Glorfindel (watch + console) est toujours là : il
+# démarre sans profil. Les profils compose ajoutent : `bot` (le bot Discord), `annatar` et
+# `gothmog` (les injecteurs, lancés à la demande : `docker compose --profile annatar run --rm
+# annatar list`). Plusieurs équipes : une instance par équipe (make team-start TEAM=…), que
+# nomment EREGION_INSTANCE (conteneurs), EREGION_CONSOLE_PORT, EREGION_RUNS et EREGION_CONFIG —
+# vides, ce sont les valeurs d'avant D1 (H0 et ses scripts lisent eregion-watch, eregion-war-room).
+
 # M-3 (#183) : chaque conteneur ne reçoit que ses secrets. docker compose lit `.env` (sur H0,
 # host.env poussé) pour remplacer les ${…} ci-dessous, et rien d'autre : un conteneur ne voit
 # que les variables de sa liste `environment`. Les blocs :
@@ -59,16 +66,35 @@ x-webhook: &webhook
   GLORFINDEL_WEBHOOK_URL: ${GLORFINDEL_WEBHOOK_URL:-}
   GLORFINDEL_DISCORD_BOT: ${DISCORD_BOT_TOKEN:+1}
 
+# D1 : les injecteurs, Annatar et Gothmog (profils `annatar` et `gothmog`). Leur principal de
+# service est le leur, ANNATAR_AZURE_CLIENT_* (Contributor sur le banc), jamais celui de
+# Glorfindel ; vide, ils n'ont pas d'identité. Le contrat d'Orodruin (cap, portées des canaux,
+# groupe du banc) : vide, le verdict est `passive` — un injecteur n'agit que depuis un Orodruin
+# armé (docs/design/orodruin-contract.md) ; ici, sur un poste : valider, lister, --dry-run,
+# `gothmog preflight`. Le canal retour : le battement de la watch hébergée (V1).
+x-injector: &injector
+  AZURE_SUBSCRIPTION_ID: ${AZURE_SUBSCRIPTION_ID:-}
+  AZURE_TENANT_ID: ${AZURE_TENANT_ID:-}
+  AZURE_CLIENT_ID: ${ANNATAR_AZURE_CLIENT_ID:-}
+  AZURE_CLIENT_SECRET: ${ANNATAR_AZURE_CLIENT_SECRET:-}
+  EREGION_BENCH_RG: ${EREGION_BENCH_RG:-}
+  EREGION_MAX_INJECTIONS: ${EREGION_MAX_INJECTIONS:-}
+  EREGION_MAX_RUN_S: ${EREGION_MAX_RUN_S:-}
+  EREGION_EXERCISE_CHANNEL: ${EREGION_EXERCISE_CHANNEL:-}
+  EREGION_CHANNEL_SCOPE: ${EREGION_CHANNEL_SCOPE:-}
+  EREGION_WATCH_CHANNEL: ${EREGION_WATCH_CHANNEL:-}
+  EREGION_WATCH_CHANNEL_SCOPE: ${EREGION_WATCH_CHANNEL_SCOPE:-}
+
 services:
   watch:
     image: eregion-glorfindel
-    container_name: eregion-watch
+    container_name: ${EREGION_INSTANCE:-eregion}-watch
     command: glorfindel watch /app/runs
     restart: unless-stopped
     environment:
       <<: [*env, *azure, *models, *webhook]
     volumes:
-      - ./runs:/app/runs
+      - ${EREGION_RUNS:-./runs}:/app/runs
       # P1 : la base livrée des règles, en lecture seule — aucun conteneur ne l'écrit plus.
       # Les règles du client (approuvées, remplacées, désactivées) vivent dans la couche du
       # client, ~/.glorfindel/client_rules.yaml (montage suivant), hors du dépôt : un
@@ -78,7 +104,7 @@ services:
       - ${HOME}/.cache/chroma:/root/.cache/chroma
       # IA0 (#167) : l'index campaign_runs du rapport de campagne, sur le disque de l'hôte.
       - ${HOME}/.eregion/analysis:/root/.eregion/analysis
-      - ./glorfindel-config.yaml:/app/glorfindel-config.yaml:ro
+      - ${EREGION_CONFIG:-./glorfindel-config.yaml}:/app/glorfindel-config.yaml:ro
       - ./technique_catalog.yaml:/app/technique_catalog.yaml:ro
     develop:
       watch:
@@ -99,7 +125,7 @@ services:
   # des escalades se tait (GLORFINDEL_DISCORD_BOT, bloc webhook) : ce profil doit alors tourner.
   bot:
     image: eregion-glorfindel
-    container_name: eregion-bot
+    container_name: ${EREGION_INSTANCE:-eregion}-bot
     command: glorfindel bot
     restart: unless-stopped
     profiles: ["bot"]
@@ -111,11 +137,11 @@ services:
       DISCORD_ALLOWED_USERS: ${DISCORD_ALLOWED_USERS:-}
       DISCORD_ALLOWED_ROLES: ${DISCORD_ALLOWED_ROLES:-}
     volumes:
-      - ./runs:/app/runs
+      - ${EREGION_RUNS:-./runs}:/app/runs
       - ./glorfindel/rules:/app/glorfindel/rules:ro
       - ${HOME}/.glorfindel:/root/.glorfindel
       - ${HOME}/.cache/chroma:/root/.cache/chroma
-      - ./glorfindel-config.yaml:/app/glorfindel-config.yaml:ro
+      - ${EREGION_CONFIG:-./glorfindel-config.yaml}:/app/glorfindel-config.yaml:ro
       - ./technique_catalog.yaml:/app/technique_catalog.yaml:ro
     depends_on:
       - watch
@@ -124,14 +150,14 @@ services:
   # Room's name for now: H0's deploy.sh and status.sh start and read it by that name.
   war-room:
     image: eregion-glorfindel
-    container_name: eregion-war-room
+    container_name: ${EREGION_INSTANCE:-eregion}-war-room
     # 0.0.0.0 INSIDE the container is required for the port mapping to work; what
     # limits exposure is the HOST side of the mapping: loopback only. To reach the
     # console from another machine, set EREGION_CONSOLE_TOKEN and widen the mapping.
     command: eregion console --host 0.0.0.0 --port 7007
     restart: unless-stopped
     ports:
-      - "127.0.0.1:7007:7007"
+      - "127.0.0.1:${EREGION_CONSOLE_PORT:-7007}:7007"
     environment:
       <<: [*env, *azure, *webhook]
       # The console's token; its former name still works (H0's host.env has only that one):
@@ -139,13 +165,13 @@ services:
       EREGION_CONSOLE_TOKEN: ${EREGION_CONSOLE_TOKEN:-}
       GLORFINDEL_WARROOM_TOKEN: ${GLORFINDEL_WARROOM_TOKEN:-}
     volumes:
-      - ./runs:/app/runs
+      - ${EREGION_RUNS:-./runs}:/app/runs
       - ./eregion_console/static:/app/eregion_console/static:ro
       - ./glorfindel/rules:/app/glorfindel/rules:ro
       - ${HOME}/.glorfindel:/root/.glorfindel
       - ${HOME}/.cache/chroma:/root/.cache/chroma
       # Optional: mount glorfindel-config.yaml if it exists
-      - ./glorfindel-config.yaml:/app/glorfindel-config.yaml
+      - ${EREGION_CONFIG:-./glorfindel-config.yaml}:/app/glorfindel-config.yaml
       - ./technique_catalog.yaml:/app/technique_catalog.yaml:ro
     depends_on:
       - watch
@@ -164,3 +190,47 @@ services:
           path: ./annatar
         - action: rebuild
           path: ./pyproject.toml
+
+  # D1 : Annatar, l'attaque (profil `annatar` : « ma détection marche-t-elle ? »). Jamais sans
+  # Glorfindel (V1) : `depends_on` démarre la watch, et son battement se lit dans ~/.glorfindel
+  # (lecture seule). runs/ est celui de la watch : elle y lit l'attack_started. Lancé à la
+  # demande, il ne reste pas : `docker compose --profile annatar run --rm annatar <commande>`.
+  annatar:
+    image: eregion-annatar
+    entrypoint: ["annatar"]
+    command: ["--help"]
+    restart: "no"
+    profiles: ["annatar"]
+    environment:
+      <<: *injector
+      # Le planificateur de campagne (`annatar campaign plan --llm`), comme sur Orodruin.
+      ANNATAR_LLM_MODEL: ${ANNATAR_LLM_MODEL:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    volumes:
+      - ${EREGION_RUNS:-./runs}:/app/runs
+      - ./annatar/scenarios:/app/annatar/scenarios
+      - ./scripts:/app/scripts
+      - ./technique_catalog.yaml:/app/technique_catalog.yaml:ro
+      - ${HOME}/.annatar:/root/.annatar
+      - ${HOME}/.glorfindel:/root/.glorfindel:ro
+    depends_on:
+      - watch
+
+  # D1 : Gothmog, la panne (profil `gothmog` : « mon infra tient-elle ? »). Même image
+  # qu'Annatar (celle des injecteurs sur Orodruin), même règle : jamais sans Glorfindel.
+  #   docker compose --profile gothmog run --rm gothmog preflight vm-shutdown
+  gothmog:
+    image: eregion-annatar
+    entrypoint: ["gothmog"]
+    command: ["--help"]
+    restart: "no"
+    profiles: ["gothmog"]
+    environment:
+      <<: *injector
+      EREGION_BENCH_WORKSPACE: ${EREGION_BENCH_WORKSPACE:-}
+    volumes:
+      - ${EREGION_RUNS:-./runs}:/app/runs
+      - ./technique_catalog.yaml:/app/technique_catalog.yaml:ro
+      - ${HOME}/.glorfindel:/root/.glorfindel:ro
+    depends_on:
+      - watch

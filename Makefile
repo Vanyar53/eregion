@@ -105,7 +105,9 @@ DOCKER_GLORFINDEL := docker run --rm $(GLORFINDEL_AZURE_ENV) $(GLORFINDEL_VOLS) 
 	orodruin-init orodruin-plan orodruin-up orodruin-lock orodruin-push orodruin-check \
 	orodruin-stop orodruin-start orodruin-kill orodruin-down orodruin-ssh \
 	gothmog-preflight gothmog-run \
-	orodruin-campaign-plan orodruin-campaign-run
+	orodruin-campaign-plan orodruin-campaign-run \
+	profile-discover profile-detection profile-resilience profile-proven profiles-check \
+	team-check team-init team-start team-stop team-logs team-config components-check
 
 # ── Help ──────────────────────────────────────────────────────────────────
 
@@ -199,6 +201,16 @@ help:
 	@echo "  make orodruin-campaign-run  CAMPAIGN=<id>    Joue la campagne (watch H0 en human_only)"
 	@echo "  make glorfindel-host-campaign-report CAMPAIGN=<id>  Son rapport, écrit seul sur H0"
 	@echo "    (#167 : code, tests et mutants — rien de mesuré sur le banc)"
+	@echo ""
+	@echo "Profils d'usage (D1) — Glorfindel toujours là ; docs/profils/ :"
+	@echo "  make profile-discover       Glorfindel seul, en observation : découvrir"
+	@echo "  make profile-detection      + Annatar : ma détection marche-t-elle ?"
+	@echo "  make profile-resilience     + Gothmog : mon infra tient-elle ?"
+	@echo "  make profile-proven         Tout : défense éprouvée (comme H0)"
+	@echo "  make team-init  TEAM=<nom>  Plusieurs équipes : ~/.eregion/teams/<nom>/ (team.env, config)"
+	@echo "  make team-start TEAM=<nom> [BOT=1]  Son Glorfindel, sa console sur son port ; team-stop, team-logs"
+	@echo "  make profiles-check         Chaque profil compose rend ses services (docker, rien ne démarre)"
+	@echo "  make components-check [COMPONENT=annatar]  Chaque composant tourne seul (ses tests, les autres absents)"
 	@echo ""
 	@echo "Variables"
 	@echo "  SCENARIO    Path to scenario YAML (default: $(SCENARIO))"
@@ -708,6 +720,94 @@ orodruin-campaign-plan:
 orodruin-campaign-run:
 	@test -n "$(CAMPAIGN)" || { echo "CAMPAIGN=<id> requis (rendu par orodruin-campaign-plan)"; exit 1; }
 	ssh $(SSH_OPTS) -o ServerAliveInterval=60 $(ORO_USER)@$(ORO_IP) '$(ORO_RUN) annatar campaign run $(CAMPAIGN) --yes$(ORO_WITHOUT)'
+
+# ── Profils d'usage (D1) — docs/profils/ ──────────────────────────────────────
+# Glorfindel est toujours là (docs/design/console.md, §2) : chaque profil démarre sa watch et la
+# console (glorfindel-start), puis prépare ce qu'il ajoute. Un injecteur n'agit que depuis un
+# Orodruin armé : sur ce poste, son image et les commandes qui ne touchent rien.
+profile-discover: glorfindel-start
+	@echo "  Profil « découvrir » : Glorfindel seul, en observation — docs/profils/decouvrir.md"
+
+profile-detection: glorfindel-start build-annatar
+	@echo "  Profil « ma détection marche-t-elle ? » : Glorfindel + Annatar — docs/profils/detection.md"
+	@echo "  Ici, rien ne touche le cloud : docker compose --profile annatar run --rm annatar list"
+	@echo "  Les attaques : depuis Orodruin (make orodruin-up, orodruin-push, orodruin-campaign-plan)"
+
+profile-resilience: glorfindel-start build-annatar
+	@echo "  Profil « mon infra tient-elle ? » : Glorfindel + Gothmog — docs/profils/resilience.md"
+	@echo "  Ici, le verdict sans rien écrire : docker compose --profile gothmog run --rm gothmog preflight vm-shutdown"
+	@echo "  Les pannes : depuis Orodruin (make gothmog-preflight, gothmog-run)"
+
+profile-proven: glorfindel-start build-annatar
+	@echo "  Profil « défense éprouvée » : Glorfindel + Annatar + Gothmog — docs/profils/eprouvee.md"
+	@echo "  Glorfindel hébergé : make glorfindel-host-up, glorfindel-host-start ; injecteurs : Orodruin"
+
+# CI (.github/workflows/components.yml) : chaque profil compose rend ses services, Glorfindel
+# dans tous ; une instance d'équipe prend son nom. docker compose config : rien ne démarre.
+profiles-check:
+	@check() { got=$$(docker compose $$1 config --services | LC_ALL=C sort | tr '\n' ' '); \
+	  if [ "$$got" = "$$2" ]; then echo "  ✓ [$$1] $$got"; else echo "  ✗ [$$1] $$got (attendu : $$2)"; exit 1; fi; }; \
+	check "" "war-room watch " && \
+	check "--profile annatar" "annatar war-room watch " && \
+	check "--profile gothmog" "gothmog war-room watch " && \
+	check "--profile annatar --profile gothmog" "annatar gothmog war-room watch " && \
+	check "--profile bot" "bot war-room watch "
+	@d=$$(mktemp -d) && printf 'AZURE_SUBSCRIPTION_ID=team-sub\nEREGION_CONSOLE_PORT=7998\n' > "$$d/team.env" \
+	  && AZURE_SUBSCRIPTION_ID=shell-sub $(MAKE) -s --no-print-directory team-config TEAM=check TEAM_DIR="$$d" > "$$d/out"; \
+	  ok=0; grep -q "container_name: eregion-check-watch" "$$d/out" && grep -q 'published: "7998"' "$$d/out" \
+	  && grep -q "AZURE_SUBSCRIPTION_ID: team-sub" "$$d/out" && ! grep -q "shell-sub" "$$d/out" && ok=1; rm -rf "$$d"; \
+	  if [ $$ok = 1 ]; then echo "  ✓ une instance par équipe : ses noms, son port, son abonnement — pas celui du shell"; \
+	  else echo "  ✗ l'instance d'une équipe ne prend pas son team.env seul"; exit 1; fi
+
+# Plusieurs équipes : une instance de Glorfindel par équipe, tout son état dans
+# ~/.eregion/teams/<équipe>/ — team.env, glorfindel-config.yaml, runs/, et le HOME que lit
+# docker-compose.yml (.glorfindel, .cache/chroma, .eregion/analysis). env -i : ton shell (ton
+# .envrc, ton abonnement) n'atteint jamais l'instance d'une équipe — docker compose préfère
+# l'environnement au fichier --env-file ; seuls passent le PATH et l'accès à docker.
+TEAM_DIR     = $(HOME)/.eregion/teams/$(TEAM)
+TEAM_COMPOSE = env -i PATH="$$PATH" HOME="$(TEAM_DIR)" DOCKER_CONFIG="$${DOCKER_CONFIG:-$$HOME/.docker}" \
+	DOCKER_HOST="$${DOCKER_HOST:-}" DOCKER_CONTEXT="$${DOCKER_CONTEXT:-}" \
+	EREGION_INSTANCE="eregion-$(TEAM)" EREGION_RUNS="$(TEAM_DIR)/runs" \
+	EREGION_CONFIG="$(TEAM_DIR)/glorfindel-config.yaml" \
+	docker compose -p "eregion-$(TEAM)" --env-file "$(TEAM_DIR)/team.env"
+
+# Le nom fait un chemin, un projet compose et des noms de conteneurs : minuscules, chiffres, tirets.
+team-check:
+	@case "$(TEAM)" in ""|-*|*[!a-z0-9-]*) echo "✗ TEAM=<nom> requis : minuscules, chiffres, tirets"; exit 1;; esac
+
+team-init: team-check
+	mkdir -p "$(TEAM_DIR)/runs"
+	@[ -f "$(TEAM_DIR)/team.env" ] || { cp team.env.example "$(TEAM_DIR)/team.env" && chmod 600 "$(TEAM_DIR)/team.env"; }
+	@[ -f "$(TEAM_DIR)/glorfindel-config.yaml" ] || cp glorfindel-config.yaml.example "$(TEAM_DIR)/glorfindel-config.yaml"
+	@echo "  À remplir : $(TEAM_DIR)/team.env (abonnement, principal, port) et glorfindel-config.yaml"
+
+team-start: team-check build-glorfindel
+	@[ -f "$(TEAM_DIR)/team.env" ] && [ -f "$(TEAM_DIR)/glorfindel-config.yaml" ] \
+	  || { echo "✗ $(TEAM_DIR)/team.env ou glorfindel-config.yaml manquant : make team-init TEAM=$(TEAM)"; exit 1; }
+	@grep -qE '^AZURE_SUBSCRIPTION_ID=[^[:space:]#]' "$(TEAM_DIR)/team.env" || [ -n "$(ALLOW_NO_AZURE)" ] \
+	  || { echo "✗ AZURE_SUBSCRIPTION_ID vide dans team.env : son Glorfindel démarrerait aveugle (ALLOW_NO_AZURE=1 : démo)"; exit 1; }
+	@grep -qE '^EREGION_CONSOLE_PORT=[0-9]+' "$(TEAM_DIR)/team.env" \
+	  || { echo "✗ EREGION_CONSOLE_PORT absent de team.env : un port par équipe (7007 : make glorfindel-start)"; exit 1; }
+	mkdir -p "$(TEAM_DIR)/runs" "$(TEAM_DIR)/.glorfindel" "$(TEAM_DIR)/.cache/chroma" "$(TEAM_DIR)/.eregion/analysis"
+	$(TEAM_COMPOSE)$(if $(BOT), --profile bot) up -d watch war-room$(if $(BOT), bot)
+	@echo "  Console de $(TEAM) → http://localhost:$$(sed -n 's/^EREGION_CONSOLE_PORT=//p' "$(TEAM_DIR)/team.env" | tail -1)"
+
+team-stop: team-check
+	$(TEAM_COMPOSE) --profile bot down
+
+team-logs: team-check
+	$(TEAM_COMPOSE) logs -f
+
+# Ce que reçoit l'instance d'une équipe, rendu par docker compose — les valeurs de team.env
+# comprises : à ne pas coller ailleurs.
+team-config: team-check
+	@$(TEAM_COMPOSE) --profile bot config
+
+# D1 : chaque composant tourne seul — ses tests, les autres composants et les dépendances de
+# Glorfindel absents (scripts/component_check.py ; la CI : .github/workflows/components.yml).
+components-check:
+	@for c in $(or $(COMPONENT),core glorfindel annatar gothmog); do \
+	  $(PYTHON) scripts/component_check.py $$c --imports && $(PYTHON) scripts/component_check.py $$c || exit 1; done
 
 # ── Dev ───────────────────────────────────────────────────────────────────
 

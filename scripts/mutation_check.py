@@ -1632,6 +1632,44 @@ TESTS.update({f"M{n}": "tests/unit/test_watch_gate.py" for n in (*range(720, 740
 TESTS.update({f"M{n}": "tests/unit/test_gothmog.py" for n in (724, 725, 726, 727)})
 TESTS.update({f"M{n}": "tests/unit/test_host_console.py" for n in range(740, 750)})  # UI-1c
 
+# D1 (#81): each component runs alone (scripts/component_check.py), and every usage profile
+# keeps Glorfindel (docker-compose.yml, the Makefile's profile and team targets).
+D1_COMPONENTS = "tests/unit/test_components.py"
+D1_PROFILES = "tests/unit/test_profiles.py"
+MUTANTS += [
+    ("M800", "Glorfindel reads the signal contract from Annatar again: it cannot run alone (D1)",
+     "glorfindel/signals.py", "from eregion_core.signals import Signal\n",
+     "from annatar.signals.emitter import Signal\n"),
+    ("M801", "the component check's finder lets every package through: it proves nothing (D1)",
+     "scripts/component_check.py", "        if self.blocks(fullname):\n            raise ModuleNotFoundError(",
+     "        if False:\n            raise ModuleNotFoundError("),
+    ("M802", "a listed crossing allowed at module level: the component imports the other on load (D1)",
+     "scripts/component_check.py", "((rel, pkg) in CROSSINGS and not at_top)", "((rel, pkg) in CROSSINGS)"),
+    ("M803", "Annatar's compose service no longer starts Glorfindel's watch (D1, V1)", "docker-compose.yml",
+     "      - ${HOME}/.annatar:/root/.annatar\n      - ${HOME}/.glorfindel:/root/.glorfindel:ro\n"
+     "    depends_on:\n      - watch\n",
+     "      - ${HOME}/.annatar:/root/.annatar\n      - ${HOME}/.glorfindel:/root/.glorfindel:ro\n"),
+    ("M804", "Gothmog's compose service may write Glorfindel's state (D1)", "docker-compose.yml",
+     "      - ${HOME}/.glorfindel:/root/.glorfindel:ro\n    depends_on:\n      - watch\n"
+     "\n  # D1 : Gothmog",
+     "      - ${HOME}/.glorfindel:/root/.glorfindel\n    depends_on:\n      - watch\n"
+     "\n  # D1 : Gothmog"),
+    ("M805", "the injectors receive Glorfindel's service principal (D1, M-3)", "docker-compose.yml",
+     "  AZURE_CLIENT_SECRET: ${ANNATAR_AZURE_CLIENT_SECRET:-}\n",
+     "  AZURE_CLIENT_SECRET: ${AZURE_CLIENT_SECRET:-}\n"),
+    ("M806", "make profile-detection starts Annatar's side without Glorfindel (D1)", MAKE,
+     "profile-detection: glorfindel-start build-annatar\n", "profile-detection: build-annatar\n"),
+    ("M807", "a team's Glorfindel inherits the operator's shell: its subscription, its keys (D1)", MAKE,
+     'TEAM_COMPOSE = env -i PATH="$$PATH"', 'TEAM_COMPOSE = env PATH="$$PATH"'),
+    ("M808", "any team name accepted: a path, a compose project, container names (D1)", MAKE,
+     '@case "$(TEAM)" in ""|-*|*[!a-z0-9-]*) echo', '@case "$(TEAM)" in "") echo'),
+    ("M809", "without a team, the watch's container is no longer eregion-watch: H0's scripts lose it (D1)",
+     "docker-compose.yml", "    container_name: ${EREGION_INSTANCE:-eregion}-watch\n",
+     "    container_name: ${EREGION_INSTANCE:-eregion-glorfindel}-watch\n"),
+]
+TESTS.update({f"M{n}": D1_COMPONENTS for n in range(800, 803)})
+TESTS.update({f"M{n}": D1_PROFILES for n in range(803, 810)})
+
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a
@@ -1759,7 +1797,10 @@ def _run(copy: Path, examples: int, show: bool = False, target: str = INVARIANTS
     proc = subprocess.run(
         [sys.executable, "-m", "pytest", *target.split(), "-q", "-x", "-p", "no:cacheprovider"],
         cwd=copy, env=env, capture_output=True, text=True)
-    if "glorfindel" in proc.stdout and "ModuleNotFoundError" in proc.stdout:
+    # A copy that cannot import its code is no measure — unless the import failed on purpose:
+    # the component check (D1) makes the other components absent, and says so.
+    if "glorfindel" in proc.stdout and "ModuleNotFoundError" in proc.stdout \
+            and "absent: component check" not in proc.stdout:
         raise RuntimeError(proc.stdout[-2000:])
     if show and proc.returncode != 0:
         print("\n".join(line for line in proc.stdout.splitlines() if line.startswith("E ")) or proc.stdout[-3000:])

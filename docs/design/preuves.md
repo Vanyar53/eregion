@@ -772,9 +772,11 @@ une, ses étapes ne se rencontraient qu'avec l'isolation d'une ancienne version 
 quinze environ) ; dans un monde qui n'en a pas, la règle la pose sur une VM que rien n'a encore
 touchée, comme `build`. Elle ne favorise pas la VM d'un monde qui en a une : son ancien état
 effacé, M34 tombait à un tour sur cinq. Elle finit par une réisolation sous panne puis une levée,
-deux levées, ou un reset. Au budget du push (500), sur cinq tours : M860 et M861 attrapés à
-chaque tour, M862 et M863 **intermittents** (deux à quatre tours sur cinq selon la mesure) —
-leurs séquences figées les attrapent à chaque push ; M34 trois sur cinq, comme sur `main`.
+deux levées, ou un reset. Au budget du push (500), sur cinq tours, après la relecture : les
+quatre sont **intermittents** par la machine — M860 4/5, M861 2/5, M862 4/5, M863 1/5 (le 429
+au bon appel reste rare) ; leurs séquences figées les attrapent à chaque push. M01–M41 et le
+jeu de contrôle, mesurés à côté de `main` au même budget : 26/39 contre 25/39 attrapés à chaque
+tour ; aucun mutant du chemin d'isolation perdu hors du bruit d'un tour.
 Rien n'est à mesurer au banc : le faux Azure n'est pas en cause.
 
 Le plus grave : après une levée qui échoue en partie, une seconde levée lisait les champs de

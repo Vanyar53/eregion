@@ -6,7 +6,7 @@ Plateforme OSS (Apache 2.0) de défense active cloud : un SOC pour les charges c
 - **Annatar** (rouge) simule des attaques réelles sur l'infra cloud (MITRE ATT&CK) ; devient des adaptateurs vers des bibliothèques publiques (R1 Atomic Red Team, R2 Stratus Red Team)
 - **Gothmog** (pannes, G0 ✅ 19/10) : pannes déclarées en code, par un moteur public (Chaos Studio d'abord) ; éprouve d'abord Glorfindel (bruit bénin, dépendances, reprise)
 
-L'atelier autour : **Celebrimbor** (`infra/terraform/`) construit et inscrit le banc ; **Orodruin** (`infra/orodruin/`, O1 ✅ 19/10) héberge les injecteurs, contrat de garde-fous vérifié au démarrage — **un injecteur n'agit que depuis un Orodruin armé** ; ailleurs (un poste d'opérateur), il reste passif.
+L'atelier autour : **Celebrimbor** (`infra/terraform/`) construit et inscrit le banc ; **Orodruin** (`infra/orodruin/`, O1 ✅ 19/10) héberge les injecteurs, contrat de garde-fous vérifié au démarrage — **un injecteur n'agit que depuis un Orodruin armé** ; ailleurs (un poste d'opérateur), il reste passif. **Et jamais sans Glorfindel** (V1, 27/10) : sans battement vivant de la watch, Annatar et Gothmog refusent avant tout appel au cloud ; `--without-glorfindel` = run de développement, inscrit au rapport.
 
 **Direction — huitième passe (13/10)** (détail : `ROADMAP.md`, « Vers la 1.0 ») :
 - **Finalité** : les incidents cloud courants contenus seuls, en quelques minutes, réversibles et vérifiés ; le reste à un humain, trié et expliqué ; la preuve à tout moment. Cinq indicateurs : temps pour contenir, part contenue seule, actions disruptives à tort, couverture des techniques cloud, âge de la dernière preuve (< 30 jours).
@@ -100,6 +100,9 @@ pytest tests/unit/test_experiment_schema.py  # E1 : schéma d'expérience (techn
 pytest tests/unit/test_docs_budget.py        # DX1 : CLAUDE.md ≤ 25 Ko, liens de l'index et des fichiers de rôle valides
 pytest tests/unit/test_provider_boundary.py # MC0 (A1) : aucun SDK de fournisseur hors de son adaptateur (aussi étape CI), capacités déclarées
 pytest tests/unit/test_actions_split.py     # A1 : la façade glorfindel.actions reste un seul espace de noms ; aucun module > 500 lignes
+pytest tests/unit/test_watch_gate.py        # V1 : pas de run sans watch vivante (refus avant tout appel au cloud), dérogation inscrite
+pytest tests/unit/test_rule_layers.py       # P1 : base livrée intacte, couche du client validée, règles approuvées liées à leur backend
+pytest tests/unit/test_invariants_aws.py    # MC1 : la machine à invariants sur un faux AWS (tests/unit/fake_aws.py)
 pytest tests/unit/test_discovery.py          # AssetRegistry + DiscoveryService + eviction
 pytest tests/unit/test_invariants.py         # L24/L26 : invariants (Hypothesis, machine à états) sur un faux Azure
                           # en mémoire (tests/unit/fake_azure.py : évaluation NSG comme Azure, politiques, régions,

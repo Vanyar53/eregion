@@ -27,6 +27,15 @@ def _recorded_original(nic_id: str):
                     and "original_nsg_id" in p:
                 return p["original_nsg_id"]
     return _UNKNOWN
+
+
+def _held_in_quarantine(nic_id: str) -> bool:
+    """A local state records this NIC in our quarantine — its original known or not.
+    Not known there (lost with the tags, Q7), it is an unknown: never "none" (I8F)."""
+    return any(p.get("kind") == "quarantine" and _same_id(p.get("nic_id", ""), nic_id)
+               for iso in active_isolations() for p in iso.get("placements") or [])
+
+
 _BLOCK_STATE_DIR = Path.home() / ".glorfindel" / "blocks"
 
 

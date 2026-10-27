@@ -304,6 +304,44 @@ def unblock(ip: str, resource_id: str, dry_run: bool, yes: bool):
         _record_manual_action("unblock_ip", resource_id, {**result, "ip": ip})
 
 
+def _watch_reassert_pass(connector, mode_override=None, lock=None, seen: dict | None = None) -> list[dict]:
+    """One reassertion pass of the watch (its own thread, every
+    GLORFINDEL_REASSERT_INTERVAL_S): the recorded isolations and blocks, and our
+    quarantine NSGs whatever the local state says — a state lost is what that check is
+    for (I1F, #226: the pass stopped before any Azure call when nothing was recorded).
+    Never raises. An unreadable configuration is said once until it reads again (`seen`
+    is the watch's memory between passes), not every minute."""
+    import contextlib
+    from glorfindel.reassert import reassert_pass
+    lock = lock if lock is not None else contextlib.nullcontext()
+    seen = seen if seen is not None else {}
+    try:
+        from glorfindel.config import load_glorfindel_config as _lgc
+        autonomy = _lgc().autonomy              # fresh: a War Room mode change applies
+        if mode_override:
+            autonomy.default = mode_override    # --mode stays pinned, as in decide
+        seen.pop("config_error", None)
+    except Exception as exc:
+        # Unreadable config: the mode loaded when the watch started may be stale —
+        # alert only, never act on it (seventh review, U4).
+        autonomy = None
+        if seen.get("config_error") != str(exc):
+            seen["config_error"] = str(exc)
+            with lock:
+                console.print(f"[yellow]reassert: config illisible, alertes seulement ({exc})[/yellow]")
+    report: list[dict] = []
+    try:
+        report = reassert_pass(connector, autonomy)
+        for r in report:
+            target = r["vm"] + (f" {r['ip']}" if r.get("ip") else "")
+            with lock:
+                console.print(f"[yellow]reassert {r['kind']} {target} → {r['outcome']}[/yellow]")
+    except Exception as exc:
+        with lock:
+            console.print(f"[red]reassert pass failed:[/red] {exc}")
+    return report
+
+
 def _start_campaign_reports(runs_dir) -> bool:
     """The thread that writes the report of each campaign Orodruin publishes (IA0, #167;
     analysis/hosted_report.py) — only with an exercise channel. Never raises: a report,
@@ -618,29 +656,10 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
         _reassert_thread[0] = _thr.Thread(target=_reassert_pass, daemon=True, name="reassert")
         _reassert_thread[0].start()
 
+    _reassert_seen: dict = {}
+
     def _reassert_pass() -> None:
-        # No early return when nothing is recorded: our quarantine NSGs are read whatever
-        # the local state says — a state lost is what that check is for (I1F, #226).
-        from glorfindel.reassert import reassert_pass
-        try:
-            from glorfindel.config import load_glorfindel_config as _lgc
-            autonomy = _lgc().autonomy          # fresh: a War Room mode change applies
-            if mode_override:
-                autonomy.default = mode_override  # --mode stays pinned, as in decide
-        except Exception as exc:
-            # Unreadable config: the mode loaded when the watch started may be stale —
-            # alert only, never act on it (seventh review, U4).
-            autonomy = None
-            with _output_lock:
-                console.print(f"[yellow]reassert: config illisible, alertes seulement ({exc})[/yellow]")
-        try:
-            for r in reassert_pass(ttl_connector, autonomy):
-                target = r["vm"] + (f" {r['ip']}" if r.get("ip") else "")
-                with _output_lock:
-                    console.print(f"[yellow]reassert {r['kind']} {target} → {r['outcome']}[/yellow]")
-        except Exception as exc:
-            with _output_lock:
-                console.print(f"[red]reassert pass failed:[/red] {exc}")
+        _watch_reassert_pass(ttl_connector, mode_override, _output_lock, _reassert_seen)
 
     _HEARTBEAT = Path.home() / ".glorfindel" / "watch_heartbeat"
 

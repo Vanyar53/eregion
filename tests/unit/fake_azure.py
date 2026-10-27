@@ -289,11 +289,6 @@ class _Nsgs:
     def list_all(self):
         return self.az.call("nsg.list", False, lambda: [self.az.nsg_view(n) for n in self.az.nsgs.values()])
 
-    def list(self, rg):
-        """One resource group's NSGs (`list(resource_group_name)`)."""
-        return self.az.call("nsg.list", False, lambda: [
-            self.az.nsg_view(n) for n in self.az.nsgs.values() if _rg_name(n["id"])[0].lower() == rg.lower()])
-
     def update_tags(self, rg, name, tags_object):
         def write():
             n = self.az.nsg(rg, name)

@@ -4,6 +4,8 @@ order it makes them — `_draw` takes the VM, the id it is reached with, the fau
 """
 from __future__ import annotations
 
+import pytest
+
 from .fake_azure import key
 from .test_invariants import IsolationMachine, _rule, invariant_env
 
@@ -468,3 +470,20 @@ def test_an_altered_quarantine_card_closes_once_it_is_whole(monkeypatch):
         assert not [e for e in escalations.pending() if e["escalation_type"] == "quarantine_altered"]
     finally:
         m.teardown()
+
+
+@pytest.mark.parametrize("alteration", [
+    ("strip_quarantine_nsg", _Q1),
+    ("tamper_with_our_rule", "protocol", (_Q1, "glorfindel-quarantine-deny-in")),
+])
+def test_a_quarantine_made_before_the_group_was_set_is_still_read(monkeypatch, alteration):
+    """Isolated while `quarantine_rg` was empty (our NSG in the VM's group), the state
+    lost, the setting then naming another group, our NSG altered: listed in that group
+    only, it was never read — the hole of I1F open again (second review of I1F, seen
+    once in 11 runs at 500 sequences). The whole subscription is listed."""
+    _run(monkeypatch, _net(quarantine=True),
+         ("isolate", WEB1, WEB1, None),
+         ("lose_state", WEB1),
+         ("config_changes", {"quarantine": True, "rg": "rg-sec", "forensic": [], "readable": True}, True),
+         alteration,
+         ("reassert", "human_only", None))

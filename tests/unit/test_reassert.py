@@ -273,15 +273,18 @@ def test_reassertion_skips_a_vm_whose_lock_is_busy():
 
 _QNSG = "/subscriptions/s/resourceGroups/rg-sec/providers/Microsoft.Network/networkSecurityGroups/nsg-glorfindel-quarantine-westeurope"
 _QNIC = "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Network/networkInterfaces/vm-nic"
+_DENY_IN = ["glorfindel-quarantine-deny-in"]
 
 
-def _quarantines(*entries, scope="rg-sec"):
-    """A connector whose quarantine listing reads `entries` (status, diff) in turn."""
+def _quarantines(*entries):
+    """A connector whose quarantine listing reads `entries` in turn: (status, diff), None
+    for an empty subscription, or an exception the listing raises."""
     c = MagicMock()
     c.verify_isolation.side_effect = AssertionError("no state: no isolation to verify")
-    listings = [{"scope": scope, "nsgs": [] if e is None else [
-        {"nsg_id": _QNSG, "nics": [_QNIC], "status": e[0], "diff": list(e[1])}]} for e in entries]
-    c.find_altered_quarantines.side_effect = listings
+    c.find_altered_quarantines.side_effect = [
+        e if isinstance(e, Exception) else
+        [] if e is None else [{"nsg_id": _QNSG, "nics": [_QNIC], "status": e[0], "diff": list(e[1])}]
+        for e in entries]
     return c
 
 
@@ -290,12 +293,19 @@ def _cards(status=None):
             and (status is None or e["status"] == status)]
 
 
+def _http_error(status: int):
+    from azure.core.exceptions import HttpResponseError
+    exc = HttpResponseError(message=f"({status}) listing refused")
+    exc.status_code = status
+    return exc
+
+
 def test_the_watch_pass_reads_the_quarantines_without_any_state():
-    """The watch's pass with nothing recorded: the quarantines are read all the same — a
-    state lost is what they are read for (the pass used to stop before any Azure call)."""
-    from glorfindel.reassert import reassert_pass
-    c = _quarantines(("altered", ["glorfindel-quarantine-deny-in"]))
-    report = reassert_pass(c, _ACT)
+    """The watch's pass, nothing recorded: the quarantines are read all the same — a state
+    lost is what they are read for (the pass used to stop before any Azure call)."""
+    from glorfindel import cli
+    c = _quarantines(("altered", _DENY_IN))
+    report = cli._watch_reassert_pass(c, None)
     c.find_altered_quarantines.assert_called_once()
     assert [r["kind"] for r in report] == ["quarantine"]
     (card,) = _cards("pending")
@@ -304,34 +314,60 @@ def test_the_watch_pass_reads_the_quarantines_without_any_state():
 
 
 def test_the_watch_pass_closes_the_card_once_the_nsg_is_whole_without_any_isolation():
-    from glorfindel.reassert import reassert_pass
-    c = _quarantines(("altered", ["glorfindel-quarantine-deny-in"]), ("ok", []))
-    reassert_pass(c, _ACT)
-    reassert_pass(c, _ACT)
+    from glorfindel import cli
+    c = _quarantines(("altered", _DENY_IN), ("ok", []))
+    cli._watch_reassert_pass(c, None)
+    cli._watch_reassert_pass(c, None)
     assert not _cards("pending") and len(_cards()) == 1
 
 
-def test_the_watch_runs_its_quarantine_check_whatever_the_local_state():
-    """`watch`'s reassertion pass goes through reassert_pass, with no return before it:
-    an early return on an empty local state left the quarantines unread (I1F, review)."""
+def test_the_watch_pass_reads_the_quarantines_with_isolations_recorded_too():
+    from glorfindel import cli
+    _isolated()
+    c = _quarantines(("altered", _DENY_IN))
+    c.verify_isolation.side_effect = None
+    c.verify_isolation.return_value = {"verified": True}
+    cli._watch_reassert_pass(c, "non_disruptive")
+    c.verify_isolation.assert_called_once()
+    assert len(_cards("pending")) == 1
+
+
+def test_the_watch_reaches_its_pass_with_no_guard_on_the_local_state():
+    """What the behaviour above can't see: the watch's closures. `_reassert` (its timer)
+    and `_reassert_pass` (its thread) hand over to `_watch_reassert_pass` without reading
+    the local state — a guard there left the quarantines unread (I1F, review)."""
     import ast
     import inspect
     from glorfindel import cli
     tree = ast.parse(inspect.getsource(cli))
-    (fn,) = [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "_reassert_pass"]
-    calls = [n for n in ast.walk(fn) if isinstance(n, ast.Call) and getattr(n.func, "id", "") == "reassert_pass"]
-    assert calls, "the watch's pass does not call reassert_pass"
-    first = min(c.lineno for c in calls)
-    early = [n for n in ast.walk(fn) if isinstance(n, ast.Return) and n.lineno < first]
-    assert not early, "the watch's pass returns before reading the quarantines"
+    fns = {n.name: n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)
+           and n.name in ("_reassert", "_reassert_pass")}
+    assert set(fns) == {"_reassert", "_reassert_pass"}
+    for name, fn in fns.items():
+        used = {n.id for n in ast.walk(fn) if isinstance(n, ast.Name)} | \
+            {n.attr for n in ast.walk(fn) if isinstance(n, ast.Attribute)}
+        assert not used & {"active_isolations", "active_blocks", "_load_isolation_state"}, name
+    assert any(isinstance(n, ast.Call) and getattr(n.func, "id", "") == "_watch_reassert_pass"
+               for n in ast.walk(fns["_reassert_pass"]))
+
+
+@pytest.mark.parametrize("status", [429, 403])
+def test_a_listing_that_fails_keeps_the_cards_open(status):
+    """The NSGs can't be listed (throttled, the role removed): the cards stay as they are
+    — nothing read is not "whole again" — and the pass goes on."""
+    from glorfindel import cli
+    c = _quarantines(("altered", _DENY_IN), _http_error(status))
+    cli._watch_reassert_pass(c, None)
+    assert cli._watch_reassert_pass(c, None) == []
+    assert len(_cards("pending")) == 1
 
 
 def test_an_acknowledged_card_stays_closed_while_its_change_stands():
     """Acknowledged (resolved by the operator) with the NSG still altered: no new card at
     every pass — one again only for another change, or after the NSG was whole."""
     from glorfindel.reassert import reassert_pass
-    deny_in, deny_out = ["glorfindel-quarantine-deny-in"], ["glorfindel-quarantine-deny-out"]
-    c = _quarantines(("altered", deny_in), ("altered", deny_in), ("altered", deny_in),
+    deny_out = ["glorfindel-quarantine-deny-out"]
+    c = _quarantines(("altered", _DENY_IN), ("altered", _DENY_IN), ("altered", _DENY_IN),
                      ("altered", deny_out), ("ok", []), ("altered", deny_out))
     reassert_pass(c, _ACT)
     escalations.resolve(_cards("pending")[0]["id"])
@@ -347,15 +383,26 @@ def test_an_acknowledged_card_stays_closed_while_its_change_stands():
 
 
 def test_a_card_is_not_closed_on_an_nsg_that_cannot_be_read():
-    """Configuration unreadable (our denies hold, the forensic access unknown), or the NSG
-    outside the group listed: its card stays. Gone from a listing of its group: closed."""
+    """Configuration unreadable (our denies hold, the forensic access unknown): its card
+    stays. Gone from the subscription's listing: closed."""
     from glorfindel.reassert import reassert_pass
-    c = _quarantines(("altered", ["glorfindel-quarantine-deny-in"]), ("unknown", ["config illisible"]))
+    c = _quarantines(("altered", _DENY_IN), ("unknown", ["config illisible"]), None)
     reassert_pass(c, _ACT)
     reassert_pass(c, _ACT)
     assert len(_cards("pending")) == 1
-    c.find_altered_quarantines.side_effect = [{"scope": "rg-other", "nsgs": []}, {"scope": "rg-sec", "nsgs": []}]
     reassert_pass(c, _ACT)
-    assert len(_cards("pending")) == 1                # not listed: unknown
-    reassert_pass(c, _ACT)
-    assert not _cards("pending")                      # its group listed, it is gone
+    assert not _cards("pending")
+
+
+def test_an_unreadable_configuration_is_said_once_not_every_pass(monkeypatch):
+    import io
+    from rich.console import Console
+    from glorfindel import cli, config as cfg
+    out = io.StringIO()
+    monkeypatch.setattr(cli, "console", Console(file=out, width=200))
+    monkeypatch.setattr(cfg, "load_glorfindel_config", MagicMock(side_effect=cfg.ConfigError("broken")))
+    seen: dict = {}
+    c = _quarantines(None, None, None)
+    for _ in range(3):
+        cli._watch_reassert_pass(c, None, seen=seen)
+    assert out.getvalue().count("config illisible") == 1

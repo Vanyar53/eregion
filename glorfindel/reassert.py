@@ -173,17 +173,17 @@ def _report_altered_quarantines(connector, report: list[dict]) -> None:
     A change said is not said again while it stands: the card stays, and once the
     operator acknowledges it, no new one comes (quarantine_alerts.json) — a new change
     of that NSG is a new card. A card closes, and its change is forgotten, once the NSG
-    reads whole, holds nothing, or is gone from a listing that covered its group; never
-    on an NSG read as unknown (configuration unreadable) or not listed."""
+    reads whole, holds nothing, or is gone from the subscription; never on an NSG read
+    as unknown (configuration unreadable), nor when the listing fails."""
     find = getattr(connector, "find_altered_quarantines", None)
     if find is None:
         return                                  # a provider without a quarantine NSG
     try:
         listing = find()
-    except Exception as exc:
+    except Exception as exc:                # unread: every card stays as it is
         log.warning("reassert: quarantine NSGs not checked (%s)", exc)
         return
-    if not isinstance(listing, dict) or not isinstance(listing.get("nsgs"), list):
+    if not isinstance(listing, list):
         return
     import hashlib
     from glorfindel import escalations
@@ -192,8 +192,7 @@ def _report_altered_quarantines(connector, report: list[dict]) -> None:
     def _key(rid) -> str:
         return (rid or "").rstrip("/").lower()
 
-    scope = (listing.get("scope") or "").lower()
-    seen = {_key(q.get("nsg_id")): q for q in listing["nsgs"]}
+    seen = {_key(q.get("nsg_id")): q for q in listing}
     altered: dict[str, tuple[str, dict]] = {}          # NSG → (signal id, as it reads)
     for k, q in seen.items():
         if q.get("status") == "altered" and q.get("nics"):
@@ -201,12 +200,11 @@ def _report_altered_quarantines(connector, report: list[dict]) -> None:
             altered[k] = (f"{_QUARANTINE_PREFIX}{_rid_hash(q['nsg_id'])}-{change}", q)
 
     def settled(k: str) -> bool:
-        """Read, and nothing to say: whole, holding nothing — or gone from a listing
-        that covered its resource group."""
+        """Read, and nothing to say: whole, holding nothing — or gone (the listing is
+        the whole subscription's)."""
         if k in seen:
             return seen[k].get("status") != "unknown" and k not in altered
-        group = k.split("/resourcegroups/", 1)[-1].split("/", 1)[0] if "/resourcegroups/" in k else ""
-        return not scope or group == scope
+        return True
 
     alerts = _load_quarantine_alerts()
     before = dict(alerts)

@@ -416,30 +416,24 @@ class QuarantineMixin:
                  if low not in {w.lower() for w in wanted} and _opens_quarantine(r)]
         return ("altered" if diff else "ok"), diff
 
-    def find_altered_quarantines(self) -> dict:
+    def find_altered_quarantines(self) -> list[dict]:
         """Glorfindel's quarantine NSGs as they read now, with the NICs they hold (I1F).
         The reassertion reads each isolation from its state: a NIC whose state was lost
         stays in a quarantine nobody checked — its deny turned to Udp by hand, the VM was
         reachable on TCP again, in silence.
 
-        {"scope": the resource group listed, or "" for the whole subscription,
-         "nsgs": [{"nsg_id", "nics", "status": "altered" | "ok" | "unknown", "diff"}]}
-        — every quarantine NSG seen, each read by content as verify_isolation reads it
-        (Q6); "unknown" when the configuration can't be read and our denies hold (the
-        forensic access can't be checked). An NSG that only has our name is not ours.
-        One listing: the configured `quarantine_rg`'s NSGs, else the subscription's
-        (a NIC that carries one of another group since the setting changed is not seen
-        there). Raises if the NSGs can't be listed: none altered is not unknown."""
+        [{"nsg_id", "nics", "status": "altered" | "ok" | "unknown", "diff"}] — every
+        quarantine NSG of the subscription, each read by content as verify_isolation
+        reads it (Q6); "unknown" when the configuration can't be read and our denies
+        hold (the forensic access can't be checked). An NSG that only has our name is not
+        ours. The whole subscription, always: listed in `quarantine_rg` only, an NSG made
+        in another group before the setting changed went unseen (I1F, second review).
+        Raises if the NSGs can't be listed: none altered is not unknown."""
         if self.dry_run:
-            return {"scope": "", "nsgs": []}
+            return []
         self._ensure_clients()
-        try:
-            _, scope = self._quarantine_settings()
-        except Exception:
-            scope = ""                          # unreadable config: the whole subscription
-        nsgs = self._network.network_security_groups
         out: list[dict] = []
-        for nsg in (nsgs.list(scope) if scope else nsgs.list_all()):
+        for nsg in self._network.network_security_groups.list_all():
             nsg_id = getattr(nsg, "id", "") or ""
             if (not _is_quarantine_nsg(nsg_id)
                     or (getattr(nsg, "tags", None) or {}).get("managed-by") != "glorfindel"):
@@ -449,7 +443,7 @@ class QuarantineMixin:
             cache = {(q_rg, q_name): list(getattr(nsg, "security_rules", None) or [])}
             st, diff = self._quarantine_state({"nsg_rg": q_rg, "nsg_name": q_name}, cache)
             out.append({"nsg_id": nsg_id, "nics": nics, "status": st, "diff": diff})
-        return {"scope": scope, "nsgs": out}
+        return out
 
     def _forensic_sources(self) -> list[str]:
         """isolation.forensic_sources as validate_forensic_sources keeps them (Q5). An

@@ -5,11 +5,11 @@
 # Recurring leak vector: real names pasted into the dev loop reaching committed
 # files. This converts "I'll be careful" into "the machine refuses".
 #
-# Denylist lives OUTSIDE version control: <gitdir>/infra-denylist.txt
+# Denylist lives OUTSIDE version control: <git common dir>/infra-denylist.txt
 #   one term per line · '#' comments · case-insensitive literal substring match
 # Intentional override (rare): git commit --no-verify
 
-denylist="$(git rev-parse --git-dir)/infra-denylist.txt"
+denylist="$(git rev-parse --git-common-dir)/infra-denylist.txt"  # common dir: the same list in every worktree
 [ -f "$denylist" ] || exit 0
 
 patterns="$(grep -vE '^[[:space:]]*(#|$)' "$denylist")"
@@ -26,7 +26,7 @@ if [ -n "$hits" ]; then
   echo "🚫 COMMIT BLOCKED — real infra identifier(s) in staged changes:" >&2
   printf '%s\n' "$hits" | sed 's/^/    /' >&2
   echo "" >&2
-  echo "Matched <gitdir>/infra-denylist.txt. Remove them before committing," >&2
+  echo "Matched <git common dir>/infra-denylist.txt. Remove them before committing," >&2
   echo "or override deliberately with: git commit --no-verify" >&2
   exit 1
 fi

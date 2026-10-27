@@ -109,7 +109,7 @@ TOGETHER = (
     "test_analysis_triage.py", "test_api.py", "test_campaign_changes.py", "test_campaign_replay.py", "test_campaign_report.py",
     "test_components.py", "test_console.py", "test_console_exercises.py", "test_profiles.py",
     "test_decision_stability.py", "test_dependency_failures.py", "test_dependency_lock.py",
-    "test_docs_budget.py", "test_exercise.py", "test_exercise_guard.py",
+    "test_docs_budget.py", "test_exercise.py", "test_githooks.py", "test_exercise_guard.py",
     "test_experiment_schema.py", "test_glorfindel_host.py", "test_host_console.py",
     "test_host_deploy.py", "test_hosted_report.py", "test_indicators.py",
     "test_makefile_bench.py", "test_makefile_campaign.py", "test_makefile_secrets.py",

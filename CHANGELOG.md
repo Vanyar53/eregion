@@ -4,6 +4,9 @@ Notable changes to Eregion. The format follows [Keep a Changelog](https://keepac
 
 ## [Unreleased]
 
+### Security
+- **The hooks that refuse a real infrastructure identifier hold in every worktree and every clone** (27/10, found by the CI/CD session). `.githooks/pre-commit` and `commit-msg` read their denylist from `--git-dir` — in a worktree `.git/worktrees/<name>/`, where the list is not: they ran and let everything through, silently, for every commit made from a worktree (all of elrond's lots). They read it from git's common directory now. And they were stored non-executable (100644): git ignored them in any fresh clone. Stored 100755 now. Nothing leaked: every change merged on 27/10 and the whole tree were scanned against the list. Tests: `tests/unit/test_githooks.py` (a throwaway repository and worktree, `core.hooksPath` relative and absolute); mutants M903, M904.
+
 ## [0.4.0] — 2026-10-27 — "the isolation path, held to its invariants"
 
 ### Added

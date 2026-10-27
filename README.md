@@ -20,9 +20,9 @@ Three agents form a closed loop: Annatar attacks, Gothmog breaks, Glorfindel det
 > **Observe-only by default** — Glorfindel recommends, you decide. Grant it autonomy per asset as you build trust.
 > With autonomous containment enabled: **~1 min to contain a ransomware VM, 21m29s to restored service** — the only human step is approving the backup restore.
 
-![Glorfindel's page of the Eregion console in observe-only (then called the War Room): a held recommendation waiting for the operator's verdict](docs/images/war-room-observation.png)
+![The Eregion console's overview in observe-only: the five indicators of the finality, measured over 30 days, above a line per agent](docs/images/console-overview.png)
 
-*Glorfindel's page of the console in observe-only — then called the War Room —, on the Eregion bench (October 2026). An Internet scanner tried SSH on a VM: Glorfindel recommended blocking its IP (95 %), the human-only mode held it, and the card waits in **TO JUDGE** for the operator's verdict — right, wrong or unsure. The header counts the week; nothing was executed. The scanner's IP is masked.*
+*The Eregion console's overview on the Eregion bench, in observe-only (27 October 2026). Over 30 days: nothing contained alone — human-only —, but Glorfindel would have contained 3 of the 5 attacks it detected (shadow); detection in 107 s and a decision in 2 min (medians); 0 % of the 20 isolations and blocks it recommended on real traffic were judged wrong; 4 of the 5 implemented techniques proven in the last 30 days. Glorfindel's page holds the cards to judge; Annatar's and Gothmog's, what they ran and what Glorfindel made of it.*
 
 ## How it works
 
@@ -138,6 +138,24 @@ On 2026-06-14, Glorfindel detected a **real SSH brute force** against the expose
 - escalated the recommendation as `mode_hold` without acting (observe mode holds the action before any write).
 
 The full pipeline — rule → detection → investigate → decide → escalate — held on authentic adversarial traffic, outside the Annatar→Glorfindel loop. The real case even surfaced a bug no scripted run had found (the escalation didn't carry the source IP), fixed the same day.
+
+## Usage profiles
+
+Eregion is self-hosted, on your machine or in a VM of yours. **Glorfindel is always there**: it is the product. A profile is what you add to it. Annatar and Gothmog never run without it: they check its watch is alive before acting.
+
+Each profile has a `docker compose` profile, a Make target and a page in [`docs/profils/`](docs/profils/README.md) (in French).
+
+| Profile | The question | Runs | Start |
+|---|---|---|---|
+| Discover | be defended first, in observation | Glorfindel (watch + console) | `make profile-discover` |
+| Does my detection work? | is a real attack seen? | + Annatar | `make profile-detection` |
+| Does my infrastructure hold? | is a fault lived through? | + Gothmog | `make profile-resilience` |
+| Proven defense | the proof at any time (like H0, the bench's hosted Glorfindel) | everything | `make profile-proven` |
+| Several teams | one defense per team, nothing mixed | one Glorfindel per team | `make team-start TEAM=<name>` |
+
+**Where the injectors act.** They act only from an armed Orodruin, the disposable host of the injectors. On your machine they stay passive: validate, list, `--dry-run`, and `gothmog preflight`.
+
+**Each component runs alone in CI.** This is a technical separation, not a product sold alone. Glorfindel, Annatar, Gothmog and the shared core are each tested with the other components absent ([`components.yml`](.github/workflows/components.yml), `make components-check`).
 
 ## Evaluate on your infrastructure — read-only, zero risk
 
@@ -620,8 +638,7 @@ annatar/
   campaign/           → generative red layer: planner (compose an ATT&CK kill-chain from the catalog,
                         optionally LLM-planned) + synthesizer (materialize replayable scenarios) +
                         runner (sequential, budgeted, blind-loop) + scope guard. CLI: annatar campaign plan|run
-  signals/schema.py   → Signal dataclass + severity_for_ttp
-  signals/emitter.py  → normalized JSONL signal emitter
+  signals/emitter.py  → normalized JSONL signal emitter (the Signal contract: eregion_core/signals.py, shared with Glorfindel)
   scenarios/azure/
     ransomware-vm.yaml          → T1486 (detection: timeout + prerequisites + hints)
     data-exfiltration.yaml      → T1041

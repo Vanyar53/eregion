@@ -15,7 +15,7 @@ Tu es spécialisé sur l'agent défensif. Lis ce fichier en début de session.
 - `glorfindel-config.yaml` — config infra locale
 
 **Tu lis mais ne modifies pas :**
-- `annatar/signals/schema.py` — pour comprendre le format signal entrant
+- `eregion_core/signals.py` — le contrat des signaux (D1 : sorti d'Annatar), pour comprendre le format signal entrant
 - `annatar/scenarios/azure/` — pour comprendre ce que tu dois détecter
 
 **Tu ne touches pas :**

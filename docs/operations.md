@@ -12,6 +12,20 @@ make glorfindel-logs                         # tail logs des deux services
 make glorfindel-dev                          # auto-reload sur modification de code (docker compose watch)
 make glorfindel-stop                         # arrêt
 
+# Profils d'usage (D1) — docs/profils/ ; Glorfindel est dans chacun (il démarre sans profil compose)
+make profile-discover                        # = glorfindel-start : Glorfindel seul, en observation
+make profile-detection                       # + l'image d'Annatar ; profile-resilience : Gothmog ; profile-proven : tout
+                                             # (crée à ton nom ~/.glorfindel, ~/.cache/chroma, ~/.annatar : sinon root)
+docker compose --profile annatar run --rm annatar list          # APRÈS make profile-… : un injecteur à la demande ;
+docker compose --profile gothmog run --rm gothmog preflight vm-shutdown   # depends_on démarre la watch sans attendre
+                                             # son battement : la 1re minute, il peut refuser (V1) ; sur un poste, contrat passive
+make team-init TEAM=<nom>                    # plusieurs équipes : ~/.eregion/teams/<nom>/ (team.env 600, config, runs)
+make team-start TEAM=<nom> [BOT=1]           # son Glorfindel : compose -p eregion-<nom> sous env -i (ton shell
+                                             # n'atteint pas l'équipe), conteneurs eregion-<nom>-*, port de team.env ;
+                                             # refuse sans AZURE_SUBSCRIPTION_ID ni EREGION_CONSOLE_PORT ; team-stop, team-logs
+make profiles-check                          # docker compose config : chaque profil rend ses services (CI)
+make components-check [COMPONENT=annatar]    # chaque composant tourne seul : ses tests, les autres absents (CI)
+
 # Glorfindel hébergé (H0) — infra/glorfindel-host/README.md
 make glorfindel-host-tunnel                  # tunnel + « Console → http://localhost:7007/?token=… » ; le jeton de host.env :
                                              # EREGION_CONSOLE_TOKEN s'il n'est pas vide, sinon GLORFINDEL_WARROOM_TOKEN
@@ -223,8 +237,8 @@ make annatar-simulate-gap
 ANTHROPIC_API_KEY=...               # requis si provider Anthropic (défaut)
 GLORFINDEL_LLM_MODEL=...            # ex: ollama/llama3.1, openai/gpt-4o, azure/gpt-4o (défaut : anthropic/claude-sonnet-5-5, eregion_core/models.py)
 ANNATAR_LLM_MODEL=...               # planificateur de campagne d'Annatar (défaut : anthropic/claude-sonnet-4-6 — claude-sonnet-5-5 refuse ce prompt, 19/10)
-EREGION_ANALYSIS_MODEL=...          # IA d'analyse, rapport de campagne (défaut : anthropic/claude-haiku-5-5 — un autre modèle que Glorfindel) ; passé à la watch par docker-compose.yml (rapport écrit sur H0, #167)
-EREGION_ANALYSIS_INDEX=...          # index campaign_runs du rapport de campagne (défaut : ~/.eregion/analysis/chroma ; sur H0, le disque de la VM, monté)
+EREGION_ANALYSIS_MODEL=...          # IA d'analyse, rapport de campagne (défaut : anthropic/claude-haiku-5-5 — un autre modèle que Glorfindel ; celui de Glorfindel est refusé, IA1) ; passé à la watch par docker-compose.yml (rapport écrit sur H0, #167) et recopié dans host.env par host_env.py (IA1) ; le conteneur d'Annatar reçoit aussi GLORFINDEL_LLM_MODEL, pour que le refus y voie le vrai modèle de Glorfindel
+EREGION_ANALYSIS_INDEX=...          # index campaign_runs du rapport de campagne (défaut : ~/.eregion/analysis/chroma ; refusé dans ~/.glorfindel, IA1 ; sur H0, le disque de la VM, monté)
 EREGION_ANALYSIS_TIMEOUT_S=300      # borne d'un appel au modèle d'analyse (rapport de campagne), par tentative (défaut 300 ; illisible, ≤0, >3600 → 300) ; passée aux conteneurs (x-env) et à l'image d'Annatar ; sur H0, à poser à la main dans host.env (host_env.py ne la recopie pas)
 GLORFINDEL_LLM_BASE_URL=...         # endpoint self-hosted/Ollama (ex: http://localhost:11434)
 GLORFINDEL_WEBHOOK_URL=...          # Slack/Teams/Discord webhook — escalades ET actions autonomes
@@ -259,6 +273,18 @@ Azure aux trois (la watch, « Approve & execute », les boutons Restore / Revert
 réglages sans secret aux trois. Une variable nouvelle s'ajoute
 dans le bloc de son conteneur, et dans `SECRETS` de `tests/unit/test_glorfindel_host.py` si elle
 porte un secret.
+
+Les injecteurs du compose (D1, profils `annatar` et `gothmog`) ont leur bloc, `x-injector` : leur
+principal à eux (`ANNATAR_AZURE_CLIENT_ID` / `…_SECRET`, jamais celui de Glorfindel ; vide, pas
+d'identité), l'abonnement, les deux canaux et le contrat d'Orodruin (vide : `passive`) ; Annatar
+y ajoute `ANNATAR_LLM_MODEL` et `ANTHROPIC_API_KEY` (le planificateur `--llm`), Gothmog
+`EREGION_BENCH_WORKSPACE`. Ni webhook, ni jeton du bot, ni jeton de la console.
+
+Plusieurs équipes (D1, `docs/profils/equipes.md`) : `EREGION_INSTANCE` (préfixe des conteneurs,
+défaut `eregion`), `EREGION_CONSOLE_PORT` (défaut 7007), `EREGION_RUNS` (défaut `./runs`),
+`EREGION_CONFIG` (défaut `./glorfindel-config.yaml`) ; vides, `docker-compose.yml` rend ce qu'il
+rendait avant D1 (H0 lit `eregion-watch`, `eregion-war-room`). `make team-start` les pose, et le
+`HOME` de l'équipe, sous `env -i`.
 
 ---
 

@@ -41,6 +41,7 @@ L'atelier autour : **Celebrimbor** (`infra/terraform/`) construit et inscrit le 
 | elrond, sous-agents par lot | [docs/elrond.md](docs/elrond.md) |
 | Observation : verdicts et rapport | [docs/observation.md](docs/observation.md) |
 | IA d'analyse : le rapport de campagne (IA0) | [docs/analysis.md](docs/analysis.md) |
+| Profils d'usage (Glorfindel toujours présent), chaque composant seul en CI (D1) | [docs/profils/README.md](docs/profils/README.md) |
 
 ---
 
@@ -100,6 +101,8 @@ pytest tests/unit/test_experiment_schema.py  # E1 : schéma d'expérience (techn
 pytest tests/unit/test_docs_budget.py        # DX1 : CLAUDE.md ≤ 25 Ko, liens de l'index et des fichiers de rôle valides
 pytest tests/unit/test_provider_boundary.py # MC0 (A1) : aucun SDK de fournisseur hors de son adaptateur (aussi étape CI), capacités déclarées
 pytest tests/unit/test_actions_split.py     # A1 : la façade glorfindel.actions reste un seul espace de noms ; aucun module > 500 lignes
+pytest tests/unit/test_components.py        # D1 : chaque composant importe seul ; test_profiles.py : les profils compose et Make
+python scripts/component_check.py annatar  # D1 : ses tests, les autres composants absents (CI : components.yml)
 pytest tests/unit/test_watch_gate.py        # V1 : pas de run sans watch vivante (refus avant tout appel au cloud), dérogation inscrite
 pytest tests/unit/test_rule_layers.py       # P1 : base livrée intacte, couche du client validée, règles approuvées liées à leur backend
 pytest tests/unit/test_invariants_aws.py    # MC1 : la machine à invariants sur un faux AWS (tests/unit/fake_aws.py)
@@ -109,7 +112,7 @@ pytest tests/unit/test_invariants.py         # L24/L26 : invariants (Hypothesis,
                           # noms insensibles à la casse, 429/crash avant ou après une écriture, API throttlée,
                           # 403 persistant, disque plein) et un monde client qui bouge (règles, IP, NSG supprimé,
                           # VM supprimée ou créée, tags, config illisible, règles de Glorfindel retournées, autre hôte,
-                          # anciennes isolations, horloge). 14 propriétés (I1–I12, L1, U1 — docstring du fichier),
+                          # anciennes isolations, horloge). 15 propriétés (I1–I12, L1, L2, U1 — docstring du fichier),
                           # oracles tirés du journal du test, jamais des marqueurs du code (A0).
                           # GLORFINDEL_INVARIANT_EXAMPLES (défaut 60 ; push 500, nuit 10 000), _STEPS (30),
                           # _DB (base Hypothesis : rejoue les échecs mémorisés), _STATS=1 -s, _NO_SHRINK=1.
@@ -132,6 +135,7 @@ python scripts/mutation_check.py [--examples 500 --rounds 2 --jobs 8]   # mesure
 - `setup_testdata.sh` uniquement dans T1486
 - RunCommand : 5 retries (15s, 30s, 60s, 90s, 120s) — pas de SSH, pas d'IP publique requise pour Annatar (Azure VM Agent via Wire Protocol)
 - `dry_run=True` dans tous les tests — jamais d'appel Azure ou LLM dans les tests
+- **Aucun composant n'en importe un autre** (D1) : Glorfindel, Annatar, Gothmog ne partagent que `eregion_core/` (le contrat des signaux : `eregion_core/signals.py`) ; une passerelle se liste avec sa raison (`scripts/component_check.py`). Un nouveau fichier de test va dans la liste de son composant (ou `TOGETHER`) — `test_components.py` échoue sinon
 - **SDK d'un fournisseur** (azure, boto3, google-cloud) : importé seulement dans son adaptateur — `glorfindel/providers/<nom>/` pour Glorfindel (A1, MC0). `glorfindel/actions.py` n'est plus qu'une façade d'import : le code est dans `glorfindel/response/` (cœur neutre) et `glorfindel/providers/azure/` (un module par préoccupation)
 - `tests/unit/conftest.py` : fixture `autouse` redirige `escalations._STORE` → `tmp_path/escalations.jsonl` (les tests n'écrivent jamais dans `~/.glorfindel/`)
 - `AZURE_SUBSCRIPTION_ID` obligatoire dans l'env (plus d'auto-détection via SubscriptionClient)

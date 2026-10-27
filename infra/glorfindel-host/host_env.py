@@ -33,7 +33,10 @@ COPIED = ("AZURE_SUBSCRIPTION_ID", "AZURE_WORKSPACE_ID", "ANTHROPIC_API_KEY",
           "GLORFINDEL_WEBHOOK_URL", "GLORFINDEL_BACKUP_VAULT",
           "DISCORD_BOT_TOKEN", "DISCORD_CHANNEL_ID", "DISCORD_PING_ROLE",
           "DISCORD_ALLOWED_USERS", "DISCORD_ALLOWED_ROLES",
-          "EREGION_EXERCISE_CHANNEL", "EREGION_WATCH_CHANNEL")
+          "EREGION_EXERCISE_CHANNEL", "EREGION_WATCH_CHANNEL",
+          # IA1: the analysis AI's model, never Glorfindel's — the hosted watch writes the
+          # campaign reports with it (analysis/hosted_report.py).
+          "EREGION_ANALYSIS_MODEL")
 REQUIRED = ("AZURE_SUBSCRIPTION_ID", "ANTHROPIC_API_KEY")
 # The console's token, and its former name (eregion_console/api.py, console_token).
 TOKEN = "EREGION_CONSOLE_TOKEN"

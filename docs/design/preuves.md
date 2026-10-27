@@ -702,6 +702,25 @@ de la cible et le réseau lèvent, et chaque tentative est notée. Trente mutant
 | M758 | un fichier local vivant compte malgré le canal | une watch locale prise pour la watch hébergée |
 | M759 | la console compte une campagne sans Glorfindel en `unknown` | un run de dév pris pour un trou |
 
+### « Déjà alerté » après la carte (L1F)
+
+La machine a trouvé L1 en défaut en cinq étapes : un blocage, le rôle retiré, un
+`terraform apply` qui supprime sa règle, une réaffirmation qui tente de la reposer (refusée)
+et meurt juste après sa première écriture, puis une réaffirmation en `human_only`. La
+réaffirmation écrivait « déjà alerté » (`drift_alerted_at`) avant la carte ; le crash tombait
+entre les deux, et chaque passe suivante se taisait sur ce marqueur. La carte vient d'abord
+maintenant (`glorfindel/reassert.py`). Trois mutants, attrapés à chaque tour (27/10) : M900 et
+M902 sont rares dans les séquences tirées (un crash pile entre la carte et le marqueur) — la
+machine seule ne les voit ni à 500 séquences (2 tours) ni à 2 000 (1 tour) ; M900 est attrapé
+par la séquence figée et par `tests/unit/test_reassert.py`, M902 par ce dernier ; M901 n'a pas de propriété de vivacité dans la
+machine (une isolation disparue), son test unitaire le mesure.
+
+| Mutant | Défaut réinjecté | Effet |
+|---|---|---|
+| M900 | un blocage qu'on n'a pas pu reposer marqué « alerté » avant sa carte | crash entre les deux : blocage disparu, rien de dit |
+| M901 | une isolation qu'on n'a pas pu reposer marquée « alertée » avant sa carte | idem pour une isolation |
+| M902 | un blocage disparu en `human_only` marqué « alerté » avant sa carte | idem, sans tentative de repose |
+
 ## Ce que les invariants ont trouvé
 
 Aucun de ces défauts n'avait été vu en revue. Chacun a son test et sa séquence figée.
@@ -739,6 +758,7 @@ Aucun de ces défauts n'avait été vu en revue. Chacun a son test et sa séquen
 | A0 | original d'une carte nue lu dans le seul tag par le reset | « swept », état effacé, carte sans NSG en silence |
 | A0 | NSG d'origine remis sans en lire les règles | « swept », VM encore coupée par une ancienne isolation |
 | A0 | NSG supprimé lu comme « illisible » | blocage disparu jamais signalé, levée partielle pour toujours |
+| L1F | « déjà alerté » écrit avant la carte quand la repose échoue | crash entre les deux : blocage disparu, plus rien de dit |
 
 Le plus grave : après une levée qui échoue en partie, une seconde levée lisait les champs de
 rétro-compatibilité de l'état comme un ancien format, et supprimait les deny du NSG de

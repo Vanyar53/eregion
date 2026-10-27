@@ -75,9 +75,11 @@ Chacun a son plan local, et les documents de pilotage restent la source commune.
 
 ## Hooks (facultatif)
 
-`bash scripts/elrond-hooks.sh install` ajoute palantir aux hooks `Stop` et `SubagentStop` de **votre** `~/.claude/settings.json`. Le journal se met alors à jour seul, et seulement pour les sessions qui ont utilisé elrond.
+`bash scripts/elrond-hooks.sh install` modifie **votre** `~/.claude/settings.json` :
+- palantir sur les hooks `Stop` et `SubagentStop` : le journal se met alors à jour seul, et seulement pour les sessions qui ont utilisé elrond ;
+- `scripts/notify_discord.py hook` sur `PreToolUse` (`Agent`) et `SubagentStop` : les lots partent dans Discord. Lancé, rendu, verdict et repli vont dans le fil du lot, et ce qui vous attend dans `#agents` (N1, [atelier-discord.md](atelier-discord.md)). Sans sa configuration, ce hook n'envoie rien.
 
-`uninstall` les retire, en laissant les autres hooks en place. Ces hooks restent en dehors du dépôt, car ils s'exécuteraient chez chaque contributeur. Sans eux, elrond lance de toute façon palantir après chaque sous-agent.
+`uninstall` les retire, en laissant les autres hooks en place. Ces hooks restent en dehors du dépôt, car ils s'exécuteraient chez chaque contributeur. Chaque commande finit par `|| true` : un hook qui sort en 2 bloquerait l'outil ou retiendrait l'agent. Sans ces hooks, elrond lance de toute façon palantir après chaque sous-agent.
 
 ## Dépannage
 

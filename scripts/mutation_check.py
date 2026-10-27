@@ -1590,8 +1590,9 @@ MUTANTS += [
      '            elif coll.collected is None:\n                causes.append("not_collected")\n'),
 ]
 
-# IA1, after the review (M840–M844): the rules as the watch loads them, one decision at a
-# time, an unreadable triage refused, no decision said by the model.
+# IA1, after the review (M840–M842, M844): the rules as the watch loads them, one decision at
+# a time, an unreadable triage refused, one entry per line. (M843, a prose filter, is gone with
+# it: no turn of phrase is filtered — the code's status decides, M871–M875.)
 MUTANTS += [
     ("M840", "an entry of the client's layer the watch skips replaces a base rule in the triage (IA1)", TRI,
      "            if why := _invalid_client_rule(entry):\n", '            if why := "":\n'),
@@ -1601,10 +1602,24 @@ MUTANTS += [
     ("M842", "an unreadable triage.json ends in a trace, not a refusal (IA1)", TRI,
      "    except (OSError, ValueError, TypeError, AttributeError, KeyError) as e:",
      "    except OSError as e:"),
-    ("M843", "an entry that says a human decided is kept (IA1)", TRI,
-     '        elif _APPROVAL.search(e["explanation"]) or _APPROVAL.search(e["text"]):\n', "        elif False:\n"),
     ("M844", "the reason of a removed entry, quoting the model, breaks triage.md (IA1)", TRI,
-     "{_cell(neutral(r.get('rejected')))}", "{r['rejected']}"),
+     "— écarté : {_cell(r.get('rejected'))}", "— écarté : {r['rejected']}"),
+]
+
+# IA1, second review (M871–M875): beside each proposal, the status the code wrote — the only
+# thing that says a human decided; the model's text shown as its text; the save locked too.
+MUTANTS += [
+    ("M871", "the status shown beside a proposal comes from the model's text, not the code (IA1)", TRI,
+     "· **{STATUS_LABEL} : {_status(i.proposal)}**", "· **{STATUS_LABEL} : {_cell(i.proposal.text)}**"),
+    ("M872", "the model's Markdown is rendered: its text can draw a status of its own (IA1)", TRI,
+     '    return f"« {_cell(str(text).translate(_MARKUP))} »"\n', '    return f"« {_cell(text)} »"\n'),
+    ("M873", "a new triage written without the lock: a decision taken meanwhile is lost (IA1)", TRI,
+     "    with _locked(campaign_dir):\n        return _save(campaign_dir, t, replace_decided)\n",
+     "    with open(os.devnull):\n        return _save(campaign_dir, t, replace_decided)\n"),
+    ("M874", "a refusal of the analysis model exits 1, as an error: H0 gives no advice (IA1)", SEP,
+     "        return REFUSED\n", "        return 1\n"),
+    ("M875", "triage.md no longer says that only the code's status counts (IA1)", TRI,
+     "\"**Aucune décision n'est prise par le modèle : seul", "\"**Le modèle propose : seul"),
 ]
 
 # Mutants measured by other tests than the invariants (their lot's own).
@@ -1704,7 +1719,8 @@ TESTS.update({f"M{n}": "tests/unit/test_host_console.py" for n in range(740, 750
 TESTS.update({f"M{n}": "tests/unit/test_analysis_separation.py" for n in range(780, 786)})
 TESTS.update({f"M{n}": "tests/unit/test_analysis_triage.py" for n in range(786, 800)})
 TESTS["M840"] = "tests/unit/test_analysis_rules_parity.py"      # against the watch's own loader
-TESTS.update({f"M{n}": "tests/unit/test_analysis_triage.py" for n in range(841, 845)})
+TESTS.update({f"M{n}": "tests/unit/test_analysis_triage.py" for n in (841, 842, 844, 871, 872, 873, 875)})
+TESTS["M874"] = "tests/unit/test_analysis_separation.py"
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

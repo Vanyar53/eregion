@@ -734,16 +734,23 @@ mutants, mesurés par `tests/unit/test_analysis_separation.py` et `tests/unit/te
 | M798 | le harnais ne compte pas l'obéissance que la vérification a écartée | l'obéissance du modèle à une ligne plantée n'est plus mesurée |
 | M799 | une collecte illisible dite « non collectée » | un inconnu présenté comme une cause |
 
-Après la relecture (27/10), cinq de plus, attrapés au premier tour ; M840 est mesuré par
-`tests/unit/test_analysis_rules_parity.py`, qui prend le chargeur de la watch pour oracle.
+Après les relectures (27/10), neuf de plus, tous attrapés à chacun des trois tours ; M840 est
+mesuré par `tests/unit/test_analysis_rules_parity.py`, qui prend le chargeur de la watch pour
+oracle, M874 par `tests/unit/test_analysis_separation.py`. M843 (un filtre de la prose du modèle,
+« approuvée par … ») a été retiré avec ce filtre : ce qui fait foi est le statut écrit par le
+code, et M871–M875 mesurent cette garantie.
 
 | Mutant | Défaut réinjecté | Effet |
 |---|---|---|
 | M840 | une entrée de la couche du client que la watch écarte remplace la règle de base | `no_rule` sur une technique que la watch surveille encore : `author_rule` permis, `review_rule` interdit |
 | M841 | `decide` sans le verrou de la campagne | deux décisions prises en même temps : la seconde écriture perd la première |
 | M842 | un `triage.json` illisible laisse passer l'exception | une trace Python au lieu d'un refus |
-| M843 | une entrée qui dit qu'un humain a décidé gardée | `triage.md` laisse croire à une validation que personne n'a donnée |
 | M844 | la raison d'une entrée écartée, qui cite le modèle, sans `_cell` | un retour à la ligne du modèle casse `triage.md` |
+| M871 | le statut affiché à côté d'une proposition pris du texte du modèle | `triage.md` montre une décision que le code n'a pas écrite |
+| M872 | le Markdown du modèle rendu tel quel | son texte dessine un « Statut (écrit par le code) » à lui |
+| M873 | un nouveau tri écrit sans le verrou | une décision prise pendant ce temps est perdue |
+| M874 | un refus du modèle d'analyse sort avec 1, comme une erreur | `glorfindel-host-model` ne donne pas son conseil |
+| M875 | l'en-tête de `triage.md` ne dit plus que seul le statut du code fait foi | le texte du modèle peut passer pour une décision |
 
 ## Ce que les invariants ont trouvé
 

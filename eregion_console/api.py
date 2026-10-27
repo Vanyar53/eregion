@@ -268,6 +268,30 @@ async def sections_status() -> dict:
     return {**out, "read_only": _read_only(), "version": sections.version()}
 
 
+# What Glorfindel closed itself, with a note (A3: an orphan rule taken off alone — a write
+# on Azure no open card says): shown on its tile for a day (Jonathan, 27/10). A card a human
+# acknowledged carries no note.
+_HANDLED_FOR_H = 24.0
+
+
+def _handled(now: datetime) -> list[dict]:
+    from glorfindel import escalations as esc_module
+    out = []
+    for e in esc_module.all_escalations():
+        if e.get("status") != "resolved" or not e.get("resolution"):
+            continue
+        try:
+            at = datetime.fromisoformat(e.get("resolved_at") or "")
+        except (TypeError, ValueError):
+            continue
+        if at.tzinfo is None:
+            at = at.replace(tzinfo=timezone.utc)
+        if (now - at).total_seconds() <= _HANDLED_FOR_H * 3600:
+            out.append({k: e.get(k, "") for k in
+                        ("id", "resource_id", "escalation_type", "resolution", "resolved_at")})
+    return out
+
+
 @app.get("/api/state")
 async def state() -> dict:
     from glorfindel import escalations as esc_module
@@ -347,6 +371,7 @@ async def state() -> dict:
         pass
 
     pending_escalations = esc_module.pending()
+    handled = _handled(now)
 
     # Autonomy modes — resolved for EVERY VM the UI can render (discovered assets,
     # isolated/blocked resources, and escalation targets). Resolving only discovered
@@ -429,6 +454,7 @@ async def state() -> dict:
     return {
         "resources": resources,
         "escalations": pending_escalations,
+        "handled": handled,
         "restores": _active_restores(),
         "discovered_assets": discovered,
         "posture_gaps": posture_gaps,
@@ -1668,6 +1694,8 @@ def _parse(data: dict, kind: str) -> dict:
         "timestamp": data.get("timestamp", ""),
         "action": data.get("action", ""),
         "escalate": data.get("escalate", False),
+        # A detection-only decision has no action (AL1, C2): the gate that held it.
+        "held_by": data.get("held_by", ""),
         "confidence": data.get("confidence", 0),
         "verified": outcome.get("verified"),
         "ttp": sig.get("ttp", ""),

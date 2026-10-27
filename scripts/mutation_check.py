@@ -65,6 +65,7 @@ GCLI = "glorfindel/cli.py"
 CON = "eregion_console/api.py"
 SEC = "eregion_console/sections.py"
 IND = "eregion_console/indicators.py"
+GHTML = "eregion_console/static/glorfindel.html"
 XW = "eregion_core/exercise.py"
 INVARIANTS = "tests/unit/test_invariants.py"
 INSCRIPTION_TESTS = "tests/unit/test_inscription.py tests/unit/test_engine.py"
@@ -1342,6 +1343,29 @@ MUTANTS = [
     ("M569", "glorfindel --version written by hand again: it drifts from the package (#222)", GCLI,
      '@click.version_option(package_name="eregion", prog_name="glorfindel")',
      '@click.version_option(version="0.2.0", prog_name="glorfindel")'),
+    ("M570", "a new card type shows under its raw name: quarantine_altered unlabelled (#248)", GHTML,
+     "  quarantine_altered:  'quarantine NSG altered',\n", ""),
+    ("M571", "a control-plane card gets the anchor VM's Restore and restore command back (#248)", GHTML,
+     "const _ANCHORED_TYPES = new Set(['control_plane_change', 'identity_change', 'unattributed_signal']);",
+     "const _ANCHORED_TYPES = new Set(['identity_change', 'unattributed_signal']);"),
+    ("M572", "a card on a quarantine NSG asks for a verdict, as if a decision (#248)", GHTML,
+     "const _NOT_DECISIONS = new Set(['posture_gap', 'orphan_rule', 'quarantine_altered', 'proposed_rule',",
+     "const _NOT_DECISIONS = new Set(['posture_gap', 'orphan_rule', 'proposed_rule',"),
+    ("M573", "the feed loses what held a decision without action: an empty « escalate → » (#248)", CON,
+     '        "held_by": data.get("held_by", ""),\n', ""),
+    ("M574", "what Glorfindel closed itself stays on its tile forever (#248)", CON,
+     "if (now - at).total_seconds() <= _HANDLED_FOR_H * 3600:", "if True:"),
+    ("M575", "a card a human acknowledged shows as done by Glorfindel (#248)", CON,
+     'if e.get("status") != "resolved" or not e.get("resolution"):', 'if e.get("status") != "resolved":'),
+    ("M576", "a card's reason written raw into the page: an Entra app's name runs in the console (XSS)", GHTML,
+     "line-height:1.6\">${_attr(e.reason || '')}</div>", "line-height:1.6\">${e.reason || ''}</div>"),
+    ("M577", "a card's suggested steps written raw into the page (XSS)", GHTML,
+     "• ${_attr(s)}</div>", "• ${s}</div>"),
+    ("M578", "a card's proposed query written raw into the page (XSS)", GHTML,
+     "${_attr(e.proposed_query.trim())}</pre>", "${e.proposed_query.trim()}</pre>"),
+    ("M579", "an anchored card offers Restore on its anchor VM again (#248)", GHTML,
+     "const isRestore = e.action === 'restore_from_backup' && !_isAnchored(e);",
+     "const isRestore = e.action === 'restore_from_backup';"),
     ("M408", "eregion console keeps compose's empty service principal: no managed identity (UI-1, H0)",
      "eregion_console/cli.py", "    _drop_empty_service_principal_env()\n", ""),
     ("M409", "the console looks for the shipped rules beside itself: none outside the repo's root (UI-1, P1 review)",
@@ -2184,6 +2208,7 @@ TESTS["M566"] = "tests/unit/test_host_deploy.py"
 TESTS["M567"] = "tests/unit/test_console.py"
 TESTS["M568"] = "tests/unit/test_console.py"
 TESTS["M569"] = "tests/unit/test_cli.py -k version"
+TESTS.update({f"M{n}": "tests/unit/test_console.py" for n in range(570, 580)})  # #248, and the card detail escaped
 TESTS["M403"] = "tests/unit/test_console_exercises.py"
 # V1 (#214): Annatar's side and the shared gate in test_watch_gate.py, Gothmog's in test_gothmog.py.
 TESTS.update({f"M{n}": "tests/unit/test_watch_gate.py" for n in (*range(720, 740), *range(750, 760))})

@@ -653,6 +653,7 @@ const ESC_LABELS = {
   proposed_action:     'unknown action',
   verification_failed: 'verification failed',
   proposed_rule:       'proposed rule',
+  posture_gap:         'posture gap',
   mode_hold:           'mode human-only',
   write_blocked:       'write blocked',
   action_failed:       'action failed',
@@ -666,7 +667,22 @@ const ESC_LABELS = {
   ttl_exceeded:        'TTL exceeded',
   readiness_hold:      'reserves to confirm',
   orphan_rule:         'orphan rule (NIC gone)',
+  quarantine_altered:  'quarantine NSG altered',
+  control_plane_change: 'control plane changed (detection only)',
+  identity_change:     'Entra ID identity changed (detection only)',
 };
+
+// Cards anchored on a VM the detection does not name (an Activity Log row, an identity,
+// an unattributed detection — glorfindel/bot.py _ANCHORED_TYPES): no button nor command
+// aimed at that VM. Detection only (AL1, C2): decided by the code, nothing recommended.
+// Not decisions: the cards TO JUDGE leaves out (escalations._NOT_DECISIONS).
+const _ANCHORED_TYPES = new Set(['control_plane_change', 'identity_change', 'unattributed_signal']);
+const _DETECTION_ONLY = new Set(['control_plane_change', 'identity_change']);
+const _NOT_DECISIONS = new Set(['posture_gap', 'orphan_rule', 'quarantine_altered', 'proposed_rule',
+  'readiness_hold', 'ttl_exceeded', 'detection_blocked']);
+function _isAnchored(e) { return _ANCHORED_TYPES.has(e.escalation_type); }
+// A card on an NSG (a quarantine altered, an orphan rule no VM holds) gets an NSG tile.
+function _isNsgId(rid) { return /\/providers\/microsoft\.network\/networksecuritygroups\//i.test(rid || ''); }
 
 // An autonomous action a gate held back: recommended, NOT executed. It used to read
 // "VM isolated from network" as if done, with only an Ack (third review, T14). Say it
@@ -700,7 +716,24 @@ const _ESC_TITLES = {
   ttl_exceeded:   'Isolation TTL exceeded',
   proposed_action:'Unknown action proposed',
   cycle_failed:   'Signal not processed — triage by hand',
+  quarantine_altered:   'Quarantine NSG altered',
+  control_plane_change: 'Control-plane change',
+  identity_change:      'Entra ID identity change',
 };
+
+// What a card is about, on one line: technique, confidence, severity (critical stands
+// out), type. A detection-only card also names its rule: it recommends nothing.
+function _escCtx(e, pct, lean) {
+  const sev = e.severity === 'critical' ? '<b style="color:var(--red)">critical</b>' : _attr(e.severity || '');
+  const rule = _DETECTION_ONLY.has(e.escalation_type) && e.rule_name ? 'rule ' + _attr(e.rule_name) : '';
+  const ttp = _attr(e.ttp || '');
+  return (lean ? [ttp, sev] : [ttp, pct, sev, rule, _attr(escLabel(e.escalation_type))])
+    .filter(Boolean).join(' · ');
+}
+function _anchorNote(e, vmName) {
+  if (!_isAnchored(e) || e.escalation_type === 'unattributed_signal') return '';
+  return `<div class="esc-context" title="The detection does not name this VM: the card is only filed on it">⚓ filed on ${_attr(vmName)}, not about it</div>`;
+}
 function escTitle(e) {
   // Real remediation action → its label; otherwise a readable type title.
   if (e.action && ACTION_LABELS[e.action]) return ACTION_LABELS[e.action];
@@ -843,6 +876,8 @@ function _extendBtn(s, vmName) {
 function cliCommand(esc) {
   const rid = esc.resource_id;
   const id  = esc.id.slice(0, 8);
+  // Never a command aimed at the anchor VM (AL1): acknowledge, act from what the card says.
+  if (_isAnchored(esc)) return `glorfindel ack ${id}`;
   if (_isHeld(esc)) {
     const vm = rid.split('/').pop();
     const ip = esc.ip || (esc.action_params && esc.action_params.ip) || '<ip>';
@@ -1042,7 +1077,8 @@ function _renderEscGroup(group) {
   const recurBadge = occ > 1
     ? `<span title="${_attr(`Re-fired ${occ}× since ${e.first_seen || '?'}${e.last_seen ? ` (last ${e.last_seen})` : ''}`)}" style="font-size:9px;font-weight:700;padding:1px 4px;border-radius:3px;background:color-mix(in srgb,var(--orange) 15%,transparent);color:var(--orange);flex-shrink:0">↻ ${occ}×${e.first_seen ? ` · ${_relTime(e.first_seen)}` : ''}</span>`
     : '';
-  const isRestore = e.action === 'restore_from_backup';
+  // No Restore on an anchored card: it would restore a VM the detection does not name.
+  const isRestore = e.action === 'restore_from_backup' && !_isAnchored(e);
   const isReadinessHold = e.escalation_type === 'readiness_hold';
   const actionBtns = isRule
     ? ruleButtons
@@ -1065,8 +1101,7 @@ function _renderEscGroup(group) {
     : `<button class="action" onclick="event.stopPropagation();doAckAll('${ids}')" style="font-size:9px;padding:2px 7px">✓ Ack</button>
        <button class="action" onclick="event.stopPropagation();openCommandModal('${e.id}')" style="font-size:9px;padding:2px 7px">📋 Cmd</button>`;
   // Observation (docs/observation.md): was this recommendation right? Decision cards only.
-  const isDecision = !isRule && !['posture_gap', 'orphan_rule', 'proposed_rule', 'readiness_hold',
-    'ttl_exceeded', 'detection_blocked'].includes(e.escalation_type)
+  const isDecision = !isRule && !_NOT_DECISIONS.has(e.escalation_type)
     && !String(e.signal_id || '').startsWith('reassert-');
   // The verdict is given in one place, TO JUDGE (decision of 26/10): the card leads there.
   const verdictBtns = isDecision
@@ -1075,9 +1110,7 @@ function _renderEscGroup(group) {
       : `<a class="judge-link" onclick="event.stopPropagation();focusJudge('${e.id}')" title="Give it a verdict in TO JUDGE">to judge ▸</a>`)
     : '';
   // mode_hold/write_blocked/action_failed: type already encoded in title, keep ctx lean
-  const ctxParts = (isModeHold || isWriteBlocked || isActionFailed)
-    ? [e.ttp, e.severity].filter(Boolean).join(' · ')
-    : [e.ttp, pct, e.severity, escLabel(e.escalation_type)].filter(Boolean).join(' · ');
+  const ctxParts = _escCtx(e, pct, isModeHold || isWriteBlocked || isActionFailed);
   return `<div class="esc-item section-group s-escalation" style="margin-top:5px" onclick="showEscModal('${vmName}')">
     <div style="display:flex;align-items:flex-start;gap:5px;margin-bottom:3px">
       <span class="esc-action-label">${label}</span>${e.source === 'exercise' ? `<span class="chip-exercise" title="An injector's exercise window covered this VM (run ${_attr(e.exercise_run || '?')}) — left out of the observation report">EXERCISE</span>` : ''}
@@ -1086,6 +1119,7 @@ function _renderEscGroup(group) {
       <span style="color:var(--blue);font-size:10px;margin-left:auto;padding-top:1px;flex-shrink:0">▸ details</span>
     </div>
     ${ctxParts ? `<div class="esc-context">${ctxParts}</div>` : ''}
+    ${_anchorNote(e, vmName)}
     <div style="display:flex;gap:5px;margin-top:6px;flex-wrap:wrap" onclick="event.stopPropagation()">${actionBtns}${verdictBtns}</div>
   </div>`;
 }
@@ -1304,14 +1338,22 @@ function renderInfra() {
     if (!exists)
       resourceMap.set(e.resource_id, {
         resource_id: e.resource_id,
-        vm_name: vmName, states: [] });
+        vm_name: vmName, states: [], is_nsg: _isNsgId(e.resource_id) });
+  });
+  // What Glorfindel closed itself in the last day keeps its tile, VM or NSG.
+  (_state.handled || []).forEach(h => {
+    const name = (h.resource_id || '').split('/').pop();
+    if (name && !_clusterKey(h.resource_id, '') && ![...resourceMap.values()].some(r => r.vm_name === name))
+      resourceMap.set(h.resource_id, { resource_id: h.resource_id, vm_name: name, states: [],
+                                       is_nsg: _isNsgId(h.resource_id) });
   });
 
   // Card name set (deduped exactly like the rendered cards) — RECOVER uses this as the
   // "unprotected" denominator so the count always matches what the operator sees on
   // screen (e.g. an AKS cluster = one card, not its N node heartbeats).
   _cardVmNames = new Set(
-    [...resourceMap.values()].map(r => (r.vm_name || '').toLowerCase()).filter(Boolean));
+    [...resourceMap.values()].filter(r => !r.is_nsg)   // an NSG is backed up by no vault
+      .map(r => (r.vm_name || '').toLowerCase()).filter(Boolean));
 
   // Auto-expand VMs with active incidents, unless user explicitly collapsed them
   // When incident clears, reset the collapsed preference so next incident re-expands
@@ -1357,6 +1399,8 @@ function renderInfra() {
               const r = [...resourceMap.values()].find(r => r.vm_name === vmName);
               if (r) return r.is_cluster
                 ? _renderClusterNode(r, slotIdx)
+                : r.is_nsg
+                ? _renderNsgNode(r, vmEscs, slotIdx)
                 : _renderAssetNode(r, vmEscs, detEscs, restoreByVm, slotIdx);
             }
             return `<div class="node-asset-empty"
@@ -1792,6 +1836,54 @@ function _renderClusterNode(cluster, slotIdx = 0) {
   </div>`;
 }
 
+// What Glorfindel closed itself on this resource in the last day (/api/state `handled`).
+function _handledLines(resource_id, name) {
+  const mine = (_state.handled || []).filter(h =>
+    h.resource_id === resource_id || (h.resource_id || '').split('/').pop() === name);
+  return mine.map(h => `<div style="font-size:9px;color:var(--green);margin-top:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"
+      title="${_attr(h.resolution)}">✓ ${h.resolved_at ? `${_relTime(h.resolved_at)} · ` : ''}${_attr(h.resolution)}</div>`).join('');
+}
+
+// A card on an NSG (I1F: a quarantine altered; A3: an orphan rule no VM holds): an NSG
+// tile — its cards, nothing a VM has (mode, backup, snapshot, heartbeat).
+function _renderNsgNode(resource, vmEscs, slotIdx = 0) {
+  const { resource_id, vm_name } = resource;
+  const myEscs = vmEscs.filter(e =>
+    e.resource_id === resource_id || e.resource_id.split('/').pop() === vm_name);
+  const isExpanded = _expandedVms.has(vm_name);
+  const rg = (/\/resourcegroups\/([^/]+)/i.exec(resource_id || '') || [])[1] || '';
+  const dot = `<span style="color:${myEscs.length ? 'var(--purple)' : 'var(--green)'};font-size:10px">●</span>`;
+  const summary = myEscs.length
+    ? `<span style="font-size:9px;color:var(--purple)">${myEscs.length} card${myEscs.length > 1 ? 's' : ''}</span>`
+    : `<span style="font-size:9px;color:var(--dim)">no open card</span>`;
+  const cards = myEscs.length
+    ? `<div class="vm-escalations" style="margin:8px 0 0;padding:8px 0 0;border-top:1px solid var(--border)">
+        ${_groupEscs(myEscs).map(_renderEscGroup).join('')}</div>` : '';
+  return `<div class="node-asset ${myEscs.length ? 's-incident' : 's-clean'} ${isExpanded ? 'expanded' : ''}"
+    id="asset-${vm_name}" data-kind="nsg"
+    draggable="true"
+    ondragstart="event.dataTransfer.setData('text/plain','${vm_name}');event.currentTarget.classList.add('dragging');document.body.classList.add('dnd')"
+    ondragend="event.currentTarget.classList.remove('dragging');document.body.classList.remove('dnd');document.querySelectorAll('.drag-over').forEach(e=>e.classList.remove('drag-over'))"
+    ondragover="event.preventDefault();event.currentTarget.classList.add('drag-over')"
+    ondragleave="event.currentTarget.classList.remove('drag-over')"
+    ondrop="event.preventDefault();event.currentTarget.classList.remove('drag-over');dropOnSlot(${slotIdx},event.dataTransfer.getData('text/plain'))">
+    <div class="node-asset-header" onclick="toggleAsset('${vm_name}')">
+      <div style="display:flex;align-items:center;gap:6px">
+        ${dot}
+        <span class="node-asset-name" title="${_attr(resource_id)}">🛡 ${_attr(vm_name)}</span>
+        <span style="font-size:8px;font-weight:700;padding:1px 5px;border-radius:3px;background:color-mix(in srgb,var(--orange) 14%,transparent);color:var(--orange);border:1px solid color-mix(in srgb,var(--orange) 35%,var(--border));letter-spacing:.5px;flex-shrink:0">NSG</span>
+        <span style="color:var(--dim);font-size:9px;margin-left:auto;flex-shrink:0">${isExpanded ? '▾' : '▸'}</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px;margin-top:5px">
+        ${rg ? `<span style="font-size:9px;color:var(--dim)">${_attr(rg)}</span>` : ''}
+        ${summary}
+      </div>
+      ${_handledLines(resource_id, vm_name)}
+    </div>
+    ${isExpanded ? cards : ''}
+  </div>`;
+}
+
 // ── Asset nodes ────────────────────────────────────────────────────────────────
 
 function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
@@ -2159,6 +2251,7 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
         ${modeBadge}
         ${readiness && !isExpanded ? `<span style="color:var(--dim);font-size:9px;margin-left:auto">${readiness}</span>` : ''}
       </div>` : ''}
+      ${_handledLines(resource_id, vm_name)}
     </div>
     ${isExpanded ? expandedBody : compactBody}
   </div>`;
@@ -2252,6 +2345,11 @@ function _drawTopologyEdges() {
     const vmName  = el.id.replace('asset-', '');
     const asset   = pt(el);
     if (!asset) return;
+    // An NSG tile: PROTECT only — no backend detects it, no vault restores it.
+    if (el.dataset.kind === 'nsg') {
+      if (nbNsg) lines.push(bezier(nbNsg.x, nbNsg.bottom, asset.x, asset.top, 'var(--orange)', '', 1.5, 0.4));
+      return;
+    }
 
     // DETECT → VM  (via the monitoring backend that discovered it)
     const disc = discovered.find(d => d.name === vmName);
@@ -2530,9 +2628,11 @@ function renderToJudge() {
     // own explanation — `reason` is often only the gate's wording (a mode hold).
     const p = c.action_params || {};
     const target = p.ip ? ` ${p.ip}${p.port ? ':' + p.port : ''}` : '';
-    const what = (actionLabelVerb(c.action) || c.action || c.escalation_type || '?') + target + pct;
+    // A detection-only card recommends nothing: its title says what was detected.
+    const what = (c.action ? actionLabelVerb(c.action) : escTitle(c)) + target + pct;
     const why = c.explanation || c.reason || '';
     const vm = (c.resource_id || '').split('/').pop();
+    const anchored = _isAnchored(c);
     const times = c.occurrences > 1 ? ` · ${c.occurrences}×` : '';
     const id = _attr(c.id);
     return `<div class="judge-item${disruptive ? ' disruptive' : ''}${c.id === _focusCard ? ' focus' : ''}" id="judge-${id}">
@@ -2541,7 +2641,7 @@ function renderToJudge() {
         <span style="flex:1"></span>
         <span class="judge-ts">${c.first_seen ? _relTime(c.first_seen) : ''}${times}</span>
       </div>
-      <div class="judge-why" style="-webkit-line-clamp:1;color:var(--text)" title="${_attr(c.resource_id || '')}">${_attr(vm)}${c.rule_name ? ` · rule ${_attr(c.rule_name)}` : ''}${c.ttp ? ` · ${_attr(c.ttp)}` : ''}</div>
+      <div class="judge-why" style="-webkit-line-clamp:1;color:var(--text)" title="${anchored ? 'The detection does not name this VM: the card is only filed on it' : _attr(c.resource_id || '')}">${anchored ? '⚓ ' : ''}${_attr(vm)}${c.rule_name ? ` · rule ${_attr(c.rule_name)}` : ''}${c.ttp ? ` · ${_attr(c.ttp)}` : ''}${c.severity === 'critical' ? ' · <b style="color:var(--red)">critical</b>' : ''}</div>
       ${c.exercise ? `<div class="judge-why" style="-webkit-line-clamp:1;color:var(--blue)" title="An injector's exercise window covered this VM at that time. A window is the injectors' claim: check the run before trusting it.">⚑ exercise${c.exercise_run ? ` · run <a href="/runs/${encodeURIComponent(c.exercise_run)}">${_attr(c.exercise_run)}</a> — check the run ▸` : ' — check the run'}</div>` : ''}
       ${c.recurrence ? `<div class="judge-why" style="-webkit-line-clamp:1;color:var(--yellow)" title="An earlier card on the same IP: in observation nothing is blocked, so a scanner comes back">↻ same IP seen ${c.recurrence.previous}× in 7 days — last ${c.recurrence.last_seen ? _relTime(c.recurrence.last_seen) : ''}${c.recurrence.last_verdict ? ', judged ' + _attr(c.recurrence.last_verdict) : ''}</div>` : ''}
       <div class="judge-why" title="${_attr(why)}">${_attr(why)}</div>
@@ -2756,6 +2856,8 @@ async function setDefaultMode(mode) {
 // Dedup escalate feed entries with same action+vm within 5s — same underlying event
 const _feedDedup = new Map(); // key → {el, count, ts}
 const _FEED_DEDUP_MS = 5000;
+// The gate that held a decision with no action (debug line `held_by`, agent.py).
+const _HELD_BY_WORDS = { control_plane: 'control plane (detection only)', identity: 'identity (detection only)' };
 
 function appendFeedEntry(entry) {
   const list = document.getElementById('feed-list');
@@ -2765,7 +2867,7 @@ function appendFeedEntry(entry) {
   const ts = fmtTime(entry.timestamp);
 
   if (entry.escalate) {
-    const key = `${entry.action}|${entry.vm || ''}`;
+    const key = `${entry.action || entry.held_by || ''}|${entry.vm || ''}`;
     const now = Date.now();
     const hit = _feedDedup.get(key);
     if (hit && (now - hit.ts) < _FEED_DEDUP_MS) {
@@ -2805,7 +2907,10 @@ function appendFeedEntry(entry) {
     const disruptive = ['isolate_vm', 'block_suspicious_ip'].includes(entry.action);
     const cls  = entry.escalate ? (disruptive ? 'act-esc' : 'act-warn')
                : entry.verified ? 'act-ok' : entry.verified === false ? 'act-err' : 'act-run';
-    const label = entry.escalate ? 'escalate → ' + entry.action : entry.action;
+    // A detection-only decision (AL1, C2) has no action: say what held it.
+    const label = entry.escalate
+      ? 'escalate → ' + (entry.action || _HELD_BY_WORDS[entry.held_by] || 'review')
+      : entry.action;
     const pct = entry.confidence ? Math.round(entry.confidence * 100) + '%' : '';
     el.innerHTML = `
       <span class="feed-ts">${ts}</span>
@@ -3139,14 +3244,12 @@ function showEscModal(vmName) {
       : isActionFailed    ? `${actionLabelVerb(e.action) || e.action || '?'} — failed`
       : escTitle(e);
     // type already encoded in title for these — keep ctx lean
-    const ctx   = (isModeHold || isWriteBlocked || isActionFailed)
-      ? [e.ttp, e.severity].filter(Boolean).join(' · ')
-      : [e.ttp, e.severity, escLabel(e.escalation_type)].filter(Boolean).join(' · ');
+    const ctx   = _escCtx(e, '', isModeHold || isWriteBlocked || isActionFailed);
     const steps = (e.suggested_steps || [])
-      .map(s => `<div style="color:var(--dim);font-size:10px;padding:2px 0 2px 8px">• ${s}</div>`).join('');
+      .map(s => `<div style="color:var(--dim);font-size:10px;padding:2px 0 2px 8px">• ${_attr(s)}</div>`).join('');
     const query = e.proposed_query
       ? `<pre style="background:var(--bg2);border-left:2px solid var(--cyan);padding:8px;font-size:10px;
-           color:var(--blue);white-space:pre-wrap;overflow-x:auto;margin:6px 0;border-radius:0 4px 4px 0">${e.proposed_query.trim()}</pre>`
+           color:var(--blue);white-space:pre-wrap;overflow-x:auto;margin:6px 0;border-radius:0 4px 4px 0">${_attr(e.proposed_query.trim())}</pre>`
       : '';
     const pid   = e.proposal_id || '';
     const countBadge = count > 1
@@ -3177,7 +3280,8 @@ function showEscModal(vmName) {
         <span style="margin-left:auto;display:flex;gap:6px">${modalBtns}</span>
       </div>
       ${ctx ? `<div style="color:var(--dim);font-size:10px;margin-bottom:6px">${ctx}</div>` : ''}
-      <div style="color:var(--text);font-size:11px;line-height:1.6">${e.reason || ''}</div>
+      ${_anchorNote(e, vmName)}
+      <div style="color:var(--text);font-size:11px;line-height:1.6">${_attr(e.reason || '')}</div>
       ${query}${steps}
     </div>`;
   }).join('');

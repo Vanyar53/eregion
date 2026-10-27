@@ -15,7 +15,7 @@ from annatar.runner.parser import ScenarioParser
 from annatar.runner.report import RUNS_DIR, RunReport
 from eregion_core.inscription import check_target
 from annatar.signals.emitter import SignalEmitter
-from eregion_core import watch_channel
+from eregion_core import watch_channel, watch_gate
 from eregion_core.exercise import close_window, open_window
 from eregion_core.exercise_channel import carry_run
 from eregion_core.orodruin import arm
@@ -48,7 +48,8 @@ class RunOutcome:
 
     ``detection`` is the honest blind measure: "detected" (Glorfindel caught it),
     "missed" (active watch, no detection in window → detection_missed emitted), or
-    "unknown" (no active glorfindel watch — detection was not measured).
+    "unknown" (detection was not measured: the watch stopped during the run, or could not
+    vouch for it, or the run went --without-glorfindel — its report then says so).
     ``detection_latency_s`` is set only when detected: seconds from the attack
     (``attack_time``) to the detection Glorfindel recorded (annatar/runner/detection.py).
     """
@@ -61,9 +62,12 @@ class RunOutcome:
 
 class Engine:
     def __init__(self, dry_run: bool = False, skip_preflight: bool = False,
-                 publish_report: bool = False):
+                 publish_report: bool = False, without_glorfindel: bool = False):
         self.dry_run = dry_run
         self.skip_preflight = skip_preflight
+        # V1 (#214): a development run, without a live Glorfindel watch — its report says so
+        # and its detection is not measured (eregion_core/watch_gate.py).
+        self.without_glorfindel = without_glorfindel
         # `annatar run` alone (#193): the report goes to H0 with the window. A campaign
         # leaves it False — it carries its runs' reports itself, at its end (annatar/cli.py).
         self.publish_report = publish_report
@@ -94,6 +98,17 @@ class Engine:
         if self.dry_run:
             self._dry_run_display(scenario)
             return
+
+        # V1 (#214): no live Glorfindel watch, no run — decided before anything reaches the
+        # cloud (the contract, the target, the window), the watch's heartbeat read alone.
+        if self.without_glorfindel:
+            console.print(f"[yellow]{watch_gate.FLAG}: a development run — "
+                          f"{watch_gate.NOT_MEASURED}.[/yellow]")
+        else:
+            no_watch = watch_gate.refusal()
+            if no_watch:
+                console.print(f"[red]Refused — no live Glorfindel watch:[/red] {no_watch}")
+                return RunOutcome(run_id, "unknown", error=f"glorfindel: {no_watch}")
 
         if not skip_confirm:
             if not Confirm.ask("[yellow]Execute this scenario?[/yellow]"):
@@ -223,7 +238,7 @@ class Engine:
             resource_id=executor.resource_id,
         )
 
-        metrics = {}
+        metrics = watch_gate.without_metrics(self.without_glorfindel)
         checks = {}
 
         # Setup runs first — cleans residuals from previous attack before we check state
@@ -310,7 +325,8 @@ class Engine:
         # Wait for Glorfindel's detection result and emit feedback if needed.
         # Non-daemon so the process stays alive until the result is known.
         # Short-circuits immediately if no glorfindel watch appears to be running.
-        if scenario.detection and detection_timeout_s > 0 and not self.dry_run:
+        if scenario.detection and detection_timeout_s > 0 and not self.dry_run \
+                and not self.without_glorfindel:  # not measured, by choice: no wait
             t = threading.Thread(
                 target=self._wait_and_emit_feedback,
                 args=(run_id, emitter, scenario, detection_timeout_s, T0, stop_event),
@@ -356,6 +372,7 @@ class Engine:
             "engine": "atomic",
             "engine_ref": scenario.engine_ref,
             "atomic_guid": resolved.guid,
+            **watch_gate.without_metrics(self.without_glorfindel),
         }
 
         # Initial state before the attack — a dirty start is refused (never attack over residue).
@@ -473,7 +490,8 @@ class Engine:
             return RunOutcome(run_id, "unknown", error=error)
 
         # Purple-team feedback — only when the attack actually started (short-circuits with no watch).
-        if attack_started and detection_timeout_s > 0 and not self.dry_run:
+        if attack_started and detection_timeout_s > 0 and not self.dry_run \
+                and not self.without_glorfindel:  # not measured, by choice: no wait
             t = threading.Thread(
                 target=self._wait_and_emit_feedback,
                 args=(run_id, emitter, scenario, detection_timeout_s, T0, threading.Event()),
@@ -602,36 +620,27 @@ class Engine:
         so Glorfindel can propose an improved detection rule.
         """
         debug_path = Path("runs") / f"{run_id}_debug.jsonl"
-        heartbeat = Path.home() / ".glorfindel" / "watch_heartbeat"
         channel = watch_channel.channel_url()
 
         def _local_watch() -> bool:
             if debug_path.exists():
                 return True  # watch already responded
-            if not heartbeat.exists():
-                return False
-            try:
-                ts = datetime.fromisoformat(heartbeat.read_text().strip())
-                return (time.time() - ts.timestamp()) < 90
-            except Exception:
-                return False
+            # The heartbeat's test is the gate's (eregion_core/watch_gate.py, V1).
+            return watch_gate.fresh(watch_gate.local_beat(),
+                                    datetime.fromtimestamp(time.time(), timezone.utc))
 
         def _remote_watch() -> bool:
-            if not channel:
-                return False
-            try:
-                return watch_channel.alive(watch_channel.read_heartbeat(),
-                                           now=datetime.fromtimestamp(time.time(), timezone.utc))
-            except Exception:
-                return False  # an unreadable channel shows no watch
+            # None without a channel; an unreadable channel shows no watch.
+            return watch_gate.fresh(watch_gate.channel_beat(),
+                                    datetime.fromtimestamp(time.time(), timezone.utc))
 
-        # Short-circuit: skip if no active glorfindel watch.
-        # Retry up to 30s to account for a watch that just started.
+        # The run started only with a live watch (V1, eregion_core/watch_gate.py). One that
+        # stopped since, and is not back within 30 s, measures nothing: unknown.
         def _watch_active() -> bool:
             return _local_watch() or _remote_watch()
 
         if not _watch_active():
-            # Retry for up to 30s in case the watch just started
+            # Retry for up to 30s in case the watch is restarting
             deadline_check = time.time() + 30
             while time.time() < deadline_check:
                 time.sleep(5)
@@ -639,8 +648,8 @@ class Engine:
                     break
             else:
                 console.print(
-                    "[dim]Purple team feedback: no active glorfindel watch detected"
-                    " — skipping.[/dim]"
+                    "[yellow]The Glorfindel watch stopped during the run — detection not"
+                    " measured (unknown).[/yellow]"
                 )
                 self._detection_result = "unknown"  # detection was not measured
                 return

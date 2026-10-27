@@ -2,13 +2,14 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://github.com/Vanyar53/eregion/schemas/campaign_manifest.schema.json",
   "title": "Campaign manifest, as H0 accepts it from the exercise channel (H-1)",
-  "description": "The fields the campaign report reads (analysis/campaign_report.py). Other fields are allowed. Checked at run time by analysis/campaign_schema.py (the watch's image has no jsonschema); tests/unit/test_campaign_schema.py keeps the two in step.",
+  "description": "The fields the campaign report reads (analysis/campaign_report.py). Other fields are allowed. Checked at run time by analysis/campaign_schema.py (the watch's image has no jsonschema); tests/unit/test_campaign_schema.py keeps the two in step. without_glorfindel (V1): a campaign run --without-glorfindel, which gets no report.",
   "type": "object",
   "required": ["campaign_id", "state", "scenarios"],
   "properties": {
     "campaign_id": {"$ref": "#/definitions/plain_name"},
     "state": {"enum": ["planned", "ratified", "running", "done", "aborted"]},
-    "scenarios": {"type": "array", "items": {"$ref": "#/definitions/scenario"}}
+    "scenarios": {"type": "array", "items": {"$ref": "#/definitions/scenario"}},
+    "without_glorfindel": {"type": ["boolean", "null"]}
   },
   "definitions": {
     "plain_name": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$", "not": {"pattern": "\\.\\."}},

@@ -27,7 +27,7 @@ L'atelier autour : **Celebrimbor** (`infra/terraform/`) construit et inscrit le 
 
 | Sujet | Où |
 |---|---|
-| Glorfindel : watch, graphe LangGraph (RulePoller, `investigate`, gardes de `decide`), raisonnement LLM, modes d'autonomie, exposition de la War Room, observe-only, vérification après action, IncidentRegistry, escalades, alertes | [docs/glorfindel.md](docs/glorfindel.md) |
+| Glorfindel : watch, graphe LangGraph (RulePoller, `investigate`, gardes de `decide`), raisonnement LLM, modes d'autonomie, exposition de la console, observe-only, vérification après action, IncidentRegistry, escalades, alertes | [docs/glorfindel.md](docs/glorfindel.md) |
 | Azure : NSG, quarantaine, préséance, sessions, restore, sauvegarde, SDK, pièges opérateur | [docs/azure.md](docs/azure.md) |
 | Fichiers clés et état local (`~/.glorfindel/`, `~/.annatar/`) | [docs/fichiers-cles.md](docs/fichiers-cles.md) |
 | CLI, workflows opérateur, variables d'environnement, packaging, coûts | [docs/operations.md](docs/operations.md) |
@@ -37,6 +37,7 @@ L'atelier autour : **Celebrimbor** (`infra/terraform/`) construit et inscrit le 
 | Preuves : invariants, mutation | [docs/design/preuves.md](docs/design/preuves.md) |
 | Isolation compatible IaC | [docs/design/module-isolation-iac.md](docs/design/module-isolation-iac.md) |
 | Contrat d'Orodruin | [docs/design/orodruin-contract.md](docs/design/orodruin-contract.md) |
+| Console Eregion : sections, Glorfindel toujours présent, plan UI | [docs/design/console.md](docs/design/console.md) |
 | elrond, sous-agents par lot | [docs/elrond.md](docs/elrond.md) |
 | Observation : verdicts et rapport | [docs/observation.md](docs/observation.md) |
 | IA d'analyse : le rapport de campagne (IA0) | [docs/analysis.md](docs/analysis.md) |
@@ -146,7 +147,7 @@ python scripts/mutation_check.py [--examples 500 --rounds 2 --jobs 8]   # mesure
 | Glorfindel | `CLAUDE_GLORFINDEL.md` | `glorfindel/`, `rules/azure/`, tests unitaires Glorfindel |
 | Annatar | `CLAUDE_ANNATAR.md` | `annatar/`, `annatar/scenarios/`, tests unitaires Annatar |
 | Tests | `CLAUDE_TESTS.md` | Chef d'orchestre — tests fonctionnels bout en bout sur Azure réel |
-| War Room | `CLAUDE_WARROOM.md` | UI/UX `glorfindel/static/index.html` + `glorfindel/api.py` |
+| Console | `CLAUDE_CONSOLE.md` | UI/UX de la console Eregion : `eregion_console/` (« War Room » jusqu'au 27/10) |
 | Infra | `CLAUDE_INFRA.md` | `infra/terraform/` — module Celebrimbor : infra Azure modulaire, namespacée, jetable + topos de validation |
 | Orodruin | `CLAUDE_ORODRUIN.md` | `infra/orodruin/` — hôte d'exécution jetable des injecteurs, état Terraform séparé, contrat vérifié au démarrage (O1, O2) |
 | Gothmog | `CLAUDE_GOTHMOG.md` | `gothmog/` — pannes déclarées, moteur Chaos Studio d'abord (G0–G4, X1 avec Annatar) |
@@ -164,8 +165,8 @@ python scripts/mutation_check.py [--examples 500 --rounds 2 --jobs 8]   # mesure
 # Session Tests
 "Lis CLAUDE_TESTS.md pour tes instructions de session, puis commence par ton inbox."
 
-# Session War Room
-"Lis CLAUDE_WARROOM.md pour tes instructions de session, puis commence par ton inbox."
+# Session Console (ex-War Room)
+"Lis CLAUDE_CONSOLE.md pour tes instructions de session, puis commence par ton inbox."
 
 # Session Infra
 "Lis CLAUDE_INFRA.md pour tes instructions de session, puis commence par ton inbox."

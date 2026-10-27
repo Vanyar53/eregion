@@ -1799,6 +1799,8 @@ def _slim_run(path: Path) -> dict | None:
     keep = ("injector", "detection", "detection_latency_s", "attack_time", "fault_start",
             "fault_end", "seen_down_at", "time_to_restore_s", "fallback_used", "aborted")
     metrics = {k: m[k] for k in keep if k in m}
+    if m.get("without_glorfindel") is True:  # V1: run --without-glorfindel, shown apart
+        metrics["without_glorfindel"] = True
     metrics.update({k: _slim_probes(m[k]) for k in ("before", "after") if k in m})
     return {"scenario": r.get("scenario", ""), "mitre": r.get("mitre", ""),
             "result": r.get("result", ""),
@@ -1929,6 +1931,7 @@ async def campaigns(since: str = "30d") -> dict:
                                                   "detection_window_s", "reset_nsg_between")},
             "pulled": (cdir / ".pulled").exists(),
             "report": (cdir / "report.md").exists(),
+            "without_glorfindel": m.get("without_glorfindel") is True,   # V1: counted apart
             "scenarios": [
                 {k: s.get(k) for k in ("seq", "ttp", "tactic", "name", "status", "detection",
                                        "detection_latency_s", "run_id", "started_at",

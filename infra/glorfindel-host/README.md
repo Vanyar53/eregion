@@ -1,8 +1,9 @@
 # Glorfindel hébergé (H0)
 
-Une petite VM, dans le groupe `rg-glorfindel`, où Glorfindel tourne en continu, War Room et
-bot Discord compris : le `docker compose` de la racine (`watch`, `war-room`, et `bot` par son
-profil), sur la même image et le même état. Premier usage : la **pré-observation** sur le banc
+Une petite VM, dans le groupe `rg-glorfindel`, où Glorfindel tourne en continu, la console
+d'Eregion (`eregion console`, l'ancienne War Room) et le bot Discord compris : le `docker compose`
+de la racine (`watch`, `war-room` — le service de la console, qui garde son nom jusqu'à UI-1d —,
+et `bot` par son profil), sur la même image et le même état. Premier usage : la **pré-observation** sur le banc
 (`ROADMAP.md`, lot H0 ; `docs/observation.md`) — bree allumée en continu avec une vraie
 charge, Glorfindel qui décide, toi qui juges chaque carte.
 
@@ -16,7 +17,7 @@ charge, Glorfindel qui décide, toi qui juges chaque carte.
   Log Analytics du banc : la découverte (Heartbeat) ne la voit pas, Glorfindel ne peut pas
   l'isoler. Elle n'est pas non plus sur Orodruin (côté rouge).
 - **Fermée.** Entrée : SSH depuis ton IP seulement (`operator_cidr`, jamais `0.0.0.0/0`).
-  La War Room écoute sur `127.0.0.1` de la VM et s'ouvre par un tunnel SSH, jeton en plus.
+  La console écoute sur `127.0.0.1` de la VM et s'ouvre par un tunnel SSH, jeton en plus.
   Alertes : Discord ou webhook, en sortie.
 - **Sans secret dans Terraform.** La clé du modèle et les jetons sont dans `host.env`
   (ignoré par git), copié à la main sur la VM. Aucun secret Azure : l'identité managée.
@@ -32,9 +33,9 @@ make glorfindel-host-up              # crée la VM (confirmation demandée) ; cl
 make glorfindel-host-env             # host.env depuis ton .envrc chargé (ou : copier host.env.example et remplir)
 make glorfindel-host-push            # host.env → ~/eregion/.env, config locale en human_only
 make glorfindel-stop                 # arrête le Glorfindel local : deux watch = cartes en double
-make glorfindel-host-start [REF=…]   # un tag ou un commit (défaut : dernier tag v*), détaché ; construit l'image, lance watch + war-room + bot
-make glorfindel-host-tunnel          # affiche l'URL avec son jeton, puis tient le tunnel (Ctrl+C)
-make glorfindel-host-url             # l'URL de la War Room avec son jeton, seule
+make glorfindel-host-start [REF=…]   # un tag ou un commit (défaut : dernier tag v*), détaché ; construit l'image, lance watch + console (war-room) + bot
+make glorfindel-host-tunnel          # affiche l'URL de la console avec son jeton, puis tient le tunnel (Ctrl+C)
+make glorfindel-host-url             # l'URL de la console avec son jeton, seule
 make glorfindel-host-logs            # vérifier « heartbeat → N VM(s) » et l'absence d'erreur d'identité
 make glorfindel-host-status          # tout tourne ? VMs, sauvegardes, services, erreurs 24 h, cartes à juger
 make glorfindel-host-report          # rapport d'observation (SINCE=4w pour la période)
@@ -42,13 +43,66 @@ make glorfindel-host-pull            # copie locale de ~/.glorfindel (verdicts, 
 make glorfindel-host-down            # détruit la VM et son état (mémoire comprise)
 ```
 
-Au quotidien : `make glorfindel-host-status` (lecture seule, une vue), puis `make glorfindel-host-tunnel`, l'URL qu'il affiche, puis les boutons **✓ Right** / **✗ Wrong** des cartes de la War Room
+Au quotidien : `make glorfindel-host-status` (lecture seule, une vue), puis `make glorfindel-host-tunnel`, l'URL qu'il affiche, puis les boutons **✓ Right** / **✗ Wrong** des cartes de la console (TO JUDGE, page Glorfindel)
 (`docs/observation.md`) ; chaque semaine, `make glorfindel-host-report`. Rien à faire sur la
 VM elle-même.
 
 Les escalades arrivent dans Discord par le bot, qui tourne sur la VM (un fil par VM, avec
 ses boutons) ; le webhook garde les notifications d'action. Un seul bot par
 `DISCORD_BOT_TOKEN` : n'en lance pas d'autre en local.
+
+## La console d'Eregion (UI-1, #205)
+
+La War Room est devenue la console d'Eregion : `eregion console` (`docs/design/console.md`). Une
+**Vue d'ensemble** (`/` : les cartes à juger, la part d'isolations et de blocages jugés faux, le
+dernier run et la dernière campagne de chaque injecteur, les canaux), puis une page par agent :
+**Glorfindel** (`/glorfindel`, l'ancienne War Room : TO JUDGE, le fil, la carte de l'infra),
+**Annatar** et **Gothmog** (`/annatar`, `/gothmog`, en lecture seule), et **Config** (`/config`).
+Glorfindel est toujours là ; un injecteur est actif dès que l'hôte tient un de ses runs (une
+fenêtre, un rapport, une campagne) — sur H0, ceux qui viennent d'Orodruin par le canal —, sinon
+son onglet est grisé. Les anciennes adresses (`/atelier`, `/api/atelier/*`) redirigent.
+
+- **L'URL** : `make glorfindel-host-tunnel` l'affiche avec son jeton (« Console → http://localhost:7007/?token=… »),
+  puis tient le tunnel ; `make glorfindel-host-url` l'affiche seule. Le jeton est posé une fois en
+  cookie ; l'URL n'a plus à être rouverte avec lui.
+- **Le jeton, sous ses deux noms.** `EREGION_CONSOLE_TOKEN`, ou son ancien nom,
+  `GLORFINDEL_WARROOM_TOKEN` : la console prend le nouveau s'il n'est pas vide, sinon l'ancien
+  (compose lui passe les deux, vides quand ils manquent). Le `host.env` de H0 n'a que l'ancien :
+  **rien à renommer**, il reste valide. Un nouvel hôte (`make glorfindel-host-env`) reçoit le
+  nouveau. `make glorfindel-host-url`, `-tunnel` et `-status` suivent la même règle : ils lisent
+  le jeton sous l'un ou l'autre nom (`host.env` sur le poste, `~/eregion/.env` sur la VM), comme
+  compose lit le fichier (la dernière ligne d'une clé l'emporte ; `# …` après la valeur et un
+  blanc est un commentaire — mais `KEY=   # note` vaut « # note », pas une valeur vide, mesuré
+  avec `docker compose config`). `glorfindel-host-status` ne l'affiche jamais et ne le met sur
+  aucune ligne de commande (curl le lit sur son entrée) ; il dit « jeton refusé » si la console
+  le refuse, « aucun jeton » s'il n'y en a pas. `make glorfindel-host-push` vérifie d'abord le
+  `host.env` (`host_env.py --check`) : il dit sous quel nom est le jeton, sans sa valeur, et
+  refuse un fichier sans jeton (la console tournerait sans) ou dont le jeton est un commentaire.
+- **Avant UI-1** : une référence antérieure (`v0.3.0` et avant) ne lit que
+  `GLORFINDEL_WARROOM_TOKEN`. Un `host.env` neuf, qui n'a que `EREGION_CONSOLE_TOKEN`, se déploie
+  donc avec une référence qui contient UI-1 (`REF=<commit>` ou un tag postérieur) : sinon la War
+  Room de l'ancienne image démarrerait sans jeton (sur la boucle locale de la VM, mais sans jeton).
+- **Le service compose** garde son nom, `war-room` (conteneur `eregion-war-room`) :
+  `glorfindel-host-status` l'affiche « console  eregion-war-room ». Le renommer (`console`) est
+  UI-1d, avec Jonathan : l'ancien conteneur garde le port 7007 tant qu'il n'est pas retiré.
+
+### Ce que change le prochain redéploiement de H0
+
+UI-1c ne change que le poste (`Makefile`, `status.sh`, `host_env.py`) : rien à redéployer pour
+lui. Si H0 tourne encore une référence d'avant UI-1 (`make glorfindel-host-status` → « référence
+déployée »), le prochain `make glorfindel-host-start REF=<tag ou commit avec UI-1>` (avec Jonathan,
+`.envrc` chargé) :
+
+- **la watch et le bot ne changent pas** : mêmes commandes (`glorfindel watch`, `glorfindel bot`),
+  mêmes variables, même état ;
+- **la console redémarre sous `eregion console`**, dans le même conteneur (`eregion-war-room`), sur
+  le même port (`127.0.0.1:7007`), avec le même jeton (l'ancien nom suffit) ;
+- `host.env` ne change pas (pas de `make glorfindel-host-env` : il tirerait un nouveau jeton) ;
+  `make glorfindel-host-push` seulement si autre chose y a changé.
+
+Vérifier : `make glorfindel-host-status` → « ✓ console  eregion-war-room », « à juger : N » (et non
+« jeton refusé » ni « pas de réponse ») ; `make glorfindel-host-tunnel`, puis l'URL affichée : la
+Vue d'ensemble, l'onglet Glorfindel ; un ancien favori `/atelier` mène à `/`.
 
 ## Ce que la VM exécute (M-3, #183)
 
@@ -77,12 +131,12 @@ ses boutons) ; le webhook garde les notifications d'action. Un seul bot par
 - **Un environnement par conteneur.** `host.env` reste un seul fichier (`~/eregion/.env` sur la
   VM), que docker compose lit pour remplir `docker-compose.yml` ; chaque conteneur ne reçoit que
   les variables de sa liste. La clé du modèle : la watch seule. Le jeton du bot : le bot seul.
-  Le jeton de la War Room : la War Room seule. L'URL du webhook (elle porte un jeton) : la watch
-  et la War Room. Les réglages sans secret (abonnement, modèle affiché, canaux, lecture seule,
+  Le jeton de la console : la console seule. L'URL du webhook (elle porte un jeton) : la watch
+  et la console. Les réglages sans secret (abonnement, modèle affiché, canaux, lecture seule,
   `DISCORD_CHANNEL_ID`) : les trois. Pourquoi pas trois fichiers : compose ne passe à un
   conteneur que sa liste, et trois fichiers sur le même disque, au même propriétaire, ne
   protégeraient rien de plus ; la répartition est tenue par `tests/unit/test_glorfindel_host.py`.
-  La watch et la War Room n'ont plus le jeton du bot : compose leur dit seulement qu'il est posé
+  La watch et la console n'ont plus le jeton du bot : compose leur dit seulement qu'il est posé
   (`GLORFINDEL_DISCORD_BOT`, « 1 » ou vide, jamais la valeur). Avec lui et `DISCORD_CHANNEL_ID`,
   le bot poste les cartes et leur webhook se tait ; un salon sans jeton, le webhook poste.
 - **Des boutons qui vérifient qui clique.** `DISCORD_ALLOWED_USERS` (ids d'utilisateurs) et
@@ -90,7 +144,7 @@ ses boutons) ; le webhook garde les notifications d'action. Un seul bot par
   avec un message visible de lui seul, et journalisé (« Button refused: user … »). **Fermé par
   défaut** : sans liste, tous les boutons refusent. Les boutons jugent, acquittent et lancent des
   restaurations, et Discord les montre à quiconque lit le salon : un oubli ne doit pas les
-  ouvrir à tout le serveur ; la War Room, derrière son jeton, juge toujours les cartes. Au
+  ouvrir à tout le serveur ; la console, derrière son jeton, juge toujours les cartes. Au
   démarrage, le bot dit combien d'utilisateurs et de rôles il autorise, ou avertit que tout est
   fermé.
 
@@ -146,7 +200,8 @@ ses boutons) ; le webhook garde les notifications d'action. Un seul bot par
    (`GPG_KEY` vient de l'image `python:3.12-slim` : l'empreinte publique de la clé qui signe
    Python, pas un secret ; la commande l'écarte.) Attendu : la watch, `ANTHROPIC_API_KEY` (et les
    autres clés de modèle, vides), `AZURE_CLIENT_SECRET` (vide), `GLORFINDEL_WEBHOOK_URL` ; la War
-   Room, `GLORFINDEL_WARROOM_TOKEN`, `AZURE_CLIENT_SECRET`, `GLORFINDEL_WEBHOOK_URL` ; le bot,
+   Room (la console depuis UI-1), `GLORFINDEL_WARROOM_TOKEN` (et `EREGION_CONSOLE_TOKEN` depuis
+   UI-1, l'un des deux vide), `AZURE_CLIENT_SECRET`, `GLORFINDEL_WEBHOOK_URL` ; le bot,
    `DISCORD_BOT_TOKEN`, `AZURE_CLIENT_SECRET`. Aucune autre. La watch et la War Room ont aussi
    `GLORFINDEL_DISCORD_BOT=1` (le jeton du bot est posé, sans sa valeur).
 7. **En cas de problème** : `make glorfindel-host-start REF=<commit déployé avant>` (affiché par
@@ -155,7 +210,7 @@ ses boutons) ; le webhook garde les notifications d'action. Un seul bot par
 
 ### Règles approuvées : la couche du client (P1)
 
-Depuis P1, une règle approuvée (`glorfindel approve-rule`, ou « Approve » dans la War Room)
+Depuis P1, une règle approuvée (`glorfindel approve-rule`, ou « Approve » dans la console)
 s'écrit dans la couche du client, `~/.glorfindel/client_rules.yaml` sur la VM (monté dans les
 trois conteneurs), chargée par-dessus la base livrée, `glorfindel/rules/azure/detection_rules.yaml`.
 La base est montée en lecture seule : aucun conteneur ne l'écrit plus, et un redéploiement, quelle
@@ -183,7 +238,7 @@ découverte, sans rien dire. `migrate-rules` lie une telle règle au backend de
 `glorfindel-config.yaml` qui surveille son workspace (`assets: [auto]`) : elle tourne alors sur
 toutes les VM de ce backend. Une règle approuvée pour une détection manquée peut se révéler
 bruyante : regarder ses détections et ses cartes les premiers jours (`make glorfindel-host-logs`,
-la War Room), et la désactiver au besoin (`disable: [<nom>]` dans la couche).
+la console), et la désactiver au besoin (`disable: [<nom>]` dans la couche).
 
 1. **Sur la VM** (`make glorfindel-host-ssh`, puis `cd eregion`) : mettre de côté le fichier
    modifié et la base d'où il vient, dans `~/.glorfindel` (que les conteneurs voient), puis
@@ -200,7 +255,7 @@ la War Room), et la désactiver au besoin (`disable: [<nom>]` dans la couche).
 2. **Depuis le poste** : `make glorfindel-host-start REF=<tag avec P1>`. Il passe ; la watch
    démarre avec la base seule, sans les règles approuvées (quelques minutes, jusqu'à l'étape 3).
 3. **Sur la VM** : ce qui part dans la couche (à sec), puis pour de bon, puis redémarrer la watch
-   (elle lit les règles au démarrage ; la War Room les relit à chaque rafraîchissement) :
+   (elle lit les règles au démarrage ; la console les relit à chaque rafraîchissement) :
 
    ```bash
    docker exec eregion-watch glorfindel migrate-rules --from /root/.glorfindel/migration-p1/approved.yaml --base /root/.glorfindel/migration-p1/base.yaml --dry-run
@@ -237,13 +292,13 @@ d'exercice non marqués (B2), qui n'ont rien à faire dans une observation.
 
 ## Changer de modèle
 
-Le modèle qui décide est un réglage du déploiement, jamais de la War Room (qui l'affiche
+Le modèle qui décide est un réglage du déploiement, jamais de la console (qui l'affiche
 seulement, avec sa provenance) : changer de modèle, c'est changer qui décide.
 
 1. Le comparer au harnais : `make llm-compare MODELS=anthropic/<actuel>,anthropic/<candidat> RUNS=3`.
 2. Le faire tourner de bout en bout sur le banc (T1486 et un autre TTP) avant toute autonomie.
 3. `make glorfindel-host-model MODEL=anthropic/<candidat>` — le pose dans `host.env` et sur
-   la VM, redémarre Glorfindel, affiche le modèle en service ; Config dans la War Room dit
+   la VM, redémarre Glorfindel, affiche le modèle en service ; Config dans la console dit
    « set at deployment (GLORFINDEL_LLM_MODEL) ». `MODEL=default` revient au défaut du code.
 
 Sans la variable, le défaut du code (`eregion_core/models.py`, une seule définition). Depuis

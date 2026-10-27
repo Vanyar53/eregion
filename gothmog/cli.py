@@ -29,11 +29,16 @@ def cli():
     """Gothmog — declared faults on the bench, run from an armed Orodruin."""
 
 
+_WITHOUT_HELP = ("Development run: no live Glorfindel watch required. The report says "
+                 "Glorfindel's reaction was not measured, by choice.")
+
+
 @cli.command()
 @click.argument("fault")
 @click.option("--yes", is_flag=True, help="Skip the confirmation prompt.")
 @click.option("--dry-run", is_flag=True, help="Show the declared fault; read and write nothing on Azure.")
-def run(fault: str, yes: bool, dry_run: bool):
+@click.option("--without-glorfindel", is_flag=True, help=_WITHOUT_HELP)
+def run(fault: str, yes: bool, dry_run: bool, without_glorfindel: bool):
     """Run a fault (a path, or a name in gothmog/experiments/).
 
         gothmog run vm-shutdown --yes
@@ -51,17 +56,19 @@ def run(fault: str, yes: bool, dry_run: bool):
         for r in doc.get("revert") or []:
             console.print(f"  Revert  : {r['name']}")
         return
-    outcome = Engine().run(fault, skip_confirm=yes)
+    outcome = Engine().run(fault, skip_confirm=yes, without_glorfindel=without_glorfindel)
     raise SystemExit(0 if outcome.result == "PASS" else 1)
 
 
 @cli.command()
 @click.argument("fault")
-def preflight(fault: str):
-    """Contract, targets and steady state, from where the run would start — nothing written."""
+@click.option("--without-glorfindel", is_flag=True, help=_WITHOUT_HELP)
+def preflight(fault: str, without_glorfindel: bool):
+    """Glorfindel's watch, the contract, targets and steady state, from where the run would
+    start — nothing written."""
     from gothmog.runner.engine import Engine
 
-    outcome = Engine().preflight(fault)
+    outcome = Engine().preflight(fault, without_glorfindel=without_glorfindel)
     raise SystemExit(0 if outcome.result == "OK" else 1)
 
 

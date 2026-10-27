@@ -32,6 +32,21 @@ def hermetic_orodruin(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def live_glorfindel_watch(monkeypatch):
+    """V1 (#214): Annatar and Gothmog refuse to run without a live Glorfindel watch. Here the
+    gate's readers see one — a heartbeat written just now, no channel — so the injectors'
+    tests run as before; tests/unit/test_watch_gate.py swaps in readers that see none. The
+    wait for a detection keeps reading the real local file (watch_gate.local_beat)."""
+    from datetime import datetime, timezone
+
+    import eregion_core.watch_gate as gate
+    monkeypatch.setattr(gate, "READERS", {
+        "channel": lambda: None,
+        "local": lambda: gate.Beat(gate.LOCAL, datetime.now(timezone.utc)),
+    })
+
+
+@pytest.fixture(autouse=True)
 def isolated_escalations_store(tmp_path, monkeypatch):
     """Redirect escalations._STORE to a temp file.
 

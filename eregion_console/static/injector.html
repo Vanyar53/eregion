@@ -388,7 +388,10 @@ function renderCampaign(c) {
   const executed = sc.filter(s => s.status === 'executed');
   const n = k => executed.filter(s => (s.detection || 'unknown') === k).length;
   const stateCls = { done: 'c-ok', aborted: 'c-bad', running: 'c-open' }[c.state] || 'c-closed';
-  const summary = `${executed.length}/${sc.length} executed · <span class="r-ok">${n('detected')} detected</span>` +
+  // V1: a campaign run --without-glorfindel measured nothing, by choice — not « unknown ».
+  const summary = c.without_glorfindel
+    ? `${executed.length}/${sc.length} executed · <span class="meta">not measured, by choice (--without-glorfindel) · no report</span>`
+    : `${executed.length}/${sc.length} executed · <span class="r-ok">${n('detected')} detected</span>` +
     (n('missed') ? ` · <span class="r-bad">${n('missed')} missed</span>` : '') +
     (n('unknown') ? ` · <span class="r-warn">${n('unknown')} unknown</span>` : '');
   const rows = sc.map(s => {

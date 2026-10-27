@@ -1,16 +1,16 @@
 @CLAUDE.md
 
-# Session War Room — UI/UX
+# Session Console — UI/UX
 
 Tu es spécialisé sur l'interface web d'Eregion — la console (`eregion console`), qui a remplacé la
-War Room et l'atelier le 26/10 ([`docs/design/console.md`](docs/design/console.md), #205). Le nom de
-cette session et de ce fichier reste à changer par General. Lis ce fichier en début de session.
+War Room et l'atelier le 26/10 ([`docs/design/console.md`](docs/design/console.md), #205). Cette
+session s'appelait « War Room » jusqu'au 27/10. Lis ce fichier en début de session.
 
 **Docs de ton périmètre** (`CLAUDE.md` n'en garde que l'essentiel) : [`docs/design/console.md`](docs/design/console.md) (décisions, sections, plan), [`docs/glorfindel.md`](docs/glorfindel.md) (exposition de la console, escalades, autonomie, observe-only), [`docs/fichiers-cles.md`](docs/fichiers-cles.md) (`eregion_console/`).
 
 ## Rôle
 
-Tu conçois et améliores l'interface opérateur de Glorfindel. La War Room est l'écran principal
+Tu conçois et améliores l'interface opérateur d'Eregion. La console est l'écran principal
 d'un SOC en situation réelle — clarté, densité d'information, et réactivité prime sur l'esthétique.
 Ton interlocuteur final est un opérateur humain sous pression qui doit comprendre l'état de l'infra
 en 5 secondes et agir en 2 clics.
@@ -98,9 +98,9 @@ En-tête (console.js), le même partout → EREGION · onglets Overview, Glorfin
 
 ## Protocole collab
 
-**En début de session :** lis `collab/inbox_warroom.md` — traite les messages en attente.
+**En début de session :** lis `collab/inbox_console.md` — traite les messages en attente.
 
-**Après chaque changement significatif :** mets à jour `collab/warroom_status.md`.
+**Après chaque changement significatif :** mets à jour `collab/console_status.md`.
 
 **Si tu as besoin d'un nouvel endpoint API :** décris le besoin dans `collab/inbox_glorfindel.md`
 avec le format de réponse attendu. Ne modifie pas `api.py` toi-même si tu n'es pas sûr de l'impact.
@@ -108,11 +108,11 @@ avec le format de réponse attendu. Ne modifie pas `api.py` toi-même si tu n'es
 **Si tu ajoutes un endpoint dans `api.py` :** notifie `collab/inbox_glorfindel.md` pour que
 la session Glorfindel l'intègre aux tests et à la doc.
 
-**En fin de session :** snapshot dans `collab/warroom_status.md`.
+**En fin de session :** snapshot dans `collab/console_status.md`.
 
 ## Contexte opérateur
 
-L'utilisateur de la War Room est un opérateur sécurité qui :
+L'utilisateur de la console est un opérateur sécurité qui :
 - surveille plusieurs VMs en simultané
 - réagit à des escalades en temps réel (isolation, brute force, exfil)
 - valide ou rejette des règles proposées par le purple team loop

@@ -59,6 +59,9 @@ class CampaignManifest:
     scenarios: list[ScenarioEntry] = field(default_factory=list)
     state: str = "planned"
     kill_switch: bool = False
+    # V1 (#214): run --without-glorfindel — set when it starts, resumed only the same way;
+    # no detection measured, so no analysis report (eregion_core/watch_gate.py).
+    without_glorfindel: bool = False
     schema_version: str = SCHEMA_VERSION
     created_by: str = "annatar-planner"
     created_at: str = field(default_factory=_utcnow)
@@ -89,6 +92,7 @@ class CampaignManifest:
             "budget": asdict(self.budget),
             "state": self.state,
             "kill_switch": self.kill_switch,
+            "without_glorfindel": self.without_glorfindel,
             "scenarios": [asdict(s) for s in self.scenarios],
             "results": self.results,
             "updated_at": self.updated_at,
@@ -104,6 +108,7 @@ class CampaignManifest:
             scenarios=[ScenarioEntry(**s) for s in d.get("scenarios", [])],
             state=d.get("state", "planned"),
             kill_switch=d.get("kill_switch", False),
+            without_glorfindel=d.get("without_glorfindel") is True,
             schema_version=d.get("schema_version", SCHEMA_VERSION),
             created_by=d.get("created_by", "annatar-planner"),
             created_at=d.get("created_at", _utcnow()),

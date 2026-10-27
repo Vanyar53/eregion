@@ -24,7 +24,9 @@ permissions:
 jobs:
   mutants:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    # 93 min on 2026-10-26; MC1 adds 24 mutants that run the machine on AWS (and its
+    # unit cases): 180 leaves room.
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v5
 

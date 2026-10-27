@@ -58,6 +58,9 @@ function response(w) {
     if (done.length) return { cls: 'bad', text: `${done[0].action} executed during a fault` };
     if (disruptive.length) return { cls: 'warn', text: `${disruptive[0].action} recommended during a fault, held` };
     if (cycles.length) return { cls: 'ok', text: `${cycles.length} cycle(s), nothing disruptive` };
+    // V1: no watch, by choice — « nothing disruptive » would be a silence, not a proof.
+    if (!live && w.run && w.run.metrics && w.run.metrics.without_glorfindel === true)
+      return { cls: 'blue', text: 'not measured, by choice (--without-glorfindel)' };
     return live ? { cls: 'wait', text: 'nothing so far' } : { cls: 'ok', text: 'nothing disruptive — as expected' };
   }
   // An unattributed row is anchored on an arbitrary VM: it names none, and the return
@@ -82,6 +85,9 @@ function response(w) {
   // Only the run concludes to a miss — on a heartbeat that vouches for its wait
   // (eregion_core/watch_channel.py): an absence in this host's files is not one.
   const verdict = w.run && w.run.metrics && w.run.metrics.detection;
+  // V1: a run --without-glorfindel measured nothing, by choice — not an `unknown`.
+  if (w.run && w.run.metrics && w.run.metrics.without_glorfindel === true)
+    return { cls: 'blue', text: 'not measured, by choice (--without-glorfindel)' };
   if (verdict === 'missed') return { cls: 'bad', text: 'missed (the run\'s verdict)' };
   if (verdict === 'detected') return { cls: 'blue', text: 'detected per the run · no cycle in this host\'s files' };
   return { cls: 'warn', text: 'no detection seen by this watch' };
@@ -92,6 +98,8 @@ function runChip(w) {
   const cls = { PASS: 'c-ok', FAIL: 'c-bad', REFUSED: 'c-warn' }[r.result] || '';
   const det = r.metrics && r.metrics.detection;
   const dcls = { detected: 'c-ok', missed: 'c-bad', unknown: 'c-warn' }[det] || '';
+  const without = r.metrics && r.metrics.without_glorfindel === true;   // V1
   return `<span class="chip ${cls}">RUN ${esc(r.result || '?')}</span>` +
-    (det ? ` <span class="chip ${dcls}" title="The run's own verdict (return channel)">${esc(String(det).toUpperCase())}</span>` : '');
+    (without ? ` <span class="chip" title="Run --without-glorfindel: a development run, detection not measured, by choice">NOT MEASURED · BY CHOICE</span>`
+     : det ? ` <span class="chip ${dcls}" title="The run's own verdict (return channel)">${esc(String(det).toUpperCase())}</span>` : '');
 }

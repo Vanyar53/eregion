@@ -557,3 +557,107 @@ def test_orodruin_may_start_follow_and_cancel_an_experiment():
 
 def test_gothmog_ships_in_orodruins_image():
     assert "COPY gothmog/ gothmog/" in (ROOT / "annatar" / "Dockerfile").read_text()
+
+
+# ── V1 (#214): no live Glorfindel watch, no fault ─────────────────────────────────────
+
+@pytest.fixture
+def no_watch(tmp_path, monkeypatch):
+    """The gate's real readers (conftest sees a live watch elsewhere), a throwaway HOME with
+    no heartbeat, no channel; Orodruin's contract recorded — the first call to the cloud."""
+    import eregion_core.watch_gate as gate
+    monkeypatch.setattr(gate, "READERS", {"channel": gate.channel_beat, "local": gate.local_beat})
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("EREGION_WATCH_CHANNEL", raising=False)
+    armed = []
+    real = engine_mod.arm
+
+    def arm(run_id, injector, *a, **kw):
+        armed.append(run_id)
+        return real(run_id, injector, *a, **kw)
+    monkeypatch.setattr(engine_mod, "arm", arm)
+    return armed
+
+
+def test_a_fault_without_a_live_watch_is_refused_before_any_cloud_call(bench, no_watch, tmp_path):
+    """M724, M725: refused, says since when — and nothing reached the cloud: no contract, no
+    read of the bench, no window, no report."""
+    clock, world, engine = bench
+    w = world()
+    out = engine().run("vm-shutdown", skip_confirm=True)
+    assert out.result == "REFUSED"
+    assert out.error.startswith(
+        "glorfindel: local file ~/.glorfindel/watch_heartbeat: last heartbeat never")
+    assert no_watch == [] and w.calls == [] and w.writes == []
+    assert _no_window() and not (tmp_path / "runs").exists()
+
+
+def test_gothmog_cli_refuses_without_a_watch_and_exits_nonzero(bench, no_watch):
+    from click.testing import CliRunner
+
+    from gothmog.cli import cli
+    clock, world, engine = bench
+    w = world()
+    res = CliRunner().invoke(cli, ["run", "vm-shutdown", "--yes"])
+    assert res.exit_code != 0
+    assert "no live Glorfindel watch" in res.output and "last heartbeat never" in res.output
+    assert no_watch == [] and w.calls == []
+
+
+def test_a_fault_without_glorfindel_runs_and_its_report_says_so(bench, no_watch, tmp_path):
+    """M726: --without-glorfindel runs with no watch, and the report carries it."""
+    clock, world, engine = bench
+    world()
+    out = engine().run("vm-shutdown", skip_confirm=True, without_glorfindel=True)
+    assert out.result == "PASS", out.report["checks"]
+    m = json.loads((tmp_path / "runs" / f"{out.run_id}.json").read_text())["metrics"]
+    assert m["without_glorfindel"] is True
+    assert m["detection_note"] == "detection not measured, by choice"
+
+
+def test_a_refused_fault_without_glorfindel_still_says_so(bench, no_watch, tmp_path):
+    """A refusal after the contract (here: the target not enrolled) is recorded with the flag."""
+    clock, world, engine = bench
+    world(vm_tags={})
+    out = engine().run("vm-shutdown", skip_confirm=True, without_glorfindel=True)
+    assert out.result == "REFUSED"
+    m = json.loads((tmp_path / "runs" / f"{out.run_id}.json").read_text())["metrics"]
+    assert m["without_glorfindel"] is True
+
+
+def test_a_fault_with_glorfindel_says_nothing_of_it(bench, tmp_path):
+    clock, world, engine = bench
+    world()
+    out = engine().run("vm-shutdown", skip_confirm=True)
+    m = json.loads((tmp_path / "runs" / f"{out.run_id}.json").read_text())["metrics"]
+    assert "without_glorfindel" not in m
+
+
+def test_preflight_without_a_live_watch_is_refused_before_the_contract(bench, no_watch):
+    """M727: the preflight answers « could the run start? » — not without a watch."""
+    clock, world, engine = bench
+    w = world()
+    out = engine().preflight("vm-shutdown")
+    assert out.result == "REFUSED" and out.error.startswith("glorfindel: ")
+    assert no_watch == [] and w.calls == []
+    assert engine().preflight("vm-shutdown", without_glorfindel=True).result == "OK"
+
+
+def test_gothmog_cli_passes_without_glorfindel(monkeypatch):
+    from click.testing import CliRunner
+
+    from gothmog.cli import cli
+    seen = {}
+
+    class Fake:
+        def run(self, fault, skip_confirm=False, without_glorfindel=False):
+            seen["run"] = without_glorfindel
+            return type("O", (), {"result": "PASS"})()
+
+        def preflight(self, fault, without_glorfindel=False):
+            seen["preflight"] = without_glorfindel
+            return type("O", (), {"result": "OK"})()
+    monkeypatch.setattr(engine_mod, "Engine", Fake)
+    assert CliRunner().invoke(cli, ["run", "x", "--yes", "--without-glorfindel"]).exit_code == 0
+    assert CliRunner().invoke(cli, ["preflight", "x", "--without-glorfindel"]).exit_code == 0
+    assert seen == {"run": True, "preflight": True}

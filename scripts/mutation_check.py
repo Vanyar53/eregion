@@ -84,6 +84,27 @@ _DATES_LINE = (_DATES_FIRST
                + _DATES_AU
                + r'''    rf"|\b\d{{1,2}}(?:er|st|nd|rd|th)?)\s+(?:{_MONTHS})\b"''' + "\n")
 
+# V1 (#214): the checks of a live Glorfindel watch, as they stand — M721 and M725 move them
+# after the first call to the cloud (Orodruin's contract).
+_V1_ANNATAR_GATE = (
+    "        if self.without_glorfindel:\n"
+    '            console.print(f"[yellow]{watch_gate.FLAG}: a development run — "\n'
+    '                          f"{watch_gate.NOT_MEASURED}.[/yellow]")\n'
+    "        else:\n"
+    "            no_watch = watch_gate.refusal()\n"
+    "            if no_watch:\n"
+    '                console.print(f"[red]Refused — no live Glorfindel watch:[/red] {no_watch}")\n'
+    '                return RunOutcome(run_id, "unknown", error=f"glorfindel: {no_watch}")\n')
+_V1_ANNATAR_ARM = '        verdict, session = arm(run_id, "annatar")\n'
+_V1_GOTHMOG_GATE = (
+    "        refused = self._no_watch(run_id, without_glorfindel)\n"
+    "        if refused:\n"
+    "            return refused\n"
+    "        self._without = watch_gate.without_metrics(without_glorfindel)\n")
+_V1_GOTHMOG_BENCH = "        bench = self._bench_factory(session)\n"
+_V1_WAIT = ("not self.dry_run \\\n"
+            "                and not self.without_glorfindel:  # not measured, by choice: no wait\n")
+
 # (id, bug class, file, text in the code today, text that re-introduces the bug[, why
 # the invariants can't see it])
 MUTANTS = [
@@ -842,8 +863,8 @@ MUTANTS = [
     # watch's pass, refused when of the wrong shape, never over a report of H0's own. And
     # the probes' values before the fault in Gothmog's report.
     ("M240", "`annatar run` keeps its report on Orodruin (#193)", ACLI,
-     "    engine = Engine(dry_run=dry_run, skip_preflight=skip_preflight, publish_report=True)\n",
-     "    engine = Engine(dry_run=dry_run, skip_preflight=skip_preflight)\n"),
+     "    engine = Engine(dry_run=dry_run, skip_preflight=skip_preflight, publish_report=True,\n",
+     "    engine = Engine(dry_run=dry_run, skip_preflight=skip_preflight,\n"),
     ("M241", "`gothmog run` keeps its report on Orodruin (#193)", GOTH,
      "            carry_run(run_id, self.runs_dir)  # its report, to H0 with its window (#193)\n",
      "            pass\n"),
@@ -1296,6 +1317,200 @@ MUTANTS = [
      '    found = next((str(p) for p in (Path("glorfindel/rules/azure/detection_rules.yaml"),\n'
      '                                   Path(__file__).parent / "rules" / "azure" / "detection_rules.yaml")\n'
      "                  if p.exists()), None)\n"),
+    # V1 (#214): Annatar and Gothmog do not act without Glorfindel — the watch's heartbeat read
+    # before any call to the cloud; --without-glorfindel said in the report.
+    ("M720", "annatar run without a live watch is not refused (V1)", ENG,
+     "            if no_watch:\n                console.print(", "            if False:\n                console.print("),
+    ("M721", "annatar reads the watch after its first call to the cloud (V1)", ENG,
+     (_V1_ANNATAR_GATE, _V1_ANNATAR_ARM), ("", _V1_ANNATAR_ARM + _V1_ANNATAR_GATE)),
+    ("M722", "an atomic run --without-glorfindel does not say so in its report (V1)", ENG,
+     "            **watch_gate.without_metrics(self.without_glorfindel),\n", ""),
+    ("M723", "a local-script run --without-glorfindel does not say so in its report (V1)", ENG,
+     "        metrics = watch_gate.without_metrics(self.without_glorfindel)\n", "        metrics = {}\n"),
+    ("M724", "gothmog run without a live watch is not refused (V1)", GOTH,
+     "        if not no_watch:\n            return None\n", "        return None\n"),
+    ("M725", "gothmog reads the watch after its first call to the cloud (V1)", GOTH,
+     (_V1_GOTHMOG_GATE, _V1_GOTHMOG_BENCH), ("", _V1_GOTHMOG_BENCH + _V1_GOTHMOG_GATE)),
+    ("M726", "a fault --without-glorfindel does not say so in its report (V1)", GOTH,
+     "                                    **self._without, **metrics},\n",
+     "                                    **metrics},\n"),
+    ("M727", "gothmog preflight without a live watch answers « could run » (V1)", GOTH,
+     "        refused = self._no_watch(run_id, without_glorfindel)\n        if refused:\n"
+     "            return refused\n        verdict, session = arm(run_id, \"gothmog\")\n",
+     "        verdict, session = arm(run_id, \"gothmog\")\n"),
+    ("M728", "a campaign without a live watch starts, and turns 'running' (V1)", CRUN,
+     "        if not self.without_glorfindel:\n            no_watch = watch_gate.refusal()\n",
+     "        if False:\n            no_watch = watch_gate.refusal()\n"),
+    ("M729", "a campaign goes on after a run refused for no watch (V1)", CRUN,
+     '            elif (entry.error or "").startswith("glorfindel:"):\n', "            elif False:\n"),
+    ("M730", "campaign run --without-glorfindel does not reach its runs (V1)", CRUN,
+     "            lambda: Engine(skip_preflight=False, without_glorfindel=without_glorfindel))\n",
+     "            lambda: Engine(skip_preflight=False))\n"),
+    ("M731", "a heartbeat of any age is a live watch (V1)", WCH,
+     "    return -CLOCK_SKEW_S <= age < FRESH_S\n", "    return -CLOCK_SKEW_S <= age\n"),
+    ("M732", "the return channel is not read: the hosted watch is never seen from Orodruin (V1)",
+     "eregion_core/watch_gate.py", '    beat = READERS["channel"]()\n', "    beat = None\n"),
+    ("M733", "an unreadable channel raises instead of refusing (V1)", "eregion_core/watch_gate.py",
+     "    except Exception as e:  # unreadable is no watch — said, never raised\n",
+     "    except ValueError as e:  # unreadable is no watch — said, never raised\n"),
+    ("M734", "H0 accepts a run without Glorfindel that claims a verdict (V1)", "analysis/campaign_schema.py",
+     '    if without is True and metrics.get("detection") in ("detected", "missed"):\n', "    if False:\n"),
+    ("M735", "the console drops the flag: a run without Glorfindel shows as unknown (V1)", CON,
+     '    if m.get("without_glorfindel") is True:  # V1: run --without-glorfindel, shown apart\n',
+     "    if False:\n"),
+    ("M736", "a local-script run --without-glorfindel still waits for a detection (V1)", ENG,
+     "        if scenario.detection and detection_timeout_s > 0 and " + _V1_WAIT,
+     "        if scenario.detection and detection_timeout_s > 0 and not self.dry_run:\n"),
+    ("M737", "an atomic run --without-glorfindel still waits for a detection (V1)", ENG,
+     "        if attack_started and detection_timeout_s > 0 and " + _V1_WAIT,
+     "        if attack_started and detection_timeout_s > 0 and not self.dry_run:\n"),
+    ("M738", "make gothmog-run drops WITHOUT_GLORFINDEL (V1)", MAKE,
+     "'$(ORO_RUN) gothmog run $(FAULT) --yes$(ORO_WITHOUT)'", "'$(ORO_RUN) gothmog run $(FAULT) --yes'"),
+    ("M739", "make orodruin-campaign-run drops WITHOUT_GLORFINDEL (V1)", MAKE,
+     "annatar campaign run $(CAMPAIGN) --yes$(ORO_WITHOUT)'", "annatar campaign run $(CAMPAIGN) --yes'"),
+    # V1, review: a campaign without Glorfindel says so, resumes only the same way, has no
+    # analysis report and never enters the index; the channel decides; no heartbeat from the future.
+    ("M750", "a campaign --without-glorfindel does not say so in its manifest (V1)", CRUN,
+     "        m.without_glorfindel = self.without_glorfindel\n", ""),
+    ("M751", "a campaign is resumed with another --without-glorfindel than it started with (V1)", CRUN,
+     "        if m.state == \"running\" and m.without_glorfindel != self.without_glorfindel:\n",
+     "        if False:\n"),
+    ("M752", "a campaign without Glorfindel gets an analysis report, its decisions sought (V1)", CREP,
+     "    if why := no_report(campaign_dir):\n        raise NoReport(why)\n", ""),
+    ("M753", "H0 writes the report of a campaign without Glorfindel (V1)", HREP,
+     "        if campaign_schema.without_glorfindel(manifest):  # V1: no report, by choice\n",
+     "        if False:\n"),
+    ("M754", "a campaign without Glorfindel enters the index: a previous campaign to compare (V1)",
+     "analysis/campaign_index.py",
+     "    if cr.without_glorfindel(manifest):  # V1: no detection measured — never compared\n",
+     "    if False:\n"),
+    ("M755", "an aborted campaign exits 0: make orodruin-campaign-run succeeds (V1)", ACLI,
+     "        if result.state == \"aborted\":\n            raise SystemExit(EXIT_RUN_FAILED)\n", ""),
+    ("M756", "a heartbeat dated in the future stays fresh for ever (V1)", WCH,
+     "    return -CLOCK_SKEW_S <= age < FRESH_S\n", "    return age < FRESH_S\n"),
+    ("M757", "WITHOUT_GLORFINDEL=0 waives the watch on Orodruin (V1)", MAKE,
+     "$(if $(filter 1 yes true,$(WITHOUT_GLORFINDEL)), --without-glorfindel)",
+     "$(if $(WITHOUT_GLORFINDEL), --without-glorfindel)"),
+    ("M758", "a live local file counts though the return channel is set (V1)",
+     "eregion_core/watch_gate.py", "    if beat is None:\n        beat = READERS[\"local\"]()\n",
+     "    if beat is None or not fresh(beat, now):\n        beat = READERS[\"local\"]()\n"),
+    ("M759", "the console counts a campaign without Glorfindel as unknown (V1)", CON,
+     '            "without_glorfindel": m.get("without_glorfindel") is True,   # V1: counted apart\n', ""),
+    # UI-1c (#205) — the console on the host: the token under its two names, from the operator's
+    # machine (Makefile, status.sh) and in host.env (host_env.py), never shown.
+    ("M740", "make glorfindel-host-url ignores EREGION_CONSOLE_TOKEN: a new host gets no URL (UI-1c)", MAKE,
+     'CONSOLE_TOKEN  = $$(t=$$($(call HOST_ENV_VALUE,EREGION_CONSOLE_TOKEN)); [ -n "$$t" ] || t=',
+     "CONSOLE_TOKEN  = $$(t="),
+    ("M741", "make glorfindel-host-url without the former name: H0's host.env gives no URL (UI-1c)", MAKE,
+     '; [ -n "$$t" ] || t=$$($(call HOST_ENV_VALUE,GLORFINDEL_WARROOM_TOKEN))', ""),
+    ("M742", "the Makefile takes an empty EREGION_CONSOLE_TOKEN as the token (UI-1c)", MAKE,
+     '[ -n "$$t" ] || t=$$($(call HOST_ENV_VALUE,GLORFINDEL_WARROOM_TOKEN))',
+     "grep -q '^EREGION_CONSOLE_TOKEN=' $(HOST_ENV) || t=$$($(call HOST_ENV_VALUE,GLORFINDEL_WARROOM_TOKEN))"),
+    ("M743", "the Makefile takes the first line of a key, compose the last (UI-1c)", MAKE,
+     "p;}' $(HOST_ENV) | tail -1\n", "p;}' $(HOST_ENV) | head -1\n"),
+    ("M744", "status.sh without the former name: H0's console never answers (UI-1c)",
+     "infra/glorfindel-host/status.sh",
+     '[ -n "$tok" ] || tok=$(env_value GLORFINDEL_WARROOM_TOKEN)\n', ""),
+    ("M745", "status.sh ignores EREGION_CONSOLE_TOKEN (UI-1c)", "infra/glorfindel-host/status.sh",
+     "tok=$(env_value EREGION_CONSOLE_TOKEN)\n", 'tok=""\n'),
+    ("M746", "status.sh puts the token on curl's command line, where ps shows it (UI-1c)",
+     "infra/glorfindel-host/status.sh",
+     "printf 'Authorization: Bearer %s\\n' \"$tok\" | curl -s -H @- \"http://127.0.0.1:7007$1\"",
+     'curl -s -H "Authorization: Bearer $tok" "http://127.0.0.1:7007$1"'),
+    ("M747", "status.sh traces its remote script: the token is printed (UI-1c)",
+     "infra/glorfindel-host/status.sh",
+     'cd eregion || { echo "  ✗ dépôt absent"; exit 1; }\n',
+     'set -x; cd eregion || { echo "  ✗ dépôt absent"; exit 1; }\n'),
+    ("M748", "a new host's token is drawn under the former name (UI-1c)", "infra/glorfindel-host/host_env.py",
+     "    out[TOKEN] = secrets.token_urlsafe(24)\n", "    out[LEGACY_TOKEN] = secrets.token_urlsafe(24)\n"),
+    ("M749", "host_env.py --check refuses H0's host.env, under the former name (UI-1c)",
+     "infra/glorfindel-host/host_env.py",
+     "    for name in (TOKEN, LEGACY_TOKEN):\n", "    for name in (TOKEN,):\n"),
+]
+
+# MC1 — the AWS adapter, written against the simulated world (tests/unit/fake_aws.py) and
+# measured by the invariants on AWS (tests/unit/test_invariants_aws.py). Range M600–M649:
+# M600–M629 the bugs met or named while building it, M630–M649 its control set (below).
+AWS_NET = "glorfindel/providers/aws/network.py"
+AWS_QUA = "glorfindel/providers/aws/quarantine.py"
+AWS_ISO = "glorfindel/providers/aws/isolation.py"
+AWS_BLK = "glorfindel/providers/aws/blocks.py"
+AWS_CON = "glorfindel/providers/aws/connector.py"
+AWS_INVARIANTS = "tests/unit/test_invariants_aws.py"
+AWS_UNIT = "tests/unit/test_aws_adapter.py"
+MUTANTS += [
+    # Found by the machine on AWS while it was built.
+    ("M600", "a block reuses an entry the customer's allow now precedes (MC1)", AWS_BLK,
+     "                                  if eg == egress and n and n < first\n",
+     "                                  if eg == egress and n\n"),
+    ("M601", "a block is not read back: « blocked » with an allow ahead (MC1)", AWS_BLK,
+     "                    held_back = acl is not None and cut(acl, False, ip) and cut(acl, True, ip)",
+     "                    held_back = True"),
+    ("M602", "an ENI left on `default` gets the state's original back, a group of it deleted (MC1)", AWS_ISO,
+     '                self._put_back(eni, self._usable_original(eni, [rec, tag], e["vpc"], q), cur)',
+     "                self._put_back(eni, prior, cur)"),
+    ("M617", "the isolation verified on the ENIs as read before the swap (MC1)", AWS_ISO,
+     "            check = self._check_isolation(self._instance_enis(iid))      # as it is now",
+     "            check = self._check_isolation(enis)"),
+    # Named by the design note (docs/design/monde-aws.md) and the classes Azure had.
+    ("M603", "the quarantine turned off by the configuration is ignored: no fallback, but writes (MC1, I10)",
+     AWS_QUA, "        return bool(load_glorfindel_config().isolation.quarantine_nsg)", "        return True"),
+    ("M604", "Amazon's DNS and IMDS not declared by the isolation (MC1, H6)", AWS_ISO,
+     '"bypass": bypass, "platform_open": [e["eni"] for e in enis],', '"bypass": bypass, "platform_open": [],'),
+    ("M605", "an ENI someone left on `default` is not given its original back (MC1, U2)", AWS_ISO,
+     "            if prior and default and same_groups(cur, [default]) and not same_groups(prior, cur):\n"
+     "                # Taken out",
+     "            if False:\n                # Taken out"),
+    ("M606", "re-isolating an ENI left on `default` records `default` as its original (MC1, U2)", AWS_ISO,
+     "            if prior is not _UNKNOWN and default and same_groups(cur, [default]) and not same_groups(prior, cur):\n"
+     "                original = prior",
+     "            if False:\n                original = prior"),
+    ("M607", "an ENI already in quarantine: what it carries read as its original (MC1, S1)", AWS_ISO,
+     "            original = prior\n            if same_groups(cur, [qid]):",
+     "            original = cur\n            if same_groups(cur, [qid]):"),
+    ("M608", "an allow someone added to the quarantine group is left there (MC1)", AWS_QUA,
+     "            extra = [r for r in ingress if r not in wanted]", "            extra = []"),
+    ("M609", "a verification that can't read an ENI says isolated (MC1)", AWS_ISO,
+     '            except Exception:\n                unknown.append(e["eni"])\n        verified',
+     "            except Exception:\n                pass\n        verified"),
+    ("M610", "the isolation is not recorded (MC1, I8)", AWS_ISO,
+     "        _state._save_isolation_state(resource_id, state)\n        try:", "        try:"),
+    ("M611", "a release that failed clears the state (MC1, I8)", AWS_ISO,
+     "        if failed:\n            _state._save_isolation_state(resource_id, {",
+     "        if False:\n            _state._save_isolation_state(resource_id, {"),
+    ("M612", "no lock on the network ACL: an unblock removes the entries a concurrent block reuses (MC1, I11)",
+     AWS_BLK,
+     '                stack.enter_context(_locks._quarantine_lock(f"aws/acl/{acl_id}"))', "                pass"),
+    ("M613", "the instance's lock inoperative (MC1, the M17 of AWS)", AWS_CON,
+     '        with _locks._vm_lock(rid.rstrip("/").rsplit("/", 1)[-1]):\n            return method(self, *args, **kwargs)',
+     "        return method(self, *args, **kwargs)"),
+    ("M614", "an entry read as Glorfindel's whatever address it refuses (MC1)", AWS_BLK,
+     ' \\\n        and e.get("CidrBlock") == cidr', ""),
+    ("M615", "an unblock keeps the block recorded (MC1)", AWS_BLK,
+     "        _state._clear_block_state(resource_id, ip)\n", ""),
+    ("M616", "verify_isolation vouches for an instance of another account (MC1, I12)", AWS_CON,
+     'for _name in ("isolate_vm", "release_isolation", "verify_isolation", "verify_release",\n',
+     'for _name in ("isolate_vm", "release_isolation", "verify_release",\n'),
+]
+# MC1, after its review: a block's reach is its ACL's, our quarantine group without its tag,
+# the guard without an account or a region, an instance without interfaces.
+MUTANTS += [
+    ("M618", "a block names the instance's subnets only, not every subnet of its ACL (MC1, review)", AWS_BLK,
+     '                affected = sorted({a.get("SubnetId") for a in acl.get("Associations") or []\n'
+     '                                   if a.get("SubnetId")} | set(acls[acl_id]))',
+     "                affected = sorted(acls[acl_id])"),
+    ("M619", "an ENI carrying a group named like the quarantine, nothing recording it, said released (MC1, review)",
+     AWS_ISO, "        named = self._named_quarantine(cur)\n        if named:", "        named = []\n        if named:"),
+    ("M620", "the account guard open when no account or region is configured (MC1, review, I12)", AWS_CON,
+     "            if not (self.account and self.region):", "            if False:"),
+    ("M621", "an instance without interfaces verified isolated (MC1, review)", AWS_ISO,
+     "(None if unknown or not enis else True)", "(None if unknown else True)"),
+    ("M622", "the quarantine group the state records ignored once its tag is gone (MC1, review)", AWS_ISO,
+     '        q = self._quarantine_sg(e["vpc"]) or self._recorded_quarantine(eni, cur, state)',
+     '        q = self._quarantine_sg(e["vpc"])'),
+    ("M623", "verify_release blind to a group named like the quarantine (MC1, review)", AWS_ISO,
+     'if (q is not None and q["GroupId"] in e["groups"]) or self._named_quarantine(e["groups"]):',
+     'if q is not None and q["GroupId"] in e["groups"]:'),
 ]
 
 # Mutants measured by other tests than the invariants (their lot's own).
@@ -1370,6 +1585,11 @@ TESTS["M289"] = "tests/unit/test_dependency_lock.py"
 TESTS["M520"] = "tests/unit/test_bot.py"
 TESTS.update({f"M{n}": "tests/unit/test_glorfindel_host.py" for n in (521, 522, 523)})
 TESTS.update({f"M{n}": "tests/unit/test_host_deploy.py" for n in range(524, 529)})
+TESTS.update({f"M{n}": AWS_INVARIANTS for n in range(600, 650)})  # MC1
+TESTS["M617"] = AWS_UNIT              # MC1: a false alarm, no false claim
+# MC1: rare in the drawn sequences (M600, M601 found at 5 000) — their case written by hand too.
+TESTS.update({mid: f"{AWS_INVARIANTS} {AWS_UNIT}" for mid in ("M600", "M601", "M602", "M608", "M612", "M614")})
+TESTS.update({f"M{n}": AWS_UNIT for n in range(618, 624)})                  # MC1, after its review
 # P1 (#86): rule layers.
 TESTS.update({f"M{n}": "tests/unit/test_rule_layers.py tests/unit/test_proposed_rules.py"
               for n in (*range(670, 679), 685, 686)})
@@ -1379,6 +1599,10 @@ TESTS.update({f"M{n}": "tests/unit/test_rule_layers.py tests/unit/test_host_depl
 TESTS.update({f"M{n}": "tests/unit/test_rule_layers.py" for n in range(713, 717)})
 TESTS.update({f"M{n}": "tests/unit/test_console.py" for n in range(400, 410)})  # UI-1
 TESTS["M403"] = "tests/unit/test_console_exercises.py"
+# V1 (#214): Annatar's side and the shared gate in test_watch_gate.py, Gothmog's in test_gothmog.py.
+TESTS.update({f"M{n}": "tests/unit/test_watch_gate.py" for n in (*range(720, 740), *range(750, 760))})
+TESTS.update({f"M{n}": "tests/unit/test_gothmog.py" for n in (724, 725, 726, 727)})
+TESTS.update({f"M{n}": "tests/unit/test_host_console.py" for n in range(740, 750)})  # UI-1c
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
@@ -1437,6 +1661,57 @@ CONTROL = [
      "        if _enum_text(getattr(r, \"access\", \"\")) != \"allow\":\n            continue\n        if direction == \"inbound\":",
      "        if _enum_text(getattr(r, \"access\", \"\")) != \"allow\":\n            continue\n        if name.startswith(\"glorfindel-\"):\n            continue\n"
      "        if direction == \"inbound\":"),
+]
+
+
+# MC1 — the control set on AWS: plausible bugs of the AWS adapter, written before the
+# machine on AWS was shaped, never used to shape it (same discipline as C01–C16). The
+# Azure figure is still counted on C01–C16 alone.
+CONTROL += [
+    ("M630", "the original groups only in the local state, no tag (MC1, control)", AWS_ISO,
+     "        if original is not _UNKNOWN:\n            self._record_original(qid, eni, original)\n",
+     "        if False:\n            self._record_original(qid, eni, original)\n"),
+    ("M631", "an egress allow in the quarantine group not seen as an alteration (MC1, control)", AWS_QUA,
+     """diff = [f"sortie {r.get('cidr') or r.get('group')}" for r in sg_rules(sg.get("IpPermissionsEgress"))]""",
+     "diff = []"),
+    ("M632", "a new quarantine group keeps its default egress (MC1, control)", AWS_QUA,
+     "            if egress:\n                self._ec2.revoke_security_group_egress(",
+     "            if False:\n                self._ec2.revoke_security_group_egress("),
+    ("M633", "an ENI's groups written without checking what it carries (MC1, control)", AWS_NET,
+     "        if not same_groups(self._eni_groups(eni_id), expect):\n            return False\n", ""),
+    ("M634", "the release does not read the ENI back (MC1, control)", AWS_ISO,
+     "        if not same_groups(now, original):\n            raise RuntimeError(f\"groupes d'origine non remis",
+     "        if False:\n            raise RuntimeError(f\"groupes d'origine non remis"),
+    ("M635", "an unknown original read as the default group (MC1, control)", AWS_ISO,
+     "        if not known:\n            raise OriginalUnknown(",
+     "        if not known:\n            return [self._default_sg(vpc)]\n            raise OriginalUnknown("),
+    ("M636", "a block's entry numbered without looking at the customer's allows (MC1, control)", AWS_BLK,
+     "n = _free_number(acl, egress, first)", "n = _free_number(acl, egress, 32767)"),
+    ("M637", "an unblock removes entries another block holds (MC1, control)", AWS_BLK,
+     "held = self._held_numbers(ip, acl_id, but_rid=resource_id)", "held = set()"),
+    ("M638", "an unblock removes an entry whatever it says now (MC1, control)", AWS_BLK,
+     "                        if not _is_our_deny(_entry(acl, egress, n), cidr):\n                            continue",
+     "                        if _entry(acl, egress, n) is None:\n                            continue"),
+    ("M639", "a block's entries created before they are recorded (MC1, control)", AWS_BLK,
+     "            _state._save_block_state(iid, ip, resource_id, partial=True, **record)\n", ""),
+    ("M640", "a block verified without the entries before it (MC1, control)", AWS_BLK,
+     "            elif not (cut(acl, False, ip) and cut(acl, True, ip)):", "            elif False:"),
+    ("M641", "an ENI with the quarantine group among others read as isolated (MC1, control)", AWS_ISO,
+     'if q is None or not same_groups(e["groups"], [q["GroupId"]]):',
+     'if q is None or q["GroupId"] not in e["groups"]:'),
+    ("M642", "the account guard ignores the region (MC1, control)", AWS_CON,
+     "if (self.account and account != self.account) or (self.region and region != self.region):",
+     "if self.account and account != self.account:"),
+    ("M643", "the release does not write its intent (MC1, control)", AWS_ISO,
+     '            _state._save_isolation_state(resource_id, {**state, "releasing_at": _now()})',
+     "            pass"),
+    ("M644", "a group named like the quarantine adopted without its tag (MC1, control)", AWS_QUA,
+     '        return bool(sg) and sg.get("GroupName") == QUARANTINE_SG_NAME and \\\n'
+     '            tags_of(sg).get("managed-by") == "glorfindel"',
+     '        return bool(sg) and sg.get("GroupName") == QUARANTINE_SG_NAME'),
+    ("M645", "verify_release ignores an ENI that is not back on its known original (MC1, control)", AWS_ISO,
+     '                if prior and not same_groups(prior, e["groups"]):\n                    pending.append(e["eni"])',
+     '                if False:\n                    pending.append(e["eni"])'),
 ]
 
 

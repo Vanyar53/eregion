@@ -1,6 +1,9 @@
 """Gothmog's run (G0): a declared fault, on enrolled targets, from an armed Orodruin —
 normal checked before, during and after, the return to the initial state verified.
 
+    0  watch     a live Glorfindel watch (V1, eregion_core/watch_gate.py), its heartbeat read
+                 before anything else reaches the cloud; none: refused. ``--without-glorfindel``
+                 runs anyway, and the report says so (``metrics.without_glorfindel``)
     1  contract  arm(run_id, "gothmog"). Passive: nothing read, nothing touched. A cap
                  too low to cancel and revert is refused too (MIN_CALLS).
     2  targets   read from the Chaos Studio experiment itself; each one declared by the
@@ -18,7 +21,7 @@ normal checked before, during and after, the return to the initial state verifie
                  exercise channel the report goes to H0 with it (#193); signals in
                  ``runs/gothmog/`` (``gothmog/signals/emitter.py``)
 
-``preflight`` runs 1–3 with no session at all: a write there is refused by construction.
+``preflight`` runs 0–3 with no session at all: a write there is refused by construction.
 """
 from __future__ import annotations
 
@@ -32,6 +35,7 @@ import yaml
 from rich.console import Console
 from rich.prompt import Confirm
 
+from eregion_core import watch_gate
 from eregion_core.exercise import close_window, open_window
 from eregion_core.exercise_channel import carry_run
 from eregion_core.inscription import BENCH_ENV, DEFAULT_BENCH, Scope, check_target, rg_from_id
@@ -127,6 +131,7 @@ class Engine:
         self.poll_s = poll_s
         self.abort_margin_s = abort_margin_s
         self.restore_timeout_s = restore_timeout_s
+        self._without: dict = {}   # what a run --without-glorfindel adds to its report (V1)
 
     # ── 1–3: everything before the fault, nothing written ─────────────────────────────
 
@@ -180,10 +185,27 @@ class Engine:
             return seen, "steady state not verified before the fault — nothing injected"
         return seen, None
 
-    def preflight(self, name_or_path: str) -> RunOutcome:
-        """Steps 1–3 from where the run would start, writing nothing (no session)."""
+    @staticmethod
+    def _no_watch(run_id: str, without_glorfindel: bool) -> RunOutcome | None:
+        """Step 0 (V1, #214): the refusal when no live Glorfindel watch stands behind the run,
+        else None — the watch's heartbeat read, nothing else on the cloud."""
+        if without_glorfindel:
+            console.print(f"[yellow]{watch_gate.FLAG}: a development run — Glorfindel's "
+                          f"reaction to the fault is not measured, by choice.[/yellow]")
+            return None
+        no_watch = watch_gate.refusal()
+        if not no_watch:
+            return None
+        console.print(f"[red]Refused — no live Glorfindel watch:[/red] {no_watch}")
+        return RunOutcome(run_id, "REFUSED", error=f"glorfindel: {no_watch}")
+
+    def preflight(self, name_or_path: str, *, without_glorfindel: bool = False) -> RunOutcome:
+        """Steps 0–3 from where the run would start, writing nothing (no session)."""
         fault = load_fault(name_or_path)
         run_id = "preflight-" + self._now().strftime("%Y%m%dT%H%M%SZ")
+        refused = self._no_watch(run_id, without_glorfindel)
+        if refused:
+            return refused
         verdict, session = arm(run_id, "gothmog")
         if session is None:
             console.print(f"[red]Orodruin passive — nothing read:[/red] {verdict.reasons()}")
@@ -197,13 +219,19 @@ class Engine:
 
     # ── The run ───────────────────────────────────────────────────────────────────────
 
-    def run(self, name_or_path: str, *, skip_confirm: bool = False) -> RunOutcome:
+    def run(self, name_or_path: str, *, skip_confirm: bool = False,
+            without_glorfindel: bool = False) -> RunOutcome:
         fault = load_fault(name_or_path)
         start = self._now()
         run_id = "gothmog-" + start.strftime("%Y%m%dT%H%M%SZ")
         console.rule(f"[bold red]Gothmog — {fault['name']}[/bold red]")
         console.print(f"  Engine  : {fault['engine']} / {fault['engine_ref']}")
         console.print(f"  Targets : {', '.join(fault['targets']['names'])}\n")
+        # 0. A live Glorfindel watch, before anything reaches the cloud (V1).
+        refused = self._no_watch(run_id, without_glorfindel)
+        if refused:
+            return refused
+        self._without = watch_gate.without_metrics(without_glorfindel)
         if not skip_confirm and not Confirm.ask("[yellow]Run this fault?[/yellow]"):
             console.print("Aborted.")
             return RunOutcome(run_id, "REFUSED", error="not confirmed")
@@ -349,7 +377,8 @@ class Engine:
 
     def _record(self, fault, run_id, result, metrics, checks, error=None) -> RunOutcome:
         report = RunReport(scenario=fault["name"], run_id=run_id, mitre="", result=result,
-                           metrics={"injector": "gothmog", "fault": fault.get("id"), **metrics},
+                           metrics={"injector": "gothmog", "fault": fault.get("id"),
+                                    **self._without, **metrics},
                            thresholds={}, checks=checks)
         path = report.save(self.runs_dir)
         report.render()

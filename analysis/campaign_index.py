@@ -82,6 +82,8 @@ def verse(campaign_dir: Path, path: Path | None = None, warn=cr._say) -> Versed:
         return Versed(campaign_dir.name, left=f"manifeste illisible : {type(e).__name__}")
     if not isinstance(manifest, dict):
         return Versed(campaign_dir.name, left="manifeste illisible")
+    if cr.without_glorfindel(manifest):  # V1: no detection measured — never compared
+        return Versed(campaign_dir.name, left=cr.NO_CAMPAIGN_REPORT)
     info = cr.campaign_info(campaign_dir)
     out = Versed(info.campaign_id, info.state, start_refused=info.start_refused)
     if info.state not in ENDED:

@@ -51,7 +51,8 @@ from pathlib import Path
 from analysis.campaign_changes import (ACTIONS, DETECTIONS, FRACTION, PERCENT, RELATIVE,
                                        RELATIVE_TOLERANCE, SECONDS, ChangeFact, Comparison, facing,
                                        keys, pair, relative, render_section)
-from analysis.campaign_schema import run_report_refusal, scenario_refusal
+from analysis.campaign_schema import (NO_CAMPAIGN_REPORT, run_report_refusal,
+                                      scenario_refusal, without_glorfindel)
 from annatar.runner.detection import _number, first_detection, read_records
 from eregion_core.exercise import (FUTURE_SKEW_S, exercises_dir, is_enrolled, last_moment,
                                    window_refusal)
@@ -1192,8 +1193,21 @@ def render(report: Report) -> str:
     return "\n".join(lines) + "\n"
 
 
+class NoReport(Exception):
+    """A campaign that has no report, by choice: run --without-glorfindel (V1)."""
+
+
+def no_report(campaign_dir: Path) -> str:
+    """Why this campaign gets no report — ``NO_CAMPAIGN_REPORT`` — else ""."""
+    manifest = _read_json(Path(campaign_dir) / "manifest.json")
+    return NO_CAMPAIGN_REPORT if without_glorfindel(manifest) else ""
+
+
 def build(campaign_dir: Path, model: str | None = None, llm=None, index_path: Path | None = None,
           *, strict: bool = False) -> Report:
+    # V1: no detection was measured — nothing to report, nothing indexed, never compared.
+    if why := no_report(campaign_dir):
+        raise NoReport(why)
     skipped: list[str] = []
 
     def warn(message: str) -> None:
@@ -1234,7 +1248,11 @@ def main(argv: list[str]) -> int:
         return 2
     campaign_dir = Path(argv[0])
     check_enrollment(campaign_dir)
-    report = build(campaign_dir)
+    try:
+        report = build(campaign_dir)
+    except NoReport as e:
+        print(f"{campaign_dir.name}: {e} — nothing written")
+        return 0
     out = campaign_dir / "report.md"
     out.write_text(render(report), encoding="utf-8")
     print(f"{out} — {len(report.kept)} affirmation(s) gardée(s), {len(report.rejected)} écartée(s)")

@@ -174,6 +174,9 @@ def ready(campaigns_root: Path, *, failed=frozenset(), say=_say) -> list[Path]:
             continue
         if manifest.get("state") != "done":
             continue
+        if campaign_schema.without_glorfindel(manifest):  # V1: no report, by choice
+            _say_once(cdir, "without", f"{cdir.name}: {campaign_schema.NO_CAMPAIGN_REPORT}", say)
+            continue
         awaited = _runs_awaited(manifest,
                                 lambda m, c=cdir: _say_once(c, "run_id", f"{c.name}: {m}", say))
         if all((cdir / "runs" / f"{rid}.json").is_file() for rid in awaited):
@@ -278,7 +281,8 @@ def _note_failure(cdir: Path, error: Exception) -> int:
 
 def write_report(cdir: Path, *, model: str | None = None, llm=None,
                  index_path: Path | None = None, say=_say) -> str:
-    """Write ``cdir/report.md`` once: ``written``, ``exists`` (already there), ``busy``
+    """Write ``cdir/report.md`` once: ``written``, ``exists`` (already there), ``without`` (no
+    report, by choice — V1: a campaign run --without-glorfindel), ``busy``
     (another pass holds the campaign) or ``failed: …``. Never raises."""
     cdir = Path(cdir)
     try:
@@ -298,6 +302,9 @@ def write_report(cdir: Path, *, model: str | None = None, llm=None,
             return "exists"
         try:
             from analysis import campaign_report as cr
+            if why := cr.no_report(cdir):   # V1: no report by choice — no attempt counted
+                _say_once(cdir, "without", f"{cdir.name}: {why}", say)
+                return "without"
             # strict: an answer without the tool's call is a failed attempt, never an
             # empty report written for good.
             report = cr.build(cdir, model=model, llm=llm, index_path=index_path, strict=True)

@@ -331,10 +331,10 @@ def test_campaign_run_writes_the_report_here_only_without_the_channel(tmp_path, 
         c = FakeContainer()
         monkeypatch.setenv(channel.CHANNEL_ENV, URL)
         monkeypatch.setattr(requests, "put", c.put)
-    done = SimpleNamespace(campaign_id="C1", state="done", results={
+    done = SimpleNamespace(campaign_id="C1", state="done", without_glorfindel=False, results={
         "executed": 2, "detected": 1, "missed": 1, "skipped": 0, "errors": 0})
     monkeypatch.setattr(runner_mod, "CampaignRunner",
-                        lambda cdir, dry_run=False: SimpleNamespace(run=lambda: done))
+                        lambda cdir, dry_run=False, **kw: SimpleNamespace(run=lambda: done))
     local = []
     monkeypatch.setattr(cli, "_write_campaign_report", local.append)
     result = CliRunner().invoke(cli.cli, ["campaign", "run", "C1", "--runs-dir", str(runs)])

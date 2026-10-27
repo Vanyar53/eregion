@@ -48,7 +48,8 @@ class RunOutcome:
 
     ``detection`` is the honest blind measure: "detected" (Glorfindel caught it),
     "missed" (active watch, no detection in window → detection_missed emitted), or
-    "unknown" (no active glorfindel watch — detection was not measured).
+    "unknown" (detection was not measured: the watch stopped during the run, or could not
+    vouch for it, or the run went --without-glorfindel — its report then says so).
     ``detection_latency_s`` is set only when detected: seconds from the attack
     (``attack_time``) to the detection Glorfindel recorded (annatar/runner/detection.py).
     """
@@ -633,13 +634,13 @@ class Engine:
             return watch_gate.fresh(watch_gate.channel_beat(),
                                     datetime.fromtimestamp(time.time(), timezone.utc))
 
-        # Short-circuit: skip if no active glorfindel watch.
-        # Retry up to 30s to account for a watch that just started.
+        # The run started only with a live watch (V1, eregion_core/watch_gate.py). One that
+        # stopped since, and is not back within 30 s, measures nothing: unknown.
         def _watch_active() -> bool:
             return _local_watch() or _remote_watch()
 
         if not _watch_active():
-            # Retry for up to 30s in case the watch just started
+            # Retry for up to 30s in case the watch is restarting
             deadline_check = time.time() + 30
             while time.time() < deadline_check:
                 time.sleep(5)
@@ -647,8 +648,8 @@ class Engine:
                     break
             else:
                 console.print(
-                    "[dim]Purple team feedback: no active glorfindel watch detected"
-                    " — skipping.[/dim]"
+                    "[yellow]The Glorfindel watch stopped during the run — detection not"
+                    " measured (unknown).[/yellow]"
                 )
                 self._detection_result = "unknown"  # detection was not measured
                 return

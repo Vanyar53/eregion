@@ -63,7 +63,7 @@ flowchart LR
         Cc["deux opérations à la fois<br/>entrelacées appel par appel<br/>un autre hôte qui écrit la carte"]
     end
     FA[("faux Azure en mémoire<br/>évalue les NSG comme Azure")]
-    P{"14 propriétés<br/>après chaque étape"}
+    P{"15 propriétés<br/>après chaque étape"}
     N --> FA
     Q --> O & Wd & F & Cc
     O & Wd & F & Cc --> FA
@@ -103,6 +103,7 @@ Les propriétés, vérifiées après chaque étape :
 | I11 | deux opérations à la fois finissent comme l'une après l'autre : l'état local dit ce qu'Azure a |
 | I12 | une VM d'un autre abonnement n'est jamais touchée, ni déclarée isolée |
 | L1 | un blocage dont les règles ont disparu est reposé ou signalé, même derrière la quarantaine |
+| L2 | un NSG de quarantaine que quelqu'un a modifié, et qui porte encore des cartes, est reposé ou signalé — l'état de ces cartes perdu compris (I1F) |
 | U1 | une règle laissée par une carte qui n'existe plus, et qui coupe une carte vivante, est signalée |
 
 **Des oracles qui ne demandent rien au code.** Ce qu'une propriété juge vient du journal du test :
@@ -739,6 +740,22 @@ Aucun de ces défauts n'avait été vu en revue. Chacun a son test et sa séquen
 | A0 | original d'une carte nue lu dans le seul tag par le reset | « swept », état effacé, carte sans NSG en silence |
 | A0 | NSG d'origine remis sans en lire les règles | « swept », VM encore coupée par une ancienne isolation |
 | A0 | NSG supprimé lu comme « illisible » | blocage disparu jamais signalé, levée partielle pour toujours |
+| I1F | NSG de quarantaine modifié (deny passé en Udp), état et tags de la carte perdus | VM joignable en TCP depuis le VNet, rien de dit : la réaffirmation ne lisait que les isolations dont elle avait l'état |
+
+**I1F (27/10, #226) : un oracle qui lisait mal, et un trou derrière.** Le run profond (10 000
+séquences) a fait tomber I1 à l'étape même où quelqu'un passe le deny entrant de la quarantaine
+en Udp : le TCP du VNet retombe sur l'`AllowVnetInBound` par défaut d'Azure, alors que le NSG
+du client refusait le VNet. Glorfindel n'avait encore rien pu faire : l'échec venait du test, qui
+lisait un deny d'un seul protocole comme un deny-all (`_quarantine_intact`) et ne comptait donc
+pas l'ouverture pour celle de ce quelqu'un. Le test lit maintenant le protocole, et n'accorde
+cette exemption qu'aux NSG de quarantaine qu'il a modifiés lui-même (son journal, `altered`,
+comme sur AWS) : un NSG que Glorfindel écrirait mal n'en gagne aucune (M832). Derrière, un vrai
+trou : l'état et les tags perdus, rien ne relisait ce NSG. La propriété L2 le borne ; la
+réaffirmation liste les NSG de quarantaine et lève une carte par NSG modifié qui porte des
+cartes (M830), close d'elle-même quand il est de nouveau entier (M833). Sans rien écrire : sans
+état, rien ne dit quelle VM ni sous quel mode (I5). La séquence réduite garde deux
+`lose_everything` et cinq éditions identiques du client : des restes du rétrécissement —
+`isolate` puis le deny passé en Udp suffisaient à faire tomber I1, avec ou sans état.
 
 Le plus grave : après une levée qui échoue en partie, une seconde levée lisait les champs de
 rétro-compatibilité de l'état comme un ancien format, et supprimait les deny du NSG de

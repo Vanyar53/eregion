@@ -48,6 +48,7 @@ from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 from pathlib import Path
 
+from analysis import separation
 from analysis.campaign_changes import (ACTIONS, DETECTIONS, FRACTION, PERCENT, RELATIVE,
                                        RELATIVE_TOLERANCE, SECONDS, ChangeFact, Comparison, facing,
                                        keys, pair, relative, render_section)
@@ -556,12 +557,16 @@ def index_path() -> Path:
     return Path(os.environ.get(INDEX_ENV) or _INDEX_PATH)
 
 
+# The index's collection: its own, never Glorfindel's (IA1, analysis/separation.py).
+COLLECTION = "campaign_runs"
+
+
 def _collection(path: Path | None = None):
     import chromadb
-    p = Path(path) if path else index_path()
+    p = separation.check_index(Path(path) if path else index_path())
     p.mkdir(parents=True, exist_ok=True)
     return chromadb.PersistentClient(path=str(p)).get_or_create_collection(
-        name="campaign_runs", metadata={"hnsw:space": "cosine"})
+        name=separation.check_collection(COLLECTION), metadata={"hnsw:space": "cosine"})
 
 
 def index_facts(facts: list[RunFact], path: Path | None = None,
@@ -1109,7 +1114,7 @@ def write_claims(facts: list[RunFact], prior: list[RunFact], model: str | None =
     from eregion_core.llm_call import completion_with_tool
     if llm is None:
         import litellm as llm
-    mdl = model or analysis_model()
+    mdl = separation.check_model(model or analysis_model())   # IA1: never Glorfindel's
     resp = completion_with_tool(
         llm, "campaign_report", model=mdl, max_tokens=2048, tools=[_REPORT_TOOL],
         timeout=timeout_s(),

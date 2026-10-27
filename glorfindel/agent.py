@@ -256,11 +256,22 @@ def load_context(
     memory: CycleMemory,
     incidents: IncidentRegistry,
 ) -> GlorfindelState:
-    """Retrieve past cycles from vector store and open/update the incident record."""
+    """Retrieve past cycles from vector store and open/update the incident record.
+
+    A control-plane detection (AL1) is decided without the model: no past cycles. And
+    unless the RulePoller tied it to its VM (`attribution: asset`, a role assigned on the
+    VM), it opens no incident and feeds none: its VM is an anchor, and the next data-plane
+    cycle there would read « T1562.007, 2 signals » about a VM nothing happened to."""
     from dataclasses import asdict
 
-    past = memory.retrieve_similar(state["signal"], n=3)
     signal = state["signal"]
+    if _is_control_plane(signal):
+        if (signal.get("context") or {}).get("attribution") != "asset":
+            return {**state, "past_cycles": [], "incident": None}
+        inc = incidents.get_or_create(resource_id=signal.get("resource_id", ""),
+                                      ttp=signal.get("ttp", ""))
+        return {**state, "past_cycles": [], "incident": asdict(inc)}
+    past = memory.retrieve_similar(state["signal"], n=3)
     inc = incidents.get_or_create(
         resource_id=signal.get("resource_id", ""),
         ttp=signal.get("ttp", ""),
@@ -350,11 +361,15 @@ def resolve_attack_started(signal: dict) -> dict:
         if "attack_time" in raw and 0 < since_attack < 86400:
             detection_s = round(since_attack)
         from glorfindel.detection_rules import normalize_row
+        from glorfindel.detectors import is_control_plane_source
         return {
             **signal,
             "event": "detection",
             "raw_signal": {
                 **raw,
+                # A control-plane source says so (AL1): the guard of `decide` reads it. A
+                # data-plane signal is unchanged — what the model sees stays the same.
+                **({"detection_source": source} if is_control_plane_source(source) else {}),
                 "detection_time_s": detection_s,
                 "detected_data": detected_row,
                 "normalized_signal": normalize_row(detected_row, ttp=signal.get("ttp", "")),
@@ -494,6 +509,10 @@ def investigate(state: GlorfindelState) -> GlorfindelState:
 
     if signal.get("event") != "detection":
         return state
+    # A control-plane detection (AL1): decided without the model, and its VM may be an
+    # anchor — no Perf/Syslog query on it.
+    if _is_control_plane(signal):
+        return state
 
     raw = signal.get("raw_signal", {})
     workspace_id = (
@@ -615,6 +634,7 @@ _HELD_BY_TYPE = {
     "attribution": "unattributed_signal",
     "telemetry": "telemetry_gap",
     "agreement": "unstable_decision",
+    "control_plane": "control_plane_change",
 }
 
 # Actions aimed at ONE VM. On a detection the RulePoller could not tie to that VM (a row
@@ -734,6 +754,108 @@ def _apply_confidence_gate(d: dict, raw_conf, threshold: float) -> None:
                     f"Seuil de confiance invalide (GLORFINDEL_CONFIDENCE_THRESHOLD) — action "
                     f"'{d['action']}' (confiance {shown}) retenue pour revue humaine. "
                     "Corriger la valeur (entre 0 et 1) pour qu'une action puisse partir seule.")
+
+
+def _is_control_plane(signal: dict) -> bool:
+    """A detection on what was done to the cloud's resources (AzureActivity, AL1): the
+    RulePoller says so (`context.plane`), and so does the source it read. In depth, the
+    row itself: an AzureActivity row read by a rule of another source (`azure_monitor`,
+    a backend of another type) loses both — its `OperationNameValue`, or its normalised
+    indicator, still says so."""
+    from glorfindel.detectors import is_control_plane_source
+    ctx = signal.get("context") or {}
+    raw = signal.get("raw_signal") or {}
+    if ctx.get("plane") == "control" or is_control_plane_source(str(raw.get("detection_source") or "")):
+        return True
+    rows = (raw.get("first_result_row") or {}, raw.get("detected_data") or {})
+    return (any(isinstance(r, dict) and r.get("OperationNameValue") for r in rows)
+            or (raw.get("normalized_signal") or {}).get("indicator_key") == "control_plane_operation")
+
+
+def _control_plane_row(signal: dict) -> dict:
+    raw = signal.get("raw_signal") or {}
+    return raw.get("first_result_row") or raw.get("detected_data") or {}
+
+
+def _control_plane_text(signal: dict) -> tuple[str, list[str]]:
+    """What a control-plane detection says, from the row alone (AL1): the operation, its
+    status as read, the caller, its address, the target, the gravest marks, the
+    operations a summary card carries — and the next steps for a human."""
+    from glorfindel.detection_rules import normalize_row
+    row = _control_plane_row(signal)
+    norm = (signal.get("raw_signal") or {}).get("normalized_signal") or normalize_row(row, signal.get("ttp", ""))
+    op = norm.get("indicator_value") or "?"
+    status = str(row.get("ActivityStatusValue") or "").strip()
+    who = norm.get("caller") or "appelant inconnu"
+    where = f" depuis {norm['caller_ip']}" if norm.get("caller_ip") else ""
+    target = norm.get("resource") or "?"
+    what = f"Plan de contrôle : {op}{f' ({status})' if status else ''} par {who}{where} sur {target}."
+    # An operation seen at its Start may still fail: the card says the status it read.
+    if status.lower() in ("start", "started", "accept", "accepted"):
+        what += " Statut lu au stade « " + status + " » : l'opération a pu échouer ensuite."
+    steps = ["Vérifier dans le journal d'activité qui a fait cette opération, et pourquoi"
+             + (f" (CorrelationId {row['CorrelationId']})" if row.get("CorrelationId") else "") + "."]
+    if norm.get("glorfindel_managed"):
+        what += (" Une règle gérée par Glorfindel (isolation, quarantaine ou blocage) a été "
+                 "écrite par un autre appelant : une isolation ou un blocage a pu être levé. "
+                 "Vérifier l'état réel de l'isolation ou du blocage sur Azure avant tout.")
+        steps.append("Vérifier sur Azure que l'isolation ou le blocage est toujours en place.")
+    if norm.get("glorfindel_identity"):
+        what += (" L'identité de Glorfindel a fait une opération qu'il ne fait pas, ou sur une "
+                 "ressource qui n'est pas à lui : ses identifiants sont peut-être entre "
+                 "d'autres mains.")
+        steps.append("Si l'opération n'est pas expliquée : renouveler les identifiants de Glorfindel.")
+    omitted = row.get("OmittedOperations") or []
+    if omitted:
+        listed = "; ".join(
+            f"{o.get('OperationNameValue') or '?'} par {o.get('Caller') or '?'} sur "
+            f"{o.get('_ResourceId') or '?'} ({str(o.get('TimeGenerated') or '')[:19]})"
+            for o in omitted)
+        what = (f"Plan de contrôle : {len(omitted)} opération(s) de plus dans le même relevé, "
+                f"au-delà des cartes individuelles — chacune listée ici : {listed}.")
+        if any(o.get("GlorfindelManaged") for o in omitted):
+            what += " Au moins une écrit une règle gérée par Glorfindel."
+        if any(o.get("GlorfindelIdentity") for o in omitted):
+            what += " Au moins une est faite sous l'identité de Glorfindel."
+    steps.append("Annuler le changement s'il n'est pas légitime ; s'il l'est (un pipeline connu), "
+                 "l'exclure dans la couche du client.")
+    return what, steps
+
+
+def _control_plane_decision(state: GlorfindelState) -> GlorfindelState:
+    """The decision on a control-plane detection (AL1), built by the code — no model.
+
+    A row of the Activity Log says who did what to which resource: an NSG rule changed,
+    a role assigned, a snapshot taken. The answer is a human's — revert a change, revoke an
+    identity — and the VM the card is anchored on may have nothing to do with it. So no
+    investigation (its Perf/Syslog queries would read the anchor VM), no call to the model
+    (it would only add text, at a cost, and send an administrator's name to the provider),
+    and no action recommended: an escalation `control_plane_change`, never approvable in
+    one click, whose reason says the operation, the target, the caller, the gravest cases
+    — a write by someone else on a rule Glorfindel manages (an isolation or a block may be
+    gone), Glorfindel's identity outside what it does — and the severity."""
+    signal = state["signal"]
+    what, steps = _control_plane_text(signal)
+    severity = "critique" if signal.get("severity") == "critical" else "haute"
+    reason = (f"{what} Sévérité : {severity}. Détection seule : aucune action autonome sur le "
+              "plan de contrôle — décision déterministe, sans appel au modèle ; revue humaine.")
+    return {
+        **state,
+        "reasoning": "Plan de contrôle : décision déterministe (AL1), sans appel au modèle.",
+        "confidence": 0.0,
+        "action": "",
+        "reversible": True,
+        "explanation": what,
+        "escalate": True,
+        "escalation_reason": reason,
+        "suggested_steps": steps,
+        "llm_usage": None,
+        "autonomy_mode": "",
+        "mode_hold": False,
+        "held_by": "control_plane",
+        "autonomy_gate": {},
+        "decision_draws": [],
+    }
 
 
 def _apply_signal_guardrail(d: dict, signal: dict) -> None:
@@ -883,8 +1005,8 @@ def _apply_autonomy_mode(d: dict, mode: str, gate: dict | None = None) -> bool:
         elif gate:
             lift = ("Corriger les points bloquants (`glorfindel activate`) pour qu'elle "
                     "agisse seule." if gate.get("reason") == "not_ready" else
-                    "Confirmer la VM (War Room, Activer) pour qu'elle agisse seule la "
-                    "prochaine fois.")
+                    "Confirmer la VM (console, page Glorfindel : « Review & turn on ») pour "
+                    "qu'elle agisse seule la prochaine fois.")
             d["escalation_reason"] = (
                 f"Réponse autonome configurée ({gate.get('configured', '?')}) mais VM "
                 f"retenue en human_only — {gate.get('message', '')}. Action "
@@ -1012,7 +1134,7 @@ def _decision_failed(state: GlorfindelState, exc: BaseException, mode: str = "")
     """State for a decision that could not be obtained (LLM call failed after retries).
 
     The cycle continues to escalate_to_human → store_cycle, so the detected threat
-    reaches `pending` / the War Room / the debug file instead of one console line."""
+    reaches `pending` / the console / the debug file instead of one console line."""
     err = _first_line(exc)
     reason = (
         f"Décision impossible : l'appel LLM a échoué après {_LLM_RETRIES} nouvelles "
@@ -1050,7 +1172,7 @@ def decide(
     is held back and escalated instead of executed.
 
     Hot-pickup: when autonomy is None (production), the config is reloaded FRESH
-    each cycle from glorfindel-config.yaml — so a War Room dropdown change (which
+    each cycle from glorfindel-config.yaml — so a console dropdown change (which
     persists to disk) takes effect on the next signal without restarting watch.
     Tests inject an explicit AutonomyConfig to bypass the disk read.
     autonomy_override (session `glorfindel watch --mode`) is re-applied on top of
@@ -1059,6 +1181,10 @@ def decide(
     intention — a VM configured autonomous runs in human_only until its readiness
     allows it (ready, or every reserve acknowledged). Covers the global default, the
     patterns and `--mode`, including VMs created after the setting.
+
+    A control-plane detection (AL1: the Activity Log) never reaches the model: its
+    decision is built by the code (`_control_plane_decision`), an escalation with no
+    action — before the mode, the readiness, the call.
 
     Gates, in order (each a pure helper, testable on its own): parsing defaults →
     executable guard → confidence gate → deterministic signal guardrail → attribution
@@ -1071,6 +1197,9 @@ def decide(
     escalation its type. An unreadable glorfindel-config.yaml runs every VM in
     human_only, `--mode` included (G2).
     """
+    if _is_control_plane(state["signal"]):
+        return _control_plane_decision(state)
+
     import litellm
 
     signal = state["signal"]
@@ -1217,7 +1346,7 @@ def _extract_suspicious_ip(signal: dict) -> str:
     Checks an explicit context override, then both the detected row (detected_data)
     and the raw source row (first_result_row) for the common source/destination IP
     fields. Shared by execute_action (to act) and escalate_to_human (to carry the IP
-    in the escalation payload so the War Room can approve & execute in one click).
+    in the escalation payload so the console can approve & execute in one click).
     """
     raw = signal.get("raw_signal", {})
     explicit = signal.get("context", {}).get("suspicious_ip")
@@ -1307,7 +1436,7 @@ def execute_action(
         out_status = "write_blocked" if is_auth else "action_failed"
         # Azure HttpResponseError.__str__ repeats the message (summary line + a
         # "Message:" section) — take only the first line for the escalation reason so
-        # the War Room modal doesn't show the same text twice. Full text → outcome.error.
+        # the console's modal doesn't show the same text twice. Full text → outcome.error.
         err_summary = _first_line(e)
         outcome = {
             "status": out_status,
@@ -1391,7 +1520,7 @@ def escalate_to_human(state: GlorfindelState) -> GlorfindelState:
             f"`glorfindel snapshot {resource_id} --yes` pour capturer l'état forensique."
         )
 
-    # Carry action parameters so the War Room can approve & execute parameterised
+    # Carry action parameters so the console can approve & execute parameterised
     # actions in one click (not just resource_id-only actions like isolate_vm).
     # block_suspicious_ip needs the IP — extracted from the signal, same source as
     # execute_action uses, so the approved action matches what would have run.
@@ -1572,9 +1701,13 @@ def store_cycle(state: GlorfindelState, *, memory: CycleMemory) -> GlorfindelSta
         "source": source,
         "exercise_run": exercise_run,
     }
-    # ChromaDB write — non-fatal: debug JSONL must still be written on failure
+    # ChromaDB write — non-fatal: debug JSONL must still be written on failure. Never a
+    # control-plane cycle (AL1): decided by the code, not the model, on a VM that may be an
+    # anchor — retrieved by similarity (TTP, severity…), it would be served as a precedent
+    # to a data-plane decision. Its debug line is written.
     try:
-        memory.store(cycle)
+        if not _is_control_plane(signal):
+            memory.store(cycle)
     except Exception as exc:
         _console.print(f"[yellow]store_cycle: ChromaDB write failed: {exc}[/yellow]")
 
@@ -1702,7 +1835,7 @@ def _detection_blocked(
             f"glorfindel reset {resource_id} --yes  — si l'isolation est résiduelle",
             f"Rejouer la query de '{rule.name}' dans Log Analytics sur la fenêtre "
             f"de l'attaque (latence d'ingestion > expected_latency_s ?)",
-            "Vérifier l'état du backend (carte MONITORING War Room / rule_status.json)",
+            "Vérifier l'état du backend (nœud DETECT de la console, page Glorfindel / rule_status.json)",
         ],
         "proposed_rule": None,
         "proposal_id": "",
@@ -1847,7 +1980,7 @@ The existing rule may be correct and no change needed."""
         "suggested_steps": [
             f"Review the proposed query for {signal.get('ttp', '')}",
             "Test it in Log Analytics against recent data",
-            f"glorfindel approve-rule {pid or '<id>'}  (or Approve in War Room Incidents)",
+            f"glorfindel approve-rule {pid or '<id>'}  (or Approve on its card in the console, Glorfindel page)",
             "Re-run the scenario to validate detection",
         ],
         "proposed_rule": proposed_rule,
@@ -1964,7 +2097,7 @@ class GlorfindelAgent:
 
         # Autonomy policy. autonomy_default is the session override (watch --mode).
         # When an explicit AutonomyConfig is injected (tests), the graph uses it as-is.
-        # Otherwise the graph reloads config FRESH each cycle (hot-pickup of War Room
+        # Otherwise the graph reloads config FRESH each cycle (hot-pickup of console
         # dropdown changes) — self.autonomy here is only for the startup banner / display.
         self._autonomy_explicit = autonomy if autonomy is not None else None
         self._autonomy_override = autonomy_default
@@ -2029,7 +2162,7 @@ def record_cycle_failure(
     Before this, an exception anywhere in a cycle (an unreadable file, a connector
     error in verify, a detection backend down while polling an attack) reached the
     watch worker's catch-all and ended as a single console line: a detected threat
-    dropped with no escalation, invisible in `pending` and the War Room. Records a
+    dropped with no escalation, invisible in `pending` and the console. Records a
     `cycle_failed` escalation (unless dry-run) and the debug line, then returns a
     terminal state. Also used by the watch poll threads (stage="detection").
     """

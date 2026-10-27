@@ -104,6 +104,13 @@ log_retention_days:               30
 perf_sampling_frequency:          10
 disk_write_alert_threshold_bytes: 52428800 # 50 MB/s
 
+# Journal d'activité de l'abonnement → le workspace (activity_log.tf, AL1) : la table
+# AzureActivity que lisent les règles du plan de contrôle de Glorfindel. PROPOSITION,
+# désactivée : à activer avec Jonathan (paramètre de diagnostic d'ABONNEMENT, posé par
+# l'instance canonique seule).
+activity_log:
+  enabled: false
+
 # ── Topologies de test (jetables, enabled:false par défaut) ───────────────────
 # PAS un asset : une FORME d'arrangement d'infra montée pour valider un handling
 # Glorfindel (multi-NIC, deny NSG subnet, vault cross-RG, multi-LAW…) puis détruite.

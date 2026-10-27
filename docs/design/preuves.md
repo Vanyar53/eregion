@@ -722,6 +722,105 @@ machine (une isolation disparue), son test unitaire le mesure.
 | M901 | une isolation qu'on n'a pas pu reposer marquée « alertée » avant sa carte | idem pour une isolation |
 | M902 | un blocage disparu en `human_only` marqué « alerté » avant sa carte | idem, sans tentative de repose |
 
+### Le journal d'activité, détection seule (AL1)
+
+Un faux `AzureActivity` (des lignes comme celles de la table, rendues par la requête du
+détecteur parent) traverse le vrai `AzureActivityDetector`, le RulePoller et le graphe, modèle
+simulé. Trente-cinq mutants (M810–M829, puis M850–M859 et M890–M894 après les relectures 5.5), mesurés par
+`tests/unit/test_activity_logs.py`, tous attrapés (27/10).
+
+| Mutant | Défaut réinjecté | Effet |
+|---|---|---|
+| M810 | les écritures de Glorfindel ne sont pas écartées | sa propre isolation s'escalade |
+| M811 | le plan de contrôle décidé par le modèle | il est appelé, et `isolate_vm` part |
+| M812 | un jeton d'utilisateur sans `idtyp` lu comme celui d'une application | l'`appid` de la CLI écarte tout le monde |
+| M813 | une carte du plan de contrôle fusionnée dans la précédente | l'écriture sur une règle de Glorfindel, invisible |
+| M814 | la décision ignore la source lue | `respond` demande au modèle |
+| M815 | le type `control_plane_change` perdu | carte `low_confidence`, approuvable en un clic |
+| M816 | une règle `glorfindel-*` pas vue comme sienne | le cas le plus grave, banal |
+| M817 | le NSG de quarantaine pas vu comme sien | idem |
+| M818 | son identité écartée quoi qu'elle fasse sur ce qui est à lui | un rôle attribué sous son identité, jamais vu |
+| M819 | l'identité du jeton ignorée | ses écritures s'escaladent |
+| M820 | les identifiants de `Claims` ignorés | idem, pour un principal de service |
+| M821 | l'appelant comparé à la casse près | idem |
+| M822 | déduplication par ligne | `Start` puis `Success` : deux détections |
+| M823 | une règle plus courte que la latence, en silence | les lignes en retard jamais vues |
+| M824 | la règle NSG livrée regarde 10 minutes | idem |
+| M825 | une sous-ressource de VM non attribuée | un rôle sur la VM ignoré |
+| M826 | la ligne la plus récente d'abord, avant l'écriture sur une règle de Glorfindel | le cas grave après les autres, ou dans la synthèse |
+| M827 | l'écriture sur une règle de Glorfindel pas critique | sévérité banale |
+| M828 | une ligne du plan de contrôle normalisée comme une IP | ni opération ni appelant |
+| M829 | une règle `azure_activity` liée à aucun backend | désactivée, elle ne tourne jamais |
+| M850 | jeton d'utilisateur : l'`appid` de la CLI pris pour celui de Glorfindel | toute écriture faite avec `az` écartée |
+| M851 | son identité sur une règle du client écartée | un credential volé, invisible |
+| M852 | une règle du client décalée par une isolation pas vue comme sienne | sa levée s'escalade, critique |
+| M853 | une carte par relevé sur le plan de contrôle | les autres opérations marquées envoyées, jamais vues |
+| M854 | au-delà du plafond, pas de carte de synthèse | des opérations marquées envoyées sans carte |
+| M855 | un bouton sur une carte ancrée sur une VM | un clic restaure une VM que la détection ne nomme pas |
+| M856 | la décision du plan de contrôle recommande d'isoler | « Recommandé : isoler » sur la VM d'ancrage |
+| M857 | un signal non attribué ouvre l'incident de la VM d'ancrage | le cycle suivant y lit « 2 signaux » |
+| M858 | un cycle du plan de contrôle dans la mémoire de décision | un précédent servi au plan de données |
+| M859 | ce qu'un état d'isolation attribuait, oublié avec l'état | la ligne de la levée s'escalade |
+| M890 | un nom `glorfindel-*` suffit à faire une règle sienne | un credential volé cache une autorisation derrière |
+| M891 | les états de blocage ignorés | son propre blocage s'escalade |
+| M892 | l'abonnement hors de la clé d'une règle | les mêmes noms ailleurs pris pour les siens |
+| M893 | une ligne `AzureActivity` lue par une autre source va au modèle | un snapshot part seul |
+| M894 | une règle du plan de contrôle sans `CorrelationId`, en silence | deux opérations n'en font qu'une |
+
+### L'IA d'analyse : son modèle, sa mémoire, le tri, rien sans un humain (IA1)
+
+L'IA d'analyse refuse le modèle de décision de Glorfindel et toute mémoire rangée dans son état
+(`analysis/separation.py`). Le tri d'une campagne (`analysis/triage.py`) est calculé depuis les
+runs, le catalogue, les règles et le code d'infrastructure ; le modèle explique et propose ; la
+vérification écarte ce que les faits ne portent pas, et chaque proposition attend un humain. Vingt
+mutants, mesurés par `tests/unit/test_analysis_separation.py` et `tests/unit/test_analysis_triage.py`
+(les cas du harnais y tournent avec un modèle simulé), tous attrapés au premier tour (27/10).
+
+| Mutant | Défaut réinjecté | Effet |
+|---|---|---|
+| M780 | le modèle de décision de Glorfindel accepté | le rapport partage les angles morts du défenseur |
+| M781 | le modèle comparé avec son préfixe | `claude-sonnet-5-5` passe pour un autre que `anthropic/claude-sonnet-5-5` |
+| M782 | le chemin de l'index lu sans être résolu | `..` ou un lien mènent dans `~/.glorfindel` |
+| M783 | l'index permis dans l'état de Glorfindel | l'analyse écrit dans la mémoire du défenseur |
+| M784 | le rapport ouvre son index sans le contrôle | idem, par `EREGION_ANALYSIS_INDEX` |
+| M785 | le rapport appelle son modèle sans le contrôle | idem, par `EREGION_ANALYSIS_MODEL` |
+| M786 | une escalade triée avant une technique manquée | ce qui est passé n'est plus en tête |
+| M787 | un commentaire du code d'infrastructure vaut collecte | « collectée » sur une ligne que Terraform ignore |
+| M788 | `disable:` de la couche du client ignoré | une règle désactivée « surveille » encore |
+| M789 | une proposition que les faits ne portent pas gardée | « écrire une règle » quand une règle existe |
+| M790 | une proposition qui porte une règle gardée | l'analyse écrit une requête de détection |
+| M791 | le statut écrit par le modèle gardé | une proposition « approuvée » sans humain |
+| M792 | une décision sans nom d'humain enregistrée | une approbation que personne n'a donnée |
+| M793 | une proposition décidée deux fois | la trace de la première décision perdue |
+| M794 | un nouveau tri écrit par-dessus une décision | la décision d'un humain perdue |
+| M795 | « Glorfindel a isolé » gardé sur une décision inconnue | un inconnu présenté comme un fait |
+| M796 | une deuxième entrée pour un item la remplace | l'explication gardée n'est plus celle vérifiée la première |
+| M797 | le tri appelle le modèle de Glorfindel | idem M780, pour le tri |
+| M798 | le harnais ne compte pas l'obéissance que la vérification a écartée | l'obéissance du modèle à une ligne plantée n'est plus mesurée |
+| M799 | une collecte illisible dite « non collectée » | un inconnu présenté comme une cause |
+
+Après les relectures (27/10), douze de plus, tous attrapés à chacun des trois tours ; M840 est
+mesuré par `tests/unit/test_analysis_rules_parity.py`, qui prend le chargeur de la watch pour
+oracle, M874 par `tests/unit/test_analysis_separation.py`. M843 (un filtre de la prose du modèle,
+« approuvée par … ») a été retiré avec ce filtre : ce qui fait foi est le statut écrit par le
+code, et M871–M878 mesurent cette garantie (M876–M878 à travers un vrai moteur CommonMark,
+markdown-it).
+
+| Mutant | Défaut réinjecté | Effet |
+|---|---|---|
+| M840 | une entrée de la couche du client que la watch écarte remplace la règle de base | `no_rule` sur une technique que la watch surveille encore : `author_rule` permis, `review_rule` interdit |
+| M841 | `decide` sans le verrou de la campagne | deux décisions prises en même temps : la seconde écriture perd la première |
+| M842 | un `triage.json` illisible laisse passer l'exception | une trace Python au lieu d'un refus |
+| M844 | la raison d'une entrée écartée, qui cite le modèle, sans `_cell` | un retour à la ligne du modèle casse `triage.md` |
+| M871 | le statut affiché à côté d'une proposition pris du texte du modèle | `triage.md` montre une décision que le code n'a pas écrite |
+| M872 | le Markdown du modèle rendu tel quel | son texte dessine un « Statut (écrit par le code) » à lui |
+| M873 | un nouveau tri écrit sans le verrou | une décision prise pendant ce temps est perdue |
+| M874 | un refus du modèle d'analyse sort avec 1, comme une erreur | `glorfindel-host-model` ne donne pas son conseil |
+| M875 | l'en-tête de `triage.md` ne dit plus que seul le statut du code fait foi | le texte du modèle peut passer pour une décision |
+| M876 | la raison d'une entrée écartée rendue sans échappement | un statut en gras écrit dans « Écarté » |
+| M877 | une ligne ne finit que sur `\n` | un `\r` du modèle ouvre un item de liste à côté des vraies propositions |
+| M878 | la raison d'une proposition inconnue cite le texte du modèle | le modèle écrit dans la colonne du code |
+
 ## Ce que les invariants ont trouvé
 
 Aucun de ces défauts n'avait été vu en revue. Chacun a son test et sa séquence figée.

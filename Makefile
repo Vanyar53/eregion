@@ -18,28 +18,35 @@ TF       := terraform -chdir=infra/terraform
 INSTANCE ?= default
 TOPO     ?=
 
+# L23 (#228) : chaque secret passe au conteneur PAR SON NOM (`-e AZURE_CLIENT_SECRET`), jamais
+# par sa valeur (`-e AZURE_CLIENT_SECRET=…`, visible dans `ps`, l'historique et `make -n`).
+# La valeur est choisie par le shell de la recette et posée dans l'environnement de
+# `docker run` seulement (*_AZURE_PICK, devant la commande) : la ligne de commande ne porte
+# que des noms. Le canary : tests/unit/test_makefile_secrets.py rend chaque cible par
+# `make -n` avec des secrets factices, et aucune valeur ne doit y paraître.
+#
 # Annatar — ANNATAR_AZURE_CLIENT_* si définis, sinon fallback AZURE_CLIENT_*
-# ⚠ Les recettes qui les utilisent commencent par @ : make afficherait sinon la commande
-# développée, secret compris (constaté le 2026-10-07).
 # Annatar a besoin de Contributor (RunCommand). Définir ANNATAR_AZURE_CLIENT_*
 # pour séparer ses creds de ceux de Glorfindel (Reader pour observe-only).
 # AZURE_TENANT_ID et AZURE_SUBSCRIPTION_ID sont toujours partagés (même tenant).
+ANNATAR_AZURE_PICK = \
+	AZURE_CLIENT_ID="$${ANNATAR_AZURE_CLIENT_ID:-$${AZURE_CLIENT_ID:-}}" \
+	AZURE_CLIENT_SECRET="$${ANNATAR_AZURE_CLIENT_SECRET:-$${AZURE_CLIENT_SECRET:-}}"
+# GLORFINDEL_LLM_MODEL : le rapport de fin de `campaign run` s'écrit dans ce conteneur, et
+# l'IA d'analyse y refuse le modèle de Glorfindel (IA1) — sans lui, elle ne verrait que le défaut.
 ANNATAR_AZURE_ENV := \
-	-e AZURE_CLIENT_ID=$(or $(ANNATAR_AZURE_CLIENT_ID),$(AZURE_CLIENT_ID)) \
-	-e AZURE_CLIENT_SECRET=$(or $(ANNATAR_AZURE_CLIENT_SECRET),$(AZURE_CLIENT_SECRET)) \
-	-e AZURE_TENANT_ID=$(AZURE_TENANT_ID) \
-	-e AZURE_SUBSCRIPTION_ID=$(AZURE_SUBSCRIPTION_ID) \
+	-e AZURE_CLIENT_ID -e AZURE_CLIENT_SECRET -e AZURE_TENANT_ID -e AZURE_SUBSCRIPTION_ID \
 	-e ANTHROPIC_API_KEY -e ANNATAR_LLM_MODEL -e EREGION_ANALYSIS_MODEL \
-	-e EREGION_ANALYSIS_TIMEOUT_S
+	-e EREGION_ANALYSIS_TIMEOUT_S -e GLORFINDEL_LLM_MODEL
 
 # Glorfindel — GLORFINDEL_AZURE_CLIENT_* si définis, sinon fallback AZURE_CLIENT_*
 # Glorfindel peut tourner en Reader (GLORFINDEL_READ_ONLY=1 + SP Reader).
 # AZURE_TENANT_ID et AZURE_SUBSCRIPTION_ID sont toujours partagés (même tenant).
+GLORFINDEL_AZURE_PICK = \
+	AZURE_CLIENT_ID="$${GLORFINDEL_AZURE_CLIENT_ID:-$${AZURE_CLIENT_ID:-}}" \
+	AZURE_CLIENT_SECRET="$${GLORFINDEL_AZURE_CLIENT_SECRET:-$${AZURE_CLIENT_SECRET:-}}"
 GLORFINDEL_AZURE_ENV := \
-	-e AZURE_CLIENT_ID=$(or $(GLORFINDEL_AZURE_CLIENT_ID),$(AZURE_CLIENT_ID)) \
-	-e AZURE_CLIENT_SECRET=$(or $(GLORFINDEL_AZURE_CLIENT_SECRET),$(AZURE_CLIENT_SECRET)) \
-	-e AZURE_TENANT_ID=$(AZURE_TENANT_ID) \
-	-e AZURE_SUBSCRIPTION_ID=$(AZURE_SUBSCRIPTION_ID)
+	-e AZURE_CLIENT_ID -e AZURE_CLIENT_SECRET -e AZURE_TENANT_ID -e AZURE_SUBSCRIPTION_ID
 
 GLORFINDEL_STATE := \
 	-v $(HOME)/.glorfindel:/root/.glorfindel \
@@ -65,7 +72,7 @@ GLORFINDEL_VOLS := \
 
 # The images' CMD is the CLI itself: arguments REPLACE it, so the binary is named here
 # (`make annatar-run` ran `run` as a command and failed).
-DOCKER_ANNATAR := docker run --rm $(ANNATAR_AZURE_ENV) $(ANNATAR_VOLS) $(IMAGE_ANNATAR) annatar
+DOCKER_ANNATAR = $(ANNATAR_AZURE_PICK) docker run --rm $(ANNATAR_AZURE_ENV) $(ANNATAR_VOLS) $(IMAGE_ANNATAR) annatar
 GLORFINDEL_ENV := \
 	-e AZURE_WORKSPACE_ID \
 	-e AZURE_VM_RESOURCE_ID \
@@ -85,7 +92,7 @@ GLORFINDEL_ENV := \
 	-e GLORFINDEL_INCIDENT_TTL_S \
 	-e ORT_LOGGING_LEVEL_DEFAULT=3
 
-DOCKER_GLORFINDEL := docker run --rm $(GLORFINDEL_AZURE_ENV) $(GLORFINDEL_VOLS) $(GLORFINDEL_STATE) \
+DOCKER_GLORFINDEL = $(GLORFINDEL_AZURE_PICK) docker run --rm $(GLORFINDEL_AZURE_ENV) $(GLORFINDEL_VOLS) $(GLORFINDEL_STATE) \
 	$(GLORFINDEL_ENV) \
 	$(IMAGE_GLORFINDEL) glorfindel
 
@@ -362,14 +369,14 @@ annatar-shell: build-annatar
 	@mkdir -p $(HOME)/.annatar
 	@touch $(HOME)/.annatar/.bashrc
 	@grep -q "alias ar=" $(HOME)/.annatar/.bashrc || echo "alias ar='annatar'" >> $(HOME)/.annatar/.bashrc
-	@docker run --rm -it $(ANNATAR_AZURE_ENV) $(ANNATAR_VOLS) $(ANNATAR_STATE) \
+	@$(ANNATAR_AZURE_PICK) docker run --rm -it $(ANNATAR_AZURE_ENV) $(ANNATAR_VOLS) $(ANNATAR_STATE) \
 		$(IMAGE_ANNATAR) bash --init-file /root/.annatar/.bashrc
 
 glorfindel-shell: build-glorfindel
 	@mkdir -p $(HOME)/.glorfindel
 	@touch $(HOME)/.glorfindel/.bashrc
 	@grep -q "alias gf=" $(HOME)/.glorfindel/.bashrc || echo "alias gf='glorfindel'" >> $(HOME)/.glorfindel/.bashrc
-	@docker run --rm -it $(GLORFINDEL_AZURE_ENV) $(GLORFINDEL_VOLS) $(GLORFINDEL_STATE) \
+	@$(GLORFINDEL_AZURE_PICK) docker run --rm -it $(GLORFINDEL_AZURE_ENV) $(GLORFINDEL_VOLS) $(GLORFINDEL_STATE) \
 		$(GLORFINDEL_ENV) \
 		$(IMAGE_GLORFINDEL) bash --init-file /root/.glorfindel/.bashrc
 
@@ -576,6 +583,9 @@ glorfindel-host-pull:
 # Change the model the hosted Glorfindel decides with, in one command: host.env here and the
 # VM's .env, then a restart. MODEL=default goes back to the code default (eregion_core/models.py).
 # Compare it first (make llm-compare) and run it end to end — README, « Changer de modèle ».
+# IA1: then says whether the analysis AI still reasons with another model (analysis/separation.py):
+# Glorfindel's model shared with the analysis makes every campaign report refused on H0. Its
+# advice on a refusal (exit 2) only; an error (1, an image before IA1) is said; never fails.
 glorfindel-host-model:
 	@test -n "$(MODEL)" || { echo "MODEL=anthropic/<modèle> requis (ou MODEL=default)"; exit 1; }
 	@case "$(MODEL)" in *[!A-Za-z0-9._/:-]*) echo "MODEL invalide : $(MODEL)"; exit 1;; esac
@@ -585,7 +595,11 @@ glorfindel-host-model:
 	@$(HOST_SSH) 'cd eregion && sed -i "/^GLORFINDEL_LLM_MODEL=/d" .env && \
 	 { [ "$(MODEL)" = default ] || echo "GLORFINDEL_LLM_MODEL=$(MODEL)" >> .env; } && \
 	 docker compose --profile bot up -d watch war-room bot >/dev/null 2>&1 && sleep 5 && \
-	 docker exec eregion-watch python -c "from eregion_core.models import glorfindel_model; print(\"  ✓ Glorfindel décide maintenant avec\", glorfindel_model())"'
+	 docker exec eregion-watch python -c "from eregion_core.models import glorfindel_model; print(\"  ✓ Glorfindel décide maintenant avec\", glorfindel_model())" && \
+	 { docker exec eregion-watch python -m analysis.separation; rc=$$?; \
+	   [ $$rc -ne 2 ] || echo "  → pose EREGION_ANALYSIS_MODEL=<un autre modèle> dans host.env (ici) et dans ~/eregion/.env (VM), puis docker compose up -d watch — docs/analysis.md"; \
+	   [ $$rc -ne 1 ] || echo "  (contrôle de séparation indisponible sur cette image : avant IA1 ?)"; \
+	   true; }'
 
 glorfindel-host-report:
 	$(HOST_SSH) 'docker exec eregion-watch glorfindel report --since $(or $(SINCE),7d)'
@@ -835,6 +849,8 @@ lock:
 	$(UV) pip compile pyproject.toml requirements/build.in --extra dev $(LOCK_FLAGS) -o requirements/dev.txt
 	$(UV) pip compile pyproject.toml requirements/build.in --extra glorfindel --extra war-room \
 	  -c requirements/dev.txt $(LOCK_FLAGS) -o requirements/glorfindel.txt
+	$(UV) pip compile pyproject.toml requirements/build.in --extra annatar \
+	  -c requirements/dev.txt $(LOCK_FLAGS) -o requirements/annatar.txt
 
 test:
 	$(PYTHON) -m pytest tests/ -v

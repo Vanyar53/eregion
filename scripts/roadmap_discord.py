@@ -129,8 +129,10 @@ def card(lot: Lot) -> dict:
                                f"issue #{lot.number}", nd.BLUE, lot.url))
 
 
-def sync_forum(forum: nd.Forum, lots: list[Lot], dry: bool = False) -> tuple[list[str], dict[str, str]]:
-    """One pass over the forum: each open lot's thread made true; (what was done, state by issue)."""
+def sync_forum(forum: nd.Forum, lots: list[Lot], dry: bool = False,
+               create: bool = True) -> tuple[list[str], dict[str, str]]:
+    """One pass over the forum: each open lot's thread made true; (what was done, state by issue).
+    Without `create`, a missing thread waits for the next push or the daily run."""
     threads = forum.threads()
     names = {v: k for k, v in forum.tags().items()}
     done, states = [], {}
@@ -164,6 +166,8 @@ def sync_forum(forum: nd.Forum, lots: list[Lot], dry: bool = False) -> tuple[lis
             continue
         name = nd.thread_name(lot.lot, lot.number, lot.title)
         if t is None:
+            if not create:
+                continue
             made = write(f"{name} créé ({want})", "POST", f"/channels/{forum.cfg.forum}/threads",
                          {"name": name, "applied_tags": forum.apply([], want, lot.milestone), "message": card(lot)})
             if made:
@@ -293,6 +297,13 @@ def upsert(forum: nd.Forum, channel: str, card_: dict) -> str:
     return "posted"
 
 
+def creates(environ) -> bool:
+    """Threads are created on a push, the daily run or by hand, never on an issue or a pull request
+    event: those also run notify.yml, which creates a lot's thread itself (in its own concurrency
+    group) — two runs at once could each create one."""
+    return environ.get("GITHUB_EVENT_NAME", "") in ("", "push", "schedule", "workflow_dispatch")
+
+
 def main(argv=None, environ=os.environ) -> int:
     dry = "--dry-run" in (sys.argv[1:] if argv is None else argv)
     cfg = nd.load_config(environ)
@@ -313,7 +324,7 @@ def main(argv=None, environ=os.environ) -> int:
     done, states = [], {x.number: wanted_state(x, "") for x in lots}
     if cfg.lots:
         try:
-            done, states = sync_forum(forum, lots, dry)
+            done, states = sync_forum(forum, lots, dry, create=creates(environ))
         except nd.Failure as e:
             nd.say(e)
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")

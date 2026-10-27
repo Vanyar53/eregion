@@ -333,3 +333,24 @@ def test_issues_are_read_past_the_first_page(fake, monkeypatch):
     rd.main([])
     text = fake.roadmap[0]["embeds"][0]["description"]
     assert "**0/150**" in text
+
+
+def test_on_an_issue_or_pull_request_event_threads_are_edited_never_created(fake, monkeypatch):
+    """notify.yml runs on those events too and creates the lot's thread, in its own concurrency
+    group: the roadmap creates only on a push, the daily run or by hand."""
+    configure(monkeypatch, fake, roadmap=False)
+    gone = fake.thread("O1 · Orodruin · #10", [TAG["en cours"], TAG["v0.3"]])
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "issues")
+    rd.main([])
+    assert fake.threads == [gone] and gone["thread_metadata"]["archived"]
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "schedule")
+    rd.main([])
+    assert sorted(by_number(fake)) == ["10", "11", "231", "67", "73"]
+
+
+@pytest.mark.parametrize("name, found", [
+    ("#70 · Point d'étape", True), ("X1 · Point d'étape · #70", True),
+    ("A3 · suite de #70 · #73", False), ("B1 · #700 · #71", False),
+])
+def test_an_issue_number_is_matched_where_a_name_puts_it(name, found):
+    assert (nd.match_thread([{"name": name}], "", "70") is not None) is found

@@ -193,7 +193,9 @@ def match_thread(threads: list[dict], lot: str = "", issue: str = "") -> dict | 
     """The issue's own thread first; else the lot's, unless that one names another issue."""
     if issue:
         for t in threads:
-            if re.search(rf"#{issue}\b", t.get("name", "")):
+            # Its number where a name puts it — last (« <ID> · <title> · #<n> ») or first (« #<n> · … »),
+            # never a « #70 » quoted inside a lot's title.
+            if re.search(rf"^#{issue} · |· #{issue}$", t.get("name", "")):
                 return t
     if lot:
         for t in threads:

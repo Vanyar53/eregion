@@ -25,10 +25,12 @@ permissions:
   issues: read
   pull-requests: read
 
-# One run at a time, shared with notify.yml: both write the same #lots threads, and two runs
-# could each create one.
+# One run at a time, in its own group (a notification is never cancelled by a roadmap run). A
+# pending run replaced by a newer one costs nothing: each pass rewrites everything. Threads are
+# created only on a push, the daily run or by hand — never on an issue or pull request event,
+# where notify.yml creates the lot's thread (scripts/roadmap_discord.py, creates()).
 concurrency:
-  group: discord-atelier
+  group: roadmap-discord
   cancel-in-progress: false
 
 jobs:

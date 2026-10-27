@@ -2470,6 +2470,16 @@ MUTANTS += [
 ]
 TESTS.update({f"M{n}": "tests/unit/test_roadmap_discord.py" for n in range(995, 1000)})
 
+# N2 after its second review (27/10): M1000–M1004, given by the General session (H1: M1005–M1019).
+MUTANTS += [
+    ("M1000", "the roadmap creates threads on issue and PR events too: with notify.yml, two threads for one lot (N2)",
+     ROADMAP_D, "            if not create:\n                continue\n", ""),
+    ("M1001", "an issue number matched anywhere in a name: a lot's title quoting #70 taken for #70's thread (N2)",
+     NOTIFY, '            if re.search(rf"^#{issue} · |· #{issue}$", t.get("name", "")):',
+     '            if re.search(rf"#{issue}\\b", t.get("name", "")):'),
+]
+TESTS.update({f"M{n}": "tests/unit/test_roadmap_discord.py" for n in (1000, 1001)})
+
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a

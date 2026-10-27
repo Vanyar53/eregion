@@ -27,10 +27,12 @@ permissions:
   contents: read
   actions: read   # the run before, to say « main green again »
 
-# One run at a time, shared with roadmap.yml: a merge that closes an issue fires several events
-# at once, and two runs could each create the lot's thread.
+# One run at a time: a merge that closes an issue fires pull_request_target and issues together,
+# and two runs could each create the lot's thread. Known limit: GitHub keeps ONE pending run per
+# group, and a newer one cancels it — with three events at once, the middle one is lost. Its own
+# group (roadmap.yml has another): a roadmap run must never cancel a notification.
 concurrency:
-  group: discord-atelier
+  group: notify-discord
   cancel-in-progress: false
 
 jobs:

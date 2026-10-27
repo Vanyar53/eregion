@@ -129,6 +129,11 @@ export AZURE_SUBSCRIPTION_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 # autonome est retenue (échec fermé). Sans coût en human_only (rien ne part seul).
 # export GLORFINDEL_DECISION_DRAWS=3
 
+# Journal d'activité (AL1) : les écritures de Glorfindel lui-même (isolation, quarantaine,
+# blocage) n'y sont pas escaladées. Son identité est lue dans son jeton et AZURE_CLIENT_ID ;
+# en ajouter d'autres (objet ou application d'un principal de service), séparées par des virgules.
+# export GLORFINDEL_OWN_CALLERS=
+
 # Rétention discovery — une VM éteinte (absente du Heartbeat) reste visible dans le
 # registre tant que son dernier heartbeat date de moins de X heures, puis est évincée
 # (défaut 8h). Évite qu'une VM juste éteinte disparaisse de la War Room.

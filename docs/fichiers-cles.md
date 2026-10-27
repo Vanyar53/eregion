@@ -86,7 +86,8 @@ glorfindel/
                           isolation.py, release.py, verify.py, blocks.py, unblock.py, backup.py (+ restore_job_status,
                           lu par jobs.py), restore.py, sweep.py, readers.py (check_permissions, check_nsg_access,
                           list_nsgs, check_compute_access…), sdk.py (warm-up), capabilities.py, monitor.py
-                          (AzureMonitorDetector, réexporté par detectors.py)
+                          (AzureMonitorDetector, réexporté par detectors.py), activity.py (AzureActivityDetector, AL1 :
+                          le journal d'activité, détection seule ; écritures de Glorfindel écartées, ses règles marquées)
                           backup.py : check_backup_points ; list_backup_items(vault, rg) → inventaire RSV vault-wide (protected items + last RP/state),
                           indépendant de l'état des VMs (source de vérité backup même VM éteinte). Cheap leg : 1 appel
                           paginé, pas de count RP par item (count = check_backup_points par VM, opt-in). Read-only OK.

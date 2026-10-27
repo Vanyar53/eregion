@@ -702,6 +702,36 @@ de la cible et le réseau lèvent, et chaque tentative est notée. Trente mutant
 | M758 | un fichier local vivant compte malgré le canal | une watch locale prise pour la watch hébergée |
 | M759 | la console compte une campagne sans Glorfindel en `unknown` | un run de dév pris pour un trou |
 
+### Le journal d'activité, détection seule (AL1)
+
+Un faux `AzureActivity` (des lignes comme celles de la table, rendues par la requête du
+détecteur parent) traverse le vrai `AzureActivityDetector`, le RulePoller et le graphe, modèle
+simulé. Vingt mutants, mesurés par `tests/unit/test_activity_logs.py`, tous attrapés au premier
+tour (27/10).
+
+| Mutant | Défaut réinjecté | Effet |
+|---|---|---|
+| M810 | les écritures de Glorfindel ne sont pas écartées | sa propre isolation s'escalade |
+| M811 | pas de garde du plan de contrôle | une détection `AzureActivity` mène à `isolate_vm` |
+| M812 | la garde laisse passer un snapshot | une action autonome sur le plan de contrôle |
+| M813 | une carte du plan de contrôle fusionnée dans la précédente | l'écriture sur une règle de Glorfindel, invisible |
+| M814 | la garde ignore la source lue | `respond` agit sur le plan de contrôle |
+| M815 | le type `control_plane_change` perdu | carte `low_confidence`, approuvable en un clic |
+| M816 | une règle `glorfindel-*` pas vue comme sienne | le cas le plus grave, banal |
+| M817 | le NSG de quarantaine pas vu comme sien | idem |
+| M818 | son identité écartée quoi qu'elle fasse | un rôle attribué sous son identité, jamais vu |
+| M819 | l'identité du jeton ignorée | ses écritures s'escaladent |
+| M820 | les identifiants de `Claims` ignorés | idem, pour un principal de service |
+| M821 | l'appelant comparé à la casse près | idem |
+| M822 | déduplication par ligne | `Start` puis `Success` : deux détections |
+| M823 | une règle plus courte que la latence, en silence | les lignes en retard jamais vues |
+| M824 | la règle NSG livrée regarde 10 minutes | idem |
+| M825 | une sous-ressource de VM non attribuée | un rôle sur la VM ignoré |
+| M826 | la ligne la plus récente choisie avant l'écriture sur une règle de Glorfindel | le cas grave masqué |
+| M827 | l'écriture sur une règle de Glorfindel pas critique | sévérité banale |
+| M828 | une ligne du plan de contrôle normalisée comme une IP | ni opération ni appelant |
+| M829 | une règle `azure_activity` liée à aucun backend | désactivée, elle ne tourne jamais |
+
 ## Ce que les invariants ont trouvé
 
 Aucun de ces défauts n'avait été vu en revue. Chacun a son test et sa séquence figée.

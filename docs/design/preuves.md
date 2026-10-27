@@ -778,7 +778,7 @@ tous attrapés (27/10).
 | M938 | une carte de rôle sans la façon de retirer l'attribution | l'humain ne sait pas révoquer |
 | M939 | le paramètre de diagnostic du tenant toujours posé | les journaux de tout le tenant envoyés |
 
-Après la relecture 5.5 (27/10), dix de plus (M940–M949), tous attrapés :
+Après les relectures 5.5 (27/10), onze de plus (M940–M949, M955), tous attrapés :
 
 | Mutant | Défaut réinjecté | Effet |
 |---|---|---|

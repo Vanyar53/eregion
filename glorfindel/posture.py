@@ -102,7 +102,11 @@ class PostureChecker:
     def _escalate_orphan_rules(self) -> None:
         """One card per Glorfindel rule whose NIC no longer exists (seventh review, U1):
         an isolation or a block of a deleted VM, aimed at an IP that another NIC may now
-        hold — that NIC is cut off. An alert for now; nothing is removed by itself."""
+        hold — that NIC is cut off. The alert first; then, when the rule cuts a live VM
+        off behind its NSG and nothing says its NIC may still exist, the rule is taken
+        off (A3) — whatever the autonomy mode: it answers no incident, it gives a VM
+        back the network its owner designed. The card says what was done; read-only
+        credentials leave it at the alert."""
         if self._dry_run or self._connector is None:
             return
         try:
@@ -112,26 +116,44 @@ class PostureChecker:
             logging.getLogger(__name__).warning("posture: orphan rules not checked (%s)", exc)
             return
         from glorfindel import escalations
+        can_remove = getattr(self._connector, "read_only", False) is False
         for o in orphans:
             from glorfindel.actions import _parse_nsg_resource_id
             nsg_rg, nsg_name = _parse_nsg_resource_id(o["nsg_id"])
-            hit = o["now_on"][0] if o["now_on"] else None
+            # `cut`: the holders this NSG governs now (A3). A connector that doesn't say
+            # counts every holder as cut, as before.
+            cut = o.get("cut", o["now_on"])
+            hit = (cut or o["now_on"] or [None])[0]
             if hit:
                 victim = (hit["vm_id"] or hit["nic_id"]).rstrip("/").rsplit("/", 1)[-1]
                 reason = (f"Règle {o['rule']} ({nsg_name}) : laissée par une carte qui n'existe plus, elle "
-                          f"vise {hit['ip']} — adresse de {victim} aujourd'hui, qui est donc coupé(e).")
+                          f"vise {hit['ip']} — adresse de {victim} aujourd'hui, "
+                          + ("qui est donc coupé(e)." if cut else
+                             "que ce NSG ne gouverne pas : coupé(e) s'il passe derrière."))
             else:
                 reason = (f"Règle {o['rule']} ({nsg_name}) : laissée par une carte qui n'existe plus "
                           f"(vise {', '.join(o['ips']) or '*'}). Aucune carte ne porte cette adresse aujourd'hui.")
-            escalations.record(
+            card = escalations.record(
                 signal_id=f"orphan-{o['nsg_id']}/{o['rule']}",
                 resource_id=(hit["vm_id"] or o["nsg_id"]) if hit else o["nsg_id"],
                 action="remove_orphan_rule",
                 escalation_type="orphan_rule",
                 reason=reason,
                 suggested_steps=[f"az network nsg rule delete -g {nsg_rg} --nsg-name {nsg_name} -n {o['rule']}"],
-                severity="high" if hit else "medium",
+                severity="high" if cut else "medium",
             )
+            if not (can_remove and o.get("removable") is True):
+                continue
+            try:
+                out = self._connector.remove_orphan_rule(o)
+            except Exception as exc:
+                out = {"removed": False, "why": str(exc)}
+            if isinstance(out, dict) and out.get("removed") is True:
+                escalations.resolve(card, note=f"Règle {o['rule']} retirée par Glorfindel (A3).")
+            else:
+                import logging
+                why = out.get("why") if isinstance(out, dict) else out
+                logging.getLogger(__name__).warning("posture: orphan rule %s not removed (%s)", o["rule"], why)
 
     def _excluded(self, asset_name: str) -> bool:
         is_excluded = getattr(self._cfg, "is_excluded", None)

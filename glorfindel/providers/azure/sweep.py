@@ -1,11 +1,11 @@
 """`glorfindel reset`'s sweep of a VM's rules, and the orphan rules no NIC owns any
-more (moved from actions.py, A1).
+more (moved from actions.py, A1) — found, and taken off when they cut a live VM (A3).
 """
 from __future__ import annotations
 
 from glorfindel.providers.azure.nsg import _nic_hash, _nic_owns, _rule_name
 from glorfindel.providers.azure.sdk import _enum_text
-from glorfindel.response.ids import _parse_vm_resource_id, _same_id
+from glorfindel.response.ids import _parse_vm_resource_id, _same_id, _subscription_of
 from glorfindel.response.policy import _ERR_MAX, _first_line
 from glorfindel.response.state import (
     _clear_block_state,
@@ -220,36 +220,119 @@ class SweepMixin:
         the next NIC — which is then cut off. Our names end with the hash of the NIC's id:
         a rule whose hash matches no NIC of the subscription is an orphan. Each one comes
         with the NIC (and VM) that now holds an address it targets, if any. Older names
-        (before the hash) can't be told apart and are not reported. Raises if the NICs
-        or NSGs can't be listed — no orphan is not the same as unknown."""
+        (before the hash) end with a NIC's or a VM's name, or a hash of the id as Azure
+        wrote it: those of a live NIC are not orphans. Raises if the NICs or NSGs can't
+        be listed — no orphan is not the same as unknown.
+
+        Each orphan also says whether the sweep may take it off (A3): `removable`, with
+        `cut` — the live NICs it cuts off now, behind this NSG — or `kept`, why not."""
         if self.dry_run:
             return []
         self._ensure_clients()
+        import hashlib
         marks: set[str] = set()
+        live_names: set[str] = set()
+        listed: set[str] = set()
         holders: dict[str, tuple[str, str]] = {}
+        nic_nsg: dict[str, str] = {}
+        nic_subnets: dict[str, set[str]] = {}
         for nic in self._network.network_interfaces.list_all():
             nid = nic.id.rstrip("/").lower()
-            marks |= {_nic_hash(nid, 6), _nic_hash(nid, 8)}
+            listed.add(nid)
+            marks |= {_nic_hash(nid, 6), _nic_hash(nid, 8),
+                      hashlib.sha1(nic.id.rstrip("/").encode()).hexdigest()[:8]}
             vm_id = getattr(getattr(nic, "virtual_machine", None), "id", None) or ""
+            live_names |= {ref.rstrip("/").rsplit("/", 1)[-1].rsplit("-", 1)[-1].lower()
+                           for ref in (nic.id, vm_id) if ref}
+            nic_nsg[nid] = (getattr(getattr(nic, "network_security_group", None), "id", None) or "").rstrip("/").lower()
             for cfg in (nic.ip_configurations or []):
                 ip = getattr(cfg, "private_ip_address", None)
                 if ip:
                     holders[ip] = (nic.id, vm_id)
+                subnet = getattr(getattr(cfg, "subnet", None), "id", None)
+                if subnet:
+                    nic_subnets.setdefault(nid, set()).add(subnet.rstrip("/").lower())
+        state_nics = self._state_nic_marks()
+        gone: dict[str, str | None] = {}      # mark of a NIC in our state → None (gone) or why kept
         orphans: list[dict] = []
         for nsg in self._network.network_security_groups.list_all():
+            nsg_key = nsg.id.rstrip("/").lower()
+            subnets = {s.id.rstrip("/").lower() for s in (getattr(nsg, "subnets", None) or []) if getattr(s, "id", None)}
+            attached = {n.id.rstrip("/").lower() for n in (getattr(nsg, "network_interfaces", None) or [])
+                        if getattr(n, "id", None)}
             for r in (nsg.security_rules or []):
                 name = _rule_name(r).lower()
                 if (not name.startswith(("glorfindel-iso-", "glorfindel-block-"))
                         or _enum_text(getattr(r, "access", "")) != "deny"):
                     continue
                 mark = (name[:-4] if name.endswith("-out") else name).rsplit("-", 1)[-1]
-                if len(mark) not in (6, 8) or any(c not in "0123456789abcdef" for c in mark) or mark in marks:
+                if (len(mark) not in (6, 8) or any(c not in "0123456789abcdef" for c in mark)
+                        or mark in marks or mark in live_names):
                     continue
+                if mark in state_nics:
+                    if mark not in gone:
+                        gone[mark] = self._state_nic_gone(state_nics[mark])
+                    if gone[mark] == "alive":
+                        continue          # a NIC of our state, missing from the listing: not an orphan
                 side = "destination" if _enum_text(getattr(r, "direction", "")) == "inbound" else "source"
                 single = getattr(r, f"{side}_address_prefix", None)
                 ips = [v for v in ([single] if single else []) + list(getattr(r, f"{side}_address_prefixes", None) or [])
                        if v and v != "*"]
                 now_on = [{"ip": ip, "nic_id": holders[ip][0], "vm_id": holders[ip][1]}
                           for ip in ips if ip in holders]
-                orphans.append({"nsg_id": nsg.id, "rule": _rule_name(r), "ips": ips, "now_on": now_on})
+                cut = [h for h in now_on if nic_nsg.get(h["nic_id"].rstrip("/").lower()) == nsg_key
+                       or nic_subnets.get(h["nic_id"].rstrip("/").lower(), set()) & subnets]
+                kept = ""
+                if not cut:
+                    kept = "ne coupe aucune carte vivante derrière ce NSG"
+                elif attached - listed:
+                    kept = "une carte attachée à ce NSG manque à la liste des cartes (droits de lecture ?)"
+                elif mark in state_nics and gone.get(mark):
+                    kept = gone[mark]
+                elif _subscription_of(nsg.id).lower() != (self._subscription_id or "").lower():
+                    kept = "NSG d'un autre abonnement"
+                orphans.append({"nsg_id": nsg.id, "rule": _rule_name(r), "ips": ips, "now_on": now_on,
+                                "cut": cut, "removable": not kept, "kept": kept})
         return orphans
+
+    @staticmethod
+    def _state_nic_marks() -> dict[str, str]:
+        """The hash marks of every NIC our local state names (isolations, blocks)."""
+        from glorfindel.response.state import active_blocks, active_isolations
+        out: dict[str, str] = {}
+        for entry in active_isolations() + active_blocks():
+            for p in entry.get("placements") or []:
+                nid = (p.get("nic_id") or "").rstrip("/")
+                if nid:
+                    for mark in (_nic_hash(nid, 6), _nic_hash(nid, 8)):
+                        out.setdefault(mark, nid)
+        return out
+
+    def _state_nic_gone(self, nic_id: str) -> str | None:
+        """A NIC our state names, that the listing doesn't have: None if Azure says it
+        is gone; "alive" if it is there (the listing missed it); else why it's unknown."""
+        from glorfindel.providers.azure.sdk import _is_not_found
+        from glorfindel.response.ids import _parse_nic_resource_id
+        try:
+            self._network.network_interfaces.get(*_parse_nic_resource_id(nic_id))
+            return "alive"
+        except Exception as exc:
+            if _is_not_found(exc):
+                return None
+            return f"carte {nic_id.rsplit('/', 1)[-1]} de l'état illisible ({_first_line(exc)[:_ERR_MAX]})"
+
+    def remove_orphan_rule(self, orphan: dict) -> dict:
+        """Take off one rule find_orphan_rules found removable (U1, A3): a deny of a NIC
+        that no longer exists, aimed at an address a live NIC holds now, on an NSG that
+        governs it — that VM is cut off by a rule no one owns. Only that one rule, by
+        its name; anything else is said, never guessed. {"removed": bool, "why": str}."""
+        if self.dry_run:
+            return {"removed": False, "why": "dry_run"}
+        if not orphan.get("removable"):
+            return {"removed": False, "why": orphan.get("kept") or "non retirable"}
+        self._guard_write("remove_orphan_rule")
+        self._ensure_clients()
+        from glorfindel.response.ids import _parse_nsg_resource_id
+        nsg_rg, nsg_name = _parse_nsg_resource_id(orphan["nsg_id"])
+        err = self._delete_rule(nsg_rg, nsg_name, orphan["rule"])
+        return {"removed": err is None, "why": err or ""}

@@ -403,3 +403,21 @@ def test_a_reset_sweeps_the_original_it_puts_back(monkeypatch):
          ("isolate", WEB1, WEB1, None),
          ("someone_detaches_the_quarantine", _nic("rg-app1", "web-nic")),
          ("reset_from_azure", WEB1, WEB1, None))
+
+
+def test_a_vm_given_an_isolated_deleted_vms_address_is_freed_by_the_sweep(monkeypatch):
+    """A3, the criterion of the lot: `web` (group 1) isolated by rules on the subnet NSG,
+    deleted after losing its state; a new VM gets 10.0.0.4 behind that NSG and is cut off
+    by web's rule. The posture pass takes it off — nothing else — and teardown checks
+    every live VM is back to its design in full."""
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_net(subnet_nsg=[]))
+        m.address_reused(Script(WEB1, WEB1, None, True, True, "rg-new", "batch", None, "Linux", False))
+        assert m._cutting_orphans(), "the new VM should be cut off by web's rule"
+        m.orphan_sweep(Script(None))
+        assert not m._cutting_orphans()
+        m.orphans_are_reported()
+    finally:
+        m.teardown()

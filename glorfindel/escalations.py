@@ -167,8 +167,9 @@ def record(
     return esc["id"]
 
 
-def resolve(escalation_id: str) -> None:
-    """Mark an escalation as resolved."""
+def resolve(escalation_id: str, note: str = "") -> None:
+    """Mark an escalation as resolved — `note`: what resolved it, when Glorfindel did
+    (an orphan rule taken off, A3)."""
     if not _STORE.exists():
         return
     lines = _STORE.read_text().splitlines()
@@ -178,6 +179,8 @@ def resolve(escalation_id: str) -> None:
         if e["id"] == escalation_id:
             e["status"] = "resolved"
             e["resolved_at"] = datetime.now(timezone.utc).isoformat()
+            if note:
+                e["resolution"] = note
         updated.append(json.dumps(e, default=str))
     _STORE.write_text("\n".join(updated) + "\n")
 

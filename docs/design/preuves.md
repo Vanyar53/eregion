@@ -703,6 +703,51 @@ de la cible et le réseau lèvent, et chaque tentative est notée. Trente mutant
 | M758 | un fichier local vivant compte malgré le canal | une watch locale prise pour la watch hébergée |
 | M759 | la console compte une campagne sans Glorfindel en `unknown` | un run de dév pris pour un trou |
 
+### Le journal d'activité, détection seule (AL1)
+
+Un faux `AzureActivity` (des lignes comme celles de la table, rendues par la requête du
+détecteur parent) traverse le vrai `AzureActivityDetector`, le RulePoller et le graphe, modèle
+simulé. Trente-cinq mutants (M810–M829, puis M850–M859 et M890–M894 après les relectures 5.5), mesurés par
+`tests/unit/test_activity_logs.py`, tous attrapés (27/10).
+
+| Mutant | Défaut réinjecté | Effet |
+|---|---|---|
+| M810 | les écritures de Glorfindel ne sont pas écartées | sa propre isolation s'escalade |
+| M811 | le plan de contrôle décidé par le modèle | il est appelé, et `isolate_vm` part |
+| M812 | un jeton d'utilisateur sans `idtyp` lu comme celui d'une application | l'`appid` de la CLI écarte tout le monde |
+| M813 | une carte du plan de contrôle fusionnée dans la précédente | l'écriture sur une règle de Glorfindel, invisible |
+| M814 | la décision ignore la source lue | `respond` demande au modèle |
+| M815 | le type `control_plane_change` perdu | carte `low_confidence`, approuvable en un clic |
+| M816 | une règle `glorfindel-*` pas vue comme sienne | le cas le plus grave, banal |
+| M817 | le NSG de quarantaine pas vu comme sien | idem |
+| M818 | son identité écartée quoi qu'elle fasse sur ce qui est à lui | un rôle attribué sous son identité, jamais vu |
+| M819 | l'identité du jeton ignorée | ses écritures s'escaladent |
+| M820 | les identifiants de `Claims` ignorés | idem, pour un principal de service |
+| M821 | l'appelant comparé à la casse près | idem |
+| M822 | déduplication par ligne | `Start` puis `Success` : deux détections |
+| M823 | une règle plus courte que la latence, en silence | les lignes en retard jamais vues |
+| M824 | la règle NSG livrée regarde 10 minutes | idem |
+| M825 | une sous-ressource de VM non attribuée | un rôle sur la VM ignoré |
+| M826 | la ligne la plus récente d'abord, avant l'écriture sur une règle de Glorfindel | le cas grave après les autres, ou dans la synthèse |
+| M827 | l'écriture sur une règle de Glorfindel pas critique | sévérité banale |
+| M828 | une ligne du plan de contrôle normalisée comme une IP | ni opération ni appelant |
+| M829 | une règle `azure_activity` liée à aucun backend | désactivée, elle ne tourne jamais |
+| M850 | jeton d'utilisateur : l'`appid` de la CLI pris pour celui de Glorfindel | toute écriture faite avec `az` écartée |
+| M851 | son identité sur une règle du client écartée | un credential volé, invisible |
+| M852 | une règle du client décalée par une isolation pas vue comme sienne | sa levée s'escalade, critique |
+| M853 | une carte par relevé sur le plan de contrôle | les autres opérations marquées envoyées, jamais vues |
+| M854 | au-delà du plafond, pas de carte de synthèse | des opérations marquées envoyées sans carte |
+| M855 | un bouton sur une carte ancrée sur une VM | un clic restaure une VM que la détection ne nomme pas |
+| M856 | la décision du plan de contrôle recommande d'isoler | « Recommandé : isoler » sur la VM d'ancrage |
+| M857 | un signal non attribué ouvre l'incident de la VM d'ancrage | le cycle suivant y lit « 2 signaux » |
+| M858 | un cycle du plan de contrôle dans la mémoire de décision | un précédent servi au plan de données |
+| M859 | ce qu'un état d'isolation attribuait, oublié avec l'état | la ligne de la levée s'escalade |
+| M890 | un nom `glorfindel-*` suffit à faire une règle sienne | un credential volé cache une autorisation derrière |
+| M891 | les états de blocage ignorés | son propre blocage s'escalade |
+| M892 | l'abonnement hors de la clé d'une règle | les mêmes noms ailleurs pris pour les siens |
+| M893 | une ligne `AzureActivity` lue par une autre source va au modèle | un snapshot part seul |
+| M894 | une règle du plan de contrôle sans `CorrelationId`, en silence | deux opérations n'en font qu'une |
+
 ### L'IA d'analyse : son modèle, sa mémoire, le tri, rien sans un humain (IA1)
 
 L'IA d'analyse refuse le modèle de décision de Glorfindel et toute mémoire rangée dans son état

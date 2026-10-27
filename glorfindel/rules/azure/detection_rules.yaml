@@ -175,3 +175,103 @@ rules:
       | where not(Account in ("azuremetricsext", "azureotelcollector") and NoLogin)
       | project TimeGenerated, Computer, _ResourceId, Facility, SeverityLevel, ProcessName, SyslogMessage
       | order by TimeGenerated desc
+
+  # ── Plan de contrôle : le journal d'activité (AzureActivity, AL1) ─────────────
+  # Détection seule : une détection sur AzureActivity n'entraîne JAMAIS d'action
+  # autonome — `decide` construit la décision par le code, sans appel au modèle :
+  # escalade `control_plane_change`, aucune action recommandée.
+  # source: azure_activity lit le même workspace que Perf et Syslog (backend
+  # azure_monitor), à condition que le journal d'activité de l'abonnement y soit envoyé
+  # (paramètre de diagnostic, catégorie Administrative — pas par défaut ;
+  # infra/terraform/activity_log.tf le propose pour le banc).
+  # Les écritures de Glorfindel lui-même (isolation, quarantaine, blocage, levée) sont
+  # écartées par l'adaptateur (glorfindel/providers/azure/activity.py) : son identité
+  # (jeton, AZURE_CLIENT_ID, GLORFINDEL_OWN_CALLERS) ET une opération qu'il fait ET une
+  # cible qui est à lui (NSG de quarantaine, règle qu'un état d'isolation ou de
+  # blocage nomme — un nom glorfindel-* seul ne suffit pas). Son identité hors de ce
+  # qu'il fait, ou sur une ressource du client, reste, marquée GlorfindelIdentity ; une écriture d'un autre sur une règle
+  # de Glorfindel est marquée GlorfindelManaged (sévérité critique, toutes deux).
+  # Chaque opération a sa carte (plafond par relevé, puis une carte de synthèse).
+  # Latence d'ingestion : plusieurs minutes, parfois plus de dix (hypothèse, à mesurer
+  # sur le banc) — la fenêtre est d'une heure ; la déduplication suit l'opération
+  # (CorrelationId, opération, ressource), une ligne arrivée en retard n'est ni ratée ni
+  # redéclenchée. Les identifiants de l'appelant (CallerAppId, CallerObjectId) sont tirés
+  # de Claims, que la règle ne projette pas.
+
+  - name: nsg-change-outside-glorfindel
+    description: >
+      Modification d'un NSG ou d'une de ses règles par un autre appelant que Glorfindel —
+      T1562.007 (Impair Defenses: Disable or Modify Cloud Firewall). Le cas le plus grave :
+      une règle gérée par Glorfindel (isolation, quarantaine, blocage) écrite par un autre.
+    enabled: true
+    source: azure_activity
+    ttp: T1562.007
+    assets: [auto]
+    interval_s: 60
+    expected_latency_s: 1200
+    query: |
+      AzureActivity
+      | where TimeGenerated > ago(1h)
+      | where OperationNameValue in~ (
+          "MICROSOFT.NETWORK/NETWORKSECURITYGROUPS/WRITE",
+          "MICROSOFT.NETWORK/NETWORKSECURITYGROUPS/DELETE",
+          "MICROSOFT.NETWORK/NETWORKSECURITYGROUPS/SECURITYRULES/WRITE",
+          "MICROSOFT.NETWORK/NETWORKSECURITYGROUPS/SECURITYRULES/DELETE")
+      | extend CallerAppId = tostring(parse_json(Claims).appid),
+               CallerObjectId = tostring(parse_json(Claims)["http://schemas.microsoft.com/identity/claims/objectidentifier"])
+      // One row per operation, its latest line (Start, Accept, Success).
+      | summarize arg_max(TimeGenerated, *) by CorrelationId, OperationNameValue, _ResourceId
+      | where ActivityStatusValue !in~ ("Failure", "Failed")
+      | project TimeGenerated, OperationNameValue, ActivityStatusValue, Caller, CallerIpAddress,
+                CallerAppId, CallerObjectId, _ResourceId, ResourceGroup, CorrelationId
+
+  - name: role-assignment-write
+    description: >
+      Attribution d'un rôle Azure (RBAC) — T1098.003 (Account Manipulation: Additional
+      Cloud Roles). Glorfindel n'en fait jamais : sous son identité, c'est la plus grave.
+      Un pipeline légitime (Terraform) s'exclut dans la couche du client.
+    enabled: true
+    source: azure_activity
+    ttp: T1098.003
+    assets: [auto]
+    interval_s: 60
+    expected_latency_s: 1200
+    query: |
+      AzureActivity
+      | where TimeGenerated > ago(1h)
+      | where OperationNameValue =~ "MICROSOFT.AUTHORIZATION/ROLEASSIGNMENTS/WRITE"
+      | extend CallerAppId = tostring(parse_json(Claims).appid),
+               CallerObjectId = tostring(parse_json(Claims)["http://schemas.microsoft.com/identity/claims/objectidentifier"])
+      | summarize arg_max(TimeGenerated, *) by CorrelationId, OperationNameValue, _ResourceId
+      | where ActivityStatusValue !in~ ("Failure", "Failed")
+      | project TimeGenerated, OperationNameValue, ActivityStatusValue, Caller, CallerIpAddress,
+                CallerAppId, CallerObjectId, _ResourceId, ResourceGroup, CorrelationId
+
+  - name: snapshot-by-unexpected-caller
+    description: >
+      Snapshot d'un disque, ou accès de téléchargement à un disque ou un snapshot, par un
+      appelant — T1578.001 (Modify Cloud Compute Infrastructure: Create Snapshot). Hypothèse,
+      à mesurer au banc : le snapshot de Glorfindel (une sauvegarde Azure Backup) et un
+      `glorfindel restore` ne passeraient pas par cette opération — Azure Backup peut
+      pourtant produire `disks/beginGetAccess` ou `snapshots/write` ; mesuré, l'appelant
+      d'Azure Backup s'exclut dans la couche du client, comme un outil de sauvegarde par
+      snapshots.
+    enabled: true
+    source: azure_activity
+    ttp: T1578.001
+    assets: [auto]
+    interval_s: 60
+    expected_latency_s: 1200
+    query: |
+      AzureActivity
+      | where TimeGenerated > ago(1h)
+      | where OperationNameValue in~ (
+          "MICROSOFT.COMPUTE/SNAPSHOTS/WRITE",
+          "MICROSOFT.COMPUTE/SNAPSHOTS/BEGINGETACCESS/ACTION",
+          "MICROSOFT.COMPUTE/DISKS/BEGINGETACCESS/ACTION")
+      | extend CallerAppId = tostring(parse_json(Claims).appid),
+               CallerObjectId = tostring(parse_json(Claims)["http://schemas.microsoft.com/identity/claims/objectidentifier"])
+      | summarize arg_max(TimeGenerated, *) by CorrelationId, OperationNameValue, _ResourceId
+      | where ActivityStatusValue !in~ ("Failure", "Failed")
+      | project TimeGenerated, OperationNameValue, ActivityStatusValue, Caller, CallerIpAddress,
+                CallerAppId, CallerObjectId, _ResourceId, ResourceGroup, CorrelationId

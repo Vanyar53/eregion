@@ -2351,6 +2351,15 @@ MUTANTS += [
 ]
 TESTS.update({f"M{n}": HY1_GUARD for n in (950, 951, 952)})
 TESTS.update({f"M{n}": HY1_SECRETS for n in (953, 954)})
+# The identifier hooks read their denylist from git's common directory: from --git-dir they
+# found no list in a worktree and let everything through (27/10).
+MUTANTS += [
+    ("M903", "pre-commit reads its denylist from --git-dir again: nothing checked in a worktree", ".githooks/pre-commit",
+     'denylist="$(git rev-parse --git-common-dir)/infra-denylist.txt"', 'denylist="$(git rev-parse --git-dir)/infra-denylist.txt"'),
+    ("M904", "commit-msg reads its denylist from --git-dir again: nothing checked in a worktree", ".githooks/commit-msg",
+     'denylist="$(git rev-parse --git-common-dir)/infra-denylist.txt"', 'denylist="$(git rev-parse --git-dir)/infra-denylist.txt"'),
+]
+TESTS.update({f"M{n}": "tests/unit/test_githooks.py" for n in (903, 904)})
 
 # N1 (#242): the workshop's news in Discord, scripts/notify_discord.py, measured by its tests
 # against a fake Discord (tests/unit/test_notify_discord.py). Range M970–M979.

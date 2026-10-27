@@ -32,7 +32,7 @@ Ce qui ne mérite rien n'envoie rien : un run vert sur une PR, un run annulé, u
 ## Mise en place (Jonathan, une fois)
 
 **1. Discord, dans l'UI.**
-- Une catégorie **Atelier**, avec :
+- Une catégorie (chez Jonathan : **Eregion**, qui tient aussi le salon de la défense, `#glorfindel`), avec :
   - `#ci`, `#agents`, `#roadmap`, `#deploy` (salons textuels) ;
   - `#lots` (salon **forum**).
 - Dans `#lots` → Paramètres → Étiquettes, ces dix étiquettes, écrites ainsi :
@@ -43,14 +43,15 @@ Ce qui ne mérite rien n'envoie rien : un run vert sur une PR, un run annulé, u
 **2. Le bot « Atelier »**, une seconde application, pas celle de Glorfindel :
 - https://discord.com/developers/applications → New Application « Eregion Atelier » → Bot → Reset Token (copier le jeton). Aucun intent privilégié n'est nécessaire.
 - OAuth2 → URL Generator : scope `bot`, **aucune permission** cochée (permissions=0). Ouvrir l'URL et inviter le bot.
-- Catégorie Atelier → Modifier → Permissions → ajouter le bot, et autoriser seulement :
+- Catégorie → Modifier → Permissions → ajouter le bot, et autoriser seulement :
   - Voir le salon ;
   - Envoyer des messages (créer un post de forum) ;
   - Envoyer des messages dans les fils ;
   - Gérer les fils ;
   - Lire l'historique ;
   - Intégrer des liens.
-- Le bot ne reçoit rien au niveau du serveur. Il ne voit ailleurs que ce que `@everyone` voit : si le salon de la défense doit lui rester fermé, qu'il soit privé.
+- **Si le salon de la défense est dans la même catégorie**, y refuser au bot Atelier « Voir le salon ». Un refus posé sur le salon pour ce membre l'emporte sur l'autorisation de la catégorie. Ne pas resynchroniser ce salon avec la catégorie : le bot de Glorfindel y garde ses droits.
+- Le bot ne reçoit rien au niveau du serveur. Ailleurs, il ne voit que ce que `@everyone` voit.
 - **Mode développeur** (Paramètres → Avancés). Clic droit sur `#lots` → Copier l'identifiant du salon. Clic droit sur ton nom → Copier l'identifiant de l'utilisateur.
 
 **3. Les secrets.** Ce sont des URL et des jetons : jamais dans le dépôt (public), jamais sur H0. `host_env.py` ne recopie aucune variable `ATELIER_*`.

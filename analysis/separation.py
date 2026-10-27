@@ -69,17 +69,22 @@ def check_collection(name: str) -> str:
     return name
 
 
+REFUSED = 2   # the exit code of a refusal, apart from an error (1)
+
+
 def main() -> int:
     """``python -m analysis.separation``: does the analysis AI, where it runs, reason with
-    another model than Glorfindel's? 0 when it does, else 1 and what to set. ``make
-    glorfindel-host-model`` runs it in H0's watch: a model shared with the analysis there
-    makes every campaign report refused (and given up after 3 attempts)."""
+    another model than Glorfindel's? 0 when it does; ``REFUSED`` (2) when it does not, and
+    what to set — 1 stays Python's own, an error (an image before IA1 has no such module).
+    ``make glorfindel-host-model`` runs it in H0's watch and gives its advice on 2 only: a
+    model shared with the analysis there makes every campaign report refused (and given up
+    after 3 attempts)."""
     from eregion_core.models import analysis_model
     try:
         check_model(analysis_model())
     except SharedWithGlorfindel as e:
         print(f"  ⚠ les rapports et les tris de campagne seront refusés : {e}")
-        return 1
+        return REFUSED
     print(f"  ✓ l'IA d'analyse raisonne avec un autre modèle ({analysis_model()})")
     return 0
 

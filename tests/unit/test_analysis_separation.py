@@ -73,8 +73,8 @@ def test_the_end_of_a_campaign_run_says_what_to_set(monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize("glorfindel, analysis, code", [
-    ("anthropic/claude-haiku-5-5", "", 1),                       # the analysis' default, taken
-    ("anthropic/claude-sonnet-5-5", "claude-sonnet-5-5", 1),
+    ("anthropic/claude-haiku-5-5", "", 2),                       # the analysis' default, taken
+    ("anthropic/claude-sonnet-5-5", "claude-sonnet-5-5", 2),
     ("anthropic/claude-haiku-5-5", "anthropic/claude-opus-4-7", 0),
     ("", "", 0),                                                 # both defaults: two models
 ])
@@ -86,15 +86,40 @@ def test_the_check_said_after_a_change_of_glorfindel_s_model(monkeypatch, capsys
             monkeypatch.setenv(name, value)
         else:
             monkeypatch.delenv(name, raising=False)
-    assert separation.main() == code
+    assert separation.main() == code and separation.REFUSED == 2   # 1 is Python's: an error
     out = capsys.readouterr().out
     assert ("EREGION_ANALYSIS_MODEL" in out) is bool(code)
 
 
-def test_glorfindel_host_model_runs_the_check_in_the_watch():
+_CHECK = "docker exec eregion-watch python -m analysis.separation"
+
+
+def _check_group() -> str:
+    """The recipe's part that runs the check in H0's watch, as the remote shell gets it."""
     make = (ANALYSIS.parent / "Makefile").read_text(encoding="utf-8")
     recipe = make.split("\nglorfindel-host-model:", 1)[1].split("\n\n", 1)[0]
-    assert "docker exec eregion-watch python -m analysis.separation ||" in recipe
+    group = recipe[recipe.index("{ " + _CHECK):]
+    group = group[:group.index("true; }") + len("true; }")]
+    return group.replace("\\\n", "\n").replace("$$", "$")
+
+
+@pytest.mark.parametrize("rc, said", [
+    (0, ""),                                            # another model: nothing to add
+    (2, "pose EREGION_ANALYSIS_MODEL"),                 # refused: what to set
+    (1, "contrôle de séparation indisponible"),         # an error (an image before IA1)
+])
+def test_glorfindel_host_model_advises_on_a_refusal_only_and_never_fails(rc, said):
+    """`make glorfindel-host-model` runs the check in H0's watch after the restart: its
+    advice on exit 2 (a refusal) only; an error (1) is said apart; the target never fails on
+    it. Played with a stand-in for the check, nothing sent to H0."""
+    import subprocess
+    group = _check_group()
+    assert _CHECK in group
+    out = subprocess.run(["sh", "-c", group.replace(_CHECK, f"(exit {rc})")],
+                         capture_output=True, text=True)
+    assert out.returncode == 0
+    assert ("pose EREGION_ANALYSIS_MODEL" in out.stdout) is (rc == 2)
+    assert (said in out.stdout) if said else out.stdout == ""
 
 
 def test_the_campaign_run_container_knows_glorfindel_s_model():

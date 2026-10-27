@@ -300,8 +300,9 @@ seulement, avec sa provenance) : changer de modèle, c'est changer qui décide.
 3. `make glorfindel-host-model MODEL=anthropic/<candidat>` — le pose dans `host.env` et sur
    la VM, redémarre Glorfindel, affiche le modèle en service ; Config dans la console dit
    « set at deployment (GLORFINDEL_LLM_MODEL) ». `MODEL=default` revient au défaut du code.
-   Il dit aussi si l'IA d'analyse raisonne encore avec un autre modèle (IA1) : le modèle de
-   Glorfindel est refusé pour les rapports de campagne. S'ils se croisent, poser
+   Il dit aussi si l'IA d'analyse raisonne encore avec un autre modèle (IA1 ; le contrôle ne
+   fait jamais échouer la cible) : le modèle de Glorfindel est refusé pour les rapports de
+   campagne. S'ils se croisent, poser
    `EREGION_ANALYSIS_MODEL=<un autre>` dans `host.env` et dans `~/eregion/.env` sur la VM, puis
    `docker compose up -d watch` (`docs/analysis.md`).
 

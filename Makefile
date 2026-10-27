@@ -567,7 +567,8 @@ glorfindel-host-pull:
 # VM's .env, then a restart. MODEL=default goes back to the code default (eregion_core/models.py).
 # Compare it first (make llm-compare) and run it end to end — README, « Changer de modèle ».
 # IA1: then says whether the analysis AI still reasons with another model (analysis/separation.py):
-# Glorfindel's model shared with the analysis makes every campaign report refused on H0.
+# Glorfindel's model shared with the analysis makes every campaign report refused on H0. Its
+# advice on a refusal (exit 2) only; an error (1, an image before IA1) is said; never fails.
 glorfindel-host-model:
 	@test -n "$(MODEL)" || { echo "MODEL=anthropic/<modèle> requis (ou MODEL=default)"; exit 1; }
 	@case "$(MODEL)" in *[!A-Za-z0-9._/:-]*) echo "MODEL invalide : $(MODEL)"; exit 1;; esac
@@ -578,8 +579,10 @@ glorfindel-host-model:
 	 { [ "$(MODEL)" = default ] || echo "GLORFINDEL_LLM_MODEL=$(MODEL)" >> .env; } && \
 	 docker compose --profile bot up -d watch war-room bot >/dev/null 2>&1 && sleep 5 && \
 	 docker exec eregion-watch python -c "from eregion_core.models import glorfindel_model; print(\"  ✓ Glorfindel décide maintenant avec\", glorfindel_model())" && \
-	 { docker exec eregion-watch python -m analysis.separation || \
-	   echo "  → pose EREGION_ANALYSIS_MODEL=<un autre modèle> dans host.env (ici) et dans ~/eregion/.env (VM), puis docker compose up -d watch — docs/analysis.md"; }'
+	 { docker exec eregion-watch python -m analysis.separation; rc=$$?; \
+	   [ $$rc -ne 2 ] || echo "  → pose EREGION_ANALYSIS_MODEL=<un autre modèle> dans host.env (ici) et dans ~/eregion/.env (VM), puis docker compose up -d watch — docs/analysis.md"; \
+	   [ $$rc -ne 1 ] || echo "  (contrôle de séparation indisponible sur cette image : avant IA1 ?)"; \
+	   true; }'
 
 glorfindel-host-report:
 	$(HOST_SSH) 'docker exec eregion-watch glorfindel report --since $(or $(SINCE),7d)'

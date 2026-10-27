@@ -1610,6 +1610,7 @@ MUTANTS += [
 # M760, M762, M763 by test_orphan_sweep.py too), the others by their unit tests (TESTS below).
 # The sweep left the posture pass for the watch's (orphans.py, D-B).
 ORP = "glorfindel/orphans.py"
+POS = "glorfindel/posture.py"
 RST = "glorfindel/providers/azure/restore.py"
 MUTANTS += [
     ("M760", "the orphan sweep alerts and never removes (A3, U1)", ORP,
@@ -1701,6 +1702,19 @@ MUTANTS += [
      "        if k in alerts:\n            continue", "        if False:\n            continue"),
     ("M887", "every orphan card closed at each pass, its rule standing (A3, D-B)", ORP,
      "    for k in [k for k in alerts if k not in current]:", "    for k in list(alerts):"),
+    # A3, second review (5.5): guards that were right, now locked.
+    ("M888", "the held VM compared by its exact id: a lowercase state misses it, its isolation lifted (A3)", SWP,
+     '            if any(_same_id(h.get("vm_id") or "", rid) for rid in held):',
+     '            if any((h.get("vm_id") or "") == rid for rid in held):'),
+    ("M889", "an unreadable configuration read as non_disruptive: the sweep writes on a guessed mode (A3, D-A)",
+     ORP, '        return "human_only" if autonomy is None else autonomy.resolve(name)',
+     '        return "non_disruptive" if autonomy is None else autonomy.resolve(name)'),
+    ("M700", "the reassertion off: nobody says the orphan rules any more, L28's alert lost (A3)", POS,
+     '        if getattr(self._connector, "read_only", False) is not True and _reassertion_on():',
+     '        if getattr(self._connector, "read_only", False) is not True:'),
+    ("M701", "a rule cutting VMs of different modes removed when one may act alone (A3, D-A)", ORP,
+     "                 and all(m in _ALONE for m in modes.values()))",
+     "                 and any(m in _ALONE for m in modes.values()))"),
 ]
 # L1F (#229): "already alerted" written before the card — a crash in between leaves the
 # marker without the card, and every later pass is silent on a block gone from Azure.
@@ -2136,6 +2150,7 @@ TESTS.update({f"M{n}": "tests/unit/test_orphan_sweep.py" for n in (776, 777, 778
 TESTS["M882"] = "tests/unit/test_config.py"
 TESTS["M884"] = "tests/unit/test_agent_nodes.py -k extension"
 TESTS["M885"] = "tests/unit/test_glorfindel.py -k extensions"
+TESTS.update({f"M{n}": "tests/unit/test_orphan_sweep.py" for n in (888, 889, 700, 701)})
 
 # L1F (#229): no liveness property on a vanished ISOLATION in the machine — its unit test.
 TESTS["M901"] = "tests/unit/test_reassert.py"

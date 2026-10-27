@@ -100,12 +100,14 @@ class PostureChecker:
         return all_gaps
 
     def _escalate_orphan_rules(self) -> None:
-        """The orphan rules (U1) on read-only credentials only: the watch's reassertion
-        pass, which sweeps them every minute whatever discovery does (A3, orphans.py),
-        doesn't run on them — here they are said, never taken off."""
+        """The orphan rules (U1) when the watch's reassertion pass, which sweeps them
+        every minute whatever discovery does (A3, orphans.py), doesn't run: read-only
+        credentials, or the reassertion turned off (GLORFINDEL_REASSERT_INTERVAL_S=0).
+        Here they are said, never taken off (autonomy None: the card only) — L28's
+        alert doesn't go with the reassertion (second review of A3)."""
         if self._dry_run or self._connector is None:
             return
-        if getattr(self._connector, "read_only", False) is not True:
+        if getattr(self._connector, "read_only", False) is not True and _reassertion_on():
             return
         from glorfindel.orphans import sweep_orphan_rules
         sweep_orphan_rules(self._connector, None)
@@ -410,6 +412,17 @@ class PostureChecker:
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _reassertion_on() -> bool:
+    """The watch's reassertion pass runs (cli.py reads the interval the same way: an
+    unreadable value is the default, 60 s; 0 or less turns it off)."""
+    import os
+    try:
+        every = float(os.environ.get("GLORFINDEL_REASSERT_INTERVAL_S", "60"))
+    except ValueError:
+        every = 60.0
+    return every > 0
+
 
 def _rg(resource_id: str) -> str:
     parts = resource_id.split("/")

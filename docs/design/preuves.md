@@ -765,19 +765,20 @@ et M834 suivent le code (la passe appelle `_whatever_the_state`).
 | M885 | Guest Configuration dans la liste blanche | le script d'une politique revient |
 | M886 | une orpheline redite à chaque passage | une carte par minute, l'acquittement perdu |
 | M887 | toute carte d'orpheline fermée à chaque passage | la règle reste, plus rien ne le dit |
+| M888 | la VM tenue comparée par son ID exact | un état en minuscules la manque : isolation levée |
+| M889 | config illisible lue `non_disruptive` | le balayage écrit sur un mode deviné |
+| M700 | réaffirmation coupée : la posture ne les dit plus | l'alerte de L28 perdue |
+| M701 | une règle qui coupe des VM de modes différents retirée si l'une le permet | `human_only` écrit |
 
 Correction après la première relecture, mesurée avant (`ae4f021`, A3 fusionné avec I1F et D1)
 et après, au même budget (500 séquences, 1 tour) : invariants à 500 et à 2 000 séquences verts
 (à 2 000, une fin de séquence balayait dans le mode `human_only` laissé par une règle précédente :
 séquence figée, la fin de séquence donne aux VM leur mode) ; M01–M41 21 sur 39 avant, 24 sur 39
-après ; jeu de contrôle C01–C16 12 sur 16 avant, 10 sur 16 après. Les écarts remesurés (tours
-attrapés sur tours joués, le tour simple compris ; trois tours de plus après pour M17, M26, C05) :
-M09 2/4 → 3/4, M17 3/4 → 6/7, M20 1/4 → 2/4, M21 1/4 → 2/4, M26 4/4 → 4/7, C05 3/4 → 2/7, C06
-1/4 → 1/4, C07 2/4 → 1/4, C16 3/4 → 3/4. Aucun mutant perdu : chacun reste attrapé des deux
-côtés ; M26, C05 et C07 le sont moins souvent après. Hypothèse, non vérifiée : la passe de
-réaffirmation fait désormais plus d'appels (la liste des NSG et des
-cartes, chaque minute) : les pannes tirées « au N-ième appel » tombent plus souvent sur eux, et
-moins sur l'isolation.
+après ; jeu de contrôle C01–C16 12 sur 16 avant, 10 sur 16 après. Les écarts remesurés par la
+seconde relecture, 500 séquences × 6 tours de chaque côté (avant `ae4f021`, après `06fa423`) :
+M26 3/6 → 6/6, C05 2/6 → 4/6, C07 0/6 (séquence figée seulement) → 1/6. L'hypothèse « plus
+d'appels par passe » testée directement (balayage retiré de la passe de la machine : C05 2/6,
+C07 3/6) n'est pas confirmée : c'est le tirage, aucune baisse réelle.
 
 ### « Déjà alerté » après la carte (L1F)
 

@@ -365,23 +365,27 @@ def _recreate_nic(f, vm, old_name, new_name):
     return new
 
 
+@pytest.mark.parametrize("rid", [WEB, WEB.lower(), WEB.replace("rg-app1", "RG-APP1").replace("web", "Web")],
+                         ids=["azure-case", "lowercase", "other-case"])
 @pytest.mark.parametrize("what", ["isolate", "block"])
-def test_the_rule_of_a_recreated_nic_of_a_vm_glorfindel_holds_stays(monkeypatch, what):
+def test_the_rule_of_a_recreated_nic_of_a_vm_glorfindel_holds_stays(monkeypatch, what, rid):
     """First review of A3 (high): web isolated (or blocked), its NIC recreated under it.
     The old NIC's rule has a hash no NIC has, and still holds what the state wants: it
-    is web's isolation, not an orphan to take off — kept, and the card says why."""
+    is web's isolation, not an orphan to take off — kept, and the card says why. The
+    state keeps the id it was given (Log Analytics' _ResourceId is lowercase), the
+    listing Azure's case: compared whatever the case (second review)."""
     f, c, subnet = _world(monkeypatch)
     if what == "isolate":
-        assert c.isolate_vm(WEB)["status"] == "isolated"
+        assert c.isolate_vm(rid)["status"] == "isolated"
     else:
-        assert c.block_suspicious_ip(ATTACKER, WEB, scope="vm", threat_port=None)["status"] == "blocked"
+        assert c.block_suspicious_ip(ATTACKER, rid, scope="vm", threat_port=None)["status"] == "blocked"
     _recreate_nic(f, WEB, "web-nic", "web-nic-v2")
     held = open_flows(_world_view(f), WEB)
     assert held != _designed(f, WEB)                # the old NIC's rule holds it still
     orphans = c.find_orphan_rules()
     assert orphans and all(o["cut"] and o["removable"] is False
                            and o["kept"] == "la VM visée (web) est isolée ou bloquée par Glorfindel" for o in orphans)
-    _watch_pass(c, "full_auto")
+    _watch_pass(c, "full_auto" if rid != WEB.lower() else "non_disruptive")
     assert open_flows(_world_view(f), WEB) == held
     assert _orphan_cards() and all("Gardée : la VM visée (web) est isolée" in e["reason"] for e in _orphan_cards())
 
@@ -440,3 +444,54 @@ def test_a_nic_of_our_state_unreadable_is_no_proof_it_is_gone(monkeypatch, statu
     before = _glorfindel_rules(f)
     _watch_pass(c, "full_auto")
     assert _glorfindel_rules(f) == before
+
+
+# ── A3, second review: the guards locked ─────────────────────────────────────────────
+
+def test_an_unreadable_config_writes_nothing(monkeypatch):
+    """D-A with the configuration unreadable (a key nobody reads): no mode can be read —
+    human_only, the card only, never a removal on a mode guessed (second review)."""
+    f, c, new = _cut_new_vm(monkeypatch)
+    before = _glorfindel_rules(f)
+    _config_file(monkeypatch, "autonomy:\n  default: non_disruptive\n  quarantaine: 1\n")
+    _watch_pass(c, None)
+    assert _glorfindel_rules(f) == before
+    assert _orphan_cards() and all(e["status"] == "pending" for e in _orphan_cards())
+
+
+def test_with_the_reassertion_off_the_posture_still_says_them(monkeypatch):
+    """GLORFINDEL_REASSERT_INTERVAL_S=0: the watch's pass doesn't run. The posture pass
+    keeps L28's alert — the card only, nothing written, write rights or not (second
+    review). With the reassertion on, the posture leaves them to the watch."""
+    f, c, new = _cut_new_vm(monkeypatch)
+    before = _glorfindel_rules(f)
+    monkeypatch.setenv("GLORFINDEL_REASSERT_INTERVAL_S", "60")
+    _posture_pass(c)
+    assert not _orphan_cards()
+    monkeypatch.setenv("GLORFINDEL_REASSERT_INTERVAL_S", "0")
+    _posture_pass(c)
+    assert _glorfindel_rules(f) == before
+    assert _orphan_cards() and all(e["status"] == "pending" for e in _orphan_cards())
+
+
+def test_a_rule_cutting_vms_of_different_modes_waits_for_every_one(monkeypatch):
+    """A rule of a gone NIC aimed at two live VMs' addresses: removed alone only when
+    every VM it cuts may act alone — one in human_only keeps it (second review)."""
+    f, c, subnet = _world(monkeypatch)
+    gone = nic_id("rg-old", "gone-nic")
+    name = "glorfindel-iso-gone-gone-nic-" + hashlib.sha1(gone.lower().encode()).hexdigest()[:6]
+    nsg = f.nsgs[key(f.subnets[key(subnet)]["nsg"])]
+    FakeAzure._put_rule(nsg, _rule_record(_rule(name, 300, dict(
+        access="Deny", direction="Inbound", source_address_prefix="*",
+        destination_address_prefixes=["10.0.0.4", "10.0.0.5"], destination_port_range="*"))))
+    (orphan,) = [o for o in c.find_orphan_rules() if o["rule"] == name]
+    assert orphan["removable"] is True and len(orphan["cut"]) == 2
+    path = _config_file(monkeypatch, "autonomy:\n  default: non_disruptive\n"
+                                     "  assets:\n    - match: app\n      mode: human_only\n")
+    _watch_pass(c, None)
+    assert (key(nsg["id"]), name) in {(k, n) for k, g in f.nsgs.items() for n in g["rules"]}
+    (card,) = _orphan_cards()
+    assert "app (human_only)" in card["reason"]
+    path.write_text("autonomy:\n  default: non_disruptive\n")
+    _watch_pass(c, None)
+    assert name not in nsg["rules"]

@@ -844,8 +844,15 @@ qu'on ne peut attribuer, est dite (`swept_partial`) au lieu d'être supprimée. 
 passait par le même chemin. La levée n'était pas touchée : elle remet la carte avant de lire.
 L'oracle n'y est pour rien : le test sait, par son propre journal, à quelle VM l'ancienne
 version a laissé cette règle. Les trois cas sont figés dans les régressions (le reset, la
-course telle que trouvée, la carte nue), mutants M960–M961. La machine en tire rarement la
-combinaison : une ancienne isolation, une VM créée sur ce NSG, sa quarantaine, puis son reset.
+course telle que trouvée, la carte nue), mutants M960–M961. Tirées une à une, les étapes ne se
+rencontraient presque jamais : sans aide, la machine n'attrapait pas M960 à 500 séquences (0/2).
+Une règle composée les enchaîne (`joins_an_old_isolation`) : une VM créée sur le NSG d'une
+ancienne isolation, la quarantaine allumée, isolée, sa carte laissée nue ou non, puis le reset
+(trois fois sur quatre) ou la levée. À 500 séquences, la machine seule attrape M961 3/3 et M960
+1/3 ; avec la séquence figée, les deux sont attrapés à chaque tour. Au même budget (60 séquences,
+deux tours), aucun mutant du chemin d'isolation n'est perdu : les écarts restent dans le bruit
+de mesure (M16 : 3/8 avant, 5/8 après ; M19 : 3/8 puis 1/8 ; ils sont aussi attrapés par leurs
+séquences figées).
 
 Le plus grave : après une levée qui échoue en partie, une seconde levée lisait les champs de
 rétro-compatibilité de l'état comme un ancien format, et supprimait les deny du NSG de

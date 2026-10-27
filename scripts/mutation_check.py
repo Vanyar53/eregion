@@ -1604,6 +1604,29 @@ MUTANTS += [
      'if (q is not None and q["GroupId"] in e["groups"]) or self._named_quarantine(e["groups"]):',
      'if q is not None and q["GroupId"] in e["groups"]:'),
 ]
+# L1F (#229): "already alerted" written before the card — a crash in between leaves the
+# marker without the card, and every later pass is silent on a block gone from Azure.
+MUTANTS += [
+    ("M900", "a block that could not be put back marked alerted before its card (L1F, L1)", R,
+     ('        outcome = "failed"\n    _alert(_alert_id(vm, rid, ip),',
+      "        # silence (L1F, invariant machine).\n        _update_block_entry(ref or vm, ip, drift_alerted_at=now)\n"),
+     ('        outcome = "failed"\n        _update_block_entry(ref or vm, ip, drift_alerted_at=now)\n'
+      "    _alert(_alert_id(vm, rid, ip),",
+      "        # silence (L1F, invariant machine).\n        pass\n")),
+    ("M901", "an isolation that could not be put back marked alerted before its card (L1F)", R,
+     ('        outcome = "failed"\n    _alert(_alert_id(vm, rid), resource_id=rid, action="isolate_vm"',
+      "(see blocks).\n        _mark_alerted(ref or vm, now)\n"),
+     ('        outcome = "failed"\n        _mark_alerted(ref or vm, now)\n'
+      '    _alert(_alert_id(vm, rid), resource_id=rid, action="isolate_vm"',
+      "(see blocks).\n        pass\n")),
+    ("M902", "a block gone in human_only marked alerted before its card (L1F, L1)", R,
+     ('        _alert(_alert_id(vm, rid, ip), resource_id=rid, action="block_suspicious_ip",\n'
+      '               reason=reason, action_params={"ip": ip})\n'
+      "        _update_block_entry(ref or vm, ip, drift_alerted_at=now)\n        report.append(",),
+     ("        _update_block_entry(ref or vm, ip, drift_alerted_at=now)\n"
+      '        _alert(_alert_id(vm, rid, ip), resource_id=rid, action="block_suspicious_ip",\n'
+      '               reason=reason, action_params={"ip": ip})\n        report.append(',)),
+]
 
 # AL1 (#225) — Azure's Activity Log, detection only: Glorfindel's own writes excluded by its
 # identity and its declared operations, its own rules marked, no autonomous action on the
@@ -1904,6 +1927,12 @@ TESTS["M403"] = "tests/unit/test_console_exercises.py"
 TESTS.update({f"M{n}": "tests/unit/test_watch_gate.py" for n in (*range(720, 740), *range(750, 760))})
 TESTS.update({f"M{n}": "tests/unit/test_gothmog.py" for n in (724, 725, 726, 727)})
 TESTS.update({f"M{n}": "tests/unit/test_host_console.py" for n in range(740, 750)})  # UI-1c
+# L1F (#229): no liveness property on a vanished ISOLATION in the machine — its unit test.
+TESTS["M901"] = "tests/unit/test_reassert.py"
+# L1F: a crash between the card and the marker is rare in the drawn sequences (M900 and M902
+# survive the machine alone at 500 and 2 000, 27/10) — M900's case frozen, both written by hand.
+TESTS.update({mid: f"tests/unit/test_reassert.py tests/unit/test_invariant_regressions.py {INVARIANTS}"
+              for mid in ("M900", "M902")})
 TESTS.update({f"M{n}": "tests/unit/test_activity_logs.py" for n in (*range(810, 830), *range(850, 860), *range(890, 895))})  # AL1
 # IA1 (#88): the separation in test_analysis_separation.py, the triage in test_analysis_triage.py.
 TESTS.update({f"M{n}": "tests/unit/test_analysis_separation.py" for n in range(780, 786)})

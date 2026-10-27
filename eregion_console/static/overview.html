@@ -6,8 +6,8 @@
 <title>Eregion — Overview</title>
 <link rel="stylesheet" href="/static/console.css">
 <style>
-  /* Eregion at a glance (/): a line per section — Glorfindel always, each injector active or
-     greyed — and the channels. The five indicators of the finality come with UI-2 (#206). */
+  /* Eregion at a glance (/): the five indicators of the finality (UI-2, #206), then a line per
+     section — Glorfindel always, each injector active or greyed — and the channels. */
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   body {
     background: var(--bg); color: var(--text); font-family: var(--font); font-size: 13px;
@@ -23,7 +23,8 @@
   }
   #observe-banner code { font-size: 10px; color: var(--blue); }
 
-  main { padding: 18px 20px; display: flex; flex-direction: column; gap: 2px; max-width: 1500px; }
+  main { padding: 18px 20px; max-width: 1500px; }
+  #ov { display: flex; flex-direction: column; gap: 2px; }
   .row { display: grid; grid-template-columns: 120px 1fr; gap: 14px; padding: 10px 12px;
          border-left: 2px solid var(--border); background: var(--bg1); }
   .row.s-glorfindel { border-left-color: var(--blue); }
@@ -50,6 +51,17 @@
   .meta { color: var(--dim); font-size: 10px; }
   .r-ok { color: var(--green); } .r-bad { color: var(--red); } .r-warn { color: var(--yellow); }
   .r-wait { color: var(--dim); } .r-blue { color: var(--blue); }
+
+  /* The five indicators (eregion_console/indicators.py): measured, never invented — what cannot
+     be measured says why. */
+  #ind { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 2px;
+         margin-bottom: 14px; }
+  .ind { background: var(--bg1); padding: 10px 12px; border-top: 2px solid var(--border); min-width: 0; }
+  .ind .lbl { color: var(--dim); font-size: 10px; font-weight: 700; letter-spacing: 1px; margin-bottom: 4px; }
+  .ind .val { font-size: 15px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ind .sub { color: var(--dim); font-size: 11px; margin-top: 3px; line-height: 1.5; }
+  .ind.ok { border-top-color: var(--green); } .ind.warn { border-top-color: var(--yellow); }
+  .ind.bad { border-top-color: var(--red); }
 </style>
 </head>
 <body>
@@ -65,7 +77,10 @@
   Give each card a verdict in <a href="/glorfindel">Glorfindel's TO JUDGE</a>.
 </div>
 
-<main id="ov"><div class="dim">…</div></main>
+<main>
+  <div id="ind"></div>
+  <div id="ov"><div class="dim">…</div></div>
+</main>
 
 <script src="/static/console.js"></script>
 <script src="/static/exercises.js"></script>
@@ -81,13 +96,8 @@ const ROLE_ROW = {
 function glorfindelRow(s) {
   const lines = [];
   const n = D.judge ? D.judge.length : null;
-  const d = (D.report && D.report.disruptive) || {};
-  const judged = (d.right || 0) + (d.wrong || 0);
-  const rate = d.false_rate == null ? '—' : Math.round(d.false_rate * 100) + '%';
   lines.push(`<div class="line">
     <a href="/glorfindel" class="big ${n ? 'warn' : 'ok'}">${n == null ? '…' : n ? `${n} to judge ▸` : 'nothing to judge'}</a>
-    <span title="Isolations and blocks judged wrong, among those judged — real traffic, the last 7 days (glorfindel report)"><span class="k">isolate/block judged wrong</span> ${rate}${judged ? ` <span class="dim">of ${judged}</span>` : ''} <span class="dim">· 7 d</span></span>
-    ${D.report && D.report.exercises ? `<span class="dim" title="Cards an exercise window covered: they are in TO JUDGE, never in this rate (glorfindel report)">not counted: ${D.report.exercises} exercise card${D.report.exercises > 1 ? 's' : ''}</span>` : ''}
     <span class="dim">${D.sections && D.sections.read_only ? 'mode <b style="color:var(--blue)">OBSERVE-ONLY</b> · human-only' : 'each VM acts per its mode (Glorfindel, Config)'}</span>
   </div>`);
   if (s && s.setup && !s.setup.configured)
@@ -148,9 +158,43 @@ function channelsRow() {
   </div>`;
 }
 
+// ── The five indicators ──────────────────────────────────────────────────────────────
+const box = (lbl, val, sub, cls = '', title = '') =>
+  `<div class="ind ${cls}" title="${esc(title)}"><div class="lbl">${lbl}</div><div class="val">${val}</div><div class="sub">${sub}</div></div>`;
+const pc = r => (r == null ? '—' : Math.round(r * 100) + '%');
+
+function indicators() {
+  const i = D.ind;
+  if (!i) return '';
+  const days = i.window_days, c = i.contain, a = i.alone, w = i.wrong, cov = i.coverage, lp = i.last_proof;
+  const timed = c.detected
+    ? `detect ${dur(c.detect_s)}${c.decide_s != null ? ' · decide ' + dur(c.decide_s) : ''} <span title="medians">(median, ${c.detected} detected attack${c.detected > 1 ? 's' : ''}, ${days} d)</span>`
+    : `no detected attack in ${days} d`;
+  const contain = box('TIME TO CONTAIN', c.contain_s != null ? dur(c.contain_s) : '— nothing contained alone',
+    timed, '', 'From the attack to the verified action — only what Glorfindel contained alone. Detect: from the attack to the detection the run counted; decide: to the recommendation (run reports and the watch\'s cycles, ' + days + ' days).');
+  const alone = box('CONTAINED ALONE', a.of ? `${a.contained} of ${a.of}` : '—',
+    a.of ? `shadow: ${a.shadow} of ${a.of} would have been` : `no detected attack in ${days} d`, '',
+    `Real: isolations and blocks executed and verified alone. Shadow: the detected attacks on which Glorfindel recommended to isolate or to block at or above the confidence gate (${a.threshold == null ? 'unreadable: every action held' : Math.round(a.threshold * 100) + '%'}), not judged wrong — what it would have contained, had it been allowed to act (${days} days).`);
+  const w30 = w.days_30, w7 = w.days_7;
+  const wrong = box('WRONG DISRUPTIVE', w30.judged ? `${pc(w30.rate)} of ${w30.judged} judged` : '— none judged',
+    `real traffic, ${days} d · 7 d: ${w7.judged ? pc(w7.rate) + ' of ' + w7.judged : 'none judged'}`,
+    w30.wrong ? 'warn' : '', 'Isolations and blocks judged wrong, among those judged (right or wrong), on real traffic — exercise cards left out (glorfindel report). The last 7 days, those of the Monday summary, aside.');
+  const coverage = box(`COVERAGE · ${days} d`, `${cov.implemented_detected} / ${cov.implemented} implemented`,
+    `${cov.catalog_detected} / ${cov.catalog} of the catalogue · faults: ${cov.faults ? cov.faults + ' run' + (cov.faults > 1 ? 's' : '') + ', ' + cov.faults_pass + ' PASS' : 'none'}`,
+    '', 'Techniques detected by an attack run of the last ' + days + ' days, over those the bench can play (implemented), then over the whole catalogue, planned ones included. Faults aside.');
+  const age = lp ? lp.age_s / 86400 : null;
+  const stale = (i.stalest || []).map(s => `${s.ttp}: ${s.at ? ago(s.at) + ' ago' : 'not in ' + days + ' d'}`).join(' · ');
+  const proof = box('LAST PROOF', lp ? `${ago(lp.at)} ago · ${esc(lp.ttp)}` : `none in ${days} d`,
+    lp ? (age < 21 ? '✓ under 30 days' : age <= 30 ? '⚠ nearly 30 days' : '✗ over 30 days') + ` · <a href="/runs/${encodeURIComponent(lp.run_id)}">run ▸</a>` : 'no attack detected with a decision',
+    !lp || age > 30 ? 'bad' : age >= 21 ? 'warn' : 'ok',
+    'The most recent attack detected with a decision of Glorfindel attached (detection and response). Each technique, the stalest first: ' + stale);
+  return contain + alone + wrong + coverage + proof;
+}
+
 function render() {
   const sections = (D.sections && D.sections.sections) || [];
   if (!sections.length) return;
+  document.getElementById('ind').innerHTML = indicators();
   document.getElementById('observe-banner').hidden = !(D.sections && D.sections.read_only);
   const injectorsOn = sections.some(s => !s.always && s.active);
   const rows = sections.map(s => {
@@ -167,14 +211,14 @@ function render() {
 async function refresh() {
   const get = (url) => getJSON(url).catch(() => null);
   const injectorsOn = ((D.sections && D.sections.sections) || []).some(s => !s.always && s.active);
-  const [judge, report, ex, camp, chan] = await Promise.all([
-    get('/api/to-judge?since=7d'), get('/api/report?since=7d'),
+  const [judge, ind, ex, camp, chan] = await Promise.all([
+    get('/api/to-judge?since=7d'), get('/api/indicators'),
     injectorsOn ? get('/api/exercises?since=7d') : null,
     injectorsOn ? get('/api/campaigns?since=30d') : null,
     injectorsOn ? get('/api/channel') : null,
   ]);
   if (judge && Array.isArray(judge.cards)) { D.judge = judge.cards; Console.setJudgeCount(judge.cards.length); }
-  if (report && typeof report.cards === 'number') D.report = report;
+  if (ind && ind.window_days) D.ind = ind;
   if (ex && !ex.error) D.ex = ex;
   if (camp && !camp.error) D.camp = camp;
   if (chan && !chan.error) D.chan = chan;

@@ -171,6 +171,8 @@ eregion_console/                → la console d'Eregion (`eregion console`, doc
   sections.py           → sections actives : Glorfindel toujours, Annatar et Gothmog dès que l'hôte a leurs runs
                           (fenêtre, rapport, campagne), ou ce que --sections / EREGION_CONSOLE_SECTIONS choisit
   cli.py                → `eregion console [--host] [--port] [--sections]`
+  indicators.py         → les cinq indicateurs de la finalité (UI-2) : sur 30 jours, rapports de run, cycles de la
+                          watch, cartes, catalogue — jamais les fenêtres ; `GET /api/indicators`
   static/console.js     → en-tête commun : onglets (actifs ou grisés), battement de la watch, canal retour,
                           cartes à juger, horloge UTC ; console.css, la palette
   static/overview.html  → l'accueil : une ligne par section, les canaux ; les cinq indicateurs avec UI-2 (#206)

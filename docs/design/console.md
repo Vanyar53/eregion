@@ -1,7 +1,7 @@
 # La console d'Eregion
 
 Conception du 26/10/2026, session War Room. **Décidé par Jonathan le 26/10**, question par question.
-**UI-1 construit le 26/10** (branche `lot/205-console-socle`) ; UI-2 attend ses définitions.
+**UI-1 construit et déployé sur H0 le 26/10** (#209, #210, #212, #216) ; **UI-2 construit le 27/10** (#206), définitions décidées le 27/10.
 Ce document sert aux sessions qui implémentent : le lot UI-1 (le socle, #205), le lot UI-2 (les cinq
 indicateurs, #206), et le lot d'Annatar et de Gothmog qui vérifie, avant chaque run, que Glorfindel
 tourne.
@@ -153,8 +153,9 @@ Le tirage des rapports reste dans la watch de Glorfindel, qui est toujours là.
    d'observation y figure, comme sur Glorfindel : c'est la première page vue.
 7. **Config** est une page : Azure, le bloc de Glorfindel (modèle, autonomie), et les canaux si un
    injecteur est actif.
-8. **L'en-tête commun** (`console.js`, `console.css`), le même sur toutes les pages : à gauche les
-   onglets (le nombre de cartes à juger sur celui de Glorfindel) ; à droite le battement de la watch,
+8. **L'en-tête commun** (`console.js`, `console.css`), le même sur toutes les pages : à gauche le
+   logo et, à côté, ce qui tourne (le tag déployé, sinon la version et le commit court ; `EREGION_REF`
+   et `EREGION_REVISION` passés au build par `deploy.sh`), puis les onglets (le nombre de cartes à juger sur celui de Glorfindel) ; à droite le battement de la watch,
    le canal retour si un injecteur est actif, ⚙ Config (à droite, comme dans la War Room) et
    l'horloge en UTC. Ce qui n'appartient qu'à une page reste dans la page : le point « live » du
    fil est sur la colonne LIVE FEED (Jonathan, 26/10).
@@ -169,23 +170,37 @@ Le tirage des rapports reste dans la watch de Glorfindel, qui est toujours là.
    - `Cache-Control: no-cache` sur les pages ;
    - la page du jeton en anglais.
 
-### Les cinq indicateurs (UI-2)
+### Les cinq indicateurs (UI-2, #206)
 
-Ils figurent sur l'accueil, et se calculent sur les **rapports de run**, qui sont gardés, pas sur les
-fenêtres, vidées après 7 jours. Leur source est `GET /api/indicators`. Ils ne montrent aucun chiffre
-inventé en observation. Les définitions sont à valider par General et Glorfindel avant UI-2 :
+Ils sont en tête de l'accueil, au-dessus des lignes des sections. Leur source est
+`GET /api/indicators`, calculée par `eregion_console/indicators.py`.
 
-| Indicateur | Calcul proposé | En observation (`human_only`) |
+**Sur 30 jours, à partir de ce que l'hôte garde** : les rapports de run (`runs/<id>.json`, et ceux
+des campagnes publiées), les cycles de la watch (`runs/*_debug.jsonl`), les cartes avec leurs
+verdicts, et le catalogue. Jamais à partir des fenêtres d'exercice, vidées 7 jours après leur fin.
+
+**La décision d'un run** est l'enregistrement de la watch pour la détection que le run a comptée :
+- même technique ;
+- vu à l'heure de l'attaque plus la latence mesurée par le run, à 5 secondes près.
+
+Le rapport d'un run ne nomme pas sa VM, et sa fenêtre a disparu après une semaine. Mais cette
+latence, Annatar l'a mesurée sur ce même enregistrement.
+
+**Rien n'est inventé** : ce qui ne se mesure pas vaut `None`, et la case dit pourquoi.
+
+**Définitions décidées par Jonathan le 27/10**, question par question :
+
+| Indicateur | Ce qui s'affiche | En observation (`human_only`) |
 |---|---|---|
-| Temps pour contenir | médiane des N derniers runs : de `attack_time` à l'action vérifiée | « — human-only », avec les médianes de la détection et de la décision |
-| Part contenue seule | contenus sans humain, parmi les incidents d'exercice détectés, sur 30 jours | « — observation » ; une part « qu'il aurait contenue » seulement si General la définit |
-| Actions disruptives à tort | `observation_report`, sur 7 et 30 jours, avec le nombre de cartes jugées | comme aujourd'hui |
-| Couverture | techniques implémentées avec un run `detected` sur 30 jours ; les pannes à part | idem |
-| Âge de la dernière preuve | depuis le dernier run `detected` auquel une décision de Glorfindel est rattachée | vert sous 21 jours, jaune de 21 à 30, rouge au-delà |
+| Temps pour contenir | de l'attaque à l'action vérifiée, médiane de ce que Glorfindel a contenu seul ; à côté, les médianes de la détection et de la décision, sur les attaques détectées | « — nothing contained alone », avec la détection et la décision |
+| Part contenue seule | les isolations et blocages exécutés et vérifiés seuls, parmi les attaques détectées ; à côté, la part **shadow** : les attaques où Glorfindel a recommandé d'isoler ou de bloquer au-dessus du seuil de confiance, sans verdict « wrong » | « 0 of N », et « shadow: K of N would have been » |
+| Actions disruptives à tort | isolations et blocages jugés faux parmi ceux jugés, sur le trafic réel, exercices écartés (`observation_report`) ; 30 jours, les 7 jours du résumé du lundi à côté | — |
+| Couverture | les techniques détectées par un run d'attaque, sur les implémentées, puis sur tout le catalogue (prévues comprises) ; les pannes à part (runs, PASS) | — |
+| Âge de la dernière preuve | le plus récent run d'attaque détecté **et** dont la décision est rattachée (détection et réponse) ; vert sous 21 jours, jaune jusqu'à 30, rouge au-delà ou aucune ; au survol, chaque technique, la moins récemment prouvée d'abord | — |
 
-Sans injecteur, la couverture et la dernière preuve disent « none yet ». En attendant UI-2, l'accueil
-montre ce qui existe déjà : les cartes à juger, « wrong », le dernier run de chaque injecteur, les
-canaux. La matrice de C1 trouvera sa place dans Annatar et dans Gothmog, avec son résumé sur
+**Sans injecteur**, la couverture et la dernière preuve disent qu'il n'y a rien sur 30 jours.
+
+**Plus loin** : la matrice de C1 trouvera sa place dans Annatar et dans Gothmog, avec son résumé sur
 l'accueil.
 
 ## 4. Maquettes

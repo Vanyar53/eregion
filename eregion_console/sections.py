@@ -77,6 +77,48 @@ def glorfindel_setup() -> dict:
     return {"configured": bool(config or heartbeat), "config": config, "heartbeat": heartbeat}
 
 
+def version() -> dict:
+    """What this console runs: the reference H0 deployed (``EREGION_REF``, ``EREGION_REVISION``,
+    passed by deploy.sh at the image's build), else the commit of the checkout it runs from
+    (local), and the package's version. ``label`` is what the header shows: the tag when one
+    was deployed, else the package's version and the short commit."""
+    if _version_cache:
+        return _version_cache
+    import os
+    from importlib.metadata import PackageNotFoundError, version as pkg_version
+    try:
+        package = pkg_version("eregion")
+    except PackageNotFoundError:
+        package = ""
+    ref, revision = os.environ.get("EREGION_REF", ""), os.environ.get("EREGION_REVISION", "")
+    source = "deployed" if revision else ""
+    if not revision:
+        revision = checkout_revision()
+        source = "checkout" if revision else ""
+    if ref and not ref.startswith("v"):
+        ref = ""                       # a commit deployed: its short form says it already
+    label = ref or (f"v{package}" if package else "") + (f" · {revision[:7]}" if revision else "")
+    _version_cache.update(package=package, ref=ref, revision=revision, source=source,
+                          label=label.strip(" ·") or "unknown version")
+    return _version_cache
+
+
+_version_cache: dict = {}
+
+
+def checkout_revision() -> str:
+    """The commit of the git checkout this console runs from (a local console), else ''."""
+    import subprocess
+    root = Path(__file__).resolve().parents[1]
+    if not (root / ".git").exists():
+        return ""
+    try:
+        return subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True,
+                              text=True, timeout=3).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
 def status(runs: Path) -> dict:
     """Every section, active or greyed, and why — cached a few seconds: three pages poll it."""
     forced = override()

@@ -40,11 +40,13 @@ carried out here. A triage that holds a decision is never written over.
 """
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import re
 import sys
 import tempfile
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -197,34 +199,93 @@ def catalog(path: Path = CATALOG) -> tuple[dict[str, dict], str]:
 
 
 def _yaml(path: Path) -> tuple[dict, str]:
+    """A layer's YAML as a dict, read as the watch reads it (glorfindel/detection_rules.py
+    ``_read_layer``: the environment's ``$VARS`` expanded first)."""
     try:
-        data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+        data = yaml.safe_load(os.path.expandvars(Path(path).read_text(encoding="utf-8")))
     except FileNotFoundError:
         return {}, ""
-    except (OSError, yaml.YAMLError) as e:
+    except (OSError, UnicodeDecodeError, yaml.YAMLError) as e:
         return {}, f"{Path(path).name} illisible ({type(e).__name__})"
     return (data if isinstance(data, dict) else {}), ""
 
 
+# The criteria of glorfindel/detection_rules.py ``_invalid_client_entry`` for a rule of the
+# client's layer, copied (analysis/ never imports glorfindel): an entry the watch skips never
+# replaces a base rule here either. tests/unit/test_analysis_rules_parity.py compares both.
+_RULE_STR_FIELDS = ("query", "ttp", "description", "source", "workspace_id", "resource_id",
+                    "monitoring_backend")
+
+
+def _invalid_client_rule(entry) -> str:
+    """Why the watch skips this rule of the client's layer ("": it loads)."""
+    if not isinstance(entry, dict):
+        return "n'est pas un dictionnaire"
+    if not isinstance(entry.get("name"), str) or not entry["name"].strip():
+        return "n'a pas de nom (une chaîne)"
+    for field_ in _RULE_STR_FIELDS:
+        if entry.get(field_) is not None and not isinstance(entry[field_], str):
+            return f"`{field_}` n'est pas une chaîne"
+    for field_ in ("assets", "monitoring_backends"):
+        value = entry.get(field_)
+        if value is not None and not (isinstance(value, list) and all(isinstance(v, str) for v in value)):
+            return f"`{field_}` n'est pas une liste de noms"
+    if not isinstance(entry.get("enabled", True), bool):
+        return "`enabled` n'est ni true ni false"
+    for field_, convert in (("interval_s", float), ("expected_latency_s", int)):
+        if field_ in entry:
+            value = entry[field_]
+            try:
+                if isinstance(value, bool):
+                    raise ValueError
+                number = convert(value)
+            except (TypeError, ValueError):
+                return f"`{field_}` n'est pas un nombre ({value!r})"
+            if field_ == "interval_s" and not number > 0:
+                return "`interval_s` doit être positif"
+    if entry.get("enabled", True) and not entry.get("query"):
+        return "n'a pas de requête"
+    return ""
+
+
 def rules(base: Path = BASE_RULES, client: Path | None = None) -> tuple[list[dict], str]:
     """Glorfindel's enabled rules, the client's layer over the base as the watch loads it
-    (glorfindel/detection_rules.py ``merge_layers``): a client rule of a base rule's name
-    replaces it, ``enabled: false`` disables it, ``disable:`` drops base rules. Read only."""
+    (glorfindel/detection_rules.py ``merge_layers``, then ``load_config``): a client rule of
+    a base rule's name replaces it in its place, ``enabled: false`` disables it, ``disable:``
+    drops base rules — and an entry of the client's layer the watch cannot load (no query,
+    ``enabled: "no"``, ``interval_s: 30s``…) is skipped, the base rule kept. Read only."""
     client = client_rules() if client is None else client
     b, why_b = _yaml(base)
     c, why_c = _yaml(client)
-    merged: dict[str, dict] = {}
-    for layer, data in (("base", b), ("client", c)):
-        for r in data.get("rules") or []:
-            if isinstance(r, dict) and r.get("name"):
-                merged[str(r["name"])] = {**r, "layer": layer}
-    for name in c.get("disable") or []:
-        if merged.get(str(name), {}).get("layer") == "base":
-            merged.pop(str(name))
-    out = [r for r in merged.values() if r.get("enabled", True) is not False]
+    found = b.get("rules")
+    merged = [{**r, "layer": "base"} for r in (found if isinstance(found, list) else [])
+              if isinstance(r, dict) and r.get("name")]
+    skipped = []
+    if c:    # the watch merges a client's layer only when it holds something
+        disable = c.get("disable")
+        disabled = {n for n in (disable if isinstance(disable, list) else [])
+                    if isinstance(n, str) and n.strip()}
+        merged = [r for r in merged if r["name"] not in disabled]
+        entries = c.get("rules")
+        for entry in entries if isinstance(entries, list) else []:
+            if why := _invalid_client_rule(entry):
+                name = entry.get("name") if isinstance(entry, dict) else None
+                skipped.append(f"« {name} » {why}" if isinstance(name, str) else f"une entrée {why}")
+                continue
+            at = next((n for n, r in enumerate(merged) if r["name"] == entry["name"]), None)
+            if at is None:
+                merged.append({**entry, "layer": "client"})
+            else:
+                merged[at] = {**entry, "layer": "client"}
+    out = [r for r in merged if r.get("enabled", True)]
     notes = [n for n in (why_b, why_c) if n]
-    layers = "base livrée et couche du client" if Path(client).is_file() else "base livrée (pas de couche du client)"
-    return out, "; ".join(notes) or f"règles lues : {layers}"
+    if not notes:
+        layers = "base livrée et couche du client" if Path(client).is_file() else "base livrée (pas de couche du client)"
+        notes.append(f"règles lues : {layers}")
+    if skipped:
+        notes.append(f"couche du client : {len(skipped)} entrée(s) que la watch ne charge pas, écartée(s) "
+                     f"({'; '.join(skipped)[:300]})")
+    return out, "; ".join(notes)
 
 
 # A log source → what, in Terraform (azurerm), says it is collected. A source not listed here:
@@ -465,6 +526,22 @@ _RULE = re.compile(
     r"|```",
     re.IGNORECASE)
 
+# A decision, said by the model: « approuvée par … », « Jonathan a validé », « approved by »,
+# « status: approved ». Only ``decide`` records a human's decision; a model that says one was
+# taken would let triage.md suggest a human validated what nobody has looked at.
+_APPROVAL = re.compile(
+    r"\b(approuvé|validé|entériné)e?s?\s+(par|by)\b"
+    r"|\b(a|as|ai|ont|avons|avez|est|sont|été)\s+(déjà\s+)?(été\s+)?(approuvé|validé|entériné)e?s?\b"
+    r"|\b(approved|signed\s+off)\b|\b(validated|accepted|authori[sz]ed)\s+by\b"
+    r"|\b(status|statut)\s*[:=]\s*(approved|approuvée?|validée?|rejected|rejetée?)\b",
+    re.IGNORECASE)
+
+
+def neutral(text: str) -> str:
+    """``text`` with any decision it claims struck out — for what triage.md shows of an entry
+    the check removed: the model's words, never a decision."""
+    return _APPROVAL.sub("[décision affirmée par le modèle, sans valeur]", str(text))
+
 
 def verify(entries: list[dict], items_: list[Item]) -> list[dict]:
     """Attach each entry the facts support to its item — its proposal ``pending`` — and return
@@ -485,6 +562,8 @@ def verify(entries: list[dict], items_: list[Item]) -> list[dict]:
             why = f"the facts do not support {e['proposal']}: {not_here}"
         elif _RULE.search(e["explanation"]) or _RULE.search(e["text"]):
             why = "it carries a rule: the analysis writes none, a human does"
+        elif _APPROVAL.search(e["explanation"]) or _APPROVAL.search(e["text"]):
+            why = "it says a decision was taken: only a human's `decide` records one"
         elif item.decision_unknown:
             told = cr._UNKNOWN.sub(" ", e["explanation"])
             if cr._NO_ACTION.search(told):
@@ -576,7 +655,10 @@ def render(t: Triage) -> str:
             lines.append(f"  - Proposition `{i.proposal.kind}` : {_cell(i.proposal.text)} — {_status(i.proposal)}")
     if t.rejected:
         lines += ["", f"## Écarté par la vérification ({len(t.rejected)})", ""]
-        lines += [f"- ~~{_cell(r.get('item'))} · {_cell(r.get('proposal'))} : {_cell(r.get('text'))}~~ — {r['rejected']}"
+        # The model's words, removed: on one line each (_cell), any decision they claim struck
+        # out (neutral) — the reason too, which may quote the model's proposal.
+        lines += [f"- ~~{_cell(neutral(r.get('item')))} · {_cell(neutral(r.get('proposal')))} : "
+                  f"{_cell(neutral(r.get('text')))}~~ — {_cell(neutral(r.get('rejected')))}"
                   for r in t.rejected]
     lines += ["", "*Lu : " + " ; ".join(t.notes) + ".*"]
     return "\n".join(lines) + "\n"
@@ -593,6 +675,9 @@ def from_json(data: dict) -> Triage:
         p = raw.pop("proposal", None)
         item = Item(**raw)
         item.proposal = Proposal(**p) if isinstance(p, dict) else None
+        if item.kind not in PRIORITY or not set(item.causes) <= set(CAUSES) or (
+                item.proposal is not None and item.proposal.status not in (PENDING, APPROVED, REJECTED)):
+            raise ValueError(f"{item.id or '?'}: kind, causes or status unknown")
         found.append(item)
     return Triage(campaign_id=data.get("campaign_id", ""), items=found, model=data.get("model", ""),
                   rejected=list(data.get("rejected") or []), notes=list(data.get("notes") or []),
@@ -603,6 +688,27 @@ class Decided(RuntimeError):
     """A triage that holds a human's decision: never written over."""
 
 
+class Unreadable(ValueError):
+    """A ``triage.json`` that cannot be read back (not JSON, a key we do not know…): nothing
+    is decided on it, nothing written over it — a human looks at it first."""
+
+
+# One writer at a time on a campaign's triage, across processes (two `decide`, a `decide` and
+# a new triage): each reads triage.json, changes it, writes it — without the lock, the second
+# write loses the first's decision. As analysis/hosted_report.py's ``LOCK``.
+LOCK = ".triage.lock"
+
+
+@contextmanager
+def _locked(campaign_dir: Path):
+    fd = os.open(Path(campaign_dir) / LOCK, os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)    # a decision is quick: wait for the other
+        yield
+    finally:
+        os.close(fd)                      # closing releases the lock
+
+
 def _write(path: Path, text: str) -> None:
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
@@ -611,16 +717,19 @@ def _write(path: Path, text: str) -> None:
 
 
 def load(campaign_dir: Path) -> Triage | None:
+    """The triage written in ``campaign_dir`` (None: none) — ``Unreadable`` when it cannot be
+    read back, never a trace."""
+    path = Path(campaign_dir) / JSON_NAME
     try:
-        return from_json(json.loads((Path(campaign_dir) / JSON_NAME).read_text(encoding="utf-8")))
+        return from_json(json.loads(path.read_text(encoding="utf-8")))
     except FileNotFoundError:
         return None
+    except (OSError, ValueError, TypeError, AttributeError, KeyError) as e:   # JSONDecodeError is a ValueError
+        raise Unreadable(f"{JSON_NAME} illisible ({path} : {type(e).__name__}) — rien n'est écrit, "
+                         "à regarder par un humain") from e
 
 
-def save(campaign_dir: Path, t: Triage, *, replace_decided: bool = False) -> Path:
-    """Write ``triage.json`` and ``triage.md``. A triage that holds a decision is never
-    written over by a new one (``Decided``) — a human's decision is not lost to a rerun."""
-    campaign_dir = Path(campaign_dir)
+def _save(campaign_dir: Path, t: Triage, replace_decided: bool) -> Path:
     old = load(campaign_dir)
     if not replace_decided and old is not None and any(
             i.proposal is not None and i.proposal.status != PENDING for i in old.items):
@@ -630,27 +739,40 @@ def save(campaign_dir: Path, t: Triage, *, replace_decided: bool = False) -> Pat
     return campaign_dir / MD_NAME
 
 
+def save(campaign_dir: Path, t: Triage, *, replace_decided: bool = False) -> Path:
+    """Write ``triage.json`` and ``triage.md``. A triage that holds a decision is never
+    written over by a new one (``Decided``) — a human's decision is not lost to a rerun."""
+    campaign_dir = Path(campaign_dir)
+    with _locked(campaign_dir):
+        return _save(campaign_dir, t, replace_decided)
+
+
 def decide(campaign_dir: Path, item_id: str, verdict: str, by: str, note: str = "",
            now: datetime | None = None) -> Item:
     """Record a human's decision on one proposal — and nothing else: an approved proposal is
-    work for a human, never carried out here."""
+    work for a human, never carried out here. Under the campaign's lock (``LOCK``): two
+    decisions taken at once are both kept."""
     if verdict not in VERDICTS:
         raise ValueError(f"verdict: {', '.join(VERDICTS)}")
     if not str(by).strip():
         raise ValueError("a decision names the human who takes it (--by)")
-    t = load(campaign_dir)
-    if t is None:
+    campaign_dir = Path(campaign_dir)
+    if not (campaign_dir / JSON_NAME).is_file():
         raise ValueError(f"no {JSON_NAME} in {campaign_dir}")
-    item = next((i for i in t.items if i.id == item_id), None)
-    if item is None or item.proposal is None:
-        raise ValueError(f"{item_id}: no proposal to decide in this triage")
-    if item.proposal.status != PENDING:
-        raise ValueError(f"{item_id}: already {item.proposal.status} by {item.proposal.decided_by}")
-    item.proposal.status = VERDICTS[verdict]
-    item.proposal.decided_by = str(by).strip()
-    item.proposal.decided_at = (now or datetime.now(timezone.utc)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    item.proposal.note = note
-    save(campaign_dir, t, replace_decided=True)
+    with _locked(campaign_dir):
+        t = load(campaign_dir)
+        if t is None:
+            raise ValueError(f"no {JSON_NAME} in {campaign_dir}")
+        item = next((i for i in t.items if i.id == item_id), None)
+        if item is None or item.proposal is None:
+            raise ValueError(f"{item_id}: no proposal to decide in this triage")
+        if item.proposal.status != PENDING:
+            raise ValueError(f"{item_id}: already {item.proposal.status} by {item.proposal.decided_by}")
+        item.proposal.status = VERDICTS[verdict]
+        item.proposal.decided_by = str(by).strip()
+        item.proposal.decided_at = (now or datetime.now(timezone.utc)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        item.proposal.note = note
+        _save(campaign_dir, t, replace_decided=True)
     return item
 
 
@@ -678,12 +800,13 @@ def main(argv: list[str]) -> int:
     a = ap.parse_args(argv)
     cr.check_enrollment(a.campaign_dir)
     try:
+        load(a.campaign_dir)    # an unreadable triage.json: refused before the model is called
         t = build(a.campaign_dir, infra=a.infra, client_rules_path=a.client_rules)
         out = save(a.campaign_dir, t)
     except cr.NoReport as e:
         print(f"{a.campaign_dir.name}: {e} — nothing written")
         return 0
-    except (Decided, separation.SharedWithGlorfindel) as e:
+    except (Decided, Unreadable, separation.SharedWithGlorfindel) as e:
         print(f"refusé : {e}")
         return 1
     pending = sum(1 for i in t.items if i.proposal is not None)

@@ -145,7 +145,7 @@ def test_rules_read_the_client_layer_over_the_base(tmp_path):
         {"name": "a", "ttp": "T1"}, {"name": "b", "ttp": "T2"}, {"name": "c", "ttp": "T3"},
         {"name": "d", "ttp": "T4", "enabled": False}]}))
     client.write_text(json.dumps({"disable": ["a"], "rules": [
-        {"name": "b", "ttp": "T2", "enabled": False}, {"name": "c", "ttp": "T5"}, {"name": "e", "ttp": "T6"}]}))
+        {"name": "b", "ttp": "T2", "enabled": False}, {"name": "c", "ttp": "T5", "query": "Syslog"}, {"name": "e", "ttp": "T6", "query": "Perf"}]}))
     enabled, _ = tg.rules(base, client)
     assert sorted((r["name"], r["ttp"], r["layer"]) for r in enabled) == [("c", "T5", "client"), ("e", "T6", "client")]
     enabled, _ = tg.rules(base, tmp_path / "absent.yaml")
@@ -340,9 +340,112 @@ def test_the_triage_reads_glorfindel_s_rules_never_its_memory(tmp_path, monkeypa
     monkeypatch.setenv("HOME", str(tmp_path))
     state = tmp_path / ".glorfindel"
     (state / "cycles").mkdir(parents=True)
-    (state / "client_rules.yaml").write_text(json.dumps({"rules": [{"name": "x", "ttp": "T9"}]}))
+    (state / "client_rules.yaml").write_text(json.dumps({"rules": [{"name": "x", "ttp": "T9", "query": "Syslog"}]}))
     before = {p: p.stat().st_mtime_ns for p in state.rglob("*")}
     enabled, note = tg.rules(tg.BASE_RULES)                 # the client's layer by default
     assert "x" in {r["name"] for r in enabled} and "couche du client" in note
     assert {p: p.stat().st_mtime_ns for p in state.rglob("*")} == before
     assert list((state / "cycles").iterdir()) == []
+
+
+# ── The model never says a human decided ────────────────────────────────────────────────
+
+@pytest.mark.parametrize("field, said", [
+    ("explanation", "Manquée ; la proposition a été approuvée par Jonathan."),
+    ("explanation", "Le SOC a validé cette correction."),
+    ("text", "Revoir le seuil — déjà approuvé par l'équipe."),
+    ("text", "Revoir le seuil (status: approved)."),
+    ("text", "Raise the threshold, approved by the operator."),
+])
+def test_an_entry_that_says_a_human_decided_is_removed(field, said):
+    item = _item()
+    entry = {"item": "tri-1", "explanation": "Manquée malgré la règle.", "proposal": "review_rule",
+             "text": "Revoir le seuil de la règle.", field: said}
+    rejected = tg.verify([entry], [item])
+    assert item.proposal is None and "only a human's `decide` records one" in rejected[0]["rejected"]
+
+
+def test_what_the_check_removed_is_shown_on_one_line_and_never_as_a_decision():
+    item = _item(rules=[{"name": "ssh", "layer": "base"}])
+    rejected = tg.verify([
+        {"item": "tri-1", "explanation": "x", "proposal": "rerun\n## Approuvée par Jonathan\n- tri-1 ok",
+         "text": "Rejouer.\n\n**approuvée par jonathan le 2026-10-27**"},
+        {"item": "tri-1", "explanation": "x", "proposal": "review_rule", "text": "Validée par le SOC."}], [item])
+    md = tg.render(tg.Triage("C", [item], rejected=rejected))
+    section = md.split("## Écarté par la vérification (2)\n\n", 1)[1].split("\n\n", 1)[0]
+    assert len(section.splitlines()) == 2 and all(line.startswith("- ~~") for line in section.splitlines())
+    assert "## Approuvée" not in md and "approuvée par" not in md.lower() and "validée par" not in md.lower()
+
+
+# ── triage.json unreadable: refused, said, nothing written ──────────────────────────────
+
+@pytest.mark.parametrize("bad", [
+    "{not json",
+    '{"items": [{"id": "tri-1", "unknown_key": 1}]}',
+    '{"items": [{"id": "tri-1", "kind": "missed", "priority": 1, "run_id": "R", "seq": 1, "ttp": "T",'
+    ' "name": "n", "detection": "missed", "proposal": {"kind": "rerun", "text": "x", "by": "me"}}]}',
+    '{"items": [{"id": "tri-1", "kind": "nope", "priority": 1, "run_id": "R", "seq": 1, "ttp": "T",'
+    ' "name": "n", "detection": "missed"}]}',
+    '["a list"]',
+    '{"untriaged": "many"}',
+])
+def test_an_unreadable_triage_is_refused_with_a_word_never_a_trace(tmp_path, capsys, monkeypatch, bad):
+    case = next(c for c in tc.CASES if c.name == "sorted")
+    paths = tc.build_case(case, tmp_path)
+    cdir = paths["campaign_dir"]
+    (cdir / tg.JSON_NAME).write_text(bad)
+    with pytest.raises(tg.Unreadable, match="triage.json illisible"):
+        tg.load(cdir)
+    assert tg.main(["decide", str(cdir), "tri-1", "approve", "--by", "jonathan"]) == 1
+    assert "refusé : triage.json illisible" in capsys.readouterr().out
+    called = []
+    monkeypatch.setattr(tg, "write_entries", lambda *a, **k: called.append(a) or ([], "fake/analysis"))
+    assert tg.main([str(cdir), "--infra", str(paths["infra"]),
+                    "--client-rules", str(paths["client_rules_path"])]) == 1
+    assert "refusé : triage.json illisible" in capsys.readouterr().out
+    assert (cdir / tg.JSON_NAME).read_text() == bad and not (cdir / tg.MD_NAME).exists()
+    assert called == []                       # refused before the model is called
+
+
+# ── Two decisions at once: both kept ────────────────────────────────────────────────────
+
+_DECIDER = """
+import sys, time
+from pathlib import Path
+from analysis import triage as tg
+cdir, item, go, hold = Path(sys.argv[1]), sys.argv[2], Path(sys.argv[3]), float(sys.argv[4])
+real = tg.load
+def slow(d):                      # widen the window between reading and writing triage.json
+    t = real(d)
+    time.sleep(hold)
+    return t
+tg.load = slow
+while not go.exists():
+    time.sleep(0.01)
+tg.decide(cdir, item, "approve", "human-" + item)
+"""
+
+
+def test_two_decisions_taken_at_once_are_both_kept(tmp_path):
+    """Three processes decide three proposals of one triage at once; each reads triage.json,
+    waits, writes it. Under the campaign's lock (tg.LOCK) the three decisions are kept; without
+    it, the last write loses the others."""
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    cdir = tmp_path / "C"
+    cdir.mkdir()
+    found = [tg.Item(f"tri-{n}", "missed", 1, f"R{n}", n, "T1110.001", "B", "missed",
+                     proposal=tg.Proposal("rerun", "Rejouer.")) for n in (1, 2, 3)]
+    tg.save(cdir, tg.Triage("C", found))
+    go = tmp_path / "go"
+    env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[2])}
+    procs = [subprocess.Popen([sys.executable, "-c", _DECIDER, str(cdir), f"tri-{n}", str(go), "0.3"], env=env)
+             for n in (1, 2, 3)]
+    go.touch()
+    for p in procs:
+        assert p.wait(timeout=60) == 0
+    assert [(i.proposal.status, i.proposal.decided_by) for i in tg.load(cdir).items] == [
+        (tg.APPROVED, f"human-tri-{n}") for n in (1, 2, 3)]

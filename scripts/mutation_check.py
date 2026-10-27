@@ -2351,6 +2351,15 @@ MUTANTS += [
 ]
 TESTS.update({f"M{n}": HY1_GUARD for n in (950, 951, 952)})
 TESTS.update({f"M{n}": HY1_SECRETS for n in (953, 954)})
+# The identifier hooks read their denylist from git's common directory: from --git-dir they
+# found no list in a worktree and let everything through (27/10).
+MUTANTS += [
+    ("M903", "pre-commit reads its denylist from --git-dir again: nothing checked in a worktree", ".githooks/pre-commit",
+     'denylist="$(git rev-parse --git-common-dir)/infra-denylist.txt"', 'denylist="$(git rev-parse --git-dir)/infra-denylist.txt"'),
+    ("M904", "commit-msg reads its denylist from --git-dir again: nothing checked in a worktree", ".githooks/commit-msg",
+     'denylist="$(git rev-parse --git-common-dir)/infra-denylist.txt"', 'denylist="$(git rev-parse --git-dir)/infra-denylist.txt"'),
+]
+TESTS.update({f"M{n}": "tests/unit/test_githooks.py" for n in (903, 904)})
 
 # N1 (#242): the workshop's news in Discord, scripts/notify_discord.py, measured by its tests
 # against a fake Discord (tests/unit/test_notify_discord.py). Range M970–M979.
@@ -2391,6 +2400,25 @@ MUTANTS += [
 ]
 TESTS.update({f"M{n}": "tests/unit/test_notify_discord.py" for n in range(970, 980)})
 
+# N1 after its review (27/10, F1–F8): M990–M994, taken from this session's range (M970–M999).
+MUTANTS += [
+    ("M990", "the verdict read only in last_assistant_message: elrond's reviewers hand it back by a tool (N1, F1)",
+     NOTIFY, "        verdict = verdict_of(final_report(transcript, data))\n",
+     '        verdict = verdict_of(data.get("last_assistant_message", ""))\n'),
+    ("M991", "a fork's pull request posts in the lot its title names (N1, F5)", NOTIFY,
+     "            lot = issue = \"\"   # a fork's pull request: #ci only, never a lot's thread (its title names any lot)\n",
+     "            pass\n"),
+    ("M992", "every closed issue creates a thread, a lot or not (N1, F5)", NOTIFY,
+     "archive=True, create=bool(lot))]", "archive=True)]"),
+    ("M993", "http.client's errors not caught: InvalidURL quotes the webhook's token (N1, F6)", NOTIFY,
+     "        except Exception as e:  # URLError, http.client's errors: InvalidURL quotes the URL, token and all\n",
+     "        except (OSError, ValueError) as e:\n"),
+    ("M994", "a blocked lot without configuration writes the local state (N1, F7)", NOTIFY,
+     "    if not (cfg.agents or cfg.lots):   # nothing configured: nothing written, not even the local state\n"
+     "        return 0\n", ""),
+]
+TESTS.update({f"M{n}": "tests/unit/test_notify_discord.py" for n in range(990, 995)})
+
 # N2 (#243): the road to 1.0 in Discord, scripts/roadmap_discord.py (and the thread matching it
 # shares with notify_discord.py), measured by tests/unit/test_roadmap_discord.py. Range M980–M989.
 ROADMAP_D = "scripts/roadmap_discord.py"
@@ -2421,24 +2449,6 @@ MUTANTS += [
      "        if milestone not in nd.MILESTONE_TAGS:"),
 ]
 TESTS.update({f"M{n}": "tests/unit/test_roadmap_discord.py" for n in range(980, 990)})
-# N1 after its review (27/10, F1–F8): M990–M994, taken from this session's range (M970–M999).
-MUTANTS += [
-    ("M990", "the verdict read only in last_assistant_message: elrond's reviewers hand it back by a tool (N1, F1)",
-     NOTIFY, "        verdict = verdict_of(final_report(transcript, data))\n",
-     '        verdict = verdict_of(data.get("last_assistant_message", ""))\n'),
-    ("M991", "a fork's pull request posts in the lot its title names (N1, F5)", NOTIFY,
-     "            lot = issue = \"\"   # a fork's pull request: #ci only, never a lot's thread (its title names any lot)\n",
-     "            pass\n"),
-    ("M992", "every closed issue creates a thread, a lot or not (N1, F5)", NOTIFY,
-     "archive=True, create=bool(lot))]", "archive=True)]"),
-    ("M993", "http.client's errors not caught: InvalidURL quotes the webhook's token (N1, F6)", NOTIFY,
-     "        except Exception as e:  # URLError, http.client's errors: InvalidURL quotes the URL, token and all\n",
-     "        except (OSError, ValueError) as e:\n"),
-    ("M994", "a blocked lot without configuration writes the local state (N1, F7)", NOTIFY,
-     "    if not (cfg.agents or cfg.lots):   # nothing configured: nothing written, not even the local state\n"
-     "        return 0\n", ""),
-]
-TESTS.update({f"M{n}": "tests/unit/test_notify_discord.py" for n in range(990, 995)})
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Eregion — block commit MESSAGES containing real infra identifiers.
 # (Avoids re-leaking a scrubbed term in a commit subject/body — almost happened.)
-# Shares the same denylist as pre-commit: <gitdir>/infra-denylist.txt
+# Shares the same denylist as pre-commit: <git common dir>/infra-denylist.txt
 
-denylist="$(git rev-parse --git-dir)/infra-denylist.txt"
+denylist="$(git rev-parse --git-common-dir)/infra-denylist.txt"  # common dir: the same list in every worktree
 [ -f "$denylist" ] || exit 0
 
 patterns="$(grep -vE '^[[:space:]]*(#|$)' "$denylist")"

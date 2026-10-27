@@ -350,11 +350,15 @@ def resolve_attack_started(signal: dict) -> dict:
         if "attack_time" in raw and 0 < since_attack < 86400:
             detection_s = round(since_attack)
         from glorfindel.detection_rules import normalize_row
+        from glorfindel.detectors import is_control_plane_source
         return {
             **signal,
             "event": "detection",
             "raw_signal": {
                 **raw,
+                # A control-plane source says so (AL1): the guard of `decide` reads it. A
+                # data-plane signal is unchanged — what the model sees stays the same.
+                **({"detection_source": source} if is_control_plane_source(source) else {}),
                 "detection_time_s": detection_s,
                 "detected_data": detected_row,
                 "normalized_signal": normalize_row(detected_row, ttp=signal.get("ttp", "")),
@@ -615,6 +619,7 @@ _HELD_BY_TYPE = {
     "attribution": "unattributed_signal",
     "telemetry": "telemetry_gap",
     "agreement": "unstable_decision",
+    "control_plane": "control_plane_change",
 }
 
 # Actions aimed at ONE VM. On a detection the RulePoller could not tie to that VM (a row
@@ -734,6 +739,55 @@ def _apply_confidence_gate(d: dict, raw_conf, threshold: float) -> None:
                     f"Seuil de confiance invalide (GLORFINDEL_CONFIDENCE_THRESHOLD) — action "
                     f"'{d['action']}' (confiance {shown}) retenue pour revue humaine. "
                     "Corriger la valeur (entre 0 et 1) pour qu'une action puisse partir seule.")
+
+
+def _is_control_plane(signal: dict) -> bool:
+    """A detection on what was done to the cloud's resources (AzureActivity, AL1): the
+    RulePoller says so (`context.plane`), and so does the source it read."""
+    from glorfindel.detectors import is_control_plane_source
+    ctx = signal.get("context") or {}
+    raw = signal.get("raw_signal") or {}
+    return ctx.get("plane") == "control" or is_control_plane_source(str(raw.get("detection_source") or ""))
+
+
+def _apply_control_plane_guard(d: dict, signal: dict) -> None:
+    """Never an autonomous action on a control-plane detection (AL1) — model-independent.
+
+    A row of the Activity Log says who did what to which resource: an NSG rule changed,
+    a role assigned, a snapshot taken. The answer is a human's — revert a change, revoke an
+    identity — and the VM the card is anchored on may have nothing to do with it. So every
+    decision on it is escalated, whatever the model chose and whatever its confidence:
+    `control_plane_change`, never approvable in one click. First of the gates: it holds
+    even what the model escalated itself, so the card says why. The gravest cases are
+    named: a write by someone else on a rule Glorfindel manages (an isolation or a block
+    may be gone), and Glorfindel's identity doing what Glorfindel never does."""
+    if not _is_control_plane(signal):
+        return
+    from glorfindel.detection_rules import normalize_row
+    raw = signal.get("raw_signal") or {}
+    norm = raw.get("normalized_signal") or normalize_row(
+        raw.get("detected_data") or raw.get("first_result_row") or {}, signal.get("ttp", ""))
+    op = norm.get("indicator_value") or "?"
+    who = norm.get("caller") or "appelant inconnu"
+    where = f" depuis {norm['caller_ip']}" if norm.get("caller_ip") else ""
+    target = norm.get("resource") or "?"
+    what = f"Plan de contrôle : {op} par {who}{where} sur {target}."
+    if norm.get("glorfindel_managed"):
+        what += (" Une règle gérée par Glorfindel (isolation, quarantaine ou blocage) a été "
+                 "écrite par un autre appelant : une isolation ou un blocage a pu être levé. "
+                 "Vérifier l'état réel de l'isolation ou du blocage sur Azure avant tout.")
+    if norm.get("glorfindel_identity"):
+        what += (" L'identité de Glorfindel a fait une opération qu'il ne fait jamais : ses "
+                 "identifiants sont peut-être entre d'autres mains.")
+    held = f"'{d['action']}' retenue" if d.get("action") else "aucune action"
+    model = (d.get("escalation_reason") or "").strip() if d.get("escalate") else ""
+    d["escalate"] = True
+    d["held_by"] = "control_plane"
+    d["escalation_reason"] = (
+        f"{what} Détection seule : aucune action autonome sur le plan de contrôle — {held} "
+        "pour revue humaine (garde déterministe, indépendante de la confiance du LLM)."
+        + (f" Le modèle : {model}" if model else "")
+    )
 
 
 def _apply_signal_guardrail(d: dict, signal: dict) -> None:
@@ -1061,6 +1115,7 @@ def decide(
     patterns and `--mode`, including VMs created after the setting.
 
     Gates, in order (each a pure helper, testable on its own): parsing defaults →
+    control-plane guard (AL1: a detection on the Activity Log never acts alone) →
     executable guard → confidence gate → deterministic signal guardrail → attribution
     guard → telemetry guard → release precondition → autonomy mode → agreement of the
     draws (D-1: a disruptive action about to run alone is drawn again, at the model's
@@ -1145,6 +1200,7 @@ def decide(
 
     d, raw_conf = _parse_decision(response)
     threshold = _confidence_threshold()
+    _apply_control_plane_guard(d, signal)
     _apply_executable_guard(d)
     _apply_confidence_gate(d, raw_conf, threshold)
     _apply_signal_guardrail(d, signal)

@@ -73,7 +73,18 @@ def capabilities_of(connector=None) -> ProviderCapabilities:
 
 
 class DetectionConnector(ABC):
-    """Provider-agnostic interface for polling alert/detection sources."""
+    """Provider-agnostic interface for polling alert/detection sources.
+
+    `plane`: "data" (what runs in a workload: Perf, Syslog, storage logs) or "control"
+    (what is done TO the cloud's resources: Azure's Activity Log — AL1). A control-plane
+    detection never leads to an autonomous action (the control-plane guard of `decide`).
+    `backend_type`: the monitoring backend type it reads ("" — its own source name).
+    `min_lookback_s`: the shortest window a rule on it may look back (ingestion latency);
+    a shorter one is said at load."""
+
+    plane = "data"
+    backend_type = ""
+    min_lookback_s = 0.0
 
     @abstractmethod
     def poll_alert(

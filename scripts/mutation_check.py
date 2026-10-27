@@ -1538,6 +1538,69 @@ MUTANTS += [
      'if q is not None and q["GroupId"] in e["groups"]:'),
 ]
 
+# AL1 (#225) — Azure's Activity Log, detection only: Glorfindel's own writes excluded by its
+# identity and its declared operations, its own rules marked, no autonomous action on the
+# control plane, a row arriving late neither missed nor dispatched twice. Range M810–M829,
+# measured by tests/unit/test_activity_logs.py.
+ACT = "glorfindel/providers/azure/activity.py"
+AGT = "glorfindel/agent.py"
+DRU = "glorfindel/detection_rules.py"
+MUTANTS += [
+    ("M810", "Glorfindel's own writes not excluded: its own isolation escalates itself (AL1)", ACT,
+     "        if is_own_call(row, own):\n            continue\n", ""),
+    ("M811", "no control-plane guard: an AzureActivity detection leads to isolate_vm (AL1)", AGT,
+     "    _apply_control_plane_guard(d, signal)\n    _apply_executable_guard(d)",
+     "    _apply_executable_guard(d)"),
+    ("M812", "the control-plane guard lets a snapshot run alone (AL1)", AGT,
+     "    if not _is_control_plane(signal):\n        return\n    from glorfindel.detection_rules import normalize_row",
+     "    if not _is_control_plane(signal) or d.get(\"action\") == \"snapshot\":\n        return\n"
+     "    from glorfindel.detection_rules import normalize_row"),
+    ("M813", "a control-plane card folded into the pending one: a write on Glorfindel's rules unseen (AL1)",
+     "glorfindel/escalations.py",
+     "                and escalation_type != \"control_plane_change\"\n", ""),
+    ("M814", "the control-plane guard ignores the source it read (AL1)", AGT,
+     "    return ctx.get(\"plane\") == \"control\" or is_control_plane_source(str(raw.get(\"detection_source\") or \"\"))",
+     "    return ctx.get(\"plane\") == \"control\""),
+    ("M815", "a held control-plane decision typed low_confidence: approvable in one click (AL1)", AGT,
+     "    \"control_plane\": \"control_plane_change\",\n", ""),
+    ("M816", "a write on a glorfindel-* rule not seen as Glorfindel's (AL1)", ACT,
+     "    if \"/securityrules/glorfindel-\" in rid:\n        return True\n", ""),
+    ("M817", "a write on the quarantine NSG not seen as Glorfindel's (AL1)", ACT,
+     "        return nsg.startswith(QUARANTINE_NSG_PREFIX)\n", "        return False\n"),
+    ("M818", "Glorfindel's identity excluded whatever it does: a role it assigns is dropped (AL1)", ACT,
+     "    return bool(own) and bool(caller_ids(row) & own) and operation(row) in own_operations()",
+     "    return bool(own) and bool(caller_ids(row) & own)"),
+    ("M819", "the identity in Glorfindel's token ignored (AL1)", ACT,
+     "            return ids | self._token_ids\n", "            return ids\n"),
+    ("M820", "the caller's ids in Claims ignored (AL1)", ACT,
+     "    ids |= {str(claims[k]).strip().lower() for k in _CLAIM_KEYS if claims.get(k)}\n", ""),
+    ("M821", "the caller compared case-sensitively (AL1)", ACT,
+     "    ids = {str(row[c]).strip().lower() for c in _CALLER_COLUMNS if row.get(c)}",
+     "    ids = {str(row[c]).strip() for c in _CALLER_COLUMNS if row.get(c)}"),
+    ("M822", "a control-plane operation deduplicated by its line: Start then Success dispatched twice (AL1)", DRU,
+     "    if row.get(\"OperationNameValue\") and row.get(\"CorrelationId\"):", "    if False:"),
+    ("M823", "a control-plane rule shorter than the ingestion latency loads in silence (AL1)", DRU,
+     "        if rule_enabled and _query_lookback_s(item[\"query\"]) < min_lookback:",
+     "        if False:"),
+    ("M824", "the shipped NSG rule looks back 10 minutes: a row ingested late is never seen (AL1)",
+     "glorfindel/rules/azure/detection_rules.yaml",
+     "      AzureActivity\n      | where TimeGenerated > ago(1h)\n      | where OperationNameValue in~ (\n"
+     "          \"MICROSOFT.NETWORK",
+     "      AzureActivity\n      | where TimeGenerated > ago(10m)\n      | where OperationNameValue in~ (\n"
+     "          \"MICROSOFT.NETWORK"),
+    ("M825", "a row on a VM's sub-resource (a role scoped on the VM) dropped, not attributed (AL1)", DRU,
+     "                named, tgt = True, by_rid.get(_vm_id_of(rid))",
+     "                named, tgt = True, by_rid.get(rid.lower())"),
+    ("M826", "the newest operation chosen over a write on Glorfindel's rules (AL1)", DRU,
+     "                        r.get(\"GlorfindelManaged\") is True or r.get(\"GlorfindelIdentity\") is True,\n", ""),
+    ("M827", "a write on Glorfindel's rules not critical (AL1)", DRU,
+     "            \"severity\": \"critical\" if grave else \"high\",", "            \"severity\": \"high\","),
+    ("M828", "a control-plane row normalised as a caller IP: no operation, no caller (AL1)", DRU,
+     "    if row.get(\"OperationNameValue\"):\n        return {", "    if False:\n        return {"),
+    ("M829", "an AzureActivity rule bound to no backend: disabled, it never polls (AL1)", DRU,
+     "                backend_type_of(rule_source),\n            )", "                rule_source,\n            )"),
+]
+
 # Mutants measured by other tests than the invariants (their lot's own).
 TESTS = {mid: INSCRIPTION_TESTS for mid in ("M42", "M43", "M44", "M45", "M46", "M47")}
 TESTS.update({mid: DOCS_TESTS for mid in ("M48", "M49")})
@@ -1631,6 +1694,7 @@ TESTS["M403"] = "tests/unit/test_console_exercises.py"
 TESTS.update({f"M{n}": "tests/unit/test_watch_gate.py" for n in (*range(720, 740), *range(750, 760))})
 TESTS.update({f"M{n}": "tests/unit/test_gothmog.py" for n in (724, 725, 726, 727)})
 TESTS.update({f"M{n}": "tests/unit/test_host_console.py" for n in range(740, 750)})  # UI-1c
+TESTS.update({f"M{n}": "tests/unit/test_activity_logs.py" for n in range(810, 830)})  # AL1
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

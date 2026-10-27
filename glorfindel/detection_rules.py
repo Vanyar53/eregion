@@ -17,7 +17,12 @@ try:
 except ImportError:
     yaml = None  # type: ignore[assignment]
 
-from glorfindel.detectors import detector_for  # noqa: E402  (after optional deps)
+from glorfindel.detectors import (  # noqa: E402  (after optional deps)
+    backend_type_of,
+    detector_class,
+    detector_for,
+    is_control_plane_source,
+)
 
 logger = logging.getLogger("glorfindel.detection_rules")
 
@@ -170,7 +175,23 @@ def normalize_row(row: dict, ttp: str = "") -> dict:
     adds a normalised summary so the LLM can identify the primary threat signal
     without parsing opaque column names.
     Falls back gracefully when the row has no recognised columns.
+
+    A control-plane row (AzureActivity, AL1: it has `OperationNameValue`) gives the
+    operation as its indicator, the resource it targets, and who made it — `caller`,
+    `caller_ip`, and whether its target is Glorfindel's (`glorfindel_managed`) or its
+    caller Glorfindel's own identity (`glorfindel_identity`). Every other row keeps the
+    three keys it had.
     """
+    if row.get("OperationNameValue"):
+        return {
+            "resource": str(row.get("_ResourceId") or row.get("ResourceId") or ""),
+            "indicator_key": "control_plane_operation",
+            "indicator_value": row["OperationNameValue"],
+            "caller": row.get("Caller") or "",
+            "caller_ip": row.get("CallerIpAddress") or "",
+            "glorfindel_managed": row.get("GlorfindelManaged") is True,
+            "glorfindel_identity": row.get("GlorfindelIdentity") is True,
+        }
     resource = next((row[c] for c in _RESOURCE_COLUMNS if c in row), "")
 
     for col, label in _INDICATOR_COLUMNS:
@@ -544,18 +565,24 @@ def load_config(path: str | Path, glorfindel_cfg=None, client_layer: str | Path 
             source = rule_source
             resolved_backend_name = primary_backend_name
         else:
+            # An AzureActivity rule reads the azure_monitor workspace (AL1): its backend
+            # type is not its source name.
             backend = _resolve_backend_for_rule(
-                item["name"], primary_backend_name, backend_by_name, backends, rule_source,
+                item["name"], primary_backend_name, backend_by_name, backends,
+                backend_type_of(rule_source),
             )
             workspace_id = backend.workspace_id if backend else ""
-            source = backend.type if backend else rule_source
+            if backend is not None and backend_type_of(rule_source) == backend.type:
+                source = rule_source
+            else:
+                source = backend.type if backend else rule_source
             # Asset matching (expand_for_discovered) keys off this name, so it must
             # be the RESOLVED backend's name — not a stale/typo'd reference.
             resolved_backend_name = backend.name if backend else primary_backend_name
 
         # A rule that couldn't resolve a workspace must not poll silently.
         rule_enabled = True
-        if source == "azure_monitor" and not workspace_id:
+        if backend_type_of(source) == "azure_monitor" and not workspace_id:
             logger.warning(
                 "detection rule '%s': no workspace_id resolved — rule disabled",
                 item["name"],
@@ -569,6 +596,16 @@ def load_config(path: str | Path, glorfindel_cfg=None, client_layer: str | Path 
                     "s'applique à aucune VM découverte (la lier : monitoring_backends: [<backend>], "
                     "assets: [auto] ; glorfindel migrate-rules le fait pour une règle approuvée avant P1)")
             notes.append(note)
+
+        # A control-plane log arrives late (AzureActivity: minutes, sometimes more than
+        # ten): a shorter window drops the row before it is ingested (AL1).
+        min_lookback = getattr(detector_class(source), "min_lookback_s", 0.0) or 0.0
+        if rule_enabled and _query_lookback_s(item["query"]) < min_lookback:
+            notes.append(
+                f"règle « {item['name']} » ({source}) : fenêtre "
+                f"{int(_query_lookback_s(item['query']) // 60)} min, plus courte que la latence "
+                f"d'ingestion de sa source — les lignes arrivées en retard ne sont jamais vues "
+                f"(au moins ago({int(min_lookback // 60)}m))")
 
         if auto_apply and _truncates_before_vm_filter(item["query"]):
             logger.warning(
@@ -694,6 +731,11 @@ def _row_identity(row: dict) -> str:
     its non-numeric columns (who, where) — the same attacker on the same VM is one
     detection for the length of the query window.
     """
+    # A control-plane operation (AzureActivity, AL1) is its correlation id, operation and
+    # target: its Start, Accept and Success lines — and a line ingested late — are one.
+    if row.get("OperationNameValue") and row.get("CorrelationId"):
+        return "op:" + "|".join(str(row.get(k) or "").lower()
+                                for k in ("CorrelationId", "OperationNameValue", "_ResourceId"))
     ts = row.get("TimeGenerated")
     if ts:
         return f"ts:{ts}"
@@ -751,6 +793,16 @@ _IP_OWNERS_TTL_S = 300.0
 # Columns naming the VM that MADE a call (not an attacker's address): a storage call's
 # caller is the VM itself (T1041 exfiltration via its managed identity).
 _VM_IP_COLUMNS = ("CallerIpAddress",)
+
+
+# A VM's own id in a longer one: an extension, a Run Command, a role assignment scoped on
+# the VM (AzureActivity, AL1) names the VM it concerns.
+_VM_ID_RE = re.compile(r"^(.*?/providers/microsoft\.compute/virtualmachines/[^/]+)", re.IGNORECASE)
+
+
+def _vm_id_of(resource_id: str) -> str:
+    m = _VM_ID_RE.match(resource_id)
+    return (m.group(1) if m else resource_id).lower()
 
 
 def _caller_ip(row: dict) -> str:
@@ -913,7 +965,7 @@ class RulePoller:
             named, tgt = False, None
             rid = row.get("_ResourceId") or row.get("ResourceId")
             if isinstance(rid, str) and "/microsoft.compute/virtualmachines/" in rid.lower():
-                named, tgt = True, by_rid.get(rid.lower())
+                named, tgt = True, by_rid.get(_vm_id_of(rid))
             if not named:
                 comp = row.get("Computer")
                 if isinstance(comp, str) and comp:
@@ -979,7 +1031,11 @@ class RulePoller:
                 events = [r for r in new if r.get("TimeGenerated")]
                 send = [r for r in new if not r.get("TimeGenerated")]
                 if events:
-                    send.append(max(events, key=lambda r: str(r["TimeGenerated"])))
+                    # The gravest first (AL1): a write on Glorfindel's own rules, or by its
+                    # identity outside what it does, then the newest.
+                    send.append(max(events, key=lambda r: (
+                        r.get("GlorfindelManaged") is True or r.get("GlorfindelIdentity") is True,
+                        str(r["TimeGenerated"]))))
                 plan.append((key, tgt, send))
                 sent_ids[key] = [_row_identity(r) for r in new]
 
@@ -1020,11 +1076,14 @@ class RulePoller:
             resource_id, asset_name = sorted(targets, key=lambda t: t[1])[0]
             attribution = "unattributed"
         ts_compact = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        # Control plane (AL1): detection only — `plane` is what the guard of `decide` reads.
+        control = is_control_plane_source(rule.source)
+        grave = control and (row.get("GlorfindelManaged") is True or row.get("GlorfindelIdentity") is True)
         return {
             "signal_id": f"rule-{rule.name}-{uuid.uuid4().hex[:8]}",
             "event": "detection",
             "ttp": rule.ttp,
-            "severity": "high",
+            "severity": "critical" if grave else "high",
             "resource_id": resource_id,
             "resource_type": "vm",
             "provider": "azure",
@@ -1038,6 +1097,7 @@ class RulePoller:
                 "run_id": f"watch-{rule.name}-{ts_compact}",
                 "attribution": attribution,
                 **({"candidates": sorted(n for _, n in targets)} if attribution == "unattributed" else {}),
+                **({"plane": "control"} if control else {}),
             },
             "raw_signal": {
                 "detection_source": rule.source,

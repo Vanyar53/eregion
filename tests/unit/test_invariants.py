@@ -1534,6 +1534,37 @@ class IsolationMachine(RuleBasedStateMachine):
         self._claims_after_a_change()
         self.reassert(_Drawn(data, fault=None))
 
+    @rule(data=st.data())
+    def joins_an_old_isolation(self, data):
+        """A rare state made common (I4F): a new VM on the NSG where an older version's
+        isolation of another VM lies, isolated — its NIC then away from that NSG, in
+        quarantine or left bare — and reset or released. Drawn one by one, the steps met
+        once at 2 000 sequences. The operator turns the quarantine on first (as
+        config_changes may): by rules, the NIC never leaves its NSG."""
+        nsgs = sorted({k for k, _ in self.legacy if k in self.fake.nsgs})
+        if not nsgs:
+            return
+        if not (self.config["quarantine"] and self.config["readable"]):
+            self.config = {**self.config, "quarantine": True, "readable": True}
+            self._write_config()
+        g = self.fake.nsgs[data.draw(st.sampled_from(nsgs), label="old isolation's NSG")]
+        count = len(self.vms)
+        self.create_vm(_Drawn(data, region=g["location"], nsg=g["id"]))
+        if len(self.vms) == count:
+            return
+        vm = self.vms[-1]
+        self._isolate(vm, vm, None)
+        if data.draw(st.booleans(), label="left bare"):
+            away = [key(n) for n in self.fake.vms[key(vm)]["nics"]
+                    if self.fake.nics[key(n)]["nsg"] and actions._is_quarantine_nsg(self.fake.nics[key(n)]["nsg"])]
+            if away:
+                self.someone_detaches_the_quarantine(_Drawn(data, nic=away[0]))
+        # The reset three times in four: the release puts the NIC back before reading.
+        if data.draw(st.sampled_from([True, True, True, False]), label="reset"):
+            self.reset_from_azure(_Drawn(data, vm=vm, fault=None))
+        else:
+            self._release(vm, vm, None)
+
     @rule()
     def time_passes(self):
         """Forty minutes go by: an operation's marker left behind is stale now."""

@@ -387,6 +387,29 @@ def test_unknown_keys_are_refused_at_every_level(tmp_path, where, text):
     assert "clé inconnue" in msg and (where or "notifications") in msg
 
 
+@pytest.mark.parametrize("where, text, close", [
+    ("monitoring_backends[0].type", "monitoring_backends:\n  - name: law\n    type: azure_monitr\n",
+     "azure_monitor"),
+    ("action_backends[0].type", "action_backends:\n  - name: rsv\n    type: azure_backup\n",
+     "azure_backup_vault"),
+])
+def test_an_unknown_backend_type_is_refused(tmp_path, where, text, close):
+    """A3, first review: `type: azure_monitr` was a backend nothing read — no discovery,
+    no rule bound to it — in silence."""
+    msg = _refused(tmp_path, text)
+    assert f"{where} : type inconnu" in msg and f"« {close} »" in msg
+
+
+def test_the_known_backend_types_load(tmp_path):
+    cfg = tmp_path / "glorfindel-config.yaml"
+    cfg.write_text("monitoring_backends:\n  - name: law\n    type: azure_monitor\n"
+                   "  - name: prom\n    type: prometheus\n"
+                   "action_backends:\n  - name: rsv\n    type: azure_backup_vault\n")
+    c = load_glorfindel_config(cfg)
+    assert [b.type for b in c.monitoring_backends] == ["azure_monitor", "prometheus"]
+    assert c.backup_vault().name == "rsv"
+
+
 @pytest.mark.parametrize("key, text", [
     ("isolation.quarantine_nsg", "isolation:\n  quarantine_nsg: \"false\"\n"),
     ("exceptions[0].exclude_all", "exceptions:\n  - asset_pattern: vm-*\n    exclude_all: \"false\"\n"),

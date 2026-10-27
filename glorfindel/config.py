@@ -473,6 +473,10 @@ _EXCEPTION_KEYS = ("asset_pattern", "exclude_all", "exclude_rules")
 _AUTONOMY_KEYS = ("default", "assets", "allow_destructive")
 _AUTONOMY_ASSET_KEYS = ("match", "mode")
 _ISOLATION_KEYS = ("quarantine_nsg", "quarantine_rg", "forensic_sources", "forensic_ports")
+# The backend types something reads (discovery.py, detection_rules.py, backup_vault()):
+# `type: azure_monitr` was a backend nothing used, in silence. A new type is added here.
+_MONITORING_TYPES = ("azure_monitor", "prometheus")
+_ACTION_TYPES = ("azure_backup_vault",)
 
 
 def _shown(value) -> str:
@@ -527,6 +531,17 @@ class _Checker:
         if required and not value.strip():
             self.bad(f"{where}.{k}", "obligatoire, et vide ici")
         return value
+
+    def choice(self, raw: dict, k: str, where: str, allowed, default: str) -> str:
+        """A text among `allowed` — a near miss is named."""
+        import difflib
+        value = self.text(raw, k, where, default=default)
+        if raw.get(k) is None or not isinstance(raw.get(k), str) or value in allowed:
+            return value
+        close = difflib.get_close_matches(value, list(allowed), n=1, cutoff=0.6)
+        hint = f" — vouliez-vous dire « {close[0]} » ?" if close else ""
+        self.bad(f"{where}.{k}", f"type inconnu {_shown(value)}{hint} (types possibles : {', '.join(allowed)})")
+        return default
 
     def flag(self, raw: dict, k: str, where: str, default: bool) -> bool:
         value = raw.get(k)
@@ -591,7 +606,7 @@ def _parse_config(data: dict) -> GlorfindelConfig:
         check.keys(disc_raw, f"{where}.discovery", _DISCOVERY_KEYS)
         monitoring_backends.append(MonitoringBackendConfig(
             name=check.text(b, "name", where, required=True),
-            type=check.text(b, "type", where, default="azure_monitor"),
+            type=check.choice(b, "type", where, _MONITORING_TYPES, default="azure_monitor"),
             workspace_id=check.text(b, "workspace_id", where),
             endpoint=check.text(b, "endpoint", where),
             discovery=DiscoveryConfig(
@@ -609,7 +624,7 @@ def _parse_config(data: dict) -> GlorfindelConfig:
         check.keys(b, where, _ACTION_KEYS)
         action_backends.append(ActionBackendConfig(
             name=check.text(b, "name", where, required=True),
-            type=check.text(b, "type", where, default="azure_backup_vault"),
+            type=check.choice(b, "type", where, _ACTION_TYPES, default="azure_backup_vault"),
             vault_name=check.text(b, "vault_name", where),
             resource_group=check.text(b, "resource_group", where),
             restore_staging_storage=check.text(b, "restore_staging_storage", where),

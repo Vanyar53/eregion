@@ -835,6 +835,8 @@ lock:
 	$(UV) pip compile pyproject.toml requirements/build.in --extra dev $(LOCK_FLAGS) -o requirements/dev.txt
 	$(UV) pip compile pyproject.toml requirements/build.in --extra glorfindel --extra war-room \
 	  -c requirements/dev.txt $(LOCK_FLAGS) -o requirements/glorfindel.txt
+	$(UV) pip compile pyproject.toml requirements/build.in --extra annatar \
+	  -c requirements/dev.txt $(LOCK_FLAGS) -o requirements/annatar.txt
 
 test:
 	$(PYTHON) -m pytest tests/ -v

@@ -606,6 +606,14 @@ def load_config(path: str | Path, glorfindel_cfg=None, client_layer: str | Path 
                 f"{int(_query_lookback_s(item['query']) // 60)} min, plus courte que la latence "
                 f"d'ingestion de sa source — les lignes arrivées en retard ne sont jamais vues "
                 f"(au moins ago({int(min_lookback // 60)}m))")
+        # Without its CorrelationId, an operation's identity is its time: two operations
+        # at the same instant fold into one card, the second never seen (AL1).
+        if rule_enabled and (is_control_plane_source(source) or "azureactivity" in item["query"].lower()) \
+                and "correlationid" not in item["query"].lower():
+            notes.append(
+                f"règle « {item['name']} » ({source}) : la requête ne projette pas "
+                f"CorrelationId — deux opérations au même horodatage n'y font qu'une détection, "
+                f"la seconde jamais vue (projeter CorrelationId, OperationNameValue, _ResourceId)")
 
         if auto_apply and _truncates_before_vm_filter(item["query"]):
             logger.warning(

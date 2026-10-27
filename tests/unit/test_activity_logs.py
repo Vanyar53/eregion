@@ -96,6 +96,19 @@ def _no_ambient_identity(monkeypatch):
     monkeypatch.delenv("GLORFINDEL_OWN_CALLERS", raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _vm1_isolated():
+    """Glorfindel isolated vm1: its state names the rules it placed (GL_RULE and its -out)
+    — what makes a `glorfindel-*` rule on a customer's NSG its own."""
+    import glorfindel.actions as actions
+    d = actions._ISOLATION_STATE_DIR
+    d.mkdir(parents=True, exist_ok=True)
+    name = GL_RULE.rsplit("/", 1)[-1]
+    (d / "vm1.json").write_text(json.dumps({"resource_id": VM1, "placements": [
+        {"nic_id": f"{VM1}-nic", "nsg_rg": "rg-bench", "nsg_name": "nsg-web",
+         "rule_in": name, "rule_out": f"{name}-out", "bumped": [], "applied": [name]}]}))
+
+
 @pytest.fixture()
 def law(monkeypatch):
     """The workspace: what the parent detector's query returns (a list per call)."""
@@ -173,7 +186,7 @@ def test_a_control_plane_rule_shorter_than_the_ingestion_latency_is_said(tmp_pat
         "    query: |\n      AzureActivity\n      | where TimeGenerated > ago(2h)\n")
     notes = load_config(path, glorfindel_cfg=_cfg(), client_layer=False).notes
     assert any("« short »" in n and "latence d'ingestion" in n for n in notes)
-    assert not any("« long »" in n for n in notes)
+    assert not any("« long »" in n and "latence d'ingestion" in n for n in notes)
 
 
 # ── Glorfindel's own writes ───────────────────────────────────────────────────
@@ -187,7 +200,7 @@ def test_own_operations_are_the_rights_its_capabilities_declare():
 
 def test_glorfindel_own_isolation_is_dropped_an_outsiders_write_kept():
     own = {OWN_APP, OWN_OID}
-    kept = activity.prepare_rows([_own_isolation(), _row()], own)
+    kept = activity.prepare_rows([_own_isolation(), _row()], own, activity.recorded_targets())
     assert [r["Caller"] for r in kept] == [OUTSIDER]
     assert kept[0]["GlorfindelManaged"] is False and kept[0]["GlorfindelIdentity"] is False
 
@@ -197,7 +210,7 @@ def test_the_caller_is_matched_by_any_of_its_ids_whatever_the_case():
     # The id only in Claims (a rule that projects it), and in capitals; on its own rule.
     from_claims = _row(caller="", corr="c-2", target=GL_RULE, Claims=json.dumps({"appid": OWN_APP.upper()}))
     from_column = _row(caller=OWN_APP.upper(), corr="c-3", target=GL_RULE)
-    assert activity.prepare_rows([from_claims, from_column], own) == []
+    assert activity.prepare_rows([from_claims, from_column], own, activity.recorded_targets()) == []
 
 
 # ── its identity on what is not its own (review 5.5, constat 2) ─────────────────
@@ -246,7 +259,7 @@ def test_a_customer_rule_its_isolation_moved_is_its_own_while_recorded():
     _isolation_state(nsg_rg="rg-bench", nsg_name="nsg-web",
                      bumped=[{"name": "allow-web", "original_priority": 100}])
     rec = activity.recorded_targets()
-    assert "rg-bench/nsg-web/allow-web" in rec
+    assert "00000000-0000-0000-0000-000000000000/rg-bench/nsg-web/allow-web" in rec   # with its subscription
     own_bump = _row(caller=OWN_OID, corr="c-b")
     assert activity.prepare_rows([own_bump], {OWN_OID}, rec) == []
     # Another rule of the same NSG, not recorded: kept, marked.
@@ -767,3 +780,97 @@ def test_the_disabled_proposal_reads_no_subscription_and_sends_only_what_rules_r
     assert 'data "azurerm_subscription" "current" {\n  count = local.activity_log_enabled ? 1 : 0' in tf
     assert "data.azurerm_subscription.current[0].id" in tf
     assert 'category = "Administrative"' in tf and 'category = "Security"' not in tf
+
+
+# ── second 5.5 review: three limits closed before the merge ──────────────────
+
+def test_its_identity_hiding_an_allow_rule_behind_a_glorfindel_name_escalates(law):
+    """A `glorfindel-*` name on a customer's NSG is no proof: whoever holds Glorfindel's
+    credential writes `glorfindel-x` there, no state names it — kept, critical."""
+    rule = _shipped("nsg-change-outside-glorfindel")
+    law["rows"] = [_row(caller=OWN_OID, corr="c-x", CallerObjectId=OWN_OID,
+                        target=f"{NSG}/securityrules/glorfindel-x")]
+    p, sent = _poller(_detector(), rule)
+    p.poll_once(rule)
+    assert len(sent) == 1 and sent[0]["severity"] == "critical"
+    row = sent[0]["raw_signal"]["first_result_row"]
+    assert row["GlorfindelIdentity"] is True and row["GlorfindelManaged"] is True
+
+
+def test_the_rules_its_states_name_are_its_own_with_their_subscription():
+    """Isolation (`rule_in`/`rule_out`, a legacy state's `rule_names`) and block (`rule`,
+    `<rule>-out`, its placements) states name the rules Glorfindel placed — keyed with the
+    subscription of the state's VM: the same names in another subscription are not its."""
+    import glorfindel.actions as actions
+    sub = SUB.rsplit("/", 1)[-1]
+    d = actions._BLOCK_STATE_DIR
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "vm2.json").write_text(json.dumps([
+        {"ip": "203.0.113.9", "resource_id": VM2, "nsg": "rg-bench/nsg-web", "rule": "glorfindel-block-a",
+         "scoped": True, "placements": [{"nsg_rg": "rg-bench", "nsg_name": "nsg-app",
+                                         "rule": "glorfindel-block-b"}]}]))
+    (actions._ISOLATION_STATE_DIR / "vm3.json").write_text(json.dumps(
+        {"resource_id": VM2.replace("vm2", "vm3"), "nsg_rg": "rg-bench", "nsg_name": "nsg-old",
+         "rule_names": ["glorfindel-iso-old"]}))
+    rec = activity.recorded_targets()
+    for key in ("rg-bench/nsg-web/glorfindel-block-a", "rg-bench/nsg-web/glorfindel-block-a-out",
+                "rg-bench/nsg-app/glorfindel-block-b", "rg-bench/nsg-app/glorfindel-block-b-out",
+                "rg-bench/nsg-old/glorfindel-iso-old",
+                "rg-bench/nsg-web/glorfindel-iso-vm1-nic-vm1-a1b2c3-out"):
+        assert f"{sub}/{key}" in rec, key
+    own = _row(caller=OWN_OID, corr="c-b", target=f"{NSG}/securityrules/glorfindel-block-a")
+    assert activity.prepare_rows([own], {OWN_OID}, rec) == []
+    elsewhere = _row(caller=OWN_OID, corr="c-e", target=f"{NSG}/securityrules/glorfindel-block-a".replace(
+        sub, "11111111-1111-1111-1111-111111111111"))
+    assert activity.prepare_rows([elsewhere], {OWN_OID}, rec)[0]["GlorfindelIdentity"] is True
+    # Its quarantine NSG is its own by name: it is Glorfindel's NSG, not the customer's.
+    quarantine = _row(caller=OWN_OID, corr="c-q", target=f"{RG}/microsoft.network/networksecuritygroups/"
+                      "nsg-glorfindel-quarantine-westeurope/securityrules/glorfindel-quarantine-deny-in")
+    assert activity.prepare_rows([quarantine], {OWN_OID}, frozenset()) == []
+
+
+@pytest.mark.parametrize("raw", [
+    {"detection_source": "azure_monitor", "first_result_row": _row()},
+    {"detection_source": "splunk", "detected_data": _row()},
+    {"detection_source": "azure_monitor", "first_result_row": {"Computer": "vm1"},
+     "normalized_signal": {"indicator_key": "control_plane_operation", "indicator_value": RULE_OP}},
+])
+def test_an_activity_row_read_by_another_source_is_still_the_control_plane(raw):
+    """In depth: an AzureActivity row read by a rule `source: azure_monitor` (or bound to a
+    backend of another type) carries neither `plane` nor its source — its row says so, and
+    the model is never asked: no snapshot alone in non_disruptive."""
+    from glorfindel.agent import _is_control_plane, decide
+    from glorfindel.config import AutonomyConfig
+    sig = {"event": "detection", "ttp": "T1562.007", "resource_id": VM1, "context": {"attribution": "asset"},
+           "raw_signal": raw}
+    assert _is_control_plane(sig)
+    with patch("litellm.completion", return_value=_llm("snapshot")) as llm:
+        d = decide(_initial(sig), model="claude-test", autonomy=AutonomyConfig(default="non_disruptive"))
+    llm.assert_not_called()
+    assert d["action"] == "" and d["escalate"] is True and d["held_by"] == "control_plane"
+
+
+def test_a_control_plane_rule_without_correlation_id_is_said(tmp_path):
+    """Without its CorrelationId, an operation is its time: two at the same instant fold
+    into one card — said at load, the client's layer included."""
+    base = tmp_path / "rules.yaml"
+    base.write_text(
+        "rules:\n"
+        "  - name: no-corr\n    source: azure_activity\n    ttp: T1562.007\n    assets: [auto]\n"
+        "    query: |\n      AzureActivity\n      | where TimeGenerated > ago(2h)\n"
+        "      | project TimeGenerated, OperationNameValue, _ResourceId\n"
+        "  - name: monitor-on-activity\n    source: azure_monitor\n    ttp: T1562.007\n    assets: [auto]\n"
+        "    query: |\n      AzureActivity\n      | where TimeGenerated > ago(2h)\n"
+        "  - name: data\n    source: azure_monitor\n    ttp: T1486\n    assets: [auto]\n"
+        "    query: |\n      Perf\n      | where TimeGenerated > ago(5m)\n")
+    client = tmp_path / "client_rules.yaml"
+    client.write_text(
+        "rules:\n"
+        "  - name: client-no-corr\n    source: azure_activity\n    ttp: T1098.003\n    assets: [auto]\n"
+        "    query: |\n      AzureActivity\n      | where TimeGenerated > ago(2h)\n")
+    notes = load_config(base, glorfindel_cfg=_cfg(), client_layer=client).notes
+    said = {n.split("«")[1].split("»")[0].strip() for n in notes if "CorrelationId" in n}
+    assert said == {"no-corr", "monitor-on-activity", "client-no-corr"}
+    # The shipped rules project it: nothing said.
+    shipped = load_config(SHIPPED, glorfindel_cfg=_cfg(), client_layer=False).notes
+    assert not any("CorrelationId" in n for n in shipped)

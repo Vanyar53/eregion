@@ -1556,8 +1556,8 @@ MUTANTS += [
      "glorfindel/escalations.py",
      "                and escalation_type != \"control_plane_change\"\n", ""),
     ("M814", "the control-plane decision ignores the source it read: respond asks the model (AL1)", AGT,
-     "    return ctx.get(\"plane\") == \"control\" or is_control_plane_source(str(raw.get(\"detection_source\") or \"\"))",
-     "    return ctx.get(\"plane\") == \"control\""),
+     "    if ctx.get(\"plane\") == \"control\" or is_control_plane_source(str(raw.get(\"detection_source\") or \"\")):",
+     "    if ctx.get(\"plane\") == \"control\":"),
     ("M815", "a held control-plane decision typed low_confidence: approvable in one click (AL1)", AGT,
      "    \"control_plane\": \"control_plane_change\",\n", ""),
     ("M816", "a write on a glorfindel-* rule not seen as Glorfindel's (AL1)", ACT,
@@ -1608,8 +1608,7 @@ MUTANTS += [
      "            and owned_target(row, recorded))",
      "    return (bool(own) and bool(caller_ids(row) & own) and operation(row) in own_operations())"),
     ("M852", "a customer rule its isolation moved not its own: its release escalates, critical (AL1)", ACT,
-     "                    out.add(f\"{p.get('nsg_rg', '')}/{p.get('nsg_name', '')}/{b['name']}\".lower())\n",
-     "                    pass\n"),
+     "                    rule(sub, rg, nsg, b.get(\"name\"))\n", "                    pass\n"),
     ("M853", "control plane, one card per poll: the other operations marked sent, never seen (AL1)", DRU,
      "                    ops = _control_plane_operations(new)\n",
      "                    ops = _control_plane_operations(new)[:1]\n"),
@@ -1626,6 +1625,24 @@ MUTANTS += [
      "        if True:\n            memory.store(cycle)"),
     ("M859", "what an isolation state recorded forgotten once the state is gone: the release escalates (AL1)",
      ACT, "            return frozenset(self._recorded)\n", "            return current\n"),
+]
+
+# AL1, after the second 5.5 review (27/10): range M890–M894, measured by tests/unit/test_activity_logs.py.
+MUTANTS += [
+    ("M890", "a glorfindel-* name is proof enough: a stolen credential hides an allow rule behind it (AL1)",
+     ACT, "    if _in_quarantine_nsg(rid):\n        return True\n",
+     "    if _in_quarantine_nsg(rid) or \"/securityrules/glorfindel-\" in rid:\n        return True\n"),
+    ("M891", "the block states ignored: its own block escalates itself (AL1)", ACT,
+     "    for e in blocks:\n", "    for e in []:\n"),
+    ("M892", "the subscription left out of a recorded rule: the same names elsewhere taken as its own (AL1)",
+     ACT, "    return (f\"{sub}/{rg}/{nsg}/{rule}\" if sub else f\"{rg}/{nsg}/{rule}\").lower()",
+     "    return f\"{rg}/{nsg}/{rule}\".lower()"),
+    ("M893", "an AzureActivity row read by another source goes to the model: a snapshot runs alone (AL1)", AGT,
+     "    return (any(isinstance(r, dict) and r.get(\"OperationNameValue\") for r in rows)\n"
+     "            or (raw.get(\"normalized_signal\") or {}).get(\"indicator_key\") == \"control_plane_operation\")",
+     "    return False"),
+    ("M894", "a control-plane rule without CorrelationId loads in silence: two operations fold into one (AL1)",
+     DRU, "                and \"correlationid\" not in item[\"query\"].lower():", "                and False:"),
 ]
 
 # Mutants measured by other tests than the invariants (their lot's own).
@@ -1721,7 +1738,7 @@ TESTS["M403"] = "tests/unit/test_console_exercises.py"
 TESTS.update({f"M{n}": "tests/unit/test_watch_gate.py" for n in (*range(720, 740), *range(750, 760))})
 TESTS.update({f"M{n}": "tests/unit/test_gothmog.py" for n in (724, 725, 726, 727)})
 TESTS.update({f"M{n}": "tests/unit/test_host_console.py" for n in range(740, 750)})  # UI-1c
-TESTS.update({f"M{n}": "tests/unit/test_activity_logs.py" for n in (*range(810, 830), *range(850, 860))})  # AL1
+TESTS.update({f"M{n}": "tests/unit/test_activity_logs.py" for n in (*range(810, 830), *range(850, 860), *range(890, 895))})  # AL1
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

@@ -758,11 +758,18 @@ def _apply_confidence_gate(d: dict, raw_conf, threshold: float) -> None:
 
 def _is_control_plane(signal: dict) -> bool:
     """A detection on what was done to the cloud's resources (AzureActivity, AL1): the
-    RulePoller says so (`context.plane`), and so does the source it read."""
+    RulePoller says so (`context.plane`), and so does the source it read. In depth, the
+    row itself: an AzureActivity row read by a rule of another source (`azure_monitor`,
+    a backend of another type) loses both — its `OperationNameValue`, or its normalised
+    indicator, still says so."""
     from glorfindel.detectors import is_control_plane_source
     ctx = signal.get("context") or {}
     raw = signal.get("raw_signal") or {}
-    return ctx.get("plane") == "control" or is_control_plane_source(str(raw.get("detection_source") or ""))
+    if ctx.get("plane") == "control" or is_control_plane_source(str(raw.get("detection_source") or "")):
+        return True
+    rows = (raw.get("first_result_row") or {}, raw.get("detected_data") or {})
+    return (any(isinstance(r, dict) and r.get("OperationNameValue") for r in rows)
+            or (raw.get("normalized_signal") or {}).get("indicator_key") == "control_plane_operation")
 
 
 def _control_plane_row(signal: dict) -> dict:

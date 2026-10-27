@@ -187,9 +187,9 @@ rules:
   # Les écritures de Glorfindel lui-même (isolation, quarantaine, blocage, levée) sont
   # écartées par l'adaptateur (glorfindel/providers/azure/activity.py) : son identité
   # (jeton, AZURE_CLIENT_ID, GLORFINDEL_OWN_CALLERS) ET une opération qu'il fait ET une
-  # cible qui est à lui (règle glorfindel-*, NSG de quarantaine, ce qu'un état
-  # d'isolation lui attribue). Son identité hors de ce qu'il fait, ou sur une ressource
-  # du client, reste, marquée GlorfindelIdentity ; une écriture d'un autre sur une règle
+  # cible qui est à lui (NSG de quarantaine, règle qu'un état d'isolation ou de
+  # blocage nomme — un nom glorfindel-* seul ne suffit pas). Son identité hors de ce
+  # qu'il fait, ou sur une ressource du client, reste, marquée GlorfindelIdentity ; une écriture d'un autre sur une règle
   # de Glorfindel est marquée GlorfindelManaged (sévérité critique, toutes deux).
   # Chaque opération a sa carte (plafond par relevé, puis une carte de synthèse).
   # Latence d'ingestion : plusieurs minutes, parfois plus de dix (hypothèse, à mesurer

@@ -131,9 +131,10 @@ export AZURE_SUBSCRIPTION_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 
 # Journal d'activité (AL1) : les écritures de Glorfindel lui-même (isolation, quarantaine,
 # blocage) n'y sont pas escaladées — son identité, une opération qu'il fait, sur une cible
-# qui est à lui (règle glorfindel-*, NSG de quarantaine, ce qu'un état d'isolation lui
-# attribue). Son identité est lue dans son jeton et AZURE_CLIENT_ID ; en ajouter d'autres
-# (objet ou application d'un principal de service), séparées par des virgules.
+# qui est à lui (NSG de quarantaine, règles qu'un état d'isolation ou de blocage nomme — un
+# nom glorfindel-* seul ne suffit pas). Son identité est lue dans son jeton et
+# AZURE_CLIENT_ID ; en ajouter d'autres (objet ou application d'un principal de service),
+# séparées par des virgules.
 # Sous `az login` (jeton d'utilisateur), seul l'oid de l'utilisateur compte (l'appid est
 # celui de la CLI, commun au tenant) : les écritures de cet utilisateur sur les règles de
 # Glorfindel sont écartées comme les siennes — sur un hôte, une identité à lui.

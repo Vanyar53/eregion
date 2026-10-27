@@ -12,9 +12,10 @@ Two things only this adapter knows, so it does them before the rows leave it:
     the Activity Log under its own identity. A row is dropped only when all three hold:
     its caller is Glorfindel, its operation is one its capabilities declare
     (capabilities.py: the rights of each response), and its TARGET is Glorfindel's — a
-    `glorfindel-*` rule, a quarantine NSG, or what an isolation state records as its own
-    on a customer's resource (a rule whose priority it moved, `bumped`, that its release
-    puts back; a NIC it put in quarantine). Else each isolation escalates itself. Its
+    quarantine NSG, or what an isolation or a block state records as its own: the rules
+    it placed (a `glorfindel-*` name on a customer's NSG is no proof by itself), a rule
+    whose priority it moved (`bumped`, that its release puts back), a NIC it put in
+    quarantine. Else each isolation escalates itself. Its
     identity is read, never written in code: the claims of its credential's token,
     `AZURE_CLIENT_ID`, and `GLORFINDEL_OWN_CALLERS` (comma separated). From an
     application's token (a service principal, a managed identity) its `appid`/`azp` and
@@ -71,6 +72,7 @@ _CLAIM_KEYS = (
 _RULE_ID_RE = re.compile(
     r"/resourcegroups/([^/]+)/providers/microsoft\.network/networksecuritygroups/([^/]+)"
     r"/securityrules/([^/]+)$")
+_SUB_RE = re.compile(r"^/subscriptions/([^/]+)/", re.IGNORECASE)
 _TOKEN_SCOPE = "https://management.azure.com/.default"
 
 
@@ -119,41 +121,84 @@ def glorfindel_managed(row: dict) -> bool:
     return False
 
 
+def _rule_key(sub: str, rg: str, nsg: str, rule: str) -> str:
+    """`sub/rg/nsg/rule`, lowercase — `rg/nsg/rule` when the state names no subscription."""
+    return (f"{sub}/{rg}/{nsg}/{rule}" if sub else f"{rg}/{nsg}/{rule}").lower()
+
+
+def _subscription_of(resource_id: str) -> str:
+    m = _SUB_RE.match(resource_id or "")
+    return m.group(1).lower() if m else ""
+
+
 def recorded_targets() -> frozenset[str]:
-    """What the isolation states record as Glorfindel's on a customer's resources,
-    lowercase: each customer rule whose priority an isolation moved (`bumped`, put back by
-    its release — providers/azure/network.py `_restore_bumped`), as `rg/nsg/rule`, and each
-    NIC it put in quarantine, by id. Unreadable: nothing (its writes there then escalate)."""
+    """What the isolation and block states record as Glorfindel's, lowercase: each rule an
+    isolation or a block placed (`rule_in`/`rule_out`, `rule_names`, a block's `rule` and
+    `<rule>-out`), each customer rule whose priority an isolation moved (`bumped`, put
+    back by its release — providers/azure/network.py `_restore_bumped`), as
+    `sub/rg/nsg/rule` (the subscription of the state's VM: an NSG governs a NIC of its own
+    subscription; `rg/nsg/rule` when the state names none), and each NIC it put in
+    quarantine, by id. Unreadable: nothing (its writes there then escalate)."""
     try:
-        from glorfindel.response.state import active_isolations
-        states = active_isolations()
+        from glorfindel.response.state import active_blocks, active_isolations
+        states, blocks = active_isolations(), active_blocks()
     except Exception:
         return frozenset()
     out: set[str] = set()
+
+    def rule(sub, rg, nsg, name):
+        if nsg and name:
+            out.add(_rule_key(sub, rg or "", nsg, name))
+
     for st in states:
+        sub = _subscription_of(str(st.get("resource_id") or ""))
         places = list(st.get("placements") or [])
         if "placements" not in st and st.get("nsg_name"):          # a legacy single-NSG state
             places.append({"nsg_rg": st.get("nsg_rg", ""), "nsg_name": st["nsg_name"],
-                           "bumped": st.get("bumped") or []})
+                           "bumped": st.get("bumped") or [],
+                           "names": list(st.get("rule_names") or [])})
         for p in places:
+            rg, nsg = p.get("nsg_rg", ""), p.get("nsg_name", "")
+            for name in (p.get("rule_in"), p.get("rule_out"), *(p.get("names") or [])):
+                rule(sub, rg, nsg, name)
             for b in p.get("bumped") or []:
-                if isinstance(b, dict) and b.get("name"):
-                    out.add(f"{p.get('nsg_rg', '')}/{p.get('nsg_name', '')}/{b['name']}".lower())
+                if isinstance(b, dict):
+                    rule(sub, rg, nsg, b.get("name"))
             if p.get("kind") == "quarantine" and p.get("nic_id"):
                 out.add(str(p["nic_id"]).rstrip("/").lower())
+    for e in blocks:
+        sub = _subscription_of(str(e.get("resource_id") or ""))
+        places = list(e.get("placements") or [])
+        if e.get("rule") and "/" in str(e.get("nsg") or ""):            # subnet-wide, or legacy
+            rg, nsg = str(e["nsg"]).split("/", 1)
+            places.append({"nsg_rg": rg, "nsg_name": nsg, "rule": e["rule"]})
+        for p in places:
+            if p.get("rule"):
+                for name in (p["rule"], f"{p['rule']}-out"):
+                    rule(sub, p.get("nsg_rg", ""), p.get("nsg_name", ""), name)
     return frozenset(out)
 
 
+def _in_quarantine_nsg(rid: str) -> bool:
+    marker = "/networksecuritygroups/"
+    return marker in rid and rid.split(marker, 1)[1].split("/", 1)[0].startswith(QUARANTINE_NSG_PREFIX)
+
+
 def owned_target(row: dict, recorded: frozenset[str] | set[str] = frozenset()) -> bool:
-    """The row's target is Glorfindel's: one of its rules or NSGs, or what an isolation
-    state records as its own on a customer's resource (`recorded_targets`)."""
-    if glorfindel_managed(row):
-        return True
+    """The row's target is Glorfindel's: one of its quarantine NSGs (or what is in it), or
+    what a state records as its own (`recorded_targets`). A `glorfindel-*` rule on a
+    customer's NSG is Glorfindel's only when a state names it: the name alone is no proof
+    — whoever holds its credential could hide an allow rule behind it."""
     rid = target_resource(row).rstrip("/").lower()
+    if _in_quarantine_nsg(rid):
+        return True
     if rid in recorded:
         return True
     m = _RULE_ID_RE.search(rid)
-    return bool(m) and "/".join(m.groups()) in recorded
+    if not m:
+        return False
+    sub = _subscription_of(rid)
+    return _rule_key(sub, *m.groups()) in recorded or "/".join(m.groups()) in recorded
 
 
 def is_own_call(row: dict, own: set[str], recorded: frozenset[str] | set[str] = frozenset()) -> bool:

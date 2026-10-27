@@ -706,7 +706,7 @@ de la cible et le réseau lèvent, et chaque tentative est notée. Trente mutant
 
 Un faux `AzureActivity` (des lignes comme celles de la table, rendues par la requête du
 détecteur parent) traverse le vrai `AzureActivityDetector`, le RulePoller et le graphe, modèle
-simulé. Trente mutants (M810–M829, puis M850–M859 après la relecture 5.5), mesurés par
+simulé. Trente-cinq mutants (M810–M829, puis M850–M859 et M890–M894 après les relectures 5.5), mesurés par
 `tests/unit/test_activity_logs.py`, tous attrapés (27/10).
 
 | Mutant | Défaut réinjecté | Effet |
@@ -741,6 +741,11 @@ simulé. Trente mutants (M810–M829, puis M850–M859 après la relecture 5.5),
 | M857 | un signal non attribué ouvre l'incident de la VM d'ancrage | le cycle suivant y lit « 2 signaux » |
 | M858 | un cycle du plan de contrôle dans la mémoire de décision | un précédent servi au plan de données |
 | M859 | ce qu'un état d'isolation attribuait, oublié avec l'état | la ligne de la levée s'escalade |
+| M890 | un nom `glorfindel-*` suffit à faire une règle sienne | un credential volé cache une autorisation derrière |
+| M891 | les états de blocage ignorés | son propre blocage s'escalade |
+| M892 | l'abonnement hors de la clé d'une règle | les mêmes noms ailleurs pris pour les siens |
+| M893 | une ligne `AzureActivity` lue par une autre source va au modèle | un snapshot part seul |
+| M894 | une règle du plan de contrôle sans `CorrelationId`, en silence | deux opérations n'en font qu'une |
 
 ## Ce que les invariants ont trouvé
 

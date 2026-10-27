@@ -795,6 +795,7 @@ Aucun de ces défauts n'avait été vu en revue. Chacun a son test et sa séquen
 | A0 | NSG d'origine remis sans en lire les règles | « swept », VM encore coupée par une ancienne isolation |
 | A0 | NSG supprimé lu comme « illisible » | blocage disparu jamais signalé, levée partielle pour toujours |
 | I1F | NSG de quarantaine modifié (deny passé en Udp), état et tags de la carte perdus | VM joignable en TCP depuis le VNet, rien de dit : la réaffirmation ne lisait que les isolations dont elle avait l'état |
+| I4F | NSG d'origine d'une carte en quarantaine (ou nue) jugé sans elle | le reset de la nouvelle VM prenait l'ancienne isolation d'une autre VM pour la sienne : **l'autre VM rouverte** |
 
 **I1F (27/10, #226) : un oracle qui lisait mal, et un trou derrière.** Le run profond (10 000
 séquences) a fait tomber I1 à l'étape même où quelqu'un passe le deny entrant de la quarantaine
@@ -828,6 +829,23 @@ réglage change n'étaient plus lus (la machine ne l'a trouvé qu'une fois sur 1
 l'abonnement est relu, la séquence est figée (M838). La passe de la watch est sortie dans
 `cli._watch_reassert_pass`, testée sur son comportement ; un test structurel ne garde que ce que
 le comportement ne voit pas, les deux closures de la watch (M835, M839, M895–M898).
+
+**I4F (27/10, #235) : le NSG d'une carte absente.** À 2 000 séquences (graine 101), I4 est
+tombée sur une course `release`/`reset` : les flux sortants d'`api` rouverts par deux
+opérations sur une autre VM. La séquence, longue de 17 étapes, se réduit à deux : une ancienne
+isolation d'`api` (noms fixes, any/any, état perdu) sur son NSG, une VM créée sur ce même
+NSG puis isolée par quarantaine, et le reset de cette VM, seul : la course n'y était pour rien.
+Le défaut est dans le produit (`_original_view`, `release.py`). Pour balayer le NSG d'origine
+d'une carte en quarantaine, le reset en comptait les cartes attachées, sans celle qui en est
+partie. Il n'en restait qu'une, celle d'`api` : le NSG passait pour dédié à la nouvelle VM, et
+les noms fixes pour les siens. La carte absente compte maintenant parmi celles de son NSG
+(`_nsg_sharing(..., away_nic=)`, `network.py`). Le NSG est lu partagé, et l'ancienne règle,
+qu'on ne peut attribuer, est dite (`swept_partial`) au lieu d'être supprimée. La carte nue
+passait par le même chemin. La levée n'était pas touchée : elle remet la carte avant de lire.
+L'oracle n'y est pour rien : le test sait, par son propre journal, à quelle VM l'ancienne
+version a laissé cette règle. Les trois cas sont figés dans les régressions (le reset, la
+course telle que trouvée, la carte nue), mutants M960–M961. La machine en tire rarement la
+combinaison : une ancienne isolation, une VM créée sur ce NSG, sa quarantaine, puis son reset.
 
 Le plus grave : après une levée qui échoue en partie, une seconde levée lisait les champs de
 rétro-compatibilité de l'état comme un ancien format, et supprimait les deny du NSG de

@@ -219,14 +219,22 @@ class NetworkMixin:
         """
         return self._nsg_sharing(nsg_rg, nsg_name) is not False
 
-    def _nsg_sharing(self, nsg_rg: str, nsg_name: str) -> bool | None:
-        """True / False, or None when the NSG's associations can't be read."""
+    def _nsg_sharing(self, nsg_rg: str, nsg_name: str, away_nic: str | None = None) -> bool | None:
+        """True / False, or None when the NSG's associations can't be read.
+
+        away_nic: a NIC that belongs behind this NSG but isn't attached right now (in
+        quarantine, or bare): it counts as one of the NSG's. Counted only from what is
+        attached, the NSG of a NIC away read as governing one NIC — another VM's — and
+        the reset took an older version's fixed-name isolation of that VM for its own
+        (I4F, #235)."""
         try:
             nsg = self._network.network_security_groups.get(nsg_rg, nsg_name)
         except Exception:
             return None
         nics = list(getattr(nsg, "network_interfaces", None) or [])
         subnets = list(getattr(nsg, "subnets", None) or [])
+        if away_nic and not any(_same_id(getattr(n, "id", "") or "", away_nic) for n in nics):
+            nics.append(away_nic)
         return len(nics) > 1 or len(subnets) > 0
 
     def _get_nic_private_ips(self, nic_id: str) -> list[str]:

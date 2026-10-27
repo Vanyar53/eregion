@@ -148,13 +148,22 @@ _PAGES = {"/": "overview.html", "/glorfindel": "glorfindel.html", "/config": "gl
           "/annatar": "injector.html", "/gothmog": "injector.html"}
 
 
+# Defence in depth for pages that show what other hosts wrote (manifests from Orodruin): never
+# framed by another page (clickjacking on Approve & execute), never talking to another origin,
+# no <base>, forms to this origin only (the token page). No script-src: the Glorfindel page's
+# inline handlers would break (#222).
+_CSP = "frame-ancestors 'none'; connect-src 'self'; base-uri 'none'; form-action 'self'"
+
+
 @app.middleware("http")
-async def _revalidate_pages(request, call_next):
-    """Pages and their scripts revalidate on every load (ETag): after a redeployment, a page
-    left in the browser's cache showed the old console on H0 (#197)."""
+async def _page_headers(request, call_next):
+    """The CSP on every response, the token page's included (this middleware is the outermost).
+    Pages and their scripts revalidate on every load (ETag): after a redeployment, a page left in
+    the browser's cache showed the old console on H0 (#197)."""
     response = await call_next(request)
     if request.url.path in _PAGES or request.url.path.startswith("/static/"):
         response.headers["Cache-Control"] = "no-cache"
+    response.headers["Content-Security-Policy"] = _CSP
     return response
 
 

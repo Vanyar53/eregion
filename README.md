@@ -20,9 +20,9 @@ Three agents form a closed loop: Annatar attacks, Gothmog breaks, Glorfindel det
 > **Observe-only by default** — Glorfindel recommends, you decide. Grant it autonomy per asset as you build trust.
 > With autonomous containment enabled: **~1 min to contain a ransomware VM, 21m29s to restored service** — the only human step is approving the backup restore.
 
-![Glorfindel's page of the Eregion console in observe-only (then called the War Room): a held recommendation waiting for the operator's verdict](docs/images/war-room-observation.png)
+![The Eregion console's overview in observe-only: the five indicators of the finality, measured over 30 days, above a line per agent](docs/images/console-overview.png)
 
-*Glorfindel's page of the console in observe-only — then called the War Room —, on the Eregion bench (October 2026). An Internet scanner tried SSH on a VM: Glorfindel recommended blocking its IP (95 %), the human-only mode held it, and the card waits in **TO JUDGE** for the operator's verdict — right, wrong or unsure. The header counts the week; nothing was executed. The scanner's IP is masked.*
+*The Eregion console's overview on the Eregion bench, in observe-only (27 October 2026). Over 30 days: nothing contained alone — human-only —, but Glorfindel would have contained 3 of the 5 attacks it detected (shadow); detection in 107 s and a decision in 2 min (medians); 0 % of the 20 isolations and blocks it recommended on real traffic were judged wrong; 4 of the 5 implemented techniques proven in the last 30 days. Glorfindel's page holds the cards to judge; Annatar's and Gothmog's, what they ran and what Glorfindel made of it.*
 
 ## How it works
 

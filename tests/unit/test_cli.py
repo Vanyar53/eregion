@@ -285,3 +285,11 @@ def test_two_discovered_vms_of_the_same_name_are_refused(monkeypatch):
     _discovered(_FULL, _FULL.replace("/resourceGroups/rg/", "/resourceGroups/rg-clone/"))
     with pytest.raises(click.ClickException, match="several VMs have this name"):
         _resolve_resource_id("vm-x")
+
+
+def test_the_version_is_the_packages():
+    """`glorfindel --version` said 0.2.0, written by hand, while the package was 0.3.0 (M569, #222)."""
+    from importlib.metadata import version
+    from click.testing import CliRunner
+    from glorfindel.cli import cli
+    assert CliRunner().invoke(cli, ["--version"]).output.strip() == f"glorfindel, version {version('eregion')}"

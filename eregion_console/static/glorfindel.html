@@ -2311,7 +2311,9 @@ async function doApproveRule(proposalId, escId) {
   try {
     const r = await fetch(`/api/action/approve-rule/${proposalId}`, {method: 'POST'});
     const d = await r.json();
-    if (d.ok) toast(`✓ Rule '${d.rule_name}' added to detection_rules.yaml — restart watch to activate`);
+    // P1: an approved rule goes to the client's layer, never into the shipped base.
+    if (d.ok && d.rule_bound === false) toast(`⚠ Rule '${d.rule_name}' written to ${d.rules_file || "the client's layer"} but not bound (${d.rule_unbound_reason || 'no backend'}): it applies to no discovered VM — bind it there (monitoring_backends, assets: [auto])`, true);
+    else if (d.ok) toast(`✓ Rule '${d.rule_name}' ${d.rule_write === 'same' ? 'already in' : d.rule_write === 'replaced' ? 'replaced in' : 'added to'} the client's layer${d.rules_file ? ' (' + d.rules_file + ')' : ''} — restart watch to activate`);
     else toast('Error: ' + (d.error || 'unknown'), true);
     // Always ack the escalation — rule may already be approved via CLI
     await doAck(escId);

@@ -507,13 +507,7 @@ async def config() -> dict:
     backends_info: list[dict] = []
     assets_info: list[dict] = []
     detection_is_inert = False  # True if no rule can poll → detection fires nothing
-    rules_candidates = [
-        Path("glorfindel/rules/azure/detection_rules.yaml"),
-        Path(__file__).parent / "rules" / "azure" / "detection_rules.yaml",
-    ]
-    rules_path: Path | None = next(
-        (p for p in rules_candidates if p.exists()), None
-    )
+    rules_path = _base_rules_path()
     if rules_path:
         try:
             from glorfindel.detection_rules import (
@@ -1245,11 +1239,7 @@ async def audit_all() -> dict:
     from glorfindel.actions import AzureConnector
     from glorfindel.detection_rules import load_config
 
-    rules_candidates = [
-        Path("glorfindel/rules/azure/detection_rules.yaml"),
-        Path(__file__).parent / "rules" / "azure" / "detection_rules.yaml",
-    ]
-    rp = next((p for p in rules_candidates if p.exists()), None)
+    rp = _base_rules_path()
     if not rp:
         return {"audits": []}
 
@@ -1415,17 +1405,17 @@ async def pending_rules() -> dict:
 
 @app.post("/api/action/approve-rule/{proposal_id}")
 async def approve_rule(proposal_id: str) -> dict:
-    rules_candidates = [
-        Path("glorfindel/rules/azure/detection_rules.yaml"),
-        Path(__file__).parent / "rules" / "azure" / "detection_rules.yaml",
-    ]
-    rules_path = next((p for p in rules_candidates if p.exists()), None)
+    """Approve a proposed rule: written to the client's layer (P1, ~/.glorfindel/client_rules.yaml),
+    the shipped base read to resolve its asset. Says where it went, as the CLI does."""
+    rules_path = _base_rules_path()
     if not rules_path:
         return {"error": "detection_rules.yaml not found"}
     try:
         from glorfindel.proposed_rules import approve
         proposal = approve(proposal_id, rules_path)
-        return {"ok": True, "rule_name": proposal["rule_name"]}
+        return {"ok": True, "rule_name": proposal["rule_name"],
+                **{k: proposal.get(k) for k in ("rules_file", "rule_write", "rule_bound",
+                                                 "rule_unbound_reason")}}
     except ValueError as e:
         return {"error": str(e)}
 
@@ -1509,6 +1499,16 @@ async def _bg_restore(resource_id: str, vm_name: str = "") -> None:
     )
     if vm_name:
         _restore_done(vm_name)
+
+
+def _base_rules_path() -> Path | None:
+    """The shipped base detection_rules.yaml, found as the glorfindel command finds it: from the
+    working directory (the container's /app, the repo's root), else beside the glorfindel
+    package — never beside this module, which left glorfindel/ on 26/10 (outside the repo's
+    root the console then showed no rule, and approving one failed)."""
+    from glorfindel.cli import _find_rules_file
+    found = _find_rules_file()
+    return Path(found) if found else None
 
 
 def _find_resource_id(vm_name: str) -> str | None:

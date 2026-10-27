@@ -308,6 +308,7 @@ allumée), `exclude_all: "false"` sortait la VM de toutes les règles (un texte 
   `exclude_rules`, `allow_destructive`, `forensic_sources`, `assets` et les sections de backends ;
   `interval_s` un nombre de secondes positif ; `forensic_ports` un port ou une liste (inchangé). Une
   section vide (tous ses éléments en commentaire) vaut une liste vide.
+- Valeurs de `type` : celles que quelque chose lit — `monitoring_backends` : `azure_monitor`, `prometheus` ; `action_backends` : `azure_backup_vault`. `type: azure_monitr` est refusé, avec celle qu'il rappelle (un backend que rien ne lisait : ni découverte, ni règle liée). Un nouveau type s'ajoute dans `glorfindel/config.py` (`_MONITORING_TYPES`, `_ACTION_TYPES`).
 - Effets du refus : la watch **ne démarre pas** (code 2, le message en rouge) ; l'isolation est refusée
   avant toute écriture et la préparation dit `config_unreadable` (comme un YAML illisible, S1) ; la
   réaffirmation passe en alertes seules.

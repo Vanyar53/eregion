@@ -705,9 +705,12 @@ de la cible et le réseau lèvent, et chaque tentative est notée. Trente mutant
 
 ### Les règles orphelines, la restauration, la configuration (A3)
 
-Le contrôle de posture alerte, puis retire la règle d'une carte disparue qui coupe une carte
-vivante derrière son NSG (U1). La machine le prouve : règle `orphan_sweep` (après elle, plus
-aucune VM vivante coupée par une orpheline ; aucune autre VM, aucun état, aucune carte ne
+La passe de réaffirmation de la watch (chaque minute, découverte ou non) alerte, puis retire la
+règle d'une carte disparue qui coupe une carte vivante derrière son NSG, quand cette VM est en
+`non_disruptive` ou plus ; en `human_only`, la carte seule (U1, décisions D-A et D-B du 27/10).
+La machine le prouve : règle `orphan_sweep` (le mode de la VM coupée tiré ; après elle, en
+`non_disruptive`, plus aucune VM vivante coupée par une orpheline, hors VM que l'état tient
+isolée ou bloquée — la seule exemption lue des enregistrements du code ; aucune autre VM, aucun état, aucune carte ne
 bouge ; rien de plus ouvert que ce que les orphelines fermaient), composite `address_reused`
 (une VM bloquée ou isolée, supprimée avec ou sans son état, une VM créée à son adresse, sur le
 NSG de sa devancière ou non) — sans elle, aucun des 313 balayages tirés à 500 séquences ne
@@ -726,8 +729,11 @@ deux côtés : identiques (M17 et M20 2 sur 3, M21 3 sur 3, M22 et M38 figés se
 meilleurs après (M18 et M29 3 sur 3, contre 2 et 1 avant) — le tirage, pas une perte.
 
 Seize mutants (M760–M775), tous attrapés au premier tour (27/10) ; M760–M763 par les
-invariants, les autres par `test_orphan_sweep.py`, `test_config.py` et `test_glorfindel.py`.
-M28 suit le code (sa condition a deux lignes).
+invariants (M760, M762 et M763 aussi par `test_orphan_sweep.py` : le mode tiré les rend plus
+rares), les autres par `test_orphan_sweep.py`, `test_config.py` et `test_glorfindel.py`.
+M28 suit le code (sa condition a deux lignes). Après la première relecture, douze de plus
+(M776–M779, M880–M887), attrapés à chaque tour ; M760, M768 et M769 visent `orphans.py`, M830
+et M834 suivent le code (la passe appelle `_whatever_the_state`).
 
 | Mutant | Défaut réinjecté | Effet |
 |---|---|---|
@@ -747,6 +753,31 @@ M28 suit le code (sa condition a deux lignes).
 | M773 | la watch démarre sur une config refusée | « Could not load rules », aucune détection |
 | M774 | la restauration revient à trois noms CustomScript | VMAccess ramène la clé de l'attaquant |
 | M775 | une extension au type illisible acceptée | l'inconnu passe pour sûr |
+| M776 | le retrait ignore le mode de la VM coupée | `human_only` écrit (D-A) |
+| M777 | le balayage hors de la passe de la watch | sans découverte, la VM reste coupée (D-B) |
+| M778 | la règle d'une carte recréée sous une VM isolée trouvée retirable | l'isolation levée sans humain |
+| M779 | le retrait ne relit pas l'état | une isolation enregistrée entre-temps levée |
+| M880 | toute erreur de lecture d'une carte de l'état prise pour un 404 | un 403 vaut « disparue » |
+| M881 | une carte de l'état illisible (403, 429) n'empêche pas le retrait | idem |
+| M882 | un `type` de backend inconnu accepté | `azure_monitr` : un backend que rien ne lit |
+| M883 | la carte ne dit pas pourquoi la règle est gardée | l'opérateur devine |
+| M884 | levée retenue par une extension : la carte accuse Run Command | l'opérateur cherche ailleurs |
+| M885 | Guest Configuration dans la liste blanche | le script d'une politique revient |
+| M886 | une orpheline redite à chaque passage | une carte par minute, l'acquittement perdu |
+| M887 | toute carte d'orpheline fermée à chaque passage | la règle reste, plus rien ne le dit |
+
+Correction après la première relecture, mesurée avant (`ae4f021`, A3 fusionné avec I1F et D1)
+et après, au même budget (500 séquences, 1 tour) : invariants à 500 et à 2 000 séquences verts
+(à 2 000, une fin de séquence balayait dans le mode `human_only` laissé par une règle précédente :
+séquence figée, la fin de séquence donne aux VM leur mode) ; M01–M41 21 sur 39 avant, 24 sur 39
+après ; jeu de contrôle C01–C16 12 sur 16 avant, 10 sur 16 après. Les écarts remesurés (tours
+attrapés sur tours joués, le tour simple compris ; trois tours de plus après pour M17, M26, C05) :
+M09 2/4 → 3/4, M17 3/4 → 6/7, M20 1/4 → 2/4, M21 1/4 → 2/4, M26 4/4 → 4/7, C05 3/4 → 2/7, C06
+1/4 → 1/4, C07 2/4 → 1/4, C16 3/4 → 3/4. Aucun mutant perdu : chacun reste attrapé des deux
+côtés ; M26, C05 et C07 le sont moins souvent après. Hypothèse, non vérifiée : la passe de
+réaffirmation fait désormais plus d'appels (la liste des NSG et des
+cartes, chaque minute) : les pannes tirées « au N-ième appel » tombent plus souvent sur eux, et
+moins sur l'isolation.
 
 ## Ce que les invariants ont trouvé
 
@@ -849,9 +880,13 @@ Une séquence trouvée la nuit est rejouée en premier à chaque push jusqu'à s
   Glorfindel est modélisé (A0) ; deux Glorfindel complets sur deux machines ne le sont pas.
 - **VM supprimée et état perdu** : les règles qu'une isolation par règles a laissées sur un
   NSG partagé se retrouvent par l'empreinte de leur nom et sont retirées quand elles coupent une
-  VM vivante (A3) ; la VM reste coupée jusqu'au passage suivant du contrôle de posture. Une liste
-  des cartes partielle (droits de lecture) et des VNets qui se recouvrent ne sont pas dans la
-  machine : des tests unitaires couvrent les gardes (`test_orphan_sweep.py`).
+  VM vivante en `non_disruptive` ou plus (A3) ; la VM reste coupée jusqu'au passage suivant de la
+  watch (une minute), ou, en `human_only`, jusqu'à ce qu'un humain agisse. Une liste des cartes
+  partielle (droits de lecture), des VNets qui se recouvrent et une carte recréée sous une VM
+  vivante ne sont pas dans la machine : des tests unitaires couvrent les gardes
+  (`test_orphan_sweep.py`). La garde « liste partielle » ne lit que les NSG attachés aux cartes :
+  des VNets qui se recouvrent derrière un NSG de subnet, une carte de l'autre VNet absente de la
+  liste, ne sont pas détectés (une règle peut alors être prise pour orpheline).
 - **Couches au-dessus du NSG** : règles d'administration d'Azure Virtual Network Manager,
   routes, pare-feu. Elles peuvent contourner une isolation et ne sont pas encore lues.
 - **Hypothèses du faux Azure** non mesurées : le code d'erreur d'un NSG d'une autre région,

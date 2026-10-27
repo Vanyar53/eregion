@@ -50,7 +50,7 @@ def _parse_signal_line(raw: str):
 
     Unknown keys are dropped (same filtering as the RulePoller dispatch) so a field
     added by a newer Annatar can't make Signal(**data) raise."""
-    from annatar.signals.schema import Signal
+    from eregion_core.signals import Signal
     data = json.loads(raw)
     if not isinstance(data, dict):
         raise ValueError("not a JSON object")
@@ -341,7 +341,7 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
     import queue as _queue
     import threading as _threading
 
-    from annatar.signals.schema import Signal
+    from eregion_core.signals import Signal
     from glorfindel.agent import GlorfindelAgent
 
     # Surface library logs (discovery cycles, posture, query failures) on stdout so
@@ -732,7 +732,7 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
                 def _rule_dispatch(signal_data: dict) -> None:
                     if _watch_channel is not None:
                         _watch_channel.note(signal_data)  # memory only, never raises
-                    from annatar.signals.schema import Signal as _Signal
+                    from eregion_core.signals import Signal as _Signal
                     sig = _Signal(**{
                         k: signal_data.get(k, "")
                         for k in _Signal.__dataclass_fields__

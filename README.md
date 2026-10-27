@@ -139,6 +139,24 @@ On 2026-06-14, Glorfindel detected a **real SSH brute force** against the expose
 
 The full pipeline — rule → detection → investigate → decide → escalate — held on authentic adversarial traffic, outside the Annatar→Glorfindel loop. The real case even surfaced a bug no scripted run had found (the escalation didn't carry the source IP), fixed the same day.
 
+## Usage profiles
+
+Eregion is self-hosted, on your machine or in a VM of yours. **Glorfindel is always there**: it is the product. A profile is what you add to it. Annatar and Gothmog never run without it: they check its watch is alive before acting.
+
+Each profile has a `docker compose` profile, a Make target and a page in [`docs/profils/`](docs/profils/README.md) (in French).
+
+| Profile | The question | Runs | Start |
+|---|---|---|---|
+| Discover | be defended first, in observation | Glorfindel (watch + console) | `make profile-discover` |
+| Does my detection work? | is a real attack seen? | + Annatar | `make profile-detection` |
+| Does my infrastructure hold? | is a fault lived through? | + Gothmog | `make profile-resilience` |
+| Proven defense | the proof at any time (like H0, the bench's hosted Glorfindel) | everything | `make profile-proven` |
+| Several teams | one defense per team, nothing mixed | one Glorfindel per team | `make team-start TEAM=<name>` |
+
+**Where the injectors act.** They act only from an armed Orodruin, the disposable host of the injectors. On your machine they stay passive: validate, list, `--dry-run`, and `gothmog preflight`.
+
+**Each component runs alone in CI.** This is a technical separation, not a product sold alone. Glorfindel, Annatar, Gothmog and the shared core are each tested with the other components absent ([`components.yml`](.github/workflows/components.yml), `make components-check`).
+
 ## Evaluate on your infrastructure — read-only, zero risk
 
 The fastest, safest way to see Glorfindel: point it at your existing Log Analytics Workspace with **read-only** credentials and watch a week of recommendations. It detects and reasons on your real signals but **cannot touch anything** — no Contributor role, no write API. The pitch to a colleague: *"see what I'd have done on your real signals; I can't touch a thing."*
@@ -620,8 +638,7 @@ annatar/
   campaign/           → generative red layer: planner (compose an ATT&CK kill-chain from the catalog,
                         optionally LLM-planned) + synthesizer (materialize replayable scenarios) +
                         runner (sequential, budgeted, blind-loop) + scope guard. CLI: annatar campaign plan|run
-  signals/schema.py   → Signal dataclass + severity_for_ttp
-  signals/emitter.py  → normalized JSONL signal emitter
+  signals/emitter.py  → normalized JSONL signal emitter (the Signal contract: eregion_core/signals.py, shared with Glorfindel)
   scenarios/azure/
     ransomware-vm.yaml          → T1486 (detection: timeout + prerequisites + hints)
     data-exfiltration.yaml      → T1041

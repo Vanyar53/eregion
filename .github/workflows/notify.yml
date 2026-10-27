@@ -6,9 +6,12 @@ name: Notify
 # saying is decided by scripts/notify_discord.py (`github`), from the event's JSON.
 #
 # Never checks out nor runs a pull request's code: pull_request_target and workflow_run run
-# the default branch's files, and the script only reads the event. Without the secrets (a
-# fork, or before the setup) it sends nothing and the job stays green; a Discord error is one
-# line in the log, without the URL or the token, and the job stays green too.
+# the default branch's files, and the script only reads the event. A fork's pull request is
+# announced in #ci (its title as inert text: no mention parsed, nothing put into `run:`), never
+# in a lot's thread. Without the secrets (before the setup) it sends nothing and the job stays
+# green; a Discord error is one line in the log, without the URL or the token, and the job
+# stays green too. A `release` event runs the workflow of the tag's commit: a release tagged
+# before this file existed is not announced.
 on:
   workflow_run:
     workflows: [CI, Components, "Invariants (deep)", Mutants, canary-azurerm]
@@ -24,12 +27,19 @@ permissions:
   contents: read
   actions: read   # the run before, to say « main green again »
 
+# One run at a time: a merge that closes an issue fires pull_request_target and issues together,
+# and two runs could each create the lot's thread.
+concurrency:
+  group: notify-discord
+  cancel-in-progress: false
+
 jobs:
   notify:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v5
+      # Pinned by commit: this job holds the Discord secrets on events a fork can trigger.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5.1.0
         with:
           persist-credentials: false
           sparse-checkout: |

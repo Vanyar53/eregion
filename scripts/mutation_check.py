@@ -2352,6 +2352,25 @@ MUTANTS += [
 ]
 TESTS.update({f"M{n}": "tests/unit/test_notify_discord.py" for n in range(970, 980)})
 
+# N1 after its review (27/10, F1–F8): M990–M994, taken from this session's range (M970–M999).
+MUTANTS += [
+    ("M990", "the verdict read only in last_assistant_message: elrond's reviewers hand it back by a tool (N1, F1)",
+     NOTIFY, "        verdict = verdict_of(final_report(transcript, data))\n",
+     '        verdict = verdict_of(data.get("last_assistant_message", ""))\n'),
+    ("M991", "a fork's pull request posts in the lot its title names (N1, F5)", NOTIFY,
+     "            lot = issue = \"\"   # a fork's pull request: #ci only, never a lot's thread (its title names any lot)\n",
+     "            pass\n"),
+    ("M992", "every closed issue creates a thread, a lot or not (N1, F5)", NOTIFY,
+     "archive=True, create=bool(lot))]", "archive=True)]"),
+    ("M993", "http.client's errors not caught: InvalidURL quotes the webhook's token (N1, F6)", NOTIFY,
+     "        except Exception as e:  # URLError, http.client's errors: InvalidURL quotes the URL, token and all\n",
+     "        except (OSError, ValueError) as e:\n"),
+    ("M994", "a blocked lot without configuration writes the local state (N1, F7)", NOTIFY,
+     "    if not (cfg.agents or cfg.lots):   # nothing configured: nothing written, not even the local state\n"
+     "        return 0\n", ""),
+]
+TESTS.update({f"M{n}": "tests/unit/test_notify_discord.py" for n in range(990, 995)})
+
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a

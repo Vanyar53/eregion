@@ -44,7 +44,9 @@ What must hold whatever happens:
       quarantine (A0);
   L2  a quarantine NSG someone altered, still holding NICs, is put back or said — its
       NICs' state lost too (I1F);
-  U1  a rule left by a NIC that no longer exists, cutting a live NIC off, is reported (L28).
+  U1  a rule left by a NIC that no longer exists, cutting a live NIC off, is reported (L28)
+      — and the orphan sweep takes it off, nothing else (A3): after it, every live VM is
+      back to its design, not only in its own view.
 
 Oracles are the test's own: what was released, what was lost and when, who wrote what
 — never the markers and records the code under test leaves (a bug that deletes them
@@ -78,7 +80,7 @@ from hypothesis.stateful import (
     RuleBasedStateMachine, initialize, invariant, rule, run_state_machine_as_test,
 )
 
-from glorfindel import actions, config, escalations, reassert
+from glorfindel import actions, config, escalations, orphans, reassert
 from glorfindel.actions import AzureConnector, _load_isolation_state
 
 from .fake_azure import (
@@ -1307,9 +1309,33 @@ class IsolationMachine(RuleBasedStateMachine):
         """A new VM: one NIC, the lowest free address of its subnet (Azure's dynamic
         allocation hands out a deleted VM's address first), no NSG of its own, the tier
         NSG, or the NSG of another NIC. Never an id a VM had before."""
+        self._create_vm(data, data.draw(st.sampled_from([_HUB, _EDGE]), label="region"))
+
+    @rule(data=st.data())
+    def address_reused(self, data):
+        """How a rule becomes an orphan that cuts a VM off (U1, V-1 — rare in the drawn
+        sequences, found at 5 000): a VM blocked or isolated, deleted with its state or
+        after losing it, and a new VM given its address; the posture pass may follow."""
+        if len(self.live) <= 2 or len(self.vms) >= len(_VMS) + 3:
+            return
+        vm, rid, fault = self._draw(data)
+        if data.draw(st.booleans(), label="isolate"):
+            self._isolate(vm, rid, fault)
+        else:
+            self._block(vm, rid, fault, data.draw(st.sampled_from([22, None]), label="threat_port"))
+        if data.draw(st.booleans(), label="lose its state"):
+            self._lose_state(vm)
+        nic = self.fake.nics[key(self.fake.vms[key(vm)]["nics"][0])]
+        self._delete_vm(vm)
+        self._create_vm(data, nic["location"], reuse_nsg=nic["design_nsg"])
+        if data.draw(st.booleans(), label="posture pass"):
+            self.orphan_sweep(data)
+
+    def _create_vm(self, data, loc: str, reuse_nsg: str | None = None):
+        """reuse_nsg: the NSG of a deleted VM's NIC, offered too — a VM recreated by its
+        pipeline gets the NSG its predecessor had (the NSG outlives the VM)."""
         if len(self.vms) >= len(_VMS) + 3:
             return
-        loc = data.draw(st.sampled_from([_HUB, _EDGE]), label="region")
         rg = data.draw(st.sampled_from(["rg-app1", "rg-app2", "rg-new"]), label="rg")
         name = data.draw(st.sampled_from(["web", "api", "batch"]), label="name")
         nic_name = f"{name}-nic-{len(self.vms)}"
@@ -1317,7 +1343,8 @@ class IsolationMachine(RuleBasedStateMachine):
             return
         subnet = next(s["id"] for s in self.fake.subnets.values() if (s["id"].split("/")[4] == "rg-net") == (loc == _HUB))
         nsgs = [None] + sorted({n["design_nsg"] for n in self.fake.nics.values()
-                               if n["design_nsg"] and n["location"] == loc and key(n["design_nsg"]) in self.fake.nsgs})
+                               if n["design_nsg"] and n["location"] == loc and key(n["design_nsg"]) in self.fake.nsgs}
+                               | ({reuse_nsg} if reuse_nsg and key(reuse_nsg) in self.fake.nsgs else set()))
         own = data.draw(st.sampled_from(nsgs), label="nsg")
         ip = self._free_ip("10.0.0" if loc == _HUB else "10.1.0", 4)
         vm = self.fake.add_vm(rg, name, [{"rg": rg, "name": nic_name, "ips": [ip], "subnet": subnet,
@@ -1337,7 +1364,9 @@ class IsolationMachine(RuleBasedStateMachine):
         """The VM is deleted with its NICs (the subnet and the NSGs stay)."""
         if len(self.live) <= 2:
             return
-        vm = data.draw(st.sampled_from(self.live), label="vm")
+        self._delete_vm(data.draw(st.sampled_from(self.live), label="vm"))
+
+    def _delete_vm(self, vm: str):
         nics = self.fake.vms.pop(key(vm))["nics"]
         for n in nics:
             self.fake.nics.pop(key(n))
@@ -1556,7 +1585,9 @@ class IsolationMachine(RuleBasedStateMachine):
     @rule(data=st.data())
     def lose_state(self, data):
         """The state directory is lost (new container without its volume, disk wiped)."""
-        vm = data.draw(st.sampled_from(self.vms), label="vm")
+        self._lose_state(data.draw(st.sampled_from(self.vms), label="vm"))
+
+    def _lose_state(self, vm: str):
         self._check_authors()                      # what Glorfindel recorded comes first
         self.ticks += 1
         self.state_lost_at[key(vm)] = self.ticks
@@ -1672,6 +1703,14 @@ class IsolationMachine(RuleBasedStateMachine):
             # VM whose state was lost, on an IP the live one got since — a known limit
             # (nothing says which NSGs to look at); its recorded rules are checked below.
             assert self._released(vm, own=True), f"I7: {vm} could not be brought back to its design"
+        # That known limit is lifted by the orphan sweep (A3): after it, every live VM
+        # is back to its design in full — not only in its own view. The VMs given their
+        # mode, as the operator gives it to free them (D-A): in human_only only a card,
+        # and a mode left by an earlier sequence's rule made the teardown flaky.
+        _CURRENT.mode = "non_disruptive"
+        self._orphan_sweep()
+        for vm in self.live:
+            assert self._released(vm), f"U1: {vm} still cut off by a deleted VM's rule after the orphan sweep"
         for vm, recorded in deleted_records.items():
             left = [r for r in self._named_leftovers(self.deleted[vm]) if r.split("/")[-1] in recorded]
             assert not left, f"I7: rules of the deleted {vm} left: {left}"
@@ -1818,6 +1857,76 @@ class IsolationMachine(RuleBasedStateMachine):
         for vm in self.live:
             self._check_claims(vm, vm)
 
+    def _cutting_orphans(self, spare: set = frozenset()) -> set:
+        """(NSG, rule) of Glorfindel's denies named for a NIC that no longer exists, aimed
+        at an address a live NIC holds, on an NSG that governs that NIC now — its own
+        NSG or its subnet's. From the test's records (the NICs it deleted, the naming
+        convention), never from what the code reports. `spare`: VMs whose NICs don't
+        count (held by Glorfindel)."""
+        gone = {_nic_hash(n) for nics in self.deleted.values() for n in nics}
+        if not gone:
+            return set()
+        spared = {key(n) for v in self.fake.vms.values() if key(v["id"]) in spare for n in v["nics"]}
+        governed: dict[str, set] = collections.defaultdict(set)
+        for n in self.fake.nics.values():
+            if key(n["id"]) in spared:
+                continue
+            for g in (n["nsg"], self.fake.subnets[key(n["subnet"])]["nsg"]):
+                if g:
+                    governed[key(g)] |= set(n["ips"])
+        out = set()
+        for k, g in self.fake.nsgs.items():
+            for name, r in g["rules"].items():
+                if (not name.startswith(("glorfindel-iso-", "glorfindel-block-")) or r["access"].lower() != "deny"
+                        or not any(h in name for h in gone)):
+                    continue
+                side = "destination" if r["direction"].lower() == "inbound" else "source"
+                if governed[k] & set([r.get(f"{side}_address_prefix")] + list(r.get(f"{side}_address_prefixes") or [])):
+                    out.add((k, name))
+        return out
+
+    def _orphan_sweep(self):
+        """The sweep of the orphan rules, as the watch's pass runs it (orphans.py); the
+        cut VM's mode is the sequence's (invariant_env)."""
+        from glorfindel.orphans import sweep_orphan_rules
+        sweep_orphan_rules(self.connector, None)
+
+    def _held(self) -> set:
+        """VMs whose isolation or block the local state holds: a rule of a NIC that no
+        longer exists, cutting one of them off, may be theirs — their NIC recreated
+        (first review of A3). The one exemption read from the code's records: the state
+        is what Glorfindel was asked to hold."""
+        out = {key(i["resource_id"]) for i in actions.active_isolations()}
+        return out | {key(b["resource_id"]) for b in actions.active_blocks() if b.get("resource_id")}
+
+    @rule(data=st.data())
+    def orphan_sweep(self, data):
+        """A3, U1 taken to its end: the alert, then each rule of a NIC that no longer
+        exists, cutting a live VM off, is taken off — a VM given a deleted VM's address
+        isn't left cut off — when that VM runs in non_disruptive (D-A); in human_only,
+        only the card. Nothing else moves: every VM ends as it was, but for what those
+        rules closed."""
+        fault = data.draw(_FAULTS, label="fault")
+        _CURRENT.mode = data.draw(st.sampled_from(["human_only", "non_disruptive"]), label="mode")
+        cutting = self._cutting_orphans() if _CURRENT.mode != "human_only" else set()
+        world = self._world()
+        cleared = {**world, "nsgs": {k: {**g, "rules": {n: r for n, r in g["rules"].items() if (k, n) not in cutting}}
+                                     for k, g in world["nsgs"].items()}}
+        flows, states = self._before()
+        expected = {vm: open_flows(cleared, vm) for vm in self.live}
+        nics_before = {k: n["nsg"] for k, n in self.fake.nics.items()}
+        _, err = self._run(fault, self._orphan_sweep, "orphan sweep")
+        _note(f"orphan sweep: {len(cutting)} cutting")
+        after = self._flows()
+        for vm in self.live:
+            assert flows[vm] <= after[vm], f"U1: the orphan sweep cut {vm} off"
+            assert after[vm] <= expected[vm] | flows[vm], f"U1: the orphan sweep opened more of {vm} than orphans closed"
+            assert self._state(vm) == states[vm], f"U1: the orphan sweep changed the state of {vm}"
+        assert {k: n["nsg"] for k, n in self.fake.nics.items()} == nics_before, "U1: the orphan sweep wrote a NIC"
+        if fault is None and err is None and not self.fake.write_denied and _CURRENT.mode != "human_only":
+            left = self._cutting_orphans(spare=self._held())
+            assert not left, f"U1: live VMs still cut off by orphan rules after the sweep: {sorted(left)}"
+
     @invariant()
     def orphans_are_reported(self):
         """U1: a rule left by a NIC that no longer exists, aimed at an address a live NIC
@@ -1869,6 +1978,7 @@ def invariant_env(monkeypatch) -> None:
 
     monkeypatch.setattr(actions, "_atomic_write_text", chaotic_write)
     monkeypatch.setattr(reassert, "_mode", lambda autonomy, vm, ref="": _CURRENT.mode)
+    monkeypatch.setattr(orphans, "_configured_mode", lambda autonomy, name: _CURRENT.mode)
     monkeypatch.setattr(config, "_DEFAULT_PATHS", list(config._DEFAULT_PATHS))
     monkeypatch.delenv("GLORFINDEL_QUARANTINE_NSG", raising=False)
     from datetime import datetime as _dt, timedelta as _td

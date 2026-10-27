@@ -400,6 +400,17 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
     for _noisy in ("azure", "urllib3", "httpx", "LiteLLM"):
         _logging.getLogger(_noisy).setLevel(_logging.WARNING)
 
+    # A badly written config is refused, and said (A3): the watch used to start on it —
+    # "Could not load rules", then no detection at all, or the defaults standing in for
+    # a key nobody read. It doesn't start until the file is fixed.
+    from glorfindel.config import ConfigError, load_glorfindel_config
+    try:
+        load_glorfindel_config()
+    except ConfigError as exc:
+        console.print("[bold red]glorfindel-config.yaml refusé[/bold red] — la watch ne démarre pas "
+                      "sur une configuration mal écrite.\n" + _esc_markup(str(exc)))
+        raise SystemExit(2)
+
     # Import the Azure SDK once, on the main thread, before discovery/poll/audit
     # threads start — avoids concurrent first-import deadlocks (azure.core _ModuleLock).
     if not dry_run:
@@ -1734,6 +1745,10 @@ def _build_recovery_signal(resource_id: str, restore_result: dict, restore_time_
             "recovery_point_time": restore_result.get("recovery_point_time", ""),
             "restore_time_s": restore_time_s,
             "run_command_neutralized": restore_result.get("run_command_neutralized"),
+            # What holds the release, when it isn't Run Command v1 itself: an extension
+            # outside the allowlist, a managed Run Command (A3) — the card names it.
+            **({"replay_vectors": list(restore_result["replay_vectors"])}
+               if restore_result.get("replay_vectors") else {}),
         },
         "context": {"run_id": run_id},
     }

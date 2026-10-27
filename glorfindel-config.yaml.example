@@ -74,6 +74,7 @@ exceptions: []
 # promote assets to non_disruptive once you trust it.
 #
 # Observe-only deployment: human_only only reads (detection/investigate/discovery).
+# An orphan rule cutting a human_only VM off (A3) gets a card, never a removal.
 # It runs on a Reader / Log Analytics Reader service principal — no Contributor
 # needed. Set GLORFINDEL_READ_ONLY=1 to declare read-only creds: write actions
 # then fail fast with a clear error instead of an opaque Azure 403.

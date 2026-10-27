@@ -433,6 +433,8 @@ def load_glorfindel_config(path: str | Path | None = None) -> GlorfindelConfig:
     """Load infrastructure config from glorfindel-config.yaml.
 
     If path is None, searches default locations. Returns empty config if not found.
+    A file that is there but badly written — a key nobody reads, a value of the wrong
+    type, `"false"` in quotes — raises ConfigError naming every problem (A3).
     """
     if yaml is None:
         raise ImportError("PyYAML is required: pip install pyyaml")
@@ -447,57 +449,219 @@ def load_glorfindel_config(path: str | Path | None = None) -> GlorfindelConfig:
         return GlorfindelConfig()
     try:
         return _parse_config(yaml.safe_load(_read_text(cfg_path)) or {})
-    except ConfigError:
-        raise
+    except ConfigError as exc:
+        raise ConfigError(f"{cfg_path} refusé — {exc}") from exc
     except Exception as exc:
         raise ConfigError(f"{cfg_path} : {type(exc).__name__}: {exc}") from exc
 
 
+# ── Strict validation (A3) ────────────────────────────────────────────────────────
+# A key nobody reads was ignored and its default stood in silently: `quarantaine_nsg:
+# false` left the quarantine on. A value of the wrong type was read by Python's rules:
+# `exclude_all: "false"` is a non-empty string, true — the VM left every rule; a single
+# `allow_destructive: "vm-*"` became the patterns v, m, - and *. Every key is known,
+# every value has its type, and every problem is said, all at once.
+
+_SECTIONS = {
+    "monitoring_backends": "list", "action_backends": "list", "exceptions": "list",
+    "autonomy": "table", "isolation": "table",
+}
+_MONITORING_KEYS = ("name", "type", "workspace_id", "endpoint", "discovery")
+_DISCOVERY_KEYS = ("enabled", "interval_s")
+_ACTION_KEYS = ("name", "type", "vault_name", "resource_group", "restore_staging_storage")
+_EXCEPTION_KEYS = ("asset_pattern", "exclude_all", "exclude_rules")
+_AUTONOMY_KEYS = ("default", "assets", "allow_destructive")
+_AUTONOMY_ASSET_KEYS = ("match", "mode")
+_ISOLATION_KEYS = ("quarantine_nsg", "quarantine_rg", "forensic_sources", "forensic_ports")
+# The backend types something reads (discovery.py, detection_rules.py, backup_vault()):
+# `type: azure_monitr` was a backend nothing used, in silence. A new type is added here.
+_MONITORING_TYPES = ("azure_monitor", "prometheus")
+_ACTION_TYPES = ("azure_backup_vault",)
+
+
+def _shown(value) -> str:
+    return f'"{value}"' if isinstance(value, str) else str(value)
+
+
+class _Checker:
+    """Reads one table of the file, noting every problem instead of stopping at the first."""
+
+    def __init__(self) -> None:
+        self.problems: list[str] = []
+
+    def bad(self, where: str, what: str) -> None:
+        self.problems.append(f"{where} : {what}")
+
+    def keys(self, raw: dict, where: str, allowed) -> None:
+        import difflib
+        for k in raw:
+            if k in allowed:
+                continue
+            close = difflib.get_close_matches(str(k), list(allowed), n=1, cutoff=0.6)
+            hint = f" — vouliez-vous dire « {close[0]} » ?" if close else ""
+            self.bad(f"{where}{'.' if where else ''}{k}",
+                     f"clé inconnue, que rien ne lit{hint} (clés possibles : {', '.join(allowed)})")
+
+    def table(self, value, where: str) -> dict:
+        if value is None:
+            return {}
+        if not isinstance(value, dict):
+            self.bad(where, f"une table (clé: valeur) est attendue, pas {_shown(value)}")
+            return {}
+        return value
+
+    def items(self, value, where: str) -> list:
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            self.bad(where, f"une liste (- élément) est attendue, pas {_shown(value)}")
+            return []
+        return value
+
+    def text(self, raw: dict, k: str, where: str, default: str = "", required: bool = False) -> str:
+        value = raw.get(k)
+        if value is None:
+            if required:
+                self.bad(f"{where}.{k}", "obligatoire")
+            return default
+        if not isinstance(value, str):
+            self.bad(f"{where}.{k}", f"un texte est attendu, pas {_shown(value)}"
+                     + (" (entre guillemets si c'est voulu)" if isinstance(value, (bool, int, float)) else ""))
+            return default
+        if required and not value.strip():
+            self.bad(f"{where}.{k}", "obligatoire, et vide ici")
+        return value
+
+    def choice(self, raw: dict, k: str, where: str, allowed, default: str) -> str:
+        """A text among `allowed` — a near miss is named."""
+        import difflib
+        value = self.text(raw, k, where, default=default)
+        if raw.get(k) is None or not isinstance(raw.get(k), str) or value in allowed:
+            return value
+        close = difflib.get_close_matches(value, list(allowed), n=1, cutoff=0.6)
+        hint = f" — vouliez-vous dire « {close[0]} » ?" if close else ""
+        self.bad(f"{where}.{k}", f"type inconnu {_shown(value)}{hint} (types possibles : {', '.join(allowed)})")
+        return default
+
+    def flag(self, raw: dict, k: str, where: str, default: bool) -> bool:
+        value = raw.get(k)
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str) and value.strip().lower() in ("true", "false", "yes", "no", "on", "off"):
+            self.bad(f"{where}.{k}", f"{_shown(value)} est un texte entre guillemets, pas un booléen — "
+                                     f"écrire {value.strip().lower()} sans guillemets")
+        else:
+            self.bad(f"{where}.{k}", f"true ou false est attendu, pas {_shown(value)}")
+        return default
+
+    def seconds(self, raw: dict, k: str, where: str, default: float) -> float:
+        import math
+        value = raw.get(k)
+        if value is None:
+            return default
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            self.bad(f"{where}.{k}", f"un nombre de secondes est attendu (sans guillemets ni unité), "
+                                     f"pas {_shown(value)}")
+            return default
+        if not math.isfinite(value) or value <= 0:
+            self.bad(f"{where}.{k}", f"un nombre de secondes positif est attendu, pas {value}")
+            return default
+        return float(value)
+
+    def texts(self, raw: dict, k: str, where: str) -> list[str]:
+        value = raw.get(k)
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            self.bad(f"{where}.{k}", f"une liste est attendue, pas {_shown(value)}"
+                     + (f" — écrire [{value}]" if isinstance(value, str) else ""))
+            return []
+        out = []
+        for i, item in enumerate(value):
+            if isinstance(item, str):
+                out.append(item)
+            else:
+                self.bad(f"{where}.{k}[{i}]", f"un texte est attendu, pas {_shown(item)}")
+        return out
+
+
 def _parse_config(data: dict) -> GlorfindelConfig:
     if not isinstance(data, dict):
-        raise ValueError("le fichier ne contient pas une table YAML")
+        raise ConfigError("le fichier ne contient pas une table YAML")
+    check = _Checker()
+    check.keys(data, "", tuple(_SECTIONS))
+    sections = {name: (check.items if kind == "list" else check.table)(data.get(name), name)
+                for name, kind in _SECTIONS.items()}
 
     monitoring_backends = []
-    for b in data.get("monitoring_backends", []):
-        disc_raw = b.get("discovery", {})
+    for i, b in enumerate(sections["monitoring_backends"]):
+        where = f"monitoring_backends[{i}]"
+        if not isinstance(b, dict):
+            check.bad(where, f"une table (name, type, workspace_id…) est attendue, pas {_shown(b)}")
+            continue
+        check.keys(b, where, _MONITORING_KEYS)
+        disc_raw = check.table(b.get("discovery"), f"{where}.discovery")
+        check.keys(disc_raw, f"{where}.discovery", _DISCOVERY_KEYS)
         monitoring_backends.append(MonitoringBackendConfig(
-            name=b["name"],
-            type=b.get("type", "azure_monitor"),
-            workspace_id=b.get("workspace_id", ""),
-            endpoint=b.get("endpoint", ""),
+            name=check.text(b, "name", where, required=True),
+            type=check.choice(b, "type", where, _MONITORING_TYPES, default="azure_monitor"),
+            workspace_id=check.text(b, "workspace_id", where),
+            endpoint=check.text(b, "endpoint", where),
             discovery=DiscoveryConfig(
-                enabled=disc_raw.get("enabled", True),
-                interval_s=float(disc_raw.get("interval_s", 1800)),
+                enabled=check.flag(disc_raw, "enabled", f"{where}.discovery", True),
+                interval_s=check.seconds(disc_raw, "interval_s", f"{where}.discovery", 1800.0),
             ),
         ))
 
     action_backends = []
-    for b in data.get("action_backends", []):
+    for i, b in enumerate(sections["action_backends"]):
+        where = f"action_backends[{i}]"
+        if not isinstance(b, dict):
+            check.bad(where, f"une table (name, type, vault_name…) est attendue, pas {_shown(b)}")
+            continue
+        check.keys(b, where, _ACTION_KEYS)
         action_backends.append(ActionBackendConfig(
-            name=b["name"],
-            type=b.get("type", "azure_backup_vault"),
-            vault_name=b.get("vault_name", ""),
-            resource_group=b.get("resource_group", ""),
-            restore_staging_storage=b.get("restore_staging_storage", ""),
+            name=check.text(b, "name", where, required=True),
+            type=check.choice(b, "type", where, _ACTION_TYPES, default="azure_backup_vault"),
+            vault_name=check.text(b, "vault_name", where),
+            resource_group=check.text(b, "resource_group", where),
+            restore_staging_storage=check.text(b, "restore_staging_storage", where),
         ))
 
     exceptions = []
-    for e in data.get("exceptions", []):
+    for i, e in enumerate(sections["exceptions"]):
+        where = f"exceptions[{i}]"
+        if not isinstance(e, dict):
+            check.bad(where, f"une table (asset_pattern, exclude_all, exclude_rules) est attendue, pas {_shown(e)}")
+            continue
+        check.keys(e, where, _EXCEPTION_KEYS)
         exceptions.append(ExceptionConfig(
-            asset_pattern=e["asset_pattern"],
-            exclude_all=e.get("exclude_all", False),
-            exclude_rules=e.get("exclude_rules", []),
+            asset_pattern=check.text(e, "asset_pattern", where, required=True),
+            exclude_all=check.flag(e, "exclude_all", where, False),
+            exclude_rules=check.texts(e, "exclude_rules", where),
         ))
 
-    autonomy = _parse_autonomy(data.get("autonomy", {}))
-    iso = data.get("isolation") or {}
+    autonomy = _check_autonomy(sections["autonomy"], check)
+
+    iso = sections["isolation"]
+    check.keys(iso, "isolation", _ISOLATION_KEYS)
+    try:
+        ports = validate_forensic_ports(iso.get("forensic_ports", [22, 3389]))
+    except ValueError as exc:
+        check.problems.append(str(exc))
+        ports = []
     isolation = IsolationConfig(
-        quarantine_nsg=bool(iso.get("quarantine_nsg", True)),
-        quarantine_rg=str(iso.get("quarantine_rg", "") or ""),
-        forensic_sources=[str(x) for x in (iso.get("forensic_sources") or [])],
-        forensic_ports=validate_forensic_ports(iso.get("forensic_ports", [22, 3389])),
+        quarantine_nsg=check.flag(iso, "quarantine_nsg", "isolation", True),
+        quarantine_rg=check.text(iso, "quarantine_rg", "isolation"),
+        forensic_sources=check.texts(iso, "forensic_sources", "isolation"),
+        forensic_ports=ports,
     )
 
+    if check.problems:
+        n = len(check.problems)
+        raise ConfigError(f"{n} problème{'s' if n > 1 else ''} :\n  - " + "\n  - ".join(check.problems))
     return GlorfindelConfig(
         monitoring_backends=monitoring_backends,
         action_backends=action_backends,
@@ -522,18 +686,48 @@ def _validate_mode(mode: str, where: str) -> str:
     )
 
 
-def _parse_autonomy(raw: dict) -> AutonomyConfig:
-    """Parse + validate the autonomy section. Empty/absent → safe defaults."""
-    default = _validate_mode(raw.get("default", "human_only"), where="autonomy.default")
+def _check_autonomy(raw: dict, check: _Checker) -> AutonomyConfig:
+    check.keys(raw, "autonomy", _AUTONOMY_KEYS)
+
+    def mode(value, where: str) -> str | None:
+        if not isinstance(value, str):
+            check.bad(where, f"un mode (texte) est attendu, pas {_shown(value)}")
+            return None
+        try:
+            return _validate_mode(value, where=where)
+        except ValueError as exc:
+            check.problems.append(str(exc))
+            return None
+
+    default = mode(raw.get("default", "human_only"), "autonomy.default") or "human_only"
     assets = []
-    for a in raw.get("assets", []):
-        mode = _validate_mode(a["mode"], where=f"autonomy.assets[match={a.get('match', '?')}]")
-        assets.append(AutonomyRule(match=a["match"], mode=mode))
+    for i, a in enumerate(check.items(raw.get("assets"), "autonomy.assets")):
+        where = f"autonomy.assets[{i}]"
+        if not isinstance(a, dict):
+            check.bad(where, f"une table (match, mode) est attendue, pas {_shown(a)}")
+            continue
+        check.keys(a, where, _AUTONOMY_ASSET_KEYS)
+        match = check.text(a, "match", where, required=True)
+        if "mode" not in a:
+            check.bad(f"{where}.mode", "obligatoire")
+            continue
+        m = mode(a["mode"], f"autonomy.assets[match={match or '?'}]")
+        if m is not None:
+            assets.append(AutonomyRule(match=match, mode=m))
     return AutonomyConfig(
         default=default,
         assets=assets,
-        allow_destructive=list(raw.get("allow_destructive", [])),
+        allow_destructive=check.texts(raw, "allow_destructive", "autonomy"),
     )
+
+
+def _parse_autonomy(raw: dict) -> AutonomyConfig:
+    """Parse + validate the autonomy section. Empty/absent → safe defaults."""
+    check = _Checker()
+    autonomy = _check_autonomy(check.table(raw, "autonomy"), check)
+    if check.problems:
+        raise ConfigError("\n".join(check.problems))
+    return autonomy
 
 
 def set_default_mode(mode: str, path: str | Path | None = None) -> str:

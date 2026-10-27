@@ -199,7 +199,8 @@ MUTANTS = [
      "            wanted = self._quarantine_wanted(with_forensic=False)\n            forensic_known = False",
      "            raise\n            forensic_known = False"),
     ("M28", "orphan rules not reported (L28, U1)", SWP,
-     "                if len(mark) not in (6, 8) or any(c not in \"0123456789abcdef\" for c in mark) or mark in marks:",
+     "                if (len(mark) not in (6, 8) or any(c not in \"0123456789abcdef\" for c in mark)\n"
+     "                        or mark in marks or mark in live_names):",
      "                if True:"),
     ("M29", "a bare NIC isolated again records 'none' over its original (L28, U2)", QUA,
      "            if original is None:\n                # A bare NIC may have been in our quarantine before",
@@ -1463,7 +1464,7 @@ MUTANTS = [
 MUTANTS += [
     ("M830", "the reassertion doesn't read the quarantine NSGs: one altered, its NICs' state lost, "
              "goes unsaid (I1F, L2)", R,
-     "    _report_altered_quarantines(connector, report)\n    return report\n\n\ndef reassert_pass(",
+     "    _whatever_the_state(connector, autonomy, report)\n    return report\n\n\ndef reassert_pass(",
      "    return report\n\n\ndef reassert_pass("),
     ("M831", "a rule's signature leaves its protocol out: our quarantine deny turned to Udp reads as "
              "ours (I1F)", NSG,
@@ -1479,7 +1480,7 @@ MUTANTS += [
      "        if k in altered or settled(k):\n"),
     # After the review (5.5): the watch's pass, an acknowledgement, an unknown.
     ("M834", "nothing recorded: the pass reads no quarantine NSG (I1F, review)", R,
-     "    report: list[dict] = []\n    _report_altered_quarantines(connector, report)\n    return report\n",
+     "    report: list[dict] = []\n    _whatever_the_state(connector, autonomy, report)\n    return report\n",
      "    return []\n"),
     ("M836", "an acknowledged quarantine card comes back at every pass (I1F, review)", R,
      "        if signal_id in said or alerts.get(k) == signal_id:\n",
@@ -1616,6 +1617,117 @@ MUTANTS += [
     ("M623", "verify_release blind to a group named like the quarantine (MC1, review)", AWS_ISO,
      'if (q is not None and q["GroupId"] in e["groups"]) or self._named_quarantine(e["groups"]):',
      'if q is not None and q["GroupId"] in e["groups"]:'),
+]
+# A3 (#73): the orphan sweep (U1, removal after the alert), the extensions allowed at the
+# restore (L23), the strict config. M760–M763 by the invariants (and their fixed sequence;
+# M760, M762, M763 by test_orphan_sweep.py too), the others by their unit tests (TESTS below).
+# The sweep left the posture pass for the watch's (orphans.py, D-B).
+ORP = "glorfindel/orphans.py"
+POS = "glorfindel/posture.py"
+RST = "glorfindel/providers/azure/restore.py"
+MUTANTS += [
+    ("M760", "the orphan sweep alerts and never removes (A3, U1)", ORP,
+     "        if alone:\n            out = _remove(connector, o, victims)",
+     "        if False:\n            out = _remove(connector, o, victims)"),
+    ("M761", "a live NIC's own rule taken for an orphan, and removed (A3, U1)", SWP,
+     "                        or mark in marks or mark in live_names):",
+     "                        or mark in live_names):"),
+    ("M762", "the orphan sweep removes a rule of the deleted NIC's, any Glorfindel rule of that NSG (A3)", SWP,
+     "        err = self._delete_rule(nsg_rg, nsg_name, orphan[\"rule\"])",
+     "        err = None\n"
+     "        for r in self._network.network_security_groups.get(nsg_rg, nsg_name).security_rules or []:\n"
+     "            if _rule_name(r).lower().startswith(\"glorfindel-\"):\n"
+     "                err = self._delete_rule(nsg_rg, nsg_name, _rule_name(r)) or err"),
+    ("M763", "an orphan's address read on either side of the rule (A3)", SWP,
+     "                side = \"destination\" if _enum_text(getattr(r, \"direction\", \"\")) == \"inbound\" else \"source\"\n"
+     "                single = getattr(r, f\"{side}_address_prefix\", None)",
+     "                side = \"source\" if _enum_text(getattr(r, \"direction\", \"\")) == \"inbound\" else \"destination\"\n"
+     "                single = getattr(r, f\"{side}_address_prefix\", None)"),
+    ("M764", "the holder's NSG not compared: an orphan behind another NSG removed too (A3)", SWP,
+     "                cut = [h for h in now_on if nic_nsg.get(h[\"nic_id\"].rstrip(\"/\").lower()) == nsg_key\n"
+     "                       or nic_subnets.get(h[\"nic_id\"].rstrip(\"/\").lower(), set()) & subnets]",
+     "                cut = list(now_on)"),
+    ("M765", "an NSG with a NIC the listing misses: its orphans removed anyway (A3)", SWP,
+     "                elif attached - listed:", "                elif False:"),
+    ("M766", "a NIC of our state, alive but missing from the listing, taken for gone (A3)", SWP,
+     "                    if gone[mark] == \"alive\":\n                        continue",
+     "                    if False:\n                        continue"),
+    ("M767", "older names of a live NIC (its name, the id's case-preserving hash) taken for orphans (A3)", SWP,
+     "                        or mark in marks or mark in live_names):",
+     "                        or mark in {m for m in marks if len(m) == 6}):"),
+    ("M768", "read-only credentials: the sweep tries to remove anyway (A3)", ORP,
+     "    can_write = getattr(connector, \"read_only\", False) is False",
+     "    can_write = True"),
+    ("M769", "an orphan's card resolved though the removal failed (A3)", ORP,
+     "        if out.get(\"removed\") is True:\n            # A card of another rule",
+     "        if out:\n            # A card of another rule"),
+    ("M770", "a key nobody reads accepted in silence (A3)", C,
+     "        for k in raw:\n            if k in allowed:\n                continue",
+     "        for k in raw:\n            if True:\n                continue"),
+    ("M771", "\"false\" in quotes read as true (A3)", C,
+     "        if isinstance(value, bool):\n            return value\n        if isinstance(value, str) and",
+     "        if isinstance(value, (bool, str)):\n            return bool(value)\n        if isinstance(value, str) and"),
+    ("M772", "a single text taken for a list, letter by letter (A3)", C,
+     "        if not isinstance(value, list):\n            self.bad(f\"{where}.{k}\", f\"une liste est attendue",
+     "        if isinstance(value, str):\n            value = list(value)\n"
+     "        if not isinstance(value, list):\n            self.bad(f\"{where}.{k}\", f\"une liste est attendue"),
+    ("M773", "the watch starts on a refused config (A3)", GCLI,
+     "                      \"sur une configuration mal écrite.\\n\" + _esc_markup(str(exc)))\n        raise SystemExit(2)",
+     "                      \"sur une configuration mal écrite.\\n\" + _esc_markup(str(exc)))"),
+    ("M774", "the restore's extensions: back to the list of three CustomScript names (A3, L23)", RST,
+     "                if key not in self._REPLAY_SAFE_EXTENSIONS:",
+     "                if key[1] in (\"customscript\", \"customscriptextension\", \"customscriptforlinux\"):"),
+    ("M775", "an extension whose kind can't be read allowed at the restore (A3, L23)", RST,
+     "                if key not in self._REPLAY_SAFE_EXTENSIONS:",
+     "                if all(key) and key not in self._REPLAY_SAFE_EXTENSIONS:"),
+]
+# A3, after its first review (5.5): the mode (D-A), the watch's pass (D-B), the VMs
+# Glorfindel holds, a 404 told from a 403, the card's reason, the backend types.
+MUTANTS += [
+    ("M776", "the orphan rule taken off whatever the cut VM's mode: human_only writes (A3, D-A)", ORP,
+     "        alone = (can_write and o.get(\"removable\") is True and bool(modes)\n"
+     "                 and all(m in _ALONE for m in modes.values()))",
+     "        alone = can_write and o.get(\"removable\") is True"),
+    ("M777", "the orphan sweep left out of the watch's pass: it waits for a discovery that may be off (A3, D-B)",
+     R, "    sweep_orphan_rules(connector, autonomy, report, nsgs)\n", ""),
+    ("M778", "the rule of a recreated NIC under a VM Glorfindel isolates found removable (A3, first review)", SWP,
+     "                elif why := self._held_reason(cut, held):\n                    kept = why\n", ""),
+    ("M779", "the removal doesn't read the state again: an isolation recorded since is lifted (A3, first review)",
+     SWP, "        why = self._held_reason(orphan.get(\"cut\") or [], self._held_vms())\n",
+     "        why = \"\"\n"),
+    ("M880", "any error reading a NIC of our state taken for a 404: gone (A3, first review, X1)", SWP,
+     "            if _is_not_found(exc):\n                return None",
+     "            if True:\n                return None"),
+    ("M881", "a NIC of our state unreadable (403, 429): its rule removable anyway (A3, first review, X2)", SWP,
+     "                elif mark in state_nics and gone.get(mark):", "                elif False:"),
+    ("M882", "an unknown backend type accepted in silence (A3, first review)", C,
+     "        if raw.get(k) is None or not isinstance(raw.get(k), str) or value in allowed:\n            return value",
+     "        if True:\n            return value"),
+    ("M883", "the orphan's card doesn't say why its rule was kept (A3, first review)", ORP,
+     "            reason += f\" Gardée : {o.get('kept') or 'non retirable'}.\"", "            pass"),
+    ("M884", "a release held by an extension: the card blames the last Run Command (A3, first review)",
+     "glorfindel/agent.py", "        if vectors:\n", "        if False:\n"),
+    ("M885", "Guest Configuration allowed at the restore: a policy's script comes back (A3, first review)", RST,
+     "        (\"microsoft.compute\", \"bginfo\"),\n",
+     "        (\"microsoft.compute\", \"bginfo\"),\n"
+     "        (\"microsoft.guestconfiguration\", \"configurationforlinux\"),\n"),
+    ("M886", "an orphan said again at every pass: a card a minute, an acknowledgement lost (A3, D-B)", ORP,
+     "        if k in alerts:\n            continue", "        if False:\n            continue"),
+    ("M887", "every orphan card closed at each pass, its rule standing (A3, D-B)", ORP,
+     "    for k in [k for k in alerts if k not in current]:", "    for k in list(alerts):"),
+    # A3, second review (5.5): guards that were right, now locked.
+    ("M888", "the held VM compared by its exact id: a lowercase state misses it, its isolation lifted (A3)", SWP,
+     '            if any(_same_id(h.get("vm_id") or "", rid) for rid in held):',
+     '            if any((h.get("vm_id") or "") == rid for rid in held):'),
+    ("M889", "an unreadable configuration read as non_disruptive: the sweep writes on a guessed mode (A3, D-A)",
+     ORP, '        return "human_only" if autonomy is None else autonomy.resolve(name)',
+     '        return "non_disruptive" if autonomy is None else autonomy.resolve(name)'),
+    ("M700", "the reassertion off: nobody says the orphan rules any more, L28's alert lost (A3)", POS,
+     '        if getattr(self._connector, "read_only", False) is not True and _reassertion_on():',
+     '        if getattr(self._connector, "read_only", False) is not True:'),
+    ("M701", "a rule cutting VMs of different modes removed when one may act alone (A3, D-A)", ORP,
+     "                 and all(m in _ALONE for m in modes.values()))",
+     "                 and any(m in _ALONE for m in modes.values()))"),
 ]
 # L1F (#229): "already alerted" written before the card — a crash in between leaves the
 # marker without the card, and every later pass is silent on a block gone from Azure.
@@ -2042,6 +2154,17 @@ TESTS["M403"] = "tests/unit/test_console_exercises.py"
 TESTS.update({f"M{n}": "tests/unit/test_watch_gate.py" for n in (*range(720, 740), *range(750, 760))})
 TESTS.update({f"M{n}": "tests/unit/test_gothmog.py" for n in (724, 725, 726, 727)})
 TESTS.update({f"M{n}": "tests/unit/test_host_console.py" for n in range(740, 750)})  # UI-1c
+# A3 (#73): the orphan sweep's guards, the strict config, the restore's extensions.
+TESTS.update({f"M{n}": "tests/unit/test_orphan_sweep.py" for n in range(764, 770)})
+TESTS.update({f"M{n}": f"{INVARIANTS} tests/unit/test_orphan_sweep.py" for n in (760, 762, 763)})  # rare when drawn
+TESTS.update({f"M{n}": "tests/unit/test_config.py" for n in range(770, 774)})
+TESTS.update({f"M{n}": "tests/unit/test_glorfindel.py -k extensions" for n in (774, 775)})
+TESTS.update({f"M{n}": "tests/unit/test_orphan_sweep.py" for n in (776, 777, 778, 779, 880, 881, 883, 886, 887)})
+TESTS["M882"] = "tests/unit/test_config.py"
+TESTS["M884"] = "tests/unit/test_agent_nodes.py -k extension"
+TESTS["M885"] = "tests/unit/test_glorfindel.py -k extensions"
+TESTS.update({f"M{n}": "tests/unit/test_orphan_sweep.py" for n in (888, 889, 700, 701)})
+
 # L1F (#229): no liveness property on a vanished ISOLATION in the machine — its unit test.
 TESTS["M901"] = "tests/unit/test_reassert.py"
 # L1F: a crash between the card and the marker is rare in the drawn sequences (M900 and M902

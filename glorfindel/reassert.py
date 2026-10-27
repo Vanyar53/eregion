@@ -117,22 +117,40 @@ def reassert_active(connector, autonomy=None) -> list[dict]:
                                 ref=snapshot["resource_id"])
         except TimeoutError:
             continue
-    _report_altered_quarantines(connector, report)
+    _whatever_the_state(connector, autonomy, report)
     return report
 
 
 def reassert_pass(connector, autonomy=None) -> list[dict]:
     """One pass of the watch's reassertion (every GLORFINDEL_REASSERT_INTERVAL_S): the
     recorded isolations and blocks when there are some — a cheap local read, no Azure
-    call for them when there are none — and our quarantine NSGs whatever the local state
-    says (I1F): the case they are read for is a state lost, and a card raised must close
-    after the last release too."""
+    call for them when there are none — then, whatever the local state says, our
+    quarantine NSGs (I1F: the case they are read for is a state lost, and a card raised
+    must close after the last release too) and the orphan rules (A3: a VM given a
+    deleted VM's address is freed, or said, within the minute — discovery on or off)."""
     from glorfindel.actions import active_blocks, active_isolations
     if active_isolations() or active_blocks():
         return reassert_active(connector, autonomy)
     report: list[dict] = []
-    _report_altered_quarantines(connector, report)
+    _whatever_the_state(connector, autonomy, report)
     return report
+
+
+def _whatever_the_state(connector, autonomy, report: list[dict]) -> None:
+    """The checks of every pass, after the isolations (which may have put a quarantine
+    back): one listing of the NSGs for both, read after those writes. Listing failed →
+    each lists for itself, and says it can't."""
+    from glorfindel.orphans import sweep_orphan_rules
+    nsgs = None
+    lister = getattr(connector, "nsg_listing", None)
+    if lister is not None and getattr(connector, "dry_run", False) is not True:
+        try:
+            nsgs = lister()
+            nsgs = nsgs if isinstance(nsgs, list) else None
+        except Exception as exc:
+            log.warning("reassert: NSGs not listed (%s)", exc)
+    _report_altered_quarantines(connector, report, nsgs)
+    sweep_orphan_rules(connector, autonomy, report, nsgs)
 
 
 _QUARANTINE_PREFIX = "reassert-quarantine-"
@@ -163,7 +181,7 @@ def _save_quarantine_alerts(alerts: dict) -> None:
         log.warning("reassert: quarantine alerts not recorded (%s)", exc)
 
 
-def _report_altered_quarantines(connector, report: list[dict]) -> None:
+def _report_altered_quarantines(connector, report: list[dict], nsgs: list | None = None) -> None:
     """Our quarantine NSG changed by someone, still holding NICs (I1F): said, one card
     per NSG and per change. The isolations are read from their state; a NIC whose state
     was lost (and its NSG's tags) sits in a quarantine nobody checked — a deny turned to
@@ -179,7 +197,7 @@ def _report_altered_quarantines(connector, report: list[dict]) -> None:
     if find is None:
         return                                  # a provider without a quarantine NSG
     try:
-        listing = find()
+        listing = find(nsgs=nsgs) if nsgs is not None else find()
     except Exception as exc:                # unread: every card stays as it is
         log.warning("reassert: quarantine NSGs not checked (%s)", exc)
         return

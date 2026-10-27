@@ -325,6 +325,35 @@ ligne qui lance ssh, `export NOM=`, pour tout nom de secret. Une cible nouvelle 
 
 ---
 
+## Configuration — `glorfindel-config.yaml` lue strictement (A3, 27/10)
+
+Le fichier est lu clé par clé : une clé que rien ne lit, une valeur du mauvais type, `"false"` entre
+guillemets **refusent le fichier** (`ConfigError`), avec tous les problèmes à la fois, chacun à son
+chemin (`isolation.quarantaine_nsg : clé inconnue … vouliez-vous dire « quarantine_nsg » ?`,
+`exceptions[0].exclude_all : "false" est un texte entre guillemets, pas un booléen — écrire false sans
+guillemets`, `autonomy.allow_destructive : une liste est attendue, pas "vm-*" — écrire [vm-*]`). Avant,
+ces fautes passaient en silence : la clé mal écrite laissait son défaut (la quarantaine restait
+allumée), `exclude_all: "false"` sortait la VM de toutes les règles (un texte non vide est vrai),
+`allow_destructive: "vm-*"` devenait les motifs `v`, `m`, `-` et `*`.
+
+- Clés connues : `monitoring_backends` (`name`, `type`, `workspace_id`, `endpoint`, `discovery` :
+  `enabled`, `interval_s`), `action_backends` (`name`, `type`, `vault_name`, `resource_group`,
+  `restore_staging_storage`), `exceptions` (`asset_pattern`, `exclude_all`, `exclude_rules`),
+  `autonomy` (`default`, `assets` : `match`, `mode` ; `allow_destructive`), `isolation`
+  (`quarantine_nsg`, `quarantine_rg`, `forensic_sources`, `forensic_ports`).
+- Types : textes entre guillemets ou non, booléens `true` / `false` sans guillemets, listes pour
+  `exclude_rules`, `allow_destructive`, `forensic_sources`, `assets` et les sections de backends ;
+  `interval_s` un nombre de secondes positif ; `forensic_ports` un port ou une liste (inchangé). Une
+  section vide (tous ses éléments en commentaire) vaut une liste vide.
+- Valeurs de `type` : celles que quelque chose lit — `monitoring_backends` : `azure_monitor`, `prometheus` ; `action_backends` : `azure_backup_vault`. `type: azure_monitr` est refusé, avec celle qu'il rappelle (un backend que rien ne lisait : ni découverte, ni règle liée). Un nouveau type s'ajoute dans `glorfindel/config.py` (`_MONITORING_TYPES`, `_ACTION_TYPES`).
+- Effets du refus : la watch **ne démarre pas** (code 2, le message en rouge) ; l'isolation est refusée
+  avant toute écriture et la préparation dit `config_unreadable` (comme un YAML illisible, S1) ; la
+  réaffirmation passe en alertes seules.
+- Le fichier d'exemple (`glorfindel-config.yaml.example`) et le fragment de Celebrimbor
+  (`make celebrimbor-output`) passent la lecture stricte (`tests/unit/test_config.py`).
+
+---
+
 ## Verrou des dépendances
 
 `pyproject.toml` déclare des plages (`>=`) ; le verrou fixe ce qui s'installe vraiment (M-3,

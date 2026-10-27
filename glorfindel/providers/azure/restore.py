@@ -236,14 +236,53 @@ class RestoreMixin:
             return {"run_command_neutralized": False,
                     "run_command_error": _first_line(e)[:_ERR_MAX]}
 
-    _SCRIPT_EXTENSIONS = {("microsoft.azure.extensions", "customscript"),
-                          ("microsoft.compute", "customscriptextension"),
-                          ("microsoft.ostcextensions", "customscriptforlinux")}
+    # Extensions a restored disk may run again without Glorfindel vouching for a script:
+    # agents that take no command from the VM model — monitoring, security, backup,
+    # sign-in, patching, attestation, inventory. Any other holds the release:
+    # CustomScript, VMAccess (it resets users and SSH keys: an attacker's key comes
+    # back), DSC, Chef, a third party's — and Guest Configuration, which applies what a
+    # policy assigns (a configuration, a script through it): kept out on purpose. The
+    # list of the dangerous ones it replaces (three CustomScript names) missed every one
+    # of those (L23, A3). Publisher and type names as documented — to measure on the
+    # bench, which only has AMA (A3, first review).
+    _REPLAY_SAFE_EXTENSIONS = frozenset({
+        ("microsoft.azure.monitor", "azuremonitorlinuxagent"),
+        ("microsoft.azure.monitor", "azuremonitorwindowsagent"),
+        ("microsoft.enterprisecloud.monitoring", "omsagentforlinux"),
+        ("microsoft.enterprisecloud.monitoring", "microsoftmonitoringagent"),
+        ("microsoft.azure.monitoring.dependencyagent", "dependencyagentlinux"),
+        ("microsoft.azure.monitoring.dependencyagent", "dependencyagentwindows"),
+        ("microsoft.azure.diagnostics", "linuxdiagnostic"),
+        ("microsoft.azure.diagnostics", "iaasdiagnostics"),
+        ("microsoft.azure.recoveryservices", "vmsnapshot"),
+        ("microsoft.azure.recoveryservices", "vmsnapshotlinux"),
+        ("microsoft.azure.networkwatcher", "networkwatcheragentlinux"),
+        ("microsoft.azure.networkwatcher", "networkwatcheragentwindows"),
+        ("microsoft.azure.activedirectory", "aadsshloginforlinux"),
+        ("microsoft.azure.activedirectory", "aadloginforwindows"),
+        ("microsoft.azure.azuredefenderforservers", "mde.linux"),
+        ("microsoft.azure.azuredefenderforservers", "mde.windows"),
+        ("microsoft.azure.security", "iaasantimalware"),
+        ("microsoft.azure.security.linuxattestation", "guestattestation"),
+        ("microsoft.azure.security.windowsattestation", "guestattestation"),
+        ("microsoft.cplat.core", "linuxpatchextension"),
+        ("microsoft.cplat.core", "windowspatchextension"),
+        ("microsoft.softwareupdatemanagement", "linuxosupdateextension"),
+        ("microsoft.softwareupdatemanagement", "windowsosupdateextension"),
+        ("microsoft.azure.changetrackingandinventory", "changetracking-linux"),
+        ("microsoft.azure.changetrackingandinventory", "changetracking-windows"),
+        ("microsoft.compute", "bginfo"),
+        # Run Command's handlers: v1's last command is the harmless one just run; v2's
+        # commands are resources of their own, listed below.
+        ("microsoft.cplat.core", "runcommandlinux"),
+        ("microsoft.cplat.core", "runcommandhandlerlinux"),
+        ("microsoft.cplat.core", "runcommandhandlerwindows"),
+    })
 
     def _replayable_scripts(self, rg: str, vm_name: str) -> list[str]:
-        """Script-running extensions (CustomScript) and managed Run Commands (v2,
-        `runCommands` resources) on the VM: like Run Command v1, a restored disk can run
-        them again at boot. Unreadable → reported as such (no success on an unknown)."""
+        """Extensions outside the allowlist and managed Run Commands (v2, `runCommands`
+        resources) on the VM: like Run Command v1, a restored disk can run them again at
+        boot. Unreadable → reported as such (no success on an unknown)."""
         found: list[str] = []
         try:
             for ext in self._compute.virtual_machine_extensions.list(rg, vm_name).value or []:
@@ -255,8 +294,8 @@ class RestoreMixin:
                 key = (str(props.get("publisher") or d.get("publisher") or getattr(ext, "publisher", "") or "").lower(),
                        str(props.get("type") or d.get("type_properties_type")
                            or getattr(ext, "type_properties_type", "") or "").lower())
-                if key in self._SCRIPT_EXTENSIONS:
-                    found.append(f"extension {ext.name}")
+                if key not in self._REPLAY_SAFE_EXTENSIONS:
+                    found.append(f"extension {ext.name}" + ("" if all(key) else " (éditeur ou type illisible)"))
         except Exception as e:
             found.append(f"extensions illisibles ({_first_line(e)[:120]})")
         try:

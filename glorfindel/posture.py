@@ -100,38 +100,17 @@ class PostureChecker:
         return all_gaps
 
     def _escalate_orphan_rules(self) -> None:
-        """One card per Glorfindel rule whose NIC no longer exists (seventh review, U1):
-        an isolation or a block of a deleted VM, aimed at an IP that another NIC may now
-        hold — that NIC is cut off. An alert for now; nothing is removed by itself."""
+        """The orphan rules (U1) when the watch's reassertion pass, which sweeps them
+        every minute whatever discovery does (A3, orphans.py), doesn't run: read-only
+        credentials, or the reassertion turned off (GLORFINDEL_REASSERT_INTERVAL_S=0).
+        Here they are said, never taken off (autonomy None: the card only) — L28's
+        alert doesn't go with the reassertion (second review of A3)."""
         if self._dry_run or self._connector is None:
             return
-        try:
-            orphans = self._connector.find_orphan_rules()
-        except Exception as exc:
-            import logging
-            logging.getLogger(__name__).warning("posture: orphan rules not checked (%s)", exc)
+        if getattr(self._connector, "read_only", False) is not True and _reassertion_on():
             return
-        from glorfindel import escalations
-        for o in orphans:
-            from glorfindel.actions import _parse_nsg_resource_id
-            nsg_rg, nsg_name = _parse_nsg_resource_id(o["nsg_id"])
-            hit = o["now_on"][0] if o["now_on"] else None
-            if hit:
-                victim = (hit["vm_id"] or hit["nic_id"]).rstrip("/").rsplit("/", 1)[-1]
-                reason = (f"Règle {o['rule']} ({nsg_name}) : laissée par une carte qui n'existe plus, elle "
-                          f"vise {hit['ip']} — adresse de {victim} aujourd'hui, qui est donc coupé(e).")
-            else:
-                reason = (f"Règle {o['rule']} ({nsg_name}) : laissée par une carte qui n'existe plus "
-                          f"(vise {', '.join(o['ips']) or '*'}). Aucune carte ne porte cette adresse aujourd'hui.")
-            escalations.record(
-                signal_id=f"orphan-{o['nsg_id']}/{o['rule']}",
-                resource_id=(hit["vm_id"] or o["nsg_id"]) if hit else o["nsg_id"],
-                action="remove_orphan_rule",
-                escalation_type="orphan_rule",
-                reason=reason,
-                suggested_steps=[f"az network nsg rule delete -g {nsg_rg} --nsg-name {nsg_name} -n {o['rule']}"],
-                severity="high" if hit else "medium",
-            )
+        from glorfindel.orphans import sweep_orphan_rules
+        sweep_orphan_rules(self._connector, None)
 
     def _excluded(self, asset_name: str) -> bool:
         is_excluded = getattr(self._cfg, "is_excluded", None)
@@ -433,6 +412,17 @@ class PostureChecker:
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _reassertion_on() -> bool:
+    """The watch's reassertion pass runs (cli.py reads the interval the same way: an
+    unreadable value is the default, 60 s; 0 or less turns it off)."""
+    import os
+    try:
+        every = float(os.environ.get("GLORFINDEL_REASSERT_INTERVAL_S", "60"))
+    except ValueError:
+        every = 60.0
+    return every > 0
+
 
 def _rg(resource_id: str) -> str:
     parts = resource_id.split("/")

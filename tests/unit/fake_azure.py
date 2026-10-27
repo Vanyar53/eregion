@@ -231,8 +231,10 @@ class _Nics:
     def get(self, rg, name):
         def read():
             n = self._get(rg, name)
+            vm = next((v["id"] for v in self.az.vms.values() if key(n["id"]) in {key(x) for x in v["nics"]}), None)
             return SimpleNamespace(
                 id=n["id"], location=n["location"],
+                virtual_machine=SimpleNamespace(id=vm) if vm else None,
                 network_security_group=SimpleNamespace(id=n["nsg"]) if n["nsg"] else None,
                 ip_configurations=[SimpleNamespace(private_ip_address=ip,
                                                    subnet=SimpleNamespace(id=n["subnet"]))

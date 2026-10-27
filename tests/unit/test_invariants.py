@@ -349,6 +349,20 @@ def _note(what: str) -> None:
     _SEEN[what] += 1
 
 
+class _Drawn:
+    """A rule's draws, some of them set: by label, a value, or a narrower strategy —
+    the rest drawn as the rule would (a composite rule reuses the others, I1F)."""
+
+    def __init__(self, data, **fixed):
+        self.data, self.fixed = data, fixed
+
+    def draw(self, strategy, label=None):
+        if label in self.fixed:
+            v = self.fixed[label]
+            return self.data.draw(v, label=label) if isinstance(v, st.SearchStrategy) else v
+        return self.data.draw(strategy, label=label)
+
+
 def _nic_hash(nic_id: str) -> str:
     """The NIC part of Glorfindel's rule names — the convention, restated here so a
     leftover is found by its name even when it no longer applies to the NIC's
@@ -1463,6 +1477,28 @@ class IsolationMachine(RuleBasedStateMachine):
             r[f"{how}_address_prefix"], r[f"{how}_address_prefixes"] = "10.9.0.0/16", None
         elif len(values) > 1:
             r[f"{how}_address_prefix"], r[f"{how}_address_prefixes"] = values[0], None
+
+    @rule(data=st.data())
+    def quarantine_altered_then_reasserted(self, data):
+        """A rare state made common (I1F, L2): a VM isolated, its state lost or kept, then
+        someone alters our quarantine NSG — strips it, or turns one of its denies — and
+        the reassertion runs, unfaulted. Drawn one by one, the steps almost never met
+        (M830 and M831 went unseen at 500 sequences)."""
+        vm, rid, _ = self._draw(data)
+        self._isolate(vm, rid, None)
+        if data.draw(st.booleans(), label="lose the state"):
+            self.lose_state(_Drawn(data, vm=vm))
+        if data.draw(st.booleans(), label="strip"):
+            self._strip_quarantine_nsg(data)
+        else:
+            q = sorted((k, n) for k, g in self.fake.nsgs.items() if actions._is_quarantine_nsg(k)
+                       for n, r in g["rules"].items() if n.startswith("glorfindel-") and r["access"].lower() == "deny")
+            if q:
+                self._tamper_with_our_rule(_Drawn(data, how=st.sampled_from(
+                    ["port", "source", "destination", "access", "priority", "protocol", "retarget"]),
+                    rule=st.sampled_from(q)))
+        self._claims_after_a_change()
+        self.reassert(_Drawn(data, fault=None))
 
     @rule()
     def time_passes(self):

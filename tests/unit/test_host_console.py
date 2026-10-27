@@ -286,3 +286,22 @@ def test_push_checks_the_token_before_anything_reaches_the_vm():
     recipe = text.split("\nglorfindel-host-push:\n", 1)[1].split("\n\n", 1)[0]
     check = recipe.index("host_env.py --check infra/glorfindel-host/host.env")
     assert check < recipe.index("scp ")
+
+
+# ── host.env.example: a variable left empty stays empty ───────────────────────────────────
+
+def test_the_example_leaves_every_empty_variable_empty():
+    """`KEY=   # note` is « # note » for docker compose (measured with `docker compose config`,
+    27/10): copied as is, an unfilled webhook URL or Discord id took the comment as its value.
+    Read with compose's rule (host_env.read_env), only the two set values remain."""
+    path = HOST / "host.env.example"
+    values = host_env.read_env(path)
+    assert {k: v for k, v in values.items() if v} == {
+        "GLORFINDEL_LLM_MODEL": "anthropic/claude-sonnet-4-6", "GLORFINDEL_READ_ONLY": "1"}
+    assert not [k for k, v in values.items() if v.startswith("#")]
+    # Every comment above its line, never beside it: none beside a filled value either.
+    beside = [line for line in path.read_text(encoding="utf-8").splitlines()
+              if not line.lstrip().startswith("#") and "=" in line and "#" in line.split("=", 1)[1]]
+    assert beside == []
+    assert {"AZURE_SUBSCRIPTION_ID", "DISCORD_PING_ROLE", "DISCORD_ALLOWED_USERS", "DISCORD_ALLOWED_ROLES",
+            "GLORFINDEL_WEBHOOK_URL", NEW} <= set(values)

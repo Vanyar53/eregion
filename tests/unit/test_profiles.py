@@ -126,6 +126,26 @@ def test_every_profile_target_starts_glorfindel_and_names_its_page():
         assert f"make {target}" in "\n".join(_recipe("help")[1]), target
 
 
+# Make target → the compose profiles it is for.
+TARGET_PROFILES = {"profile-discover": (), "profile-detection": ("annatar",),
+                   "profile-resilience": ("gothmog",), "profile-proven": ("annatar", "gothmog")}
+
+
+def test_every_profile_target_creates_what_its_services_mount_from_home():
+    """A directory of $HOME that docker bind-mounts without it existing is created by docker,
+    as root: the operator's CLI can no longer write it. Each profile's target creates them
+    first, as the operator (its recipe, or glorfindel-start's)."""
+    assert set(TARGET_PROFILES) == set(TARGETS)
+    for target, selected in TARGET_PROFILES.items():
+        mounted = {v.split(":", 1)[0].replace("${HOME}", "$(HOME)")
+                   for name in _started(selected) for v in SERVICES[name]["volumes"]
+                   if v.startswith("${HOME}/")}
+        assert mounted, target
+        made = " ".join(ln for ln in _recipe(target)[1] + _recipe("glorfindel-start")[1]
+                        if "mkdir -p" in ln).split()
+        assert mounted <= set(made), (target, mounted - set(made))
+
+
 def test_each_profile_has_its_page():
     index = (ROOT / "docs" / "profils" / "README.md").read_text(encoding="utf-8")
     for page in PAGES:

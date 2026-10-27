@@ -14,6 +14,8 @@
 make profile-detection        # Glorfindel (watch + console) + l'image d'Annatar
 ```
 
+`make profile-detection` crée d'abord, à ton nom, `~/.glorfindel`, `~/.cache/chroma` et `~/.annatar`, que les services montent. Lance Annatar **après** elle : sinon docker crée ces dossiers au nom de root.
+
 **Sur ton poste, rien ne touche le cloud.** Le contrat d'Orodruin y est `passive`, et Annatar refuse d'agir. Ce que tu peux faire sans risque :
 
 ```bash
@@ -32,7 +34,7 @@ make orodruin-campaign-run CAMPAIGN=<id>
 
 ## Jamais sans Glorfindel
 
-**Le service compose.** `annatar` dépend de la watch : le lancer la démarre. Il lit le battement de la watch dans `~/.glorfindel`, en lecture seule. Il partage aussi `runs/` avec elle, et c'est là qu'elle lit l'`attack_started`.
+**Le service compose.** `annatar` dépend de la watch : le lancer la démarre, mais sans attendre son battement. Dans la première minute, le temps que la watch publie son premier battement, Annatar peut refuser d'agir : relance-le un peu plus tard. Il lit ce battement dans `~/.glorfindel`, en lecture seule. Il partage aussi `runs/` avec la watch, et c'est là qu'elle lit l'`attack_started`.
 
 **Depuis Orodruin.** Annatar lit le battement de la watch hébergée sur le canal retour, `EREGION_WATCH_CHANNEL`. Sans battement vivant, il refuse avant tout appel au cloud.
 

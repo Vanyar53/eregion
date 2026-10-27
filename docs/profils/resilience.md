@@ -16,6 +16,8 @@
 make profile-resilience       # Glorfindel (watch + console) + l'image des injecteurs (Gothmog compris)
 ```
 
+`make profile-resilience` crée d'abord, à ton nom, `~/.glorfindel` et `~/.cache/chroma`, que les services montent. Lance Gothmog **après** elle : sinon docker crée ces dossiers au nom de root.
+
 **Sur ton poste, rien n'écrit.** Le verdict du contrat est `passive`, et Gothmog dit pourquoi :
 
 ```bash
@@ -33,6 +35,7 @@ make gothmog-run FAULT=vm-shutdown           # la panne, et son retour vérifié
 
 Comme Annatar :
 - le service compose dépend de la watch, et lit son battement dans `~/.glorfindel`, en lecture seule ;
+- `depends_on` démarre la watch sans attendre son battement : dans la première minute, Gothmog peut refuser, relance-le un peu plus tard ;
 - depuis Orodruin, Gothmog lit le canal retour ;
 - `gothmog run` et `gothmog preflight` refusent sans battement vivant, avant tout appel au cloud ;
 - `WITHOUT_GLORFINDEL=1` permet un run de développement, et le rapport le dit.

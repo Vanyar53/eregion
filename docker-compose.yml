@@ -192,7 +192,8 @@ services:
           path: ./pyproject.toml
 
   # D1 : Annatar, l'attaque (profil `annatar` : « ma détection marche-t-elle ? »). Jamais sans
-  # Glorfindel (V1) : `depends_on` démarre la watch, et son battement se lit dans ~/.glorfindel
+  # Glorfindel (V1) : `depends_on` démarre la watch (sans attendre son premier battement : la
+  # première minute, l'injecteur peut refuser), et son battement se lit dans ~/.glorfindel
   # (lecture seule). runs/ est celui de la watch : elle y lit l'attack_started. Lancé à la
   # demande, il ne reste pas : `docker compose --profile annatar run --rm annatar <commande>`.
   annatar:

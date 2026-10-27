@@ -34,6 +34,7 @@ make team-stop  TEAM=bleue
 **Les refus de `team-start`.**
 - **Sans `AZURE_SUBSCRIPTION_ID`**, son Glorfindel serait aveugle. `ALLOW_NO_AZURE=1` permet une démo.
 - **Sans `EREGION_CONSOLE_PORT`**, il refuse aussi : un port par équipe. 7007 reste celui de `make glorfindel-start`.
+- **Deux équipes au même port** : `team-start` ne le vérifie pas. La seconde échoue au `up` de docker compose, car le port est déjà pris.
 
 **Ce qu'une équipe ne reçoit pas.** `make team-start` lance docker compose sous `env -i`. Ton shell n'atteint donc jamais l'instance d'une équipe : ni ton `.envrc`, ni ton abonnement, ni tes clés. docker compose préfère l'environnement au fichier `--env-file`, alors sans `env -i`, ton abonnement l'emporterait sur le sien. Seuls passent le `PATH` et l'accès à docker (`DOCKER_CONFIG`, `DOCKER_HOST`, `DOCKER_CONTEXT`).
 

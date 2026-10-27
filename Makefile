@@ -725,10 +725,14 @@ orodruin-campaign-run:
 # Glorfindel est toujours là (docs/design/console.md, §2) : chaque profil démarre sa watch et la
 # console (glorfindel-start), puis prépare ce qu'il ajoute. Un injecteur n'agit que depuis un
 # Orodruin armé : sur ce poste, son image et les commandes qui ne touchent rien.
+# Les dossiers montés (~/.glorfindel, ~/.cache/chroma par glorfindel-start, ~/.annatar ici) sont
+# créés au nom de l'opérateur : laissés à docker, ils seraient à root. depends_on démarre la
+# watch, sans attendre son battement : la première minute, un injecteur peut refuser (V1).
 profile-discover: glorfindel-start
 	@echo "  Profil « découvrir » : Glorfindel seul, en observation — docs/profils/decouvrir.md"
 
 profile-detection: glorfindel-start build-annatar
+	@mkdir -p $(HOME)/.annatar
 	@echo "  Profil « ma détection marche-t-elle ? » : Glorfindel + Annatar — docs/profils/detection.md"
 	@echo "  Ici, rien ne touche le cloud : docker compose --profile annatar run --rm annatar list"
 	@echo "  Les attaques : depuis Orodruin (make orodruin-up, orodruin-push, orodruin-campaign-plan)"
@@ -739,6 +743,7 @@ profile-resilience: glorfindel-start build-annatar
 	@echo "  Les pannes : depuis Orodruin (make gothmog-preflight, gothmog-run)"
 
 profile-proven: glorfindel-start build-annatar
+	@mkdir -p $(HOME)/.annatar
 	@echo "  Profil « défense éprouvée » : Glorfindel + Annatar + Gothmog — docs/profils/eprouvee.md"
 	@echo "  Glorfindel hébergé : make glorfindel-host-up, glorfindel-host-start ; injecteurs : Orodruin"
 

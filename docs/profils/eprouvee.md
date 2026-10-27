@@ -20,6 +20,8 @@
 make profile-proven           # Glorfindel + l'image des injecteurs
 ```
 
+Elle crée d'abord, à ton nom, `~/.glorfindel`, `~/.cache/chroma` et `~/.annatar`, que les services montent. Lance un injecteur **après** elle. Le premier peut refuser dans la première minute, le temps que la watch publie son battement (V1) : relance-le un peu plus tard.
+
 **Hébergé**, comme H0. Une référence se déploie, jamais une branche :
 
 ```bash

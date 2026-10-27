@@ -15,8 +15,10 @@ make glorfindel-stop                         # arrêt
 # Profils d'usage (D1) — docs/profils/ ; Glorfindel est dans chacun (il démarre sans profil compose)
 make profile-discover                        # = glorfindel-start : Glorfindel seul, en observation
 make profile-detection                       # + l'image d'Annatar ; profile-resilience : Gothmog ; profile-proven : tout
-docker compose --profile annatar run --rm annatar list          # un injecteur à la demande : depends_on démarre la
-docker compose --profile gothmog run --rm gothmog preflight vm-shutdown   # watch ; sur un poste, contrat passive
+                                             # (crée à ton nom ~/.glorfindel, ~/.cache/chroma, ~/.annatar : sinon root)
+docker compose --profile annatar run --rm annatar list          # APRÈS make profile-… : un injecteur à la demande ;
+docker compose --profile gothmog run --rm gothmog preflight vm-shutdown   # depends_on démarre la watch sans attendre
+                                             # son battement : la 1re minute, il peut refuser (V1) ; sur un poste, contrat passive
 make team-init TEAM=<nom>                    # plusieurs équipes : ~/.eregion/teams/<nom>/ (team.env 600, config, runs)
 make team-start TEAM=<nom> [BOT=1]           # son Glorfindel : compose -p eregion-<nom> sous env -i (ton shell
                                              # n'atteint pas l'équipe), conteneurs eregion-<nom>-*, port de team.env ;

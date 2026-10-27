@@ -984,6 +984,9 @@ Aucun de ces défauts n'avait été vu en revue. Chacun a son test et sa séquen
 | A0 | NSG supprimé lu comme « illisible » | blocage disparu jamais signalé, levée partielle pour toujours |
 | L1F | « déjà alerté » écrit avant la carte quand la repose échoue | crash entre les deux : blocage disparu, plus rien de dit |
 | I1F | NSG de quarantaine modifié (deny passé en Udp), état et tags de la carte perdus | VM joignable en TCP depuis le VNet, rien de dit : la réaffirmation ne lisait que les isolations dont elle avait l'état |
+| I8F | original inconnu (état et tags perdus), carte laissée nue puis réisolée | « aucun NSG » écrit par-dessus l'inconnu : `released`, carte sans son NSG, une ancienne isolation restée sur ce NSG sans état |
+| I8F | même carte nue, `reset --from-azure` | carte sautée : `swept`, état effacé, même reste |
+| I8F | même carte nue, un 429 à la lecture de notre tag (relecture) | l'erreur lue « aucun NSG » et écrite : même reste |
 | I4F | NSG d'origine d'une carte en quarantaine (ou nue) jugé sans elle | le reset de la nouvelle VM prenait l'ancienne isolation d'une autre VM pour la sienne : **l'autre VM rouverte** |
 
 **I1F (27/10, #226) : un oracle qui lisait mal, et un trou derrière.** Le run profond (10 000
@@ -1018,6 +1021,52 @@ réglage change n'étaient plus lus (la machine ne l'a trouvé qu'une fois sur 1
 l'abonnement est relu, la séquence est figée (M838). La passe de la watch est sortie dans
 `cli._watch_reassert_pass`, testée sur son comportement ; un test structurel ne garde que ce que
 le comportement ne voit pas, les deux closures de la watch (M835, M839, M895–M898).
+
+**I8F (27/10, #227) : un inconnu devenu « aucun ».** A3 a fait tomber I8 sur le code non muté
+(500 séquences, 186 étapes, dont des 429 sur la carte et les NSG). Réduite, la séquence tient en
+quatre étapes : une quarantaine dont l'état et les tags sont perdus, réisolée (l'original est
+inconnu, Q7) ; quelqu'un retire notre NSG et laisse la carte nue ; une nouvelle isolation ; la
+levée. Le correctif d'U2 (septième passe) reprenait l'original noté pour une carte nue ; noté
+nulle part, il écrivait « aucun NSG », alors que l'état tenait la carte en quarantaine avec un
+original inconnu. La levée, fidèle à son état, ne remettait rien et disait `released`. I8 le
+voyait parce que le monde avait une isolation d'une ancienne version sur le NSG de la carte :
+plus rien ne la notait. La réisolation garde maintenant l'inconnu (M860), le reset aussi (M861,
+même trou, voisin). Les 429 *toujours* actifs de la séquence d'A3 étaient des restes du
+rétrécissement ; un 429 *unique*, lui, faisait le même tort : à la lecture de notre tag lors de la
+réisolation, l'erreur se lisait « aucun NSG » et s'écrivait (relecture 5.5 ; M863) — et, l'état
+perdu mais le tag intact, par-dessus un tag valide : l'original disparaissait d'Azure (seconde
+relecture ; M864). Un tag illisible vaut maintenant un inconnu, rien n'est écrit ; seul le
+« aucun » explicite de l'état tient. **L'oracle avait un défaut à
+côté** : I8 comptait les règles du NSG propre d'une carte laissée nue que rien ne relie plus à ce
+NSG (le journal du test le dit : `_untraceable`), là où I3 et les blocages l'excluent déjà ;
+l'état et les tags perdus, la levée ne peut pas le savoir. Il ne les compte plus que si le
+**test** a perdu l'état de la VM après la dernière fois qu'il a vu un état tenir la carte en
+quarantaine pendant qu'elle était nue (`quarantine_held`, son journal) : cet état savait qu'on
+avait retiré notre NSG. Une carte isolée nue après la perte, que rien ne dit nôtre, garde
+l'exemption (2 000 séquences, figé). I3 avait le même défaut (`_named_leftovers` : les règles de Glorfindel nommées pour une
+carte nue, sur son NSG d'origine hors d'elle) : même exemption, même journal (`_untied`, 500
+séquences, figé), et `_consistent` (I8 du reset, I11) aussi (2 000 séquences, figé). Une première version lisait l'état dont la levée
+partait : une levée qui jetait le placement qu'elle n'avait pas su défaire gagnait l'exemption
+(relecture ; M862, figé).
+Une règle composée (`bare_with_an_unknown_original`) rend la séquence courante : tirées une à
+une, ses étapes ne se rencontraient qu'avec l'isolation d'une ancienne version (un monde sur
+quinze environ) ; dans un monde qui n'en a pas, la règle la pose sur une VM que rien n'a encore
+touchée, comme `build`. Elle ne favorise pas la VM d'un monde qui en a une : son ancien état
+effacé, M34 tombait à un tour sur cinq. Elle finit par une réisolation sous panne puis une levée,
+deux levées, ou un reset. Par la machine seule, au budget du push (500) : M860 2/3, M861 3/3,
+M862 3/3, et M863, M864, M865 jamais (0/3 ; le 429 au bon appel reste rare, le reste demande deux
+pertes et deux détachements) — d'une mesure à l'autre, ces chiffres bougent (M861 2/5 la veille).
+La table `TESTS` les mesure donc par leurs séquences figées puis la machine (précédent de L1F) :
+chacun est attrapé à chaque push. M01–M41 et le jeu de contrôle, mesurés sur deux tours à côté
+de `main` après la fusion de I1F : 23/39 contre 21/39 attrapés aux deux tours, contrôle 19/32
+contre 17/32 ; seul M34 avait reculé (0/2 contre 1/2), repris sur trois tours : 3/3 contre 2/3.
+Rien n'est à mesurer au banc : le faux Azure n'est pas en cause.
+La seconde relecture a trouvé un angle mort de l'exemption : les tags perdus par le test, une
+réisolation d'une carte nue dont l'état connaît l'original réécrit le tag (U2) — le journal ne le
+voyait pas, la carte passait pour intraçable, et une levée sans état qui ignorait ce tag (M865)
+passait. Le faux Azure note les tags écrits, le test note quand Glorfindel réécrit un original
+(`retagged_at`) : la carte n'est plus intraçable s'il l'a réécrit après la perte (figé, avec la
+variante sans perte de tags).
 
 **I4F (27/10, #235) : le NSG d'une carte absente.** À 2 000 séquences (graine 101), I4 est
 tombée sur une course `release`/`reset` : les flux sortants d'`api` rouverts par deux
@@ -1089,5 +1138,10 @@ Une séquence trouvée la nuit est rejouée en premier à chaque push jusqu'à s
   routes, pare-feu. Elles peuvent contourner une isolation et ne sont pas encore lues.
 - **Hypothèses du faux Azure** non mesurées : le code d'erreur d'un NSG d'une autre région,
   le refus de supprimer un NSG attaché, Run Command shell refusé sous Windows.
+- **L'exemption d'une carte nue (I8F)** : elle vaut si le test a perdu l'état après la dernière
+  fois qu'il a vu un état tenir la carte en quarantaine *pendant qu'elle était nue*. Un état qui
+  l'a tenue après la perte, mais pas nue, puis que le code abandonne, laisse l'exemption à une
+  carte que quelqu'un détache ensuite. Aucun mutant naturel ne l'exploite ; le journal ne dit
+  pas mieux sans lire l'état comme le code l'a laissé (A0).
 - **Le monde simulé AWS** (MC1) : rien n'y est mesuré. Ses seize hypothèses attendent le banc AWS
   (MC2), et la cohérence à terme des lectures d'EC2 n'est pas modélisée ([`monde-aws.md`](monde-aws.md)).

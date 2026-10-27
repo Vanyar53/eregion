@@ -136,7 +136,7 @@ def test_a_customer_group_named_like_the_quarantine_is_never_adopted(world):
     assert c.verify_isolation(arn("i-web1"))["verified"] is False
 
 
-def test_a_block_is_subnet_wide_placed_before_the_customer_allow_and_shared(world):
+def test_a_block_reaches_its_acl_is_placed_before_the_customer_allow_and_shared(world):
     f, c, _ = world
     out = c.block_suspicious_ip(ATTACKER, arn("i-web1"), scope="vm")
     assert out["status"] == "blocked" and out["scope"] == "network_acl" and out["subnets_affected"] == ["subnet-app"]

@@ -630,3 +630,29 @@ def test_a_429_on_our_tag_doesnt_overwrite_a_valid_original(monkeypatch):
          ("someone_detaches_the_quarantine", _nic("rg-app1", "web-nic")),
          ("isolate", WEB1, WEB1, (5, "before-429")),
          ("release", WEB1, WEB1, None))
+
+
+def _retagged(monkeypatch, lose_tags: bool):
+    _run(monkeypatch, _net(quarantine=True, legacy=("web-nic", False), web_nic={"own": "dedicated"}),
+         ("isolate", WEB1, WEB1, None),
+         *([("tags_lost", _Q1)] if lose_tags else []),
+         ("someone_detaches_the_quarantine", _nic("rg-app1", "web-nic")),
+         ("writes_only_its_own",),
+         ("isolate", WEB1, WEB1, None),
+         ("lose_state", WEB1),
+         ("someone_detaches_the_quarantine", _nic("rg-app1", "web-nic")),
+         ("release", WEB1, WEB1, None))
+
+
+def test_a_tag_written_again_ties_the_nic_back(monkeypatch):
+    """Our tags lost by the test, the NIC left bare, isolated again: the state knew the
+    original, the isolation wrote the tag again (U2). Then the state lost, the NIC bare
+    again: the tag says where its NSG is — a release that ignored it (M865) left the NIC
+    bare and the old isolation there. The oracle took the NIC for untraceable: the test's
+    journal now sees the tag written again (I8F, second relecture)."""
+    _retagged(monkeypatch, lose_tags=True)
+
+
+def test_a_tag_never_lost_ties_the_nic(monkeypatch):
+    """The same without the tags lost: the tag was never gone (I8F, second relecture)."""
+    _retagged(monkeypatch, lose_tags=False)

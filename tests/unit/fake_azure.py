@@ -280,7 +280,7 @@ class _Nsgs:
                 FakeAzure._put_rule(n, _rule_record(r))
             before = self.az.nsgs.get(key(rid))
             self.az.journal.append({"op": "nsg.write", "nsg": key(rid), "before_tags": (
-                dict(before["tags"]) if before else None)})
+                dict(before["tags"]) if before else None), "after_tags": dict(n.get("tags") or {})})
             self.az.nsgs[key(rid)] = n
             self.az.authored |= {(key(rid), r) for r in n["rules"]}
             return _Done(self.az.nsg_view(n))
@@ -292,8 +292,10 @@ class _Nsgs:
     def update_tags(self, rg, name, tags_object):
         def write():
             n = self.az.nsg(rg, name)
-            self.az.journal.append({"op": "nsg.tags", "nsg": key(n["id"]), "before_tags": dict(n["tags"])})
-            n["tags"] = dict(getattr(tags_object, "tags", None) or {})
+            after = dict(getattr(tags_object, "tags", None) or {})
+            self.az.journal.append({"op": "nsg.tags", "nsg": key(n["id"]), "before_tags": dict(n["tags"]),
+                                    "after_tags": after})
+            n["tags"] = after
             return self.az.nsg_view(n)
         return self.az.call("nsg.tags", True, write)
 

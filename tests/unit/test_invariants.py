@@ -401,6 +401,7 @@ class IsolationMachine(RuleBasedStateMachine):
         self.recorded_at: dict[str, tuple[int, str]] = {}   # NIC → (tick, quarantine NSG)
         self.state_lost_at: dict[str, int] = {}             # VM → tick
         self.tags_lost_at: dict[str, int] = {}              # quarantine NSG → tick
+        self.retagged_at: dict[str, int] = {}               # NIC → tick Glorfindel wrote its original as a tag
         self.state_had: dict[str, int] = {}                 # NIC → record a state once held
         self.quarantine_held: dict[str, int] = {}           # NIC → last tick a state held it in quarantine, bare
         self.before_quarantine: dict[str, str | None] = {}   # NIC → what it carried
@@ -601,6 +602,8 @@ class IsolationMachine(RuleBasedStateMachine):
         at, quarantine = rec
         if self.tags_lost_at.get(quarantine, -1) <= at:
             return False                      # the test didn't lose the tag: it traces it
+        if self.retagged_at.get(key(nic["id"]), -1) > self.tags_lost_at.get(quarantine, -1):
+            return False                      # Glorfindel wrote it again since: it traces it
         if self.state_lost_at.get(key(vm), -1) > at:
             return True
         if self.state_had.get(key(nic["id"])) == at:
@@ -626,19 +629,30 @@ class IsolationMachine(RuleBasedStateMachine):
                     and live <= design)
         return live == design
 
-    def _named_leftovers(self, nic_ids: list[str], prefix: str = "glorfindel-iso") -> list[str]:
+    def _named_leftovers(self, nic_ids: list[str], prefix: str = "glorfindel-iso",
+                         skip: frozenset = frozenset()) -> list[str]:
         """Rules of `prefix` named for one of these NICs, on any NSG — applying to their
-        addresses or not (a changed IP, a deleted VM)."""
+        addresses or not (a changed IP, a deleted VM). `skip`: (NSG key, NIC mark) pairs
+        not counted."""
         marks = {_nic_hash(n) for n in nic_ids}
-        return [f'{n["id"].rsplit("/", 1)[-1]}/{r["name"]}' for n in self.fake.nsgs.values()
+        return [f'{n["id"].rsplit("/", 1)[-1]}/{r["name"]}' for k, n in self.fake.nsgs.items()
                 for r in n["rules"].values()
-                if r["name"].lower().startswith(prefix) and any(m in r["name"].lower() for m in marks)]
+                if r["name"].lower().startswith(prefix) and any(
+                    m in r["name"].lower() and (k, m) not in skip for m in marks)]
+
+    def _nic_of_tag(self, tag: str) -> str | None:
+        """The NIC (key) a `glorfindel-orig-<hash>` tag names — live or deleted."""
+        import hashlib
+        nics = list(self.fake.nics) + [key(n) for nics in self.deleted.values() for n in nics]
+        return next((n for n in nics if "glorfindel-orig-" + hashlib.sha1(
+            n.rstrip("/").lower().encode()).hexdigest()[:12] == tag), None)
 
     def _untied(self, vm: str) -> frozenset:
         """NICs of the VM left bare whose own NSG nothing ties to them any more, by the
         test's journal (A0): untraceable, and the test lost the VM's state after the last
         time it saw a state hold the NIC in quarantine while it was bare — that state
         knew someone took our NSG off; lost by the code itself, it earns nothing (I8F)."""
+        self._check_authors()
         lost = self.state_lost_at.get(key(vm), -1)
         return frozenset(key(n["id"]) for n in self._nics(vm)
                          if lost > self.quarantine_held.get(key(n["id"]), -1) and self._untraceable(vm, n))
@@ -646,11 +660,10 @@ class IsolationMachine(RuleBasedStateMachine):
     def _released(self, vm: str, own: bool = False) -> bool:
         # Glorfindel's own rules named for an untied NIC, on its own NSG off it, are out of
         # the release's reach — as I8 judges them (_isolation_recorded).
-        untied = {key(n["design_nsg"]).rsplit("/", 1)[-1]: _nic_hash(n["id"]) for n in self._nics(vm)
-                  if key(n["id"]) in self._untied(vm) and n["design_nsg"]}
-        left = [x for x in self._named_leftovers(self.fake.vms[key(vm)]["nics"])
-                if not any(x.split("/")[0].lower() == g and h in x.split("/")[-1].lower()
-                           for g, h in untied.items())]
+        untied = self._untied(vm)
+        skip = frozenset((key(n["design_nsg"]), _nic_hash(n["id"])) for n in self._nics(vm)
+                         if key(n["id"]) in untied and n["design_nsg"])
+        left = self._named_leftovers(self.fake.vms[key(vm)]["nics"], skip=skip)
         return (self._back_to_design(vm, own) and self._nics_as_designed(vm) and self._state(vm) is None
                 and not left)
 
@@ -1771,6 +1784,15 @@ class IsolationMachine(RuleBasedStateMachine):
                 before = e["before_tags"]
                 assert before is None or before.get("managed-by") == "glorfindel", (
                     f"I2: Glorfindel took over an NSG that only has its name: {e['nsg']}")
+                # An original written as our tag (a NIC's own NSG, not "none"): the NIC is
+                # tied to it again, whatever the test lost before (I8F, second review).
+                after = e.get("after_tags") or {}
+                for k, v in after.items():
+                    if k.startswith("glorfindel-orig-") and v != "none" and (before or {}).get(k) != v:
+                        nic = self._nic_of_tag(k)
+                        if nic:
+                            self.ticks += 1
+                            self.retagged_at[nic] = self.ticks
             elif op == "nic.write":
                 nic, was, now = e["nic"], e["before"], e["after"]
                 if now and actions._is_quarantine_nsg(now):

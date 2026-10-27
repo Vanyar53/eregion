@@ -1186,9 +1186,87 @@ MUTANTS = [
     ("M527", "the ssh line copies REF into the recipe: make expands it before it is checked (M-3, review)",
      MAKE, """bash -s -- '"$$EREGION_DEPLOY_REF" < infra/glorfindel-host/deploy.sh""",
      "bash -s -- $(REF)' < infra/glorfindel-host/deploy.sh"),
-    ("M528", "rules the VM approved and the reference changes: « gardé », then git refuses (M-3, review)",
+    # P1 moved this check: a rules file modified on the VM is refused with what to do (migrate).
+    ("M528", "rules the VM approved: refused in git's words, not with what to do (M-3, review; P1)",
      "infra/glorfindel-host/deploy.sh",
-     '    [ -z "$clash" ] || die "$(echo', '    [ -z "$clash" ] || true "$(echo'),
+     '  [ -z "$rules" ] || die "$(echo', '  [ -z "$rules" ] || true "$(echo'),
+    # P1 (#86): rule layers — the shipped base stays intact, the client's rules in their own
+    # layer (~/.glorfindel/client_rules.yaml), an approved rule binds to its backend.
+    ("M670", "an approved rule is written into the shipped base again (P1)", "glorfindel/proposed_rules.py",
+     "    how = rule_layers.write_client_rule(rule)\n",
+     "    how = rule_layers.write_client_rule(rule, path=Path(rules_yaml_path))\n"),
+    ("M671", "the client's layer is not loaded: an update loses the client's rules (P1)",
+     "glorfindel/detection_rules.py",
+     "    if client_layer:\n        cpath =", "    if False:\n        cpath ="),
+    ("M672", "a base rule wins over the client's rule of the same name (P1)", "glorfindel/detection_rules.py",
+     "            rules[at] = entry\n", "            pass\n"),
+    ("M673", "`disable` ignored: a client cannot disable a base rule (P1)", "glorfindel/detection_rules.py",
+     '        if r["name"] in disabled:\n', "        if False:\n"),
+    ("M674", "a client rule replacing a base rule is not said (P1)", "glorfindel/detection_rules.py",
+     '                notes.append(f"règle de base « {name} » remplacée par celle de la couche du client")\n',
+     "                pass\n"),
+    ("M675", "the notes are not logged: the watch's log says nothing of the client's layer (P1)",
+     "glorfindel/detection_rules.py",
+     '            logger.warning("detection rules: %s", note)\n', "            pass\n"),
+    ("M676", "an unreadable client layer stops the base from loading (P1)", "glorfindel/detection_rules.py",
+     "        except Exception as exc:\n            client = {}\n",
+     "        except ImportError as exc:\n            client = {}\n"),
+    ("M677", "an unreadable client layer is read as empty, then written over (P1)", "glorfindel/rule_layers.py",
+     '        raise ClientLayerError(f"couche du client illisible ({path}) : {exc}") from exc\n',
+     "        return {}\n"),
+    ("M678", "a proposal is approved before its rule is written: approved without a rule (P1)",
+     "glorfindel/proposed_rules.py",
+     "    rule = rule_from_proposal(proposal, Path(rules_yaml_path))\n"
+     "    how = rule_layers.write_client_rule(rule)\n\n"
+     '    proposal["status"] = "approved"\n'
+     '    proposal["approved_at"] = datetime.now(timezone.utc).isoformat()\n'
+     '    _STORE.write_text("\\n".join(json.dumps(p) for p in updated) + "\\n")\n',
+     '    proposal["status"] = "approved"\n'
+     '    proposal["approved_at"] = datetime.now(timezone.utc).isoformat()\n'
+     '    _STORE.write_text("\\n".join(json.dumps(p) for p in updated) + "\\n")\n'
+     "    rule = rule_from_proposal(proposal, Path(rules_yaml_path))\n"
+     "    how = rule_layers.write_client_rule(rule)\n"),
+    ("M685", "migrate moves only new rules: a base rule changed on the VM is lost (P1)", "glorfindel/rule_layers.py",
+     "    moved = [r for name, r in src_rules.items() if base_rules.get(name) != r]\n",
+     "    moved = [r for name, r in src_rules.items() if name not in base_rules]\n"),
+    ("M686", "migrate forgets a base rule removed on the VM: it comes back (P1)", "glorfindel/rule_layers.py",
+     "    disable = [name for name in base_rules if name not in src_rules]\n", "    disable = []\n"),
+    ("M687", "H0: a rules file modified on the VM rides into the image again (P1)", "infra/glorfindel-host/deploy.sh",
+     "  dirty=$(git status --porcelain --untracked-files=no | awk '{print $NF}')\n",
+     "  dirty=$(git status --porcelain --untracked-files=no | awk '{print $NF}' | grep -v '^glorfindel/rules/' || true)\n"),
+    ("M688", "the watch's container mounts the shipped base read-write again (P1)", "docker-compose.yml",
+     "      # redéploiement ne la touche jamais.\n      - ./glorfindel/rules:/app/glorfindel/rules:ro\n",
+     "      # redéploiement ne la touche jamais.\n      - ./glorfindel/rules:/app/glorfindel/rules\n"),
+    # P1, review: a bad client entry never stops the detection; an approved rule binds to its
+    # backend. (The export's mutants left with the export, for a lot of P2: lot/p1b-export.)
+    ("M695", "a client entry is not validated: `interval_s: 30s` stops every rule (P1, review)",
+     "glorfindel/detection_rules.py",
+     "            reason = _invalid_client_entry(key, entry)\n", "            reason = None\n"),
+    ("M696", "a key of the client's layer that is not a list is not said (P1, review)",
+     "glorfindel/detection_rules.py",
+     "            notes.append(f\"couche du client : `{key}` n'est pas une liste, ignoré\")\n", "            pass\n"),
+    ("M697", "an approved rule takes the inline form again: it applies to no VM (P1, review)",
+     "glorfindel/proposed_rules.py",
+     '                if backend_name:\n                    asset_name = "auto"\n',
+     '                if False:\n                    asset_name = "auto"\n'),
+    ("M698", "migrate does not bind a rule approved before P1 to its backend (P1, review)",
+     "glorfindel/rule_layers.py",
+     '            backend = backend_for_workspace(r["workspace_id"], backends)\n', '            backend = ""\n'),
+    ("M699", "a rule that applies to no VM is not said at load (P1, review)", "glorfindel/detection_rules.py",
+     "            notes.append(note)\n", "            pass\n"),
+    # P1, second review: an approved rule is bound only to its own workspace's backend; what is
+    # inert or unreadable is said.
+    ("M713", "glorfindel rules hides the backend of an auto rule: bound and inert look alike (P1, review 2)",
+     GCLI, '            assets = (f"auto ({r.monitoring_backend_name})" if r.monitoring_backend_name\n',
+     '            assets = ("auto" if r.monitoring_backend_name\n'),
+    ("M714", "an approved rule of another workspace borrows the first rule's backend (P1, review 2)",
+     "glorfindel/proposed_rules.py",
+     "backend_for_workspace(workspace, cfg.backends) if workspace else next(",
+     "backend_for_workspace(workspace, cfg.backends) or next("),
+    ("M715", "migrate-rules reads an unreadable config as « no backend » (P1, review 2)", GCLI,
+     "        gcfg, config_error = None, str(exc)\n", '        gcfg, config_error = None, ""\n'),
+    ("M716", "glorfindel rules says an ignored layer « absente » (P1, review 2)", GCLI,
+     "    elif client_rules_path().exists():\n", "    elif False:\n"),
     # UI-1 (#205) — the Eregion console: the former addresses, the token's two names, the
     # injectors' routes read only, every page behind the token, the sections.
     ("M400", "the atelier's address no longer leads anywhere (UI-1)", CON,
@@ -1287,6 +1365,13 @@ TESTS["M289"] = "tests/unit/test_dependency_lock.py"
 TESTS["M520"] = "tests/unit/test_bot.py"
 TESTS.update({f"M{n}": "tests/unit/test_glorfindel_host.py" for n in (521, 522, 523)})
 TESTS.update({f"M{n}": "tests/unit/test_host_deploy.py" for n in range(524, 529)})
+# P1 (#86): rule layers.
+TESTS.update({f"M{n}": "tests/unit/test_rule_layers.py tests/unit/test_proposed_rules.py"
+              for n in (*range(670, 679), 685, 686)})
+TESTS["M687"] = "tests/unit/test_host_deploy.py"
+TESTS["M688"] = "tests/unit/test_rule_layers.py"
+TESTS.update({f"M{n}": "tests/unit/test_rule_layers.py tests/unit/test_host_deploy.py" for n in range(695, 700)})
+TESTS.update({f"M{n}": "tests/unit/test_rule_layers.py" for n in range(713, 717)})
 TESTS.update({f"M{n}": "tests/unit/test_console.py" for n in range(400, 409)})  # UI-1
 TESTS["M403"] = "tests/unit/test_console_exercises.py"
 

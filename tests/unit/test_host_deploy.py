@@ -146,37 +146,32 @@ def test_a_tracked_file_changed_on_the_vm_stops_the_deployment(repo):
     assert repo.head() == before
 
 
-def test_rules_approved_on_the_vm_ride_along(repo):
-    """The containers write glorfindel/rules (approved rules, mounted read-write): kept, said."""
+@pytest.mark.parametrize("ref", ["v0.11.0", "v0.2.0"])
+def test_rules_approved_on_the_vm_before_p1_stop_it_with_what_to_do(repo, tmp_path, ref):
+    """P1: the containers no longer write glorfindel/rules (mounted read-only; approved
+    rules live in ~/.glorfindel/client_rules.yaml). A rules file modified on the VM holds
+    rules approved before P1: whether the reference leaves the file as it is (v0.11.0, c3)
+    or changes it (v0.2.0, c1), it would ride into the image or make git refuse — the script
+    stops first, names the file, says where the migration is and what never to do."""
     c3 = repo.commits[2]
-    rules = repo.vm / "glorfindel" / "rules" / "azure" / "detection_rules.yaml"
     _git(repo.work, repo.env, "tag", "v0.11.0", c3)
     _git(repo.work, repo.env, "push", "-q", "origin", "v0.11.0")
-    rules.write_text("rules: 3\napproved: 1\n")
-    res = repo.deploy("--checkout-only", "v0.11.0")
-    assert res.returncode == 0, res.stderr
-    assert "glorfindel/rules" in res.stderr and rules.read_text().endswith("approved: 1\n")
-
-
-def test_rules_approved_on_the_vm_that_the_reference_changes_stop_it_with_what_to_do(repo, tmp_path):
-    """The reference changes the very file the VM approved rules in: git would refuse the
-    checkout in its own words, just after the script said « gardé ». The script stops
-    first, names the file, says where the procedure is and what never to do (review of M-3)."""
     rules = repo.vm / "glorfindel" / "rules" / "azure" / "detection_rules.yaml"
     rules.write_text("rules: 3\napproved: 1\n")
     before = repo.head()
     bin_dir, log, fake = _fake_bin(tmp_path)
     env = {**repo.env, **fake, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"}
-    res = repo.deploy("v0.2.0", env=env)                    # c1: its rules file differs
+    res = repo.deploy(ref, env=env)
     assert res.returncode != 0
     assert "glorfindel/rules/azure/detection_rules.yaml" in res.stderr
-    assert "changé par v0.2.0" in res.stderr and "rien n'est déployé" in res.stderr
-    assert "Règles approuvées et nouvelle référence" in res.stderr
+    assert "avant P1" in res.stderr and "rien n'est déployé" in res.stderr
+    assert "Migrer les règles approuvées vers la couche du client" in res.stderr
+    assert "Jamais git checkout -- glorfindel/rules" in res.stderr
     assert "gardé" not in res.stderr and "error:" not in res.stderr       # not git's words
     assert repo.head() == before and not repo.detached() and log.read_text() == ""
     assert rules.read_text() == "rules: 3\napproved: 1\n"               # nothing lost
     readme = (ROOT / "infra" / "glorfindel-host" / "README.md").read_text(encoding="utf-8")
-    assert "Règles approuvées et nouvelle référence" in readme
+    assert "### Migrer les règles approuvées vers la couche du client" in readme
 
 
 def _fake_bin(tmp_path, ref="", rev=""):
@@ -206,6 +201,96 @@ def test_the_image_carries_the_reference_it_was_built_from(repo, tmp_path):
     assert any(c.startswith("compose --profile bot up -d watch war-room bot") for c in calls)
     assert calls.index(build) < next(i for i, c in enumerate(calls) if c.startswith("compose"))
     assert f"déployé : v0.10.0 ({c2[:12]})" in res.stdout
+
+
+def _migration_steps():
+    """The README's procedure, « Migrer les règles approuvées vers la couche du client »:
+    its bash blocks, line by line, as written."""
+    import re
+    import textwrap
+    readme = (ROOT / "infra" / "glorfindel-host" / "README.md").read_text(encoding="utf-8")
+    section = readme.split("### Migrer les règles approuvées vers la couche du client\n")[1]
+    section = re.split(r"\n#{2,3} ", section)[0]
+    blocks = re.findall(r"```bash\n(.*?)```", section, re.S)
+    return [line for b in blocks for line in textwrap.dedent(b).splitlines() if line.strip()]
+
+
+def test_the_migration_procedure_of_the_readme_runs_as_written(repo, tmp_path, monkeypatch):
+    """P1, H0: a VM on a reference from before P1, a rule approved into the tracked base,
+    the deployment refused. The README's steps, run as written — the VM's shell lines in
+    bash, `glorfindel …` as `docker exec eregion-watch` would run it, with ~/.glorfindel
+    mounted at /root/.glorfindel — leave a clean checkout that deploys, the approved rule
+    in the client's layer and loaded as the client's, the base the reference's."""
+    import yaml
+    from click.testing import CliRunner
+
+    import glorfindel.detection_rules as dr
+    from glorfindel.cli import cli
+    from glorfindel.detection_rules import load_config
+
+    base_v1 = ("rules:\n  - name: ssh-brute-force\n    ttp: T1110.001\n    assets: [auto]\n"
+               "    query: |\n      Syslog | where SyslogMessage has \"Failed password\"\n")
+    rel = "glorfindel/rules/azure/detection_rules.yaml"
+    for tag, text in (("v0.12.0", base_v1), ("v0.13.0", base_v1.replace("Failed password", "Invalid user"))):
+        (repo.work / rel).write_text(text)
+        _git(repo.work, repo.env, "commit", "-qam", tag)
+        _git(repo.work, repo.env, "tag", tag)
+    _git(repo.work, repo.env, "push", "-q", "origin", "main", "--tags")
+    assert repo.deploy("--checkout-only", "v0.12.0").returncode == 0   # H0 before P1
+    with open(repo.vm / rel, "a") as f:                                 # what the old approve did
+        f.write("\n  - name: log-clearing\n    description: >\n      Auto-proposed by Glorfindel.\n"
+                "    enabled: true\n    source: azure_monitor\n    workspace_id: \"ws-example\"\n"
+                "    ttp: T1070.002\n    resource_id: \"/subscriptions/s/rg/vm-example\"\n"
+                "    interval_s: 30\n    query: |\n      Syslog | where SyslogMessage has \"rm -f\"\n")
+    refused = repo.deploy("--checkout-only", "v0.13.0")
+    assert refused.returncode != 0 and "Migrer les règles approuvées" in refused.stderr
+
+    home = Path(repo.env["HOME"])
+    monkeypatch.setattr(dr, "_CLIENT_RULES_FILE", home / ".glorfindel" / "client_rules.yaml")
+    # H0's glorfindel-config.yaml: the backend that watches the approved rule's workspace.
+    import glorfindel.config as config
+    monkeypatch.setattr(config, "load_glorfindel_config", lambda *a, **k: config.GlorfindelConfig(
+        monitoring_backends=[config.MonitoringBackendConfig(
+            name="law-main", type="azure_monitor", workspace_id="ws-example")]))
+    monkeypatch.chdir(repo.vm)                    # the container's cwd holds glorfindel/rules
+    steps, outputs, shell = _migration_steps(), [], []
+
+    def flush():
+        if shell:
+            res = subprocess.run(["bash", "-euc", "\n".join(shell)], cwd=repo.vm, env=repo.env,
+                                 capture_output=True, text=True, timeout=60)
+            assert res.returncode == 0, res.stderr
+            shell.clear()
+
+    for line in steps:
+        if line.startswith("docker exec eregion-watch glorfindel "):
+            flush()
+            args = line.split("glorfindel ", 1)[1].replace("/root/", f"{home}/").split()
+            res = CliRunner().invoke(cli, args, catch_exceptions=False)
+            assert res.exit_code == 0, res.output
+            outputs.append(res.output)
+        elif line.startswith("docker compose"):
+            flush()                                   # restarting the watch: nothing to run here
+        else:
+            shell.append(line)
+            if line.startswith("git stash push"):
+                flush()
+                deployed = repo.deploy("--checkout-only", "v0.13.0")   # step 2, from the poste
+                assert deployed.returncode == 0, deployed.stderr
+    flush()
+
+    assert any("log-clearing: added" in o for o in outputs)              # dry run, then for good
+    assert any("bound" in o and "law-main" in o for o in outputs), outputs   # inert before, bound now
+    assert _git(repo.vm, repo.env, "status", "--porcelain", "--untracked-files=no") == ""
+    assert _git(repo.vm, repo.env, "stash", "list") == ""                 # step 4: dropped
+    layer = yaml.safe_load((home / ".glorfindel" / "client_rules.yaml").read_text())
+    assert [r["name"] for r in layer["rules"]] == ["log-clearing"] and "disable" not in layer
+    assert layer["rules"][0]["assets"] == ["auto"] and layer["rules"][0]["monitoring_backends"] == ["law-main"]
+    rules = {r.name: r for r in load_config(repo.vm / rel, glorfindel_cfg=config.load_glorfindel_config()).rules}
+    assert rules["log-clearing"].layer == "client"
+    assert rules["log-clearing"].auto_apply and rules["log-clearing"].monitoring_backend_name == "law-main"
+    assert "Invalid user" in rules["ssh-brute-force"].query                # the reference's base
+    assert (home / ".glorfindel" / "migration-p1" / "approved.yaml").exists()
 
 
 def test_a_refused_reference_builds_nothing(repo, tmp_path):

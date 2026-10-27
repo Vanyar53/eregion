@@ -69,7 +69,11 @@ services:
       <<: [*env, *azure, *models, *webhook]
     volumes:
       - ./runs:/app/runs
-      - ./glorfindel/rules:/app/glorfindel/rules
+      # P1 : la base livrée des règles, en lecture seule — aucun conteneur ne l'écrit plus.
+      # Les règles du client (approuvées, remplacées, désactivées) vivent dans la couche du
+      # client, ~/.glorfindel/client_rules.yaml (montage suivant), hors du dépôt : un
+      # redéploiement ne la touche jamais.
+      - ./glorfindel/rules:/app/glorfindel/rules:ro
       - ${HOME}/.glorfindel:/root/.glorfindel
       - ${HOME}/.cache/chroma:/root/.cache/chroma
       # IA0 (#167) : l'index campaign_runs du rapport de campagne, sur le disque de l'hôte.
@@ -108,7 +112,7 @@ services:
       DISCORD_ALLOWED_ROLES: ${DISCORD_ALLOWED_ROLES:-}
     volumes:
       - ./runs:/app/runs
-      - ./glorfindel/rules:/app/glorfindel/rules
+      - ./glorfindel/rules:/app/glorfindel/rules:ro
       - ${HOME}/.glorfindel:/root/.glorfindel
       - ${HOME}/.cache/chroma:/root/.cache/chroma
       - ./glorfindel-config.yaml:/app/glorfindel-config.yaml:ro
@@ -137,7 +141,7 @@ services:
     volumes:
       - ./runs:/app/runs
       - ./eregion_console/static:/app/eregion_console/static:ro
-      - ./glorfindel/rules:/app/glorfindel/rules
+      - ./glorfindel/rules:/app/glorfindel/rules:ro
       - ${HOME}/.glorfindel:/root/.glorfindel
       - ${HOME}/.cache/chroma:/root/.cache/chroma
       # Optional: mount glorfindel-config.yaml if it exists

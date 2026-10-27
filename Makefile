@@ -60,7 +60,7 @@ ANNATAR_VOLS := \
 
 GLORFINDEL_VOLS := \
 	-v $(PWD)/runs:/app/runs \
-	-v $(PWD)/glorfindel/rules:/app/glorfindel/rules \
+	-v $(PWD)/glorfindel/rules:/app/glorfindel/rules:ro \
 	$(if $(wildcard $(PWD)/glorfindel-config.yaml),-v $(PWD)/glorfindel-config.yaml:/app/glorfindel-config.yaml,)
 
 # The images' CMD is the CLI itself: arguments REPLACE it, so the binary is named here

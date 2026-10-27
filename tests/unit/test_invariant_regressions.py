@@ -561,6 +561,161 @@ def test_a_quarantine_made_before_the_group_was_set_is_still_read(monkeypatch, a
          ("reassert", "human_only", None))
 
 
+def test_a_bare_nic_whose_original_is_unknown_stays_unknown(monkeypatch):
+    """An older version's isolation of `web` on its own NSG; a quarantine whose state and
+    tags are lost, re-isolated (its original unknown); our NSG taken off the NIC by
+    someone, then isolated again: that isolation recorded "none" over the unknown — the
+    release put no NSG back, said `released` and cleared the state, the old isolation
+    still on the NIC's own NSG with nothing recording it (I8). Reduced from 186 steps of
+    A3's run (27/10, I8F, #227): its faults (429 on the NIC and the NSGs) were leftovers."""
+    _run(monkeypatch, _net(quarantine=True, legacy=("web-nic", False), web_nic={"own": "dedicated"}),
+         ("lose_everything", WEB1, WEB1, None, WEB1, _Q1, "reisolate"),
+         ("someone_detaches_the_quarantine", _nic("rg-app1", "web-nic")),
+         ("isolate", WEB1, WEB1, None),
+         ("release", WEB1, WEB1, None))
+
+
+def test_a_bare_nic_isolated_again_under_a_429_keeps_its_original_unknown(monkeypatch):
+    """The same, a single 429 on the second isolation, as it reads our tag: the error read
+    as "none", and "none" was written — released bare, the old isolation left without
+    state (I8F, relecture)."""
+    _run(monkeypatch, _net(quarantine=True, legacy=("web-nic", False), web_nic={"own": "dedicated"}),
+         ("lose_everything", WEB1, WEB1, None, WEB1, _Q1, "reisolate"),
+         ("someone_detaches_the_quarantine", _nic("rg-app1", "web-nic")),
+         ("isolate", WEB1, WEB1, (5, "before-429")),
+         ("release", WEB1, WEB1, None))
+
+
+def test_a_failed_release_keeps_the_placement_it_couldnt_undo(monkeypatch):
+    """Original unknown, the NIC left bare: the first release can't put an NSG back and
+    keeps the placement. A release that dropped it (M862) wrote a state without the NIC —
+    the second said `released`, the old isolation left without state. The oracle's
+    exemption for a bare NIC must not reward that: it is the test's journal that says
+    the state was lost, not the state the code left (A0, I8F relecture)."""
+    _run(monkeypatch, _net(quarantine=True, legacy=("web-nic", False), web_nic={"own": "dedicated"}),
+         ("lose_everything", WEB1, WEB1, None, WEB1, _Q1, "reisolate"),
+         ("someone_detaches_the_quarantine", _nic("rg-app1", "web-nic")),
+         ("release", WEB1, WEB1, None),
+         ("release", WEB1, WEB1, None))
+
+
+def test_a_bare_nic_isolated_after_its_state_is_lost_doesnt_carry_its_rules(monkeypatch):
+    """The other side of the test above (2 000 sequences, seed 302): the NIC left bare,
+    both releases kept it — then the test loses the state. Isolated again, bare, nothing
+    says it was ever ours: "none" is all Glorfindel can know, and its release can't reach
+    the old isolation on the NIC's own NSG. A state held the NIC after the loss, but
+    never while it was bare: the exemption holds (I8F, relecture)."""
+    q = _NSG.format(rg="rg-edge", name="nsg-glorfindel-quarantine-northeurope")
+    _run(monkeypatch, _net(quarantine=True, legacy=("api-nic", False), api_nic={"own": "dedicated"}),
+         ("lose_everything", API, API, None, API, q, "reisolate"),
+         ("someone_detaches_the_quarantine", _nic("rg-edge", "api-nic")),
+         ("release", API, API, None),
+         ("release", API, API, None),
+         ("lose_state", API),
+         ("isolate", API, API, None),
+         ("release", API, API, None))
+
+
+def test_our_rules_on_an_nsg_nothing_ties_to_a_bare_nic_any_more(monkeypatch):
+    """I3 had the same defect as I8 (500 sequences, seed 34): db-nic-1, isolated by rules on
+    the tier NSG then by quarantine, left bare, its state lost by the test after a state
+    saw it bare — Glorfindel's own rules named for it stay on the tier NSG, off the NIC,
+    and nothing says where to look. The release said `released`; I3 counted them. The
+    same journal exemption (_untied); the operator puts the NSG back, the release then
+    sweeps them (I7)."""
+    ssh = _rule("allow-ssh", 100, dict(access="Allow", direction="Inbound", source_address_prefix="*",
+                                       destination_address_prefix="*", destination_port_range="22"))
+    out = _rule("allow-lateral-out", 100, dict(access="Allow", direction="Outbound", source_address_prefix="*",
+                                               destination_address_prefix="VirtualNetwork", destination_port_range="*"))
+    deny = _rule("deny-lateral-in", 130, dict(access="Deny", direction="Inbound", source_address_prefix="VirtualNetwork",
+                                              destination_address_prefix="*", destination_port_range="*"))
+    https = _rule("allow-https", 110, dict(access="Allow", direction="Inbound", source_address_prefix="Internet",
+                                           destination_address_prefix="*", destination_port_range="443"))
+    # db-nic-0 can't take the quarantine (a policy): isolated by rules on the subnet's NSG.
+    _run(monkeypatch, _net(subnet_nsg=[ssh, out, deny], tier_rules=[ssh, https],
+                           web_nic={"own": "dedicated", "rules": [out, deny], "policy": True},
+                           db_nic_0={"rules": [out], "policy": True}, db_nic_1={"own": "tier"},
+                           api_nic={"policy": True}),
+         ("another_host_writes", DB, DB, None, "after-foreign", False),
+         ("bare_with_an_unknown_original", DB, DB, None, _nic("rg-app1", "db-nic-1"), "reset"),
+         ("access_changes", True),
+         ("bare_with_an_unknown_original", DB, DB, None, _Q1, "release twice"))
+
+
+def test_a_state_is_azures_without_an_nsg_nothing_ties_to_a_bare_nic(monkeypatch):
+    """The third place of the same defect (2 000 sequences, seed 303): web left bare in our
+    quarantine's state, then the test loses that state (lose_state, drawn for web while
+    another VM is isolated). _consistent (I8 of the reset, I11) counted the old isolation
+    on the NSG the NIC lost, against a state the code can't have. Same exemption (_untied)."""
+    _run(monkeypatch, _net(web_nic={"own": "dedicated"}),
+         ("bare_with_an_unknown_original", WEB1, WEB1, None, _nic("rg-app1", "web-nic"), "isolate+release",
+          (1, "before-429")),
+         ("lose_everything", WEB2, WEB2, None, WEB1, _Q1, "stop"),
+         ("race", WEB1, ("release", "reassert"), 0))
+
+
+def test_a_reset_doesnt_skip_a_bare_nic_whose_original_is_unknown(monkeypatch):
+    """The same, a reset in place of the second isolation: the bare NIC, in quarantine for
+    the state but its original unknown there and on no tag, was skipped — `swept`, the
+    state cleared, the old isolation left on the NIC's own NSG (I8, I8F)."""
+    _run(monkeypatch, _net(quarantine=True, legacy=("web-nic", False), web_nic={"own": "dedicated"}),
+         ("lose_everything", WEB1, WEB1, None, WEB1, _Q1, "reisolate"),
+         ("someone_detaches_the_quarantine", _nic("rg-app1", "web-nic")),
+         ("reset_from_azure", WEB1, WEB1, None))
+
+
+def test_a_bare_nic_nothing_ties_to_its_nsg_doesnt_carry_its_rules(monkeypatch):
+    """The other side of I8F, met by its composite rule: our NSG taken off the NIC by
+    someone, then the state and the tags lost — nothing ties the NIC to its own NSG any
+    more, and the release can't know it, nor the old isolation there. I8 counted it
+    against the release; I3 and the blocks did not (_untraceable): the oracle's defect.
+    It counts again as soon as a state held the NIC in quarantine (the two tests above)."""
+    _run(monkeypatch, _net(quarantine=True, legacy=("web-nic", False), web_nic={"own": "dedicated"}),
+         ("isolate", WEB1, WEB1, None),
+         ("someone_detaches_the_quarantine", _nic("rg-app1", "web-nic")),
+         ("lose_state", WEB1),
+         ("tags_lost", _Q1),
+         ("release", WEB1, WEB1, None))
+
+
+def test_a_429_on_our_tag_doesnt_overwrite_a_valid_original(monkeypatch):
+    """The state lost but our tag intact, someone leaves the NIC bare, and a single 429 as
+    the next isolation reads the tag: the error read as "none" — and, no state holding the
+    NIC, "none" was written over the valid tag. The original was gone from Azure, the
+    release said `released`, the NIC left without its NSG (I3; I8F, second relecture)."""
+    _run(monkeypatch, _net(quarantine=True, web_nic={"own": "dedicated"}),
+         ("isolate", WEB1, WEB1, None),
+         ("lose_state", WEB1),
+         ("someone_detaches_the_quarantine", _nic("rg-app1", "web-nic")),
+         ("isolate", WEB1, WEB1, (5, "before-429")),
+         ("release", WEB1, WEB1, None))
+
+
+def _retagged(monkeypatch, lose_tags: bool):
+    _run(monkeypatch, _net(quarantine=True, legacy=("web-nic", False), web_nic={"own": "dedicated"}),
+         ("isolate", WEB1, WEB1, None),
+         *([("tags_lost", _Q1)] if lose_tags else []),
+         ("someone_detaches_the_quarantine", _nic("rg-app1", "web-nic")),
+         ("writes_only_its_own",),
+         ("isolate", WEB1, WEB1, None),
+         ("lose_state", WEB1),
+         ("someone_detaches_the_quarantine", _nic("rg-app1", "web-nic")),
+         ("release", WEB1, WEB1, None))
+
+
+def test_a_tag_written_again_ties_the_nic_back(monkeypatch):
+    """Our tags lost by the test, the NIC left bare, isolated again: the state knew the
+    original, the isolation wrote the tag again (U2). Then the state lost, the NIC bare
+    again: the tag says where its NSG is — a release that ignored it (M865) left the NIC
+    bare and the old isolation there. The oracle took the NIC for untraceable: the test's
+    journal now sees the tag written again (I8F, second relecture)."""
+    _retagged(monkeypatch, lose_tags=True)
+
+
+def test_a_tag_never_lost_ties_the_nic(monkeypatch):
+    """The same without the tags lost: the tag was never gone (I8F, second relecture)."""
+    _retagged(monkeypatch, lose_tags=False)
+
 _BATCH = "/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/batch"
 
 

@@ -107,8 +107,10 @@ class FakeDiscord:
             if p == "/api/guilds/GUILD/threads/active":
                 return 200, {"threads": [t for t in self.threads if not t["thread_metadata"]["archived"]]}, {}
             if p == "/api/channels/FORUM/threads/archived/public":
-                return 200, {"threads": [t for t in self.threads if t["thread_metadata"]["archived"]],
-                             "has_more": False}, {}
+                archived = [t for t in self.threads if t["thread_metadata"]["archived"]]
+                if "before" not in query and len(archived) > 1:   # Discord pages its answer
+                    return 200, {"threads": archived[:1], "has_more": True}, {}
+                return 200, {"threads": archived[1:] if "before" in query else archived, "has_more": False}, {}
             if p == "/api/channels/FORUM/threads" and method == "POST":
                 t = self.thread(body["name"], body.get("applied_tags") or [])
                 t["posts"].append(body["message"])

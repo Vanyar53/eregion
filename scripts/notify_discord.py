@@ -36,6 +36,7 @@ import sys
 import time
 import unicodedata
 import urllib.error
+import urllib.parse
 import urllib.request
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -92,7 +93,8 @@ def load_config(environ=os.environ) -> Config:
                 values[key.strip()] = value.strip().strip("'\"")
     except OSError:
         pass
-    values.update({k: environ[k] for k in KEYS if environ.get(k)})
+    # Stripped: a value ending in a newline made http.client quote the URL — token and all.
+    values.update({k: environ[k].strip() for k in KEYS if (environ.get(k) or "").strip()})
     mention = values.get("EREGION_DISCORD_MENTION", "")
     return Config(ci=values.get("EREGION_DISCORD_WEBHOOK_CI", "").rstrip("/"),
                   agents=values.get("EREGION_DISCORD_WEBHOOK_AGENTS", "").rstrip("/"),
@@ -118,7 +120,7 @@ def fetch(method: str, url: str, label: str, body=None, headers=None):
                 time.sleep(wait)
                 continue
             raise Failure(label, e.code) from None
-        except (OSError, ValueError) as e:  # URLError is an OSError
+        except Exception as e:  # URLError, http.client's errors: InvalidURL quotes the URL, token and all
             raise Failure(label, why=type(e).__name__) from None
 
 
@@ -231,7 +233,8 @@ class Forum:
             found += page.get("threads") or []
             if not page.get("has_more") or not page.get("threads"):
                 break
-            before = "&before=" + page["threads"][-1]["thread_metadata"]["archive_timestamp"]
+            before = "&before=" + urllib.parse.quote(page["threads"][-1]["thread_metadata"]["archive_timestamp"],
+                                                     safe="")
         return found
 
     def find(self, lot: str = "", issue: str = "") -> dict | None:
@@ -363,14 +366,18 @@ def github_notices(name: str, event: dict, previous=lambda run: "") -> list[Noti
         pr, action = event.get("pull_request") or {}, event.get("action")
         lot, issue = lot_of(branch=(pr.get("head") or {}).get("ref", ""), title=pr.get("title", ""),
                             body=pr.get("body") or "")
+        repo = lambda side: (((pr.get(side) or {}).get("repo")) or {}).get("full_name")  # noqa: E731
+        if repo("head") != repo("base"):
+            lot = issue = ""   # a fork's pull request: #ci only, never a lot's thread (its title names any lot)
         milestone = (pr.get("milestone") or {}).get("title")
         head = f"#{pr.get('number')} {pr.get('title', '')}"
         if action == "opened":
             return [Notice(embed(f"📬 PR ouverte · {head}", "", BLUE, pr.get("html_url", "")),
-                           lot=lot, issue=issue, title=pr.get("title", ""), milestone=milestone)]
+                           lot=lot, issue=issue, title=pr.get("title", ""), milestone=milestone, create=bool(lot))]
         if action == "closed" and pr.get("merged"):
             return [Notice(embed(f"🔀 PR fusionnée · {head}", "", PURPLE, pr.get("html_url", "")),
-                           lot=lot, issue=issue, title=pr.get("title", ""), state="fait", milestone=milestone)]
+                           lot=lot, issue=issue, title=pr.get("title", ""), state="fait", milestone=milestone,
+                           create=bool(lot))]
         return []
     if name == "release" and event.get("action") == "published":
         rel = event.get("release") or {}
@@ -384,7 +391,7 @@ def github_notices(name: str, event: dict, previous=lambda run: "") -> list[Noti
         return [Notice(embed(f"✅ #{it.get('number')} fermée{why} · {it.get('title', '')}", "", GREEN,
                              it.get("html_url", "")),
                        lot=lot, issue=str(it.get("number", "")), title=it.get("title", ""), state="fait",
-                       milestone=(it.get("milestone") or {}).get("title"), archive=True)]
+                       milestone=(it.get("milestone") or {}).get("title"), archive=True, create=bool(lot))]
     return []
 
 
@@ -428,6 +435,28 @@ def parse_description(desc: str) -> tuple[str, str, str] | None:
         if rest.lower().startswith(step):
             return lot, step, ""
     return lot, "worker", rest
+
+
+def final_report(transcript: Path, data: dict) -> str:
+    """The agent's last word. elrond's agents hand their report back through the SubagentHandback
+    tool (every reviewer transcript, measured on 27/10), not as text: its message first, else
+    the last text, else the hook's last_assistant_message."""
+    last = ""
+    try:
+        for line in transcript.open(encoding="utf-8", errors="replace"):
+            try:
+                o = json.loads(line)
+            except ValueError:
+                continue
+            msg = o.get("message") if o.get("type") == "assistant" else None
+            for b in (msg.get("content") or []) if isinstance(msg, dict) else []:
+                if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "SubagentHandback":
+                    last = str((b.get("input") or {}).get("message") or "")
+                elif isinstance(b, dict) and b.get("type") == "text" and str(b.get("text", "")).strip():
+                    last = str(b["text"])
+    except OSError:
+        pass
+    return last or str(data.get("last_assistant_message") or "")
 
 
 def verdict_of(text: str) -> str:
@@ -528,7 +557,7 @@ def on_stop(data: dict, cfg: Config, state: dict) -> list[Notice]:
                          ORANGE)
             alert(cfg, card)
             return [Notice(card, ci=False, lot=lot)]
-        verdict = verdict_of(data.get("last_assistant_message", ""))
+        verdict = verdict_of(final_report(transcript, data))
         if verdict == "ok":
             return [Notice(embed(f"✅ Relecture ok · {lot}", f"modèles : {models}", GREEN), ci=False, lot=lot,
                            state="fait")]
@@ -592,16 +621,18 @@ def hook(text: str, environ=os.environ) -> int:
 # ── elrond's own calls, and the setup check ─────────────────────────────────────────
 
 def lot_blocked(lot: str, note: str, cfg: Config) -> int:
+    if not (cfg.agents or cfg.lots):   # nothing configured: nothing written, not even the local state
+        return 0
     card = embed(f"⛔ Lot bloqué · {lot}", note, RED)
     alert(cfg, card)
-    with running_state() as state:
-        for k in [k for k, r in state["running"].items() if r["lot"] == lot]:
-            state["running"].pop(k)
-        deliver([Notice(card, ci=False, lot=lot, state="bloqué")], cfg)
-        try:
+    try:
+        with running_state() as state:
+            for k in [k for k, r in state["running"].items() if r["lot"] == lot]:
+                state["running"].pop(k)
+            deliver([Notice(card, ci=False, lot=lot, state="bloqué")], cfg)
             refresh_status(cfg, state)
-        except Failure as e:
-            say(e)
+    except Exception as e:   # a read-only state folder, a Discord error: said, exit 0 (SKILL.md)
+        say(e if isinstance(e, Failure) else Failure("lot blocked", why=type(e).__name__))
     return 0
 
 

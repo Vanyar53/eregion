@@ -177,6 +177,13 @@ def test_in_progress_blocked_and_to_do(fake):
     assert "[B1]" in todo and "[H0]" in todo and "[A3]" not in todo and "[O1]" not in todo
 
 
+def test_a_forks_pull_request_puts_no_lot_in_progress(fake):
+    fork = pull(300, "feat: Mistral (B1, #67)", "lot/b1-mistral")
+    fork["head"]["repo"], fork["base"] = {"full_name": "someone/eregion"}, {"repo": {"full_name": "o/r"}}
+    lots = rd.lots_of(fake.gh["issues"], fake.gh["pulls"] + [fork])
+    assert [x.key for x in lots if x.pr] == ["A3"]
+
+
 def test_the_criteria_and_the_indicators_come_from_the_roadmap(fake):
     text = rd.render([], [], {}, ROADMAP)["description"]
     assert "☐ Critères de maturité de Glorfindel remplis\n☐ Contrats publics figés et versionnés\n" \

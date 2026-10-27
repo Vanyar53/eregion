@@ -85,12 +85,18 @@ def _turn(mid, model, ts, tool="Read"):
                         "content": [{"type": "tool_use", "name": tool, "input": {"file_path": "x.py"}}]}}
 
 
-def agent(tmp_path, desc, agent_type="elrond-worker", fallback=False, tool_use="toolu_1"):
+def agent(tmp_path, desc, agent_type="elrond-worker", fallback=False, tool_use="toolu_1", report=""):
+    """An elrond agent's transcript. Its report, as the real ones end (measured on 27/10): a call
+    to the SubagentHandback tool holding it — not a text, so last_assistant_message is empty."""
     path = tmp_path / "proj" / "sess" / "subagents" / f"agent-{tool_use}.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
     turns = [_turn("m1", PINNED, "2026-10-27T14:00:00Z")]
     if fallback:
         turns += [_turn("m2", FALLBACK, "2026-10-27T14:02:00Z", "Write"), _turn("m3", PINNED, "2026-10-27T14:09:00Z")]
+    if report:
+        turns.append({"type": "assistant", "timestamp": "2026-10-27T14:10:00Z", "message": {
+            "id": "m9", "model": PINNED, "stop_reason": "tool_use",
+            "content": [{"type": "tool_use", "name": "SubagentHandback", "input": {"message": report}}]}})
     path.write_text("\n".join(json.dumps(t) for t in turns) + "\n", encoding="utf-8")
     path.with_name(path.stem + ".meta.json").write_text(
         json.dumps({"agentType": agent_type, "description": desc, "toolUseId": tool_use}), encoding="utf-8")
@@ -290,8 +296,8 @@ def test_a_lot_is_followed_from_launch_to_review(fake, monkeypatch, tmp_path):
     assert t["name"] == "A3 · règles orphelines" and t["applied_tags"] == [TAG["en cours"]]
     nd.hook(stop(agent(tmp_path, "elrond A3 · règles orphelines")))
     nd.hook(launch("elrond A3 · relecture", "elrond-reviewer", "toolu_2"))
-    nd.hook(stop(agent(tmp_path, "elrond A3 · relecture", "elrond-reviewer", tool_use="toolu_2"),
-                 "elrond-reviewer", "- **Verdict :** `ok`\n- **Constats :** aucun"))
+    nd.hook(stop(agent(tmp_path, "elrond A3 · relecture", "elrond-reviewer", tool_use="toolu_2",
+                       report="**Verdict : `ok`**\n\nAucun constat."), "elrond-reviewer"))
     titles = [p["embeds"][0]["title"].split(" · ")[0] for p in t["posts"]]
     assert titles == ["🚀 Lancé", "📦 Rendu", "🔎 Relecture lancée", "✅ Relecture ok"]
     assert all(p["flags"] == nd.SILENT for p in t["posts"]) and t["applied_tags"] == [TAG["fait"]]
@@ -308,17 +314,17 @@ def test_a_fallback_is_an_alert_that_mentions_jonathan(fake, monkeypatch, tmp_pa
     assert "Repli" in t["posts"][-1]["embeds"][0]["title"] and t["applied_tags"] == [TAG["en relecture"]]
 
 
-@pytest.mark.parametrize("last, fell, title, state", [
-    ("**Verdict :** `changes`", False, "🛠️ Relecture : changes", "en correction"),
+@pytest.mark.parametrize("report, fell, title, state", [
+    ("Relu.\n\n**Verdict : `changes`**\n\n1. …", False, "🛠️ Relecture : changes", "en correction"),
     ("- **Verdict :** blocking", False, "🛠️ Relecture : blocking", "en correction"),
     ("Je n'ai rien conclu.", False, "❔ Relecture sans verdict lisible", None),
     ("**Verdict :** `ok`", True, "⚠️ Relecture non obtenue", None),   # the reviewer fell back itself
 ])
-def test_a_review_that_needs_jonathan_alerts_him(fake, monkeypatch, tmp_path, last, fell, title, state):
+def test_a_review_that_needs_jonathan_alerts_him(fake, monkeypatch, tmp_path, report, fell, title, state):
     configure(monkeypatch, fake)
     t = fake.thread("A3 · x", [TAG["en relecture"]])
-    nd.hook(stop(agent(tmp_path, "elrond A3 · relecture 2", "elrond-reviewer", fallback=fell),
-                 "elrond-reviewer", last))
+    nd.hook(stop(agent(tmp_path, "elrond A3 · relecture 2", "elrond-reviewer", fallback=fell, report=report),
+                 "elrond-reviewer"))
     alerts = [p for p in fake.webhook_posts(AGENTS_TOKEN) if p.get("content") == "<@42>"]
     assert len(alerts) == 1 and alerts[0]["embeds"][0]["title"].startswith(title)
     assert t["applied_tags"] == [TAG[state or "en relecture"]]
@@ -405,3 +411,71 @@ def test_the_workshop_variables_never_reach_the_containers_nor_h0(path):
     """EREGION_DISCORD_* is the workshop's (the CI, elrond), not the product's: the Eregion bot's
     token never goes into a container nor onto H0 — only Glorfindel's DISCORD_* do."""
     assert "EREGION_DISCORD_" not in (ROOT / path).read_text(encoding="utf-8")
+
+
+# ── after the review of 27/10 (F1, F5–F8) ──────────────────────────────────────────
+
+def test_the_verdict_is_read_where_elrond_hands_it_back(fake, monkeypatch, tmp_path):
+    """F1: the report is in the transcript's last SubagentHandback; the hook's
+    last_assistant_message is only a fallback, for an agent that ends on a text."""
+    configure(monkeypatch, fake)
+    a = fake.thread("A3 · x", [TAG["en relecture"]])
+    nd.hook(stop(agent(tmp_path, "elrond A3 · relecture", "elrond-reviewer",
+                       report="Troisième relecture.\n\n**Verdict : `changes`**\n\n1. …"), "elrond-reviewer", ""))
+    b = fake.thread("B1 · y", [TAG["en relecture"]])
+    nd.hook(stop(agent(tmp_path, "elrond B1 · relecture", "elrond-reviewer", tool_use="toolu_9"),
+                 "elrond-reviewer", "- **Verdict :** `ok`"))
+    assert a["applied_tags"] == [TAG["en correction"]] and b["applied_tags"] == [TAG["fait"]]
+
+
+def test_a_forks_pull_request_is_announced_never_threaded(fake, monkeypatch, tmp_path):
+    """F5: its title can name any lot; it reaches #ci, never a lot's thread."""
+    configure(monkeypatch, fake)
+    t = fake.thread("A3 · règles orphelines", [TAG["en relecture"]])
+    event = pr_event("opened", merged=False)
+    event["pull_request"]["head"]["repo"] = {"full_name": "someone/eregion"}
+    event["pull_request"]["base"] = {"repo": {"full_name": "o/r"}}
+    run_github(monkeypatch, tmp_path, "pull_request_target", event)
+    assert len(fake.webhook_posts(CI_TOKEN)) == 1
+    assert t["posts"] == [] and t["applied_tags"] == [TAG["en relecture"]] and len(fake.threads) == 1
+
+
+def test_an_issue_without_a_lot_gets_no_thread_but_its_own_is_archived(fake, monkeypatch, tmp_path):
+    """F5: N1 creates a thread only for a known lot; an existing « #n · … » one (N2's) is closed."""
+    configure(monkeypatch, fake, ci=False)
+    closed = {"action": "closed", "issue": {"number": 248, "title": "Console : les cartes"}}
+    run_github(monkeypatch, tmp_path, "issues", closed)
+    assert fake.threads == []
+    t = fake.thread("#248 · Console : les cartes", [TAG["en cours"]])
+    run_github(monkeypatch, tmp_path, "issues", closed)
+    assert t["thread_metadata"]["archived"] and t["applied_tags"] == [TAG["fait"]]
+
+
+def test_a_malformed_webhook_url_is_said_without_its_token(fake, monkeypatch, tmp_path, capsys):
+    """F6: http.client's InvalidURL quotes the URL; a trailing newline is stripped."""
+    configure(monkeypatch, fake, bot=False)
+    release = {"action": "published", "release": {"tag_name": "v0.4.0"}}
+    monkeypatch.setenv("EREGION_DISCORD_WEBHOOK_CI", f"{fake.base}/api/webhooks/1/{CI_TOKEN}\t/x")
+    assert run_github(monkeypatch, tmp_path, "release", release) == 0
+    err = capsys.readouterr().err
+    assert "not sent" in err and CI_TOKEN not in err
+    monkeypatch.setenv("EREGION_DISCORD_WEBHOOK_CI", f"{fake.base}/api/webhooks/1/{CI_TOKEN}\n")
+    run_github(monkeypatch, tmp_path, "release", release)
+    assert len(fake.messages) == 1
+
+
+def test_a_blocked_lot_without_configuration_writes_nothing(fake, tmp_path):
+    """F7: nothing configured, nothing written — not even the local state (SKILL.md)."""
+    assert nd.main(["lot", "A3", "blocked", "--note", "x"]) == 0
+    assert fake.requests == [] and not (tmp_path / "state").exists()
+
+
+def test_archived_threads_are_paged_with_an_encoded_timestamp(fake, monkeypatch, tmp_path):
+    """F8: the archive timestamp (« +00:00 ») goes into the query encoded."""
+    configure(monkeypatch, fake, ci=False)
+    fake.thread("B1 · autre", archived=True)
+    t = fake.thread("A3 · règles orphelines", [TAG["fait"]], archived=True)
+    nd.hook(launch("elrond A3 · correction"))
+    assert len(fake.threads) == 2 and t["posts"]
+    pages = [r["path"] for r in fake.requests if "archived/public" in r["path"] and "before=" in r["path"]]
+    assert pages and "before=2026-10-01T00%3A00%3A00%2B00%3A00" in pages[0]

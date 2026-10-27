@@ -21,15 +21,16 @@ Ce qui ne mérite rien n'envoie rien : un run vert sur une PR, un run annulé, u
 
 **D'où ça vient.**
 - **GitHub** : `.github/workflows/notify.yml`. Le workflow ne récupère ni n'exécute jamais le code d'une PR (`pull_request_target` et `workflow_run` lisent les fichiers de la branche par défaut). Le script ne lit que le JSON de l'événement.
-- **Les lots d'elrond** : des hooks de Claude Code, chez toi (plus bas). Le lancement passe par `PreToolUse` sur `Agent`. Le retour passe par `SubagentStop` : palantir y lit le transcript de l'agent, qui dit s'il y a eu un repli, et le verdict vient de la ligne `**Verdict :**` du relecteur.
+- **Les lots d'elrond** : des hooks de Claude Code, chez toi (plus bas). Le lancement passe par `PreToolUse` sur `Agent`. Le retour passe par `SubagentStop` : palantir y lit le transcript de l'agent, qui dit s'il y a eu un repli. Le verdict vient de la ligne `**Verdict : …**` du rapport, que le relecteur rend par l'outil `SubagentHandback` (mesuré le 27/10 sur les transcripts réels : son dernier message n'est pas un texte). Le script le lit dans le transcript ; à défaut, dans le dernier texte, puis dans `last_assistant_message`.
 - **La feuille de route** : `.github/workflows/roadmap.yml` lance `scripts/roadmap_discord.py` à chaque push sur main, chaque jour, et quand une issue ou une PR s'ouvre ou se ferme (un run à la fois).
 - **elrond lui-même**, pour deux choses seulement : `notify_discord.py lot <ID> blocked --note …` et `notify_discord.py run-end "<bilan>"` (`.claude/skills/elrond/SKILL.md`).
 
 **Le fil d'un lot.**
 - Il s'appelle « `<ID> · <titre> · #<n>` » (« `#<n> · <titre>` » pour une issue sans ID). Le script le retrouve, archivé compris, d'abord par le numéro de l'issue, puis par l'ID du lot : la branche `lot/<id>-…`, l'ID en tête du titre ou entre parenthèses (« (A3, #73) »). Un fil qui porte le numéro d'une autre issue n'est jamais repris : les deux issues d'I1F (#226, #231) ont chacune le leur.
 - **Qui a un fil** (décision du 27/10) : les issues **ouvertes** des quatre jalons. Une issue fermée n'en reçoit pas ; le sien, s'il existe, passe à « fait » et s'archive. L'historique d'avant reste sur GitHub et dans les barres de `#roadmap`.
-- **L'état** : « fait » pour une issue fermée ; une PR ouverte qui nomme le lot le met au moins « en cours » ; les états fins d'elrond (`en relecture`, `en correction`, `bloqué`, et « fait » tant que sa PR est ouverte) sont gardés ; sinon « à faire ». Un fil créé par elrond est retrouvé par l'ID du lot et renommé au nom canonique.
-- Un run rouge poste dans le fil existant, sans jamais en créer.
+- **L'état** : « fait » pour une issue fermée ; une PR ouverte du dépôt (jamais celle d'un fork) qui nomme le lot le met au moins « en cours » ; les états fins d'elrond (`en relecture`, `en correction`, `bloqué`, et « fait » tant que sa PR est ouverte) sont gardés ; sinon « à faire ». Un fil créé par elrond est retrouvé par l'ID du lot et renommé au nom canonique.
+- Un événement de GitHub (N1) ne crée un fil que pour un lot connu (son ID) ; un run rouge poste dans le fil existant, sans jamais en créer.
+- **La PR d'un fork** est annoncée dans `#ci`, jamais dans un fil : son titre peut nommer n'importe quel lot.
 
 ## Mise en place (Jonathan, une fois)
 
@@ -80,13 +81,17 @@ EREGION_DISCORD_MENTION=<ton id d'utilisateur>
 
 **5. Vérifier** : `python3 scripts/notify_discord.py check`. La commande dit ce qui est configuré (les noms, jamais les valeurs), si le forum est lisible et quelles étiquettes manquent. `python3 scripts/roadmap_discord.py --dry-run` affiche le message de `#roadmap` et ce que recevrait le forum, sans rien écrire (avec `GITHUB_TOKEN=$(gh auth token)` pour l'API de GitHub).
 
+**Reste à mesurer** (après la fusion) :
+- `notify.yml` ne tourne que depuis main (`workflow_run`, `pull_request_target`). Un événement `release` prend le workflow du commit du tag : une release dont le tag précède ce fichier, v0.4.0 comprise, n'est pas annoncée.
+- Les hooks sur un vrai run d'elrond : le `matcher` `Agent` de `PreToolUse`, les champs `agent_type` et `agent_transcript_path` de `SubagentStop`. Ils viennent de la documentation de Claude Code ; seule la fin des transcripts (`SubagentHandback`) a été mesurée.
+
 **Mesuré le 27/10** : le bot n'a jamais besoin de se connecter au gateway. Sans connexion, il a créé un fil de forum et posé ses étiquettes en REST seul (essai de mise en place : `lot ESSAI blocked`, puis `run-end`).
 
 ## Les règles du script
 
 `scripts/notify_discord.py`, sans dépendance hors de la bibliothèque standard :
 - **Sans configuration, rien n'est envoyé**, et le code de sortie est 0. Ce qui n'est pas configuré n'est pas envoyé : sans bot, pas de fils ; sans `EREGION_DISCORD_WEBHOOK_AGENTS`, pas de `#agents`.
-- **Une erreur de Discord ne fait jamais échouer l'appelant** : le job reste vert, l'agent continue. Elle donne une ligne sur stderr, `atelier: not sent — webhook #ci: HTTP 500`, sans URL ni jeton. Après un 429 qui demande 5 s ou moins, le script fait un second essai.
+- **Une erreur de Discord ne fait jamais échouer l'appelant** : le job reste vert, l'agent continue. Elle donne une ligne sur stderr, `atelier: not sent — webhook #ci: HTTP 500`, sans URL ni jeton. Après un 429 qui demande 5 s ou moins, le script fait un second essai. Toute erreur de la bibliothèque HTTP est réduite à son nom (`InvalidURL` citerait l'URL, jeton compris), et les valeurs de l'environnement sont débarrassées de leurs espaces et sauts de ligne.
 - **Aucune mention venue d'un texte.** `allowed_mentions` est vide sur chaque message : un titre de PR « @everyone » reste du texte. Seules les alertes de `#agents` mentionnent `EREGION_DISCORD_MENTION`.
 - **Le hook rend la main tout de suite.** L'envoi part dans un processus détaché, qui écrit ses erreurs dans `~/.local/state/eregion/discord.log`. L'état local (les agents en cours, l'id du message « En cours ») est dans `~/.local/state/eregion/discord.json`, sous verrou. Un message « En cours » supprimé dans Discord est recréé. Un lancement refusé après le hook disparaît au bout de 24 h.
 

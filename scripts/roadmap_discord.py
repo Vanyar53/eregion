@@ -77,8 +77,11 @@ def load_github(environ) -> tuple[list, list, list]:
 
 def lots_of(issues: list, pulls: list) -> list[Lot]:
     """The issues of the four milestones; `pr` when an open pull request names the lot or the issue."""
+    def repo(p, side):
+        return (((p.get(side) or {}).get("repo")) or {}).get("full_name")
+    # A fork's pull request names whatever lot it likes: it never puts one « en cours ».
     refs = [nd.lot_of(branch=(p.get("head") or {}).get("ref", ""), title=p.get("title", ""),
-                      body=p.get("body") or "") for p in pulls]
+                      body=p.get("body") or "") for p in pulls if repo(p, "head") == repo(p, "base")]
     pr_lots, pr_issues = {lot for lot, _ in refs if lot}, {i for _, i in refs if i}
     out = []
     for i in issues:

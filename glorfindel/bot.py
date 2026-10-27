@@ -55,9 +55,9 @@ def _save_threads(threads: dict[str, int]) -> None:
     _THREADS_STORE.write_text(json.dumps(threads))
 
 
-# Escalation types whose card is anchored on a VM the detection may not concern (AL1):
-# never a command, nor a button, aimed at that VM.
-_ANCHORED_TYPES = {"control_plane_change", "unattributed_signal"}
+# Escalation types whose card is anchored on a VM the detection may not concern (AL1;
+# an identity detection names no VM — C2): never a command, nor a button, aimed at that VM.
+_ANCHORED_TYPES = {"control_plane_change", "identity_change", "unattributed_signal"}
 
 
 def _cli_command(esc: dict) -> str:

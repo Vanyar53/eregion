@@ -1711,7 +1711,7 @@ MUTANTS += [
     ("M857", "an unattributed control-plane signal opens the anchor VM's incident (AL1)", AGT,
      "        if (signal.get(\"context\") or {}).get(\"attribution\") != \"asset\":", "        if False:"),
     ("M858", "a control-plane cycle stored in the decision memory: a precedent for a data-plane decision (AL1)",
-     AGT, "        if not _is_control_plane(signal):\n            memory.store(cycle)",
+     AGT, "        if not (_is_control_plane(signal) or _is_identity(signal)):\n            memory.store(cycle)",
      "        if True:\n            memory.store(cycle)"),
     ("M859", "what an isolation state recorded forgotten once the state is gone: the release escalates (AL1)",
      ACT, "            return frozenset(self._recorded)\n", "            return current\n"),
@@ -1733,6 +1733,108 @@ MUTANTS += [
      "    return False"),
     ("M894", "a control-plane rule without CorrelationId loads in silence: two operations fold into one (AL1)",
      DRU, "                and \"correlationid\" not in item[\"query\"].lower():", "                and False:"),
+]
+
+# C2 (#199), the defensive half — Entra ID's logs, detection only: each rule escalates with
+# its steps, never the model, never an action on an identity; thresholds in code; Glorfindel's
+# identity marked, never an excuse to silence. Range M920–M939, measured by
+# tests/unit/test_entra_detection.py.
+ENT = "glorfindel/providers/azure/entra.py"
+MUTANTS += [
+    ("M920", "an identity detection decided by the model: it is called, with an administrator's UPN (C2)", AGT,
+     "    if _is_identity(state[\"signal\"]):\n        return _identity_decision(state)\n", ""),
+    ("M921", "the route after decide sends an identity detection to an action: a bypassed decide isolates (C2)",
+     AGT, "    if _is_identity(state[\"signal\"]):\n        return \"escalate_to_human\"\n", ""),
+    ("M922", "an identity detection known by its plane only: a row whose columns say nothing goes to the model (C2)",
+     AGT, "    if ctx.get(\"plane\") == \"identity\" or is_identity_source(str(raw.get(\"detection_source\") or \"\")):",
+     "    if ctx.get(\"plane\") == \"identity\":"),
+    ("M923", "an Entra row read by another source goes to the model: no plane, no source (C2)", AGT,
+     "    return (any(r.get(c) for r in rows for c in IDENTITY_COLUMNS)\n"
+     "            or any(str(r.get(\"Type\") or \"\").lower() in ENTRA_TABLES for r in rows)\n"
+     "            or (raw.get(\"normalized_signal\") or {}).get(\"indicator_key\") == \"identity_operation\")",
+     "    return False"),
+    ("M924", "every directory role a finding: Directory Readers escalates like Global Administrator (C2)", ENT,
+     "        return not role or role in PRIVILEGED_ROLES", "        return True"),
+    ("M925", "a service principal without history unusual: the first days after the setting flood (C2)", ENT,
+     "        return days is None or days >= MIN_BASELINE_DAYS", "        return True"),
+    ("M926", "a failed operation a finding (C2)", ENT, "    if not _succeeded(row):\n        return False\n", ""),
+    ("M927", "Glorfindel's identity as the actor not marked: its stolen credential not critical (C2)", ENT,
+     "\"GlorfindelIdentity\": bool(own) and bool(actor_ids(row) & own),", "\"GlorfindelIdentity\": False,"),
+    ("M928", "Glorfindel's identity as the target not marked: a credential added to it not critical (C2)", ENT,
+     "\"GlorfindelManaged\": bool(own) and bool(target_ids(row) & own)})", "\"GlorfindelManaged\": False})"),
+    ("M929", "an identity card folded into the pending one: a credential added to Glorfindel unseen (C2)",
+     "glorfindel/escalations.py", "                and escalation_type != \"identity_change\"\n", ""),
+    ("M930", "an identity escalation past a bypassed decide typed low_confidence: approvable in one click (C2)",
+     AGT, "    if _is_identity(state[\"signal\"]):\n        escalation_type = \"identity_change\"\n"
+          "    elif _out_status in (\"write_blocked\", \"action_failed\"):",
+     "    if _out_status in (\"write_blocked\", \"action_failed\"):"),
+    ("M931", "a command aimed at the anchor VM on an identity card (C2)", "glorfindel/bot.py",
+     "_ANCHORED_TYPES = {\"control_plane_change\", \"identity_change\", \"unattributed_signal\"}",
+     "_ANCHORED_TYPES = {\"control_plane_change\", \"unattributed_signal\"}"),
+    ("M932", "an identity cycle stored in the decision memory: its UPN served to the model later (C2)", AGT,
+     "        if not (_is_control_plane(signal) or _is_identity(signal)):\n            memory.store(cycle)",
+     "        if not _is_control_plane(signal):\n            memory.store(cycle)"),
+    ("M933", "an identity detection opens the anchor VM's incident (C2)", AGT,
+     "    if _is_identity(signal):\n        return {**state, \"past_cycles\": [], \"incident\": None}\n", ""),
+    ("M934", "an identity finding deduplicated by its time: two consents in the same second, one card (C2)", DRU,
+     "    if row.get(\"EntraOperation\") and row.get(\"EventId\"):", "    if False:"),
+    ("M935", "identity findings one card per cycle: the second credential added in a poll never seen (C2)", DRU,
+     "            control = is_control_plane_source(rule.source) or is_identity_source(rule.source)",
+     "            control = is_control_plane_source(rule.source)"),
+    ("M936", "an identity signal without its plane: a finding on Glorfindel's identity not critical (C2)", DRU,
+     "        control = plane in (\"control\", \"identity\")", "        control = plane == \"control\""),
+    ("M937", "an identity rule without EventId loads in silence (C2)", DRU,
+     "        if rule_enabled and is_identity_source(source) and \"eventid\" not in item[\"query\"].lower():",
+     "        if False:"),
+    ("M938", "a role card without how to revoke the assignment (C2)", ENT,
+     "            \"Non voulue : retirer l'attribution — portail, ou `az rest --method DELETE --url \"\n"
+     "            \"https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignments/<id>`.\",\n", ""),
+    ("M939", "the tenant's diagnostic setting always on: the whole tenant's logs sent (C2)",
+     "infra/terraform/entra_logs.tf", "  count = local.entra_logs_enabled ? 1 : 0", "  count = 1"),
+]
+
+# C2, after the 5.5 review (27/10): range M940–M949, measured by tests/unit/test_entra_detection.py.
+RUL = "glorfindel/rules/azure/detection_rules.yaml"
+MUTANTS += [
+    ("M940", "under az login, the operator's oid taken as Glorfindel's in Entra: his actions read as theft (C2)",
+     ENT, "        return prepare_rows(rows, self.app_identities())",
+     "        return prepare_rows(rows, self.own_identities())"),
+    ("M941", "a user's token taken as an application's: the operator marked as Glorfindel (C2)", ACT,
+     "                    self._token_is_app = bool(claims) and is_app_token(claims)\n",
+     "                    self._token_is_app = True\n"),
+    ("M942", "the role rule filters on Role.DisplayName: an assignment without it gone before the adapter (C2)",
+     RUL, "          summarize RoleName = take_anyif(trim(@'\"', tostring(Prop.newValue)), "
+          "tostring(Prop.displayName) =~ \"Role.DisplayName\"))",
+     "          where tostring(Prop.displayName) =~ \"Role.DisplayName\"\n"
+     "          | extend RoleName = trim(@'\"', tostring(Prop.newValue)))"),
+    ("M943", "a first credential's old value not an array: set_difference silences the row (C2)", RUL,
+     "iff(isnull(array_length(OldSet)), dynamic([]), OldSet)", "iff(isnull(OldSet), dynamic([]), OldSet)"),
+    ("M944", "a client rule on an Entra table without telling columns goes to the model: its UPN sent (C2)", DRU,
+     "        if plane == \"data\" and _reads_entra_table(rule.query):\n            plane = \"identity\"\n", ""),
+    ("M945", "respond on an Entra query of another source goes to the model (C2)", AGT,
+     "        entra_query = _reads_entra_table(query) and not is_control_plane_source(source)",
+     "        entra_query = False"),
+    ("M946", "a consent card proposes to disable the resource's principal: the whole tenant cut (C2)", ENT,
+     "        client = (tid if op.lower() == \"consent to application\" and row.get(\"TargetId\")\n"
+     "                  else str(row.get(\"ClientId\") or \"\").strip())",
+     "        client = tid"),
+    ("M947", "an identity card labelled exercise by a window on its anchor VM (C2)", AGT,
+     "    if _is_identity(signal) or (\n"
+     "            # `unattributed` is the RulePoller's own word; a respond signal (an\n"
+     "            # attack_started resolved on the Activity Log) has none, and keeps its window.\n"
+     "            _is_control_plane(signal) and (signal.get(\"context\") or {}).get(\"attribution\") == \"unattributed\"):\n"
+     "        return \"real\", \"\"\n", ""),
+    ("M948", "Global Administrator's former name not privileged (C2)", ENT, "    \"Company Administrator\",\n", ""),
+    ("M949", "the role's target not the fallback name: an assignment without Role.DisplayName unnamed (C2)", RUL,
+     "      | extend RoleName = coalesce(RoleName, RoleTargetName)\n", ""),
+]
+
+# C2, after the second 5.5 review (27/10): range M955–M959, measured by
+# tests/unit/test_entra_detection.py.
+MUTANTS += [
+    ("M955", "a respond signal on the Activity Log forced real: a declared exercise counted as an incident (C2)",
+     AGT, "(signal.get(\"context\") or {}).get(\"attribution\") == \"unattributed\"):",
+     "(signal.get(\"context\") or {}).get(\"attribution\") != \"asset\"):"),
 ]
 
 
@@ -1934,6 +2036,7 @@ TESTS["M901"] = "tests/unit/test_reassert.py"
 TESTS.update({mid: f"tests/unit/test_reassert.py tests/unit/test_invariant_regressions.py {INVARIANTS}"
               for mid in ("M900", "M902")})
 TESTS.update({f"M{n}": "tests/unit/test_activity_logs.py" for n in (*range(810, 830), *range(850, 860), *range(890, 895))})  # AL1
+TESTS.update({f"M{n}": "tests/unit/test_entra_detection.py" for n in (*range(920, 950), 955)})  # C2
 # IA1 (#88): the separation in test_analysis_separation.py, the triage in test_analysis_triage.py.
 TESTS.update({f"M{n}": "tests/unit/test_analysis_separation.py" for n in range(780, 786)})
 TESTS.update({f"M{n}": "tests/unit/test_analysis_triage.py" for n in range(786, 800)})

@@ -269,6 +269,8 @@ class AzureActivityDetector(AzureMonitorDetector):
         super().__init__(workspace_id)
         self._credential = credential
         self._token_ids: set[str] | None = None
+        # The token read is an application's (C2: Entra ID marks only an application's ids).
+        self._token_is_app = False
         self._id_lock = threading.Lock()
         self._warned = False
         # What the isolation states recorded as Glorfindel's, kept a while after the state
@@ -292,6 +294,7 @@ class AzureActivityDetector(AzureMonitorDetector):
                     token = self._identity_credential().get_token(_TOKEN_SCOPE).token
                     claims = _token_claims(token)
                     self._token_ids = token_identities(claims)
+                    self._token_is_app = bool(claims) and is_app_token(claims)
                     if claims and not is_app_token(claims):
                         logger.warning(
                             "AzureActivity : Glorfindel tourne sous un jeton d'utilisateur "
@@ -308,6 +311,19 @@ class AzureActivityDetector(AzureMonitorDetector):
                             "écritures peuvent s'escalader", exc)
                     return ids
             return ids | self._token_ids
+
+    def app_identities(self) -> set[str]:
+        """Glorfindel's identities as an application (C2): the token's ids only when the
+        token is an application's (a service principal, a managed identity), plus the
+        configured ids. Under a user's token (`az login`) the token's `oid` is the
+        operator's, not Glorfindel's: in Entra ID's logs every action of that
+        administrator would read as Glorfindel's credential used elsewhere — it is left
+        out. The Activity Log (AL1) keeps `own_identities`, the oid included."""
+        ids = self.own_identities()          # reads the token, once
+        with self._id_lock:
+            if self._token_is_app:
+                return ids
+        return configured_identities()
 
     def recorded(self) -> frozenset[str]:
         """`recorded_targets()` now, plus what was recorded within the last RECORDED_TTL_S."""

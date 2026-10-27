@@ -261,10 +261,15 @@ def load_context(
     A control-plane detection (AL1) is decided without the model: no past cycles. And
     unless the RulePoller tied it to its VM (`attribution: asset`, a role assigned on the
     VM), it opens no incident and feeds none: its VM is an anchor, and the next data-plane
-    cycle there would read « T1562.007, 2 signals » about a VM nothing happened to."""
+    cycle there would read « T1562.007, 2 signals » about a VM nothing happened to.
+
+    An identity detection (Entra ID, C2) names no VM: it never opens nor feeds an incident,
+    and is given no past cycle."""
     from dataclasses import asdict
 
     signal = state["signal"]
+    if _is_identity(signal):
+        return {**state, "past_cycles": [], "incident": None}
     if _is_control_plane(signal):
         if (signal.get("context") or {}).get("attribution") != "asset":
             return {**state, "past_cycles": [], "incident": None}
@@ -360,16 +365,21 @@ def resolve_attack_started(signal: dict) -> dict:
         since_attack = time.time() - attack_time
         if "attack_time" in raw and 0 < since_attack < 86400:
             detection_s = round(since_attack)
-        from glorfindel.detection_rules import normalize_row
-        from glorfindel.detectors import is_control_plane_source
+        from glorfindel.detection_rules import _reads_entra_table, normalize_row
+        from glorfindel.detectors import is_control_plane_source, is_identity_source
+        # A query on one of Entra ID's tables, whatever its source (C2): an identity
+        # detection — decided by the code, its UPN never sent to the model.
+        entra_query = _reads_entra_table(query) and not is_control_plane_source(source)
         return {
             **signal,
+            **({"context": {**(signal.get("context") or {}), "plane": "identity"}} if entra_query else {}),
             "event": "detection",
             "raw_signal": {
                 **raw,
                 # A control-plane source says so (AL1): the guard of `decide` reads it. A
                 # data-plane signal is unchanged — what the model sees stays the same.
-                **({"detection_source": source} if is_control_plane_source(source) else {}),
+                **({"detection_source": source}
+                   if is_control_plane_source(source) or is_identity_source(source) else {}),
                 "detection_time_s": detection_s,
                 "detected_data": detected_row,
                 "normalized_signal": normalize_row(detected_row, ttp=signal.get("ttp", "")),
@@ -513,6 +523,9 @@ def investigate(state: GlorfindelState) -> GlorfindelState:
     # anchor — no Perf/Syslog query on it.
     if _is_control_plane(signal):
         return state
+    # An identity detection (C2): decided without the model, its VM an anchor.
+    if _is_identity(signal):
+        return state
 
     raw = signal.get("raw_signal", {})
     workspace_id = (
@@ -635,6 +648,7 @@ _HELD_BY_TYPE = {
     "telemetry": "telemetry_gap",
     "agreement": "unstable_decision",
     "control_plane": "control_plane_change",
+    "identity": "identity_change",
 }
 
 # Actions aimed at ONE VM. On a detection the RulePoller could not tie to that VM (a row
@@ -853,6 +867,68 @@ def _control_plane_decision(state: GlorfindelState) -> GlorfindelState:
         "autonomy_mode": "",
         "mode_hold": False,
         "held_by": "control_plane",
+        "autonomy_gate": {},
+        "decision_draws": [],
+    }
+
+
+def _is_identity(signal: dict) -> bool:
+    """A detection on what was done to an identity (Entra ID's logs, C2): the RulePoller
+    says so (`context.plane` — from the source, or from the query when a rule of another
+    source reads an Entra table, whatever it projects), and so does the source it read. In
+    depth, the row itself: its columns (`EntraOperation`, `InitiatedBy`, `TargetResources`,
+    `ServicePrincipalId`…), its table (`Type`), or its normalised indicator."""
+    from glorfindel.detectors import is_identity_source
+    from glorfindel.providers.azure.entra import ENTRA_TABLES, IDENTITY_COLUMNS
+    ctx = signal.get("context") or {}
+    raw = signal.get("raw_signal") or {}
+    if ctx.get("plane") == "identity" or is_identity_source(str(raw.get("detection_source") or "")):
+        return True
+    rows = [r for r in (raw.get("first_result_row"), raw.get("detected_data")) if isinstance(r, dict)]
+    return (any(r.get(c) for r in rows for c in IDENTITY_COLUMNS)
+            or any(str(r.get("Type") or "").lower() in ENTRA_TABLES for r in rows)
+            or (raw.get("normalized_signal") or {}).get("indicator_key") == "identity_operation")
+
+
+def _identity_decision(state: GlorfindelState) -> GlorfindelState:
+    """The decision on an identity detection (C2), built by the code — no model, no action.
+
+    A row of Entra ID's logs says who added a credential, consented to an application,
+    assigned a privileged role, or which service principal signed in from where. The
+    answer is a human's — revoke a credential, a consent, a role, block a sign-in — and an
+    autonomous action on an identity is the costliest false positive there is (an
+    administrator locked out); `revoke_service_principal` does not exist. So no
+    investigation, no call to the model (its text would carry a user's name — a UPN — to the
+    provider), no action recommended: an escalation `identity_change`, never approvable in
+    one click, whose reason says what, who, on which identity, the gravest cases
+    (Glorfindel's identity as the actor or the target) and the severity, and whose steps
+    say how to check and how to revoke (`entra.describe`)."""
+    from glorfindel.providers.azure.entra import describe
+    signal = state["signal"]
+    raw = signal.get("raw_signal") or {}
+    row = dict(raw.get("first_result_row") or raw.get("detected_data") or {})
+    norm = raw.get("normalized_signal") or {}
+    # A row normalised with its marks (the RulePoller's) keeps them.
+    row.setdefault("GlorfindelIdentity", norm.get("glorfindel_identity") is True)
+    row.setdefault("GlorfindelManaged", norm.get("glorfindel_managed") is True)
+    what, steps = describe(row)
+    severity = "critique" if signal.get("severity") == "critical" else "haute"
+    reason = (f"{what} Sévérité : {severity}. Détection seule : aucune action autonome sur une "
+              "identité — décision déterministe, sans appel au modèle ; revue humaine.")
+    return {
+        **state,
+        "reasoning": "Identité : décision déterministe (C2), sans appel au modèle.",
+        "confidence": 0.0,
+        "action": "",
+        "reversible": True,
+        "explanation": what,                # the card's text, nothing for a model
+        "escalate": True,
+        "escalation_reason": reason,
+        "suggested_steps": steps,
+        "llm_usage": None,
+        "autonomy_mode": "",
+        "mode_hold": False,
+        "held_by": "identity",
         "autonomy_gate": {},
         "decision_draws": [],
     }
@@ -1184,7 +1260,8 @@ def decide(
 
     A control-plane detection (AL1: the Activity Log) never reaches the model: its
     decision is built by the code (`_control_plane_decision`), an escalation with no
-    action — before the mode, the readiness, the call.
+    action — before the mode, the readiness, the call. Nor an identity detection (C2:
+    Entra ID's logs, `_identity_decision`).
 
     Gates, in order (each a pure helper, testable on its own): parsing defaults →
     executable guard → confidence gate → deterministic signal guardrail → attribution
@@ -1197,6 +1274,8 @@ def decide(
     escalation its type. An unreadable glorfindel-config.yaml runs every VM in
     human_only, `--mode` included (G2).
     """
+    if _is_identity(state["signal"]):
+        return _identity_decision(state)
     if _is_control_plane(state["signal"]):
         return _control_plane_decision(state)
 
@@ -1477,7 +1556,11 @@ def escalate_to_human(state: GlorfindelState) -> GlorfindelState:
     #   write_blocked  → credentials can't write (read-only SP / IAM 403) — capability gap
     #   action_failed  → other Azure failure during execution (transient / config)
     _out_status = (state.get("outcome") or {}).get("status")
-    if _out_status in ("write_blocked", "action_failed"):
+    # An identity detection (C2) is always its own type, whatever reached here: never a
+    # type the console approves in one click.
+    if _is_identity(state["signal"]):
+        escalation_type = "identity_change"
+    elif _out_status in ("write_blocked", "action_failed"):
         escalation_type = _out_status
     # Executed but the check failed (rule missing, an allow evaluated before the deny,
     # a NIC left open) or couldn't conclude (Q11): the type the Revert / reset buttons
@@ -1664,7 +1747,19 @@ def _platform_note(outcome: dict) -> str:
 def _cycle_source(signal: dict) -> tuple[str, str]:
     """B2: (`exercise`, run_id) when an injector's window covers the signal's VM at its
     time, else (`real`, "") — eregion_core/exercise.py. Recorded in the memory and on the
-    card; never shown to the model yet. Unreadable → (`unknown`, "")."""
+    card; never shown to the model yet. Unreadable → (`unknown`, "").
+
+    An identity detection (C2), and a control-plane one the RulePoller says
+    `unattributed` (AL1), are `real` (a `respond` signal on the Activity Log has no
+    attribution, and keeps its declared window):
+    their VM is an anchor, and an exercise window on it says nothing of an identity or of
+    an operation elsewhere — until an identity can be enrolled, nothing ties one to an
+    exercise (an attack on it would otherwise be labelled one)."""
+    if _is_identity(signal) or (
+            # `unattributed` is the RulePoller's own word; a respond signal (an
+            # attack_started resolved on the Activity Log) has none, and keeps its window.
+            _is_control_plane(signal) and (signal.get("context") or {}).get("attribution") == "unattributed"):
+        return "real", ""
     try:
         from eregion_core.exercise import source_of
         return source_of(signal.get("resource_id", ""), signal.get("timestamp"),
@@ -1704,9 +1799,10 @@ def store_cycle(state: GlorfindelState, *, memory: CycleMemory) -> GlorfindelSta
     # ChromaDB write — non-fatal: debug JSONL must still be written on failure. Never a
     # control-plane cycle (AL1): decided by the code, not the model, on a VM that may be an
     # anchor — retrieved by similarity (TTP, severity…), it would be served as a precedent
-    # to a data-plane decision. Its debug line is written.
+    # to a data-plane decision. Its debug line is written. Nor an identity cycle (C2): its
+    # text names a user (a UPN), and the memory feeds the model.
     try:
-        if not _is_control_plane(signal):
+        if not (_is_control_plane(signal) or _is_identity(signal)):
             memory.store(cycle)
     except Exception as exc:
         _console.print(f"[yellow]store_cycle: ChromaDB write failed: {exc}[/yellow]")
@@ -2012,6 +2108,10 @@ def _route_after_load_context(state: GlorfindelState) -> str:
 def _route_after_decide(state: GlorfindelState) -> str:
     action = state["action"]
     if state["escalate"]:
+        return "escalate_to_human"
+    # Never an action on an identity detection (C2), whatever the decision says: the
+    # second lock, after `decide`'s.
+    if _is_identity(state["signal"]):
         return "escalate_to_human"
     if action in HUMAN_APPROVAL_REQUIRED:
         return "escalate_to_human"

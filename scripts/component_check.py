@@ -105,7 +105,7 @@ COMPONENTS: dict[str, Component] = {
 # runs, the analysis AI over a campaign and Glorfindel's decisions, the gate seen from both
 # sides, the host and the Makefile — and the repository-wide checks. The full suite runs them.
 TOGETHER = (
-    "test_activity_logs.py", "test_analysis_rules_parity.py", "test_analysis_separation.py",
+    "test_activity_logs.py", "test_analysis_rules_parity.py", "test_entra_detection.py", "test_analysis_separation.py",
     "test_analysis_triage.py", "test_api.py", "test_campaign_changes.py", "test_campaign_replay.py", "test_campaign_report.py",
     "test_components.py", "test_console.py", "test_console_exercises.py", "test_profiles.py",
     "test_decision_stability.py", "test_dependency_failures.py", "test_dependency_lock.py",

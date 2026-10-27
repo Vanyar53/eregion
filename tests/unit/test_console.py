@@ -70,6 +70,17 @@ def test_pages_and_their_scripts_revalidate_on_each_load(client):
     assert "cache-control" not in client.get("/api/sections").headers
 
 
+def test_every_response_carries_the_content_security_policy(client, monkeypatch):
+    """M568: never framed by another page (Approve & execute under a decoy), never talking to
+    another origin — pages, scripts, API, and the token page a browser gets without its token."""
+    for path in (*PAGES, "/static/console.js", "/api/sections"):
+        csp = client.get(path).headers.get("content-security-policy", "")
+        assert "frame-ancestors 'none'" in csp and "connect-src 'self'" in csp, path
+    monkeypatch.setenv("EREGION_CONSOLE_TOKEN", "s3cret")
+    page = TestClient(api.app).get("/", headers={"accept": "text/html"})
+    assert page.status_code == 401 and "frame-ancestors 'none'" in page.headers["content-security-policy"]
+
+
 # ── The former addresses ──────────────────────────────────────────────────────────────
 
 def test_the_atelier_leads_to_the_overview_with_its_query(client):

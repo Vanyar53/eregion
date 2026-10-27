@@ -1,7 +1,7 @@
 """Persistent state for long-running Azure backup/restore jobs.
 
 Jobs are persisted in ~/.glorfindel/active_jobs/<vm>.json so their status
-is readable by both the CLI and the War Room API without coupling.
+is readable by both the CLI and the console's API without coupling.
 """
 from __future__ import annotations
 
@@ -153,7 +153,7 @@ def record_snapshot_job(
     resource_id: str, snap_id: str, vault: str, vault_rg: str = "",
     *, overwrite_running: bool = True,
 ) -> dict | None:
-    """Persist a snapshot job so the CLI, the War Room and the watch reconciler see it.
+    """Persist a snapshot job so the CLI, the console and the watch reconciler see it.
 
     overwrite_running=False (the agent's autonomous snapshot): keep a job that is still
     InProgress for this VM — there is one job file per VM, and overwriting a running
@@ -198,7 +198,7 @@ def start_restore(
     """Trigger a non-blocking restore. Blocks only on VM deallocation (~1-2 min).
 
     Post-restore: VM stays deallocated until started manually.
-    Use 'az vm start' + 'glorfindel release' or the War Room after job completes.
+    Use 'az vm start' + 'glorfindel release' or the console after job completes.
     """
     vm_name = resource_id.split("/")[-1]
     result = connector.restore_from_backup(

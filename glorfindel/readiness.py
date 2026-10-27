@@ -313,7 +313,7 @@ def _now() -> str:
 
 @contextlib.contextmanager
 def _locked():
-    """The watch (tracker) and the War Room (activation) are two processes writing the
+    """The watch (tracker) and the console (activation) are two processes writing the
     same file: a thread lock plus an flock around every read-modify-write."""
     with _lock:
         _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -532,7 +532,7 @@ class ReadinessTracker:
     def refresh(self, assets) -> list[dict]:
         """Check what is due and apply the transitions. Returns one event per
         transition: {"vm", "event": "activated" | "held" | "demoted", "hold"?}."""
-        cfg = self._config()           # fresh: a War Room mode change applies
+        cfg = self._config()           # fresh: a console mode change applies
         autonomy = cfg.autonomy
         if self._override:
             autonomy.default = self._override
@@ -613,7 +613,7 @@ class ReadinessTracker:
                     "(human_only) tant que ses réserves ne sont pas confirmées.")
         steps = [r["fix"] for r in reasons if r.get("fix")]
         if hold["reason"] != "not_ready":
-            steps.append(f"Lire et confirmer les réserves : War Room (Activer) ou "
+            steps.append(f"Lire et confirmer les réserves : console, page Glorfindel (« Review & turn on ») ou "
                          f"`glorfindel activate {vm}`.")
         resolve_card(rid)       # a new situation is a new card (and a new notification)
         escalations.record(

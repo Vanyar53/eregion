@@ -451,9 +451,11 @@ def test_asset_in_exceptions_is_not_checked_and_its_gaps_resolve(tmp_path):
 
 def test_an_orphan_rule_cutting_a_live_vm_off_is_escalated(tmp_path):
     """Seventh review, U1: a rule left by a NIC that no longer exists, aimed at an IP a
-    live VM holds now, cuts that VM off — one card, naming the victim and the command."""
+    live VM holds now, cuts that VM off — one card, naming the victim and the command.
+    On read-only credentials, the posture says it: the watch's pass doesn't run (A3)."""
     from glorfindel import escalations
     c = _connector()
+    c.read_only = True
     nsg = "/subscriptions/s/resourceGroups/rg-net/providers/Microsoft.Network/networkSecurityGroups/nsg-subnet"
     vm_b = "/subscriptions/s/resourceGroups/rg-b/providers/Microsoft.Compute/virtualMachines/vm-b"
     c.find_orphan_rules.return_value = [
@@ -469,3 +471,13 @@ def test_an_orphan_rule_cutting_a_live_vm_off_is_escalated(tmp_path):
     assert hit["severity"] == "high" and "vm-b" in hit["reason"] and "10.0.0.20" in hit["reason"]
     assert "az network nsg rule delete -g rg-net --nsg-name nsg-subnet -n glorfindel-iso-vm-a-nic-a-0d0228" \
         in hit["suggested_steps"][0]
+
+
+def test_with_write_rights_the_orphan_rules_are_the_watchs_not_the_posture(tmp_path):
+    """A3 (D-B): the watch's reassertion pass sweeps the orphan rules every minute,
+    discovery on or off — the posture pass, after discovery, no longer reads them."""
+    c = _connector()
+    c.read_only = False
+    with patch("glorfindel.posture._STATE_FILE", tmp_path / "posture.json"):
+        PostureChecker(_cfg(), c).check_and_escalate([_asset()])
+    c.find_orphan_rules.assert_not_called()

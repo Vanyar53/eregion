@@ -410,17 +410,44 @@ def test_a_reset_sweeps_the_original_it_puts_back(monkeypatch):
 def test_a_vm_given_an_isolated_deleted_vms_address_is_freed_by_the_sweep(monkeypatch):
     """A3, the criterion of the lot: `web` (group 1) isolated by rules on the subnet NSG,
     deleted after losing its state; a new VM gets 10.0.0.4 behind that NSG and is cut off
-    by web's rule. The posture pass takes it off — nothing else — and teardown checks
-    every live VM is back to its design in full."""
+    by web's rule. The watch's pass takes it off in non_disruptive — nothing else; in
+    human_only first, it only says so — and teardown checks every live VM is back to its
+    design in full."""
     invariant_env(monkeypatch)
     m = IsolationMachine()
     try:
         m.build(_net(subnet_nsg=[]))
         m.address_reused(Script(WEB1, WEB1, None, True, True, "rg-new", "batch", None, "Linux", False))
         assert m._cutting_orphans(), "the new VM should be cut off by web's rule"
-        m.orphan_sweep(Script(None))
+        m.orphan_sweep(Script(None, "human_only"))
+        assert m._cutting_orphans(), "human_only only reads (D-A)"
+        m.orphan_sweep(Script(None, "non_disruptive"))
         assert not m._cutting_orphans()
         m.orphans_are_reported()
+    finally:
+        m.teardown()
+
+
+BATCH = "/subscriptions/s/resourceGroups/rg-new/providers/Microsoft.Compute/virtualMachines/batch"
+
+
+def test_a_deleted_vms_rule_on_a_vm_glorfindel_isolates_waits_for_its_release(monkeypatch):
+    """A3, first review: the VM given web's address is isolated in its turn. web's rule
+    cuts a VM Glorfindel holds: kept, not swept from under the isolation. Once that VM
+    is released, the rule is an orphan cutting it off — the next pass takes it off, and
+    teardown finds every live VM back to its design."""
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_net(subnet_nsg=[]))
+        m.address_reused(Script(WEB1, WEB1, None, True, True, "rg-new", "batch", None, "Linux", False))
+        cutting = m._cutting_orphans()
+        m.isolate(Script(BATCH, BATCH, None))
+        m.orphan_sweep(Script(None, "non_disruptive"))
+        assert m._cutting_orphans() == cutting, "a rule cutting a VM Glorfindel isolates was swept"
+        m.release(Script(BATCH, BATCH, None))
+        m.orphan_sweep(Script(None, "non_disruptive"))
+        assert not m._cutting_orphans()
     finally:
         m.teardown()
 

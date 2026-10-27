@@ -80,7 +80,7 @@ from hypothesis.stateful import (
     RuleBasedStateMachine, initialize, invariant, rule, run_state_machine_as_test,
 )
 
-from glorfindel import actions, config, escalations, reassert
+from glorfindel import actions, config, escalations, orphans, reassert
 from glorfindel.actions import AzureConnector, _load_isolation_state
 
 from .fake_azure import (
@@ -1823,16 +1823,20 @@ class IsolationMachine(RuleBasedStateMachine):
         for vm in self.live:
             self._check_claims(vm, vm)
 
-    def _cutting_orphans(self) -> set:
+    def _cutting_orphans(self, spare: set = frozenset()) -> set:
         """(NSG, rule) of Glorfindel's denies named for a NIC that no longer exists, aimed
         at an address a live NIC holds, on an NSG that governs that NIC now — its own
         NSG or its subnet's. From the test's records (the NICs it deleted, the naming
-        convention), never from what the code reports."""
+        convention), never from what the code reports. `spare`: VMs whose NICs don't
+        count (held by Glorfindel)."""
         gone = {_nic_hash(n) for nics in self.deleted.values() for n in nics}
         if not gone:
             return set()
+        spared = {key(n) for v in self.fake.vms.values() if key(v["id"]) in spare for n in v["nics"]}
         governed: dict[str, set] = collections.defaultdict(set)
         for n in self.fake.nics.values():
+            if key(n["id"]) in spared:
+                continue
             for g in (n["nsg"], self.fake.subnets[key(n["subnet"])]["nsg"]):
                 if g:
                     governed[key(g)] |= set(n["ips"])
@@ -1848,18 +1852,29 @@ class IsolationMachine(RuleBasedStateMachine):
         return out
 
     def _orphan_sweep(self):
-        """The posture pass over orphan rules, as the watch runs it (posture.py)."""
-        from glorfindel.posture import PostureChecker
-        return PostureChecker(None, self.connector)._escalate_orphan_rules()
+        """The sweep of the orphan rules, as the watch's pass runs it (orphans.py); the
+        cut VM's mode is the sequence's (invariant_env)."""
+        from glorfindel.orphans import sweep_orphan_rules
+        sweep_orphan_rules(self.connector, None)
+
+    def _held(self) -> set:
+        """VMs whose isolation or block the local state holds: a rule of a NIC that no
+        longer exists, cutting one of them off, may be theirs — their NIC recreated
+        (first review of A3). The one exemption read from the code's records: the state
+        is what Glorfindel was asked to hold."""
+        out = {key(i["resource_id"]) for i in actions.active_isolations()}
+        return out | {key(b["resource_id"]) for b in actions.active_blocks() if b.get("resource_id")}
 
     @rule(data=st.data())
     def orphan_sweep(self, data):
         """A3, U1 taken to its end: the alert, then each rule of a NIC that no longer
         exists, cutting a live VM off, is taken off — a VM given a deleted VM's address
-        isn't left cut off. Nothing else moves: every VM ends as it was, but for what
-        those rules closed."""
+        isn't left cut off — when that VM runs in non_disruptive (D-A); in human_only,
+        only the card. Nothing else moves: every VM ends as it was, but for what those
+        rules closed."""
         fault = data.draw(_FAULTS, label="fault")
-        cutting = self._cutting_orphans()
+        _CURRENT.mode = data.draw(st.sampled_from(["human_only", "non_disruptive"]), label="mode")
+        cutting = self._cutting_orphans() if _CURRENT.mode != "human_only" else set()
         world = self._world()
         cleared = {**world, "nsgs": {k: {**g, "rules": {n: r for n, r in g["rules"].items() if (k, n) not in cutting}}
                                      for k, g in world["nsgs"].items()}}
@@ -1874,8 +1889,8 @@ class IsolationMachine(RuleBasedStateMachine):
             assert after[vm] <= expected[vm] | flows[vm], f"U1: the orphan sweep opened more of {vm} than orphans closed"
             assert self._state(vm) == states[vm], f"U1: the orphan sweep changed the state of {vm}"
         assert {k: n["nsg"] for k, n in self.fake.nics.items()} == nics_before, "U1: the orphan sweep wrote a NIC"
-        if fault is None and err is None and not self.fake.write_denied:
-            left = self._cutting_orphans()
+        if fault is None and err is None and not self.fake.write_denied and _CURRENT.mode != "human_only":
+            left = self._cutting_orphans(spare=self._held())
             assert not left, f"U1: live VMs still cut off by orphan rules after the sweep: {sorted(left)}"
 
     @invariant()
@@ -1929,6 +1944,7 @@ def invariant_env(monkeypatch) -> None:
 
     monkeypatch.setattr(actions, "_atomic_write_text", chaotic_write)
     monkeypatch.setattr(reassert, "_mode", lambda autonomy, vm, ref="": _CURRENT.mode)
+    monkeypatch.setattr(orphans, "_configured_mode", lambda autonomy, name: _CURRENT.mode)
     monkeypatch.setattr(config, "_DEFAULT_PATHS", list(config._DEFAULT_PATHS))
     monkeypatch.delenv("GLORFINDEL_QUARANTINE_NSG", raising=False)
     from datetime import datetime as _dt, timedelta as _td

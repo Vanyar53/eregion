@@ -68,30 +68,47 @@ def pending() -> list[dict]:
 
 
 def approve(proposal_id: str, rules_yaml_path: str | Path) -> dict:
-    """Mark a proposal as approved and append the rule to detection_rules.yaml."""
+    """Mark a proposal as approved and write its rule to the client's layer (P1).
+
+    `rules_yaml_path` is the shipped base (detection_rules.yaml): read to resolve the
+    rule's asset, NEVER written — an update of Glorfindel replaces the base, and an
+    approved rule written there was lost (or stopped H0's deployment, M-3). The rule goes
+    to `~/.glorfindel/client_rules.yaml` (`rule_layers.write_client_rule`), loaded over
+    the base. The rule is written first: a layer that cannot be read leaves the proposal
+    pending, never approved without its rule. Returns the proposal, with `rules_file` (the
+    layer written) and `rule_write` ('added' | 'replaced' | 'same').
+    """
+    from glorfindel import rule_layers
+
     if not _STORE.exists():
         raise ValueError(f"Proposal {proposal_id} not found")
 
     lines = _STORE.read_text().splitlines()
     proposal: dict | None = None
-    updated = []
+    updated: list[dict] = []
     for line in lines:
         if not line.strip():
             continue
         p = json.loads(line)
-        if p["id"] == proposal_id and p["status"] == "pending":
-            p["status"] = "approved"
-            p["approved_at"] = datetime.now(timezone.utc).isoformat()
+        if p["id"] == proposal_id and p["status"] == "pending" and proposal is None:
             proposal = p
-        updated.append(json.dumps(p))
+        updated.append(p)
 
     if proposal is None:
         raise ValueError(f"Proposal {proposal_id} not found or already approved")
 
-    _STORE.write_text("\n".join(updated) + "\n")
+    rule = rule_from_proposal(proposal, Path(rules_yaml_path))
+    how = rule_layers.write_client_rule(rule)
 
-    _append_to_rules_yaml(proposal, Path(rules_yaml_path))
-    return proposal
+    proposal["status"] = "approved"
+    proposal["approved_at"] = datetime.now(timezone.utc).isoformat()
+    _STORE.write_text("\n".join(json.dumps(p) for p in updated) + "\n")
+    bound = "assets" in rule
+    reason = "" if bound else (
+        "aucun backend unique de glorfindel-config.yaml ne surveille son workspace"
+        if proposal.get("workspace_id") else "aucun backend de glorfindel-config.yaml")
+    return {**proposal, "rules_file": str(rule_layers.client_rules_path()), "rule_write": how,
+            "rule_bound": bound, "rule_unbound_reason": reason}
 
 
 def reject(proposal_id: str) -> dict:
@@ -118,17 +135,15 @@ def reject(proposal_id: str) -> dict:
     return proposal
 
 
-def _append_to_rules_yaml(proposal: dict, rules_path: Path) -> None:
-    """Append a proposed rule to detection_rules.yaml.
+def rule_from_proposal(proposal: dict, rules_path: Path) -> dict:
+    """The rule an approved proposal becomes (a dict, as in a rules file).
 
-    Writes the new format (assets reference) when possible by reverse-
-    looking up which asset matches the proposal's resource_id.
-    Falls back to inline workspace_id/resource_id for robustness.
+    The asset reference when possible, by reverse-looking up which asset matches the
+    proposal's resource_id in the rules loaded from `rules_path` (base + client layer);
+    falls back to inline workspace_id/resource_id. Same rule as before P1 — only where it
+    is written changed.
     """
     from glorfindel.detection_rules import load_config
-    indented_query = "".join(
-        f"      {line}\n" for line in proposal["query"].splitlines()
-    )
 
     # Try to resolve asset and backend names from existing config
     asset_name = proposal.get("asset_name", "")
@@ -148,48 +163,43 @@ def _append_to_rules_yaml(proposal: dict, rules_path: Path) -> None:
                 if match.monitoring_backends:
                     backend_name = match.monitoring_backends[0]
             else:
-                # No static asset — borrow backend from first existing rule, use auto discovery
-                for r in cfg.rules:
-                    if r.monitoring_backends:
-                        asset_name = "auto"
-                        backend_name = r.monitoring_backends[0]
-                        break
+                # No static asset: every discovered VM of the backend that watches the
+                # proposal's workspace — or, none matching, the first rule's backend. This
+                # read `r.monitoring_backends`, which DetectionRule does not have: the error
+                # was swallowed, every approved rule took the inline form below, and loaded
+                # as auto-apply on no backend it applied to no VM, silently (P1 review).
+                # The first rule's backend only when the proposal names no workspace: one
+                # that names another would be bound to a workspace it does not watch.
+                from glorfindel.rule_layers import backend_for_workspace
+                workspace = proposal.get("workspace_id", "")
+                backend_name = backend_for_workspace(workspace, cfg.backends) if workspace else next(
+                    (r.monitoring_backend_name for r in cfg.rules if r.monitoring_backend_name), "")
+                if backend_name:
+                    asset_name = "auto"
         except Exception:
             pass
 
+    rule: dict = {
+        "name": proposal["rule_name"],
+        "description": (f"Auto-proposed by Glorfindel after detection_missed "
+                        f"(TTP: {proposal['ttp']}). {proposal['explanation'][:120]}"),
+        "enabled": True,
+    }
     if asset_name:
-        backend_line = f"    monitoring_backends: [{backend_name}]\n" if backend_name else ""
-        block = (
-            f"\n"
-            f"  - name: {proposal['rule_name']}\n"
-            f"    description: >\n"
-            f"      Auto-proposed by Glorfindel after detection_missed (TTP: {proposal['ttp']}).\n"
-            f"      {proposal['explanation'][:120]}\n"
-            f"    enabled: true\n"
-            f"    ttp: {proposal['ttp']}\n"
-            f"{backend_line}"
-            f"    assets: [{asset_name}]\n"
-            f"    interval_s: {int(proposal['interval_s'])}\n"
-            f"    query: |\n"
-            f"{indented_query}"
-        )
+        rule["ttp"] = proposal["ttp"]
+        if backend_name:
+            rule["monitoring_backends"] = [backend_name]
+        rule["assets"] = [asset_name]
     else:
-        # Legacy fallback — should not happen in normal deployments
-        block = (
-            f"\n"
-            f"  - name: {proposal['rule_name']}\n"
-            f"    description: >\n"
-            f"      Auto-proposed by Glorfindel after detection_missed (TTP: {proposal['ttp']}).\n"
-            f"      {proposal['explanation'][:120]}\n"
-            f"    enabled: true\n"
-            f"    source: {proposal['source']}\n"
-            f"    workspace_id: \"{proposal['workspace_id']}\"\n"
-            f"    ttp: {proposal['ttp']}\n"
-            f"    resource_id: \"{proposal['resource_id']}\"\n"
-            f"    interval_s: {int(proposal['interval_s'])}\n"
-            f"    query: |\n"
-            f"{indented_query}"
-        )
-
-    with open(rules_path, "a") as f:
-        f.write(block)
+        # Legacy fallback — inline workspace and target: no backend to bind to (no
+        # monitoring_backends in glorfindel-config.yaml). Said by approve and at load.
+        rule.update({
+            "source": proposal["source"],
+            "workspace_id": proposal["workspace_id"],
+            "ttp": proposal["ttp"],
+            "resource_id": proposal["resource_id"],
+        })
+    rule["interval_s"] = int(proposal["interval_s"])
+    query = proposal["query"]
+    rule["query"] = query if query.endswith("\n") else query + "\n"
+    return rule

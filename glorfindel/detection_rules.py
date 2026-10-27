@@ -23,6 +23,18 @@ logger = logging.getLogger("glorfindel.detection_rules")
 
 _STATUS_FILE = Path.home() / ".glorfindel" / "rule_status.json"
 
+# P1: the client's layer — the rules of THIS deployment (approved, overriding a base rule,
+# disabling one), outside the repository, loaded over the shipped base
+# (glorfindel/rules/azure/detection_rules.yaml). Nothing writes the base any more: an update
+# of Glorfindel replaces it and never loses a client rule. Read at call time (the tests'
+# conftest redirects it to tmp).
+_CLIENT_RULES_FILE = Path.home() / ".glorfindel" / "client_rules.yaml"
+
+
+def client_rules_path() -> Path:
+    """Where the client's layer lives (~/.glorfindel/client_rules.yaml)."""
+    return _CLIENT_RULES_FILE
+
 
 # ── Data model ─────────────────────────────────────────────────────────────────
 
@@ -70,6 +82,8 @@ class DetectionRule:
     # assets for the monitoring_backend (filtered by GlorfindelConfig.exceptions)
     auto_apply: bool = False
     expected_latency_s: int = 0
+    # P1: "base" (shipped with Glorfindel) or "client" (the client's layer, which wins).
+    layer: str = "base"
 
 
 @dataclass
@@ -78,6 +92,10 @@ class DetectionConfig:
     backends: list[MonitoringBackend]
     assets: list[Asset]
     rules: list[DetectionRule]
+    # P1: what the client's layer did to the base (a rule replaced, one disabled, a
+    # name it cannot disable…), in words — the watch prints them at start.
+    notes: list[str] = field(default_factory=list)
+    client_file: str = ""
 
     def backend(self, name: str) -> MonitoringBackend | None:
         return next((b for b in self.backends if b.name == name), None)
@@ -240,8 +258,174 @@ def _truncates_before_vm_filter(query: str) -> bool:
     return bool(_TRUNCATE_RE.search(code))
 
 
-def load_config(path: str | Path, glorfindel_cfg=None) -> DetectionConfig:
-    """Load detection configuration from YAML.
+def _read_layer(path: Path, notes: list[str] | None = None) -> dict:
+    """One layer's YAML as a dict ({} when the file is absent or empty). `notes`: where to
+    say that the file holds something else than a dictionary (the client's layer)."""
+    import os
+    if not path.exists():
+        return {}
+    data = yaml.safe_load(os.path.expandvars(path.read_text()))
+    if data is not None and not isinstance(data, dict) and notes is not None:
+        notes.append(f"couche du client ({path}) : le fichier n'est pas un dictionnaire YAML "
+                     f"(rules:, disable:…) — ignorée, base seule")
+    return data if isinstance(data, dict) else {}
+
+
+_LAYER_KEYS = ("rules", "disable", "assets", "monitoring_backends")
+_STR_FIELDS = {
+    "rules": ("query", "ttp", "description", "source", "workspace_id", "resource_id", "monitoring_backend"),
+    "assets": ("type", "resource_id", "vault_name", "resource_group"),
+    "monitoring_backends": ("type", "workspace_id", "endpoint"),
+}
+
+
+def _invalid_client_entry(key: str, entry) -> str | None:
+    """Why an entry of the client's layer cannot load (None: it can). Checked here, before
+    load_config converts it: one bad entry (`interval_s: 30s`, `name: [x]`) raised there and
+    left the watch without any rule — the base's included."""
+    if not isinstance(entry, dict):
+        return "n'est pas un dictionnaire"
+    if not isinstance(entry.get("name"), str) or not entry["name"].strip():
+        return "n'a pas de nom (une chaîne)"
+    for field_ in _STR_FIELDS[key]:
+        if entry.get(field_) is not None and not isinstance(entry[field_], str):
+            return f"`{field_}` n'est pas une chaîne"
+    for field_ in ("assets", "monitoring_backends"):
+        value = entry.get(field_)
+        if value is not None and not (isinstance(value, list) and all(isinstance(v, str) for v in value)):
+            return f"`{field_}` n'est pas une liste de noms"
+    if key != "rules":
+        return None
+    if not isinstance(entry.get("enabled", True), bool):
+        return "`enabled` n'est ni true ni false"
+    for field_, convert in (("interval_s", float), ("expected_latency_s", int)):
+        if field_ in entry:
+            value = entry[field_]
+            try:
+                if isinstance(value, bool):
+                    raise ValueError
+                number = convert(value)
+            except (TypeError, ValueError):
+                return f"`{field_}` n'est pas un nombre ({value!r})"
+            if field_ == "interval_s" and not number > 0:
+                return "`interval_s` doit être positif"
+    if entry.get("enabled", True) and not entry.get("query"):
+        return "n'a pas de requête"
+    return None
+
+
+def _entry_label(entry) -> str:
+    name = entry.get("name") if isinstance(entry, dict) else None
+    return f"« {name} »" if isinstance(name, str) and name.strip() else "une entrée"
+
+
+def _named(items) -> list[dict]:
+    """The entries of a list that have a name (anything else in a layer is skipped)."""
+    if not isinstance(items, list):
+        return []
+    return [i for i in items if isinstance(i, dict) and i.get("name")]
+
+
+def merge_layers(base: dict, client: dict) -> tuple[dict, list[str], dict[str, str]]:
+    """The client's layer over the base (P1) → (merged data, notes, layer of each rule).
+
+    - `rules`: a client rule with a base rule's name REPLACES it (in its place), and that is
+      said; any other client rule is added after the base. A client rule `enabled: false`
+      with a base rule's name disables it.
+    - `disable: [<name>, …]`: base rules not loaded at all; a name that is no base rule is
+      said, never silently ignored.
+    - `assets`, `monitoring_backends`: the client's entry wins by name, the others are added.
+    An entry that cannot load (no name, no query, `interval_s: 30s`, a field of the wrong
+    type…) is skipped and said; so is a key that is not a list, or a key we do not know: one
+    bad entry must not stop the watch from loading the others, nor the base.
+    """
+    notes: list[str] = []
+    for key, value in client.items():
+        if key not in _LAYER_KEYS:
+            notes.append(f"couche du client : clé `{key}` inconnue, ignorée ({', '.join(_LAYER_KEYS)})")
+        elif value is not None and not isinstance(value, list):
+            notes.append(f"couche du client : `{key}` n'est pas une liste, ignoré")
+
+    def entries(key):
+        value = client.get(key)
+        out = []
+        for entry in value if isinstance(value, list) else []:
+            reason = _invalid_client_entry(key, entry)
+            if reason:
+                notes.append(f"couche du client, {key} : {_entry_label(entry)} {reason}, ignorée")
+            else:
+                out.append(entry)
+        return out
+
+    merged = dict(base)
+    for key in ("monitoring_backends", "assets"):
+        items = list(base.get(key) or [])
+        for entry in entries(key):
+            at = next((i for i, b in enumerate(items)
+                       if isinstance(b, dict) and b.get("name") == entry["name"]), None)
+            if at is None:
+                items.append(entry)
+            else:
+                items[at] = entry
+                notes.append(f"{key} « {entry['name']} » : celui de la couche du client remplace celui de la base")
+        if items or key in base:
+            merged[key] = items
+
+    base_rules = _named(base.get("rules"))
+    disable = client.get("disable")
+    disabled = []
+    for n in disable if isinstance(disable, list) else []:
+        if isinstance(n, str) and n.strip():
+            disabled.append(n)
+        else:
+            notes.append(f"couche du client, disable : {n!r} n'est pas un nom de règle, ignoré")
+    base_names = {r["name"] for r in base_rules}
+    for name in disabled:
+        if name not in base_names:
+            notes.append(f"couche du client : « {name} » à désactiver n'est pas une règle de base — rien n'est désactivé")
+    rules: list[dict] = []
+    layer: dict[str, str] = {}
+    for r in base_rules:
+        if r["name"] in disabled:
+            notes.append(f"règle de base « {r['name']} » désactivée par la couche du client")
+            continue
+        rules.append(r)
+        layer[r["name"]] = "base"
+
+    for entry in entries("rules"):
+        name = entry["name"]
+        at = next((i for i, r in enumerate(rules) if r["name"] == name), None)
+        if at is None:
+            rules.append(entry)
+        else:
+            if layer.get(name) == "client":
+                notes.append(f"couche du client : « {name} » deux fois, la dernière gagne")
+            elif entry.get("enabled", True):
+                notes.append(f"règle de base « {name} » remplacée par celle de la couche du client")
+            else:
+                notes.append(f"règle de base « {name} » désactivée par la couche du client")
+            rules[at] = entry
+        layer[name] = "client"
+    merged["rules"] = rules
+    return merged, notes, layer
+
+
+# Notes already logged: /api/state reloads the rules at every refresh of the War Room — a
+# note is logged once per process, and kept on DetectionConfig.notes for whoever shows it.
+_NOTES_LOGGED: set[str] = set()
+
+
+def _log_notes(notes: list[str]) -> None:
+    for note in notes:
+        if note not in _NOTES_LOGGED:
+            _NOTES_LOGGED.add(note)
+            logger.warning("detection rules: %s", note)
+
+
+def load_config(path: str | Path, glorfindel_cfg=None, client_layer: str | Path | bool = True) -> DetectionConfig:
+    """Load detection configuration from YAML: the shipped base at `path`, then the
+    client's layer over it (P1, `client_rules_path()`; `client_layer=False`: the base
+    alone; a path: that file as the client's layer).
 
     glorfindel_cfg (GlorfindelConfig | None): when provided, monitoring backend
     workspace_id and endpoint are resolved from it — detection_rules.yaml only
@@ -251,17 +435,30 @@ def load_config(path: str | Path, glorfindel_cfg=None) -> DetectionConfig:
     - New (recommended): assets + rules sections, backends from glorfindel_cfg.
     - Legacy: rules with workspace_id and resource_id inline.
       Backward-compatible so existing configs and tests continue to work.
+
+    An unreadable client layer does not stop the base from loading: the error is logged
+    and kept in the notes (the watch keeps detecting with the base rules).
     """
-    import os
     if yaml is None:
         raise ImportError("PyYAML is required: pip install pyyaml")
-    p = Path(path)
-    if not p.exists():
-        return DetectionConfig(backends=[], assets=[], rules=[])
-    raw = os.path.expandvars(p.read_text())
-    data = yaml.safe_load(raw)
-    if not data or not isinstance(data, dict):
-        return DetectionConfig(backends=[], assets=[], rules=[])
+    data = _read_layer(Path(path))
+    notes: list[str] = []
+    layer_of: dict[str, str] = {}
+    client_file = ""
+    if client_layer:
+        cpath = client_rules_path() if client_layer is True else Path(client_layer)
+        try:
+            client = _read_layer(cpath, notes)
+        except Exception as exc:
+            client = {}
+            notes.append(f"couche du client illisible ({cpath}) : {exc} — base seule")
+        if client:
+            client_file = str(cpath)
+            data, more, layer_of = merge_layers(data, client)
+            notes += more
+    if not data:
+        _log_notes(notes)
+        return DetectionConfig(backends=[], assets=[], rules=[], notes=notes, client_file=client_file)
 
     # ── Build backend lookup ──────────────────────────────────────────────────
     # glorfindel_cfg is the source of truth for connection details (workspace_id,
@@ -365,6 +562,14 @@ def load_config(path: str | Path, glorfindel_cfg=None) -> DetectionConfig:
             )
             rule_enabled = False
 
+        if auto_apply and rule_enabled and inline_ws and not resolved_backend_name:
+            # The inline form an approval wrote before P1: auto-apply on no backend — the
+            # expansion finds no VM for it, the RulePoller drops every row naming one.
+            note = (f"règle « {item['name']} » : workspace en ligne sans backend ni assets — elle ne "
+                    "s'applique à aucune VM découverte (la lier : monitoring_backends: [<backend>], "
+                    "assets: [auto] ; glorfindel migrate-rules le fait pour une règle approuvée avant P1)")
+            notes.append(note)
+
         if auto_apply and _truncates_before_vm_filter(item["query"]):
             logger.warning(
                 "detection rule '%s': `limit` / `take` / `top` runs on the server BEFORE the "
@@ -387,9 +592,12 @@ def load_config(path: str | Path, glorfindel_cfg=None) -> DetectionConfig:
             monitoring_backend_name=resolved_backend_name,
             auto_apply=auto_apply,
             expected_latency_s=int(item.get("expected_latency_s", 0)),
+            layer=layer_of.get(item["name"], "base"),
         ))
 
-    return DetectionConfig(backends=backends, assets=assets, rules=rules)
+    _log_notes(notes)
+    return DetectionConfig(backends=backends, assets=assets, rules=rules,
+                           notes=notes, client_file=client_file)
 
 
 def load_rules(path: str | Path, glorfindel_cfg=None) -> list[DetectionRule]:

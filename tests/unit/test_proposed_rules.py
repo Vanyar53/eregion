@@ -4,7 +4,8 @@ import json
 
 import pytest
 
-from glorfindel.proposed_rules import _append_to_rules_yaml, approve, pending, record, reject
+from glorfindel.detection_rules import client_rules_path
+from glorfindel.proposed_rules import approve, pending, record, reject, rule_from_proposal
 
 
 # ── Fixtures ────────────────────────────────────────────────────────────────────
@@ -100,7 +101,8 @@ def test_approve_marks_status(tmp_path):
     assert proposal["approved_at"] is not None
 
 
-def test_approve_appends_to_rules_yaml(tmp_path):
+def test_approve_writes_the_client_layer_not_the_base(tmp_path):
+    """P1: the rule goes to the client's layer; the base file is not touched."""
     pid = _sample_proposal(
         rule_name="test-rule",
         ttp="T1486",
@@ -109,9 +111,11 @@ def test_approve_appends_to_rules_yaml(tmp_path):
     rules_file = tmp_path / "detection_rules.yaml"
     rules_file.write_text("rules:\n")
 
-    approve(pid, rules_file)
+    proposal = approve(pid, rules_file)
 
-    content = rules_file.read_text()
+    assert rules_file.read_text() == "rules:\n"
+    content = client_rules_path().read_text()
+    assert proposal["rules_file"] == str(client_rules_path())
     assert "test-rule" in content
     assert "T1486" in content
     assert "CounterValue > 1000000" in content
@@ -173,9 +177,9 @@ def test_reject_already_approved_raises(tmp_path):
         reject(pid)
 
 
-# ── _append_to_rules_yaml ────────────────────────────────────────────────────────
+# ── rule_from_proposal ───────────────────────────────────────────────────────────
 
-def test_append_indents_multiline_query(tmp_path):
+def test_rule_from_proposal_keeps_a_multiline_query(tmp_path):
     rules_file = tmp_path / "rules.yaml"
     rules_file.write_text("rules:\n")
     proposal = {
@@ -188,11 +192,14 @@ def test_append_indents_multiline_query(tmp_path):
         "explanation": "Better SSH detection",
         "query": "Syslog\n| where Facility == 'auth'\n| limit 1",
     }
-    _append_to_rules_yaml(proposal, rules_file)
-    content = rules_file.read_text()
-    # Each query line should be indented
-    assert "      Syslog" in content
-    assert "      | where" in content
+    rule = rule_from_proposal(proposal, rules_file)
+    assert rule["query"] == "Syslog\n| where Facility == 'auth'\n| limit 1\n"
+    assert rule["name"] == "my-rule" and rule["enabled"] is True and rule["interval_s"] == 30
+    from glorfindel.rule_layers import write_client_rule
+    write_client_rule(rule)
+    content = client_rules_path().read_text()
+    # The query stays a block of lines, as in the base
+    assert "query: |\n    Syslog\n    | where Facility == 'auth'\n" in content
 
 
 # ── agent routing: detection_missed goes to propose_detection_rule ───────────────

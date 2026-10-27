@@ -618,11 +618,47 @@ de sa relecture), mesurés par `tests/unit/test_bot.py`, `test_glorfindel_host.p
 | M525 | une `REF` exportée dans l'environnement est déployée en silence | un nom générique choisit ce qui tourne |
 | M526 | make développe une `REF` refusée en l'exportant | `$(shell …)` s'exécute |
 | M527 | la ligne ssh recopie `REF` dans la recette | make la développe avant qu'elle soit vérifiée |
-| M528 | règles approuvées sur la VM que la référence change : « gardé », puis git refuse | l'opérateur répare et efface les règles |
+| M528 | règles approuvées sur la VM que la référence change : « gardé », puis git refuse (depuis P1 : un fichier de règles modifié refusé sans dire comment migrer) | l'opérateur répare et efface les règles |
 
 Dix-neuf sur dix-neuf attrapés, trois tours (26/10, #202). Détail :
 [`../../infra/glorfindel-host/README.md`](../../infra/glorfindel-host/README.md), « Ce que la VM
 exécute » et « Redéployer H0 après M-3 ».
+
+### Les couches de règles (P1)
+
+La base livrée reste intacte ; les règles du client vivent dans leur couche,
+`~/.glorfindel/client_rules.yaml`, chargée par-dessus ; une entrée invalide de la couche ne
+coupe jamais la détection ; une règle approuvée se lie au backend de son workspace. Vingt-deux
+mutants, mesurés par `tests/unit/test_rule_layers.py`, `test_proposed_rules.py` et
+`test_host_deploy.py`, tous attrapés au premier tour (26/10) ; M528 (M-3) suit le nouveau refus
+de `deploy.sh`, attrapé aussi. L'export d'une règle généralisée, sans identifiant, est reporté à
+un lot rattaché à P2 (relu par un humain avant tout envoi) : ses mutants (M679–M684, M689–M694,
+M700–M712, M717–M719) sont partis avec lui ; les numéros laissent un trou.
+
+| Mutant | Défaut réinjecté | Effet |
+|---|---|---|
+| M670 | la règle approuvée écrite dans la base livrée | une mise à jour la perd |
+| M671 | la couche du client pas chargée | une mise à jour « perd » toutes les règles du client |
+| M672 | la règle de base gagne sur celle du client de même nom | la version du client ignorée |
+| M673 | `disable:` ignoré | une règle de base que le client a désactivée tourne |
+| M674 | une règle de base remplacée sans le dire | rien dans les notes ni la bannière |
+| M675 | les notes pas journalisées | le journal de la watch ne dit rien de la couche |
+| M676 | une couche illisible empêche la base de charger | la watch ne détecte plus rien |
+| M677 | une couche illisible lue vide, puis écrite par-dessus | les règles du client effacées |
+| M678 | la proposition approuvée avant que sa règle soit écrite | « approuvée » sans règle |
+| M685 | la migration ne prend que les règles nouvelles | une règle de base modifiée sur la VM perdue |
+| M686 | la migration oublie une règle de base supprimée sur la VM | elle revient |
+| M687 | H0 : un fichier de règles modifié repart dans l'image | les règles approuvées avant P1 jamais migrées |
+| M688 | la base montée en écriture dans la watch | un conteneur peut de nouveau l'écrire |
+| M695 | une entrée de la couche pas validée | `interval_s: 30s` : plus aucune règle, base comprise |
+| M696 | une clé de la couche qui n'est pas une liste pas dite | des règles absentes en silence |
+| M697 | la règle approuvée reprend la forme en ligne | elle ne s'applique à aucune VM |
+| M698 | la migration ne lie pas une règle en ligne à son backend | une règle d'avant P1 reste inerte |
+| M699 | une règle qui ne s'applique à aucune VM pas dite au chargement | inerte en silence |
+| M713 | `glorfindel rules` cache le backend d'une règle auto | liée et inerte se confondent |
+| M714 | une règle approuvée d'un autre workspace prend le backend de la première règle | elle tourne sur le mauvais workspace |
+| M715 | une config illisible lue « aucun backend » par `migrate-rules` | la vraie cause tue |
+| M716 | une couche ignorée dite « absente » | contredit la note |
 
 ## Ce que les invariants ont trouvé
 

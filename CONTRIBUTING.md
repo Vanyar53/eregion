@@ -1,6 +1,46 @@
 # Contributing to Eregion
 
-Eregion is open-core (Apache 2.0). Contributions are welcome — scenarios, cloud providers, detection sources, and bug fixes.
+Eregion is open-core (Apache 2.0). Contributions are welcome — adapters first, then scenarios and bug fixes.
+
+## Where to start: the adapters
+
+Eregion has three agents:
+- **Glorfindel**, the defender: the product, always present;
+- **Annatar**, the attacker;
+- **Gothmog**, the fault injector.
+
+They meet only through the shared core (`eregion_core/`). The usage profiles are combinations of the three, with Glorfindel in each ([`docs/profils/`](docs/profils/README.md)).
+
+What reaches the outside world sits behind an **adapter**: a cloud, a telemetry source, or a public attack or fault library. An adapter is the best first contribution. It is small, it has one interface, and you can develop and test it without the rest:
+
+| You bring | The adapter | Its interface | Its example |
+|---|---|---|---|
+| a cloud provider (AWS, GCP…) | `glorfindel/providers/<name>/` | `CloudConnector` + its `CAPABILITIES` | `glorfindel/providers/azure/`, `glorfindel/providers/aws/` |
+| a detection source (Prometheus, Sentinel…) | `glorfindel/providers/<name>/` | `DetectionConnector` | `glorfindel/providers/azure/monitor.py` |
+| a public attack library | `annatar/engines/<name>.py` | `engine` + `engine_ref` of the experiment schema; prepare, inject, revert, clean | `annatar/engines/atomic.py` (Atomic Red Team) |
+| a fault engine | `gothmog/engines/<name>.py` | the same, `kind: fault` | `gothmog/engines/chaos_studio.py` |
+
+**Two rules hold every adapter in place:**
+- **A provider's SDK** (azure, boto3, google-cloud) is imported only in its adapter. `tests/unit/test_provider_boundary.py` enforces it, and CI runs it as its own step.
+- **No component imports another.** Glorfindel never imports Annatar or Gothmog, and they never import Glorfindel. What they share lives in `eregion_core/`, such as the signal contract, `eregion_core/signals.py`. `tests/unit/test_components.py` refuses any other crossing.
+
+**What an injector adapter does not do.** It never checks its own target, its host or the watch. The runner does that before it calls the adapter:
+- the inscription (`eregion_core/inscription.py`);
+- Orodruin's contract (`eregion_core/orodruin.py`);
+- the live Glorfindel watch (`eregion_core/watch_gate.py`);
+- the exercise window (`eregion_core/exercise.py`).
+
+An injector adapter wraps a public library at a pinned version. Eregion has no offensive logic of its own.
+
+**Develop it alone.** Each component is tested with the others absent from the interpreter. An injector also runs without Glorfindel's dependencies (LangGraph, ChromaDB, the bot, the console). CI does the same ([`components.yml`](.github/workflows/components.yml)):
+
+```bash
+python scripts/component_check.py annatar --imports   # every module imports with the others absent
+python scripts/component_check.py annatar             # its tests, the others absent
+make components-check                                 # all four: core, glorfindel, annatar, gothmog
+```
+
+A new test file goes into its component's list in `scripts/component_check.py`, or into `TOGETHER` if it crosses components on purpose. `test_components.py` fails until it has a home.
 
 ## Development setup
 

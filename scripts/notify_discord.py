@@ -45,10 +45,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 KEYS = ("EREGION_DISCORD_WEBHOOK_CI", "EREGION_DISCORD_WEBHOOK_AGENTS", "EREGION_DISCORD_BOT_TOKEN",
-        "EREGION_DISCORD_LOTS_FORUM", "EREGION_DISCORD_MENTION", "EREGION_DISCORD_API")
+        "EREGION_DISCORD_LOTS_FORUM", "EREGION_DISCORD_MENTION", "EREGION_DISCORD_API",
+        "EREGION_DISCORD_ROADMAP_CHANNEL")
 UA = "DiscordBot (https://github.com/Vanyar53/eregion, 1)"
 SILENT = 1 << 12  # SUPPRESS_NOTIFICATIONS: shown in the channel, no push, no sound
 RED, GREEN, BLUE, PURPLE, ORANGE, GREY = 0xE5484D, 0x30A46C, 0x3E63DD, 0x8E4EC6, 0xF76B15, 0x8B8D98
+RETRY_MAX_S = 5.0  # the longest 429 wait taken; a batch (roadmap_discord.py) can wait longer
 RED_CONCLUSIONS = {"failure", "timed_out", "startup_failure"}
 STATE_TAGS = ("à faire", "en cours", "en relecture", "en correction", "fait", "bloqué")
 MILESTONE_TAGS = ("v0.3", "v0.x", "v1.0", "v1.x")
@@ -72,6 +74,7 @@ class Config:
     token: str = ""
     forum: str = ""
     mention: str = ""
+    roadmap: str = ""
     api: str = "https://discord.com/api/v10"
 
     @property
@@ -97,11 +100,12 @@ def load_config(environ=os.environ) -> Config:
                   agents=values.get("EREGION_DISCORD_WEBHOOK_AGENTS", "").rstrip("/"),
                   token=values.get("EREGION_DISCORD_BOT_TOKEN", ""), forum=values.get("EREGION_DISCORD_LOTS_FORUM", ""),
                   mention=mention if mention.isdigit() else "",
+                  roadmap=values.get("EREGION_DISCORD_ROADMAP_CHANNEL", ""),
                   api=(values.get("EREGION_DISCORD_API") or Config.api).rstrip("/"))
 
 
 def fetch(method: str, url: str, label: str, body=None, headers=None):
-    """JSON in, JSON out; one more try after a 429 that asks for 5 s or less."""
+    """JSON in, JSON out; one more try after a 429 that asks for RETRY_MAX_S or less."""
     data = json.dumps(body).encode() if body is not None else None
     head = {"User-Agent": UA, "Content-Type": "application/json", **(headers or {})}
     for attempt in (1, 2):
@@ -112,7 +116,7 @@ def fetch(method: str, url: str, label: str, body=None, headers=None):
             return json.loads(raw) if raw else {}
         except urllib.error.HTTPError as e:
             wait = _retry_after(e)
-            if e.code == 429 and attempt == 1 and wait <= 5:
+            if e.code == 429 and attempt == 1 and wait <= RETRY_MAX_S:
                 time.sleep(wait)
                 continue
             raise Failure(label, e.code) from None
@@ -164,14 +168,52 @@ def _norm(name: str) -> str:
     return unicodedata.normalize("NFC", name).strip().casefold()
 
 
+def clean_title(title: str, lot: str = "") -> str:
+    """A thread's title: no commit prefix (feat(x):), no lot id ahead, no (ID, #n) at the end."""
+    t = re.sub(r"^\s*\w+(?:\([^)]*\))?!?:\s+", "", title or "")
+    t = re.sub(r"\s*\((?:[A-Z0-9-]+\s*,\s*)?#\d+\)\s*$", "", t)
+    if lot:
+        t = re.sub(rf"^\s*{re.escape(lot)}\b\s*(?:[—:·-]\s*)?", "", t)
+    return t.strip()
+
+
+def thread_name(lot: str, issue: str, title: str) -> str:
+    """« <ID> · <title> · #<n> » — the issue's number last, so two issues of one lot id differ."""
+    tail = f" · #{issue}" if issue and lot else ""
+    head = " · ".join(x for x in (lot or (f"#{issue}" if issue else ""), clean_title(title, lot)) if x)
+    return _cut(head, 100 - len(tail)) + tail
+
+
+def same_tags(a: list, b: list) -> bool:
+    """Discord gives a thread's tags back in its own order: compared as a set, never in order."""
+    return sorted(map(str, a)) == sorted(map(str, b))
+
+
+def match_thread(threads: list[dict], lot: str = "", issue: str = "") -> dict | None:
+    """The issue's own thread first; else the lot's, unless that one names another issue."""
+    if issue:
+        for t in threads:
+            # Its number where a name puts it — last (« <ID> · <title> · #<n> ») or first (« #<n> · … »),
+            # never a « #70 » quoted inside a lot's title.
+            if re.search(rf"^#{issue} · |· #{issue}$", t.get("name", "")):
+                return t
+    if lot:
+        for t in threads:
+            name = t.get("name", "")
+            other = re.search(r"#(\d+)\b", name)
+            if (name == lot or name.startswith(f"{lot} · ")) and not (issue and other and other.group(1) != issue):
+                return t
+    return None
+
+
 class Forum:
     """The #lots forum, through the Eregion bot: a thread per lot, named « <ID> · <title> »."""
 
     def __init__(self, cfg: Config):
         self.cfg, self._channel = cfg, None
 
-    def call(self, method: str, path: str, body=None):
-        return fetch(method, self.cfg.api + path, "forum #lots", body,
+    def call(self, method: str, path: str, body=None, label: str = "forum #lots"):
+        return fetch(method, self.cfg.api + path, label, body,
                      {"Authorization": f"Bot {self.cfg.token}"})
 
     def channel(self) -> dict:
@@ -198,13 +240,7 @@ class Forum:
         return found
 
     def find(self, lot: str = "", issue: str = "") -> dict | None:
-        for t in self.threads():
-            name = t.get("name", "")
-            if lot and (name == lot or name.startswith(f"{lot} · ")):
-                return t
-            if issue and re.search(rf"#{issue}\b", name):
-                return t
-        return None
+        return match_thread(self.threads(), lot, issue)
 
     def apply(self, current: list, state: str | None, milestone: str | None) -> list:
         """One state and one milestone at most; the other tags stay."""
@@ -222,14 +258,14 @@ class Forum:
         if t is None:
             if not n.create:
                 return
-            name = _cut(" · ".join(x for x in (n.lot or f"#{n.issue}", n.title) if x), 100)
             t = self.call("POST", f"/channels/{self.cfg.forum}/threads",
-                          {"name": name, "applied_tags": self.apply([], n.state, n.milestone),
+                          {"name": thread_name(n.lot, n.issue, n.title),
+                           "applied_tags": self.apply([], n.state, n.milestone),
                            "message": payload})
         else:
             change = {}
             tags = self.apply(t.get("applied_tags") or [], n.state, n.milestone)
-            if tags != [str(x) for x in t.get("applied_tags") or []]:
+            if not same_tags(tags, t.get("applied_tags") or []):
                 change["applied_tags"] = tags
             if (t.get("thread_metadata") or {}).get("archived"):
                 change["archived"] = False
@@ -604,7 +640,8 @@ def lot_blocked(lot: str, note: str, cfg: Config) -> int:
 
 def check(cfg: Config) -> int:
     names = {"EREGION_DISCORD_WEBHOOK_CI": cfg.ci, "EREGION_DISCORD_WEBHOOK_AGENTS": cfg.agents,
-             "EREGION_DISCORD_BOT_TOKEN": cfg.token, "EREGION_DISCORD_LOTS_FORUM": cfg.forum, "EREGION_DISCORD_MENTION": cfg.mention}
+             "EREGION_DISCORD_BOT_TOKEN": cfg.token, "EREGION_DISCORD_LOTS_FORUM": cfg.forum,
+             "EREGION_DISCORD_MENTION": cfg.mention, "EREGION_DISCORD_ROADMAP_CHANNEL": cfg.roadmap}
     for k, v in names.items():
         print(f"  {'✓' if v else '·'} {k}")
     if cfg.lots:

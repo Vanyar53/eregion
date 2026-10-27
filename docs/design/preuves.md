@@ -954,8 +954,10 @@ voyait parce que le monde avait une isolation d'une ancienne version sur le NSG 
 plus rien ne la notait. La réisolation garde maintenant l'inconnu (M860), le reset aussi (M861,
 même trou, voisin). Les 429 *toujours* actifs de la séquence d'A3 étaient des restes du
 rétrécissement ; un 429 *unique*, lui, faisait le même tort : à la lecture de notre tag lors de la
-réisolation, l'erreur se lisait « aucun NSG » et s'écrivait (relecture 5.5 ; M863). Elle vaut
-maintenant un inconnu quand l'état tient la carte. **L'oracle avait un défaut à
+réisolation, l'erreur se lisait « aucun NSG » et s'écrivait (relecture 5.5 ; M863) — et, l'état
+perdu mais le tag intact, par-dessus un tag valide : l'original disparaissait d'Azure (seconde
+relecture ; M864). Un tag illisible vaut maintenant un inconnu, rien n'est écrit ; seul le
+« aucun » explicite de l'état tient. **L'oracle avait un défaut à
 côté** : I8 comptait les règles du NSG propre d'une carte laissée nue que rien ne relie plus à ce
 NSG (le journal du test le dit : `_untraceable`), là où I3 et les blocages l'excluent déjà ;
 l'état et les tags perdus, la levée ne peut pas le savoir. Il ne les compte plus que si le
@@ -972,12 +974,20 @@ une, ses étapes ne se rencontraient qu'avec l'isolation d'une ancienne version 
 quinze environ) ; dans un monde qui n'en a pas, la règle la pose sur une VM que rien n'a encore
 touchée, comme `build`. Elle ne favorise pas la VM d'un monde qui en a une : son ancien état
 effacé, M34 tombait à un tour sur cinq. Elle finit par une réisolation sous panne puis une levée,
-deux levées, ou un reset. Au budget du push (500), sur cinq tours, après la relecture : les
-quatre sont **intermittents** par la machine — M860 4/5, M861 2/5, M862 4/5, M863 1/5 (le 429
-au bon appel reste rare) ; leurs séquences figées les attrapent à chaque push. M01–M41 et le
-jeu de contrôle, mesurés à côté de `main` au même budget : 26/39 contre 25/39 attrapés à chaque
-tour ; aucun mutant du chemin d'isolation perdu hors du bruit d'un tour.
+deux levées, ou un reset. Par la machine seule, au budget du push (500) : M860 2/3, M861 3/3,
+M862 3/3, et M863, M864, M865 jamais (0/3 ; le 429 au bon appel reste rare, le reste demande deux
+pertes et deux détachements) — d'une mesure à l'autre, ces chiffres bougent (M861 2/5 la veille).
+La table `TESTS` les mesure donc par leurs séquences figées puis la machine (précédent de L1F) :
+chacun est attrapé à chaque push. M01–M41 et le jeu de contrôle, mesurés sur deux tours à côté
+de `main` après la fusion de I1F : 23/39 contre 21/39 attrapés aux deux tours, contrôle 19/32
+contre 17/32 ; seul M34 avait reculé (0/2 contre 1/2), repris sur trois tours : 3/3 contre 2/3.
 Rien n'est à mesurer au banc : le faux Azure n'est pas en cause.
+La seconde relecture a trouvé un angle mort de l'exemption : les tags perdus par le test, une
+réisolation d'une carte nue dont l'état connaît l'original réécrit le tag (U2) — le journal ne le
+voyait pas, la carte passait pour intraçable, et une levée sans état qui ignorait ce tag (M865)
+passait. Le faux Azure note les tags écrits, le test note quand Glorfindel réécrit un original
+(`retagged_at`) : la carte n'est plus intraçable s'il l'a réécrit après la perte (figé, avec la
+variante sans perte de tags).
 
 Le plus grave : après une levée qui échoue en partie, une seconde levée lisait les champs de
 rétro-compatibilité de l'état comme un ancien format, et supprimait les deny du NSG de
@@ -1012,5 +1022,10 @@ Une séquence trouvée la nuit est rejouée en premier à chaque push jusqu'à s
   routes, pare-feu. Elles peuvent contourner une isolation et ne sont pas encore lues.
 - **Hypothèses du faux Azure** non mesurées : le code d'erreur d'un NSG d'une autre région,
   le refus de supprimer un NSG attaché, Run Command shell refusé sous Windows.
+- **L'exemption d'une carte nue (I8F)** : elle vaut si le test a perdu l'état après la dernière
+  fois qu'il a vu un état tenir la carte en quarantaine *pendant qu'elle était nue*. Un état qui
+  l'a tenue après la perte, mais pas nue, puis que le code abandonne, laisse l'exemption à une
+  carte que quelqu'un détache ensuite. Aucun mutant naturel ne l'exploite ; le journal ne dit
+  pas mieux sans lire l'état comme le code l'a laissé (A0).
 - **Le monde simulé AWS** (MC1) : rien n'y est mesuré. Ses seize hypothèses attendent le banc AWS
   (MC2), et la cohérence à terme des lectures d'EC2 n'est pas modélisée ([`monde-aws.md`](monde-aws.md)).

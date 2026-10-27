@@ -44,4 +44,10 @@ RUN groupadd -o -g "$GID" app && \
 ENV HOME=/root
 USER app
 
+# The reference deploy.sh built this image from (M-3), shown in the console's header. Last, so
+# a new reference rebuilds no earlier layer; empty for a local `make build`.
+ARG EREGION_REF=
+ARG EREGION_REVISION=
+ENV EREGION_REF=$EREGION_REF EREGION_REVISION=$EREGION_REVISION
+
 CMD ["glorfindel"]

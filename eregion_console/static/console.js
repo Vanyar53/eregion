@@ -37,6 +37,15 @@ const Console = (() => {
     if (cfg) cfg.innerHTML = tab(CONFIG);
   }
 
+  // What this console runs, beside the logo: the deployed tag, else the version and the commit.
+  function renderVersion() {
+    const el = $('c-version'), v = sections && sections.version;
+    if (!el || !v) return;
+    el.textContent = v.label;
+    el.title = [v.ref && `deployed tag ${v.ref}`, v.revision && `${v.source === 'checkout' ? 'checkout' : 'deployed'} commit ${v.revision}`,
+                v.package && `package ${v.package}`].filter(Boolean).join(' · ');
+  }
+
   async function getJSON(url) {
     const r = await fetch(url, { cache: 'no-store' });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -50,6 +59,7 @@ const Console = (() => {
       sections = d;
     } catch (e) { return; }
     renderTabs();
+    renderVersion();
     listeners.forEach(cb => { try { cb(sections); } catch (_) { /* a page's own error */ } });
     refreshChannel();
   }
@@ -117,6 +127,7 @@ const Console = (() => {
     const h = $('console-header');
     h.classList.add('console');
     h.innerHTML = `<a class="logo" href="/" title="Eregion — Glorfindel defends, Annatar and Gothmog prove it">EREGION</a>
+      <span id="c-version" class="ver"></span>
       <nav id="c-nav"></nav>
       <span class="spacer"></span>
       <span class="hstat" title="The watch's heartbeat (~/.glorfindel/watch_heartbeat)"><span id="c-watch-dot" class="dot">●</span> <span id="c-watch-label">watch…</span></span>

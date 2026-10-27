@@ -256,7 +256,7 @@ async def sections_status() -> dict:
         out = await asyncio.to_thread(sections.status, _RUNS)
     except ValueError as exc:
         return {"error": str(exc)}
-    return {**out, "read_only": _read_only()}
+    return {**out, "read_only": _read_only(), "version": sections.version()}
 
 
 @app.get("/api/state")

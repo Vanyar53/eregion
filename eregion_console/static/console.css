@@ -28,6 +28,7 @@ header.console {
 header.console .logo {
   color: var(--blue); font-weight: 700; font-size: 15px; letter-spacing: 2px; text-decoration: none;
 }
+header.console .ver { color: var(--dim); font-size: 10px; margin-left: -6px; white-space: nowrap; cursor: default; }
 header.console nav { display: flex; gap: 2px; align-items: center; }
 header.console .tab {
   font-size: 12px; padding: 4px 10px; border-radius: 6px; color: var(--dim);

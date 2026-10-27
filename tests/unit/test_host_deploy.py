@@ -197,6 +197,9 @@ def test_the_image_carries_the_reference_it_was_built_from(repo, tmp_path):
     build = next(c for c in calls if c.startswith("build "))
     assert "--label org.opencontainers.image.version=v0.10.0" in build
     assert f"--label org.opencontainers.image.revision={c2}" in build
+    # The console's header says what it runs (#206): the same reference, passed to the build.
+    assert "--build-arg EREGION_REF=v0.10.0" in build
+    assert f"--build-arg EREGION_REVISION={c2}" in build
     assert "-f glorfindel/Dockerfile -t eregion-glorfindel ." in build
     assert any(c.startswith("compose --profile bot up -d watch war-room bot") for c in calls)
     assert calls.index(build) < next(i for i, c in enumerate(calls) if c.startswith("compose"))

@@ -74,7 +74,9 @@ checkout() {
 
 build_and_start() {
   local ref="$1" commit="$2"
+  # The labels for `--show`; the build-args so the console can say what it runs (its header).
   docker build --build-arg UID="$(id -u)" --build-arg GID="$(id -g)" \
+    --build-arg "EREGION_REF=$ref" --build-arg "EREGION_REVISION=$commit" \
     --label "$LABEL_REF=$ref" --label "$LABEL_REV=$commit" \
     -f glorfindel/Dockerfile -t "$IMAGE" .
   docker compose --profile bot up -d watch war-room bot

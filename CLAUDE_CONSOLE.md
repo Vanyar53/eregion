@@ -76,7 +76,7 @@ Feed WebSocket — événements possibles :
 ## Structure UI actuelle
 
 ```
-En-tête (console.js), le même partout → EREGION · onglets Overview, Glorfindel (cartes à juger),
+En-tête (console.js), le même partout → EREGION + version déployée (tag, sinon version · commit) · onglets Overview, Glorfindel (cartes à juger),
                        Annatar, Gothmog (grisés sans run sur l'hôte) … à droite : battement de la watch ·
                        canal retour · ⚙ Config · UTC. Le point « live » est sur la colonne LIVE FEED.
 /            Overview → une ligne par section : à juger, part jugée fausse, dernier run, campagne, canaux

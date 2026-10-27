@@ -1329,6 +1329,12 @@ MUTANTS = [
      "        proofs.append(r)\n        d = decision_of(r, cycles)\n        if d is None:\n            continue\n"),
     ("M565", "coverage counts a missed technique as covered (UI-2)", IND,
      '    covered = {r["ttp"] for r in detected}\n', '    covered = {r["ttp"] for r in attacks}\n'),
+    # The version beside the logo: the reference deploy.sh builds from, the deployed tag first.
+    ("M566", "deploy.sh does not pass the reference to the build: the console cannot say what it runs (UI-2)",
+     "infra/glorfindel-host/deploy.sh",
+     '    --build-arg "EREGION_REF=$ref" --build-arg "EREGION_REVISION=$commit" \\\n', ""),
+    ("M567", "the header shows the package's version over the deployed tag (UI-2)", SEC,
+     '    label = ref or (f"v{package}" if package else "")', '    label = (f"v{package}" if package else "")'),
     ("M408", "eregion console keeps compose's empty service principal: no managed identity (UI-1, H0)",
      "eregion_console/cli.py", "    _drop_empty_service_principal_env()\n", ""),
     ("M409", "the console looks for the shipped rules beside itself: none outside the repo's root (UI-1, P1 review)",
@@ -1618,6 +1624,8 @@ TESTS.update({f"M{n}": "tests/unit/test_rule_layers.py tests/unit/test_host_depl
 TESTS.update({f"M{n}": "tests/unit/test_rule_layers.py" for n in range(713, 717)})
 TESTS.update({f"M{n}": "tests/unit/test_console.py" for n in range(400, 410)})  # UI-1
 TESTS.update({f"M{n}": "tests/unit/test_indicators.py" for n in range(560, 566)})  # UI-2
+TESTS["M566"] = "tests/unit/test_host_deploy.py"
+TESTS["M567"] = "tests/unit/test_console.py"
 TESTS["M403"] = "tests/unit/test_console_exercises.py"
 # V1 (#214): Annatar's side and the shared gate in test_watch_gate.py, Gothmog's in test_gothmog.py.
 TESTS.update({f"M{n}": "tests/unit/test_watch_gate.py" for n in (*range(720, 740), *range(750, 760))})

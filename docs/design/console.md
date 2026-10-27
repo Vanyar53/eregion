@@ -153,8 +153,9 @@ Le tirage des rapports reste dans la watch de Glorfindel, qui est toujours là.
    d'observation y figure, comme sur Glorfindel : c'est la première page vue.
 7. **Config** est une page : Azure, le bloc de Glorfindel (modèle, autonomie), et les canaux si un
    injecteur est actif.
-8. **L'en-tête commun** (`console.js`, `console.css`), le même sur toutes les pages : à gauche les
-   onglets (le nombre de cartes à juger sur celui de Glorfindel) ; à droite le battement de la watch,
+8. **L'en-tête commun** (`console.js`, `console.css`), le même sur toutes les pages : à gauche le
+   logo et, à côté, ce qui tourne (le tag déployé, sinon la version et le commit court ; `EREGION_REF`
+   et `EREGION_REVISION` passés au build par `deploy.sh`), puis les onglets (le nombre de cartes à juger sur celui de Glorfindel) ; à droite le battement de la watch,
    le canal retour si un injecteur est actif, ⚙ Config (à droite, comme dans la War Room) et
    l'horloge en UTC. Ce qui n'appartient qu'à une page reste dans la page : le point « live » du
    fil est sur la colonne LIVE FEED (Jonathan, 26/10).

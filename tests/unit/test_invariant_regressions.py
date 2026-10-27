@@ -4,6 +4,8 @@ order it makes them — `_draw` takes the VM, the id it is reached with, the fau
 """
 from __future__ import annotations
 
+import pytest
+
 from .fake_azure import key
 from .test_invariants import IsolationMachine, _rule, invariant_env
 
@@ -421,3 +423,85 @@ def test_a_vm_given_an_isolated_deleted_vms_address_is_freed_by_the_sweep(monkey
         m.orphans_are_reported()
     finally:
         m.teardown()
+
+
+# I1F (#226): web's own NSG denies the VNet in (deny-lateral-in) — the quarantine NSG that
+# replaces it must too. Its deny turned to Udp, TCP from the VNet falls to Azure's default
+# AllowVnetInBound: 10.9.9.9 reaches :22.
+_SEC_Q = _NSG.format(rg="rg-sec", name="nsg-glorfindel-quarantine-westeurope")
+_LATERAL_RULES = [
+    _rule("allow-lateral-out", 100, dict(access="Allow", direction="Outbound", source_address_prefix="*",
+                                         destination_address_prefix="VirtualNetwork", destination_port_range="*")),
+    _rule("deny-lateral-in", 130, dict(access="Deny", direction="Inbound", source_address_prefix="VirtualNetwork",
+                                       destination_address_prefix="*", destination_port_range="*")),
+]
+_TURNED_TO_UDP = ("tamper_with_our_rule", "protocol", (_SEC_Q, "glorfindel-quarantine-deny-in"))
+
+
+def test_a_quarantine_deny_turned_to_udp_is_someone_elses_opening(monkeypatch):
+    """The sequence of the deep run (27/10, 10 000 sequences), as it shrank: isolated by a
+    quarantine whose state and tags are lost (twice), the customer narrows a rule, then
+    someone turns our quarantine deny to Udp. I1 fell at that very step — before
+    Glorfindel could do anything: the test read a deny of one protocol as a deny-all
+    (`_quarantine_intact`), so the opening was not taken for that someone's (I1F)."""
+    edit = ("customer_edits_rule", _NSG.format(rg="rg-app1", name="nsg-web-nic"), "allow-lateral-out",
+            ("source_address_prefix", "10.9.0.0/16"))
+    _run(monkeypatch, _net(quarantine=True, quarantine_rg="rg-sec", legacy=("web-nic", False),
+                           web_nic={"own": "dedicated", "rules": _LATERAL_RULES}),
+         ("lose_everything", WEB1, WEB1, ("nic.get", "always-429"), WEB1, _SEC_Q, "stop"),
+         ("lose_everything", WEB1, WEB1, (1, "before-429"), WEB1, _SEC_Q, "stop"),
+         edit, edit, edit, edit, edit,
+         _TURNED_TO_UDP)
+
+
+def test_an_altered_quarantine_whose_state_is_lost_is_said(monkeypatch):
+    """The same opening, then a reassertion: the isolation's state and our NSG's tags lost,
+    nothing read that NSG again — web reachable from the VNet on TCP, and nothing said
+    (I1F, L2). The reassertion now lists our quarantine NSGs and says the altered one."""
+    _run(monkeypatch, _net(quarantine=True, quarantine_rg="rg-sec", web_nic={"own": "dedicated",
+                                                                         "rules": _LATERAL_RULES}),
+         ("lose_everything", WEB1, WEB1, None, WEB1, _SEC_Q, "stop"),
+         _TURNED_TO_UDP,
+         ("reassert", "human_only", None),
+         ("reassert", "non_disruptive", None))
+
+
+def test_an_altered_quarantine_card_closes_once_it_is_whole(monkeypatch):
+    """L2's card is one per change, and closes itself: said once over two passes, then
+    gone when an isolation in the region put the NSG's rules back (I1F)."""
+    from glorfindel import escalations
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_net(quarantine=True, quarantine_rg="rg-sec", web_nic={"own": "dedicated",
+                                                                    "rules": _LATERAL_RULES}))
+        m.lose_everything(Script(WEB1, WEB1, None, WEB1, _SEC_Q, "stop"))
+        m.tamper_with_our_rule(Script(*_TURNED_TO_UDP[1:]))
+        for _ in range(2):
+            m.reassert(Script("human_only", None))
+        cards = [e for e in escalations.all_escalations() if e["escalation_type"] == "quarantine_altered"]
+        assert len(cards) == 1 and cards[0]["status"] == "pending", cards
+        assert key(cards[0]["resource_id"]) == key(_SEC_Q) and "nsg-glorfindel-quarantine-westeurope" in \
+            cards[0]["reason"] and "web-nic" in cards[0]["reason"], cards
+        m.isolate(Script(DB, DB, None))             # same region: the NSG's rules put back
+        m.reassert(Script("human_only", None))
+        assert not [e for e in escalations.pending() if e["escalation_type"] == "quarantine_altered"]
+    finally:
+        m.teardown()
+
+
+@pytest.mark.parametrize("alteration", [
+    ("strip_quarantine_nsg", _Q1),
+    ("tamper_with_our_rule", "protocol", (_Q1, "glorfindel-quarantine-deny-in")),
+])
+def test_a_quarantine_made_before_the_group_was_set_is_still_read(monkeypatch, alteration):
+    """Isolated while `quarantine_rg` was empty (our NSG in the VM's group), the state
+    lost, the setting then naming another group, our NSG altered: listed in that group
+    only, it was never read — the hole of I1F open again (second review of I1F, seen
+    once in 11 runs at 500 sequences). The whole subscription is listed."""
+    _run(monkeypatch, _net(quarantine=True),
+         ("isolate", WEB1, WEB1, None),
+         ("lose_state", WEB1),
+         ("config_changes", {"quarantine": True, "rg": "rg-sec", "forensic": [], "readable": True}, True),
+         alteration,
+         ("reassert", "human_only", None))

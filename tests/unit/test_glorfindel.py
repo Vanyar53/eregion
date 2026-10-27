@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from annatar.signals.schema import Signal
+from eregion_core.signals import Signal
 from glorfindel.actions import (
     AUTONOMOUS_ACTIONS,
     HUMAN_APPROVAL_REQUIRED,

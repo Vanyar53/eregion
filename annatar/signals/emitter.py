@@ -5,7 +5,7 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 
-from annatar.signals.schema import Signal, severity_for_ttp
+from eregion_core.signals import Signal, severity_for_ttp
 
 _PROVIDER_MAP: dict[str, str] = {
     "azure": "azure",

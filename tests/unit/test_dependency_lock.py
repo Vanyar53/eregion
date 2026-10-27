@@ -126,8 +126,11 @@ def test_the_image_installs_from_the_lock_with_hashes_and_nothing_else(dockerfil
 def test_the_injectors_image_has_the_planner_s_llm_client(python):
     """HY1: `annatar campaign plan --llm` imports litellm; the injectors' image installed
     `.[annatar]`, whose extra did not declare it — the planner failed in the image only."""
-    assert "litellm" in _for(_lock(INJECTORS), python)
-    assert "litellm" in {canonicalize_name(r.name) for r in _declared("annatar")}
+    declared = {canonicalize_name(r.name) for r in _declared("annatar")}
+    # litellm for the planner; jsonschema and requests, which the shared core imports, declared
+    # rather than left to litellm and azure-core to bring.
+    for name in ("litellm", "jsonschema", "requests"):
+        assert name in _for(_lock(INJECTORS), python) and name in declared, name
 
 
 def test_make_lock_writes_every_lock():

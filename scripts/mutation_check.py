@@ -1457,7 +1457,8 @@ MUTANTS = [
 MUTANTS += [
     ("M830", "the reassertion doesn't read the quarantine NSGs: one altered, its NICs' state lost, "
              "goes unsaid (I1F, L2)", R,
-     "    _report_altered_quarantines(connector, report)\n", ""),
+     "    _report_altered_quarantines(connector, report)\n    return report\n\n\ndef reassert_pass(",
+     "    return report\n\n\ndef reassert_pass("),
     ("M831", "a rule's signature leaves its protocol out: our quarantine deny turned to Udp reads as "
              "ours (I1F)", NSG,
      '            getattr(rule, "priority", None), _enum_text(getattr(rule, "protocol", "")),\n',
@@ -1466,10 +1467,28 @@ MUTANTS += [
              "in quarantine (I1F)", QUA,
      '                protocol="*", source_address_prefix="*", destination_address_prefix="*",\n',
      '                protocol="Udp", source_address_prefix="*", destination_address_prefix="*",\n'),
-    ("M833", "the altered quarantine's card is closed and raised again at every pass (I1F)", R,
-     "            if sid in current:\n                said.add(sid)\n            else:\n"
-     '                escalations.resolve(e["id"])    # whole again, nothing on it, or changed\n',
-     '            escalations.resolve(e["id"])\n'),
+    ("M833", "the altered quarantine's card is closed at the next pass, its change standing (I1F)", R,
+     "        if k in altered and altered[k][0] == sid:\n            said.add(sid)\n"
+     "        elif k in altered or settled(k):\n",
+     "        if k in altered or settled(k):\n"),
+    # After the review (5.5): the watch's pass, an acknowledgement, an unknown.
+    ("M834", "nothing recorded: the pass reads no quarantine NSG (I1F, review)", R,
+     "    report: list[dict] = []\n    _report_altered_quarantines(connector, report)\n    return report\n",
+     "    return []\n"),
+    ("M835", "the watch's pass stops on an empty local state before reading the quarantines (I1F, review)",
+     GCLI,
+     "        # No early return when nothing is recorded: our quarantine NSGs are read whatever\n",
+     "        from glorfindel.actions import active_blocks, active_isolations\n"
+     "        if not active_isolations() and not active_blocks():\n            return\n"
+     "        # No early return when nothing is recorded: our quarantine NSGs are read whatever\n"),
+    ("M836", "an acknowledged quarantine card comes back at every pass (I1F, review)", R,
+     "        if signal_id in said or alerts.get(k) == signal_id:\n",
+     "        if signal_id in said:\n"),
+    ("M837", "a quarantine card closed on an NSG read as unknown (I1F, review)", R,
+     '            return seen[k].get("status") != "unknown" and k not in altered\n',
+     "            return k not in altered\n"),
+    ("M838", "a quarantine card closed on an NSG the listing did not cover (I1F, review)", R,
+     "        return not scope or group == scope\n", "        return True\n"),
 ]
 
 # MC1 — the AWS adapter, written against the simulated world (tests/unit/fake_aws.py) and
@@ -1651,8 +1670,11 @@ TESTS.update({f"M{n}": "tests/unit/test_watch_gate.py" for n in (*range(720, 740
 TESTS.update({f"M{n}": "tests/unit/test_gothmog.py" for n in (724, 725, 726, 727)})
 TESTS.update({f"M{n}": "tests/unit/test_host_console.py" for n in range(740, 750)})  # UI-1c
 # I1F (#226): M830–M832 by the machine (their frozen sequences catch them too); M833 is no
-# property of the world (a card raised again), its regression only.
-TESTS["M833"] = "tests/unit/test_invariant_regressions.py -k altered_quarantine"
+# property of the world (a card closed too soon), its regression and unit tests only.
+TESTS["M833"] = "tests/unit/test_invariant_regressions.py -k altered_quarantine tests/unit/test_reassert.py"
+TESTS.update({f"M{n}": "tests/unit/test_reassert.py" for n in range(835, 839)})   # I1F, review
+# M834 needs a world with no state at all: rare in the drawn sequences (2/4 at 500).
+TESTS["M834"] = f"{INVARIANTS} tests/unit/test_reassert.py"
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

@@ -566,7 +566,7 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
                 _dispatch(data, sig)   # non-blocking — worker thread takes over
 
     from datetime import datetime, timezone
-    from glorfindel.actions import AzureConnector, active_isolations
+    from glorfindel.actions import AzureConnector
 
     ttl_h = float(os.environ.get("GLORFINDEL_ISOLATION_TTL_H") or "4")
     ttl_connector = AzureConnector(dry_run=dry_run)
@@ -619,10 +619,9 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
         _reassert_thread[0].start()
 
     def _reassert_pass() -> None:
-        from glorfindel.actions import active_blocks
-        if not active_isolations() and not active_blocks():
-            return      # cheap local check — no Azure call when nothing is active
-        from glorfindel.reassert import reassert_active
+        # No early return when nothing is recorded: our quarantine NSGs are read whatever
+        # the local state says — a state lost is what that check is for (I1F, #226).
+        from glorfindel.reassert import reassert_pass
         try:
             from glorfindel.config import load_glorfindel_config as _lgc
             autonomy = _lgc().autonomy          # fresh: a War Room mode change applies
@@ -635,7 +634,7 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
             with _output_lock:
                 console.print(f"[yellow]reassert: config illisible, alertes seulement ({exc})[/yellow]")
         try:
-            for r in reassert_active(ttl_connector, autonomy):
+            for r in reassert_pass(ttl_connector, autonomy):
                 target = r["vm"] + (f" {r['ip']}" if r.get("ip") else "")
                 with _output_lock:
                     console.print(f"[yellow]reassert {r['kind']} {target} → {r['outcome']}[/yellow]")

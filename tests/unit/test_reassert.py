@@ -267,3 +267,95 @@ def test_reassertion_skips_a_vm_whose_lock_is_busy():
         release.set()
         t.join(5)
     c.verify_isolation.assert_not_called()
+
+
+# ── our quarantine NSGs, whatever the local state says (I1F, #226) ───────────────────
+
+_QNSG = "/subscriptions/s/resourceGroups/rg-sec/providers/Microsoft.Network/networkSecurityGroups/nsg-glorfindel-quarantine-westeurope"
+_QNIC = "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Network/networkInterfaces/vm-nic"
+
+
+def _quarantines(*entries, scope="rg-sec"):
+    """A connector whose quarantine listing reads `entries` (status, diff) in turn."""
+    c = MagicMock()
+    c.verify_isolation.side_effect = AssertionError("no state: no isolation to verify")
+    listings = [{"scope": scope, "nsgs": [] if e is None else [
+        {"nsg_id": _QNSG, "nics": [_QNIC], "status": e[0], "diff": list(e[1])}]} for e in entries]
+    c.find_altered_quarantines.side_effect = listings
+    return c
+
+
+def _cards(status=None):
+    return [e for e in escalations.all_escalations() if e["escalation_type"] == "quarantine_altered"
+            and (status is None or e["status"] == status)]
+
+
+def test_the_watch_pass_reads_the_quarantines_without_any_state():
+    """The watch's pass with nothing recorded: the quarantines are read all the same — a
+    state lost is what they are read for (the pass used to stop before any Azure call)."""
+    from glorfindel.reassert import reassert_pass
+    c = _quarantines(("altered", ["glorfindel-quarantine-deny-in"]))
+    report = reassert_pass(c, _ACT)
+    c.find_altered_quarantines.assert_called_once()
+    assert [r["kind"] for r in report] == ["quarantine"]
+    (card,) = _cards("pending")
+    assert card["resource_id"] == _QNSG and "vm-nic" in card["reason"] and card["severity"] == "high"
+    assert card["suggested_steps"]
+
+
+def test_the_watch_pass_closes_the_card_once_the_nsg_is_whole_without_any_isolation():
+    from glorfindel.reassert import reassert_pass
+    c = _quarantines(("altered", ["glorfindel-quarantine-deny-in"]), ("ok", []))
+    reassert_pass(c, _ACT)
+    reassert_pass(c, _ACT)
+    assert not _cards("pending") and len(_cards()) == 1
+
+
+def test_the_watch_runs_its_quarantine_check_whatever_the_local_state():
+    """`watch`'s reassertion pass goes through reassert_pass, with no return before it:
+    an early return on an empty local state left the quarantines unread (I1F, review)."""
+    import ast
+    import inspect
+    from glorfindel import cli
+    tree = ast.parse(inspect.getsource(cli))
+    (fn,) = [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "_reassert_pass"]
+    calls = [n for n in ast.walk(fn) if isinstance(n, ast.Call) and getattr(n.func, "id", "") == "reassert_pass"]
+    assert calls, "the watch's pass does not call reassert_pass"
+    first = min(c.lineno for c in calls)
+    early = [n for n in ast.walk(fn) if isinstance(n, ast.Return) and n.lineno < first]
+    assert not early, "the watch's pass returns before reading the quarantines"
+
+
+def test_an_acknowledged_card_stays_closed_while_its_change_stands():
+    """Acknowledged (resolved by the operator) with the NSG still altered: no new card at
+    every pass — one again only for another change, or after the NSG was whole."""
+    from glorfindel.reassert import reassert_pass
+    deny_in, deny_out = ["glorfindel-quarantine-deny-in"], ["glorfindel-quarantine-deny-out"]
+    c = _quarantines(("altered", deny_in), ("altered", deny_in), ("altered", deny_in),
+                     ("altered", deny_out), ("ok", []), ("altered", deny_out))
+    reassert_pass(c, _ACT)
+    escalations.resolve(_cards("pending")[0]["id"])
+    reassert_pass(c, _ACT)
+    reassert_pass(c, _ACT)
+    assert len(_cards()) == 1 and not _cards("pending")
+    reassert_pass(c, _ACT)                            # another change: said
+    assert len(_cards()) == 2 and len(_cards("pending")) == 1
+    escalations.resolve(_cards("pending")[0]["id"])
+    reassert_pass(c, _ACT)                            # whole again: forgotten
+    reassert_pass(c, _ACT)                            # the same change, a new episode
+    assert len(_cards()) == 3 and len(_cards("pending")) == 1
+
+
+def test_a_card_is_not_closed_on_an_nsg_that_cannot_be_read():
+    """Configuration unreadable (our denies hold, the forensic access unknown), or the NSG
+    outside the group listed: its card stays. Gone from a listing of its group: closed."""
+    from glorfindel.reassert import reassert_pass
+    c = _quarantines(("altered", ["glorfindel-quarantine-deny-in"]), ("unknown", ["config illisible"]))
+    reassert_pass(c, _ACT)
+    reassert_pass(c, _ACT)
+    assert len(_cards("pending")) == 1
+    c.find_altered_quarantines.side_effect = [{"scope": "rg-other", "nsgs": []}, {"scope": "rg-sec", "nsgs": []}]
+    reassert_pass(c, _ACT)
+    assert len(_cards("pending")) == 1                # not listed: unknown
+    reassert_pass(c, _ACT)
+    assert not _cards("pending")                      # its group listed, it is gone

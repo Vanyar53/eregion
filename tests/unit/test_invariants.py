@@ -999,7 +999,7 @@ class IsolationMachine(RuleBasedStateMachine):
         # subnet, those without state included — by design.
         perimeter = any(e.get("scoped") is False for vm in self.vms for e in actions._load_block_entries(vm))
         vanished = [vm for vm in self.live if self._block_vanished(vm)]
-        report, err = self._run(fault, lambda: reassert.reassert_active(self.connector, None))
+        report, err = self._run(fault, lambda: reassert.reassert_pass(self.connector, None))
         for r in report or []:
             _note(f"reassert ({_CURRENT.mode}): {r['outcome']}")
         if fault is None and err is None:
@@ -1494,9 +1494,14 @@ class IsolationMachine(RuleBasedStateMachine):
             q = sorted((k, n) for k, g in self.fake.nsgs.items() if actions._is_quarantine_nsg(k)
                        for n, r in g["rules"].items() if n.startswith("glorfindel-") and r["access"].lower() == "deny")
             if q:
-                self._tamper_with_our_rule(_Drawn(data, how=st.sampled_from(
-                    ["port", "source", "destination", "access", "priority", "protocol", "retarget"]),
-                    rule=st.sampled_from(q)))
+                # The inbound deny turned to another protocol half the time: what the deep
+                # run found, and what M831 needs (1/2 at 500 sequences, drawn uniformly).
+                inbound = [r for r in q if r[1] == "glorfindel-quarantine-deny-in"] or q
+                self._tamper_with_our_rule(_Drawn(
+                    data,
+                    how=st.one_of(st.just("protocol"), st.sampled_from(
+                        ["port", "source", "destination", "access", "priority", "protocol", "retarget"])),
+                    rule=st.one_of(st.sampled_from(inbound), st.sampled_from(q))))
         self._claims_after_a_change()
         self.reassert(_Drawn(data, fault=None))
 

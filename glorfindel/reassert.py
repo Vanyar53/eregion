@@ -121,47 +121,110 @@ def reassert_active(connector, autonomy=None) -> list[dict]:
     return report
 
 
+def reassert_pass(connector, autonomy=None) -> list[dict]:
+    """One pass of the watch's reassertion (every GLORFINDEL_REASSERT_INTERVAL_S): the
+    recorded isolations and blocks when there are some — a cheap local read, no Azure
+    call for them when there are none — and our quarantine NSGs whatever the local state
+    says (I1F): the case they are read for is a state lost, and a card raised must close
+    after the last release too."""
+    from glorfindel.actions import active_blocks, active_isolations
+    if active_isolations() or active_blocks():
+        return reassert_active(connector, autonomy)
+    report: list[dict] = []
+    _report_altered_quarantines(connector, report)
+    return report
+
+
+_QUARANTINE_PREFIX = "reassert-quarantine-"
+
+
+def _quarantine_alerts_path():
+    """Beside the isolation states (~/.glorfindel/quarantine_alerts.json): which change
+    of which quarantine NSG was said — the `drift_alerted_at` of an NSG no state names."""
+    from glorfindel import actions
+    return actions._ISOLATION_STATE_DIR.parent / "quarantine_alerts.json"
+
+
+def _load_quarantine_alerts() -> dict:
+    import json
+    try:
+        data = json.loads(_quarantine_alerts_path().read_text())
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_quarantine_alerts(alerts: dict) -> None:
+    import json
+    from glorfindel import actions
+    try:
+        actions._atomic_write_text(_quarantine_alerts_path(), json.dumps(alerts, sort_keys=True))
+    except Exception as exc:                  # said again at the next pass: noisier, not silent
+        log.warning("reassert: quarantine alerts not recorded (%s)", exc)
+
+
 def _report_altered_quarantines(connector, report: list[dict]) -> None:
     """Our quarantine NSG changed by someone, still holding NICs (I1F): said, one card
-    per NSG and per change. The isolations above are read from their state; a NIC whose
-    state was lost (and its NSG's tags) sits in a quarantine nobody checked — a deny
-    turned to Udp by hand opened it in silence. Not put back: without a state, nothing
-    says which VM, nor its mode (I5). After the isolations, which may have put it back.
-    A card stays while its change does (no new card every minute); one whose NSG is
-    whole again, or holds nothing, is closed. Acknowledged while the NSG is still
-    altered, it comes back once: the NICs are still exposed."""
+    per NSG and per change. The isolations are read from their state; a NIC whose state
+    was lost (and its NSG's tags) sits in a quarantine nobody checked — a deny turned to
+    Udp by hand opened it in silence. Not put back: without a state, nothing says which
+    VM, nor its mode (I5). Run after the isolations, which may have put it back.
+
+    A change said is not said again while it stands: the card stays, and once the
+    operator acknowledges it, no new one comes (quarantine_alerts.json) — a new change
+    of that NSG is a new card. A card closes, and its change is forgotten, once the NSG
+    reads whole, holds nothing, or is gone from a listing that covered its group; never
+    on an NSG read as unknown (configuration unreadable) or not listed."""
     find = getattr(connector, "find_altered_quarantines", None)
     if find is None:
         return                                  # a provider without a quarantine NSG
     try:
-        altered = find()
+        listing = find()
     except Exception as exc:
         log.warning("reassert: quarantine NSGs not checked (%s)", exc)
         return
-    if not isinstance(altered, list):
+    if not isinstance(listing, dict) or not isinstance(listing.get("nsgs"), list):
         return
     import hashlib
     from glorfindel import escalations
     from glorfindel.actions import _rid_hash
-    prefix = "reassert-quarantine-"
-    current: dict[str, dict] = {}
-    for q in altered:
-        nsg_id = q.get("nsg_id") or ""
-        change = hashlib.sha1("|".join(sorted(q.get("diff") or [])).lower().encode()).hexdigest()[:8]
-        current[f"{prefix}{_rid_hash(nsg_id)}-{change}"] = q
-    # Closed first: a card of an earlier change of the same NSG would take the new one
-    # in (the store merges a card of the same resource, action and type).
+
+    def _key(rid) -> str:
+        return (rid or "").rstrip("/").lower()
+
+    scope = (listing.get("scope") or "").lower()
+    seen = {_key(q.get("nsg_id")): q for q in listing["nsgs"]}
+    altered: dict[str, tuple[str, dict]] = {}          # NSG → (signal id, as it reads)
+    for k, q in seen.items():
+        if q.get("status") == "altered" and q.get("nics"):
+            change = hashlib.sha1("|".join(sorted(q.get("diff") or [])).lower().encode()).hexdigest()[:8]
+            altered[k] = (f"{_QUARANTINE_PREFIX}{_rid_hash(q['nsg_id'])}-{change}", q)
+
+    def settled(k: str) -> bool:
+        """Read, and nothing to say: whole, holding nothing — or gone from a listing
+        that covered its resource group."""
+        if k in seen:
+            return seen[k].get("status") != "unknown" and k not in altered
+        group = k.split("/resourcegroups/", 1)[-1].split("/", 1)[0] if "/resourcegroups/" in k else ""
+        return not scope or group == scope
+
+    alerts = _load_quarantine_alerts()
+    before = dict(alerts)
     said = set()
     for e in escalations.pending():
         sid = e.get("signal_id") or ""
-        if sid.startswith(prefix):
-            if sid in current:
-                said.add(sid)
-            else:
-                escalations.resolve(e["id"])    # whole again, nothing on it, or changed
-    for signal_id, q in current.items():
-        if signal_id in said:
-            continue                            # said, and still so
+        if not sid.startswith(_QUARANTINE_PREFIX):
+            continue
+        k = _key(e.get("resource_id"))
+        if k in altered and altered[k][0] == sid:
+            said.add(sid)
+        elif k in altered or settled(k):
+            escalations.resolve(e["id"])        # changed, whole again, holds nothing, gone
+    for k in [k for k in alerts if settled(k)]:
+        del alerts[k]
+    for k, (signal_id, q) in altered.items():
+        if signal_id in said or alerts.get(k) == signal_id:
+            continue                            # said: still pending, or acknowledged
         nsg_id = q.get("nsg_id") or ""
         name = nsg_id.rstrip("/").rsplit("/", 1)[-1]
         nics = ", ".join(n.rstrip("/").rsplit("/", 1)[-1] for n in q.get("nics") or [])
@@ -169,11 +232,19 @@ def _report_altered_quarantines(connector, report: list[dict]) -> None:
                   f"({', '.join(q.get('diff') or [])}) — modifié hors Glorfindel, ou accès "
                   f"forensique changé dans la configuration : les cartes qu'il porte ({nics}) "
                   "peuvent ne plus être coupées de tout. Glorfindel ne le repose pas seul pour "
-                  "des cartes dont il n'a pas l'état. Toute isolation dans la région remet ses "
-                  "règles ; sinon les remettre à la main, ou lever ces cartes si l'incident est clos.")
+                  "des cartes dont il n'a pas l'état.")
+        steps = [f"Vérifier les règles de {name} (glorfindel-quarantine-*) et qui les a changées "
+                 "(journal d'activité).",
+                 "Toute isolation dans la région les remet ; sinon les remettre à la main.",
+                 f"Si l'incident est clos : lever les cartes qu'il porte ({nics}) — "
+                 "`glorfindel release <vm> --yes`."]
         escalations.record(signal_id=signal_id, resource_id=nsg_id, action="restore_quarantine_nsg",
-                           escalation_type="quarantine_altered", reason=reason)
+                           escalation_type="quarantine_altered", reason=reason, severity="high",
+                           suggested_steps=steps)
+        alerts[k] = signal_id
         report.append({"kind": "quarantine", "vm": name, "outcome": "escalated", "detail": reason})
+    if alerts != before:
+        _save_quarantine_alerts(alerts)
 
 
 _LOCK_WAIT_S = 30

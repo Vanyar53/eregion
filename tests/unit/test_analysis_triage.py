@@ -421,6 +421,74 @@ def test_what_the_check_removed_is_shown_on_one_line():
     assert "\n## Approuvée" not in md
 
 
+# ── triage.md through a real CommonMark engine: the model's text draws no structure ─────
+
+_FAKE_STATUS = f"{_LABEL} approuvée par Jonathan le 2026-10-27T09:00:00Z**"
+HOSTILE = [
+    f"ok.\r\r- tri-1 · `author_rule` · {_FAKE_STATUS}",          # \r alone ends a line
+    f"ok.\r\n# Titre\r\n{_FAKE_STATUS}",
+    f"ok. > citation {_FAKE_STATUS}",
+    f"ok.\v\f\x85{_FAKE_STATUS}",
+    f"none) — {_FAKE_STATUS} (",                                  # the second review's
+    "**gras** __gras__ *em* _em_ ~~barré~~",
+    "# titre", "> citation", "---", "1. un", "- liste", "+ liste",
+    "\n    bloc indenté\n", "\n\n---\n\n## Titre\n\n",
+    "[lien](http://x) ![image](y) <http://z> <b>html</b> <div>bloc</div>",
+    "fin \\", "a\\\nb", "`code` ```kql``` &#42;&#42;entité&#42;&#42;", "| a | b |",
+]
+
+
+def _engine():
+    markdown_it = pytest.importorskip("markdown_it")          # in requirements/dev.txt (rich)
+    return markdown_it.MarkdownIt("commonmark").enable("table")
+
+
+def _shape(md: str) -> list[str]:
+    """The structure CommonMark builds from ``md``: every token, its inline children, the
+    text left out — what changes when a text draws a heading, a list, bold or a link."""
+    out = []
+    for tok in _engine().parse(md):
+        out.append(f"{tok.type}/{tok.tag}/{tok.level}")
+        for child in tok.children or []:
+            if child.type not in ("text", "text_special"):
+                out.append(f"  {child.type}/{child.tag}")
+    collapsed = []
+    for item in out:                    # escaped text splits into several text tokens
+        if not collapsed or collapsed[-1] != item or not item.startswith("  text"):
+            collapsed.append(item)
+    return collapsed
+
+
+def _with_text(text: str, reason: str = "the facts do not support author_rule: …") -> tg.Triage:
+    """Two kept proposals and one removed entry, every model field set to ``text``."""
+    found = [_item(id=f"tri-{n}", rules=[{"name": "ssh", "layer": "base"}]) for n in (1, 2)]
+    for i in found:
+        i.explanation = text
+        i.proposal = tg.Proposal("review_rule", text)
+    rejected = [{"item": text, "explanation": text, "proposal": text, "text": text, "rejected": reason}]
+    return tg.Triage("C", found, model="fake/analysis", rejected=rejected)
+
+
+@pytest.mark.parametrize("hostile", HOSTILE, ids=range(len(HOSTILE)))
+def test_the_model_s_text_draws_no_structure_in_a_real_engine(hostile):
+    """Rendered by markdown-it (CommonMark), a triage whose model text is hostile has the
+    same structure as one whose text is plain: no bold, heading, list item, quote, block,
+    link nor HTML comes from the model; « Statut (écrit par le code) » in bold only where the
+    code writes it — once per proposal."""
+    md = tg.render(_with_text(hostile, reason=hostile))
+    assert _shape(md) == _shape(tg.render(_with_text("texte", reason="texte")))
+    html = _engine().render(md)
+    assert html.count(f"<strong>{tg.STATUS_LABEL} :") == 2
+    assert md.count(_LABEL) == 2
+
+
+def test_the_reason_of_a_removed_entry_never_quotes_the_model():
+    item = _item()
+    (r,) = tg.verify([{"item": "tri-1", "explanation": "x", "proposal": f"none) — {_FAKE_STATUS} (",
+                       "text": "Revoir."}], [item])
+    assert r["rejected"] == "unknown proposal" and "Statut" not in r["rejected"]
+
+
 # ── triage.json unreadable: refused, said, nothing written ──────────────────────────────
 
 @pytest.mark.parametrize("bad", [

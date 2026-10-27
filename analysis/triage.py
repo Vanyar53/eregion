@@ -542,7 +542,7 @@ def verify(entries: list[dict], items_: list[Item]) -> list[dict]:
         elif item.proposal is not None or item.explanation:
             why = f"a second entry for {item.id}"
         elif e["proposal"] not in PROPOSALS:
-            why = f"unknown proposal ({e['proposal'] or 'none'})"
+            why = "unknown proposal"   # never the model's text: it is shown beside, escaped
         elif (not_here := item.allowed()[e["proposal"]]):
             why = f"the facts do not support {e['proposal']}: {not_here}"
         elif _RULE.search(e["explanation"]) or _RULE.search(e["text"]):
@@ -594,23 +594,30 @@ def _status(p: Proposal | None) -> str:
         return "en attente d'un humain (pending)"
     word = "approuvée" if p.status == APPROVED else "rejetée"
     # The human's name and note on one line, never as Markdown (they are typed, not checked).
-    by, note = (_cell(str(v).translate(_MARKUP)) for v in (p.decided_by, p.note))
+    by, note = (_plain(v) for v in (p.decided_by, p.note))
     return f"{word} par {by} le {p.decided_at}" + (f" ({note})" if note else "")
 
 
 def _cell(text: str) -> str:
-    """One line, in a table or a list: one entry is one line."""
-    return str(text).replace("|", "\\|").replace("\n", " ")
+    """One line, in a table or a list: one entry is one line — whatever ends a line for
+    CommonMark or Python (``\\r`` alone, ``\\r\\n``, ``\\v``, ``\\f``, U+2028…) is a space."""
+    return " ".join(str(text).splitlines()).replace("|", "\\|")
 
 
 # What Markdown would turn into structure: emphasis, code, a heading, a link, a quote, HTML.
 _MARKUP = str.maketrans({c: "\\" + c for c in "\\*_`#[]<>~"})
 
 
+def _plain(text: str) -> str:
+    """Text not written by the code, as text, never as structure: on one line (``_cell``),
+    its Markdown escaped (``**Statut …**`` stays two asterisks, never bold). On one line after
+    the code's own prefix, nothing in it begins a line: no heading, list, quote nor block."""
+    return _cell(str(text).translate(_MARKUP))
+
+
 def _model(text: str) -> str:
-    """The model's words as text, never as structure: on one line (``_cell``), and without
-    the Markdown that could draw a status of its own (``**Statut …**``)."""
-    return f"« {_cell(str(text).translate(_MARKUP))} »"
+    """The model's words, quoted as the model's."""
+    return f"« {_plain(text)} »"
 
 
 # Beside each proposal, its status, written by the code — the only thing that says whether a
@@ -662,9 +669,10 @@ def render(t: Triage) -> str:
             lines.append(f"  - texte du modèle, proposition : {_model(i.proposal.text)}")
     if t.rejected:
         lines += ["", f"## Écarté par la vérification ({len(t.rejected)})", ""]
-        # The model's words, removed — one line each, the reason too (it may quote the model).
+        # The model's words, removed — one line each; the reason escaped too, by defence (the
+        # code's reasons quote no model text, but a triage.json may have been edited by hand).
         lines += [f"- {_model(r.get('item'))} · {_model(r.get('proposal'))} : {_model(r.get('text'))} "
-                  f"— écarté : {_cell(r.get('rejected'))}"
+                  f"— écarté : {_plain(r.get('rejected'))}"
                   for r in t.rejected]
     lines += ["", "*Lu : " + " ; ".join(t.notes) + ".*"]
     return "\n".join(lines) + "\n"

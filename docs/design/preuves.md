@@ -755,7 +755,11 @@ réaffirmation liste les NSG de quarantaine et lève une carte par NSG modifié 
 cartes (M830), close d'elle-même quand il est de nouveau entier (M833). Sans rien écrire : sans
 état, rien ne dit quelle VM ni sous quel mode (I5). La séquence réduite garde deux
 `lose_everything` et cinq éditions identiques du client : des restes du rétrécissement —
-`isolate` puis le deny passé en Udp suffisaient à faire tomber I1, avec ou sans état.
+`isolate` puis le deny passé en Udp suffisaient à faire tomber I1, avec ou sans état. Tirées
+une à une, les étapes qui mènent à L2 ne se rencontraient presque jamais : M830 et M831
+n'étaient attrapés que par leurs séquences figées à 500 séquences. Une règle composée
+(`quarantine_altered_then_reasserted` : isoler, perdre l'état ou non, vider la quarantaine ou
+en retourner un deny, réaffirmer sans panne) les fait attraper à chaque tour au même budget.
 
 Le plus grave : après une levée qui échoue en partie, une seconde levée lisait les champs de
 rétro-compatibilité de l'état comme un ancien format, et supprimait les deny du NSG de

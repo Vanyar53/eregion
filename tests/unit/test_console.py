@@ -234,6 +234,31 @@ def test_the_catalog_of_one_kind(client):
     assert kinds("?kind=fault") == {"fault"}
 
 
+# ── The shipped rules ─────────────────────────────────────────────────────────────────
+
+def test_the_console_finds_the_shipped_rules_outside_the_repo_root(client, monkeypatch):
+    """M409: the console left glorfindel/ (26/10). Its lookup beside its own module found no rule
+    outside the repo's root (an editable install launched elsewhere): the configuration listed
+    no rule and approve-rule answered « detection_rules.yaml not found » (found by P1's review).
+    The working directory here is tmp: only the lookup beside the glorfindel package finds it.
+    An approved rule says where it went — the client's layer (P1), never the base."""
+    from pathlib import Path
+    import glorfindel
+    shipped = Path(glorfindel.__file__).parent / "rules" / "azure" / "detection_rules.yaml"
+    assert api._base_rules_path().resolve() == shipped.resolve()
+    seen = {}
+
+    def _approve(proposal_id, rules_path):
+        seen["path"] = Path(rules_path)
+        return {"rule_name": "r", "rules_file": "/tmp/x/client_rules.yaml", "rule_write": "added",
+                "rule_bound": True}
+    monkeypatch.setattr("glorfindel.proposed_rules.approve", _approve)
+    body = client.post("/api/action/approve-rule/p1").json()
+    assert body == {"ok": True, "rule_name": "r", "rules_file": "/tmp/x/client_rules.yaml",
+                    "rule_write": "added", "rule_bound": True, "rule_unbound_reason": None}
+    assert seen["path"].resolve() == shipped.resolve()
+
+
 # ── The command ───────────────────────────────────────────────────────────────────────
 
 def test_eregion_console_starts_the_console(monkeypatch):

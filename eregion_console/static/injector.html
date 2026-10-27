@@ -426,13 +426,14 @@ function renderCampaignDetail(c) {
   if (d.error) return `<div class="detail" style="color:var(--red)">${esc(d.error)}</div>`;
   const facts = d.facts || [];
   const rows = facts.map(f => `<tr><td>${esc(f.seq)}</td><td>${esc(f.ttp)}</td>
+    <td title="${esc(f.target || '')}">${esc(vmName(f.target) || '—')}</td>
     <td>${f.decision ? esc(f.decision) + ' ' + pct(f.confidence) + (f.escalated === true ? ' · escalated' : f.escalated === false ? ' · not escalated' : '')
       : `<span style="color:var(--dim)">${esc(f.decision_unknown ? 'unknown — ' + f.decision_unknown : '—')}</span>`}</td>
     <td class="wrap" style="color:var(--dim)">${esc((f.excerpt || '').slice(0, 220))}${(f.excerpt || '').length > 220 ? '…' : ''}</td></tr>`).join('');
   const showing = S.showReport.has(c.dir);
   return `<div class="detail">
     <div class="dsec s-blue"><div class="dtitle">GLORFINDEL'S DECISION ON EACH RUN (read from the files, as the campaign report reads them)</div>
-      <table class="t"><tr><th>#</th><th>ttp</th><th>decision</th><th>reasoning (excerpt)</th></tr>${rows}</table></div>
+      <table class="t"><tr><th>#</th><th>ttp</th><th>target</th><th>decision</th><th>reasoning (excerpt)</th></tr>${rows}</table></div>
     ${(d.skipped || []).length ? `<div class="dsec" style="border-color:var(--yellow)"><div class="dtitle">LEFT OUT OF THE FACTS (and of the report)</div>
       ${(d.skipped || []).map(s => `<div style="color:var(--yellow)">${esc(s)}</div>`).join('')}</div>` : ''}
     <div class="dsec s-purple"><div class="dtitle">REPORT</div>${d.report_md

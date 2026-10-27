@@ -301,6 +301,25 @@ def test_a_block_that_could_not_be_put_back_keeps_its_card_through_a_crash(monke
     assert [e for e in escalations.pending() if e.get("action") == "block_suspicious_ip"]
 
 
+def test_a_block_gone_in_human_only_keeps_its_card_through_a_crash(monkeypatch):
+    """In human_only the order already held — the card, then the marker: kept so (L1F)."""
+    import glorfindel.actions as actions
+    _save_block_state("vm", "203.0.113.9", _RID, nsg="rg/nsg", nsg_scope="subnet", rule="r",
+                      placements=[{"nsg_rg": "rg", "nsg_name": "nsg", "rule": "r"}], threat_port=22)
+    c = _connector(verify_blk={"verified": False, "missing_rules": ["r"]})
+    real = actions._update_block_entry
+
+    def dies_on_the_marker(vm, ip, **fields):
+        real(vm, ip, **fields)
+        if "drift_alerted_at" in fields:
+            raise _Died()
+    monkeypatch.setattr(actions, "_update_block_entry", dies_on_the_marker)
+    with pytest.raises(_Died):
+        reassert_active(c, AutonomyConfig(default="human_only"))
+    c.block_suspicious_ip.assert_not_called()
+    assert [e for e in escalations.pending() if e.get("action") == "block_suspicious_ip"]
+
+
 def test_an_isolation_that_could_not_be_put_back_keeps_its_card_through_a_crash(monkeypatch):
     """The same order for an isolation: the card, then "already alerted" (L1F)."""
     import glorfindel.reassert as ra

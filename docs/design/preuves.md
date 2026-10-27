@@ -764,7 +764,9 @@ sans panne) les fait attraper : 4/4 à 500 séquences (tirage uniforme : M831 1/
 a trouvé ce que la machine ne voyait pas : la passe de la watch s'arrêtait avant toute lecture
 quand l'état local était vide (la machine appelait la réaffirmation directement ; elle passe
 maintenant par `reassert_pass`, comme la watch), un acquittement défait à chaque passe, une
-carte fermée sur un NSG illisible ou hors de la liste. Mutants M834–M837, mesurés par
+carte fermée sur un NSG illisible ou hors d'une liste qui ne couvrait que son groupe — depuis la
+seconde relecture, la liste est celle de l'abonnement : une carte s'y ferme quand son NSG en a
+disparu, jamais quand la liste échoue (M897). Mutants M834–M837, mesurés par
 `tests/unit/test_reassert.py` (M834 aussi par la machine, 2/4 à 500 : il faut un monde sans
 aucun état). Une seconde relecture a trouvé le trou que la première consigne avait ouvert : listés
 dans le seul `quarantine_rg`, les NSG de quarantaine créés dans un autre groupe avant que le

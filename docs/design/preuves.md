@@ -764,9 +764,14 @@ sans panne) les fait attraper : 4/4 à 500 séquences (tirage uniforme : M831 1/
 a trouvé ce que la machine ne voyait pas : la passe de la watch s'arrêtait avant toute lecture
 quand l'état local était vide (la machine appelait la réaffirmation directement ; elle passe
 maintenant par `reassert_pass`, comme la watch), un acquittement défait à chaque passe, une
-carte fermée sur un NSG illisible ou hors de la liste. Mutants M834–M838, mesurés par
+carte fermée sur un NSG illisible ou hors de la liste. Mutants M834–M837, mesurés par
 `tests/unit/test_reassert.py` (M834 aussi par la machine, 2/4 à 500 : il faut un monde sans
-aucun état).
+aucun état). Une seconde relecture a trouvé le trou que la première consigne avait ouvert : listés
+dans le seul `quarantine_rg`, les NSG de quarantaine créés dans un autre groupe avant que le
+réglage change n'étaient plus lus (la machine ne l'a trouvé qu'une fois sur 11 à 500) — tout
+l'abonnement est relu, la séquence est figée (M838). La passe de la watch est sortie dans
+`cli._watch_reassert_pass`, testée sur son comportement ; un test structurel ne garde que ce que
+le comportement ne voit pas, les deux closures de la watch (M835, M839, M895–M898).
 
 Le plus grave : après une levée qui échoue en partie, une seconde levée lisait les champs de
 rétro-compatibilité de l'état comme un ancien format, et supprimait les deny du NSG de

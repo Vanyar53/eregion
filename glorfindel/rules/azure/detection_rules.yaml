@@ -178,16 +178,20 @@ rules:
 
   # ── Plan de contrôle : le journal d'activité (AzureActivity, AL1) ─────────────
   # Détection seule : une détection sur AzureActivity n'entraîne JAMAIS d'action
-  # autonome (garde du plan de contrôle de `decide`) — escalade `control_plane_change`.
+  # autonome — `decide` construit la décision par le code, sans appel au modèle :
+  # escalade `control_plane_change`, aucune action recommandée.
   # source: azure_activity lit le même workspace que Perf et Syslog (backend
   # azure_monitor), à condition que le journal d'activité de l'abonnement y soit envoyé
   # (paramètre de diagnostic, catégorie Administrative — pas par défaut ;
   # infra/terraform/activity_log.tf le propose pour le banc).
   # Les écritures de Glorfindel lui-même (isolation, quarantaine, blocage, levée) sont
   # écartées par l'adaptateur (glorfindel/providers/azure/activity.py) : son identité
-  # (jeton, AZURE_CLIENT_ID, GLORFINDEL_OWN_CALLERS) ET une opération qu'il fait. Son
-  # identité hors de ce qu'il fait reste, marquée GlorfindelIdentity ; une écriture d'un
-  # autre sur une règle de Glorfindel est marquée GlorfindelManaged (sévérité critique).
+  # (jeton, AZURE_CLIENT_ID, GLORFINDEL_OWN_CALLERS) ET une opération qu'il fait ET une
+  # cible qui est à lui (règle glorfindel-*, NSG de quarantaine, ce qu'un état
+  # d'isolation lui attribue). Son identité hors de ce qu'il fait, ou sur une ressource
+  # du client, reste, marquée GlorfindelIdentity ; une écriture d'un autre sur une règle
+  # de Glorfindel est marquée GlorfindelManaged (sévérité critique, toutes deux).
+  # Chaque opération a sa carte (plafond par relevé, puis une carte de synthèse).
   # Latence d'ingestion : plusieurs minutes, parfois plus de dix (hypothèse, à mesurer
   # sur le banc) — la fenêtre est d'une heure ; la déduplication suit l'opération
   # (CorrelationId, opération, ressource), une ligne arrivée en retard n'est ni ratée ni
@@ -246,10 +250,12 @@ rules:
   - name: snapshot-by-unexpected-caller
     description: >
       Snapshot d'un disque, ou accès de téléchargement à un disque ou un snapshot, par un
-      appelant — T1578.001 (Modify Cloud Compute Infrastructure: Create Snapshot). Le
-      snapshot de Glorfindel est une sauvegarde Azure Backup, pas cette opération : tout
-      appelant est inattendu, sauf ceux que la couche du client exclut (un outil de
-      sauvegarde par snapshots).
+      appelant — T1578.001 (Modify Cloud Compute Infrastructure: Create Snapshot). Hypothèse,
+      à mesurer au banc : le snapshot de Glorfindel (une sauvegarde Azure Backup) et un
+      `glorfindel restore` ne passeraient pas par cette opération — Azure Backup peut
+      pourtant produire `disks/beginGetAccess` ou `snapshots/write` ; mesuré, l'appelant
+      d'Azure Backup s'exclut dans la couche du client, comme un outil de sauvegarde par
+      snapshots.
     enabled: true
     source: azure_activity
     ttp: T1578.001

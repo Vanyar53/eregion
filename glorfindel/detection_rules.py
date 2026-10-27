@@ -746,6 +746,47 @@ def _row_identity(row: dict) -> str:
     return "row:" + "|".join(keys)
 
 
+# Control plane (AL1): at most this many cards per rule and poll, each one operation; the
+# operations beyond share one summary card that names each of them.
+_CONTROL_PLANE_CARDS_PER_POLL = 5
+
+
+def _grave(row: dict) -> bool:
+    """A write on Glorfindel's own rules, or its identity outside what it does (AL1)."""
+    return row.get("GlorfindelManaged") is True or row.get("GlorfindelIdentity") is True
+
+
+def _control_plane_operations(rows: list[dict]) -> list[dict]:
+    """One row per operation (its lines Start, Accept, Success share an identity: the
+    latest is kept), the gravest first, then the newest."""
+    by_op: dict[str, dict] = {}
+    for r in rows:
+        k = _row_identity(r)
+        if k not in by_op or str(r.get("TimeGenerated") or "") > str(by_op[k].get("TimeGenerated") or ""):
+            by_op[k] = r
+    return sorted(by_op.values(), key=lambda r: (_grave(r), str(r.get("TimeGenerated") or "")),
+                  reverse=True)
+
+
+def _control_plane_summary(rest: list[dict]) -> dict:
+    """The card of the operations past the cap: the gravest one's row, carrying the list
+    of every one of them (`OmittedOperations`) and either mark if any has it."""
+    return {
+        **rest[0],
+        "GlorfindelManaged": any(r.get("GlorfindelManaged") is True for r in rest),
+        "GlorfindelIdentity": any(r.get("GlorfindelIdentity") is True for r in rest),
+        "OmittedOperations": [
+            {"TimeGenerated": r.get("TimeGenerated") or "",
+             "OperationNameValue": r.get("OperationNameValue") or "",
+             "ActivityStatusValue": r.get("ActivityStatusValue") or "",
+             "Caller": r.get("Caller") or "",
+             "_ResourceId": r.get("_ResourceId") or r.get("ResourceId") or "",
+             "GlorfindelManaged": r.get("GlorfindelManaged") is True,
+             "GlorfindelIdentity": r.get("GlorfindelIdentity") is True}
+            for r in rest],
+    }
+
+
 def _row_attribution(row: dict, resource_id: str, asset_name: str) -> bool | None:
     """Does this row concern this asset? True/False when the row names a resource
     (`_ResourceId` / `ResourceId` / `Computer`), None when it can't tell (a query
@@ -1021,21 +1062,32 @@ class RulePoller:
                     seen = {seen["id"]: seen["at"]}
                 dispatched[key] = {i: at for i, at in (seen or {}).items() if float(at) >= cutoff}
             plan = []
+            control = is_control_plane_source(rule.source)
+            budget = _CONTROL_PLANE_CARDS_PER_POLL
             for key, (tgt, krows) in routed.items():
                 seen = dispatched.get(key, {})
                 new = [r for r in krows if _row_identity(r) not in seen]
                 if not new:
+                    continue
+                if control:
+                    # Control plane (AL1): each operation is its own card — two NSG rules
+                    # changed in one minute are two findings, never one. Capped per poll;
+                    # beyond, one summary card names every operation left without its
+                    # own: no row is marked sent without a card.
+                    ops = _control_plane_operations(new)
+                    send, budget = ops[:budget], max(0, budget - len(ops))
+                    rest = ops[len(send):]
+                    if rest:
+                        send.append(_control_plane_summary(rest))
+                    plan.append((key, tgt, send))
+                    sent_ids[key] = [_row_identity(r) for r in new]
                     continue
                 # Event rows (TimeGenerated) are one incident per cycle: the newest is
                 # sent. Aggregated rows (one per attacker, per account…) each count.
                 events = [r for r in new if r.get("TimeGenerated")]
                 send = [r for r in new if not r.get("TimeGenerated")]
                 if events:
-                    # The gravest first (AL1): a write on Glorfindel's own rules, or by its
-                    # identity outside what it does, then the newest.
-                    send.append(max(events, key=lambda r: (
-                        r.get("GlorfindelManaged") is True or r.get("GlorfindelIdentity") is True,
-                        str(r["TimeGenerated"]))))
+                    send.append(max(events, key=lambda r: str(r["TimeGenerated"])))
                 plan.append((key, tgt, send))
                 sent_ids[key] = [_row_identity(r) for r in new]
 
@@ -1076,7 +1128,7 @@ class RulePoller:
             resource_id, asset_name = sorted(targets, key=lambda t: t[1])[0]
             attribution = "unattributed"
         ts_compact = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        # Control plane (AL1): detection only — `plane` is what the guard of `decide` reads.
+        # Control plane (AL1): detection only — `plane` is what `decide` reads.
         control = is_control_plane_source(rule.source)
         grave = control and (row.get("GlorfindelManaged") is True or row.get("GlorfindelIdentity") is True)
         return {

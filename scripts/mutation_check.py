@@ -1547,18 +1547,15 @@ AGT = "glorfindel/agent.py"
 DRU = "glorfindel/detection_rules.py"
 MUTANTS += [
     ("M810", "Glorfindel's own writes not excluded: its own isolation escalates itself (AL1)", ACT,
-     "        if is_own_call(row, own):\n            continue\n", ""),
-    ("M811", "no control-plane guard: an AzureActivity detection leads to isolate_vm (AL1)", AGT,
-     "    _apply_control_plane_guard(d, signal)\n    _apply_executable_guard(d)",
-     "    _apply_executable_guard(d)"),
-    ("M812", "the control-plane guard lets a snapshot run alone (AL1)", AGT,
-     "    if not _is_control_plane(signal):\n        return\n    from glorfindel.detection_rules import normalize_row",
-     "    if not _is_control_plane(signal) or d.get(\"action\") == \"snapshot\":\n        return\n"
-     "    from glorfindel.detection_rules import normalize_row"),
+     "        if is_own_call(row, own, recorded):\n            continue\n", ""),
+    ("M811", "a control-plane detection decided by the model: it is called, and isolate_vm runs (AL1)", AGT,
+     "    if _is_control_plane(state[\"signal\"]):\n        return _control_plane_decision(state)\n", ""),
+    ("M812", "a user's token without idtyp read as an application's: the CLI's appid excludes everyone (AL1)",
+     ACT, "    return not claims.get(\"scp\") and not claims.get(\"upn\")", "    return True"),
     ("M813", "a control-plane card folded into the pending one: a write on Glorfindel's rules unseen (AL1)",
      "glorfindel/escalations.py",
      "                and escalation_type != \"control_plane_change\"\n", ""),
-    ("M814", "the control-plane guard ignores the source it read (AL1)", AGT,
+    ("M814", "the control-plane decision ignores the source it read: respond asks the model (AL1)", AGT,
      "    return ctx.get(\"plane\") == \"control\" or is_control_plane_source(str(raw.get(\"detection_source\") or \"\"))",
      "    return ctx.get(\"plane\") == \"control\""),
     ("M815", "a held control-plane decision typed low_confidence: approvable in one click (AL1)", AGT,
@@ -1567,9 +1564,9 @@ MUTANTS += [
      "    if \"/securityrules/glorfindel-\" in rid:\n        return True\n", ""),
     ("M817", "a write on the quarantine NSG not seen as Glorfindel's (AL1)", ACT,
      "        return nsg.startswith(QUARANTINE_NSG_PREFIX)\n", "        return False\n"),
-    ("M818", "Glorfindel's identity excluded whatever it does: a role it assigns is dropped (AL1)", ACT,
-     "    return bool(own) and bool(caller_ids(row) & own) and operation(row) in own_operations()",
-     "    return bool(own) and bool(caller_ids(row) & own)"),
+    ("M818", "Glorfindel's identity excluded whatever it does on its own: a role it assigns there is dropped (AL1)",
+     ACT, "    return (bool(own) and bool(caller_ids(row) & own) and operation(row) in own_operations()\n",
+     "    return (bool(own) and bool(caller_ids(row) & own)\n"),
     ("M819", "the identity in Glorfindel's token ignored (AL1)", ACT,
      "            return ids | self._token_ids\n", "            return ids\n"),
     ("M820", "the caller's ids in Claims ignored (AL1)", ACT,
@@ -1591,14 +1588,44 @@ MUTANTS += [
     ("M825", "a row on a VM's sub-resource (a role scoped on the VM) dropped, not attributed (AL1)", DRU,
      "                named, tgt = True, by_rid.get(_vm_id_of(rid))",
      "                named, tgt = True, by_rid.get(rid.lower())"),
-    ("M826", "the newest operation chosen over a write on Glorfindel's rules (AL1)", DRU,
-     "                        r.get(\"GlorfindelManaged\") is True or r.get(\"GlorfindelIdentity\") is True,\n", ""),
+    ("M826", "the newest operation first, before a write on Glorfindel's rules (AL1)", DRU,
+     "    return sorted(by_op.values(), key=lambda r: (_grave(r), str(r.get(\"TimeGenerated\") or \"\")),",
+     "    return sorted(by_op.values(), key=lambda r: str(r.get(\"TimeGenerated\") or \"\"),"),
     ("M827", "a write on Glorfindel's rules not critical (AL1)", DRU,
      "            \"severity\": \"critical\" if grave else \"high\",", "            \"severity\": \"high\","),
     ("M828", "a control-plane row normalised as a caller IP: no operation, no caller (AL1)", DRU,
      "    if row.get(\"OperationNameValue\"):\n        return {", "    if False:\n        return {"),
     ("M829", "an AzureActivity rule bound to no backend: disabled, it never polls (AL1)", DRU,
      "                backend_type_of(rule_source),\n            )", "                rule_source,\n            )"),
+]
+
+# AL1, after the 5.5 review (27/10): range M850–M859, measured by tests/unit/test_activity_logs.py.
+MUTANTS += [
+    ("M850", "a user's token: the Azure CLI's appid taken as Glorfindel's, everyone's az writes dropped (AL1)",
+     ACT, "    keys = _CLAIM_KEYS if is_app_token(claims) else _OID_CLAIMS", "    keys = _CLAIM_KEYS"),
+    ("M851", "its identity's write on a customer's rule dropped: a stolen credential unseen (AL1)", ACT,
+     "    return (bool(own) and bool(caller_ids(row) & own) and operation(row) in own_operations()\n"
+     "            and owned_target(row, recorded))",
+     "    return (bool(own) and bool(caller_ids(row) & own) and operation(row) in own_operations())"),
+    ("M852", "a customer rule its isolation moved not its own: its release escalates, critical (AL1)", ACT,
+     "                    out.add(f\"{p.get('nsg_rg', '')}/{p.get('nsg_name', '')}/{b['name']}\".lower())\n",
+     "                    pass\n"),
+    ("M853", "control plane, one card per poll: the other operations marked sent, never seen (AL1)", DRU,
+     "                    ops = _control_plane_operations(new)\n",
+     "                    ops = _control_plane_operations(new)[:1]\n"),
+    ("M854", "past the cap, no summary card: operations marked sent without a card (AL1)", DRU,
+     "                    if rest:\n                        send.append(_control_plane_summary(rest))\n", ""),
+    ("M855", "a button on a card anchored on a VM: one click restores a VM the detection never named (AL1)",
+     "glorfindel/bot.py", "    if esc_type in _ANCHORED_TYPES:\n        return None\n", ""),
+    ("M856", "the control-plane decision recommends isolating the anchor VM (AL1)", AGT,
+     "        \"explanation\": what,\n", "        \"explanation\": what,\n        \"action\": \"isolate_vm\",\n"),
+    ("M857", "an unattributed control-plane signal opens the anchor VM's incident (AL1)", AGT,
+     "        if (signal.get(\"context\") or {}).get(\"attribution\") != \"asset\":", "        if False:"),
+    ("M858", "a control-plane cycle stored in the decision memory: a precedent for a data-plane decision (AL1)",
+     AGT, "        if not _is_control_plane(signal):\n            memory.store(cycle)",
+     "        if True:\n            memory.store(cycle)"),
+    ("M859", "what an isolation state recorded forgotten once the state is gone: the release escalates (AL1)",
+     ACT, "            return frozenset(self._recorded)\n", "            return current\n"),
 ]
 
 # Mutants measured by other tests than the invariants (their lot's own).
@@ -1694,7 +1721,7 @@ TESTS["M403"] = "tests/unit/test_console_exercises.py"
 TESTS.update({f"M{n}": "tests/unit/test_watch_gate.py" for n in (*range(720, 740), *range(750, 760))})
 TESTS.update({f"M{n}": "tests/unit/test_gothmog.py" for n in (724, 725, 726, 727)})
 TESTS.update({f"M{n}": "tests/unit/test_host_console.py" for n in range(740, 750)})  # UI-1c
-TESTS.update({f"M{n}": "tests/unit/test_activity_logs.py" for n in range(810, 830)})  # AL1
+TESTS.update({f"M{n}": "tests/unit/test_activity_logs.py" for n in (*range(810, 830), *range(850, 860))})  # AL1
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

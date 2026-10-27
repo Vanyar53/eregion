@@ -281,7 +281,8 @@ def _note_failure(cdir: Path, error: Exception) -> int:
 
 def write_report(cdir: Path, *, model: str | None = None, llm=None,
                  index_path: Path | None = None, say=_say) -> str:
-    """Write ``cdir/report.md`` once: ``written``, ``exists`` (already there), ``busy``
+    """Write ``cdir/report.md`` once: ``written``, ``exists`` (already there), ``without`` (no
+    report, by choice — V1: a campaign run --without-glorfindel), ``busy``
     (another pass holds the campaign) or ``failed: …``. Never raises."""
     cdir = Path(cdir)
     try:

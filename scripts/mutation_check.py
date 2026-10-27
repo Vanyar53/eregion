@@ -1605,6 +1605,102 @@ MUTANTS += [
      'if q is not None and q["GroupId"] in e["groups"]:'),
 ]
 
+# IA1 (#88): the analysis AI's own model and memory, never Glorfindel's; the triage computed
+# from the runs, the catalog, the rules and the infrastructure code; nothing without a human.
+SEP = "analysis/separation.py"
+TRI = "analysis/triage.py"
+MUTANTS += [
+    ("M780", "the analysis may reason with Glorfindel's decision model (IA1)", SEP,
+     "    if _model_name(model) == _model_name(defender):\n", "    if False:\n"),
+    ("M781", "Glorfindel's model under another provider's prefix passes as another model (IA1)", SEP,
+     '    return str(model or "").strip().lower().rsplit("/", 1)[-1]\n', '    return str(model or "")\n'),
+    ("M782", "an index reaching Glorfindel's state through « .. » or a link is let through (IA1)", SEP,
+     "    p = Path(path).expanduser().resolve()\n", "    p = Path(path).expanduser()\n"),
+    ("M783", "the analysis index may lie in Glorfindel's memory (IA1)", SEP,
+     "    if p == state or state in p.parents:\n", "    if False:\n"),
+    ("M784", "the report opens its index without the separation's check (IA1)", CREP,
+     "    p = separation.check_index(Path(path) if path else index_path())\n",
+     "    p = Path(path) if path else index_path()\n"),
+    ("M785", "the report calls its model without the separation's check (IA1)", CREP,
+     "    mdl = separation.check_model(model or analysis_model())   # IA1: never Glorfindel's\n",
+     "    mdl = model or analysis_model()\n"),
+    ("M786", "an escalation is triaged before a missed technique (IA1)", TRI,
+     '    "missed": (1, ', '    "missed": (3, '),
+    ("M787", "a comment in the infrastructure code counts as collection (IA1)", TRI,
+     '            elif ch == "#" or two == "//":\n                break\n',
+     "            elif False:\n                break\n"),
+    ("M788", "a base rule the client's layer disables still watches its technique (IA1)", TRI,
+     '        merged = [r for r in merged if r["name"] not in disabled]\n', "        merged = list(merged)\n"),
+    ("M789", "a proposal the computed facts do not support is kept (IA1)", TRI,
+     '        elif (not_here := item.allowed()[e["proposal"]]):\n', '        elif (not_here := ""):\n'),
+    ("M790", "a proposal that carries a rule is kept: the analysis writes a rule (IA1)", TRI,
+     '        elif _RULE.search(e["explanation"]) or _RULE.search(e["text"]):\n', "        elif False:\n"),
+    ("M791", "the model's status is kept: a proposal approved without a human (IA1)", TRI,
+     '        item.proposal = Proposal(kind=e["proposal"], text=e["text"], status=PENDING)\n',
+     '        item.proposal = Proposal(kind=e["proposal"], text=e["text"], status=str(raw.get("status") or PENDING))\n'),
+    ("M792", "a decision that names no human is recorded (IA1)", TRI,
+     '    if not str(by).strip():\n        raise ValueError("a decision names the human who takes it (--by)")\n', ""),
+    ("M793", "a decided proposal is decided again (IA1)", TRI,
+     "        if item.proposal.status != PENDING:\n", "        if False:\n"),
+    ("M794", "a new triage writes over a human's decision (IA1)", TRI,
+     "    if not replace_decided and old is not None and any(\n", "    if False and old is not None and any(\n"),
+    ("M795", "an unknown decision said taken is kept (IA1)", TRI,
+     "            elif cr._ACTED.search(told):\n", "            elif False:\n"),
+    ("M796", "a second entry for an item replaces the first (IA1)", TRI,
+     "        elif item.proposal is not None or item.explanation:\n", "        elif False:\n"),
+    ("M797", "the triage calls Glorfindel's model (IA1)", TRI,
+     "    mdl = separation.check_model(model or analysis_model())\n", "    mdl = model or analysis_model()\n"),
+    ("M798", "the harness does not count an obeyed planted line the check removed (IA1)",
+     "analysis/triage_cases.py", "    entries = [r for r in t.rejected] + [\n", "    entries = [] + [\n"),
+    ("M799", "a collection that cannot be read is called « not collected » (IA1)", TRI,
+     '            elif coll.collected is None:\n                causes.append("collection_unknown")\n',
+     '            elif coll.collected is None:\n                causes.append("not_collected")\n'),
+]
+
+# IA1, after the review (M840–M842, M844): the rules as the watch loads them, one decision at
+# a time, an unreadable triage refused, one entry per line. (M843, a prose filter, is gone with
+# it: no turn of phrase is filtered — the code's status decides, M871–M878.)
+MUTANTS += [
+    ("M840", "an entry of the client's layer the watch skips replaces a base rule in the triage (IA1)", TRI,
+     "            if why := _invalid_client_rule(entry):\n", '            if why := "":\n'),
+    ("M841", "two decisions taken at once: the second write loses the first (IA1)", TRI,
+     "    with _locked(campaign_dir):\n        t = load(campaign_dir)\n",
+     "    with open(os.devnull):\n        t = load(campaign_dir)\n"),
+    ("M842", "an unreadable triage.json ends in a trace, not a refusal (IA1)", TRI,
+     "    except (OSError, ValueError, TypeError, AttributeError, KeyError) as e:",
+     "    except OSError as e:"),
+    ("M844", "the reason of a removed entry, quoting the model, breaks triage.md (IA1)", TRI,
+     "— écarté : {_plain(r.get('rejected'))}", "— écarté : {r['rejected']}"),
+]
+
+# IA1, second review (M871–M875): beside each proposal, the status the code wrote — the only
+# thing that says a human decided; the model's text shown as its text; the save locked too.
+MUTANTS += [
+    ("M871", "the status shown beside a proposal comes from the model's text, not the code (IA1)", TRI,
+     "· **{STATUS_LABEL} : {_status(i.proposal)}**", "· **{STATUS_LABEL} : {_cell(i.proposal.text)}**"),
+    ("M872", "the model's Markdown is rendered: its text can draw a status of its own (IA1)", TRI,
+     "    return _cell(str(text).translate(_MARKUP))\n", "    return _cell(text)\n"),
+    ("M873", "a new triage written without the lock: a decision taken meanwhile is lost (IA1)", TRI,
+     "    with _locked(campaign_dir):\n        return _save(campaign_dir, t, replace_decided)\n",
+     "    with open(os.devnull):\n        return _save(campaign_dir, t, replace_decided)\n"),
+    ("M874", "a refusal of the analysis model exits 1, as an error: H0 gives no advice (IA1)", SEP,
+     "        return REFUSED\n", "        return 1\n"),
+    ("M875", "triage.md no longer says that only the code's status counts (IA1)", TRI,
+     "\"**Aucune décision n'est prise par le modèle : seul", "\"**Le modèle propose : seul"),
+]
+
+# IA1, third review (M876–M878): measured through a real CommonMark engine (markdown-it).
+MUTANTS += [
+    ("M876", "the reason of a removed entry rendered without escaping: a bold status from it (IA1)", TRI,
+     "— écarté : {_plain(r.get('rejected'))}", "— écarté : {_cell(r.get('rejected'))}"),
+    ("M877", "a line ends on \\n only: a \\r of the model starts a list item of its own (IA1)", TRI,
+     '    return " ".join(str(text).splitlines()).replace("|", "\\\\|")\n',
+     '    return str(text).replace("|", "\\\\|").replace("\\n", " ")\n'),
+    ("M878", "the reason of an unknown proposal quotes the model's text (IA1)", TRI,
+     '            why = "unknown proposal"   # never the model\'s text: it is shown beside, escaped\n',
+     "            why = f\"unknown proposal ({e['proposal'] or 'none'})\"\n"),
+]
+
 # Mutants measured by other tests than the invariants (their lot's own).
 TESTS = {mid: INSCRIPTION_TESTS for mid in ("M42", "M43", "M44", "M45", "M46", "M47")}
 TESTS.update({mid: DOCS_TESTS for mid in ("M48", "M49")})
@@ -1700,6 +1796,12 @@ TESTS["M403"] = "tests/unit/test_console_exercises.py"
 TESTS.update({f"M{n}": "tests/unit/test_watch_gate.py" for n in (*range(720, 740), *range(750, 760))})
 TESTS.update({f"M{n}": "tests/unit/test_gothmog.py" for n in (724, 725, 726, 727)})
 TESTS.update({f"M{n}": "tests/unit/test_host_console.py" for n in range(740, 750)})  # UI-1c
+# IA1 (#88): the separation in test_analysis_separation.py, the triage in test_analysis_triage.py.
+TESTS.update({f"M{n}": "tests/unit/test_analysis_separation.py" for n in range(780, 786)})
+TESTS.update({f"M{n}": "tests/unit/test_analysis_triage.py" for n in range(786, 800)})
+TESTS["M840"] = "tests/unit/test_analysis_rules_parity.py"      # against the watch's own loader
+TESTS.update({f"M{n}": "tests/unit/test_analysis_triage.py" for n in (841, 842, 844, 871, 872, 873, 875, 876, 877, 878)})
+TESTS["M874"] = "tests/unit/test_analysis_separation.py"
 # I1F (#226): M830–M832 by the machine (their frozen sequences catch them too); M833 is no
 # property of the world (a card closed too soon), its regression and unit tests only.
 TESTS["M833"] = "tests/unit/test_invariant_regressions.py -k altered_quarantine tests/unit/test_reassert.py"

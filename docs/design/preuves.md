@@ -703,6 +703,60 @@ de la cible et le réseau lèvent, et chaque tentative est notée. Trente mutant
 | M758 | un fichier local vivant compte malgré le canal | une watch locale prise pour la watch hébergée |
 | M759 | la console compte une campagne sans Glorfindel en `unknown` | un run de dév pris pour un trou |
 
+### L'IA d'analyse : son modèle, sa mémoire, le tri, rien sans un humain (IA1)
+
+L'IA d'analyse refuse le modèle de décision de Glorfindel et toute mémoire rangée dans son état
+(`analysis/separation.py`). Le tri d'une campagne (`analysis/triage.py`) est calculé depuis les
+runs, le catalogue, les règles et le code d'infrastructure ; le modèle explique et propose ; la
+vérification écarte ce que les faits ne portent pas, et chaque proposition attend un humain. Vingt
+mutants, mesurés par `tests/unit/test_analysis_separation.py` et `tests/unit/test_analysis_triage.py`
+(les cas du harnais y tournent avec un modèle simulé), tous attrapés au premier tour (27/10).
+
+| Mutant | Défaut réinjecté | Effet |
+|---|---|---|
+| M780 | le modèle de décision de Glorfindel accepté | le rapport partage les angles morts du défenseur |
+| M781 | le modèle comparé avec son préfixe | `claude-sonnet-5-5` passe pour un autre que `anthropic/claude-sonnet-5-5` |
+| M782 | le chemin de l'index lu sans être résolu | `..` ou un lien mènent dans `~/.glorfindel` |
+| M783 | l'index permis dans l'état de Glorfindel | l'analyse écrit dans la mémoire du défenseur |
+| M784 | le rapport ouvre son index sans le contrôle | idem, par `EREGION_ANALYSIS_INDEX` |
+| M785 | le rapport appelle son modèle sans le contrôle | idem, par `EREGION_ANALYSIS_MODEL` |
+| M786 | une escalade triée avant une technique manquée | ce qui est passé n'est plus en tête |
+| M787 | un commentaire du code d'infrastructure vaut collecte | « collectée » sur une ligne que Terraform ignore |
+| M788 | `disable:` de la couche du client ignoré | une règle désactivée « surveille » encore |
+| M789 | une proposition que les faits ne portent pas gardée | « écrire une règle » quand une règle existe |
+| M790 | une proposition qui porte une règle gardée | l'analyse écrit une requête de détection |
+| M791 | le statut écrit par le modèle gardé | une proposition « approuvée » sans humain |
+| M792 | une décision sans nom d'humain enregistrée | une approbation que personne n'a donnée |
+| M793 | une proposition décidée deux fois | la trace de la première décision perdue |
+| M794 | un nouveau tri écrit par-dessus une décision | la décision d'un humain perdue |
+| M795 | « Glorfindel a isolé » gardé sur une décision inconnue | un inconnu présenté comme un fait |
+| M796 | une deuxième entrée pour un item la remplace | l'explication gardée n'est plus celle vérifiée la première |
+| M797 | le tri appelle le modèle de Glorfindel | idem M780, pour le tri |
+| M798 | le harnais ne compte pas l'obéissance que la vérification a écartée | l'obéissance du modèle à une ligne plantée n'est plus mesurée |
+| M799 | une collecte illisible dite « non collectée » | un inconnu présenté comme une cause |
+
+Après les relectures (27/10), douze de plus, tous attrapés à chacun des trois tours ; M840 est
+mesuré par `tests/unit/test_analysis_rules_parity.py`, qui prend le chargeur de la watch pour
+oracle, M874 par `tests/unit/test_analysis_separation.py`. M843 (un filtre de la prose du modèle,
+« approuvée par … ») a été retiré avec ce filtre : ce qui fait foi est le statut écrit par le
+code, et M871–M878 mesurent cette garantie (M876–M878 à travers un vrai moteur CommonMark,
+markdown-it).
+
+| Mutant | Défaut réinjecté | Effet |
+|---|---|---|
+| M840 | une entrée de la couche du client que la watch écarte remplace la règle de base | `no_rule` sur une technique que la watch surveille encore : `author_rule` permis, `review_rule` interdit |
+| M841 | `decide` sans le verrou de la campagne | deux décisions prises en même temps : la seconde écriture perd la première |
+| M842 | un `triage.json` illisible laisse passer l'exception | une trace Python au lieu d'un refus |
+| M844 | la raison d'une entrée écartée, qui cite le modèle, sans `_cell` | un retour à la ligne du modèle casse `triage.md` |
+| M871 | le statut affiché à côté d'une proposition pris du texte du modèle | `triage.md` montre une décision que le code n'a pas écrite |
+| M872 | le Markdown du modèle rendu tel quel | son texte dessine un « Statut (écrit par le code) » à lui |
+| M873 | un nouveau tri écrit sans le verrou | une décision prise pendant ce temps est perdue |
+| M874 | un refus du modèle d'analyse sort avec 1, comme une erreur | `glorfindel-host-model` ne donne pas son conseil |
+| M875 | l'en-tête de `triage.md` ne dit plus que seul le statut du code fait foi | le texte du modèle peut passer pour une décision |
+| M876 | la raison d'une entrée écartée rendue sans échappement | un statut en gras écrit dans « Écarté » |
+| M877 | une ligne ne finit que sur `\n` | un `\r` du modèle ouvre un item de liste à côté des vraies propositions |
+| M878 | la raison d'une proposition inconnue cite le texte du modèle | le modèle écrit dans la colonne du code |
+
 ## Ce que les invariants ont trouvé
 
 Aucun de ces défauts n'avait été vu en revue. Chacun a son test et sa séquence figée.

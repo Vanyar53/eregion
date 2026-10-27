@@ -263,6 +263,8 @@ infra/terraform/              → module Celebrimbor : infra de test Azure modul
                                 sont le même fichier : cinquième passe C1) ; `migrate_state_files()` au démarrage du watch.
                                 CI : job macOS (APFS insensible à la casse) ; `main` protégée, checks requis.
   blocks/<vm>--<h>.json       → IPs bloquées par VM (même clé)
+  quarantine_alerts.json      → I1F : NSG de quarantaine → le changement déjà signalé (carte `quarantine_altered`) ;
+                                oublié quand le NSG est de nouveau entier — un acquittement ne relève pas de carte
   proposed_rules.jsonl        → règles de détection proposées (en attente d'approbation)
   client_rules.yaml           → P1 : la couche du client — règles approuvées (`approve-rule`, War Room), règles de
                                 base remplacées (même nom) ou désactivées (`disable:`), chargée par-dessus la base

@@ -759,7 +759,14 @@ cartes (M830), close d'elle-même quand il est de nouveau entier (M833). Sans ri
 une à une, les étapes qui mènent à L2 ne se rencontraient presque jamais : M830 et M831
 n'étaient attrapés que par leurs séquences figées à 500 séquences. Une règle composée
 (`quarantine_altered_then_reasserted` : isoler, perdre l'état ou non, vider la quarantaine ou
-en retourner un deny, réaffirmer sans panne) les fait attraper à chaque tour au même budget.
+en retourner un deny — l'entrant passé à un autre protocole une fois sur deux —, réaffirmer
+sans panne) les fait attraper : 4/4 à 500 séquences (tirage uniforme : M831 1/2). La relecture
+a trouvé ce que la machine ne voyait pas : la passe de la watch s'arrêtait avant toute lecture
+quand l'état local était vide (la machine appelait la réaffirmation directement ; elle passe
+maintenant par `reassert_pass`, comme la watch), un acquittement défait à chaque passe, une
+carte fermée sur un NSG illisible ou hors de la liste. Mutants M834–M838, mesurés par
+`tests/unit/test_reassert.py` (M834 aussi par la machine, 2/4 à 500 : il faut un monde sans
+aucun état).
 
 Le plus grave : après une levée qui échoue en partie, une seconde levée lisait les champs de
 rétro-compatibilité de l'état comme un ancien format, et supprimait les deny du NSG de

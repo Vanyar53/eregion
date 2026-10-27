@@ -439,7 +439,7 @@ HOSTILE = [
 
 
 def _engine():
-    markdown_it = pytest.importorskip("markdown_it")          # in requirements/dev.txt (rich)
+    import markdown_it  # requirements/dev.txt (via rich): missing, it fails — never a silent skip
     return markdown_it.MarkdownIt("commonmark").enable("table")
 
 

@@ -443,6 +443,23 @@ def test_a_failed_release_keeps_the_placement_it_couldnt_undo(monkeypatch):
          ("release", WEB1, WEB1, None))
 
 
+def test_a_bare_nic_isolated_after_its_state_is_lost_doesnt_carry_its_rules(monkeypatch):
+    """The other side of the test above (2 000 sequences, seed 302): the NIC left bare,
+    both releases kept it — then the test loses the state. Isolated again, bare, nothing
+    says it was ever ours: "none" is all Glorfindel can know, and its release can't reach
+    the old isolation on the NIC's own NSG. A state held the NIC after the loss, but
+    never while it was bare: the exemption holds (I8F, relecture)."""
+    q = _NSG.format(rg="rg-edge", name="nsg-glorfindel-quarantine-northeurope")
+    _run(monkeypatch, _net(quarantine=True, legacy=("api-nic", False), api_nic={"own": "dedicated"}),
+         ("lose_everything", API, API, None, API, q, "reisolate"),
+         ("someone_detaches_the_quarantine", _nic("rg-edge", "api-nic")),
+         ("release", API, API, None),
+         ("release", API, API, None),
+         ("lose_state", API),
+         ("isolate", API, API, None),
+         ("release", API, API, None))
+
+
 def test_a_reset_doesnt_skip_a_bare_nic_whose_original_is_unknown(monkeypatch):
     """The same, a reset in place of the second isolation: the bare NIC, in quarantine for
     the state but its original unknown there and on no tag, was skipped — `swept`, the

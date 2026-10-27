@@ -760,7 +760,9 @@ côté** : I8 comptait les règles du NSG propre d'une carte laissée nue que ri
 NSG (le journal du test le dit : `_untraceable`), là où I3 et les blocages l'excluent déjà ;
 l'état et les tags perdus, la levée ne peut pas le savoir. Il ne les compte plus que si le
 **test** a perdu l'état de la VM après la dernière fois qu'il a vu un état tenir la carte en
-quarantaine (`quarantine_held`, son journal). Une première version lisait l'état dont la levée
+quarantaine pendant qu'elle était nue (`quarantine_held`, son journal) : cet état savait qu'on
+avait retiré notre NSG. Une carte isolée nue après la perte, que rien ne dit nôtre, garde
+l'exemption (2 000 séquences, figé). Une première version lisait l'état dont la levée
 partait : une levée qui jetait le placement qu'elle n'avait pas su défaire gagnait l'exemption
 (relecture ; M862, figé).
 Une règle composée (`bare_with_an_unknown_original`) rend la séquence courante : tirées une à

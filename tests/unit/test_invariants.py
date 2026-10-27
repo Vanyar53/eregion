@@ -386,7 +386,7 @@ class IsolationMachine(RuleBasedStateMachine):
         self.state_lost_at: dict[str, int] = {}             # VM → tick
         self.tags_lost_at: dict[str, int] = {}              # quarantine NSG → tick
         self.state_had: dict[str, int] = {}                 # NIC → record a state once held
-        self.quarantine_held: dict[str, int] = {}           # NIC → last tick a state held it in quarantine
+        self.quarantine_held: dict[str, int] = {}           # NIC → last tick a state held it in quarantine, bare
         self.before_quarantine: dict[str, str | None] = {}   # NIC → what it carried
         # (NSG, rule) someone turned into an allow → (the rule before, the rule after);
         # before = None for an allow they added under one of our names.
@@ -727,9 +727,11 @@ class IsolationMachine(RuleBasedStateMachine):
         After a release: a NIC left bare whose original nothing records (_untraceable)
         doesn't carry the rules of its own NSG, off it — as for I3 (_back_to_design) and
         the blocks (_block_rules_for) — only if the TEST lost the VM's state after the
-        last time it saw a state hold that NIC in quarantine (its journal, A0). A state
-        that still held it when the release began, or that the code dropped itself,
-        earns nothing: Glorfindel knew, and must say what it can't undo (I8F)."""
+        last time it saw a state hold that NIC in quarantine while the NIC was bare (its
+        journal, A0): such a state knew someone took our NSG off. One that still held it
+        when the release began, or that the code dropped itself, earns nothing —
+        Glorfindel knew, and must say what it can't undo (I8F). A NIC isolated bare
+        after the loss, nothing recording it was ever ours, earns it."""
         untied = frozenset()
         if released:
             lost = self.state_lost_at.get(key(vm), -1)
@@ -1711,8 +1713,8 @@ class IsolationMachine(RuleBasedStateMachine):
         for vm in self.live:                     # which records a state has held
             for p in (self._state(vm) or {}).get("placements") or []:
                 nk = key(p.get("nic_id") or "")
-                if p.get("kind") == "quarantine":
-                    self.quarantine_held[nk] = self.ticks
+                if p.get("kind") == "quarantine" and (self.fake.nics.get(nk) or {}).get("nsg") is None:
+                    self.quarantine_held[nk] = self.ticks     # a state saw it taken off our NSG
                 if p.get("original_nsg_id") and nk in self.recorded_at:
                     self.state_had[nk] = self.recorded_at[nk][0]
 

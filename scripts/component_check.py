@@ -112,8 +112,9 @@ TOGETHER = (
     "test_docs_budget.py", "test_exercise.py", "test_exercise_guard.py",
     "test_experiment_schema.py", "test_glorfindel_host.py", "test_host_console.py",
     "test_host_deploy.py", "test_hosted_report.py", "test_indicators.py",
-    "test_makefile_bench.py", "test_makefile_campaign.py", "test_observation.py",
-    "test_orodruin_kill.py", "test_palantir.py", "test_provider_boundary.py",
+    "test_makefile_bench.py", "test_makefile_campaign.py", "test_makefile_secrets.py",
+    "test_observation.py", "test_orodruin_kill.py", "test_palantir.py", "test_provider_boundary.py",
+    "test_repo_hermetic.py",
     "test_run_channel.py", "test_watch_channel.py", "test_watch_gate.py",
 )
 
@@ -273,8 +274,9 @@ def run_tests(name: str, extra: list[str]) -> int:
     make_absent(component.absent())
     import pytest
 
-    # In the full suite's order (alphabetical): a few tests read state an earlier file left
-    # in a module (test_glorfindel.py's quarantine locks), as they do in the full run.
+    # In the full suite's order (alphabetical), for a run that reads like the full one. No test
+    # depends on it: the quarantine locks' test once read what an earlier file left in the
+    # module, and has its own empty locks since HY1 (it passes alone, in order and reversed).
     files = [str(REPO / "tests" / "unit" / f) for f in sorted(component.tests)]
     return int(pytest.main([*files, "-q", "-p", "no:cacheprovider", *extra]))
 

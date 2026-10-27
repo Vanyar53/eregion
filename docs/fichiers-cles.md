@@ -206,6 +206,14 @@ eregion_core/
                         zone `bench`, migration) ; `check_zone` (production : technique non destructive seulement,
                         `destructive=None` refusé, panne jamais) ; `check_target` = les trois. Banc : `EREGION_BENCH`
                         (défaut `celebrimbor`, instance nommée `celebrimbor-<nom>`). Tout inconnu est refusé.
+  signals.py          → D1 : le contrat des signaux (Signal + severity_for_ttp), écrit par les injecteurs, lu par
+                        la watch — dans le cœur, pour que Glorfindel tourne sans Annatar (ex-annatar/signals/schema.py).
+
+scripts/component_check.py → D1 : chaque composant tourne seul — Glorfindel, Annatar, Gothmog et le cœur, leurs
+                        modules importés et leurs tests joués avec les autres composants ABSENTS (un chercheur en
+                        tête de sys.meta_path), et les dépendances de Glorfindel absentes pour un injecteur ; les
+                        passerelles permises (BRIDGES, CROSSINGS) avec leur raison. CI : components.yml ; tests :
+                        tests/unit/test_components.py. Les profils d'usage : docs/profils/, tests/unit/test_profiles.py.
 
 annatar/
   runner/engine.py    → inscription (`eregion_core.inscription.check_target` : périmètre du banc + tags `eregion-target`/`eregion-zone`
@@ -216,8 +224,8 @@ annatar/
   runner/detection.py → règle pure : quelle détection compte pour un run (TTP, resource_id sans la casse, vue ≥ attack_time)
                         et sa latence depuis attack_time — les deux chemins de l'attente, et le canal retour (#159)
   runner/parser.py    → Scenario dataclass simplifié (detection: timeout/prerequisites/hints)
-  signals/schema.py   → Signal + severity_for_ttp (T1486/T1041/T1110/T1548)
-  signals/emitter.py  → signal normalisé JSONL
+  signals/emitter.py  → signal normalisé JSONL ; le contrat (Signal + severity_for_ttp) est dans eregion_core/signals.py,
+                        lu aussi par Glorfindel (D1 : sorti d'Annatar, pour que Glorfindel tourne sans lui)
 
 annatar/scenarios/azure/
   Structure: name, mitre, target, setup, steps, detection{timeout, prerequisites, hints}
@@ -264,6 +272,8 @@ infra/terraform/              → module Celebrimbor : infra de test Azure modul
                                 sont le même fichier : cinquième passe C1) ; `migrate_state_files()` au démarrage du watch.
                                 CI : job macOS (APFS insensible à la casse) ; `main` protégée, checks requis.
   blocks/<vm>--<h>.json       → IPs bloquées par VM (même clé)
+  quarantine_alerts.json      → I1F : NSG de quarantaine → le changement déjà signalé (carte `quarantine_altered`) ;
+                                oublié quand le NSG est de nouveau entier, ne porte plus rien ou a disparu — un acquittement ne relève pas de carte
   proposed_rules.jsonl        → règles de détection proposées (en attente d'approbation)
   client_rules.yaml           → P1 : la couche du client — règles approuvées (`approve-rule`, War Room), règles de
                                 base remplacées (même nom) ou désactivées (`disable:`), chargée par-dessus la base

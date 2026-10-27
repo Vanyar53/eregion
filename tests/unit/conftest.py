@@ -1,4 +1,19 @@
+import importlib.util
+
 import pytest
+
+
+def _present(package: str) -> bool:
+    """D1: a component's tests also run with the other components absent
+    (scripts/component_check.py) — a fixture of an absent one has nothing to redirect."""
+    try:
+        return importlib.util.find_spec(package) is not None
+    except ModuleNotFoundError:   # made absent by the component check
+        return False
+
+
+GLORFINDEL = _present("glorfindel")
+CONSOLE = _present("eregion_console")
 
 
 @pytest.fixture(autouse=True)
@@ -53,6 +68,8 @@ def isolated_escalations_store(tmp_path, monkeypatch):
     Prevents test runs from writing pending escalations to ~/.glorfindel/,
     which the Discord bot would then pick up as real incidents.
     """
+    if not GLORFINDEL:
+        return
     import glorfindel.escalations as esc_module
     monkeypatch.setattr(esc_module, "_STORE", tmp_path / "escalations.jsonl")
 
@@ -60,6 +77,8 @@ def isolated_escalations_store(tmp_path, monkeypatch):
 @pytest.fixture(autouse=True)
 def isolated_rule_status(tmp_path, monkeypatch):
     """Redirect rule_status.json to a temp file — avoids root-owned Docker file."""
+    if not GLORFINDEL:
+        return
     import glorfindel.detection_rules as dr_module
     monkeypatch.setattr(dr_module, "_STATUS_FILE", tmp_path / "rule_status.json")
 
@@ -70,6 +89,8 @@ def stop_rule_pollers(isolated_rule_status):
     undone (this fixture's teardown runs first): a poll thread outlived its test and
     wrote the operator's real ~/.glorfindel/rule_status.json (sixth review, S5)."""
     yield
+    if not GLORFINDEL:
+        return
     import glorfindel.detection_rules as dr_module
     for poller in list(dr_module.RulePoller._live):
         poller.stop(join_s=2.0)
@@ -91,6 +112,8 @@ def no_write_outside_the_sandbox():
 @pytest.fixture(autouse=True)
 def isolated_posture_state(tmp_path, monkeypatch):
     """Redirect posture_state.json to a temp file."""
+    if not GLORFINDEL:
+        return
     import glorfindel.posture as posture_module
     monkeypatch.setattr(posture_module, "_STATE_FILE", tmp_path / "posture_state.json")
 
@@ -105,6 +128,8 @@ def isolated_glorfindel_home(tmp_path, monkeypatch):
     War Room and the LLM prompt read that directory). One fixture for all the others,
     so "0 écriture dans ~/.glorfindel" holds by construction.
     """
+    if not GLORFINDEL:
+        return
     home = tmp_path / "glorfindel-home"
     import glorfindel.actions as actions
     import glorfindel.jobs as jobs
@@ -140,6 +165,8 @@ def no_local_glorfindel_config(monkeypatch):
     Azure" held only on a machine without that file, and the suite ran ~5x slower.
     Tests that need a config build or inject one explicitly.
     """
+    if not GLORFINDEL:
+        return
     import glorfindel.config as config
     monkeypatch.setattr(config, "_DEFAULT_PATHS", [])
 
@@ -151,6 +178,8 @@ def no_console_settings(monkeypatch):
     for name in ("EREGION_CONSOLE_TOKEN", "EREGION_CONSOLE_SECTIONS"):
         monkeypatch.setenv(name, "")      # recorded, so restored even if a CLI test sets it
         monkeypatch.delenv(name)
+    if not CONSOLE:
+        return
     from eregion_console import sections
     monkeypatch.setitem(sections._cache, "key", None)
 

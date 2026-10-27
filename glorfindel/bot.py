@@ -815,6 +815,6 @@ def run() -> None:
     else:
         _console.print(
             f"[yellow]⚠ {_ALLOWED_USERS_ENV} et {_ALLOWED_ROLES_ENV} vides : tous les boutons "
-            "refusent (fermé par défaut). Les cartes se jugent dans la War Room.[/yellow]")
+            "refusent (fermé par défaut). Les cartes se jugent dans la console (page Glorfindel, TO JUDGE).[/yellow]")
     bot = GlorfindelBot(channel_id=int(channel_id_str), ping_role=ping_role, button_policy=policy)
     bot.run(token, log_handler=None)

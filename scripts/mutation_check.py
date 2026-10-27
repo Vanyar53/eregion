@@ -1335,6 +1335,12 @@ MUTANTS = [
      '    --build-arg "EREGION_REF=$ref" --build-arg "EREGION_REVISION=$commit" \\\n', ""),
     ("M567", "the header shows the package's version over the deployed tag (UI-2)", SEC,
      '    label = ref or (f"v{package}" if package else "")', '    label = (f"v{package}" if package else "")'),
+    # #222 — finitions: the content security policy on every response.
+    ("M568", "the console's pages can be framed by another site, and talk to another origin (#222)", CON,
+     '    response.headers["Content-Security-Policy"] = _CSP\n', ""),
+    ("M569", "glorfindel --version written by hand again: it drifts from the package (#222)", GCLI,
+     '@click.version_option(package_name="eregion", prog_name="glorfindel")',
+     '@click.version_option(version="0.2.0", prog_name="glorfindel")'),
     ("M408", "eregion console keeps compose's empty service principal: no managed identity (UI-1, H0)",
      "eregion_console/cli.py", "    _drop_empty_service_principal_env()\n", ""),
     ("M409", "the console looks for the shipped rules beside itself: none outside the repo's root (UI-1, P1 review)",
@@ -1451,6 +1457,67 @@ MUTANTS = [
     ("M749", "host_env.py --check refuses H0's host.env, under the former name (UI-1c)",
      "infra/glorfindel-host/host_env.py",
      "    for name in (TOKEN, LEGACY_TOKEN):\n", "    for name in (TOKEN,):\n"),
+]
+
+# I1F (#226): our quarantine NSG altered while its NICs' state is lost — read, and said.
+MUTANTS += [
+    ("M830", "the reassertion doesn't read the quarantine NSGs: one altered, its NICs' state lost, "
+             "goes unsaid (I1F, L2)", R,
+     "    _report_altered_quarantines(connector, report)\n    return report\n\n\ndef reassert_pass(",
+     "    return report\n\n\ndef reassert_pass("),
+    ("M831", "a rule's signature leaves its protocol out: our quarantine deny turned to Udp reads as "
+             "ours (I1F)", NSG,
+     '            getattr(rule, "priority", None), _enum_text(getattr(rule, "protocol", "")),\n',
+     '            getattr(rule, "priority", None),\n'),
+    ("M832", "the quarantine denies are written for UDP only: TCP from the VNet reaches a VM "
+             "in quarantine (I1F)", QUA,
+     '                protocol="*", source_address_prefix="*", destination_address_prefix="*",\n',
+     '                protocol="Udp", source_address_prefix="*", destination_address_prefix="*",\n'),
+    ("M833", "the altered quarantine's card is closed at the next pass, its change standing (I1F)", R,
+     "        if k in altered and altered[k][0] == sid:\n            said.add(sid)\n"
+     "        elif k in altered or settled(k):\n",
+     "        if k in altered or settled(k):\n"),
+    # After the review (5.5): the watch's pass, an acknowledgement, an unknown.
+    ("M834", "nothing recorded: the pass reads no quarantine NSG (I1F, review)", R,
+     "    report: list[dict] = []\n    _report_altered_quarantines(connector, report)\n    return report\n",
+     "    return []\n"),
+    ("M836", "an acknowledged quarantine card comes back at every pass (I1F, review)", R,
+     "        if signal_id in said or alerts.get(k) == signal_id:\n",
+     "        if signal_id in said:\n"),
+    ("M837", "a quarantine card closed on an NSG read as unknown (I1F, review)", R,
+     '            return seen[k].get("status") != "unknown" and k not in altered\n',
+     "            return k not in altered\n"),
+    ("M835", "the watch's thread hands over only when something is recorded (I1F, review)", GCLI,
+     "        _watch_reassert_pass(ttl_connector, mode_override, _output_lock, _reassert_seen)\n",
+     "        from glorfindel.actions import active_blocks, active_isolations\n"
+     "        if active_isolations() or active_blocks():\n"
+     "            _watch_reassert_pass(ttl_connector, mode_override, _output_lock, _reassert_seen)\n"),
+    ("M838", "the quarantine NSGs read in `quarantine_rg` only: one made in another group goes unseen "
+             "(I1F, second review)", QUA,
+     "            if (not _is_quarantine_nsg(nsg_id)\n",
+     "            if (not _is_quarantine_nsg(nsg_id) or (self._quarantine_settings()[1] and "
+     "f\"/resourcegroups/{self._quarantine_settings()[1].lower()}/\" not in nsg_id.lower())\n"),
+    ("M839", "the watch's pass stops on an empty local state (I1F, second review)", GCLI,
+     "    seen = seen if seen is not None else {}\n",
+     "    seen = seen if seen is not None else {}\n"
+     "    from glorfindel.actions import active_blocks, active_isolations\n"
+     "    if not active_isolations() and not active_blocks():\n        return []\n"),
+    ("M895", "the watch's pass raises on an empty local state, the error swallowed (I1F, second review)", GCLI,
+     "        report = reassert_pass(connector, autonomy)\n",
+     "        from glorfindel.actions import active_blocks, active_isolations\n"
+     "        if not active_isolations() and not active_blocks():\n"
+     "            raise RuntimeError(\"nothing recorded\")\n"
+     "        report = reassert_pass(connector, autonomy)\n"),
+    ("M896", "the watch's timer starts no pass when nothing is recorded (I1F, second review)", GCLI,
+     "        if time.time() - _last_reassert[0] < _reassert_every_s:\n            return\n",
+     "        if time.time() - _last_reassert[0] < _reassert_every_s:\n            return\n"
+     "        from glorfindel.actions import active_blocks, active_isolations\n        if not active_isolations() and not active_blocks():\n"
+     "            return\n"),
+    ("M897", "a listing that fails reads as empty: every quarantine card closed (I1F, second review)", R,
+     '        log.warning("reassert: quarantine NSGs not checked (%s)", exc)\n        return\n',
+     '        log.warning("reassert: quarantine NSGs not checked (%s)", exc)\n        listing = []\n'),
+    ("M898", "an unreadable configuration said at every pass (I1F, second review)", GCLI,
+     '        if seen.get("config_error") != str(exc):\n', "        if True:\n"),
 ]
 
 # MC1 — the AWS adapter, written against the simulated world (tests/unit/fake_aws.py) and
@@ -1645,6 +1712,103 @@ MUTANTS += [
      DRU, "                and \"correlationid\" not in item[\"query\"].lower():", "                and False:"),
 ]
 
+
+# IA1 (#88): the analysis AI's own model and memory, never Glorfindel's; the triage computed
+# from the runs, the catalog, the rules and the infrastructure code; nothing without a human.
+SEP = "analysis/separation.py"
+TRI = "analysis/triage.py"
+MUTANTS += [
+    ("M780", "the analysis may reason with Glorfindel's decision model (IA1)", SEP,
+     "    if _model_name(model) == _model_name(defender):\n", "    if False:\n"),
+    ("M781", "Glorfindel's model under another provider's prefix passes as another model (IA1)", SEP,
+     '    return str(model or "").strip().lower().rsplit("/", 1)[-1]\n', '    return str(model or "")\n'),
+    ("M782", "an index reaching Glorfindel's state through « .. » or a link is let through (IA1)", SEP,
+     "    p = Path(path).expanduser().resolve()\n", "    p = Path(path).expanduser()\n"),
+    ("M783", "the analysis index may lie in Glorfindel's memory (IA1)", SEP,
+     "    if p == state or state in p.parents:\n", "    if False:\n"),
+    ("M784", "the report opens its index without the separation's check (IA1)", CREP,
+     "    p = separation.check_index(Path(path) if path else index_path())\n",
+     "    p = Path(path) if path else index_path()\n"),
+    ("M785", "the report calls its model without the separation's check (IA1)", CREP,
+     "    mdl = separation.check_model(model or analysis_model())   # IA1: never Glorfindel's\n",
+     "    mdl = model or analysis_model()\n"),
+    ("M786", "an escalation is triaged before a missed technique (IA1)", TRI,
+     '    "missed": (1, ', '    "missed": (3, '),
+    ("M787", "a comment in the infrastructure code counts as collection (IA1)", TRI,
+     '            elif ch == "#" or two == "//":\n                break\n',
+     "            elif False:\n                break\n"),
+    ("M788", "a base rule the client's layer disables still watches its technique (IA1)", TRI,
+     '        merged = [r for r in merged if r["name"] not in disabled]\n', "        merged = list(merged)\n"),
+    ("M789", "a proposal the computed facts do not support is kept (IA1)", TRI,
+     '        elif (not_here := item.allowed()[e["proposal"]]):\n', '        elif (not_here := ""):\n'),
+    ("M790", "a proposal that carries a rule is kept: the analysis writes a rule (IA1)", TRI,
+     '        elif _RULE.search(e["explanation"]) or _RULE.search(e["text"]):\n', "        elif False:\n"),
+    ("M791", "the model's status is kept: a proposal approved without a human (IA1)", TRI,
+     '        item.proposal = Proposal(kind=e["proposal"], text=e["text"], status=PENDING)\n',
+     '        item.proposal = Proposal(kind=e["proposal"], text=e["text"], status=str(raw.get("status") or PENDING))\n'),
+    ("M792", "a decision that names no human is recorded (IA1)", TRI,
+     '    if not str(by).strip():\n        raise ValueError("a decision names the human who takes it (--by)")\n', ""),
+    ("M793", "a decided proposal is decided again (IA1)", TRI,
+     "        if item.proposal.status != PENDING:\n", "        if False:\n"),
+    ("M794", "a new triage writes over a human's decision (IA1)", TRI,
+     "    if not replace_decided and old is not None and any(\n", "    if False and old is not None and any(\n"),
+    ("M795", "an unknown decision said taken is kept (IA1)", TRI,
+     "            elif cr._ACTED.search(told):\n", "            elif False:\n"),
+    ("M796", "a second entry for an item replaces the first (IA1)", TRI,
+     "        elif item.proposal is not None or item.explanation:\n", "        elif False:\n"),
+    ("M797", "the triage calls Glorfindel's model (IA1)", TRI,
+     "    mdl = separation.check_model(model or analysis_model())\n", "    mdl = model or analysis_model()\n"),
+    ("M798", "the harness does not count an obeyed planted line the check removed (IA1)",
+     "analysis/triage_cases.py", "    entries = [r for r in t.rejected] + [\n", "    entries = [] + [\n"),
+    ("M799", "a collection that cannot be read is called « not collected » (IA1)", TRI,
+     '            elif coll.collected is None:\n                causes.append("collection_unknown")\n',
+     '            elif coll.collected is None:\n                causes.append("not_collected")\n'),
+]
+
+# IA1, after the review (M840–M842, M844): the rules as the watch loads them, one decision at
+# a time, an unreadable triage refused, one entry per line. (M843, a prose filter, is gone with
+# it: no turn of phrase is filtered — the code's status decides, M871–M878.)
+MUTANTS += [
+    ("M840", "an entry of the client's layer the watch skips replaces a base rule in the triage (IA1)", TRI,
+     "            if why := _invalid_client_rule(entry):\n", '            if why := "":\n'),
+    ("M841", "two decisions taken at once: the second write loses the first (IA1)", TRI,
+     "    with _locked(campaign_dir):\n        t = load(campaign_dir)\n",
+     "    with open(os.devnull):\n        t = load(campaign_dir)\n"),
+    ("M842", "an unreadable triage.json ends in a trace, not a refusal (IA1)", TRI,
+     "    except (OSError, ValueError, TypeError, AttributeError, KeyError) as e:",
+     "    except OSError as e:"),
+    ("M844", "the reason of a removed entry, quoting the model, breaks triage.md (IA1)", TRI,
+     "— écarté : {_plain(r.get('rejected'))}", "— écarté : {r['rejected']}"),
+]
+
+# IA1, second review (M871–M875): beside each proposal, the status the code wrote — the only
+# thing that says a human decided; the model's text shown as its text; the save locked too.
+MUTANTS += [
+    ("M871", "the status shown beside a proposal comes from the model's text, not the code (IA1)", TRI,
+     "· **{STATUS_LABEL} : {_status(i.proposal)}**", "· **{STATUS_LABEL} : {_cell(i.proposal.text)}**"),
+    ("M872", "the model's Markdown is rendered: its text can draw a status of its own (IA1)", TRI,
+     "    return _cell(str(text).translate(_MARKUP))\n", "    return _cell(text)\n"),
+    ("M873", "a new triage written without the lock: a decision taken meanwhile is lost (IA1)", TRI,
+     "    with _locked(campaign_dir):\n        return _save(campaign_dir, t, replace_decided)\n",
+     "    with open(os.devnull):\n        return _save(campaign_dir, t, replace_decided)\n"),
+    ("M874", "a refusal of the analysis model exits 1, as an error: H0 gives no advice (IA1)", SEP,
+     "        return REFUSED\n", "        return 1\n"),
+    ("M875", "triage.md no longer says that only the code's status counts (IA1)", TRI,
+     "\"**Aucune décision n'est prise par le modèle : seul", "\"**Le modèle propose : seul"),
+]
+
+# IA1, third review (M876–M878): measured through a real CommonMark engine (markdown-it).
+MUTANTS += [
+    ("M876", "the reason of a removed entry rendered without escaping: a bold status from it (IA1)", TRI,
+     "— écarté : {_plain(r.get('rejected'))}", "— écarté : {_cell(r.get('rejected'))}"),
+    ("M877", "a line ends on \\n only: a \\r of the model starts a list item of its own (IA1)", TRI,
+     '    return " ".join(str(text).splitlines()).replace("|", "\\\\|")\n',
+     '    return str(text).replace("|", "\\\\|").replace("\\n", " ")\n'),
+    ("M878", "the reason of an unknown proposal quotes the model's text (IA1)", TRI,
+     '            why = "unknown proposal"   # never the model\'s text: it is shown beside, escaped\n',
+     "            why = f\"unknown proposal ({e['proposal'] or 'none'})\"\n"),
+]
+
 # Mutants measured by other tests than the invariants (their lot's own).
 TESTS = {mid: INSCRIPTION_TESTS for mid in ("M42", "M43", "M44", "M45", "M46", "M47")}
 TESTS.update({mid: DOCS_TESTS for mid in ("M48", "M49")})
@@ -1733,12 +1897,89 @@ TESTS.update({f"M{n}": "tests/unit/test_console.py" for n in range(400, 410)})  
 TESTS.update({f"M{n}": "tests/unit/test_indicators.py" for n in range(560, 566)})  # UI-2
 TESTS["M566"] = "tests/unit/test_host_deploy.py"
 TESTS["M567"] = "tests/unit/test_console.py"
+TESTS["M568"] = "tests/unit/test_console.py"
+TESTS["M569"] = "tests/unit/test_cli.py -k version"
 TESTS["M403"] = "tests/unit/test_console_exercises.py"
 # V1 (#214): Annatar's side and the shared gate in test_watch_gate.py, Gothmog's in test_gothmog.py.
 TESTS.update({f"M{n}": "tests/unit/test_watch_gate.py" for n in (*range(720, 740), *range(750, 760))})
 TESTS.update({f"M{n}": "tests/unit/test_gothmog.py" for n in (724, 725, 726, 727)})
 TESTS.update({f"M{n}": "tests/unit/test_host_console.py" for n in range(740, 750)})  # UI-1c
 TESTS.update({f"M{n}": "tests/unit/test_activity_logs.py" for n in (*range(810, 830), *range(850, 860), *range(890, 895))})  # AL1
+# IA1 (#88): the separation in test_analysis_separation.py, the triage in test_analysis_triage.py.
+TESTS.update({f"M{n}": "tests/unit/test_analysis_separation.py" for n in range(780, 786)})
+TESTS.update({f"M{n}": "tests/unit/test_analysis_triage.py" for n in range(786, 800)})
+TESTS["M840"] = "tests/unit/test_analysis_rules_parity.py"      # against the watch's own loader
+TESTS.update({f"M{n}": "tests/unit/test_analysis_triage.py" for n in (841, 842, 844, 871, 872, 873, 875, 876, 877, 878)})
+TESTS["M874"] = "tests/unit/test_analysis_separation.py"
+# I1F (#226): M830–M832 by the machine (their frozen sequences catch them too); M833 is no
+# property of the world (a card closed too soon), its regression and unit tests only.
+TESTS["M833"] = "tests/unit/test_invariant_regressions.py -k altered_quarantine tests/unit/test_reassert.py"
+TESTS.update({f"M{n}": "tests/unit/test_reassert.py" for n in (835, 836, 837, 839, 895, 896, 897, 898)})
+# M838: the frozen sequence of the second review; the machine found it once in 11 runs at 500.
+TESTS["M838"] = f"{INVARIANTS} tests/unit/test_invariant_regressions.py"
+# M834 needs a world with no state at all: rare in the drawn sequences (2/4 at 500).
+TESTS["M834"] = f"{INVARIANTS} tests/unit/test_reassert.py"
+
+# D1 (#81): each component runs alone (scripts/component_check.py), and every usage profile
+# keeps Glorfindel (docker-compose.yml, the Makefile's profile and team targets).
+D1_COMPONENTS = "tests/unit/test_components.py"
+D1_PROFILES = "tests/unit/test_profiles.py"
+MUTANTS += [
+    ("M800", "Glorfindel reads the signal contract from Annatar again: it cannot run alone (D1)",
+     "glorfindel/signals.py", "from eregion_core.signals import Signal\n",
+     "from annatar.signals.emitter import Signal\n"),
+    ("M801", "the component check's finder lets every package through: it proves nothing (D1)",
+     "scripts/component_check.py", "        if self.blocks(fullname):\n            raise ModuleNotFoundError(",
+     "        if False:\n            raise ModuleNotFoundError("),
+    ("M802", "a listed crossing allowed at module level: the component imports the other on load (D1)",
+     "scripts/component_check.py", "((rel, pkg) in CROSSINGS and not at_top)", "((rel, pkg) in CROSSINGS)"),
+    ("M803", "Annatar's compose service no longer starts Glorfindel's watch (D1, V1)", "docker-compose.yml",
+     "      - ${HOME}/.annatar:/root/.annatar\n      - ${HOME}/.glorfindel:/root/.glorfindel:ro\n"
+     "    depends_on:\n      - watch\n",
+     "      - ${HOME}/.annatar:/root/.annatar\n      - ${HOME}/.glorfindel:/root/.glorfindel:ro\n"),
+    ("M804", "Gothmog's compose service may write Glorfindel's state (D1)", "docker-compose.yml",
+     "      - ${HOME}/.glorfindel:/root/.glorfindel:ro\n    depends_on:\n      - watch\n"
+     "\n  # D1 : Gothmog",
+     "      - ${HOME}/.glorfindel:/root/.glorfindel\n    depends_on:\n      - watch\n"
+     "\n  # D1 : Gothmog"),
+    ("M805", "the injectors receive Glorfindel's service principal (D1, M-3)", "docker-compose.yml",
+     "  AZURE_CLIENT_SECRET: ${ANNATAR_AZURE_CLIENT_SECRET:-}\n",
+     "  AZURE_CLIENT_SECRET: ${AZURE_CLIENT_SECRET:-}\n"),
+    ("M806", "make profile-detection starts Annatar's side without Glorfindel (D1)", MAKE,
+     "profile-detection: glorfindel-start build-annatar\n", "profile-detection: build-annatar\n"),
+    ("M807", "a team's Glorfindel inherits the operator's shell: its subscription, its keys (D1)", MAKE,
+     'TEAM_COMPOSE = env -i PATH="$$PATH"', 'TEAM_COMPOSE = env PATH="$$PATH"'),
+    ("M808", "any team name accepted: a path, a compose project, container names (D1)", MAKE,
+     '@case "$(TEAM)" in ""|-*|*[!a-z0-9-]*) echo', '@case "$(TEAM)" in "") echo'),
+    ("M809", "without a team, the watch's container is no longer eregion-watch: H0's scripts lose it (D1)",
+     "docker-compose.yml", "    container_name: ${EREGION_INSTANCE:-eregion}-watch\n",
+     "    container_name: ${EREGION_INSTANCE:-eregion-glorfindel}-watch\n"),
+]
+TESTS.update({f"M{n}": D1_COMPONENTS for n in range(800, 803)})
+TESTS.update({f"M{n}": D1_PROFILES for n in range(803, 810)})
+# D1, after its review: the conftest's redirections, the analysis AI scanned, the guard of
+# this harness line by line.
+MUTANTS += [
+    ("M845", "the conftest believes Glorfindel absent: no redirection, the suite writes ~/.glorfindel (D1)",
+     "tests/unit/conftest.py", 'GLORFINDEL = _present("glorfindel")\n', "GLORFINDEL = False\n"),
+    ("M846", "the conftest believes the console absent: its settings cache leaks between tests (D1)",
+     "tests/unit/conftest.py", 'CONSOLE = _present("eregion_console")\n', "CONSOLE = False\n"),
+    ("M847", "the analysis AI no longer scanned: its import of Annatar on load goes unlisted (D1)",
+     "scripts/component_check.py",
+     ',\n           "analysis": ("analysis", "eregion_core")}', "}"),
+    ("M848", "one module made absent covers every other missing one: the harness measures a broken copy (D1)",
+     "scripts/mutation_check.py",
+     "COMPONENT_ABSENT not in line:\n            return line.strip()",
+     "COMPONENT_ABSENT not in stdout:\n            return line.strip()"),
+    ("M849", "make profile-detection leaves ~/.annatar to docker: created as root (D1)", MAKE,
+     "profile-detection: glorfindel-start build-annatar\n\t@mkdir -p $(HOME)/.annatar\n",
+     "profile-detection: glorfindel-start build-annatar\n"),
+    ("M870", "without Annatar, the reports' thread starts and fails every pass, never said at start (D1)",
+     "glorfindel/cli.py", "        from analysis import campaign_report  # noqa: F401\n", ""),
+]
+TESTS.update({f"M{n}": D1_COMPONENTS for n in range(845, 849)})
+TESTS["M849"] = D1_PROFILES
+TESTS["M870"] = "tests/unit/test_hosted_report.py"
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
@@ -1860,6 +2101,20 @@ def _copy_repo(dest: Path) -> None:
             shutil.copy2(src, dest / rel)
 
 
+# What the component check (scripts/component_check.py, D1) adds to the module it makes absent.
+COMPONENT_ABSENT = "absent: component check"
+
+
+def unmeasurable(stdout: str) -> str | None:
+    """The first line of a test run saying a module could not be found, other than one the
+    component check made absent on purpose (D1) — a copy that cannot import its code is no
+    measure. Line by line: one module made absent must not cover another that is missing."""
+    for line in stdout.splitlines():
+        if "ModuleNotFoundError: No module named" in line and COMPONENT_ABSENT not in line:
+            return line.strip()
+    return None
+
+
 def _run(copy: Path, examples: int, show: bool = False, target: str = INVARIANTS) -> bool:
     """True if `target` (test paths, space-separated) FAILS on this copy (the mutant is caught)."""
     env = {**os.environ, "GLORFINDEL_INVARIANT_EXAMPLES": str(examples), "GLORFINDEL_INVARIANT_NO_SHRINK": "1",
@@ -1867,8 +2122,9 @@ def _run(copy: Path, examples: int, show: bool = False, target: str = INVARIANTS
     proc = subprocess.run(
         [sys.executable, "-m", "pytest", *target.split(), "-q", "-x", "-p", "no:cacheprovider"],
         cwd=copy, env=env, capture_output=True, text=True)
-    if "glorfindel" in proc.stdout and "ModuleNotFoundError" in proc.stdout:
-        raise RuntimeError(proc.stdout[-2000:])
+    missing = unmeasurable(proc.stdout)
+    if missing:
+        raise RuntimeError(f"{missing}\n{proc.stdout[-2000:]}")
     if show and proc.returncode != 0:
         print("\n".join(line for line in proc.stdout.splitlines() if line.startswith("E ")) or proc.stdout[-3000:])
     return proc.returncode != 0

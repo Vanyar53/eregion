@@ -943,7 +943,7 @@ le comportement ne voit pas, les deux closures de la watch (M835, M839, M895–M
 
 **I4F (27/10, #235) : le NSG d'une carte absente.** À 2 000 séquences (graine 101), I4 est
 tombée sur une course `release`/`reset` : les flux sortants d'`api` rouverts par deux
-opérations sur une autre VM. La séquence, longue de 17 étapes, se réduit à deux : une ancienne
+opérations sur une autre VM. La séquence, longue de 17 étapes, se réduit à quatre, dont deux opérations sur la nouvelle VM : une ancienne
 isolation d'`api` (noms fixes, any/any, état perdu) sur son NSG, une VM créée sur ce même
 NSG puis isolée par quarantaine, et le reset de cette VM, seul : la course n'y était pour rien.
 Le défaut est dans le produit (`_original_view`, `release.py`). Pour balayer le NSG d'origine
@@ -963,7 +963,13 @@ ancienne isolation, la quarantaine allumée, isolée, sa carte laissée nue ou n
 1/3 ; avec la séquence figée, les deux sont attrapés à chaque tour. Au même budget (60 séquences,
 deux tours), aucun mutant du chemin d'isolation n'est perdu : les écarts restent dans le bruit
 de mesure (M16 : 3/8 avant, 5/8 après ; M19 : 3/8 puis 1/8 ; ils sont aussi attrapés par leurs
-séquences figées).
+séquences figées). La relecture 5.5 l'a remesuré à 500 séquences, deux tours, sur les seize mutants
+de `release.py`, `network.py` et `sweep.py` : 6/15 attrapés à chaque tour avant comme après (8/17 avec
+M960–M961), M02 passé de FIXED-ONLY à attrapé par la machine, M26 7/8 de chaque côté sur huit tours.
+Limite connue, sans flux ouvert aujourd'hui (#239) : le cas symétrique — l'ancienne isolation est à
+une VM partie en quarantaine, la nouvelle carte reste seule attachée — fait encore prendre au reset
+les noms fixes de l'autre VM ; la quarantaine tient cette VM, mais si sa carte revenait sur son NSG
+sans Glorfindel, l'ancienne règle n'y serait plus.
 
 Le plus grave : après une levée qui échoue en partie, une seconde levée lisait les champs de
 rétro-compatibilité de l'état comme un ancien format, et supprimait les deny du NSG de

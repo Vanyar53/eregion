@@ -1,0 +1,103 @@
+# L'atelier dans Discord (N1)
+
+_Lot N1 (#242), 27/10. La feuille de route (N2, #243) et le déploiement de H0 (H1, #244) s'y ajoutent ensuite._
+
+Ce que fait l'atelier (la CI, les PR, les lots d'elrond) arrive dans Discord, à part de la défense : le bot de Glorfindel, ses cartes et son channel ne changent pas.
+
+## Ce qui va où
+
+| Où | Quoi | Notifie ? |
+|---|---|---|
+| `#ci` | PR ouverte, PR fusionnée, issue fermée | non (silencieux) |
+| `#ci` | run rouge : PR, main, runs de nuit (invariants, mutants, canary) ; release publiée | oui |
+| `#ci` | main de nouveau verte après un rouge | non |
+| `#lots` (forum) | un fil par lot : lancé, rendu, relecture, correction, PR, fusion, issue fermée ; étiquettes jalon et état tenues à jour | non |
+| `#agents` | un message « En cours » réécrit sur place : les agents d'elrond qui tournent, depuis quand | non |
+| `#agents` | ce qui t'attend, avec ta mention : repli de modèle, relecture `changes` / `blocking` / sans verdict / non obtenue, lot bloqué, fin de run | oui |
+| `#roadmap` | N2 | — |
+| `#deploy` | H1 | — |
+
+Ce qui ne mérite rien n'envoie rien : un run vert sur une PR, un run annulé, une PR fermée sans fusion, les agents qui ne sont pas ceux d'elrond.
+
+**D'où ça vient.**
+- **GitHub** : `.github/workflows/notify.yml`. Le workflow ne récupère ni n'exécute jamais le code d'une PR (`pull_request_target` et `workflow_run` lisent les fichiers de la branche par défaut). Le script ne lit que le JSON de l'événement.
+- **Les lots d'elrond** : des hooks de Claude Code, chez toi (plus bas). Le lancement passe par `PreToolUse` sur `Agent`. Le retour passe par `SubagentStop` : palantir y lit le transcript de l'agent, qui dit s'il y a eu un repli, et le verdict vient de la ligne `**Verdict :**` du relecteur.
+- **elrond lui-même**, pour deux choses seulement : `notify_discord.py lot <ID> blocked --note …` et `notify_discord.py run-end "<bilan>"` (`.claude/skills/elrond/SKILL.md`).
+
+**Le fil d'un lot.**
+- Il s'appelle « `<ID> · <titre>` ». Le script le retrouve, archivé compris, par l'ID du lot : la branche `lot/<id>-…`, l'ID en tête du titre ou entre parenthèses (« (A3, #73) »). À défaut, il le retrouve par le numéro de l'issue.
+- Un run rouge poste dans le fil existant, sans jamais en créer.
+- Une issue fermée archive son fil.
+
+## Mise en place (Jonathan, une fois)
+
+**1. Discord, dans l'UI.**
+- Une catégorie **Atelier**, avec :
+  - `#ci`, `#agents`, `#roadmap`, `#deploy` (salons textuels) ;
+  - `#lots` (salon **forum**).
+- Dans `#lots` → Paramètres → Étiquettes, ces dix étiquettes, écrites ainsi :
+  - les jalons : `v0.3`, `v0.x`, `v1.0`, `v1.x` ;
+  - les états : `à faire`, `en cours`, `en relecture`, `en correction`, `fait`, `bloqué`.
+- Un webhook par salon textuel : Paramètres du salon → Intégrations → Webhooks → Nouveau → Copier l'URL. L'URL contient le jeton du webhook : c'est un secret.
+
+**2. Le bot « Atelier »**, une seconde application, pas celle de Glorfindel :
+- https://discord.com/developers/applications → New Application « Eregion Atelier » → Bot → Reset Token (copier le jeton). Aucun intent privilégié n'est nécessaire.
+- OAuth2 → URL Generator : scope `bot`, **aucune permission** cochée (permissions=0). Ouvrir l'URL et inviter le bot.
+- Catégorie Atelier → Modifier → Permissions → ajouter le bot, et autoriser seulement :
+  - Voir le salon ;
+  - Envoyer des messages (créer un post de forum) ;
+  - Envoyer des messages dans les fils ;
+  - Gérer les fils ;
+  - Lire l'historique ;
+  - Intégrer des liens.
+- Le bot ne reçoit rien au niveau du serveur. Il ne voit ailleurs que ce que `@everyone` voit : si le salon de la défense doit lui rester fermé, qu'il soit privé.
+- **Mode développeur** (Paramètres → Avancés). Clic droit sur `#lots` → Copier l'identifiant du salon. Clic droit sur ton nom → Copier l'identifiant de l'utilisateur.
+
+**3. Les secrets.** Ce sont des URL et des jetons : jamais dans le dépôt (public), jamais sur H0. `host_env.py` ne recopie aucune variable `ATELIER_*`.
+
+```bash
+gh secret set ATELIER_WEBHOOK_CI          # l'URL du webhook de #ci (collée au prompt, pas dans l'historique)
+gh secret set ATELIER_BOT_TOKEN           # le jeton du bot Atelier
+gh secret set ATELIER_LOTS_FORUM          # l'id du forum #lots
+```
+
+Sur ton poste, pour les hooks d'elrond : `~/.config/eregion/atelier.env`, en `chmod 600`. Les hooks tournent dans l'environnement de Claude Code, qui n'a pas forcément chargé `.envrc` (VS Code). Une variable posée dans l'environnement l'emporte sur le fichier.
+
+```
+ATELIER_WEBHOOK_AGENTS=https://discord.com/api/webhooks/…
+ATELIER_BOT_TOKEN=…
+ATELIER_LOTS_FORUM=…
+ATELIER_MENTION=<ton id d'utilisateur>
+```
+
+**4. Les hooks**, chez toi et jamais dans le dépôt (ils s'exécuteraient chez chaque contributeur) : `bash scripts/elrond-hooks.sh install`. La commande ajoute palantir sur `Stop` et `SubagentStop`, et `notify_discord.py hook` sur `PreToolUse` (`Agent`) et `SubagentStop` (`elrond-worker|elrond-reviewer`). Chaque commande finit par `|| true` : un hook `PreToolUse` qui sort en 2 bloquerait l'outil, et `python3` sort en 2 si le fichier manque. `uninstall` les retire et garde les autres hooks (rtk compris).
+
+**5. Vérifier** : `python3 scripts/notify_discord.py check`. La commande dit ce qui est configuré (les noms, jamais les valeurs), si le forum est lisible et quelles étiquettes manquent.
+
+**À mesurer au premier essai** : je ne sais pas encore si un bot qui ne s'est jamais connecté au gateway peut créer et modifier des fils en REST seul. Si la création d'un fil échoue alors que `check` passe, il faut une connexion unique au gateway. discord.py est dans l'image de Glorfindel :
+
+```bash
+docker run --rm -i -e T eregion-glorfindel python - <<'EOF'
+import os, discord
+client = discord.Client(intents=discord.Intents.none())
+
+@client.event
+async def on_ready():
+    print("connecté une fois :", client.user)
+    await client.close()
+
+client.run(os.environ["T"])
+EOF
+```
+
+(`T` exporté à la main dans le shell, puis `unset T`.)
+
+## Les règles du script
+
+`scripts/notify_discord.py`, sans dépendance hors de la bibliothèque standard :
+- **Sans configuration, rien n'est envoyé**, et le code de sortie est 0. Ce qui n'est pas configuré n'est pas envoyé : sans bot, pas de fils ; sans `ATELIER_WEBHOOK_AGENTS`, pas de `#agents`.
+- **Une erreur de Discord ne fait jamais échouer l'appelant** : le job reste vert, l'agent continue. Elle donne une ligne sur stderr, `atelier: not sent — webhook #ci: HTTP 500`, sans URL ni jeton. Après un 429 qui demande 5 s ou moins, le script fait un second essai.
+- **Aucune mention venue d'un texte.** `allowed_mentions` est vide sur chaque message : un titre de PR « @everyone » reste du texte. Seules les alertes de `#agents` mentionnent `ATELIER_MENTION`.
+- **Le hook rend la main tout de suite.** L'envoi part dans un processus détaché, qui écrit ses erreurs dans `~/.local/state/eregion/atelier.log`. L'état local (les agents en cours, l'id du message « En cours ») est dans `~/.local/state/eregion/atelier.json`, sous verrou. Un message « En cours » supprimé dans Discord est recréé. Un lancement refusé après le hook disparaît au bout de 24 h.
+
+Tests : `tests/unit/test_notify_discord.py`, contre un faux Discord, un serveur HTTP sur la boucle locale (rien ne sort de la machine). Mutants M970–M979 (`scripts/mutation_check.py --only M970,…`).

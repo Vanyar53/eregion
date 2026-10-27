@@ -1312,6 +1312,11 @@ MUTANTS = [
      "        if forced is not None:\n", "        if False:\n"),
     ("M408", "eregion console keeps compose's empty service principal: no managed identity (UI-1, H0)",
      "eregion_console/cli.py", "    _drop_empty_service_principal_env()\n", ""),
+    ("M409", "the console looks for the shipped rules beside itself: none outside the repo's root (UI-1, P1 review)",
+     CON, "    from glorfindel.cli import _find_rules_file\n    found = _find_rules_file()\n",
+     '    found = next((str(p) for p in (Path("glorfindel/rules/azure/detection_rules.yaml"),\n'
+     '                                   Path(__file__).parent / "rules" / "azure" / "detection_rules.yaml")\n'
+     "                  if p.exists()), None)\n"),
     # V1 (#214): Annatar and Gothmog do not act without Glorfindel — the watch's heartbeat read
     # before any call to the cloud; --without-glorfindel said in the report.
     ("M720", "annatar run without a live watch is not refused (V1)", ENG,
@@ -1592,7 +1597,7 @@ TESTS["M687"] = "tests/unit/test_host_deploy.py"
 TESTS["M688"] = "tests/unit/test_rule_layers.py"
 TESTS.update({f"M{n}": "tests/unit/test_rule_layers.py tests/unit/test_host_deploy.py" for n in range(695, 700)})
 TESTS.update({f"M{n}": "tests/unit/test_rule_layers.py" for n in range(713, 717)})
-TESTS.update({f"M{n}": "tests/unit/test_console.py" for n in range(400, 409)})  # UI-1
+TESTS.update({f"M{n}": "tests/unit/test_console.py" for n in range(400, 410)})  # UI-1
 TESTS["M403"] = "tests/unit/test_console_exercises.py"
 # V1 (#214): Annatar's side and the shared gate in test_watch_gate.py, Gothmog's in test_gothmog.py.
 TESTS.update({f"M{n}": "tests/unit/test_watch_gate.py" for n in (*range(720, 740), *range(750, 760))})

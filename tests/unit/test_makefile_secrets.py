@@ -75,6 +75,18 @@ def _leaks(text: str, secrets: dict[str, str]) -> dict[str, list[str]]:
             for name, value in secrets.items() if value in text}
 
 
+def _by_value(text: str, names) -> list[str]:
+    """The rendered lines that give a secret a value on a command line, however the value is
+    spelled — a value the shell expands (`-e AZURE_CLIENT_SECRET="$AZURE_CLIENT_SECRET"`) never
+    reaches `make -n`'s text, yet `ps` shows it. Refused: `-e NAME=` and `--env NAME=` for docker,
+    and `export NAME=` in a line that runs ssh (the remote command line carries it)."""
+    alt = "|".join(re.escape(n) for n in sorted(names, key=len, reverse=True))
+    docker = re.compile(rf"(?:^|\s)(?:-e|--env)(?:\s+|=)[\"']?(?:{alt})=")
+    export = re.compile(rf"\bexport\s+(?:{alt})=")
+    return [line.strip()[:200] for line in text.replace("\\\n", " ").splitlines()   # a recipe line continued
+            if docker.search(line) or ("ssh" in line and export.search(line))]
+
+
 def test_no_target_puts_a_secret_s_value_on_a_command_line(tmp_path):
     """The canary: every target as `make -n` renders it, every secret set to a fake value."""
     secrets, targets = _secrets(), _targets()
@@ -85,6 +97,26 @@ def test_no_target_puts_a_secret_s_value_on_a_command_line(tmp_path):
     # What it rendered is the recipes, the containers' ones included: the check sees them.
     assert "docker run" in rendered and "-e AZURE_CLIENT_SECRET " in rendered, rendered[-2000:]
     assert _leaks(rendered, secrets) == {}
+    assert _by_value(rendered, secrets) == []
+
+
+@pytest.mark.parametrize("line", [
+    'docker run -e AZURE_CLIENT_SECRET="$AZURE_CLIENT_SECRET" eregion-annatar',
+    "docker run --env=DISCORD_BOT_TOKEN=$DISCORD_BOT_TOKEN img",
+    "docker run --env 'ANTHROPIC_API_KEY=x' img",
+    'ssh host "export ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY; docker compose up -d"',
+])
+def test_a_value_the_shell_expands_is_refused_too(line):
+    assert _by_value(line, _secrets()) == [line]
+
+
+@pytest.mark.parametrize("line", [
+    'AZURE_CLIENT_SECRET="${ANNATAR_AZURE_CLIENT_SECRET:-${AZURE_CLIENT_SECRET:-}}" docker run '
+    "-e AZURE_CLIENT_SECRET -e ANTHROPIC_API_KEY img",
+    "docker run -e AZURE_CLIENT_ID=abc -e ORT_LOGGING_LEVEL_DEFAULT=3 img",
+])
+def test_a_secret_passed_by_name_is_not(line):
+    assert _by_value(line, _secrets()) == []
 
 
 def _docker_calls(tmp_path, target, secrets):

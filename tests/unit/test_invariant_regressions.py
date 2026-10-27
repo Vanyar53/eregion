@@ -460,6 +460,32 @@ def test_a_bare_nic_isolated_after_its_state_is_lost_doesnt_carry_its_rules(monk
          ("release", API, API, None))
 
 
+def test_our_rules_on_an_nsg_nothing_ties_to_a_bare_nic_any_more(monkeypatch):
+    """I3 had the same defect as I8 (500 sequences, seed 34): db-nic-1, isolated by rules on
+    the tier NSG then by quarantine, left bare, its state lost by the test after a state
+    saw it bare — Glorfindel's own rules named for it stay on the tier NSG, off the NIC,
+    and nothing says where to look. The release said `released`; I3 counted them. The
+    same journal exemption (_untied); the operator puts the NSG back, the release then
+    sweeps them (I7)."""
+    ssh = _rule("allow-ssh", 100, dict(access="Allow", direction="Inbound", source_address_prefix="*",
+                                       destination_address_prefix="*", destination_port_range="22"))
+    out = _rule("allow-lateral-out", 100, dict(access="Allow", direction="Outbound", source_address_prefix="*",
+                                               destination_address_prefix="VirtualNetwork", destination_port_range="*"))
+    deny = _rule("deny-lateral-in", 130, dict(access="Deny", direction="Inbound", source_address_prefix="VirtualNetwork",
+                                              destination_address_prefix="*", destination_port_range="*"))
+    https = _rule("allow-https", 110, dict(access="Allow", direction="Inbound", source_address_prefix="Internet",
+                                           destination_address_prefix="*", destination_port_range="443"))
+    # db-nic-0 can't take the quarantine (a policy): isolated by rules on the subnet's NSG.
+    _run(monkeypatch, _net(subnet_nsg=[ssh, out, deny], tier_rules=[ssh, https],
+                           web_nic={"own": "dedicated", "rules": [out, deny], "policy": True},
+                           db_nic_0={"rules": [out], "policy": True}, db_nic_1={"own": "tier"},
+                           api_nic={"policy": True}),
+         ("another_host_writes", DB, DB, None, "after-foreign", False),
+         ("bare_with_an_unknown_original", DB, DB, None, _nic("rg-app1", "db-nic-1"), "reset"),
+         ("access_changes", True),
+         ("bare_with_an_unknown_original", DB, DB, None, _Q1, "release twice"))
+
+
 def test_a_reset_doesnt_skip_a_bare_nic_whose_original_is_unknown(monkeypatch):
     """The same, a reset in place of the second isolation: the bare NIC, in quarantine for
     the state but its original unknown there and on no tag, was skipped — `swept`, the

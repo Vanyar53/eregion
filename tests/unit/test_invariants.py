@@ -614,9 +614,25 @@ class IsolationMachine(RuleBasedStateMachine):
                 for r in n["rules"].values()
                 if r["name"].lower().startswith(prefix) and any(m in r["name"].lower() for m in marks)]
 
+    def _untied(self, vm: str) -> frozenset:
+        """NICs of the VM left bare whose own NSG nothing ties to them any more, by the
+        test's journal (A0): untraceable, and the test lost the VM's state after the last
+        time it saw a state hold the NIC in quarantine while it was bare — that state
+        knew someone took our NSG off; lost by the code itself, it earns nothing (I8F)."""
+        lost = self.state_lost_at.get(key(vm), -1)
+        return frozenset(key(n["id"]) for n in self._nics(vm)
+                         if lost > self.quarantine_held.get(key(n["id"]), -1) and self._untraceable(vm, n))
+
     def _released(self, vm: str, own: bool = False) -> bool:
+        # Glorfindel's own rules named for an untied NIC, on its own NSG off it, are out of
+        # the release's reach — as I8 judges them (_isolation_recorded).
+        untied = {key(n["design_nsg"]).rsplit("/", 1)[-1]: _nic_hash(n["id"]) for n in self._nics(vm)
+                  if key(n["id"]) in self._untied(vm) and n["design_nsg"]}
+        left = [x for x in self._named_leftovers(self.fake.vms[key(vm)]["nics"])
+                if not any(x.split("/")[0].lower() == g and h in x.split("/")[-1].lower()
+                           for g, h in untied.items())]
         return (self._back_to_design(vm, own) and self._nics_as_designed(vm) and self._state(vm) is None
-                and not self._named_leftovers(self.fake.vms[key(vm)]["nics"]))
+                and not left)
 
     def _footprint(self, vm: str, untied: frozenset = frozenset()) -> set:
         """What of Glorfindel's isolation applies to the VM: a NIC in quarantine, a
@@ -732,12 +748,7 @@ class IsolationMachine(RuleBasedStateMachine):
         when the release began, or that the code dropped itself, earns nothing —
         Glorfindel knew, and must say what it can't undo (I8F). A NIC isolated bare
         after the loss, nothing recording it was ever ours, earns it."""
-        untied = frozenset()
-        if released:
-            lost = self.state_lost_at.get(key(vm), -1)
-            untied = frozenset(key(n["id"]) for n in self._nics(vm)
-                               if lost > self.quarantine_held.get(key(n["id"]), -1) and self._untraceable(vm, n))
-        if self._footprint(vm, untied):
+        if self._footprint(vm, self._untied(vm) if released else frozenset()):
             assert self._state(vm) is not None, f"I8: {what} left an isolation of {vm} on Azure without state"
 
     def _block_recorded(self, vm: str, what: str):

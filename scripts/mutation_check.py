@@ -1291,6 +1291,36 @@ MUTANTS = [
      "        if forced is not None:\n", "        if False:\n"),
     ("M408", "eregion console keeps compose's empty service principal: no managed identity (UI-1, H0)",
      "eregion_console/cli.py", "    _drop_empty_service_principal_env()\n", ""),
+    # UI-1c (#205) — the console on the host: the token under its two names, from the operator's
+    # machine (Makefile, status.sh) and in host.env (host_env.py), never shown.
+    ("M740", "make glorfindel-host-url ignores EREGION_CONSOLE_TOKEN: a new host gets no URL (UI-1c)", MAKE,
+     'CONSOLE_TOKEN  = $$(t=$$($(call HOST_ENV_VALUE,EREGION_CONSOLE_TOKEN)); [ -n "$$t" ] || t=',
+     "CONSOLE_TOKEN  = $$(t="),
+    ("M741", "make glorfindel-host-url without the former name: H0's host.env gives no URL (UI-1c)", MAKE,
+     '; [ -n "$$t" ] || t=$$($(call HOST_ENV_VALUE,GLORFINDEL_WARROOM_TOKEN))', ""),
+    ("M742", "the Makefile takes an empty EREGION_CONSOLE_TOKEN as the token (UI-1c)", MAKE,
+     '[ -n "$$t" ] || t=$$($(call HOST_ENV_VALUE,GLORFINDEL_WARROOM_TOKEN))',
+     "grep -q '^EREGION_CONSOLE_TOKEN=' $(HOST_ENV) || t=$$($(call HOST_ENV_VALUE,GLORFINDEL_WARROOM_TOKEN))"),
+    ("M743", "the Makefile takes the first line of a key, compose the last (UI-1c)", MAKE,
+     "p;}' $(HOST_ENV) | tail -1\n", "p;}' $(HOST_ENV) | head -1\n"),
+    ("M744", "status.sh without the former name: H0's console never answers (UI-1c)",
+     "infra/glorfindel-host/status.sh",
+     '[ -n "$tok" ] || tok=$(env_value GLORFINDEL_WARROOM_TOKEN)\n', ""),
+    ("M745", "status.sh ignores EREGION_CONSOLE_TOKEN (UI-1c)", "infra/glorfindel-host/status.sh",
+     "tok=$(env_value EREGION_CONSOLE_TOKEN)\n", 'tok=""\n'),
+    ("M746", "status.sh puts the token on curl's command line, where ps shows it (UI-1c)",
+     "infra/glorfindel-host/status.sh",
+     "printf 'Authorization: Bearer %s\\n' \"$tok\" | curl -s -H @- \"http://127.0.0.1:7007$1\"",
+     'curl -s -H "Authorization: Bearer $tok" "http://127.0.0.1:7007$1"'),
+    ("M747", "status.sh traces its remote script: the token is printed (UI-1c)",
+     "infra/glorfindel-host/status.sh",
+     'cd eregion || { echo "  ✗ dépôt absent"; exit 1; }\n',
+     'set -x; cd eregion || { echo "  ✗ dépôt absent"; exit 1; }\n'),
+    ("M748", "a new host's token is drawn under the former name (UI-1c)", "infra/glorfindel-host/host_env.py",
+     "    out[TOKEN] = secrets.token_urlsafe(24)\n", "    out[LEGACY_TOKEN] = secrets.token_urlsafe(24)\n"),
+    ("M749", "host_env.py --check refuses H0's host.env, under the former name (UI-1c)",
+     "infra/glorfindel-host/host_env.py",
+     "    for name in (TOKEN, LEGACY_TOKEN):\n", "    for name in (TOKEN,):\n"),
 ]
 
 # MC1 — the AWS adapter, written against the simulated world (tests/unit/fake_aws.py) and
@@ -1464,6 +1494,7 @@ TESTS.update({f"M{n}": "tests/unit/test_rule_layers.py tests/unit/test_host_depl
 TESTS.update({f"M{n}": "tests/unit/test_rule_layers.py" for n in range(713, 717)})
 TESTS.update({f"M{n}": "tests/unit/test_console.py" for n in range(400, 409)})  # UI-1
 TESTS["M403"] = "tests/unit/test_console_exercises.py"
+TESTS.update({f"M{n}": "tests/unit/test_host_console.py" for n in range(740, 750)})  # UI-1c
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

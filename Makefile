@@ -175,9 +175,9 @@ help:
 	@echo "  make celebrimbor-workload                    Charge de bree (site + routine d'admin)"
 	@echo "  make glorfindel-host-status                  Tout tourne ? VMs, sauvegardes, services, erreurs, cartes à juger"
 	@echo "  make glorfindel-host-start [REF=tag|commit]  Déploie une référence (défaut : dernier tag v*), jamais une branche"
-	@echo "  make glorfindel-host-stop / -logs            Glorfindel + War Room sur la VM"
-	@echo "  make glorfindel-host-tunnel                  Tunnel + URL de la War Room avec son jeton"
-	@echo "  make glorfindel-host-url                     L'URL de la War Room avec son jeton"
+	@echo "  make glorfindel-host-stop / -logs            Glorfindel + la console sur la VM"
+	@echo "  make glorfindel-host-tunnel                  Tunnel + URL de la console avec son jeton"
+	@echo "  make glorfindel-host-url                     L'URL de la console avec son jeton"
 	@echo ""
 	@echo "Orodruin (O1) — hôte des injecteurs, état séparé (infra/orodruin/README.md) :"
 	@echo "  make orodruin-plan [OPERATOR_CIDR=]          Plan (lecture seule)"
@@ -316,7 +316,7 @@ glorfindel-start: check-azure-env build-glorfindel
 	mkdir -p $(HOME)/.glorfindel $(HOME)/.cache/chroma $(HOME)/.eregion/analysis runs
 	docker compose up -d
 	@echo ""
-	@echo "  War Room  →  http://localhost:7007"
+	@echo "  Console   →  http://localhost:7007"
 	@echo "  Logs      →  make glorfindel-logs"
 	@echo "  Dev mode  →  make glorfindel-dev  (auto-reload on file change)"
 	@echo "  Stop      →  make glorfindel-stop"
@@ -328,12 +328,12 @@ glorfindel-stop:
 glorfindel-restart: check-azure-env build-glorfindel
 	mkdir -p $(HOME)/.glorfindel $(HOME)/.cache/chroma $(HOME)/.eregion/analysis runs
 	docker compose up -d --build --force-recreate
-	@echo "  War Room  →  http://localhost:7007"
+	@echo "  Console   →  http://localhost:7007"
 
 glorfindel-dev: check-azure-env build-glorfindel
 	mkdir -p $(HOME)/.glorfindel $(HOME)/.cache/chroma $(HOME)/.eregion/analysis runs
 	docker compose up -d
-	@echo "  War Room  →  http://localhost:7007  (watching for changes…)"
+	@echo "  Console   →  http://localhost:7007  (watching for changes…)"
 	docker compose watch
 
 glorfindel-logs:
@@ -341,7 +341,7 @@ glorfindel-logs:
 
 glorfindel-ui: build-glorfindel
 	docker compose up -d --no-deps war-room
-	@echo "  War Room  →  http://localhost:7007  (watch untouched)"
+	@echo "  Console   →  http://localhost:7007  (watch untouched)"
 
 # ── Shells ────────────────────────────────────────────────────────────────
 
@@ -476,8 +476,13 @@ HOST_ENV      ?= infra/glorfindel-host/host.env
 # Local copies of the VM's ~/.glorfindel (verdicts, memory, state): the observation's data
 # lives on one disk otherwise. Outside the repo — they hold real cards.
 HOST_BACKUPS  ?= $(HOME)/.eregion/host-backups
-# L'URL de la War Room avec son jeton (GLORFINDEL_WARROOM_TOKEN de host.env), à ouvrir tunnel ouvert.
-WARROOM_URL    = http://localhost:7007/?token=$$(grep '^GLORFINDEL_WARROOM_TOKEN=' $(HOST_ENV) | cut -d= -f2-)
+# Le jeton de la console dans host.env (UI-1c), à la règle de la console (eregion_console/api.py) :
+# EREGION_CONSOLE_TOKEN s'il n'est pas vide, sinon son ancien nom, GLORFINDEL_WARROOM_TOKEN — le
+# host.env de H0 n'a que lui, rien à renommer. Lu comme compose le lit : la dernière ligne d'une
+# clé l'emporte, un « # … » après la valeur et un blanc est un commentaire. Affiché dans l'URL seulement.
+HOST_ENV_VALUE = sed -n -E '/^$(1)=/{s/^[^=]*=[[:space:]]*//;s/[[:space:]]+\#.*$$//;s/[[:space:]]+$$//;p;}' $(HOST_ENV) | tail -1
+CONSOLE_TOKEN  = $$(t=$$($(call HOST_ENV_VALUE,EREGION_CONSOLE_TOKEN)); [ -n "$$t" ] || t=$$($(call HOST_ENV_VALUE,GLORFINDEL_WARROOM_TOKEN)); printf '%s' "$$t")
+NO_CONSOLE_TOKEN = $(HOST_ENV) : aucun jeton de la console (EREGION_CONSOLE_TOKEN, ou son ancien nom GLORFINDEL_WARROOM_TOKEN)
 
 glorfindel-host-init:
 	$(HOST_TF) init -upgrade
@@ -494,7 +499,8 @@ glorfindel-host-down:
 	$(HOST_TF) destroy $(HOST_VARS)
 
 # host.env depuis ton environnement (.envrc chargé) : abonnement, clé du modèle, webhook ;
-# jamais de secret Azure (identité managée) ; READ_ONLY=1 et un jeton War Room tiré au sort.
+# jamais de secret Azure (identité managée) ; READ_ONLY=1 et un jeton de la console tiré au sort
+# (EREGION_CONSOLE_TOKEN ; un host.env existant sous l'ancien nom reste valide).
 glorfindel-host-env:
 	@.venv/bin/python infra/glorfindel-host/host_env.py infra/glorfindel-host/host.env
 
@@ -503,6 +509,7 @@ glorfindel-host-env:
 glorfindel-host-push:
 	@test -f infra/glorfindel-host/host.env || { echo "infra/glorfindel-host/host.env manquant (voir host.env.example)"; exit 1; }
 	@test -n "$(HOST_IP)" || { echo "Pas de VM : make glorfindel-host-up d'abord"; exit 1; }
+	@.venv/bin/python infra/glorfindel-host/host_env.py --check infra/glorfindel-host/host.env
 	@cfg=$$(mktemp); \
 	 .venv/bin/python infra/glorfindel-host/host_config.py glorfindel-config.yaml $$cfg && \
 	 scp -q $(SSH_OPTS) infra/glorfindel-host/host.env $(HOST_USER)@$(HOST_IP):eregion/.env && \
@@ -530,7 +537,7 @@ glorfindel-host-start:
 	@echo ""
 	@echo "  ⚠ Arrête le Glorfindel local (make glorfindel-stop) : deux watch sur le même banc = cartes en double ;"
 	@echo "    et aucun autre bot avec le même DISCORD_BOT_TOKEN."
-	@echo "  War Room → make glorfindel-host-tunnel, puis http://localhost:7007/?token=<GLORFINDEL_WARROOM_TOKEN>"
+	@echo "  Console → make glorfindel-host-tunnel : il affiche l'URL avec son jeton, puis tient le tunnel"
 
 glorfindel-host-stop:
 	$(HOST_SSH) 'cd eregion && docker compose stop'
@@ -578,11 +585,14 @@ glorfindel-host-campaign-report:
 
 glorfindel-host-url:
 	@test -f $(HOST_ENV) || { echo "$(HOST_ENV) manquant (make glorfindel-host-env)"; exit 1; }
-	@echo "$(WARROOM_URL)"
+	@t="$(CONSOLE_TOKEN)"; test -n "$$t" || { echo "$(NO_CONSOLE_TOKEN)" >&2; exit 1; }; \
+	 echo "http://localhost:7007/?token=$$t"
 
 # Affiche l'URL avec son jeton, puis tient le tunnel ouvert (Ctrl+C pour fermer).
 glorfindel-host-tunnel:
-	@test -f $(HOST_ENV) && echo "  War Room → $(WARROOM_URL)" && echo "  (Ctrl+C ferme le tunnel)" || true
+	@if [ -f $(HOST_ENV) ]; then t="$(CONSOLE_TOKEN)"; \
+	 if [ -n "$$t" ]; then echo "  Console → http://localhost:7007/?token=$$t"; else echo "  ⚠ $(NO_CONSOLE_TOKEN)"; fi; \
+	 echo "  (Ctrl+C ferme le tunnel)"; fi
 	ssh $(SSH_OPTS) -N -L 7007:127.0.0.1:7007 $(HOST_USER)@$(HOST_IP)
 
 glorfindel-host-ssh:

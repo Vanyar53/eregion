@@ -104,7 +104,7 @@ class SweepMixin:
             if recorded is not _UNKNOWN:
                 original = recorded
             elif q_bare is None:
-                if _held_in_quarantine(t0["nic_id"]):
+                if recorded is _UNKNOWN and _held_in_quarantine(t0["nic_id"]):
                     # In quarantine for our state, its original unknown there and no tag:
                     # skipped, the reset said `swept` and cleared the state — the NIC
                     # left bare, an old isolation on its own NSG unrecorded (I8F).

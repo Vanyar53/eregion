@@ -1461,7 +1461,8 @@ MUTANTS += [
      "                elif False:"),
     ("M861", "reset skips a bare NIC whose original is unknown: swept, an old isolation left without "
              "state (I8F, I8)", SWP,
-     '                if _held_in_quarantine(t0["nic_id"]):\n                    # In quarantine for our state',
+     '                if recorded is _UNKNOWN and _held_in_quarantine(t0["nic_id"]):\n'
+     "                    # In quarantine for our state",
      "                if False:\n                    # In quarantine for our state"),
 ]
 

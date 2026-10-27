@@ -42,6 +42,8 @@ What must hold whatever happens:
   I12 a VM of another subscription is never acted on — nor vouched for (A0);
   L1  a block whose rules all vanished from Azure is put back, or said — even behind the
       quarantine (A0);
+  L2  a quarantine NSG someone altered, still holding NICs, is put back or said — its
+      NICs' state lost too (I1F);
   U1  a rule left by a NIC that no longer exists, cutting a live NIC off, is reported (L28).
 
 Oracles are the test's own: what was released, what was lost and when, who wrote what
@@ -380,6 +382,10 @@ class IsolationMachine(RuleBasedStateMachine):
         # (NSG, rule) someone turned into an allow → (the rule before, the rule after);
         # before = None for an allow they added under one of our names.
         self.tampered: dict[tuple[str, str], tuple[dict | None, dict]] = {}
+        # Quarantine NSGs the TEST altered (stripped, a rule tampered with): only these
+        # earn I1's exemption while they no longer deny everything — one Glorfindel
+        # wrote wrong earns none (I1F, as the AWS machine's `altered`).
+        self.altered: set[str] = set()
         self.fake = _CURRENT.fake = FakeAzure(self.chaos)
         self.deleted: dict[str, list[str]] = {}         # VM id → its NIC ids, once deleted
         self.detached: set[str] = set()                 # NICs someone left without any NSG
@@ -990,6 +996,16 @@ class IsolationMachine(RuleBasedStateMachine):
             for vm in vanished:
                 assert not self._block_vanished(vm) or key(vm) in told, (
                     f"L1: the block on {vm} vanished from Azure; the reassertion neither put it back nor said so")
+            # L2 (I1F): a quarantine NSG someone altered, still holding NICs, is whole
+            # again or said — its NICs' state lost too (I1's exemption ends here).
+            said = {key(e.get("resource_id", "")) for e in escalations.pending()}
+            for k in sorted(self.altered):
+                if self.fake.nsgs.get(k, {}).get("tags", {}).get("managed-by") != "glorfindel":
+                    continue                    # gone, or not ours
+                held = [n for n, c in self.fake.nics.items() if key(c["nsg"]) == k]
+                assert not held or self._quarantine_intact(k) or k in said, (
+                    f"L2: the quarantine NSG {k} was altered, holds {held}; "
+                    "the reassertion neither put it back nor said so")
         after = self._flows()
         for vm in self.live:
             reopenable = flows[("own", vm)] - flows[vm]
@@ -1324,7 +1340,8 @@ class IsolationMachine(RuleBasedStateMachine):
 
     def _quarantine_intact(self, nsg_key: str) -> bool:
         """Our quarantine NSG still denies everything, in and out — by the test's own
-        reading of its rules, not the code's."""
+        reading of its rules, not the code's: every protocol too (a deny turned to Udp
+        lets TCP reach Azure's default AllowVnetInBound, I1F)."""
         rules = self.fake.nsgs.get(nsg_key, {}).get("rules", {})
 
         def denies_all(direction):
@@ -1334,6 +1351,7 @@ class IsolationMachine(RuleBasedStateMachine):
                 if r["access"].lower() == "allow" and r["name"] != "glorfindel-quarantine-forensic-in":
                     return False
                 if (r["access"].lower() == "deny" and r.get("source_address_prefix") == "*"
+                        and (r.get("protocol") or "*").lower() in ("*", "any")
                         and r.get("destination_address_prefix") == "*"
                         and r.get("destination_port_range") in ("*", None) and not r.get("destination_port_ranges")):
                     return True
@@ -1342,15 +1360,19 @@ class IsolationMachine(RuleBasedStateMachine):
 
     def _foreign_open(self, vm: str) -> set:
         """NICs of the VM on a quarantine NSG someone else has altered: whatever they let
-        through is that someone's doing, until Glorfindel repairs it (liveness)."""
+        through is that someone's doing, until Glorfindel repairs it or says so (L2).
+        Someone else: the test's journal (`altered`), not the rules as they read."""
         return {n["id"].rsplit("/", 1)[-1] for n in self._nics(vm)
-                if n["nsg"] and actions._is_quarantine_nsg(n["nsg"]) and not self._quarantine_intact(key(n["nsg"]))}
+                if n["nsg"] and actions._is_quarantine_nsg(n["nsg"]) and key(n["nsg"]) in self.altered
+                and not self._quarantine_intact(key(n["nsg"]))}
 
     def _strip_quarantine_nsg(self, data):
         """Someone deletes the deny rules of Glorfindel's own quarantine NSG."""
         ours = sorted(k for k, n in self.fake.nsgs.items() if n["tags"].get("managed-by") == "glorfindel")
         if ours:
-            rules = self.fake.nsgs[data.draw(st.sampled_from(ours), label="quarantine")]["rules"]
+            nsg = data.draw(st.sampled_from(ours), label="quarantine")
+            self.altered.add(nsg)
+            rules = self.fake.nsgs[nsg]["rules"]
             for name in ("glorfindel-quarantine-deny-in", "glorfindel-quarantine-deny-out"):
                 rules.pop(name, None)
 
@@ -1412,6 +1434,8 @@ class IsolationMachine(RuleBasedStateMachine):
         if not ours:
             return
         nsg, name = data.draw(st.sampled_from(ours), label="rule")
+        if actions._is_quarantine_nsg(nsg):
+            self.altered.add(nsg)
         r = self.fake.nsgs[nsg]["rules"][name]
         if how in ("access", "priority", "protocol", "retarget"):
             # Only an allow can open beyond the design: the others deny less, or

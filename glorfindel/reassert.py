@@ -117,7 +117,63 @@ def reassert_active(connector, autonomy=None) -> list[dict]:
                                 ref=snapshot["resource_id"])
         except TimeoutError:
             continue
+    _report_altered_quarantines(connector, report)
     return report
+
+
+def _report_altered_quarantines(connector, report: list[dict]) -> None:
+    """Our quarantine NSG changed by someone, still holding NICs (I1F): said, one card
+    per NSG and per change. The isolations above are read from their state; a NIC whose
+    state was lost (and its NSG's tags) sits in a quarantine nobody checked — a deny
+    turned to Udp by hand opened it in silence. Not put back: without a state, nothing
+    says which VM, nor its mode (I5). After the isolations, which may have put it back.
+    A card stays while its change does (no new card every minute); one whose NSG is
+    whole again, or holds nothing, is closed. Acknowledged while the NSG is still
+    altered, it comes back once: the NICs are still exposed."""
+    find = getattr(connector, "find_altered_quarantines", None)
+    if find is None:
+        return                                  # a provider without a quarantine NSG
+    try:
+        altered = find()
+    except Exception as exc:
+        log.warning("reassert: quarantine NSGs not checked (%s)", exc)
+        return
+    if not isinstance(altered, list):
+        return
+    import hashlib
+    from glorfindel import escalations
+    from glorfindel.actions import _rid_hash
+    prefix = "reassert-quarantine-"
+    current: dict[str, dict] = {}
+    for q in altered:
+        nsg_id = q.get("nsg_id") or ""
+        change = hashlib.sha1("|".join(sorted(q.get("diff") or [])).lower().encode()).hexdigest()[:8]
+        current[f"{prefix}{_rid_hash(nsg_id)}-{change}"] = q
+    # Closed first: a card of an earlier change of the same NSG would take the new one
+    # in (the store merges a card of the same resource, action and type).
+    said = set()
+    for e in escalations.pending():
+        sid = e.get("signal_id") or ""
+        if sid.startswith(prefix):
+            if sid in current:
+                said.add(sid)
+            else:
+                escalations.resolve(e["id"])    # whole again, nothing on it, or changed
+    for signal_id, q in current.items():
+        if signal_id in said:
+            continue                            # said, and still so
+        nsg_id = q.get("nsg_id") or ""
+        name = nsg_id.rstrip("/").rsplit("/", 1)[-1]
+        nics = ", ".join(n.rstrip("/").rsplit("/", 1)[-1] for n in q.get("nics") or [])
+        reason = (f"Le NSG de quarantaine {name} ne porte plus les règles de Glorfindel "
+                  f"({', '.join(q.get('diff') or [])}) — modifié hors Glorfindel, ou accès "
+                  f"forensique changé dans la configuration : les cartes qu'il porte ({nics}) "
+                  "peuvent ne plus être coupées de tout. Glorfindel ne le repose pas seul pour "
+                  "des cartes dont il n'a pas l'état. Toute isolation dans la région remet ses "
+                  "règles ; sinon les remettre à la main, ou lever ces cartes si l'incident est clos.")
+        escalations.record(signal_id=signal_id, resource_id=nsg_id, action="restore_quarantine_nsg",
+                           escalation_type="quarantine_altered", reason=reason)
+        report.append({"kind": "quarantine", "vm": name, "outcome": "escalated", "detail": reason})
 
 
 _LOCK_WAIT_S = 30

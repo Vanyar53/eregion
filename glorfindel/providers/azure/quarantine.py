@@ -416,6 +416,33 @@ class QuarantineMixin:
                  if low not in {w.lower() for w in wanted} and _opens_quarantine(r)]
         return ("altered" if diff else "ok"), diff
 
+    def find_altered_quarantines(self) -> list[dict]:
+        """Glorfindel's quarantine NSGs someone changed, with the NICs they still hold
+        (I1F). The reassertion reads each isolation from its state: a NIC whose state was
+        lost stays in a quarantine nobody checked — its deny turned to Udp by hand, the
+        VM was reachable on TCP again, in silence. One listing of the subscription's
+        NSGs, each read by content as verify_isolation reads it (Q6); an NSG that only
+        has our name is not ours. Raises if the NSGs can't be listed: none altered is
+        not the same as unknown."""
+        if self.dry_run:
+            return []
+        self._ensure_clients()
+        out: list[dict] = []
+        for nsg in self._network.network_security_groups.list_all():
+            nsg_id = getattr(nsg, "id", "") or ""
+            if (not _is_quarantine_nsg(nsg_id)
+                    or (getattr(nsg, "tags", None) or {}).get("managed-by") != "glorfindel"):
+                continue
+            nics = [n.id for n in (getattr(nsg, "network_interfaces", None) or []) if getattr(n, "id", None)]
+            if not nics:
+                continue                      # holds nothing: nothing reachable through it
+            q_rg, q_name = _parse_nsg_resource_id(nsg_id)
+            cache = {(q_rg, q_name): list(getattr(nsg, "security_rules", None) or [])}
+            st, diff = self._quarantine_state({"nsg_rg": q_rg, "nsg_name": q_name}, cache)
+            if st == "altered":
+                out.append({"nsg_id": nsg_id, "nics": nics, "diff": diff})
+        return out
+
     def _forensic_sources(self) -> list[str]:
         """isolation.forensic_sources as validate_forensic_sources keeps them (Q5). An
         unreadable config raises (S1) — no source is guessed."""

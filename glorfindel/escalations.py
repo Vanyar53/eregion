@@ -38,6 +38,7 @@ _ESCALATION_LABELS = {
     "proposed_rule": "règle de détection proposée",
     "posture_gap": "gap de posture",
     "orphan_rule": "règle orpheline (carte disparue)",
+    "quarantine_altered": "NSG de quarantaine modifié",
     "detection_blocked": "détection empêchée (règle déjà en place)",
     "mode_hold": "action retenue (mode human_only)",
     "write_blocked": "écriture refusée (droits)",
@@ -361,7 +362,7 @@ VERDICTS = ("right", "wrong", "unsure")
 # autonomy decision weighs.
 DISRUPTIVE_ACTIONS = ("isolate_vm", "block_suspicious_ip")
 # Cards that are not a decision on a detection: posture, housekeeping, proposals.
-_NOT_DECISIONS = {"posture_gap", "orphan_rule", "proposed_rule", "readiness_hold",
+_NOT_DECISIONS = {"posture_gap", "orphan_rule", "quarantine_altered", "proposed_rule", "readiness_hold",
                   "ttl_exceeded", "detection_blocked"}
 
 

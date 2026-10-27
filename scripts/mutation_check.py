@@ -1453,6 +1453,25 @@ MUTANTS = [
      "    for name in (TOKEN, LEGACY_TOKEN):\n", "    for name in (TOKEN,):\n"),
 ]
 
+# I1F (#226): our quarantine NSG altered while its NICs' state is lost — read, and said.
+MUTANTS += [
+    ("M830", "the reassertion doesn't read the quarantine NSGs: one altered, its NICs' state lost, "
+             "goes unsaid (I1F, L2)", R,
+     "    _report_altered_quarantines(connector, report)\n", ""),
+    ("M831", "a rule's signature leaves its protocol out: our quarantine deny turned to Udp reads as "
+             "ours (I1F)", NSG,
+     '            getattr(rule, "priority", None), _enum_text(getattr(rule, "protocol", "")),\n',
+     '            getattr(rule, "priority", None),\n'),
+    ("M832", "the quarantine denies are written for UDP only: TCP from the VNet reaches a VM "
+             "in quarantine (I1F)", QUA,
+     '                protocol="*", source_address_prefix="*", destination_address_prefix="*",\n',
+     '                protocol="Udp", source_address_prefix="*", destination_address_prefix="*",\n'),
+    ("M833", "the altered quarantine's card is closed and raised again at every pass (I1F)", R,
+     "            if sid in current:\n                said.add(sid)\n            else:\n"
+     '                escalations.resolve(e["id"])    # whole again, nothing on it, or changed\n',
+     '            escalations.resolve(e["id"])\n'),
+]
+
 # MC1 — the AWS adapter, written against the simulated world (tests/unit/fake_aws.py) and
 # measured by the invariants on AWS (tests/unit/test_invariants_aws.py). Range M600–M649:
 # M600–M629 the bugs met or named while building it, M630–M649 its control set (below).
@@ -1631,6 +1650,9 @@ TESTS["M403"] = "tests/unit/test_console_exercises.py"
 TESTS.update({f"M{n}": "tests/unit/test_watch_gate.py" for n in (*range(720, 740), *range(750, 760))})
 TESTS.update({f"M{n}": "tests/unit/test_gothmog.py" for n in (724, 725, 726, 727)})
 TESTS.update({f"M{n}": "tests/unit/test_host_console.py" for n in range(740, 750)})  # UI-1c
+# I1F (#226): M830–M832 by the machine (their frozen sequences catch them too); M833 is no
+# property of the world (a card raised again), its regression only.
+TESTS["M833"] = "tests/unit/test_invariant_regressions.py -k altered_quarantine"
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

@@ -758,7 +758,12 @@ l'état et les tags perdus, la levée ne peut pas le savoir. Il ne les compte pl
 dont la levée est partie tenait la carte en quarantaine : Glorfindel le savait, il doit le dire.
 Une règle composée (`bare_with_an_unknown_original`) rend la séquence courante : tirées une à
 une, ses étapes ne se rencontraient qu'avec l'isolation d'une ancienne version (un monde sur
-quinze environ) ; la règle la pose sur une VM que rien n'a encore touchée, comme `build`.
+quinze environ) ; dans un monde qui n'en a pas, la règle la pose sur une VM que rien n'a encore
+touchée, comme `build`. Elle ne favorise pas la VM d'un monde qui en a une : son ancien état
+effacé, M34 n'était plus attrapé qu'un tour sur cinq. Au budget du push, sur cinq tours : M860
+attrapé à chaque tour, M861 quatre sur cinq ; les mutants du chemin d'isolation (M01–M41) et le
+jeu de contrôle restent au niveau de `main`, mesurés côte à côte. Rien n'est à mesurer au banc :
+le faux Azure n'est pas en cause.
 
 Le plus grave : après une levée qui échoue en partie, une seconde levée lisait les champs de
 rétro-compatibilité de l'état comme un ancien format, et supprimait les deny du NSG de

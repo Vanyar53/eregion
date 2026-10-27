@@ -1519,16 +1519,13 @@ class IsolationMachine(RuleBasedStateMachine):
         of the VM bare, and the VM is isolated again then released, or reset.
         Drawn one by one, these steps met once in A3's run (186 steps), in a world where
         an older version's isolation sat on the NIC's own NSG — M860 and M861 went unseen
-        at 500 sequences. That VM, when the world has one, is the one. In a world without
-        one, a VM nothing touched yet, its first NIC on an NSG of its own, may get it now
-        — what `build` gives a world with `legacy` (an older version's isolation, its state
-        lost), only drawn later. The quarantine is turned on if it is off (config_changes)."""
-        owners = sorted({v for v in self.legacy.values() if v in self.live})
-        if owners:
-            vm = owners[0]
-            rid = data.draw(st.sampled_from([vm, vm.lower()]), label="rid")
-        else:
-            vm, rid, _ = self._draw(data)
+        at 500 sequences. In a world without one, a VM nothing touched yet, its first NIC
+        on an NSG of its own, gets it now — what `build` gives a world with `legacy` (an
+        older version's isolation, its state lost), only drawn later; the legacy VM is not
+        favoured (M34 needs its old state). The quarantine is turned on if it is off
+        (config_changes)."""
+        vm, rid, _ = self._draw(data)
+        if not self.legacy:
             first = self._nics(vm)[0]
             own, name = key(first["nsg"]), first["id"].rsplit("/", 1)[-1]
             dedicated = (own and own == key(first["design_nsg"])
@@ -1536,10 +1533,9 @@ class IsolationMachine(RuleBasedStateMachine):
                          and not any(key(s["nsg"]) == own for s in self.fake.subnets.values()))
             untouched = (self._state(vm) is None and not self._footprint(vm) and not actions._load_block_entries(vm)
                          and not self._block_rules_for(vm))
-            if (not self.legacy and not self.deleted and dedicated and untouched
+            if (not self.deleted and dedicated and untouched
                     and next(v for v in self.vms if any(        # the VM _legacy_isolation finds
-                        n.rsplit("/", 1)[-1] == name for n in self.fake.vms[key(v)]["nics"])) == vm
-                    and data.draw(st.booleans(), label="an older version isolated it")):
+                        n.rsplit("/", 1)[-1] == name for n in self.fake.vms[key(v)]["nics"])) == vm):
                 self._legacy_isolation(name, keep_state=False)
         if not (self.config["readable"] and self.config["quarantine"]):
             self.config = {**self.config, "quarantine": True, "readable": True}

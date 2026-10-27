@@ -33,6 +33,7 @@ Tu es spécialisé sur l'agent offensif. Lis ce fichier en début de session.
 
 ## Contexte technique rapide
 
+- **Jamais sans Glorfindel (V1, #214)** : avant chaque run et avant tout appel au cloud, `eregion_core/watch_gate.refusal()` (canal retour s'il est configuré, sinon `~/.glorfindel/watch_heartbeat`) ; sans battement vivant, refus. `--without-glorfindel` = run de développement, inscrit au rapport (« detection not measured, by choice »), sans rapport IA0 pour une campagne. Tout nouveau point d'entrée de run passe par `watch_gate` avant `arm`. Exception assumée : `annatar clean` (préparation).
 - `annatar run <scenario.yaml>` : setup → integrity check → attack → emit `attack_started`
 - Preflight check automatique : VM running + pas de règles `glorfindel-isolation-*` en place
 - Signal `attack_started` : `{T0, query, workspace_id}` via `annatar/signals/emitter.py`

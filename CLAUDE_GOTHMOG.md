@@ -40,6 +40,7 @@ et répond. Ses pannes éprouvent d'abord Glorfindel. Lis ce fichier en début d
 
 - **Aucune panne en zone `production`** — refusée par l'inscription (O0). Banc ou jumeau seulement.
 - Exécution depuis Orodruin ; rien sur Azure sans Jonathan (Chaos Studio, cibles, identité).
+- **Jamais sans Glorfindel (V1, #214)** : `gothmog run` et `preflight` refusent sans battement vivant de la watch (étape 0, avant `arm`, `eregion_core/watch_gate.py`) ; `--without-glorfindel` = run de développement, inscrit au rapport.
 - Une panne est déclarée en code, réversible, et son retour à l'état initial est vérifié.
 - Chaque lot ajoute ses mutants au harnais avant d'être fusionné.
 

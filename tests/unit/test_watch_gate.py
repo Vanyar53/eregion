@@ -137,7 +137,7 @@ def test_a_stale_channel_says_how_old_and_where(real_gate, monkeypatch):
     _channel(monkeypatch, {"at": (NOW - timedelta(days=2, hours=1)).isoformat()})
     why = gate.refusal(NOW)
     assert why.startswith(f"{gate.CHANNEL}: last heartbeat 2 d 1 h ago")
-    assert f"; {gate.LOCAL}: last heartbeat never" in why
+    assert gate.LOCAL not in why          # the channel decides: the local file is not read
 
 
 def test_an_unreadable_channel_is_said_never_raised(real_gate, monkeypatch):
@@ -150,10 +150,30 @@ def test_an_unreadable_channel_is_said_never_raised(real_gate, monkeypatch):
         f"{gate.CHANNEL}: last heartbeat never (no heartbeat.json in the channel)")
 
 
-def test_a_live_local_watch_is_enough_whatever_the_channel(real_gate, monkeypatch):
+def test_with_a_channel_a_live_local_file_does_not_count(real_gate, monkeypatch):
+    """M758: the channel decides when it is set — a file on this host says nothing of the
+    hosted watch the run depends on."""
     _channel(monkeypatch, RuntimeError("HTTP 403 reading the watch channel"))
     real_gate.write_text((NOW - timedelta(seconds=5)).isoformat())
-    assert gate.refusal(NOW) == ""
+    assert gate.refusal(NOW).startswith(f"{gate.CHANNEL}: last heartbeat never (unreadable")
+    _channel(monkeypatch, {"at": (NOW - timedelta(hours=1)).isoformat()})
+    assert gate.refusal(NOW).startswith(f"{gate.CHANNEL}: last heartbeat 1 h 00 min ago")
+
+
+@pytest.mark.parametrize("ahead_s, fresh", [(5, True), (10, True), (11, False), (3600, False)])
+def test_a_heartbeat_dated_in_the_future_is_fresh_only_within_the_clocks_skew(
+        real_gate, monkeypatch, ahead_s, fresh):
+    """M756: a heartbeat dated an hour ahead would stay « fresh » for ever. A few seconds
+    ahead is two hosts' clocks (H0, Orodruin); beyond CLOCK_SKEW_S, no watch — and said."""
+    at = NOW + timedelta(seconds=ahead_s)
+    real_gate.write_text(at.isoformat())
+    why = gate.refusal(NOW)
+    assert (why == "") is fresh
+    if not fresh:
+        assert "in the future" in why and "a clock is wrong" in why
+    _channel(monkeypatch, {"at": at.isoformat()})
+    assert (gate.refusal(NOW) == "") is fresh
+    assert wc.alive({"at": at.isoformat()}, now=NOW) is fresh   # the wait's test too (#159)
 
 
 # ── Annatar: refused before any call to the cloud ────────────────────────────────────
@@ -342,7 +362,7 @@ def test_campaign_run_cli_passes_the_flag(tmp_path, monkeypatch):
     def fake(cdir, dry_run=False, without_glorfindel=False):
         seen["without"] = without_glorfindel
         return SimpleNamespace(run=lambda: SimpleNamespace(
-            campaign_id="C1", state="done",
+            campaign_id="C1", state="done", without_glorfindel=without_glorfindel,
             results={"executed": 0, "detected": 0, "missed": 0, "skipped": 0, "errors": 0}))
     monkeypatch.setattr(runner_mod, "CampaignRunner", fake)
     res = CliRunner().invoke(cli, ["campaign", "run", "C1", "--yes", "--no-report",
@@ -350,6 +370,135 @@ def test_campaign_run_cli_passes_the_flag(tmp_path, monkeypatch):
     assert res.exit_code == 0, res.output
     assert seen == {"without": True}
     assert cdir.exists()
+
+
+def test_a_campaign_records_how_it_started_and_resumes_only_the_same_way(real_gate, tmp_path):
+    """M750, M751: the manifest says the campaign runs without Glorfindel; resumed with the
+    watch required (or the other way round), it is refused, its manifest left as it was."""
+    from annatar.campaign.runner import CampaignRefused
+    cdir = _campaign(tmp_path, n=2)
+    engine = FakeEngine([RunOutcome("run-1", "unknown"), RunOutcome("run-2", "unknown")])
+    CampaignRunner(cdir, reset_fn=lambda x: None, engine_factory=lambda: engine,
+                   without_glorfindel=True).run()
+    m = CampaignManifest.load(cdir)
+    assert m.without_glorfindel is True
+    assert json.loads((cdir / "manifest.json").read_text())["without_glorfindel"] is True
+    # Left 'running' by a crash: resumed with the watch required → refused, whatever the watch.
+    m.set_state("running")
+    m.scenarios[1].status = "pending"
+    m.save(cdir)
+    real_gate.write_text(datetime.now(timezone.utc).isoformat())   # a live watch, even
+    with pytest.raises(CampaignRefused, match="started without Glorfindel — resume it the same way"):
+        CampaignRunner(cdir, reset_fn=lambda x: None, engine_factory=lambda: engine).run()
+    assert CampaignManifest.load(cdir).state == "running" and len(engine.calls) == 2
+    # And a campaign started with Glorfindel is not resumed without it.
+    cdir2 = _campaign(tmp_path / "b")
+    m2 = CampaignManifest.load(cdir2)
+    m2.set_state("running")
+    m2.save(cdir2)
+    with pytest.raises(CampaignRefused, match="started with Glorfindel"):
+        CampaignRunner(cdir2, reset_fn=lambda x: None, engine_factory=lambda: engine,
+                       without_glorfindel=True).run()
+
+
+def test_campaign_run_cli_refuses_in_one_line_and_exits_one(real_gate, tmp_path, monkeypatch):
+    """M755: no watch → the reason and the hint, no traceback, exit 1, the campaign untouched."""
+    monkeypatch.delenv("ANNATAR_DEBUG", raising=False)
+    cdir = _campaign(tmp_path)
+    res = CliRunner().invoke(cli, ["campaign", "run", "C1", "--yes", "--no-report",
+                                   "--runs-dir", str(tmp_path)])
+    assert res.exit_code == 1
+    assert "no live Glorfindel watch" in res.output and "--without-glorfindel" in res.output
+    assert "Traceback" not in res.output and "ValueError" not in res.output
+    assert CampaignManifest.load(cdir).state == "ratified"
+
+
+def _cli_campaign(tmp_path, monkeypatch, *, state="done", without=False, args=()):
+    import annatar.campaign.runner as runner_mod
+    from annatar import cli as cli_mod
+    _campaign(tmp_path)
+    done = SimpleNamespace(campaign_id="C1", state=state, without_glorfindel=without, results={
+        "executed": 1, "detected": 0, "missed": 0, "skipped": 0, "errors": 0})
+    monkeypatch.setattr(runner_mod, "CampaignRunner",
+                        lambda cdir, dry_run=False, **kw: SimpleNamespace(run=lambda: done))
+    written = []
+    monkeypatch.setattr(cli_mod, "_write_campaign_report", written.append)
+    res = CliRunner().invoke(cli, ["campaign", "run", "C1", "--runs-dir", str(tmp_path), *args])
+    return res, written
+
+
+def test_an_aborted_campaign_exits_one(tmp_path, monkeypatch):
+    """M755: the watch gone mid-campaign (or the kill switch): `make orodruin-campaign-run`
+    must fail."""
+    res, _ = _cli_campaign(tmp_path, monkeypatch, state="aborted")
+    assert res.exit_code == 1
+    res, _ = _cli_campaign(tmp_path / "ok", monkeypatch, state="done")
+    assert res.exit_code == 0, res.output
+
+
+def test_a_campaign_without_glorfindel_writes_no_report_and_says_so(tmp_path, monkeypatch):
+    res, written = _cli_campaign(tmp_path, monkeypatch, without=True)
+    assert res.exit_code == 0, res.output
+    assert written == []
+    assert gate.NO_CAMPAIGN_REPORT in res.output
+
+
+def _done_manifest(cdir, **extra):
+    cdir.mkdir(parents=True, exist_ok=True)
+    (cdir / "manifest.json").write_text(json.dumps({
+        "campaign_id": cdir.name, "state": "done", "created_at": "2026-10-27T08:00:00Z",
+        "scenarios": [{"seq": 1, "ttp": "T1110.001", "status": "executed", "run_id": "R1",
+                       "target_resource_id": VM, "detection": "unknown",
+                       "started_at": "2026-10-27T08:00:00Z"}], **extra}))
+    return cdir
+
+
+def test_a_campaign_without_glorfindel_has_no_analysis_report(tmp_path, capsys):
+    """M752: no detection measured — no report, nothing indexed (so never a previous
+    campaign), said; `make campaign-report` writes nothing and does not fail."""
+    from analysis import campaign_report as cr
+    cdir = _done_manifest(tmp_path / "runs" / "campaigns" / "C1", without_glorfindel=True)
+    with pytest.raises(cr.NoReport, match="campaign without Glorfindel: no detection report, by choice"):
+        cr.build(cdir, llm=lambda *a, **k: pytest.fail("the model was called"))
+    assert cr.main([str(cdir)]) == 0
+    assert not (cdir / "report.md").exists()
+    assert gate.NO_CAMPAIGN_REPORT in capsys.readouterr().out
+    assert cr.no_report(_done_manifest(tmp_path / "runs" / "campaigns" / "C2")) == ""
+
+
+def test_h0_writes_no_report_for_a_campaign_without_glorfindel(tmp_path):
+    """M753: pulled from the channel, done, its runs here — still not due; said once."""
+    from analysis import hosted_report as hr
+    from eregion_core.exercise_channel import PULLED
+    root = tmp_path / "runs" / "campaigns"
+    said = []
+    for name, extra in (("C1", {"without_glorfindel": True}), ("C2", {})):
+        cdir = _done_manifest(root / name, **extra)
+        (cdir / PULLED).touch()
+        (cdir / "runs").mkdir()
+        (cdir / "runs" / "R1.json").write_text(json.dumps({"run_id": "R1", "metrics": {}}))
+    assert [p.name for p in hr.ready(root, say=said.append)] == ["C2"]
+    assert said == [f"C1: {gate.NO_CAMPAIGN_REPORT}"]
+    assert hr.write_report(root / "C1", llm=lambda *a, **k: pytest.fail("model"),
+                           say=said.append) == "without"
+    assert not (root / "C1" / "report.md").exists() and not (root / "C1" / hr.ERROR).exists()
+
+
+def test_a_campaign_without_glorfindel_never_enters_the_index(tmp_path):
+    """M754: `campaign_index` leaves it, and says why — it is never a previous campaign."""
+    from analysis import campaign_index as ci
+    cdir = _done_manifest(tmp_path / "runs" / "campaigns" / "C1", without_glorfindel=True)
+    versed = ci.verse(cdir, path=tmp_path / "index")
+    assert versed.left == gate.NO_CAMPAIGN_REPORT
+    assert not (tmp_path / "index").exists()
+
+
+@pytest.mark.parametrize("value, refused", [(True, False), (False, False), (None, False),
+                                            ("yes", True), (1, True)])
+def test_h0_reads_the_manifest_s_flag_typed(value, refused):
+    from analysis.campaign_schema import manifest_refusal
+    m = {"campaign_id": "C1", "state": "done", "scenarios": [], "without_glorfindel": value}
+    assert bool(manifest_refusal(m)) is refused
 
 
 # ── The console shows it apart from unknown ──────────────────────────────────────────
@@ -365,6 +514,25 @@ def test_the_console_keeps_the_flag_of_a_run_without_glorfindel(tmp_path):
     assert "without_glorfindel" not in api._slim_run(path)["metrics"]
     js = (ROOT / "eregion_console" / "static" / "exercises.js").read_text()
     assert "without_glorfindel === true" in js and "not measured, by choice" in js
+
+
+def test_the_console_counts_a_campaign_without_glorfindel_apart(tmp_path, monkeypatch):
+    """M759: the campaigns' API carries the manifest's flag; the overview and Annatar's page
+    show « not measured, by choice » in place of the unknown count."""
+    import asyncio
+    api = pytest.importorskip("eregion_console.api")
+    runs = tmp_path / "runs"
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    for name, extra in (("C1", {"without_glorfindel": True}), ("C2", {})):
+        _done_manifest(runs / "campaigns" / name, **extra)
+        m = json.loads((runs / "campaigns" / name / "manifest.json").read_text())
+        (runs / "campaigns" / name / "manifest.json").write_text(json.dumps({**m, "created_at": now}))
+    monkeypatch.setattr(api, "_RUNS", runs)
+    got = {c["dir"]: c["without_glorfindel"] for c in asyncio.run(api.campaigns())["campaigns"]}
+    assert got == {"C1": True, "C2": False}
+    for page in ("overview.html", "injector.html"):
+        html = (ROOT / "eregion_console" / "static" / page).read_text()
+        assert "c.without_glorfindel" in html and "not measured, by choice" in html, page
 
 
 # ── Orodruin's Make targets: the flag goes through, the refusal comes back ───────────
@@ -402,7 +570,11 @@ def test_orodruin_targets_pass_the_flag_and_return_the_refusal(tmp_path, target,
     is added; a refusal there (exit != 0) fails the make target."""
     code, calls = _make(tmp_path, target, *args)
     assert code == 0 and calls[-1].endswith(command) and "--without-glorfindel" not in calls[-1]
-    code, calls = _make(tmp_path, target, *args, "WITHOUT_GLORFINDEL=1")
-    assert code == 0 and calls[-1].endswith(f"{command} --without-glorfindel")
+    for value in ("1", "yes", "true"):
+        code, calls = _make(tmp_path, target, *args, f"WITHOUT_GLORFINDEL={value}")
+        assert code == 0 and calls[-1].endswith(f"{command} --without-glorfindel"), value
+    for value in ("0", "no", "false"):   # M757: only 1, yes, true waive the watch
+        code, calls = _make(tmp_path, target, *args, f"WITHOUT_GLORFINDEL={value}")
+        assert code == 0 and "--without-glorfindel" not in calls[-1], value
     code, _ = _make(tmp_path, target, *args, exit_code=1)
     assert code != 0

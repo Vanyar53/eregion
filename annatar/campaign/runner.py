@@ -31,6 +31,11 @@ from eregion_core import watch_gate
 console = Console()
 
 
+class CampaignRefused(ValueError):
+    """A campaign that does not start (V1): no live Glorfindel watch, or a resume with another
+    --without-glorfindel than the one it started with. Its manifest is left as it was."""
+
+
 def _utcnow() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -101,15 +106,22 @@ class CampaignRunner:
                 f"campaign {m.campaign_id} is '{m.state}' — {hint}"
             )
 
-        # V1 (#214): no live Glorfindel watch, no campaign — refused before its first run, its
-        # state left as it was (ratified: it can run once the watch is up).
+        # V1 (#214): a campaign is resumed the way it started — with Glorfindel, or without it:
+        # its runs would otherwise mix measured and unmeasured detections.
+        if m.state == "running" and m.without_glorfindel != self.without_glorfindel:
+            said = "without" if m.without_glorfindel else "with"
+            raise CampaignRefused(
+                f"campaign {m.campaign_id} started {said} Glorfindel — resume it the same way "
+                f"({'with' if m.without_glorfindel else 'without'} {watch_gate.FLAG})")
+        # No live Glorfindel watch, no campaign — refused before its first run, its state left
+        # as it was (ratified: it can run once the watch is up).
         if not self.without_glorfindel:
             no_watch = watch_gate.refusal()
             if no_watch:
-                raise ValueError(
-                    f"campaign {m.campaign_id} refused — no live Glorfindel watch: {no_watch}. "
-                    f"Start the watch, or {watch_gate.FLAG} for a development campaign")
+                raise CampaignRefused(
+                    f"campaign {m.campaign_id} refused — no live Glorfindel watch: {no_watch}")
 
+        m.without_glorfindel = self.without_glorfindel
         m.set_state("running")
         m.save(self.campaign_dir)
 

@@ -1931,6 +1931,7 @@ async def campaigns(since: str = "30d") -> dict:
                                                   "detection_window_s", "reset_nsg_between")},
             "pulled": (cdir / ".pulled").exists(),
             "report": (cdir / "report.md").exists(),
+            "without_glorfindel": m.get("without_glorfindel") is True,   # V1: counted apart
             "scenarios": [
                 {k: s.get(k) for k in ("seq", "ttp", "tactic", "name", "status", "detection",
                                        "detection_latency_s", "run_id", "started_at",

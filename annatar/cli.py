@@ -363,7 +363,8 @@ def campaign_plan(target, objective, max_scenarios, allow_destructive, use_llm, 
 def campaign_run(campaign_id, yes, dry_run, runs_dir, without_glorfindel, report):
     """Execute a planned campaign sequentially within its budget/scope."""
     from annatar.campaign.manifest import CampaignManifest, campaign_dir
-    from annatar.campaign.runner import CampaignRunner
+    from annatar.campaign.runner import CampaignRefused, CampaignRunner
+    from eregion_core import watch_gate
 
     cdir = campaign_dir(campaign_id, runs_dir=runs_dir)
     if not (cdir / "manifest.json").exists():
@@ -382,7 +383,12 @@ def campaign_run(campaign_id, yes, dry_run, runs_dir, without_glorfindel, report
             m.set_state("ratified")
             m.save(cdir)
 
-    result = CampaignRunner(cdir, dry_run=dry_run, without_glorfindel=without_glorfindel).run()
+    try:
+        result = CampaignRunner(cdir, dry_run=dry_run, without_glorfindel=without_glorfindel).run()
+    except CampaignRefused as e:  # V1: nothing ran, the manifest is as it was
+        console.print(f"[red]✗ {e}[/red]")
+        console.print(f"[dim]  → {_CAMPAIGN_HINT}[/dim]")
+        raise SystemExit(EXIT_RUN_FAILED)
     if not dry_run:
         r = result.results
         console.print(
@@ -392,11 +398,25 @@ def campaign_run(campaign_id, yes, dry_run, runs_dir, without_glorfindel, report
         )
         # From Orodruin (an exercise channel set), the campaign goes to H0, whose watch
         # writes its report (#167); else, or if it could not go, written here if possible.
-        if report and not _publish_campaign(cdir, runs_dir, result.state):
+        # Without Glorfindel (V1) no report is written, here nor on H0 — and that is said.
+        without = result.without_glorfindel
+        if report and not _publish_campaign(cdir, runs_dir, result.state, without) \
+                and not without:
             _write_campaign_report(cdir)
+        if without:
+            console.print(f"[yellow]{watch_gate.NO_CAMPAIGN_REPORT}.[/yellow]")
+        # A campaign stopped on its way (kill switch, the watch gone mid-campaign) did not
+        # complete: a script, or `make orodruin-campaign-run`, must see it.
+        if result.state == "aborted":
+            raise SystemExit(EXIT_RUN_FAILED)
 
 
-def _publish_campaign(cdir, runs_dir, state) -> bool:
+_CAMPAIGN_HINT = ("lancer la watch de Glorfindel (ou la watch hébergée, vue par "
+                  "EREGION_WATCH_CHANNEL), ou --without-glorfindel pour une campagne de "
+                  "développement ; une campagne reprise garde son réglage de départ.")
+
+
+def _publish_campaign(cdir, runs_dir, state, without_glorfindel=False) -> bool:
     """#167: carry the finished campaign to H0 over the exercise channel — its manifest and
     its runs' reports, nothing else (eregion_core/exercise_channel.py) — and say where its
     report will be written: on H0 for a ``done`` campaign only (the hosted watch writes no
@@ -419,7 +439,10 @@ def _publish_campaign(cdir, runs_dir, state) -> bool:
         missing = exercise_channel.unpublished_runs(cdir, Path(runs_dir))
     except Exception:  # the manifest was just published from this very file
         missing = []
-    if missing:
+    if without_glorfindel:  # V1: H0 writes no report for it (analysis/hosted_report.py)
+        console.print(f"[yellow]Campaign published to H0[/yellow] ({len(names)} file(s)) — "
+                      "no report will be written for it there")
+    elif missing:
         # H0 waits for the report of every executed run: without them, it never writes the
         # campaign's (`--runs-dir` other than runs/: the runs' reports stay in runs/).
         console.print(f"[yellow]Campaign published to H0[/yellow] ({len(names)} file(s)) — "

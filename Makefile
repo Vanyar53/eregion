@@ -663,8 +663,9 @@ orodruin-ssh:
 FAULT ?= vm-shutdown
 # V1 (#214) : sans watch de Glorfindel vivante (le battement du canal retour), l'injecteur refuse
 # avant tout appel au cloud, et la cible échoue avec lui. WITHOUT_GLORFINDEL=1 : un run de
-# développement, que le rapport inscrit (« detection not measured, by choice »).
-ORO_WITHOUT    = $(if $(WITHOUT_GLORFINDEL), --without-glorfindel)
+# développement, que le rapport inscrit (« detection not measured, by choice ») ; 1, yes ou true
+# seulement — WITHOUT_GLORFINDEL=0 (ou toute autre valeur) n'y touche pas.
+ORO_WITHOUT    = $(if $(filter 1 yes true,$(WITHOUT_GLORFINDEL)), --without-glorfindel)
 
 gothmog-preflight:
 	$(ORO_SSH) '$(ORO_RUN) gothmog preflight $(FAULT)$(ORO_WITHOUT)'

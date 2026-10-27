@@ -9,15 +9,18 @@ injector reads the watch's heartbeat, from two places:
 - the local file ``~/.glorfindel/watch_heartbeat``, which a watch on this host rewrites every
   minute and removes when it stops.
 
-Either one recent enough (``watch_channel.FRESH_S``) is a live watch. Neither: the run is
-refused, and the refusal says how old the last heartbeat is in each place, or that there
-was never one. Reading the channel is the only network call made before that answer.
+The channel decides when it is set — the watch is hosted elsewhere, and a file on this host
+says nothing of it; the local file otherwise. A heartbeat younger than
+``watch_channel.FRESH_S`` (and not dated further ahead than ``CLOCK_SKEW_S``) is a live
+watch. Else the run is refused, and the refusal says how old the last heartbeat is, or that
+there was never one. Reading the channel is the only network call made before that answer.
 
 ``--without-glorfindel`` runs anyway, for development. The run's report says so
 (``metrics.without_glorfindel``, ``metrics.detection_note``); its detection is not measured
 — never ``missed``, never a rule proposed for it; H0 accepts that report
 (``analysis/campaign_schema.run_report_refusal``) and the console shows it apart from
-``unknown``.
+``unknown``. A campaign run that way carries ``without_glorfindel: true`` in its manifest, is
+resumed only the same way, and has no analysis report (``NO_CAMPAIGN_REPORT``).
 
 The engines read through ``READERS``, which the tests swap (tests/unit/conftest.py) the way
 they swap Orodruin's; Annatar's wait for a detection reads ``local_beat`` itself.
@@ -80,8 +83,8 @@ READERS = {"channel": channel_beat, "local": local_beat}
 
 
 def fresh(beat: Beat | None, now: datetime) -> bool:
-    return (beat is not None and beat.at is not None
-            and (now - beat.at).total_seconds() < watch_channel.FRESH_S)
+    """Younger than FRESH_S, never dated further ahead than the clocks' skew."""
+    return beat is not None and watch_channel.recent(beat.at, now)
 
 
 def _age(seconds: float) -> str:
@@ -101,17 +104,28 @@ def _age(seconds: float) -> str:
 def describe(beat: Beat, now: datetime) -> str:
     if beat.at is None:
         return f"{beat.where}: last heartbeat never ({beat.why})"
-    return (f"{beat.where}: last heartbeat {_age((now - beat.at).total_seconds())} ago "
-            f"({beat.at.astimezone(timezone.utc):%Y-%m-%d %H:%M:%S} UTC)")
+    at = f"{beat.at.astimezone(timezone.utc):%Y-%m-%d %H:%M:%S} UTC"
+    age = (now - beat.at).total_seconds()
+    if age < 0:
+        return (f"{beat.where}: last heartbeat dated {_age(-age)} in the future ({at}) — "
+                "a clock is wrong")
+    return f"{beat.where}: last heartbeat {_age(age)} ago ({at})"
 
 
 def refusal(now: datetime | None = None) -> str:
-    """Why no live Glorfindel watch stands behind this run — "" when one does."""
+    """Why no live Glorfindel watch stands behind this run — "" when one does. The return
+    channel decides when it is set (the watch is hosted elsewhere: a file on this host says
+    nothing of it); the local file otherwise."""
     now = now or datetime.now(timezone.utc)
-    beats = [b for b in (READERS["channel"](), READERS["local"]()) if b is not None]
-    if any(fresh(b, now) for b in beats):
-        return ""
-    return "; ".join(describe(b, now) for b in beats)
+    beat = READERS["channel"]()
+    if beat is None:
+        beat = READERS["local"]()
+    return "" if fresh(beat, now) else describe(beat, now)
+
+
+# A campaign run --without-glorfindel: its runs measured no detection, so it has no report of
+# the analysis (IA0), here or on H0, and never enters the index nor a comparison (D-2).
+NO_CAMPAIGN_REPORT = "campaign without Glorfindel: no detection report, by choice"
 
 
 def without_metrics(without_glorfindel: bool) -> dict:

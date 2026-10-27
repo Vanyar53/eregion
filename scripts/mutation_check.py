@@ -1341,12 +1341,10 @@ MUTANTS = [
     ("M730", "campaign run --without-glorfindel does not reach its runs (V1)", CRUN,
      "            lambda: Engine(skip_preflight=False, without_glorfindel=without_glorfindel))\n",
      "            lambda: Engine(skip_preflight=False))\n"),
-    ("M731", "a heartbeat of any age is a live watch (V1)", "eregion_core/watch_gate.py",
-     "            and (now - beat.at).total_seconds() < watch_channel.FRESH_S)\n", ")\n"),
+    ("M731", "a heartbeat of any age is a live watch (V1)", WCH,
+     "    return -CLOCK_SKEW_S <= age < FRESH_S\n", "    return -CLOCK_SKEW_S <= age\n"),
     ("M732", "the return channel is not read: the hosted watch is never seen from Orodruin (V1)",
-     "eregion_core/watch_gate.py",
-     '    beats = [b for b in (READERS["channel"](), READERS["local"]()) if b is not None]\n',
-     '    beats = [b for b in (READERS["local"](),) if b is not None]\n'),
+     "eregion_core/watch_gate.py", '    beat = READERS["channel"]()\n', "    beat = None\n"),
     ("M733", "an unreadable channel raises instead of refusing (V1)", "eregion_core/watch_gate.py",
      "    except Exception as e:  # unreadable is no watch — said, never raised\n",
      "    except ValueError as e:  # unreadable is no watch — said, never raised\n"),
@@ -1365,6 +1363,34 @@ MUTANTS = [
      "'$(ORO_RUN) gothmog run $(FAULT) --yes$(ORO_WITHOUT)'", "'$(ORO_RUN) gothmog run $(FAULT) --yes'"),
     ("M739", "make orodruin-campaign-run drops WITHOUT_GLORFINDEL (V1)", MAKE,
      "annatar campaign run $(CAMPAIGN) --yes$(ORO_WITHOUT)'", "annatar campaign run $(CAMPAIGN) --yes'"),
+    # V1, review: a campaign without Glorfindel says so, resumes only the same way, has no
+    # analysis report and never enters the index; the channel decides; no heartbeat from the future.
+    ("M750", "a campaign --without-glorfindel does not say so in its manifest (V1)", CRUN,
+     "        m.without_glorfindel = self.without_glorfindel\n", ""),
+    ("M751", "a campaign is resumed with another --without-glorfindel than it started with (V1)", CRUN,
+     "        if m.state == \"running\" and m.without_glorfindel != self.without_glorfindel:\n",
+     "        if False:\n"),
+    ("M752", "a campaign without Glorfindel gets an analysis report, its decisions sought (V1)", CREP,
+     "    if why := no_report(campaign_dir):\n        raise NoReport(why)\n", ""),
+    ("M753", "H0 writes the report of a campaign without Glorfindel (V1)", HREP,
+     "        if campaign_schema.without_glorfindel(manifest):  # V1: no report, by choice\n",
+     "        if False:\n"),
+    ("M754", "a campaign without Glorfindel enters the index: a previous campaign to compare (V1)",
+     "analysis/campaign_index.py",
+     "    if cr.without_glorfindel(manifest):  # V1: no detection measured — never compared\n",
+     "    if False:\n"),
+    ("M755", "an aborted campaign exits 0: make orodruin-campaign-run succeeds (V1)", ACLI,
+     "        if result.state == \"aborted\":\n            raise SystemExit(EXIT_RUN_FAILED)\n", ""),
+    ("M756", "a heartbeat dated in the future stays fresh for ever (V1)", WCH,
+     "    return -CLOCK_SKEW_S <= age < FRESH_S\n", "    return age < FRESH_S\n"),
+    ("M757", "WITHOUT_GLORFINDEL=0 waives the watch on Orodruin (V1)", MAKE,
+     "$(if $(filter 1 yes true,$(WITHOUT_GLORFINDEL)), --without-glorfindel)",
+     "$(if $(WITHOUT_GLORFINDEL), --without-glorfindel)"),
+    ("M758", "a live local file counts though the return channel is set (V1)",
+     "eregion_core/watch_gate.py", "    if beat is None:\n        beat = READERS[\"local\"]()\n",
+     "    if beat is None or not fresh(beat, now):\n        beat = READERS[\"local\"]()\n"),
+    ("M759", "the console counts a campaign without Glorfindel as unknown (V1)", CON,
+     '            "without_glorfindel": m.get("without_glorfindel") is True,   # V1: counted apart\n', ""),
 ]
 
 # Mutants measured by other tests than the invariants (their lot's own).
@@ -1449,7 +1475,7 @@ TESTS.update({f"M{n}": "tests/unit/test_rule_layers.py" for n in range(713, 717)
 TESTS.update({f"M{n}": "tests/unit/test_console.py" for n in range(400, 409)})  # UI-1
 TESTS["M403"] = "tests/unit/test_console_exercises.py"
 # V1 (#214): Annatar's side and the shared gate in test_watch_gate.py, Gothmog's in test_gothmog.py.
-TESTS.update({f"M{n}": "tests/unit/test_watch_gate.py" for n in range(720, 740)})
+TESTS.update({f"M{n}": "tests/unit/test_watch_gate.py" for n in (*range(720, 740), *range(750, 760))})
 TESTS.update({f"M{n}": "tests/unit/test_gothmog.py" for n in (724, 725, 726, 727)})
 
 

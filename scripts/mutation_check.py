@@ -1521,6 +1521,41 @@ MUTANTS += [
      '        if seen.get("config_error") != str(exc):\n', "        if True:\n"),
 ]
 
+# I8F (#227): a bare NIC our state holds in quarantine, its original unknown — never "none".
+MUTANTS += [
+    ("M860", "a bare NIC isolated again records 'none' over an unknown original: released bare, an old "
+             "isolation left without state (I8F, I8)", QUA,
+     '                elif recorded is _UNKNOWN and prior is _UNKNOWN and _held_in_quarantine(t["nic_id"]):',
+     "                elif False:"),
+    ("M861", "reset skips a bare NIC whose original is unknown: swept, an old isolation left without "
+             "state (I8F, I8)", SWP,
+     '                if recorded is _UNKNOWN and _held_in_quarantine(t0["nic_id"]):\n'
+     "                    # In quarantine for our state",
+     "                if False:\n                    # In quarantine for our state"),
+    ("M862", "a release drops the placement whose original is unknown: the next says released, "
+             "an old isolation left without state (I8F, relecture)", REL,
+     '                                          f"non détaché : {_first_line(exc)[:_ERR_MAX]}")\n'
+     "                            remaining.append(p)\n",
+     '                                          f"non détaché : {_first_line(exc)[:_ERR_MAX]}")\n'
+     '                            if type(exc).__name__ != "OriginalUnknown":\n'
+     "                                remaining.append(p)\n"),
+    ("M863", "an unreadable tag on a bare NIC reads as 'none': a 429 writes it over an unknown "
+             "original (I8F, relecture)", QUA,
+     "                        prior, unread = _UNKNOWN, True\n",
+     "                        prior = None\n"),
+    ("M864", "an unreadable tag counts as unknown only when a state holds the NIC: the state lost, a "
+             "429 writes 'none' over a valid tag (I8F, second relecture)", QUA,
+     "                elif unread and recorded is _UNKNOWN:\n",
+     '                elif unread and recorded is _UNKNOWN and _held_in_quarantine(t["nic_id"]):\n'),
+    ("M865", "a stateless release ignores the tag of a bare NIC: left without its NSG, an old isolation "
+             "there (I8F, second relecture)", REL,
+     "                    original, q_bare = self._bare_nic_original(t0, rg)\n"
+     "                    if q_bare is not None:\n",
+     "                    original, q_bare = self._bare_nic_original(t0, rg)\n"
+     "                    if False:\n"),
+]
+
+
 # I4F (#235): a NIC away from its NSG (in quarantine, or bare) still counts among the NSG's —
 # or the NSG reads as another VM's alone, and the reset takes that VM's older isolation.
 MUTANTS += [
@@ -2189,6 +2224,10 @@ TESTS["M838"] = f"{INVARIANTS} tests/unit/test_invariant_regressions.py"
 TESTS.update({mid: f"{INVARIANTS} tests/unit/test_invariant_regressions.py" for mid in ("M960", "M961")})
 # M834 needs a world with no state at all: rare in the drawn sequences (2/4 at 500).
 TESTS["M834"] = f"{INVARIANTS} tests/unit/test_reassert.py"
+# I8F (#227): flaky by the machine alone (its composite rule helps, a 429 at the right call
+# stays rare) — their frozen sequences, then the machine (L1F's precedent).
+TESTS.update({mid: f"tests/unit/test_invariant_regressions.py {INVARIANTS}"
+              for mid in ("M860", "M861", "M862", "M863", "M864", "M865")})
 
 # D1 (#81): each component runs alone (scripts/component_check.py), and every usage profile
 # keeps Glorfindel (docker-compose.yml, the Makefile's profile and team targets).

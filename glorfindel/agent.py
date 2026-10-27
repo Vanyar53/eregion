@@ -365,10 +365,14 @@ def resolve_attack_started(signal: dict) -> dict:
         since_attack = time.time() - attack_time
         if "attack_time" in raw and 0 < since_attack < 86400:
             detection_s = round(since_attack)
-        from glorfindel.detection_rules import normalize_row
+        from glorfindel.detection_rules import _reads_entra_table, normalize_row
         from glorfindel.detectors import is_control_plane_source, is_identity_source
+        # A query on one of Entra ID's tables, whatever its source (C2): an identity
+        # detection — decided by the code, its UPN never sent to the model.
+        entra_query = _reads_entra_table(query) and not is_control_plane_source(source)
         return {
             **signal,
+            **({"context": {**(signal.get("context") or {}), "plane": "identity"}} if entra_query else {}),
             "event": "detection",
             "raw_signal": {
                 **raw,
@@ -870,10 +874,10 @@ def _control_plane_decision(state: GlorfindelState) -> GlorfindelState:
 
 def _is_identity(signal: dict) -> bool:
     """A detection on what was done to an identity (Entra ID's logs, C2): the RulePoller
-    says so (`context.plane`), and so does the source it read. In depth, the row itself — an
-    Entra row read by a rule of another source has neither: its columns (`EntraOperation`,
-    `InitiatedBy`, `TargetResources`, `ServicePrincipalId`…), its table (`Type`), or its
-    normalised indicator still say so."""
+    says so (`context.plane` — from the source, or from the query when a rule of another
+    source reads an Entra table, whatever it projects), and so does the source it read. In
+    depth, the row itself: its columns (`EntraOperation`, `InitiatedBy`, `TargetResources`,
+    `ServicePrincipalId`…), its table (`Type`), or its normalised indicator."""
     from glorfindel.detectors import is_identity_source
     from glorfindel.providers.azure.entra import ENTRA_TABLES, IDENTITY_COLUMNS
     ctx = signal.get("context") or {}
@@ -1743,7 +1747,15 @@ def _platform_note(outcome: dict) -> str:
 def _cycle_source(signal: dict) -> tuple[str, str]:
     """B2: (`exercise`, run_id) when an injector's window covers the signal's VM at its
     time, else (`real`, "") — eregion_core/exercise.py. Recorded in the memory and on the
-    card; never shown to the model yet. Unreadable → (`unknown`, "")."""
+    card; never shown to the model yet. Unreadable → (`unknown`, "").
+
+    An identity detection (C2), and an unattributed control-plane one (AL1), are `real`:
+    their VM is an anchor, and an exercise window on it says nothing of an identity or of
+    an operation elsewhere — until an identity can be enrolled, nothing ties one to an
+    exercise (an attack on it would otherwise be labelled one)."""
+    if _is_identity(signal) or (
+            _is_control_plane(signal) and (signal.get("context") or {}).get("attribution") != "asset"):
+        return "real", ""
     try:
         from eregion_core.exercise import source_of
         return source_of(signal.get("resource_id", ""), signal.get("timestamp"),

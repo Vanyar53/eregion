@@ -32,9 +32,11 @@ elsewhere), `GlorfindelManaged` (the target is Glorfindel's identity — a crede
 there gives its rights to someone else). Both critical. **No row is dropped under
 Glorfindel's identity**: unlike the Activity Log (AL1), Glorfindel makes no write here; its
 usual sign-ins are left out by the baseline, as anyone's. Its identity is read as AL1 reads
-it (its token, AZURE_CLIENT_ID, GLORFINDEL_OWN_CALLERS); its application's object id, the
-target of a credential added to its registration, is not in its token: add it to
-GLORFINDEL_OWN_CALLERS.
+it (AZURE_CLIENT_ID, GLORFINDEL_OWN_CALLERS, its token) — but its token's ids only when the
+token is an application's (`app_identities`): under `az login` the token's oid is the
+operator's, and every action of that administrator would read as Glorfindel's stolen
+credential. Its application's object id, the target of a credential added to its
+registration, is not in its token: add it to GLORFINDEL_OWN_CALLERS.
 
 Entra's logs reach the workspace only through a diagnostic setting of the TENANT (not of the
 subscription): AuditLogs, ServicePrincipalSignInLogs — infra/terraform/entra_logs.tf proposes
@@ -69,10 +71,13 @@ PRIVILEGED_ROLES = frozenset(r.lower() for r in (
     "Lifecycle Workflows Administrator", "Password Administrator", "Security Administrator",
     "Security Operator", "Security Reader", "User Administrator",
     "Partner Tier1 Support", "Partner Tier2 Support",
+    # Global Administrator's former name, still read in some logs (hypothesis, to measure).
+    "Company Administrator",
 ))
 KINDS = ("credential", "consent", "role", "signin")
 # Entra's tables: a rule of another source that reads one is said at load (no threshold,
-# no mark) — its rows are still decided by the code (the row's columns say so).
+# no mark) — its signals still carry `plane: identity`, from the query itself
+# (detection_rules `_signal`): decided by the code, whatever the columns it projects.
 ENTRA_TABLES = ("auditlogs", "signinlogs", "aadserviceprincipalsigninlogs",
                 "aadnoninteractiveusersigninlogs", "aadmanagedidentitysigninlogs")
 # Columns that only an Entra row carries (raw or projected): the guard of `decide` reads them
@@ -187,11 +192,24 @@ def describe(row: dict) -> tuple[str, list[str]]:
             "https://graph.microsoft.com/v1.0/oauth2PermissionGrants/<id>` ; d'application : "
             "`az rest --method DELETE --url https://graph.microsoft.com/v1.0/servicePrincipals/"
             "<id>/appRoleAssignedTo/<id>`.",
-            f"Bloquer la connexion de l'application le temps de l'enquête : `az ad sp update --id "
-            f"{tid} --set accountEnabled=false` ; révoquer les sessions de qui a consenti "
-            "(`az rest --method POST --url https://graph.microsoft.com/v1.0/users/<id>/"
-            "revokeSignInSessions`) — un jeton déjà émis vit jusqu'à son expiration.",
         ]
+        # Which principal to block: under « Consent to application » the target is the
+        # application consented to; under a grant or an app role assignment outside that
+        # flow, the target is likely the RESOURCE's principal (Microsoft Graph — hypothesis):
+        # blocking it would cut the whole tenant. The client then comes from
+        # modifiedProperties (`ClientId`), or no blocking step is proposed.
+        client = (tid if op.lower() == "consent to application" and row.get("TargetId")
+                  else str(row.get("ClientId") or "").strip())
+        if client:
+            steps.append(f"Bloquer la connexion de l'application le temps de l'enquête : "
+                         f"`az ad sp update --id {client} --set accountEnabled=false`.")
+        else:
+            steps.append("Identifier l'application cliente (modifiedProperties de l'événement) "
+                         "avant tout blocage : la cible est sans doute le principal de la "
+                         "ressource (Microsoft Graph) — le désactiver couperait tout le tenant.")
+        steps.append("Révoquer les sessions de qui a consenti (`az rest --method POST --url "
+                     "https://graph.microsoft.com/v1.0/users/<id>/revokeSignInSessions`) — un "
+                     "jeton déjà émis vit jusqu'à son expiration.")
     elif kind == "role":
         role = str(row.get("RoleName") or "").strip() or "rôle non lu"
         what = (f"Entra ID : rôle d'annuaire privilégié « {role} » attribué ({op}) par {actor} "
@@ -252,7 +270,7 @@ def describe(row: dict) -> tuple[str, list[str]]:
 
 class AzureEntraDetector(AzureActivityDetector):
     """Entra ID's audit and sign-in logs, in the Log Analytics workspace. Glorfindel's
-    identity is read as the Activity Log's detector reads it (`own_identities`)."""
+    identity: `app_identities` (an application's token only, never an operator's oid)."""
 
     plane = "identity"
     backend_type = "azure_monitor"   # same workspace as Perf / Syslog / AzureActivity
@@ -260,10 +278,10 @@ class AzureEntraDetector(AzureActivityDetector):
 
     def run_query(self, query: str, timespan=None) -> list[dict]:
         rows = AzureMonitorDetector.run_query(self, query, timespan=timespan)
-        return prepare_rows(rows, self.own_identities())
+        return prepare_rows(rows, self.app_identities())
 
     def poll_alert(self, query, since, timeout_s, interval_s=10.0, verbose=True, match_row=None):
-        own = self.own_identities()
+        own = self.app_identities()
 
         def keep(row):
             return above_threshold(row) and (match_row is None or match_row(row))

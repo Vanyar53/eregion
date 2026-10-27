@@ -321,7 +321,9 @@ rules:
       | mv-apply Prop = Props on (
           where tostring(Prop.displayName) in~ ("KeyDescription", "FederatedIdentityCredentials")
           | extend NewSet = parse_json(tostring(Prop.newValue)), OldSet = parse_json(tostring(Prop.oldValue)))
-      | extend OldSet = iff(isnull(OldSet), dynamic([]), OldSet)
+      // No old value (a first credential): an empty array — set_difference on a non-array
+      // would silence the row.
+      | extend OldSet = iff(isnull(array_length(OldSet)), dynamic([]), OldSet)
       | extend Added = set_difference(NewSet, OldSet)
       | where array_length(Added) > 0
       // One row per operation and target.
@@ -353,7 +355,7 @@ rules:
       | where Result =~ "success"
       | extend Target = TargetResources[0]
       | mv-apply Prop = Target.modifiedProperties on (
-          where tostring(Prop.displayName) in~ ("ConsentAction.Permissions", "ConsentContext.IsAdminConsent", "AppRole.Value", "DelegatedPermissionGrant.Scope")
+          where tostring(Prop.displayName) in~ ("ConsentAction.Permissions", "ConsentContext.IsAdminConsent", "AppRole.Value", "DelegatedPermissionGrant.Scope", "ServicePrincipal.ObjectID")
           | summarize Props = make_bag(bag_pack(tostring(Prop.displayName), tostring(Prop.newValue))))
       // One row per operation: its « Consent to application » line first.
       | extend Rank = iff(OperationName =~ "Consent to application", 0, 1)
@@ -365,7 +367,10 @@ rules:
                 ActorAppId = tostring(InitiatedBy.app.appId), ActorIp = tostring(InitiatedBy.user.ipAddress),
                 TargetName = tostring(Target.displayName), TargetId = tostring(Target.id), TargetType = tostring(Target.type),
                 Permissions = trim(@'"', coalesce(tostring(Props["ConsentAction.Permissions"]), tostring(Props["AppRole.Value"]), tostring(Props["DelegatedPermissionGrant.Scope"]))),
-                AdminConsent = tostring(Props["ConsentContext.IsAdminConsent"]) has "True", CorrelationId
+                AdminConsent = tostring(Props["ConsentContext.IsAdminConsent"]) has "True",
+                // The client application, when the event names it (hypothesis): outside
+                // « Consent to application », the target is likely the resource's principal.
+                ClientId = trim(@'"', tostring(Props["ServicePrincipal.ObjectID"])), CorrelationId
 
   - name: entra-privileged-role-assigned
     description: >
@@ -387,13 +392,18 @@ rules:
       | where OperationName has_any ("Add member to role", "Add eligible member to role", "Add scoped member to role")
       | where OperationName !has "PIM activation"
       | where Result =~ "success"
+      // The role's own target, when the event has one (PIM: hypothesis) — the fallback name.
+      | mv-apply R = TargetResources on (
+          summarize RoleTargetName = take_anyif(tostring(R.displayName), tostring(R.type) =~ "Role"))
       | mv-apply Target = TargetResources on (
           where tostring(Target.type) in~ ("User", "ServicePrincipal", "Group")
           | extend TargetName = coalesce(tostring(Target.userPrincipalName), tostring(Target.displayName)),
                    TargetId = tostring(Target.id), TargetType = tostring(Target.type), Props = Target.modifiedProperties)
+      // A summarize without `by` always gives one row: an assignment without Role.DisplayName
+      // is kept, its name from the role's target, or empty — the adapter keeps it then.
       | mv-apply Prop = Props on (
-          where tostring(Prop.displayName) =~ "Role.DisplayName"
-          | extend RoleName = trim(@'"', tostring(Prop.newValue)))
+          summarize RoleName = take_anyif(trim(@'"', tostring(Prop.newValue)), tostring(Prop.displayName) =~ "Role.DisplayName"))
+      | extend RoleName = coalesce(RoleName, RoleTargetName)
       // One row per operation and member; the privileged roles are filtered by the adapter.
       | summarize arg_max(TimeGenerated, *) by CorrelationId, TargetId
       | project TimeGenerated, EntraKind = "role", EntraOperation = OperationName,

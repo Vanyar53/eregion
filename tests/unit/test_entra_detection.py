@@ -611,3 +611,130 @@ def test_the_disabled_proposal_reads_nothing_of_the_tenant_and_sends_only_what_r
     import yaml
     cfg = yaml.safe_load((ROOT / "infra/terraform/config.yaml").read_text())
     assert cfg["entra_logs"] == {"enabled": False}
+
+
+# ── after the 5.5 review (27/10): range M940–M949 ─────────────────────────────
+
+OPERATOR_OID = "00000000-0000-0000-0000-0000000000e1"
+CLI_APPID = "00000000-0000-0000-0000-0000000000e2"
+GRAPH_SP = "00000000-0000-0000-0000-0000000000f1"
+
+
+def test_under_a_users_token_the_operator_is_not_glorfindel_in_entra(monkeypatch, law):
+    """`az login`: the token's oid is the operator's. In Entra ID's logs only an
+    application's token says who Glorfindel is — the administrator's own actions are not
+    « Glorfindel's credential used elsewhere ». The configured ids still mark; the Activity
+    Log (AL1) keeps the oid."""
+    claims = {"oid": OPERATOR_OID, "upn": ADMIN_UPN, "scp": "user_impersonation", "appid": CLI_APPID}
+    rule = _shipped("entra-privileged-role-assigned")
+    law["rows"] = [_row("role", ActorId=OPERATOR_OID, ActorAppId=CLI_APPID)]
+    det = _detector(claims)
+    p, sent = _poller(det, rule, VM1)
+    p.poll_once(rule)
+    row = sent[0]["raw_signal"]["first_result_row"]
+    assert row["GlorfindelIdentity"] is False and sent[0]["severity"] == "high"
+    assert OPERATOR_OID in det.own_identities() and det.app_identities() == set()
+    monkeypatch.setenv("GLORFINDEL_OWN_CALLERS", OWN_OID)
+    assert det.app_identities() == {OWN_OID}
+    # An application's token: its ids mark, as before.
+    assert _detector().app_identities() == {OWN_APP, OWN_OID}
+
+
+def test_the_role_rule_keeps_an_assignment_without_a_role_name_and_the_old_set_is_an_array():
+    """A filtering mv-apply dropped an assignment without `Role.DisplayName` before the
+    adapter; a summarize without `by` always gives one row, the role's target as fallback.
+    A first credential (no old value) is an empty array, never a silenced row."""
+    role = _shipped("entra-privileged-role-assigned").query
+    assert 'where tostring(Prop.displayName) =~ "Role.DisplayName"' not in role
+    assert ('summarize RoleName = take_anyif(trim(@\'"\', tostring(Prop.newValue)), '
+            'tostring(Prop.displayName) =~ "Role.DisplayName")') in role
+    assert "take_anyif(tostring(R.displayName), tostring(R.type) =~ \"Role\")" in role
+    assert "extend RoleName = coalesce(RoleName, RoleTargetName)" in role
+    cred = _shipped("entra-credential-added").query
+    assert "iff(isnull(array_length(OldSet)), dynamic([]), OldSet)" in cred
+    assert "company administrator" in entra.PRIVILEGED_ROLES
+    assert entra.prepare_rows([_row("role", RoleName="Company Administrator")], set())
+
+
+def _client_rule(tmp_path):
+    p = tmp_path / "rules.yaml"
+    p.write_text("rules:\n  - name: client-signins\n    enabled: true\n    source: azure_monitor\n"
+                 "    ttp: T1078.004\n    assets: [auto]\n    query: |\n"
+                 "      SigninLogs\n      | where TimeGenerated > ago(1h)\n"
+                 "      | summarize n = count() by UserPrincipalName, IPAddress\n")
+    return next(r for r in load_config(p, glorfindel_cfg=_cfg(), client_layer=False).rules)
+
+
+def test_a_client_rule_on_an_entra_table_projecting_nothing_telling_is_decided_by_the_code(
+        tmp_path, monkeypatch):
+    """A rule of another source (a client's, an approved proposal) reading SigninLogs and
+    projecting only a UPN and an address: no column says Entra — the query does. Its
+    signal carries `plane: identity`; the model is never called, the UPN never sent."""
+    rule = _client_rule(tmp_path)
+    monkeypatch.setattr(AzureMonitorDetector, "run_query", lambda self, q, timespan=None: [
+        {"UserPrincipalName": ADMIN_UPN, "IPAddress": "198.51.100.40", "n": 12}])
+    p, sent = _poller(AzureMonitorDetector("ws-test"), rule, VM1)
+    p.poll_once(rule)
+    assert len(sent) == 1 and sent[0]["context"]["plane"] == "identity"
+    connector = MagicMock(dry_run=False)
+    with patch("litellm.completion", return_value=_llm("isolate_vm")) as llm:
+        final = _graph(tmp_path, monkeypatch, connector).invoke(_initial(sent[0]))
+    llm.assert_not_called()
+    connector.isolate_vm.assert_not_called()
+    assert final["outcome"]["escalation_type"] == "identity_change"
+
+
+def test_respond_on_an_entra_query_of_another_source_is_an_identity(monkeypatch):
+    from glorfindel.agent import decide, resolve_attack_started
+    monkeypatch.setattr(AzureMonitorDetector, "poll_alert", lambda self, *a, **k: (
+        5, {"UserPrincipalName": ADMIN_UPN, "IPAddress": "198.51.100.40"}))
+    out = resolve_attack_started({"event": "attack_started", "ttp": "T1078.004", "raw_signal": {
+        "detection_source": "azure_monitor", "log_analytics_workspace_id": "ws",
+        "detection_query": "SigninLogs | summarize n = count() by UserPrincipalName, IPAddress",
+        "detection_timeout_s": 1}})
+    assert out["event"] == "detection" and out["context"]["plane"] == "identity"
+    with patch("litellm.completion", return_value=_llm("isolate_vm")) as llm:
+        d = decide(_initial(out), model="claude-test")
+    llm.assert_not_called()
+    assert d["held_by"] == "identity"
+
+
+def _steps(**extra):
+    from glorfindel.agent import _identity_decision
+    sig = _signal("consent")
+    sig["raw_signal"]["first_result_row"].update(extra)
+    return " ".join(_identity_decision(_initial(sig))["suggested_steps"])
+
+
+def test_a_consent_card_never_proposes_to_block_the_resources_principal():
+    """Outside « Consent to application », the target of a grant is likely the resource's
+    principal (Microsoft Graph): blocking it would cut the whole tenant. The client from
+    modifiedProperties, or no blocking step — only « identify the client »."""
+    grant = _steps(EntraOperation="Add delegated permission grant", TargetId=GRAPH_SP,
+                   TargetName="Microsoft Graph")
+    assert "accountEnabled=false" not in grant
+    assert "Identifier l'application cliente" in grant
+    with_client = _steps(EntraOperation="Add app role assignment to service principal",
+                         TargetId=GRAPH_SP, ClientId=SP_OID)
+    assert f"az ad sp update --id {SP_OID} --set accountEnabled=false" in with_client
+    assert f"--id {GRAPH_SP} --set" not in with_client
+    consent = _steps()                                   # « Consent to application »
+    assert f"az ad sp update --id {SP_OID} --set accountEnabled=false" in consent
+    assert 'ClientId = trim(@\'"\', tostring(Props["ServicePrincipal.ObjectID"]))' in \
+        _shipped("entra-app-consent").query
+
+
+def test_an_identity_card_or_an_unattributed_control_plane_one_is_never_an_exercise(monkeypatch):
+    """Until an identity can be enrolled, an exercise window on the anchor VM says nothing
+    of an identity, nor of an operation elsewhere: `real`. A VM's own signal is unchanged."""
+    import eregion_core.exercise as exercise
+    from glorfindel.agent import _cycle_source
+    monkeypatch.setattr(exercise, "source_of", lambda *a, **k: ("exercise", "run-1"))
+    assert _cycle_source(_signal("role")) == ("real", "")
+    control = {"resource_id": VM1, "context": {"plane": "control", "attribution": "unattributed"},
+               "raw_signal": {"detection_source": "azure_activity"}}
+    assert _cycle_source(control) == ("real", "")
+    attributed = {**control, "context": {"plane": "control", "attribution": "asset"}}
+    assert _cycle_source(attributed) == ("exercise", "run-1")
+    data = {"resource_id": VM1, "context": {}, "raw_signal": {"first_result_row": {"Computer": "vm1"}}}
+    assert _cycle_source(data) == ("exercise", "run-1")

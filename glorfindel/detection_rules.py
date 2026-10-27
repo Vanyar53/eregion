@@ -638,7 +638,8 @@ def load_config(path: str | Path, glorfindel_cfg=None, client_layer: str | Path 
                 f"deux opérations au même horodatage n'y font qu'une détection, la seconde "
                 f"jamais vue (projeter EntraKind, EntraOperation, EventId)")
         # Entra's tables read by another source: none of its thresholds, none of its marks
-        # (Glorfindel's identity) — its rows are still decided by the code, without action.
+        # (Glorfindel's identity). Its signals still carry `plane: identity` (`_signal`, from
+        # the query itself, whatever it projects): decided by the code, without the model.
         if rule_enabled and not is_identity_source(source) and _reads_entra_table(item["query"]):
             notes.append(
                 f"règle « {item['name']} » ({source}) : lit un journal d'Entra ID sans la source "
@@ -1190,6 +1191,11 @@ class RulePoller:
         # Control plane (AL1), identities (C2): detection only — `plane` is what `decide`
         # reads.
         plane = plane_of(rule.source)
+        # A rule of another source that reads one of Entra ID's tables (a client's, an
+        # approved proposal — C2): its rows may name a user (a UPN) without any column that
+        # says Entra (`summarize … by UserPrincipalName, IPAddress`). The query says so.
+        if plane == "data" and _reads_entra_table(rule.query):
+            plane = "identity"
         control = plane in ("control", "identity")
         grave = control and (row.get("GlorfindelManaged") is True or row.get("GlorfindelIdentity") is True)
         return {

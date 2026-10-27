@@ -1703,6 +1703,40 @@ MUTANTS += [
      "infra/terraform/entra_logs.tf", "  count = local.entra_logs_enabled ? 1 : 0", "  count = 1"),
 ]
 
+# C2, after the 5.5 review (27/10): range M940–M949, measured by tests/unit/test_entra_detection.py.
+RUL = "glorfindel/rules/azure/detection_rules.yaml"
+MUTANTS += [
+    ("M940", "under az login, the operator's oid taken as Glorfindel's in Entra: his actions read as theft (C2)",
+     ENT, "        return prepare_rows(rows, self.app_identities())",
+     "        return prepare_rows(rows, self.own_identities())"),
+    ("M941", "a user's token taken as an application's: the operator marked as Glorfindel (C2)", ACT,
+     "                    self._token_is_app = bool(claims) and is_app_token(claims)\n",
+     "                    self._token_is_app = True\n"),
+    ("M942", "the role rule filters on Role.DisplayName: an assignment without it gone before the adapter (C2)",
+     RUL, "          summarize RoleName = take_anyif(trim(@'\"', tostring(Prop.newValue)), "
+          "tostring(Prop.displayName) =~ \"Role.DisplayName\"))",
+     "          where tostring(Prop.displayName) =~ \"Role.DisplayName\"\n"
+     "          | extend RoleName = trim(@'\"', tostring(Prop.newValue)))"),
+    ("M943", "a first credential's old value not an array: set_difference silences the row (C2)", RUL,
+     "iff(isnull(array_length(OldSet)), dynamic([]), OldSet)", "iff(isnull(OldSet), dynamic([]), OldSet)"),
+    ("M944", "a client rule on an Entra table without telling columns goes to the model: its UPN sent (C2)", DRU,
+     "        if plane == \"data\" and _reads_entra_table(rule.query):\n            plane = \"identity\"\n", ""),
+    ("M945", "respond on an Entra query of another source goes to the model (C2)", AGT,
+     "        entra_query = _reads_entra_table(query) and not is_control_plane_source(source)",
+     "        entra_query = False"),
+    ("M946", "a consent card proposes to disable the resource's principal: the whole tenant cut (C2)", ENT,
+     "        client = (tid if op.lower() == \"consent to application\" and row.get(\"TargetId\")\n"
+     "                  else str(row.get(\"ClientId\") or \"\").strip())",
+     "        client = tid"),
+    ("M947", "an identity card labelled exercise by a window on its anchor VM (C2)", AGT,
+     "    if _is_identity(signal) or (\n"
+     "            _is_control_plane(signal) and (signal.get(\"context\") or {}).get(\"attribution\") != \"asset\"):\n"
+     "        return \"real\", \"\"\n", ""),
+    ("M948", "Global Administrator's former name not privileged (C2)", ENT, "    \"Company Administrator\",\n", ""),
+    ("M949", "the role's target not the fallback name: an assignment without Role.DisplayName unnamed (C2)", RUL,
+     "      | extend RoleName = coalesce(RoleName, RoleTargetName)\n", ""),
+]
+
 # Mutants measured by other tests than the invariants (their lot's own).
 TESTS = {mid: INSCRIPTION_TESTS for mid in ("M42", "M43", "M44", "M45", "M46", "M47")}
 TESTS.update({mid: DOCS_TESTS for mid in ("M48", "M49")})
@@ -1797,7 +1831,7 @@ TESTS.update({f"M{n}": "tests/unit/test_watch_gate.py" for n in (*range(720, 740
 TESTS.update({f"M{n}": "tests/unit/test_gothmog.py" for n in (724, 725, 726, 727)})
 TESTS.update({f"M{n}": "tests/unit/test_host_console.py" for n in range(740, 750)})  # UI-1c
 TESTS.update({f"M{n}": "tests/unit/test_activity_logs.py" for n in (*range(810, 830), *range(850, 860), *range(890, 895))})  # AL1
-TESTS.update({f"M{n}": "tests/unit/test_entra_detection.py" for n in range(920, 940)})  # C2
+TESTS.update({f"M{n}": "tests/unit/test_entra_detection.py" for n in range(920, 950)})  # C2
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

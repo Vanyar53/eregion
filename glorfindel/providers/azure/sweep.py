@@ -212,7 +212,16 @@ class SweepMixin:
             "note": "Règles client décalées par une isolation : non restaurées sans état local.",
         }
 
-    def find_orphan_rules(self) -> list[dict]:
+    def nsg_listing(self) -> list:
+        """Every NSG of the subscription, read once: the watch's pass hands it to the
+        quarantine check and the orphan sweep (A3), one listing for both. Raises if they
+        can't be listed."""
+        if self.dry_run:
+            return []
+        self._ensure_clients()
+        return list(self._network.network_security_groups.list_all())
+
+    def find_orphan_rules(self, nsgs: list | None = None) -> list[dict]:
         """Glorfindel denies left by a NIC that no longer exists (seventh review, U1).
 
         A release can't find the rules of a deleted VM without its state: nothing says
@@ -225,7 +234,11 @@ class SweepMixin:
         be listed — no orphan is not the same as unknown.
 
         Each orphan also says whether the sweep may take it off (A3): `removable`, with
-        `cut` — the live NICs it cuts off now, behind this NSG — or `kept`, why not."""
+        `cut` — the live NICs it cuts off now, behind this NSG — or `kept`, why not.
+        A rule aimed at a VM Glorfindel isolates or blocks now is kept: its NIC recreated
+        (a `terraform apply`: a new id, the same address), the old NIC's rule still holds
+        the isolation the state wants — a NIC hash nobody has is no proof it's nobody's.
+        `nsgs`: the NSGs already listed (the watch's pass), else listed here."""
         if self.dry_run:
             return []
         self._ensure_clients()
@@ -253,9 +266,10 @@ class SweepMixin:
                 if subnet:
                     nic_subnets.setdefault(nid, set()).add(subnet.rstrip("/").lower())
         state_nics = self._state_nic_marks()
+        held = self._held_vms()
         gone: dict[str, str | None] = {}      # mark of a NIC in our state → None (gone) or why kept
         orphans: list[dict] = []
-        for nsg in self._network.network_security_groups.list_all():
+        for nsg in (self._network.network_security_groups.list_all() if nsgs is None else nsgs):
             nsg_key = nsg.id.rstrip("/").lower()
             subnets = {s.id.rstrip("/").lower() for s in (getattr(nsg, "subnets", None) or []) if getattr(s, "id", None)}
             attached = {n.id.rstrip("/").lower() for n in (getattr(nsg, "network_interfaces", None) or [])
@@ -285,6 +299,8 @@ class SweepMixin:
                 kept = ""
                 if not cut:
                     kept = "ne coupe aucune carte vivante derrière ce NSG"
+                elif why := self._held_reason(cut, held):
+                    kept = why
                 elif attached - listed:
                     kept = "une carte attachée à ce NSG manque à la liste des cartes (droits de lecture ?)"
                 elif mark in state_nics and gone.get(mark):
@@ -294,6 +310,23 @@ class SweepMixin:
                 orphans.append({"nsg_id": nsg.id, "rule": _rule_name(r), "ips": ips, "now_on": now_on,
                                 "cut": cut, "removable": not kept, "kept": kept})
         return orphans
+
+    @staticmethod
+    def _held_vms() -> list[str]:
+        """The VMs Glorfindel isolates or blocks now, by their local state."""
+        from glorfindel.response.state import active_blocks, active_isolations
+        return [e["resource_id"] for e in active_isolations() + active_blocks() if e.get("resource_id")]
+
+    @staticmethod
+    def _held_reason(cut: list[dict], held: list[str]) -> str:
+        """Why a rule cutting these NICs off stays: the VM it cuts is one Glorfindel
+        isolates or blocks (first review of A3). By the VM's id, whatever its case: a
+        name from before L24 hashed the NIC's id as Azure wrote it."""
+        for h in cut:
+            if any(_same_id(h.get("vm_id") or "", rid) for rid in held):
+                vm = (h.get("vm_id") or "").rstrip("/").rsplit("/", 1)[-1]
+                return f"la VM visée ({vm}) est isolée ou bloquée par Glorfindel"
+        return ""
 
     @staticmethod
     def _state_nic_marks() -> dict[str, str]:
@@ -332,6 +365,19 @@ class SweepMixin:
             return {"removed": False, "why": orphan.get("kept") or "non retirable"}
         self._guard_write("remove_orphan_rule")
         self._ensure_clients()
+        # Read again just before the write: an isolation or a block recorded since the
+        # listing (the watch, the console, the CLI) names this NIC or this VM now (A3).
+        name = orphan["rule"].lower()
+        mark = (name[:-4] if name.endswith("-out") else name).rsplit("-", 1)[-1]
+        state_nics = self._state_nic_marks()
+        if mark in state_nics:
+            why = self._state_nic_gone(state_nics[mark])
+            if why is not None:
+                return {"removed": False, "why": ("une isolation ou un blocage enregistré depuis nomme sa carte"
+                                                  if why == "alive" else why)}
+        why = self._held_reason(orphan.get("cut") or [], self._held_vms())
+        if why:
+            return {"removed": False, "why": why}
         from glorfindel.response.ids import _parse_nsg_resource_id
         nsg_rg, nsg_name = _parse_nsg_resource_id(orphan["nsg_id"])
         err = self._delete_rule(nsg_rg, nsg_name, orphan["rule"])

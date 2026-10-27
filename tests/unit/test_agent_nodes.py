@@ -1612,8 +1612,9 @@ def test_graph_isolation_with_sessions_left_open_fails_verification(tmp_path, mo
     assert "sessions déjà ouvertes" in final["escalation_reason"]
 
 
-def test_store_cycle_never_notifies_a_no_op(tmp_memory):
+def test_store_cycle_never_notifies_a_no_op(tmp_memory, tmp_path, monkeypatch):
     from glorfindel.agent import store_cycle
+    monkeypatch.chdir(tmp_path)   # store_cycle writes runs/<run_id>_debug.jsonl where it runs (HY1)
     state = _state(action="revoke_temp_access", confidence=0.9,
                    outcome={"status": "no_op", "executed": True, "verified": None})
     with patch("glorfindel.escalations.notify_action") as notify:
@@ -2152,7 +2153,7 @@ def test_graph_held_vm_recommends_instead_of_isolating(tmp_path, monkeypatch, dr
     assert final["outcome"]["executed"] is False
     assert final["autonomy_mode"] == "human_only"
     assert final["autonomy_gate"]["codes"] == ["no_drain"]
-    assert "Activer" in final["escalation_reason"]
+    assert "Review & turn on" in final["escalation_reason"]   # the console's button (#222)
 
     readiness.acknowledge("vm", ["no_drain"], by="test")      # the operator confirms
     with patch("litellm.completion") as mock_cls:

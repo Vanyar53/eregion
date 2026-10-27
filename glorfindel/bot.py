@@ -55,11 +55,18 @@ def _save_threads(threads: dict[str, int]) -> None:
     _THREADS_STORE.write_text(json.dumps(threads))
 
 
+# Escalation types whose card is anchored on a VM the detection may not concern (AL1;
+# an identity detection names no VM — C2): never a command, nor a button, aimed at that VM.
+_ANCHORED_TYPES = {"control_plane_change", "identity_change", "unattributed_signal"}
+
+
 def _cli_command(esc: dict) -> str:
     """Return CLI command(s) the operator should run for this escalation."""
     action = esc["action"]
     rid = esc["resource_id"]
     esc_id = esc["id"]
+    if esc.get("escalation_type") in _ANCHORED_TYPES:
+        return f"glorfindel ack {esc_id}"
     if action == "restore_from_backup":
         return (
             f"glorfindel restore {rid} --yes\n"
@@ -389,6 +396,11 @@ def _make_action_button(esc: dict) -> _ExecuteButton | None:
     esc_type = esc["escalation_type"]
     rid = esc["resource_id"]
 
+    # A control-plane change or an unattributed signal (AL1): the card's VM is an anchor,
+    # chosen among the watched ones — one click on it would restore or revert a VM the
+    # detection says nothing of.
+    if esc_type in _ANCHORED_TYPES:
+        return None
     if action == "restore_from_backup":
         return _ExecuteButton(
             esc, "🔄 Restore",
@@ -803,6 +815,6 @@ def run() -> None:
     else:
         _console.print(
             f"[yellow]⚠ {_ALLOWED_USERS_ENV} et {_ALLOWED_ROLES_ENV} vides : tous les boutons "
-            "refusent (fermé par défaut). Les cartes se jugent dans la War Room.[/yellow]")
+            "refusent (fermé par défaut). Les cartes se jugent dans la console (page Glorfindel, TO JUDGE).[/yellow]")
     bot = GlorfindelBot(channel_id=int(channel_id_str), ping_role=ping_role, button_policy=policy)
     bot.run(token, log_handler=None)

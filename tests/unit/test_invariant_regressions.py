@@ -466,6 +466,19 @@ def test_a_deleted_vms_rule_on_a_vm_glorfindel_isolates_waits_for_its_release(mo
         m.teardown()
 
 
+def test_a_block_that_could_not_be_put_back_is_said_even_after_a_crash(monkeypatch):
+    """Blocked on the subnet's NSG, the role removed, then a `terraform apply` deletes the
+    block's rule. The reassertion tries to put it back (refused, 403) and dies right after
+    writing "already alerted" — before the card. Every later pass returned on that marker:
+    the attacker back in, and nothing said (L1F, seed of I8F)."""
+    _run(monkeypatch, _net(subnet_nsg=[]),
+         ("block", WEB1, WEB1, None, 22),
+         ("access_changes", True),
+         ("terraform_apply", _NSG.format(rg="rg-net", name="nsg-subnet")),
+         ("reassert", "non_disruptive", (1, "after-crash")),
+         ("reassert", "human_only", None))
+
+
 # I1F (#226): web's own NSG denies the VNet in (deny-lateral-in) — the quarantine NSG that
 # replaces it must too. Its deny turned to Udp, TCP from the VNet falls to Azure's default
 # AllowVnetInBound: 10.9.9.9 reaches :22.

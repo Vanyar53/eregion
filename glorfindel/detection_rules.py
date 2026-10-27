@@ -17,7 +17,14 @@ try:
 except ImportError:
     yaml = None  # type: ignore[assignment]
 
-from glorfindel.detectors import detector_for  # noqa: E402  (after optional deps)
+from glorfindel.detectors import (  # noqa: E402  (after optional deps)
+    backend_type_of,
+    detector_class,
+    detector_for,
+    is_control_plane_source,
+    is_identity_source,
+    plane_of,
+)
 
 logger = logging.getLogger("glorfindel.detection_rules")
 
@@ -170,7 +177,37 @@ def normalize_row(row: dict, ttp: str = "") -> dict:
     adds a normalised summary so the LLM can identify the primary threat signal
     without parsing opaque column names.
     Falls back gracefully when the row has no recognised columns.
+
+    A control-plane row (AzureActivity, AL1: it has `OperationNameValue`) gives the
+    operation as its indicator, the resource it targets, and who made it — `caller`,
+    `caller_ip`, and whether its target is Glorfindel's (`glorfindel_managed`) or its
+    caller Glorfindel's own identity (`glorfindel_identity`). Every other row keeps the
+    three keys it had.
+
+    An identity row (Entra ID, C2: it has `EntraOperation`) gives the operation as its
+    indicator (`identity_operation`), the identity it targets as its resource, its actor and
+    the actor's address, and the same two marks.
     """
+    if row.get("EntraOperation"):
+        return {
+            "resource": str(row.get("TargetId") or row.get("TargetName") or ""),
+            "indicator_key": "identity_operation",
+            "indicator_value": row["EntraOperation"],
+            "actor": row.get("ActorName") or row.get("ActorId") or "",
+            "actor_ip": row.get("ActorIp") or "",
+            "glorfindel_managed": row.get("GlorfindelManaged") is True,
+            "glorfindel_identity": row.get("GlorfindelIdentity") is True,
+        }
+    if row.get("OperationNameValue"):
+        return {
+            "resource": str(row.get("_ResourceId") or row.get("ResourceId") or ""),
+            "indicator_key": "control_plane_operation",
+            "indicator_value": row["OperationNameValue"],
+            "caller": row.get("Caller") or "",
+            "caller_ip": row.get("CallerIpAddress") or "",
+            "glorfindel_managed": row.get("GlorfindelManaged") is True,
+            "glorfindel_identity": row.get("GlorfindelIdentity") is True,
+        }
     resource = next((row[c] for c in _RESOURCE_COLUMNS if c in row), "")
 
     for col, label in _INDICATOR_COLUMNS:
@@ -544,18 +581,24 @@ def load_config(path: str | Path, glorfindel_cfg=None, client_layer: str | Path 
             source = rule_source
             resolved_backend_name = primary_backend_name
         else:
+            # An AzureActivity rule reads the azure_monitor workspace (AL1): its backend
+            # type is not its source name.
             backend = _resolve_backend_for_rule(
-                item["name"], primary_backend_name, backend_by_name, backends, rule_source,
+                item["name"], primary_backend_name, backend_by_name, backends,
+                backend_type_of(rule_source),
             )
             workspace_id = backend.workspace_id if backend else ""
-            source = backend.type if backend else rule_source
+            if backend is not None and backend_type_of(rule_source) == backend.type:
+                source = rule_source
+            else:
+                source = backend.type if backend else rule_source
             # Asset matching (expand_for_discovered) keys off this name, so it must
             # be the RESOLVED backend's name — not a stale/typo'd reference.
             resolved_backend_name = backend.name if backend else primary_backend_name
 
         # A rule that couldn't resolve a workspace must not poll silently.
         rule_enabled = True
-        if source == "azure_monitor" and not workspace_id:
+        if backend_type_of(source) == "azure_monitor" and not workspace_id:
             logger.warning(
                 "detection rule '%s': no workspace_id resolved — rule disabled",
                 item["name"],
@@ -569,6 +612,39 @@ def load_config(path: str | Path, glorfindel_cfg=None, client_layer: str | Path 
                     "s'applique à aucune VM découverte (la lier : monitoring_backends: [<backend>], "
                     "assets: [auto] ; glorfindel migrate-rules le fait pour une règle approuvée avant P1)")
             notes.append(note)
+
+        # A control-plane log arrives late (AzureActivity: minutes, sometimes more than
+        # ten): a shorter window drops the row before it is ingested (AL1).
+        min_lookback = getattr(detector_class(source), "min_lookback_s", 0.0) or 0.0
+        if rule_enabled and _query_lookback_s(item["query"]) < min_lookback:
+            notes.append(
+                f"règle « {item['name']} » ({source}) : fenêtre "
+                f"{int(_query_lookback_s(item['query']) // 60)} min, plus courte que la latence "
+                f"d'ingestion de sa source — les lignes arrivées en retard ne sont jamais vues "
+                f"(au moins ago({int(min_lookback // 60)}m))")
+        # Without its CorrelationId, an operation's identity is its time: two operations
+        # at the same instant fold into one card, the second never seen (AL1).
+        if rule_enabled and (is_control_plane_source(source) or "azureactivity" in item["query"].lower()) \
+                and "correlationid" not in item["query"].lower():
+            notes.append(
+                f"règle « {item['name']} » ({source}) : la requête ne projette pas "
+                f"CorrelationId — deux opérations au même horodatage n'y font qu'une détection, "
+                f"la seconde jamais vue (projeter CorrelationId, OperationNameValue, _ResourceId)")
+        # An identity finding's dedup key is its EventId (C2): without it, two findings at
+        # the same instant fold into one card, the second never seen.
+        if rule_enabled and is_identity_source(source) and "eventid" not in item["query"].lower():
+            notes.append(
+                f"règle « {item['name']} » ({source}) : la requête ne projette pas EventId — "
+                f"deux opérations au même horodatage n'y font qu'une détection, la seconde "
+                f"jamais vue (projeter EntraKind, EntraOperation, EventId)")
+        # Entra's tables read by another source: none of its thresholds, none of its marks
+        # (Glorfindel's identity). Its signals still carry `plane: identity` (`_signal`, from
+        # the query itself, whatever it projects): decided by the code, without the model.
+        if rule_enabled and not is_identity_source(source) and _reads_entra_table(item["query"]):
+            notes.append(
+                f"règle « {item['name']} » ({source}) : lit un journal d'Entra ID sans la source "
+                f"azure_entra — ni ses seuils ni ses marques (identité de Glorfindel) ; "
+                f"utiliser source: azure_entra")
 
         if auto_apply and _truncates_before_vm_filter(item["query"]):
             logger.warning(
@@ -678,6 +754,17 @@ def _query_lookback_s(query: str) -> float:
     return max(spans) if spans else _DEFAULT_LOOKBACK_S
 
 
+_ENTRA_TABLE_RE = re.compile(
+    r"\b(auditlogs|signinlogs|aadserviceprincipalsigninlogs|aadnoninteractiveusersigninlogs|"
+    r"aadmanagedidentitysigninlogs)\b", re.IGNORECASE)
+
+
+def _reads_entra_table(query: str) -> bool:
+    """The query reads one of Entra ID's tables (comments left out)."""
+    code = "\n".join(line.split("//", 1)[0] for line in (query or "").splitlines())
+    return bool(_ENTRA_TABLE_RE.search(code))
+
+
 def _looks_numeric(value: str) -> bool:
     try:
         float(value)
@@ -694,6 +781,15 @@ def _row_identity(row: dict) -> str:
     its non-numeric columns (who, where) — the same attacker on the same VM is one
     detection for the length of the query window.
     """
+    # An identity finding (Entra ID, C2) is its EventId — its CorrelationId and target, or
+    # a service principal and an address: a line ingested late is the same one.
+    if row.get("EntraOperation") and row.get("EventId"):
+        return "entra:" + str(row["EventId"]).lower()
+    # A control-plane operation (AzureActivity, AL1) is its correlation id, operation and
+    # target: its Start, Accept and Success lines — and a line ingested late — are one.
+    if row.get("OperationNameValue") and row.get("CorrelationId"):
+        return "op:" + "|".join(str(row.get(k) or "").lower()
+                                for k in ("CorrelationId", "OperationNameValue", "_ResourceId"))
     ts = row.get("TimeGenerated")
     if ts:
         return f"ts:{ts}"
@@ -702,6 +798,52 @@ def _row_identity(row: dict) -> str:
         if isinstance(v, str) and v and not _looks_numeric(v)
     )
     return "row:" + "|".join(keys)
+
+
+# Control plane (AL1): at most this many cards per rule and poll, each one operation; the
+# operations beyond share one summary card that names each of them.
+_CONTROL_PLANE_CARDS_PER_POLL = 5
+
+
+def _grave(row: dict) -> bool:
+    """A write on Glorfindel's own rules, or its identity outside what it does (AL1)."""
+    return row.get("GlorfindelManaged") is True or row.get("GlorfindelIdentity") is True
+
+
+def _control_plane_operations(rows: list[dict]) -> list[dict]:
+    """One row per operation (its lines Start, Accept, Success share an identity: the
+    latest is kept), the gravest first, then the newest."""
+    by_op: dict[str, dict] = {}
+    for r in rows:
+        k = _row_identity(r)
+        if k not in by_op or str(r.get("TimeGenerated") or "") > str(by_op[k].get("TimeGenerated") or ""):
+            by_op[k] = r
+    return sorted(by_op.values(), key=lambda r: (_grave(r), str(r.get("TimeGenerated") or "")),
+                  reverse=True)
+
+
+def _control_plane_summary(rest: list[dict]) -> dict:
+    """The card of the operations past the cap: the gravest one's row, carrying the list
+    of every one of them (`OmittedOperations`) and either mark if any has it."""
+    return {
+        **rest[0],
+        "GlorfindelManaged": any(r.get("GlorfindelManaged") is True for r in rest),
+        "GlorfindelIdentity": any(r.get("GlorfindelIdentity") is True for r in rest),
+        "OmittedOperations": [
+            {"TimeGenerated": r.get("TimeGenerated") or "",
+             "OperationNameValue": r.get("OperationNameValue") or "",
+             "ActivityStatusValue": r.get("ActivityStatusValue") or "",
+             "Caller": r.get("Caller") or "",
+             "_ResourceId": r.get("_ResourceId") or r.get("ResourceId") or "",
+             "GlorfindelManaged": r.get("GlorfindelManaged") is True,
+             "GlorfindelIdentity": r.get("GlorfindelIdentity") is True,
+             # An identity finding (C2): what its card would have said.
+             **({"EntraOperation": r.get("EntraOperation") or "",
+                 "ActorName": r.get("ActorName") or r.get("ActorId") or "",
+                 "TargetName": r.get("TargetName") or "", "TargetId": r.get("TargetId") or ""}
+                if r.get("EntraOperation") else {})}
+            for r in rest],
+    }
 
 
 def _row_attribution(row: dict, resource_id: str, asset_name: str) -> bool | None:
@@ -751,6 +893,16 @@ _IP_OWNERS_TTL_S = 300.0
 # Columns naming the VM that MADE a call (not an attacker's address): a storage call's
 # caller is the VM itself (T1041 exfiltration via its managed identity).
 _VM_IP_COLUMNS = ("CallerIpAddress",)
+
+
+# A VM's own id in a longer one: an extension, a Run Command, a role assignment scoped on
+# the VM (AzureActivity, AL1) names the VM it concerns.
+_VM_ID_RE = re.compile(r"^(.*?/providers/microsoft\.compute/virtualmachines/[^/]+)", re.IGNORECASE)
+
+
+def _vm_id_of(resource_id: str) -> str:
+    m = _VM_ID_RE.match(resource_id)
+    return (m.group(1) if m else resource_id).lower()
 
 
 def _caller_ip(row: dict) -> str:
@@ -913,7 +1065,7 @@ class RulePoller:
             named, tgt = False, None
             rid = row.get("_ResourceId") or row.get("ResourceId")
             if isinstance(rid, str) and "/microsoft.compute/virtualmachines/" in rid.lower():
-                named, tgt = True, by_rid.get(rid.lower())
+                named, tgt = True, by_rid.get(_vm_id_of(rid))
             if not named:
                 comp = row.get("Computer")
                 if isinstance(comp, str) and comp:
@@ -969,10 +1121,26 @@ class RulePoller:
                     seen = {seen["id"]: seen["at"]}
                 dispatched[key] = {i: at for i, at in (seen or {}).items() if float(at) >= cutoff}
             plan = []
+            # The control plane (AL1) and identities (C2): one card per operation.
+            control = is_control_plane_source(rule.source) or is_identity_source(rule.source)
+            budget = _CONTROL_PLANE_CARDS_PER_POLL
             for key, (tgt, krows) in routed.items():
                 seen = dispatched.get(key, {})
                 new = [r for r in krows if _row_identity(r) not in seen]
                 if not new:
+                    continue
+                if control:
+                    # Control plane (AL1): each operation is its own card — two NSG rules
+                    # changed in one minute are two findings, never one. Capped per poll;
+                    # beyond, one summary card names every operation left without its
+                    # own: no row is marked sent without a card.
+                    ops = _control_plane_operations(new)
+                    send, budget = ops[:budget], max(0, budget - len(ops))
+                    rest = ops[len(send):]
+                    if rest:
+                        send.append(_control_plane_summary(rest))
+                    plan.append((key, tgt, send))
+                    sent_ids[key] = [_row_identity(r) for r in new]
                     continue
                 # Event rows (TimeGenerated) are one incident per cycle: the newest is
                 # sent. Aggregated rows (one per attacker, per account…) each count.
@@ -1020,11 +1188,21 @@ class RulePoller:
             resource_id, asset_name = sorted(targets, key=lambda t: t[1])[0]
             attribution = "unattributed"
         ts_compact = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        # Control plane (AL1), identities (C2): detection only — `plane` is what `decide`
+        # reads.
+        plane = plane_of(rule.source)
+        # A rule of another source that reads one of Entra ID's tables (a client's, an
+        # approved proposal — C2): its rows may name a user (a UPN) without any column that
+        # says Entra (`summarize … by UserPrincipalName, IPAddress`). The query says so.
+        if plane == "data" and _reads_entra_table(rule.query):
+            plane = "identity"
+        control = plane in ("control", "identity")
+        grave = control and (row.get("GlorfindelManaged") is True or row.get("GlorfindelIdentity") is True)
         return {
             "signal_id": f"rule-{rule.name}-{uuid.uuid4().hex[:8]}",
             "event": "detection",
             "ttp": rule.ttp,
-            "severity": "high",
+            "severity": "critical" if grave else "high",
             "resource_id": resource_id,
             "resource_type": "vm",
             "provider": "azure",
@@ -1038,6 +1216,7 @@ class RulePoller:
                 "run_id": f"watch-{rule.name}-{ts_compact}",
                 "attribution": attribution,
                 **({"candidates": sorted(n for _, n in targets)} if attribution == "unattributed" else {}),
+                **({"plane": plane} if control else {}),
             },
             "raw_signal": {
                 "detection_source": rule.source,

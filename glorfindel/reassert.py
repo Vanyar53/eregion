@@ -350,8 +350,10 @@ def _reassert_isolation(connector, autonomy, vm: str, report: list[dict], ref: s
     except Exception as exc:
         reason = f"L'isolation de {vm} a disparu d'Azure ; la reposer a échoué : {exc}"
         outcome = "failed"
-        _mark_alerted(ref or vm, now)        # no retry-and-alert every minute
     _alert(_alert_id(vm, rid), resource_id=rid, action="isolate_vm", reason=reason)
+    if outcome == "failed":
+        # No retry-and-alert every minute — marked AFTER the card exists (see blocks).
+        _mark_alerted(ref or vm, now)
     report.append({"kind": "isolation", "vm": vm, "outcome": outcome, "detail": reason})
 
 
@@ -409,9 +411,14 @@ def _reassert_block(connector, autonomy, vm: str, ip: str, report: list[dict], r
     except Exception as exc:
         reason = f"Le blocage de {ip} sur {vm} a disparu d'Azure ; le reposer a échoué : {exc}"
         outcome = "failed"
-        _update_block_entry(ref or vm, ip, drift_alerted_at=now)
     _alert(_alert_id(vm, rid, ip), resource_id=rid, action="block_suspicious_ip",
            reason=reason, action_params={"ip": ip})
+    if outcome == "failed":
+        # "Already alerted" is written only once the card exists. Written before it, a
+        # crash in between (or a full disk on the card) left the marker without the
+        # card: every later pass returned on the marker, and the block stayed gone in
+        # silence (L1F, invariant machine).
+        _update_block_entry(ref or vm, ip, drift_alerted_at=now)
     report.append({"kind": "block", "vm": vm, "ip": ip, "outcome": outcome, "detail": reason})
 
 

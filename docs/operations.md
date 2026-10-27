@@ -237,8 +237,8 @@ make annatar-simulate-gap
 ANTHROPIC_API_KEY=...               # requis si provider Anthropic (défaut)
 GLORFINDEL_LLM_MODEL=...            # ex: ollama/llama3.1, openai/gpt-4o, azure/gpt-4o (défaut : anthropic/claude-sonnet-5-5, eregion_core/models.py)
 ANNATAR_LLM_MODEL=...               # planificateur de campagne d'Annatar (défaut : anthropic/claude-sonnet-4-6 — claude-sonnet-5-5 refuse ce prompt, 19/10)
-EREGION_ANALYSIS_MODEL=...          # IA d'analyse, rapport de campagne (défaut : anthropic/claude-haiku-5-5 — un autre modèle que Glorfindel) ; passé à la watch par docker-compose.yml (rapport écrit sur H0, #167)
-EREGION_ANALYSIS_INDEX=...          # index campaign_runs du rapport de campagne (défaut : ~/.eregion/analysis/chroma ; sur H0, le disque de la VM, monté)
+EREGION_ANALYSIS_MODEL=...          # IA d'analyse, rapport de campagne (défaut : anthropic/claude-haiku-5-5 — un autre modèle que Glorfindel ; celui de Glorfindel est refusé, IA1) ; passé à la watch par docker-compose.yml (rapport écrit sur H0, #167) et recopié dans host.env par host_env.py (IA1) ; le conteneur d'Annatar reçoit aussi GLORFINDEL_LLM_MODEL, pour que le refus y voie le vrai modèle de Glorfindel
+EREGION_ANALYSIS_INDEX=...          # index campaign_runs du rapport de campagne (défaut : ~/.eregion/analysis/chroma ; refusé dans ~/.glorfindel, IA1 ; sur H0, le disque de la VM, monté)
 EREGION_ANALYSIS_TIMEOUT_S=300      # borne d'un appel au modèle d'analyse (rapport de campagne), par tentative (défaut 300 ; illisible, ≤0, >3600 → 300) ; passée aux conteneurs (x-env) et à l'image d'Annatar ; sur H0, à poser à la main dans host.env (host_env.py ne la recopie pas)
 GLORFINDEL_LLM_BASE_URL=...         # endpoint self-hosted/Ollama (ex: http://localhost:11434)
 GLORFINDEL_WEBHOOK_URL=...          # Slack/Teams/Discord webhook — escalades ET actions autonomes
@@ -256,6 +256,7 @@ GLORFINDEL_CONFIDENCE_THRESHOLD=0.7 # gate autonomie LLM (défaut 0.7 — en des
 GLORFINDEL_LLM_TIMEOUT_S=120        # borne d'un appel au modèle de Glorfindel (décision, autoring de règle), par tentative (défaut 120 ; illisible, ≤0, >3600 → 120) ; pas le rapport de campagne : EREGION_ANALYSIS_TIMEOUT_S
 GLORFINDEL_DECISION_DRAWS=3         # D-1 : tirages qui doivent s'accorder avant une action disruptive autonome (défaut 3 ; entier de 2 à 10 ; illisible, 1, >10 → toute action disruptive autonome retenue) ; aucun tirage de plus en human_only
 GLORFINDEL_READ_ONLY=1              # creds lecture seule (SP Reader) — mode observe-only ; toute valeur sauf vide/0/false/no/off = lecture seule
+GLORFINDEL_OWN_CALLERS=<id>,<id>    # AL1 : identités de Glorfindel sur Azure, en plus des claims de son jeton (jeton d'application : appid/azp et oid ; jeton d'utilisateur, `az login` : l'oid seul — l'appid y est celui de la CLI, commun au tenant, dit une fois) et d'AZURE_CLIENT_ID ; ses écritures (isolation, quarantaine, blocage) dans le journal d'activité ne s'escaladent pas, seulement sur une cible qui est à lui (NSG de quarantaine, règle qu'un état d'isolation ou de blocage nomme — un nom glorfindel-* seul ne suffit pas —, règle du client dont une isolation a décalé la priorité, NIC mise en quarantaine) — son identité sur une autre ressource s'escalade, critique. Glorfindel lancé sous l'identité d'un opérateur écarte aussi les écritures de cet opérateur sur les ressources de Glorfindel ; un seul principal pour Annatar et Glorfindel (option A de .envrc.example) écarte de même celles d'Annatar. Journaux d'Entra ID (C2) : rien n'est écarté sous ces identités, elles y sont marquées (acteur ou cible, critique) ; y ajouter l'objet de l'application de Glorfindel pour qu'un identifiant ajouté à son inscription soit marqué
 GLORFINDEL_DISCOVERY_RETENTION_H=8  # rétention d'une VM éteinte dans le registre avant éviction (défaut 8h)
 EREGION_EXERCISE_CHANNEL=https://…/exercises  # O1 : canal des fenêtres d'exercice (Orodruin publie, la watch hébergée lit) ; vide → fenêtres locales. Porte aussi les campagnes finies (campaigns/<id>/…, #167) et le rapport d'un run seul (runs/<run_id>.json, #193) ; posé sur la watch, il démarre le thread campaign-report, qui tire les deux
 # Orodruin seulement (orodruin.env) : EREGION_CHANNEL_SCOPE (le conteneur, seule attribution hors du banc acceptée),
@@ -285,6 +286,42 @@ défaut `eregion`), `EREGION_CONSOLE_PORT` (défaut 7007), `EREGION_RUNS` (défa
 `EREGION_CONFIG` (défaut `./glorfindel-config.yaml`) ; vides, `docker-compose.yml` rend ce qu'il
 rendait avant D1 (H0 lit `eregion-watch`, `eregion-war-room`). `make team-start` les pose, et le
 `HOME` de l'équipe, sous `env -i`.
+
+**Aucun test n'écrit dans le dépôt** (HY1). Le garde de `tests/unit/conftest.py`
+(`nothing_written_in_the_repository`), armé dès l'import du conftest, collecte comprise, fait
+échouer la suite :
+- **ce que le processus de test écrit sous le dépôt**, caches à part. Vu : un fichier ouvert en
+  écriture, un dossier créé ou retiré, un fichier retiré, renommé ou remplacé (`os.replace`,
+  `shutil.move`), un lien (`os.symlink`, `os.link`), des dates ou une taille changées
+  (`Path.touch` sur un fichier existant, `os.utime`, `os.truncate`), `shutil.rmtree`,
+  `sqlite3.connect`. **Pas vu** : ce qu'une bibliothèque C écrit après l'ouverture (les pages
+  de sqlite, une écriture par descripteur, mmap), le store de ChromaDB 1.x (écrit par son cœur
+  Rust), un chemin relatif à un
+  `dir_fd` ou donné en descripteur, et toute écriture d'un sous-processus sous la racine ;
+- **à la racine**, quel que soit l'auteur : un `runs/` nouveau, ou toute entrée nouvelle que git
+  n'ignore pas.
+
+Limites connues :
+- dans l'arbre principal, un autre processus qui crée à la racine une entrée non ignorée
+  pendant la suite (une autre session, un éditeur) la fait échouer à tort ;
+- un `TMPDIR` ou un `--basetemp` dans le dépôt fait de chaque `tmp_path` une écriture ;
+- `os.makedirs(exist_ok=True)` sur un dossier existant compte comme une écriture, de même qu'un
+  `os.remove` d'un fichier absent ;
+- seul `tests/unit/` est gardé ;
+- un dépôt ouvert par un lien symbolique : les chemins sont comparés tels quels, pas résolus.
+
+**Les secrets passent par leur nom** (L23, #228). Les cibles du `Makefile` qui lancent un conteneur
+(`annatar-run`, `annatar-dry-run`, `annatar-shell`, `glorfindel-watch`, `-list`, `-shell`…)
+donnent chaque secret à `docker run` par son nom, `-e AZURE_CLIENT_SECRET`, jamais par sa valeur :
+`-e AZURE_CLIENT_SECRET=…` se lisait dans `ps`, l'historique du shell et `make -n`. Le shell de la
+recette choisit la valeur (`ANNATAR_AZURE_CLIENT_*` ou `GLORFINDEL_AZURE_CLIENT_*` d'abord, puis
+`AZURE_CLIENT_*`) et la pose dans l'environnement de `docker run` seulement (`*_AZURE_PICK`, devant
+la commande). Le canary, `tests/unit/test_makefile_secrets.py` : chaque cible rendue par `make -n`
+avec des secrets factices, aucune valeur sur une ligne de commande ; puis les recettes des
+conteneurs lancées contre un faux `docker` (le bon principal dans son environnement, rien dans
+ses arguments). Une valeur que le shell développe (`-e NOM="$NOM"`) n'apparaît pas dans
+`make -n`, mais bien dans `ps` : le texte rendu refuse aussi `-e NOM=`, `--env NOM=` et, sur une
+ligne qui lance ssh, `export NOM=`, pour tout nom de secret. Une cible nouvelle qui passe un secret fait de même.
 
 ---
 
@@ -324,8 +361,12 @@ allumée), `exclude_all: "false"` sortait la VM de toutes les règles (un texte 
 verrou, chaque reconstruction de l'image prenait la dernière version de tout.
 
 - `requirements/dev.txt` : la CI (3.11, 3.12, macOS), `make install`, les mutants et les
-  invariants de nuit. `requirements/glorfindel.txt` : l'image de Glorfindel (H0 compris),
-  contrainte par le premier — l'image tourne avec les versions que la CI a testées.
+  invariants de nuit. `requirements/glorfindel.txt` : l'image de Glorfindel (H0 compris).
+  `requirements/annatar.txt` (HY1) : l'image des injecteurs, Annatar et Gothmog, celle que
+  `make orodruin-push` envoie à Orodruin — avec `litellm`, dont le planificateur a besoin
+  (`annatar campaign plan --llm`), et `jsonschema` et `requests`, déclarés plutôt qu'apportés
+  par litellm et azure-core. Les deux images sont contraintes par le premier : elles
+  tournent avec les versions que la CI a testées.
   `requirements/build.in` : le backend de construction (setuptools, wheel), verrouillé aussi.
 - Installation : `pip install --require-hashes -r requirements/<fichier>.txt`, puis le projet
   seul, `pip install --no-deps --no-build-isolation -e .`. pip vérifie l'empreinte SHA-256 de

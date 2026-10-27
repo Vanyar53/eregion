@@ -19,9 +19,10 @@ run accepts (``ScenarioParser().validate``, plus the atomic engine's probe check
 atomic). Script-only guards: ``reference_script``/``setup_scripts`` exist on disk;
 destructive + ``requires_testdata`` ⇒ setup_scripts non-empty.
 
-No ``jsonschema`` at plan time: the synthesizer runs in the Orodruin image, which ships
-neither ``jsonschema`` nor ``schemas/`` (schema validation is a dev/CI concern,
-``eregion_core/experiment.py``). The tests check that what it writes passes the E1 schema.
+No ``jsonschema`` at plan time: the synthesizer runs in the Orodruin image, which ships no
+``schemas/`` (schema validation is a dev/CI concern, ``eregion_core/experiment.py``; the
+library itself is in the image's lock since HY1, unused at run time). The tests check that
+what it writes passes the E1 schema.
 
 A failure yields ``SynthesisResult(ok=False, reason=...)`` — the scenario is not written
 (and a file written before a failed or raising validation is removed).
@@ -309,8 +310,8 @@ def _synthesize_atomic(
 
     # Validate the produced experiment the way the run will read it — the ScenarioParser plus
     # the atomic engine's probe check — never with jsonschema: schema validation is a dev/CI
-    # concern (eregion_core/experiment.py), and the Orodruin image ships neither jsonschema
-    # nor schemas/. The E1 schema itself is checked by the tests. Nothing is left behind when
+    # concern (eregion_core/experiment.py), and the Orodruin image ships no schemas/. The E1
+    # schema itself is checked by the tests. Nothing is left behind when
     # the validation fails OR raises: no half-planned file without its manifest.
     try:
         errors = _runtime_atomic_errors(path)

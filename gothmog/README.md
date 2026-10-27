@@ -27,7 +27,7 @@ préversion publique et hors du provider azurerm (09/2026).
 
 | Étape | Ce qui se passe | Refusé si |
 |---|---|---|
-| 0. Glorfindel | le battement de la watch, lu avant tout appel au cloud (V1, [`eregion_core/watch_gate.py`](../eregion_core/watch_gate.py)) : le canal retour s'il est configuré, le fichier local `~/.glorfindel/watch_heartbeat` | aucun battement de moins de 90 s : refusé, et le message dit depuis quand date le dernier (ou « never ») ; `--without-glorfindel` passe, et le rapport le dit (`metrics.without_glorfindel`) |
+| 0. Glorfindel | le battement de la watch, lu avant tout appel au cloud (V1, [`eregion_core/watch_gate.py`](../eregion_core/watch_gate.py)) : le canal retour s'il est configuré, sinon le fichier local `~/.glorfindel/watch_heartbeat` | aucun battement de moins de 90 s : refusé, et le message dit depuis quand date le dernier (ou « never ») ; `--without-glorfindel` passe, et le rapport le dit (`metrics.without_glorfindel`) |
 | 1. Contrat | `arm(run_id, "gothmog")` ([`eregion_core/orodruin.py`](../eregion_core/orodruin.py)) | contrat passif (rien lu, rien touché) ; plafond sous 3 appels (démarrer, annuler, redémarrer la VM) |
 | 2. Cibles | relues **dans l'expérience Chaos Studio elle-même**, puis chacune passée par l'inscription (O0, `kind="fault"`) | cible non déclarée par la panne ou déclarée absente ; sélecteur dynamique ; cible hors banc, non inscrite, en `production` ; arrêt brutal pour une panne déclarée non destructive ; durée au-delà du plafond du run |
 | 3. Avant | sondes d'état normal sur chaque cible | une sonde ne tient pas, ou ne se lit pas |

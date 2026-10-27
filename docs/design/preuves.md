@@ -570,9 +570,9 @@ M700–M712, M717–M719) sont partis avec lui ; les numéros laissent un trou.
 Avant chaque run, et avant tout appel au cloud, l'injecteur lit le battement de la watch
 (`eregion_core/watch_gate.py`) et refuse sans battement vivant ; `--without-glorfindel` passe, et
 le rapport le dit. Le cloud des tests échoue si on l'appelle : le contrat d'Orodruin, l'exécuteur
-de la cible et le réseau lèvent, et chaque tentative est notée. Vingt mutants, mesurés par
+de la cible et le réseau lèvent, et chaque tentative est notée. Trente mutants, mesurés par
 `tests/unit/test_watch_gate.py` et `tests/unit/test_gothmog.py`, tous attrapés au premier tour
-(27/10).
+(27/10) ; M750–M759 après la relecture.
 
 | Mutant | Défaut réinjecté | Effet |
 |---|---|---|
@@ -596,6 +596,16 @@ de la cible et le réseau lèvent, et chaque tentative est notée. Vingt mutants
 | M737 | un atomic `--without-glorfindel` attend encore la détection | idem |
 | M738 | `make gothmog-run` perd `WITHOUT_GLORFINDEL` | la dérogation ne passe pas sur Orodruin |
 | M739 | `make orodruin-campaign-run` perd `WITHOUT_GLORFINDEL` | idem pour une campagne |
+| M750 | une campagne `--without-glorfindel` ne le dit pas dans son manifeste | ses runs comptés « sans mesure », sans raison |
+| M751 | une campagne reprise avec un autre réglage | détections mesurées et non mesurées mêlées |
+| M752 | une campagne sans Glorfindel a un rapport d'analyse | « décision inconnue » cherchée, appel au modèle |
+| M753 | H0 écrit le rapport d'une campagne sans Glorfindel | idem, sur H0 |
+| M754 | une campagne sans Glorfindel entre dans l'index | choisie comme précédente (D-2) |
+| M755 | une campagne `aborted` sort en 0 | `make orodruin-campaign-run` réussit |
+| M756 | un battement daté dans le futur reste frais | une horloge fausse vaut une watch pour toujours |
+| M757 | `WITHOUT_GLORFINDEL=0` lève l'exigence | la dérogation par erreur |
+| M758 | un fichier local vivant compte malgré le canal | une watch locale prise pour la watch hébergée |
+| M759 | la console compte une campagne sans Glorfindel en `unknown` | un run de dév pris pour un trou |
 
 ## Ce que les invariants ont trouvé
 

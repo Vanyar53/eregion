@@ -93,7 +93,10 @@ de H0 portent l'abonnement du banc.
 run d'une campagne (et la campagne avant son premier run), `gothmog run` et `gothmog preflight` ;
 tests `tests/unit/test_watch_gate.py` et `tests/unit/test_gothmog.py` ; mutants M720–M739. Le
 rapport porte `metrics.without_glorfindel: true` et `metrics.detection_note` ; la console montre
-« not measured, by choice » (`exercises.js`). Cibles Make d'Orodruin : `WITHOUT_GLORFINDEL=1`.
+« not measured, by choice » (`exercises.js`, et pour une campagne `overview.html`,
+`injector.html`). Une campagne ainsi lancée le porte dans son manifeste, ne se reprend que de la
+même façon et n'a pas de rapport d'analyse (M750–M759). Le canal retour fait foi s'il est
+configuré, sinon le fichier local. Cibles Make d'Orodruin : `WITHOUT_GLORFINDEL=1`.
 
 **Avant V1** : sans watch, Annatar avertissait (« no active glorfindel watch detected »), attaquait
 quand même, et le run finissait en `detection: unknown`. Gothmog ne vérifiait rien.

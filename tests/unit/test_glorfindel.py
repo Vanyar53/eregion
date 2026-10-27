@@ -3005,6 +3005,36 @@ def test_other_replayable_scripts_hold_the_release(monkeypatch):
     assert out["replay_vectors"] == ["extension setup", "run command managé nightly"]
 
 
+def test_restore_allows_only_the_listed_extensions(monkeypatch):
+    """L23, A3: an allowlist, not a list of the dangerous ones. VMAccess resets users and
+    SSH keys — an attacker's key came back with the restored disk — and no CustomScript
+    name caught it; neither a third party's extension, nor one whose kind can't be read.
+    The agents that take no command (monitoring, backup, Run Command's handler, whose
+    last command is the harmless one) don't hold the release."""
+    from types import SimpleNamespace
+    connector, posted = _restore_ready(monkeypatch)
+
+    def ext(name, publisher, typ):
+        d = {"name": name, "properties": {"publisher": publisher, "type": typ}}
+        return SimpleNamespace(name=name, as_dict=lambda: d)
+
+    safe = [ext("AzureMonitorLinuxAgent", "Microsoft.Azure.Monitor", "AzureMonitorLinuxAgent"),
+            ext("VMSnapshotLinux", "Microsoft.Azure.RecoveryServices", "VMSnapshotLinux"),
+            ext("RunCommandLinux", "Microsoft.CPlat.Core", "RunCommandLinux")]
+    extensions = connector._compute.virtual_machine_extensions.list.return_value = SimpleNamespace(value=list(safe))
+    connector._compute.virtual_machine_run_commands.list_by_virtual_machine.return_value = []
+    out = connector.restore_from_backup(_RID, vault="rsv", wait=False, staging_storage="st")
+    assert out["run_command_neutralized"] is True and "replay_vectors" not in out
+
+    extensions.value = safe + [ext("enablevmaccess", "Microsoft.OSTCExtensions", "VMAccessForLinux"),
+                               ext("agent", "Contoso.Tools", "Bootstrap"),
+                               ext("odd", "", "")]
+    out = connector.restore_from_backup(_RID, vault="rsv", wait=False, staging_storage="st")
+    assert out["run_command_neutralized"] is False
+    assert out["replay_vectors"] == ["extension enablevmaccess", "extension agent",
+                                     "extension odd (éditeur ou type illisible)"]
+
+
 
 def test_a_customer_nsg_named_like_ours_is_not_treated_as_quarantine(monkeypatch):
     """Recognised by its name prefix only, a customer NSG named like ours would have

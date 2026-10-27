@@ -10,7 +10,7 @@ from glorfindel.providers.azure.nsg import _rule_name, _rule_signature
 from glorfindel.providers.azure.sdk import _enum_text, _is_not_found
 from glorfindel.response.ids import _parse_nsg_resource_id, _same_id
 from glorfindel.response.locks import _quarantine_lock
-from glorfindel.response.state import _recorded_original, _UNKNOWN
+from glorfindel.response.state import _held_in_quarantine, _recorded_original, _UNKNOWN
 
 
 # Lot L4 — Glorfindel's own quarantine NSG, attached to a NIC that has none of its own.
@@ -118,7 +118,7 @@ class QuarantineMixin:
                 # someone else: what was recorded then (state, or our tag) still stands.
                 # Re-isolating it recorded "none" over it, and the release then left it
                 # with no NSG (seventh review, U2).
-                prior = _recorded_original(t["nic_id"])
+                recorded = prior = _recorded_original(t["nic_id"])
                 if prior is _UNKNOWN or prior is None:
                     try:
                         prior = self._bare_nic_original(t, default_rg)[0]
@@ -126,9 +126,18 @@ class QuarantineMixin:
                         prior = None
                 if prior and prior is not _UNKNOWN:
                     original = prior
+                elif recorded is _UNKNOWN and prior is _UNKNOWN and _held_in_quarantine(t["nic_id"]):
+                    # Our state has it in quarantine, its original unknown (state and
+                    # tags lost before a re-isolation), and someone left it bare: the
+                    # bare NIC is theirs, not its design. Recorded "none", the release
+                    # left it with no NSG and said released — an old isolation still on
+                    # its own NSG, and nothing recorded it any more (I8F).
+                    original = _UNKNOWN
             # Recorded even when the NIC had no NSG: "none" said explicitly, so a tag
-            # that is missing means unknown (Q7), not "put no NSG back".
-            self._record_original(q, t["nic_id"], original)
+            # that is missing means unknown (Q7), not "put no NSG back". An unknown is
+            # left unwritten: the missing tag says it.
+            if original is not _UNKNOWN:
+                self._record_original(q, t["nic_id"], original)
             # The swap only happens if the NIC still carries what was read: its return
             # was ignored, and a NIC changed in between was reported isolated (S1).
             if not self._set_nic_nsg(t["nic_id"], q["nsg_id"], expect=t.get("own_nsg_id") or ""):

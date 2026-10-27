@@ -10,6 +10,7 @@ from glorfindel.response.policy import _ERR_MAX, _first_line
 from glorfindel.response.state import (
     _clear_block_state,
     _clear_isolation_state,
+    _held_in_quarantine,
     _load_block_entries,
     _load_isolation_state,
     _recorded_original,
@@ -103,6 +104,12 @@ class SweepMixin:
             if recorded is not _UNKNOWN:
                 original = recorded
             elif q_bare is None:
+                if _held_in_quarantine(t0["nic_id"]):
+                    # In quarantine for our state, its original unknown there and no tag:
+                    # skipped, the reset said `swept` and cleared the state — the NIC
+                    # left bare, an old isolation on its own NSG unrecorded (I8F).
+                    failed_early.append(f'{t0["nic_short"]}: carte sans NSG, NSG d\'origine inconnu '
+                                        "(ni l'état local ni le tag ne le disent) : la remettre à la main")
                 continue
             bare[t0["nic_id"]] = (original, q_bare)
             if original:

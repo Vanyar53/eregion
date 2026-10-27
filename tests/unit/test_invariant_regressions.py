@@ -403,3 +403,28 @@ def test_a_reset_sweeps_the_original_it_puts_back(monkeypatch):
          ("isolate", WEB1, WEB1, None),
          ("someone_detaches_the_quarantine", _nic("rg-app1", "web-nic")),
          ("reset_from_azure", WEB1, WEB1, None))
+
+
+def test_a_bare_nic_whose_original_is_unknown_stays_unknown(monkeypatch):
+    """An older version's isolation of `web` on its own NSG; a quarantine whose state and
+    tags are lost, re-isolated (its original unknown); our NSG taken off the NIC by
+    someone, then isolated again: that isolation recorded "none" over the unknown — the
+    release put no NSG back, said `released` and cleared the state, the old isolation
+    still on the NIC's own NSG with nothing recording it (I8). Reduced from 186 steps of
+    A3's run (27/10, I8F, #227): its faults (429 on the NIC and the NSGs) were leftovers."""
+    _run(monkeypatch, _net(quarantine=True, legacy=("web-nic", False), web_nic={"own": "dedicated"}),
+         ("lose_everything", WEB1, WEB1, None, WEB1, _Q1, "reisolate"),
+         ("someone_detaches_the_quarantine", _nic("rg-app1", "web-nic")),
+         ("isolate", WEB1, WEB1, None),
+         ("release", WEB1, WEB1, None))
+
+
+def test_a_reset_doesnt_skip_a_bare_nic_whose_original_is_unknown(monkeypatch):
+    """The same, a reset in place of the second isolation: the bare NIC, in quarantine for
+    the state but its original unknown there and on no tag, was skipped — `swept`, the
+    state cleared, the old isolation left on the NIC's own NSG (I8, I8F)."""
+    _run(monkeypatch, _net(quarantine=True, legacy=("web-nic", False), web_nic={"own": "dedicated"}),
+         ("lose_everything", WEB1, WEB1, None, WEB1, _Q1, "reisolate"),
+         ("someone_detaches_the_quarantine", _nic("rg-app1", "web-nic")),
+         ("reset_from_azure", WEB1, WEB1, None))
+

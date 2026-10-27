@@ -703,6 +703,116 @@ de la cible et le réseau lèvent, et chaque tentative est notée. Trente mutant
 | M758 | un fichier local vivant compte malgré le canal | une watch locale prise pour la watch hébergée |
 | M759 | la console compte une campagne sans Glorfindel en `unknown` | un run de dév pris pour un trou |
 
+### « Déjà alerté » après la carte (L1F)
+
+La machine a trouvé L1 en défaut en cinq étapes : un blocage, le rôle retiré, un
+`terraform apply` qui supprime sa règle, une réaffirmation qui tente de la reposer (refusée)
+et meurt juste après sa première écriture, puis une réaffirmation en `human_only`. La
+réaffirmation écrivait « déjà alerté » (`drift_alerted_at`) avant la carte ; le crash tombait
+entre les deux, et chaque passe suivante se taisait sur ce marqueur. La carte vient d'abord
+maintenant (`glorfindel/reassert.py`). Trois mutants, attrapés à chaque tour (27/10) : M900 et
+M902 sont rares dans les séquences tirées (un crash pile entre la carte et le marqueur) — la
+machine seule ne les voit ni à 500 séquences (2 tours) ni à 2 000 (1 tour) ; M900 est attrapé
+par la séquence figée et par `tests/unit/test_reassert.py`, M902 par ce dernier ; M901 n'a pas de propriété de vivacité dans la
+machine (une isolation disparue), son test unitaire le mesure.
+
+| Mutant | Défaut réinjecté | Effet |
+|---|---|---|
+| M900 | un blocage qu'on n'a pas pu reposer marqué « alerté » avant sa carte | crash entre les deux : blocage disparu, rien de dit |
+| M901 | une isolation qu'on n'a pas pu reposer marquée « alertée » avant sa carte | idem pour une isolation |
+| M902 | un blocage disparu en `human_only` marqué « alerté » avant sa carte | idem, sans tentative de repose |
+
+### Le journal d'activité, détection seule (AL1)
+
+Un faux `AzureActivity` (des lignes comme celles de la table, rendues par la requête du
+détecteur parent) traverse le vrai `AzureActivityDetector`, le RulePoller et le graphe, modèle
+simulé. Trente-cinq mutants (M810–M829, puis M850–M859 et M890–M894 après les relectures 5.5), mesurés par
+`tests/unit/test_activity_logs.py`, tous attrapés (27/10).
+
+| Mutant | Défaut réinjecté | Effet |
+|---|---|---|
+| M810 | les écritures de Glorfindel ne sont pas écartées | sa propre isolation s'escalade |
+| M811 | le plan de contrôle décidé par le modèle | il est appelé, et `isolate_vm` part |
+| M812 | un jeton d'utilisateur sans `idtyp` lu comme celui d'une application | l'`appid` de la CLI écarte tout le monde |
+| M813 | une carte du plan de contrôle fusionnée dans la précédente | l'écriture sur une règle de Glorfindel, invisible |
+| M814 | la décision ignore la source lue | `respond` demande au modèle |
+| M815 | le type `control_plane_change` perdu | carte `low_confidence`, approuvable en un clic |
+| M816 | une règle `glorfindel-*` pas vue comme sienne | le cas le plus grave, banal |
+| M817 | le NSG de quarantaine pas vu comme sien | idem |
+| M818 | son identité écartée quoi qu'elle fasse sur ce qui est à lui | un rôle attribué sous son identité, jamais vu |
+| M819 | l'identité du jeton ignorée | ses écritures s'escaladent |
+| M820 | les identifiants de `Claims` ignorés | idem, pour un principal de service |
+| M821 | l'appelant comparé à la casse près | idem |
+| M822 | déduplication par ligne | `Start` puis `Success` : deux détections |
+| M823 | une règle plus courte que la latence, en silence | les lignes en retard jamais vues |
+| M824 | la règle NSG livrée regarde 10 minutes | idem |
+| M825 | une sous-ressource de VM non attribuée | un rôle sur la VM ignoré |
+| M826 | la ligne la plus récente d'abord, avant l'écriture sur une règle de Glorfindel | le cas grave après les autres, ou dans la synthèse |
+| M827 | l'écriture sur une règle de Glorfindel pas critique | sévérité banale |
+| M828 | une ligne du plan de contrôle normalisée comme une IP | ni opération ni appelant |
+| M829 | une règle `azure_activity` liée à aucun backend | désactivée, elle ne tourne jamais |
+| M850 | jeton d'utilisateur : l'`appid` de la CLI pris pour celui de Glorfindel | toute écriture faite avec `az` écartée |
+| M851 | son identité sur une règle du client écartée | un credential volé, invisible |
+| M852 | une règle du client décalée par une isolation pas vue comme sienne | sa levée s'escalade, critique |
+| M853 | une carte par relevé sur le plan de contrôle | les autres opérations marquées envoyées, jamais vues |
+| M854 | au-delà du plafond, pas de carte de synthèse | des opérations marquées envoyées sans carte |
+| M855 | un bouton sur une carte ancrée sur une VM | un clic restaure une VM que la détection ne nomme pas |
+| M856 | la décision du plan de contrôle recommande d'isoler | « Recommandé : isoler » sur la VM d'ancrage |
+| M857 | un signal non attribué ouvre l'incident de la VM d'ancrage | le cycle suivant y lit « 2 signaux » |
+| M858 | un cycle du plan de contrôle dans la mémoire de décision | un précédent servi au plan de données |
+| M859 | ce qu'un état d'isolation attribuait, oublié avec l'état | la ligne de la levée s'escalade |
+| M890 | un nom `glorfindel-*` suffit à faire une règle sienne | un credential volé cache une autorisation derrière |
+| M891 | les états de blocage ignorés | son propre blocage s'escalade |
+| M892 | l'abonnement hors de la clé d'une règle | les mêmes noms ailleurs pris pour les siens |
+| M893 | une ligne `AzureActivity` lue par une autre source va au modèle | un snapshot part seul |
+| M894 | une règle du plan de contrôle sans `CorrelationId`, en silence | deux opérations n'en font qu'une |
+
+### Les identités : Entra ID, détection seule (C2)
+
+De faux journaux d'Entra ID (des lignes comme celles que projettent les règles livrées, rendues par
+la requête du détecteur parent) traversent le vrai `AzureEntraDetector`, le RulePoller et le
+graphe, modèle simulé. Vingt mutants (M920–M939), mesurés par `tests/unit/test_entra_detection.py`,
+tous attrapés (27/10).
+
+| Mutant | Défaut réinjecté | Effet |
+|---|---|---|
+| M920 | une détection d'identité décidée par le modèle | il est appelé, avec l'UPN d'un administrateur |
+| M921 | la route après `decide` envoie une détection d'identité vers une action | un `decide` contourné isole |
+| M922 | la détection d'identité reconnue par son seul plan | une ligne aux colonnes muettes va au modèle |
+| M923 | une ligne d'Entra lue par une autre source va au modèle | ni plan ni source |
+| M924 | tout rôle d'annuaire est un constat | Lecteurs d'annuaire comme Administrateur général |
+| M925 | un principal sans historique, inhabituel | les premiers jours après le paramètre inondent |
+| M926 | une opération échouée est un constat | des cartes pour rien |
+| M927 | l'identité de Glorfindel, acteur, pas marquée | son identifiant volé, pas critique |
+| M928 | l'identité de Glorfindel, cible, pas marquée | un identifiant ajouté à Glorfindel, banal |
+| M929 | une carte d'identité fusionnée dans la précédente | l'identifiant ajouté à Glorfindel, invisible |
+| M930 | après un `decide` contourné, le type `low_confidence` | approuvable en un clic |
+| M931 | une commande sur la VM d'ancrage d'une carte d'identité | `glorfindel restore` proposé |
+| M932 | un cycle d'identité dans la mémoire de décision | son UPN servi au modèle plus tard |
+| M933 | une détection d'identité ouvre l'incident de la VM d'ancrage | le cycle suivant y lit « 2 signaux » |
+| M934 | un constat dédupliqué par son heure | deux consentements dans la même seconde : une carte |
+| M935 | une carte par cycle pour les identités | le second identifiant ajouté du relevé, jamais vu |
+| M936 | un signal d'identité sans son plan | un constat sur Glorfindel, pas critique |
+| M937 | une règle d'identité sans `EventId`, en silence | deux constats n'en font qu'un |
+| M938 | une carte de rôle sans la façon de retirer l'attribution | l'humain ne sait pas révoquer |
+| M939 | le paramètre de diagnostic du tenant toujours posé | les journaux de tout le tenant envoyés |
+
+Après les relectures 5.5 (27/10), onze de plus (M940–M949, M955), tous attrapés :
+
+| Mutant | Défaut réinjecté | Effet |
+|---|---|---|
+| M940 | sous `az login`, l'`oid` de l'opérateur pris pour Glorfindel dans Entra | ses actions lues comme un vol |
+| M941 | un jeton d'utilisateur pris pour celui d'une application | idem |
+| M942 | la règle de rôle filtre sur `Role.DisplayName` | une attribution sans lui disparaît avant l'adaptateur |
+| M943 | l'ancienne valeur d'un premier identifiant n'est pas un tableau | `set_difference` tait la ligne |
+| M944 | une règle du client sur une table d'Entra, sans colonne révélatrice, va au modèle | son UPN envoyé |
+| M945 | `respond` sur une requête d'Entra d'une autre source va au modèle | idem |
+| M946 | une carte de consentement propose de désactiver le principal de la ressource | tout le tenant coupé |
+| M947 | une carte d'identité étiquetée exercice par une fenêtre sur sa VM d'ancrage | un vrai constat pris pour un exercice |
+| M948 | l'ancien nom de Global Administrator pas privilégié | une attribution lue sous ce nom, tue |
+| M949 | le nom du rôle pas repris de sa cible | une attribution sans `Role.DisplayName`, sans nom |
+| M955 | un signal de `respond` sur le journal d'activité forcé `real` (seconde relecture) | un exercice déclaré compté comme un incident |
+
 ### L'IA d'analyse : son modèle, sa mémoire, le tri, rien sans un humain (IA1)
 
 L'IA d'analyse refuse le modèle de décision de Glorfindel et toute mémoire rangée dans son état
@@ -794,6 +904,7 @@ Aucun de ces défauts n'avait été vu en revue. Chacun a son test et sa séquen
 | A0 | original d'une carte nue lu dans le seul tag par le reset | « swept », état effacé, carte sans NSG en silence |
 | A0 | NSG d'origine remis sans en lire les règles | « swept », VM encore coupée par une ancienne isolation |
 | A0 | NSG supprimé lu comme « illisible » | blocage disparu jamais signalé, levée partielle pour toujours |
+| L1F | « déjà alerté » écrit avant la carte quand la repose échoue | crash entre les deux : blocage disparu, plus rien de dit |
 | I1F | NSG de quarantaine modifié (deny passé en Udp), état et tags de la carte perdus | VM joignable en TCP depuis le VNet, rien de dit : la réaffirmation ne lisait que les isolations dont elle avait l'état |
 | I4F | NSG d'origine d'une carte en quarantaine (ou nue) jugé sans elle | le reset de la nouvelle VM prenait l'ancienne isolation d'une autre VM pour la sienne : **l'autre VM rouverte** |
 

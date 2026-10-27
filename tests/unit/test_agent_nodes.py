@@ -1612,8 +1612,9 @@ def test_graph_isolation_with_sessions_left_open_fails_verification(tmp_path, mo
     assert "sessions déjà ouvertes" in final["escalation_reason"]
 
 
-def test_store_cycle_never_notifies_a_no_op(tmp_memory):
+def test_store_cycle_never_notifies_a_no_op(tmp_memory, tmp_path, monkeypatch):
     from glorfindel.agent import store_cycle
+    monkeypatch.chdir(tmp_path)   # store_cycle writes runs/<run_id>_debug.jsonl where it runs (HY1)
     state = _state(action="revoke_temp_access", confidence=0.9,
                    outcome={"status": "no_op", "executed": True, "verified": None})
     with patch("glorfindel.escalations.notify_action") as notify:

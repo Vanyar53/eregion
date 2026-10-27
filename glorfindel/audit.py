@@ -251,7 +251,8 @@ def _check_syslog(resource_id: str, workspace_id: str, detector=None) -> AuditCh
 
 
 # Tables a rule can read, in the order they are looked for in its query.
-_RULE_TABLES = ("Perf", "Syslog", "StorageBlobLogs", "AzureActivity", "SigninLogs", "AuditLogs", "Heartbeat")
+_RULE_TABLES = ("Perf", "Syslog", "StorageBlobLogs", "AzureActivity", "SigninLogs", "AuditLogs",
+               "AADServicePrincipalSignInLogs", "Heartbeat")
 # Tables whose rows the VM itself sends: a rule on them is blind if the VM sends none.
 _VM_TELEMETRY = {"Perf": "perf", "Syslog": "syslog"}
 

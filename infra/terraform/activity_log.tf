@@ -17,24 +17,31 @@
 #     (Monitoring Contributor ou Contributor sur l'abonnement), pas seulement sur le groupe.
 # Lecture côté Glorfindel : aucun droit de plus (Log Analytics Reader sur le workspace).
 #
-# Catégories : Administrative (écritures, suppressions, actions sur les ressources : ce que
-# lisent les règles) et Security (Defender for Cloud). Latence d'ingestion à mesurer sur le
-# banc (hypothèse : quelques minutes, parfois plus de dix).
+# Catégorie : Administrative seule (écritures, suppressions, actions sur les ressources :
+# ce que lisent les règles). `Security` (les alertes de Defender for Cloud) n'est lue par
+# aucune règle : retirée — de l'ingestion payée pour rien ; un lot qui lira Defender
+# l'ajoutera avec sa règle. Latence d'ingestion à mesurer sur le banc (hypothèse :
+# quelques minutes, parfois plus de dix).
+#
+# Désactivé, rien ne s'exécute : ni le paramètre ni la lecture de l'abonnement (même
+# `count`).
 
-data "azurerm_subscription" "current" {}
+locals {
+  activity_log_enabled = try(local.cfg.activity_log.enabled, false) && local.instance == "default"
+}
+
+data "azurerm_subscription" "current" {
+  count = local.activity_log_enabled ? 1 : 0
+}
 
 resource "azurerm_monitor_diagnostic_setting" "activity_log" {
-  count = try(local.cfg.activity_log.enabled, false) && local.instance == "default" ? 1 : 0
+  count = local.activity_log_enabled ? 1 : 0
 
   name                       = "diag-${local.project}-activity"
-  target_resource_id         = data.azurerm_subscription.current.id
+  target_resource_id         = data.azurerm_subscription.current[0].id
   log_analytics_workspace_id = azurerm_log_analytics_workspace.celebrimbor.id
 
   enabled_log {
     category = "Administrative"
-  }
-
-  enabled_log {
-    category = "Security"
   }
 }

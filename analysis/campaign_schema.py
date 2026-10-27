@@ -13,6 +13,7 @@ from __future__ import annotations
 import math
 
 from eregion_core.exercise_channel import safe_part
+from eregion_core.watch_gate import NO_CAMPAIGN_REPORT  # noqa: F401 — said by the readers
 
 # annatar/campaign/manifest.py, CAMPAIGN_STATES and SCENARIO_STATES.
 CAMPAIGN_STATES = ("planned", "ratified", "running", "done", "aborted")
@@ -37,7 +38,16 @@ def manifest_refusal(manifest) -> str:
         return f"its state {str(manifest.get('state'))[:20]!r} is not one of {', '.join(CAMPAIGN_STATES)}"
     if not isinstance(manifest.get("scenarios"), list):
         return "its scenarios are not a list"
+    flag = manifest.get("without_glorfindel")
+    if flag is not None and not isinstance(flag, bool):
+        return "its without_glorfindel is not true or false"
     return ""
+
+
+def without_glorfindel(manifest) -> bool:
+    """V1: a campaign run --without-glorfindel — no detection measured, so no analysis report
+    (here or on H0), never in the index nor in a comparison: ``NO_CAMPAIGN_REPORT``."""
+    return isinstance(manifest, dict) and manifest.get("without_glorfindel") is True
 
 
 def scenario_refusal(scenario) -> str:
@@ -80,4 +90,11 @@ def run_report_refusal(report, run_id: str) -> str:
     attack = metrics.get("attack_time")
     if attack is not None and not _finite(attack):
         return "its attack_time is not a number of seconds"
+    # V1 (#214): a run without Glorfindel, by choice, is accepted — said as such, never with
+    # a verdict only a watch could have given.
+    without = metrics.get("without_glorfindel")
+    if without is not None and not isinstance(without, bool):
+        return "its without_glorfindel is not true or false"
+    if without is True and metrics.get("detection") in ("detected", "missed"):
+        return "it ran without Glorfindel, yet its detection is a verdict"
     return ""

@@ -31,6 +31,10 @@ eregion_core/exercise_channel.py → O1 : les fenêtres d'Orodruin vers la watch
 eregion_core/watch_channel.py   → #159 : le sens retour (conteneur watch) — heartbeat.json {at, since, windows} et
                                    detections/<run_id>/<signal_id>.json, écrits par la watch hébergée (Publisher,
                                    thread watch-channel), lus par l'attente d'Annatar ; miss_unprovable → unknown.
+eregion_core/watch_gate.py      → V1 (#214) : avant chaque run d'Annatar et de Gothmog, avant tout appel au
+                                   cloud, le battement de la watch (canal retour, ~/.glorfindel/watch_heartbeat) ;
+                                   refusal() dit depuis quand date le dernier ; --without-glorfindel → le rapport
+                                   porte metrics.without_glorfindel.
 
 gothmog/                        → G0 : pannes déclarées. experiments/<id>.yaml (schéma E1, kind fault) ;
                                    engines/chaos_studio.py (ARM REST : lire l'expérience et ses cibles,

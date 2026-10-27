@@ -85,6 +85,27 @@ _DATES_LINE = (_DATES_FIRST
                + _DATES_AU
                + r'''    rf"|\b\d{{1,2}}(?:er|st|nd|rd|th)?)\s+(?:{_MONTHS})\b"''' + "\n")
 
+# V1 (#214): the checks of a live Glorfindel watch, as they stand — M721 and M725 move them
+# after the first call to the cloud (Orodruin's contract).
+_V1_ANNATAR_GATE = (
+    "        if self.without_glorfindel:\n"
+    '            console.print(f"[yellow]{watch_gate.FLAG}: a development run — "\n'
+    '                          f"{watch_gate.NOT_MEASURED}.[/yellow]")\n'
+    "        else:\n"
+    "            no_watch = watch_gate.refusal()\n"
+    "            if no_watch:\n"
+    '                console.print(f"[red]Refused — no live Glorfindel watch:[/red] {no_watch}")\n'
+    '                return RunOutcome(run_id, "unknown", error=f"glorfindel: {no_watch}")\n')
+_V1_ANNATAR_ARM = '        verdict, session = arm(run_id, "annatar")\n'
+_V1_GOTHMOG_GATE = (
+    "        refused = self._no_watch(run_id, without_glorfindel)\n"
+    "        if refused:\n"
+    "            return refused\n"
+    "        self._without = watch_gate.without_metrics(without_glorfindel)\n")
+_V1_GOTHMOG_BENCH = "        bench = self._bench_factory(session)\n"
+_V1_WAIT = ("not self.dry_run \\\n"
+            "                and not self.without_glorfindel:  # not measured, by choice: no wait\n")
+
 # (id, bug class, file, text in the code today, text that re-introduces the bug[, why
 # the invariants can't see it])
 MUTANTS = [
@@ -843,8 +864,8 @@ MUTANTS = [
     # watch's pass, refused when of the wrong shape, never over a report of H0's own. And
     # the probes' values before the fault in Gothmog's report.
     ("M240", "`annatar run` keeps its report on Orodruin (#193)", ACLI,
-     "    engine = Engine(dry_run=dry_run, skip_preflight=skip_preflight, publish_report=True)\n",
-     "    engine = Engine(dry_run=dry_run, skip_preflight=skip_preflight)\n"),
+     "    engine = Engine(dry_run=dry_run, skip_preflight=skip_preflight, publish_report=True,\n",
+     "    engine = Engine(dry_run=dry_run, skip_preflight=skip_preflight,\n"),
     ("M241", "`gothmog run` keeps its report on Orodruin (#193)", GOTH,
      "            carry_run(run_id, self.runs_dir)  # its report, to H0 with its window (#193)\n",
      "            pass\n"),
@@ -1310,6 +1331,85 @@ MUTANTS = [
      '    covered = {r["ttp"] for r in detected}\n', '    covered = {r["ttp"] for r in attacks}\n'),
     ("M408", "eregion console keeps compose's empty service principal: no managed identity (UI-1, H0)",
      "eregion_console/cli.py", "    _drop_empty_service_principal_env()\n", ""),
+    # V1 (#214): Annatar and Gothmog do not act without Glorfindel — the watch's heartbeat read
+    # before any call to the cloud; --without-glorfindel said in the report.
+    ("M720", "annatar run without a live watch is not refused (V1)", ENG,
+     "            if no_watch:\n                console.print(", "            if False:\n                console.print("),
+    ("M721", "annatar reads the watch after its first call to the cloud (V1)", ENG,
+     (_V1_ANNATAR_GATE, _V1_ANNATAR_ARM), ("", _V1_ANNATAR_ARM + _V1_ANNATAR_GATE)),
+    ("M722", "an atomic run --without-glorfindel does not say so in its report (V1)", ENG,
+     "            **watch_gate.without_metrics(self.without_glorfindel),\n", ""),
+    ("M723", "a local-script run --without-glorfindel does not say so in its report (V1)", ENG,
+     "        metrics = watch_gate.without_metrics(self.without_glorfindel)\n", "        metrics = {}\n"),
+    ("M724", "gothmog run without a live watch is not refused (V1)", GOTH,
+     "        if not no_watch:\n            return None\n", "        return None\n"),
+    ("M725", "gothmog reads the watch after its first call to the cloud (V1)", GOTH,
+     (_V1_GOTHMOG_GATE, _V1_GOTHMOG_BENCH), ("", _V1_GOTHMOG_BENCH + _V1_GOTHMOG_GATE)),
+    ("M726", "a fault --without-glorfindel does not say so in its report (V1)", GOTH,
+     "                                    **self._without, **metrics},\n",
+     "                                    **metrics},\n"),
+    ("M727", "gothmog preflight without a live watch answers « could run » (V1)", GOTH,
+     "        refused = self._no_watch(run_id, without_glorfindel)\n        if refused:\n"
+     "            return refused\n        verdict, session = arm(run_id, \"gothmog\")\n",
+     "        verdict, session = arm(run_id, \"gothmog\")\n"),
+    ("M728", "a campaign without a live watch starts, and turns 'running' (V1)", CRUN,
+     "        if not self.without_glorfindel:\n            no_watch = watch_gate.refusal()\n",
+     "        if False:\n            no_watch = watch_gate.refusal()\n"),
+    ("M729", "a campaign goes on after a run refused for no watch (V1)", CRUN,
+     '            elif (entry.error or "").startswith("glorfindel:"):\n', "            elif False:\n"),
+    ("M730", "campaign run --without-glorfindel does not reach its runs (V1)", CRUN,
+     "            lambda: Engine(skip_preflight=False, without_glorfindel=without_glorfindel))\n",
+     "            lambda: Engine(skip_preflight=False))\n"),
+    ("M731", "a heartbeat of any age is a live watch (V1)", WCH,
+     "    return -CLOCK_SKEW_S <= age < FRESH_S\n", "    return -CLOCK_SKEW_S <= age\n"),
+    ("M732", "the return channel is not read: the hosted watch is never seen from Orodruin (V1)",
+     "eregion_core/watch_gate.py", '    beat = READERS["channel"]()\n', "    beat = None\n"),
+    ("M733", "an unreadable channel raises instead of refusing (V1)", "eregion_core/watch_gate.py",
+     "    except Exception as e:  # unreadable is no watch — said, never raised\n",
+     "    except ValueError as e:  # unreadable is no watch — said, never raised\n"),
+    ("M734", "H0 accepts a run without Glorfindel that claims a verdict (V1)", "analysis/campaign_schema.py",
+     '    if without is True and metrics.get("detection") in ("detected", "missed"):\n', "    if False:\n"),
+    ("M735", "the console drops the flag: a run without Glorfindel shows as unknown (V1)", CON,
+     '    if m.get("without_glorfindel") is True:  # V1: run --without-glorfindel, shown apart\n',
+     "    if False:\n"),
+    ("M736", "a local-script run --without-glorfindel still waits for a detection (V1)", ENG,
+     "        if scenario.detection and detection_timeout_s > 0 and " + _V1_WAIT,
+     "        if scenario.detection and detection_timeout_s > 0 and not self.dry_run:\n"),
+    ("M737", "an atomic run --without-glorfindel still waits for a detection (V1)", ENG,
+     "        if attack_started and detection_timeout_s > 0 and " + _V1_WAIT,
+     "        if attack_started and detection_timeout_s > 0 and not self.dry_run:\n"),
+    ("M738", "make gothmog-run drops WITHOUT_GLORFINDEL (V1)", MAKE,
+     "'$(ORO_RUN) gothmog run $(FAULT) --yes$(ORO_WITHOUT)'", "'$(ORO_RUN) gothmog run $(FAULT) --yes'"),
+    ("M739", "make orodruin-campaign-run drops WITHOUT_GLORFINDEL (V1)", MAKE,
+     "annatar campaign run $(CAMPAIGN) --yes$(ORO_WITHOUT)'", "annatar campaign run $(CAMPAIGN) --yes'"),
+    # V1, review: a campaign without Glorfindel says so, resumes only the same way, has no
+    # analysis report and never enters the index; the channel decides; no heartbeat from the future.
+    ("M750", "a campaign --without-glorfindel does not say so in its manifest (V1)", CRUN,
+     "        m.without_glorfindel = self.without_glorfindel\n", ""),
+    ("M751", "a campaign is resumed with another --without-glorfindel than it started with (V1)", CRUN,
+     "        if m.state == \"running\" and m.without_glorfindel != self.without_glorfindel:\n",
+     "        if False:\n"),
+    ("M752", "a campaign without Glorfindel gets an analysis report, its decisions sought (V1)", CREP,
+     "    if why := no_report(campaign_dir):\n        raise NoReport(why)\n", ""),
+    ("M753", "H0 writes the report of a campaign without Glorfindel (V1)", HREP,
+     "        if campaign_schema.without_glorfindel(manifest):  # V1: no report, by choice\n",
+     "        if False:\n"),
+    ("M754", "a campaign without Glorfindel enters the index: a previous campaign to compare (V1)",
+     "analysis/campaign_index.py",
+     "    if cr.without_glorfindel(manifest):  # V1: no detection measured — never compared\n",
+     "    if False:\n"),
+    ("M755", "an aborted campaign exits 0: make orodruin-campaign-run succeeds (V1)", ACLI,
+     "        if result.state == \"aborted\":\n            raise SystemExit(EXIT_RUN_FAILED)\n", ""),
+    ("M756", "a heartbeat dated in the future stays fresh for ever (V1)", WCH,
+     "    return -CLOCK_SKEW_S <= age < FRESH_S\n", "    return age < FRESH_S\n"),
+    ("M757", "WITHOUT_GLORFINDEL=0 waives the watch on Orodruin (V1)", MAKE,
+     "$(if $(filter 1 yes true,$(WITHOUT_GLORFINDEL)), --without-glorfindel)",
+     "$(if $(WITHOUT_GLORFINDEL), --without-glorfindel)"),
+    ("M758", "a live local file counts though the return channel is set (V1)",
+     "eregion_core/watch_gate.py", "    if beat is None:\n        beat = READERS[\"local\"]()\n",
+     "    if beat is None or not fresh(beat, now):\n        beat = READERS[\"local\"]()\n"),
+    ("M759", "the console counts a campaign without Glorfindel as unknown (V1)", CON,
+     '            "without_glorfindel": m.get("without_glorfindel") is True,   # V1: counted apart\n', ""),
     # UI-1c (#205) — the console on the host: the token under its two names, from the operator's
     # machine (Makefile, status.sh) and in host.env (host_env.py), never shown.
     ("M740", "make glorfindel-host-url ignores EREGION_CONSOLE_TOKEN: a new host gets no URL (UI-1c)", MAKE,
@@ -1514,6 +1614,9 @@ TESTS.update({f"M{n}": "tests/unit/test_rule_layers.py" for n in range(713, 717)
 TESTS.update({f"M{n}": "tests/unit/test_console.py" for n in range(400, 409)})  # UI-1
 TESTS.update({f"M{n}": "tests/unit/test_indicators.py" for n in range(560, 566)})  # UI-2
 TESTS["M403"] = "tests/unit/test_console_exercises.py"
+# V1 (#214): Annatar's side and the shared gate in test_watch_gate.py, Gothmog's in test_gothmog.py.
+TESTS.update({f"M{n}": "tests/unit/test_watch_gate.py" for n in (*range(720, 740), *range(750, 760))})
+TESTS.update({f"M{n}": "tests/unit/test_gothmog.py" for n in (724, 725, 726, 727)})
 TESTS.update({f"M{n}": "tests/unit/test_host_console.py" for n in range(740, 750)})  # UI-1c
 
 

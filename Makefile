@@ -192,6 +192,7 @@ help:
 	@echo "Gothmog (G0) — une panne déclarée, depuis Orodruin (gothmog/README.md) :"
 	@echo "  make gothmog-preflight [FAULT=vm-shutdown]   Contrat, cibles, état normal — rien d'écrit"
 	@echo "  make gothmog-run [FAULT=vm-shutdown]         La panne, son retour vérifié (~15 min)"
+	@echo "    Sans watch de Glorfindel vivante, refusé (V1) ; WITHOUT_GLORFINDEL=1 : run de dév, dit au rapport"
 	@echo ""
 	@echo "Campagne (R1 + IA0) — kill-chain + rapport, depuis Orodruin :"
 	@echo "  make orodruin-campaign-plan CAMPAIGN_TARGET=<rid> [CAMPAIGN_MAX=5]  Planifie (rend un id)"
@@ -670,12 +671,17 @@ orodruin-ssh:
 # Même image et même identité qu'Annatar sur Orodruin. ServerAliveInterval : la panne et la
 # vérification du retour durent ~15 min, plus que le délai d'inactivité d'une IP publique.
 FAULT ?= vm-shutdown
+# V1 (#214) : sans watch de Glorfindel vivante (le battement du canal retour), l'injecteur refuse
+# avant tout appel au cloud, et la cible échoue avec lui. WITHOUT_GLORFINDEL=1 : un run de
+# développement, que le rapport inscrit (« detection not measured, by choice ») ; 1, yes ou true
+# seulement — WITHOUT_GLORFINDEL=0 (ou toute autre valeur) n'y touche pas.
+ORO_WITHOUT    = $(if $(filter 1 yes true,$(WITHOUT_GLORFINDEL)), --without-glorfindel)
 
 gothmog-preflight:
-	$(ORO_SSH) '$(ORO_RUN) gothmog preflight $(FAULT)'
+	$(ORO_SSH) '$(ORO_RUN) gothmog preflight $(FAULT)$(ORO_WITHOUT)'
 
 gothmog-run:
-	ssh $(SSH_OPTS) -o ServerAliveInterval=60 $(ORO_USER)@$(ORO_IP) '$(ORO_RUN) gothmog run $(FAULT) --yes'
+	ssh $(SSH_OPTS) -o ServerAliveInterval=60 $(ORO_USER)@$(ORO_IP) '$(ORO_RUN) gothmog run $(FAULT) --yes$(ORO_WITHOUT)'
 
 # ── Campagne (R1 + IA0) — planifier puis lancer depuis Orodruin ───────────────
 # Même image, même identité qu'Annatar/Gothmog sur Orodruin. La campagne joue l'atomic
@@ -701,7 +707,7 @@ orodruin-campaign-plan:
 
 orodruin-campaign-run:
 	@test -n "$(CAMPAIGN)" || { echo "CAMPAIGN=<id> requis (rendu par orodruin-campaign-plan)"; exit 1; }
-	ssh $(SSH_OPTS) -o ServerAliveInterval=60 $(ORO_USER)@$(ORO_IP) '$(ORO_RUN) annatar campaign run $(CAMPAIGN) --yes'
+	ssh $(SSH_OPTS) -o ServerAliveInterval=60 $(ORO_USER)@$(ORO_IP) '$(ORO_RUN) annatar campaign run $(CAMPAIGN) --yes$(ORO_WITHOUT)'
 
 # ── Dev ───────────────────────────────────────────────────────────────────
 

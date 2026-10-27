@@ -1673,7 +1673,10 @@ class IsolationMachine(RuleBasedStateMachine):
             # (nothing says which NSGs to look at); its recorded rules are checked below.
             assert self._released(vm, own=True), f"I7: {vm} could not be brought back to its design"
         # That known limit is lifted by the orphan sweep (A3): after it, every live VM
-        # is back to its design in full — not only in its own view.
+        # is back to its design in full — not only in its own view. The VMs given their
+        # mode, as the operator gives it to free them (D-A): in human_only only a card,
+        # and a mode left by an earlier sequence's rule made the teardown flaky.
+        _CURRENT.mode = "non_disruptive"
         self._orphan_sweep()
         for vm in self.live:
             assert self._released(vm), f"U1: {vm} still cut off by a deleted VM's rule after the orphan sweep"

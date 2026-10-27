@@ -428,6 +428,20 @@ def test_a_vm_given_an_isolated_deleted_vms_address_is_freed_by_the_sweep(monkey
         m.teardown()
 
 
+def test_the_teardown_frees_the_vms_whatever_mode_the_last_rule_left(monkeypatch):
+    """Found at 2 000 sequences (A3, after its first review): `api` isolated, its state
+    lost, deleted; a new `api` gets its address behind its NSG. The teardown's sweep ran
+    in the mode an earlier rule — or an earlier sequence — left: in human_only, only a
+    card, and the new VM stayed cut off. The teardown gives the VMs their mode."""
+    from . import test_invariants
+    monkeypatch.setattr(test_invariants._CURRENT, "mode", "human_only")
+    nsg_api = ("/subscriptions/s/resourceGroups/rg-edge/providers/Microsoft.Network/"
+               "networkSecurityGroups/nsg-api-nic")
+    _run(monkeypatch, _net(api_nic={"own": "dedicated"}),
+         ("address_reused", WEB1, WEB1, None, False, 22, False, "rg-app1", "web", False),
+         ("address_reused", API, API, None, True, True, "rg-app1", "api", nsg_api, "Linux", False))
+
+
 BATCH = "/subscriptions/s/resourceGroups/rg-new/providers/Microsoft.Compute/virtualMachines/batch"
 
 

@@ -1,0 +1,62 @@
+name: Components
+
+# D1: each component runs alone — a technical separation, not a product sold alone.
+# Glorfindel, Annatar, Gothmog and the shared core are each imported and tested with the
+# other components ABSENT, and Glorfindel's dependencies absent for an injector
+# (scripts/component_check.py). The usage profiles (docs/profils/) are combinations of them,
+# Glorfindel in each: every compose profile renders its services (make profiles-check).
+# The full suite stays in ci.yml.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  component:
+    name: ${{ matrix.component }} alone
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        component: [core, glorfindel, annatar, gothmog]
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      # ChromaDB downloads its ONNX embedding model (~80 MB) on first use (as in ci.yml).
+      - uses: actions/cache@v5
+        if: matrix.component == 'glorfindel'
+        with:
+          path: ~/.cache/chroma
+          key: chroma-onnx-v1
+
+      # The lock (M-3), as in ci.yml: what is absent is made so by the check, not by a
+      # second install.
+      - name: Install
+        run: |
+          python -m pip install --require-hashes -r requirements/dev.txt
+          python -m pip install --no-deps --no-build-isolation -e .
+
+      - name: Every module imports alone
+        run: python scripts/component_check.py ${{ matrix.component }} --imports
+
+      - name: Its tests pass alone (0 Azure call, 0 LLM call)
+        run: python scripts/component_check.py ${{ matrix.component }}
+
+  profiles:
+    name: compose profiles (Glorfindel in each)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # docker compose config only: nothing is built, nothing starts.
+      - name: Each profile renders its services
+        run: make profiles-check

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from annatar.signals.schema import Signal
+from eregion_core.signals import Signal
 
 
 def load_signals(path: str | Path) -> list[Signal]:

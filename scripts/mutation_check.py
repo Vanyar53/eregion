@@ -1701,6 +1701,67 @@ TESTS["M838"] = f"{INVARIANTS} tests/unit/test_invariant_regressions.py"
 # M834 needs a world with no state at all: rare in the drawn sequences (2/4 at 500).
 TESTS["M834"] = f"{INVARIANTS} tests/unit/test_reassert.py"
 
+# D1 (#81): each component runs alone (scripts/component_check.py), and every usage profile
+# keeps Glorfindel (docker-compose.yml, the Makefile's profile and team targets).
+D1_COMPONENTS = "tests/unit/test_components.py"
+D1_PROFILES = "tests/unit/test_profiles.py"
+MUTANTS += [
+    ("M800", "Glorfindel reads the signal contract from Annatar again: it cannot run alone (D1)",
+     "glorfindel/signals.py", "from eregion_core.signals import Signal\n",
+     "from annatar.signals.emitter import Signal\n"),
+    ("M801", "the component check's finder lets every package through: it proves nothing (D1)",
+     "scripts/component_check.py", "        if self.blocks(fullname):\n            raise ModuleNotFoundError(",
+     "        if False:\n            raise ModuleNotFoundError("),
+    ("M802", "a listed crossing allowed at module level: the component imports the other on load (D1)",
+     "scripts/component_check.py", "((rel, pkg) in CROSSINGS and not at_top)", "((rel, pkg) in CROSSINGS)"),
+    ("M803", "Annatar's compose service no longer starts Glorfindel's watch (D1, V1)", "docker-compose.yml",
+     "      - ${HOME}/.annatar:/root/.annatar\n      - ${HOME}/.glorfindel:/root/.glorfindel:ro\n"
+     "    depends_on:\n      - watch\n",
+     "      - ${HOME}/.annatar:/root/.annatar\n      - ${HOME}/.glorfindel:/root/.glorfindel:ro\n"),
+    ("M804", "Gothmog's compose service may write Glorfindel's state (D1)", "docker-compose.yml",
+     "      - ${HOME}/.glorfindel:/root/.glorfindel:ro\n    depends_on:\n      - watch\n"
+     "\n  # D1 : Gothmog",
+     "      - ${HOME}/.glorfindel:/root/.glorfindel\n    depends_on:\n      - watch\n"
+     "\n  # D1 : Gothmog"),
+    ("M805", "the injectors receive Glorfindel's service principal (D1, M-3)", "docker-compose.yml",
+     "  AZURE_CLIENT_SECRET: ${ANNATAR_AZURE_CLIENT_SECRET:-}\n",
+     "  AZURE_CLIENT_SECRET: ${AZURE_CLIENT_SECRET:-}\n"),
+    ("M806", "make profile-detection starts Annatar's side without Glorfindel (D1)", MAKE,
+     "profile-detection: glorfindel-start build-annatar\n", "profile-detection: build-annatar\n"),
+    ("M807", "a team's Glorfindel inherits the operator's shell: its subscription, its keys (D1)", MAKE,
+     'TEAM_COMPOSE = env -i PATH="$$PATH"', 'TEAM_COMPOSE = env PATH="$$PATH"'),
+    ("M808", "any team name accepted: a path, a compose project, container names (D1)", MAKE,
+     '@case "$(TEAM)" in ""|-*|*[!a-z0-9-]*) echo', '@case "$(TEAM)" in "") echo'),
+    ("M809", "without a team, the watch's container is no longer eregion-watch: H0's scripts lose it (D1)",
+     "docker-compose.yml", "    container_name: ${EREGION_INSTANCE:-eregion}-watch\n",
+     "    container_name: ${EREGION_INSTANCE:-eregion-glorfindel}-watch\n"),
+]
+TESTS.update({f"M{n}": D1_COMPONENTS for n in range(800, 803)})
+TESTS.update({f"M{n}": D1_PROFILES for n in range(803, 810)})
+# D1, after its review: the conftest's redirections, the analysis AI scanned, the guard of
+# this harness line by line.
+MUTANTS += [
+    ("M845", "the conftest believes Glorfindel absent: no redirection, the suite writes ~/.glorfindel (D1)",
+     "tests/unit/conftest.py", 'GLORFINDEL = _present("glorfindel")\n', "GLORFINDEL = False\n"),
+    ("M846", "the conftest believes the console absent: its settings cache leaks between tests (D1)",
+     "tests/unit/conftest.py", 'CONSOLE = _present("eregion_console")\n', "CONSOLE = False\n"),
+    ("M847", "the analysis AI no longer scanned: its import of Annatar on load goes unlisted (D1)",
+     "scripts/component_check.py",
+     ',\n           "analysis": ("analysis", "eregion_core")}', "}"),
+    ("M848", "one module made absent covers every other missing one: the harness measures a broken copy (D1)",
+     "scripts/mutation_check.py",
+     "COMPONENT_ABSENT not in line:\n            return line.strip()",
+     "COMPONENT_ABSENT not in stdout:\n            return line.strip()"),
+    ("M849", "make profile-detection leaves ~/.annatar to docker: created as root (D1)", MAKE,
+     "profile-detection: glorfindel-start build-annatar\n\t@mkdir -p $(HOME)/.annatar\n",
+     "profile-detection: glorfindel-start build-annatar\n"),
+    ("M870", "without Annatar, the reports' thread starts and fails every pass, never said at start (D1)",
+     "glorfindel/cli.py", "        from analysis import campaign_report  # noqa: F401\n", ""),
+]
+TESTS.update({f"M{n}": D1_COMPONENTS for n in range(845, 849)})
+TESTS["M849"] = D1_PROFILES
+TESTS["M870"] = "tests/unit/test_hosted_report.py"
+
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a
@@ -1821,6 +1882,20 @@ def _copy_repo(dest: Path) -> None:
             shutil.copy2(src, dest / rel)
 
 
+# What the component check (scripts/component_check.py, D1) adds to the module it makes absent.
+COMPONENT_ABSENT = "absent: component check"
+
+
+def unmeasurable(stdout: str) -> str | None:
+    """The first line of a test run saying a module could not be found, other than one the
+    component check made absent on purpose (D1) — a copy that cannot import its code is no
+    measure. Line by line: one module made absent must not cover another that is missing."""
+    for line in stdout.splitlines():
+        if "ModuleNotFoundError: No module named" in line and COMPONENT_ABSENT not in line:
+            return line.strip()
+    return None
+
+
 def _run(copy: Path, examples: int, show: bool = False, target: str = INVARIANTS) -> bool:
     """True if `target` (test paths, space-separated) FAILS on this copy (the mutant is caught)."""
     env = {**os.environ, "GLORFINDEL_INVARIANT_EXAMPLES": str(examples), "GLORFINDEL_INVARIANT_NO_SHRINK": "1",
@@ -1828,8 +1903,9 @@ def _run(copy: Path, examples: int, show: bool = False, target: str = INVARIANTS
     proc = subprocess.run(
         [sys.executable, "-m", "pytest", *target.split(), "-q", "-x", "-p", "no:cacheprovider"],
         cwd=copy, env=env, capture_output=True, text=True)
-    if "glorfindel" in proc.stdout and "ModuleNotFoundError" in proc.stdout:
-        raise RuntimeError(proc.stdout[-2000:])
+    missing = unmeasurable(proc.stdout)
+    if missing:
+        raise RuntimeError(f"{missing}\n{proc.stdout[-2000:]}")
     if show and proc.returncode != 0:
         print("\n".join(line for line in proc.stdout.splitlines() if line.startswith("E ")) or proc.stdout[-3000:])
     return proc.returncode != 0

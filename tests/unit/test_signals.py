@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 
 
-from annatar.signals.schema import Signal, severity_for_ttp
+from eregion_core.signals import Signal, severity_for_ttp
 from annatar.signals.emitter import SignalEmitter, _provider, _resource_type
 
 

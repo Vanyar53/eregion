@@ -1,5 +1,5 @@
 """Gothmog's signals — ``fault_started``, ``fault_ended``, ``steady_state_restored``,
-``revert_failed`` — in the shape of Annatar's (``annatar/signals/schema.py``), but in a file
+``revert_failed`` — in the shape of the injectors' signal (``eregion_core/signals.py``), but in a file
 Glorfindel's watch does not read: ``runs/gothmog/<run_id>_signals.jsonl``.
 
 The watch sends every event of ``runs/*_signals.jsonl`` but ``attack_started`` straight to

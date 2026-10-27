@@ -347,6 +347,16 @@ def _note(what: str) -> None:
     _SEEN[what] += 1
 
 
+class _Given:
+    """A rule's draws given in order: a composite rule calls another on its own VM (I8F)."""
+
+    def __init__(self, *values):
+        self.values = list(values)
+
+    def draw(self, strategy, label=None):
+        return self.values.pop(0)
+
+
 def _nic_hash(nic_id: str) -> str:
     """The NIC part of Glorfindel's rule names — the convention, restated here so a
     leftover is found by its name even when it no longer applies to the NIC's
@@ -607,16 +617,18 @@ class IsolationMachine(RuleBasedStateMachine):
         return (self._back_to_design(vm, own) and self._nics_as_designed(vm) and self._state(vm) is None
                 and not self._named_leftovers(self.fake.vms[key(vm)]["nics"]))
 
-    def _footprint(self, vm: str) -> set:
+    def _footprint(self, vm: str, untied: frozenset = frozenset()) -> set:
         """What of Glorfindel's isolation applies to the VM: a NIC in quarantine, a
-        glorfindel-iso deny that covers one of a NIC's addresses."""
+        glorfindel-iso deny that covers one of a NIC's addresses. `untied`: NICs whose own
+        NSG is off them and tied to them by nothing any more — its rules don't count."""
         fp = set()
         others = self._other_marks(vm)
         for nic in self._nics(vm):
             if nic["nsg"] and actions._is_quarantine_nsg(nic["nsg"]):
                 fp.add(("quarantine", key(nic["id"])))
             sub = self.fake.subnets[key(nic["subnet"])]["nsg"]
-            for g in {key(nic["nsg"]), key(nic["design_nsg"]), key(sub)} - {""}:
+            design = None if key(nic["id"]) in untied else nic["design_nsg"]
+            for g in {key(nic["nsg"]), key(design), key(sub)} - {""}:
                 for r in self.fake.nsgs.get(g, {}).get("rules", {}).values():
                     if (not r["name"].lower().startswith("glorfindel-iso") or r["access"].lower() != "deny"
                             or self._owned_by(r["name"].lower(), others) or self._not_its_legacy(vm, g, r["name"])):
@@ -709,9 +721,20 @@ class IsolationMachine(RuleBasedStateMachine):
             got = nsg.split("/")[4]
             assert got.lower() == want.lower(), f"I10: {what} used a quarantine NSG in {got}, not {want}"
 
-    def _isolation_recorded(self, vm: str, what: str):
-        """I8: an isolation or release that returned has recorded what it left on Azure."""
-        if self._footprint(vm):
+    def _isolation_recorded(self, vm: str, what: str, held: dict | None = None):
+        """I8: an isolation or release that returned has recorded what it left on Azure.
+        `held`: the state the operation started from. A NIC left bare whose original
+        nothing records (_untraceable) doesn't carry the rules of its own NSG, off it —
+        as for I3 (_back_to_design) and the blocks (_block_rules_for) — unless that state
+        held it in quarantine: Glorfindel knew it then, and must say what it can't undo
+        (I8F)."""
+        if held is None:
+            untied = frozenset()
+        else:
+            known = {key(p.get("nic_id") or "") for p in held.get("placements") or [] if p.get("kind") == "quarantine"}
+            untied = frozenset(key(n["id"]) for n in self._nics(vm)
+                               if key(n["id"]) not in known and self._untraceable(vm, n))
+        if self._footprint(vm, untied):
             assert self._state(vm) is not None, f"I8: {what} left an isolation of {vm} on Azure without state"
 
     def _block_recorded(self, vm: str, what: str):
@@ -782,7 +805,7 @@ class IsolationMachine(RuleBasedStateMachine):
             if out and out.get("status") == "released":
                 assert self._released(vm, own=True), f"I3: release said released, {vm} is not back to its design"
             if err is None:
-                self._isolation_recorded(vm, "release_isolation")
+                self._isolation_recorded(vm, "release_isolation", held=states_before_release or {})
         self._others_unchanged(vm, flows, states)
         return out, err
 
@@ -1488,6 +1511,56 @@ class IsolationMachine(RuleBasedStateMachine):
             out, _ = self._release(vm, rid, None)
             if (out or {}).get("status") != "released":
                 self._recover_everything(lose_state=False)     # I7, from this very state
+
+    @rule(data=st.data())
+    def bare_with_an_unknown_original(self, data):
+        """A rare state made common (I8F): an isolation by quarantine whose state and tags
+        are lost, re-isolated — its NICs' original unknown (Q7); someone then leaves a NIC
+        of the VM bare, and the VM is isolated again then released, or reset.
+        Drawn one by one, these steps met once in A3's run (186 steps), in a world where
+        an older version's isolation sat on the NIC's own NSG — M860 and M861 went unseen
+        at 500 sequences. That VM, when the world has one, is the one. In a world without
+        one, a VM nothing touched yet, its first NIC on an NSG of its own, may get it now
+        — what `build` gives a world with `legacy` (an older version's isolation, its state
+        lost), only drawn later. The quarantine is turned on if it is off (config_changes)."""
+        owners = sorted({v for v in self.legacy.values() if v in self.live})
+        if owners:
+            vm = owners[0]
+            rid = data.draw(st.sampled_from([vm, vm.lower()]), label="rid")
+        else:
+            vm, rid, _ = self._draw(data)
+            first = self._nics(vm)[0]
+            own, name = key(first["nsg"]), first["id"].rsplit("/", 1)[-1]
+            dedicated = (own and own == key(first["design_nsg"])
+                         and sum(own in (key(c["nsg"]), key(c["design_nsg"])) for c in self.fake.nics.values()) == 1
+                         and not any(key(s["nsg"]) == own for s in self.fake.subnets.values()))
+            untouched = (self._state(vm) is None and not self._footprint(vm) and not actions._load_block_entries(vm)
+                         and not self._block_rules_for(vm))
+            if (not self.legacy and not self.deleted and dedicated and untouched
+                    and next(v for v in self.vms if any(        # the VM _legacy_isolation finds
+                        n.rsplit("/", 1)[-1] == name for n in self.fake.vms[key(v)]["nics"])) == vm
+                    and data.draw(st.booleans(), label="an older version isolated it")):
+                self._legacy_isolation(name, keep_state=False)
+        if not (self.config["readable"] and self.config["quarantine"]):
+            self.config = {**self.config, "quarantine": True, "readable": True}
+            self._write_config()
+        self._isolate(vm, rid, None)
+        self.lose_state(_Given(vm))
+        held = sorted({key(n["nsg"]) for n in self._nics(vm) if n["nsg"] and actions._is_quarantine_nsg(n["nsg"])})
+        self._tags_lost(_Given(held[0]) if held else data)        # the tags of the VM's quarantine
+        self._isolate(vm, rid, None)
+        nics = sorted(k for k in (key(n) for n in self.fake.vms[key(vm)]["nics"])
+                      if self.fake.nics[k]["nsg"] and actions._is_quarantine_nsg(self.fake.nics[k]["nsg"]))
+        if nics:
+            nic = data.draw(st.sampled_from(nics), label="nic")
+            self.fake.nics[nic]["nsg"] = None
+            self.detached.add(nic)
+            self._claims_after_a_change()
+        if data.draw(st.sampled_from(["isolate+release", "reset"]), label="then") == "reset":
+            self.reset_from_azure(_Given(vm, rid, None))
+        else:
+            self._isolate(vm, rid, None)
+            self._release(vm, rid, None)
 
     @rule()
     def recover(self):

@@ -428,3 +428,16 @@ def test_a_reset_doesnt_skip_a_bare_nic_whose_original_is_unknown(monkeypatch):
          ("someone_detaches_the_quarantine", _nic("rg-app1", "web-nic")),
          ("reset_from_azure", WEB1, WEB1, None))
 
+
+def test_a_bare_nic_nothing_ties_to_its_nsg_doesnt_carry_its_rules(monkeypatch):
+    """The other side of I8F, met by its composite rule: our NSG taken off the NIC by
+    someone, then the state and the tags lost — nothing ties the NIC to its own NSG any
+    more, and the release can't know it, nor the old isolation there. I8 counted it
+    against the release; I3 and the blocks did not (_untraceable): the oracle's defect.
+    It counts again as soon as a state held the NIC in quarantine (the two tests above)."""
+    _run(monkeypatch, _net(quarantine=True, legacy=("web-nic", False), web_nic={"own": "dedicated"}),
+         ("isolate", WEB1, WEB1, None),
+         ("someone_detaches_the_quarantine", _nic("rg-app1", "web-nic")),
+         ("lose_state", WEB1),
+         ("tags_lost", _Q1),
+         ("release", WEB1, WEB1, None))

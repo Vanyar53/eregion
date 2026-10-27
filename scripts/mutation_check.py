@@ -1453,6 +1453,18 @@ MUTANTS = [
      "    for name in (TOKEN, LEGACY_TOKEN):\n", "    for name in (TOKEN,):\n"),
 ]
 
+# I8F (#227): a bare NIC our state holds in quarantine, its original unknown — never "none".
+MUTANTS += [
+    ("M860", "a bare NIC isolated again records 'none' over an unknown original: released bare, an old "
+             "isolation left without state (I8F, I8)", QUA,
+     '                elif recorded is _UNKNOWN and prior is _UNKNOWN and _held_in_quarantine(t["nic_id"]):',
+     "                elif False:"),
+    ("M861", "reset skips a bare NIC whose original is unknown: swept, an old isolation left without "
+             "state (I8F, I8)", SWP,
+     '                if _held_in_quarantine(t0["nic_id"]):\n                    # In quarantine for our state',
+     "                if False:\n                    # In quarantine for our state"),
+]
+
 # MC1 — the AWS adapter, written against the simulated world (tests/unit/fake_aws.py) and
 # measured by the invariants on AWS (tests/unit/test_invariants_aws.py). Range M600–M649:
 # M600–M629 the bugs met or named while building it, M630–M649 its control set (below).

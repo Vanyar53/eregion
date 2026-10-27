@@ -32,7 +32,10 @@ class RunReport:
         console.print(f"\n[bold]Run:[/bold] {self.run_id}")
         console.print(f"[bold]Scenario:[/bold] {self.scenario}  [bold]MITRE:[/bold] {self.mitre}")
         console.print(f"[bold]Result:[/bold] [{color}]{self.result}[/{color}]")
-        if "detection" in self.metrics:  # written after the wait for Glorfindel's result
+        if self.metrics.get("without_glorfindel") is True:  # V1: run --without-glorfindel
+            console.print("[bold]Detection:[/bold] [yellow]not measured, by choice "
+                          "(--without-glorfindel)[/yellow]")
+        elif "detection" in self.metrics:  # written after the wait for Glorfindel's result
             latency = self.metrics.get("detection_latency_s")
             after = f" ({latency:g} s after the attack)" if latency is not None else ""
             console.print(f"[bold]Detection:[/bold] {self.metrics['detection']}{after}")

@@ -35,6 +35,9 @@ class RunReport:
         for name, value in self.checks.items():
             mark = "[green]✓[/green]" if value == "PASS" else "[red]✗[/red]"
             console.print(f"  {mark} {name}: {value}")
+        if self.metrics.get("without_glorfindel") is True:  # V1: run --without-glorfindel
+            console.print("[bold]Glorfindel:[/bold] [yellow]not running, by choice "
+                          "(--without-glorfindel) — its reaction not measured[/yellow]")
         console.print(f"[bold]Result:[/bold] [{color}]{self.result}[/{color}]")
 
     @staticmethod

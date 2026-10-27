@@ -388,6 +388,9 @@ _SCEN = {"seq": 1, "ttp": "T1136.001", "status": "executed", "run_id": "R1",
     {"campaign_id": "C1", "state": "done", "scenarios": [{**_SCEN, "run_id": "a/b"}]},
     {"campaign_id": "C1", "state": "done", "scenarios": [{**_SCEN, "detection": "maybe"}]},
     {"campaign_id": "C1", "state": "done", "scenarios": [{**_SCEN, "detection_latency_s": -1}]},
+    # V1 (#214): a campaign run --without-glorfindel says so, typed.
+    {"campaign_id": "C1", "state": "done", "scenarios": [], "without_glorfindel": True},
+    {"campaign_id": "C1", "state": "done", "scenarios": [], "without_glorfindel": "yes"},
 ])
 def test_the_manifest_schema_and_its_runtime_check_agree(manifest):
     jsonschema = pytest.importorskip("jsonschema")
@@ -408,6 +411,11 @@ def test_the_manifest_schema_and_its_runtime_check_agree(manifest):
     ({"run_id": "R1", "metrics": {"attack_time": "soon"}}, False),
     ({"run_id": "R1", "metrics": []}, False),
     ({"metrics": {}}, False),
+    # V1 (#214): a run --without-glorfindel, accepted — never with a verdict.
+    ({"run_id": "R1", "metrics": {"without_glorfindel": True, "detection": "unknown"}}, True),
+    ({"run_id": "R1", "metrics": {"without_glorfindel": False, "detection": "missed"}}, True),
+    ({"run_id": "R1", "metrics": {"without_glorfindel": True, "detection": "detected"}}, False),
+    ({"run_id": "R1", "metrics": {"without_glorfindel": "yes"}}, False),
 ])
 def test_the_run_report_schema_and_its_runtime_check_agree(report, ok):
     jsonschema = pytest.importorskip("jsonschema")

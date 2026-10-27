@@ -41,8 +41,12 @@ HEARTBEAT = "heartbeat.json"
 DETECTIONS = "detections"
 TICK_S = 5.0
 HEARTBEAT_EVERY_S = 60.0
-# The local heartbeat's own test (annatar/runner/engine.py): older than this, no watch.
+# A heartbeat older than this is no watch — the channel's and the local file's alike
+# (eregion_core/watch_gate.py, V1).
 FRESH_S = 90.0
+# A heartbeat dated a little after now is the clocks of two hosts (H0, Orodruin) drifting
+# apart; one dated further ahead is never fresh — else it would stay fresh for ever.
+CLOCK_SKEW_S = 10.0
 # A detection waits for its window as long as a window could still cover it.
 KEEP_S = MAX_DURATION_S + GRACE_AFTER_S
 # After its wait, a run waits this long for a heartbeat that covers it (one missed beat).
@@ -258,8 +262,16 @@ def as_records(detections: list[dict]) -> list[dict]:
 
 def alive(heartbeat: dict, now: datetime | None = None) -> bool:
     """A watch is running behind the channel: its heartbeat is recent."""
-    at = _when(heartbeat.get("at"))
-    return at is not None and ((now or _now()) - at).total_seconds() < FRESH_S
+    return recent(_when(heartbeat.get("at")), now)
+
+
+def recent(at: datetime | None, now: datetime | None = None) -> bool:
+    """A heartbeat written at ``at`` is fresh: younger than FRESH_S, and not dated more than
+    CLOCK_SKEW_S after ``now`` (V1)."""
+    if at is None:
+        return False
+    age = ((now or _now()) - at).total_seconds()
+    return -CLOCK_SKEW_S <= age < FRESH_S
 
 
 def miss_unprovable(heartbeat: dict, *, run_id: str, attack_time, until) -> str:

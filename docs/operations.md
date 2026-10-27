@@ -93,13 +93,36 @@ eregion console [--sections annatar,gothmog] # la console web sur http://localho
                                              # (ou --sections) ; `glorfindel war-room` reste un alias caché
 glorfindel --version                         # 0.2.0
 
+# Annatar et Gothmog exigent Glorfindel (V1, #214) : avant chaque run (chaque run d'une campagne aussi),
+#   avant tout appel au cloud, l'injecteur lit le battement de la watch. Le canal retour fait foi s'il est
+#   configuré (EREGION_WATCH_CHANNEL : la watch hébergée vue d'Orodruin — un fichier de cet hôte n'en dit
+#   rien) ; sinon le fichier local ~/.glorfindel/watch_heartbeat (une watch sur le même hôte ; `make
+#   annatar-run` le monte). Un battement de moins de 90 s, et pas daté de plus de 10 s dans le futur (le
+#   décalage des horloges H0 ↔ Orodruin) : la watch vit. Sinon : refus, code 1, et le message dit depuis quand
+#   date le dernier battement (« never » s'il n'y en a pas, la raison entre parenthèses : pas de fichier, canal
+#   illisible… ; « in the future » si une horloge est fausse). Rien n'a été touché : ni contrat d'Orodruin, ni
+#   cible, ni fenêtre, ni rapport. Une campagne sans watch est refusée entière (une ligne, code 1, son état
+#   reste « ratified ») ; une watch qui meurt en cours de campagne l'arrête au run suivant (« aborted », code 1).
+#   --without-glorfindel (annatar run, annatar campaign run, gothmog run, gothmog preflight ; Make d'Orodruin :
+#   WITHOUT_GLORFINDEL=1, yes ou true — toute autre valeur, 0 compris, n'y touche pas) : run de développement.
+#   Le rapport l'inscrit (metrics.without_glorfindel: true, metrics.detection_note « detection not measured, by
+#   choice ») ; aucune attente de détection, jamais de detection_missed ; H0 accepte ce rapport au tirage (un
+#   tel rapport qui dirait detected ou missed est refusé), et la console l'affiche « not measured, by choice »,
+#   à part d'unknown. Une campagne ainsi lancée le porte dans son manifeste (without_glorfindel: true) et ne
+#   se reprend que de la même façon ; elle n'a pas de rapport d'analyse (IA0), ni sur Orodruin ni sur H0,
+#   n'entre pas dans l'index ni dans les comparaisons (D-2), et c'est dit : « campaign without Glorfindel: no
+#   detection report, by choice ». Le --dry-run n'exige rien.
+#   Exception assumée : `annatar clean` (annatar/runner/initializer.py) arme le contrat et écrit sur la cible
+#   (le disque de test de T1486) sans lire la watch — c'est de la préparation, pas une attaque.
+
 # Annatar
 annatar run annatar/scenarios/azure/<scenario>.yaml  # --dry-run disponible, --skip-preflight pour bypasser le check VM
 #   Code de sortie (#158) : 0 seulement pour un run allé au bout (détecté, manqué ou non mesuré), un --dry-run ou un
-#   « non » à la confirmation ; 1 pour tout refus (contrat d'Orodruin passif, cible non inscrite, départ sale, atomic
+#   « non » à la confirmation ; 1 pour tout refus (pas de watch de Glorfindel vivante, contrat d'Orodruin passif, cible non inscrite, départ sale, atomic
 #   refusé ou sondes incomplètes, plafond, preflight, scénario invalide) et toute erreur (aucun effet observé, état
 #   initial non restauré ou non vérifié, commande qui lève). Une ligne + un indice ; ANNATAR_DEBUG=1 pour la pile.
-#   `annatar campaign run` n'est pas concerné : il lit RunOutcome.error, marque le scénario en erreur et continue.
+#   `annatar campaign run` lit RunOutcome.error, marque le scénario en erreur et continue — sauf un refus
+#   `glorfindel:` (la watch morte en route) : la campagne s'arrête (« aborted ») et sort en 1.
 annatar run annatar/scenarios/azure/account-creation-atomic.yaml  # R1 : un test Atomic Red Team épinglé (engine: atomic)
 #   depuis Orodruin armé seulement (ailleurs le contrat est passif) ; les atomics sont dans l'image (annatar/atomics/, cf. PIN
 #   + sha256 vérifié par test) ; l'adaptateur (annatar/engines/atomic.py) refuse ce qu'il ne jouerait pas fidèlement (non-linux,
@@ -119,8 +142,8 @@ annatar run annatar/scenarios/azure/account-creation-atomic.yaml  # R1 : un test
 #   `unknown`, sans detection_missed, et la raison s'affiche (« channel unreadable », « does not know the run's window »…).
 
 # Gothmog (G0) — depuis Orodruin seulement (ailleurs le contrat est passif)
-make gothmog-preflight [FAULT=vm-shutdown]   # contrat, cibles relues dans l'expérience, état normal — rien d'écrit
-make gothmog-run [FAULT=vm-shutdown]         # la panne, son retour vérifié par sonde (~15 min)
+make gothmog-preflight [FAULT=vm-shutdown]   # watch de Glorfindel, contrat, cibles relues dans l'expérience, état normal — rien d'écrit
+make gothmog-run [FAULT=vm-shutdown]         # la panne, son retour vérifié par sonde (~15 min) ; WITHOUT_GLORFINDEL=1 : sans watch (V1)
 gothmog run vm-shutdown --dry-run            # la panne déclarée, sans appel Azure
 gothmog report <run_id>                      # runs/<run_id>.json (même forme qu'Annatar)
 #   Depuis Orodruin, avec EREGION_EXERCISE_CHANNEL (#193, pas encore mesuré sur le banc) : à la fin
@@ -142,7 +165,7 @@ make orodruin-campaign-plan CAMPAIGN_TARGET=<resource_id de la VM inscrite> [CAM
 #   par les tests. Une entrée destructive (atomic ou script) demande --allow-destructive et un
 #   safe_target. Manifeste et scénarios dans ~/runs/campaigns/<id>/ (bind-monté). La commande n'est
 #   pas répétée à l'écran (CAMPAIGN_TARGET porte l'abonnement).
-make orodruin-campaign-run CAMPAIGN=<id>     # joue la campagne (watch H0 en human_only — rien ne s'isole)
+make orodruin-campaign-run CAMPAIGN=<id>     # joue la campagne (watch H0 en human_only — rien ne s'isole) ; refusée sans watch vivante (V1)
 #   Chaque run passe par le moteur de son expérience (atomic ou script) ; sa détection (detected/
 #   missed/unknown) et sa latence (#157) arrivent dans le manifeste, comme pour un run seul. Le reset
 #   entre scénarios (glorfindel reset) n'est pas dans l'image d'Orodruin : le lanceur glorfindel y

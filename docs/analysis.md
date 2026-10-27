@@ -12,6 +12,14 @@ make report-eval                       # harnais : fidélité et instruction pla
 (techniques, runs, détectée / manquée, latence), et pour chaque run le rapport d'Annatar et le
 fichier de décision de Glorfindel (`runs/<run_id>_debug.jsonl`). Les chiffres d'en-tête et le
 tableau sont calculés.
+
+**Une campagne sans Glorfindel n'a pas de rapport** (V1, #214) : lancée `--without-glorfindel`,
+son manifeste porte `without_glorfindel: true` et aucune détection n'a été mesurée. Ni
+`make campaign-report`, ni la fin de `annatar campaign run`, ni la watch de H0 n'écrivent son
+rapport ; elle n'entre pas dans l'index, et n'est donc jamais la campagne précédente d'une autre
+(D-2). C'est dit : « campaign without Glorfindel: no detection report, by choice »
+(`campaign_report.no_report`, `hosted_report.ready`, `campaign_index.verse`).
+
 Le tableau donne, par run, la technique, le run, la détection, sa latence (`detection_latency_s`
 du manifeste, à une décimale : « 106,3 s » ; « — » sans latence, un run manqué par exemple) et
 la décision de Glorfindel.

@@ -89,10 +89,16 @@ de H0 portent l'abonnement du banc.
 
 ### La vérification avant d'agir (lot Annatar et Gothmog)
 
-**Aujourd'hui** : sans watch, Annatar avertit (« no active glorfindel watch detected »), attaque
-quand même, et le run finit en `detection: unknown`. Gothmog ne vérifie rien.
+**✅ Fait (V1, #214, 27/10)** : `eregion_core/watch_gate.py`, appelé par `annatar run`, chaque
+run d'une campagne (et la campagne avant son premier run), `gothmog run` et `gothmog preflight` ;
+tests `tests/unit/test_watch_gate.py` et `tests/unit/test_gothmog.py` ; mutants M720–M739. Le
+rapport porte `metrics.without_glorfindel: true` et `metrics.detection_note` ; la console montre
+« not measured, by choice » (`exercises.js`). Cibles Make d'Orodruin : `WITHOUT_GLORFINDEL=1`.
 
-**Demain**, avant chaque run, campagnes comprises, et **avant tout appel au cloud** :
+**Avant V1** : sans watch, Annatar avertissait (« no active glorfindel watch detected »), attaquait
+quand même, et le run finissait en `detection: unknown`. Gothmog ne vérifiait rien.
+
+**Depuis V1**, avant chaque run, campagnes comprises, et **avant tout appel au cloud** :
 - Annatar et Gothmog lisent le battement de la watch : `watch_channel.alive(read_heartbeat())` sur
   le canal retour, ou le fichier local sur le même hôte.
 - Sans battement, ils refusent, et disent depuis quand date le dernier.
@@ -101,7 +107,7 @@ quand même, et le run finit en `detection: unknown`. Gothmog ne vérifie rien.
   de `unknown`.
 
 **Mutants** : la vérification retirée ; la vérification placée après le premier appel ; la
-dérogation absente du rapport. General donne la plage.
+dérogation absente du rapport — pour chaque injecteur (M720–M739, `docs/design/preuves.md`).
 
 **Coût** : 1 à 1,5 jour, pour les sessions Annatar et Gothmog, avec Orodruin pour les cibles Make.
 

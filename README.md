@@ -495,8 +495,10 @@ annatar run annatar/scenarios/azure/lateral-movement.yaml
 annatar run annatar/scenarios/azure/privilege-escalation.yaml
 annatar run annatar/scenarios/azure/account-creation.yaml        # T1136.001 (purple-loop test)
 # annatar run ... --skip-preflight                        # bypass VM state check (power + isolation)
+# annatar run ... --without-glorfindel                    # development run with no live watch — said in the report
 annatar campaign plan --target <resource_id> [--llm]      # compose a kill-chain → materialize scenarios
 annatar campaign run <campaign_id>                        # execute a planned campaign (sequential, budgeted)
+gothmog run vm-shutdown --yes [--without-glorfindel]      # a declared fault, from an armed Orodruin
 
 # LLM provider — default: Anthropic Claude
 ANTHROPIC_API_KEY=...               # required for default Anthropic provider
@@ -711,9 +713,11 @@ The agent logic, scenarios, and RAG memory are provider-agnostic — they don't 
 
 ## Operational notes
 
+**Annatar and Gothmog require Glorfindel.** Before each run — each run of a campaign too — and before any call to the cloud, `annatar run`, `annatar campaign run`, `gothmog run` and `gothmog preflight` read the watch's heartbeat: the return channel when `EREGION_WATCH_CHANNEL` is set (the watch hosted on H0, seen from Orodruin), and `~/.glorfindel/watch_heartbeat` (a watch on the same host). With no heartbeat younger than 90 s, the run is refused, exits 1, and says how old the last heartbeat is, or that there was never one — nothing was touched. `--without-glorfindel` (Make targets on Orodruin: `WITHOUT_GLORFINDEL=1`) runs anyway, for development: the report says so (`metrics.without_glorfindel`, « detection not measured, by choice »), the detection is not waited for, H0 accepts the report, and the console shows it apart from `unknown`. A `--dry-run` needs no watch.
+
 **Before each run**, `annatar run` automatically checks that the VM is running and not isolated by Glorfindel. If either check fails, the run aborts with the exact fix command. Use `--skip-preflight` to bypass.
 
-**Exit code**: `annatar run` exits 0 only when the run went through (detected, missed or not measured) or with `--dry-run`; any refusal (Orodruin passive, target not enrolled, dirty start, an atomic the adapter refuses, preflight, invalid scenario) or error (no observable effect, initial state not restored) exits 1, with one line and a hint — so a script or a CI chaining runs can stop on it.
+**Exit code**: `annatar run` exits 0 only when the run went through (detected, missed or not measured) or with `--dry-run`; any refusal (no live Glorfindel watch, Orodruin passive, target not enrolled, dirty start, an atomic the adapter refuses, preflight, invalid scenario) or error (no observable effect, initial state not restored) exits 1, with one line and a hint — so a script or a CI chaining runs can stop on it.
 
 To check manually:
 ```bash

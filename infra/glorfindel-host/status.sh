@@ -4,7 +4,11 @@
 # Azure side (local az): the VMs of the defender and of the bench, the last backups.
 # On the VM (two ssh: the deployed reference, then the rest): containers, errors of the last 24 h, discovery,
 # bot, cards to judge and the week's count, disk and memory. Nothing is written anywhere;
-# the War Room token is read on the VM and never printed.
+# the console's token is read on the VM and never printed, nor put on a command line: under
+# its name, EREGION_CONSOLE_TOKEN, when it is not empty, else under its former name,
+# GLORFINDEL_WARROOM_TOKEN (H0's .env has only that one: nothing to rename) — the console's
+# rule (eregion_console/api.py). The console's compose service keeps the War Room's name,
+# war-room (container eregion-war-room), until UI-1d (docs/design/console.md).
 set -u
 HOST_IP="${HOST_IP:?no VM: make glorfindel-host-up first}"
 HOST_USER="${HOST_USER:-glorfindel}"
@@ -30,17 +34,17 @@ ssh $SSH_OPTS -o BatchMode=yes -o ConnectTimeout=10 "$HOST_USER@$HOST_IP" \
 # shellcheck disable=SC2086
 ssh $SSH_OPTS -o BatchMode=yes -o ConnectTimeout=10 "$HOST_USER@$HOST_IP" 'bash -s' <<'REMOTE'
 cd eregion || { echo "  ✗ dépôt absent"; exit 1; }
-for s in eregion-watch eregion-war-room eregion-bot; do
-  st=$(docker inspect -f '{{.State.Status}} depuis {{.State.StartedAt}}' "$s" 2>/dev/null || echo "absent")
+for s in watch:eregion-watch console:eregion-war-room bot:eregion-bot; do
+  st=$(docker inspect -f '{{.State.Status}} depuis {{.State.StartedAt}}' "${s#*:}" 2>/dev/null || echo "absent")
   mark="✗"; case "$st" in running*) mark="✓";; esac
-  printf "  %s %-18s %s\n" "$mark" "$s" "$(echo "$st" | cut -c1-38)"
+  printf "  %s %-8s %-18s %s\n" "$mark" "${s%%:*}" "${s#*:}" "$(echo "$st" | cut -c1-38)"
 done
 # Les avertissements ne comptent pas (20/10 : LiteLLM signale à chaque démarrage l'absence de
 # botocore, « Error: No module named … » dans une ligne WARNING — 4 fausses erreurs par jour).
-for s in watch war-room bot; do
-  n=$(docker compose logs --no-color --since 24h "$s" 2>&1 | grep -iE "error|traceback|exception" | grep -cviE "warning")
+for s in watch:watch console:war-room bot:bot; do
+  n=$(docker compose logs --no-color --since 24h "${s#*:}" 2>&1 | grep -iE "error|traceback|exception" | grep -cviE "warning")
   mark="✓"; [ "$n" -gt 0 ] && mark="⚠"
-  printf "  %s erreurs 24 h %-9s %s\n" "$mark" "$s" "$n"
+  printf "  %s erreurs 24 h %-9s %s\n" "$mark" "${s%%:*}" "$n"
 done
 # A detection the model could not decide on (cycle_failed): services up, discovery fine,
 # and still no decision — a broken LLM dependency did exactly that on 19/10.
@@ -55,18 +59,35 @@ disc=$(docker compose logs --no-color --since 10m watch 2>&1 | grep -E "heartbea
 [ -n "$disc" ] && echo "  ✓ découverte : $disc" || echo "  ✗ découverte : aucun heartbeat depuis 10 min"
 last=$(docker compose logs --no-color bot 2>&1 | grep -E "Posted" | tail -1 | sed -E 's/.*Posted/dernière carte postée :/')
 echo "  · bot : ${last:-aucune carte postée}"
-H="Authorization: Bearer $(grep '^GLORFINDEL_WARROOM_TOKEN=' .env | cut -d= -f2-)"
+# Read as compose reads .env: the last line of a key wins, « # … » after the value and a blank is a comment.
+env_value() {
+  sed -n -E '/^'"$1"'=/{s/^[^=]*=[[:space:]]*//;s/[[:space:]]+#.*$//;s/[[:space:]]+$//;p;}' .env 2>/dev/null | tail -1
+}
+tok=$(env_value EREGION_CONSOLE_TOKEN)
+[ -n "$tok" ] || tok=$(env_value GLORFINDEL_WARROOM_TOKEN)
+[ -n "$tok" ] || echo "  ⚠ console : aucun jeton dans .env (EREGION_CONSOLE_TOKEN, ou son ancien nom GLORFINDEL_WARROOM_TOKEN)"
+# The header goes through curl's stdin (-H @-), never its arguments: ps shows those.
+console_get() {
+  if [ -n "$tok" ]; then
+    printf 'Authorization: Bearer %s\n' "$tok" | curl -s -H @- "http://127.0.0.1:7007$1"
+  else
+    curl -s "http://127.0.0.1:7007$1"
+  fi
+}
 # Python 3.10 on the VM (Ubuntu 22.04): no backslash inside an f-string expression.
-curl -s -H "$H" "http://127.0.0.1:7007/api/to-judge?since=7d" | python3 -c '
+console_get "/api/to-judge?since=7d" | python3 -c '
 import json, sys
 try:
-    c = json.load(sys.stdin)["cards"]
+    r = json.load(sys.stdin)
 except Exception:
-    print("  ✗ War Room : pas de réponse"); sys.exit()
+    print("  ✗ console : pas de réponse"); sys.exit()
+if not isinstance(r, dict) or "cards" not in r:
+    print("  ✗ console : jeton refusé, ou réponse inattendue"); sys.exit()
+c = r["cards"]
 print("  %s à juger : %d" % ("⚠" if c else "✓", len(c)))
 for x in c[:5]:
     print("      - %s · %s · %sx · depuis %s" % (x["action"], x.get("rule_name") or "", x.get("occurrences") or 1, str(x.get("first_seen"))[:16]))'
-curl -s -H "$H" "http://127.0.0.1:7007/api/report?since=7d" | python3 -c '
+console_get "/api/report?since=7d" | python3 -c '
 import json, sys
 try:
     r = json.load(sys.stdin)

@@ -550,6 +550,7 @@ GLORFINDEL_INCIDENT_TTL_S=300       # incident grouping window in seconds (defau
 GLORFINDEL_CONFIDENCE_THRESHOLD=0.7 # min LLM confidence for autonomous action (default: 0.7 — below this, escalate; unreadable or outside [0, 1]: every autonomous action is held)
 GLORFINDEL_LLM_TIMEOUT_S=120        # bound on one model call, per attempt (default: 120 s; a hung provider ends as a cycle_failed card)
 GLORFINDEL_DECISION_DRAWS=3         # draws that must agree before a disruptive autonomous action (default: 3, 2 to 10; unreadable, 1 or above 10: every disruptive autonomous action is held)
+GLORFINDEL_OWN_CALLERS=<id>,<id>    # Glorfindel's identities on Azure, besides its token and AZURE_CLIENT_ID: its own writes in the Activity Log are not escalated (AL1)
 ```
 
 See [.envrc.example](.envrc.example) for a ready-to-fill template with provider examples.
@@ -582,7 +583,7 @@ glorfindel/
   providers/           → the provider interface (MC0): CloudConnector, DetectionConnector, declared capabilities
     azure/             → the only adapter, the only place the Azure SDK is imported: AzureConnector (isolate,
                          release, block, unblock, snapshot, verify_*, audit checks), one module per concern;
-                         AzureMonitorDetector; capabilities.py
+                         AzureMonitorDetector; AzureActivityDetector (the Activity Log, detection only); capabilities.py
   detectors.py         → detector_for(): the detection source registry
   detection_rules.py   → DetectionRule + RulePoller: continuous polling, auto-apply via discovered assets
                          load_config(path, glorfindel_cfg=None) — workspace_id from glorfindel-config.yaml
@@ -749,6 +750,8 @@ glorfindel reset <resource_id> --yes      # release isolation + unblock all IPs
 **Syslog detection latency**: ~40-60s nominal. Scenario timeout set to 300s for margin (DCR ingestion can vary).
 
 **StorageBlobLogs**: near-realtime (seconds). `AzureNetworkAnalytics_CL` (Traffic Analytics) is unusable for detection — 10-60 min latency.
+
+**Azure's Activity Log (`AzureActivity`), detection only** (AL1): three shipped rules watch the control plane — an NSG or one of its rules changed by someone other than Glorfindel (T1562.007), a role assigned (T1098.003), a disk snapshot or download access (T1578.001). A detection on them is always escalated (`control_plane_change`), with no action recommended, by a decision the code builds — the model is not called; each operation has its card. Glorfindel's own writes are left out: its identity (read from its token — under `az login`, the user's object id only —, `AZURE_CLIENT_ID`, `GLORFINDEL_OWN_CALLERS`) doing an operation it declares on a resource that is its own; its identity on anything else is kept, critical; someone else writing one of Glorfindel's rules is the gravest case, marked critical. The table reaches the workspace only through a **diagnostic setting on the subscription** (category Administrative) — not by default; without it these rules see nothing. Its ingestion takes minutes: the rules look back one hour.
 
 **Each scenario's `detection` block** contains `prerequisites` (verification queries to run before launching), `hints` (purple-team context sent to Glorfindel on `detection_missed`), `timeout` (hard stop for the feedback watcher), and optionally `time_max` (declared SLA). Detection queries and configuration live in `detection_rules.yaml` — not in the scenario.
 

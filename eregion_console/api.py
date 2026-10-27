@@ -282,7 +282,7 @@ def _handled(now: datetime) -> list[dict]:
             continue
         try:
             at = datetime.fromisoformat(e.get("resolved_at") or "")
-        except ValueError:
+        except (TypeError, ValueError):
             continue
         if at.tzinfo is None:
             at = at.replace(tzinfo=timezone.utc)

@@ -1357,6 +1357,15 @@ MUTANTS = [
      "if (now - at).total_seconds() <= _HANDLED_FOR_H * 3600:", "if True:"),
     ("M575", "a card a human acknowledged shows as done by Glorfindel (#248)", CON,
      'if e.get("status") != "resolved" or not e.get("resolution"):', 'if e.get("status") != "resolved":'),
+    ("M576", "a card's reason written raw into the page: an Entra app's name runs in the console (XSS)", GHTML,
+     "line-height:1.6\">${_attr(e.reason || '')}</div>", "line-height:1.6\">${e.reason || ''}</div>"),
+    ("M577", "a card's suggested steps written raw into the page (XSS)", GHTML,
+     "• ${_attr(s)}</div>", "• ${s}</div>"),
+    ("M578", "a card's proposed query written raw into the page (XSS)", GHTML,
+     "${_attr(e.proposed_query.trim())}</pre>", "${e.proposed_query.trim()}</pre>"),
+    ("M579", "an anchored card offers Restore on its anchor VM again (#248)", GHTML,
+     "const isRestore = e.action === 'restore_from_backup' && !_isAnchored(e);",
+     "const isRestore = e.action === 'restore_from_backup';"),
     ("M408", "eregion console keeps compose's empty service principal: no managed identity (UI-1, H0)",
      "eregion_console/cli.py", "    _drop_empty_service_principal_env()\n", ""),
     ("M409", "the console looks for the shipped rules beside itself: none outside the repo's root (UI-1, P1 review)",
@@ -2199,7 +2208,7 @@ TESTS["M566"] = "tests/unit/test_host_deploy.py"
 TESTS["M567"] = "tests/unit/test_console.py"
 TESTS["M568"] = "tests/unit/test_console.py"
 TESTS["M569"] = "tests/unit/test_cli.py -k version"
-TESTS.update({f"M{n}": "tests/unit/test_console.py" for n in range(570, 576)})  # #248
+TESTS.update({f"M{n}": "tests/unit/test_console.py" for n in range(570, 580)})  # #248, and the card detail escaped
 TESTS["M403"] = "tests/unit/test_console_exercises.py"
 # V1 (#214): Annatar's side and the shared gate in test_watch_gate.py, Gothmog's in test_gothmog.py.
 TESTS.update({f"M{n}": "tests/unit/test_watch_gate.py" for n in (*range(720, 740), *range(750, 760))})

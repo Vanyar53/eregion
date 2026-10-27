@@ -2867,7 +2867,7 @@ function appendFeedEntry(entry) {
   const ts = fmtTime(entry.timestamp);
 
   if (entry.escalate) {
-    const key = `${entry.action}|${entry.vm || ''}`;
+    const key = `${entry.action || entry.held_by || ''}|${entry.vm || ''}`;
     const now = Date.now();
     const hit = _feedDedup.get(key);
     if (hit && (now - hit.ts) < _FEED_DEDUP_MS) {
@@ -3246,10 +3246,10 @@ function showEscModal(vmName) {
     // type already encoded in title for these — keep ctx lean
     const ctx   = _escCtx(e, '', isModeHold || isWriteBlocked || isActionFailed);
     const steps = (e.suggested_steps || [])
-      .map(s => `<div style="color:var(--dim);font-size:10px;padding:2px 0 2px 8px">• ${s}</div>`).join('');
+      .map(s => `<div style="color:var(--dim);font-size:10px;padding:2px 0 2px 8px">• ${_attr(s)}</div>`).join('');
     const query = e.proposed_query
       ? `<pre style="background:var(--bg2);border-left:2px solid var(--cyan);padding:8px;font-size:10px;
-           color:var(--blue);white-space:pre-wrap;overflow-x:auto;margin:6px 0;border-radius:0 4px 4px 0">${e.proposed_query.trim()}</pre>`
+           color:var(--blue);white-space:pre-wrap;overflow-x:auto;margin:6px 0;border-radius:0 4px 4px 0">${_attr(e.proposed_query.trim())}</pre>`
       : '';
     const pid   = e.proposal_id || '';
     const countBadge = count > 1
@@ -3281,7 +3281,7 @@ function showEscModal(vmName) {
       </div>
       ${ctx ? `<div style="color:var(--dim);font-size:10px;margin-bottom:6px">${ctx}</div>` : ''}
       ${_anchorNote(e, vmName)}
-      <div style="color:var(--text);font-size:11px;line-height:1.6">${e.reason || ''}</div>
+      <div style="color:var(--text);font-size:11px;line-height:1.6">${_attr(e.reason || '')}</div>
       ${query}${steps}
     </div>`;
   }).join('');

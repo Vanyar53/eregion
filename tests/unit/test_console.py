@@ -423,3 +423,21 @@ def test_what_glorfindel_closed_with_a_note_shows_for_a_day(client):
     handled = client.get("/api/state").json()["handled"]
     assert [h["id"] for h in handled] == [recent]
     assert handled[0]["resolution"].startswith("Règle glorfindel-block-x")
+
+def test_a_cards_detail_escapes_what_azure_or_the_model_wrote():
+    """A card's reason, steps and proposed query come from Azure (an Entra application's display
+    name, an NSG rule's name) or from the model: written raw into innerHTML, a name such as
+    `<img src=x onerror=…>` ran in the operator's console — and could call its routes."""
+    page = _glorfindel_page()
+    assert "${_attr(e.reason || '')}" in page
+    assert "• ${_attr(s)}" in page
+    assert "${_attr(e.proposed_query.trim())}" in page
+    for raw in ("${e.reason || ''}", "• ${s}<", "${e.proposed_query.trim()}"):
+        assert raw not in page, raw
+
+
+def test_an_anchored_card_never_offers_restore_nor_a_command_on_its_vm():
+    """The server does not refuse /api/action/restore on an anchored card: the page is the guard."""
+    page = _glorfindel_page()
+    assert "const isRestore = e.action === 'restore_from_backup' && !_isAnchored(e);" in page
+    assert "if (_isAnchored(esc)) return `glorfindel ack ${id}`;" in page

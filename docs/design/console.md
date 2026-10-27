@@ -223,7 +223,11 @@ Après I1F, AL1, C2 et A3 (27/10) :
 - **Une tuile NSG** pour une carte dont la ressource est un NSG ; seul PROTECT la relie, et elle ne
   compte pas parmi les VM « unprotected » de RECOVER.
 - **`/api/state` donne `handled`** : les cartes résolues avec une note dans les dernières 24 h. Une carte
-  qu'un humain acquitte n'a pas de note et n'y figure pas.
+  qu'un humain acquitte n'a pas de note et n'y figure pas. Limite : une carte que Glorfindel ferme parce
+  que la règle n'est plus orpheline (souvent un humain qui a lancé la commande de la carte) y figure aussi ;
+  la note dit laquelle.
+- **Le détail d'une carte échappe tout ce qui vient d'Azure ou du modèle** (raison, étapes, requête
+  proposée) : un nom d'application Entra ID ou de règle NSG choisi par un attaquant ne s'exécute pas dans la page.
 
 **Mutants M570–M575** (`tests/unit/test_console.py`) :
 - M570 : un type sans libellé.

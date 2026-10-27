@@ -64,6 +64,7 @@ ACLI = "annatar/cli.py"
 GCLI = "glorfindel/cli.py"
 CON = "eregion_console/api.py"
 SEC = "eregion_console/sections.py"
+IND = "eregion_console/indicators.py"
 XW = "eregion_core/exercise.py"
 INVARIANTS = "tests/unit/test_invariants.py"
 INSCRIPTION_TESTS = "tests/unit/test_inscription.py tests/unit/test_engine.py"
@@ -1289,6 +1290,24 @@ MUTANTS = [
      '            sections.append({**s, "active": forced is None, "always": True, "setup": glorfindel_setup()})\n'),
     ("M407", "--sections is ignored: the detection wins (UI-1)", SEC,
      "        if forced is not None:\n", "        if False:\n"),
+    # UI-2 (#206) — the five indicators: a run's own decision, nothing invented in human-only,
+    # the shadow bounded by the verdicts, 30 days from the reports, a proof is detection AND
+    # decision, coverage counts what was detected.
+    ("M560", "a run takes any decision of its technique, not the one at its detection (UI-2)", IND,
+     "             and (t := _ts(c.get(\"signal_at\"))) is not None and abs(t - seen_at) <= MATCH_SLACK_S]\n",
+     "             and (t := _ts(c.get(\"signal_at\"))) is not None and t >= run[\"at\"]]\n"),
+    ("M561", "a recommendation counts as contained alone in human-only (UI-2)", IND,
+     '        if disruptive and d.get("executed") is True and d.get("verified") is True:\n',
+     "        if disruptive:\n"),
+    ("M562", "the shadow share ignores a verdict « wrong » (UI-2)", IND,
+     '                and r["run_id"] not in judged_wrong):\n', "                ):\n"),
+    ("M563", "the indicators take runs older than 30 days (UI-2)", IND,
+     "        if at is None or at < since:\n", "        if at is None:\n"),
+    ("M564", "a detection without a decision counts as a proof (UI-2)", IND,
+     "        d = decision_of(r, cycles)\n        if d is None:\n            continue\n        proofs.append(r)\n",
+     "        proofs.append(r)\n        d = decision_of(r, cycles)\n        if d is None:\n            continue\n"),
+    ("M565", "coverage counts a missed technique as covered (UI-2)", IND,
+     '    covered = {r["ttp"] for r in detected}\n', '    covered = {r["ttp"] for r in attacks}\n'),
     ("M408", "eregion console keeps compose's empty service principal: no managed identity (UI-1, H0)",
      "eregion_console/cli.py", "    _drop_empty_service_principal_env()\n", ""),
     # UI-1c (#205) — the console on the host: the token under its two names, from the operator's
@@ -1493,6 +1512,7 @@ TESTS["M688"] = "tests/unit/test_rule_layers.py"
 TESTS.update({f"M{n}": "tests/unit/test_rule_layers.py tests/unit/test_host_deploy.py" for n in range(695, 700)})
 TESTS.update({f"M{n}": "tests/unit/test_rule_layers.py" for n in range(713, 717)})
 TESTS.update({f"M{n}": "tests/unit/test_console.py" for n in range(400, 409)})  # UI-1
+TESTS.update({f"M{n}": "tests/unit/test_indicators.py" for n in range(560, 566)})  # UI-2
 TESTS["M403"] = "tests/unit/test_console_exercises.py"
 TESTS.update({f"M{n}": "tests/unit/test_host_console.py" for n in range(740, 750)})  # UI-1c
 

@@ -1985,6 +1985,31 @@ def _published_heartbeat() -> dict:
     return value
 
 
+@app.get("/api/indicators")
+async def indicators() -> dict:
+    """The five indicators of the finality, for the overview (UI-2, #206): computed from the run
+    reports, the watch's cycles, the cards and the catalog over 30 days — never from the
+    exercise windows, emptied after 7 (eregion_console/indicators.py)."""
+    import time as _time
+    from datetime import timedelta
+    from eregion_console import indicators as ind
+    from glorfindel import escalations as esc_module
+    from glorfindel.config import confidence_threshold
+    now = datetime.now(timezone.utc)
+    since = ind.since_window(now)
+    cat = (await catalog()).get("entries", [])
+
+    def gather() -> dict:
+        runs = ind.read_runs(_run_reports(), since.timestamp())
+        cycles = _watch_cycles(since.timestamp())
+        cards = [e for e in esc_module.all_escalations() if e.get("exercise_run")]
+        r30 = esc_module.observation_report(since=since)
+        r7 = esc_module.observation_report(since=now - timedelta(days=7))
+        return ind.compute(runs, cycles, cards, cat, r30.get("disruptive") or {},
+                           r7.get("disruptive") or {}, confidence_threshold(), _time.time())
+    return await asyncio.to_thread(gather)
+
+
 @app.get("/api/channel")
 async def channel() -> dict:
     """Both channels as this host sees them: the windows the watch pulled (which are live

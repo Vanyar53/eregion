@@ -49,6 +49,7 @@ GET  /  /glorfindel  /annatar  /gothmog  /config   → les pages (overview, glor
 GET  /runs/<run_id>                   → 302 vers la page de son injecteur
 GET  /atelier, /api/atelier/*         → 308 vers / et /api/* (jusqu'à la 1.0)
 GET  /api/sections                    → Glorfindel, chaque injecteur actif ou grisé et pourquoi, read_only
+GET  /api/indicators                  → les cinq indicateurs (30 jours) : contenir, contenu seul (+ shadow), à tort, couverture, dernière preuve
 GET  /api/catalog[?kind=technique|fault]   → techniques + pannes du catalogue
 GET  /api/exercises?since=7d[&injector=…]  → fenêtres d'exercice + cycles, cartes et rapport de run de chacune
 GET  /api/campaigns[/<id>]            → manifestes ; en détail, faits du rapport de campagne + report.md

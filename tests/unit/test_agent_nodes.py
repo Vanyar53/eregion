@@ -2152,7 +2152,7 @@ def test_graph_held_vm_recommends_instead_of_isolating(tmp_path, monkeypatch, dr
     assert final["outcome"]["executed"] is False
     assert final["autonomy_mode"] == "human_only"
     assert final["autonomy_gate"]["codes"] == ["no_drain"]
-    assert "Activer" in final["escalation_reason"]
+    assert "Review & turn on" in final["escalation_reason"]   # the console's button (#222)
 
     readiness.acknowledge("vm", ["no_drain"], by="test")      # the operator confirms
     with patch("litellm.completion") as mock_cls:

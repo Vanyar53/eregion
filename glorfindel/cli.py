@@ -97,7 +97,7 @@ def _find_rules_file() -> str | None:
 
 
 def _resolve_resource_id(arg: str) -> str:
-    """Accept a short VM name (what `list` and the War Room display) or a full ARM id.
+    """Accept a short VM name (what `list` and the console display) or a full ARM id.
 
     The Azure calls parse the full resource path (resource group + VM name), so a bare
     name must be resolved to it — otherwise the command either silently matches nothing
@@ -182,7 +182,7 @@ def _drop_empty_service_principal_env(environ=os.environ) -> list[str]:
 
 
 @click.group(cls=_GlorfindelCli)
-@click.version_option(version="0.2.0", prog_name="glorfindel")
+@click.version_option(package_name="eregion", prog_name="glorfindel")   # the package's, never by hand
 def cli():
     """Glorfindel — detect, respond, restore."""
     _drop_empty_service_principal_env()
@@ -238,7 +238,7 @@ def release(resource_id: str, dry_run: bool, yes: bool):
         # still cut off — and then cleared its state, leaving the rule orphaned.
         verification = connector.verify_release(resource_id)
         if verification.get("verified"):
-            # NSG already clean — still clear any stale state file so War Room updates
+            # NSG already clean — still clear any stale state file so the console updates
             from glorfindel.actions import _clear_isolation_state
             _clear_isolation_state(resource_id)      # by id: two VMs may share a name
             console.print("[yellow]No active isolation found on NSG — state cleared.[/yellow]")
@@ -414,7 +414,7 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
             "  In human_only, Glorfindel detects and recommends but does NOT act — "
             "escalations need a human.\n"
             "  Set GLORFINDEL_WEBHOOK_URL or the Discord bot (DISCORD_BOT_TOKEN and "
-            "DISCORD_CHANNEL_ID), or watch the War Room, "
+            "DISCORD_CHANNEL_ID), or watch the console (eregion console), "
             "so escalations are seen."
         )
 
@@ -625,7 +625,7 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
         from glorfindel.reassert import reassert_active
         try:
             from glorfindel.config import load_glorfindel_config as _lgc
-            autonomy = _lgc().autonomy          # fresh: a War Room mode change applies
+            autonomy = _lgc().autonomy          # fresh: a console mode change applies
             if mode_override:
                 autonomy.default = mode_override  # --mode stays pinned, as in decide
         except Exception as exc:
@@ -1078,7 +1078,7 @@ def restore(resource_id: str, vault: str, dry_run: bool, yes: bool, keep_isolate
         console.print(f"  azure_job: [dim]{job.get('restore_job_name', '?')}[/dim]")
         console.print(f"  RP      : [dim]{job.get('recovery_point_time', '?')}[/dim]")
         console.print(f"\n[dim]Check status : glorfindel jobs {resource_id} --refresh[/dim]")
-        console.print("[dim]When Completed: az vm start + glorfindel release (or War Room)[/dim]")
+        console.print("[dim]When Completed: az vm start + glorfindel release (or the console)[/dim]")
         _record_manual_action("restore", resource_id, {"status": "InProgress", "job": job.get("restore_job_name")})
         return
 
@@ -1506,7 +1506,7 @@ def list_active():
 
 
 def _state_warnings(entry: dict, failed_key: str) -> list[str]:
-    """What `list` must say next to ISOLATED / BLOCKED — the same flags the War Room
+    """What `list` must say next to ISOLATED / BLOCKED — the same flags the console
     shows as chips. A partial isolation used to print as a plain ISOLATED while one
     NIC carried no rule at all (real run, 2026-10-05, topology multinic)."""
     out = []
@@ -1961,7 +1961,7 @@ def migrate_rules(from_file: str, base_file: str, dry_run: bool) -> None:
     if not any(report[k] for k in ("added", "replaced", "same", "disable", "assets", "monitoring_backends")):
         console.print("  nothing to move: --from holds nothing beyond --base")
     elif not dry_run:
-        console.print("  Restart the watch and the War Room to load it (rules are read at start).")
+        console.print("  Restart the watch and the console to load it (rules are read at start).")
 
 
 @cli.command("propose-rules")

@@ -1335,6 +1335,12 @@ MUTANTS = [
      '    --build-arg "EREGION_REF=$ref" --build-arg "EREGION_REVISION=$commit" \\\n', ""),
     ("M567", "the header shows the package's version over the deployed tag (UI-2)", SEC,
      '    label = ref or (f"v{package}" if package else "")', '    label = (f"v{package}" if package else "")'),
+    # #222 — finitions: the content security policy on every response.
+    ("M568", "the console's pages can be framed by another site, and talk to another origin (#222)", CON,
+     '    response.headers["Content-Security-Policy"] = _CSP\n', ""),
+    ("M569", "glorfindel --version written by hand again: it drifts from the package (#222)", GCLI,
+     '@click.version_option(package_name="eregion", prog_name="glorfindel")',
+     '@click.version_option(version="0.2.0", prog_name="glorfindel")'),
     ("M408", "eregion console keeps compose's empty service principal: no managed identity (UI-1, H0)",
      "eregion_console/cli.py", "    _drop_empty_service_principal_env()\n", ""),
     ("M409", "the console looks for the shipped rules beside itself: none outside the repo's root (UI-1, P1 review)",
@@ -1626,6 +1632,8 @@ TESTS.update({f"M{n}": "tests/unit/test_console.py" for n in range(400, 410)})  
 TESTS.update({f"M{n}": "tests/unit/test_indicators.py" for n in range(560, 566)})  # UI-2
 TESTS["M566"] = "tests/unit/test_host_deploy.py"
 TESTS["M567"] = "tests/unit/test_console.py"
+TESTS["M568"] = "tests/unit/test_console.py"
+TESTS["M569"] = "tests/unit/test_cli.py -k version"
 TESTS["M403"] = "tests/unit/test_console_exercises.py"
 # V1 (#214): Annatar's side and the shared gate in test_watch_gate.py, Gothmog's in test_gothmog.py.
 TESTS.update({f"M{n}": "tests/unit/test_watch_gate.py" for n in (*range(720, 740), *range(750, 760))})

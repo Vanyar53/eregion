@@ -48,6 +48,6 @@ make profiles-check                       # chaque profil compose rend ses servi
 
 Deux choses sont permises entre composants : le contrat que tous lisent, qui vit dans le cœur (les signaux, `eregion_core/signals.py`, sortis d'Annatar par D1), et les passerelles listées avec leur raison (`scripts/component_check.py`, `BRIDGES` et `CROSSINGS`). [`tests/unit/test_components.py`](../../tests/unit/test_components.py) refuse toute autre importation d'un composant par un autre.
 
-L'IA d'analyse (`analysis/`) n'est pas un composant testé seul, mais la watch la charge (IA0) : son code est lu par la même règle. Le rapport de campagne lit les détections d'un run avec le lecteur d'Annatar (`annatar.runner.detection`), dès son chargement : c'est une passerelle listée. Sur un Glorfindel installé sans Annatar, la watch démarre donc sans les rapports de campagne, et le dit au démarrage (« Rapports de campagne désactivés »).
+L'IA d'analyse (`analysis/`) n'est pas un composant testé seul, mais la watch la charge (IA0) : son code est lu par la même règle. Le rapport de campagne lit les détections d'un run avec le lecteur d'Annatar (`annatar.runner.detection`), dès son chargement : c'est une passerelle listée. Sur un Glorfindel installé sans Annatar, la watch importe ce rapport avant de lancer le thread des rapports : elle démarre donc sans eux, et le dit une fois au démarrage (« Rapports de campagne désactivés »).
 
 Pour contribuer un adaptateur, voir [`CONTRIBUTING.md`](../../CONTRIBUTING.md).

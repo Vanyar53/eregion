@@ -17,6 +17,11 @@ test file has one home, every bridge still crosses.
 
 Locally, in a worktree too: the repository this file lives in is put first on sys.path, so
 the editable install (which may point at another checkout) is never what gets tested.
+
+Known limits:
+- the mutation harness's guard (scripts/mutation_check.py, unmeasurable) may raise wrongly on a
+  `FAILED … - ModuleNotFoundError…` line cut at 80 columns outside CI (node id ≤ 31 chars; none today);
+- allowed() accepts any package a module of BRIDGES imports, not only the one its bridge is for.
 """
 from __future__ import annotations
 
@@ -138,7 +143,8 @@ CROSSINGS = {
                                        "publishes (IA0) — never stops the watch. The report "
                                        "needs Annatar's package (the bridge "
                                        "analysis.campaign_report): on a Glorfindel without "
-                                       "Annatar, the watch starts with the reports off, and "
+                                       "Annatar, the watch (which imports it before the "
+                                       "thread) starts with the reports off, and "
                                        "says so",
     ("annatar/cli.py", "analysis"): "the report written at the end of a campaign (IA0) — says "
                                     "so when the package is missing",

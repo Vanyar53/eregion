@@ -1686,9 +1686,12 @@ MUTANTS += [
     ("M849", "make profile-detection leaves ~/.annatar to docker: created as root (D1)", MAKE,
      "profile-detection: glorfindel-start build-annatar\n\t@mkdir -p $(HOME)/.annatar\n",
      "profile-detection: glorfindel-start build-annatar\n"),
+    ("M870", "without Annatar, the reports' thread starts and fails every pass, never said at start (D1)",
+     "glorfindel/cli.py", "        from analysis import campaign_report  # noqa: F401\n", ""),
 ]
 TESTS.update({f"M{n}": D1_COMPONENTS for n in range(845, 849)})
 TESTS["M849"] = D1_PROFILES
+TESTS["M870"] = "tests/unit/test_hosted_report.py"
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

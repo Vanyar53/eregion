@@ -650,6 +650,36 @@ def test_the_watch_goes_on_when_the_reports_cannot_start(tmp_path, monkeypatch):
     assert _never_raises(gcli._start_campaign_reports, tmp_path) is False
 
 
+def test_without_annatar_the_watch_says_once_that_the_reports_are_off(tmp_path, monkeypatch):
+    """M870: the report reads a run's detections with Annatar's reader (a bridge, D1). On a
+    Glorfindel without Annatar, with a channel, the watch says so at start, once — no thread
+    that would fail every pass."""
+    import importlib.util
+    import sys
+
+    from glorfindel import cli as gcli
+    spec = importlib.util.spec_from_file_location(
+        "component_check", Path(__file__).resolve().parents[2] / "scripts" / "component_check.py")
+    cc = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, "component_check", cc)
+    spec.loader.exec_module(cc)
+    finder = cc.Absent(("annatar",))
+    monkeypatch.setattr(sys, "meta_path", [finder, *sys.meta_path])
+    for name in [m for m in sys.modules if finder.blocks(m) or m == "analysis.campaign_report"]:
+        monkeypatch.delitem(sys.modules, name)
+    monkeypatch.delattr(sys.modules["analysis"], "campaign_report", raising=False)
+    monkeypatch.setenv(channel.CHANNEL_ENV, URL)
+    started = []
+    monkeypatch.setattr(hr, "start", lambda runs_dir: started.append(runs_dir) or object())
+    said = []
+    monkeypatch.setattr(gcli.console, "print", lambda *a, **kw: said.append(" ".join(map(str, a))))
+
+    assert _never_raises(gcli._start_campaign_reports, tmp_path) is False
+    assert started == []
+    assert [s for s in said if "Rapports de campagne désactivés" in s] == said and len(said) == 1
+    assert "annatar" in said[0]
+
+
 def test_a_failing_pass_never_stops_the_thread(tmp_path):
     """M132: every pass runs, whatever the one before raised."""
     passes, sleeps = [], []

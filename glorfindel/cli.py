@@ -310,6 +310,10 @@ def _start_campaign_reports(runs_dir) -> bool:
     or its thread failing to start, never stops the watch."""
     try:
         from analysis import hosted_report
+        # Before the thread: the report reads a run's detections with Annatar's reader, a
+        # bridge (scripts/component_check.py). Without Annatar it is said here, once — not by
+        # every pass of a thread that could never write a report.
+        from analysis import campaign_report  # noqa: F401
         return hosted_report.start(runs_dir) is not None
     except Exception as exc:  # the watch goes on without campaign reports
         console.print(f"[yellow]Rapports de campagne désactivés — {type(exc).__name__}: {exc}[/yellow]")

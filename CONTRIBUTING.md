@@ -22,7 +22,7 @@ What reaches the outside world sits behind an **adapter**: a cloud, a telemetry 
 
 **Two rules hold every adapter in place:**
 - **A provider's SDK** (azure, boto3, google-cloud) is imported only in its adapter. `tests/unit/test_provider_boundary.py` enforces it, and CI runs it as its own step.
-- **No component imports another.** Glorfindel never imports Annatar or Gothmog, and they never import Glorfindel. What they share lives in `eregion_core/`, such as the signal contract, `eregion_core/signals.py`. `tests/unit/test_components.py` refuses any other crossing.
+- **No component imports another.** Glorfindel reaches Annatar or Gothmog, and they reach Glorfindel, only through the listed bridges, each with its reason (`scripts/component_check.py`, `BRIDGES` and `CROSSINGS`). What they share lives in `eregion_core/`, such as the signal contract, `eregion_core/signals.py`. `tests/unit/test_components.py` refuses any other crossing.
 
 **What an injector adapter does not do.** It never checks its own target, its host or the watch. The runner does that before it calls the adapter:
 - the inscription (`eregion_core/inscription.py`);

@@ -118,6 +118,12 @@ TOGETHER = (
 BRIDGES = {
     "glorfindel.campaign_replay": "replays an Annatar campaign (its manifest) — "
                                   "`glorfindel replay-campaign`, with Annatar",
+    # Not a component's module, but the watch loads it (IA0): on load, the report reads a
+    # run's detections with Annatar's reader (annatar.runner.detection, the format's one
+    # source). The report is about an Annatar campaign: without Annatar's package it is not
+    # written, and the watch says so (CROSSINGS, glorfindel/cli.py → analysis).
+    "analysis.campaign_report": "the campaign report (IA0) reads a run's detections with "
+                                "Annatar's reader — written where Annatar is installed",
 }
 
 # The other crossings: an import of another component INSIDE a function, by a command or a
@@ -129,13 +135,20 @@ CROSSINGS = {
     ("glorfindel/cli.py", "eregion_console"): "`glorfindel war-room`, the former name of "
                                               "`eregion console`",
     ("glorfindel/cli.py", "analysis"): "the watch writes the report of the campaigns Orodruin "
-                                       "publishes (IA0) — never stops the watch",
+                                       "publishes (IA0) — never stops the watch. The report "
+                                       "needs Annatar's package (the bridge "
+                                       "analysis.campaign_report): on a Glorfindel without "
+                                       "Annatar, the watch starts with the reports off, and "
+                                       "says so",
     ("annatar/cli.py", "analysis"): "the report written at the end of a campaign (IA0) — says "
                                     "so when the package is missing",
 }
-# The components whose code these rules hold: (directory, its own packages).
+# The code these rules hold: (directory, its own packages). The analysis AI is no component the
+# CI runs alone, but the watch loads it (IA0): what it reaches of another component is listed
+# too. The console is not scanned: it is the face of them all.
 SCANNED = {"eregion_core": ("eregion_core",), "glorfindel": ("glorfindel", "eregion_core"),
-           "annatar": ("annatar", "eregion_core"), "gothmog": ("gothmog", "eregion_core")}
+           "annatar": ("annatar", "eregion_core"), "gothmog": ("gothmog", "eregion_core"),
+           "analysis": ("analysis", "eregion_core")}
 
 
 def first_party_imports(source: str) -> list[tuple[int, str, bool]]:

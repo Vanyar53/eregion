@@ -33,6 +33,18 @@ EXPECTED_ABSENT = {
 INJECTOR_NEVER = {"langgraph", "chromadb", "discord", "fastapi"}
 
 
+def test_in_the_full_suite_the_conftest_redirects_glorfindels_state(tmp_path):
+    """First: the conftest skips its redirections when a component is absent (the component
+    check). In the full suite, both are present — or every test would write ~/.glorfindel."""
+    conftest = next(m for m in list(sys.modules.values())
+                    if getattr(m, "__file__", None)
+                    and Path(m.__file__).resolve() == ROOT / "tests" / "unit" / "conftest.py")
+    assert conftest.GLORFINDEL is True
+    assert conftest.CONSOLE is True
+    import glorfindel.escalations as escalations
+    assert Path(escalations._STORE).is_relative_to(tmp_path)
+
+
 def test_the_components_and_what_each_finds_absent():
     assert set(cc.COMPONENTS) == set(EXPECTED_ABSENT)
     for name, absent in EXPECTED_ABSENT.items():
@@ -72,6 +84,54 @@ def test_the_scan_sees_what_it_must_refuse():
     assert not cc.allowed("glorfindel/cli.py", "annatar", at_top=False)
     assert not cc.allowed("glorfindel/agent.py", "analysis", at_top=False)
     assert cc.allowed("glorfindel/campaign_replay.py", "annatar", at_top=True)
+    assert cc.allowed("analysis/campaign_report.py", "annatar", at_top=True)
+    assert not cc.allowed("analysis/hosted_report.py", "annatar", at_top=True)
+
+
+def test_the_code_the_watch_loads_is_scanned_too():
+    """The watch loads the analysis AI (IA0): an import of Annatar there, on load, turned the
+    campaign reports off on a Glorfindel without Annatar — and no list said so."""
+    assert {"eregion_core", "glorfindel", "annatar", "gothmog", "analysis"} <= set(cc.SCANNED)
+    assert cc.SCANNED["analysis"] == ("analysis", "eregion_core")
+    assert any(f.startswith("analysis/") for f in _crossings_without(("analysis", "eregion_core")))
+
+
+def _crossings_without(own: tuple[str, ...]) -> list[str]:
+    """What the scan reports for analysis/ with no bridge listed for it."""
+    out = []
+    for path in sorted((ROOT / "analysis").rglob("*.py")):
+        rel = path.relative_to(ROOT).as_posix()
+        for line, pkg, _ in cc.first_party_imports(path.read_text(encoding="utf-8")):
+            if pkg not in own:
+                out.append(f"{rel}:{line} {pkg}")
+    return out
+
+
+def _mutation_check():
+    spec = importlib.util.spec_from_file_location("mutation_check", ROOT / "scripts" / "mutation_check.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_a_missing_module_is_no_measure_unless_the_component_check_made_it_absent():
+    """Line by line: a module the component check made absent never covers another that is
+    missing from the copy (scripts/mutation_check.py, unmeasurable)."""
+    mc = _mutation_check()
+    # Built from parts, and compared without pytest's introspection: this test's own failure,
+    # under a mutant, must not print a line the harness would read as a missing module.
+    said = "ModuleNotFound" + "Error: No module named"
+    absent = f"E   {said} 'annatar' (absent: component check)"
+    missing = f"E   {said} 'glorfindel.gone'"
+    cases = [
+        (f"collected 3 items\n{absent}\n1 failed", None),
+        (f"{absent}\n{missing}\n2 failed", missing.strip()),     # one absent covers no other
+        (f"{missing}\n{absent}", missing.strip()),
+        (f"ERROR tests/unit/test_x.py - {said} 'x'", f"ERROR tests/unit/test_x.py - {said} 'x'"),
+        (">       except ModuleNotFoundError:\n1 failed", None),  # source shown in a traceback
+    ]
+    wrong = [i for i, (stdout, expected) in enumerate(cases) if mc.unmeasurable(stdout) != expected]
+    assert not wrong, f"cases {wrong}"
 
 
 def test_the_signal_contract_lives_in_the_shared_core():

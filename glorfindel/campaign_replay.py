@@ -9,7 +9,9 @@ verdict — the loop's "raté → appris → rejoué → chopé" in one pass.
 Contract (see collab/design_campaign_manifest.md):
   - Reads Annatar's manifest.json POST-HOC, READ-ONLY — never before/during execution, so
     the blind measurement stays honest. Reuses annatar.campaign.manifest (single source of
-    the format; glorfindel already depends on annatar.signals).
+    the format). That makes this module a bridge to Annatar (scripts/component_check.py,
+    BRIDGES): only `glorfindel replay-campaign` imports it, with Annatar installed — the
+    rest of Glorfindel runs without Annatar (D1).
   - Re-reads the materialized artifact / proposal — NEVER regenerates (generation is
     non-deterministic; regenerating would break the regression test).
   - Writes its verdict to a SEPARATE runs/campaigns/<id>/replay.json. One writer per file:

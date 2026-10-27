@@ -18,7 +18,9 @@ Lot D1 (#81). Eregion est auto-hébergé : il tourne sur ton poste, ou dans une 
   - `bot` : le bot Discord ;
   - `annatar` et `gothmog` : les injecteurs. Ils sont lancés à la demande, par `docker compose --profile annatar run --rm annatar …`, et ne restent pas en service.
 
-  Chaque injecteur dépend de la watch (`depends_on`). Le lancer démarre donc Glorfindel, s'il ne tourne pas encore.
+  Lance un injecteur **après `make profile-…`**. La cible crée d'abord, à ton nom, les dossiers que les services montent : `~/.glorfindel`, `~/.cache/chroma`, et `~/.annatar` pour Annatar. Sans elle, docker les crée au nom de root, et ta CLI ne peut plus y écrire.
+
+  Chaque injecteur dépend de la watch (`depends_on`). Le lancer démarre donc Glorfindel, s'il ne tourne pas encore, mais n'attend pas son battement. Dans la première minute, le temps que la watch démarre et publie son premier battement, l'injecteur peut refuser d'agir (V1) : relance-le un peu plus tard.
 - **Cibles Make.** Il y en a une par profil, listées dans `make help`, section « Profils d'usage ». Chacune démarre Glorfindel (`glorfindel-start`), puis prépare ce que le profil ajoute.
 - **Une page par profil** : pour qui, ce qui tourne et où, comment l'installer, ce que la console en montre, les limites.
 
@@ -45,5 +47,7 @@ make profiles-check                       # chaque profil compose rend ses servi
 ```
 
 Deux choses sont permises entre composants : le contrat que tous lisent, qui vit dans le cœur (les signaux, `eregion_core/signals.py`, sortis d'Annatar par D1), et les passerelles listées avec leur raison (`scripts/component_check.py`, `BRIDGES` et `CROSSINGS`). [`tests/unit/test_components.py`](../../tests/unit/test_components.py) refuse toute autre importation d'un composant par un autre.
+
+L'IA d'analyse (`analysis/`) n'est pas un composant testé seul, mais la watch la charge (IA0) : son code est lu par la même règle. Le rapport de campagne lit les détections d'un run avec le lecteur d'Annatar (`annatar.runner.detection`), dès son chargement : c'est une passerelle listée. Sur un Glorfindel installé sans Annatar, la watch démarre donc sans les rapports de campagne, et le dit au démarrage (« Rapports de campagne désactivés »).
 
 Pour contribuer un adaptateur, voir [`CONTRIBUTING.md`](../../CONTRIBUTING.md).

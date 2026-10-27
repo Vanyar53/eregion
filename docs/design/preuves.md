@@ -702,6 +702,38 @@ de la cible et le réseau lèvent, et chaque tentative est notée. Trente mutant
 | M758 | un fichier local vivant compte malgré le canal | une watch locale prise pour la watch hébergée |
 | M759 | la console compte une campagne sans Glorfindel en `unknown` | un run de dév pris pour un trou |
 
+### L'IA d'analyse : son modèle, sa mémoire, le tri, rien sans un humain (IA1)
+
+L'IA d'analyse refuse le modèle de décision de Glorfindel et toute mémoire rangée dans son état
+(`analysis/separation.py`). Le tri d'une campagne (`analysis/triage.py`) est calculé depuis les
+runs, le catalogue, les règles et le code d'infrastructure ; le modèle explique et propose ; la
+vérification écarte ce que les faits ne portent pas, et chaque proposition attend un humain. Vingt
+mutants, mesurés par `tests/unit/test_analysis_separation.py` et `tests/unit/test_analysis_triage.py`
+(les cas du harnais y tournent avec un modèle simulé), tous attrapés au premier tour (27/10).
+
+| Mutant | Défaut réinjecté | Effet |
+|---|---|---|
+| M780 | le modèle de décision de Glorfindel accepté | le rapport partage les angles morts du défenseur |
+| M781 | le modèle comparé avec son préfixe | `claude-sonnet-5-5` passe pour un autre que `anthropic/claude-sonnet-5-5` |
+| M782 | le chemin de l'index lu sans être résolu | `..` ou un lien mènent dans `~/.glorfindel` |
+| M783 | l'index permis dans l'état de Glorfindel | l'analyse écrit dans la mémoire du défenseur |
+| M784 | le rapport ouvre son index sans le contrôle | idem, par `EREGION_ANALYSIS_INDEX` |
+| M785 | le rapport appelle son modèle sans le contrôle | idem, par `EREGION_ANALYSIS_MODEL` |
+| M786 | une escalade triée avant une technique manquée | ce qui est passé n'est plus en tête |
+| M787 | un commentaire du code d'infrastructure vaut collecte | « collectée » sur une ligne que Terraform ignore |
+| M788 | `disable:` de la couche du client ignoré | une règle désactivée « surveille » encore |
+| M789 | une proposition que les faits ne portent pas gardée | « écrire une règle » quand une règle existe |
+| M790 | une proposition qui porte une règle gardée | l'analyse écrit une requête de détection |
+| M791 | le statut écrit par le modèle gardé | une proposition « approuvée » sans humain |
+| M792 | une décision sans nom d'humain enregistrée | une approbation que personne n'a donnée |
+| M793 | une proposition décidée deux fois | la trace de la première décision perdue |
+| M794 | un nouveau tri écrit par-dessus une décision | la décision d'un humain perdue |
+| M795 | « Glorfindel a isolé » gardé sur une décision inconnue | un inconnu présenté comme un fait |
+| M796 | une deuxième entrée pour un item la remplace | l'explication gardée n'est plus celle vérifiée la première |
+| M797 | le tri appelle le modèle de Glorfindel | idem M780, pour le tri |
+| M798 | le harnais ne compte pas l'obéissance que la vérification a écartée | l'obéissance du modèle à une ligne plantée n'est plus mesurée |
+| M799 | une collecte illisible dite « non collectée » | un inconnu présenté comme une cause |
+
 ## Ce que les invariants ont trouvé
 
 Aucun de ces défauts n'avait été vu en revue. Chacun a son test et sa séquence figée.

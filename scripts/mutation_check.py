@@ -1538,6 +1538,58 @@ MUTANTS += [
      'if q is not None and q["GroupId"] in e["groups"]:'),
 ]
 
+# IA1 (#88): the analysis AI's own model and memory, never Glorfindel's; the triage computed
+# from the runs, the catalog, the rules and the infrastructure code; nothing without a human.
+SEP = "analysis/separation.py"
+TRI = "analysis/triage.py"
+MUTANTS += [
+    ("M780", "the analysis may reason with Glorfindel's decision model (IA1)", SEP,
+     "    if _model_name(model) == _model_name(defender):\n", "    if False:\n"),
+    ("M781", "Glorfindel's model under another provider's prefix passes as another model (IA1)", SEP,
+     '    return str(model or "").strip().lower().rsplit("/", 1)[-1]\n', '    return str(model or "")\n'),
+    ("M782", "an index reaching Glorfindel's state through « .. » or a link is let through (IA1)", SEP,
+     "    p = Path(path).expanduser().resolve()\n", "    p = Path(path).expanduser()\n"),
+    ("M783", "the analysis index may lie in Glorfindel's memory (IA1)", SEP,
+     "    if p == state or state in p.parents:\n", "    if False:\n"),
+    ("M784", "the report opens its index without the separation's check (IA1)", CREP,
+     "    p = separation.check_index(Path(path) if path else index_path())\n",
+     "    p = Path(path) if path else index_path()\n"),
+    ("M785", "the report calls its model without the separation's check (IA1)", CREP,
+     "    mdl = separation.check_model(model or analysis_model())   # IA1: never Glorfindel's\n",
+     "    mdl = model or analysis_model()\n"),
+    ("M786", "an escalation is triaged before a missed technique (IA1)", TRI,
+     '    "missed": (1, ', '    "missed": (3, '),
+    ("M787", "a comment in the infrastructure code counts as collection (IA1)", TRI,
+     '            elif ch == "#" or two == "//":\n                break\n',
+     "            elif False:\n                break\n"),
+    ("M788", "a base rule the client's layer disables still watches its technique (IA1)", TRI,
+     '    for name in c.get("disable") or []:\n', "    for name in []:\n"),
+    ("M789", "a proposal the computed facts do not support is kept (IA1)", TRI,
+     '        elif (not_here := item.allowed()[e["proposal"]]):\n', '        elif (not_here := ""):\n'),
+    ("M790", "a proposal that carries a rule is kept: the analysis writes a rule (IA1)", TRI,
+     '        elif _RULE.search(e["explanation"]) or _RULE.search(e["text"]):\n', "        elif False:\n"),
+    ("M791", "the model's status is kept: a proposal approved without a human (IA1)", TRI,
+     '        item.proposal = Proposal(kind=e["proposal"], text=e["text"], status=PENDING)\n',
+     '        item.proposal = Proposal(kind=e["proposal"], text=e["text"], status=str(raw.get("status") or PENDING))\n'),
+    ("M792", "a decision that names no human is recorded (IA1)", TRI,
+     '    if not str(by).strip():\n        raise ValueError("a decision names the human who takes it (--by)")\n', ""),
+    ("M793", "a decided proposal is decided again (IA1)", TRI,
+     "    if item.proposal.status != PENDING:\n", "    if False:\n"),
+    ("M794", "a new triage writes over a human's decision (IA1)", TRI,
+     "    if not replace_decided and old is not None and any(\n", "    if False and old is not None and any(\n"),
+    ("M795", "an unknown decision said taken is kept (IA1)", TRI,
+     "            elif cr._ACTED.search(told):\n", "            elif False:\n"),
+    ("M796", "a second entry for an item replaces the first (IA1)", TRI,
+     "        elif item.proposal is not None or item.explanation:\n", "        elif False:\n"),
+    ("M797", "the triage calls Glorfindel's model (IA1)", TRI,
+     "    mdl = separation.check_model(model or analysis_model())\n", "    mdl = model or analysis_model()\n"),
+    ("M798", "the harness does not count an obeyed planted line the check removed (IA1)",
+     "analysis/triage_cases.py", "    entries = [r for r in t.rejected] + [\n", "    entries = [] + [\n"),
+    ("M799", "a collection that cannot be read is called « not collected » (IA1)", TRI,
+     '            elif coll.collected is None:\n                causes.append("collection_unknown")\n',
+     '            elif coll.collected is None:\n                causes.append("not_collected")\n'),
+]
+
 # Mutants measured by other tests than the invariants (their lot's own).
 TESTS = {mid: INSCRIPTION_TESTS for mid in ("M42", "M43", "M44", "M45", "M46", "M47")}
 TESTS.update({mid: DOCS_TESTS for mid in ("M48", "M49")})
@@ -1631,6 +1683,9 @@ TESTS["M403"] = "tests/unit/test_console_exercises.py"
 TESTS.update({f"M{n}": "tests/unit/test_watch_gate.py" for n in (*range(720, 740), *range(750, 760))})
 TESTS.update({f"M{n}": "tests/unit/test_gothmog.py" for n in (724, 725, 726, 727)})
 TESTS.update({f"M{n}": "tests/unit/test_host_console.py" for n in range(740, 750)})  # UI-1c
+# IA1 (#88): the separation in test_analysis_separation.py, the triage in test_analysis_triage.py.
+TESTS.update({f"M{n}": "tests/unit/test_analysis_separation.py" for n in range(780, 786)})
+TESTS.update({f"M{n}": "tests/unit/test_analysis_triage.py" for n in range(786, 800)})
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

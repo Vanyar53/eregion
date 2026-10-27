@@ -1693,6 +1693,48 @@ TESTS.update({f"M{n}": D1_COMPONENTS for n in range(845, 849)})
 TESTS["M849"] = D1_PROFILES
 TESTS["M870"] = "tests/unit/test_hosted_report.py"
 
+# HY1: no test writes in the repository (the conftest's guard), the quarantine locks' test on
+# its own locks, the injectors' image from its lock, every secret passed by name (L23, #228).
+HY1_GUARD = "tests/unit/test_repo_hermetic.py"
+HY1_LOCK = "tests/unit/test_dependency_lock.py"
+HY1_SECRETS = "tests/unit/test_makefile_secrets.py"
+CONF = "tests/unit/conftest.py"
+MUTANTS += [
+    ("M910", "the store_cycle test writes runs/ in the repository again (HY1)", "tests/unit/test_agent_nodes.py",
+     "    monkeypatch.chdir(tmp_path)   # store_cycle writes runs/<run_id>_debug.jsonl where it runs (HY1)\n", ""),
+    ("M911", "the guard no longer watches the test process's writes (HY1)", CONF,
+     "    _watching[0] = True\n    yield\n", "    yield\n"),
+    ("M912", "a runs/ made at the root passes: git ignores it (HY1)", CONF,
+     'left = [n for n in new if n == "runs" or (', 'left = [n for n in new if ('),
+    ("M913", "any new entry at the root passes, whatever git says (HY1)", CONF,
+     "_ignored_by_git(n) is not True)]", "False)]"),
+    ("M914", "a write by a relative path is not seen as in the repository (HY1)", CONF,
+     "    full = os.path.abspath(os.fsdecode(path))\n", "    full = os.fsdecode(path)\n"),
+    ("M915", "the quarantine locks' test reads the process's global locks again (HY1)",
+     "tests/unit/test_glorfindel.py",
+     '    monkeypatch.setattr(actions, "_QUARANTINE_LOCKS", locks)\n    return locks\n',
+     "    return actions._QUARANTINE_LOCKS\n"),
+    ("M916", "the injectors' image resolves its dependencies again, unlocked (HY1)", "annatar/Dockerfile",
+     "RUN pip install --no-cache-dir --no-deps --no-build-isolation -e .\n",
+     'RUN pip install --no-cache-dir -e ".[annatar]"\n'),
+    ("M917", "Annatar's extra without litellm: the planner fails in the image (HY1)", "pyproject.toml",
+     '    "azure-monitor-query>=1.3",\n    # The campaign planner (`annatar campaign plan --llm`) — the same pin as Glorfindel\'s (HY1).\n'
+     '    "litellm==1.86.1",\n]\nglorfindel = [',
+     '    "azure-monitor-query>=1.3",\n]\nglorfindel = ['),
+    ("M918", "Annatar's targets pass the client secret by value again (L23)", MAKE,
+     "\t-e AZURE_CLIENT_ID -e AZURE_CLIENT_SECRET -e AZURE_TENANT_ID -e AZURE_SUBSCRIPTION_ID \\\n\t-e ANTHROPIC_API_KEY",
+     "\t-e AZURE_CLIENT_ID -e AZURE_CLIENT_SECRET=$(or $(ANNATAR_AZURE_CLIENT_SECRET),$(AZURE_CLIENT_SECRET)) "
+     "-e AZURE_TENANT_ID -e AZURE_SUBSCRIPTION_ID \\\n\t-e ANTHROPIC_API_KEY"),
+    ("M919", "one target, glorfindel-shell, passes the client secret by value (L23)", MAKE,
+     "\t@$(GLORFINDEL_AZURE_PICK) docker run --rm -it $(GLORFINDEL_AZURE_ENV)",
+     "\t@docker run --rm -it -e AZURE_CLIENT_SECRET=$(AZURE_CLIENT_SECRET) $(GLORFINDEL_AZURE_ENV)"),
+]
+TESTS["M910"] = "tests/unit/test_agent_nodes.py -k no_op"
+TESTS.update({f"M{n}": HY1_GUARD for n in range(911, 915)})
+TESTS["M915"] = "tests/unit/test_glorfindel.py -k quarantine_lock"
+TESTS.update({f"M{n}": HY1_LOCK for n in (916, 917)})
+TESTS.update({f"M{n}": HY1_SECRETS for n in (918, 919)})
+
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a

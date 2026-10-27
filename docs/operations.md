@@ -253,6 +253,7 @@ EREGION_DISCORD_WEBHOOK_CI=...              # webhook de #ci (secret GitHub : no
 EREGION_DISCORD_WEBHOOK_AGENTS=...          # webhook de #agents (poste de l'opérateur : hooks d'elrond)
 EREGION_DISCORD_BOT_TOKEN=...               # le bot « Eregion », celui de l'atelier (pas celui de Glorfindel) : fils du forum #lots et leurs étiquettes
 EREGION_DISCORD_LOTS_FORUM=...              # id du forum #lots
+EREGION_DISCORD_ROADMAP_CHANNEL=...         # id du salon #roadmap : le message de la feuille de route (N2, secret GitHub : roadmap.yml)
 EREGION_DISCORD_MENTION=...                 # id de l'utilisateur que mentionnent les alertes de #agents
                                     # sur le poste : ~/.config/eregion/discord.env (600) si l'environnement ne les a pas
 GLORFINDEL_KEEP_ISOLATED=1          # mode forensique

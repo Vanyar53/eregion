@@ -2419,6 +2419,67 @@ MUTANTS += [
 ]
 TESTS.update({f"M{n}": "tests/unit/test_notify_discord.py" for n in range(990, 995)})
 
+# N2 (#243): the road to 1.0 in Discord, scripts/roadmap_discord.py (and the thread matching it
+# shares with notify_discord.py), measured by tests/unit/test_roadmap_discord.py. Range M980–M989.
+ROADMAP_D = "scripts/roadmap_discord.py"
+MUTANTS += [
+    ("M980", "a closed issue gets a thread like an open one: the forum fills with finished lots (N2)", ROADMAP_D,
+     "        if not lot.open:\n            if t and not", "        if False:\n            if t and not"),
+    ("M981", "the sync overwrites elrond's states: a lot in review reads « à faire » (N2)", ROADMAP_D,
+     '    if current in KEPT:   # elrond\'s, kept until GitHub says more\n'
+     "        return current\n", ""),
+    ("M982", "a closed lot's thread never archived (N2)", ROADMAP_D,
+     '                write(f"{lot.key} archivé", "PATCH", f"/channels/{t[\'id\']}", {"archived": True})\n', ""),
+    ("M983", "two issues of one lot id share a thread: I1F suite lands in the closed I1F's (N2)", NOTIFY,
+     "and not (issue and other and other.group(1) != issue)", ""),
+    ("M984", "the roadmap message never looked up: a new one at every run (N2)", ROADMAP_D,
+     '    for where in ("pins", "messages?limit=50"):\n', "    for where in ():\n"),
+    ("M985", "someone else's message with the same title taken for the bot's (N2)", ROADMAP_D,
+     '            if str((m.get("author") or {}).get("id")) == me and title.startswith(TITLE):\n',
+     "            if title.startswith(TITLE):\n"),
+    ("M986", "a dry run writes to the forum (N2)", ROADMAP_D,
+     "        if dry:\n            return {}\n", ""),
+    ("M987", "a milestone's bar counts its open issues as done (N2)", ROADMAP_D,
+     "        closed = sum(not x.open for x in mine)\n", "        closed = sum(x.open for x in mine)\n"),
+    ("M988", "a ROADMAP.md without its criteria breaks the whole message (N2)", ROADMAP_D,
+     '    out += ["", "**Pour la 1.0**"] + (crit if crit is not None else ["_section introuvable dans ROADMAP.md_"])\n',
+     '    out += ["", "**Pour la 1.0**"] + crit\n'),
+    ("M989", "a pull request counted as an issue of its milestone (N2)", ROADMAP_D,
+     '        if "pull_request" in i or milestone not in nd.MILESTONE_TAGS:',
+     "        if milestone not in nd.MILESTONE_TAGS:"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_roadmap_discord.py" for n in range(980, 990)})
+
+# N2 after its review (27/10): M995–M999, the end of this session's range (M970–M999).
+MUTANTS += [
+    ("M995", "the issues read on one page only: past the 100th, lots vanish from the roadmap (N2)", ROADMAP_D,
+     "        if len(batch) < 100:\n            break\n", "        break\n"),
+    ("M996", "a merged lot whose issue is still open falls back to « à faire » (N2)", ROADMAP_D,
+     '    if current == "fait" and not lot.reopened:   # merged or reviewed ok, its issue open until « Fini quand »\n',
+     '    if current == "fait" and lot.pr:\n'),
+    ("M997", "the roadmap message posted again when its lookup failed: a second, stale one (N2)", ROADMAP_D,
+     "    if not looked:   # neither list read: posting would leave a second message, stale from then on\n"
+     '        raise nd.Failure("#roadmap", why="message not looked up (pins and messages failed): nothing posted")\n',
+     ""),
+    ("M998", "a follow-up issue (#70, #95, a finding) gets a thread like a lot (N2, Jonathan's decision)", ROADMAP_D,
+     "        if not lot.thread:   # not a lot (#70, #95, a finding): no thread; one made before is archived\n",
+     "        if False:\n"),
+    ("M999", "every thread Discord archived for idleness reopened at each pass (N2)", ROADMAP_D,
+     '        if change and (t.get("thread_metadata") or {}).get("archived"):\n',
+     '        if (t.get("thread_metadata") or {}).get("archived"):\n'),
+]
+TESTS.update({f"M{n}": "tests/unit/test_roadmap_discord.py" for n in range(995, 1000)})
+
+# N2 after its second review (27/10): M1000–M1004, given by the General session (H1: M1005–M1019).
+MUTANTS += [
+    ("M1000", "the roadmap creates threads on issue and PR events too: with notify.yml, two threads for one lot (N2)",
+     ROADMAP_D, "            if not create:\n                continue\n", ""),
+    ("M1001", "an issue number matched anywhere in a name: a lot's title quoting #70 taken for #70's thread (N2)",
+     NOTIFY, '            if re.search(rf"^#{issue} · |· #{issue}$", t.get("name", "")):',
+     '            if re.search(rf"#{issue}\\b", t.get("name", "")):'),
+]
+TESTS.update({f"M{n}": "tests/unit/test_roadmap_discord.py" for n in (1000, 1001)})
+
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a

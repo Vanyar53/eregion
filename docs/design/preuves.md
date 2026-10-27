@@ -906,6 +906,7 @@ Aucun de ces défauts n'avait été vu en revue. Chacun a son test et sa séquen
 | A0 | NSG supprimé lu comme « illisible » | blocage disparu jamais signalé, levée partielle pour toujours |
 | L1F | « déjà alerté » écrit avant la carte quand la repose échoue | crash entre les deux : blocage disparu, plus rien de dit |
 | I1F | NSG de quarantaine modifié (deny passé en Udp), état et tags de la carte perdus | VM joignable en TCP depuis le VNet, rien de dit : la réaffirmation ne lisait que les isolations dont elle avait l'état |
+| I4F | NSG d'origine d'une carte en quarantaine (ou nue) jugé sans elle | le reset de la nouvelle VM prenait l'ancienne isolation d'une autre VM pour la sienne : **l'autre VM rouverte** |
 
 **I1F (27/10, #226) : un oracle qui lisait mal, et un trou derrière.** Le run profond (10 000
 séquences) a fait tomber I1 à l'étape même où quelqu'un passe le deny entrant de la quarantaine
@@ -939,6 +940,36 @@ réglage change n'étaient plus lus (la machine ne l'a trouvé qu'une fois sur 1
 l'abonnement est relu, la séquence est figée (M838). La passe de la watch est sortie dans
 `cli._watch_reassert_pass`, testée sur son comportement ; un test structurel ne garde que ce que
 le comportement ne voit pas, les deux closures de la watch (M835, M839, M895–M898).
+
+**I4F (27/10, #235) : le NSG d'une carte absente.** À 2 000 séquences (graine 101), I4 est
+tombée sur une course `release`/`reset` : les flux sortants d'`api` rouverts par deux
+opérations sur une autre VM. La séquence, longue de 17 étapes, se réduit à quatre, dont deux opérations sur la nouvelle VM : une ancienne
+isolation d'`api` (noms fixes, any/any, état perdu) sur son NSG, une VM créée sur ce même
+NSG puis isolée par quarantaine, et le reset de cette VM, seul : la course n'y était pour rien.
+Le défaut est dans le produit (`_original_view`, `release.py`). Pour balayer le NSG d'origine
+d'une carte en quarantaine, le reset en comptait les cartes attachées, sans celle qui en est
+partie. Il n'en restait qu'une, celle d'`api` : le NSG passait pour dédié à la nouvelle VM, et
+les noms fixes pour les siens. La carte absente compte maintenant parmi celles de son NSG
+(`_nsg_sharing(..., away_nic=)`, `network.py`). Le NSG est lu partagé, et l'ancienne règle,
+qu'on ne peut attribuer, est dite (`swept_partial`) au lieu d'être supprimée. La carte nue
+passait par le même chemin. La levée n'était pas touchée : elle remet la carte avant de lire.
+L'oracle n'y est pour rien : le test sait, par son propre journal, à quelle VM l'ancienne
+version a laissé cette règle. Les trois cas sont figés dans les régressions (le reset, la
+course telle que trouvée, la carte nue), mutants M960–M961. Tirées une à une, les étapes ne se
+rencontraient presque jamais : sans aide, la machine n'attrapait pas M960 à 500 séquences (0/2).
+Une règle composée les enchaîne (`joins_an_old_isolation`) : une VM créée sur le NSG d'une
+ancienne isolation, la quarantaine allumée, isolée, sa carte laissée nue ou non, puis le reset
+(trois fois sur quatre) ou la levée. À 500 séquences, la machine seule attrape M961 3/3 et M960
+1/3 ; avec la séquence figée, les deux sont attrapés à chaque tour. Au même budget (60 séquences,
+deux tours), aucun mutant du chemin d'isolation n'est perdu : les écarts restent dans le bruit
+de mesure (M16 : 3/8 avant, 5/8 après ; M19 : 3/8 puis 1/8 ; ils sont aussi attrapés par leurs
+séquences figées). La relecture 5.5 l'a remesuré à 500 séquences, deux tours, sur les seize mutants
+de `release.py`, `network.py` et `sweep.py` : 6/15 attrapés à chaque tour avant comme après (8/17 avec
+M960–M961), M02 passé de FIXED-ONLY à attrapé par la machine, M26 7/8 de chaque côté sur huit tours.
+Limite connue, sans flux ouvert aujourd'hui (#239) : le cas symétrique — l'ancienne isolation est à
+une VM partie en quarantaine, la nouvelle carte reste seule attachée — fait encore prendre au reset
+les noms fixes de l'autre VM ; la quarantaine tient cette VM, mais si sa carte revenait sur son NSG
+sans Glorfindel, l'ancienne règle n'y serait plus.
 
 Le plus grave : après une levée qui échoue en partie, une seconde levée lisait les champs de
 rétro-compatibilité de l'état comme un ancien format, et supprimait les deny du NSG de

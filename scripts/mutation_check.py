@@ -1520,6 +1520,19 @@ MUTANTS += [
      '        if seen.get("config_error") != str(exc):\n', "        if True:\n"),
 ]
 
+# I4F (#235): a NIC away from its NSG (in quarantine, or bare) still counts among the NSG's —
+# or the NSG reads as another VM's alone, and the reset takes that VM's older isolation.
+MUTANTS += [
+    ("M960", "the original NSG's sharing read without the NIC away from it: an older version's "
+             "isolation of the VM still on it swept by the reset (I4F)", REL,
+     '        sharing = self._nsg_sharing(o_rg, o_name, away_nic=t0["nic_id"])\n',
+     "        sharing = self._nsg_sharing(o_rg, o_name)\n"),
+    ("M961", "a NIC away not counted among its NSG's (I4F)", NET,
+     "        if away_nic and not any(_same_id(getattr(n, \"id\", \"\") or \"\", away_nic) for n in nics):\n"
+     "            nics.append(away_nic)\n",
+     ""),
+]
+
 # MC1 — the AWS adapter, written against the simulated world (tests/unit/fake_aws.py) and
 # measured by the invariants on AWS (tests/unit/test_invariants_aws.py). Range M600–M649:
 # M600–M629 the bugs met or named while building it, M630–M649 its control set (below).
@@ -2049,6 +2062,8 @@ TESTS["M833"] = "tests/unit/test_invariant_regressions.py -k altered_quarantine 
 TESTS.update({f"M{n}": "tests/unit/test_reassert.py" for n in (835, 836, 837, 839, 895, 896, 897, 898)})
 # M838: the frozen sequence of the second review; the machine found it once in 11 runs at 500.
 TESTS["M838"] = f"{INVARIANTS} tests/unit/test_invariant_regressions.py"
+# I4F (#235): the machine met it once, at 2 000 sequences (seed 101) — its frozen sequence too.
+TESTS.update({mid: f"{INVARIANTS} tests/unit/test_invariant_regressions.py" for mid in ("M960", "M961")})
 # M834 needs a world with no state at all: rare in the drawn sequences (2/4 at 500).
 TESTS["M834"] = f"{INVARIANTS} tests/unit/test_reassert.py"
 

@@ -500,3 +500,26 @@ def test_a_quarantine_made_before_the_group_was_set_is_still_read(monkeypatch, a
          ("config_changes", {"quarantine": True, "rg": "rg-sec", "forensic": [], "readable": True}, True),
          alteration,
          ("reassert", "human_only", None))
+
+
+_BATCH = "/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/batch"
+
+
+@pytest.mark.parametrize("then", [
+    [("reset_from_azure", _BATCH, _BATCH, None)],
+    # As the machine found it (I4F, #235: 2 000 sequences, seed 101), shrunk: a release
+    # and a reset of the new VM at once.
+    [("race", _BATCH, ("release", "reset"), 0)],
+    # The NIC bare (our NSG taken off it): its original is read the same way.
+    [("someone_detaches_the_quarantine", _nic("rg-app1", "batch-nic-4")), ("reset_from_azure", _BATCH, _BATCH, None)],
+])
+def test_a_reset_never_takes_an_old_isolation_on_an_nsg_shared_since(monkeypatch, then):
+    """An older version's isolation of `api` (fixed names, any/any, state lost), then a new
+    VM attached to the same NSG and isolated by quarantine: its NIC away, the NSG governed
+    api's NIC alone — read as the new VM's own, the reset took the fixed names for its
+    isolation and deleted api's (I4). A NIC away in quarantine still counts among the
+    NSG's (I4F)."""
+    _run(monkeypatch, _net(quarantine=True, legacy=("api-nic", False), api_nic={"own": "dedicated"}),
+         ("create_vm", "northeurope", "rg-app1", "batch", _NEW_VM_ON.format(rg="rg-edge", nic="api-nic"), "Linux"),
+         ("isolate", _BATCH, _BATCH, None),
+         *then)

@@ -2313,6 +2313,45 @@ MUTANTS += [
 TESTS.update({f"M{n}": HY1_GUARD for n in (950, 951, 952)})
 TESTS.update({f"M{n}": HY1_SECRETS for n in (953, 954)})
 
+# N1 (#242): the workshop's news in Discord, scripts/notify_discord.py, measured by its tests
+# against a fake Discord (tests/unit/test_notify_discord.py). Range M970–M979.
+NOTIFY = "scripts/notify_discord.py"
+MUTANTS += [
+    ("M970", "a message without allowed_mentions: a title with @everyone pings the server (N1)", NOTIFY,
+     ('    out = {"embeds": [card], "allowed_mentions": {"parse": []}}\n',
+      '        out["allowed_mentions"]["users"] = [mention]\n'),
+     ('    out = {"embeds": [card]}\n',
+      '        out["allowed_mentions"] = {"users": [mention]}\n')),
+    ("M971", "a failed request names its URL: a webhook's token in the CI's log (N1)", NOTIFY,
+     "            raise Failure(label, e.code) from None\n",
+     '            raise Failure(f"{label} {url}", e.code) from None\n'),
+    ("M972", "a Discord failure raised to the caller: the notify job red, the hook in error (N1)", NOTIFY,
+     '                post_webhook(cfg.ci, message(n.card, silent=n.silent), "webhook #ci")\n'
+     "            except Failure as e:\n                say(e)\n",
+     '                post_webhook(cfg.ci, message(n.card, silent=n.silent), "webhook #ci")\n'
+     "            except Failure:\n                raise\n"),
+    ("M973", "a lot's detail not silent: every event of every lot notifies (N1)", NOTIFY,
+     '    if silent:\n        out["flags"] = SILENT\n', ""),
+    ("M974", "a cancelled run said red (N1)", NOTIFY,
+     'RED_CONCLUSIONS = {"failure", "timed_out", "startup_failure"}\n',
+     'RED_CONCLUSIONS = {"failure", "timed_out", "startup_failure", "cancelled"}\n'),
+    ("M975", "the run before read as this very run: main green again never said (N1)", NOTIFY,
+     '        if r.get("run_number", 0) < run.get("run_number", 0) and r.get("conclusion") in RED_CONCLUSIONS | {"success"}:\n',
+     '        if r.get("conclusion") in RED_CONCLUSIONS | {"success"}:\n'),
+    ("M976", "a new state replaces every tag: the thread loses its milestone (N1)", NOTIFY,
+     "        names, out = self.tags(), [str(x) for x in current]\n",
+     "        names, out = self.tags(), []\n"),
+    ("M977", "archived threads not searched: a closed lot gets a second thread (N1)", NOTIFY,
+     '            found += page.get("threads") or []\n', "            pass\n"),
+    ("M978", "palantir's verdict misread: a model fallback neither alerted nor reviewed (N1)", NOTIFY,
+     '    fell = scan.get("verdict") == "review-needed"\n',
+     '    fell = scan.get("verdict") == "review_needed"\n'),
+    ("M979", "every subagent's stop followed, not only elrond's: #agents rewritten for any agent (N1)", NOTIFY,
+     '    return data.get("hook_event_name") == "SubagentStop" and data.get("agent_type") in ELROND_AGENTS\n',
+     '    return data.get("hook_event_name") == "SubagentStop"\n'),
+]
+TESTS.update({f"M{n}": "tests/unit/test_notify_discord.py" for n in range(970, 980)})
+
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a

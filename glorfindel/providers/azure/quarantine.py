@@ -123,7 +123,9 @@ class QuarantineMixin:
                     try:
                         prior = self._bare_nic_original(t, default_rg)[0]
                     except Exception:
-                        prior = None
+                        # The tag unreadable (a 429): an unknown when our state holds
+                        # the NIC in quarantine — read as "none", it was written (I8F).
+                        prior = _UNKNOWN if _held_in_quarantine(t["nic_id"]) else None
                 if prior and prior is not _UNKNOWN:
                     original = prior
                 elif recorded is _UNKNOWN and prior is _UNKNOWN and _held_in_quarantine(t["nic_id"]):

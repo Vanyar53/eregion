@@ -386,6 +386,7 @@ class IsolationMachine(RuleBasedStateMachine):
         self.state_lost_at: dict[str, int] = {}             # VM → tick
         self.tags_lost_at: dict[str, int] = {}              # quarantine NSG → tick
         self.state_had: dict[str, int] = {}                 # NIC → record a state once held
+        self.quarantine_held: dict[str, int] = {}           # NIC → last tick a state held it in quarantine
         self.before_quarantine: dict[str, str | None] = {}   # NIC → what it carried
         # (NSG, rule) someone turned into an allow → (the rule before, the rule after);
         # before = None for an allow they added under one of our names.
@@ -721,19 +722,19 @@ class IsolationMachine(RuleBasedStateMachine):
             got = nsg.split("/")[4]
             assert got.lower() == want.lower(), f"I10: {what} used a quarantine NSG in {got}, not {want}"
 
-    def _isolation_recorded(self, vm: str, what: str, held: dict | None = None):
+    def _isolation_recorded(self, vm: str, what: str, released: bool = False):
         """I8: an isolation or release that returned has recorded what it left on Azure.
-        `held`: the state the operation started from. A NIC left bare whose original
-        nothing records (_untraceable) doesn't carry the rules of its own NSG, off it —
-        as for I3 (_back_to_design) and the blocks (_block_rules_for) — unless that state
-        held it in quarantine: Glorfindel knew it then, and must say what it can't undo
-        (I8F)."""
-        if held is None:
-            untied = frozenset()
-        else:
-            known = {key(p.get("nic_id") or "") for p in held.get("placements") or [] if p.get("kind") == "quarantine"}
+        After a release: a NIC left bare whose original nothing records (_untraceable)
+        doesn't carry the rules of its own NSG, off it — as for I3 (_back_to_design) and
+        the blocks (_block_rules_for) — only if the TEST lost the VM's state after the
+        last time it saw a state hold that NIC in quarantine (its journal, A0). A state
+        that still held it when the release began, or that the code dropped itself,
+        earns nothing: Glorfindel knew, and must say what it can't undo (I8F)."""
+        untied = frozenset()
+        if released:
+            lost = self.state_lost_at.get(key(vm), -1)
             untied = frozenset(key(n["id"]) for n in self._nics(vm)
-                               if key(n["id"]) not in known and self._untraceable(vm, n))
+                               if lost > self.quarantine_held.get(key(n["id"]), -1) and self._untraceable(vm, n))
         if self._footprint(vm, untied):
             assert self._state(vm) is not None, f"I8: {what} left an isolation of {vm} on Azure without state"
 
@@ -787,6 +788,7 @@ class IsolationMachine(RuleBasedStateMachine):
                 for n in (p.get("rule_in"), p.get("rule_out")) if n}
 
     def _release(self, vm, rid, fault):
+        self._check_authors()                      # which states held which NICs (I8F)
         flows, states = self._before()
         states_before_release = self._state(vm)
         self.releasing.add(vm)
@@ -805,7 +807,7 @@ class IsolationMachine(RuleBasedStateMachine):
             if out and out.get("status") == "released":
                 assert self._released(vm, own=True), f"I3: release said released, {vm} is not back to its design"
             if err is None:
-                self._isolation_recorded(vm, "release_isolation", held=states_before_release or {})
+                self._isolation_recorded(vm, "release_isolation", released=True)
         self._others_unchanged(vm, flows, states)
         return out, err
 
@@ -1516,7 +1518,8 @@ class IsolationMachine(RuleBasedStateMachine):
     def bare_with_an_unknown_original(self, data):
         """A rare state made common (I8F): an isolation by quarantine whose state and tags
         are lost, re-isolated — its NICs' original unknown (Q7); someone then leaves a NIC
-        of the VM bare, and the VM is isolated again then released, or reset.
+        of the VM bare, and the VM is isolated again (a fault drawn) then released,
+        released twice, or reset.
         Drawn one by one, these steps met once in A3's run (186 steps), in a world where
         an older version's isolation sat on the NIC's own NSG — M860 and M861 went unseen
         at 500 sequences. In a world without one, a VM nothing touched yet, its first NIC
@@ -1552,10 +1555,18 @@ class IsolationMachine(RuleBasedStateMachine):
             self.fake.nics[nic]["nsg"] = None
             self.detached.add(nic)
             self._claims_after_a_change()
-        if data.draw(st.sampled_from(["isolate+release", "reset"]), label="then") == "reset":
+        then = data.draw(st.sampled_from(["isolate+release", "release twice", "reset"]), label="then")
+        if then == "reset":
             self.reset_from_azure(_Given(vm, rid, None))
+        elif then == "release twice":
+            # A release that can't finish, then the operator's retry: what the first one
+            # kept is what the second one undoes (M862).
+            self._release(vm, rid, None)
+            self._release(vm, rid, None)
         else:
-            self._isolate(vm, rid, None)
+            # Isolated again, under a fault of its own — a single 429 reading our tag
+            # read as "none" (M863).
+            self._isolate(vm, rid, data.draw(_FAULTS, label="isolate fault"))
             self._release(vm, rid, None)
 
     @rule()
@@ -1699,6 +1710,8 @@ class IsolationMachine(RuleBasedStateMachine):
         for vm in self.live:                     # which records a state has held
             for p in (self._state(vm) or {}).get("placements") or []:
                 nk = key(p.get("nic_id") or "")
+                if p.get("kind") == "quarantine":
+                    self.quarantine_held[nk] = self.ticks
                 if p.get("original_nsg_id") and nk in self.recorded_at:
                     self.state_had[nk] = self.recorded_at[nk][0]
 

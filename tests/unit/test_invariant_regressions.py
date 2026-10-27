@@ -419,6 +419,30 @@ def test_a_bare_nic_whose_original_is_unknown_stays_unknown(monkeypatch):
          ("release", WEB1, WEB1, None))
 
 
+def test_a_bare_nic_isolated_again_under_a_429_keeps_its_original_unknown(monkeypatch):
+    """The same, a single 429 on the second isolation, as it reads our tag: the error read
+    as "none", and "none" was written — released bare, the old isolation left without
+    state (I8F, relecture)."""
+    _run(monkeypatch, _net(quarantine=True, legacy=("web-nic", False), web_nic={"own": "dedicated"}),
+         ("lose_everything", WEB1, WEB1, None, WEB1, _Q1, "reisolate"),
+         ("someone_detaches_the_quarantine", _nic("rg-app1", "web-nic")),
+         ("isolate", WEB1, WEB1, (5, "before-429")),
+         ("release", WEB1, WEB1, None))
+
+
+def test_a_failed_release_keeps_the_placement_it_couldnt_undo(monkeypatch):
+    """Original unknown, the NIC left bare: the first release can't put an NSG back and
+    keeps the placement. A release that dropped it (M862) wrote a state without the NIC —
+    the second said `released`, the old isolation left without state. The oracle's
+    exemption for a bare NIC must not reward that: it is the test's journal that says
+    the state was lost, not the state the code left (A0, I8F relecture)."""
+    _run(monkeypatch, _net(quarantine=True, legacy=("web-nic", False), web_nic={"own": "dedicated"}),
+         ("lose_everything", WEB1, WEB1, None, WEB1, _Q1, "reisolate"),
+         ("someone_detaches_the_quarantine", _nic("rg-app1", "web-nic")),
+         ("release", WEB1, WEB1, None),
+         ("release", WEB1, WEB1, None))
+
+
 def test_a_reset_doesnt_skip_a_bare_nic_whose_original_is_unknown(monkeypatch):
     """The same, a reset in place of the second isolation: the bare NIC, in quarantine for
     the state but its original unknown there and on no tag, was skipped — `swept`, the

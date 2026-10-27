@@ -34,6 +34,8 @@ def _held_in_quarantine(nic_id: str) -> bool:
     Not known there (lost with the tags, Q7), it is an unknown: never "none" (I8F)."""
     return any(p.get("kind") == "quarantine" and _same_id(p.get("nic_id", ""), nic_id)
                for iso in active_isolations() for p in iso.get("placements") or [])
+
+
 _BLOCK_STATE_DIR = Path.home() / ".glorfindel" / "blocks"
 
 

@@ -1464,6 +1464,17 @@ MUTANTS += [
      '                if recorded is _UNKNOWN and _held_in_quarantine(t0["nic_id"]):\n'
      "                    # In quarantine for our state",
      "                if False:\n                    # In quarantine for our state"),
+    ("M862", "a release drops the placement whose original is unknown: the next says released, "
+             "an old isolation left without state (I8F, relecture)", REL,
+     '                                          f"non détaché : {_first_line(exc)[:_ERR_MAX]}")\n'
+     "                            remaining.append(p)\n",
+     '                                          f"non détaché : {_first_line(exc)[:_ERR_MAX]}")\n'
+     '                            if type(exc).__name__ != "OriginalUnknown":\n'
+     "                                remaining.append(p)\n"),
+    ("M863", "an unreadable tag on a bare NIC reads as 'none': a 429 writes it over an unknown "
+             "original (I8F, relecture)", QUA,
+     '                        prior = _UNKNOWN if _held_in_quarantine(t["nic_id"]) else None\n',
+     "                        prior = None\n"),
 ]
 
 # MC1 — the AWS adapter, written against the simulated world (tests/unit/fake_aws.py) and

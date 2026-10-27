@@ -130,8 +130,16 @@ export AZURE_SUBSCRIPTION_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 # export GLORFINDEL_DECISION_DRAWS=3
 
 # Journal d'activité (AL1) : les écritures de Glorfindel lui-même (isolation, quarantaine,
-# blocage) n'y sont pas escaladées. Son identité est lue dans son jeton et AZURE_CLIENT_ID ;
-# en ajouter d'autres (objet ou application d'un principal de service), séparées par des virgules.
+# blocage) n'y sont pas escaladées — son identité, une opération qu'il fait, sur une cible
+# qui est à lui (règle glorfindel-*, NSG de quarantaine, ce qu'un état d'isolation lui
+# attribue). Son identité est lue dans son jeton et AZURE_CLIENT_ID ; en ajouter d'autres
+# (objet ou application d'un principal de service), séparées par des virgules.
+# Sous `az login` (jeton d'utilisateur), seul l'oid de l'utilisateur compte (l'appid est
+# celui de la CLI, commun au tenant) : les écritures de cet utilisateur sur les règles de
+# Glorfindel sont écartées comme les siennes — sur un hôte, une identité à lui.
+# Option A (un seul SP pour Annatar et Glorfindel) : les écritures d'Annatar sur les
+# ressources de Glorfindel (ses règles, ses NSG de quarantaine) seraient écartées comme
+# les siennes — l'option B (SP séparés) les garde visibles.
 # export GLORFINDEL_OWN_CALLERS=
 
 # Rétention discovery — une VM éteinte (absente du Heartbeat) reste visible dans le

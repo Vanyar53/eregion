@@ -1453,6 +1453,67 @@ MUTANTS = [
      "    for name in (TOKEN, LEGACY_TOKEN):\n", "    for name in (TOKEN,):\n"),
 ]
 
+# I1F (#226): our quarantine NSG altered while its NICs' state is lost — read, and said.
+MUTANTS += [
+    ("M830", "the reassertion doesn't read the quarantine NSGs: one altered, its NICs' state lost, "
+             "goes unsaid (I1F, L2)", R,
+     "    _report_altered_quarantines(connector, report)\n    return report\n\n\ndef reassert_pass(",
+     "    return report\n\n\ndef reassert_pass("),
+    ("M831", "a rule's signature leaves its protocol out: our quarantine deny turned to Udp reads as "
+             "ours (I1F)", NSG,
+     '            getattr(rule, "priority", None), _enum_text(getattr(rule, "protocol", "")),\n',
+     '            getattr(rule, "priority", None),\n'),
+    ("M832", "the quarantine denies are written for UDP only: TCP from the VNet reaches a VM "
+             "in quarantine (I1F)", QUA,
+     '                protocol="*", source_address_prefix="*", destination_address_prefix="*",\n',
+     '                protocol="Udp", source_address_prefix="*", destination_address_prefix="*",\n'),
+    ("M833", "the altered quarantine's card is closed at the next pass, its change standing (I1F)", R,
+     "        if k in altered and altered[k][0] == sid:\n            said.add(sid)\n"
+     "        elif k in altered or settled(k):\n",
+     "        if k in altered or settled(k):\n"),
+    # After the review (5.5): the watch's pass, an acknowledgement, an unknown.
+    ("M834", "nothing recorded: the pass reads no quarantine NSG (I1F, review)", R,
+     "    report: list[dict] = []\n    _report_altered_quarantines(connector, report)\n    return report\n",
+     "    return []\n"),
+    ("M836", "an acknowledged quarantine card comes back at every pass (I1F, review)", R,
+     "        if signal_id in said or alerts.get(k) == signal_id:\n",
+     "        if signal_id in said:\n"),
+    ("M837", "a quarantine card closed on an NSG read as unknown (I1F, review)", R,
+     '            return seen[k].get("status") != "unknown" and k not in altered\n',
+     "            return k not in altered\n"),
+    ("M835", "the watch's thread hands over only when something is recorded (I1F, review)", GCLI,
+     "        _watch_reassert_pass(ttl_connector, mode_override, _output_lock, _reassert_seen)\n",
+     "        from glorfindel.actions import active_blocks, active_isolations\n"
+     "        if active_isolations() or active_blocks():\n"
+     "            _watch_reassert_pass(ttl_connector, mode_override, _output_lock, _reassert_seen)\n"),
+    ("M838", "the quarantine NSGs read in `quarantine_rg` only: one made in another group goes unseen "
+             "(I1F, second review)", QUA,
+     "            if (not _is_quarantine_nsg(nsg_id)\n",
+     "            if (not _is_quarantine_nsg(nsg_id) or (self._quarantine_settings()[1] and "
+     "f\"/resourcegroups/{self._quarantine_settings()[1].lower()}/\" not in nsg_id.lower())\n"),
+    ("M839", "the watch's pass stops on an empty local state (I1F, second review)", GCLI,
+     "    seen = seen if seen is not None else {}\n",
+     "    seen = seen if seen is not None else {}\n"
+     "    from glorfindel.actions import active_blocks, active_isolations\n"
+     "    if not active_isolations() and not active_blocks():\n        return []\n"),
+    ("M895", "the watch's pass raises on an empty local state, the error swallowed (I1F, second review)", GCLI,
+     "        report = reassert_pass(connector, autonomy)\n",
+     "        from glorfindel.actions import active_blocks, active_isolations\n"
+     "        if not active_isolations() and not active_blocks():\n"
+     "            raise RuntimeError(\"nothing recorded\")\n"
+     "        report = reassert_pass(connector, autonomy)\n"),
+    ("M896", "the watch's timer starts no pass when nothing is recorded (I1F, second review)", GCLI,
+     "        if time.time() - _last_reassert[0] < _reassert_every_s:\n            return\n",
+     "        if time.time() - _last_reassert[0] < _reassert_every_s:\n            return\n"
+     "        from glorfindel.actions import active_blocks, active_isolations\n        if not active_isolations() and not active_blocks():\n"
+     "            return\n"),
+    ("M897", "a listing that fails reads as empty: every quarantine card closed (I1F, second review)", R,
+     '        log.warning("reassert: quarantine NSGs not checked (%s)", exc)\n        return\n',
+     '        log.warning("reassert: quarantine NSGs not checked (%s)", exc)\n        listing = []\n'),
+    ("M898", "an unreadable configuration said at every pass (I1F, second review)", GCLI,
+     '        if seen.get("config_error") != str(exc):\n', "        if True:\n"),
+]
+
 # MC1 — the AWS adapter, written against the simulated world (tests/unit/fake_aws.py) and
 # measured by the invariants on AWS (tests/unit/test_invariants_aws.py). Range M600–M649:
 # M600–M629 the bugs met or named while building it, M630–M649 its control set (below).
@@ -1631,6 +1692,14 @@ TESTS["M403"] = "tests/unit/test_console_exercises.py"
 TESTS.update({f"M{n}": "tests/unit/test_watch_gate.py" for n in (*range(720, 740), *range(750, 760))})
 TESTS.update({f"M{n}": "tests/unit/test_gothmog.py" for n in (724, 725, 726, 727)})
 TESTS.update({f"M{n}": "tests/unit/test_host_console.py" for n in range(740, 750)})  # UI-1c
+# I1F (#226): M830–M832 by the machine (their frozen sequences catch them too); M833 is no
+# property of the world (a card closed too soon), its regression and unit tests only.
+TESTS["M833"] = "tests/unit/test_invariant_regressions.py -k altered_quarantine tests/unit/test_reassert.py"
+TESTS.update({f"M{n}": "tests/unit/test_reassert.py" for n in (835, 836, 837, 839, 895, 896, 897, 898)})
+# M838: the frozen sequence of the second review; the machine found it once in 11 runs at 500.
+TESTS["M838"] = f"{INVARIANTS} tests/unit/test_invariant_regressions.py"
+# M834 needs a world with no state at all: rare in the drawn sequences (2/4 at 500).
+TESTS["M834"] = f"{INVARIANTS} tests/unit/test_reassert.py"
 
 # D1 (#81): each component runs alone (scripts/component_check.py), and every usage profile
 # keeps Glorfindel (docker-compose.yml, the Makefile's profile and team targets).

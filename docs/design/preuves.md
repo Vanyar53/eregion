@@ -332,6 +332,101 @@ Quatorze mutants pour ce qu'A1 et MC0 ajoutent (M460–M463 après la relecture)
 | M462 | une dette du socle partagé déclarée adaptateur | la frontière ne la voit plus |
 | M463 | suppression à travers la façade ignorée en silence | `mock.patch` laisse sa valeur dans tous les modules |
 
+### Le monde simulé AWS (MC1)
+
+Les invariants tournent aussi sur un faux AWS (`tests/unit/fake_aws.py`), avec l'adaptateur AWS
+écrit contre lui (`glorfindel/providers/aws/`) : `tests/unit/test_invariants_aws.py`, la même
+machine, le même harnais (pannes, deux opérations à la fois avec les vrais verrous, journal par
+auteur), les mêmes réglages `GLORFINDEL_INVARIANT_*` ; en CI, à 500 séquences avec le reste. Code
+seul : aucun appel AWS, aucun compte. **La sémantique d'AWS du faux monde est faite d'hypothèses
+tirées de la documentation, toutes à mesurer sur le banc AWS (MC2)** : leur liste (H1–H14), ce
+qu'isoler, bloquer et lever veulent dire sur AWS et la transposition de chaque invariant sont dans
+[`monde-aws.md`](monde-aws.md). I1–I12 et L1 tiennent, transposés là où AWS diffère (I4 : tout
+blocage est à l'échelle de l'ACL : tous les sous-réseaux qui lui sont associés, souvent tout le VPC pour l'ACL par défaut, et le blocage d'une autre instance tient ; I10 : pas de repli par
+règles ; I12 : compte et région) ; U1 n'a pas d'équivalent.
+
+Ce que la machine AWS a trouvé dans l'adaptateur en se construisant, avant toute revue :
+
+| Défaut | Effet avant correction |
+|---|---|
+| un blocage réutilisait les entrées d'un autre, qu'une autorisation ajoutée depuis par le client précède | « bloqué », l'instance joignait l'attaquant sur ses ports hauts |
+| le blocage n'était pas relu | idem, dès qu'une entrée posée passe après une autorisation |
+| une ENI laissée sur `default`, un de ses groupes d'origine supprimé | la levée retentait l'origine de l'état, jamais le tag que l'opérateur pose |
+
+Mesuré le 26/10 au budget du lundi (1 000 séquences, 2 tours). Dix-huit mutants, M600–M617 :
+les défauts trouvés, et ceux que la note de conception ou l'histoire d'Azure nomment. M600, M601,
+M602, M608, M612 et M614, rares dans les séquences tirées (M600 trouvé à 5 000), sont aussi mesurés
+par leur cas écrit à la main (`tests/unit/test_aws_adapter.py`) ; M617, une fausse alerte sans
+fausse affirmation, par lui seul.
+
+| Mutant | Défaut réinjecté | Attrapé |
+|---|---|---|
+| M600 | un blocage réutilise une entrée qu'une autorisation du client précède | à chaque tour |
+| M601 | le blocage n'est pas relu | à chaque tour |
+| M602 | ENI sur `default`, groupe d'origine supprimé : l'origine de l'état, jamais le tag | à chaque tour |
+| M603 | quarantaine éteinte ignorée : écritures sans repli (I10) | à chaque tour |
+| M604 | DNS et IMDS d'Amazon non déclarés par l'isolation (H6) | à chaque tour |
+| M605 | une ENI laissée sur `default` ne retrouve pas son origine (U2) | à chaque tour |
+| M606 | ré-isoler une ENI laissée sur `default` note `default` comme origine (U2) | un tour sur deux |
+| M607 | ENI déjà en quarantaine : ce qu'elle porte lu comme son origine (S1) | à chaque tour |
+| M608 | une autorisation ajoutée au groupe de quarantaine y reste | à chaque tour |
+| M609 | une vérification qui ne lit pas une ENI dit « isolée » | à chaque tour |
+| M610 | l'isolation n'est pas notée (I8) | à chaque tour |
+| M611 | une levée en échec efface l'état (I8) | à chaque tour |
+| M612 | pas de verrou par ACL : un déblocage retire les entrées qu'un blocage voisin réutilise | à chaque tour |
+| M613 | verrou de l'instance inopérant (le M17 d'AWS) | un tour sur deux |
+| M614 | une entrée lue comme de Glorfindel quelle que soit l'adresse qu'elle refuse | à chaque tour |
+| M615 | un déblocage garde le blocage noté | à chaque tour |
+| M616 | `verify_isolation` se porte garant d'une instance d'un autre compte (I12) | à chaque tour |
+| M617 | isolation vérifiée sur les ENI lues avant l'échange | à chaque tour |
+
+La relecture de MC1 a trouvé quatre trous, corrigés : un blocage annonçait le sous-réseau de
+l'instance alors qu'une ACL en sert souvent plusieurs (celle par défaut d'un VPC sert tous les
+sous-réseaux qu'on n'a pas associés ailleurs) ; un groupe de quarantaine privé de son tag
+`managed-by` laissait la levée dire `released`, état effacé, l'ENI encore dedans ; la garde de compte
+et de région s'ouvrait quand l'adaptateur n'en avait pas ; une instance sans interface était dite
+isolée. Six mutants de plus, M618–M623, mesurés par leurs cas de `tests/unit/test_aws_adapter.py` :
+
+| Mutant | Défaut réinjecté |
+|---|---|
+| M618 | un blocage ne nomme que les sous-réseaux de l'instance, pas tous ceux de son ACL |
+| M619 | une ENI qui porte un groupe nommé comme la quarantaine, que rien ne note, dite levée |
+| M620 | garde ouverte sans compte ni région configurés (I12) |
+| M621 | une instance sans interface dite isolée |
+| M622 | le groupe de quarantaine noté dans l'état ignoré une fois son tag perdu |
+| M623 | `verify_release` aveugle à un groupe nommé comme la quarantaine |
+
+**Le jeu de contrôle sur AWS.** Seize bugs plausibles de l'adaptateur, M630–M645, écrits et commités
+avant la machine AWS (dans le même commit que l'adaptateur) et jamais utilisés pour l'orienter, dans la
+discipline de C01–C16 (`--control`). Au budget du lundi, **AWS 9 à 10 sur 16, Azure 9 à 11 sur 16,
+selon le tirage** : 10 sur 16 sur la machine finale (M631 un tour sur deux), 9 sur 16 à la relecture
+(M638 survit, M630 un tour sur deux, M631 attrapé) ; Azure 11 puis 10 sur 16 sur la base, 9 sur 16 sur
+la branche à la relecture, code identique. M630, M631 et M638 sont au bord du tirage. Les survivants
+constants, ce qu'il manque pour les voir — non ajouté, pour ne pas orienter la génération sur eux :
+
+| Mutant | Défaut | Ce que la machine ne joue pas |
+|---|---|---|
+| M633 | les groupes d'une ENI écrits sans vérifier ce qu'elle porte | quelqu'un qui change l'ENI entre la lecture de Glorfindel et son écriture |
+| M636 | une entrée numérotée sans regarder les autorisations du client | rien de faux n'est dit : la relecture (M601) dit `partial` ; aucune propriété n'exige qu'un blocage possible soit posé |
+| M640 | un blocage vérifié sans les entrées qui le précèdent | une autorisation du client glissée devant sur un port que les sondes regardent |
+| M641 | une ENI qui porte la quarantaine parmi d'autres groupes, lue isolée | quelqu'un qui ajoute un groupe à une ENI en quarantaine |
+| M644 | un groupe au nom de la quarantaine, sans son tag, adopté | un groupe du client qui porte ce nom (un test unitaire le couvre) |
+
+**Azure inchangé.** Aucun fichier d'Azure n'a bougé (seule la docstring de
+`glorfindel/providers/__init__.py`). Mesuré au même budget, avant (`18df2d6`) et après :
+
+| | Avant | Après |
+|---|---|---|
+| Suite complète | 1 654 | 1 680 (+ 26 tests de MC1) |
+| Invariants Azure à 500 séquences, rejeu, verrous | verts (31) | verts (31) |
+| Harnais, mutants d'Azure attrapés à chaque tour | 297 sur 311 | 299 sur 311 |
+| Jeu de contrôle d'Azure | 11 sur 16 (10 à la relecture) | 10 sur 16 (C05 ; 9 à la relecture) |
+
+Les écarts sont ceux du tirage : M34 passe de « attrapé » à « un tour sur deux », M21, M36, M41
+l'inverse ; C05 survit à 2 tours. Remesurés à 4 tours sur le code d'après, C05 et M34 sont attrapés
+3 fois sur 4, M21 4 fois sur 4, M36 jamais (il était « un tour sur deux » avant) : des mutants au bord
+du tirage, comme A1 l'avait noté pour M22–M39.
+
 ### Ce qui a changé depuis la campagne précédente (D-2)
 
 Le rapport de campagne se compare à la campagne précédente. Le code la choisit par une règle :
@@ -636,3 +731,5 @@ Une séquence trouvée la nuit est rejouée en premier à chaque push jusqu'à s
   routes, pare-feu. Elles peuvent contourner une isolation et ne sont pas encore lues.
 - **Hypothèses du faux Azure** non mesurées : le code d'erreur d'un NSG d'une autre région,
   le refus de supprimer un NSG attaché, Run Command shell refusé sous Windows.
+- **Le monde simulé AWS** (MC1) : rien n'y est mesuré. Ses seize hypothèses attendent le banc AWS
+  (MC2), et la cohérence à terme des lectures d'EC2 n'est pas modélisée ([`monde-aws.md`](monde-aws.md)).

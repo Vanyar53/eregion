@@ -138,7 +138,7 @@ def sync_forum(forum: nd.Forum, lots: list[Lot], dry: bool = False) -> tuple[lis
         if not lot.open:
             if t and not (t.get("thread_metadata") or {}).get("archived"):
                 tags = forum.apply(t.get("applied_tags") or [], want, lot.milestone)
-                if tags != [str(x) for x in t.get("applied_tags") or []]:
+                if not nd.same_tags(tags, t.get("applied_tags") or []):
                     write(f"{lot.key} → fait", "PATCH", f"/channels/{t['id']}", {"applied_tags": tags})
                 write(f"{lot.key} archivé", "PATCH", f"/channels/{t['id']}", {"archived": True})
             continue
@@ -151,7 +151,7 @@ def sync_forum(forum: nd.Forum, lots: list[Lot], dry: bool = False) -> tuple[lis
             continue
         change = {}
         tags = forum.apply(t.get("applied_tags") or [], want, lot.milestone)
-        if tags != [str(x) for x in t.get("applied_tags") or []]:
+        if not nd.same_tags(tags, t.get("applied_tags") or []):
             change["applied_tags"] = tags
         if (t.get("thread_metadata") or {}).get("archived"):
             change["archived"] = False

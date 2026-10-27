@@ -13,7 +13,9 @@ from urllib.parse import parse_qs, urlsplit
 # The forum's tags, as set up in Discord (docs/atelier-discord.md).
 TAG_NAMES = ("à faire", "en cours", "en relecture", "en correction", "fait", "bloqué",
              "v0.3", "v0.x", "v1.0", "v1.x")
-TAGS = [{"id": f"t{i}", "name": n} for i, n in enumerate(TAG_NAMES)]
+# Ids as if the milestones were created first: Discord gives a thread's tags back sorted by id,
+# so not in the order they were sent (state, then milestone) — as the real forum did on 27/10.
+TAGS = [{"id": f"t{(i + 4) % 10}", "name": n} for i, n in enumerate(TAG_NAMES)]
 TAG = {t["name"]: t["id"] for t in TAGS}
 BOT_ID = "BOT"
 
@@ -59,7 +61,7 @@ class FakeDiscord:
         return str(self.next_id)
 
     def thread(self, name, tags=(), archived=False):
-        t = {"id": self._id(), "name": name, "parent_id": "FORUM", "applied_tags": list(tags),
+        t = {"id": self._id(), "name": name, "parent_id": "FORUM", "applied_tags": sorted(tags),
              "thread_metadata": {"archived": archived, "archive_timestamp": "2026-10-01T00:00:00+00:00"},
              "posts": []}
         self.threads.append(t)
@@ -119,9 +121,10 @@ class FakeDiscord:
                     t["posts"].append(body)
                     return 200, {"id": self._id()}, {}
                 if method == "PATCH":
-                    for k in ("applied_tags", "name"):
-                        if k in body:
-                            t[k] = body[k]
+                    if "applied_tags" in body:
+                        t["applied_tags"] = sorted(body["applied_tags"])
+                    if "name" in body:
+                        t["name"] = body["name"]
                     if "archived" in body:
                         t["thread_metadata"]["archived"] = body["archived"]
                     return 200, t, {}

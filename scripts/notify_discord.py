@@ -182,6 +182,11 @@ def thread_name(lot: str, issue: str, title: str) -> str:
     return _cut(head, 100 - len(tail)) + tail
 
 
+def same_tags(a: list, b: list) -> bool:
+    """Discord gives a thread's tags back in its own order: compared as a set, never in order."""
+    return sorted(map(str, a)) == sorted(map(str, b))
+
+
 def match_thread(threads: list[dict], lot: str = "", issue: str = "") -> dict | None:
     """The issue's own thread first; else the lot's, unless that one names another issue."""
     if issue:
@@ -255,7 +260,7 @@ class Forum:
         else:
             change = {}
             tags = self.apply(t.get("applied_tags") or [], n.state, n.milestone)
-            if tags != [str(x) for x in t.get("applied_tags") or []]:
+            if not same_tags(tags, t.get("applied_tags") or []):
                 change["applied_tags"] = tags
             if (t.get("thread_metadata") or {}).get("archived"):
                 change["archived"] = False

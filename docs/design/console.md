@@ -22,6 +22,8 @@ tourne.
 | Verdict | **seulement dans TO JUDGE**. La carte de la VM garde Approve & execute, Ack et Cmd, et un lien « to judge ▸ » | aux deux endroits |
 | Heure | **UTC partout**, avec la mention « UTC » | heure locale ; les deux |
 | Lots | **UI-1** : le socle, les sections modulaires et les corrections de doublons. **UI-2** : les cinq indicateurs. **Un lot Annatar et Gothmog** pour la vérification avant d'agir | un seul lot ; trois lots UI |
+| Carte sur un NSG (#248) | **une tuile NSG**, dans la rangée des VM : son nom, son groupe de ressources, ses cartes ; ni mode, ni sauvegarde, ni Snapshot | sous le nœud PROTECT ; garder la tuile de VM |
+| Ce que Glorfindel a fait seul (#248) | **une ligne verte sur la tuile, 24 h** : la note d'une carte qu'il a résolue lui-même (A3 : règle orpheline retirée) | dans le fil en direct ; rien dans la console |
 
 **Choisi par défaut, sans objection :**
 - `/atelier` redirige vers `/`.
@@ -203,6 +205,34 @@ latence, Annatar l'a mesurée sur ce même enregistrement.
 **Plus loin** : la matrice de C1 trouvera sa place dans Annatar et dans Gothmog, avec son résumé sur
 l'accueil.
 
+### Les cartes (#248)
+
+Après I1F, AL1, C2 et A3 (27/10) :
+- **Chaque type de carte a un libellé** (`ESC_LABELS`) et, s'il n'est pas lié à une action, un titre
+  (`_ESC_TITLES`) : `quarantine_altered`, `control_plane_change`, `identity_change`, `posture_gap`.
+  Un test le vérifie contre `escalations._ESCALATION_LABELS`.
+- **Une carte ancrée** (`control_plane_change`, `identity_change`, `unattributed_signal`, les
+  `_ANCHORED_TYPES` du bot) porte sur une VM que la détection ne nomme pas. Elle n'a ni « 🔄 Restore »
+  ni commande visant cette VM (seulement `glorfindel ack`), et la console dit « ⚓ filed on …, not about
+  it ».
+- **Détection seule** (AL1, C2) : la décision vient du code, sans action ni confiance. La carte et
+  TO JUDGE donnent son titre, sa règle et sa sévérité (`critical` en rouge) ; le fil dit « escalate →
+  control plane » (`held_by` de la ligne de debug).
+- **TO JUDGE laisse de côté** les cartes qui ne sont pas des décisions, comme Glorfindel
+  (`escalations._NOT_DECISIONS`, quarantaine modifiée comprise).
+- **Une tuile NSG** pour une carte dont la ressource est un NSG ; seul PROTECT la relie, et elle ne
+  compte pas parmi les VM « unprotected » de RECOVER.
+- **`/api/state` donne `handled`** : les cartes résolues avec une note dans les dernières 24 h. Une carte
+  qu'un humain acquitte n'a pas de note et n'y figure pas.
+
+**Mutants M570–M575** (`tests/unit/test_console.py`) :
+- M570 : un type sans libellé.
+- M571 : une carte du plan de contrôle retrouve Restore.
+- M572 : la quarantaine modifiée demande un verdict.
+- M573 : le fil perd `held_by`.
+- M574 : une résolution reste sur la tuile au-delà de 24 h.
+- M575 : un acquittement passe pour un geste de Glorfindel.
+
 ## 4. Maquettes
 
 Les valeurs sont illustratives. L'onglet actif est entre crochets, l'onglet grisé entre `░`.
@@ -349,6 +379,8 @@ EXERCISES · 11          windows [7 days ▾] │ CAMPAIGNS · 1    [30 days ▾
 | UI-1c : le déploiement, `CLAUDE.md`, la feuille de route | General | 0,5 |
 | La vérification avant d'agir | Annatar, Gothmog | 1 à 1,5 |
 | UI-2 (#206) : les cinq indicateurs | War Room, avec General et Glorfindel pour les définitions | 2 à 3 |
+| Finitions (#222) : CSP, README, textes, `--version` | Console | 0,5 |
+| Les cartes (#248) : I1F, AL1, C2, A3 | Console | 0,5 |
 | UI-1d, optionnel | General et Jonathan | 0,25 |
 
 - UI-1 se déploie seul : sur H0, la détection voit tous les composants, et l'alias du jeton suffit.

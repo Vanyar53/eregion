@@ -351,3 +351,75 @@ def test_glorfindel_war_room_is_still_the_console(monkeypatch):
     assert r.exit_code == 0, r.output
     assert served == [("127.0.0.1", 7007)]
     assert "war-room" not in CliRunner().invoke(gcli, ["--help"]).output
+
+
+# ── The cards of I1F, AL1, C2 and A3 (#248) ───────────────────────────────────────────
+
+def _glorfindel_page() -> str:
+    from pathlib import Path
+    return (Path(api.__file__).parent / "static" / "glorfindel.html").read_text()
+
+
+def _js_set(name: str) -> set[str]:
+    import re
+    m = re.search(rf"const {name} = new Set\(\[(.*?)\]\);", _glorfindel_page(), re.S)
+    assert m, name
+    return set(re.findall(r"'([a-z_]+)'", m.group(1)))
+
+
+def test_every_card_type_has_a_label_in_the_console():
+    """A new type showed under its raw name (quarantine_altered, control_plane_change…)."""
+    import re
+    from glorfindel import escalations
+    block = re.search(r"const ESC_LABELS = \{(.*?)\n\};", _glorfindel_page(), re.S).group(1)
+    labelled = set(re.findall(r"^\s*([a-z_]+)\s*:", block, re.M))
+    assert set(escalations._ESCALATION_LABELS) <= labelled, set(escalations._ESCALATION_LABELS) - labelled
+
+
+def test_the_console_anchors_the_cards_glorfindel_anchors():
+    """No Restore, no command aimed at a VM the detection does not name (AL1, C2): the same
+    types as the bot's. Read from bot.py's source — it imports discord."""
+    import ast
+    from pathlib import Path
+    import glorfindel
+    tree = ast.parse((Path(glorfindel.__file__).parent / "bot.py").read_text())
+    bot = next(ast.literal_eval(n.value) for n in ast.walk(tree) if isinstance(n, ast.Assign)
+               and any(getattr(t, "id", "") == "_ANCHORED_TYPES" for t in n.targets))
+    assert _js_set("_ANCHORED_TYPES") == bot
+
+
+def test_the_console_leaves_out_of_to_judge_what_glorfindel_does():
+    from glorfindel import escalations
+    assert _js_set("_NOT_DECISIONS") == escalations._NOT_DECISIONS
+
+
+def test_the_feed_says_what_held_a_decision_without_action():
+    entry = api._parse({"action": "", "escalate": True, "held_by": "control_plane",
+                        "signal": {"ttp": "T1562.007", "resource_id": "/x/vm-a"}}, "action")
+    assert entry["held_by"] == "control_plane" and entry["action"] == ""
+
+
+def _resolved(store, rid, note, hours_ago):
+    from glorfindel import escalations
+    eid = escalations.record("s-" + note[:6], rid, "remove_orphan_rule", "orphan_rule", "r")
+    escalations.resolve(eid, note=note)
+    lines = [json.loads(x) for x in store.read_text().splitlines() if x.strip()]
+    for e in lines:
+        if e["id"] == eid:
+            e["resolved_at"] = (NOW - timedelta(hours=hours_ago)).isoformat()
+    store.write_text("\n".join(json.dumps(e) for e in lines) + "\n")
+    return eid
+
+
+def test_what_glorfindel_closed_with_a_note_shows_for_a_day(client):
+    """A3: an orphan rule taken off alone leaves its card resolved, with a note — no open
+    card says it. Shown a day; a card closed without a note (a human's ack) never."""
+    from glorfindel import escalations
+    vm = "/subscriptions/s/resourcegroups/rg/providers/microsoft.compute/virtualmachines/vm-a"
+    recent = _resolved(escalations._STORE, vm, "Règle glorfindel-block-x retirée par Glorfindel (A3).", 3)
+    _resolved(escalations._STORE, vm, "Règle glorfindel-block-y retirée par Glorfindel (A3).", 25)
+    acked = escalations.record("s-ack", vm, "isolate_vm", "mode_hold", "r")
+    escalations.resolve(acked)
+    handled = client.get("/api/state").json()["handled"]
+    assert [h["id"] for h in handled] == [recent]
+    assert handled[0]["resolution"].startswith("Règle glorfindel-block-x")

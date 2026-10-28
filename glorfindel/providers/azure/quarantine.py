@@ -247,8 +247,12 @@ class QuarantineMixin:
     def _unquarantine(self, nic_id: str, q: dict, original: str | None) -> None:
         """Put the NIC's own NSG back (or none), only if it still carries OURS, then read
         the NIC back: release is done when the ORIGINAL is on it, not when ours is gone
-        (verify_release only checks the latter)."""
-        if self._set_nic_nsg(nic_id, original, expect=q["nsg_id"]):
+        (verify_release only checks the latter). An original gone says how to get out."""
+        try:
+            changed = self._set_nic_nsg(nic_id, original, expect=q["nsg_id"])
+        except Exception as exc:
+            raise self._original_gone(q, nic_id, original, exc)
+        if changed:
             now = self._nic_nsg_id(nic_id)
             if not _same_id(now or "", original or ""):
                 raise RuntimeError(

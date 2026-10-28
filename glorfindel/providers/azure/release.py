@@ -97,6 +97,30 @@ class ReleaseMixin:
                 return None
             raise
 
+    def _original_gone(self, q: dict | None, nic_id: str, original: str | None, exc: Exception) -> Exception:
+        """The error of a NIC whose original NSG couldn't be put back — and, when that NSG
+        no longer exists (read again by its id: a 404 only), how to get out (ISU, #264):
+        recreate it, or, when our tag on `q` names it and no state does, set the tag to
+        "none" (the state's original wins over the tag). The NIC stays as it is; it used to
+        say only that the NSG wasn't found."""
+        if not original:
+            return exc
+        try:
+            self._network.network_security_groups.get(*_parse_nsg_resource_id(original))
+            return exc
+        except Exception as read:
+            if not _is_not_found(read):
+                return exc
+        recorded = _recorded_original(nic_id)
+        tag = "" if not q or (isinstance(recorded, str) and _same_id(recorded, original)) else (
+            f", ou poser le tag {self._orig_tag(nic_id)}={self._NO_ORIGINAL} sur {q['nsg_name']} "
+            "pour qu'elle reste sans NSG")
+        return RuntimeError(
+            f"le NSG d'origine {'/'.join(_parse_nsg_resource_id(original))} de "
+            f"{nic_id.rstrip('/').rsplit('/', 1)[-1]} n'existe plus, la carte reste comme elle est : le "
+            f"recréer (même groupe, même nom){tag}, ou poser à la main sur la carte le NSG qu'elle doit "
+            "porter, puis relancer")
+
     def release_isolation(self, resource_id: str) -> dict:
         """Remove every isolation rule of the VM and restore bumped customer rules.
 
@@ -154,7 +178,10 @@ class ReleaseMixin:
                             # verify_release agreed (seventh review, U2). Put the
                             # original back; the tag goes only once it is on.
                             if original:
-                                self._set_nic_nsg(p["nic_id"], original, expect=None)
+                                try:
+                                    self._set_nic_nsg(p["nic_id"], original, expect=None)
+                                except Exception as exc:
+                                    raise self._original_gone(p, p["nic_id"], original, exc)
                                 back = self._nic_nsg_id(p["nic_id"])
                                 if not _same_id(back or "", original):
                                     raise RuntimeError(
@@ -261,7 +288,10 @@ class ReleaseMixin:
                     original, q_bare = self._bare_nic_original(t0, rg)
                     if q_bare is not None:
                         if original:
-                            self._set_nic_nsg(t0["nic_id"], original)
+                            try:
+                                self._set_nic_nsg(t0["nic_id"], original)
+                            except Exception as exc:
+                                raise self._original_gone(q_bare, t0["nic_id"], original, exc)
                             if not _same_id(self._nic_nsg_id(t0["nic_id"]) or "", original):
                                 raise RuntimeError("NSG d'origine non remis (carte sans NSG)")
                             restored = True

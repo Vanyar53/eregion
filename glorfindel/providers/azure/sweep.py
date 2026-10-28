@@ -197,7 +197,10 @@ class SweepMixin:
                 continue
             try:
                 if original:
-                    self._set_nic_nsg(t0["nic_id"], original)
+                    try:
+                        self._set_nic_nsg(t0["nic_id"], original)
+                    except Exception as exc:
+                        raise self._original_gone(q_bare, t0["nic_id"], original, exc)
                     if not _same_id(self._nic_nsg_id(t0["nic_id"]) or "", original):
                         raise RuntimeError("NSG d'origine non remis")
                 if q_bare is not None:
@@ -239,6 +242,15 @@ class SweepMixin:
             return []
         self._ensure_clients()
         return list(self._network.network_security_groups.list_all())
+
+    def outside_subscription(self, resource_id: str) -> str | None:
+        """The subscription of `resource_id` when it isn't the one the clients run in
+        ("?" when the id names none), None when it is: the reassertion asks before reading
+        a card's NSG again, and says such a card once, not at every pass (ISU, #264)."""
+        if not self.dry_run:
+            self._ensure_clients()
+        target = _subscription_of(resource_id)
+        return None if target and target.lower() == (self._subscription_id or "").lower() else (target or "?")
 
     def read_quarantine(self, nsg_id: str) -> dict | None:
         """One quarantine NSG read by its id (I1S, #231), for a card the listing no longer

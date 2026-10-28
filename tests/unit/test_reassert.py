@@ -592,6 +592,67 @@ def test_a_card_of_another_subscription_stays(homonym):
     assert card["resource_id"] == other and "nsg.get" not in calls
 
 
+def _warnings(caplog, text: str) -> list[str]:
+    return [r.getMessage() for r in caplog.records
+            if r.name == "glorfindel.reassert" and r.levelname == "WARNING" and text in r.getMessage()]
+
+
+@pytest.mark.parametrize("acknowledged", [False, True])
+def test_a_card_of_another_subscription_is_said_once_never_read(monkeypatch, caplog, acknowledged):
+    """A card — or a change acknowledged — on an NSG of another subscription: filtered
+    before `read_quarantine`, never read, kept, and said ONCE (ISU, #264). It used to be
+    handed to the reader, refused there, and a warning written at every pass, without end.
+    Its name as Azure wrote it, not the lowercase key of the acknowledgement."""
+    import logging
+    from glorfindel import reassert
+    monkeypatch.setattr(reassert, "_SAID_ELSEWHERE", set())
+    f, c, q, calls = _quarantined_world()
+    other = ("/subscriptions/other/resourceGroups/RG-Sec/providers/Microsoft.Network/networkSecurityGroups/"
+             "NSG-Glorfindel-Quarantine-WestEurope")
+    e = escalations.record(signal_id=f"{reassert._QUARANTINE_PREFIX}other-1", resource_id=other,
+                           action="restore_quarantine_nsg", escalation_type="quarantine_altered",
+                           reason="altered", severity="high")
+    if acknowledged:
+        escalations.resolve(e)
+        reassert._save_quarantine_alerts({other.lower(): f"{reassert._QUARANTINE_PREFIX}other-1"})
+    read = MagicMock(side_effect=c.read_quarantine)
+    monkeypatch.setattr(c, "read_quarantine", read)
+    caplog.set_level(logging.WARNING, logger="glorfindel.reassert")
+    for _ in range(3):
+        reassert.reassert_pass(c, None)
+    assert not [a for a in read.call_args_list if "/subscriptions/other/" in a.args[0]]
+    said = _warnings(caplog, "NSG-Glorfindel-Quarantine-WestEurope")
+    assert len(said) == 1 and "other" in said[0], [r.getMessage() for r in caplog.records]
+    assert not _warnings(caplog, "nsg-glorfindel-quarantine-westeurope is in")
+    if acknowledged:
+        assert other.lower() in reassert._load_quarantine_alerts()      # kept, not forgotten
+    else:
+        assert other in [x["resource_id"] for x in _cards("pending")]    # kept
+
+
+def test_a_card_whose_nsg_is_refused_warns_at_every_pass_in_its_case(monkeypatch, caplog):
+    """The 403 of an NSG of this subscription is a real state: said at every pass, unlike
+    another subscription's (ISU, #264). An acknowledged change alone names its NSG as Azure
+    wrote it, not by the lowercase key it is acknowledged under."""
+    import logging
+    from glorfindel import reassert
+    monkeypatch.setattr(reassert, "_SAID_ELSEWHERE", set())
+    f, c, q, _ = _quarantined_world()
+    cased = "NSG-Glorfindel-Quarantine-WestEurope"
+    nsg = f.nsgs.pop(q)
+    nsg["id"] = nsg["id"].rsplit("/", 1)[0] + "/" + cased
+    f.nsgs[q] = nsg
+    f.nics[next(iter(f.nics))]["nsg"] = nsg["id"]
+    escalations.resolve(_said_once(c)["id"])                             # acknowledged
+    assert q in reassert._load_quarantine_alerts()
+    f.unreadable.add(q)
+    caplog.set_level(logging.WARNING, logger="glorfindel.reassert")
+    for _ in range(3):
+        reassert.reassert_pass(c, None)
+    assert len(_warnings(caplog, f"{cased} not read again")) == 3, [r.getMessage() for r in caplog.records]
+    assert q in reassert._load_quarantine_alerts()
+
+
 def test_only_a_missing_card_nsg_is_read_again():
     """The cost (no `get` of every NSG at every pass): a card whose NSG is listed is
     judged on the listing; the NSG of a card the listing doesn't show is read once."""

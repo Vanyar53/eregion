@@ -1035,3 +1035,136 @@ def test_two_hosts_a_stale_none_never_leaves_the_nic_bare(monkeypatch, nic_is, g
     finally:
         actions._ISOLATION_STATE_DIR = host1
         shutil.rmtree(m.home, ignore_errors=True)
+
+
+# ISU (#264): the small follow-ups of the reviews of I1S, I8S and I4S.
+
+def _host_dirs():
+    from glorfindel import actions
+    return actions._ISOLATION_STATE_DIR, actions._BLOCK_STATE_DIR
+
+
+def _set_host_dirs(dirs) -> None:
+    from glorfindel import actions
+    actions._ISOLATION_STATE_DIR, actions._BLOCK_STATE_DIR = dirs
+
+
+@pytest.mark.parametrize("tag", ["readable", "unreadable"])
+def test_two_hosts_an_unblock_behind_the_quarantine_finds_the_block_on_x(monkeypatch, tag):
+    """Host 1 isolates a bare NIC (state and tag: "none"); our NSG is taken off by hand and
+    the customer gives the NIC an NSG X; host 2 blocks the attacker (on X), then isolates
+    the NIC (tag: X). Host 1 unblocks: its state's "none" hid X, `not_found` was answered
+    while the IP stayed blocked on X, put back with X at the release (ISU, #264; I8S). The
+    tag that names X wins, as at the release; a tag that can't be read is
+    `unblock_partial`, never "none" on a guess — and the retry unblocks."""
+    import shutil
+
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    host1 = _host_dirs()
+    try:
+        m.build(_net(quarantine=True))
+        f, c, nic = m.fake, m.connector, _nic("rg-app1", "web-nic")
+        assert f.nics[nic]["nsg"] is None
+        assert c.isolate_vm(WEB1)["status"] == "isolated"                  # host 1: "none"
+        f.nics[nic]["nsg"] = None                                         # someone, by hand
+        x = f.add_nsg("rg-app1", "nsg-web-x")
+        f.nics[nic]["nsg"] = f.nics[nic]["design_nsg"] = x
+        _set_host_dirs((m.home / "host2" / "isolation", m.home / "host2" / "blocks"))
+        assert c.block_suspicious_ip(ATTACKER, WEB1)["status"] == "blocked"   # on X
+        assert c.isolate_vm(WEB1)["status"] == "isolated"                  # host 2: tag X
+        _set_host_dirs(host1)
+
+        def on_x():
+            return {n for n in f.nsgs[key(x)]["rules"] if n.startswith("glorfindel-block-")}
+        assert on_x()
+        if tag == "unreadable":
+            m.chaos.arm(("nsg.get", "always-429"))
+            try:
+                out = m.connector.unblock_ip(ATTACKER, WEB1)
+            finally:
+                m.chaos.arm(None)
+            assert out["status"] == "unblock_partial" and on_x(), out
+            assert any("NSG d'origine" in e for e in out["failed"]), out
+        out = c.unblock_ip(ATTACKER, WEB1)
+        assert out["status"] == "unblocked" and not on_x(), out
+    finally:
+        _set_host_dirs(host1)
+        shutil.rmtree(m.home, ignore_errors=True)
+
+
+@pytest.mark.parametrize("known_by,lift_with", [("state", "release"), ("state", "bare"),
+                                                ("tag", "release"), ("tag", "reset")])
+def test_an_original_gone_says_how_to_get_out(monkeypatch, known_by, lift_with):
+    """The NIC's own NSG deleted while it is in quarantine (or left bare by hand): the lift
+    fails and keeps the NIC as it is — wanted — but said only that the NSG wasn't found
+    (ISU, #264; I8S). It says how to get out: recreate it, put by hand on the NIC the NSG
+    it must carry — or, when only our tag names it, set the tag to "none" (the state's
+    original wins over the tag: never offered then). Each way out taken, the retry lifts."""
+    import shutil
+
+    from glorfindel import actions
+
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_net(quarantine=True, web_nic={"own": "dedicated"}))
+        f, c, nic = m.fake, m.connector, _nic("rg-app1", "web-nic")
+        x = f.nics[nic]["nsg"]
+        assert c.isolate_vm(WEB1)["status"] == "isolated"
+        q = f.nics[nic]["nsg"]
+        assert actions._is_quarantine_nsg(q)
+        if known_by == "tag":
+            for p in actions._ISOLATION_STATE_DIR.glob("*.json"):
+                p.unlink()                                                # the state lost
+        if lift_with == "bare":
+            f.nics[nic]["nsg"] = None                                     # ours taken off by hand
+        assert f.delete_nsg(x)                                           # the customer's NSG gone
+        lift = (lambda: c.sweep_vm_rules(WEB1)) if lift_with == "reset" else (lambda: c.release_isolation(WEB1))
+        out = lift()
+        assert out["status"] in ("release_partial", "swept_partial"), out
+        said = [e for e in out["failed"] if "n'existe plus" in e]
+        assert said and "rg-app1/nsg-web-nic" in said[0], out
+        assert "recréer" in said[0] and "poser à la main" in said[0], said
+        tag = actions.AzureConnector._orig_tag(f.nics[nic]["id"])
+        assert (f"{tag}=none" in said[0]) == (known_by == "tag"), said
+        assert f.nics[nic]["nsg"] == (None if lift_with == "bare" else q)  # kept as it was
+        assert lift()["status"] == out["status"]                          # nothing changed: again
+        if known_by == "tag":
+            f.nsgs[key(q)]["tags"][tag] = "none"                            # the tag set to none
+            assert lift()["status"] in ("released", "swept")
+            assert f.nics[nic]["nsg"] is None
+        elif lift_with == "bare":
+            f.add_nsg("rg-app1", "nsg-web-nic")                              # recreated
+            assert lift()["status"] == "released"
+            assert key(f.nics[nic]["nsg"] or "") == key(x)
+        else:
+            y = f.add_nsg("rg-app1", "nsg-web-y")                            # another, by hand
+            f.nics[nic]["nsg"] = y
+            assert lift()["status"] == "released"
+            assert key(f.nics[nic]["nsg"] or "") == key(y)
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)
+
+
+@pytest.mark.parametrize("subnet_too", [False, True])
+def test_an_unblock_says_a_plain_block_may_be_a_perimeter_one(monkeypatch, subnet_too):
+    """api's older plain-named block on its own NSG, whose sharing can't be read. When that
+    NSG is its subnet's too, the plain name is also a perimeter block's: the unblock says
+    "d'une ancienne version ou de périmètre", not only "d'une ancienne version" (ISU,
+    #264; I4S)."""
+    def check(m):
+        if subnet_too:
+            m.fake.subnets[key(m.fake.nics[_nic("rg-edge", "api-nic")]["subnet"])]["nsg"] = _API_NSG
+        m.chaos.arm(("nsg.get", "always-429"))
+        try:
+            out = m.connector.unblock_ip(ATTACKER, API)
+        finally:
+            m.chaos.arm(None)
+        said = [f for f in out["failed"] if _PLAIN in f]
+        assert len(said) == 2, out                                        # in and out
+        for s in said:
+            assert "partage illisible" in s and "blocage d'une ancienne version" in s, out
+            assert ("ou de périmètre" in s) == subnet_too, s
+        assert _plain_on(m) == {_PLAIN, f"{_PLAIN}-out"}
+    _plain_block_world(monkeypatch, check=check)

@@ -334,6 +334,12 @@ class UnblockMixin:
                 try:
                     if original is _UNKNOWN:
                         original = self._original_from_tags(t0["quarantine"], t0["nic_id"])
+                    elif original is None:
+                        # The state's "none" yields to our tag when it names an NSG, as at
+                        # the release: another host's isolation wrote X there, the block
+                        # lies on X, and `not_found` was answered (I8S, ISU #264). A tag
+                        # that can't be read fails the unblock — never "none" on a guess.
+                        original = self._tag_over_none(t0["quarantine"], t0["nic_id"])
                 except Exception as exc:
                     failed.append(f'{t0["nic_short"]} : NSG d\'origine inconnu, déblocage non vérifié '
                                   f"({_first_line(exc)[:_ERR_MAX]})")
@@ -360,10 +366,12 @@ class UnblockMixin:
         """An older version's block under the IP's name alone, cutting this NIC off, on
         its own NSG whose sharing can't be read: this VM's, or another's away from it —
         unknown (I4S). Left, and said: it used to be left in silence, `not_found` answered
-        while the IP stayed blocked. On a subnet's NSG the name is a perimeter block."""
+        while the IP stayed blocked. On a subnet's NSG the name is a perimeter block — and
+        on a NIC's NSG that is its subnet's too, it may be one: said so (ISU, #264)."""
         if not (t.get("sharing_unknown") and t.get("scope") == "nic"):
             return []
         plain = {self._block_rule_prefix(ip).lower(), f"{self._block_rule_prefix(ip)}-out".lower()}
+        what = "d'une ancienne version ou de périmètre" if t.get("subnet_nsg_too") else "d'une ancienne version"
         return [f'{t["nic_short"]}:{_rule_name(r)} (NSG {t["nsg_name"]} au partage illisible : blocage '
-                "d'une ancienne version, VM inconnue) : laissée"
+                f"{what}, VM inconnue) : laissée"
                 for r in rules if _rule_name(r).lower() in plain and _deny_applies(r, t.get("private_ips") or None)]

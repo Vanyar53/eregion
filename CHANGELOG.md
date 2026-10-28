@@ -12,14 +12,14 @@ Notable changes to Eregion. The format follows [Keep a Changelog](https://keepac
   - **One ping per thing that waits, deleted once settled:**
     - a lot blocked, or a review not obtained;
     - the elrond session waiting for a permission (`Notification` `permission_prompt`) or for an answer (`AskUserQuestion` left unanswered for 30 s);
-    - a pull request to merge by hand (`agents_discord.py lot <ID> merge --pr <n>`, settled when GitHub says it is merged);
+    - a pull request to merge by hand (`agents_discord.py lot <ID> merge --pr <n>`, settled when GitHub says it is merged — asked at each event, and by a detached watcher every five minutes while one waits, two days at most: the merge often comes after the run);
     - the end of a run.
   - **No longer pings:** `changes` / `blocking` (elrond fixes alone), a worker's fallback, a return.
   - **Each worker's and reviewer's report lands in the lot's thread:** a head in the card, the whole `.md` attached (median 7.8 KB, measured on 28/10).
-  - **The hooks only queue the event and return;** one process delivers the queue in order. `PreToolUse` is synchronous, so a hand-back is queued before its `SubagentStop`.
+  - **The hooks only queue the event and return;** one process delivers the queue in order. `PreToolUse` and `SubagentStop` are synchronous, so a hand-back is queued before its `SubagentStop`, and that one before elrond can resume the agent; an agent that hands back is never read from its stop. A failing `#lots` never keeps a ping from Jonathan.
   - **After merging, run `bash scripts/elrond-hooks.sh install` again.**
 
-  To measure on a real run: the payloads, from Claude Code's documentation (the auto-mode classifier refused a measuring hook). `~/.local/state/eregion/discord.trace` keeps one line per event, its fields' names only. Tests: `tests/unit/test_agents_discord.py` (I8S's sequence of 28/10 replayed); mutants M1060–M1069, and M978, M979, M990 and M994 moved with the code they bite.
+  To measure on a real run: the payloads, from Claude Code's documentation (the auto-mode classifier refused a measuring hook). `~/.local/state/eregion/discord.trace` keeps one line per event, its fields' names only. Tests: `tests/unit/test_agents_discord.py` (I8S's sequence of 28/10 replayed); mutants M1060–M1073 (M1070–M1073 after the 5.5 review), and M978, M979, M990 and M994 moved with the code they bite.
 
 ## [0.4.1] — 2026-10-28 — "nothing raw in the console, three loose ends of the isolation path tied"
 

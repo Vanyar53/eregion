@@ -33,14 +33,15 @@ if settings.exists():
 OURS = ("elrond/palantir.py", "scripts/notify_discord.py", "scripts/agents_discord.py")
 # `|| true`: exit 2 from a PreToolUse hook blocks the tool, from SubagentStop it keeps the agent
 # going — and python3 exits 2 on a missing file (a checkout without the script).
-# PreToolUse waits for its hook (a few ms: it only queues the event): a hand-back is then queued
-# before the tool runs, so before its SubagentStop. The others never hold Claude Code up.
+# PreToolUse and SubagentStop wait for their hook (a fraction of a second: it only queues the
+# event): a hand-back is queued before its SubagentStop, and that one before elrond can resume
+# the agent. The others never hold Claude Code up.
 def entry(script, timeout, wait=False):
     return {"type": "command", "command": f'python3 "{script}" hook || true', "timeout": timeout,
             **({} if wait else {"async": True})}
 WANTED = {
     "Stop": [("", [entry(palantir, 30), entry(notify, 15)])],
-    "SubagentStop": [("", [entry(palantir, 30)]), ("elrond-worker|elrond-reviewer", [entry(notify, 15)])],
+    "SubagentStop": [("", [entry(palantir, 30)]), ("elrond-worker|elrond-reviewer", [entry(notify, 15, wait=True)])],
     "PreToolUse": [("Agent|SendMessage|SubagentHandback|AskUserQuestion", [entry(notify, 15, wait=True)])],
     "PostToolUse": [("AskUserQuestion", [entry(notify, 15)])],
     "Notification": [("permission_prompt", [entry(notify, 15)])],

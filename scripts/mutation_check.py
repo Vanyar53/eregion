@@ -2601,8 +2601,8 @@ TESTS.update({f"M{n}": "tests/unit/test_agents_discord.py" for n in (978, 979)})
 # N1 after its review (27/10, F1–F8): M990–M994, taken from this session's range (M970–M999).
 MUTANTS += [
     ("M990", "the report not read from the hand-back: elrond's reviewers hand it back by a tool (N1 F1, N3)",
-     AGENTS_D, '        on_return(e, cfg, state, forum, str((e.get("tool_input") or {}).get("message") or ""))\n',
-     '        on_return(e, cfg, state, forum, str(e.get("last_assistant_message") or ""))\n'),
+     AGENTS_D, 'str((e.get("tool_input") or {}).get("message") or ""), handback=True)\n',
+     'str(e.get("last_assistant_message") or ""), handback=True)\n'),
     ("M991", "a fork's pull request posts in the lot its title names (N1, F5)", NOTIFY,
      "            lot = issue = \"\"   # a fork's pull request: #ci only, never a lot's thread (its title names any lot)\n",
      "            pass\n"),
@@ -2627,7 +2627,8 @@ MUTANTS += [
     ("M1061", "a long report never attached: the thread holds its head, the findings lost (N3)", AGENTS_D,
      "    if len(report) > REPORT_HEAD:\n", "    if False:\n"),
     ("M1062", "elrond's resumes unseen: a correction sent by SendMessage neither on the board nor in the thread (N3)",
-     AGENTS_D, '        return str(inp.get("to") or "") in state.get("agents", {})\n', "        return False\n"),
+     AGENTS_D, '        return str(inp.get("to") or "") in state.get("agents", {}) or _elrond_session(e, state)\n',
+     "        return False\n"),
     ("M1063", "a settled ping never deleted: #agents fills up again (N3)", AGENTS_D,
      '            nd.fetch("DELETE", f"{cfg.agents}/messages/{mid}", "webhook #agents")\n', "            pass\n"),
     ("M1064", "a fallback of an earlier stretch counted again: a clean correction said fallen back (N3)", AGENTS_D,
@@ -2648,6 +2649,22 @@ MUTANTS += [
      "scripts/elrond-hooks.sh", '            **({} if wait else {"async": True})}\n', '            "async": True}\n'),
 ]
 TESTS.update({f"M{n}": "tests/unit/test_agents_discord.py" for n in range(1060, 1070)})
+
+# N3 after its 5.5 review (28/10): M1070–M1073, from the same range (M1060–M1079).
+MUTANTS += [
+    ("M1070", "a forum that fails keeps what waits off the board: a review not obtained never pinged (N3)",
+     AGENTS_D, '    except nd.Failure as f:\n        nd.say(f)\n        return ""\n    return f"https://discord.com',
+     '    except KeyError:\n        return ""\n    return f"https://discord.com'),
+    ("M1071", "a late SubagentStop of a past stretch ends a resumed agent: « sans verdict » again (N3)", AGENTS_D,
+     '    if state["agents"].get(aid, {}).get("handback"):\n'
+     "        return   # its returns come by SubagentHandback: a stop is a pause, or a late one of a past stretch\n",
+     ""),
+    ("M1072", "a lot blocked after its review fell back: two pings for one stop (N3)", AGENTS_D,
+     '        settle(cfg, state, lambda w: w["key"] == f"not-obtained:{lot}")   # the same stop, one ping\n', ""),
+    ("M1073", "no watcher: a pull request merged after the run keeps its ping (N3)", AGENTS_D,
+     "        while time.time() < end and any(", "        while False and any("),
+]
+TESTS.update({f"M{n}": "tests/unit/test_agents_discord.py" for n in range(1070, 1074)})
 
 # N2 (#243): the road to 1.0 in Discord, scripts/roadmap_discord.py (and the thread matching it
 # shares with notify_discord.py), measured by tests/unit/test_roadmap_discord.py. Range M980–M989.

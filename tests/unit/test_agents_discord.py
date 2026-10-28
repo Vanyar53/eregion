@@ -110,8 +110,9 @@ def stop(path, agent_type="elrond-worker", last="", bg=()):
             "last_assistant_message": last, "background_tasks": list(bg)}
 
 
-def resume(aid, session="S1", at=None):
+def resume(aid, session="S1", at=None, transcript=None):
     return {"hook_event_name": "PreToolUse", "tool_name": "SendMessage", "session_id": session,
+            "transcript_path": str(transcript) if transcript else None,
             "tool_input": {"to": aid, "summary": "…", "message": "…"}, "at": at}
 
 
@@ -183,6 +184,18 @@ def test_a_discord_failure_never_fails_the_caller_nor_prints_a_secret(fake, monk
     assert "HTTP 500" in err and "HTTP 503" in err
     for secret in (AGENTS_TOKEN, BOT_TOKEN, fake.base):
         assert secret not in err
+
+
+def test_a_forum_that_fails_never_keeps_what_waits_off_the_board(fake, monkeypatch, tmp_path, capsys):
+    """#lots down: the lot's thread is lost for this event, the ping to Jonathan is not."""
+    configure(monkeypatch, fake)
+    fake.fail.update({"/api/channels": 503, "/api/guilds": 503})
+    r = agent(tmp_path, "elrond A3 · relecture", "elrond-reviewer", aid="r1", tool_use="toolu_r", fallback=True)
+    send(launch("elrond A3 · relecture", "elrond-reviewer", "toolu_r", at=ts("2026-10-27T13:59:00")))
+    send(handback(r, "**Verdict : ok**", "elrond-reviewer"))
+    ad.main(["lot", "B1", "blocked", "--note", "attend une décision"])
+    assert sorted(p["embeds"][0]["title"] for p in pings(fake)) == ["⚠️ A3 : relecture non obtenue", "⛔ B1 bloqué"]
+    assert "HTTP 503" in capsys.readouterr().err
 
 
 def test_no_message_mentions_anyone_but_the_configured_user(fake, monkeypatch, tmp_path):
@@ -269,6 +282,7 @@ def test_a_fallback_counts_only_in_the_stretch_it_happened(fake, monkeypatch, tm
     (t,) = fake.threads
     assert titles(t) == ["🚀 Lancé", "⚠️ Repli de modèle", "🔧 Correction lancée", "📦 Rendu"]
     assert FALLBACK in t["posts"][1]["embeds"][0]["description"] and pings(fake) == []
+    assert "Fait." in t["posts"][1]["embeds"][0]["description"]   # a short report, in the card
 
 
 # ── what waits for Jonathan: on the board, pinged, the ping deleted once settled ───
@@ -359,10 +373,10 @@ def test_a_permission_prompt_pings_until_the_session_goes_on(fake, monkeypatch, 
 def test_the_end_of_a_run_pings_and_the_next_run_clears_it(fake, monkeypatch, tmp_path):
     configure(monkeypatch, fake)
     ad.main(["run-end", "2 lots faits"])
-    ad.main(["run-end", "3 lots faits, H1 à fusionner"])
+    ad.main(["run-end", "3 lots faits\nH1 à fusionner"])
     (p,) = pings(fake)
     assert p["embeds"][0]["title"] == "🏁 Fin du run elrond" and "3 lots" in p["embeds"][0]["description"]
-    assert "**🏁 Dernier run**" in board_text(fake)
+    assert "**🏁 Dernier run**" in board_text(fake) and "3 lots faits\nH1 à fusionner" in board_text(fake)
     send(launch("elrond A3 · x"))
     assert pings(fake) == [] and "3 lots faits" in board_text(fake)
 
@@ -430,7 +444,7 @@ def test_the_trace_keeps_the_fields_names_never_their_values(fake, monkeypatch, 
     send(launch("elrond A3 · x", tool_use="toolu_w"))
     send(handback(w, "REPORT-TEXT"))
     trace = (tmp_path / "state" / "eregion" / "discord.trace").read_text(encoding="utf-8")
-    assert "PreToolUse SubagentHandback agent=elrond-worker bg=0 keys=" in trace and "tool_input" in trace
+    assert "PreToolUse SubagentHandback agent=elrond-worker bg=0 meta=1 keys=" in trace and "tool_input" in trace
     assert "REPORT-TEXT" not in trace
 
 
@@ -467,8 +481,9 @@ def _hooks(home, mode):
 def test_the_user_hooks_never_block_and_leave_the_others_alone(tmp_path):
     """The hooks are the operator's (~/.claude/settings.json), never the repository's. Exit 2
     from a PreToolUse hook blocks the tool, from SubagentStop it keeps the agent going — and
-    python3 exits 2 on a missing file: every command of ours ends in `|| true`. PreToolUse waits
-    for its hook (it only queues): a hand-back is queued before its SubagentStop."""
+    python3 exits 2 on a missing file: every command of ours ends in `|| true`. PreToolUse and
+    SubagentStop wait for their hook (it only queues): a hand-back is queued before its
+    SubagentStop, and that one before elrond can resume the agent."""
     home = tmp_path / "claude"
     home.mkdir()
     rtk = {"matcher": "Bash", "hooks": [{"type": "command", "command": "rtk hook claude"}]}
@@ -485,6 +500,78 @@ def test_the_user_hooks_never_block_and_leave_the_others_alone(tmp_path):
         ("Stop", "", False), ("Stop", "", True),
         ("SubagentStop", "", False), ("SubagentStop", "elrond-worker|elrond-reviewer", True)]
     assert all(h["command"].endswith("|| true") for _, _, h in ours)
-    assert all(h.get("async") is (None if e == "PreToolUse" else True) for e, _, h in ours)
+    waits = {("PreToolUse", True), ("SubagentStop", True)}
+    assert all(h.get("async") is (None if (e, "agents_discord" in h["command"]) in waits else True) for e, _, h in ours)
     assert rtk in hooks["PreToolUse"] and "notify_discord" not in json.dumps(hooks)
     assert _hooks(home, "uninstall") == {"PreToolUse": [rtk]}
+
+
+# ── after the review of 28/10 ──────────────────────────────────────────────────────
+
+def test_a_late_stop_of_a_past_stretch_never_ends_a_resumed_agent(fake, monkeypatch, tmp_path):
+    """Review, 3: a SubagentStop that comes after elrond resumed the agent is not its return:
+    an agent that hands back is never read from its stop."""
+    configure(monkeypatch, fake)
+    r = agent(tmp_path, "elrond H1 · relecture", "elrond-reviewer", aid="r1", tool_use="toolu_r")
+    send(launch("elrond H1 · relecture", "elrond-reviewer", "toolu_r"))
+    send(handback(r, "**Verdict : blocking**", "elrond-reviewer"))
+    send(resume("r1"))
+    send(stop(r, "elrond-reviewer", last="Rapport envoyé."))   # late: the first stretch's
+    (t,) = fake.threads
+    assert titles(t)[-1] == "🔎 Relecture lancée" and "`H1` relecture" in board_text(fake)
+
+
+def test_a_resume_queued_behind_its_agents_hand_back_is_followed(fake, monkeypatch, tmp_path):
+    """Review, 4: the saved state does not know the agent yet (its hand-back still queued); the
+    queue is delivered in order, so the resume finds it."""
+    configure(monkeypatch, fake)
+    w = agent(tmp_path, "elrond A3 · règles", aid="w1", tool_use="toolu_w")
+    send(launch("elrond A3 · règles", tool_use="toolu_w"))
+    ad.enqueue(handback(w, "Fait."))                            # queued, not delivered yet
+    send(resume("w1", transcript=main_transcript(tmp_path)))
+    (t,) = fake.threads
+    assert titles(t) == ["🚀 Lancé", "📦 Rendu", "🔧 Correction lancée"] and "`A3` correction" in board_text(fake)
+
+
+def test_a_hand_back_said_again_counts_only_since_the_last_return(fake, monkeypatch, tmp_path):
+    """Review, 6: a second hand-back with no launch between (a retried one) does not count the
+    fallback of the stretch already said: no « relecture non obtenue » that pings."""
+    configure(monkeypatch, fake)
+    r = agent(tmp_path, "elrond A3 · relecture", "elrond-reviewer", aid="r1", tool_use="toolu_r", fallback=True)
+    send(launch("elrond A3 · relecture", "elrond-reviewer", "toolu_r", at=ts("2026-10-27T13:59:00")))
+    send(handback(r, "**Verdict : ok**", "elrond-reviewer"))
+    ad.main(["clear", "A3"])
+    send(handback(r, "**Verdict : ok**", "elrond-reviewer"))
+    (t,) = fake.threads
+    assert titles(t)[-1] == "✅ Relecture ok" and pings(fake) == []
+
+
+def test_a_review_not_obtained_then_the_lot_blocked_is_one_ping(fake, monkeypatch, tmp_path):
+    """Review, 7: elrond stops a lot whose review fell back; one thing waits, one ping."""
+    configure(monkeypatch, fake)
+    r = agent(tmp_path, "elrond A3 · relecture", "elrond-reviewer", aid="r1", tool_use="toolu_r", fallback=True)
+    send(launch("elrond A3 · relecture", "elrond-reviewer", "toolu_r", at=ts("2026-10-27T13:59:00")))
+    send(handback(r, "**Verdict : ok**", "elrond-reviewer"))
+    ad.main(["lot", "A3", "blocked", "--note", "relecture non obtenue : à toi"])
+    assert [p["embeds"][0]["title"] for p in pings(fake)] == ["⛔ A3 bloqué"]
+
+
+def test_a_pull_request_merged_after_the_run_is_seen_by_the_watcher(fake, monkeypatch, tmp_path):
+    """Review, 2: elrond is done, no event comes; the detached watcher asks GitHub every five
+    minutes while a pull request waits, and stops once none does."""
+    configure(monkeypatch, fake)
+    fake.gh["pulls"] = [{"number": 255, "state": "open", "merged_at": None}]
+    ad.main(["lot", "H1", "merge", "--pr", "255"])
+    ad.main(["run-end", "H1 à fusionner"])
+    naps = []
+
+    def nap(s):   # Jonathan merges during the second wait
+        naps.append(s)
+        if len(naps) == 2:
+            fake.gh["pulls"][0].update(state="closed", merged_at="2026-10-28T18:00:00Z")
+    monkeypatch.setattr(ad.time, "sleep", nap)
+    assert ad.main(["watch"]) == 0
+    assert naps == [ad.PR_CHECK_S, ad.PR_CHECK_S]
+    assert [p["embeds"][0]["title"] for p in pings(fake)] == ["🏁 Fin du run elrond"]
+    assert "PR #255 fusionnée" in board_text(fake)
+    assert ad.main(["watch"]) == 0 and len(naps) == 2   # nothing waits: no watch

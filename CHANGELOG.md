@@ -41,6 +41,9 @@ Notable changes to Eregion. The format follows [Keep a Changelog](https://keepac
 
   To measure on a real run: the payloads, from Claude Code's documentation (the auto-mode classifier refused a measuring hook). `~/.local/state/eregion/discord.trace` keeps one line per event, its fields' names only. Tests: `tests/unit/test_agents_discord.py` (I8S's sequence of 28/10 replayed); mutants M1060–M1076 (M1070–M1076 after the two 5.5 reviews), and M978, M979, M990 and M994 moved with the code they bite.
 
+### Fixed
+- **The CD of H0 asks to reinstall its agent only for a release newer than it** (H1b, #263, 28/10, after the first real pass to v0.4.1). `make glorfindel-host-cd-install` notes the commit it installs from (`~/.eregion-cd/installed-from`, a full commit id). The « 🔧 Agent de CD à mettre à jour » message needs a release that descends from it and carries other agent files. v0.4.1 had no H1 and asked anyway: installing from it would have broken the CD, its `deploy.sh` having no `--activate`. An older release says nothing in #deploy (a line in the journal). An installation without a valid `installed-from`, or installed off main, says once, without the mention, that it cannot tell when to update. Mutants M1053–M1056.
+
 ## [0.4.1] — 2026-10-28 — "nothing raw in the console, three loose ends of the isolation path tied"
 
 ### Fixed

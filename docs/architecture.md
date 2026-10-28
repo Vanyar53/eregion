@@ -162,13 +162,14 @@ flowchart LR
     M -->|"non_disruptive"| D{"isoler, bloquer :<br/>les tirages s'accordent ?"}
     D -->|non| E9["unstable_decision"]
     D -->|oui| GO(("exécuter"))
+    GO -.->|"instantané seul,<br/>détection caractérisée"| E10["uncontained_detection<br/>carte sans action"]
     classDef blue fill:#2f6fd6,stroke:#1d4a9a,color:#ffffff
     classDef guard fill:#f2b33d,stroke:#b07a12,color:#2b1d00
     classDef warn fill:#fbe3e3,stroke:#d64545,color:#7a1f1f
     classDef go fill:#2e9e6a,stroke:#1d6b47,color:#ffffff
     class LLM blue
     class P,K,X,C,S,A,T,R,M,D guard
-    class E0,E1,E2,E3,E4,E5,E6,E7,E8,E9 warn
+    class E0,E1,E2,E3,E4,E5,E6,E7,E8,E9,E10 warn
     class GO go
 ```
 

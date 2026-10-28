@@ -137,7 +137,8 @@ glorfindel/
                           proposée ; flag grounded_schema). techniques_needing_rules() (sélection
                           cold-start). Source UNIQUE du tool+prompt d'autoring (agent.py importe).
                           Deux appelants : propose_detection_rule (réactif) + `propose-rules` (proactif).
-  memory.py             → CycleMemory ChromaDB (confidence + past_cycles_used)
+  memory.py             → CycleMemory ChromaDB (confidence + past_cycles_used) ; SEC4a : identifiant tiré par la mémoire
+                          (jamais celui du signal, jamais remplacé), un signal réel ne reçoit que des cycles réels
   incidents.py          → IncidentRegistry (TTL, persist, thread-safe)
   cli.py                → watch, respond, restore (--wait), release, unblock, reset (revert=alias), list, pending, ack, activate,
                           audit (--all), approve-rule, reject-rule, propose-rules, rules, migrate-rules, check-ttl, jobs,
@@ -149,6 +150,7 @@ glorfindel/
                           injecteur émet (attack_started → la règle de la watch, detection_missed → une proposition),
                           et d'eux les seuls champs qu'il écrit ; le reste refusé (journal, compteur), jamais décidé. Le recovery_complete : seul celui de `glorfindel restore` (ce
                           processus, ou ~/.glorfindel/recovery_signals/) lève une isolation seul
+                          SEC4a : l'attack_time d'un attack_started borné (2 h en arrière, 5 min en avant), sinon refusé
   bot.py                → Discord bot — un fil par VM, boutons Acquitter + Commande, /pending slash command ;
                           ButtonPolicy (M-3) : DISCORD_ALLOWED_USERS / _ROLES, fermé par défaut
   tui.py                → Rich TUI full-screen (glorfindel dashboard) : resources + feed + escalations, raccourcis a/r/x/u/v

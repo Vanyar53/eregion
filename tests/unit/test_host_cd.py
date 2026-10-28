@@ -154,6 +154,7 @@ class H0:
             shutil.copy(src, self.cd / src.name)
         (self.cd / "discord.env").write_text(
             f"EREGION_DISCORD_WEBHOOK_DEPLOY={fake.base}/api/webhooks/9/{SECRET}\nEREGION_DISCORD_MENTION=42\n")
+        (self.cd / "installed-from").write_text(self.commits["c1"] + "\n")   # installed while v0.3.1 ran
         # docker: v0.3.1 runs.
         bin_dir = tmp_path / "bin"
         bin_dir.mkdir()
@@ -714,3 +715,36 @@ def test_a_switch_interrupted_twice_is_refused_and_said(h0):
     assert h0.run().returncode == 0 and not any(c.startswith("build") for c in h0.calls())
     res = h0.run("retry")
     assert res.returncode == 0 and h0.outcome("v0.4.0") == "deployed"
+
+
+# ── « Agent de CD à mettre à jour » only for a newer release (28/10, after v0.4.1) ──
+
+def test_a_release_older_than_the_agent_never_asks_to_reinstall_it(tmp_path, fake):
+    """v0.4.1 had no H1: its deploy.sh is older than the agent's, and installing from it
+    would break the CD. The agent was installed from a later commit: nothing said."""
+    h0 = H0(tmp_path, fake, c2_files={"infra/glorfindel-host/cd/eregion_cd.py": "# an older agent\n"})
+    work = h0.tmp / "work"
+    _git(work, h0.env, "checkout", "-q", "main")
+    (work / "app.py").write_text("V = 3\n")
+    _git(work, h0.env, "commit", "-qam", "c3: the agent's own commit")
+    _git(work, h0.env, "push", "-q", "origin", "main")
+    (h0.cd / "installed-from").write_text(_git(work, h0.env, "rev-parse", "HEAD") + "\n")
+    res = h0.run()
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert not any("Agent de CD" in t for t in _titles(h0)) and "pas plus ancien" in res.stdout
+
+
+def test_an_agent_that_does_not_know_its_commit_says_nothing_in_deploy(tmp_path, fake):
+    h0 = H0(tmp_path, fake, c2_files={"infra/glorfindel-host/cd/eregion_cd.py": "# another agent\n"})
+    (h0.cd / "installed-from").unlink()
+    res = h0.run()
+    assert res.returncode == 0 and not any("Agent de CD" in t for t in _titles(h0))
+    assert "make glorfindel-host-cd-install le note" in res.stdout
+
+
+@pytest.mark.skipif(shutil.which("make") is None, reason="make not installed")
+def test_the_installation_writes_the_commit_it_installs_from():
+    res = subprocess.run(["make", "-n", "--no-print-directory", "-C", str(ROOT), "glorfindel-host-cd-install",
+                          "HOST_IP=203.0.113.9"], capture_output=True, text=True, timeout=60)
+    assert res.returncode == 0, res.stderr
+    assert "git rev-parse HEAD |" in res.stdout and "cat > .eregion-cd/installed-from" in res.stdout

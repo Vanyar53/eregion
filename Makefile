@@ -646,7 +646,8 @@ glorfindel-host-cd-install:
 	@lines=$$(python3 infra/glorfindel-host/cd/eregion_cd.py export-discord-env) || exit 1; \
 	 $(HOST_SSH) 'mkdir -p .eregion-cd && chmod 700 .eregion-cd' && \
 	 scp -q $(SSH_OPTS) $(HOST_CD_FILES) $(HOST_USER)@$(HOST_IP):.eregion-cd/ && \
-	 printf '%s\n' "$$lines" | $(HOST_SSH) 'umask 077 && cat > .eregion-cd/discord.env'
+	 printf '%s\n' "$$lines" | $(HOST_SSH) 'umask 077 && cat > .eregion-cd/discord.env' && \
+	 git rev-parse HEAD | $(HOST_SSH) 'cat > .eregion-cd/installed-from'
 	$(HOST_SSH_TTY) 'sudo bash .eregion-cd/install.sh'
 
 glorfindel-host-cd-check:

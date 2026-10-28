@@ -39,8 +39,9 @@ The trigger is Jonathan publishing a release (sessions prepare drafts). A pass:
      words, compose's) stays in the journal: it may name the infrastructure.
 
 Installed in ~/.eregion-cd/ with deploy.sh and notify_discord.py, never run from the checkout it
-deploys, and never replaced by a deployment: after one, a release whose agent differs is said
-(make glorfindel-host-cd-install). One pass at a time, and none while a deployment by hand runs
+deploys, and never replaced by a deployment: after one, a release newer than the agent (the
+commit it was installed from, ~/.eregion-cd/installed-from) whose agent differs is said (make
+glorfindel-host-cd-install); an older release, never — installing from it would break the CD. One pass at a time, and none while a deployment by hand runs
 (~/.eregion-deploy.lock). Python 3.10 (the VM's), standard library only.
 """
 from __future__ import annotations
@@ -427,8 +428,21 @@ def health(ref: str, since: float) -> str:
     return why
 
 
-def agent_drift(tag: str) -> list[str]:
-    """The agent's files that differ from the release just deployed."""
+def agent_drift(tag: str) -> tuple[list[str], str]:
+    """The agent's files that differ from the release just deployed — said only when the release
+    is newer than the commit the agent was installed from (`installed-from`, written by make
+    glorfindel-host-cd-install). An older release (one from before H1, v0.4.1) carries an older
+    deploy.sh: installing from it would break the CD. Else ([], why nothing is said)."""
+    release = git("rev-parse", "-q", "--verify", f"refs/tags/{tag}^{{commit}}", check=False).stdout.strip()
+    try:
+        installed = (CD_HOME / "installed-from").read_text(encoding="utf-8").strip()
+    except OSError:
+        installed = ""
+    if not installed or git("cat-file", "-e", f"{installed}^{{commit}}", check=False).returncode != 0:
+        return [], ("l'agent ne sait pas de quel commit il a été installé (ou ce commit n'est pas sur la VM) : "
+                    "make glorfindel-host-cd-install le note — rien n'est dit")
+    if installed == release or not is_ancestor(installed, release):
+        return [], f"l'agent ({installed[:12]}) n'est pas plus ancien que {tag} : rien à mettre à jour"
     out = []
     for local, path in AGENT_FILES.items():
         theirs = git("show", f"refs/tags/{tag}:{path}", check=False)
@@ -438,7 +452,7 @@ def agent_drift(tag: str) -> list[str]:
             ours = ""
         if theirs.returncode == 0 and theirs.stdout != ours:
             out.append(local)
-    return out
+    return out, ""
 
 
 def conclude(state: dict, tag: str, dep_ref: str, why: str, url: str, how: str) -> int:
@@ -449,10 +463,12 @@ def conclude(state: dict, tag: str, dep_ref: str, why: str, url: str, how: str) 
         save_state(state)
         prune(tag, dep_ref)
         say(f"✅ H0 tourne sur {tag}", how, color=nd.GREEN, url=url)
-        drift = agent_drift(tag)
+        drift, note = agent_drift(tag)
         if drift:
-            say(f"🔧 Agent de CD à mettre à jour ({tag})", f"diffèrent de la release : {', '.join(drift)} — "
-                "make glorfindel-host-cd-install", color=nd.ORANGE)
+            say(f"🔧 Agent de CD à mettre à jour ({tag})", f"diffèrent de la release, plus récente que l'agent : "
+                f"{', '.join(drift)} — make glorfindel-host-cd-install", color=nd.ORANGE)
+        elif note:
+            print(note)
         return 0
     back = rollback(dep_ref)
     state["outcomes"][tag] = {"result": "rollback failed" if back else "rolled back", "why": why,

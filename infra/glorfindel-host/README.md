@@ -283,12 +283,58 @@ la console), et la désactiver au besoin (`disable: [<nom>]` dans la couche).
    git stash drop
    ```
 
-**Disque** : chaque `make glorfindel-host-start` reconstruit l'image ; les couches des anciennes images restaient dans containerd (Docker 29), jusqu'à 87 % d'un disque de 32 Go le 20/10, 25 Go récupérables. Le redéploiement purge maintenant les images orphelines (`docker image prune -f`), et `glorfindel-host-status` affiche l'occupation du disque.
+**Disque** : chaque `make glorfindel-host-start` reconstruit l'image ; les couches des anciennes images restaient dans containerd (Docker 29), jusqu'à 87 % d'un disque de 32 Go le 20/10, 25 Go récupérables. Le redéploiement purge maintenant les images orphelines (`docker image prune -f`), et `glorfindel-host-status` affiche l'occupation du disque. Depuis H1, chaque image est aussi étiquetée par sa référence (`eregion-glorfindel:v0.4.0`) et les trois plus récentes restent (celle qui tourne toujours) : revenir à la précédente est un `docker tag`, pas une reconstruction.
 
 Les verdicts de l'observation et la mémoire ne vivent que sur le disque de la VM : `make glorfindel-host-pull` en garde une copie sur le poste (`~/.eregion/host-backups/`, les 30 dernières), et `make glorfindel-host-status` signale une copie de plus de 7 jours. Une VM éteinte (gondolin entre deux exercices) reste une semaine sur la carte (`GLORFINDEL_DISCOVERY_RETENTION_H=168` dans `host.env`, 8 h par défaut).
 
 La mémoire (ChromaDB) part vide sur la VM : la mémoire locale ne contient que des cycles
 d'exercice non marqués (B2), qui n'ont rien à faire dans une observation.
+
+## Le CD de H0 (H1, #244)
+
+**Publier une release, c'est déployer H0.** Un timer sur la VM la tire toutes les 5 minutes. Il la vérifie, la construit à côté, la préflighte, bascule, et revient en arrière si la santé échoue. H0 reste fermé : il ne fait que sortir, vers l'API publique de GitHub (sans jeton) et vers le webhook de `#deploy`.
+
+**Les sessions ne publient jamais une release** : elles la préparent en brouillon (`gh release create --draft`), et Jonathan clique « Publish ».
+
+### Installer (une fois, Jonathan)
+
+1. **Le webhook de `#deploy`.** Dans Discord, Paramètres du salon → Intégrations → Webhooks (par exemple « H0 »). Mets son URL dans `~/.config/eregion/discord.env` (`EREGION_DISCORD_WEBHOOK_DEPLOY=…`), à côté de `EREGION_DISCORD_MENTION`.
+2. **`make glorfindel-host-cd-install`.** La commande :
+   - copie l'agent dans `~/.eregion-cd/` sur la VM, avec `deploy.sh` et `notify_discord.py`, jamais dans le checkout qu'il déploie ;
+   - y écrit `discord.env` en 600, avec le webhook et la mention seulement, passés par stdin. Le jeton du bot Eregion ne va jamais sur H0 ;
+   - installe les unités systemd avec sudo, **timer désactivé**.
+3. **`make glorfindel-host-cd-check`, à blanc.** La commande vérifie la dernière release, construit la candidate à côté et passe le préflight, dont **la config de H0 sous la lecture stricte d'A3**. Elle ne bascule pas, et dit le résultat dans le terminal et dans `#deploy`.
+4. **Si c'est vert, `make glorfindel-host-cd-enable`.** Le passage suivant déploie.
+
+### Un passage
+
+1. **La dernière release**, sur l'API publique (les brouillons et les pré-versions n'y figurent pas). Rien à faire si elle tourne déjà, ou si elle a déjà échoué ou été refusée.
+2. **Vérifier.** Son tag est sur `origin/main`, et jamais plus ancien que ce qui tourne. Tous les check-runs de son commit sont terminés, et aucun n'est rouge ; si la CI tourne encore, le CD attend le passage suivant et le dit une fois.
+3. **Garde du verrou.** Si `requirements/glorfindel.txt` a changé depuis ce qui tourne, `requirements/harness.json` doit porter sur ce verrou (son sha256) et sur le modèle de H0 (celui de `.env`, sinon celui par défaut de la release). Il doit aussi montrer 3 runs, une intégration et un jugement complets, et aucune erreur surconfiante.
+4. **La candidate** `eregion-glorfindel:<tag>`, construite dans un worktree à part (`~/.eregion-cd/build`, `deploy.sh --build-only`). L'image qui tourne et le checkout de `~/eregion` ne bougent pas.
+5. **Le préflight, dans la candidate :**
+   - `glorfindel --version` dit le tag ;
+   - la watch, le bot et la console s'importent ;
+   - `glorfindel-config.yaml` passe la lecture stricte d'A3 ;
+   - `docker compose config` accepte le fichier de la release avec le `.env` de H0.
+6. **La bascule** (`deploy.sh --activate`). Le checkout est détaché, et refusé si un fichier suivi a été modifié sur la VM. Puis le retag et les trois services relancés.
+7. **La santé, pendant 3 minutes :**
+   - les trois conteneurs tournent, sans redémarrage, et sur l'image du tag ;
+   - `~/.glorfindel/watch_heartbeat` a été réécrit après la bascule ;
+   - la console répond (son jeton est lu dans `.env` et ne paraît sur aucune ligne de commande).
+8. **Si la santé échoue, retour à ce qui tournait.** Son image est gardée : c'est un retag. Avant de basculer, le CD l'étiquette par sa référence si elle ne l'est pas encore (une image construite avant H1, comme celle de v0.3.1). La release est marquée et n'est plus retentée seule.
+9. **`#deploy`.** Le début et le succès sont silencieux. Le refus, le retour arrière et un retour arrière raté portent ta mention.
+
+### Au quotidien
+
+- **`make glorfindel-host-cd-status`** : ce qui tourne, la dernière release, les derniers résultats, le journal du jour.
+- **Une release refusée ou revenue en arrière** ne se retente pas d'elle-même. Corriger, puis publier une nouvelle release, ou `make glorfindel-host-cd-retry`.
+- **Un nouveau verrou.** `make llm-compare MODELS=<modèle de H0> RUNS=3 ATTEST=1` (appels payants, Jonathan) écrit `requirements/harness.json`, à commiter dans la PR du verrou.
+- **Un déploiement à la main** (`make glorfindel-host-start REF=…`) reste possible. Il partage le verrou du CD (`~/.eregion-deploy.lock`) et est refusé pendant un passage. Pour mettre le CD en pause : `make glorfindel-host-cd-disable`.
+- **L'agent ne se remplace jamais lui-même.** Après un déploiement, si la release porte un autre `eregion_cd.py`, `deploy.sh` ou `notify_discord.py`, `#deploy` le dit, et `make glorfindel-host-cd-install` le met à jour.
+- **Le retirer** : `make glorfindel-host-cd-uninstall` (les unités ; `~/.eregion-cd/` reste).
+
+Reste à mesurer : le premier passage réel, de v0.3.1 à v0.4.0. Le verrou est identique entre les deux, donc pas d'attestation à fournir. Restent aussi les unités sur la VM et `journalctl` pour le compte `glorfindel`.
 
 ## Changer de modèle
 

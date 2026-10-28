@@ -4,6 +4,20 @@ Notable changes to Eregion. The format follows [Keep a Changelog](https://keepac
 
 ## [Unreleased]
 
+### Added
+- **The CD of H0: the release Jonathan publishes reaches H0 on its own** (H1, #244, 28/10; `infra/glorfindel-host/README.md`, « Le CD de H0 »). A systemd timer on the VM runs `infra/glorfindel-host/cd/eregion_cd.py` every 5 minutes. The agent is installed in `~/.eregion-cd/`, never in the checkout it deploys, and never replaces itself.
+  - **H0 stays closed.** It only goes out, to GitHub's public API (no token) and to #deploy's webhook. Publishing is the gesture: sessions prepare drafts (`CLAUDE.md`).
+  - **Verified first.** The tag is on main and never older than what runs; every check run of its commit is completed, none red (a CI still running is waited for, and said once).
+  - **A new lock needs the harness.** `make llm-compare … ATTEST=1` writes `requirements/harness.json`: the lock's sha256, the runs, and per model the integration, the judgment and the overconfident errors. The CD refuses a changed `requirements/glorfindel.txt` without an attestation for that lock and H0's model, complete and with no overconfident error.
+  - **Built aside, preflighted, then switched.** The candidate `eregion-glorfindel:<tag>` is built in a worktree of its own. In it: `glorfindel --version` is the tag, the watch, the bot and the console import, H0's config passes A3's strict reading, compose renders. Then `deploy.sh --activate` switches.
+  - **Health for 3 minutes, else back.** The three containers run, never restarted, on the tag; the watch's heartbeat is written after the switch; the console answers. Unhealthy: back to what ran by a retag (before switching, the running image is tagged by its reference: one built before H1 had none), the release marked and never tried again on its own (`make glorfindel-host-cd-retry`).
+  - **Said in #deploy.** The start and the success silently; a refusal, a rollback and a failed rollback mention Jonathan; a release carrying another agent says to reinstall it.
+  - **Installed disabled.** `make glorfindel-host-cd-install` (sudo on the VM; the #deploy webhook and the mention by stdin, never the bot's token), then `-cd-check` (a dry run: built and preflighted, never switched), then `-cd-enable`; also `-cd-status`, `-cd-retry`, `-cd-disable`, `-cd-uninstall`.
+  - **Tests and mutants.** The agent runs installed, as on H0, against real git, a fake docker, a fake GitHub and Discord (`tests/unit/test_host_cd.py`, 32 tests). Mutants M1002 and M1005–M1019, 16/16 caught.
+
+### Changed
+- **`deploy.sh` builds aside and switches by a retag** (H1). `--build-only REF` builds `eregion-glorfindel:REF` from the CD's worktree without touching what runs. `--activate REF` checks out, retags and restarts, without building. Every image is also tagged by its reference, and the three newest stay (the running one always), so going back is a retag. One deployment at a time: by hand, it is refused while the CD's pass runs (`~/.eregion-deploy.lock`).
+
 ## [0.4.0] — 2026-10-27 — "the isolation path, held to its invariants"
 
 ### Added

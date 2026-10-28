@@ -821,7 +821,12 @@ séquences) : tous attrapés à chaque tour ; M1020, M1021, M1023 et M1026 aussi
 seule (3/3) et par les séquences figées (`test_a_said_quarantine_out_of_the_listing_stays_said`).
 M1022 (l'abonnement), M1024 (le coût) et M1025 (un acquittement d'un NSG supprimé) ne sont pas
 des propriétés du monde de la machine (un seul abonnement, pas de compte des appels, aucun
-acquittement) : `tests/unit/test_reassert.py`.
+acquittement) : `tests/unit/test_reassert.py`. Au même budget (500 séquences, deux tours), les 87
+mutants du chemin d'isolation avant et après : 72/87 attrapés à chaque tour avant, 74/87 après
+(M880, dont le texte se retrouvait deux fois dans `sweep.py`, rendu unique et remesuré) ; aucun
+perdu — M34, attrapé avant et 1/2 après, l'est 4/4 sur quatre tours (le bruit déjà noté) ; M10,
+M17 et M33 passent de 1/2 à 2/2. Les invariants à 500 sont verts sur trois graines (11, 22, 33),
+chacune passant une trentaine de fois par un NSG sorti de la vue.
 
 | Mutant | Défaut réinjecté | Effet |
 |---|---|---|

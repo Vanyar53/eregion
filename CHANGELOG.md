@@ -4,6 +4,9 @@ Notable changes to Eregion. The format follows [Keep a Changelog](https://keepac
 
 ## [Unreleased]
 
+### Fixed
+- **`verify_release` no longer says "released" for a NIC left bare whose original is unknown** (I3F, #287, 28/10; `docs/azure.md`, `docs/design/preuves.md`). Take an isolation by quarantine whose state and tags are lost. It is isolated again, so its original is now unknown (Q7), and then someone leaves the NIC with no NSG. `verify_release` read that as released (`verified: True`). `glorfindel release` trusts that check, so it then cleared the state that still held the NIC. The NIC was left without its NSG, and an older version's isolation stayed on that NSG. Now the check answers not verified, and `original_unknown` names the NIC. The release already kept the placement. It now says the NIC carries no NSG (it used to say the NIC "stays in quarantine") and how to get out: put the NSG the NIC must carry back on it, or set our tag. The invariant machine no longer exempts such a NIC when a state held it bare in quarantine, with no original, after the test last lost that state. Mutants M1340–M1342.
+
 ## [0.4.3] — 2026-10-28 — "held at the edges"
 
 ### Fixed

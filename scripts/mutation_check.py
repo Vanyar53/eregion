@@ -3281,6 +3281,43 @@ MUTANTS += [
 ]
 TESTS.update({f"M{n}": "tests/unit/test_forged_logs.py" for n in range(1320, 1325)})
 
+# SEC6 (#277): the security process — the CI's actions and inputs, the lot threads against a fork
+# or an outsider, text from outside made inert in the chats, the bench's apply confirmed.
+NDS = "scripts/notify_discord.py"
+CHT = "glorfindel/chat_text.py"
+MUTANTS += [
+    ("M1280", "the canary, which holds an Azure secret, takes checkout by its tag again (SEC6, P-04)",
+     ".github/workflows/canary-azurerm.yml",
+     "      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5.1.0\n        if: steps.creds",
+     "      - uses: actions/checkout@v5\n        if: steps.creds"),
+    ("M1281", "a dispatcher's inputs pasted into the mutants' script again (SEC6, V-33)",
+     ".github/workflows/mutants.yml",
+     '--min-caught "$MIN_CAUGHT"', "--min-caught ${{ inputs.min_caught || '14' }}"),
+    ("M1282", "a fork's red run posted in a lot's thread: the run's head never checked (SEC6, N-11)", NDS,
+     "            if not own_run(run):\n                lot = issue = \"\"",
+     "            if False:\n                lot = issue = \"\""),
+    ("M1283", "an outsider's closed issue tags and archives a lot's thread (SEC6, N-11)", NDS,
+     '        if it.get("author_association") not in MEMBERS:', "        if False:"),
+    ("M1284", "a masked link from outside left as Markdown: brackets not escaped (SEC6, N-09)", CHT,
+     '_INLINE = re.compile(r"([\\\\`*_~|\\[\\]()<>])")', '_INLINE = re.compile(r"([\\\\`*_~|<>])")'),
+    ("M1285", "@everyone and @here from outside left whole (SEC6, N-09)", CHT,
+     '    return _MENTION.sub("@" + ZWSP + r"\\1", text)', "    return text"),
+    ("M1286", "the steps of a card raw in Discord: an Entra name's Markdown rendered (SEC6, N-09)",
+     "glorfindel/bot.py", 'f"• {discord_text(s)}"', 'f"• {s}"'),
+    ("M1287", "the webhook keeps <…>: Slack's links and mentions from outside (SEC6, N-09)", CHT,
+     '    s = s.replace("<", "‹").replace(">", "›").replace("](", "]" + ZWSP + "(")',
+     '    s = s.replace("](", "]" + ZWSP + "(")'),
+    ("M1288", "the bot posts with Discord's default mentions: any text may ping (SEC6, N-09)", "glorfindel/bot.py",
+     "super().__init__(intents=intents, allowed_mentions=discord.AllowedMentions.none())",
+     "super().__init__(intents=intents)"),
+    ("M1289", "make celebrimbor-up applies without confirmation, YES=1 or not (SEC6, P-10)", MAKE,
+     "	   $(TF) apply$(if $(YES), -auto-approve); \\\n", "	   $(TF) apply --auto-approve; \\\n"),
+]
+TESTS.update({mid: "tests/unit/test_workflows.py" for mid in ("M1280", "M1281")})
+TESTS.update({mid: "tests/unit/test_notify_discord.py" for mid in ("M1282", "M1283")})
+TESTS.update({f"M{n}": "tests/unit/test_chat_escaping.py" for n in range(1284, 1289)})
+TESTS["M1289"] = "tests/unit/test_makefile_bench.py -k yes"
+
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a

@@ -98,9 +98,12 @@ glorfindel propose-rules [--ttp T..] [--include-planned] [--dry-run]  # autoring
                                              # l'attaque (getschema sur le vrai LAW → KQL groundée).
                                              # Skip les TTPs déjà couverts. Sortie = propositions.
 glorfindel approve-rule <id>                 # appliquer la règle → couche du client (~/.glorfindel/client_rules.yaml, P1)
+                                             # ; jamais à la place d'une règle livrée (nom suffixé -proposed,
+                                             # dit), et dit si elle remplace une règle du client (SEC2)
 glorfindel reject-rule <id>                  # écarter la règle sans l'approuver
 glorfindel rules                             # règles chargées : la base livrée, puis la couche du client (couche de chaque
-                                             # règle ; ce que la couche fait à la base : règle remplacée, désactivée)
+                                             # règle ; ce que la couche fait à la base : règle remplacée, désactivée ;
+                                             # une règle livrée remplacée : « client (remplace) », en rouge, SEC2)
 glorfindel migrate-rules --from <modifié> --base <livré> [--dry-run]  # règles approuvées DANS la base avant P1
                                              # → couche du client, une règle au workspace en ligne liée à son
                                              # backend (H0 : infra/glorfindel-host/README.md)
@@ -359,7 +362,8 @@ allumée), `exclude_all: "false"` sortait la VM de toutes les règles (un texte 
   `enabled`, `interval_s`), `action_backends` (`name`, `type`, `vault_name`, `resource_group`,
   `restore_staging_storage`), `exceptions` (`asset_pattern`, `exclude_all`, `exclude_rules`),
   `autonomy` (`default`, `assets` : `match`, `mode` ; `allow_destructive`), `isolation`
-  (`quarantine_nsg`, `quarantine_rg`, `forensic_sources`, `forensic_ports`).
+  (`quarantine_nsg`, `quarantine_rg`, `forensic_sources`, `forensic_ports`), `never_block`
+  (SEC2, ci-dessous).
 - Types : textes entre guillemets ou non, booléens `true` / `false` sans guillemets, listes pour
   `exclude_rules`, `allow_destructive`, `forensic_sources`, `assets` et les sections de backends ;
   `interval_s` un nombre de secondes positif ; `forensic_ports` un port ou une liste (inchangé). Une
@@ -370,6 +374,20 @@ allumée), `exclude_all: "false"` sortait la VM de toutes les règles (un texte 
   réaffirmation passe en alertes seules.
 - Le fichier d'exemple (`glorfindel-config.yaml.example`) et le fragment de Celebrimbor
   (`make celebrimbor-output`) passent la lecture stricte (`tests/unit/test_config.py`).
+- **`never_block`** (SEC2, 28/10) : une liste d'adresses ou de préfixes CIDR que Glorfindel ne
+  bloque **jamais**, quelle que soit la règle ou le modèle — en plus de ceux livrés
+  (`glorfindel/response/policy.py`, `NEVER_BLOCK_SHIPPED` : 168.63.129.16 et 169.254.169.254 de la
+  plateforme Azure, 10/8, 172.16/12, 192.168/16, 100.64/10, fc00::/7, le bouclage ; `::ffff:a.b.c.d`
+  est lue comme son IPv4). Y mettre la sortie du bureau, un scanner, une sonde de supervision.
+  **Une adresse privée n'est donc jamais bloquée** : un mouvement latéral depuis une autre VM du
+  réseau ne se répond pas par un blocage d'IP, mais par l'isolation de la VM source. Un blocage d'une de ces adresses est retenu par `decide`
+  (carte `protected_address`) et refusé par le connecteur, Azure comme AWS, quel que soit le chemin
+  (décision de l'agent, approbation d'une carte dans la console et
+  son extension au sous-réseau, réaffirmation) ; une liste illisible refuse tout
+  blocage. Chaque entrée est validée (adresse ou préfixe ; `/0` refusé : couper les blocages se fait
+  par le mode d'autonomie). Absente : la liste livrée seule. **Clé nouvelle** : une config qui la
+  porte est refusée par une version antérieure (lecture stricte) — la poser sur H0 après la mise à
+  jour.
 
 ---
 

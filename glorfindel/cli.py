@@ -840,6 +840,18 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
                               f"[dim]{det_cfg.client_file}[/dim]")
             for note in det_cfg.notes:
                 console.print(f"  [yellow]·[/yellow] {_esc_markup(note)}")
+            # SEC2: a shipped rule replaced by the client's layer — its detection is gone
+            # unless the replacement detects as well. Said loudly, not as one note among others.
+            for name in det_cfg.overrides:
+                console.print(f"[bold red]⚠ Règle livrée « {_esc_markup(name)} » remplacée par la "
+                              f"couche du client[/bold red] — la règle livrée n'est plus chargée "
+                              f"([dim]{det_cfg.client_file}[/dim]) ; si ce n'est pas voulu, la "
+                              f"retirer de la couche du client.")
+            for name in det_cfg.disabled_base:
+                console.print(f"[bold red]⚠ Règle livrée « {_esc_markup(name)} » désactivée par la "
+                              f"couche du client[/bold red] — sa technique n'est plus détectée "
+                              f"([dim]{det_cfg.client_file}[/dim]) ; si ce n'est pas voulu, la "
+                              f"réactiver.")
         except Exception as exc:
             console.print(f"[yellow]⚠ Could not load rules: {exc}[/yellow]")
 
@@ -1170,9 +1182,15 @@ def _render_proposal(p: dict) -> None:
     vm = p["resource_id"].split("/")[-1]
     conf_pct = int(p["confidence"] * 100)
     console.print(
-        f"  [bold cyan]{p['rule_name']}[/bold cyan]  "
+        f"  [bold cyan]{_esc_markup(p['rule_name'])}[/bold cyan]  "
         f"[dim]{p['ttp']}  {vm}  {conf_pct}% confidence[/dim]"
     )
+    if p.get("renamed_from"):
+        console.print(f"  [yellow]Nom proposé « {_esc_markup(p['renamed_from'])} » : celui d'une règle "
+                      f"livrée — renommée, elle ne la remplace pas.[/yellow]")
+    if p.get("replaces") == "client":
+        console.print(f"  [yellow]⚠ L'approuver remplace la règle « {_esc_markup(p['rule_name'])} » "
+                      f"de la couche du client.[/yellow]")
     console.print(f"  Analysis  : [dim]{p['analysis'][:100]}…[/dim]")
     console.print(f"  Why better: {p['explanation'][:100]}")
     console.print(Syntax(p["query"].strip(), "sql", theme="monokai", line_numbers=False))
@@ -1869,6 +1887,13 @@ def approve_rule(proposal_id: str, rules_file: str | None) -> None:
         )
         verb = {"replaced": "Replaced in", "same": "Already in"}.get(proposal.get("rule_write"), "Written to")
         console.print(f"  {verb} the client's layer [dim]{proposal.get('rules_file')}[/dim]")
+        if proposal.get("renamed_from"):
+            console.print(f"  [yellow]Proposed as « {_esc_markup(proposal['renamed_from'])} », a shipped "
+                          f"rule's name: approved as « {_esc_markup(proposal['rule_name'])} », the shipped "
+                          "rule stays.[/yellow]")
+        if proposal.get("replaces") == "client":
+            console.print(f"  [yellow]⚠ It REPLACES the client rule « {_esc_markup(proposal['rule_name'])} » "
+                          "that was there: its query is no longer loaded.[/yellow]")
         if not proposal.get("rule_bound", True):
             console.print(f"  [yellow]⚠ Not bound ({_esc_markup(proposal.get('rule_unbound_reason', ''))}): "
                           "written with the workspace in line, it applies to no "
@@ -1932,7 +1957,8 @@ def rules_cmd(rules_file: str | None) -> None:
     for col in ("rule", "layer", "ttp", "assets"):
         table.add_column(col)
     for r in cfg.rules:
-        layer = "[cyan]client[/cyan]" if r.layer == "client" else "base"
+        layer = ("[bold red]client (remplace)[/bold red]" if r.replaces_base
+                 else "[cyan]client[/cyan]" if r.layer == "client" else "base")
         if r.auto_apply:   # the backend whose VMs it applies to: a rule on none is inert
             assets = (f"auto ({r.monitoring_backend_name})" if r.monitoring_backend_name
                       else "[yellow]auto (aucun backend : inerte)[/yellow]")
@@ -1950,6 +1976,12 @@ def rules_cmd(rules_file: str | None) -> None:
     console.print(f"[dim]Couche du client :[/dim] {client_rules_path()}{state}")
     for note in cfg.notes:
         console.print(f"  [yellow]·[/yellow] {_esc_markup(note)}")
+    for name in cfg.overrides:          # SEC2: said loudly, not as one note among others
+        console.print(f"[bold red]⚠ Règle livrée « {_esc_markup(name)} » remplacée par la couche du "
+                      "client[/bold red] — la règle livrée n'est plus chargée.")
+    for name in cfg.disabled_base:
+        console.print(f"[bold red]⚠ Règle livrée « {_esc_markup(name)} » désactivée par la couche du "
+                      "client[/bold red] — sa technique n'est plus détectée.")
 
 
 @cli.command("migrate-rules")

@@ -205,6 +205,16 @@ Either way, the same rules hold:
 - tests never call Azure or an LLM;
 - one lot or one fix per pull request.
 
+## Security
+
+A vulnerability is reported privately, its details never in an issue or a pull request: [`SECURITY.md`](SECURITY.md). The boundaries and what holds them: [`docs/design/modele-de-menace.md`](docs/design/modele-de-menace.md) — a lot that moves a boundary updates its page, and writes what it leaves open as « planifié : #n », never how to use it.
+
+Three rules the tests hold:
+- **A workflow that holds a secret** (or runs on `pull_request_target` / `workflow_run`) **pins every action by commit** (`uses: owner/action@<40 hex>   # vX.Y.Z`); no `run:` takes `${{ inputs.* }}`, `${{ github.event.* }}` or `${{ github.head_ref }}` in its text — pass them through `env:` (`tests/unit/test_workflows.py`).
+- **Text from outside reaching a chat** (the model's words, names from Azure, a rule's name) goes through `glorfindel/chat_text.py` (`tests/unit/test_chat_escaping.py`); the console has its own rule (`scripts/console_escaping.py`).
+- **Install from the repository** (`make install`, or `pip install -e '.[console]'`), never from a package index by name (`tests/unit/test_readme.py`).
+- **The release pull request** bumps `pyproject.toml`, the `CHANGELOG.md` and the README's « **Status — vX.Y.Z.** » together (`tests/unit/test_readme.py`); `docs/operations.md`, « Packaging et version ».
+
 ## Pull requests
 
 The title follows the commit convention, and the body follows `.github/pull_request_template.md`. That template asks for:

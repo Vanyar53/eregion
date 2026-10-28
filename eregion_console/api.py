@@ -16,7 +16,8 @@ try:
     from fastapi.staticfiles import StaticFiles
 except ImportError as e:
     raise ImportError(
-        "The Eregion console requires extra dependencies: pip install eregion[console]"
+        "The Eregion console requires extra dependencies: pip install -e '.[console]' "
+        "from the clone"
     ) from e
 
 # No schema, no docs pages: what the console's routes are is not served to whoever asks (SEC1).
@@ -2344,7 +2345,7 @@ def serve(host: str = "127.0.0.1", port: int = 7007) -> None:
     except ImportError as e:
         raise ImportError(
             "The Eregion console requires extra dependencies: "
-            "pip install eregion[console]"
+            "pip install -e '.[console]' from the clone"
         ) from e
     from eregion_console import sections
     sections.override()   # an unknown section stops here, before anything listens

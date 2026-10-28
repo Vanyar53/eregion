@@ -45,6 +45,9 @@ RED_CONCLUSIONS = {"failure", "timed_out", "startup_failure"}
 STATE_TAGS = ("à faire", "en cours", "en relecture", "en correction", "fait", "bloqué")
 MILESTONE_TAGS = ("v0.3", "v0.x", "v1.0", "v1.x")
 LOT_ID = r"[A-Z]{1,3}-?\d+[A-Z]?"
+# Who may move a lot's thread through an issue (SEC6, N-11): its author holds a role in the
+# repository. Anyone may open an issue, and close their own.
+MEMBERS = {"OWNER", "MEMBER", "COLLABORATOR"}
 
 
 class Failure(Exception):
@@ -346,6 +349,13 @@ def previous_conclusion(run: dict, environ) -> str:
     return ""
 
 
+def own_run(run: dict) -> bool:
+    """A run of this repository's own branch. A fork's pull request runs here too
+    (workflow_run), on the fork's head: its branch name and title are the fork's to choose."""
+    head = (run.get("head_repository") or {}).get("full_name")
+    return bool(head) and head == (run.get("repository") or {}).get("full_name")
+
+
 def github_notices(name: str, event: dict, previous=lambda run: "") -> list[Notice]:
     """What a GitHub event is worth saying; [] for the rest (a green PR, a cancelled run…)."""
     if name == "workflow_run":
@@ -358,6 +368,8 @@ def github_notices(name: str, event: dict, previous=lambda run: "") -> list[Noti
                 return []
             pr = (run.get("pull_requests") or [{}])[0]
             lot, issue = lot_of(branch=(pr.get("head") or {}).get("ref") or run.get("head_branch", ""), title=title)
+            if not own_run(run):
+                lot = issue = ""   # a fork's red run: #ci only, never a lot's thread
             num = f"#{pr['number']} " if pr.get("number") else ""
             return [Notice(embed(f"🔴 {wf} · {num}{title}", f"rouge ({concl})", RED, url),
                            silent=False, lot=lot, issue=issue, create=False)]
@@ -397,10 +409,13 @@ def github_notices(name: str, event: dict, previous=lambda run: "") -> list[Noti
     if name == "issues" and event.get("action") == "closed":
         it = event.get("issue") or {}
         lot, _ = lot_of(title=it.get("title", ""))
+        number = str(it.get("number", ""))
+        if it.get("author_association") not in MEMBERS:
+            lot = number = ""   # an outsider's issue: #ci only — no lot's thread tagged nor archived
         why = " (abandonnée)" if it.get("state_reason") == "not_planned" else ""
         return [Notice(embed(f"✅ #{it.get('number')} fermée{why} · {it.get('title', '')}", "", GREEN,
                              it.get("html_url", "")),
-                       lot=lot, issue=str(it.get("number", "")), title=it.get("title", ""), state="fait",
+                       lot=lot, issue=number, title=it.get("title", ""), state="fait",
                        milestone=(it.get("milestone") or {}).get("title"), archive=True, create=bool(lot))]
     return []
 

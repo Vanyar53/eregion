@@ -74,7 +74,7 @@ COMPONENTS: dict[str, Component] = {
         absent_deps=CONSOLE_DEPS,
         tests=(
             "test_actions_split.py", "test_agent_nodes.py", "test_audit.py", "test_aws_adapter.py",
-            "test_bot.py", "test_cli.py", "test_config.py", "test_detection_authoring.py",
+            "test_bot.py", "test_chat_escaping.py", "test_cli.py", "test_config.py", "test_detection_authoring.py",
             "test_detection_rules.py", "test_detectors.py", "test_discovery.py", "test_forged_logs.py",
             "test_glorfindel.py",
             "test_invariant_regressions.py", "test_invariants.py", "test_invariants_aws.py",
@@ -119,6 +119,7 @@ TOGETHER = (
     "test_provider_boundary.py", "test_roadmap_discord.py",
     "test_repo_hermetic.py",
     "test_run_channel.py", "test_watch_channel.py", "test_watch_gate.py",
+    "test_workflows.py", "test_readme.py",
 )
 
 # Modules of a component that exist to meet another one: each is imported only by a command

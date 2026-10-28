@@ -4,6 +4,22 @@ Notable changes to Eregion. The format follows [Keep a Changelog](https://keepac
 
 ## [Unreleased]
 
+### Security
+- **The security process: where to report, the boundaries, a README that says true, a hardened CI** (SEC6, #277, 28/10).
+  - **`SECURITY.md`**: the supported version (the latest 0.4.x), how to report (a private advisory on GitHub, « Report a vulnerability » — no e-mail address), indicative delays, the scope (this repository's code; not the maintainer's bench nor hosts), and what is not a vulnerability (`human_only` by default, observation, a wrong model a guard holds).
+  - **The threat model** (`docs/design/modele-de-menace.md`): one page per boundary — the console, `runs/` and the local state, Discord and the webhooks, the model's provider, the hosts, the CI and the CD — who is trusted, what crosses it, STRIDE, what holds it (with the code and the lot), what is still open, said as « planifié : #n ». I8S's choice (the quarantine tag wins over the state's « none ») is written as an assumed decision. `.github/CODEOWNERS`: the maintainer on everything, named again on `glorfindel/response/`, `glorfindel/providers/`, `infra/`, `.github/`.
+  - **Text from outside is inert in the chats.** An Entra application's display name, the model's words, a rule's or a VM's name reach the Discord bot's cards and the webhook escaped: no Markdown, no masked link, no `@everyone`, no backtick closing Glorfindel's own (`glorfindel/chat_text.py`); the bot allows no mention but the role it pings. A card's steps are escaped whole: a command shows its backticks, without a code style; an empty value between Glorfindel's backticks shows « — ».
+  - **The workshop's Discord against forks and outsiders.** A fork's red CI run is announced in `#ci`, never in a lot's thread (its head checked, not only its branch's name); an issue whose author holds no role in the repository, once closed, neither tags nor archives a lot's thread.
+  - **The CI.** A workflow that holds a secret, or runs on an event a fork can trigger, pins every action by commit; the canary installs Terraform from HashiCorp's signed apt repository, its key checked by its fingerprint, instead of a third party's action; `actions/checkout` is pinned by commit everywhere. `mutants.yml` passes its inputs through `env:`. A test refuses an action named by its tag in such a workflow (and any new one elsewhere) and a `run:` that takes `inputs.*`, `github.event.*` or `github.head_ref` in its text (`tests/unit/test_workflows.py`).
+  - Mutants M1280–M1289.
+
+### Changed
+- **The README says true**: the status is v0.4.3 (a test reads it against `pyproject.toml`), about 3,000 tests (a test bounds every count by the suite's size); the read-only evaluation is « read-only on Azure », with what still leaves the machine — the detection's rows, the investigation, past decisions, to the model's provider; a local model or `--model` to keep them in — and a new « Remove Eregion » (state, memory, images, Azure's identities and quarantine NSGs). Installing the console is `pip install -e '.[console]'` from the clone, in the README, `docs/operations.md` and the console's own messages. The release pull request updates the README's status with the version (`docs/operations.md`, « Packaging et version »).
+- **`make celebrimbor-up` shows the plan and asks**, like the other Terraform targets; `YES=1` applies it unread. It passed `--auto-approve` unconditionally.
+
+### Fixed
+- **Tests no longer depend on when they run**: the five files that took `NOW` at import take it when each test starts, and the two tests that compared it with the clock of the code under test — the console's heartbeat, a window declared for later — no longer fail when the suite runs longer than a minute.
+
 ## [0.4.3] — 2026-10-28 — "held at the edges"
 
 ### Fixed

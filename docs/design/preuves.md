@@ -818,7 +818,10 @@ suite de la séquence ne porte pas sur eux. L'oracle reste celui du test : L2 ju
 test a lui-même sorti de la vue (`out_of_sight`, son journal) comme s'il était tagué ; rien n'est
 lu des cartes ni de `quarantine_alerts.json` pour l'accorder. Mutants M1020–M1026 (28/10, 500
 séquences) : tous attrapés à chaque tour ; M1020, M1021, M1023 et M1026 aussi par la machine
-seule (3/3) et par les séquences figées (`test_a_said_quarantine_out_of_the_listing_stays_said`).
+seule (3/3, à 500) et par les séquences figées (`test_a_said_quarantine_out_of_the_listing_stays_said`).
+M1020, la machine seule ne l'attrape qu'à partir de quelques centaines de séquences (relecture
+d'I1S ; remesuré pour ISU, #264) : 1/6 à 60, le budget par défaut d'un `pytest` local, 4/4 à 200
+(une remesure de la relecture : 2/3), 4/4 à 500 (le budget du push), qui est le budget sûr. À 60, ce sont `test_reassert.py` et la séquence figée qui le tiennent.
 M1022 (l'abonnement), M1024 (le coût) et M1025 (un acquittement d'un NSG supprimé) ne sont pas
 des propriétés du monde de la machine (un seul abonnement, pas de compte des appels, aucun
 acquittement) : `tests/unit/test_reassert.py`. Au même budget (500 séquences, deux tours), les 87
@@ -837,6 +840,47 @@ chacune passant une trentaine de fois par un NSG sorti de la vue.
 | M1024 | chaque NSG de carte relu à chaque passe, listé ou non | un `get` par carte et par minute (coût, throttling) |
 | M1025 | un changement acquitté jamais relu | son NSG supprimé, l'acquittement fait taire le suivant au même ID |
 | M1026 | 403 lu comme 404 par le connecteur | carte fermée |
+
+### Les suites des relectures du 28/10 (ISU)
+
+Quatre suites laissées par les relectures 5.5 d'I1S, I8S et I4S (#264), aucune trouvée par la
+machine : elle n'a qu'un répertoire d'état et qu'un abonnement, et ne lit pas les messages. Le
+déblocage derrière la quarantaine suit la règle de la levée pour l'original — l'« aucun » de
+l'état cède au tag qui nomme un NSG, un tag illisible fait échouer (`unblock_partial`) ; un
+original supprimé dit comment en sortir, sur chaque chemin (carte en quarantaine, carte nue
+avec état, carte nue sans état ; levée et reset), et un original seulement illisible (403) n'est
+jamais dit supprimé ; une carte d'un autre abonnement est écartée avant la relecture, dite une
+fois, redite après une nouvelle carte ; un blocage à nom simple sur un NSG qui est aussi celui du
+sous-réseau est dit « d'une ancienne version ou de périmètre ». Tests à la main sur le faux Azure
+(`test_two_hosts_an_unblock_behind_the_quarantine_finds_the_block_on_x`,
+`test_an_original_gone_says_how_to_get_out` — huit chemins —,
+`test_an_original_that_cant_be_read_is_not_called_gone`,
+`test_an_unblock_says_a_plain_block_may_be_a_perimeter_one`,
+`test_a_card_of_another_subscription_is_said_once_never_read`,
+`test_a_card_whose_nsg_is_refused_warns_at_every_pass_in_its_case`) : tous échouent sur `main`
+(971e608) sauf le cas témoin (un NSG qui n'est pas celui du sous-réseau) et le test du 403
+(`test_an_original_that_cant_be_read_is_not_called_gone`, qui garde contre M1104). Mutants M1100–M1115,
+mesurés par ces tests : 16/16. Au même budget (500 séquences, deux tours, deux passes côte à côte),
+les 87 mutants du chemin d'isolation (`unblock.py`, `reassert.py`, `release.py`, `sweep.py`,
+`quarantine.py`, `network.py`), `main` puis la branche : 72/86 attrapés à chaque tour avant, 77/86
+après (M10, M14, M19, M21 et M39 passent à 2/2) ; aucun perdu. M22 et M35 (1/2 avant, 0/2 après)
+et M37 (0/2 puis 1/2) remesurés sur six tours de chaque côté : M22 0/6 et 0/6, M35 0/6 et 0/6, M37
+1/6 et 0/6 — du bruit, et tous trois attrapés par leurs séquences figées (`FIXED-ONLY`). Invariants
+à 500 verts sur deux graines (17, 29).
+
+| Mutant | Défaut réinjecté | Effet |
+|---|---|---|
+| M1100 | le déblocage suit l'« aucun » de l'état contre le tag qui nomme X | `not_found`, l'IP reste bloquée sur X, revient à la levée |
+| M1101 | un tag illisible lu « aucun » au déblocage | même `not_found`, au hasard |
+| M1102 | un original supprimé ne dit que l'erreur d'Azure | aucune sortie dite |
+| M1103 | le tag « none » proposé alors que l'état nomme l'original | une sortie qui ne change rien |
+| M1104 | un original illisible (403, 429) dit supprimé | « recréer » un NSG qui existe |
+| M1105–M1108 | la sortie oubliée sur un chemin (carte nue avec état, levée sans état, reset d'une carte nue, carte en quarantaine) | même silence sur ce chemin |
+| M1109, M1112 | la carte d'un autre abonnement passée au lecteur (le filtre, le connecteur) | un avertissement à chaque passe, sans fin |
+| M1110 | dite à chaque passe | même bruit |
+| M1115 | jamais oubliée | une nouvelle carte sur ce NSG, après la fermeture de la première, jamais dite |
+| M1111 | l'acquittement seul nommé par sa clé en minuscules | le nom n'est pas celui d'Azure |
+| M1113, M1114 | « ou de périmètre » jamais dit (le libellé, la marque de la cible) | un blocage de périmètre présenté comme d'une ancienne version |
 
 ### Le journal d'activité, détection seule (AL1)
 
@@ -1231,8 +1275,8 @@ Une séquence trouvée la nuit est rejouée en premier à chaque push jusqu'à s
 
 - **Deux hôtes** : les verrous sont par hôte. Un autre hôte qui écrit la carte juste après
   Glorfindel est modélisé (A0) ; deux Glorfindel complets sur deux machines ne le sont pas. Deux
-  états séparés le sont à la main, sur une seule séquence (I8S, figée) : la machine n'a qu'un
-  répertoire d'état.
+  états séparés le sont à la main, sur une seule séquence (I8S, figée ; le déblocage, ISU) : la
+  machine n'a qu'un répertoire d'état.
 - **VM supprimée et état perdu** : les règles qu'une isolation par règles a laissées sur un
   NSG partagé se retrouvent par l'empreinte de leur nom et sont retirées quand elles coupent une
   VM vivante en `non_disruptive` ou plus (A3) ; la VM reste coupée jusqu'au passage suivant de la
@@ -1247,7 +1291,8 @@ Une séquence trouvée la nuit est rejouée en premier à chaque push jusqu'à s
 - **Hypothèses du faux Azure** non mesurées : le code d'erreur d'un NSG d'une autre région,
   le refus de supprimer un NSG attaché, Run Command shell refusé sous Windows, et (I1S) une
   liste des NSG de l'abonnement qui omet sans erreur un NSG que l'identité ne peut plus lire,
-  un `get` de ce NSG refusé (403).
+  un `get` de ce NSG refusé (403) ; (ISU) l'association d'un NSG supprimé à une carte refusée
+  (`InvalidResourceReference`, 400) plutôt qu'acceptée.
 - **L'exemption d'une carte nue (I8F)** : elle vaut si le test a perdu l'état après la dernière
   fois qu'il a vu un état tenir la carte en quarantaine *pendant qu'elle était nue*. Un état qui
   l'a tenue après la perte, mais pas nue, puis que le code abandonne, laisse l'exemption à une

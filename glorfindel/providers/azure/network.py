@@ -186,6 +186,10 @@ class NetworkMixin:
                 "nic_has_nsg": bool(own_id),
                 "own_nsg_id": own_id,
                 "subnet_unreadable": subnet_unreadable,
+                # Its own NSG is its subnet's too: a plain-named block there may be a
+                # perimeter block — said so when it is left (ISU, #264).
+                **({"subnet_nsg_too": True} if own_id and subnet_nsg and tuple(
+                    x.lower() for x in subnet_nsg) == (nsg_rg.lower(), nsg_name.lower()) else {}),
                 "quarantine": quarantine,
                 "location": getattr(nic, "location", None),
             })

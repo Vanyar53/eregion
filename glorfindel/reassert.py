@@ -154,6 +154,7 @@ def _whatever_the_state(connector, autonomy, report: list[dict]) -> None:
 
 
 _QUARANTINE_PREFIX = "reassert-quarantine-"
+_SAID_ELSEWHERE: set[str] = set()     # cards' NSGs of another subscription, said (ISU, #264)
 
 
 def _quarantine_alerts_path():
@@ -215,19 +216,27 @@ def _report_altered_quarantines(connector, report: list[dict], nsgs: list | None
     seen = {_key(q.get("nsg_id")): q for q in listing}
     alerts = _load_quarantine_alerts()
     cards = [e for e in escalations.pending() if (e.get("signal_id") or "").startswith(_QUARANTINE_PREFIX)]
-    # Absent from the listing is not gone (I1S, #231): a role removed on its group (a
-    # listing that leaves it out without an error — a hypothesis, to measure on the bench),
-    # our tag taken off with our rules, another subscription. The NSG of a card — or of a
-    # change acknowledged — that the listing doesn't show is read again by its id, those
-    # alone: gone only on a 404; anything else unread keeps the card. Before any card is
-    # touched: a pass cut off in the reads changes nothing.
+    # Absent from the listing is not gone (I1S, #231): a role removed on its group (a listing
+    # that omits it without an error — a hypothesis, to measure on the bench), our tag taken
+    # off. The NSG of a card (or of a change acknowledged) not listed is read again by its id,
+    # before any card is touched: gone on a 404 only, anything else keeps the card. Of another
+    # subscription: never read here, kept, said once (ISU, #264); a 403, at every pass.
     gone: set[str] = set()
     missing: dict[str, str] = {}
     for rid in [e.get("resource_id") or "" for e in cards] + list(alerts):
         if _key(rid) and _key(rid) not in seen:
             missing.setdefault(_key(rid), rid)
-    reread = getattr(connector, "read_quarantine", None)
-    for k, rid in (missing.items() if reread is not None else ()):     # no reader: all kept
+    cased = {_key(e.get("resource_id")): e.get("resource_id") for e in escalations.all_escalations()} \
+        if any(rid == k for k, rid in missing.items()) else {}       # acknowledged alone: its name's case
+    missing = {k: cased.get(k) or rid for k, rid in missing.items()}
+    reread, outside = getattr(connector, "read_quarantine", None), getattr(connector, "outside_subscription", None)
+    elsewhere = {k: w for k, rid in missing.items() if outside and isinstance(w := outside(rid), str) and w}
+    for k in elsewhere.keys() - _SAID_ELSEWHERE:
+        log.warning("reassert: quarantine NSG %s is in subscription %s, not the one Glorfindel reads: its "
+                    "card kept, never read here (said once)", missing[k].rsplit("/", 1)[-1], elsewhere[k])
+    _SAID_ELSEWHERE.intersection_update(elsewhere)
+    _SAID_ELSEWHERE.update(elsewhere)
+    for k, rid in ([(k, r) for k, r in missing.items() if k not in elsewhere] if reread is not None else ()):
         try:
             q = reread(rid)
         except Exception as exc:
@@ -443,7 +452,6 @@ def _reassert_block(connector, autonomy, vm: str, ip: str, report: list[dict], r
         # silence (L1F, invariant machine).
         _update_block_entry(ref or vm, ip, drift_alerted_at=now)
     report.append({"kind": "block", "vm": vm, "ip": ip, "outcome": outcome, "detail": reason})
-
 
 
 def ttl_alerts(ttl_h: float, now: datetime | None = None) -> list[dict]:

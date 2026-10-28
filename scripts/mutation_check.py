@@ -2508,6 +2508,67 @@ TESTS.update({f"M{n}": f"tests/unit/test_reassert.py tests/unit/test_invariant_r
               for n in (1020, 1021, 1023, 1026)})
 TESTS.update({f"M{n}": "tests/unit/test_reassert.py" for n in (1022, 1024, 1025)})
 
+# ISU (#264): the small follow-ups of the reviews of I1S, I8S and I4S — the unblock behind the
+# quarantine follows the release's rule for the original; an original gone says how to get
+# out; a card of another subscription is never read and said once; a plain-named block on a
+# NIC's NSG that is its subnet's too may be a perimeter block. Range M1100–M1119.
+MUTANTS += [
+    ("M1100", "the unblock behind the quarantine follows the state's 'none' over a tag naming X: "
+              "`not_found`, the IP still blocked on X (ISU)", UNB,
+     "                    elif original is None:\n", "                    elif False:\n"),
+    ("M1101", "a tag that can't be read behind the state's 'none' reads as 'none' at the unblock: "
+              "`not_found` on a guess (ISU)", UNB,
+     '                        original = self._tag_over_none(t0["quarantine"], t0["nic_id"])\n',
+     "                        try:\n"
+     '                            original = self._tag_over_none(t0["quarantine"], t0["nic_id"])\n'
+     "                        except Exception:\n"
+     "                            original = None\n"),
+    ("M1102", "an original gone says only that it wasn't found: no way out (ISU)", REL,
+     "        if not original:\n            return exc\n", "        return exc\n"),
+    ("M1103", "the tag set to 'none' offered while the state names the original: a way out that "
+              "changes nothing (ISU)", REL,
+     'tag = "" if not q or (isinstance(recorded, str) and _same_id(recorded, original)) else (',
+     'tag = "" if not q else ('),
+    ("M1104", "an original that can't be read (403, 429) called gone: recreate an NSG that exists (ISU)",
+     REL, "            if not _is_not_found(read):\n                return exc\n", "            pass\n"),
+    ("M1105", "a NIC left bare whose recorded original is gone: the release says only 'not found' (ISU)",
+     REL, '                                    raise self._original_gone(p, p["nic_id"], original, exc)\n',
+     "                                    raise\n"),
+    ("M1106", "a bare NIC tied by our tag to an original gone: the stateless release says only "
+              "'not found' (ISU)", REL,
+     '                                raise self._original_gone(q_bare, t0["nic_id"], original, exc)\n',
+     "                                raise\n"),
+    ("M1107", "a bare NIC whose original is gone: the reset says only 'not found' (ISU)", SWP,
+     '                        raise self._original_gone(q_bare, t0["nic_id"], original, exc)\n',
+     "                        raise\n"),
+    ("M1108", "a NIC in quarantine whose original is gone: release and reset say only 'not found' (ISU)",
+     QUA, "            raise self._original_gone(q, nic_id, original, exc)\n", "            raise\n"),
+    ("M1109", "a card of another subscription handed to the reader: refused there, a warning at every "
+              "pass without end (ISU)", R,
+     "    elsewhere = {k: w for k, rid in missing.items() if outside and isinstance(w := outside(rid), str) "
+     "and w}\n", "    elsewhere = {}\n"),
+    ("M1110", "a card of another subscription said at every pass (ISU)", R,
+     "    for k in elsewhere.keys() - _SAID_ELSEWHERE:\n", "    for k in elsewhere:\n"),
+    ("M1111", "an acknowledged change alone named by its lowercase key, not as Azure wrote it (ISU)", R,
+     "    missing = {k: cased.get(k) or rid for k, rid in missing.items()}\n", ""),
+    ("M1112", "the connector never says an NSG is of another subscription: every pass, a warning (ISU)",
+     SWP, '        return None if target and target.lower() == (self._subscription_id or "").lower() '
+          'else (target or "?")\n', "        return None\n"),
+    ("M1113", "a plain-named block on a NIC's NSG that is its subnet's too: said an older version's "
+              "only, never a perimeter block (ISU)", UNB,
+     'if t.get("subnet_nsg_too") else', "if False else"),
+    ("M1114", "a NIC's own NSG that is its subnet's too not marked: the perimeter block unsaid (ISU)", NET,
+     '**({"subnet_nsg_too": True} if own_id and subnet_nsg and tuple(',
+     '**({"subnet_nsg_too": True} if False and subnet_nsg and tuple('),
+    ("M1115", "a card of another subscription said once for ever: closed, then a new card on its NSG "
+              "unsaid (ISU)", R,
+     "    _SAID_ELSEWHERE.intersection_update(elsewhere)\n", ""),
+]
+TESTS.update({f"M{n}": "tests/unit/test_invariant_regressions.py -k two_hosts_an_unblock" for n in (1100, 1101)})
+TESTS.update({f"M{n}": "tests/unit/test_invariant_regressions.py -k gone" for n in range(1102, 1109)})
+TESTS.update({f"M{n}": "tests/unit/test_reassert.py" for n in (1109, 1110, 1111, 1112, 1115)})
+TESTS.update({f"M{n}": "tests/unit/test_invariant_regressions.py -k perimeter_one" for n in (1113, 1114)})
+
 # D1 (#81): each component runs alone (scripts/component_check.py), and every usage profile
 # keeps Glorfindel (docker-compose.yml, the Makefile's profile and team targets).
 D1_COMPONENTS = "tests/unit/test_components.py"

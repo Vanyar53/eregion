@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Optional: user-level Claude Code hooks for elrond.
 #   bash scripts/elrond-hooks.sh install    palantir on Stop and SubagentStop (the journal refreshes
-#                                           itself), and notify_discord.py on PreToolUse (Agent) and
-#                                           SubagentStop (elrond's lots in Discord, docs/atelier-discord.md)
+#                                           itself), and agents_discord.py on PreToolUse, PostToolUse,
+#                                           SubagentStop, Notification and Stop (elrond's lots and what
+#                                           waits for you in Discord, docs/atelier-discord.md)
 #   bash scripts/elrond-hooks.sh uninstall  remove them (other hooks are kept)
 # The hooks live in ~/.claude/settings.json, never in the repository: they would run on every
 # contributor's machine. Without them, the elrond skill still runs palantir after each subagent;
-# notify_discord.py without its configuration sends nothing.
+# agents_discord.py without its configuration sends nothing.
 set -euo pipefail
 
 MODE="${1:-}"
@@ -14,7 +15,7 @@ case "$MODE" in install|uninstall) ;; *) echo "usage: $0 install|uninstall" >&2;
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PALANTIR="$REPO/.claude/skills/elrond/palantir.py"
-NOTIFY="$REPO/scripts/notify_discord.py"
+NOTIFY="$REPO/scripts/agents_discord.py"
 SETTINGS="${CLAUDE_HOME:-$HOME/.claude}/settings.json"
 [ -f "$PALANTIR" ] || { echo "palantir not found: $PALANTIR" >&2; exit 1; }
 mkdir -p "$(dirname "$SETTINGS")"
@@ -28,15 +29,21 @@ data = json.loads(settings.read_text(encoding="utf-8")) if settings.exists() els
 if settings.exists():
     shutil.copy2(settings, settings.with_name(f"settings.json.bak-elrond-{time.strftime('%Y%m%d-%H%M%S')}"))
 
-OURS = ("elrond/palantir.py", "scripts/notify_discord.py")
+# notify_discord.py: N1's hook, before agents_discord.py took it over (N3); removed on install.
+OURS = ("elrond/palantir.py", "scripts/notify_discord.py", "scripts/agents_discord.py")
 # `|| true`: exit 2 from a PreToolUse hook blocks the tool, from SubagentStop it keeps the agent
 # going — and python3 exits 2 on a missing file (a checkout without the script).
-def entry(script, timeout):
-    return {"type": "command", "command": f'python3 "{script}" hook || true', "timeout": timeout, "async": True}
+# PreToolUse waits for its hook (a few ms: it only queues the event): a hand-back is then queued
+# before the tool runs, so before its SubagentStop. The others never hold Claude Code up.
+def entry(script, timeout, wait=False):
+    return {"type": "command", "command": f'python3 "{script}" hook || true', "timeout": timeout,
+            **({} if wait else {"async": True})}
 WANTED = {
-    "Stop": [("", [entry(palantir, 30)])],
+    "Stop": [("", [entry(palantir, 30), entry(notify, 15)])],
     "SubagentStop": [("", [entry(palantir, 30)]), ("elrond-worker|elrond-reviewer", [entry(notify, 15)])],
-    "PreToolUse": [("Agent", [entry(notify, 15)])],
+    "PreToolUse": [("Agent|SendMessage|SubagentHandback|AskUserQuestion", [entry(notify, 15, wait=True)])],
+    "PostToolUse": [("AskUserQuestion", [entry(notify, 15)])],
+    "Notification": [("permission_prompt", [entry(notify, 15)])],
 }
 
 hooks = data.setdefault("hooks", {})
@@ -55,5 +62,5 @@ for event in set(hooks) | set(WANTED):
 if not hooks:
     data.pop("hooks")
 settings.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-print(f"elrond hooks (palantir, notify_discord) {'installed' if mode == 'install' else 'removed'} in {settings}")
+print(f"elrond hooks (palantir, agents_discord) {'installed' if mode == 'install' else 'removed'} in {settings}")
 PY

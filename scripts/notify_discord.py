@@ -4,19 +4,13 @@
   notify_discord.py github        in GitHub Actions (notify.yml): reads $GITHUB_EVENT_NAME and
                                   $GITHUB_EVENT_PATH — CI results, pull requests, releases, closed
                                   issues to #ci, and a lot's events to its thread as well
-  notify_discord.py hook          Claude Code hook (PreToolUse on Agent, SubagentStop): JSON on
-                                  stdin, elrond's agents only; returns at once and delivers in
-                                  the background (EREGION_DISCORD_SYNC=1: inline)
-  notify_discord.py lot ID blocked [--note TEXT]   elrond: a lot it cannot go on with
-  notify_discord.py run-end TEXT  elrond: the end-of-run summary
   notify_discord.py check         what is configured (names, never values), what the forum lacks
 
 Where things go. #ci: a pull request opened or merged, a red CI (pull request, main, the
 nightly runs), main green again after red, a published release, a closed issue. #lots: one
-thread per lot, every event of the lot, its tags (milestone, state) kept true. #agents: one
-message rewritten in place (the agents running), and what needs Jonathan — a model fallback,
-a review with changes, blocking or not obtained, a blocked lot, the end of a run — which
-mentions EREGION_DISCORD_MENTION. Only a red CI, a release and those alerts notify; the rest is silent.
+thread per lot, every event of the lot, its tags (milestone, state) kept true. Only a red CI
+and a release notify; the rest is silent. elrond's lots and #agents: scripts/agents_discord.py
+(N3), which shares this module's plumbing.
 
 Configuration: the environment, over ~/.config/eregion/discord.env (KEY=value lines; another
 file: EREGION_DISCORD_ENV) — EREGION_DISCORD_WEBHOOK_CI, EREGION_DISCORD_WEBHOOK_AGENTS (webhook URLs),
@@ -27,20 +21,16 @@ fails the caller: one line on stderr, without the URL or the token, and exit 0.
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import json
 import os
 import re
-import subprocess
 import sys
 import time
 import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
-from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -55,8 +45,6 @@ RED_CONCLUSIONS = {"failure", "timed_out", "startup_failure"}
 STATE_TAGS = ("à faire", "en cours", "en relecture", "en correction", "fait", "bloqué")
 MILESTONE_TAGS = ("v0.3", "v0.x", "v1.0", "v1.x")
 LOT_ID = r"[A-Z]{1,3}-?\d+[A-Z]?"
-ELROND_AGENTS = ("elrond-worker", "elrond-reviewer")
-STEP_STATE = {"worker": "en cours", "correction": "en correction", "relecture": "en relecture"}
 
 
 class Failure(Exception):
@@ -104,9 +92,10 @@ def load_config(environ=os.environ) -> Config:
                   api=(values.get("EREGION_DISCORD_API") or Config.api).rstrip("/"))
 
 
-def fetch(method: str, url: str, label: str, body=None, headers=None):
-    """JSON in, JSON out; one more try after a 429 that asks for RETRY_MAX_S or less."""
-    data = json.dumps(body).encode() if body is not None else None
+def fetch(method: str, url: str, label: str, body=None, headers=None, raw: bytes | None = None):
+    """JSON in (or `raw`, typed by `headers`), JSON out; one more try after a 429 that asks for
+    RETRY_MAX_S or less."""
+    data = raw if raw is not None else json.dumps(body).encode() if body is not None else None
     head = {"User-Agent": UA, "Content-Type": "application/json", **(headers or {})}
     for attempt in (1, 2):
         try:
@@ -253,15 +242,18 @@ class Forum:
                     out.append(names[_norm(want)])
         return out[:5]
 
-    def post(self, n: "Notice", payload: dict) -> None:
+    def post(self, n: "Notice", payload: dict) -> tuple[dict | None, str]:
+        """The thread and the id of the message posted in it (a forum post's first message has the
+        thread's id); (None, "") when there is no thread and none to create."""
         t = self.find(n.lot, n.issue)
         if t is None:
             if not n.create:
-                return
+                return None, ""
             t = self.call("POST", f"/channels/{self.cfg.forum}/threads",
                           {"name": thread_name(n.lot, n.issue, n.title),
                            "applied_tags": self.apply([], n.state, n.milestone),
                            "message": payload})
+            mid = str(t["id"])
         else:
             change = {}
             tags = self.apply(t.get("applied_tags") or [], n.state, n.milestone)
@@ -271,9 +263,23 @@ class Forum:
                 change["archived"] = False
             if change:
                 self.call("PATCH", f"/channels/{t['id']}", change)
-            self.call("POST", f"/channels/{t['id']}/messages", payload)
+            mid = str(self.call("POST", f"/channels/{t['id']}/messages", payload).get("id") or "")
         if n.archive:
             self.call("PATCH", f"/channels/{t['id']}", {"archived": True})
+        return t, mid
+
+    def attach(self, thread: str, filename: str, text: str) -> None:
+        """A text file in a thread, silent: an agent's whole report, too long for a card."""
+        boundary = "eregion-" + os.urandom(8).hex()
+        payload = {"flags": SILENT, "allowed_mentions": {"parse": []},
+                   "attachments": [{"id": 0, "filename": filename}]}
+        raw = (f'--{boundary}\r\nContent-Disposition: form-data; name="payload_json"\r\n'
+               f'Content-Type: application/json\r\n\r\n{json.dumps(payload)}\r\n'
+               f'--{boundary}\r\nContent-Disposition: form-data; name="files[0]"; filename="{filename}"\r\n'
+               f'Content-Type: text/markdown; charset=utf-8\r\n\r\n').encode() + text.encode() + f"\r\n--{boundary}--\r\n".encode()
+        fetch("POST", f"{self.cfg.api}/channels/{thread}/messages", "forum #lots", raw=raw,
+              headers={"Authorization": f"Bot {self.cfg.token}",
+                       "Content-Type": f"multipart/form-data; boundary={boundary}"})
 
 
 @dataclass
@@ -417,226 +423,7 @@ def github(environ=os.environ) -> int:
     return 0
 
 
-# ── elrond's agents (Claude Code hooks) ─────────────────────────────────────────────
-
-def _palantir():
-    path = ROOT / ".claude" / "skills" / "elrond" / "palantir.py"
-    spec = importlib.util.spec_from_file_location("palantir", path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-
-def parse_description(desc: str) -> tuple[str, str, str] | None:
-    """« elrond <ID> · <title> » → (ID, step, title); step: worker, correction or relecture."""
-    m = re.match(r"\s*elrond\s+(\S+)\s+·\s+(.+)", desc or "")
-    if not m or m.group(1) == "plan":
-        return None
-    lot, rest = m.group(1), m.group(2).strip()
-    for step in ("relecture", "correction"):
-        if rest.lower().startswith(step):
-            return lot, step, ""
-    return lot, "worker", rest
-
-
-def final_report(transcript: Path, data: dict) -> str:
-    """The agent's last word. elrond's agents hand their report back through the SubagentHandback
-    tool (every reviewer transcript, measured on 27/10), not as text: its message first, else
-    the last text, else the hook's last_assistant_message."""
-    last = ""
-    try:
-        for line in transcript.open(encoding="utf-8", errors="replace"):
-            try:
-                o = json.loads(line)
-            except ValueError:
-                continue
-            msg = o.get("message") if o.get("type") == "assistant" else None
-            for b in (msg.get("content") or []) if isinstance(msg, dict) else []:
-                if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "SubagentHandback":
-                    last = str((b.get("input") or {}).get("message") or "")
-                elif isinstance(b, dict) and b.get("type") == "text" and str(b.get("text", "")).strip():
-                    last = str(b["text"])
-    except OSError:
-        pass
-    return last or str(data.get("last_assistant_message") or "")
-
-
-def verdict_of(text: str) -> str:
-    m = re.search(r"(?i)verdict\W{0,8}(ok|changes|blocking)\b", text or "")
-    return m.group(1).lower() if m else ""
-
-
-def _state_path() -> Path:
-    base = os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state"
-    return Path(base) / "eregion" / "discord.json"
-
-
-@contextmanager
-def running_state():
-    """The agents running and the id of the « en cours » message; one writer at a time."""
-    import fcntl  # POSIX: the hosts elrond runs on
-    path = _state_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path.with_suffix(".lock"), "a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            data = {}
-        data.setdefault("running", {})
-        yield data
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-        os.replace(tmp, path)
-
-
-def refresh_status(cfg: Config, data: dict) -> None:
-    """Rewrites the one « en cours » message of #agents; a new one if it was deleted."""
-    if not cfg.agents:
-        return
-    # A launch refused after the hook saw it never stops: gone after a day, not shown forever.
-    data["running"] = {k: r for k, r in data["running"].items() if time.time() - r.get("since", 0) < 86400}
-    rows = sorted(data["running"].values(), key=lambda r: r.get("since", 0))
-    lines = [f"`{r['lot']}` {r['step']} · <t:{r['since']}:R>" + (f" · {_cut(r['title'], 60)}" if r.get("title") else "")
-             for r in rows]
-    payload = {"embeds": [embed("🔄 En cours", "\n".join(lines) or "Rien ne tourne.", BLUE)],
-               "allowed_mentions": {"parse": []}}
-    mid = data.get("status_message")
-    if mid:
-        try:
-            fetch("PATCH", f"{cfg.agents}/messages/{mid}", "webhook #agents", payload)
-            return
-        except Failure as e:
-            if e.code != 404:
-                raise
-    data["status_message"] = post_webhook(cfg.agents, {**payload, "flags": SILENT}, "webhook #agents")
-
-
-def alert(cfg: Config, card: dict) -> None:
-    if cfg.agents:
-        try:
-            post_webhook(cfg.agents, message(card, silent=False, mention=cfg.mention), "webhook #agents")
-        except Failure as e:
-            say(e)
-
-
-def _when(ts: str) -> str:
-    try:
-        return f"<t:{int(datetime.fromisoformat(ts.replace('Z', '+00:00')).timestamp())}:t>"
-    except (ValueError, AttributeError):
-        return ts
-
-
-def on_launch(data: dict, cfg: Config, state: dict) -> list[Notice]:
-    lot, step, title = parse_description((data.get("tool_input") or {}).get("description", ""))
-    state["running"][data.get("tool_use_id") or f"{lot}:{step}"] = {
-        "lot": lot, "step": step, "since": int(time.time()), "title": title}
-    head = {"worker": "🚀 Lancé", "correction": "🔧 Correction lancée", "relecture": "🔎 Relecture lancée"}[step]
-    return [Notice(embed(f"{head} · {lot}", title, BLUE), ci=False, lot=lot, title=title, state=STEP_STATE[step])]
-
-
-def on_stop(data: dict, cfg: Config, state: dict) -> list[Notice]:
-    transcript = Path(str(data.get("agent_transcript_path") or "")).expanduser()
-    pal = _palantir()
-    meta = pal.meta_of(transcript)
-    parsed = parse_description(meta.get("description", ""))
-    if not parsed:
-        return []
-    lot, step, _ = parsed
-    key = meta.get("toolUseId")
-    if key not in state["running"]:
-        key = next((k for k, r in state["running"].items() if (r["lot"], r["step"]) == (lot, step)), None)
-    state["running"].pop(key, None)
-    scan = pal.scan(transcript, pal.EXPECTED) if transcript.is_file() else {}
-    models = ", ".join(f"{m} ×{n}" for m, n in (scan.get("models") or {}).items()) or "—"
-    fell = scan.get("verdict") == "review-needed"
-    episodes = "\n".join(f"{e['model']} de {_when(e['from'])} à {_when(e['to'])} ({e['responses']} réponses)"
-                         for e in scan.get("fallback_episodes") or [])
-    stops = len(scan.get("refusals") or [])
-    if step == "relecture":
-        if fell:
-            card = embed(f"⚠️ Relecture non obtenue · {lot}", f"le relecteur a basculé :\n{episodes or f'{stops} arrêt(s)'}",
-                         ORANGE)
-            alert(cfg, card)
-            return [Notice(card, ci=False, lot=lot)]
-        verdict = verdict_of(final_report(transcript, data))
-        if verdict == "ok":
-            return [Notice(embed(f"✅ Relecture ok · {lot}", f"modèles : {models}", GREEN), ci=False, lot=lot,
-                           state="fait")]
-        card = (embed(f"🛠️ Relecture : {verdict} · {lot}", "le lot repart en correction", RED) if verdict
-                else embed(f"❔ Relecture sans verdict lisible · {lot}", "lire son rapport", ORANGE))
-        alert(cfg, card)
-        return [Notice(card, ci=False, lot=lot, state="en correction" if verdict else None)]
-    if fell:
-        card = embed(f"⚠️ Repli de modèle · {lot}",
-                     f"{episodes or f'{stops} arrêt(s) des protections'}\nrelecture en Opus obligatoire", ORANGE)
-        alert(cfg, card)
-        return [Notice(card, ci=False, lot=lot, state="en relecture")]
-    return [Notice(embed(f"📦 Rendu · {lot}", f"modèles : {models}", GREY), ci=False, lot=lot, state="en relecture")]
-
-
-def wanted(data: dict) -> bool:
-    if data.get("hook_event_name") == "PreToolUse":
-        inp = data.get("tool_input") or {}
-        return (data.get("tool_name") == "Agent" and inp.get("subagent_type") in ELROND_AGENTS
-                and parse_description(inp.get("description", "")) is not None)
-    return data.get("hook_event_name") == "SubagentStop" and data.get("agent_type") in ELROND_AGENTS
-
-
-def deliver_hook(data: dict, cfg: Config) -> None:
-    with running_state() as state:
-        try:
-            notices = (on_launch if data["hook_event_name"] == "PreToolUse" else on_stop)(data, cfg, state)
-        except Exception as e:  # a transcript or a palantir that changed: said, never raised
-            say(Failure("hook", why=type(e).__name__))
-            notices = []
-        deliver(notices, cfg)
-        try:
-            refresh_status(cfg, state)
-        except Failure as e:
-            say(e)
-
-
-def hook(text: str, environ=os.environ) -> int:
-    """Never blocks Claude Code: exit 0 whatever happens, Discord reached in the background."""
-    try:
-        data = json.loads(text)
-        cfg = load_config(environ)
-        if not isinstance(data, dict) or not wanted(data) or not (cfg.agents or cfg.lots):
-            return 0
-        if environ.get("EREGION_DISCORD_SYNC"):
-            deliver_hook(data, cfg)
-            return 0
-        log = _state_path().with_suffix(".log")
-        log.parent.mkdir(parents=True, exist_ok=True)
-        with open(log, "a") as err:
-            child = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "deliver"],
-                                     stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=err,
-                                     start_new_session=True)
-        child.stdin.write(json.dumps(data).encode())
-        child.stdin.close()
-    except Exception as e:
-        say(Failure("hook", why=type(e).__name__))
-    return 0
-
-
-# ── elrond's own calls, and the setup check ─────────────────────────────────────────
-
-def lot_blocked(lot: str, note: str, cfg: Config) -> int:
-    if not (cfg.agents or cfg.lots):   # nothing configured: nothing written, not even the local state
-        return 0
-    card = embed(f"⛔ Lot bloqué · {lot}", note, RED)
-    alert(cfg, card)
-    try:
-        with running_state() as state:
-            for k in [k for k, r in state["running"].items() if r["lot"] == lot]:
-                state["running"].pop(k)
-            deliver([Notice(card, ci=False, lot=lot, state="bloqué")], cfg)
-            refresh_status(cfg, state)
-    except Exception as e:   # a read-only state folder, a Discord error: said, exit 0 (SKILL.md)
-        say(e if isinstance(e, Failure) else Failure("lot blocked", why=type(e).__name__))
-    return 0
-
+# ── the setup check ────────────────────────────────────────────────────────────────
 
 def check(cfg: Config) -> int:
     names = {"EREGION_DISCORD_WEBHOOK_CI": cfg.ci, "EREGION_DISCORD_WEBHOOK_AGENTS": cfg.agents,
@@ -658,31 +445,11 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="mode", required=True)
     sub.add_parser("github")
-    sub.add_parser("hook")
-    sub.add_parser("deliver")
-    lot = sub.add_parser("lot")
-    lot.add_argument("lot")
-    lot.add_argument("event", choices=["blocked"])
-    lot.add_argument("--note", default="")
-    end = sub.add_parser("run-end")
-    end.add_argument("text")
     sub.add_parser("check")
     a = ap.parse_args(argv)
     if a.mode == "github":
         return github()
-    if a.mode == "hook":
-        return hook(sys.stdin.read())
-    cfg = load_config()
-    if a.mode == "deliver":
-        deliver_hook(json.loads(sys.stdin.read()), cfg)
-        return 0
-    if a.mode == "lot":
-        return lot_blocked(a.lot, a.note, cfg)
-    if a.mode == "run-end":
-        alert(cfg, embed("🏁 Fin du run elrond", a.text, PURPLE))
-        return 0
-    return check(cfg)
-
+    return check(load_config())
 
 if __name__ == "__main__":
     sys.exit(main())

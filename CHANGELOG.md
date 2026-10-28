@@ -4,6 +4,23 @@ Notable changes to Eregion. The format follows [Keep a Changelog](https://keepac
 
 ## [Unreleased]
 
+### Changed
+- **`#agents` is what waits for Jonathan, and nothing else: one board, pings that delete themselves, links** (N3, #262, 28/10). The first real elrond run with N1 (I1S, I4S, I8S, H1) gave 10 alerts in `#agents` and one was right. A reviewer waiting for its mutants ends its turn, so `SubagentStop` fired, and the pause was taken for a return. The report was read from the transcript, where the `SubagentHandback` is not yet written when `SubagentStop` runs: « sans verdict » five times (both `blocking` reviews were never said as such), and once the previous verdict (an `ok` said `changes`). Corrections and second reviews, which elrond sends by `SendMessage` to the agent that already ran, were seen by no hook (« Rien ne tourne » during a review). And no alert had a link.
+  - **elrond's part moves to `scripts/agents_discord.py`.** `notify_discord.py` keeps GitHub to `#ci` and `#lots`.
+  - **The report comes from `SubagentHandback`'s `PreToolUse` (`tool_input.message`),** as Claude Code documents it. A pause (`background_tasks`) is nothing. A resume by `SendMessage` is followed. A fallback counts only in the stretch it happened in.
+  - **`#agents` holds one board, rewritten in place** (N1's pinned « En cours » message becomes it): 🙋 what waits, 🔄 running, ✅ returned lately, 🏁 the last run, each line with its links (the lot's thread, the pull request, the issue, the report).
+  - **One ping per thing that waits, deleted once settled:**
+    - a lot blocked, or a review not obtained;
+    - the elrond session waiting for a permission (`Notification` `permission_prompt`) or for an answer (`AskUserQuestion` left unanswered for 30 s);
+    - a pull request to merge by hand (`agents_discord.py lot <ID> merge --pr <n>`, settled when GitHub says it is merged);
+    - the end of a run.
+  - **No longer pings:** `changes` / `blocking` (elrond fixes alone), a worker's fallback, a return.
+  - **Each worker's and reviewer's report lands in the lot's thread:** a head in the card, the whole `.md` attached (median 7.8 KB, measured on 28/10).
+  - **The hooks only queue the event and return;** one process delivers the queue in order. `PreToolUse` is synchronous, so a hand-back is queued before its `SubagentStop`.
+  - **After merging, run `bash scripts/elrond-hooks.sh install` again.**
+
+  To measure on a real run: the payloads, from Claude Code's documentation (the auto-mode classifier refused a measuring hook). `~/.local/state/eregion/discord.trace` keeps one line per event, its fields' names only. Tests: `tests/unit/test_agents_discord.py` (I8S's sequence of 28/10 replayed); mutants M1060–M1069, and M978, M979, M990 and M994 moved with the code they bite.
+
 ## [0.4.1] — 2026-10-28 — "nothing raw in the console, three loose ends of the isolation path tied"
 
 ### Fixed

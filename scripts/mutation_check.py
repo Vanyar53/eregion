@@ -2560,6 +2560,7 @@ TESTS.update({f"M{n}": "tests/unit/test_githooks.py" for n in (903, 904)})
 # N1 (#242): the workshop's news in Discord, scripts/notify_discord.py, measured by its tests
 # against a fake Discord (tests/unit/test_notify_discord.py). Range M970–M979.
 NOTIFY = "scripts/notify_discord.py"
+AGENTS_D = "scripts/agents_discord.py"
 MUTANTS += [
     ("M970", "a message without allowed_mentions: a title with @everyone pings the server (N1)", NOTIFY,
      ('    out = {"embeds": [card], "allowed_mentions": {"parse": []}}\n',
@@ -2587,20 +2588,21 @@ MUTANTS += [
      "        names, out = self.tags(), []\n"),
     ("M977", "archived threads not searched: a closed lot gets a second thread (N1)", NOTIFY,
      '            found += page.get("threads") or []\n', "            pass\n"),
-    ("M978", "palantir's verdict misread: a model fallback neither alerted nor reviewed (N1)", NOTIFY,
-     '    fell = scan.get("verdict") == "review-needed"\n',
-     '    fell = scan.get("verdict") == "review_needed"\n'),
-    ("M979", "every subagent's stop followed, not only elrond's: #agents rewritten for any agent (N1)", NOTIFY,
-     '    return data.get("hook_event_name") == "SubagentStop" and data.get("agent_type") in ELROND_AGENTS\n',
-     '    return data.get("hook_event_name") == "SubagentStop"\n'),
+    # M978, M979: elrond's part moved to scripts/agents_discord.py (N3), its tests with it.
+    ("M978", "a model fallback never seen: a review not obtained neither pinged nor said (N1, N3)", AGENTS_D,
+     "    fell = bool(episodes or stops)\n", "    fell = False\n"),
+    ("M979", "every subagent followed, not only elrond's: #agents rewritten for any agent (N1, N3)", AGENTS_D,
+     '        return (e.get("agent_type") or agent_of(e)[1].get("agentType")) in ELROND_AGENTS\n',
+     "        return True\n"),
 ]
-TESTS.update({f"M{n}": "tests/unit/test_notify_discord.py" for n in range(970, 980)})
+TESTS.update({f"M{n}": "tests/unit/test_notify_discord.py" for n in range(970, 978)})
+TESTS.update({f"M{n}": "tests/unit/test_agents_discord.py" for n in (978, 979)})
 
 # N1 after its review (27/10, F1–F8): M990–M994, taken from this session's range (M970–M999).
 MUTANTS += [
-    ("M990", "the verdict read only in last_assistant_message: elrond's reviewers hand it back by a tool (N1, F1)",
-     NOTIFY, "        verdict = verdict_of(final_report(transcript, data))\n",
-     '        verdict = verdict_of(data.get("last_assistant_message", ""))\n'),
+    ("M990", "the report not read from the hand-back: elrond's reviewers hand it back by a tool (N1 F1, N3)",
+     AGENTS_D, '        on_return(e, cfg, state, forum, str((e.get("tool_input") or {}).get("message") or ""))\n',
+     '        on_return(e, cfg, state, forum, str(e.get("last_assistant_message") or ""))\n'),
     ("M991", "a fork's pull request posts in the lot its title names (N1, F5)", NOTIFY,
      "            lot = issue = \"\"   # a fork's pull request: #ci only, never a lot's thread (its title names any lot)\n",
      "            pass\n"),
@@ -2609,11 +2611,43 @@ MUTANTS += [
     ("M993", "http.client's errors not caught: InvalidURL quotes the webhook's token (N1, F6)", NOTIFY,
      "        except Exception as e:  # URLError, http.client's errors: InvalidURL quotes the URL, token and all\n",
      "        except (OSError, ValueError) as e:\n"),
-    ("M994", "a blocked lot without configuration writes the local state (N1, F7)", NOTIFY,
+    ("M994", "a blocked lot without configuration writes the local state (N1, F7)", AGENTS_D,
      "    if not (cfg.agents or cfg.lots):   # nothing configured: nothing written, not even the local state\n"
      "        return 0\n", ""),
 ]
 TESTS.update({f"M{n}": "tests/unit/test_notify_discord.py" for n in range(990, 995)})
+TESTS.update({f"M{n}": "tests/unit/test_agents_discord.py" for n in (990, 994)})
+
+# N3 (#262): #agents is what waits for Jonathan, scripts/agents_discord.py, measured by
+# tests/unit/test_agents_discord.py against the fake Discord. Range M1060–M1069.
+MUTANTS += [
+    ("M1060", "a pause taken for a return: a reviewer waiting for its mutants said « sans verdict » (N3)", AGENTS_D,
+     "    if e.get(\"background_tasks\"):\n        return   # a pause: it waits for its own background task, and comes back\n",
+     ""),
+    ("M1061", "a long report never attached: the thread holds its head, the findings lost (N3)", AGENTS_D,
+     "    if len(report) > REPORT_HEAD:\n", "    if False:\n"),
+    ("M1062", "elrond's resumes unseen: a correction sent by SendMessage neither on the board nor in the thread (N3)",
+     AGENTS_D, '        return str(inp.get("to") or "") in state.get("agents", {})\n', "        return False\n"),
+    ("M1063", "a settled ping never deleted: #agents fills up again (N3)", AGENTS_D,
+     '            nd.fetch("DELETE", f"{cfg.agents}/messages/{mid}", "webhook #agents")\n', "            pass\n"),
+    ("M1064", "a fallback of an earlier stretch counted again: a clean correction said fallen back (N3)", AGENTS_D,
+     '    episodes = [x for x in scan.get("fallback_episodes") or [] if x.get("to", "") >= _iso(since)]\n',
+     '    episodes = list(scan.get("fallback_episodes") or [])\n'),
+    ("M1065", "every question pings at once, even answered within seconds (N3)", AGENTS_D,
+     '    state["waiting"].append({**item, "ping_at": item["since"] + delay})\n',
+     '    state["waiting"].append({**item, "ping_at": item["since"]})\n'),
+    ("M1066", "the board posted anew at each event: #agents a stream again (N3)", AGENTS_D,
+     '    if mid:\n        try:\n            nd.fetch("PATCH"', '    if False:\n        try:\n            nd.fetch("PATCH"'),
+    ("M1067", "a subagent's event settles the main session's permission: the ping gone, the run still stuck (N3)",
+     AGENTS_D, '    if event in ("PreToolUse", "PostToolUse", "Stop") and not e.get("agent_id"):\n',
+     '    if event in ("PreToolUse", "PostToolUse", "Stop"):\n'),
+    ("M1068", "GitHub asked at every event whether a pull request was merged (N3)", AGENTS_D,
+     '    if not items or (not force and now - state.get("prs_checked", 0) < PR_CHECK_S):\n',
+     "    if not items:\n"),
+    ("M1069", "the PreToolUse hook async: a hand-back may be queued after its SubagentStop (N3)",
+     "scripts/elrond-hooks.sh", '            **({} if wait else {"async": True})}\n', '            "async": True}\n'),
+]
+TESTS.update({f"M{n}": "tests/unit/test_agents_discord.py" for n in range(1060, 1070)})
 
 # N2 (#243): the road to 1.0 in Discord, scripts/roadmap_discord.py (and the thread matching it
 # shares with notify_discord.py), measured by tests/unit/test_roadmap_discord.py. Range M980–M989.

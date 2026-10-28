@@ -143,7 +143,12 @@ glorfindel/
                           audit (--all), approve-rule, reject-rule, propose-rules, rules, migrate-rules, check-ttl, jobs,
                           bot, dashboard
                           (war-room : alias caché d'`eregion console`)
-  escalations.py        → ~/.glorfindel/escalations.jsonl + labels (proposed_rule, improve_detection ajoutés)
+  escalations.py        → ~/.glorfindel/escalations.jsonl + labels (proposed_rule, improve_detection ajoutés) ;
+                          SEC3 : chaque écriture sous le verrou du magasin, le magasin réécrit entier
+  signal_origin.py      → SEC3 (#274) : ce que la watch prend de runs/*_signals.jsonl — les événements qu'un
+                          injecteur émet (attack_started → la règle de la watch, detection_missed → une proposition),
+                          et d'eux les seuls champs qu'il écrit ; le reste refusé (journal, compteur), jamais décidé. Le recovery_complete : seul celui de `glorfindel restore` (ce
+                          processus, ou ~/.glorfindel/recovery_signals/) lève une isolation seul
   bot.py                → Discord bot — un fil par VM, boutons Acquitter + Commande, /pending slash command ;
                           ButtonPolicy (M-3) : DISCORD_ALLOWED_USERS / _ROLES, fermé par défaut
   tui.py                → Rich TUI full-screen (glorfindel dashboard) : resources + feed + escalations, raccourcis a/r/x/u/v
@@ -270,8 +275,30 @@ infra/terraform/              → module Celebrimbor : infra de test Azure modul
                                 Cibles : make celebrimbor-{plan,up,down,output,stop,start} [INSTANCE=] [TOPO=].
                                 Schéma de noms type-celebrimbor-nom (CAF) : VM=cités, LAW=tours de guet, RSV=coffres.
 
-~/.glorfindel/
-  escalations.jsonl           → escalades persistées
+~/.glorfindel/                → SEC3 : en 0600 (dossiers 0700), écrits entiers (fichier temporaire + `os.replace`) :
+                                isolation/, blocks/, escalations.jsonl, channel_refusals.json, recovery_signals/ (et
+                                orphan_alerts.json, quarantine_alerts.json, active_jobs/, recovery/, écrits par le même
+                                chemin) ; isolation/ et
+                                blocks/ d'une version antérieure resserrés au démarrage du watch. Les autres —
+                                proposed_rules.jsonl, incidents.jsonl, les magasins du bot, posture, discovery,
+                                readiness — restent au umask : suite notée. Qui écrit : la watch, la console, le bot et
+                                la CLI (le même utilisateur). Les injecteurs (Annatar, Gothmog) n'en voient que
+                                `injectors/`, en lecture seule (compose, Makefile)
+  injectors/watch_heartbeat   → SEC3 (N-05) : copie du battement de la watch, le seul fichier de Glorfindel que lisent
+                                les injecteurs (garde V1 ; le guetteur des blocages d'Annatar, qui lisait blocks/ et
+                                émettait attack_adapted, est retiré) — leur conteneur monte ce dossier comme son
+                                ~/.glorfindel. La watch le crée au démarrage. 0644 (dossier 0755) : à lire par eux, rien
+                                de secret. Retiré à l'arrêt
+  watch_heartbeat             → le battement de la watch (V1 sur cet hôte, la console, le CD de H0)
+  escalations.jsonl           → escalades persistées. SEC3 (V-10) : chaque lecture-modification-écriture sous un
+                                verrou (`flock` sur `escalations.jsonl.lock`, `response/locks.py::_file_lock`), le
+                                magasin réécrit entier : aucune carte perdue entre écrivains, aucune lecture tronquée
+                                (`tests/unit/test_locks.py`, vrais processus)
+  recovery_signals/           → SEC3 (V-05) : le `recovery_complete` qu'écrit `glorfindel restore --wait` pour un
+                                `glorfindel respond` plus tard — seul endroit d'où ce signal lève une isolation seul
+                                (`glorfindel/signal_origin.py`) ; plus `runs/recovery/`, que les injecteurs écrivent
+  channel_refusals.json       → SEC3 (V-05) : les lignes de `runs/` que la watch a refusées, comptées par événement
+                                (la dernière : fichier, heure, raison)
   console_token               → SEC1 : le jeton que la console a tiré à son premier démarrage sans
                                 EREGION_CONSOLE_TOKEN (mode 600, relu ensuite) ; jamais écrit quand la variable est posée (H0)
   incidents.jsonl             → incidents actifs

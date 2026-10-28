@@ -315,6 +315,14 @@ def isolated_glorfindel_home(tmp_path, monkeypatch):
     monkeypatch.setattr(discovery, "_CACHE_FILE", home / "discovered_assets.json")
     monkeypatch.setattr(IncidentRegistry, "_DEFAULT_PATH", home / "incidents.jsonl")
     monkeypatch.setattr(readiness, "_STATE_FILE", home / "readiness.json")
+    # SEC3: the recovery signals `glorfindel restore` keeps, and what this process vouched for.
+    import glorfindel.signal_origin as signal_origin
+    monkeypatch.setattr(signal_origin, "RECOVERY_SIGNALS_DIR", home / "recovery_signals")
+    monkeypatch.setattr(signal_origin, "_VOUCHED", set())
+    monkeypatch.setattr(signal_origin, "_REFUSED", {})
+    monkeypatch.setattr(signal_origin, "REFUSALS_FILE", home / "channel_refusals.json")
+    import glorfindel.cli as glorfindel_cli          # the injectors' heartbeat directory (SEC3)
+    monkeypatch.setattr(glorfindel_cli, "_INJECTORS_DIR", home / "injectors")
     try:
         import eregion_console.api as api
         monkeypatch.setattr(api, "_RESTORE_TRACKING", home / "restore_in_progress.json")

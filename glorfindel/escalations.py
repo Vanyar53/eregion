@@ -1,11 +1,55 @@
 from __future__ import annotations
 
+import functools
 import json
+import threading
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 _STORE = Path.home() / ".glorfindel" / "escalations.jsonl"
+
+# SEC3 (V-10): the store has many writers — the watch's workers and its reassertion pass, the
+# console, the bot, the CLI. Each read-modify-write holds an flock on `<store>.lock`, and the
+# store is rewritten whole (temporary file + os.replace): no card lost between two writers,
+# no reader ever sees half a file.
+_AFTER = threading.local()
+
+
+def _locked(fn):
+    """`fn` reads, changes and rewrites the store under its lock; what it hands to
+    `_after_unlock` (a webhook) runs once the lock is released."""
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        from glorfindel.response.locks import _file_lock
+        outer = getattr(_AFTER, "calls", None) is None
+        if outer:
+            _AFTER.calls = []
+        try:
+            with _file_lock(_STORE.with_name(_STORE.name + ".lock")):
+                result = fn(*args, **kwargs)
+            calls = _AFTER.calls if outer else []
+        finally:
+            if outer:
+                _AFTER.calls = None
+        for call, arg in calls:
+            call(arg)
+        return result
+    return wrapper
+
+
+def _after_unlock(call, arg) -> None:
+    pending_calls = getattr(_AFTER, "calls", None)
+    if pending_calls is None:
+        call(arg)
+    else:
+        pending_calls.append((call, arg))
+
+
+def _write_lines(lines: list[str]) -> None:
+    """The whole store, through a temporary file: owner-only (0600), never half-written."""
+    from glorfindel.response.state import _atomic_write_text
+    _atomic_write_text(_STORE, "\n".join(lines) + "\n")
 
 # A re-fired escalation refreshes its (LLM-generated) content only when confidence
 # moves at least this much — keeps a standing card current without flickering its
@@ -57,6 +101,7 @@ _ESCALATION_LABELS = {
 }
 
 
+@_locked
 def record(
     signal_id: str,
     resource_id: str,
@@ -144,7 +189,7 @@ def record(
                         e["explanation"] = explanation
                     e["updated_at"] = now
                 lines[i] = json.dumps(e, default=str)
-                _STORE.write_text("\n".join(lines) + "\n")
+                _write_lines(lines)
                 return e["id"]
 
     esc = {
@@ -175,13 +220,15 @@ def record(
         "status": "pending",
         "resolved_at": None,
     }
-    _STORE.parent.mkdir(parents=True, exist_ok=True)
-    with open(_STORE, "a") as f:
-        f.write(json.dumps(esc, default=str) + "\n")
-    _notify(esc)
+    # Rewritten whole, as every write of the store: an append seen half-done by a reader
+    # made its last line unreadable (SEC3, V-10).
+    lines = _STORE.read_text().splitlines() if _STORE.exists() else []
+    _write_lines([ln for ln in lines if ln.strip()] + [json.dumps(esc, default=str)])
+    _after_unlock(_notify, esc)
     return esc["id"]
 
 
+@_locked
 def resolve(escalation_id: str, note: str = "") -> None:
     """Mark an escalation as resolved — `note`: what resolved it, when Glorfindel did
     (an orphan rule taken off, A3)."""
@@ -197,9 +244,10 @@ def resolve(escalation_id: str, note: str = "") -> None:
             if note:
                 e["resolution"] = note
         updated.append(json.dumps(e, default=str))
-    _STORE.write_text("\n".join(updated) + "\n")
+    _write_lines(updated)
 
 
+@_locked
 def resolve_by_resource(resource_id: str, action: str) -> int:
     """Resolve all pending escalations matching resource_id + action.
 
@@ -224,10 +272,11 @@ def resolve_by_resource(resource_id: str, action: str) -> int:
             e["resolved_at"] = now
             count += 1
         updated.append(json.dumps(e, default=str))
-    _STORE.write_text("\n".join(updated) + "\n")
+    _write_lines(updated)
     return count
 
 
+@_locked
 def resolve_by_proposal(proposal_id: str) -> int:
     """Resolve all pending proposed_rule escalations for a given proposal_id."""
     if not _STORE.exists() or not proposal_id:
@@ -254,7 +303,7 @@ def resolve_by_proposal(proposal_id: str) -> int:
             e["resolved_at"] = now
             count += 1
         updated.append(json.dumps(e, default=str))
-    _STORE.write_text("\n".join(updated) + "\n")
+    _write_lines(updated)
     return count
 
 
@@ -398,6 +447,7 @@ def all_escalations() -> list[dict]:
     return out
 
 
+@_locked
 def set_verdict(escalation_id: str, verdict: str, note: str = "") -> dict:
     """Record the operator's judgement of a card — independent of its acknowledgement.
 
@@ -429,7 +479,7 @@ def set_verdict(escalation_id: str, verdict: str, note: str = "") -> dict:
     e["verdict_at"] = datetime.now(timezone.utc).isoformat()
     e["verdict_note"] = note
     lines[i] = json.dumps(e, default=str)
-    _STORE.write_text("\n".join(lines) + "\n")
+    _write_lines(lines)
     return e
 
 

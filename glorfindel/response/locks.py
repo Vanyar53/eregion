@@ -111,3 +111,43 @@ def _vm_lock(vm_name: str, timeout: float | None = None):
                 depth[key] = 0
     finally:
         lock.release()
+
+
+_FILE_LOCKS: dict[str, threading.RLock] = {}
+_FILE_LOCK_DEPTH = threading.local()
+
+
+@contextlib.contextmanager
+def _file_lock(lock_file):
+    """One read-modify-write at a time of a file the watch, the console, the bot and the
+    CLI all write (the escalations store — SEC3, V-10): a thread lock plus an flock on
+    `lock_file`, as _vm_lock. Re-entrant within a thread. Writers wait: they must
+    serialise, and each holds it for one rewrite of a local file."""
+    from pathlib import Path
+    path = Path(lock_file)
+    key = str(path)
+    with _QUARANTINE_LOCKS_GUARD:
+        lock = _FILE_LOCKS.setdefault(key, threading.RLock())
+    depth = getattr(_FILE_LOCK_DEPTH, "d", None)
+    if depth is None:
+        depth = _FILE_LOCK_DEPTH.d = {}
+    with lock:
+        if depth.get(key):
+            depth[key] += 1
+            try:
+                yield
+            finally:
+                depth[key] -= 1
+            return
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        with open(path, "a") as fh:
+            try:
+                import fcntl
+                fcntl.flock(fh, fcntl.LOCK_EX)
+            except ImportError:
+                pass
+            depth[key] = 1
+            try:
+                yield
+            finally:
+                depth[key] = 0

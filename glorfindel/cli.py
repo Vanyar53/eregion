@@ -58,6 +58,30 @@ def _parse_signal_line(raw: str):
     return data, sig
 
 
+# SEC3 (N-05): what the injectors' containers mount, read-only, as their ~/.glorfindel — the
+# watch writes a copy of its heartbeat there, nothing else.
+_INJECTORS_DIR = Path.home() / ".glorfindel" / "injectors"
+
+
+def _admit_from_runs(data: dict, source: str):
+    """(data, Signal) the watch may decide on, for one line of runs/*_signals.jsonl — None
+    when the line is refused (said: the log, the counter). SEC3 (#274),
+    glorfindel/signal_origin.py."""
+    from eregion_core.signals import Signal
+    from glorfindel import signal_origin
+    adm = signal_origin.admit(data)
+    if adm.signal is None:
+        console.print(f"[bold red]Signal refusé ({_esc_markup(source)}) :[/bold red] {_esc_markup(adm.refused)} "
+                      "— rien n'est décidé (compté : ~/.glorfindel/channel_refusals.json)")
+        signal_origin.refuse(data, adm.refused, source)
+        return None
+    if adm.dropped:
+        console.print(f"[yellow]{source} : champs ignorés ({_esc_markup(', '.join(adm.dropped[:8]))}) — "
+                      "un injecteur ne les écrit pas[/yellow]")
+    sig = Signal(**{k: adm.signal.get(k, "") for k in Signal.__dataclass_fields__})
+    return adm.signal, sig
+
+
 def _read_new_signals(path: Path, offset: int, on_error) -> tuple[list, int]:
     """Signals appended to `path` since `offset` → ([(data, Signal)], new_offset).
 
@@ -204,8 +228,14 @@ def respond(signals_file: str, dry_run: bool, model: str, memory_path: str | Non
         return
 
     agent = GlorfindelAgent(dry_run=dry_run, model=model, memory_path=memory_path)
+    # SEC3: a recovery_complete lifts an isolation alone only from where the defender alone
+    # writes it (`glorfindel restore`, glorfindel/signal_origin.py) — not from runs/.
+    from glorfindel import signal_origin
+    trusted = signal_origin.in_recovery_dir(signals_file)
 
     for sig in signals:
+        if trusted and sig.event == "recovery_complete":
+            signal_origin.vouch({"signal_id": sig.signal_id})
         console.rule(f"[bold cyan]Signal — {sig.signal_id}[/bold cyan]")
         console.print(f"  TTP      : {sig.ttp}  |  Severity: [red]{sig.severity}[/red]")
         console.print(f"  Event    : {sig.event}  |  Resource: {sig.resource_type}")
@@ -399,6 +429,15 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
     # watch (real run, 2026-10-05), drowning Glorfindel's own lines. Warnings still show.
     for _noisy in ("azure", "urllib3", "httpx", "LiteLLM"):
         _logging.getLogger(_noisy).setLevel(_logging.WARNING)
+
+    # SEC3: the directory the injectors mount (~/.glorfindel/injectors, their heartbeat), made
+    # first, as the operator: a `docker compose run annatar` on a fresh host would otherwise
+    # have docker create it, as root — and the watch could no longer write there.
+    try:
+        _INJECTORS_DIR.mkdir(mode=0o755, parents=True, exist_ok=True)
+        os.chmod(_INJECTORS_DIR, 0o755)      # theirs to read, whatever the umask
+    except OSError as exc:
+        console.print(f"[yellow]~/.glorfindel/injectors non créé ({exc})[/yellow]")
 
     # A badly written config is refused, and said (A3): the watch used to start on it —
     # "Could not load rules", then no detection at all, or the defaults standing in for
@@ -615,8 +654,12 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
                 lambda exc, name=path.name: console.print(
                     f"[yellow]Ligne de signal ignorée ({name}) : {exc}[/yellow]"),
             )
-            for data, sig in signals:
-                _dispatch(data, sig)   # non-blocking — worker thread takes over
+            for data, _sig in signals:
+                # SEC3 (#274): runs/ is written by the injectors too — only what they emit,
+                # each for what it is (glorfindel/signal_origin.py).
+                admitted = _admit_from_runs(data, path.name)
+                if admitted is not None:
+                    _dispatch(*admitted)   # non-blocking — worker thread takes over
 
     from datetime import datetime, timezone
     from glorfindel.actions import AzureConnector
@@ -695,9 +738,21 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
         except Exception:
             pass
 
+    # SEC3 (N-05): the injectors' containers mount ~/.glorfindel/injectors/ only, read-only
+    # — not the whole of ~/.glorfindel (escalations, isolation state, the client's rules).
+    # The watch writes its heartbeat there too, the one thing they read (V1).
+    _INJECTOR_BEAT = _INJECTORS_DIR / "watch_heartbeat"
+
     def _write_heartbeat() -> None:
         _HEARTBEAT.parent.mkdir(parents=True, exist_ok=True)
-        _HEARTBEAT.write_text(datetime.now(timezone.utc).isoformat())
+        now = datetime.now(timezone.utc).isoformat()
+        _HEARTBEAT.write_text(now)
+        try:
+            from glorfindel.response.state import _atomic_write_text
+            _atomic_write_text(_INJECTOR_BEAT, now, mode=0o644)   # for them to read: nothing secret
+        except OSError as exc:          # a directory docker made as root: the watch goes on
+            console.print(f"[yellow]Battement pour les injecteurs non écrit ({exc}) — "
+                          "`make glorfindel-start` crée ~/.glorfindel/injectors[/yellow]")
 
     # Remove the heartbeat on exit so a fast restart (docker compose restart / stop+up)
     # doesn't see a stale heartbeat and warn about a phantom second watch. Ctrl+C is
@@ -708,6 +763,10 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
 
     def _remove_heartbeat() -> None:
         _HEARTBEAT.unlink(missing_ok=True)
+        try:   # the injectors' copy: never an error at stop (a file in its place, a root-owned beat)
+            _INJECTOR_BEAT.unlink(missing_ok=True)
+        except OSError:
+            pass
 
     def _on_sigterm(_signum, _frame):
         raise SystemExit(0)
@@ -926,7 +985,7 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
     except KeyboardInterrupt:
         if _rule_poller:
             _rule_poller.stop()
-        _HEARTBEAT.unlink(missing_ok=True)
+        _remove_heartbeat()
         console.print("\n[dim]Watch stopped.[/dim]")
 
 
@@ -1747,10 +1806,14 @@ def check_ttl(ttl: float | None, dry_run: bool):
 
 
 def _build_recovery_signal(resource_id: str, restore_result: dict, restore_time_s: int) -> dict:
+    """The recovery_complete of a restore this process ran — vouched for in this process
+    only (SEC3, glorfindel/signal_origin.py): the release precondition knows it is ours."""
     from datetime import datetime, timezone
+
+    from glorfindel.signal_origin import vouch
     ts = datetime.now(timezone.utc)
     run_id = ts.strftime("%Y%m%dT%H%M%SZ")
-    return {
+    return vouch({
         "signal_id": f"{run_id}_recovery_complete",
         "timestamp": ts.isoformat(),
         "provider": "azure",
@@ -1769,7 +1832,7 @@ def _build_recovery_signal(resource_id: str, restore_result: dict, restore_time_
                if restore_result.get("replay_vectors") else {}),
         },
         "context": {"run_id": run_id},
-    }
+    })
 
 
 def _find_last_attack_time() -> str | None:
@@ -1792,14 +1855,11 @@ def _find_last_attack_time() -> str | None:
     return None
 
 
-def _write_signal(signal: dict, runs_dir: str = "runs") -> Path:
-    from pathlib import Path
-    # Recovery signals go to runs/recovery/ — watch only monitors runs/*_signals.jsonl
-    out = Path(runs_dir) / "recovery" / f"{signal['context']['run_id']}_signals.jsonl"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    with open(out, "a") as f:
-        f.write(json.dumps(signal) + "\n")
-    return out
+def _write_signal(signal: dict) -> Path:
+    """A recovery signal is kept where only the defender writes (SEC3, #274):
+    ~/.glorfindel/recovery_signals/ — not runs/, which the injectors write too."""
+    from glorfindel.signal_origin import write_recovery_signal
+    return write_recovery_signal(signal)
 
 
 def _render_decision(state: dict, dry_run: bool) -> None:

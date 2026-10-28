@@ -53,17 +53,19 @@ GLORFINDEL_STATE := \
 	-v $(HOME)/.cache/chroma:/root/.cache/chroma
 
 ANNATAR_STATE := \
-	-v $(HOME)/.annatar:/root/.annatar \
-	-v $(HOME)/.glorfindel:/root/.glorfindel:ro
+	-v $(HOME)/.annatar:/root/.annatar
 
-# ~/.glorfindel read-only: Annatar reads the watch heartbeat to send its purple-team
-# feedback (detection_missed). Without it, every Docker run printed "no active
-# glorfindel watch detected" and skipped the feedback (constaté le 2026-10-07).
+# ~/.glorfindel/injectors read-only, as ~/.glorfindel in the container: Annatar reads the
+# watch heartbeat there (V1, its purple-team feedback). Without it, every Docker run printed
+# "no active glorfindel watch detected" and skipped the feedback (constaté le 2026-10-07).
+# Only that directory (SEC3): the rest of ~/.glorfindel — escalations, isolation state, the
+# client's rules — stays out of the attacker's reach. Mounted once (ANNATAR_STATE no longer
+# mounts it too: annatar-shell had the same mount point twice).
 ANNATAR_VOLS := \
 	-v $(PWD)/annatar/scenarios:/app/annatar/scenarios \
 	-v $(PWD)/scripts:/app/scripts \
 	-v $(PWD)/runs:/app/runs \
-	$(if $(wildcard $(HOME)/.glorfindel),-v $(HOME)/.glorfindel:/root/.glorfindel:ro,)
+	$(if $(wildcard $(HOME)/.glorfindel/injectors),-v $(HOME)/.glorfindel/injectors:/root/.glorfindel:ro,)
 
 GLORFINDEL_VOLS := \
 	-v $(PWD)/runs:/app/runs \
@@ -142,8 +144,8 @@ help:
 	@echo "  make annatar-dry-run          Run scenario (--dry-run)"
 	@echo "  make annatar-validate         Validate scenario YAML"
 	@echo "  make annatar-list             List available scenarios"
-	@echo "  make annatar-simulate         Simulate locally (no Azure)"
-	@echo "  make annatar-simulate-gap     Simulate detection_timeout flow"
+	@echo "  make annatar-simulate         Simulate locally (no Azure): glorfindel respond --dry-run"
+	@echo "  make annatar-simulate-gap     Simulate detection_timeout flow (same, no watch)"
 	@echo ""
 	@echo "Glorfindel (Docker)"
 	@echo "  make glorfindel-start           Start watch + war-room (http://localhost:7007)"
@@ -270,6 +272,8 @@ annatar-validate:
 annatar-list:
 	docker run --rm -v $(PWD)/annatar/scenarios:/app/annatar/scenarios --entrypoint annatar $(IMAGE_ANNATAR) list
 
+# The signals of a run in a temporary file, then `glorfindel respond <file> --dry-run` — not
+# runs/: the watch takes from there only what an injector emits (SEC3).
 annatar-simulate:
 	$(PYTHON) scripts/simulate_annatar.py
 
@@ -340,7 +344,7 @@ check-azure-env:
 	fi
 
 glorfindel-start: check-azure-env build-glorfindel
-	mkdir -p $(HOME)/.glorfindel $(HOME)/.cache/chroma $(HOME)/.eregion/analysis runs
+	mkdir -p $(HOME)/.glorfindel $(HOME)/.glorfindel/injectors $(HOME)/.cache/chroma $(HOME)/.eregion/analysis runs
 	docker compose up -d
 	@echo ""
 	@$(MAKE) --no-print-directory console-url || true
@@ -353,12 +357,12 @@ glorfindel-stop:
 	docker compose down
 
 glorfindel-restart: check-azure-env build-glorfindel
-	mkdir -p $(HOME)/.glorfindel $(HOME)/.cache/chroma $(HOME)/.eregion/analysis runs
+	mkdir -p $(HOME)/.glorfindel $(HOME)/.glorfindel/injectors $(HOME)/.cache/chroma $(HOME)/.eregion/analysis runs
 	docker compose up -d --build --force-recreate
 	@$(MAKE) --no-print-directory console-url || true
 
 glorfindel-dev: check-azure-env build-glorfindel
-	mkdir -p $(HOME)/.glorfindel $(HOME)/.cache/chroma $(HOME)/.eregion/analysis runs
+	mkdir -p $(HOME)/.glorfindel $(HOME)/.glorfindel/injectors $(HOME)/.cache/chroma $(HOME)/.eregion/analysis runs
 	docker compose up -d
 	@$(MAKE) --no-print-directory console-url || true
 	@echo "  (watching for changes…)"

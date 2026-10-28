@@ -495,3 +495,81 @@ def test_a_rule_cutting_vms_of_different_modes_waits_for_every_one(monkeypatch):
     path.write_text("autonomy:\n  default: non_disruptive\n")
     _watch_pass(c, None)
     assert name not in nsg["rules"]
+
+
+# ── SEC3 (#274): an unreadable state never frees a VM ────────────────────────────────
+
+def _corrupt_states(directory, text="{not json"):
+    files = sorted(directory.glob("*.json"))
+    assert files
+    for f in files:
+        f.write_text(text)
+    return files
+
+
+@pytest.mark.parametrize("text", ["{not json", "wrong-shape", "\"x\""], ids=["truncated", "wrong-shape", "scalar"])
+@pytest.mark.parametrize("what", ["isolate", "block"])
+def test_an_unreadable_state_keeps_the_rule_of_a_recreated_nic(monkeypatch, what, text):
+    """N-06: web isolated (or blocked), its NIC recreated under it — the old NIC's rule
+    holds what the state wants. Its state file unreadable, the state is unknown, not
+    empty: the sweep keeps every orphan, says why on the card, and writes nothing — in
+    full_auto too. The VM stays held."""
+    f, c, subnet = _world(monkeypatch)
+    if what == "isolate":
+        assert c.isolate_vm(WEB)["status"] == "isolated"
+        directory = actions._ISOLATION_STATE_DIR
+    else:
+        assert c.block_suspicious_ip(ATTACKER, WEB, scope="vm", threat_port=None)["status"] == "blocked"
+        directory = actions._BLOCK_STATE_DIR
+    if text == "wrong-shape":               # a list for an isolation, an object for blocks
+        text = "[1]" if what == "isolate" else '{"ip": "x"}'
+    _recreate_nic(f, WEB, "web-nic", "web-nic-v2")
+    held = open_flows(_world_view(f), WEB)
+    assert held != _designed(f, WEB)
+    _corrupt_states(directory, text)
+    before = _glorfindel_rules(f)
+    _watch_pass(c, "full_auto")
+    assert _glorfindel_rules(f) == before
+    assert open_flows(_world_view(f), WEB) == held
+    orphans = c.find_orphan_rules()
+    assert orphans and all(o["removable"] is False and "état local illisible" in o["kept"] for o in orphans)
+    cards = _orphan_cards()
+    assert cards and all(e["status"] == "pending" and "état local illisible" in e["reason"] for e in cards)
+
+
+def test_a_state_unreadable_after_the_listing_stops_the_removal(monkeypatch):
+    """Read again before the write: a state that turned unreadable between the listing
+    and the removal stops it, as a state recorded since does."""
+    f, c, new = _cut_new_vm(monkeypatch)
+    orphans = [o for o in c.find_orphan_rules() if o["removable"]]
+    assert orphans
+    assert c.isolate_vm(APP)["status"] == "isolated"
+    _corrupt_states(actions._ISOLATION_STATE_DIR)
+    before = _glorfindel_rules(f)
+    out = c.remove_orphan_rule(orphans[0])
+    assert out["removed"] is False and "état local illisible" in out["why"]
+    assert _glorfindel_rules(f) == before
+
+
+def test_remove_orphan_rule_is_a_guarded_write(monkeypatch):
+    """N-07: remove_orphan_rule takes the locks of the VMs it cuts and refuses an NSG of
+    another subscription, as every other write of the connector does."""
+    from glorfindel.response.policy import WrongSubscriptionError
+    f, c, new = _cut_new_vm(monkeypatch)
+    (orphan, *_) = [o for o in c.find_orphan_rules() if o["removable"]]
+    other = {**orphan, "nsg_id": orphan["nsg_id"].replace("/subscriptions/s/", "/subscriptions/other/")}
+    monkeypatch.setenv("AZURE_SUBSCRIPTION_ID", "s")
+    before = _glorfindel_rules(f)
+    with pytest.raises(WrongSubscriptionError):
+        c.remove_orphan_rule(other)
+    assert _glorfindel_rules(f) == before
+    taken: list[str] = []
+    import glorfindel.providers.azure.connector as connector_module
+    real = connector_module._vm_lock
+
+    def spy(vm, timeout=None):
+        taken.append(vm)
+        return real(vm, timeout=timeout)
+    monkeypatch.setattr(connector_module, "_vm_lock", spy)
+    assert c.remove_orphan_rule(orphan)["removed"] is True
+    assert taken == ["batch"]

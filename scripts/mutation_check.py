@@ -2572,6 +2572,119 @@ TESTS.update({f"M{n}": "tests/unit/test_invariant_regressions.py -k gone" for n 
 TESTS.update({f"M{n}": "tests/unit/test_reassert.py" for n in (1109, 1110, 1111, 1112, 1115)})
 TESTS.update({f"M{n}": "tests/unit/test_invariant_regressions.py -k perimeter_one" for n in (1113, 1114)})
 
+# SEC3 (#274): the runs/ channel and the local state — an unreadable state never frees a VM,
+# remove_orphan_rule guarded as every write, the channel takes from runs/ only what an injector
+# emits, a recovery_complete lifts an isolation alone only from Glorfindel's own path, the
+# escalations store under its lock and written whole, owner-only state, the injectors' mounts.
+# Range M1210–M1239.
+SO = "glorfindel/signal_origin.py"
+ESC = "glorfindel/escalations.py"
+LCK = "glorfindel/response/locks.py"
+SEC3_ORIGIN = "tests/unit/test_signal_origin.py"
+MUTANTS += [
+    ("M1210", "an unreadable state reads as no state: the sweep frees a VM it isolates (SEC3, N-06)", SWP,
+     "        unread = self._unreadable_reason()\n        gone: dict", "        unread = \"\"\n        gone: dict"),
+    ("M1211", "a state unreadable since the listing is not read again before the removal (SEC3, N-06)", SWP,
+     "        unread = self._unreadable_reason()\n        if unread:\n            return {\"removed\": False, "
+     "\"why\": unread}\n", ""),
+    ("M1212", "a state of the wrong shape reads as readable (SEC3, N-06)", STA,
+     "            if not isinstance(data, shape) or (shape is list and not all(isinstance(e, dict) for e in data)):\n",
+     "            if data is None:\n"),
+    ("M1213", "remove_orphan_rule writes an NSG of another subscription (SEC3, N-07)", AZC,
+     "        if target and mine and target.lower() != mine.lower():\n            raise WrongSubscriptionError(\n"
+     "                f\"{nsg_id.rstrip",
+     "        if False:\n            raise WrongSubscriptionError(\n                f\"{nsg_id.rstrip"),
+    ("M1214", "remove_orphan_rule outside the guards of the writes: no lock of the VMs it cuts (SEC3, N-07)",
+     AZC, "AzureConnector.remove_orphan_rule = _orphan_writer(AzureConnector.remove_orphan_rule)\n", ""),
+    ("M1215", "the watch dispatches every line of runs/ as it is: a forged recovery_complete decided on "
+              "(SEC3, V-05)", GCLI,
+     "                admitted = _admit_from_runs(data, path.name)\n", "                admitted = (data, _sig)\n"),
+    ("M1216", "an admitted line keeps its own fields: a query, an IP to block, an attribution (SEC3, V-05)", SO,
+     "        clean[part] = {k: given[k] for k in fields[part] if k in given}\n", "        clean[part] = dict(given)\n"),
+    ("M1217", "a run id that is a path admitted: the debug file written outside runs/ (SEC3, V-05)", SO,
+     "    if run_id not in (None, \"\") and not (", "    if False and not ("),
+    ("M1218", "a recovery_complete of unknown origin releases alone (SEC3, V-05)", "glorfindel/agent.py",
+     "    if signal.get(\"event\") == \"recovery_complete\" and not vouched(signal):\n", "    if False:\n"),
+    ("M1219", "`glorfindel respond` vouches for a recovery_complete of any file, runs/ included (SEC3, V-05)",
+     GCLI, "    trusted = signal_origin.in_recovery_dir(signals_file)\n", "    trusted = True\n"),
+    ("M1220", "the defender's directory told by a name: runs/recovery/ passes (SEC3, V-05)", SO,
+     "        return Path(path).resolve().parent == RECOVERY_SIGNALS_DIR.resolve()\n",
+     "        return \"recovery\" in str(path)\n"),
+    ("M1221", "the restore's own recovery_complete not vouched for: `restore --wait` never releases (SEC3)",
+     GCLI, "    return vouch({\n        \"signal_id\": f\"{run_id}_recovery_complete\",",
+     "    return ({\n        \"signal_id\": f\"{run_id}_recovery_complete\","),
+    ("M1222", "the escalations store rewritten without its lock: cards lost between writers (SEC3, V-10)", ESC,
+     "            with _file_lock(_STORE.with_name(_STORE.name + \".lock\")):\n", "            if True:\n"),
+    ("M1223", "the escalations store rewritten in place: a reader sees half a file (SEC3, V-10)", ESC,
+     "    _atomic_write_text(_STORE, \"\\n\".join(lines) + \"\\n\")\n",
+     "    _STORE.write_text(\"\\n\".join(lines) + \"\\n\")\n"),
+    ("M1224", "a new card appended in place: a reader may see half a line (SEC3, V-10)", ESC,
+     "    _write_lines([ln for ln in lines if ln.strip()] + [json.dumps(esc, default=str)])\n",
+     "    with open(_STORE, \"a\") as _f:\n        _f.write(json.dumps(esc, default=str) + \"\\n\")\n",
+     "TIMING: under the store's lock, one small append is one write(2) — the test's reader sees "
+     "it half done only at times (1 round in 2, measured); what the whole rewrite adds besides (a "
+     "crash inside the write leaves the store as it was) needs a process killed mid-write"),
+    ("M1225", "the store's lock is a thread lock only: another process writes meanwhile (SEC3, V-10)", LCK,
+     "                import fcntl\n                fcntl.flock(fh, fcntl.LOCK_EX)\n",
+     "                import fcntl  # noqa: F401\n"),
+    ("M1226", "state files readable by all again (SEC3, V-27)", STA,
+     "def _atomic_write_text(path: Path, text: str, mode: int = 0o600) -> None:\n",
+     "def _atomic_write_text(path: Path, text: str, mode: int = 0o644) -> None:\n"),
+    ("M1227", "state directories created with the default mode (SEC3, V-27)", STA,
+     "    path.parent.mkdir(mode=0o755 if mode & 0o044 else 0o700, parents=True, exist_ok=True)\n",
+     "    path.parent.mkdir(parents=True, exist_ok=True)\n"),
+    ("M1228", "an earlier version's state left readable by all (SEC3, V-27)", STA,
+     "        _owner_only(directory)\n", ""),
+    ("M1229", "Gothmog's container mounts the whole of ~/.glorfindel again (SEC3, N-05)", "docker-compose.yml",
+     "      - ./technique_catalog.yaml:/app/technique_catalog.yaml:ro\n"
+     "      - ${HOME}/.glorfindel/injectors:/root/.glorfindel:ro\n",
+     "      - ./technique_catalog.yaml:/app/technique_catalog.yaml:ro\n"
+     "      - ${HOME}/.glorfindel:/root/.glorfindel:ro\n"),
+    ("M1230", "the watch writes no heartbeat where the injectors read it: every run refused (SEC3, N-05)",
+     GCLI, "            _atomic_write_text(_INJECTOR_BEAT, now, mode=0o644)", "            pass  #"),
+    ("M1231", "make glorfindel-start no longer creates ~/.glorfindel/injectors: docker makes it as root "
+              "(SEC3)", MAKE,
+     "glorfindel-start: check-azure-env build-glorfindel\n"
+     "\tmkdir -p $(HOME)/.glorfindel $(HOME)/.glorfindel/injectors ",
+     "glorfindel-start: check-azure-env build-glorfindel\n\tmkdir -p $(HOME)/.glorfindel "),
+    ("M1232", "an attack_adapted admitted again, no injector emitting it: decided on (SEC3, V-05)", SO,
+     ("    if event not in CHANNEL_EVENTS:\n", "    fields = _FIELDS[event]\n"),
+     ("    if event not in CHANNEL_EVENTS and event != \"attack_adapted\":\n",
+      "    fields = _FIELDS.get(event, _FIELDS[\"attack_started\"])\n")),
+    ("M1233", "a refused line not counted (SEC3, V-05)", SO,
+     "        _REFUSED[event] = _REFUSED.get(event, 0) + 1\n", ""),
+    # After the review of SEC3 (M1234–M1239).
+    ("M1234", "a link in the defender's directory taken for its file: one into runs/ passes (SEC3, V-05)", SO,
+     "        return Path(path).resolve().parent == RECOVERY_SIGNALS_DIR.resolve()\n",
+     "        return Path(path).parent == RECOVERY_SIGNALS_DIR\n"),
+    ("M1235", "the watch no longer makes the injectors' directory first: docker makes it as root (SEC3)", GCLI,
+     "        _INJECTORS_DIR.mkdir(mode=0o755, parents=True, exist_ok=True)\n"
+     "        os.chmod(_INJECTORS_DIR, 0o755)      # theirs to read, whatever the umask\n",
+     "        pass\n"),
+    ("M1236", "the injectors' heartbeat owner-only: an image of another user can't read it (SEC3, N-05)", GCLI,
+     "            _atomic_write_text(_INJECTOR_BEAT, now, mode=0o644)", "            _atomic_write_text(_INJECTOR_BEAT, now)"),
+    ("M1237", "Annatar reads Glorfindel's state again: the blocks watcher back (SEC3, N-05)", ENG,
+     "        # Glorfindel no longer writes, and the injectors no longer mount that state.\n"
+     "        stop_event = threading.Event()\n",
+     "        # Glorfindel no longer writes, and the injectors no longer mount that state.\n"
+     "        stop_event = threading.Event()\n"
+     "        _blocks = Path.home() / \".glorfindel\" / \"blocks\"\n"),
+    ("M1238", "the refusals counted in memory only: nothing on this host says them (SEC3, V-05)", SO,
+     "            _atomic_write_text(REFUSALS_FILE, json.dumps(", "            (lambda *a, **k: None)(REFUSALS_FILE, json.dumps("),
+    ("M1239", "any recovery_complete with an id vouched for: a forged one releases alone (SEC3, V-05)", SO,
+     "        return bool(sid) and sid in _VOUCHED\n", "        return bool(sid)\n"),
+]
+TESTS.update({f"M{n}": SEC3_ORIGIN for n in (1234, 1235, 1236, 1238)})
+TESTS["M1237"] = "tests/unit/test_engine.py -k injectors_read"
+TESTS["M1239"] = "tests/unit/test_agent_nodes.py -k recovery"
+TESTS.update({f"M{n}": "tests/unit/test_orphan_sweep.py -k unreadable" for n in (1210, 1211, 1212)})
+TESTS.update({f"M{n}": "tests/unit/test_orphan_sweep.py -k guarded_write" for n in (1213, 1214)})
+TESTS.update({f"M{n}": SEC3_ORIGIN for n in (1215, 1216, 1217, 1219, 1220, 1221, 1226, 1227, 1228, 1230,
+                                             1232, 1233)})
+TESTS["M1218"] = "tests/unit/test_agent_nodes.py -k recovery"
+TESTS.update({f"M{n}": "tests/unit/test_locks.py -k concurrent" for n in (1222, 1223, 1224, 1225)})
+TESTS.update({f"M{n}": "tests/unit/test_profiles.py" for n in (1229, 1231)})
+
 # D1 (#81): each component runs alone (scripts/component_check.py), and every usage profile
 # keeps Glorfindel (docker-compose.yml, the Makefile's profile and team targets).
 D1_COMPONENTS = "tests/unit/test_components.py"
@@ -2586,11 +2699,11 @@ MUTANTS += [
     ("M802", "a listed crossing allowed at module level: the component imports the other on load (D1)",
      "scripts/component_check.py", "((rel, pkg) in CROSSINGS and not at_top)", "((rel, pkg) in CROSSINGS)"),
     ("M803", "Annatar's compose service no longer starts Glorfindel's watch (D1, V1)", "docker-compose.yml",
-     "      - ${HOME}/.annatar:/root/.annatar\n      - ${HOME}/.glorfindel:/root/.glorfindel:ro\n"
+     "      - ${HOME}/.annatar:/root/.annatar\n      - ${HOME}/.glorfindel/injectors:/root/.glorfindel:ro\n"
      "    depends_on:\n      - watch\n",
-     "      - ${HOME}/.annatar:/root/.annatar\n      - ${HOME}/.glorfindel:/root/.glorfindel:ro\n"),
+     "      - ${HOME}/.annatar:/root/.annatar\n      - ${HOME}/.glorfindel/injectors:/root/.glorfindel:ro\n"),
     ("M804", "Gothmog's compose service may write Glorfindel's state (D1)", "docker-compose.yml",
-     "      - ${HOME}/.glorfindel:/root/.glorfindel:ro\n    depends_on:\n      - watch\n"
+     "      - ${HOME}/.glorfindel/injectors:/root/.glorfindel:ro\n    depends_on:\n      - watch\n"
      "\n  # D1 : Gothmog",
      "      - ${HOME}/.glorfindel:/root/.glorfindel\n    depends_on:\n      - watch\n"
      "\n  # D1 : Gothmog"),

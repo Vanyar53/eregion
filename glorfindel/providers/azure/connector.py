@@ -160,6 +160,35 @@ def _one_writer(method):
     return wrapper
 
 
+def _orphan_writer(method):
+    """remove_orphan_rule (SEC3, N-07) through the same two guards as the other writes: the
+    subscription of the NSG it writes, then the lock of every VM the rule cuts, held for
+    the whole write — sorted, as the sweep takes them (re-entrant: the sweep's pass
+    already holds them). It was safe through its one caller only."""
+    import contextlib
+    import functools
+
+    @functools.wraps(method)
+    def wrapper(self, orphan, *args, **kwargs):
+        if self.dry_run or not isinstance(orphan, dict):
+            return method(self, orphan, *args, **kwargs)
+        nsg_id = str(orphan.get("nsg_id") or "")
+        target = _subscription_of(nsg_id)
+        mine = self._subscription_id or os.environ.get("AZURE_SUBSCRIPTION_ID", "")
+        if target and mine and target.lower() != mine.lower():
+            raise WrongSubscriptionError(
+                f"{nsg_id.rstrip('/').rsplit('/', 1)[-1]} est dans l'abonnement {target}, Glorfindel "
+                f"agit dans {mine} : retrait refusé.")
+        victims = sorted({(h.get("vm_id") or h.get("nic_id") or "").rstrip("/").rsplit("/", 1)[-1]
+                          for h in orphan.get("cut") or [] if isinstance(h, dict)} - {""})
+        with contextlib.ExitStack() as stack:
+            for vm in victims:
+                stack.enter_context(_vm_lock(vm))
+            return method(self, orphan, *args, **kwargs)
+    return wrapper
+
+
+AzureConnector.remove_orphan_rule = _orphan_writer(AzureConnector.remove_orphan_rule)
 for _name in ("isolate_vm", "release_isolation", "block_suspicious_ip", "unblock_ip", "sweep_vm_rules"):
     setattr(AzureConnector, _name, _one_writer(getattr(AzureConnector, _name)))
 for _name in ("isolate_vm", "release_isolation", "verify_isolation", "verify_release",

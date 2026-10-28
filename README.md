@@ -342,6 +342,8 @@ python scripts/simulate_annatar.py            # normal flow
 python scripts/simulate_annatar.py --ids-gap  # detection_timeout flow
 ```
 
+The script writes the run's signals to a temporary file, then runs `glorfindel respond <file> --dry-run` on it (no watch needed; a model key, no Azure credential). It no longer goes through `runs/`: the watch only takes the events an injector emits there (`attack_started`, `detection_missed`), and refuses the simulated `detection` and `recovery_complete`. The simulated `recovery_complete` is not Glorfindel's own (`glorfindel restore --wait` emits that one), so the release it proposes is held for a human.
+
 ## Using Glorfindel standalone
 
 Glorfindel doesn't require Annatar. Its main standalone path — **continuous detection** — is the **Evaluate on your infrastructure** section above (it polls the rules, auto-discovers assets, runs posture checks, and recommends or acts per the mode you set). Two more standalone uses below: manual signal injection and a pre-deployment audit.

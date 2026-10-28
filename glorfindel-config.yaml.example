@@ -90,3 +90,16 @@ autonomy:
     #   mode: non_disruptive
     # - match: "vm-prod-db"
     #   mode: human_only
+
+# ── Never blocked ───────────────────────────────────────────────────────────────
+# Addresses (or CIDR prefixes) Glorfindel never blocks, whatever the rule or the
+# model says: a block of one is refused and escalated, never executed (SEC2).
+# Already shipped, always: Azure's platform (168.63.129.16, 169.254.169.254), the
+# private ranges (10/8, 172.16/12, 192.168/16, 100.64/10, fc00::/7) and the loopback
+# — a private address is never blocked: lateral movement is answered by isolating
+# the source VM. Add your own:
+# the office's egress, a scanner, a monitoring probe. /0 is refused.
+
+never_block: []
+  # - "198.51.100.10"        # the office's egress
+  # - "203.0.113.0/28"       # the external scanner

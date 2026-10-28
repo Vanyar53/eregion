@@ -7,6 +7,8 @@ _Extrait tel quel de `CLAUDE.md` le 2026-10-15 (lot DX1) : la CLI, les workflows
 ```bash
 # Workflow opérateur — Docker Compose (recommandé)
 make glorfindel-start                        # lance watch + la console → http://localhost:7007
+make console-url                             # l'URL de la console avec son jeton (celui de l'environnement ou de .env,
+                                             # sinon ~/.glorfindel/console_token, attendu CONSOLE_WAIT=20 s) ; glorfindel-start l'affiche
                                              # refuse si AZURE_SUBSCRIPTION_ID est vide (watch aveugle) ; ALLOW_NO_AZURE=1 pour une démo
 make glorfindel-logs                         # tail logs des deux services
 make glorfindel-dev                          # auto-reload sur modification de code (docker compose watch)
@@ -114,9 +116,12 @@ glorfindel propose-rules [--ttp T..] [--include-planned] [--dry-run]  # autoring
                                              # l'attaque (getschema sur le vrai LAW → KQL groundée).
                                              # Skip les TTPs déjà couverts. Sortie = propositions.
 glorfindel approve-rule <id>                 # appliquer la règle → couche du client (~/.glorfindel/client_rules.yaml, P1)
+                                             # ; jamais à la place d'une règle livrée (nom suffixé -proposed,
+                                             # dit), et dit si elle remplace une règle du client (SEC2)
 glorfindel reject-rule <id>                  # écarter la règle sans l'approuver
 glorfindel rules                             # règles chargées : la base livrée, puis la couche du client (couche de chaque
-                                             # règle ; ce que la couche fait à la base : règle remplacée, désactivée)
+                                             # règle ; ce que la couche fait à la base : règle remplacée, désactivée ;
+                                             # une règle livrée remplacée : « client (remplace) », en rouge, SEC2)
 glorfindel migrate-rules --from <modifié> --base <livré> [--dry-run]  # règles approuvées DANS la base avant P1
                                              # → couche du client, une règle au workspace en ligne liée à son
                                              # backend (H0 : infra/glorfindel-host/README.md)
@@ -127,6 +132,8 @@ glorfindel dashboard                         # TUI full-screen : resources + fee
 eregion console [--sections annatar,gothmog] # la console web sur http://localhost:7007 (pip install eregion[console]) ;
                                              # Glorfindel toujours, Annatar et Gothmog s'ils ont des runs sur l'hôte
                                              # (ou --sections) ; `glorfindel war-room` reste un alias caché
+                                             # toujours un jeton : EREGION_CONSOLE_TOKEN, sinon tiré au premier démarrage
+                                             # (~/.glorfindel/console_token, 600) et affiché avec l'URL à ouvrir une fois
 glorfindel --version                         # 0.2.0
 
 # Annatar et Gothmog exigent Glorfindel (V1, #214) : avant chaque run (chaque run d'une campagne aussi),
@@ -282,6 +289,8 @@ EREGION_DISCORD_MENTION=...                 # id de l'utilisateur que mentionnen
                                     # sur le poste : ~/.config/eregion/discord.env (600) si l'environnement ne les a pas
 GLORFINDEL_KEEP_ISOLATED=1          # mode forensique
 GLORFINDEL_ISOLATION_TTL_H=4        # TTL isolation (défaut 4h) : au-delà, une carte ttl_exceeded — jamais de levée automatique
+EREGION_CONSOLE_HOSTS=nom,nom       # SEC1 : noms (sans port) sous lesquels la console répond, en plus de localhost / 127.0.0.1 / [::1] ; une
+                                    # modification n'est acceptée que de l'origine de la console sous ce nom (compose la passe à la console)
 GLORFINDEL_APPROVAL_MAX_AGE_H=2     # âge max d'une carte exécutable en un clic (console, « Approve & execute ») ; nan/inf → 2 ; ≤0 → approbation en un clic fermée
 GLORFINDEL_INCIDENT_TTL_S=300       # TTL fenêtre incident
 GLORFINDEL_CONFIDENCE_THRESHOLD=0.7 # gate autonomie LLM (défaut 0.7 — en dessous → escalade forcée) ; illisible, hors [0, 1] → tout est retenu
@@ -372,7 +381,8 @@ allumée), `exclude_all: "false"` sortait la VM de toutes les règles (un texte 
   `enabled`, `interval_s`), `action_backends` (`name`, `type`, `vault_name`, `resource_group`,
   `restore_staging_storage`), `exceptions` (`asset_pattern`, `exclude_all`, `exclude_rules`),
   `autonomy` (`default`, `assets` : `match`, `mode` ; `allow_destructive`), `isolation`
-  (`quarantine_nsg`, `quarantine_rg`, `forensic_sources`, `forensic_ports`).
+  (`quarantine_nsg`, `quarantine_rg`, `forensic_sources`, `forensic_ports`), `never_block`
+  (SEC2, ci-dessous).
 - Types : textes entre guillemets ou non, booléens `true` / `false` sans guillemets, listes pour
   `exclude_rules`, `allow_destructive`, `forensic_sources`, `assets` et les sections de backends ;
   `interval_s` un nombre de secondes positif ; `forensic_ports` un port ou une liste (inchangé). Une
@@ -383,6 +393,20 @@ allumée), `exclude_all: "false"` sortait la VM de toutes les règles (un texte 
   réaffirmation passe en alertes seules.
 - Le fichier d'exemple (`glorfindel-config.yaml.example`) et le fragment de Celebrimbor
   (`make celebrimbor-output`) passent la lecture stricte (`tests/unit/test_config.py`).
+- **`never_block`** (SEC2, 28/10) : une liste d'adresses ou de préfixes CIDR que Glorfindel ne
+  bloque **jamais**, quelle que soit la règle ou le modèle — en plus de ceux livrés
+  (`glorfindel/response/policy.py`, `NEVER_BLOCK_SHIPPED` : 168.63.129.16 et 169.254.169.254 de la
+  plateforme Azure, 10/8, 172.16/12, 192.168/16, 100.64/10, fc00::/7, le bouclage ; `::ffff:a.b.c.d`
+  est lue comme son IPv4). Y mettre la sortie du bureau, un scanner, une sonde de supervision.
+  **Une adresse privée n'est donc jamais bloquée** : un mouvement latéral depuis une autre VM du
+  réseau ne se répond pas par un blocage d'IP, mais par l'isolation de la VM source. Un blocage d'une de ces adresses est retenu par `decide`
+  (carte `protected_address`) et refusé par le connecteur, Azure comme AWS, quel que soit le chemin
+  (décision de l'agent, approbation d'une carte dans la console et
+  son extension au sous-réseau, réaffirmation) ; une liste illisible refuse tout
+  blocage. Chaque entrée est validée (adresse ou préfixe ; `/0` refusé : couper les blocages se fait
+  par le mode d'autonomie). Absente : la liste livrée seule. **Clé nouvelle** : une config qui la
+  porte est refusée par une version antérieure (lecture stricte) — la poser sur H0 après la mise à
+  jour.
 
 ---
 

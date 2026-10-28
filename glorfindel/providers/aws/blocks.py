@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from glorfindel.providers.aws.client import is_not_found, parse_instance_arn
 from glorfindel.response import locks as _locks
 from glorfindel.response import state as _state
-from glorfindel.response.policy import _ERR_MAX, _first_line
+from glorfindel.response.policy import _ERR_MAX, _first_line, blockable_ip
 
 _LAST = 32766                      # H5: the highest number an entry may take
 
@@ -127,6 +127,7 @@ class BlockMixin:
         `replace` has nothing to replace."""
         if self.dry_run:
             return {"status": "dry_run", "action": "block_suspicious_ip", "ip": ip, "resource_id": resource_id}
+        blockable_ip(ip)            # a never-block address, never (SEC2)
         self._guard_write("block_suspicious_ip")
         cidr = self._cidr(ip)
         _, _, iid = parse_instance_arn(resource_id)

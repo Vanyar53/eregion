@@ -17,6 +17,8 @@ pytest.importorskip("httpx")
 from click.testing import CliRunner  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
+from .console_client import ORIGIN, TOKEN, WS, console  # noqa: E402
+
 import eregion_console.api as api  # noqa: E402
 from eregion_console import sections  # noqa: E402
 
@@ -36,7 +38,7 @@ def runs(tmp_path, monkeypatch):
 
 @pytest.fixture()
 def client(runs):
-    return TestClient(api.app)
+    return console()
 
 
 def _window(tmp_path, run_id, injector, kind="technique"):
@@ -77,7 +79,7 @@ def test_every_response_carries_the_content_security_policy(client, monkeypatch)
         csp = client.get(path).headers.get("content-security-policy", "")
         assert "frame-ancestors 'none'" in csp and "connect-src 'self'" in csp, path
     monkeypatch.setenv("EREGION_CONSOLE_TOKEN", "s3cret")
-    page = TestClient(api.app).get("/", headers={"accept": "text/html"})
+    page = console(token=None).get("/", headers={"accept": "text/html"})
     assert page.status_code == 401 and "frame-ancestors 'none'" in page.headers["content-security-policy"]
 
 
@@ -125,7 +127,7 @@ def test_every_page_is_behind_the_token(runs, monkeypatch):
     """M404: a new page is no way around the token — a browser gets the token page, a
     script the JSON refusal."""
     monkeypatch.setenv("EREGION_CONSOLE_TOKEN", "s3cret")
-    c = TestClient(api.app)
+    c = console(token=None)
     for path in (*PAGES, "/atelier", "/runs/a-1", "/api/sections", "/api/exercises"):
         browser = c.get(path, headers={"accept": "text/html"}, follow_redirects=False)
         assert browser.status_code == 401 and 'name="token"' in browser.text, path
@@ -136,7 +138,7 @@ def test_every_page_is_behind_the_token(runs, monkeypatch):
 
 def test_the_token_page_names_the_console_and_its_variable(runs, monkeypatch):
     monkeypatch.setenv("EREGION_CONSOLE_TOKEN", "s3cret")
-    page = TestClient(api.app).get("/", headers={"accept": "text/html"}).text
+    page = console(token=None).get("/", headers={"accept": "text/html"}).text
     assert "EREGION_CONSOLE_TOKEN" in page and 'lang="en"' in page
     assert "War Room" not in page
 
@@ -154,7 +156,7 @@ def test_the_token_under_its_new_name_or_its_former_one(runs, monkeypatch, new, 
         else:
             monkeypatch.setenv(name, value)
     assert api.console_token() == works
-    c = TestClient(api.app)
+    c = console(token=None)
     assert c.get("/api/sections", headers={"Authorization": f"Bearer {works}"}).status_code == 200
     assert c.get("/api/sections", headers={"Authorization": f"Bearer {refused}"}).status_code == 401
 
@@ -162,7 +164,7 @@ def test_the_token_under_its_new_name_or_its_former_one(runs, monkeypatch, new, 
 def test_two_tokens_that_differ_are_said_at_startup(runs, monkeypatch, capsys):
     monkeypatch.setenv("EREGION_CONSOLE_TOKEN", "new")
     monkeypatch.setenv("GLORFINDEL_WARROOM_TOKEN", "old")
-    with TestClient(api.app):
+    with console():
         pass
     assert "the console takes EREGION_CONSOLE_TOKEN" in capsys.readouterr().out
 
@@ -264,7 +266,7 @@ def test_the_console_finds_the_shipped_rules_outside_the_repo_root(client, monke
         return {"rule_name": "r", "rules_file": "/tmp/x/client_rules.yaml", "rule_write": "added",
                 "rule_bound": True}
     monkeypatch.setattr("glorfindel.proposed_rules.approve", _approve)
-    body = client.post("/api/action/approve-rule/p1").json()
+    body = client.post("/api/action/approve-rule/p1", json={}).json()
     assert body == {"ok": True, "rule_name": "r", "rules_file": "/tmp/x/client_rules.yaml",
                     "rule_write": "added", "rule_bound": True, "rule_unbound_reason": None}
     assert seen["path"].resolve() == shipped.resolve()
@@ -437,7 +439,435 @@ def test_a_cards_detail_escapes_what_azure_or_the_model_wrote():
 
 
 def test_an_anchored_card_never_offers_restore_nor_a_command_on_its_vm():
-    """The server does not refuse /api/action/restore on an anchored card: the page is the guard."""
+    """The page offers no Restore on an anchored card; the server refuses one too (SEC1:
+    test_the_restore_route_refuses_an_anchored_card)."""
     page = _glorfindel_page()
     assert "const isRestore = e.action === 'restore_from_backup' && !_isAnchored(e);" in page
     assert "if (_isAnchored(esc)) return `glorfindel ack ${id}`;" in page
+
+
+# ── The boundary (SEC1): a token always, this console's host and origin, JSON changes ──────
+# What the boundary refuses before any route: a change from another origin, a Host the console
+# does not know, the live feed from another origin or under such a Host, a change without a JSON
+# body.
+
+FOREIGN = "http://evil.example"
+COOKIE = "eregion_console_7007"     # the session cookie of the console reached on port 7007
+
+
+def _browser(client=None, origin=ORIGIN):
+    """A browser holding the console's cookie (set as ?token= sets it), on one of its pages."""
+    c = client or console(token=None)
+    c.cookies.set(COOKIE, api._session(TOKEN))
+    if origin:
+        c.headers["Origin"] = origin
+    return c
+
+
+@pytest.fixture()
+def acked(monkeypatch):
+    """What the ack route did: a change refused at the boundary never gets here."""
+    from glorfindel import escalations
+    seen = []
+    monkeypatch.setattr(escalations, "resolve", lambda eid, **kw: seen.append(eid))
+    return seen
+
+
+def test_a_change_from_another_origin_is_refused(runs, acked):
+    """M1172: a change from another origin — without the token, with the cookie, or with the
+    token itself — is refused (403); nothing is executed."""
+    for c in (console(token=None), _browser(), console()):
+        for origin in (FOREIGN, "null", "http://localhost:8080", "http://127.0.0.1:7007"):
+            r = c.post("/api/action/ack/e1", json={}, headers={"Origin": origin})
+            assert r.status_code == 403 and "origin" in r.json()["error"], origin
+        r = c.post("/api/action/ack/e1", content=b"{}", headers={"Origin": FOREIGN, "Content-Type": "text/plain"})
+        assert r.status_code == 403
+    assert acked == []
+    assert _browser().post("/api/action/ack/e1", json={}).json() == {"ok": True} and acked == ["e1"]
+
+
+def test_the_origin_is_the_consoles_exactly(runs, acked):
+    """M1174: the same host name on another port is another origin (a page another local
+    service serves); http or https on the Host the console was asked under is its own."""
+    assert _browser(origin="http://localhost:7008").post("/api/action/ack/e1", json={}).status_code == 403
+    assert _browser(origin="https://localhost:7007").post("/api/action/ack/e1", json={}).status_code == 200
+    assert acked == ["e1"]
+
+
+def test_a_browsers_change_without_its_origin_is_refused(runs, acked):
+    """M1175: the cookie is a browser's, and a browser says where a change comes from; a script
+    with the token sends none."""
+    assert _browser(origin=None).post("/api/action/ack/e1", json={}).status_code == 403
+    assert console().post("/api/action/ack/e1", json={}).status_code == 200
+    assert acked == ["e1"]
+
+
+def test_a_foreign_host_is_refused_everywhere(runs):
+    """M1170, M1171: under a host name the console does not know, everything is refused (403),
+    the token page too, whatever the token or the cookie."""
+    for host in ("evil.example:7007", "evil.example", "localhost.evil.example:7007",
+                 "evil-localhost:7007", "127.0.0.1.evil.example", "", "localhost@evil.example"):
+        for c in (console(), console(token=None), _browser()):
+            for path in ("/", "/api/sections", "/api/config", "/static/console.js"):
+                r = c.get(path, headers={"Host": host, "Accept": "text/html"})
+                assert r.status_code == 403 and 'name="token"' not in r.text, (host, path)
+
+
+def test_a_loopback_name_or_a_listed_one_is_the_consoles(runs, monkeypatch):
+    """Any port: a tunnel or a team's console publishes another one. A name of the network is
+    listed in EREGION_CONSOLE_HOSTS; the console is then its own origin under it too."""
+    c = console()
+    for host in ("localhost:7007", "127.0.0.1:7007", "[::1]:7007", "localhost:17007", "LOCALHOST:7007"):
+        assert c.get("/api/sections", headers={"Host": host}).status_code == 200, host
+    assert c.get("/api/sections", headers={"Host": "eregion.example:7007"}).status_code == 403
+    monkeypatch.setenv("EREGION_CONSOLE_HOSTS", "eregion.example, other.example")
+    assert c.get("/api/sections", headers={"Host": "eregion.example:7007"}).status_code == 200
+    assert c.get("/api/sections", headers={"Host": "evil.example:7007"}).status_code == 403
+    r = c.post("/api/escalations/x/verdict", json={"verdict": "?"},
+               headers={"Host": "eregion.example", "Origin": "https://eregion.example"})
+    assert r.status_code == 200
+
+
+async def _echo(scope, receive, send):
+    """A route behind the boundary that says it was reached — the live feed itself never ends,
+    so a feed the boundary let through would hang the test instead of failing it."""
+    if scope["type"] == "websocket":
+        await receive()
+        await send({"type": "websocket.accept"})
+        await send({"type": "websocket.send", "text": "reached"})
+        await send({"type": "websocket.close", "code": 1000})
+        return
+    from starlette.responses import JSONResponse
+    await JSONResponse({"reached": True})(scope, receive, send)
+
+
+def _feed(token=TOKEN, cookie=False):
+    """The boundary in front of `_echo`, as the app puts it in front of the feed."""
+    c = TestClient(api._TokenAuthMiddleware(_echo), base_url=ORIGIN,
+                   headers={"Authorization": f"Bearer {token}"} if token else {})
+    if cookie:
+        c.cookies.set(COOKIE, api._session(TOKEN))
+    return c
+
+
+def test_the_live_feed_refuses_another_origin_and_a_foreign_host(runs):
+    """M1173: the WebSocket is a change — from another origin, under a foreign Host, or a
+    browser's without its origin, it closes before it opens, cookie or token."""
+    from starlette.websockets import WebSocketDisconnect
+    assert any(m.cls is api._TokenAuthMiddleware for m in api.app.user_middleware)
+    for c, headers in ((_feed(None, cookie=True), {"Origin": FOREIGN}),
+                       (_feed(), {"Origin": FOREIGN}),
+                       (_feed(None, cookie=True), {"Origin": "http://localhost:8080"}),
+                       (_feed(None, cookie=True), {"Origin": ORIGIN, "Host": "evil.example:7007"}),
+                       (_feed(), {"Host": "evil.example:7007"}),
+                       (_feed(None, cookie=True), {}),
+                       (_feed(None), {"Origin": ORIGIN})):
+        with pytest.raises(WebSocketDisconnect) as refused:
+            with c.websocket_connect(WS, headers=headers) as ws:
+                ws.receive_text()
+        assert refused.value.code == 1008, headers
+
+
+def test_the_live_feed_opens_for_the_consoles_own_page(runs):
+    """The page's WebSocket — its origin, its cookie — and a script's, with the token."""
+    with _feed(None, cookie=True).websocket_connect(WS, headers={"Origin": ORIGIN}) as ws:
+        assert ws.receive_text() == "reached"
+    with _feed().websocket_connect(WS) as ws:
+        assert ws.receive_text() == "reached"
+
+
+def test_a_change_carries_a_json_object(runs, monkeypatch):
+    """M1182, M1183: a change carries a JSON object, `Content-Type: application/json` — the
+    console's own page included; anything else is refused before the route."""
+    seen = []
+    monkeypatch.setattr(api, "_assess_vm", lambda vm: seen.append(vm) or {"error": "stub"})
+    for c in (_browser(), console()):
+        assert c.post("/api/activate/vm").status_code == 415
+        assert c.post("/api/activate/vm", content=b'{"acknowledged": []}',
+                      headers={"Content-Type": "text/plain"}).status_code == 415
+        assert c.post("/api/activate/vm", content=b'{"acknowledged": []}',
+                      headers={"Content-Type": "application/x-www-form-urlencoded"}).status_code == 415
+        for body in (b"", b"[]", b'"x"', b"null", b"{not json"):
+            r = c.post("/api/activate/vm", content=body, headers={"Content-Type": "application/json"})
+            assert r.status_code == 400, body
+        assert c.patch("/api/config/autonomy/default").status_code == 415
+        assert c.post("/api/activate/vm", content=b"{" + b" " * api._MAX_BODY + b"}",
+                      headers={"Content-Type": "application/json"}).status_code == 413
+    assert seen == []
+    assert _browser().post("/api/activate/vm", json={"acknowledged": []}).json() == {"error": "stub"}
+    assert console().post("/api/activate/vm", content=b"{}",
+                          headers={"Content-Type": "application/json; charset=utf-8"}).json() == {"error": "stub"}
+    assert seen == ["vm", "vm"]
+
+
+# ── A token always (SEC1) ──────────────────────────────────────────────────────────────
+
+def test_the_first_start_without_a_token_draws_one(runs, monkeypatch, capsys):
+    """M1177, M1178: no EREGION_CONSOLE_TOKEN (the local default): the console draws a token,
+    keeps it in the operator's file, mode 600, says it once with the URL, and takes it at the
+    next start; nothing opens without it."""
+    import stat
+    monkeypatch.delenv("EREGION_CONSOLE_TOKEN")
+    monkeypatch.setattr("uvicorn.run", lambda *a, **k: None)
+    api.serve(port=7007)
+    token = api._TOKEN_FILE.read_text().strip()
+    assert len(token) >= 32 and stat.S_IMODE(api._TOKEN_FILE.stat().st_mode) == 0o600
+    out = capsys.readouterr().out
+    assert f"http://localhost:7007/?token={token}" in out and str(api._TOKEN_FILE) in out
+    assert console(token=None).get("/api/sections").status_code == 401
+    assert console(token=token).get("/api/sections").status_code == 200
+    api._local_token["value"] = ""
+    api._TOKEN_FILE.chmod(0o644)
+    assert api.ensure_token() == (token, "file")          # the next start: the same token
+    assert stat.S_IMODE(api._TOKEN_FILE.stat().st_mode) == 0o600
+
+
+def test_a_deployments_token_is_never_printed_nor_written(runs, monkeypatch, capsys):
+    """H0's mode is unchanged: the token comes from its environment, the URL names the variable."""
+    monkeypatch.setattr("uvicorn.run", lambda *a, **k: None)
+    api.serve(port=7007)
+    out = capsys.readouterr().out
+    assert "?token=$EREGION_CONSOLE_TOKEN" in out and TOKEN not in out
+    assert not api._TOKEN_FILE.exists()
+
+
+def test_no_token_at_all_refuses_everything(runs, monkeypatch):
+    """M1176: neither the deployment's token nor a drawn one (the file unreadable): every
+    request is refused, never served open."""
+    monkeypatch.delenv("EREGION_CONSOLE_TOKEN")
+    for path in ("/", "/api/sections", "/api/config"):
+        assert console(token=None).get(path).status_code == 503, path
+        assert console(token="").get(path).status_code == 503, path
+
+
+# ── The cookie: a session, not the token (SEC1) ────────────────────────────────────────
+
+def test_the_cookie_is_a_session_derived_from_the_token(runs):
+    """M1179, M1180: ?token= sets a cookie that is not the token (HttpOnly, SameSite=Strict); the
+    token as a cookie, or the session as a bearer, opens nothing."""
+    c = console(token=None)
+    r = c.get(f"/?token={TOKEN}", follow_redirects=False)
+    cookie = r.headers["set-cookie"]
+    assert r.status_code == 303 and TOKEN not in cookie
+    assert f"{COOKIE}={api._session(TOKEN)}" in cookie and api._session(TOKEN) != TOKEN
+    assert "httponly" in cookie.lower() and "samesite=strict" in cookie.lower()
+    assert "secure" not in cookie.lower()                 # http://localhost: the SSH tunnel
+    assert c.get("/api/sections").status_code == 200
+    stolen = console(token=None)
+    stolen.cookies.set(COOKIE, TOKEN)
+    assert stolen.get("/api/sections").status_code == 401
+    assert console(token=api._session(TOKEN)).get("/api/sections").status_code == 401
+    assert api._session("another") != api._session(TOKEN)
+
+
+def test_the_cookie_is_secure_over_https(runs):
+    """M1181: served in HTTPS (a proxy that terminates it), the cookie never travels in clear."""
+    r = console(token=None, base_url="https://localhost:7007").get(f"/?token={TOKEN}", follow_redirects=False)
+    assert "secure" in r.headers["set-cookie"].lower()
+
+
+def test_the_token_in_the_url_never_leads_to_another_host(runs):
+    r = console(token=None).get(f"{ORIGIN}//evil.example/x?token={TOKEN}", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/evil.example/x"
+
+
+# ── What every response says, and what is not served (SEC1) ────────────────────────────
+
+def test_every_response_carries_the_boundarys_headers(runs):
+    """M1184, M1185: the pages, their scripts, the API, the token page and the refusals — the
+    CSP from this origin only, no sniffing, no Referer."""
+    responses = [console().get(p) for p in (*PAGES, "/static/console.js", "/static/glorfindel.js",
+                                             "/api/sections")]
+    responses += [console(token=None).get("/", headers={"accept": "text/html"}),
+                  console().get("/", headers={"Host": "evil.example"}),
+                  _browser(origin=FOREIGN).post("/api/action/ack/x", json={})]
+    for r in responses:
+        directives = dict(d.strip().split(" ", 1) for d in r.headers["content-security-policy"].split(";"))
+        assert directives["default-src"] == "'self'" and directives["script-src"] == "'self'"
+        assert directives["object-src"] == "'none'" and directives["frame-ancestors"] == "'none'"
+        assert "unsafe" not in directives["script-src"] and "http" not in r.headers["content-security-policy"]
+        assert r.headers["x-content-type-options"] == "nosniff"
+        assert r.headers["referrer-policy"] == "no-referrer"
+
+
+def test_the_api_schema_and_its_pages_are_not_served(runs):
+    """M1186: what the routes are is not served to whoever asks — even with the token."""
+    for path in ("/openapi.json", "/docs", "/redoc", "/docs/oauth2-redirect"):
+        assert console().get(path).status_code == 404, path
+
+
+def test_the_config_masks_the_azure_identifiers(runs, monkeypatch):
+    """M1187: Config shows a subscription, a tenant, a client by their ends; the page needs
+    no more, and no workspace id."""
+    ids = {"AZURE_SUBSCRIPTION_ID": "sub0123456789abcdefsubzz", "AZURE_TENANT_ID": "ten0123456789abcdeftenzz",
+           "AZURE_CLIENT_ID": "cli0123456789abcdefclizz"}
+    for name, value in ids.items():
+        monkeypatch.setenv(name, value)
+    body = console().get("/api/config")
+    az = body.json()["azure"]
+    assert az["subscription_id"] == "sub01234…ubzz" and az["configured"] is True
+    for value in ids.values():
+        assert value not in body.text
+    assert "workspace_id" not in body.text
+    assert "function mask(s) {\n  return s || '—';\n}" in _glorfindel_page()
+
+
+def test_a_name_in_a_routes_path_is_encoded(runs):
+    """M1189: a VM name or a card id in an API path goes through encodeURIComponent — a `?` or
+    `#` in it would change the route; every change goes through _post (JSON)."""
+    import re
+    js = (api._STATIC / "glorfindel.js").read_text()
+    assert "function _seg(s) { return encodeURIComponent(String(s ?? '')); }" in js
+    paths = re.findall(r"`(/api/[^`]*)`", js)
+    assert len(paths) >= 15
+    for path in paths:
+        for expr in re.findall(r"\$\{([^}]*)\}", path.split("?")[0]):
+            assert expr.startswith(("_seg(", "encodeURIComponent(")), path
+    assert "method: 'POST'" not in js and "method: 'PATCH'" not in js
+    assert ("  return fetch(url, { method, headers: { 'Content-Type': 'application/json' },\n"
+            "                      body: JSON.stringify(body ?? {}) });") in js
+
+
+# ── Restore from the console: its card's, never an anchored one (SEC1) ─────────────────
+
+@pytest.fixture()
+def restores(monkeypatch):
+    seen = []
+
+    async def _bg(resource_id, vm_name=""):
+        seen.append(resource_id)
+    monkeypatch.setattr(api, "_bg_restore", _bg)
+    monkeypatch.setattr(api, "_restore_start", lambda vm, rid: None)
+    return seen
+
+
+@pytest.mark.parametrize("etype", sorted({"control_plane_change", "identity_change", "unattributed_signal"}))
+def test_the_restore_route_refuses_an_anchored_card(client, restores, etype):
+    """M1188: a card anchored on a VM the detection does not name is never restored from the
+    console — the route refuses it, as the page and the bot."""
+    from glorfindel import escalations
+    vm = "/subscriptions/s/resourcegroups/rg/providers/microsoft.compute/virtualmachines/vm-a"
+    eid = escalations.record("s1", vm, "restore_from_backup", etype, "r")
+    r = client.post("/api/action/restore/vm-a", json={"escalation": eid}).json()
+    assert "anchored" in r["error"] and restores == []
+
+
+def test_the_restore_route_takes_its_card_only(client, restores):
+    from glorfindel import escalations
+    vm = "/subscriptions/s/resourcegroups/rg/providers/microsoft.compute/virtualmachines/vm-a"
+    held = escalations.record("s1", vm, "restore_from_backup", "destructive_action", "r")
+    other = escalations.record("s2", vm, "isolate_vm", "mode_hold", "r")
+    assert "card" in client.post("/api/action/restore/vm-a", json={}).json()["error"]
+    assert "not found" in client.post("/api/action/restore/vm-a", json={"escalation": "nope"}).json()["error"]
+    assert "restore" in client.post("/api/action/restore/vm-a", json={"escalation": other}).json()["error"]
+    assert "vm-b" in client.post("/api/action/restore/vm-b", json={"escalation": held}).json()["error"]
+    assert restores == []
+    assert client.post("/api/action/restore/vm-a", json={"escalation": held}).json() == {
+        "status": "started", "resource_id": vm}
+    assert restores == [vm]
+
+
+def test_the_consoles_anchored_types_are_the_bots():
+    import ast
+    from pathlib import Path
+    import glorfindel
+    tree = ast.parse((Path(glorfindel.__file__).parent / "bot.py").read_text())
+    bot = next(ast.literal_eval(n.value) for n in ast.walk(tree) if isinstance(n, ast.Assign)
+               and any(getattr(t, "id", "") == "_ANCHORED_TYPES" for t in n.targets))
+    assert api._ANCHORED_TYPES == bot
+
+
+# ── The relecture of SEC1 ───────────────────────────────────────────────────────────────
+
+def test_each_console_has_its_own_cookie(runs):
+    """M1302: a browser keeps one jar for every port of a host — the session cookie is named by
+    the port it reached, so a team's console on 7008 never overwrites the local one's."""
+    assert api._cookie_name("localhost:7007", "http") == "eregion_console_7007"
+    assert api._cookie_name("eregion.example", "https") == "eregion_console_443"
+    team = console(token=None, base_url="http://localhost:7008")
+    r = team.get(f"/?token={TOKEN}", follow_redirects=False)
+    assert r.headers["set-cookie"].startswith(f"eregion_console_7008={api._session(TOKEN)}")
+    local = console(token=None, base_url="http://localhost:7008")
+    local.cookies.set("eregion_console_7007", api._session(TOKEN))
+    assert local.get("/api/sections").status_code == 401        # 7007's cookie is not 7008's
+    assert team.get("/api/sections").status_code == 200
+
+
+def test_a_token_file_behind_a_link_is_refused(runs, monkeypatch, tmp_path):
+    """M1303: the token file is never read through a symbolic link: the console refuses every
+    request instead (no token), and says why at startup."""
+    monkeypatch.delenv("EREGION_CONSOLE_TOKEN")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.write_text("a-token-kept-elsewhere-0123456789\n")
+    api._TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
+    api._TOKEN_FILE.symlink_to(elsewhere)
+    with pytest.raises(OSError):
+        api.ensure_token()
+    assert api._local_token["value"] == ""
+    assert console(token="a-token-kept-elsewhere-0123456789").get("/api/sections").status_code == 503
+
+
+def test_the_url_reaches_a_containers_log(runs, tmp_path):
+    """M1304: in a container stdout is a pipe — the URL is flushed at once, or `docker compose
+    logs` shows nothing while the console runs."""
+    import os
+    import select
+    import subprocess
+    import sys
+    code = ("import uvicorn, time; uvicorn.run = lambda *a, **k: time.sleep(30); "
+            "from eregion_console import api; api.serve(port=7007)")
+    env = {**os.environ, "HOME": str(tmp_path), "EREGION_CONSOLE_TOKEN": TOKEN,
+           "PYTHONPATH": str(api._STATIC.parents[1])}
+    env.pop("PYTHONUNBUFFERED", None)
+    proc = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, env=env, cwd=tmp_path)
+    try:
+        ready, _, _ = select.select([proc.stdout], [], [], 20)
+        assert ready, "nothing written on the pipe"
+        assert "?token=$EREGION_CONSOLE_TOKEN" in proc.stdout.readline().decode()
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+def test_make_console_url_says_where_the_token_is(tmp_path):
+    """`make glorfindel-start` and its neighbours print the console's URL with its token: the
+    environment's, else the file the console wrote at its first start."""
+    import os
+    import shutil
+    import subprocess
+    if shutil.which("make") is None:
+        pytest.skip("make not installed")
+    root = api._STATIC.parents[1]
+    env = {k: v for k, v in os.environ.items() if k not in ("EREGION_CONSOLE_TOKEN", "GLORFINDEL_WARROOM_TOKEN",
+                                                             "EREGION_CONSOLE_PORT", "MAKEFLAGS")}
+
+    def url(home, **extra):
+        r = subprocess.run(["make", "-s", "-C", str(root), "console-url", f"HOME={home}", "CONSOLE_WAIT=0"],
+                           env={**env, **extra}, capture_output=True, text=True, cwd=tmp_path)
+        return r.returncode, r.stdout.strip(), r.stderr
+    (tmp_path / ".glorfindel").mkdir()
+    (tmp_path / ".glorfindel" / "console_token").write_text("drawn-token\n")
+    if (root / ".env").exists():
+        pytest.skip("a .env in the checkout gives compose its token")
+    assert url(tmp_path)[1] == "Console   →  http://localhost:7007/?token=drawn-token"
+    assert url(tmp_path, EREGION_CONSOLE_PORT="7008")[1].endswith("localhost:7008/?token=drawn-token")
+    assert url(tmp_path, EREGION_CONSOLE_TOKEN="set-token")[1].endswith("?token=set-token")
+    code, out, err = url(tmp_path / "nothing")
+    assert code != 0 and "console_token" in err
+
+
+def test_read_only_greys_the_buttons_that_write(runs):
+    """M1300, M1301: in read-only (H0) the buttons that write are disabled — named by their
+    action since #257 (data-on-click), the modals' own included; never read from `onclick`."""
+    import re
+    js = (api._STATIC / "glorfindel.js").read_text()
+    assert "getAttribute('onclick')" not in js
+    guard = js[js.index("function _applyReadOnlyGuards"):js.index("\n}\n", js.index("function _applyReadOnlyGuards"))]
+    assert "const action = b.getAttribute('data-on-click') || '';" in guard
+    assert "if (_WRITE_HANDLERS.includes(action)) {" in guard
+    names = set(re.findall(r"'(\w+)'", js[js.index("const _WRITE_HANDLERS = ["):js.index("];", js.index("const _WRITE_HANDLERS = ["))]))
+    assert names == {"doApproveAction", "confirmRestore", "doSnapshot", "confirmRelease", "confirmUnblock",
+                     "confirmReset", "confirmExtendSubnet", "approveActionAndClose", "approveScoped",
+                     "snapshotAndClose"}
+    table = js[js.index("const ACTIONS = {"):js.index("\n};", js.index("const ACTIONS = {"))]
+    assert all(re.search(rf"\b{n}\b", table) for n in names)

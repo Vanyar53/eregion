@@ -346,16 +346,31 @@ def no_local_glorfindel_config(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def no_console_settings(monkeypatch):
-    """The console's token and chosen sections never come from the developer's shell, and
-    the sections are read afresh in each test (they are cached a few seconds)."""
-    for name in ("EREGION_CONSOLE_TOKEN", "EREGION_CONSOLE_SECTIONS"):
+def no_console_settings(tmp_path, monkeypatch):
+    """The console's token, host names and chosen sections never come from the developer's
+    shell, and the sections are read afresh in each test (they are cached a few seconds).
+    There is no console without a token (SEC1): every test has one, `console_client.TOKEN`;
+    the token a console draws when it has none goes to tmp, never ~/.glorfindel."""
+    try:
+        from .console_client import TOKEN
+    except ImportError:   # this conftest copied alone, without the tests (test_repo_hermetic.py)
+        TOKEN = ""
+    for name in ("EREGION_CONSOLE_TOKEN", "GLORFINDEL_WARROOM_TOKEN", "EREGION_CONSOLE_HOSTS",
+                 "EREGION_CONSOLE_SECTIONS"):
         monkeypatch.setenv(name, "")      # recorded, so restored even if a CLI test sets it
         monkeypatch.delenv(name)
+    if TOKEN:
+        monkeypatch.setenv("EREGION_CONSOLE_TOKEN", TOKEN)
     if not CONSOLE:
         return
     from eregion_console import sections
     monkeypatch.setitem(sections._cache, "key", None)
+    try:
+        import eregion_console.api as api
+    except ImportError:  # the console's extra not installed
+        return
+    monkeypatch.setattr(api, "_TOKEN_FILE", tmp_path / "glorfindel-home" / "console_token")
+    monkeypatch.setitem(api._local_token, "value", "")
 
 
 @pytest.fixture(autouse=True)

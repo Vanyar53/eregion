@@ -263,7 +263,8 @@ def test_migrate_moves_what_the_modified_base_holds_beyond_the_base(tmp_path):
     cfg = load_config(base)
     rules = _names(cfg)
     assert set(rules) == {"ssh-brute-force", "log-clearing"}
-    assert rules["ssh-brute-force"].interval_s == 15 and rules["ssh-brute-force"].layer == "client"
+    # Approved before SEC2 at 15 s: still loaded, polled at the floor (SEC2).
+    assert rules["ssh-brute-force"].interval_s == 30 and rules["ssh-brute-force"].layer == "client"
     assert rules["log-clearing"].layer == "client" and rules["log-clearing"].workspace_id == WS
 
     again = rule_layers.migrate(modified, base)

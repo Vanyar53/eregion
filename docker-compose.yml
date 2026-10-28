@@ -154,8 +154,11 @@ services:
     image: eregion-glorfindel
     container_name: ${EREGION_INSTANCE:-eregion}-war-room
     # 0.0.0.0 INSIDE the container is required for the port mapping to work; what
-    # limits exposure is the HOST side of the mapping: loopback only. To reach the
-    # console from another machine, set EREGION_CONSOLE_TOKEN and widen the mapping.
+    # limits exposure is the HOST side of the mapping: loopback only. The console always
+    # has a token (EREGION_CONSOLE_TOKEN, else the one it draws at its first start in
+    # ~/.glorfindel/console_token: `make console-url`) and answers only under a loopback
+    # name. To reach it from another machine: widen the mapping, and list the name it is
+    # reached under in EREGION_CONSOLE_HOSTS.
     command: eregion console --host 0.0.0.0 --port 7007
     restart: unless-stopped
     ports:
@@ -166,6 +169,8 @@ services:
       # the console takes EREGION_CONSOLE_TOKEN when it is not empty, else the former.
       EREGION_CONSOLE_TOKEN: ${EREGION_CONSOLE_TOKEN:-}
       GLORFINDEL_WARROOM_TOKEN: ${GLORFINDEL_WARROOM_TOKEN:-}
+      # The names, besides the loopback ones, the console answers under (comma-separated).
+      EREGION_CONSOLE_HOSTS: ${EREGION_CONSOLE_HOSTS:-}
     volumes:
       # runs/ en écriture : la console y note les actions de l'opérateur (manual_actions.jsonl)
       # et la vérification d'une action approuvée, pour le fil (SEC3).

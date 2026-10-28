@@ -458,7 +458,9 @@ Syslog
 | where TimeGenerated > ago(5m)
 | where Computer == "{vm}"
 | where Facility == "auth"
-| where SyslogMessage has "Accepted" and SyslogMessage has "{ip}"
+| where ProcessName in ("sshd", "sshd-session")
+// sshd's own wording, at the start of the line (SEC2): never a user name holding it.
+| where SyslogMessage startswith "Accepted " and SyslogMessage has "{ip}"
 | project TimeGenerated, SyslogMessage
 | limit 3
 """
@@ -470,9 +472,11 @@ _IQ_ROOT_COMMANDS = """
 Syslog
 | where TimeGenerated > ago(10m)
 | where Computer == "{vm}"
-| where Facility == "auth"
-| where SyslogMessage has "sudo" and SyslogMessage has "USER=root"
-    and SyslogMessage has "COMMAND="
+// sudo logs to authpriv (measured under AMA).
+| where Facility in ("auth", "authpriv")
+// sudo's own lines (SEC2): the word is its tag (ProcessName), not in the message.
+| where ProcessName == "sudo"
+| where SyslogMessage has "USER=root" and SyslogMessage has "COMMAND="
 | project TimeGenerated, SyslogMessage
 | limit 10
 """
@@ -649,6 +653,7 @@ _HELD_BY_TYPE = {
     "agreement": "unstable_decision",
     "control_plane": "control_plane_change",
     "identity": "identity_change",
+    "never_block": "protected_address",
 }
 
 # Actions aimed at ONE VM. On a detection the RulePoller could not tie to that VM (a row
@@ -980,6 +985,33 @@ def _apply_attribution_guard(d: dict, signal: dict) -> None:
         f"de VM surveillée n'est à l'origine) — '{d['action']}' retenue pour revue "
         f"humaine. VMs surveillées : {candidates}. Vérifier laquelle est concernée "
         "(ou bloquer au périmètre) avant d'agir."
+    )
+
+
+def _apply_never_block_guard(d: dict, signal: dict) -> None:
+    """A block of an address on the never-block list is held, always (SEC2): Azure's
+    platform, the private ranges, the loopback, glorfindel-config.yaml's `never_block`.
+    Whatever the rule or the model said, and whichever gate held it first: the card says
+    the address is protected (its own type), and the connector refuses the block anyway
+    (`policy.blockable_ip`) — an approval of the card blocks nothing."""
+    if d["action"] != "block_suspicious_ip":
+        return
+    from glorfindel.response.policy import protected_by
+    ip = _extract_suspicious_ip(signal)
+    try:
+        held = protected_by(ip)
+    except Exception as exc:          # the list unknown: never a block (fail closed)
+        held = f"liste never_block illisible : {_first_line(exc)}"
+    if not held:
+        return
+    before = d.get("escalation_reason") if d["escalate"] else ""
+    d["escalate"] = True
+    d["held_by"] = "never_block"
+    d["escalation_reason"] = (
+        f"Blocage de {ip} retenu : adresse protégée ({held}, liste never_block) — "
+        "Glorfindel ne la bloque jamais, quelle que soit la règle ou le modèle. Vérifier "
+        "d'où vient la détection (une ligne de journal peut nommer n'importe quelle adresse)."
+        + (f" — {before}" if before else "")
     )
 
 
@@ -1382,6 +1414,7 @@ def decide(
     _apply_attribution_guard(d, signal)
     _apply_telemetry_guard(d, state.get("telemetry_gaps") or [])
     _apply_release_precondition(d, signal)
+    _apply_never_block_guard(d, signal)
 
     mode_hold = _apply_autonomy_mode(d, mode, gate)
 

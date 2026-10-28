@@ -96,6 +96,67 @@ def single_host_ip(ip: str) -> str:
     return str(addr)
 
 
+# Addresses Glorfindel never blocks, whatever the rule or the model says (SEC2): Azure's
+# platform (DNS and the host agent at 168.63.129.16, IMDS at 169.254.169.254), the private
+# ranges (RFC 1918, the shared space of carrier NAT, IPv6's unique local) and the loopback.
+# A private address is never blocked: lateral movement is answered by isolating the source
+# VM. glorfindel-config.yaml's `never_block` adds the deployment's own (a scanner, a
+# monitoring probe, the office).
+NEVER_BLOCK_SHIPPED = (
+    "168.63.129.16/32", "169.254.169.254/32",
+    "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "fc00::/7",
+    "127.0.0.0/8", "::1/128",
+)
+
+
+class ProtectedAddressError(ValueError):
+    """The address is on the never-block list: no block, ever — a human looks."""
+
+
+def never_block_networks() -> list[str]:
+    """The shipped list, then glorfindel-config.yaml's `never_block`. An unreadable config
+    raises: not knowing the list is no reason to block (fail closed)."""
+    from glorfindel.config import load_glorfindel_config
+    return list(NEVER_BLOCK_SHIPPED) + list(load_glorfindel_config().never_block)
+
+
+def protected_by(ip: str, networks: list[str] | None = None) -> str:
+    """The never-block entry that holds `ip` ("" when none). `networks`: the list, when
+    the caller already has it (default: `never_block_networks()`)."""
+    import ipaddress
+    try:
+        addr = ipaddress.ip_address((ip or "").strip())
+    except ValueError:
+        return ""
+    # An IPv4 address written as IPv6 (::ffff:a.b.c.d) is that IPv4 address.
+    if addr.version == 6 and addr.ipv4_mapped is not None:
+        addr = addr.ipv4_mapped
+    for net in never_block_networks() if networks is None else networks:
+        try:
+            if addr in ipaddress.ip_network(net, strict=False):
+                return net
+        except ValueError:
+            continue
+    return ""
+
+
+def blockable_ip(ip: str) -> str:
+    """`single_host_ip`, and never an address of the never-block list (SEC2): every block
+    goes through here — the agent's, an approval's, a reassertion's, on every provider."""
+    addr = single_host_ip(ip)
+    try:
+        held = protected_by(addr)
+    except Exception as exc:
+        raise ProtectedAddressError(
+            f"blocage de {addr} refusé : liste never_block illisible "
+            f"(glorfindel-config.yaml : {_first_line(exc)})") from exc
+    if held:
+        raise ProtectedAddressError(
+            f"blocage de {addr} refusé : adresse protégée ({held}, liste never_block) — "
+            "Glorfindel ne la bloque jamais ; à examiner par un humain")
+    return addr
+
+
 def platform_open_nics(placements) -> list[str]:
     """The NICs (short names) an isolation holds by rules only — no quarantine placement:
     Azure's DNS and IMDS stay reachable from them (Q15, measured). The War Room, `list` and

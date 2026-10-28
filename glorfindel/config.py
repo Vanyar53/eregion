@@ -354,6 +354,29 @@ def validate_forensic_sources(values) -> tuple[list[str], list[tuple[str, str]]]
     return accepted, rejected
 
 
+def validate_never_block(values) -> tuple[list[str], list[tuple[str, str]]]:
+    """(the never-block entries in canonical CIDR form, [(rejected value, why)]) (SEC2).
+
+    An address or a prefix; a prefix that holds every address (/0) would turn blocking
+    off altogether — that is a mode (`autonomy`), not a list, and it is refused."""
+    import ipaddress
+    accepted: list[str] = []
+    rejected: list[tuple[str, str]] = []
+    for raw in values or []:
+        text = str(raw).strip()
+        try:
+            net = ipaddress.ip_network(text, strict=False)
+        except ValueError:
+            rejected.append((text, "ni une adresse ni un préfixe CIDR"))
+            continue
+        if net.prefixlen == 0:
+            rejected.append((text, "toutes les adresses : couper les blocages se fait par le mode "
+                                   "d'autonomie, pas par cette liste"))
+        elif str(net) not in accepted:
+            accepted.append(str(net))
+    return accepted, rejected
+
+
 def validate_forensic_ports(values) -> list[int]:
     """TCP ports, 1–65535. A single port written without a list (`forensic_ports: 22`)
     raised TypeError and made the whole config unreadable; `"22"` iterated as "2", "2"
@@ -383,6 +406,9 @@ class GlorfindelConfig:
     exceptions: list[ExceptionConfig] = field(default_factory=list)
     autonomy: AutonomyConfig = field(default_factory=AutonomyConfig)
     isolation: IsolationConfig = field(default_factory=IsolationConfig)
+    # Addresses never blocked, on top of the shipped ones (SEC2,
+    # glorfindel.response.policy.NEVER_BLOCK_SHIPPED): canonical CIDRs.
+    never_block: list[str] = field(default_factory=list)
 
     def monitoring_backend(self, name: str) -> MonitoringBackendConfig | None:
         return next((b for b in self.monitoring_backends if b.name == name), None)
@@ -464,7 +490,7 @@ def load_glorfindel_config(path: str | Path | None = None) -> GlorfindelConfig:
 
 _SECTIONS = {
     "monitoring_backends": "list", "action_backends": "list", "exceptions": "list",
-    "autonomy": "table", "isolation": "table",
+    "autonomy": "table", "isolation": "table", "never_block": "list",
 }
 _MONITORING_KEYS = ("name", "type", "workspace_id", "endpoint", "discovery")
 _DISCOVERY_KEYS = ("enabled", "interval_s")
@@ -659,6 +685,16 @@ def _parse_config(data: dict) -> GlorfindelConfig:
         forensic_ports=ports,
     )
 
+    never_block: list[str] = []
+    for i, item in enumerate(sections["never_block"]):
+        if not isinstance(item, str):
+            check.bad(f"never_block[{i}]", f"une adresse ou un préfixe (texte) est attendu, pas {_shown(item)}")
+            continue
+        accepted, rejected = validate_never_block([item])
+        never_block += [a for a in accepted if a not in never_block]
+        for value, why in rejected:
+            check.bad(f"never_block[{i}]", f"{_shown(value)} : {why}")
+
     if check.problems:
         n = len(check.problems)
         raise ConfigError(f"{n} problème{'s' if n > 1 else ''} :\n  - " + "\n  - ".join(check.problems))
@@ -668,6 +704,7 @@ def _parse_config(data: dict) -> GlorfindelConfig:
         exceptions=exceptions,
         autonomy=autonomy,
         isolation=isolation,
+        never_block=never_block,
     )
 
 

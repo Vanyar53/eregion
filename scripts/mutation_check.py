@@ -1306,8 +1306,8 @@ MUTANTS = [
     ("M403", "an injector's route accepts a POST (UI-1)", CON,
      '@app.get("/api/exercises")\n', '@app.api_route("/api/exercises", methods=["GET", "POST"])\n'),
     ("M404", "a new page is served without the token (UI-1)", CON,
-     '        if not token or scope["type"] not in ("http", "websocket"):\n',
-     '        if not token or scope["type"] not in ("http", "websocket") or scope.get("path") == "/annatar":\n'),
+     '        if not (by_bearer or by_cookie):\n',
+     '        if not (by_bearer or by_cookie) and scope.get("path") != "/annatar":\n'),
     ("M405", "/runs/<id> takes a path for a run id (UI-1)", CON,
      "    if not safe_part(run_id):\n", "    if not run_id:\n"),
     ("M406", "--sections removes Glorfindel (UI-1)", SEC,
@@ -1341,7 +1341,7 @@ MUTANTS = [
      '    label = ref or (f"v{package}" if package else "")', '    label = (f"v{package}" if package else "")'),
     # #222 — finitions: the content security policy on every response.
     ("M568", "the console's pages can be framed by another site, and talk to another origin (#222)", CON,
-     '    response.headers["Content-Security-Policy"] = _CSP\n', ""),
+     '    response.headers.update(_HEADERS)\n', ""),
     ("M569", "glorfindel --version written by hand again: it drifts from the package (#222)", GCLI,
      '@click.version_option(package_name="eregion", prog_name="glorfindel")',
      '@click.version_option(version="0.2.0", prog_name="glorfindel")'),
@@ -1418,11 +1418,14 @@ MUTANTS = [
     # #257: scripts from the console's files only — the CSP, the page's events without inline
     # handlers (data-on-*, a closed table), and the reader's S1–S8 (#256's review).
     ("M1080", "the CSP lets inline scripts and handlers run again (#257)", CON,
-     """_CSP = ("script-src 'self'; object-src 'none'; frame-ancestors 'none'; connect-src 'self'; \"""",
-     """_CSP = ("object-src 'none'; frame-ancestors 'none'; connect-src 'self'; \""""),
+     """_CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; \"""",
+     """_CSP = ("style-src 'self' 'unsafe-inline'; img-src 'self'; \""""),
     ("M1081", "the CSP's script-src takes 'unsafe-inline': an injected handler runs (#257)", CON,
-     """_CSP = ("script-src 'self'; object-src""", """_CSP = ("script-src 'self' 'unsafe-inline'; object-src"""),
-    ("M1082", "the CSP lets a plugin load (#257)", CON, "script-src 'self'; object-src 'none'; frame", "script-src 'self'; frame"),
+     """_CSP = ("default-src 'self'; script-src 'self'; style-src""",
+     """_CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src"""),
+    ("M1082", "the CSP lets a plugin load (#257)", CON,
+     """        "object-src 'none'; frame-ancestors 'none'; connect-src 'self'; base-uri 'none'; \"""",
+     """        "frame-ancestors 'none'; connect-src 'self'; base-uri 'none'; \""""),
     ("M1083", "an inline handler back in a card: the CSP blocks it, the card no longer opens (#257)", GJS,
      "${_on('click', 'showEscModal', vmName)}", "onclick=\"showEscModal('${vmName}')\""),
     ("M1084", "an inline script back in the overview (#257)", "eregion_console/static/overview.html",
@@ -3081,6 +3084,202 @@ MUTANTS += [
      '    if not re.fullmatch(r"[0-9a-f]{40}", installed) or git(', "    if not installed or git("),
 ]
 TESTS.update({"M1055": "tests/unit/test_host_cd.py", "M1056": "tests/unit/test_host_cd.py"})
+
+# SEC1 (#272) — the console's boundary: a token always (drawn at the first start, mode 600), the
+# Host a loopback name or a listed one, a change from this origin only (the live feed included),
+# a JSON object, a cookie that is a session, the headers; Config masked, a name encoded in a
+# path, a restore that is its card's. Range M1170–M1189.
+MUTANTS += [
+    ("M1170", "any Host is served (SEC1)", CON,
+     "        if not _allowed_host(host):\n", "        if False:\n"),
+    ("M1171", "a Host that merely contains a loopback name is served (SEC1)", CON,
+     "    return name in _LOOPBACK_HOSTS or name in extra - {None}\n",
+     "    return any(n in name for n in _LOOPBACK_HOSTS) or name in extra - {None}\n"),
+    ("M1172", "a change from another origin is executed (SEC1)", CON,
+     "        if changes and origin is not None and not _same_origin(origin, host):\n",
+     "        if False:\n"),
+    ("M1173", "the live feed is not a change: it opens for another origin (SEC1)", CON,
+     '        changes = ws or scope.get("method", "GET") in _CHANGES\n',
+     '        changes = scope.get("method", "GET") in _CHANGES\n'),
+    ("M1174", "the origin's port is ignored (SEC1)", CON,
+     '    return origin in (f"http://{host}", f"https://{host}")\n',
+     '    return origin.split("://")[-1].split(":")[0] == host.split(":")[0]\n'),
+    ("M1175", "a browser's change without its Origin is executed (SEC1)", CON,
+     "        if changes and not by_bearer and origin is None:\n", "        if False:\n"),
+    ("M1176", "no token at all: the console answers everyone (SEC1)", CON,
+     "            await _refuse(scope, receive, send, 503,\n",
+     "            await self.app(scope, receive, send)\n            return\n"
+     "            await _refuse(scope, receive, send, 503,\n"),
+    ("M1177", "the first start draws no token (SEC1)", CON,
+     "    token = secrets.token_urlsafe(32)\n", '    token = ""\n'),
+    ("M1178", "the drawn token is written readable by all (SEC1)", CON,
+     ('os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o600)\n',
+      '    os.chmod(path, 0o600)\n    _local_token["value"] = token\n'),
+     ('os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o644)\n',
+      '    _local_token["value"] = token\n')),
+    ("M1179", "the cookie carries the token itself (SEC1)", CON,
+     "                resp.set_cookie(cookie, _session(token), httponly=True,",
+     "                resp.set_cookie(cookie, token, httponly=True,"),
+    ("M1180", "the token as a cookie opens the console (SEC1)", CON,
+     "        by_cookie = _ok(conn.cookies.get(cookie), _session(token))\n",
+     "        by_cookie = _ok(conn.cookies.get(cookie), _session(token)) or _ok(conn.cookies.get(cookie), token)\n"),
+    ("M1181", "the cookie is never Secure, HTTPS included (SEC1)", CON,
+     '                                secure=scope.get("scheme") == "https")\n',
+     "                                secure=False)\n"),
+    ("M1182", "a change of another type than JSON is executed (SEC1)", CON,
+     '    if media != "application/json":\n', "    if False:\n"),
+    ("M1183", "a change without a body is executed (SEC1)", CON,
+     "    if not isinstance(parsed, dict):\n", "    if body and not isinstance(parsed, dict):\n"),
+    ("M1184", "no nosniff, and the console's addresses leave in a Referer (SEC1)", CON,
+     '_HEADERS = {"Content-Security-Policy": _CSP, "X-Content-Type-Options": "nosniff",\n'
+     '            "Referrer-Policy": "no-referrer"}\n',
+     '_HEADERS = {"Content-Security-Policy": _CSP}\n'),
+    ("M1185", "the CSP without default-src: images, fonts and styles from anywhere (SEC1)", CON,
+     """_CSP = ("default-src 'self'; script-src 'self'; style-src""", """_CSP = ("script-src 'self'; style-src"""),
+    ("M1186", "the API's schema is served (SEC1)", CON,
+     'app = FastAPI(title="Eregion console", openapi_url=None, docs_url=None, redoc_url=None)\n',
+     'app = FastAPI(title="Eregion console")\n'),
+    ("M1187", "Config sends the whole subscription id (SEC1)", CON,
+     '            "subscription_id": _mask(subscription),\n', '            "subscription_id": subscription,\n'),
+    ("M1188", "the restore route takes an anchored card (SEC1)", CON,
+     '    if esc.get("escalation_type") in _ANCHORED_TYPES:\n', "    if False:\n"),
+    ("M1189", "a VM name raw in a route's path: a ? or # in it changes the route (SEC1)", GJS,
+     "    const r = await _post(`/api/action/release/${_seg(vmName)}`);",
+     "    const r = await _post(`/api/action/release/${vmName}`);"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_console.py" for n in range(1170, 1190)})
+
+# SEC1's relecture (5.5): the read-only guard reads the action a button names (#257); one cookie
+# per console; the token file never through a link; the URL flushed to a container's log.
+# Range M1300–M1309.
+MUTANTS += [
+    ("M1300", "the read-only guard reads `onclick`, gone since #257: no button that writes is disabled (SEC1)", GJS,
+     "    const action = b.getAttribute('data-on-click') || '';\n",
+     "    const action = b.getAttribute('onclick') || '';\n"),
+    ("M1301", "the read-only guard leaves a modal's own write buttons enabled (SEC1)", GJS,
+     "  'approveActionAndClose', 'approveScoped', 'snapshotAndClose',\n", ""),
+    ("M1302", "one cookie name for every console of a host: two consoles overwrite each other's (SEC1)", CON,
+     "    return f\"{_TOKEN_COOKIE}_{port or (443 if scheme in ('https', 'wss') else 80)}\"\n",
+     "    return _TOKEN_COOKIE\n"),
+    ("M1303", "the token file is read through a symbolic link (SEC1)", CON,
+     '        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))\n',
+     "        fd = os.open(path, os.O_RDONLY)\n"),
+    ("M1304", "the URL stays in a buffer: a container's log never shows it (SEC1)", CON,
+     '        print(f"  Eregion console  →  http://localhost:{port}/?token=${TOKEN_ENV}", flush=True)\n',
+     '        print(f"  Eregion console  →  http://localhost:{port}/?token=${TOKEN_ENV}")\n'),
+    ("M1305", "make console-url never reads the file the console drew (SEC1)", "Makefile",
+     '\t   [ -s "$$f" ] && t=$$(head -n 1 "$$f"); fi; \\\n', "\t   true; fi; \\\n"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_console.py" for n in range(1300, 1306)})
+
+
+# SEC2 — the detection rules against log lines anyone can write; the addresses never blocked;
+# one card per address; a proposed rule never in a shipped rule's place; the floor interval,
+# ${VAR} in documented fields only; a cap per rule and poll for every source. Measured by
+# tests/unit/test_forged_logs.py (the shipped rules run as written, tests/unit/kql_subset.py).
+RULES_YAML = "glorfindel/rules/azure/detection_rules.yaml"
+POL = "glorfindel/response/policy.py"
+DRU = "glorfindel/detection_rules.py"
+PRU = "glorfindel/proposed_rules.py"
+MUTANTS += [
+    ("M1190", "ssh-brute-force reads every program's lines, not sshd's (SEC2)", RULES_YAML,
+     '      | where ProcessName in ("sshd", "sshd-session")\n', ""),
+    ("M1191", "ssh-brute-force takes the first address of the line (SEC2)", RULES_YAML,
+     r'extract(@"from (\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}) port \d+( ssh2)?( \[preauth\])?\]?\s*$", 1, SyslogMessage)',
+     r'extract(@"from (\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})", 1, SyslogMessage)'),
+    ("M1192", "ssh-brute-force's address not anchored at the end of sshd's line (SEC2)", RULES_YAML,
+     r'port \d+( ssh2)?( \[preauth\])?\]?\s*$", 1, SyslogMessage)', r'port \d+( ssh2)?( \[preauth\])?\]?", 1, SyslogMessage)'),
+    ("M1193", "ssh-brute-force blind to sshd-session (OpenSSH 9.8+) (SEC2)", RULES_YAML,
+     '      | where ProcessName in ("sshd", "sshd-session")\n', '      | where ProcessName == "sshd"\n'),
+    ("M1194", "sudo-privilege-escalation reads every program's lines, not sudo's (SEC2)", RULES_YAML,
+     '      | where ProcessName == "sudo"\n', ""),
+    ("M1195", "sudo-privilege-escalation takes any sudo line holding its words, not sudo's form (SEC2)", RULES_YAML,
+     r'      | where SyslogMessage matches regex @"^\s*\S+ : (TTY|PWD)=(.*[ ;])?USER=root[ ;]+(.*[ ;])?COMMAND="' + "\n", ""),
+    ("M1196", "the platform and private addresses blockable: nothing shipped in never_block (SEC2)", POL,
+     '    "168.63.129.16/32", "169.254.169.254/32",\n'
+     '    "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "fc00::/7",\n'
+     '    "127.0.0.0/8", "::1/128",\n', ""),
+    ("M1197", "glorfindel-config.yaml's never_block never read (SEC2)", POL,
+     "    return list(NEVER_BLOCK_SHIPPED) + list(load_glorfindel_config().never_block)",
+     "    return list(NEVER_BLOCK_SHIPPED)"),
+    ("M1198", "an unreadable never_block list blocks anyway (SEC2)", POL,
+     "    except Exception as exc:\n        raise ProtectedAddressError(\n            f\"blocage de {addr} refusé : liste never_block illisible \"",
+     "    except Exception as exc:\n        return addr\n        raise ProtectedAddressError(\n"
+     "            f\"blocage de {addr} refusé : liste never_block illisible \""),
+    ("M1199", "the Azure connector blocks a never-block address (SEC2)", "glorfindel/providers/azure/blocks.py",
+     "        blockable_ip(ip)\n\n        self._guard_write(\"block_suspicious_ip\")", "        pass\n\n        self._guard_write(\"block_suspicious_ip\")"),
+    ("M1200", "the AWS connector blocks a never-block address (SEC2)", "glorfindel/providers/aws/blocks.py",
+     "        blockable_ip(ip)            # a never-block address, never (SEC2)\n", ""),
+    ("M1201", "decide lets a block of a never-block address run: the guard never called (SEC2)", "glorfindel/agent.py",
+     "    _apply_never_block_guard(d, signal)\n", ""),
+    ("M1202", "a never-block address held by another gate first: the card never says it (SEC2)", "glorfindel/agent.py",
+     "    if not held:\n        return\n    before = d.get(\"escalation_reason\")",
+     "    if not held or d[\"escalate\"]:\n        return\n    before = d.get(\"escalation_reason\")"),
+    ("M1203", "two addresses on one VM folded into one card: its approval blocks the first (SEC2)", "glorfindel/escalations.py",
+     "                and (e.get(\"action_params\") or {}).get(\"ip\") == (action_params or {}).get(\"ip\")\n", ""),
+    ("M1204", "a proposal keeps a shipped rule's name: approved, it replaces the shipped rule (SEC2)", PRU,
+     "    name = own_name(rule_name)\n    proposal = {", "    name = rule_name\n    proposal = {"),
+    ("M1205", "a proposal recorded under a shipped rule's name approved under it (SEC2)", PRU,
+     "    name = own_name(proposal[\"rule_name\"])\n    if name != proposal[\"rule_name\"]:",
+     "    name = proposal[\"rule_name\"]\n    if name != proposal[\"rule_name\"]:"),
+    ("M1206", "a client rule in a shipped rule's place never flagged: only a note (SEC2)", DRU,
+     "        replaces_base = layer_of.get(item[\"name\"]) == \"client\" and item[\"name\"] in base_names\n",
+     "        replaces_base = False\n"),
+    ("M1207", "a rule polling every second polled every second: no floor at load (SEC2)", DRU,
+     "        if not (math.isfinite(interval_s) and interval_s >= MIN_INTERVAL_S):",
+     "        if not (math.isfinite(interval_s) and interval_s > 0):"),
+    ("M1208", "${VAR} expanded in a rule's whole text again: a query reads the environment (SEC2)", DRU,
+     "    data = yaml.safe_load(path.read_text())\n    if data is not None and not isinstance(data, dict) and notes is not None:",
+     "    import os\n    data = yaml.safe_load(os.path.expandvars(path.read_text()))\n"
+     "    if data is not None and not isinstance(data, dict) and notes is not None:"),
+    ("M1209", "no cap of cards per rule and poll on a data source: one model call per row (SEC2)", DRU,
+     "                rest = send[data_budget:]\n                send = send[:data_budget]\n", "                rest = []\n"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_forged_logs.py" for n in range(1190, 1210)})
+# SEC2, after the 5.5 review.
+MUTANTS += [
+    ("M1310", "a client rule under the floor refused: a rule approved at 15 s drops out of detection (SEC2)", DRU,
+     '            if field_ == "interval_s" and not (math.isfinite(number) and number > 0):',
+     '            if field_ == "interval_s" and not (math.isfinite(number) and number >= MIN_INTERVAL_S):'),
+    ("M1311", "the investigation looks for sudo in the message: no root command found (SEC2)", "glorfindel/agent.py",
+     '| where ProcessName == "sudo"\n| where SyslogMessage has "USER=root" and SyslogMessage has "COMMAND="\n',
+     '| where SyslogMessage has "sudo" and SyslogMessage has "USER=root" and SyslogMessage has "COMMAND="\n'),
+    ("M1312", "the investigation reads any program's successful logins (SEC2)", "glorfindel/agent.py",
+     '| where ProcessName in ("sshd", "sshd-session")\n// sshd\'s own wording',
+     '// sshd\'s own wording'),
+    ("M1313", "an IPv4 written as IPv6 escapes never_block (SEC2)", POL,
+     "    if addr.version == 6 and addr.ipv4_mapped is not None:\n        addr = addr.ipv4_mapped\n", ""),
+    ("M1314", "carrier NAT and IPv6 unique local blockable (SEC2)", POL,
+     '"192.168.0.0/16", "100.64.0.0/10", "fc00::/7",', '"192.168.0.0/16",'),
+    ("M1315", "a failed sudo in sudo's form counted as an escalation (SEC2)", RULES_YAML,
+     r'@"^\s*\S+ : (TTY|PWD)=(.*[ ;])?USER=root[ ;]+(.*[ ;])?COMMAND="', r'@"^\s*\S+ : (.*[ ;])?USER=root[ ;]+(.*[ ;])?COMMAND="'),
+    ("M1316", "a summary card carries every row, unbounded (SEC2)", DRU,
+     "        for r in rest[:_SUMMARY_ROWS_MAX]]}", "        for r in rest]}"),
+    ("M1317", "a summary card never says how many rows it stands for (SEC2)", DRU,
+     '    return {**rest[0], "OmittedCount": len(rest), "OmittedRows": [',
+     '    return {**rest[0], "OmittedRows": ['),
+    ("M1318", "a shipped rule turned off by the client's layer never flagged (SEC2)", DRU,
+     "    disabled_base = sorted(base_on - loaded) if client_file else []\n", "    disabled_base = []\n"),
+    ("M1319", "`glorfindel rules` silent on a shipped rule turned off (SEC2)", "glorfindel/cli.py",
+     "    for name in cfg.disabled_base:\n", "    for name in []:\n"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_forged_logs.py" for n in range(1310, 1320)})
+# SEC2, after the measure on H0's Syslog (7 days).
+MUTANTS += [
+    ("M1320", "sudo-privilege-escalation reads auth only: real sudo logs to authpriv (SEC2)", RULES_YAML,
+     '      | where Facility in ("auth", "authpriv")\n      | where TimeGenerated > ago(10m)\n      // Lines tagged sudo',
+     '      | where Facility == "auth"\n      | where TimeGenerated > ago(10m)\n      // Lines tagged sudo'),
+    ("M1321", "sudo-privilege-escalation takes « ; » only: the agent's form, with spaces, never matches (SEC2)",
+     RULES_YAML, r'(TTY|PWD)=(.*[ ;])?USER=root[ ;]+(.*[ ;])?COMMAND="', r'(TTY|PWD)=(.*; )?USER=root ; (.*; )?COMMAND="'),
+    ("M1322", "the investigation looks for sudo's lines in auth only (SEC2)", "glorfindel/agent.py",
+     '| where Facility in ("auth", "authpriv")\n// sudo\'s own lines', '| where Facility == "auth"\n// sudo\'s own lines'),
+    ("M1323", "ssh-brute-force loses a line written before authentication ([preauth]) (SEC2)", RULES_YAML,
+     r'port \d+( ssh2)?( \[preauth\])?\]?\s*$"', r'port \d+( ssh2)?\]?\s*$"'),
+    ("M1324", "the investigation takes a user name holding « Accepted » for a login (SEC2)", "glorfindel/agent.py",
+     '| where SyslogMessage startswith "Accepted " and SyslogMessage has "{ip}"',
+     '| where SyslogMessage has "Accepted" and SyslogMessage has "{ip}"'),
+]
+TESTS.update({f"M{n}": "tests/unit/test_forged_logs.py" for n in range(1320, 1325)})
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

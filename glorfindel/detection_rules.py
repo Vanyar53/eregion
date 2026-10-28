@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 import threading
 import weakref
@@ -91,6 +92,9 @@ class DetectionRule:
     expected_latency_s: int = 0
     # P1: "base" (shipped with Glorfindel) or "client" (the client's layer, which wins).
     layer: str = "base"
+    # SEC2: a client rule that took the place of the shipped rule of its name — said at
+    # load, in the watch banner and by `glorfindel rules`, never only logged.
+    replaces_base: bool = False
 
 
 @dataclass
@@ -103,6 +107,10 @@ class DetectionConfig:
     # name it cannot disable…), in words — the watch prints them at start.
     notes: list[str] = field(default_factory=list)
     client_file: str = ""
+    # SEC2: the shipped rules a client rule replaces (their names) — the watch says each.
+    overrides: list[str] = field(default_factory=list)
+    # SEC2: the shipped rules the client's layer turns off (`disable:`, `enabled: false`).
+    disabled_base: list[str] = field(default_factory=list)
 
     def backend(self, name: str) -> MonitoringBackend | None:
         return next((b for b in self.backends if b.name == name), None)
@@ -295,17 +303,55 @@ def _truncates_before_vm_filter(query: str) -> bool:
     return bool(_TRUNCATE_RE.search(code))
 
 
+# The only fields where ${VAR} is expanded (SEC2): where a deployment names its workspace
+# or its target. A query, a name, a description are read as written — the whole file used
+# to be expanded, so a rule's text could pull the process's environment into a query.
+_EXPANDED_FIELDS = ("workspace_id", "resource_id", "endpoint")
+
+
+def _expand_documented(data: dict) -> dict:
+    import os
+    for key in ("rules", "assets", "monitoring_backends"):
+        items = data.get(key)
+        for entry in items if isinstance(items, list) else []:
+            if isinstance(entry, dict):
+                for f in _EXPANDED_FIELDS:
+                    if isinstance(entry.get(f), str):
+                        entry[f] = os.path.expandvars(entry[f])
+    return data
+
+
 def _read_layer(path: Path, notes: list[str] | None = None) -> dict:
     """One layer's YAML as a dict ({} when the file is absent or empty). `notes`: where to
-    say that the file holds something else than a dictionary (the client's layer)."""
-    import os
+    say that the file holds something else than a dictionary (the client's layer).
+    `${VAR}` is expanded in `_EXPANDED_FIELDS` only (SEC2)."""
     if not path.exists():
         return {}
-    data = yaml.safe_load(os.path.expandvars(path.read_text()))
+    data = yaml.safe_load(path.read_text())
     if data is not None and not isinstance(data, dict) and notes is not None:
         notes.append(f"couche du client ({path}) : le fichier n'est pas un dictionnaire YAML "
                      f"(rules:, disable:…) — ignorée, base seule")
-    return data if isinstance(data, dict) else {}
+    return _expand_documented(data) if isinstance(data, dict) else {}
+
+
+# The shortest poll a rule may ask for (SEC2): the fastest shipped rule. A rule that asked
+# for 1 s ran its query every second — Log Analytics throttles, and every match is a model
+# call.
+MIN_INTERVAL_S = 30.0
+
+
+def shipped_rules_path() -> Path:
+    """The base shipped with Glorfindel (glorfindel/rules/azure/detection_rules.yaml)."""
+    return Path(__file__).resolve().parent / "rules" / "azure" / "detection_rules.yaml"
+
+
+def shipped_rule_names(path: str | Path | None = None) -> set[str]:
+    """The names of the shipped rules (SEC2): a proposed rule never takes one. An unreadable
+    base gives the empty set — and a proposal its own name, as before."""
+    try:
+        return {r["name"] for r in _named(_read_layer(Path(path) if path else shipped_rules_path()).get("rules"))}
+    except Exception:
+        return set()
 
 
 _LAYER_KEYS = ("rules", "disable", "assets", "monitoring_backends")
@@ -344,8 +390,10 @@ def _invalid_client_entry(key: str, entry) -> str | None:
                 number = convert(value)
             except (TypeError, ValueError):
                 return f"`{field_}` n'est pas un nombre ({value!r})"
-            if field_ == "interval_s" and not number > 0:
-                return "`interval_s` doit être positif"
+            # Under the floor, the rule still loads: load_config polls it at the floor and
+            # says so (SEC2) — a rule approved before at 15 s keeps detecting.
+            if field_ == "interval_s" and not (math.isfinite(number) and number > 0):
+                return f"`interval_s` doit être un nombre de secondes positif ({value!r})"
     if entry.get("enabled", True) and not entry.get("query"):
         return "n'a pas de requête"
     return None
@@ -479,6 +527,8 @@ def load_config(path: str | Path, glorfindel_cfg=None, client_layer: str | Path 
     if yaml is None:
         raise ImportError("PyYAML is required: pip install pyyaml")
     data = _read_layer(Path(path))
+    base_names = {r["name"] for r in _named(data.get("rules"))}
+    base_on = {r["name"] for r in _named(data.get("rules")) if r.get("enabled", True)}
     notes: list[str] = []
     layer_of: dict[str, str] = {}
     client_file = ""
@@ -535,9 +585,18 @@ def load_config(path: str | Path, glorfindel_cfg=None, client_layer: str | Path 
 
     # ── Parse rules ───────────────────────────────────────────────────────────
     rules: list[DetectionRule] = []
+    overrides: list[str] = []
     for item in data.get("rules", []):
         if not item.get("enabled", True):
             continue
+        replaces_base = layer_of.get(item["name"]) == "client" and item["name"] in base_names
+        if replaces_base:
+            overrides.append(item["name"])
+        interval_s = float(item.get("interval_s", 30))
+        if not (math.isfinite(interval_s) and interval_s >= MIN_INTERVAL_S):
+            notes.append(f"règle « {item['name']} » : interval_s {item.get('interval_s')!r} sous le "
+                         f"minimum — interrogée toutes les {MIN_INTERVAL_S:g} s")
+            interval_s = MIN_INTERVAL_S
 
         rule_assets  = item.get("assets", [])
         rule_backends = item.get("monitoring_backends", [])
@@ -661,7 +720,7 @@ def load_config(path: str | Path, glorfindel_cfg=None, client_layer: str | Path 
             query=item["query"],
             ttp=item.get("ttp", ""),
             resource_id=resource_id,
-            interval_s=float(item.get("interval_s", 30)),
+            interval_s=interval_s,
             enabled=rule_enabled,
             description=item.get("description", ""),
             asset_name=primary_asset_name,
@@ -669,11 +728,16 @@ def load_config(path: str | Path, glorfindel_cfg=None, client_layer: str | Path 
             auto_apply=auto_apply,
             expected_latency_s=int(item.get("expected_latency_s", 0)),
             layer=layer_of.get(item["name"], "base"),
+            replaces_base=replaces_base,
         ))
+
+    loaded = {item["name"] for item in data.get("rules", []) if item.get("enabled", True)}
+    disabled_base = sorted(base_on - loaded) if client_file else []
 
     _log_notes(notes)
     return DetectionConfig(backends=backends, assets=assets, rules=rules,
-                           notes=notes, client_file=client_file)
+                           notes=notes, client_file=client_file, overrides=overrides,
+                           disabled_base=disabled_base)
 
 
 def load_rules(path: str | Path, glorfindel_cfg=None) -> list[DetectionRule]:
@@ -844,6 +908,37 @@ def _control_plane_summary(rest: list[dict]) -> dict:
                 if r.get("EntraOperation") else {})}
             for r in rest],
     }
+
+
+# Data sources (SEC2): at most this many cards per rule and poll too — the rows a log can
+# be made to hold are not bounded, and each card is a model call. The gravest first; beyond,
+# one card per VM names the rows left without their own (`OmittedRows`).
+_DATA_CARDS_PER_POLL = 5
+# The magnitude a data row is ranked by, in this order (the curated indicators).
+_GRAVITY_COLUMNS = ("MaxWrite", "FailedAttempts", "PutBlobCount", "EgressBytes")
+
+
+def _gravity(row: dict) -> float:
+    for col in _GRAVITY_COLUMNS:
+        try:
+            return float(row[col])
+        except (KeyError, TypeError, ValueError):
+            continue
+    return 0.0
+
+
+# The rows a summary card carries, the gravest first; beyond, it gives their number.
+_SUMMARY_ROWS_MAX = 50
+
+
+def _data_summary(rest: list[dict]) -> dict:
+    """The card of the data rows past the cap: the gravest one's row, carrying the gravest
+    of them (`OmittedRows`, at most `_SUMMARY_ROWS_MAX`) and how many there are
+    (`OmittedCount`) — none marked sent without being said or counted."""
+    return {**rest[0], "OmittedCount": len(rest), "OmittedRows": [
+        {k: (v[:300] if isinstance(v, str) else v) for k, v in r.items()
+         if isinstance(v, (str, int, float, bool)) or v is None}
+        for r in rest[:_SUMMARY_ROWS_MAX]]}
 
 
 def _row_attribution(row: dict, resource_id: str, asset_name: str) -> bool | None:
@@ -1124,6 +1219,7 @@ class RulePoller:
             # The control plane (AL1) and identities (C2): one card per operation.
             control = is_control_plane_source(rule.source) or is_identity_source(rule.source)
             budget = _CONTROL_PLANE_CARDS_PER_POLL
+            data_budget = _DATA_CARDS_PER_POLL
             for key, (tgt, krows) in routed.items():
                 seen = dispatched.get(key, {})
                 new = [r for r in krows if _row_identity(r) not in seen]
@@ -1148,6 +1244,16 @@ class RulePoller:
                 send = [r for r in new if not r.get("TimeGenerated")]
                 if events:
                     send.append(max(events, key=lambda r: str(r["TimeGenerated"])))
+                # Capped per rule and poll (SEC2), as the control plane: the gravest rows
+                # first; the rest of this VM's in one card that names each of them.
+                send.sort(key=_gravity, reverse=True)
+                rest = send[data_budget:]
+                send = send[:data_budget]
+                data_budget = max(0, data_budget - len(send))
+                if len(rest) == 1:
+                    send.append(rest[0])
+                elif rest:
+                    send.append(_data_summary(rest))
                 plan.append((key, tgt, send))
                 sent_ids[key] = [_row_identity(r) for r in new]
 

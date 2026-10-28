@@ -11,7 +11,7 @@ from glorfindel.providers.azure.nsg import (
     _shadowing_rules,
 )
 from glorfindel.response.ids import _parse_vm_resource_id
-from glorfindel.response.policy import _first_line, PartialActionError, single_host_ip
+from glorfindel.response.policy import _first_line, PartialActionError, blockable_ip
 from glorfindel.response.state import _clear_block_state, _load_block_entries, _save_block_state
 
 
@@ -41,7 +41,8 @@ class BlockMixin:
             return {"status": "dry_run", "action": "block_ip", "ip": ip, "scope": scope}
         if not ip:
             raise ValueError("block_suspicious_ip: no IP address provided")
-        single_host_ip(ip)          # `*`, a CIDR or a service tag would cut far more
+        # `*`, a CIDR or a service tag would cut far more; a never-block address, never (SEC2).
+        blockable_ip(ip)
 
         self._guard_write("block_suspicious_ip")
         self._ensure_clients()

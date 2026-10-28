@@ -103,7 +103,7 @@ DOCKER_GLORFINDEL = $(GLORFINDEL_AZURE_PICK) docker run --rm $(GLORFINDEL_AZURE_
 	glorfindel-respond glorfindel-dry-run glorfindel-watch \
 	glorfindel-release glorfindel-revert glorfindel-list \
 	glorfindel-pending glorfindel-check-ttl \
-	glorfindel-start glorfindel-stop glorfindel-restart glorfindel-dev glorfindel-logs glorfindel-ui \
+	glorfindel-start glorfindel-stop glorfindel-restart glorfindel-dev glorfindel-logs glorfindel-ui console-url \
 	annatar-shell glorfindel-shell \
 	venv install lock test test-unit lint annatar-simulate annatar-simulate-gap clean \
 	canary-jit celebrimbor-init celebrimbor-plan celebrimbor-up celebrimbor-down celebrimbor-output celebrimbor-stop celebrimbor-start \
@@ -153,6 +153,7 @@ help:
 	@echo "  make glorfindel-restart         Rebuild + restart all services"
 	@echo "  make glorfindel-dev             Start + watch files (auto-reload on change)"
 	@echo "  make glorfindel-ui              Rebuild + restart war-room only (watch untouched)"
+	@echo "  make console-url                The console's URL with its token (~/.glorfindel/console_token)"
 	@echo "  make glorfindel-logs            Tail service logs"
 	@echo "  make glorfindel-watch           Watch runs/ only (no web UI)"
 	@echo "  make glorfindel-respond         SIGNALS=... Process signal file"
@@ -346,7 +347,7 @@ glorfindel-start: check-azure-env build-glorfindel
 	mkdir -p $(HOME)/.glorfindel $(HOME)/.glorfindel/injectors $(HOME)/.cache/chroma $(HOME)/.eregion/analysis runs
 	docker compose up -d
 	@echo ""
-	@echo "  Console   →  http://localhost:7007"
+	@$(MAKE) --no-print-directory console-url || true
 	@echo "  Logs      →  make glorfindel-logs"
 	@echo "  Dev mode  →  make glorfindel-dev  (auto-reload on file change)"
 	@echo "  Stop      →  make glorfindel-stop"
@@ -358,12 +359,13 @@ glorfindel-stop:
 glorfindel-restart: check-azure-env build-glorfindel
 	mkdir -p $(HOME)/.glorfindel $(HOME)/.glorfindel/injectors $(HOME)/.cache/chroma $(HOME)/.eregion/analysis runs
 	docker compose up -d --build --force-recreate
-	@echo "  Console   →  http://localhost:7007"
+	@$(MAKE) --no-print-directory console-url || true
 
 glorfindel-dev: check-azure-env build-glorfindel
 	mkdir -p $(HOME)/.glorfindel $(HOME)/.glorfindel/injectors $(HOME)/.cache/chroma $(HOME)/.eregion/analysis runs
 	docker compose up -d
-	@echo "  Console   →  http://localhost:7007  (watching for changes…)"
+	@$(MAKE) --no-print-directory console-url || true
+	@echo "  (watching for changes…)"
 	docker compose watch
 
 glorfindel-logs:
@@ -371,7 +373,23 @@ glorfindel-logs:
 
 glorfindel-ui: build-glorfindel
 	docker compose up -d --no-deps war-room
-	@echo "  Console   →  http://localhost:7007  (watch untouched)"
+	@$(MAKE) --no-print-directory console-url || true
+	@echo "  (watch untouched)"
+
+# The console's URL with its token (SEC1): the one compose passes (EREGION_CONSOLE_TOKEN, else its
+# former name, from the environment or .env), else the one the console drew at its first start,
+# ~/.glorfindel/console_token — written by the container after `up -d`, so waited for
+# (CONSOLE_WAIT seconds, 20 by default). The port: EREGION_CONSOLE_PORT, as compose publishes it.
+CONSOLE_WAIT ?= 20
+console-url:
+	@t="$${EREGION_CONSOLE_TOKEN:-$${GLORFINDEL_WARROOM_TOKEN:-}}"; f="$(HOME)/.glorfindel/console_token"; \
+	 for k in EREGION_CONSOLE_TOKEN GLORFINDEL_WARROOM_TOKEN; do \
+	   [ -n "$$t" ] || t=$$(sed -n -E "/^$$k=/{s/^[^=]*=[[:space:]]*//;s/[[:space:]]+#.*$$//;s/[[:space:]]+$$//;p;}" .env 2>/dev/null | tail -1); \
+	 done; \
+	 if [ -z "$$t" ]; then i=0; while [ ! -s "$$f" ] && [ $$i -lt $(CONSOLE_WAIT) ]; do sleep 1; i=$$((i+1)); done; \
+	   [ -s "$$f" ] && t=$$(head -n 1 "$$f"); fi; \
+	 if [ -n "$$t" ]; then echo "  Console   →  http://localhost:$${EREGION_CONSOLE_PORT:-7007}/?token=$$t"; \
+	 else echo "  ⚠ Console: no token yet — the console writes $$f at its first start (make glorfindel-logs)" >&2; exit 1; fi
 
 # ── Shells ────────────────────────────────────────────────────────────────
 

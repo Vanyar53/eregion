@@ -97,6 +97,7 @@ _ESCALATION_LABELS = {
     "readiness_hold": "VM retenue en observation (préparation)",
     "control_plane_change": "plan de contrôle modifié (détection seule)",
     "identity_change": "identité modifiée dans Entra ID (détection seule)",
+    "protected_address": "adresse protégée (jamais bloquée)",
 }
 
 
@@ -138,7 +139,8 @@ def record(
     this VM, else `real` (empty on older cards = real). It is part of the dedup key: a
     real detection never merges into a pending exercise card, nor the reverse.
     A `control_plane_change` card (AL1) never merges: each is one operation. Nor an
-    `identity_change` card (C2): each is one finding on one identity.
+    `identity_change` card (C2): each is one finding on one identity. Nor two cards whose
+    action names two addresses (`action_params.ip`, SEC2): one card per address.
     """
     rid_lower = resource_id.lower()
     now = datetime.now(timezone.utc).isoformat()
@@ -163,6 +165,9 @@ def record(
                 and escalation_type != "control_plane_change"
                 # Nor an identity card (C2): the next, perhaps on Glorfindel's own identity.
                 and escalation_type != "identity_change"
+                # Two addresses are two cards (SEC2): folded into one, its approval
+                # blocked the first address only, the other never said.
+                and (e.get("action_params") or {}).get("ip") == (action_params or {}).get("ip")
             ):
                 e["occurrences"] = int(e.get("occurrences", 1)) + 1
                 e["last_seen"] = now

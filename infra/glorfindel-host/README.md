@@ -303,7 +303,7 @@ d'exercice non marqués (B2), qui n'ont rien à faire dans une observation.
    - copie l'agent dans `~/.eregion-cd/` sur la VM, avec `deploy.sh` et `notify_discord.py`, jamais dans le checkout qu'il déploie ;
    - y écrit `discord.env` en 600, avec le webhook et la mention seulement, passés par stdin. Le jeton du bot Eregion ne va jamais sur H0 ;
    - installe les unités systemd avec sudo, **timer désactivé**.
-3. **`make glorfindel-host-cd-check`, à blanc.** La commande vérifie la dernière release, construit la candidate à côté et passe le préflight, dont **la config de H0 sous la lecture stricte d'A3**. Elle ne bascule pas, et dit le résultat dans le terminal et dans `#deploy`. Si la dernière release tourne déjà (v0.4.0 depuis le 28/10), elle la reconstruit à côté (`check-v0.4.0`, effacée ensuite) et la préflighte : le vrai Docker de H0 est éprouvé quand même.
+3. **`make glorfindel-host-cd-check`, à blanc.** La commande vérifie la dernière release, construit la candidate à côté et passe le préflight, dont **la config de H0 sous la lecture stricte d'A3**. Elle ne bascule pas, et dit le résultat dans le terminal et dans `#deploy`. Si la dernière release tourne déjà (le cas quand H0 a été redéployé à la main sur elle), elle la reconstruit à côté (`check-<tag>`, effacée ensuite) et la préflighte : le vrai Docker de H0 est éprouvé quand même.
 4. **Si c'est vert, `make glorfindel-host-cd-enable`.** Le passage suivant déploie.
 
 ### Un passage
@@ -340,7 +340,7 @@ d'exercice non marqués (B2), qui n'ont rien à faire dans une observation.
 - **L'agent ne se remplace jamais lui-même.** Après un déploiement, si la release porte un autre `eregion_cd.py`, `deploy.sh` ou `notify_discord.py`, `#deploy` le dit, et `make glorfindel-host-cd-install` le met à jour.
 - **Le retirer** : `make glorfindel-host-cd-uninstall` (les unités ; `~/.eregion-cd/` reste).
 
-Reste à mesurer : le premier passage réel. H0 tourne sur v0.4.0 depuis le 28/10 (redéployé à la main), donc ce sera v0.4.1. Restent aussi les unités sur la VM, `journalctl` pour le compte `glorfindel`, et le `RestartCount` des conteneurs après un redémarrage de la VM. Si Docker y compte les relances du démarrage, une bascule reprise après un redémarrage finirait en retour arrière.
+Reste à mesurer : le premier passage réel — la première release publiée après celle qui tourne sur H0 (redéployé à la main le 28/10). Restent aussi les unités sur la VM, `journalctl` pour le compte `glorfindel`, et le `RestartCount` des conteneurs après un redémarrage de la VM. Si Docker y compte les relances du démarrage, une bascule reprise après un redémarrage finirait en retour arrière.
 
 ## Changer de modèle
 

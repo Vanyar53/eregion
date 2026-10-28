@@ -1,0 +1,16 @@
+# The CD of H0 (H1, #244): one pass — the latest release, verified, built aside, preflighted,
+# switched to, kept if healthy. Installed by `make glorfindel-host-cd-install` (install.sh);
+# @USER@ and @HOME@ are filled in then. The timer runs it every 5 minutes, once enabled.
+[Unit]
+Description=Eregion CD: the release Jonathan publishes reaches H0 (H1)
+Wants=network-online.target
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+User=@USER@
+WorkingDirectory=@HOME@
+ExecStart=/usr/bin/python3 @HOME@/.eregion-cd/eregion_cd.py run
+Nice=10
+# A build and the health watch take minutes; a stuck pass ends, the next one starts over.
+TimeoutStartSec=45min

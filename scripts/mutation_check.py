@@ -2505,6 +2505,53 @@ MUTANTS += [
 ]
 TESTS.update({f"M{n}": "tests/unit/test_roadmap_discord.py" for n in (1000, 1001)})
 
+# H1 (#244): the CD of H0 — infra/glorfindel-host/cd/eregion_cd.py and deploy.sh's new modes,
+# measured by tests/unit/test_host_cd.py (an agent installed as on H0, real git, a fake docker,
+# a fake GitHub and Discord). Range M1005–M1019, given by the General session.
+CD = "infra/glorfindel-host/cd/eregion_cd.py"
+DEPLOY = "infra/glorfindel-host/deploy.sh"
+MUTANTS += [
+    ("M1005", "a release whose tag is off main deployed (H1)", CD,
+     '    if not is_ancestor(commit, "refs/remotes/origin/main"):', "    if False:"),
+    ("M1006", "a release with a red CI deployed (H1)", CD, "    if red:\n", "    if False:\n"),
+    ("M1007", "a release deployed while its CI still runs (H1)", CD,
+     '    if not runs or any(r.get("status") != "completed" for r in runs):', "    if False:"),
+    ("M1008", "a release older than what runs deployed over it (H1)", CD,
+     "    if dep_commit and is_ancestor(commit, dep_commit):", "    if False:"),
+    ("M1009", "a new lock deployed without the harness: the guard never runs (H1)", CD,
+     '    if dep_commit and git("diff", "--quiet", dep_commit, commit, "--", LOCK, check=False).returncode == 0:\n'
+     "        return\n", "    return\n"),
+    ("M1010", "an attestation for another lock accepted (H1)", CD,
+     '    if att.get("lock_sha256") != hashlib.sha256(lock).hexdigest():', "    if False:"),
+    ("M1011", "an attestation for another model accepted: H0's own is never checked (H1)", CD,
+     '    entry = next((m for m in att.get("models") or [] if m.get("model") == model), None)',
+     '    entry = next(iter(att.get("models") or []), None)'),
+    ("M1012", "an attestation with overconfident errors accepted (H1)", CD,
+     '    if entry.get("overconfident_errors") != 0:', "    if False:"),
+    ("M1013", "H0's config refused by A3 and the release switched to anyway: the watch exits 2 (H1)", CD,
+     '        if res.returncode != 0:\n            raise Refused(f"préflight : la config de H0',
+     '        if False:\n            raise Refused(f"préflight : la config de H0'),
+    ("M1014", "the candidate built as the running image: a refused release replaces it anyway (H1)", DEPLOY,
+     '    build "${pair% *}" "${pair#* }"\n    echo "✓ construite',
+     '    build "${pair% *}" "${pair#* }" latest\n    echo "✓ construite'),
+    ("M1015", "an unhealthy release left running: no rollback (H1)", CD,
+     "        back = rollback(dep_ref)\n", '        back = ""\n'),
+    ("M1016", "a refused or rolled-back release tried again at every pass (H1)", CD,
+     '    if not check and done in ("refused", "rolled back", "rollback failed"):', "    if False:"),
+    ("M1017", "two passes at once, or one during a deployment by hand: no lock (H1)", CD,
+     "            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)\n", "            pass\n"),
+    ("M1018", "a release with another agent never said: H0 keeps an old CD in silence (H1)", CD,
+     "    drift = agent_drift(tag)\n", "    drift = []\n"),
+    ("M1019", "a heartbeat from before the switch taken for health (H1)", CD,
+     "        if HEARTBEAT.stat().st_mtime < since:", "        if False:"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_host_cd.py" for n in range(1005, 1020)})
+MUTANTS += [
+    ("M1002", "the image of before H1 never tagged by its reference: the first rollback has nothing to retag (H1)",
+     CD, "    keep_the_way_back(dep_ref)\n", ""),
+]
+TESTS["M1002"] = "tests/unit/test_host_cd.py"
+
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a

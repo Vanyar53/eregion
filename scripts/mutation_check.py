@@ -1801,8 +1801,8 @@ MUTANTS += [
      SWP, "        why = self._held_reason(orphan.get(\"cut\") or [], self._held_vms())\n",
      "        why = \"\"\n"),
     ("M880", "any error reading a NIC of our state taken for a 404: gone (A3, first review, X1)", SWP,
-     "            if _is_not_found(exc):\n                return None",
-     "            if True:\n                return None"),
+     "            if _is_not_found(exc):\n                return None\n            return f\"carte",
+     "            if True:\n                return None\n            return f\"carte"),
     ("M881", "a NIC of our state unreadable (403, 429): its rule removable anyway (A3, first review, X2)", SWP,
      "                elif mark in state_nics and gone.get(mark):", "                elif False:"),
     ("M882", "an unknown backend type accepted in silence (A3, first review)", C,
@@ -2300,6 +2300,39 @@ TESTS["M834"] = f"{INVARIANTS} tests/unit/test_reassert.py"
 # stays rare) — their frozen sequences, then the machine (L1F's precedent).
 TESTS.update({mid: f"tests/unit/test_invariant_regressions.py {INVARIANTS}"
               for mid in ("M860", "M861", "M862", "M863", "M864", "M865")})
+
+# I1S (#231): a quarantine card's NSG absent from the listing is read again by its id before
+# the card closes — gone on a 404 only, judged on its content without its tag, never read in
+# another subscription.
+MUTANTS += [
+    ("M1020", "a quarantine card closed on the mere absence of its NSG from the listing: the role "
+              "removed, our tag taken off, another subscription (I1S)", R,
+     "        return k in gone\n", "        return True\n"),
+    ("M1021", "a quarantine NSG read again without our tag reads as not ours: its card closed (I1S)", SWP,
+     "        return self._quarantine_as_read(nsg)\n",
+     '        if (getattr(nsg, "tags", None) or {}).get("managed-by") != "glorfindel":\n'
+     "            return None\n        return self._quarantine_as_read(nsg)\n"),
+    ("M1022", "a quarantine NSG of another subscription read in this one: its homonym, or a 404, "
+              "closes its card (I1S)", SWP,
+     '        if not target or target.lower() != (self._subscription_id or "").lower():\n',
+     "        if False:\n"),
+    ("M1023", "a quarantine NSG that can't be read again (403, 429) reads as gone: its card closed (I1S)", R,
+     "exc)\n            continue\n        if q is None:\n",
+     "exc)\n            gone.add(k)\n            continue\n        if q is None:\n"),
+    ("M1024", "every quarantine card's NSG read again at every pass, listed or not: a get per card "
+              "per minute (I1S)", R,
+     "        if _key(rid) and _key(rid) not in seen:\n", "        if _key(rid):\n"),
+    ("M1025", "an acknowledged change is not read again: its NSG deleted, the acknowledgement silences "
+              "the next one (I1S)", R,
+     '    for rid in [e.get("resource_id") or "" for e in cards] + list(alerts):\n',
+     '    for rid in [e.get("resource_id") or "" for e in cards]:\n'),
+    ("M1026", "a refusal (403) read again reads as not found: the card closed (I1S)", SWP,
+     "            if _is_not_found(exc):\n                return None\n            raise\n",
+     "            return None\n"),
+]
+TESTS.update({f"M{n}": f"tests/unit/test_reassert.py tests/unit/test_invariant_regressions.py {INVARIANTS}"
+              for n in (1020, 1021, 1023, 1026)})
+TESTS.update({f"M{n}": "tests/unit/test_reassert.py" for n in (1022, 1024, 1025)})
 
 # D1 (#81): each component runs alone (scripts/component_check.py), and every usage profile
 # keeps Glorfindel (docker-compose.yml, the Makefile's profile and team targets).

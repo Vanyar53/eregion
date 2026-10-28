@@ -544,6 +544,27 @@ def test_an_altered_quarantine_card_closes_once_it_is_whole(monkeypatch):
         m.teardown()
 
 
+@pytest.mark.parametrize("how", ["role removed", "untagged", "both"])
+def test_a_said_quarantine_out_of_the_listing_stays_said(monkeypatch, how):
+    """L2's card, then the NSG out of the listing — the role removed on its group (a
+    listing that leaves it out without an error: our hypothesis), our tag taken off with
+    our rules, or both: its card closed on the mere absence, silence until the role came
+    back (I1S, #231; third and fourth reviews of I1F). Two passes, the second autonomous."""
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_net(quarantine=True, quarantine_rg="rg-sec", web_nic={"own": "dedicated",
+                                                                    "rules": _LATERAL_RULES}))
+        m.lose_everything(Script(WEB1, WEB1, None, WEB1, _SEC_Q, "stop"))
+        m.tamper_with_our_rule(Script(*_TURNED_TO_UDP[1:]))
+        m.reassert(Script("human_only", None))
+        assert m.l2_held_on == {key(_SEC_Q)}
+        m._out_of_sight(Script(how, key(_SEC_Q), 2, "human_only", "non_disruptive"))
+        assert not m.fake.unreadable and m.fake.nsgs[key(_SEC_Q)]["tags"]["managed-by"] == "glorfindel"
+    finally:
+        m.teardown()
+
+
 @pytest.mark.parametrize("alteration", [
     ("strip_quarantine_nsg", _Q1),
     ("tamper_with_our_rule", "protocol", (_Q1, "glorfindel-quarantine-deny-in")),

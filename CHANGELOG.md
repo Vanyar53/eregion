@@ -4,6 +4,9 @@ Notable changes to Eregion. The format follows [Keep a Changelog](https://keepac
 
 ## [Unreleased]
 
+### Security
+- **The console writes nothing from the outside raw into its pages** (#254, 28/10; the known issue of 0.4.0). A card, a rule, a feed entry, an error — a resource's or an Entra application's name from Azure, the model's text, a rule's query, a run report pulled from the exercise channel — written raw into `innerHTML` ran in the operator's console and could call its routes (#250 fixed one card's detail; the CSP of #222 has no `script-src`). Now escaped everywhere it lands: the live feed, a rule's window and rows, the decisions, the cards' titles (the `|| e.action` fallback), the coverage window, the NSG, backup and cluster tiles, the configuration, the overview's indicators. `_attr` takes any value (`String(s ?? '')`) and escapes `'` and `>` too; an argument of an `on…` attribute goes through `_js` (a JSON string, then escaped for the attribute — the browser decodes `&#39;` before the handler runs), never between quotes: 74 handlers. `scripts/console_escaping.py` reads each page's scripts and follows what every `${…}` of an HTML template and every value given to innerHTML can hold — through ternaries, `||`, variables and their assignments, a `Map`, a page function's returns, a parameter's calls and a callback's array — and `tests/unit/test_console_escaping.py` fails on anything raw, on the start of a URL escaped only for HTML, or on an attribute not in double quotes; it holds the reader to small pages too. Checked in Chromium on a local console seeded with payloads: on `main`, 14 injected images and payloads run on load and on click; after, none, no JS error, every handler's argument intact. Mutants M580–M599.
+
 ## [0.4.0] — 2026-10-27 — "the isolation path, held to its invariants"
 
 ### Added

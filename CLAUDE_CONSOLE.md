@@ -96,6 +96,11 @@ En-tête (console.js), le même partout → EREGION + version déployée (tag, s
 - **Pas de framework** : vanilla JS uniquement. Pas de React, Vue, Alpine, etc.
 - **Pas de build step** : l'HTML est servi statique par FastAPI, une seule modification = résultat immédiat.
 - **Responsive minimal** : optimisé pour grand écran (1440px+). Mobile = non-prioritaire.
+- **Rien du dehors n'est écrit brut** (#254) : un champ de carte, de règle, du fil, une erreur, un
+  nombre du serveur passe par `_attr` (glorfindel.html) ou `esc` (les autres pages) ; un argument
+  de gestionnaire `on…` par `_js`, sans guillemets autour (`onclick="f(${_js(vm)})"`) ; le début
+  d'une URL par `encodeURIComponent`. `python scripts/console_escaping.py` dit où, et
+  `tests/unit/test_console_escaping.py` échoue sinon ([docs/design/console.md](docs/design/console.md), « Ce qui vient du dehors »).
 
 ## Protocole collab
 

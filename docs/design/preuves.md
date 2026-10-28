@@ -1025,6 +1025,8 @@ Aucun de ces défauts n'avait été vu en revue. Chacun a son test et sa séquen
 | I8F | original inconnu (état et tags perdus), carte laissée nue puis réisolée | « aucun NSG » écrit par-dessus l'inconnu : `released`, carte sans son NSG, une ancienne isolation restée sur ce NSG sans état |
 | I8F | même carte nue, `reset --from-azure` | carte sautée : `swept`, état effacé, même reste |
 | I8F | même carte nue, un 429 à la lecture de notre tag (relecture) | l'erreur lue « aucun NSG » et écrite : même reste |
+| I8S | deux hôtes aux états séparés : « aucun » de l'hôte 1, tag X de l'hôte 2 (la carte a reçu X entre-temps) | la levée suivait l'« aucun » périmé : `released`, carte sans NSG, tag X effacé (trouvé en relecture, hors de la machine) |
+| I8S | même scénario, reset ; deux groupes de quarantaine (relecture 5.5) | un 429 sur le tag : carte remise nue, X effacé ; le « aucun » trouvé dans un groupe l'emportait sur X dans l'autre |
 | I4F | NSG d'origine d'une carte en quarantaine (ou nue) jugé sans elle | le reset de la nouvelle VM prenait l'ancienne isolation d'une autre VM pour la sienne : **l'autre VM rouverte** |
 
 **I1F (27/10, #226) : un oracle qui lisait mal, et un trou derrière.** Le run profond (10 000
@@ -1136,6 +1138,35 @@ une VM partie en quarantaine, la nouvelle carte reste seule attachée — fait e
 les noms fixes de l'autre VM ; la quarantaine tient cette VM, mais si sa carte revenait sur son NSG
 sans Glorfindel, l'ancienne règle n'y serait plus.
 
+**I8S (28/10, #245) : deux hôtes, deux états, un « aucun » périmé.** Trouvé par la troisième
+relecture d'I8F, hors de la machine : elle n'a qu'un répertoire d'état. Une carte nue ; l'hôte 1
+l'isole (état et tag : « aucun ») ; quelqu'un retire notre NSG, le client donne ensuite un NSG X à
+la carte ; l'hôte 2 l'isole (tag : X) ; notre NSG retiré de nouveau ; l'hôte 1 la réisole, un 429
+à l'appel k, puis la lève. Sur les 26 positions, 10 finissaient `released`, la carte sans NSG et
+le tag X effacé : la levée suivait l'« aucun » de son état sans lire le tag. Le reset, `verify_release`
+et une levée sans réisolation avaient le même défaut. Correctif, option (a) de l'issue : quand
+l'état dit « aucun », un tag lisible qui nomme un NSG l'emporte ; un tag illisible fait échouer la
+levée ; la réisolation n'écrit plus « aucun » par-dessus un tag qu'elle n'a pas lu. L'option (b) — un
+tag absent ou illisible toujours inconnu — aurait gardé en quarantaine toute carte nue par conception
+dont les tags sont perdus. L'oracle n'est pas touché. La relecture 5.5 a trouvé deux trous de plus :
+le reset notait l'« aucun » avant de lire le tag, et un 429 sur ce tag remettait la carte nue en
+effaçant X (corrigé, M1048) ; deux hôtes dans deux groupes de quarantaine, le premier tag trouvé (le
+« aucun » de l'hôte 1) l'emportait sur X dans l'autre groupe — ancien, `main` aussi — : un tag qui
+nomme un NSG gagne maintenant sur un « aucun » trouvé d'abord (M1049). Le scénario est écrit à la
+main, avec deux répertoires d'état sur le faux Azure (`test_two_hosts_a_stale_none_never_leaves_the_nic_bare`,
+259 cas : la carte réisolée, nue ou encore dans la quarantaine de l'hôte 2, dans le même groupe ou
+un autre, levée ou reset, un 429 avant ou après chaque appel ; I1 et I2 de la machine vérifiés
+après chaque levée ; 189 échouent sur la 0.4.0, dont 10 des 26 positions). Mutants M1040–M1049,
+mesurés par ces cas : 10/10 attrapés. Au même budget (60 séquences, deux tours), les 62 mutants
+du chemin d'isolation : 33/62 attrapés à chaque tour avant comme après la première version, aucun
+perdu ; après la correction, les 29 de `sweep.py` et `quarantine.py` : 19/29 de chaque côté, aucun
+perdu. Les écarts restent dans le bruit, mais M04, M17, M19 et M33 reculent sur quatorze tours
+(M04 10/14 contre 14/14, M17 2/14 contre 6/14). Cause probable : la levée d'une carte dont l'état
+dit « aucun » lit maintenant le tag, et un 429 la fait échouer ; les séquences tirées changent. À
+500 séquences, le budget du push, une seule passe de deux tours sur la première version : les
+quatre attrapés 2/2 ; la relecture, une autre passe de deux tours, a eu M19 (un blocage, sans lien
+avec le lot) à 1/2.
+
 Le plus grave : après une levée qui échoue en partie, une seconde levée lisait les champs de
 rétro-compatibilité de l'état comme un ancien format, et supprimait les deny du NSG de
 quarantaine **partagé**. Toutes les VMs en quarantaine du même groupe étaient rouvertes. La
@@ -1162,7 +1193,9 @@ Une séquence trouvée la nuit est rejouée en premier à chaque push jusqu'à s
 ## Ce qui n'est pas couvert
 
 - **Deux hôtes** : les verrous sont par hôte. Un autre hôte qui écrit la carte juste après
-  Glorfindel est modélisé (A0) ; deux Glorfindel complets sur deux machines ne le sont pas.
+  Glorfindel est modélisé (A0) ; deux Glorfindel complets sur deux machines ne le sont pas. Deux
+  états séparés le sont à la main, sur une seule séquence (I8S, figée) : la machine n'a qu'un
+  répertoire d'état.
 - **VM supprimée et état perdu** : les règles qu'une isolation par règles a laissées sur un
   NSG partagé se retrouvent par l'empreinte de leur nom et sont retirées quand elles coupent une
   VM vivante en `non_disruptive` ou plus (A3) ; la VM reste coupée jusqu'au passage suivant de la

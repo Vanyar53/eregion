@@ -758,3 +758,101 @@ def test_a_reset_never_takes_an_old_isolation_on_an_nsg_shared_since(monkeypatch
          ("create_vm", "northeurope", "rg-app1", "batch", _NEW_VM_ON.format(rg="rg-edge", nic="api-nic"), "Linux"),
          ("isolate", _BATCH, _BATCH, None),
          *then)
+
+
+# I8S (#245): two Glorfindel hosts, each its own state directory — the machine has one.
+# A case: how host 1 finds the NIC (re-isolated by host 1, bare, or still in host 2's
+# quarantine), host 2's quarantine group (the same as host 1's, or another), the lift (release
+# or reset), where the 429 falls (in the re-isolation or in the lift), its kind and position.
+_LIFTS = ("release", "reset")
+_TWO_HOSTS = (
+    # The issue's sequence: a 429 at each call of host 1's re-isolation, then its release.
+    [("reisolated", "same", "release", "isolate", "before-429", k) for k in range(1, 27)]
+    + [("reisolated", "same", "release", "isolate", "after-429", k) for k in range(1, 9)]
+    # The 429 in the lift itself (re-isolated cleanly), then the operator's retry; the reset.
+    + [("reisolated", "same", "release", "lift", "before-429", k) for k in range(1, 16)]
+    + [("reisolated", "same", "reset", where, "before-429", k)
+       for where in ("isolate", "lift") for k in range(1, 16)]
+    # No re-isolation: the NIC bare, or still in host 2's quarantine; host 1's state says
+    # "none"; a 429 before or after each call of the lift.
+    + [(nic, "same", lift, "lift", kind, k) for nic in ("bare", "in-quarantine") for lift in _LIFTS
+       for kind in ("before-429", "after-429") for k in range(1, 16)]
+    # Host 2's configuration names another quarantine group: its tag X is there, host 1's
+    # "none" in the VM's group (I8S, review).
+    + [(nic, "other", lift, "lift", "before-429", k) for nic in ("reisolated", "bare", "in-quarantine")
+       for lift in _LIFTS for k in range(1, 11)])
+
+
+@pytest.mark.parametrize("nic_is,group,lift_with,where,kind,k", _TWO_HOSTS)
+def test_two_hosts_a_stale_none_never_leaves_the_nic_bare(monkeypatch, nic_is, group, lift_with, where, kind, k):
+    """Two hosts with separate states. A bare NIC; host 1 isolates it (state and tag:
+    "none"); someone takes our NSG off, then the customer gives the NIC an NSG X; host 2
+    isolates it (tag: X); our NSG taken off again; host 1 isolates it again — a 429 at
+    call k — then releases it. Its state's "none" was followed over the tag: 10 positions
+    of 26 ended `released` with the NIC without any NSG (I8S, #245); the reset, and a
+    lift with no re-isolation, the same. The tag that names X wins over the state's
+    "none" — found in another quarantine group too; a 429 never writes "none" over it,
+    nor puts the NIC back bare; a tag that can't be read fails the lift, never "none" on a
+    guess; verify_release doesn't say released while X is off the NIC. After the
+    operator's retry the NIC is on X, and verify_release agrees."""
+    import shutil
+
+    from glorfindel import actions
+
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    host1 = actions._ISOLATION_STATE_DIR
+    try:
+        m.build(_net(quarantine=True))
+        f, c, nic = m.fake, m.connector, _nic("rg-app1", "web-nic")
+        assert f.nics[nic]["nsg"] is None
+        assert c.isolate_vm(WEB1)["status"] == "isolated"                  # host 1: "none"
+        f.nics[nic]["nsg"] = None                                         # someone, by hand
+        https = _rule("allow-https", 110, dict(access="Allow", direction="Inbound",
+                                               source_address_prefix="Internet",
+                                               destination_address_prefix="*", destination_port_range="443"))
+        x = f.add_nsg("rg-app1", "nsg-web-x", [https])                     # the customer's new design
+        f.nics[nic]["nsg"] = f.nics[nic]["design_nsg"] = x
+        m.design = f.snapshot()                                           # the oracles judge by it
+        m.design["nsgs"] = {k: g for k, g in m.design["nsgs"].items() if g["tags"].get("managed-by") != "glorfindel"}
+        actions._ISOLATION_STATE_DIR = m.home / "host2" / "isolation"
+        if group == "other":                                              # host 2's configuration
+            m.config = {**m.config, "rg": "rg-sec"}
+            m._write_config()
+        assert c.isolate_vm(WEB1)["status"] == "isolated"                  # host 2: tag X
+        if group == "other":
+            m.config = {**m.config, "rg": ""}
+            m._write_config()
+        if nic_is != "in-quarantine":
+            f.nics[nic]["nsg"] = None                                     # by hand, again
+            m.detached.add(nic)
+        actions._ISOLATION_STATE_DIR = host1
+        lift = (lambda: c.sweep_vm_rules(WEB1)) if lift_with == "reset" else (lambda: c.release_isolation(WEB1))
+        if nic_is == "reisolated":
+            m._run((k, kind) if where == "isolate" else None, lambda: c.isolate_vm(WEB1))
+        else:
+            assert c.verify_release(WEB1)["verified"] is not True, "verify_release True, X off the NIC"
+        out, _ = m._run((k, kind) if where == "lift" else None, lift)
+        m.customer_configuration_untouched()
+        m.never_more_open_than_designed()
+        done = ("swept",) if lift_with == "reset" else ("released",)
+        if (out or {}).get("status") in done:
+            assert key(f.nics[nic]["nsg"] or "") == key(x), (
+                f"{out['status']}, the NIC on {f.nics[nic]['nsg'] or 'no NSG'} — its NSG is X")
+        else:
+            # Not done: the NIC kept as it was (bare) or in quarantine, never put back bare
+            # on a guess; the retry, the 429 gone, puts X back.
+            now = f.nics[nic]["nsg"]
+            assert (now is None and nic_is != "in-quarantine") or (now and actions._is_quarantine_nsg(now)) \
+                or key(now or "") == key(x), f"{(out or {}).get('status')}: the NIC on {now or 'no NSG'}"
+            if key(now or "") != key(x):
+                assert c.verify_release(WEB1)["verified"] is not True, "verify_release True, X off the NIC"
+            out = lift()
+            assert out["status"] in done, out
+        assert key(f.nics[nic]["nsg"] or "") == key(x), f"the NIC on {f.nics[nic]['nsg'] or 'no NSG'}, not X"
+        assert c.verify_release(WEB1)["verified"] is True
+        m.customer_configuration_untouched()
+        m.never_more_open_than_designed()
+    finally:
+        actions._ISOLATION_STATE_DIR = host1
+        shutil.rmtree(m.home, ignore_errors=True)

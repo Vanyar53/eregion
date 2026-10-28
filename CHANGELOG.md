@@ -26,6 +26,14 @@ Notable changes to Eregion. The format follows [Keep a Changelog](https://keepac
 ### Changed
 - **`deploy.sh` builds aside and switches by a retag** (H1). `--build-only REF` builds `eregion-glorfindel:REF` from the CD's worktree without touching what runs. `--activate REF` checks out, retags and restarts, without building. Every image is also tagged by its reference. `--prune REF…` keeps the three newest and every one named; `--activate` never prunes, and a deployment by hand keeps the image it replaces. So going back is a retag. `--activate` tolerates a failed `git fetch`: the rollback must not depend on the network. A tag rewritten since its image was built: the image's own commit is checked out instead, and said — never one commit's compose and rules beside another's image. One deployment at a time: by hand, it is refused while the CD's pass runs (`~/.eregion-deploy.lock`).
 
+### Fixed
+- **The small follow-ups of the isolation reviews of 28/10** (ISU, #264; after I1S, I8S and I4S).
+  - **An unblock behind the quarantine follows the release's rule for the original.** For a NIC in quarantine, the state's « none » yields to our tag when it names an NSG (`_tag_over_none`); a tag that can't be read is `unblock_partial`, never « none » on a guess. Before: two hosts, host 2's block on X answered `not_found`, and the IP came back blocked with X at the release.
+  - **An original NSG gone says how to get out.** A release or a reset whose NIC's original NSG no longer exists still fails and keeps the NIC as it is. It now says how to get out: recreate it (same group, same name), or put by hand on the NIC the NSG it must carry, then run again. When only our tag names it (no local state), it also offers setting the tag `glorfindel-orig-<hash>=none` on the quarantine NSG. The NSG is read again by its id: only a 404 gives this message, never a 403 or a 429.
+  - **A quarantine card of another subscription is said once.** It is filtered before being read again (`outside_subscription`), kept, and said once per NSG in the watch's log. Before, a warning was written at every pass, without end. A refused NSG (403) of this subscription is still said at every pass. These messages name the NSG in its own case, not by the lowercase key of an acknowledgement.
+  - **A plain-named block on a NIC's NSG that is also its subnet's** is said « d'une ancienne version ou de périmètre » when the NSG's sharing can't be read.
+  - Docs: `docs/azure.md` (a stale X in another quarantine group can win over a correct « none » for a bare NIC: marginal, on the closed side); `docs/design/preuves.md` (M1020 caught by the machine alone only from about 500 sequences). Tests on the fake Azure; mutants M1100–M1115, 16/16 caught.
+
 ## [0.4.1] — 2026-10-28 — "nothing raw in the console, three loose ends of the isolation path tied"
 
 ### Fixed

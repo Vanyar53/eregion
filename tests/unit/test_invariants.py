@@ -43,7 +43,8 @@ What must hold whatever happens:
   L1  a block whose rules all vanished from Azure is put back, or said — even behind the
       quarantine (A0);
   L2  a quarantine NSG someone altered, still holding NICs, is put back or said — its
-      NICs' state lost too (I1F);
+      NICs' state lost too (I1F); once said, it stays said while the NSG is out of the
+      listing — its role removed (a hypothesis: no error, fake_azure), our tag taken off (I1S);
   U1  a rule left by a NIC that no longer exists, cutting a live NIC off, is reported (L28)
       — and the orphan sweep takes it off, nothing else (A3): after it, every live VM is
       back to its design, not only in its own view.
@@ -414,6 +415,10 @@ class IsolationMachine(RuleBasedStateMachine):
         # earn I1's exemption while they no longer deny everything — one Glorfindel
         # wrote wrong earns none (I1F, as the AWS machine's `altered`).
         self.altered: set[str] = set()
+        # I1S: the altered NSGs L2 last held on (said by Glorfindel), and those the test
+        # then took out of the listing — its role removed, our tag taken off — and how.
+        self.l2_held_on: set[str] = set()
+        self.out_of_sight: dict[str, str] = {}
         self.fake = _CURRENT.fake = FakeAzure(self.chaos)
         self.deleted: dict[str, list[str]] = {}         # VM id → its NIC ids, once deleted
         self.detached: set[str] = set()                 # NICs someone left without any NSG
@@ -1065,14 +1070,23 @@ class IsolationMachine(RuleBasedStateMachine):
                     f"L1: the block on {vm} vanished from Azure; the reassertion neither put it back nor said so")
             # L2 (I1F): a quarantine NSG someone altered, still holding NICs, is whole
             # again or said — its NICs' state lost too (I1's exemption ends here).
+            # Out of sight (I1S): its role removed, or our tag taken off, after L2 held on it
+            # here — the test's own journal (`out_of_sight`), never the code's cards.
             said = {key(e.get("resource_id", "")) for e in escalations.pending()}
+            required = set()
             for k in sorted(self.altered):
-                if self.fake.nsgs.get(k, {}).get("tags", {}).get("managed-by") != "glorfindel":
+                if self.fake.nsgs.get(k, {}).get("tags", {}).get("managed-by") != "glorfindel" \
+                        and k not in self.out_of_sight:
                     continue                    # gone, or not ours
                 held = [n for n, c in self.fake.nics.items() if key(c["nsg"]) == k]
+                if held and not self._quarantine_intact(k):
+                    required.add(k)
                 assert not held or self._quarantine_intact(k) or k in said, (
                     f"L2: the quarantine NSG {k} was altered, holds {held}; "
-                    "the reassertion neither put it back nor said so")
+                    "the reassertion neither put it back nor said so"
+                    + (f" — its card closed while it was out of sight ({self.out_of_sight[k]})"
+                       if k in self.out_of_sight else ""))
+            self.l2_held_on = required
         after = self._flows()
         for vm in self.live:
             reopenable = flows[("own", vm)] - flows[vm]
@@ -1583,7 +1597,37 @@ class IsolationMachine(RuleBasedStateMachine):
                         ["port", "source", "destination", "access", "priority", "protocol", "retarget"])),
                     rule=st.one_of(st.sampled_from(inbound), st.sampled_from(q))))
         self._claims_after_a_change()
+        self.l2_held_on = set()
         self.reassert(_Drawn(data, fault=None))
+        self._out_of_sight(data)
+
+    def _out_of_sight(self, data):
+        """Said, then out of the listing (I1S, #231): the role removed on its group — the
+        listing leaves it out without an error, a hypothesis (fake_azure.unreadable) —, or
+        our tag taken off as well as our rules, or both. Its card stays while it is altered
+        and holds NICs (L2), then the role is given back and the tag put back (the operator,
+        a policy): the rest of the sequence is not about them."""
+        f = self.fake
+        owed = sorted(k for k in self.l2_held_on if k in f.nsgs
+                      and f.nsgs[k]["tags"].get("managed-by") == "glorfindel")
+        how = data.draw(st.sampled_from(["no", "role removed", "untagged", "both"]), label="out of sight")
+        if not owed or how == "no":
+            return
+        k = data.draw(st.sampled_from(owed), label="nsg out of sight")
+        self.out_of_sight[k] = how
+        _note(f"quarantine said, then out of sight: {how}")
+        if how != "untagged":
+            f.unreadable.add(k)
+        if how != "role removed":
+            del f.nsgs[k]["tags"]["managed-by"]
+        try:
+            for _ in range(data.draw(st.integers(1, 2), label="passes")):
+                self.reassert(_Drawn(data, fault=None))
+        finally:
+            f.unreadable.discard(k)
+            if k in f.nsgs:
+                f.nsgs[k]["tags"]["managed-by"] = "glorfindel"
+            del self.out_of_sight[k]
 
     @rule(data=st.data())
     def joins_an_old_isolation(self, data):

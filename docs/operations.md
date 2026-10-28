@@ -129,8 +129,7 @@ glorfindel migrate-rules --from <modifié> --base <livré> [--dry-run]  # règle
 glorfindel memory-stats                      # ChromaDB cycle count
 glorfindel bot                               # démarrer le bot Discord interactif
 glorfindel dashboard                         # TUI full-screen : resources + feed + escalations
-eregion console [--sections annatar,gothmog] # la console web sur http://localhost:7007 (pip install -e '.[console]' depuis le clone :
-                                             # le nom « eregion » sur PyPI n'est pas le nôtre) ;
+eregion console [--sections annatar,gothmog] # la console web sur http://localhost:7007 (pip install -e '.[console]' depuis le clone) ;
                                              # Glorfindel toujours, Annatar et Gothmog s'ils ont des runs sur l'hôte
                                              # (ou --sections) ; `glorfindel war-room` reste un alias caché
                                              # toujours un jeton : EREGION_CONSOLE_TOKEN, sinon tiré au premier démarrage
@@ -463,13 +462,18 @@ L'image d'Annatar (Orodruin) s'installe encore depuis `pyproject.toml`, sans ver
 
 ---
 
-## Packaging
+## Packaging et version
 
 ```
-name = "eregion", version = "0.2.0", Apache 2.0 ✓
-entrypoints : annatar + glorfindel + gothmog CLIs
-wheel : eregion-0.2.0-py3-none-any.whl ✓
+name = "eregion", version dans pyproject.toml, Apache 2.0
+entrypoints : annatar, glorfindel, gothmog, eregion (la console)
+installation : depuis le dépôt (make install, ou pip install -e '.[console]')
 ```
+
+**La PR de version** (`chore(release): X.Y.Z — …`) change ensemble la version de `pyproject.toml`, le
+`CHANGELOG.md` (`[Unreleased]` → `[X.Y.Z]`) et la ligne « **Status — vX.Y.Z.** » du README :
+`tests/unit/test_readme.py` échoue tant que le README n'a pas suivi (SEC6). Puis la release en brouillon
+(`gh release create --draft`), que Jonathan publie (CD de H0).
 
 ---
 

@@ -514,7 +514,7 @@ glorfindel check-ttl                            # release isolations older than 
 glorfindel memory-stats                         # ChromaDB cycle count
 glorfindel bot                                  # start the interactive Discord bot
 glorfindel dashboard                            # full-screen TUI: resources + feed + escalations
-eregion console [--sections annatar,gothmog]    # web console on http://localhost:7007 (pip install -e '.[console]' from the clone — the name « eregion » on PyPI is not ours); loopback by default, always a token (drawn at the first start, or EREGION_CONSOLE_TOKEN)
+eregion console [--sections annatar,gothmog]    # web console on http://localhost:7007 (pip install -e '.[console]' from the clone); loopback by default, always a token (drawn at the first start, or EREGION_CONSOLE_TOKEN)
 
 # Annatar
 annatar run annatar/scenarios/azure/ransomware-vm.yaml            # run a scenario (--dry-run available)
@@ -840,7 +840,7 @@ Nothing of Eregion stays behind once these are gone. **First, nothing isolated o
 
 ## Security
 
-To report a vulnerability: [`SECURITY.md`](SECURITY.md) (a private advisory on GitHub — never a public issue). The boundaries, who is trusted at each, and what holds them: [`docs/design/modele-de-menace.md`](docs/design/modele-de-menace.md) (French).
+To report a vulnerability: [`SECURITY.md`](SECURITY.md) (a private advisory on GitHub — never the details in a public issue). The boundaries, who is trusted at each, and what holds them: [`docs/design/modele-de-menace.md`](docs/design/modele-de-menace.md) (French).
 
 ## Contributing
 

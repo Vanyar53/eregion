@@ -15,7 +15,9 @@ Eregion is before 1.0, maintained by one person. Fixes go into the **latest 0.4.
 
 **Privately, through GitHub**: the repository's **Security** tab → **Report a vulnerability** (a private security advisory). Only the maintainer sees it.
 
-Please do **not** open a public issue or pull request, nor post in a public channel, for a vulnerability. There is no security e-mail address.
+If the button does not show, open an issue that asks for a private contact — **with no detail of the flaw** (no component, no steps, no impact); the maintainer answers with a private channel.
+
+Please do **not** describe a vulnerability in a public issue or pull request, nor in a public channel. There is no security e-mail address.
 
 What helps:
 - the version or commit, and how Eregion runs (Docker Compose, a local install, the hosted profile);

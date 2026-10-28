@@ -15,7 +15,7 @@ _SEC6 (#277), 28/10, sur la 0.4.3. Une page par frontière : qui y est de confia
 | [3. Discord et les webhooks](#3-discord-et-les-webhooks) | les utilisateurs et rôles autorisés | cartes (texte du modèle, noms Azure), clics, nouvelles de l'atelier |
 | [4. Le fournisseur du modèle](#4-le-fournisseur-du-modèle) | pour la confidentialité, le fournisseur choisi ; pour la décision, personne | extraits de journaux à l'aller, une proposition au retour |
 | [5. Les hôtes](#5-les-hôtes--h0-orodruin-le-banc) | l'opérateur, l'hôte (root) | identités Azure, actions sur le cloud, injecteurs |
-| [6. La CI et le CD](#6-la-ci-et-le-cd--github-release-tags) | le mainteneur, `main` protégée | code des PR, événements GitHub, secrets, releases vers H0 |
+| [6. La CI et le CD](#6-la-ci-et-le-cd-github-release-tags) | le mainteneur, `main` protégée | code des PR, événements GitHub, secrets, releases vers H0 |
 
 ---
 
@@ -59,7 +59,7 @@ _SEC6 (#277), 28/10, sur la 0.4.3. Une page par frontière : qui y est de confia
 
 **Où c'est dans le code** : `glorfindel/signal_origin.py`, `glorfindel/response/state.py`, `glorfindel/response/locks.py`, `eregion_core/exercise.py` ; tests `tests/unit/test_signal_origin.py`, `tests/unit/test_locks.py`, `tests/unit/test_exercise_guard.py`. Détail : [`docs/glorfindel.md`](../glorfindel.md), « Le canal runs/ » ; [`docs/fichiers-cles.md`](../fichiers-cles.md).
 
-**Ouvert** : les autres fichiers de `~/.glorfindel` (règles proposées, incidents, magasins du bot, découverte) restent au umask, et d'autres suites de l'état local — planifié : #275 (SEC4b).
+**Ouvert** : d'autres points de l'état local — planifié : #275.
 
 ---
 
@@ -112,7 +112,7 @@ Trois canaux, à ne pas confondre :
 
 **Où c'est dans le code** : `glorfindel/agent.py` (`decide` et ses gardes, `_build_user_message`), `glorfindel/response/` (la liste des actions autonomes), `glorfindel/rules/azure/detection_rules.yaml` ; tests `tests/unit/test_agent_nodes.py`, `tests/unit/test_forged_logs.py`, `tests/unit/test_dependency_failures.py`. Détail : [`docs/glorfindel.md`](../glorfindel.md), [`docs/architecture.md`](../architecture.md), « Les gardes qui encadrent le LLM ».
 
-**Ouvert** : la décision face à une réponse du modèle, une mémoire ou une ligne imprévues — planifié : #275 (SEC4a).
+**Ouvert** : la décision face à une réponse, une mémoire ou une ligne imprévues — planifié : #275.
 
 ---
 
@@ -133,7 +133,7 @@ Trois canaux, à ne pas confondre :
 | D | Un injecteur qui s'emballe | Plafond, arrêt d'urgence, fenêtres bornées (O1, B2) |
 | E | Le Glorfindel hébergé est poussé à écrire | Il n'en a pas les droits (Reader) et tourne en lecture seule, `human_only` forcé au push |
 
-**Ouvert** : les injecteurs et leurs canaux — planifié : #276 (SEC5) ; le durcissement des conteneurs (utilisateur, capacités, système de fichiers) — planifié, lot suivant.
+**Ouvert** : les injecteurs et leurs canaux — planifié : #276 ; le durcissement des conteneurs — planifié.
 
 ---
 
@@ -146,9 +146,9 @@ Trois canaux, à ne pas confondre :
 | | Menace | Ce qui la tient |
 |---|---|---|
 | S | Une PR de fork se fait passer pour un lot | Annoncée dans `#ci`, jamais dans un fil ; son run rouge aussi (SEC6) |
-| T | Une action tierce déplacée sous son tag, dans un job qui tient un secret | Tout workflow qui tient un secret, ou tourne sur un événement qu'un fork déclenche, épingle ses actions par commit ; le canari installe Terraform depuis le dépôt signé de HashiCorp, sans action tierce (SEC6, `tests/unit/test_workflows.py`) |
+| T | Une action tierce déplacée sous son tag, dans un job qui tient un secret | Tout workflow qui tient un secret, ou tourne sur un événement qu'un fork déclenche, épingle ses actions par commit ; le canari installe Terraform depuis le dépôt signé de HashiCorp, sa clé vérifiée par son empreinte, sans action tierce (SEC6, `tests/unit/test_workflows.py`) |
 | T | Une valeur choisie (entrée d'un `workflow_dispatch`, titre d'une PR) exécutée comme du shell | Aucun `run:` ne prend `inputs.*`, `github.event.*` ni `github.head_ref` dans son texte : ces valeurs passent par `env:` (SEC6, testé) |
-| T | Une dépendance changée sous son numéro | Dépendances verrouillées, chaque fichier vérifié par son empreinte (M-3, `requirements/`) |
+| T | Une dépendance changée sous son numéro, ou prise sous un autre nom | Dépendances verrouillées, chaque fichier vérifié par son empreinte (M-3, `requirements/`) ; Eregion s'installe depuis le dépôt (README) |
 | R | Une release sans histoire | `CHANGELOG.md`, une issue par lot ; les sessions préparent une release en brouillon, le mainteneur la publie |
 | I | Un secret exposé au code d'une PR | `pull_request_target` et `workflow_run` ne récupèrent ni n'exécutent jamais le code d'une PR (récupération partielle du seul script, sans identifiants persistés) ; des permissions en lecture seulement, partout |
 | D | Une CI rouge passée inaperçue | Annoncée dans `#ci`, avec mention ; le CD de H0 attend une CI verte |
@@ -157,9 +157,9 @@ Trois canaux, à ne pas confondre :
 **Où c'est** : `.github/workflows/`, `.github/CODEOWNERS`, `scripts/notify_discord.py`, `infra/glorfindel-host/` (le CD) ; tests `tests/unit/test_workflows.py`, `tests/unit/test_notify_discord.py`, `tests/unit/test_host_cd.py`, `tests/unit/test_dependency_lock.py`.
 
 **Ouvert** :
-- le canari (`canary-azurerm.yml`) tient un secret Azure de longue durée — la bascule vers une identité fédérée (OIDC), sans secret stocké, est planifiée (action du mainteneur, sur son tenant) ;
-- quelques actions des workflows sans secret sont encore nommées par leur tag (liste figée dans `tests/unit/test_workflows.py`, qui ne peut que raccourcir) — planifié ;
-- le nom `eregion` n'est pas réservé sur PyPI : l'installation se fait depuis le dépôt (README) ; la réservation est planifiée (action du mainteneur).
+- un secret Azure de longue durée pour le canari — planifié ;
+- quelques actions sans secret encore nommées par leur tag — planifié ;
+- la publication du paquet — planifié.
 
 ---
 

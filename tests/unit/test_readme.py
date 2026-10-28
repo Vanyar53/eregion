@@ -1,12 +1,14 @@
 """SEC6 (#277): what the README claims stays true without anyone remembering it.
 
 It said « v0.2.0 » and « ~870 tests » at 0.4.3, with about three thousand; it told readers to
-`pip install eregion[console]`, a name on PyPI this project does not hold — whoever takes it
-would be installed. Each claim is now read against its source.
+install the console from a package index by name, not from the repository. Each claim is now
+read against its source.
 """
 import re
 import tomllib
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 README = (ROOT / "README.md").read_text(encoding="utf-8")
@@ -87,8 +89,30 @@ def test_an_open_point_names_its_plan_never_its_use():
     text = THREAT_MODEL.read_text(encoding="utf-8")
     opens = re.findall(r"\*\*Ouvert\*\* :(.*?)(?=\n---|\n## )", text, re.S)
     assert len(opens) == 6
+    item = re.compile(r"[^`/()_\[\]]{3,70} — planifié(?: : #\d+)?")   # a title, its plan: no name, no path
     for o in opens:
-        assert "planifié" in o or "rien de connu" in o, o
+        points = [p.strip(" -;.\n") for p in re.split(r"\n- | ; ", o.strip()) if p.strip(" -;.\n")]
+        assert points, o
+        for p in points:
+            assert p.startswith("rien de connu") or item.fullmatch(p), p
+
+
+@pytest.mark.parametrize("path", [THREAT_MODEL, ROOT / "SECURITY.md", ROOT / "README.md"], ids=lambda p: p.name)
+def test_every_anchor_resolves_as_github_computes_it(path):
+    """GitHub's anchor: the heading in lower case, every character but letters, digits, `-`, `_`
+    and spaces dropped (parentheses, colons, backticks, dashes —), each space a `-`."""
+    def slugs(p: Path) -> set[str]:
+        heads = re.findall(r"^#{1,6} (.+)$", p.read_text(encoding="utf-8"), re.M)
+        return {re.sub(r"[^\w\- ]", "", h.strip().lower()).replace(" ", "-") for h in heads}
+    text = path.read_text(encoding="utf-8")
+    broken = []
+    for target, anchor in re.findall(r"\]\(([^)#\s]*)#([^)\s]+)\)", text):
+        if "://" in target:
+            continue
+        where = (path.parent / target) if target else path
+        if where.suffix == ".md" and anchor not in slugs(where):
+            broken.append(f"{target}#{anchor}")
+    assert broken == []
 
 
 def test_the_security_documents_links_resolve():

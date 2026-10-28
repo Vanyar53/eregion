@@ -763,7 +763,10 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
 
     def _remove_heartbeat() -> None:
         _HEARTBEAT.unlink(missing_ok=True)
-        _INJECTOR_BEAT.unlink(missing_ok=True)
+        try:   # the injectors' copy: never an error at stop (a file in its place, a root-owned beat)
+            _INJECTOR_BEAT.unlink(missing_ok=True)
+        except OSError:
+            pass
 
     def _on_sigterm(_signum, _frame):
         raise SystemExit(0)

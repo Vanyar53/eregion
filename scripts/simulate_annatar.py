@@ -14,6 +14,7 @@ Glorfindel's own (`glorfindel restore --wait` emits that one): the release it pr
 held for a human — what the real defender does with such a line. A model key is needed
 (the decisions are the model's), no Azure credential.
 """
+import os
 import subprocess
 import sys
 import tempfile
@@ -89,6 +90,12 @@ else:
     print("[annatar] → signal 'recovery_complete' written (not Glorfindel's: its release is held)")
 
 print()
-print(f"[glorfindel] glorfindel respond {signals_file} --dry-run")
+# The simulated cycles stay out of the operator's memory (ChromaDB) and out of the repository's
+# runs/: a memory of their own, and the debug trace written beside the signals.
+memory = out_dir / "memory"
+repo = str(Path(__file__).resolve().parent.parent)
+env = {**os.environ, "PYTHONPATH": os.pathsep.join(p for p in (repo, os.environ.get("PYTHONPATH")) if p)}
+print(f"[glorfindel] glorfindel respond {signals_file} --dry-run --memory-path {memory}")
 sys.exit(subprocess.call([sys.executable, "-c", "from glorfindel.cli import cli; cli()",
-                          "respond", str(signals_file), "--dry-run"]))
+                          "respond", str(signals_file), "--dry-run", "--memory-path", str(memory)],
+                         cwd=out_dir, env=env))

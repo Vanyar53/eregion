@@ -146,6 +146,63 @@ def test_an_entra_name_reaches_the_webhook_inert(monkeypatch, post):
     assert all(line.count("`") % 2 == 0 for line in text.splitlines())
 
 
+def test_a_steps_command_keeps_its_code_style_and_nothing_else_renders():
+    s = chat_text.discord_steps("Lister : `az ad app credential list --id 0000` (application) [x](https://e.example)")
+    assert "`az ad app credential list --id 0000`" in s
+    assert _unescaped(re.sub(r"(?<!\\)`[^`\n]+`", "", s), "[]()<>*_~|`") == []
+
+
+@pytest.mark.parametrize("text", [
+    "a``[x](https://e.example)`",            # a span beside a backtick: not a span
+    "``[x](https://e.example)``",            # double backticks: not ours
+    "`a\n[x](https://e.example)`",           # across lines
+    "`` `@everyone` ``",
+    "`a`b`[x](https://e.example)`",
+])
+def test_a_step_never_lets_a_span_be_read_two_ways(text):
+    """What is left unescaped are single-backtick spans with no backtick beside or inside them:
+    Discord can read them only as code. Everything else is escaped prose."""
+    s = chat_text.discord_steps(text)
+    spans = list(re.finditer(r"(?<!\\)`([^`\n]*)`", s))
+    for m in spans:
+        assert m.group(1) and s[m.start() - 1:m.start()] != "`" and s[m.end():m.end() + 1] != "`"
+    prose = re.sub(r"(?<!\\)`[^`\n]+`", "", s)
+    assert _unescaped(prose, "[]()<>*_~|`") == [] and "@everyone" not in s
+
+
+def test_the_ping_alone_may_mention_and_only_its_role():
+    """The message that opens a VM's thread pings DISCORD_PING_ROLE: that role, nothing else
+    (the client allows no mention otherwise)."""
+    pytest.importorskip("discord")
+    import asyncio
+
+    from glorfindel import bot
+    sent = []
+
+    class _Thread:
+        id, name = 7, "🔴 vm-x"
+
+        async def send(self, content=None, **kw):
+            sent.append((content, kw))
+
+    class _Channel:
+        async def create_thread(self, **kw):
+            return _Thread()
+
+    b = bot.GlorfindelBot(channel_id=1, ping_role=4242)
+    b._threads = {}
+    asyncio.run(b._get_or_create_thread(_Channel(), "/subscriptions/s/resourceGroups/rg/providers/"
+                                        "Microsoft.Compute/virtualMachines/vm-[x](https://e.example)"))
+    ((content, kw),) = sent
+    assert content.startswith("<@&4242> ")
+    allowed = kw["allowed_mentions"]
+    assert [r.id for r in allowed.roles] == [4242]
+    assert (allowed.everyone, allowed.users, allowed.replied_user) == (False, False, False)
+    merged = b.allowed_mentions.merge(allowed).to_dict()          # what discord.py sends
+    assert merged == {"parse": [], "roles": [4242]}
+    assert _unescaped(re.sub(r"(?<!\\)`[^`\n]+`", "", content), "[]()") == []
+
+
 def test_the_module_imports_nothing_of_discord():
     """The watch posts the webhook without discord.py installed (an image without the bot)."""
     import ast

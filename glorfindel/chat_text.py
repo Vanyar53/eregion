@@ -48,6 +48,23 @@ def discord_code(text) -> str:
     return f"`{_no_mention(s)}`"
 
 
+# A span between single backticks, alone: neither its neighbours nor its content is a backtick,
+# on one line. Discord can read it only one way — as code, where nothing renders.
+_SPAN = re.compile(r"(?<!`)`([^`\n]+)`(?!`)")
+
+
+def discord_steps(text) -> str:
+    """A step for a human: its commands between backticks keep their code style
+    (``discord_code``), everything else is ``discord_text``. A backtick that does not make
+    such a span is escaped like any other mark."""
+    s = "" if text is None else str(text)
+    out, i = [], 0
+    for m in _SPAN.finditer(s):
+        out += [discord_text(s[i:m.start()]), discord_code(m.group(1))]
+        i = m.end()
+    return "".join(out) + discord_text(s[i:])
+
+
 def webhook_text(text) -> str:
     """Prose for the webhook (Slack's format): one line, no link nor mention of its own."""
     s = " ".join(("" if text is None else str(text)).split())

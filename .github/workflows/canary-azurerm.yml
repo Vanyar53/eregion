@@ -48,11 +48,24 @@ jobs:
         with:
           persist-credentials: false
       # The latest Terraform, as setup-terraform installed it, without its wrapper.
+      # The key is trusted only if it is HashiCorp's: the fingerprint of « Linux repositories and
+      # packages », https://www.hashicorp.com/en/trust/security (read on 2026-10-28). Otherwise the
+      # job fails, nothing installed. Only that key goes into apt's keyring.
       - name: Install Terraform (HashiCorp's apt repository)
         if: steps.creds.outputs.ok == 'true'
+        env:
+          HASHICORP_APT_FPR: D55C0D1AC78A8D8126CB631CFC9CA96ACA026560
         run: |
-          curl -fsSL https://apt.releases.hashicorp.com/gpg \
-            | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+          key="$RUNNER_TEMP/hashicorp.gpg"
+          curl -fsSL https://apt.releases.hashicorp.com/gpg | gpg --batch --yes --dearmor -o "$key"
+          if ! gpg --batch --show-keys --with-colons "$key" | grep -qx "fpr:::::::::${HASHICORP_APT_FPR}:"; then
+            echo "::error::HashiCorp's apt key does not carry the fingerprint ${HASHICORP_APT_FPR} — Terraform not installed."
+            exit 1
+          fi
+          ring="$RUNNER_TEMP/hashicorp.kbx"
+          gpg --batch --no-default-keyring --keyring "$ring" --import "$key"
+          gpg --batch --no-default-keyring --keyring "$ring" --export "$HASHICORP_APT_FPR" \
+            | sudo tee /usr/share/keyrings/hashicorp-archive-keyring.gpg > /dev/null
           echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" \
             | sudo tee /etc/apt/sources.list.d/hashicorp.list > /dev/null
           sudo apt-get update -qq && sudo apt-get install -y -qq terraform

@@ -2618,9 +2618,9 @@ MUTANTS += [
     ("M1224", "a new card appended in place: a reader may see half a line (SEC3, V-10)", ESC,
      "    _write_lines([ln for ln in lines if ln.strip()] + [json.dumps(esc, default=str)])\n",
      "    with open(_STORE, \"a\") as _f:\n        _f.write(json.dumps(esc, default=str) + \"\\n\")\n",
-     "EQUIVALENT: under the store's lock, one small append is one write(2) — no reader of the "
-     "test sees it half done on a local disk; what the whole rewrite adds (a crash inside the "
-     "write leaves the store as it was) needs a process killed mid-write"),
+     "TIMING: under the store's lock, one small append is one write(2) — the test's reader sees "
+     "it half done only at times (1 round in 2, measured); what the whole rewrite adds besides (a "
+     "crash inside the write leaves the store as it was) needs a process killed mid-write"),
     ("M1225", "the store's lock is a thread lock only: another process writes meanwhile (SEC3, V-10)", LCK,
      "                import fcntl\n                fcntl.flock(fh, fcntl.LOCK_EX)\n",
      "                import fcntl  # noqa: F401\n"),

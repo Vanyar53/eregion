@@ -246,9 +246,13 @@ class SweepMixin:
     def outside_subscription(self, resource_id: str) -> str | None:
         """The subscription of `resource_id` when it isn't the one the clients run in
         ("?" when the id names none), None when it is: the reassertion asks before reading
-        a card's NSG again, and says such a card once, not at every pass (ISU, #264)."""
-        if not self.dry_run:
-            self._ensure_clients()
+        a card's NSG again, and says such a card once, not at every pass (ISU, #264). Never
+        raises: clients that can't be built leave it to `read_quarantine`, which says so."""
+        try:
+            if not self.dry_run:
+                self._ensure_clients()
+        except Exception:
+            return None
         target = _subscription_of(resource_id)
         return None if target and target.lower() == (self._subscription_id or "").lower() else (target or "?")
 

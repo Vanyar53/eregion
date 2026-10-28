@@ -24,7 +24,7 @@ jobs:
       matrix:
         component: [core, glorfindel, annatar, gothmog]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5.1.0
 
       - uses: actions/setup-python@v6
         with:
@@ -55,7 +55,7 @@ jobs:
     name: compose profiles (Glorfindel in each)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5.1.0
 
       # docker compose config only: nothing is built, nothing starts.
       - name: Each profile renders its services

@@ -28,7 +28,7 @@ jobs:
     # unit cases): 180 leaves room.
     timeout-minutes: 180
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5.1.0
 
       - uses: actions/setup-python@v6
         with:
@@ -40,7 +40,13 @@ jobs:
           python -m pip install --require-hashes -r requirements/dev.txt
           python -m pip install --no-deps --no-build-isolation -e .
 
+      # The inputs go through the environment, never into the script's text (SEC6,
+      # tests/unit/test_workflows.py): a value is a value, not shell.
       - name: Re-introduce each bug, run the invariants
+        env:
+          MIN_CAUGHT: ${{ inputs.min_caught || '14' }}
+          EXAMPLES: ${{ inputs.examples || '1000' }}
+          ROUNDS: ${{ inputs.rounds || '2' }}
         run: >-
-          python scripts/mutation_check.py --jobs 4 --min-caught ${{ inputs.min_caught || '14' }}
-          --examples ${{ inputs.examples || '1000' }} --rounds ${{ inputs.rounds || '2' }}
+          python scripts/mutation_check.py --jobs 4 --min-caught "$MIN_CAUGHT"
+          --examples "$EXAMPLES" --rounds "$ROUNDS"

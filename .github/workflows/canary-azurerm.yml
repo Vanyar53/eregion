@@ -7,6 +7,12 @@ name: canary-azurerm
 # principal allowed to create a resource group); WITHOUT them the run FAILS — a canary
 # that stays green while testing nothing is worse than none (third review, T16).
 # Creates only free resources (resource group, VNet, NSG, NICs), deleted at the end.
+#
+# This job holds a long-lived Azure secret: every action is pinned by commit, and no third
+# party's action runs beside the secret — Terraform comes from HashiCorp's signed apt
+# repository, the publisher the canary trusts anyway since its binary runs with the secret
+# (tests/unit/test_workflows.py). Planned, Jonathan's step: a federated identity (OIDC) in
+# place of the client secret (docs/design/modele-de-menace.md, « La CI et le CD »).
 on:
   schedule:
     - cron: "0 6 * * *"
@@ -37,12 +43,20 @@ jobs:
           else
             echo "ok=true" >> "$GITHUB_OUTPUT"
           fi
-      - uses: actions/checkout@v5
-        if: steps.creds.outputs.ok == 'true'
-      - uses: hashicorp/setup-terraform@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5.1.0
         if: steps.creds.outputs.ok == 'true'
         with:
-          terraform_wrapper: false
+          persist-credentials: false
+      # The latest Terraform, as setup-terraform installed it, without its wrapper.
+      - name: Install Terraform (HashiCorp's apt repository)
+        if: steps.creds.outputs.ok == 'true'
+        run: |
+          curl -fsSL https://apt.releases.hashicorp.com/gpg \
+            | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" \
+            | sudo tee /etc/apt/sources.list.d/hashicorp.list > /dev/null
+          sudo apt-get update -qq && sudo apt-get install -y -qq terraform
+          terraform version
       - name: Azure login
         if: steps.creds.outputs.ok == 'true'
         run: |

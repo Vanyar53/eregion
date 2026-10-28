@@ -146,28 +146,37 @@ def test_an_entra_name_reaches_the_webhook_inert(monkeypatch, post):
     assert all(line.count("`") % 2 == 0 for line in text.splitlines())
 
 
-def test_a_steps_command_keeps_its_code_style_and_nothing_else_renders():
-    s = chat_text.discord_steps("Lister : `az ad app credential list --id 0000` (application) [x](https://e.example)")
-    assert "`az ad app credential list --id 0000`" in s
-    assert _unescaped(re.sub(r"(?<!\\)`[^`\n]+`", "", s), "[]()<>*_~|`") == []
+@pytest.mark.parametrize("value", ["", " ", "  \t ", None, "\n"])
+def test_an_empty_value_never_makes_two_backticks_side_by_side(value):
+    """`` `` `` is no code to Discord: it would pair with the next backtick and let what
+    follows out as Markdown (a rule with no name in the weekly summary)."""
+    assert discord_code(value) == "`—`"
 
 
-@pytest.mark.parametrize("text", [
-    "a``[x](https://e.example)`",            # a span beside a backtick: not a span
-    "``[x](https://e.example)``",            # double backticks: not ours
-    "`a\n[x](https://e.example)`",           # across lines
-    "`` `@everyone` ``",
-    "`a`b`[x](https://e.example)`",
+@pytest.mark.parametrize("steps", [
+    ["Vérifier ` ` `[Support](https://evil.example) @everyone`"],
+    ["` ` `[x](https://e.example)`"],
+    ["`` x", "[y](https://e.example)"],
 ])
-def test_a_step_never_lets_a_span_be_read_two_ways(text):
-    """What is left unescaped are single-backtick spans with no backtick beside or inside them:
-    Discord can read them only as code. Everything else is escaped prose."""
-    s = chat_text.discord_steps(text)
-    spans = list(re.finditer(r"(?<!\\)`([^`\n]*)`", s))
-    for m in spans:
-        assert m.group(1) and s[m.start() - 1:m.start()] != "`" and s[m.end():m.end() + 1] != "`"
-    prose = re.sub(r"(?<!\\)`[^`\n]+`", "", s)
-    assert _unescaped(prose, "[]()<>*_~|`") == [] and "@everyone" not in s
+def test_a_cards_steps_are_escaped_whole(steps):
+    """No backtick of a step stays a backtick to Discord: none can open a span that would pair
+    with another and let a link out (the 5.5 review of SEC6)."""
+    pytest.importorskip("discord")
+    from glorfindel import bot
+    _, fields = bot._embed_body({**_identity_card(), "suggested_steps": steps})
+    (value,) = [v for n, v, _ in fields if n == "Prochaines étapes"]
+    assert _unescaped(value, "[]()<>*_~|`") == [] and "@everyone" not in value
+
+
+def test_the_weekly_summary_never_lets_a_nameless_rule_swallow_a_line():
+    pytest.importorskip("discord")
+    from datetime import datetime, timezone
+
+    from glorfindel import bot
+    text = bot._weekly_summary({"cards": 1, "judged": 0, "disruptive": {"false_rate": None},
+                                "by_rule": {"": {"right": 1}, "[x](https://e.example)": {"wrong": 1}}},
+                               0, datetime(2026, 10, 26, 8, 0, tzinfo=timezone.utc))
+    assert "``" not in text and "• `—` :" in text
 
 
 def test_the_ping_alone_may_mention_and_only_its_role():

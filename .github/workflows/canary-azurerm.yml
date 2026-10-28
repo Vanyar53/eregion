@@ -58,8 +58,10 @@ jobs:
         run: |
           key="$RUNNER_TEMP/hashicorp.gpg"
           curl -fsSL https://apt.releases.hashicorp.com/gpg | gpg --batch --yes --dearmor -o "$key"
-          if ! gpg --batch --show-keys --with-colons "$key" | grep -qx "fpr:::::::::${HASHICORP_APT_FPR}:"; then
-            echo "::error::HashiCorp's apt key does not carry the fingerprint ${HASHICORP_APT_FPR} — Terraform not installed."
+          # One primary key, and that fingerprint is its own — a subkey's fpr line has the same form.
+          if ! gpg --batch --show-keys --with-colons "$key" \
+               | awk -F: -v f="$HASHICORP_APT_FPR" '$1=="pub"{n++;p=1;next} $1=="fpr"&&p{k=$10;p=0} END{exit !(n==1&&k==f)}'; then
+            echo "::error::HashiCorp's apt key is not the one primary key ${HASHICORP_APT_FPR} — Terraform not installed."
             exit 1
           fi
           ring="$RUNNER_TEMP/hashicorp.kbx"

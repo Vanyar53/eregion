@@ -127,7 +127,10 @@ def test_the_canary_trusts_hashicorps_key_by_its_fingerprint_only():
                   if "apt.releases.hashicorp.com/gpg" in str(s.get("run") or "")]
     assert install["env"]["HASHICORP_APT_FPR"] == HASHICORP_APT_FPR
     run = install["run"]
-    assert 'grep -qx "fpr:::::::::${HASHICORP_APT_FPR}:"' in run and "exit 1" in run
+    # one primary key, whose own fingerprint it is — never a subkey's fpr line, never a second key
+    assert ("""'$1=="pub"{n++;p=1;next} $1=="fpr"&&p{k=$10;p=0} END{exit !(n==1&&k==f)}'""" in run
+            and '-v f="$HASHICORP_APT_FPR"' in run and "exit 1" in run)
+    assert "grep -qx \"fpr:" not in run
     assert run.index("exit 1") < run.index("/usr/share/keyrings/hashicorp-archive-keyring.gpg")
     assert '--export "$HASHICORP_APT_FPR"' in run
     assert "798AEC65" not in text.replace(" ", "")

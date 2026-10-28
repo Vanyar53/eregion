@@ -11,7 +11,7 @@ from discord import app_commands
 from rich.console import Console
 
 from glorfindel import escalations as esc_module
-from glorfindel.chat_text import discord_code, discord_steps, discord_text
+from glorfindel.chat_text import discord_code, discord_text
 from glorfindel.escalations import _ACTION_LABELS, _ESCALATION_LABELS
 
 _console = Console()
@@ -152,7 +152,7 @@ def _embed_body(esc: dict) -> tuple[str, list[tuple[str, str, bool]]]:
     if explanation and reason and reason != explanation:
         fields.append(("Pourquoi rien n'est exécuté", discord_text(reason)[:1024], False))
     if esc.get("suggested_steps"):
-        steps = "\n".join(f"• {discord_steps(s)}" for s in esc["suggested_steps"][:3])
+        steps = "\n".join(f"• {discord_text(s)}" for s in esc["suggested_steps"][:3])
         fields.append(("Prochaines étapes", steps[:1024], False))
     return discord_text(explanation or reason)[:2048], fields
 
@@ -662,7 +662,8 @@ class GlorfindelBot(discord.Client):
         if self.ping_role:
             await thread.send(
                 f"<@&{self.ping_role}> Incident opened on {discord_code(vm_name)}",
-                # Every field said: one left out reads True in discord.py (measured, SEC6).
+                # Every field said: the message mentions its role alone, whatever the client's
+                # own allowed mentions (send merges the two).
                 allowed_mentions=discord.AllowedMentions(everyone=False, users=False, replied_user=False,
                                                          roles=[discord.Object(id=self.ping_role)]),
             )

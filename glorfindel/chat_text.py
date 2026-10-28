@@ -43,26 +43,11 @@ def discord_text(text) -> str:
 
 
 def discord_code(text) -> str:
-    """A value in Glorfindel's own backticks: on one line, no backtick to close them early."""
+    """A value in Glorfindel's own backticks: on one line, no backtick to close them early.
+    Empty or made of spaces, it is « — »: two backticks side by side are no code to Discord,
+    and would pair with the next one, letting what follows out as Markdown."""
     s = " ".join(("" if text is None else str(text)).split()).replace("`", "ˋ")
-    return f"`{_no_mention(s)}`"
-
-
-# A span between single backticks, alone: neither its neighbours nor its content is a backtick,
-# on one line. Discord can read it only one way — as code, where nothing renders.
-_SPAN = re.compile(r"(?<!`)`([^`\n]+)`(?!`)")
-
-
-def discord_steps(text) -> str:
-    """A step for a human: its commands between backticks keep their code style
-    (``discord_code``), everything else is ``discord_text``. A backtick that does not make
-    such a span is escaped like any other mark."""
-    s = "" if text is None else str(text)
-    out, i = [], 0
-    for m in _SPAN.finditer(s):
-        out += [discord_text(s[i:m.start()]), discord_code(m.group(1))]
-        i = m.end()
-    return "".join(out) + discord_text(s[i:])
+    return f"`{_no_mention(s) or '—'}`"
 
 
 def webhook_text(text) -> str:

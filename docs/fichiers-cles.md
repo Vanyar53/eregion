@@ -211,6 +211,10 @@ eregion_core/
   signals.py          → D1 : le contrat des signaux (Signal + severity_for_ttp), écrit par les injecteurs, lu par
                         la watch — dans le cœur, pour que Glorfindel tourne sans Annatar (ex-annatar/signals/schema.py).
 
+scripts/console_escaping.py → #254 : rien du dehors n'est écrit brut dans la console — suit ce que peut contenir
+                        chaque ${…} d'un gabarit HTML et chaque valeur donnée à innerHTML, et le contexte (texte,
+                        attribut on…, début d'URL) ; tests : tests/unit/test_console_escaping.py.
+
 scripts/component_check.py → D1 : chaque composant tourne seul — Glorfindel, Annatar, Gothmog et le cœur, leurs
                         modules importés et leurs tests joués avec les autres composants ABSENTS (un chercheur en
                         tête de sys.meta_path), et les dépendances de Glorfindel absentes pour un injecteur ; les

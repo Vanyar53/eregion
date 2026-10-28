@@ -62,12 +62,16 @@ def test_glorfindel_starts_in_every_profile():
 
 def test_an_injector_never_runs_without_glorfindel():
     """V1 in compose: running an injector starts the watch, the injector reads its heartbeat
-    in ~/.glorfindel without being able to write it, and shares the runs/ the watch reads."""
+    without being able to write it, and shares the runs/ the watch reads. SEC3 (N-05): of
+    ~/.glorfindel, only ~/.glorfindel/injectors, where the watch writes that heartbeat —
+    never the escalations, the isolation state, the client's rules."""
     watch_runs = next(v for v in SERVICES["watch"]["volumes"] if v.endswith(":/app/runs"))
     for name in INJECTORS:
         s = SERVICES[name]
         assert "watch" in s["depends_on"], name
-        assert "${HOME}/.glorfindel:/root/.glorfindel:ro" in s["volumes"], name
+        assert "${HOME}/.glorfindel/injectors:/root/.glorfindel:ro" in s["volumes"], name
+        assert [v for v in s["volumes"] if v.startswith("${HOME}/.glorfindel")] == [
+            "${HOME}/.glorfindel/injectors:/root/.glorfindel:ro"], name
         assert watch_runs in s["volumes"], name
         assert s["image"] == "eregion-annatar" and s["entrypoint"] == [name], name
         assert s["restart"] == "no" and s["profiles"] == [name], name

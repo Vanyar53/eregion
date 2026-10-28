@@ -137,6 +137,8 @@ services:
       DISCORD_ALLOWED_USERS: ${DISCORD_ALLOWED_USERS:-}
       DISCORD_ALLOWED_ROLES: ${DISCORD_ALLOWED_ROLES:-}
     volumes:
+      # runs/ en écriture : ses boutons lancent la CLI de Glorfindel (restore, revert), qui y
+      # note l'action (manual_actions.jsonl) pour le fil de la console (SEC3).
       - ${EREGION_RUNS:-./runs}:/app/runs
       - ./glorfindel/rules:/app/glorfindel/rules:ro
       - ${HOME}/.glorfindel:/root/.glorfindel
@@ -165,6 +167,8 @@ services:
       EREGION_CONSOLE_TOKEN: ${EREGION_CONSOLE_TOKEN:-}
       GLORFINDEL_WARROOM_TOKEN: ${GLORFINDEL_WARROOM_TOKEN:-}
     volumes:
+      # runs/ en écriture : la console y note les actions de l'opérateur (manual_actions.jsonl)
+      # et la vérification d'une action approuvée, pour le fil (SEC3).
       - ${EREGION_RUNS:-./runs}:/app/runs
       - ./eregion_console/static:/app/eregion_console/static:ro
       - ./glorfindel/rules:/app/glorfindel/rules:ro
@@ -193,9 +197,12 @@ services:
 
   # D1 : Annatar, l'attaque (profil `annatar` : « ma détection marche-t-elle ? »). Jamais sans
   # Glorfindel (V1) : `depends_on` démarre la watch (sans attendre son premier battement : la
-  # première minute, l'injecteur peut refuser), et son battement se lit dans ~/.glorfindel
-  # (lecture seule). runs/ est celui de la watch : elle y lit l'attack_started. Lancé à la
-  # demande, il ne reste pas : `docker compose --profile annatar run --rm annatar <commande>`.
+  # première minute, l'injecteur peut refuser), et son battement se lit dans
+  # ~/.glorfindel/injectors, monté en lecture seule comme son ~/.glorfindel : la watch y écrit
+  # son battement, rien d'autre — les escalades, l'état d'isolation, les règles du client
+  # restent hors de portée du rouge (SEC3). runs/ est celui de la watch : elle y lit
+  # l'attack_started, et n'en prend que ce qu'un injecteur émet (glorfindel/signal_origin.py).
+  # Lancé à la demande, il ne reste pas : `docker compose --profile annatar run --rm annatar <commande>`.
   annatar:
     image: eregion-annatar
     entrypoint: ["annatar"]
@@ -213,7 +220,7 @@ services:
       - ./scripts:/app/scripts
       - ./technique_catalog.yaml:/app/technique_catalog.yaml:ro
       - ${HOME}/.annatar:/root/.annatar
-      - ${HOME}/.glorfindel:/root/.glorfindel:ro
+      - ${HOME}/.glorfindel/injectors:/root/.glorfindel:ro
     depends_on:
       - watch
 
@@ -232,6 +239,6 @@ services:
     volumes:
       - ${EREGION_RUNS:-./runs}:/app/runs
       - ./technique_catalog.yaml:/app/technique_catalog.yaml:ro
-      - ${HOME}/.glorfindel:/root/.glorfindel:ro
+      - ${HOME}/.glorfindel/injectors:/root/.glorfindel:ro
     depends_on:
       - watch

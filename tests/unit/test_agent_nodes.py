@@ -1307,17 +1307,25 @@ def test_graph_detection_timeout_takes_snapshot_and_escalates(tmp_path, monkeypa
     assert tmp_memory.count() == 1
 
 
+def _ours(signal: dict) -> dict:
+    """A recovery_complete Glorfindel's own path built (`glorfindel restore`, SEC3)."""
+    from glorfindel.signal_origin import vouch
+    return vouch({"signal_id": "t-recovery", **signal})
+
+
 def test_graph_recovery_complete_releases_isolation(tmp_path, monkeypatch, dry_connector, tmp_memory):
     monkeypatch.chdir(tmp_path)
     graph = _build(tmp_path, tmp_memory, dry_connector)
+    initial = _initial(
+        "recovery_complete",
+        raw={"recovery_point_time": "2026-05-24T10:00:00Z", "restore_time_s": 1220,
+             "run_command_neutralized": True},
+    )
+    _ours(initial["signal"])
 
     with patch("litellm.completion") as mock_cls:
         mock_cls.return_value = _mock_llm_response("release_isolation")
-        final = graph.invoke(_initial(
-            "recovery_complete",
-            raw={"recovery_point_time": "2026-05-24T10:00:00Z", "restore_time_s": 1220,
-                 "run_command_neutralized": True},
-        ))
+        final = graph.invoke(initial)
 
     assert final["action"] == "release_isolation"
     assert final["outcome"]["status"] == "dry_run"
@@ -1332,7 +1340,7 @@ def test_recovery_complete_without_the_neutralization_flag_is_held():
     for flag in (None, False):
         d = {"escalate": False, "action": "release_isolation"}
         raw = {} if flag is None else {"run_command_neutralized": flag}
-        _apply_release_precondition(d, {"event": "recovery_complete", "raw_signal": raw})
+        _apply_release_precondition(d, _ours({"event": "recovery_complete", "raw_signal": raw}))
         assert d["escalate"] is True and d["held_by"] == "release_precondition"
     assert "pas confirmée" in _held_reason(None) and "pas pu" in _held_reason(False)
 
@@ -1340,8 +1348,8 @@ def test_recovery_complete_without_the_neutralization_flag_is_held():
 def _held_reason(flag):
     from glorfindel.agent import _apply_release_precondition
     d = {"escalate": False, "action": "release_isolation"}
-    _apply_release_precondition(d, {"event": "recovery_complete",
-                                    "raw_signal": {"run_command_neutralized": flag}})
+    _apply_release_precondition(d, _ours({"event": "recovery_complete",
+                                          "raw_signal": {"run_command_neutralized": flag}}))
     return d["escalation_reason"]
 
 
@@ -1592,12 +1600,12 @@ def test_release_after_restore_is_held_when_run_command_was_not_neutralized():
     """The restored disk may have replayed the attacker's last Run Command at boot."""
     from glorfindel.agent import _apply_release_precondition
     held = {"action": "release_isolation", "escalate": False}
-    _apply_release_precondition(held, {"event": "recovery_complete",
-                                       "raw_signal": {"run_command_neutralized": False}})
+    _apply_release_precondition(held, _ours({"event": "recovery_complete",
+                                             "raw_signal": {"run_command_neutralized": False}}))
     assert held["escalate"] is True and "rejouer" in held["escalation_reason"]
     ok = {"action": "release_isolation", "escalate": False}
-    _apply_release_precondition(ok, {"event": "recovery_complete",
-                                     "raw_signal": {"run_command_neutralized": True}})
+    _apply_release_precondition(ok, _ours({"event": "recovery_complete",
+                                           "raw_signal": {"run_command_neutralized": True}}))
     assert ok["escalate"] is False
 
 
@@ -2008,10 +2016,26 @@ def test_release_on_recovery_complete_stays_autonomous():
     state["signal"]["event"] = "recovery_complete"
     state["signal"]["raw_signal"] = {"recovery_point_time": "2026-06-09T10:00:00Z",
                                      "run_command_neutralized": True}
+    _ours(state["signal"])
     with patch("litellm.completion", return_value=_mock_llm_response("release_isolation")):
         out = decide(state, model="x", autonomy_override="non_disruptive")
     assert out["escalate"] is False
     assert out["action"] == "release_isolation"
+
+
+def test_a_recovery_complete_glorfindel_did_not_emit_never_releases_alone():
+    """SEC3 (V-05): the same signal, with a neutralized Run Command, but not built by
+    `glorfindel restore` here nor read from ~/.glorfindel/recovery_signals/ — who wrote it
+    is unknown: the release is held for a human, whatever the model's confidence."""
+    from glorfindel.agent import decide
+    state = _state()
+    state["signal"].update(event="recovery_complete", signal_id="forged_recovery_complete",
+                           raw_signal={"recovery_point_time": "2026-06-09T10:00:00Z",
+                                       "run_command_neutralized": True})
+    with patch("litellm.completion", return_value=_mock_llm_response("release_isolation", confidence=0.99)):
+        out = decide(state, model="x", autonomy_override="non_disruptive")
+    assert out["escalate"] is True and out["held_by"] == "release_precondition"
+    assert "n'a pas émis" in out["escalation_reason"]
 
 
 def test_guardrail_holds_isolate_on_an_uncurated_syslog_line():

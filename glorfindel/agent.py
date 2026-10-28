@@ -1026,6 +1026,19 @@ def _apply_release_precondition(d: dict, signal: dict) -> None:
     """
     if d["escalate"] or d["action"] != "release_isolation":
         return
+    from glorfindel.signal_origin import vouched
+    if signal.get("event") == "recovery_complete" and not vouched(signal):
+        # Not built by `glorfindel restore` in this process, nor read from where only the
+        # defender writes it (SEC3, #274): who wrote it is unknown — a human decides.
+        d["escalate"] = True
+        d["held_by"] = "release_precondition"
+        d["escalation_reason"] = (
+            "Levée d'isolation proposée sur un recovery_complete que Glorfindel n'a pas émis "
+            "(ni `glorfindel restore` sur cet hôte, ni ~/.glorfindel/recovery_signals/) — "
+            "retenue pour revue humaine : vérifier que la restauration a eu lieu avant de lever "
+            "l'isolation."
+        )
+        return
     neutralized = (signal.get("raw_signal") or {}).get("run_command_neutralized")
     # `is True`, not `is not False`: an absent flag (a restore that didn't neutralize,
     # a recovery_complete written by anything else) is an unknown, not a success.

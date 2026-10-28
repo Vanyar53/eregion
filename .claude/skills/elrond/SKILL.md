@@ -87,12 +87,13 @@ Index :
    - les verdicts de relecture ;
    - ce qui attend une décision de l'utilisateur : fusion, push, PR.
 
-   Envoie aussi ce bilan, en quelques lignes, à Discord : `python3 scripts/notify_discord.py run-end "<bilan>"`.
+   Envoie aussi ce bilan, en quelques lignes, à Discord : `python3 scripts/agents_discord.py run-end "<bilan>"`.
 
 ## Discord (facultatif)
 
-Si les hooks de `scripts/elrond-hooks.sh` sont installés, chaque lancement, retour, verdict et repli part seul dans le fil du lot (`docs/atelier-discord.md`). Les descriptions `elrond <ID> · …` servent à reconnaître le lot : garde-les telles quelles. Toi, tu n'envoies que deux choses :
-- **un lot qui passe à `blocked`** : `python3 scripts/notify_discord.py lot <ID> blocked --note "<pourquoi>"` ;
+Si les hooks de `scripts/elrond-hooks.sh` sont installés, chaque lancement, relance (`SendMessage` à un agent déjà rendu), retour, verdict et repli part seul dans le fil du lot, avec le rapport, et `#agents` tient le tableau de ce qui attend l'utilisateur (`docs/atelier-discord.md`). Les descriptions `elrond <ID> · …` servent à reconnaître le lot : garde-les telles quelles. Toi, tu n'envoies que ce que toi seul sais :
+- **un lot qui passe à `blocked`** : `python3 scripts/agents_discord.py lot <ID> blocked --note "<pourquoi>"` ;
+- **une PR prête que l'utilisateur fusionne lui-même** (la fusion t'est refusée, ou il se l'est gardée) : `python3 scripts/agents_discord.py lot <ID> merge --pr <n> --note "<où on en est>"` ;
 - **la fin du run** : `run-end`, à l'étape 6.
 
 Sans configuration, ces commandes ne font rien et sortent en 0.

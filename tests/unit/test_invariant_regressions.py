@@ -1093,9 +1093,10 @@ def test_two_hosts_an_unblock_behind_the_quarantine_finds_the_block_on_x(monkeyp
         shutil.rmtree(m.home, ignore_errors=True)
 
 
-@pytest.mark.parametrize("known_by,lift_with", [("state", "release"), ("state", "bare"),
-                                                ("tag", "release"), ("tag", "reset")])
-def test_an_original_gone_says_how_to_get_out(monkeypatch, known_by, lift_with):
+@pytest.mark.parametrize("bare", [False, True])
+@pytest.mark.parametrize("lift_with", ["release", "reset"])
+@pytest.mark.parametrize("known_by", ["state", "tag"])
+def test_an_original_gone_says_how_to_get_out(monkeypatch, known_by, lift_with, bare):
     """The NIC's own NSG deleted while it is in quarantine (or left bare by hand): the lift
     fails and keeps the NIC as it is — wanted — but said only that the NSG wasn't found
     (ISU, #264; I8S). It says how to get out: recreate it, put by hand on the NIC the NSG
@@ -1117,32 +1118,56 @@ def test_an_original_gone_says_how_to_get_out(monkeypatch, known_by, lift_with):
         if known_by == "tag":
             for p in actions._ISOLATION_STATE_DIR.glob("*.json"):
                 p.unlink()                                                # the state lost
-        if lift_with == "bare":
+        if bare:
             f.nics[nic]["nsg"] = None                                     # ours taken off by hand
         assert f.delete_nsg(x)                                           # the customer's NSG gone
         lift = (lambda: c.sweep_vm_rules(WEB1)) if lift_with == "reset" else (lambda: c.release_isolation(WEB1))
+        done = "swept" if lift_with == "reset" else "released"
         out = lift()
-        assert out["status"] in ("release_partial", "swept_partial"), out
+        assert out["status"] == ("swept_partial" if lift_with == "reset" else "release_partial"), out
         said = [e for e in out["failed"] if "n'existe plus" in e]
         assert said and "rg-app1/nsg-web-nic" in said[0], out
         assert "recréer" in said[0] and "poser à la main" in said[0], said
         tag = actions.AzureConnector._orig_tag(f.nics[nic]["id"])
         assert (f"{tag}=none" in said[0]) == (known_by == "tag"), said
-        assert f.nics[nic]["nsg"] == (None if lift_with == "bare" else q)  # kept as it was
+        assert f.nics[nic]["nsg"] == (None if bare else q)                # kept as it was
         assert lift()["status"] == out["status"]                          # nothing changed: again
         if known_by == "tag":
             f.nsgs[key(q)]["tags"][tag] = "none"                            # the tag set to none
-            assert lift()["status"] in ("released", "swept")
+            assert lift()["status"] == done
             assert f.nics[nic]["nsg"] is None
-        elif lift_with == "bare":
+        elif bare:
             f.add_nsg("rg-app1", "nsg-web-nic")                              # recreated
-            assert lift()["status"] == "released"
+            assert lift()["status"] == done
             assert key(f.nics[nic]["nsg"] or "") == key(x)
         else:
             y = f.add_nsg("rg-app1", "nsg-web-y")                            # another, by hand
             f.nics[nic]["nsg"] = y
-            assert lift()["status"] == "released"
+            assert lift()["status"] == done
             assert key(f.nics[nic]["nsg"] or "") == key(y)
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)
+
+
+def test_an_original_that_cant_be_read_is_not_called_gone(monkeypatch):
+    """The original refused (403), not deleted: the lift fails as it did, and never says
+    it no longer exists — only a 404 on its id does (ISU, #264). Readable again, lifted."""
+    import shutil
+
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_net(quarantine=True, web_nic={"own": "dedicated"}))
+        f, c, nic = m.fake, m.connector, _nic("rg-app1", "web-nic")
+        x = f.nics[nic]["nsg"]
+        assert c.isolate_vm(WEB1)["status"] == "isolated"
+        f.unreadable.add(key(x))
+        out = c.release_isolation(WEB1)
+        assert out["status"] == "release_partial", out
+        assert out["failed"] and not any("n'existe plus" in e for e in out["failed"]), out
+        f.unreadable.discard(key(x))
+        assert c.release_isolation(WEB1)["status"] == "released"
+        assert key(f.nics[nic]["nsg"] or "") == key(x)
     finally:
         shutil.rmtree(m.home, ignore_errors=True)
 

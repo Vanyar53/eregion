@@ -626,8 +626,15 @@ def test_a_card_of_another_subscription_is_said_once_never_read(monkeypatch, cap
     assert not _warnings(caplog, "nsg-glorfindel-quarantine-westeurope is in")
     if acknowledged:
         assert other.lower() in reassert._load_quarantine_alerts()      # kept, not forgotten
-    else:
-        assert other in [x["resource_id"] for x in _cards("pending")]    # kept
+        return
+    assert other in [x["resource_id"] for x in _cards("pending")]        # kept
+    escalations.resolve(e)                                              # closed by the operator:
+    reassert.reassert_pass(c, None)                                     # nothing left to say,
+    escalations.record(signal_id=f"{reassert._QUARANTINE_PREFIX}other-2", resource_id=other,
+                       action="restore_quarantine_nsg", escalation_type="quarantine_altered",
+                       reason="altered", severity="high")
+    reassert.reassert_pass(c, None)                                     # a new card: said again
+    assert len(_warnings(caplog, "NSG-Glorfindel-Quarantine-WestEurope")) == 2
 
 
 def test_a_card_whose_nsg_is_refused_warns_at_every_pass_in_its_case(monkeypatch, caplog):

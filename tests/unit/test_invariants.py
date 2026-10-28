@@ -409,6 +409,7 @@ class IsolationMachine(RuleBasedStateMachine):
         self.retagged_at: dict[str, int] = {}               # NIC → tick Glorfindel wrote its original as a tag
         self.state_had: dict[str, int] = {}                 # NIC → record a state once held
         self.quarantine_held: dict[str, int] = {}           # NIC → last tick a state held it in quarantine, bare
+        self.unknown_held: dict[str, int] = {}              # ... and recorded no original for it (I3F)
         self.before_quarantine: dict[str, str | None] = {}   # NIC → what it carried
         # (NSG, rule) someone turned into an allow → (the rule before, the rule after);
         # before = None for an allow they added under one of our names.
@@ -673,6 +674,19 @@ class IsolationMachine(RuleBasedStateMachine):
         return frozenset(key(n["id"]) for n in self._nics(vm)
                          if lost > self.quarantine_held.get(key(n["id"]), -1) and self._untraceable(vm, n))
 
+    def _held_unknown(self, vm: str) -> list[str]:
+        """NICs of the VM left bare, off their design, that the test saw a state hold in
+        quarantine with no original since it last lost that state: Glorfindel knows it
+        doesn't know what they carried — "released" there is a guess, whatever the test
+        lost before (_untraceable exempts them: it can't tell the state was written after
+        the loss). Only ever stricter: a code that drops a known original earns nothing,
+        one that writes a wrong one is judged as before (I3F, #287)."""
+        self._check_authors()
+        lost = self.state_lost_at.get(key(vm), -1)
+        return [n["id"].rsplit("/", 1)[-1] for n in self._nics(vm)
+                if n["nsg"] is None and n["design_nsg"] and key(n["design_nsg"]) in self.fake.nsgs
+                and key(n["id"]) in self.unknown_held and self.unknown_held[key(n["id"])] >= lost]
+
     def _released(self, vm: str, own: bool = False) -> bool:
         # Glorfindel's own rules named for an untied NIC, on its own NSG off it, are out of
         # the release's reach — as I8 judges them (_isolation_recorded).
@@ -681,7 +695,7 @@ class IsolationMachine(RuleBasedStateMachine):
                          if key(n["id"]) in untied and n["design_nsg"])
         left = self._named_leftovers(self.fake.vms[key(vm)]["nics"], skip=skip)
         return (self._back_to_design(vm, own) and self._nics_as_designed(vm) and self._state(vm) is None
-                and not left)
+                and not left and not self._held_unknown(vm))
 
     def _footprint(self, vm: str, untied: frozenset = frozenset()) -> set:
         """What of Glorfindel's isolation applies to the VM: a NIC in quarantine, a
@@ -1150,7 +1164,8 @@ class IsolationMachine(RuleBasedStateMachine):
             # what it couldn't finish, so the reassertion doesn't put back the rest.
             assert self._consistent(vm), f"I8: reset --from-azure left {vm} with a state that isn't Azure's"
         if out and out.get("status") == "swept":
-            assert self._back_to_design(vm, own=True) and self._nics_as_designed(vm), (
+            assert (self._back_to_design(vm, own=True) and self._nics_as_designed(vm)
+                    and not self._held_unknown(vm)), (
                 f"I3: reset --from-azure said swept, {vm} is not back to its design")
             assert self._state(vm) is None
         self._others_unchanged(vm, flows, states, perimeter=True)
@@ -1996,6 +2011,8 @@ class IsolationMachine(RuleBasedStateMachine):
                 nk = key(p.get("nic_id") or "")
                 if p.get("kind") == "quarantine" and (self.fake.nics.get(nk) or {}).get("nsg") is None:
                     self.quarantine_held[nk] = self.ticks     # a state saw it taken off our NSG
+                    if "original_nsg_id" not in p:
+                        self.unknown_held[nk] = self.ticks    # ...knowing it doesn't know its original
                 if p.get("original_nsg_id") and nk in self.recorded_at:
                     self.state_had[nk] = self.recorded_at[nk][0]
 
@@ -2075,6 +2092,8 @@ class IsolationMachine(RuleBasedStateMachine):
         if rel and rel.get("verified") is True:
             assert self._back_to_design(vm, own=True) and self._nics_as_designed(vm), (
                 f"I3: verify_release True, {vm} not back to its design")
+            held = self._held_unknown(vm)
+            assert not held, f"I3: verify_release True, {held} of {vm} bare, their original unknown to a state"
         entry = next((e for e in actions._load_block_entries(vm) if e.get("ip") == ATTACKER), None)
         if entry and entry.get("scoped", True) is not False:          # not a perimeter block
             blk, _ = self._run(fault, lambda: self.connector.verify_block_ip(ATTACKER, rid))

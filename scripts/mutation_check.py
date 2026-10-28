@@ -2991,9 +2991,10 @@ MUTANTS += [
     ("M1194", "sudo-privilege-escalation reads every program's lines, not sudo's (SEC2)", RULES_YAML,
      '      | where ProcessName == "sudo"\n', ""),
     ("M1195", "sudo-privilege-escalation takes any sudo line holding its words, not sudo's form (SEC2)", RULES_YAML,
-     r'      | where SyslogMessage matches regex @"^\s*\S+ : (.*; )?USER=root ; (.*; )?COMMAND="' + "\n", ""),
+     r'      | where SyslogMessage matches regex @"^\s*\S+ : (TTY|PWD)=(.*; )?USER=root ; (.*; )?COMMAND="' + "\n", ""),
     ("M1196", "the platform and private addresses blockable: nothing shipped in never_block (SEC2)", POL,
-     '    "168.63.129.16/32", "169.254.169.254/32",\n    "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",\n'
+     '    "168.63.129.16/32", "169.254.169.254/32",\n'
+     '    "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "fc00::/7",\n'
      '    "127.0.0.0/8", "::1/128",\n', ""),
     ("M1197", "glorfindel-config.yaml's never_block never read (SEC2)", POL,
      "    return list(NEVER_BLOCK_SHIPPED) + list(load_glorfindel_config().never_block)",
@@ -3021,9 +3022,9 @@ MUTANTS += [
     ("M1206", "a client rule in a shipped rule's place never flagged: only a note (SEC2)", DRU,
      "        replaces_base = layer_of.get(item[\"name\"]) == \"client\" and item[\"name\"] in base_names\n",
      "        replaces_base = False\n"),
-    ("M1207", "a client rule polling every second accepted (SEC2)", DRU,
-     "            if field_ == \"interval_s\" and not (math.isfinite(number) and number >= MIN_INTERVAL_S):",
-     "            if field_ == \"interval_s\" and not number > 0:"),
+    ("M1207", "a rule polling every second polled every second: no floor at load (SEC2)", DRU,
+     "        if not (math.isfinite(interval_s) and interval_s >= MIN_INTERVAL_S):",
+     "        if not (math.isfinite(interval_s) and interval_s > 0):"),
     ("M1208", "${VAR} expanded in a rule's whole text again: a query reads the environment (SEC2)", DRU,
      "    data = yaml.safe_load(path.read_text())\n    if data is not None and not isinstance(data, dict) and notes is not None:",
      "    import os\n    data = yaml.safe_load(os.path.expandvars(path.read_text()))\n"
@@ -3032,6 +3033,34 @@ MUTANTS += [
      "                rest = send[data_budget:]\n                send = send[:data_budget]\n", "                rest = []\n"),
 ]
 TESTS.update({f"M{n}": "tests/unit/test_forged_logs.py" for n in range(1190, 1210)})
+# SEC2, after the 5.5 review.
+MUTANTS += [
+    ("M1310", "a client rule under the floor refused: a rule approved at 15 s drops out of detection (SEC2)", DRU,
+     '            if field_ == "interval_s" and not (math.isfinite(number) and number > 0):',
+     '            if field_ == "interval_s" and not (math.isfinite(number) and number >= MIN_INTERVAL_S):'),
+    ("M1311", "the investigation looks for sudo in the message: no root command found (SEC2)", "glorfindel/agent.py",
+     '| where ProcessName == "sudo"\n| where SyslogMessage has "USER=root" and SyslogMessage has "COMMAND="\n',
+     '| where SyslogMessage has "sudo" and SyslogMessage has "USER=root" and SyslogMessage has "COMMAND="\n'),
+    ("M1312", "the investigation reads any program's successful logins (SEC2)", "glorfindel/agent.py",
+     '| where ProcessName in ("sshd", "sshd-session")\n| where SyslogMessage has "Accepted"',
+     '| where SyslogMessage has "Accepted"'),
+    ("M1313", "an IPv4 written as IPv6 escapes never_block (SEC2)", POL,
+     "    if addr.version == 6 and addr.ipv4_mapped is not None:\n        addr = addr.ipv4_mapped\n", ""),
+    ("M1314", "carrier NAT and IPv6 unique local blockable (SEC2)", POL,
+     '"192.168.0.0/16", "100.64.0.0/10", "fc00::/7",', '"192.168.0.0/16",'),
+    ("M1315", "a failed sudo in sudo's form counted as an escalation (SEC2)", RULES_YAML,
+     r'@"^\s*\S+ : (TTY|PWD)=(.*; )?USER=root ; (.*; )?COMMAND="', r'@"^\s*\S+ : (.*; )?USER=root ; (.*; )?COMMAND="'),
+    ("M1316", "a summary card carries every row, unbounded (SEC2)", DRU,
+     "        for r in rest[:_SUMMARY_ROWS_MAX]]}", "        for r in rest]}"),
+    ("M1317", "a summary card never says how many rows it stands for (SEC2)", DRU,
+     '    return {**rest[0], "OmittedCount": len(rest), "OmittedRows": [',
+     '    return {**rest[0], "OmittedRows": ['),
+    ("M1318", "a shipped rule turned off by the client's layer never flagged (SEC2)", DRU,
+     "    disabled_base = sorted(base_on - loaded) if client_file else []\n", "    disabled_base = []\n"),
+    ("M1319", "`glorfindel rules` silent on a shipped rule turned off (SEC2)", "glorfindel/cli.py",
+     "    for name in cfg.disabled_base:\n", "    for name in []:\n"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_forged_logs.py" for n in range(1310, 1320)})
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

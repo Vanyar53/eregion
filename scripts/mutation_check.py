@@ -66,6 +66,7 @@ CON = "eregion_console/api.py"
 SEC = "eregion_console/sections.py"
 IND = "eregion_console/indicators.py"
 GHTML = "eregion_console/static/glorfindel.html"
+CESC = "scripts/console_escaping.py"
 XW = "eregion_core/exercise.py"
 INVARIANTS = "tests/unit/test_invariants.py"
 INSCRIPTION_TESTS = "tests/unit/test_inscription.py tests/unit/test_engine.py"
@@ -183,10 +184,11 @@ MUTANTS = [
      "            views = self._nic_nsg_views(t0)\n            if t0.get(\"quarantine\"):",
      "            views = self._nic_nsg_views(t0)\n            if False:"),
     ("M24", "reset --from-azure reads the original from the tag only (L27)", SWP,
+     # The state skipped: the tag decides (the code moved, I8S review — same bug).
      "                original = _recorded_original(t0[\"nic_id\"])\n                if original is _UNKNOWN:\n"
-     "                    original = self._original_from_tags(t0[\"quarantine\"], t0[\"nic_id\"])\n"
-     "                originals[t0[\"nic_id\"]] = original",
-     "                originals[t0[\"nic_id\"]] = original = self._original_from_tags(t0[\"quarantine\"], t0[\"nic_id\"])"),
+     "                    original = self._original_from_tags(t0[\"quarantine\"], t0[\"nic_id\"])\n",
+     "                original = _UNKNOWN\n                if original is _UNKNOWN:\n"
+     "                    original = self._original_from_tags(t0[\"quarantine\"], t0[\"nic_id\"])\n"),
     ("M25", "a partial reset leaves the state unmarked (L27)", SWP,
      "        elif not dry_run:\n            # Part of it is gone from Azure",
      "        elif False:\n            # Part of it is gone from Azure",
@@ -1366,6 +1368,51 @@ MUTANTS = [
     ("M579", "an anchored card offers Restore on its anchor VM again (#248)", GHTML,
      "const isRestore = e.action === 'restore_from_backup' && !_isAnchored(e);",
      "const isRestore = e.action === 'restore_from_backup';"),
+    # #254: what comes from the outside is escaped where it lands — the page's text, an on…
+    # attribute (_js), a URL — and the reader (scripts/console_escaping.py) finds it raw.
+    ("M580", "a feed signal's event written raw: a run's report runs in the console (#254)", GHTML,
+     "${icon} ${_attr(entry.event)}</span>", "${icon} ${entry.event}</span>"),
+    ("M581", "a feed action written raw: the model's invented action name runs in the console (#254)", GHTML,
+     '<span class="feed-event ${cls}">${icon} ${_attr(label)}</span>', '<span class="feed-event ${cls}">${icon} ${label}</span>'),
+    ("M582", "a feed entry's technique and VM written raw (#254)", GHTML,
+     """      <span class="feed-meta">${_attr(entry.ttp || '')} ${_attr(entry.vm || '')}</span>\n      <span class="feed-pct">""",
+     """      <span class="feed-meta">${entry.ttp || ''} ${entry.vm || ''}</span>\n      <span class="feed-pct">"""),
+    ("M583", "a rule's query written raw in its window: a rule the model wrote runs in the console (#254)", GHTML,
+     "${_attr((rule.query || '').trim())}", "${(rule.query || '').trim()}"),
+    ("M584", "a rule's description written raw in its window (#254)", GHTML,
+     "${_attr(rule.description || '—')}", "${rule.description || '—'}"),
+    ("M585", "a rule's name written raw in its row (#254)", GHTML,
+     '<span style="color:${dc};font-size:9px">●</span>\n      <span style="flex:1;min-width:0;overflow:hidden;'
+     'text-overflow:ellipsis;white-space:nowrap" title="${_attr(r.name)}">${_attr(r.name)}</span>',
+     '<span style="color:${dc};font-size:9px">●</span>\n      <span style="flex:1;min-width:0;overflow:hidden;'
+     'text-overflow:ellipsis;white-space:nowrap" title="${_attr(r.name)}">${r.name}</span>'),
+    ("M586", "a decision's technique written raw on the VM card (#254)", GHTML,
+     '<span class="dec-ttp">${_attr(a.ttp)}</span>', '<span class="dec-ttp">${a.ttp}</span>'),
+    ("M587", "a card's title written raw: the `|| e.action` fallback runs the model's text (#254)", GHTML,
+     '<span class="esc-action-label">${_attr(label)}</span>', '<span class="esc-action-label">${label}</span>'),
+    ("M588", "a card's title written raw in its detail (#254)", GHTML,
+     'font-size:12px">${_attr(label)}</span>', 'font-size:12px">${label}</span>'),
+    ("M589", "the configuration's error written raw (#254)", GHTML,
+     "Failed to load config: ${_attr(e.message)}</div>", "Failed to load config: ${e.message}</div>"),
+    ("M590", "a handler's argument between quotes again: a VM name with a quote runs on click (#254)", GHTML,
+     'onclick="showEscModal(${_js(vmName)})"', "onclick=\"showEscModal('${vmName}')\""),
+    ("M591", "the IP to block written into the handler raw (#254)", GHTML,
+     "  const ipArg = ip ? `,ip:${_js(ip)}` : '';", "  const ipArg = ip ? `,ip:'${ip}'` : '';"),
+    ("M592", "_attr raises on what is not a string: the card's window no longer opens (#254)", GHTML,
+     "  return String(s ?? '').replace(/&/g, '&amp;')", "  return (s || '').replace(/&/g, '&amp;')"),
+    ("M593", "_attr lets a tag through (#254)", GHTML, ".replace(/</g, '&lt;')", ""),
+    ("M594", "_js only escapes for HTML: a quote ends the handler's string (#254)", GHTML,
+     "  return _attr(JSON.stringify(String(s ?? '')));", "  return _attr(String(s ?? ''));"),
+    ("M595", "the overview writes a section's label raw (#254)", "eregion_console/static/overview.html",
+     "no ${esc(s.label)} window in the last 7 days", "no ${s.label} window in the last 7 days"),
+    ("M596", "the reader takes `x || field` for the page's: the labels' fallback goes unseen (#254)", CESC,
+     '            if node.text in ("||", "??", "+"):', '            if node.text in ("??", "+"):'),
+    ("M597", "the reader takes an on… attribute for text: HTML escaping passes there (#254)", CESC,
+     '        if name.startswith("on"):\n            return "js"', '        if name.startswith("on"):\n            return "html"'),
+    ("M598", "the reader misses what goes into a Map: the cards' buttons go unseen (#254)", CESC,
+     "                if method not in _PURE:", "                if False:"),
+    ("M599", "the reader takes a promise's callback argument as the page's (#254)", CESC,
+     "                if fn.escapes or not (fn.named or fn.feeds):", "                if fn.escapes:"),
     ("M408", "eregion console keeps compose's empty service principal: no managed identity (UI-1, H0)",
      "eregion_console/cli.py", "    _drop_empty_service_principal_env()\n", ""),
     ("M409", "the console looks for the shipped rules beside itself: none outside the repo's root (UI-1, P1 review)",
@@ -1577,6 +1624,44 @@ MUTANTS += [
      "                    if q_bare is not None:\n",
      "                    original, q_bare = self._bare_nic_original(t0, rg)\n"
      "                    if False:\n"),
+]
+
+# I8S (#245): two hosts, separate states — the state's "none" never wins over a tag that names
+# an NSG, and a tag that can't be read is never "none". The machine has one state directory:
+# measured by the two-host sequences frozen in test_invariant_regressions.py (TESTS below).
+MUTANTS += [
+    ("M1040", "the release follows the state's 'none' over a tag naming the NSG: the NIC left bare (I8S)",
+     REL, '                        if original is None and "original_nsg_id" in p:\n',
+     "                        if False:\n"),
+    ("M1041", "the release's sweep follows the state's 'none' for a NIC in a quarantine its placement doesn't "
+              "name (host 2's, another group): left bare (I8S)", REL,
+     "                    elif original is None:\n                        original = self._tag_over_none(q, t0[\"nic_id\"])\n",
+     "                    elif False:\n                        original = self._tag_over_none(q, t0[\"nic_id\"])\n"),
+    ("M1042", "a 429 on our tag: the re-isolation writes the state's 'none' over it (I8S)", QUA,
+     "            if original is not _UNKNOWN and not tag_unread:\n",
+     "            if original is not _UNKNOWN:\n"),
+    ("M1043", "a tag that can't be read reads as 'none' at the release: the NIC left bare (I8S)", REL,
+     "            if _is_not_found(exc):\n                return None\n            raise\n",
+     "            return None\n"),
+    ("M1044", "reset follows the state's 'none' over the tag of a NIC in quarantine (I8S)", SWP,
+     "                elif original is None:\n                    # The state's \"none\" yields to our tag",
+     "                elif False:\n                    # The state's \"none\" yields to our tag"),
+    ("M1045", "reset follows the state's 'none' over the tag of a bare NIC (I8S)", SWP,
+     "            if recorded is None and q_bare is not None:\n", "            if False:\n"),
+    ("M1046", "reset reads an unreadable tag of a bare NIC as the state's 'none': swept bare (I8S)", SWP,
+     "                if recorded is _UNKNOWN or recorded is None:\n", "                if recorded is _UNKNOWN:\n"),
+    ("M1047", "verify_release follows the state's 'none' over a tag naming the NSG: says released (I8S)", VER,
+     "            if original is _UNKNOWN or original is None:\n", "            if original is _UNKNOWN:\n"),
+    # Review of I8S (5.5): the reset recorded the state's "none" before reading the tag; a 429
+    # there left it recorded — the NIC put back bare, the tag X deleted.
+    ("M1048", "reset records the state's 'none' before reading the tag: a 429 there, the NIC put back "
+              "bare and X deleted (I8S, review)", SWP,
+     "                original = _recorded_original(t0[\"nic_id\"])\n",
+     "                originals[t0[\"nic_id\"]] = original = _recorded_original(t0[\"nic_id\"])\n"),
+    ("M1049", "a bare NIC's original: the first tag found, a 'none' in one group over X in another — two "
+              "hosts, two quarantine groups (I8S, review)", QUA,
+     "            if hit and hit[0]:\n                return hit\n            none = none or hit\n",
+     "            if hit:\n                return hit\n"),
 ]
 
 
@@ -1802,8 +1887,8 @@ MUTANTS += [
      SWP, "        why = self._held_reason(orphan.get(\"cut\") or [], self._held_vms())\n",
      "        why = \"\"\n"),
     ("M880", "any error reading a NIC of our state taken for a 404: gone (A3, first review, X1)", SWP,
-     "            if _is_not_found(exc):\n                return None",
-     "            if True:\n                return None"),
+     "            if _is_not_found(exc):\n                return None\n            return f\"carte",
+     "            if True:\n                return None\n            return f\"carte"),
     ("M881", "a NIC of our state unreadable (403, 429): its rule removable anyway (A3, first review, X2)", SWP,
      "                elif mark in state_nics and gone.get(mark):", "                elif False:"),
     ("M882", "an unknown backend type accepted in silence (A3, first review)", C,
@@ -2256,6 +2341,7 @@ TESTS["M567"] = "tests/unit/test_console.py"
 TESTS["M568"] = "tests/unit/test_console.py"
 TESTS["M569"] = "tests/unit/test_cli.py -k version"
 TESTS.update({f"M{n}": "tests/unit/test_console.py" for n in range(570, 580)})  # #248, and the card detail escaped
+TESTS.update({f"M{n}": "tests/unit/test_console_escaping.py" for n in range(580, 600)})  # #254
 TESTS["M403"] = "tests/unit/test_console_exercises.py"
 # V1 (#214): Annatar's side and the shared gate in test_watch_gate.py, Gothmog's in test_gothmog.py.
 TESTS.update({f"M{n}": "tests/unit/test_watch_gate.py" for n in (*range(720, 740), *range(750, 760))})
@@ -2303,6 +2389,41 @@ TESTS["M834"] = f"{INVARIANTS} tests/unit/test_reassert.py"
 # stays rare) — their frozen sequences, then the machine (L1F's precedent).
 TESTS.update({mid: f"tests/unit/test_invariant_regressions.py {INVARIANTS}"
               for mid in ("M860", "M861", "M862", "M863", "M864", "M865")})
+# I8S (#245): a second host with its own state is outside the machine — the frozen sequences.
+TESTS.update({f"M{n}": "tests/unit/test_invariant_regressions.py -k two_hosts" for n in range(1040, 1050)})
+
+# I1S (#231): a quarantine card's NSG absent from the listing is read again by its id before
+# the card closes — gone on a 404 only, judged on its content without its tag, never read in
+# another subscription.
+MUTANTS += [
+    ("M1020", "a quarantine card closed on the mere absence of its NSG from the listing: the role "
+              "removed, our tag taken off, another subscription (I1S)", R,
+     "        return k in gone\n", "        return True\n"),
+    ("M1021", "a quarantine NSG read again without our tag reads as not ours: its card closed (I1S)", SWP,
+     "        return self._quarantine_as_read(nsg)\n",
+     '        if (getattr(nsg, "tags", None) or {}).get("managed-by") != "glorfindel":\n'
+     "            return None\n        return self._quarantine_as_read(nsg)\n"),
+    ("M1022", "a quarantine NSG of another subscription read in this one: its homonym, or a 404, "
+              "closes its card (I1S)", SWP,
+     '        if not target or target.lower() != (self._subscription_id or "").lower():\n',
+     "        if False:\n"),
+    ("M1023", "a quarantine NSG that can't be read again (403, 429) reads as gone: its card closed (I1S)", R,
+     "exc)\n            continue\n        if q is None:\n",
+     "exc)\n            gone.add(k)\n            continue\n        if q is None:\n"),
+    ("M1024", "every quarantine card's NSG read again at every pass, listed or not: a get per card "
+              "per minute (I1S)", R,
+     "        if _key(rid) and _key(rid) not in seen:\n", "        if _key(rid):\n"),
+    ("M1025", "an acknowledged change is not read again: its NSG deleted, the acknowledgement silences "
+              "the next one (I1S)", R,
+     '    for rid in [e.get("resource_id") or "" for e in cards] + list(alerts):\n',
+     '    for rid in [e.get("resource_id") or "" for e in cards]:\n'),
+    ("M1026", "a refusal (403) read again reads as not found: the card closed (I1S)", SWP,
+     "            if _is_not_found(exc):\n                return None\n            raise\n",
+     "            return None\n"),
+]
+TESTS.update({f"M{n}": f"tests/unit/test_reassert.py tests/unit/test_invariant_regressions.py {INVARIANTS}"
+              for n in (1020, 1021, 1023, 1026)})
+TESTS.update({f"M{n}": "tests/unit/test_reassert.py" for n in (1022, 1024, 1025)})
 
 # D1 (#81): each component runs alone (scripts/component_check.py), and every usage profile
 # keeps Glorfindel (docker-compose.yml, the Makefile's profile and team targets).

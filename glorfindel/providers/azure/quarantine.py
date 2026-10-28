@@ -113,6 +113,7 @@ class QuarantineMixin:
                     original = _UNKNOWN
         else:
             original = t.get("own_nsg_id") or None
+            tag_unread = False
             if original is None:
                 # A bare NIC may have been in our quarantine before, and left bare by
                 # someone else: what was recorded then (state, or our tag) still stands.
@@ -133,6 +134,10 @@ class QuarantineMixin:
                     original = prior
                 elif unread and recorded is _UNKNOWN:
                     original = _UNKNOWN
+                elif unread and recorded is None:
+                    # Nor is the state's "none" written over it: another host may have
+                    # recorded there the NSG the NIC got since — the release reads it (I8S).
+                    tag_unread = True
                 elif recorded is _UNKNOWN and prior is _UNKNOWN and _held_in_quarantine(t["nic_id"]):
                     # Our state has it in quarantine, its original unknown (state and
                     # tags lost before a re-isolation), and someone left it bare: the
@@ -143,7 +148,7 @@ class QuarantineMixin:
             # Recorded even when the NIC had no NSG: "none" said explicitly, so a tag
             # that is missing means unknown (Q7), not "put no NSG back". An unknown is
             # left unwritten: the missing tag says it.
-            if original is not _UNKNOWN:
+            if original is not _UNKNOWN and not tag_unread:
                 self._record_original(q, t["nic_id"], original)
             # The swap only happens if the NIC still carries what was read: its return
             # was ignored, and a NIC changed in between was reported isolated (S1).
@@ -257,7 +262,8 @@ class QuarantineMixin:
         and left it bare (seventh review, U2). Our tag still says what it carried — it
         goes only once the original is back. (original or None, the quarantine NSG) when
         a tag is found, (_UNKNOWN, None) otherwise. Looked up on the region's quarantine
-        NSG, in the configured group and in the VM's."""
+        NSG, in the configured group and in the VM's, then in the subscription. A tag that
+        names an NSG wins over a "none" found first: two hosts, two groups (I8S)."""
         if t0.get("quarantine") or t0.get("own_nsg_id"):
             return _UNKNOWN, None
         name = f"{QUARANTINE_NSG_PREFIX}-{(t0.get('location') or 'unknown').lower()}"
@@ -278,6 +284,7 @@ class QuarantineMixin:
             q_rg, q_name = _parse_nsg_resource_id(nsg.id)
             return (None if value == self._NO_ORIGINAL else value), {"nsg_rg": q_rg, "nsg_name": q_name, "nsg_id": nsg.id}
 
+        none = None
         for q_rg in dict.fromkeys(g.lower() for g in groups):
             try:
                 hit = found(self._network.network_security_groups.get(q_rg, name))
@@ -285,16 +292,18 @@ class QuarantineMixin:
                 if _is_not_found(exc):
                     continue
                 raise
-            if hit:
+            if hit and hit[0]:
                 return hit
+            none = none or hit
         # The quarantine group may have changed since (or the config can't be read):
         # every quarantine NSG of ours in the subscription, by its name and our tag.
         for nsg in self._network.network_security_groups.list_all():
             if (getattr(nsg, "name", "") or "").lower() == name:
                 hit = found(nsg)
-                if hit:
+                if hit and hit[0]:
                     return hit
-        return _UNKNOWN, None
+                none = none or hit
+        return none or (_UNKNOWN, None)
 
     # ── L4: Glorfindel's quarantine NSG ─────────────────────────────────────────
 
@@ -455,12 +464,16 @@ class QuarantineMixin:
             if (not _is_quarantine_nsg(nsg_id)
                     or (getattr(nsg, "tags", None) or {}).get("managed-by") != "glorfindel"):
                 continue
-            nics = [n.id for n in (getattr(nsg, "network_interfaces", None) or []) if getattr(n, "id", None)]
-            q_rg, q_name = _parse_nsg_resource_id(nsg_id)
-            cache = {(q_rg, q_name): list(getattr(nsg, "security_rules", None) or [])}
-            st, diff = self._quarantine_state({"nsg_rg": q_rg, "nsg_name": q_name}, cache)
-            out.append({"nsg_id": nsg_id, "nics": nics, "status": st, "diff": diff})
+            out.append(self._quarantine_as_read(nsg))
         return out
+
+    def _quarantine_as_read(self, nsg) -> dict:
+        nsg_id = getattr(nsg, "id", "") or ""
+        nics = [n.id for n in (getattr(nsg, "network_interfaces", None) or []) if getattr(n, "id", None)]
+        q_rg, q_name = _parse_nsg_resource_id(nsg_id)
+        cache = {(q_rg, q_name): list(getattr(nsg, "security_rules", None) or [])}
+        st, diff = self._quarantine_state({"nsg_rg": q_rg, "nsg_name": q_name}, cache)
+        return {"nsg_id": nsg_id, "nics": nics, "status": st, "diff": diff}
 
     def _forensic_sources(self) -> list[str]:
         """isolation.forensic_sources as validate_forensic_sources keeps them (Q5). An

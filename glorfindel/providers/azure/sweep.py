@@ -1,12 +1,15 @@
 """`glorfindel reset`'s sweep of a VM's rules, and the orphan rules no NIC owns any
 more (moved from actions.py, A1) — found, and taken off when they cut a live VM (A3).
+The NSG listing the watch's pass shares, and one quarantine NSG read by its id (I1S).
 """
 from __future__ import annotations
 
 from glorfindel.providers.azure.nsg import _nic_hash, _nic_owns, _rule_name
-from glorfindel.providers.azure.sdk import _enum_text
-from glorfindel.response.ids import _parse_vm_resource_id, _same_id, _subscription_of
-from glorfindel.response.policy import _ERR_MAX, _first_line
+from glorfindel.providers.azure.sdk import _enum_text, _is_not_found
+from glorfindel.response.ids import (
+    _parse_nsg_resource_id, _parse_vm_resource_id, _same_id, _subscription_of,
+)
+from glorfindel.response.policy import _ERR_MAX, WrongSubscriptionError, _first_line
 from glorfindel.response.state import (
     _clear_block_state,
     _clear_isolation_state,
@@ -76,6 +79,11 @@ class SweepMixin:
                 original = _recorded_original(t0["nic_id"])
                 if original is _UNKNOWN:
                     original = self._original_from_tags(t0["quarantine"], t0["nic_id"])
+                elif original is None:
+                    # The state's "none" yields to our tag when it names an NSG (I8S).
+                    original = self._tag_over_none(t0["quarantine"], t0["nic_id"])
+                # Recorded once known: kept as "none" before an unreadable tag, the NIC
+                # was put back bare and the tag deleted (I8S, review).
                 originals[t0["nic_id"]] = original
             except Exception as exc:
                 unreadable.append(f'{t0["nic_short"]}: NSG d\'origine illisible ({_first_line(exc)[:_ERR_MAX]})')
@@ -97,10 +105,14 @@ class SweepMixin:
             try:
                 original, q_bare = self._bare_nic_original(t0, rg)
             except Exception as exc:
-                if recorded is _UNKNOWN:
+                # Unread, our tag may name the NSG the NIC got since the state said
+                # "none" (another host's isolation, I8S): never "none" on a guess.
+                if recorded is _UNKNOWN or recorded is None:
                     failed_early.append(f'{t0["nic_short"]}: tag d\'origine illisible ({_first_line(exc)[:_ERR_MAX]})')
                     continue
                 original, q_bare = _UNKNOWN, None
+            if recorded is None and q_bare is not None:
+                recorded = original              # our tag over the state's "none" (I8S)
             if recorded is not _UNKNOWN:
                 original = recorded
             elif q_bare is None:
@@ -227,6 +239,30 @@ class SweepMixin:
             return []
         self._ensure_clients()
         return list(self._network.network_security_groups.list_all())
+
+    def read_quarantine(self, nsg_id: str) -> dict | None:
+        """One quarantine NSG read by its id (I1S, #231), for a card the listing no longer
+        shows: as `find_altered_quarantines` reads it, its tag or not — the card was raised
+        on our NSG, and someone taking our tag off as well as our rules is the same hand.
+        None: gone (404). Raises on anything else — refused (403: a listing may leave out,
+        without an error, an NSG the identity can no longer read — a hypothesis, to measure
+        on the bench), throttled, unread — and on an NSG of another subscription: the
+        clients run in this one, and its homonym here is not it."""
+        if self.dry_run:
+            raise RuntimeError("dry-run: no quarantine NSG read")
+        self._ensure_clients()
+        target = _subscription_of(nsg_id)
+        if not target or target.lower() != (self._subscription_id or "").lower():
+            raise WrongSubscriptionError(f"{nsg_id.rstrip('/').rsplit('/', 1)[-1]} est dans l'abonnement "
+                                         f"{target or '?'}, Glorfindel lit {self._subscription_id}")
+        q_rg, q_name = _parse_nsg_resource_id(nsg_id)
+        try:
+            nsg = self._network.network_security_groups.get(q_rg, q_name)
+        except Exception as exc:
+            if _is_not_found(exc):
+                return None
+            raise
+        return self._quarantine_as_read(nsg)
 
     def find_orphan_rules(self, nsgs: list | None = None) -> list[dict]:
         """Glorfindel denies left by a NIC that no longer exists (seventh review, U1).

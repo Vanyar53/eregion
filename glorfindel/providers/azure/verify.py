@@ -192,12 +192,16 @@ class VerifyMixin:
                 continue
             p = recorded.get(t0["nic_id"].rstrip("/").lower())
             original = p["original_nsg_id"] if p and "original_nsg_id" in p else _UNKNOWN
-            if original is _UNKNOWN:
+            # The state's "none" too: our tag may name the NSG the NIC got since —
+            # another host's isolation (I8S).
+            if original is _UNKNOWN or original is None:
                 try:
-                    original = self._bare_nic_original(t0, rg)[0]
+                    tagged = self._bare_nic_original(t0, rg)[0]
                 except Exception as exc:
                     unknown.append(f'{t0["nic_short"]} : tag d\'origine illisible ({_first_line(exc)[:_ERR_MAX]})')
                     continue
+                if original is _UNKNOWN or tagged is not _UNKNOWN:
+                    original = tagged
             if original and original is not _UNKNOWN:
                 still.append(f'{t0["nic_short"]} : sans NSG, '
                              f'{original.rstrip("/").rsplit("/", 1)[-1]} non remis')

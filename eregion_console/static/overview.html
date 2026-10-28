@@ -134,9 +134,9 @@ function campaignLine() {
 
 function injectorRow(s) {
   if (!s.active)
-    return `<div class="line dim"><span>not set up — ${ROLE_ROW[s.id].absent} (<a href="/${s.id}">what it adds ▸</a>)</span></div>`;
+    return `<div class="line dim"><span>not set up — ${ROLE_ROW[s.id].absent} (<a href="/${encodeURIComponent(s.id)}">what it adds ▸</a>)</span></div>`;
   const w = lastRun(s.id);
-  const lines = [w ? runLine(w) : `<div class="line dim"><span>no ${s.label} window in the last 7 days (<a href="/${s.id}">${s.label} ▸</a>)</span></div>`];
+  const lines = [w ? runLine(w) : `<div class="line dim"><span>no ${esc(s.label)} window in the last 7 days (<a href="/${encodeURIComponent(s.id)}">${esc(s.label)} ▸</a>)</span></div>`];
   if (s.id === 'annatar') lines.push(campaignLine());
   return lines.join('');
 }
@@ -166,21 +166,21 @@ const pc = r => (r == null ? '—' : Math.round(r * 100) + '%');
 function indicators() {
   const i = D.ind;
   if (!i) return '';
-  const days = i.window_days, c = i.contain, a = i.alone, w = i.wrong, cov = i.coverage, lp = i.last_proof;
+  const days = Number(i.window_days), c = i.contain, a = i.alone, w = i.wrong, cov = i.coverage, lp = i.last_proof;
   const timed = c.detected
-    ? `detect ${dur(c.detect_s)}${c.decide_s != null ? ' · decide ' + dur(c.decide_s) : ''} <span title="medians">(median, ${c.detected} detected attack${c.detected > 1 ? 's' : ''}, ${days} d)</span>`
+    ? `detect ${dur(c.detect_s)}${c.decide_s != null ? ' · decide ' + dur(c.decide_s) : ''} <span title="medians">(median, ${esc(c.detected)} detected attack${c.detected > 1 ? 's' : ''}, ${days} d)</span>`
     : `no detected attack in ${days} d`;
   const contain = box('TIME TO CONTAIN', c.contain_s != null ? dur(c.contain_s) : '— nothing contained alone',
     timed, '', 'From the attack to the verified action — only what Glorfindel contained alone. Detect: from the attack to the detection the run counted; decide: to the recommendation (run reports and the watch\'s cycles, ' + days + ' days).');
-  const alone = box('CONTAINED ALONE', a.of ? `${a.contained} of ${a.of}` : '—',
-    a.of ? `shadow: ${a.shadow} of ${a.of} would have been` : `no detected attack in ${days} d`, '',
+  const alone = box('CONTAINED ALONE', a.of ? `${esc(a.contained)} of ${esc(a.of)}` : '—',
+    a.of ? `shadow: ${esc(a.shadow)} of ${esc(a.of)} would have been` : `no detected attack in ${days} d`, '',
     `Real: isolations and blocks executed and verified alone. Shadow: the detected attacks on which Glorfindel recommended to isolate or to block at or above the confidence gate (${a.threshold == null ? 'unreadable: every action held' : Math.round(a.threshold * 100) + '%'}), not judged wrong — what it would have contained, had it been allowed to act (${days} days).`);
   const w30 = w.days_30, w7 = w.days_7;
-  const wrong = box('WRONG DISRUPTIVE', w30.judged ? `${pc(w30.rate)} of ${w30.judged} judged` : '— none judged',
-    `real traffic, ${days} d · 7 d: ${w7.judged ? pc(w7.rate) + ' of ' + w7.judged : 'none judged'}`,
+  const wrong = box('WRONG DISRUPTIVE', w30.judged ? `${pc(w30.rate)} of ${esc(w30.judged)} judged` : '— none judged',
+    `real traffic, ${days} d · 7 d: ${w7.judged ? pc(w7.rate) + ' of ' + esc(w7.judged) : 'none judged'}`,
     w30.wrong ? 'warn' : '', 'Isolations and blocks judged wrong, among those judged (right or wrong), on real traffic — exercise cards left out (glorfindel report). The last 7 days, those of the Monday summary, aside.');
-  const coverage = box(`COVERAGE · ${days} d`, `${cov.implemented_detected} / ${cov.implemented} implemented`,
-    `${cov.catalog_detected} / ${cov.catalog} of the catalogue · faults: ${cov.faults ? cov.faults + ' run' + (cov.faults > 1 ? 's' : '') + ', ' + cov.faults_pass + ' PASS' : 'none'}`,
+  const coverage = box(`COVERAGE · ${days} d`, `${esc(cov.implemented_detected)} / ${esc(cov.implemented)} implemented`,
+    `${esc(cov.catalog_detected)} / ${esc(cov.catalog)} of the catalogue · faults: ${cov.faults ? esc(cov.faults) + ' run' + (cov.faults > 1 ? 's' : '') + ', ' + esc(cov.faults_pass) + ' PASS' : 'none'}`,
     '', 'Techniques detected by an attack run of the last ' + days + ' days, over those the bench can play (implemented), then over the whole catalogue, planned ones included. Faults aside.');
   const age = lp ? lp.age_s / 86400 : null;
   const stale = (i.stalest || []).map(s => `${s.ttp}: ${s.at ? ago(s.at) + ' ago' : 'not in ' + days + ' d'}`).join(' · ');

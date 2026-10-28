@@ -237,6 +237,46 @@ Après I1F, AL1, C2 et A3 (27/10) :
 - M574 : une résolution reste sur la tuile au-delà de 24 h.
 - M575 : un acquittement passe pour un geste de Glorfindel.
 
+### Ce qui vient du dehors (#254)
+
+Une carte, une règle, une ligne du fil, une erreur : du texte d'Azure (le nom d'une ressource, d'une
+application Entra ID), du modèle, d'une règle, ou d'un rapport de run tiré du canal d'exercice (un hôte
+moins sûr que la console). Écrit brut dans `innerHTML`, il s'exécute dans la console et peut appeler ses
+routes. La CSP de #222 n'a pas de `script-src` : elle ne l'arrête pas.
+
+- **Rien du dehors n'est écrit brut**, nombres compris : le serveur relaie des rapports dont le type
+  n'est pas garanti. Dans le texte de la page ou un attribut entre guillemets doubles : `_attr`
+  (glorfindel.html) ou `esc` (`Console.esc`, les autres pages) ; `_attr` accepte toute valeur
+  (`String(s ?? '')`) et échappe `& " ' < >`.
+- **Un argument de gestionnaire `on…`** passe par `_js` : le navigateur décode l'attribut avant que le
+  gestionnaire tourne (un `&#39;` y redevient une apostrophe). `_js` en fait une chaîne JavaScript
+  (`JSON.stringify`), puis l'échappe pour l'attribut : `onclick="f(${_js(vm)})"`, jamais `'${…}'`.
+- **Le début d'une URL** (`href="${…}"`) ne prend que `encodeURIComponent` : un `javascript:` échappé en
+  HTML en reste un. Un attribut s'écrit entre guillemets doubles.
+- **`scripts/console_escaping.py` le vérifie** (`python scripts/console_escaping.py` : où, quoi, d'où).
+  Il lit les scripts de chaque page et suit ce que peut contenir chaque `${…}` d'un gabarit HTML et
+  chaque valeur donnée à `innerHTML`. Il suit les branches d'un ternaire, `||` et `+`, une variable
+  jusqu'à sa déclaration et ses affectations, un `push` ou une `Map`, une fonction de la page jusqu'à
+  ses `return`, un paramètre jusqu'aux arguments de ses appels ou aux éléments de son tableau
+  (`.map`). Le champ d'un objet que la page a écrit est lu par sa clé. Une valeur est propre quand
+  c'est un littéral, un nombre calculé, une table de la page ou un échappement reconnu par sa
+  déclaration (une variable locale nommée `esc` n'en est pas un). Le reste est brut : un champ de ce
+  qu'a envoyé le serveur, l'argument d'un callback, une erreur, la barre d'adresse.
+  `ALLOWED` nomme, avec sa raison, ce que le lecteur ne sait pas suivre ; il est vide.
+- **Vérifié dans Chromium** (28/10) : une console locale sur des cartes, une isolation, un fil et des
+  actifs piégés, chaque élément `onclick` cliqué. Sur `main`, 14 images injectées et des charges
+  exécutées, au chargement comme au clic ; avec #254, aucune, aucune erreur JS, et les arguments
+  arrivent intacts aux fonctions.
+
+**Mutants M580–M599** (`tests/unit/test_console_escaping.py`) : douze endroits de la console réécrits
+bruts (fil, fenêtre et ligne d'une règle, décisions, titres de carte, configuration, un gestionnaire,
+l'IP à bloquer), `_attr` et `_js` affaiblis, l'accueil, et le lecteur lui-même (`||`, les attributs
+`on…`, une `Map`, l'argument d'un callback de promesse). Le test vérifie aussi le lecteur sur de petites
+pages écrites pour lui.
+
+Reste à considérer : sortir les gestionnaires en ligne et les scripts de la page pour poser
+`script-src 'self'` dans la CSP (une défense de plus, plus de 90 attributs `on…`).
+
 ## 4. Maquettes
 
 Les valeurs sont illustratives. L'onglet actif est entre crochets, l'onglet grisé entre `░`.

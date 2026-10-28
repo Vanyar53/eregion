@@ -4,7 +4,7 @@ doesn't know (moved from actions.py, A1).
 from __future__ import annotations
 
 from glorfindel.providers.azure.nsg import _deny_applies, _deny_isolates, _ip_scoped, _nic_owns, _rule_name
-from glorfindel.providers.azure.quarantine import _is_quarantine_nsg
+from glorfindel.providers.azure.quarantine import OriginalUnknown, _is_quarantine_nsg
 from glorfindel.providers.azure.sdk import _is_not_found
 from glorfindel.response.ids import _parse_nsg_resource_id, _parse_vm_resource_id, _same_id
 from glorfindel.response.policy import _ERR_MAX, _first_line
@@ -81,6 +81,22 @@ class ReleaseMixin:
                 for r in rules if _rule_name(r).lower() in fixed and _deny_applies(r, t.get("private_ips") or None)
                 and not _legacy_claimed(t["nsg_rg"], t["nsg_name"], _rule_name(r))]
 
+    def _tag_over_none(self, q: dict, nic_id: str) -> str | None:
+        """The original of a NIC whose local state says it had no NSG: our tag, when it
+        names one (I8S). Two hosts keep separate states: the first isolated the NIC bare
+        ("none"), its customer gave it an NSG since, the second isolated it and wrote that
+        NSG in the tag — the first's release followed its own "none" and left the NIC
+        without its NSG. No tag, or our NSG gone: the state's "none" stands. A tag that
+        can't be read RAISES: it may name the original, and the release deletes it."""
+        try:
+            return self._original_from_tags(q, nic_id)
+        except OriginalUnknown:
+            return None
+        except Exception as exc:
+            if _is_not_found(exc):
+                return None
+            raise
+
     def release_isolation(self, resource_id: str) -> dict:
         """Remove every isolation rule of the VM and restore bumped customer rules.
 
@@ -130,6 +146,8 @@ class ReleaseMixin:
                             continue
                         original = (p["original_nsg_id"] if "original_nsg_id" in p
                                     else self._original_from_tags(p, p["nic_id"]))
+                        if original is None and "original_nsg_id" in p:
+                            original = self._tag_over_none(p, p["nic_id"])
                         if now is None:
                             # Detached from our NSG and left with none: the release
                             # moved on, deleted the tag, and the NIC kept no NSG while
@@ -229,6 +247,8 @@ class ReleaseMixin:
                     original = _recorded_original(t0["nic_id"])
                     if original is _UNKNOWN:
                         original = self._original_from_tags(q, t0["nic_id"])
+                    elif original is None:
+                        original = self._tag_over_none(q, t0["nic_id"])
                     self._unquarantine(t0["nic_id"], q, original)
                     restored = True
                 except Exception as exc:

@@ -62,7 +62,7 @@ def _function(text: str, name: str) -> str:
 def test_attr_escapes_what_html_gives_a_meaning_to_and_takes_any_value():
     """`_attr` is glorfindel.html's escape: a number, null or an object is text too (#254: a
     step that was not a string raised and the card's window no longer opened)."""
-    body = _function((STATIC / "glorfindel.html").read_text(), "_attr")
+    body = _function((STATIC / "glorfindel.js").read_text(), "_attr")
     assert body.startswith("return String(s ?? '')"), body
     for char, entity in (("&", "&amp;"), ('"', "&quot;"), ("'", "&#39;"), ("<", "&lt;"), (">", "&gt;")):
         assert f".replace(/{char}/g, '{entity}')" in body, char
@@ -72,7 +72,7 @@ def test_attr_escapes_what_html_gives_a_meaning_to_and_takes_any_value():
 def test_js_makes_a_javascript_string_of_a_handlers_argument():
     """In an on… attribute the browser decodes `&#39;` before the handler runs: the value goes in
     as a JSON string, then escaped for the attribute."""
-    body = _function((STATIC / "glorfindel.html").read_text(), "_js")
+    body = _function((STATIC / "glorfindel.js").read_text(), "_js")
     assert body == "return _attr(JSON.stringify(String(s ?? '')));", body
 
 
@@ -84,7 +84,7 @@ def test_the_shared_escape_of_the_other_pages():
 
 def test_no_page_writes_a_handler_argument_between_quotes():
     """`onclick="f('${x}')"`: the reader would refuse it — said here plainly too."""
-    for page in ("glorfindel.html", "overview.html", "injector.html"):
+    for page in ("glorfindel.html", "glorfindel.js", "overview.js", "injector.js"):
         text = (STATIC / page).read_text()
         for attr in re.finditer(r'\bon[a-z]+="[^"]*"', text):
             assert not re.search(r"'\$\{[^}]*\}'", attr.group(0)), (page, attr.group(0)[:120])

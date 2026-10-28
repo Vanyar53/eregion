@@ -530,7 +530,7 @@ def test_the_console_counts_a_campaign_without_glorfindel_apart(tmp_path, monkey
     monkeypatch.setattr(api, "_RUNS", runs)
     got = {c["dir"]: c["without_glorfindel"] for c in asyncio.run(api.campaigns())["campaigns"]}
     assert got == {"C1": True, "C2": False}
-    for page in ("overview.html", "injector.html"):
+    for page in ("overview.js", "injector.js"):
         html = (ROOT / "eregion_console" / "static" / page).read_text()
         assert "c.without_glorfindel" in html and "not measured, by choice" in html, page
 

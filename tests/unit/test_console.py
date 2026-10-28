@@ -357,7 +357,7 @@ def test_glorfindel_war_room_is_still_the_console(monkeypatch):
 
 def _glorfindel_page() -> str:
     from pathlib import Path
-    return (Path(api.__file__).parent / "static" / "glorfindel.html").read_text()
+    return (Path(api.__file__).parent / "static" / "glorfindel.js").read_text()
 
 
 def _js_set(name: str) -> set[str]:

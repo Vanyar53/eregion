@@ -1579,6 +1579,33 @@ MUTANTS += [
      "                    if False:\n"),
 ]
 
+# I8S (#245): two hosts, separate states — the state's "none" never wins over a tag that names
+# an NSG, and a tag that can't be read is never "none". The machine has one state directory:
+# measured by the two-host sequences frozen in test_invariant_regressions.py (TESTS below).
+MUTANTS += [
+    ("M1040", "the release follows the state's 'none' over a tag naming the NSG: the NIC left bare (I8S)",
+     REL, '                        if original is None and "original_nsg_id" in p:\n',
+     "                        if False:\n"),
+    ("M1041", "a release without the NIC's placement follows the state's 'none' over the tag (I8S)", REL,
+     "                    elif original is None:\n                        original = self._tag_over_none(q, t0[\"nic_id\"])\n",
+     "                    elif False:\n                        original = self._tag_over_none(q, t0[\"nic_id\"])\n"),
+    ("M1042", "a 429 on our tag: the re-isolation writes the state's 'none' over it (I8S)", QUA,
+     "            if original is not _UNKNOWN and not tag_unread:\n",
+     "            if original is not _UNKNOWN:\n"),
+    ("M1043", "a tag that can't be read reads as 'none' at the release: the NIC left bare (I8S)", REL,
+     "            if _is_not_found(exc):\n                return None\n            raise\n",
+     "            return None\n"),
+    ("M1044", "reset follows the state's 'none' over the tag of a NIC in quarantine (I8S)", SWP,
+     "                if original is None:\n                    # The state's \"none\" yields to our tag",
+     "                if False:\n                    # The state's \"none\" yields to our tag"),
+    ("M1045", "reset follows the state's 'none' over the tag of a bare NIC (I8S)", SWP,
+     "            if recorded is None and q_bare is not None:\n", "            if False:\n"),
+    ("M1046", "reset reads an unreadable tag of a bare NIC as the state's 'none': swept bare (I8S)", SWP,
+     "                if recorded is _UNKNOWN or recorded is None:\n", "                if recorded is _UNKNOWN:\n"),
+    ("M1047", "verify_release follows the state's 'none' over a tag naming the NSG: says released (I8S)", VER,
+     "            if original is _UNKNOWN or original is None:\n", "            if original is _UNKNOWN:\n"),
+]
+
 
 # I4F (#235): a NIC away from its NSG (in quarantine, or bare) still counts among the NSG's —
 # or the NSG reads as another VM's alone, and the reset takes that VM's older isolation.
@@ -2253,6 +2280,8 @@ TESTS["M834"] = f"{INVARIANTS} tests/unit/test_reassert.py"
 # stays rare) — their frozen sequences, then the machine (L1F's precedent).
 TESTS.update({mid: f"tests/unit/test_invariant_regressions.py {INVARIANTS}"
               for mid in ("M860", "M861", "M862", "M863", "M864", "M865")})
+# I8S (#245): a second host with its own state is outside the machine — the frozen sequences.
+TESTS.update({f"M{n}": "tests/unit/test_invariant_regressions.py -k two_hosts" for n in range(1040, 1048)})
 
 # D1 (#81): each component runs alone (scripts/component_check.py), and every usage profile
 # keeps Glorfindel (docker-compose.yml, the Makefile's profile and team targets).

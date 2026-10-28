@@ -113,6 +113,7 @@ class QuarantineMixin:
                     original = _UNKNOWN
         else:
             original = t.get("own_nsg_id") or None
+            tag_unread = False
             if original is None:
                 # A bare NIC may have been in our quarantine before, and left bare by
                 # someone else: what was recorded then (state, or our tag) still stands.
@@ -133,6 +134,10 @@ class QuarantineMixin:
                     original = prior
                 elif unread and recorded is _UNKNOWN:
                     original = _UNKNOWN
+                elif unread and recorded is None:
+                    # Nor is the state's "none" written over it: another host may have
+                    # recorded there the NSG the NIC got since — the release reads it (I8S).
+                    tag_unread = True
                 elif recorded is _UNKNOWN and prior is _UNKNOWN and _held_in_quarantine(t["nic_id"]):
                     # Our state has it in quarantine, its original unknown (state and
                     # tags lost before a re-isolation), and someone left it bare: the
@@ -143,7 +148,7 @@ class QuarantineMixin:
             # Recorded even when the NIC had no NSG: "none" said explicitly, so a tag
             # that is missing means unknown (Q7), not "put no NSG back". An unknown is
             # left unwritten: the missing tag says it.
-            if original is not _UNKNOWN:
+            if original is not _UNKNOWN and not tag_unread:
                 self._record_original(q, t["nic_id"], original)
             # The swap only happens if the NIC still carries what was read: its return
             # was ignored, and a NIC changed in between was reported isolated (S1).

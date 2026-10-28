@@ -164,7 +164,7 @@ The fastest, safest way to see Glorfindel: point it at your existing Log Analyti
 **What leaves your machine.** Read-only on Azure is not "nothing leaves":
 - **To the model's provider** (Anthropic by default), on each decision: the detection's rows — log excerpts, with the VM's name and resource id, addresses, user and process names as the logs hold them —, the results of the investigative queries, the incident's context, a few similar past decisions from the local memory and the VM's isolation state. Proposing a detection rule (`glorfindel propose-rules`, the purple loop) sends the technique and the columns of your log tables (`getschema`). The model's answer is a proposal: deterministic guards decide what may run, whatever it says (the [threat model](docs/design/modele-de-menace.md), « Le fournisseur du modèle »).
 - **To your alert channel**, if you set one: each card, to the webhook or the Discord bot.
-- **Nowhere else**: the memory (ChromaDB) and its embedding model run locally; no telemetry.
+- **Nowhere else**: the memory (ChromaDB) and its embedding model run locally; Eregion sends no telemetry of its own.
 
 To keep the logs in-house, run a local model: `GLORFINDEL_LLM_MODEL=ollama/<model>` (and `GLORFINDEL_LLM_BASE_URL`), or `--model ollama/<model>` on `glorfindel watch` — or a provider under your own contract (Azure OpenAI in your tenant). Validated models, and how to compare them on your cases: `make llm-compare` (« Cost of running Glorfindel », below).
 

@@ -13,11 +13,11 @@ function toDate(v) {
 }
 function dur(s) {
   if (s === null || s === undefined || isNaN(s)) return '—';
-  s = Math.round(s);
-  if (Math.abs(s) < 120) return `${s}s`;
-  if (Math.abs(s) < 3600) return `${Math.floor(s / 60)}m${String(Math.abs(s % 60)).padStart(2, '0')}`;
-  if (Math.abs(s) < 172800) return `${Math.floor(s / 3600)}h${String(Math.floor(Math.abs(s % 3600) / 60)).padStart(2, '0')}`;
-  return `${Math.floor(s / 86400)}d`;
+  const n = Math.round(s);
+  if (Math.abs(n) < 120) return `${n}s`;
+  if (Math.abs(n) < 3600) return `${Math.floor(n / 60)}m${String(Math.abs(n % 60)).padStart(2, '0')}`;
+  if (Math.abs(n) < 172800) return `${Math.floor(n / 3600)}h${String(Math.floor(Math.abs(n % 3600) / 60)).padStart(2, '0')}`;
+  return `${Math.floor(n / 86400)}d`;
 }
 function ago(v) { const d = toDate(v); return d ? dur((Date.now() - d) / 1000) : '—'; }
 const pct = c => (typeof c === 'number' ? `${Math.round(c * 100)}%` : '');

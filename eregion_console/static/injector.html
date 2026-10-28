@@ -241,7 +241,7 @@ function renderExercises() {
 
 function renderWindow(w) {
   const key = 'w:' + w.run_id, isOpen = S.open.has(key);
-  const stateCls = 'c-' + (w.state || 'closed');
+  const stateCls = 'c-' + esc(w.state || 'closed');
   const end = toDate(w.end), start = toDate(w.start);
   let timing = `${hms(w.start)}`;
   if (w.state === 'open') timing += ` → running ${dur((Date.now() - start) / 1000)}`;

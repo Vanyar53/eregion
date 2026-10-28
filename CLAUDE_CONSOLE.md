@@ -19,8 +19,9 @@ en 5 secondes et agir en 2 clics.
 
 **Tu travailles sur :**
 - `eregion_console/static/` — `console.js` et `console.css` (l'en-tête commun), `overview.html` (`/`),
-  `glorfindel.html` (`/glorfindel`, `/config`, ~3500 lignes), `injector.html` (`/annatar`, `/gothmog`,
-  lecture seule), `exercises.js` ; vanilla JS + CSS variables, sans étape de build
+  `glorfindel.html` (`/glorfindel`, `/config`), `injector.html` (`/annatar`, `/gothmog`, lecture seule) ;
+  leur script dans un fichier à part (`overview.js`, `glorfindel.js` ~3000 lignes, `injector.js`),
+  `exercises.js` partagé ; vanilla JS + CSS variables, sans étape de build
 - `eregion_console/api.py`, `sections.py`, `cli.py` — tu peux proposer de nouveaux endpoints si l'UI en a besoin
 
 **Tu lis mais ne modifies pas :**
@@ -97,10 +98,19 @@ En-tête (console.js), le même partout → EREGION + version déployée (tag, s
 - **Pas de build step** : l'HTML est servi statique par FastAPI, une seule modification = résultat immédiat.
 - **Responsive minimal** : optimisé pour grand écran (1440px+). Mobile = non-prioritaire.
 - **Rien du dehors n'est écrit brut** (#254) : un champ de carte, de règle, du fil, une erreur, un
-  nombre du serveur passe par `_attr` (glorfindel.html) ou `esc` (les autres pages) ; un argument
-  de gestionnaire `on…` par `_js`, sans guillemets autour (`onclick="f(${_js(vm)})"`) ; le début
-  d'une URL par `encodeURIComponent`. `python scripts/console_escaping.py` dit où, et
-  `tests/unit/test_console_escaping.py` échoue sinon ([docs/design/console.md](docs/design/console.md), « Ce qui vient du dehors »).
+  nombre du serveur (un `.length` compris : `Number(…)`) passe par `_attr` (glorfindel.js) ou `esc`
+  (les autres pages) ; le début d'une URL, `/` de tête compris, par `encodeURIComponent`.
+- **Aucun script ni gestionnaire `on…` en ligne** (#257, CSP `script-src 'self'`) : le script d'une
+  page est un fichier ; un élément nomme son action avec `_on` (`data-on-click` et ses arguments en
+  JSON), appelée par le répartiteur dans `ACTIONS` — une action nouvelle s'ajoute à cette table. Le
+  nom d'une action est un littéral de la page, jamais une donnée ; ses arguments, des chaînes ou des
+  nombres ; une action qui lit une valeur (`_target.value`) vérifie que l'élément est le sien (`<select>`).
+- **Ce que le test vérifie** : `tests/unit/test_console_escaping.py` échoue sur ce que le lecteur
+  (`python scripts/console_escaping.py` : où, d'où) voit — une valeur non échappée pour sa place dans
+  le `${…}` d'un gabarit HTML, une valeur donnée à `innerHTML` ou une concaténation, un gestionnaire ou
+  un script en ligne, une URL `javascript:`, `srcdoc`, et les API qui écrivent ailleurs
+  (`document.write`, `setAttribute`, `.href =`, `eval`…). Un code qu'il ne sait pas lire lui échappe :
+  le relire reste nécessaire ([docs/design/console.md](docs/design/console.md), « Ce qui vient du dehors »).
 
 ## Protocole collab
 

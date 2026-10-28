@@ -150,9 +150,11 @@ _PAGES = {"/": "overview.html", "/glorfindel": "glorfindel.html", "/config": "gl
 
 # Defence in depth for pages that show what other hosts wrote (manifests from Orodruin): never
 # framed by another page (clickjacking on Approve & execute), never talking to another origin,
-# no <base>, forms to this origin only (the token page). No script-src: the Glorfindel page's
-# inline handlers would break (#222).
-_CSP = "frame-ancestors 'none'; connect-src 'self'; base-uri 'none'; form-action 'self'"
+# no <base>, forms to this origin only (the token page) (#222). Scripts from this origin only, as
+# files: no inline script, no on… handler, no javascript: URL, no eval — what an injection would
+# write, refused even if escaping missed it (#257); no plugin either.
+_CSP = ("script-src 'self'; object-src 'none'; frame-ancestors 'none'; connect-src 'self'; "
+        "base-uri 'none'; form-action 'self'")
 
 
 @app.middleware("http")

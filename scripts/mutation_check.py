@@ -2640,7 +2640,7 @@ MUTANTS += [
 ]
 TESTS.update({"M1003": "tests/unit/test_host_cd.py", "M1004": "tests/unit/test_host_cd.py"})
 # H1 after its second review (28/10): two guards of a deployment on the host. M1050–M1059 given
-# by the General session; M1052–M1059 stay free.
+# by the General session; M1053–M1059 stay free.
 MUTANTS += [
     ("M1050", "a switch cut by a reboot never taken up: a sick release stays, unsaid (H1, second review)", CD,
      "        if cut:\n", "        if False:\n"),
@@ -2648,6 +2648,11 @@ MUTANTS += [
      "    if seen.get(tag, commit) != commit:\n", "    if False:\n"),
 ]
 TESTS.update({"M1050": "tests/unit/test_host_cd.py", "M1051": "tests/unit/test_host_cd.py"})
+MUTANTS += [
+    ("M1052", "a switch interrupted again and again tried forever, never said (H1, third review)", CD,
+     "        twice = counts[tag] >= 2\n", "        twice = False\n"),
+]
+TESTS["M1052"] = "tests/unit/test_host_cd.py"
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

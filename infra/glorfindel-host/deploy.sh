@@ -89,8 +89,13 @@ checkout() {
   fi
   pair=$(resolve "$want")
   # The image was built from one commit (H1): a tag rewritten since names another — its compose,
-  # its rules, its catalogue beside the old image. Refused before anything moves.
-  [ -z "$expect" ] || [ "${pair#* }" = "$expect" ] || die "« $want » désigne maintenant ${pair#* }, son image a été construite depuis $expect (tag réécrit) : rien n'a bougé"
+  # its rules, its catalogue beside the old image. The image's own commit is checked out
+  # instead, said; refused if the VM does not have it.
+  if [ -n "$expect" ] && [ "${pair#* }" != "$expect" ]; then
+    git cat-file -e "$expect^{commit}" 2>/dev/null || die "« $want » désigne maintenant ${pair#* }, son image a été construite depuis $expect, absent de la VM (tag réécrit) : rien n'a bougé"
+    echo "⚠ « $want » désigne maintenant ${pair#* } (tag réécrit) : le commit de son image, $expect, est extrait" >&2
+    pair="${pair% *} $expect"
+  fi
   # A tracked file changed on the VM would ride along into the image: refused. The detection
   # rules too (P1): the containers no longer write them (mounted read-only) — approved rules
   # live in the client's layer, ~/.glorfindel/client_rules.yaml, which no checkout touches.

@@ -310,7 +310,7 @@ d'exercice non marqués (B2), qui n'ont rien à faire dans une observation.
 
 0. **Un passage interrompu après sa bascule** (redémarrage de la VM, délai de systemd) est repris d'abord. La bascule est inscrite avant d'avoir lieu, et le passage suivant regarde ce qui tourne :
    - la watch est sur la release : la santé, puis la release est gardée ou c'est le retour arrière ;
-   - elle est encore sur la version d'avant (coupé avant que les conteneurs basculent) : H0 est remis d'aplomb sur elle, et la bascule est dite « interrompue », pas malade ; elle est retentée au passage suivant ;
+   - elle est encore sur la version d'avant, ou absente (coupé avant ou pendant le `compose up`) : H0 est remis d'aplomb sur la version d'avant, et la bascule est dite « interrompue », pas malade ; elle est retentée au passage suivant. Interrompue une deuxième fois, elle est refusée, avec ta mention ;
    - elle tourne sur autre chose (redéployé à la main entre-temps) : le CD n'y touche pas.
    `make glorfindel-host-cd-retry` garde une bascule interrompue.
 1. **La dernière release**, sur l'API publique (les brouillons et les pré-versions n'y figurent pas). Rien à faire si elle tourne déjà sur les trois conteneurs, ou si elle a déjà échoué ou été refusée. Un tag déjà vu sur un autre commit est refusé : un tag publié ne se réécrit pas.
@@ -323,7 +323,7 @@ d'exercice non marqués (B2), qui n'ont rien à faire dans une observation.
    - la watch, le bot et la console s'importent ;
    - la config que compose monte (`EREGION_CONFIG` du `.env`, sinon `glorfindel-config.yaml`) passe la lecture stricte d'A3 ;
    - `docker compose config` accepte le fichier de la release avec le `.env` de H0.
-6. **La bascule** (`deploy.sh --activate`). Avant, l'image qui tourne doit être étiquetée par sa référence, sinon c'est un refus : pas de bascule sans retour possible. `--activate` tolère un `git fetch` en échec, pour que le retour arrière ne dépende pas du réseau. Il refuse un tag qui désigne un autre commit que celui dont l'image a été construite (tag réécrit) : jamais le compose ou les règles d'un commit avec l'image d'un autre. Le checkout est détaché, et refusé si un fichier suivi a été modifié sur la VM. Puis le retag et les trois services relancés.
+6. **La bascule** (`deploy.sh --activate`). Avant, l'image qui tourne doit être étiquetée par sa référence, sinon c'est un refus : pas de bascule sans retour possible. `--activate` tolère un `git fetch` en échec, pour que le retour arrière ne dépende pas du réseau. Si un tag désigne un autre commit que celui dont l'image a été construite (tag réécrit), il extrait le commit de l'image et le dit : jamais le compose ou les règles d'un commit avec l'image d'un autre. Si la VM n'a pas ce commit, il refuse. Le checkout est détaché, et refusé si un fichier suivi a été modifié sur la VM. Puis le retag et les trois services relancés.
 7. **La santé, pendant 3 minutes :**
    - les trois conteneurs tournent, sans redémarrage, et sur l'image du tag ;
    - `~/.glorfindel/watch_heartbeat` a été réécrit après la bascule ;

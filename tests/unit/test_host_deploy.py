@@ -452,17 +452,22 @@ def test_activate_checks_out_retags_and_starts_without_building(repo, tmp_path):
     assert repo.head() == c1 and repo.detached()
 
 
-def test_activate_refuses_a_tag_rewritten_since_its_image_was_built(repo, tmp_path):
+def test_activate_checks_out_its_image_s_own_commit_when_the_tag_was_rewritten(repo, tmp_path):
     """The image of v0.2.0 was built from c2 (the tag pointed there then): checking out c1
-    would run c2's image beside c1's compose and rules. Refused, nothing moves."""
-    before = repo.head()
-    env, log = _with_docker(repo, tmp_path, FAKE_IMAGE_REV=repo.commits[1])
+    would run c2's image beside c1's compose and rules. c2 is checked out, and said; a commit
+    the VM does not have is refused, nothing moves."""
+    c1, c2 = repo.commits[:2]
+    env, log = _with_docker(repo, tmp_path, FAKE_IMAGE_REV="f" * 40)
     res = repo.deploy("--activate", "v0.2.0", env=env)
-    assert res.returncode != 0 and "tag réécrit" in res.stderr
-    assert repo.head() == before and not repo.detached()
-    assert not any(c.startswith(("tag", "compose")) for c in log.read_text().splitlines())
-    env, log = _with_docker(repo, tmp_path, FAKE_IMAGE_REV=repo.commits[0])     # the same commit: fine
-    assert repo.deploy("--activate", "v0.2.0", env=env).returncode == 0
+    assert res.returncode != 0 and "absent de la VM" in res.stderr
+    assert not repo.detached() and not any(c.startswith(("tag", "compose")) for c in log.read_text().splitlines())
+    env, log = _with_docker(repo, tmp_path, FAKE_IMAGE_REV=c2)
+    res = repo.deploy("--activate", "v0.2.0", env=env)
+    assert res.returncode == 0, res.stderr
+    assert "tag réécrit" in res.stderr and repo.head() == c2 and repo.detached()
+    env, log = _with_docker(repo, tmp_path, FAKE_IMAGE_REV=c1)                  # the same commit: silent
+    res = repo.deploy("--activate", "v0.2.0", env=env)
+    assert res.returncode == 0 and "réécrit" not in res.stderr and repo.head() == c1
 
 
 def test_activate_without_its_image_moves_nothing(repo, tmp_path):

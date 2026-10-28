@@ -683,3 +683,34 @@ def test_retry_keeps_a_cut_switch(h0):
     (h0.cd / "state.json").write_text(json.dumps(st))
     res = h0.run("retry")
     assert "reprise" in res.stdout and h0.outcome("v0.3.9") is None
+
+
+# ── after the third review of 28/10 ────────────────────────────────────────────────
+
+def test_a_watch_gone_after_a_cut_compose_is_put_back_not_superseded(h0):
+    """1: cut during `compose up` — the old watch removed, the new one not created yet. Not a
+    deployment by hand: H0 put back on v0.3.1, Glorfindel running again."""
+    _cut_switch(h0)
+    st = h0.docker()
+    del st["containers"]["eregion-watch"]
+    h0.state.write_text(json.dumps(st))
+    res = h0.run()
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert h0.outcome("v0.4.0") == "interrupted"
+    assert h0.running() == {"v0.3.1"} and "eregion-watch" in h0.docker()["containers"]
+
+
+def test_a_switch_interrupted_twice_is_refused_and_said(h0):
+    """2: a switch always cut at the same place is not tried forever without a word."""
+    _cut_switch(h0)
+    assert h0.run().returncode == 0 and h0.outcome("v0.4.0") == "interrupted"
+    state = json.loads((h0.cd / "state.json").read_text())
+    state["outcomes"]["v0.4.0"].update(result="switching", **{"from": "v0.3.1"})
+    (h0.cd / "state.json").write_text(json.dumps(state))
+    assert h0.run().returncode == 1 and h0.outcome("v0.4.0") == "refused"
+    (alert,) = _alerts(h0)
+    assert "interrompue deux fois" in alert["embeds"][0]["title"]
+    h0.log.write_text("")
+    assert h0.run().returncode == 0 and not any(c.startswith("build") for c in h0.calls())
+    res = h0.run("retry")
+    assert res.returncode == 0 and h0.outcome("v0.4.0") == "deployed"

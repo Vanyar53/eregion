@@ -469,13 +469,15 @@ def conclude(state: dict, tag: str, dep_ref: str, why: str, url: str, how: str) 
 def resume(state: dict, tag: str, cut: dict) -> int:
     """A pass cut after its switch (a reboot, a timeout), read against what runs now:
     - the watch on the release: its health, then kept or back;
-    - still on what ran (cut before the containers moved): H0 put back in one piece, the
-      switch « interrupted » — never called sick, and tried again by the next pass;
+    - still on what ran, or gone (cut before, or during, the containers' move): H0 put back in
+      one piece, the switch « interrupted » — never called sick, tried again by the next pass;
+      cut a second time, refused and said with the mention (a switch that always stops at the
+      same place is not tried forever);
     - on something else (deployed by hand meanwhile): « superseded », nothing touched."""
     dep_ref, url = str(cut.get("from") or ""), str(cut.get("url") or "")
     watch = versions().get(CONTAINERS[0], "")
     print(f"reprise d'un passage interrompu : {tag} (avant : {dep_ref or '?'}, la watch : {watch or '?'})")
-    if watch not in (tag, dep_ref):
+    if watch and watch not in (tag, dep_ref):     # a watch gone is a cut compose, not a hand
         state["outcomes"][tag] = {"result": "superseded", "at": int(time.time()),
                                   "why": f"H0 redéployé entre-temps : la watch tourne sur {watch or '?'}"}
         save_state(state)
@@ -484,11 +486,19 @@ def resume(state: dict, tag: str, cut: dict) -> int:
         return 0
     if watch != tag:
         back = rollback(dep_ref)        # the checkout may have moved, a container may have: all on dep_ref
-        state["outcomes"][tag] = {"result": "interrupted", "at": int(time.time()),
-                                  "why": "coupée avant que les conteneurs basculent"}
+        counts = state.setdefault("interrupts", {})
+        counts[tag] = counts.get(tag, 0) + 1
+        twice = counts[tag] >= 2
+        why = "bascule interrompue deux fois" if twice else "coupée avant que les conteneurs basculent"
+        state["outcomes"][tag] = {"result": "refused" if twice else "interrupted", "at": int(time.time()), "why": why}
         save_state(state)
         if back:
             say(f"🔥 Bascule vers {tag} interrompue, et H0 n'a pas pu être remis sur {dep_ref}", back,
+                color=nd.RED, alert=True, url=url)
+            return 1
+        if twice:
+            say(f"⛔ {tag} refusée : sa bascule a été interrompue deux fois", f"H0 est sur {dep_ref}. Regarder "
+                "pourquoi (journalctl -u eregion-cd, make glorfindel-host-cd-status), puis make glorfindel-host-cd-retry",
                 color=nd.RED, alert=True, url=url)
             return 1
         say(f"⏸️ Bascule vers {tag} interrompue avant d'avoir eu lieu", f"H0 est sur {dep_ref} ; le CD la "
@@ -673,6 +683,7 @@ def main(argv: list[str]) -> int:
             state["outcomes"] = {t: o for t, o in state["outcomes"].items() if o.get("result") == "switching"}
             state["said"].clear()
             state.pop("waits", None)
+            state.pop("interrupts", None)
             save_state(state)
         try:
             return run_pass(check=mode == "check")

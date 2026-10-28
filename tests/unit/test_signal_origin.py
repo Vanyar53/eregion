@@ -154,7 +154,7 @@ def _run_watch(tmp_path, monkeypatch, lines, expect):
             responded.append(data)
             return {"action": "none", "escalate": False, "confidence": 0.0, "outcome": {}}
 
-    def _resolve(data):
+    def _resolve(data, ip_owners=None):
         polled.append(data)
         return {**data, "event": "detection"}
 

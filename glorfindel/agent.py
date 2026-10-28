@@ -267,8 +267,8 @@ def load_context(
     An identity detection (Entra ID, C2) names no VM: it never opens nor feeds an incident,
     and is given no past cycle.
 
-    The past cycles of a real signal are real ones only (SEC4a, V-12): never an exercise's,
-    nor one of unknown source. An exercise is given every cycle."""
+    The past cycles are real ones only, for every signal, an exercise's too (SEC4a, V-12):
+    never an exercise's cycle, nor one of unknown source."""
     from dataclasses import asdict
 
     signal = state["signal"]
@@ -280,10 +280,8 @@ def load_context(
         inc = incidents.get_or_create(resource_id=signal.get("resource_id", ""),
                                       ttp=signal.get("ttp", ""))
         return {**state, "past_cycles": [], "incident": asdict(inc)}
-    # SEC4a (V-12): a real signal — or one whose source is unknown — is given real cycles
-    # only; an exercise, every cycle.
-    exercise = _cycle_source(signal)[0] == "exercise"
-    past = memory.retrieve_similar(state["signal"], n=3, exercise=exercise)
+    # SEC4a (V-12): real cycles only, for every signal (memory.retrieve_similar).
+    past = memory.retrieve_similar(state["signal"], n=3)
     inc = incidents.get_or_create(
         resource_id=signal.get("resource_id", ""),
         ttp=signal.get("ttp", ""),
@@ -310,24 +308,32 @@ def _find_rule_for_ttp(ttp: str, glorfindel_cfg=None):
     return None
 
 
-def _row_names_vm(row, resource_id: str) -> bool | None:
-    """Does this detection row name this VM? True/False when it names a VM — its
-    `_ResourceId` (a VM's, or one of its sub-resources), else its `Computer` (host name,
-    domain dropped) — None when it names none. The RulePoller's reading (`_route`)."""
-    from glorfindel.detection_rules import _vm_id_of
-    if not isinstance(row, dict):
-        return None
-    rid = row.get("_ResourceId") or row.get("ResourceId")
-    if isinstance(rid, str) and "/microsoft.compute/virtualmachines/" in rid.lower():
-        return bool(resource_id) and _vm_id_of(rid) == _vm_id_of(resource_id)
-    computer = row.get("Computer")
-    if isinstance(computer, str) and computer.strip():
-        name = (resource_id or "").rstrip("/").split("/")[-1].lower()
-        return bool(name) and computer.strip().split(".")[0].lower() == name
-    return None
+def _row_reader(resource_id: str, ip_owners=None):
+    """`row → True/False/None`: does a detection row name this VM — True, another VM —
+    False, none — None. The RulePoller's reading (`detection_rules.RowAttribution`), over
+    this VM and every VM whose private IP Azure lists (`ip_owners`): the host name of two
+    of them names neither, and a call made from this VM's private IP names it (T1041)."""
+    from glorfindel.detection_rules import RowAttribution
+    try:
+        owners = {ip: str(rid).lower() for ip, rid in ((ip_owners() if ip_owners else None) or {}).items()}
+    except Exception as exc:            # unreadable: an address names no VM (held, never a guess)
+        _console.print(f"  [yellow]IP privées des VMs illisibles ({_first_line(exc)}) — une ligne "
+                       "sans ressource ni nom d'hôte reste non attribuée[/yellow]")
+        owners = {}
+    known = {rid: (rid, rid.rstrip("/").split("/")[-1]) for rid in set(owners.values())}
+    if resource_id:
+        known[resource_id.lower()] = (resource_id, resource_id.rstrip("/").split("/")[-1])
+    index = RowAttribution(list(known.values()), lambda: owners)
+
+    def names(row) -> bool | None:
+        named, target = index.attribute(row)
+        if not named:
+            return None
+        return target is not None and bool(resource_id) and target[0].lower() == resource_id.lower()
+    return names
 
 
-def resolve_attack_started(signal: dict) -> dict:
+def resolve_attack_started(signal: dict, ip_owners=None) -> dict:
     """Poll the detection source for an attack_started signal and return the resolved signal.
 
     Detection config is resolved in priority order:
@@ -344,7 +350,10 @@ def resolve_attack_started(signal: dict) -> dict:
     refuses the line before, `respond` makes it a cycle_failed card). On a data-plane
     detection the poll keeps the rows naming that VM or none (never one naming another
     VM); a row that does not name it is pinned to the VM all the same, `unattributed`: the
-    attribution guard of `decide` holds the actions aimed at it.
+    attribution guard of `decide` holds the actions aimed at it. A row is read as the
+    RulePoller reads it (`detection_rules.RowAttribution`): its resource, its host name,
+    then the private IP that made the call — `ip_owners` (IP → VM id, the connector's
+    `private_ip_owners`; none: an address names no VM).
     """
     from glorfindel.detectors import detector_for, is_control_plane_source, is_identity_source
     from glorfindel.detection_rules import _reads_entra_table
@@ -399,11 +408,12 @@ def resolve_attack_started(signal: dict) -> dict:
     # are detection only, whatever row (AL1, C2): their rows name an NSG, a role, a user.
     data_plane = not (is_control_plane_source(source) or is_identity_source(source) or entra_query)
     vm_rid = signal.get("resource_id") or ""
+    names_vm = _row_reader(vm_rid, ip_owners) if data_plane else None
 
     _console.print(f"[cyan]->[/cyan] Polling {source} (timeout={int(timeout_s)}s)...")
     if data_plane:
         result = detector.poll_alert(query, since=attack_time, timeout_s=timeout_s,
-                                     match_row=lambda row: _row_names_vm(row, vm_rid) is not False)
+                                     match_row=lambda row: names_vm(row) is not False)
     else:
         result = detector.poll_alert(query, since=attack_time, timeout_s=timeout_s)
 
@@ -419,7 +429,7 @@ def resolve_attack_started(signal: dict) -> dict:
         context = dict(signal.get("context") or {})
         if entra_query:
             context["plane"] = "identity"
-        if data_plane and _row_names_vm(detected_row, vm_rid) is not True:
+        if data_plane and names_vm(detected_row) is not True:
             # The row names no VM (aggregated by address, a storage account): the line's
             # VM is a guess — the same hold as an unattributed row of the RulePoller.
             context.update(attribution="unattributed", attribution_from="attack_started",
@@ -444,7 +454,7 @@ def resolve_attack_started(signal: dict) -> dict:
     return {**signal, "event": "detection_timeout"}
 
 
-def poll_detection(state: GlorfindelState) -> GlorfindelState:
+def poll_detection(state: GlorfindelState, ip_owners=None) -> GlorfindelState:
     """Resolve attack_started → detection/timeout (respond mode).
 
     No-op for all other events. In watch mode this node is never reached for
@@ -454,7 +464,7 @@ def poll_detection(state: GlorfindelState) -> GlorfindelState:
     signal = state["signal"]
     if signal.get("event") != "attack_started":
         return state
-    return {**state, "signal": resolve_attack_started(signal)}
+    return {**state, "signal": resolve_attack_started(signal, ip_owners=ip_owners)}
 
 
 # ── Investigative queries (post-detection enrichment) ─────────────────────────
@@ -795,13 +805,14 @@ def _parse_decision(response) -> tuple[dict, object]:
         if isinstance(raw_conf, bool) or not isinstance(raw_conf, (int, float, str, type(None))):
             raise TypeError("confidence is not a number")
         confidence = float(raw_conf) if raw_conf is not None else 0.0
+        # A confidence is a number of [0, 1] (SEC4a): NaN, an infinity, 5.0, 85 or -0.4
+        # is no confidence at all — unknown, held by the confidence gate (G2 bounded them,
+        # and an out-of-range value then read 100 %).
+        if raw_conf is not None and not 0.0 <= confidence <= 1.0:
+            raise ValueError("confidence outside [0, 1]")
     except (TypeError, ValueError, OverflowError):
         raw_conf = None
         confidence = 0.0
-    # Bounded to [0, 1] (G2 review): a 5.0 read as 500 % in the cards and the memory. NaN
-    # is kept as it came: the confidence gate's `not >=` holds it.
-    if not math.isnan(confidence):
-        confidence = min(max(confidence, 0.0), 1.0)
     d["confidence"] = confidence
     # No action parsed → cannot act safely → force human review. `if not` rather than
     # setdefault: the schema asks for "" when there is nothing to say, and an explicit ""
@@ -1134,12 +1145,40 @@ def _uncontained_floor(d: dict, signal: dict) -> str:
     row = raw.get("detected_data") or raw.get("first_result_row") or {}
     if not has_recognized_indicator(row, signal.get("ttp", "")):
         return ""
+    # What a previous cycle already contains (the state files, the source of truth — never
+    # the past cycles): an isolated VM, or this source already blocked, is contained.
+    contained, note = _contained_now(signal)
+    if contained:
+        return ""
     return (
         f"Détection caractérisée ({signal.get('ttp') or '?'}) à laquelle seul un instantané a "
-        f"répondu (confiance {d['confidence']:.0%}) : rien n'est contenu, l'attaque peut "
-        "continuer. Juger s'il faut isoler la VM ou bloquer la source (plancher déterministe, "
-        "indépendant du modèle)."
+        f"répondu (confiance {d['confidence']:.0%}) : la VM n'est pas isolée"
+        f"{note}, l'attaque peut continuer. Juger s'il faut isoler la VM ou bloquer la source "
+        "(plancher déterministe, indépendant du modèle)."
     )
+
+
+def _contained_now(signal: dict) -> tuple[bool, str]:
+    """(contained, note) from the state files: the VM isolated, or the detection's source
+    already blocked on it → contained. Otherwise the note says what is blocked, or that the
+    state could not be read (then the card is written: never a guess toward silence)."""
+    from glorfindel.actions import _load_block_entries, _load_isolation_state
+    rid = signal.get("resource_id") or ""
+    try:
+        iso = _load_isolation_state(rid)
+        if iso is not None and not iso.get("partial"):
+            return True, ""
+        if iso is not None:
+            return False, " entièrement (isolation partielle)"
+        blocked = [str(e.get("ip") or "") for e in _load_block_entries(rid)]
+    except Exception as exc:
+        return False, f" (état d'isolation illisible : {_first_line(exc)[:120]})"
+    ip = _extract_suspicious_ip(signal)
+    if ip and ip in blocked:
+        return True, ""
+    others = [b for b in blocked if b]
+    return False, (f" (IP déjà bloquées sur cette VM, pas celle de cette détection : "
+                   f"{', '.join(others[:5])})" if others else ", aucune source n'est bloquée")
 
 
 def _apply_telemetry_guard(d: dict, gaps: list[str]) -> None:
@@ -2370,7 +2409,8 @@ def _build_graph(
     graph = StateGraph(GlorfindelState)
 
     graph.add_node("load_context", lambda s: load_context(s, memory=memory, incidents=incidents))
-    graph.add_node("poll_detection", poll_detection)
+    graph.add_node("poll_detection", lambda s: poll_detection(
+        s, ip_owners=getattr(connector, "private_ip_owners", None)))
     graph.add_node("investigate", investigate)
     graph.add_node("decide", lambda s: decide(
         s, model=model, autonomy=autonomy, autonomy_override=autonomy_override,

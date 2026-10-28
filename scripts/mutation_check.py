@@ -709,9 +709,10 @@ MUTANTS = [
      "glorfindel/agent.py",
      '        if raw_conf is None or not d["confidence"] >= threshold:\n',
      '        if raw_conf is None or d["confidence"] < threshold:\n'),
-    ("M173", "the model: a confidence outside [0, 1] is kept as sent — 500 % on the card (G2 review)",
+    ("M173", "the model: a confidence outside [0, 1] is kept as sent — 500 % on the card (G2 review, SEC4a)",
      "glorfindel/agent.py",
-     "    if not math.isnan(confidence):\n        confidence = min(max(confidence, 0.0), 1.0)\n", ""),
+     "        if raw_conf is not None and not 0.0 <= confidence <= 1.0:\n"
+     "            raise ValueError(\"confidence outside [0, 1]\")\n", ""),
     ("M174", "the telemetry: a card held by an earlier gate does not say the queries failed (G2 review)",
      "glorfindel/agent.py",
      '    if d["escalate"]:\n        d["escalation_reason"] = (\n',
@@ -3286,7 +3287,7 @@ TESTS.update({f"M{n}": "tests/unit/test_forged_logs.py" for n in range(1320, 132
 # model's answer read for its type, a snapshot alone leaves a card, real cycles only for a
 # real signal and no cycle overwriting another, the row of an attack_started naming its VM,
 # its moment bounded. Measured by tests/unit/test_unexpected_decision.py. Ranges
-# M1240–M1249, M1330–M1334.
+# M1240–M1249, M1330–M1339, M1360–M1364.
 SIG = "glorfindel/signal_origin.py"
 MEM = "glorfindel/memory.py"
 MUTANTS += [
@@ -3305,29 +3306,61 @@ MUTANTS += [
      "    uncontained = _uncontained_floor(d, signal)\n", '    uncontained = ""\n'),
     ("M1245", "the card of an uncontained detection never written (SEC4a, V-11)", AGT,
      "    _record_uncontained(state, source, exercise_run)\n", ""),
-    ("M1246", "a real signal given exercise cycles: the retrieval does not filter (SEC4a, V-12)", MEM,
-     '            **({} if exercise else {"where": {"source": "real"}}),\n', ""),
+    ("M1246", "a signal given exercise cycles: the retrieval does not filter (SEC4a, V-12)", MEM,
+     '            where={"source": "real"},\n', ""),
     ("M1247", "a cycle's id taken from its signal and upserted: a reused id overwrites a real cycle (SEC4a, V-12)",
      MEM, ('cycle_id = f"cycle-{uuid.uuid4().hex}"', "self._collection.add("),
      ("cycle_id = f\"{cycle['signal_id']}_{cycle['action']}\"", "self._collection.upsert(")),
-    ("M1248", "every signal read as an exercise: a real one given every cycle (SEC4a, V-12)", AGT,
-     '    exercise = _cycle_source(signal)[0] == "exercise"\n', "    exercise = True\n"),
+    ("M1248", "a replayed cycle fills every place of the retrieval (SEC4a, V-12)", MEM,
+     "            if key in seen:\n                continue\n", ""),
     ("M1249", "an attack_started's row naming no VM pinned to the line's VM, unheld (SEC4a)", AGT,
-     "        if data_plane and _row_names_vm(detected_row, vm_rid) is not True:\n", "        if False:\n"),
+     "        if data_plane and names_vm(detected_row) is not True:\n", "        if False:\n"),
     ("M1330", "an attack_started's poll takes a row naming another VM (SEC4a)", AGT,
-     "match_row=lambda row: _row_names_vm(row, vm_rid) is not False)", "match_row=None)"),
+     "match_row=lambda row: names_vm(row) is not False)", "match_row=None)"),
     ("M1331", "the runs/ channel admits an attack_started of any moment (SEC4a)", SIG,
      '        why = attack_time_refusal(clean["raw_signal"]["attack_time"])\n', '        why = ""\n'),
     ("M1332", "resolve_attack_started searches from any moment (SEC4a)", AGT,
      '        refused = attack_time_refusal(raw.get("attack_time"))\n', '        refused = ""\n'),
     ("M1333", "an attack_time in the future admitted (SEC4a)", SIG,
      "    if t - now > ATTACK_TIME_FUTURE_S:\n", "    if False:\n"),
-    ("M1334", "a row naming any VM by its resource id read as naming the line's (SEC4a)", AGT,
-     "        return bool(resource_id) and _vm_id_of(rid) == _vm_id_of(resource_id)\n",
-     "        return bool(resource_id)\n"),
+    ("M1334", "a row naming any known VM read as naming the line's (SEC4a)", AGT,
+     "        return target is not None and bool(resource_id) and target[0].lower() == resource_id.lower()\n",
+     "        return target is not None\n"),
+    # The second pass (review 5.5, Jonathan's decisions): the RulePoller's reading, the
+    # floor reading the state, the confidence's range.
+    ("M1335", "two VMs with one host name: the row guessed onto one of them (SEC4a)", DRU,
+     "            if len(hits) <= 1:\n                return True, next(iter(hits), None)\n",
+     "            if hits:\n                return True, next(iter(hits), None)\n"),
+    ("M1336", "an attack_started's row read without the private IPs: an exfiltration held (SEC4a)", AGT,
+     "    index = RowAttribution(list(known.values()), lambda: owners)\n",
+     "    index = RowAttribution(list(known.values()))\n"),
+    ("M1337", "respond's poll never given the connector's private IPs (SEC4a)", AGT,
+     '        s, ip_owners=getattr(connector, "private_ip_owners", None)))',
+     "        s, ip_owners=None))"),
+    ("M1338", "the floor ignores an isolation in place: « not isolated » on an isolated VM (SEC4a)", AGT,
+     '        if iso is not None and not iso.get("partial"):\n            return True, ""\n', ""),
+    ("M1339", "the floor ignores the source already blocked (SEC4a)", AGT,
+     '    if ip and ip in blocked:\n        return True, ""\n', ""),
+    ("M1360", "a partial isolation read as contained by the floor (SEC4a)", AGT,
+     '        if iso is not None and not iso.get("partial"):\n',
+     "        if iso is not None:\n"),
+    ("M1361", "a confidence above 1 read as sent (SEC4a)", AGT,
+     "        if raw_conf is not None and not 0.0 <= confidence <= 1.0:\n",
+     "        if raw_conf is not None and not 0.0 <= confidence:\n"),
+    ("M1362", "a VM's sub-resource not brought back to the VM (SEC4a)", DRU,
+     "            return True, self.by_rid.get(_vm_id_of(rid))\n",
+     "            return True, self.by_rid.get(rid.lower())\n"),
+    ("M1363", "a dotted host name never matches its VM (SEC4a)", DRU,
+     '            hits = self.by_name.get(comp.split(".")[0].lower(), set())\n',
+     "            hits = self.by_name.get(comp.lower(), set())\n"),
+    ("M1364", "the address that made the call never read: an exfiltration names no VM (SEC4a)", DRU,
+     "        owner = (self._owners() or {}).get(ip) if ip else None\n",
+     "        owner = None\n"),
 ]
 TESTS.update({mid: "tests/unit/test_unexpected_decision.py"
-              for mid in [f"M{n}" for n in range(1240, 1250)] + [f"M{n}" for n in range(1330, 1335)]})
+              for mid in [f"M{n}" for n in range(1240, 1250)] + [f"M{n}" for n in range(1330, 1340)]
+              + [f"M{n}" for n in range(1360, 1365)]})
+TESTS["M1361"] = "tests/unit/test_dependency_failures.py"
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

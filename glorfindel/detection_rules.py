@@ -1009,6 +1009,49 @@ def _caller_ip(row: dict) -> str:
     return ""
 
 
+class RowAttribution:
+    """Which VM a detection row is about — the one reading of Glorfindel (the RulePoller's
+    routing, and an attack_started's row, SEC4a). Over `targets` (resource_id, name):
+
+      1. the resource it names, `_ResourceId` (or `ResourceId`) of a VM — a sub-resource
+         (an extension, a Run Command, a role on the VM) brought back to its VM;
+      2. else its `Computer`, cut at the first dot — unless two targets carry that host
+         name (clones in two resource groups): the name can't tell which, never a guess;
+      3. else the address that made the call (`CallerIpAddress`, a storage call made FROM
+         a VM — T1041), when it is a private IP of exactly one VM (`owners()`: IP → id).
+
+    `attribute(row)` → (named, target): named False when the row names no VM; target None
+    when the VM it names is not among the targets."""
+
+    def __init__(self, targets: list[tuple[str, str]], owners: Callable[[], dict] | None = None):
+        self._owners = owners or (lambda: {})
+        self.by_rid = {rid.lower(): (rid, name) for rid, name in targets}
+        self.by_name: dict[str, set] = {}
+        for rid, name in targets:
+            for n in (name, rid.rstrip("/").split("/")[-1]):
+                if n:
+                    self.by_name.setdefault(n.split(".")[0].lower(), set()).add((rid, name))
+
+    def attribute(self, row: dict) -> tuple[bool, tuple | None]:
+        if not isinstance(row, dict):
+            return False, None
+        rid = row.get("_ResourceId") or row.get("ResourceId")
+        if isinstance(rid, str) and "/microsoft.compute/virtualmachines/" in rid.lower():
+            return True, self.by_rid.get(_vm_id_of(rid))
+        comp = row.get("Computer")
+        if isinstance(comp, str) and comp:
+            hits = self.by_name.get(comp.split(".")[0].lower(), set())
+            # Two watched VMs with this host name (clones in two resource
+            # groups): the name can't tell which — never a guess.
+            if len(hits) <= 1:
+                return True, next(iter(hits), None)
+        ip = _caller_ip(row)
+        owner = (self._owners() or {}).get(ip) if ip else None
+        if owner:
+            return True, self.by_rid.get(str(owner).lower())
+        return False, None
+
+
 class RulePoller:
     """Polls detection rules continuously and dispatches detection signals.
 
@@ -1148,32 +1191,11 @@ class RulePoller:
                targets: list[tuple[str, str]]) -> dict[str, tuple]:
         """target key → ((resource_id, name) | None, rows). A row naming a VM this rule
         doesn't watch (excluded, another backend's) is dropped; one that names none is
-        keyed "unattributed"."""
-        by_rid = {rid.lower(): (rid, name) for rid, name in targets}
-        by_name: dict[str, set] = {}
-        for rid, name in targets:
-            for n in (name, rid.rstrip("/").split("/")[-1]):
-                if n:
-                    by_name.setdefault(n.split(".")[0].lower(), set()).add((rid, name))
+        keyed "unattributed". Each row read by `attribute_row`."""
+        index = RowAttribution(targets, self._owners)
         out: dict[str, tuple] = {}
         for row in rows:
-            named, tgt = False, None
-            rid = row.get("_ResourceId") or row.get("ResourceId")
-            if isinstance(rid, str) and "/microsoft.compute/virtualmachines/" in rid.lower():
-                named, tgt = True, by_rid.get(_vm_id_of(rid))
-            if not named:
-                comp = row.get("Computer")
-                if isinstance(comp, str) and comp:
-                    hits = by_name.get(comp.split(".")[0].lower(), set())
-                    # Two watched VMs with this host name (clones in two resource
-                    # groups): the name can't tell which — never a guess.
-                    if len(hits) <= 1:
-                        named, tgt = True, next(iter(hits), None)
-            if not named:
-                ip = _caller_ip(row)
-                owner = self._owners().get(ip) if ip else None
-                if owner:
-                    named, tgt = True, by_rid.get(owner)
+            named, tgt = index.attribute(row)
             if named and tgt is None:
                 continue
             key = tgt[0].lower() if tgt else "unattributed"

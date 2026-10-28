@@ -90,7 +90,7 @@ class FakeMemory:
     def __init__(self, path=None) -> None:
         self.stored: list[dict] = []
 
-    def retrieve_similar(self, signal, n=3, *, exercise=False):
+    def retrieve_similar(self, signal, n=3):
         return []
 
     def store(self, cycle):
@@ -502,9 +502,8 @@ def test_a_valid_or_unset_threshold_reads_as_written(monkeypatch, raw, expected)
 
 
 def test_a_nan_confidence_from_the_model_is_held(notified):
-    """`_parse_decision` takes the model's NaN as it comes (JSON `NaN` parses): the gate
-    reads `not confidence >= threshold`, which holds it — `confidence < threshold` was
-    never true for a NaN and let the isolation through."""
+    """A NaN from the model (JSON `NaN` parses) is no confidence (SEC4a): unknown, held by
+    the confidence gate."""
     conn = Recorder()
     final = _respond(_agent(conn, autonomy=AutonomyConfig(default="non_disruptive")),
                      _ransomware(), llm=_llm("isolate_vm", confidence=math.nan))
@@ -512,24 +511,43 @@ def test_a_nan_confidence_from_the_model_is_held(notified):
     assert final["held_by"] == "confidence"
 
 
-@pytest.mark.parametrize("raw, bounded", [(5.0, 1.0), (85, 1.0), (math.inf, 1.0),
-                                          (-0.4, 0.0), (-math.inf, 0.0), (0.42, 0.42)])
-def test_the_model_confidence_is_bounded_to_0_1(raw, bounded):
-    """A 5.0 read as 500 % on the card and in the memory; it is 100 % now, and a negative
-    one 0 %. What the model sees is unchanged: this is its answer, read after."""
+def test_the_confidence_gate_itself_holds_a_nan():
+    """In depth: the gate reads `not confidence >= threshold`, which holds a NaN that would
+    reach it — `confidence < threshold` is never true for one (G2 review)."""
+    from glorfindel.agent import _apply_confidence_gate
+    d = {"action": "isolate_vm", "escalate": False, "confidence": math.nan}
+    _apply_confidence_gate(d, math.nan, 0.7)
+    assert d["escalate"] is True and d["held_by"] == "confidence"
+
+
+@pytest.mark.parametrize("raw", [5.0, 85, math.inf, -0.4, -math.inf, 1.0000001, "1e999", 10**30])
+def test_a_confidence_outside_0_1_is_unknown_and_held(raw):
+    """A confidence is a number of [0, 1] (SEC4a). G2 bounded a 5.0 or an infinity to 100 %,
+    and the bounded value passed the gate: anything outside the range is unknown now, held
+    by the confidence gate. What the model sees is unchanged: this is its answer, read after."""
+    from glorfindel.agent import _apply_confidence_gate, _parse_decision
+    d, raw_conf = _parse_decision(_llm("isolate_vm", confidence=raw))
+    assert raw_conf is None and d["confidence"] == 0.0
+    _apply_confidence_gate(d, raw_conf, 0.7)
+    assert d["escalate"] is True and "unknown" in d["escalation_reason"]
+
+
+@pytest.mark.parametrize("raw", [0.0, 0.42, 1.0, "0.9"])
+def test_a_confidence_within_0_1_reads_as_sent(raw):
     from glorfindel.agent import _parse_decision
-    d, _raw = _parse_decision(_llm("isolate_vm", confidence=raw))
-    assert d["confidence"] == bounded
+    d, raw_conf = _parse_decision(_llm("isolate_vm", confidence=raw))
+    assert raw_conf is not None and d["confidence"] == float(raw)
 
 
-def test_a_bounded_confidence_shows_as_100_percent_on_the_card(monkeypatch, notified):
-    """End to end: a 5.0 held by the mode reads 100 % on its card, not 500 %."""
+def test_a_confidence_outside_0_1_never_reads_500_percent_on_the_card(monkeypatch, notified):
+    """End to end: a 5.0 held by the mode reads as unknown on its card — never 500 %, and
+    no longer a bounded 100 % either."""
     conn = Recorder()
     _respond(_agent(conn, autonomy=AutonomyConfig(default="human_only")),
              _ransomware(), llm=_llm("isolate_vm", confidence=5.0))
     assert conn.writes() == []
     reason = _cards()[0]["reason"]
-    assert "100%" in reason and "500%" not in reason
+    assert "500%" not in reason and "100%" not in reason
 
 
 @pytest.mark.parametrize("raw", ["1", "true", "TRUE", "yes", "on", "y", "enabled", " 1 "])

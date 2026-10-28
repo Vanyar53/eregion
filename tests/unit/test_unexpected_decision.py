@@ -5,13 +5,15 @@
    never raises. A property (Hypothesis, arbitrary JSON) keeps it so.
 2. A characterized detection that a snapshot alone answers leaves a card for a human: the
    snapshot runs, nothing is contained, a human is asked.
-3. The memory: a real signal is given real cycles only; a cycle's identifier is drawn by
-   the memory, never taken from the signal — no cycle overwrites another.
-4. An attack_started from runs/: the row the rule finds must name the line's VM, or the
-   actions aimed at it are held; its moment is bounded, or the line is refused.
+3. The memory: every signal, an exercise too, is given real cycles only; a cycle's
+   identifier is drawn by the memory — no cycle overwrites another, a replayed one is
+   retrieved once.
+4. An attack_started from runs/: the row the rule finds is read as the RulePoller reads it
+   and must name the line's VM, or the actions aimed at it are held; its moment is
+   bounded, or the line is refused.
 
-No Azure call, no model call (the model is patched). Mutants M1240–M1249, M1330–M1334
-(scripts/mutation_check.py) are measured here.
+No Azure call, no model call (the model is patched). Mutants M1240–M1249, M1330–M1339,
+M1360–M1364 (scripts/mutation_check.py) are measured here.
 """
 from __future__ import annotations
 
@@ -108,8 +110,7 @@ def _decide(signal: dict, resp, mode: str = "non_disruptive") -> dict:
 
 @pytest.mark.parametrize("action", [["isolate_vm"], 42, {"name": "isolate_vm"}, True, 0.5])
 def test_an_action_that_is_not_text_escalates_and_never_raises(action):
-    """`(action or "").strip()` raised an AttributeError on a list, a number, an object:
-    the cycle crashed where the docstring promised a quirky model could not crash it."""
+    """Only a text is an action: anything else is unreadable, and the cycle escalates."""
     d, _raw = agent._parse_decision(_decision(action=action))
     assert d["action"] == "" and d["escalate"] is True
     assert "illisible" in d["escalation_reason"]
@@ -119,7 +120,7 @@ def test_an_action_that_is_not_text_escalates_and_never_raises(action):
 
 @pytest.mark.parametrize("conf", [True, False, [0.9], {"value": 0.9}])
 def test_a_confidence_that_is_not_a_number_is_unknown_and_held(conf):
-    """A JSON `true` read as 1.0 passed the confidence gate: it is no number."""
+    """Only a number is a confidence (a boolean is none): unknown, held by the gate."""
     d, raw = agent._parse_decision(_decision(action="snapshot", confidence=conf))
     assert raw is None and d["confidence"] == 0.0
     final = _decide(_detection(), _decision(action="snapshot", confidence=conf))
@@ -128,8 +129,8 @@ def test_a_confidence_that_is_not_a_number_is_unknown_and_held(conf):
 
 
 def test_a_key_the_model_adds_never_reaches_the_gates():
-    """`held_by` is the gates' word: a model writing it chose its card's type (a
-    `control_plane_change`, never approvable, for an isolation it escalated itself)."""
+    """Only the schema's fields are kept from the answer: which gate held a decision is
+    the gates' to say, never the model's."""
     final = _decide(_detection(), _decision(escalate=True, escalation_reason="unsure",
                                             held_by="control_plane", autonomy_gate={"x": 1}))
     assert final["escalate"] is True and final["held_by"] == ""
@@ -201,8 +202,8 @@ def test_property_any_answer_is_a_decision_or_an_escalation_never_an_exception(a
 # ── 2. A snapshot alone leaves a card (V-11) ─────────────────────────────────────────────
 
 def test_a_characterized_detection_a_snapshot_alone_answers_leaves_a_card():
-    """The snapshot runs (autonomous, non-disruptive); nothing is contained, and the cycle
-    used to end with no card. Now one says so — no action on it: nothing to approve."""
+    """The snapshot runs (autonomous, non-disruptive) and a card asks a human whether to
+    contain — no action on it: nothing to approve in one click."""
     conn = Recorder()
     agent_ = _agent(conn, autonomy=AutonomyConfig(default="non_disruptive"))
     with patch("litellm.completion", return_value=_decision(action="snapshot")), \
@@ -229,6 +230,26 @@ def test_the_floor_holds_whatever_the_mode_of_the_snapshot_and_only_where_it_sho
                        _decision(action="snapshot"))["uncontained"]
 
 
+def test_no_floor_when_a_previous_cycle_already_contains(monkeypatch):
+    """A new trigger on a VM already isolated, or from a source already blocked on it: the
+    snapshot answers a contained incident — no card saying nothing is contained. Read from
+    the state files, never from the past cycles."""
+    import glorfindel.actions as actions
+    det = _detection({"Computer": "vm-s4", "SourceIP": "203.0.113.7", "FailedAttempts": 40},
+                     ttp="T1110.001")
+    monkeypatch.setattr(actions, "_load_isolation_state", lambda rid: {"resource_id": rid})
+    monkeypatch.setattr(actions, "_load_block_entries", lambda rid: [])
+    assert not _decide(_detection(), _decision(action="snapshot"))["uncontained"]
+    monkeypatch.setattr(actions, "_load_isolation_state", lambda rid: {"partial": True})
+    assert "partielle" in _decide(_detection(), _decision(action="snapshot"))["uncontained"]
+    monkeypatch.setattr(actions, "_load_isolation_state", lambda rid: None)
+    monkeypatch.setattr(actions, "_load_block_entries", lambda rid: [{"ip": "203.0.113.7"}])
+    assert not _decide(det, _decision(action="snapshot"))["uncontained"]
+    monkeypatch.setattr(actions, "_load_block_entries", lambda rid: [{"ip": "198.51.100.9"}])
+    reason = _decide(det, _decision(action="snapshot"))["uncontained"]
+    assert "198.51.100.9" in reason and "pas isolée" in reason
+
+
 def test_a_snapshot_that_failed_has_its_own_card_only():
     conn = Recorder(outage=True)
     agent_ = _agent(conn, autonomy=AutonomyConfig(default="non_disruptive"))
@@ -246,38 +267,51 @@ def _cycle(source: str, reasoning: str, signal_id: str = "sig-1", action: str = 
             "action": action, "outcome": "x", "source": source, "confidence": 0.9}
 
 
-def test_a_real_signal_is_given_real_cycles_only(tmp_path):
+def test_every_signal_is_given_real_cycles_only(tmp_path):
     mem = CycleMemory(path=tmp_path / "cycles")
     for source in ("real", "exercise", "", "unknown"):
         mem.store(_cycle(source, f"cycle {source or 'legacy'}", signal_id=f"s-{source}"))
     sig = {"ttp": "T1486", "severity": "high", "resource_type": "vm", "event": "detection"}
     assert [c["source"] for c in mem.retrieve_similar(sig, n=4)] == ["real"]
-    assert sorted(c["source"] for c in mem.retrieve_similar(sig, n=4, exercise=True)) == \
-        ["", "exercise", "real", "unknown"]
 
 
-def test_load_context_reads_the_source_of_the_signal(tmp_path, monkeypatch):
+def test_an_exercise_is_given_no_exercise_cycle_nor_one_of_unknown_source(tmp_path, monkeypatch):
+    """What the model is shown never tells it whether the current signal is an exercise:
+    an exercise is given real cycles only, as a real signal is."""
     from glorfindel.incidents import IncidentRegistry
     mem = CycleMemory(path=tmp_path / "cycles")
     mem.store(_cycle("exercise", "an exercise", signal_id="s-x"))
+    mem.store(_cycle("", "before sources existed", signal_id="s-l"))
     mem.store(_cycle("real", "a real one", signal_id="s-r"))
     incidents = IncidentRegistry(path=tmp_path / "incidents.jsonl")
     real = agent.load_context(_state(_detection()), memory=mem, incidents=incidents)
-    assert [c["source"] for c in real["past_cycles"]] == ["real"]
     monkeypatch.setattr(agent, "_cycle_source", lambda s: ("exercise", "run-1"))
     drill = agent.load_context(_state(_detection()), memory=mem, incidents=incidents)
-    assert sorted(c["source"] for c in drill["past_cycles"]) == ["exercise", "real"]
+    assert [c["source"] for c in real["past_cycles"]] == ["real"]
+    assert [c["source"] for c in drill["past_cycles"]] == ["real"]
 
 
 def test_no_cycle_overwrites_another_whatever_its_signal_id(tmp_path):
-    """The identifier was `<signal_id>_<action>`, upserted: a cycle under a reused signal id
-    replaced the real one. Drawn by the memory now: both are kept."""
+    """The memory draws a cycle's identifier: two cycles under one signal id are two."""
     mem = CycleMemory(path=tmp_path / "cycles")
-    mem.store(_cycle("real", "the real precedent"))
-    mem.store(_cycle("real", "a cycle under the same signal id"))
+    mem.store(_cycle("real", "the real precedent", signal_id="sig-1"))
+    mem.store({**_cycle("real", "another cycle", signal_id="sig-1"), "run_id": "r2"})
     assert mem.count() == 2
     sig = {"ttp": "T1486", "severity": "high", "resource_type": "vm", "event": "detection"}
-    assert any("the real precedent" in c["summary"] for c in mem.retrieve_similar(sig, n=2))
+    found = mem.retrieve_similar(sig, n=2)
+    assert any("the real precedent" in c["summary"] for c in found) and len(found) == 2
+
+
+def test_a_replayed_cycle_is_retrieved_once(tmp_path):
+    """`respond` replayed on the same file (Annatar's signal ids are fixed) stores its
+    cycles again: one (signal_id, action, run_id) fills one place, never N."""
+    mem = CycleMemory(path=tmp_path / "cycles")
+    for _ in range(4):
+        mem.store(_cycle("real", "replayed", signal_id="20261028T100000Z_attack_started"))
+    mem.store(_cycle("real", "another", signal_id="s-2"))
+    sig = {"ttp": "T1486", "severity": "high", "resource_type": "vm", "event": "detection"}
+    found = mem.retrieve_similar(sig, n=3)
+    assert sorted(c["signal_id"] for c in found) == ["20261028T100000Z_attack_started", "s-2"]
 
 
 # ── 4. An attack_started: the row names the VM, the moment is bounded ───────────────────
@@ -292,6 +326,9 @@ class _Detector:
         self.polled += 1
         return next(((12, r) for r in self.rows if match_row is None or match_row(r)), None)
 
+    def run_query(self, query, timespan=None):      # the investigation: nothing to add
+        return []
+
 
 def _started(**raw) -> dict:
     return {"signal_id": "20261028T100000Z_attack_started", "event": "attack_started",
@@ -300,7 +337,7 @@ def _started(**raw) -> dict:
             "raw_signal": {"attack_time": time.time() - 90, "detection_timeout_s": 1, **raw}}
 
 
-def _resolve(signal: dict, rows) -> tuple[dict, _Detector]:
+def _resolve(signal: dict, rows, owners: dict | None = None) -> tuple[dict, _Detector]:
     det = _Detector(rows)
     rule = MagicMock(source="azure_monitor", query="Perf | where x", workspace_id="ws",
                      expected_latency_s=0)
@@ -308,7 +345,8 @@ def _resolve(signal: dict, rows) -> tuple[dict, _Detector]:
     with patch("glorfindel.agent._find_rule_for_ttp", return_value=rule), \
             patch("glorfindel.agent.load_glorfindel_config", return_value=None), \
             patch("glorfindel.detectors.detector_for", return_value=det):
-        return agent.resolve_attack_started(signal), det
+        return agent.resolve_attack_started(
+            signal, ip_owners=(lambda: owners) if owners is not None else None), det
 
 
 def test_a_row_naming_the_lines_vm_is_its_detection():
@@ -338,6 +376,65 @@ def test_a_row_naming_no_vm_holds_what_is_aimed_at_the_lines():
         assert final["escalate"] is True and final["held_by"] == "attribution"
         assert "attack_started" in final["escalation_reason"] and "vm-s4" in final["escalation_reason"]
     assert _decide(out, _decision(action="snapshot"))["escalate"] is False
+
+
+def test_an_exfiltration_row_is_attributed_by_the_private_ip_that_made_the_call():
+    """data-exfiltration-blob (T1041) names no VM: its caller's private IP does, as the
+    RulePoller reads it — the line's VM made the call, the isolation runs."""
+    row = {"CallerIpAddress": "10.0.0.4:52114", "AccountName": "stacct", "PutBlobCount": 40}
+    out, _ = _resolve(_started(), [row], owners={"10.0.0.4": RID, "10.0.0.5": OTHER})
+    assert out["event"] == "detection" and "attribution" not in out["context"]
+    assert _decide(out, _decision())["action"] == "isolate_vm"
+    # Another VM's address: never this VM's row. An address no VM holds: unattributed.
+    out, _ = _resolve(_started(), [row], owners={"10.0.0.4": OTHER})
+    assert out["event"] == "detection_timeout"
+    out, _ = _resolve(_started(), [row], owners={})
+    assert out["context"]["attribution"] == "unattributed"
+
+
+def test_a_dotted_host_name_names_its_vm_and_two_homonyms_name_neither():
+    out, _ = _resolve(_started(), [{"Computer": "vm-s4.internal.example", "MaxWrite": 9e7}])
+    assert out["event"] == "detection" and "attribution" not in out["context"]
+    # A sub-resource of the VM (an extension) names the VM.
+    out, _ = _resolve(_started(), [{"_ResourceId": RID.lower() + "/extensions/x", "MaxWrite": 9e7}])
+    assert out["event"] == "detection" and "attribution" not in out["context"]
+    twin = "/subscriptions/s/resourceGroups/rg2/providers/Microsoft.Compute/virtualMachines/vm-s4"
+    out, _ = _resolve(_started(), [{"Computer": "vm-s4", "MaxWrite": 9e7}],
+                      owners={"10.0.0.4": RID, "10.1.0.4": twin})
+    assert out["context"]["attribution"] == "unattributed"
+    held = _decide(out, _decision())
+    assert held["escalate"] is True and held["held_by"] == "attribution"
+
+
+def test_respond_reads_the_private_ips_through_its_connector():
+    """`glorfindel respond`: the graph hands the connector's private IP map to the poll —
+    an exfiltration made from the line's VM is contained there too."""
+    class WithIPs(Recorder):
+        def private_ip_owners(self):
+            return {"10.0.0.4": RID}
+
+    conn = WithIPs()
+    row = {"CallerIpAddress": "10.0.0.4:52114", "AccountName": "stacct", "PutBlobCount": 40}
+    det = _Detector([row])
+    rule = MagicMock(source="azure_monitor", query="StorageBlobLogs | where x", workspace_id="",
+                     expected_latency_s=0)
+    rule.name = "data-exfiltration-blob"
+    with patch("glorfindel.agent._find_rule_for_ttp", return_value=rule), \
+            patch("glorfindel.detectors.detector_for", return_value=det), \
+            patch("litellm.completion", return_value=_decision()):
+        final = _agent(conn, autonomy=AutonomyConfig(default="non_disruptive")).respond(
+            {**_started(), "ttp": "T1041"})
+    assert final["signal"]["event"] == "detection"
+    assert "attribution" not in final["signal"]["context"]
+    assert conn.writes() == ["isolate_vm"], final.get("escalation_reason")
+
+
+def test_the_same_reading_as_the_rulepoller():
+    """One way to attribute a row: the RulePoller's routing and an attack_started's."""
+    import inspect
+    from glorfindel import detection_rules
+    assert "RowAttribution" in inspect.getsource(detection_rules.RulePoller._route)
+    assert "RowAttribution" in inspect.getsource(agent._row_reader)
 
 
 def test_a_control_plane_attack_started_is_not_read_for_a_vm():

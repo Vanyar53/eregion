@@ -6,6 +6,9 @@ from pathlib import Path
 
 
 _DEFAULT_PATH = Path.home() / ".glorfindel" / "cycles"
+# How many more cycles the retrieval reads than it returns, so that the copies of a
+# replayed cycle, dropped, still leave N distinct ones.
+_DUPLICATE_SLACK = 4
 
 
 class CycleMemory:
@@ -30,9 +33,8 @@ class CycleMemory:
     def store(self, cycle: dict) -> None:
         """Persist a completed cycle, under an identifier of its own (SEC4a, V-12).
 
-        It was `<signal_id>_<action>`, upserted: a signal id comes from the signal — a line
-        could reuse a real cycle's, and its cycle replaced the real one. Drawn here, never
-        reused: a cycle is added, never overwritten."""
+        Drawn here, never taken from the signal: a cycle is added, never overwritten.
+        The copies of a replayed cycle are folded at retrieval (`retrieve_similar`)."""
         cycle_id = f"cycle-{uuid.uuid4().hex}"
         document = _cycle_to_text(cycle)
         self._collection.add(
@@ -56,23 +58,35 @@ class CycleMemory:
             }],
         )
 
-    def retrieve_similar(self, signal: dict, n: int = 3, *, exercise: bool = False) -> list[dict]:
-        """Return the N past cycles most similar to this signal.
+    def retrieve_similar(self, signal: dict, n: int = 3) -> list[dict]:
+        """Return the N past cycles most similar to this signal — real cycles only, for
+        every signal (SEC4a, V-12).
 
-        A real signal is given real cycles only (SEC4a, V-12): an exercise, a cycle of
-        unknown source (recorded before B2, or unreadable labelling) is never a precedent
-        for a real incident. `exercise`: the signal is one — every cycle, real ones too."""
+        An exercise's cycle, or one of unknown source (recorded before B2, labelling
+        unreadable), is never a precedent. Not for an exercise either: what the model is
+        shown must not tell it whether the current signal is one (the prompt says it is
+        not given). The cost: a bench's memory, made of exercises, shows nothing.
+
+        One cycle per (signal_id, action, run_id), the most similar: a `respond` replayed
+        on the same file stores its cycles again (the identifiers are drawn, never the
+        signal's), and the same cycle never fills the N places."""
         if self._collection.count() == 0:
             return []
         query_text = _signal_to_text(signal)
         results = self._collection.query(
             query_texts=[query_text],
-            n_results=min(n, self._collection.count()),
-            **({} if exercise else {"where": {"source": "real"}}),
+            n_results=min(n * _DUPLICATE_SLACK, self._collection.count()),
+            where={"source": "real"},
         )
-        cycles = []
+        cycles, seen = [], set()
         for doc, meta in zip(results["documents"][0], results["metadatas"][0]):
+            key = (meta.get("signal_id", ""), meta.get("action", ""), meta.get("run_id", ""))
+            if key in seen:
+                continue
+            seen.add(key)
             cycles.append({"summary": doc, **meta})
+            if len(cycles) == n:
+                break
         return cycles
 
     def count(self) -> int:

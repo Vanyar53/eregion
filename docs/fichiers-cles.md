@@ -275,7 +275,7 @@ infra/terraform/              → module Celebrimbor : infra de test Azure modul
                                 CI : job macOS (APFS insensible à la casse) ; `main` protégée, checks requis.
   blocks/<vm>--<h>.json       → IPs bloquées par VM (même clé)
   quarantine_alerts.json      → I1F : NSG de quarantaine → le changement déjà signalé (carte `quarantine_altered`) ;
-                                oublié quand le NSG est de nouveau entier, ne porte plus rien ou a disparu — un acquittement ne relève pas de carte
+                                oublié quand le NSG est de nouveau entier, ne porte plus rien ou a disparu (relu par son ID : 404, I1S) — un acquittement ne relève pas de carte
   orphan_alerts.json          → A3 : règle orpheline (NSG/règle) → sa carte `orphan_rule` ; une règle dite ne l'est pas de nouveau
                                 tant qu'elle reste ; oubliée (carte fermée) quand elle n'est plus orpheline ou a été retirée
   proposed_rules.jsonl        → règles de détection proposées (en attente d'approbation)

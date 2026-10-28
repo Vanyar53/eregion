@@ -4,6 +4,9 @@ Notable changes to Eregion. The format follows [Keep a Changelog](https://keepac
 
 ## [Unreleased]
 
+### Fixed
+- **A quarantine card no longer closes on its NSG's mere absence from the listing** (I1S, #231, 28/10, found by the third and fourth reviews of I1F). The reassertion closed a `quarantine_altered` card — and forgot its change in `quarantine_alerts.json` — as soon as its NSG was missing from the subscription's listing, while the NSG could still be altered and hold NICs: Glorfindel's role removed or expired (PIM) on its group, which ARM would leave out of a subscription-wide listing without an error (a hypothesis, to measure on the bench), our `managed-by` tag taken off as well as our rules, or a card of another subscription (`AZURE_SUBSCRIPTION_ID` changed with a shared `~/.glorfindel`). Silence until the rights came back. Now the NSG of a card, or of an acknowledged change, that the listing doesn't show is read again by its id (`read_quarantine`, a `get` for those alone — never every NSG at every pass): not found (404) closes it, any other error (403, 429…) keeps it, found is judged on its content **with or without our tag** (the card was raised on our NSG at that id; requiring its NICs to be named by our states would miss I1F's own case, a state lost), and an NSG of another subscription is never read here and keeps its card. The fake Azure can leave an NSG out of a listing without an error and refuse any call on it (`unreadable`, written as a hypothesis); the invariant machine draws it, and our tag taken off, after L2 held (`_out_of_sight`). Mutants M1020–M1026.
+
 ## [0.4.0] — 2026-10-27 — "the isolation path, held to its invariants"
 
 ### Added

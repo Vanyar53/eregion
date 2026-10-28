@@ -103,7 +103,7 @@ Les propriétés, vérifiées après chaque étape :
 | I11 | deux opérations à la fois finissent comme l'une après l'autre : l'état local dit ce qu'Azure a |
 | I12 | une VM d'un autre abonnement n'est jamais touchée, ni déclarée isolée |
 | L1 | un blocage dont les règles ont disparu est reposé ou signalé, même derrière la quarantaine |
-| L2 | un NSG de quarantaine que quelqu'un a modifié, et qui porte encore des cartes, est reposé ou signalé — l'état de ces cartes perdu compris (I1F) |
+| L2 | un NSG de quarantaine que quelqu'un a modifié, et qui porte encore des cartes, est reposé ou signalé — l'état de ces cartes perdu compris (I1F) ; signalé, il le reste quand il sort de la liste : rôle retiré sur son groupe, notre tag retiré (I1S) |
 | U1 | une règle laissée par une carte qui n'existe plus, et qui coupe une carte vivante, est signalée, puis retirée par le balayage — rien d'autre ne bouge ; en fin de séquence, chaque VM vivante revient à sa conception en entier (A3) |
 
 **Des oracles qui ne demandent rien au code.** Ce qu'une propriété juge vient du journal du test :
@@ -800,6 +800,39 @@ machine (une isolation disparue), son test unitaire le mesure.
 | M901 | une isolation qu'on n'a pas pu reposer marquée « alertée » avant sa carte | idem pour une isolation |
 | M902 | un blocage disparu en `human_only` marqué « alerté » avant sa carte | idem, sans tentative de repose |
 
+### Absent de la liste n'est pas disparu (I1S)
+
+Relevé par les troisième et quatrième relectures d'I1F (#231), pas par la machine : elle ne
+savait pas faire sortir un NSG de la liste sans le supprimer. Une carte `quarantine_altered`
+se fermait dès que son NSG manquait à la liste de l'abonnement — rôle retiré sur son groupe,
+notre tag retiré avec nos règles, carte d'un autre abonnement — alors qu'il était encore modifié
+et portait des cartes. Le NSG d'une carte absente de la liste est maintenant relu par son ID
+(`read_quarantine`) : seul un 404 la ferme.
+
+Le faux Azure apprend une **hypothèse**, pas une mesure : une liste à l'échelle de l'abonnement
+qu'ARM filtrerait selon les droits, sans erreur, et un refus (403) sur tout appel à ce NSG
+(`unreadable`). Le tag retiré est une édition du monde, comme les autres. La machine les tire
+dans la règle composée d'I1F (`_out_of_sight`), **après** que L2 a tenu sur ce NSG : rôle
+retiré, tag retiré, ou les deux, une ou deux passes, puis le rôle rendu et le tag remis — la
+suite de la séquence ne porte pas sur eux. L'oracle reste celui du test : L2 juge un NSG que le
+test a lui-même sorti de la vue (`out_of_sight`, son journal) comme s'il était tagué ; rien n'est
+lu des cartes ni de `quarantine_alerts.json` pour l'accorder. Mutants M1020–M1026 (28/10, 500
+séquences) : tous attrapés à chaque tour ; M1020, M1021, M1023 et M1026 aussi par la machine
+seule (3/3) et par les séquences figées (`test_a_said_quarantine_out_of_the_listing_stays_said`).
+M1022 (l'abonnement), M1024 (le coût) et M1025 (un acquittement d'un NSG supprimé) ne sont pas
+des propriétés du monde de la machine (un seul abonnement, pas de compte des appels, aucun
+acquittement) : `tests/unit/test_reassert.py`.
+
+| Mutant | Défaut réinjecté | Effet |
+|---|---|---|
+| M1020 | carte fermée sur la simple absence de la liste | NSG modifié, cartes dedans, rien de dit jusqu'au retour des droits |
+| M1021 | notre tag exigé à la relecture | tag retiré avec les règles : même silence |
+| M1022 | abonnement ignoré à la relecture | l'homonyme de cet abonnement (entier) ou un 404 ferme la carte de l'autre |
+| M1023 | relecture en échec (403, 429) lue comme « disparu » | carte fermée sur un NSG qu'on ne peut pas lire |
+| M1024 | chaque NSG de carte relu à chaque passe, listé ou non | un `get` par carte et par minute (coût, throttling) |
+| M1025 | un changement acquitté jamais relu | son NSG supprimé, l'acquittement fait taire le suivant au même ID |
+| M1026 | 403 lu comme 404 par le connecteur | carte fermée |
+
 ### Le journal d'activité, détection seule (AL1)
 
 Un faux `AzureActivity` (des lignes comme celles de la table, rendues par la requête du
@@ -1137,7 +1170,9 @@ Une séquence trouvée la nuit est rejouée en premier à chaque push jusqu'à s
 - **Couches au-dessus du NSG** : règles d'administration d'Azure Virtual Network Manager,
   routes, pare-feu. Elles peuvent contourner une isolation et ne sont pas encore lues.
 - **Hypothèses du faux Azure** non mesurées : le code d'erreur d'un NSG d'une autre région,
-  le refus de supprimer un NSG attaché, Run Command shell refusé sous Windows.
+  le refus de supprimer un NSG attaché, Run Command shell refusé sous Windows, et (I1S) une
+  liste des NSG de l'abonnement qui omet sans erreur un NSG que l'identité ne peut plus lire,
+  un `get` de ce NSG refusé (403).
 - **L'exemption d'une carte nue (I8F)** : elle vaut si le test a perdu l'état après la dernière
   fois qu'il a vu un état tenir la carte en quarantaine *pendant qu'elle était nue*. Un état qui
   l'a tenue après la perte, mais pas nue, puis que le code abandonne, laisse l'exemption à une

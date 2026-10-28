@@ -89,10 +89,9 @@ def test_the_cli_judges_and_reports():
 def test_the_api_judges_and_reports(monkeypatch):
     pytest.importorskip("fastapi")
     pytest.importorskip("httpx")
-    from fastapi.testclient import TestClient
-    import eregion_console.api as api
+    from .console_client import console
     monkeypatch.delenv("GLORFINDEL_WARROOM_TOKEN", raising=False)
-    client = TestClient(api.app)
+    client = console()
     esc = _card()
     assert client.post(f"/api/escalations/{esc}/verdict", json={"verdict": "right"}).json() == {
         "ok": True, "verdict": "right"}

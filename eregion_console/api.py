@@ -19,7 +19,8 @@ except ImportError as e:
         "The Eregion console requires extra dependencies: pip install eregion[console]"
     ) from e
 
-app = FastAPI(title="Eregion console", docs_url=None, redoc_url=None)
+# No schema, no docs pages: what the console's routes are is not served to whoever asks (SEC1).
+app = FastAPI(title="Eregion console", openapi_url=None, docs_url=None, redoc_url=None)
 
 
 class AmbiguousVM(Exception):
@@ -32,83 +33,252 @@ async def _ambiguous_vm(_request, exc: AmbiguousVM):
     return JSONResponse(status_code=409, content={"error": str(exc)})
 
 # The cookie keeps the War Room's name: it is invisible (HttpOnly), and renaming it would make
-# every open browser ask for the token again, for nothing (docs/design/console.md).
+# every open browser ask for the token again, for nothing (docs/design/console.md). Its value
+# is a session derived from the token, never the token itself (SEC1).
 _TOKEN_COOKIE = "glorfindel_warroom"
 TOKEN_ENV = "EREGION_CONSOLE_TOKEN"
 LEGACY_TOKEN_ENV = "GLORFINDEL_WARROOM_TOKEN"
+# The names, besides the loopback ones, under which this console may be reached (SEC1):
+# comma-separated, for an access through another name (a proxy, a host name of the network).
+HOSTS_ENV = "EREGION_CONSOLE_HOSTS"
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+# The token drawn at the first start without one (SEC1): the operator's own file, mode 600,
+# beside Glorfindel's state (bind-mounted by compose: the same file on the host).
+_TOKEN_FILE = Path.home() / ".glorfindel" / "console_token"
+_local_token: dict = {"value": ""}
+_SESSION_LABEL = b"eregion-console-session/v1"
+# Methods that change something: their requests must come from the console's own pages (or a
+# script with the token), carry a JSON object, and nothing else (SEC1).
+_CHANGES = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+_MAX_BODY = 64 * 1024
 
 
 def console_token() -> str:
-    """The console's token: EREGION_CONSOLE_TOKEN when it is not empty, else its former name.
-    Not empty, not merely set: docker compose passes `${VAR:-}`, so the new variable is always
-    there, empty on a host whose host.env only has the old one (H0) — read as "set", it would
-    drop the token there."""
+    """The token the deployment sets: EREGION_CONSOLE_TOKEN when it is not empty, else its
+    former name. Not empty, not merely set: docker compose passes `${VAR:-}`, so the new
+    variable is always there, empty on a host whose host.env only has the old one (H0) — read
+    as "set", it would drop the token there."""
     return os.environ.get(TOKEN_ENV, "") or os.environ.get(LEGACY_TOKEN_ENV, "")
 
 
+def _token() -> str:
+    """The token every request is checked against: the deployment's, else the one this host
+    drew (`ensure_token`). Empty only when neither could be had: every request is refused."""
+    return console_token() or _local_token["value"]
+
+
+def ensure_token() -> tuple[str, str]:
+    """The console's token and where it comes from: ``env`` (the deployment sets it — H0),
+    ``file`` (drawn at an earlier start, read from ``_TOKEN_FILE``) or ``new`` (drawn now and
+    written there, mode 600). There is no console without a token (SEC1): a local console
+    used to answer anyone, any page the operator opened included. OSError when the file can
+    be neither read nor written."""
+    token = console_token()
+    if token:
+        return token, "env"
+    path = _TOKEN_FILE
+    try:
+        kept = path.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        kept = ""
+    if kept:
+        if path.stat().st_mode & 0o077:
+            os.chmod(path, 0o600)
+        _local_token["value"] = kept
+        return kept, "file"
+    import secrets
+    token = secrets.token_urlsafe(32)
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(token + "\n")
+    os.chmod(path, 0o600)
+    _local_token["value"] = token
+    return token, "new"
+
+
+def _session(token: str) -> str:
+    """The cookie's value: derived from the token (HMAC), so the cookie never carries the token
+    — it opens the pages and nothing else (not a Bearer, not ?token=) — survives a restart,
+    and changes with the token."""
+    import hashlib
+    return hmac.new(token.encode(), _SESSION_LABEL, hashlib.sha256).hexdigest()
+
+
+def _host_name(netloc: str) -> str | None:
+    """The host name of a Host header (or of an entry of EREGION_CONSOLE_HOSTS), lowercased,
+    without its port; None when it is not a plain host[:port]."""
+    if not netloc or any(c in netloc for c in "/?#@\\ \t,"):
+        return None
+    from urllib.parse import urlsplit
+    try:
+        parts = urlsplit("//" + netloc)
+        parts.port                      # a port that is not a number raises
+    except ValueError:
+        return None
+    return parts.hostname or None
+
+
+def _allowed_host(host: str) -> bool:
+    """A loopback name, or one EREGION_CONSOLE_HOSTS lists — whatever the port: a tunnel or a
+    team's console publishes another port than the one the console listens on. The name is
+    what a rebinding page cannot choose; its own origin's port is checked by the Origin."""
+    name = _host_name(host)
+    if not name:
+        return False
+    extra = {_host_name(h.strip()) for h in os.environ.get(HOSTS_ENV, "").split(",") if h.strip()}
+    return name in _LOOPBACK_HOSTS or name in extra - {None}
+
+
+def _same_origin(origin: str, host: str) -> bool:
+    """The Origin of a page of this console: its scheme, and exactly the Host it was asked under."""
+    origin, host = origin.lower(), host.lower()
+    return origin in (f"http://{host}", f"https://{host}")
+
+
 class _TokenAuthMiddleware:
-    """Shared-token gate for every console route (pages, API, live feed).
+    """The console's boundary, for every route (pages, API, live feed).
 
     The console triggers real Azure actions (restore, release, approve & execute) and
     can switch an asset's autonomy mode. It used to listen on 0.0.0.0 with no
-    authentication: anyone reaching the port could do all of that.
+    authentication, then, on the loopback, to answer any page the operator's browser opened.
 
-    Active when the token is set (``console_token``, read per request, so tests and a
-    restart pick it up). Accepted proofs: the `glorfindel_warroom` cookie, an
-    `Authorization: Bearer <token>` header, or `?token=<token>` once — which sets the
-    cookie (HttpOnly, SameSite=Strict: a cross-site page can't ride on it) and
-    redirects to the same URL without the token. Pure ASGI so it also covers the
-    WebSocket feed, which HTTP middlewares don't see.
+    In order (SEC1): the Host is a loopback name or one EREGION_CONSOLE_HOSTS lists (403); a
+    request that changes something (POST, PUT, PATCH, DELETE, the WebSocket) never comes from
+    another origin (403); the token (`_token`: always one), as the `glorfindel_warroom` cookie
+    — a session derived from it — or `Authorization: Bearer <token>`, or `?token=<token>` once
+    on a GET, which sets the cookie (HttpOnly, SameSite=Strict, Secure over HTTPS) and
+    redirects to the same URL without the token (401 otherwise: a token page for a browser);
+    a browser's change carries its Origin (403); and a change carries a JSON object
+    (`Content-Type: application/json`, 415 / 400). Pure ASGI so it also covers the WebSocket
+    feed, which HTTP middlewares don't see.
     """
 
     def __init__(self, app):
         self.app = app
 
     async def __call__(self, scope, receive, send):
-        token = console_token()
-        if not token or scope["type"] not in ("http", "websocket"):
+        if scope["type"] not in ("http", "websocket"):
             await self.app(scope, receive, send)
             return
 
         from starlette.requests import HTTPConnection
         conn = HTTPConnection(scope)
+        ws = scope["type"] == "websocket"
+        changes = ws or scope.get("method", "GET") in _CHANGES
+        host = conn.headers.get("host", "")
+        origin = conn.headers.get("origin")
 
-        def _ok(candidate: str | None) -> bool:
-            return bool(candidate) and hmac.compare_digest(candidate, token)
+        if not _allowed_host(host):
+            await _refuse(scope, receive, send, 403,
+                          f"Eregion console: unknown host name — list it in {HOSTS_ENV}.")
+            return
+        if changes and origin is not None and not _same_origin(origin, host):
+            await _refuse(scope, receive, send, 403,
+                          "Eregion console: a change from another origin is refused.")
+            return
+
+        token = _token()
+        if not token:
+            await _refuse(scope, receive, send, 503,
+                          f"Eregion console: no token ({TOKEN_ENV}, or {_TOKEN_FILE} unreadable).")
+            return
+
+        def _ok(candidate: str | None, expected: str) -> bool:
+            return bool(candidate) and hmac.compare_digest(candidate.encode(), expected.encode())
 
         bearer = conn.headers.get("authorization", "")
         bearer = bearer[7:] if bearer.lower().startswith("bearer ") else ""
-        if _ok(conn.cookies.get(_TOKEN_COOKIE)) or _ok(bearer):
-            await self.app(scope, receive, send)
+        by_bearer = _ok(bearer, token)
+        by_cookie = _ok(conn.cookies.get(_TOKEN_COOKIE), _session(token))
+
+        if not (by_bearer or by_cookie):
+            if not ws and scope.get("method") in ("GET", "HEAD") and _ok(conn.query_params.get("token"), token):
+                from urllib.parse import urlencode
+                from starlette.responses import RedirectResponse
+                query = urlencode([(k, v) for k, v in conn.query_params.multi_items() if k != "token"])
+                # One leading slash: `//name` would send the browser to another host.
+                target = "/" + conn.url.path.lstrip("/") + (f"?{query}" if query else "")
+                resp = RedirectResponse(target, status_code=303)
+                resp.set_cookie(_TOKEN_COOKIE, _session(token), httponly=True, samesite="strict",
+                                secure=scope.get("scheme") == "https")
+                await resp(scope, receive, send)
+                return
+            if ws:
+                await _refuse(scope, receive, send, 401, "")
+                return
+            if "text/html" in conn.headers.get("accept", ""):
+                # A browser navigating here: a page that asks for the token (GET form →
+                # ?token=… → cookie + redirect above), not a raw JSON error.
+                from starlette.responses import HTMLResponse
+                await HTMLResponse(_TOKEN_PAGE, status_code=401)(scope, receive, send)
+                return
+            await _refuse(scope, receive, send, 401,
+                          f"Eregion console: open /?token=<{TOKEN_ENV}> once, or send "
+                          "Authorization: Bearer <token>.")
             return
 
-        if scope["type"] == "http" and _ok(conn.query_params.get("token")):
-            from urllib.parse import urlencode
-            from starlette.responses import RedirectResponse
-            query = urlencode([(k, v) for k, v in conn.query_params.multi_items() if k != "token"])
-            target = conn.url.path + (f"?{query}" if query else "")
-            resp = RedirectResponse(target, status_code=303)
-            resp.set_cookie(_TOKEN_COOKIE, token, httponly=True, samesite="strict")
-            await resp(scope, receive, send)
+        if changes and not by_bearer and origin is None:
+            # The cookie is a browser's, and a browser says where a change comes from.
+            await _refuse(scope, receive, send, 403,
+                          "Eregion console: a change without its origin is refused.")
             return
+        if changes and not ws:
+            receive = await _json_body(scope, receive, send)
+            if receive is None:
+                return
+        await self.app(scope, receive, send)
 
-        if scope["type"] == "websocket":
-            await receive()  # websocket.connect
-            await send({"type": "websocket.close", "code": 1008})
-            return
-        if "text/html" in conn.headers.get("accept", ""):
-            # A browser navigating here: a page that asks for the token (GET form →
-            # ?token=… → cookie + redirect above), not a raw JSON error.
-            from starlette.responses import HTMLResponse
-            resp = HTMLResponse(_TOKEN_PAGE, status_code=401)
-        else:
-            from starlette.responses import JSONResponse
-            resp = JSONResponse(
-                {"error": f"Eregion console: open /?token=<{TOKEN_ENV}> once, or send "
-                          "Authorization: Bearer <token>."},
-                status_code=401,
-            )
-        await resp(scope, receive, send)
+
+async def _refuse(scope, receive, send, status: int, error: str) -> None:
+    """A refusal: a JSON error, or, for the live feed, the WebSocket closed before it opens."""
+    if scope["type"] == "websocket":
+        await receive()  # websocket.connect
+        await send({"type": "websocket.close", "code": 1008})
+        return
+    from starlette.responses import JSONResponse
+    await JSONResponse({"error": error}, status_code=status)(scope, receive, send)
+
+
+async def _json_body(scope, receive, send):
+    """A change's body: a JSON object, `Content-Type: application/json`, at most _MAX_BODY.
+    Read whole, then handed to the route as it came; None once refused (sent)."""
+    from starlette.datastructures import Headers
+    media = Headers(scope=scope).get("content-type", "").split(";")[0].strip().lower()
+    if media != "application/json":
+        await _refuse(scope, receive, send, 415,
+                      "Eregion console: a change carries a JSON object (Content-Type: application/json).")
+        return None
+    chunks, size = [], 0
+    while True:
+        message = await receive()
+        if message["type"] == "http.disconnect":
+            return None
+        chunk = message.get("body", b"")
+        size += len(chunk)
+        if size > _MAX_BODY:
+            await _refuse(scope, receive, send, 413, "Eregion console: body too large.")
+            return None
+        chunks.append(chunk)
+        if not message.get("more_body"):
+            break
+    body = b"".join(chunks)
+    try:
+        parsed = json.loads(body) if body else None
+    except ValueError:
+        parsed = None
+    if not isinstance(parsed, dict):
+        await _refuse(scope, receive, send, 400, "Eregion console: a change carries a JSON object.")
+        return None
+    replayed = False
+
+    async def replay():
+        nonlocal replayed
+        if not replayed:
+            replayed = True
+            return {"type": "http.request", "body": body, "more_body": False}
+        return await receive()
+    return replay
 
 
 _TOKEN_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
@@ -130,8 +300,9 @@ _TOKEN_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 </style></head><body>
 <form method="get" action="">
   <h1>EREGION</h1>
-  <p>This console can trigger Azure actions. Enter the token set in
-     <code>EREGION_CONSOLE_TOKEN</code> on the machine that hosts it.</p>
+  <p>This console can trigger Azure actions. Enter its token: the one set in
+     <code>EREGION_CONSOLE_TOKEN</code> on the machine that hosts it, else the one the console
+     drew at its first start, in <code>~/.glorfindel/console_token</code> there.</p>
   <label for="token">Token</label>
   <input id="token" name="token" type="password" autocomplete="current-password" required autofocus>
   <button type="submit">Open</button>
@@ -152,20 +323,28 @@ _PAGES = {"/": "overview.html", "/glorfindel": "glorfindel.html", "/config": "gl
 # framed by another page (clickjacking on Approve & execute), never talking to another origin,
 # no <base>, forms to this origin only (the token page) (#222). Scripts from this origin only, as
 # files: no inline script, no on… handler, no javascript: URL, no eval — what an injection would
-# write, refused even if escaping missed it (#257); no plugin either.
-_CSP = ("script-src 'self'; object-src 'none'; frame-ancestors 'none'; connect-src 'self'; "
-        "base-uri 'none'; form-action 'self'")
+# write, refused even if escaping missed it (#257); no plugin either. Anything else from this
+# origin only (SEC1): no image, font or stylesheet from elsewhere — styles may be inline (the
+# pages' <style> and style="…", what the scripts write; a style runs no code).
+_CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; "
+        "object-src 'none'; frame-ancestors 'none'; connect-src 'self'; base-uri 'none'; "
+        "form-action 'self'")
+# On every response too (SEC1): a file is what its type says, and no address of the console
+# (a ?token= one included) leaves in a Referer.
+_HEADERS = {"Content-Security-Policy": _CSP, "X-Content-Type-Options": "nosniff",
+            "Referrer-Policy": "no-referrer"}
 
 
 @app.middleware("http")
 async def _page_headers(request, call_next):
-    """The CSP on every response, the token page's included (this middleware is the outermost).
-    Pages and their scripts revalidate on every load (ETag): after a redeployment, a page left in
-    the browser's cache showed the old console on H0 (#197)."""
+    """The CSP and the other headers on every response, the token page's and the boundary's
+    refusals included (this middleware is the outermost). Pages and their scripts revalidate
+    on every load (ETag): after a redeployment, a page left in the browser's cache showed the
+    old console on H0 (#197)."""
     response = await call_next(request)
     if request.url.path in _PAGES or request.url.path.startswith("/static/"):
         response.headers["Cache-Control"] = "no-cache"
-    response.headers["Content-Security-Policy"] = _CSP
+    response.headers.update(_HEADERS)
     return response
 
 
@@ -193,6 +372,17 @@ async def _read_enrollment() -> None:
     from eregion_core import exercise
     from eregion_core.inscription import TagEnrollment
     exercise.set_enrollment_check(TagEnrollment())
+
+
+@app.on_event("startup")
+async def _have_a_token() -> None:
+    """The token, before the first request — also when the app is served without `serve`. The
+    file unreadable: said, and every request is refused (no console without a token)."""
+    try:
+        ensure_token()
+    except OSError as exc:
+        print(f"  ✗ console token: {_TOKEN_FILE} unreadable ({exc}) — every request is refused; "
+              f"set {TOKEN_ENV}.")
 
 
 @app.on_event("startup")
@@ -509,6 +699,11 @@ async def watch_status() -> dict:
         return {"status": "unknown"}
 
 
+def _mask(value: str) -> str:
+    """An identifier as Config shows it: its first 8 and last 4 characters, '' when unset."""
+    return f"{value[:8]}…{value[-4:]}" if value else ""
+
+
 @app.get("/api/config")
 async def config() -> dict:
     import os
@@ -524,7 +719,6 @@ async def config() -> dict:
         glorfindel_cfg_dict = {
             "monitoring_backends": [
                 {"name": b.name, "type": b.type,
-                 "workspace_id": b.workspace_id[:8] + "…" if b.workspace_id else "",
                  "discovery_enabled": b.discovery.enabled,
                  "discovery_interval_s": b.discovery.interval_s}
                 for b in glorfindel_cfg.monitoring_backends
@@ -581,11 +775,10 @@ async def config() -> dict:
                     reachable, backend_error = False, st["error"]
                 else:
                     reachable, backend_error = (True if st["polled"] else None), ""
+                # No workspace id nor endpoint (SEC1, N-13): the page shows neither.
                 backends_info.append({
                     "name": b.name,
                     "type": b.type,
-                    "workspace_id": b.workspace_id,
-                    "endpoint": b.endpoint,
                     "reachable": reachable,
                     "last_error": backend_error,
                 })
@@ -625,11 +818,13 @@ async def config() -> dict:
     llm_model = glorfindel_model()
     llm_provider = llm_model.split("/")[0] if "/" in llm_model else llm_model
 
+    # Masked, as the page shows them (SEC1, N-13): enough to recognise a subscription or an
+    # identity, never the identifiers themselves.
     return {
         "azure": {
-            "subscription_id": subscription,
-            "tenant_id": tenant,
-            "client_id": client_id,
+            "subscription_id": _mask(subscription),
+            "tenant_id": _mask(tenant),
+            "client_id": _mask(client_id),
             "configured": bool(subscription and tenant and client_id),
         },
         "llm": {
@@ -1184,11 +1379,40 @@ async def action_snapshot(vm_name: str) -> dict:
     return {"status": "started", "job_id": job["job_id"], "resource_id": resource_id}
 
 
+# Cards anchored on a VM the detection may not concern (AL1; an identity detection names no
+# VM — C2): the same types as glorfindel/bot.py's and the page's (_ANCHORED_TYPES).
+_ANCHORED_TYPES = {"control_plane_change", "identity_change", "unattributed_signal"}
+
+
+def _restore_refusal(esc_id: str, vm_name: str) -> tuple[str | None, str]:
+    """(why the console refuses this restore, or None; the card's resource id). A restore
+    from the console is its card's (SEC1, N-12): pending, a restore, on this VM, and never an
+    anchored one — the page and the bot refused it, the route did not."""
+    from glorfindel import escalations as _esc
+    cli = "glorfindel restore <resource_id> --yes"
+    if not esc_id:
+        return f"A restore from the console goes through its card — else the CLI: {cli}", ""
+    esc = next((e for e in _esc.pending() if e.get("id") == esc_id), None)
+    if not esc:
+        return f"Escalation {esc_id} not found or already resolved", ""
+    rid = esc.get("resource_id", "")
+    if esc.get("escalation_type") in _ANCHORED_TYPES:
+        return ("This card is anchored on a VM the detection does not name: no restore from "
+                f"the console — identify the VM, then the CLI: {cli}"), rid
+    if esc.get("action") != "restore_from_backup":
+        return f"This card does not hold a restore — CLI: {cli}", rid
+    if rid.rstrip("/").split("/")[-1] != vm_name:
+        return f"This card is not {vm_name}'s", rid
+    return None, rid
+
+
 @app.post("/api/action/restore/{vm_name}")
-async def action_restore(vm_name: str) -> dict:
-    resource_id = _find_resource_id(vm_name)
-    if not resource_id:
-        return {"error": f"Resource ID not found for {vm_name}"}
+async def action_restore(vm_name: str, body: dict) -> dict:
+    """Azure Backup restore of the VM of a restore card (`{"escalation": <id>}`), in the
+    background (`glorfindel restore`)."""
+    refusal, resource_id = _restore_refusal(str(body.get("escalation") or ""), vm_name)
+    if refusal:
+        return {"error": refusal}
     _restore_start(vm_name, resource_id)
     asyncio.create_task(_bg_restore(resource_id, vm_name))
     return {"status": "started", "resource_id": resource_id}
@@ -2109,17 +2333,13 @@ def serve(host: str = "127.0.0.1", port: int = 7007) -> None:
         ) from e
     from eregion_console import sections
     sections.override()   # an unknown section stops here, before anything listens
-    token = console_token()
-    loopback = host in ("127.0.0.1", "localhost", "::1")
-    if token:
+    # Always a token (SEC1): the deployment's, else one drawn at the first start and kept in
+    # the operator's file — shown here, with the URL that opens the console once.
+    token, where = ensure_token()
+    if where == "env":
         print(f"  Eregion console  →  http://localhost:{port}/?token=${TOKEN_ENV}")
     else:
-        print(f"  Eregion console  →  http://localhost:{port}")
-    if not loopback and not token:
-        print(
-            f"  ⚠ Écoute sur {host} SANS jeton : quiconque joint ce port peut déclencher "
-            "des actions Azure (restore, release, approve) et changer le mode "
-            f"d'autonomie. Définir {TOKEN_ENV}, ou limiter l'exposition "
-            "(mapping Docker 127.0.0.1:7007:7007)."
-        )
+        print(f"  Eregion console  →  http://localhost:{port}/?token={token}")
+        print(f"  (token {'drawn at this first start, ' if where == 'new' else ''}kept in "
+              f"{_TOKEN_FILE}, mode 600; {TOKEN_ENV} sets another)")
     uvicorn.run(app, host=host, port=port, log_level="warning")

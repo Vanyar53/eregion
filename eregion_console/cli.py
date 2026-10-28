@@ -19,7 +19,7 @@ def cli():
 @cli.command()
 @click.option("--host", default="127.0.0.1", show_default=True,
               help="Listen address. Loopback by default: the console triggers real Azure "
-                   "actions. To expose it, set EREGION_CONSOLE_TOKEN first.")
+                   "actions. It answers under a loopback name, or one EREGION_CONSOLE_HOSTS lists.")
 @click.option("--port", default=7007, show_default=True)
 @click.option("--sections", "chosen", default=None, metavar="annatar,gothmog",
               help="The injectors to show, whatever this host holds (else detected from "
@@ -30,9 +30,11 @@ def console(host: str, port: int, chosen: str | None):
 
     Requires: pip install eregion[console]
 
-    With EREGION_CONSOLE_TOKEN set (or GLORFINDEL_WARROOM_TOKEN, its former name), every
-    page and API call requires the token: open http://<host>:7007/?token=<token> once (it is
-    then kept in a cookie), or send `Authorization: Bearer <token>` from scripts.
+    Every page and API call requires the token: EREGION_CONSOLE_TOKEN (or
+    GLORFINDEL_WARROOM_TOKEN, its former name), else the one drawn at the first start and kept in
+    ~/.glorfindel/console_token (mode 600), printed with the URL. Open
+    http://localhost:7007/?token=<token> once (a session cookie is then kept), or send
+    `Authorization: Bearer <token>` from scripts.
     """
     if chosen is not None:
         os.environ[sections.ENV] = chosen

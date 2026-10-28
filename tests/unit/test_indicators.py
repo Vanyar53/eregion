@@ -14,7 +14,7 @@ import pytest
 pytest.importorskip("fastapi")
 pytest.importorskip("httpx")
 
-from fastapi.testclient import TestClient  # noqa: E402
+from .console_client import console  # noqa: E402
 
 import eregion_console.api as api  # noqa: E402
 from eregion_console import indicators as ind  # noqa: E402
@@ -176,7 +176,7 @@ def test_the_route_reads_this_host(runs):
     a = NOW - timedelta(days=1)
     _report(runs, "r1", "T1110.001", a, latency=60.0)
     _cycle(runs, a + timedelta(seconds=60), "T1110.001", "block_suspicious_ip", 0.85)
-    body = TestClient(api.app).get("/api/indicators").json()
+    body = console().get("/api/indicators").json()
     assert body["window_days"] == 30 and body["last_proof"]["run_id"] == "r1"
     assert body["coverage"]["implemented"] >= 1 and body["alone"]["shadow"] == 1
     route = next(r for r in api.app.routes if getattr(r, "path", "") == "/api/indicators")

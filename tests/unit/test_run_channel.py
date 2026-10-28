@@ -273,7 +273,7 @@ def test_the_console_shows_the_verdict_of_a_run_pulled_from_the_channel(tmp_path
     on H0, and the console's exercise carries its verdict."""
     pytest.importorskip("fastapi")
     pytest.importorskip("httpx")
-    from fastapi.testclient import TestClient
+    from .console_client import console
 
     import eregion_console.api as api
 
@@ -288,7 +288,7 @@ def test_the_console_shows_the_verdict_of_a_run_pulled_from_the_channel(tmp_path
     monkeypatch.chdir(h0.parent)
     monkeypatch.delenv("GLORFINDEL_WARROOM_TOKEN", raising=False)
     api._cycle_cache.clear()
-    exercises = TestClient(api.app).get("/api/exercises").json()["exercises"]
+    exercises = console().get("/api/exercises").json()["exercises"]
     assert len(exercises) == 1
     run = exercises[0]["run"]
     assert run["result"] == "PASS" and run["mitre"] == "T1136.001"

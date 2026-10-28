@@ -14,7 +14,7 @@ import pytest
 pytest.importorskip("fastapi")
 pytest.importorskip("httpx")
 
-from fastapi.testclient import TestClient  # noqa: E402
+from .console_client import console  # noqa: E402
 
 import eregion_console.api as api  # noqa: E402
 
@@ -42,7 +42,7 @@ def runs(tmp_path, monkeypatch):
 
 @pytest.fixture()
 def client(runs):
-    return TestClient(api.app)
+    return console()
 
 
 def _window(runs, run_id, *, injector="annatar", kind="technique", experiment="T1110.001 ssh",
@@ -350,7 +350,7 @@ def test_the_war_room_reads_enrollment_as_the_watch_does(runs, monkeypatch):
     from eregion_core import exercise
     from eregion_core.inscription import TagEnrollment
     monkeypatch.setattr(exercise, "_enrollment_check", None)
-    with TestClient(api.app):
+    with console():
         assert isinstance(exercise._enrollment_check, TagEnrollment)
 
 

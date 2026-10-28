@@ -481,7 +481,7 @@ function _renderEscGroup(group) {
        <button class="action" ${_on('click', 'doAckAll', ids)} style="font-size:9px;padding:2px 7px">✓ Ack</button>
        <button class="action" ${_on('click', 'openCommandModal', e.id)} style="font-size:9px;padding:2px 7px">📋 Cmd</button>`
     : isRestore
-    ? `<button class="action primary" ${_on('click', 'confirmRestore', vmName)} style="font-size:9px;padding:2px 7px">🔄 Restore</button>
+    ? `<button class="action primary" ${_on('click', 'confirmRestore', vmName, e.id)} style="font-size:9px;padding:2px 7px">🔄 Restore</button>
        <button class="action" ${_on('click', 'doAckAll', ids)} style="font-size:9px;padding:2px 7px">✓ Ack</button>
        <button class="action" ${_on('click', 'openCommandModal', e.id)} style="font-size:9px;padding:2px 7px">📋 Cmd</button>`
     : isSnapshotPending
@@ -517,7 +517,7 @@ function _renderEscGroup(group) {
 async function doAckAll(ids) {
   if (typeof ids === 'string') ids = ids.split(',').filter(Boolean);
   try {
-    await Promise.all(ids.map(id => fetch(`/api/action/ack/${id}`, { method: 'POST' })));
+    await Promise.all(ids.map(id => _post(`/api/action/ack/${_seg(id)}`)));
     toast(`✓ Acknowledged (${ids.length})`);
     refreshState();
   } catch (e) {
@@ -633,7 +633,7 @@ async function refreshActionsData() {
   if (!toFetch.length) return;
   await Promise.all(toFetch.map(async vm => {
     try {
-      const r = await fetch(`/api/actions/${vm}?limit=15`);
+      const r = await fetch(`/api/actions/${_seg(vm)}?limit=15`);
       const d = await r.json();
       _actionsCache[vm] = { actions: d.actions || [], fetchedAt: Date.now() };
     } catch (e) {}
@@ -1797,7 +1797,7 @@ function _drawTopologyEdges() {
 
 async function doApproveRule(proposalId, escId) {
   try {
-    const r = await fetch(`/api/action/approve-rule/${proposalId}`, {method: 'POST'});
+    const r = await _post(`/api/action/approve-rule/${_seg(proposalId)}`);
     const d = await r.json();
     // P1: an approved rule goes to the client's layer, never into the shipped base.
     if (d.ok && d.rule_bound === false) toast(`⚠ Rule '${d.rule_name}' written to ${d.rules_file || "the client's layer"} but not bound (${d.rule_unbound_reason || 'no backend'}): it applies to no discovered VM — bind it there (monitoring_backends, assets: [auto])`, true);
@@ -1811,7 +1811,7 @@ async function doApproveRule(proposalId, escId) {
 
 async function doRejectRule(proposalId, escId) {
   try {
-    const r = await fetch(`/api/action/reject-rule/${proposalId}`, {method: 'POST'});
+    const r = await _post(`/api/action/reject-rule/${_seg(proposalId)}`);
     const d = await r.json();
     if (d.ok) toast(`✗ Rule '${d.rule_name}' rejected`);
     // Always ack the escalation — rule may already be rejected via CLI
@@ -1838,7 +1838,7 @@ async function doRelease(vmName) {
   toast('↩️ Releasing isolation on ' + vmName + '…');
   _pendingActions.add(vmName); renderInfra();
   try {
-    const r = await fetch(`/api/action/release/${vmName}`, { method: 'POST' });
+    const r = await _post(`/api/action/release/${_seg(vmName)}`);
     const d = await r.json();
     if (d.ok) toast('✓ Isolation released — ' + vmName + ' is back online');
     else if (d.capability_gap) toast('✗ ' + d.error, 8000);
@@ -1876,7 +1876,7 @@ async function doBlockPromote(vmName) {
   if (_guardReadOnly()) return;
   toast('▶ Extending block to subnet…');
   try {
-    const r = await fetch(`/api/action/block-promote/${vmName}`, { method: 'POST' });
+    const r = await _post(`/api/action/block-promote/${_seg(vmName)}`);
     const d = await r.json();
     if (d.permission_denied) { toast('✗ Cannot execute: read-only credentials'); return; }
     if (d.capability_gap) { toast('✗ ' + d.error, 8000); return; }
@@ -1902,14 +1902,14 @@ function confirmRevert(vmName) {
   confirmReset(vmName);
 }
 
-function confirmRestore(vmName) {
+function confirmRestore(vmName, escId) {
   openModal(
     'Restore ' + vmName + ' from backup',
     'This triggers an Azure Backup restore (~20 min). The VM will be offline during restore. Glorfindel will release isolation automatically after completion.',
     `glorfindel restore ${vmName} --yes`,
     '🔄 Restore',
     'primary',
-    () => doRestore(vmName),
+    () => doRestore(vmName, escId),
   );
 }
 
@@ -1929,7 +1929,7 @@ async function doRevert(vmName) {
   toast('↩️ Reverting ' + vmName + '…');
   _pendingActions.add(vmName); renderInfra();
   try {
-    const r = await fetch(`/api/action/revert/${vmName}`, { method: 'POST' });
+    const r = await _post(`/api/action/revert/${_seg(vmName)}`);
     const d = await r.json();
     if (d.ok) toast('✓ Revert complete — ' + vmName + ' is clean');
     else if (d.capability_gap) toast('✗ ' + d.error, 8000);
@@ -1942,7 +1942,7 @@ async function doSnapshot(vmName) {
   if (_guardReadOnly()) return;
   toast('📸 Snapshot started for ' + vmName + ' — check RSV for job status');
   try {
-    const r = await fetch(`/api/action/snapshot/${vmName}`, { method: 'POST' });
+    const r = await _post(`/api/action/snapshot/${_seg(vmName)}`);
     const d = await r.json();
     if (d.error) toast('✗ Snapshot failed: ' + d.error);
     else refreshState();  // triggers re-render with snapshotInProgress badge
@@ -1952,7 +1952,7 @@ async function doSnapshot(vmName) {
 async function refreshAuditVm(vmName) {
   toast('↺ Refreshing backup info…');
   try {
-    const r = await fetch(`/api/audit/${vmName}`);
+    const r = await fetch(`/api/audit/${_seg(vmName)}`);
     const d = await r.json();
     if (d.error) { toast('✗ ' + d.error); return; }
     if (!_auditData) _auditData = { audits: [] };
@@ -1965,11 +1965,13 @@ async function refreshAuditVm(vmName) {
   } catch (e) { toast('✗ ' + e.message); }
 }
 
-async function doRestore(vmName) {
+async function doRestore(vmName, escId) {
   if (_guardReadOnly()) return;
-  toast('🔄 Restore started for ' + vmName + ' (~20 min)…', 8000);
   try {
-    await fetch(`/api/action/restore/${vmName}`, { method: 'POST' });
+    // The card's restore (SEC1): the server checks the card — never an anchored one.
+    const d = await (await _post(`/api/action/restore/${_seg(vmName)}`, { escalation: escId })).json();
+    if (d.error) { toast('✗ Restore refused: ' + d.error, 8000); return; }
+    toast('🔄 Restore started for ' + vmName + ' (~20 min)…', 8000);
   } catch (e) {
     toast('✗ ' + e.message);
   }
@@ -2053,15 +2055,12 @@ function renderToJudge() {
 async function judgeCard(escId, verdict) {
   const note = (document.getElementById('judge-note-' + escId)?.value || '').trim();
   try {
-    const r = await fetch(`/api/escalations/${escId}/verdict`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ verdict, note }),
-    });
+    const r = await _post(`/api/escalations/${_seg(escId)}/verdict`, { verdict, note });
     const d = await r.json();
     if (d.error) { toast('✗ ' + d.error); return; }
     // One click: a judged card is also acknowledged, so the next detection opens a new
     // card to judge instead of piling onto this one (Jonathan, 16/10).
-    await fetch(`/api/action/ack/${escId}`, { method: 'POST' });
+    await _post(`/api/action/ack/${_seg(escId)}`);
     toast({ right: '✓ Marked right', wrong: '✗ Marked wrong', unsure: '? Marked unsure' }[verdict] || '✓');
     refreshObservation();
     refreshState();
@@ -2072,7 +2071,7 @@ async function judgeCard(escId, verdict) {
 
 async function doAck(escId) {
   try {
-    await fetch(`/api/action/ack/${escId}`, { method: 'POST' });
+    await _post(`/api/action/ack/${_seg(escId)}`);
     toast('✓ Acknowledged');
     refreshState();
   } catch (e) {
@@ -2118,8 +2117,8 @@ async function doApproveAction(escId, vmName, opts) {
     const qs = new URLSearchParams();
     if (opts.ip)    qs.set('ip', opts.ip);
     if (opts.scope) qs.set('scope', opts.scope);
-    const url = `/api/action/approve/${escId}` + (qs.toString() ? `?${qs}` : '');
-    const r = await fetch(url, { method: 'POST' });
+    const url = `/api/action/approve/${_seg(escId)}` + (qs.toString() ? `?${qs}` : '');
+    const r = await _post(url);
     const d = await r.json();
     if (d.permission_denied) { toast('✗ Cannot execute: read-only credentials'); return; }
     // Parameterised action whose param is missing (e.g. pre-fix escalation with no IP) —
@@ -2165,11 +2164,7 @@ function showBlockScopeModal(escId, vmName, ip) {
 
 async function setAutonomyMode(vmName, mode) {
   try {
-    const r = await fetch(`/api/autonomy/${vmName}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mode }),
-    });
+    const r = await _post(`/api/autonomy/${_seg(vmName)}`, { mode });
     const d = await r.json();
     if (d.error) { toast('✗ ' + d.error); return; }
     toast(`✓ Mode ${mode} set for ${vmName}`);
@@ -2194,7 +2189,7 @@ async function openActivation(vmName) {
   confirm.style.display = 'none';
   document.getElementById('modal').classList.add('open');
   let a;
-  try { a = await (await fetch(`/api/readiness/${vmName}`)).json(); }
+  try { a = await (await fetch(`/api/readiness/${_seg(vmName)}`)).json(); }
   catch (e) { body.textContent = '✗ ' + e.message; refreshState(); return; }
   if (a.error) { body.textContent = '✗ ' + a.error; refreshState(); return; }
   const [label, color, lead] = _VERDICT[a.verdict] || _VERDICT.not_ready;
@@ -2213,10 +2208,8 @@ async function openActivation(vmName) {
       toast('Confirm the reserves first'); return;
     }
     try {
-      const d = await (await fetch(`/api/activate/${vmName}`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ acknowledged: a.reserve_codes || [] }),
-      })).json();
+      const d = await (await _post(`/api/activate/${_seg(vmName)}`,
+                                   { acknowledged: a.reserve_codes || [] })).json();
       if (d.error) { toast('✗ ' + d.error, 6000); return; }
       closeModal(); toast(`✓ Autonomous response on for ${vmName}`); refreshState();
     } catch (e) { toast('✗ ' + e.message); }
@@ -2227,11 +2220,7 @@ async function openActivation(vmName) {
 
 async function setDefaultMode(mode) {
   try {
-    const r = await fetch('/api/config/autonomy/default', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mode }),
-    });
+    const r = await _post('/api/config/autonomy/default', { mode }, 'PATCH');
     const d = await r.json();
     if (d.error) { toast('✗ ' + d.error); return; }
     toast(`✓ Default mode set to ${mode}` + (d.note ? ` — ${d.note}` : ''), d.note ? 7000 : undefined);
@@ -2504,9 +2493,9 @@ function toggleConfig() {
   if (_configMode) refreshConfig();
 }
 
-function mask(s, keep = 8) {
-  if (!s) return '—';
-  return s.slice(0, keep) + '…' + s.slice(-4);
+// The server sends identifiers masked already (SEC1): its first 8 and last 4 characters.
+function mask(s) {
+  return s || '—';
 }
 
 function ttpStatus(c) {
@@ -2589,7 +2578,7 @@ async function showIsolationModal(vmName) {
   document.getElementById('modal').classList.add('open');
 
   try {
-    const r = await fetch(`/api/actions/${vmName}?limit=15`);
+    const r = await fetch(`/api/actions/${_seg(vmName)}?limit=15`);
     const d = await r.json();
     _actionsCache[vmName] = { actions: d.actions || [], fetchedAt: Date.now() };
   } catch (e) {}
@@ -2831,6 +2820,15 @@ function _worstStatus(checks, actions) {
 function _attr(s) {
   return String(s ?? '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;')
     .replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '&#10;');
+}
+// A segment of a route's path, from a name the page did not choose (a VM, a card's id): a `?`,
+// `#` or `/` in it would send the request elsewhere (SEC1, N-14).
+function _seg(s) { return encodeURIComponent(String(s ?? '')); }
+// A change sent to the console (SEC1): always a JSON object — the server refuses a change
+// without one, or of another type; the browser adds the page's Origin, which it checks.
+function _post(url, body, method = 'POST') {
+  return fetch(url, { method, headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify(body ?? {}) });
 }
 // What an element does on an event, without an inline handler (#257: script-src 'self' refuses
 // them): `data-on-click="showEscModal"`, and its arguments as JSON in `data-click-args`, escaped

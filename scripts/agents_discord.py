@@ -53,6 +53,8 @@ RECENT_MAX = 8
 PR_CHECK_S = 300         # GitHub asked at most every five minutes whether a pull request was merged
 WATCH_MAX_S = 2 * 86400  # the watcher of pull requests to merge gives up after two days
 REPORT_HEAD = 1500       # the report's head in the thread's card; the whole report comes as a file
+ATTACH_MAX = 1_000_000   # a report beyond it is cut in its file (the real ones: 1 to 15 KB on 28/10)
+AGENTS_KEEP_S = 7 * 86400  # an agent not back for a week is forgotten: elrond resumes within a run
 ICON = {"blocked": "⛔", "not-obtained": "⚠️", "merge": "🔀", "question": "❓", "permission": "🔐"}
 
 
@@ -257,13 +259,17 @@ def _post_ping(cfg: nd.Config, card: dict) -> str:
     return nd.post_webhook(cfg.agents, nd.message(card, silent=False, mention=cfg.mention), "webhook #agents")
 
 
-def _unping(cfg: nd.Config, mid: str | None) -> None:
+def _unping(cfg: nd.Config, state: dict, mid: str | None) -> None:
+    """A settled ping leaves the channel; a deletion that fails is kept and tried again at the
+    next refresh, never forgotten with the thing it was for."""
     if mid and cfg.agents:
         try:
             nd.fetch("DELETE", f"{cfg.agents}/messages/{mid}", "webhook #agents")
         except nd.Failure as f:
             if f.code != 404:   # 404: deleted by hand already
                 nd.say(f)
+                if mid not in state.setdefault("unping", []):
+                    state["unping"].append(mid)
 
 
 def await_(cfg: nd.Config, state: dict, item: dict, delay: int = 0) -> None:
@@ -291,7 +297,7 @@ def settle(cfg: nd.Config, state: dict, pred) -> None:
     keep = []
     for w in state["waiting"]:
         if pred(w):
-            _unping(cfg, w.get("ping"))
+            _unping(cfg, state, w.get("ping"))
         else:
             keep.append(w)
     state["waiting"] = keep
@@ -326,9 +332,12 @@ def refresh(cfg: nd.Config, state: dict, now: int | None = None, force: bool = F
     """The pings that are due, then the board rewritten in place (a new one if it was deleted)."""
     now = now or int(time.time())
     state["running"] = {k: r for k, r in state["running"].items() if now - r.get("since", 0) < STALE_S}
+    state["agents"] = {k: a for k, a in state["agents"].items() if now - a.get("returned_at", now) < AGENTS_KEEP_S}
     _merged_prs(cfg, state, now, force)
     if not cfg.agents:
         return
+    for mid in state.pop("unping", []):   # a deletion that failed, tried again
+        _unping(cfg, state, mid)
     for w in state["waiting"]:
         if not w.get("ping") and w["ping_at"] <= now:
             card = nd.embed(f"{ICON[w['kind']]} {w['title']}", "\n".join(x for x in (w.get("text"), _links(state, w)) if x),
@@ -363,7 +372,8 @@ def to_thread(cfg: nd.Config, state: dict, forum, lot: str, card: dict, *, title
         issue = re.search(r"· #(\d+)$", t.get("name", ""))
         state["threads"][lot] = {"id": str(t["id"]), "issue": issue.group(1) if issue else ""}
         if len(report) > REPORT_HEAD:
-            forum.attach(t["id"], f"{name or 'rapport'}-{re.sub(r'[^A-Za-z0-9-]', '', lot)}.md", report)
+            text = report if len(report) <= ATTACH_MAX else report[:ATTACH_MAX] + "\n\n… (tronqué : plus de 1 Mo)"
+            forum.attach(t["id"], f"{name or 'rapport'}-{re.sub(r'[^A-Za-z0-9-]', '', lot)}.md", text)
     except nd.Failure as f:
         nd.say(f)
         return ""
@@ -396,7 +406,7 @@ def _begin(e: dict, cfg, state, forum, key: str, lot: str, step: str, title: str
         state["sessions"] = (state["sessions"] + [sid])[-20:]
     settle(cfg, state, lambda w: w.get("lot") == lot and w["kind"] in ("blocked", "not-obtained"))
     if (run := state.get("last_run") or {}).get("ping"):   # a new run: the last one's ping goes
-        _unping(cfg, run.pop("ping"))
+        _unping(cfg, state, run.pop("ping"))
     head = {"worker": "🚀 Lancé", "correction": "🔧 Correction lancée", "relecture": "🔎 Relecture lancée"}[step]
     to_thread(cfg, state, forum, lot, nd.embed(f"{head} · {lot}", title, nd.BLUE), title=title, st=STEP_STATE[step])
 
@@ -431,16 +441,15 @@ def on_return(e, cfg, state, forum, report: str, handback: bool = False) -> None
     step = state["running"][keys[0]]["step"] if keys else step
     for k in keys:
         state["running"].pop(k)
-    state["agents"][aid] = {"lot": lot, "kind": kind, "title": title or before.get("title", ""), "returned_at": e["at"],
-                            "handback": handback or before.get("handback", False)}
     pal = _palantir()
     scan = pal.scan(path, pal.EXPECTED) if path and path.is_file() else {}
     episodes = [x for x in scan.get("fallback_episodes") or [] if x.get("to", "") >= _iso(since)]
     stops = [x for x in scan.get("refusals") or [] if x.get("at", "") >= _iso(since)]
     fell = bool(episodes or stops)
+    state["agents"][aid] = {"lot": lot, "kind": kind, "title": title or before.get("title", ""), "returned_at": e["at"],
+                            "since": since, "fell": fell, "handback": handback or before.get("handback", False)}
     models = ", ".join(f"{m} ×{n}" for m, n in (scan.get("models") or {}).items()) or "—"
-    said = "\n".join(f"{x['model']} de {_when(x['from'])} à {_when(x['to'])} ({x['responses']} réponses)"
-                     for x in episodes) or f"{len(stops)} arrêt(s) des protections"
+    said = _said(episodes, stops)
     at = e["at"]
     if kind == "elrond-reviewer":
         if fell:
@@ -471,11 +480,44 @@ def on_return(e, cfg, state, forum, report: str, handback: bool = False) -> None
             to_thread(cfg, state, forum, lot, card, st="en relecture", report=report, name="rendu"), "rapport")
 
 
+def _said(episodes: list, stops: list) -> str:
+    return "\n".join(f"{x['model']} de {_when(x['from'])} à {_when(x['to'])} ({x['responses']} réponses)"
+                     for x in episodes) or f"{len(stops)} arrêt(s) des protections"
+
+
+def late_fallback(cfg, state, forum, aid: str, a: dict, path: Path | None, at: int) -> None:
+    """Its last turns may reach the transcript after its hand-back was read: read again at its
+    stop, a fallback of that stretch is said then — a review « non obtenue », pinged. elrond
+    runs palantir itself on the agent: its own guard never depends on this."""
+    pal = _palantir()
+    scan = pal.scan(path, pal.EXPECTED) if path and path.is_file() else {}
+    lo, hi = _iso(a.get("since", 0)), _iso(a["returned_at"] + 1)
+    episodes = [x for x in scan.get("fallback_episodes") or [] if lo <= x.get("to", "") <= hi]
+    stops = [x for x in scan.get("refusals") or [] if lo <= x.get("at", "") <= hi]
+    if not (episodes or stops):
+        return
+    a["fell"], lot, said = True, a["lot"], _said(episodes, stops)
+    if a["kind"] == "elrond-reviewer":
+        card = nd.embed(f"⚠️ Relecture non obtenue · {lot}", f"le relecteur a basculé sur ses derniers tours :\n{said}",
+                        nd.ORANGE)
+        link = to_thread(cfg, state, forum, lot, card, st="en relecture")
+        await_(cfg, state, {"key": f"not-obtained:{lot}", "kind": "not-obtained", "lot": lot,
+                            "title": f"{lot} : relecture non obtenue", "text": said, "since": at})
+        _recent(state, lot, "relecture non obtenue", at, link)
+        return
+    card = nd.embed(f"⚠️ Repli de modèle · {lot}", f"sur ses derniers tours :\n{said}\nrelecture en Opus obligatoire",
+                    nd.ORANGE)
+    _recent(state, lot, "rendu, avec un repli", at, to_thread(cfg, state, forum, lot, card, st="en relecture"))
+
+
 def on_stop(e, cfg, state, forum) -> None:
-    aid, meta, _ = agent_of(e)
+    aid, meta, path = agent_of(e)
+    a = state["agents"].get(aid, {})
     if not any(k in state["running"] for k in (aid, meta.get("toolUseId"))):
+        if a.get("handback") and not a.get("fell"):
+            late_fallback(cfg, state, forum, aid, a, path, e["at"])
         return   # handed back already (SubagentHandback), or never seen
-    if state["agents"].get(aid, {}).get("handback"):
+    if a.get("handback"):
         return   # its returns come by SubagentHandback: a stop is a pause, or a late one of a past stretch
     if e.get("background_tasks"):
         return   # a pause: it waits for its own background task, and comes back
@@ -498,7 +540,7 @@ def on_elrond(e, cfg, state, forum) -> None:
         await_(cfg, state, {"key": f"merge:{pr}", "kind": "merge", "lot": lot, "pr": pr,
                             "title": f"{lot} : PR #{pr} à fusionner", "text": note, "since": at})
     elif kind == "run-end":
-        _unping(cfg, (state.get("last_run") or {}).get("ping"))
+        _unping(cfg, state, (state.get("last_run") or {}).get("ping"))
         state["last_run"] = {"text": note, "at": at}
         if cfg.agents:
             try:
@@ -536,11 +578,14 @@ def handle(e: dict, cfg: nd.Config, state: dict, forum) -> None:
         on_elrond(e, cfg, state, forum)
 
 
-def drain(cfg: nd.Config, force: bool = False) -> None:
-    """Every queued event, in order, then the board once."""
+def drain(cfg: nd.Config, force: bool = False, always: bool = True) -> None:
+    """Every queued event, in order, then the board once. A deliverer that finds the queue
+    emptied by another one rewrites nothing (`always`: the board, a tick, the watcher)."""
     with board_state() as state:
         forum = nd.Forum(cfg) if cfg.lots else None
+        done = False
         while events := _dequeue():
+            done = True
             for e in events:
                 try:
                     handle(e, cfg, state, forum)
@@ -548,6 +593,8 @@ def drain(cfg: nd.Config, force: bool = False) -> None:
                     nd.say(f)
                 except Exception as x:   # a transcript or a palantir that changed: said, never raised
                     nd.say(nd.Failure("hook", why=type(x).__name__))
+        if not (done or always):
+            return
         try:
             refresh(cfg, state, force=force)
         except nd.Failure as f:
@@ -599,14 +646,14 @@ def watch(cfg: nd.Config) -> int:
     return 0
 
 
-def command(event: dict, cfg: nd.Config, force: bool = False) -> int:
+def command(event: dict, cfg: nd.Config, force: bool = False, always: bool = True) -> int:
     """elrond's own calls: queued like a hook's event, delivered at once (elrond waits for it)."""
     if not (cfg.agents or cfg.lots):   # nothing configured: nothing written, not even the local state
         return 0
     try:
         if event:
             enqueue({"hook_event_name": "elrond", **event})
-        drain(cfg, force)
+        drain(cfg, force, always)
     except Exception as x:   # a read-only state folder: said, exit 0 (SKILL.md)
         nd.say(x if isinstance(x, nd.Failure) else nd.Failure("elrond", why=type(x).__name__))
     return 0
@@ -635,7 +682,7 @@ def main(argv=None) -> int:
         return hook(sys.stdin.read())
     cfg = nd.load_config()
     if a.mode == "deliver":
-        return command({}, cfg)
+        return command({}, cfg, always=False)
     if a.mode == "tick":
         time.sleep(a.delay + 1)
         return command({}, cfg)

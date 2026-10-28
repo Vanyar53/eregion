@@ -575,3 +575,78 @@ def test_a_pull_request_merged_after_the_run_is_seen_by_the_watcher(fake, monkey
     assert [p["embeds"][0]["title"] for p in pings(fake)] == ["🏁 Fin du run elrond"]
     assert "PR #255 fusionnée" in board_text(fake)
     assert ad.main(["watch"]) == 0 and len(naps) == 2   # nothing waits: no watch
+
+
+# ── after the Orchestre's review of 28/10 ──────────────────────────────────────────
+
+def test_a_ping_whose_deletion_fails_is_deleted_later(fake, monkeypatch, tmp_path, capsys):
+    """C1: Discord refuses the deletion (503): the ping is kept and deleted at a later refresh,
+    never forgotten with the thing it was for."""
+    configure(monkeypatch, fake)
+    ad.main(["lot", "A3", "blocked", "--note", "attend une décision"])
+    (pid,) = [k for k, m in fake.messages.items() if m.get("content")]
+    fake.fail[f"/api/webhooks/2/{AGENTS_TOKEN}/messages/{pid}"] = 503
+    ad.main(["clear", "A3"])
+    assert len(pings(fake)) == 1 and "Rien ne t'attend." in board_text(fake) and "HTTP 503" in capsys.readouterr().err
+    fake.fail.clear()
+    ad.main(["board"])
+    assert pings(fake) == []
+
+
+def test_the_hook_returns_at_once_while_a_delivery_waits(fake, monkeypatch, tmp_path):
+    """The hook only queues: a deliverer that holds the state (a slow Discord) never holds Claude
+    Code up; the event waits in the queue and goes once the state is free."""
+    import fcntl
+    configure(monkeypatch, fake, bot=False)
+    monkeypatch.delenv("EREGION_DISCORD_SYNC")
+    state = tmp_path / "state" / "eregion"
+    state.mkdir(parents=True)
+    with open(state / "discord.lock", "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        start = time.monotonic()
+        assert send(launch("elrond A3 · x")) == 0
+        assert time.monotonic() - start < 0.5
+        time.sleep(0.3)
+        assert fake.messages == {}
+    for _ in range(100):
+        if fake.messages:
+            break
+        time.sleep(0.05)
+    assert "`A3` worker" in board_text(fake)
+
+
+def test_a_fallback_of_the_last_turns_is_said_at_the_stop(fake, monkeypatch, tmp_path):
+    """S3: the reviewer's last turns reach the transcript after its hand-back was read; at its
+    stop they are read again, and a fallback there makes the review « non obtenue »."""
+    configure(monkeypatch, fake)
+    r = agent(tmp_path, "elrond A3 · relecture", "elrond-reviewer", aid="r1", tool_use="toolu_r")
+    send(launch("elrond A3 · relecture", "elrond-reviewer", "toolu_r", at=ts("2026-10-27T13:59:00")))
+    send(handback(r, "**Verdict : ok**", "elrond-reviewer"))
+    assert pings(fake) == []
+    agent(tmp_path, "elrond A3 · relecture", "elrond-reviewer", aid="r1", tool_use="toolu_r", fallback=True)
+    send(stop(r, "elrond-reviewer"))
+    (p,) = pings(fake)
+    (t,) = fake.threads
+    assert p["embeds"][0]["title"] == "⚠️ A3 : relecture non obtenue" and titles(t)[-1] == "⚠️ Relecture non obtenue"
+    assert t["applied_tags"] == [TAG["en relecture"]]
+    send(stop(r, "elrond-reviewer"))   # said once
+    assert len(pings(fake)) == 1 and titles(t).count("⚠️ Relecture non obtenue") == 1
+
+
+def test_a_huge_report_is_cut_in_its_file(fake, monkeypatch, tmp_path):
+    configure(monkeypatch, fake)
+    monkeypatch.setattr(ad, "ATTACH_MAX", 3000)
+    t = fake.thread("A3 · x", [TAG["en relecture"]])
+    r = agent(tmp_path, "elrond A3 · relecture", "elrond-reviewer", aid="r1", tool_use="toolu_r")
+    send(launch("elrond A3 · relecture", "elrond-reviewer", "toolu_r"))
+    send(handback(r, "**Verdict : ok**\n\n" + "x" * 5000, "elrond-reviewer"))
+    (text,) = t["posts"][-1]["files"].values()
+    assert len(text) < 3100 and text.endswith("(tronqué : plus de 1 Mo)")
+
+
+def test_a_deliverer_with_an_empty_queue_writes_nothing(fake, monkeypatch, tmp_path):
+    """S5: another deliverer took its event; it rewrites nothing. `board` always does."""
+    configure(monkeypatch, fake)
+    assert ad.main(["deliver"]) == 0 and fake.requests == []
+    ad.main(["board"])
+    assert board_text(fake)

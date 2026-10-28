@@ -35,11 +35,11 @@ Notable changes to Eregion. The format follows [Keep a Changelog](https://keepac
     - a pull request to merge by hand (`agents_discord.py lot <ID> merge --pr <n>`, settled when GitHub says it is merged — asked at each event, and by a detached watcher every five minutes while one waits, two days at most: the merge often comes after the run);
     - the end of a run.
   - **No longer pings:** `changes` / `blocking` (elrond fixes alone), a worker's fallback, a return.
-  - **Each worker's and reviewer's report lands in the lot's thread:** a head in the card, the whole `.md` attached (median 7.8 KB, measured on 28/10).
-  - **The hooks only queue the event and return;** one process delivers the queue in order. `PreToolUse` and `SubagentStop` are synchronous, so a hand-back is queued before its `SubagentStop`, and that one before elrond can resume the agent; an agent that hands back is never read from its stop. A failing `#lots` never keeps a ping from Jonathan.
+  - **Each worker's and reviewer's report lands in the lot's thread:** the card holds a report of up to 1500 characters, or its head; a longer one is attached whole as a `.md` (median 7.8 KB, measured on 28/10; cut beyond 1 MB). A fallback in the reviewer's last turns, reaching the transcript after its hand-back was read, is said at its stop.
+  - **The hooks only queue the event and return;** one process delivers the queue in order. `PreToolUse` and `SubagentStop` are synchronous, so a hand-back is queued before its `SubagentStop`, and that one before elrond can resume the agent; an agent that hands back is never read from its stop. A failing `#lots` never keeps a ping from Jonathan; a ping whose deletion fails is tried again. A board re-created after being deleted is no longer pinned (a webhook can't pin).
   - **After merging, run `bash scripts/elrond-hooks.sh install` again.**
 
-  To measure on a real run: the payloads, from Claude Code's documentation (the auto-mode classifier refused a measuring hook). `~/.local/state/eregion/discord.trace` keeps one line per event, its fields' names only. Tests: `tests/unit/test_agents_discord.py` (I8S's sequence of 28/10 replayed); mutants M1060–M1073 (M1070–M1073 after the 5.5 review), and M978, M979, M990 and M994 moved with the code they bite.
+  To measure on a real run: the payloads, from Claude Code's documentation (the auto-mode classifier refused a measuring hook). `~/.local/state/eregion/discord.trace` keeps one line per event, its fields' names only. Tests: `tests/unit/test_agents_discord.py` (I8S's sequence of 28/10 replayed); mutants M1060–M1076 (M1070–M1076 after the two 5.5 reviews), and M978, M979, M990 and M994 moved with the code they bite.
 
 ## [0.4.1] — 2026-10-28 — "nothing raw in the console, three loose ends of the isolation path tied"
 

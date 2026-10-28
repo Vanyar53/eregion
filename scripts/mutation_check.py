@@ -2666,6 +2666,18 @@ MUTANTS += [
 ]
 TESTS.update({f"M{n}": "tests/unit/test_agents_discord.py" for n in range(1070, 1074)})
 
+# N3 after the Orchestre's 5.5 review (28/10): M1074–M1076.
+MUTANTS += [
+    ("M1074", "a ping whose deletion failed never tried again: it stays in #agents for good (N3)", AGENTS_D,
+     '    for mid in state.pop("unping", []):   # a deletion that failed, tried again\n        _unping(cfg, state, mid)\n',
+     ""),
+    ("M1075", "a fallback of a reviewer's last turns, read after its hand-back, never said (N3)", AGENTS_D,
+     '        if a.get("handback") and not a.get("fell"):\n', "        if False:\n"),
+    ("M1076", "a deliverer with an empty queue rewrites the board: one PATCH per hook in a burst (N3)", AGENTS_D,
+     "        if not (done or always):\n            return\n", ""),
+]
+TESTS.update({f"M{n}": "tests/unit/test_agents_discord.py" for n in range(1074, 1077)})
+
 # N2 (#243): the road to 1.0 in Discord, scripts/roadmap_discord.py (and the thread matching it
 # shares with notify_discord.py), measured by tests/unit/test_roadmap_discord.py. Range M980–M989.
 ROADMAP_D = "scripts/roadmap_discord.py"

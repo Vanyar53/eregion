@@ -4,6 +4,8 @@ Notable changes to Eregion. The format follows [Keep a Changelog](https://keepac
 
 ## [Unreleased]
 
+## [0.4.3] — 2026-10-28 — "held at the edges"
+
 ### Fixed
 - **In read-only, the buttons that write are greyed again** (regression of 0.4.2; SEC1). The guard read the inline handlers #257 removed; it reads each button's action now, the modals' own buttons included. The actions themselves kept refusing.
 

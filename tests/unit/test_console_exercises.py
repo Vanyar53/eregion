@@ -23,6 +23,15 @@ OTHER = "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute/virtualM
 NOW = datetime.now(timezone.utc)
 
 
+@pytest.fixture(autouse=True)
+def _now_when_the_test_starts():
+    """NOW is the clock when each test starts, not when this file was imported: a long suite
+    (the CI's) no longer ages it past the windows and heartbeats the code under test compares
+    with its own clock (SEC6, P-08)."""
+    global NOW
+    NOW = datetime.now(timezone.utc)
+
+
 def _iso(dt: datetime) -> str:
     return dt.isoformat()
 
@@ -306,7 +315,9 @@ def test_channel_reads_the_published_heartbeat(runs, client, monkeypatch):
 
     def _read():
         reads.append(1)
-        return {"at": _iso(NOW - timedelta(seconds=30)), "since": _iso(NOW - timedelta(hours=1)),
+        # Read when the console reads it: 30 s old by its own clock, however long the suite.
+        now = datetime.now(timezone.utc)
+        return {"at": _iso(now - timedelta(seconds=30)), "since": _iso(now - timedelta(hours=1)),
                 "windows": ["known"]}
     monkeypatch.setattr(watch_channel, "read_heartbeat", _read)
     rc = client.get("/api/channel").json()["return_channel"]

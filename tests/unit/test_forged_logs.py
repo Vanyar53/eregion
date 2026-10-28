@@ -37,6 +37,15 @@ from . import kql_subset
 ROOT = Path(__file__).resolve().parents[2]
 SHIPPED = {r["name"]: r for r in yaml.safe_load(shipped_rules_path().read_text())["rules"]}
 NOW = datetime.now(timezone.utc)
+
+
+@pytest.fixture(autouse=True)
+def _now_when_the_test_starts():
+    """NOW is the clock when each test starts, not when this file was imported: a long suite
+    (the CI's) no longer ages it past the windows and heartbeats the code under test compares
+    with its own clock (SEC6, P-08)."""
+    global NOW
+    NOW = datetime.now(timezone.utc)
 SUB = "00000000-0000-0000-0000-0000000000bb"
 VM = f"/subscriptions/{SUB}/resourceGroups/rg-example/providers/Microsoft.Compute/virtualMachines/vm-example-01"
 PEER = "198.51.100.7"         # the address that really connects

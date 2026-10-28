@@ -25,7 +25,7 @@ TARGET = {
 }
 
 RESOURCE_ID = (
-    "/subscriptions/44a4dc83-3e79-4e4e-aa93-1b4f8e3ede80/resourceGroups/annatar"
+    "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/annatar"
     "/providers/Microsoft.Compute/virtualMachines/vm-annatar-victim"
 )
 

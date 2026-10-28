@@ -272,6 +272,8 @@ infra/terraform/              → module Celebrimbor : infra de test Azure modul
 
 ~/.glorfindel/
   escalations.jsonl           → escalades persistées
+  console_token               → SEC1 : le jeton que la console a tiré à son premier démarrage sans
+                                EREGION_CONSOLE_TOKEN (mode 600, relu ensuite) ; jamais écrit quand la variable est posée (H0)
   incidents.jsonl             → incidents actifs
   isolation/<vm>--<h>.json    → état NSG isolation + TTL. Clé = nom + hash de l'ID de ressource (troisième
                                 passe : deux VMs homonymes partageaient `<vm>.json`) ; un ancien `<vm>.json` n'est

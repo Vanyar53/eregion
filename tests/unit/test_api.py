@@ -11,16 +11,17 @@ import pytest
 pytest.importorskip("fastapi")
 pytest.importorskip("httpx")
 
-from fastapi.testclient import TestClient  # noqa: E402
 from starlette.websockets import WebSocketDisconnect  # noqa: E402
 
 import eregion_console.api as api  # noqa: E402
+
+from .console_client import WS, console  # noqa: E402
 
 
 @pytest.fixture()
 def client(monkeypatch):
     monkeypatch.delenv("GLORFINDEL_WARROOM_TOKEN", raising=False)
-    return TestClient(api.app)
+    return console()
 
 
 def test_audit_resource_endpoint_no_longer_raises_nameerror(client, monkeypatch):
@@ -49,16 +50,17 @@ def test_snapshot_without_a_vault_says_so(client, monkeypatch):
     monkeypatch.delenv("GLORFINDEL_BACKUP_VAULT", raising=False)
     rid = "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm"
     monkeypatch.setattr(api, "_find_resource_id", lambda vm: rid)
-    assert "Aucun coffre" in client.post("/api/action/snapshot/vm").json()["error"]
+    assert "Aucun coffre" in client.post("/api/action/snapshot/vm", json={}).json()["error"]
 
 
-def test_open_access_without_token(client):
+def test_the_token_opens_the_console(client):
     assert client.get("/").status_code == 200
 
 
 def test_token_required_when_configured(monkeypatch):
+    monkeypatch.delenv("EREGION_CONSOLE_TOKEN")
     monkeypatch.setenv("GLORFINDEL_WARROOM_TOKEN", "s3cret")
-    c = TestClient(api.app)
+    c = console(token=None)
     assert c.get("/").status_code == 401
     assert c.get("/api/discovered").status_code == 401
     assert c.post("/api/autonomy/vm", json={"mode": "non_disruptive"}).status_code == 401
@@ -67,8 +69,9 @@ def test_token_required_when_configured(monkeypatch):
 
 
 def test_token_in_url_sets_a_cookie_and_strips_the_token(monkeypatch):
+    monkeypatch.delenv("EREGION_CONSOLE_TOKEN")
     monkeypatch.setenv("GLORFINDEL_WARROOM_TOKEN", "s3cret")
-    c = TestClient(api.app)
+    c = console(token=None)
     r = c.get("/?token=s3cret&tab=feed", follow_redirects=False)
     assert r.status_code == 303
     assert r.headers["location"] == "/?tab=feed"
@@ -78,10 +81,11 @@ def test_token_in_url_sets_a_cookie_and_strips_the_token(monkeypatch):
 
 
 def test_live_feed_websocket_requires_the_token(monkeypatch):
+    monkeypatch.delenv("EREGION_CONSOLE_TOKEN")
     monkeypatch.setenv("GLORFINDEL_WARROOM_TOKEN", "s3cret")
-    c = TestClient(api.app)
+    c = console(token=None)
     with pytest.raises(WebSocketDisconnect):
-        with c.websocket_connect("/api/feed") as ws:
+        with c.websocket_connect(WS) as ws:
             ws.receive_json()
 
 
@@ -117,8 +121,9 @@ def test_state_exposes_partial_shared_and_bypassed_isolation(client):
 
 
 def test_browser_without_token_gets_a_token_form(monkeypatch):
+    monkeypatch.delenv("EREGION_CONSOLE_TOKEN")
     monkeypatch.setenv("GLORFINDEL_WARROOM_TOKEN", "s3cret")
-    c = TestClient(api.app)
+    c = console(token=None)
     r = c.get("/", headers={"Accept": "text/html,application/xhtml+xml"})
     assert r.status_code == 401
     assert 'name="token"' in r.text and "<form" in r.text
@@ -141,7 +146,7 @@ def test_approved_isolation_is_verified_and_traced(client, monkeypatch, tmp_path
     conn.verify_isolation.return_value = {"verified": True, "method": "nsg_check"}
     monkeypatch.setattr("glorfindel.actions.AzureConnector", lambda **k: conn)
 
-    r = client.post(f"/api/action/approve/{esc_id}")
+    r = client.post(f"/api/action/approve/{esc_id}", json={})
     assert r.json()["verification"]["verified"] is False
     assert [e["escalation_type"] for e in escalations.pending()] == ["verification_failed"]
     assert "isolate_vm" in (tmp_path / "runs" / "manual_actions.jsonl").read_text()
@@ -161,7 +166,7 @@ def test_an_approved_isolation_that_cannot_be_verified_leaves_a_card(client, mon
     conn.verify_isolation.return_value = {"verified": None, "error": "règles illisibles sur nic-a"}
     monkeypatch.setattr("glorfindel.actions.AzureConnector", lambda **k: conn)
 
-    client.post(f"/api/action/approve/{esc_id}")
+    client.post(f"/api/action/approve/{esc_id}", json={})
     [card] = escalations.pending()
     assert card["escalation_type"] == "verification_failed" and "pas pu être vérifiée" in card["reason"]
 
@@ -182,7 +187,7 @@ def test_approved_release_is_verified_after_the_rules_are_removed(client, monkey
         return {"ok": True, "stdout": "released"}
     monkeypatch.setattr(api, "action_release", _released)
 
-    r = client.post(f"/api/action/approve/{esc_id}")
+    r = client.post(f"/api/action/approve/{esc_id}", json={})
     assert r.json()["verification"]["verified"] is True
     conn.verify_release.assert_called_once_with(rid)
 
@@ -233,7 +238,7 @@ def test_an_ambiguous_vm_name_is_refused(client, monkeypatch):
     _save_isolation_state(b, {"resource_id": b})
     ran = []
     monkeypatch.setattr(api.subprocess, "run", lambda *x, **k: ran.append(x))
-    r = client.post("/api/action/release/web")
+    r = client.post("/api/action/release/web", json={})
     assert r.status_code == 409 and "2 VMs" in r.json()["error"] and ran == []
 
 
@@ -262,13 +267,13 @@ def test_an_unattributed_card_cannot_be_executed(client, monkeypatch):
     """Anchored on a VM the detection did not name: approving isolated that VM."""
     monkeypatch.setattr("glorfindel.actions.AzureConnector", lambda **k: (_ for _ in ()).throw(AssertionError("no Azure")))
     eid = _card("unattributed_signal")
-    assert "non attribuée" in client.post(f"/api/action/approve/{eid}").json()["error"]
+    assert "non attribuée" in client.post(f"/api/action/approve/{eid}", json={}).json()["error"]
 
 
 def test_a_stale_card_cannot_be_executed(client, monkeypatch):
     monkeypatch.setattr("glorfindel.actions.AzureConnector", lambda **k: (_ for _ in ()).throw(AssertionError("no Azure")))
     eid = _card(age_h=5)
-    assert "vieille" in client.post(f"/api/action/approve/{eid}").json()["error"]
+    assert "vieille" in client.post(f"/api/action/approve/{eid}", json={}).json()["error"]
 
 
 def test_an_approval_refuses_anything_but_one_ip(client, monkeypatch):
@@ -276,7 +281,7 @@ def test_an_approval_refuses_anything_but_one_ip(client, monkeypatch):
     monkeypatch.setattr("glorfindel.actions.AzureConnector", lambda **k: (_ for _ in ()).throw(AssertionError("no Azure")))
     eid = _card(action="block_suspicious_ip")
     for bad in ("*", "10.0.0.0/8", "Internet", "0.0.0.0"):
-        r = client.post(f"/api/action/approve/{eid}", params={"ip": bad, "scope": "subnet"}).json()
+        r = client.post(f"/api/action/approve/{eid}", json={}, params={"ip": bad, "scope": "subnet"}).json()
         assert "IP" in r["error"], bad
 
 

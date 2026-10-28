@@ -1116,10 +1116,17 @@ original. Un tag périmé ne rattache rien (la carte supprimée, ou rendue à un
 Glorfindel) : la VM réellement seule reprend ses noms fixes. Liste des NSG ou des cartes illisible :
 inconnu, les noms fixes restent et le rapport le dit (« au partage illisible »). Règle composée
 `an_old_isolations_vm_goes_away` (la VM de l'ancienne isolation isolée, sa carte nue ou non, les
-tags perdus ou non, une VM créée sur ce NSG, puis reset trois fois sur quatre, ou levée) ; huit
-cas figés (reset, levée, carte nue, tags perdus, état perdu, liste des cartes illisible, et le
-pendant : la VM seule avec un tag périmé, la VM elle-même en quarantaine) ; mutants M1030–M1037,
-attrapés à chaque tour, d'abord par leurs séquences figées. Le mécanisme couvre aussi le cas
+tags perdus ou non, une VM créée sur ce NSG, puis reset trois fois sur quatre, ou levée) ; dix
+cas figés (reset, levée, carte nue, tags perdus, état perdu, liste des cartes illisible ; liste des
+NSG illisible ; et le pendant : la VM seule avec un tag périmé, la VM elle-même en quarantaine, la
+carte du reset sans aucune liste) ; mutants M1030–M1037, attrapés à chaque tour, d'abord par leurs
+séquences figées. La relecture 5.5 a trouvé le nom de blocage simple (`glorfindel-block-<ip>`, sans
+VM) compté parmi les noms fixes sans qu'aucun cas ne le prouve, et le déblocage muet quand le
+partage est illisible : `not_found`, la règle laissée (l'IP restait bloquée : côté sûr, mais faux).
+Trois cas figés de plus (le blocage d'`api` gardé au déblocage de la nouvelle VM ; le NSG, puis la
+liste des NSG, illisibles : `unblock_partial`, le blocage dit et laissé, repris une fois lisible),
+mutants M1038–M1039. La course avec la réaffirmation n'est plus exemptée : elle ne supprime aucune
+règle hors de notre NSG de quarantaine, seule l'autre opération compte comme acteur. Le mécanisme couvre aussi le cas
 d'I4F (la carte de la nouvelle VM porte notre tag) : M960–M961 n'y restent visibles que par un cas
 figé où les listes sont illisibles — la carte du reset elle-même suffit à dire le NSG partagé, sans
 rien lire d'autre. Mesures : machine verte à 500 séquences (graines 1, 7, 42) et à 2 000 (graine

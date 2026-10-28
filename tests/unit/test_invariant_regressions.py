@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import pytest
 
-from .fake_azure import key
+from .fake_azure import ATTACKER, FakeAzure, _rule_record, key
 from .test_invariants import IsolationMachine, _rule, invariant_env
 
 WEB1 = "/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/web"
@@ -853,3 +853,66 @@ def test_the_nic_away_of_the_reset_itself_needs_no_listing(monkeypatch):
     _quarantine_world(monkeypatch,
                       ("create_vm", "northeurope", "rg-app1", "batch", _API_NSG, "Linux"),
                       ("isolate", _BATCH, _BATCH, None), check=check)
+
+
+_PLAIN = "glorfindel-block-" + ATTACKER.replace(".", "-")
+
+
+def _plain_block_world(monkeypatch, *steps, check):
+    """An older version's block of the attacker on api's own NSG, under the IP's name
+    alone (no VM in it), its state lost — and no older isolation: the plain block name
+    is the only fixed name on the NSG. The quarantine on, steps, then `check`."""
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_net(quarantine=True, api_nic={"own": "dedicated"}))
+        nsg = m.fake.nsgs[key(_API_NSG)]
+        taken = {r["priority"] for r in nsg["rules"].values()}
+        prio = next(p for p in range(200, 4096) if p not in taken)
+        for name, direction, src, dst in ((_PLAIN, "Inbound", ATTACKER, "*"), (f"{_PLAIN}-out", "Outbound", "*", ATTACKER)):
+            FakeAzure._put_rule(nsg, _rule_record(_rule(name, prio, dict(
+                access="Deny", direction=direction, source_address_prefix=src,
+                destination_address_prefix=dst, destination_port_range="*"))))
+            m.fake.authored.add((key(_API_NSG), name.lower()))
+        for rule, *draws in steps:
+            getattr(m, rule)(Script(*draws))
+        check(m)
+    finally:
+        m.teardown()
+
+
+def _plain_on(m) -> set:
+    return {n for n in m.fake.nsgs[key(_API_NSG)]["rules"] if n.startswith(_PLAIN)}
+
+
+def test_an_unblock_never_takes_the_old_block_of_a_vm_in_quarantine(monkeypatch):
+    """The issue's world with a block: api's older block under the IP's name alone, api
+    isolated by quarantine, a new VM attached alone to api's NSG. Read as the new VM's
+    alone, the NSG's plain block name was its own: its unblock deleted api's block. The
+    plain block name is a fixed name too: the NIC away is looked for (I4S)."""
+    def check(m):
+        out = m.connector.unblock_ip(ATTACKER, _BATCH)
+        assert out["status"] == "not_found", out
+        assert _plain_on(m) == {_PLAIN, f"{_PLAIN}-out"}
+    _plain_block_world(monkeypatch, ("isolate", API, API, None),
+                       ("create_vm", "northeurope", "rg-app1", "batch", _API_NSG, "Linux"), check=check)
+
+
+@pytest.mark.parametrize("fault", [("nsg.get", "always-429"), ("nsg.list", "always-429")])
+def test_an_unblock_says_the_old_block_it_cant_attribute(monkeypatch, fault):
+    """api alone on its NSG with its older plain-named block, whose sharing can't be read
+    (the NSG, or the subscription's NSGs where a NIC away would show): unknown. The
+    block is left — the IP stays blocked — and said: `not_found` was answered while the
+    rules stayed (I4S, review). Readable again, the unblock takes it."""
+    def check(m):
+        m.chaos.arm(fault)
+        try:
+            out = m.connector.unblock_ip(ATTACKER, API)
+        finally:
+            m.chaos.arm(None)
+        assert out["status"] == "unblock_partial", out
+        assert any("partage illisible" in f and _PLAIN in f for f in out["failed"]), out
+        assert _plain_on(m) == {_PLAIN, f"{_PLAIN}-out"}
+        out = m.connector.unblock_ip(ATTACKER, API)
+        assert out["status"] == "unblocked" and not _plain_on(m), out
+    _plain_block_world(monkeypatch, check=check)

@@ -1263,8 +1263,10 @@ class IsolationMachine(RuleBasedStateMachine):
             if other not in involved and "reassert" not in {first[1], second[1]}:
                 self._only_sealed(other, strip(flows[other]), strip(after[other]), "I4: two operations elsewhere",
                                   flows[("own", other)] - flows[other])
-        if "reassert" not in {first[1], second[1]}:
-            self._old_isolations_kept(involved, f"I4: {first[1]} and {second[1]} at once")
+        # The reassertion acts on every VM it has a state for, never on its drawn one, and
+        # deletes no rule outside our quarantine NSG: only the other operation's VM acts.
+        self._old_isolations_kept({vm for vm, kind, _ in (first, second) if kind != "reassert"},
+                                  f"I4: {first[1]} and {second[1]} at once")
         self._claims_after_a_change()
 
     # ── the customer's world moving ─────────────────────────────────────────────

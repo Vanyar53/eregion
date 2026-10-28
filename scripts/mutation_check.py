@@ -1628,6 +1628,16 @@ MUTANTS += [
               "isolation of a VM alone on its NSG never goes (I4S)", NET,
      "        tied -= mine\n",
      ""),
+    # After the 5.5 review: the plain block name is a fixed name too, and an unblock that
+    # leaves one it can't attribute says so.
+    ("M1038", "the block under the IP's name alone not a fixed name: the unblock of a VM alone on an "
+              "NSG takes the older block of a VM away from it (I4S)", NET,
+     " or bool(_PLAIN_BLOCK.match(low))",
+     ""),
+    ("M1039", "an older plain-named block left on an NSG whose sharing can't be read, in silence: "
+              "`not_found` while the IP stays blocked (I4S, review)", UNB,
+     "                failed += self._unattributable_plain_block(ip, t, rules)\n",
+     ""),
 ]
 
 # MC1 — the AWS adapter, written against the simulated world (tests/unit/fake_aws.py) and
@@ -2286,7 +2296,7 @@ TESTS["M838"] = f"{INVARIANTS} tests/unit/test_invariant_regressions.py"
 TESTS.update({mid: f"{INVARIANTS} tests/unit/test_invariant_regressions.py" for mid in ("M960", "M961")})
 # I4S (#239): their frozen sequences first (each one has its witness), then the machine
 # (its composite rule, `an_old_isolations_vm_goes_away`).
-TESTS.update({f"M{n}": f"tests/unit/test_invariant_regressions.py {INVARIANTS}" for n in range(1030, 1038)})
+TESTS.update({f"M{n}": f"tests/unit/test_invariant_regressions.py {INVARIANTS}" for n in range(1030, 1040)})
 # M834 needs a world with no state at all: rare in the drawn sequences (2/4 at 500).
 TESTS["M834"] = f"{INVARIANTS} tests/unit/test_reassert.py"
 # I8F (#227): flaky by the machine alone (its composite rule helps, a 429 at the right call

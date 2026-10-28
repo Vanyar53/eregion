@@ -184,10 +184,11 @@ MUTANTS = [
      "            views = self._nic_nsg_views(t0)\n            if t0.get(\"quarantine\"):",
      "            views = self._nic_nsg_views(t0)\n            if False:"),
     ("M24", "reset --from-azure reads the original from the tag only (L27)", SWP,
+     # The state skipped: the tag decides (the code moved, I8S review — same bug).
      "                original = _recorded_original(t0[\"nic_id\"])\n                if original is _UNKNOWN:\n"
-     "                    original = self._original_from_tags(t0[\"quarantine\"], t0[\"nic_id\"])\n"
-     "                originals[t0[\"nic_id\"]] = original",
-     "                originals[t0[\"nic_id\"]] = original = self._original_from_tags(t0[\"quarantine\"], t0[\"nic_id\"])"),
+     "                    original = self._original_from_tags(t0[\"quarantine\"], t0[\"nic_id\"])\n",
+     "                original = _UNKNOWN\n                if original is _UNKNOWN:\n"
+     "                    original = self._original_from_tags(t0[\"quarantine\"], t0[\"nic_id\"])\n"),
     ("M25", "a partial reset leaves the state unmarked (L27)", SWP,
      "        elif not dry_run:\n            # Part of it is gone from Azure",
      "        elif False:\n            # Part of it is gone from Azure",
@@ -1625,6 +1626,44 @@ MUTANTS += [
      "                    if False:\n"),
 ]
 
+# I8S (#245): two hosts, separate states — the state's "none" never wins over a tag that names
+# an NSG, and a tag that can't be read is never "none". The machine has one state directory:
+# measured by the two-host sequences frozen in test_invariant_regressions.py (TESTS below).
+MUTANTS += [
+    ("M1040", "the release follows the state's 'none' over a tag naming the NSG: the NIC left bare (I8S)",
+     REL, '                        if original is None and "original_nsg_id" in p:\n',
+     "                        if False:\n"),
+    ("M1041", "the release's sweep follows the state's 'none' for a NIC in a quarantine its placement doesn't "
+              "name (host 2's, another group): left bare (I8S)", REL,
+     "                    elif original is None:\n                        original = self._tag_over_none(q, t0[\"nic_id\"])\n",
+     "                    elif False:\n                        original = self._tag_over_none(q, t0[\"nic_id\"])\n"),
+    ("M1042", "a 429 on our tag: the re-isolation writes the state's 'none' over it (I8S)", QUA,
+     "            if original is not _UNKNOWN and not tag_unread:\n",
+     "            if original is not _UNKNOWN:\n"),
+    ("M1043", "a tag that can't be read reads as 'none' at the release: the NIC left bare (I8S)", REL,
+     "            if _is_not_found(exc):\n                return None\n            raise\n",
+     "            return None\n"),
+    ("M1044", "reset follows the state's 'none' over the tag of a NIC in quarantine (I8S)", SWP,
+     "                elif original is None:\n                    # The state's \"none\" yields to our tag",
+     "                elif False:\n                    # The state's \"none\" yields to our tag"),
+    ("M1045", "reset follows the state's 'none' over the tag of a bare NIC (I8S)", SWP,
+     "            if recorded is None and q_bare is not None:\n", "            if False:\n"),
+    ("M1046", "reset reads an unreadable tag of a bare NIC as the state's 'none': swept bare (I8S)", SWP,
+     "                if recorded is _UNKNOWN or recorded is None:\n", "                if recorded is _UNKNOWN:\n"),
+    ("M1047", "verify_release follows the state's 'none' over a tag naming the NSG: says released (I8S)", VER,
+     "            if original is _UNKNOWN or original is None:\n", "            if original is _UNKNOWN:\n"),
+    # Review of I8S (5.5): the reset recorded the state's "none" before reading the tag; a 429
+    # there left it recorded — the NIC put back bare, the tag X deleted.
+    ("M1048", "reset records the state's 'none' before reading the tag: a 429 there, the NIC put back "
+              "bare and X deleted (I8S, review)", SWP,
+     "                original = _recorded_original(t0[\"nic_id\"])\n",
+     "                originals[t0[\"nic_id\"]] = original = _recorded_original(t0[\"nic_id\"])\n"),
+    ("M1049", "a bare NIC's original: the first tag found, a 'none' in one group over X in another — two "
+              "hosts, two quarantine groups (I8S, review)", QUA,
+     "            if hit and hit[0]:\n                return hit\n            none = none or hit\n",
+     "            if hit:\n                return hit\n"),
+]
+
 
 # I4F (#235): a NIC away from its NSG (in quarantine, or bare) still counts among the NSG's —
 # or the NSG reads as another VM's alone, and the reset takes that VM's older isolation.
@@ -1636,6 +1675,53 @@ MUTANTS += [
     ("M961", "a NIC away not counted among its NSG's (I4F)", NET,
      "        if away_nic and not any(_same_id(getattr(n, \"id\", \"\") or \"\", away_nic) for n in nics):\n"
      "            nics.append(away_nic)\n",
+     ""),
+]
+
+# I4S (#239), the symmetric case: another VM's NIC away from the NSG (in our quarantine, or
+# bare) is tied to it by our tag, or by the local state when the tag is lost — or the NSG
+# reads as the new VM's alone, and its reset takes the other VM's older isolation. Range
+# M1030–M1039.
+MUTANTS += [
+    ("M1030", "another VM's NIC away from the NSG not counted: the reset of a VM alone there takes "
+              "the other's older isolation (I4S)", NET,
+     "        if len(nics) < 2 and not subnets:\n",
+     "        if False:\n"),
+    ("M1031", "our quarantine tag ignored: only the local state ties a NIC away to its NSG (I4S)", NET,
+     '            tied |= {tag for tag, value in tags.items() if tag.startswith("glorfindel-orig-") '
+     "and names_this(value)}\n",
+     ""),
+    ("M1032", "the local state ignored when the quarantine's tag is lost (I4S)", NET,
+     '        tied |= {self._orig_tag(p["nic_id"]) for iso in active_isolations()',
+     '        tied |= {self._orig_tag(p["nic_id"]) for iso in []'),
+    ("M1033", "an unreadable NSG listing read as no NIC away: the fixed names taken (I4S)", NET,
+     "            listing = list(self._network.network_security_groups.list_all())\n"
+     "        except Exception:\n            return None\n",
+     "            listing = list(self._network.network_security_groups.list_all())\n"
+     "        except Exception:\n            return False\n"),
+    ("M1034", "a bare NIC tied by our tag not counted (I4S)", NET,
+     "        if not tied:\n            return False\n",
+     "        if True:\n            return False\n"),
+    ("M1035", "every tag naming the NSG read as a NIC away, a stale one too: the older isolation of "
+              "a VM alone on its NSG never goes (I4S)", NET,
+     "        if not tied:\n            return False\n",
+     "        if tied:\n            return True\n"),
+    ("M1036", "an unreadable NIC listing read as no bare NIC: the fixed names taken (I4S)", NET,
+     "        except Exception:\n            return None\n        return False\n",
+     "        except Exception:\n            return False\n        return False\n"),
+    ("M1037", "the NIC of the reset itself, away in quarantine, counted as another VM's: the older "
+              "isolation of a VM alone on its NSG never goes (I4S)", NET,
+     "        tied -= mine\n",
+     ""),
+    # After the 5.5 review: the plain block name is a fixed name too, and an unblock that
+    # leaves one it can't attribute says so.
+    ("M1038", "the block under the IP's name alone not a fixed name: the unblock of a VM alone on an "
+              "NSG takes the older block of a VM away from it (I4S)", NET,
+     " or bool(_PLAIN_BLOCK.match(low))",
+     ""),
+    ("M1039", "an older plain-named block left on an NSG whose sharing can't be read, in silence: "
+              "`not_found` while the IP stays blocked (I4S, review)", UNB,
+     "                failed += self._unattributable_plain_block(ip, t, rules)\n",
      ""),
 ]
 
@@ -2294,12 +2380,17 @@ TESTS.update({f"M{n}": "tests/unit/test_reassert.py" for n in (835, 836, 837, 83
 TESTS["M838"] = f"{INVARIANTS} tests/unit/test_invariant_regressions.py"
 # I4F (#235): the machine met it once, at 2 000 sequences (seed 101) — its frozen sequence too.
 TESTS.update({mid: f"{INVARIANTS} tests/unit/test_invariant_regressions.py" for mid in ("M960", "M961")})
+# I4S (#239): their frozen sequences first (each one has its witness), then the machine
+# (its composite rule, `an_old_isolations_vm_goes_away`).
+TESTS.update({f"M{n}": f"tests/unit/test_invariant_regressions.py {INVARIANTS}" for n in range(1030, 1040)})
 # M834 needs a world with no state at all: rare in the drawn sequences (2/4 at 500).
 TESTS["M834"] = f"{INVARIANTS} tests/unit/test_reassert.py"
 # I8F (#227): flaky by the machine alone (its composite rule helps, a 429 at the right call
 # stays rare) — their frozen sequences, then the machine (L1F's precedent).
 TESTS.update({mid: f"tests/unit/test_invariant_regressions.py {INVARIANTS}"
               for mid in ("M860", "M861", "M862", "M863", "M864", "M865")})
+# I8S (#245): a second host with its own state is outside the machine — the frozen sequences.
+TESTS.update({f"M{n}": "tests/unit/test_invariant_regressions.py -k two_hosts" for n in range(1040, 1050)})
 
 # I1S (#231): a quarantine card's NSG absent from the listing is read again by its id before
 # the card closes — gone on a 404 only, judged on its content without its tag, never read in

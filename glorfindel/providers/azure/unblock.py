@@ -4,6 +4,7 @@ actions.py, A1).
 from __future__ import annotations
 
 from glorfindel.providers.azure.nsg import (
+    _deny_applies,
     _deny_blocks,
     _describe_shadowing,
     _ip_scoped,
@@ -352,4 +353,17 @@ class UnblockMixin:
                     if _nic_owns(r, {base, f"{base}-out"}, names, t.get("private_ips") or None):
                         err = self._delete_rule(t["nsg_rg"], t["nsg_name"], name)
                         (failed if err else deleted).append(err or name)
+                failed += self._unattributable_plain_block(ip, t, rules)
         return deleted, failed
+
+    def _unattributable_plain_block(self, ip: str, t: dict, rules: list) -> list[str]:
+        """An older version's block under the IP's name alone, cutting this NIC off, on
+        its own NSG whose sharing can't be read: this VM's, or another's away from it —
+        unknown (I4S). Left, and said: it used to be left in silence, `not_found` answered
+        while the IP stayed blocked. On a subnet's NSG the name is a perimeter block."""
+        if not (t.get("sharing_unknown") and t.get("scope") == "nic"):
+            return []
+        plain = {self._block_rule_prefix(ip).lower(), f"{self._block_rule_prefix(ip)}-out".lower()}
+        return [f'{t["nic_short"]}:{_rule_name(r)} (NSG {t["nsg_name"]} au partage illisible : blocage '
+                "d'une ancienne version, VM inconnue) : laissée"
+                for r in rules if _rule_name(r).lower() in plain and _deny_applies(r, t.get("private_ips") or None)]

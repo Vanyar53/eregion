@@ -146,9 +146,8 @@ glorfindel/
   escalations.py        → ~/.glorfindel/escalations.jsonl + labels (proposed_rule, improve_detection ajoutés) ;
                           SEC3 : chaque écriture sous le verrou du magasin, le magasin réécrit entier
   signal_origin.py      → SEC3 (#274) : ce que la watch prend de runs/*_signals.jsonl — les événements qu'un
-                          injecteur émet (attack_started → la règle de la watch, detection_missed → une proposition,
-                          attack_adapted → noté), et d'eux les seuls champs qu'il écrit ; le reste refusé (journal,
-                          compteur), jamais décidé. Le recovery_complete : seul celui de `glorfindel restore` (ce
+                          injecteur émet (attack_started → la règle de la watch, detection_missed → une proposition),
+                          et d'eux les seuls champs qu'il écrit ; le reste refusé (journal, compteur), jamais décidé. Le recovery_complete : seul celui de `glorfindel restore` (ce
                           processus, ou ~/.glorfindel/recovery_signals/) lève une isolation seul
   bot.py                → Discord bot — un fil par VM, boutons Acquitter + Commande, /pending slash command ;
                           ButtonPolicy (M-3) : DISCORD_ALLOWED_USERS / _ROLES, fermé par défaut
@@ -276,13 +275,20 @@ infra/terraform/              → module Celebrimbor : infra de test Azure modul
                                 Cibles : make celebrimbor-{plan,up,down,output,stop,start} [INSTANCE=] [TOPO=].
                                 Schéma de noms type-celebrimbor-nom (CAF) : VM=cités, LAW=tours de guet, RSV=coffres.
 
-~/.glorfindel/                → SEC3 : fichiers d'état en 0600, dossiers en 0700, écrits entiers (fichier temporaire +
-                                `os.replace`) ; un état d'une version antérieure est resserré au démarrage du watch.
-                                Qui écrit : la watch, la console, le bot et la CLI (le même utilisateur). Les injecteurs
-                                (Annatar, Gothmog) n'en voient que `injectors/`, en lecture seule (compose, Makefile)
-  injectors/watch_heartbeat   → SEC3 (N-05) : copie du battement de la watch, le seul fichier que lisent les injecteurs
-                                (garde V1) — leur conteneur monte ce dossier comme son ~/.glorfindel. 0644 (dossier 0755) : à lire
-                                par eux, rien de secret. Retiré à l'arrêt
+~/.glorfindel/                → SEC3 : en 0600 (dossiers 0700), écrits entiers (fichier temporaire + `os.replace`) :
+                                isolation/, blocks/, escalations.jsonl, channel_refusals.json, recovery_signals/ (et
+                                orphan_alerts.json, quarantine_alerts.json, active_jobs/, recovery/, écrits par le même
+                                chemin) ; isolation/ et
+                                blocks/ d'une version antérieure resserrés au démarrage du watch. Les autres —
+                                proposed_rules.jsonl, incidents.jsonl, les magasins du bot, posture, discovery,
+                                readiness — restent au umask : suite notée. Qui écrit : la watch, la console, le bot et
+                                la CLI (le même utilisateur). Les injecteurs (Annatar, Gothmog) n'en voient que
+                                `injectors/`, en lecture seule (compose, Makefile)
+  injectors/watch_heartbeat   → SEC3 (N-05) : copie du battement de la watch, le seul fichier de Glorfindel que lisent
+                                les injecteurs (garde V1 ; le guetteur des blocages d'Annatar, qui lisait blocks/ et
+                                émettait attack_adapted, est retiré) — leur conteneur monte ce dossier comme son
+                                ~/.glorfindel. La watch le crée au démarrage. 0644 (dossier 0755) : à lire par eux, rien
+                                de secret. Retiré à l'arrêt
   watch_heartbeat             → le battement de la watch (V1 sur cet hôte, la console, le CD de H0)
   escalations.jsonl           → escalades persistées. SEC3 (V-10) : chaque lecture-modification-écriture sous un
                                 verrou (`flock` sur `escalations.jsonl.lock`, `response/locks.py::_file_lock`), le

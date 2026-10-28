@@ -2644,11 +2644,36 @@ MUTANTS += [
      "glorfindel-start: check-azure-env build-glorfindel\n"
      "\tmkdir -p $(HOME)/.glorfindel $(HOME)/.glorfindel/injectors ",
      "glorfindel-start: check-azure-env build-glorfindel\n\tmkdir -p $(HOME)/.glorfindel "),
-    ("M1232", "an attack_adapted decided on: a note of the run makes the defender act (SEC3, V-05)", GCLI,
-     "    if adm.what == \"note\":\n", "    if False:\n"),
+    ("M1232", "an attack_adapted admitted again, no injector emitting it: decided on (SEC3, V-05)", SO,
+     ("    if event not in CHANNEL_EVENTS:\n", "    fields = _FIELDS[event]\n"),
+     ("    if event not in CHANNEL_EVENTS and event != \"attack_adapted\":\n",
+      "    fields = _FIELDS.get(event, _FIELDS[\"attack_started\"])\n")),
     ("M1233", "a refused line not counted (SEC3, V-05)", SO,
      "        _REFUSED[event] = _REFUSED.get(event, 0) + 1\n", ""),
+    # After the review of SEC3 (M1234–M1239).
+    ("M1234", "a link in the defender's directory taken for its file: one into runs/ passes (SEC3, V-05)", SO,
+     "        return Path(path).resolve().parent == RECOVERY_SIGNALS_DIR.resolve()\n",
+     "        return Path(path).parent == RECOVERY_SIGNALS_DIR\n"),
+    ("M1235", "the watch no longer makes the injectors' directory first: docker makes it as root (SEC3)", GCLI,
+     "        _INJECTORS_DIR.mkdir(mode=0o755, parents=True, exist_ok=True)\n"
+     "        os.chmod(_INJECTORS_DIR, 0o755)      # theirs to read, whatever the umask\n",
+     "        pass\n"),
+    ("M1236", "the injectors' heartbeat owner-only: an image of another user can't read it (SEC3, N-05)", GCLI,
+     "            _atomic_write_text(_INJECTOR_BEAT, now, mode=0o644)", "            _atomic_write_text(_INJECTOR_BEAT, now)"),
+    ("M1237", "Annatar reads Glorfindel's state again: the blocks watcher back (SEC3, N-05)", ENG,
+     "        # Glorfindel no longer writes, and the injectors no longer mount that state.\n"
+     "        stop_event = threading.Event()\n",
+     "        # Glorfindel no longer writes, and the injectors no longer mount that state.\n"
+     "        stop_event = threading.Event()\n"
+     "        _blocks = Path.home() / \".glorfindel\" / \"blocks\"\n"),
+    ("M1238", "the refusals counted in memory only: nothing on this host says them (SEC3, V-05)", SO,
+     "            _atomic_write_text(REFUSALS_FILE, json.dumps(", "            (lambda *a, **k: None)(REFUSALS_FILE, json.dumps("),
+    ("M1239", "any recovery_complete with an id vouched for: a forged one releases alone (SEC3, V-05)", SO,
+     "        return bool(sid) and sid in _VOUCHED\n", "        return bool(sid)\n"),
 ]
+TESTS.update({f"M{n}": SEC3_ORIGIN for n in (1234, 1235, 1236, 1238)})
+TESTS["M1237"] = "tests/unit/test_engine.py -k injectors_read"
+TESTS["M1239"] = "tests/unit/test_agent_nodes.py -k recovery"
 TESTS.update({f"M{n}": "tests/unit/test_orphan_sweep.py -k unreadable" for n in (1210, 1211, 1212)})
 TESTS.update({f"M{n}": "tests/unit/test_orphan_sweep.py -k guarded_write" for n in (1213, 1214)})
 TESTS.update({f"M{n}": SEC3_ORIGIN for n in (1215, 1216, 1217, 1219, 1220, 1221, 1226, 1227, 1228, 1230,

@@ -32,14 +32,17 @@ make components-check [COMPONENT=annatar]    # chaque composant tourne seul : se
 #     commandes que lancent les boutons du bot), d'où l'écriture.
 #   annatar, gothmog : runs/ en écriture (leurs signaux, leurs rapports, leurs campagnes) et, de ~/.glorfindel,
 #     ~/.glorfindel/injectors seulement, en lecture seule, monté comme leur ~/.glorfindel : la watch y écrit
-#     son battement (le garde V1, eregion_core/watch_gate.py), rien d'autre. Les escalades, l'état d'isolation
-#     et de blocage, les règles du client, l'historique restent hors de leur portée. make glorfindel-start
-#     crée ce dossier à ton nom (laissé à docker, il serait à root, et la watch ne pourrait pas y écrire : elle
-#     le dit et continue).
+#     son battement (le garde V1, eregion_core/watch_gate.py), rien d'autre ; ni Annatar ni Gothmog ne lisent
+#     d'autre fichier de Glorfindel (le guetteur des blocages d'Annatar est retiré). Les escalades, l'état
+#     d'isolation et de blocage, les règles du client, l'historique restent hors de leur portée. La watch crée
+#     ce dossier au démarrage, et make glorfindel-start avant elle, à ton nom (laissé à docker, il serait à
+#     root, et la watch ne pourrait pas y écrire : elle le dit et continue).
 #   La watch ne prend de runs/ que ce qu'un injecteur émet (docs/glorfindel.md, « Le canal runs/ ») : une ligne
 #     refusée est dite dans `make glorfindel-logs` et comptée dans ~/.glorfindel/channel_refusals.json.
-#   État local : fichiers 0600, dossiers 0700, écrits entiers ; un état d'avant est resserré au démarrage de
-#     la watch (un fichier à root d'une ancienne image reste tel quel : make fix-state-ownership).
+#   État local (docs/fichiers-cles.md) : isolation/, blocks/, escalations.jsonl, channel_refusals.json et
+#     recovery_signals/ en 0600 (dossiers 0700), écrits entiers ; isolation/ et blocks/ d'avant resserrés au
+#     démarrage de la watch (un fichier à root d'une ancienne image reste tel quel : make fix-state-ownership).
+#     Les autres fichiers de ~/.glorfindel restent au umask (suite notée).
 
 # Glorfindel hébergé (H0) — infra/glorfindel-host/README.md
 make glorfindel-host-tunnel                  # tunnel + « Console → http://localhost:7007/?token=… » ; le jeton de host.env :
@@ -248,7 +251,8 @@ make glorfindel-host-campaign-report CAMPAIGN=<id>   # lit runs/campaigns/<id>/r
 annatar campaign plan --target <resource_id> [--llm]   # en local (banc) ; --llm pour le planner LLM
 annatar campaign run <campaign_id> --yes               # ratifie le budget/scope et exécute
 
-# Simulation locale sans Azure
+# Simulation locale sans Azure — les signaux d'un run dans un fichier temporaire, puis
+# `glorfindel respond <fichier> --dry-run` (pas de watch, pas runs/ : SEC3) ; une clé de modèle
 make annatar-simulate
 make annatar-simulate-gap
 

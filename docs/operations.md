@@ -371,10 +371,13 @@ allumée), `exclude_all: "false"` sortait la VM de toutes les règles (un texte 
 - **`never_block`** (SEC2, 28/10) : une liste d'adresses ou de préfixes CIDR que Glorfindel ne
   bloque **jamais**, quelle que soit la règle ou le modèle — en plus de ceux livrés
   (`glorfindel/response/policy.py`, `NEVER_BLOCK_SHIPPED` : 168.63.129.16 et 169.254.169.254 de la
-  plateforme Azure, 10/8, 172.16/12, 192.168/16, le bouclage). Y mettre la sortie du bureau, un
-  scanner, une sonde de supervision. Un blocage d'une de ces adresses est retenu par `decide`
+  plateforme Azure, 10/8, 172.16/12, 192.168/16, 100.64/10, fc00::/7, le bouclage ; `::ffff:a.b.c.d`
+  est lue comme son IPv4). Y mettre la sortie du bureau, un scanner, une sonde de supervision.
+  **Une adresse privée n'est donc jamais bloquée** : un mouvement latéral depuis une autre VM du
+  réseau ne se répond pas par un blocage d'IP, mais par l'isolation de la VM source. Un blocage d'une de ces adresses est retenu par `decide`
   (carte `protected_address`) et refusé par le connecteur, Azure comme AWS, quel que soit le chemin
-  (agent, approbation de la console ou du bot, `glorfindel block`) ; une liste illisible refuse tout
+  (décision de l'agent, approbation d'une carte dans la console et
+  son extension au sous-réseau, réaffirmation) ; une liste illisible refuse tout
   blocage. Chaque entrée est validée (adresse ou préfixe ; `/0` refusé : couper les blocages se fait
   par le mode d'autonomie). Absente : la liste livrée seule. **Clé nouvelle** : une config qui la
   porte est refusée par une version antérieure (lecture stricte) — la poser sur H0 après la mise à

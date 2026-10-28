@@ -2970,6 +2970,70 @@ MUTANTS += [
 TESTS.update({"M1055": "tests/unit/test_host_cd.py", "M1056": "tests/unit/test_host_cd.py"})
 
 
+# SEC2 — the detection rules against log lines anyone can write; the addresses never blocked;
+# one card per address; a proposed rule never in a shipped rule's place; the floor interval,
+# ${VAR} in documented fields only; a cap per rule and poll for every source. Measured by
+# tests/unit/test_forged_logs.py (the shipped rules run as written, tests/unit/kql_subset.py).
+RULES_YAML = "glorfindel/rules/azure/detection_rules.yaml"
+POL = "glorfindel/response/policy.py"
+DRU = "glorfindel/detection_rules.py"
+PRU = "glorfindel/proposed_rules.py"
+MUTANTS += [
+    ("M1190", "ssh-brute-force reads every program's lines, not sshd's (SEC2)", RULES_YAML,
+     '      | where ProcessName in ("sshd", "sshd-session")\n', ""),
+    ("M1191", "ssh-brute-force takes the first address of the line (SEC2)", RULES_YAML,
+     r'extract(@"from (\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}) port \d+( ssh2)?\]?\s*$", 1, SyslogMessage)',
+     r'extract(@"from (\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})", 1, SyslogMessage)'),
+    ("M1192", "ssh-brute-force's address not anchored at the end of sshd's line (SEC2)", RULES_YAML,
+     r'port \d+( ssh2)?\]?\s*$", 1, SyslogMessage)', r'port \d+( ssh2)?\]?", 1, SyslogMessage)'),
+    ("M1193", "ssh-brute-force blind to sshd-session (OpenSSH 9.8+) (SEC2)", RULES_YAML,
+     '      | where ProcessName in ("sshd", "sshd-session")\n', '      | where ProcessName == "sshd"\n'),
+    ("M1194", "sudo-privilege-escalation reads every program's lines, not sudo's (SEC2)", RULES_YAML,
+     '      | where ProcessName == "sudo"\n', ""),
+    ("M1195", "sudo-privilege-escalation takes any sudo line holding its words, not sudo's form (SEC2)", RULES_YAML,
+     r'      | where SyslogMessage matches regex @"^\s*\S+ : (.*; )?USER=root ; (.*; )?COMMAND="' + "\n", ""),
+    ("M1196", "the platform and private addresses blockable: nothing shipped in never_block (SEC2)", POL,
+     '    "168.63.129.16/32", "169.254.169.254/32",\n    "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",\n'
+     '    "127.0.0.0/8", "::1/128",\n', ""),
+    ("M1197", "glorfindel-config.yaml's never_block never read (SEC2)", POL,
+     "    return list(NEVER_BLOCK_SHIPPED) + list(load_glorfindel_config().never_block)",
+     "    return list(NEVER_BLOCK_SHIPPED)"),
+    ("M1198", "an unreadable never_block list blocks anyway (SEC2)", POL,
+     "    except Exception as exc:\n        raise ProtectedAddressError(\n            f\"blocage de {addr} refusé : liste never_block illisible \"",
+     "    except Exception as exc:\n        return addr\n        raise ProtectedAddressError(\n"
+     "            f\"blocage de {addr} refusé : liste never_block illisible \""),
+    ("M1199", "the Azure connector blocks a never-block address (SEC2)", "glorfindel/providers/azure/blocks.py",
+     "        blockable_ip(ip)\n\n        self._guard_write(\"block_suspicious_ip\")", "        pass\n\n        self._guard_write(\"block_suspicious_ip\")"),
+    ("M1200", "the AWS connector blocks a never-block address (SEC2)", "glorfindel/providers/aws/blocks.py",
+     "        blockable_ip(ip)            # a never-block address, never (SEC2)\n", ""),
+    ("M1201", "decide lets a block of a never-block address run: the guard never called (SEC2)", "glorfindel/agent.py",
+     "    _apply_never_block_guard(d, signal)\n", ""),
+    ("M1202", "a never-block address held by another gate first: the card never says it (SEC2)", "glorfindel/agent.py",
+     "    if not held:\n        return\n    before = d.get(\"escalation_reason\")",
+     "    if not held or d[\"escalate\"]:\n        return\n    before = d.get(\"escalation_reason\")"),
+    ("M1203", "two addresses on one VM folded into one card: its approval blocks the first (SEC2)", "glorfindel/escalations.py",
+     "                and (e.get(\"action_params\") or {}).get(\"ip\") == (action_params or {}).get(\"ip\")\n", ""),
+    ("M1204", "a proposal keeps a shipped rule's name: approved, it replaces the shipped rule (SEC2)", PRU,
+     "    name = own_name(rule_name)\n    proposal = {", "    name = rule_name\n    proposal = {"),
+    ("M1205", "a proposal recorded under a shipped rule's name approved under it (SEC2)", PRU,
+     "    name = own_name(proposal[\"rule_name\"])\n    if name != proposal[\"rule_name\"]:",
+     "    name = proposal[\"rule_name\"]\n    if name != proposal[\"rule_name\"]:"),
+    ("M1206", "a client rule in a shipped rule's place never flagged: only a note (SEC2)", DRU,
+     "        replaces_base = layer_of.get(item[\"name\"]) == \"client\" and item[\"name\"] in base_names\n",
+     "        replaces_base = False\n"),
+    ("M1207", "a client rule polling every second accepted (SEC2)", DRU,
+     "            if field_ == \"interval_s\" and not (math.isfinite(number) and number >= MIN_INTERVAL_S):",
+     "            if field_ == \"interval_s\" and not number > 0:"),
+    ("M1208", "${VAR} expanded in a rule's whole text again: a query reads the environment (SEC2)", DRU,
+     "    data = yaml.safe_load(path.read_text())\n    if data is not None and not isinstance(data, dict) and notes is not None:",
+     "    import os\n    data = yaml.safe_load(os.path.expandvars(path.read_text()))\n"
+     "    if data is not None and not isinstance(data, dict) and notes is not None:"),
+    ("M1209", "no cap of cards per rule and poll on a data source: one model call per row (SEC2)", DRU,
+     "                rest = send[data_budget:]\n                send = send[:data_budget]\n", "                rest = []\n"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_forged_logs.py" for n in range(1190, 1210)})
+
+
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a
 # composite rule or a world event to one of them. Run with --control.

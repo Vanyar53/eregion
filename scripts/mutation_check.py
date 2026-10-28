@@ -3303,7 +3303,7 @@ MUTANTS += [
     ("M1285", "@everyone and @here from outside left whole (SEC6, N-09)", CHT,
      '    return _MENTION.sub("@" + ZWSP + r"\\1", text)', "    return text"),
     ("M1286", "the steps of a card raw in Discord: an Entra name's Markdown rendered (SEC6, N-09)",
-     "glorfindel/bot.py", 'f"• {discord_text(s)}"', 'f"• {s}"'),
+     "glorfindel/bot.py", 'f"• {discord_steps(s)}"', 'f"• {s}"'),
     ("M1287", "the webhook keeps <…>: Slack's links and mentions from outside (SEC6, N-09)", CHT,
      '    s = s.replace("<", "‹").replace(">", "›").replace("](", "]" + ZWSP + "(")',
      '    s = s.replace("](", "]" + ZWSP + "(")'),
@@ -3317,6 +3317,29 @@ TESTS.update({mid: "tests/unit/test_workflows.py" for mid in ("M1280", "M1281")}
 TESTS.update({mid: "tests/unit/test_notify_discord.py" for mid in ("M1282", "M1283")})
 TESTS.update({f"M{n}": "tests/unit/test_chat_escaping.py" for n in range(1284, 1289)})
 TESTS["M1289"] = "tests/unit/test_makefile_bench.py -k yes"
+# SEC6, after the 5.5 review.
+MUTANTS += [
+    ("M1350", "an input reaches run: inside format(): the check stopped at the first } (SEC6)",
+     ".github/workflows/mutants.yml", '--examples "$EXAMPLES"', "--examples ${{ format('{0}', inputs.examples) }}"),
+    ("M1351", "the canary trusts whatever key HashiCorp's URL serves: no fingerprint check (SEC6)",
+     ".github/workflows/canary-azurerm.yml",
+     '          if ! gpg --batch --show-keys --with-colons "$key" | grep -qx "fpr:::::::::${HASHICORP_APT_FPR}:"; then\n'
+     '            echo "::error::HashiCorp\'s apt key does not carry the fingerprint ${HASHICORP_APT_FPR} — Terraform not installed."\n'
+     "            exit 1\n          fi\n", ""),
+    ("M1352", "the ping's allowed mentions leave everyone and users to discord.py's default, True (SEC6)",
+     "glorfindel/bot.py",
+     "AllowedMentions(everyone=False, users=False, replied_user=False,\n"
+     "                                                         roles=", "AllowedMentions(roles="),
+    ("M1353", "the ping posted under the client's « none »: the on-call role never pinged (SEC6)", "glorfindel/bot.py",
+     "                # Every field said: one left out reads True in discord.py (measured, SEC6).\n"
+     "                allowed_mentions=discord.AllowedMentions(everyone=False, users=False, replied_user=False,\n"
+     "                                                         roles=[discord.Object(id=self.ping_role)]),\n", ""),
+    ("M1354", "a step's code span read beside another backtick: Discord may pair it otherwise (SEC6)", CHT,
+     '_SPAN = re.compile(r"(?<!`)`([^`\\n]+)`(?!`)")', '_SPAN = re.compile(r"`([^`\\n]+)`")'),
+]
+TESTS["M1350"] = "tests/unit/test_workflows.py"
+TESTS["M1351"] = "tests/unit/test_workflows.py -k fingerprint"
+TESTS.update({f"M{n}": "tests/unit/test_chat_escaping.py" for n in (1352, 1353, 1354)})
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

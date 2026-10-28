@@ -308,10 +308,14 @@ d'exercice non marqués (B2), qui n'ont rien à faire dans une observation.
 
 ### Un passage
 
-0. **Un passage interrompu après sa bascule** (redémarrage de la VM, délai de systemd) est repris d'abord. La bascule est inscrite avant d'avoir lieu ; le passage suivant regarde la santé, puis garde la release ou revient.
+0. **Un passage interrompu après sa bascule** (redémarrage de la VM, délai de systemd) est repris d'abord. La bascule est inscrite avant d'avoir lieu, et le passage suivant regarde ce qui tourne :
+   - la watch est sur la release : la santé, puis la release est gardée ou c'est le retour arrière ;
+   - elle est encore sur la version d'avant (coupé avant que les conteneurs basculent) : H0 est remis d'aplomb sur elle, et la bascule est dite « interrompue », pas malade ; elle est retentée au passage suivant ;
+   - elle tourne sur autre chose (redéployé à la main entre-temps) : le CD n'y touche pas.
+   `make glorfindel-host-cd-retry` garde une bascule interrompue.
 1. **La dernière release**, sur l'API publique (les brouillons et les pré-versions n'y figurent pas). Rien à faire si elle tourne déjà sur les trois conteneurs, ou si elle a déjà échoué ou été refusée. Un tag déjà vu sur un autre commit est refusé : un tag publié ne se réécrit pas.
    Si seule une partie des conteneurs tourne sur la release, `#deploy` le dit une fois.
-2. **Vérifier.** Son tag est sur `origin/main`, et jamais plus ancien que ce qui tourne. Tous les check-runs de son commit, sur toutes leurs pages, sont terminés et aucun n'est rouge. Celui de la CI principale (`lint + tests`) doit être parmi eux. Si la CI tourne encore, le CD attend le passage suivant et le dit une fois.
+2. **Vérifier.** Son tag est sur `origin/main`, et jamais plus ancien que ce qui tourne. Tous les check-runs de son commit, sur toutes leurs pages, sont terminés et aucun n'est rouge. Celui de la CI principale (`lint + tests`) doit être parmi eux : absent, le CD l'attend une heure, puis refuse. Si la CI tourne encore, le CD attend le passage suivant et le dit une fois.
 3. **Garde du verrou.** Si `requirements/glorfindel.txt` a changé depuis ce qui tourne, `requirements/harness.json` doit porter sur ce verrou (son sha256) et sur le modèle de H0 (celui de `.env`, sinon celui par défaut de la release). Il doit aussi montrer 3 runs, une intégration et un jugement complets, et aucune erreur surconfiante.
 4. **La candidate** `eregion-glorfindel:<tag>`, construite dans un worktree à part (`~/.eregion-cd/build`, `deploy.sh --build-only`). L'image qui tourne et le checkout de `~/eregion` ne bougent pas.
 5. **Le préflight, dans la candidate :**
@@ -319,7 +323,7 @@ d'exercice non marqués (B2), qui n'ont rien à faire dans une observation.
    - la watch, le bot et la console s'importent ;
    - la config que compose monte (`EREGION_CONFIG` du `.env`, sinon `glorfindel-config.yaml`) passe la lecture stricte d'A3 ;
    - `docker compose config` accepte le fichier de la release avec le `.env` de H0.
-6. **La bascule** (`deploy.sh --activate`). Avant, l'image qui tourne doit être étiquetée par sa référence, sinon c'est un refus : pas de bascule sans retour possible. `--activate` tolère un `git fetch` en échec, pour que le retour arrière ne dépende pas du réseau. Le checkout est détaché, et refusé si un fichier suivi a été modifié sur la VM. Puis le retag et les trois services relancés.
+6. **La bascule** (`deploy.sh --activate`). Avant, l'image qui tourne doit être étiquetée par sa référence, sinon c'est un refus : pas de bascule sans retour possible. `--activate` tolère un `git fetch` en échec, pour que le retour arrière ne dépende pas du réseau. Il refuse un tag qui désigne un autre commit que celui dont l'image a été construite (tag réécrit) : jamais le compose ou les règles d'un commit avec l'image d'un autre. Le checkout est détaché, et refusé si un fichier suivi a été modifié sur la VM. Puis le retag et les trois services relancés.
 7. **La santé, pendant 3 minutes :**
    - les trois conteneurs tournent, sans redémarrage, et sur l'image du tag ;
    - `~/.glorfindel/watch_heartbeat` a été réécrit après la bascule ;
@@ -336,7 +340,7 @@ d'exercice non marqués (B2), qui n'ont rien à faire dans une observation.
 - **L'agent ne se remplace jamais lui-même.** Après un déploiement, si la release porte un autre `eregion_cd.py`, `deploy.sh` ou `notify_discord.py`, `#deploy` le dit, et `make glorfindel-host-cd-install` le met à jour.
 - **Le retirer** : `make glorfindel-host-cd-uninstall` (les unités ; `~/.eregion-cd/` reste).
 
-Reste à mesurer : le premier passage réel. H0 tourne sur v0.4.0 depuis le 28/10 (redéployé à la main), donc ce sera v0.4.1. Restent aussi les unités sur la VM et `journalctl` pour le compte `glorfindel`.
+Reste à mesurer : le premier passage réel. H0 tourne sur v0.4.0 depuis le 28/10 (redéployé à la main), donc ce sera v0.4.1. Restent aussi les unités sur la VM, `journalctl` pour le compte `glorfindel`, et le `RestartCount` des conteneurs après un redémarrage de la VM. Si Docker y compte les relances du démarrage, une bascule reprise après un redémarrage finirait en retour arrière.
 
 ## Changer de modèle
 

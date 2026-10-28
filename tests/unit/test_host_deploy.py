@@ -183,7 +183,8 @@ def _fake_bin(tmp_path, ref="", rev=""):
     docker.write_text('#!/bin/bash\necho "$*" >> "$FAKE_DOCKER_LOG"\n'
                       'case "$1" in inspect) case "$3" in *version*) echo "$FAKE_REF";; '
                       '*revision*) echo "$FAKE_REV";; esac;;\n'
-                      '  image) case "$2" in inspect) if [ -n "${FAKE_MISSING:-}" ] && [ "$3" = "$FAKE_MISSING" ]; then exit 1; fi;;\n'
+                      '  image) case "$2" in inspect) if [ -n "${FAKE_MISSING:-}" ] && [ "$3" = "$FAKE_MISSING" ]; then exit 1; fi;\n'
+                      '      if [ "$3" = "-f" ]; then printf "%s" "${FAKE_IMAGE_REV:-}"; fi;;\n'
                       '    ls) printf "%b" "${FAKE_IMAGES:-}";; esac;; esac\n')
     docker.chmod(0o755)
     return bin_dir, log, {"FAKE_DOCKER_LOG": str(log), "FAKE_REF": ref, "FAKE_REV": rev}
@@ -443,9 +444,25 @@ def test_activate_checks_out_retags_and_starts_without_building(repo, tmp_path):
     assert res.returncode == 0, res.stderr
     calls = log.read_text().splitlines()
     assert not any(c.startswith("build") for c in calls)
-    assert calls[:2] == ["image inspect eregion-glorfindel:v0.2.0", "tag eregion-glorfindel:v0.2.0 eregion-glorfindel"]
-    assert calls[2].startswith("compose --profile bot up -d watch war-room bot")
+    assert calls[:3] == ["image inspect eregion-glorfindel:v0.2.0",       # there, and built from which commit
+                         'image inspect -f {{index .Config.Labels "org.opencontainers.image.revision"}} '
+                         "eregion-glorfindel:v0.2.0",
+                         "tag eregion-glorfindel:v0.2.0 eregion-glorfindel"]
+    assert calls[3].startswith("compose --profile bot up -d watch war-room bot")
     assert repo.head() == c1 and repo.detached()
+
+
+def test_activate_refuses_a_tag_rewritten_since_its_image_was_built(repo, tmp_path):
+    """The image of v0.2.0 was built from c2 (the tag pointed there then): checking out c1
+    would run c2's image beside c1's compose and rules. Refused, nothing moves."""
+    before = repo.head()
+    env, log = _with_docker(repo, tmp_path, FAKE_IMAGE_REV=repo.commits[1])
+    res = repo.deploy("--activate", "v0.2.0", env=env)
+    assert res.returncode != 0 and "tag réécrit" in res.stderr
+    assert repo.head() == before and not repo.detached()
+    assert not any(c.startswith(("tag", "compose")) for c in log.read_text().splitlines())
+    env, log = _with_docker(repo, tmp_path, FAKE_IMAGE_REV=repo.commits[0])     # the same commit: fine
+    assert repo.deploy("--activate", "v0.2.0", env=env).returncode == 0
 
 
 def test_activate_without_its_image_moves_nothing(repo, tmp_path):

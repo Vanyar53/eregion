@@ -78,7 +78,7 @@ latest_tag() {
 }
 
 checkout() {
-  local want="${1:-}" tolerant="${2:-}" pair dirty rules
+  local want="${1:-}" tolerant="${2:-}" expect="${3:-}" pair dirty rules
   if ! git fetch -q --tags --force origin; then
     [ -n "$tolerant" ] || die "git fetch a échoué : rien n'est déployé"
     echo "⚠ git fetch a échoué : la référence est résolue sur la VM" >&2
@@ -88,6 +88,9 @@ checkout() {
     [ -n "$want" ] || die "aucun tag v* : préciser REF=<commit>"
   fi
   pair=$(resolve "$want")
+  # The image was built from one commit (H1): a tag rewritten since names another — its compose,
+  # its rules, its catalogue beside the old image. Refused before anything moves.
+  [ -z "$expect" ] || [ "${pair#* }" = "$expect" ] || die "« $want » désigne maintenant ${pair#* }, son image a été construite depuis $expect (tag réécrit) : rien n'a bougé"
   # A tracked file changed on the VM would ride along into the image: refused. The detection
   # rules too (P1): the containers no longer write them (mounted read-only) — approved rules
   # live in the client's layer, ~/.glorfindel/client_rules.yaml, which no checkout touches.
@@ -174,7 +177,9 @@ case "${1:-}" in
     [ -n "${2:-}" ] || die "--activate REF : la référence manque"
     lock
     docker image inspect "$IMAGE:$2" >/dev/null 2>&1 || die "pas d'image $IMAGE:$2 sur la VM : rien n'a bougé"
-    pair=$(checkout "$2" tolerant)
+    rev=$(docker image inspect -f "{{index .Config.Labels \"$LABEL_REV\"}}" "$IMAGE:$2" 2>/dev/null || true)
+    [ "$rev" = "<no value>" ] && rev=""
+    pair=$(checkout "$2" tolerant "$rev")
     docker tag "$IMAGE:${pair% *}" "$IMAGE"
     start
     echo "✓ activé : ${pair% *} (${pair#* })" ;;

@@ -2639,6 +2639,15 @@ MUTANTS += [
      "    raise Refused(f\"pas d'image {IMAGE}:{ref} pour revenir en arrière : rien n'a basculé\")\n", ""),
 ]
 TESTS.update({"M1003": "tests/unit/test_host_cd.py", "M1004": "tests/unit/test_host_cd.py"})
+# H1 after its second review (28/10): two guards of a deployment on the host. M1050–M1059 given
+# by the General session; M1052–M1059 stay free.
+MUTANTS += [
+    ("M1050", "a switch cut by a reboot never taken up: a sick release stays, unsaid (H1, second review)", CD,
+     "        if cut:\n", "        if False:\n"),
+    ("M1051", "a moved tag followed: H0 deploys a commit Jonathan never published (H1, second review)", CD,
+     "    if seen.get(tag, commit) != commit:\n", "    if False:\n"),
+]
+TESTS.update({"M1050": "tests/unit/test_host_cd.py", "M1051": "tests/unit/test_host_cd.py"})
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

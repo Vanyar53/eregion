@@ -57,7 +57,7 @@ elif cmd == "image":
     if args[1] == "inspect" and args[2] == "-f":
         if args[4] not in st["images"]:
             sys.exit(1)
-        print(st["images"][args[4]]["version"])
+        print(st["images"][args[4]]["revision" if "revision" in args[3] else "version"])
     elif args[1] == "inspect":
         sys.exit(0 if args[2] in st["images"] else 1)
     if args[1] == "ls":
@@ -587,8 +587,14 @@ def test_a_moved_tag_is_refused(h0):
     assert "a bougé" in _alerts(h0)[-1]["embeds"][0]["description"]
 
 
-def test_the_main_ci_job_must_have_run(h0):
+def test_the_main_ci_job_is_waited_for_an_hour_then_refused(h0):
+    """Another workflow can finish before the CI's job is even created: a wait, not a refusal."""
     h0.fake.gh["checks"][h0.commits["c2"]] = [{"name": "Components", "status": "completed", "conclusion": "success"}]
+    assert h0.run().returncode == 0 and h0.run().returncode == 0
+    assert [t.split(" ")[0] for t in _titles(h0)] == ["⏳"] and h0.outcome("v0.4.0") is None
+    state = json.loads((h0.cd / "state.json").read_text())
+    state["waits"]["v0.4.0"] = 12
+    (h0.cd / "state.json").write_text(json.dumps(state))
     assert h0.run().returncode == 1 and "CI principale" in _alerts(h0)[0]["embeds"][0]["description"]
 
 
@@ -629,3 +635,51 @@ def test_check_rebuilds_and_preflights_the_release_running_already(h0):
     assert "eregion-glorfindel:check-v0.4.0" not in h0.docker()["images"]
     assert h0.running() == {"v0.4.0"}
     assert h0.posts()[0]["embeds"][0]["title"] == "✅ À blanc : v0.4.0, en service, reconstruite et préflightée"
+
+
+# ── after the second review of 28/10 ───────────────────────────────────────────────
+
+def _cut_switch(h0):
+    import time
+    (h0.cd / "state.json").write_text(json.dumps({"outcomes": {"v0.4.0": {
+        "result": "switching", "from": "v0.3.1", "url": "", "why": "", "at": time.time() - 2}}, "said": {}}))
+
+
+def test_a_cut_switch_then_a_deployment_by_hand_is_left_alone(h0):
+    """1: the switch to v0.4.0 cut, then Jonathan deploys a hotfix by hand: the next pass
+    never puts v0.3.1 back over it."""
+    _cut_switch(h0)
+    st = h0.docker()
+    st["images"]["eregion-glorfindel:hotfix"] = {"version": "hotfix", "revision": h0.commits["c2"], "n": 7}
+    for c in st["containers"].values():
+        c.update(version="hotfix")
+    h0.state.write_text(json.dumps(st))
+    h0.publish("v0.3.1")
+    res = h0.run()
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert h0.running() == {"hotfix"} and h0.outcome("v0.4.0") == "superseded"
+    assert not any(c.startswith(("tag ", "compose ")) for c in h0.calls())
+    (post,) = h0.posts()
+    assert post["embeds"][0]["title"].startswith("ℹ️") and not post.get("content")
+
+
+def test_a_switch_cut_before_the_containers_moved_is_interrupted_not_sick(h0):
+    """1: cut after the checkout, before compose: H0 put back in one piece on v0.3.1, the
+    release never called sick nor marked rolled back — and the next pass deploys it."""
+    _cut_switch(h0)
+    _git(h0.vm, h0.env, "checkout", "-q", "--detach", h0.commits["c2"])
+    res = h0.run()
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert h0.running() == {"v0.3.1"} and h0.head() == h0.commits["c1"]
+    assert h0.outcome("v0.4.0") == "interrupted" and not _alerts(h0)
+    assert h0.posts()[-1]["embeds"][0]["title"].startswith("⏸️")
+    assert h0.run().returncode == 0 and h0.running() == {"v0.4.0"} and h0.outcome("v0.4.0") == "deployed"
+
+
+def test_retry_keeps_a_cut_switch(h0):
+    _cut_switch(h0)
+    st = json.loads((h0.cd / "state.json").read_text())
+    st["outcomes"]["v0.3.9"] = {"result": "refused", "why": "x", "at": 1}
+    (h0.cd / "state.json").write_text(json.dumps(st))
+    res = h0.run("retry")
+    assert "reprise" in res.stdout and h0.outcome("v0.3.9") is None

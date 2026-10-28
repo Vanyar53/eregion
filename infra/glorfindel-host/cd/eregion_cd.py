@@ -77,6 +77,7 @@ VERSION = '{{index .Config.Labels "org.opencontainers.image.version"}}'
 LABELS = VERSION + ' {{index .Config.Labels "org.opencontainers.image.revision"}}'
 RED = {"failure", "timed_out", "cancelled", "action_required", "startup_failure", "stale"}
 MAIN_CHECK = "lint + tests"   # the CI's own job (ci.yml): a commit without it is not verified
+MAIN_CHECK_PASSES = 12        # an hour of passes before its absence is a refusal
 TAG_RE = r"[A-Za-z0-9][A-Za-z0-9._-]*"
 LOCK = "requirements/glorfindel.txt"
 ATTESTATION = "requirements/harness.json"
@@ -224,7 +225,14 @@ def verify(tag: str, commit: str, dep_commit: str, state: dict) -> None:
                  "le CD repasse toutes les 5 minutes", color=nd.BLUE)
         raise Quiet(f"{tag} : CI en cours")
     if not any(str(r.get("name", "")).startswith(MAIN_CHECK) for r in runs):
-        raise Refused(f"la CI principale ({MAIN_CHECK}) n'a pas tourné sur {commit[:12]}")
+        # Another workflow may finish before the CI's job is even created: waited for, an hour.
+        waits = state.setdefault("waits", {})
+        waits[tag] = waits.get(tag, 0) + 1
+        if waits[tag] <= MAIN_CHECK_PASSES:
+            say_once(state, tag, "ci-main", f"⏳ {tag} attend sa CI principale", f"pas encore de « {MAIN_CHECK} » "
+                     f"sur {commit[:12]}", color=nd.BLUE)
+            raise Quiet(f"{tag} : CI principale absente ({waits[tag]}/{MAIN_CHECK_PASSES})")
+        raise Refused(f"la CI principale ({MAIN_CHECK}) n'a pas tourné sur {commit[:12]}, en une heure")
 
 
 def check_runs(commit: str) -> list[dict]:
@@ -459,12 +467,35 @@ def conclude(state: dict, tag: str, dep_ref: str, why: str, url: str, how: str) 
 
 
 def resume(state: dict, tag: str, cut: dict) -> int:
-    """A pass cut after its switch (a reboot, a timeout): its health now, then kept or back."""
-    dep_ref = str(cut.get("from") or "")
-    print(f"reprise d'un passage interrompu : {tag} (avant : {dep_ref or '?'})")
+    """A pass cut after its switch (a reboot, a timeout), read against what runs now:
+    - the watch on the release: its health, then kept or back;
+    - still on what ran (cut before the containers moved): H0 put back in one piece, the
+      switch « interrupted » — never called sick, and tried again by the next pass;
+    - on something else (deployed by hand meanwhile): « superseded », nothing touched."""
+    dep_ref, url = str(cut.get("from") or ""), str(cut.get("url") or "")
+    watch = versions().get(CONTAINERS[0], "")
+    print(f"reprise d'un passage interrompu : {tag} (avant : {dep_ref or '?'}, la watch : {watch or '?'})")
+    if watch not in (tag, dep_ref):
+        state["outcomes"][tag] = {"result": "superseded", "at": int(time.time()),
+                                  "why": f"H0 redéployé entre-temps : la watch tourne sur {watch or '?'}"}
+        save_state(state)
+        say(f"ℹ️ Bascule vers {tag} interrompue, puis H0 redéployé", f"la watch tourne sur {watch or '?'} : "
+            "le CD n'y touche pas", color=nd.BLUE, url=url)
+        return 0
+    if watch != tag:
+        back = rollback(dep_ref)        # the checkout may have moved, a container may have: all on dep_ref
+        state["outcomes"][tag] = {"result": "interrupted", "at": int(time.time()),
+                                  "why": "coupée avant que les conteneurs basculent"}
+        save_state(state)
+        if back:
+            say(f"🔥 Bascule vers {tag} interrompue, et H0 n'a pas pu être remis sur {dep_ref}", back,
+                color=nd.RED, alert=True, url=url)
+            return 1
+        say(f"⏸️ Bascule vers {tag} interrompue avant d'avoir eu lieu", f"H0 est sur {dep_ref} ; le CD la "
+            "reprend au prochain passage", color=nd.BLUE, url=url)
+        return 0
     why = health(tag, float(cut.get("at") or 0))
-    return conclude(state, tag, dep_ref, why, str(cut.get("url") or ""),
-                    "passage repris après une interruption ; santé verte")
+    return conclude(state, tag, dep_ref, why, url, "passage repris après une interruption ; santé verte")
 
 
 def check_running(tag: str, commit: str, url: str) -> int:
@@ -638,8 +669,10 @@ def main(argv: list[str]) -> int:
     def one() -> int:
         if mode == "retry":
             state = load_state()
-            state["outcomes"].clear()
+            # A cut switch stays: it is taken up first, whatever retry forgets.
+            state["outcomes"] = {t: o for t, o in state["outcomes"].items() if o.get("result") == "switching"}
             state["said"].clear()
+            state.pop("waits", None)
             save_state(state)
         try:
             return run_pass(check=mode == "check")

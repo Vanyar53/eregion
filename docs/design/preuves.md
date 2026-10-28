@@ -820,8 +820,8 @@ lu des cartes ni de `quarantine_alerts.json` pour l'accorder. Mutants M1020–M1
 séquences) : tous attrapés à chaque tour ; M1020, M1021, M1023 et M1026 aussi par la machine
 seule (3/3, à 500) et par les séquences figées (`test_a_said_quarantine_out_of_the_listing_stays_said`).
 M1020, la machine seule ne l'attrape qu'à partir de quelques centaines de séquences (relecture
-d'I1S ; remesuré pour ISU, #264) : 1/6 à 60, le budget par défaut d'un `pytest` local, 4/4 à 200,
-4/4 à 500 (le budget du push). À 60, ce sont `test_reassert.py` et la séquence figée qui le tiennent.
+d'I1S ; remesuré pour ISU, #264) : 1/6 à 60, le budget par défaut d'un `pytest` local, 4/4 à 200
+(une remesure de la relecture : 2/3), 4/4 à 500 (le budget du push), qui est le budget sûr. À 60, ce sont `test_reassert.py` et la séquence figée qui le tiennent.
 M1022 (l'abonnement), M1024 (le coût) et M1025 (un acquittement d'un NSG supprimé) ne sont pas
 des propriétés du monde de la machine (un seul abonnement, pas de compte des appels, aucun
 acquittement) : `tests/unit/test_reassert.py`. Au même budget (500 séquences, deux tours), les 87
@@ -858,7 +858,8 @@ sous-réseau est dit « d'une ancienne version ou de périmètre ». Tests à la
 `test_an_unblock_says_a_plain_block_may_be_a_perimeter_one`,
 `test_a_card_of_another_subscription_is_said_once_never_read`,
 `test_a_card_whose_nsg_is_refused_warns_at_every_pass_in_its_case`) : tous échouent sur `main`
-(971e608) sauf le cas témoin (un NSG qui n'est pas celui du sous-réseau). Mutants M1100–M1115,
+(971e608) sauf le cas témoin (un NSG qui n'est pas celui du sous-réseau) et le test du 403
+(`test_an_original_that_cant_be_read_is_not_called_gone`, qui garde contre M1104). Mutants M1100–M1115,
 mesurés par ces tests : 16/16. Au même budget (500 séquences, deux tours, deux passes côte à côte),
 les 87 mutants du chemin d'isolation (`unblock.py`, `reassert.py`, `release.py`, `sweep.py`,
 `quarantine.py`, `network.py`), `main` puis la branche : 72/86 attrapés à chaque tour avant, 77/86

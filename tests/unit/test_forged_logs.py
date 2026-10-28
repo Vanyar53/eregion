@@ -74,6 +74,16 @@ def test_sshd_failures_are_counted_by_the_peer_address(fmt, process):
         {"SourceIP": PEER, "Computer": "vm-example-01", "_ResourceId": VM, "FailedAttempts": 10}]
 
 
+def test_a_line_written_before_authentication_is_counted():
+    # sshd's ` [preauth]` suffix, as measured: the address is still the last of the line.
+    fmt = (f"error: maximum authentication attempts exceeded for invalid user alice from {PEER} "
+           "port {port} ssh2 [preauth]")
+    assert [r["SourceIP"] for r in _ssh(_attempts(fmt))] == [PEER]
+    fmt = (f"error: maximum authentication attempts exceeded for invalid user x from {NAMED} port 22 "
+           f"ssh2 [preauth] from {PEER} port {{port}} ssh2 [preauth]")
+    assert [r["SourceIP"] for r in _ssh(_attempts(fmt))] == [PEER]
+
+
 @pytest.mark.parametrize("fmt", [
     f"Invalid user x from {NAMED} port 22 from {PEER} port {{port}}",
     f"Failed password for invalid user x from {NAMED} port 22 ssh2 from {PEER} port {{port}} ssh2",
@@ -109,6 +119,16 @@ def test_the_threshold_and_the_private_ranges_are_unchanged():
 _SUDO_OK = "   alice : TTY=pts/0 ; PWD=/home/alice ; USER=root ; COMMAND=/usr/bin/id"
 
 
+@pytest.mark.parametrize("facility", ["auth", "authpriv"])
+@pytest.mark.parametrize("message", [
+    "alice : PWD=/home/alice   USER=root   COMMAND=/usr/bin/id",             # as the agent writes it
+    "  alice : TTY=pts/0   PWD=/home/alice   USER=root   COMMAND=/bin/sh",
+])
+def test_the_agent_s_form_of_a_sudo_to_root_is_an_escalation(message, facility):
+    [row] = _sudo([_line(message, process="sudo", facility=facility)])
+    assert row["SyslogMessage"] == message
+
+
 @pytest.mark.parametrize("message", [
     _SUDO_OK,
     "alice : PWD=/srv ; USER=root ; COMMAND=/bin/sh",
@@ -135,6 +155,8 @@ def test_a_sudo_to_root_is_an_escalation(message):
     # sudo's failures, in its form: no escalation happened
     ("alice : 3 incorrect password attempts ; TTY=pts/0 ; PWD=/ ; USER=root ; COMMAND=/bin/sh", "sudo"),
     ("alice : command not allowed ; TTY=pts/0 ; PWD=/ ; USER=root ; COMMAND=/bin/sh", "sudo"),
+    ("alice : 3 incorrect password attempts   TTY=pts/0   PWD=/   USER=root   COMMAND=/bin/sh", "sudo"),
+    ("alice : PWD=/   USER=bob   COMMAND=/bin/sh", "sudo"),
 ])
 def test_what_is_not_a_sudo_to_root(message, process):
     assert _sudo([_line(message, process=process)]) == []
@@ -177,10 +199,19 @@ def test_the_investigation_finds_the_simulation_s_root_commands():
     assert not any("/bin/forged" in r["SyslogMessage"] for r in out)
 
 
+def test_the_investigation_finds_sudo_s_lines_in_authpriv():
+    from glorfindel.agent import _IQ_ROOT_COMMANDS
+    rows = [_line("alice : PWD=/home/alice   USER=root   COMMAND=/bin/cat /etc/shadow",
+                  process="sudo", facility="authpriv")]
+    out = kql_subset.run(_IQ_ROOT_COMMANDS.format(vm="vm-example-01"), rows, now=NOW)
+    assert [r["SyslogMessage"] for r in out] == [rows[0]["SyslogMessage"]]
+
+
 def test_the_investigation_reads_sshd_s_successful_logins_only():
     from glorfindel.agent import _IQ_SUCCESS_AUTH
-    rows = [_line(f"Accepted password for annatar from {PEER} port 41000 ssh2"),
-            _line(f"Accepted password for x from {PEER} port 41001 ssh2", process="root")]
+    rows = [_line(f"Accepted password for alice from {PEER} port 41000 ssh2"),
+            _line(f"Accepted password for x from {PEER} port 41001 ssh2", process="root"),
+            _line(f"Invalid user Accepted from {PEER} port 41002")]
     out = kql_subset.run(_IQ_SUCCESS_AUTH.format(vm="vm-example-01", ip=PEER), rows, now=NOW)
     assert [r["SyslogMessage"] for r in out] == [rows[0]["SyslogMessage"]]
 

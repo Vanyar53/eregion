@@ -39,7 +39,7 @@ detection:
       '<user> : TTY=pts/1 ; PWD=/tmp ; USER=root ; COMMAND=...', in the auth Syslog
       facility. The command succeeds (no 'NOT in sudoers' error).
     expected_indicators:
-      - "Syslog: Facility='auth', ProcessName == 'sudo', SyslogMessage in sudo's form '<user> : … ; USER=root ; … COMMAND=…' (the word sudo is the tag, not in the message)"
+      - "Syslog: Facility in ('auth', 'authpriv') (real sudo logs to authpriv), ProcessName == 'sudo', SyslogMessage in sudo's form '<user> : [TTY=… ]PWD=… USER=root … COMMAND=…' — fields separated by ' ; ' or by spaces as the agent writes them (the word sudo is the tag, not in the message)"
       - "Successful sudo (no 'NOT in sudoers' or 'authentication failure' in the message)"
       - "Same pipeline as T1110 — DCR auth facility must be active"
     failure_candidates:

@@ -459,7 +459,8 @@ Syslog
 | where Computer == "{vm}"
 | where Facility == "auth"
 | where ProcessName in ("sshd", "sshd-session")
-| where SyslogMessage has "Accepted" and SyslogMessage has "{ip}"
+// sshd's own wording, at the start of the line (SEC2): never a user name holding it.
+| where SyslogMessage startswith "Accepted " and SyslogMessage has "{ip}"
 | project TimeGenerated, SyslogMessage
 | limit 3
 """
@@ -471,7 +472,8 @@ _IQ_ROOT_COMMANDS = """
 Syslog
 | where TimeGenerated > ago(10m)
 | where Computer == "{vm}"
-| where Facility == "auth"
+// sudo logs to authpriv (measured under AMA).
+| where Facility in ("auth", "authpriv")
 // sudo's own lines (SEC2): the word is its tag (ProcessName), not in the message.
 | where ProcessName == "sudo"
 | where SyslogMessage has "USER=root" and SyslogMessage has "COMMAND="

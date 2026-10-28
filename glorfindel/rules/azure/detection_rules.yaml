@@ -117,8 +117,9 @@ rules:
       | where TimeGenerated > ago(10m)
       // The peer address is the one sshd writes last, `from <address> port <n>[ ssh2]` at
       // the end of its line (SEC2) — never an address found elsewhere in the line. `]`:
-      // rsyslog's « message repeated N times: [ … ] ». IPv4 only, as before.
-      | extend SourceIP = extract(@"from (\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}) port \d+( ssh2)?\]?\s*$", 1, SyslogMessage)
+      // rsyslog's « message repeated N times: [ … ] »; ` [preauth]`: sshd's suffix on a
+      // line written before authentication. IPv4 only, as before.
+      | extend SourceIP = extract(@"from (\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}) port \d+( ssh2)?( \[preauth\])?\]?\s*$", 1, SyslogMessage)
       | where isnotempty(SourceIP)
       // Exclude all RFC-1918 + loopback — aligned with data-exfiltration-blob
       // (172.16-31 was previously missing → internal 172.x flagged as external)
@@ -138,15 +139,17 @@ rules:
     expected_latency_s: 480
     query: |
       Syslog
-      | where Facility == "auth"
+      // sudo logs to authpriv (measured under AMA); auth kept for the hosts that route it there.
+      | where Facility in ("auth", "authpriv")
       | where TimeGenerated > ago(10m)
       // Lines tagged sudo only (SEC2), in sudo's form: `<user> : TTY=… ; PWD=… ; USER=root ;
-      // … COMMAND=…` (TTY absent without a terminal). A failure (`3 incorrect password
-      // attempts ; …`) is no escalation.
+      // … COMMAND=…` (TTY absent without a terminal). The fields are separated by « ; » or,
+      // as the agent writes them, by spaces. A failure (`3 incorrect password attempts ; …`)
+      // is no escalation.
       | where ProcessName == "sudo"
       | where SyslogMessage has "USER=root"
             and SyslogMessage has "COMMAND="
-      | where SyslogMessage matches regex @"^\s*\S+ : (TTY|PWD)=(.*; )?USER=root ; (.*; )?COMMAND="
+      | where SyslogMessage matches regex @"^\s*\S+ : (TTY|PWD)=(.*[ ;])?USER=root[ ;]+(.*[ ;])?COMMAND="
       | where SyslogMessage !has "NOT in sudoers"
             and SyslogMessage !has "authentication failure"
       | project TimeGenerated, Computer, _ResourceId, SyslogMessage

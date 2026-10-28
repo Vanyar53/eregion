@@ -2982,16 +2982,16 @@ MUTANTS += [
     ("M1190", "ssh-brute-force reads every program's lines, not sshd's (SEC2)", RULES_YAML,
      '      | where ProcessName in ("sshd", "sshd-session")\n', ""),
     ("M1191", "ssh-brute-force takes the first address of the line (SEC2)", RULES_YAML,
-     r'extract(@"from (\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}) port \d+( ssh2)?\]?\s*$", 1, SyslogMessage)',
+     r'extract(@"from (\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}) port \d+( ssh2)?( \[preauth\])?\]?\s*$", 1, SyslogMessage)',
      r'extract(@"from (\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})", 1, SyslogMessage)'),
     ("M1192", "ssh-brute-force's address not anchored at the end of sshd's line (SEC2)", RULES_YAML,
-     r'port \d+( ssh2)?\]?\s*$", 1, SyslogMessage)', r'port \d+( ssh2)?\]?", 1, SyslogMessage)'),
+     r'port \d+( ssh2)?( \[preauth\])?\]?\s*$", 1, SyslogMessage)', r'port \d+( ssh2)?( \[preauth\])?\]?", 1, SyslogMessage)'),
     ("M1193", "ssh-brute-force blind to sshd-session (OpenSSH 9.8+) (SEC2)", RULES_YAML,
      '      | where ProcessName in ("sshd", "sshd-session")\n', '      | where ProcessName == "sshd"\n'),
     ("M1194", "sudo-privilege-escalation reads every program's lines, not sudo's (SEC2)", RULES_YAML,
      '      | where ProcessName == "sudo"\n', ""),
     ("M1195", "sudo-privilege-escalation takes any sudo line holding its words, not sudo's form (SEC2)", RULES_YAML,
-     r'      | where SyslogMessage matches regex @"^\s*\S+ : (TTY|PWD)=(.*; )?USER=root ; (.*; )?COMMAND="' + "\n", ""),
+     r'      | where SyslogMessage matches regex @"^\s*\S+ : (TTY|PWD)=(.*[ ;])?USER=root[ ;]+(.*[ ;])?COMMAND="' + "\n", ""),
     ("M1196", "the platform and private addresses blockable: nothing shipped in never_block (SEC2)", POL,
      '    "168.63.129.16/32", "169.254.169.254/32",\n'
      '    "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "fc00::/7",\n'
@@ -3042,14 +3042,14 @@ MUTANTS += [
      '| where ProcessName == "sudo"\n| where SyslogMessage has "USER=root" and SyslogMessage has "COMMAND="\n',
      '| where SyslogMessage has "sudo" and SyslogMessage has "USER=root" and SyslogMessage has "COMMAND="\n'),
     ("M1312", "the investigation reads any program's successful logins (SEC2)", "glorfindel/agent.py",
-     '| where ProcessName in ("sshd", "sshd-session")\n| where SyslogMessage has "Accepted"',
-     '| where SyslogMessage has "Accepted"'),
+     '| where ProcessName in ("sshd", "sshd-session")\n// sshd\'s own wording',
+     '// sshd\'s own wording'),
     ("M1313", "an IPv4 written as IPv6 escapes never_block (SEC2)", POL,
      "    if addr.version == 6 and addr.ipv4_mapped is not None:\n        addr = addr.ipv4_mapped\n", ""),
     ("M1314", "carrier NAT and IPv6 unique local blockable (SEC2)", POL,
      '"192.168.0.0/16", "100.64.0.0/10", "fc00::/7",', '"192.168.0.0/16",'),
     ("M1315", "a failed sudo in sudo's form counted as an escalation (SEC2)", RULES_YAML,
-     r'@"^\s*\S+ : (TTY|PWD)=(.*; )?USER=root ; (.*; )?COMMAND="', r'@"^\s*\S+ : (.*; )?USER=root ; (.*; )?COMMAND="'),
+     r'@"^\s*\S+ : (TTY|PWD)=(.*[ ;])?USER=root[ ;]+(.*[ ;])?COMMAND="', r'@"^\s*\S+ : (.*[ ;])?USER=root[ ;]+(.*[ ;])?COMMAND="'),
     ("M1316", "a summary card carries every row, unbounded (SEC2)", DRU,
      "        for r in rest[:_SUMMARY_ROWS_MAX]]}", "        for r in rest]}"),
     ("M1317", "a summary card never says how many rows it stands for (SEC2)", DRU,
@@ -3061,6 +3061,22 @@ MUTANTS += [
      "    for name in cfg.disabled_base:\n", "    for name in []:\n"),
 ]
 TESTS.update({f"M{n}": "tests/unit/test_forged_logs.py" for n in range(1310, 1320)})
+# SEC2, after the measure on H0's Syslog (7 days).
+MUTANTS += [
+    ("M1320", "sudo-privilege-escalation reads auth only: real sudo logs to authpriv (SEC2)", RULES_YAML,
+     '      | where Facility in ("auth", "authpriv")\n      | where TimeGenerated > ago(10m)\n      // Lines tagged sudo',
+     '      | where Facility == "auth"\n      | where TimeGenerated > ago(10m)\n      // Lines tagged sudo'),
+    ("M1321", "sudo-privilege-escalation takes « ; » only: the agent's form, with spaces, never matches (SEC2)",
+     RULES_YAML, r'(TTY|PWD)=(.*[ ;])?USER=root[ ;]+(.*[ ;])?COMMAND="', r'(TTY|PWD)=(.*; )?USER=root ; (.*; )?COMMAND="'),
+    ("M1322", "the investigation looks for sudo's lines in auth only (SEC2)", "glorfindel/agent.py",
+     '| where Facility in ("auth", "authpriv")\n// sudo\'s own lines', '| where Facility == "auth"\n// sudo\'s own lines'),
+    ("M1323", "ssh-brute-force loses a line written before authentication ([preauth]) (SEC2)", RULES_YAML,
+     r'port \d+( ssh2)?( \[preauth\])?\]?\s*$"', r'port \d+( ssh2)?\]?\s*$"'),
+    ("M1324", "the investigation takes a user name holding « Accepted » for a login (SEC2)", "glorfindel/agent.py",
+     '| where SyslogMessage startswith "Accepted " and SyslogMessage has "{ip}"',
+     '| where SyslogMessage has "Accepted" and SyslogMessage has "{ip}"'),
+]
+TESTS.update({f"M{n}": "tests/unit/test_forged_logs.py" for n in range(1320, 1325)})
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

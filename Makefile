@@ -171,7 +171,7 @@ help:
 	@echo ""
 	@echo "Celebrimbor (infra de test Terraform, jetable)"
 	@echo "  make celebrimbor-plan [TOPO=] [INSTANCE=]   Plan (lecture seule, pas d'apply)"
-	@echo "  make celebrimbor-up   [TOPO=] [INSTANCE=]   Apply baseline (+ topos)"
+	@echo "  make celebrimbor-up   [TOPO=] [INSTANCE=] [YES=1]  Apply baseline (+ topos) ; plan montré et confirmé, sauf YES=1"
 	@echo "  make celebrimbor-down TOPO=x                Détruit UNE topo (baseline préservé)"
 	@echo "  make celebrimbor-down CONFIRM=<instance>    Teardown TOTAL (gardé, baseline inclus)"
 	@echo "  make celebrimbor-stop / celebrimbor-start         Éteint/rallume le banc (sans détruire) ; VM=<nom> pour une seule"
@@ -413,6 +413,7 @@ glorfindel-shell: build-glorfindel
 #   make celebrimbor-up                       # baseline (+ topos enabled:true du config)
 #   make celebrimbor-up TOPO="multinic,aks"   # n'active QUE ces topos
 #   make celebrimbor-up INSTANCE=ci-1234       # stack isolée (workspace dédié)
+#   make celebrimbor-up YES=1                  # sans confirmation (-auto-approve : le plan n'est pas relu) — SEC6
 #   make celebrimbor-plan TOPO=multinic        # plan seul (lecture, pas d'apply)
 #   make celebrimbor-stop / celebrimbor-start        # éteint/rallume le banc sans détruire
 #     [VM=gondolin]                                  # une seule VM ; stop épargne les VM always-on (bree) sauf ALL=1
@@ -447,9 +448,9 @@ celebrimbor-up: celebrimbor-init
 	@$(TF) workspace select -or-create $(INSTANCE)
 	@if [ -n "$(TOPO)" ]; then \
 	   filter=$$(echo '$(TOPO)' | awk -F, '{for(i=1;i<=NF;i++){printf "%s\"%s\"",(i>1?",":""),$$i}}'); \
-	   $(TF) apply -var="topo_filter=[$$filter]" --auto-approve; \
+	   $(TF) apply -var="topo_filter=[$$filter]"$(if $(YES), -auto-approve); \
 	 else \
-	   $(TF) apply --auto-approve; \
+	   $(TF) apply$(if $(YES), -auto-approve); \
 	 fi
 	@echo "" && echo "  Fragment glorfindel-config → make celebrimbor-output"
 

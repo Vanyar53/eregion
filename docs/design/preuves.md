@@ -93,7 +93,7 @@ Les propriétés, vérifiées après chaque étape :
 | I1 | aucune VM n'est plus joignable que son propriétaire ne l'a conçue |
 | I2 | la configuration du client est ce qu'il a écrit en dernier ; une carte porte son NSG ou celui de quarantaine, jamais aucun ni un autre ; et, par auteur (journal des écritures de l'API), Glorfindel n'écrit que ce qui est à lui |
 | I3 | aucun succès sur un mensonge : chaque vérification qui dit vrai est vraie, à chaque étape |
-| I4 | une opération sur une VM ne change rien pour une autre, homonymes compris |
+| I4 | une opération sur une VM ne change rien pour une autre, homonymes compris — et ne supprime jamais l'ancienne isolation d'une autre VM, même là où aucun flux ne le dit (I4S, lu dans le journal du test) |
 | I5 | la réaffirmation n'ouvre jamais rien, et n'écrit rien en `human_only` |
 | I6 | une VM, un fichier d'état |
 | I7 | depuis tout état atteint, la levée ramène chaque VM à sa conception, ou la garde en quarantaine en disant ce qui manque |
@@ -1028,6 +1028,7 @@ Aucun de ces défauts n'avait été vu en revue. Chacun a son test et sa séquen
 | I8S | deux hôtes aux états séparés : « aucun » de l'hôte 1, tag X de l'hôte 2 (la carte a reçu X entre-temps) | la levée suivait l'« aucun » périmé : `released`, carte sans NSG, tag X effacé (trouvé en relecture, hors de la machine) |
 | I8S | même scénario, reset ; deux groupes de quarantaine (relecture 5.5) | un 429 sur le tag : carte remise nue, X effacé ; le « aucun » trouvé dans un groupe l'emportait sur X dans l'autre |
 | I4F | NSG d'origine d'une carte en quarantaine (ou nue) jugé sans elle | le reset de la nouvelle VM prenait l'ancienne isolation d'une autre VM pour la sienne : **l'autre VM rouverte** |
+| I4S | NSG jugé sans la carte d'une autre VM partie en quarantaine (ou nue) | le reset (ou la levée) de la VM restée seule supprimait l'ancienne isolation de l'autre : aucun flux, mais plus rien au retour de sa carte hors de Glorfindel |
 
 **I1F (27/10, #226) : un oracle qui lisait mal, et un trou derrière.** Le run profond (10 000
 séquences) a fait tomber I1 à l'étape même où quelqu'un passe le deny entrant de la quarantaine
@@ -1133,10 +1134,46 @@ de mesure (M16 : 3/8 avant, 5/8 après ; M19 : 3/8 puis 1/8 ; ils sont aussi att
 séquences figées). La relecture 5.5 l'a remesuré à 500 séquences, deux tours, sur les seize mutants
 de `release.py`, `network.py` et `sweep.py` : 6/15 attrapés à chaque tour avant comme après (8/17 avec
 M960–M961), M02 passé de FIXED-ONLY à attrapé par la machine, M26 7/8 de chaque côté sur huit tours.
-Limite connue, sans flux ouvert aujourd'hui (#239) : le cas symétrique — l'ancienne isolation est à
-une VM partie en quarantaine, la nouvelle carte reste seule attachée — fait encore prendre au reset
-les noms fixes de l'autre VM ; la quarantaine tient cette VM, mais si sa carte revenait sur son NSG
-sans Glorfindel, l'ancienne règle n'y serait plus.
+Limite alors connue, sans flux ouvert (#239) : le cas symétrique, corrigé par I4S (ci-dessous).
+
+**I4S (28/10, #239) : le NSG d'une autre VM partie.** Le cas symétrique d'I4F : l'ancienne
+isolation d'`api` (noms fixes, état perdu), `api` envoyée en quarantaine, puis une VM créée sur le
+NSG d'`api`, seule attachée. Le reset (ou la levée) de la nouvelle VM prenait les noms fixes pour
+les siens et supprimait l'ancienne isolation d'`api`. Aucun flux ne s'ouvrait — la quarantaine
+tient `api` —, si bien qu'aucune propriété ne le voyait : I4 ne lisait que les flux et l'état des
+autres VMs. L'oracle s'étend donc, sans rien retirer : I4 lit aussi le journal du faux Azure, et
+une ancienne isolation (le test sait, par son propre registre `legacy`, à quelle VM l'ancienne
+version l'a laissée) n'est jamais supprimée par l'opération d'une autre VM
+(`_old_isolations_kept`, après chaque opération et chaque course). Deux exceptions, tirées du
+journal du test : la VM n'existe plus, ou le test a perdu tout ce qui rattachait sa carte à ce NSG
+(tags et état, `_record_lost`, le cœur de `_untraceable` sans la condition « carte nue ») — la
+machine l'a trouvé à 60 séquences, une carte réisolée sur un original inconnu (I8F) : rien, ni sur
+Azure ni dans un état, ne dit à quel NSG elle revient. Le correctif est dans le produit
+(`_tied_while_away`, `network.py`) : sur un NSG qui porte un nom fixe et ne gouverne qu'une carte,
+une carte d'une autre VM partie de ce NSG compte parmi les siennes — en quarantaine, ou laissée
+nue — quand notre tag de quarantaine ou, le tag perdu, l'état local de sa VM le désigne comme son
+original. Un tag périmé ne rattache rien (la carte supprimée, ou rendue à un NSG hors de
+Glorfindel) : la VM réellement seule reprend ses noms fixes. Liste des NSG ou des cartes illisible :
+inconnu, les noms fixes restent et le rapport le dit (« au partage illisible »). Règle composée
+`an_old_isolations_vm_goes_away` (la VM de l'ancienne isolation isolée, sa carte nue ou non, les
+tags perdus ou non, une VM créée sur ce NSG, puis reset trois fois sur quatre, ou levée) ; dix
+cas figés (reset, levée, carte nue, tags perdus, état perdu, liste des cartes illisible ; liste des
+NSG illisible ; et le pendant : la VM seule avec un tag périmé, la VM elle-même en quarantaine, la
+carte du reset sans aucune liste) ; mutants M1030–M1037, attrapés à chaque tour, d'abord par leurs
+séquences figées. La relecture 5.5 a trouvé le nom de blocage simple (`glorfindel-block-<ip>`, sans
+VM) compté parmi les noms fixes sans qu'aucun cas ne le prouve, et le déblocage muet quand le
+partage est illisible : `not_found`, la règle laissée (l'IP restait bloquée : côté sûr, mais faux).
+Trois cas figés de plus (le blocage d'`api` gardé au déblocage de la nouvelle VM ; le NSG, puis la
+liste des NSG, illisibles : `unblock_partial`, le blocage dit et laissé, repris une fois lisible),
+mutants M1038–M1039. La course avec la réaffirmation n'est plus exemptée : elle ne supprime aucune
+règle hors de notre NSG de quarantaine, seule l'autre opération compte comme acteur. Le mécanisme couvre aussi le cas
+d'I4F (la carte de la nouvelle VM porte notre tag) : M960–M961 n'y restent visibles que par un cas
+figé où les listes sont illisibles — la carte du reset elle-même suffit à dire le NSG partagé, sans
+rien lire d'autre. Mesures : machine verte à 500 séquences (graines 1, 7, 42) et à 2 000 (graine
+101) ; harnais à 500 séquences, deux tours, sur les 32 mutants de `release.py`, `network.py` et
+`sweep.py`, à côté de `main` (0f32b92) : 24/32 attrapés à chaque tour avant, 25/32 après, aucun
+perdu ; les huit nouveaux, 8/8. Le seul écart, M33 (1/2 puis 2/2), est du bruit : 6/6 de chaque
+côté sur six tours (M10, instable des deux côtés : 4/6 avant, 5/6 après).
 
 **I8S (28/10, #245) : deux hôtes, deux états, un « aucun » périmé.** Trouvé par la troisième
 relecture d'I8F, hors de la machine : elle n'a qu'un répertoire d'état. Une carte nue ; l'hôte 1

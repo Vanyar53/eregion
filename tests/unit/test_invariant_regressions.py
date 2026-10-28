@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import pytest
 
-from .fake_azure import key
+from .fake_azure import ATTACKER, FakeAzure, _rule_record, key
 from .test_invariants import IsolationMachine, _rule, invariant_env
 
 WEB1 = "/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/web"
@@ -758,6 +758,185 @@ def test_a_reset_never_takes_an_old_isolation_on_an_nsg_shared_since(monkeypatch
          ("create_vm", "northeurope", "rg-app1", "batch", _NEW_VM_ON.format(rg="rg-edge", nic="api-nic"), "Linux"),
          ("isolate", _BATCH, _BATCH, None),
          *then)
+
+
+_QUARANTINE_EDGE = _NSG.format(rg="rg-edge", name="nsg-glorfindel-quarantine-northeurope")
+
+
+@pytest.mark.parametrize("then", [
+    [("reset_from_azure", _BATCH, _BATCH, None)],
+    # The release of the new VM sweeps the same names on the same NSG.
+    [("release", _BATCH, _BATCH, None)],
+    # api's NIC left bare (our NSG taken off it): our tag still ties it to its NSG.
+    [("someone_detaches_the_quarantine", _nic("rg-edge", "api-nic")), ("reset_from_azure", _BATCH, _BATCH, None)],
+    # The tags of the quarantine lost: api's state still says where its NIC belongs.
+    [("tags_lost", _QUARANTINE_EDGE), ("reset_from_azure", _BATCH, _BATCH, None)],
+    # api's state lost: our tag still says it.
+    [("lose_state", API), ("reset_from_azure", _BATCH, _BATCH, None)],
+    # api's NIC bare, the NICs can't be listed: unknown, not "no NIC away".
+    [("someone_detaches_the_quarantine", _nic("rg-edge", "api-nic")),
+     ("reset_from_azure", _BATCH, _BATCH, ("nic.list", "always-429"))],
+])
+def test_a_reset_never_takes_the_old_isolation_of_a_vm_in_quarantine(monkeypatch, then):
+    """The symmetric case of I4F (#239): an older version's isolation of `api` (fixed names,
+    any/any, state lost), `api` isolated by quarantine — its NIC away —, then a new VM
+    attached to the same NSG, alone there now. Counted from what is attached, the NSG read
+    as the new VM's, the fixed names as its own: its reset deleted api's older isolation.
+    No flow opened (the quarantine holds api), but back on its NSG outside Glorfindel (an
+    ARM redeploy), api's NIC would have found it gone. A NIC tied to the NSG by our tag
+    (or by the state when the tag is lost) counts among its NICs (I4S)."""
+    _run(monkeypatch, _net(quarantine=True, legacy=("api-nic", False), api_nic={"own": "dedicated"}),
+         ("isolate", API, API, None),
+         ("create_vm", "northeurope", "rg-app1", "batch", _NEW_VM_ON.format(rg="rg-edge", nic="api-nic"), "Linux"),
+         *then)
+
+
+_GONE_NIC = "/subscriptions/s/resourceGroups/rg-old/providers/Microsoft.Network/networkInterfaces/old-nic"
+_API_NSG = _NEW_VM_ON.format(rg="rg-edge", nic="api-nic")
+
+
+def _alone_with_a_stale_tag(m, fault=None):
+    """api alone on its NSG with its older isolation; our quarantine NSG keeps the tag of
+    a NIC gone since, naming that NSG (deleted in quarantine: nobody took the tag off).
+    The reset of api, under `fault`."""
+    m.fake.add_nsg("rg-edge", "nsg-glorfindel-quarantine-northeurope", location="northeurope",
+                   tags={"managed-by": "glorfindel", m.connector._orig_tag(_GONE_NIC): _API_NSG})
+    m.chaos.arm(fault)
+    try:
+        return m.connector.sweep_vm_rules(API)
+    finally:
+        m.chaos.arm(None)
+
+
+def _old_names_on(m) -> set:
+    return {n for n in m.fake.nsgs[key(_API_NSG)]["rules"] if n.startswith("glorfindel-isolation-deny-all")}
+
+
+def test_a_vm_alone_on_its_nsg_still_takes_its_old_isolation(monkeypatch):
+    """No eternal rule (I4S): the VM alone on its NSG, the reset still deletes its older
+    isolation — a stale tag (its NIC gone) ties nothing."""
+    def check(m):
+        out = _alone_with_a_stale_tag(m)
+        assert out["status"] == "swept", out
+        assert not _old_names_on(m)
+    _legacy_world(monkeypatch, ("api-nic", False), check=check)
+
+
+def test_an_unreadable_quarantine_listing_leaves_the_old_isolation_and_says_it(monkeypatch):
+    """Whose the fixed names are can't be read (the NSG listing throttled): unknown, not
+    "nobody else" — left, and said (I4S)."""
+    def check(m):
+        out = _alone_with_a_stale_tag(m, ("nsg.list", "always-429"))
+        assert out["status"] == "swept_partial", out
+        assert _old_names_on(m) == {"glorfindel-isolation-deny-all", "glorfindel-isolation-deny-all-out"}
+        assert any("partage illisible" in f and "ancienne version" in f for f in out["failed"]), out
+    _legacy_world(monkeypatch, ("api-nic", False), check=check)
+
+
+def _quarantine_world(monkeypatch, *steps, check):
+    """api's older isolation (fixed names, state lost), the quarantine on, steps, then
+    `check`."""
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_net(quarantine=True, legacy=("api-nic", False), api_nic={"own": "dedicated"}))
+        for rule, *draws in steps:
+            getattr(m, rule)(Script(*draws))
+        check(m)
+    finally:
+        m.teardown()
+
+
+def test_a_vm_in_quarantine_alone_on_its_nsg_still_takes_its_old_isolation(monkeypatch):
+    """The VM of the older isolation in quarantine itself, alone on its NSG: its own NIC,
+    away and tied by our tag, is not another VM's — its reset deletes the fixed names
+    (I4S: no eternal rule)."""
+    def check(m):
+        assert m._in_quarantine(API)
+        out = m.connector.sweep_vm_rules(API)
+        assert out["status"] == "swept", out
+        assert not _old_names_on(m)
+    _quarantine_world(monkeypatch, ("isolate", API, API, None), check=check)
+
+
+def test_the_nic_away_of_the_reset_itself_needs_no_listing(monkeypatch):
+    """I4F's case — the new VM's own NIC away from api's NSG —, the subscription's NSGs
+    and NICs unreadable: the NIC of the reset, away, makes the NSG shared, known without
+    reading anything else. The older isolation is left as another VM's, not as unknown."""
+    def check(m):
+        m.chaos.arm(("nsg.list", "always-429"))
+        try:
+            out = m.connector.sweep_vm_rules(_BATCH)
+        finally:
+            m.chaos.arm(None)
+        assert _old_names_on(m) == {"glorfindel-isolation-deny-all", "glorfindel-isolation-deny-all-out"}
+        assert any("NSG nsg-api-nic partagé :" in f for f in out["failed"]), out
+    _quarantine_world(monkeypatch,
+                      ("create_vm", "northeurope", "rg-app1", "batch", _API_NSG, "Linux"),
+                      ("isolate", _BATCH, _BATCH, None), check=check)
+
+
+_PLAIN = "glorfindel-block-" + ATTACKER.replace(".", "-")
+
+
+def _plain_block_world(monkeypatch, *steps, check):
+    """An older version's block of the attacker on api's own NSG, under the IP's name
+    alone (no VM in it), its state lost — and no older isolation: the plain block name
+    is the only fixed name on the NSG. The quarantine on, steps, then `check`."""
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_net(quarantine=True, api_nic={"own": "dedicated"}))
+        nsg = m.fake.nsgs[key(_API_NSG)]
+        taken = {r["priority"] for r in nsg["rules"].values()}
+        prio = next(p for p in range(200, 4096) if p not in taken)
+        for name, direction, src, dst in ((_PLAIN, "Inbound", ATTACKER, "*"), (f"{_PLAIN}-out", "Outbound", "*", ATTACKER)):
+            FakeAzure._put_rule(nsg, _rule_record(_rule(name, prio, dict(
+                access="Deny", direction=direction, source_address_prefix=src,
+                destination_address_prefix=dst, destination_port_range="*"))))
+            m.fake.authored.add((key(_API_NSG), name.lower()))
+        for rule, *draws in steps:
+            getattr(m, rule)(Script(*draws))
+        check(m)
+    finally:
+        m.teardown()
+
+
+def _plain_on(m) -> set:
+    return {n for n in m.fake.nsgs[key(_API_NSG)]["rules"] if n.startswith(_PLAIN)}
+
+
+def test_an_unblock_never_takes_the_old_block_of_a_vm_in_quarantine(monkeypatch):
+    """The issue's world with a block: api's older block under the IP's name alone, api
+    isolated by quarantine, a new VM attached alone to api's NSG. Read as the new VM's
+    alone, the NSG's plain block name was its own: its unblock deleted api's block. The
+    plain block name is a fixed name too: the NIC away is looked for (I4S)."""
+    def check(m):
+        out = m.connector.unblock_ip(ATTACKER, _BATCH)
+        assert out["status"] == "not_found", out
+        assert _plain_on(m) == {_PLAIN, f"{_PLAIN}-out"}
+    _plain_block_world(monkeypatch, ("isolate", API, API, None),
+                       ("create_vm", "northeurope", "rg-app1", "batch", _API_NSG, "Linux"), check=check)
+
+
+@pytest.mark.parametrize("fault", [("nsg.get", "always-429"), ("nsg.list", "always-429")])
+def test_an_unblock_says_the_old_block_it_cant_attribute(monkeypatch, fault):
+    """api alone on its NSG with its older plain-named block, whose sharing can't be read
+    (the NSG, or the subscription's NSGs where a NIC away would show): unknown. The
+    block is left — the IP stays blocked — and said: `not_found` was answered while the
+    rules stayed (I4S, review). Readable again, the unblock takes it."""
+    def check(m):
+        m.chaos.arm(fault)
+        try:
+            out = m.connector.unblock_ip(ATTACKER, API)
+        finally:
+            m.chaos.arm(None)
+        assert out["status"] == "unblock_partial", out
+        assert any("partage illisible" in f and _PLAIN in f for f in out["failed"]), out
+        assert _plain_on(m) == {_PLAIN, f"{_PLAIN}-out"}
+        out = m.connector.unblock_ip(ATTACKER, API)
+        assert out["status"] == "unblocked" and not _plain_on(m), out
+    _plain_block_world(monkeypatch, check=check)
 
 
 # I8S (#245): two Glorfindel hosts, each its own state directory — the machine has one.

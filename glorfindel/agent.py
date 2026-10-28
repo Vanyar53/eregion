@@ -84,6 +84,7 @@ class GlorfindelState(TypedDict):
     telemetry_gaps: list[str]   # investigative queries that FAILED (G2) — never shown to the model
     decision_temperature: float | None  # temperature of the first draw; None = model's default (D-1)
     decision_draws: list[dict]  # every draw asked before a disruptive autonomous action (D-1)
+    uncontained: str            # a characterized detection a snapshot alone answers (V-11): its card's reason
 
 
 # ── LLM decision tool schema ──────────────────────────────────────────────────
@@ -264,7 +265,10 @@ def load_context(
     cycle there would read « T1562.007, 2 signals » about a VM nothing happened to.
 
     An identity detection (Entra ID, C2) names no VM: it never opens nor feeds an incident,
-    and is given no past cycle."""
+    and is given no past cycle.
+
+    The past cycles of a real signal are real ones only (SEC4a, V-12): never an exercise's,
+    nor one of unknown source. An exercise is given every cycle."""
     from dataclasses import asdict
 
     signal = state["signal"]
@@ -276,7 +280,10 @@ def load_context(
         inc = incidents.get_or_create(resource_id=signal.get("resource_id", ""),
                                       ttp=signal.get("ttp", ""))
         return {**state, "past_cycles": [], "incident": asdict(inc)}
-    past = memory.retrieve_similar(state["signal"], n=3)
+    # SEC4a (V-12): a real signal — or one whose source is unknown — is given real cycles
+    # only; an exercise, every cycle.
+    exercise = _cycle_source(signal)[0] == "exercise"
+    past = memory.retrieve_similar(state["signal"], n=3, exercise=exercise)
     inc = incidents.get_or_create(
         resource_id=signal.get("resource_id", ""),
         ttp=signal.get("ttp", ""),
@@ -303,6 +310,23 @@ def _find_rule_for_ttp(ttp: str, glorfindel_cfg=None):
     return None
 
 
+def _row_names_vm(row, resource_id: str) -> bool | None:
+    """Does this detection row name this VM? True/False when it names a VM — its
+    `_ResourceId` (a VM's, or one of its sub-resources), else its `Computer` (host name,
+    domain dropped) — None when it names none. The RulePoller's reading (`_route`)."""
+    from glorfindel.detection_rules import _vm_id_of
+    if not isinstance(row, dict):
+        return None
+    rid = row.get("_ResourceId") or row.get("ResourceId")
+    if isinstance(rid, str) and "/microsoft.compute/virtualmachines/" in rid.lower():
+        return bool(resource_id) and _vm_id_of(rid) == _vm_id_of(resource_id)
+    computer = row.get("Computer")
+    if isinstance(computer, str) and computer.strip():
+        name = (resource_id or "").rstrip("/").split("/")[-1].lower()
+        return bool(name) and computer.strip().split(".")[0].lower() == name
+    return None
+
+
 def resolve_attack_started(signal: dict) -> dict:
     """Poll the detection source for an attack_started signal and return the resolved signal.
 
@@ -313,14 +337,28 @@ def resolve_attack_started(signal: dict) -> dict:
     Returns a signal with event='detection' (+ detection_time_s, detected_data) or
     event='detection_timeout'. Called by poll_detection (respond mode) and by
     watch poll threads (watch mode, so polling runs in parallel per resource).
+
+    What comes from the line, what comes from the monitoring (SEC4a): the line names the
+    VM and the moment; the detection is the row the rule finds. Its `attack_time` is
+    bounded (`signal_origin.attack_time_refusal`: refused, a ValueError — the watch
+    refuses the line before, `respond` makes it a cycle_failed card). On a data-plane
+    detection the poll keeps the rows naming that VM or none (never one naming another
+    VM); a row that does not name it is pinned to the VM all the same, `unattributed`: the
+    attribution guard of `decide` holds the actions aimed at it.
     """
-    from glorfindel.detectors import detector_for
+    from glorfindel.detectors import detector_for, is_control_plane_source, is_identity_source
+    from glorfindel.detection_rules import _reads_entra_table
+    from glorfindel.signal_origin import attack_time_refusal
 
     raw = signal.get("raw_signal", {})
     source = raw.get("detection_source", "")
     query = raw.get("detection_query", "")
     workspace_id = raw.get("log_analytics_workspace_id", "")
     timeout_s = float(raw.get("detection_timeout_s", 300))
+    if "attack_time" in raw:
+        refused = attack_time_refusal(raw.get("attack_time"))
+        if refused:
+            raise ValueError(f"attack_started refusé : {refused}")
     attack_time = float(raw.get("attack_time", time.time()))
 
     # Fall back to detection_rules.yaml when fields absent from signal
@@ -354,8 +392,20 @@ def resolve_attack_started(signal: dict) -> dict:
         _console.print(f"[yellow]poll: {e} — skipping[/yellow]")
         return {**signal, "event": "detection_timeout"}
 
+    # A query on one of Entra ID's tables, whatever its source (C2): an identity
+    # detection — decided by the code, its UPN never sent to the model.
+    entra_query = _reads_entra_table(query) and not is_control_plane_source(source)
+    # The data plane: a row says which VM it is about. The control plane and identities
+    # are detection only, whatever row (AL1, C2): their rows name an NSG, a role, a user.
+    data_plane = not (is_control_plane_source(source) or is_identity_source(source) or entra_query)
+    vm_rid = signal.get("resource_id") or ""
+
     _console.print(f"[cyan]->[/cyan] Polling {source} (timeout={int(timeout_s)}s)...")
-    result = detector.poll_alert(query, since=attack_time, timeout_s=timeout_s)
+    if data_plane:
+        result = detector.poll_alert(query, since=attack_time, timeout_s=timeout_s,
+                                     match_row=lambda row: _row_names_vm(row, vm_rid) is not False)
+    else:
+        result = detector.poll_alert(query, since=attack_time, timeout_s=timeout_s)
 
     if result is not None:
         detection_s, detected_row = result
@@ -365,14 +415,18 @@ def resolve_attack_started(signal: dict) -> dict:
         since_attack = time.time() - attack_time
         if "attack_time" in raw and 0 < since_attack < 86400:
             detection_s = round(since_attack)
-        from glorfindel.detection_rules import _reads_entra_table, normalize_row
-        from glorfindel.detectors import is_control_plane_source, is_identity_source
-        # A query on one of Entra ID's tables, whatever its source (C2): an identity
-        # detection — decided by the code, its UPN never sent to the model.
-        entra_query = _reads_entra_table(query) and not is_control_plane_source(source)
+        from glorfindel.detection_rules import normalize_row
+        context = dict(signal.get("context") or {})
+        if entra_query:
+            context["plane"] = "identity"
+        if data_plane and _row_names_vm(detected_row, vm_rid) is not True:
+            # The row names no VM (aggregated by address, a storage account): the line's
+            # VM is a guess — the same hold as an unattributed row of the RulePoller.
+            context.update(attribution="unattributed", attribution_from="attack_started",
+                           candidates=[vm_rid.rstrip("/").split("/")[-1] or "?"])
         return {
             **signal,
-            **({"context": {**(signal.get("context") or {}), "plane": "identity"}} if entra_query else {}),
+            **({"context": context} if context != (signal.get("context") or {}) else {}),
             "event": "detection",
             "raw_signal": {
                 **raw,
@@ -710,25 +764,38 @@ def _parse_decision(response) -> tuple[dict, object]:
     non-numeric confidence → float() raises. All seen in the multi-run provider smoke
     (scripts/llm_smoke.py): llama3.2 string booleans, command-r7b omitted a field.
     Defensive parsing so a quirky model can't crash or defeat a safety control.
+
+    Every field is read for its type (SEC4a, V-23): an action that is not text (a list, a
+    number, an object), a confidence that is not a number (a boolean among them), steps
+    that are not a list of text — the field is unreadable, never an exception. An
+    unreadable action is no action: escalated. Only the schema's fields are kept: a key
+    the model adds (`held_by`…) never reaches the gates. Never raises.
     """
     import json
     try:
         tool_calls = getattr(response.choices[0].message, "tool_calls", None) or []
-        d = json.loads(tool_calls[0].function.arguments) if tool_calls else {}
-    except (json.JSONDecodeError, TypeError, AttributeError, IndexError):
-        d = {}
-    if not isinstance(d, dict):
-        d = {}
+        args = tool_calls[0].function.arguments if tool_calls else {}
+        raw = args if isinstance(args, dict) else json.loads(args)
+    except Exception:              # no tool-call, arguments not JSON, nested too deep…
+        raw = {}
+    if not isinstance(raw, dict):
+        raw = {}
 
-    d["action"] = (d.get("action") or "").strip()
-    d["reasoning"] = d.get("reasoning", "")
-    d["explanation"] = d.get("explanation", "")
-    d["escalate"] = _as_bool(d.get("escalate"))
-    d["reversible"] = _as_bool(d.get("reversible")) if d.get("reversible") is not None else True
-    raw_conf = d.get("confidence")
+    d: dict = {}
+    action = raw.get("action")
+    d["action"] = action.strip() if isinstance(action, str) else ""
+    d["reasoning"] = _as_text(raw.get("reasoning"))
+    d["explanation"] = _as_text(raw.get("explanation"))
+    d["escalation_reason"] = _as_text(raw.get("escalation_reason"))
+    d["suggested_steps"] = _as_steps(raw.get("suggested_steps"))
+    d["escalate"] = _as_bool(raw.get("escalate"))
+    d["reversible"] = _as_bool(raw.get("reversible")) if raw.get("reversible") is not None else True
+    raw_conf = raw.get("confidence")
     try:
+        if isinstance(raw_conf, bool) or not isinstance(raw_conf, (int, float, str, type(None))):
+            raise TypeError("confidence is not a number")
         confidence = float(raw_conf) if raw_conf is not None else 0.0
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         raw_conf = None
         confidence = 0.0
     # Bounded to [0, 1] (G2 review): a 5.0 read as 500 % in the cards and the memory. NaN
@@ -741,9 +808,37 @@ def _parse_decision(response) -> tuple[dict, object]:
     # used to survive setdefault → an escalation with no reason.
     if not d["action"]:
         d["escalate"] = True
-        if not d.get("escalation_reason"):
+        if action is not None and not isinstance(action, str):
+            d["escalation_reason"] = (
+                f"Action illisible (le modèle a rendu un {type(action).__name__}, pas un nom "
+                "d'action) — revue humaine requise."
+                + (f" {d['escalation_reason']}" if d["escalation_reason"] else ""))
+        elif not d["escalation_reason"]:
             d["escalation_reason"] = "LLM returned no action — human review required"
     return d, raw_conf
+
+
+def _as_text(v) -> str:
+    """A text field of the decision: text as it came, nothing for None, anything else
+    written out (a model returning an object for its reasoning) — never an exception."""
+    if v is None:
+        return ""
+    if isinstance(v, str):
+        return v
+    try:
+        import json
+        return json.dumps(v, default=str)[:4000]
+    except Exception:
+        return ""
+
+
+def _as_steps(v) -> list[str]:
+    """`suggested_steps`: a list of text. One text is one step; anything else, none."""
+    if isinstance(v, str):
+        return [v] if v.strip() else []
+    if not isinstance(v, list):
+        return []
+    return [s if isinstance(s, str) else _as_text(s) for s in v if s is not None][:20]
 
 
 def _apply_executable_guard(d: dict) -> None:
@@ -980,6 +1075,14 @@ def _apply_attribution_guard(d: dict, signal: dict) -> None:
     candidates = ", ".join(ctx.get("candidates") or []) or "?"
     d["escalate"] = True
     d["held_by"] = "attribution"
+    if ctx.get("attribution_from") == "attack_started":
+        # SEC4a: the line named the VM; the row the rule found does not.
+        d["escalation_reason"] = (
+            f"La ligne de détection trouvée ne nomme pas la VM que désigne le signal "
+            f"attack_started ({candidates}) — '{d['action']}' retenue pour revue humaine. "
+            "Vérifier dans la ligne de détection quelle VM elle concerne avant d'agir."
+        )
+        return
     d["escalation_reason"] = (
         f"Détection non attribuable à une VM (la ligne ne nomme aucune VM, et aucune IP "
         f"de VM surveillée n'est à l'origine) — '{d['action']}' retenue pour revue "
@@ -1012,6 +1115,30 @@ def _apply_never_block_guard(d: dict, signal: dict) -> None:
         "Glorfindel ne la bloque jamais, quelle que soit la règle ou le modèle. Vérifier "
         "d'où vient la détection (une ligne de journal peut nommer n'importe quelle adresse)."
         + (f" — {before}" if before else "")
+    )
+
+
+def _uncontained_floor(d: dict, signal: dict) -> str:
+    """A characterized detection answered by a snapshot alone leaves a card (SEC4a, V-11).
+
+    A snapshot is autonomous and contains nothing: the attack goes on, and the cycle used
+    to end with a notification of the snapshot and no card — a detection no human was asked
+    to judge, whatever the model's reason (a line of the log talking it down). A floor
+    independent of the model: the snapshot still runs, and a card says what nothing
+    contained. Returns the card's reason, or "" when the floor does not apply (the decision
+    is escalated already: it has its card)."""
+    if d["escalate"] or d["action"] != "snapshot" or signal.get("event") != "detection":
+        return ""
+    from glorfindel.detection_rules import has_recognized_indicator
+    raw = signal.get("raw_signal") or {}
+    row = raw.get("detected_data") or raw.get("first_result_row") or {}
+    if not has_recognized_indicator(row, signal.get("ttp", "")):
+        return ""
+    return (
+        f"Détection caractérisée ({signal.get('ttp') or '?'}) à laquelle seul un instantané a "
+        f"répondu (confiance {d['confidence']:.0%}) : rien n'est contenu, l'attaque peut "
+        "continuer. Juger s'il faut isoler la VM ou bloquer la source (plancher déterministe, "
+        "indépendant du modèle)."
     )
 
 
@@ -1431,6 +1558,10 @@ def decide(
             responses += more_responses
         _apply_agreement_guard(d, draws, required)
 
+    # Last, on the decision as it stands: a characterized detection a snapshot alone
+    # answers gets its card (V-11) — store_cycle records it once the snapshot ran.
+    uncontained = _uncontained_floor(d, signal)
+
     return {
         **state,
         "reasoning": d["reasoning"],
@@ -1448,6 +1579,7 @@ def decide(
         "autonomy_gate": gate,
         "decision_temperature": temperature,
         "decision_draws": draws,
+        "uncontained": uncontained,
     }
 
 
@@ -1890,9 +2022,44 @@ def store_cycle(state: GlorfindelState, *, memory: CycleMemory) -> GlorfindelSta
     except Exception as exc:
         _console.print(f"[yellow]store_cycle: notify_action failed: {exc}[/yellow]")
 
+    _record_uncontained(state, source, exercise_run)
+
     # Debug JSONL — always written, even if ChromaDB or webhook failed
     _write_debug_record(state)
     return state
+
+
+def _record_uncontained(state: GlorfindelState, source: str, exercise_run: str) -> None:
+    """The card of a characterized detection a snapshot alone answered (V-11), once the
+    snapshot ran: no action on it (it has run; nothing is approvable in one click), its
+    id in the reason. A decision escalated on the way (the snapshot failed, its check
+    failed) has its own card already."""
+    outcome = state.get("outcome") or {}
+    if (not state.get("uncontained") or state.get("dry_run") or state.get("escalate")
+            or not outcome.get("executed")):
+        return
+    signal = state["signal"]
+    snap = outcome.get("snapshot_id") or ""
+    try:
+        from glorfindel import escalations
+        escalations.record(
+            signal_id=signal.get("signal_id", ""),
+            resource_id=signal.get("resource_id", ""),
+            action="",
+            escalation_type="uncontained_detection",
+            reason=state["uncontained"] + (f" Instantané pris : {snap}." if snap else ""),
+            run_id=(signal.get("context") or {}).get("run_id", ""),
+            suggested_steps=list(state.get("suggested_steps") or []),
+            ttp=signal.get("ttp", ""),
+            severity=signal.get("severity", ""),
+            confidence=state.get("confidence", 0.0),
+            rule_name=(signal.get("context") or {}).get("rule_name", ""),
+            source=source,
+            exercise_run=exercise_run,
+            explanation=state.get("explanation", ""),
+        )
+    except Exception as exc:          # said, and the debug line still written
+        _console.print(f"[red]store_cycle: carte de la détection non contenue non écrite — {exc}[/red]")
 
 
 def _write_debug_record(state: GlorfindelState) -> None:
@@ -1930,6 +2097,8 @@ def _write_debug_record(state: GlorfindelState) -> None:
         debug_record["decision_temperature"] = state["decision_temperature"]
     if state.get("decision_draws"):
         debug_record["decision_draws"] = state["decision_draws"]
+    if state.get("uncontained"):
+        debug_record["uncontained"] = state["uncontained"]
     out = Path("runs") / f"{run_id}_debug.jsonl"
     out.parent.mkdir(parents=True, exist_ok=True)
     with open(out, "a") as f:

@@ -3282,6 +3282,54 @@ MUTANTS += [
 TESTS.update({f"M{n}": "tests/unit/test_forged_logs.py" for n in range(1320, 1325)})
 
 
+# SEC4a (#275): the decision facing a model, a memory or a line it did not expect — the
+# model's answer read for its type, a snapshot alone leaves a card, real cycles only for a
+# real signal and no cycle overwriting another, the row of an attack_started naming its VM,
+# its moment bounded. Measured by tests/unit/test_unexpected_decision.py. Ranges
+# M1240–M1249, M1330–M1334.
+SIG = "glorfindel/signal_origin.py"
+MEM = "glorfindel/memory.py"
+MUTANTS += [
+    ("M1240", "an action that is not text raises: the cycle crashes on a list (SEC4a, V-23)", AGT,
+     '    d["action"] = action.strip() if isinstance(action, str) else ""\n',
+     '    d["action"] = (action or "").strip()\n'),
+    ("M1241", "a boolean confidence read as 1.0: a JSON true passes the gate (SEC4a, V-23)", AGT,
+     "        if isinstance(raw_conf, bool) or not isinstance(raw_conf, (int, float, str, type(None))):",
+     "        if not isinstance(raw_conf, (int, float, str, type(None))):"),
+    ("M1242", "the model's own keys kept: its held_by chooses the card's type (SEC4a, V-23)", AGT,
+     "    d: dict = {}\n", "    d: dict = dict(raw)\n"),
+    ("M1243", "steps that are not a list passed on: the card's construction raises (SEC4a, V-23)", AGT,
+     "    if not isinstance(v, list):\n        return []\n    return [s if isinstance(s, str)",
+     "    if not isinstance(v, list):\n        return v\n    return [s if isinstance(s, str)"),
+    ("M1244", "a characterized detection a snapshot alone answers ends with no card (SEC4a, V-11)", AGT,
+     "    uncontained = _uncontained_floor(d, signal)\n", '    uncontained = ""\n'),
+    ("M1245", "the card of an uncontained detection never written (SEC4a, V-11)", AGT,
+     "    _record_uncontained(state, source, exercise_run)\n", ""),
+    ("M1246", "a real signal given exercise cycles: the retrieval does not filter (SEC4a, V-12)", MEM,
+     '            **({} if exercise else {"where": {"source": "real"}}),\n', ""),
+    ("M1247", "a cycle's id taken from its signal and upserted: a reused id overwrites a real cycle (SEC4a, V-12)",
+     MEM, ('cycle_id = f"cycle-{uuid.uuid4().hex}"', "self._collection.add("),
+     ("cycle_id = f\"{cycle['signal_id']}_{cycle['action']}\"", "self._collection.upsert(")),
+    ("M1248", "every signal read as an exercise: a real one given every cycle (SEC4a, V-12)", AGT,
+     '    exercise = _cycle_source(signal)[0] == "exercise"\n', "    exercise = True\n"),
+    ("M1249", "an attack_started's row naming no VM pinned to the line's VM, unheld (SEC4a)", AGT,
+     "        if data_plane and _row_names_vm(detected_row, vm_rid) is not True:\n", "        if False:\n"),
+    ("M1330", "an attack_started's poll takes a row naming another VM (SEC4a)", AGT,
+     "match_row=lambda row: _row_names_vm(row, vm_rid) is not False)", "match_row=None)"),
+    ("M1331", "the runs/ channel admits an attack_started of any moment (SEC4a)", SIG,
+     '        why = attack_time_refusal(clean["raw_signal"]["attack_time"])\n', '        why = ""\n'),
+    ("M1332", "resolve_attack_started searches from any moment (SEC4a)", AGT,
+     '        refused = attack_time_refusal(raw.get("attack_time"))\n', '        refused = ""\n'),
+    ("M1333", "an attack_time in the future admitted (SEC4a)", SIG,
+     "    if t - now > ATTACK_TIME_FUTURE_S:\n", "    if False:\n"),
+    ("M1334", "a row naming any VM by its resource id read as naming the line's (SEC4a)", AGT,
+     "        return bool(resource_id) and _vm_id_of(rid) == _vm_id_of(resource_id)\n",
+     "        return bool(resource_id)\n"),
+]
+TESTS.update({mid: "tests/unit/test_unexpected_decision.py"
+              for mid in [f"M{n}" for n in range(1240, 1250)] + [f"M{n}" for n in range(1330, 1335)]})
+
+
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a
 # composite rule or a world event to one of them. Run with --control.

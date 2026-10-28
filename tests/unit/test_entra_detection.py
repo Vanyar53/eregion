@@ -171,7 +171,7 @@ class _Memory:
     def store(self, cycle):
         self.cycles.append(cycle)
 
-    def retrieve_similar(self, signal, n=3):
+    def retrieve_similar(self, signal, n=3, *, exercise=False):
         return [{"summary": json.dumps(c, ensure_ascii=False)} for c in self.cycles[-n:]]
 
     def count(self):

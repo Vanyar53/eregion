@@ -48,8 +48,9 @@ def test_only_what_an_injector_emits_is_admitted(event):
 def test_an_attack_started_keeps_only_the_fields_an_injector_writes():
     """A line cannot hand the defender a query of its own, an IP to block, or a verdict:
     the detection comes from the watch's rule for the technique."""
+    t0 = time.time() - 60
     data = _line("attack_started",
-                 raw_signal={"attack_time": 1.0, "detection_timeout_s": 300, "detection_max_s": 180,
+                 raw_signal={"attack_time": t0, "detection_timeout_s": 300, "detection_max_s": 180,
                              "detection_query": "print x=1", "log_analytics_workspace_id": "w",
                              "detection_source": "azure_monitor", "first_result_row": {"MaxWrite": 1e9}},
                  context={"run_id": "20261028T100000Z", "scenario": "s", "suspicious_ip": "203.0.113.9",
@@ -57,7 +58,7 @@ def test_an_attack_started_keeps_only_the_fields_an_injector_writes():
                  extra="x")
     adm = signal_origin.admit(data)
     assert adm.what == "poll"
-    assert adm.signal["raw_signal"] == {"attack_time": 1.0, "detection_timeout_s": 300, "detection_max_s": 180}
+    assert adm.signal["raw_signal"] == {"attack_time": t0, "detection_timeout_s": 300, "detection_max_s": 180}
     assert adm.signal["context"] == {"run_id": "20261028T100000Z", "scenario": "s"}
     assert "extra" not in adm.signal
     assert {"raw_signal.detection_query", "raw_signal.first_result_row", "context.suspicious_ip",
@@ -232,19 +233,20 @@ def test_a_recovery_complete_written_in_runs_by_another_process_never_acts(tmp_p
     carrying its own row, an unknown event and a run id that is a path never reach the
     defender's decision; the attack_started reaches the poll without the query it brought,
     the detection_missed its proposal. Each refusal is said and counted."""
+    t0 = time.time() - 60
     lines = [
         _line("recovery_complete", raw_signal={"run_command_neutralized": True}),
         _line("detection", raw_signal={"first_result_row": {"Computer": "web", "MaxWrite": 1e9}}),
         _line("something_else"),
         _line("attack_started", context={"run_id": "../../x"}),
-        _line("attack_started", raw_signal={"attack_time": 1.0, "detection_query": "print x=1"}),
+        _line("attack_started", raw_signal={"attack_time": t0, "detection_query": "print x=1"}),
         _line("detection_missed", raw_signal={"failed_query": "q"}),
         _line("attack_adapted", raw_signal={"blocked_ip": "203.0.113.9"}),
     ]
     responded, polled, out = _run_watch(tmp_path, monkeypatch, lines, expect=2)
     assert sorted(d["event"] for d in responded) == ["detection", "detection_missed"], out
     assert not [d for d in responded if d.get("raw_signal", {}).get("first_result_row")]
-    assert [p["raw_signal"] for p in polled] == [{"attack_time": 1.0}]
+    assert [p["raw_signal"] for p in polled] == [{"attack_time": t0}]
     assert signal_origin.refused_counts() == {"recovery_complete": 1, "detection": 1, "something_else": 1,
                                               "attack_started": 1, "attack_adapted": 1}
     assert out.count("Signal refusé") == 5

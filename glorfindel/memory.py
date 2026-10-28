@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from pathlib import Path
 
 
@@ -27,10 +28,14 @@ class CycleMemory:
         )
 
     def store(self, cycle: dict) -> None:
-        """Persist a completed cycle."""
-        cycle_id = f"{cycle['signal_id']}_{cycle['action']}"
+        """Persist a completed cycle, under an identifier of its own (SEC4a, V-12).
+
+        It was `<signal_id>_<action>`, upserted: a signal id comes from the signal — a line
+        could reuse a real cycle's, and its cycle replaced the real one. Drawn here, never
+        reused: a cycle is added, never overwritten."""
+        cycle_id = f"cycle-{uuid.uuid4().hex}"
         document = _cycle_to_text(cycle)
-        self._collection.upsert(
+        self._collection.add(
             ids=[cycle_id],
             documents=[document],
             metadatas=[{
@@ -39,8 +44,8 @@ class CycleMemory:
                 "outcome": str(cycle.get("outcome", "")),
                 "signal_id": cycle.get("signal_id", ""),
                 "run_id": cycle.get("run_id", ""),
-                # B2: `exercise` or `real` (eregion_core/exercise.py). Recorded, not yet
-                # shown to the model nor used to filter the retrieval.
+                # B2: `exercise` or `real` (eregion_core/exercise.py) — shown to the model
+                # with each past cycle, and what the retrieval filters on (SEC4a).
                 "source": cycle.get("source", ""),
                 "exercise_run": cycle.get("exercise_run", ""),
                 "event": cycle.get("event", ""),
@@ -51,14 +56,19 @@ class CycleMemory:
             }],
         )
 
-    def retrieve_similar(self, signal: dict, n: int = 3) -> list[dict]:
-        """Return the N past cycles most similar to this signal."""
+    def retrieve_similar(self, signal: dict, n: int = 3, *, exercise: bool = False) -> list[dict]:
+        """Return the N past cycles most similar to this signal.
+
+        A real signal is given real cycles only (SEC4a, V-12): an exercise, a cycle of
+        unknown source (recorded before B2, or unreadable labelling) is never a precedent
+        for a real incident. `exercise`: the signal is one — every cycle, real ones too."""
         if self._collection.count() == 0:
             return []
         query_text = _signal_to_text(signal)
         results = self._collection.query(
             query_texts=[query_text],
             n_results=min(n, self._collection.count()),
+            **({} if exercise else {"where": {"source": "real"}}),
         )
         cycles = []
         for doc, meta in zip(results["documents"][0], results["metadatas"][0]):

@@ -98,6 +98,7 @@ _ESCALATION_LABELS = {
     "control_plane_change": "plan de contrôle modifié (détection seule)",
     "identity_change": "identité modifiée dans Entra ID (détection seule)",
     "protected_address": "adresse protégée (jamais bloquée)",
+    "uncontained_detection": "détection non contenue (instantané seul)",
 }
 
 

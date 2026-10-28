@@ -2712,7 +2712,7 @@ MUTANTS += [
     ("M1017", "two passes at once, or one during a deployment by hand: no lock (H1)", CD,
      "            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)\n", "            pass\n"),
     ("M1018", "a release with another agent never said: H0 keeps an old CD in silence (H1)", CD,
-     "        drift, note = agent_drift(tag)\n", '        drift, note = [], ""\n'),
+     "        drift, note, lost = agent_drift(tag)\n", '        drift, note, lost = [], "", False\n'),
     ("M1019", "a heartbeat from before the switch taken for health (H1)", CD,
      "        if HEARTBEAT.stat().st_mtime < since:", "        if False:"),
 ]
@@ -2731,7 +2731,7 @@ MUTANTS += [
 ]
 TESTS.update({"M1003": "tests/unit/test_host_cd.py", "M1004": "tests/unit/test_host_cd.py"})
 # H1 after its second review (28/10): two guards of a deployment on the host. M1050–M1059 given
-# by the General session; M1055–M1059 stay free.
+# by the General session; M1057–M1059 stay free.
 MUTANTS += [
     ("M1050", "a switch cut by a reboot never taken up: a sick release stays, unsaid (H1, second review)", CD,
      "        if cut:\n", "        if False:\n"),
@@ -2753,6 +2753,14 @@ MUTANTS += [
      "'umask 077 && cat > .eregion-cd/discord.env'\n"),
 ]
 TESTS.update({"M1053": "tests/unit/test_host_cd.py", "M1054": "tests/unit/test_host_cd.py"})
+# After its review: the same files say nothing; installed-from is a commit id, never a name.
+MUTANTS += [
+    ("M1055", "the agent's files compared to nothing: a newer release always asks to reinstall it", CD,
+     "        if theirs.returncode == 0 and theirs.stdout != ours:\n", "        if theirs.returncode == 0:\n"),
+    ("M1056", "installed-from read as any ref: « HEAD » makes every release look newer than the agent", CD,
+     '    if not re.fullmatch(r"[0-9a-f]{40}", installed) or git(', "    if not installed or git("),
+]
+TESTS.update({"M1055": "tests/unit/test_host_cd.py", "M1056": "tests/unit/test_host_cd.py"})
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

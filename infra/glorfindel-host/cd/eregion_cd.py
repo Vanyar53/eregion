@@ -428,21 +428,27 @@ def health(ref: str, since: float) -> str:
     return why
 
 
-def agent_drift(tag: str) -> tuple[list[str], str]:
+def agent_drift(tag: str) -> tuple[list[str], str, bool]:
     """The agent's files that differ from the release just deployed — said only when the release
     is newer than the commit the agent was installed from (`installed-from`, written by make
     glorfindel-host-cd-install). An older release (one from before H1, v0.4.1) carries an older
-    deploy.sh: installing from it would break the CD. Else ([], why nothing is said)."""
+    deploy.sh: installing from it would break the CD. Else ([], why nothing is said, whether the
+    agent's origin is lost — unknown, or off main: no release will ever descend from it, the
+    repository merges by squash — which is said once)."""
     release = git("rev-parse", "-q", "--verify", f"refs/tags/{tag}^{{commit}}", check=False).stdout.strip()
     try:
         installed = (CD_HOME / "installed-from").read_text(encoding="utf-8").strip()
     except OSError:
         installed = ""
-    if not installed or git("cat-file", "-e", f"{installed}^{{commit}}", check=False).returncode != 0:
-        return [], ("l'agent ne sait pas de quel commit il a été installé (ou ce commit n'est pas sur la VM) : "
-                    "make glorfindel-host-cd-install le note — rien n'est dit")
+    # A full commit id only: a name like HEAD would make every release look newer.
+    if not re.fullmatch(r"[0-9a-f]{40}", installed) or git("cat-file", "-e", f"{installed}^{{commit}}",
+                                                             check=False).returncode != 0:
+        return [], ("l'agent ne sait pas de quel commit il a été installé (installed-from absent, illisible, ou "
+                    "commit absent de la VM)"), True
+    if not is_ancestor(installed, "refs/remotes/origin/main"):
+        return [], f"l'agent a été installé depuis {installed[:12]}, hors de main : aucune release n'en descendra", True
     if installed == release or not is_ancestor(installed, release):
-        return [], f"l'agent ({installed[:12]}) n'est pas plus ancien que {tag} : rien à mettre à jour"
+        return [], f"l'agent ({installed[:12]}) n'est pas plus ancien que {tag} : rien à mettre à jour", False
     out = []
     for local, path in AGENT_FILES.items():
         theirs = git("show", f"refs/tags/{tag}:{path}", check=False)
@@ -452,7 +458,7 @@ def agent_drift(tag: str) -> tuple[list[str], str]:
             ours = ""
         if theirs.returncode == 0 and theirs.stdout != ours:
             out.append(local)
-    return out, ""
+    return out, "", False
 
 
 def conclude(state: dict, tag: str, dep_ref: str, why: str, url: str, how: str) -> int:
@@ -463,10 +469,14 @@ def conclude(state: dict, tag: str, dep_ref: str, why: str, url: str, how: str) 
         save_state(state)
         prune(tag, dep_ref)
         say(f"✅ H0 tourne sur {tag}", how, color=nd.GREEN, url=url)
-        drift, note = agent_drift(tag)
+        drift, note, lost = agent_drift(tag)
         if drift:
             say(f"🔧 Agent de CD à mettre à jour ({tag})", f"diffèrent de la release, plus récente que l'agent : "
                 f"{', '.join(drift)} — make glorfindel-host-cd-install", color=nd.ORANGE)
+        elif lost:
+            say_once(state, "_agent", "origin", "ℹ️ L'agent de CD ne saura pas dire quand se mettre à jour",
+                     f"{note} — make glorfindel-host-cd-install depuis main le note", color=nd.BLUE)
+            save_state(state)
         elif note:
             print(note)
         return 0

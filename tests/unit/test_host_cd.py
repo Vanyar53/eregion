@@ -734,12 +734,30 @@ def test_a_release_older_than_the_agent_never_asks_to_reinstall_it(tmp_path, fak
     assert not any("Agent de CD" in t for t in _titles(h0)) and "pas plus ancien" in res.stdout
 
 
-def test_an_agent_that_does_not_know_its_commit_says_nothing_in_deploy(tmp_path, fake):
+@pytest.mark.parametrize("installed_from", [None, "HEAD", "side"])
+def test_an_agent_whose_origin_is_lost_says_it_once_without_the_mention(tmp_path, fake, installed_from):
+    """installed-from missing, a ref name (HEAD made every release look newer), or a commit off
+    main (a lot's branch: no release will descend from it): never « 🔧 », said once, silent."""
     h0 = H0(tmp_path, fake, c2_files={"infra/glorfindel-host/cd/eregion_cd.py": "# another agent\n"})
-    (h0.cd / "installed-from").unlink()
+    if installed_from is None:
+        (h0.cd / "installed-from").unlink()
+    else:
+        (h0.cd / "installed-from").write_text(h0.commits.get(installed_from, installed_from) + "\n")
     res = h0.run()
-    assert res.returncode == 0 and not any("Agent de CD" in t for t in _titles(h0))
-    assert "make glorfindel-host-cd-install le note" in res.stdout
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert not any("Agent de CD à mettre à jour" in t for t in _titles(h0))
+    (info,) = [p for p in h0.posts() if p["embeds"][0]["title"].startswith("ℹ️ L'agent de CD")]
+    assert not info.get("content") and info["flags"] == 4096
+
+
+def test_a_newer_release_with_the_same_agent_says_nothing(tmp_path, fake):
+    """The release is newer than the agent, its three files are the installed ones: nothing to update."""
+    same = {path: (ROOT / path).read_text(encoding="utf-8") for path in (
+        "infra/glorfindel-host/cd/eregion_cd.py", "infra/glorfindel-host/deploy.sh", "scripts/notify_discord.py")}
+    h0 = H0(tmp_path, fake, c2_files=same)
+    res = h0.run()
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert not any("Agent de CD" in t or "L'agent de CD" in t for t in _titles(h0))
 
 
 @pytest.mark.skipif(shutil.which("make") is None, reason="make not installed")

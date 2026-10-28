@@ -6,13 +6,14 @@ Notable changes to Eregion. The format follows [Keep a Changelog](https://keepac
 
 ### Security
 - **The decision facing a model, a memory or a line it did not expect** (SEC4a, #275, 28/10; `docs/glorfindel.md`, « gardes de `decide` », « Source d'un cycle », « Le canal runs/ »).
-  - **The model's answer is read field by field, for its type.** An action that is not text, a confidence that is not a number (a boolean among them), steps that are not a list: the field is unreadable and the cycle escalates — it no longer raises. Only the decision schema's fields are kept from the answer. A property test over arbitrary JSON keeps it so.
-  - **A real signal is given real past cycles only**: an exercise's cycles, or cycles of unknown source, are no longer retrieved for it (an exercise is still given every cycle). A cycle's identifier in the memory is drawn by the memory, never taken from the signal: a cycle is added, never overwritten.
-  - **An `attack_started` from `runs/`**: the detection row the rule finds must name the VM the line names — a row naming another VM is never taken for it, and a row naming no VM leaves the actions aimed at that VM (isolation, block) held for a human (`unattributed_signal`). Its `attack_time` must be a moment within 2 h back and 5 min ahead, or the line is refused (counted with the other refusals).
-- Tests `tests/unit/test_unexpected_decision.py`, mutants M1240–M1249, M1330–M1334.
+  - **The model's answer is read field by field, for its type.** An action that is not text, a confidence that is not a number of [0, 1] (a boolean, NaN, an infinity, 5.0: unknown, held by the confidence gate — no longer brought back into the range), steps that are not a list: the field is unreadable and the cycle escalates — it no longer raises. Only the decision schema's fields are kept from the answer. A property test over arbitrary JSON keeps it so.
+  - **Every signal, an exercise too, is given real past cycles only**: an exercise's cycles, or cycles of unknown source, are no longer retrieved — so what the model is shown never tells it whether the current signal is an exercise. A cycle's identifier in the memory is drawn by the memory: a cycle is added, never overwritten; a replayed `respond` is retrieved once.
+  - **An `attack_started` from `runs/`**: the detection row the rule finds is read as the rule poller reads it (its resource, its host name, the private IP that made the call — one shared reading) and must name the VM the line names — a row naming another VM is never taken for it, and a row naming no VM leaves the actions aimed at that VM (isolation, block) held for a human (`unattributed_signal`). Its `attack_time` must be a moment within 2 h back and 5 min ahead, or the line is refused (counted with the other refusals).
+  - **What the model sees changes**: fewer past cycles (real ones only, for every signal), and the attribution of an `attack_started`'s detection in its context — an end-to-end run comes with BL1 (#280).
+- Tests `tests/unit/test_unexpected_decision.py`, mutants M1240–M1249, M1330–M1339, M1360–M1364.
 
 ### Fixed
-- **A characterized detection answered by a snapshot alone now leaves a card** (SEC4a, #275): the snapshot still runs on its own, and a card `uncontained_detection` (no action to approve) asks a human whether to contain. It used to end with the snapshot's notification only.
+- **A characterized detection answered by a snapshot alone now leaves a card** (SEC4a, #275): the snapshot still runs on its own, and a card `uncontained_detection` (no action to approve) asks a human whether to contain — unless the VM is already isolated, or the detection's source already blocked, by an earlier cycle. It used to end with the snapshot's notification only.
 
 ## [0.4.3] — 2026-10-28 — "held at the edges"
 

@@ -138,7 +138,7 @@ glorfindel/
                           cold-start). Source UNIQUE du tool+prompt d'autoring (agent.py importe).
                           Deux appelants : propose_detection_rule (réactif) + `propose-rules` (proactif).
   memory.py             → CycleMemory ChromaDB (confidence + past_cycles_used) ; SEC4a : identifiant tiré par la mémoire
-                          (jamais celui du signal, jamais remplacé), un signal réel ne reçoit que des cycles réels
+                          (jamais remplacé), tout signal ne reçoit que des cycles réels, un par (signal_id, action, run_id)
   incidents.py          → IncidentRegistry (TTL, persist, thread-safe)
   cli.py                → watch, respond, restore (--wait), release, unblock, reset (revert=alias), list, pending, ack, activate,
                           audit (--all), approve-rule, reject-rule, propose-rules, rules, migrate-rules, check-ttl, jobs,

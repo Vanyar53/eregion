@@ -76,10 +76,12 @@ class SweepMixin:
                 original = _recorded_original(t0["nic_id"])
                 if original is _UNKNOWN:
                     original = self._original_from_tags(t0["quarantine"], t0["nic_id"])
-                originals[t0["nic_id"]] = original
-                if original is None:
+                elif original is None:
                     # The state's "none" yields to our tag when it names an NSG (I8S).
-                    originals[t0["nic_id"]] = original = self._tag_over_none(t0["quarantine"], t0["nic_id"])
+                    original = self._tag_over_none(t0["quarantine"], t0["nic_id"])
+                # Recorded once known: kept as "none" before an unreadable tag, the NIC
+                # was put back bare and the tag deleted (I8S, review).
+                originals[t0["nic_id"]] = original
             except Exception as exc:
                 unreadable.append(f'{t0["nic_short"]}: NSG d\'origine illisible ({_first_line(exc)[:_ERR_MAX]})')
                 continue

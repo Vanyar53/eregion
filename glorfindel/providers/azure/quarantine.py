@@ -262,7 +262,8 @@ class QuarantineMixin:
         and left it bare (seventh review, U2). Our tag still says what it carried — it
         goes only once the original is back. (original or None, the quarantine NSG) when
         a tag is found, (_UNKNOWN, None) otherwise. Looked up on the region's quarantine
-        NSG, in the configured group and in the VM's."""
+        NSG, in the configured group and in the VM's, then in the subscription. A tag that
+        names an NSG wins over a "none" found first: two hosts, two groups (I8S)."""
         if t0.get("quarantine") or t0.get("own_nsg_id"):
             return _UNKNOWN, None
         name = f"{QUARANTINE_NSG_PREFIX}-{(t0.get('location') or 'unknown').lower()}"
@@ -283,6 +284,7 @@ class QuarantineMixin:
             q_rg, q_name = _parse_nsg_resource_id(nsg.id)
             return (None if value == self._NO_ORIGINAL else value), {"nsg_rg": q_rg, "nsg_name": q_name, "nsg_id": nsg.id}
 
+        none = None
         for q_rg in dict.fromkeys(g.lower() for g in groups):
             try:
                 hit = found(self._network.network_security_groups.get(q_rg, name))
@@ -290,16 +292,18 @@ class QuarantineMixin:
                 if _is_not_found(exc):
                     continue
                 raise
-            if hit:
+            if hit and hit[0]:
                 return hit
+            none = none or hit
         # The quarantine group may have changed since (or the config can't be read):
         # every quarantine NSG of ours in the subscription, by its name and our tag.
         for nsg in self._network.network_security_groups.list_all():
             if (getattr(nsg, "name", "") or "").lower() == name:
                 hit = found(nsg)
-                if hit:
+                if hit and hit[0]:
                     return hit
-        return _UNKNOWN, None
+                none = none or hit
+        return none or (_UNKNOWN, None)
 
     # ── L4: Glorfindel's quarantine NSG ─────────────────────────────────────────
 

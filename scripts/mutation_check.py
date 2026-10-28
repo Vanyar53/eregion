@@ -183,10 +183,11 @@ MUTANTS = [
      "            views = self._nic_nsg_views(t0)\n            if t0.get(\"quarantine\"):",
      "            views = self._nic_nsg_views(t0)\n            if False:"),
     ("M24", "reset --from-azure reads the original from the tag only (L27)", SWP,
+     # The state skipped: the tag decides (the code moved, I8S review — same bug).
      "                original = _recorded_original(t0[\"nic_id\"])\n                if original is _UNKNOWN:\n"
-     "                    original = self._original_from_tags(t0[\"quarantine\"], t0[\"nic_id\"])\n"
-     "                originals[t0[\"nic_id\"]] = original",
-     "                originals[t0[\"nic_id\"]] = original = self._original_from_tags(t0[\"quarantine\"], t0[\"nic_id\"])"),
+     "                    original = self._original_from_tags(t0[\"quarantine\"], t0[\"nic_id\"])\n",
+     "                original = _UNKNOWN\n                if original is _UNKNOWN:\n"
+     "                    original = self._original_from_tags(t0[\"quarantine\"], t0[\"nic_id\"])\n"),
     ("M25", "a partial reset leaves the state unmarked (L27)", SWP,
      "        elif not dry_run:\n            # Part of it is gone from Azure",
      "        elif False:\n            # Part of it is gone from Azure",
@@ -1586,7 +1587,8 @@ MUTANTS += [
     ("M1040", "the release follows the state's 'none' over a tag naming the NSG: the NIC left bare (I8S)",
      REL, '                        if original is None and "original_nsg_id" in p:\n',
      "                        if False:\n"),
-    ("M1041", "a release without the NIC's placement follows the state's 'none' over the tag (I8S)", REL,
+    ("M1041", "the release's sweep follows the state's 'none' for a NIC in a quarantine its placement doesn't "
+              "name (host 2's, another group): left bare (I8S)", REL,
      "                    elif original is None:\n                        original = self._tag_over_none(q, t0[\"nic_id\"])\n",
      "                    elif False:\n                        original = self._tag_over_none(q, t0[\"nic_id\"])\n"),
     ("M1042", "a 429 on our tag: the re-isolation writes the state's 'none' over it (I8S)", QUA,
@@ -1596,14 +1598,24 @@ MUTANTS += [
      "            if _is_not_found(exc):\n                return None\n            raise\n",
      "            return None\n"),
     ("M1044", "reset follows the state's 'none' over the tag of a NIC in quarantine (I8S)", SWP,
-     "                if original is None:\n                    # The state's \"none\" yields to our tag",
-     "                if False:\n                    # The state's \"none\" yields to our tag"),
+     "                elif original is None:\n                    # The state's \"none\" yields to our tag",
+     "                elif False:\n                    # The state's \"none\" yields to our tag"),
     ("M1045", "reset follows the state's 'none' over the tag of a bare NIC (I8S)", SWP,
      "            if recorded is None and q_bare is not None:\n", "            if False:\n"),
     ("M1046", "reset reads an unreadable tag of a bare NIC as the state's 'none': swept bare (I8S)", SWP,
      "                if recorded is _UNKNOWN or recorded is None:\n", "                if recorded is _UNKNOWN:\n"),
     ("M1047", "verify_release follows the state's 'none' over a tag naming the NSG: says released (I8S)", VER,
      "            if original is _UNKNOWN or original is None:\n", "            if original is _UNKNOWN:\n"),
+    # Review of I8S (5.5): the reset recorded the state's "none" before reading the tag; a 429
+    # there left it recorded — the NIC put back bare, the tag X deleted.
+    ("M1048", "reset records the state's 'none' before reading the tag: a 429 there, the NIC put back "
+              "bare and X deleted (I8S, review)", SWP,
+     "                original = _recorded_original(t0[\"nic_id\"])\n",
+     "                originals[t0[\"nic_id\"]] = original = _recorded_original(t0[\"nic_id\"])\n"),
+    ("M1049", "a bare NIC's original: the first tag found, a 'none' in one group over X in another — two "
+              "hosts, two quarantine groups (I8S, review)", QUA,
+     "            if hit and hit[0]:\n                return hit\n            none = none or hit\n",
+     "            if hit:\n                return hit\n"),
 ]
 
 
@@ -2281,7 +2293,7 @@ TESTS["M834"] = f"{INVARIANTS} tests/unit/test_reassert.py"
 TESTS.update({mid: f"tests/unit/test_invariant_regressions.py {INVARIANTS}"
               for mid in ("M860", "M861", "M862", "M863", "M864", "M865")})
 # I8S (#245): a second host with its own state is outside the machine — the frozen sequences.
-TESTS.update({f"M{n}": "tests/unit/test_invariant_regressions.py -k two_hosts" for n in range(1040, 1048)})
+TESTS.update({f"M{n}": "tests/unit/test_invariant_regressions.py -k two_hosts" for n in range(1040, 1050)})
 
 # D1 (#81): each component runs alone (scripts/component_check.py), and every usage profile
 # keeps Glorfindel (docker-compose.yml, the Makefile's profile and team targets).

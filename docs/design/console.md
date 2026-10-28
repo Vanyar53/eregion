@@ -316,6 +316,49 @@ force s'exécute sur `main` ; avec #257, la CSP la bloque. **Mutants M1080–M10
 ou un script en ligne de retour, le répartiteur (table fermée, élément le plus proche, phase de capture),
 les arguments non échappés, une action absente de la table, et le lecteur pour S1, S2, S4, S5, S6, S8.
 
+### La frontière de la console (SEC1, #272, 0.4.3)
+
+La console agit sur Azure ; elle ne répond qu'à ses propres pages et aux scripts qui ont son jeton.
+Tout se joue dans un seul middleware ASGI (`_TokenAuthMiddleware`, `eregion_console/api.py`), avant
+toute route, WebSocket du fil compris. Dans l'ordre :
+
+1. **Le nom d'hôte** : un nom de la boucle locale (`localhost`, `127.0.0.1`, `[::1]`) ou un nom de
+   `EREGION_CONSOLE_HOSTS`, quel que soit le port — un tunnel (`ssh -L`) ou la console d'une équipe
+   (`EREGION_CONSOLE_PORT`) publient un autre port que celui où la console écoute. Sinon 403.
+2. **L'origine d'une modification** (POST, PUT, PATCH, DELETE, le WebSocket) : celle de la console,
+   schéma et `Host` exacts (le port compte : une autre page de `localhost` est une autre origine). Sinon 403.
+3. **Le jeton, toujours** : celui du déploiement (`EREGION_CONSOLE_TOKEN`, ou son ancien nom), sinon
+   celui que la console a tiré à son premier démarrage, gardé dans `~/.glorfindel/console_token`
+   (mode 600) et affiché une fois au démarrage avec l'URL. Aucun mode sans jeton, les tests compris
+   (le conftest en pose un). Le cookie est une session dérivée du jeton (HMAC), jamais le jeton ;
+   `Secure` en HTTPS.
+4. **Une modification d'un navigateur** (par le cookie) porte son `Origin`.
+5. **Une modification porte un objet JSON** (`Content-Type: application/json`) : sinon 415 ou 400.
+
+Côté pages, `_post(url, body, method)` envoie chaque modification en JSON, et `_seg(nom)` encode
+chaque segment de chemin construit avec un nom (VM, carte). Restore n'est plus qu'une restauration de
+carte : le serveur refuse une carte ancrée, comme la page et le bot. Config reçoit les identifiants
+Azure masqués. En-têtes : la CSP prend `default-src 'self'`, `style-src 'self' 'unsafe-inline'` et
+`img-src 'self'` (aucune ressource bloquée dans Chromium), `X-Content-Type-Options: nosniff`,
+`Referrer-Policy: no-referrer` ; ni schéma OpenAPI ni `/docs`.
+
+**Vérifié dans Chromium** (28/10, chrome-headless-shell, console locale sur un HOME jetable, réseau
+limité à la boucle locale, connecteur Azure et commande `glorfindel` remplacés) : par un relais local
+qui joue le tunnel (`http://localhost:<port>/?token=…`, port publié différent du port d'écoute), la
+page du jeton puis son formulaire, `?token=` une fois, chaque page (aucune violation de CSP, aucune
+erreur JS, aucune requête refusée, le fil en WebSocket ouvert), et chaque bouton de Glorfindel et de
+Config (Release, Restore, Cmd, Snapshot, Approve & execute, les verdicts, le mode par défaut) : chaque
+modification part en JSON et répond 200. Deux fois : jeton tiré au premier démarrage, puis jeton du
+déploiement (le mode de H0).
+
+**Mutants M1170–M1189** (`tests/unit/test_console.py`) : le nom d'hôte ignoré ou lu comme une
+sous-chaîne, l'origine ignorée, le WebSocket hors des modifications, le port de l'origine ignoré, la
+modification d'un navigateur sans origine, aucun jeton qui ouvre tout, aucun jeton tiré, le fichier du
+jeton lisible par tous, le jeton dans le cookie ou accepté comme cookie, `Secure` jamais posé, une
+modification d'un autre type ou sans corps, les en-têtes et `default-src` retirés, le schéma servi,
+l'abonnement entier dans Config, une carte ancrée restaurée, un nom de VM brut dans un chemin.
+M404, M568, M1080–M1082 suivent le nouveau code.
+
 ## 4. Maquettes
 
 Les valeurs sont illustratives. L'onglet actif est entre crochets, l'onglet grisé entre `░`.

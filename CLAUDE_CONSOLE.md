@@ -60,7 +60,7 @@ GET  /api/channel/detections/<run_id> → détections livrées au run
 
 POST /api/action/release/<vm>         → lever isolation NSG
 POST /api/action/revert/<vm>          → reset complet (release + unblock toutes IPs)
-POST /api/action/restore/<vm>         → Azure Backup restore
+POST /api/action/restore/<vm>         → Azure Backup restore de la carte {"escalation": <id>} (jamais une carte ancrée, SEC1)
 POST /api/action/ack/<esc_id>         → acquitter escalade
 POST /api/action/approve-rule/<id>    → approuver règle proposée
 POST /api/action/reject-rule/<id>     → rejeter règle proposée
@@ -105,6 +105,10 @@ En-tête (console.js), le même partout → EREGION + version déployée (tag, s
   JSON), appelée par le répartiteur dans `ACTIONS` — une action nouvelle s'ajoute à cette table. Le
   nom d'une action est un littéral de la page, jamais une donnée ; ses arguments, des chaînes ou des
   nombres ; une action qui lit une valeur (`_target.value`) vérifie que l'élément est le sien (`<select>`).
+- **La frontière** (SEC1) : une modification part par `_post` (glorfindel.js : un objet JSON, le serveur
+  refuse le reste) ; un nom dans un chemin d'API, par `_seg` (`encodeURIComponent`). Le serveur refuse un
+  `Host` inconnu, une autre origine, une requête sans jeton ([docs/design/console.md](docs/design/console.md),
+  « La frontière de la console ») ; les tests passent par `tests/unit/console_client.py`.
 - **Ce que le test vérifie** : `tests/unit/test_console_escaping.py` échoue sur ce que le lecteur
   (`python scripts/console_escaping.py` : où, d'où) voit — une valeur non échappée pour sa place dans
   le `${…}` d'un gabarit HTML, une valeur donnée à `innerHTML` ou une concaténation, un gestionnaire ou

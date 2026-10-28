@@ -2712,7 +2712,7 @@ MUTANTS += [
     ("M1017", "two passes at once, or one during a deployment by hand: no lock (H1)", CD,
      "            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)\n", "            pass\n"),
     ("M1018", "a release with another agent never said: H0 keeps an old CD in silence (H1)", CD,
-     "        drift = agent_drift(tag)\n", "        drift = []\n"),
+     "        drift, note, lost = agent_drift(tag)\n", '        drift, note, lost = [], "", False\n'),
     ("M1019", "a heartbeat from before the switch taken for health (H1)", CD,
      "        if HEARTBEAT.stat().st_mtime < since:", "        if False:"),
 ]
@@ -2731,7 +2731,7 @@ MUTANTS += [
 ]
 TESTS.update({"M1003": "tests/unit/test_host_cd.py", "M1004": "tests/unit/test_host_cd.py"})
 # H1 after its second review (28/10): two guards of a deployment on the host. M1050–M1059 given
-# by the General session; M1053–M1059 stay free.
+# by the General session; M1057–M1059 stay free.
 MUTANTS += [
     ("M1050", "a switch cut by a reboot never taken up: a sick release stays, unsaid (H1, second review)", CD,
      "        if cut:\n", "        if False:\n"),
@@ -2744,6 +2744,23 @@ MUTANTS += [
      "        twice = counts[tag] >= 2\n", "        twice = False\n"),
 ]
 TESTS["M1052"] = "tests/unit/test_host_cd.py"
+# « Agent de CD à mettre à jour » only for a release newer than the agent (28/10, after v0.4.1).
+MUTANTS += [
+    ("M1053", "an older release asks to reinstall the agent from it: deploy.sh without --activate breaks the CD",
+     CD, "    if installed == release or not is_ancestor(installed, release):\n", "    if False:\n"),
+    ("M1054", "the installation never notes its commit: no release can tell it is newer than the agent", "Makefile",
+     "'umask 077 && cat > .eregion-cd/discord.env' && \\\n\t git rev-parse HEAD | $(HOST_SSH) 'cat > .eregion-cd/installed-from'\n",
+     "'umask 077 && cat > .eregion-cd/discord.env'\n"),
+]
+TESTS.update({"M1053": "tests/unit/test_host_cd.py", "M1054": "tests/unit/test_host_cd.py"})
+# After its review: the same files say nothing; installed-from is a commit id, never a name.
+MUTANTS += [
+    ("M1055", "the agent's files compared to nothing: a newer release always asks to reinstall it", CD,
+     "        if theirs.returncode == 0 and theirs.stdout != ours:\n", "        if theirs.returncode == 0:\n"),
+    ("M1056", "installed-from read as any ref: « HEAD » makes every release look newer than the agent", CD,
+     '    if not re.fullmatch(r"[0-9a-f]{40}", installed) or git(', "    if not installed or git("),
+]
+TESTS.update({"M1055": "tests/unit/test_host_cd.py", "M1056": "tests/unit/test_host_cd.py"})
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

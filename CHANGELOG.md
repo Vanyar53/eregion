@@ -26,6 +26,9 @@ Notable changes to Eregion. The format follows [Keep a Changelog](https://keepac
 ### Changed
 - **`deploy.sh` builds aside and switches by a retag** (H1). `--build-only REF` builds `eregion-glorfindel:REF` from the CD's worktree without touching what runs. `--activate REF` checks out, retags and restarts, without building. Every image is also tagged by its reference. `--prune REF…` keeps the three newest and every one named; `--activate` never prunes, and a deployment by hand keeps the image it replaces. So going back is a retag. `--activate` tolerates a failed `git fetch`: the rollback must not depend on the network. A tag rewritten since its image was built: the image's own commit is checked out instead, and said — never one commit's compose and rules beside another's image. One deployment at a time: by hand, it is refused while the CD's pass runs (`~/.eregion-deploy.lock`).
 
+### Fixed
+- **The CD of H0 asks to reinstall its agent only for a release newer than it** (H1b, #263, 28/10, after the first real pass to v0.4.1). `make glorfindel-host-cd-install` notes the commit it installs from (`~/.eregion-cd/installed-from`, a full commit id). The « 🔧 Agent de CD à mettre à jour » message needs a release that descends from it and carries other agent files. v0.4.1 had no H1 and asked anyway: installing from it would have broken the CD, its `deploy.sh` having no `--activate`. An older release says nothing in #deploy (a line in the journal). An installation without a valid `installed-from`, or installed off main, says once, without the mention, that it cannot tell when to update. Mutants M1053–M1056.
+
 ## [0.4.1] — 2026-10-28 — "nothing raw in the console, three loose ends of the isolation path tied"
 
 ### Fixed

@@ -39,19 +39,23 @@ def _held_in_quarantine(nic_id: str) -> bool:
 _BLOCK_STATE_DIR = Path.home() / ".glorfindel" / "blocks"
 
 
-def _atomic_write_text(path: Path, text: str) -> None:
+def _atomic_write_text(path: Path, text: str, mode: int = 0o600) -> None:
     """Write through a temp file + os.replace.
 
     A reader (War Room, a concurrent CLI, the watch) never sees a half-written state
     file, and a crash mid-write leaves the previous version intact instead of a
     truncated JSON that would break the next release.
+
+    Readable by its owner only (SEC3, V-27): 0600, its directory made 0700 — the watch,
+    the console, the bot and the CLI run as the operator; nothing else reads it. `mode`:
+    what is written for others to read (the injectors' heartbeat), its directory 0755.
     """
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path.parent.mkdir(mode=0o755 if mode & 0o044 else 0o700, parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
     try:
         with os.fdopen(fd, "w") as f:
             f.write(text)
-        os.chmod(tmp, 0o644)
+        os.chmod(tmp, mode)
         os.replace(tmp, path)
     except BaseException:
         try:
@@ -156,6 +160,17 @@ def _write_state(directory: Path, ref: str, rid: str, payload) -> None:
         old.unlink()
 
 
+def _owner_only(directory: Path) -> None:
+    """A state directory of an earlier version, and its files, made owner-only (0700 /
+    0600, SEC3 V-27). One that isn't ours to change (root's, from the old image: `make
+    fix-state-ownership`) is left as it is."""
+    for path, mode in [(directory, 0o700), *((f, 0o600) for f in directory.glob("*.json"))]:
+        try:
+            os.chmod(path, mode)
+        except OSError:
+            pass
+
+
 def migrate_state_files() -> int:
     """At start-up: every state file under its lowercase keyed name, one per VM (the
     newest wins). A mixed-case file left by #41's version, or a plain `<name>.json`,
@@ -165,6 +180,7 @@ def migrate_state_files() -> int:
     for directory in (_ISOLATION_STATE_DIR, _BLOCK_STATE_DIR):
         if not directory.exists():
             continue
+        _owner_only(directory)
         seen: set[str] = set()
         for f in sorted(directory.glob("*.json"), key=lambda f: f.stat().st_mtime, reverse=True):
             rid = _file_rid(f)
@@ -237,8 +253,29 @@ def _clear_isolation_state(vm_ref: str) -> None:
         f.unlink()
 
 
+def unreadable_states() -> list[str]:
+    """The isolation and block state files that can't be read: unparsable, an I/O error,
+    or not the shape Glorfindel writes (an object per isolation, a list of entries per
+    block file). What such a file holds is unknown — never "nothing": a reader that
+    decides on the absence of a state (the orphan sweep) does nothing while one is listed
+    (SEC3, N-06). `<directory>/<file>`, sorted."""
+    out = []
+    for directory, shape in ((_ISOLATION_STATE_DIR, dict), (_BLOCK_STATE_DIR, list)):
+        if not directory.exists():
+            continue
+        for f in directory.glob("*.json"):
+            try:
+                data = json.loads(f.read_text())
+            except (OSError, ValueError):
+                data = None
+            if not isinstance(data, shape) or (shape is list and not all(isinstance(e, dict) for e in data)):
+                out.append(f"{directory.name}/{f.name}")
+    return sorted(out)
+
+
 def active_isolations() -> list[dict]:
-    """Return all active isolation state files (VMs that Glorfindel has isolated)."""
+    """Return all active isolation state files (VMs that Glorfindel has isolated). An
+    unreadable file is left out here — `unreadable_states` lists it."""
     result = []
     for f in _ISOLATION_STATE_DIR.glob("*.json"):
         try:

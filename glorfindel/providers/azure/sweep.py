@@ -20,6 +20,7 @@ from glorfindel.response.state import (
     _save_isolation_state,
     _UNKNOWN,
     _update_block_entry,
+    unreadable_states,
 )
 
 
@@ -326,6 +327,9 @@ class SweepMixin:
                     nic_subnets.setdefault(nid, set()).add(subnet.rstrip("/").lower())
         state_nics = self._state_nic_marks()
         held = self._held_vms()
+        # A state file unreadable: what it holds is unknown — any rule may be the
+        # isolation or the block it records (SEC3, N-06). Nothing is removable then.
+        unread = self._unreadable_reason()
         gone: dict[str, str | None] = {}      # mark of a NIC in our state → None (gone) or why kept
         orphans: list[dict] = []
         for nsg in (self._network.network_security_groups.list_all() if nsgs is None else nsgs):
@@ -358,6 +362,8 @@ class SweepMixin:
                 kept = ""
                 if not cut:
                     kept = "ne coupe aucune carte vivante derrière ce NSG"
+                elif unread:
+                    kept = unread
                 elif why := self._held_reason(cut, held):
                     kept = why
                 elif attached - listed:
@@ -375,6 +381,16 @@ class SweepMixin:
         """The VMs Glorfindel isolates or blocks now, by their local state."""
         from glorfindel.response.state import active_blocks, active_isolations
         return [e["resource_id"] for e in active_isolations() + active_blocks() if e.get("resource_id")]
+
+    @staticmethod
+    def _unreadable_reason() -> str:
+        """Why nothing is removable while a state file can't be read, else ""."""
+        unread = unreadable_states()
+        if not unread:
+            return ""
+        more = f" (+{len(unread) - 3})" if len(unread) > 3 else ""
+        return (f"état local illisible ({', '.join(unread[:3])}{more}) : ce qu'il tient est inconnu "
+                "— le réparer ou le retirer à la main ; la watch juge alors la règle à nouveau")
 
     @staticmethod
     def _held_reason(cut: list[dict], held: list[str]) -> str:
@@ -426,6 +442,9 @@ class SweepMixin:
         self._ensure_clients()
         # Read again just before the write: an isolation or a block recorded since the
         # listing (the watch, the console, the CLI) names this NIC or this VM now (A3).
+        unread = self._unreadable_reason()
+        if unread:
+            return {"removed": False, "why": unread}
         name = orphan["rule"].lower()
         mark = (name[:-4] if name.endswith("-out") else name).rsplit("-", 1)[-1]
         state_nics = self._state_nic_marks()

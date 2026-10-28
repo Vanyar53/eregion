@@ -28,7 +28,7 @@ tourne.
 **Choisi par défaut, sans objection :**
 - `/atelier` redirige vers `/`.
 - L'API de l'atelier perd son préfixe (`/api/exercises`…). L'ancien redirige jusqu'à la 1.0.
-- Le cookie `glorfindel_warroom` est gardé : il est invisible. (SEC1 l'a remplacé par `eregion_console_<port>`, une session dérivée du jeton.)
+- Le cookie s'appelait encore `glorfindel_warroom` après le renommage (il est invisible) ; SEC1 l'a remplacé par `eregion_console_<port>`, une session dérivée du jeton : l'ancien n'est plus lu.
 - Le service compose n'est renommé qu'en option, plus tard.
 - Si Glorfindel n'est pas configuré, la console démarre sur une page qui dit quoi faire.
 - Les techniques du catalogue vont dans Annatar, les pannes dans Gothmog.

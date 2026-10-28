@@ -594,13 +594,13 @@
 <!-- Autonomy capability popover — what Glorfindel runs alone vs always gates, per mode -->
 <div id="cap-popover"></div>
 
-<div class="modal-overlay" id="modal" onclick="closeModal()">
-  <div class="modal" onclick="event.stopPropagation()">
+<div class="modal-overlay" id="modal" data-on-click="closeModal">
+  <div class="modal" data-on-click="stop">
     <div class="modal-title" id="modal-title"></div>
     <div class="modal-body"  id="modal-body"></div>
     <div class="modal-cmd"   id="modal-cmd" style="display:none"></div>
     <div class="modal-actions">
-      <button id="modal-cancel" onclick="closeModal()">Cancel</button>
+      <button id="modal-cancel">Cancel</button>
       <button id="modal-confirm" class="primary"></button>
     </div>
   </div>

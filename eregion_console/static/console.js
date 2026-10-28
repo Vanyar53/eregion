@@ -102,8 +102,9 @@ const Console = (() => {
   }
 
   function setJudgeCount(n) {
-    if (judge === n) return;
-    judge = n;
+    const count = Number(n) || 0;       // a count, whoever gives it (#257)
+    if (judge === count) return;
+    judge = count;
     renderTabs();
   }
 

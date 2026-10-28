@@ -183,6 +183,9 @@ eregion_console/                → la console d'Eregion (`eregion console`, doc
                           d'exercice et ce que Glorfindel a fait dans chacune, campagnes (faits + report.md),
                           techniques ou pannes du catalogue ; grisée, ce que l'injecteur ajouterait
   static/exercises.js   → ce que Glorfindel a fait dans une fenêtre (partagé par l'accueil et les injecteurs)
+  static/*.js           → le script de chaque page, un fichier (overview.js, glorfindel.js, injector.js) : la
+                          CSP n'admet que les scripts servis par la console (#257) ; dans glorfindel.js,
+                          _on et le répartiteur des événements (ACTIONS, data-on-*)
   static/glorfindel.html → page Glorfindel (/glorfindel, /config) — TO JUDGE (seul endroit où l'on juge
                           une carte, 26/10), cards VM expandables (compact + étendu), feed live
                           bandeau INFRASTRUCTURE (posture) : 2 axes orthogonaux — régime credentials
@@ -211,9 +214,11 @@ eregion_core/
   signals.py          → D1 : le contrat des signaux (Signal + severity_for_ttp), écrit par les injecteurs, lu par
                         la watch — dans le cœur, pour que Glorfindel tourne sans Annatar (ex-annatar/signals/schema.py).
 
-scripts/console_escaping.py → #254 : rien du dehors n'est écrit brut dans la console — suit ce que peut contenir
-                        chaque ${…} d'un gabarit HTML et chaque valeur donnée à innerHTML, et le contexte (texte,
-                        attribut on…, début d'URL) ; tests : tests/unit/test_console_escaping.py.
+scripts/console_escaping.py → #254, #257 : rien du dehors n'est écrit brut dans la console — suit ce que peut
+                        contenir chaque ${…} d'un gabarit HTML, chaque valeur donnée à innerHTML et chaque
+                        concaténation, selon sa place (texte, début d'URL) ; refuse les gestionnaires et
+                        scripts en ligne, javascript:, srcdoc et les API qu'il ne suit pas ; tests :
+                        tests/unit/test_console_escaping.py.
 
 scripts/component_check.py → D1 : chaque composant tourne seul — Glorfindel, Annatar, Gothmog et le cœur, leurs
                         modules importés et leurs tests joués avec les autres composants ABSENTS (un chercheur en

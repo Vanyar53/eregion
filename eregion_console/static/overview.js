@@ -8,7 +8,7 @@ const ROLE_ROW = {
 
 function glorfindelRow(s) {
   const lines = [];
-  const n = D.judge ? D.judge.length : null;
+  const n = D.judge ? Number(D.judge.length) : null;
   lines.push(`<div class="line">
     <a href="/glorfindel" class="big ${n ? 'warn' : 'ok'}">${n == null ? '…' : n ? `${n} to judge ▸` : 'nothing to judge'}</a>
     <span class="dim">${D.sections && D.sections.read_only ? 'mode <b style="color:var(--blue)">OBSERVE-ONLY</b> · human-only' : 'each VM acts per its mode (Glorfindel, Config)'}</span>
@@ -38,11 +38,11 @@ function campaignLine() {
   const sc = c.scenarios || [], ex = sc.filter(s => s.status === 'executed');
   const n = k => ex.filter(s => (s.detection || 'unknown') === k).length;
   // V1: a campaign run --without-glorfindel measured nothing, by choice — not « unknown ».
-  const counts = c.without_glorfindel ? `${ex.length}/${sc.length} executed · <span class="dim">not measured, by choice (--without-glorfindel)</span>` : null;
+  const counts = c.without_glorfindel ? `${ex.length}/${Number(sc.length)} executed · <span class="dim">not measured, by choice (--without-glorfindel)</span>` : null;
   return `<div class="line"><span class="k">last campaign</span>
     <a href="/annatar?campaign=${encodeURIComponent(c.dir)}">${esc(c.campaign_id || c.dir)}</a>
     <span class="dim">${hms(c.created_at)}</span>
-    <span>${counts || `${ex.length}/${sc.length} executed · <span class="ok">${n('detected')} detected</span>${n('missed') ? ` · <span class="bad">${n('missed')} missed</span>` : ''}${n('unknown') ? ` · <span class="warn">${n('unknown')} unknown</span>` : ''}`}</span></div>`;
+    <span>${counts || `${ex.length}/${Number(sc.length)} executed · <span class="ok">${n('detected')} detected</span>${n('missed') ? ` · <span class="bad">${n('missed')} missed</span>` : ''}${n('unknown') ? ` · <span class="warn">${n('unknown')} unknown</span>` : ''}`}</span></div>`;
 }
 
 function injectorRow(s) {
@@ -113,7 +113,7 @@ function render() {
   const rows = sections.map(s => {
     const body = s.id === 'glorfindel' ? glorfindelRow(s) : injectorRow(s);
     return `<div class="row s-${esc(s.id)}${s.active ? '' : ' greyed'}" title="${esc(s.label)} — ${esc(s.role)}">
-      <div class="name"><a href="/${esc(s.id)}">${esc(s.label.toUpperCase())}</a></div>
+      <div class="name"><a href="/${encodeURIComponent(s.id)}">${esc(s.label.toUpperCase())}</a></div>
       <div class="lines">${body}</div></div>`;
   });
   if (injectorsOn) rows.push(`<div class="row"><div class="name dim">CHANNELS</div><div class="lines">${channelsRow()}</div></div>`);

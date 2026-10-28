@@ -94,7 +94,7 @@ function renderWindow(w) {
     <div class="row-sub">
       <span class="meta" style="width:10px"></span>
       <span class="resp r-${resp.cls}">${w.kind === 'fault' ? '⚡' : '⚔'} ${esc(resp.text)}</span>
-      ${cards.length ? `<a class="chip c-blue" href="/glorfindel?card=${encodeURIComponent(cards[0].id)}" title="Judge it in Glorfindel's TO JUDGE">${cards.length} card${cards.length > 1 ? 's' : ''} ▸</a>` : ''}
+      ${cards.length ? `<a class="chip c-blue" href="/glorfindel?card=${encodeURIComponent(cards[0].id)}" title="Judge it in Glorfindel's TO JUDGE">${Number(cards.length)} card${cards.length > 1 ? 's' : ''} ▸</a>` : ''}
       <span style="margin-left:auto">${runChip(w)}</span>
     </div>
     ${isOpen ? renderWindowDetail(w) : ''}
@@ -143,7 +143,7 @@ function renderWindowDetail(w) {
 
   const cycles = w.cycles || [];
   const t0 = attackTime(w);
-  parts.push(`<div class="dsec s-blue"><div class="dtitle">GLORFINDEL — ${cycles.length} cycle(s) on a target inside the window</div>` +
+  parts.push(`<div class="dsec s-blue"><div class="dtitle">GLORFINDEL — ${Number(cycles.length)} cycle(s) on a target inside the window</div>` +
     (cycles.length ? `<table class="t"><tr><th>seen</th><th>+${esc(t0.from)}</th><th>event</th><th>ttp</th><th>rule</th><th>decision</th></tr>` +
       cycles.map(c => {
         const seen = toDate(c.signal_at), other = ownTtp(w) && c.ttp !== ownTtp(w);
@@ -219,8 +219,8 @@ function renderCampaign(c) {
   const stateCls = { done: 'c-ok', aborted: 'c-bad', running: 'c-open' }[c.state] || 'c-closed';
   // V1: a campaign run --without-glorfindel measured nothing, by choice — not « unknown ».
   const summary = c.without_glorfindel
-    ? `${executed.length}/${sc.length} executed · <span class="meta">not measured, by choice (--without-glorfindel) · no report</span>`
-    : `${executed.length}/${sc.length} executed · <span class="r-ok">${n('detected')} detected</span>` +
+    ? `${executed.length}/${Number(sc.length)} executed · <span class="meta">not measured, by choice (--without-glorfindel) · no report</span>`
+    : `${executed.length}/${Number(sc.length)} executed · <span class="r-ok">${n('detected')} detected</span>` +
     (n('missed') ? ` · <span class="r-bad">${n('missed')} missed</span>` : '') +
     (n('unknown') ? ` · <span class="r-warn">${n('unknown')} unknown</span>` : '');
   const rows = sc.map(s => {

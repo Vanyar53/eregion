@@ -208,13 +208,13 @@ function _cliTail(text, n = 4) {
 // sees full coverage (a one-NSG badge could read as if only the primary NIC were covered).
 // Only shown when >1 NIC; single-NIC keeps the badge clean.
 function _nicNote(s, vmName) {
-  const n = Array.isArray(s?.placements) ? s.placements.length : 0;
+  const n = Array.isArray(s?.placements) ? Number(s.placements.length) : 0;
   if (n <= 1) return '';
   const nsgs = new Set(s.placements.map(p => p.nsg || `${p.nsg_rg}/${p.nsg_name}`)).size;
   const idx = _coverageCache.push({ vmName, type: s.type, ip: s.ip || '', placements: s.placements }) - 1;
   const base = 'font-size:8px;font-weight:600;padding:0 4px;border-radius:3px;flex-shrink:0;cursor:pointer';
   return ` <span style="${base};color:var(--cyan);border:1px solid color-mix(in srgb,var(--cyan) 35%,var(--border))"
-    onclick="event.stopPropagation();showCoverageModal(${idx})"
+    ${_on('click', 'showCoverageModal', idx)}
     title="Click for per-NIC coverage — deny placed on all ${n} NICs (${nsgs} NSG${nsgs>1?'s':''}).">${n} NICs ▸</span>`;
 }
 
@@ -246,8 +246,8 @@ function showCoverageModal(idx) {
     `${verb} coverage — ${c.vmName}${c.ip ? ` (${c.ip})` : ''}`;
   const body = document.getElementById('modal-body');
   const subtitle = c.type === 'nsg'
-    ? `${(c.placements || []).length} NICs — NSG on each`
-    : `${(c.placements || []).length} NICs covered — one deny placement each`;
+    ? `${Number((c.placements || []).length)} NICs — NSG on each`
+    : `${Number((c.placements || []).length)} NICs covered — one deny placement each`;
   body.innerHTML = `<div style="font-size:10px;color:var(--dim);margin-bottom:4px">${subtitle}</div>${rows}`;
   document.getElementById('modal-cmd').style.display = 'none';
   const btn = document.getElementById('modal-confirm');
@@ -260,7 +260,7 @@ function showCoverageModal(idx) {
 // Hidden once the block is already subnet-wide (scoped === false).
 function _extendBtn(s, vmName) {
   if (!s || s.scoped === false) return '';
-  return `<button class="action" onclick="event.stopPropagation();confirmExtendSubnet(${_js(vmName)})" style="font-size:9px;padding:2px 7px;color:var(--orange)" title="Block this IP for every VM on the subnet">⚠ Extend to subnet</button>`;
+  return `<button class="action" ${_on('click', 'confirmExtendSubnet', vmName)} style="font-size:9px;padding:2px 7px;color:var(--orange)" title="Block this IP for every VM on the subnet">⚠ Extend to subnet</button>`;
 }
 
 function cliCommand(esc) {
@@ -448,13 +448,13 @@ function _renderEscGroup(group) {
     : isWriteBlocked     ? `${actionLabelVerb(e.action) || e.action || '?'} — write blocked`
     : isActionFailed     ? `${actionLabelVerb(e.action) || e.action || '?'} — failed`
     : escTitle(e);
-  const count = group.length;
+  const count = Number(group.length);
   const ids   = group.map(g => g.id).join(','); // CSV — safe in onclick attrs, no quotes
   const isRule = e.action === 'improve_detection' && e.proposal_id;
   // proposed rule: Approve/Reject cover the decision — Ack is redundant
   const ruleButtons = isRule ? `
-    <button class="action ok" onclick="event.stopPropagation();doApproveRule(${_js(e.proposal_id)},${_js(e.id)})" style="font-size:9px;padding:2px 7px">✓ Approve</button>
-    <button class="action" onclick="event.stopPropagation();doRejectRule(${_js(e.proposal_id)},${_js(e.id)})" style="font-size:9px;padding:2px 7px;color:var(--red)">✗ Reject</button>` : '';
+    <button class="action ok" ${_on('click', 'doApproveRule', e.proposal_id, e.id)} style="font-size:9px;padding:2px 7px">✓ Approve</button>
+    <button class="action" ${_on('click', 'doRejectRule', e.proposal_id, e.id)} style="font-size:9px;padding:2px 7px;color:var(--red)">✗ Reject</button>` : '';
   const vmName = e.resource_id.split('/').pop();
   const countBadge = count > 1
     ? `<span style="font-size:9px;font-weight:700;padding:1px 4px;border-radius:3px;
@@ -473,23 +473,23 @@ function _renderEscGroup(group) {
   const actionBtns = isRule
     ? ruleButtons
     : isReadinessHold
-    ? `<button class="action primary" onclick="event.stopPropagation();openActivation(${_js(vmName)})" style="font-size:9px;padding:2px 7px">⚡ Review & turn on</button>
-       <button class="action" onclick="event.stopPropagation();doAckAll(${_js(ids)})" style="font-size:9px;padding:2px 7px">✓ Ack</button>
-       <button class="action" onclick="event.stopPropagation();openCommandModal(${_js(e.id)})" style="font-size:9px;padding:2px 7px">📋 Cmd</button>`
+    ? `<button class="action primary" ${_on('click', 'openActivation', vmName)} style="font-size:9px;padding:2px 7px">⚡ Review & turn on</button>
+       <button class="action" ${_on('click', 'doAckAll', ids)} style="font-size:9px;padding:2px 7px">✓ Ack</button>
+       <button class="action" ${_on('click', 'openCommandModal', e.id)} style="font-size:9px;padding:2px 7px">📋 Cmd</button>`
     : isModeHold
-    ? `<button class="action primary" onclick="event.stopPropagation();doApproveAction(${_js(e.id)},${_js(vmName)})" style="font-size:9px;padding:2px 7px">▶ Approve & execute</button>
-       <button class="action" onclick="event.stopPropagation();doAckAll(${_js(ids)})" style="font-size:9px;padding:2px 7px">✓ Ack</button>
-       <button class="action" onclick="event.stopPropagation();openCommandModal(${_js(e.id)})" style="font-size:9px;padding:2px 7px">📋 Cmd</button>`
+    ? `<button class="action primary" ${_on('click', 'doApproveAction', e.id, vmName)} style="font-size:9px;padding:2px 7px">▶ Approve & execute</button>
+       <button class="action" ${_on('click', 'doAckAll', ids)} style="font-size:9px;padding:2px 7px">✓ Ack</button>
+       <button class="action" ${_on('click', 'openCommandModal', e.id)} style="font-size:9px;padding:2px 7px">📋 Cmd</button>`
     : isRestore
-    ? `<button class="action primary" onclick="event.stopPropagation();confirmRestore(${_js(vmName)})" style="font-size:9px;padding:2px 7px">🔄 Restore</button>
-       <button class="action" onclick="event.stopPropagation();doAckAll(${_js(ids)})" style="font-size:9px;padding:2px 7px">✓ Ack</button>
-       <button class="action" onclick="event.stopPropagation();openCommandModal(${_js(e.id)})" style="font-size:9px;padding:2px 7px">📋 Cmd</button>`
+    ? `<button class="action primary" ${_on('click', 'confirmRestore', vmName)} style="font-size:9px;padding:2px 7px">🔄 Restore</button>
+       <button class="action" ${_on('click', 'doAckAll', ids)} style="font-size:9px;padding:2px 7px">✓ Ack</button>
+       <button class="action" ${_on('click', 'openCommandModal', e.id)} style="font-size:9px;padding:2px 7px">📋 Cmd</button>`
     : isSnapshotPending
-    ? `<button class="action" onclick="event.stopPropagation();doSnapshot(${_js(vmName)})" style="font-size:9px;padding:2px 7px">📸 Snapshot</button>
-       <button class="action" onclick="event.stopPropagation();doAckAll(${_js(ids)})" style="font-size:9px;padding:2px 7px">✓ Ack</button>
-       <button class="action" onclick="event.stopPropagation();openCommandModal(${_js(e.id)})" style="font-size:9px;padding:2px 7px">📋 Cmd</button>`
-    : `<button class="action" onclick="event.stopPropagation();doAckAll(${_js(ids)})" style="font-size:9px;padding:2px 7px">✓ Ack</button>
-       <button class="action" onclick="event.stopPropagation();openCommandModal(${_js(e.id)})" style="font-size:9px;padding:2px 7px">📋 Cmd</button>`;
+    ? `<button class="action" ${_on('click', 'doSnapshot', vmName)} style="font-size:9px;padding:2px 7px">📸 Snapshot</button>
+       <button class="action" ${_on('click', 'doAckAll', ids)} style="font-size:9px;padding:2px 7px">✓ Ack</button>
+       <button class="action" ${_on('click', 'openCommandModal', e.id)} style="font-size:9px;padding:2px 7px">📋 Cmd</button>`
+    : `<button class="action" ${_on('click', 'doAckAll', ids)} style="font-size:9px;padding:2px 7px">✓ Ack</button>
+       <button class="action" ${_on('click', 'openCommandModal', e.id)} style="font-size:9px;padding:2px 7px">📋 Cmd</button>`;
   // Observation (docs/observation.md): was this recommendation right? Decision cards only.
   const isDecision = !isRule && !_NOT_DECISIONS.has(e.escalation_type)
     && !String(e.signal_id || '').startsWith('reassert-');
@@ -497,11 +497,11 @@ function _renderEscGroup(group) {
   const verdictBtns = isDecision
     ? (e.verdict
       ? `<span style="font-size:9px;color:var(--dim);margin-left:auto">judged: ${_attr(e.verdict)}</span>`
-      : `<a class="judge-link" onclick="event.stopPropagation();focusJudge(${_js(e.id)})" title="Give it a verdict in TO JUDGE">to judge ▸</a>`)
+      : `<a class="judge-link" ${_on('click', 'focusJudge', e.id)} title="Give it a verdict in TO JUDGE">to judge ▸</a>`)
     : '';
   // mode_hold/write_blocked/action_failed: type already encoded in title, keep ctx lean
   const ctxParts = _escCtx(e, pct, isModeHold || isWriteBlocked || isActionFailed);
-  return `<div class="esc-item section-group s-escalation" style="margin-top:5px" onclick="showEscModal(${_js(vmName)})">
+  return `<div class="esc-item section-group s-escalation" style="margin-top:5px" ${_on('click', 'showEscModal', vmName)}>
     <div style="display:flex;align-items:flex-start;gap:5px;margin-bottom:3px">
       <span class="esc-action-label">${_attr(label)}</span>${e.source === 'exercise' ? `<span class="chip-exercise" title="An injector's exercise window covered this VM (run ${_attr(e.exercise_run || '?')}) — left out of the observation report">EXERCISE</span>` : ''}
       ${countBadge}
@@ -510,7 +510,7 @@ function _renderEscGroup(group) {
     </div>
     ${ctxParts ? `<div class="esc-context">${ctxParts}</div>` : ''}
     ${_anchorNote(e, vmName)}
-    <div style="display:flex;gap:5px;margin-top:6px;flex-wrap:wrap" onclick="event.stopPropagation()">${actionBtns}${verdictBtns}</div>
+    <div style="display:flex;gap:5px;margin-top:6px;flex-wrap:wrap" ${_on('click', 'stop')}>${actionBtns}${verdictBtns}</div>
   </div>`;
 }
 
@@ -794,9 +794,9 @@ function renderInfra() {
                 : _renderAssetNode(r, vmEscs, detEscs, restoreByVm, slotIdx);
             }
             return `<div class="node-asset-empty"
-              ondragover="event.preventDefault();this.classList.add('drag-over')"
-              ondragleave="this.classList.remove('drag-over')"
-              ondrop="event.preventDefault();this.classList.remove('drag-over');dropOnSlot(${slotIdx},event.dataTransfer.getData('text/plain'))"></div>`;
+              ${_on('dragover', 'dragOver')}
+              ${_on('dragleave', 'dragLeave')}
+              ${_on('drop', 'dropOn', slotIdx)}></div>`;
           }).join('');
         })()}
       </div>
@@ -838,7 +838,7 @@ function renderIncidents() { renderInfra(); }
 // ── Agent node ─────────────────────────────────────────────────────────────────
 
 function _renderAgentNode(rules, detectBackends, recoverBackends, discovered) {
-  const moduleCount = detectBackends.length + recoverBackends.length + 1;
+  const moduleCount = Number(detectBackends.length) + Number(recoverBackends.length) + 1;
   // Parent node summarises its children: aggregate health of DETECT (rule polling)
   // and RECOVER (backup audit). Distinct from the header's `watch active` (engine
   // heartbeat) and `live` (UI freshness) — three different questions, no redundancy.
@@ -891,7 +891,7 @@ function _renderModules(rules, detectBackends, recoverBackends, resources) {
   const _ruleRow = (r) => {
     const idx = _rulesCache.indexOf(r);
     if (r.enabled === false) {
-      return `<div class="row rule-item" onclick="event.stopPropagation();showRuleByIdx(${idx})"
+      return `<div class="row rule-item" ${_on('click', 'showRuleByIdx', idx)}
         style="padding:3px 4px;font-size:10px;opacity:.55">
         <span style="color:var(--dim);font-size:9px">●</span>
         <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${_attr(r.name)}">${_attr(r.name)}</span>
@@ -902,7 +902,7 @@ function _renderModules(rules, detectBackends, recoverBackends, resources) {
     }
     const dc  = r.last_error ? 'var(--red)' : r.last_poll ? 'var(--green)' : 'var(--dim)';
     const mt  = r.last_match ? `<span style="color:${_matchColor(r.last_match)};font-size:9px;margin-left:auto;flex-shrink:0">${_relTime(r.last_match)}</span>` : '';
-    return `<div class="row rule-item" onclick="event.stopPropagation();showRuleByIdx(${idx})"
+    return `<div class="row rule-item" ${_on('click', 'showRuleByIdx', idx)}
       style="padding:3px 4px;font-size:10px">
       <span style="color:${dc};font-size:9px">●</span>
       <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${_attr(r.name)}">${_attr(r.name)}</span>
@@ -932,7 +932,7 @@ function _renderModules(rules, detectBackends, recoverBackends, resources) {
     const isExpanded = _expandedBackends.has(b.name);
     const ruleRows  = bRules.map(_ruleRow).join('');
     return `<div class="node-backend detect ${unreachable ? 'state-error' : ''}" id="nb-${_attr(b.name)}" style="cursor:pointer;max-width:320px"
-      onclick="event.stopPropagation();toggleBackend(${_js(b.name)})">
+      ${_on('click', 'toggleBackend', b.name)}>
       <div class="node-backend-name">${dot} ${_attr(b.name)}</div>
       <div class="node-backend-type">${_attr(b.type)}</div>
       <div class="node-backend-row" style="justify-content:space-between">
@@ -953,7 +953,7 @@ function _renderModules(rules, detectBackends, recoverBackends, resources) {
   const orphanExpanded = _expandedBackends.has('__unbound__');
   const orphanNode = orphanRules.length
     ? `<div class="node-backend detect state-warn" id="nb-__unbound__" style="cursor:pointer;max-width:320px;opacity:.85"
-        onclick="event.stopPropagation();toggleBackend('__unbound__')">
+        ${_on('click', 'toggleBackend', '__unbound__')}>
         <div class="node-backend-name"><span style="color:var(--orange)">●</span> unbound rules</div>
         <div class="node-backend-type">no backend resolved</div>
         <div class="node-backend-row" style="justify-content:space-between">
@@ -997,7 +997,7 @@ function _renderModules(rules, detectBackends, recoverBackends, resources) {
   }));
   const actionCount    = blockCount + isolCount;
   const protectExpanded = _expandedBackends.has('__protect__');
-  const nsgN           = nsgInv ? nsgInv.length : (nsgKeys.size || subnetGroups.size);
+  const nsgN           = nsgInv ? Number(nsgInv.length) : (nsgKeys.size || subnetGroups.size);
   const restrictedN    = nsgInv ? nsgInv.filter(n => n.restricted).length : actionCount;
   // "Monitored" = an NSG governs ≥1 VM that LAW sees (discovered_assets). An NSG that
   // governs ONLY out-of-LAW VMs is a blind spot — Glorfindel can't detect/act there.
@@ -1017,9 +1017,9 @@ function _renderModules(rules, detectBackends, recoverBackends, resources) {
   const nsgListDetail = nsgInv
     ? (nsgInv.length
         ? `<div id="nsg-scroll" style="max-height:240px;overflow-y:auto">${nsgInv.slice().sort((a, b) => (a.nsg || '').localeCompare(b.nsg || '')).map(n => {
-            const sub = (n.subnets || []).length, nic = (n.nics || []).length;
+            const sub = Number((n.subnets || []).length), nic = Number((n.nics || []).length);
             const govVms = n.vms || [];
-            const assoc = [sub ? `${sub} subnet${sub > 1 ? 's' : ''}` : '', nic ? `${nic} NIC${nic > 1 ? 's' : ''}` : '', govVms.length ? `${govVms.length} VM${govVms.length > 1 ? 's' : ''}` : '']
+            const assoc = [sub ? `${sub} subnet${sub > 1 ? 's' : ''}` : '', nic ? `${nic} NIC${nic > 1 ? 's' : ''}` : '', govVms.length ? `${Number(govVms.length)} VM${govVms.length > 1 ? 's' : ''}` : '']
               .filter(Boolean).join(' · ') || 'unassociated';
             const blind = govVms.length && !_nsgMon(n);
             const glowNames = [];
@@ -1031,7 +1031,7 @@ function _renderModules(rules, detectBackends, recoverBackends, resources) {
             // Two lines so the NSG NAME gets the full width (it's what matters): name +
             // chips on top, the associations/rules metadata dimmed underneath.
             return `<div style="padding:4px;cursor:default"
-              onmouseenter="_glowNsgVms(${gi},true)" onmouseleave="_glowNsgVms(${gi},false)">
+              ${_on('mouseenter', '_glowNsgVms', gi, true)} ${_on('mouseleave', '_glowNsgVms', gi, false)}>
               <div style="display:flex;align-items:center;gap:6px;font-size:10px">
                 <span style="color:${n.restricted ? 'var(--orange)' : 'var(--dim)'};font-size:9px">●</span>
                 <span style="flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600" title="${_attr(n.nsg)}">${_attr((n.nsg || '').split('/').pop())}</span>
@@ -1053,7 +1053,7 @@ function _renderModules(rules, detectBackends, recoverBackends, resources) {
         ${ips.map(b => `
           <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap;margin-top:3px">
             <span class="badge blocked" style="font-size:9px;cursor:default">⚠ ${_attr(b.ip)} · ${age(b.since)}</span>
-            <button class="action danger" onclick="event.stopPropagation();confirmUnblock(${_js(b.vm_name)})" style="font-size:9px;padding:1px 6px;margin-left:auto">↩️ Unblock</button>
+            <button class="action danger" ${_on('click', 'confirmUnblock', b.vm_name)} style="font-size:9px;padding:1px 6px;margin-left:auto">↩️ Unblock</button>
           </div>`).join('')}
       </div>`).join('');
   const protectBody = protectExpanded
@@ -1064,7 +1064,7 @@ function _renderModules(rules, detectBackends, recoverBackends, resources) {
        </div>`
     : '';
   const protectNode = `<div class="node-backend protect ${isIsolated ? 'state-error' : isBlocked ? 'state-warn' : ''}" id="module-protect"
-      style="cursor:pointer" onclick="event.stopPropagation();toggleBackend('__protect__')">
+      style="cursor:pointer" ${_on('click', 'toggleBackend', '__protect__')}>
     <div class="node-backend-name">${protectDot} network control</div>
     <div class="node-backend-type">cloud provider · NSG</div>
     <div class="node-backend-row" style="justify-content:space-between">
@@ -1112,7 +1112,7 @@ function _renderModules(rules, detectBackends, recoverBackends, resources) {
     const summary = worst === 'error'   ? 'vault read error'
                   : worst === 'loading' ? 'loading…'
                   : worst === 'empty'   ? `no protected items${unprotectedN ? ` · <span style="color:var(--red)">${unprotectedN} unprotected</span>` : ''}`
-                  : `${items.length} protected${unprotectedN ? ` · <span style="color:var(--red)">${unprotectedN} unprotected</span>` : ''}${oldest ? ` · oldest ${oldest}h` : ''}${pendingN ? ` · ${pendingN} pending` : ''}${stoppedN ? ` · ${stoppedN} stopped` : ''}${staleSfx}`;
+                  : `${Number(items.length)} protected${unprotectedN ? ` · <span style="color:var(--red)">${unprotectedN} unprotected</span>` : ''}${oldest ? ` · oldest ${oldest}h` : ''}${pendingN ? ` · ${pendingN} pending` : ''}${stoppedN ? ` · ${stoppedN} stopped` : ''}${staleSfx}`;
     const itemRows = items.map(it => {
       const hasRP = it.latest_recovery_point != null;
       const age = hasRP ? _relTime(it.latest_recovery_point) : 'first backup pending';
@@ -1130,12 +1130,12 @@ function _renderModules(rules, detectBackends, recoverBackends, resources) {
            ${items.length ? itemRows
               : `<div class="node-backend-row" style="color:var(--dim);font-size:9px">${inv && inv.error ? 'Vault read error: ' + _attr(String(inv.error).slice(0, 80)) : 'No protected items in this vault — nothing is backed up'}</div>`}
            <div class="node-backend-row" style="margin-top:4px">
-             <button class="action" style="font-size:9px;padding:1px 5px" onclick="event.stopPropagation();refreshBackups()">↺ refresh</button>
+             <button class="action" style="font-size:9px;padding:1px 5px" ${_on('click', 'refreshBackups')}>↺ refresh</button>
            </div>
          </div>`
       : '';
     return `<div class="node-backend recover ${worst==='error'||worst==='empty'?'state-error':worst==='warn'||worst==='pending'?'state-warn':''}" id="nb-${_attr(b.name)}"
-        style="cursor:pointer" onclick="event.stopPropagation();toggleBackend(${_js(b.name)})">
+        style="cursor:pointer" ${_on('click', 'toggleBackend', b.name)}>
       <div class="node-backend-name"><span style="color:${dotCol}">●</span> ${_attr(b.name)}</div>
       <div class="node-backend-type">backup vault</div>
       <div class="node-backend-row" style="justify-content:space-between">
@@ -1188,7 +1188,7 @@ function _renderClusterNode(cluster, slotIdx = 0) {
   const offlineN = nodes.filter(_nodeOffline).length;
   const dotCol = offlineN === nodes.length && nodes.length ? 'var(--dim)'
                : offlineN ? 'var(--orange)' : 'var(--cyan)';
-  const summary = `${nodes.length} node${nodes.length > 1 ? 's' : ''}${offlineN ? ` · ${offlineN} offline` : ''}`;
+  const summary = `${Number(nodes.length)} node${nodes.length > 1 ? 's' : ''}${offlineN ? ` · ${offlineN} offline` : ''}`;
   const nodeRows = nodes
     .slice()
     .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
@@ -1206,12 +1206,12 @@ function _renderClusterNode(cluster, slotIdx = 0) {
   return `<div class="node-asset s-clean ${isExpanded ? 'expanded' : ''}"
     id="asset-${_attr(vm_name)}"
     draggable="true"
-    ondragstart="event.dataTransfer.setData('text/plain',${_js(vm_name)});event.currentTarget.classList.add('dragging');document.body.classList.add('dnd')"
-    ondragend="event.currentTarget.classList.remove('dragging');document.body.classList.remove('dnd');document.querySelectorAll('.drag-over').forEach(e=>e.classList.remove('drag-over'))"
-    ondragover="event.preventDefault();event.currentTarget.classList.add('drag-over')"
-    ondragleave="event.currentTarget.classList.remove('drag-over')"
-    ondrop="event.preventDefault();event.currentTarget.classList.remove('drag-over');dropOnSlot(${slotIdx},event.dataTransfer.getData('text/plain'))">
-    <div class="node-asset-header" onclick="toggleAsset(${_js(vm_name)})">
+    ${_on('dragstart', 'dragVm', vm_name)}
+    ${_on('dragend', 'dragEnd')}
+    ${_on('dragover', 'dragOver')}
+    ${_on('dragleave', 'dragLeave')}
+    ${_on('drop', 'dropOn', slotIdx)}>
+    <div class="node-asset-header" ${_on('click', 'toggleAsset', vm_name)}>
       <div style="display:flex;align-items:center;gap:6px">
         <span style="color:${dotCol};font-size:10px">●</span>
         <span class="node-asset-name" title="${_attr(vm_name)}">🎛 ${_attr(vm_name)}</span>
@@ -1252,12 +1252,12 @@ function _renderNsgNode(resource, vmEscs, slotIdx = 0) {
   return `<div class="node-asset ${myEscs.length ? 's-incident' : 's-clean'} ${isExpanded ? 'expanded' : ''}"
     id="asset-${_attr(vm_name)}" data-kind="nsg"
     draggable="true"
-    ondragstart="event.dataTransfer.setData('text/plain',${_js(vm_name)});event.currentTarget.classList.add('dragging');document.body.classList.add('dnd')"
-    ondragend="event.currentTarget.classList.remove('dragging');document.body.classList.remove('dnd');document.querySelectorAll('.drag-over').forEach(e=>e.classList.remove('drag-over'))"
-    ondragover="event.preventDefault();event.currentTarget.classList.add('drag-over')"
-    ondragleave="event.currentTarget.classList.remove('drag-over')"
-    ondrop="event.preventDefault();event.currentTarget.classList.remove('drag-over');dropOnSlot(${slotIdx},event.dataTransfer.getData('text/plain'))">
-    <div class="node-asset-header" onclick="toggleAsset(${_js(vm_name)})">
+    ${_on('dragstart', 'dragVm', vm_name)}
+    ${_on('dragend', 'dragEnd')}
+    ${_on('dragover', 'dragOver')}
+    ${_on('dragleave', 'dragLeave')}
+    ${_on('drop', 'dropOn', slotIdx)}>
+    <div class="node-asset-header" ${_on('click', 'toggleAsset', vm_name)}>
       <div style="display:flex;align-items:center;gap:6px">
         ${dot}
         <span class="node-asset-name" title="${_attr(resource_id)}">🛡 ${_attr(vm_name)}</span>
@@ -1353,7 +1353,7 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
 
   // Badges are clickable in compact mode only — expanded mode uses dec-row / esc-items
   const escBadge = totalEscs
-    ? `<span ${!isExpanded ? `onclick="event.stopPropagation();showEscModal(${_js(vm_name)})"` : ''}
+    ? `<span ${!isExpanded ? `${_on('click', 'showEscModal', vm_name)}` : ''}
         style="font-size:9px;font-weight:700;padding:2px 7px;border-radius:4px;
                ${!isExpanded ? 'cursor:pointer;' : ''}
                background:color-mix(in srgb,var(--purple) 18%,transparent);
@@ -1365,9 +1365,9 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
     restoreInfo ? `<span class="badge restoring" style="font-size:9px">🔄 RESTORING · ${_attr(restoreInfo.elapsed_label)}</span>` : '',
     ...states.map(s => s.type === 'isolated'
       ? `<span class="badge isolated" style="font-size:9px${!isExpanded ? ';cursor:pointer' : ''}"
-           ${!isExpanded ? `onclick="event.stopPropagation();showIsolationModal(${_js(vm_name)})"` : ''}>ISOLATED · ${age(s.since)}</span>${_scopeNote(s)}${_nicNote(s, vm_name)}`
+           ${!isExpanded ? `${_on('click', 'showIsolationModal', vm_name)}` : ''}>ISOLATED · ${age(s.since)}</span>${_scopeNote(s)}${_nicNote(s, vm_name)}`
       : `<span class="badge blocked" style="font-size:9px${!isExpanded ? ';cursor:pointer' : ''}"
-           ${!isExpanded ? `onclick="event.stopPropagation();showIsolationModal(${_js(vm_name)})"` : ''}>BLOCKED ${_attr(s.ip)} · ${age(s.since)}</span>${_scopeNote(s)}${_nicNote(s, vm_name)}`),
+           ${!isExpanded ? `${_on('click', 'showIsolationModal', vm_name)}` : ''}>BLOCKED ${_attr(s.ip)} · ${age(s.since)}</span>${_scopeNote(s)}${_nicNote(s, vm_name)}`),
     escBadge,
   ].filter(Boolean).join('');
 
@@ -1417,11 +1417,11 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
     if (a.action === 'isolate_vm' && isIsolated) {
       const s = states.find(s => s.type === 'isolated');
       badge   = s ? `<span class="badge isolated" style="font-size:9px;cursor:default">ISOLATED · ${age(s.since)}</span>${_scopeNote(s)}${_nicNote(s, vm_name)}` : '';
-      corrBtn = `<button class="action danger" onclick="event.stopPropagation();confirmRelease(${_js(vm_name)})" style="font-size:9px;padding:2px 7px;margin-left:auto">↩️ Release</button>`;
+      corrBtn = `<button class="action danger" ${_on('click', 'confirmRelease', vm_name)} style="font-size:9px;padding:2px 7px;margin-left:auto">↩️ Release</button>`;
     } else if (a.action === 'block_suspicious_ip' && isBlocked) {
       const s = states.find(s => s.type === 'blocked');
       badge   = s ? `<span class="badge blocked" style="font-size:9px;cursor:default">BLOCKED ${_attr(s.ip)} · ${age(s.since)}</span>${_scopeNote(s)}${_nicNote(s, vm_name)}` : '';
-      corrBtn = `${_extendBtn(s, vm_name)}<button class="action danger" onclick="event.stopPropagation();confirmUnblock(${_js(vm_name)})" style="font-size:9px;padding:2px 7px;margin-left:auto">↩️ Unblock</button>`;
+      corrBtn = `${_extendBtn(s, vm_name)}<button class="action danger" ${_on('click', 'confirmUnblock', vm_name)} style="font-size:9px;padding:2px 7px;margin-left:auto">↩️ Unblock</button>`;
     }
 
     const meta = [
@@ -1433,7 +1433,7 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
     return `<div class="section-group ${sectionClass}" style="margin-top:5px">
       ${badge ? `<div style="margin-bottom:3px">${badge}</div>` : ''}
       <div class="dec-row ${hasDetail ? 'dec-clickable' : ''}"
-        ${hasDetail ? `onclick="event.stopPropagation();showReasoning(${_js(vm_name)},${Number(realIdx)})"` : ''}>
+        ${hasDetail ? `${_on('click', 'showReasoning', vm_name, Number(realIdx))}` : ''}>
         <div class="dec-header">
           <span class="dec-action">${_attr(actionLabel(a.action))}</span>
           ${hasDetail ? `<span style="color:var(--blue);font-size:10px;margin-left:6px">▸ reasoning</span>` : ''}
@@ -1452,7 +1452,7 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
     const s = states.find(s => s.type === 'isolated');
     fallbackRows.push(`<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
       <span class="badge isolated" style="font-size:9px;cursor:default">ISOLATED · ${age(s?.since)}</span>${_scopeNote(s)}${_nicNote(s, vm_name)}
-      <button class="action danger" onclick="event.stopPropagation();confirmRelease(${_js(vm_name)})" style="font-size:9px;padding:2px 7px">↩️ Release</button>
+      <button class="action danger" ${_on('click', 'confirmRelease', vm_name)} style="font-size:9px;padding:2px 7px">↩️ Release</button>
     </div>`);
   }
   if (isBlocked && !coveredByDec.has('block_suspicious_ip')) {
@@ -1460,11 +1460,11 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
       `<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
         <span class="badge blocked" style="font-size:9px;cursor:default">BLOCKED ${_attr(s.ip)} · ${age(s.since)}</span>${_scopeNote(s)}${_nicNote(s, vm_name)}
         ${_extendBtn(s, vm_name)}
-        <button class="action danger" onclick="event.stopPropagation();confirmUnblock(${_js(vm_name)})" style="font-size:9px;padding:2px 7px">↩️ Unblock</button>
+        <button class="action danger" ${_on('click', 'confirmUnblock', vm_name)} style="font-size:9px;padding:2px 7px">↩️ Unblock</button>
       </div>`));
   }
   if (isIsolated && isBlocked) fallbackRows.push(
-    `<button class="action danger" onclick="event.stopPropagation();confirmReset(${_js(vm_name)})" style="font-size:9px;padding:2px 7px">⟳ Reset</button>`);
+    `<button class="action danger" ${_on('click', 'confirmReset', vm_name)} style="font-size:9px;padding:2px 7px">⟳ Reset</button>`);
 
   const isClean = !isIsolated && !isBlocked && !restoreInfo && !myEscs.length;
 
@@ -1480,12 +1480,12 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
   const modeTxt   = `${modeIsAct ? '⚡' : '👁'} ${modeIsAct ? 'NON-DISRUPTIVE' : 'HUMAN-ONLY'}`;
   const _defLabel = globalDefault === 'non_disruptive' ? 'non-disruptive' : 'human-only';
   const _modeBase = 'font-size:8px;font-weight:700;padding:1px 5px;border-radius:3px;letter-spacing:.5px;flex-shrink:0;cursor:pointer';
-  const _modeClick = `onclick="event.stopPropagation();showCapabilityPopover(event,${_js(autonomyMode)})"`;
+  const _modeClick = `${_on('click', 'capability', autonomyMode)}`;
   // Configured autonomous but held in human-only by its readiness (L6 gate): say why,
   // and one click opens the activation screen.
   const modeHold = (_state?.autonomy_holds || {})[vm_name];
   const holdChip = modeHold
-    ? `<span onclick="event.stopPropagation();openActivation(${_js(vm_name)})" title="${_attr(`Configured ${modeHold.configured}, held in human-only: ${modeHold.message}. Click to review and turn on.`)}" style="${_modeBase};background:color-mix(in srgb,var(--orange) 12%,transparent);color:var(--orange);border:1px dashed color-mix(in srgb,var(--orange) 45%,transparent)">⏸ ${modeHold.reason === 'not_checked' ? 'CHECKING' : modeHold.reason === 'not_ready' ? 'NOT READY' : 'CONFIRM'}</span>`
+    ? `<span ${_on('click', 'openActivation', vm_name)} title="${_attr(`Configured ${modeHold.configured}, held in human-only: ${modeHold.message}. Click to review and turn on.`)}" style="${_modeBase};background:color-mix(in srgb,var(--orange) 12%,transparent);color:var(--orange);border:1px dashed color-mix(in srgb,var(--orange) 45%,transparent)">⏸ ${modeHold.reason === 'not_checked' ? 'CHECKING' : modeHold.reason === 'not_ready' ? 'NOT READY' : 'CONFIRM'}</span>`
     : '';
   const modeBadge = holdChip + (modeHold
     ? `<span ${_modeClick} title="Held in human-only until its readiness allows (configured: ${_attr(modeHold.configured)}) · click for capability" style="${_modeBase};background:transparent;color:var(--dim);border:1px solid var(--border)">${modeTxt}</span>`
@@ -1498,7 +1498,7 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
   const modeSelector = isExpanded
     ? `<div style="display:flex;align-items:center;gap:6px;margin-top:6px">
         <span style="font-size:9px;color:var(--dim);font-weight:600;letter-spacing:.5px">MODE</span>
-        <select onchange="this.value === 'non_disruptive' ? openActivation(${_js(vm_name)}) : setAutonomyMode(${_js(vm_name)},this.value)" onclick="event.stopPropagation()"${_state?.read_only ? ' disabled title="Observe-only (read-only credentials): human-only is locked"' : ''}
+        <select ${_on('change', 'modeChange', vm_name)} ${_on('click', 'stop')}${_state?.read_only ? ' disabled title="Observe-only (read-only credentials): human-only is locked"' : ''}
           style="font-size:9px;background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:2px 5px;border-radius:3px;cursor:pointer">
           <option value="human_only"${autonomyMode === 'human_only' ? ' selected' : ''}>human-only (recommend)</option>
           <option value="non_disruptive"${autonomyMode === 'non_disruptive' ? ' selected' : ''}>non-disruptive (execute)</option>
@@ -1530,12 +1530,12 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
   const snapshotBtn = snapshotInProgress
     ? `<button class="action" disabled style="margin-left:auto;font-size:9px;padding:2px 7px;opacity:.5;cursor:default">⏳ Snapshot…</button>`
     : snapshotStale
-      ? `<button class="action" onclick="event.stopPropagation();doSnapshot(${_js(vm_name)})" style="margin-left:auto;font-size:9px;padding:2px 7px;background:color-mix(in srgb,var(--yellow) 20%,transparent);color:var(--yellow);border-color:var(--yellow)" title="Snapshot job stale — InProgress >24h with no terminal state. Re-check Azure or relaunch.">⏱ Stale</button>`
+      ? `<button class="action" ${_on('click', 'doSnapshot', vm_name)} style="margin-left:auto;font-size:9px;padding:2px 7px;background:color-mix(in srgb,var(--yellow) 20%,transparent);color:var(--yellow);border-color:var(--yellow)" title="Snapshot job stale — InProgress >24h with no terminal state. Re-check Azure or relaunch.">⏱ Stale</button>`
     : snapshotFailed
-      ? `<button class="action" onclick="event.stopPropagation();doSnapshot(${_js(vm_name)})" style="margin-left:auto;font-size:9px;padding:2px 7px;background:color-mix(in srgb,var(--red) 20%,transparent);color:var(--red);border-color:var(--red)" title="${_attr(activeJob?.error || 'Snapshot failed')}">✗ Retry</button>`
+      ? `<button class="action" ${_on('click', 'doSnapshot', vm_name)} style="margin-left:auto;font-size:9px;padding:2px 7px;background:color-mix(in srgb,var(--red) 20%,transparent);color:var(--red);border-color:var(--red)" title="${_attr(activeJob?.error || 'Snapshot failed')}">✗ Retry</button>`
       : hasSnapshotEsc
         ? ''
-        : `<button class="action" onclick="event.stopPropagation();doSnapshot(${_js(vm_name)})" style="margin-left:auto;font-size:9px;padding:2px 7px">📸 Snapshot</button>`;
+        : `<button class="action" ${_on('click', 'doSnapshot', vm_name)} style="margin-left:auto;font-size:9px;padding:2px 7px">📸 Snapshot</button>`;
 
   // Readiness checks (NSG / Backup / Compute / Detection) — shown in any expanded card. During an
   // incident "can Glorfindel act on this VM?" matters more, not less → not gated on isClean.
@@ -1554,7 +1554,7 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
   const backupSection = `<div class="section-group s-recover" style="margin-top:5px">
     <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
       <span style="color:var(--green);font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:.5px">Backup</span>
-      <button onclick="event.stopPropagation();refreshAuditVm(${_js(vm_name)})"
+      <button ${_on('click', 'refreshAuditVm', vm_name)}
         style="background:none;border:none;color:var(--dim);cursor:pointer;font-size:11px;padding:0 2px;line-height:1" title="Refresh backup info">↺</button>
       <span style="margin-left:2px">${backupSummary}</span>
       ${snapshotBtn}
@@ -1576,8 +1576,8 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
     }) - 1;
     const subnetN = _nsgs.filter(x => x.nsg_scope === 'subnet').length;
     nsgLine = `<div style="font-size:9px;color:var(--dim);margin-top:5px;cursor:pointer"
-      onclick="event.stopPropagation();showCoverageModal(${idx})"
-      title="Click for the NSG on each NIC">🛡 ${_nsgs.length} NSGs across NICs${subnetN ? ` · <span style="color:var(--orange)">${subnetN} subnet</span>` : ''} ▸</div>`;
+      ${_on('click', 'showCoverageModal', idx)}
+      title="Click for the NSG on each NIC">🛡 ${Number(_nsgs.length)} NSGs across NICs${subnetN ? ` · <span style="color:var(--orange)">${subnetN} subnet</span>` : ''} ▸</div>`;
   } else if (_nsgData.nsg) {
     nsgLine = `<div style="font-size:9px;color:var(--dim);margin-top:5px">🛡 NSG <span style="color:var(--text)">${_attr(_nsgData.nsg.split('/').pop())}</span> · <span style="color:${_nsgData.nsg_scope === 'subnet' ? 'var(--orange)' : 'var(--dim)'}">${_nsgData.nsg_scope === 'subnet' ? 'subnet (shared)' : 'NIC (this VM)'}</span></div>`;
   }
@@ -1604,12 +1604,12 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
   const compactSnapshotBtn = snapshotInProgress
     ? `<button class="action" disabled style="margin-left:auto;font-size:9px;padding:1px 6px;opacity:.5;cursor:default">⏳ Snapshot…</button>`
     : snapshotStale
-      ? `<button class="action" onclick="event.stopPropagation();doSnapshot(${_js(vm_name)})" style="margin-left:auto;font-size:9px;padding:1px 6px;background:color-mix(in srgb,var(--yellow) 20%,transparent);color:var(--yellow);border-color:var(--yellow)" title="Snapshot job stale — InProgress >24h with no terminal state. Re-check Azure or relaunch.">⏱ Stale</button>`
+      ? `<button class="action" ${_on('click', 'doSnapshot', vm_name)} style="margin-left:auto;font-size:9px;padding:1px 6px;background:color-mix(in srgb,var(--yellow) 20%,transparent);color:var(--yellow);border-color:var(--yellow)" title="Snapshot job stale — InProgress >24h with no terminal state. Re-check Azure or relaunch.">⏱ Stale</button>`
     : snapshotFailed
-      ? `<button class="action" onclick="event.stopPropagation();doSnapshot(${_js(vm_name)})" style="margin-left:auto;font-size:9px;padding:1px 6px;background:color-mix(in srgb,var(--red) 20%,transparent);color:var(--red);border-color:var(--red)" title="${_attr(activeJob?.error || 'Snapshot failed')}">✗ Retry</button>`
+      ? `<button class="action" ${_on('click', 'doSnapshot', vm_name)} style="margin-left:auto;font-size:9px;padding:1px 6px;background:color-mix(in srgb,var(--red) 20%,transparent);color:var(--red);border-color:var(--red)" title="${_attr(activeJob?.error || 'Snapshot failed')}">✗ Retry</button>`
       : hasSnapshotEsc
         ? ''
-        : `<button class="action" onclick="event.stopPropagation();doSnapshot(${_js(vm_name)})" style="margin-left:auto;font-size:9px;padding:1px 6px">📸 Snapshot</button>`;
+        : `<button class="action" ${_on('click', 'doSnapshot', vm_name)} style="margin-left:auto;font-size:9px;padding:1px 6px">📸 Snapshot</button>`;
 
   const compactBody = isClean
     ? `<div style="margin-top:5px;display:flex;align-items:center;gap:6px">
@@ -1622,12 +1622,12 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
   return `<div class="node-asset ${stateClass} ${isExpanded ? 'expanded' : ''}"
     id="asset-${_attr(vm_name)}"
     draggable="true"
-    ondragstart="event.dataTransfer.setData('text/plain',${_js(vm_name)});event.currentTarget.classList.add('dragging');document.body.classList.add('dnd')"
-    ondragend="event.currentTarget.classList.remove('dragging');document.body.classList.remove('dnd');document.querySelectorAll('.drag-over').forEach(e=>e.classList.remove('drag-over'))"
-    ondragover="event.preventDefault();event.currentTarget.classList.add('drag-over')"
-    ondragleave="event.currentTarget.classList.remove('drag-over')"
-    ondrop="event.preventDefault();event.currentTarget.classList.remove('drag-over');dropOnSlot(${slotIdx},event.dataTransfer.getData('text/plain'))">
-    <div class="node-asset-header" onclick="toggleAsset(${_js(vm_name)})">
+    ${_on('dragstart', 'dragVm', vm_name)}
+    ${_on('dragend', 'dragEnd')}
+    ${_on('dragover', 'dragOver')}
+    ${_on('dragleave', 'dragLeave')}
+    ${_on('drop', 'dropOn', slotIdx)}>
+    <div class="node-asset-header" ${_on('click', 'toggleAsset', vm_name)}>
       <div style="display:flex;align-items:center;gap:6px">
         ${dot}
         <span class="node-asset-name" title="${_attr(vm_name)}">${_attr(vm_name)}</span>
@@ -2037,9 +2037,9 @@ function renderToJudge() {
       <div class="judge-why" title="${_attr(why)}">${_attr(why)}</div>
       <div class="judge-actions">
         <input id="judge-note-${id}" placeholder="note (optional): why" maxlength="300">
-        <button class="action" title="The recommendation was right" onclick="judgeCard(${_js(c.id)},'right')">✓ Right</button>
-        <button class="action" style="color:var(--red)" title="False positive, or a disproportionate action" onclick="judgeCard(${_js(c.id)},'wrong')">✗ Wrong</button>
-        <button class="action" style="color:var(--dim)" title="Can't tell with what is known" onclick="judgeCard(${_js(c.id)},'unsure')">? Unsure</button>
+        <button class="action" title="The recommendation was right" ${_on('click', 'judgeCard', c.id, 'right')}>✓ Right</button>
+        <button class="action" style="color:var(--red)" title="False positive, or a disproportionate action" ${_on('click', 'judgeCard', c.id, 'wrong')}>✗ Wrong</button>
+        <button class="action" style="color:var(--dim)" title="Can't tell with what is known" ${_on('click', 'judgeCard', c.id, 'unsure')}>? Unsure</button>
       </div>
     </div>`;
   }).join('');
@@ -2142,17 +2142,16 @@ async function doApproveAction(escId, vmName, opts) {
 // escalation). "vm" scopes the rule to this VM's IP; "subnet" puts one any-rule on
 // the subnet NSG → blocks the IP for every VM on the subnet.
 function showBlockScopeModal(escId, vmName, ip) {
-  const ipArg = ip ? `,ip:${_js(ip)}` : '';
   document.getElementById('modal-title').textContent = `Block scope — ${vmName}`;
   document.getElementById('modal-body').innerHTML = `
     <div style="margin-bottom:12px;color:var(--text)">Where should this IP block apply?</div>
     <div style="display:flex;flex-direction:column;gap:8px">
-      <button class="action" onclick="closeModal();doApproveAction(${_js(escId)},${_js(vmName)},{scope:'vm'${ipArg}})"
+      <button class="action" ${_on('click', 'approveScoped', escId, vmName, 'vm', ip)}
         style="text-align:left;padding:9px 11px">
         <div style="font-weight:700;color:var(--text)">🔒 This VM only <span style="color:var(--dim);font-weight:400;font-size:10px">· default</span></div>
         <div style="color:var(--dim);font-size:11px;margin-top:2px">Rule scoped to this VM's IP — other subnet VMs are untouched.</div>
       </button>
-      <button class="action" onclick="closeModal();doApproveAction(${_js(escId)},${_js(vmName)},{scope:'subnet'${ipArg}})"
+      <button class="action" ${_on('click', 'approveScoped', escId, vmName, 'subnet', ip)}
         style="text-align:left;padding:9px 11px;border-color:color-mix(in srgb,var(--orange) 45%,var(--border))">
         <div style="font-weight:700;color:var(--orange)">⚠ Whole subnet — all VMs</div>
         <div style="color:var(--dim);font-size:11px;margin-top:2px">One any-rule on the subnet NSG — blocks this IP for every VM on the subnet, incl. future ones.</div>
@@ -2619,7 +2618,7 @@ function showEscModal(vmName) {
   bodyEl.innerHTML = groups.map(group => {
     const e     = group[0];
     const ids   = group.map(g => g.id).join(','); // CSV — safe in onclick attrs, no quotes
-    const count = group.length;
+    const count = Number(group.length);
     const isModeHold        = _isHeld(e);
     const isSnapshotPending = e.action === 'snapshot' && e.escalation_type === 'low_confidence';
     const isWriteBlocked    = e.escalation_type === 'write_blocked';
@@ -2646,22 +2645,22 @@ function showEscModal(vmName) {
                       background:color-mix(in srgb,var(--purple) 15%,transparent);
                       color:var(--purple)">×${count}</span>` : '';
     const modalBtns = isRule
-      ? `<button class="action" style="color:var(--green)" onclick="doApproveRule(${_js(pid)},${_js(e.id)});closeModal()">✓ Approve</button>
-         <button class="action" style="color:var(--red)"   onclick="doRejectRule(${_js(pid)},${_js(e.id)});closeModal()">✗ Reject</button>`
+      ? `<button class="action" style="color:var(--green)" ${_on('click', 'approveRuleAndClose', pid, e.id)}>✓ Approve</button>
+         <button class="action" style="color:var(--red)"   ${_on('click', 'rejectRuleAndClose', pid, e.id)}>✗ Reject</button>`
       : e.escalation_type === 'readiness_hold'
-      ? `<button class="action primary" onclick="openActivation(${_js(vmName)})">⚡ Review & turn on</button>
-         <button class="action" onclick="doAckAll(${_js(ids)});closeModal()">✓ Ack</button>
-         <button class="action" onclick="openCommandModal(${_js(e.id)})">📋 Cmd</button>`
+      ? `<button class="action primary" ${_on('click', 'openActivation', vmName)}>⚡ Review & turn on</button>
+         <button class="action" ${_on('click', 'ackAllAndClose', ids)}>✓ Ack</button>
+         <button class="action" ${_on('click', 'openCommandModal', e.id)}>📋 Cmd</button>`
       : isModeHold
-      ? `<button class="action primary" onclick="doApproveAction(${_js(e.id)},${_js(vmName)});closeModal()">▶ Approve & execute</button>
-         <button class="action" onclick="doAckAll(${_js(ids)});closeModal()">✓ Ack</button>
-         <button class="action" onclick="openCommandModal(${_js(e.id)})">📋 Cmd</button>`
+      ? `<button class="action primary" ${_on('click', 'approveActionAndClose', e.id, vmName)}>▶ Approve & execute</button>
+         <button class="action" ${_on('click', 'ackAllAndClose', ids)}>✓ Ack</button>
+         <button class="action" ${_on('click', 'openCommandModal', e.id)}>📋 Cmd</button>`
       : isSnapshotPending
-      ? `<button class="action" onclick="doSnapshot(${_js(vmName)});closeModal()">📸 Snapshot</button>
-         <button class="action" onclick="doAckAll(${_js(ids)});closeModal()">✓ Ack</button>
-         <button class="action" onclick="openCommandModal(${_js(e.id)})">📋 Cmd</button>`
-      : `<button class="action" onclick="doAckAll(${_js(ids)});closeModal()">✓ Ack</button>
-         <button class="action" onclick="openCommandModal(${_js(e.id)})">📋 Cmd</button>`;
+      ? `<button class="action" ${_on('click', 'snapshotAndClose', vmName)}>📸 Snapshot</button>
+         <button class="action" ${_on('click', 'ackAllAndClose', ids)}>✓ Ack</button>
+         <button class="action" ${_on('click', 'openCommandModal', e.id)}>📋 Cmd</button>`
+      : `<button class="action" ${_on('click', 'ackAllAndClose', ids)}>✓ Ack</button>
+         <button class="action" ${_on('click', 'openCommandModal', e.id)}>📋 Cmd</button>`;
     return `<div style="border-left:2px solid var(--purple);padding:10px;margin-bottom:10px;background:color-mix(in srgb,var(--purple) 4%,var(--bg1))">
       <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;flex-wrap:wrap">
         <span style="color:var(--purple);font-weight:700;font-size:12px">${_attr(label)}</span>
@@ -2774,7 +2773,7 @@ async function refreshConfig() {
         <div class="cfg-row">
           <span class="cfg-key">default mode</span>
           <span class="cfg-val">
-            <select onchange="setDefaultMode(this.value)"${_state?.read_only ? ' disabled title="Observe-only (read-only credentials): human-only is locked"' : ''}
+            <select ${_on('change', 'defaultMode')}${_state?.read_only ? ' disabled title="Observe-only (read-only credentials): human-only is locked"' : ''}
               style="font-size:11px;background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:2px 6px;border-radius:3px;cursor:pointer">
               <option value="human_only"${(_state?.autonomy_default||'human_only') === 'human_only' ? ' selected' : ''}>human-only (recommend)</option>
               <option value="non_disruptive"${(_state?.autonomy_default) === 'non_disruptive' ? ' selected' : ''}>non-disruptive (execute)</option>
@@ -2833,10 +2832,11 @@ function _attr(s) {
   return String(s ?? '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;')
     .replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '&#10;');
 }
-// The same as an argument of an on… attribute: the browser decodes the attribute before the
-// handler runs (an &#39; is a quote again there), so the value goes in as a JavaScript string.
-function _js(s) {
-  return _attr(JSON.stringify(String(s ?? '')));
+// What an element does on an event, without an inline handler (#257: script-src 'self' refuses
+// them): `data-on-click="showEscModal"`, and its arguments as JSON in `data-click-args`, escaped
+// like any attribute. _dispatch reads them back; the action is looked up in ACTIONS.
+function _on(event, action, ...args) {
+  return `data-on-${event}="${action}"` + (args.length ? ` data-${event}-args="${_attr(JSON.stringify(args))}"` : '');
 }
 
 // Full audit detail (message + fix) for a readiness group — surfaced as a tooltip
@@ -2926,6 +2926,73 @@ async function refreshNsgs() {
     renderInfra();
   }
 }
+
+// ── Events (#257) ──────────────────────────────────────────────────────────────
+// No handler is written into the page: an element names its action (_on), and one listener per
+// event, on the document, calls it. The nearest element with an action takes the event, as the
+// inline handlers' stopPropagation() did for a button inside a card. Capture phase: an action
+// that stops the event (the capability popover) stops it before the document's other listeners.
+// The table is closed: a name that is not in it does nothing — never a global found by its name.
+let _event = null, _target = null;     // the event an action runs for, and its element
+
+const ACTIONS = {
+  confirmExtendSubnet, confirmRelease, confirmReset, confirmRestore, confirmUnblock, doAckAll,
+  doApproveAction, doApproveRule, doRejectRule, doSnapshot, focusJudge, judgeCard, openActivation,
+  openCommandModal, refreshAuditVm, refreshBackups, showCoverageModal, showEscModal,
+  showIsolationModal, showReasoning, showRuleByIdx, toggleAsset, toggleBackend, closeModal,
+  _glowNsgVms,
+  stop() {},                                      // only keeps the click from the element around
+  ackAllAndClose(ids) { doAckAll(ids); closeModal(); },
+  snapshotAndClose(vm) { doSnapshot(vm); closeModal(); },
+  approveRuleAndClose(pid, id) { doApproveRule(pid, id); closeModal(); },
+  rejectRuleAndClose(pid, id) { doRejectRule(pid, id); closeModal(); },
+  approveActionAndClose(id, vm) { doApproveAction(id, vm); closeModal(); },
+  approveScoped(escId, vm, scope, ip) { closeModal(); doApproveAction(escId, vm, ip ? { scope, ip } : { scope }); },
+  capability(mode) { showCapabilityPopover(_event, mode); },
+  modeChange(vm) {
+    if (_target.value === 'non_disruptive') openActivation(vm);
+    else setAutonomyMode(vm, _target.value);
+  },
+  defaultMode() { setDefaultMode(_target.value); },
+  dragVm(vm) {
+    _event.dataTransfer.setData('text/plain', vm);
+    _target.classList.add('dragging');
+    document.body.classList.add('dnd');
+  },
+  dragEnd() {
+    _target.classList.remove('dragging');
+    document.body.classList.remove('dnd');
+    document.querySelectorAll('.drag-over').forEach(e => e.classList.remove('drag-over'));
+  },
+  dragOver() { _event.preventDefault(); _target.classList.add('drag-over'); },
+  dragLeave() { _target.classList.remove('drag-over'); },
+  dropOn(slot) {
+    _event.preventDefault();
+    _target.classList.remove('drag-over');
+    dropOnSlot(slot, _event.dataTransfer.getData('text/plain'));
+  },
+};
+
+// mouseenter and mouseleave do not bubble: read from mouseover and mouseout, the move from one
+// child to another left out.
+const _EVENTS = { click: 'click', change: 'change', dragstart: 'dragstart', dragend: 'dragend',
+                  dragover: 'dragover', dragleave: 'dragleave', drop: 'drop',
+                  mouseover: 'mouseenter', mouseout: 'mouseleave' };
+
+function _dispatch(ev, name) {
+  const el = ev.target instanceof Element ? ev.target.closest(`[data-on-${name}]`) : null;
+  if (!el || ((name === 'mouseenter' || name === 'mouseleave') && el.contains(ev.relatedTarget))) return;
+  const action = el.getAttribute(`data-on-${name}`);
+  if (!Object.hasOwn(ACTIONS, action)) return;
+  let args = [];
+  try { args = JSON.parse(el.getAttribute(`data-${name}-args`) || '[]'); } catch (e) { return; }
+  _event = ev; _target = el;
+  try { ACTIONS[action](...args); } finally { _event = _target = null; }
+}
+
+for (const [type, name] of Object.entries(_EVENTS)) document.addEventListener(type, ev => _dispatch(ev, name), true);
+// The modal's Cancel closes it, unless a screen gives it its own action (openActivation).
+document.getElementById('modal-cancel').onclick = closeModal;
 
 // ── Init ───────────────────────────────────────────────────────────────────────
 

@@ -1,9 +1,11 @@
-"""A fake Discord on the loopback, for notify_discord.py and roadmap_discord.py (N1, N2).
+"""A fake Discord on the loopback, for notify_discord.py, roadmap_discord.py (N1, N2) and the
+CD of H0 (H1).
 
 The routes the scripts use, as Discord answers them: the webhooks, the Eregion bot's forum
 (#lots: its tags, active and archived threads, posts), its #roadmap channel (pins, last
-messages, a message posted or edited), and GitHub's API (workflow runs, milestones, issues,
-pull requests) under /gh. Nothing leaves the machine; every request is kept for the tests.
+messages, a message posted or edited), GitHub's API (workflow runs, milestones, issues, pull
+requests, the latest release, a commit's check runs) under /gh, and H0's console under
+/console. Nothing leaves the machine; every request is kept for the tests.
 """
 import json
 import threading
@@ -24,7 +26,8 @@ class FakeDiscord:
     def __init__(self):
         self.requests, self.messages, self.threads, self.runs = [], {}, [], []
         self.roadmap: list[dict] = []        # #roadmap's messages, newest first
-        self.gh = {"milestones": [], "issues": [], "pulls": []}
+        self.gh = {"milestones": [], "issues": [], "pulls": [], "release": None, "checks": {}}
+        self.console_token, self.console_status = "", 200
         self.fail: dict[str, int] = {}       # path prefix → status (once if listed in self.once)
         self.once: set[str] = set()
         self.lock, self.next_id = threading.Lock(), 100
@@ -88,6 +91,10 @@ class FakeDiscord:
             parts = p.strip("/").split("/")
             if p.startswith("/gh/"):
                 return self._github(p, query)
+            if p == "/console/api/sections":
+                if headers.get("Authorization") != f"Bearer {self.console_token}":
+                    return 401, {"detail": "token"}, {}
+                return self.console_status, {"sections": []}, {}
             if parts[:2] == ["api", "webhooks"]:
                 if method == "POST":
                     mid = self._id()
@@ -162,6 +169,13 @@ class FakeDiscord:
             return 200, self.gh["issues"][(page - 1) * per: page * per], {}
         if p == "/gh/repos/o/r/pulls":
             return 200, self.gh["pulls"], {}
+        if p == "/gh/repos/o/r/releases/latest":
+            return (200, self.gh["release"], {}) if self.gh["release"] else (404, {"message": "Not Found"}, {})
+        if p.startswith("/gh/repos/o/r/commits/") and p.endswith("/check-runs"):
+            sha = p.split("/")[-2]
+            runs = self.gh["checks"].get(sha, [{"name": "lint + tests (py3.12)", "status": "completed",
+                                                "conclusion": "success"}])
+            return 200, {"total_count": len(runs), "check_runs": runs}, {}
         return 404, {}, {}
 
     def webhook_posts(self, token):

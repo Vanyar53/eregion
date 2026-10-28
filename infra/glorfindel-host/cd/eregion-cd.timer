@@ -1,0 +1,12 @@
+# Every 5 minutes, one pass of the CD of H0 (H1). Installed disabled: `make
+# glorfindel-host-cd-check` first (dry run), then `make glorfindel-host-cd-enable`.
+[Unit]
+Description=Eregion CD every 5 minutes (H1)
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=5min
+RandomizedDelaySec=30s
+
+[Install]
+WantedBy=timers.target

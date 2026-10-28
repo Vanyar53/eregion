@@ -15,7 +15,8 @@ Ce que fait l'atelier (la CI, les PR, les lots d'elrond) arrive dans Discord, à
 | `#agents` | un message « En cours » réécrit sur place : les agents d'elrond qui tournent, depuis quand | non |
 | `#agents` | ce qui t'attend, avec ta mention : repli de modèle, relecture `changes` / `blocking` / sans verdict / non obtenue, lot bloqué, fin de run | oui |
 | `#roadmap` | un seul message du bot, réécrit sur place (N2) : une barre par jalon, en cours, relus, bloqués, à faire, les critères de la 1.0, les cinq indicateurs | non |
-| `#deploy` | H1 | — |
+| `#deploy` | le CD de H0 (H1) : début, succès, attente de la CI, agent de CD à mettre à jour, résultats du dry-run | non |
+| `#deploy` | refus, retour arrière, retour arrière raté, H0 dépareillé, erreur de l'agent : avec ta mention | oui |
 
 Ce qui ne mérite rien n'envoie rien : un run vert sur une PR, un run annulé, une PR fermée sans fusion, les agents qui ne sont pas ceux d'elrond.
 
@@ -75,7 +76,10 @@ EREGION_DISCORD_WEBHOOK_AGENTS=https://discord.com/api/webhooks/…
 EREGION_DISCORD_BOT_TOKEN=…
 EREGION_DISCORD_LOTS_FORUM=…
 EREGION_DISCORD_MENTION=<ton id d'utilisateur>
+EREGION_DISCORD_WEBHOOK_DEPLOY=https://discord.com/api/webhooks/…   # #deploy (H1)
 ```
+
+Le webhook de `#deploy` est le seul secret de l'atelier qui va sur H0. `make glorfindel-host-cd-install` le copie dans `~/.eregion-cd/discord.env` (600), avec la mention et rien d'autre : le CD de H0 poste avec (H1, `infra/glorfindel-host/README.md`, « Le CD de H0 »).
 
 **4. Les hooks**, chez toi et jamais dans le dépôt (ils s'exécuteraient chez chaque contributeur) : `bash scripts/elrond-hooks.sh install`. La commande ajoute palantir sur `Stop` et `SubagentStop`, et `notify_discord.py hook` sur `PreToolUse` (`Agent`) et `SubagentStop` (`elrond-worker|elrond-reviewer`). Chaque commande finit par `|| true` : un hook `PreToolUse` qui sort en 2 bloquerait l'outil, et `python3` sort en 2 si le fichier manque. `uninstall` les retire et garde les autres hooks (rtk compris).
 

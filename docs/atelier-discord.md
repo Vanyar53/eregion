@@ -15,7 +15,8 @@ Ce que fait l'atelier (la CI, les PR, les lots d'elrond) arrive dans Discord, à
 | `#agents` | un message « En cours » réécrit sur place : les agents d'elrond qui tournent, depuis quand | non |
 | `#agents` | ce qui t'attend, avec ta mention : repli de modèle, relecture `changes` / `blocking` / sans verdict / non obtenue, lot bloqué, fin de run | oui |
 | `#roadmap` | un seul message du bot, réécrit sur place (N2) : une barre par jalon, en cours, relus, bloqués, à faire, les critères de la 1.0, les cinq indicateurs | non |
-| `#deploy` | le CD de H0 (H1) : début et succès d'un déploiement ; refus, retour arrière, retour raté avec ta mention ; un agent de CD à mettre à jour | succès : non ; le reste : oui |
+| `#deploy` | le CD de H0 (H1) : début, succès, attente de la CI, agent de CD à mettre à jour, résultats du dry-run | non |
+| `#deploy` | refus, retour arrière, retour arrière raté, H0 dépareillé, erreur de l'agent : avec ta mention | oui |
 
 Ce qui ne mérite rien n'envoie rien : un run vert sur une PR, un run annulé, une PR fermée sans fusion, les agents qui ne sont pas ceux d'elrond.
 

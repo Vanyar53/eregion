@@ -283,7 +283,7 @@ la console), et la désactiver au besoin (`disable: [<nom>]` dans la couche).
    git stash drop
    ```
 
-**Disque** : chaque `make glorfindel-host-start` reconstruit l'image ; les couches des anciennes images restaient dans containerd (Docker 29), jusqu'à 87 % d'un disque de 32 Go le 20/10, 25 Go récupérables. Le redéploiement purge maintenant les images orphelines (`docker image prune -f`), et `glorfindel-host-status` affiche l'occupation du disque. Depuis H1, chaque image est aussi étiquetée par sa référence (`eregion-glorfindel:v0.4.0`) et les trois plus récentes restent (celle qui tourne toujours) : revenir à la précédente est un `docker tag`, pas une reconstruction.
+**Disque** : chaque `make glorfindel-host-start` reconstruit l'image ; les couches des anciennes images restaient dans containerd (Docker 29), jusqu'à 87 % d'un disque de 32 Go le 20/10, 25 Go récupérables. Le redéploiement purge maintenant les images orphelines (`docker image prune -f`), et `glorfindel-host-status` affiche l'occupation du disque. Depuis H1, chaque image est aussi étiquetée par sa référence (`eregion-glorfindel:v0.4.0`). Le ménage garde les trois plus récentes, plus celle qui tourne et celle d'avant : revenir à la précédente est un `docker tag`, pas une reconstruction. Le CD ne fait ce ménage qu'une fois la santé verte ; jamais à la bascule, pour que l'image du retour arrière reste.
 
 Les verdicts de l'observation et la mémoire ne vivent que sur le disque de la VM : `make glorfindel-host-pull` en garde une copie sur le poste (`~/.eregion/host-backups/`, les 30 dernières), et `make glorfindel-host-status` signale une copie de plus de 7 jours. Une VM éteinte (gondolin entre deux exercices) reste une semaine sur la carte (`GLORFINDEL_DISCOVERY_RETENTION_H=168` dans `host.env`, 8 h par défaut).
 
@@ -303,27 +303,29 @@ d'exercice non marqués (B2), qui n'ont rien à faire dans une observation.
    - copie l'agent dans `~/.eregion-cd/` sur la VM, avec `deploy.sh` et `notify_discord.py`, jamais dans le checkout qu'il déploie ;
    - y écrit `discord.env` en 600, avec le webhook et la mention seulement, passés par stdin. Le jeton du bot Eregion ne va jamais sur H0 ;
    - installe les unités systemd avec sudo, **timer désactivé**.
-3. **`make glorfindel-host-cd-check`, à blanc.** La commande vérifie la dernière release, construit la candidate à côté et passe le préflight, dont **la config de H0 sous la lecture stricte d'A3**. Elle ne bascule pas, et dit le résultat dans le terminal et dans `#deploy`.
+3. **`make glorfindel-host-cd-check`, à blanc.** La commande vérifie la dernière release, construit la candidate à côté et passe le préflight, dont **la config de H0 sous la lecture stricte d'A3**. Elle ne bascule pas, et dit le résultat dans le terminal et dans `#deploy`. Si la dernière release tourne déjà (v0.4.0 depuis le 28/10), elle la reconstruit à côté (`check-v0.4.0`, effacée ensuite) et la préflighte : le vrai Docker de H0 est éprouvé quand même.
 4. **Si c'est vert, `make glorfindel-host-cd-enable`.** Le passage suivant déploie.
 
 ### Un passage
 
-1. **La dernière release**, sur l'API publique (les brouillons et les pré-versions n'y figurent pas). Rien à faire si elle tourne déjà, ou si elle a déjà échoué ou été refusée.
-2. **Vérifier.** Son tag est sur `origin/main`, et jamais plus ancien que ce qui tourne. Tous les check-runs de son commit sont terminés, et aucun n'est rouge ; si la CI tourne encore, le CD attend le passage suivant et le dit une fois.
+0. **Un passage interrompu après sa bascule** (redémarrage de la VM, délai de systemd) est repris d'abord. La bascule est inscrite avant d'avoir lieu ; le passage suivant regarde la santé, puis garde la release ou revient.
+1. **La dernière release**, sur l'API publique (les brouillons et les pré-versions n'y figurent pas). Rien à faire si elle tourne déjà sur les trois conteneurs, ou si elle a déjà échoué ou été refusée. Un tag déjà vu sur un autre commit est refusé : un tag publié ne se réécrit pas.
+   Si seule une partie des conteneurs tourne sur la release, `#deploy` le dit une fois.
+2. **Vérifier.** Son tag est sur `origin/main`, et jamais plus ancien que ce qui tourne. Tous les check-runs de son commit, sur toutes leurs pages, sont terminés et aucun n'est rouge. Celui de la CI principale (`lint + tests`) doit être parmi eux. Si la CI tourne encore, le CD attend le passage suivant et le dit une fois.
 3. **Garde du verrou.** Si `requirements/glorfindel.txt` a changé depuis ce qui tourne, `requirements/harness.json` doit porter sur ce verrou (son sha256) et sur le modèle de H0 (celui de `.env`, sinon celui par défaut de la release). Il doit aussi montrer 3 runs, une intégration et un jugement complets, et aucune erreur surconfiante.
 4. **La candidate** `eregion-glorfindel:<tag>`, construite dans un worktree à part (`~/.eregion-cd/build`, `deploy.sh --build-only`). L'image qui tourne et le checkout de `~/eregion` ne bougent pas.
 5. **Le préflight, dans la candidate :**
-   - `glorfindel --version` dit le tag ;
+   - `glorfindel --version` dit exactement le tag ;
    - la watch, le bot et la console s'importent ;
-   - `glorfindel-config.yaml` passe la lecture stricte d'A3 ;
+   - la config que compose monte (`EREGION_CONFIG` du `.env`, sinon `glorfindel-config.yaml`) passe la lecture stricte d'A3 ;
    - `docker compose config` accepte le fichier de la release avec le `.env` de H0.
-6. **La bascule** (`deploy.sh --activate`). Le checkout est détaché, et refusé si un fichier suivi a été modifié sur la VM. Puis le retag et les trois services relancés.
+6. **La bascule** (`deploy.sh --activate`). Avant, l'image qui tourne doit être étiquetée par sa référence, sinon c'est un refus : pas de bascule sans retour possible. `--activate` tolère un `git fetch` en échec, pour que le retour arrière ne dépende pas du réseau. Le checkout est détaché, et refusé si un fichier suivi a été modifié sur la VM. Puis le retag et les trois services relancés.
 7. **La santé, pendant 3 minutes :**
    - les trois conteneurs tournent, sans redémarrage, et sur l'image du tag ;
    - `~/.glorfindel/watch_heartbeat` a été réécrit après la bascule ;
    - la console répond (son jeton est lu dans `.env` et ne paraît sur aucune ligne de commande).
-8. **Si la santé échoue, retour à ce qui tournait.** Son image est gardée : c'est un retag. Avant de basculer, le CD l'étiquette par sa référence si elle ne l'est pas encore (une image construite avant H1, comme celle de v0.3.1). La release est marquée et n'est plus retentée seule.
-9. **`#deploy`.** Le début et le succès sont silencieux. Le refus, le retour arrière et un retour arrière raté portent ta mention.
+8. **Si la santé est verte, le ménage des images** : la nouvelle et celle d'avant restent. **Si elle échoue, retour à ce qui tournait.** Son image est gardée : c'est un retag. Avant de basculer, le CD l'étiquette par sa référence si elle ne l'est pas encore (une image construite avant H1, comme celle de v0.3.1). La release est marquée et n'est plus retentée seule.
+9. **`#deploy`.** Le début, le succès et l'attente de la CI sont silencieux. Le refus, le retour arrière, un retour arrière raté, H0 dépareillé et une erreur de l'agent portent ta mention. Le détail d'un refus (les mots d'A3, de compose, d'un build) reste dans le journal, `make glorfindel-host-cd-status`, parce qu'il peut nommer l'infrastructure.
 
 ### Au quotidien
 
@@ -334,7 +336,7 @@ d'exercice non marqués (B2), qui n'ont rien à faire dans une observation.
 - **L'agent ne se remplace jamais lui-même.** Après un déploiement, si la release porte un autre `eregion_cd.py`, `deploy.sh` ou `notify_discord.py`, `#deploy` le dit, et `make glorfindel-host-cd-install` le met à jour.
 - **Le retirer** : `make glorfindel-host-cd-uninstall` (les unités ; `~/.eregion-cd/` reste).
 
-Reste à mesurer : le premier passage réel, de v0.3.1 à v0.4.0. Le verrou est identique entre les deux, donc pas d'attestation à fournir. Restent aussi les unités sur la VM et `journalctl` pour le compte `glorfindel`.
+Reste à mesurer : le premier passage réel. H0 tourne sur v0.4.0 depuis le 28/10 (redéployé à la main), donc ce sera v0.4.1. Restent aussi les unités sur la VM et `journalctl` pour le compte `glorfindel`.
 
 ## Changer de modèle
 

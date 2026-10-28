@@ -28,7 +28,7 @@ tourne.
 **Choisi par défaut, sans objection :**
 - `/atelier` redirige vers `/`.
 - L'API de l'atelier perd son préfixe (`/api/exercises`…). L'ancien redirige jusqu'à la 1.0.
-- Le cookie `glorfindel_warroom` est gardé : il est invisible.
+- Le cookie `glorfindel_warroom` est gardé : il est invisible. (SEC1 l'a remplacé par `eregion_console_<port>`, une session dérivée du jeton.)
 - Le service compose n'est renommé qu'en option, plus tard.
 - Si Glorfindel n'est pas configuré, la console démarre sur une page qui dit quoi faire.
 - Les techniques du catalogue vont dans Annatar, les pannes dans Gothmog.
@@ -330,8 +330,9 @@ toute route, WebSocket du fil compris. Dans l'ordre :
 3. **Le jeton, toujours** : celui du déploiement (`EREGION_CONSOLE_TOKEN`, ou son ancien nom), sinon
    celui que la console a tiré à son premier démarrage, gardé dans `~/.glorfindel/console_token`
    (mode 600) et affiché une fois au démarrage avec l'URL. Aucun mode sans jeton, les tests compris
-   (le conftest en pose un). Le cookie est une session dérivée du jeton (HMAC), jamais le jeton ;
-   `Secure` en HTTPS.
+   (le conftest en pose un). Le cookie est une session dérivée du jeton (HMAC), jamais le jeton,
+   nommé par le port que le navigateur a joint (`eregion_console_<port>` : un navigateur partage ses
+   cookies entre les ports d'un hôte) ; `Secure` en HTTPS. Le fichier n'est jamais lu à travers un lien.
 4. **Une modification d'un navigateur** (par le cookie) porte son `Origin`.
 5. **Une modification porte un objet JSON** (`Content-Type: application/json`) : sinon 415 ou 400.
 
@@ -358,6 +359,11 @@ jeton lisible par tous, le jeton dans le cookie ou accepté comme cookie, `Secur
 modification d'un autre type ou sans corps, les en-têtes et `default-src` retirés, le schéma servi,
 l'abonnement entier dans Config, une carte ancrée restaurée, un nom de VM brut dans un chemin.
 M404, M568, M1080–M1082 suivent le nouveau code.
+
+**Relecture (5.5)** : en lecture seule, les boutons qui écrivent sont de nouveau grisés (le garde lisait
+`onclick`, disparu avec #257) ; un cookie par console ; le fichier du jeton jamais lu à travers un lien ;
+l'URL écrite sans tampon (un conteneur n'a pas de terminal) et `make console-url` ; compose passe
+`EREGION_CONSOLE_HOSTS`. Mutants M1300–M1305.
 
 ## 4. Maquettes
 

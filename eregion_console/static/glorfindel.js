@@ -449,7 +449,7 @@ function _renderEscGroup(group) {
     : isActionFailed     ? `${actionLabelVerb(e.action) || e.action || '?'} — failed`
     : escTitle(e);
   const count = Number(group.length);
-  const ids   = group.map(g => g.id).join(','); // CSV — safe in onclick attrs, no quotes
+  const ids   = group.map(g => g.id).join(','); // CSV — one string argument of the button's action (_on)
   const isRule = e.action === 'improve_detection' && e.proposal_id;
   // proposed rule: Approve/Reject cover the decision — Ack is redundant
   const ruleButtons = isRule ? `
@@ -530,7 +530,7 @@ async function doAckAll(ids) {
 let _expandedVms      = new Set();
 let _collapsedVms     = new Set(); // user explicitly collapsed — immune to auto-expand
 let _expandedBackends = new Set();
-let _rulesCache       = [];   // flat array, index used in onclick to avoid JSON.stringify in HTML
+let _rulesCache       = [];   // flat array: a button's action takes the index, never the rule itself
 let _coverageCache    = [];   // per-render {vmName, type, ip, placements} — index used by the N-NICs chip
 let _nsgGlowCache     = [];   // per-render [vm_name,...] per NSG row — index used to glow governed VM cards on hover
 let _pendingActions   = new Set(); // vm_names with in-flight release/unblock actions
@@ -2088,16 +2088,18 @@ function _guardReadOnly() {
 }
 
 // Preventive read-only guard: disable every button that triggers an Azure write,
-// detected by its onclick handler. Ack / Cmd / Approve-rule stay active (local only).
+// named by its action (data-on-click, #257), exactly. Ack / Cmd / Approve-rule stay active (local only).
 const _WRITE_HANDLERS = [
   'doApproveAction', 'confirmRestore', 'doSnapshot',
   'confirmRelease', 'confirmUnblock', 'confirmReset', 'confirmExtendSubnet',
+  // The modals' own buttons that run the same writes.
+  'approveActionAndClose', 'approveScoped', 'snapshotAndClose',
 ];
 function _applyReadOnlyGuards(root) {
   if (!_state?.read_only) return;
   (root || document).querySelectorAll('button').forEach(b => {
-    const oc = b.getAttribute('onclick') || '';
-    if (_WRITE_HANDLERS.some(h => oc.includes(h))) {
+    const action = b.getAttribute('data-on-click') || '';
+    if (_WRITE_HANDLERS.includes(action)) {
       b.disabled = true;
       b.title = 'Read-only credentials (observe-only) — write actions disabled';
     }
@@ -2606,7 +2608,7 @@ function showEscModal(vmName) {
   const bodyEl = document.getElementById('modal-body');
   bodyEl.innerHTML = groups.map(group => {
     const e     = group[0];
-    const ids   = group.map(g => g.id).join(','); // CSV — safe in onclick attrs, no quotes
+    const ids   = group.map(g => g.id).join(','); // CSV — one string argument of the button's action (_on)
     const count = Number(group.length);
     const isModeHold        = _isHeld(e);
     const isSnapshotPending = e.action === 'snapshot' && e.escalation_type === 'low_confidence';
@@ -2822,7 +2824,7 @@ function _attr(s) {
     .replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '&#10;');
 }
 // A segment of a route's path, from a name the page did not choose (a VM, a card's id): a `?`,
-// `#` or `/` in it would send the request elsewhere (SEC1, N-14).
+// `#` or `/` in it would change the route (SEC1).
 function _seg(s) { return encodeURIComponent(String(s ?? '')); }
 // A change sent to the console (SEC1): always a JSON object — the server refuses a change
 // without one, or of another type; the browser adds the page's Origin, which it checks.

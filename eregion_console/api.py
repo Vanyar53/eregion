@@ -32,10 +32,11 @@ async def _ambiguous_vm(_request, exc: AmbiguousVM):
     from fastapi.responses import JSONResponse
     return JSONResponse(status_code=409, content={"error": str(exc)})
 
-# The cookie keeps the War Room's name: it is invisible (HttpOnly), and renaming it would make
-# every open browser ask for the token again, for nothing (docs/design/console.md). Its value
-# is a session derived from the token, never the token itself (SEC1).
-_TOKEN_COOKIE = "glorfindel_warroom"
+# The session cookie (SEC1): a value derived from the token, never the token itself, under a
+# name that carries the port the browser reached (`_cookie_name`) — a browser keeps one jar for
+# every port of a host, and two consoles (a team's on 7008, the local one on 7007) would
+# overwrite each other's. The former cookie, `glorfindel_warroom`, is no longer read.
+_TOKEN_COOKIE = "eregion_console"
 TOKEN_ENV = "EREGION_CONSOLE_TOKEN"
 LEGACY_TOKEN_ENV = "GLORFINDEL_WARROOM_TOKEN"
 # The names, besides the loopback ones, under which this console may be reached (SEC1):
@@ -70,20 +71,23 @@ def _token() -> str:
 def ensure_token() -> tuple[str, str]:
     """The console's token and where it comes from: ``env`` (the deployment sets it — H0),
     ``file`` (drawn at an earlier start, read from ``_TOKEN_FILE``) or ``new`` (drawn now and
-    written there, mode 600). There is no console without a token (SEC1): a local console
-    used to answer anyone, any page the operator opened included. OSError when the file can
-    be neither read nor written."""
+    written there, mode 600). There is no console without a token (SEC1). The file is read
+    and written without following a symbolic link. OSError when it can be neither read nor
+    written (a link included)."""
     token = console_token()
     if token:
         return token, "env"
     path = _TOKEN_FILE
     try:
-        kept = path.read_text(encoding="utf-8").strip()
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
     except FileNotFoundError:
         kept = ""
+    else:
+        with os.fdopen(fd, "r", encoding="utf-8") as fh:
+            if os.fstat(fd).st_mode & 0o077:
+                os.fchmod(fd, 0o600)
+            kept = fh.read().strip()
     if kept:
-        if path.stat().st_mode & 0o077:
-            os.chmod(path, 0o600)
         _local_token["value"] = kept
         return kept, "file"
     import secrets
@@ -105,6 +109,17 @@ def _session(token: str) -> str:
     return hmac.new(token.encode(), _SESSION_LABEL, hashlib.sha256).hexdigest()
 
 
+def _cookie_name(host: str, scheme: str) -> str:
+    """The session cookie's name for the port the browser reached (the Host's, else the
+    scheme's default): one console's cookie never overwrites another's on the same host."""
+    from urllib.parse import urlsplit
+    try:
+        port = urlsplit("//" + host).port
+    except ValueError:
+        port = None
+    return f"{_TOKEN_COOKIE}_{port or (443 if scheme in ('https', 'wss') else 80)}"
+
+
 def _host_name(netloc: str) -> str | None:
     """The host name of a Host header (or of an entry of EREGION_CONSOLE_HOSTS), lowercased,
     without its port; None when it is not a plain host[:port]."""
@@ -122,7 +137,7 @@ def _host_name(netloc: str) -> str | None:
 def _allowed_host(host: str) -> bool:
     """A loopback name, or one EREGION_CONSOLE_HOSTS lists — whatever the port: a tunnel or a
     team's console publishes another port than the one the console listens on. The name is
-    what a rebinding page cannot choose; its own origin's port is checked by the Origin."""
+    what is checked here; the port of a change's origin is checked by the Origin."""
     name = _host_name(host)
     if not name:
         return False
@@ -140,13 +155,12 @@ class _TokenAuthMiddleware:
     """The console's boundary, for every route (pages, API, live feed).
 
     The console triggers real Azure actions (restore, release, approve & execute) and
-    can switch an asset's autonomy mode. It used to listen on 0.0.0.0 with no
-    authentication, then, on the loopback, to answer any page the operator's browser opened.
+    can switch an asset's autonomy mode: it answers its own pages, and scripts with its token.
 
     In order (SEC1): the Host is a loopback name or one EREGION_CONSOLE_HOSTS lists (403); a
     request that changes something (POST, PUT, PATCH, DELETE, the WebSocket) never comes from
-    another origin (403); the token (`_token`: always one), as the `glorfindel_warroom` cookie
-    — a session derived from it — or `Authorization: Bearer <token>`, or `?token=<token>` once
+    another origin (403); the token (`_token`: always one), as the session cookie
+    (`_cookie_name`: derived from the token) or `Authorization: Bearer <token>`, or `?token=<token>` once
     on a GET, which sets the cookie (HttpOnly, SameSite=Strict, Secure over HTTPS) and
     redirects to the same URL without the token (401 otherwise: a token page for a browser);
     a browser's change carries its Origin (403); and a change carries a JSON object
@@ -190,7 +204,8 @@ class _TokenAuthMiddleware:
         bearer = conn.headers.get("authorization", "")
         bearer = bearer[7:] if bearer.lower().startswith("bearer ") else ""
         by_bearer = _ok(bearer, token)
-        by_cookie = _ok(conn.cookies.get(_TOKEN_COOKIE), _session(token))
+        cookie = _cookie_name(host, scope.get("scheme", "http"))
+        by_cookie = _ok(conn.cookies.get(cookie), _session(token))
 
         if not (by_bearer or by_cookie):
             if not ws and scope.get("method") in ("GET", "HEAD") and _ok(conn.query_params.get("token"), token):
@@ -200,7 +215,7 @@ class _TokenAuthMiddleware:
                 # One leading slash: `//name` would send the browser to another host.
                 target = "/" + conn.url.path.lstrip("/") + (f"?{query}" if query else "")
                 resp = RedirectResponse(target, status_code=303)
-                resp.set_cookie(_TOKEN_COOKIE, _session(token), httponly=True, samesite="strict",
+                resp.set_cookie(cookie, _session(token), httponly=True, samesite="strict",
                                 secure=scope.get("scheme") == "https")
                 await resp(scope, receive, send)
                 return
@@ -382,7 +397,7 @@ async def _have_a_token() -> None:
         ensure_token()
     except OSError as exc:
         print(f"  ✗ console token: {_TOKEN_FILE} unreadable ({exc}) — every request is refused; "
-              f"set {TOKEN_ENV}.")
+              f"set {TOKEN_ENV}.", flush=True)
 
 
 @app.on_event("startup")
@@ -391,7 +406,7 @@ async def _say_which_token() -> None:
     operator who still types the old one knows why it is refused."""
     new, old = os.environ.get(TOKEN_ENV, ""), os.environ.get(LEGACY_TOKEN_ENV, "")
     if new and old and new != old:
-        print(f"  ⚠ {TOKEN_ENV} and {LEGACY_TOKEN_ENV} differ: the console takes {TOKEN_ENV}.")
+        print(f"  ⚠ {TOKEN_ENV} and {LEGACY_TOKEN_ENV} differ: the console takes {TOKEN_ENV}.", flush=True)
 
 
 def _page(name: str):
@@ -775,7 +790,7 @@ async def config() -> dict:
                     reachable, backend_error = False, st["error"]
                 else:
                     reachable, backend_error = (True if st["polled"] else None), ""
-                # No workspace id nor endpoint (SEC1, N-13): the page shows neither.
+                # No workspace id nor endpoint (SEC1): the page shows neither.
                 backends_info.append({
                     "name": b.name,
                     "type": b.type,
@@ -818,7 +833,7 @@ async def config() -> dict:
     llm_model = glorfindel_model()
     llm_provider = llm_model.split("/")[0] if "/" in llm_model else llm_model
 
-    # Masked, as the page shows them (SEC1, N-13): enough to recognise a subscription or an
+    # Masked, as the page shows them (SEC1): enough to recognise a subscription or an
     # identity, never the identifiers themselves.
     return {
         "azure": {
@@ -1386,8 +1401,8 @@ _ANCHORED_TYPES = {"control_plane_change", "identity_change", "unattributed_sign
 
 def _restore_refusal(esc_id: str, vm_name: str) -> tuple[str | None, str]:
     """(why the console refuses this restore, or None; the card's resource id). A restore
-    from the console is its card's (SEC1, N-12): pending, a restore, on this VM, and never an
-    anchored one — the page and the bot refused it, the route did not."""
+    from the console is its card's (SEC1): pending, a restore, on this VM, and never an
+    anchored one — as the page and the bot."""
     from glorfindel import escalations as _esc
     cli = "glorfindel restore <resource_id> --yes"
     if not esc_id:
@@ -2334,12 +2349,13 @@ def serve(host: str = "127.0.0.1", port: int = 7007) -> None:
     from eregion_console import sections
     sections.override()   # an unknown section stops here, before anything listens
     # Always a token (SEC1): the deployment's, else one drawn at the first start and kept in
-    # the operator's file — shown here, with the URL that opens the console once.
+    # the operator's file — shown here, with the URL that opens the console once. Flushed: in a
+    # container stdout is a pipe, and a buffered line would never reach `docker compose logs`.
     token, where = ensure_token()
     if where == "env":
-        print(f"  Eregion console  →  http://localhost:{port}/?token=${TOKEN_ENV}")
+        print(f"  Eregion console  →  http://localhost:{port}/?token=${TOKEN_ENV}", flush=True)
     else:
-        print(f"  Eregion console  →  http://localhost:{port}/?token={token}")
+        print(f"  Eregion console  →  http://localhost:{port}/?token={token}", flush=True)
         print(f"  (token {'drawn at this first start, ' if where == 'new' else ''}kept in "
-              f"{_TOKEN_FILE}, mode 600; {TOKEN_ENV} sets another)")
+              f"{_TOKEN_FILE}, mode 600; {TOKEN_ENV} sets another)", flush=True)
     uvicorn.run(app, host=host, port=port, log_level="warning")

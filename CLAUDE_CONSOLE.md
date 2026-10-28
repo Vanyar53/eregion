@@ -108,7 +108,8 @@ En-tête (console.js), le même partout → EREGION + version déployée (tag, s
 - **La frontière** (SEC1) : une modification part par `_post` (glorfindel.js : un objet JSON, le serveur
   refuse le reste) ; un nom dans un chemin d'API, par `_seg` (`encodeURIComponent`). Le serveur refuse un
   `Host` inconnu, une autre origine, une requête sans jeton ([docs/design/console.md](docs/design/console.md),
-  « La frontière de la console ») ; les tests passent par `tests/unit/console_client.py`.
+  « La frontière de la console ») ; les tests passent par `tests/unit/console_client.py`. Un bouton
+  qui écrit sur Azure a son action dans `_WRITE_HANDLERS` (grisé en lecture seule).
 - **Ce que le test vérifie** : `tests/unit/test_console_escaping.py` échoue sur ce que le lecteur
   (`python scripts/console_escaping.py` : où, d'où) voit — une valeur non échappée pour sa place dans
   le `${…}` d'un gabarit HTML, une valeur donnée à `innerHTML` ou une concaténation, un gestionnaire ou

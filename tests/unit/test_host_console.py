@@ -107,7 +107,9 @@ def test_the_displayed_lines_name_the_console():
     text = (ROOT / "Makefile").read_text(encoding="utf-8")
     shown = [line for line in text.splitlines() if line.lstrip().startswith("@echo")]
     assert not [line for line in shown if "War Room" in line]
-    assert sum("Console" in line and "7007" in line for line in shown) >= 4
+    # SEC1: the start targets print the URL with its token through `make console-url`.
+    assert sum("console-url" in line and "$(MAKE)" in line for line in text.splitlines()) >= 4
+    assert any("Console   →  http://localhost:" in line and "?token=" in line for line in text.splitlines())
 
 
 # ── make glorfindel-host-status (status.sh) ───────────────────────────────────────────────

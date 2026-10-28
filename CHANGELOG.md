@@ -6,10 +6,10 @@ Notable changes to Eregion. The format follows [Keep a Changelog](https://keepac
 
 ### Security
 - **The console's boundary: always a token, its own host and origin only** (SEC1, #272, 28/10; `docs/glorfindel.md`, « Console — exposition »).
-  - **A token always.** Without `EREGION_CONSOLE_TOKEN`, the first start draws one, keeps it in `~/.glorfindel/console_token` (mode 600) and prints the URL that opens the console once (`http://localhost:7007/?token=…`); later starts read it again. No route answers without it but the token page. With the token set (H0), nothing changes.
-  - **Its own host and origin.** The console answers under a loopback name, or a name listed in `EREGION_CONSOLE_HOSTS` (new), any port. A change (POST, PUT, PATCH, DELETE, the live feed's WebSocket) from another origin is refused; a browser's change carries its origin.
+  - **A token always.** Without `EREGION_CONSOLE_TOKEN`, the first start draws one, keeps it in `~/.glorfindel/console_token` (mode 600) and prints the URL that opens the console once (`http://localhost:7007/?token=…`, in `docker compose logs war-room` too); later starts read it again. `make console-url` (new; called by `make glorfindel-start` and its neighbours) prints it from the environment or that file. No route answers without it but the token page. With the token set (H0), nothing changes.
+  - **Its own host and origin.** The console answers under a loopback name, or a name listed in `EREGION_CONSOLE_HOSTS` (new, passed by compose), any port. A change (POST, PUT, PATCH, DELETE, the live feed's WebSocket) from another origin is refused; a browser's change carries its origin.
   - **A change carries a JSON object** (`Content-Type: application/json`); the pages send theirs so, and encode every name in a path.
-  - **The cookie is a session derived from the token**, never the token; `Secure` over HTTPS (the tunnel on `http://localhost` still works).
+  - **The cookie is a session derived from the token**, never the token, named by the port the browser reached (`eregion_console_<port>`: two consoles of one host keep theirs); `Secure` over HTTPS (the tunnel on `http://localhost` still works). A browser asks for the token once after the upgrade.
   - **Headers.** The CSP adds `default-src 'self'`, `style-src`, `img-src`; `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`; the API schema and its pages are no longer served. Config receives the Azure identifiers masked.
   - **Restore from the console is its card's**: the server refuses an anchored card, as the page and the bot did.
   - Checked in Chromium: no resource blocked, every button of Glorfindel's page works, the tunnel's URL opens the console. Mutants M1170–M1189 caught.
@@ -53,6 +53,7 @@ Notable changes to Eregion. The format follows [Keep a Changelog](https://keepac
   To measure on a real run: the payloads, from Claude Code's documentation (the auto-mode classifier refused a measuring hook). `~/.local/state/eregion/discord.trace` keeps one line per event, its fields' names only. Tests: `tests/unit/test_agents_discord.py` (I8S's sequence of 28/10 replayed); mutants M1060–M1076 (M1070–M1076 after the two 5.5 reviews), and M978, M979, M990 and M994 moved with the code they bite.
 
 ### Fixed
+- **In read-only, the buttons that write are greyed again** (regression of 0.4.2; SEC1). The guard read the inline handlers #257 removed; it reads each button's action now, the modals' own buttons included. The actions themselves kept refusing.
 - **The CD of H0 asks to reinstall its agent only for a release newer than it** (H1b, #263, 28/10, after the first real pass to v0.4.1). `make glorfindel-host-cd-install` notes the commit it installs from (`~/.eregion-cd/installed-from`, a full commit id). The « 🔧 Agent de CD à mettre à jour » message needs a release that descends from it and carries other agent files. v0.4.1 had no H1 and asked anyway: installing from it would have broken the CD, its `deploy.sh` having no `--activate`. An older release says nothing in #deploy (a line in the journal). An installation without a valid `installed-from`, or installed off main, says once, without the mention, that it cannot tell when to update. Mutants M1053–M1056.
 
 ### Fixed

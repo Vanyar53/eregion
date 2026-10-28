@@ -2977,7 +2977,7 @@ TESTS.update({"M1055": "tests/unit/test_host_cd.py", "M1056": "tests/unit/test_h
 # a JSON object, a cookie that is a session, the headers; Config masked, a name encoded in a
 # path, a restore that is its card's. Range M1170–M1189.
 MUTANTS += [
-    ("M1170", "any Host is served: a page that rebinds its name reaches the console (SEC1)", CON,
+    ("M1170", "any Host is served (SEC1)", CON,
      "        if not _allowed_host(host):\n", "        if False:\n"),
     ("M1171", "a Host that merely contains a loopback name is served (SEC1)", CON,
      "    return name in _LOOPBACK_HOSTS or name in extra - {None}\n",
@@ -2988,7 +2988,7 @@ MUTANTS += [
     ("M1173", "the live feed is not a change: it opens for another origin (SEC1)", CON,
      '        changes = ws or scope.get("method", "GET") in _CHANGES\n',
      '        changes = scope.get("method", "GET") in _CHANGES\n'),
-    ("M1174", "the origin's port is ignored: a page another local service serves is the console's (SEC1)", CON,
+    ("M1174", "the origin's port is ignored (SEC1)", CON,
      '    return origin in (f"http://{host}", f"https://{host}")\n',
      '    return origin.split("://")[-1].split(":")[0] == host.split(":")[0]\n'),
     ("M1175", "a browser's change without its Origin is executed (SEC1)", CON,
@@ -3005,12 +3005,11 @@ MUTANTS += [
      ('os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o644)\n',
       '    _local_token["value"] = token\n')),
     ("M1179", "the cookie carries the token itself (SEC1)", CON,
-     "                resp.set_cookie(_TOKEN_COOKIE, _session(token), httponly=True,",
-     "                resp.set_cookie(_TOKEN_COOKIE, token, httponly=True,"),
+     "                resp.set_cookie(cookie, _session(token), httponly=True,",
+     "                resp.set_cookie(cookie, token, httponly=True,"),
     ("M1180", "the token as a cookie opens the console (SEC1)", CON,
-     "        by_cookie = _ok(conn.cookies.get(_TOKEN_COOKIE), _session(token))\n",
-     "        by_cookie = _ok(conn.cookies.get(_TOKEN_COOKIE), _session(token)) or _ok(\n"
-     "            conn.cookies.get(_TOKEN_COOKIE), token)\n"),
+     "        by_cookie = _ok(conn.cookies.get(cookie), _session(token))\n",
+     "        by_cookie = _ok(conn.cookies.get(cookie), _session(token)) or _ok(conn.cookies.get(cookie), token)\n"),
     ("M1181", "the cookie is never Secure, HTTPS included (SEC1)", CON,
      '                                secure=scope.get("scheme") == "https")\n',
      "                                secure=False)\n"),
@@ -3027,15 +3026,38 @@ MUTANTS += [
     ("M1186", "the API's schema is served (SEC1)", CON,
      'app = FastAPI(title="Eregion console", openapi_url=None, docs_url=None, redoc_url=None)\n',
      'app = FastAPI(title="Eregion console")\n'),
-    ("M1187", "Config sends the whole subscription id (SEC1, N-13)", CON,
+    ("M1187", "Config sends the whole subscription id (SEC1)", CON,
      '            "subscription_id": _mask(subscription),\n', '            "subscription_id": subscription,\n'),
-    ("M1188", "the restore route takes an anchored card (SEC1, N-12)", CON,
+    ("M1188", "the restore route takes an anchored card (SEC1)", CON,
      '    if esc.get("escalation_type") in _ANCHORED_TYPES:\n', "    if False:\n"),
-    ("M1189", "a VM name raw in a route's path: a ? or # in it sends the request elsewhere (SEC1, N-14)", GJS,
+    ("M1189", "a VM name raw in a route's path: a ? or # in it changes the route (SEC1)", GJS,
      "    const r = await _post(`/api/action/release/${_seg(vmName)}`);",
      "    const r = await _post(`/api/action/release/${vmName}`);"),
 ]
 TESTS.update({f"M{n}": "tests/unit/test_console.py" for n in range(1170, 1190)})
+
+# SEC1's relecture (5.5): the read-only guard reads the action a button names (#257); one cookie
+# per console; the token file never through a link; the URL flushed to a container's log.
+# Range M1300–M1309.
+MUTANTS += [
+    ("M1300", "the read-only guard reads `onclick`, gone since #257: no button that writes is disabled (SEC1)", GJS,
+     "    const action = b.getAttribute('data-on-click') || '';\n",
+     "    const action = b.getAttribute('onclick') || '';\n"),
+    ("M1301", "the read-only guard leaves a modal's own write buttons enabled (SEC1)", GJS,
+     "  'approveActionAndClose', 'approveScoped', 'snapshotAndClose',\n", ""),
+    ("M1302", "one cookie name for every console of a host: two consoles overwrite each other's (SEC1)", CON,
+     "    return f\"{_TOKEN_COOKIE}_{port or (443 if scheme in ('https', 'wss') else 80)}\"\n",
+     "    return _TOKEN_COOKIE\n"),
+    ("M1303", "the token file is read through a symbolic link (SEC1)", CON,
+     '        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))\n',
+     "        fd = os.open(path, os.O_RDONLY)\n"),
+    ("M1304", "the URL stays in a buffer: a container's log never shows it (SEC1)", CON,
+     '        print(f"  Eregion console  →  http://localhost:{port}/?token=${TOKEN_ENV}", flush=True)\n',
+     '        print(f"  Eregion console  →  http://localhost:{port}/?token=${TOKEN_ENV}")\n'),
+    ("M1305", "make console-url never reads the file the console drew (SEC1)", "Makefile",
+     '\t   [ -s "$$f" ] && t=$$(head -n 1 "$$f"); fi; \\\n', "\t   true; fi; \\\n"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_console.py" for n in range(1300, 1306)})
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

@@ -7,6 +7,8 @@ _Extrait tel quel de `CLAUDE.md` le 2026-10-15 (lot DX1) : la CLI, les workflows
 ```bash
 # Workflow opérateur — Docker Compose (recommandé)
 make glorfindel-start                        # lance watch + la console → http://localhost:7007
+make console-url                             # l'URL de la console avec son jeton (celui de l'environnement ou de .env,
+                                             # sinon ~/.glorfindel/console_token, attendu CONSOLE_WAIT=20 s) ; glorfindel-start l'affiche
                                              # refuse si AZURE_SUBSCRIPTION_ID est vide (watch aveugle) ; ALLOW_NO_AZURE=1 pour une démo
 make glorfindel-logs                         # tail logs des deux services
 make glorfindel-dev                          # auto-reload sur modification de code (docker compose watch)
@@ -109,6 +111,8 @@ glorfindel dashboard                         # TUI full-screen : resources + fee
 eregion console [--sections annatar,gothmog] # la console web sur http://localhost:7007 (pip install eregion[console]) ;
                                              # Glorfindel toujours, Annatar et Gothmog s'ils ont des runs sur l'hôte
                                              # (ou --sections) ; `glorfindel war-room` reste un alias caché
+                                             # toujours un jeton : EREGION_CONSOLE_TOKEN, sinon tiré au premier démarrage
+                                             # (~/.glorfindel/console_token, 600) et affiché avec l'URL à ouvrir une fois
 glorfindel --version                         # 0.2.0
 
 # Annatar et Gothmog exigent Glorfindel (V1, #214) : avant chaque run (chaque run d'une campagne aussi),
@@ -263,6 +267,8 @@ EREGION_DISCORD_MENTION=...                 # id de l'utilisateur que mentionnen
                                     # sur le poste : ~/.config/eregion/discord.env (600) si l'environnement ne les a pas
 GLORFINDEL_KEEP_ISOLATED=1          # mode forensique
 GLORFINDEL_ISOLATION_TTL_H=4        # TTL isolation (défaut 4h) : au-delà, une carte ttl_exceeded — jamais de levée automatique
+EREGION_CONSOLE_HOSTS=nom,nom       # SEC1 : noms (sans port) sous lesquels la console répond, en plus de localhost / 127.0.0.1 / [::1] ; une
+                                    # modification n'est acceptée que de l'origine de la console sous ce nom (compose la passe à la console)
 GLORFINDEL_APPROVAL_MAX_AGE_H=2     # âge max d'une carte exécutable en un clic (console, « Approve & execute ») ; nan/inf → 2 ; ≤0 → approbation en un clic fermée
 GLORFINDEL_INCIDENT_TTL_S=300       # TTL fenêtre incident
 GLORFINDEL_CONFIDENCE_THRESHOLD=0.7 # gate autonomie LLM (défaut 0.7 — en dessous → escalade forcée) ; illisible, hors [0, 1] → tout est retenu

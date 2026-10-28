@@ -608,14 +608,14 @@ def test_the_war_room_shows_the_threshold_even_when_the_agent_cannot_load(monkey
     pytest.importorskip("fastapi")
     pytest.importorskip("httpx")
     import sys
-    from fastapi.testclient import TestClient
-    import eregion_console.api as api
+    from .console_client import console
+    import eregion_console.api  # noqa: F401  (imported before the agent cannot be)
     monkeypatch.delenv("GLORFINDEL_WARROOM_TOKEN", raising=False)
     monkeypatch.setenv("GLORFINDEL_CONFIDENCE_THRESHOLD", raw)
     monkeypatch.setitem(sys.modules, "glorfindel.agent", None)     # import fails
     with pytest.raises(ImportError):
         import glorfindel.agent  # noqa: F401
-    capability = TestClient(api.app).get("/api/state").json()["capability"]
+    capability = console().get("/api/state").json()["capability"]
     assert capability, "the capability matrix vanished with the agent's import"
     assert capability["confidence_threshold"] == shown
     assert "isolate_vm" in capability["autonomous_actions"]

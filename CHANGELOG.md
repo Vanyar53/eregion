@@ -4,6 +4,19 @@ Notable changes to Eregion. The format follows [Keep a Changelog](https://keepac
 
 ## [Unreleased]
 
+### Fixed
+- **In read-only, the buttons that write are greyed again** (regression of 0.4.2; SEC1). The guard read the inline handlers #257 removed; it reads each button's action now, the modals' own buttons included. The actions themselves kept refusing.
+
+### Security
+- **The console's boundary: always a token, its own host and origin only** (SEC1, #272, 28/10; `docs/glorfindel.md`, « Console — exposition »).
+  - **A token always.** Without `EREGION_CONSOLE_TOKEN`, the first start draws one, keeps it in `~/.glorfindel/console_token` (mode 600) and prints the URL that opens the console once (`http://localhost:7007/?token=…`, in `docker compose logs war-room` too); later starts read it again. `make console-url` (new; called by `make glorfindel-start` and its neighbours) prints it from the environment or that file. No route answers without it but the token page. With the token set (H0), nothing changes.
+  - **Its own host and origin.** The console answers under a loopback name, or a name listed in `EREGION_CONSOLE_HOSTS` (new, passed by compose), any port. A change (POST, PUT, PATCH, DELETE, the live feed's WebSocket) from another origin is refused; a browser's change carries its origin.
+  - **A change carries a JSON object** (`Content-Type: application/json`); the pages send theirs so, and encode every name in a path.
+  - **The cookie is a session derived from the token**, never the token, named by the port the browser reached (`eregion_console_<port>`: two consoles of one host keep theirs); `Secure` over HTTPS (the tunnel on `http://localhost` still works). A browser asks for the token once after the upgrade.
+  - **Headers.** The CSP adds `default-src 'self'`, `style-src`, `img-src`; `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`; the API schema and its pages are no longer served. Config receives the Azure identifiers masked.
+  - **Restore from the console is its card's**: the server refuses an anchored card, as the page and the bot did.
+  - Checked in Chromium: no resource blocked, every button of Glorfindel's page works, the tunnel's URL opens the console. Mutants M1170–M1189 caught.
+
 ## [0.4.2] — 2026-10-28 — "the CD of H0, a console that runs only its own scripts"
 
 ### Added

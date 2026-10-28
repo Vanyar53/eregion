@@ -1306,8 +1306,8 @@ MUTANTS = [
     ("M403", "an injector's route accepts a POST (UI-1)", CON,
      '@app.get("/api/exercises")\n', '@app.api_route("/api/exercises", methods=["GET", "POST"])\n'),
     ("M404", "a new page is served without the token (UI-1)", CON,
-     '        if not token or scope["type"] not in ("http", "websocket"):\n',
-     '        if not token or scope["type"] not in ("http", "websocket") or scope.get("path") == "/annatar":\n'),
+     '        if not (by_bearer or by_cookie):\n',
+     '        if not (by_bearer or by_cookie) and scope.get("path") != "/annatar":\n'),
     ("M405", "/runs/<id> takes a path for a run id (UI-1)", CON,
      "    if not safe_part(run_id):\n", "    if not run_id:\n"),
     ("M406", "--sections removes Glorfindel (UI-1)", SEC,
@@ -1341,7 +1341,7 @@ MUTANTS = [
      '    label = ref or (f"v{package}" if package else "")', '    label = (f"v{package}" if package else "")'),
     # #222 — finitions: the content security policy on every response.
     ("M568", "the console's pages can be framed by another site, and talk to another origin (#222)", CON,
-     '    response.headers["Content-Security-Policy"] = _CSP\n', ""),
+     '    response.headers.update(_HEADERS)\n', ""),
     ("M569", "glorfindel --version written by hand again: it drifts from the package (#222)", GCLI,
      '@click.version_option(package_name="eregion", prog_name="glorfindel")',
      '@click.version_option(version="0.2.0", prog_name="glorfindel")'),
@@ -1418,11 +1418,14 @@ MUTANTS = [
     # #257: scripts from the console's files only — the CSP, the page's events without inline
     # handlers (data-on-*, a closed table), and the reader's S1–S8 (#256's review).
     ("M1080", "the CSP lets inline scripts and handlers run again (#257)", CON,
-     """_CSP = ("script-src 'self'; object-src 'none'; frame-ancestors 'none'; connect-src 'self'; \"""",
-     """_CSP = ("object-src 'none'; frame-ancestors 'none'; connect-src 'self'; \""""),
+     """_CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; \"""",
+     """_CSP = ("style-src 'self' 'unsafe-inline'; img-src 'self'; \""""),
     ("M1081", "the CSP's script-src takes 'unsafe-inline': an injected handler runs (#257)", CON,
-     """_CSP = ("script-src 'self'; object-src""", """_CSP = ("script-src 'self' 'unsafe-inline'; object-src"""),
-    ("M1082", "the CSP lets a plugin load (#257)", CON, "script-src 'self'; object-src 'none'; frame", "script-src 'self'; frame"),
+     """_CSP = ("default-src 'self'; script-src 'self'; style-src""",
+     """_CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src"""),
+    ("M1082", "the CSP lets a plugin load (#257)", CON,
+     """        "object-src 'none'; frame-ancestors 'none'; connect-src 'self'; base-uri 'none'; \"""",
+     """        "frame-ancestors 'none'; connect-src 'self'; base-uri 'none'; \""""),
     ("M1083", "an inline handler back in a card: the CSP blocks it, the card no longer opens (#257)", GJS,
      "${_on('click', 'showEscModal', vmName)}", "onclick=\"showEscModal('${vmName}')\""),
     ("M1084", "an inline script back in the overview (#257)", "eregion_console/static/overview.html",
@@ -2968,6 +2971,93 @@ MUTANTS += [
      '    if not re.fullmatch(r"[0-9a-f]{40}", installed) or git(', "    if not installed or git("),
 ]
 TESTS.update({"M1055": "tests/unit/test_host_cd.py", "M1056": "tests/unit/test_host_cd.py"})
+
+# SEC1 (#272) — the console's boundary: a token always (drawn at the first start, mode 600), the
+# Host a loopback name or a listed one, a change from this origin only (the live feed included),
+# a JSON object, a cookie that is a session, the headers; Config masked, a name encoded in a
+# path, a restore that is its card's. Range M1170–M1189.
+MUTANTS += [
+    ("M1170", "any Host is served (SEC1)", CON,
+     "        if not _allowed_host(host):\n", "        if False:\n"),
+    ("M1171", "a Host that merely contains a loopback name is served (SEC1)", CON,
+     "    return name in _LOOPBACK_HOSTS or name in extra - {None}\n",
+     "    return any(n in name for n in _LOOPBACK_HOSTS) or name in extra - {None}\n"),
+    ("M1172", "a change from another origin is executed (SEC1)", CON,
+     "        if changes and origin is not None and not _same_origin(origin, host):\n",
+     "        if False:\n"),
+    ("M1173", "the live feed is not a change: it opens for another origin (SEC1)", CON,
+     '        changes = ws or scope.get("method", "GET") in _CHANGES\n',
+     '        changes = scope.get("method", "GET") in _CHANGES\n'),
+    ("M1174", "the origin's port is ignored (SEC1)", CON,
+     '    return origin in (f"http://{host}", f"https://{host}")\n',
+     '    return origin.split("://")[-1].split(":")[0] == host.split(":")[0]\n'),
+    ("M1175", "a browser's change without its Origin is executed (SEC1)", CON,
+     "        if changes and not by_bearer and origin is None:\n", "        if False:\n"),
+    ("M1176", "no token at all: the console answers everyone (SEC1)", CON,
+     "            await _refuse(scope, receive, send, 503,\n",
+     "            await self.app(scope, receive, send)\n            return\n"
+     "            await _refuse(scope, receive, send, 503,\n"),
+    ("M1177", "the first start draws no token (SEC1)", CON,
+     "    token = secrets.token_urlsafe(32)\n", '    token = ""\n'),
+    ("M1178", "the drawn token is written readable by all (SEC1)", CON,
+     ('os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o600)\n',
+      '    os.chmod(path, 0o600)\n    _local_token["value"] = token\n'),
+     ('os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o644)\n',
+      '    _local_token["value"] = token\n')),
+    ("M1179", "the cookie carries the token itself (SEC1)", CON,
+     "                resp.set_cookie(cookie, _session(token), httponly=True,",
+     "                resp.set_cookie(cookie, token, httponly=True,"),
+    ("M1180", "the token as a cookie opens the console (SEC1)", CON,
+     "        by_cookie = _ok(conn.cookies.get(cookie), _session(token))\n",
+     "        by_cookie = _ok(conn.cookies.get(cookie), _session(token)) or _ok(conn.cookies.get(cookie), token)\n"),
+    ("M1181", "the cookie is never Secure, HTTPS included (SEC1)", CON,
+     '                                secure=scope.get("scheme") == "https")\n',
+     "                                secure=False)\n"),
+    ("M1182", "a change of another type than JSON is executed (SEC1)", CON,
+     '    if media != "application/json":\n', "    if False:\n"),
+    ("M1183", "a change without a body is executed (SEC1)", CON,
+     "    if not isinstance(parsed, dict):\n", "    if body and not isinstance(parsed, dict):\n"),
+    ("M1184", "no nosniff, and the console's addresses leave in a Referer (SEC1)", CON,
+     '_HEADERS = {"Content-Security-Policy": _CSP, "X-Content-Type-Options": "nosniff",\n'
+     '            "Referrer-Policy": "no-referrer"}\n',
+     '_HEADERS = {"Content-Security-Policy": _CSP}\n'),
+    ("M1185", "the CSP without default-src: images, fonts and styles from anywhere (SEC1)", CON,
+     """_CSP = ("default-src 'self'; script-src 'self'; style-src""", """_CSP = ("script-src 'self'; style-src"""),
+    ("M1186", "the API's schema is served (SEC1)", CON,
+     'app = FastAPI(title="Eregion console", openapi_url=None, docs_url=None, redoc_url=None)\n',
+     'app = FastAPI(title="Eregion console")\n'),
+    ("M1187", "Config sends the whole subscription id (SEC1)", CON,
+     '            "subscription_id": _mask(subscription),\n', '            "subscription_id": subscription,\n'),
+    ("M1188", "the restore route takes an anchored card (SEC1)", CON,
+     '    if esc.get("escalation_type") in _ANCHORED_TYPES:\n', "    if False:\n"),
+    ("M1189", "a VM name raw in a route's path: a ? or # in it changes the route (SEC1)", GJS,
+     "    const r = await _post(`/api/action/release/${_seg(vmName)}`);",
+     "    const r = await _post(`/api/action/release/${vmName}`);"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_console.py" for n in range(1170, 1190)})
+
+# SEC1's relecture (5.5): the read-only guard reads the action a button names (#257); one cookie
+# per console; the token file never through a link; the URL flushed to a container's log.
+# Range M1300–M1309.
+MUTANTS += [
+    ("M1300", "the read-only guard reads `onclick`, gone since #257: no button that writes is disabled (SEC1)", GJS,
+     "    const action = b.getAttribute('data-on-click') || '';\n",
+     "    const action = b.getAttribute('onclick') || '';\n"),
+    ("M1301", "the read-only guard leaves a modal's own write buttons enabled (SEC1)", GJS,
+     "  'approveActionAndClose', 'approveScoped', 'snapshotAndClose',\n", ""),
+    ("M1302", "one cookie name for every console of a host: two consoles overwrite each other's (SEC1)", CON,
+     "    return f\"{_TOKEN_COOKIE}_{port or (443 if scheme in ('https', 'wss') else 80)}\"\n",
+     "    return _TOKEN_COOKIE\n"),
+    ("M1303", "the token file is read through a symbolic link (SEC1)", CON,
+     '        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))\n',
+     "        fd = os.open(path, os.O_RDONLY)\n"),
+    ("M1304", "the URL stays in a buffer: a container's log never shows it (SEC1)", CON,
+     '        print(f"  Eregion console  →  http://localhost:{port}/?token=${TOKEN_ENV}", flush=True)\n',
+     '        print(f"  Eregion console  →  http://localhost:{port}/?token=${TOKEN_ENV}")\n'),
+    ("M1305", "make console-url never reads the file the console drew (SEC1)", "Makefile",
+     '\t   [ -s "$$f" ] && t=$$(head -n 1 "$$f"); fi; \\\n', "\t   true; fi; \\\n"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_console.py" for n in range(1300, 1306)})
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

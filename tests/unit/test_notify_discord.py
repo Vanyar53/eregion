@@ -241,7 +241,9 @@ def test_a_red_run_never_creates_a_thread(fake, monkeypatch, tmp_path):
                                   "infra/glorfindel-host/host.env.example"])
 def test_the_workshop_variables_never_reach_the_containers_nor_h0(path):
     """EREGION_DISCORD_* is the workshop's (the CI, elrond), not the product's: the Eregion bot's
-    token never goes into a container nor onto H0 — only Glorfindel's DISCORD_* do."""
+    token never goes into a container nor onto H0 — only Glorfindel's DISCORD_* do. #deploy's
+    webhook reaches H0 only in the CD's own file (~/.eregion-cd/discord.env, H1): never through
+    host.env nor a container (tests/unit/test_host_cd.py, the installation's export)."""
     assert "EREGION_DISCORD_" not in (ROOT / path).read_text(encoding="utf-8")
 
 

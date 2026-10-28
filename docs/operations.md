@@ -32,6 +32,10 @@ make glorfindel-host-tunnel                  # tunnel + « Console → http://lo
                                              # (l'ancien nom reste valide, rien à renommer) ; -url : l'URL seule
 make glorfindel-host-status                  # tout tourne ? lit le jeton sur la VM sous l'un ou l'autre nom, sans l'afficher
 make glorfindel-host-push                    # host_env.py --check d'abord : refuse un host.env sans jeton de la console
+make glorfindel-host-cd-install              # le CD de H0 (H1) : agent dans ~/.eregion-cd/, timer désactivé ; README, « Le CD de H0 »
+make glorfindel-host-cd-check                # à blanc : vérifie, construit à côté, préflight (config sous A3), sans basculer
+make glorfindel-host-cd-enable               # puis : toute release publiée se déploie (5 min), retour arrière si malade
+make glorfindel-host-cd-status | -cd-retry | -cd-disable | -cd-uninstall
 
 # Workflow opérateur — 3 terminaux (local sans Docker Compose)
 glorfindel watch runs/                       # terminal 1 — réponses automatiques
@@ -254,6 +258,7 @@ EREGION_DISCORD_WEBHOOK_AGENTS=...          # webhook de #agents (poste de l'op�
 EREGION_DISCORD_BOT_TOKEN=...               # le bot « Eregion », celui de l'atelier (pas celui de Glorfindel) : fils du forum #lots et leurs étiquettes
 EREGION_DISCORD_LOTS_FORUM=...              # id du forum #lots
 EREGION_DISCORD_ROADMAP_CHANNEL=...         # id du salon #roadmap : le message de la feuille de route (N2, secret GitHub : roadmap.yml)
+EREGION_DISCORD_WEBHOOK_DEPLOY=...          # webhook de #deploy : copié sur H0 par make glorfindel-host-cd-install (~/.eregion-cd/discord.env, H1)
 EREGION_DISCORD_MENTION=...                 # id de l'utilisateur que mentionnent les pings de #agents
                                     # sur le poste : ~/.config/eregion/discord.env (600) si l'environnement ne les a pas
 GLORFINDEL_KEEP_ISOLATED=1          # mode forensique

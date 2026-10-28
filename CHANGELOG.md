@@ -4,7 +4,27 @@ Notable changes to Eregion. The format follows [Keep a Changelog](https://keepac
 
 ## [Unreleased]
 
+### Added
+- **The CD of H0: the release Jonathan publishes reaches H0 on its own** (H1, #244, 28/10; `infra/glorfindel-host/README.md`, « Le CD de H0 »). A systemd timer on the VM runs `infra/glorfindel-host/cd/eregion_cd.py` every 5 minutes. The agent is installed in `~/.eregion-cd/`, never in the checkout it deploys, and never replaces itself.
+  - **H0 stays closed.** It only goes out, to GitHub's public API (no token) and to #deploy's webhook. Publishing is the gesture: sessions prepare drafts (`CLAUDE.md`).
+  - **Verified first.** The tag is on main and never older than what runs; every check run of its commit is completed, none red (a CI still running is waited for, and said once).
+  - **A new lock needs the harness.** `make llm-compare … ATTEST=1` writes `requirements/harness.json`: the lock's sha256, the runs, and per model the integration, the judgment and the overconfident errors. The CD refuses a changed `requirements/glorfindel.txt` without an attestation for that lock and H0's model, complete and with no overconfident error.
+  - **Built aside, preflighted, then switched.** The candidate `eregion-glorfindel:<tag>` is built in a worktree of its own. In it: `glorfindel --version` is the tag, the watch, the bot and the console import, H0's config passes A3's strict reading, compose renders. Then `deploy.sh --activate` switches.
+  - **Health for 3 minutes, else back.** The three containers run, never restarted, on the tag; the watch's heartbeat is written after the switch; the console answers.
+    - Unhealthy: back to what ran by a retag; the release is marked and never tried again on its own (`make glorfindel-host-cd-retry`).
+    - Before switching, the running image is tagged by its reference (one built before H1 had none). Without an image to go back to, there is no switch.
+    - The old images are pruned only once the health is green, keeping the new one and the one before.
+    - A switch is written down before it happens: a pass cut after it (a reboot, a timeout) is taken up by the next one, read against what runs.
+      - The release running: its health, then kept or back.
+      - Still what ran, or the watch gone (cut before or during the containers' move): H0 put back in one piece, the switch « interrupted », never called sick, tried again — refused, with the mention, at the second interruption.
+      - Something else (deployed by hand meanwhile): left alone.
+    - A tag seen before on another commit is refused.
+  - **Said in #deploy.** The start and the success silently; a refusal, a rollback and a failed rollback mention Jonathan; a release carrying another agent says to reinstall it. A refusal's detail (A3's words, compose's output) stays in the journal: it may name the infrastructure.
+  - **Installed disabled.** `make glorfindel-host-cd-install` (sudo on the VM; the #deploy webhook and the mention by stdin, never the bot's token), then `-cd-check` (a dry run: built and preflighted, never switched), then `-cd-enable`; also `-cd-status`, `-cd-retry`, `-cd-disable`, `-cd-uninstall`.
+  - **Tests and mutants.** The agent runs installed, as on H0, against real git, a fake docker, a fake GitHub and Discord (`tests/unit/test_host_cd.py`). Mutants M1002–M1019 and M1050–M1052, 21/21 caught.
+
 ### Changed
+- **`deploy.sh` builds aside and switches by a retag** (H1). `--build-only REF` builds `eregion-glorfindel:REF` from the CD's worktree without touching what runs. `--activate REF` checks out, retags and restarts, without building. Every image is also tagged by its reference. `--prune REF…` keeps the three newest and every one named; `--activate` never prunes, and a deployment by hand keeps the image it replaces. So going back is a retag. `--activate` tolerates a failed `git fetch`: the rollback must not depend on the network. A tag rewritten since its image was built: the image's own commit is checked out instead, and said — never one commit's compose and rules beside another's image. One deployment at a time: by hand, it is refused while the CD's pass runs (`~/.eregion-deploy.lock`).
 - **`#agents` is what waits for Jonathan, and nothing else: one board, pings that delete themselves, links** (N3, #262, 28/10). The first real elrond run with N1 (I1S, I4S, I8S, H1) gave 10 alerts in `#agents` and one was right. A reviewer waiting for its mutants ends its turn, so `SubagentStop` fired, and the pause was taken for a return. The report was read from the transcript, where the `SubagentHandback` is not yet written when `SubagentStop` runs: « sans verdict » five times (both `blocking` reviews were never said as such), and once the previous verdict (an `ok` said `changes`). Corrections and second reviews, which elrond sends by `SendMessage` to the agent that already ran, were seen by no hook (« Rien ne tourne » during a review). And no alert had a link.
   - **elrond's part moves to `scripts/agents_discord.py`.** `notify_discord.py` keeps GitHub to `#ci` and `#lots`.
   - **The report comes from `SubagentHandback`'s `PreToolUse` (`tool_input.message`),** as Claude Code documents it. A pause (`background_tasks`) is nothing. A resume by `SendMessage` is followed. A fallback counts only in the stretch it happened in.

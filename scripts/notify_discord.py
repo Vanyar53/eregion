@@ -36,7 +36,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 KEYS = ("EREGION_DISCORD_WEBHOOK_CI", "EREGION_DISCORD_WEBHOOK_AGENTS", "EREGION_DISCORD_BOT_TOKEN",
         "EREGION_DISCORD_LOTS_FORUM", "EREGION_DISCORD_MENTION", "EREGION_DISCORD_API",
-        "EREGION_DISCORD_ROADMAP_CHANNEL")
+        "EREGION_DISCORD_ROADMAP_CHANNEL", "EREGION_DISCORD_WEBHOOK_DEPLOY")
 UA = "DiscordBot (https://github.com/Vanyar53/eregion, 1)"
 SILENT = 1 << 12  # SUPPRESS_NOTIFICATIONS: shown in the channel, no push, no sound
 RED, GREEN, BLUE, PURPLE, ORANGE, GREY = 0xE5484D, 0x30A46C, 0x3E63DD, 0x8E4EC6, 0xF76B15, 0x8B8D98
@@ -63,6 +63,7 @@ class Config:
     forum: str = ""
     mention: str = ""
     roadmap: str = ""
+    deploy: str = ""   # #deploy's webhook: the CD of H0 posts with it (H1), never the bot's token
     api: str = "https://discord.com/api/v10"
 
     @property
@@ -89,6 +90,7 @@ def load_config(environ=os.environ) -> Config:
                   token=values.get("EREGION_DISCORD_BOT_TOKEN", ""), forum=values.get("EREGION_DISCORD_LOTS_FORUM", ""),
                   mention=mention if mention.isdigit() else "",
                   roadmap=values.get("EREGION_DISCORD_ROADMAP_CHANNEL", ""),
+                  deploy=values.get("EREGION_DISCORD_WEBHOOK_DEPLOY", "").rstrip("/"),
                   api=(values.get("EREGION_DISCORD_API") or Config.api).rstrip("/"))
 
 

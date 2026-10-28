@@ -107,3 +107,17 @@ def test_a_run_publishes_each_cases_draws(smoke, monkeypatch, capsys):
     assert "the model's default sampling" in out
     assert "the context moves the decision" in out
     assert [len(c["slots"]) for c in res["cases"]] == [2, 2]
+
+
+def test_the_attestation_names_its_lock_and_each_models_result(smoke, tmp_path):
+    """H1: the CD of H0 deploys a new lock only with the harness's attestation for it."""
+    import hashlib
+    lock = tmp_path / "glorfindel.txt"
+    lock.write_text("litellm==1.86.1 \\\n    --hash=sha256:00\n")
+    results = [{"model": "anthropic/claude-sonnet-5-5", "integration": 24, "judgment": 24, "slots": 24, "overconf": 0},
+               {"model": "ollama/qwen3", "integration": 24, "judgment": 19, "slots": 24, "overconf": 3}]
+    att = smoke.attestation(results, 3, lock)
+    assert att["lock"] == "requirements/glorfindel.txt" and att["runs"] == 3
+    assert att["lock_sha256"] == hashlib.sha256(lock.read_bytes()).hexdigest()
+    assert att["models"][1] == {"model": "ollama/qwen3", "integration": 24, "judgment": 19,
+                                "slots": 24, "overconfident_errors": 3}

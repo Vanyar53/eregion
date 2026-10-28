@@ -182,7 +182,10 @@ def _fake_bin(tmp_path, ref="", rev=""):
     docker = bin_dir / "docker"
     docker.write_text('#!/bin/bash\necho "$*" >> "$FAKE_DOCKER_LOG"\n'
                       'case "$1" in inspect) case "$3" in *version*) echo "$FAKE_REF";; '
-                      '*revision*) echo "$FAKE_REV";; esac;; esac\n')
+                      '*revision*) echo "$FAKE_REV";; esac;;\n'
+                      '  image) case "$2" in inspect) if [ -n "${FAKE_MISSING:-}" ] && [ "$3" = "$FAKE_MISSING" ]; then exit 1; fi;\n'
+                      '      if [ "$3" = "-f" ]; then printf "%s" "${FAKE_IMAGE_REV:-}"; fi;;\n'
+                      '    ls) printf "%b" "${FAKE_IMAGES:-}";; esac;; esac\n')
     docker.chmod(0o755)
     return bin_dir, log, {"FAKE_DOCKER_LOG": str(log), "FAKE_REF": ref, "FAKE_REV": rev}
 
@@ -200,7 +203,8 @@ def test_the_image_carries_the_reference_it_was_built_from(repo, tmp_path):
     # The console's header says what it runs (#206): the same reference, passed to the build.
     assert "--build-arg EREGION_REF=v0.10.0" in build
     assert f"--build-arg EREGION_REVISION={c2}" in build
-    assert "-f glorfindel/Dockerfile -t eregion-glorfindel ." in build
+    # Tagged by its reference too (H1): going back to it later is a retag, not a build.
+    assert "-f glorfindel/Dockerfile -t eregion-glorfindel:v0.10.0 -t eregion-glorfindel ." in build
     assert any(c.startswith("compose --profile bot up -d watch war-room bot") for c in calls)
     assert calls.index(build) < next(i for i, c in enumerate(calls) if c.startswith("compose"))
     assert f"déployé : v0.10.0 ({c2[:12]})" in res.stdout
@@ -406,3 +410,126 @@ def test_the_recipe_no_longer_pulls_a_branch():
     assert "git pull" not in recipe and "infra/glorfindel-host/deploy.sh" in recipe
     status = (ROOT / "infra" / "glorfindel-host" / "status.sh").read_text(encoding="utf-8")
     assert "--show" in status and "git log --oneline" not in status
+
+
+# ── H1 (#244): the CD builds a candidate aside, then activates it; going back is a retag ──
+
+def _with_docker(repo, tmp_path, **fake_env):
+    bin_dir, log, fake = _fake_bin(tmp_path)
+    return {**repo.env, **fake, **fake_env, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"}, log
+
+
+def test_build_only_tags_the_reference_and_never_the_running_image(repo, tmp_path):
+    c1 = repo.commits[0]
+    assert repo.deploy("--checkout-only", "v0.2.0").returncode == 0
+    env, log = _with_docker(repo, tmp_path)
+    res = repo.deploy("--build-only", "v0.2.0", env=env)
+    assert res.returncode == 0, res.stderr
+    (build,) = log.read_text().splitlines()
+    assert build.startswith("build ") and f"revision={c1}" in build
+    assert build.endswith("-t eregion-glorfindel:v0.2.0 .") and "-t eregion-glorfindel " not in build
+    assert "rien n'a basculé" in res.stdout
+
+
+def test_build_only_refuses_a_directory_at_another_commit(repo, tmp_path):
+    env, log = _with_docker(repo, tmp_path)
+    res = repo.deploy("--build-only", "v0.2.0", env=env)       # the clone sits on main (c3)
+    assert res.returncode != 0 and "pas au commit" in res.stderr and log.read_text() == ""
+
+
+def test_activate_checks_out_retags_and_starts_without_building(repo, tmp_path):
+    c1 = repo.commits[0]
+    env, log = _with_docker(repo, tmp_path)
+    res = repo.deploy("--activate", "v0.2.0", env=env)
+    assert res.returncode == 0, res.stderr
+    calls = log.read_text().splitlines()
+    assert not any(c.startswith("build") for c in calls)
+    assert calls[:3] == ["image inspect eregion-glorfindel:v0.2.0",       # there, and built from which commit
+                         'image inspect -f {{index .Config.Labels "org.opencontainers.image.revision"}} '
+                         "eregion-glorfindel:v0.2.0",
+                         "tag eregion-glorfindel:v0.2.0 eregion-glorfindel"]
+    assert calls[3].startswith("compose --profile bot up -d watch war-room bot")
+    assert repo.head() == c1 and repo.detached()
+
+
+def test_activate_checks_out_its_image_s_own_commit_when_the_tag_was_rewritten(repo, tmp_path):
+    """The image of v0.2.0 was built from c2 (the tag pointed there then): checking out c1
+    would run c2's image beside c1's compose and rules. c2 is checked out, and said; a commit
+    the VM does not have is refused, nothing moves."""
+    c1, c2 = repo.commits[:2]
+    env, log = _with_docker(repo, tmp_path, FAKE_IMAGE_REV="f" * 40)
+    res = repo.deploy("--activate", "v0.2.0", env=env)
+    assert res.returncode != 0 and "absent de la VM" in res.stderr
+    assert not repo.detached() and not any(c.startswith(("tag", "compose")) for c in log.read_text().splitlines())
+    env, log = _with_docker(repo, tmp_path, FAKE_IMAGE_REV=c2)
+    res = repo.deploy("--activate", "v0.2.0", env=env)
+    assert res.returncode == 0, res.stderr
+    assert "tag réécrit" in res.stderr and repo.head() == c2 and repo.detached()
+    env, log = _with_docker(repo, tmp_path, FAKE_IMAGE_REV=c1)                  # the same commit: silent
+    res = repo.deploy("--activate", "v0.2.0", env=env)
+    assert res.returncode == 0 and "réécrit" not in res.stderr and repo.head() == c1
+
+
+def test_activate_without_its_image_moves_nothing(repo, tmp_path):
+    before = repo.head()
+    env, log = _with_docker(repo, tmp_path, FAKE_MISSING="eregion-glorfindel:v0.2.0")
+    res = repo.deploy("--activate", "v0.2.0", env=env)
+    assert res.returncode != 0 and "pas d'image" in res.stderr
+    assert repo.head() == before and not repo.detached()
+    assert not any(c.startswith(("tag", "compose")) for c in log.read_text().splitlines())
+
+
+def test_activate_never_prunes(repo, tmp_path):
+    """The image to go back to must outlive the switch: the CD prunes once the health is green."""
+    env, log = _with_docker(repo, tmp_path, FAKE_IMAGES=_IMAGES)
+    assert repo.deploy("--activate", "v0.2.0", env=env).returncode == 0
+    assert not any(c.startswith(("image rm", "image ls")) for c in log.read_text().splitlines())
+
+
+_IMAGES = "".join(f"2026-10-{d:02d} 10:00:00 +0000 UTC\\t{t}\\n" for d, t in
+                  ((28, "latest"), (27, "v0.5.0"), (26, "v0.4.0"), (25, "v0.3.1"), (24, "v0.3.0"), (20, "v0.2.0"),
+                   (19, "v0.1.0")))
+
+
+def test_prune_keeps_the_three_newest_and_every_one_named(repo, tmp_path):
+    env, log = _with_docker(repo, tmp_path, FAKE_IMAGES=_IMAGES)
+    assert repo.deploy("--prune", "v0.2.0", env=env).returncode == 0
+    removed = [c.split()[-1] for c in log.read_text().splitlines() if c.startswith("image rm")]
+    assert removed == ["eregion-glorfindel:v0.3.0", "eregion-glorfindel:v0.1.0"]
+
+
+def test_a_deployment_by_hand_keeps_the_image_it_replaces(repo, tmp_path):
+    """By hand there is no health watch: the image running before stays, however old."""
+    env, log = _with_docker(repo, tmp_path, FAKE_IMAGES=_IMAGES)
+    env["FAKE_REF"] = "v0.1.0"                                   # what the watch was built from
+    assert repo.deploy("v0.2.0", env=env).returncode == 0
+    removed = [c.split()[-1] for c in log.read_text().splitlines() if c.startswith("image rm")]
+    assert removed == ["eregion-glorfindel:v0.3.0"]
+
+
+def test_the_rollback_does_not_need_the_network(repo, tmp_path):
+    """3: the image and the commit are on the VM; a fetch that fails is said, not fatal — for
+    --activate only: deploying by hand still needs it."""
+    repo.origin.rename(repo.origin.with_name("gone.git"))
+    env, log = _with_docker(repo, tmp_path)
+    res = repo.deploy("--activate", "v0.2.0", env=env)
+    assert res.returncode == 0, res.stderr
+    assert "git fetch a échoué" in res.stderr and repo.head() == repo.commits[0]
+    res = repo.deploy("v0.10.0", env=env)
+    assert res.returncode != 0 and "rien n'est déployé" in res.stderr
+
+
+def test_a_deployment_by_hand_waits_for_the_cd(repo, tmp_path):
+    """The CD holds ~/.eregion-deploy.lock for its whole pass; by hand meanwhile: refused.
+    The CD itself calls this script with EREGION_DEPLOY_LOCKED=1."""
+    import fcntl
+    home = Path(repo.env["HOME"])
+    before = repo.head()
+    with open(home / ".eregion-deploy.lock", "w") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        env, log = _with_docker(repo, tmp_path)
+        res = repo.deploy("v0.2.0", env=env)
+        assert res.returncode != 0 and "un déploiement est en cours" in res.stderr
+        assert repo.head() == before and log.read_text() == ""
+        res = repo.deploy("--activate", "v0.2.0", env={**env, "EREGION_DEPLOY_LOCKED": "1"})
+        assert res.returncode == 0, res.stderr

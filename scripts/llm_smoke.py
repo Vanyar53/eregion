@@ -35,6 +35,7 @@ import argparse
 import os
 import sys
 import time
+from pathlib import Path
 
 from glorfindel.actions import AUTONOMOUS_ACTIONS, HUMAN_APPROVAL_REQUIRED
 
@@ -441,6 +442,19 @@ def _run_one(model: str, runs: int, kinds: set[str] | None = None) -> dict:
             "sampling": _temperature_line(all_slots), "cases": cases}
 
 
+def attestation(results: list[dict], runs: int, lock: Path) -> dict:
+    """What the CD of H0 (H1) checks before deploying a new lock: which lock the harness ran
+    on (its sha256), how many runs, and per model its integration, judgment and overconfident
+    errors. Written whatever the result: the CD refuses one that is not complete."""
+    import hashlib
+    from datetime import date
+    return {"lock": "requirements/glorfindel.txt", "lock_sha256": hashlib.sha256(lock.read_bytes()).hexdigest(),
+            "date": date.today().isoformat(), "runs": runs,
+            "draws": os.environ.get("GLORFINDEL_DECISION_DRAWS") or "3",
+            "models": [{"model": r["model"], "integration": r["integration"], "judgment": r["judgment"],
+                        "slots": r["slots"], "overconfident_errors": r["overconf"]} for r in results]}
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--model", default=os.environ.get("GLORFINDEL_LLM_MODEL", "ollama/llama3.1"))
@@ -457,6 +471,10 @@ def main() -> int:
     ap.add_argument("--json", default="",
                     help="also write every case's draws (action, confidence, held_by) to this "
                          "file — the distribution, for comparing runs (D-1).")
+    ap.add_argument("--attest", default="",
+                    help="write the harness's attestation for the lock to this file (H1): "
+                         "requirements/harness.json, committed in the lock's pull request — the "
+                         "CD of H0 deploys a new lock only with it (make llm-compare ATTEST=1).")
     args = ap.parse_args()
     runs = max(1, args.runs)
     kinds = {k.strip() for k in args.kinds.split(",") if k.strip()} or None
@@ -485,6 +503,12 @@ def main() -> int:
             {"runs": runs, "draws": os.environ.get("GLORFINDEL_DECISION_DRAWS") or "3",
              "models": results}, indent=2, ensure_ascii=False, default=str))
         print(f"Draws written to {args.json}")
+
+    if args.attest:
+        import json
+        lock = Path(__file__).resolve().parents[1] / "requirements" / "glorfindel.txt"
+        Path(args.attest).write_text(json.dumps(attestation(results, runs, lock), indent=2) + "\n")
+        print(f"Attestation for {lock.name} written to {args.attest} — commit it with the lock")
 
     if len(results) > 1:
         print("\n" + "=" * 72)

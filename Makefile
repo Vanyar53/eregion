@@ -107,6 +107,8 @@ DOCKER_GLORFINDEL = $(GLORFINDEL_AZURE_PICK) docker run --rm $(GLORFINDEL_AZURE_
 	canary-jit celebrimbor-init celebrimbor-plan celebrimbor-up celebrimbor-down celebrimbor-output celebrimbor-stop celebrimbor-start \
 	glorfindel-host-init glorfindel-host-plan glorfindel-host-up glorfindel-host-down glorfindel-host-push \
 	glorfindel-host-start glorfindel-host-stop glorfindel-host-logs glorfindel-host-tunnel glorfindel-host-ssh \
+	glorfindel-host-cd-install glorfindel-host-cd-check glorfindel-host-cd-enable glorfindel-host-cd-disable \
+	glorfindel-host-cd-status glorfindel-host-cd-retry glorfindel-host-cd-uninstall \
 	glorfindel-host-env glorfindel-host-report glorfindel-host-url glorfindel-host-status glorfindel-host-pull \
 	glorfindel-host-model glorfindel-host-campaign-report celebrimbor-workload \
 	orodruin-init orodruin-plan orodruin-up orodruin-lock orodruin-push orodruin-check \
@@ -187,6 +189,10 @@ help:
 	@echo "  make glorfindel-host-stop / -logs            Glorfindel + la console sur la VM"
 	@echo "  make glorfindel-host-tunnel                  Tunnel + URL de la console avec son jeton"
 	@echo "  make glorfindel-host-url                     L'URL de la console avec son jeton"
+	@echo "  make glorfindel-host-cd-install              Le CD de H0 (H1) : agent + timer (désactivé), webhook #deploy"
+	@echo "  make glorfindel-host-cd-check                À blanc : vérifie, construit, préflight de la dernière release"
+	@echo "  make glorfindel-host-cd-enable / -disable    Le timer (toutes les 5 min) : une release publiée se déploie"
+	@echo "  make glorfindel-host-cd-status / -retry      Ce qui tourne, les derniers résultats / réessayer la release"
 	@echo ""
 	@echo "Orodruin (O1) — hôte des injecteurs, état séparé (infra/orodruin/README.md) :"
 	@echo "  make orodruin-plan [OPERATOR_CIDR=]          Plan (lecture seule)"
@@ -291,7 +297,7 @@ report-eval:
 	$(PYTHON) scripts/report_eval.py --runs $(or $(RUNS),3)
 
 llm-compare:
-	$(PYTHON) scripts/llm_smoke.py --models $(MODELS) --runs $(or $(RUNS),3)
+	$(PYTHON) scripts/llm_smoke.py --models $(MODELS) --runs $(or $(RUNS),3)$(if $(ATTEST), --attest requirements/harness.json)
 
 # ── Glorfindel ────────────────────────────────────────────────────────────
 
@@ -624,6 +630,44 @@ glorfindel-host-tunnel:
 
 glorfindel-host-ssh:
 	$(HOST_SSH)
+
+# ── Le CD de H0 (H1, #244) : la release que Jonathan publie arrive seule sur H0 ──────────
+# infra/glorfindel-host/README.md, « Le CD de H0 ». L'agent vit dans ~/.eregion-cd/ sur la VM,
+# jamais dans le checkout qu'il déploie ; ses unités systemd s'installent avec sudo, le timer
+# désactivé : -cd-check (à blanc), puis -cd-enable. Le webhook de #deploy et la mention viennent
+# de ton environnement ou de ~/.config/eregion/discord.env, par stdin — jamais le jeton du bot.
+HOST_CD_FILES = infra/glorfindel-host/cd/eregion_cd.py infra/glorfindel-host/cd/install.sh \
+                infra/glorfindel-host/cd/eregion-cd.service infra/glorfindel-host/cd/eregion-cd.timer \
+                infra/glorfindel-host/deploy.sh scripts/notify_discord.py
+HOST_SSH_TTY   = ssh -t $(SSH_OPTS) $(HOST_USER)@$(HOST_IP)
+
+glorfindel-host-cd-install:
+	@test -n "$(HOST_IP)" || { echo "Pas de VM : make glorfindel-host-up d'abord"; exit 1; }
+	@lines=$$(python3 infra/glorfindel-host/cd/eregion_cd.py export-discord-env) || exit 1; \
+	 $(HOST_SSH) 'mkdir -p .eregion-cd && chmod 700 .eregion-cd' && \
+	 scp -q $(SSH_OPTS) $(HOST_CD_FILES) $(HOST_USER)@$(HOST_IP):.eregion-cd/ && \
+	 printf '%s\n' "$$lines" | $(HOST_SSH) 'umask 077 && cat > .eregion-cd/discord.env'
+	$(HOST_SSH_TTY) 'sudo bash .eregion-cd/install.sh'
+
+glorfindel-host-cd-check:
+	@test -n "$(HOST_IP)" || { echo "Pas de VM : make glorfindel-host-up d'abord"; exit 1; }
+	$(HOST_SSH) 'python3 .eregion-cd/eregion_cd.py check'
+
+glorfindel-host-cd-enable:
+	$(HOST_SSH_TTY) 'sudo systemctl enable --now eregion-cd.timer && systemctl list-timers eregion-cd.timer --no-pager'
+
+glorfindel-host-cd-disable:
+	$(HOST_SSH_TTY) 'sudo systemctl disable --now eregion-cd.timer'
+
+glorfindel-host-cd-status:
+	@test -n "$(HOST_IP)" || { echo "Pas de VM : make glorfindel-host-up d'abord"; exit 1; }
+	@$(HOST_SSH) 'python3 .eregion-cd/eregion_cd.py status; echo "  timer : $$(systemctl is-enabled eregion-cd.timer 2>/dev/null || echo absent)"; journalctl -u eregion-cd --since -1d -n 15 --no-pager -o cat 2>/dev/null | sed "s/^/  | /"'
+
+glorfindel-host-cd-retry:
+	$(HOST_SSH) 'python3 .eregion-cd/eregion_cd.py retry'
+
+glorfindel-host-cd-uninstall:
+	$(HOST_SSH_TTY) 'sudo bash .eregion-cd/install.sh --remove'
 
 # ── Orodruin (O1) — l'hôte d'où les injecteurs agissent ───────────────────────
 # État séparé de Celebrimbor et de Glorfindel. Le contrat est relu par la VM elle-même (son

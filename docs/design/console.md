@@ -242,17 +242,41 @@ Après I1F, AL1, C2 et A3 (27/10) :
 Une carte, une règle, une ligne du fil, une erreur : du texte d'Azure (le nom d'une ressource, d'une
 application Entra ID), du modèle, d'une règle, ou d'un rapport de run tiré du canal d'exercice (un hôte
 moins sûr que la console). Écrit brut dans `innerHTML`, il s'exécute dans la console et peut appeler ses
-routes. La CSP de #222 n'a pas de `script-src` : elle ne l'arrête pas.
+routes. Deux défenses : l'échappement (#254), et la CSP `script-src 'self'` (#257), qui refuse tout script
+que la console n'a pas servi en fichier.
 
 - **Rien du dehors n'est écrit brut**, nombres compris : le serveur relaie des rapports dont le type
   n'est pas garanti. Dans le texte de la page ou un attribut entre guillemets doubles : `_attr`
-  (glorfindel.html) ou `esc` (`Console.esc`, les autres pages) ; `_attr` accepte toute valeur
+  (glorfindel.js) ou `esc` (`Console.esc`, les autres pages) ; `_attr` accepte toute valeur
   (`String(s ?? '')`) et échappe `& " ' < >`.
-- **Un argument de gestionnaire `on…`** passe par `_js` : le navigateur décode l'attribut avant que le
-  gestionnaire tourne (un `&#39;` y redevient une apostrophe). `_js` en fait une chaîne JavaScript
-  (`JSON.stringify`), puis l'échappe pour l'attribut : `onclick="f(${_js(vm)})"`, jamais `'${…}'`.
-- **Le début d'une URL** (`href="${…}"`) ne prend que `encodeURIComponent` : un `javascript:` échappé en
-  HTML en reste un. Un attribut s'écrit entre guillemets doubles.
+- **Aucun gestionnaire `on…` ni script en ligne** (#257) : les scripts des pages sont des fichiers
+  (`glorfindel.js`, `overview.js`, `injector.js`, après `console.js` et `exercises.js`). Un élément
+  nomme son action : `${_on('click', 'showEscModal', vm)}` écrit `data-on-click="showEscModal"` et ses
+  arguments en JSON dans `data-click-args`, échappés par `_attr`. Un écouteur par événement, sur le
+  document et en phase de capture, appelle l'action dans `ACTIONS`, une table fermée (un nom qui n'y
+  est pas ne fait rien, jamais `window[nom]`). L'élément le plus proche prend l'événement, comme le
+  faisait `event.stopPropagation()` pour un bouton dans une carte ; `data-on-click="stop"` sert aux
+  éléments qui ne faisaient que l'arrêter. Le glisser-déposer et le survol des NSG passent par le même
+  chemin (`dragVm`, `dropOn`, `_glowNsgVms`…). `_js` a disparu : un argument n'est plus du JavaScript.
+  Le nom d'une action est toujours un littéral de la page : la valeur d'un `data-on-*` n'admet rien
+  d'autre (ni une donnée, ni une donnée échappée), et `setAttribute`/`dataset` ne l'écrivent pas.
+- **Ce que la CSP laisse** : un élément injecté malgré tout, avec un `data-on-click` qui nomme une action
+  de la table, s'exécute (vu dans Chromium : `<b data-on-click="refreshBackups">`). Il ne peut faire que ce
+  que fait un bouton de la page, et le répartiteur borne ce que l'élément porte :
+  - les arguments sont des chaînes, des nombres, des booléens ou `null`, jamais un objet — sinon
+    `doApproveAction(id, vm, {scope, ip})` sauterait la fenêtre de portée ;
+  - le mode d'une VM ou le mode par défaut ne se lit que dans un `<select>` de la page
+    (`modeChange`, `defaultMode`) ;
+  - les gestes qui écrivent gardent leur confirmation ou passent par le serveur, qui refuse en lecture
+    seule et refuse une carte trop vieille ou non attribuée.
+
+  L'échappement reste la première défense ; la CSP retire seulement l'exécution de code.
+- **La CSP** : `script-src 'self'; object-src 'none'` en plus de #222. Une `<img onerror>` injectée de
+  force, au-delà de tout échappement, ne s'exécute plus. Les styles en ligne restent permis : une
+  injection de style est bien moins grave, et `style="…${_attr(x)}"` n'en sort pas.
+- **Le début d'une URL** (`href="${…}"`, et après un `/` de tête : `/${x}` avec x = `/hôte` mène à un
+  autre site) ne prend que `encodeURIComponent` : un `javascript:` échappé en HTML en reste un. Un
+  attribut s'écrit entre guillemets doubles ; `srcdoc` ne prend aucune valeur.
 - **`scripts/console_escaping.py` le vérifie** (`python scripts/console_escaping.py` : où, quoi, d'où).
   Il lit les scripts de chaque page et suit ce que peut contenir chaque `${…}` d'un gabarit HTML et
   chaque valeur donnée à `innerHTML`. Il suit les branches d'un ternaire, `||` et `+`, une variable
@@ -261,7 +285,16 @@ routes. La CSP de #222 n'a pas de `script-src` : elle ne l'arrête pas.
   (`.map`). Le champ d'un objet que la page a écrit est lu par sa clé. Une valeur est propre quand
   c'est un littéral, un nombre calculé, une table de la page ou un échappement reconnu par sa
   déclaration (une variable locale nommée `esc` n'en est pas un). Le reste est brut : un champ de ce
-  qu'a envoyé le serveur, l'argument d'un callback, une erreur, la barre d'adresse.
+  qu'a envoyé le serveur, l'argument d'un callback ou d'une fonction d'`ACTIONS`, une erreur, la barre
+  d'adresse. Un `.length` n'est un nombre que sur un tableau, une chaîne ou un `Set` que la page a faits :
+  d'un objet du serveur, il passe par `Number(…)`. Une concaténation se lit comme un gabarit : la place
+  d'une valeur se déduit des chaînes avant elle.
+  Il refuse aussi, où qu'ils soient écrits : un gestionnaire `on…`, un `<script>`, une URL
+  `javascript:`, `srcdoc`, et les API qui écrivent du HTML ou du code hors d'`innerHTML` et qu'il ne
+  suit pas (`document.write`, `el['innerHTML']`, `Object.assign(el, {innerHTML})`,
+  `createContextualFragment`, `DOMParser`, `setAttribute` d'un gestionnaire ou d'une URL, `.href =`,
+  `eval`, `new Function`, une chaîne donnée à `setTimeout`). Il compte les `${…}` qu'il lit, et le test
+  les compare à un décompte fait à part : un gabarit sauté ne passe pas inaperçu.
   `ALLOWED` nomme, avec sa raison, ce que le lecteur ne sait pas suivre ; il est vide.
 - **Vérifié dans Chromium** (28/10) : une console locale sur des cartes, une isolation, un fil et des
   actifs piégés, chaque élément `onclick` cliqué. Sur `main`, 14 images injectées et des charges
@@ -274,8 +307,14 @@ l'IP à bloquer), `_attr` et `_js` affaiblis, l'accueil, et le lecteur lui-même
 `on…`, une `Map`, l'argument d'un callback de promesse). Le test vérifie aussi le lecteur sur de petites
 pages écrites pour lui.
 
-Reste à considérer : sortir les gestionnaires en ligne et les scripts de la page pour poser
-`script-src 'self'` dans la CSP (une défense de plus, plus de 90 attributs `on…`).
+**#257** (28/10, avec S1–S8 de la relecture de #256) : vérifié dans Chromium sur la même console
+piégée, `main` en regard. Bouton par bouton, chaque élément déclare le même appel, avec les mêmes
+arguments (89 sur 89 ; le Cancel de la fenêtre est une propriété). Le glisser-déposer d'une carte sur une
+autre fait le même `dropOnSlot`, et la fenêtre s'ouvre et se ferme comme avant. La bulle des capacités
+reste ouverte. Aucune violation de CSP venue de la page, aucune erreur JS. Une `<img onerror>` injectée de
+force s'exécute sur `main` ; avec #257, la CSP la bloque. **Mutants M1080–M1099** : la CSP, un gestionnaire
+ou un script en ligne de retour, le répartiteur (table fermée, élément le plus proche, phase de capture),
+les arguments non échappés, une action absente de la table, et le lecteur pour S1, S2, S4, S5, S6, S8.
 
 ## 4. Maquettes
 
@@ -363,7 +402,7 @@ EXERCISES · 11          windows [7 days ▾] │ CAMPAIGNS · 1    [30 days ▾
 
 | Où | Changement | Qui |
 |---|---|---|
-| `eregion_console/` | `api.py` (l'ancien `glorfindel/api.py`, déplacé tel quel puis complété : pages, redirections, jeton, `/api/sections`) ; `sections.py` (le registre) ; `cli.py` (`eregion console [--sections]`) ; `static/` : `overview.html`, `glorfindel.html` (ex-`index.html`, sert aussi `/config`), `injector.html` (ex-`atelier.html`, une seule page pour Annatar et Gothmog, filtrée par le chemin, qui montre aussi la vue « non installé »), `exercises.js`, `console.js`, `console.css`. Un module par section reste possible plus tard : comme Glorfindel est toujours là, aucune route n'a besoin d'être enregistrée sous condition | War Room |
+| `eregion_console/` | `api.py` (l'ancien `glorfindel/api.py`, déplacé tel quel puis complété : pages, redirections, jeton, `/api/sections`) ; `sections.py` (le registre) ; `cli.py` (`eregion console [--sections]`) ; `static/` : `overview.html`, `glorfindel.html` (ex-`index.html`, sert aussi `/config`), `injector.html` (ex-`atelier.html`, une seule page pour Annatar et Gothmog, filtrée par le chemin, qui montre aussi la vue « non installé »), `exercises.js`, `console.js`, `console.css` ; depuis #257, le script de chaque page est un fichier (`overview.js`, `glorfindel.js`, `injector.js`). Un module par section reste possible plus tard : comme Glorfindel est toujours là, aucune route n'a besoin d'être enregistrée sous condition | War Room |
 | Jeton | `EREGION_CONSOLE_TOKEN` s'il n'est pas vide, sinon `GLORFINDEL_WARROOM_TOKEN` ; avertissement si les deux diffèrent. Cookie inchangé | War Room |
 | Dans la même PR, hors périmètre | `pyproject.toml` : le paquet, le script `eregion`, l'extra `console` (`war-room` gardé), les pages en données du paquet (aucune n'est déclarée aujourd'hui : un `pip install` sans `-e` les perdrait). Le Dockerfile de Glorfindel : `COPY eregion_console/`. Depuis M-3, il installe les dépendances verrouillées (`requirements/glorfindel.txt`, avec FastAPI et uvicorn), puis le paquet sans dépendances : l'extra `console` reprend celles de `war-room`, à vérifier contre le verrou. `docker-compose.yml` : le montage de `static` et la commande. L'import de `glorfindel/cli.py`. Les imports des tests et de `scripts/mutation_check.py`, dont 5 mutants visent `glorfindel/api.py` | War Room, avec l'accord de General et de Glorfindel |
 | Glorfindel (UI-1b) | l'alias caché `glorfindel war-room` ; les textes « War Room » d'`agent.py`, `readiness.py` et `jobs.py`. Vérifier qu'aucun n'entre dans ce que voit le modèle | Glorfindel |

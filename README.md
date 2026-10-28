@@ -626,6 +626,8 @@ eregion_console/       → the Eregion console (`eregion console`, docs/design/c
   cli.py               → `eregion console [--host] [--port] [--sections]`
   static/              → console.js + console.css (the shared header), overview.html, injector.html
                          (Annatar's and Gothmog's pages), exercises.js (what Glorfindel did in an exercise),
+                         each page's script as a file (overview.js, glorfindel.js, injector.js: the CSP
+                         runs no inline script nor handler, #257),
                          glorfindel.html — TO JUDGE (the only place a card is judged), expandable VM cards,
                          live feed, action buttons; INFRASTRUCTURE banner: credentials regime
                          (OBSERVE-ONLY ↔ ACTIVE) + autonomy mode; per-card autonomy badge → capability

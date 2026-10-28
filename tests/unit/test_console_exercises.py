@@ -86,8 +86,10 @@ def test_every_injector_route_is_a_read():
 
 
 def test_the_page_is_served_behind_the_token(client, monkeypatch):
-    assert "injector.html" not in client.get("/annatar").text  # the page itself, not a listing
-    assert "INJECTOR" in client.get("/annatar").text
+    page = client.get("/annatar").text
+    assert "injector.html" not in page  # the page itself, not a listing
+    assert '<script src="/static/injector.js"></script>' in page        # its script, a file (#257)
+    assert "INJECTOR" in client.get("/static/injector.js").text
     monkeypatch.setenv("EREGION_CONSOLE_TOKEN", "s3cret")
     assert client.get("/api/exercises").status_code == 401
     assert client.get("/annatar", headers={"accept": "application/json"}).status_code == 401

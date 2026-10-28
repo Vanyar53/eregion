@@ -8,15 +8,19 @@ step from the model, a rule's query, a message — written raw there runs in the
 console, and can call its routes (#250 found one; the CSP of #222 has no `script-src`: the
 inline handlers would break).
 
-This reader follows what can reach the page. It reads the scripts of each page (the inline
-ones and console.js, exercises.js), and checks every `${…}` of an HTML template and every
-value given to innerHTML: what each one can hold, through the branches of a ternary, `||`,
-`+`, `.map(…).join(…)`, a variable to its declaration and its assignments, a page function
-to its returns, a parameter to the arguments of its calls. A value is clean when it is a
-literal, a number, a page table, or escaped (`esc`, `_attr`, `encodeURIComponent`; `_js` in
-an `on…` attribute, where the browser decodes `&#39;` before the handler runs). Anything
-else is raw: a field of what the server sent, a callback's argument, an error, the address
-bar. ALLOWED names the few values the reader cannot follow and the page built, with why.
+This reader follows what can reach the page. It reads the scripts each page loads, and checks
+every `${…}` of an HTML template and every value given to innerHTML: what each one can hold,
+through the branches of a ternary, `||`, `+`, `.map(…).join(…)`, a variable to its declaration
+and its assignments, a page function to its returns, a parameter to the arguments of its calls.
+A value is clean when it is a literal, a number, a page table, or escaped for where it lands
+(`esc`, `_attr`; `encodeURIComponent` at the start of a URL). Anything else is raw: a field of
+what the server sent, a callback's argument, an error, the address bar. ALLOWED names the few
+values the reader cannot follow and the page built, with why.
+
+It also refuses what the CSP's `script-src 'self'` would block or what it does not follow (#257):
+an inline script or `on…` handler (an element names its action: `data-on-click`, `_on`), a
+`javascript:` URL, `srcdoc`, and the APIs that write markup or code elsewhere than innerHTML
+(`document.write`, `setAttribute`, `.href =`, `eval`, a string given to `setTimeout`…).
 """
 from __future__ import annotations
 
@@ -30,17 +34,18 @@ STATIC = ROOT / "eregion_console" / "static"
 PAGES = ("glorfindel.html", "overview.html", "injector.html")
 
 # The page's escapes, by where the value lands (_context): the page's text or a double-quoted
-# attribute; the JavaScript of an on… attribute (`_js` makes a string of it); the start of a
-# URL (an escaped `javascript:` is still one). An unquoted attribute takes none.
+# attribute; the start of a URL (an escaped `javascript:` is still one, and `/${x}` with x =
+# `/host` another site). An attribute not in double quotes, an on… handler and srcdoc take none.
 ESCAPES = {
-    "html": {"esc", "_attr", "_js", "Console.esc", "encodeURIComponent"},
-    "js": {"_js"},
+    "html": {"esc", "_attr", "Console.esc", "encodeURIComponent"},
     "url": {"encodeURIComponent"},
     "unquoted": set(),
+    "never": set(),
 }
-_WHERE = {"js": "an on… attribute (the browser decodes it before the handler runs)",
-          "url": "the start of a URL (a javascript: URL survives HTML escaping)",
-          "unquoted": "an attribute not in double quotes (write it in double quotes)"}
+_WHERE = {"url": "the start of a URL (a javascript: URL survives HTML escaping)",
+          "unquoted": "an attribute not in double quotes (write it in double quotes)",
+          "never": "an on… handler, srcdoc, or the action a data-on-* names (only what the page wrote)"}
+_URL_ATTRS = ("href", "src", "action", "formaction", "xlink:href", "data")
 
 # What the reader cannot follow, and the page built: (file, expression as written) → why.
 ALLOWED: dict[tuple[str, str], str] = {}
@@ -73,6 +78,10 @@ _PURE = {"has", "get", "includes", "indexOf", "lastIndexOf", "find", "findIndex"
          "getElementById", "querySelector", "querySelectorAll", "closest", "contains",
          "getAttribute", "then", "catch", "finally", "json", "text", "stopPropagation",
          "preventDefault", "remove", "focus", "scrollIntoView", "toggle"}
+# Methods whose result is an array or a string the page holds: its .length is a number.
+_BUILDS = {"filter", "map", "flatMap", "slice", "concat", "split", "flat", "sort", "reverse", "join",
+           "keys", "values", "entries", "toUpperCase", "toLowerCase", "trim", "padStart", "padEnd",
+           "replace", "replaceAll", "substring", "toFixed", "toISOString"}
 _SAME_OF_ARGS = {"String", "JSON.stringify", "Object.keys", "Object.values", "Object.entries",
                  "Array.from"}
 _BROWSER = {"window", "document", "location", "navigator", "localStorage", "sessionStorage",
@@ -439,6 +448,8 @@ class Decl:
     fn: Fn | None = None            # function: itself; param: the function it belongs to
     index: int = 0                  # param: its place
     assigns: list[Node] = field(default_factory=list)   # what is assigned to it, or to its fields
+    reassigns: list[Node] = field(default_factory=list) # x = v, x += v: what it is then
+    const: bool = False             # declared const: never bound to anything else
 
 
 @dataclass(frozen=True)
@@ -460,6 +471,7 @@ class Unit:
     """A page: its inline scripts and the scripts it loads, read as one."""
 
     def __init__(self, page: str, static: Path = STATIC):
+        self._static_dir = static
         self.files: list[tuple[str, str]] = []
         self.decls: dict[str, list[Decl]] = {}
         self.fns: dict[int, Fn] = {}
@@ -471,6 +483,9 @@ class Unit:
         self._refs: list = []
         self._feeds: list = []
         self._mcalls: list = []
+        self._static: list[Finding] = []    # what is refused wherever it is (#257)
+        self._reassigns: list = []
+        self.interpolations: dict[str, int] = {}   # the ${…} read, per file
         self._parsers: dict[int, Parser] = {}
         self._memo: dict = {}
         self._busy: set = set()
@@ -481,6 +496,11 @@ class Unit:
                 self._read(m.group(1), (static / m.group(1)).read_text(encoding="utf-8"), 0, None)
             else:
                 self._read(page, html, m.start(2), m.end(2))
+                self._refuse(self._pos(page, m.start()), m.group(0)[:40], "an inline script (script-src 'self' refuses it)")
+        markup = re.sub(r"<script\b.*?</script>", lambda m: " " * len(m.group(0)), html, flags=re.S)
+        for m in _REFUSED.finditer(markup):
+            if _kind(m) != "<m":            # the page's own <meta charset>, <meta viewport>
+                self._refuse(self._pos(page, m.start()), m.group(0), _REFUSED_WHY[_kind(m)])
         self._link()
 
     def _read(self, name: str, text: str, start: int, stop: int | None):
@@ -488,10 +508,20 @@ class Unit:
         self.files.append((name, text))
         end = base + (len(text) if stop is None else stop)
         toks, _ = tokenize(text if stop is None else text[:stop], base, start)
+        self.interpolations[name] = _count(toks)
         self._scan(toks, (0, end), everywhere=True)
-        # A function named in an on… attribute is called by the page with what it wrote there.
-        for attr in re.finditer(r"\bon[a-z]+\s*=\s*\"([^\"]*)\"", text):
-            self._refs.extend((n, -1) for n in re.findall(r"([A-Za-z_$][\w$]*)\s*\(", attr.group(1)))
+
+    def _pos(self, name: str, offset: int) -> int:
+        """A file's offset in the unit (the page is read even when it has no inline script)."""
+        for i, (n, _) in enumerate(self.files):
+            if n == name:
+                return i * _STRIDE + offset
+        self.files.append((name, (self._static_dir / name).read_text(encoding="utf-8")))
+        return (len(self.files) - 1) * _STRIDE + offset
+
+    def _refuse(self, pos: int, what: str, why: str):
+        file, line = self.where(pos)
+        self._static.append(Finding(file, line, " ".join(what.split()), "", why))
 
     def where(self, pos: int) -> tuple[str, int]:
         name, text = self.files[pos // _STRIDE]
@@ -550,6 +580,10 @@ class Unit:
 
         for k, t in enumerate(toks):
             prev = toks[k - 1] if k else None
+            if t.kind in ("tpl", "str"):
+                text = "\x00".join(t.quasis) if t.kind == "tpl" else t.text
+                for m in _REFUSED.finditer(text):
+                    self._refuse(t.pos, m.group(0), _REFUSED_WHY[_kind(m)])
             if t.kind == "tpl":
                 if _is_html(t):
                     self.templates.append((p._tpl(t), ctx))
@@ -557,7 +591,7 @@ class Unit:
                 for i, (e, end) in enumerate(zip(t.exprs, t.ends)):
                     self._scan(e, (e[0].pos if e else end, end), ctx=_context(t, i, ctx))
             elif t.kind == "name" and t.text in ("const", "let", "var"):
-                self._declarators(p, toks, k + 1, scope_at(k), declare)
+                self._declarators(p, toks, k + 1, scope_at(k), declare, t.text == "const")
             elif t.kind == "name" and t.text == "function":
                 j = k + 1 + (toks[k + 1].kind == "name")
                 body = p.close[j] + 1
@@ -589,6 +623,23 @@ class Unit:
                 self.sinks.append(p.expr(k + 3, 1)[0])
             if t.kind == "name" and t.text == "insertAdjacentHTML" and toks[k + 1].text == "(":
                 self.sinks.extend(p.items(k + 2, ")")[0][1:2])
+            if why := _refused_api(toks, k):
+                self._refuse(t.pos, " ".join(x.text for x in toks[max(0, k - 1):k + 3]), why)
+            # [a, b] = v, ({a} = v), for (a of v): names bound again, apart from their declaration
+            prev = toks[k - 1] if k else None
+            if t.kind == "punct" and t.text in "[{" and k in p.close and p.close[k] + 1 < len(toks) \
+                    and toks[p.close[k] + 1].text == "=" and toks[p.close[k] + 1].kind == "punct" \
+                    and (prev is None or prev.kind == "punct" and prev.text in (";", "{", "}", "(", ",")):
+                value = p.expr(p.close[k] + 2, 1)[0]
+                for x in _pattern_names(toks, k, p.close[k]):
+                    self._uses.append((toks[x].text, toks[x].pos, value))
+                    self._reassigns.append((toks[x].text, toks[x].pos, value))
+            if t.kind == "name" and t.text == "for" and k + 3 < len(toks) and toks[k + 1].text == "(" \
+                    and toks[k + 2].kind == "name" and toks[k + 3].text in ("of", "in") \
+                    and toks[k + 2].text not in ("const", "let", "var"):
+                value = p.expr(k + 4, 1)[0]
+                self._uses.append((toks[k + 2].text, toks[k + 2].pos, value))
+                self._reassigns.append((toks[k + 2].text, toks[k + 2].pos, value))
             prev = toks[k - 1] if k else None
             if t.kind != "name" or t.text in _KEYWORDS or (
                     prev is not None and prev.text in (".", "?.", "const", "let", "var", "function")):
@@ -614,21 +665,25 @@ class Unit:
                     break
             nxt = toks[j] if j < len(toks) else None
             for method, args, first in calls:
-                if first:
+                if first:               # x.m(args): a page object's function, or what goes into x
                     self._mcalls.append((t, method, args))
-                if method not in _PURE:
+                elif method not in _PURE:
                     self._uses.extend((t.text, t.pos, a) for a in args)
             if t.text == "Object" and calls and calls[0][0] == "assign" and calls[0][1] and calls[0][1][0].kind == "name":
                 target = calls[0][1][0]
                 self._uses.extend((target.text, target.pos, a) for a in calls[0][1][1:])
             if nxt is not None and nxt.kind == "punct" and nxt.text in _ASSIGN:
                 # x[key] = v: the key too, for Object.keys(x) and for…in
-                self._uses.extend((t.text, t.pos, v) for v in (*keys, p.expr(j + 1, 1)[0]))
-            elif j == k + 1 and not (prev is not None and prev.text in ("{", ",") and nxt is not None
-                                     and nxt.text in (",", "}")):     # not a page object's method
+                value = p.expr(j + 1, 1)[0]
+                self._uses.extend((t.text, t.pos, v) for v in (*keys, value))
+                if j == k + 1:
+                    self._reassigns.append((t.text, t.pos, value))
+            elif j == k + 1:
+                # Passed as a value — to ACTIONS (the page's events), to a listener, to a page
+                # object: called with what we do not see.
                 self._refs.append((t.text, t.pos))
 
-    def _declarators(self, p: Parser, toks, j, scope, declare):
+    def _declarators(self, p: Parser, toks, j, scope, declare, const: bool = False):
         while True:
             if toks[j].kind == "punct" and toks[j].text in "{[":
                 close = p.close[j]
@@ -644,7 +699,7 @@ class Unit:
                 if how == "=" and not pattern and init.kind == "function":
                     declare(x, "function", scope, fn=self._fn(init, named=True), init=init)
                 elif how in ("=", None) and not pattern:
-                    declare(x, "var", scope, init=init)
+                    declare(x, "var", scope, init=init, const=const)
                 else:           # destructured, or the item of a for…of / for…in: made of init
                     declare(x, "element", scope, init=init)
             if j < len(toks) and toks[j].text == ",":
@@ -697,6 +752,10 @@ class Unit:
             d = self.resolve(name, pos)
             if d is not None:
                 d.assigns.append(rhs)
+        for name, pos, rhs in self._reassigns:
+            d = self.resolve(name, pos)
+            if d is not None:
+                d.reassigns.append(rhs)
         for name, pos, args in self._calls:
             d = self.resolve(name, pos)
             if d is not None and d.kind == "function":
@@ -704,6 +763,10 @@ class Unit:
         for t, method, args in self._mcalls:            # Console.setJudgeCount(n)
             if fn := self._method(Node("name", t.pos, t.pos + len(t.text), text=t.text), method):
                 fn.calls.append(args)
+            elif method not in _PURE:
+                d = self.resolve(t.text, t.pos)
+                if d is not None:
+                    d.assigns.extend(args)
         # What a function puts into its parameter goes into what its callers gave it.
         for ds in list(self.decls.values()):
             for d in ds:
@@ -743,7 +806,7 @@ class Unit:
         if k == "tpl":      # an HTML template is checked on its own
             if node.pos in self._html:
                 return []
-            return [r for i, e in enumerate(kids) for r in self.raw(e, _context(node.tok, i, ctx))]
+            return [r for i, e in enumerate(kids) for r in self.raw(e, self._place(node, i, ctx))]
         if k == "name":
             if node.text in _SAFE_GLOBALS:
                 return []
@@ -752,13 +815,17 @@ class Unit:
                 return [(node, "from the browser" if node.text in _BROWSER else "not declared in the page")]
             return self._decl(d, ctx)
         if k == "member":
-            return [] if node.text in ("length", "size") else self._field(kids[0], node.text, ctx)
+            if node.text in ("length", "size") and self._built(kids[0]):
+                return []       # an array, a string, a Set the page made: a number
+            return self._field(kids[0], node.text, ctx)
         if k in ("index", "paren", "spread", "assign"):
             return self.raw(kids[-1] if k == "assign" else kids[0], ctx)
         if k == "cond":
             return self.raw(kids[1], ctx) + self.raw(kids[2], ctx)
         if k == "binary":
-            if node.text in ("||", "??", "+"):
+            if node.text == "+":
+                return self._concat(node, ctx)
+            if node.text in ("||", "??"):
                 return self.raw(kids[0], ctx) + self.raw(kids[1], ctx)
             return self.raw(kids[1], ctx) if node.text == "&&" else []   # a falsy field is no markup
         if k == "unary":
@@ -778,6 +845,74 @@ class Unit:
         if k == "reduced":      # a reduce's accumulator
             return self.raw(kids[0], ctx) + self._callback(kids[1:], ctx)
         return [(node, f"a {k} the reader does not follow")]
+
+    def _concat(self, node: Node, ctx: str) -> list:
+        """`'<a href="' + x + '">'`: each value's place is read from the text before it, as in a
+        template (S1 of #256's review)."""
+        parts: list[Node] = []
+
+        def flat(n: Node):
+            if n.kind == "binary" and n.text == "+":
+                flat(n.kids[0])
+                flat(n.kids[1])
+            else:
+                parts.append(n)
+        flat(node)
+        text, out = "", []
+        for part in parts:
+            here = _context_text(text, ctx)
+            if (literal := self._literal(part)) is not None:
+                text += literal
+                continue
+            out += self.raw(part, here)
+            text += "\x00".join(part.tok.quasis) if part.kind == "tpl" else "\x00"
+        return out
+
+    def _literal(self, node: Node) -> str | None:
+        """The text of a string the page wrote — a literal, or a const holding one (`const pre =
+        '<a href="'`): it says where the next value lands."""
+        if node.kind == "lit" and node.text[:1] in "'\"":
+            return node.text[1:-1]
+        if node.kind == "name" and (d := self.resolve(node.text, node.pos)) is not None \
+                and d.kind == "var" and d.const and d.init is not None and d.init.kind == "lit":
+            return self._literal(d.init)
+        return None
+
+    def _place(self, tpl: Node, i: int, inherited: str) -> str:
+        """Where the i-th ${…} of a template lands, a const string before it read as text."""
+        parts = []
+        for k in range(i + 1):
+            parts.append(tpl.tok.quasis[k])
+            if k < i:
+                parts.append(lit if (lit := self._literal(tpl.kids[k])) is not None else "\x00")
+        return _context_text("".join(parts), inherited)
+
+    def _built(self, node: Node, seen=None) -> bool:
+        """Whether a value is an array, a string, a Set or a Map the page made — its .length or
+        .size a number. An object from the server can carry a `length` of its own (S4)."""
+        seen = set() if seen is None else seen
+        if id(node) in seen:
+            return True
+        seen.add(id(node))
+        k = node.kind
+        if k in ("array", "tpl") or (k == "lit" and node.text[:1] in "'\""):
+            return True
+        if k == "paren":
+            return self._built(node.kids[0], seen)
+        if k == "cond":
+            return self._built(node.kids[1], seen) and self._built(node.kids[2], seen)
+        if k == "unary" and node.text == "new":
+            call = node.kids[0]
+            return _dotted(call.kids[0] if call.kind == "call" else call) in ("Set", "Map", "Array")
+        if k == "call":
+            callee = node.kids[0]
+            if _dotted(callee) in ("Object.keys", "Object.values", "Object.entries", "Array.from", "String"):
+                return True
+            return callee.kind == "member" and callee.text in _BUILDS
+        if k == "name" and (d := self.resolve(node.text, node.pos)) is not None:
+            # a const only: a let can be rebound where the reader does not look ([a] = …, for (a of …))
+            return d.kind == "var" and d.const and d.init is not None and self._built(d.init, seen)
+        return False
 
     def _escape(self, callee: Node) -> str | None:
         """The escape a callee is — by its declaration, not only its name: a local `esc` (a card)
@@ -952,7 +1087,7 @@ class Unit:
         """One per ${…} (or value given to innerHTML) with something raw in it — an HTML
         template inside is checked on its own."""
         out: dict[int, Finding] = {}
-        checks = [(e, _context(t.tok, i, ctx)) for t, ctx in self.templates for i, e in enumerate(t.kids)]
+        checks = [(e, self._place(t, i, ctx)) for t, ctx in self.templates for i, e in enumerate(t.kids)]
         checks += [(s, "html") for s in self.sinks if s.pos not in self._html]
         for expr, ctx in checks:
             file, line = self.where(expr.pos)
@@ -965,7 +1100,7 @@ class Unit:
                 ofile, oline = self.where(origin.pos)
                 at = f"{self.source(origin)}" + (f" ({ofile}:{oline})" if (ofile, oline) != (file, line) else "")
                 out[expr.pos] = Finding(file, line, sink, at, why)
-        return list(out.values())
+        return list(out.values()) + self._static
 
 
 def _returned(unit: Unit, fn: Fn) -> list[Node]:
@@ -1041,22 +1176,89 @@ def _is_html(t: Tok) -> bool:
 
 
 def _context(t: Tok, i: int, inherited: str) -> str:
-    """Where the i-th ${…} of a template lands: "js" in an on… attribute, "url" at the start of
-    an href/src/action, "unquoted" in an attribute without double quotes, "html" otherwise. A
-    template inside a ${…} inherits that ${…}'s place, unless its own text opens a quote."""
-    text = "\x00".join(t.quasis[:i + 1])
-    opened = list(re.finditer(r"\b([\w-]+)\s*=\s*\"", text))
+    """Where the i-th ${…} of a template lands (_context_text)."""
+    return _context_text("\x00".join(t.quasis[:i + 1]), inherited)
+
+
+def _context_text(text: str, inherited: str) -> str:
+    """Where a value written after `text` lands: "url" at the start of an href/src/action (or
+    right after its leading "/": `/${x}` with x = `/host` is another site), "never" in an on…
+    handler or srcdoc, "unquoted" in an attribute without double quotes, "html" otherwise. A
+    value inside a ${…} inherits that ${…}'s place, unless its own text opens a quote."""
+    opened = list(re.finditer(r"(?<![\w-])([\w:\x00-]+)\s*=\s*\"", text))
     if opened and '"' not in text[opened[-1].end():]:     # inside a double-quoted value
         last = opened[-1]
-        name = last.group(1).lower()
-        if name.startswith("on"):
-            return "js"
-        if name in ("href", "src", "action", "formaction") and last.end() == len(text):
+        name, value = last.group(1).lower(), text[last.end():]
+        # the action of a data-on-* is a name the page wrote, never a value (#257's review)
+        if name.startswith("on") or name == "srcdoc" or name.startswith("data-on-"):
+            return "never"
+        if name in _URL_ATTRS and value in ("", "/"):
             return "url"
         return "html"
     if re.search(r"<[^>]*\b[\w-]+\s*=\s*'?[^\s\"'>]*$", text):   # a value in single quotes, or none
         return "unquoted"
     return inherited if '"' not in text else "html"
+
+
+# Refused wherever they are written — the page's markup, a template, a string (#257): an inline
+# handler or script (script-src 'self' blocks them), a javascript: URL, srcdoc.
+_REFUSED = re.compile(r"(?<![\w-])on[a-z]+\s*=(?!=)|<script\b|javascript:|(?<![\w-])srcdoc\s*=|<meta\b", re.I)
+_REFUSED_WHY = {"on": "an inline handler (script-src 'self' refuses it: data-on-*, _on)",
+                "<s": "an inline script (script-src 'self' refuses it)",
+                "ja": "a javascript: URL", "sr": "srcdoc (its markup is read as a page)",
+                "<m": "a meta tag written by a script (a refresh is a navigation)"}
+
+
+def _kind(m: re.Match) -> str:
+    return m.group(0)[:2].lower()
+
+
+def _count(toks: list[Tok]) -> int:
+    """The ${…} of a token list, nested ones too."""
+    return sum(len(t.exprs) + sum(_count(e) for e in t.exprs) for t in toks if t.kind == "tpl")
+
+
+def _refused_api(toks: list[Tok], k: int) -> str | None:
+    """What writes markup or code elsewhere than innerHTML, at token k (S2 of #256's review)."""
+    t = toks[k]
+    nxt = toks[k + 1].text if k + 1 < len(toks) else ""
+    prev = toks[k - 1].text if k else ""
+    after = toks[k + 2] if k + 2 < len(toks) else None
+    if t.kind == "name" and t.text in ("write", "writeln") and prev == "." and toks[k - 2].text == "document":
+        return "document.write (not followed: innerHTML, escaped)"
+    if t.kind == "str" and t.text[1:-1] in ("innerHTML", "outerHTML") and prev == "[":
+        return "innerHTML by its name in brackets (not followed)"
+    if t.kind == "name" and t.text in ("innerHTML", "outerHTML") and nxt == ":" and prev in ("{", ","):
+        return "innerHTML in an object (Object.assign: not followed)"
+    if t.kind == "name" and t.text in ("createContextualFragment", "DOMParser", "parseFromString", "eval"):
+        return f"{t.text} (markup or code the reader does not follow)"
+    if t.kind == "name" and t.text == "Function" and (prev == "new" or nxt == "("):
+        return "new Function (code from a string)"
+    if t.kind == "name" and t.text in ("setTimeout", "setInterval") and nxt == "(" and after is not None:
+        then = toks[k + 3].text if k + 3 < len(toks) else ""
+        function = after.text in ("function", "async") or then == "=>" or (
+            after.text == "(" and any(x.text == "=>" for x in toks[k + 2:k + 40])) or (
+            after.kind == "name" and then in (",", ")"))
+        if not function:
+            return f"{t.text} given what may be a string (code from a string)"
+    if t.kind == "name" and t.text == "setAttribute" and prev in (".", "?.") and nxt == "(" and after is not None:
+        if after.kind != "str" or re.match(r"(on|srcdoc$|style$|data-on-)|(href|src|action|formaction|xlink:href)$",
+                                          after.text[1:-1].lower()):
+            return "setAttribute of a handler, a URL, an action or a name not written in the page"
+    if t.kind == "name" and t.text == "setAttributeNS" and prev in (".", "?."):
+        return "setAttributeNS (not followed)"
+    if t.kind == "name" and t.text == "dataset" and prev in (".", "?.") and nxt in (".", "[") and after is not None \
+            and re.match(r"['\"]?on[A-Z]", after.text):
+        return "an action set from a value (dataset.on…: only _on, in a template)"
+    if t.kind == "name" and t.text == "location" and prev not in (".", "?.") or (
+            t.kind == "name" and t.text == "location" and prev == "." and toks[k - 2].text in ("window", "document")):
+        if nxt == "=" or (nxt == "." and after is not None and after.text in ("assign", "replace", "href")
+                          and k + 3 < len(toks) and toks[k + 3].text in ("(", "=")):
+            return "a navigation the reader does not follow (a link, escaped, instead)"
+    if t.kind == "name" and prev in (".", "?.") and t.text.lower() in _URL_ATTRS + ("srcdoc",) \
+            and nxt == "=":
+        return f".{t.text} = (a URL or markup written outside a template)"
+    return None
 
 
 def check(static: Path = STATIC) -> list[Finding]:

@@ -340,8 +340,12 @@ def notify_action(
         return
     try:
         import requests
-        resource_short = resource_id.split("/")[-1]
-        label = _ACTION_LABELS.get(action, action)
+
+        from glorfindel.chat_text import webhook_code, webhook_text
+        # Text from outside (the model's, Azure's names): one line each, no link nor mention
+        # of its own (SEC6, N-09 — glorfindel/chat_text.py).
+        resource_short = webhook_code(resource_id.split("/")[-1])
+        label = _ACTION_LABELS.get(action) or webhook_text(action)
         if verified:
             status = "✓"
         elif verified is None:
@@ -349,14 +353,14 @@ def notify_action(
         else:
             status = "✗"
         pct = f"{int(confidence * 100)}% confidence"
-        meta = " · ".join(filter(None, [ttp, severity, pct]))
+        meta = webhook_text(" · ".join(filter(None, [ttp, severity, pct])))
         requests.post(url, json={
             "text": (
                 f":robot_face: *{label}* {status}  |  `{resource_short}`\n"
-                f"`{action}` · {meta}\n"
-                f"> {explanation[:800]}\n"
-                + (f"> ⚠ {note[:300]}\n" if note else "")
-                + f"`{run_id}`"
+                f"`{webhook_code(action)}` · {meta}\n"
+                f"> {webhook_text(explanation[:800])}\n"
+                + (f"> ⚠ {webhook_text(note[:300])}\n" if note else "")
+                + f"`{webhook_code(run_id)}`"
             )
         }, timeout=5)
     except Exception:
@@ -398,19 +402,23 @@ def _notify(esc: dict) -> None:
         return
     try:
         import requests
-        resource_short = esc["resource_id"].split("/")[-1]
-        label = _ACTION_LABELS.get(esc["action"], esc["action"])
+
+        from glorfindel.chat_text import webhook_code, webhook_text
+        # The reason carries the model's words and Azure's names (an Entra application's
+        # display name): one line, no link nor mention of its own (SEC6, N-09).
+        resource_short = webhook_code(esc["resource_id"].split("/")[-1])
+        label = _ACTION_LABELS.get(esc["action"]) or webhook_text(esc["action"])
         type_label = _ESCALATION_LABELS.get(
             esc["escalation_type"], esc["escalation_type"]
         )
         parts = [esc.get("ttp", ""), esc.get("severity", ""), type_label]
-        meta = " · ".join(filter(None, parts))
+        meta = webhook_text(" · ".join(filter(None, parts)))
         requests.post(url, json={
             "text": (
                 f":rotating_light: *{label}*  |  `{resource_short}`\n"
-                f"`{esc['action']}` · {meta}\n"
-                f"> {esc['reason'][:500]}\n"
-                f"`{esc['run_id']}`"
+                f"`{webhook_code(esc['action'])}` · {meta}\n"
+                f"> {webhook_text(esc['reason'][:500])}\n"
+                f"`{webhook_code(esc['run_id'])}`"
             )
         }, timeout=5)
     except Exception:

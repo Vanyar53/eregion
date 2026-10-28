@@ -11,6 +11,7 @@ from discord import app_commands
 from rich.console import Console
 
 from glorfindel import escalations as esc_module
+from glorfindel.chat_text import discord_code, discord_text
 from glorfindel.escalations import _ACTION_LABELS, _ESCALATION_LABELS
 
 _console = Console()
@@ -106,14 +107,15 @@ _ATTEMPTED = {"write_blocked", "action_failed"}  # tried, did not go through
 
 
 def _embed_title(esc: dict) -> str:
-    """Never a past participle for what did not run."""
+    """Never a past participle for what did not run. An action or a type Glorfindel has no
+    label for (the model may name any action) is shown as written, never as Markdown."""
     action, etype = esc.get("action", ""), esc.get("escalation_type", "")
-    type_label = _ESCALATION_LABELS.get(etype, etype)
+    type_label = _ESCALATION_LABELS.get(etype) or discord_text(etype)
     if etype in _RAN:
-        return f"🚨 {_ACTION_LABELS.get(action, action)} — {type_label}"
+        return f"🚨 {_ACTION_LABELS.get(action) or discord_text(action)} — {type_label}"
     rec = _RECOMMEND_LABELS.get(action)
     if etype in _ATTEMPTED:
-        return f"🚨 {(rec or action or '?').capitalize()} — {type_label}"
+        return f"🚨 {rec.capitalize() if rec else discord_text((action or '?').capitalize())} — {type_label}"
     if not rec or not esc_module.is_decision(esc):
         return f"🚨 {_ACTION_LABELS.get(action) or type_label[:1].upper() + type_label[1:]}"
     return f"🚨 Recommandé : {rec} (non exécuté)"
@@ -121,19 +123,22 @@ def _embed_title(esc: dict) -> str:
 
 def _embed_body(esc: dict) -> tuple[str, list[tuple[str, str, bool]]]:
     """The description and fields: the evidence to judge on (the model's explanation, the
-    IP a block targets, the rule, the confidence), then why it did not run."""
+    IP a block targets, the rule, the confidence), then why it did not run.
+
+    Every text from outside — the model's, Azure's names (an Entra application's display
+    name), a rule's — is escaped (SEC6, N-09: glorfindel/chat_text.py), then cut."""
     explanation = (esc.get("explanation") or "").strip()
     reason = (esc.get("reason") or "").strip()
     fields: list[tuple[str, str, bool]] = [
-        ("Action", f"`{esc.get('action') or '—'}`", True),
-        ("Ressource", f"`{(esc.get('resource_id') or '').split('/')[-1]}`", True),
+        ("Action", discord_code(esc.get("action") or "—"), True),
+        ("Ressource", discord_code((esc.get("resource_id") or "").split("/")[-1]), True),
     ]
     params = esc.get("action_params") or {}
     if params.get("ip"):
-        target = params["ip"] + (f":{params['port']}" if params.get("port") else "")
-        fields.append(("Cible", f"`{target}`", True))
+        target = str(params["ip"]) + (f":{params['port']}" if params.get("port") else "")
+        fields.append(("Cible", discord_code(target), True))
     if esc.get("rule_name"):
-        fields.append(("Règle", f"`{esc['rule_name']}`", True))
+        fields.append(("Règle", discord_code(esc["rule_name"]), True))
     if esc.get("confidence"):
         fields.append(("Confiance", f"{round(float(esc['confidence']) * 100)} %", True))
     rec = esc.get("recurrence")
@@ -142,13 +147,14 @@ def _embed_body(esc: dict) -> tuple[str, list[tuple[str, str, bool]]]:
         fields.append(("Déjà vue", f"↻ même IP {rec['previous']}× en 7 jours — dernière le "
                        f"{str(rec.get('last_seen') or '')[:16].replace('T', ' ')} UTC{verdict}", False))
     type_label = _ESCALATION_LABELS.get(esc.get("escalation_type", ""), esc.get("escalation_type", ""))
-    fields.append(("Contexte", " · ".join(filter(None, [esc.get("ttp", ""), esc.get("severity", ""), type_label])), False))
+    fields.append(("Contexte", discord_text(" · ".join(filter(None, [
+        str(esc.get("ttp") or ""), str(esc.get("severity") or ""), type_label]))), False))
     if explanation and reason and reason != explanation:
-        fields.append(("Pourquoi rien n'est exécuté", reason[:1024], False))
+        fields.append(("Pourquoi rien n'est exécuté", discord_text(reason)[:1024], False))
     if esc.get("suggested_steps"):
-        steps = "\n".join(f"• {s}" for s in esc["suggested_steps"][:3])
+        steps = "\n".join(f"• {discord_text(s)}" for s in esc["suggested_steps"][:3])
         fields.append(("Prochaines étapes", steps[:1024], False))
-    return (explanation or reason)[:2048], fields
+    return discord_text(explanation or reason)[:2048], fields
 
 
 def _load_messages() -> dict[str, int]:
@@ -237,7 +243,7 @@ def _weekly_summary(report: dict, to_judge: int, now) -> str:
         lines.append(f"🔁 blocages recommandés : {blocks['cards']} carte(s) pour {blocks['distinct_ips']} IP distincte(s)")
     rules = sorted((report.get("by_rule") or {}).items(), key=lambda kv: -sum(kv[1].values()))
     for name, b in rules[:5]:
-        lines.append(f"• `{name}` : {b.get('right', 0)} right · {b.get('wrong', 0)} wrong · "
+        lines.append(f"• {discord_code(name)} : {b.get('right', 0)} right · {b.get('wrong', 0)} wrong · "
                      f"{b.get('unsure', 0)} unsure · {b.get('unjudged', 0)} non jugée(s)")
     lines.append(f"⚖️ **{to_judge} carte(s) à juger**" if to_judge else "✓ Rien à juger.")
     return "\n".join(lines)
@@ -350,7 +356,7 @@ class _ExecuteButton(discord.ui.Button):
 
         cmd_display = "glorfindel " + " ".join(self.cli_args)
         await interaction.channel.send(  # type: ignore[union-attr]
-            f"⚡ **{interaction.user.display_name}** → `{cmd_display}`"
+            f"⚡ **{discord_text(interaction.user.display_name)}** → {discord_code(cmd_display)}"
         )
 
         # Auto-ack before executing so the escalation closes right away
@@ -365,7 +371,8 @@ class _ExecuteButton(discord.ui.Button):
         try:
             loop = asyncio.get_running_loop()
             output = await loop.run_in_executor(None, self._run)
-            short = output.strip()[:1800] or "(pas de sortie)"
+            # The CLI's output (names from Azure in it): no ``` of its own closes the block.
+            short = output.strip()[:1800].replace("`", "ˋ") or "(pas de sortie)"
             await channel.send(f"```\n{short}\n```")
             # Archive thread if no more pending escalations for this resource
             remaining = [
@@ -377,7 +384,7 @@ class _ExecuteButton(discord.ui.Button):
                     archived=True, reason="All escalations acknowledged"
                 )
         except Exception as exc:
-            await channel.send(f"✗ Erreur lors de l'exécution : {exc}")
+            await channel.send(f"✗ Erreur lors de l'exécution : {discord_text(exc)}")
 
     def _run(self) -> str:
         import subprocess
@@ -438,7 +445,7 @@ class _VerdictButton(discord.ui.Button):
         try:
             esc_module.set_verdict(self.esc["id"], self.verdict, "")
         except (KeyError, ValueError) as exc:
-            await interaction.response.send_message(f"✗ {exc}", ephemeral=True)
+            await interaction.response.send_message(f"✗ {discord_text(exc)}", ephemeral=True)
             return
         # One click: a judged card is also acknowledged (Jonathan, 16/10).
         esc_module.resolve(self.esc["id"])
@@ -446,7 +453,7 @@ class _VerdictButton(discord.ui.Button):
             item.disabled = True  # type: ignore[attr-defined]
         await interaction.response.edit_message(view=self.view)  # type: ignore[union-attr]
         await interaction.followup.send(
-            f"{_VERDICT_WORDS[self.verdict]} — jugé par **{interaction.user.display_name}**"
+            f"{_VERDICT_WORDS[self.verdict]} — jugé par **{discord_text(interaction.user.display_name)}**"
         )
         remaining = [e for e in esc_module.pending() if e["resource_id"] == self.esc["resource_id"]]
         if not remaining and isinstance(interaction.channel, discord.Thread):
@@ -488,7 +495,7 @@ class EscalationView(discord.ui.View):
             item.disabled = True  # type: ignore[attr-defined]
         await interaction.response.edit_message(view=self)
         await interaction.followup.send(
-            f"✓ Acknowledged by **{interaction.user.display_name}**"
+            f"✓ Acknowledged by **{discord_text(interaction.user.display_name)}**"
         )
         remaining = [
             e for e in esc_module.pending()
@@ -544,7 +551,9 @@ class GlorfindelBot(discord.Client):
     def __init__(self, channel_id: int, ping_role: int | None,
                  button_policy: ButtonPolicy | None = None):
         intents = discord.Intents.default()
-        super().__init__(intents=intents)
+        # No mention from any text the bot posts (SEC6, N-09): only the role it is set to
+        # ping, and only in that message (_get_or_create_thread).
+        super().__init__(intents=intents, allowed_mentions=discord.AllowedMentions.none())
         self.tree = app_commands.CommandTree(self)
         self.channel_id = channel_id
         self.ping_role = ping_role
@@ -571,10 +580,10 @@ class GlorfindelBot(discord.Client):
                 return
             lines = []
             for e in escs[:5]:
-                label = _ACTION_LABELS.get(e["action"], e["action"])
+                label = _ACTION_LABELS.get(e["action"]) or discord_text(e["action"])
                 short = e["resource_id"].split("/")[-1]
                 lines.append(
-                    f"• `{e['id'][:8]}` — **{label}** sur `{short}`"
+                    f"• {discord_code(e['id'][:8])} — **{label}** sur {discord_code(short)}"
                 )
             if len(escs) > 5:
                 lines.append(f"_... et {len(escs) - 5} autre(s)_")
@@ -652,7 +661,8 @@ class GlorfindelBot(discord.Client):
 
         if self.ping_role:
             await thread.send(
-                f"<@&{self.ping_role}> Incident opened on `{vm_name}`"
+                f"<@&{self.ping_role}> Incident opened on {discord_code(vm_name)}",
+                allowed_mentions=discord.AllowedMentions(roles=[discord.Object(id=self.ping_role)]),
             )
         return thread
 

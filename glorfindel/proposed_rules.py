@@ -7,6 +7,33 @@ from pathlib import Path
 
 _STORE = Path.home() / ".glorfindel" / "proposed_rules.jsonl"
 
+# A proposal named like a shipped rule gets this suffix (SEC2): approved, it would have
+# replaced the shipped rule in the client's layer, in silence.
+_PROPOSED_SUFFIX = "-proposed"
+
+
+def own_name(rule_name: str, shipped: set[str] | None = None) -> str:
+    """`rule_name`, or — when it is a shipped rule's name — that name suffixed, never one
+    a shipped rule has (SEC2). `shipped`: the names (default: the shipped base's)."""
+    from glorfindel.detection_rules import shipped_rule_names
+    taken = shipped_rule_names() if shipped is None else shipped
+    if rule_name not in taken:
+        return rule_name
+    name, n = f"{rule_name}{_PROPOSED_SUFFIX}", 2
+    while name in taken:
+        name, n = f"{rule_name}{_PROPOSED_SUFFIX}-{n}", n + 1
+    return name
+
+
+def _min_interval(interval_s) -> float:
+    """The proposal's interval, never under the rules' floor (SEC2)."""
+    from glorfindel.detection_rules import MIN_INTERVAL_S
+    try:
+        value = float(interval_s)
+    except (TypeError, ValueError):
+        return MIN_INTERVAL_S
+    return value if value >= MIN_INTERVAL_S else MIN_INTERVAL_S
+
 
 def record(
     run_id: str,
@@ -22,7 +49,12 @@ def record(
     analysis: str,
     signal_id: str = "",
 ) -> str:
-    """Append a proposed detection rule and return its id."""
+    """Append a proposed detection rule and return its id.
+
+    The model names the rule: a shipped rule's name is suffixed (`own_name`, SEC2) and the
+    name it asked for kept (`renamed_from`) — approved, it would have replaced the shipped
+    rule. Its interval is raised to the rules' floor (`MIN_INTERVAL_S`)."""
+    name = own_name(rule_name)
     proposal = {
         "id": str(uuid.uuid4()),
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -30,11 +62,12 @@ def record(
         "signal_id": signal_id,
         "ttp": ttp,
         "resource_id": resource_id,
-        "rule_name": rule_name,
+        "rule_name": name,
+        **({"renamed_from": rule_name} if name != rule_name else {}),
         "source": source,
         "workspace_id": workspace_id,
         "query": query,
-        "interval_s": interval_s,
+        "interval_s": _min_interval(interval_s),
         "explanation": explanation,
         "confidence": confidence,
         "analysis": analysis,
@@ -63,8 +96,15 @@ def all_proposals() -> list[dict]:
 
 
 def pending() -> list[dict]:
-    """Return all unapproved proposals, oldest first."""
-    return [p for p in all_proposals() if p["status"] == "pending"]
+    """Return all unapproved proposals, oldest first — each with `replaces` (SEC2): the
+    layer of the rule its approval would replace ("client"), "" when none."""
+    out = [p for p in all_proposals() if p["status"] == "pending"]
+    if out:
+        from glorfindel.detection_rules import shipped_rule_names
+        shipped, names = shipped_rule_names(), {r["name"] for r in _client_layer_rules()}
+        for p in out:
+            p["replaces"] = "client" if own_name(p["rule_name"], shipped) in names else ""
+    return out
 
 
 def approve(proposal_id: str, rules_yaml_path: str | Path) -> dict:
@@ -77,6 +117,11 @@ def approve(proposal_id: str, rules_yaml_path: str | Path) -> dict:
     the base. The rule is written first: a layer that cannot be read leaves the proposal
     pending, never approved without its rule. Returns the proposal, with `rules_file` (the
     layer written) and `rule_write` ('added' | 'replaced' | 'same').
+
+    Never in the place of a shipped rule (SEC2): a proposal recorded under a shipped rule's
+    name (before the suffix) is approved under its own (`renamed_from` says it). Replacing
+    a client rule of the same name is said: `replaces` = "client", the rule it replaced in
+    `replaced_rule`.
     """
     from glorfindel import rule_layers
 
@@ -97,6 +142,11 @@ def approve(proposal_id: str, rules_yaml_path: str | Path) -> dict:
     if proposal is None:
         raise ValueError(f"Proposal {proposal_id} not found or already approved")
 
+    name = own_name(proposal["rule_name"])
+    if name != proposal["rule_name"]:
+        proposal.setdefault("renamed_from", proposal["rule_name"])
+        proposal["rule_name"] = name
+    replaced = next((r for r in _client_layer_rules() if r.get("name") == name), None)
     rule = rule_from_proposal(proposal, Path(rules_yaml_path))
     how = rule_layers.write_client_rule(rule)
 
@@ -108,7 +158,18 @@ def approve(proposal_id: str, rules_yaml_path: str | Path) -> dict:
         "aucun backend unique de glorfindel-config.yaml ne surveille son workspace"
         if proposal.get("workspace_id") else "aucun backend de glorfindel-config.yaml")
     return {**proposal, "rules_file": str(rule_layers.client_rules_path()), "rule_write": how,
-            "rule_bound": bound, "rule_unbound_reason": reason}
+            "rule_bound": bound, "rule_unbound_reason": reason,
+            "replaces": "client" if how == "replaced" else "",
+            **({"replaced_rule": replaced} if how == "replaced" else {})}
+
+
+def _client_layer_rules() -> list[dict]:
+    from glorfindel import rule_layers
+    from glorfindel.detection_rules import _named
+    try:
+        return _named(rule_layers.read_client_layer().get("rules"))
+    except Exception:
+        return []
 
 
 def reject(proposal_id: str) -> dict:
@@ -199,7 +260,7 @@ def rule_from_proposal(proposal: dict, rules_path: Path) -> dict:
             "ttp": proposal["ttp"],
             "resource_id": proposal["resource_id"],
         })
-    rule["interval_s"] = int(proposal["interval_s"])
+    rule["interval_s"] = int(_min_interval(proposal["interval_s"]))
     query = proposal["query"]
     rule["query"] = query if query.endswith("\n") else query + "\n"
     return rule

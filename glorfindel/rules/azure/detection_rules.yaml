@@ -17,7 +17,8 @@
 #                        précis quand plusieurs sont définis. Un nom absent du config
 #                        ou une ambiguïté → warning au chargement (jamais silencieux).
 # assets: [auto]       : s'applique à toutes les VMs découvertes par ce backend
-# interval_s           : période de polling en secondes
+# interval_s           : période de polling en secondes (30 au moins, SEC2)
+# ${VAR}               : développé dans workspace_id, resource_id, endpoint seulement
 # enabled              : mettre à false pour désactiver sans supprimer
 # expected_latency_s   : latence d'ingestion P95 du backend.
 #                        poll_detection utilise max(expected_latency_s, signal.detection_timeout_s)
@@ -110,9 +111,14 @@ rules:
     query: |
       Syslog
       | where Facility == "auth"
+      // sshd's own lines only (SEC2): `sshd-session` since OpenSSH 9.8.
+      | where ProcessName in ("sshd", "sshd-session")
       | where SyslogMessage has "Failed password" or SyslogMessage has "Invalid user"
       | where TimeGenerated > ago(10m)
-      | extend SourceIP = extract(@"from (\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})", 1, SyslogMessage)
+      // The peer address is the one sshd writes last, `from <address> port <n>[ ssh2]` at
+      // the end of its line (SEC2) — never an address found elsewhere in the line. `]`:
+      // rsyslog's « message repeated N times: [ … ] ». IPv4 only, as before.
+      | extend SourceIP = extract(@"from (\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}) port \d+( ssh2)?\]?\s*$", 1, SyslogMessage)
       | where isnotempty(SourceIP)
       // Exclude all RFC-1918 + loopback — aligned with data-exfiltration-blob
       // (172.16-31 was previously missing → internal 172.x flagged as external)
@@ -134,9 +140,11 @@ rules:
       Syslog
       | where Facility == "auth"
       | where TimeGenerated > ago(10m)
-      | where SyslogMessage has "sudo"
-            and SyslogMessage has "USER=root"
+      // sudo's own lines only (SEC2), in sudo's form: `<user> : … ; USER=root ; … COMMAND=…`.
+      | where ProcessName == "sudo"
+      | where SyslogMessage has "USER=root"
             and SyslogMessage has "COMMAND="
+      | where SyslogMessage matches regex @"^\s*\S+ : (.*; )?USER=root ; (.*; )?COMMAND="
       | where SyslogMessage !has "NOT in sudoers"
             and SyslogMessage !has "authentication failure"
       | project TimeGenerated, Computer, _ResourceId, SyslogMessage

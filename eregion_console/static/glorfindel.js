@@ -60,6 +60,7 @@ const ESC_LABELS = {
   quarantine_altered:  'quarantine NSG altered',
   control_plane_change: 'control plane changed (detection only)',
   identity_change:     'Entra ID identity changed (detection only)',
+  protected_address:   'protected address (never blocked)',
 };
 
 // Cards anchored on a VM the detection does not name (an Activity Log row, an identity,

@@ -249,7 +249,7 @@ def test_migrate_moves_what_the_modified_base_holds_beyond_the_base(tmp_path):
     modified = tmp_path / "approved.yaml"
     # Approved rule appended; ssh-brute-force edited on the VM; sudo-root removed on the VM.
     text = _pre_p1_approved(BASE_V1).replace("interval_s: 30\n    query: |\n      Syslog | where "
-                                             "SyslogMessage has \"Failed", "interval_s: 15\n    query: |\n"
+                                             "SyslogMessage has \"Failed", "interval_s: 45\n    query: |\n"
                                              "      Syslog | where SyslogMessage has \"Failed")
     text = text.replace(BASE_V1.split("  - name: sudo-root")[1], "\n").replace("  - name: sudo-root", "")
     modified.write_text(text)
@@ -263,7 +263,7 @@ def test_migrate_moves_what_the_modified_base_holds_beyond_the_base(tmp_path):
     cfg = load_config(base)
     rules = _names(cfg)
     assert set(rules) == {"ssh-brute-force", "log-clearing"}
-    assert rules["ssh-brute-force"].interval_s == 15 and rules["ssh-brute-force"].layer == "client"
+    assert rules["ssh-brute-force"].interval_s == 45 and rules["ssh-brute-force"].layer == "client"
     assert rules["log-clearing"].layer == "client" and rules["log-clearing"].workspace_id == WS
 
     again = rule_layers.migrate(modified, base)
@@ -338,7 +338,7 @@ def test_the_containers_mount_the_base_read_only_and_the_state_read_write():
     ("rules:\n  - name: bad\n    enabled: yes please\n    query: S\n", "enabled"),
     ("rules:\n  - name: bad\n    assets: vm-1\n    query: S\n", "assets"),
     ("rules:\n  - name: bad\n    query: [S]\n", "query"),
-    ("rules:\n  - name: bad\n    interval_s: 0\n    query: S\n", "positif"),
+    ("rules:\n  - name: bad\n    interval_s: 0\n    query: S\n", "au moins"),
     ("assets:\n  - name: a1\n    monitoring_backends: law\n", "monitoring_backends"),
 ])
 def test_a_bad_client_entry_is_skipped_said_and_the_rest_loads(tmp_path, layer, said):

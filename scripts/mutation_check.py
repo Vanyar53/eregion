@@ -1429,10 +1429,10 @@ MUTANTS = [
      '<script src="/static/overview.js"></script>', '<script src="/static/overview.js"></script><script>refresh()</script>'),
     ("M1085", "the page's events call a name the table only inherits (constructor, toString…) (#257)", GJS,
      "  if (!Object.hasOwn(ACTIONS, action)) return;", "  if (!(action in ACTIONS)) return;"),
-    ("M1086", "a button inside a card opens the card too: the event no longer goes to the nearest action (#257)", GJS,
+    ("M1086", "a click on an action's text or icon does nothing: only the element itself takes the event (#257)", GJS,
      "  const el = ev.target instanceof Element ? ev.target.closest(`[data-on-${name}]`) : null;",
      "  const el = ev.target instanceof Element && ev.target.hasAttribute(`data-on-${name}`) ? ev.target : null;"),
-    ("M1087", "the events dispatched after the document's other listeners: the popover closes as it opens (#257)", GJS,
+    ("M1087", "the events dispatched after the document's other listeners: whether an action runs hangs on the order they were added (#257)", GJS,
      "document.addEventListener(type, ev => _dispatch(ev, name), true);", "document.addEventListener(type, ev => _dispatch(ev, name));"),
     ("M1088", "an element's arguments written raw into its attribute (#257)", GJS,
      '` data-${event}-args="${_attr(JSON.stringify(args))}"`', '` data-${event}-args="${JSON.stringify(args)}"`'),
@@ -1445,17 +1445,18 @@ MUTANTS = [
     ("M1091", "the reader lets document.write through (S2, #257)", CESC,
      '        return "document.write (not followed: innerHTML, escaped)"', "        return None"),
     ("M1092", "the reader lets setAttribute('onclick', …) through (S2, #257)", CESC,
-     '            return "setAttribute of a handler, a URL or a name not written in the page"', "            return None"),
+     '            return "setAttribute of a handler, a URL, an action or a name not written in the page"', "            return None"),
     ("M1093", "the reader takes any .length for a number, a server object's too (S4, #257)", CESC,
      '            if node.text in ("length", "size") and self._built(kids[0]):', '            if node.text in ("length", "size"):'),
     ("M1094", "the reader takes srcdoc for an attribute like another (S5, #257)", CESC,
-     '        if name.startswith("on") or name == "srcdoc":', '        if name.startswith("on"):'),
+     '        if name.startswith("on") or name == "srcdoc" or name.startswith("data-on-"):',
+     '        if name.startswith("on") or name.startswith("data-on-"):'),
     ("M1095", "the reader's count leaves out the nested templates: a skipped one would go unseen (S6, #257)", CESC,
      '    return sum(len(t.exprs) + sum(_count(e) for e in t.exprs) for t in toks if t.kind == "tpl")',
      '    return sum(len(t.exprs) for t in toks if t.kind == "tpl")'),
     ("M1096", "the reader lets an inline handler through (#257)", CESC,
-     '_REFUSED = re.compile(r"(?<![\\w-])on[a-z]+\\s*=(?!=)|<script\\b|javascript:|(?<![\\w-])srcdoc\\s*=", re.I)',
-     '_REFUSED = re.compile(r"<script\\b|javascript:|(?<![\\w-])srcdoc\\s*=", re.I)'),
+     '_REFUSED = re.compile(r"(?<![\\w-])on[a-z]+\\s*=(?!=)|<script\\b|javascript:|(?<![\\w-])srcdoc\\s*=|<meta\\b", re.I)',
+     '_REFUSED = re.compile(r"<script\\b|javascript:|(?<![\\w-])srcdoc\\s*=|<meta\\b", re.I)'),
     ("M1097", "the reader takes a function in a table (ACTIONS) as called by the page only (#257)", CESC,
      "            elif j == k + 1:\n                # Passed as a value",
      "            elif j == k + 1 and not (prev is not None and prev.text in ('{', ',') and nxt is not None\n"
@@ -1464,6 +1465,36 @@ MUTANTS = [
      '        if name in _URL_ATTRS and value in ("", "/"):', '        if name in _URL_ATTRS and value == "":'),
     ("M1099", "the overview links a section by its id escaped for HTML only (S8, #257)", "eregion_console/static/overview.js",
      '<div class="name"><a href="/${encodeURIComponent(s.id)}">', '<div class="name"><a href="/${esc(s.id)}">'),
+    # #257's review (5.5): an action is a name the page wrote; what an injected element could still
+    # make the page do; the rebindings and prefixes the reader missed.
+    ("M1290", "the reader lets a data-on-* name its action from a card, escaped or not (#257)", CESC,
+     '        if name.startswith("on") or name == "srcdoc" or name.startswith("data-on-"):',
+     '        if name.startswith("on") or name == "srcdoc":'),
+    ("M1291", "the reader lets setAttribute('data-on-click', …) name an action from a value (#257)", CESC,
+     'r"(on|srcdoc$|style$|data-on-)|', 'r"(on|srcdoc$|style$)|'),
+    ("M1292", "the reader lets dataset.onClick name an action from a value (#257)", CESC,
+     '        return "an action set from a value (dataset.on…: only _on, in a template)"', "        return None"),
+    ("M1293", "an injected element with a value changes a VM's mode: no <select> needed (#257)", GJS,
+     "    if (!(_target instanceof HTMLSelectElement)) return;\n    if (_target.value === 'non_disruptive')",
+     "    if (_target.value === 'non_disruptive')"),
+    ("M1294", "an element's arguments may be an object: an approval skips its scope window (#257)", GJS,
+     "  if (!Array.isArray(args) || !args.every(a => a === null || ['string', 'number', 'boolean'].includes(typeof a))) return;\n",
+     ""),
+    ("M1295", "the reader lets setAttributeNS through (#257)", CESC,
+     '        return "setAttributeNS (not followed)"', "        return None"),
+    ("M1296", "the reader lets a navigation through: location.assign(x) (#257)", CESC,
+     '            return "a navigation the reader does not follow (a link, escaped, instead)"', "            return None"),
+    ("M1297", "the reader takes a let's .length for a number: a destructuring rebinds it to the server's (#257)", CESC,
+     "            return d.kind == \"var\" and d.const and d.init is not None and self._built(d.init, seen)",
+     "            return d.kind == \"var\" and d.init is not None and self._built(d.init, seen)"),
+    ("M1298", "the reader reads a const prefix as a value: `pre + _attr(u)` with pre = '<a href=\"' unseen (#257)", CESC,
+     "            if (literal := self._literal(part)) is not None:",
+     "            if part.kind == \"lit\" and (literal := self._literal(part)) is not None:"),
+    ("M1299", "the reader misses a destructuring assignment: [a] = [card] goes unseen (#257)", CESC,
+     "                for x in _pattern_names(toks, k, p.close[k]):\n"
+     "                    self._uses.append((toks[x].text, toks[x].pos, value))\n"
+     "                    self._reassigns.append((toks[x].text, toks[x].pos, value))",
+     "                for x in _pattern_names(toks, k, p.close[k]):\n                    pass"),
     ("M408", "eregion console keeps compose's empty service principal: no managed identity (UI-1, H0)",
      "eregion_console/cli.py", "    _drop_empty_service_principal_env()\n", ""),
     ("M409", "the console looks for the shipped rules beside itself: none outside the repo's root (UI-1, P1 review)",
@@ -2393,7 +2424,7 @@ TESTS["M568"] = "tests/unit/test_console.py"
 TESTS["M569"] = "tests/unit/test_cli.py -k version"
 TESTS.update({f"M{n}": "tests/unit/test_console.py" for n in range(570, 580)})  # #248, and the card detail escaped
 TESTS.update({f"M{n}": "tests/unit/test_console_escaping.py" for n in range(580, 600)})  # #254
-TESTS.update({f"M{n}": "tests/unit/test_console_escaping.py" for n in range(1080, 1100)})  # #257
+TESTS.update({f"M{n}": "tests/unit/test_console_escaping.py" for n in (*range(1080, 1100), *range(1290, 1300))})  # #257
 TESTS["M403"] = "tests/unit/test_console_exercises.py"
 # V1 (#214): Annatar's side and the shared gate in test_watch_gate.py, Gothmog's in test_gothmog.py.
 TESTS.update({f"M{n}": "tests/unit/test_watch_gate.py" for n in (*range(720, 740), *range(750, 760))})

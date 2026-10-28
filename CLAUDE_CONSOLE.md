@@ -102,7 +102,9 @@ En-tête (console.js), le même partout → EREGION + version déployée (tag, s
   (les autres pages) ; le début d'une URL, `/` de tête compris, par `encodeURIComponent`.
 - **Aucun script ni gestionnaire `on…` en ligne** (#257, CSP `script-src 'self'`) : le script d'une
   page est un fichier ; un élément nomme son action avec `_on` (`data-on-click` et ses arguments en
-  JSON), appelée par le répartiteur dans `ACTIONS` — une action nouvelle s'ajoute à cette table.
+  JSON), appelée par le répartiteur dans `ACTIONS` — une action nouvelle s'ajoute à cette table. Le
+  nom d'une action est un littéral de la page, jamais une donnée ; ses arguments, des chaînes ou des
+  nombres ; une action qui lit une valeur (`_target.value`) vérifie que l'élément est le sien (`<select>`).
 - **Ce que le test vérifie** : `tests/unit/test_console_escaping.py` échoue sur ce que le lecteur
   (`python scripts/console_escaping.py` : où, d'où) voit — une valeur non échappée pour sa place dans
   le `${…}` d'un gabarit HTML, une valeur donnée à `innerHTML` ou une concaténation, un gestionnaire ou

@@ -2949,11 +2949,14 @@ const ACTIONS = {
   approveActionAndClose(id, vm) { doApproveAction(id, vm); closeModal(); },
   approveScoped(escId, vm, scope, ip) { closeModal(); doApproveAction(escId, vm, ip ? { scope, ip } : { scope }); },
   capability(mode) { showCapabilityPopover(_event, mode); },
+  // A mode is read from the page's own <select>: an element that only carries a value (an injected
+  // <button value="non_disruptive">) changes nothing.
   modeChange(vm) {
+    if (!(_target instanceof HTMLSelectElement)) return;
     if (_target.value === 'non_disruptive') openActivation(vm);
     else setAutonomyMode(vm, _target.value);
   },
-  defaultMode() { setDefaultMode(_target.value); },
+  defaultMode() { if (_target instanceof HTMLSelectElement) setDefaultMode(_target.value); },
   dragVm(vm) {
     _event.dataTransfer.setData('text/plain', vm);
     _target.classList.add('dragging');
@@ -2986,6 +2989,8 @@ function _dispatch(ev, name) {
   if (!Object.hasOwn(ACTIONS, action)) return;
   let args = [];
   try { args = JSON.parse(el.getAttribute(`data-${name}-args`) || '[]'); } catch (e) { return; }
+  // Names, ids, indexes, a flag: never an object (doApproveAction's scope would skip its window).
+  if (!Array.isArray(args) || !args.every(a => a === null || ['string', 'number', 'boolean'].includes(typeof a))) return;
   _event = ev; _target = el;
   try { ACTIONS[action](...args); } finally { _event = _target = null; }
 }

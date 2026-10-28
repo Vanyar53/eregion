@@ -98,6 +98,12 @@ def test_the_page_dispatches_to_a_closed_table_from_the_nearest_element():
     assert "if (!Object.hasOwn(ACTIONS, action)) return;" in js
     assert "try { ACTIONS[action](...args); } finally { _event = _target = null; }" in js
     assert "document.addEventListener(type, ev => _dispatch(ev, name), true);" in js
+    # names, ids, indexes, flags — never an object (a scope that would skip its window)
+    assert "if (!Array.isArray(args) || !args.every(a => a === null || ['string', 'number', 'boolean']" \
+           ".includes(typeof a))) return;" in js
+    # a mode only from the page's own <select>, never from an element that carries a value
+    assert "    if (!(_target instanceof HTMLSelectElement)) return;\n    if (_target.value === 'non_disruptive')" in js
+    assert "defaultMode() { if (_target instanceof HTMLSelectElement) setDefaultMode(_target.value); }," in js
     assert "window[" not in js and "eval(" not in js and "new Function" not in js
 
 
@@ -117,8 +123,9 @@ def test_scripts_come_from_the_consoles_files_only():
     import eregion_console.api as api
     directives = dict(d.strip().split(" ", 1) for d in api._CSP.split(";"))
     assert directives["script-src"] == "'self'" and directives["object-src"] == "'none'"
-    for page in ("glorfindel.html", "overview.html", "injector.html"):
-        html = (STATIC / page).read_text()
+    pages = {page: (STATIC / page).read_text() for page in ("glorfindel.html", "overview.html", "injector.html")}
+    pages["the token page"] = api._TOKEN_PAGE
+    for page, html in pages.items():
         assert not re.search(r"<script(?![^>]*\bsrc=)[^>]*>", html), page
         assert not re.search(r"(?<![\w-])on[a-z]+\s*=", html), page
 
@@ -318,10 +325,71 @@ setTimeout('go()', 10); setTimeout(() => go(), 10);
 eval(x); new Function(x);""") == sorted([
         "document.write", "innerHTML by its name in brackets", "innerHTML in an object",
         "createContextualFragment", "DOMParser", "parseFromString",
-        "setAttribute of a handler, a URL or a name not written in the page",
-        "setAttribute of a handler, a URL or a name not written in the page",
-        "setAttribute of a handler, a URL or a name not written in the page",
-        ".href =", "setTimeout given a string", "eval", "new Function"])
+        "setAttribute of a handler, a URL, an action or a name not written in the page",
+        "setAttribute of a handler, a URL, an action or a name not written in the page",
+        "setAttribute of a handler, a URL, an action or a name not written in the page",
+        ".href =", "setTimeout given what may be a string", "eval", "new Function"])
+
+
+def test_an_action_is_a_name_the_page_wrote_never_a_value(tmp_path):
+    """#257's review: the action of a data-on-* comes from the page — never from a card, escaped
+    or not (an injected name could call any action of the table)."""
+    found = _raw(tmp_path, """
+function _on(event, action, ...args) {
+  return `data-on-${event}="${action}"` + (args.length ? ` data-${event}-args="${_attr(JSON.stringify(args))}"` : '');
+}
+async function load() {
+  const e = await (await fetch('/api/x')).json();
+  el.innerHTML = `<b data-on-click="${_attr(e.action)}">a</b>`;
+  el.innerHTML = `<b ${_on('click', _attr(e.action))}>b</b>`;
+  el.innerHTML = `<b ${_on('click', 'showEscModal', e.vm, e.id)}>c</b>`;
+}""")
+    assert found == ["_attr(e.action)", "action"]
+    assert _refused(tmp_path, """
+el.setAttribute('data-on-click', x); el.dataset.onClick = x; el.dataset['onClick'] = x;
+el.setAttribute('data-vm', x);""") == [
+        "an action set from a value", "an action set from a value",
+        "setAttribute of a handler, a URL, an action or a name not written in the page"]
+
+
+def test_what_writes_elsewhere_is_refused_navigation_and_timers_too(tmp_path):
+    """The rest of #257's review: setAttributeNS, a navigation, a timer given a value, a meta tag
+    written by a script."""
+    assert _refused(tmp_path, """
+el.setAttributeNS(null, 'href', x);
+location.assign(x); window.location = x; location.href = x;
+setTimeout(e.code, 1); setTimeout(refresh, 10); setInterval(() => go(), 10); setTimeout(function () {}, 1);
+el.innerHTML = '<meta http-equiv="refresh" content="0">';""") == sorted([
+        "setAttributeNS", "a navigation the reader does not follow", "a navigation the reader does not follow",
+        "a navigation the reader does not follow", ".href =", "setTimeout given what may be a string",
+        "a meta tag written by a script"])
+
+
+def test_a_const_string_before_a_value_says_where_it_lands(tmp_path):
+    """A prefix held in a const is text: `const pre = '<a href="'; pre + _attr(u)`."""
+    found = _raw(tmp_path, """
+async function load() {
+  const e = await (await fetch('/api/x')).json();
+  const pre = '<a href="';
+  el.innerHTML = pre + _attr(e.u) + '">a</a>';
+  el.innerHTML = `${pre}${_attr(e.v)}">b</a>`;
+  el.innerHTML = `<object data="${_attr(e.w)}"></object>`;
+}""")
+    assert found == ["_attr(e.v)", "_attr(e.w)", "pre + _attr(e.u) + '\">a</a>'"]
+
+
+def test_a_name_bound_again_is_followed_and_its_length_is_no_number(tmp_path):
+    """S4 after the review: a let can be rebound by a destructuring or a for…of — what it then
+    holds is followed, and its .length is a number only on a const the page built."""
+    found = _raw(tmp_path, """
+async function load() {
+  const e = await (await fetch('/api/x')).json();
+  let a = []; [a] = [e.list]; el.innerHTML = `<b>${a.length}</b>`;
+  let b = []; for (b of e.lists) {} el.innerHTML = `<i>${b.length}</i>`;
+  let c = []; ({ c } = e); el.innerHTML = `<u>${c.length}</u>`;
+  const d = ['x']; el.innerHTML = `<s>${d.length}</s>`;
+}""")
+    assert found == ["a.length", "b.length", "c.length"]
 
 
 def test_a_function_an_object_hands_out_is_called_with_what_it_is_not_shown(tmp_path):

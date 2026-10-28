@@ -247,7 +247,7 @@ que la console n'a pas servi en fichier.
 
 - **Rien du dehors n'est écrit brut**, nombres compris : le serveur relaie des rapports dont le type
   n'est pas garanti. Dans le texte de la page ou un attribut entre guillemets doubles : `_attr`
-  (glorfindel.html) ou `esc` (`Console.esc`, les autres pages) ; `_attr` accepte toute valeur
+  (glorfindel.js) ou `esc` (`Console.esc`, les autres pages) ; `_attr` accepte toute valeur
   (`String(s ?? '')`) et échappe `& " ' < >`.
 - **Aucun gestionnaire `on…` ni script en ligne** (#257) : les scripts des pages sont des fichiers
   (`glorfindel.js`, `overview.js`, `injector.js`, après `console.js` et `exercises.js`). Un élément
@@ -258,6 +258,19 @@ que la console n'a pas servi en fichier.
   faisait `event.stopPropagation()` pour un bouton dans une carte ; `data-on-click="stop"` sert aux
   éléments qui ne faisaient que l'arrêter. Le glisser-déposer et le survol des NSG passent par le même
   chemin (`dragVm`, `dropOn`, `_glowNsgVms`…). `_js` a disparu : un argument n'est plus du JavaScript.
+  Le nom d'une action est toujours un littéral de la page : la valeur d'un `data-on-*` n'admet rien
+  d'autre (ni une donnée, ni une donnée échappée), et `setAttribute`/`dataset` ne l'écrivent pas.
+- **Ce que la CSP laisse** : un élément injecté malgré tout, avec un `data-on-click` qui nomme une action
+  de la table, s'exécute (vu dans Chromium : `<b data-on-click="refreshBackups">`). Il ne peut faire que ce
+  que fait un bouton de la page, et le répartiteur borne ce que l'élément porte :
+  - les arguments sont des chaînes, des nombres, des booléens ou `null`, jamais un objet — sinon
+    `doApproveAction(id, vm, {scope, ip})` sauterait la fenêtre de portée ;
+  - le mode d'une VM ou le mode par défaut ne se lit que dans un `<select>` de la page
+    (`modeChange`, `defaultMode`) ;
+  - les gestes qui écrivent gardent leur confirmation ou passent par le serveur, qui refuse en lecture
+    seule et refuse une carte trop vieille ou non attribuée.
+
+  L'échappement reste la première défense ; la CSP retire seulement l'exécution de code.
 - **La CSP** : `script-src 'self'; object-src 'none'` en plus de #222. Une `<img onerror>` injectée de
   force, au-delà de tout échappement, ne s'exécute plus. Les styles en ligne restent permis : une
   injection de style est bien moins grave, et `style="…${_attr(x)}"` n'en sort pas.
@@ -389,7 +402,7 @@ EXERCISES · 11          windows [7 days ▾] │ CAMPAIGNS · 1    [30 days ▾
 
 | Où | Changement | Qui |
 |---|---|---|
-| `eregion_console/` | `api.py` (l'ancien `glorfindel/api.py`, déplacé tel quel puis complété : pages, redirections, jeton, `/api/sections`) ; `sections.py` (le registre) ; `cli.py` (`eregion console [--sections]`) ; `static/` : `overview.html`, `glorfindel.html` (ex-`index.html`, sert aussi `/config`), `injector.html` (ex-`atelier.html`, une seule page pour Annatar et Gothmog, filtrée par le chemin, qui montre aussi la vue « non installé »), `exercises.js`, `console.js`, `console.css`. Un module par section reste possible plus tard : comme Glorfindel est toujours là, aucune route n'a besoin d'être enregistrée sous condition | War Room |
+| `eregion_console/` | `api.py` (l'ancien `glorfindel/api.py`, déplacé tel quel puis complété : pages, redirections, jeton, `/api/sections`) ; `sections.py` (le registre) ; `cli.py` (`eregion console [--sections]`) ; `static/` : `overview.html`, `glorfindel.html` (ex-`index.html`, sert aussi `/config`), `injector.html` (ex-`atelier.html`, une seule page pour Annatar et Gothmog, filtrée par le chemin, qui montre aussi la vue « non installé »), `exercises.js`, `console.js`, `console.css` ; depuis #257, le script de chaque page est un fichier (`overview.js`, `glorfindel.js`, `injector.js`). Un module par section reste possible plus tard : comme Glorfindel est toujours là, aucune route n'a besoin d'être enregistrée sous condition | War Room |
 | Jeton | `EREGION_CONSOLE_TOKEN` s'il n'est pas vide, sinon `GLORFINDEL_WARROOM_TOKEN` ; avertissement si les deux diffèrent. Cookie inchangé | War Room |
 | Dans la même PR, hors périmètre | `pyproject.toml` : le paquet, le script `eregion`, l'extra `console` (`war-room` gardé), les pages en données du paquet (aucune n'est déclarée aujourd'hui : un `pip install` sans `-e` les perdrait). Le Dockerfile de Glorfindel : `COPY eregion_console/`. Depuis M-3, il installe les dépendances verrouillées (`requirements/glorfindel.txt`, avec FastAPI et uvicorn), puis le paquet sans dépendances : l'extra `console` reprend celles de `war-room`, à vérifier contre le verrou. `docker-compose.yml` : le montage de `static` et la commande. L'import de `glorfindel/cli.py`. Les imports des tests et de `scripts/mutation_check.py`, dont 5 mutants visent `glorfindel/api.py` | War Room, avec l'accord de General et de Glorfindel |
 | Glorfindel (UI-1b) | l'alias caché `glorfindel war-room` ; les textes « War Room » d'`agent.py`, `readiness.py` et `jobs.py`. Vérifier qu'aucun n'entre dans ce que voit le modèle | Glorfindel |

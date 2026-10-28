@@ -26,7 +26,8 @@ What must hold whatever happens:
       "blocked" means the attacker is cut off, "released" means back to the design with
       nothing of Glorfindel's left on the NICs, a verification that says True is true;
   I4  an operation on one VM changes nothing for another — homonyms included (a
-      perimeter block closes the attacker's flows on its subnet, and only those);
+      perimeter block closes the attacker's flows on its subnet, and only those) — and
+      never deletes another VM's older isolation, even where no flow tells (I4S);
   I5  the reassertion never opens anything, never acts on a VM it has no state for,
       and writes nothing to Azure in human_only;
   I6  one VM, one state file, whatever the case of the id it was reached with;

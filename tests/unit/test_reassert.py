@@ -347,8 +347,10 @@ _DENY_IN = ["glorfindel-quarantine-deny-in"]
 
 def _quarantines(*entries):
     """A connector whose quarantine listing reads `entries` in turn: (status, diff), None
-    for an empty subscription, or an exception the listing raises."""
+    for an empty subscription, or an exception the listing raises. An NSG absent from the
+    listing is read again by its id (I1S): not found, here."""
     c = MagicMock()
+    c.read_quarantine.return_value = None
     c.verify_isolation.side_effect = AssertionError("no state: no isolation to verify")
     c.find_altered_quarantines.side_effect = [
         e if isinstance(e, Exception) else
@@ -453,7 +455,7 @@ def test_an_acknowledged_card_stays_closed_while_its_change_stands():
 
 def test_a_card_is_not_closed_on_an_nsg_that_cannot_be_read():
     """Configuration unreadable (our denies hold, the forensic access unknown): its card
-    stays. Gone from the subscription's listing: closed."""
+    stays. Gone from the subscription's listing, and not found when read again: closed."""
     from glorfindel.reassert import reassert_pass
     c = _quarantines(("altered", _DENY_IN), ("unknown", ["config illisible"]), None)
     reassert_pass(c, _ACT)
@@ -475,3 +477,164 @@ def test_an_unreadable_configuration_is_said_once_not_every_pass(monkeypatch):
     for _ in range(3):
         cli._watch_reassert_pass(c, None, seen=seen)
     assert out.getvalue().count("config illisible") == 1
+
+
+# ── a card's NSG absent from the listing is read again before it closes (I1S, #231) ──
+
+class _Calls(list):
+    """The fake Azure's calls, by operation (its `chaos` hook sees every one)."""
+
+    def __call__(self, op, phase, write):
+        if phase == "before":
+            self.append(op)
+
+    def __bool__(self):                 # empty, still the fake's hook (`chaos or …`)
+        return True
+
+
+def _quarantined_world():
+    """Our quarantine NSG holding `web-nic`, its NIC's state lost (no isolation recorded),
+    its inbound deny removed by someone; the real connector on the fake Azure."""
+    from glorfindel.actions import AzureConnector
+    from .fake_azure import FakeAzure, key
+    calls = _Calls()
+    f = FakeAzure(chaos=calls)
+    sub = f.add_subnet("rg-net", "vnet", "app", None)
+    f.add_vm("rg-app", "web", [{"rg": "rg-app", "name": "web-nic", "ips": ["10.0.0.4"],
+                                "subnet": sub, "nsg": None}])
+    c = AzureConnector(dry_run=False)
+    c._network, c._compute = f.network, f.compute
+    c._subscription_id = "s"
+    c.recent_changes = lambda *a, **k: []
+    q = c._ensure_quarantine_nsg("westeurope", "rg-sec")["nsg_id"]
+    f.nics[next(iter(f.nics))]["nsg"] = q
+    f.nsgs[key(q)]["rules"].pop("glorfindel-quarantine-deny-in")
+    return f, c, key(q), calls
+
+
+def _said_once(c):
+    from glorfindel.reassert import reassert_pass
+    reassert_pass(c, None)
+    (card,) = _cards("pending")
+    return card
+
+
+@pytest.mark.parametrize("how", ["role removed", "untagged", "both"])
+def test_a_card_stays_while_its_nsg_is_out_of_the_listing(how):
+    """Said, then out of the listing without an error: the role removed on its group
+    (a listing ARM filters by the caller's rights — a hypothesis, to measure on the
+    bench), our tag taken off as well as our rules, or both. The NSG is still altered and
+    still holds web-nic: the card stays, and no second one comes. Read again once the
+    role is back and the rules put back by hand — its tag still off —: closed."""
+    from glorfindel import reassert
+    f, c, q, _ = _quarantined_world()
+    card = _said_once(c)
+    if how != "untagged":
+        f.unreadable.add(q)
+    if how != "role removed":
+        del f.nsgs[q]["tags"]["managed-by"]
+    for _ in range(2):
+        reassert.reassert_pass(c, None)
+    assert [e["id"] for e in _cards("pending")] == [card["id"]] and len(_cards()) == 1
+    assert q in reassert._load_quarantine_alerts()
+    f.unreadable.discard(q)
+    f.nsgs[q]["rules"]["glorfindel-quarantine-deny-in"] = dict(
+        f.nsgs[q]["rules"]["glorfindel-quarantine-deny-out"], name="glorfindel-quarantine-deny-in",
+        direction="Inbound")
+    reassert.reassert_pass(c, None)
+    assert not _cards("pending") and q not in reassert._load_quarantine_alerts()
+
+
+def test_a_card_whose_nsg_cannot_be_read_again_stays():
+    """The listing empty, the NSG read again by its id: refused (403) — the card stays."""
+    from glorfindel.reassert import reassert_pass
+    c = _quarantines(("altered", _DENY_IN), None, None)
+    c.read_quarantine.side_effect = _http_error(403)
+    reassert_pass(c, _ACT)
+    reassert_pass(c, _ACT)
+    assert len(_cards("pending")) == 1
+    c.read_quarantine.assert_called_once_with(_QNSG)
+    reassert_pass(c, _ACT)
+    assert len(_cards("pending")) == 1
+
+
+def test_a_card_whose_nsg_is_gone_closes():
+    """No card for ever: the NSG deleted (our quarantine taken off its NIC first), read
+    again by its id and not found — the card closes, its change is forgotten."""
+    from glorfindel import reassert
+    f, c, q, _ = _quarantined_world()
+    _said_once(c)
+    f.nics[next(iter(f.nics))]["nsg"] = None
+    assert f.delete_nsg(f.nsgs[q]["id"])
+    reassert.reassert_pass(c, None)
+    assert not _cards("pending") and not reassert._load_quarantine_alerts()
+
+
+@pytest.mark.parametrize("homonym", [False, True])
+def test_a_card_of_another_subscription_stays(homonym):
+    """A card on an NSG of another subscription (AZURE_SUBSCRIPTION_ID changed, the same
+    ~/.glorfindel): never in this subscription's listing, and never read here — the
+    clients run in this one, where its homonym (whole, or none at all) is not it."""
+    from glorfindel import reassert
+    f, c, q, calls = _quarantined_world()
+    other = f.nsgs[q]["id"].replace("/subscriptions/s/", "/subscriptions/other/")
+    if homonym:
+        c._ensure_quarantine_nsg("westeurope", "rg-sec")        # ours, whole again
+    else:
+        f.nics[next(iter(f.nics))]["nsg"] = None
+        f.delete_nsg(f.nsgs[q]["id"])
+    escalations.record(signal_id=f"{reassert._QUARANTINE_PREFIX}other-1", resource_id=other,
+                       action="restore_quarantine_nsg", escalation_type="quarantine_altered",
+                       reason="altered", severity="high")
+    calls.clear()
+    reassert.reassert_pass(c, None)
+    (card,) = _cards("pending")
+    assert card["resource_id"] == other and "nsg.get" not in calls
+
+
+def test_only_a_missing_card_nsg_is_read_again():
+    """The cost (no `get` of every NSG at every pass): a card whose NSG is listed is
+    judged on the listing; the NSG of a card the listing doesn't show is read once."""
+    from glorfindel.reassert import reassert_pass
+    f, c, q, calls = _quarantined_world()
+    calls.clear()
+    _said_once(c)
+    reassert_pass(c, None)
+    assert "nsg.get" not in calls
+    f.unreadable.add(q)
+    calls.clear()
+    reassert_pass(c, None)
+    assert calls.count("nsg.get") == 1
+
+
+def test_an_acknowledged_change_is_forgotten_once_its_nsg_is_gone():
+    """Acknowledged, then the NSG deleted while out of the listing: its change is
+    forgotten. Made again by an isolation and altered the same way, it is said — the
+    acknowledgement of a deleted NSG doesn't silence the next one."""
+    from glorfindel import reassert
+    f, c, q, _ = _quarantined_world()
+    escalations.resolve(_said_once(c)["id"])
+    f.nics[next(iter(f.nics))]["nsg"] = None
+    assert f.delete_nsg(f.nsgs[q]["id"])
+    reassert.reassert_pass(c, None)
+    assert not reassert._load_quarantine_alerts()
+    rid = c._ensure_quarantine_nsg("westeurope", "rg-sec")["nsg_id"]
+    f.nics[next(iter(f.nics))]["nsg"] = rid
+    f.nsgs[q]["rules"].pop("glorfindel-quarantine-deny-in")
+    reassert.reassert_pass(c, None)
+    assert len(_cards("pending")) == 1
+
+
+def test_a_reread_keeps_to_the_clients_subscription_and_never_in_dry_run():
+    """The connector's own guard: another subscription raises before any call; in
+    dry-run, nothing is read (the card stays)."""
+    from glorfindel.actions import AzureConnector
+    from glorfindel.response.policy import WrongSubscriptionError
+    f, c, q, calls = _quarantined_world()
+    calls.clear()
+    with pytest.raises(WrongSubscriptionError):
+        c.read_quarantine(f.nsgs[q]["id"].replace("/subscriptions/s/", "/subscriptions/other/"))
+    assert calls == []
+    assert c.read_quarantine(f.nsgs[q]["id"])["status"] == "altered"
+    with pytest.raises(RuntimeError):
+        AzureConnector(dry_run=True).read_quarantine(f.nsgs[q]["id"])

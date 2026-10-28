@@ -464,12 +464,16 @@ class QuarantineMixin:
             if (not _is_quarantine_nsg(nsg_id)
                     or (getattr(nsg, "tags", None) or {}).get("managed-by") != "glorfindel"):
                 continue
-            nics = [n.id for n in (getattr(nsg, "network_interfaces", None) or []) if getattr(n, "id", None)]
-            q_rg, q_name = _parse_nsg_resource_id(nsg_id)
-            cache = {(q_rg, q_name): list(getattr(nsg, "security_rules", None) or [])}
-            st, diff = self._quarantine_state({"nsg_rg": q_rg, "nsg_name": q_name}, cache)
-            out.append({"nsg_id": nsg_id, "nics": nics, "status": st, "diff": diff})
+            out.append(self._quarantine_as_read(nsg))
         return out
+
+    def _quarantine_as_read(self, nsg) -> dict:
+        nsg_id = getattr(nsg, "id", "") or ""
+        nics = [n.id for n in (getattr(nsg, "network_interfaces", None) or []) if getattr(n, "id", None)]
+        q_rg, q_name = _parse_nsg_resource_id(nsg_id)
+        cache = {(q_rg, q_name): list(getattr(nsg, "security_rules", None) or [])}
+        st, diff = self._quarantine_state({"nsg_rg": q_rg, "nsg_name": q_name}, cache)
+        return {"nsg_id": nsg_id, "nics": nics, "status": st, "diff": diff}
 
     def _forensic_sources(self) -> list[str]:
         """isolation.forensic_sources as validate_forensic_sources keeps them (Q5). An

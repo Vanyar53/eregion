@@ -211,6 +211,10 @@ eregion_core/
   signals.py          → D1 : le contrat des signaux (Signal + severity_for_ttp), écrit par les injecteurs, lu par
                         la watch — dans le cœur, pour que Glorfindel tourne sans Annatar (ex-annatar/signals/schema.py).
 
+scripts/console_escaping.py → #254 : rien du dehors n'est écrit brut dans la console — suit ce que peut contenir
+                        chaque ${…} d'un gabarit HTML et chaque valeur donnée à innerHTML, et le contexte (texte,
+                        attribut on…, début d'URL) ; tests : tests/unit/test_console_escaping.py.
+
 scripts/component_check.py → D1 : chaque composant tourne seul — Glorfindel, Annatar, Gothmog et le cœur, leurs
                         modules importés et leurs tests joués avec les autres composants ABSENTS (un chercheur en
                         tête de sys.meta_path), et les dépendances de Glorfindel absentes pour un injecteur ; les
@@ -275,7 +279,7 @@ infra/terraform/              → module Celebrimbor : infra de test Azure modul
                                 CI : job macOS (APFS insensible à la casse) ; `main` protégée, checks requis.
   blocks/<vm>--<h>.json       → IPs bloquées par VM (même clé)
   quarantine_alerts.json      → I1F : NSG de quarantaine → le changement déjà signalé (carte `quarantine_altered`) ;
-                                oublié quand le NSG est de nouveau entier, ne porte plus rien ou a disparu — un acquittement ne relève pas de carte
+                                oublié quand le NSG est de nouveau entier, ne porte plus rien ou a disparu (relu par son ID : 404, I1S) — un acquittement ne relève pas de carte
   orphan_alerts.json          → A3 : règle orpheline (NSG/règle) → sa carte `orphan_rule` ; une règle dite ne l'est pas de nouveau
                                 tant qu'elle reste ; oubliée (carte fermée) quand elle n'est plus orpheline ou a été retirée
   proposed_rules.jsonl        → règles de détection proposées (en attente d'approbation)

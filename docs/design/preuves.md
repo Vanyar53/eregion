@@ -1281,7 +1281,7 @@ Par la machine seule, M1340 est attrapé 5/5 à 60 séquences et 3/3 à 500. Inv
 séquences sur cinq graines, et 2 000 sur deux graines, verts. Au même budget (60 séquences, deux
 tours), les 64 mutants mesurables de `verify.py`, `release.py`, `quarantine.py` et `sweep.py`
 donnent 51/64 attrapés à chaque tour, avant comme après. Huit d'entre eux bougent d'un côté à
-l'autre. Remesurés sur six tours : 28/48 avant, 33/48 après, tous instables des deux côtés
+l'autre. Remesurés sur six tours : 28/48 avant, 33/48 après, instables d'au moins un côté (M15 attrapé 6/6 des deux côtés)
 (M09 5/6 → 3/6, M26 3/6 → 2/6, M29 0/6 → 4/6). Aucun n'est perdu : un mutant à 0/2 par la machine
 reste attrapé par ses séquences figées.
 

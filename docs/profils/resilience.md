@@ -34,7 +34,7 @@ make gothmog-run FAULT=vm-shutdown           # la panne, et son retour vérifié
 ## Jamais sans Glorfindel
 
 Comme Annatar :
-- le service compose dépend de la watch, et lit son battement dans `~/.glorfindel`, en lecture seule ;
+- le service compose dépend de la watch, et lit son battement dans `~/.glorfindel/injectors`, en lecture seule (le reste de `~/.glorfindel` lui reste fermé) ;
 - `depends_on` démarre la watch sans attendre son battement : dans la première minute, Gothmog peut refuser, relance-le un peu plus tard ;
 - depuis Orodruin, Gothmog lit le canal retour ;
 - `gothmog run` et `gothmog preflight` refusent sans battement vivant, avant tout appel au cloud ;

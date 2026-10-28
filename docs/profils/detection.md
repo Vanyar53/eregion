@@ -34,7 +34,7 @@ make orodruin-campaign-run CAMPAIGN=<id>
 
 ## Jamais sans Glorfindel
 
-**Le service compose.** `annatar` dépend de la watch : le lancer la démarre, mais sans attendre son battement. Dans la première minute, le temps que la watch publie son premier battement, Annatar peut refuser d'agir : relance-le un peu plus tard. Il lit ce battement dans `~/.glorfindel`, en lecture seule. Il partage aussi `runs/` avec la watch, et c'est là qu'elle lit l'`attack_started`.
+**Le service compose.** `annatar` dépend de la watch : le lancer la démarre, mais sans attendre son battement. Dans la première minute, le temps que la watch publie son premier battement, Annatar peut refuser d'agir : relance-le un peu plus tard. Il lit ce battement dans `~/.glorfindel/injectors`, en lecture seule : la watch l'y écrit pour lui, et le reste de `~/.glorfindel` (escalades, état d'isolation, règles du client) lui reste fermé. Il partage aussi `runs/` avec la watch, et c'est là qu'elle lit l'`attack_started` — elle n'en prend que ce qu'un injecteur émet.
 
 **Depuis Orodruin.** Annatar lit le battement de la watch hébergée sur le canal retour, `EREGION_WATCH_CHANNEL`. Sans battement vivant, il refuse avant tout appel au cloud.
 

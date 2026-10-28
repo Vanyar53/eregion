@@ -26,6 +26,21 @@ make team-start TEAM=<nom> [BOT=1]           # son Glorfindel : compose -p eregi
 make profiles-check                          # docker compose config : chaque profil rend ses services (CI)
 make components-check [COMPONENT=annatar]    # chaque composant tourne seul : ses tests, les autres absents (CI)
 
+# Montages (SEC3, #274) — qui voit quoi de l'état (docker-compose.yml, le Makefile pour make annatar-*)
+#   watch, war-room (console), bot : runs/ et ~/.glorfindel en écriture — Glorfindel, le même utilisateur ;
+#     la console et le bot écrivent runs/ (manual_actions.jsonl : le fil des actions de l'opérateur, les
+#     commandes que lancent les boutons du bot), d'où l'écriture.
+#   annatar, gothmog : runs/ en écriture (leurs signaux, leurs rapports, leurs campagnes) et, de ~/.glorfindel,
+#     ~/.glorfindel/injectors seulement, en lecture seule, monté comme leur ~/.glorfindel : la watch y écrit
+#     son battement (le garde V1, eregion_core/watch_gate.py), rien d'autre. Les escalades, l'état d'isolation
+#     et de blocage, les règles du client, l'historique restent hors de leur portée. make glorfindel-start
+#     crée ce dossier à ton nom (laissé à docker, il serait à root, et la watch ne pourrait pas y écrire : elle
+#     le dit et continue).
+#   La watch ne prend de runs/ que ce qu'un injecteur émet (docs/glorfindel.md, « Le canal runs/ ») : une ligne
+#     refusée est dite dans `make glorfindel-logs` et comptée dans ~/.glorfindel/channel_refusals.json.
+#   État local : fichiers 0600, dossiers 0700, écrits entiers ; un état d'avant est resserré au démarrage de
+#     la watch (un fichier à root d'une ancienne image reste tel quel : make fix-state-ownership).
+
 # Glorfindel hébergé (H0) — infra/glorfindel-host/README.md
 make glorfindel-host-tunnel                  # tunnel + « Console → http://localhost:7007/?token=… » ; le jeton de host.env :
                                              # EREGION_CONSOLE_TOKEN s'il n'est pas vide, sinon GLORFINDEL_WARROOM_TOKEN
@@ -115,7 +130,7 @@ glorfindel --version                         # 0.2.0
 #   avant tout appel au cloud, l'injecteur lit le battement de la watch. Le canal retour fait foi s'il est
 #   configuré (EREGION_WATCH_CHANNEL : la watch hébergée vue d'Orodruin — un fichier de cet hôte n'en dit
 #   rien) ; sinon le fichier local ~/.glorfindel/watch_heartbeat (une watch sur le même hôte ; `make
-#   annatar-run` le monte). Un battement de moins de 90 s, et pas daté de plus de 10 s dans le futur (le
+#   annatar-run` monte sa copie, ~/.glorfindel/injectors — SEC3). Un battement de moins de 90 s, et pas daté de plus de 10 s dans le futur (le
 #   décalage des horloges H0 ↔ Orodruin) : la watch vit. Sinon : refus, code 1, et le message dit depuis quand
 #   date le dernier battement (« never » s'il n'y en a pas, la raison entre parenthèses : pas de fichier, canal
 #   illisible… ; « in the future » si une horloge est fausse). Rien n'a été touché : ni contrat d'Orodruin, ni

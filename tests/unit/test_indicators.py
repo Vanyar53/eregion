@@ -20,6 +20,15 @@ import eregion_console.api as api  # noqa: E402
 from eregion_console import indicators as ind  # noqa: E402
 
 NOW = datetime.now(timezone.utc)
+
+
+@pytest.fixture(autouse=True)
+def _now_when_the_test_starts():
+    """NOW is the clock when each test starts, not when this file was imported: a long suite
+    (the CI's) no longer ages it past the windows and heartbeats the code under test compares
+    with its own clock (SEC6, P-08)."""
+    global NOW
+    NOW = datetime.now(timezone.utc)
 VM = "/subscriptions/s/resourcegroups/rg/providers/microsoft.compute/virtualmachines/vm-a"
 CATALOG = [{"kind": "technique", "id": "T1110.001", "status": "implemented"},
            {"kind": "technique", "id": "T1136.001", "status": "implemented"},

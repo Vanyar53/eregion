@@ -34,6 +34,15 @@ LOAD = VM.replace("gondolin", "bree")           # the VM carrying a real load: n
 NOW = datetime.now(timezone.utc).replace(microsecond=0)
 
 
+@pytest.fixture(autouse=True)
+def _now_when_the_test_starts():
+    """NOW is the clock when each test starts, not when this file was imported: a long suite
+    (the CI's) no longer ages it past the windows and heartbeats the code under test compares
+    with its own clock (SEC6, P-08)."""
+    global NOW
+    NOW = datetime.now(timezone.utc).replace(microsecond=0)
+
+
 def _window(rid="r1", *, start=None, lasts=MAX_DURATION_S, end=None, targets=(VM,)):
     start = start or NOW - timedelta(minutes=10)
     return {"run_id": rid, "injector": "annatar", "kind": "technique", "experiment": "T1486",
@@ -70,8 +79,8 @@ def test_a_window_that_starts_far_after_it_was_declared_is_refused():
     later = NOW + timedelta(seconds=FUTURE_SKEW_S + 60)
     assert "FUTURE_SKEW_S" in window_refusal(_window(start=later), NOW)
     assert window_refusal(_window(start=NOW + timedelta(seconds=FUTURE_SKEW_S - 30)), NOW) == ""
-    _put(_window(start=later))
-    assert load_windows() == []
+    _put(_window(start=later), mtime=NOW)
+    assert load_windows(now=NOW) == []
 
 
 def test_a_window_written_today_for_tomorrow_is_refused_tomorrow_too():

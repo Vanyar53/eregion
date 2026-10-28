@@ -160,6 +160,18 @@ Ensuite (0.4+) : A1 avec MC0, A2, A3, B1, B3, B4, G1–G3, R2 (Stratus, Activity
 
 Relecture de l'atelier (partie 1, écrite le 20/10) et de ce que la 0.3.0 a mesuré (partie 2). Livrés le 26/10 : **D-1** (stabilité de la décision, #186, #190), **H-1** (une fenêtre d'exercice n'est plus crue sur parole, #187, #191, mesurée sur H0), **M-1** (l'arrêt d'urgence arrête ce qui tourne, #181, #189, mesuré au banc #196) et la console de l'atelier en lecture seule (#185) ; le rapport d'un run seul arrive sur H0 (#193, #194, #197, #198, vu sur H0 le 26/10 pour un run d'Annatar et un run de Gothmog, sondes affichées). Code fusionné le 26/10, mesure encore à faire avec Jonathan : **D-2** comparaison entre campagnes calculée par le code (#184, #203 ; reste une 2ᵉ campagne réelle, avant le point d'étape rejoué du ~13/11 ; suite en D2b), **M-3** référence épinglée, verrou de dépendances, un environnement par conteneur, boutons Discord vérifiés (#183, #202 ; reste le redéploiement de H0). Encore ouvert : **M-2** rôle d'injection sur la VM à vraie charge (#182, à la prochaine session banc). D-2, M-3 et A1+MC0 (#204) ont été menés par des agents Opus 5.5 en autonomie (elrond), chacun relu en Opus 5.5 avant fusion.
 
+
+### Après la 0.4.3 (28/10)
+
+Le 28/10 : la **0.4.1** (échappement de la console, trois suites d'isolation), la **0.4.2** (le CD de H0 — publier une release, c'est déployer H0 —, `script-src 'self'`, le tableau de `#agents`) et la **0.4.3** « held at the edges » (une revue de sécurité externe de la 0.4.1 : la frontière de la console, les règles face aux journaux qu'elles n'ont pas écrites, les canaux de fichiers et l'état local), toutes trois déployées par le CD. Mesuré sur 7 jours de Syslog de H0 : la règle sudo livrée jusqu'à la 0.4.2 ne voyait aucun vrai `sudo` (en `authpriv`, sans le mot dans le message) ; la nouvelle les voit tous.
+
+**0.4.4** : la suite de la revue — SEC4 (la décision face à un modèle ou une mémoire imprévus, #275), SEC5 (les injecteurs et leurs canaux, #276), SEC6 (le processus : SECURITY.md, modèle de menace, README, CI, #277) — avec I3F (un défaut ancien de la vérification d'une levée, #287) et ADM1 (les `sudo` attendus des administrateurs, #284, après une semaine de cartes jugées sur H0 ; avant toute autonomie). Puis CI1 (#267), CI2 (#268), H2 (#266), REL1 (#269).
+
+**Ensuite, dans cet ordre** (décidé par Jonathan le 28/10) :
+1. **BL1** (#280) — la boucle avec la réponse exécutée sur le banc (`non_disruptive`, une technique et une panne dans la même campagne) : elle remplit le temps pour contenir et la part contenue seule, les deux indicateurs encore vides.
+2. **ID1** (#281) — rendre réels AL1 et C2 : les journaux d'activité et d'Entra ID envoyés au workspace du banc, mesurés ; puis R2 (#79).
+3. **DEP1** (#282) — litellm ≥ 1.95.0 avec le harnais ; puis B3 (#74) et B4 (#75).
+4. **J1** (#82) et **J2** (#83) — la preuve en production : détection seule, VM sentinelle.
 ---
 
 ## Contexte produit (scénario optionnel)
@@ -203,7 +215,7 @@ Modèle : CLI open source gratuit, SaaS payant pour multi-tenant + connecteurs a
 - Alerting webhook sur décisions autonomes + escalades (Slack/Teams/Discord)
 - **Bot Discord interactif** : un fil par VM, boutons ✓ Acknowledge / 📋 Command / 🔄 Restore / ↩️ Revert — exécutent les commandes Glorfindel directement depuis Discord
 - **War Room web** (`glorfindel war-room`, `make glorfindel-start`) — incident cards, live feed WebSocket, action buttons, infra map avec posture gaps
-- **Annatar block watcher** — émet `attack_adapted` si Glorfindel bloque une IP en cours de run
+- ~~**Annatar block watcher** — émet `attack_adapted` si Glorfindel bloque une IP en cours de run~~ — retiré le 28/10 (SEC3, #274) : il lisait l'état du défenseur, et ne voyait déjà plus rien (ancien nom de fichier)
 - Repo public : https://github.com/Vanyar53/eregion
 - Coût exploitation : <$2/mois LLM API sur infra existante
 

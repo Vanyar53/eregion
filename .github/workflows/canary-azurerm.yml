@@ -7,6 +7,12 @@ name: canary-azurerm
 # principal allowed to create a resource group); WITHOUT them the run FAILS — a canary
 # that stays green while testing nothing is worse than none (third review, T16).
 # Creates only free resources (resource group, VNet, NSG, NICs), deleted at the end.
+#
+# This job holds a long-lived Azure secret: every action is pinned by commit, and no third
+# party's action runs beside the secret — Terraform comes from HashiCorp's signed apt
+# repository, the publisher the canary trusts anyway since its binary runs with the secret
+# (tests/unit/test_workflows.py). Planned, Jonathan's step: a federated identity (OIDC) in
+# place of the client secret (docs/design/modele-de-menace.md, « La CI et le CD »).
 on:
   schedule:
     - cron: "0 6 * * *"
@@ -37,12 +43,35 @@ jobs:
           else
             echo "ok=true" >> "$GITHUB_OUTPUT"
           fi
-      - uses: actions/checkout@v5
-        if: steps.creds.outputs.ok == 'true'
-      - uses: hashicorp/setup-terraform@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5.1.0
         if: steps.creds.outputs.ok == 'true'
         with:
-          terraform_wrapper: false
+          persist-credentials: false
+      # The latest Terraform, as setup-terraform installed it, without its wrapper.
+      # The key is trusted only if it is HashiCorp's: the fingerprint of « Linux repositories and
+      # packages », https://www.hashicorp.com/en/trust/security (read on 2026-10-28). Otherwise the
+      # job fails, nothing installed. Only that key goes into apt's keyring.
+      - name: Install Terraform (HashiCorp's apt repository)
+        if: steps.creds.outputs.ok == 'true'
+        env:
+          HASHICORP_APT_FPR: D55C0D1AC78A8D8126CB631CFC9CA96ACA026560
+        run: |
+          key="$RUNNER_TEMP/hashicorp.gpg"
+          curl -fsSL https://apt.releases.hashicorp.com/gpg | gpg --batch --yes --dearmor -o "$key"
+          # One primary key, and that fingerprint is its own — a subkey's fpr line has the same form.
+          if ! gpg --batch --show-keys --with-colons "$key" \
+               | awk -F: -v f="$HASHICORP_APT_FPR" '$1=="pub"{n++;p=1;next} $1=="fpr"&&p{k=$10;p=0} END{exit !(n==1&&k==f)}'; then
+            echo "::error::HashiCorp's apt key is not the one primary key ${HASHICORP_APT_FPR} — Terraform not installed."
+            exit 1
+          fi
+          ring="$RUNNER_TEMP/hashicorp.kbx"
+          gpg --batch --no-default-keyring --keyring "$ring" --import "$key"
+          gpg --batch --no-default-keyring --keyring "$ring" --export "$HASHICORP_APT_FPR" \
+            | sudo tee /usr/share/keyrings/hashicorp-archive-keyring.gpg > /dev/null
+          echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" \
+            | sudo tee /etc/apt/sources.list.d/hashicorp.list > /dev/null
+          sudo apt-get update -qq && sudo apt-get install -y -qq terraform
+          terraform version
       - name: Azure login
         if: steps.creds.outputs.ok == 'true'
         run: |

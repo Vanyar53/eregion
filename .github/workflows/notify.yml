@@ -6,9 +6,11 @@ name: Notify
 # saying is decided by scripts/notify_discord.py (`github`), from the event's JSON.
 #
 # Never checks out nor runs a pull request's code: pull_request_target and workflow_run run
-# the default branch's files, and the script only reads the event. A fork's pull request is
-# announced in #ci (its title as inert text: no mention parsed, nothing put into `run:`), never
-# in a lot's thread. Without the secrets (before the setup) it sends nothing and the job stays
+# the default branch's files, and the script only reads the event. A fork's pull request, and
+# its red run (a workflow_run whose head is the fork's), are announced in #ci (the title as inert
+# text: no mention parsed, nothing put into `run:`), never in a lot's thread; an issue closed
+# whose author holds no role in the repository neither tags nor archives a lot's thread (SEC6).
+# Without the secrets (before the setup) it sends nothing and the job stays
 # green; a Discord error is one line in the log, without the URL or the token, and the job
 # stays green too. A `release` event runs the workflow of the tag's commit: a release tagged
 # before this file existed is not announced.

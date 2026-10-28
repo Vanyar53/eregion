@@ -3299,6 +3299,76 @@ MUTANTS += [
 # quarantine with no original since the test last lost it (_held_unknown).
 TESTS.update({"M1340": f"tests/unit/test_invariant_regressions.py {INVARIANTS}"})
 TESTS.update({f"M{n}": "tests/unit/test_invariant_regressions.py -k said_bare" for n in (1341, 1342)})
+# SEC6 (#277): the security process — the CI's actions and inputs, the lot threads against a fork
+# or an outsider, text from outside made inert in the chats, the bench's apply confirmed.
+NDS = "scripts/notify_discord.py"
+CHT = "glorfindel/chat_text.py"
+MUTANTS += [
+    ("M1280", "the canary, which holds an Azure secret, takes checkout by its tag again (SEC6, P-04)",
+     ".github/workflows/canary-azurerm.yml",
+     "      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5.1.0\n        if: steps.creds",
+     "      - uses: actions/checkout@v5\n        if: steps.creds"),
+    ("M1281", "a dispatcher's inputs pasted into the mutants' script again (SEC6, V-33)",
+     ".github/workflows/mutants.yml",
+     '--min-caught "$MIN_CAUGHT"', "--min-caught ${{ inputs.min_caught || '14' }}"),
+    ("M1282", "a fork's red run posted in a lot's thread: the run's head never checked (SEC6, N-11)", NDS,
+     "            if not own_run(run):\n                lot = issue = \"\"",
+     "            if False:\n                lot = issue = \"\""),
+    ("M1283", "an outsider's closed issue tags and archives a lot's thread (SEC6, N-11)", NDS,
+     '        if it.get("author_association") not in MEMBERS:', "        if False:"),
+    ("M1284", "a masked link from outside left as Markdown: brackets not escaped (SEC6, N-09)", CHT,
+     '_INLINE = re.compile(r"([\\\\`*_~|\\[\\]()<>])")', '_INLINE = re.compile(r"([\\\\`*_~|<>])")'),
+    ("M1285", "@everyone and @here from outside left whole (SEC6, N-09)", CHT,
+     '    return _MENTION.sub("@" + ZWSP + r"\\1", text)', "    return text"),
+    ("M1286", "the steps of a card raw in Discord: an Entra name's Markdown rendered (SEC6, N-09)",
+     "glorfindel/bot.py", 'f"• {discord_text(s)}"', 'f"• {s}"'),
+    ("M1287", "the webhook keeps <…>: Slack's links and mentions from outside (SEC6, N-09)", CHT,
+     '    s = s.replace("<", "‹").replace(">", "›").replace("](", "]" + ZWSP + "(")',
+     '    s = s.replace("](", "]" + ZWSP + "(")'),
+    ("M1288", "the bot posts with Discord's default mentions: any text may ping (SEC6, N-09)", "glorfindel/bot.py",
+     "super().__init__(intents=intents, allowed_mentions=discord.AllowedMentions.none())",
+     "super().__init__(intents=intents)"),
+    ("M1289", "make celebrimbor-up applies without confirmation, YES=1 or not (SEC6, P-10)", MAKE,
+     "	   $(TF) apply$(if $(YES), -auto-approve); \\\n", "	   $(TF) apply --auto-approve; \\\n"),
+]
+TESTS.update({mid: "tests/unit/test_workflows.py" for mid in ("M1280", "M1281")})
+TESTS.update({mid: "tests/unit/test_notify_discord.py" for mid in ("M1282", "M1283")})
+TESTS.update({f"M{n}": "tests/unit/test_chat_escaping.py" for n in range(1284, 1289)})
+TESTS["M1289"] = "tests/unit/test_makefile_bench.py -k yes"
+# SEC6, after the 5.5 review.
+_CANARY_AWK = """'$1=="pub"{n++;p=1;next} $1=="fpr"&&p{k=$10;p=0} END{exit !(n==1&&k==f)}'"""
+_CANARY_CHECK = (
+    '          if ! gpg --batch --show-keys --with-colons "$key" \\\n'
+    f'               | awk -F: -v f="$HASHICORP_APT_FPR" {_CANARY_AWK}; then\n'
+    '            echo "::error::HashiCorp\'s apt key is not the one primary key ${HASHICORP_APT_FPR} — Terraform not installed."\n'
+    "            exit 1\n          fi\n")
+MUTANTS += [
+    ("M1350", "an input reaches run: inside format(): the check stopped at the first } (SEC6)",
+     ".github/workflows/mutants.yml", '--examples "$EXAMPLES"', "--examples ${{ format('{0}', inputs.examples) }}"),
+    ("M1351", "the canary trusts whatever key HashiCorp's URL serves: no fingerprint check (SEC6)",
+     ".github/workflows/canary-azurerm.yml",
+     _CANARY_CHECK, ""),
+    ("M1352", "the ping's allowed mentions no longer independent of the client's own: fields left to defaults (SEC6)",
+     "glorfindel/bot.py",
+     "AllowedMentions(everyone=False, users=False, replied_user=False,\n"
+     "                                                         roles=", "AllowedMentions(roles="),
+    ("M1353", "the ping posted under the client's « none »: the on-call role never pinged (SEC6)", "glorfindel/bot.py",
+     "                # Every field said: the message mentions its role alone, whatever the client's\n"
+     "                # own allowed mentions (send merges the two).\n"
+     "                allowed_mentions=discord.AllowedMentions(everyone=False, users=False, replied_user=False,\n"
+     "                                                         roles=[discord.Object(id=self.ping_role)]),\n", ""),
+    ("M1354", "an empty value between Glorfindel's backticks: two side by side, the next span let out (SEC6)",
+     CHT, "    return f\"`{_no_mention(s) or '—'}`\"\n", "    return f\"`{_no_mention(s)}`\"\n"),
+]
+MUTANTS += [
+    ("M1355", "the canary takes a subkey's fingerprint, or a second key, for HashiCorp's (SEC6, 2nd review)",
+     ".github/workflows/canary-azurerm.yml", f'-v f="$HASHICORP_APT_FPR" {_CANARY_AWK}',
+     """-v f="$HASHICORP_APT_FPR" '$1=="fpr"&&$10==f{ok=1} END{exit !ok}'"""),
+]
+TESTS["M1350"] = "tests/unit/test_workflows.py"
+TESTS["M1355"] = "tests/unit/test_workflows.py -k fingerprint"
+TESTS["M1351"] = "tests/unit/test_workflows.py -k fingerprint"
+TESTS.update({f"M{n}": "tests/unit/test_chat_escaping.py" for n in (1352, 1353, 1354)})
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

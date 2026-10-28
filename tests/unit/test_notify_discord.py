@@ -61,12 +61,19 @@ def run_github(monkeypatch, tmp_path, name, event, f=None):
     return nd.main(["github"])
 
 
-def wr(conclusion, event="pull_request", branch="lot/a3-regles-orphelines", number=7, run_number=11):
+def wr(conclusion, event="pull_request", branch="lot/a3-regles-orphelines", number=7, run_number=11,
+       head_repo="o/r"):
     run = {"name": "CI", "conclusion": conclusion, "event": event, "head_branch": branch,
            "display_title": "feat(isolation): règles orphelines (A3, #73)", "html_url": "https://x/run",
            "workflow_id": 9, "run_number": run_number,
+           "repository": {"full_name": "o/r"}, "head_repository": {"full_name": head_repo},
            "pull_requests": [{"number": number, "head": {"ref": branch}}] if event == "pull_request" else []}
     return {"workflow_run": run, "repository": {"default_branch": "main"}}
+
+
+def closed_issue(number, title, association="OWNER", **more):
+    return {"action": "closed", "issue": {"number": number, "title": title,
+                                          "author_association": association, **more}}
 
 
 def pr_event(action="closed", merged=True, title="@everyone feat(x): y (A3, #73)", branch="lot/a3-x"):
@@ -175,7 +182,7 @@ def test_merged_opened_closed_issue_and_release(fake, monkeypatch, tmp_path):
     run_github(monkeypatch, tmp_path, "pull_request_target", pr_event("opened", merged=False))
     run_github(monkeypatch, tmp_path, "pull_request_target", pr_event("closed", merged=False))  # not said
     run_github(monkeypatch, tmp_path, "pull_request_target", pr_event())
-    run_github(monkeypatch, tmp_path, "issues", {"action": "closed", "issue": {"number": 73, "title": "A3 — x"}})
+    run_github(monkeypatch, tmp_path, "issues", closed_issue(73, "A3 — x"))
     run_github(monkeypatch, tmp_path, "release", {"action": "published", "release": {"tag_name": "v0.4.0"}})
     titles = [p["embeds"][0]["title"] for p in fake.webhook_posts(CI_TOKEN)]
     assert [t.split(" · ")[0] for t in titles] == ["📬 PR ouverte", "🔀 PR fusionnée", "✅ #73 fermée", "🏷️ v0.4.0 publiée"]
@@ -221,8 +228,8 @@ def test_an_archived_thread_is_found_reopened_never_duplicated(fake, monkeypatch
 
 def test_a_closed_issue_tags_its_thread_done_and_archives_it(fake, monkeypatch, tmp_path):
     configure(monkeypatch, fake, ci=False)
-    run_github(monkeypatch, tmp_path, "issues", {"action": "closed", "issue": {
-        "number": 225, "title": "AL1 — Activity Logs", "milestone": {"title": "v0.x"}}})
+    run_github(monkeypatch, tmp_path, "issues", closed_issue(225, "AL1 — Activity Logs",
+                                                             milestone={"title": "v0.x"}))
     (t,) = fake.threads
     assert t["name"].startswith("AL1 · ") and t["thread_metadata"]["archived"]
     assert sorted(t["applied_tags"]) == sorted([TAG["fait"], TAG["v0.x"]])
@@ -264,11 +271,52 @@ def test_a_forks_pull_request_is_announced_never_threaded(fake, monkeypatch, tmp
 def test_an_issue_without_a_lot_gets_no_thread_but_its_own_is_archived(fake, monkeypatch, tmp_path):
     """F5: N1 creates a thread only for a known lot; an existing « #n · … » one (N2's) is closed."""
     configure(monkeypatch, fake, ci=False)
-    closed = {"action": "closed", "issue": {"number": 248, "title": "Console : les cartes"}}
+    closed = closed_issue(248, "Console : les cartes", "MEMBER")
     run_github(monkeypatch, tmp_path, "issues", closed)
     assert fake.threads == []
     t = fake.thread("#248 · Console : les cartes", [TAG["en cours"]])
     run_github(monkeypatch, tmp_path, "issues", closed)
+    assert t["thread_metadata"]["archived"] and t["applied_tags"] == [TAG["fait"]]
+
+
+def test_a_forks_red_run_is_announced_never_threaded(fake, monkeypatch, tmp_path):
+    """SEC6 (N-11): a fork's pull request runs CI here (workflow_run), on the fork's head — its
+    branch `lot/a3-…` and its title are the fork's to choose. #ci gets the red run; the lot's
+    thread gets nothing. A run that does not say where its head is from is treated alike."""
+    configure(monkeypatch, fake)
+    t = fake.thread("A3 · règles orphelines", [TAG["en relecture"]])
+    run_github(monkeypatch, tmp_path, "workflow_run", wr("failure", head_repo="someone/eregion"))
+    no_head = wr("failure")
+    del no_head["workflow_run"]["head_repository"]
+    run_github(monkeypatch, tmp_path, "workflow_run", no_head)
+    assert len(fake.webhook_posts(CI_TOKEN)) == 2
+    assert t["posts"] == [] and len(fake.threads) == 1
+    run_github(monkeypatch, tmp_path, "workflow_run", wr("failure"))   # the repository's own: threaded
+    assert len(t["posts"]) == 1
+
+
+@pytest.mark.parametrize("association", ["NONE", "CONTRIBUTOR", "FIRST_TIME_CONTRIBUTOR", None])
+def test_an_outsiders_closed_issue_never_moves_a_lots_thread(fake, monkeypatch, tmp_path, association):
+    """SEC6 (N-11): anyone may open an issue named « A3 — … » and close it. It is said in #ci;
+    the lot's thread is neither tagged « fait » nor archived, and no thread is created."""
+    configure(monkeypatch, fake)
+    t = fake.thread("A3 · règles orphelines", [TAG["en cours"], TAG["v0.x"]])
+    own = fake.thread("#300 · A3 — x", [TAG["en cours"]])
+    event = closed_issue(300, "A3 — x", association, milestone={"title": "v0.x"})
+    if association is None:
+        del event["issue"]["author_association"]
+    run_github(monkeypatch, tmp_path, "issues", event)
+    assert len(fake.webhook_posts(CI_TOKEN)) == 1
+    for thread in (t, own):
+        assert thread["posts"] == [] and not thread["thread_metadata"]["archived"]
+    assert sorted(t["applied_tags"]) == sorted([TAG["en cours"], TAG["v0.x"]]) and len(fake.threads) == 2
+
+
+@pytest.mark.parametrize("association", sorted(nd.MEMBERS))
+def test_a_members_closed_issue_moves_its_lots_thread(fake, monkeypatch, tmp_path, association):
+    configure(monkeypatch, fake, ci=False)
+    t = fake.thread("A3 · règles orphelines", [TAG["en cours"]])
+    run_github(monkeypatch, tmp_path, "issues", closed_issue(73, "A3 — x", association))
     assert t["thread_metadata"]["archived"] and t["applied_tags"] == [TAG["fait"]]
 
 

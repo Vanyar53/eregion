@@ -2656,7 +2656,7 @@ MUTANTS += [
      AGENTS_D, '    except nd.Failure as f:\n        nd.say(f)\n        return ""\n    return f"https://discord.com',
      '    except KeyError:\n        return ""\n    return f"https://discord.com'),
     ("M1071", "a late SubagentStop of a past stretch ends a resumed agent: « sans verdict » again (N3)", AGENTS_D,
-     '    if state["agents"].get(aid, {}).get("handback"):\n'
+     '    if a.get("handback"):\n'
      "        return   # its returns come by SubagentHandback: a stop is a pause, or a late one of a past stretch\n",
      ""),
     ("M1072", "a lot blocked after its review fell back: two pings for one stop (N3)", AGENTS_D,

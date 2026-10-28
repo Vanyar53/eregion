@@ -67,6 +67,9 @@ jobs:
   test-macos:
     name: tests (macOS, case-insensitive file system)
     runs-on: macos-latest
+    # Bounded: on 28/10 this job hung twice (50 and 28 min, 4-6 min usually) where Linux passed
+    # in 2 — a job without a bound runs six hours, and a cancelled step keeps no log.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5.1.0
 
@@ -90,4 +93,7 @@ jobs:
         env:
           GLORFINDEL_INVARIANT_EXAMPLES: "500"
           GLORFINDEL_INVARIANT_DB: .hypothesis-invariants
+          # Here a failure is reported as found: this job checks case-insensitive names, and
+          # shrinking a sequence whose races wait up to 20 s each outlasts the job. Linux shrinks.
+          GLORFINDEL_INVARIANT_NO_SHRINK: "1"
         run: python -m pytest tests/unit/test_glorfindel.py tests/unit/test_readiness.py tests/unit/test_reassert.py tests/unit/test_invariants.py tests/unit/test_invariant_regressions.py -q

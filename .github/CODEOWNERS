@@ -1,0 +1,13 @@
+# Who reviews what (SEC6, #277). One maintainer: every path is his. The lines below the
+# first name, again, the paths whose change must never merge without his review — the
+# response that writes on the cloud, its providers, the infrastructure and the CI itself —
+# so that a later, wider list of owners keeps them.
+# docs/design/modele-de-menace.md, « La CI et le CD ».
+
+*                       @Vanyar53
+
+/glorfindel/response/   @Vanyar53
+/glorfindel/providers/  @Vanyar53
+/infra/                 @Vanyar53
+/.github/               @Vanyar53
+/SECURITY.md            @Vanyar53

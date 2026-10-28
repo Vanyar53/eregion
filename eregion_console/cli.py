@@ -28,7 +28,8 @@ def console(host: str, port: int, chosen: str | None):
     """Start the web console (http://localhost:7007): Overview, Glorfindel, Annatar,
     Gothmog, Config.
 
-    Requires: pip install eregion[console]
+    Requires: pip install -e '.[console]', from the clone (the name eregion on PyPI is
+    not this project's)
 
     Every page and API call requires the token: EREGION_CONSOLE_TOKEN (or
     GLORFINDEL_WARROOM_TOKEN, its former name), else the one drawn at the first start and kept in

@@ -9,11 +9,11 @@ Three agents form a closed loop: Annatar attacks, Gothmog breaks, Glorfindel det
   - **Responds** — reasons from the raw signal to choose the minimum effective action and verifies it via the cloud API.
 - **Annatar** (red) — launches real MITRE ATT&CK attacks to prove the defense actually works. Today its own scenarios on Azure; from 0.3, adapters to public attack libraries (Atomic Red Team first, then Stratus Red Team) — no home-grown offensive logic.
 - **Gothmog** (faults — first fault measured on the bench, 19/10) — declared failures run by a public chaos engine (Azure Chaos Studio first): benign noise Glorfindel must not act on, its own dependencies failing (it must fail closed), a recovery timed.
-- Around them, the workshop: **Celebrimbor** builds and enrolls the disposable bench (Terraform); **Orodruin** (*coming in 0.3*) hosts the injectors, with a guardrail contract checked at startup and a one-command kill switch.
+- Around them, the workshop: **Celebrimbor** builds and enrolls the disposable bench (Terraform); **Orodruin** hosts the injectors, with a guardrail contract checked at startup and a one-command kill switch.
 
 > **Production rule** — never a fault or a destructive action on a real workload. In production, only non-destructive techniques on enrolled VMs, and the full chain on an empty sentinel VM; destructive techniques and faults stay on the reference bench or a twin. *(Coded: every enrolled target carries its zone — `bench`, `twin` or `production` — and every injector goes through one guard, `eregion_core/inscription.py`; anything unknown is refused.)*
 
-**Status — v0.2.0.** Glorfindel and Annatar run on Azure today (6 techniques validated in real runs). The **0.3** milestone closes the full loop: a public technique and a fault run from Orodruin, the bench returns to its initial state, and what Glorfindel saw is measured and reported. Milestones, lots and the five indicators the project is judged by: [`ROADMAP.md`](ROADMAP.md) (French).
+**Status — v0.4.3.** Glorfindel runs on Azure, hosted next to the bench in observe-only. The full loop runs (0.3): from Orodruin, a public technique (Atomic Red Team) and a declared fault (Chaos Studio) on enrolled targets only, what Glorfindel saw measured and reported. 0.4 held the isolation path to its invariants; the 0.4.x releases harden its edges — the console, the log lines, the channels. Released versions and what changed: [`CHANGELOG.md`](CHANGELOG.md); milestones, lots and the five indicators the project is judged by: [`ROADMAP.md`](ROADMAP.md) (French). Security: how to report a vulnerability is in [`SECURITY.md`](SECURITY.md), the boundaries and what holds them in the [threat model](docs/design/modele-de-menace.md) (French).
 
 **The core — LLM reasoning + RAG, not playbooks.** Glorfindel never follows a TTP→action table. Every decision comes from an **LLM** (provider-agnostic via LiteLLM — Anthropic, OpenAI, Azure OpenAI, Ollama, self-hosted) reasoning over: the enriched signal (targeted follow-up queries run *before* deciding), a **RAG memory of past incidents** (ChromaDB — it learns every cycle, no fine-tuning), and production-validated few-shot examples. Two hard guardrails wrap the LLM: a **confidence gate** (low confidence → forced escalation) and a **safety graph** that blocks destructive actions without human approval regardless of what the LLM proposes. *(Annatar runs fixed scenarios deterministically and also has a generative campaign layer — `annatar campaign plan` composes an ATT&CK kill-chain from a shared technique catalog, optionally LLM-planned, and materializes replayable scenarios.)*
 
@@ -157,9 +157,16 @@ Each profile has a `docker compose` profile, a Make target and a page in [`docs/
 
 **Each component runs alone in CI.** This is a technical separation, not a product sold alone. Glorfindel, Annatar, Gothmog and the shared core are each tested with the other components absent ([`components.yml`](.github/workflows/components.yml), `make components-check`).
 
-## Evaluate on your infrastructure — read-only, zero risk
+## Evaluate on your infrastructure — read-only on Azure
 
-The fastest, safest way to see Glorfindel: point it at your existing Log Analytics Workspace with **read-only** credentials and watch a week of recommendations. It detects and reasons on your real signals but **cannot touch anything** — no Contributor role, no write API. The pitch to a colleague: *"see what I'd have done on your real signals; I can't touch a thing."*
+The fastest, safest way to see Glorfindel: point it at your existing Log Analytics Workspace with **read-only** credentials and watch a week of recommendations. It detects and reasons on your real signals but **cannot change anything on Azure** — no Contributor role, no write API. The pitch to a colleague: *"see what I'd have done on your real signals; I can't touch a thing."*
+
+**What leaves your machine.** Read-only on Azure is not "nothing leaves":
+- **To the model's provider** (Anthropic by default), on each decision: the detection's rows — log excerpts, with the VM's name and resource id, addresses, user and process names as the logs hold them —, the results of the investigative queries, the incident's context, a few similar past decisions from the local memory and the VM's isolation state. Proposing a detection rule (`glorfindel propose-rules`, the purple loop) sends the technique and the columns of your log tables (`getschema`). The model's answer is a proposal: deterministic guards decide what may run, whatever it says (the [threat model](docs/design/modele-de-menace.md), « Le fournisseur du modèle »).
+- **To your alert channel**, if you set one: each card, to the webhook or the Discord bot.
+- **Nowhere else**: the memory (ChromaDB) and its embedding model run locally; no telemetry.
+
+To keep the logs in-house, run a local model: `GLORFINDEL_LLM_MODEL=ollama/<model>` (and `GLORFINDEL_LLM_BASE_URL`), or `--model ollama/<model>` on `glorfindel watch` — or a provider under your own contract (Azure OpenAI in your tenant). Validated models, and how to compare them on your cases: `make llm-compare` (« Cost of running Glorfindel », below).
 
 **1. Create a Reader-only service principal** (no write permission anywhere):
 
@@ -226,7 +233,8 @@ Everything is provisioned by Terraform — Log Analytics Workspace, VM, NSG, Bac
 ```bash
 cp infra/terraform/terraform.tfvars.example infra/terraform/terraform.tfvars
 # edit terraform.tfvars — set your SSH public key and notification email
-make celebrimbor-up          # baseline (vm-celebrimbor-gondolin, law-celebrimbor-amonsul, rsv-celebrimbor-erebor)
+make celebrimbor-up          # baseline (vm-celebrimbor-gondolin, law-celebrimbor-amonsul, rsv-celebrimbor-erebor);
+                             # the plan is shown and asks for « yes » — YES=1 applies it unread
 make celebrimbor-output      # → glorfindel-config.yaml fragment (workspace_id, vault) — no copy-paste
 # → full test infrastructure in one command (~5 min). make celebrimbor-down to tear it down.
 ```
@@ -423,7 +431,7 @@ export GLORFINDEL_READ_ONLY=1   # Azure Reader + Log Analytics Reader SP
 glorfindel watch runs/           # detects, investigates, recommends — never writes
 ```
 
-The console and Discord bot still work — every escalation includes the recommended action and suggested forensic steps. Zero risk for a first evaluation: give a peer read-only access to your LAW and let them observe a week of Glorfindel decisions before granting Contributor.
+The console and Discord bot still work — every escalation includes the recommended action and suggested forensic steps. No write risk for a first evaluation: give a peer read-only access to your LAW and let them observe a week of Glorfindel decisions before granting Contributor (what still leaves the machine: [above](#evaluate-on-your-infrastructure--read-only-on-azure)).
 
 The full read-only evaluation walkthrough (Reader SP → workspace config → observe) is the **Evaluate on your infrastructure** section near the top of this README.
 
@@ -506,7 +514,7 @@ glorfindel check-ttl                            # release isolations older than 
 glorfindel memory-stats                         # ChromaDB cycle count
 glorfindel bot                                  # start the interactive Discord bot
 glorfindel dashboard                            # full-screen TUI: resources + feed + escalations
-eregion console [--sections annatar,gothmog]    # web console on http://localhost:7007 (pip install eregion[console]); loopback by default, always a token (drawn at the first start, or EREGION_CONSOLE_TOKEN)
+eregion console [--sections annatar,gothmog]    # web console on http://localhost:7007 (pip install -e '.[console]' from the clone — the name « eregion » on PyPI is not ours); loopback by default, always a token (drawn at the first start, or EREGION_CONSOLE_TOKEN)
 
 # Annatar
 annatar run annatar/scenarios/azure/ransomware-vm.yaml            # run a scenario (--dry-run available)
@@ -776,7 +784,7 @@ A claim such as "the VM is isolated" must be true, not likely. Each layer of evi
 
 ```mermaid
 flowchart BT
-    U["Unit tests<br/>~870, 30 s"]
+    U["Unit tests<br/>~3,000, 1 min"]
     I["Property-based invariants<br/>in-memory Azure, a moving world,<br/>faults, two writers at once"]
     M["Mutation check<br/>real past bugs re-injected"]
     L["Cross-process locks<br/>real flock"]
@@ -808,7 +816,7 @@ flowchart BT
 ```bash
 make install          # the locked dependencies, hashes checked (requirements/dev.txt) — as CI and the image
 pytest
-# ~870 tests (~30s) — 0 Azure calls, 0 LLM calls, 0 writes to ~/.glorfindel
+# ~3,000 tests (about a minute) — 0 Azure calls, 0 LLM calls, 0 writes to ~/.glorfindel
 GLORFINDEL_INVARIANT_EXAMPLES=5000 pytest tests/unit/test_invariants.py   # deep run (~8 min)
 python scripts/mutation_check.py --examples 500 --rounds 2                # measure the invariants
 ```
@@ -820,6 +828,19 @@ The suite is hermetic by construction: `tests/unit/conftest.py` redirects every 
 **Mutation check** (`scripts/mutation_check.py`, weekly in `.github/workflows/mutants.yml`, red below 14): re-introduces, one at a time, 41 bugs Glorfindel really had and checks the invariants catch each of them — plus, for each lot since the eighth pass, the bugs its specification names, measured by that lot's own tests (the six of the inscription, O0, and the two of the `CLAUDE.md` budget, DX1: all caught). At the push budget, 22 are caught by the random sequences in every round and the others by their fixed sequence at every push (one is covered by a unit test, two are equivalent since the code changed). `--control` measures the 16 bugs of the control set, never used to shape the generation: 10 caught in every round.
 
 Coverage: 8 LangGraph nodes (incl. the propose_detection_rule branch), routing rules, signal schema, safety guard, YAML parser, ChromaDB memory, CLI escalation flow, detection rules (RulePoller + auto-apply + eviction), proposed rules lifecycle, grounded detection authoring, campaign planner/synthesizer/runner + replay, audit readiness checks, GlorfindelConfig + ExceptionConfig, AssetRegistry + DiscoveryService (replace-on-refresh, self-evicting threads), PostureChecker (dedup, re-escalation).
+
+## Remove Eregion
+
+Nothing of Eregion stays behind once these are gone. **First, nothing isolated or blocked**: `glorfindel list` must be empty — release or unblock what it lists (`glorfindel reset <resource_id> --yes`), or the VMs stay in quarantine once Glorfindel is gone.
+
+- **Containers and images**: `make glorfindel-stop`, then `docker rmi eregion-glorfindel eregion-annatar`.
+- **Local state**, on each host that ran it: `~/.glorfindel/` (isolation and block state, escalations, the console's token, the approved rules, the discovered assets, and the memory of past decisions, `~/.glorfindel/cycles/`), `~/.annatar/`, `~/.eregion/` (the campaign reports' index), `~/.cache/chroma/` (the embedding model) and `runs/` in the clone.
+- **On Azure**: the quarantine NSGs Glorfindel created (`nsg-glorfindel-quarantine-<region>`, tagged `managed-by=glorfindel`), once no NIC carries one; the service principals and their role assignments (`az ad sp delete --id <appId>` — Reader, Log Analytics Reader, and Contributor if you granted it); a diagnostic setting you added for Glorfindel (Activity Log, Entra ID). The bench and Orodruin, if you built them: `make celebrimbor-down CONFIRM=<instance>`, `make orodruin-down`.
+- **Elsewhere**: the Discord bot and webhooks you created for it; your provider's API key.
+
+## Security
+
+To report a vulnerability: [`SECURITY.md`](SECURITY.md) (a private advisory on GitHub — never a public issue). The boundaries, who is trusted at each, and what holds them: [`docs/design/modele-de-menace.md`](docs/design/modele-de-menace.md) (French).
 
 ## Contributing
 

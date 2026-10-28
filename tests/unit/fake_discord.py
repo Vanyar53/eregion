@@ -1,12 +1,15 @@
-"""A fake Discord on the loopback, for notify_discord.py, roadmap_discord.py (N1, N2) and the
-CD of H0 (H1).
+"""A fake Discord on the loopback, for notify_discord.py, agents_discord.py, roadmap_discord.py
+(N1–N3) and the CD of H0 (H1).
 
-The routes the scripts use, as Discord answers them: the webhooks, the Eregion bot's forum
-(#lots: its tags, active and archived threads, posts), its #roadmap channel (pins, last
-messages, a message posted or edited), GitHub's API (workflow runs, milestones, issues, pull
-requests, the latest release, a commit's check runs) under /gh, and H0's console under
-/console. Nothing leaves the machine; every request is kept for the tests.
+The routes the scripts use, as Discord answers them: the webhooks (a message posted, edited,
+deleted), the Eregion bot's forum (#lots: its tags, active and archived threads, posts, a file
+sent as multipart), its #roadmap channel (pins, last messages, a message posted or edited),
+GitHub's API (workflow runs, milestones, issues, pull requests, the latest release, a commit's
+check runs) under /gh, and H0's console under /console. Nothing leaves the machine; every request
+is kept for the tests.
 """
+import email.parser
+import email.policy
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -20,6 +23,19 @@ TAG_NAMES = ("à faire", "en cours", "en relecture", "en correction", "fait", "b
 TAGS = [{"id": f"t{(i + 4) % 10}", "name": n} for i, n in enumerate(TAG_NAMES)]
 TAG = {t["name"]: t["id"] for t in TAGS}
 BOT_ID = "BOT"
+
+
+def _multipart(ctype: str, raw: bytes) -> dict:
+    """A multipart body as the tests read it: its payload_json, and its files by name."""
+    msg = email.parser.BytesParser(policy=email.policy.default).parsebytes(
+        f"Content-Type: {ctype}\r\n\r\n".encode() + raw)
+    out = {"payload_json": None, "files": {}}
+    for part in msg.iter_parts():
+        if part.get_filename():
+            out["files"][part.get_filename()] = part.get_content()
+        elif part.get_param("name", header="content-disposition") == "payload_json":
+            out["payload_json"] = json.loads(part.get_content())
+    return out
 
 
 class FakeDiscord:
@@ -39,9 +55,10 @@ class FakeDiscord:
 
             def _serve(self):
                 n = int(self.headers.get("Content-Length") or 0)
-                body = json.loads(self.rfile.read(n)) if n else None
+                raw, ctype = (self.rfile.read(n) if n else b""), self.headers.get("Content-Type", "")
+                body = _multipart(ctype, raw) if ctype.startswith("multipart/") else json.loads(raw) if raw else None
                 status, out, headers = fake.handle(self.command, self.path, body, dict(self.headers))
-                raw = json.dumps(out).encode()
+                raw = b"" if status == 204 else json.dumps(out).encode()
                 self.send_response(status)
                 for k, v in headers.items():
                     self.send_header(k, v)
@@ -49,7 +66,7 @@ class FakeDiscord:
                 self.send_header("Content-Length", str(len(raw)))
                 self.end_headers()
                 self.wfile.write(raw)
-            do_GET = do_POST = do_PATCH = _serve
+            do_GET = do_POST = do_PATCH = do_DELETE = _serve
 
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         threading.Thread(target=self.server.serve_forever, args=(0.01,), daemon=True).start()
@@ -103,6 +120,9 @@ class FakeDiscord:
                 mid = parts[-1]
                 if mid not in self.messages:
                     return 404, {"message": "Unknown Message"}, {}
+                if method == "DELETE":
+                    del self.messages[mid]
+                    return 204, {}, {}
                 self.messages[mid] = body
                 return 200, {"id": mid}, {}
             if p == "/api/users/@me":
@@ -169,6 +189,9 @@ class FakeDiscord:
             return 200, self.gh["issues"][(page - 1) * per: page * per], {}
         if p == "/gh/repos/o/r/pulls":
             return 200, self.gh["pulls"], {}
+        if p.startswith("/gh/repos/o/r/pulls/"):
+            pr = next((x for x in self.gh["pulls"] if str(x.get("number")) == p.rsplit("/", 1)[1]), None)
+            return (200, pr, {}) if pr else (404, {}, {})
         if p == "/gh/repos/o/r/releases/latest":
             return (200, self.gh["release"], {}) if self.gh["release"] else (404, {"message": "Not Found"}, {})
         if p.startswith("/gh/repos/o/r/commits/") and p.endswith("/check-runs"):

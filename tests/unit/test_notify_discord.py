@@ -1,4 +1,5 @@
 """notify_discord (N1, #242) — the workshop's news in Discord, against a fake Discord.
+elrond's lots and #agents: tests/unit/test_agents_discord.py (N3, #262).
 
 The fake (tests/unit/fake_discord.py) is an HTTP server on the loopback: nothing leaves the
 machine, and the requests are read back as Discord would get them.
@@ -6,9 +7,7 @@ machine, and the requests are read back as Discord would get them.
 import importlib.util
 import json
 import os
-import subprocess
 import sys
-import time
 from pathlib import Path
 
 import pytest
@@ -21,7 +20,6 @@ nd = importlib.util.module_from_spec(_SPEC)
 sys.modules["notify_discord"] = nd   # its dataclasses look their module up
 _SPEC.loader.exec_module(nd)
 
-PINNED, FALLBACK = "claude-opus-5-5", "claude-opus-4-8"
 CI_TOKEN, AGENTS_TOKEN, BOT_TOKEN = "CI-SECRET-abc", "AGENTS-SECRET-def", "BOT-SECRET-ghi"
 assert TAG_NAMES == nd.STATE_TAGS + nd.MILESTONE_TAGS   # the fake forum has the script's tags
 
@@ -77,48 +75,10 @@ def pr_event(action="closed", merged=True, title="@everyone feat(x): y (A3, #73)
                                                "html_url": "https://x/pr", "milestone": {"title": "v0.x"}}}
 
 
-# ── transcripts of elrond's agents, as palantir reads them ─────────────────────────
-
-def _turn(mid, model, ts, tool="Read"):
-    return {"type": "assistant", "timestamp": ts,
-            "message": {"id": mid, "model": model, "stop_reason": "tool_use",
-                        "content": [{"type": "tool_use", "name": tool, "input": {"file_path": "x.py"}}]}}
-
-
-def agent(tmp_path, desc, agent_type="elrond-worker", fallback=False, tool_use="toolu_1", report=""):
-    """An elrond agent's transcript. Its report, as the real ones end (measured on 27/10): a call
-    to the SubagentHandback tool holding it — not a text, so last_assistant_message is empty."""
-    path = tmp_path / "proj" / "sess" / "subagents" / f"agent-{tool_use}.jsonl"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    turns = [_turn("m1", PINNED, "2026-10-27T14:00:00Z")]
-    if fallback:
-        turns += [_turn("m2", FALLBACK, "2026-10-27T14:02:00Z", "Write"), _turn("m3", PINNED, "2026-10-27T14:09:00Z")]
-    if report:
-        turns.append({"type": "assistant", "timestamp": "2026-10-27T14:10:00Z", "message": {
-            "id": "m9", "model": PINNED, "stop_reason": "tool_use",
-            "content": [{"type": "tool_use", "name": "SubagentHandback", "input": {"message": report}}]}})
-    path.write_text("\n".join(json.dumps(t) for t in turns) + "\n", encoding="utf-8")
-    path.with_name(path.stem + ".meta.json").write_text(
-        json.dumps({"agentType": agent_type, "description": desc, "toolUseId": tool_use}), encoding="utf-8")
-    return path
-
-
-def launch(desc, agent_type="elrond-worker", tool_use="toolu_1"):
-    return json.dumps({"hook_event_name": "PreToolUse", "tool_name": "Agent", "tool_use_id": tool_use,
-                       "tool_input": {"description": desc, "subagent_type": agent_type, "prompt": "…"}})
-
-
-def stop(path, agent_type="elrond-worker", last=""):
-    return json.dumps({"hook_event_name": "SubagentStop", "agent_type": agent_type,
-                       "agent_transcript_path": str(path), "last_assistant_message": last})
-
-
 # ── nothing configured, nothing broken ─────────────────────────────────────────────
 
 def test_nothing_configured_sends_nothing_and_exits_zero(fake, monkeypatch, tmp_path, capsys):
     assert run_github(monkeypatch, tmp_path, "workflow_run", wr("failure")) == 0
-    assert nd.hook(launch("elrond A3 · règles orphelines")) == 0
-    assert nd.main(["run-end", "2 lots faits"]) == 0
     assert fake.requests == []
     assert capsys.readouterr().err == ""
 
@@ -139,7 +99,6 @@ def test_the_file_fills_what_the_environment_leaves_out(fake, monkeypatch, tmp_p
 def test_no_message_mentions_anyone_but_the_configured_user(fake, monkeypatch, tmp_path):
     configure(monkeypatch, fake)
     run_github(monkeypatch, tmp_path, "pull_request_target", pr_event())
-    nd.main(["run-end", "@everyone fin"])
     bodies = [r["body"] for r in fake.requests if r["method"] in ("POST", "PATCH") and r["body"]]
     payloads = [b.get("message", b) for b in bodies if "embeds" in b or "message" in b]
     assert payloads and all(p["allowed_mentions"]["parse"] == [] for p in payloads)
@@ -152,8 +111,6 @@ def test_a_discord_failure_never_fails_the_caller_nor_prints_a_secret(fake, monk
     fake.fail.update({"/api/webhooks": 500, "/api/channels": 503})
     assert run_github(monkeypatch, tmp_path, "release",
                       {"action": "published", "release": {"tag_name": "v0.4.0"}}) == 0
-    assert nd.hook(stop(agent(tmp_path, "elrond A3 · x", fallback=True))) == 0
-    assert nd.main(["lot", "A3", "blocked", "--note", "attend Jonathan"]) == 0
     err = capsys.readouterr().err
     assert "HTTP 500" in err
     for secret in (CI_TOKEN, AGENTS_TOKEN, BOT_TOKEN, fake.base):
@@ -245,9 +202,12 @@ def test_a_lot_is_found_from_its_branch_title_or_body(kw, expected):
 # ── #lots: one thread per lot, its tags true ───────────────────────────────────────
 
 def test_a_merge_moves_the_state_and_keeps_the_other_tags(fake, monkeypatch, tmp_path):
+    """A pull request without a milestone: the thread keeps its own."""
     configure(monkeypatch, fake, ci=False)
     t = fake.thread("A3 · règles orphelines", [TAG["en relecture"], TAG["v0.x"]])
-    run_github(monkeypatch, tmp_path, "pull_request_target", pr_event())
+    event = pr_event()
+    event["pull_request"]["milestone"] = None
+    run_github(monkeypatch, tmp_path, "pull_request_target", event)
     assert sorted(t["applied_tags"]) == sorted([TAG["fait"], TAG["v0.x"]])
     assert t["posts"][-1]["flags"] == nd.SILENT and len(fake.threads) == 1
 
@@ -255,9 +215,8 @@ def test_a_merge_moves_the_state_and_keeps_the_other_tags(fake, monkeypatch, tmp
 def test_an_archived_thread_is_found_reopened_never_duplicated(fake, monkeypatch, tmp_path):
     configure(monkeypatch, fake, ci=False)
     t = fake.thread("A3 · règles orphelines", [TAG["fait"]], archived=True)
-    assert nd.hook(launch("elrond A3 · correction")) == 0
+    run_github(monkeypatch, tmp_path, "pull_request_target", pr_event("opened", merged=False))
     assert len(fake.threads) == 1 and t["posts"] and not t["thread_metadata"]["archived"]
-    assert TAG["en correction"] in t["applied_tags"] and TAG["fait"] not in t["applied_tags"]
 
 
 def test_a_closed_issue_tags_its_thread_done_and_archives_it(fake, monkeypatch, tmp_path):
@@ -278,133 +237,6 @@ def test_a_red_run_never_creates_a_thread(fake, monkeypatch, tmp_path):
     assert len(t["posts"]) == 1 and len(fake.threads) == 1
 
 
-# ── elrond's agents ────────────────────────────────────────────────────────────────
-
-def test_only_elronds_agents_are_followed(fake, monkeypatch, tmp_path):
-    configure(monkeypatch, fake)
-    for data in (launch("Find API endpoints", "Explore"), launch("elrond plan · x", "elrond-planner"),
-                 stop(agent(tmp_path, "something", "general-purpose"), "general-purpose"),
-                 json.dumps({"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {}})):
-        assert nd.hook(data) == 0
-    assert fake.requests == []
-
-
-def test_a_lot_is_followed_from_launch_to_review(fake, monkeypatch, tmp_path):
-    configure(monkeypatch, fake)
-    nd.hook(launch("elrond A3 · règles orphelines"))
-    (t,) = fake.threads
-    assert t["name"] == "A3 · règles orphelines" and t["applied_tags"] == [TAG["en cours"]]
-    nd.hook(stop(agent(tmp_path, "elrond A3 · règles orphelines")))
-    nd.hook(launch("elrond A3 · relecture", "elrond-reviewer", "toolu_2"))
-    nd.hook(stop(agent(tmp_path, "elrond A3 · relecture", "elrond-reviewer", tool_use="toolu_2",
-                       report="**Verdict : `ok`**\n\nAucun constat."), "elrond-reviewer"))
-    titles = [p["embeds"][0]["title"].split(" · ")[0] for p in t["posts"]]
-    assert titles == ["🚀 Lancé", "📦 Rendu", "🔎 Relecture lancée", "✅ Relecture ok"]
-    assert all(p["flags"] == nd.SILENT for p in t["posts"]) and t["applied_tags"] == [TAG["fait"]]
-    assert all(not p.get("content") for p in fake.webhook_posts(AGENTS_TOKEN))   # no alert: no ping
-
-
-def test_a_fallback_is_an_alert_that_mentions_jonathan(fake, monkeypatch, tmp_path):
-    configure(monkeypatch, fake)
-    nd.hook(stop(agent(tmp_path, "elrond I8F · constat", fallback=True)))
-    alerts = [p for p in fake.webhook_posts(AGENTS_TOKEN) if p.get("content")]
-    assert len(alerts) == 1 and alerts[0]["content"] == "<@42>" and "flags" not in alerts[0]
-    assert FALLBACK in alerts[0]["embeds"][0]["description"]
-    (t,) = fake.threads
-    assert "Repli" in t["posts"][-1]["embeds"][0]["title"] and t["applied_tags"] == [TAG["en relecture"]]
-
-
-@pytest.mark.parametrize("report, fell, title, state", [
-    ("Relu.\n\n**Verdict : `changes`**\n\n1. …", False, "🛠️ Relecture : changes", "en correction"),
-    ("- **Verdict :** blocking", False, "🛠️ Relecture : blocking", "en correction"),
-    ("Je n'ai rien conclu.", False, "❔ Relecture sans verdict lisible", None),
-    ("**Verdict :** `ok`", True, "⚠️ Relecture non obtenue", None),   # the reviewer fell back itself
-])
-def test_a_review_that_needs_jonathan_alerts_him(fake, monkeypatch, tmp_path, report, fell, title, state):
-    configure(monkeypatch, fake)
-    t = fake.thread("A3 · x", [TAG["en relecture"]])
-    nd.hook(stop(agent(tmp_path, "elrond A3 · relecture 2", "elrond-reviewer", fallback=fell, report=report),
-                 "elrond-reviewer"))
-    alerts = [p for p in fake.webhook_posts(AGENTS_TOKEN) if p.get("content") == "<@42>"]
-    assert len(alerts) == 1 and alerts[0]["embeds"][0]["title"].startswith(title)
-    assert t["applied_tags"] == [TAG[state or "en relecture"]]
-
-
-def test_the_running_message_is_rewritten_in_place(fake, monkeypatch, tmp_path):
-    configure(monkeypatch, fake, bot=False)
-    nd.hook(launch("elrond A3 · règles orphelines", tool_use="toolu_a"))
-    nd.hook(launch("elrond I8F · constat", tool_use="toolu_b"))
-    nd.hook(stop(agent(tmp_path, "elrond A3 · règles orphelines", tool_use="toolu_a")))
-    (mid,) = fake.messages
-    text = fake.messages[mid]["embeds"][0]["description"]
-    assert "`I8F` worker" in text and "A3" not in text
-    assert len(fake.webhook_posts(AGENTS_TOKEN)) == 1   # one POST, then PATCHes
-    del fake.messages[mid]                              # deleted in Discord: a new one
-    nd.hook(stop(agent(tmp_path, "elrond I8F · constat", tool_use="toolu_b")))
-    (new,) = fake.messages
-    assert new != mid and fake.messages[new]["embeds"][0]["description"] == "Rien ne tourne."
-
-
-def test_a_blocked_lot_and_the_end_of_a_run_alert_jonathan(fake, monkeypatch, tmp_path):
-    configure(monkeypatch, fake)
-    t = fake.thread("A3 · x", [TAG["en cours"]])
-    nd.main(["lot", "A3", "blocked", "--note", "attend une décision"])
-    nd.main(["run-end", "1 lot fait, 1 bloqué"])
-    alerts = [p["embeds"][0]["title"] for p in fake.webhook_posts(AGENTS_TOKEN) if p.get("content") == "<@42>"]
-    assert alerts == ["⛔ Lot bloqué · A3", "🏁 Fin du run elrond"]
-    assert t["applied_tags"] == [TAG["bloqué"]]
-
-
-def test_the_hook_delivers_in_the_background(fake, monkeypatch, tmp_path):
-    configure(monkeypatch, fake, bot=False)
-    monkeypatch.delenv("EREGION_DISCORD_SYNC")
-    start = time.monotonic()
-    assert nd.hook(launch("elrond A3 · x")) == 0
-    assert time.monotonic() - start < 2
-    for _ in range(100):
-        if fake.messages:
-            break
-        time.sleep(0.05)
-    assert fake.messages
-
-
-# ── the hooks can never stop Claude Code ───────────────────────────────────────────
-
-@pytest.mark.parametrize("stdin", ["", "not json", "[]", json.dumps({"hook_event_name": "SubagentStop",
-                                                                     "agent_type": "elrond-worker"})])
-def test_the_hook_exits_zero_on_anything(fake, monkeypatch, stdin):
-    configure(monkeypatch, fake)
-    out = subprocess.run([sys.executable, str(ROOT / "scripts" / "notify_discord.py"), "hook"],
-                         input=stdin, capture_output=True, text=True, env=os.environ, timeout=30)
-    assert out.returncode == 0 and out.stdout == ""
-
-
-def _hooks(home, mode):
-    subprocess.run(["bash", str(ROOT / "scripts" / "elrond-hooks.sh"), mode], check=True, capture_output=True,
-                   env={**os.environ, "CLAUDE_HOME": str(home)}, timeout=30)
-    return json.loads((home / "settings.json").read_text(encoding="utf-8")).get("hooks", {})
-
-
-def test_the_user_hooks_never_block_and_leave_the_others_alone(tmp_path):
-    """The hooks are the operator's (~/.claude/settings.json), never the repository's. Exit 2
-    from a PreToolUse hook blocks the tool, from SubagentStop it keeps the agent going — and
-    python3 exits 2 on a missing file: every command of ours ends in `|| true`."""
-    home = tmp_path / "claude"
-    home.mkdir()
-    rtk = {"matcher": "Bash", "hooks": [{"type": "command", "command": "rtk hook claude"}]}
-    (home / "settings.json").write_text(json.dumps({"hooks": {"PreToolUse": [rtk]}}), encoding="utf-8")
-    _hooks(home, "install")
-    hooks = _hooks(home, "install")                         # twice: still one of each
-    ours = [(event, g["matcher"], h["command"]) for event, groups in hooks.items() for g in groups
-            for h in g["hooks"] if "rtk" not in h["command"]]
-    assert sorted((e, m, "notify" in c) for e, m, c in ours) == [
-        ("PreToolUse", "Agent", True), ("Stop", "", False),
-        ("SubagentStop", "", False), ("SubagentStop", "elrond-worker|elrond-reviewer", True)]
-    assert all(c.endswith("|| true") for _, _, c in ours)
-    assert rtk in hooks["PreToolUse"]
-    assert _hooks(home, "uninstall") == {"PreToolUse": [rtk]}
-
-
 @pytest.mark.parametrize("path", ["docker-compose.yml", "infra/glorfindel-host/host_env.py",
                                   "infra/glorfindel-host/host.env.example"])
 def test_the_workshop_variables_never_reach_the_containers_nor_h0(path):
@@ -415,20 +247,7 @@ def test_the_workshop_variables_never_reach_the_containers_nor_h0(path):
     assert "EREGION_DISCORD_" not in (ROOT / path).read_text(encoding="utf-8")
 
 
-# ── after the review of 27/10 (F1, F5–F8) ──────────────────────────────────────────
-
-def test_the_verdict_is_read_where_elrond_hands_it_back(fake, monkeypatch, tmp_path):
-    """F1: the report is in the transcript's last SubagentHandback; the hook's
-    last_assistant_message is only a fallback, for an agent that ends on a text."""
-    configure(monkeypatch, fake)
-    a = fake.thread("A3 · x", [TAG["en relecture"]])
-    nd.hook(stop(agent(tmp_path, "elrond A3 · relecture", "elrond-reviewer",
-                       report="Troisième relecture.\n\n**Verdict : `changes`**\n\n1. …"), "elrond-reviewer", ""))
-    b = fake.thread("B1 · y", [TAG["en relecture"]])
-    nd.hook(stop(agent(tmp_path, "elrond B1 · relecture", "elrond-reviewer", tool_use="toolu_9"),
-                 "elrond-reviewer", "- **Verdict :** `ok`"))
-    assert a["applied_tags"] == [TAG["en correction"]] and b["applied_tags"] == [TAG["fait"]]
-
+# ── after the review of 27/10 (F5, F6) ──────────────────────────────────────────
 
 def test_a_forks_pull_request_is_announced_never_threaded(fake, monkeypatch, tmp_path):
     """F5: its title can name any lot; it reaches #ci, never a lot's thread."""
@@ -464,20 +283,3 @@ def test_a_malformed_webhook_url_is_said_without_its_token(fake, monkeypatch, tm
     monkeypatch.setenv("EREGION_DISCORD_WEBHOOK_CI", f"{fake.base}/api/webhooks/1/{CI_TOKEN}\n")
     run_github(monkeypatch, tmp_path, "release", release)
     assert len(fake.messages) == 1
-
-
-def test_a_blocked_lot_without_configuration_writes_nothing(fake, tmp_path):
-    """F7: nothing configured, nothing written — not even the local state (SKILL.md)."""
-    assert nd.main(["lot", "A3", "blocked", "--note", "x"]) == 0
-    assert fake.requests == [] and not (tmp_path / "state").exists()
-
-
-def test_archived_threads_are_paged_with_an_encoded_timestamp(fake, monkeypatch, tmp_path):
-    """F8: the archive timestamp (« +00:00 ») goes into the query encoded."""
-    configure(monkeypatch, fake, ci=False)
-    fake.thread("B1 · autre", archived=True)
-    t = fake.thread("A3 · règles orphelines", [TAG["fait"]], archived=True)
-    nd.hook(launch("elrond A3 · correction"))
-    assert len(fake.threads) == 2 and t["posts"]
-    pages = [r["path"] for r in fake.requests if "archived/public" in r["path"] and "before=" in r["path"]]
-    assert pages and "before=2026-10-01T00%3A00%3A00%2B00%3A00" in pages[0]

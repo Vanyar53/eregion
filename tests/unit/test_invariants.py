@@ -395,6 +395,7 @@ class IsolationMachine(RuleBasedStateMachine):
         self.releasing: set[str] = set()                # the test's own journal (I9)
         self.unblocking: set[str] = set()
         self.journal_seen = 0                           # I2 by author: entries checked
+        self.journal_at = 0                             # I4: where the operation began (_before)
         # Untraceability from the test's own journal (A0): when Glorfindel recorded a NIC's
         # original (moved it from a real NSG into quarantine), and when the test destroyed
         # the records — never from the records as the code left them, or a bug that
@@ -597,6 +598,13 @@ class IsolationMachine(RuleBasedStateMachine):
         test's journal, not from the records as the code left them (see __init__)."""
         if key(nic["id"]) not in self.detached or nic["nsg"] is not None:
             return False
+        return self._record_lost(vm, nic)
+
+    def _record_lost(self, vm: str, nic: dict) -> bool:
+        """What _untraceable reads, the NIC bare or not: Glorfindel recorded the NIC's own
+        NSG when it moved it into quarantine, and the TEST lost every record of it since
+        (the quarantine's tags, and the VM's state or the state never had it) — by the
+        test's journal, never by the records as the code left them."""
         self._check_authors()
         rec = self.recorded_at.get(key(nic["id"]))
         if rec is None:
@@ -749,8 +757,30 @@ class IsolationMachine(RuleBasedStateMachine):
                               flows_before[("own", other)] - before)
             assert self._state(other) == states_before[other], (
                 f"I4: an operation on {vm} changed the state of {other}")
+        self._old_isolations_kept({vm}, f"I4: an operation on {vm}")
+
+    def _old_isolations_kept(self, acting: set, what: str):
+        """I4, by the test's journal (A0): an older version's isolation is its VM's, and
+        an operation on another VM never deletes it — even with that VM's NIC away in
+        quarantine, where no flow tells (I4S, #239). A VM that no longer exists has none
+        to keep; nor, for Glorfindel to know, a VM whose NIC is away from that NSG with
+        every record of where it belongs lost by the TEST (_record_lost): nothing on Azure
+        or in a state ties the NIC to it any more. The deletes since _before, from the
+        fake's journal; the owner, from the test's own record of what the older version
+        left (`legacy`)."""
+        mine = {key(v) for v in acting}
+        for e in self.fake.journal[self.journal_at:]:
+            owner = self.legacy.get((e.get("nsg"), e.get("rule"))) if e["op"] == "rule.delete" else None
+            if owner and owner not in self.deleted and any(
+                    key(n["design_nsg"]) == e["nsg"] and key(n["nsg"]) != e["nsg"] and self._record_lost(owner, n)
+                    for n in self._nics(owner)):
+                continue
+            assert not owner or owner in self.deleted or key(owner) in mine, (
+                f"{what} deleted {e['rule']} of {owner.rsplit('/', 1)[-1]}, an older version's isolation, "
+                f"from {e['nsg'].rsplit('/', 1)[-1]}")
 
     def _before(self):
+        self.journal_at = len(self.fake.journal)
         flows = self._flows()
         flows.update({("own", v): self._open(v, own=True) for v in self.live})
         return flows, {v: self._state(v) for v in self.live}
@@ -1232,6 +1262,8 @@ class IsolationMachine(RuleBasedStateMachine):
             if other not in involved and "reassert" not in {first[1], second[1]}:
                 self._only_sealed(other, strip(flows[other]), strip(after[other]), "I4: two operations elsewhere",
                                   flows[("own", other)] - flows[other])
+        if "reassert" not in {first[1], second[1]}:
+            self._old_isolations_kept(involved, f"I4: {first[1]} and {second[1]} at once")
         self._claims_after_a_change()
 
     # ── the customer's world moving ─────────────────────────────────────────────
@@ -1611,6 +1643,40 @@ class IsolationMachine(RuleBasedStateMachine):
             if away:
                 self.someone_detaches_the_quarantine(_Drawn(data, nic=away[0]))
         # The reset three times in four: the release puts the NIC back before reading.
+        if data.draw(st.sampled_from([True, True, True, False]), label="reset"):
+            self.reset_from_azure(_Drawn(data, vm=vm, fault=None))
+        else:
+            self._release(vm, vm, None)
+
+    @rule(data=st.data())
+    def an_old_isolations_vm_goes_away(self, data):
+        """The symmetric case made common (I4S, #239): the VM of an older version's
+        isolation isolated by quarantine — its NIC away from that NSG, left bare or not,
+        the quarantine's tags lost or not —, then a new VM attached to that NSG, alone
+        there now, reset or released. Nothing opens (the quarantine holds the old VM):
+        only the test's journal tells the old isolation was taken (_old_isolations_kept)."""
+        owners = sorted({(k, v) for (k, _), v in self.legacy.items() if k in self.fake.nsgs and v in self.live})
+        if not owners:
+            return
+        if not (self.config["quarantine"] and self.config["readable"]):
+            self.config = {**self.config, "quarantine": True, "readable": True}
+            self._write_config()
+        k, owner = data.draw(st.sampled_from(owners), label="old isolation")
+        g = self.fake.nsgs[k]
+        self._isolate(owner, owner, None)
+        away = [key(n) for n in self.fake.vms[key(owner)]["nics"]
+                if self.fake.nics[key(n)]["nsg"] and actions._is_quarantine_nsg(self.fake.nics[key(n)]["nsg"])]
+        held = sorted({key(self.fake.nics[n]["nsg"]) for n in away})
+        if held and data.draw(st.booleans(), label="tags lost"):
+            self._tags_lost(_Drawn(data, quarantine=held[0]))
+            self._claims_after_a_change()
+        if away and data.draw(st.booleans(), label="left bare"):
+            self.someone_detaches_the_quarantine(_Drawn(data, nic=away[0]))
+        count = len(self.vms)
+        self.create_vm(_Drawn(data, region=g["location"], nsg=g["id"]))
+        if len(self.vms) == count:
+            return
+        vm = self.vms[-1]
         if data.draw(st.sampled_from([True, True, True, False]), label="reset"):
             self.reset_from_azure(_Drawn(data, vm=vm, fault=None))
         else:

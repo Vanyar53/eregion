@@ -3,11 +3,24 @@ and deletes, rule names, NSG sharing (moved from actions.py, A1).
 """
 from __future__ import annotations
 
-from glorfindel.providers.azure.nsg import _nic_hash
+import re
+
+from glorfindel.providers.azure.nsg import _nic_hash, _rule_name
 from glorfindel.providers.azure.quarantine import _is_quarantine_nsg
 from glorfindel.providers.azure.sdk import _is_not_found
 from glorfindel.response.ids import _parse_nic_resource_id, _parse_nsg_resource_id, _same_id
 from glorfindel.response.policy import _ERR_MAX, _first_line
+
+# A VM block's name before the VM was in it: the attacker's address alone (an older
+# version's, on an NSG it took for the VM's own; on a subnet's, a perimeter block).
+_PLAIN_BLOCK = re.compile(r"^glorfindel-block-\d{1,3}(?:-\d{1,3}){3}(?:-\d{1,2})?(?:-out)?$")
+
+
+def _fixed_name(name: str, isolation_name: str) -> bool:
+    """A rule name with no VM in it — an older version's isolation or block: whose it
+    is depends on whose NSG it is (_isolation_pairs, _block_names_for_target)."""
+    low = (name or "").lower()
+    return low in (isolation_name.lower(), f"{isolation_name}-out".lower()) or bool(_PLAIN_BLOCK.match(low))
 
 
 class NetworkMixin:
@@ -226,7 +239,7 @@ class NetworkMixin:
         quarantine, or bare): it counts as one of the NSG's. Counted only from what is
         attached, the NSG of a NIC away read as governing one NIC — another VM's — and
         the reset took an older version's fixed-name isolation of that VM for its own
-        (I4F, #235)."""
+        (I4F, #235). Another VM's NIC away from it counts too (_tied_while_away, I4S)."""
         try:
             nsg = self._network.network_security_groups.get(nsg_rg, nsg_name)
         except Exception:
@@ -235,7 +248,65 @@ class NetworkMixin:
         subnets = list(getattr(nsg, "subnets", None) or [])
         if away_nic and not any(_same_id(getattr(n, "id", "") or "", away_nic) for n in nics):
             nics.append(away_nic)
+        if len(nics) < 2 and not subnets:
+            away = self._tied_while_away(nsg, [n if isinstance(n, str) else getattr(n, "id", "") or "" for n in nics])
+            if away is not False:
+                return away                   # another VM's NIC away from it (I4S), or unknown
         return len(nics) > 1 or len(subnets) > 0
+
+    def _tied_while_away(self, nsg, counted: list[str]) -> bool | None:
+        """True when a NIC not in `counted` belongs behind this NSG while it is away from
+        it — in our quarantine, or left bare —: our tag on the quarantine NSG names this
+        NSG as its original, or, its tag lost, the local state does. None when that can't
+        be read: unknown, the fixed names are left and said (_unattributable_fixed).
+
+        Counted from what is attached, the NSG of a VM away in quarantine read as the
+        new VM's alone there, and its reset took the older version's isolation of the
+        other VM for its own (I4S, #239; I4F was the NIC of the reset itself). Read only
+        when the NSG holds a fixed name (an older version's, no VM in it): only then does
+        it matter whose NSG this is — every rule placed since is scoped to its NIC."""
+        if not any(_fixed_name(_rule_name(r), self.ISOLATION_RULE_NAME)
+                   for r in (getattr(nsg, "security_rules", None) or [])):
+            return False
+        from glorfindel.response.state import active_isolations
+        nsg_id = getattr(nsg, "id", "") or ""
+        mine = {self._orig_tag(n) for n in counted if n}
+
+        def names_this(original) -> bool:
+            return isinstance(original, str) and _same_id(original, nsg_id)
+
+        try:
+            listing = list(self._network.network_security_groups.list_all())
+        except Exception:
+            return None
+        tied: set[str] = set()                # NICs (by their tag's key) whose original is this NSG
+        held: set[str] = set()                # NICs in our quarantine now
+        for q in listing:
+            tags = getattr(q, "tags", None) or {}
+            if not _is_quarantine_nsg(getattr(q, "id", "") or "") or tags.get("managed-by") != "glorfindel":
+                continue
+            held |= {self._orig_tag(n.id) for n in (getattr(q, "network_interfaces", None) or [])
+                     if getattr(n, "id", None)}
+            tied |= {tag for tag, value in tags.items() if tag.startswith("glorfindel-orig-") and names_this(value)}
+        # The local state says it too — the tag lost, it still does.
+        tied |= {self._orig_tag(p["nic_id"]) for iso in active_isolations() for p in iso.get("placements") or []
+                 if p.get("kind") == "quarantine" and p.get("nic_id") and names_this(p.get("original_nsg_id"))}
+        tied -= mine
+        if tied & held:
+            return True
+        if not tied:
+            return False
+        # Tied to this NSG, not in our quarantine: left bare (our NSG taken off it, the
+        # tag kept until its original is back), or a stale record — a NIC gone since, or
+        # given back an NSG outside Glorfindel. Only the bare one is away.
+        try:
+            for n in self._network.network_interfaces.list_all():
+                now = getattr(getattr(n, "network_security_group", None), "id", None)
+                if self._orig_tag(n.id) in tied and (now is None or _is_quarantine_nsg(now)):
+                    return True
+        except Exception:
+            return None
+        return False
 
     def _get_nic_private_ips(self, nic_id: str) -> list[str]:
         """All private IPs across a NIC's ipConfigurations (a NIC can have several).

@@ -737,3 +737,119 @@ def test_a_reset_never_takes_an_old_isolation_on_an_nsg_shared_since(monkeypatch
          ("create_vm", "northeurope", "rg-app1", "batch", _NEW_VM_ON.format(rg="rg-edge", nic="api-nic"), "Linux"),
          ("isolate", _BATCH, _BATCH, None),
          *then)
+
+
+_QUARANTINE_EDGE = _NSG.format(rg="rg-edge", name="nsg-glorfindel-quarantine-northeurope")
+
+
+@pytest.mark.parametrize("then", [
+    [("reset_from_azure", _BATCH, _BATCH, None)],
+    # The release of the new VM sweeps the same names on the same NSG.
+    [("release", _BATCH, _BATCH, None)],
+    # api's NIC left bare (our NSG taken off it): our tag still ties it to its NSG.
+    [("someone_detaches_the_quarantine", _nic("rg-edge", "api-nic")), ("reset_from_azure", _BATCH, _BATCH, None)],
+    # The tags of the quarantine lost: api's state still says where its NIC belongs.
+    [("tags_lost", _QUARANTINE_EDGE), ("reset_from_azure", _BATCH, _BATCH, None)],
+    # api's state lost: our tag still says it.
+    [("lose_state", API), ("reset_from_azure", _BATCH, _BATCH, None)],
+    # api's NIC bare, the NICs can't be listed: unknown, not "no NIC away".
+    [("someone_detaches_the_quarantine", _nic("rg-edge", "api-nic")),
+     ("reset_from_azure", _BATCH, _BATCH, ("nic.list", "always-429"))],
+])
+def test_a_reset_never_takes_the_old_isolation_of_a_vm_in_quarantine(monkeypatch, then):
+    """The symmetric case of I4F (#239): an older version's isolation of `api` (fixed names,
+    any/any, state lost), `api` isolated by quarantine — its NIC away —, then a new VM
+    attached to the same NSG, alone there now. Counted from what is attached, the NSG read
+    as the new VM's, the fixed names as its own: its reset deleted api's older isolation.
+    No flow opened (the quarantine holds api), but back on its NSG outside Glorfindel (an
+    ARM redeploy), api's NIC would have found it gone. A NIC tied to the NSG by our tag
+    (or by the state when the tag is lost) counts among its NICs (I4S)."""
+    _run(monkeypatch, _net(quarantine=True, legacy=("api-nic", False), api_nic={"own": "dedicated"}),
+         ("isolate", API, API, None),
+         ("create_vm", "northeurope", "rg-app1", "batch", _NEW_VM_ON.format(rg="rg-edge", nic="api-nic"), "Linux"),
+         *then)
+
+
+_GONE_NIC = "/subscriptions/s/resourceGroups/rg-old/providers/Microsoft.Network/networkInterfaces/old-nic"
+_API_NSG = _NEW_VM_ON.format(rg="rg-edge", nic="api-nic")
+
+
+def _alone_with_a_stale_tag(m, fault=None):
+    """api alone on its NSG with its older isolation; our quarantine NSG keeps the tag of
+    a NIC gone since, naming that NSG (deleted in quarantine: nobody took the tag off).
+    The reset of api, under `fault`."""
+    m.fake.add_nsg("rg-edge", "nsg-glorfindel-quarantine-northeurope", location="northeurope",
+                   tags={"managed-by": "glorfindel", m.connector._orig_tag(_GONE_NIC): _API_NSG})
+    m.chaos.arm(fault)
+    try:
+        return m.connector.sweep_vm_rules(API)
+    finally:
+        m.chaos.arm(None)
+
+
+def _old_names_on(m) -> set:
+    return {n for n in m.fake.nsgs[key(_API_NSG)]["rules"] if n.startswith("glorfindel-isolation-deny-all")}
+
+
+def test_a_vm_alone_on_its_nsg_still_takes_its_old_isolation(monkeypatch):
+    """No eternal rule (I4S): the VM alone on its NSG, the reset still deletes its older
+    isolation — a stale tag (its NIC gone) ties nothing."""
+    def check(m):
+        out = _alone_with_a_stale_tag(m)
+        assert out["status"] == "swept", out
+        assert not _old_names_on(m)
+    _legacy_world(monkeypatch, ("api-nic", False), check=check)
+
+
+def test_an_unreadable_quarantine_listing_leaves_the_old_isolation_and_says_it(monkeypatch):
+    """Whose the fixed names are can't be read (the NSG listing throttled): unknown, not
+    "nobody else" — left, and said (I4S)."""
+    def check(m):
+        out = _alone_with_a_stale_tag(m, ("nsg.list", "always-429"))
+        assert out["status"] == "swept_partial", out
+        assert _old_names_on(m) == {"glorfindel-isolation-deny-all", "glorfindel-isolation-deny-all-out"}
+        assert any("partage illisible" in f and "ancienne version" in f for f in out["failed"]), out
+    _legacy_world(monkeypatch, ("api-nic", False), check=check)
+
+
+def _quarantine_world(monkeypatch, *steps, check):
+    """api's older isolation (fixed names, state lost), the quarantine on, steps, then
+    `check`."""
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_net(quarantine=True, legacy=("api-nic", False), api_nic={"own": "dedicated"}))
+        for rule, *draws in steps:
+            getattr(m, rule)(Script(*draws))
+        check(m)
+    finally:
+        m.teardown()
+
+
+def test_a_vm_in_quarantine_alone_on_its_nsg_still_takes_its_old_isolation(monkeypatch):
+    """The VM of the older isolation in quarantine itself, alone on its NSG: its own NIC,
+    away and tied by our tag, is not another VM's — its reset deletes the fixed names
+    (I4S: no eternal rule)."""
+    def check(m):
+        assert m._in_quarantine(API)
+        out = m.connector.sweep_vm_rules(API)
+        assert out["status"] == "swept", out
+        assert not _old_names_on(m)
+    _quarantine_world(monkeypatch, ("isolate", API, API, None), check=check)
+
+
+def test_the_nic_away_of_the_reset_itself_needs_no_listing(monkeypatch):
+    """I4F's case — the new VM's own NIC away from api's NSG —, the subscription's NSGs
+    and NICs unreadable: the NIC of the reset, away, makes the NSG shared, known without
+    reading anything else. The older isolation is left as another VM's, not as unknown."""
+    def check(m):
+        m.chaos.arm(("nsg.list", "always-429"))
+        try:
+            out = m.connector.sweep_vm_rules(_BATCH)
+        finally:
+            m.chaos.arm(None)
+        assert _old_names_on(m) == {"glorfindel-isolation-deny-all", "glorfindel-isolation-deny-all-out"}
+        assert any("NSG nsg-api-nic partagé :" in f for f in out["failed"]), out
+    _quarantine_world(monkeypatch,
+                      ("create_vm", "northeurope", "rg-app1", "batch", _API_NSG, "Linux"),
+                      ("isolate", _BATCH, _BATCH, None), check=check)

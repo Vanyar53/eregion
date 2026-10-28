@@ -1593,6 +1593,43 @@ MUTANTS += [
      ""),
 ]
 
+# I4S (#239), the symmetric case: another VM's NIC away from the NSG (in our quarantine, or
+# bare) is tied to it by our tag, or by the local state when the tag is lost — or the NSG
+# reads as the new VM's alone, and its reset takes the other VM's older isolation. Range
+# M1030–M1039.
+MUTANTS += [
+    ("M1030", "another VM's NIC away from the NSG not counted: the reset of a VM alone there takes "
+              "the other's older isolation (I4S)", NET,
+     "        if len(nics) < 2 and not subnets:\n",
+     "        if False:\n"),
+    ("M1031", "our quarantine tag ignored: only the local state ties a NIC away to its NSG (I4S)", NET,
+     '            tied |= {tag for tag, value in tags.items() if tag.startswith("glorfindel-orig-") '
+     "and names_this(value)}\n",
+     ""),
+    ("M1032", "the local state ignored when the quarantine's tag is lost (I4S)", NET,
+     '        tied |= {self._orig_tag(p["nic_id"]) for iso in active_isolations()',
+     '        tied |= {self._orig_tag(p["nic_id"]) for iso in []'),
+    ("M1033", "an unreadable NSG listing read as no NIC away: the fixed names taken (I4S)", NET,
+     "            listing = list(self._network.network_security_groups.list_all())\n"
+     "        except Exception:\n            return None\n",
+     "            listing = list(self._network.network_security_groups.list_all())\n"
+     "        except Exception:\n            return False\n"),
+    ("M1034", "a bare NIC tied by our tag not counted (I4S)", NET,
+     "        if not tied:\n            return False\n",
+     "        if True:\n            return False\n"),
+    ("M1035", "every tag naming the NSG read as a NIC away, a stale one too: the older isolation of "
+              "a VM alone on its NSG never goes (I4S)", NET,
+     "        if not tied:\n            return False\n",
+     "        if tied:\n            return True\n"),
+    ("M1036", "an unreadable NIC listing read as no bare NIC: the fixed names taken (I4S)", NET,
+     "        except Exception:\n            return None\n        return False\n",
+     "        except Exception:\n            return False\n        return False\n"),
+    ("M1037", "the NIC of the reset itself, away in quarantine, counted as another VM's: the older "
+              "isolation of a VM alone on its NSG never goes (I4S)", NET,
+     "        tied -= mine\n",
+     ""),
+]
+
 # MC1 — the AWS adapter, written against the simulated world (tests/unit/fake_aws.py) and
 # measured by the invariants on AWS (tests/unit/test_invariants_aws.py). Range M600–M649:
 # M600–M629 the bugs met or named while building it, M630–M649 its control set (below).
@@ -2247,6 +2284,9 @@ TESTS.update({f"M{n}": "tests/unit/test_reassert.py" for n in (835, 836, 837, 83
 TESTS["M838"] = f"{INVARIANTS} tests/unit/test_invariant_regressions.py"
 # I4F (#235): the machine met it once, at 2 000 sequences (seed 101) — its frozen sequence too.
 TESTS.update({mid: f"{INVARIANTS} tests/unit/test_invariant_regressions.py" for mid in ("M960", "M961")})
+# I4S (#239): their frozen sequences first (each one has its witness), then the machine
+# (its composite rule, `an_old_isolations_vm_goes_away`).
+TESTS.update({f"M{n}": f"tests/unit/test_invariant_regressions.py {INVARIANTS}" for n in range(1030, 1038)})
 # M834 needs a world with no state at all: rare in the drawn sequences (2/4 at 500).
 TESTS["M834"] = f"{INVARIANTS} tests/unit/test_reassert.py"
 # I8F (#227): flaky by the machine alone (its composite rule helps, a 429 at the right call

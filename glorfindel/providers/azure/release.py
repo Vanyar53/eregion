@@ -75,7 +75,8 @@ class ReleaseMixin:
         if not (t.get("sharing_unknown") or _ip_scoped(t)):
             return []
         fixed = {self.ISOLATION_RULE_NAME.lower(), f"{self.ISOLATION_RULE_NAME}-out".lower()}
-        return [f'{t["nic_short"]}:{_rule_name(r)} (NSG {t["nsg_name"]} partagé : isolation d\'une ancienne '
+        how = "au partage illisible" if t.get("sharing_unknown") else "partagé"
+        return [f'{t["nic_short"]}:{_rule_name(r)} (NSG {t["nsg_name"]} {how} : isolation d\'une ancienne '
                 "version, VM inconnue)"
                 for r in rules if _rule_name(r).lower() in fixed and _deny_applies(r, t.get("private_ips") or None)
                 and not _legacy_claimed(t["nsg_rg"], t["nsg_name"], _rule_name(r))]

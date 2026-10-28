@@ -35,10 +35,11 @@ detection:
     log_source: Syslog
     attack_commands_summary: >
       Configures a sudoers wildcard entry and executes a sudo command as a
-      non-privileged user, producing 'sudo: USER=root COMMAND=...' in the
-      auth Syslog facility. The command succeeds (no 'NOT in sudoers' error).
+      non-privileged user: sudo's own line (ProcessName 'sudo'), in sudo's form
+      '<user> : TTY=pts/1 ; PWD=/tmp ; USER=root ; COMMAND=...', in the auth Syslog
+      facility. The command succeeds (no 'NOT in sudoers' error).
     expected_indicators:
-      - "Syslog: Facility='auth', SyslogMessage contains 'sudo' and 'USER=root' and 'COMMAND='"
+      - "Syslog: Facility='auth', ProcessName == 'sudo', SyslogMessage in sudo's form '<user> : … ; USER=root ; … COMMAND=…' (the word sudo is the tag, not in the message)"
       - "Successful sudo (no 'NOT in sudoers' or 'authentication failure' in the message)"
       - "Same pipeline as T1110 — DCR auth facility must be active"
     failure_candidates:

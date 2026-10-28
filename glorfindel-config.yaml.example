@@ -95,7 +95,9 @@ autonomy:
 # Addresses (or CIDR prefixes) Glorfindel never blocks, whatever the rule or the
 # model says: a block of one is refused and escalated, never executed (SEC2).
 # Already shipped, always: Azure's platform (168.63.129.16, 169.254.169.254), the
-# private ranges (10/8, 172.16/12, 192.168/16) and the loopback. Add your own:
+# private ranges (10/8, 172.16/12, 192.168/16, 100.64/10, fc00::/7) and the loopback
+# — a private address is never blocked: lateral movement is answered by isolating
+# the source VM. Add your own:
 # the office's egress, a scanner, a monitoring probe. /0 is refused.
 
 never_block: []

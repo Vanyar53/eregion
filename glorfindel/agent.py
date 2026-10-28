@@ -458,6 +458,7 @@ Syslog
 | where TimeGenerated > ago(5m)
 | where Computer == "{vm}"
 | where Facility == "auth"
+| where ProcessName in ("sshd", "sshd-session")
 | where SyslogMessage has "Accepted" and SyslogMessage has "{ip}"
 | project TimeGenerated, SyslogMessage
 | limit 3
@@ -471,8 +472,9 @@ Syslog
 | where TimeGenerated > ago(10m)
 | where Computer == "{vm}"
 | where Facility == "auth"
-| where SyslogMessage has "sudo" and SyslogMessage has "USER=root"
-    and SyslogMessage has "COMMAND="
+// sudo's own lines (SEC2): the word is its tag (ProcessName), not in the message.
+| where ProcessName == "sudo"
+| where SyslogMessage has "USER=root" and SyslogMessage has "COMMAND="
 | project TimeGenerated, SyslogMessage
 | limit 10
 """

@@ -109,6 +109,8 @@ class DetectionConfig:
     client_file: str = ""
     # SEC2: the shipped rules a client rule replaces (their names) — the watch says each.
     overrides: list[str] = field(default_factory=list)
+    # SEC2: the shipped rules the client's layer turns off (`disable:`, `enabled: false`).
+    disabled_base: list[str] = field(default_factory=list)
 
     def backend(self, name: str) -> MonitoringBackend | None:
         return next((b for b in self.backends if b.name == name), None)
@@ -388,8 +390,10 @@ def _invalid_client_entry(key: str, entry) -> str | None:
                 number = convert(value)
             except (TypeError, ValueError):
                 return f"`{field_}` n'est pas un nombre ({value!r})"
-            if field_ == "interval_s" and not (math.isfinite(number) and number >= MIN_INTERVAL_S):
-                return f"`interval_s` : {MIN_INTERVAL_S:g} s au moins ({value!r})"
+            # Under the floor, the rule still loads: load_config polls it at the floor and
+            # says so (SEC2) — a rule approved before at 15 s keeps detecting.
+            if field_ == "interval_s" and not (math.isfinite(number) and number > 0):
+                return f"`interval_s` doit être un nombre de secondes positif ({value!r})"
     if entry.get("enabled", True) and not entry.get("query"):
         return "n'a pas de requête"
     return None
@@ -524,6 +528,7 @@ def load_config(path: str | Path, glorfindel_cfg=None, client_layer: str | Path 
         raise ImportError("PyYAML is required: pip install pyyaml")
     data = _read_layer(Path(path))
     base_names = {r["name"] for r in _named(data.get("rules"))}
+    base_on = {r["name"] for r in _named(data.get("rules")) if r.get("enabled", True)}
     notes: list[str] = []
     layer_of: dict[str, str] = {}
     client_file = ""
@@ -590,7 +595,7 @@ def load_config(path: str | Path, glorfindel_cfg=None, client_layer: str | Path 
         interval_s = float(item.get("interval_s", 30))
         if not (math.isfinite(interval_s) and interval_s >= MIN_INTERVAL_S):
             notes.append(f"règle « {item['name']} » : interval_s {item.get('interval_s')!r} sous le "
-                         f"minimum — {MIN_INTERVAL_S:g} s")
+                         f"minimum — interrogée toutes les {MIN_INTERVAL_S:g} s")
             interval_s = MIN_INTERVAL_S
 
         rule_assets  = item.get("assets", [])
@@ -726,9 +731,13 @@ def load_config(path: str | Path, glorfindel_cfg=None, client_layer: str | Path 
             replaces_base=replaces_base,
         ))
 
+    loaded = {item["name"] for item in data.get("rules", []) if item.get("enabled", True)}
+    disabled_base = sorted(base_on - loaded) if client_file else []
+
     _log_notes(notes)
     return DetectionConfig(backends=backends, assets=assets, rules=rules,
-                           notes=notes, client_file=client_file, overrides=overrides)
+                           notes=notes, client_file=client_file, overrides=overrides,
+                           disabled_base=disabled_base)
 
 
 def load_rules(path: str | Path, glorfindel_cfg=None) -> list[DetectionRule]:
@@ -918,13 +927,18 @@ def _gravity(row: dict) -> float:
     return 0.0
 
 
+# The rows a summary card carries, the gravest first; beyond, it gives their number.
+_SUMMARY_ROWS_MAX = 50
+
+
 def _data_summary(rest: list[dict]) -> dict:
-    """The card of the data rows past the cap: the gravest one's row, carrying every one of
-    them (`OmittedRows`) — none marked sent without being said."""
-    return {**rest[0], "OmittedRows": [
+    """The card of the data rows past the cap: the gravest one's row, carrying the gravest
+    of them (`OmittedRows`, at most `_SUMMARY_ROWS_MAX`) and how many there are
+    (`OmittedCount`) — none marked sent without being said or counted."""
+    return {**rest[0], "OmittedCount": len(rest), "OmittedRows": [
         {k: (v[:300] if isinstance(v, str) else v) for k, v in r.items()
          if isinstance(v, (str, int, float, bool)) or v is None}
-        for r in rest]}
+        for r in rest[:_SUMMARY_ROWS_MAX]]}
 
 
 def _row_attribution(row: dict, resource_id: str, asset_name: str) -> bool | None:

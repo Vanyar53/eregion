@@ -2,7 +2,7 @@
 as written, on lines the test writes (SEC2). No Log Analytics, no Azure.
 
 Only what the Syslog rules use: a table, then `where`, `extend`, `summarize` (`count()`,
-`arg_max(col, *)`), `project`, `order by`; predicates `==`, `!=`, `<`, `<=`, `>`, `>=`,
+`arg_max(col, *)`), `project`, `order by`, `limit`; predicates `==`, `!=`, `<`, `<=`, `>`, `>=`,
 `has`, `!has`, `in (…)`, `matches regex`, `startswith`, `and`, `or`, `not(…)`; functions
 `ago()`, `extract()`, `isnotempty()`, `isnotnull()`, `toint()`, `tostring()`. Anything
 else raises NotImplementedError: a rule this reader cannot follow fails its test, never
@@ -254,6 +254,8 @@ def run(query: str, rows: list[dict], now: datetime | None = None) -> list[dict]
                 p.take()
                 cols.append(p.take("ident")[1])
             out = [{c: r.get(c) for c in cols} for r in out]
+        elif verb in ("limit", "take"):
+            out = out[:int(p.take("num")[1])]
         elif verb == "summarize":
             out = _summarize(p, out)
         elif verb == "order":

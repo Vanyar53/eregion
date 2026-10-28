@@ -98,11 +98,13 @@ def single_host_ip(ip: str) -> str:
 
 # Addresses Glorfindel never blocks, whatever the rule or the model says (SEC2): Azure's
 # platform (DNS and the host agent at 168.63.129.16, IMDS at 169.254.169.254), the private
-# ranges and the loopback the detection rules already leave out. glorfindel-config.yaml's
-# `never_block` adds the deployment's own (a scanner, a monitoring probe, the office).
+# ranges (RFC 1918, the shared space of carrier NAT, IPv6's unique local) and the loopback.
+# A private address is never blocked: lateral movement is answered by isolating the source
+# VM. glorfindel-config.yaml's `never_block` adds the deployment's own (a scanner, a
+# monitoring probe, the office).
 NEVER_BLOCK_SHIPPED = (
     "168.63.129.16/32", "169.254.169.254/32",
-    "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
+    "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "fc00::/7",
     "127.0.0.0/8", "::1/128",
 )
 
@@ -126,6 +128,9 @@ def protected_by(ip: str, networks: list[str] | None = None) -> str:
         addr = ipaddress.ip_address((ip or "").strip())
     except ValueError:
         return ""
+    # An IPv4 address written as IPv6 (::ffff:a.b.c.d) is that IPv4 address.
+    if addr.version == 6 and addr.ipv4_mapped is not None:
+        addr = addr.ipv4_mapped
     for net in never_block_networks() if networks is None else networks:
         try:
             if addr in ipaddress.ip_network(net, strict=False):
@@ -137,7 +142,7 @@ def protected_by(ip: str, networks: list[str] | None = None) -> str:
 
 def blockable_ip(ip: str) -> str:
     """`single_host_ip`, and never an address of the never-block list (SEC2): every block
-    goes through here — the agent's, an approval's, the CLI's, on every provider."""
+    goes through here — the agent's, an approval's, a reassertion's, on every provider."""
     addr = single_host_ip(ip)
     try:
         held = protected_by(addr)

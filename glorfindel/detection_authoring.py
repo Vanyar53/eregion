@@ -196,7 +196,7 @@ RULE_PROPOSAL_TOOL = {
                 },
                 "interval_s": {
                     "type": "number",
-                    "description": "Recommended polling interval in seconds (10–120).",
+                    "description": "Recommended polling interval in seconds (30–120).",
                 },
                 "explanation": {
                     "type": "string",

@@ -847,6 +847,11 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
                               f"couche du client[/bold red] — la règle livrée n'est plus chargée "
                               f"([dim]{det_cfg.client_file}[/dim]) ; si ce n'est pas voulu, la "
                               f"retirer de la couche du client.")
+            for name in det_cfg.disabled_base:
+                console.print(f"[bold red]⚠ Règle livrée « {_esc_markup(name)} » désactivée par la "
+                              f"couche du client[/bold red] — sa technique n'est plus détectée "
+                              f"([dim]{det_cfg.client_file}[/dim]) ; si ce n'est pas voulu, la "
+                              f"réactiver.")
         except Exception as exc:
             console.print(f"[yellow]⚠ Could not load rules: {exc}[/yellow]")
 
@@ -1974,6 +1979,9 @@ def rules_cmd(rules_file: str | None) -> None:
     for name in cfg.overrides:          # SEC2: said loudly, not as one note among others
         console.print(f"[bold red]⚠ Règle livrée « {_esc_markup(name)} » remplacée par la couche du "
                       "client[/bold red] — la règle livrée n'est plus chargée.")
+    for name in cfg.disabled_base:
+        console.print(f"[bold red]⚠ Règle livrée « {_esc_markup(name)} » désactivée par la couche du "
+                      "client[/bold red] — sa technique n'est plus détectée.")
 
 
 @cli.command("migrate-rules")

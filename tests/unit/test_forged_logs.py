@@ -113,6 +113,7 @@ _SUDO_OK = "   alice : TTY=pts/0 ; PWD=/home/alice ; USER=root ; COMMAND=/usr/bi
     _SUDO_OK,
     "alice : PWD=/srv ; USER=root ; COMMAND=/bin/sh",
     "svc-backup : TTY=pts/1 ; PWD=/tmp ; USER=root ; ENV=A=b ; COMMAND=/opt/scripts/backup.sh /dev/null",
+    "deploy : PWD=/ ; USER=root ; COMMAND=/usr/bin/systemctl restart app",       # no terminal (cron)
 ])
 def test_a_sudo_to_root_is_an_escalation(message):
     [row] = _sudo([_line(message, process="sudo")])
@@ -131,6 +132,9 @@ def test_a_sudo_to_root_is_an_escalation(message):
     ("pam_unix(sudo:auth): authentication failure; logname= uid=1001 USER=root COMMAND=x", "sudo"),
     ("alice : TTY=pts/0 ; PWD=/ ; USER=bob ; COMMAND=/bin/sh", "sudo"),
     ("unable to resolve host vm-example-01: USER=root COMMAND=/bin/sh", "sudo"),
+    # sudo's failures, in its form: no escalation happened
+    ("alice : 3 incorrect password attempts ; TTY=pts/0 ; PWD=/ ; USER=root ; COMMAND=/bin/sh", "sudo"),
+    ("alice : command not allowed ; TTY=pts/0 ; PWD=/ ; USER=root ; COMMAND=/bin/sh", "sudo"),
 ])
 def test_what_is_not_a_sudo_to_root(message, process):
     assert _sudo([_line(message, process=process)]) == []
@@ -160,6 +164,25 @@ def test_the_ssh_simulation_is_still_detected():
 def test_the_sudo_simulation_is_still_detected():
     rows = _sudo(_logged("privilege_escalation_sim.sh", ATTACKER_USER="svc-backup"))
     assert len(rows) == 1 and "USER=root ; COMMAND=" in rows[0]["SyslogMessage"]
+
+
+def test_the_investigation_finds_the_simulation_s_root_commands():
+    # What `investigate` puts before the model on a T1548 detection: sudo's lines are
+    # tagged sudo, the word is not in their message (SEC2).
+    from glorfindel.agent import _IQ_ROOT_COMMANDS
+    rows = _logged("privilege_escalation_sim.sh", ATTACKER_USER="svc-backup")
+    rows.append(_line("x : TTY=pts/0 ; PWD=/ ; USER=root ; COMMAND=/bin/forged", process="root"))
+    out = kql_subset.run(_IQ_ROOT_COMMANDS.format(vm="vm-example-01"), rows, now=NOW)
+    assert any("COMMAND=/bin/cat /etc/shadow" in r["SyslogMessage"] for r in out)
+    assert not any("/bin/forged" in r["SyslogMessage"] for r in out)
+
+
+def test_the_investigation_reads_sshd_s_successful_logins_only():
+    from glorfindel.agent import _IQ_SUCCESS_AUTH
+    rows = [_line(f"Accepted password for annatar from {PEER} port 41000 ssh2"),
+            _line(f"Accepted password for x from {PEER} port 41001 ssh2", process="root")]
+    out = kql_subset.run(_IQ_SUCCESS_AUTH.format(vm="vm-example-01", ip=PEER), rows, now=NOW)
+    assert [r["SyslogMessage"] for r in out] == [rows[0]["SyslogMessage"]]
 
 
 # ── From the rule to the block ───────────────────────────────────────────────────
@@ -218,12 +241,21 @@ def cfg_file(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("ip", ["168.63.129.16", "169.254.169.254", "10.0.0.9", "172.31.255.1",
-                                "192.168.0.1", "127.0.0.1"])
+                                "192.168.0.1", "127.0.0.1", "100.64.0.1", "fd00::1",
+                                "::ffff:168.63.129.16", "::ffff:10.0.0.1"])
 def test_the_shipped_addresses_are_never_blockable(ip, cfg_file):
     from glorfindel.response.policy import protected_by, blockable_ip
     assert protected_by(ip)                      # what decide holds on
     with pytest.raises(ValueError):              # what every connector refuses
         blockable_ip(ip)
+
+
+def test_an_ipv4_written_as_ipv6_is_that_ipv4(cfg_file):
+    from glorfindel.response.policy import ProtectedAddressError, blockable_ip
+    cfg_file.write_text("never_block: [203.0.113.77]\n")
+    with pytest.raises(ProtectedAddressError):
+        blockable_ip("::ffff:203.0.113.77")
+    assert blockable_ip("2001:db8::1") == "2001:db8::1"
 
 
 def test_the_config_adds_its_own_and_others_stay_blockable(cfg_file):
@@ -405,15 +437,54 @@ def test_a_client_rule_in_a_shipped_rule_s_place_is_said_loudly():
     assert "client (remplace)" in out and "Règle livrée « ssh-brute-force » remplacée" in out
 
 
-# ── The floor interval, ${VAR} (V-14) ────────────────────────────────────────────
-
-def test_a_client_rule_polling_every_second_is_refused(tmp_path):
+@pytest.mark.parametrize("how", ["disable", "enabled_false"])
+def test_a_shipped_rule_turned_off_by_the_client_is_said_loudly(how):
+    from click.testing import CliRunner
+    from glorfindel.cli import cli
     from glorfindel.detection_rules import client_rules_path
     client_rules_path().parent.mkdir(parents=True, exist_ok=True)
-    client_rules_path().write_text("rules:\n  - name: fast\n    interval_s: 1\n    query: Syslog\n")
+    client_rules_path().write_text(
+        "disable: [sudo-privilege-escalation]\n" if how == "disable" else
+        "rules:\n  - name: sudo-privilege-escalation\n    enabled: false\n")
     cfg = load_config(shipped_rules_path())
-    assert "fast" not in {r.name for r in cfg.rules}
-    assert any("fast" in n and "au moins" in n for n in cfg.notes)
+    assert cfg.disabled_base == ["sudo-privilege-escalation"] and cfg.overrides == []
+    out = CliRunner().invoke(cli, ["rules", "--rules", str(shipped_rules_path())], catch_exceptions=False).output
+    assert "Règle livrée « sudo-privilege-escalation » désactivée" in out
+
+
+def test_without_a_client_layer_nothing_is_said_turned_off():
+    assert load_config(shipped_rules_path()).disabled_base == []
+
+
+# ── The floor interval, ${VAR} (V-14) ────────────────────────────────────────────
+
+@pytest.mark.parametrize("interval", [1, 15, 29.9])
+def test_a_client_rule_under_the_floor_polls_at_the_floor_never_faster(interval, tmp_path):
+    # Refusing it would drop a rule approved before SEC2 (proposals asked 10–120 s) from
+    # the detection: it keeps detecting, at the floor, and that is said.
+    from glorfindel.detection_rules import client_rules_path
+    client_rules_path().parent.mkdir(parents=True, exist_ok=True)
+    client_rules_path().write_text(f"rules:\n  - name: fast\n    interval_s: {interval}\n    query: Syslog\n")
+    cfg = load_config(shipped_rules_path())
+    [rule] = [r for r in cfg.rules if r.name == "fast"]
+    assert rule.interval_s == MIN_INTERVAL_S
+    assert any("fast" in n and "minimum" in n for n in cfg.notes)
+
+
+@pytest.mark.parametrize("interval", [0, -5, ".inf", ".nan"])
+def test_a_client_interval_that_means_nothing_is_refused(interval, tmp_path):
+    from glorfindel.detection_rules import client_rules_path
+    client_rules_path().parent.mkdir(parents=True, exist_ok=True)
+    client_rules_path().write_text(f"rules:\n  - name: odd\n    interval_s: {interval}\n    query: Syslog\n")
+    cfg = load_config(shipped_rules_path())
+    assert "odd" not in {r.name for r in cfg.rules}
+    assert any("odd" in n and "positif" in n for n in cfg.notes)
+
+
+def test_the_authoring_schema_asks_for_the_floor():
+    from glorfindel import detection_authoring
+    text = Path(detection_authoring.__file__).read_text()
+    assert "(30–120)" in text and "(10–120)" not in text
 
 
 def test_a_legacy_rule_under_the_floor_polls_at_the_floor(tmp_path):
@@ -487,12 +558,25 @@ def test_many_rows_on_one_vm_are_capped_then_summed_up():
     # the gravest first, each its own card
     assert [r["FailedAttempts"] for r in firsts[:_DATA_CARDS_PER_POLL]] == [22, 21, 20, 19, 18]
     omitted = firsts[-1]["OmittedRows"]
+    assert firsts[-1]["OmittedCount"] == 7
     assert sorted(r["SourceIP"] for r in omitted) == sorted(r["SourceIP"] for r in rows[:7])
     # none lost, none sent twice: every row is said once, and marked sent
     said = {r["SourceIP"] for r in firsts[:-1]} | {r["SourceIP"] for r in omitted}
     assert said == {r["SourceIP"] for r in rows}
     p._detector = lambda _r: _Rows(rows)
     assert p.poll_once(rule) == []
+
+
+def test_a_summary_card_carries_at_most_its_maximum_and_the_count():
+    from glorfindel.detection_rules import _SUMMARY_ROWS_MAX
+    rows = [{"SourceIP": f"198.51.{i // 250}.{i % 250 + 1}", "Computer": "vm-example-01",
+             "_ResourceId": VM, "FailedAttempts": 10 + i} for i in range(300)]
+    _, _, sent = _capped(rows)
+    summary = sent[-1]["raw_signal"]["first_result_row"]
+    assert summary["OmittedCount"] == 300 - _DATA_CARDS_PER_POLL
+    assert len(summary["OmittedRows"]) == _SUMMARY_ROWS_MAX == 50
+    # the gravest of the rest, first
+    assert summary["OmittedRows"][0]["FailedAttempts"] == 10 + 299 - _DATA_CARDS_PER_POLL
 
 
 def test_under_the_cap_nothing_changes():

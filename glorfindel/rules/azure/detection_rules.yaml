@@ -111,7 +111,7 @@ rules:
     query: |
       Syslog
       | where Facility == "auth"
-      // sshd's own lines only (SEC2): `sshd-session` since OpenSSH 9.8.
+      // Lines tagged sshd only (SEC2): `sshd-session` since OpenSSH 9.8.
       | where ProcessName in ("sshd", "sshd-session")
       | where SyslogMessage has "Failed password" or SyslogMessage has "Invalid user"
       | where TimeGenerated > ago(10m)
@@ -140,11 +140,13 @@ rules:
       Syslog
       | where Facility == "auth"
       | where TimeGenerated > ago(10m)
-      // sudo's own lines only (SEC2), in sudo's form: `<user> : … ; USER=root ; … COMMAND=…`.
+      // Lines tagged sudo only (SEC2), in sudo's form: `<user> : TTY=… ; PWD=… ; USER=root ;
+      // … COMMAND=…` (TTY absent without a terminal). A failure (`3 incorrect password
+      // attempts ; …`) is no escalation.
       | where ProcessName == "sudo"
       | where SyslogMessage has "USER=root"
             and SyslogMessage has "COMMAND="
-      | where SyslogMessage matches regex @"^\s*\S+ : (.*; )?USER=root ; (.*; )?COMMAND="
+      | where SyslogMessage matches regex @"^\s*\S+ : (TTY|PWD)=(.*; )?USER=root ; (.*; )?COMMAND="
       | where SyslogMessage !has "NOT in sudoers"
             and SyslogMessage !has "authentication failure"
       | project TimeGenerated, Computer, _ResourceId, SyslogMessage

@@ -64,12 +64,13 @@ def test_an_attack_started_keeps_only_the_fields_an_injector_writes():
             "context.attribution", "extra"} <= set(adm.dropped)
 
 
-def test_a_detection_missed_is_a_proposal_and_an_attack_adapted_a_note():
+def test_a_detection_missed_is_a_proposal_and_an_attack_adapted_no_more():
     missed = signal_origin.admit(_line("detection_missed", raw_signal={"failed_query": "q",
                                                                        "detection_hints": {"a": 1}},
                                        context={"run_id": "r1", "workspace_id": "w", "detection_timeout_s": 300}))
     assert missed.what == "propose" and missed.signal["raw_signal"]["detection_hints"] == {"a": 1}
-    assert signal_origin.admit(_line("attack_adapted", raw_signal={"blocked_ip": "1.2.3.4"})).what == "note"
+    # The blocks watcher that emitted it is gone (SEC3): an attack_adapted is no injector's.
+    assert signal_origin.admit(_line("attack_adapted", raw_signal={"blocked_ip": "1.2.3.4"})).signal is None
 
 
 @pytest.mark.parametrize("run_id", ["../../root/.glorfindel/escalations", "a/b", "..", "-x", "", None])
@@ -136,6 +137,7 @@ def _run_watch(tmp_path, monkeypatch, lines, expect):
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(cli, "_INJECTORS_DIR", home / ".glorfindel" / "injectors")
     runs = tmp_path / "runs"
     runs.mkdir()
     responded: list[dict] = []
@@ -201,6 +203,30 @@ def _run_watch(tmp_path, monkeypatch, lines, expect):
     return responded, polled, result.output
 
 
+def test_the_watch_makes_the_injectors_directory_first(tmp_path, monkeypatch):
+    """Before anything else — the config, the agent, the first heartbeat: a `docker compose
+    run annatar` on a fresh host would otherwise have docker make it, as root."""
+    from click.testing import CliRunner
+
+    from glorfindel import cli
+    made = tmp_path / "home" / ".glorfindel" / "injectors"
+    monkeypatch.setattr(cli, "_INJECTORS_DIR", made)
+
+    class Started(Exception):
+        pass
+
+    def started(*a, **k):
+        assert made.is_dir() and stat.S_IMODE(made.stat().st_mode) == 0o755
+        raise Started
+
+    monkeypatch.setattr("glorfindel.config.load_glorfindel_config", started)
+    monkeypatch.setenv("GLORFINDEL_DEBUG", "1")         # the CLI re-raises Started as it is
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    result = CliRunner().invoke(cli.cli, ["watch", str(runs), "--dry-run"])
+    assert isinstance(result.exception, Started), result.output
+
+
 def test_a_recovery_complete_written_in_runs_by_another_process_never_acts(tmp_path, monkeypatch):
     """V-05: the forged recovery_complete (Run Command "neutralized"), a forged detection
     carrying its own row, an unknown event and a run id that is a path never reach the
@@ -220,9 +246,8 @@ def test_a_recovery_complete_written_in_runs_by_another_process_never_acts(tmp_p
     assert not [d for d in responded if d.get("raw_signal", {}).get("first_result_row")]
     assert [p["raw_signal"] for p in polled] == [{"attack_time": 1.0}]
     assert signal_origin.refused_counts() == {"recovery_complete": 1, "detection": 1, "something_else": 1,
-                                              "attack_started": 1}
-    assert out.count("Signal refusé") == 4
-    assert "attack_adapted noté" in out
+                                              "attack_started": 1, "attack_adapted": 1}
+    assert out.count("Signal refusé") == 5
 
 
 # ── recovery_complete: only Glorfindel's own path ─────────────────────────────────────
@@ -256,6 +281,22 @@ def test_respond_vouches_only_for_the_defenders_directory(tmp_path, monkeypatch)
     assert seen == [False, True]
     assert stat.S_IMODE(ours.stat().st_mode) == 0o600
     assert stat.S_IMODE(ours.parent.stat().st_mode) == 0o700
+
+
+def test_a_link_into_the_defenders_directory_is_judged_by_what_it_points_to(tmp_path):
+    """A link placed in ~/.glorfindel/recovery_signals/ that points into runs/ is a file of
+    runs/; a link elsewhere that points into the directory is the directory's file."""
+    ours = signal_origin.write_recovery_signal(_line("recovery_complete", context={"run_id": "r1"}))
+    forged = tmp_path / "runs" / "x_signals.jsonl"
+    forged.parent.mkdir()
+    forged.write_text("{}\n")
+    inside = signal_origin.RECOVERY_SIGNALS_DIR / "link_signals.jsonl"
+    inside.symlink_to(forged)
+    outside = tmp_path / "runs" / "to_ours_signals.jsonl"
+    outside.symlink_to(ours)
+    assert signal_origin.in_recovery_dir(ours) is True
+    assert signal_origin.in_recovery_dir(inside) is False
+    assert signal_origin.in_recovery_dir(outside) is True
 
 
 def test_the_restore_signal_is_vouched_for_in_its_own_process_only(tmp_path):

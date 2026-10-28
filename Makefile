@@ -144,8 +144,8 @@ help:
 	@echo "  make annatar-dry-run          Run scenario (--dry-run)"
 	@echo "  make annatar-validate         Validate scenario YAML"
 	@echo "  make annatar-list             List available scenarios"
-	@echo "  make annatar-simulate         Simulate locally (no Azure)"
-	@echo "  make annatar-simulate-gap     Simulate detection_timeout flow"
+	@echo "  make annatar-simulate         Simulate locally (no Azure): glorfindel respond --dry-run"
+	@echo "  make annatar-simulate-gap     Simulate detection_timeout flow (same, no watch)"
 	@echo ""
 	@echo "Glorfindel (Docker)"
 	@echo "  make glorfindel-start           Start watch + war-room (http://localhost:7007)"
@@ -271,6 +271,8 @@ annatar-validate:
 annatar-list:
 	docker run --rm -v $(PWD)/annatar/scenarios:/app/annatar/scenarios --entrypoint annatar $(IMAGE_ANNATAR) list
 
+# The signals of a run in a temporary file, then `glorfindel respond <file> --dry-run` — not
+# runs/: the watch takes from there only what an injector emits (SEC3).
 annatar-simulate:
 	$(PYTHON) scripts/simulate_annatar.py
 

@@ -58,10 +58,15 @@ def _parse_signal_line(raw: str):
     return data, sig
 
 
+# SEC3 (N-05): what the injectors' containers mount, read-only, as their ~/.glorfindel — the
+# watch writes a copy of its heartbeat there, nothing else.
+_INJECTORS_DIR = Path.home() / ".glorfindel" / "injectors"
+
+
 def _admit_from_runs(data: dict, source: str):
     """(data, Signal) the watch may decide on, for one line of runs/*_signals.jsonl — None
-    when the line is refused (said: the log, the counter) or only noted (attack_adapted).
-    SEC3 (#274), glorfindel/signal_origin.py."""
+    when the line is refused (said: the log, the counter). SEC3 (#274),
+    glorfindel/signal_origin.py."""
     from eregion_core.signals import Signal
     from glorfindel import signal_origin
     adm = signal_origin.admit(data)
@@ -73,9 +78,6 @@ def _admit_from_runs(data: dict, source: str):
     if adm.dropped:
         console.print(f"[yellow]{source} : champs ignorés ({_esc_markup(', '.join(adm.dropped[:8]))}) — "
                       "un injecteur ne les écrit pas[/yellow]")
-    if adm.what == "note":
-        console.print(f"[dim]{source} : {adm.signal['event']} noté (rien à décider)[/dim]")
-        return None
     sig = Signal(**{k: adm.signal.get(k, "") for k in Signal.__dataclass_fields__})
     return adm.signal, sig
 
@@ -428,6 +430,15 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
     for _noisy in ("azure", "urllib3", "httpx", "LiteLLM"):
         _logging.getLogger(_noisy).setLevel(_logging.WARNING)
 
+    # SEC3: the directory the injectors mount (~/.glorfindel/injectors, their heartbeat), made
+    # first, as the operator: a `docker compose run annatar` on a fresh host would otherwise
+    # have docker create it, as root — and the watch could no longer write there.
+    try:
+        _INJECTORS_DIR.mkdir(mode=0o755, parents=True, exist_ok=True)
+        os.chmod(_INJECTORS_DIR, 0o755)      # theirs to read, whatever the umask
+    except OSError as exc:
+        console.print(f"[yellow]~/.glorfindel/injectors non créé ({exc})[/yellow]")
+
     # A badly written config is refused, and said (A3): the watch used to start on it —
     # "Could not load rules", then no detection at all, or the defaults standing in for
     # a key nobody read. It doesn't start until the file is fixed.
@@ -730,7 +741,7 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
     # SEC3 (N-05): the injectors' containers mount ~/.glorfindel/injectors/ only, read-only
     # — not the whole of ~/.glorfindel (escalations, isolation state, the client's rules).
     # The watch writes its heartbeat there too, the one thing they read (V1).
-    _INJECTOR_BEAT = Path.home() / ".glorfindel" / "injectors" / "watch_heartbeat"
+    _INJECTOR_BEAT = _INJECTORS_DIR / "watch_heartbeat"
 
     def _write_heartbeat() -> None:
         _HEARTBEAT.parent.mkdir(parents=True, exist_ok=True)

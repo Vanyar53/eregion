@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import threading
 import time
 from dataclasses import dataclass
@@ -257,20 +256,10 @@ class Engine:
                 )
                 return RunOutcome(run_id, "unknown", error="integrity check failed")
 
-        # Block watcher — detects if Glorfindel blocks a source IP mid-run
+        # SEC3 (#274): no more watcher of Glorfindel's blocks (attack_adapted). It read the
+        # defender's state — the red team's measure is blind to the blue's — under a file name
+        # Glorfindel no longer writes, and the injectors no longer mount that state.
         stop_event = threading.Event()
-        source_ips = scenario.detection_hints.get("source_ips", [])
-        vm_name = scenario.target.get("vm_name", "")
-        if source_ips and vm_name and not self.dry_run:
-            blocks_file = (
-                Path.home() / ".glorfindel" / "blocks" / f"{vm_name}.json"
-            )
-            threading.Thread(
-                target=self._watch_blocks,
-                args=(source_ips, emitter, stop_event, blocks_file),
-                daemon=True,
-                name=f"annatar-block-watcher-{run_id}",
-            ).start()
 
         # Steps
         T0 = time.time()
@@ -814,41 +803,3 @@ class Engine:
         found = [lat for lat in (detection_latency(read_records(path), ttp, resource_id, attack_time)
                                  for path in candidates) if lat is not None]
         return min(found) if found else None
-
-    def _watch_blocks(
-        self,
-        source_ips: list[str],
-        emitter: SignalEmitter,
-        stop_event: threading.Event,
-        blocks_file: Path | None = None,
-        poll_interval: float = 5.0,
-    ) -> None:
-        """Poll Glorfindel's blocks file for the scenario's source IPs.
-
-        Emits attack_adapted when a source IP is blocked mid-run so the
-        event is recorded in the run's signals file.
-        """
-        source_set = set(source_ips)
-        reported: set[str] = set()
-
-        while not stop_event.wait(poll_interval):
-            if blocks_file is not None and blocks_file.exists():
-                try:
-                    entries = json.loads(blocks_file.read_text())
-                    for entry in entries:
-                        ip = entry.get("ip", "")
-                        if ip in source_set and ip not in reported:
-                            reported.add(ip)
-                            emitter.emit(
-                                event="attack_adapted",
-                                raw_signal={
-                                    "blocked_ip": ip,
-                                    "reason": "source_ip_blocked_by_defender",
-                                },
-                            )
-                            console.print(
-                                f"[yellow]⚡ Source IP {ip} blocked by"
-                                f" Glorfindel — attack_adapted emitted.[/yellow]"
-                            )
-                except Exception:
-                    pass

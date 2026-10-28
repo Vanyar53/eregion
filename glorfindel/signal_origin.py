@@ -5,15 +5,19 @@ write there can write any line. The watch takes from `runs/*_signals.jsonl` only
 injector emits (the inventory of annatar/runner/engine.py; Gothmog writes `runs/gothmog/`,
 which the watch does not read), each for what it is:
 
-  attack_started    "look": the watch polls ITS detection rule for the technique — what it
-                    acts on comes from the monitoring, never from the line;
-  detection_missed  a rule proposal: a card, never an action;
-  attack_adapted    a note of the run (a source the defender blocked): read, nothing decided.
+  attack_started    "look": the watch runs ITS detection rule for the line's technique. From
+                    the line come the VM it names (`resource_id`), the technique (`ttp`) and
+                    the moment (`attack_time`, where the rule's search starts); from the
+                    monitoring, the detection itself — the row the rule finds, which the
+                    cycle then pins to the line's VM. Not checked here, yet: that the row
+                    names that VM, and a bound on `attack_time` (SEC4);
+  detection_missed  a rule proposal: a card, never an action.
 
 and, of each, only the fields the injector writes (`_FIELDS`): a line cannot hand the
-defender a query, an IP to block or a verdict of its own. Anything else — `recovery_complete`,
-`detection`, `detection_timeout`, an unknown event, a run id that is not a plain name — is
-refused: logged, counted (~/.glorfindel/channel_refusals.json), never decided.
+defender a query of its own, an IP to block or an attribution. Anything else —
+`recovery_complete`, `detection`, `detection_timeout`, an unknown event (`attack_adapted`
+too, no longer emitted since SEC3), a run id that is not a plain name — is refused: logged,
+counted (~/.glorfindel/channel_refusals.json), never decided.
 
 `recovery_complete` lifts an isolation without a human. Only Glorfindel's own path emits it:
 `glorfindel restore --wait` builds it and answers it in its own process; written for later,
@@ -37,7 +41,7 @@ RECOVERY_SIGNALS_DIR = Path.home() / ".glorfindel" / "recovery_signals"
 REFUSALS_FILE = Path.home() / ".glorfindel" / "channel_refusals.json"
 
 # What the watch does with each event an injector emits.
-CHANNEL_EVENTS = {"attack_started": "poll", "detection_missed": "propose", "attack_adapted": "note"}
+CHANNEL_EVENTS = {"attack_started": "poll", "detection_missed": "propose"}
 
 # The fields an injector writes in each (annatar/runner/engine.py): the rest is dropped.
 _FIELDS = {
@@ -48,10 +52,6 @@ _FIELDS = {
     "detection_missed": {
         "raw_signal": ("failed_query", "detection_source", "detection_hints"),
         "context": ("run_id", "scenario", "workspace_id", "detection_timeout_s", "failed_query"),
-    },
-    "attack_adapted": {
-        "raw_signal": ("blocked_ip", "reason"),
-        "context": ("run_id", "scenario"),
     },
 }
 _TOP = ("signal_id", "timestamp", "provider", "resource_id", "resource_type", "ttp", "severity", "event")
@@ -65,7 +65,7 @@ _VOUCHED: set[str] = set()
 
 class Admission:
     """What the watch makes of one line of runs/: `signal` (cleaned) and `what` (poll,
-    propose, note) when admitted; `refused` (why) otherwise. `dropped`: the fields taken off."""
+    propose) when admitted; `refused` (why) otherwise. `dropped`: the fields taken off."""
 
     def __init__(self, signal: dict | None, what: str = "", refused: str = "", dropped=()):
         self.signal, self.what, self.refused, self.dropped = signal, what, refused, list(dropped)
@@ -77,7 +77,7 @@ def admit(data: dict) -> Admission:
     if event not in CHANNEL_EVENTS:
         why = ("n'est accepté que de `glorfindel restore`, jamais du canal runs/"
                if event == "recovery_complete" else
-               "n'est pas un signal d'injecteur (attack_started, detection_missed, attack_adapted)")
+               "n'est pas un signal d'injecteur (attack_started, detection_missed)")
         return Admission(None, refused=f"« {event[:60] or '?'} » {why}")
     fields = _FIELDS[event]
     clean = {k: data.get(k, "") for k in _TOP}

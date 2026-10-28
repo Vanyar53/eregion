@@ -154,6 +154,7 @@ class H0:
             shutil.copy(src, self.cd / src.name)
         (self.cd / "discord.env").write_text(
             f"EREGION_DISCORD_WEBHOOK_DEPLOY={fake.base}/api/webhooks/9/{SECRET}\nEREGION_DISCORD_MENTION=42\n")
+        (self.cd / "installed-from").write_text(self.commits["c1"] + "\n")   # installed while v0.3.1 ran
         # docker: v0.3.1 runs.
         bin_dir = tmp_path / "bin"
         bin_dir.mkdir()
@@ -714,3 +715,54 @@ def test_a_switch_interrupted_twice_is_refused_and_said(h0):
     assert h0.run().returncode == 0 and not any(c.startswith("build") for c in h0.calls())
     res = h0.run("retry")
     assert res.returncode == 0 and h0.outcome("v0.4.0") == "deployed"
+
+
+# ── « Agent de CD à mettre à jour » only for a newer release (28/10, after v0.4.1) ──
+
+def test_a_release_older_than_the_agent_never_asks_to_reinstall_it(tmp_path, fake):
+    """v0.4.1 had no H1: its deploy.sh is older than the agent's, and installing from it
+    would break the CD. The agent was installed from a later commit: nothing said."""
+    h0 = H0(tmp_path, fake, c2_files={"infra/glorfindel-host/cd/eregion_cd.py": "# an older agent\n"})
+    work = h0.tmp / "work"
+    _git(work, h0.env, "checkout", "-q", "main")
+    (work / "app.py").write_text("V = 3\n")
+    _git(work, h0.env, "commit", "-qam", "c3: the agent's own commit")
+    _git(work, h0.env, "push", "-q", "origin", "main")
+    (h0.cd / "installed-from").write_text(_git(work, h0.env, "rev-parse", "HEAD") + "\n")
+    res = h0.run()
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert not any("Agent de CD" in t for t in _titles(h0)) and "pas plus ancien" in res.stdout
+
+
+@pytest.mark.parametrize("installed_from", [None, "HEAD", "side"])
+def test_an_agent_whose_origin_is_lost_says_it_once_without_the_mention(tmp_path, fake, installed_from):
+    """installed-from missing, a ref name (HEAD made every release look newer), or a commit off
+    main (a lot's branch: no release will descend from it): never « 🔧 », said once, silent."""
+    h0 = H0(tmp_path, fake, c2_files={"infra/glorfindel-host/cd/eregion_cd.py": "# another agent\n"})
+    if installed_from is None:
+        (h0.cd / "installed-from").unlink()
+    else:
+        (h0.cd / "installed-from").write_text(h0.commits.get(installed_from, installed_from) + "\n")
+    res = h0.run()
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert not any("Agent de CD à mettre à jour" in t for t in _titles(h0))
+    (info,) = [p for p in h0.posts() if p["embeds"][0]["title"].startswith("ℹ️ L'agent de CD")]
+    assert not info.get("content") and info["flags"] == 4096
+
+
+def test_a_newer_release_with_the_same_agent_says_nothing(tmp_path, fake):
+    """The release is newer than the agent, its three files are the installed ones: nothing to update."""
+    same = {path: (ROOT / path).read_text(encoding="utf-8") for path in (
+        "infra/glorfindel-host/cd/eregion_cd.py", "infra/glorfindel-host/deploy.sh", "scripts/notify_discord.py")}
+    h0 = H0(tmp_path, fake, c2_files=same)
+    res = h0.run()
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert not any("Agent de CD" in t or "L'agent de CD" in t for t in _titles(h0))
+
+
+@pytest.mark.skipif(shutil.which("make") is None, reason="make not installed")
+def test_the_installation_writes_the_commit_it_installs_from():
+    res = subprocess.run(["make", "-n", "--no-print-directory", "-C", str(ROOT), "glorfindel-host-cd-install",
+                          "HOST_IP=203.0.113.9"], capture_output=True, text=True, timeout=60)
+    assert res.returncode == 0, res.stderr
+    assert "git rev-parse HEAD |" in res.stdout and "cat > .eregion-cd/installed-from" in res.stdout

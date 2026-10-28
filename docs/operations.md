@@ -259,7 +259,7 @@ EREGION_DISCORD_BOT_TOKEN=...               # le bot « Eregion », celui de l'a
 EREGION_DISCORD_LOTS_FORUM=...              # id du forum #lots
 EREGION_DISCORD_ROADMAP_CHANNEL=...         # id du salon #roadmap : le message de la feuille de route (N2, secret GitHub : roadmap.yml)
 EREGION_DISCORD_WEBHOOK_DEPLOY=...          # webhook de #deploy : copié sur H0 par make glorfindel-host-cd-install (~/.eregion-cd/discord.env, H1)
-EREGION_DISCORD_MENTION=...                 # id de l'utilisateur que mentionnent les alertes de #agents
+EREGION_DISCORD_MENTION=...                 # id de l'utilisateur que mentionnent les pings de #agents
                                     # sur le poste : ~/.config/eregion/discord.env (600) si l'environnement ne les a pas
 GLORFINDEL_KEEP_ISOLATED=1          # mode forensique
 GLORFINDEL_ISOLATION_TTL_H=4        # TTL isolation (défaut 4h) : au-delà, une carte ttl_exceeded — jamais de levée automatique

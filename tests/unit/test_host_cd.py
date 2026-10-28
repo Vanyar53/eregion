@@ -249,8 +249,7 @@ def test_a_published_release_is_verified_built_aside_switched_and_said(h0):
 def test_what_runs_already_does_nothing(h0):
     h0.publish("v0.3.1")
     assert h0.run().returncode == 0
-    assert h0.calls() == ["inspect -f " + '{{index .Config.Labels "org.opencontainers.image.version"}} '
-                          '{{index .Config.Labels "org.opencontainers.image.revision"}} eregion-watch']
+    assert h0.calls() and all(c.startswith("inspect -f ") for c in h0.calls())   # the three containers read
     assert h0.posts() == []
 
 
@@ -288,11 +287,11 @@ def test_a_red_ci_is_refused(h0):
 
 def test_a_ci_still_running_waits_said_once_then_deploys(h0):
     c2 = h0.commits["c2"]
-    h0.fake.gh["checks"][c2] = [{"name": "lint", "status": "in_progress", "conclusion": None}]
+    h0.fake.gh["checks"][c2] = [{"name": "lint + tests (py3.12)", "status": "in_progress", "conclusion": None}]
     assert h0.run().returncode == 0 and h0.run().returncode == 0
     assert h0.running() == {"v0.3.1"} and [t.split(" ")[0] for t in _titles(h0)] == ["⏳"]
     assert h0.outcome("v0.4.0") is None
-    h0.fake.gh["checks"][c2] = [{"name": "lint", "status": "completed", "conclusion": "success"}]
+    h0.fake.gh["checks"][c2] = [{"name": "lint + tests (py3.12)", "status": "completed", "conclusion": "success"}]
     assert h0.run().returncode == 0 and h0.running() == {"v0.4.0"}
 
 
@@ -365,9 +364,12 @@ def test_a_failed_preflight_leaves_what_runs_untouched(h0, env, said):
     assert h0.outcome("v0.4.0") == "refused"
 
 
-def test_the_config_refusal_says_what_a3_said(h0):
-    h0.run(FAKE_CONFIG_FAIL="1")
-    assert "quarantaine_nsg" in _alerts(h0)[0]["embeds"][0]["description"]
+def test_the_config_refusal_says_what_a3_said_in_the_journal_only(h0):
+    """A3's words name the config's keys and values — workspace ids, resource groups: the
+    journal (make glorfindel-host-cd-status) has them, #deploy only says where to look."""
+    res = h0.run(FAKE_CONFIG_FAIL="1")
+    assert "quarantaine_nsg" in res.stdout
+    assert "quarantaine_nsg" not in json.dumps(h0.posts()) and "cd-status" in json.dumps(h0.posts())
 
 
 # ── health, and going back ─────────────────────────────────────────────────────────
@@ -492,3 +494,138 @@ def test_the_timer_runs_the_installed_agent_and_starts_disabled():
     assert "User=@USER@" in service and "OnUnitActiveSec=5min" in (cd / "eregion-cd.timer").read_text()
     assert "enable" not in "\n".join(line for line in install.splitlines() if not line.lstrip().startswith("#")
                                       and "disable" not in line and "is-enabled" not in line and "enabled" not in line)
+
+
+# ── after the review of 28/10 ──────────────────────────────────────────────────────
+
+def _images(h0, **tags):
+    st = h0.docker()
+    for tag, (version, n) in tags.items():
+        st["images"][f"eregion-glorfindel:{tag}"] = {"version": version, "revision": h0.commits["c1"], "n": n}
+    h0.state.write_text(json.dumps(st))
+
+
+def test_two_refused_candidates_then_a_sick_release_still_go_back(h0):
+    """1: nothing is pruned before the health is green. Two newer candidates (refused before,
+    their images kept) made the one before the oldest: a prune at the switch removed it."""
+    _images(h0, **{"v0.3.5": ("v0.3.5", 1), "v0.3.6": ("v0.3.6", 2)})
+    assert h0.run(FAKE_SICK="v0.4.0").returncode == 1
+    assert h0.running() == {"v0.3.1"} and h0.outcome("v0.4.0") == "rolled back"
+    assert not any(c.startswith("image rm") for c in h0.calls())
+
+
+def test_after_a_green_health_the_old_images_go_and_the_one_before_stays(h0):
+    _images(h0, **{"v0.2.0": ("v0.2.0", 1), "v0.3.5": ("v0.3.5", 2), "v0.3.6": ("v0.3.6", 3)})
+    assert h0.run().returncode == 0
+    images = h0.docker()["images"]
+    assert "eregion-glorfindel:v0.3.1" in images and "eregion-glorfindel:v0.4.0" in images
+    assert "eregion-glorfindel:v0.2.0" not in images
+
+
+def test_no_way_back_no_switch(h0):
+    """The image running now has neither its tag nor its label: refused, nothing moves."""
+    st = h0.docker()
+    del st["images"]["eregion-glorfindel:v0.3.1"]
+    st["images"]["eregion-glorfindel"]["version"] = "v0.2.0"
+    h0.state.write_text(json.dumps(st))
+    assert h0.run().returncode == 1
+    assert h0.running() == {"v0.3.1"} and h0.head() == h0.commits["c1"]
+    assert "pas d'image eregion-glorfindel:v0.3.1" in _alerts(h0)[0]["embeds"][0]["description"]
+    assert not any(c.startswith(("tag eregion-glorfindel:v0.4.0", "compose --profile")) for c in h0.calls())
+
+
+@pytest.mark.parametrize("sick", [False, True])
+def test_a_pass_cut_after_its_switch_is_taken_up(h0, sick):
+    """2: a reboot or a timeout between the switch and the end of the health. The next pass
+    reads the switch it wrote down, watches the health, keeps the release or goes back."""
+    import time
+    c2 = h0.commits["c2"]
+    st = h0.docker()
+    st["images"]["eregion-glorfindel:v0.4.0"] = {"version": "v0.4.0", "revision": c2, "n": 5}
+    st["images"]["eregion-glorfindel"] = dict(st["images"]["eregion-glorfindel:v0.4.0"])
+    for c in st["containers"].values():
+        c.update(version="v0.4.0", revision=c2, status="restarting" if sick else "running", restarts=4 if sick else 0)
+    h0.state.write_text(json.dumps(st))
+    _git(h0.vm, h0.env, "checkout", "-q", "--detach", c2)
+    (h0.cd / "state.json").write_text(json.dumps({"outcomes": {"v0.4.0": {
+        "result": "switching", "from": "v0.3.1", "url": "", "why": "", "at": time.time() - 2}}, "said": {}}))
+    h0.heartbeat.parent.mkdir(parents=True, exist_ok=True)
+    h0.heartbeat.write_text("now")
+    res = h0.run()
+    assert "reprise" in res.stdout
+    if sick:
+        assert res.returncode == 1 and h0.running() == {"v0.3.1"} and h0.outcome("v0.4.0") == "rolled back"
+    else:
+        assert res.returncode == 0, res.stdout + res.stderr
+        assert h0.running() == {"v0.4.0"} and h0.outcome("v0.4.0") == "deployed"
+        assert "repris" in h0.posts()[-1]["embeds"][0]["description"]
+
+
+def test_running_already_but_not_all_three_is_said(h0):
+    """2: « runs already » means the three containers, not the watch alone."""
+    assert h0.run().returncode == 0
+    st = h0.docker()
+    st["containers"]["eregion-war-room"]["version"] = "v0.3.1"
+    h0.state.write_text(json.dumps(st))
+    h0.fake.requests.clear()
+    assert h0.run().returncode == 0 and h0.run().returncode == 0
+    (alert,) = _alerts(h0)
+    assert "eregion-war-room" in alert["embeds"][0]["description"]
+
+
+def test_a_moved_tag_is_refused(h0):
+    """4: v0.4.0 deployed, then its tag rewritten onto a newer commit of main: refused, said."""
+    assert h0.run().returncode == 0
+    work = h0.tmp / "work"
+    _git(work, h0.env, "checkout", "-q", "main")
+    (work / "app.py").write_text("V = 3\n")
+    _git(work, h0.env, "commit", "-qam", "c3")
+    _git(work, h0.env, "tag", "-f", "v0.4.0")
+    _git(work, h0.env, "push", "-q", "--force", "origin", "main", "refs/tags/v0.4.0")
+    assert h0.run().returncode == 1
+    assert h0.running() == {"v0.4.0"} and h0.head() == h0.commits["c2"]
+    assert "a bougé" in _alerts(h0)[-1]["embeds"][0]["description"]
+
+
+def test_the_main_ci_job_must_have_run(h0):
+    h0.fake.gh["checks"][h0.commits["c2"]] = [{"name": "Components", "status": "completed", "conclusion": "success"}]
+    assert h0.run().returncode == 1 and "CI principale" in _alerts(h0)[0]["embeds"][0]["description"]
+
+
+def test_the_version_is_compared_exactly(h0):
+    assert h0.run(FAKE_PKG_VERSION="0.4.01").returncode == 1
+    assert "0.4.01" in _alerts(h0)[0]["embeds"][0]["description"]
+
+
+def test_the_config_compose_mounts_is_the_one_preflighted(h0, tmp_path):
+    cfg = tmp_path / "elsewhere.yaml"
+    cfg.write_text("autonomy: {}\n")
+    (h0.vm / ".env").write_text(f"EREGION_CONSOLE_TOKEN=tok\nEREGION_CONFIG={cfg}\n")
+    assert h0.run().returncode == 0
+    assert any(f"{cfg}:/app/glorfindel-config.yaml:ro" in c for c in h0.calls())
+
+
+def test_a_malformed_release_is_quiet(h0):
+    h0.fake.gh["release"] = [{"tag_name": "v0.4.0"}]
+    res = h0.run()
+    assert res.returncode == 0 and "illisible" in res.stdout and h0.posts() == []
+
+
+def test_an_unexpected_error_is_said_once(h0, tmp_path):
+    for _ in range(2):
+        res = h0.run(EREGION_CD_REPO=str(tmp_path / "no-such-checkout"))
+        assert res.returncode == 1
+    (alert,) = _alerts(h0)
+    assert alert["embeds"][0]["title"] == "⚠️ Le CD de H0 a échoué"
+
+
+def test_check_rebuilds_and_preflights_the_release_running_already(h0):
+    """6: v0.4.0 runs; the dry run still checks it on the real Docker — aside, then gone."""
+    assert h0.run().returncode == 0
+    h0.fake.requests.clear()
+    res = h0.run("check")
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert any(c.endswith("-t eregion-glorfindel:check-v0.4.0 .") for c in h0.calls())
+    assert "eregion-glorfindel:check-v0.4.0" not in h0.docker()["images"]
+    assert h0.running() == {"v0.4.0"}
+    assert h0.posts()[0]["embeds"][0]["title"] == "✅ À blanc : v0.4.0, en service, reconstruite et préflightée"

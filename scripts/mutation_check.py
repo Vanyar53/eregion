@@ -2529,28 +2529,36 @@ MUTANTS += [
     ("M1012", "an attestation with overconfident errors accepted (H1)", CD,
      '    if entry.get("overconfident_errors") != 0:', "    if False:"),
     ("M1013", "H0's config refused by A3 and the release switched to anyway: the watch exits 2 (H1)", CD,
-     '        if res.returncode != 0:\n            raise Refused(f"préflight : la config de H0',
-     '        if False:\n            raise Refused(f"préflight : la config de H0'),
+     '        if res.returncode != 0:\n            raise Refused("préflight : la config de H0',
+     '        if False:\n            raise Refused("préflight : la config de H0'),
     ("M1014", "the candidate built as the running image: a refused release replaces it anyway (H1)", DEPLOY,
-     '    build "${pair% *}" "${pair#* }"\n    echo "✓ construite',
-     '    build "${pair% *}" "${pair#* }" latest\n    echo "✓ construite'),
+     '    build "${pair% *}" "${pair#* }" "" "$name"\n',
+     '    build "${pair% *}" "${pair#* }" latest "$name"\n'),
     ("M1015", "an unhealthy release left running: no rollback (H1)", CD,
-     "        back = rollback(dep_ref)\n", '        back = ""\n'),
+     "    back = rollback(dep_ref)\n", '    back = ""\n'),
     ("M1016", "a refused or rolled-back release tried again at every pass (H1)", CD,
      '    if not check and done in ("refused", "rolled back", "rollback failed"):', "    if False:"),
     ("M1017", "two passes at once, or one during a deployment by hand: no lock (H1)", CD,
      "            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)\n", "            pass\n"),
     ("M1018", "a release with another agent never said: H0 keeps an old CD in silence (H1)", CD,
-     "    drift = agent_drift(tag)\n", "    drift = []\n"),
+     "        drift = agent_drift(tag)\n", "        drift = []\n"),
     ("M1019", "a heartbeat from before the switch taken for health (H1)", CD,
      "        if HEARTBEAT.stat().st_mtime < since:", "        if False:"),
 ]
 TESTS.update({f"M{n}": "tests/unit/test_host_cd.py" for n in range(1005, 1020)})
 MUTANTS += [
     ("M1002", "the image of before H1 never tagged by its reference: the first rollback has nothing to retag (H1)",
-     CD, "    keep_the_way_back(dep_ref)\n", ""),
+     CD, "        keep_the_way_back(dep_ref, dry=check)\n", ""),
 ]
 TESTS["M1002"] = "tests/unit/test_host_cd.py"
+# H1 after its review (28/10): the image to go back to outlives the switch (finding 1).
+MUTANTS += [
+    ("M1003", "--activate prunes before the health: two refused candidates, and the image to go back to is gone (H1, review 1)",
+     DEPLOY, '    start\n    echo "✓ activé', '    start\n    prune "${pair% *}"\n    echo "✓ activé'),
+    ("M1004", "a switch without an image to go back to: the rollback has nothing to retag (H1, review 1)", CD,
+     "    raise Refused(f\"pas d'image {IMAGE}:{ref} pour revenir en arrière : rien n'a basculé\")\n", ""),
+]
+TESTS.update({"M1003": "tests/unit/test_host_cd.py", "M1004": "tests/unit/test_host_cd.py"})
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

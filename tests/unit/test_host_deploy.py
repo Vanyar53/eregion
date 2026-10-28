@@ -457,13 +457,44 @@ def test_activate_without_its_image_moves_nothing(repo, tmp_path):
     assert not any(c.startswith(("tag", "compose")) for c in log.read_text().splitlines())
 
 
-def test_the_three_newest_images_stay_and_the_running_one_always(repo, tmp_path):
-    images = "".join(f"2026-10-{d:02d} 10:00:00 +0000 UTC\\t{t}\\n" for d, t in
-                     ((28, "latest"), (27, "v0.5.0"), (26, "v0.4.0"), (25, "v0.3.1"), (24, "v0.3.0"), (20, "v0.2.0")))
-    env, log = _with_docker(repo, tmp_path, FAKE_IMAGES=images)
+def test_activate_never_prunes(repo, tmp_path):
+    """The image to go back to must outlive the switch: the CD prunes once the health is green."""
+    env, log = _with_docker(repo, tmp_path, FAKE_IMAGES=_IMAGES)
     assert repo.deploy("--activate", "v0.2.0", env=env).returncode == 0
+    assert not any(c.startswith(("image rm", "image ls")) for c in log.read_text().splitlines())
+
+
+_IMAGES = "".join(f"2026-10-{d:02d} 10:00:00 +0000 UTC\\t{t}\\n" for d, t in
+                  ((28, "latest"), (27, "v0.5.0"), (26, "v0.4.0"), (25, "v0.3.1"), (24, "v0.3.0"), (20, "v0.2.0"),
+                   (19, "v0.1.0")))
+
+
+def test_prune_keeps_the_three_newest_and_every_one_named(repo, tmp_path):
+    env, log = _with_docker(repo, tmp_path, FAKE_IMAGES=_IMAGES)
+    assert repo.deploy("--prune", "v0.2.0", env=env).returncode == 0
     removed = [c.split()[-1] for c in log.read_text().splitlines() if c.startswith("image rm")]
-    assert removed == ["eregion-glorfindel:v0.3.0"]           # v0.2.0 runs: kept, however old
+    assert removed == ["eregion-glorfindel:v0.3.0", "eregion-glorfindel:v0.1.0"]
+
+
+def test_a_deployment_by_hand_keeps_the_image_it_replaces(repo, tmp_path):
+    """By hand there is no health watch: the image running before stays, however old."""
+    env, log = _with_docker(repo, tmp_path, FAKE_IMAGES=_IMAGES)
+    env["FAKE_REF"] = "v0.1.0"                                   # what the watch was built from
+    assert repo.deploy("v0.2.0", env=env).returncode == 0
+    removed = [c.split()[-1] for c in log.read_text().splitlines() if c.startswith("image rm")]
+    assert removed == ["eregion-glorfindel:v0.3.0"]
+
+
+def test_the_rollback_does_not_need_the_network(repo, tmp_path):
+    """3: the image and the commit are on the VM; a fetch that fails is said, not fatal — for
+    --activate only: deploying by hand still needs it."""
+    repo.origin.rename(repo.origin.with_name("gone.git"))
+    env, log = _with_docker(repo, tmp_path)
+    res = repo.deploy("--activate", "v0.2.0", env=env)
+    assert res.returncode == 0, res.stderr
+    assert "git fetch a échoué" in res.stderr and repo.head() == repo.commits[0]
+    res = repo.deploy("v0.10.0", env=env)
+    assert res.returncode != 0 and "rien n'est déployé" in res.stderr
 
 
 def test_a_deployment_by_hand_waits_for_the_cd(repo, tmp_path):

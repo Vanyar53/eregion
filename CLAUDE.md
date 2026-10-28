@@ -104,6 +104,7 @@ pytest tests/unit/test_actions_split.py     # A1 : la façade glorfindel.actions
 pytest tests/unit/test_components.py        # D1 : chaque composant importe seul ; test_profiles.py : les profils compose et Make
 python scripts/component_check.py annatar  # D1 : ses tests, les autres composants absents (CI : components.yml)
 pytest tests/unit/test_watch_gate.py        # V1 : pas de run sans watch vivante (refus avant tout appel au cloud), dérogation inscrite
+pytest tests/unit/test_console_escaping.py  # #254 : rien du dehors écrit brut dans la console (`python scripts/console_escaping.py` : où, d'où)
 pytest tests/unit/test_rule_layers.py       # P1 : base livrée intacte, couche du client validée, règles approuvées liées à leur backend
 pytest tests/unit/test_invariants_aws.py    # MC1 : la machine à invariants sur un faux AWS (tests/unit/fake_aws.py)
 pytest tests/unit/test_discovery.py          # AssetRegistry + DiscoveryService + eviction

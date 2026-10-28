@@ -16,6 +16,11 @@ isolation paths, with Azure's semantics where they matter:
   InUseNetworkSecurityGroupCannotBeDeleted);
 - `write_denied`: every write is refused (403) — the role was removed, a deny
   assignment, a resource lock;
+- `unreadable`: NSGs the identity can no longer read (its role removed on their group,
+  expired under PIM) — a HYPOTHESIS, not measured (I1S, #231): ARM filters a
+  subscription-wide listing by the caller's rights, so `list_all` leaves them out
+  WITHOUT an error, while a call on one of them (get, its rules, a write, a NIC joined
+  to it) is refused (403);
 - Run Command's shell script doesn't run on a Windows VM (assumed).
 
 `open_flows` evaluates traffic as Azure does, independently of the connector's own
@@ -118,6 +123,7 @@ class FakeAzure:
         self.subnets: dict[str, dict] = {}
         self.vms: dict[str, dict] = {}
         self.write_denied = False
+        self.unreadable: set[str] = set()       # NSG keys: left out of a listing, 403 on a call
         # Every write that went through the API — Glorfindel's, since the test plays
         # everyone else by editing the dicts — and the rules it wrote (nsg key, name):
         # I2 by author, without asking the code what it meant to do.
@@ -182,10 +188,16 @@ class FakeAzure:
         return out
 
     def nsg(self, rg: str, name: str) -> dict:
+        self.readable(nsg_id(rg, name))
         n = self.nsgs.get(key(nsg_id(rg, name)))
         if n is None:
             raise not_found(f"networkSecurityGroups/{name}")
         return n
+
+    def readable(self, rid: str) -> None:
+        if key(rid) in self.unreadable:
+            raise _error(HttpResponseError, 403, f"(AuthorizationFailed) {rid.rsplit('/', 1)[-1]}: "
+                                                 "the client does not have authorization")
 
     @staticmethod
     def _put_rule(nsg: dict, rec: dict) -> None:
@@ -246,6 +258,7 @@ class _Nics:
             n = self._get(rg, name)
             new = getattr(getattr(nic, "network_security_group", None), "id", None)
             if new:
+                self.az.readable(new)
                 if key(new) not in self.az.nsgs:
                     raise _error(HttpResponseError, 400,
                                  f"(InvalidResourceReference) {new} referenced by {name} was not found.")
@@ -276,6 +289,7 @@ class _Nsgs:
     def begin_create_or_update(self, rg, name, model):
         def write():
             rid = nsg_id(rg, name)
+            self.az.readable(rid)
             n = {"id": rid, "location": getattr(model, "location", None) or "westeurope",
                  "tags": dict(getattr(model, "tags", None) or {}), "rules": {}}
             for r in getattr(model, "security_rules", None) or []:
@@ -289,7 +303,8 @@ class _Nsgs:
         return self.az.call("nsg.write", True, write)
 
     def list_all(self):
-        return self.az.call("nsg.list", False, lambda: [self.az.nsg_view(n) for n in self.az.nsgs.values()])
+        return self.az.call("nsg.list", False, lambda: [self.az.nsg_view(n) for k, n in self.az.nsgs.items()
+                                                        if k not in self.az.unreadable])
 
     def update_tags(self, rg, name, tags_object):
         def write():

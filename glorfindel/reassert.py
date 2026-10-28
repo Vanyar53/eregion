@@ -191,8 +191,10 @@ def _report_altered_quarantines(connector, report: list[dict], nsgs: list | None
     A change said is not said again while it stands: the card stays, and once the
     operator acknowledges it, no new one comes (quarantine_alerts.json) — a new change
     of that NSG is a new card. A card closes, and its change is forgotten, once the NSG
-    reads whole, holds nothing, or is gone from the subscription; never on an NSG read
-    as unknown (configuration unreadable), nor when the listing fails."""
+    reads whole, holds nothing, or is gone from the subscription — read again by its id
+    and not found, never only absent from the listing (I1S); never on an NSG read as
+    unknown (configuration unreadable), unread, of another subscription, nor when the
+    listing fails. Read again, our NSG is judged by its content, its tag or not."""
     find = getattr(connector, "find_altered_quarantines", None)
     if find is None:
         return                                  # a provider without a quarantine NSG
@@ -211,6 +213,30 @@ def _report_altered_quarantines(connector, report: list[dict], nsgs: list | None
         return (rid or "").rstrip("/").lower()
 
     seen = {_key(q.get("nsg_id")): q for q in listing}
+    alerts = _load_quarantine_alerts()
+    cards = [e for e in escalations.pending() if (e.get("signal_id") or "").startswith(_QUARANTINE_PREFIX)]
+    # Absent from the listing is not gone (I1S, #231): a role removed on its group (a
+    # listing that leaves it out without an error — a hypothesis, to measure on the bench),
+    # our tag taken off with our rules, another subscription. The NSG of a card — or of a
+    # change acknowledged — that the listing doesn't show is read again by its id, those
+    # alone: gone only on a 404; anything else unread keeps the card. Before any card is
+    # touched: a pass cut off in the reads changes nothing.
+    gone: set[str] = set()
+    missing: dict[str, str] = {}
+    for rid in [e.get("resource_id") or "" for e in cards] + list(alerts):
+        if _key(rid) and _key(rid) not in seen:
+            missing.setdefault(_key(rid), rid)
+    reread = getattr(connector, "read_quarantine", None)
+    for k, rid in (missing.items() if reread is not None else ()):     # no reader: all kept
+        try:
+            q = reread(rid)
+        except Exception as exc:
+            log.warning("reassert: quarantine NSG %s not read again (%s)", rid.rsplit("/", 1)[-1], exc)
+            continue
+        if q is None:
+            gone.add(k)
+        elif isinstance(q, dict):
+            seen[k] = q
     altered: dict[str, tuple[str, dict]] = {}          # NSG → (signal id, as it reads)
     for k, q in seen.items():
         if q.get("status") == "altered" and q.get("nics"):
@@ -218,19 +244,16 @@ def _report_altered_quarantines(connector, report: list[dict], nsgs: list | None
             altered[k] = (f"{_QUARANTINE_PREFIX}{_rid_hash(q['nsg_id'])}-{change}", q)
 
     def settled(k: str) -> bool:
-        """Read, and nothing to say: whole, holding nothing — or gone (the listing is
-        the whole subscription's)."""
+        """Read, and nothing to say: whole, holding nothing — or gone: read again by its
+        id, not found. Unread is not settled."""
         if k in seen:
             return seen[k].get("status") != "unknown" and k not in altered
-        return True
+        return k in gone
 
-    alerts = _load_quarantine_alerts()
     before = dict(alerts)
     said = set()
-    for e in escalations.pending():
+    for e in cards:
         sid = e.get("signal_id") or ""
-        if not sid.startswith(_QUARANTINE_PREFIX):
-            continue
         k = _key(e.get("resource_id"))
         if k in altered and altered[k][0] == sid:
             said.add(sid)

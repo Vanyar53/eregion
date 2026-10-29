@@ -3965,6 +3965,15 @@ MUTANTS += [
 ]
 TESTS.update({f"M{n}": "tests/unit/test_image_check.py" for n in range(1480, 1490)})
 TESTS["M1486"] = "tests/unit/test_workflows.py"
+# DEP1 (#282): `make llm-compare ATTEST=1` passes --attest without --json (M1617).
+_SMOKE_T = "tests/unit/test_llm_smoke.py"
+MUTANTS += [
+    ("M1617", "main's --json branch imports Path: `make llm-compare ATTEST=1` loses the attestation (DEP1)",
+     "scripts/llm_smoke.py",
+     "    if args.json:\n        import json\n        Path(args.json)",
+     "    if args.json:\n        import json\n        from pathlib import Path\n        Path(args.json)"),
+]
+TESTS["M1617"] = _SMOKE_T
 
 
 # SEC4c (#275, M1370–M1389): the entries and the calls — the restore's moment, the values

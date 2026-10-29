@@ -121,3 +121,20 @@ def test_the_attestation_names_its_lock_and_each_models_result(smoke, tmp_path):
     assert att["lock_sha256"] == hashlib.sha256(lock.read_bytes()).hexdigest()
     assert att["models"][1] == {"model": "ollama/qwen3", "integration": 24, "judgment": 19,
                                 "slots": 24, "overconfident_errors": 3}
+
+
+def test_make_llm_compare_attest_writes_the_attestation_without_json(smoke, monkeypatch, tmp_path):
+    """DEP1: `make llm-compare ATTEST=1` passes --attest without --json. A `from pathlib import
+    Path` in main's --json branch made Path local to main, and the attestation of a paid run
+    was lost to an UnboundLocalError at its very end (measured on 29/10, 51/51)."""
+    import json
+    import sys
+    monkeypatch.setattr(smoke, "_launchable_ttps", lambda: set())
+    monkeypatch.setattr(smoke, "_run_one", lambda model, runs, kinds: {
+        "model": model, "integration": 51, "judgment": 51, "slots": 51, "overconf": 0})
+    out = tmp_path / "harness.json"
+    monkeypatch.setattr(sys, "argv", ["llm_smoke.py", "--models", "anthropic/claude-sonnet-5-5",
+                                      "--runs", "3", "--attest", str(out)])
+    assert smoke.main() == 0
+    att = json.loads(out.read_text(encoding="utf-8"))
+    assert att["runs"] == 3 and att["models"][0]["model"] == "anthropic/claude-sonnet-5-5"

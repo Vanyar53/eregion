@@ -4,6 +4,9 @@ Notable changes to Eregion. The format follows [Keep a Changelog](https://keepac
 
 ## [Unreleased]
 
+### Fixed
+- **`make llm-compare ATTEST=1` writes its attestation** (DEP1, #282, 29/10). A `from pathlib import Path` in the harness's `--json` branch made `Path` local to its `main`: without `--json`, the attestation of a full, paid run was lost to an error at its very end. Test `test_make_llm_compare_attest_writes_the_attestation_without_json`, mutant M1617.
+
 ## [0.4.5] — 2026-10-29 — "held in place"
 
 ### Security

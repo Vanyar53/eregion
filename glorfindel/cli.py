@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from eregion_core.models import glorfindel_model
 
+import contextlib
 import json
 import os
 import sys
@@ -1183,6 +1184,10 @@ def restore(resource_id: str, vault: str, dry_run: bool, yes: bool, keep_isolate
     before, why_before = _restore_before(resource_id, before)
     if before:
         console.print(f"  Before   : {before}  [dim]({_esc_markup(why_before)})[/dim]")
+        from glorfindel.restore_plan import moment_warning
+        warning = moment_warning(resource_id, before)
+        if warning:
+            console.print(f"  [yellow]⚠ {_esc_markup(warning)}[/yellow]")
     console.print(f"  Dry-run  : {dry_run}")
     console.print(f"  Wait     : {wait}\n")
 
@@ -1193,6 +1198,12 @@ def restore(resource_id: str, vault: str, dry_run: bool, yes: bool, keep_isolate
             console.print("[yellow]DRY RUN — no changes made.[/yellow]")
             return
         raise click.ClickException(why_before)
+
+    # One restore at a time per VM (SEC4c): another one running, or about to, refuses this one.
+    from glorfindel.jobs import restore_in_progress
+    busy = restore_in_progress(resource_id.rstrip("/").split("/")[-1])
+    if busy and not dry_run:
+        raise click.ClickException(f"Restore refusé : {busy}.")
 
     if not dry_run and not yes:
         if not click.confirm("Trigger Azure Backup restore on this VM?", default=False):
@@ -1206,8 +1217,9 @@ def restore(resource_id: str, vault: str, dry_run: bool, yes: bool, keep_isolate
     if not wait:
         from glorfindel.jobs import start_restore
         console.print("[cyan]->[/cyan] Triggering restore (fire-and-forget — VM deallocation ~1-2 min)...")
-        job = start_restore(resource_id, connector, vault, before,
-                            staging_storage=staging_storage, vault_rg=vault_rg)
+        with _restore_claimed(resource_id):
+            job = start_restore(resource_id, connector, vault, before,
+                                staging_storage=staging_storage, vault_rg=vault_rg)
         console.print("[green]✓ Restore job started.[/green]")
         console.print(f"  job_id  : [dim]{job['job_id']}[/dim]")
         console.print(f"  azure_job: [dim]{job.get('restore_job_name', '?')}[/dim]")
@@ -1221,8 +1233,9 @@ def restore(resource_id: str, vault: str, dry_run: bool, yes: bool, keep_isolate
     import time as _time
     console.print("[cyan]->[/cyan] Triggering restore (blocking ~15-30 min)...")
     t0 = _time.time()
-    result = connector.restore_from_backup(resource_id, vault=vault, before_attack_time=before, wait=True,
-                                           staging_storage=staging_storage, vault_rg=vault_rg)
+    with _restore_claimed(resource_id):
+        result = connector.restore_from_backup(resource_id, vault=vault, before_attack_time=before, wait=True,
+                                               staging_storage=staging_storage, vault_rg=vault_rg)
     rto_s = round(_time.time() - t0)
 
     restore_label = f"{rto_s // 60}min {rto_s % 60}s"
@@ -1904,6 +1917,22 @@ def _restore_before(resource_id: str, before: str | None) -> tuple[str, str]:
                 "cette VM admise dans runs/ (au plus 2 h avant son isolation, ou avant "
                 "maintenant). Le point le plus récent peut être postérieur à l'attaque : "
                 "passer --before <ISO8601>, un instant avant son début." + hint)
+
+
+@contextlib.contextmanager
+def _restore_claimed(resource_id: str):
+    """The VM claimed for this restore while it starts (glorfindel/jobs.py, SEC4c), or the
+    command refused: another restore of it is running or about to."""
+    from glorfindel.jobs import RestoreBusy, restore_claim
+    claim = restore_claim(resource_id.rstrip("/").split("/")[-1])
+    try:
+        claim.__enter__()
+    except RestoreBusy as exc:
+        raise click.ClickException(f"Restore refusé : {exc}.")
+    try:
+        yield
+    finally:
+        claim.__exit__(None, None, None)
 
 
 def _say_recovery_point(result: dict, before: str, why: str) -> None:

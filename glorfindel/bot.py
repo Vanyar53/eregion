@@ -383,7 +383,7 @@ def _run_cli(cli_args: list[str]) -> tuple[int, str]:
 
 
 async def _execute_and_report(esc: dict, cli_args: list[str], channel, run, card_message=None,
-                              card_view=None) -> None:
+                              card_view=None, on_done=None) -> None:
     """Run the command, say its output in the thread; the card is acknowledged only once it
     succeeded (SEC4c) — a refusal or a failure is said, the card stays open and its buttons
     come back."""
@@ -412,6 +412,14 @@ async def _execute_and_report(esc: dict, cli_args: list[str], channel, run, card
             )
     except Exception as exc:
         await channel.send(f"✗ Erreur lors de l'exécution : {discord_text(exc)} — la carte reste ouverte.")
+    finally:
+        if on_done is not None:
+            on_done()
+
+
+# The cards whose restore this bot is running (SEC4c): a second confirmation — a second form,
+# a double click — is refused and says so, until the first one ends.
+_RESTORING: set[str] = set()
 
 
 async def _allowed(interaction: discord.Interaction, esc_id: str) -> bool:
@@ -440,7 +448,15 @@ class _RestoreButton(discord.ui.Button):
 
     async def callback(self, interaction: discord.Interaction) -> None:
         from glorfindel import restore_plan
-        plan = restore_plan.proposed_moment(self.esc["resource_id"], self.esc)
+        # Discord wants the form within 3 s: runs/ is read off the event loop, and given up
+        # past 2 s (the card's own moment then).
+        rid = self.esc["resource_id"]
+        loop = asyncio.get_running_loop()
+        try:
+            plan = await asyncio.wait_for(
+                loop.run_in_executor(None, lambda: restore_plan.proposed_moment(rid, self.esc)), timeout=2.0)
+        except Exception:
+            plan = restore_plan.proposed_moment(rid, self.esc, read_runs=False)
         await interaction.response.send_modal(
             _RestoreModal(self.esc, plan, interaction.message, self.view))
 
@@ -495,6 +511,10 @@ def _points_text(esc: dict, before: str, plan: dict, points: list[dict], unread:
              f"{discord_code(before)}"]
     if plan.get("why") and plan.get("before") == before:
         lines.append(f"Moment proposé : {discord_text(plan['why'])}")
+    from glorfindel.restore_plan import moment_warning
+    warning = moment_warning(str(esc.get("resource_id") or ""), before)
+    if warning:
+        lines.append(f"⚠ {discord_text(warning)}")
     if unread:
         lines.append(f"Points de restauration illisibles : {discord_text(unread[:300])}")
     elif not points:
@@ -503,7 +523,8 @@ def _points_text(esc: dict, before: str, plan: dict, points: list[dict], unread:
         lines.append("Points avant ce moment (lecture seule) :")
         for i, p in enumerate(points[:8]):
             tier = " · niveau coffre" if p.get("vault_tier") else ""
-            lines.append(f"• {discord_code(str(p.get('time')))}{tier}" + (" ← restauré" if i == 0 else ""))
+            during = " · **pris pendant l'incident**" if p.get("during_incident") else ""
+            lines.append(f"• {discord_code(str(p.get('time')))}{tier}{during}" + (" ← restauré" if i == 0 else ""))
     return "\n".join(lines)
 
 
@@ -521,6 +542,13 @@ class _RestoreConfirmView(discord.ui.View):
     @discord.ui.button(label="🔄 Confirmer le restore", style=discord.ButtonStyle.primary)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
         from glorfindel import restore_plan
+        esc_id = self.esc["id"]
+        if esc_id in _RESTORING:
+            await interaction.response.send_message(
+                "✗ Un restore de cette carte est déjà en cours : attendre sa fin (son résultat est dans le fil).",
+                ephemeral=True)
+            return
+        _RESTORING.add(esc_id)
         for item in self.children:
             item.disabled = True  # type: ignore[attr-defined]
         await interaction.response.edit_message(view=self)
@@ -533,7 +561,7 @@ class _RestoreConfirmView(discord.ui.View):
             f"⚡ **{discord_text(interaction.user.display_name)}** → {discord_code('glorfindel ' + ' '.join(args))}")
         asyncio.create_task(_execute_and_report(self.esc, args, interaction.channel,
                                                 lambda: _run_cli(args), self.card_message,
-                                                self.card_view))
+                                                self.card_view, on_done=lambda: _RESTORING.discard(esc_id)))
 
     @discord.ui.button(label="Annuler", style=discord.ButtonStyle.secondary)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):

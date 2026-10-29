@@ -334,9 +334,11 @@ function closeModal() {
   document.querySelector('.modal').classList.remove('wide');
   document.getElementById('modal-confirm').style.display = '';  // restore (block-scope modal hides it)
   document.getElementById('modal-confirm').disabled = false;    // the restore's, while it reads
+  document.getElementById('modal').dataset.owner = '';           // the restore's window token
 }
 
 function openModal(title, body, cmd, confirmLabel, confirmClass, onConfirm) {
+  document.getElementById('modal').dataset.owner = '';
   document.getElementById('modal-title').textContent = title;
   document.getElementById('modal-body').textContent = body;
   document.getElementById('modal-confirm').style.display = '';
@@ -1919,8 +1921,17 @@ function confirmRevert(vmName) {
 // began. The field is filled with what the server proposes (an exercise's attack_started for
 // this VM, else the card's first detection); the points before it are shown, read only; the
 // operator confirms, and the restore runs with --before.
+let _restoreWindow = 0;     // the restore window's token: another window opened meanwhile wins
 async function confirmRestore(vmName, escId) {
-  document.getElementById('modal-title').textContent = 'Restore ' + vmName + ' from backup';
+  const mine = String(++_restoreWindow);
+  const modal = document.getElementById('modal');
+  modal.dataset.owner = 'restore-' + mine;
+  const title = 'Restore ' + vmName + ' from backup';
+  // Ours while open, under our token and our title — a window opened meanwhile by any other
+  // path (it sets its own title) is never overwritten.
+  const _stillMine = () => modal.dataset.owner === 'restore-' + mine && modal.classList.contains('open')
+    && document.getElementById('modal-title').textContent === title;
+  document.getElementById('modal-title').textContent = title;
   const body = document.getElementById('modal-body');
   body.innerHTML = '<div style="color:var(--dim)">Reading what the restore would take (nothing is changed)…</div>';
   document.getElementById('modal-cmd').style.display = 'none';
@@ -1934,13 +1945,16 @@ async function confirmRestore(vmName, escId) {
   let d;
   try {
     d = await (await fetch(`/api/restore/plan/${_seg(vmName)}?escalation=${_seg(escId)}`)).json();
-  } catch (e) { body.textContent = '✗ ' + e.message; return; }
+  } catch (e) { if (_stillMine()) body.textContent = '✗ ' + e.message; return; }
+  // Closed, or another window opened while the plan was read: it is not this one's to fill.
+  if (!_stillMine()) return;
   if (d.error && !d.why) { body.textContent = '✗ ' + d.error; return; }
   body.innerHTML = `
     <div style="margin-bottom:6px;color:var(--text)">Restore to the newest recovery point from before…</div>
     <input id="restore-before" type="text" value="${_attr(d.before)}" placeholder="2026-10-29T08:00:00+00:00"
       style="width:100%;font-family:var(--font);background:var(--bg2);color:var(--text);border:1px solid var(--border);padding:4px 6px">
     <div id="restore-why" style="color:var(--dim);font-size:11px;margin-top:4px">${_attr(d.why)}</div>
+    <div id="restore-warning" style="color:var(--orange);font-size:11px;margin-top:4px">${d.warning ? '⚠ ' + _attr(d.warning) : ''}</div>
     <div style="margin-top:6px"><button class="action" ${_on('click', 'restorePoints', vmName, escId)} style="font-size:10px;padding:2px 7px">↺ Points before this moment</button></div>
     <div id="restore-points" style="margin-top:8px;font-size:11px"></div>
     <div style="color:var(--dim);font-size:11px;margin-top:8px">~20 min, the VM offline meanwhile. Glorfindel releases the isolation once the restore is done.</div>`;
@@ -1963,7 +1977,9 @@ function _renderRestorePoints(d) {
   if (!d.moment) { el.innerHTML = '<div style="color:var(--dim)">Give a moment to see the points before it.</div>'; return; }
   if (!points.length) { el.innerHTML = `<div style="color:var(--red)">No recovery point before ${_attr(d.moment)}: the restore would be refused.</div>`; return; }
   el.innerHTML = `<div style="color:var(--dim);margin-bottom:3px">Recovery points before ${_attr(d.moment)} (read only):</div>`
-    + points.slice(0, 8).map((p, i) => `<div style="color:${i === 0 ? 'var(--green)' : 'var(--text)'}">${_attr(p.time)}${p.vault_tier ? ' · vault tier' : ''}${i === 0 ? ' ← restored' : ''}</div>`).join('');
+    + points.slice(0, 8).map((p, i) => `<div style="color:${i === 0 ? 'var(--green)' : 'var(--text)'}">${_attr(p.time)}${p.vault_tier ? ' · vault tier' : ''}${p.during_incident ? ' · <span style="color:var(--orange)">taken during the incident</span>' : ''}${i === 0 ? ' ← restored' : ''}</div>`).join('');
+  const w = document.getElementById('restore-warning');
+  if (w) w.textContent = d.warning ? '⚠ ' + d.warning : '';
 }
 
 async function restorePoints(vmName, escId) {

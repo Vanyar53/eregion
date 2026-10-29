@@ -98,7 +98,9 @@ glorfindel restore <resource_id> --yes       # Azure Backup fire-and-forget ; po
                                              # (UTC sans décalage), sinon le premier attack_started de
                                              # cette VM admis dans runs/ (≤ 2 h avant son isolation) ;
                                              # inconnu → refusé, --before demandé (SEC4c). Nom court :
-                                             # deux VMs de ce nom (état ou découverte) → refusé
+                                             # deux VMs de ce nom (état ou découverte) → refusé ;
+                                             # un autre restore de la VM en cours → refusé ; un moment
+                                             # futur ou hors calendrier → refusé ; après l'isolation → dit
 glorfindel restore <resource_id> --yes --wait  # workflow complet : attend recovery_complete → release_isolation auto
 glorfindel jobs <vm-name> [--refresh]        # état du job snapshot/restore en cours
 glorfindel ack <escalation_id>               # acquitter escalade

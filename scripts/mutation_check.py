@@ -3561,6 +3561,39 @@ MUTANTS += [
 TESTS.update({f"M{n}": "tests/unit/test_entries_calls.py tests/unit/test_restore_moment.py tests/unit/test_console.py"
               for n in range(1396, 1410)})
 
+# SEC4c, the second correction (M1460–M1469): one restore at a time per VM, a moment that is
+# one, the proposal never after the isolation, the restore's window its own, the failures kept.
+JOBS = "glorfindel/jobs.py"
+JSP = "eregion_console/static/glorfindel.js"
+MUTANTS += [
+    ("M1460", "a restore of a VM whose restore job is InProgress goes on (SEC4c)", JOBS,
+     '    if job and job.get("type") == "restore" and job.get("status") == "InProgress":\n', "    if False:\n"),
+    ("M1461", "two restores of one VM start together: no claim (SEC4c)", JOBS,
+     "            busy = restore_in_progress(self.vm_name)\n            if busy:\n                raise RestoreBusy(busy)\n", ""),
+    ("M1462", "the bot runs a second confirmation of one card (SEC4c)", BOT,
+     "        if esc_id in _RESTORING:\n", "        if False:\n"),
+    ("M1463", "a moment in the future taken: the newest point restored (SEC4c)", RPL,
+     "    if epoch > now + FUTURE_MARGIN_S:\n", "    if False:\n"),
+    ("M1464", "a year at the calendar's edge raises past every face: the TUI falls (SEC4c)", RPL,
+     '    except (ValueError, OverflowError, OSError):\n        raise ValueError(',
+     "    except ValueError:\n        raise ValueError("),
+    ("M1465", "the proposed moment falls after the isolation (SEC4c)", RPL,
+     "    if before and isolated_at is not None and isolated_at < datetime.fromisoformat(before).timestamp():\n",
+     "    if False:\n"),
+    ("M1466", "a point taken during the incident shown as any other (SEC4c)", RPL,
+     '        p["during_incident"] = (isolated_at is not None\n', '        p["during_incident"] = (False\n'),
+    ("M1467", "the restore's answer fills a window opened meanwhile (SEC4c)", JSP,
+     "  if (!_stillMine()) return;\n", ""),
+    ("M1468", "the restore failures kept without a bound (SEC4c)", CON,
+     '                      key=lambda kv: str(kv[1].get("at") or ""))[-_RESTORE_FAILURES_KEPT:]\n',
+     '                      key=lambda kv: str(kv[1].get("at") or ""))\n'),
+    ("M1469", "the failures of resolved cards kept forever (SEC4c)", CON,
+     "        kept = sorted(((k, v) for k, v in data.items() if k in pending),\n",
+     "        kept = sorted(((k, v) for k, v in data.items()),\n"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_entries_calls.py tests/unit/test_restore_moment.py"
+              for n in range(1460, 1470)})
+
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a
 # composite rule or a world event to one of them. Run with --control.

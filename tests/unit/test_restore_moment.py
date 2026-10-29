@@ -332,3 +332,144 @@ def test_the_tui_s_escape_cancels_without_running(monkeypatch, ran):
     monkeypatch.setattr(tui.subprocess, "run", ran.run)
     esc = _pending(_card())
     assert tui._restore_key(tui._restore_pending(esc), "\x1b") is None and ran.args == []
+
+
+# ── The second correction ─────────────────────────────────────────────────────────────
+
+_BAD_MOMENTS = ["2999-01-01T00:00:00Z", "0001-01-01T00:00:00+01:00", "9999-12-31T23:59:59-01:00"]
+
+
+@pytest.mark.parametrize("text", _BAD_MOMENTS)
+def test_the_console_refuses_such_a_moment_with_an_answer_not_a_500(console, points, text):
+    from urllib.parse import quote
+    esc_id = _card()
+    r = console.get(f"/api/restore/plan/vm-example-01?escalation={esc_id}&before={quote(text)}")
+    assert r.status_code == 200 and "error" in r.json()
+    r = console.post("/api/action/restore/vm-example-01", json={"escalation": esc_id, "before": text})
+    assert r.status_code == 200 and "required" in r.json()["error"]
+
+
+def test_the_console_says_a_moment_after_the_isolation(console, points, monkeypatch):
+    monkeypatch.setattr("glorfindel.actions._load_isolation_state",
+                        lambda rid: {"isolated_at": "2026-10-28T06:00:00+00:00"})
+    esc_id = _card()
+    d = console.get(f"/api/restore/plan/vm-example-01?escalation={esc_id}&before=2026-10-28T12:00:00Z").json()
+    assert "postérieur à l'isolation" in d["warning"]
+    d = console.get(f"/api/restore/plan/vm-example-01?escalation={esc_id}").json()
+    assert d["before"] == "2026-10-28T06:00:00+00:00" and d["warning"] == ""      # the isolation, first
+
+
+def test_the_failures_kept_are_the_pending_cards_newest_under_the_lock(console, monkeypatch):
+    import json
+
+    import eregion_console.api as api
+    locked = []
+    real = __import__("glorfindel.response.locks", fromlist=["_file_lock"])._file_lock
+
+    def spy(path):
+        locked.append(str(path))
+        return real(path)
+    monkeypatch.setattr("glorfindel.response.locks._file_lock", spy)
+    monkeypatch.setattr(api, "_RESTORE_FAILURES_KEPT", 3)
+    ids = [escalations.record(f"rule-x-{i:08d}", VM.replace("vm-example-01", f"vm-{i}"), "restore_from_backup",
+                              "destructive_action", "r") for i in range(5)]
+    for i, esc_id in enumerate(ids):
+        api._note_restore_failure(esc_id, f"vm-{i}", f"refused {i}")
+    kept = json.loads(api._RESTORE_FAILURES.read_text())
+    assert list(kept) == ids[2:]                                   # the newest 3
+    escalations.resolve(ids[3])
+    api._note_restore_failure(ids[4], "vm-4", None)              # cleared on success
+    assert list(json.loads(api._RESTORE_FAILURES.read_text())) == [ids[2]]   # resolved card gone
+    assert any(p.endswith("restore_failures.lock") for p in locked)
+
+
+def test_the_page_never_fills_a_window_that_is_no_longer_its_own():
+    from pathlib import Path
+    js = (Path(__file__).resolve().parents[2] / "eregion_console" / "static" / "glorfindel.js").read_text()
+    restore = js[js.index("async function confirmRestore("):js.index("function _renderRestorePoints(")]
+    wait = restore.index("await (await fetch(")
+    check = restore.index("if (!_stillMine()) return;")
+    assert wait < check < restore.index("body.innerHTML = `")          # read, checked, then filled
+    assert "modal.dataset.owner === 'restore-' + mine" in restore
+    close = js[js.index("function closeModal()"):js.index("function openModal(")]
+    assert "dataset.owner = ''" in close
+
+
+def test_a_second_confirmation_of_one_card_is_refused(monkeypatch, ran, points):
+    bot = pytest.importorskip("glorfindel.bot")
+    release = asyncio.Event()
+
+    def slow(args):
+        ran.args.append(args)
+        return 0, "✓ Restore job started."
+    monkeypatch.setattr(bot, "_run_cli", slow)
+    esc = _pending(_card())
+    thread = _Thread()
+
+    async def go():
+        first = bot._RestoreConfirmView(esc, "2026-10-29T07:30:00+00:00")
+        second = bot._RestoreConfirmView(esc, "2026-10-29T07:30:00+00:00")      # a second form
+        a, b = _Interaction(bot, thread), _Interaction(bot, thread)
+        await first.confirm.callback(a)
+        await second.confirm.callback(b)                     # before the first has ended
+        assert b.ephemeral and "déjà en cours" in b.ephemeral[0]
+        await _settle()
+        release.set()
+        c = _Interaction(bot, thread)
+        await bot._RestoreConfirmView(esc, "2026-10-29T07:30:00+00:00").confirm.callback(c)
+        await _settle()
+        return c
+    c = asyncio.run(go())
+    assert len(ran.args) == 2 and c.ephemeral == []            # the lock is given back at the end
+    assert esc["id"] not in bot._RESTORING
+
+
+def test_the_bot_answers_within_discord_s_three_seconds(monkeypatch):
+    bot = pytest.importorskip("glorfindel.bot")
+    real = restore_plan.proposed_moment
+
+    def slow(rid, esc=None, runs_dir="runs", read_runs=True):
+        if read_runs:
+            time.sleep(4)
+        return real(rid, esc, runs_dir=runs_dir, read_runs=read_runs)
+    monkeypatch.setattr(restore_plan, "proposed_moment", slow)
+    esc_id = _card()
+    esc = _pending(esc_id)
+
+    async def go():
+        view = bot.EscalationView(esc)
+        button = next(i for i in view.children if isinstance(i, bot._RestoreButton))
+        click = _Interaction(bot, _Thread(), _Card())
+        t0 = time.monotonic()
+        await button.callback(click)
+        return time.monotonic() - t0, click
+    took, click = asyncio.run(go())
+    assert took < 3.0 and click.modals and click.modals[0].moment.default == _first_seen(esc_id)
+
+
+@pytest.mark.parametrize("text", _BAD_MOMENTS)
+def test_the_bot_s_form_refuses_such_a_moment(monkeypatch, ran, text):
+    bot = pytest.importorskip("glorfindel.bot")
+    esc = _pending(_card())
+    form = bot._RestoreModal(esc, {})
+    form.moment._value = text
+    click = _Interaction(bot, _Thread())
+    asyncio.run(form.on_submit(click))
+    assert click.ephemeral and ran.args == []
+
+
+@pytest.mark.parametrize("text", _BAD_MOMENTS)
+def test_the_tui_does_not_crash_on_such_a_moment(monkeypatch, ran, text):
+    from datetime import datetime, timezone
+
+    from rich.console import Console
+
+    from glorfindel import tui
+    monkeypatch.setattr(tui.subprocess, "run", ran.run)
+    pending = tui._restore_pending(_pending(_card()))
+    pending["buffer"] = text
+    pending = tui._restore_key(pending, "\r")
+    assert pending["stage"] == "moment" and pending["error"] and ran.args == []
+    screen = Console(width=160, record=True)
+    screen.print(tui._escalations_renderable(datetime.now(timezone.utc), pending, True))
+    assert "✗" in screen.export_text()

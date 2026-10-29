@@ -138,7 +138,8 @@ def _restore_key(pending: dict, key: str) -> dict | None:
             except ValueError as exc:
                 pending["error"] = str(exc)
                 return pending
-            pending.update(stage="points", error="", points=None, points_error="")
+            pending.update(stage="points", error="", points=None, points_error="",
+                           warning=restore_plan.moment_warning(pending["esc"]["resource_id"], pending["before"]))
             threading.Thread(target=_load_points, args=(pending,), daemon=True).start()
         elif key in ("\x7f", "\b"):
             pending["buffer"] = pending["buffer"][:-1]
@@ -184,6 +185,8 @@ def _restore_panel(pending: dict) -> Panel:
         lines.append("\n  [Enter] points before it   [Esc] cancel\n", style="cyan")
     else:
         lines.append(f"  Before {pending['before']}\n", style="bold cyan")
+        if pending.get("warning"):
+            lines.append(f"  ⚠ {pending['warning']}\n", style="yellow")
         points = pending.get("points")
         if points is None:
             lines.append("  reading the recovery points…\n", style="dim")
@@ -193,6 +196,7 @@ def _restore_panel(pending: dict) -> Panel:
             lines.append("  no recovery point before it: the restore would be refused\n", style="red")
         for i, p in enumerate((points or [])[:6]):
             lines.append(f"  {p.get('time')}{' · vault tier' if p.get('vault_tier') else ''}"
+                         f"{' · taken during the incident' if p.get('during_incident') else ''}"
                          f"{'  ← restored' if i == 0 else ''}\n", style="green" if i == 0 else "dim")
         lines.append("\n  Confirm?   [y] Yes   [n] Cancel\n", style="cyan")
     return Panel(lines, title="[bold white on red] RESTORE [/bold white on red]", border_style="red")

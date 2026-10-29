@@ -833,3 +833,105 @@ def test_the_watch_lists_the_private_ips_once_for_its_attack_lines(tmp_path, mon
     assert result.exit_code == 0, result.output
     assert polled == [{"10.0.0.4": VM.lower()}] * 2, result.output
     assert len(listed) == 1
+
+
+# ── The second correction: one restore at a time, a moment that is one ────────────────
+
+@pytest.mark.parametrize("text", ["2999-01-01T00:00:00Z", "0001-01-01T00:00:00+01:00",
+                                  "9999-12-31T23:59:59-01:00", "hier", ""])
+def test_a_moment_that_is_not_one_is_a_value_error(text):
+    from glorfindel import restore_plan
+    with pytest.raises(ValueError):
+        restore_plan.parse_moment(text)
+    assert restore_plan.parse_moment("2026-10-29T07:00:00+01:00") == "2026-10-29T06:00:00+00:00"
+    soon = datetime.now(timezone.utc) + timedelta(seconds=60)          # within the margin
+    assert restore_plan.parse_moment(soon.isoformat())
+
+
+@pytest.mark.parametrize("text", ["2999-01-01T00:00:00Z", "0001-01-01T00:00:00+01:00",
+                                  "9999-12-31T23:59:59-01:00"])
+def test_the_cli_refuses_such_a_moment_without_a_trace(tmp_path, monkeypatch, text):
+    cli, started = _restore_env(tmp_path, monkeypatch)
+    out = CliRunner().invoke(cli.cli, ["restore", VM, "--yes", "--before", text])
+    assert out.exit_code == 1 and started == [] and isinstance(out.exception, SystemExit)
+    assert "--before" in out.output and "Traceback" not in out.output
+
+
+def test_a_moment_after_the_isolation_is_said_not_refused(tmp_path, monkeypatch):
+    isolated_at = datetime.now(timezone.utc) - timedelta(hours=2)
+    cli, started = _restore_env(tmp_path, monkeypatch, iso={"isolated_at": isolated_at.isoformat()})
+    after = (isolated_at + timedelta(minutes=30)).isoformat()
+    out = CliRunner().invoke(cli.cli, ["restore", VM, "--yes", "--before", after], terminal_width=200)
+    assert out.exit_code == 0 and started == [(VM, after)]
+    assert "postérieur à l'isolation" in " ".join(out.output.split())
+
+
+def test_a_restore_already_running_on_the_vm_refuses_another(tmp_path, monkeypatch):
+    from glorfindel import jobs
+    cli, started = _restore_env(tmp_path, monkeypatch)
+    jobs.save_job("vm-example-01", {"type": "restore", "status": "InProgress", "job_id": "j1",
+                                    "restore_job_name": "rj-1", "started_at": "2026-10-29T08:00:00+00:00"})
+    out = CliRunner().invoke(cli.cli, ["restore", VM, "--yes", "--before", "2026-10-29T07:30:00Z"])
+    assert out.exit_code == 1 and started == [] and "en cours" in out.output and "rj-1" in out.output
+    jobs.save_job("vm-example-01", {"type": "restore", "status": "Completed"})
+    out = CliRunner().invoke(cli.cli, ["restore", VM, "--yes", "--before", "2026-10-29T07:30:00Z"])
+    assert out.exit_code == 0 and len(started) == 1
+
+
+def test_a_restore_claims_its_vm_while_it_starts(tmp_path, monkeypatch):
+    """Two restores of one VM at once — two tabs, a double click: the second is refused while
+    the first holds the claim, and the claim goes with the first."""
+    import glorfindel.jobs as jobs
+    cli, started = _restore_env(tmp_path, monkeypatch)
+    seen = []
+    first = jobs.start_restore                           # the fake of _restore_env
+
+    def start_and_try_another(resource_id, connector, vault, before, **kw):
+        seen.append(CliRunner().invoke(cli.cli, ["restore", VM, "--yes", "--before", before]))
+        return first(resource_id, connector, vault, before, **kw)
+    monkeypatch.setattr("glorfindel.jobs.start_restore", start_and_try_another)
+    out = CliRunner().invoke(cli.cli, ["restore", VM, "--yes", "--before", "2026-10-29T07:30:00Z"])
+    assert out.exit_code == 0, out.output
+    inner = seen[0]
+    assert inner.exit_code == 1 and "en train de partir" in inner.output
+    assert started == [(VM, "2026-10-29T07:30:00+00:00")]                 # only the first ran
+    assert not (jobs._JOBS_DIR / "vm-example-01.restore-claim").exists()
+    with jobs.restore_claim("vm-example-01"):
+        with pytest.raises(jobs.RestoreBusy):
+            jobs.restore_claim("vm-example-01").__enter__()
+
+
+def test_a_claim_left_by_a_dead_process_stops_holding(tmp_path):
+    import os
+
+    from glorfindel import jobs
+    jobs._JOBS_DIR.mkdir(parents=True, exist_ok=True)
+    claim = jobs._JOBS_DIR / "vm-example-01.restore-claim"
+    claim.write_text("x")
+    assert jobs.restore_in_progress("vm-example-01")
+    old = time.time() - jobs._CLAIM_MAX_AGE_S - 10
+    os.utime(claim, (old, old))
+    assert jobs.restore_in_progress("vm-example-01") == ""
+
+
+def test_the_proposal_never_falls_after_the_isolation(tmp_path, monkeypatch):
+    """The card is written after the isolation and the autonomous snapshot: the field takes
+    the isolation when it came first, and a point taken after it is marked."""
+    from glorfindel import restore_plan
+    isolated = "2026-10-29T08:00:00+00:00"
+    monkeypatch.setattr("glorfindel.actions._load_isolation_state", lambda rid: {"isolated_at": isolated})
+    card = {"first_seen": "2026-10-29T08:05:00+00:00"}
+    got = restore_plan.proposed_moment(VM, card, runs_dir=tmp_path / "runs")
+    assert got["before"] == isolated and "isolation de la VM" in got["why"]
+    earlier = {"first_seen": "2026-10-29T07:55:00+00:00"}
+    assert restore_plan.proposed_moment(VM, earlier, runs_dir=tmp_path / "runs")["before"] == "2026-10-29T07:55:00+00:00"
+    monkeypatch.setattr("glorfindel.config.resolve_backup_vault", lambda v=None: ("rsv-example", "rg-backup", "st"))
+
+    class _Conn:
+        def list_recovery_points(self, rid, vault="", vault_rg=""):
+            return [{"name": "rp-snap", "time": "2026-10-29T08:01:00+00:00", "vault_tier": False},
+                    {"name": "rp-night", "time": "2026-10-29T01:00:00+00:00", "vault_tier": True}]
+    got = restore_plan.points_before(VM, "2026-10-29T08:10:00Z", connector=_Conn())
+    assert {p["name"]: p["during_incident"] for p in got} == {"rp-night": False, "rp-snap": True}
+    assert restore_plan.moment_warning(VM, "2026-10-29T08:10:00+00:00")
+    assert restore_plan.moment_warning(VM, "2026-10-29T07:10:00+00:00") == ""

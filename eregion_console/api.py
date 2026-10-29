@@ -1439,7 +1439,8 @@ async def restore_plan_view(vm_name: str, escalation: str = "", before: str = ""
         moment = restore_plan.parse_moment(before) if before else proposed["before"]
     except ValueError as exc:
         return {**proposed, "resource_id": resource_id, "error": str(exc)}
-    out = {**proposed, "resource_id": resource_id, "moment": moment, "points": [], "points_error": ""}
+    out = {**proposed, "resource_id": resource_id, "moment": moment, "points": [], "points_error": "",
+           "warning": restore_plan.moment_warning(resource_id, moment) if moment else ""}
     if not moment:
         return out
     loop = asyncio.get_running_loop()
@@ -1815,19 +1816,28 @@ def _restore_failures() -> dict[str, dict]:
         return {}
 
 
+_RESTORE_FAILURES_KEPT = 50
+
+
 def _note_restore_failure(esc_id: str, vm_name: str, error: str | None) -> None:
-    """Keep (error) or clear (None) what a card's last restore said."""
+    """Keep (error) or clear (None) what a card's last restore said — under the state's file
+    lock (two restores ending together lose nothing), only for cards still pending, the
+    newest _RESTORE_FAILURES_KEPT at most."""
     import json as _json
+    from glorfindel import escalations as _esc
+    from glorfindel.response.locks import _file_lock
     from glorfindel.response.state import _atomic_write_text
-    data = _restore_failures()
-    if error is None:
-        if esc_id not in data:
-            return
-        data.pop(esc_id, None)
-    else:
-        data[esc_id] = {"vm_name": vm_name, "error": error[-600:],
-                        "at": datetime.now(timezone.utc).isoformat()}
-    _atomic_write_text(_RESTORE_FAILURES, _json.dumps(data))
+    with _file_lock(_RESTORE_FAILURES.with_suffix(".lock")):
+        data = _restore_failures()
+        if error is None:
+            data.pop(esc_id, None)
+        else:
+            data[esc_id] = {"vm_name": vm_name, "error": error[-600:],
+                            "at": datetime.now(timezone.utc).isoformat()}
+        pending = {e.get("id") for e in _esc.pending()}
+        kept = sorted(((k, v) for k, v in data.items() if k in pending),
+                      key=lambda kv: str(kv[1].get("at") or ""))[-_RESTORE_FAILURES_KEPT:]
+        _atomic_write_text(_RESTORE_FAILURES, _json.dumps(dict(kept)))
 
 
 async def _bg_restore(resource_id: str, vm_name: str = "", before: str = "", esc_id: str = "") -> None:

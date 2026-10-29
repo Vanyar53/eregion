@@ -3434,6 +3434,36 @@ TESTS.update({mid: "tests/unit/test_unexpected_decision.py"
 TESTS["M1361"] = "tests/unit/test_dependency_failures.py"
 
 
+# REL1 (#269): a release in two commands — the version's pull request (`make release`), then the
+# draft (`make release-draft`), seen on #agents and cleared when published. Measured by
+# tests/unit/test_release.py on a throwaway repository, a fake gh, the fake Discord. M1160–M1169.
+RELS = "scripts/release.py"
+MUTANTS += [
+    ("M1160", "a modified tree cut and committed with the release (REL1)", RELS,
+     '    if git(root, "status", "--porcelain"):\n', "    if False:\n"),
+    ("M1161", "the current version released again: equal is not greater (REL1)", RELS,
+     "new <= semver(current)", "new < semver(current)"),
+    ("M1162", "an empty [Unreleased] released: a version with nothing in it (REL1)", RELS,
+     "    if not unreleased(changelog).strip():\n        refused.append(", "    if False:\n        refused.append("),
+    ("M1163", "a release cut from a HEAD that is not origin/main (REL1)", RELS,
+     "    if head != main:\n", "    if False:\n"),
+    ("M1164", "a draft created for a tag that exists already (REL1)", RELS,
+     '        refused.append(f"le tag {tag} existe déjà")\n    if shutil.which("gh") is None:\n',
+     '    if shutil.which("gh") is None:\n'),
+    ("M1165", "the cut takes [Unreleased]'s place: no empty [Unreleased] above the version (REL1)", RELS,
+     '    return head + UNRELEASED + "\\n" + f\'## [{version}]', "    return head + f'## [{version}]"),
+    ("M1166", "the release created without --draft: published, H0 deployed (REL1)", RELS,
+     '"release", "create", tag, "--draft", "--target"', '"release", "create", tag, "--target"'),
+    ("M1167", "the draft targets main by name, not origin/main's full sha (REL1)", RELS,
+     '"--target", sha, "--title"', '"--target", "main", "--title"'),
+    ("M1168", "DRY_RUN=1 writes, commits and pushes (REL1)", RELS,
+     '    if dry_run:\n        say("")\n', '    if False:\n        say("")\n'),
+    ("M1169", "a published release leaves its draft's ping and line on #agents (REL1)", NDS,
+     "        release_published(event, cfg)\n", "        pass\n"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_release.py" for n in range(1160, 1170)})
+
+
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a
 # composite rule or a world event to one of them. Run with --control.

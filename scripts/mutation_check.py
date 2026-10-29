@@ -130,8 +130,9 @@ MUTANTS = [
      "    _atomic_write_text(target, json.dumps(payload))\n",
      "    _atomic_write_text(target, json.dumps(payload))\n    if name != name.lower():\n        target.unlink()\n"),
     ("M07", "release sweeps the NICs only when there is no state", REL,
-     "        failed += self._sweep_isolation(rg, vm_name, remaining)",
-     "        failed += [] if state.get(\"placements\") else self._sweep_isolation(rg, vm_name, remaining)"),
+     "        failed += self._sweep_isolation(rg, vm_name, remaining, known, resource_id)",
+     "        failed += [] if state.get(\"placements\") else self._sweep_isolation(rg, vm_name, remaining, known,"
+     " resource_id)"),
     ("M08", "fallback deny any/any on an NSG that only looks dedicated", NSG,
      '    return bool(target.get("private_ips")) or _ip_scoped(target)',
      "    return _ip_scoped(target)"),
@@ -4165,6 +4166,112 @@ MUTANTS += [
      '    if not cmd or cmd[0] not in ("git", "gh"):\n        raise ValueError("git or gh only")\n', ""),
 ]
 TESTS.update({mid: "tests/unit/test_release.py" for mid in ("M1437", "M1438", "M1439", "M1470")})
+# I7S (#303): the release of a deleted VM looks for the rules named for the NICs its records
+# name on every NSG of the subscription — an isolation whose state was lost or rewritten
+# since stayed on a shared NSG, aimed at the address the next VM gets; a listing that fails is
+# said, the NICs kept for the retry. Seed 322 at 500 found it (M1550: the machine too).
+_I7S = "tests/unit/test_invariant_regressions.py -k deleted_vm"
+MUTANTS += [
+    ("M1550", "a deleted VM's release looks nowhere: its rules left on a shared NSG, `released` (I7S)", REL,
+     "                        + self._gone_vm_rules(resource_id, vm_name, list(known_nics), stuck))\n",
+     "                        + [])\n"),
+    ("M1551", "the NSGs that can't be listed: a deleted VM's release says `released` (I7S)", REL,
+     '            return failed + [f"{vm_name} supprimée : les règles de ses cartes n\'ont pas été cherchées sur les "\n'
+     '                             f"NSG de l\'abonnement (liste illisible : {_first_line(exc)[:_ERR_MAX]}), levée non '
+     'vérifiée"]\n',
+     "            return failed\n"),
+    ("M1552", "a failed release of a deleted VM forgets its NICs: the retry looks for nothing (I7S)", REL,
+     '                **({"known_nics": known} if known else {}),\n', ""),
+    ("M1553", "the NICs a failed release kept are not read again (I7S)", REL,
+     '        kept = state.get("known_nics") if isinstance(state, dict) else None\n',
+     "        kept = None\n"),
+    ("M1554", "the NICs of a deleted VM's blocks are not looked for (I7S)", REL,
+     "        entries = [state, *(blocks if isinstance(blocks, list) else [])]\n",
+     "        entries = [state]\n"),
+    ("M1555", "a deleted VM's outbound rule left: only the inbound name looked for (I7S)", REL,
+     '            names |= {base, f"{base}-out"}\n', "            names |= {base}\n"),
+]
+TESTS.update({"M1550": f"{_I7S} {INVARIANTS}", **{f"M{n}": _I7S for n in range(1551, 1556)}})
+# I7S after its 5.5 review: a gone VM whose state can't be read is never `released` (the
+# file kept); a NIC Azure kept after its VM (`az vm delete`, Terraform: detached by default)
+# is read before its names are looked for — attached to another VM of that name, they are
+# that VM's isolation's too, and stay, said. M1556–M1559, M1600–M1601.
+MUTANTS += [
+    ("M1556", "a gone VM's unreadable state: `released`, the only file that named its NICs cleared (I7S)", REL,
+     "                return (self._gone_vm_unknown(resource_id or vm_name, vm_name)\n",
+     "                return ([]\n"),
+    ("M1557", "a gone VM's unreadable isolation state not counted (I7S)", REL,
+     "        if _isolation_unreadable(vm_ref) or (\n", "        if False or (\n"),
+    ("M1558", "a gone VM's unreadable block state not counted (I7S)", REL,
+     '                block is not None and f"{_BLOCK_STATE_DIR.name}/{block.name}" in unreadable_states()):\n',
+     "                False):\n"),
+    ("M1559", "a NIC kept and attached to a namesake VM: its isolation's rules taken (I7S)", REL,
+     '        if (not holder or holder.rsplit("/", 1)[-1].lower() != vm_name.lower()\n',
+     "        if (True or not holder\n"),
+    ("M1600", "a kept NIC that can't be read taken as gone: its names looked for (I7S)", REL,
+     "            if _is_not_found(exc):\n                return None\n            return f\"{vm_name} supprimée : carte",
+     "            if True:\n                return None\n            return f\"{vm_name} supprimée : carte"),
+    ("M1601", "a kept NIC on a VM of another name taken for a namesake's: its rules left (I7S)", REL,
+     '        if (not holder or holder.rsplit("/", 1)[-1].lower() != vm_name.lower()\n',
+     "        if (not holder\n"),
+]
+TESTS.update({mid: _I7S for mid in ("M1556", "M1557", "M1558", "M1559", "M1600", "M1601")})
+
+# REL2 (#309): #releases, a release's story — the version's pull request, the draft ready, the
+# publication — in one channel, silent, never deleted; #ci keeps the rest. Measured by
+# tests/unit/test_notify_discord.py and tests/unit/test_release.py, the fake Discord. M1540–M1549.
+MUTANTS += [
+    ("M1540", "a published release still posted to #ci beside #releases (REL2)", NDS,
+     "            post_releases(cfg, n.card, n.button)\n        elif n.ci and cfg.ci:\n",
+     "            post_releases(cfg, n.card, n.button)\n        if n.ci and cfg.ci:\n"),
+    ("M1541", "#releases' webhook given to notify.yml on every event (REL2)", ".github/workflows/notify.yml",
+     "${{ (github.event_name == 'release' || (github.event_name == 'pull_request_target' "
+     "&& github.event.pull_request.head.repo.full_name == github.repository "
+     "&& startsWith(github.event.pull_request.head.ref, 'chore/release-'))) "
+     "&& secrets.EREGION_DISCORD_WEBHOOK_RELEASES || '' }}",
+     "${{ secrets.EREGION_DISCORD_WEBHOOK_RELEASES }}"),
+    ("M1542", "a release's notes reach #releases raw: a masked link, a mention (REL2, SEC6)", NDS,
+     '    out += ["• " + inert(_cut(', '    out += ["• " + (_cut('),
+    ("M1543", "a release's name reaches #releases raw (REL2, SEC6)", NDS,
+     'inert(rel.get("name") or "")', '(rel.get("name") or "")'),
+    ("M1544", "make release-draft never posts the draft's card on #releases (REL2)", RELS,
+     "        if notify_discord.release_ready(tag, heading, url, text):\n", "        if False:\n"),
+    ("M1545", "a card refused with its button (400) is lost, never sent again without it (REL2)", NDS,
+     '            if not (e.code == 400 and "components" in payload):\n', "            if True:\n"),
+    ("M1546", "a fork's chore/release-X.Y.Z taken for the version's pull request (REL2, SEC6)", NDS,
+     '    return bool(VERSION_BRANCH.fullmatch((pr.get("head") or {}).get("ref") or "")\n'
+     '                and head.get("full_name") and head.get("full_name") == base.get("full_name"))\n',
+     '    return bool(VERSION_BRANCH.fullmatch((pr.get("head") or {}).get("ref") or ""))\n'),
+    ("M1547", "any branch that starts like chore/release-X.Y.Z is the version's pull request (REL2)", NDS,
+     "VERSION_BRANCH.fullmatch(", "VERSION_BRANCH.match("),
+    ("M1548", "without #releases, the publication and the version's pull request said nowhere (REL2)", NDS,
+     "        elif n.ci and cfg.ci:\n", "        elif n.ci and cfg.ci and not n.releases:\n"),
+    ("M1549", "the draft's own URL posted: GitHub moves it at the next edit, the link leads nowhere (REL2)",
+     RELS, "        url = releases_page(url[0])\n", '        url = url[0] if url[0].startswith("https://") else ""\n'),
+]
+TESTS.update({mid: "tests/unit/test_notify_discord.py tests/unit/test_release.py"
+              for mid in ("M1540", "M1542", "M1543", "M1545", "M1546", "M1547", "M1548")})
+TESTS.update({"M1541": "tests/unit/test_notify_discord.py", "M1544": "tests/unit/test_release.py",
+              "M1549": "tests/unit/test_release.py"})
+# REL2 after its 5.5 review: M1580–M1584.
+MUTANTS += [
+    ("M1580", "#releases' webhook given to every pull_request_target, a fork's included (REL2, review)",
+     ".github/workflows/notify.yml",
+     "(github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name == "
+     "github.repository && startsWith(github.event.pull_request.head.ref, 'chore/release-'))",
+     "github.event_name == 'pull_request_target'"),
+    ("M1581", "chat_text missing: its fallback lets everything through (REL2, review)", NDS,
+     "    return _strict\n", "    return lambda t: t\n"),
+    ("M1582", "chat_text missing: its fallback keeps `_` (__underline__ _italic_) (REL2, review)", NDS,
+     '''    return re.sub(r"[^\\w .,:;!?'’«»/=+-]|_", "·",''', '''    return re.sub(r"[^\\w .,:;!?'’«»/=+-]", "·",'''),
+    ("M1583", "the version's pull request's title reaches #releases raw (REL2, review)", NDS,
+     "    head = f\"#{pr.get('number')} {inert(pr.get('title') or '')}\"\n",
+     "    head = f\"#{pr.get('number')} {pr.get('title') or ''}\"\n"),
+    ("M1584", "the draft's heading reaches #releases' card title raw (REL2, review)", NDS,
+     '(f" — {inert(heading)}" if heading else "")', '(f" — {heading}" if heading else "")'),
+]
+TESTS.update({mid: "tests/unit/test_notify_discord.py tests/unit/test_release.py"
+              for mid in ("M1580", "M1581", "M1582", "M1583", "M1584")})
 
 
 # SEC7 (#296): identities and hardening — the bot's stale buttons (V-08), the control plane read

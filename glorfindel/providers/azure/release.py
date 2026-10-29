@@ -254,7 +254,8 @@ class ReleaseMixin:
         # state file, an answer lost after Azure applied a write, a placement replaced
         # by a re-isolation. `released` used to mean "what the state listed is undone"
         # while a NIC stayed cut off (L24).
-        failed += self._sweep_isolation(rg, vm_name, remaining)
+        known = self._known_nics(resource_id, state)
+        failed += self._sweep_isolation(rg, vm_name, remaining, known, resource_id)
 
         if failed and _isolation_unreadable(resource_id):
             # Its state kept as it is: written over, what it held was gone, and the next
@@ -268,29 +269,125 @@ class ReleaseMixin:
                 "isolated_at": state.get("isolated_at") or datetime.now(timezone.utc).isoformat(),
                 "placements": remaining if state.get("placements") else state.get("placements", []),
                 "release_failed": failed,
+                # The NICs it named, kept for the retry: a deleted VM's are known from
+                # nowhere else once its placements are undone (I7S).
+                **({"known_nics": known} if known else {}),
             })
             return {"status": "release_partial", "resource_id": resource_id, "failed": failed}
 
         _clear_isolation_state(resource_id)
         return {"status": "released", "resource_id": resource_id}
 
-    def _sweep_isolation(self, rg: str, vm_name: str, remaining: list[dict]) -> list[str]:
+    @staticmethod
+    def _known_nics(resource_id: str, state: dict) -> list[str]:
+        """The NICs this VM's local records name: its isolation's placements, its
+        blocks', those a failed release kept — what is left to know of them once the VM
+        is gone (I7S, #303)."""
+        from glorfindel.response.state import _load_block_entries
+        blocks = _load_block_entries(resource_id)
+        entries = [state, *(blocks if isinstance(blocks, list) else [])]
+        ids = {(p.get("nic_id") or "").rstrip("/"): None for e in entries if isinstance(e, dict)
+               for p in (e.get("placements") or []) if isinstance(p, dict)}
+        kept = state.get("known_nics") if isinstance(state, dict) else None
+        ids.update({n.rstrip("/"): None for n in (kept if isinstance(kept, list) else []) if isinstance(n, str)})
+        return [n for n in ids if n]
+
+    @staticmethod
+    def _gone_vm_unknown(vm_ref: str, vm_name: str) -> list[str]:
+        """The VM gone, a state of its that can't be read (isolation or block) may name
+        NICs the release can't look for: never `released`, the file kept (I7S, review —
+        the release cleared the only file that named the NIC, its rules left)."""
+        from glorfindel.response.state import (_BLOCK_STATE_DIR, _ISOLATION_STATE_DIR, _state_file,
+                                               unreadable_states)
+        block = _state_file(_BLOCK_STATE_DIR, vm_ref)
+        if _isolation_unreadable(vm_ref) or (
+                block is not None and f"{_BLOCK_STATE_DIR.name}/{block.name}" in unreadable_states()):
+            named = ", ".join(f"{d.name}/{f.name}" for d, f in (
+                (_ISOLATION_STATE_DIR, _state_file(_ISOLATION_STATE_DIR, vm_ref)), (_BLOCK_STATE_DIR, block))
+                if f is not None and f"{d.name}/{f.name}" in unreadable_states())
+            return [f"{vm_name} supprimée, état illisible ({named}) : ses cartes inconnues, levée non vérifiée"]
+        return []
+
+    def _gone_nic_check(self, resource_id: str, vm_name: str, nid: str) -> str | None:
+        """Whether the rules named for this NIC of a gone VM may be looked for: None if
+        so — the NIC gone too (a 404), detached, or on a VM of another name (the names
+        carry `vm_name`). A NIC Azure kept (`az vm delete` and Terraform detach it by
+        default) attached since to another VM of that name: its isolation has the same
+        names — they stay, and that is said; as is a NIC that can't be read (I7S, review;
+        A3's "Azure says 404", extended)."""
+        from glorfindel.response.ids import _parse_nic_resource_id
+        short = nid.rsplit("/", 1)[-1]
+        try:
+            nic = self._network.network_interfaces.get(*_parse_nic_resource_id(nid))
+        except Exception as exc:
+            if _is_not_found(exc):
+                return None
+            return f"{vm_name} supprimée : carte {short} illisible ({_first_line(exc)[:_ERR_MAX]}), levée non vérifiée"
+        holder = (getattr(getattr(nic, "virtual_machine", None), "id", None) or "").rstrip("/")
+        if (not holder or holder.rsplit("/", 1)[-1].lower() != vm_name.lower()
+                or (resource_id and _same_id(holder, resource_id))):
+            return None
+        return (f"{vm_name} supprimée : sa carte {short} est maintenant celle de {holder.split('/')[4]}/"
+                f"{vm_name}, dont l'isolation porte les mêmes noms — laissés ; si elle n'est pas isolée "
+                "(glorfindel status), ce sont ceux de la VM supprimée : à retirer à la main "
+                "(az network nsg rule delete)")
+
+    def _gone_vm_rules(self, resource_id: str, vm_name: str, nic_ids: list[str], stuck: set) -> list[str]:
+        """The VM is gone, and the NSGs its NICs carried with it out of sight: the rules
+        named for its NICs (their hash: no other NIC's, _nic_owns) are looked for on every
+        NSG of the subscription. One an isolation left there whose state was lost since
+        (a crash, the state rewritten by a later isolation that went elsewhere) stayed
+        on a shared NSG, aimed at an address Azure hands to the next VM — "released"
+        (I7S, #303). A listing that fails is said: nothing found is not nothing there.
+        Only the current hashed names: an older one (before L24, VM-suffixed) is shared
+        by homonyms, and on a NSG that is not read through a NIC, nothing tells whose (I2)."""
+        names: set[str] = set()
+        failed: list[str] = []
+        for nid in nic_ids:
+            why = self._gone_nic_check(resource_id, vm_name, nid)
+            if why:
+                failed.append(why)
+                continue
+            base = self._placement_rule_base("glorfindel-iso", vm_name, nid.rsplit("/", 1)[-1], nid)
+            names |= {base, f"{base}-out"}
+        if not names:
+            return failed
+        try:
+            nsgs = list(self._network.network_security_groups.list_all())
+        except Exception as exc:
+            return failed + [f"{vm_name} supprimée : les règles de ses cartes n'ont pas été cherchées sur les "
+                             f"NSG de l'abonnement (liste illisible : {_first_line(exc)[:_ERR_MAX]}), levée non vérifiée"]
+        for nsg in nsgs:
+            n_rg, n_name = _parse_nsg_resource_id(nsg.id)
+            for r in (getattr(nsg, "security_rules", None) or []):
+                name = _rule_name(r)
+                if name.lower() in names and (n_rg.lower(), n_name.lower(), name.lower()) not in stuck:
+                    err = self._delete_rule(n_rg, n_name, name)
+                    if err:
+                        failed.append(err)
+        return failed
+
+    def _sweep_isolation(self, rg: str, vm_name: str, remaining: list[dict],
+                         known_nics: list[str] = (), resource_id: str = "") -> list[str]:
         """Remove every isolation of this VM still on Azure: our quarantine NSG on its
         NICs (original from the state, else from our tag), and on each NSG that governs
         a NIC, the rules of THAT NIC — named for it and applying to its addresses, so a
         homonym's rules on the same NSG stay. `remaining`: placements whose undo just
-        failed (not tried twice). Returns the failures; an unreadable NIC or rule list
-        is one — nothing found is not nothing there."""
+        failed (not tried twice). `known_nics`: the NICs the local records name, looked
+        for everywhere once the VM is gone. Returns the failures; an unreadable NIC or
+        rule list is one — nothing found is not nothing there."""
+        stuck = {(p["nsg_rg"].lower(), p["nsg_name"].lower(), n.lower())
+                 for p in remaining if p.get("kind") != "quarantine"
+                 for n in (p.get("rule_in"), p.get("rule_out")) if n}
         try:
             targets = self._get_vm_nic_targets(rg, vm_name, allow_no_nsg=True)
         except Exception as exc:
             if _is_not_found(exc):
-                return []                     # the VM is gone, and its NICs with it
+                # The VM is gone, and its NICs with it: their NSGs can't be asked for.
+                return (self._gone_vm_unknown(resource_id or vm_name, vm_name)
+                        + self._gone_vm_rules(resource_id, vm_name, list(known_nics), stuck))
             return [f"cartes de {vm_name} illisibles, levée non vérifiée : {_first_line(exc)[:_ERR_MAX]}"]
         held = {p["nic_id"].rstrip("/").lower() for p in remaining if p.get("kind") == "quarantine"}
-        stuck = {(p["nsg_rg"].lower(), p["nsg_name"].lower(), n.lower())
-                 for p in remaining if p.get("kind") != "quarantine"
-                 for n in (p.get("rule_in"), p.get("rule_out")) if n}
         failed: list[str] = []
         cache: dict = {}
         restored = False

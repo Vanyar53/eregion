@@ -724,7 +724,9 @@ def command(event: dict, cfg: nd.Config, force: bool = False, always: bool = Tru
 def release_draft(tag: str, url: str, cfg: nd.Config | None = None) -> dict:
     """scripts/release.py's draft (REL1): on the board, pinged at once. The ids of its ping and
     of the board, for notify.yml to delete them when the release is published — it runs on
-    GitHub, without this state; {} when #agents is not configured."""
+    GitHub, without this state; {} when #agents is not configured. `url`: the repository's
+    releases, where the draft comes first — never the draft's own URL, which GitHub moves at
+    each edit (release.py's releases_page, REL2)."""
     cfg = cfg or nd.load_config()
     if not cfg.agents:
         return {}

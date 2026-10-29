@@ -865,7 +865,10 @@ make release-draft VERSION=0.4.4 [NOTES=notes.md] [DRY_RUN=1]   # après sa fusi
 - **`make release-draft`**, après la fusion : le **brouillon** `vX.Y.Z — <titre>`, sur le sha complet
   d'`origin/main`. Celui-ci doit tenir la version : son `pyproject.toml` et la section `[X.Y.Z]` de son
   CHANGELOG. Les notes : `NOTES=fichier`, sinon cette section, avec au moins une ligne qui n'est pas un
-  titre. Refusé si le tag ou une release `vX.Y.Z` existe déjà, brouillon compris. Le brouillon est posé sur le tableau de `#agents`, avec un ping
+  titre. Refusé si le tag ou une release `vX.Y.Z` existe déjà, brouillon compris. Le brouillon est posé sur le tableau de `#agents`, avec un ping,
+  et sa carte va dans `#releases`, avec le résumé de ses notes (REL2) ; le lien donné est la liste des
+  releases du dépôt, où le brouillon est en tête : GitHub change l'URL d'un brouillon à chaque
+  édition (mesuré sur la 0.4.4). La PR de version et la publication vont aussi dans `#releases`
   (`docs/atelier-discord.md`) ; sans configuration Discord, rien n'est envoyé et la commande réussit.
 - **Aucun chemin ne publie** : rien ne fait d'un brouillon une release. `tests/unit/test_release.py`
   lit le code sur une liste blanche : quatre commandes `gh` seulement (`pr create`, `release list`,

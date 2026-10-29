@@ -3462,6 +3462,43 @@ TESTS.update({mid: "tests/unit/test_unexpected_decision.py"
               + [f"M{n}" for n in range(1360, 1365)]})
 TESTS["M1361"] = "tests/unit/test_dependency_failures.py"
 
+# CI2 (#268): the advisories of the locks, one issue per advisory — the same advisory never two
+# issues (an alias, a closed issue, a duplicate, several locks), one gone said once and never
+# closed, a lock not read says nothing, the lock read as it is, make lock never failing on it.
+# Measured by tests/unit/test_pip_audit_issues.py. Range M1150–M1159.
+PAI = "scripts/pip_audit_issues.py"
+MUTANTS += [
+    ("M1150", "an issue found by the exact same identifiers only: an alias seen later opens a second one (CI2)",
+     PAI, 'i.key["package"] == adv.package and i.key["ids"] & adv.ids]',
+     'i.key["package"] == adv.package and i.key["ids"] == adv.ids]'),
+    ("M1151", "the open issues only are read: a closed advisory's issue doubled (CI2)", PAI,
+     '"repos/{owner}/{repo}/issues?state=all&per_page=100"', '"repos/{owner}/{repo}/issues?state=open&per_page=100"'),
+    ("M1152", "an advisory listed twice by pip-audit never merged: two issues (CI2)", PAI,
+     "                same = [a for a in out if a.package == package and a.ids & ids]\n",
+     "                same = []\n"),
+    ("M1153", "the same advisory in two locks is two advisories (CI2)", PAI,
+     "                same = [a for a in out if a.package == package and a.ids & ids]\n",
+     "                same = [a for a in out if a.package == package and a.ids & ids and lock in a.locks]\n"),
+    ("M1154", "an advisory gone closes its issue: the workflow decides the bump was made (CI2)", PAI,
+     '        gh("issue", "comment", str(issue.number), "--body-file", "-",\n'
+     '           stdin="L\'avis n\'est plus trouvé dans "',
+     '        gh("issue", "close", str(issue.number))\n'
+     '        gh("issue", "comment", str(issue.number), "--body-file", "-",\n'
+     '           stdin="L\'avis n\'est plus trouvé dans "'),
+    ("M1155", "an advisory gone said every week: the issue's key never told (CI2)", PAI,
+     'stdin=with_present(issue.body, False))', "stdin=issue.body)"),
+    ("M1156", "a lock whose audit failed reads as clean: its advisories said gone (CI2)", PAI,
+     '        if not issue.key["locks"] or not issue.key["locks"] <= audited:\n',
+     '        if not issue.key["locks"]:\n'),
+    ("M1157", "an issue never rewritten: a new lock, a fix, an alias never said (CI2)", PAI,
+     "        if _same(issue.body) != _same(text):\n", "        if False:\n"),
+    ("M1158", "pip-audit resolves the lock with pip instead of reading it (CI2, N-16)", PAI,
+     '"--require-hashes", "--disable-pip",', '"--require-hashes",'),
+    ("M1159", "make lock fails when its audit cannot run (CI2, N-16)", MAKE,
+     "\t-@$(MAKE) --no-print-directory audit\n", "\t@$(MAKE) --no-print-directory audit\n"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_pip_audit_issues.py" for n in range(1150, 1160)})
+
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a

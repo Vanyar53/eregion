@@ -1,0 +1,48 @@
+name: Dependency audit
+
+# CI2 (#268): the advisories of the three locks (requirements/dev.txt, glorfindel.txt, annatar.txt),
+# one issue per advisory, label `security` (scripts/pip_audit_issues.py). pip-audit reads each lock
+# as it is (`--require-hashes --disable-pip`): nothing is resolved, only the advisory service is
+# asked. Never a pull request: a bump goes through `make lock`, then the harness (Jonathan) —
+# docs/operations.md, « Verrou des dépendances ».
+#
+# Red when a human has something new to see (an issue opened or reopened, an advisory back) or
+# an audit failed: notify.yml announces a red scheduled run in #ci — an issue opened with the
+# workflow's token triggers no workflow, so the run says it. No secret: the repository's token,
+# issues written, contents read.
+on:
+  schedule:
+    - cron: "17 5 * * 2"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: pip-audit
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5.1.0
+        with:
+          persist-credentials: false
+
+      # pip-audit from its own lock, every file checked against its hash, in a venv of its own:
+      # the runner's Python, no third-party action.
+      - name: Install pip-audit
+        run: |
+          python3 -m venv "$RUNNER_TEMP/audit"
+          "$RUNNER_TEMP/audit/bin/pip" install --require-hashes -r requirements/audit.txt
+
+      - name: Audit the locks, one issue per advisory
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: >-
+          python3 scripts/pip_audit_issues.py issues --pip-audit "$RUNNER_TEMP/audit/bin/pip-audit"
+          requirements/dev.txt requirements/glorfindel.txt requirements/annatar.txt

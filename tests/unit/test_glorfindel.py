@@ -1716,8 +1716,13 @@ def _backup_env(monkeypatch, *, rps, jobs, stored_id=None):
 
     posted = []
     fake_requests = types.ModuleType("requests")
-    fake_requests.post = lambda url, json=None, headers=None: (
-        posted.append(url) or types.SimpleNamespace(status_code=202, text=""))
+    # Each call's timeout is kept (SEC4c): a call without one holds the command forever.
+    fake_requests.timeouts = []
+    fake_requests.Timeout = type("Timeout", (Exception,), {})
+    fake_requests.ConnectTimeout = type("ConnectTimeout", (fake_requests.Timeout,), {})
+    fake_requests.post = lambda url, json=None, headers=None, timeout=None: (
+        posted.append(url) or fake_requests.timeouts.append(timeout)
+        or types.SimpleNamespace(status_code=202, text=""))
     monkeypatch.setitem(sys.modules, "requests", fake_requests)
     monkeypatch.setattr("time.sleep", lambda s: None)
 
@@ -1729,6 +1734,10 @@ def _backup_env(monkeypatch, *, rps, jobs, stored_id=None):
     connector._compute.virtual_machines.get.return_value = MagicMock(
         id=_RID, location="westeurope", storage_profile=MagicMock(data_disks=[]))
     return connector, client, posted, datetime.now(timezone.utc)
+
+
+# A moment after every point these tests list: the restore always takes one (SEC4c).
+_AFTER_EVERY_POINT = "2999-01-01T00:00:00+00:00"
 
 
 def _rp(name, when, vaulted=True):
@@ -1753,7 +1762,8 @@ def test_restore_picks_the_newest_point_not_the_list_order(monkeypatch):
     job.name = "restore-1"
     client.backup_jobs.list.return_value = [job]
 
-    out = connector.restore_from_backup(_RID, vault="rsv", wait=False, staging_storage="st")
+    out = connector.restore_from_backup(_RID, vault="rsv", wait=False, staging_storage="st",
+                                        before_attack_time=_AFTER_EVERY_POINT)
     assert out["recovery_point"] == "rp-new"
     assert "/recoveryPoints/rp-new/restore" in posted[0]
 
@@ -1773,6 +1783,7 @@ def test_restore_uses_vault_rg_and_the_names_the_vault_stores(monkeypatch):
     client.backup_jobs.list.return_value = [job]
 
     out = connector.restore_from_backup(_RID, vault="rsv", wait=False, staging_storage="st",
+                                        before_attack_time=_AFTER_EVERY_POINT,
                                         vault_rg="rg-backup")
     args = client.recovery_points.list.call_args.args
     assert args[1] == "rg-backup"
@@ -2369,7 +2380,8 @@ def test_restore_neutralizes_run_command_before_swapping_the_disks(monkeypatch):
     """The restored disk replayed the last Run Command at boot — the ransomware script,
     which re-encrypted the restored data (real run, 2026-10-05)."""
     connector, posted = _restore_ready(monkeypatch)
-    out = connector.restore_from_backup(_RID, vault="rsv", wait=False, staging_storage="st")
+    out = connector.restore_from_backup(_RID, vault="rsv", wait=False, staging_storage="st",
+                                        before_attack_time=_AFTER_EVERY_POINT)
     calls = [c[0] for c in connector._compute.mock_calls]
     run = calls.index("virtual_machines.begin_run_command")
     dealloc = calls.index("virtual_machines.begin_deallocate")
@@ -2383,7 +2395,8 @@ def test_restore_still_runs_when_run_command_cannot_be_neutralized(monkeypatch):
     connector, posted = _restore_ready(monkeypatch)
     connector._compute.virtual_machines.begin_run_command.side_effect = RuntimeError(
         "(OperationNotAllowed) VM is not running")
-    out = connector.restore_from_backup(_RID, vault="rsv", wait=False, staging_storage="st")
+    out = connector.restore_from_backup(_RID, vault="rsv", wait=False, staging_storage="st",
+                                        before_attack_time=_AFTER_EVERY_POINT)
     assert out["run_command_neutralized"] is False
     assert "not running" in out["run_command_error"]
     assert posted                                    # recovery first
@@ -2984,7 +2997,8 @@ def test_neutralized_only_when_the_harmless_command_finished(monkeypatch):
     """result(timeout) returns at the deadline without raising (third review, T13)."""
     connector, posted = _restore_ready(monkeypatch)
     connector._compute.virtual_machines.begin_run_command.return_value.done.return_value = False
-    out = connector.restore_from_backup(_RID, vault="rsv", wait=False, staging_storage="st")
+    out = connector.restore_from_backup(_RID, vault="rsv", wait=False, staging_storage="st",
+                                        before_attack_time=_AFTER_EVERY_POINT)
     assert out["run_command_neutralized"] is False and "600" in out["run_command_error"]
 
 
@@ -3002,7 +3016,8 @@ def test_other_replayable_scripts_hold_the_release(monkeypatch):
         ext("setup", "Microsoft.Azure.Extensions", "CustomScript")])
     connector._compute.virtual_machine_run_commands.list_by_virtual_machine.return_value = [
         SimpleNamespace(name="nightly")]
-    out = connector.restore_from_backup(_RID, vault="rsv", wait=False, staging_storage="st")
+    out = connector.restore_from_backup(_RID, vault="rsv", wait=False, staging_storage="st",
+                                        before_attack_time=_AFTER_EVERY_POINT)
     assert out["run_command_neutralized"] is False
     assert out["replay_vectors"] == ["extension setup", "run command managé nightly"]
 
@@ -3025,13 +3040,15 @@ def test_restore_allows_only_the_listed_extensions(monkeypatch):
             ext("RunCommandLinux", "Microsoft.CPlat.Core", "RunCommandLinux")]
     extensions = connector._compute.virtual_machine_extensions.list.return_value = SimpleNamespace(value=list(safe))
     connector._compute.virtual_machine_run_commands.list_by_virtual_machine.return_value = []
-    out = connector.restore_from_backup(_RID, vault="rsv", wait=False, staging_storage="st")
+    out = connector.restore_from_backup(_RID, vault="rsv", wait=False, staging_storage="st",
+                                        before_attack_time=_AFTER_EVERY_POINT)
     assert out["run_command_neutralized"] is True and "replay_vectors" not in out
 
     extensions.value = safe + [ext("enablevmaccess", "Microsoft.OSTCExtensions", "VMAccessForLinux"),
                                ext("agent", "Contoso.Tools", "Bootstrap"),
                                ext("odd", "", "")]
-    out = connector.restore_from_backup(_RID, vault="rsv", wait=False, staging_storage="st")
+    out = connector.restore_from_backup(_RID, vault="rsv", wait=False, staging_storage="st",
+                                        before_attack_time=_AFTER_EVERY_POINT)
     assert out["run_command_neutralized"] is False
     assert out["replay_vectors"] == ["extension enablevmaccess", "extension agent",
                                      "extension odd (éditeur ou type illisible)"]
@@ -3060,11 +3077,13 @@ def test_restore_lets_the_common_benign_extensions_through(monkeypatch):
         ("Microsoft.Compute", "BGInfo"))]
     extensions = connector._compute.virtual_machine_extensions.list.return_value = SimpleNamespace(value=list(benign))
     connector._compute.virtual_machine_run_commands.list_by_virtual_machine.return_value = []
-    out = connector.restore_from_backup(_RID, vault="rsv", wait=False, staging_storage="st")
+    out = connector.restore_from_backup(_RID, vault="rsv", wait=False, staging_storage="st",
+                                        before_attack_time=_AFTER_EVERY_POINT)
     assert out["run_command_neutralized"] is True and "replay_vectors" not in out
     extensions.value = benign + [ext("AzurePolicyforLinux", "Microsoft.GuestConfiguration",
                                      "ConfigurationforLinux")]
-    out = connector.restore_from_backup(_RID, vault="rsv", wait=False, staging_storage="st")
+    out = connector.restore_from_backup(_RID, vault="rsv", wait=False, staging_storage="st",
+                                        before_attack_time=_AFTER_EVERY_POINT)
     assert out["replay_vectors"] == ["extension AzurePolicyforLinux"]
 
 

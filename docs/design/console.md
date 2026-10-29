@@ -338,7 +338,14 @@ toute route, WebSocket du fil compris. Dans l'ordre :
 
 Côté pages, `_post(url, body, method)` envoie chaque modification en JSON, et `_seg(nom)` encode
 chaque segment de chemin construit avec un nom (VM, carte). Restore n'est plus qu'une restauration de
-carte : le serveur refuse une carte ancrée, comme la page et le bot. Config reçoit les identifiants
+carte : le serveur refuse une carte ancrée, comme la page et le bot. Et il demande son moment
+(SEC4c) : la fenêtre pré-remplit le champ (`GET /api/restore/plan/<vm>`), montre les points d'avant ce
+moment en lecture seule (« ↺ Points before this moment » les relit pour un autre moment), envoie
+`before` ; le serveur refuse sans lui. Un refus de la commande revient sur la carte (« ✗ Restore
+refused or failed »), échappé. Vérifié dans Chromium (29/10, chrome-headless-shell, console locale
+sur un HOME jetable, points et commande remplacés, un point et une sortie piégés `<img onerror>`) :
+le champ, la raison, les points, la relecture pour un autre moment, l'envoi avec `--before`, le
+refus sur la carte ; aucune image injectée, aucune erreur JS ni violation de CSP. Config reçoit les identifiants
 Azure masqués. En-têtes : la CSP prend `default-src 'self'`, `style-src 'self' 'unsafe-inline'` et
 `img-src 'self'` (aucune ressource bloquée dans Chromium), `X-Content-Type-Options: nosniff`,
 `Referrer-Policy: no-referrer` ; ni schéma OpenAPI ni `/docs`.

@@ -109,14 +109,17 @@ def test_pull_copies_new_windows_and_skips_unsafe_names(tmp_path):
 
 def test_pull_downloads_again_only_what_changed(tmp_path):
     local = tmp_path / "r1.json"
-    local.write_text("{}")
+    opened = {"run_id": "r1", "start": "2026-10-19T12:57:49+00:00", "end": None}
+    local.write_text(json.dumps(opened))
     os.utime(local, (1_000_000_000, 1_760_000_000))  # 2025-10-09
     get, calls = _getter(_listing(("r1.json", "Thu, 09 Oct 2025 08:00:00 GMT")), {"r1.json": b"{}"})
     assert channel.pull(tmp_path, channel=URL, credential=CRED, get=get) == 0
+    # Changed since: its closure, the one rewrite a pulled window may take (SEC5, V-20).
+    closed = {**opened, "end": "2026-10-19T12:58:29+00:00"}
     get, calls = _getter(_listing(("r1.json", "Mon, 19 Oct 2026 12:58:30 GMT")),
-                         {"r1.json": b'{"run_id": "r1", "end": "x"}'})
+                         {"r1.json": json.dumps(closed).encode()})
     assert channel.pull(tmp_path, channel=URL, credential=CRED, get=get) == 1
-    assert json.loads(local.read_text())["end"] == "x"
+    assert json.loads(local.read_text())["end"] == closed["end"]
 
 
 def test_the_watch_pulls_before_it_labels(monkeypatch):
@@ -157,7 +160,10 @@ SUB = "sub-123"
 BENCH = f"/subscriptions/{SUB}/resourceGroups/rg-celebrimbor"
 CONTAINER = (f"/subscriptions/{SUB}/resourceGroups/rg-orodruin/providers/Microsoft.Storage"
              "/storageAccounts/storodruin/blobServices/default/containers/exercises")
-RIGHTS = [{"actions": list(orodruin.REQUIRED_ACTIONS)}]
+# SEC5 (V-29): reads on the group, writes on an enrolled VM and an experiment.
+RIGHTS = [{"actions": list(orodruin.READ_ACTIONS)}]
+ENROLLED = (f"{BENCH}/providers/Microsoft.Compute/virtualMachines/vm-1",
+            f"{BENCH}/providers/Microsoft.Chaos/experiments/exp-1")
 
 
 def _assignment(scope):
@@ -165,8 +171,9 @@ def _assignment(scope):
 
 
 def _assess(scope, channel_scope):
-    return orodruin.assess_identity([_assignment(BENCH), _assignment(scope)], lambda _: ["*"],
-                                    RIGHTS, BENCH, sees_subscription=True, channel=channel_scope)
+    return orodruin.assess_identity([*map(_assignment, ENROLLED), _assignment(scope)],
+                                    lambda _: ["*"], RIGHTS, BENCH, sees_subscription=True,
+                                    channel=channel_scope)
 
 
 def test_the_channel_container_is_the_one_assignment_allowed_outside_the_bench():

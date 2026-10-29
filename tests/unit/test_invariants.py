@@ -1285,11 +1285,14 @@ class IsolationMachine(RuleBasedStateMachine):
         """The attacker's flows to the VM with none of Glorfindel's denies but the perimeter
         block (keep), or none at all: what the perimeter alone cuts off is the difference —
         an isolation or the VM's own block don't count for it. A rule of ours someone turned
-        into an allow stays: it is theirs now."""
+        into an allow stays: it is theirs now. The subnet's NSG alone, the NICs' own left
+        out: a perimeter an allow passes before, on its NSG, is bypassed — the code's model
+        of precedence, one NSG at a time (a NIC's own NSG that happens to close the port as
+        well is no reason for the card to say the perimeter blocks)."""
         bare = "glorfindel-block-" + ATTACKER.replace(".", "-")
         mine = {bare, f"{bare}-out"} if keep else set()
         world = self._world()
-        world = {**world, "nsgs": {k: {**g, "rules": {
+        world = {**world, "nics": {k: {**n, "nsg": None} for k, n in world["nics"].items()}, "nsgs": {k: {**g, "rules": {
             n: r for n, r in g["rules"].items()
             if not n.startswith("glorfindel-") or n in mine or r["access"].lower() != "deny"}}
             for k, g in world["nsgs"].items()}}

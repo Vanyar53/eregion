@@ -1297,6 +1297,23 @@ régression `test_a_race_whose_two_operations_rewrite_the_escalations_store` rej
 mutant M1395 (le verrou qui ignore son délai) y est attrapé. Le job macOS est borné (25 min) et un
 test qui dure plus de 8 min y écrit la pile de ses fils.
 
+**SEC4b (29/10, #275) : un état illisible, un contournement, des propositions perdues.** La
+machine n'écrit jamais d'état illisible : les lecteurs qui concluaient « personne » d'un fichier
+qu'ils ne lisaient pas (`_held_in_quarantine` pour `verify_release`, `_recorded_original` pour la
+levée et le reset, `_tied_while_away`, la passe de réaffirmation) sont mesurés par
+`tests/unit/test_unreadable_state.py`, sur le faux Azure de la machine : chaque cas échoue sur
+`main` (16 tests, avec ceux de `test_reassert.py`). Le contournement (V-16) y est aussi, de bout en
+bout : notre deny passé derrière une allow d'un tiers, une carte, aucune écriture sur Azure, la
+règle toujours là. Le magasin des règles proposées est mesuré entre vrais processus
+(`measure_proposals`, `test_locks.py`) : sur `main`, 28 propositions perdues sur 60, 5 approbations
+et 1 rejet perdus, 2 lectures d'un fichier à moitié écrit ; aucune après. Mutants M1250–M1259,
+M1390–M1394 : 15/15 attrapés par ces tests. Invariants à 500 séquences, deux graines : verts.
+Au même budget (60 séquences, deux tours, `--jobs 4`), les 95 mutants de `state.py`, `network.py`,
+`release.py`, `verify.py`, `sweep.py` et `reassert.py` : 78/94 attrapés à chaque tour avant, 75/94
+après (M865, M1212 et M1340 suivent le code déplacé : 2/2). Aucun n'est perdu : M10 et M36 survivent
+des deux côtés, les autres écarts sont des tours de moins ou de plus. Remesurés sur six tours, M01,
+M07 et M28 font 6/6 après ; M26, 3/6 avant comme après.
+
 Le plus grave : après une levée qui échoue en partie, une seconde levée lisait les champs de
 rétro-compatibilité de l'état comme un ancien format, et supprimait les deny du NSG de
 quarantaine **partagé**. Toutes les VMs en quarantaine du même groupe étaient rouvertes. La

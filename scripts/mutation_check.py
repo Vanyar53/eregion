@@ -2078,8 +2078,8 @@ MUTANTS += [
      "      AzureActivity\n      | where TimeGenerated > ago(10m)\n      | where OperationNameValue in~ (\n"
      "          \"MICROSOFT.NETWORK"),
     ("M825", "a row on a VM's sub-resource (a role scoped on the VM) dropped, not attributed (AL1)", DRU,
-     "                named, tgt = True, by_rid.get(_vm_id_of(rid))",
-     "                named, tgt = True, by_rid.get(rid.lower())"),
+     "            return True, self.by_rid.get(_vm_id_of(rid))",
+     "            return True, self.by_rid.get(rid.lower())"),
     ("M826", "the newest operation first, before a write on Glorfindel's rules (AL1)", DRU,
      "    return sorted(by_op.values(), key=lambda r: (_grave(r), str(r.get(\"TimeGenerated\") or \"\")),",
      "    return sorted(by_op.values(), key=lambda r: str(r.get(\"TimeGenerated\") or \"\"),"),
@@ -2214,8 +2214,8 @@ MUTANTS += [
     ("M944", "a client rule on an Entra table without telling columns goes to the model: its UPN sent (C2)", DRU,
      "        if plane == \"data\" and _reads_entra_table(rule.query):\n            plane = \"identity\"\n", ""),
     ("M945", "respond on an Entra query of another source goes to the model (C2)", AGT,
-     "        entra_query = _reads_entra_table(query) and not is_control_plane_source(source)",
-     "        entra_query = False"),
+     "    entra_query = _reads_entra_table(query) and not is_control_plane_source(source)",
+     "    entra_query = False"),
     ("M946", "a consent card proposes to disable the resource's principal: the whole tenant cut (C2)", ENT,
      "        client = (tid if op.lower() == \"consent to application\" and row.get(\"TargetId\")\n"
      "                  else str(row.get(\"ClientId\") or \"\").strip())",
@@ -2626,8 +2626,17 @@ MUTANTS += [
      "it half done only at times (1 round in 2, measured); what the whole rewrite adds besides (a "
      "crash inside the write leaves the store as it was) needs a process killed mid-write"),
     ("M1225", "the store's lock is a thread lock only: another process writes meanwhile (SEC3, V-10)", LCK,
-     "                import fcntl\n                fcntl.flock(fh, fcntl.LOCK_EX)\n",
-     "                import fcntl  # noqa: F401\n"),
+     # The store's own block (its message names the file, not a VM): since I3F (#292) the
+     # same flock lines open _vm_lock and _file_lock.
+     "                if timeout is None:\n                    fcntl.flock(fh, fcntl.LOCK_EX)\n"
+     "                else:\n                    deadline = _time.monotonic() + timeout\n"
+     "                    while True:\n                        try:\n"
+     "                            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)\n"
+     "                            break\n                        except BlockingIOError:\n"
+     "                            if _time.monotonic() >= deadline:\n"
+     "                                raise TimeoutError(f\"{path.name} busy (another process is writing)\")\n"
+     "                            _time.sleep(0.2)\n",
+     "                pass\n"),
     ("M1226", "state files readable by all again (SEC3, V-27)", STA,
      "def _atomic_write_text(path: Path, text: str, mode: int = 0o600) -> None:\n",
      "def _atomic_write_text(path: Path, text: str, mode: int = 0o644) -> None:\n"),

@@ -2,8 +2,10 @@ name: Notify
 
 # N1 (#242): the workshop's news in Discord (docs/atelier-discord.md). #ci: a pull request
 # opened or merged, a red run (pull request, main, nightly), main green again after red, a
-# published release (and, on #agents, its draft's line and ping deleted: REL1), a closed
-# issue; a lot's events in its #lots thread too. What is worth
+# closed issue; a lot's events in its #lots thread too. #releases (REL2): the version's pull
+# request (chore/release-X.Y.Z, this repository's own) opened and merged, a published release
+# (and, on #agents, its draft's line and ping deleted: REL1) — in #ci, as before, while
+# #releases' secret is not set. What is worth
 # saying is decided by scripts/notify_discord.py (`github`), from the event's JSON.
 #
 # Never checks out nor runs a pull request's code: pull_request_target and workflow_run run
@@ -50,6 +52,7 @@ jobs:
           sparse-checkout: |
             scripts/notify_discord.py
             .claude/skills/elrond/palantir.py
+            glorfindel/chat_text.py
           sparse-checkout-cone-mode: false
 
       - name: Discord
@@ -58,6 +61,13 @@ jobs:
           # REL1: a published release deletes its draft's line and ping on #agents (the board's
           # webhook: it edits and deletes only its own messages). Given to release events only.
           EREGION_DISCORD_WEBHOOK_AGENTS: ${{ github.event_name == 'release' && secrets.EREGION_DISCORD_WEBHOOK_AGENTS || '' }}
+          # REL2: #releases, a release's story. Given to the events that tell it only: the
+          # release, and the version's pull request — pull_request_target whose head is this
+          # repository's chore/release-… branch; never a fork's pull request, never a run (a red
+          # run on chore/release-* stays in #ci). scripts/notify_discord.py checks it again
+          # (version_pull: the whole semver, the head's repository). glorfindel/chat_text.py
+          # (sparse checkout above) makes its notes and titles inert (SEC6).
+          EREGION_DISCORD_WEBHOOK_RELEASES: ${{ (github.event_name == 'release' || (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.event.pull_request.head.ref, 'chore/release-'))) && secrets.EREGION_DISCORD_WEBHOOK_RELEASES || '' }}
           EREGION_DISCORD_BOT_TOKEN: ${{ secrets.EREGION_DISCORD_BOT_TOKEN }}
           EREGION_DISCORD_LOTS_FORUM: ${{ secrets.EREGION_DISCORD_LOTS_FORUM }}
           GITHUB_TOKEN: ${{ github.token }}

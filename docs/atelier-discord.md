@@ -1,6 +1,6 @@
 # L'atelier dans Discord (N1, N2, N3)
 
-_Lots N1 (#242) et N2 (#243), 27/10 ; N3 (#262), 28/10 : `#agents` devient le tableau de ce qui t'attend. Le déploiement de H0 (H1, #244) s'y ajoutera ensuite. REL1 (#269), 29/10 : une release en brouillon y attend que tu la publies._
+_Lots N1 (#242) et N2 (#243), 27/10 ; N3 (#262), 28/10 : `#agents` devient le tableau de ce qui t'attend. Le déploiement de H0 (H1, #244) s'y ajoutera ensuite. REL1 (#269), 29/10 : une release en brouillon y attend que tu la publies. REL2 (#309), 29/10 : `#releases`, l'histoire d'une release au même endroit._
 
 Ce que fait l'atelier (la CI, les PR, les lots d'elrond) arrive dans Discord, à part de la défense : le bot de Glorfindel, ses cartes et son channel ne changent pas.
 
@@ -8,9 +8,10 @@ Ce que fait l'atelier (la CI, les PR, les lots d'elrond) arrive dans Discord, à
 
 | Où | Quoi | Notifie ? |
 |---|---|---|
-| `#ci` | PR ouverte, PR fusionnée, issue fermée | non (silencieux) |
-| `#ci` | run rouge : PR, main, runs de nuit (invariants, mutants, canary) ; release publiée | oui |
+| `#ci` | PR ouverte, PR fusionnée (sauf la PR de version), issue fermée | non (silencieux) |
+| `#ci` | run rouge : PR, main, runs de nuit (invariants, mutants, canary) | oui |
 | `#ci` | main de nouveau verte après un rouge | non |
+| `#releases` | **l'histoire d'une release**, une carte par étape, jamais effacée (REL2) : 📬 la PR de version ouverte, 🔀 fusionnée (`chore/release-X.Y.Z`, du dépôt) ; 📦 le brouillon prêt, le résumé de ses notes ; 🏷️ la release publiée, et le renvoi vers `#deploy`. Chaque carte a un bouton-lien | non |
 | `#lots` (forum) | un fil par lot ouvert, et seulement un lot (N2) : lancé, rendu, relecture, correction, PR, fusion, issue fermée (N1) ; le rapport de chaque exécutant et de chaque relecteur, un aperçu et le fichier `.md` entier (N3) ; étiquettes jalon et état tenues à jour | non |
 | `#agents` | **le tableau**, un message réécrit sur place (N3) : 🙋 ce qui t'attend, 🔄 les agents d'elrond en cours (relances comprises), ✅ ce qui est rendu depuis peu, 🏁 le dernier run ; chaque ligne avec ses liens (fil du lot, PR, issue, rapport) | non |
 | `#agents` | **un ping par chose qui t'attend**, avec ta mention et ses liens, **effacé une fois réglé** : lot bloqué, relecture non obtenue, la session elrond qui attend ta permission ou ta réponse, une PR à fusionner toi-même, une release en brouillon à publier (REL1), la fin du run | oui |
@@ -37,6 +38,16 @@ Ce qui ne mérite rien n'envoie rien : un run vert sur une PR, un run annulé, u
   - **Le relais local.** Le tableau local demande aussi à GitHub si la release est publiée : au plus toutes les 5 min, à chaque événement, et par le veilleur des PR (deux jours au plus). GitHub ne connaît une release par son tag qu'une fois publiée. Sans le secret dans GitHub, c'est ce relais qui efface, au rafraîchissement suivant. Quand le ping d'un brouillon a disparu de Discord (`notify.yml` l'a effacé), GitHub est demandé tout de suite, sans attendre les 5 min (le ping est cherché au plus une fois par minute) : la ligne retirée par `notify.yml` ne revient pas.
   - **À la main** : `agents_discord.py clear vX.Y.Z`, pour un brouillon supprimé sans être publié. Un nouveau brouillon du même tag remplace l'ancien : son lien, et un nouveau ping (l'ancien est effacé).
   - **Sans configuration** : rien n'est envoyé, et la commande réussit.
+- **`#releases`** (REL2, `EREGION_DISCORD_WEBHOOK_RELEASES`) : du brouillon jusqu'à H0, sans ping, rien n'y est effacé. `#ci` garde les autres PR, les runs rouges et les issues fermées.
+  - **La PR de version.** `notify.yml` la reconnaît à sa branche de tête, `chore/release-` suivi d'un semver (`chore/release-0.4.5`, jamais `chore/release-notes` ni `chore/release-0.4.5-bis`), **et** à son dépôt : la tête est ce dépôt-ci. La même branche venue d'un fork reste une PR de `#ci` (SEC6 : un fork nomme sa branche comme il veut). Ouverte, puis fusionnée (« ensuite : make release-draft ») ; fermée sans fusion, rien.
+  - **Le brouillon prêt.** `make release-draft` poste « 📦 vX.Y.Z en brouillon — titre » : les titres de section des notes, leurs trois premières entrées, coupées, « Cherche vX.Y.Z en tête des releases du dépôt », et un bouton vers ces releases (le brouillon n'est visible que des membres du dépôt). Pas de ping : celui de `#agents` (REL1) ne change pas. **Le lien est la liste, jamais l'URL du brouillon** : GitHub donne au brouillon une nouvelle URL (`…/releases/tag/untagged-<hash>`) à chaque édition, et `make release-draft` l'édite juste après l'avoir annoncé (les ids de `#agents`, dans ses notes) ; tu peux l'éditer toi aussi avant de publier. Relire l'URL après la dernière édition ne suffirait donc pas. La liste, elle, ne bouge pas. Le lien du tableau et du ping de `#agents` est le même.
+  - **La publication.** Sur `release: published`, « 🏷️ vX.Y.Z publiée », un bouton vers la page de la release, et « le CD de H0 la déploie : voir #deploy ». Elle ne va plus dans `#ci`. L'effacement de la ligne et du ping de `#agents` (REL1) reste.
+  - **Le déploiement** reste dans `#deploy` (décision de Jonathan, 29/10) : le webhook de `#deploy` est le seul secret de l'atelier sur H0. La carte de publication y renvoie.
+  - **Le texte du dehors est inerte** (SEC6) : les notes, le nom d'une release, le titre d'une PR, qu'un membre du dépôt écrit, passent par `glorfindel/chat_text.py` (`discord_text`, l'échappement du bot de Glorfindel) : aucun Markdown, aucun lien masqué, aucune mention ; `allowed_mentions` vide. `notify.yml` l'apporte dans son checkout partiel ; le script le lit depuis son fichier, jamais par le paquet `glorfindel`. Sans lui, un filtre strict ne garde que les lettres, les chiffres et la ponctuation simple. Un lien qui n'est pas `https://` ne donne ni bouton ni lien de carte.
+  - **Le bouton.** Un webhook créé dans les paramètres du salon n'envoie un bouton-lien qu'avec `with_components=true` (documentation de Discord, non mesuré). Une carte refusée avec son bouton (400) repart sans lui : son titre mène au même endroit.
+  - **Le secret** n'est donné à l'étape que pour un événement `release`, ou pour la seule PR de version du dépôt : un `pull_request_target` dont la tête est ce dépôt-ci (`head.repo.full_name == github.repository`) et sa branche `chore/release-…` (l'expression de `notify.yml`). Jamais pour la PR d'un fork, jamais pour un run ni une issue. Le script revérifie (`version_pull` : le semver entier, le dépôt de la tête) : deux barrières, l'une dans le YAML, l'autre en Python.
+  - **Un run rouge sur `chore/release-*` reste dans `#ci`**, avec son ping, comme tout run rouge d'une PR (décision de l'orchestre, 29/10, que Jonathan peut changer) : le secret n'est pas donné à `workflow_run`. Un run rouge est une alerte de CI ; `#releases` raconte les étapes de la release.
+  - **Sans ce webhook, rien ne change** : la PR de version et la publication restent dans `#ci`, comme avant ; le brouillon n'a pas de carte. Une erreur de Discord donne une ligne (`atelier: not sent — webhook #releases: HTTP 500`), et la commande ou le job réussit.
 - **La feuille de route** : `.github/workflows/roadmap.yml` lance `scripts/roadmap_discord.py` à chaque push sur main, chaque jour, et quand une issue ou une PR vers main s'ouvre ou se ferme. Un run à la fois, chaque workflow dans son groupe (`roadmap-discord`, `notify-discord`) : GitHub ne garde qu'un run en attente par groupe, et un plus récent l'annule — sans conséquence pour la feuille de route, qui réécrit tout à chaque passage ; pour `notify.yml`, trois événements simultanés perdent celui du milieu (limite connue). La feuille de route ne crée de fils qu'au push, au passage quotidien ou à la main ; sur un événement d'issue ou de PR, c'est N1 qui crée le fil du lot.
 - **elrond lui-même**, pour ce que lui seul sait (`.claude/skills/elrond/SKILL.md`) : `agents_discord.py lot <ID> blocked --note …`, `agents_discord.py lot <ID> merge --pr <n>` (une PR que tu fusionnes toi-même : le classifieur refuse `gh pr merge` ; le ping s'efface quand GitHub la dit fusionnée ou fermée : demandé au plus toutes les 5 min à chaque événement, et par un veilleur détaché, toutes les 5 min tant qu'une PR attend, deux jours au plus — la fusion vient souvent après le run, quand plus rien ne se passe), `agents_discord.py run-end "<bilan>"`. À la main : `agents_discord.py clear <ID>|all` (ce qui attend sur un lot, réglé), `agents_discord.py board` (le tableau réécrit, les PR revérifiées).
 
@@ -52,7 +63,7 @@ Ce qui ne mérite rien n'envoie rien : un run vert sur une PR, un run annulé, u
 
 **1. Discord, dans l'UI.**
 - Une catégorie (chez Jonathan : **Eregion**, qui tient aussi le salon de la défense, `#glorfindel`), avec :
-  - `#ci`, `#agents`, `#roadmap`, `#deploy` (salons textuels) ;
+  - `#ci`, `#agents`, `#roadmap`, `#deploy`, `#releases` (salons textuels ; `#releases` : REL2) ;
   - `#lots` (salon **forum**).
 - Dans `#lots` → Paramètres → Étiquettes, ces dix étiquettes, écrites ainsi :
   - les jalons : `v0.3`, `v0.x`, `v1.0`, `v1.x` ;
@@ -81,6 +92,7 @@ gh secret set EREGION_DISCORD_BOT_TOKEN           # le jeton du bot Eregion
 gh secret set EREGION_DISCORD_LOTS_FORUM          # l'id du forum #lots
 gh secret set EREGION_DISCORD_ROADMAP_CHANNEL     # l'id du salon #roadmap (N2)
 gh secret set EREGION_DISCORD_WEBHOOK_AGENTS      # l'URL du webhook de #agents : une release publiée efface la ligne de son brouillon (REL1)
+gh secret set EREGION_DISCORD_WEBHOOK_RELEASES    # l'URL du webhook de #releases : la PR de version, la publication (REL2)
 ```
 
 `#roadmap` n'a pas de webhook : c'est le bot qui poste son message, puis le réécrit. Après le premier run, épingle-le ; le script le retrouve parmi les messages épinglés, puis parmi les 50 derniers, et seulement s'il est de lui.
@@ -93,7 +105,10 @@ EREGION_DISCORD_BOT_TOKEN=…
 EREGION_DISCORD_LOTS_FORUM=…
 EREGION_DISCORD_MENTION=<ton id d'utilisateur>
 EREGION_DISCORD_WEBHOOK_DEPLOY=https://discord.com/api/webhooks/…   # #deploy (H1)
+EREGION_DISCORD_WEBHOOK_RELEASES=https://discord.com/api/webhooks/…   # #releases : la carte du brouillon (REL2)
 ```
+
+`#releases` (REL2) reçoit de deux endroits : de GitHub (le secret, pour la PR de version et la publication) et de ton poste (cette ligne, pour `make release-draft`). Sans la ligne, le brouillon n'a pas sa carte ; sans le secret, la PR de version et la publication restent dans `#ci`. Ce webhook ne va jamais sur H0.
 
 Le webhook de `#deploy` est le seul secret de l'atelier qui va sur H0. `make glorfindel-host-cd-install` le copie dans `~/.eregion-cd/discord.env` (600), avec la mention et rien d'autre : le CD de H0 poste avec (H1, `infra/glorfindel-host/README.md`, « Le CD de H0 »).
 
@@ -106,13 +121,15 @@ Après la réinstallation, le message « En cours » épinglé de N1 devient le 
 **Reste à mesurer** (après la fusion) :
 - `notify.yml` ne tourne que depuis main (`workflow_run`, `pull_request_target`). Un événement `release` prend le workflow du commit du tag : une release dont le tag précède ce fichier, v0.4.0 comprise, n'est pas annoncée.
 - Les hooks sur un vrai run d'elrond (N3) : `PreToolUse` sur `SubagentHandback` dans un sous-agent (ses champs `agent_id`, `agent_type`, `transcript_path`), `background_tasks` de `SubagentStop`, `Notification` `permission_prompt` dans VS Code. Ils viennent de la documentation de Claude Code ; le classifieur d'auto mode a refusé, le 28/10, d'installer un hook de mesure. Mesurés dans les transcripts du 28/10 : le `to` de `SendMessage` (l'id de l'agent) et les `questions` d'`AskUserQuestion`. Pour vérifier après un run : `~/.local/state/eregion/discord.trace`, une ligne par événement reçu, les noms de ses champs seulement (jamais leurs valeurs), et `meta=1` quand l'agent a été retrouvé depuis ses champs (`SubagentHandback`, `SubagentStop`), `known=1` quand le `to` d'un `SendMessage` est un agent d'elrond connu.
-- La release en brouillon (REL1), sur la 0.4.4 : `gh release edit vX.Y.Z --notes-file` sur un brouillon (gh le retrouve par son tag), le commentaire HTML gardé tel quel dans le `body` de l'événement `release: published`, `GET` d'un message par son webhook, et `releases/tags/vX.Y.Z` en 404 tant que c'est un brouillon. Tout vient de la documentation de GitHub et de Discord, rien n'est mesuré.
+- La release en brouillon (REL1), sur la 0.4.4 : le commentaire HTML gardé tel quel dans le `body` de l'événement `release: published`, `GET` d'un message par son webhook, et `releases/tags/vX.Y.Z` en 404 tant que c'est un brouillon. Cela vient de la documentation de GitHub et de Discord, sans mesure.
+- **Mesuré sur la 0.4.4 (29/10)** : `gh release edit vX.Y.Z --notes-file` retrouve bien un brouillon par son tag, mais **GitHub change l'URL du brouillon à chaque édition**. `make release-draft` l'avait créé à `…/releases/tag/untagged-2f67a5022338c9619b4d` et avait posté ce lien dans `#agents` ; l'édition qui écrit les ids du ping l'a fait passer à `…/untagged-2c21dc7acd54ed0e3386`. Il n'y avait bien qu'un seul brouillon, mais le lien de `#agents` ne menait plus nulle part. Depuis REL2, le lien posté (`#agents`, `#releases`) est la liste des releases du dépôt, où le brouillon est en tête (plus haut, « `#releases` »). Le faux `gh` des tests change l'URL à chaque édition.
+- `#releases` (REL2), à la release qui suit : le bouton-lien d'un webhook créé dans le salon (`with_components=true`, documentation de Discord), la PR de version vue par `pull_request_target` (et l'expression du secret évaluée par GitHub), la carte de publication. Et l'ordre de la page des releases avec un ancien brouillon resté : le nouveau est-il bien en tête ? La carte nomme le tag (« Cherche vX.Y.Z »), pour le trouver quand même.
 
 **Mesuré le 27/10** : le bot n'a jamais besoin de se connecter au gateway. Sans connexion, il a créé un fil de forum et posé ses étiquettes en REST seul (essai de mise en place : `lot ESSAI blocked`, puis `run-end`).
 
 ## Les règles du script
 
-`scripts/notify_discord.py` (GitHub vers `#ci` et `#lots`) et `scripts/agents_discord.py` (elrond vers `#agents` et `#lots`, N3), sans dépendance hors de la bibliothèque standard :
+`scripts/notify_discord.py` (GitHub vers `#ci`, `#releases` et `#lots`) et `scripts/agents_discord.py` (elrond vers `#agents` et `#lots`, N3), sans dépendance hors de la bibliothèque standard :
 - **Sans configuration, rien n'est envoyé**, et le code de sortie est 0. Ce qui n'est pas configuré n'est pas envoyé : sans bot, pas de fils ; sans `EREGION_DISCORD_WEBHOOK_AGENTS`, pas de `#agents`.
 - **Une erreur de Discord ne fait jamais échouer l'appelant** : le job reste vert, l'agent continue. Elle donne une ligne sur stderr, `atelier: not sent — webhook #ci: HTTP 500`, sans URL ni jeton. Après un 429 qui demande 5 s ou moins, le script fait un second essai. Toute erreur de la bibliothèque HTTP est réduite à son nom (`InvalidURL` citerait l'URL, jeton compris), et les valeurs de l'environnement sont débarrassées de leurs espaces et sauts de ligne.
 - **Aucune mention venue d'un texte.** `allowed_mentions` est vide sur chaque message : un titre de PR « @everyone » reste du texte. Seuls les pings de `#agents` mentionnent `EREGION_DISCORD_MENTION`.
@@ -120,4 +137,4 @@ Après la réinstallation, le message « En cours » épinglé de N1 devient le 
 
 `scripts/roadmap_discord.py` (N2) suit les mêmes règles : sans bot ni salon, rien ; une erreur de Discord ou de GitHub donne une ligne, jamais un job rouge. Il attend jusqu'à 30 s un 429 (un passage crée plusieurs fils). Un `ROADMAP.md` dont la forme a changé perd sa section (critères, indicateurs), et le message le dit ; le message reste sous les limites de Discord (tronqué au-delà, et dit). Si la recherche de son message échoue (épinglés et derniers messages illisibles), il ne poste rien, plutôt qu'un second message figé. Il lit les issues sur toutes leurs pages. Un passage refait ce qui manque : il est idempotent. `--dry-run` sans forum configuré le dit (« non configuré »).
 
-Tests : `tests/unit/test_notify_discord.py`, `tests/unit/test_agents_discord.py`, `tests/unit/test_release.py` (REL1 : la ligne d'un brouillon posée, puis effacée à la publication) (N3 : la séquence d'I8S du 28/10 rejouée — pause, `blocking`, correction et seconde relecture par `SendMessage`, `ok`) et `tests/unit/test_roadmap_discord.py`, contre un faux Discord et un faux GitHub (`tests/unit/fake_discord.py`, un serveur HTTP sur la boucle locale : rien ne sort de la machine). Mutants M970–M979, M980–M989, M990–M999, M1060–M1076, M1160–M1169, M1430–M1439 et M1470 (`scripts/mutation_check.py --only M970,…`).
+Tests : `tests/unit/test_notify_discord.py`, `tests/unit/test_agents_discord.py`, `tests/unit/test_release.py` (REL1 : la ligne d'un brouillon posée, puis effacée à la publication ; REL2 : l'histoire d'une release dans `#releases`, l'URL du brouillon qui change à chaque édition) (N3 : la séquence d'I8S du 28/10 rejouée — pause, `blocking`, correction et seconde relecture par `SendMessage`, `ok`) et `tests/unit/test_roadmap_discord.py`, contre un faux Discord et un faux GitHub (`tests/unit/fake_discord.py`, un serveur HTTP sur la boucle locale : rien ne sort de la machine). Mutants M970–M979, M980–M989, M990–M999, M1060–M1076, M1160–M1169, M1430–M1439, M1470, M1540–M1549 et M1580–M1584 (`scripts/mutation_check.py --only M970,…`).

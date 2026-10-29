@@ -15,8 +15,9 @@ an empty [Unreleased], a branch or a tag vX.Y.Z that exists.
 origin/main (which must hold the version: its pyproject.toml and its CHANGELOG's [X.Y.Z]), with
 the notes given or else the CHANGELOG's section. Refused: a tag or a release vX.Y.Z that exists.
 The draft is put on #agents' board, pinged (scripts/agents_discord.py), its line and its ping
-deleted when the release is published (notify.yml). Without Discord's configuration, nothing is
-sent and the command succeeds.
+deleted when the release is published (notify.yml); and its card goes to #releases, with a
+button to it and its notes in short, never pinged nor deleted (REL2, notify_discord.release_ready).
+Without Discord's configuration, nothing is sent and the command succeeds.
 
 **No path publishes.** Publishing deploys H0 (its CD, H1): Jonathan alone publishes, on GitHub.
 Nothing here ever turns a draft into a release (tests/unit/test_release.py reads this file).
@@ -271,17 +272,35 @@ def _releases(root: Path) -> list[str]:
         raise Refused("gh release list : réponse illisible") from None
 
 
-def _discord(tag: str, url: str) -> dict:
-    """The draft on #agents' board, pinged; {} without configuration or when Discord fails."""
+def releases_page(url: str) -> str:
+    """The repository's list of releases, from the draft's URL gh printed: the link Discord gets.
+    A draft's own URL (…/releases/tag/untagged-<hash>) changes at each edit — measured on the
+    0.4.4, 29/10: the `gh release edit` below, which writes #agents' ids in the notes, moved it,
+    and any edit Jonathan makes on GitHub before publishing would too. The list stays, and
+    shows the draft first to the repository's members."""
+    m = re.match(r"(https://[^/\s]+/[^/\s]+/[^/\s]+/releases)/", url or "")
+    return m.group(1) if m else ""
+
+
+def _discord(tag: str, url: str, heading: str = "", text: str = "") -> dict:
+    """The draft on #agents' board, pinged; {} without configuration or when Discord fails. Then
+    its card on #releases (REL2), apart: one failing never keeps the other from being sent."""
     here = str(Path(__file__).resolve().parent)
     if here not in sys.path:
         sys.path.insert(0, here)
+    ids: dict = {}
     try:
         import agents_discord
-        return agents_discord.release_draft(tag, url)
+        ids = agents_discord.release_draft(tag, url)
     except Exception as x:   # Discord never fails the command: the draft exists
         print(f"atelier: not sent — #agents: {type(x).__name__}", file=sys.stderr)
-        return {}
+    try:
+        import notify_discord
+        if notify_discord.release_ready(tag, heading, url, text):
+            say("Sur #releases : sa carte, avec un bouton vers le brouillon.")
+    except Exception as x:
+        print(f"atelier: not sent — #releases: {type(x).__name__}", file=sys.stderr)
+    return ids
 
 
 def draft(root: Path, version: str, notes_file: str = "", *, dry_run: bool = False) -> int:
@@ -327,7 +346,8 @@ def draft(root: Path, version: str, notes_file: str = "", *, dry_run: bool = Fal
         say("\n".join(text.splitlines()[:12]) + ("\n…" if len(text.splitlines()) > 12 else ""))
         say("\nÀ blanc (DRY_RUN=1) — rien n'est créé, rien n'est envoyé. Lancerait :")
         say(f"  {show(['gh', 'release', 'create', tag, '--draft', '--target', sha, '--title', title, '--notes-file', '<notes>'])}")
-        say("  puis la ligne du brouillon sur #agents, et son ping (si Discord est configuré)")
+        say("  puis la ligne du brouillon sur #agents, et son ping, et sa carte sur #releases "
+            "(si Discord est configuré)")
         return 0
 
     with tempfile.TemporaryDirectory(prefix="eregion-release-") as tmp:
@@ -335,9 +355,9 @@ def draft(root: Path, version: str, notes_file: str = "", *, dry_run: bool = Fal
         notes.write_text(text + "\n", encoding="utf-8")
         url = run(["gh", "release", "create", tag, "--draft", "--target", sha, "--title", title,
                    "--notes-file", str(notes)], root).stdout.strip().splitlines()[-1:] or [""]
-        url = url[0] if url[0].startswith("https://") else ""
-        say(f"Brouillon créé : {url or '(lien non lu)'} — Jonathan le publie (publier déploie H0).")
-        ids = _discord(tag, url)
+        url = releases_page(url[0])
+        say(f"Brouillon créé, en tête de {url or '(lien non lu)'} — Jonathan le publie (publier déploie H0).")
+        ids = _discord(tag, url, heading, text)
         if ids.get("ping") or ids.get("board"):
             # Where notify.yml finds #agents' messages when the release is published: it has no
             # local state (docs/atelier-discord.md). An HTML comment: unseen in the release's page.

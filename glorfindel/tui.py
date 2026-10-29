@@ -79,8 +79,52 @@ def _start_key_reader() -> bool:
 
 # ── Action execution ───────────────────────────────────────────────────────────
 
+# The cards whose VM is an anchor the detection may not concern (AL1, C2) — the same set as the
+# bot's (glorfindel/bot.py, which imports discord) and the console's; a test keeps the three
+# equal. Never a command aimed at that VM from here: ack only (SEC5, V-35).
+_ANCHORED_TYPES = {"control_plane_change", "identity_change", "unattributed_signal"}
+
+
+def _anchored(esc: dict) -> bool:
+    return esc.get("escalation_type") in _ANCHORED_TYPES
+
+
+def _can_restore(esc: dict) -> bool:
+    """Restore only on a restore card the console and the bot would offer it on: never on an
+    anchored one (SEC5, V-35), never on a held snapshot (fourth review, Q16)."""
+    return esc.get("action") == "restore_from_backup" and not _anchored(esc)
+
+
+def _can_undo(esc: dict) -> bool:
+    """Release, unblock, reset: on a failed verification of the card's own VM only."""
+    return esc.get("escalation_type") == "verification_failed" and not _anchored(esc)
+
+
+def _commands(key: str, esc: dict, before: str = "") -> list[list[str]]:
+    """What a confirmed key runs, as glorfindel CLI arguments — [] when the card allows none.
+    « unblock » removes the VM's IP blocks one by one (``glorfindel unblock <ip> <vm>``), never
+    its isolation: it is not « reset » (SEC5, V-35). « restore » runs only with the moment the
+    operator gave (`before`, SEC4c): without it, nothing."""
+    rid = esc["resource_id"]
+    if key == "r":
+        from glorfindel import restore_plan
+        return [restore_plan.restore_args(rid, before)] if _can_restore(esc) and before else []
+    if not _can_undo(esc):
+        return []
+    if key == "x":
+        return [["release", rid, "--yes"]]
+    if key == "v":
+        return [["reset", rid, "--yes"]]
+    if key == "u":
+        from glorfindel.actions import active_blocks
+        ips = sorted({b["ip"] for b in active_blocks()
+                      if (b.get("resource_id") or "").lower() == rid.lower() and b.get("ip")})
+        return [["unblock", ip, rid, "--yes"] for ip in ips]
+    return []
+
+
 def _execute(pending: dict) -> None:
-    """Execute a confirmed action. Restore/revert run in a background thread."""
+    """Execute a confirmed action. Restore/release/unblock/reset run in a background thread."""
     from glorfindel import escalations as esc_module
 
     key = pending["key"]
@@ -90,15 +134,118 @@ def _execute(pending: dict) -> None:
         esc_module.resolve(esc["id"])
         return
 
-    cmd_arg = {"r": "restore", "x": "release", "u": "revert", "v": "revert"}.get(key, "revert")
-    rid = esc["resource_id"]
+    commands = _commands(key, esc)
+    if not commands:
+        return
 
-    threading.Thread(
-        target=lambda: subprocess.run(
-            [_bin(), cmd_arg, rid, "--yes"], capture_output=True
-        ),
-        daemon=True,
-    ).start()
+    def _run() -> None:
+        for args in commands:
+            subprocess.run([_bin(), *args], capture_output=True)
+
+    threading.Thread(target=_run, daemon=True).start()
+
+
+# ── Restore: the moment is asked (SEC4c) ───────────────────────────────────────
+# The field is filled with the moment the runs/ channel gives for the VM (an exercise), else
+# the card's first detection; Enter shows the recovery points before it (read only); y runs
+# `glorfindel restore --before`. What the command says — a refusal too — stays on screen.
+
+_last_restore: dict = {}
+
+
+def _restore_pending(esc: dict) -> dict:
+    from glorfindel import restore_plan
+    plan = restore_plan.proposed_moment(esc["resource_id"], esc)
+    return {"key": "r", "esc": esc, "stage": "moment", "buffer": plan.get("before", ""),
+            "why": plan.get("why", ""), "error": "",
+            "label": f"restore {esc['resource_id'].split('/')[-1]} from backup (~20 min)"}
+
+
+def _load_points(pending: dict) -> None:
+    from glorfindel import restore_plan
+    try:
+        pending["points"] = restore_plan.points_before(pending["esc"]["resource_id"], pending["before"])
+    except Exception as exc:  # unreadable vault: said, the restore stays possible
+        pending["points_error"] = f"{type(exc).__name__}: {str(exc)[:200]}"
+        pending["points"] = []
+
+
+def _restore_key(pending: dict, key: str) -> dict | None:
+    """One key on the restore's screen: the pending state after it, None when cancelled."""
+    if key == "\x1b":
+        return None
+    if pending["stage"] == "moment":
+        if key in ("\r", "\n"):
+            from glorfindel import restore_plan
+            try:
+                pending["before"] = restore_plan.parse_moment(pending["buffer"])
+            except ValueError as exc:
+                pending["error"] = str(exc)
+                return pending
+            pending.update(stage="points", error="", points=None, points_error="",
+                           warning=restore_plan.moment_warning(pending["esc"]["resource_id"], pending["before"]))
+            threading.Thread(target=_load_points, args=(pending,), daemon=True).start()
+        elif key in ("\x7f", "\b"):
+            pending["buffer"] = pending["buffer"][:-1]
+        elif key.isprintable() and len(pending["buffer"]) < 40:
+            pending["buffer"] += key
+        return pending
+    if key in ("y", "Y"):
+        _start_restore(pending["esc"], pending["before"])
+        return None
+    if key in ("n", "N", "q", "Q"):
+        return None
+    return pending
+
+
+def _start_restore(esc: dict, before: str) -> None:
+    from glorfindel import restore_plan
+    vm = esc["resource_id"].split("/")[-1]
+    _last_restore.clear()
+    _last_restore.update(vm=vm, text=f"restore {vm} before {before}: running…", ok=None)
+
+    def run():
+        try:
+            cmds = _commands("r", esc, before)
+            if not cmds:
+                raise ValueError("cette carte n'offre pas de restore")
+            proc = subprocess.run([_bin(), *cmds[0]], capture_output=True, text=True, timeout=1800)
+            ok = proc.returncode == 0
+            said = restore_plan.failure_text(proc.returncode, (proc.stdout or "") + (proc.stderr or ""))
+        except Exception as exc:
+            ok, said = False, f"{type(exc).__name__}: {exc}"
+        _last_restore.update(ok=ok, text=(f"✓ restore {vm} started: {said}" if ok
+                                          else f"✗ restore {vm} refused or failed: {said}"))
+    threading.Thread(target=run, daemon=True).start()
+
+
+def _restore_panel(pending: dict) -> Panel:
+    lines = Text(overflow="fold")
+    lines.append(f"\n  ⚡ {pending['label']}\n\n", style="bold yellow")
+    if pending["stage"] == "moment":
+        lines.append("  Restore to the newest point from before: ", style="white")
+        lines.append(pending["buffer"] + "▌\n", style="bold cyan")
+        lines.append(f"  {pending['why']}\n", style="dim")
+        if pending["error"]:
+            lines.append(f"  ✗ {pending['error']}\n", style="red")
+        lines.append("\n  [Enter] points before it   [Esc] cancel\n", style="cyan")
+    else:
+        lines.append(f"  Before {pending['before']}\n", style="bold cyan")
+        if pending.get("warning"):
+            lines.append(f"  ⚠ {pending['warning']}\n", style="yellow")
+        points = pending.get("points")
+        if points is None:
+            lines.append("  reading the recovery points…\n", style="dim")
+        elif pending.get("points_error"):
+            lines.append(f"  recovery points unreadable: {pending['points_error']}\n", style="yellow")
+        elif not points:
+            lines.append("  no recovery point before it: the restore would be refused\n", style="red")
+        for i, p in enumerate((points or [])[:6]):
+            lines.append(f"  {p.get('time')}{' · vault tier' if p.get('vault_tier') else ''}"
+                         f"{' · taken during the incident' if p.get('during_incident') else ''}"
+                         f"{'  ← restored' if i == 0 else ''}\n", style="green" if i == 0 else "dim")
+        lines.append("\n  Confirm?   [y] Yes   [n] Cancel\n", style="cyan")
+    return Panel(lines, title="[bold white on red] RESTORE [/bold white on red]", border_style="red")
 
 
 # ── Renderables ────────────────────────────────────────────────────────────────
@@ -154,12 +301,15 @@ def _escalations_renderable(
     from glorfindel import escalations as esc_module
 
     items = esc_module.pending()
+    if pending and pending.get("stage"):
+        return _restore_panel(pending)
     if not items:
-        return Panel(
-            Text.from_markup("[green]✓ No pending escalations[/green]"),
-            title="[bold]ESCALATIONS[/bold]",
-            border_style="green",
-        )
+        last = Text(overflow="fold")
+        if _last_restore:                    # what the restore said stays on screen (SEC4c)
+            last.append(f"  {_last_restore.get('text', '')}\n\n",
+                        style="green" if _last_restore.get("ok") else "red" if _last_restore.get("ok") is False else "dim")
+        last.append("✓ No pending escalations", style="green")
+        return Panel(last, title="[bold]ESCALATIONS[/bold]", border_style="green")
 
     lines = Text(overflow="fold")
 
@@ -171,6 +321,10 @@ def _escalations_renderable(
             title="[bold white on red] CONFIRM ACTION [/bold white on red]",
             border_style="red",
         )
+
+    if _last_restore:
+        lines.append(f"  {_last_restore.get('text', '')}\n\n",
+                     style="green" if _last_restore.get("ok") else ("red" if _last_restore.get("ok") is False else "dim"))
 
     for e in items[:4]:
         age = _age(e["timestamp"], now)
@@ -186,9 +340,13 @@ def _escalations_renderable(
         for step in (e.get("suggested_steps") or [])[:2]:
             lines.append(f"    • {step[:72]}\n", style="dim")
 
-        if action == "restore_from_backup":
+        if esc_type in _ANCHORED_TYPES:   # its VM is an anchor: ack only (SEC5, V-35)
+            lines.append(f"    → glorfindel ack {esc_id}\n", style="dim cyan")
+        elif action == "restore_from_backup":
             lines.append(
-                f"    → glorfindel restore {vm_short} --yes\n", style="dim cyan"
+                f"    → glorfindel restore {vm_short} --yes --before "
+                f"{e.get('first_seen') or e.get('timestamp') or '<ISO8601>'}  # before the attack began\n",
+                style="dim cyan"
             )
         elif esc_type == "verification_failed":
             lines.append(
@@ -205,10 +363,9 @@ def _escalations_renderable(
     if interactive:
         first = items[0]
         hints = ["[a] ack"]
-        if (first["action"] == "restore_from_backup"
-                or first.get("escalation_type") == "low_confidence"):
+        if _can_restore(first):      # the keys offered are the keys that act (SEC5, V-35)
             hints.append("[r] restore")
-        if first.get("escalation_type") == "verification_failed":
+        if _can_undo(first):
             hints.append("[x] release   [u] unblock   [v] reset")
         lines.append("\n  " + "   ".join(hints) + "\n", style="dim cyan")
 
@@ -398,6 +555,9 @@ def run() -> None:
 
                 while not _key_q.empty():
                     key = _key_q.get_nowait()
+                    if pending and pending.get("stage"):     # the restore asks its moment (SEC4c)
+                        pending = _restore_key(pending, key)
+                        continue
                     if pending:
                         if key in ("y", "Y"):
                             _execute(pending)
@@ -419,18 +579,13 @@ def run() -> None:
                             }
                         elif key == "r" and escs:
                             e = escs[0]
-                            # Only a restore card: a held snapshot never ran (fourth review, Q16).
-                            is_restore = e["action"] == "restore_from_backup"
-                            if is_restore:
-                                vm = e["resource_id"].split("/")[-1]
-                                pending = {
-                                    "key": "r",
-                                    "esc": e,
-                                    "label": f"restore {vm} from backup (~20 min)",
-                                }
+                            # Only a restore card: a held snapshot never ran (fourth review, Q16),
+                            # and never an anchored one (SEC5, V-35). It asks its moment (SEC4c).
+                            if _can_restore(e):
+                                pending = _restore_pending(e)
                         elif key == "x" and escs:
                             e = escs[0]
-                            if e.get("escalation_type") == "verification_failed":
+                            if _can_undo(e):
                                 vm = e["resource_id"].split("/")[-1]
                                 pending = {
                                     "key": "x",
@@ -439,7 +594,7 @@ def run() -> None:
                                 }
                         elif key == "u" and escs:
                             e = escs[0]
-                            if e.get("escalation_type") == "verification_failed":
+                            if _can_undo(e):
                                 vm = e["resource_id"].split("/")[-1]
                                 pending = {
                                     "key": "u",
@@ -448,7 +603,7 @@ def run() -> None:
                                 }
                         elif key == "v" and escs:
                             e = escs[0]
-                            if e.get("escalation_type") == "verification_failed":
+                            if _can_undo(e):
                                 vm = e["resource_id"].split("/")[-1]
                                 pending = {
                                     "key": "v",

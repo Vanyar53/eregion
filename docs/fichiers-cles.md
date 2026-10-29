@@ -237,9 +237,14 @@ scripts/component_check.py → D1 : chaque composant tourne seul — Glorfindel,
                         passerelles permises (BRIDGES, CROSSINGS) avec leur raison. CI : components.yml ; tests :
                         tests/unit/test_components.py. Les profils d'usage : docs/profils/, tests/unit/test_profiles.py.
 
+scripts/image_check.py → CI1 : les images de Glorfindel et des injecteurs éprouvées après leur construction — --version,
+                        imports (ceux du préflight du CD), config d'exemple sous A3, pas root, rien de Glorfindel chez
+                        les injecteurs ; chaque vérification en docker run --network none. CI : images.yml ; local :
+                        make images-check ; tests : tests/unit/test_image_check.py.
+
 annatar/
   runner/engine.py    → inscription (`eregion_core.inscription.check_target` : périmètre du banc + tags `eregion-target`/`eregion-zone`
-                        sur le groupe ET la VM + zone ; `scenario_destructive()` = champ du scénario puis catalogue ; `annatar clean` gardé aussi, destructif) → setup → integrity check → attack
+                        sur le groupe ET la VM + zone ; `scenario_destructive()` = le catalogue décide — la technique et sa source épinglée, inconnu = destructif, un scénario qui se dit non destructif contre lui refusé (SEC5) ; `annatar clean` gardé aussi, destructif, et derrière le garde V1) → setup → integrity check → attack
                         → emit attack_started (sans query — Glorfindel résout via detection_rules.yaml)
                         → thread daemon feedback: si detection_timeout → emit detection_missed
                         → runs/<run_id>.json réécrit après l'attente : detection + detection_latency_s (#157)

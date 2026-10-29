@@ -77,6 +77,7 @@ Trois canaux, à ne pas confondre :
 | S | Un membre du serveur juge une carte ou lance un restore | Boutons fermés par défaut, autorisés par id seulement, chaque refus dit et journalisé (M-3) |
 | T | Un texte du dehors (le nom d'une application Entra, les mots du modèle) déguise un lien, imite une mise en forme ou mentionne tout le monde | Tout texte du dehors échappé avant d'être posté, aucune mention permise sauf le rôle configuré (SEC6, `glorfindel/chat_text.py`) |
 | T | La PR d'un fork, son run rouge ou l'issue d'un inconnu déplace le fil d'un lot (l'étiquette, l'archive) | `#ci` seulement : la tête d'un run doit venir du dépôt, l'auteur d'une issue y tenir un rôle (SEC6, `scripts/notify_discord.py`) |
+| T | Les notes d'une release publiée font effacer ou réécrire d'autres messages de `#agents` | `notify.yml` n'en lit que deux ids, en chiffres, dans le commentaire posé par `make release-draft`, et lit chaque message avant d'y toucher : le ping n'est effacé que si son titre est celui de ce brouillon, le tableau réécrit que si c'est le tableau, et seule la ligne de ce brouillon en sort ; le webhook n'est donné qu'aux événements `release`, que seul un membre du dépôt déclenche en publiant (REL1, `scripts/notify_discord.py`) |
 | R | Un clic sans trace | Le bot journalise chaque refus ; verdicts et acquittements dans `escalations.jsonl` |
 | I | Un jeton fuit | Le jeton du bot de Glorfindel seulement dans son conteneur (la watch et la console savent qu'il existe, pas sa valeur) ; celui de l'atelier jamais sur H0 ni dans un conteneur (testé) ; une URL de webhook est un secret, jamais imprimée |
 | D | Discord tombe | Une escalade est d'abord écrite localement et visible dans la console ; la watch dit au démarrage quand rien n'alerte |
@@ -128,12 +129,15 @@ Trois canaux, à ne pas confondre :
 |---|---|---|
 | S | Un injecteur joué depuis un poste quelconque, sur une cible non inscrite | Contrat d'Orodruin armé/passif ; inscription et zone de chaque cible ; tout inconnu refusé (O0, O1) |
 | T | Une attaque ou une panne sur une charge réelle | Règle de production codée (O0) ; un apply du banc montre son plan et demande confirmation, sauf `YES=1` (SEC6) |
-| R | Un appel au cloud sans trace | Orodruin l'écrit avant de le faire (O1) |
+| R | Un appel au cloud sans trace | Orodruin l'écrit avant de le faire (O1), sur son disque puis dans le canal, hors de l'hôte (SEC5) |
+| E | L'identité d'Orodruin agit sur une VM du banc qui n'est pas inscrite | Elle ne lit que le groupe ; elle n'écrit que sur chaque VM inscrite et chaque expérience, et le contrat refuse une écriture sur le groupe entier (SEC5, #182) |
+| S | Un battement de watch qui ne parle pas des cibles, une fenêtre d'exercice antidatée | Le battement porte le périmètre de la watch, comparé à celui de l'injecteur et relu avant chaque action ; une fenêtre est bornée par la création de son blob, et ne marque une VM de production que pour une technique non destructive (SEC5) |
+| T | Une URL de canal mal réglée, un blob démesuré | Le jeton ne part que vers un point de terminaison Azure Storage ; un tirage lit en flux borné (taille, nombre), et dit ce qui dépasse (SEC5) |
 | I | Un secret de l'hôte fuit | Identités managées plutôt que des secrets ; `host.env` hors du dépôt ; le jeton du bot de l'atelier jamais sur H0 |
 | D | Un injecteur qui s'emballe | Plafond, arrêt d'urgence, fenêtres bornées (O1, B2) |
 | E | Le Glorfindel hébergé est poussé à écrire | Il n'en a pas les droits (Reader) et tourne en lecture seule, `human_only` forcé au push |
 
-**Ouvert** : les injecteurs et leurs canaux — planifié : #276 ; le durcissement des conteneurs — planifié.
+**Ouvert** : un battement de la watch authentifié, pas seulement lié — planifié ; un journal hors de l'hôte que son identité ne peut pas effacer — planifié ; le canal sans point de terminaison public — planifié ; le durcissement des conteneurs — planifié.
 
 ---
 
@@ -149,17 +153,21 @@ Trois canaux, à ne pas confondre :
 | T | Une action tierce déplacée sous son tag, dans un job qui tient un secret | Tout workflow qui tient un secret, ou tourne sur un événement qu'un fork déclenche, épingle ses actions par commit ; le canari installe Terraform depuis le dépôt signé de HashiCorp, sa clé vérifiée par son empreinte, sans action tierce (SEC6, `tests/unit/test_workflows.py`) |
 | T | Une valeur choisie (entrée d'un `workflow_dispatch`, titre d'une PR) exécutée comme du shell | Aucun `run:` ne prend `inputs.*`, `github.event.*` ni `github.head_ref` dans son texte : ces valeurs passent par `env:` (SEC6, testé) |
 | T | Une dépendance changée sous son numéro, ou prise sous un autre nom | Dépendances verrouillées, chaque fichier vérifié par son empreinte (M-3, `requirements/`) ; Eregion s'installe depuis le dépôt (README) |
+| T | Une dépendance verrouillée qui a un avis de vulnérabilité, et que personne ne voit | Chaque semaine, `pip-audit` lit les quatre verrous tels quels (empreintes, rien de résolu). Il ouvre une issue par avis, label `security`, jamais deux pour le même avis. Seules les issues ouvertes par le workflow sont relues, et leur clé est vérifiée champ par champ : une issue d'un autre auteur ne fait taire aucun avis et ne fait rien écrire au bot. Le run est rouge dans `#ci` quand il y a du neuf. `make lock` dit les avis du verrou qu'il écrit. Jamais de PR de montée automatique : la montée passe par le harnais (CI2, `scripts/pip_audit_issues.py`) |
 | R | Une release sans histoire | `CHANGELOG.md`, une issue par lot ; les sessions préparent une release en brouillon, le mainteneur la publie |
 | I | Un secret exposé au code d'une PR | `pull_request_target` et `workflow_run` ne récupèrent ni n'exécutent jamais le code d'une PR (récupération partielle du seul script, sans identifiants persistés) ; des permissions en lecture seulement, partout |
-| D | Une CI rouge passée inaperçue | Annoncée dans `#ci`, avec mention ; le CD de H0 attend une CI verte |
+| D | Une CI rouge passée inaperçue | Annoncée dans `#ci`, avec mention : chaque workflow lancé par un push, une PR ou la nuit est dans la liste de `notify.yml`, ses exceptions écrites (CI1, testé) ; le CD de H0 attend une CI verte |
+| D | Un Dockerfile ou un verrou cassé vu seulement au préflight de H0 : la release brûlée | Les deux images construites et éprouvées dans la PR et sur `main` (CI1, `images.yml`) : `--version`, les imports du préflight du CD, la config d'exemple sous A3, pas root, rien de Glorfindel dans l'image des injecteurs. Construites sans push, sans registre, sans secret, actions épinglées par commit, le cache écrit par `main` seulement ; chaque vérification est un `docker run --network none` (`scripts/image_check.py`, testé). Sans filtre `paths` : ses checks peuvent être requis |
 | E | Une release piégée déployée sur H0 | Le CD exige un tag sur `origin/main`, jamais réécrit, tous les checks verts, un préflight dans la candidate, et revient en arrière si la santé échoue (H1) |
 
-**Où c'est** : `.github/workflows/`, `.github/CODEOWNERS`, `scripts/notify_discord.py`, `infra/glorfindel-host/` (le CD) ; tests `tests/unit/test_workflows.py`, `tests/unit/test_notify_discord.py`, `tests/unit/test_host_cd.py`, `tests/unit/test_dependency_lock.py`.
+**Où c'est** : `.github/workflows/`, `.github/CODEOWNERS`, `scripts/notify_discord.py`, `scripts/pip_audit_issues.py`, `scripts/image_check.py`, `infra/glorfindel-host/` (le CD) ; tests `tests/unit/test_workflows.py`, `tests/unit/test_notify_discord.py`, `tests/unit/test_host_cd.py`, `tests/unit/test_dependency_lock.py`, `tests/unit/test_pip_audit_issues.py`, `tests/unit/test_image_check.py`.
 
 **Ouvert** :
 - un secret Azure de longue durée pour le canari — planifié ;
 - quelques actions sans secret encore nommées par leur tag — planifié ;
-- la publication du paquet — planifié.
+- les versions propres à Python 3.11, hors de l'audit des verrous — planifié : #298 ;
+- la publication du paquet — planifié ;
+- les images déployées ne sont pas encore celles que la CI éprouve — planifié : #267.
 
 ---
 

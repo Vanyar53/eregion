@@ -65,7 +65,7 @@ def _make_campaign(tmp_path, scenarios, *, budget=None, state="ratified", kill=F
 
 
 def test_happy_path_sequential(tmp_path):
-    cdir = _make_campaign(tmp_path, [_entry(1, "T1110.001"), _entry(2, "T1486")])
+    cdir = _make_campaign(tmp_path, [_entry(1, "T1110.001"), _entry(2, "T1041")])
     engine = FakeEngine([
         RunOutcome("run-1", "detected"),
         RunOutcome("run-2", "missed"),
@@ -85,7 +85,7 @@ def test_happy_path_sequential(tmp_path):
 
 def test_budget_ceiling_skips_rest(tmp_path):
     cdir = _make_campaign(
-        tmp_path, [_entry(1, "T1110.001"), _entry(2, "T1486")],
+        tmp_path, [_entry(1, "T1110.001"), _entry(2, "T1041")],
         budget=Budget(max_scenarios=1),
     )
     engine = FakeEngine([RunOutcome("run-1", "detected")])
@@ -154,7 +154,7 @@ def test_refuses_done_campaign_with_replan_hint(tmp_path):
 
 def test_multi_scenario_warns_human_only(tmp_path, capsys):
     cdir = _make_campaign(
-        tmp_path, [_entry(1, "T1110.001"), _entry(2, "T1486")],
+        tmp_path, [_entry(1, "T1110.001"), _entry(2, "T1041")],
     )
     engine = FakeEngine([
         RunOutcome("run-1", "detected"),
@@ -172,7 +172,7 @@ def test_single_scenario_no_human_only_warning(tmp_path, capsys):
 
 
 def test_engine_error_marks_error_continues(tmp_path):
-    cdir = _make_campaign(tmp_path, [_entry(1, "T1110.001"), _entry(2, "T1486")])
+    cdir = _make_campaign(tmp_path, [_entry(1, "T1110.001"), _entry(2, "T1041")])
     engine = FakeEngine([
         RunOutcome("run-1", "unknown", error="preflight failed"),
         RunOutcome("run-2", "detected"),

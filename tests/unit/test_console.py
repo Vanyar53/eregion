@@ -774,7 +774,7 @@ def test_a_name_in_a_routes_path_is_encoded(runs):
 def restores(monkeypatch):
     seen = []
 
-    async def _bg(resource_id, vm_name=""):
+    async def _bg(resource_id, vm_name="", before="", esc_id=""):
         seen.append(resource_id)
     monkeypatch.setattr(api, "_bg_restore", _bg)
     monkeypatch.setattr(api, "_restore_start", lambda vm, rid: None)
@@ -802,8 +802,12 @@ def test_the_restore_route_takes_its_card_only(client, restores):
     assert "restore" in client.post("/api/action/restore/vm-a", json={"escalation": other}).json()["error"]
     assert "vm-b" in client.post("/api/action/restore/vm-b", json={"escalation": held}).json()["error"]
     assert restores == []
-    assert client.post("/api/action/restore/vm-a", json={"escalation": held}).json() == {
-        "status": "started", "resource_id": vm}
+    # The moment is asked (SEC4c): without it, refused — never the newest point.
+    assert "required" in client.post("/api/action/restore/vm-a", json={"escalation": held}).json()["error"]
+    assert restores == []
+    assert client.post("/api/action/restore/vm-a", json={"escalation": held,
+                                                          "before": "2026-10-29T08:00:00Z"}).json() == {
+        "status": "started", "resource_id": vm, "before": "2026-10-29T08:00:00+00:00"}
     assert restores == [vm]
 
 

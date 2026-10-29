@@ -156,6 +156,17 @@ def _workspace_id() -> str:
 _COARSE_STEP_S = 25
 
 
+def _query_scope(resource_id: str) -> tuple[str, str] | str:
+    """(the resource id, the VM's name) as KQL literals, each checked for what it is
+    (SEC4c) — or, when one is not, why the query is not run."""
+    from glorfindel import kql
+    try:
+        rid = kql.resource_id(resource_id)
+        return kql.literal(rid), kql.literal(kql.name(rid.rstrip("/").split("/")[-1]))
+    except kql.UnsafeValue as exc:
+        return f"Requête non lancée : {exc}."
+
+
 def _check_perf_sampling(resource_id: str, workspace_id: str, detector=None) -> AuditCheck:
     """What the ransomware rule actually receives for this VM (third review, T6/L14).
 
@@ -164,12 +175,14 @@ def _check_perf_sampling(resource_id: str, workspace_id: str, detector=None) -> 
     60-s sampling the rule used to never fire; it now uses a coarse mode whose
     threshold is provisional."""
     name = "Disk write sampling"
-    vm = resource_id.rstrip("/").split("/")[-1]
+    scope = _query_scope(resource_id)
+    if isinstance(scope, str):
+        return AuditCheck("detection", name, "warn", scope, data={"present": None})
     query = (
         "Perf | where TimeGenerated > ago(1h)"
         ' | where ObjectName == "Logical Disk" or ObjectName == "LogicalDisk"'
         ' | where CounterName == "Disk Write Bytes/sec"'
-        f' | where _ResourceId =~ "{resource_id}" or Computer =~ "{vm}"'
+        f" | where _ResourceId =~ {scope[0]} or Computer =~ {scope[1]}"
         # The cadence is the smallest gap between two seconds that each carry ONE sample of
         # the series. A second with several is an agent batch: its first upload after a boot
         # sends them under one timestamp (measured, 15/10) — read as a 0-s step, it claimed
@@ -222,10 +235,12 @@ def _check_syslog(resource_id: str, workspace_id: str, detector=None) -> AuditCh
     """Does this VM send Syslog? Most shipped rules read it (brute force, sudo, account
     creation): without it they are blind for this VM, without any error (P4)."""
     name = "Syslog"
-    vm = resource_id.rstrip("/").split("/")[-1]
+    scope = _query_scope(resource_id)
+    if isinstance(scope, str):
+        return AuditCheck("detection", name, "warn", scope, data={"present": None})
     query = (
         "Syslog | where TimeGenerated > ago(1h)"
-        f' | where _ResourceId =~ "{resource_id}" or Computer =~ "{vm}"'
+        f" | where _ResourceId =~ {scope[0]} or Computer =~ {scope[1]}"
         " | summarize n = count(), facilities = strcat_array(make_set(Facility, 12), ', ')"
     )
     try:

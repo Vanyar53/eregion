@@ -105,7 +105,7 @@ DOCKER_GLORFINDEL = $(GLORFINDEL_AZURE_PICK) docker run --rm $(GLORFINDEL_AZURE_
 	glorfindel-pending glorfindel-check-ttl \
 	glorfindel-start glorfindel-stop glorfindel-restart glorfindel-dev glorfindel-logs glorfindel-ui console-url \
 	annatar-shell glorfindel-shell \
-	venv install lock test test-unit lint annatar-simulate annatar-simulate-gap clean \
+	venv install lock audit test test-unit lint annatar-simulate annatar-simulate-gap clean release release-draft \
 	canary-jit celebrimbor-init celebrimbor-plan celebrimbor-up celebrimbor-down celebrimbor-output celebrimbor-stop celebrimbor-start \
 	glorfindel-host-init glorfindel-host-plan glorfindel-host-up glorfindel-host-down glorfindel-host-push \
 	glorfindel-host-start glorfindel-host-stop glorfindel-host-logs glorfindel-host-tunnel glorfindel-host-ssh \
@@ -118,7 +118,7 @@ DOCKER_GLORFINDEL = $(GLORFINDEL_AZURE_PICK) docker run --rm $(GLORFINDEL_AZURE_
 	gothmog-preflight gothmog-run \
 	orodruin-campaign-plan orodruin-campaign-run \
 	profile-discover profile-detection profile-resilience profile-proven profiles-check \
-	team-check team-init team-start team-stop team-logs team-config components-check
+	team-check team-init team-start team-stop team-logs team-config components-check images-check
 
 # ── Help ──────────────────────────────────────────────────────────────────
 
@@ -130,9 +130,14 @@ help:
 	@echo "  make venv           Create .venv (python3 -m venv)"
 	@echo "  make install        Create .venv + install dev dependencies (from the lock, hashes checked)"
 	@echo "  make lock           Regenerate the dependency lock (uv; UPGRADE=1 bumps all) — docs/operations.md"
+	@echo "  make audit          Known advisories of the locks, pip-audit's own too (read as locked; CI2)"
 	@echo "  make test           Run all tests (104, 0 Azure, 0 LLM calls)"
 	@echo "  make lint           Ruff linter"
 	@echo "  make clean          Remove build artifacts"
+	@echo ""
+	@echo "Release (REL1) — a draft only: Jonathan publishes (publishing deploys H0)"
+	@echo "  make release VERSION=X.Y.Z TITLE=\"…\" [DRY_RUN=1]  The version's PR: CHANGELOG cut, version, README"
+	@echo "  make release-draft VERSION=X.Y.Z [NOTES=file] [DRY_RUN=1]  After its merge: the draft, seen on #agents"
 	@echo ""
 	@echo "Build"
 	@echo "  make build          Build both Docker images"
@@ -227,6 +232,7 @@ help:
 	@echo "  make team-start TEAM=<nom> [BOT=1]  Son Glorfindel, sa console sur son port ; team-stop, team-logs"
 	@echo "  make profiles-check         Chaque profil compose rend ses services (docker, rien ne démarre)"
 	@echo "  make components-check [COMPONENT=annatar]  Chaque composant tourne seul (ses tests, les autres absents)"
+	@echo "  make images-check           Les deux images construites et éprouvées comme en CI (eregion-*:ci, rien ne démarre)"
 	@echo ""
 	@echo "Variables"
 	@echo "  SCENARIO    Path to scenario YAML (default: $(SCENARIO))"
@@ -661,7 +667,7 @@ glorfindel-host-ssh:
 # de ton environnement ou de ~/.config/eregion/discord.env, par stdin — jamais le jeton du bot.
 HOST_CD_FILES = infra/glorfindel-host/cd/eregion_cd.py infra/glorfindel-host/cd/install.sh \
                 infra/glorfindel-host/cd/eregion-cd.service infra/glorfindel-host/cd/eregion-cd.timer \
-                infra/glorfindel-host/deploy.sh scripts/notify_discord.py
+                infra/glorfindel-host/deploy.sh scripts/notify_discord.py glorfindel/chat_text.py
 HOST_SSH_TTY   = ssh -t $(SSH_OPTS) $(HOST_USER)@$(HOST_IP)
 
 glorfindel-host-cd-install:
@@ -701,6 +707,13 @@ ORO_USER      ?= orodruin
 # watch_principal_id : l'identité du Glorfindel hébergé, lectrice du canal des fenêtres (partie C).
 ORO_WATCH_ID   = $(shell $(HOST_TF) output -no-color -raw principal_id 2>/dev/null | grep -E '^[0-9a-f-]{36}$$')
 ORO_VARS       = -var-file=../terraform/terraform.tfvars -var="operator_cidr=$(OPERATOR_CIDR)" -var="watch_principal_id=$(ORO_WATCH_ID)"
+# SEC5 (V-31) : le sous-réseau et l'IP de H0, admis par le pare-feu du compte du canal — dans
+# l'environnement de terraform, jamais sur la ligne affichée (l'id du sous-réseau nomme
+# l'abonnement, M124).
+ORO_WATCH_SUBNET = $(shell $(HOST_TF) output -no-color -raw subnet_id 2>/dev/null | grep -E '^/subscriptions/')
+ORO_WATCH_IP   = $(shell $(HOST_TF) output -no-color -raw public_ip 2>/dev/null | grep -E '^[0-9.]+$$')
+orodruin-plan orodruin-up orodruin-lock orodruin-down: export TF_VAR_watch_subnet_id = $(ORO_WATCH_SUBNET)
+orodruin-plan orodruin-up orodruin-lock orodruin-down: export TF_VAR_watch_public_ip = $(ORO_WATCH_IP)
 ORO_IP         = $(shell $(ORO_TF) output -no-color -raw public_ip 2>/dev/null | grep -E '^[0-9.]+$$')
 ORO_SSH        = ssh $(SSH_OPTS) $(ORO_USER)@$(ORO_IP)
 ORO_IMAGE     := eregion-annatar:orodruin
@@ -846,6 +859,15 @@ profiles-check:
 	  if [ $$ok = 1 ]; then echo "  ✓ une instance par équipe : ses noms, son port, son abonnement — pas celui du shell"; \
 	  else echo "  ✗ l'instance d'une équipe ne prend pas son team.env seul"; exit 1; fi
 
+# CI1 (#267) : les deux images construites comme le job de CI (.github/workflows/images.yml) —
+# leur Dockerfile, le dépôt pour contexte, aucun build-arg, sans le cache de GitHub — puis
+# éprouvées dedans (scripts/image_check.py : --version, imports, config d'exemple sous A3), sans
+# réseau, rien ne démarre. Tags eregion-glorfindel:ci et eregion-annatar:ci : les images de
+# make build (:latest, UID/GID de l'opérateur) ne bougent pas.
+images-check:
+	python3 scripts/image_check.py glorfindel --build
+	python3 scripts/image_check.py annatar --build
+
 # Plusieurs équipes : une instance de Glorfindel par équipe, tout son état dans
 # ~/.eregion/teams/<équipe>/ — team.env, glorfindel-config.yaml, runs/, et le HOME que lit
 # docker-compose.yml (.glorfindel, .cache/chroma, .eregion/analysis). env -i : ton shell (ton
@@ -909,6 +931,8 @@ install: venv
 # Regénérer le verrou (uv, résolution universelle : Python 3.11 et 3.12, Linux et macOS).
 # Les versions déjà verrouillées restent ; UPGRADE=1 les monte toutes. Une PR, puis le harnais
 # (make llm-compare) avant de redéployer H0 : docs/operations.md, « Verrou des dépendances ».
+# Puis les avis connus des verrous écrits (make audit, CI2) : une information pour la PR,
+# jamais un échec de make lock.
 UV         ?= uv
 LOCK_DATE  ?= $(shell date -u +%Y-%m-%d)
 LOCK_FLAGS  = --universal --python-version 3.11 --generate-hashes \
@@ -919,6 +943,21 @@ lock:
 	  -c requirements/dev.txt $(LOCK_FLAGS) -o requirements/glorfindel.txt
 	$(UV) pip compile pyproject.toml requirements/build.in --extra annatar \
 	  -c requirements/dev.txt $(LOCK_FLAGS) -o requirements/annatar.txt
+	$(UV) pip compile requirements/audit.in $(LOCK_FLAGS) -o requirements/audit.txt
+	-@$(MAKE) --no-print-directory audit
+
+# CI2 (#268) : les avis connus des trois verrous et de celui de pip-audit, tels qu'ils sont
+# (pip-audit --require-hashes --disable-pip : rien n'est résolu, seul le service des avis est
+# interrogé). pip-audit vient de
+# son propre verrou (requirements/audit.txt, empreintes), dans un venv à part ; le workflow
+# hebdomadaire (pip-audit.yml) en fait une issue par avis. Ici, il le dit seulement.
+AUDIT_VENV ?= .venv-audit
+PIP_AUDIT  ?= $(AUDIT_VENV)/bin/pip-audit
+LOCKS       = requirements/dev.txt requirements/glorfindel.txt requirements/annatar.txt requirements/audit.txt
+audit:
+	@[ -x "$(PIP_AUDIT)" ] || { python3 -m venv $(AUDIT_VENV) \
+	  && $(AUDIT_VENV)/bin/pip install -q --require-hashes -r requirements/audit.txt; }
+	@python3 scripts/pip_audit_issues.py report --pip-audit "$(PIP_AUDIT)" $(LOCKS)
 
 test:
 	$(PYTHON) -m pytest tests/ -v
@@ -928,6 +967,26 @@ test-unit:
 
 lint:
 	.venv/bin/ruff check .
+
+# REL1 (#269) : une release en deux commandes (docs/operations.md, « Packaging et version »).
+# `release` coupe [Unreleased], change la version et la ligne « Status » du README, ouvre la PR
+# chore/release-X.Y.Z ; `release-draft`, après sa fusion, crée le BROUILLON sur le sha complet
+# d'origin/main et le pose sur #agents. Aucune ne publie : Jonathan publie (son CD déploie H0).
+# Comme REF : VERSION, TITLE et NOTES se donnent sur la ligne de commande, lus par le script
+# dans son environnement, jamais développés par make ni recopiés dans la commande.
+RELEASE_ARGS = VERSION TITLE NOTES
+unexport VERSION TITLE NOTES
+release release-draft: export EREGION_RELEASE_VERSION = $(value VERSION)
+release release-draft: export EREGION_RELEASE_TITLE = $(value TITLE)
+release release-draft: export EREGION_RELEASE_NOTES = $(value NOTES)
+release release-draft: export EREGION_RELEASE_ORIGIN = $(foreach v,$(RELEASE_ARGS),$(v):$(firstword $(origin $(v))))
+release:
+	@case " $$EREGION_RELEASE_ORIGIN " in *:environment*) echo "VERSION, TITLE ou NOTES vient de l'environnement : rien n'est fait. Sur la ligne de commande : make release VERSION=X.Y.Z TITLE=\"…\"" >&2; exit 1;; esac
+	python3 scripts/release.py prepare$(if $(DRY_RUN), --dry-run)
+
+release-draft:
+	@case " $$EREGION_RELEASE_ORIGIN " in *:environment*) echo "VERSION ou NOTES vient de l'environnement : rien n'est fait. Sur la ligne de commande : make release-draft VERSION=X.Y.Z" >&2; exit 1;; esac
+	python3 scripts/release.py release-draft$(if $(DRY_RUN), --dry-run)
 
 clean:
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true

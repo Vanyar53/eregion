@@ -81,3 +81,28 @@ def tactic_rank(tactic: str) -> int:
         return CANONICAL_TACTIC_ORDER.index(tactic)
     except ValueError:
         return len(CANONICAL_TACTIC_ORDER)
+
+
+def catalog_destructive(ttp: str, *, engine: str = "", engine_ref: str = "",
+                        scripts: list[str] | tuple[str, ...] | None = None,
+                        catalog: dict[str, dict[str, Any]] | None = None) -> bool | None:
+    """Does the catalog say this technique destroys or alters data? ``None`` when it does not
+    say (SEC5, V-19) — the caller counts that as destructive, never as harmless.
+
+    The catalog decides, not the scenario: the entry of the technique, and only for the source
+    the catalog names. An atomic (``engine: atomic``) must be the entry's own ``engine_ref``;
+    a local script, the entry's ``reference_script`` or one of its ``setup_scripts`` — each of
+    ``scripts``, when given. Another test, another script, or an engine the entry does not
+    declare is not what the catalog vouched for: ``None``."""
+    entry = (load_catalog() if catalog is None else catalog).get(ttp) or {}
+    if not entry:
+        return None
+    if engine and engine != "local-script":
+        if entry.get("engine") != engine or entry.get("engine_ref") != engine_ref:
+            return None
+    elif scripts:
+        known = {entry.get("reference_script")} | set(entry.get("setup_scripts") or [])
+        if any(s not in known for s in scripts):
+            return None
+    flag = entry.get("destructive")
+    return flag if isinstance(flag, bool) else None

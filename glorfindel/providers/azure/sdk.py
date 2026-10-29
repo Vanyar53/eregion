@@ -7,6 +7,27 @@ import importlib
 import threading
 
 
+# Every REST call made with `requests` (SEC4c): an endpoint that does not answer ends the
+# call — connection in 10 s, an answer in 60 s — instead of holding the command forever.
+REST_TIMEOUT_S = (10, 60)
+
+
+def rest_post(url: str, what: str, **kw):
+    """requests.post with REST_TIMEOUT_S. A timeout raises a RuntimeError that says whether
+    the request may have reached Azure: no connection — nothing sent; no answer — it may
+    have been applied, to check before trying again."""
+    import requests
+    try:
+        return requests.post(url, timeout=REST_TIMEOUT_S, **kw)
+    except requests.ConnectTimeout:
+        raise RuntimeError(f"{what} : pas de connexion à Azure en {REST_TIMEOUT_S[0]} s — "
+                           "rien n'a été envoyé") from None
+    except requests.Timeout:
+        raise RuntimeError(f"{what} : pas de réponse d'Azure en {REST_TIMEOUT_S[1]} s — la "
+                           "demande a pu être prise en compte : vérifier les jobs du coffre "
+                           "avant de la relancer") from None
+
+
 _warmed_up = False
 _warmup_lock = threading.Lock()
 

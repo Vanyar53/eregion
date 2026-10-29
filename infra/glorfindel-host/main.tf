@@ -65,6 +65,9 @@ resource "azurerm_subnet" "host" {
   resource_group_name  = azurerm_resource_group.host.name
   virtual_network_name = azurerm_virtual_network.host.name
   address_prefixes     = ["10.20.0.0/26"]
+  # SEC5 (V-31) : le compte du canal d'Orodruin n'admet H0 que par ce point de terminaison de
+  # service (gratuit) : une règle d'IP n'a pas d'effet depuis la même région que le compte.
+  service_endpoints = ["Microsoft.Storage"]
 
   # Un VNet recréé (changement de région, 16/10) emporte son sous-réseau, mais le nom ne change
   # pas : sans ce lien, Terraform garde l'ancien sous-réseau dans son état et la carte réseau

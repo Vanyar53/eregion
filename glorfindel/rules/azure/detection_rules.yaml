@@ -160,7 +160,8 @@ rules:
   - name: t1136-001-local-account-creation-linux-v1
     description: >
       Local account creation on Linux — T1136.001. Fires on a successful creation
-      (« new user: name=… ») in auth/authpriv Syslog, except a package manager's
+      (« new user: name=… ») in auth/authpriv Syslog, written by useradd (measured,
+      SEC4c), except a package manager's
       system account (system UID, no login shell) and the known agent accounts
       without a shell (seventh review, P1).
     enabled: true
@@ -176,6 +177,12 @@ rules:
       // exists » failure (idempotent provisioning), the « new group » line of the same creation,
       // or a line that merely mentions useradd is not an account created.
       | where SyslogMessage has "new user: name="
+      // Lines tagged useradd only (SEC4c, as SEC2 for sudo and sshd). Measured on H0's Syslog
+      // (30 days to 29/10): 16 « new user » lines on 6 VMs, auth and authpriv, all tagged
+      // useradd — no other emitter, no other wording. Read in the code only: Debian's adduser
+      // calls useradd and logs « Adding new user … » of its own, never « new user: name= ».
+      // Any other writer of that text (`logger -p auth.info`, a service) creates no account.
+      | where ProcessName == "useradd"
       | extend Account = extract(@"name=([^,]+)", 1, SyslogMessage),
                Uid = toint(extract(@"UID=(\d+)", 1, SyslogMessage)),
                Shell = extract(@"shell=([^,\s]+)", 1, SyslogMessage)

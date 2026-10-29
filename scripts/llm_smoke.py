@@ -24,6 +24,8 @@ Usage:
     python scripts/llm_smoke.py --model ollama/command-r7b --runs 5
     python scripts/llm_smoke.py --model anthropic/claude-sonnet-5-5 --kinds paired --runs 5
     make llm-smoke MODEL=ollama/llama3.1
+    make llm-compare MODELS=<H0's model> RUNS=3 ATTEST=1 [BASE=<tag>]   # H3: two passes, one
+        # attestation (requirements/harness.json) — the reference lock, then this checkout's
 
 For Ollama: `ollama serve` + `ollama pull llama3.1` (a TOOL-CAPABLE model is required —
 the decide step forces a function call). Set GLORFINDEL_LLM_BASE_URL if not on
@@ -442,17 +444,66 @@ def _run_one(model: str, runs: int, kinds: set[str] | None = None) -> dict:
             "sampling": _temperature_line(all_slots), "cases": cases}
 
 
-def attestation(results: list[dict], runs: int, lock: Path) -> dict:
-    """What the CD of H0 (H1) checks before deploying a new lock: which lock the harness ran
-    on (its sha256), how many runs, and per model its integration, judgment and overconfident
-    errors. Written whatever the result: the CD refuses one that is not complete."""
+# ── The attestation (H1, then H3) ─────────────────────────────────────────────────
+# H0's CD deploys a new lock only with the harness's attestation. Since H3 (#324) it holds two
+# passes: the candidate (the lock of this checkout) and the reference (the lock in service on
+# H0, installed apart: scripts/harness_attest.py), each case's draws in each. The CD judges
+# case by case against what runs, not against a perfect score that the model's own sampling
+# cannot promise (the same lock: 51/51, then 50/51, 29/10). A draw keeps whether it was right,
+# the action and the confidence: nothing of the logs, nothing secret.
+LOCK_REL = "requirements/glorfindel.txt"
+PASS_SCHEMA = "eregion.harness-pass/2"
+ATTESTATION_SCHEMA = "eregion.harness/2"
+
+
+def _draw(slot: dict) -> dict:
+    conf = slot.get("confidence")
+    return {"good": bool(slot.get("good")), "action": str(slot.get("action") or "")[:64],
+            "confidence": None if conf is None else round(float(conf), 3)}
+
+
+def harness_pass(results: list[dict], runs: int, lock: Path, ref: str = "",
+                 kinds: set[str] | None = None) -> dict:
+    """One pass of the harness on one lock: its sha256, the runs, and per model the totals
+    and every case's draws (`_draw`)."""
     import hashlib
     from datetime import date
-    return {"lock": "requirements/glorfindel.txt", "lock_sha256": hashlib.sha256(lock.read_bytes()).hexdigest(),
+    return {"schema": PASS_SCHEMA, "ref": ref, "lock": LOCK_REL,
+            "lock_sha256": hashlib.sha256(lock.read_bytes()).hexdigest(),
             "date": date.today().isoformat(), "runs": runs,
-            "draws": os.environ.get("GLORFINDEL_DECISION_DRAWS") or "3",
+            "draws": os.environ.get("GLORFINDEL_DECISION_DRAWS") or "3", "gate": _GATE,
+            "kinds": sorted(kinds) if kinds else "all",
             "models": [{"model": r["model"], "integration": r["integration"], "judgment": r["judgment"],
-                        "slots": r["slots"], "overconfident_errors": r["overconf"]} for r in results]}
+                        "slots": r["slots"], "overconfident_errors": r["overconf"],
+                        "cases": [{"label": c["label"], "kind": c["kind"],
+                                   "draws": [_draw(s) for s in c["slots"]]} for c in r.get("cases", [])]}
+                       for r in results]}
+
+
+def attestation(candidate: dict, reference: dict) -> dict:
+    """What the CD of H0 checks before deploying a new lock (H1, H3): both passes. Written
+    whatever the result: the CD refuses a regression, and says what varies."""
+    from datetime import date
+    return {"schema": ATTESTATION_SCHEMA, "lock": LOCK_REL, "date": date.today().isoformat(),
+            "candidate": candidate, "reference": reference}
+
+
+def read_reference(path: str, models: list[str], runs: int) -> tuple[dict | None, str]:
+    """The reference pass, checked before any paid call: (the pass, '') or (None, why)."""
+    import json
+    try:
+        ref = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        return None, f"reference pass unreadable ({type(e).__name__}): {path}"
+    if not isinstance(ref, dict) or ref.get("schema") != PASS_SCHEMA:
+        return None, f"{path} is not a harness pass ({PASS_SCHEMA})"
+    if ref.get("runs") != runs:
+        return None, f"the reference ran {ref.get('runs')} run(s), this pass {runs}: the same on both sides"
+    have = [m.get("model") for m in ref.get("models") or [] if isinstance(m, dict)]
+    missing = [m for m in models if m not in have]
+    if missing:
+        return None, f"the reference does not cover {', '.join(missing)}"
+    return ref, ""
 
 
 def main() -> int:
@@ -472,13 +523,35 @@ def main() -> int:
                     help="also write every case's draws (action, confidence, held_by) to this "
                          "file — the distribution, for comparing runs (D-1).")
     ap.add_argument("--attest", default="",
-                    help="write the harness's attestation for the lock to this file (H1): "
+                    help="write the harness's attestation to this file (H1, H3): "
                          "requirements/harness.json, committed in the lock's pull request — the "
-                         "CD of H0 deploys a new lock only with it (make llm-compare ATTEST=1).")
+                         "CD of H0 deploys a new lock only with it. Needs --reference: "
+                         "make llm-compare ATTEST=1 runs both passes (scripts/harness_attest.py).")
+    ap.add_argument("--reference", default="",
+                    help="the reference pass (--pass-out of the harness on the lock in service), "
+                         "kept beside this pass in the attestation (H3).")
+    ap.add_argument("--pass-out", default="",
+                    help="write this pass (its lock's sha256, every case's draws) to this file: "
+                         "the reference side of the attestation (H3).")
+    ap.add_argument("--lock", default="",
+                    help="the lock this pass runs on, for its sha256 (default: this checkout's "
+                         "requirements/glorfindel.txt).")
+    ap.add_argument("--ref", default="", help="the release whose lock this pass runs on (said only).")
     args = ap.parse_args()
     runs = max(1, args.runs)
     kinds = {k.strip() for k in args.kinds.split(",") if k.strip()} or None
     models = [m.strip() for m in args.models.split(",") if m.strip()] or [args.model]
+    lock = Path(args.lock) if args.lock else Path(__file__).resolve().parents[1] / LOCK_REL
+    # H3: an attestation holds the reference, checked before a single paid call.
+    reference = None
+    if args.attest and not args.reference:
+        print("--attest needs --reference (the pass on the lock in service): make llm-compare ATTEST=1")
+        return 2
+    if args.reference:
+        reference, why = read_reference(args.reference, models, runs)
+        if why:
+            print(f"→ {why} — nothing run")
+            return 2
 
     # Ground-truth coverage: does the eval cover every TTP Annatar can launch?
     covered = {sc["ttp"] for sc in SCENARIOS if sc["ttp"]}
@@ -503,11 +576,17 @@ def main() -> int:
              "models": results}, indent=2, ensure_ascii=False, default=str))
         print(f"Draws written to {args.json}")
 
-    if args.attest:
+    if args.pass_out or args.attest:
         import json
-        lock = Path(__file__).resolve().parents[1] / "requirements" / "glorfindel.txt"
-        Path(args.attest).write_text(json.dumps(attestation(results, runs, lock), indent=2) + "\n")
-        print(f"Attestation for {lock.name} written to {args.attest} — commit it with the lock")
+        this = harness_pass(results, runs, lock, args.ref, kinds)
+        if args.pass_out:
+            Path(args.pass_out).write_text(json.dumps(this, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+            print(f"Pass on {lock.name} ({this['lock_sha256'][:12]}) written to {args.pass_out}")
+        if args.attest:
+            Path(args.attest).write_text(json.dumps(attestation(this, reference), indent=1, ensure_ascii=False)
+                                         + "\n", encoding="utf-8")
+            print(f"Attestation for {lock.name} written to {args.attest}, against the reference "
+                  f"{reference.get('ref') or '?'} ({str(reference.get('lock_sha256'))[:12]}) — commit it with the lock")
 
     if len(results) > 1:
         print("\n" + "=" * 72)

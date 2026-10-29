@@ -3299,6 +3299,17 @@ MUTANTS += [
 # quarantine with no original since the test last lost it (_held_unknown).
 TESTS.update({"M1340": f"tests/unit/test_invariant_regressions.py {INVARIANTS}"})
 TESTS.update({f"M{n}": "tests/unit/test_invariant_regressions.py -k said_bare" for n in (1341, 1342)})
+# The escalations store's lock (SEC3) gives up within its timeout: the machine's scheduler
+# tries it without blocking, so a race never leaves a thread blocked out of its sight (#292).
+MUTANTS += [
+    ("M1395", "the store's file lock ignores its timeout: a race's thread blocks in it out of the "
+              "scheduler's sight (I3F, #292)", LCK,
+     "    if not lock.acquire(timeout=-1 if timeout is None else timeout):\n"
+     "        raise TimeoutError(f\"{path.name} busy (another write in progress)\")\n",
+     "    if not lock.acquire():\n"
+     "        raise TimeoutError(f\"{path.name} busy (another write in progress)\")\n"),
+]
+TESTS.update({"M1395": "tests/unit/test_invariant_regressions.py -k escalations_store"})
 # SEC6 (#277): the security process — the CI's actions and inputs, the lot threads against a fork
 # or an outsider, text from outside made inert in the chats, the bench's apply confirmed.
 NDS = "scripts/notify_discord.py"

@@ -83,6 +83,7 @@ from hypothesis.stateful import (
 )
 
 from glorfindel import actions, config, escalations, orphans, reassert
+from glorfindel.response import locks
 from glorfindel.actions import AzureConnector, _load_isolation_state
 
 from .fake_azure import (
@@ -2241,6 +2242,9 @@ def invariant_env(monkeypatch) -> None:
     monkeypatch.setattr(reassert, "datetime", _Clock)
     monkeypatch.setattr(actions, "_vm_lock", _scheduled(actions._vm_lock))
     monkeypatch.setattr(actions, "_quarantine_lock", _scheduled(actions._quarantine_lock))
+    # The escalations store's lock (SEC3) too: a thread stopped at its write inside it
+    # left the other blocked there, out of the scheduler's sight (I3F, #292).
+    monkeypatch.setattr(locks, "_file_lock", _scheduled(locks._file_lock))
 
 
 def test_isolation_invariants(monkeypatch):

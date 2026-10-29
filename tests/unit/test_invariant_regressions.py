@@ -1262,3 +1262,29 @@ def test_a_bare_nic_whose_original_is_unknown_is_said_bare(monkeypatch, way_out)
         assert c.verify_release(WEB1)["verified"] is True
     finally:
         shutil.rmtree(m.home, ignore_errors=True)
+
+
+def test_a_race_whose_two_operations_rewrite_the_escalations_store(monkeypatch):
+    """Two operations of a race that each rewrite the escalations store (two reassertions
+    whose sweeps both leave a card). The store's lock (SEC3) was not the scheduler's: one
+    operation stopped at its write, inside that lock, left the other blocked in it out of
+    the scheduler's sight — I11 « op-2 never came back » ({'op-1': 'wait', 'op-2': 'run'},
+    #292), then the teardown's sweep waiting behind it forever (the macOS job of I3F, 29/10).
+    Each lock the code takes in a race is the scheduler's (_scheduled)."""
+    import json
+    from glorfindel import escalations
+    from .test_invariants import _CURRENT, _Chaos, _Scheduler
+    invariant_env(monkeypatch)
+    _CURRENT.chaos = _Chaos()
+
+    @escalations._locked
+    def rewrite(n):
+        escalations._write_lines([json.dumps({"n": n})])
+
+    try:
+        for seed in range(8):           # each order of the two: one stopped inside, then the other
+            _CURRENT.scheduler = _Scheduler(seed)
+            out = _CURRENT.scheduler.run([("op-1", lambda: rewrite(1)), ("op-2", lambda: rewrite(2))])
+            assert all(exc is None for _, exc in out.values()), out
+    finally:
+        _CURRENT.scheduler = None

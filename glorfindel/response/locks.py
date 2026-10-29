@@ -118,11 +118,14 @@ _FILE_LOCK_DEPTH = threading.local()
 
 
 @contextlib.contextmanager
-def _file_lock(lock_file):
+def _file_lock(lock_file, timeout: float | None = None):
     """One read-modify-write at a time of a file the watch, the console, the bot and the
     CLI all write (the escalations store — SEC3, V-10): a thread lock plus an flock on
     `lock_file`, as _vm_lock. Re-entrant within a thread. Writers wait: they must
-    serialise, and each holds it for one rewrite of a local file."""
+    serialise, and each holds it for one rewrite of a local file.
+
+    `timeout`: give up after that many seconds with TimeoutError, as _vm_lock — what the
+    invariant machine's scheduler needs to try it without blocking (I3F, #292)."""
     from pathlib import Path
     path = Path(lock_file)
     key = str(path)
@@ -131,7 +134,9 @@ def _file_lock(lock_file):
     depth = getattr(_FILE_LOCK_DEPTH, "d", None)
     if depth is None:
         depth = _FILE_LOCK_DEPTH.d = {}
-    with lock:
+    if not lock.acquire(timeout=-1 if timeout is None else timeout):
+        raise TimeoutError(f"{path.name} busy (another write in progress)")
+    try:
         if depth.get(key):
             depth[key] += 1
             try:
@@ -143,7 +148,19 @@ def _file_lock(lock_file):
         with open(path, "a") as fh:
             try:
                 import fcntl
-                fcntl.flock(fh, fcntl.LOCK_EX)
+                import time as _time
+                if timeout is None:
+                    fcntl.flock(fh, fcntl.LOCK_EX)
+                else:
+                    deadline = _time.monotonic() + timeout
+                    while True:
+                        try:
+                            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                            break
+                        except BlockingIOError:
+                            if _time.monotonic() >= deadline:
+                                raise TimeoutError(f"{path.name} busy (another process is writing)")
+                            _time.sleep(0.2)
             except ImportError:
                 pass
             depth[key] = 1
@@ -151,3 +168,5 @@ def _file_lock(lock_file):
                 yield
             finally:
                 depth[key] = 0
+    finally:
+        lock.release()

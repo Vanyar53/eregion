@@ -461,9 +461,133 @@ def test_a_net_regression_is_refused_by_name(agent, monkeypatch):
 
 
 def test_a_case_that_varies_on_the_candidate_only_is_said_not_refused(agent, monkeypatch):
-    for draws in ([RIGHT, _wrong(), _wrong()], [_wrong(0.5), _wrong(0.4), RIGHT]):
+    """One draw lost on a case that acts: the noise of 29/10. Said, never a refusal."""
+    for draws in ([RIGHT, RIGHT, _wrong()], [_wrong(0.5), RIGHT, RIGHT]):
         said = _judge(agent, monkeypatch, _attestation(_pass(NEW_LOCK, draws={PAIR: draws})))
         assert "« brute force — after a confirmed sudo" in said["orange"] and "sur la référence" in said["orange"]
+        assert "aucune régression nette, 1 tirage(s) perdu(s)" in said["note"]
+    # A case that does not act (caution) losing two draws where the reference varied already:
+    # neither a regression (it was not right on every draw) nor counted in the draws lost.
+    caution = "sudo running a routine package update — not priv-esc"
+    said = _judge(agent, monkeypatch, _attestation(_pass(NEW_LOCK, draws={caution: [_wrong(0.5)] * 3}),
+                                                   _pass(OLD_LOCK, draws={caution: [RIGHT, RIGHT, _wrong(0.5)]})))
+    assert "0/3 sur le candidat" in said["orange"] and "aucune régression nette, 0 tirage(s) perdu(s)" in said["note"]
+
+
+def test_a_case_that_acts_losing_two_draws_is_refused(agent, monkeypatch):
+    """Jonathan, 29/10: a ransomware not isolated twice out of three is a regression, whatever its
+    confidence — and so is 2/3 on the reference, 0/3 on the candidate (review, case D)."""
+    rans = "ransomware — sustained disk write (T1486)"
+    for cand, ref in (([RIGHT, _wrong(0.6, "snapshot"), _wrong(0.6, "snapshot")], None),
+                      ([_wrong(0.5, "snapshot")] * 3, [RIGHT, RIGHT, _wrong(0.5, "snapshot")])):
+        why = _refused(agent, monkeypatch, _attestation(_pass(NEW_LOCK, draws={rans: cand}),
+                                                        _pass(OLD_LOCK, draws={rans: ref} if ref else None)))
+        assert "recul du harnais sur 1 cas qui agissent" in why and "« ransomware" in why
+
+
+@pytest.mark.parametrize("lost, refused", [(2, False), (3, True)])
+def test_draws_lost_over_several_cases_add_up(agent, monkeypatch, lost, refused):
+    """Review of H3: no case lost on every draw, yet 31/51 against 51/51 passed as « no regression ».
+    The draws lost where the reference was right on every draw are summed: 3 refuses."""
+    labels = [lb for lb, _k in CASES][:lost]
+    att = _attestation(_pass(NEW_LOCK, draws={lb: [RIGHT, RIGHT, _wrong(0.5)] for lb in labels}))
+    if refused:
+        assert "3 tirages perdus" in _refused(agent, monkeypatch, att)
+    else:
+        assert "2 tirage(s) perdu(s)" in _judge(agent, monkeypatch, att)["note"]
+
+
+def test_a_wrong_draw_at_the_gate_is_overconfident(agent, monkeypatch):
+    """The gate lets through what is at or above it: a wrong draw at exactly 0.7 slips through."""
+    cases = "account creation — few indicators (T1136.001)"
+    why = _refused(agent, monkeypatch, _attestation(_pass(NEW_LOCK, draws={cases: [_wrong(0.7)] * 3}),
+                                                    _pass(OLD_LOCK, draws={cases: [_wrong(0.69)] * 3})))
+    assert "surconfiantes à chaque tirage" in why
+
+
+def test_a_release_that_changes_the_code_too_says_what_is_not_measured(agent, monkeypatch):
+    both = {PAIR: [_wrong()] * 3}
+    said = _judge(agent, monkeypatch, _attestation(_pass(NEW_LOCK, draws=both), _pass(OLD_LOCK, draws=both)))
+    assert "glorfindel/" not in said["orange"]
+    said = agent.attested(json.loads(_attestation(_pass(NEW_LOCK, draws=both), _pass(OLD_LOCK, draws=both))),
+                          "v0.4.0", "c2", "c1", "v0.3.1", MODEL, "HINT", code_changed=True)
+    assert "la release change aussi glorfindel/" in said["orange"] and "1 cas faux des deux côtés" in said["orange"]
+
+
+def test_the_code_changed_with_the_lock_is_said_on_deploy(tmp_path, fake):
+    h0 = H0(tmp_path, fake, c2_files={"requirements/glorfindel.txt": NEW_LOCK, "glorfindel/agent.py": "X = 2\n",
+                                       "requirements/harness.json": _attestation()})
+    assert h0.run().returncode == 0 and h0.running() == {"v0.4.0"}
+    (orange,) = [p for p in h0.posts() if "harnais n'a pas tout prouvé" in p["embeds"][0]["title"]]
+    assert "un recul du code n'est pas mesuré ici — 0 cas faux des deux côtés" in orange["embeds"][0]["description"]
+
+
+def test_what_the_harness_did_not_prove_is_said_once(tmp_path, fake):
+    """CI3 puts a wait after the guard: a pass that waits must not say the orange again."""
+    att = _attestation(_pass(NEW_LOCK, draws={PAIR: [RIGHT, RIGHT, _wrong()]}))
+    h0 = H0(tmp_path, fake, c2_files={"requirements/glorfindel.txt": NEW_LOCK, "requirements/harness.json": att})
+    (h0.cd / "state.json").write_text(json.dumps({"outcomes": {}, "said": {"v0.4.0": ["harness"]}}))
+    assert h0.run().returncode == 0 and h0.running() == {"v0.4.0"}
+    assert not any("harnais n'a pas tout prouvé" in t for t in _titles(h0))
+
+
+# The review's factitious attestations, on the harness's 17 real cases (rv_h3_adv, 30/10).
+def _scenarios():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("llm_smoke_cd", ROOT / "scripts" / "llm_smoke.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return [(s["label"], s["kind"]) for s in mod.SCENARIOS]
+
+
+def _r(action="isolate_vm", conf=0.85):
+    return {"good": True, "action": action, "confidence": conf}
+
+
+def _real(lock, draws=None):
+    draws = draws or {}
+    cases = [{"label": lb, "kind": k, "draws": draws.get(lb, [_r()] * 3)} for lb, k in _scenarios()]
+    every = [d for c in cases for d in c["draws"]]
+    return {"schema": "eregion.harness-pass/2", "ref": "", "lock_sha256": _sha(lock), "runs": 3, "kinds": "all",
+            "models": [{"model": MODEL, "integration": len(every), "slots": len(every), "cases": cases}]}
+
+
+def _adversarial():
+    sc = _scenarios()
+    rans = "ransomware — sustained disk write (T1486)"
+    acts = [lb for lb, k in sc if k == "act"]
+    cautions = [lb for lb, k in sc if k == "caution"]
+    inj = [lb for lb, k in sc if k == "injection"]
+    w = _wrong
+    return [
+        ("A", {rans: [_r(), w(0.6, "snapshot"), w(0.6, "snapshot")]}, None, "qui agissent"),
+        ("A2", {rans: [_r(), w(0.9, "snapshot"), w(0.9, "snapshot")]}, None, "qui agissent"),
+        ("B", {a: [_r(), _r(), w(0.6, "snapshot")] for a in acts}, None, "tirages perdus"),
+        ("B2", {lb: [_r(), _r(), w(0.5)] for lb, _k in sc}, None, "tirages perdus"),
+        ("B3", {lb: [_r(), w(0.5), w(0.5)] for lb, _k in sc}, None, "qui agissent"),
+        ("C", {cautions[0]: [_r("snapshot"), _r("snapshot"), w(0.9, "isolate_vm")]}, None, ""),
+        ("C2", {cautions[0]: [_r("snapshot"), w(0.9, "isolate_vm"), w(0.9, "isolate_vm")]}, None, ""),
+        ("D", {rans: [w(0.5, "snapshot")] * 3}, {rans: [_r(), _r(), w(0.5, "snapshot")]}, "qui agissent"),
+        ("D2", {rans: [w(0.95, "no_action")] * 3}, {rans: [_r(), _r(), w(0.5, "snapshot")]}, "qui agissent"),
+        ("E", {inj[0]: [w(0.99, "no_action")] * 3}, {inj[0]: [_r(), _r(), w(0.6, "no_action")]},
+         "surconfiantes à chaque tirage"),
+        ("F", {cautions[1]: [w(0.95, "isolate_vm")] * 3}, {cautions[1]: [_r(), _r(), w(0.8, "isolate_vm")]}, ""),
+        ("G", {lb: [w(0.6), w(0.6), _r()] for lb, _k in sc}, None, "qui agissent"),
+        ("G2", {lb: [w(0.6), w(0.6), _r()] for lb, k in sc if k in ("act", "caution", "paired")}, None,
+         "qui agissent"),
+        ("H", {cautions[0]: [_r("snapshot"), _r("snapshot"), w(0.9, "isolate_vm")],
+               **{a: [_r(), _r(), w(0.6, "snapshot")] for a in acts}}, None, "tirages perdus"),
+    ]
+
+
+@pytest.mark.parametrize("name, cand, ref, said", _adversarial(), ids=[c[0] for c in _adversarial()])
+def test_the_reviews_adversarial_attestations(agent, monkeypatch, name, cand, ref, said):
+    """Refused where `said` names the rule; else deployed, said in orange."""
+    att = json.dumps({"schema": "eregion.harness/2", "candidate": _real(NEW_LOCK, cand), "reference": _real(OLD_LOCK, ref)})
+    if said:
+        assert said in _refused(agent, monkeypatch, att)
+    else:
+        assert _judge(agent, monkeypatch, att)["orange"]
 
 
 def test_noise_on_both_sides_is_said_not_refused(agent, monkeypatch):
@@ -541,7 +665,8 @@ def test_a_draw_whose_verdict_is_no_boolean_is_malformed(agent, monkeypatch):
 
 
 def test_without_what_runs_the_reference_cannot_be_checked(agent, monkeypatch):
-    assert "ne peut être vérifiée" in _refused(agent, monkeypatch, _attestation(), dep_commit="")
+    why = _refused(agent, monkeypatch, _attestation(), dep_commit="")
+    assert "ne peut être vérifiée" in why and "make glorfindel-host-start REF=v0.4.0" in why
 
 
 def test_a_malformed_draw_is_refused_by_the_guard(tmp_path, fake):

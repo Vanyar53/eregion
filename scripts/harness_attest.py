@@ -151,7 +151,8 @@ def main(argv: list[str] | None = None) -> int:
     tag = reference_tag(args.base, fetch=not args.no_fetch)
     lock = reference_lock(tag)
     if hashlib.sha256(lock).digest() == hashlib.sha256(mine).digest():
-        print(f"{LOCK} est celui de {tag} : le CD n'a rien à attester — rien lancé")
+        print(f"ce verrou est déjà celui de {tag} : si H0 tourne sur une release d'avant, donne "
+              f"BASE=<la release d'avant {tag}> ; sinon le CD n'a rien à attester — rien lancé")
         return 0
     cache = Path(args.cache) if args.cache else cache_dir()
     py, lock_file = reference_venv(lock, cache)
@@ -164,7 +165,10 @@ def main(argv: list[str] | None = None) -> int:
     ref = subprocess.run([str(py), str(SMOKE), *common, "--lock", str(lock_file), "--ref", tag,
                           "--pass-out", str(ref_pass)], cwd=REPO, env=env, check=False)
     if not ref_pass.is_file():
-        print(f"→ la passe de référence n'a rien écrit (code {ref.returncode}) : rien d'attesté")
+        print(f"→ la passe de référence n'a rien écrit (code {ref.returncode}) : rien d'attesté. Si elle a échoué "
+              f"à l'import (ModuleNotFoundError ci-dessus), le code de ce checkout exige une dépendance que le verrou "
+              f"de {tag} n'a pas. Une PR de verrou ne porte pas de code qui exige ses nouvelles dépendances : "
+              "sépare les PR — le verrou d'abord, attesté et déployé, puis le code qui s'en sert.")
         return 1
     print(f"\n══ 2/2 — le candidat : {LOCK} de ce checkout ══\n", flush=True)
     cand = subprocess.run([sys.executable, str(SMOKE), *common, "--reference", str(ref_pass),

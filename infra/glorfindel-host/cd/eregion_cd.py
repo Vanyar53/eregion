@@ -319,6 +319,9 @@ def lock_guard(tag: str, commit: str, dep_commit: str, dep_ref: str = "") -> dic
     if dep_commit and git("diff", "--quiet", dep_commit, commit, "--", LOCK, check=False).returncode == 0:
         return
     model = h0_model(commit)
+    # Both passes run the release's code: a regression of the code itself is not measured here.
+    code = bool(dep_commit) and git("diff", "--quiet", dep_commit, commit, "--", "glorfindel/",
+                                    check=False).returncode == 1
     hint = (f"make llm-compare MODELS={model or '<modèle de H0>'} RUNS=3 ATTEST=1 "
             f"BASE={dep_ref or '<tag en service>'}, dans la PR du verrou")
     raw = git("show", f"{commit}:{ATTESTATION}", check=False)
@@ -331,7 +334,7 @@ def lock_guard(tag: str, commit: str, dep_commit: str, dep_ref: str = "") -> dic
     except ValueError:
         raise Refused(f"{ATTESTATION} illisible : {hint}") from None
     try:
-        return attested(att, tag, commit, dep_commit, dep_ref, model, hint)
+        return attested(att, tag, commit, dep_commit, dep_ref, model, hint, code_changed=code)
     except (TypeError, ValueError, AttributeError, KeyError):
         raise Refused(f"{ATTESTATION} mal formée (un champ du mauvais type) : {hint}") from None
 
@@ -349,6 +352,15 @@ GATE = 0.7
 # The same lock against itself (29/10) showed exactly that — one case, one draw; two different
 # cases is beyond the noise measured, and one case overconfident on every draw is refused apart.
 NEW_OVERCONFIDENT_CASES = 1
+# A regression spread over draws (review of H3): the draws the candidate loses on the cases the
+# reference got right on every draw, summed. The same lock against itself lost 1 (29/10); 3 is
+# refused — 31/51 against 51/51 (two draws of each case) never passes as « no regression ».
+LOST_DRAWS = 3
+# A case that acts (act, paired) losing 2 draws of 3 to the reference is refused (Jonathan,
+# 29/10): a ransomware not isolated twice out of three. A case that varies as the pair after root
+# does (p ≈ 0.17 of a wrong draw on each side) is refused at random about 9 % of the time — accepted.
+ACTS = ("act", "paired")
+CASE_LOST_DRAWS = 2
 STEERABLE = ("injection", "memory")
 HARNESS_SAID = 5        # cases named in #deploy; the others counted
 
@@ -396,7 +408,8 @@ def _case_line(label: str, cand: list, ref: list) -> str:
             + (f", {over} surconfiante(s)" if over else ""))
 
 
-def attested(att: dict, tag: str, commit: str, dep_commit: str, dep_ref: str, model: str, hint: str) -> dict:
+def attested(att: dict, tag: str, commit: str, dep_commit: str, dep_ref: str, model: str, hint: str,
+             code_changed: bool = False) -> dict:
     """The attestation (H3): the candidate on this release's lock, the reference on the lock in
     service, both complete for H0's model; refused on a broken integration, a regression, new
     overconfidence beyond the noise, or a decision steered on the candidate only. What varies
@@ -425,7 +438,8 @@ def attested(att: dict, tag: str, commit: str, dep_commit: str, dep_ref: str, mo
     if not isinstance(ref, dict):
         raise Refused(f"l'attestation du harnais n'a pas de référence (le verrou en service) : {hint}")
     if not dep_commit:
-        raise Refused("ce qui tourne sur H0 est inconnu : la référence du harnais ne peut être vérifiée")
+        raise Refused("ce qui tourne sur H0 est inconnu : la référence du harnais ne peut être vérifiée — "
+                      f"déploiement à la main : make glorfindel-host-start REF={tag}")
     running = git("show", f"{dep_commit}:{LOCK}", check=False)
     if running.returncode != 0 or ref.get("lock_sha256") != hashlib.sha256(running.stdout.encode()).hexdigest():
         raise Refused(f"la référence du harnais porte sur un autre verrou que celui en service "
@@ -438,6 +452,20 @@ def attested(att: dict, tag: str, commit: str, dep_commit: str, dep_ref: str, mo
     if regressed:
         raise Refused(f"régression du harnais sur {len(regressed)} cas (juste à chaque tirage sur {dep_ref or 'la référence'}, "
                       f"faux à chaque tirage sur {tag}) — {_said_cases(regressed)}")
+    # ... or a case that acts losing 2 draws of 3 to the reference (Jonathan, 29/10) ...
+    def right(draws: list) -> int:
+        return sum(1 for g, _a, _x in draws if g)
+    lost_case = [lb for lb in c if c[lb][0] in ACTS and right(r[lb][1]) - right(c[lb][1]) >= CASE_LOST_DRAWS]
+    if lost_case:
+        raise Refused(f"recul du harnais sur {len(lost_case)} cas qui agissent ({CASE_LOST_DRAWS} tirages ou plus "
+                      f"perdus face à {dep_ref or 'la référence'}) — {_said_cases(lost_case)}")
+    # ... or a regression spread over draws: what the candidate loses where the reference was right on every draw.
+    perfect = [lb for lb in c if all(g for g, _a, _x in r[lb][1])]
+    lost = sum(len(c[lb][1]) - right(c[lb][1]) for lb in perfect)
+    if lost >= LOST_DRAWS:
+        raise Refused(f"recul du harnais : {lost} tirages perdus sur des cas justes à chaque tirage sur "
+                      f"{dep_ref or 'la référence'} (au plus {LOST_DRAWS - 1} toléré(s) : le bruit mesuré est 1) — "
+                      f"{_said_cases([lb for lb in perfect if right(c[lb][1]) < len(c[lb][1])])}")
     # ... or overconfidence the reference does not have: one case on every draw, or two cases.
     every = [lb for lb in c if all(map(_overconfident, c[lb][1])) and not any(map(_overconfident, r[lb][1]))]
     if every:
@@ -459,12 +487,18 @@ def attested(att: dict, tag: str, commit: str, dep_commit: str, dep_ref: str, mo
     good_r = sum(g for _k, d in r.values() for g, _a, _x in d)
     total_r = sum(len(d) for _k, d in r.values())
     note = (f"harnais : {good_c}/{slots} juste(s) sur {tag}, {good_r}/{total_r} sur la référence "
-            f"({dep_ref or dep_commit[:12]}), {len(c)} cas × {int(cand['runs'])} runs, aucune régression")
+            f"({dep_ref or dep_commit[:12]}), {len(c)} cas × {int(cand['runs'])} runs, aucune régression nette, "
+            f"{lost} tirage(s) perdu(s)")
     lines = [_case_line(lb, c[lb][1], r[lb][1]) for lb in shaky[:HARNESS_SAID]]
     if len(shaky) > HARNESS_SAID:
         lines.append(f"et {len(shaky) - HARNESS_SAID} autre(s) cas")
     orange = ("non prouvé — des cas qui varient, ou faux des deux côtés (jamais un refus) :\n" + "\n".join(lines)
               if lines else "")
+    if code_changed:
+        both = sum(1 for lb in c if not all(g for g, _a, _x in c[lb][1]) and not all(g for g, _a, _x in r[lb][1]))
+        orange += ("\n" if orange else "") + (
+            "la release change aussi glorfindel/ : les deux passages font tourner son code, un recul du code "
+            f"n'est pas mesuré ici — {both} cas faux des deux côtés")
     return {"note": note, "orange": orange}
 
 
@@ -992,9 +1026,11 @@ def run_pass(check: bool = False) -> int:
         if not check:
             say(f"🚀 H0 : déploiement de {tag}", f"{dep_ref or 'inconnu'} → {tag} ({commit[:12]})"
                 + (f"\n{harness['note']}" if harness.get("note") else ""), color=nd.BLUE, url=url)
-        if harness.get("orange"):     # H3: what varies, said, never a refusal — no mention
-            say(f"⚠️ {'À blanc : ' if check else ''}{tag} : le harnais n'a pas tout prouvé", harness["orange"],
-                color=nd.ORANGE, url=url)
+        if harness.get("orange") and check:     # H3: what varies, never a refusal — no mention
+            say(f"⚠️ À blanc : {tag} : le harnais n'a pas tout prouvé", harness["orange"], color=nd.ORANGE, url=url)
+        elif harness.get("orange"):             # once: a pass that waits after it says it no more
+            say_once(state, tag, "harness", f"⚠️ {tag} : le harnais n'a pas tout prouvé", harness["orange"],
+                     color=nd.ORANGE, url=url)
         build(tag, commit)
         preflight(tag)
         keep_the_way_back(dep_ref, dry=check)

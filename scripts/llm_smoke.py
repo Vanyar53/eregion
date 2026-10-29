@@ -547,6 +547,10 @@ def main() -> int:
     if args.attest and not args.reference:
         print("--attest needs --reference (the pass on the lock in service): make llm-compare ATTEST=1")
         return 2
+    if (args.attest or args.pass_out) and (kinds or runs < 3):
+        print("an attestation's pass runs every case, 3 runs at least (H0's CD refuses less): "
+              "no --kinds, --runs 3 — nothing run")
+        return 2
     if args.reference:
         reference, why = read_reference(args.reference, models, runs)
         if why:

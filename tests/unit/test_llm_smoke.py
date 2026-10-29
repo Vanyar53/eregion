@@ -234,9 +234,23 @@ def test_a_reference_that_does_not_match_runs_nothing(smoke, monkeypatch, tmp_pa
 ROOT = SMOKE.parents[1]
 
 
+def _cd_agent():
+    """H0's CD agent, its functions alone (its sys.path put back): the CI reads a pass as it does."""
+    spec = importlib.util.spec_from_file_location("eregion_cd_ci", ROOT / "infra" / "glorfindel-host" / "cd" /
+                                                  "eregion_cd.py")
+    mod = importlib.util.module_from_spec(spec)
+    saved = list(sys.path)
+    try:
+        spec.loader.exec_module(mod)
+    finally:
+        sys.path[:] = saved
+    return mod
+
+
 def _attestation_problems(att_path: Path, lock_path: Path, model: str, repo: Path = ROOT) -> list[str]:
     import hashlib
     import json
+    import re
     import subprocess
     if not att_path.is_file():
         return []
@@ -249,12 +263,23 @@ def _attestation_problems(att_path: Path, lock_path: Path, model: str, repo: Pat
         problems.append(f"{att_path.name} porte sur un autre {lock_path.name} : make llm-compare … ATTEST=1")
     if not ref:
         problems.append(f"{att_path.name} sans référence (le verrou en service)")
+    # Each pass read as H0's CD reads it, for the default model: complete, every case, 3 runs.
+    cd, cases = _cd_agent(), {}
     for side, p in (("candidat", cand), ("référence", ref)):
-        if model not in [m.get("model") for m in p.get("models") or []]:
-            problems.append(f"{att_path.name} : le passage {side} ne couvre pas le modèle par défaut ({model})")
+        try:
+            _entry, cases[side] = cd._passage(p, model, side, "make llm-compare … ATTEST=1")
+        except cd.Refused as e:
+            problems.append(f"{att_path.name} : {e}")
+        except (TypeError, ValueError, KeyError, AttributeError):
+            problems.append(f"{att_path.name} : le passage {side} est mal formé")
+    if len(cases) == 2 and cases["candidat"].keys() != cases["référence"].keys():
+        problems.append(f"{att_path.name} : les deux passages n'ont pas les mêmes cas")
     # The reference carries its release's lock, when the checkout has the tag (in CI, often not).
-    tag = ref.get("ref")
-    shown = subprocess.run(["git", "show", f"{tag}:requirements/glorfindel.txt"], cwd=repo,
+    tag = str(ref.get("ref") or "")
+    if tag and not re.fullmatch(r"v\d+\.\d+\.\d+", tag):
+        problems.append(f"{att_path.name} : la référence ne nomme pas une release ({tag[:40]!r})")
+        tag = ""
+    shown = subprocess.run(["git", "show", "--end-of-options", f"{tag}:requirements/glorfindel.txt"], cwd=repo,
                            capture_output=True, check=False) if tag else None
     if shown is not None and shown.returncode == 0 and \
             ref.get("lock_sha256") != hashlib.sha256(shown.stdout).hexdigest():
@@ -418,3 +443,61 @@ def test_make_llm_compare_attest_runs_both_passes():
     assert "scripts/harness_attest.py --models m/a --runs 3 --base v0.4.5 --out requirements/harness.json" in attest
     plain = dry("MODELS=m/a")
     assert "scripts/llm_smoke.py --models m/a --runs 3" in plain and "attest" not in plain
+
+
+def test_the_ci_reads_each_pass_as_the_cd_does(smoke, tmp_path):
+    """Review of H3: a partial pass (--kinds), a case left out on one side, a case drawn too few
+    times, a reference that names no release — each fails in CI, as H0's CD would refuse it."""
+    import json
+    lock, ref_lock, att = tmp_path / "glorfindel.txt", tmp_path / "ref.txt", tmp_path / "harness.json"
+    lock.write_text("litellm==1.100.4\n")
+    ref_lock.write_text("litellm==1.86.1\n")
+    cand = smoke.harness_pass([_result("m/a", CASES_OK)], 3, lock)
+    ref = smoke.harness_pass([_result("m/a", CASES_OK)], 3, ref_lock, "v0.4.5")
+    partial = smoke.harness_pass([_result("m/a", CASES_OK)], 3, lock, kinds={"paired"})
+    att.write_text(json.dumps(smoke.attestation(partial, ref)))
+    assert any("pas tous les cas" in p for p in _attestation_problems(att, lock, "m/a", tmp_path))
+    fewer = smoke.harness_pass([_result("m/a", CASES_OK[:1])], 3, lock)
+    att.write_text(json.dumps(smoke.attestation(fewer, ref)))
+    assert any("pas les mêmes cas" in p for p in _attestation_problems(att, lock, "m/a", tmp_path))
+    short = smoke.harness_pass([_result("m/a", [(lb, k, d[:2]) for lb, k, d in CASES_OK])], 3, lock)
+    att.write_text(json.dumps(smoke.attestation(short, ref)))
+    assert any("incomplet" in p for p in _attestation_problems(att, lock, "m/a", tmp_path))
+    for bad in ("--output=/tmp/x", "HEAD", "main"):
+        att.write_text(json.dumps(smoke.attestation(cand, dict(ref, ref=bad))))
+        assert any("ne nomme pas une release" in p for p in _attestation_problems(att, lock, "m/a", tmp_path))
+
+
+def test_an_attestation_on_some_cases_or_fewer_runs_runs_nothing(smoke, monkeypatch, tmp_path):
+    import json
+    lock, ref = tmp_path / "ref.txt", tmp_path / "reference.json"
+    lock.write_text("x\n")
+    ref.write_text(json.dumps(smoke.harness_pass([_result("m/a", CASES_OK)], 1, lock)))
+    out = tmp_path / "harness.json"
+    for extra in (["--runs", "3", "--kinds", "paired"], ["--runs", "1"]):
+        for flag in (["--reference", str(ref), "--attest", str(out)], ["--pass-out", str(out)]):
+            code, calls = _main(smoke, monkeypatch, ["--models", "m/a", *extra, *flag], lambda m: _result(m, CASES_OK))
+            assert (code, calls) == (2, []) and not out.exists()
+
+
+def test_attest_says_the_rule_when_the_reference_cannot_import_the_code(attest, monkeypatch, tmp_path, capsys):
+    """A lock's PR that brings code needing its new dependencies: the reference cannot run it."""
+    class Failed:
+        returncode = 1
+    monkeypatch.setattr(attest, "drift", lambda text: [])
+    monkeypatch.setattr(attest, "reference_tag", lambda base, fetch=True: "v0.4.5")
+    monkeypatch.setattr(attest, "reference_lock", lambda tag: b"litellm==1.86.1\n")
+    monkeypatch.setattr(attest, "reference_venv", lambda lock, cache: (tmp_path / "py", tmp_path / "lock"))
+    monkeypatch.setattr(attest.subprocess, "run", lambda cmd, **kw: Failed())
+    assert attest.main(["--models", MODEL, "--runs", "3", "--cache", str(tmp_path / "c")]) == 1
+    out = capsys.readouterr().out
+    assert "ModuleNotFoundError" in out and "sépare les PR" in out and "v0.4.5" in out
+
+
+def test_attest_on_the_lock_of_the_latest_tag_asks_for_the_release_before(attest, monkeypatch, capsys):
+    monkeypatch.setattr(attest, "drift", lambda text: [])
+    monkeypatch.setattr(attest, "reference_tag", lambda base, fetch=True: "v0.4.6")
+    monkeypatch.setattr(attest, "reference_lock", lambda tag: (ROOT / "requirements" / "glorfindel.txt").read_bytes())
+    assert attest.main(["--models", MODEL, "--runs", "3"]) == 0
+    said = capsys.readouterr().out
+    assert "déjà celui de v0.4.6" in said and "BASE=<la release d'avant v0.4.6>" in said

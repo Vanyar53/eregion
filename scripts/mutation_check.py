@@ -4016,7 +4016,7 @@ MUTANTS += [
     ("M1685", "a case drawn fewer times than the runs accepted: an empty reference is right « on every draw » (H3)", CD,
      '        if len(draws) != runs or str(c["label"]) in cases:\n', '        if str(c["label"]) in cases:\n'),
     ("M1686", "what the harness did not prove never said on #deploy (H3)", CD,
-     '        if harness.get("orange"):', "        if False:"),
+     '        elif harness.get("orange"):', "        elif False:"),
     ("M1687", "a .venv that does not follow the lock attested under its sha256 (H3)", _ATT,
      "        if have != pinned:\n", "        if False:\n"),
     ("M1688", "a committed attestation on another lock passes the CI (H3, DEP1)", _SMOKE_T,
@@ -4025,6 +4025,60 @@ MUTANTS += [
      "    if not ref:\n        problems.append", "    if False:\n        problems.append"),
 ]
 TESTS.update({f"M{n}": "tests/unit/test_host_cd.py" for n in range(1670, 1690)})
+# H3 after its review (30/10, M1700–M1719): a regression spread over draws, a case that acts
+# losing 2 of 3, the gate at exactly 0.7, the reference that varied, the code the attestation
+# does not measure, the orange said once, the CI reading each pass as the CD does.
+MUTANTS += [
+    ("M1700", "31/51 against 51/51 deployed as « no regression »: draws lost never summed (H3, review)", CD,
+     "    if lost >= LOST_DRAWS:\n", "    if False:\n"),
+    ("M1701", "3 draws lost tolerated: the threshold one too far (H3, review)", CD,
+     "    if lost >= LOST_DRAWS:\n", "    if lost > LOST_DRAWS:\n"),
+    ("M1702", "draws lost counted on cases the reference got wrong too: noise on both sides refused (H3, review)", CD,
+     "    perfect = [lb for lb in c if all(g for g, _a, _x in r[lb][1])]\n", "    perfect = list(c)\n"),
+    ("M1703", "a ransomware not isolated twice out of three deployed (H3, Jonathan 29/10)", CD,
+     "    if lost_case:\n", "    if False:\n"),
+    ("M1704", "a case that acts must lose all 3 draws: 2/3 lost deployed (H3, review)", CD,
+     "CASE_LOST_DRAWS = 2\n", "CASE_LOST_DRAWS = 3\n"),
+    ("M1705", "a case that does not act losing 2 draws where the reference varied refused (H3, review)", CD,
+     "    lost_case = [lb for lb in c if c[lb][0] in ACTS and ", "    lost_case = [lb for lb in c if "),
+    ("M1706", "a wrong draw at exactly the gate (0.7) not overconfident: the gate lets it through (H3, review)", CD,
+     "    return not good and conf is not None and float(conf) >= GATE\n",
+     "    return not good and conf is not None and float(conf) > GATE\n"),
+    ("M1707", "a regression where the reference varied: right on any draw before taken for right on every (H3, review)",
+     CD, "    regressed = [lb for lb in c if all(g for g, _a, _x in r[lb][1]) and",
+     "    regressed = [lb for lb in c if any(g for g, _a, _x in r[lb][1]) and"),
+    ("M1708", "a release that changes glorfindel/ with the lock: what the attestation does not measure unsaid (H3, review)",
+     CD, "    if code_changed:\n", "    if False:\n"),
+    ("M1709", "the orange said again at every pass that waits after the guard (H3, review, CI3)", CD,
+     '            say_once(state, tag, "harness", f"⚠️ {tag} : le harnais n\'a pas tout prouvé", harness["orange"],\n'
+     "                     color=nd.ORANGE, url=url)",
+     '            say(f"⚠️ {tag} : le harnais n\'a pas tout prouvé", harness["orange"],\n'
+     "                     color=nd.ORANGE, url=url)"),
+    ("M1710", "the command to run again loses BASE=<tag en service> (H3, review)", CD,
+     "            f\"BASE={dep_ref or '<tag en service>'}, dans la PR du verrou\")",
+     '            ", dans la PR du verrou")'),
+    ("M1711", "what runs unknown: the deployment by hand unsaid (H3, review)", CD,
+     '                      f"déploiement à la main : make glorfindel-host-start REF={tag}")',
+     '                      "")'),
+    ("M1712", "the CI reads a partial attestation without the CD's _passage (H3, review)", _SMOKE_T,
+     '            _entry, cases[side] = cd._passage(p, model, side, "make llm-compare … ATTEST=1")\n',
+     "            cases[side] = {}\n"),
+    ("M1713", "the CI never compares the two passes' cases (H3, review)", _SMOKE_T,
+     '    if len(cases) == 2 and cases["candidat"].keys() != cases["référence"].keys():\n', "    if False:\n"),
+    ("M1714", "the CI hands git a reference that names no release (H3, review)", _SMOKE_T,
+     '    if tag and not re.fullmatch(r"v\\d+\\.\\d+\\.\\d+", tag):\n', "    if False:\n"),
+    ("M1715", "--attest with --kinds or fewer than 3 runs pays a pass the CD refuses (H3, review)", "scripts/llm_smoke.py",
+     "    if (args.attest or args.pass_out) and (kinds or runs < 3):\n", "    if False:\n"),
+    ("M1716", "a reference that cannot import the code: the rule (separate the PRs) unsaid (H3, review)", _ATT,
+     '              "sépare les PR — le verrou d\'abord, attesté et déployé, puis le code qui s\'en sert.")',
+     '              "")'),
+    ("M1717", "the lock already the latest tag's: BASE=<the release before> unsaid (H3, review)", _ATT,
+     '        print(f"ce verrou est déjà celui de {tag} : si H0 tourne sur une release d\'avant, donne "\n'
+     '              f"BASE=<la release d\'avant {tag}> ; sinon le CD n\'a rien à attester — rien lancé")',
+     '        print("rien lancé")'),
+]
+TESTS.update({f"M{n}": "tests/unit/test_host_cd.py" for n in range(1700, 1712)})
+TESTS.update({f"M{n}": _SMOKE_T for n in range(1712, 1718)})
 TESTS.update({mid: _SMOKE_T for mid in ("M1671", "M1677", "M1683", "M1687", "M1688", "M1689")})
 
 

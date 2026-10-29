@@ -3476,7 +3476,7 @@ MUTANTS += [
      "    msg = _titled(cfg, board, BOARD_TITLE) if board else None\n",
      '    msg = fetch("GET", f"{cfg.agents}/messages/{board}", "webhook #agents") if board else None\n'),
     ("M1434", "the line notify.yml took off put back by the next refresh (REL1)", ADS,
-     "    if not items or not (due or any([_ping_gone(cfg, w) for w in items])):\n",
+     "    if not items or not (due or (probe and any([_ping_gone(cfg, w) for w in items]))):\n",
      "    if not items or not due:\n"),
     ("M1435", "a draft made again keeps the stale link and ping (REL1)", ADS,
      '        if old.get("url", "") == item.get("url", ""):\n', "        if True:\n"),
@@ -3485,6 +3485,20 @@ MUTANTS += [
      "${{ secrets.EREGION_DISCORD_WEBHOOK_AGENTS }}"),
 ]
 TESTS.update({f"M{n}": "tests/unit/test_release.py" for n in range(1430, 1437)})
+# REL1 after its second 5.5 review: M1437–M1439, M1470.
+MUTANTS += [
+    ("M1437", "the way back of a failure in route: git switch - fails from a detached HEAD, staged files kept (REL1)",
+     RELS, '    back = f"git reset -q --hard && git checkout -q - && git branch -D {branch}"\n',
+     '    back = f"git checkout -- . && git switch - && git branch -D {branch}"\n'),
+    ("M1438", "the way back after a pushed branch leaves it on the remote (REL1)", RELS,
+     '        back += f" && git push origin --delete {branch}"\n', "        pass\n"),
+    ("M1439", "a draft's ping looked for in Discord at every refresh (REL1)", ADS,
+     '    probe = bool(items) and not due and now - state.get("pings_probed", 0) >= PING_PROBE_S\n',
+     "    probe = bool(items) and not due\n"),
+    ("M1470", "run() starts whatever it is given: its git-or-gh check gone (REL1)", RELS,
+     '    if not cmd or cmd[0] not in ("git", "gh"):\n        raise ValueError("git or gh only")\n', ""),
+]
+TESTS.update({mid: "tests/unit/test_release.py" for mid in ("M1437", "M1438", "M1439", "M1470")})
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

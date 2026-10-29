@@ -53,6 +53,7 @@ ASK_DELAY_S = 30         # a question answered within it never pings: Jonathan w
 STALE_S = 86400          # a launch refused after the hook saw it never comes back: gone after a day
 RECENT_MAX = 8
 PR_CHECK_S = 300         # GitHub asked at most every five minutes whether a pull request was merged
+PING_PROBE_S = 60        # a draft's ping looked for in Discord at most once a minute
 WATCH_MAX_S = 2 * 86400  # the watcher of pull requests to merge gives up after two days
 REPORT_HEAD = 1500       # the report's head in the thread's card; the whole report comes as a file
 ATTACH_MAX = 1_000_000   # a report beyond it is cut in its file (the real ones: 1 to 15 KB on 28/10)
@@ -353,10 +354,14 @@ def _ping_gone(cfg: nd.Config, w: dict) -> bool:
 def _published_releases(cfg: nd.Config, state: dict, now: int, force: bool) -> None:
     """A draft Jonathan published no longer waits. GitHub knows a release by its tag once it is
     published only (a draft has no tag yet: 404); asked, never often — at once, though, when its
-    ping is gone: notify.yml took its line off the board, which must not put it back."""
+    ping is gone (looked for at most once a minute): notify.yml took its line off the board, which
+    must not put it back."""
     items = [w for w in state["waiting"] if w["kind"] == "release"]
     due = force or now - state.get("releases_checked", 0) >= PR_CHECK_S
-    if not items or not (due or any([_ping_gone(cfg, w) for w in items])):
+    probe = bool(items) and not due and now - state.get("pings_probed", 0) >= PING_PROBE_S
+    if probe:
+        state["pings_probed"] = now
+    if not items or not (due or (probe and any([_ping_gone(cfg, w) for w in items]))):
         return
     state["releases_checked"] = now
     api = os.environ.get("GITHUB_API_URL", "https://api.github.com")

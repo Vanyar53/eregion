@@ -418,20 +418,43 @@ def test_release_draft_refuses_a_version_main_s_changelog_does_not_hold(repo, tm
 # - In release.py, every list that starts with "gh" is one of four commands, never `gh api`;
 #   `release create` holds the literal "--draft" followed by another flag, and `release edit` is
 #   exactly [gh, release, edit, <tag>, --notes-file, <path>]. "gh" appears nowhere else but in
-#   shutil.which; release.py opens no HTTP connection of its own.
+#   shutil.which and run()'s own check ("git", "gh"). A command runs only through run(), with a literal list that starts with "git" or
+#   "gh"; run() is the only caller of subprocess, and checks its head itself. No shell, no
+#   os.system / popen / exec / spawn, no eval, exec, getattr or __import__; no HTTP of its own.
 # - Everywhere (release.py, agents_discord.py, notify_discord.py, the make recipes), no string
-#   says `draft` as a word, a flag or a field — but the literal "--draft" of `create`. The names
+#   says `draft` as a word, a flag or a field — strings joined by + or in an f-string read whole,
+#   keyword arguments (dict(draft=…)) too — but the literal "--draft" of `create`. The names
 #   `release-draft` (the make target, the subcommand) and `release_draft` (a function) are names.
 # - In agents_discord.py and notify_discord.py, a URL that holds `releases` is only ever read
-#   (GET), by fetch(method, url, …) as by the bot's call(method, path, …).
+#   (GET), by fetch(method, url, …) as by the bot's call(method, path, …), positional or named;
+#   and no call, whatever its name (getattr…), takes a method that writes with such a URL.
+# What no reading of the text can see: a method AND a URL both computed at run time (a join, a
+# lookup) behind a function looked up by a computed name. The dynamic tests cover it: no request
+# but GET ever reaches the fake GitHub (test_the_draft_is_on_the_board_…), and every gh call is
+# compared argument by argument (test_no_call_publishes).
 
 GH_COMMANDS = {("pr", "create"), ("release", "list"), ("release", "create"), ("release", "edit")}
-DRAFT_WORD = re.compile(r"(?i)(?<![a-z_-])-*draft")
+DRAFT_WORD = re.compile(r"(?i)(?<!release)(?<!release[-_])-*draft")
+WRITES = {"POST", "PATCH", "PUT", "DELETE"}
 SCRIPTS = ("release.py", "agents_discord.py", "notify_discord.py")
+FORBIDDEN_CALLS = {"eval", "exec", "getattr", "__import__", "compile", "globals", "vars"}
+FORBIDDEN_OS = re.compile(r"system|popen|exec.*|spawn.*|fork.*|posix_spawn.*")
 
 
 def _const(node) -> str | None:
     return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
+
+
+def _folded(node) -> str | None:
+    """A string the code writes in pieces: "a" + "b", f"a{x}b" (its literal parts), as one."""
+    if (c := _const(node)) is not None:
+        return c
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left, right = _folded(node.left), _folded(node.right)
+        return None if left is None or right is None else left + right
+    if isinstance(node, ast.JoinedStr):
+        return "".join(_const(v) or "" for v in node.values)
+    return None
 
 
 def _docstrings(tree) -> set[int]:
@@ -446,6 +469,10 @@ def _docstrings(tree) -> set[int]:
 
 def _gh_lists(tree) -> list:
     return [n for n in ast.walk(tree) if isinstance(n, ast.List) and n.elts and _const(n.elts[0]) == "gh"]
+
+
+def _parents(tree) -> dict[int, ast.AST]:
+    return {id(child): node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
 
 
 def publishes_gh(source: str) -> list[str]:
@@ -467,7 +494,8 @@ def publishes_gh(source: str) -> list[str]:
                 bad.append(f"edit is not [gh, release, edit, <tag>, --notes-file, <path>]: {consts}")
     ghs = sum(_const(n) == "gh" for n in ast.walk(tree))
     whiches = sum(isinstance(n, ast.Call) and getattr(n.func, "attr", "") == "which" for n in ast.walk(tree))
-    if ghs != len(lists) + whiches:
+    guards = sum(isinstance(n, ast.Tuple) and [_const(e) for e in n.elts] == ["git", "gh"] for n in ast.walk(tree))
+    if ghs != len(lists) + whiches + guards:
         bad.append("gh named outside a command list")
     drafts = sum(_const(n) == "--draft" for n in ast.walk(tree))
     if drafts != sum(1 for n in lists if tuple(_const(e) for e in n.elts[1:3]) == ("release", "create")):
@@ -479,25 +507,93 @@ def publishes_gh(source: str) -> list[str]:
     return bad
 
 
+def publishes_code(source: str) -> list[str]:
+    """How release.py may start a process: run() with a literal git or gh list, nothing else."""
+    tree, bad = ast.parse(source), []
+    parents = _parents(tree)
+    defs = {n.name: n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+    for n in ast.walk(tree):
+        if isinstance(n, ast.keyword) and n.arg == "shell":
+            bad.append("shell=")
+        if isinstance(n, ast.ImportFrom) and (n.module or "").split(".")[0] in ("subprocess", "os", "pty"):
+            bad.append(f"from {n.module} import")
+        if isinstance(n, ast.Import) and any(a.name.split(".")[0] in ("pty", "multiprocessing") for a in n.names):
+            bad.append("import pty/multiprocessing")
+        if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name):
+            if n.value.id == "os" and FORBIDDEN_OS.fullmatch(n.attr):
+                bad.append(f"os.{n.attr}")
+            if n.value.id == "subprocess" and n.attr != "CompletedProcess":
+                call = parents.get(id(n))
+                inside = defs.get("run")
+                ok = (n.attr == "run" and isinstance(call, ast.Call) and call.func is n and inside is not None
+                      and any(x is call for x in ast.walk(inside))
+                      and len(call.args) == 1 and isinstance(call.args[0], ast.Name) and call.args[0].id == "cmd")
+                if not ok:
+                    bad.append(f"subprocess.{n.attr} outside run(cmd)")
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in FORBIDDEN_CALLS:
+            bad.append(f"{n.func.id}()")
+        if isinstance(n, ast.Name) and n.id == "run" and isinstance(n.ctx, ast.Load):
+            call = parents.get(id(n))
+            if not (isinstance(call, ast.Call) and call.func is n):
+                bad.append("run passed around")
+            elif not (call.args and isinstance(call.args[0], ast.List) and call.args[0].elts
+                      and _const(call.args[0].elts[0]) in ("git", "gh")):
+                bad.append("run() without a literal git or gh list")
+    inside = defs.get("run")
+    if inside is not None and 'cmd[0] not in ("git", "gh")' not in ast.get_source_segment(source, inside):
+        bad.append("run() does not check its command's head")
+    return bad
+
+
 def publishes_words(source: str) -> list[str]:
-    """Every string of the code (docstrings aside) that says draft, but "--draft" itself."""
+    """Every string of the code (docstrings aside) that says draft, but "--draft" itself; and
+    every keyword argument named so."""
     tree = ast.parse(source)
     skip = _docstrings(tree)
-    return [c for n in ast.walk(tree) if id(n) not in skip and (c := _const(n)) is not None
-            and c != "--draft" and DRAFT_WORD.search(c)]
+    bad = [n.arg for n in ast.walk(tree) if isinstance(n, ast.keyword) and n.arg and "draft" in n.arg.lower()]
+    for n in ast.walk(tree):
+        if id(n) in skip:
+            continue
+        if isinstance(n, (ast.Constant, ast.BinOp, ast.JoinedStr)):
+            c = _folded(n)
+            if c is not None and c != "--draft" and DRAFT_WORD.search(c):
+                bad.append(c)
+    return bad
+
+
+def _arg(call: ast.Call, at: int, *names: str):
+    if len(call.args) > at:
+        return call.args[at]
+    return next((k.value for k in call.keywords if k.arg in names), None)
 
 
 def publishes_http(source: str) -> list[str]:
     """A URL holding `releases` called with another method than GET."""
     bad = []
     for n in ast.walk(ast.parse(source)):
-        name = getattr(n.func, "attr", None) or getattr(n.func, "id", None) if isinstance(n, ast.Call) else None
-        if name not in ("fetch", "call", "Request", "urlopen") or len(n.args) < 2:
+        if not isinstance(n, ast.Call):
             continue
-        url = "".join(c for x in ast.walk(n.args[1]) if (c := _const(x)) is not None)
-        if "releases" in url and _const(n.args[0]) != "GET":
-            bad.append(f"{_const(n.args[0])} {url}")
+        args = [*n.args, *(k.value for k in n.keywords)]
+        texts = ["".join(c for x in ast.walk(a) if (c := _const(x)) is not None) for a in args]
+        texts += [f for a in args if (f := _folded(a))]
+        if any(t in WRITES for t in texts) and any("releases" in t for t in texts):
+            bad.append(f"a write on releases: {texts}")
+            continue
+        name = getattr(n.func, "attr", None) or getattr(n.func, "id", None)
+        if name in ("fetch", "call"):
+            method, url = _arg(n, 0, "method"), _arg(n, 1, "url", "path")
+        elif name in ("Request", "urlopen"):
+            method, url = next((k.value for k in n.keywords if k.arg == "method"), None), _arg(n, 0, "url")
+        else:
+            continue
+        where = "".join(c for x in ast.walk(url) if (c := _const(x)) is not None) if url is not None else ""
+        if "releases" in where and (_folded(method) if method is not None else "GET") != "GET":
+            bad.append(f"{_folded(method) if method is not None else None} {where}")
     return bad
+
+
+def publishes(source: str) -> list[str]:
+    return publishes_gh(source) + publishes_code(source) + publishes_words(source) + publishes_http(source)
 
 
 def _recipes(text: str, *targets: str) -> str:
@@ -513,7 +609,10 @@ def test_no_path_publishes_in_the_code():
     """Publishing deploys H0: nothing in the release's code turns a draft into a release."""
     code = {n: (ROOT / "scripts" / n).read_text(encoding="utf-8") for n in SCRIPTS}
     assert publishes_gh(code["release.py"]) == []
-    assert len(_gh_lists(ast.parse(code["release.py"]))) == 4      # pr create, release list/create/edit
+    assert publishes_code(code["release.py"]) == []
+    heads = sorted(tuple(_const(e) for e in n.elts[1:3]) for n in _gh_lists(ast.parse(code["release.py"])))
+    assert heads == sorted([("pr", "create")] * 2 + [("release", "list"), ("release", "create"), ("release", "create"),
+                                                      ("release", "edit")])   # each command shown and run
     for name, text in code.items():
         assert publishes_words(text) == [], name
     for name in ("agents_discord.py", "notify_discord.py"):
@@ -529,21 +628,42 @@ def test_no_path_publishes_in_the_code():
     '["gh", "release", "create", tag, "--draft", "False", "--target", sha]',
     '["gh", "release", "create", tag, "--draft", "--target", sha, "--draft", "0"]',
     'x = "--draft=" + "false"',
+    'x = "--dr" + "aft=f"',
     'x = f"--draft={value}"',
     '["gh", "api", "-X", "PATCH", f"repos/o/r/releases/{rid}", "-F", "draft=f"]',
     '["gh", "api", "--method", "PATCH", "repos/o/r/releases/1", "--input", path]',
     '["gh", *args]',
     'cmd = ["gh"] + ["release", "edit", tag, "--draft=false"]',
     'subprocess.run(["gh", "release", "edit", tag, "--notes-file", p, "--prerelease"])',
+    'run([shutil.which("gh"), "api", "-X", "PATCH", "repos/o/r/releases/1"], root)',
+    'run(cmd, root)',
+    'r = run\nr(["gh", "api"], root)',
+    'subprocess.run("gh api -X PATCH repos/o/r/releases/1", shell=True)',
+    'os.system("gh release edit v1 --notes-file n")',
+    'os.popen("gh api repos/o/r/releases")',
+    'from subprocess import run as go',
+    'json.dumps(dict(draft=False))',
     'import urllib.request',
     'nd.fetch("PATCH", f"{api}/repos/o/r/releases/{rid}", "GitHub API", {"draft": False})',
+    'nd.fetch("PATCH", url=f"{api}/repos/o/r/releases/{rid}")',
+    'nd.fetch(method="PATCH", url=f"{api}/repos/o/r/releases/{rid}")',
+    'getattr(nd, "fe" + "tch")("PATCH", f"{api}/repos/o/r/releases/{rid}")',
     'fetch("POST", api + "/repos/o/r/releases", "x", body)',
     'fetch(method, f"{api}/releases/{rid}", "x")',
+    'fetch("PA" + "TCH", f"{api}/releases/{rid}", "x")',
     'x = {"Draft": 0}',
     'x = "publish -F draft=f"',
+    'x = "undraft"',
 ], ids=lambda s: s[:40])
 def test_the_allow_list_sees_a_path_that_would_publish(snippet):
-    assert publishes_gh(snippet) or publishes_words(snippet) or publishes_http(snippet), snippet
+    assert publishes(snippet), snippet
+
+
+@pytest.mark.parametrize("snippet", ['x = "make release-draft VERSION=1"', "def release_draft(): pass",
+                                     'run(["gh", "release", "list"], root)', 'run(["git", *args], root)'])
+def test_the_allow_list_lets_the_names_through(snippet):
+    assert publishes_words(snippet) == [] and [b for b in publishes_code(snippet) if "run()" in b
+                                                                                       and "literal" in b] == []
 
 
 def test_the_makefile_check_sees_a_recipe_that_would_publish():
@@ -558,6 +678,7 @@ def test_no_call_publishes(repo, tmp_path, capsys, monkeypatch):
         _discord(monkeypatch, f)
         prepared(repo, capsys)
         assert rel.main(["release-draft", "0.4.4"]) == 0
+        assert [r for r in f.requests if r["path"].startswith("/gh/") and r["method"] != "GET"] == []
     finally:
         f.close()
     calls = [c["args"] for c in gh_calls(tmp_path)]
@@ -584,7 +705,11 @@ def _discord(monkeypatch, f):
 
 @pytest.fixture
 def fake(monkeypatch, tmp_path):
-    """The fake Discord; the local state and the configuration file in tmp_path, never the operator's."""
+    """The fake Discord; the local state and the configuration file in tmp_path, never the operator's;
+    none of the shell's Discord or GitHub variables (a real #ci webhook exported there)."""
+    for k in list(os.environ):
+        if k.startswith(("EREGION_DISCORD_", "GITHUB_")):
+            monkeypatch.delenv(k)
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     monkeypatch.setenv("EREGION_DISCORD_ENV", str(tmp_path / "absent.env"))
     f = FakeDiscord()
@@ -652,6 +777,7 @@ def test_the_draft_is_on_the_board_and_pinged_then_both_go_when_published(repo, 
     board, state = _board(fake)
     assert state["waiting"] == [] and line not in board["description"]
     assert "release v0.4.4 publiée" in board["description"]
+    assert [r for r in fake.requests if r["path"].startswith("/gh/") and r["method"] != "GET"] == []
 
 
 def gh_gh_release_notes(tmp_path):
@@ -791,7 +917,29 @@ def test_make_refuses_a_version_from_the_environment(make_env, tmp_path, target)
 
 # ── a failure past the point of no return ───────────────────────────────────────────
 
-def test_a_pull_request_that_fails_says_what_is_left_and_how_to_go_on(repo, tmp_path, capsys, monkeypatch):
+def _way_back(out: str) -> str:
+    (line,) = [x for x in out.splitlines() if "Ou revenir en arrière : " in x]
+    return line.split("Ou revenir en arrière : ", 1)[1].removesuffix(".")
+
+
+def _went_back(repo, out):
+    """The way back said, run as said: a clean tree, HEAD on origin/main, the branch gone here and there."""
+    p = subprocess.run(_way_back(out), shell=True, cwd=repo, capture_output=True, text=True)
+    assert p.returncode == 0, p.stderr
+    assert git(repo, "status", "--porcelain") == ""
+    assert git(repo, "rev-parse", "HEAD") == git(repo, "rev-parse", "origin/main")
+    assert git(repo, "branch", "--list", "chore/*") == ""
+    assert not git(repo, "ls-remote", "--heads", "origin", "chore/release-0.4.4")
+
+
+@pytest.fixture
+def detached(repo):
+    """The start docs/operations.md gives: git switch --detach origin/main."""
+    git(repo, "switch", "-q", "--detach", "origin/main")
+    return repo
+
+
+def test_a_pull_request_that_fails_says_what_is_left_and_how_to_go_on(detached, tmp_path, capsys, monkeypatch):
     monkeypatch.setenv("FAKE_GH_FAIL", "pr create")
     assert rel.main(["prepare", "0.4.4", "--title", "x"]) == 2
     out = capsys.readouterr().out
@@ -799,11 +947,13 @@ def test_a_pull_request_that_fails_says_what_is_left_and_how_to_go_on(repo, tmp_
     assert "Arrêté en route — échec à l'étape « pr », après la création de chore/release-0.4.4" in out
     assert "HTTP 502" in out and "Reste : la branche, son commit, poussée ; pas de PR" in out
     assert "Reprendre : gh pr create --base main --head chore/release-0.4.4" in out
-    assert "git push origin --delete chore/release-0.4.4" in out
-    assert git(repo, "branch", "--show-current") == "chore/release-0.4.4"      # it is there, as said
+    assert git(detached, "branch", "--show-current") == "chore/release-0.4.4"      # it is there, as said
+    assert git(detached, "ls-remote", "--heads", "origin", "chore/release-0.4.4")
+    assert _way_back(out).endswith("&& git push origin --delete chore/release-0.4.4")
+    _went_back(detached, out)
 
 
-def test_a_push_that_fails_says_what_is_left_and_how_to_go_back(repo, tmp_path, capsys):
+def test_a_push_that_fails_says_what_is_left_and_how_to_go_back(detached, tmp_path, capsys):
     hook = tmp_path / "origin.git" / "hooks" / "pre-receive"
     hook.write_text("#!/bin/sh\necho 'refused by the test' >&2\nexit 1\n")
     hook.chmod(0o755)
@@ -811,8 +961,21 @@ def test_a_push_that_fails_says_what_is_left_and_how_to_go_back(repo, tmp_path, 
     out = capsys.readouterr().out
     assert "échec à l'étape « push »" in out and "Reste : la branche et son commit, en local seulement" in out
     assert "git push -u origin chore/release-0.4.4 && gh pr create --base main --head chore/release-0.4.4" in out
-    assert "git switch - && git branch -D chore/release-0.4.4" in out
     assert [c for c in gh_calls(tmp_path) if c["args"][:2] == ["pr", "create"]] == []
+    hook.unlink()
+    _went_back(detached, out)
+
+
+def test_a_commit_that_fails_leaves_staged_files_the_way_back_drops(detached, tmp_path, capsys):
+    hook = detached / ".git" / "hooks" / "pre-commit"
+    hook.write_text("#!/bin/sh\necho 'refused by the test' >&2\nexit 1\n")
+    hook.chmod(0o755)
+    assert rel.main(["prepare", "0.4.4", "--title", "x"]) == 2
+    out = capsys.readouterr().out
+    assert "échec à l'étape « commit »" in out and "rien de commité" in out
+    assert git(detached, "diff", "--cached", "--name-only")                # staged: checkout -- . would not do
+    hook.unlink()
+    _went_back(detached, out)
 
 
 # ── notify.yml reads ids from the notes: only this draft's ping, only the board ─────
@@ -882,3 +1045,48 @@ def test_the_agents_webhook_is_given_to_release_events_only():
     (step,) = [s for s in doc["jobs"]["notify"]["steps"] if s.get("name") == "Discord"]
     assert step["env"]["EREGION_DISCORD_WEBHOOK_AGENTS"] == (
         "${{ github.event_name == 'release' && secrets.EREGION_DISCORD_WEBHOOK_AGENTS || '' }}")
+
+
+
+# ── the fixture, the probe, a webhook that fails ────────────────────────────────────
+
+def test_the_shell_s_discord_and_github_never_reach_a_test(monkeypatch, tmp_path, request):
+    """A real #ci webhook, a bot and a GitHub token exported in the shell that runs pytest."""
+    trap = FakeDiscord()
+    try:
+        monkeypatch.setenv("EREGION_DISCORD_WEBHOOK_CI", f"{trap.base}/api/webhooks/1/CI-SECRET")
+        monkeypatch.setenv("EREGION_DISCORD_BOT_TOKEN", "BOT-SECRET")
+        monkeypatch.setenv("EREGION_DISCORD_LOTS_FORUM", "FORUM")
+        monkeypatch.setenv("GITHUB_TOKEN", "GH-SECRET")
+        f = request.getfixturevalue("fake")
+        _published(tmp_path, monkeypatch, "notes")
+        ad.release_draft("v0.4.4", "https://github.com/o/r/releases/tag/untagged-1")
+        assert ad.main(["board"]) == 0
+        assert trap.requests == []
+        assert [r for r in f.requests if "/webhooks/1/" in r["path"] or "/channels/" in r["path"]] == []
+        assert not any("SECRET" in json.dumps(r["headers"]) for r in f.requests)
+    finally:
+        trap.close()
+
+
+def test_the_ping_is_looked_for_once_a_minute_at_most(repo, capsys, fake):
+    prepared(repo, capsys)
+    assert rel.main(["release-draft", "0.4.4"]) == 0
+    assert ad.main(["board"]) == 0                        # GitHub asked now: the next refreshes are not due
+    _, state = _board(fake)
+    ping, cfg = state["waiting"][0]["ping"], nd.load_config()
+    for _ in range(4):
+        ad.command({}, cfg)
+    assert len([r for r in fake.requests if r["method"] == "GET" and r["path"].endswith(f"/messages/{ping}")]) == 1
+
+
+def test_a_webhook_that_fails_to_read_touches_nothing(repo, tmp_path, capsys, fake, monkeypatch):
+    prepared(repo, capsys)
+    assert rel.main(["release-draft", "0.4.4"]) == 0
+    (edit,) = [c for c in gh_calls(tmp_path) if c["args"][:2] == ["release", "edit"]]
+    capsys.readouterr()
+    fake.fail["/api/webhooks"] = 500
+    n = len(fake.requests)
+    _published(tmp_path, monkeypatch, edit["notes"])
+    assert [r["method"] for r in fake.requests[n:] if "/webhooks/" in r["path"]] == ["GET", "GET"]
+    assert "atelier: not sent — webhook #agents: HTTP 500" in capsys.readouterr().err

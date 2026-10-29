@@ -59,6 +59,10 @@ class Halfway(Exception):
 # ── the tools ───────────────────────────────────────────────────────────────────────
 
 def run(cmd: list[str], cwd: Path, *, check: bool = True) -> subprocess.CompletedProcess:
+    """git or gh, nothing else, never through a shell; every call names its command literally
+    (tests/unit/test_release.py reads it)."""
+    if not cmd or cmd[0] not in ("git", "gh"):
+        raise ValueError("git or gh only")
     p = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
     if check and p.returncode != 0:
         raise Refused(f"`{' '.join(cmd[:3])} …` a échoué ({p.returncode}) : {(p.stderr or p.stdout).strip()[:300]}")
@@ -196,11 +200,11 @@ def prepare(root: Path, version: str, title: str, *, dry_run: bool = False, day:
             f"{lines} lignes, aucune perdue) ; la version du paquet "
             f"(pyproject.toml, lue par annatar.__version__) et la ligne « Status » du README suivent.\n\n"
             f"Après la fusion : make release-draft VERSION={version} — un brouillon, que Jonathan publie.")
-    commands = [["git", "switch", "-c", branch],
-                ["git", "add", "pyproject.toml", "CHANGELOG.md", "README.md"],
-                ["git", "commit", "-m", subject, "-m", body],
-                ["git", "push", "-u", "origin", branch],
-                ["gh", "pr", "create", "--base", "main", "--head", branch, "--title", subject, "--body", body]]
+    shown = [["git", "switch", "-c", branch],          # what runs below, call by call
+             ["git", "add", "pyproject.toml", "CHANGELOG.md", "README.md"],
+             ["git", "commit", "-m", subject, "-m", body],
+             ["git", "push", "-u", "origin", branch],
+             ["gh", "pr", "create", "--base", "main", "--head", branch, "--title", subject, "--body", body]]
 
     if dry_run:
         say("")
@@ -210,22 +214,26 @@ def prepare(root: Path, version: str, title: str, *, dry_run: bool = False, day:
                                              f"a/{name}", f"b/{name}", n=2)).rstrip("\n"))
         say(f"\n[{version}] reçoit {lines} lignes : {', '.join(sections_named(cut_text)) or '—'}")
         say("\nÀ blanc (DRY_RUN=1) — rien n'est écrit ni poussé. Lancerait :")
-        for c in commands:
+        for c in shown:
             say(f"  {show(c)}")
         if refused:
             say("Refusé tel quel : les points ✗ d'abord.")
         return 1 if refused else 0
 
-    run(commands[0], root)                       # the branch first: main's tree is never touched
+    run(["git", "switch", "-c", branch], root)   # the branch first: main's tree is never touched
     step = "write"
     try:
         for name, text in edits.items():
             (root / name).write_text(text, encoding="utf-8")
-        for c in commands[1:]:
-            step = c[1]
-            out = run(c, root)
-            if c is commands[-1]:   # the pull request: its URL
-                say(out.stdout.strip())
+        step = "add"
+        run(["git", "add", "pyproject.toml", "CHANGELOG.md", "README.md"], root)
+        step = "commit"
+        run(["git", "commit", "-m", subject, "-m", body], root)
+        step = "push"
+        run(["git", "push", "-u", "origin", branch], root)
+        step = "pr"
+        out = run(["gh", "pr", "create", "--base", "main", "--head", branch, "--title", subject, "--body", body], root)
+        say(out.stdout.strip())
     except (Refused, OSError) as e:
         raise Halfway(_halfway(step, branch, str(e))) from None
     say(f"\nPR ouverte. Après sa fusion : make release-draft VERSION={version}")
@@ -233,8 +241,10 @@ def prepare(root: Path, version: str, title: str, *, dry_run: bool = False, day:
 
 
 def _halfway(step: str, branch: str, why: str) -> str:
-    """What is left after a failure past `git switch -c`, and how to go on or back."""
-    back = f"git checkout -- . && git switch - && git branch -D {branch}"
+    """What is left after a failure past `git switch -c`, and how to go on or back. Back: the
+    branch's changes dropped, staged ones too (reset --hard), then where make release started —
+    `checkout -` takes a detached HEAD back, as `switch -` does not —, the branch deleted."""
+    back = f"git reset -q --hard && git checkout -q - && git branch -D {branch}"
     left, on = {
         "write": ("la branche, des fichiers peut-être à moitié écrits",
                   "revenir en arrière (ci-dessous), corriger, puis relancer make release"),
@@ -244,8 +254,8 @@ def _halfway(step: str, branch: str, why: str) -> str:
                  f"git push -u origin {branch} && gh pr create --base main --head {branch}"),
         "pr": ("la branche, son commit, poussée ; pas de PR", f"gh pr create --base main --head {branch}"),
     }[step]
-    if step in ("pr",):
-        back = f"git switch - && git branch -D {branch} && git push origin --delete {branch}"
+    if step == "pr":   # pushed: the remote branch goes too
+        back += f" && git push origin --delete {branch}"
     return (f"échec à l'étape « {step} », après la création de {branch} : {why}\n"
             f"  Reste : {left}.\n  Reprendre : {on}.\n  Ou revenir en arrière : {back}.")
 
@@ -312,19 +322,19 @@ def draft(root: Path, version: str, notes_file: str = "", *, dry_run: bool = Fal
         say("Refusé : rien n'a été créé.")
         return 1
 
-    create = ["gh", "release", "create", tag, "--draft", "--target", sha, "--title", title, "--notes-file"]
     if dry_run:
         say(f"\nNotes ({len(text.splitlines())} lignes{', ' + notes_file if notes_file else ', le CHANGELOG'}) :")
         say("\n".join(text.splitlines()[:12]) + ("\n…" if len(text.splitlines()) > 12 else ""))
         say("\nÀ blanc (DRY_RUN=1) — rien n'est créé, rien n'est envoyé. Lancerait :")
-        say(f"  {show(create + ['<notes>'])}")
+        say(f"  {show(['gh', 'release', 'create', tag, '--draft', '--target', sha, '--title', title, '--notes-file', '<notes>'])}")
         say("  puis la ligne du brouillon sur #agents, et son ping (si Discord est configuré)")
         return 0
 
     with tempfile.TemporaryDirectory(prefix="eregion-release-") as tmp:
         notes = Path(tmp) / "notes.md"
         notes.write_text(text + "\n", encoding="utf-8")
-        url = run(create + [str(notes)], root).stdout.strip().splitlines()[-1:] or [""]
+        url = run(["gh", "release", "create", tag, "--draft", "--target", sha, "--title", title,
+                   "--notes-file", str(notes)], root).stdout.strip().splitlines()[-1:] or [""]
         url = url[0] if url[0].startswith("https://") else ""
         say(f"Brouillon créé : {url or '(lien non lu)'} — Jonathan le publie (publier déploie H0).")
         ids = _discord(tag, url)

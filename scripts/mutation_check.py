@@ -3469,7 +3469,7 @@ IMW = ".github/workflows/images.yml"
 MUTANTS += [
     ("M1140", "the checks run with the network: a check reaching Azure or a registry goes unseen (CI1)", IMC,
      '    argv = ["docker", "run", "--rm", "--network", "none"]\n', '    argv = ["docker", "run", "--rm"]\n'),
-    ("M1141", "a --version other than pyproject's passes: a stale package goes to H0 (CI1)", IMC,
+    ("M1141", "a --version other than pyproject's passes: a broken entry point or metadata unseen (CI1)", IMC,
      "        if said != want:\n", "        if False:\n"),
     ("M1142", "the config loaded without being opened: an absent example passes as an empty config (CI1)", IMC,
      '               f"open({CONFIG_IN_IMAGE!r}).close(); load({CONFIG_IN_IMAGE!r})")\n',
@@ -3481,14 +3481,8 @@ MUTANTS += [
     ("M1145", "the absence check always passes: Glorfindel's code in the injectors' image unseen (D1, CI1)", IMC,
      '          "sys.exit(1 if found else 0)\\n")\n', '          "sys.exit(0)\\n")\n'),
     ("M1146", "the image pushed (CI1)", IMW, "          push: false\n", "          push: true\n"),
-    ("M1147", "a pull request changing the lock builds no image (CI1)", IMW,
-     '    paths:   # the same list (tests/unit/test_image_check.py)\n      - ".github/workflows/images.yml"\n'
-     '      - ".dockerignore"\n      - "glorfindel/**"\n      - "annatar/**"\n      - "gothmog/**"\n'
-     '      - "eregion_core/**"\n      - "eregion_console/**"\n      - "analysis/**"\n      - "scripts/**"\n'
-     '      - "requirements/**"\n',
-     '    paths:   # the same list (tests/unit/test_image_check.py)\n      - ".github/workflows/images.yml"\n'
-     '      - ".dockerignore"\n      - "glorfindel/**"\n      - "annatar/**"\n      - "gothmog/**"\n'
-     '      - "eregion_core/**"\n      - "eregion_console/**"\n      - "analysis/**"\n      - "scripts/**"\n'),
+    ("M1147", "a pull request changing the lock builds no image (CI1)", IMC,
+     '"scripts/**", "requirements/**",\n', '"scripts/**",\n'),
     ("M1148", "the console's import left out: the CI passes an image the CD's preflight refuses (CI1)", IMC,
      'GLORFINDEL_IMPORTS = "glorfindel.cli, glorfindel.bot, eregion_console.api"\n',
      'GLORFINDEL_IMPORTS = "glorfindel.cli, glorfindel.bot"\n'),
@@ -3497,6 +3491,39 @@ MUTANTS += [
      "        check_image(args.name, image, runner)\n        return 0\n"),
 ]
 TESTS.update({f"M{n}": "tests/unit/test_image_check.py" for n in range(1140, 1150)})
+# CI1 after its review (29/10): the checks frozen, the job unfiltered (it decides itself), the
+# cache written by main only, #ci told of a red run. M1480–M1489.
+MUTANTS += [
+    ("M1480", "the injectors' absence check removed: Glorfindel's code in their image unseen (D1, CI1)", IMC,
+     '        Check("ni Glorfindel, ni la console, ni leurs dépendances (D1)",\n'
+     '              ("python", "-c", ABSENT, *NOT_IN_INJECTORS)),\n', ""),
+    ("M1481", "the injectors' image no longer checked for root (CI1)", IMC,
+     '              ("python", "-c", ABSENT, *NOT_IN_INJECTORS)),\n        Check("pas root", ("python", "-c", NOT_ROOT)),\n',
+     '              ("python", "-c", ABSENT, *NOT_IN_INJECTORS)),\n'),
+    ("M1482", "Annatar and Gothmog no longer imported in their image (CI1)", IMC,
+     '        Check("Annatar et Gothmog importent", ("python", "-c", f"import {INJECTOR_IMPORTS}")),\n', ""),
+    ("M1483", "an unreadable diff skips the build: the job green on what it never built (CI1)", IMC,
+     '        return True, "le diff de la PR est illisible : construit"\n',
+     '        return False, "le diff de la PR est illisible : construit"\n'),
+    ("M1484", "a push to main skips by the diff: main's commits and the release's unchecked (CI1)", IMC,
+     '    if event != "pull_request":\n        return True, f"{event', '    if event == "push_never":\n        return True, f"{event'),
+    ("M1485", "a `dir/**` takes a sibling's name: glorfindelx/ builds, never what it means (CI1)", IMC,
+     "            if path == p[:-3] or path.startswith(p[:-2]):\n",
+     "            if path.startswith(p[:-3]):\n"),
+    ("M1486", "Images left out of notify.yml: its red run unseen in #ci (CI1)", ".github/workflows/notify.yml",
+     "    workflows: [CI, Components, Images, ", "    workflows: [CI, Components, "),
+    ("M1487", "the cache written by pull requests too: one can evict main's (CI1)", IMW,
+     "          cache-to: ${{ github.event_name == 'push' && format('type=gha,mode=max,scope={0}', matrix.image) || '' }}\n",
+     "          cache-to: type=gha,mode=max,scope=${{ matrix.image }}\n"),
+    ("M1488", "the check step no longer waits on the decision: a docs pull request red, its image never built (CI1)", IMW,
+     "      - name: In the image (nothing started, no network, no secret)\n        if: steps.touched.outputs.build == 'true'\n",
+     "      - name: In the image (nothing started, no network, no secret)\n"),
+    ("M1489", "the diff read with renames: a file moved out of an image is not seen leaving it (CI1)", IMC,
+     '["git", "diff", "--no-renames", "--name-only", "-z", "HEAD^1", "HEAD"]',
+     '["git", "diff", "--name-only", "-z", "HEAD^1", "HEAD"]'),
+]
+TESTS.update({f"M{n}": "tests/unit/test_image_check.py" for n in range(1480, 1490)})
+TESTS["M1486"] = "tests/unit/test_workflows.py"
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

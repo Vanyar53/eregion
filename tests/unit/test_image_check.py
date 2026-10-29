@@ -3,7 +3,7 @@
 code the checks run in the image runs here, on this interpreter, against the same files."""
 from __future__ import annotations
 
-import fnmatch
+import ast
 import re
 import subprocess
 import sys
@@ -198,58 +198,224 @@ def test_the_root_check_refuses_root_only():
     assert "getuid() == 0" in ic.NOT_ROOT
 
 
-def test_the_imports_are_the_cds_preflight():
-    """The CD (eregion_cd.py, preflight, step 5) checks its candidate with the same imports and the
-    same config path: what the CI proves is what H0 would refuse."""
-    cd = CD.read_text(encoding="utf-8")
-    assert f'"import {ic.GLORFINDEL_IMPORTS}"' in cd
-    assert f':{ic.CONFIG_IN_IMAGE}:ro"' in cd
-    assert "load_glorfindel_config" in ic.READ_CONFIG and "load_glorfindel_config" in cd
+
+def test_each_image_keeps_its_checks():
+    """Frozen, image by image: a check that disappears fails here, not silently in the CI. Each
+    probe is in the right image's argv — the imports, the absence of Glorfindel, not root."""
+    names = {name: [c.name for c in image.checks] for name, image in ic.IMAGES.items()}
+    assert names == {
+        "glorfindel": ["glorfindel --version", "la watch, le bot et la console importent",
+                       "glorfindel-config.yaml.example sous la lecture stricte d'A3", "pas root"],
+        "annatar": ["annatar --version", "Annatar et Gothmog importent",
+                    "ni Glorfindel, ni la console, ni leurs dépendances (D1)", "pas root"],
+    }
+    argv = {name: [c.argv for c in image.checks] for name, image in ic.IMAGES.items()}
+    assert ("glorfindel", "--version") in argv["glorfindel"] and ("annatar", "--version") in argv["annatar"]
+    assert ("python", "-c", f"import {ic.GLORFINDEL_IMPORTS}") in argv["glorfindel"]
+    assert ("python", "-c", ic.READ_CONFIG) in argv["glorfindel"]
+    assert ("python", "-c", f"import {ic.INJECTOR_IMPORTS}") in argv["annatar"]
+    assert ("python", "-c", ic.ABSENT, *ic.NOT_IN_INJECTORS) in argv["annatar"]
+    for name in ic.IMAGES:
+        assert ("python", "-c", ic.NOT_ROOT) in argv[name]
+        assert [c.says_version for c in ic.IMAGES[name].checks] == [True, False, False, False]
+    assert ic.INJECTOR_IMPORTS == "annatar.cli, gothmog.cli"
+
+
+# ── H0's preflight, read: each docker run it makes has its check here ─────────────────────────
+
+# What the CD does in its candidate that the CI of the images does not, with the reason.
+CD_ONLY = {
+    "compose": "compose rendered with H0's .env: H0's own; the CI renders each profile "
+                           "(make profiles-check, components.yml, tests/unit/test_profiles.py)",
+}
+
+
+def _cd_preflight_calls():
+    """Every sh("docker", …) of eregion_cd.py's preflight: (its words after `docker`, the command
+    in the image — the constants after the image's name — and its mount targets)."""
+    tree = ast.parse(CD.read_text(encoding="utf-8"))
+    (fn,) = [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "preflight"]
+    calls = []
+    for node in ast.walk(fn):
+        if not (isinstance(node, ast.Call) and getattr(node.func, "id", "") == "sh"):
+            continue
+        args = node.args
+        if not (args and isinstance(args[0], ast.Constant) and args[0].value == "docker"):
+            continue
+        words = tuple(a.value for a in args[1:3] if isinstance(a, ast.Constant))
+        img = next((i for i, a in enumerate(args) if isinstance(a, ast.Name)), None)
+        inside = tuple(a.value for a in args[img + 1:]) if img is not None else ()
+        assert all(isinstance(a, ast.Constant) for a in args[img + 1:]) if img is not None else True
+        mounts = tuple(ast.unparse(a).split(":")[-2] for a in args[:img or 0] if isinstance(a, ast.JoinedStr))
+        calls.append((node.lineno, words, inside, mounts))
+    return sorted(calls)
+
+
+def _covers(check, inside, mounts) -> bool:
+    if check.argv[:2] == ("python", "-c") and inside[:2] == ("python", "-c"):
+        statements = [s.strip() for s in inside[2].split(";") if s.strip()]
+        same = all(s in check.argv[2] for s in statements)
+    else:
+        same = check.argv == inside
+    return same and set(mounts) == {m for _, m in check.mounts}
+
+
+def test_every_docker_run_of_the_cds_preflight_has_its_check():
+    """The other way too: a check the CD adds to its preflight fails here until the CI does it, or
+    its reason is written in CD_ONLY."""
+    calls = _cd_preflight_calls()
+    runs = [c for c in calls if c[1] == ("run", "--rm")]
+    assert len(runs) >= 3
+    for line, _, inside, mounts in runs:
+        assert any(_covers(c, inside, mounts) for c in ic.IMAGES["glorfindel"].checks), (line, inside)
+    assert sorted(c[1][0] for c in calls if c not in runs) == sorted(CD_ONLY)
+
+
+def test_what_the_preflight_reader_reads():
+    calls = _cd_preflight_calls()
+    insides = [c[2] for c in calls if c[1] == ("run", "--rm")]
+    assert ("glorfindel", "--version") in insides
+    assert ("python", "-c", f"import {ic.GLORFINDEL_IMPORTS}") in insides
+    assert [c[3] for c in calls if c[3]] == [("/app/glorfindel-config.yaml",)]
+    check = ic.Check("x", ("python", "-c", "import a; load('p')"))
+    assert _covers(check, ("python", "-c", "load('p')"), ())
+    assert not _covers(check, ("python", "-c", "import a; open('q')"), ())
+    assert not _covers(check, ("python", "-c", "load('p')"), ("/app/x",))
+
+
+# ── The decision: does the change go into an image ────────────────────────────────────────────
+
+def _diff(*files, code=0):
+    def runner(argv):
+        assert argv == ["git", "diff", "--no-renames", "--name-only", "-z", "HEAD^1", "HEAD"]
+        return _done(argv, code, "".join(f + "\0" for f in files))
+    return runner
+
+
+@pytest.mark.parametrize("files, build", [
+    (("docs/operations.md", "README.md"), False),
+    (("tests/unit/test_x.py",), False),
+    (("requirements/glorfindel.txt",), True),
+    (("glorfindel/Dockerfile",), True),
+    (("README.md", "pyproject.toml"), True),
+    (("a file\nwith a newline", "eregion_core/signals.py"), True),
+    (("glorfindelx/thing.py",), False),
+    (("glorfindel-config.yaml.example",), True),
+])
+def test_a_pull_request_builds_when_its_diff_touches_an_image(files, build):
+    assert ic.touched("pull_request", _diff(*files))[0] is build
+
+
+def test_a_push_always_builds_without_reading_the_diff():
+    def no_git(argv):
+        raise AssertionError("a push builds: no diff read")
+    assert ic.touched("push", no_git) == (True, "push : toujours construit")
+    assert ic.touched("", no_git)[0] is True
+
+
+def test_an_unreadable_diff_builds():
+    assert ic.touched("pull_request", _diff(code=128))[0] is True
+
+
+def test_the_decision_goes_to_githubs_output(tmp_path, monkeypatch, capsys):
+    out = tmp_path / "out"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+    assert ic.main(["touched", "--event", "pull_request"], runner=_diff("docs/x.md")) == 0
+    assert ic.main(["touched", "--event", "pull_request"], runner=_diff("scripts/image_check.py")) == 0
+    assert out.read_text() == "build=false\nbuild=true\n"
+    assert "build=false — " in capsys.readouterr().out
 
 
 # ── The workflow ─────────────────────────────────────────────────────────────────────────────
 
-def _copied(dockerfile: Path) -> set[str]:
-    out = set()
-    for line in dockerfile.read_text(encoding="utf-8").splitlines():
-        words = line.split()
-        if words[:1] in (["COPY"], ["ADD"]):
-            srcs = [w for w in words[1:] if not w.startswith("--")][:-1]
-            out |= {s.rstrip("/") for s in srcs}
+def _instructions(text: str) -> list[tuple[str, list[str]]]:
+    """A Dockerfile's instructions as docker reads them: a line continued by `\\` joined to the
+    next, comments dropped, the keyword in upper case (docker ignores its case)."""
+    out, cur = [], ""
+    for line in text.splitlines():
+        if not cur and line.lstrip().startswith("#"):
+            continue
+        if line.rstrip().endswith("\\"):
+            cur += line.rstrip()[:-1] + " "
+            continue
+        cur += line
+        if cur.split():
+            words = cur.split()
+            out.append((words[0].upper(), words[1:]))
+        cur = ""
     return out
 
 
-def _covered(path: str, patterns: list[str]) -> bool:
-    for p in patterns:
-        if p.endswith("/**") and (path == p[:-3] or path.startswith(p[:-2])):
-            return True
-        if fnmatch.fnmatchcase(path, p):
-            return True
-    return False
+def _copied(dockerfile: Path) -> set[str]:
+    return _copied_text(dockerfile.read_text(encoding="utf-8"))
 
 
-def test_the_workflow_runs_on_pull_requests_and_main_with_the_same_paths():
+def _copied_text(text: str) -> set[str]:
+    out = set()
+    for keyword, words in _instructions(text):
+        if keyword not in ("COPY", "ADD"):
+            continue
+        assert not (words and words[0].startswith("[")), "the JSON form of COPY is not read: write it plain"
+        assert not any(w.startswith("--from") for w in words), "a COPY from another stage is not read"
+        srcs = [w for w in words if not w.startswith("--")][:-1]
+        out |= {s.rstrip("/") for s in srcs}
+    return out
+
+
+def test_the_copy_reader_reads_continued_and_lower_case_lines():
+    text = "FROM x\n# COPY not/this .\ncopy a/ \\\n    b.txt \\\n    /app/\nCOPY --chown=1:1 c .\nRUN echo\n"
+    assert _copied_text(text) == {"a", "b.txt", "c"}
+    with pytest.raises(AssertionError):
+        _copied_text('COPY ["a", "/app/"]\n')
+    with pytest.raises(AssertionError):
+        _copied_text("COPY --from=build /x /y\n")
+
+
+def test_the_workflow_runs_on_every_pull_request_and_main_unfiltered():
+    """No `paths`: a filtered workflow leaves a required check « expected » on a pull request it
+    skips. The first step decides instead (touched)."""
     on = _wf()["on"]
-    assert on["push"]["branches"] == ["main"]
-    assert on["push"]["paths"] == on["pull_request"]["paths"]
     assert set(on) == {"push", "pull_request"}
+    assert on["push"] == {"branches": ["main"]}
+    assert on["pull_request"] is None
+    assert "paths" not in WORKFLOW.read_text(encoding="utf-8").split("\njobs:")[0].replace("`paths`", "")
+
+
+def test_the_first_step_decides_and_every_later_step_obeys():
+    steps = _steps()
+    first = steps[1]
+    assert steps[0]["uses"].startswith("actions/checkout@")
+    assert steps[0]["with"] == {"fetch-depth": 2, "persist-credentials": False}
+    assert first["id"] == "touched"
+    assert first["run"].strip() == 'python3 scripts/image_check.py touched --event "$EVENT"'
+    assert first["env"] == {"EVENT": "${{ github.event_name }}"}
+    assert all(s.get("if") == "steps.touched.outputs.build == 'true'" for s in steps[2:])
+    assert len(steps) == 5
+
+
+def test_the_job_names_are_the_checks_to_require():
+    job = _wf()["jobs"]["image"]
+    assert job["name"] == "image (${{ matrix.image }})"
+    ops = (ROOT / "docs" / "operations.md").read_text(encoding="utf-8")
+    assert all(f"`image ({name})`" in ops for name in ic.IMAGES)
 
 
 @pytest.mark.parametrize("name", sorted(ic.IMAGES))
 def test_everything_an_image_takes_is_in_the_paths(name):
     dockerfile = ROOT / ic.IMAGES[name].dockerfile
     takes = _copied(dockerfile) | {ic.IMAGES[name].dockerfile, ".dockerignore", ".github/workflows/images.yml",
-                                   "scripts/image_check.py", ic.EXAMPLE_CONFIG, "docker-compose.yml"}
+                                   "scripts/image_check.py", ic.EXAMPLE_CONFIG}
     assert len(_copied(dockerfile)) >= 5
-    for event in ("push", "pull_request"):
-        assert [t for t in sorted(takes) if not _covered(t, _wf()["on"][event]["paths"])] == []
+    assert [t for t in sorted(takes) if not ic.covered(t)] == []
 
 
 def test_what_counts_as_covered():
-    assert _covered("glorfindel/Dockerfile", ["glorfindel/**"])
-    assert _covered("requirements", ["requirements/**"])
-    assert not _covered("requirements/glorfindel.txt", ["requirements"])
-    assert not _covered("glorfindel-config.yaml.example", ["glorfindel/**"])
+    assert ic.covered("glorfindel/Dockerfile", ("glorfindel/**",))
+    assert ic.covered("requirements", ("requirements/**",))
+    assert not ic.covered("requirements/glorfindel.txt", ("requirements",))
+    assert not ic.covered("glorfindel-config.yaml.example", ("glorfindel/**",))
+    assert not ic.covered("glorfindelx/a.py", ("glorfindel/**",))
+    assert ic.covered("pyproject.toml") and not ic.covered("docs/operations.md") and not ic.covered("tests/unit/x.py")
     assert _copied(ROOT / "glorfindel/Dockerfile") >= {"requirements/glorfindel.txt", "pyproject.toml", "glorfindel"}
 
 
@@ -274,21 +440,21 @@ def test_never_pushed_no_registry_no_secret():
     assert "ghcr.io" not in text
 
 
-def test_the_build_uses_githubs_cache_one_scope_per_image():
+def test_the_cache_is_read_everywhere_and_written_by_mains_pushes_only():
     with_ = _build_step()["with"]
     assert with_["cache-from"] == "type=gha,scope=${{ matrix.image }}"
-    assert with_["cache-to"] == "type=gha,mode=max,scope=${{ matrix.image }}"
+    assert with_["cache-to"] == ("${{ github.event_name == 'push' && "
+                                 "format('type=gha,mode=max,scope={0}', matrix.image) || '' }}")
+    assert _wf()["on"]["push"]["branches"] == ["main"]
     assert any(str(s.get("uses", "")).startswith("docker/setup-buildx-action@") for s in _steps())
 
 
 def test_the_check_step_runs_the_script_on_the_built_image():
     steps = _steps()
-    run = [s for s in steps if "image_check.py" in str(s.get("run", ""))]
+    run = [s for s in steps if "image_check.py" in str(s.get("run", "")) and "touched" not in s["run"]]
     assert len(run) == 1 and steps.index(run[0]) > steps.index(_build_step())
     assert run[0]["run"].strip() == 'python3 scripts/image_check.py "$IMAGE"'
     assert run[0]["env"] == {"IMAGE": "${{ matrix.image }}"}
-    assert [s for s in steps if s.get("uses", "").startswith("actions/checkout@")][0]["with"] == {
-        "persist-credentials": False}
 
 
 def test_make_images_check_builds_and_checks_both_as_the_ci_does():

@@ -6,6 +6,7 @@ request, not at H0's preflight, where it burns a release (infra/glorfindel-host/
     python3 scripts/image_check.py glorfindel                   # checks eregion-glorfindel:ci
     python3 scripts/image_check.py annatar --build              # builds it first, as the CI does
     python3 scripts/image_check.py glorfindel --image <name>    # another image (a local build)
+    python3 scripts/image_check.py touched --event pull_request # build=true|false: the CI's first step
 
 The CI (.github/workflows/images.yml) builds each image with docker/build-push-action — its
 Dockerfile, the repository as context, no build argument, never pushed — then runs this script
@@ -23,12 +24,20 @@ here first, with the same imports (tests/unit/test_image_check.py keeps them in 
   annatar     `annatar --version` is pyproject.toml's version; Annatar and Gothmog import;
               neither Glorfindel, the console nor their dependencies are in it (D1); not root.
 
+`touched` decides, in the job's first step, whether the change goes into an image: a pull request
+whose diff (its merge commit against the base, `git diff --no-renames -z`) names no path of
+IMAGE_PATHS skips the build and the job passes green — so the job runs on every pull request and its
+checks can be required, never left « expected ». A push to main always builds, and so does a diff
+that cannot be read: it fails closed. Written to $GITHUB_OUTPUT when the CI sets it.
+
 Exit 0 when every check passes, 1 otherwise (each failure says which, with the command's last
 lines), 2 when docker cannot run at all. Python 3.11+, standard library only.
 """
 from __future__ import annotations
 
 import argparse
+import fnmatch
+import os
 import subprocess
 import sys
 import tomllib
@@ -61,6 +70,14 @@ ABSENT = ("import importlib.util, sys\n"
           "sys.exit(1 if found else 0)\n")
 NOT_IN_INJECTORS = ("glorfindel", "eregion_console", *GLORFINDEL_ONLY_DEPS)
 TAIL = 20
+# What goes into an image, or decides how it is checked: the Dockerfiles and what they COPY
+# (tests/unit/test_image_check.py reads each COPY against this list), the lock, the checks. A path
+# below a `dir/**` is in it; any other pattern is matched whole (fnmatch).
+IMAGE_PATHS = (
+    ".github/workflows/images.yml", ".dockerignore", "glorfindel/**", "annatar/**", "gothmog/**",
+    "eregion_core/**", "eregion_console/**", "analysis/**", "scripts/**", "requirements/**",
+    "pyproject.toml", "technique_catalog.yaml", "glorfindel-config.yaml.example", "docker-compose.yml",
+)
 
 
 @dataclass(frozen=True)
@@ -161,12 +178,48 @@ def check_image(name: str, image: str, runner: Runner = run, want: str | None = 
     return ok
 
 
+def covered(path: str, patterns: tuple[str, ...] = IMAGE_PATHS) -> bool:
+    for p in patterns:
+        if p.endswith("/**"):
+            if path == p[:-3] or path.startswith(p[:-2]):
+                return True
+        elif fnmatch.fnmatchcase(path, p):
+            return True
+    return False
+
+
+def touched(event: str, runner: Runner = run) -> tuple[bool, str]:
+    """Whether the change goes into an image: (build, why). Fails closed."""
+    if event != "pull_request":
+        return True, f"{event or 'événement inconnu'} : toujours construit"
+    res = runner(["git", "diff", "--no-renames", "--name-only", "-z", "HEAD^1", "HEAD"])
+    if res.returncode != 0:
+        return True, "le diff de la PR est illisible : construit"
+    hits = sorted(f for f in res.stdout.split("\0") if f and covered(f))
+    if not hits:
+        return False, "la PR ne touche rien de ce qui entre dans une image : rien à construire"
+    return True, f"la PR touche {len(hits)} fichier(s) d'image, dont {hits[0]}"
+
+
+def say_touched(event: str, runner: Runner = run) -> int:
+    build_it, why = touched(event, runner)
+    print(f"build={'true' if build_it else 'false'} — {why}")
+    out = os.environ.get("GITHUB_OUTPUT")
+    if out:
+        with open(out, "a", encoding="utf-8") as f:
+            f.write(f"build={'true' if build_it else 'false'}\n")
+    return 0
+
+
 def main(argv: list[str] | None = None, runner: Runner = run) -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    p.add_argument("name", choices=sorted(IMAGES))
+    p.add_argument("name", choices=[*sorted(IMAGES), "touched"])
     p.add_argument("--image", help="the image to check (default: the CI's tag)")
     p.add_argument("--build", action="store_true", help="build it first, as the CI does (without its cache)")
+    p.add_argument("--event", default="", help="touched: the event that runs the CI (github.event_name)")
     args = p.parse_args(argv)
+    if args.name == "touched":
+        return say_touched(args.event, runner)
     image = args.image or IMAGES[args.name].default
     try:
         if args.build and not build(args.name, image, runner):

@@ -155,6 +155,8 @@ class UnblockMixin:
                 st, names = self._block_pair_state(cache, *perimeter, ip, None)
                 if st in ("absent", "altered"):
                     (missing if missing else held_missing).extend(names)
+                elif st == "unknown":            # never read as there (RB1, review)
+                    unread += [f"{n} ({perimeter[1]})" for n in names]
             said = {**({"held_by_perimeter": held_by, "perimeter_rule": self._block_rule_prefix(ip)} if held_by else {}),
                     **({"perimeter_unread": unsure} if unsure else {})}
             if missing:
@@ -194,6 +196,15 @@ class UnblockMixin:
                     return self._block_bypassed(ip, shadowed)
                 if unknown:
                     return self._precedence_unknown(unknown, rule=entry["rule"])
+                if entry.get("scoped") is False:     # the VM's NICs it doesn't cover (RB1, review)
+                    try:
+                        off = [t["nic_short"] for t in self._off_perimeter(rg, vm_name, nsg_rg, nsg_name)]
+                    except Exception as exc:
+                        return {"verified": None, "method": "nsg_check",
+                                "error": f"blocage non vérifiable : cartes illisibles ({_first_line(exc)[:_ERR_MAX]})"}
+                    if off:
+                        return {"verified": False, "method": "nsg_check", "uncovered_nics": off, "open_nics": off,
+                                "error": f"le périmètre ne couvre pas {', '.join(off)} (autre subnet)"}
                 return {"verified": True, "method": "nsg_check", "rule": entry["rule"],
                         **({"exposure": shadowed} if shadowed else {})}
             return {"verified": False, "method": "nsg_check", "missing_rules": missing,

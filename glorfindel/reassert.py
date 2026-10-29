@@ -308,7 +308,9 @@ def _reassert_block(connector, autonomy, vm: str, ip: str, report: list[dict], r
             after = connector.verify_block_ip(ip, rid)
         except Exception as exc:
             after = {"verified": None, "error": f"relecture impossible : {exc}"}
-        if after.get("verified") is True and not after.get("held_missing"):
+        # A write that failed is never « reposé », whatever the reading says: an unreadable
+        # perimeter read as whole, and the error was swallowed (RB1, review).
+        if after.get("verified") is True and not after.get("held_missing") and not errors:
             reason = (f"Le blocage de {ip} sur {vm} avait disparu d'Azure : reposé une fois. "
                       "S'il disparaît encore, Glorfindel alertera sans le reposer.")
             outcome = "reapplied"
@@ -351,7 +353,8 @@ def _block_drift(ip: str, vm: str, v: dict, again: bool = False, said: bool = Fa
     if v.get("verified") is True:
         where = f" sur {', '.join(held)}{by}" if held else ""
         if said:
-            return f"l'IP reste bloquée{where}, mais il manque toujours{names or ' des règles'}."
+            return (f"l'IP reste bloquée{where}, mais il manque toujours{names}." if gone else
+                    "Azure le relit entier, mais une écriture a échoué : à vérifier.")
         return f"Le blocage de {ip} sur {vm} a disparu d'Azure en partie{twice}{names} — l'IP reste bloquée{where}."
     if v.get("verified") is None or (v.get("shadowed_by") and not gone):
         what = ("contourné : une règle d'autorisation d'un tiers passe avant (carte à part)"

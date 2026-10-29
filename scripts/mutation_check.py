@@ -4330,7 +4330,12 @@ _RB1 = " ".join([f"{_I5R}{t}" for t in (
     "an_unblock_of_a_deleted_vm_says_how_to_take_what_it_leaves",
     "an_unblock_of_a_deleted_vm_says_a_perimeter_block_nothing_ties_elsewhere",
     "our_outbound_rule_turned_inbound_never_collides_with_the_rewrite",
-    "a_vm_block_never_says_the_ip_unblocked_while_another_vms_perimeter_holds")] + ["tests/unit/test_reassert.py"])
+    "a_vm_block_never_says_the_ip_unblocked_while_another_vms_perimeter_holds",
+    "a_perimeter_block_never_says_blocked_with_a_nic_left_open",
+    "a_promotion_keeps_the_block_of_a_nic_the_perimeter_doesnt_cover",
+    "a_perimeter_block_alone_is_verified_on_every_nic",
+    "a_perimeter_block_whose_nics_cant_be_read_takes_no_block_off",
+    "a_write_that_failed_is_never_said_put_back")] + ["tests/unit/test_reassert.py"])
 MUTANTS += [
     ("M1620", "a merged block put back on its perimeter alone: the VM's rule left turned (RB1)", R,
      '    scopes = (["subnet", "vm"] if b.get("placements") else ["subnet"]) if b.get("scoped") is False else ["vm"]\n',
@@ -4374,6 +4379,29 @@ MUTANTS += [
      "                if found is not None:\n"),
 ]
 TESTS.update({f"M{n}": _RB1 for n in range(1620, 1635)})
+# RB1, review (5.5): a perimeter block covers the primary NIC's subnet only — named, kept,
+# verified; a write that failed is never « reposé ». M1635–M1640.
+BLK = "glorfindel/providers/azure/blocks.py"
+MUTANTS += [
+    ("M1635", "a promotion takes the block off every NIC, the ones off the perimeter's subnet too (RB1, review)",
+     BLK, "                if off_ids is None or (pl.get(\"nic_id\") or \"\").rstrip(\"/\").lower() in off_ids:\n",
+     "                if False:\n"),
+    ("M1636", "a perimeter block never names the NICs it doesn't cover: `blocked` said (RB1, review)", BLK,
+     '        uncovered = [t["nic_short"] for t in off if t["nic_id"].rstrip("/").lower() not in own]\n',
+     "        uncovered = []\n"),
+    ("M1637", "a perimeter block alone verified on its pair only: a NIC off its subnet open, true said (RB1, review)",
+     UNB, "                if entry.get(\"scoped\") is False:     # the VM's NICs it doesn't cover (RB1, review)\n",
+     "                if False:\n"),
+    ("M1638", "a write that failed said « reposé » when the reading holds (RB1, review, A0)", R,
+     '        if after.get("verified") is True and not after.get("held_missing") and not errors:\n',
+     '        if after.get("verified") is True and not after.get("held_missing"):\n'),
+    ("M1639", "a merged entry's perimeter pair unread counted as nothing (RB1, review, A0)", UNB,
+     '                elif st == "unknown":            # never read as there (RB1, review)\n',
+     "                elif False:\n"),
+    ("M1640", "NICs unreadable read as all behind the perimeter: their blocks taken off, `blocked` (RB1, review)",
+     BLK, "            off, off_ids, unread = [], None, _first_line(exc)\n", '            off, off_ids, unread = [], set(), ""\n'),
+]
+TESTS.update({f"M{n}": _RB1 for n in range(1635, 1641)})
 
 
 # SEC7 (#296): identities and hardening — the bot's stale buttons (V-08), the control plane read

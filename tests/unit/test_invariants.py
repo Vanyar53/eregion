@@ -1116,11 +1116,25 @@ class IsolationMachine(RuleBasedStateMachine):
         flows, states = self._before()
         out, err = self._run(fault, lambda: self.connector.block_suspicious_ip(
             ATTACKER, rid, scope="subnet", replace=replace), "block_perimeter" + (" (promote)" if replace else ""))
-        if out and out.get("status") == "blocked" and not out.get("bypass"):
-            # On its subnet — the primary NIC's: a NIC of a mate on another subnet (RB1's
-            # second subnet) is not behind it.
+        if out and out.get("status") in ("blocked", "blocked_partial") and not out.get("bypass"):
+            # The VM blocked: every one of its NICs is cut off — behind the perimeter, or, on
+            # another subnet (RB1's second subnet), by its own block — but those it names as
+            # uncovered, which must be off the perimeter's subnet (the test's own knowledge).
+            # Restricted to the perimeter's subnet, this hid a promotion that took the block
+            # off the other NIC, `blocked` said (RB1, review).
             home = key(self._nics(vm)[0]["subnet"])
+            off = {n["id"].rsplit("/", 1)[-1] for n in self._nics(vm) if key(n["subnet"]) != home}
+            said = set(out.get("uncovered_nics") or []) | (off if out.get("nics_unread") else set())
+            assert said <= off, f"I3: perimeter block named {sorted(said - off)} of {vm} uncovered, behind it"
+            assert out["status"] == "blocked_partial" or not said, f"I3: perimeter block said blocked, {sorted(said)} open"
+            entry = next((e for e in actions._load_block_entries(vm) if e.get("ip") == ATTACKER), {})
+            reached = ({f[0] for f in self._attacker_flows(vm, None) if f[0] not in off}
+                       | {f[0] for f in self._attacker_flows(vm, entry.get("threat_port")) if f[0] in off}) - said
+            assert not reached, f"I3: perimeter block said blocked, {ATTACKER} reaches {vm} ({sorted(reached)})"
+            # Its subnet's other VMs: their NICs behind it.
             for mate in self._subnet_mates(vm):
+                if mate == vm:
+                    continue
                 behind = {n["id"].rsplit("/", 1)[-1] for n in self._nics(mate) if key(n["subnet"]) == home}
                 assert not {f for f in self._attacker_flows(mate, None) if f[0] in behind}, (
                     f"I3: perimeter block said blocked, {ATTACKER} reaches {mate}")
@@ -1196,12 +1210,12 @@ class IsolationMachine(RuleBasedStateMachine):
         perimeter = any(e.get("scoped") is False for vm in self.vms for e in actions._load_block_entries(vm))
         vanished = [vm for vm in self.live if self._block_vanished(vm)]
         cards_before = {e["id"] for e in escalations.pending()}
-        cut_before = {vm for vm in self.live if self._perimeter_cuts(vm)}
+        journal_at = len(self.fake.journal)
         report, err = self._run(fault, lambda: reassert.reassert_pass(self.connector, None))
         for r in report or []:
             _note(f"reassert ({_CURRENT.mode}): {r['outcome']}")
         if fault is None and err is None:
-            self._block_cards_true(cards_before, cut_before)
+            self._block_cards_true(cards_before, journal_at)
             # Liveness: a block whose rules all vanished from Azure is put back, or told
             # about — not left gone in silence.
             told = {key(e.get("resource_id", "")) for e in escalations.pending()
@@ -1244,14 +1258,19 @@ class IsolationMachine(RuleBasedStateMachine):
             assert {k: n["nsg"] for k, n in self.fake.nics.items()} == nics_before
         self._config_honoured({k: v for k, v in nics_before.items() if v}, "the reassertion")
 
-    def _block_cards_true(self, cards_before: set, cut_before: set):
-        """I3 for what the reassertion's block cards say (RB1), on the cards this pass
-        made: "reposé une fois" or "reste bloquée" means the attacker is cut off from the
-        VM; "n'est plus bloquée" is never said of a VM our perimeter block, intact on the
-        subnet of each of its NICs, cuts off on every port — before the pass and after it
-        (`cut_before`: the same pass may put back, for another VM's entry, the perimeter
-        someone turned; said before that, the card was true). Judged from the world, never
-        from the verification the code ran."""
+    def _block_cards_true(self, cards_before: set, journal_at: int):
+        """I3 for what the reassertion's block cards say (RB1), NIC by NIC, on the NICs a
+        card names (all of the VM's when it names none), on the cards this pass made:
+        "reposé une fois" or "reste bloquée" means the attacker is cut off from them;
+        "n'est plus bloquée" is never said of a NIC our perimeter block, intact on its
+        subnet, cuts off on every port — but one this pass wrote that perimeter for, a card
+        said before the write (another VM's entry put it back: true when it was written;
+        not a re-application's card, said after its own re-read). Judged from the world and
+        the fake's journal, never from the verification the code ran."""
+        import re
+        bare = "glorfindel-block-" + ATTACKER.replace(".", "-")
+        written = {e["nsg"] for e in self.fake.journal[journal_at:]
+                   if e.get("op") == "rule.write" and e.get("rule") in (bare, f"{bare}-out")}
         for e in escalations.pending():
             if (e["id"] in cards_before or e.get("action") != "block_suspicious_ip"
                     or not (e.get("signal_id") or "").startswith("reassert-")):
@@ -1261,28 +1280,37 @@ class IsolationMachine(RuleBasedStateMachine):
                 continue
             reason = e.get("reason") or ""
             entry = next((b for b in actions._load_block_entries(vm) if b.get("ip") == ATTACKER), {})
-            if "reposé une fois" in reason or "reste bloquée" in reason:
-                reached = self._attacker_flows(vm, entry.get("threat_port"))
-                if not entry.get("placements"):
-                    # A perimeter block alone covers its subnet — the primary NIC's.
-                    home = key(self._nics(vm)[0]["subnet"])
-                    behind = {n["id"].rsplit("/", 1)[-1] for n in self._nics(vm) if key(n["subnet"]) == home}
-                    reached = {f for f in reached if f[0] in behind}
-                assert not reached, (
-                    f"I3: the reassertion said the block on {vm} holds ({reason[:100]}…), {ATTACKER} reaches it")
+            nics = [n["id"].rsplit("/", 1)[-1] for n in self._nics(vm)]
+
+            def named(claim: str) -> list[str]:
+                m = re.search(re.escape(claim) + r" sur ([^;.(]+?)(?: par |[;.(]|$)", reason)
+                return [n for n in nics if m and n in [x.strip() for x in m.group(1).split(",")]]
+            held = (nics if "reposé une fois" in reason else []) + \
+                ((named("reste bloquée") or nics) if "reste bloquée" in reason else [])
+            reached = {f[0] for f in self._attacker_flows(vm, entry.get("threat_port"))} & set(held)
+            assert not reached, (
+                f"I3: the reassertion said the block on {vm} holds ({reason[:100]}…), {ATTACKER} reaches "
+                f"{sorted(reached)}")
             if "n'est plus bloquée" in reason:
-                assert not (vm in cut_before and self._perimeter_cuts(vm)), (
-                    f"I3: the reassertion said {ATTACKER} no longer blocked on {vm}; "
+                said = named("n'est plus bloquée")
+                cut = [n for n in (said or nics) if self._perimeter_cuts(vm, n)
+                       and ("réécrites" in reason or key(self._subnet_nsg_of(vm, n) or "") not in written)]
+                assert not cut if said else len(cut) < len(nics), (
+                    f"I3: the reassertion said {ATTACKER} no longer blocked on {vm} ({said}); "
                     "our perimeter block still cuts it off")
 
-    def _perimeter_cuts(self, vm: str) -> bool:
-        """Our perimeter block, intact on the subnet of each of the VM's NICs, cuts the
-        attacker off alone — what nothing else of ours does."""
-        return bool(self._behind_our_perimeter(vm) and not self._perimeter_only(vm)
-                    and self._perimeter_only(vm, keep=False))
+    def _subnet_nsg_of(self, vm: str, nic: str) -> str | None:
+        n = next(x for x in self._nics(vm) if x["id"].rsplit("/", 1)[-1] == nic)
+        return self.fake.subnets[key(n["subnet"])]["nsg"]
 
-    def _perimeter_only(self, vm: str, keep: bool = True) -> frozenset:
-        """The attacker's flows to the VM with none of Glorfindel's denies but the perimeter
+    def _perimeter_cuts(self, vm: str, nic: str) -> bool:
+        """Our perimeter block, intact on this NIC's subnet, cuts the attacker off it alone —
+        what nothing else of ours does."""
+        return bool(self._behind_our_perimeter(vm, nic) and not self._perimeter_only(vm, nic)
+                    and self._perimeter_only(vm, nic, keep=False))
+
+    def _perimeter_only(self, vm: str, nic: str, keep: bool = True) -> frozenset:
+        """The attacker's flows to the NIC with none of Glorfindel's denies but the perimeter
         block (keep), or none at all: what the perimeter alone cuts off is the difference —
         an isolation or the VM's own block don't count for it. A rule of ours someone turned
         into an allow stays: it is theirs now. The subnet's NSG alone, the NICs' own left
@@ -1296,24 +1324,23 @@ class IsolationMachine(RuleBasedStateMachine):
             n: r for n, r in g["rules"].items()
             if not n.startswith("glorfindel-") or n in mine or r["access"].lower() != "deny"}}
             for k, g in world["nsgs"].items()}}
-        return frozenset(f for f in open_flows(world, vm) if f[3] == ATTACKER)
+        return frozenset(f for f in open_flows(world, vm) if f[3] == ATTACKER and f[0] == nic)
 
-    def _behind_our_perimeter(self, vm: str) -> bool:
-        """Every NIC of the VM sits on a subnet whose NSG carries our perimeter block of
-        the attacker as Glorfindel writes it (the test's own restatement of its shape)."""
+    def _behind_our_perimeter(self, vm: str, nic: str) -> bool:
+        """The NIC sits on a subnet whose NSG carries our perimeter block of the attacker as
+        Glorfindel writes it (the test's own restatement of its shape)."""
         bare = "glorfindel-block-" + ATTACKER.replace(".", "-")
         shape = {"inbound": (ATTACKER, "*"), "outbound": ("*", ATTACKER)}
-        for nic in self._nics(vm):
-            g = self.fake.subnets[key(nic["subnet"])]["nsg"]
-            rules = self.fake.nsgs.get(key(g), {}).get("rules", {}) if g else {}
-            for name, direction in ((bare, "inbound"), (f"{bare}-out", "outbound")):
-                r = rules.get(name)
-                if (r is None or r["access"].lower() != "deny" or r["direction"].lower() != direction
-                        or str(r.get("protocol") or "*").lower() not in ("*", "any")
-                        or r.get("destination_port_range") not in ("*", None) or r.get("destination_port_ranges")
-                        or (r.get("source_address_prefix"), r.get("destination_address_prefix")) != shape[direction]
-                        or r.get("source_address_prefixes") or r.get("destination_address_prefixes")):
-                    return False
+        g = self._subnet_nsg_of(vm, nic)
+        rules = self.fake.nsgs.get(key(g), {}).get("rules", {}) if g else {}
+        for name, direction in ((bare, "inbound"), (f"{bare}-out", "outbound")):
+            r = rules.get(name)
+            if (r is None or r["access"].lower() != "deny" or r["direction"].lower() != direction
+                    or str(r.get("protocol") or "*").lower() not in ("*", "any")
+                    or r.get("destination_port_range") not in ("*", None) or r.get("destination_port_ranges")
+                    or (r.get("source_address_prefix"), r.get("destination_address_prefix")) != shape[direction]
+                    or r.get("source_address_prefixes") or r.get("destination_address_prefixes")):
+                return False
         return True
 
     @rule(data=st.data())
@@ -2290,9 +2317,10 @@ class IsolationMachine(RuleBasedStateMachine):
             held = self._held_unknown(vm)
             assert not held, f"I3: verify_release True, {held} of {vm} bare, their original unknown to a state"
         entry = next((e for e in actions._load_block_entries(vm) if e.get("ip") == ATTACKER), None)
-        # Not a perimeter block alone — one merged with the VM's own is judged NIC by NIC
-        # like a VM block, the perimeter counted where it covers a NIC (RB1).
-        if entry and (entry.get("scoped", True) is not False or entry.get("placements")):
+        # Every entry, a perimeter block alone too: its verification reads the VM's NICs it
+        # doesn't cover (RB1, review) — one merged with the VM's own is judged NIC by NIC,
+        # the perimeter counted where it covers a NIC.
+        if entry:
             blk, _ = self._run(fault, lambda: self.connector.verify_block_ip(ATTACKER, rid))
             if blk and blk.get("verified") is True:
                 assert not self._attacker_flows(vm, entry.get("threat_port")), (

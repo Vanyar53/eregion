@@ -42,6 +42,16 @@ class PerimeterMixin:
             out = "unknown" if st == "unknown" else out
         return out
 
+    def _off_perimeter(self, rg: str, vm_name: str, nsg_rg: str, nsg_name: str) -> list[dict]:
+        """The VM's NICs no NSG of which is the perimeter's: on another subnet (the perimeter
+        lies on the primary NIC's). A perimeter block said `blocked` while one of them stayed
+        open, and its promotion took their own block off them (RB1, review). Unreadable
+        NICs RAISE: never "all covered" on a guess."""
+        home = (nsg_rg.lower(), nsg_name.lower())
+        return [t for t in self._get_vm_nic_targets(rg, vm_name, allow_no_nsg=True)
+                if home not in {(v["nsg_rg"].lower(), v["nsg_name"].lower())
+                                for v in self._nic_nsg_views(t) if v.get("nsg_rg")}]
+
     @staticmethod
     def _perimeters_recorded(ip: str, but: str) -> set[tuple[str, str]]:
         """(rg, NSG) of the perimeter blocks of `ip` another VM's entry records — theirs."""

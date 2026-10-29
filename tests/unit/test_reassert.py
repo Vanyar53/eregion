@@ -845,3 +845,22 @@ def test_rules_gone_while_the_ip_stays_blocked_are_said_so(held):
     assert "n'est plus bloquée" not in reason and "l'IP reste bloquée" in reason, reason
     assert ("nic-a par la règle de périmètre" in reason) is bool(held), reason
     c.block_suspicious_ip.assert_not_called()
+
+
+def test_a_write_that_failed_is_never_said_put_back_even_read_whole():
+    """RB1, review: putting back the perimeter failed, the VM's rules were written, and
+    Azure read the block whole — « reposé une fois » was said, the error swallowed. A
+    write that failed is said, whatever the reading."""
+    _merged()
+    c = _connector(verify_blk={"verified": False, "missing_rules": ["r"], "open_nics": ["nic-b"]})
+
+    def write(ip, rid, scope="vm", **k):
+        if scope == "subnet":
+            raise RuntimeError("(AuthorizationFailed) nsg-subnet")
+        c.verify_block_ip.return_value = {"verified": True}
+        return {"status": "blocked"}
+    c.block_suspicious_ip.side_effect = write
+    report = reassert_active(c, _ACT)
+    (card,) = _block_cards()
+    assert report[0]["outcome"] == "partial", report
+    assert "reposé" not in card["reason"] and "AuthorizationFailed" in card["reason"], card["reason"]

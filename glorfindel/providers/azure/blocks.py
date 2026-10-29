@@ -196,10 +196,19 @@ class BlockMixin:
     ) -> dict:
         """Perimeter block — one any rule on the SUBNET NSG (covers all VMs on the
         subnet + future). replace=True promotes a prior VM-scoped block: create the
-        subnet rule first, then drop the prior per-NIC rules (no protection gap)."""
+        subnet rule first, then drop the prior per-NIC rules (no protection gap) — of the
+        NICs behind it only. It lies on the primary NIC's subnet: a NIC on another subnet
+        keeps its own block, and one nothing blocks is named (`uncovered_nics`, status
+        `blocked_partial`) — it was `blocked` while that NIC stayed open, and a promotion
+        took its block off (RB1, review)."""
         nic_id = self._get_primary_nic_id(rg, vm_name)
         nsg_rg, nsg_name = self._get_subnet_nsg(nic_id)
         rule_name = self._block_rule_name(ip, vm_name, scope="vm")  # shared (no VM suffix)
+        try:
+            off = self._off_perimeter(rg, vm_name, nsg_rg, nsg_name)
+            off_ids, unread = {t["nic_id"].rstrip("/").lower() for t in off}, ""
+        except Exception as exc:              # unknown: no NIC's own block taken off
+            off, off_ids, unread = [], None, _first_line(exc)
 
         existing = list(self._network.security_rules.list(nsg_rg, nsg_name))
         # Put back by the reassertion, it keeps its place (see _pair_priorities).
@@ -210,10 +219,13 @@ class BlockMixin:
 
         promoted_from = None
         if replace:
-            # Subnet rule now in place → drop the prior VM-scoped rules (every NIC).
+            # Subnet rule now in place → drop the prior VM-scoped rules of the NICs behind it.
             prev = next((e for e in _load_block_entries(resource_id) if e.get("ip") == ip), None)
-            dropped = []
+            dropped, kept = [], []
             for pl in (prev or {}).get("placements", []):
+                if off_ids is None or (pl.get("nic_id") or "").rstrip("/").lower() in off_ids:
+                    kept.append(pl)               # not behind the perimeter (or unknown): kept
+                    continue
                 for nm in (pl["rule"], f'{pl["rule"]}-out'):
                     try:
                         self._network.security_rules.begin_delete(pl["nsg_rg"], pl["nsg_name"], nm).result()
@@ -236,8 +248,11 @@ class BlockMixin:
         _save_block_state(
             vm_name, ip, resource_id,
             nsg=f"{nsg_rg}/{nsg_name}", nsg_scope="subnet", rule=rule_name, scoped=False,
-            threat_port=threat_port,
+            placements=kept if replace else None, threat_port=threat_port,
         )
+        entry = next((e for e in _load_block_entries(resource_id) if e.get("ip") == ip), None) or {}
+        own = {(p.get("nic_id") or "").rstrip("/").lower() for p in entry.get("placements") or []}
+        uncovered = [t["nic_short"] for t in off if t["nic_id"].rstrip("/").lower() not in own]
         # Same precedence report as the VM-scoped block (verify fails on it as well).
         shadowed = _shadowing_rules(
             existing, priority, inbound_src=[ip], inbound_dst=None,
@@ -253,6 +268,12 @@ class BlockMixin:
         }
         if promoted_from:
             out["promoted_from"] = promoted_from
+        if uncovered or unread:
+            out["status"] = "blocked_partial"
+            out["uncovered_nics" if uncovered else "nics_unread"] = uncovered or unread
+            out["note"] += (f" Not behind it, on another subnet: {', '.join(uncovered)} — {ip} still reaches "
+                            "them; block the VM too (scope vm) to cut them off." if uncovered else
+                            f" {vm_name}'s NICs unreadable ({unread}): what the perimeter covers of it is unverified.")
         _report_block_shadowing(out, ip, shadowed)
         return out
 

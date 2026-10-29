@@ -1940,7 +1940,8 @@ def test_a_merged_block_card_says_what_is_back_and_what_still_holds(monkeypatch)
     try:
         m.build(_net(subnet_nsg=[], data_subnet=[]))
         c = m.connector
-        assert c.block_suspicious_ip(ATTACKER, DB, scope="subnet")["status"] == "blocked"
+        out = c.block_suspicious_ip(ATTACKER, DB, scope="subnet")       # db-nic-1 not behind it
+        assert out["status"] == "blocked_partial" and out["uncovered_nics"] == ["db-nic-1"], out
         assert c.block_suspicious_ip(ATTACKER, DB, scope="vm", threat_port=22)["status"] == "blocked"
         for nsg, name in ((_SUBNET, _DB0_BLOCK), (_DATA, _DB1_BLOCK)):
             m.fake.nsgs[key(nsg)]["rules"][name]["access"] = "Allow"
@@ -2129,3 +2130,97 @@ def test_a_vm_block_never_says_the_ip_unblocked_while_another_vms_perimeter_hold
          ("block", WEB2, WEB2, None, 22),
          ("tamper_with_our_rule", "access", (key(_SUBNET), _WEB2_BLOCK)),
          ("reassert", "human_only", None))
+
+
+# ── RB1, review (5.5): a perimeter block covers its subnet only ─────────────────────────
+
+def test_a_perimeter_block_never_says_blocked_with_a_nic_left_open(monkeypatch):
+    """The review's sequence: Db--01's second NIC on a subnet of its own, a perimeter block
+    of Db--01 — on the primary NIC's subnet. It said `blocked`, db-nic-1 open to the
+    attacker; the machine's I3, cut down to that subnet, didn't see it. Now
+    `blocked_partial`, db-nic-1 named."""
+    _run(monkeypatch, _net(subnet_nsg=[], data_subnet=[]),
+         ("block_perimeter", DB, DB, None, False))
+
+
+def test_a_promotion_keeps_the_block_of_a_nic_the_perimeter_doesnt_cover(monkeypatch):
+    """Db--01 blocked for itself on both its subnets, then promoted to the perimeter: the
+    promotion took the block off both NICs — db-nic-1 open, `blocked` said,
+    `verify_block_ip` true, no card. A NIC off the perimeter's subnet keeps its own."""
+    _run(monkeypatch, _net(subnet_nsg=[], data_subnet=[]),
+         ("block", DB, DB, None, 22),
+         ("block_perimeter", DB, DB, None, True),
+         ("verify", DB, DB, None))
+
+
+def test_a_perimeter_block_alone_is_verified_on_every_nic(monkeypatch):
+    """A perimeter block alone was verified on its rule pair only: true, db-nic-1 open.
+    Now its verification reads the VM's NICs it doesn't cover — false, and the
+    reassertion's card names it."""
+    import shutil
+
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_net(subnet_nsg=[], data_subnet=[]))
+        c = m.connector
+        c.block_suspicious_ip(ATTACKER, DB, scope="subnet")
+        v = c.verify_block_ip(ATTACKER, DB)
+        assert v["verified"] is False and v["uncovered_nics"] == ["db-nic-1"], v
+        m.reassert(Script("human_only", None))
+        (card,) = _cards(m)
+        assert "n'est plus bloquée sur db-nic-1" in card, card
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)
+
+
+def test_a_perimeter_block_whose_nics_cant_be_read_takes_no_block_off(monkeypatch):
+    """The VM's NICs unreadable while it is promoted: what the perimeter covers is unknown
+    — no NIC's own block is taken off, and `blocked` is not said."""
+    import shutil
+
+    from glorfindel import actions
+
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_net(subnet_nsg=[], data_subnet=[]))
+        c = m.connector
+        assert c.block_suspicious_ip(ATTACKER, DB, scope="vm", threat_port=22)["status"] == "blocked"
+
+        def unreadable(*a, **k):
+            raise RuntimeError("(TooManyRequests) networkInterfaces")
+        monkeypatch.setattr(c, "_off_perimeter", unreadable)
+        out = c.block_suspicious_ip(ATTACKER, DB, scope="subnet", replace=True)
+        assert out["status"] == "blocked_partial" and out.get("nics_unread"), out
+        entry = next(e for e in actions._load_block_entries(DB) if e["ip"] == ATTACKER)
+        assert len(entry["placements"]) == 2, entry
+        assert {_DB0_BLOCK, _DB1_BLOCK} <= set(m.fake.nsgs[key(_SUBNET)]["rules"]) | set(
+            m.fake.nsgs[key(_DATA)]["rules"])
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)
+
+
+def test_a_write_that_failed_is_never_said_put_back(monkeypatch):
+    """The review's second case: a merged entry on web2, its own rule turned into an
+    allow, the subnet's NSG unreadable (403). Putting back the perimeter fails, the VM's
+    rule is written; the verification read the perimeter's unknown pair as nothing to
+    say — « reposé une fois », the error swallowed. Now the pair unread is unknown, and a
+    failed write never « reposé »: the card says what failed."""
+    import shutil
+
+    m = _merged_world(monkeypatch, _net(subnet_nsg=[], web_nic={"own": "dedicated"}))
+    try:
+        own = _NSG.format(rg="rg-app2", name="nsg-web-nic")
+        name = next(n for n in m.fake.nsgs[key(own)]["rules"] if n.startswith(_PERIMETER) and not n.endswith("-out"))
+        m.fake.nsgs[key(own)]["rules"][name]["access"] = "Allow"
+        m.fake.unreadable.add(key(_SUBNET))
+        m.reassert(Script("non_disruptive", None))
+        (card,) = _cards(m)
+        assert "reposé" not in card and "échec" in card, card
+        assert m.fake.nsgs[key(own)]["rules"][name]["access"] == "Deny"
+        v = m.connector.verify_block_ip(ATTACKER, WEB2)
+        assert v["verified"] is None, v
+    finally:
+        m.fake.unreadable.discard(key(_SUBNET))
+        shutil.rmtree(m.home, ignore_errors=True)

@@ -32,6 +32,8 @@ from glorfindel.detection_rules import (
     shipped_rules_path,
 )
 
+from glorfindel.kql import literal
+
 from . import kql_subset
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -203,7 +205,7 @@ def test_the_investigation_finds_the_simulation_s_root_commands():
     from glorfindel.agent import _IQ_ROOT_COMMANDS
     rows = _logged("privilege_escalation_sim.sh", ATTACKER_USER="svc-backup")
     rows.append(_line("x : TTY=pts/0 ; PWD=/ ; USER=root ; COMMAND=/bin/forged", process="root"))
-    out = kql_subset.run(_IQ_ROOT_COMMANDS.format(vm="vm-example-01"), rows, now=NOW)
+    out = kql_subset.run(_IQ_ROOT_COMMANDS.format(vm=literal("vm-example-01")), rows, now=NOW)
     assert any("COMMAND=/bin/cat /etc/shadow" in r["SyslogMessage"] for r in out)
     assert not any("/bin/forged" in r["SyslogMessage"] for r in out)
 
@@ -212,7 +214,7 @@ def test_the_investigation_finds_sudo_s_lines_in_authpriv():
     from glorfindel.agent import _IQ_ROOT_COMMANDS
     rows = [_line("alice : PWD=/home/alice   USER=root   COMMAND=/bin/cat /etc/shadow",
                   process="sudo", facility="authpriv")]
-    out = kql_subset.run(_IQ_ROOT_COMMANDS.format(vm="vm-example-01"), rows, now=NOW)
+    out = kql_subset.run(_IQ_ROOT_COMMANDS.format(vm=literal("vm-example-01")), rows, now=NOW)
     assert [r["SyslogMessage"] for r in out] == [rows[0]["SyslogMessage"]]
 
 
@@ -221,7 +223,7 @@ def test_the_investigation_reads_sshd_s_successful_logins_only():
     rows = [_line(f"Accepted password for alice from {PEER} port 41000 ssh2"),
             _line(f"Accepted password for x from {PEER} port 41001 ssh2", process="root"),
             _line(f"Invalid user Accepted from {PEER} port 41002")]
-    out = kql_subset.run(_IQ_SUCCESS_AUTH.format(vm="vm-example-01", ip=PEER), rows, now=NOW)
+    out = kql_subset.run(_IQ_SUCCESS_AUTH.format(vm=literal("vm-example-01"), ip=literal(PEER)), rows, now=NOW)
     assert [r["SyslogMessage"] for r in out] == [rows[0]["SyslogMessage"]]
 
 

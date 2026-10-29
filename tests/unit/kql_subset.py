@@ -67,8 +67,13 @@ def _stages(tokens):
 
 
 def _has(hay, needle) -> bool:
-    return re.search(r"(?<![A-Za-z0-9])" + re.escape(str(needle)) + r"(?![A-Za-z0-9])",
-                     str(hay or ""), re.IGNORECASE) is not None
+    # A term boundary where the needle starts or ends with a term's character only: the
+    # needle `new user: name=` ends on a separator, and the account's name follows it
+    # (SEC4c, the T1136 rule — live on the bench, so Log Analytics reads it so).
+    needle = str(needle)
+    head = r"(?<![A-Za-z0-9])" if needle[:1].isalnum() else ""
+    tail = r"(?![A-Za-z0-9])" if needle[-1:].isalnum() else ""
+    return re.search(head + re.escape(needle) + tail, str(hay or ""), re.IGNORECASE) is not None
 
 
 def _or(a, b):

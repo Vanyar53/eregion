@@ -75,7 +75,8 @@ COMPONENTS: dict[str, Component] = {
         tests=(
             "test_actions_split.py", "test_agent_nodes.py", "test_audit.py", "test_aws_adapter.py",
             "test_bot.py", "test_chat_escaping.py", "test_cli.py", "test_config.py", "test_detection_authoring.py",
-            "test_detection_rules.py", "test_detectors.py", "test_discovery.py", "test_forged_logs.py",
+            "test_detection_rules.py", "test_detectors.py", "test_discovery.py", "test_entries_calls.py",
+            "test_forged_logs.py",
             "test_glorfindel.py",
             "test_invariant_regressions.py", "test_invariants.py", "test_invariants_aws.py",
             "test_jobs.py", "test_llm_smoke.py", "test_locks.py", "test_orphan_sweep.py", "test_posture.py", "test_proposed_rules.py", "test_readiness.py",

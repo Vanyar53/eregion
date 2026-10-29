@@ -190,7 +190,8 @@ class CloudConnector(ABC):
         """Trigger an Azure Backup OriginalLocation restore. Human-approved action.
 
         before_attack_time: ISO8601 timestamp — selects the most recent recovery point
-        that predates the attack, avoiding restoration of a post-attack backup.
+        that predates the attack, avoiding restoration of a post-attack backup. Required
+        (SEC4c): without it the restore is refused, never the newest point.
         wait=False: returns after triggering the restore job, without polling.
           VM stays deallocated; caller must start it and emit recovery_complete manually.
         vault_rg: the vault's resource group (central vault ≠ VM RG); empty → VM's RG.

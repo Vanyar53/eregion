@@ -215,6 +215,8 @@ def start_restore(
         "vault_rg": result.get("vault_rg") or vault_rg,
         "recovery_point": result.get("recovery_point"),
         "recovery_point_time": str(result.get("recovery_point_time", "")),
+        "recovery_point_vault_tier": bool(result.get("recovery_point_vault_tier")),
+        "before_attack_time": before_attack_time,
         "status": "InProgress",
         "started_at": datetime.now(timezone.utc).isoformat(),
         "completed_at": None,

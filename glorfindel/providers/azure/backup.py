@@ -3,7 +3,7 @@ recovery points and items, a restore job's status (moved from actions.py, A1).
 """
 from __future__ import annotations
 
-from glorfindel.providers.azure.sdk import _backup_item_names, _is_iam_error
+from glorfindel.providers.azure.sdk import _backup_item_names, _is_iam_error, rest_post
 from glorfindel.response.ids import _is_backupable_vm, _parse_vm_resource_id
 from glorfindel.response.policy import _console
 
@@ -30,7 +30,6 @@ class BackupMixin:
             from glorfindel.config import NO_VAULT_MSG
             raise RuntimeError(NO_VAULT_MSG)
         import time
-        import requests
         from datetime import datetime, timezone, timedelta
         from azure.mgmt.recoveryservicesbackup import RecoveryServicesBackupClient
 
@@ -62,7 +61,7 @@ class BackupMixin:
             }
         }
         triggered_at = datetime.now(timezone.utc)
-        r = requests.post(url, json=payload, headers=headers)
+        r = rest_post(url, "Déclenchement de l'instantané", json=payload, headers=headers)
         if r.status_code not in (200, 202):
             raise RuntimeError(f"Snapshot trigger failed ({r.status_code}): {r.text[:300]}")
 

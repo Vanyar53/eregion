@@ -1,9 +1,10 @@
-"""restore_from_backup (human-approved): the newest recovery point before the attack,
-Run Command scripts neutralised first (moved from actions.py, A1).
+"""restore_from_backup (human-approved): the newest recovery point before the attack —
+never without knowing when it began (SEC4c) —, Run Command scripts neutralised first
+(moved from actions.py, A1).
 """
 from __future__ import annotations
 
-from glorfindel.providers.azure.sdk import _enum_text
+from glorfindel.providers.azure.sdk import _enum_text, rest_post
 from glorfindel.response.ids import _parse_vm_resource_id
 from glorfindel.response.policy import _console, _ERR_MAX, _first_line
 
@@ -24,11 +25,16 @@ class RestoreMixin:
             return {"status": "dry_run", "action": "restore_from_backup", "resource_id": resource_id}
 
         self._guard_write("restore_from_backup")
+        # Never the newest point by default (SEC4c): it may have been taken after the attack.
+        if not before_attack_time:
+            raise RuntimeError(
+                "restore_from_backup : moment de l'attaque inconnu — le point le plus récent "
+                "peut être postérieur à l'attaque ; donner before_attack_time "
+                "(`glorfindel restore --before`).")
         if not vault:
             from glorfindel.config import NO_VAULT_MSG
             raise RuntimeError(NO_VAULT_MSG)
         import time
-        import requests
         from datetime import datetime, timezone
         from azure.mgmt.recoveryservicesbackup import RecoveryServicesBackupClient
 
@@ -60,31 +66,29 @@ class RestoreMixin:
         def _rp_time(rp):
             return getattr(rp.properties, "recovery_point_time", None)
 
-        # Select the most recent clean recovery point — must predate the attack
-        # to avoid restoring a backup that already contains attack artifacts.
-        if before_attack_time:
-            attack_dt = datetime.fromisoformat(before_attack_time).astimezone(timezone.utc)
-            pre_attack = [
-                rp for rp in rps
-                if _rp_time(rp) is not None and _rp_time(rp) < attack_dt
-            ]
-            if not pre_attack:
-                raise RuntimeError(
-                    f"No recovery point found before attack time {before_attack_time}. "
-                    "A backup may have run during the attack. Check the portal."
-                )
-            candidate_pool = pre_attack
-        else:
-            candidate_pool = rps
+        # The most recent clean recovery point — it must predate the attack, or the
+        # restored disk already holds what the attack did. A point without a time can't be
+        # placed before anything: never taken.
+        attack_dt = datetime.fromisoformat(before_attack_time.replace("Z", "+00:00"))
+        if attack_dt.tzinfo is None:
+            attack_dt = attack_dt.replace(tzinfo=timezone.utc)
+        attack_dt = attack_dt.astimezone(timezone.utc)
+        pre_attack = [
+            rp for rp in rps
+            if _rp_time(rp) is not None and _rp_time(rp) < attack_dt
+        ]
+        if not pre_attack:
+            raise RuntimeError(
+                f"No recovery point found before attack time {before_attack_time}. "
+                "A backup may have run during the attack. Check the portal."
+            )
 
         # Prefer the immutable vault tier, then the NEWEST point by its timestamp.
         # Taking pool[0] relied on the order Azure happens to list points in.
-        pool = [rp for rp in candidate_pool if _has_vault_tier(rp)] or candidate_pool
-        timed = [rp for rp in pool if _rp_time(rp) is not None]
-        latest = max(timed, key=_rp_time) if timed else pool[0]
-        rp_time = _rp_time(latest) or "unknown"
-        if before_attack_time:
-            _console.print(f"  [dim]Using pre-attack recovery point: {rp_time}[/dim]")
+        vaulted = [rp for rp in pre_attack if _has_vault_tier(rp)]
+        latest = max(vaulted or pre_attack, key=_rp_time)
+        rp_time = _rp_time(latest)
+        _console.print(f"  [dim]Using pre-attack recovery point: {rp_time}[/dim]")
 
         vm = self._compute.virtual_machines.get(rg, vm_name)
         if not staging_storage:
@@ -145,7 +149,7 @@ class RestoreMixin:
         }
 
         triggered_at = datetime.now(timezone.utc)
-        r = requests.post(url, json=payload, headers=headers)
+        r = rest_post(url, "Déclenchement du restore (VM désallouée)", json=payload, headers=headers)
         if r.status_code not in (200, 202):
             raise RuntimeError(f"Restore trigger failed ({r.status_code}): {r.text[:300]}")
 
@@ -168,6 +172,8 @@ class RestoreMixin:
                 "vm_rg": rg,
                 "recovery_point": latest.name,
                 "recovery_point_time": str(rp_time),
+                "recovery_point_vault_tier": bool(vaulted),
+                "before_attack_time": before_attack_time,
                 "resource_id": resource_id,
                 **neutralize,
             }
@@ -192,6 +198,8 @@ class RestoreMixin:
             "status": "restored",
             "recovery_point": latest.name,
             "recovery_point_time": str(rp_time),
+            "recovery_point_vault_tier": bool(vaulted),
+            "before_attack_time": before_attack_time,
             "resource_id": resource_id,
             **neutralize,
         }

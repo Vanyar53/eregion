@@ -97,7 +97,7 @@ _V1_ANNATAR_GATE = (
     "            no_watch = watch_gate.refusal()\n"
     "            if no_watch:\n"
     '                console.print(f"[red]Refused — no live Glorfindel watch:[/red] {no_watch}")\n'
-    '                return RunOutcome(run_id, "unknown", error=f"glorfindel: {no_watch}")\n')
+    '                return RunOutcome(run_id, "unknown", error=f"glorfindel: {no_watch}", refused=True)\n')
 _V1_ANNATAR_ARM = '        verdict, session = arm(run_id, "annatar")\n'
 _V1_GOTHMOG_GATE = (
     "        refused = self._no_watch(run_id, without_glorfindel)\n"
@@ -377,16 +377,16 @@ MUTANTS = [
      '    if outcome is not None and getattr(outcome, "error", None):\n',
      "    if False:\n"),
     ("M104", "a passive Orodruin refusal exits 0 (#158)", ENG,
-     'return RunOutcome(run_id, "unknown", error=f"passive: {verdict.reasons()}")',
+     'return RunOutcome(run_id, "unknown", error=f"passive: {verdict.reasons()}", refused=True)',
      'return RunOutcome(run_id, "unknown")'),
     ("M105", "a target not enrolled exits 0 (#158)", ENG,
-     'return RunOutcome(run_id, "unknown", error=f"safety: {guard.reason}")',
+     'return RunOutcome(run_id, "unknown", error=f"safety: {guard.reason}", refused=True)',
      'return RunOutcome(run_id, "unknown")'),
     ("M106", "a dirty start (atomic) exits 0 (#158)", ENG,
      'run_id, "unknown", error="initial state not clean before the atomic"',
      'run_id, "unknown"'),
     ("M107", "an atomic the adapter refuses exits 0 (#158)", ENG,
-     'return RunOutcome(run_id, "unknown", error=f"atomic: {e}")',
+     'return RunOutcome(run_id, "unknown", error=f"atomic: {e}", refused=True)',
      'return RunOutcome(run_id, "unknown")'),
     ("M108", "an initial state not restored exits 0 (#158)", ENG,
      '            return RunOutcome(run_id, "unknown", error=error)\n',
@@ -820,11 +820,11 @@ MUTANTS = [
      "    if refs and start > min(refs) + timedelta(seconds=FUTURE_SKEW_S):\n", "    if False:\n"),
     ("M222", "a window marks a VM that is not enrolled — the real load passed off as an "
      "exercise (H-1)", XW,
-     "    return _targets(window, resource_id) and live(window, when) and enrolled(resource_id)\n",
-     "    return _targets(window, resource_id) and live(window, when)\n"),
+     "    return (_targets(window, resource_id) and live(window, when) and enrolled(resource_id)\n",
+     "    return (_targets(window, resource_id) and live(window, when)\n"),
     ("M223", "the run_id shortcut marks a VM its window does not name (H-1)", XW,
-     '            w.get("run_id") == run_id and _targets(w, resource_id) for w in ws) \\\n',
-     '            w.get("run_id") == run_id for w in ws) \\\n'),
+     '            w.get("run_id") == run_id and _targets(w, resource_id)\n',
+     '            w.get("run_id") == run_id\n'),
     ("M224", "an exercise card is hidden from the list to judge (H-1)", "glorfindel/escalations.py",
      '        if not is_decision(e) or e.get("verdict") in VERDICTS:\n',
      '        if not is_decision(e) or e.get("verdict") in VERDICTS or e.get("source") == "exercise":\n'),
@@ -2078,8 +2078,8 @@ MUTANTS += [
      "      AzureActivity\n      | where TimeGenerated > ago(10m)\n      | where OperationNameValue in~ (\n"
      "          \"MICROSOFT.NETWORK"),
     ("M825", "a row on a VM's sub-resource (a role scoped on the VM) dropped, not attributed (AL1)", DRU,
-     "                named, tgt = True, by_rid.get(_vm_id_of(rid))",
-     "                named, tgt = True, by_rid.get(rid.lower())"),
+     "            return True, self.by_rid.get(_vm_id_of(rid))",
+     "            return True, self.by_rid.get(rid.lower())"),
     ("M826", "the newest operation first, before a write on Glorfindel's rules (AL1)", DRU,
      "    return sorted(by_op.values(), key=lambda r: (_grave(r), str(r.get(\"TimeGenerated\") or \"\")),",
      "    return sorted(by_op.values(), key=lambda r: str(r.get(\"TimeGenerated\") or \"\"),"),
@@ -2214,8 +2214,8 @@ MUTANTS += [
     ("M944", "a client rule on an Entra table without telling columns goes to the model: its UPN sent (C2)", DRU,
      "        if plane == \"data\" and _reads_entra_table(rule.query):\n            plane = \"identity\"\n", ""),
     ("M945", "respond on an Entra query of another source goes to the model (C2)", AGT,
-     "        entra_query = _reads_entra_table(query) and not is_control_plane_source(source)",
-     "        entra_query = False"),
+     "    entra_query = _reads_entra_table(query) and not is_control_plane_source(source)",
+     "    entra_query = False"),
     ("M946", "a consent card proposes to disable the resource's principal: the whole tenant cut (C2)", ENT,
      "        client = (tid if op.lower() == \"consent to application\" and row.get(\"TargetId\")\n"
      "                  else str(row.get(\"ClientId\") or \"\").strip())",
@@ -2626,8 +2626,17 @@ MUTANTS += [
      "it half done only at times (1 round in 2, measured); what the whole rewrite adds besides (a "
      "crash inside the write leaves the store as it was) needs a process killed mid-write"),
     ("M1225", "the store's lock is a thread lock only: another process writes meanwhile (SEC3, V-10)", LCK,
-     "                import fcntl\n                fcntl.flock(fh, fcntl.LOCK_EX)\n",
-     "                import fcntl  # noqa: F401\n"),
+     # The store's own block (its message names the file, not a VM): since I3F (#292) the
+     # same flock lines open _vm_lock and _file_lock.
+     "                if timeout is None:\n                    fcntl.flock(fh, fcntl.LOCK_EX)\n"
+     "                else:\n                    deadline = _time.monotonic() + timeout\n"
+     "                    while True:\n                        try:\n"
+     "                            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)\n"
+     "                            break\n                        except BlockingIOError:\n"
+     "                            if _time.monotonic() >= deadline:\n"
+     "                                raise TimeoutError(f\"{path.name} busy (another process is writing)\")\n"
+     "                            _time.sleep(0.2)\n",
+     "                pass\n"),
     ("M1226", "state files readable by all again (SEC3, V-27)", STA,
      "def _atomic_write_text(path: Path, text: str, mode: int = 0o600) -> None:\n",
      "def _atomic_write_text(path: Path, text: str, mode: int = 0o644) -> None:\n"),
@@ -2642,7 +2651,8 @@ MUTANTS += [
      "      - ./technique_catalog.yaml:/app/technique_catalog.yaml:ro\n"
      "      - ${HOME}/.glorfindel:/root/.glorfindel:ro\n"),
     ("M1230", "the watch writes no heartbeat where the injectors read it: every run refused (SEC3, N-05)",
-     GCLI, "            _atomic_write_text(_INJECTOR_BEAT, now, mode=0o644)", "            pass  #"),
+     GCLI, "            _atomic_write_text(_INJECTOR_BEAT, json.dumps(beat_body(at)), mode=0o644)",
+     "            pass  #"),
     ("M1231", "make glorfindel-start no longer creates ~/.glorfindel/injectors: docker makes it as root "
               "(SEC3)", MAKE,
      "glorfindel-start: check-azure-env build-glorfindel\n"
@@ -2663,7 +2673,8 @@ MUTANTS += [
      "        os.chmod(_INJECTORS_DIR, 0o755)      # theirs to read, whatever the umask\n",
      "        pass\n"),
     ("M1236", "the injectors' heartbeat owner-only: an image of another user can't read it (SEC3, N-05)", GCLI,
-     "            _atomic_write_text(_INJECTOR_BEAT, now, mode=0o644)", "            _atomic_write_text(_INJECTOR_BEAT, now)"),
+     "            _atomic_write_text(_INJECTOR_BEAT, json.dumps(beat_body(at)), mode=0o644)",
+     "            _atomic_write_text(_INJECTOR_BEAT, json.dumps(beat_body(at)))"),
     ("M1237", "Annatar reads Glorfindel's state again: the blocks watcher back (SEC3, N-05)", ENG,
      "        # Glorfindel no longer writes, and the injectors no longer mount that state.\n"
      "        stop_event = threading.Event()\n",
@@ -3383,6 +3394,106 @@ TESTS["M1351"] = "tests/unit/test_workflows.py -k fingerprint"
 TESTS.update({f"M{n}": "tests/unit/test_chat_escaping.py" for n in (1352, 1353, 1354)})
 
 
+# SEC5 (#276, V-35): the TUI's keys do what they say, on the cards the console allows.
+MUTANTS += [
+    ("M1266", "the TUI restores an anchored card (SEC5, V-35)", "glorfindel/tui.py",
+     '    return esc.get("action") == "restore_from_backup" and not _anchored(esc)',
+     '    return esc.get("action") == "restore_from_backup"'),
+    ("M1279", "the TUI's unblock runs a full reset (SEC5, V-35)", "glorfindel/tui.py",
+     '        return [["unblock", ip, rid, "--yes"] for ip in ips]', '        return [["reset", rid, "--yes"]]'),
+]
+TESTS.update({mid: "tests/unit/test_tui_actions.py" for mid in ("M1266", "M1279")})
+
+
+# SEC5 (#276): the injectors and their channels — a refusal never reset, the catalog's word on
+# what is destructive, the gate read again and bound to its perimeter, no development run in
+# production, the windows bounded by their blob, the pulls bounded, a token for Azure Storage
+# only, the writes per enrolled VM and the journal off the host, the TUI's keys.
+_SEC5_GUARDS = "tests/unit/test_injector_guards.py"
+_SEC5_CHANNELS = "tests/unit/test_injector_channels.py"
+MUTANTS += [
+    ("M1260", "a campaign resets a target the engine refused (SEC5, V-18)", CRUN,
+     "            if outcome is not None and outcome.refused:\n", "            if False:\n"),
+    ("M1261", "the channel's storage account open to every network again (SEC5, V-31)",
+     "infra/orodruin/main.tf", '    default_action             = "Deny"',
+     '    default_action             = "Allow"'),
+    ("M1262", "the scenario's own destructive field believed before the catalog (SEC5, V-19)", ENG,
+     '    own = scenario.raw.get("destructive")\n    destructive = said is not False or own is True\n',
+     '    own = scenario.raw.get("destructive")\n'
+     '    destructive = own if isinstance(own, bool) else said is not False\n'),
+    ("M1263", "the catalog vouches for a technique whatever script the scenario runs (SEC5, V-19)",
+     "annatar/campaign/catalog.py", "    elif scripts:\n", "    elif False:\n"),
+    ("M1264", "the campaign's destructive policy reads the manifest's ttp, not its scenario (SEC5, V-19)",
+     CRUN, "        return scenario_destructive(scenario)[0]",
+     "        return catalog_destructive(entry.ttp) is not False"),
+    ("M1265", "the watch read once per run: a watch that dies mid-run lets the next steps run (SEC5, N-03)",
+     ENG, "            lost = self._watch_lost()\n            if lost:\n                return self._lost(run_id, lost)\n"
+          "            self._execute_action(executor, step)\n",
+     "            self._execute_action(executor, step)\n"),
+    ("M1267", "annatar clean rewrites a disk without a live watch (SEC5, N-03)", "annatar/runner/initializer.py",
+     "        if not without_glorfindel:\n            no_watch = watch_gate.refusal()\n            if no_watch:\n"
+     '                raise RuntimeError(f"Refused — no live Glorfindel watch: {no_watch}")\n', ""),
+    ("M1268", "a fresh heartbeat of any perimeter is a watch of this injector's targets (SEC5, N-03)",
+     "eregion_core/watch_gate.py", '    return unbound(beat, READERS.get("own", perimeter)())', '    return ""'),
+    ("M1269", "--without-glorfindel runs in zone production (SEC5, N-04)", ENG,
+     '        if self.without_glorfindel and guard.zone == "production":', "        if False:"),
+    ("M1270", "a run --without-glorfindel absent from Orodruin's journal (SEC5, N-04)", ENG,
+     "            session.declare(WITHOUT_GLORFINDEL, watch_gate.NOT_MEASURED)\n", "            pass\n"),
+    ("M1271", "the atomics' sha256 checked in CI only, not at run time (SEC5, V-30)", ATO,
+     "    if hashlib.sha256(raw).hexdigest() != pinned:", "    if False:"),
+    ("M1272", "a window dated back before its blob was created is believed (SEC5, V-20)", XW,
+     "        if start < created - timedelta(seconds=FUTURE_SKEW_S):", "        if False:"),
+    ("M1273", "a window marks a production VM whatever it ran there (SEC5, V-20)", XW,
+     '    return window.get("kind") == "technique" and window.get("destructive") is False',
+     "    return True"),
+    ("M1274", "a blob read whole, then checked (SEC5, V-21)", XCH,
+     "    if isinstance(r, requests.Response):\n        try:", "    if False:\n        try:"),
+    ("M1275", "a listing of the channel without a bound on its names (SEC5, V-21)", XCH,
+     "            if seen >= MAX_BLOBS:", "            if False:"),
+    ("M1276", "the storage token sent to whatever URL the channel names (SEC5, N-15)", XCH,
+     "    global _credential\n    check_url(url)\n", "    global _credential\n"),
+    ("M1277", "Orodruin's journal stays on its host (SEC5, V-29)", "eregion_core/orodruin.py",
+     "    url = channel if channel is not None else xc.channel_url()",
+     '    url = ""'),
+    ("M1278", "the contract accepts a write right on the whole bench group (SEC5, V-29, #182)",
+     "eregion_core/orodruin.py",
+     ('            if scope.lower().rstrip("/") == bench.lower().rstrip("/") and wide:',
+      '    if wide and not any(m["code"] == "identity_group_wide" for m in missing):'),
+     ("            if False:", "    if False:")),
+]
+TESTS.update({mid: _SEC5_GUARDS for mid in ("M1260", "M1262", "M1263", "M1264", "M1265", "M1267",
+                                            "M1269", "M1270", "M1271")})
+TESTS["M1268"] = f"{_SEC5_GUARDS} {_SEC5_CHANNELS}"
+TESTS.update({mid: _SEC5_CHANNELS for mid in ("M1272", "M1273", "M1274", "M1275", "M1276", "M1277")})
+TESTS["M1278"] = f"{_SEC5_CHANNELS} tests/unit/test_orodruin.py"
+TESTS["M1261"] = "tests/unit/test_orodruin.py"
+# SEC5, after the 5.5 review: a window rewritten after its pull, the chaos rights asked without
+# an experiment, an engine that raised then reset, the channel without a retention.
+MUTANTS += [
+    ("M1450", "a campaign resets the target of an engine that raised (SEC5, V-18)", CRUN,
+     '            if (entry.error or "").startswith(ENGINE_RAISED):\n', "            if False:\n"),
+    ("M1451", "a window pulled again replaces its copy whatever changed (SEC5, V-20)", XCH,
+     "            why = rewrite_refusal(old, new)\n", '            why = ""\n'),
+    ("M1452", "the chaos rights asked with no experiment in the group: Orodruin passive for all (SEC5, V-29)",
+     "eregion_core/orodruin.py",
+     "        if not scopes and (experiments or action not in CHAOS_ACTIONS):", "        if not scopes:"),
+    ("M1453", "the channel's blobs kept for ever: the listing's bound cuts the newest (SEC5, V-21)",
+     "infra/orodruin/main.tf",
+     "        delete_after_days_since_modification_greater_than = var.channel_retention_days",
+     "        delete_after_days_since_modification_greater_than = 36500"),
+    ("M1454", "a hosted watch declared without its subnet: the firewall cuts it off silently (SEC5, V-31)",
+     "infra/orodruin/main.tf",
+     '      condition     = var.watch_principal_id == "" || var.watch_subnet_id != ""',
+     "      condition     = true"),
+    ("M1455", "a named Celebrimbor's VMs never get Orodruin's rights: the tag fixed to celebrimbor (SEC5, V-29)",
+     "infra/orodruin/main.tf", 'trimprefix(var.bench_resource_group, "rg-")', '"celebrimbor"'),
+    ("M1456", "a passive Orodruin is not a refusal: the campaign resets the target (SEC5, V-18)", ENG,
+     'error=f"passive: {verdict.reasons()}", refused=True)', 'error=f"passive: {verdict.reasons()}")'),
+]
+TESTS.update({"M1450": _SEC5_GUARDS, "M1456": _SEC5_GUARDS, "M1451": _SEC5_CHANNELS,
+              "M1452": f"{_SEC5_CHANNELS} tests/unit/test_orodruin.py"})
+TESTS.update({mid: "tests/unit/test_orodruin.py" for mid in ("M1453", "M1454", "M1455")})
+
 # SEC4a (#275): the decision facing a model, a memory or a line it did not expect — the
 # model's answer read for its type, a snapshot alone leaves a card, real cycles only for a
 # real signal and no cycle overwriting another, the row of an attack_started naming its VM,
@@ -3524,6 +3635,73 @@ MUTANTS += [
 ]
 TESTS.update({f"M{n}": "tests/unit/test_image_check.py" for n in range(1480, 1490)})
 TESTS["M1486"] = "tests/unit/test_workflows.py"
+
+
+# REL1 (#269): a release in two commands — the version's pull request (`make release`), then the
+# draft (`make release-draft`), seen on #agents and cleared when published. Measured by
+# tests/unit/test_release.py on a throwaway repository, a fake gh, the fake Discord. M1160–M1169.
+RELS = "scripts/release.py"
+MUTANTS += [
+    ("M1160", "a modified tree cut and committed with the release (REL1)", RELS,
+     '    if git(root, "status", "--porcelain"):\n', "    if False:\n"),
+    ("M1161", "the current version released again: equal is not greater (REL1)", RELS,
+     "new <= semver(current)", "new < semver(current)"),
+    ("M1162", "an empty [Unreleased] released: a version with nothing in it (REL1)", RELS,
+     "    if not has_content(unreleased(changelog)):\n        refused.append(", "    if False:\n        refused.append("),
+    ("M1163", "a release cut from a HEAD that is not origin/main (REL1)", RELS,
+     "    if head != main:\n", "    if False:\n"),
+    ("M1164", "a draft created for a tag that exists already (REL1)", RELS,
+     '        refused.append(f"le tag {tag} existe déjà")\n    if shutil.which("gh") is None:\n',
+     '    if shutil.which("gh") is None:\n'),
+    ("M1165", "the cut takes [Unreleased]'s place: no empty [Unreleased] above the version (REL1)", RELS,
+     '    return head + UNRELEASED + "\\n" + f\'## [{version}]', "    return head + f'## [{version}]"),
+    ("M1166", "the release created without --draft: published, H0 deployed (REL1)", RELS,
+     '"release", "create", tag, "--draft", "--target"', '"release", "create", tag, "--target"'),
+    ("M1167", "the draft targets main by name, not origin/main's full sha (REL1)", RELS,
+     '"--target", sha, "--title"', '"--target", "main", "--title"'),
+    ("M1168", "DRY_RUN=1 writes, commits and pushes (REL1)", RELS,
+     '    if dry_run:\n        say("")\n', '    if False:\n        say("")\n'),
+    ("M1169", "a published release leaves its draft's ping and line on #agents (REL1)", NDS,
+     "        release_published(event, cfg)\n", "        pass\n"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_release.py" for n in range(1160, 1170)})
+# REL1 after its 5.5 review: M1430–M1436.
+ADS = "scripts/agents_discord.py"
+MUTANTS += [
+    ("M1430", "a push or a pull request that fails after the branch exists said « nothing written » (REL1)", RELS,
+     "        raise Halfway(_halfway(step, branch, str(e))) from None\n", "        raise\n"),
+    ("M1431", "an [Unreleased] of headings only released: a version with nothing in it (REL1)", RELS,
+     '    return any(line.strip() and not line.lstrip().startswith("#") for line in text.splitlines())\n',
+     "    return bool(text.strip())\n"),
+    ("M1432", "ids from a release's notes delete any message of #agents' webhook (REL1)", NDS,
+     '    if ping and _titled(cfg, ping, "🙋 " + release_waiting(tag)):\n', "    if ping:\n"),
+    ("M1433", "ids from a release's notes rewrite any message as if it were the board (REL1)", NDS,
+     "    msg = _titled(cfg, board, BOARD_TITLE) if board else None\n",
+     '    msg = fetch("GET", f"{cfg.agents}/messages/{board}", "webhook #agents") if board else None\n'),
+    ("M1434", "the line notify.yml took off put back by the next refresh (REL1)", ADS,
+     "    if not items or not (due or (probe and any([_ping_gone(cfg, w) for w in items]))):\n",
+     "    if not items or not due:\n"),
+    ("M1435", "a draft made again keeps the stale link and ping (REL1)", ADS,
+     '        if old.get("url", "") == item.get("url", ""):\n', "        if True:\n"),
+    ("M1436", "#agents' webhook given to notify.yml on every event (REL1)", ".github/workflows/notify.yml",
+     "${{ github.event_name == 'release' && secrets.EREGION_DISCORD_WEBHOOK_AGENTS || '' }}",
+     "${{ secrets.EREGION_DISCORD_WEBHOOK_AGENTS }}"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_release.py" for n in range(1430, 1437)})
+# REL1 after its second 5.5 review: M1437–M1439, M1470.
+MUTANTS += [
+    ("M1437", "the way back of a failure in route: git switch - fails from a detached HEAD, staged files kept (REL1)",
+     RELS, '    back = f"git reset -q --hard && git checkout -q - && git branch -D {branch}"\n',
+     '    back = f"git checkout -- . && git switch - && git branch -D {branch}"\n'),
+    ("M1438", "the way back after a pushed branch leaves it on the remote (REL1)", RELS,
+     '        back += f" && git push origin --delete {branch}"\n', "        pass\n"),
+    ("M1439", "a draft's ping looked for in Discord at every refresh (REL1)", ADS,
+     '    probe = bool(items) and not due and now - state.get("pings_probed", 0) >= PING_PROBE_S\n',
+     "    probe = bool(items) and not due\n"),
+    ("M1470", "run() starts whatever it is given: its git-or-gh check gone (REL1)", RELS,
+     '    if not cmd or cmd[0] not in ("git", "gh"):\n        raise ValueError("git or gh only")\n', ""),
+]
+TESTS.update({mid: "tests/unit/test_release.py" for mid in ("M1437", "M1438", "M1439", "M1470")})
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

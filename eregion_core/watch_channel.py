@@ -34,7 +34,8 @@ from datetime import datetime, timezone
 
 from eregion_core.exercise import (GRACE_AFTER_S, MAX_DURATION_S, covering_runs, live,
                                    load_windows)
-from eregion_core.exercise_channel import auth_headers
+from eregion_core.exercise_channel import MAX_BLOB_BYTES, MAX_BLOBS, MAX_LISTING_BYTES, \
+    auth_headers, fetch
 
 CHANNEL_ENV = "EREGION_WATCH_CHANNEL"
 HEARTBEAT = "heartbeat.json"
@@ -152,10 +153,15 @@ class Publisher:
             return  # no heartbeat while a detection waits: it would vouch for a miss
         if self._last_beat and (now - self._last_beat).total_seconds() < HEARTBEAT_EVERY_S:
             return
+        from eregion_core.watch_gate import perimeter  # watch_gate reads this module
+
         self._write(HEARTBEAT, {
             "at": now.isoformat(),
             "since": self.since,
             "windows": sorted(w["run_id"] for w in windows if live(w, now)),
+            # SEC5 (N-03): the subscription this watch reads, as a digest — what binds this
+            # heartbeat to the targets of a run (eregion_core/watch_gate.py).
+            "perimeter": perimeter(),
         })
         self._last_beat = now
         self._report("")
@@ -163,7 +169,7 @@ class Publisher:
     def _write(self, name: str, body: dict) -> None:
         import requests
 
-        headers = {**auth_headers(self._credential), "x-ms-blob-type": "BlockBlob",
+        headers = {**auth_headers(self._credential, self.channel), "x-ms-blob-type": "BlockBlob",
                    "Content-Type": "application/json"}
         r = (self._put or requests.put)(f"{self.channel}/{name}", headers=headers,
                                         data=json.dumps(body, indent=2).encode(), timeout=15)
@@ -200,13 +206,14 @@ def start(*, interval: float = TICK_S) -> Publisher | None:
 
 # ── The run's side (Orodruin) ──────────────────────────────────────────────────────
 
-def _get(url: str, get, credential, **kw):
-    import requests
-
-    r = (get or requests.get)(url, headers=auth_headers(credential), timeout=15, **kw)
+def _get(url: str, get, credential, *, params=None, limit: int = MAX_BLOB_BYTES) -> bytes:
+    """A blob or a listing page of the return channel, read within its bound (SEC5, V-21);
+    the token goes to an Azure Storage endpoint only (N-15)."""
+    r, body = fetch(get, url, auth_headers(credential, url), limit=limit, params=params,
+                    what="the watch channel")
     if not r.ok:
         raise RuntimeError(f"HTTP {r.status_code} reading the watch channel")
-    return r
+    return body
 
 
 def read_heartbeat(*, channel: str | None = None, credential=None, get=None) -> dict:
@@ -214,7 +221,7 @@ def read_heartbeat(*, channel: str | None = None, credential=None, get=None) -> 
     url = channel if channel is not None else channel_url()
     if not url:
         raise RuntimeError(f"{CHANNEL_ENV} is not set")
-    body = json.loads(_get(f"{url}/{HEARTBEAT}", get, credential).content)
+    body = json.loads(_get(f"{url}/{HEARTBEAT}", get, credential))
     if not isinstance(body, dict):
         raise RuntimeError("heartbeat is not an object")
     return body
@@ -235,8 +242,10 @@ def read_detections(run_id: str, *, channel: str | None = None, credential=None,
         params = {"restype": "container", "comp": "list", "prefix": prefix}
         if marker:
             params["marker"] = marker
-        root = ET.fromstring(_get(url, get, credential, params=params).content)
+        root = ET.fromstring(_get(url, get, credential, params=params, limit=MAX_LISTING_BYTES))
         names += [b.findtext("Name") or "" for b in root.iter("Blob")]
+        if len(names) > MAX_BLOBS:  # V-21: never a miss on a listing cut short — unknown
+            raise RuntimeError(f"more than {MAX_BLOBS} detections listed for {run_id}")
         marker = root.findtext("NextMarker") or ""
         if not marker:
             break
@@ -246,7 +255,7 @@ def read_detections(run_id: str, *, channel: str | None = None, credential=None,
         if not name.startswith(prefix) or not leaf.endswith(".json") \
                 or not _SAFE.match(leaf[:-5]):
             continue
-        record = json.loads(_get(f"{url}/{name}", get, credential).content)
+        record = json.loads(_get(f"{url}/{name}", get, credential))
         if isinstance(record, dict):
             out.append(record)
     return out

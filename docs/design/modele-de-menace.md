@@ -77,6 +77,7 @@ Trois canaux, à ne pas confondre :
 | S | Un membre du serveur juge une carte ou lance un restore | Boutons fermés par défaut, autorisés par id seulement, chaque refus dit et journalisé (M-3) |
 | T | Un texte du dehors (le nom d'une application Entra, les mots du modèle) déguise un lien, imite une mise en forme ou mentionne tout le monde | Tout texte du dehors échappé avant d'être posté, aucune mention permise sauf le rôle configuré (SEC6, `glorfindel/chat_text.py`) |
 | T | La PR d'un fork, son run rouge ou l'issue d'un inconnu déplace le fil d'un lot (l'étiquette, l'archive) | `#ci` seulement : la tête d'un run doit venir du dépôt, l'auteur d'une issue y tenir un rôle (SEC6, `scripts/notify_discord.py`) |
+| T | Les notes d'une release publiée font effacer ou réécrire d'autres messages de `#agents` | `notify.yml` n'en lit que deux ids, en chiffres, dans le commentaire posé par `make release-draft`, et lit chaque message avant d'y toucher : le ping n'est effacé que si son titre est celui de ce brouillon, le tableau réécrit que si c'est le tableau, et seule la ligne de ce brouillon en sort ; le webhook n'est donné qu'aux événements `release`, que seul un membre du dépôt déclenche en publiant (REL1, `scripts/notify_discord.py`) |
 | R | Un clic sans trace | Le bot journalise chaque refus ; verdicts et acquittements dans `escalations.jsonl` |
 | I | Un jeton fuit | Le jeton du bot de Glorfindel seulement dans son conteneur (la watch et la console savent qu'il existe, pas sa valeur) ; celui de l'atelier jamais sur H0 ni dans un conteneur (testé) ; une URL de webhook est un secret, jamais imprimée |
 | D | Discord tombe | Une escalade est d'abord écrite localement et visible dans la console ; la watch dit au démarrage quand rien n'alerte |
@@ -128,12 +129,15 @@ Trois canaux, à ne pas confondre :
 |---|---|---|
 | S | Un injecteur joué depuis un poste quelconque, sur une cible non inscrite | Contrat d'Orodruin armé/passif ; inscription et zone de chaque cible ; tout inconnu refusé (O0, O1) |
 | T | Une attaque ou une panne sur une charge réelle | Règle de production codée (O0) ; un apply du banc montre son plan et demande confirmation, sauf `YES=1` (SEC6) |
-| R | Un appel au cloud sans trace | Orodruin l'écrit avant de le faire (O1) |
+| R | Un appel au cloud sans trace | Orodruin l'écrit avant de le faire (O1), sur son disque puis dans le canal, hors de l'hôte (SEC5) |
+| E | L'identité d'Orodruin agit sur une VM du banc qui n'est pas inscrite | Elle ne lit que le groupe ; elle n'écrit que sur chaque VM inscrite et chaque expérience, et le contrat refuse une écriture sur le groupe entier (SEC5, #182) |
+| S | Un battement de watch qui ne parle pas des cibles, une fenêtre d'exercice antidatée | Le battement porte le périmètre de la watch, comparé à celui de l'injecteur et relu avant chaque action ; une fenêtre est bornée par la création de son blob, et ne marque une VM de production que pour une technique non destructive (SEC5) |
+| T | Une URL de canal mal réglée, un blob démesuré | Le jeton ne part que vers un point de terminaison Azure Storage ; un tirage lit en flux borné (taille, nombre), et dit ce qui dépasse (SEC5) |
 | I | Un secret de l'hôte fuit | Identités managées plutôt que des secrets ; `host.env` hors du dépôt ; le jeton du bot de l'atelier jamais sur H0 |
 | D | Un injecteur qui s'emballe | Plafond, arrêt d'urgence, fenêtres bornées (O1, B2) |
 | E | Le Glorfindel hébergé est poussé à écrire | Il n'en a pas les droits (Reader) et tourne en lecture seule, `human_only` forcé au push |
 
-**Ouvert** : les injecteurs et leurs canaux — planifié : #276 ; le durcissement des conteneurs — planifié.
+**Ouvert** : un battement de la watch authentifié, pas seulement lié — planifié ; un journal hors de l'hôte que son identité ne peut pas effacer — planifié ; le canal sans point de terminaison public — planifié ; le durcissement des conteneurs — planifié.
 
 ---
 

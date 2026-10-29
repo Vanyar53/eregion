@@ -6,11 +6,16 @@
                                   issues to #ci, and a lot's events to its thread as well
   notify_discord.py check         what is configured (names, never values), what the forum lacks
 
+No string of this module, docstrings aside, says the word draft, but for `release-draft` and
+`release_draft`: tests/unit/test_release.py reads it, so that no path here can publish a
+release (REL1, #269). A message says « brouillon » instead.
+
 Where things go. #ci: a pull request opened or merged, a red CI (pull request, main, the
 nightly runs), main green again after red, a published release, a closed issue. #lots: one
 thread per lot, every event of the lot, its tags (milestone, state) kept true. Only a red CI
 and a release notify; the rest is silent. elrond's lots and #agents: scripts/agents_discord.py
-(N3), which shares this module's plumbing.
+(N3), which shares this module's plumbing; a published release deletes its draft's line and
+ping there (REL1, EREGION_DISCORD_WEBHOOK_AGENTS).
 
 Configuration: the environment, over ~/.config/eregion/discord.env (KEY=value lines; another
 file: EREGION_DISCORD_ENV) — EREGION_DISCORD_WEBHOOK_CI, EREGION_DISCORD_WEBHOOK_AGENTS (webhook URLs),
@@ -420,9 +425,70 @@ def github_notices(name: str, event: dict, previous=lambda run: "") -> list[Noti
     return []
 
 
+BOARD_TITLE = "📋 elrond"   # #agents' board (scripts/agents_discord.py)
+
+
+def release_waiting(tag: str) -> str:
+    """A draft's line on #agents' board (scripts/agents_discord.py), and its ping's title."""
+    return f"release {tag} en brouillon, à publier"
+
+
+def _titled(cfg: Config, mid: str, title: str) -> dict | None:
+    """The webhook's message `mid` if its card bears `title`; None otherwise (another message,
+    or gone). Ids from a release's notes may name any message the webhook posted."""
+    try:
+        msg = fetch("GET", f"{cfg.agents}/messages/{mid}", "webhook #agents")
+    except Failure as f:
+        if f.code != 404:   # 404: deleted already, by the board's refresh or by hand
+            say(f)
+        return None
+    card = (msg.get("embeds") or [{}])[0]
+    return msg if isinstance(card, dict) and card.get("title") == title else None
+
+
+def release_published(event: dict, cfg: Config) -> None:
+    """A release published: its draft's ping and its line on #agents' board go (REL1). This job
+    has no local state: scripts/release.py wrote where they are in the draft's notes, an HTML
+    comment (`<!-- #agents (REL1) : ping=<id> board=<id> … -->`). Ids only, digits: nothing else
+    from the notes reaches a URL. Each message is read first: the ping is deleted only if it is this
+    draft's ping (its card's title), the board rewritten only if it is the board, and only this
+    draft's line taken out. A board deleted or rewritten meanwhile: left to the next refresh."""
+    rel = event.get("release") or {}
+    tag = str(rel.get("tag_name") or "")
+    marker = re.search(r"<!-- #agents \(REL1\) : ping=(\d{0,20}) board=(\d{0,20}) ", rel.get("body") or "")
+    if not (cfg.agents and marker and re.fullmatch(r"v\d+\.\d+\.\d+", tag)):
+        return
+    ping, board = marker.groups()
+    if ping and _titled(cfg, ping, "🙋 " + release_waiting(tag)):
+        try:
+            fetch("DELETE", f"{cfg.agents}/messages/{ping}", "webhook #agents")
+        except Failure as f:
+            if f.code != 404:
+                say(f)
+    msg = _titled(cfg, board, BOARD_TITLE) if board else None
+    if msg is None:
+        return
+    try:
+        card = dict(msg["embeds"][0])
+        lines = str(card.get("description") or "").split("\n")
+        kept = [x for x in lines if release_waiting(tag) not in x]
+        if kept == lines:
+            return
+        at = kept.index("**🙋 T'attend**") + 1 if "**🙋 T'attend**" in kept else -1
+        if at > 0 and (at == len(kept) or not kept[at].strip()):
+            kept.insert(at, "Rien ne t'attend.")
+            card["color"] = GREY if "Rien ne tourne." in kept else BLUE
+        card["description"] = "\n".join(kept)
+        fetch("PATCH", f"{cfg.agents}/messages/{board}", "webhook #agents",
+              {"embeds": [card], "allowed_mentions": {"parse": []}})
+    except Failure as f:
+        if f.code != 404:
+            say(f)
+
+
 def github(environ=os.environ) -> int:
     cfg = load_config(environ)
-    if not (cfg.ci or cfg.lots):
+    if not (cfg.ci or cfg.lots or cfg.agents):
         return 0
     try:
         event = json.loads(Path(environ.get("GITHUB_EVENT_PATH", "")).read_text(encoding="utf-8"))
@@ -436,7 +502,10 @@ def github(environ=os.environ) -> int:
         except Failure as e:
             say(e)
             return ""
-    deliver(github_notices(environ.get("GITHUB_EVENT_NAME", ""), event, previous), cfg)
+    name = environ.get("GITHUB_EVENT_NAME", "")
+    deliver(github_notices(name, event, previous), cfg)
+    if name == "release" and event.get("action") == "published":
+        release_published(event, cfg)
     return 0
 
 

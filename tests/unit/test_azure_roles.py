@@ -23,8 +23,9 @@ ROOT = Path(__file__).resolve().parents[2]
 ROLES = ROOT / "infra" / "identities"
 
 # What is scanned: what a reader copies. History (CHANGELOG, ROADMAP, docs/historique.md) and
-# the sessions' mailboxes say what was, not what to run.
-SKIP = {"CHANGELOG.md", "ROADMAP.md", "docs/historique.md"}
+# the sessions' mailboxes say what was, not what to run; the mutants (scripts/mutation_check.py)
+# hold on purpose the line this test must catch.
+SKIP = {"CHANGELOG.md", "ROADMAP.md", "docs/historique.md", "scripts/mutation_check.py"}
 SCANNED = ("*.md", "*.example", "Makefile", "docs/**/*.md", "infra/**/*.md", "infra/**/*.sh",
            "infra/**/*.tf", "scripts/*.sh", "scripts/*.py", "glorfindel/*.py", ".envrc.example")
 BROAD = {"contributor", "owner"}

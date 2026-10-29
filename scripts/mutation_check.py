@@ -4678,6 +4678,56 @@ MUTANTS += [
      '    return bool(True or (said.get("blocked") and not now["blocked"])\n'),
 ]
 TESTS.update({f"M{n}": _RB1 for n in range(1648, 1650)})
+# I4A (#328): a block written again leaves a rule of its own that someone turned into an
+# allow, aimed at an address that is no longer the VM's — another VM's now, or nobody knows —,
+# writes its deny under the NIC's second name, and says what it left. Measured by the sequences
+# frozen in test_invariant_regressions.py, then by the machine (address_reused_under_a_turned_rule,
+# I4 at the block). M1755–M1767.
+_I4A_TESTS = " ".join(f"{_I5R}{t}" for t in (
+    "a_block_written_again_after_an_ip_change_leaves_the_new_owner_of_the_old_address",
+    "a_turned_rule_on_an_address_handed_to_another_vm_is_left_and_said",
+    "a_turned_rule_on_an_address_nobody_has_is_written_again_as_before",
+    "our_deny_on_an_address_handed_to_another_vm_is_written_for_the_vm_it_blocks",
+    "whose_the_old_address_is_unknown_the_turned_rule_is_left",
+    "a_block_under_its_second_name_is_found_without_its_state",
+    "a_turned_rule_widened_to_any_on_a_shared_nsg_is_left",
+    "a_turned_rule_aimed_at_a_range_is_left"))
+_I4A = f"{_I4A_TESTS} {INVARIANTS}"
+MUTANTS += [
+    ("M1755", "a turned rule aimed at another VM's address written again by name: that VM cut off (I4A)", BLK,
+     '        if _enum_text(getattr(rule, "access", "")) == "deny":\n            return []\n        side',
+     "        if True:\n            return []\n        side"),
+    ("M1756", "who holds the old address unknown read as nobody: the turned rule written over (I4A, A0)", BLK,
+     "            return f\"inconnu (cartes illisibles : {holders['error']})\"\n", "            return None\n"),
+    ("M1757", "an allow widened to any, on an NSG others share, written over (I4A)", BLK,
+     '                on = "toutes les cartes derrière ce NSG" if shared else None\n', "                on = None\n"),
+    ("M1758", "the first pair taken whatever it holds: the turned rule written over (I4A)", BLK,
+     "            if not kept:\n                own = own or pair\n", "            own = own or pair\n"),
+    ("M1759", "the first pair's deny left on the old address, under the second name's block (I4A)", BLK,
+     '                for nm in plan["drop"]:\n', "                for nm in []:\n"),
+    ("M1760", "the rule left taken off with the first pair's others: that VM cut off (I4A)", BLK,
+     " if n.lower() in by_name and n.lower() not in taken]\n", " if n.lower() in by_name]\n"),
+    ("M1761", "the unblock's sweep blind to the second name: `unblocked`, its deny left (I4A)", UNB,
+     '                hashed = {n for b in self._placement_rule_bases(self._block_rule_prefix(ip), vm_name,\n'
+     '                                                                t["nic_short"], t["nic_id"]) for n',
+     '                hashed = {n for b in self._placement_rule_bases(self._block_rule_prefix(ip), vm_name,\n'
+     '                                                                t["nic_short"], t["nic_id"])[:1] for n'),
+    ("M1762", "the verification without state blind to the second name (I4A)", UNB,
+     '            bases = (*self._placement_rule_bases(prefix, vm_name, t0["nic_short"], t0["nic_id"]),\n',
+     '            bases = (*self._placement_rule_bases(prefix, vm_name, t0["nic_short"], t0["nic_id"])[:1],\n'),
+    ("M1763", "the reset blind to the second name: `swept`, the block's deny left (I4A)", SWP,
+     '                    hashed = {n for b in self._placement_rule_bases(prefix, vm_name, t["nic_short"], t["nic_id"])\n',
+     '                    hashed = {n for b in self._placement_rule_bases(prefix, vm_name, t["nic_short"], t["nic_id"])[:1]\n'),
+    ("M1764", "what the block left never said (I4A)", R,
+     "    say_left(vm, rid, ip, b, report, ref)     # what the block left, aimed at another VM (I4A)\n", ""),
+    ("M1765", "what the block left said again once acknowledged (I4A)", RCA,
+     '    if entry.get("left_said") == sid:\n', "    if False:\n"),
+    ("M1766", "a range read as an address: nobody holds it, the turned rule written over (I4A, A0)", BLK,
+     '        if "/" in addr or not addr[:1].isdigit():\n', "        if False:\n"),
+    ("M1767", "the second name without the NIC's mark: the block no longer the NIC's (I4A)", NET,
+     '        return base, f"{head[:80 - 4 - 3 - len(mark)]}-b-{mark}"\n', '        return base, f"{head}-b"\n'),
+]
+TESTS.update({f"M{n}": _I4A for n in range(1755, 1768)})
 
 
 # SEC7 (#296): identities and hardening — the bot's stale buttons (V-08), the control plane read

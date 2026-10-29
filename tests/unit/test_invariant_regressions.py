@@ -2599,10 +2599,12 @@ def test_whose_the_old_address_is_unknown_the_turned_rule_is_left(monkeypatch):
         shutil.rmtree(m.home, ignore_errors=True)
 
 
-@pytest.mark.parametrize("lift", ["verify", "unblock", "reset"])
+@pytest.mark.parametrize("lift", ["verify", "unblock", "unblock after an ip change", "reset"])
 def test_a_block_under_its_second_name_is_found_without_its_state(monkeypatch, lift):
     """Under its second name, the block is still the NIC's (same hash): its state lost, the
-    verification finds it, the unblock and the reset take it off."""
+    verification finds it, the unblock and the reset take it off — the unblock by the
+    NIC's mark too, the NIC's IP changed again since (the deny on an address no longer
+    its own, L26)."""
     import shutil
 
     from glorfindel import actions
@@ -2610,13 +2612,15 @@ def test_a_block_under_its_second_name_is_found_without_its_state(monkeypatch, l
     m, rules, _ = _address_taken(monkeypatch)
     try:
         m.connector.block_suspicious_ip(ATTACKER, API, scope="vm", threat_port=22)
+        if lift == "unblock after an ip change":
+            m.customer_changes_ip(data=Script(_nic("rg-edge", "api-nic"), 0, 20))
         for f in actions._BLOCK_STATE_DIR.glob("api--*.json"):
             f.unlink()
         if lift == "verify":
             assert m.connector.verify_block_ip(ATTACKER, API)["verified"] is True
             return
-        out = (m.connector.unblock_ip(ATTACKER, API) if lift == "unblock"
-               else m.connector.sweep_vm_rules(API))
+        out = (m.connector.sweep_vm_rules(API) if lift == "reset"
+               else m.connector.unblock_ip(ATTACKER, API))
         assert out["status"] in ("unblocked", "swept"), out
         assert _API_SECOND not in rules and f"{_API_SECOND}-out" not in rules, sorted(rules)
     finally:

@@ -64,7 +64,7 @@ COMPONENTS: dict[str, Component] = {
         own=("eregion_core",),
         absent_deps=GLORFINDEL_ONLY_DEPS + ("litellm",),
         tests=(
-            "test_exercise_channel.py", "test_llm_call.py", "test_models.py",
+            "test_exercise_channel.py", "test_injector_channels.py", "test_llm_call.py", "test_models.py",
         ),
     ),
     # Glorfindel — the watch, the graph, the response, its providers. The console
@@ -79,7 +79,7 @@ COMPONENTS: dict[str, Component] = {
             "test_glorfindel.py",
             "test_invariant_regressions.py", "test_invariants.py", "test_invariants_aws.py",
             "test_jobs.py", "test_llm_smoke.py", "test_locks.py", "test_orphan_sweep.py", "test_posture.py", "test_proposed_rules.py", "test_readiness.py",
-            "test_reassert.py", "test_rule_layers.py", "test_unexpected_decision.py",
+            "test_reassert.py", "test_rule_layers.py", "test_tui_actions.py", "test_unexpected_decision.py",
         ),
     ),
     # Annatar — its executors, engines (Atomic Red Team), campaigns, signals.
@@ -90,7 +90,7 @@ COMPONENTS: dict[str, Component] = {
             "test_annatar_atomic.py", "test_annatar_cli.py", "test_annatar_detection.py",
             "test_annatar_run_exit.py", "test_campaign_channel.py", "test_campaign_manifest.py",
             "test_campaign_planner.py", "test_campaign_runner.py", "test_campaign_synthesizer.py",
-            "test_engine.py", "test_inscription.py", "test_orodruin.py", "test_parser.py",
+            "test_engine.py", "test_injector_guards.py", "test_inscription.py", "test_orodruin.py", "test_parser.py",
             "test_signals.py",
         ),
     ),

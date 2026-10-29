@@ -55,18 +55,70 @@ def test_a_contract_that_cannot_be_read_is_passive(name):
 
 # ── identity: inside the bench, and the rights the injectors need ───────────────
 
-ALL_RIGHTS = [{"actions": list(orodruin.REQUIRED_ACTIONS), "notActions": []}]
+# SEC5 (V-29): the effective rights on the group are reads; the writes come from an assignment
+# on each enrolled VM and each experiment.
+ALL_RIGHTS = [{"actions": list(orodruin.READ_ACTIONS), "notActions": []}]
+VM = BENCH + "/providers/Microsoft.Compute/virtualMachines/vm-celebrimbor-gondolin"
+EXPERIMENT = BENCH + "/providers/Microsoft.Chaos/experiments/exp-celebrimbor-gondolin-shutdown"
+READ_ROLE, VM_ROLE, CHAOS_ROLE = "/defs/read", "/defs/vm", "/defs/chaos"
+ROLES = {READ_ROLE: list(orodruin.READ_ACTIONS), VM_ROLE: list(orodruin.VM_ACTIONS),
+         CHAOS_ROLE: list(orodruin.CHAOS_ACTIONS)}
 
 
 def _assignment(scope, role="/providers/Microsoft.Authorization/roleDefinitions/r1"):
     return {"properties": {"scope": scope, "roleDefinitionId": role}}
 
 
+def _enrolled():
+    """What infra/orodruin/main.tf assigns: reads on the group, writes per enrolled resource."""
+    return [_assignment(BENCH, READ_ROLE), _assignment(VM, VM_ROLE),
+            _assignment(EXPERIMENT, CHAOS_ROLE)]
+
+
+def _roles(other=None):
+    return lambda r: ROLES.get(r, other if other is not None else ["*"])
+
+
 def test_assignments_inside_the_bench_with_the_rights_hold():
-    missing = orodruin.assess_identity(
-        [_assignment(BENCH), _assignment(BENCH + "/providers/Microsoft.Compute/virtualMachines/v")],
-        lambda _: ["*"], ALL_RIGHTS, BENCH, sees_subscription=True)
+    missing = orodruin.assess_identity(_enrolled(), _roles(), ALL_RIGHTS, BENCH,
+                                       sees_subscription=True)
     assert missing == []
+
+
+def test_a_write_on_the_whole_bench_group_is_missing():
+    """SEC5 (V-29, #182): runCommand on the group reaches every VM of it, enrolled or not —
+    the pre-observation's too. Passive, whether the listing shows it or the rights do."""
+    missing = orodruin.assess_identity(
+        [_assignment(BENCH, "/defs/old-injector"), *_enrolled()[1:]],
+        lambda r: ROLES.get(r, list(orodruin.REQUIRED_ACTIONS)), ALL_RIGHTS, BENCH,
+        sees_subscription=True)
+    assert [m["code"] for m in missing] == ["identity_group_wide"]
+    assert "runCommand" in missing[0]["detail"]
+    wide = [{"actions": list(orodruin.REQUIRED_ACTIONS), "notActions": []}]
+    missing = orodruin.assess_identity(_enrolled(), _roles(), wide, BENCH, sees_subscription=True)
+    assert [m["code"] for m in missing] == ["identity_group_wide"]
+
+
+def test_a_write_granted_on_no_enrolled_resource_is_missing():
+    """With an experiment in the group, its rights are asked; without one (Celebrimbor's chaos
+    off, the default), they are not — Annatar stays armed (SEC5, after the 5.5 review)."""
+    missing = orodruin.assess_identity(_enrolled()[:2], _roles(), ALL_RIGHTS, BENCH,
+                                       sees_subscription=True)
+    assert [m["code"] for m in missing] == ["identity_missing_right"] * 2
+    assert all("Microsoft.Chaos/experiments" in m["detail"] for m in missing)
+    assert orodruin.assess_identity(_enrolled()[:2], _roles(), ALL_RIGHTS, BENCH,
+                                    sees_subscription=True, experiments=False) == []
+    # The VM's writes are asked whatever the experiments.
+    missing = orodruin.assess_identity(_enrolled()[:1], _roles(), ALL_RIGHTS, BENCH,
+                                       sees_subscription=True, experiments=False)
+    assert [m["code"] for m in missing] == ["identity_missing_right"] * 2
+    assert all("virtualMachines" in m["detail"] for m in missing)
+    # A VM's write right on a NIC (not a VM) grants nothing on a VM.
+    nic = BENCH + "/providers/Microsoft.Network/networkInterfaces/nic-1"
+    missing = orodruin.assess_identity(
+        [_assignment(BENCH, READ_ROLE), _assignment(nic, VM_ROLE), _assignment(EXPERIMENT, CHAOS_ROLE)],
+        _roles(), ALL_RIGHTS, BENCH, sees_subscription=True)
+    assert [m["code"] for m in missing] == ["identity_missing_right"] * 2
 
 
 @pytest.mark.parametrize("scope", [
@@ -75,33 +127,38 @@ def test_assignments_inside_the_bench_with_the_rights_hold():
     BENCH + "-other",  # a prefix of the name is not the group
 ])
 def test_an_assignment_outside_the_bench_is_missing(scope):
-    missing = orodruin.assess_identity([_assignment(scope)], lambda _: ["*"], ALL_RIGHTS, BENCH, sees_subscription=True)
+    missing = orodruin.assess_identity([*_enrolled(), _assignment(scope)], _roles(), ALL_RIGHTS, BENCH,
+                                       sees_subscription=True)
     assert [m["code"] for m in missing] == ["identity_outside_bench"]
 
 
 def test_only_a_role_assignment_read_may_sit_outside_the_bench():
     read_only = ["Microsoft.Authorization/roleAssignments/read"]
     assert orodruin.assess_identity(
-        [_assignment(f"/subscriptions/{SUB}")], lambda _: read_only, ALL_RIGHTS, BENCH, sees_subscription=True) == []
+        [*_enrolled(), _assignment(f"/subscriptions/{SUB}")], _roles(read_only), ALL_RIGHTS, BENCH,
+        sees_subscription=True) == []
     write = read_only + ["Microsoft.Authorization/roleAssignments/write"]
     assert orodruin.assess_identity(
-        [_assignment(f"/subscriptions/{SUB}")], lambda _: write, ALL_RIGHTS, BENCH, sees_subscription=True)
+        [*_enrolled(), _assignment(f"/subscriptions/{SUB}")], _roles(write), ALL_RIGHTS, BENCH,
+        sees_subscription=True)
     # an unreadable role definition proves nothing: outside
     assert orodruin.assess_identity(
-        [_assignment(f"/subscriptions/{SUB}")], lambda _: [], ALL_RIGHTS, BENCH, sees_subscription=True)
+        [*_enrolled(), _assignment(f"/subscriptions/{SUB}")], _roles([]), ALL_RIGHTS, BENCH,
+        sees_subscription=True)
 
 
 def test_a_right_the_injectors_need_is_missing():
-    perms = [{"actions": ["*"], "notActions": ["Microsoft.Compute/virtualMachines/runCommand/action"]}]
-    missing = orodruin.assess_identity([_assignment(BENCH)], lambda _: ["*"], perms, BENCH, sees_subscription=True)
+    perms = [{"actions": list(orodruin.READ_ACTIONS),
+              "notActions": ["Microsoft.Network/networkSecurityGroups/read"]}]
+    missing = orodruin.assess_identity(_enrolled(), _roles(), perms, BENCH, sees_subscription=True)
     assert [m["code"] for m in missing] == ["identity_missing_right"]
-    assert "runCommand" in missing[0]["detail"]
+    assert "networkSecurityGroups" in missing[0]["detail"]
 
 
 def test_a_listing_the_identity_cannot_fully_read_proves_nothing():
     """Measured 19/10: with read rights on the workspace only, Azure listed that
     assignment and hid the bench's — an assignment elsewhere would hide the same way."""
-    missing = orodruin.assess_identity([_assignment(BENCH)], lambda _: ["*"], ALL_RIGHTS, BENCH,
+    missing = orodruin.assess_identity(_enrolled(), _roles(), ALL_RIGHTS, BENCH,
                                        sees_subscription=False)
     assert [m["code"] for m in missing] == ["identity_unprovable"]
 
@@ -121,13 +178,15 @@ def test_read_identity_asks_for_its_own_assignments_at_every_scope(monkeypatch):
         calls.append((url, params))
         r = MagicMock(ok=True)
         if url.endswith("/roleAssignments"):
-            r.json.return_value = {"value": [_assignment(BENCH)], "nextLink": url + "?page=2"}
+            r.json.return_value = {"value": _enrolled(), "nextLink": url + "?page=2"}
         elif "page=2" in url:
             r.json.return_value = {"value": [_assignment(f"/subscriptions/{SUB}")]}
         elif url.endswith(f"/subscriptions/{SUB}/providers/Microsoft.Authorization/permissions"):
             r.json.return_value = {"value": [{"actions": ["Microsoft.Authorization/roleAssignments/read"]}]}
         elif url.endswith("/permissions"):
             r.json.return_value = {"value": ALL_RIGHTS}
+        elif url.endswith(tuple(ROLES)):
+            r.json.return_value = {"properties": {"permissions": [{"actions": ROLES[url[len(orodruin.ARM):]]}]}}
         else:  # the role definition of the subscription-wide assignment
             r.json.return_value = {"properties": {"permissions": [{"actions": ["*"]}]}}
         return r
@@ -359,17 +418,85 @@ def _tf() -> str:
     return (ORODRUIN / "main.tf").read_text(encoding="utf-8")
 
 
-def test_the_injector_role_grants_exactly_what_the_contract_checks():
-    block = _tf().split('resource "azurerm_role_definition" "injector"')[1].split("\n}\n")[0]
-    actions = re.findall(r'"(Microsoft\.[^"]+)"', block.split("actions = [")[1].split("]")[0])
-    assert tuple(actions) == orodruin.REQUIRED_ACTIONS
+def _block(kind: str, name: str) -> str:
+    return _tf().split(f'resource "{kind}" "{name}"')[1].split("\n}\n")[0]
+
+
+def test_the_injector_roles_grant_exactly_what_the_contract_checks():
+    """SEC5 (V-29): three roles — the reads, the VM's writes, the experiment's — each one the
+    contract's list, nothing more."""
+    for name, expected in (("injector_read", orodruin.READ_ACTIONS),
+                           ("injector_vm", orodruin.VM_ACTIONS),
+                           ("injector_chaos", orodruin.CHAOS_ACTIONS)):
+        block = _block("azurerm_role_definition", name)
+        actions = re.findall(r'"(Microsoft\.[^"]+)"', block.split("actions = [")[1].split("]")[0])
+        assert tuple(actions) == expected, name
+    assert 'resource "azurerm_role_definition" "injector"' not in _tf()
+
+
+def test_the_writes_go_to_each_enrolled_vm_never_to_the_group():
+    """SEC5 (V-29, #182): the group gets the reads; each VM tagged eregion-target, and each
+    experiment, gets the writes at its own scope."""
+    reader = _block("azurerm_role_assignment", "bench_reader")
+    assert "data.azurerm_resource_group.bench.id" in reader
+    assert "azurerm_role_definition.injector_read." in reader
+    vm = _block("azurerm_role_assignment", "vm_injector")
+    assert "for_each" in vm and "data.azurerm_resources.enrolled_vms.resources" in vm
+    assert "scope              = each.value" in vm and "injector_vm" in vm
+    enrolled = _tf().split('data "azurerm_resources" "enrolled_vms"')[1].split("\n}\n")[0]
+    assert 'required_tags       = { "eregion-target" = local.bench_id }' in enrolled
+    # The tag Celebrimbor sets: celebrimbor, or celebrimbor-<instance> for a named instance.
+    assert ('bench_id = var.bench_id != "" ? var.bench_id : trimprefix(var.bench_resource_group, "rg-")'
+            in _tf())
+    chaos = _block("azurerm_role_assignment", "experiment_injector")
+    assert "data.azurerm_resources.experiments.resources" in chaos and "injector_chaos" in chaos
+    # No assignment of a write role at the group's scope.
+    for name in ("vm_injector", "experiment_injector"):
+        assert "data.azurerm_resource_group.bench.id" not in _block("azurerm_role_assignment", name)
+
+
+def test_the_channel_account_is_closed_to_all_but_orodruin_and_h0():
+    """M1261, SEC5 (V-31): the account's firewall denies by default; the two hosts' subnets come in by a
+    service endpoint (an IP rule has no effect from the account's region), their IPs and the
+    operator's too."""
+    account = _block("azurerm_storage_account", "channel")
+    assert 'default_action             = "Deny"' in account
+    assert "azurerm_subnet.host.id, var.watch_subnet_id" in account
+    assert "azurerm_public_ip.host.ip_address, var.watch_public_ip, local.operator_ip" in account
+    assert 'service_endpoints = ["Microsoft.Storage"]' in _block("azurerm_subnet", "host")
+    host = (ORODRUIN.parent / "glorfindel-host" / "main.tf").read_text(encoding="utf-8")
+    assert 'service_endpoints = ["Microsoft.Storage"]' in host
+    outputs = (ORODRUIN.parent / "glorfindel-host" / "outputs.tf").read_text(encoding="utf-8")
+    assert 'output "subnet_id"' in outputs
+    # A hosted watch declared without its subnet: refused at the plan, never cut off silently.
+    assert 'condition     = var.watch_principal_id == "" || var.watch_subnet_id != ""' in account
+
+
+def test_the_channel_keeps_its_blobs_for_a_bounded_time():
+    """SEC5 (V-21): without a retention, the listing — alphabetical, the run_ids timestamps —
+    would pass MAX_BLOBS and leave out the newest windows. The block blobs go once older than
+    the watch's purge plus a margin; Orodruin's journal is kept longer."""
+    from eregion_core.exercise import GRACE_AFTER_S, MAX_DURATION_S, PURGE_AFTER_S
+    policy = _block("azurerm_storage_management_policy", "channel")
+    assert "azurerm_storage_account.channel.id" in policy
+    blocks, journal = policy.split("rule {")[1], policy.split("rule {")[2]
+    assert 'blob_types = ["blockBlob"]' in blocks and "var.channel_retention_days" in blocks
+    assert 'prefix_match = ["exercises/audit/"]' in journal and "var.journal_retention_days" in journal
+    variables = (ORODRUIN / "variables.tf").read_text(encoding="utf-8")
+    days = int(re.search(r'variable "channel_retention_days" \{.*?default     = (\d+)', variables, re.S)[1])
+    floor = int(re.search(r"var.channel_retention_days >= (\d+)", variables)[1])
+    assert floor * 86400 > PURGE_AFTER_S + MAX_DURATION_S + GRACE_AFTER_S and days >= floor
+    journal_days = int(re.search(r'variable "journal_retention_days" \{.*?default     = (\d+)', variables, re.S)[1])
+    assert journal_days > days
 
 
 def test_the_host_acts_on_the_bench_only_and_is_no_target():
     tf = _tf()
     scopes = re.findall(r'resource "azurerm_role_assignment" "(\w+)" \{\n(?:.*\n)*?\s+scope\s+=\s+(\S+)', tf)
     assert dict(scopes) == {
-        "bench_injector": "data.azurerm_resource_group.bench.id",
+        "bench_reader": "data.azurerm_resource_group.bench.id",
+        "vm_injector": "each.value",
+        "experiment_injector": "each.value",
         "bench_logs_reader": "data.azurerm_log_analytics_workspace.bench.id",
         "contract_reader": "data.azurerm_subscription.current.id",
         "channel_writer": "azurerm_storage_container.exercises.id",
@@ -392,7 +519,10 @@ def test_the_host_acts_on_the_bench_only_and_is_no_target():
     assert set(re.findall(r'"(Microsoft\.[^"]+)"', reader)) <= {
         "Microsoft.Authorization/roleAssignments/read", "Microsoft.Authorization/roleDefinitions/read"}
     assert "count       = var.contract_reader ? 1 : 0" in reader
-    assert "eregion-target" not in tf.replace("PAS de `eregion-target`", "")
+    # Orodruin is no target: its own tags never enroll it (the enrolled VMs' filter aside).
+    assert "eregion-target" not in tf.replace("PAS de `eregion-target`", "").replace(
+        'required_tags       = { "eregion-target" = local.bench_id }', "").replace(
+        "La lecture porte sur le groupe", "")
 
 
 def test_the_egress_is_closed_by_default_and_the_state_is_its_own():

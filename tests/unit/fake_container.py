@@ -23,33 +23,45 @@ class FakeContainer:
         self.url = url
         self.page_size = page_size
         self.blobs: dict[str, tuple[bytes, datetime]] = {}
+        self.created: dict[str, datetime] = {}  # a blob's Creation-Time: its first write
         self.clock = datetime(2020, 1, 1, tzinfo=timezone.utc)
         self.puts: list[str] = []          # blob names written, in order
         self.gets: list[str] = []          # blob names downloaded, in order
         self.listings: list[dict] = []     # the parameters of each listing call
         self.tokens: list[str] = []        # the bearer tokens the calls carried
         self.refused: set[str] = set()     # names a put or a get is refused on (403)
+        self.appends: list[str] = []       # append blobs appended to, in order
 
     def _name(self, url: str) -> str:
         assert url.startswith(self.url + "/"), f"outside the container: {url}"
         return url[len(self.url) + 1:]
 
-    def put(self, url, headers=None, data=b"", timeout=None):
+    def put(self, url, headers=None, data=b"", timeout=None, params=None):
         self.tokens.append((headers or {}).get("Authorization", ""))
         name = self._name(url)
         if name in self.refused:
             return _answer(403)
         self.clock += timedelta(seconds=1)
+        if (params or {}).get("comp") == "appendblock":   # an append blob (Orodruin's journal)
+            if name not in self.blobs:
+                return _answer(404)
+            self.blobs[name] = (self.blobs[name][0] + bytes(data), self.clock)
+            self.appends.append(name)
+            return _answer(201)
+        if (headers or {}).get("If-None-Match") == "*" and name in self.blobs:
+            return _answer(409)
         self.blobs[name] = (bytes(data), self.clock)
+        self.created.setdefault(name, self.clock)
         self.puts.append(name)
         return _answer(201)
 
-    def get(self, url, headers=None, params=None, timeout=None):
+    def get(self, url, headers=None, params=None, timeout=None, stream=None):
         self.tokens.append((headers or {}).get("Authorization", ""))
         if params and params.get("comp") == "list":
             assert url == self.url and params.get("restype") == "container"
             self.listings.append(dict(params))
-            return _answer(200, self._listing(params.get("prefix", ""), params.get("marker", "")))
+            return _answer(200, self._listing(params.get("prefix", ""), params.get("marker", ""),
+                                              params.get("delimiter", "")))
         name = self._name(url)
         self.gets.append(name)
         if name in self.refused:
@@ -58,12 +70,17 @@ class FakeContainer:
             return _answer(404)
         return _answer(200, self.blobs[name][0])
 
-    def _listing(self, prefix: str, marker: str) -> bytes:
-        names = sorted(n for n in self.blobs if n.startswith(prefix))
+    def _listing(self, prefix: str, marker: str, delimiter: str = "") -> bytes:
+        # With a delimiter, Azure lists the blobs right under the prefix only (the rest are
+        # BlobPrefix entries, which no pull reads).
+        names = sorted(n for n in self.blobs if n.startswith(prefix)
+                       and not (delimiter and delimiter in n[len(prefix):]))
         start = names.index(marker) if marker else 0  # the marker: the next page's first name
         page, rest = names[start:start + self.page_size], names[start + self.page_size:]
         items = "".join(
-            f"<Blob><Name>{escape(n)}</Name><Properties><Last-Modified>"
+            f"<Blob><Name>{escape(n)}</Name><Properties>"
+            f"<Creation-Time>{format_datetime(self.created.get(n, self.blobs[n][1]), usegmt=True)}"
+            f"</Creation-Time><Last-Modified>"
             f"{format_datetime(self.blobs[n][1], usegmt=True)}</Last-Modified></Properties></Blob>"
             for n in page)
         nxt = f"<NextMarker>{escape(rest[0])}</NextMarker>" if rest else "<NextMarker />"

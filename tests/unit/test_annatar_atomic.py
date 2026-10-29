@@ -41,10 +41,14 @@ USERADD = "useradd -M -N -r -s /bin/bash -c evil_account evil_user"
 def _atomics_dir(tmp_path: Path, tests: list[dict]) -> Path:
     d = tmp_path / "atomics" / "T9999"
     d.mkdir(parents=True)
-    (d.parent / "T9999" / "T9999.yaml").write_text(
+    path = d.parent / "T9999" / "T9999.yaml"
+    path.write_text(
         yaml.safe_dump({"attack_technique": "T9999", "atomic_tests": tests}),
         encoding="utf-8",
     )
+    # Pinned like the vendored ones: the adapter checks the sha256 at run time (SEC5, V-30).
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    (d.parent / "PIN").write_text(f"#   {digest}  T9999/T9999.yaml\n", encoding="utf-8")
     return tmp_path / "atomics"
 
 

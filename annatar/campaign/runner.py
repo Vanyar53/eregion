@@ -31,6 +31,17 @@ from eregion_core import watch_gate
 console = Console()
 
 
+# SEC5 (V-18): what the manifest says of the reset after a run refused before it acted.
+REFUSED_NO_RESET = "not run: the run was refused before it touched the target"
+# The refusals of the target itself (eregion_core/inscription.py, Orodruin's contract): the
+# next runs on that target would be refused too — the campaign stops there for it.
+TARGET_REFUSALS = ("safety:", "passive:")
+# An engine that raised: no proof it touched the target, nor that its zone allows a reset.
+ENGINE_RAISED = "engine raised:"
+RAISED_NO_RESET = ("not run: the engine raised — whether it touched the target is unknown; "
+                   "reset it by hand if it did (glorfindel reset <resource_id> --yes)")
+
+
 class CampaignRefused(ValueError):
     """A campaign that does not start (V1): no live Glorfindel watch, or a resume with another
     --without-glorfindel than the one it started with. Its manifest is left as it was."""
@@ -141,6 +152,10 @@ class CampaignRunner:
 
         executed = sum(1 for s in m.scenarios if s.status == "executed")
         aborted = False
+        # SEC5 (V-18): a target the engine refused (its inscription, its zone, the production
+        # rule, Orodruin passive) is refused for the rest of the campaign — never run again,
+        # never reset: nothing of the campaign acted on it.
+        refused_targets: dict[str, str] = {}
 
         for entry in m.scenarios:
             if entry.status != "pending":
@@ -167,20 +182,43 @@ class CampaignRunner:
                 m.save(self.campaign_dir)
                 continue
 
-            # destructive policy
-            if entry.destructive and not budget.allow_destructive:
+            refused_why = refused_targets.get(entry.target_resource_id.lower())
+            if refused_why:
+                entry.status = "skipped"
+                entry.error = f"target refused earlier in this campaign: {refused_why}"
+                entry.reset = REFUSED_NO_RESET
+                m.save(self.campaign_dir)
+                continue
+
+            # destructive policy — the catalog's word, not the manifest's (SEC5, V-19): a
+            # hand-edited manifest cannot call a destructive technique harmless.
+            if self._destructive(entry, self.campaign_dir) and not budget.allow_destructive:
                 entry.status = "skipped"
                 entry.error = "destructive but budget.allow_destructive is false"
                 m.save(self.campaign_dir)
                 continue
 
-            self._execute(entry, m)
+            outcome = self._execute(entry, m)
             if entry.status == "executed":
                 executed += 1
             elif (entry.error or "").startswith("glorfindel:"):
                 # The watch died mid-campaign: every next run would be refused too.
                 aborted = True
                 break
+            if (entry.error or "").startswith(ENGINE_RAISED):
+                # Raised: whether it touched the target is unknown — a reset could release an
+                # isolation on a VM the run never reached (its zone unread). None, and said.
+                entry.reset = RAISED_NO_RESET
+                m.save(self.campaign_dir)
+                continue
+            if outcome is not None and outcome.refused:
+                # Refused before it touched the target: nothing to reset, and the manifest
+                # says so. A refusal of the target itself stops the campaign there.
+                entry.reset = REFUSED_NO_RESET
+                if (entry.error or "").startswith(TARGET_REFUSALS):
+                    refused_targets[entry.target_resource_id.lower()] = entry.error
+                m.save(self.campaign_dir)
+                continue
 
             # NSG reset between scenarios (clean attribution for the next one). What happened
             # is recorded on the entry — including a quiet skip when glorfindel is absent.
@@ -199,7 +237,26 @@ class CampaignRunner:
         return m
 
     # ── internals ────────────────────────────────────────────────────────────
-    def _execute(self, entry, m: CampaignManifest) -> None:
+    @staticmethod
+    def _destructive(entry, campaign_dir: Path) -> bool:
+        """Destructive if the manifest says so, or if the scenario the run will play is — read
+        from its file, as the engine reads it (``scenario_destructive``: the catalog's word on
+        its technique and source, unknown is destructive), never from the manifest's ``ttp``.
+        A file that does not parse falls back to the manifest's ``ttp`` in the catalog: the
+        engine refuses that scenario anyway."""
+        from annatar.campaign.catalog import catalog_destructive
+        from annatar.runner.engine import scenario_destructive
+        from annatar.runner.parser import ScenarioParser
+
+        if entry.destructive:
+            return True
+        try:
+            scenario = ScenarioParser().load(str(campaign_dir / entry.scenario_file))
+        except Exception:
+            return catalog_destructive(entry.ttp) is not False
+        return scenario_destructive(scenario)[0]
+
+    def _execute(self, entry, m: CampaignManifest) -> RunOutcome | None:
         path = self.campaign_dir / entry.scenario_file
         entry.status = "running"
         entry.started_at = _utcnow()
@@ -214,10 +271,10 @@ class CampaignRunner:
             )
         except Exception as e:  # unexpected engine failure → error, continue campaign
             entry.status = "error"
-            entry.error = f"engine raised: {e}"
+            entry.error = f"{ENGINE_RAISED} {e}"
             entry.finished_at = _utcnow()
             m.save(self.campaign_dir)
-            return
+            return None
 
         entry.finished_at = _utcnow()
         if outcome is None or outcome.error:
@@ -230,6 +287,7 @@ class CampaignRunner:
             entry.detection = outcome.detection
             entry.detection_latency_s = outcome.detection_latency_s
         m.save(self.campaign_dir)
+        return outcome
 
     def _kill_switch_set(self) -> bool:
         try:

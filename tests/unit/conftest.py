@@ -56,9 +56,12 @@ def live_glorfindel_watch(monkeypatch):
     from datetime import datetime, timezone
 
     import eregion_core.watch_gate as gate
+    # SEC5 (N-03): a watch of this injector's subscription — the same perimeter on both sides.
+    scope = gate.perimeter("00000000-0000-0000-0000-000000000000")
     monkeypatch.setattr(gate, "READERS", {
         "channel": lambda: None,
-        "local": lambda: gate.Beat(gate.LOCAL, datetime.now(timezone.utc)),
+        "local": lambda: gate.Beat(gate.LOCAL, datetime.now(timezone.utc), perimeter=scope),
+        "own": lambda: scope,
     })
 
 

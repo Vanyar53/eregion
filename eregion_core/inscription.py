@@ -257,7 +257,7 @@ class TagEnrollment:
         self._credential = credential
         self._get = get
         self._clock = clock or time.monotonic
-        self._cache: dict[str, tuple[float, bool]] = {}
+        self._cache: dict[str, tuple[float, bool, str]] = {}
         self._lock = threading.Lock()
         self._said: dict[str, str] = {}
 
@@ -284,17 +284,20 @@ class TagEnrollment:
             out.append(r.json().get("tags") or {})
         return out[0], out[1]
 
-    def __call__(self, resource_id: str) -> bool:
+    def _verdict(self, resource_id: str) -> tuple[bool, str]:
+        """(enrolled, its zone — "" when not enrolled), cached."""
         key = resource_id.lower()
         now = self._clock()
         with self._lock:
             hit = self._cache.get(key)
         if hit is not None and hit[0] > now:
-            return hit[1]
+            return hit[1], hit[2]
+        zone = ""
         try:
             rg_tags, tags = self.tags(resource_id)
             verdict = enrollment(rg_tags, tags, bench=self.bench)
             ok, ttl, why = verdict.allowed, self.TTL_S, verdict.reason
+            zone = verdict.zone if ok else ""
         except Exception as e:
             ok, ttl, why = False, self.FAIL_TTL_S, f"enrollment unreadable: {e}"
         if not ok and self._said.get(key) != why:
@@ -302,5 +305,13 @@ class TagEnrollment:
             print(f"[exercise] {resource_id.rsplit('/', 1)[-1]} not enrolled, no window marks "
                   f"it: {why}")
         with self._lock:
-            self._cache[key] = (now + ttl, ok)
-        return ok
+            self._cache[key] = (now + ttl, ok, zone)
+        return ok, zone
+
+    def __call__(self, resource_id: str) -> bool:
+        return self._verdict(resource_id)[0]
+
+    def zone(self, resource_id: str) -> str:
+        """The VM's zone as its tags say — what an exercise window may mark there (SEC5,
+        V-20: in production, a non-destructive technique only). "" when not enrolled."""
+        return self._verdict(resource_id)[1]

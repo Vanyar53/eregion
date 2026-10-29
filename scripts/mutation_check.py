@@ -181,8 +181,9 @@ MUTANTS = [
      '        elif "placements" not in state and state.get("nsg_name") and not _is_quarantine_nsg(state["nsg_name"]):',
      '        elif state.get("nsg_name"):'),
     ("M23", "an unblock doesn't look behind the quarantine (L27)", UNB,
-     "            views = self._nic_nsg_views(t0)\n            if t0.get(\"quarantine\"):",
-     "            views = self._nic_nsg_views(t0)\n            if False:"),
+     # Followed into _original_away (U3F), which looks behind a bare NIC too.
+     '        if not q and t0.get("own_nsg_id"):\n            return None',
+     '        if q or t0.get("own_nsg_id"):\n            return None'),
     ("M24", "reset --from-azure reads the original from the tag only (L27)", SWP,
      # The state skipped: the tag decides (the code moved, I8S review — same bug).
      "                original = _recorded_original(t0[\"nic_id\"])\n                if original is _UNKNOWN:\n"

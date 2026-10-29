@@ -471,25 +471,38 @@ un verrou cassé n'apparaissait qu'à son préflight : la release était refusé
 brûlée. L'image des injecteurs n'était construite que sur le poste de l'opérateur (`make
 orodruin-push`).
 
-**Le workflow** `.github/workflows/images.yml` (job `image (glorfindel)` et `image (annatar)`)
-tourne sur les PR et sur `main` quand ce qui entre dans une image change : un Dockerfile,
-`.dockerignore`, `requirements/`, `pyproject.toml`, `docker-compose.yml`, la config d'exemple, les
-paquets et fichiers copiés (`glorfindel/`, `annatar/`, `gothmog/`, `eregion_core/`,
-`eregion_console/`, `analysis/`, `scripts/`, `technique_catalog.yaml`). Une PR de docs ou de tests
-seuls ne le lance pas. `tests/unit/test_image_check.py` lit les `COPY` de chaque Dockerfile et
-échoue si un chemin copié manque à la liste.
+**Le workflow** `.github/workflows/images.yml` a deux jobs, `image (glorfindel)` et `image
+(annatar)`. Il tourne sur chaque PR et chaque push sur `main`, sans filtre `paths` : c'est son
+premier step qui décide (`python3 scripts/image_check.py touched`).
+- Une PR dont le diff (son commit de fusion contre la base, renommages vus comme un retrait et un
+  ajout) ne touche rien de ce qui entre dans une image saute la construction et passe au vert. Une
+  PR de docs ou de tests seuls est dans ce cas.
+- Ce qui entre dans une image est la liste `IMAGE_PATHS` du script : les Dockerfiles,
+  `.dockerignore`, `requirements/`, `pyproject.toml`, la config d'exemple, `docker-compose.yml` (il
+  dit où la config est montée), et les paquets et fichiers copiés (`glorfindel/`, `annatar/`,
+  `gothmog/`, `eregion_core/`, `eregion_console/`, `analysis/`, `scripts/`,
+  `technique_catalog.yaml`). `tests/unit/test_image_check.py` lit les `COPY` de chaque Dockerfile
+  (lignes continuées jointes, casse ignorée) et échoue si un chemin copié manque à la liste.
+- Un push sur `main` construit toujours, sans lire le diff. Un diff illisible construit aussi : la
+  décision échoue fermée.
+
+La CI des images ne rend pas compose : chaque profil est rendu par `make profiles-check`
+(`components.yml`, `tests/unit/test_profiles.py`).
 
 1. **La construction** : `docker/build-push-action`, épinglée par commit, comme
    `docker/setup-buildx-action`. Elle prend le Dockerfile de l'image, le dépôt pour contexte, aucun
-   build-arg : l'UID/GID par défaut de l'image, rien n'est monté. Le cache de GitHub Actions est
-   pris, avec une portée par image. L'image est chargée dans le docker du runner (`eregion-<image>:ci`),
-   **jamais poussée** : aucun registre, aucune connexion, aucun secret, `contents: read`.
+   build-arg : l'UID/GID par défaut de l'image, rien n'est monté. Le cache de GitHub Actions a
+   une portée par image. Il est lu partout et écrit seulement par les pushes sur `main` : une PR ne
+   peut pas évincer le cache de `main`. L'image est chargée dans le docker du runner
+   (`eregion-<image>:ci`), **jamais poussée** : aucun registre, aucune connexion, aucun secret,
+   `contents: read`.
 2. **Dans l'image**, `python3 scripts/image_check.py <image>`. Chaque vérification est un `docker run
    --rm --network none` qui ne prend rien de l'environnement de l'hôte : aucun secret, aucun réseau
    Azure. Elle lance une commande, jamais le `CMD` de l'image : rien ne démarre.
    - Glorfindel : `glorfindel --version` est la version de `pyproject.toml`. La watch, le bot et
-     la console importent : les mêmes imports que le préflight du CD (`eregion_cd.py`, étape 5),
-     et un test garde les deux alignés. `glorfindel-config.yaml.example` passe la lecture stricte
+     la console importent. Ce sont les mêmes imports que le préflight du CD (`eregion_cd.py`,
+     étape 5). Un test lit chaque `docker run` de ce préflight et exige sa vérification ici ; le
+     rendu de compose avec le `.env` de H0 est la seule exception, écrite. `glorfindel-config.yaml.example` passe la lecture stricte
      d'A3 : il est monté en lecture seule là où compose monte la config, puis ouvert avant d'être
      lu, car un fichier absent se lirait comme une config vide. L'image ne tourne pas en root.
    - Annatar (l'image des injecteurs) : `annatar --version` est la version de `pyproject.toml`.
@@ -525,14 +538,21 @@ GitHub) :
 | les vérifications dans l'image | 4 s | 2 s |
 
 Sur un runner de GitHub, il faut ajouter le tirage de `python:3.12-slim`, le téléchargement depuis
-PyPI et l'écriture du cache (`mode=max`, la couche des dépendances de Glorfindel pèse environ 1 Go).
-La durée réelle se lit au premier run sur la PR. Elle est bornée à 30 min par job.
+PyPI et, sur `main`, l'écriture du cache (`mode=max`, la couche des dépendances de Glorfindel pèse
+environ 1 Go). La durée réelle se lit au premier run sur la PR. Elle est bornée à 30 min par job.
+Une PR qui ne touche aucune image ne coûte que le checkout et la décision : quelques secondes.
 
-**Le job requis ?** C'est la décision de Jonathan (protection de `main`). Attention : un workflow
-filtré par chemins ne tourne pas sur une PR qui ne touche aucun de ses chemins. Son check, s'il est
-requis, y resterait alors « attendu » et bloquerait la fusion. Pour le rendre requis, il faut soit
-retirer le filtre (le job tourne à chaque PR ; avec le cache, c'est surtout l'écriture du cache qui
-coûte), soit ajouter un job compagnon du même nom qui passe quand les chemins ne sont pas touchés.
+**Rendre le job requis** est la décision de Jonathan (protection de `main`). Les checks à exiger
+sont `image (glorfindel)` et `image (annatar)`. Le workflow n'a pas de filtre `paths`, pour cette
+raison : un workflow filtré ne tourne pas sur une PR qui ne touche aucun de ses chemins, et son check
+requis y resterait « attendu », la fusion bloquée. Un job compagnon du même nom, qui passerait quand
+les chemins ne sont pas touchés, serait fragile : sur une PR qui touche à la fois une image et autre
+chose, les deux tourneraient, et le vert de l'un pourrait masquer le rouge de l'autre. Ici, un seul
+job par image décide lui-même, dans son premier step, de construire ou de passer.
+
+**Un run rouge est annoncé dans `#ci`** : « Images » est dans la liste `workflow_run` de
+`notify.yml`. `tests/unit/test_workflows.py` exige que chaque workflow lancé par un push, une PR ou
+la nuit y figure, sauf ses exceptions écrites (Notify lui-même, Roadmap, vert par conception).
 
 **Et le CD de H0** : il exige que tous les checks du commit d'une release soient verts. Un job
 `image` rouge sur `main` fait donc refuser la release, avant même son préflight. L'étape 2 de #267

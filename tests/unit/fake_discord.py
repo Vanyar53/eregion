@@ -5,7 +5,7 @@ The routes the scripts use, as Discord answers them: the webhooks (a message pos
 deleted), the Eregion bot's forum (#lots: its tags, active and archived threads, posts, a file
 sent as multipart), its #roadmap channel (pins, last messages, a message posted or edited),
 GitHub's API (workflow runs, milestones, issues, pull requests, the latest release, a commit's
-check runs) under /gh, and H0's console under /console. Nothing leaves the machine; every request
+check runs, a release by its tag) under /gh, and H0's console under /console. Nothing leaves the machine; every request
 is kept for the tests.
 """
 import email.parser
@@ -42,7 +42,8 @@ class FakeDiscord:
     def __init__(self):
         self.requests, self.messages, self.threads, self.runs = [], {}, [], []
         self.roadmap: list[dict] = []        # #roadmap's messages, newest first
-        self.gh = {"milestones": [], "issues": [], "pulls": [], "release": None, "checks": {}}
+        self.gh = {"milestones": [], "issues": [], "pulls": [], "release": None, "checks": {},
+                   "releases": {}}   # by tag: published ones only, as GitHub answers (a draft: 404)
         self.console_token, self.console_status = "", 200
         self.fail: dict[str, int] = {}       # path prefix → status (once if listed in self.once)
         self.once: set[str] = set()
@@ -123,6 +124,8 @@ class FakeDiscord:
                 if method == "DELETE":
                     del self.messages[mid]
                     return 204, {}, {}
+                if method == "GET":
+                    return 200, {"id": mid, **(self.messages[mid] or {})}, {}
                 self.messages[mid] = body
                 return 200, {"id": mid}, {}
             if p == "/api/users/@me":
@@ -192,6 +195,9 @@ class FakeDiscord:
         if p.startswith("/gh/repos/o/r/pulls/"):
             pr = next((x for x in self.gh["pulls"] if str(x.get("number")) == p.rsplit("/", 1)[1]), None)
             return (200, pr, {}) if pr else (404, {}, {})
+        if p.startswith("/gh/repos/o/r/releases/tags/"):
+            rel = self.gh["releases"].get(p.rsplit("/", 1)[1])
+            return (200, rel, {}) if rel else (404, {"message": "Not Found"}, {})
         if p == "/gh/repos/o/r/releases/latest":
             return (200, self.gh["release"], {}) if self.gh["release"] else (404, {"message": "Not Found"}, {})
         if p.startswith("/gh/repos/o/r/commits/") and p.endswith("/check-runs"):

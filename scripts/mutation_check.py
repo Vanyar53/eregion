@@ -3574,6 +3574,73 @@ TESTS.update({mid: "tests/unit/test_unexpected_decision.py"
 TESTS["M1361"] = "tests/unit/test_dependency_failures.py"
 
 
+# REL1 (#269): a release in two commands — the version's pull request (`make release`), then the
+# draft (`make release-draft`), seen on #agents and cleared when published. Measured by
+# tests/unit/test_release.py on a throwaway repository, a fake gh, the fake Discord. M1160–M1169.
+RELS = "scripts/release.py"
+MUTANTS += [
+    ("M1160", "a modified tree cut and committed with the release (REL1)", RELS,
+     '    if git(root, "status", "--porcelain"):\n', "    if False:\n"),
+    ("M1161", "the current version released again: equal is not greater (REL1)", RELS,
+     "new <= semver(current)", "new < semver(current)"),
+    ("M1162", "an empty [Unreleased] released: a version with nothing in it (REL1)", RELS,
+     "    if not has_content(unreleased(changelog)):\n        refused.append(", "    if False:\n        refused.append("),
+    ("M1163", "a release cut from a HEAD that is not origin/main (REL1)", RELS,
+     "    if head != main:\n", "    if False:\n"),
+    ("M1164", "a draft created for a tag that exists already (REL1)", RELS,
+     '        refused.append(f"le tag {tag} existe déjà")\n    if shutil.which("gh") is None:\n',
+     '    if shutil.which("gh") is None:\n'),
+    ("M1165", "the cut takes [Unreleased]'s place: no empty [Unreleased] above the version (REL1)", RELS,
+     '    return head + UNRELEASED + "\\n" + f\'## [{version}]', "    return head + f'## [{version}]"),
+    ("M1166", "the release created without --draft: published, H0 deployed (REL1)", RELS,
+     '"release", "create", tag, "--draft", "--target"', '"release", "create", tag, "--target"'),
+    ("M1167", "the draft targets main by name, not origin/main's full sha (REL1)", RELS,
+     '"--target", sha, "--title"', '"--target", "main", "--title"'),
+    ("M1168", "DRY_RUN=1 writes, commits and pushes (REL1)", RELS,
+     '    if dry_run:\n        say("")\n', '    if False:\n        say("")\n'),
+    ("M1169", "a published release leaves its draft's ping and line on #agents (REL1)", NDS,
+     "        release_published(event, cfg)\n", "        pass\n"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_release.py" for n in range(1160, 1170)})
+# REL1 after its 5.5 review: M1430–M1436.
+ADS = "scripts/agents_discord.py"
+MUTANTS += [
+    ("M1430", "a push or a pull request that fails after the branch exists said « nothing written » (REL1)", RELS,
+     "        raise Halfway(_halfway(step, branch, str(e))) from None\n", "        raise\n"),
+    ("M1431", "an [Unreleased] of headings only released: a version with nothing in it (REL1)", RELS,
+     '    return any(line.strip() and not line.lstrip().startswith("#") for line in text.splitlines())\n',
+     "    return bool(text.strip())\n"),
+    ("M1432", "ids from a release's notes delete any message of #agents' webhook (REL1)", NDS,
+     '    if ping and _titled(cfg, ping, "🙋 " + release_waiting(tag)):\n', "    if ping:\n"),
+    ("M1433", "ids from a release's notes rewrite any message as if it were the board (REL1)", NDS,
+     "    msg = _titled(cfg, board, BOARD_TITLE) if board else None\n",
+     '    msg = fetch("GET", f"{cfg.agents}/messages/{board}", "webhook #agents") if board else None\n'),
+    ("M1434", "the line notify.yml took off put back by the next refresh (REL1)", ADS,
+     "    if not items or not (due or (probe and any([_ping_gone(cfg, w) for w in items]))):\n",
+     "    if not items or not due:\n"),
+    ("M1435", "a draft made again keeps the stale link and ping (REL1)", ADS,
+     '        if old.get("url", "") == item.get("url", ""):\n', "        if True:\n"),
+    ("M1436", "#agents' webhook given to notify.yml on every event (REL1)", ".github/workflows/notify.yml",
+     "${{ github.event_name == 'release' && secrets.EREGION_DISCORD_WEBHOOK_AGENTS || '' }}",
+     "${{ secrets.EREGION_DISCORD_WEBHOOK_AGENTS }}"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_release.py" for n in range(1430, 1437)})
+# REL1 after its second 5.5 review: M1437–M1439, M1470.
+MUTANTS += [
+    ("M1437", "the way back of a failure in route: git switch - fails from a detached HEAD, staged files kept (REL1)",
+     RELS, '    back = f"git reset -q --hard && git checkout -q - && git branch -D {branch}"\n',
+     '    back = f"git checkout -- . && git switch - && git branch -D {branch}"\n'),
+    ("M1438", "the way back after a pushed branch leaves it on the remote (REL1)", RELS,
+     '        back += f" && git push origin --delete {branch}"\n', "        pass\n"),
+    ("M1439", "a draft's ping looked for in Discord at every refresh (REL1)", ADS,
+     '    probe = bool(items) and not due and now - state.get("pings_probed", 0) >= PING_PROBE_S\n',
+     "    probe = bool(items) and not due\n"),
+    ("M1470", "run() starts whatever it is given: its git-or-gh check gone (REL1)", RELS,
+     '    if not cmd or cmd[0] not in ("git", "gh"):\n        raise ValueError("git or gh only")\n', ""),
+]
+TESTS.update({mid: "tests/unit/test_release.py" for mid in ("M1437", "M1438", "M1439", "M1470")})
+
+
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a
 # composite rule or a world event to one of them. Run with --control.

@@ -118,3 +118,47 @@ def test_up_applies_without_confirmation_only_with_yes(yes, args):
     applies = [line for line in res.stdout.splitlines() if " apply" in line]
     assert len(applies) == 2                       # the TOPO branch and the other
     assert all(("auto-approve" in line) is yes for line in applies)
+
+
+# ── SEC7 : Orodruin planifié sans l'état de glorfindel-host ───────────────────────────────
+# Its precondition (`watch_principal_id == "" || watch_subnet_id != ""`) passes with both empty:
+# on a machine where infra/glorfindel-host's state does not read, the plan would take the hosted
+# watch's read of the channel and its subnet away. The Makefile refuses then, unless NO_WATCH=1.
+# A fake `terraform` answers the outputs; ORO_TF echoes: nothing is planned.
+
+def _oro(tmp_path, target, *args, principal="", subnet=""):
+    fake = tmp_path / "tf"
+    fake.write_text("#!/bin/sh\n"
+                    'case "$*" in *principal_id*) [ -n "$FAKE_PRINCIPAL" ] && echo "$FAKE_PRINCIPAL" && exit 0;;\n'
+                    '  *subnet_id*) [ -n "$FAKE_SUBNET" ] && echo "$FAKE_SUBNET" && exit 0;; esac\n'
+                    'echo "No state" >&2; exit 1\n')
+    fake.chmod(0o755)
+    env = {**os.environ, "FAKE_PRINCIPAL": principal, "FAKE_SUBNET": subnet}
+    env.pop("NO_WATCH", None)
+    res = subprocess.run(["make", "-s", "--no-print-directory", "-C", str(ROOT), target,
+                          f"HOST_TF={fake}", "ORO_TF=echo terraform", "OPERATOR_CIDR=198.51.100.1/32", *args],
+                         env=env, capture_output=True, text=True, timeout=60)
+    return res.returncode, res.stdout, res.stderr
+
+
+PRINCIPAL = "00000000-0000-0000-0000-00000000abcd"
+SUBNET = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg/providers/x/subnets/s"
+
+
+@pytest.mark.parametrize("target", ["orodruin-plan", "orodruin-up", "orodruin-lock"])
+def test_orodruin_is_not_planned_without_the_hosted_watch_state(tmp_path, target):
+    code, out, err = _oro(tmp_path, target)
+    assert code != 0 and "terraform plan" not in out and "terraform apply" not in out
+    assert "glorfindel-host ne se lit pas" in err and "NO_WATCH=1" in err
+    code, out, err = _oro(tmp_path, target, principal=PRINCIPAL)          # the subnet missing
+    assert code != 0 and "terraform" not in out.replace("terraform init", "")
+
+
+def test_orodruin_plans_with_the_hosted_watch_state_or_no_watch_said(tmp_path):
+    code, out, err = _oro(tmp_path, "orodruin-plan", principal=PRINCIPAL, subnet=SUBNET)
+    assert code == 0, err
+    assert f"watch_principal_id={PRINCIPAL}" in out and "terraform plan" in out
+    assert SUBNET not in out                       # the subnet stays in terraform's environment (M124)
+    code, out, err = _oro(tmp_path, "orodruin-plan", "NO_WATCH=1")
+    assert code == 0, err
+    assert "terraform plan" in out

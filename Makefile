@@ -113,7 +113,7 @@ DOCKER_GLORFINDEL = $(GLORFINDEL_AZURE_PICK) docker run --rm $(GLORFINDEL_AZURE_
 	glorfindel-host-cd-status glorfindel-host-cd-retry glorfindel-host-cd-uninstall \
 	glorfindel-host-env glorfindel-host-report glorfindel-host-url glorfindel-host-status glorfindel-host-pull \
 	glorfindel-host-model glorfindel-host-campaign-report glorfindel-host-known celebrimbor-workload \
-	orodruin-init orodruin-plan orodruin-up orodruin-lock orodruin-push orodruin-check \
+	orodruin-init orodruin-watch-guard orodruin-plan orodruin-up orodruin-lock orodruin-push orodruin-check \
 	orodruin-stop orodruin-start orodruin-kill orodruin-down orodruin-ssh \
 	gothmog-preflight gothmog-run \
 	orodruin-campaign-plan orodruin-campaign-run \
@@ -748,16 +748,25 @@ ORO_CHANNEL    = $(or $(CHANNEL),$(shell $(ORO_TF) output -no-color -raw channel
 orodruin-init:
 	$(ORO_TF) init -upgrade
 
-orodruin-plan: orodruin-init
+# SEC7 (relecture de SEC5) : sans l'état de glorfindel-host lisible sur ce poste, l'identité et le
+# sous-réseau de H0 seraient vides, et le plan retirerait la lecture du canal par la watch et
+# l'accès de son sous-réseau. NO_WATCH=1 : un Orodruin sans Glorfindel hébergé, voulu.
+orodruin-watch-guard:
+	@if [ -z "$(NO_WATCH)" ] && { [ -z "$(ORO_WATCH_ID)" ] || [ -z "$(ORO_WATCH_SUBNET)" ]; }; then \
+	  echo "✗ L'état de infra/glorfindel-host ne se lit pas ici (principal_id, subnet_id) : le plan retirerait" >&2; \
+	  echo "  à la watch hébergée la lecture du canal et l'accès de son sous-réseau. make glorfindel-host-init" >&2; \
+	  echo "  sur ce poste, ou NO_WATCH=1 pour un Orodruin sans Glorfindel hébergé." >&2; exit 1; fi
+
+orodruin-plan: orodruin-init orodruin-watch-guard
 	$(ORO_TF) plan $(ORO_VARS)
 
 # Premier apply : sortie ouverte, le temps d'installer Docker. Ensuite orodruin-lock.
 # YES=1 : sans confirmation (-auto-approve), pour un lancement non interactif.
-orodruin-up: orodruin-init
+orodruin-up: orodruin-init orodruin-watch-guard
 	$(ORO_TF) apply $(ORO_VARS) -var="egress_locked=false"$(if $(YES), -auto-approve)
 	@echo "" && echo "  VM prête quand ~/.orodruin-ready existe (make orodruin-ssh) ; puis make orodruin-lock"
 
-orodruin-lock: orodruin-init
+orodruin-lock: orodruin-init orodruin-watch-guard
 	$(ORO_TF) apply $(ORO_VARS)$(if $(YES), -auto-approve)
 
 # L'image arrive par SSH : la sortie de la VM reste fermée. UID 1000 = l'utilisateur de la VM.

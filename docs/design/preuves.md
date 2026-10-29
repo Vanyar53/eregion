@@ -1422,6 +1422,19 @@ côtés. Le harnais a aussi trouvé, sur sa graine du moment, un échec d'I5 san
 reassertion opened flows of …/web », l'attaquant sur 443), présent sur `main` : réduit à quatre
 étapes (`block_perimeter` coupé, `block` sous 429, notre blocage passé en allow par quelqu'un,
 `quarantine_altered_then_reasserted`), à traiter dans un lot à part.
+La relecture 5.5 a trouvé deux trous que la machine ne voit pas (elle n'écrit jamais d'état
+illisible, et sa suppression d'une VM emporte ses cartes). Un état illisible de la VM supprimée
+(isolation ou blocage) : `released`, les règles laissées, et le seul fichier qui nommait la carte
+effacé — maintenant `release_partial`, le fichier gardé (M1556–M1558). Une carte qu'Azure garde
+après sa VM (`az vm delete` et Terraform la détachent par défaut), rattachée à une autre VM du même
+nom que Glorfindel isole : la levée retirait l'isolation de celle-ci, qui porte les mêmes noms —
+la carte est maintenant lue d'abord ; 404, détachée ou sur une VM d'un autre nom, ses règles sont
+cherchées ; sur un homonyme, elles restent et c'est dit ; illisible, « non vérifiée » (M1559,
+M1600, M1601 ; c'est la garde « Azure dit 404 » d'A3, étendue). Séquences figées : quatre cas de
+plus à `test_a_deleted_vms_rules_go_with_its_release_or_are_said`,
+`test_a_deleted_vms_nic_that_azure_kept_is_read_first` (quatre cas). Seuls les noms actuels à
+empreinte sont cherchés — ni ceux d'avant L24 ni ceux suffixés par la VM, partagés par des
+homonymes : voulu, pour I2.
 
 **I11 sous charge (29/10).** Le délai d'un tour (20 s) n'a pas été dépassé : 26 runs de la
 machine à 500 séquences en même temps sur 16 cœurs (312 à 647 s chacun, contre une centaine
@@ -1461,7 +1474,8 @@ Une séquence trouvée la nuit est rejouée en premier à chaque push jusqu'à s
   NSG partagé se retrouvent par l'empreinte de leur nom et sont retirées quand elles coupent une
   VM vivante en `non_disruptive` ou plus (A3) ; la VM reste coupée jusqu'au passage suivant de la
   watch (une minute), ou, en `human_only`, jusqu'à ce qu'un humain agisse. Tant qu'un état de la
-  VM (isolation, blocage) nomme encore la carte, sa levée les cherche sur tous les NSG (I7S) ;
+  VM (isolation, blocage) nomme encore la carte, sa levée les cherche sur tous les NSG (I7S),
+  sous leurs seuls noms actuels à empreinte (ni ceux d'avant L24 ni ceux suffixés par la VM : I2) ;
   un NSG que l'identité ne lit plus manque à cette liste sans erreur (hypothèse I1S). Une liste des cartes
   partielle (droits de lecture), des VNets qui se recouvrent et une carte recréée sous une VM
   vivante ne sont pas dans la machine : des tests unitaires couvrent les gardes

@@ -130,8 +130,9 @@ MUTANTS = [
      "    _atomic_write_text(target, json.dumps(payload))\n",
      "    _atomic_write_text(target, json.dumps(payload))\n    if name != name.lower():\n        target.unlink()\n"),
     ("M07", "release sweeps the NICs only when there is no state", REL,
-     "        failed += self._sweep_isolation(rg, vm_name, remaining, known)",
-     "        failed += [] if state.get(\"placements\") else self._sweep_isolation(rg, vm_name, remaining, known)"),
+     "        failed += self._sweep_isolation(rg, vm_name, remaining, known, resource_id)",
+     "        failed += [] if state.get(\"placements\") else self._sweep_isolation(rg, vm_name, remaining, known,"
+     " resource_id)"),
     ("M08", "fallback deny any/any on an NSG that only looks dedicated", NSG,
      '    return bool(target.get("private_ips")) or _ip_scoped(target)',
      "    return _ip_scoped(target)"),
@@ -4169,12 +4170,13 @@ TESTS.update({mid: "tests/unit/test_release.py" for mid in ("M1437", "M1438", "M
 _I7S = "tests/unit/test_invariant_regressions.py -k deleted_vm"
 MUTANTS += [
     ("M1550", "a deleted VM's release looks nowhere: its rules left on a shared NSG, `released` (I7S)", REL,
-     "                return self._gone_vm_rules(vm_name, list(known_nics), stuck)\n",
-     "                return []\n"),
+     "                        + self._gone_vm_rules(resource_id, vm_name, list(known_nics), stuck))\n",
+     "                        + [])\n"),
     ("M1551", "the NSGs that can't be listed: a deleted VM's release says `released` (I7S)", REL,
-     '            return [f"{vm_name} supprimée : les règles de ses cartes n\'ont pas été cherchées sur les NSG "\n'
-     '                    f"de l\'abonnement (liste illisible : {_first_line(exc)[:_ERR_MAX]}), levée non vérifiée"]\n',
-     "            return []\n"),
+     '            return failed + [f"{vm_name} supprimée : les règles de ses cartes n\'ont pas été cherchées sur les "\n'
+     '                             f"NSG de l\'abonnement (liste illisible : {_first_line(exc)[:_ERR_MAX]}), levée non '
+     'vérifiée"]\n',
+     "            return failed\n"),
     ("M1552", "a failed release of a deleted VM forgets its NICs: the retry looks for nothing (I7S)", REL,
      '                **({"known_nics": known} if known else {}),\n', ""),
     ("M1553", "the NICs a failed release kept are not read again (I7S)", REL,
@@ -4187,6 +4189,30 @@ MUTANTS += [
      '            names |= {base, f"{base}-out"}\n', "            names |= {base}\n"),
 ]
 TESTS.update({"M1550": f"{_I7S} {INVARIANTS}", **{f"M{n}": _I7S for n in range(1551, 1556)}})
+# I7S after its 5.5 review: a gone VM whose state can't be read is never `released` (the
+# file kept); a NIC Azure kept after its VM (`az vm delete`, Terraform: detached by default)
+# is read before its names are looked for — attached to another VM of that name, they are
+# that VM's isolation's too, and stay, said. M1556–M1559, M1600–M1601.
+MUTANTS += [
+    ("M1556", "a gone VM's unreadable state: `released`, the only file that named its NICs cleared (I7S)", REL,
+     "                return (self._gone_vm_unknown(resource_id or vm_name, vm_name)\n",
+     "                return ([]\n"),
+    ("M1557", "a gone VM's unreadable isolation state not counted (I7S)", REL,
+     "        if _isolation_unreadable(vm_ref) or (\n", "        if False or (\n"),
+    ("M1558", "a gone VM's unreadable block state not counted (I7S)", REL,
+     '                block is not None and f"{_BLOCK_STATE_DIR.name}/{block.name}" in unreadable_states()):\n',
+     "                False):\n"),
+    ("M1559", "a NIC kept and attached to a namesake VM: its isolation's rules taken (I7S)", REL,
+     '        if (not holder or holder.rsplit("/", 1)[-1].lower() != vm_name.lower()\n',
+     "        if (True or not holder\n"),
+    ("M1600", "a kept NIC that can't be read taken as gone: its names looked for (I7S)", REL,
+     "            if _is_not_found(exc):\n                return None\n            return f\"{vm_name} supprimée : carte",
+     "            if True:\n                return None\n            return f\"{vm_name} supprimée : carte"),
+    ("M1601", "a kept NIC on a VM of another name taken for a namesake's: its rules left (I7S)", REL,
+     '        if (not holder or holder.rsplit("/", 1)[-1].lower() != vm_name.lower()\n',
+     "        if (not holder\n"),
+]
+TESTS.update({mid: _I7S for mid in ("M1556", "M1557", "M1558", "M1559", "M1600", "M1601")})
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

@@ -2617,3 +2617,36 @@ def test_a_live_vms_release_is_not_held_by_its_own_turned_rule(monkeypatch):
         assert not [n for n in g["rules"] if n.startswith(_Q_API_ISO)]
     finally:
         shutil.rmtree(m.home, ignore_errors=True)
+
+
+# ── Found on the way (I5Q), outside its cause: L2, frozen for a lot of its own ──────────
+
+_L2_NET = {'subnet_nsg': [_rule('allow-https', 100, dict(access='Allow', direction='Inbound', source_address_prefix='Internet', destination_address_prefix='*', destination_port_range='443')), _rule('allow-lateral-out', 100, dict(access='Allow', direction='Outbound', source_address_prefix='*', destination_address_prefix='VirtualNetwork', destination_port_range='*'))], 'edge_nsg': None, 'tier_rules': [_rule('allow-ssh', 100, dict(access='Allow', direction='Inbound', source_address_prefix='*', destination_address_prefix='*', destination_port_range='22')), _rule('allow-lateral-out', 100, dict(access='Allow', direction='Outbound', source_address_prefix='*', destination_address_prefix='VirtualNetwork', destination_port_range='*')), _rule('deny-lateral-in', 130, dict(access='Deny', direction='Inbound', source_address_prefix='VirtualNetwork', destination_address_prefix='*', destination_port_range='*'))], 'nics': {'web-nic': {'own': None, 'rules': [_rule('allow-ssh', 100, dict(access='Allow', direction='Inbound', source_address_prefix='*', destination_address_prefix='*', destination_port_range='22')), _rule('allow-lateral-out', 100, dict(access='Allow', direction='Outbound', source_address_prefix='*', destination_address_prefix='VirtualNetwork', destination_port_range='*')), _rule('deny-lateral-in', 130, dict(access='Deny', direction='Inbound', source_address_prefix='VirtualNetwork', destination_address_prefix='*', destination_port_range='*'))], 'policy': False}, 'db-nic-0': {'own': None, 'rules': [_rule('allow-lateral-out', 100, dict(access='Allow', direction='Outbound', source_address_prefix='*', destination_address_prefix='VirtualNetwork', destination_port_range='*'))], 'policy': False}, 'db-nic-1': {'own': 'dedicated', 'rules': [_rule('allow-ssh', 100, dict(access='Allow', direction='Inbound', source_address_prefix='*', destination_address_prefix='*', destination_port_range='22')), _rule('allow-lateral-out', 100, dict(access='Allow', direction='Outbound', source_address_prefix='*', destination_address_prefix='VirtualNetwork', destination_port_range='*'))], 'policy': False}, 'api-nic': {'own': None, 'rules': [_rule('allow-ssh', 100, dict(access='Allow', direction='Inbound', source_address_prefix='*', destination_address_prefix='*', destination_port_range='22'))], 'policy': False}}, 'windows': None, 'config': {'quarantine': False, 'readable': True, 'forensic': [], 'rg': ''}, 'legacy': None, 'data_subnet': [_rule('allow-ssh', 100, dict(access='Allow', direction='Inbound', source_address_prefix='*', destination_address_prefix='*', destination_port_range='22')), _rule('deny-lateral-in', 130, dict(access='Deny', direction='Inbound', source_address_prefix='VirtualNetwork', destination_address_prefix='*', destination_port_range='*'))]}
+_L2_STEPS = [
+    ('block_then_isolate', '/subscriptions/s/resourceGroups/rg-app2/providers/Microsoft.Compute/virtualMachines/web', '/subscriptions/s/resourceGroups/rg-app2/providers/Microsoft.Compute/virtualMachines/web', None, 22, None, True, False),
+    ('config_changes', {'quarantine': False, 'rg': 'rg-sec', 'readable': True, 'forensic': []}, False),
+    ('delete_vm', '/subscriptions/s/resourceGroups/rg-app2/providers/Microsoft.Compute/virtualMachines/web'),
+    ('block', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/web', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/web', None, 22),
+    ('block_turned_then_reasserted', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/web', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/web', None, 'both', 22, ('/subscriptions/s/resourcegroups/rg-net/providers/microsoft.network/networksecuritygroups/nsg-subnet', 'glorfindel-block-192-31-196-7-web-web-nic-80ab3c'), 'non_disruptive'),
+    ('address_reused', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/web', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/web', None, True, False, 'rg-new', 'web', None, 'Linux', False),
+    ('reassert', 'non_disruptive', None),
+    ('bare_with_an_unknown_original', '/subscriptions/s/resourceGroups/rg-edge/providers/Microsoft.Compute/virtualMachines/api', '/subscriptions/s/resourceGroups/rg-edge/providers/Microsoft.Compute/virtualMachines/api', None, '/subscriptions/s/resourcegroups/rg-edge/providers/microsoft.network/networkinterfaces/api-nic', 'isolate+release', None),
+    ('address_reused', '/subscriptions/s/resourceGroups/rg-new/providers/Microsoft.Compute/virtualMachines/web', '/subscriptions/s/resourceGroups/rg-new/providers/Microsoft.Compute/virtualMachines/web', ('nic.get', 'always-429'), True, True, 'rg-app1', 'api', None, 'Linux', False),
+    ('quarantine_altered_then_reasserted', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/api', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/api', None, False, True, '/subscriptions/s/resourcegroups/rg-sec/providers/microsoft.network/networksecuritygroups/nsg-glorfindel-quarantine-westeurope', 'human_only', 'role removed', '/subscriptions/s/resourcegroups/rg-sec/providers/microsoft.network/networksecuritygroups/nsg-glorfindel-quarantine-westeurope', 1, 'human_only'),
+    ('config_changes', {'quarantine': True, 'forensic': ['10.9.9.9'], 'readable': True, 'rg': ''}, True),
+    ('reassert', 'human_only', (14, 'before-429')),
+    ('config_changes', {'quarantine': False, 'rg': '', 'readable': True, 'forensic': []}, False),
+    ('block_turned_then_reasserted', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/Db--01', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/Db--01', None, 'both', 22, ('/subscriptions/s/resourcegroups/rg-net/providers/microsoft.network/networksecuritygroups/nsg-subnet', 'glorfindel-block-192-31-196-7-web-web-nic-80ab3c-out'), 'non_disruptive'),
+]
+
+
+@pytest.mark.xfail(strict=True, reason="L2 outside I5Q: present on origin/main 171a242, for a lot of its own")
+def test_an_altered_quarantine_said_while_the_config_is_unreadable(monkeypatch):
+    """Graine 101 at 500 sequences, after RB1 (I5Q's run), shrunk to 14 steps — written
+    with the rules of the machine as `main` has them: it fails there too, glorfindel/ of
+    171a242. A quarantine NSG altered (stripped) and out of sight, then the quarantine
+    switched off and the configuration unreadable, a NIC held by it; the reassertion in
+    non_disruptive neither puts it back nor says it (« L2: the quarantine NSG
+    …/nsg-glorfindel-quarantine-westeurope was altered, holds […/api-nic-5] »). Cause
+    not established."""
+    _run(monkeypatch, _L2_NET, *_L2_STEPS)

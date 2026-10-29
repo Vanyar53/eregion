@@ -1165,19 +1165,22 @@ class IsolationMachine(RuleBasedStateMachine):
         if (entry is None or vm in self.unblocking
                 or any(entry.get(k) for k in ("partial", "unblock_failed", "unblocking_at"))):
             return False
-        where = [(p["nsg_rg"], p["nsg_name"], p["rule"]) for p in entry.get("placements") or [] if p.get("rule")]
-        if entry.get("nsg") and entry.get("rule") and "/" in entry["nsg"] and (
-                not where or entry.get("scoped") is False):
-            # A perimeter alone — or merged with the VM's own block: its pair too (RB1).
-            where.append((*entry["nsg"].split("/", 1), entry["rule"]))
-        if not where:
-            return False
         from .fake_azure import nsg_id
-        for rg, name, rule_name in where:
-            g = self.fake.nsgs.get(key(nsg_id(rg, name)))
-            if g and ({rule_name.lower(), f"{rule_name.lower()}-out"} & set(g["rules"])):
-                return False
-        return True
+
+        def gone(where) -> bool:
+            for rg, name, rule_name in where:
+                g = self.fake.nsgs.get(key(nsg_id(rg, name)))
+                if g and ({rule_name.lower(), f"{rule_name.lower()}-out"} & set(g["rules"])):
+                    return False
+            return bool(where)
+        where = [(p["nsg_rg"], p["nsg_name"], p["rule"]) for p in entry.get("placements") or [] if p.get("rule")]
+        pair = [(*entry["nsg"].split("/", 1), entry["rule"])] if (
+            entry.get("nsg") and entry.get("rule") and "/" in entry["nsg"]) else []
+        if not where:
+            return gone(pair)
+        # Merged with a perimeter block (RB1): the VM's rules all gone, OR its perimeter pair
+        # gone — each a disappearance; never both required (fifth review: L1 weakened).
+        return gone(where) or (entry.get("scoped") is False and gone(pair))
 
     @staticmethod
     def _perimeter_rule(name: str) -> bool:

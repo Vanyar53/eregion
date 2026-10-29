@@ -2435,3 +2435,45 @@ def test_a_block_written_again_after_an_ip_change_leaves_the_new_owner_of_the_ol
          ("customer_changes_ip", _nic("rg-edge", "api-nic"), 0, 4),
          ("create_vm", "northeurope", "rg-app1", "api", None, "Linux"),
          ("address_reused", API, API, None, False, 22, False, "rg-new", "x", None, "Linux", False))
+
+
+def test_the_same_perimeter_gone_twice_is_said_twice(monkeypatch):
+    """RB1, fifth review: a perimeter block alone on Db--01 (two subnets) — « ne couvre pas »,
+    acknowledged; its pair deleted — « disparu », acknowledged; blocked again by the
+    operator, the pair back: the next pass reads it whole but for db-nic-1, the episode is
+    over; the same pair deleted a second time must be said again — the same rules gone, so
+    no « rule more » tells it worse: only the episode closed does."""
+    import shutil
+
+    from glorfindel import escalations
+
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_net(subnet_nsg=[], data_subnet=[]))
+        c, rules = m.connector, m.fake.nsgs[key(_SUBNET)]["rules"]
+
+        def drop():
+            for n in (_PERIMETER, f"{_PERIMETER}-out"):
+                rules.pop(n, None)
+
+        def ack():
+            for e in escalations.pending():
+                escalations.resolve(e["id"])
+        c.block_suspicious_ip(ATTACKER, DB, scope="subnet")
+        m.reassert(Script("human_only", None))
+        ack()
+        drop()
+        m.reassert(Script("human_only", None))
+        assert any("disparu" in x for x in _cards(m)), _cards(m)
+        ack()
+        c.block_suspicious_ip(ATTACKER, DB, scope="subnet")
+        m.reassert(Script("human_only", None))
+        ack()
+        drop()
+        m.reassert(Script("human_only", None))
+        (card,) = _cards(m)
+        assert "disparu" in card, card
+        assert m._attacker_flows(WEB1, None)
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)

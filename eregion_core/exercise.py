@@ -24,6 +24,16 @@ window's targets; a window is purged PURGE_AFTER_S after its last moment (emptie
 tombstone keeps the channel from bringing it back). An exercise card stays in front of the
 operator, flagged (glorfindel/escalations.py, ``to_judge``).
 
+SEC5 (V-20): a window's dates are bounded by what the reader knows, not by what it declares.
+A window pulled from the channel carries when its blob was created (``channel_created``, the
+listing's word, eregion_core/exercise_channel.py): it may not start more than FUTURE_SKEW_S
+before that — a window written now and dated 110 minutes back is refused (its file's mtime,
+the pull, already bounds it the other way).
+MAX_DURATION_S still caps how long it lasts. And on a VM in zone ``production`` (its tags,
+read by the watch), a window marks nothing unless it declares a technique that is not
+destructive (``kind: technique``, ``destructive: false``): the production rule of O0 — a
+destructive technique or a fault never runs there, so a window that says one did is a lie.
+
 Files: one JSON per run under ``runs/exercises/`` (or ``EREGION_EXERCISES_DIR``), where
 the injector and the watch share ``runs/``. A watch on another host (H0) gets them through
 the exercise channel (``eregion_core/exercise_channel.py``, O1): the injector publishes
@@ -54,6 +64,8 @@ PURGE_AFTER_S = 7 * 24 * 3600
 # make a detection an exercise by its run_id (H-1).
 _WATCH_RUN_PREFIX = "watch-"
 _SAFE_RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+# When the blob of a window pulled from the channel was created (exercise_channel.CREATED).
+CHANNEL_CREATED = "channel_created"
 
 EXERCISE, REAL, UNKNOWN = "exercise", "real", "unknown"
 
@@ -99,8 +111,11 @@ def _publish(window: dict) -> None:
 
 def open_window(run_id: str, *, injector: str, kind: str, experiment: str,
                 targets: list[str], max_duration_s: float = MAX_DURATION_S,
-                now: datetime | None = None, directory: Path | None = None) -> dict:
-    """Declare that ``run_id`` exercises ``targets`` from now, for at most ``max_duration_s``."""
+                now: datetime | None = None, directory: Path | None = None,
+                destructive: bool | None = None) -> dict:
+    """Declare that ``run_id`` exercises ``targets`` from now, for at most ``max_duration_s``.
+    ``destructive``: what the catalog says of the experiment (SEC5, V-20) — unknown is
+    destructive, and marks nothing in production."""
     start = now or _now()
     window = {
         "run_id": run_id,
@@ -111,6 +126,7 @@ def open_window(run_id: str, *, injector: str, kind: str, experiment: str,
         "start": start.isoformat(),
         "end": None,
         "expires": (start + timedelta(seconds=max_duration_s)).isoformat(),
+        "destructive": destructive is not False,
     }
     _write((directory or exercises_dir()) / f"{run_id}.json", window)
     _publish(window)
@@ -138,7 +154,9 @@ def window_refusal(window, now: datetime | None = None,
     expiry readable, the expiry after the start and at most MAX_DURATION_S later; its end,
     when set, readable and not before its start. With ``now`` or ``declared_at`` (when it
     was written: its file's mtime), it must not start more than FUTURE_SKEW_S after the
-    earlier of the two — a window written today for tomorrow is refused for good."""
+    earlier of the two — a window written today for tomorrow is refused for good. Pulled from
+    the channel, it must start within FUTURE_SKEW_S of when its blob was created
+    (``channel_created``, SEC5 V-20): a window written now and dated back is refused too."""
     if not isinstance(window, dict):
         return "not a JSON object"
     rid = str(window.get("run_id") or "")
@@ -159,6 +177,14 @@ def window_refusal(window, now: datetime | None = None,
         end = _parse(window.get("end"))
         if end is None or end < start:
             return "its end is unreadable or before its start"
+    if CHANNEL_CREATED in window:
+        created = _parse(window.get(CHANNEL_CREATED))
+        if created is None:
+            return "the time its blob was created is unreadable"
+        if start < created - timedelta(seconds=FUTURE_SKEW_S):
+            return (f"it starts {(created - start).total_seconds():.0f} s before the blob that "
+                    f"carries it was created (more than FUTURE_SKEW_S, {FUTURE_SKEW_S} s): "
+                    "antedated")
     refs = [t for t in (now, declared_at) if t is not None]
     if refs and start > min(refs) + timedelta(seconds=FUTURE_SKEW_S):
         return (f"it starts {(start - min(refs)).total_seconds():.0f} s after it was declared "
@@ -270,8 +296,34 @@ def _targets(window: dict, resource_id: str) -> bool:
             and not window_refusal(window))
 
 
+def _zone_reader(enrolled):
+    """``zone(resource_id)`` of the check in use, or None when it reads no zone."""
+    zone = getattr(enrolled, "zone", None)
+    if zone is None and enrolled is is_enrolled:
+        zone = getattr(_enrollment_check, "zone", None)
+    return zone
+
+
+def zone_allows(window: dict, resource_id: str, enrolled=None) -> bool:
+    """A window marks a VM in zone ``production`` only if it declares a technique that is not
+    destructive (SEC5, V-20) — the production rule of O0. The zone is the reader's, from the
+    VM's tags (eregion_core/inscription.py ``TagEnrollment.zone``); a check that reads none
+    leaves the rule to the injector's own (O0)."""
+    zone = _zone_reader(enrolled or is_enrolled)
+    if zone is None:
+        return True
+    try:
+        z = zone(resource_id)
+    except Exception:
+        return False
+    if z != "production":
+        return True
+    return window.get("kind") == "technique" and window.get("destructive") is False
+
+
 def _covers(window: dict, resource_id: str, when: datetime, enrolled) -> bool:
-    return _targets(window, resource_id) and live(window, when) and enrolled(resource_id)
+    return (_targets(window, resource_id) and live(window, when) and enrolled(resource_id)
+            and zone_allows(window, resource_id, enrolled))
 
 
 def covering_runs(resource_id: str, when, windows: list[dict], *, enrolled=None) -> list[str]:
@@ -296,7 +348,8 @@ def source_of(resource_id: str, when=None, *, run_id: str = "",
     ws = load_windows() if windows is None else windows
     enrolled = enrolled or is_enrolled
     if run_id and resource_id and any(
-            w.get("run_id") == run_id and _targets(w, resource_id) for w in ws) \
+            w.get("run_id") == run_id and _targets(w, resource_id)
+            and zone_allows(w, resource_id, enrolled) for w in ws) \
             and enrolled(resource_id):
         return EXERCISE, run_id
     at = _parse(when) if when is not None else _now()

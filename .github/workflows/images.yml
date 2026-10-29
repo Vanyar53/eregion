@@ -1,0 +1,73 @@
+name: Images
+
+# CI1 (#267): the images of Glorfindel and of the injectors (Annatar, Gothmog), built and proven
+# in the pull request — before, only H0's CD built Glorfindel's (a broken Dockerfile or lock
+# refused at its preflight, the release burnt) and the injectors' was built on the operator's
+# machine (make orodruin-push). Built with GitHub's cache, never pushed: no registry, no login,
+# no secret. Then, in the image, scripts/image_check.py: `--version`, the imports, the example
+# config under A3's strict reading — each a `docker run --network none`, nothing started
+# (docs/operations.md, « La CI des images »). Locally, the same build and checks: make images-check.
+#
+# On every pull request and every push to main, without a `paths` filter: the jobs' checks,
+# `image (glorfindel)` and `image (annatar)`, can then be required — a filtered workflow leaves a
+# required check « expected » on a pull request it skips. The first step decides instead: a pull
+# request whose diff touches nothing that goes into an image (scripts/image_check.py, IMAGE_PATHS —
+# tests/unit/test_image_check.py reads each Dockerfile's COPY against it) skips the build and
+# passes green; a push to main, or a diff that cannot be read, builds.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  image:
+    name: image (${{ matrix.image }})
+    runs-on: ubuntu-latest
+    # A cold build takes a few minutes (docs/operations.md); bounded so a hung one cannot run six hours.
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [glorfindel, annatar]
+    steps:
+      # Two commits deep: a pull request's merge commit and the base it is diffed against.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5.1.0
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: What the change touches
+        id: touched
+        env:
+          EVENT: ${{ github.event_name }}
+        run: python3 scripts/image_check.py touched --event "$EVENT"
+
+      # BuildKit in a container: the driver that can read and write GitHub's cache.
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069   # v4.4.1
+        if: steps.touched.outputs.build == 'true'
+
+      # The same build as `python3 scripts/image_check.py <image> --build` (make images-check):
+      # its Dockerfile, the repository as context, no build argument (the image's default
+      # UID/GID: nothing is mounted here). Loaded into the runner's docker, never pushed. The
+      # cache is read everywhere and written by main's pushes only: a pull request cannot evict
+      # main's.
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc   # v7.4.0
+        if: steps.touched.outputs.build == 'true'
+        with:
+          context: .
+          file: ${{ matrix.image }}/Dockerfile
+          tags: eregion-${{ matrix.image }}:ci
+          load: true
+          push: false
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: ${{ github.event_name == 'push' && format('type=gha,mode=max,scope={0}', matrix.image) || '' }}
+
+      - name: In the image (nothing started, no network, no secret)
+        if: steps.touched.outputs.build == 'true'
+        env:
+          IMAGE: ${{ matrix.image }}
+        run: python3 scripts/image_check.py "$IMAGE"

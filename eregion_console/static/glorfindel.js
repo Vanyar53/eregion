@@ -122,6 +122,13 @@ function _escCtx(e, pct, lean) {
   return (lean ? [ttp, sev] : [ttp, pct, sev, rule, _attr(escLabel(e.escalation_type))])
     .filter(Boolean).join(' · ');
 }
+// What the command said when a restore of this card was refused or failed (SEC4c): on the
+// card, never silence.
+function _restoreFailure(e) {
+  const f = (_state?.restore_failures || {})[e.id];
+  if (!f) return '';
+  return `<div class="esc-context" style="color:var(--red)" title="${_attr(f.at)}">✗ Restore refused or failed: ${_attr(f.error)}</div>`;
+}
 function _anchorNote(e, vmName) {
   if (!_isAnchored(e) || e.escalation_type === 'unattributed_signal') return '';
   return `<div class="esc-context" title="The detection does not name this VM: the card is only filed on it">⚓ filed on ${_attr(vmName)}, not about it</div>`;
@@ -283,7 +290,9 @@ function cliCommand(esc) {
     return (actionMap[esc.action] || `glorfindel ack ${id}`) + `\nglorfindel ack ${id}`;
   }
   if (esc.action === 'restore_from_backup') {
-    return `glorfindel restore ${rid} --yes\nglorfindel ack ${id}`;
+    // The moment is asked (SEC4c): the card's first detection — the attack began before it.
+    return `# --before: an instant before the attack began (the card's first detection here — go back if it began earlier)\n`
+      + `glorfindel restore ${rid} --yes --before ${esc.first_seen || esc.timestamp || '<ISO8601>'}\nglorfindel ack ${id}`;
   }
   if (esc.escalation_type === 'readiness_hold') {
     return `# Shows the reserves, then asks you to accept them\nglorfindel activate ${rid.split('/').pop()}`;
@@ -324,9 +333,12 @@ function closeModal() {
   document.getElementById('modal').classList.remove('open');
   document.querySelector('.modal').classList.remove('wide');
   document.getElementById('modal-confirm').style.display = '';  // restore (block-scope modal hides it)
+  document.getElementById('modal-confirm').disabled = false;    // the restore's, while it reads
+  document.getElementById('modal').dataset.owner = '';           // the restore's window token
 }
 
 function openModal(title, body, cmd, confirmLabel, confirmClass, onConfirm) {
+  document.getElementById('modal').dataset.owner = '';
   document.getElementById('modal-title').textContent = title;
   document.getElementById('modal-body').textContent = body;
   document.getElementById('modal-confirm').style.display = '';
@@ -512,6 +524,7 @@ function _renderEscGroup(group) {
     </div>
     ${ctxParts ? `<div class="esc-context">${ctxParts}</div>` : ''}
     ${_anchorNote(e, vmName)}
+    ${_restoreFailure(e)}
     <div style="display:flex;gap:5px;margin-top:6px;flex-wrap:wrap" ${_on('click', 'stop')}>${actionBtns}${verdictBtns}</div>
   </div>`;
 }
@@ -1904,15 +1917,80 @@ function confirmRevert(vmName) {
   confirmReset(vmName);
 }
 
-function confirmRestore(vmName, escId) {
-  openModal(
-    'Restore ' + vmName + ' from backup',
-    'This triggers an Azure Backup restore (~20 min). The VM will be offline during restore. Glorfindel will release isolation automatically after completion.',
-    `glorfindel restore ${vmName} --yes`,
-    '🔄 Restore',
-    'primary',
-    () => doRestore(vmName, escId),
-  );
+// A restore asks for its moment (SEC4c): the newest recovery point from before the attack
+// began. The field is filled with what the server proposes (an exercise's attack_started for
+// this VM, else the card's first detection); the points before it are shown, read only; the
+// operator confirms, and the restore runs with --before.
+let _restoreWindow = 0;     // the restore window's token: another window opened meanwhile wins
+async function confirmRestore(vmName, escId) {
+  const mine = String(++_restoreWindow);
+  const modal = document.getElementById('modal');
+  modal.dataset.owner = 'restore-' + mine;
+  const title = 'Restore ' + vmName + ' from backup';
+  // Ours while open, under our token and our title — a window opened meanwhile by any other
+  // path (it sets its own title) is never overwritten.
+  const _stillMine = () => modal.dataset.owner === 'restore-' + mine && modal.classList.contains('open')
+    && document.getElementById('modal-title').textContent === title;
+  document.getElementById('modal-title').textContent = title;
+  const body = document.getElementById('modal-body');
+  body.innerHTML = '<div style="color:var(--dim)">Reading what the restore would take (nothing is changed)…</div>';
+  document.getElementById('modal-cmd').style.display = 'none';
+  document.getElementById('modal-cancel').style.display = '';
+  const btn = document.getElementById('modal-confirm');
+  btn.style.display = '';
+  btn.textContent = '🔄 Restore';
+  btn.className = 'primary';
+  btn.disabled = true;
+  document.getElementById('modal').classList.add('open');
+  let d;
+  try {
+    d = await (await fetch(`/api/restore/plan/${_seg(vmName)}?escalation=${_seg(escId)}`)).json();
+  } catch (e) { if (_stillMine()) body.textContent = '✗ ' + e.message; return; }
+  // Closed, or another window opened while the plan was read: it is not this one's to fill.
+  if (!_stillMine()) return;
+  if (d.error && !d.why) { body.textContent = '✗ ' + d.error; return; }
+  body.innerHTML = `
+    <div style="margin-bottom:6px;color:var(--text)">Restore to the newest recovery point from before…</div>
+    <input id="restore-before" type="text" value="${_attr(d.before)}" placeholder="2026-10-29T08:00:00+00:00"
+      style="width:100%;font-family:var(--font);background:var(--bg2);color:var(--text);border:1px solid var(--border);padding:4px 6px">
+    <div id="restore-why" style="color:var(--dim);font-size:11px;margin-top:4px">${_attr(d.why)}</div>
+    <div id="restore-warning" style="color:var(--orange);font-size:11px;margin-top:4px">${d.warning ? '⚠ ' + _attr(d.warning) : ''}</div>
+    <div style="margin-top:6px"><button class="action" ${_on('click', 'restorePoints', vmName, escId)} style="font-size:10px;padding:2px 7px">↺ Points before this moment</button></div>
+    <div id="restore-points" style="margin-top:8px;font-size:11px"></div>
+    <div style="color:var(--dim);font-size:11px;margin-top:8px">~20 min, the VM offline meanwhile. Glorfindel releases the isolation once the restore is done.</div>`;
+  _renderRestorePoints(d);
+  btn.disabled = false;
+  btn.onclick = () => {
+    const before = document.getElementById('restore-before').value.trim();
+    if (!before) { toast('✗ Give the moment to restore before'); return; }
+    closeModal();
+    doRestore(vmName, escId, before);
+  };
+}
+
+function _renderRestorePoints(d) {
+  const el = document.getElementById('restore-points');
+  if (!el) return;
+  if (d.error) { el.innerHTML = `<div style="color:var(--red)">✗ ${_attr(d.error)}</div>`; return; }
+  if (d.points_error) { el.innerHTML = `<div style="color:var(--orange)">Recovery points unreadable: ${_attr(d.points_error)}</div>`; return; }
+  const points = Array.isArray(d.points) ? d.points : [];
+  if (!d.moment) { el.innerHTML = '<div style="color:var(--dim)">Give a moment to see the points before it.</div>'; return; }
+  if (!points.length) { el.innerHTML = `<div style="color:var(--red)">No recovery point before ${_attr(d.moment)}: the restore would be refused.</div>`; return; }
+  el.innerHTML = `<div style="color:var(--dim);margin-bottom:3px">Recovery points before ${_attr(d.moment)} (read only):</div>`
+    + points.slice(0, 8).map((p, i) => `<div style="color:${i === 0 ? 'var(--green)' : 'var(--text)'}">${_attr(p.time)}${p.vault_tier ? ' · vault tier' : ''}${p.during_incident ? ' · <span style="color:var(--orange)">taken during the incident</span>' : ''}${i === 0 ? ' ← restored' : ''}</div>`).join('');
+  const w = document.getElementById('restore-warning');
+  if (w) w.textContent = d.warning ? '⚠ ' + d.warning : '';
+}
+
+async function restorePoints(vmName, escId) {
+  const input = document.getElementById('restore-before');
+  if (!(input instanceof HTMLInputElement)) return;
+  const el = document.getElementById('restore-points');
+  if (el) el.textContent = 'Reading…';
+  try {
+    const d = await (await fetch(`/api/restore/plan/${_seg(vmName)}?escalation=${_seg(escId)}&before=${encodeURIComponent(input.value.trim())}`)).json();
+    _renderRestorePoints(d);
+  } catch (e) { if (el) el.textContent = '✗ ' + e.message; }
 }
 
 function confirmAck(escId) {
@@ -1967,13 +2045,14 @@ async function refreshAuditVm(vmName) {
   } catch (e) { toast('✗ ' + e.message); }
 }
 
-async function doRestore(vmName, escId) {
+async function doRestore(vmName, escId, before) {
   if (_guardReadOnly()) return;
   try {
-    // The card's restore (SEC1): the server checks the card — never an anchored one.
-    const d = await (await _post(`/api/action/restore/${_seg(vmName)}`, { escalation: escId })).json();
+    // The card's restore (SEC1): the server checks the card — never an anchored one — and
+    // the moment (SEC4c). A refusal of the command itself comes back on the card.
+    const d = await (await _post(`/api/action/restore/${_seg(vmName)}`, { escalation: escId, before })).json();
     if (d.error) { toast('✗ Restore refused: ' + d.error, 8000); return; }
-    toast('🔄 Restore started for ' + vmName + ' (~20 min)…', 8000);
+    toast('🔄 Restore requested for ' + vmName + ' before ' + d.before + ' — a refusal shows on the card', 8000);
   } catch (e) {
     toast('✗ ' + e.message);
   }
@@ -2940,7 +3019,7 @@ let _event = null, _target = null;     // the event an action runs for, and its 
 const ACTIONS = {
   confirmExtendSubnet, confirmRelease, confirmReset, confirmRestore, confirmUnblock, doAckAll,
   doApproveAction, doApproveRule, doRejectRule, doSnapshot, focusJudge, judgeCard, openActivation,
-  openCommandModal, refreshAuditVm, refreshBackups, showCoverageModal, showEscModal,
+  openCommandModal, refreshAuditVm, refreshBackups, restorePoints, showCoverageModal, showEscModal,
   showIsolationModal, showReasoning, showRuleByIdx, toggleAsset, toggleBackend, closeModal,
   _glowNsgVms,
   stop() {},                                      // only keeps the click from the element around

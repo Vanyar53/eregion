@@ -97,7 +97,7 @@ _V1_ANNATAR_GATE = (
     "            no_watch = watch_gate.refusal()\n"
     "            if no_watch:\n"
     '                console.print(f"[red]Refused — no live Glorfindel watch:[/red] {no_watch}")\n'
-    '                return RunOutcome(run_id, "unknown", error=f"glorfindel: {no_watch}")\n')
+    '                return RunOutcome(run_id, "unknown", error=f"glorfindel: {no_watch}", refused=True)\n')
 _V1_ANNATAR_ARM = '        verdict, session = arm(run_id, "annatar")\n'
 _V1_GOTHMOG_GATE = (
     "        refused = self._no_watch(run_id, without_glorfindel)\n"
@@ -377,16 +377,16 @@ MUTANTS = [
      '    if outcome is not None and getattr(outcome, "error", None):\n',
      "    if False:\n"),
     ("M104", "a passive Orodruin refusal exits 0 (#158)", ENG,
-     'return RunOutcome(run_id, "unknown", error=f"passive: {verdict.reasons()}")',
+     'return RunOutcome(run_id, "unknown", error=f"passive: {verdict.reasons()}", refused=True)',
      'return RunOutcome(run_id, "unknown")'),
     ("M105", "a target not enrolled exits 0 (#158)", ENG,
-     'return RunOutcome(run_id, "unknown", error=f"safety: {guard.reason}")',
+     'return RunOutcome(run_id, "unknown", error=f"safety: {guard.reason}", refused=True)',
      'return RunOutcome(run_id, "unknown")'),
     ("M106", "a dirty start (atomic) exits 0 (#158)", ENG,
      'run_id, "unknown", error="initial state not clean before the atomic"',
      'run_id, "unknown"'),
     ("M107", "an atomic the adapter refuses exits 0 (#158)", ENG,
-     'return RunOutcome(run_id, "unknown", error=f"atomic: {e}")',
+     'return RunOutcome(run_id, "unknown", error=f"atomic: {e}", refused=True)',
      'return RunOutcome(run_id, "unknown")'),
     ("M108", "an initial state not restored exits 0 (#158)", ENG,
      '            return RunOutcome(run_id, "unknown", error=error)\n',
@@ -820,11 +820,11 @@ MUTANTS = [
      "    if refs and start > min(refs) + timedelta(seconds=FUTURE_SKEW_S):\n", "    if False:\n"),
     ("M222", "a window marks a VM that is not enrolled — the real load passed off as an "
      "exercise (H-1)", XW,
-     "    return _targets(window, resource_id) and live(window, when) and enrolled(resource_id)\n",
-     "    return _targets(window, resource_id) and live(window, when)\n"),
+     "    return (_targets(window, resource_id) and live(window, when) and enrolled(resource_id)\n",
+     "    return (_targets(window, resource_id) and live(window, when)\n"),
     ("M223", "the run_id shortcut marks a VM its window does not name (H-1)", XW,
-     '            w.get("run_id") == run_id and _targets(w, resource_id) for w in ws) \\\n',
-     '            w.get("run_id") == run_id for w in ws) \\\n'),
+     '            w.get("run_id") == run_id and _targets(w, resource_id)\n',
+     '            w.get("run_id") == run_id\n'),
     ("M224", "an exercise card is hidden from the list to judge (H-1)", "glorfindel/escalations.py",
      '        if not is_decision(e) or e.get("verdict") in VERDICTS:\n',
      '        if not is_decision(e) or e.get("verdict") in VERDICTS or e.get("source") == "exercise":\n'),
@@ -2078,8 +2078,8 @@ MUTANTS += [
      "      AzureActivity\n      | where TimeGenerated > ago(10m)\n      | where OperationNameValue in~ (\n"
      "          \"MICROSOFT.NETWORK"),
     ("M825", "a row on a VM's sub-resource (a role scoped on the VM) dropped, not attributed (AL1)", DRU,
-     "                named, tgt = True, by_rid.get(_vm_id_of(rid))",
-     "                named, tgt = True, by_rid.get(rid.lower())"),
+     "            return True, self.by_rid.get(_vm_id_of(rid))",
+     "            return True, self.by_rid.get(rid.lower())"),
     ("M826", "the newest operation first, before a write on Glorfindel's rules (AL1)", DRU,
      "    return sorted(by_op.values(), key=lambda r: (_grave(r), str(r.get(\"TimeGenerated\") or \"\")),",
      "    return sorted(by_op.values(), key=lambda r: str(r.get(\"TimeGenerated\") or \"\"),"),
@@ -2214,8 +2214,8 @@ MUTANTS += [
     ("M944", "a client rule on an Entra table without telling columns goes to the model: its UPN sent (C2)", DRU,
      "        if plane == \"data\" and _reads_entra_table(rule.query):\n            plane = \"identity\"\n", ""),
     ("M945", "respond on an Entra query of another source goes to the model (C2)", AGT,
-     "        entra_query = _reads_entra_table(query) and not is_control_plane_source(source)",
-     "        entra_query = False"),
+     "    entra_query = _reads_entra_table(query) and not is_control_plane_source(source)",
+     "    entra_query = False"),
     ("M946", "a consent card proposes to disable the resource's principal: the whole tenant cut (C2)", ENT,
      "        client = (tid if op.lower() == \"consent to application\" and row.get(\"TargetId\")\n"
      "                  else str(row.get(\"ClientId\") or \"\").strip())",
@@ -2626,8 +2626,17 @@ MUTANTS += [
      "it half done only at times (1 round in 2, measured); what the whole rewrite adds besides (a "
      "crash inside the write leaves the store as it was) needs a process killed mid-write"),
     ("M1225", "the store's lock is a thread lock only: another process writes meanwhile (SEC3, V-10)", LCK,
-     "                import fcntl\n                fcntl.flock(fh, fcntl.LOCK_EX)\n",
-     "                import fcntl  # noqa: F401\n"),
+     # The store's own block (its message names the file, not a VM): since I3F (#292) the
+     # same flock lines open _vm_lock and _file_lock.
+     "                if timeout is None:\n                    fcntl.flock(fh, fcntl.LOCK_EX)\n"
+     "                else:\n                    deadline = _time.monotonic() + timeout\n"
+     "                    while True:\n                        try:\n"
+     "                            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)\n"
+     "                            break\n                        except BlockingIOError:\n"
+     "                            if _time.monotonic() >= deadline:\n"
+     "                                raise TimeoutError(f\"{path.name} busy (another process is writing)\")\n"
+     "                            _time.sleep(0.2)\n",
+     "                pass\n"),
     ("M1226", "state files readable by all again (SEC3, V-27)", STA,
      "def _atomic_write_text(path: Path, text: str, mode: int = 0o600) -> None:\n",
      "def _atomic_write_text(path: Path, text: str, mode: int = 0o644) -> None:\n"),
@@ -2642,7 +2651,8 @@ MUTANTS += [
      "      - ./technique_catalog.yaml:/app/technique_catalog.yaml:ro\n"
      "      - ${HOME}/.glorfindel:/root/.glorfindel:ro\n"),
     ("M1230", "the watch writes no heartbeat where the injectors read it: every run refused (SEC3, N-05)",
-     GCLI, "            _atomic_write_text(_INJECTOR_BEAT, now, mode=0o644)", "            pass  #"),
+     GCLI, "            _atomic_write_text(_INJECTOR_BEAT, json.dumps(beat_body(at)), mode=0o644)",
+     "            pass  #"),
     ("M1231", "make glorfindel-start no longer creates ~/.glorfindel/injectors: docker makes it as root "
               "(SEC3)", MAKE,
      "glorfindel-start: check-azure-env build-glorfindel\n"
@@ -2663,7 +2673,8 @@ MUTANTS += [
      "        os.chmod(_INJECTORS_DIR, 0o755)      # theirs to read, whatever the umask\n",
      "        pass\n"),
     ("M1236", "the injectors' heartbeat owner-only: an image of another user can't read it (SEC3, N-05)", GCLI,
-     "            _atomic_write_text(_INJECTOR_BEAT, now, mode=0o644)", "            _atomic_write_text(_INJECTOR_BEAT, now)"),
+     "            _atomic_write_text(_INJECTOR_BEAT, json.dumps(beat_body(at)), mode=0o644)",
+     "            _atomic_write_text(_INJECTOR_BEAT, json.dumps(beat_body(at)))"),
     ("M1237", "Annatar reads Glorfindel's state again: the blocks watcher back (SEC3, N-05)", ENG,
      "        # Glorfindel no longer writes, and the injectors no longer mount that state.\n"
      "        stop_event = threading.Event()\n",
@@ -3277,8 +3288,8 @@ MUTANTS += [
     ("M1323", "ssh-brute-force loses a line written before authentication ([preauth]) (SEC2)", RULES_YAML,
      r'port \d+( ssh2)?( \[preauth\])?\]?\s*$"', r'port \d+( ssh2)?\]?\s*$"'),
     ("M1324", "the investigation takes a user name holding « Accepted » for a login (SEC2)", "glorfindel/agent.py",
-     '| where SyslogMessage startswith "Accepted " and SyslogMessage has "{ip}"',
-     '| where SyslogMessage has "Accepted" and SyslogMessage has "{ip}"'),
+     '| where SyslogMessage startswith "Accepted " and SyslogMessage has {ip}',
+     '| where SyslogMessage has "Accepted" and SyslogMessage has {ip}'),
 ]
 TESTS.update({f"M{n}": "tests/unit/test_forged_logs.py" for n in range(1320, 1325)})
 
@@ -3383,6 +3394,106 @@ TESTS["M1351"] = "tests/unit/test_workflows.py -k fingerprint"
 TESTS.update({f"M{n}": "tests/unit/test_chat_escaping.py" for n in (1352, 1353, 1354)})
 
 
+# SEC5 (#276, V-35): the TUI's keys do what they say, on the cards the console allows.
+MUTANTS += [
+    ("M1266", "the TUI restores an anchored card (SEC5, V-35)", "glorfindel/tui.py",
+     '    return esc.get("action") == "restore_from_backup" and not _anchored(esc)',
+     '    return esc.get("action") == "restore_from_backup"'),
+    ("M1279", "the TUI's unblock runs a full reset (SEC5, V-35)", "glorfindel/tui.py",
+     '        return [["unblock", ip, rid, "--yes"] for ip in ips]', '        return [["reset", rid, "--yes"]]'),
+]
+TESTS.update({mid: "tests/unit/test_tui_actions.py" for mid in ("M1266", "M1279")})
+
+
+# SEC5 (#276): the injectors and their channels — a refusal never reset, the catalog's word on
+# what is destructive, the gate read again and bound to its perimeter, no development run in
+# production, the windows bounded by their blob, the pulls bounded, a token for Azure Storage
+# only, the writes per enrolled VM and the journal off the host, the TUI's keys.
+_SEC5_GUARDS = "tests/unit/test_injector_guards.py"
+_SEC5_CHANNELS = "tests/unit/test_injector_channels.py"
+MUTANTS += [
+    ("M1260", "a campaign resets a target the engine refused (SEC5, V-18)", CRUN,
+     "            if outcome is not None and outcome.refused:\n", "            if False:\n"),
+    ("M1261", "the channel's storage account open to every network again (SEC5, V-31)",
+     "infra/orodruin/main.tf", '    default_action             = "Deny"',
+     '    default_action             = "Allow"'),
+    ("M1262", "the scenario's own destructive field believed before the catalog (SEC5, V-19)", ENG,
+     '    own = scenario.raw.get("destructive")\n    destructive = said is not False or own is True\n',
+     '    own = scenario.raw.get("destructive")\n'
+     '    destructive = own if isinstance(own, bool) else said is not False\n'),
+    ("M1263", "the catalog vouches for a technique whatever script the scenario runs (SEC5, V-19)",
+     "annatar/campaign/catalog.py", "    elif scripts:\n", "    elif False:\n"),
+    ("M1264", "the campaign's destructive policy reads the manifest's ttp, not its scenario (SEC5, V-19)",
+     CRUN, "        return scenario_destructive(scenario)[0]",
+     "        return catalog_destructive(entry.ttp) is not False"),
+    ("M1265", "the watch read once per run: a watch that dies mid-run lets the next steps run (SEC5, N-03)",
+     ENG, "            lost = self._watch_lost()\n            if lost:\n                return self._lost(run_id, lost)\n"
+          "            self._execute_action(executor, step)\n",
+     "            self._execute_action(executor, step)\n"),
+    ("M1267", "annatar clean rewrites a disk without a live watch (SEC5, N-03)", "annatar/runner/initializer.py",
+     "        if not without_glorfindel:\n            no_watch = watch_gate.refusal()\n            if no_watch:\n"
+     '                raise RuntimeError(f"Refused — no live Glorfindel watch: {no_watch}")\n', ""),
+    ("M1268", "a fresh heartbeat of any perimeter is a watch of this injector's targets (SEC5, N-03)",
+     "eregion_core/watch_gate.py", '    return unbound(beat, READERS.get("own", perimeter)())', '    return ""'),
+    ("M1269", "--without-glorfindel runs in zone production (SEC5, N-04)", ENG,
+     '        if self.without_glorfindel and guard.zone == "production":', "        if False:"),
+    ("M1270", "a run --without-glorfindel absent from Orodruin's journal (SEC5, N-04)", ENG,
+     "            session.declare(WITHOUT_GLORFINDEL, watch_gate.NOT_MEASURED)\n", "            pass\n"),
+    ("M1271", "the atomics' sha256 checked in CI only, not at run time (SEC5, V-30)", ATO,
+     "    if hashlib.sha256(raw).hexdigest() != pinned:", "    if False:"),
+    ("M1272", "a window dated back before its blob was created is believed (SEC5, V-20)", XW,
+     "        if start < created - timedelta(seconds=FUTURE_SKEW_S):", "        if False:"),
+    ("M1273", "a window marks a production VM whatever it ran there (SEC5, V-20)", XW,
+     '    return window.get("kind") == "technique" and window.get("destructive") is False',
+     "    return True"),
+    ("M1274", "a blob read whole, then checked (SEC5, V-21)", XCH,
+     "    if isinstance(r, requests.Response):\n        try:", "    if False:\n        try:"),
+    ("M1275", "a listing of the channel without a bound on its names (SEC5, V-21)", XCH,
+     "            if seen >= MAX_BLOBS:", "            if False:"),
+    ("M1276", "the storage token sent to whatever URL the channel names (SEC5, N-15)", XCH,
+     "    global _credential\n    check_url(url)\n", "    global _credential\n"),
+    ("M1277", "Orodruin's journal stays on its host (SEC5, V-29)", "eregion_core/orodruin.py",
+     "    url = channel if channel is not None else xc.channel_url()",
+     '    url = ""'),
+    ("M1278", "the contract accepts a write right on the whole bench group (SEC5, V-29, #182)",
+     "eregion_core/orodruin.py",
+     ('            if scope.lower().rstrip("/") == bench.lower().rstrip("/") and wide:',
+      '    if wide and not any(m["code"] == "identity_group_wide" for m in missing):'),
+     ("            if False:", "    if False:")),
+]
+TESTS.update({mid: _SEC5_GUARDS for mid in ("M1260", "M1262", "M1263", "M1264", "M1265", "M1267",
+                                            "M1269", "M1270", "M1271")})
+TESTS["M1268"] = f"{_SEC5_GUARDS} {_SEC5_CHANNELS}"
+TESTS.update({mid: _SEC5_CHANNELS for mid in ("M1272", "M1273", "M1274", "M1275", "M1276", "M1277")})
+TESTS["M1278"] = f"{_SEC5_CHANNELS} tests/unit/test_orodruin.py"
+TESTS["M1261"] = "tests/unit/test_orodruin.py"
+# SEC5, after the 5.5 review: a window rewritten after its pull, the chaos rights asked without
+# an experiment, an engine that raised then reset, the channel without a retention.
+MUTANTS += [
+    ("M1450", "a campaign resets the target of an engine that raised (SEC5, V-18)", CRUN,
+     '            if (entry.error or "").startswith(ENGINE_RAISED):\n', "            if False:\n"),
+    ("M1451", "a window pulled again replaces its copy whatever changed (SEC5, V-20)", XCH,
+     "            why = rewrite_refusal(old, new)\n", '            why = ""\n'),
+    ("M1452", "the chaos rights asked with no experiment in the group: Orodruin passive for all (SEC5, V-29)",
+     "eregion_core/orodruin.py",
+     "        if not scopes and (experiments or action not in CHAOS_ACTIONS):", "        if not scopes:"),
+    ("M1453", "the channel's blobs kept for ever: the listing's bound cuts the newest (SEC5, V-21)",
+     "infra/orodruin/main.tf",
+     "        delete_after_days_since_modification_greater_than = var.channel_retention_days",
+     "        delete_after_days_since_modification_greater_than = 36500"),
+    ("M1454", "a hosted watch declared without its subnet: the firewall cuts it off silently (SEC5, V-31)",
+     "infra/orodruin/main.tf",
+     '      condition     = var.watch_principal_id == "" || var.watch_subnet_id != ""',
+     "      condition     = true"),
+    ("M1455", "a named Celebrimbor's VMs never get Orodruin's rights: the tag fixed to celebrimbor (SEC5, V-29)",
+     "infra/orodruin/main.tf", 'trimprefix(var.bench_resource_group, "rg-")', '"celebrimbor"'),
+    ("M1456", "a passive Orodruin is not a refusal: the campaign resets the target (SEC5, V-18)", ENG,
+     'error=f"passive: {verdict.reasons()}", refused=True)', 'error=f"passive: {verdict.reasons()}")'),
+]
+TESTS.update({"M1450": _SEC5_GUARDS, "M1456": _SEC5_GUARDS, "M1451": _SEC5_CHANNELS,
+              "M1452": f"{_SEC5_CHANNELS} tests/unit/test_orodruin.py"})
+TESTS.update({mid: "tests/unit/test_orodruin.py" for mid in ("M1453", "M1454", "M1455")})
+
 # SEC4a (#275): the decision facing a model, a memory or a line it did not expect — the
 # model's answer read for its type, a snapshot alone leaves a card, real cycles only for a
 # real signal and no cycle overwriting another, the row of an attack_started naming its VM,
@@ -3418,7 +3529,7 @@ MUTANTS += [
     ("M1330", "an attack_started's poll takes a row naming another VM (SEC4a)", AGT,
      "match_row=lambda row: names_vm(row) is not False)", "match_row=None)"),
     ("M1331", "the runs/ channel admits an attack_started of any moment (SEC4a)", SIG,
-     '        why = attack_time_refusal(clean["raw_signal"]["attack_time"])\n', '        why = ""\n'),
+     '        why = attack_time_refusal(clean["raw_signal"]["attack_time"], now=now)\n', '        why = ""\n'),
     ("M1332", "resolve_attack_started searches from any moment (SEC4a)", AGT,
      '        refused = attack_time_refusal(raw.get("attack_time"))\n', '        refused = ""\n'),
     ("M1333", "an attack_time in the future admitted (SEC4a)", SIG,
@@ -3438,12 +3549,11 @@ MUTANTS += [
      '        s, ip_owners=getattr(connector, "private_ip_owners", None)))',
      "        s, ip_owners=None))"),
     ("M1338", "the floor ignores an isolation in place: « not isolated » on an isolated VM (SEC4a)", AGT,
-     '        if iso is not None and not iso.get("partial"):\n            return True, ""\n', ""),
+     '        if iso is not None and not incomplete:\n            return True, ""\n', ""),
     ("M1339", "the floor ignores the source already blocked (SEC4a)", AGT,
      '    if ip and ip in blocked:\n        return True, ""\n', ""),
     ("M1360", "a partial isolation read as contained by the floor (SEC4a)", AGT,
-     '        if iso is not None and not iso.get("partial"):\n',
-     "        if iso is not None:\n"),
+     '    if iso.get("partial"):\n        return "isolation partielle"\n', ""),
     ("M1361", "a confidence above 1 read as sent (SEC4a)", AGT,
      "        if raw_conf is not None and not 0.0 <= confidence <= 1.0:\n",
      "        if raw_conf is not None and not 0.0 <= confidence:\n"),
@@ -3528,6 +3638,268 @@ MUTANTS += [
      "        _gone(issue, done)\n"),
 ]
 TESTS.update({f"M{n}": "tests/unit/test_pip_audit_issues.py" for n in range(1490, 1498)})
+
+# CI1 (#267): the images built and proven in CI — scripts/image_check.py and its workflow,
+# measured by tests/unit/test_image_check.py (a fake docker; the in-image code run here). M1140–M1149.
+IMC = "scripts/image_check.py"
+IMW = ".github/workflows/images.yml"
+MUTANTS += [
+    ("M1140", "the checks run with the network: a check reaching Azure or a registry goes unseen (CI1)", IMC,
+     '    argv = ["docker", "run", "--rm", "--network", "none"]\n', '    argv = ["docker", "run", "--rm"]\n'),
+    ("M1141", "a --version other than pyproject's passes: a broken entry point or metadata unseen (CI1)", IMC,
+     "        if said != want:\n", "        if False:\n"),
+    ("M1142", "the config loaded without being opened: an absent example passes as an empty config (CI1)", IMC,
+     '               f"open({CONFIG_IN_IMAGE!r}).close(); load({CONFIG_IN_IMAGE!r})")\n',
+     '               f"load({CONFIG_IN_IMAGE!r})")\n'),
+    ("M1143", "the first failure stops the checks: the log hides what else is wrong (CI1)", IMC,
+     "            ok = False\n        else:\n", "            return False\n        else:\n"),
+    ("M1144", "the example config mounted read-write in the image (CI1)", IMC,
+     '        argv += ["-v", f"{host}:{inside}:ro"]\n', '        argv += ["-v", f"{host}:{inside}"]\n'),
+    ("M1145", "the absence check always passes: Glorfindel's code in the injectors' image unseen (D1, CI1)", IMC,
+     '          "sys.exit(1 if found else 0)\\n")\n', '          "sys.exit(0)\\n")\n'),
+    ("M1146", "the image pushed (CI1)", IMW, "          push: false\n", "          push: true\n"),
+    ("M1147", "a pull request changing the lock builds no image (CI1)", IMC,
+     '"scripts/**", "requirements/**",\n', '"scripts/**",\n'),
+    ("M1148", "the console's import left out: the CI passes an image the CD's preflight refuses (CI1)", IMC,
+     'GLORFINDEL_IMPORTS = "glorfindel.cli, glorfindel.bot, eregion_console.api"\n',
+     'GLORFINDEL_IMPORTS = "glorfindel.cli, glorfindel.bot"\n'),
+    ("M1149", "a failed check exits 0: the job green on a broken image (CI1)", IMC,
+     "        return 0 if check_image(args.name, image, runner) else 1\n",
+     "        check_image(args.name, image, runner)\n        return 0\n"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_image_check.py" for n in range(1140, 1150)})
+# CI1 after its review (29/10): the checks frozen, the job unfiltered (it decides itself), the
+# cache written by main only, #ci told of a red run. M1480–M1489.
+MUTANTS += [
+    ("M1480", "the injectors' absence check removed: Glorfindel's code in their image unseen (D1, CI1)", IMC,
+     '        Check("ni Glorfindel, ni la console, ni leurs dépendances (D1)",\n'
+     '              ("python", "-c", ABSENT, *NOT_IN_INJECTORS)),\n', ""),
+    ("M1481", "the injectors' image no longer checked for root (CI1)", IMC,
+     '              ("python", "-c", ABSENT, *NOT_IN_INJECTORS)),\n        Check("pas root", ("python", "-c", NOT_ROOT)),\n',
+     '              ("python", "-c", ABSENT, *NOT_IN_INJECTORS)),\n'),
+    ("M1482", "Annatar and Gothmog no longer imported in their image (CI1)", IMC,
+     '        Check("Annatar et Gothmog importent", ("python", "-c", f"import {INJECTOR_IMPORTS}")),\n', ""),
+    ("M1483", "an unreadable diff skips the build: the job green on what it never built (CI1)", IMC,
+     '        return True, "le diff de la PR est illisible : construit"\n',
+     '        return False, "le diff de la PR est illisible : construit"\n'),
+    ("M1484", "a push to main skips by the diff: main's commits and the release's unchecked (CI1)", IMC,
+     '    if event != "pull_request":\n        return True, f"{event', '    if event == "push_never":\n        return True, f"{event'),
+    ("M1485", "a `dir/**` takes a sibling's name: glorfindelx/ builds, never what it means (CI1)", IMC,
+     "            if path == p[:-3] or path.startswith(p[:-2]):\n",
+     "            if path.startswith(p[:-3]):\n"),
+    ("M1486", "Images left out of notify.yml: its red run unseen in #ci (CI1)", ".github/workflows/notify.yml",
+     "    workflows: [CI, Components, Images, ", "    workflows: [CI, Components, "),
+    ("M1487", "the cache written by pull requests too: one can evict main's (CI1)", IMW,
+     "          cache-to: ${{ github.event_name == 'push' && format('type=gha,mode=max,scope={0}', matrix.image) || '' }}\n",
+     "          cache-to: type=gha,mode=max,scope=${{ matrix.image }}\n"),
+    ("M1488", "the check step no longer waits on the decision: a docs pull request red, its image never built (CI1)", IMW,
+     "      - name: In the image (nothing started, no network, no secret)\n        if: steps.touched.outputs.build == 'true'\n",
+     "      - name: In the image (nothing started, no network, no secret)\n"),
+    ("M1489", "the diff read with renames: a file moved out of an image is not seen leaving it (CI1)", IMC,
+     '["git", "diff", "--no-renames", "--name-only", "-z", "HEAD^1", "HEAD"]',
+     '["git", "diff", "--name-only", "-z", "HEAD^1", "HEAD"]'),
+]
+TESTS.update({f"M{n}": "tests/unit/test_image_check.py" for n in range(1480, 1490)})
+TESTS["M1486"] = "tests/unit/test_workflows.py"
+
+
+# SEC4c (#275, M1370–M1389): the entries and the calls — the restore's moment, the values
+# in a query, the timeouts, the short names, the floor, the T1136 rule, the private IPs.
+KQL = "glorfindel/kql.py"
+AUD = "glorfindel/audit.py"
+MUTANTS += [
+    ("M1370", "the restore takes an attack_started of any VM (SEC4c)", SIG,
+     '            if adm.signal is None or adm.signal["resource_id"].rstrip("/").lower() != want:\n',
+     "            if adm.signal is None:\n"),
+    ("M1371", "the restore takes the LAST attack line: a later one moves the point past the attack (SEC4c)", SIG,
+     "            if best is None or float(at) < best[0]:\n", "            if best is None or float(at) > best[0]:\n"),
+    ("M1372", "the moment bounded around now only: a restore after 2 h never finds it (SEC4c)", SIG,
+     "            adm = admit(data, now=ref)\n", "            adm = admit(data)\n"),
+    ("M1373", "no moment known: the restore goes on, the newest point taken (SEC4c)", GCLI,
+     "        raise click.ClickException(why_before)\n", "        pass\n"),
+    ("M1374", "the provider takes the newest point without a moment (SEC4c)", RST,
+     "        if not before_attack_time:\n            raise RuntimeError(\n",
+     "        if False:\n            raise RuntimeError(\n"),
+    ("M1375", "a point taken after the attack is restored (SEC4c)", RST,
+     "            if _rp_time(rp) is not None and _rp_time(rp) < attack_dt\n",
+     "            if _rp_time(rp) is not None\n"),
+    ("M1376", "a quote in a value ends its KQL literal (SEC4c)", KQL,
+     "_QUOTE: _BACKSLASH + _QUOTE}", "_QUOTE: _QUOTE}"),
+    ("M1377", "a backslash in a value escapes the literal's closing quote (SEC4c)", KQL,
+     "{_BACKSLASH: _BACKSLASH * 2,", "{_BACKSLASH: _BACKSLASH,"),
+    ("M1378", "an address with a zone (anything after '%') taken as an address (SEC4c)", KQL,
+     '    if not text or "%" in text:\n', "    if not text:\n"),
+    ("M1379", "a query run with a value refused (SEC4c)", AGT,
+     "        if any(v is None for v in values.values()):\n", "        if False:\n"),
+    ("M1380", "the source address of a detection enters the query unchecked (SEC4c)", AGT,
+     "            ip=value(kql.ip, source_ip))\n", "            ip=kql.literal(str(source_ip)))\n"),
+    ("M1381", "the audit takes any text for a resource id (SEC4c)", AUD,
+     "        rid = kql.resource_id(resource_id)\n", "        rid = resource_id\n"),
+    ("M1382", "a REST call to the vault without a timeout: the command hangs (SEC4c)", SDK,
+     "        return requests.post(url, timeout=REST_TIMEOUT_S, **kw)\n", "        return requests.post(url, **kw)\n"),
+    ("M1383", "a short name resolved to the first VM of the local state (SEC4c)", GCLI,
+     '    for entry in (*active_isolations(), *active_blocks()):\n        add(entry.get("resource_id"))\n',
+     '    for entry in (*active_isolations(), *active_blocks()):\n        add(entry.get("resource_id"))\n'
+     "        if found:\n            return next(iter(found.values()))\n"),
+    ("M1384", "one VM whose id differs in case taken for two (SEC4c)", GCLI,
+     "            found.setdefault(key, rid)\n", "            found.setdefault(rid, rid)\n"),
+    ("M1385", "an isolation being lifted read as contained by the floor (SEC4c)", AGT,
+     "    if iso.get(\"releasing_at\"):\n", "    if False:\n"),
+    ("M1386", "an isolation whose lifting failed read as contained by the floor (SEC4c)", AGT,
+     "    if iso.get(\"release_failed\"):\n", "    if False:\n"),
+    ("M1387", "the T1136 rule reads « new user » from any writer (SEC4c)", RUL,
+     '      | where ProcessName == "useradd"\n', ""),
+    ("M1388", "the watch lists the private IPs again for each attack_started line (SEC4c)", GCLI,
+     "                    resolved = resolve_attack_started(data, ip_owners=_ip_owners)\n",
+     "                    resolved = resolve_attack_started(\n"
+     "                        data, ip_owners=None if dry_run else AzureConnector(dry_run=False).private_ip_owners)\n"),
+    ("M1389", "the private IP map read again at each call (SEC4c)", DRU,
+     "            if at and time.time() - at < _IP_OWNERS_TTL_S:\n", "            if False:\n"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_entries_calls.py" for n in range(1370, 1390)})
+
+# SEC4c, the correction (M1396–M1409): the restore asks its moment — console, bot, TUI —, a line
+# dated after the isolation, the moment around an isolation hours old, a file read from its end.
+RPL = "glorfindel/restore_plan.py"
+BOT = "glorfindel/bot.py"
+TUI = "glorfindel/tui.py"
+MUTANTS += [
+    ("M1396", "an attack line dated after the isolation taken for its moment (SEC4c)", SIG,
+     "            if isolated_at is not None and float(at) > isolated_at:\n                continue\n", ""),
+    ("M1397", "the moment bounded around now: a VM isolated hours ago never finds it (SEC4c)", RPL,
+     "    found = attack_moment(resource_id, runs_dir=runs_dir, isolated_at=isolated_at)\n",
+     "    found = attack_moment(resource_id, runs_dir=runs_dir)\n"),
+    ("M1398", "each runs/ file read whole, whatever its size (SEC4c)", SIG,
+     "            lines = _tail_lines(path)\n", '            lines = path.read_text(errors="replace").splitlines()\n'),
+    ("M1399", "the console restores without a moment (SEC4c)", CON,
+     '        return {"error": f"The moment to restore before is required: {exc}"}\n', '        before = ""\n'),
+    ("M1400", "the console runs the restore without --before (SEC4c)", CON,
+     "                [_bin(), *restore_plan.restore_args(resource_id, before)],\n",
+     '                [_bin(), "restore", resource_id, "--yes"],\n'),
+    ("M1401", "the console never reads the restore's return code: a refusal in silence (SEC4c)", CON,
+     "        error = (None if proc.returncode == 0 else\n", "        error = (None if True else\n"),
+    ("M1402", "the restore's field ignores the exercise's moment (SEC4c)", RPL,
+     '    if before:\n        return {"before": before, "source": "exercise", "why": why}\n', ""),
+    ("M1403", "the restore's field filled with the card's last detection, not its first (SEC4c)", RPL,
+     '    first = str((esc or {}).get("first_seen") or (esc or {}).get("timestamp") or "")\n',
+     '    first = str((esc or {}).get("timestamp") or "")\n'),
+    ("M1404", "the points shown include points taken after the moment (SEC4c)", RPL,
+     '              if datetime.fromisoformat(p["time"]) < limit]\n', "              if p]\n"),
+    ("M1405", "the bot acknowledges a card whose command was refused (SEC4c)", BOT,
+     "        if code != 0:\n", "        if False:\n"),
+    ("M1406", "the bot runs the restore without --before (SEC4c)", BOT,
+     '        args = restore_plan.restore_args(self.esc["resource_id"], self.before)\n',
+     '        args = ["restore", self.esc["resource_id"], "--yes"]\n'),
+    ("M1407", "the bot's restore form takes anyone's moment (SEC4c)", BOT,
+     '        return await _allowed(interaction, self.esc["id"])\n\n    async def on_submit',
+     "        return True\n\n    async def on_submit"),
+    ("M1408", "the TUI runs the restore without --before (SEC4c)", TUI,
+     "        return [restore_plan.restore_args(rid, before)] if _can_restore(esc) and before else []\n",
+     '        return [["restore", rid, "--yes"]] if _can_restore(esc) else []\n'),
+    ("M1409", "the TUI says a refused restore started (SEC4c)", TUI,
+     "            ok = proc.returncode == 0\n", "            ok = True\n"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_entries_calls.py tests/unit/test_restore_moment.py tests/unit/test_console.py"
+              for n in range(1396, 1410)})
+
+# SEC4c, the second correction (M1460–M1469): one restore at a time per VM, a moment that is
+# one, the proposal never after the isolation, the restore's window its own, the failures kept.
+JOBS = "glorfindel/jobs.py"
+JSP = "eregion_console/static/glorfindel.js"
+MUTANTS += [
+    ("M1460", "a restore of a VM whose restore job is InProgress goes on (SEC4c)", JOBS,
+     '    if job and job.get("type") == "restore" and job.get("status") == "InProgress":\n', "    if False:\n"),
+    ("M1461", "two restores of one VM start together: no claim (SEC4c)", JOBS,
+     "            busy = restore_in_progress(self.vm_name)\n            if busy:\n                raise RestoreBusy(busy)\n", ""),
+    ("M1462", "the bot runs a second confirmation of one card (SEC4c)", BOT,
+     "        if esc_id in _RESTORING:\n", "        if False:\n"),
+    ("M1463", "a moment in the future taken: the newest point restored (SEC4c)", RPL,
+     "    if epoch > now + FUTURE_MARGIN_S:\n", "    if False:\n"),
+    ("M1464", "a year at the calendar's edge raises past every face: the TUI falls (SEC4c)", RPL,
+     '    except (ValueError, OverflowError, OSError):\n        raise ValueError(',
+     "    except ValueError:\n        raise ValueError("),
+    ("M1465", "the proposed moment falls after the isolation (SEC4c)", RPL,
+     "    if before and isolated_at is not None and isolated_at < datetime.fromisoformat(before).timestamp():\n",
+     "    if False:\n"),
+    ("M1466", "a point taken during the incident shown as any other (SEC4c)", RPL,
+     '        p["during_incident"] = (isolated_at is not None\n', '        p["during_incident"] = (False\n'),
+    ("M1467", "the restore's answer fills a window opened meanwhile (SEC4c)", JSP,
+     "  if (!_stillMine()) return;\n", ""),
+    ("M1468", "the restore failures kept without a bound (SEC4c)", CON,
+     '                      key=lambda kv: str(kv[1].get("at") or ""))[-_RESTORE_FAILURES_KEPT:]\n',
+     '                      key=lambda kv: str(kv[1].get("at") or ""))\n'),
+    ("M1469", "the failures of resolved cards kept forever (SEC4c)", CON,
+     "        kept = sorted(((k, v) for k, v in data.items() if k in pending),\n",
+     "        kept = sorted(((k, v) for k, v in data.items()),\n"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_entries_calls.py tests/unit/test_restore_moment.py"
+              for n in range(1460, 1470)})
+
+# REL1 (#269): a release in two commands — the version's pull request (`make release`), then the
+# draft (`make release-draft`), seen on #agents and cleared when published. Measured by
+# tests/unit/test_release.py on a throwaway repository, a fake gh, the fake Discord. M1160–M1169.
+RELS = "scripts/release.py"
+MUTANTS += [
+    ("M1160", "a modified tree cut and committed with the release (REL1)", RELS,
+     '    if git(root, "status", "--porcelain"):\n', "    if False:\n"),
+    ("M1161", "the current version released again: equal is not greater (REL1)", RELS,
+     "new <= semver(current)", "new < semver(current)"),
+    ("M1162", "an empty [Unreleased] released: a version with nothing in it (REL1)", RELS,
+     "    if not has_content(unreleased(changelog)):\n        refused.append(", "    if False:\n        refused.append("),
+    ("M1163", "a release cut from a HEAD that is not origin/main (REL1)", RELS,
+     "    if head != main:\n", "    if False:\n"),
+    ("M1164", "a draft created for a tag that exists already (REL1)", RELS,
+     '        refused.append(f"le tag {tag} existe déjà")\n    if shutil.which("gh") is None:\n',
+     '    if shutil.which("gh") is None:\n'),
+    ("M1165", "the cut takes [Unreleased]'s place: no empty [Unreleased] above the version (REL1)", RELS,
+     '    return head + UNRELEASED + "\\n" + f\'## [{version}]', "    return head + f'## [{version}]"),
+    ("M1166", "the release created without --draft: published, H0 deployed (REL1)", RELS,
+     '"release", "create", tag, "--draft", "--target"', '"release", "create", tag, "--target"'),
+    ("M1167", "the draft targets main by name, not origin/main's full sha (REL1)", RELS,
+     '"--target", sha, "--title"', '"--target", "main", "--title"'),
+    ("M1168", "DRY_RUN=1 writes, commits and pushes (REL1)", RELS,
+     '    if dry_run:\n        say("")\n', '    if False:\n        say("")\n'),
+    ("M1169", "a published release leaves its draft's ping and line on #agents (REL1)", NDS,
+     "        release_published(event, cfg)\n", "        pass\n"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_release.py" for n in range(1160, 1170)})
+# REL1 after its 5.5 review: M1430–M1436.
+ADS = "scripts/agents_discord.py"
+MUTANTS += [
+    ("M1430", "a push or a pull request that fails after the branch exists said « nothing written » (REL1)", RELS,
+     "        raise Halfway(_halfway(step, branch, str(e))) from None\n", "        raise\n"),
+    ("M1431", "an [Unreleased] of headings only released: a version with nothing in it (REL1)", RELS,
+     '    return any(line.strip() and not line.lstrip().startswith("#") for line in text.splitlines())\n',
+     "    return bool(text.strip())\n"),
+    ("M1432", "ids from a release's notes delete any message of #agents' webhook (REL1)", NDS,
+     '    if ping and _titled(cfg, ping, "🙋 " + release_waiting(tag)):\n', "    if ping:\n"),
+    ("M1433", "ids from a release's notes rewrite any message as if it were the board (REL1)", NDS,
+     "    msg = _titled(cfg, board, BOARD_TITLE) if board else None\n",
+     '    msg = fetch("GET", f"{cfg.agents}/messages/{board}", "webhook #agents") if board else None\n'),
+    ("M1434", "the line notify.yml took off put back by the next refresh (REL1)", ADS,
+     "    if not items or not (due or (probe and any([_ping_gone(cfg, w) for w in items]))):\n",
+     "    if not items or not due:\n"),
+    ("M1435", "a draft made again keeps the stale link and ping (REL1)", ADS,
+     '        if old.get("url", "") == item.get("url", ""):\n', "        if True:\n"),
+    ("M1436", "#agents' webhook given to notify.yml on every event (REL1)", ".github/workflows/notify.yml",
+     "${{ github.event_name == 'release' && secrets.EREGION_DISCORD_WEBHOOK_AGENTS || '' }}",
+     "${{ secrets.EREGION_DISCORD_WEBHOOK_AGENTS }}"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_release.py" for n in range(1430, 1437)})
+# REL1 after its second 5.5 review: M1437–M1439, M1470.
+MUTANTS += [
+    ("M1437", "the way back of a failure in route: git switch - fails from a detached HEAD, staged files kept (REL1)",
+     RELS, '    back = f"git reset -q --hard && git checkout -q - && git branch -D {branch}"\n',
+     '    back = f"git checkout -- . && git switch - && git branch -D {branch}"\n'),
+    ("M1438", "the way back after a pushed branch leaves it on the remote (REL1)", RELS,
+     '        back += f" && git push origin --delete {branch}"\n', "        pass\n"),
+    ("M1439", "a draft's ping looked for in Discord at every refresh (REL1)", ADS,
+     '    probe = bool(items) and not due and now - state.get("pings_probed", 0) >= PING_PROBE_S\n',
+     "    probe = bool(items) and not due\n"),
+    ("M1470", "run() starts whatever it is given: its git-or-gh check gone (REL1)", RELS,
+     '    if not cmd or cmd[0] not in ("git", "gh"):\n        raise ValueError("git or gh only")\n', ""),
+]
+TESTS.update({mid: "tests/unit/test_release.py" for mid in ("M1437", "M1438", "M1439", "M1470")})
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

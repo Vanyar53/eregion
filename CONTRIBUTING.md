@@ -213,7 +213,7 @@ Three rules the tests hold:
 - **A workflow that holds a secret** (or runs on `pull_request_target` / `workflow_run`) **pins every action by commit** (`uses: owner/action@<40 hex>   # vX.Y.Z`); no `run:` takes `${{ inputs.* }}`, `${{ github.event.* }}` or `${{ github.head_ref }}` in its text — pass them through `env:` (`tests/unit/test_workflows.py`).
 - **Text from outside reaching a chat** (the model's words, names from Azure, a rule's name) goes through `glorfindel/chat_text.py` (`tests/unit/test_chat_escaping.py`); the console has its own rule (`scripts/console_escaping.py`).
 - **Install from the repository** (`make install`, or `pip install -e '.[console]'`), never from a package index by name (`tests/unit/test_readme.py`).
-- **The release pull request** bumps `pyproject.toml`, the `CHANGELOG.md` and the README's « **Status — vX.Y.Z.** » together (`tests/unit/test_readme.py`); `docs/operations.md`, « Packaging et version ».
+- **The release pull request** bumps `pyproject.toml`, the `CHANGELOG.md` and the README's « **Status — vX.Y.Z.** » together (`tests/unit/test_readme.py`). `make release` opens it, and `make release-draft` creates the draft after its merge. Neither publishes (`tests/unit/test_release.py`); `docs/operations.md`, « Packaging et version ».
 
 ## Pull requests
 

@@ -135,11 +135,14 @@ def test_the_publication_asks_nothing_more_of_orodruins_contract(tmp_path):
     bench = f"/subscriptions/{sub}/resourceGroups/rg-bench"
     container_scope = (f"/subscriptions/{sub}/resourceGroups/rg-orodruin/providers/Microsoft.Storage"
                        "/storageAccounts/exampleaccount/blobServices/default/containers/exercises")
+    # SEC5 (V-29): the writes on an enrolled VM and an experiment, the reads on the group.
+    enrolled = (f"{bench}/providers/Microsoft.Compute/virtualMachines/vm-1",
+                f"{bench}/providers/Microsoft.Chaos/experiments/exp-1")
     assignments = [{"properties": {"scope": s, "roleDefinitionId": "/r/blob-data-contributor"}}
-                   for s in (bench, container_scope)]
+                   for s in (*enrolled, container_scope)]
     declared = orodruin.channel_scope({orodruin.CHANNEL_SCOPE_ENV: container_scope})
     assert orodruin.assess_identity(assignments, lambda _: ["*"],
-                                    [{"actions": list(orodruin.REQUIRED_ACTIONS)}], bench,
+                                    [{"actions": list(orodruin.READ_ACTIONS)}], bench,
                                     sees_subscription=True, channel=declared) == []
 
 
@@ -242,7 +245,9 @@ def test_the_windows_pull_takes_the_windows_only_page_after_page(tmp_path):
     windows = tmp_path / "h0" / "runs" / "exercises"
     assert channel.pull(windows, channel=URL, credential=CRED, get=c.get) == 3
     assert sorted(os.listdir(windows)) == ["R1.json", "R2.json", "R3.json"]
-    assert len(c.listings) == 3 and [bool(p.get("marker")) for p in c.listings] == [False, True, True]
+    # The root only (SEC5, V-21): the campaign's blobs are not even listed by this pull.
+    assert len(c.listings) == 2 and [bool(p.get("marker")) for p in c.listings] == [False, True]
+    assert all(p.get("delimiter") == "/" for p in c.listings)
     assert not [g for g in c.gets if g.startswith("campaigns/")]
 
 
@@ -258,7 +263,10 @@ def test_a_published_campaign_never_takes_a_windows_place(tmp_path):
     windows = tmp_path / "h0" / "runs" / "exercises"
     channel.pull(windows, channel=URL, credential=CRED, get=c.get)
     assert sorted(os.listdir(windows)) == ["R1.json"]
-    assert exercise.load_windows(windows) == [window]
+    (pulled,) = exercise.load_windows(windows)
+    # With when its blob was created, the listing's word (SEC5, V-20).
+    assert pulled.pop(channel.CREATED) == c.created["R1.json"].isoformat()
+    assert pulled == window
 
 
 # ── The end of `campaign run` ────────────────────────────────────────────────────

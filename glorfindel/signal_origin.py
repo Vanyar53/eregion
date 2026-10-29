@@ -102,8 +102,9 @@ class Admission:
         self.signal, self.what, self.refused, self.dropped = signal, what, refused, list(dropped)
 
 
-def admit(data: dict) -> Admission:
-    """The line as the watch may take it from runs/, or why it is refused. Never raises."""
+def admit(data: dict, now: float | None = None) -> Admission:
+    """The line as the watch may take it from runs/, or why it is refused. Never raises.
+    `now`: the moment an attack_time is bounded around (default: the clock)."""
     event = str((data or {}).get("event") or "")
     if event not in CHANNEL_EVENTS:
         why = ("n'est accepté que de `glorfindel restore`, jamais du canal runs/"
@@ -124,7 +125,7 @@ def admit(data: dict) -> Admission:
     if not isinstance(clean["resource_id"], str):
         return Admission(None, refused="resource_id n'est pas une chaîne")
     if event == "attack_started" and "attack_time" in clean["raw_signal"]:
-        why = attack_time_refusal(clean["raw_signal"]["attack_time"])
+        why = attack_time_refusal(clean["raw_signal"]["attack_time"], now=now)
         if why:
             return Admission(None, refused=why)
     return Admission(clean, CHANNEL_EVENTS[event], dropped=dropped)
@@ -191,3 +192,71 @@ def write_recovery_signal(signal: dict) -> Path:
     out = RECOVERY_SIGNALS_DIR / f"{signal['context']['run_id']}_signals.jsonl"
     _atomic_write_text(out, json.dumps(signal) + "\n")
     return out
+
+
+# What attack_moment reads of each runs/*_signals.jsonl: its last MiB. An injector's file
+# holds one run (a few lines); a file grown past that — written by anyone — is read from
+# its end, never whole.
+MOMENT_TAIL_BYTES = 1 << 20
+
+
+def _tail_lines(path: Path, limit: int | None = None) -> list[str]:
+    """The lines of the last `limit` bytes of `path` (default MOMENT_TAIL_BYTES; a line cut
+    at the start dropped)."""
+    limit = MOMENT_TAIL_BYTES if limit is None else limit
+    with open(path, "rb") as f:
+        f.seek(0, 2)
+        size = f.tell()
+        f.seek(max(0, size - limit))
+        data = f.read(limit)
+    lines = data.decode("utf-8", errors="replace").splitlines()
+    return lines[1:] if size > limit else lines
+
+
+def attack_moment(resource_id: str, runs_dir="runs", isolated_at: float | None = None):
+    """When the attack on `resource_id` began, as the runs/ channel admits it (SEC4c):
+    `(epoch, file name)`, or None when nothing says so.
+
+    Only an attack_started line `admit` takes, naming THIS VM (ids compared without case),
+    whose `attack_time` lies within the bounds of SEC4a around the moment the VM was
+    isolated (`isolated_at`), else around now. An isolated VM's attack came before its
+    isolation: a line dated after it — the 5 min SEC4a allows ahead included — is never
+    taken. Of the lines left, the earliest: a line written later, by any writer of runs/,
+    never moves the moment past the first one, so never toward a point taken after the
+    attack — an earlier exercise's line can take it further back, the safe way. Each file
+    is read from its end (MOMENT_TAIL_BYTES). Never raises."""
+    import json
+    import time
+
+    want = str(resource_id or "").rstrip("/").lower()
+    if not want:
+        return None
+    ref = time.time() if isolated_at is None else isolated_at
+    best = None
+    try:
+        files = sorted(Path(runs_dir).glob("*_signals.jsonl"))
+    except OSError:
+        return None
+    for path in files:
+        try:
+            lines = _tail_lines(path)
+        except OSError:
+            continue
+        for line in lines:
+            try:
+                data = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(data, dict) or data.get("event") != "attack_started":
+                continue
+            adm = admit(data, now=ref)
+            if adm.signal is None or adm.signal["resource_id"].rstrip("/").lower() != want:
+                continue
+            at = adm.signal["raw_signal"].get("attack_time")
+            if at is None:
+                continue
+            if isolated_at is not None and float(at) > isolated_at:
+                continue
+            if best is None or float(at) < best[0]:
+                best = (float(at), path.name)
+    return best

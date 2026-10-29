@@ -122,6 +122,27 @@ def test_pull_downloads_again_only_what_changed(tmp_path):
     assert json.loads(local.read_text())["end"] == closed["end"]
 
 
+@pytest.mark.parametrize("copy", ["{not json", "[]", "null"])
+def test_a_copy_that_cannot_be_read_here_is_never_replaced(tmp_path, copy):
+    """SEC7 (review of SEC5): a window pulled before whose copy no longer reads (corrupt, not a
+    window) gave no old value to compare: any rewrite passed, in the 2 h of MAX_DURATION_S. It
+    is refused now, said once, the copy kept."""
+    local = tmp_path / "r1.json"
+    local.write_text(copy)
+    os.utime(local, (1_000_000_000, 1_760_000_000))
+    pushed = {"run_id": "r1", "start": "2026-10-19T12:57:49+00:00", "end": None, "targets": [VM]}
+    get, _ = _getter(_listing(("r1.json", "Mon, 19 Oct 2026 12:58:30 GMT")),
+                     {"r1.json": json.dumps(pushed).encode()})
+    said = []
+    assert channel.pull(tmp_path, channel=URL, credential=CRED, get=get, say=said.append) == 0
+    assert local.read_text() == copy
+    assert said and "cannot be read here" in said[0]
+    # A copy deleted here comes again as new — the limit left, bounded by its blob's creation.
+    local.unlink()
+    channel._refused_rewrites.clear()
+    assert channel.pull(tmp_path, channel=URL, credential=CRED, get=get) == 1
+
+
 def test_the_watch_pulls_before_it_labels(monkeypatch):
     """M70: a watch on another host labels an exercise only once the channel's windows
     are in its directory."""

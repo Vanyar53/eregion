@@ -2520,14 +2520,18 @@ TESTS.update({f"M{n}": "tests/unit/test_reassert.py" for n in (1022, 1024, 1025)
 MUTANTS += [
     ("M1100", "the unblock behind the quarantine follows the state's 'none' over a tag naming X: "
               "`not_found`, the IP still blocked on X (ISU)", UNB,
-     "                    elif original is None:\n", "                    elif False:\n"),
+     "            return self._original_from_tags(q, nic_id) if original is _UNKNOWN else self._tag_over_none(q, nic_id)\n",
+     "            return self._original_from_tags(q, nic_id) if original is _UNKNOWN else None\n"),
     ("M1101", "a tag that can't be read behind the state's 'none' reads as 'none' at the unblock: "
               "`not_found` on a guess (ISU)", UNB,
-     '                        original = self._tag_over_none(t0["quarantine"], t0["nic_id"])\n',
-     "                        try:\n"
-     '                            original = self._tag_over_none(t0["quarantine"], t0["nic_id"])\n'
-     "                        except Exception:\n"
-     "                            original = None\n"),
+     # Since U3F the unblock reads it in _original_away.
+     "            return self._original_from_tags(q, nic_id) if original is _UNKNOWN else self._tag_over_none(q, nic_id)\n",
+     "            if original is _UNKNOWN:\n"
+     "                return self._original_from_tags(q, nic_id)\n"
+     "            try:\n"
+     "                return self._tag_over_none(q, nic_id)\n"
+     "            except Exception:\n"
+     "                return None\n"),
     ("M1102", "an original gone says only that it wasn't found: no way out (ISU)", REL,
      "        if not original:\n            return exc\n", "        return exc\n"),
     ("M1103", "the tag set to 'none' offered while the state names the original: a way out that "

@@ -325,7 +325,7 @@ d'exercice non marqués (B2), qui n'ont rien à faire dans une observation.
    - un digest différent de celui vu la première fois pour cette release (`state.json`, `digests`, que `retry` ne touche pas) est refusé : une image publiée ne se remplace pas ;
    - les fichiers de la release (son compose, pour le préflight) dans un worktree à part (`~/.eregion-cd/build`). L'image qui tourne et le checkout de `~/eregion` ne bougent pas.
 
-   Une image absente, privée, non signée, signée par un autre workflow, dépôt, branche ou pour un autre commit, sans provenance, ou dont la provenance ou les étiquettes disent autre chose : **refusée**, dite dans `#deploy` avec ta mention (les mots de cosign restent dans le journal), et **jamais construite à la place**. Un registre qui ne répond pas (réseau, `docker pull` en échec) n'est pas un refus : le CD le dit une fois, en bleu, et repasse.
+   Une image absente, privée, non signée, signée par un autre workflow, dépôt, branche ou pour un autre commit, sans provenance, ou dont la provenance ou les étiquettes disent autre chose : **refusée**, dite dans `#deploy` avec ta mention (les mots de cosign restent dans le journal), et **jamais construite à la place**. Un registre ou sigstore qui ne répond pas (réseau, miroir TUF, `docker pull` en échec, un délai : pull et cosign sont bornés à 10 min) n'est pas un refus tout de suite : le CD le dit une fois, en bleu, et repasse, une heure au plus (12 passages), puis refuse en le disant.
 5. **Le préflight, dans la candidate :**
    - `glorfindel --version` dit exactement le tag ;
    - la watch, le bot et la console s'importent ;
@@ -434,7 +434,11 @@ CI3 est déployée **par l'agent d'avant, qui construit** ; la suivante, par le 
 
 1. **La PR de CI3 fusionnée.** `publish.yml` tourne sur ce commit de `main` : `publish (glorfindel)`
    et `publish (annatar)` doivent être verts. Son dernier step avertit si le paquet n'est pas lisible
-   sans jeton (attendu au premier run : un paquet neuf de GHCR est privé).
+   sans jeton (attendu au premier run : un paquet neuf de GHCR est privé). **C'est la première mesure
+   de l'aller-retour** : jamais encore `cosign sign` v3 puis `verify`, ni les attestations poussées
+   puis relues, n'ont tourné sur nos propres images. Avant de publier la 0.4.6, relire ce run : les
+   steps « Sign (keyless) » et « Verified as H0 verifies it » verts sur les deux jobs ; rouge, ne pas
+   publier, le corriger d'abord.
 2. **Les deux paquets publics, une fois.** Sur GitHub : ton profil → Packages → `eregion-glorfindel`
    → Package settings → Change visibility → Public ; de même pour `eregion-annatar`. Puis, sans jeton,
    depuis un checkout à jour :
@@ -471,8 +475,10 @@ ci-dessus garde la 0.4.6 sur le chemin connu. Le retour arrière depuis la 0.4.7
 **L'agent neuf devant une release sans image attestée** : jamais une construction. Sans le job
 `publish (glorfindel)` sur son commit (une release d'avant CI3), il attend une heure, puis la refuse
 (« aucune image publiée … H0 ne construit plus »). Avec le job, mais une image absente, privée, non
-signée ou signée par un autre : refusée tout de suite. Les deux avec ta mention dans `#deploy`. Un
-registre injoignable est dit une fois, en bleu, et le CD repasse.
+signée ou signée par un autre : refusée tout de suite ; un paquet privé aussi (GHCR refuse le jeton
+anonyme). Les deux avec ta mention dans `#deploy`. Un registre ou sigstore injoignable (cosign dit
+« error updating to TUF remote mirror », ou un délai) est dit une fois, en bleu, et le CD repasse,
+une heure au plus : puis la release est refusée, avec ta mention.
 
 ## Mesuré au premier démarrage (16/10)
 

@@ -1,12 +1,13 @@
 name: Publish
 
-# CI3 (#267, step 2; P-02, V-22): every commit of main gets its two images, built and proven as
+# CI3 (#267, step 2; P-02, V-22): the head of every push to main (the repository merges by squash:
+# each commit of main is one) gets its two images, built and proven as
 # in images.yml (CI1), then published to GHCR — ghcr.io/vanyar53/eregion-glorfindel and
 # -annatar, tagged sha-<commit> — with a SLSA provenance and an SBOM attested
 # (actions/attest-build-provenance, actions/attest-sbom) and a keyless signature (cosign, GitHub's
 # OIDC: no long-lived key), then verified here as H0 verifies them (scripts/published_image.py).
 #
-# Why every commit of main: the draft of a release targets a commit of main (make release-draft,
+# Why every push to main: the draft of a release targets a commit of main (make release-draft,
 # origin/main's sha), and H0's CD deploys it as soon as Jonathan publishes. Its image is then
 # already there, attested: this job is a check run of that commit, and the CD waits for it (or
 # refuses a commit without it). The registry's tag is a hint only: the CD trusts the signature,

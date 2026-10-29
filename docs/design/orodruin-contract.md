@@ -489,11 +489,18 @@ l'envoyait par SSH : rien ne liait ce qu'Orodruin exécute à ce que la CI avait
    `.github/workflows/publish.yml` de ce dépôt, sur `main`, déclenché par un push, **à ce commit** —,
    la provenance relue ; l'image tirée **par ce digest**, ses étiquettes relues (le commit), étiquetée
    `eregion-annatar:orodruin`. Un échec à n'importe quelle étape : rien n'est envoyé.
-2. **Par SSH**, `docker save | docker load`, comme avant : **la sortie d'Orodruin reste fermée**.
-3. **Sur Orodruin**, l'identifiant de l'image chargée est relu (`docker image inspect -f {{.Id}}`) et
-   doit être une adresse de contenu sous le digest vérifié : le digest lui-même, son manifeste
-   linux/amd64, ou la configuration de ce manifeste (l'identifiant du magasin classique de docker).
-   Autre chose : refusé. `~/.eregion-image` garde « commit digest ».
+2. **Avant l'envoi**, les identifiants qu'elle peut avoir une fois chargée sont calculés sur le
+   poste (`published_image.py ids`) : le digest lui-même, son manifeste linux/amd64, ou la
+   configuration de ce manifeste (l'identifiant du magasin classique de docker). `~/.eregion-image`
+   est effacé sur Orodruin.
+3. **Par SSH**, `docker save | docker load`, comme avant, **sous un tag d'attente**
+   (`eregion-annatar:incoming`) : **la sortie d'Orodruin reste fermée**, et l'image en service ne
+   bouge pas encore.
+4. **Sur Orodruin**, l'identifiant de l'image arrivée est relu (`docker image inspect -f {{.Id}}`) et
+   doit être l'un de ceux calculés. Alors seulement elle devient `eregion-annatar:orodruin`, le tag
+   d'attente est retiré, et `~/.eregion-image` est écrit (« commit digest »). Sinon elle est retirée,
+   `eregion-annatar:orodruin` n'a pas changé, et `~/.eregion-image` reste absent : il ne nomme jamais
+   l'ancienne image comme si elle était la nouvelle.
 
 **Pourquoi Orodruin ne tire pas lui-même.** Le contrat garantit une sortie limitée au banc, aux API
 de contrôle du cloud et à l'API du modèle, vérifiée par une connexion hors périmètre qui échoue.

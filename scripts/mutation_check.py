@@ -4035,8 +4035,9 @@ MUTANTS += [
      "    if lost >= LOST_DRAWS:\n", "    if False:\n"),
     ("M1701", "3 draws lost tolerated: the threshold one too far (H3, review)", CD,
      "    if lost >= LOST_DRAWS:\n", "    if lost > LOST_DRAWS:\n"),
-    ("M1702", "draws lost counted on cases the reference got wrong too: noise on both sides refused (H3, review)", CD,
-     "    perfect = [lb for lb in c if all(g for g, _a, _x in r[lb][1])]\n", "    perfect = list(c)\n"),
+    ("M1702", "a case that improves pays for one that loses: draws lost netted, not capped at 0 (H3, review 2)", CD,
+     "    lost_by = {lb: max(0, right(r[lb][1]) - right(c[lb][1])) for lb in c}\n",
+     "    lost_by = {lb: right(r[lb][1]) - right(c[lb][1]) for lb in c}\n"),
     ("M1703", "a ransomware not isolated twice out of three deployed (H3, Jonathan 29/10)", CD,
      "    if lost_case:\n", "    if False:\n"),
     ("M1704", "a case that acts must lose all 3 draws: 2/3 lost deployed (H3, review)", CD,
@@ -4092,6 +4093,16 @@ MUTANTS += [
      "CASE_LOST_DRAWS = 2\n", "CASE_LOST_DRAWS = 1\n"),
 ]
 TESTS.update({f"M{n}": "tests/unit/test_host_cd.py" for n in range(1718, 1721)})
+# H3, second review (M1721–M1729): draws lost where the reference varied, the decision's code.
+MUTANTS += [
+    ("M1721", "draws lost counted only where the reference was right on every draw: 31/51 against 41/51 "
+     "deployed (H3, review 2)", CD,
+     "    lost_by = {lb: max(0, right(r[lb][1]) - right(c[lb][1])) for lb in c}\n",
+     "    lost_by = {lb: max(0, right(r[lb][1]) - right(c[lb][1])) for lb in c if all(g for g, _a, _x in r[lb][1])}\n"),
+    ("M1722", "a release changing eregion_core/ (llm_call.py, models.py) with the lock: unsaid (H3, review 2)", CD,
+     'DECISION_CODE = ("glorfindel/", "eregion_core/")\n', 'DECISION_CODE = ("glorfindel/",)\n'),
+]
+TESTS.update({f"M{n}": "tests/unit/test_host_cd.py" for n in range(1721, 1723)})
 TESTS.update({mid: _SMOKE_T for mid in ("M1671", "M1677", "M1683", "M1687", "M1688", "M1689")})
 
 # CI3 (#267, step 2): the images published, signed, pulled by their digest — the reader and

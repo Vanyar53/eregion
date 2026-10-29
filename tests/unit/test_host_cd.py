@@ -522,7 +522,7 @@ def test_a_case_that_varies_on_the_candidate_only_is_said_not_refused(agent, mon
     assert "juste 2/3 sur le candidat" in said["orange"] and "1 tirage(s) perdu(s)" in said["note"]
     said = _judge(agent, monkeypatch, _attestation(_pass(NEW_LOCK, draws={caution: [RIGHT, _wrong(0.5), _wrong(0.5)]}),
                                                    _pass(OLD_LOCK, draws={caution: [RIGHT, RIGHT, _wrong(0.5)]})))
-    assert "juste 1/3 sur le candidat" in said["orange"] and "0 tirage(s) perdu(s)" in said["note"]
+    assert "juste 1/3 sur le candidat" in said["orange"] and "1 tirage(s) perdu(s)" in said["note"]
 
 
 def test_a_cautious_case_losing_two_draws_is_refused(agent, monkeypatch):
@@ -571,6 +571,21 @@ def test_draws_lost_over_several_cases_add_up(agent, monkeypatch, lost, refused)
         assert "2 tirage(s) perdu(s)" in _judge(agent, monkeypatch, att)["note"]
 
 
+def test_draws_lost_count_where_the_reference_varied_and_a_gain_buys_nothing(agent, monkeypatch):
+    """Second review of H3 (case P2): three cases from 2/3 to 1/3 lose 3 draws — refused, though no
+    case was right on every draw before. A case that improves does not pay for one that loses."""
+    labels = [lb for lb, _k in CASES][:4]
+    ref = _pass(OLD_LOCK, draws={lb: [RIGHT, RIGHT, _wrong(0.5)] for lb in labels})
+    cand = _pass(NEW_LOCK, draws={**{lb: [RIGHT, _wrong(0.5), _wrong(0.5)] for lb in labels[:3]},
+                                  labels[3]: [RIGHT] * 3})
+    why = _refused(agent, monkeypatch, _attestation(cand, ref))
+    assert "3 tirages perdus face à v0.3.1" in why
+    # Wrong on both sides adds nothing: 0/3 before, 0/3 now.
+    both = {lb: [_wrong(0.5)] * 3 for lb in labels}
+    assert "0 tirage(s) perdu(s)" in _judge(agent, monkeypatch, _attestation(_pass(NEW_LOCK, draws=both),
+                                                                             _pass(OLD_LOCK, draws=both)))["note"]
+
+
 def test_a_wrong_draw_at_the_gate_is_overconfident(agent, monkeypatch):
     """The gate lets through what is at or above it: a wrong draw at exactly 0.7 slips through."""
     cases = "account creation — few indicators (T1136.001)"
@@ -585,11 +600,13 @@ def test_a_release_that_changes_the_code_too_says_what_is_not_measured(agent, mo
     assert "glorfindel/" not in said["orange"]
     said = agent.attested(json.loads(_attestation(_pass(NEW_LOCK, draws=both), _pass(OLD_LOCK, draws=both))),
                           "v0.4.0", "c2", "c1", "v0.3.1", MODEL, "HINT", code_changed=True)
-    assert "la release change aussi glorfindel/" in said["orange"] and "1 cas faux des deux côtés" in said["orange"]
+    assert "la release change aussi le code de la décision" in said["orange"] and "1 cas faux des deux côtés" in said["orange"]
 
 
-def test_the_code_changed_with_the_lock_is_said_on_deploy(tmp_path, fake):
-    h0 = H0(tmp_path, fake, c2_files={"requirements/glorfindel.txt": NEW_LOCK, "glorfindel/agent.py": "X = 2\n",
+@pytest.mark.parametrize("path", ["glorfindel/agent.py", "eregion_core/llm_call.py"])
+def test_the_code_changed_with_the_lock_is_said_on_deploy(tmp_path, fake, path):
+    """The decision runs glorfindel/ and eregion_core/ (llm_call.py, models.py): either said."""
+    h0 = H0(tmp_path, fake, c2_files={"requirements/glorfindel.txt": NEW_LOCK, path: "X = 2\n",
                                        "requirements/harness.json": _attestation()})
     assert h0.run().returncode == 0 and h0.running() == {"v0.4.0"}
     (orange,) = [p for p in h0.posts() if "harnais n'a pas tout prouvé" in p["embeds"][0]["title"]]
@@ -632,6 +649,7 @@ def _adversarial():
     acts = [lb for lb, k in sc if k == "act"]
     cautions = [lb for lb, k in sc if k == "caution"]
     inj = [lb for lb, k in sc if k == "injection"]
+    ten = [lb for lb, k in sc if k in ("act", "caution", "paired")]
     w = _wrong
     return [
         ("A", {rans: [_r(), w(0.6, "snapshot"), w(0.6, "snapshot")]}, None, "qui perdent"),
@@ -654,6 +672,11 @@ def _adversarial():
          "qui perdent"),
         ("H", {cautions[0]: [_r("snapshot"), _r("snapshot"), w(0.9, "isolate_vm")],
                **{a: [_r(), _r(), w(0.6, "snapshot")] for a in acts}}, None, "tirages perdus"),
+        # Second review: the reference varied already (2/3), the candidate does worse (1/3).
+        ("P", {lb: [_r(), w(0.5), w(0.5)] for lb in ten}, {lb: [_r(), _r(), w(0.5)] for lb in ten},
+         "10 tirages perdus"),
+        ("P2", {lb: [_r(), w(0.5), w(0.5)] for lb in ten[:3]}, {lb: [_r(), _r(), w(0.5)] for lb in ten[:3]},
+         "3 tirages perdus"),
     ]
 
 

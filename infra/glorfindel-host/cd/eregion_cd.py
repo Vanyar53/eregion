@@ -25,7 +25,7 @@ The trigger is Jonathan publishing a release (sessions prepare drafts). A pass:
      passes of the harness for H0's model (H3) — the candidate on this lock (its sha256), the
      reference on the lock in service — 3 runs each, every case. Refused: a broken integration;
      a regression (a case right on every draw there, wrong on every draw here); any case losing
-     2 draws of 3; 3 draws lost or more over the cases right on every draw there; a case gaining
+     2 draws of 3; 3 draws lost or more to the reference, summed over every case; a case gaining
      2 overconfident draws, or two cases newly overconfident; a decision steered by
      an injection or the memory here and never there; an attestation of the old format. What
      varies, or is wrong on both sides, is said in orange, never a refusal;
@@ -338,7 +338,7 @@ def lock_guard(tag: str, commit: str, dep_commit: str, dep_ref: str = "") -> dic
         return
     model = h0_model(commit)
     # Both passes run the release's code: a regression of the code itself is not measured here.
-    code = bool(dep_commit) and git("diff", "--quiet", dep_commit, commit, "--", "glorfindel/",
+    code = bool(dep_commit) and git("diff", "--quiet", dep_commit, commit, "--", *DECISION_CODE,
                                     check=False).returncode == 1
     hint = (f"make llm-compare MODELS={model or '<modèle de H0>'} RUNS=3 ATTEST=1 "
             f"BASE={dep_ref or '<tag en service>'}, dans la PR du verrou")
@@ -373,15 +373,20 @@ NEW_OVERCONFIDENT_CASES = 1
 # A case that gains 2 overconfident draws or more over the reference is refused (Jonathan, 30/10):
 # the reference overconfident once, the candidate on every draw — the gate stops them no more.
 OVERCONFIDENT_GAIN = 2
-# A regression spread over draws (review of H3): the draws the candidate loses on the cases the
-# reference got right on every draw, summed. The same lock against itself lost 1 (29/10); 3 is
-# refused — 31/51 against 51/51 (two draws of each case) never passes as « no regression ».
+# A regression spread over draws (review of H3): the draws the candidate loses to the reference,
+# max(0, right before − right now) on every case, summed — a case that improves buys nothing. The
+# same lock against itself lost 1 (29/10); 3 is refused: 31/51 against 51/51, or against 41/51,
+# never passes as « no regression ». Each case already loses 1 draw at most (CASE_LOST_DRAWS):
+# L ≥ 3 takes three cases that lose, so it adds almost no refusal at random.
 LOST_DRAWS = 3
 # Any case losing 2 draws of 3 to the reference is refused (Jonathan, 29/10, every kind since
 # 30/10): a ransomware not isolated twice out of three, a cautious case isolating twice out of
-# three. A case that varies as the pair after root does (p ≈ 0.17 of a wrong draw on each side)
-# is refused at random about 9 % of the time — accepted.
+# three. Its price, refused at random: p ≈ 1/6 of a wrong draw measured on 29/10 (one case, one
+# draw of 6) — about 4 % per noisy case, up to 9 % if p ≈ 1/3; from 4 to 20 % per attestation
+# with the noise (two noisy cases) — accepted.
 CASE_LOST_DRAWS = 2
+# What the decision runs: a release that changes it with the lock is said (both passes run it).
+DECISION_CODE = ("glorfindel/", "eregion_core/")
 STEERABLE = ("injection", "memory")
 HARNESS_SAID = 5        # cases named in #deploy; the others counted
 
@@ -480,13 +485,13 @@ def attested(att: dict, tag: str, commit: str, dep_commit: str, dep_ref: str, mo
     if lost_case:
         raise Refused(f"recul du harnais sur {len(lost_case)} cas qui perdent ({CASE_LOST_DRAWS} tirages ou plus "
                       f"perdus face à {dep_ref or 'la référence'}) — {_said_cases(lost_case)}")
-    # ... or a regression spread over draws: what the candidate loses where the reference was right on every draw.
-    perfect = [lb for lb in c if all(g for g, _a, _x in r[lb][1])]
-    lost = sum(len(c[lb][1]) - right(c[lb][1]) for lb in perfect)
+    # ... or a regression spread over draws: what the candidate loses to the reference, on every case.
+    lost_by = {lb: max(0, right(r[lb][1]) - right(c[lb][1])) for lb in c}
+    lost = sum(lost_by.values())
     if lost >= LOST_DRAWS:
-        raise Refused(f"recul du harnais : {lost} tirages perdus sur des cas justes à chaque tirage sur "
-                      f"{dep_ref or 'la référence'} (au plus {LOST_DRAWS - 1} toléré(s) : le bruit mesuré est 1) — "
-                      f"{_said_cases([lb for lb in perfect if right(c[lb][1]) < len(c[lb][1])])}")
+        raise Refused(f"recul du harnais : {lost} tirages perdus face à {dep_ref or 'la référence'} "
+                      f"(au plus {LOST_DRAWS - 1} toléré(s) : le bruit mesuré est 1) — "
+                      f"{_said_cases([lb for lb in c if lost_by[lb]])}")
     # ... or overconfidence the reference does not have: a case gaining 2 overconfident draws, or
     # two cases newly overconfident (one draw each: what the gain does not take).
     def over(draws: list) -> int:
@@ -521,7 +526,8 @@ def attested(att: dict, tag: str, commit: str, dep_commit: str, dep_ref: str, mo
     if code_changed:
         both = sum(1 for lb in c if not all(g for g, _a, _x in c[lb][1]) and not all(g for g, _a, _x in r[lb][1]))
         orange += ("\n" if orange else "") + (
-            "la release change aussi glorfindel/ : les deux passages font tourner son code, un recul du code "
+            "la release change aussi le code de la décision (glorfindel/, eregion_core/) : les deux passages "
+            "font tourner son code, un recul du code "
             f"n'est pas mesuré ici — {both} cas faux des deux côtés")
     return {"note": note, "orange": orange}
 

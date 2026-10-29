@@ -105,7 +105,7 @@ DOCKER_GLORFINDEL = $(GLORFINDEL_AZURE_PICK) docker run --rm $(GLORFINDEL_AZURE_
 	glorfindel-pending glorfindel-check-ttl \
 	glorfindel-start glorfindel-stop glorfindel-restart glorfindel-dev glorfindel-logs glorfindel-ui console-url \
 	annatar-shell glorfindel-shell \
-	venv install lock test test-unit lint annatar-simulate annatar-simulate-gap clean release release-draft \
+	venv install lock audit test test-unit lint annatar-simulate annatar-simulate-gap clean release release-draft \
 	canary-jit celebrimbor-init celebrimbor-plan celebrimbor-up celebrimbor-down celebrimbor-output celebrimbor-stop celebrimbor-start \
 	glorfindel-host-init glorfindel-host-plan glorfindel-host-up glorfindel-host-down glorfindel-host-push \
 	glorfindel-host-start glorfindel-host-stop glorfindel-host-logs glorfindel-host-tunnel glorfindel-host-ssh \
@@ -130,6 +130,7 @@ help:
 	@echo "  make venv           Create .venv (python3 -m venv)"
 	@echo "  make install        Create .venv + install dev dependencies (from the lock, hashes checked)"
 	@echo "  make lock           Regenerate the dependency lock (uv; UPGRADE=1 bumps all) — docs/operations.md"
+	@echo "  make audit          Known advisories of the locks, pip-audit's own too (read as locked; CI2)"
 	@echo "  make test           Run all tests (104, 0 Azure, 0 LLM calls)"
 	@echo "  make lint           Ruff linter"
 	@echo "  make clean          Remove build artifacts"
@@ -930,6 +931,8 @@ install: venv
 # Regénérer le verrou (uv, résolution universelle : Python 3.11 et 3.12, Linux et macOS).
 # Les versions déjà verrouillées restent ; UPGRADE=1 les monte toutes. Une PR, puis le harnais
 # (make llm-compare) avant de redéployer H0 : docs/operations.md, « Verrou des dépendances ».
+# Puis les avis connus des verrous écrits (make audit, CI2) : une information pour la PR,
+# jamais un échec de make lock.
 UV         ?= uv
 LOCK_DATE  ?= $(shell date -u +%Y-%m-%d)
 LOCK_FLAGS  = --universal --python-version 3.11 --generate-hashes \
@@ -940,6 +943,21 @@ lock:
 	  -c requirements/dev.txt $(LOCK_FLAGS) -o requirements/glorfindel.txt
 	$(UV) pip compile pyproject.toml requirements/build.in --extra annatar \
 	  -c requirements/dev.txt $(LOCK_FLAGS) -o requirements/annatar.txt
+	$(UV) pip compile requirements/audit.in $(LOCK_FLAGS) -o requirements/audit.txt
+	-@$(MAKE) --no-print-directory audit
+
+# CI2 (#268) : les avis connus des trois verrous et de celui de pip-audit, tels qu'ils sont
+# (pip-audit --require-hashes --disable-pip : rien n'est résolu, seul le service des avis est
+# interrogé). pip-audit vient de
+# son propre verrou (requirements/audit.txt, empreintes), dans un venv à part ; le workflow
+# hebdomadaire (pip-audit.yml) en fait une issue par avis. Ici, il le dit seulement.
+AUDIT_VENV ?= .venv-audit
+PIP_AUDIT  ?= $(AUDIT_VENV)/bin/pip-audit
+LOCKS       = requirements/dev.txt requirements/glorfindel.txt requirements/annatar.txt requirements/audit.txt
+audit:
+	@[ -x "$(PIP_AUDIT)" ] || { python3 -m venv $(AUDIT_VENV) \
+	  && $(AUDIT_VENV)/bin/pip install -q --require-hashes -r requirements/audit.txt; }
+	@python3 scripts/pip_audit_issues.py report --pip-audit "$(PIP_AUDIT)" $(LOCKS)
 
 test:
 	$(PYTHON) -m pytest tests/ -v

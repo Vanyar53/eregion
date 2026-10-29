@@ -233,7 +233,7 @@ scripts/component_check.py → D1 : chaque composant tourne seul — Glorfindel,
 
 annatar/
   runner/engine.py    → inscription (`eregion_core.inscription.check_target` : périmètre du banc + tags `eregion-target`/`eregion-zone`
-                        sur le groupe ET la VM + zone ; `scenario_destructive()` = champ du scénario puis catalogue ; `annatar clean` gardé aussi, destructif) → setup → integrity check → attack
+                        sur le groupe ET la VM + zone ; `scenario_destructive()` = le catalogue décide — la technique et sa source épinglée, inconnu = destructif, un scénario qui se dit non destructif contre lui refusé (SEC5) ; `annatar clean` gardé aussi, destructif, et derrière le garde V1) → setup → integrity check → attack
                         → emit attack_started (sans query — Glorfindel résout via detection_rules.yaml)
                         → thread daemon feedback: si detection_timeout → emit detection_missed
                         → runs/<run_id>.json réécrit après l'attente : detection + detection_latency_s (#157)

@@ -374,8 +374,13 @@ tout le groupe du banc : Run Command sur bree, la VM de la pré-observation, jam
 Le contrat (`assess_identity`) le relit : les lectures doivent être effectives sur le groupe, chaque
 écriture accordée sur au moins une ressource de son type dans le groupe, et **aucune écriture sur le
 groupe entier** — ni dans les attributions listées, ni dans les droits effectifs relus sur le
-groupe (`identity_group_wide` → `passive`). Une VM inscrite après l'apply n'a pas de droit tant que
-`make orodruin-lock` ne l'a pas relue. À mesurer après l'apply : que les droits effectifs relus sur
+groupe (`identity_group_wide` → `passive`). Une VM inscrite après l'apply — ou toutes, après une
+reconstruction de Celebrimbor (les attributions portent l'id des VM) — n'a pas de droit tant que
+`make orodruin-lock YES=1` ne l'a pas relue. Le tag cherché est tiré du groupe du banc
+(`rg-celebrimbor` → `celebrimbor`, `rg-celebrimbor-<instance>` → `celebrimbor-<instance>`, comme
+Celebrimbor le pose), sauf `bench_id` donné. Les droits de chaos ne sont demandés que si le groupe
+contient une expérience (le contrat liste les expériences du groupe ; le chaos de Celebrimbor est
+éteint par défaut) : sans elle, Annatar reste armé, et Gothmog ne trouve rien à lancer. À mesurer après l'apply : que les droits effectifs relus sur
 le groupe n'incluent pas ceux accordés sur ses VM (sinon le contrat dirait `identity_group_wide`
 à tort, et resterait passif — l'échec est fermé). Le contrat ne relit pas lui-même l'inscription
 des VM sur lesquelles l'identité écrit : c'est Terraform qui la tire des tags, et l'inscription
@@ -419,9 +424,19 @@ blob (`channel_created`, ce que dit la liste, écrit par-dessus ce que la fenêt
 depuis son premier tirage) : elle ne peut pas commencer plus de 5 min avant. MAX_DURATION_S la
 plafonne toujours. Sur une VM en zone `production` (ses tags, lus par la watch), une fenêtre ne
 marque rien, sauf une technique non destructive (`kind: technique`, `destructive: false`, que
-l'injecteur écrit d'après le catalogue). À mesurer : qu'Azure garde la date de création d'un blob
-réécrit (sinon, une fenêtre vue pour la première fois déjà fermée serait refusée : ses cycles
-restent « real », le sens sûr).
+l'injecteur écrit d'après le catalogue). Une fenêtre déjà tirée ne peut revenir que fermée : tous
+ses champs tels qu'ils étaient, `end` qui passe de null à une date pas antérieure à son début
+(`closed_by` à côté, celui du kill) ; toute autre réécriture (une cible ajoutée, un début déplacé,
+une expiration repoussée, `end` retiré ou déplacé) est refusée, la copie tirée d'abord gardée, et
+c'est dit une fois. À mesurer : qu'Azure garde la date de création d'un blob réécrit (sinon, une
+fenêtre vue pour la première fois déjà fermée serait refusée : ses cycles restent « real », le
+sens sûr).
+
+Limites qui restent, assumées : une fenêtre écrite sur l'hôte même (sans canal) n'est bornée que
+vers le futur (le mtime de son fichier), car qui écrit là écrit aussi le reste de l'état ; en
+production, la règle repose sur le `destructive` que l'injecteur écrit d'après le catalogue — un
+rédacteur du canal qui mentirait là ne ferait marquer qu'une technique non destructive, sur une
+VM inscrite.
 
 **Les canaux bornés (V-21, N-15).** Un tirage lit en flux, coupé au-delà de sa borne (jamais lu en
 entier puis contrôlé) : un blob au plus `MAX_BLOB_BYTES` (1 Mio), une page de liste au plus
@@ -429,12 +444,38 @@ entier puis contrôlé) : un blob au plus `MAX_BLOB_BYTES` (1 Mio), une page de 
 téléchargés (200) par tirage ; ce qui dépasse est dit, laissé au tirage suivant ou écarté, jamais
 écrit. Le jeton de stockage ne part que vers `https://<compte>.blob.core.windows.net` (ou
 `.blob.core.chinacloudapi.cn`, `.blob.core.usgovcloudapi.net`), port 443, sans utilisateur dans
-l'URL : toute autre URL est refusée avant qu'un jeton soit demandé.
+l'URL : toute autre URL est refusée avant qu'un jeton soit demandé. Une rétention sur le compte
+(`azurerm_storage_management_policy`, gratuite) tient la liste sous ces bornes : la liste est
+alphabétique et les run_id sont des horodatages, si bien qu'au-delà de 2 000 noms ce sont les
+fenêtres les plus récentes qui ne seraient plus tirées. Les blobs de bloc (fenêtres, campagnes,
+rapports de run, détections) partent 9 jours après leur dernière écriture (la purge de la watch,
+7 jours après le dernier moment d'une fenêtre, plus 2 h 15 et une marge) ; le journal d'Orodruin
+(`audit/`) reste 90 jours, le temps de revenir sur un incident.
 
-**Ce qu'il reste à faire, avec Jonathan** : appliquer `infra/glorfindel-host` (le point de
-terminaison de service de H0), puis `infra/orodruin`, puis reconstruire et pousser l'image
-(`make orodruin-push`) — dans cet ordre : un contrat neuf sur l'ancien rôle de groupe dit
-`identity_group_wide`, et un pare-feu posé avant le point de terminaison de H0 lui coupe le canal.
+**Les atomics (V-30).** Le sha256 de chaque atomic est relu contre `PIN` à chaque run. `PIN` est
+rangé à côté des YAML, dans la même image : une modification qui touche les deux à la fois n'est
+pas vue. Cela attrape un fichier dérivé ou à moitié modifié, pas une image hostile (sa
+provenance : M-3).
+
+**Le déploiement, avec Jonathan, dans cet ordre** — un injecteur neuf refuse le battement d'une
+watch sans périmètre, un contrat neuf sur l'ancien rôle de groupe dit `identity_group_wide`, et un
+pare-feu posé avant le point de terminaison de H0 lui coupe le canal :
+
+1. la release publiée ; le CD de H0 la déploie ; vérifier que `heartbeat.json`, dans le conteneur
+   `watch`, porte `perimeter` ;
+2. `make glorfindel-host-plan` : une seule mise à jour en place, celle du sous-réseau
+   (`service_endpoints`), et l'output `subnet_id` — rien qui remplace la VM (`custom_data`) ;
+   puis `make glorfindel-host-up YES=1` ;
+3. `make orodruin-plan` : deux sous-réseaux dans `network_rules`, les rôles et attributions
+   ci-dessus, la politique de rétention ; puis `make orodruin-lock YES=1`, sans run en cours ;
+4. `make orodruin-push` (l'image des injecteurs, et son contrat) ;
+5. `make orodruin-check` : `armed`.
+
+Un retour en arrière du CD de H0 vers une version sans SEC5 rend un battement sans périmètre :
+tous les injecteurs neufs refusent (« names no perimeter »), le sens fermé — redéployer la
+version SEC5 ; `--without-glorfindel` reste possible hors production. En profil local, un vieil
+injecteur (une image d'avant SEC5) lit la copie de la watch neuve, devenue du JSON, comme une date
+illisible, et refuse aussi : `make build`.
 
 ## Questions ouvertes (pour Jonathan, à l'implémentation)
 

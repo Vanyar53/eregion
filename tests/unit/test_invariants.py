@@ -1762,6 +1762,32 @@ class IsolationMachine(RuleBasedStateMachine):
             del self.out_of_sight[k]
 
     @rule(data=st.data())
+    def block_turned_then_reasserted(self, data):
+        """A rare state made common (I5R): a VM blocked on its subnet, for itself, or both
+        — two of our rules for one IP —, then someone turns one of our block denies
+        into an allow, and the reassertion runs, unfaulted. Drawn one by one, the steps
+        met once (I7S's run): a block put back under a turned rule went unseen at 500
+        sequences (M1591). The VM's own inbound deny is the one turned half the time —
+        what the run found."""
+        vm, rid, _ = self._draw(data)
+        scope = data.draw(st.sampled_from(["both", "subnet", "vm"]), label="block scope")
+        if scope != "vm":
+            self.block_perimeter(_Drawn(data, vm=vm, rid=rid, fault=None, replace=False))
+        if scope != "subnet":
+            self.block(_Drawn(data, vm=vm, rid=rid, fault=None))
+        ours = sorted((k, n) for k, g in self.fake.nsgs.items() for n, r in g["rules"].items()
+                      if n.startswith("glorfindel-block-") and r["access"].lower() == "deny")
+        if ours:
+            marks = {_nic_hash(n) for n in self.fake.vms[key(vm)]["nics"]}
+            mine = [r for r in ours if r[1].rsplit("-", 1)[-1] in marks] or ours
+            self._tamper_with_our_rule(_Drawn(data, how="access", rule=st.one_of(
+                st.sampled_from(mine), st.sampled_from(ours))))
+        self._claims_after_a_change()
+        # Outside human_only half the time more: there, the reassertion writes.
+        self.reassert(_Drawn(data, fault=None, mode=st.one_of(
+            st.just("non_disruptive"), st.sampled_from(["human_only", "non_disruptive"]))))
+
+    @rule(data=st.data())
     def joins_an_old_isolation(self, data):
         """A rare state made common (I4F): a new VM on the NSG where an older version's
         isolation of another VM lies, isolated — its NIC then away from that NSG, in

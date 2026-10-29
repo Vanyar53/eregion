@@ -6,6 +6,7 @@ from __future__ import annotations
 from glorfindel.providers.azure.nsg import (
     _describe_shadowing,
     _ip_scoped,
+    _pair_priorities,
     _report_block_shadowing,
     _scope_to_nic,
     _shadowing_rules,
@@ -53,12 +54,13 @@ class BlockMixin:
         return self._block_ip_vm(ip, resource_id, rg, vm_name, threat_port)
 
     def _plan_block(self, t: dict, ip: str, nsg_rg: str, nsg_name: str, ip_scoped: bool,
-                    assigned: dict, threat_port: int | None) -> dict:
-        """Priority a block deny would take on this NSG, and the allows before it."""
+                    assigned: dict, threat_port: int | None, own: tuple[str, str]) -> dict:
+        """Priorities a block deny pair would take on this NSG (`own`: its two names — a
+        rewrite keeps their place or moves them up, see _pair_priorities), and the allows
+        before it."""
         nsg_key = f"{nsg_rg}/{nsg_name}"
         existing = list(self._network.security_rules.list(nsg_rg, nsg_name))
-        used = {r.priority for r in existing} | assigned.get(nsg_key, set())
-        priority = next(p for p in range(200, 4000, 10) if p not in used)
+        priority = _pair_priorities(existing, *own, 200, 10, assigned.get(nsg_key, set()))
         vm_ips = t["private_ips"] or None
         shadowed = _shadowing_rules(existing, priority, inbound_src=[ip], inbound_dst=vm_ips,
                                     outbound_src=vm_ips, outbound_dst=[ip], port=threat_port)
@@ -94,11 +96,12 @@ class BlockMixin:
                 # Same placement rule as the isolation: no customer rule moved; when an
                 # allow before the deny lets the THREAT through on this NSG, the NIC's
                 # other NSG (its subnet's) holds the deny instead.
-                plan = self._plan_block(t, ip, nsg_rg, nsg_name, _scope_to_nic(t), assigned, threat_port)
+                plan = self._plan_block(t, ip, nsg_rg, nsg_name, _scope_to_nic(t), assigned, threat_port,
+                                        (in_name, out_name))
                 alt = t.get("alt_nsg")
                 if plan["bypassed"] and alt:
                     alt_plan = self._plan_block(t, ip, alt["nsg_rg"], alt["nsg_name"], True,
-                                                assigned, threat_port)
+                                                assigned, threat_port, (in_name, out_name))
                     if not alt_plan["bypassed"]:
                         placement.update({
                             "nsg_rg": alt["nsg_rg"], "nsg_name": alt["nsg_name"],
@@ -117,14 +120,18 @@ class BlockMixin:
                             f"NIC {t['nic_short']} has no private IP — cannot scope the "
                             "block on its shared NSG"
                         )
-                    self._put_deny_rule(nsg_rg, nsg_name, in_name, "Inbound", priority, src=ip, dsts=ips)
+                    self._put_deny_rule(nsg_rg, nsg_name, in_name, "Inbound", priority["inbound"],
+                                        src=ip, dsts=ips)
                     applied.append(in_name)
-                    self._put_deny_rule(nsg_rg, nsg_name, out_name, "Outbound", priority, srcs=ips, dst=ip)
+                    self._put_deny_rule(nsg_rg, nsg_name, out_name, "Outbound", priority["outbound"],
+                                        srcs=ips, dst=ip)
                     applied.append(out_name)
                 else:
-                    self._put_deny_rule(nsg_rg, nsg_name, in_name, "Inbound", priority, src=ip, dst="*")
+                    self._put_deny_rule(nsg_rg, nsg_name, in_name, "Inbound", priority["inbound"],
+                                        src=ip, dst="*")
                     applied.append(in_name)
-                    self._put_deny_rule(nsg_rg, nsg_name, out_name, "Outbound", priority, src="*", dst=ip)
+                    self._put_deny_rule(nsg_rg, nsg_name, out_name, "Outbound", priority["outbound"],
+                                        src="*", dst=ip)
                     applied.append(out_name)
                 placement["shadowed_by"] = plan["shadowed"]
             except Exception as exc:
@@ -146,7 +153,7 @@ class BlockMixin:
                     f"`glorfindel unblock {ip} <resource_id>` pour les retirer.",
                     cause=exc, covered=[p["rule"] for p in placements], failed_nic=failed_nic,
                 ) from exc
-            assigned.setdefault(nsg_key, set()).add(priority)
+            assigned.setdefault(nsg_key, set()).update(priority.values())
             placements.append(placement)
 
         first = placements[0]
@@ -195,10 +202,11 @@ class BlockMixin:
         rule_name = self._block_rule_name(ip, vm_name, scope="vm")  # shared (no VM suffix)
 
         existing = list(self._network.security_rules.list(nsg_rg, nsg_name))
-        used = {r.priority for r in existing}
-        priority = next(p for p in range(200, 4000, 10) if p not in used)
-        self._put_deny_rule(nsg_rg, nsg_name, rule_name, "Inbound", priority, src=ip, dst="*")
-        self._put_deny_rule(nsg_rg, nsg_name, f"{rule_name}-out", "Outbound", priority, src="*", dst=ip)
+        # Put back by the reassertion, it keeps its place (see _pair_priorities).
+        priority = _pair_priorities(existing, rule_name, f"{rule_name}-out", 200, 10)
+        self._put_deny_rule(nsg_rg, nsg_name, rule_name, "Inbound", priority["inbound"], src=ip, dst="*")
+        self._put_deny_rule(nsg_rg, nsg_name, f"{rule_name}-out", "Outbound", priority["outbound"],
+                            src="*", dst=ip)
 
         promoted_from = None
         if replace:

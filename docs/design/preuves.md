@@ -1105,6 +1105,8 @@ Aucun de ces défauts n'avait été vu en revue. Chacun a son test et sa séquen
 | I8F | même carte nue, un 429 à la lecture de notre tag (relecture) | l'erreur lue « aucun NSG » et écrite : même reste |
 | I3F | original inconnu (état et tags perdus), carte réisolée puis laissée nue | `verify_release` : `verified: True`, carte sans son NSG, une ancienne isolation restée sur ce NSG ; `glorfindel release`, qui le consulte d'abord, effaçait l'état |
 | U3F | blocage coupé avant son état, VM isolée par quarantaine, notre NSG retiré de la carte laissée nue | `unblock` : `not_found`, la règle de blocage restée sur le NSG propre de la carte ; la levée remettait ce NSG, l'IP de nouveau bloquée |
+| I5R | blocage de périmètre (200) puis de la VM (210), la règle de la VM passée en allow par un tiers, réaffirmation | la règle de périmètre réécrite au premier numéro libre (220), sous cet allow : **l'attaquant atteignait la VM sur tous ses ports** |
+| I5R | VM supprimée, l'entrée de son blocage perdue | `unblock` : `not_found` sans avoir cherché, le blocage resté sur le NSG partagé pour la VM suivante à cette adresse (trouvé en relecture d'I7S, hors de la machine) |
 | I8S | deux hôtes aux états séparés : « aucun » de l'hôte 1, tag X de l'hôte 2 (la carte a reçu X entre-temps) | la levée suivait l'« aucun » périmé : `released`, carte sans NSG, tag X effacé (trouvé en relecture, hors de la machine) |
 | I8S | même scénario, reset ; deux groupes de quarantaine (relecture 5.5) | un 429 sur le tag : carte remise nue, X effacé ; le « aucun » trouvé dans un groupe l'emportait sur X dans l'autre |
 | I4F | NSG d'origine d'une carte en quarantaine (ou nue) jugé sans elle | le reset de la nouvelle VM prenait l'ancienne isolation d'une autre VM pour la sienne : **l'autre VM rouverte** |
@@ -1435,6 +1437,62 @@ plus à `test_a_deleted_vms_rules_go_with_its_release_or_are_said`,
 `test_a_deleted_vms_nic_that_azure_kept_is_read_first` (quatre cas). Seuls les noms actuels à
 empreinte sont cherchés — ni ceux d'avant L24 ni ceux suffixés par la VM, partagés par des
 homonymes : voulu, pour I2.
+
+**I5R (29/10, #311) : une réaffirmation qui ouvrait.** Trouvée par la machine pendant I7S,
+présente sur `main`, déterministe : « I5: the reassertion opened flows of …/rg-app2/…/web »,
+l'attaquant sur ses ports 22 et 443. Réduite à quatre étapes : `block_perimeter` sur `web` (la
+règle de périmètre à 200), `block` de la même VM (sa règle à 210, dans la même entrée d'état),
+`tamper_with_our_rule` qui passe la règle de la VM en allow, puis la réaffirmation (ici dans
+`quarantine_altered_then_reasserted`, sur une autre VM : le crash et le 429 tirés n'y jouent
+pas). **Cause** (`providers/azure/blocks.py`) : la vérification voit la règle de la VM manquer,
+la réaffirmation repose le blocage — de périmètre, l'entrée étant `scoped: false` — et la règle
+réécrite sous son nom prenait le premier numéro libre, le sien compté comme pris : de 200 à 220,
+sous l'allow à 210. Remettre ce qui manquait déplaçait ce qui tenait. Correctif
+(`nsg.py`, `_pair_priorities`) : nos deux noms ne comptent pas parmi les numéros pris, et une
+règle déjà à nous garde le sien s'il est plus petit, dans sa direction (Azure n'y met aucune
+autre règle) — une réécriture monte ou reste, jamais ne descend. Le même chemin vaut pour le
+blocage d'une VM et pour l'isolation par règles, qui excluait déjà ses noms mais déplaçait une
+paire séparée à la main (la règle sortante déplacée, son numéro pris par une autre). Ce que la
+réaffirmation ne remet pas (la règle de la VM retournée), elle le dit : la carte de dérive, puis
+« disparu une deuxième fois ». Séquences figées (`test_a_perimeter_block_put_back_keeps_its_place`,
+`test_the_sequence_the_machine_found_on_i5`, `test_a_block_written_again_never_moves_down`,
+`test_an_isolation_written_again_never_moves_down`) ; M1590–M1594 attrapés. Tirées une à une,
+les étapes ne se rencontraient presque jamais : la machine seule laissait M1590 et M1591 à 0/2 à
+500 séquences. Une règle composée (`block_turned_then_reasserted` : bloquer sur le subnet, pour
+la VM ou les deux, passer un de nos deny en allow — celui de la VM une fois sur deux —, puis
+réaffirmer hors faute, hors `human_only` plus souvent) rend M1592 courant : attrapé par la
+machine seule à 500 séquences (2/3, puis 2/2 à la relecture) ; M1591 rarement (2 sur 5 en
+cumulant les deux mesures), tenu surtout par les séquences figées. M1590 (une paire séparée dont le numéro est
+pris par une autre règle), M1593 et M1594 restent aux séquences figées : il y faut une règle
+d'autorisation posée entre nos deux numéros, que la machine ne pose pas.
+
+**Le déblocage d'une VM supprimée (I5R).** Le défaut qu'I7S corrige pour la levée, côté
+déblocage : `_sweep_block` répondait `[], []` sur une VM absente, et un blocage dont l'entrée
+était perdue (un crash avant qu'elle soit écrite, ou réécrite depuis) restait sur un NSG
+partagé, `not_found` annoncé — l'IP de l'attaquant coupée pour la VM suivante à cette adresse.
+Correctif (`unblock.py`, `_gone_vm_blocks`) sur les aides de la levée d'I7S (`release.py`,
+dites maintenant pour l'acte qu'elles servent) : les cartes que l'état nomme (`_known_nics` : les
+placements du blocage, de l'isolation), leurs règles de blocage cherchées sur tous les NSG de
+l'abonnement et retirées (`_gone_vm_rules`) ; une carte gardée et rattachée depuis à une autre
+VM du même nom n'est pas touchée, et c'est dit (`_gone_nic_check`) ; un état illisible est dit
+(`_gone_vm_unknown`). En plus de la levée : une règle nommée pour la VM dont rien ne nomme plus
+la carte, et qu'aucune carte vivante ne porte, ne se distingue pas de celle d'un homonyme
+supprimé — laissée et dite (`unblock_partial`, `_unnamed_blocks`) ; une liste refusée aussi. La
+machine ne débloque pas une VM supprimée : tests figés (`test_an_unblock_of_a_deleted_vm_*`),
+M1595–M1599 attrapés ; ces tests mesurent aussi les mutants d'I7S (`-k deleted_vm`), 12/12
+attrapés.
+
+**Mesures d'I5R.** Invariants sur le code final, la règle composée comprise : 500 séquences sur
+les graines 1, 42, 203, 210, 322 et 777, puis 2 000 sur 42 et 322, verts (la 322 tombait sur I7
+avant I7S). Au même budget (60 séquences, deux tours), les 124 mutants des modules touchés
+(blocage, isolation, NSG, déblocage, levée, réaffirmation), ceux qu'I7S avait choisis et les
+siens, avant (`main` avec I7S) et après : 92 attrapés à chaque tour avant, 95 après. M03 suivait
+l'ancien texte de l'isolation (attrapé 2/2 une fois corrigé). Deux ont semblé perdus, dilués par
+la règle composée. M761 (une règle d'une carte vivante prise pour orpheline) : 2/2 avant, 0/2
+après ; remesuré sur six tours, 5/6 avant, 2/6 après, 5/6 après sans la règle composée ; à 500
+séquences, 3/3 avant comme après. M831 (`nsg.py`, relevé à la relecture) : 3/3 puis 5/6 avant,
+0/1, 1/3 puis 1/6 après à 60 séquences ; à 500, 3/3 après (graines 11, 99, 1234). Aucun mutant
+n'est perdu au budget de la CI (500).
 
 **I11 sous charge (29/10).** Le délai d'un tour (20 s) n'a pas été dépassé : 26 runs de la
 machine à 500 séquences en même temps sur 16 cœurs (312 à 647 s chacun, contre une centaine

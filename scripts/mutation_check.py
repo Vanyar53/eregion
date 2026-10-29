@@ -118,8 +118,8 @@ MUTANTS = [
      "        return len(nics) > 1 or len(subnets) > 0",
      "        return False"),
     ("M03", "deny scoped to the NIC's first IP only", ISO,
-     'self._put_deny_rule(nsg_rg, nsg_name, in_name, "Inbound", priority, src="*", dsts=ips)',
-     'self._put_deny_rule(nsg_rg, nsg_name, in_name, "Inbound", priority, src="*", dsts=ips[:1])'),
+     'self._put_deny_rule(nsg_rg, nsg_name, in_name, "Inbound", priority["inbound"], src="*", dsts=ips)',
+     'self._put_deny_rule(nsg_rg, nsg_name, in_name, "Inbound", priority["inbound"], src="*", dsts=ips[:1])'),
     ("M04", "outbound allows ignored by the precedence check", NSG,
      '        elif direction == "outbound":\n            src, dst = outbound_src, outbound_dst',
      '        elif direction == "outbound":\n            continue'),
@@ -4177,8 +4177,8 @@ MUTANTS += [
      "                        + [])\n"),
     ("M1551", "the NSGs that can't be listed: a deleted VM's release says `released` (I7S)", REL,
      '            return failed + [f"{vm_name} supprimée : les règles de ses cartes n\'ont pas été cherchées sur les "\n'
-     '                             f"NSG de l\'abonnement (liste illisible : {_first_line(exc)[:_ERR_MAX]}), levée non '
-     'vérifiée"]\n',
+     '                             f"NSG de l\'abonnement (liste illisible : {_first_line(exc)[:_ERR_MAX]}), "\n'
+     '                             f"{_GONE_WORDS[act][0]} non vérifiée"]\n',
      "            return failed\n"),
     ("M1552", "a failed release of a deleted VM forgets its NICs: the retry looks for nothing (I7S)", REL,
      '                **({"known_nics": known} if known else {}),\n', ""),
@@ -4272,6 +4272,46 @@ MUTANTS += [
 ]
 TESTS.update({mid: "tests/unit/test_notify_discord.py tests/unit/test_release.py"
               for mid in ("M1580", "M1581", "M1582", "M1583", "M1584")})
+
+# I5R (#311): a deny written again keeps its place or moves up, never down — the reassertion
+# put a perimeter block back at 220, under an allow at 210, and opened the VM (I5); and the
+# unblock of a deleted VM looks for the block its states name (the unblock's side of I7S).
+# Measured by the sequences frozen in test_invariant_regressions.py, then the machine. M1590–M1599.
+_I5R = "tests/unit/test_invariant_regressions.py::test_"
+_I5R_KEEP = (f"{_I5R}a_perimeter_block_put_back_keeps_its_place {_I5R}the_sequence_the_machine_found_on_i5 "
+             f"{_I5R}a_block_written_again_never_moves_down {_I5R}an_isolation_written_again_never_moves_down")
+MUTANTS += [
+    ("M1590", "a rule of ours keeps no smaller number: the first free one only, a split pair moves down (I5R)",
+     NSG, "        if (direction and isinstance(prio, int) and prio < out[direction]\n",
+     "        if (False and direction and isinstance(prio, int) and prio < out[direction]\n"),
+    ("M1591", "a rewrite counts its own numbers as taken: moved to the first free one, under an allow (I5R)",
+     NSG, '    own = {in_name.lower(): "inbound", out_name.lower(): "outbound"}\n', "    own = {}\n"),
+    ("M1592", "a perimeter block written again moves down (I5R)", "glorfindel/providers/azure/blocks.py",
+     '        priority = _pair_priorities(existing, rule_name, f"{rule_name}-out", 200, 10)\n',
+     '        priority = _pair_priorities(existing, "", "", 200, 10)\n'),
+    ("M1593", "a VM's block written again moves down (I5R)", "glorfindel/providers/azure/blocks.py",
+     "        priority = _pair_priorities(existing, *own, 200, 10, assigned.get(nsg_key, set()))\n",
+     '        priority = _pair_priorities(existing, "", "", 200, 10, assigned.get(nsg_key, set()))\n'),
+    ("M1594", "an isolation by rules written again moves down (I5R)", ISO,
+     "        priority = _pair_priorities(existing, *own, self.ISOLATION_PRIORITY, 1, assigned.get(nsg_key, set()))\n",
+     '        priority = _pair_priorities(existing, "", "", self.ISOLATION_PRIORITY, 1, assigned.get(nsg_key, set()))\n'),
+    ("M1595", "the unblock of a deleted VM looks nowhere: `not_found`, the block left (I5R, I7S's cause)", UNB,
+     "                return self._gone_vm_blocks(resource_id, vm_name, ip)\n",
+     "                return [], []\n"),
+    ("M1596", "the unblock of a deleted VM forgets the NICs its isolation's state names (I5R)", UNB,
+     "        known = self._known_nics(resource_id, _load_isolation_state(resource_id) or {})\n",
+     "        known = self._known_nics(resource_id, {})\n"),
+    ("M1597", "the unblock of a deleted VM looks for its isolation's names: the isolation off, the block left (I5R)",
+     UNB, "                                      self._block_rule_prefix(ip), deleted)\n",
+     '                                      "glorfindel-iso", deleted)\n'),
+    ("M1598", "the unblock of a deleted VM reads an unreadable state as nothing (I5R, SEC4b)", UNB,
+     '        failed = self._gone_vm_unknown(resource_id or vm_name, vm_name, "block")\n',
+     "        failed = []\n"),
+    ("M1599", "the unblock of a deleted VM leaves in silence the rules nothing names (I5R)", UNB,
+     "        failed += self._unnamed_blocks(vm_name, ip, known)\n", ""),
+]
+TESTS.update({mid: f"{_I5R_KEEP} {INVARIANTS}" for mid in ("M1590", "M1591", "M1592", "M1593", "M1594")})
+TESTS.update({f"M{n}": "tests/unit/test_invariant_regressions.py -k deleted_vm" for n in range(1595, 1600)})
 
 
 # SEC7 (#296): identities and hardening — the bot's stale buttons (V-08), the control plane read

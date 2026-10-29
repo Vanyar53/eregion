@@ -1516,19 +1516,55 @@ et ne dit « reposé une fois » que d'un blocage entier — sinon `partial`, di
 sa carte ne dit plus « n'est plus bloquée » d'une IP que le périmètre ou la quarantaine coupe
 encore (`reassert.py::_block_drift`, `providers/azure/perimeter.py`). **La machine** gagne un tirage
 (la seconde carte de Db--01 sur un subnet à elle, `data_subnet`, tiré en dernier) et un oracle sur
-ce que disent les cartes de blocage d'une passe (`_block_cards_true`, jugé sur le monde) :
-« reposé une fois » ou « reste bloquée » → l'attaquant n'atteint pas la VM (pour un périmètre seul,
-les cartes de son subnet) ; « n'est plus bloquée » → jamais quand notre périmètre, intact sur le
-subnet de chaque carte, coupe seul l'attaquant, avant la passe et après (le NSG du subnet seul, sans
-nos autres deny, les règles qu'un tiers a retournées gardées : une isolation, ou le NSG propre d'une
-carte qui ferme aussi le port, ne comptent pas pour le périmètre — le modèle de préséance du code,
-un NSG à la fois ; et une carte dite avant que la même passe repose le périmètre pour l'entrée d'une
-autre VM était vraie quand elle a été écrite). Ces deux bornes viennent de la machine elle-même
-(graines 42 et 322 à 2 000 séquences, sur le correctif) : l'oracle les jugeait fausses à tort. Le contrôle de
-préséance du blocage tiré pour un périmètre (I3 de `block_perimeter`) ne regarde que les cartes de
-son subnet, comme il le dit ; I3 sur `verify_block_ip` couvre aussi une entrée fusionnée. Aucune
-règle retirée. Sur `main`, la machine seule fait tomber l'oracle aux graines 1, 322 et 1234 (500
-séquences), sur les deux formes du constat.
+ce que disent les cartes de blocage d'une passe (`_block_cards_true`, jugé sur le monde et le
+journal du faux Azure), carte réseau par carte réseau, sur celles que la carte nomme (toutes celles
+de la VM si elle n'en nomme aucune) : « reposé une fois » ou « reste bloquée » → l'attaquant
+n'atteint pas ces cartes ; « n'est plus bloquée » → jamais d'une carte que notre périmètre, intact
+sur son subnet, coupe seul — le NSG du subnet seul, sans nos autres deny, les règles qu'un tiers a
+retournées gardées (une isolation, ou le NSG propre d'une carte qui ferme aussi le port, ne comptent
+pas pour le périmètre : le modèle de préséance du code, un NSG à la fois ; trouvé par la machine,
+graine 42 à 2 000) ; seule exemption, une carte d'escalade quand la même passe a écrit ce périmètre
+(le journal le dit) pour l'entrée d'une autre VM — dite avant l'écriture, elle était vraie (graine
+322 à 2 000) ; une carte de repose, écrite après sa propre relecture, n'en a pas. Sur `main`, la
+machine seule fait tomber l'oracle aux graines 1, 322 et 1234 (500 séquences), sur les deux formes
+du constat. **Le tirage `data_subnet`** fait passer les mondes où les deux cartes de Db--01 partagent
+un subnet d'environ 100 % à environ 50 % (`st.one_of(st.none(), …)`), et, tiré en dernier mais
+ajouté au flux d'octets, il décale les exemples que `GLORFINDEL_INVARIANT_DB` rejoue : une séquence
+mémorisée avant RB1 rejoue une autre séquence.
+
+**La relecture 5.5 de RB1 : I3 de `block_perimeter`, et une écriture échouée.** Le premier correctif
+avait borné le contrôle de préséance d'un blocage de périmètre (I3 de `block_perimeter`) aux cartes
+du subnet du périmètre, pour toutes les VM. La relecture l'a défait sur une copie : la machine
+échoue en 5 min (graine 1, 300 séquences), réduite à `build(subnet_nsg=[], data_subnet=[])` puis
+`block_perimeter(Db--01)` — « perimeter block said blocked, … reaches Db--01 ». Le borner cachait un
+vrai défaut, qui ouvrait une carte : `block` de Db--01 sur ses deux subnets, puis
+`block_perimeter(replace=True)` — la promotion retirait les placements des **deux** cartes, alors
+que le périmètre ne couvre que le subnet de la carte primaire ; db-nic-1 ouverte, `blocked` dit,
+`verify_block_ip` vrai (une entrée de périmètre seul ne lisait que sa paire), aucune carte. Sans
+promotion, `blocked` aussi, la seconde carte ouverte. **Correctif** (`blocks.py`, `perimeter.py`,
+`unblock.py`) : la promotion garde les placements des cartes hors du subnet du périmètre (et de
+toutes, si les cartes ne se lisent pas) ; un blocage de périmètre nomme les cartes qu'il ne couvre
+et que rien ne bloque (`uncovered_nics`, statut `blocked_partial`, ou `nics_unread`) ; la
+vérification d'une entrée de périmètre seul lit ces cartes — fausse, la réaffirmation le dit sur sa
+carte (« n'est plus bloquée sur db-nic-1 »). **Le test** : pour la VM visée, I3 garde toutes ses
+cartes — sauf celles qu'elle nomme non couvertes, que le test vérifie hors du subnet (sa propre
+connaissance) ; pour les autres VM du subnet, leurs cartes derrière le périmètre ; I3 sur
+`verify_block_ip` couvre toute entrée, de périmètre seul comprise. Second cas de la relecture : une
+entrée fusionnée sur web2, sa règle propre retournée, le NSG du subnet illisible (403), en
+`non_disruptive` — la repose du périmètre échoue, celle de la VM réussit, et la relecture disait
+vrai, l'état `unknown` de la paire de périmètre compté nulle part : « reposé une fois », l'erreur
+avalée. Maintenant une écriture échouée n'est jamais « reposé » (`partial`, l'erreur dans la carte),
+et une paire de périmètre illisible rend la vérification inconnue. Séquences figées
+`test_a_perimeter_block_never_says_blocked_with_a_nic_left_open` (celle de la relecture),
+`test_a_promotion_keeps_the_block_of_a_nic_the_perimeter_doesnt_cover`,
+`test_a_perimeter_block_alone_is_verified_on_every_nic`,
+`test_a_perimeter_block_whose_nics_cant_be_read_takes_no_block_off`,
+`test_a_write_that_failed_is_never_said_put_back` (toutes échouent sur `main`) et un test de
+`test_reassert.py` ; mutants M1635–M1640. Sur ce correctif, la machine a encore trouvé (graine 777
+à 500) une carte hors du périmètre jugée bloquée sur la foi de l'état : son blocage enregistré,
+ses règles retirées depuis (un `terraform apply`), `blocked` dit. Ce qui la bloque est relu sur
+Azure (`verify_block_ip`) ; séquence `test_a_perimeter_block_reads_the_other_nics_own_block_on_azure`,
+mutant M1641.
 
 **Le déblocage d'une VM supprimée (RB1).** Ce qu'il laisse porte sa commande
 (`az network nsg rule delete -g … --nsg-name … -n …`) et le dit redit tant que la règle reste — la
@@ -1539,25 +1575,28 @@ dit (`not_found`) : dit et laissé (il couvre tout un subnet). **Notre `-out` re
 entrait en collision, Azure refusait, rien n'était reposé ; seule une règle à nous dans sa propre
 direction libère le sien.
 
-**Séquences figées** (`test_invariant_regressions.py`) : dix tests, quatorze cas ; onze échouent sur
-`main` pour la raison dite, les trois autres (un périmètre contourné sur le port de la menace, un
-périmètre d'une autre VM, l'entrée gardée) gardent des mutants ; tests de `test_reassert.py`. Mutants M1620–M1634 attrapés par elles ; M1599 réaligné. Conséquence
+**Séquences figées** (`test_invariant_regressions.py`) : seize tests, vingt cas, relecture
+comprise ; dix-sept échouent sur `main` pour la raison dite, les trois autres (un périmètre contourné
+sur le port de la menace, un périmètre d'une autre VM au déblocage, l'entrée gardée) gardent des
+mutants ; tests de `test_reassert.py`. Mutants M1620–M1641 attrapés par elles ; M1599 réaligné. Conséquence
 voulue de la relecture après repose : un blocage tenu par la quarantaine dont les règles, sur le
 NSG propre de la carte (hors de la carte jusqu'à la levée), ont disparu n'est plus dit « reposé » —
 la repose écrit sur le NSG qui gouverne la carte, celles-là manquent toujours : `partial`, dit.
 
-**Mesures de RB1.** Invariants sur le code final : 500 séquences sur les graines 1, 11, 42, 99,
-203, 322, 777 et 1234, puis 2 000 sur 42, 322 et 1234, verts. Les quinze mutants M1620–M1634 sont
-attrapés 15/15 par leurs séquences figées (et `test_reassert.py`) ; par la machine seule, à 500
-séquences et deux tours : M1621, M1625 et M1634 à chaque tour, M1622 une fois sur deux, M1627
-jamais (tenu par `test_reassert.py`), les dix autres par les séquences figées seulement — la
-relecture après repose suffit à rendre vraie la carte d'une repose incomplète (M1620), c'est la
-séquence figée qui voit la règle de la VM restée retournée. Harnais avant/après au même budget (60
-séquences, deux tours, `--jobs 4`) sur les mutants des modules du chemin d'isolation (blocage,
-déblocage, NSG, réseau, quarantaine, isolation, levée, vérification, état, réaffirmation) :
-138 avant (`main`), les mêmes et M1620–M1634 après ; attrapés à chaque tour, 113/138 avant,
-115/138 après, et 130/153 avec les nouveaux ; aucun perdu — tout mutant attrapé avant (machine ou
-séquences figées) l'est après ; M36 et M864 survivent des deux côtés. M761 et M831, dilués à 60
+**Mesures de RB1** (code final, relecture comprise). Invariants : 500 séquences sur les graines 1,
+777, 1234 et 2718, puis 2 000 sur 322 et 42, verts (avant la relecture, 500 sur 1, 11, 42, 99, 203,
+322, 777, 1234 et 2 000 sur 42, 322, 1234). Les vingt-deux mutants M1620–M1641 sont attrapés par
+leurs séquences figées (et `test_reassert.py`), M1590–M1599 aussi. Par la machine seule (mesuré
+avant la relecture, 500 séquences, deux tours) : M1621, M1625 et M1634 à chaque tour, M1622 une
+fois sur deux, M1627 jamais (tenu par `test_reassert.py`), les autres par les séquences figées
+seulement — la relecture après repose suffit à rendre vraie la carte d'une repose incomplète
+(M1620), c'est la séquence figée qui voit la règle de la VM restée retournée. Harnais avant/après
+au même budget (60 séquences, deux tours, `--jobs 4`) sur les mutants des modules du chemin
+d'isolation (blocage, déblocage, NSG, réseau, quarantaine, isolation, levée, vérification, état,
+réaffirmation) : 138 avant (`main`), les mêmes et M1620–M1641 après ; attrapés à chaque tour,
+113/138 avant, 112/138 après, 134/160 avec les nouveaux. Aucun perdu : M10 (un subnet illisible lu
+« sans NSG »), 1/2 avant et 0/2 après à ce budget, remesuré — 1/6 avant, 4/6 après à 60 séquences,
+2/2 des deux côtés à 500 ; M36 et M864 survivent des deux côtés. M761 et M831, dilués à 60
 séquences depuis I5R : à 500, 2/2 avant comme après.
 
 **I11 sous charge (29/10).** Le délai d'un tour (20 s) n'a pas été dépassé : 26 runs de la

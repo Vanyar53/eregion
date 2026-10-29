@@ -32,6 +32,11 @@ def _connector(verify_iso=None, verify_blk=None):
     c.verify_isolation.return_value = verify_iso or {"verified": True}
     c.verify_block_ip.return_value = verify_blk or {"verified": True}
     c.isolate_vm.side_effect = lambda rid: _isolated() or {"status": "isolated"}
+
+    def blocked(*a, **k):            # put back: Azure, read again, has the block whole (RB1)
+        c.verify_block_ip.return_value = {"verified": True}
+        return {"status": "blocked"}
+    c.block_suspicious_ip.side_effect = blocked
     return c
 
 
@@ -787,3 +792,56 @@ def test_a_reread_keeps_to_the_clients_subscription_and_never_in_dry_run():
     assert c.read_quarantine(f.nsgs[q]["id"])["status"] == "altered"
     with pytest.raises(RuntimeError):
         AzureConnector(dry_run=True).read_quarantine(f.nsgs[q]["id"])
+
+
+# ── RB1 (#321): a merged block put back whole, and said exactly ─────────────────────────
+
+def _merged(**extra):
+    """A `block_perimeter` then a `block` of one IP: one entry, `scoped: false`."""
+    _save_block_state("vm", "203.0.113.9", _RID, nsg="rg/nsg-subnet", nsg_scope="subnet",
+                      rule="glorfindel-block-203-0-113-9", scoped=False, threat_port=22)
+    _save_block_state("vm", "203.0.113.9", _RID, nsg="rg/nsg-subnet", nsg_scope="subnet", rule="r",
+                      placements=[{"nsg_rg": "rg", "nsg_name": "nsg-subnet", "rule": "r", "nic_id": "n"}], **extra)
+
+
+def _block_cards():
+    return [e for e in escalations.pending() if e.get("action") == "block_suspicious_ip"]
+
+
+def test_a_merged_block_puts_back_its_perimeter_and_its_vms_rules():
+    """The perimeter alone was put back: a VM rule turned into an allow stayed so (RB1)."""
+    _merged()
+    c = _connector(verify_blk={"verified": False, "missing_rules": ["r"], "open_nics": ["nic-b"]})
+    report = reassert_active(c, _ACT)
+    assert [call.kwargs["scope"] for call in c.block_suspicious_ip.call_args_list] == ["subnet", "vm"]
+    assert report[0]["outcome"] == "reapplied" and "reposé une fois" in _block_cards()[0]["reason"]
+
+
+def test_a_block_put_back_that_still_doesnt_hold_is_never_said_put_back():
+    """Written again, Azure read again: what still doesn't hold is said, never « reposé »;
+    once said, the next passes are quiet until it holds (one card per episode)."""
+    _merged()
+    c = _connector(verify_blk={"verified": False, "missing_rules": ["r"], "open_nics": ["nic-b"]})
+    c.block_suspicious_ip.side_effect = None                 # Azure still has the rule turned
+    report = reassert_active(c, _ACT)
+    (card,) = _block_cards()
+    assert report[0]["outcome"] == "partial", report
+    assert "reposé" not in card["reason"] and "n'est plus bloquée sur nic-b" in card["reason"], card["reason"]
+    assert reassert_active(c, _ACT) == [] and len(_block_cards()) == 1
+    c.verify_block_ip.return_value = {"verified": True}
+    reassert_active(c, _ACT)
+    assert not _load_block_entries("vm")[0].get("drift_alerted_at")
+
+
+@pytest.mark.parametrize("held", [{"held_by_perimeter": ["nic-a"], "perimeter_rule": "glorfindel-block-203-0-113-9"},
+                                  {}])
+def test_rules_gone_while_the_ip_stays_blocked_are_said_so(held):
+    """Its own rules gone, the IP still cut off — by the perimeter, or by the quarantine
+    (`held_missing`): « l'IP n'est plus bloquée » was said of it."""
+    _merged()
+    c = _connector(verify_blk={"verified": True, "held_missing": ["r", "r-out"], **held})
+    reassert_active(c, AutonomyConfig(default="human_only"))
+    reason = _block_cards()[0]["reason"]
+    assert "n'est plus bloquée" not in reason and "l'IP reste bloquée" in reason, reason
+    assert ("nic-a par la règle de périmètre" in reason) is bool(held), reason
+    c.block_suspicious_ip.assert_not_called()

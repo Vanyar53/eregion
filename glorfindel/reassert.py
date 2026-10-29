@@ -283,35 +283,90 @@ def _reassert_block(connector, autonomy, vm: str, ip: str, report: list[dict], r
     if b.get("drift_alerted_at"):
         return                      # one alert per disappearance (see isolations)
     if b.get("reasserted_at") or _mode(autonomy, vm, ref) == "human_only":
-        reason = (f"Le blocage de {ip} sur {vm} a disparu d'Azure"
-                  + (" une deuxième fois" if b.get("reasserted_at") else "")
-                  + " — l'IP n'est plus bloquée. Glorfindel ne le repose pas : "
-                  f"`glorfindel unblock {ip} {rid} --yes` si c'est voulu, sinon re-bloquer.")
+        reason = (_block_drift(ip, vm, verification, again=bool(b.get("reasserted_at")))
+                  + f" Glorfindel ne le repose pas : `glorfindel unblock {ip} {rid} --yes` si c'est voulu, "
+                  "sinon re-bloquer.")
         _alert(_alert_id(vm, rid, ip), resource_id=rid, action="block_suspicious_ip",
                reason=reason, action_params={"ip": ip})
         _update_block_entry(ref or vm, ip, drift_alerted_at=now)
         report.append({"kind": "block", "vm": vm, "ip": ip, "outcome": "escalated", "detail": reason})
         return
-    try:
-        connector.block_suspicious_ip(
-            ip, rid, scope="vm" if b.get("scoped", True) else "subnet",
-            threat_port=b.get("threat_port"))
+    # A merged entry (RB1): its perimeter AND its VM's placements, each put back — the
+    # perimeter alone left a VM rule turned into an allow as it was.
+    scopes = (["subnet", "vm"] if b.get("placements") else ["subnet"]) if b.get("scoped") is False else ["vm"]
+    errors: list[str] = []
+    for scope in scopes:
+        try:
+            connector.block_suspicious_ip(ip, rid, scope=scope, threat_port=b.get("threat_port"))
+        except Exception as exc:
+            errors.append(f"{exc}" if len(scopes) == 1 else f"{_SCOPE_WORDS[scope]} : {exc}")
+    if len(errors) < len(scopes):
         _update_block_entry(ref or vm, ip, reasserted_at=now)
-        reason = (f"Le blocage de {ip} sur {vm} avait disparu d'Azure : reposé une fois. "
-                  "S'il disparaît encore, Glorfindel alertera sans le reposer.")
-        outcome = "reapplied"
-    except Exception as exc:
-        reason = f"Le blocage de {ip} sur {vm} a disparu d'Azure ; le reposer a échoué : {exc}"
+        # Said from Azure read again, never from the writes alone (A0): « reposé » only
+        # for a block that holds whole.
+        try:
+            after = connector.verify_block_ip(ip, rid)
+        except Exception as exc:
+            after = {"verified": None, "error": f"relecture impossible : {exc}"}
+        if after.get("verified") is True and not after.get("held_missing"):
+            reason = (f"Le blocage de {ip} sur {vm} avait disparu d'Azure : reposé une fois. "
+                      "S'il disparaît encore, Glorfindel alertera sans le reposer.")
+            outcome = "reapplied"
+        else:
+            say_bypass(vm, rid, after, report, ip=ip, ref=ref)
+            reason = (f"Le blocage de {ip} sur {vm} avait disparu d'Azure ; ses règles réécrites une fois"
+                      + (f" (échec : {' ; '.join(errors)})" if errors else "")
+                      + ", il ne tient pas en entier — " + _block_drift(ip, vm, after, said=True)
+                      + f" Glorfindel ne les réécrit pas de nouveau : `glorfindel unblock {ip} {rid} --yes` si "
+                      "c'est voulu, sinon re-bloquer.")
+            outcome = "partial"
+    else:
+        reason = f"Le blocage de {ip} sur {vm} a disparu d'Azure ; le reposer a échoué : {' ; '.join(errors)}"
         outcome = "failed"
     _alert(_alert_id(vm, rid, ip), resource_id=rid, action="block_suspicious_ip",
            reason=reason, action_params={"ip": ip})
-    if outcome == "failed":
+    if outcome != "reapplied":
         # "Already alerted" is written only once the card exists. Written before it, a
         # crash in between (or a full disk on the card) left the marker without the
         # card: every later pass returned on the marker, and the block stayed gone in
         # silence (L1F, invariant machine).
         _update_block_entry(ref or vm, ip, drift_alerted_at=now)
     report.append({"kind": "block", "vm": vm, "ip": ip, "outcome": outcome, "detail": reason})
+
+
+_SCOPE_WORDS = {"subnet": "règle de périmètre", "vm": "règles de la VM"}
+
+
+def _block_drift(ip: str, vm: str, v: dict, again: bool = False, said: bool = False) -> str:
+    """What a block's verification says is gone, and what still holds (RB1). Never « n'est
+    plus bloquée » of an IP our perimeter (or the quarantine) still cuts off, nor of a NIC
+    whose perimeter couldn't be read: that is said as unknown. `said`: the tail of a card
+    whose head is already written (after a re-application)."""
+    gone = [str(n) for n in (v.get("missing_rules") or v.get("held_missing") or [])]
+    names = f" ({', '.join(gone)})" if gone else ""
+    held, open_, unsure = (v.get("held_by_perimeter") or [], v.get("open_nics") or [],
+                           v.get("perimeter_unread") or [])
+    by = f" par la règle de périmètre {v.get('perimeter_rule')}" if held else ""
+    twice = " une deuxième fois" if again else ""
+    if v.get("verified") is True:
+        where = f" sur {', '.join(held)}{by}" if held else ""
+        if said:
+            return f"l'IP reste bloquée{where}, mais il manque toujours{names or ' des règles'}."
+        return f"Le blocage de {ip} sur {vm} a disparu d'Azure en partie{twice}{names} — l'IP reste bloquée{where}."
+    if v.get("verified") is None or (v.get("shadowed_by") and not gone):
+        what = ("contourné : une règle d'autorisation d'un tiers passe avant (carte à part)"
+                if v.get("shadowed_by") else f"non vérifiable ({v.get('error') or 'illisible'})")
+        return (what + ".") if said else f"Le blocage de {ip} sur {vm} a disparu d'Azure{twice} — {what}."
+    head = "" if said else f"Le blocage de {ip} sur {vm} a disparu d'Azure{twice}{names} — "
+    if open_ or not unsure:
+        tail = "l'IP n'est plus bloquée" + (f" sur {', '.join(open_)}" if open_ else "")
+    else:
+        tail = f"on ne sait pas si l'IP est encore bloquée sur {', '.join(unsure)}"
+        unsure = []
+    tail += f" ; elle l'est encore sur {', '.join(held)}{by}" if held else ""
+    tail += (f" ; sur {', '.join(unsure)}, ses règles ont disparu et la règle de périmètre n'a pas pu être lue"
+             if unsure else "")
+    return head + tail + (f"{names}." if said else ".")
 
 
 def ttl_alerts(ttl_h: float, now: datetime | None = None) -> list[dict]:

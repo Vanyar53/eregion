@@ -200,10 +200,14 @@ def _pair_priorities(rules, in_name: str, out_name: str, start: int, step: int,
     direction: it keeps it. A rewrite moves a deny up, never down. Moved down, it fell
     behind an allow it used to precede: the reassertion put a perimeter block back at
     220, under an allow at 210 — a block rule someone had turned around —, and the
-    attacker reached the VM on every port (I5R, invariant machine). `taken`: numbers
-    already given by this operation on the same NSG."""
+    attacker reached the VM on every port (I5R, invariant machine). Only ours in its own
+    direction frees its number: our `-out` turned Inbound by someone, below the first
+    free, read as free — the inbound deny written there met it, Azure refused the pair
+    and nothing was put back (RB1). `taken`: numbers already given by this operation on
+    the same NSG."""
     own = {in_name.lower(): "inbound", out_name.lower(): "outbound"}
-    used = {r.priority for r in rules or [] if _rule_name(r).lower() not in own} | set(taken)
+    used = {r.priority for r in rules or []
+            if own.get(_rule_name(r).lower()) != _enum_text(getattr(r, "direction", ""))} | set(taken)
     first = next(p for p in range(start, 4000, step) if p not in used)
     out = {"inbound": first, "outbound": first}
     for r in rules or []:

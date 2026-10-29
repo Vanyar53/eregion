@@ -29,14 +29,15 @@ class Script:
         return self.values.pop(0)
 
 
-def _net(quarantine=False, subnet_nsg=None, quarantine_rg="", tier_rules=(), legacy=None, **nics):
+def _net(quarantine=False, subnet_nsg=None, quarantine_rg="", tier_rules=(), legacy=None, data_subnet=None,
+         **nics):
     plain = {"own": None, "rules": [], "policy": False}
     return {"subnet_nsg": subnet_nsg, "edge_nsg": None, "tier_rules": list(tier_rules),
             "nics": {n: {**plain, **nics.get(n.replace("-", "_"), {})}
                      for n in ("web-nic", "db-nic-0", "db-nic-1", "api-nic")},
             "windows": None,
             "config": {"quarantine": quarantine, "rg": quarantine_rg, "forensic": [], "readable": True},
-            "legacy": legacy}
+            "legacy": legacy, "data_subnet": data_subnet}
 
 
 def _run(monkeypatch, net, *steps):
@@ -1876,3 +1877,255 @@ def test_an_unblock_of_a_deleted_vm_with_a_state_unreadable_says_it(monkeypatch,
         assert any(f"{d.name}/" in f and "illisible" in f for f in out["failed"]), out
     finally:
         shutil.rmtree(m.home, ignore_errors=True)
+
+
+# ── RB1 (#321): the reassertion of a merged block, the unblock of a deleted VM ─────────
+
+_DATA = _NSG.format(rg="rg-net", name="nsg-data")
+_PERIMETER = "glorfindel-block-" + ATTACKER.replace(".", "-")
+
+
+def _block_name(vm: str, nic: str, nic_key: str) -> str:
+    """The VM block's rule of this NIC, by the naming convention (restated)."""
+    import hashlib
+    mark = hashlib.sha1(nic_key.rstrip("/").lower().encode()).hexdigest()[:6]
+    return f"{_PERIMETER}-{vm}-{nic}-{mark}".lower()
+
+
+_DB0_BLOCK = _block_name("db--01", "db-nic-0", _nic("rg-app1", "db-nic-0"))
+_DB1_BLOCK = _block_name("db--01", "db-nic-1", _nic("rg-app1", "db-nic-1"))
+
+
+@pytest.mark.parametrize("modes", [("human_only",), ("non_disruptive", "non_disruptive")])
+def test_a_merged_block_never_says_the_ip_unblocked_while_the_perimeter_holds(monkeypatch, modes):
+    """RB1, finding 1, one subnet: web2 blocked on the perimeter (200), then for itself
+    (210), in one entry (`scoped: false`); someone turns the VM's rule into an allow. The
+    perimeter still cuts the attacker off. The reassertion put back the perimeter alone
+    — the VM's rule stayed an allow — then said « disparu une deuxième fois — l'IP n'est
+    plus bloquée »; in human_only, at once. False, on the prudent side."""
+    _run(monkeypatch, _net(subnet_nsg=[]),
+         ("block_perimeter", WEB2, WEB2, None, False),
+         ("block", WEB2, WEB2, None, 22),
+         ("tamper_with_our_rule", "access", (key(_SUBNET), _WEB2_BLOCK)),
+         *[("reassert", mode, None) for mode in modes])
+
+
+def test_a_merged_block_puts_back_the_vms_rules_on_every_subnet(monkeypatch):
+    """RB1, finding 1, two subnets: Db--01's second NIC on a subnet of its own. The
+    perimeter covers the primary NIC's subnet only, and the second NIC's rule was turned
+    into an allow: the attacker reaches it. The reassertion put back the perimeter and
+    said « reposé une fois » — db-nic-1 open."""
+    _run(monkeypatch, _net(subnet_nsg=[], data_subnet=[]),
+         ("block_perimeter", DB, DB, None, False),
+         ("block", DB, DB, None, 22),
+         ("tamper_with_our_rule", "access", (key(_DATA), _DB1_BLOCK)),
+         ("reassert", "non_disruptive", None))
+
+
+def _cards(m) -> list[str]:
+    from glorfindel import escalations
+    return [e["reason"] for e in escalations.pending()
+            if e.get("action") == "block_suspicious_ip" and e["signal_id"].startswith("reassert-")]
+
+
+def test_a_merged_block_card_says_what_is_back_and_what_still_holds(monkeypatch):
+    """The card of a merged block, both NICs' rules turned: in human_only it says where the
+    IP is no longer blocked (db-nic-1) and where the perimeter still blocks it (db-nic-0)
+    — never « reposé »; outside it, both rules are written again, the perimeter kept, and
+    only then « reposé une fois »."""
+    import shutil
+
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_net(subnet_nsg=[], data_subnet=[]))
+        c = m.connector
+        assert c.block_suspicious_ip(ATTACKER, DB, scope="subnet")["status"] == "blocked"
+        assert c.block_suspicious_ip(ATTACKER, DB, scope="vm", threat_port=22)["status"] == "blocked"
+        for nsg, name in ((_SUBNET, _DB0_BLOCK), (_DATA, _DB1_BLOCK)):
+            m.fake.nsgs[key(nsg)]["rules"][name]["access"] = "Allow"
+        m.reassert(Script("human_only", None))
+        (card,) = _cards(m)
+        assert "n'est plus bloquée sur db-nic-1" in card and "db-nic-0" in card and "périmètre" in card, card
+        assert "reposé" not in card, card
+        from glorfindel import actions
+        actions._update_block_entry(DB, ATTACKER, drift_alerted_at=None)      # the operator acknowledged it
+        m.reassert(Script("non_disruptive", None))
+        (card,) = _cards(m)
+        assert "reposé une fois" in card, card
+        for nsg, name in ((_SUBNET, _DB0_BLOCK), (_DATA, _DB1_BLOCK), (_SUBNET, _PERIMETER)):
+            assert m.fake.nsgs[key(nsg)]["rules"][name]["access"] == "Deny", (nsg, name)
+        assert not m._attacker_flows(DB, None)
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)      # the rules turned by hand aren't the machine's
+
+
+def test_an_unblock_of_a_deleted_vm_says_how_to_take_what_it_leaves(monkeypatch):
+    """RB1, finding 2: the rules it can't attribute are left — the message now says how
+    to take them off, and that the unblock says them again while they stay: once taken
+    off by hand, the next unblock is done."""
+    import shutil
+
+    m = _gone_world(monkeypatch, isolated=False)
+    try:
+        left = sorted(_block_rules(m))
+        for _ in range(2):
+            out = m.connector.unblock_ip(ATTACKER, WEB2)
+            assert out["status"] == "unblock_partial", out
+            for r in left:
+                said = [f for f in out["failed"] if r in f]
+                assert said and f"az network nsg rule delete -g rg-net --nsg-name nsg-subnet -n {r}" in said[0], out
+                assert "tant qu'elle reste" in said[0], said
+        for r in left:
+            del m.fake.nsgs[key(_SUBNET)]["rules"][r]
+        assert m.connector.unblock_ip(ATTACKER, WEB2)["status"] == "not_found"
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)
+
+
+@pytest.mark.parametrize("case", ["entry lost", "tied elsewhere", "entry kept"])
+def test_an_unblock_of_a_deleted_vm_says_a_perimeter_block_nothing_ties_elsewhere(monkeypatch, case):
+    """RB1, finding 2: a perimeter block of the deleted VM's, its entry lost: neither looked
+    for nor said — `not_found`, the IP blocked for the whole subnet. Now said, left (it
+    covers every VM of the subnet), with how to take it off. One another VM's entry
+    records (web1 blocked the IP on the same subnet) is that VM's; and with its own entry
+    kept (a VM block), the deleted VM's entry says what was its own — nothing else said."""
+    import shutil
+
+    from glorfindel import actions
+
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_net(subnet_nsg=[]))
+        c = m.connector
+        perimeter_of = WEB1 if case == "entry kept" else WEB2
+        assert c.block_suspicious_ip(ATTACKER, perimeter_of, scope="subnet")["status"] == "blocked"
+        if case == "tied elsewhere":
+            assert c.block_suspicious_ip(ATTACKER, WEB1, scope="subnet")["status"] == "blocked"
+        if case == "entry kept":
+            assert c.block_suspicious_ip(ATTACKER, WEB2, scope="vm", threat_port=22)["status"] == "blocked"
+        (actions._BLOCK_STATE_DIR / f"web--{actions._rid_hash(perimeter_of)}.json").unlink()
+        web2 = m.fake.vms.pop(key(WEB2))
+        for n in web2["nics"]:
+            m.fake.nics.pop(key(n))
+        out = c.unblock_ip(ATTACKER, WEB2)
+        assert {_PERIMETER, f"{_PERIMETER}-out"} <= set(m.fake.nsgs[key(_SUBNET)]["rules"])
+        if case != "entry lost":
+            assert out["status"] == ("unblocked" if case == "entry kept" else "not_found"), out
+            return
+        assert out["status"] == "unblock_partial", out
+        said = [f for f in out["failed"] if _PERIMETER in f]
+        assert said and "périmètre" in said[0], out
+        assert f"az network nsg rule delete -g rg-net --nsg-name nsg-subnet -n {_PERIMETER}" in said[0], said
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)
+
+
+def test_our_outbound_rule_turned_inbound_never_collides_with_the_rewrite(monkeypatch):
+    """RB1, finding 3: someone turns our `-out` rule into an Inbound one, at a number below
+    the first free (here its own, 200, the inbound one deleted). Our names don't count
+    among the numbers taken: 200 read as free, the inbound deny written there met the
+    turned rule — Azure refuses two rules of one direction at one number, and nothing
+    was put back. Only a rule of ours in its own direction frees its number."""
+    import shutil
+
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_net(subnet_nsg=[]))
+        c, g = m.connector, m.fake.nsgs[key(_SUBNET)]["rules"]
+        assert c.block_suspicious_ip(ATTACKER, WEB2, scope="vm", threat_port=22)["status"] == "blocked"
+        del g[_WEB2_BLOCK]
+        g[f"{_WEB2_BLOCK}-out"]["direction"] = "Inbound"
+        out = c.block_suspicious_ip(ATTACKER, WEB2, scope="vm", threat_port=22)
+        assert out["status"] == "blocked", out
+        assert g[_WEB2_BLOCK]["direction"] == "Inbound" and g[f"{_WEB2_BLOCK}-out"]["direction"] == "Outbound"
+        assert not m._attacker_flows(WEB2, None)
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)
+
+
+def _merged_world(monkeypatch, net, rid=WEB2):
+    """`rid` blocked on the perimeter, then for itself: one merged entry."""
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    m.build(net)
+    assert m.connector.block_suspicious_ip(ATTACKER, rid, scope="subnet")["status"] == "blocked"
+    m.connector.block_suspicious_ip(ATTACKER, rid, scope="vm", threat_port=22)
+    return m
+
+
+@pytest.mark.parametrize("mode", ["human_only", "non_disruptive"])
+def test_a_merged_blocks_perimeter_gone_is_put_back_or_said(monkeypatch, mode):
+    """The perimeter of a merged entry deleted (a `terraform apply` on the subnet's NSG),
+    the VM's own rules in place: the verification looked at the VM's rules only — the
+    block read whole, its perimeter gone in silence for every other VM of the subnet.
+    Now its own pair is checked: put back once, or said — the IP still blocked for this
+    VM, by its own rules."""
+    import shutil
+
+    m = _merged_world(monkeypatch, _net(subnet_nsg=[]))
+    try:
+        rules = m.fake.nsgs[key(_SUBNET)]["rules"]
+        for n in (_PERIMETER, f"{_PERIMETER}-out"):
+            del rules[n]
+        m.reassert(Script(mode, None))
+        (card,) = _cards(m)
+        if mode == "human_only":
+            assert _PERIMETER in card and "l'IP reste bloquée" in card, card
+            assert _PERIMETER not in rules
+        else:
+            assert "reposé une fois" in card, card
+            assert {_PERIMETER, f"{_PERIMETER}-out"} <= set(rules)
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)
+
+
+def test_a_merged_block_whose_perimeter_cant_be_read_is_never_said_held(monkeypatch):
+    """web2's own rule on its NIC's NSG turned into an allow, the subnet's NSG — where the
+    perimeter lies — unreadable (403): the perimeter may hold or not. Never read as held
+    (« reste bloquée »), nor as gone (« n'est plus bloquée »): unknown, said so."""
+    import shutil
+
+    m = _merged_world(monkeypatch, _net(subnet_nsg=[], web_nic={"own": "dedicated"}))
+    try:
+        own = _NSG.format(rg="rg-app2", name="nsg-web-nic")
+        name = next(n for n in m.fake.nsgs[key(own)]["rules"] if n.startswith(_PERIMETER) and not n.endswith("-out"))
+        m.fake.nsgs[key(own)]["rules"][name]["access"] = "Allow"
+        m.fake.unreadable.add(key(_SUBNET))
+        v = m.connector.verify_block_ip(ATTACKER, WEB2)
+        assert v["verified"] is not True and v.get("perimeter_unread") == ["web-nic"], v
+        m.reassert(Script("human_only", None))
+        (card,) = _cards(m)
+        assert "on ne sait pas si l'IP est encore bloquée sur web-nic" in card, card
+        assert "n'est plus bloquée" not in card and "reste bloquée" not in card, card
+    finally:
+        m.fake.unreadable.discard(key(_SUBNET))
+        shutil.rmtree(m.home, ignore_errors=True)
+
+
+def test_a_merged_block_whose_perimeter_is_bypassed_is_never_said_held(monkeypatch):
+    """A customer allow for SSH (100) before every deny of ours on the subnet's NSG: the
+    perimeter lets the threat through. The VM's rule turned too: the IP is not blocked on
+    22 — never « reste bloquée » because the perimeter is there."""
+    from .test_invariants import _TEMPLATES
+
+    _run(monkeypatch, _net(subnet_nsg=[_rule("allow-ssh", 100, _TEMPLATES["allow-ssh"])]),
+         ("block_perimeter", WEB2, WEB2, None, False),
+         ("block", WEB2, WEB2, None, 22),
+         ("tamper_with_our_rule", "access", (key(_SUBNET), _WEB2_BLOCK)),
+         ("reassert", "human_only", None))
+
+
+def test_a_vm_block_never_says_the_ip_unblocked_while_another_vms_perimeter_holds(monkeypatch):
+    """Found by the machine on RB1's first fix (seed 1 at 500): web1 blocked on the
+    perimeter, web2 for itself only — its entry not merged — and web2's rule turned into an
+    allow. The perimeter is one rule for the whole subnet: web2 stays blocked, and its card
+    said « l'IP n'est plus bloquée ». Any perimeter block of the IP on a NSG that governs
+    the NIC counts, whoever's entry records it."""
+    _run(monkeypatch, _net(subnet_nsg=[]),
+         ("block_perimeter", WEB1, WEB1, None, False),
+         ("block", WEB2, WEB2, None, 22),
+         ("tamper_with_our_rule", "access", (key(_SUBNET), _WEB2_BLOCK)),
+         ("reassert", "human_only", None))

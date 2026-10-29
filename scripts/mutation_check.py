@@ -4309,10 +4309,71 @@ MUTANTS += [
      '        failed = self._gone_vm_unknown(resource_id or vm_name, vm_name, "block")\n',
      "        failed = []\n"),
     ("M1599", "the unblock of a deleted VM leaves in silence the rules nothing names (I5R)", UNB,
-     "        failed += self._unnamed_blocks(vm_name, ip, known)\n", ""),
+     "        failed += self._unnamed_blocks(vm_name, ip, known, resource_id if lost else None)\n", ""),
 ]
 TESTS.update({mid: f"{_I5R_KEEP} {INVARIANTS}" for mid in ("M1590", "M1591", "M1592", "M1593", "M1594")})
 TESTS.update({f"M{n}": "tests/unit/test_invariant_regressions.py -k deleted_vm" for n in range(1595, 1600)})
+
+# RB1 (#321): a merged block — a perimeter and the VM's own, one entry — put back whole, and
+# its card says exactly what is back and what still holds; the unblock of a deleted VM says
+# how to take what it leaves, its perimeter block too; our `-out` rule turned Inbound frees
+# no number. Measured by the sequences frozen in test_invariant_regressions.py (and
+# test_reassert.py), then by the machine alone (its card oracle, the second subnet). M1620–M1634.
+PER = "glorfindel/providers/azure/perimeter.py"
+_RB1 = " ".join([f"{_I5R}{t}" for t in (
+    "a_merged_block_never_says_the_ip_unblocked_while_the_perimeter_holds",
+    "a_merged_block_puts_back_the_vms_rules_on_every_subnet",
+    "a_merged_block_card_says_what_is_back_and_what_still_holds",
+    "a_merged_blocks_perimeter_gone_is_put_back_or_said",
+    "a_merged_block_whose_perimeter_cant_be_read_is_never_said_held",
+    "a_merged_block_whose_perimeter_is_bypassed_is_never_said_held",
+    "an_unblock_of_a_deleted_vm_says_how_to_take_what_it_leaves",
+    "an_unblock_of_a_deleted_vm_says_a_perimeter_block_nothing_ties_elsewhere",
+    "our_outbound_rule_turned_inbound_never_collides_with_the_rewrite",
+    "a_vm_block_never_says_the_ip_unblocked_while_another_vms_perimeter_holds")] + ["tests/unit/test_reassert.py"])
+MUTANTS += [
+    ("M1620", "a merged block put back on its perimeter alone: the VM's rule left turned (RB1)", R,
+     '    scopes = (["subnet", "vm"] if b.get("placements") else ["subnet"]) if b.get("scoped") is False else ["vm"]\n',
+     '    scopes = ["subnet"] if b.get("scoped") is False else ["vm"]\n'),
+    ("M1621", "« reposé » said from the writes alone, Azure not read again (RB1, A0)", R,
+     "            after = connector.verify_block_ip(ip, rid)\n",
+     '            after = {"verified": True}\n'),
+    ("M1622", "only the entry's own perimeter counted: another VM's on the subnet still blocks (RB1)", UNB,
+     "                holds = self._perimeter_holds(cache, t0, ip, port)\n",
+     '                holds = self._perimeter_holds(cache, t0, ip, port) if perimeter else "no"\n'),
+    ("M1623", "a perimeter that can't be read counted as holding (RB1, A0)", UNB,
+     '                if holds == "holds":\n', '                if holds in ("holds", "unknown"):\n'),
+    ("M1624", "a merged entry's own perimeter pair not checked: gone in silence (RB1)", UNB,
+     '                if st in ("absent", "altered"):\n                    (missing if missing else held_missing)',
+     '                if False:\n                    (missing if missing else held_missing)'),
+    ("M1625", "rules gone while the IP stays blocked said « n'est plus bloquée » (RB1)", R,
+     '    if v.get("verified") is True:\n        where =', '    if False:\n        where ='),
+    ("M1626", "the NICs the perimeter still holds left out of the card (RB1)", UNB,
+     "                    held_by.append(short)\n", ""),
+    ("M1627", "a block put back that still doesn't hold said again at every pass (RB1)", R,
+     '    if outcome != "reapplied":\n', '    if outcome == "failed":\n'),
+    ("M1628", "our rule turned to the other direction frees its number: the rewrite collides (RB1)", NSG,
+     '            if own.get(_rule_name(r).lower()) != _enum_text(getattr(r, "direction", ""))} | set(taken)\n',
+     '            if _rule_name(r).lower() not in own} | set(taken)\n'),
+    ("M1629", "the unblock of a deleted VM leaves a rule without saying how to take it off (RB1)", UNB,
+     '                                "rien ne nomme plus)" + how.format(" si aucune VM vivante de ce nom ne bloque "\n'
+     '                                                                   f"{ip} (glorfindel status)"))\n',
+     '                                "rien ne nomme plus) : laissée")\n'),
+    ("M1630", "the unblock of a deleted VM, its entry lost, never looks for its perimeter block (RB1)", UNB,
+     '                elif lost and name.removesuffix("-out") == prefix', '                elif False and name.removesuffix("-out") == prefix'),
+    ("M1631", "another VM's recorded perimeter said as the deleted VM's (RB1)", UNB,
+     '        tied = self._perimeters_recorded(ip, lost) if lost else set()\n', "        tied = set()\n"),
+    ("M1632", "a perimeter block said for a deleted VM whose entry is kept (RB1)", UNB,
+     "        failed += self._unnamed_blocks(vm_name, ip, known, resource_id if lost else None)\n",
+     "        failed += self._unnamed_blocks(vm_name, ip, known, resource_id)\n"),
+    ("M1633", "a merged entry read as a VM block: its own perimeter never recognised, nor checked (RB1)", PER,
+     '        if entry.get("scoped") is not False or not entry.get("nsg")',
+     '        if True or not entry.get("nsg")'),
+    ("M1634", "a perimeter an allow lets the threat through counted as holding (RB1)", PER,
+     "                if found is not None and not self._threat_open(found):\n",
+     "                if found is not None:\n"),
+]
+TESTS.update({f"M{n}": _RB1 for n in range(1620, 1635)})
 
 
 # SEC7 (#296): identities and hardening — the bot's stale buttons (V-08), the control plane read

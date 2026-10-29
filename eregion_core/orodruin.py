@@ -4,7 +4,10 @@ guardrails hold — otherwise the injector stays passive and touches nothing.
         guarantee         checked by (nothing is written)
         identity          its role assignments, at every scope, all inside the bench's
                           resource group (but the two channels'); its effective rights
-                          there cover what the injectors ask
+                          there cover what the injectors read; what they write, granted at
+                          the scope of a VM or an experiment of it, never on the whole
+                          group (which VMs: Terraform's choice, by their tags — the
+                          contract does not read their inscription; O0 does, at each run)
         network           a connection outside the perimeter fails
         cap               the declared cap is read and compared to the ceiling
         kill              revoke the identity, cancel the chaos experiments, stop the
@@ -42,17 +45,30 @@ API_VERSION = "2022-04-01"
 # What the injectors ask of Azure on the bench: Annatar on a VM (annatar/executors/
 # azure_vm.py), Gothmog on a Chaos Studio experiment (gothmog/engines/chaos_studio.py —
 # it starts the experiment; the experiment's own identity acts on the VM).
-REQUIRED_ACTIONS = (
+# SEC5 (V-29, #182): they READ the bench's group; they WRITE only on what is enrolled — each
+# VM, each experiment, a role assignment at its own scope (infra/orodruin/main.tf). A write
+# right on the whole group (a VM not enrolled, the pre-observation's, would be in reach) is a
+# missing guarantee: passive.
+READ_ACTIONS = (
     "Microsoft.Resources/subscriptions/resourceGroups/read",
     "Microsoft.Compute/virtualMachines/read",
-    "Microsoft.Compute/virtualMachines/start/action",
-    "Microsoft.Compute/virtualMachines/runCommand/action",
     "Microsoft.Network/networkSecurityGroups/read",
     "Microsoft.Chaos/experiments/read",
-    "Microsoft.Chaos/experiments/start/action",
-    "Microsoft.Chaos/experiments/cancel/action",
     "Microsoft.Chaos/experiments/executions/read",
 )
+VM_ACTIONS = (
+    "Microsoft.Compute/virtualMachines/start/action",
+    "Microsoft.Compute/virtualMachines/runCommand/action",
+)
+CHAOS_ACTIONS = (
+    "Microsoft.Chaos/experiments/start/action",
+    "Microsoft.Chaos/experiments/cancel/action",
+)
+WRITE_ACTIONS = VM_ACTIONS + CHAOS_ACTIONS
+REQUIRED_ACTIONS = READ_ACTIONS + WRITE_ACTIONS
+# The resource type each write is granted on — its scope, inside the bench.
+_WRITE_SCOPE = {**{a: "/providers/microsoft.compute/virtualmachines/" for a in VM_ACTIONS},
+                **{a: "/providers/microsoft.chaos/experiments/" for a in CHAOS_ACTIONS}}
 # The one kind of assignment allowed outside the bench: reading role assignments, so
 # the identity can prove it holds nothing else (a read at the bench's scope cannot see
 # the subscription's).
@@ -169,9 +185,15 @@ def _allowed(action: str, perms: list[dict]) -> bool:
     )
 
 
+def _grants(action: str, actions: set[str]) -> bool:
+    """A role's actions (lower case, as ``role_actions`` lists them) grant ``action``."""
+    a = action.lower()
+    return any(fnmatch.fnmatch(a, x) for x in actions if not x.startswith("data:"))
+
+
 def assess_identity(assignments: list[dict], role_actions: Callable[[str], list[str]],
                     perms: list[dict], bench: str, *, sees_subscription: bool,
-                    channel: str = "", watch: str = "") -> list[dict]:
+                    channel: str = "", watch: str = "", experiments: bool = True) -> list[dict]:
     """The identity guarantee from what was read: every assignment inside the bench (or a
     pure role-assignment read, the exercise channel's container, a read-only role on the
     return channel's), and the injectors' actions allowed on the bench.
@@ -185,10 +207,22 @@ def assess_identity(assignments: list[dict], role_actions: Callable[[str], list[
         missing.append(_miss("identity_unprovable",
                              "cannot read role assignments over the subscription: an assignment "
                              "elsewhere would not be listed (contract_reader)"))
+    granted_on: dict[str, list[str]] = {a: [] for a in WRITE_ACTIONS}
     for a in assignments:
         props = a.get("properties") or {}
         scope = props.get("scope") or ""
         if _inside(scope, bench):
+            # SEC5 (V-29): a write on the group itself reaches every VM of it, enrolled or not.
+            actions = {x.lower() for x in role_actions(props.get("roleDefinitionId") or "")}
+            wide = [w for w in WRITE_ACTIONS if _grants(w, actions)]
+            if scope.lower().rstrip("/") == bench.lower().rstrip("/") and wide:
+                missing.append(_miss("identity_group_wide",
+                                     f"{', '.join(wide)} on the whole of {bench}: a write right "
+                                     "goes on each enrolled VM or experiment, never on the group"))
+                continue
+            for w in wide:
+                if _WRITE_SCOPE[w] in scope.lower():
+                    granted_on[w].append(scope)
             continue
         actions = {x.lower() for x in role_actions(props.get("roleDefinitionId") or "")}
         # Checked before the exercise channel: declared on the same container, the
@@ -204,10 +238,38 @@ def assess_identity(assignments: list[dict], role_actions: Callable[[str], list[
         if actions and actions <= AUTHZ_READ_ONLY:
             continue
         missing.append(_miss("identity_outside_bench", f"role assignment at {scope}"))
-    for action in REQUIRED_ACTIONS:
+    for action in READ_ACTIONS:
         if not _allowed(action, perms):
             missing.append(_miss("identity_missing_right", f"{action} on {bench}"))
+    # Read over the group, a write there: from an assignment above it, or one the listing
+    # did not show — never on the group (SEC5, V-29).
+    wide = [w for w in WRITE_ACTIONS if _allowed(w, perms)]
+    if wide and not any(m["code"] == "identity_group_wide" for m in missing):
+        missing.append(_miss("identity_group_wide",
+                             f"{', '.join(wide)} effective on the whole of {bench}"))
+    for action, scopes in granted_on.items():
+        # No experiment in the group (Celebrimbor's chaos is off by default): nothing to start
+        # or cancel, and Gothmog finds no experiment to run — the chaos rights are not asked.
+        if not scopes and (experiments or action not in CHAOS_ACTIONS):
+            missing.append(_miss("identity_missing_right",
+                                 f"{action} on no enrolled resource of {bench}"))
     return missing
+
+
+CHAOS_API = "2024-01-01"
+
+
+def _has_experiments(get, headers: dict, bench: str) -> bool:
+    """Does the bench's group hold a Chaos Studio experiment? A provider not registered in the
+    subscription (400 NoRegisteredProviderFound) or no such collection (404): none. Any other
+    failure raises — the contract is then unreadable, passive."""
+    r = get(f"{ARM}{bench}/providers/Microsoft.Chaos/experiments", headers=headers,
+            params={"api-version": CHAOS_API}, timeout=20)
+    if r.status_code == 404 or (r.status_code == 400 and "NoRegisteredProvider" in (r.text or "")):
+        return False
+    if not r.ok:
+        raise RuntimeError(f"HTTP {r.status_code} listing the bench's experiments")
+    return bool(r.json().get("value"))
 
 
 def read_identity(*, credential=None, get=None) -> list[dict]:
@@ -243,15 +305,20 @@ def read_identity(*, credential=None, get=None) -> list[dict]:
         {"api-version": API_VERSION, "$filter": f"assignedTo('{oid}')"},
     )
 
+    read_roles: dict[str, list[str]] = {}
+
     def role_actions(definition_id: str) -> list[str]:
+        if definition_id in read_roles:  # one read per role: the same on every enrolled VM
+            return read_roles[definition_id]
         r = get(f"{ARM}{definition_id}", headers=headers,
                 params={"api-version": API_VERSION}, timeout=20)
         if not r.ok:
             return []  # unreadable: not proven read-only, so it counts as outside
         perms = (r.json().get("properties") or {}).get("permissions") or []
         # Data actions marked "data:": never mistaken for a role-assignment read.
-        return [x for p in perms for x in (p.get("actions") or [])] + \
+        read_roles[definition_id] = [x for p in perms for x in (p.get("actions") or [])] + \
             [f"data:{x}" for p in perms for x in (p.get("dataActions") or [])]
+        return read_roles[definition_id]
 
     perms = pages(f"{ARM}{bench}/providers/Microsoft.Authorization/permissions",
                   {"api-version": API_VERSION})
@@ -260,7 +327,8 @@ def read_identity(*, credential=None, get=None) -> list[dict]:
     return assess_identity(
         assignments, role_actions, perms, bench,
         sees_subscription=_allowed("Microsoft.Authorization/roleAssignments/read", sub_perms),
-        channel=channel_scope(), watch=watch_scope())
+        channel=channel_scope(), watch=watch_scope(),
+        experiments=_has_experiments(get, headers, bench))
 
 
 def read_network(*, probes=NETWORK_PROBES, connect=None) -> list[dict]:
@@ -330,15 +398,60 @@ def _append(path: Path, record: dict) -> None:
         os.fsync(f.fileno())  # on disk before the call: a crash leaves the intent
 
 
+def push_offhost(run_id: str, line: str, *, created: bool, channel: str | None = None,
+                 credential=None, put=None) -> None:
+    """One journal line to the exercise channel, off this host (SEC5, V-29): the append blob
+    ``audit/<run_id>.jsonl`` — created on the run's first line (never over an existing one),
+    then appended to. Raises when the channel refuses: the caller says it."""
+    import requests
+
+    from eregion_core import exercise_channel as xc
+
+    url = channel if channel is not None else xc.channel_url()
+    if not url:
+        return
+    if not xc.safe_part(run_id):
+        raise ValueError(f"unsafe run id: {run_id!r}")
+    put = put or requests.put
+    blob = f"{url}/{xc.AUDIT}/{run_id}.jsonl"
+    headers = xc.auth_headers(credential, url)
+    if not created:
+        r = put(blob, headers={**headers, "x-ms-blob-type": "AppendBlob", "If-None-Match": "*"},
+                data=b"", timeout=15)
+        if not r.ok and r.status_code not in (409, 412):  # there already: append to it
+            raise RuntimeError(f"HTTP {r.status_code} creating {xc.AUDIT}/{run_id}.jsonl")
+    r = put(blob, headers={**headers, "Content-Type": "application/x-ndjson"},
+            params={"comp": "appendblock"}, data=line.encode(), timeout=15)
+    if not r.ok:
+        raise RuntimeError(f"HTTP {r.status_code} appending to {xc.AUDIT}/{run_id}.jsonl")
+
+
 @dataclass
 class Session:
     """An armed run: each injector call goes through ``before_call``, which journals it
-    and enforces the cap, before anything reaches Azure."""
+    and enforces the cap, before anything reaches Azure. The journal is on this host's disk
+    first (fsync), then — with an exercise channel — off it (SEC5, V-29): a host lost or
+    wiped keeps its trace in the channel. Off-host is best effort: a push that fails is
+    journaled here and said, and the call goes on (refusing it could leave a target
+    half-cleaned); it is no defence against a compromised host, which could stop pushing."""
     run_id: str
     injector: str
     max_injections: int
     path: Path = field(default_factory=audit_path)
     calls: int = 0
+    offhost: Callable | None = None   # push_offhost unless a test swaps it
+    _pushed: bool = False
+
+    def _journal(self, record: dict) -> None:
+        _append(self.path, record)
+        try:
+            (self.offhost or push_offhost)(self.run_id, json.dumps(record) + "\n",
+                                           created=self._pushed)
+            self._pushed = True
+        except Exception as e:
+            why = f"{type(e).__name__}: {e}"[:300]
+            _append(self.path, {**record, "outcome": "offhost_failed", "detail": why})
+            print(f"[orodruin] journal line not pushed off the host: {why}")
 
     def before_call(self, action: str, target: str, detail: str = "") -> None:
         record = {
@@ -346,10 +459,19 @@ class Session:
             "injector": self.injector, "action": action, "target": target, "detail": detail,
         }
         if self.calls >= self.max_injections:
-            _append(self.path, {**record, "outcome": "refused_cap"})
+            self._journal({**record, "outcome": "refused_cap"})
             raise CapReached(f"{self.calls} injector calls, cap {self.max_injections}")
-        _append(self.path, {**record, "outcome": "about_to_call"})
+        self._journal({**record, "outcome": "about_to_call"})
         self.calls += 1
+
+    def declare(self, what: str, detail: str = "") -> None:
+        """A fact of the run, journaled — no call, not counted against the cap. A run
+        ``--without-glorfindel`` is written here (SEC5, N-04), not only in its report."""
+        self._journal({
+            "ts": datetime.now(timezone.utc).isoformat(), "run_id": self.run_id,
+            "injector": self.injector, "action": what, "target": "", "detail": detail,
+            "outcome": "declared",
+        })
 
 
 def arm(run_id: str, injector: str, verdict: Verdict | None = None) -> tuple[Verdict, Session | None]:

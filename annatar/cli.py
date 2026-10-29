@@ -244,14 +244,18 @@ def init(yes: bool, scenario: str | None):
 
 @cli.command()
 @click.argument("scenario", type=click.Path(exists=True))
-def clean(scenario: str):
+@click.option("--without-glorfindel", is_flag=True,
+              help="Development clean: no live Glorfindel watch required (written to "
+                   "Orodruin's journal).")
+def clean(scenario: str, without_glorfindel: bool):
     """Reset the VM disk to a clean state before re-running a scenario.
 
+    Like `run`, never without a live Glorfindel watch (V1, SEC5).
     After this, run 'glorfindel snapshot <resource_id> --yes' to capture
     a clean recovery point.
     """
     from annatar.runner.initializer import InitRunner
-    InitRunner().clean(scenario)
+    InitRunner().clean(scenario, without_glorfindel=without_glorfindel)
 
 
 # ── Generative campaigns ─────────────────────────────────────────────────────

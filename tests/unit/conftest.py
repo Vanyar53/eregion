@@ -56,9 +56,12 @@ def live_glorfindel_watch(monkeypatch):
     from datetime import datetime, timezone
 
     import eregion_core.watch_gate as gate
+    # SEC5 (N-03): a watch of this injector's subscription — the same perimeter on both sides.
+    scope = gate.perimeter("00000000-0000-0000-0000-000000000000")
     monkeypatch.setattr(gate, "READERS", {
         "channel": lambda: None,
-        "local": lambda: gate.Beat(gate.LOCAL, datetime.now(timezone.utc)),
+        "local": lambda: gate.Beat(gate.LOCAL, datetime.now(timezone.utc), perimeter=scope),
+        "own": lambda: scope,
     })
 
 
@@ -326,6 +329,7 @@ def isolated_glorfindel_home(tmp_path, monkeypatch):
     try:
         import eregion_console.api as api
         monkeypatch.setattr(api, "_RESTORE_TRACKING", home / "restore_in_progress.json")
+        monkeypatch.setattr(api, "_RESTORE_FAILURES", home / "restore_failures.json")  # SEC4c
     except ImportError:  # war-room extra not installed
         pass
 

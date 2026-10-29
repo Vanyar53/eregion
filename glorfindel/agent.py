@@ -10,6 +10,7 @@ from typing import TypedDict
 
 from langgraph.graph import StateGraph, END
 from rich.console import Console
+from rich.markup import escape as _esc_markup
 
 from glorfindel.actions import (
     AUTONOMOUS_ACTIONS, HUMAN_APPROVAL_REQUIRED, CloudConnector, PartialActionError, _first_line,
@@ -469,13 +470,15 @@ def poll_detection(state: GlorfindelState, ip_owners=None) -> GlorfindelState:
 
 # ── Investigative queries (post-detection enrichment) ─────────────────────────
 
-# Query templates — {vm} is replaced at runtime with the VM hostname.
+# Query templates — {vm} is replaced at runtime with the VM hostname, {ip} with the
+# detection's source address: each a KQL string literal (glorfindel/kql.py), checked for
+# what it is first (SEC4c) — a value read from a log line never leaves its literal.
 # All queries use ago(5m) to stay within the detection window.
 # Kept short: investigate must complete in <15s total.
 
 _IQ_HEARTBEAT_GAP = """
 Heartbeat
-| where Computer == "{vm}"
+| where Computer == {vm}
 | where TimeGenerated > ago(2h)
 | order by TimeGenerated asc
 | extend PrevBeat = prev(TimeGenerated)
@@ -489,7 +492,7 @@ Heartbeat
 _IQ_DISK_PROCESSES = """
 Perf
 | where TimeGenerated > ago(5m)
-| where Computer == "{vm}"
+| where Computer == {vm}
 | where ObjectName == "Process"
 | where CounterName == "IO Write Bytes/sec"
 | where InstanceName !in ("_Total", "Idle", "System")
@@ -510,7 +513,7 @@ Perf
 _IQ_BACKUP_AGENT = """
 Perf
 | where TimeGenerated > ago(10m)
-| where Computer == "{vm}"
+| where Computer == {vm}
 | where ObjectName == "Process"
 | where CounterName == "IO Write Bytes/sec"
 | where InstanceName in~ ("waagent", "WALinuxAgent", "azure-backup", "snapd", "MicrosoftAzureRecoveryServices")
@@ -520,11 +523,11 @@ Perf
 _IQ_SUCCESS_AUTH = """
 Syslog
 | where TimeGenerated > ago(5m)
-| where Computer == "{vm}"
+| where Computer == {vm}
 | where Facility == "auth"
 | where ProcessName in ("sshd", "sshd-session")
 // sshd's own wording, at the start of the line (SEC2): never a user name holding it.
-| where SyslogMessage startswith "Accepted " and SyslogMessage has "{ip}"
+| where SyslogMessage startswith "Accepted " and SyslogMessage has {ip}
 | project TimeGenerated, SyslogMessage
 | limit 3
 """
@@ -535,7 +538,7 @@ Syslog
 _IQ_ROOT_COMMANDS = """
 Syslog
 | where TimeGenerated > ago(10m)
-| where Computer == "{vm}"
+| where Computer == {vm}
 // sudo logs to authpriv (measured under AMA).
 | where Facility in ("auth", "authpriv")
 // sudo's own lines (SEC2): the word is its tag (ProcessName), not in the message.
@@ -548,7 +551,7 @@ Syslog
 _IQ_DISK_AFTER_ESC = """
 Perf
 | where TimeGenerated > ago(10m)
-| where Computer == "{vm}"
+| where Computer == {vm}
 | where ObjectName in ("Logical Disk", "LogicalDisk")
 | where CounterName == "Disk Write Bytes/sec"
 | summarize MaxWriteMBs = round(max(CounterValue) / 1048576, 1),
@@ -624,20 +627,40 @@ def investigate(state: GlorfindelState) -> GlorfindelState:
         or first_row.get("host")
     )
     using_arm_fallback = not hostname_from_signal
-    vm = hostname_from_signal or signal.get("resource_id", "").split("/")[-1]
+    vm = str(hostname_from_signal or signal.get("resource_id", "").split("/")[-1])
 
     if using_arm_fallback:
         _console.print(
             f"  [dim]investigate: Computer absent from signal — "
-            f"using ARM name '{vm}' as hostname fallback "
+            f"using ARM name '{_esc_markup(vm)}' as hostname fallback "
             f"(queries may return empty if OS hostname differs)[/dim]"
         )
 
     ctx: dict[str, list[dict]] = {}
     gaps: list[str] = []
+    refused: dict[str, str] = {}
 
-    def run(name: str, query: str) -> None:
-        rows = _run_investigative_query(workspace_id, query)
+    # Each value enters its query as a KQL literal, checked for what it is (SEC4c): a host
+    # name, an address — read from a log line, which anyone on the VM can shape. A value
+    # that is not one: its queries are not run, and the enquiry says so (a gap, like a
+    # failed query: the guard of `decide` holds a disruptive action).
+    from glorfindel import kql
+
+    def value(check, raw_value) -> str | None:
+        try:
+            return kql.literal(check(raw_value))
+        except kql.UnsafeValue as exc:
+            refused.setdefault(str(raw_value)[:60], str(exc))
+            return None
+
+    vm_lit = value(kql.name, vm)
+
+    def run(name: str, template: str, **values) -> None:
+        if any(v is None for v in values.values()):
+            gaps.append(name)             # not run: unknown, not "nothing found"
+            ctx[name] = []
+            return
+        rows = _run_investigative_query(workspace_id, template.format(**values))
         if rows is None:              # failed: unknown, not "nothing found" (G2)
             gaps.append(name)
             rows = []
@@ -645,29 +668,36 @@ def investigate(state: GlorfindelState) -> GlorfindelState:
 
     # ── Disk write anomaly → which process is writing? backup agent present? recent reboot?
     if "MaxWrite" in first_row or "DiskWrite" in first_row:
-        run("top_write_processes", _IQ_DISK_PROCESSES.format(vm=vm))
-        run("backup_agent_check", _IQ_BACKUP_AGENT.format(vm=vm))
+        run("top_write_processes", _IQ_DISK_PROCESSES, vm=vm_lit)
+        run("backup_agent_check", _IQ_BACKUP_AGENT, vm=vm_lit)
         # Azure Backup OriginalLocation restore causes high I/O during boot rewrite.
         # A Heartbeat gap > 10min indicates a recent VM reboot — raises suspicion of
         # legitimate post-restore I/O rather than active ransomware encryption.
-        run("heartbeat_gap", _IQ_HEARTBEAT_GAP.format(vm=vm))
+        run("heartbeat_gap", _IQ_HEARTBEAT_GAP, vm=vm_lit)
 
     # ── Brute force → did any attempt succeed from this IP?
     source_ip = first_row.get("SourceIP", "")
     if "FailedAttempts" in first_row and source_ip:
-        run("successful_auth_from_ip", _IQ_SUCCESS_AUTH.format(vm=vm, ip=source_ip))
+        run("successful_auth_from_ip", _IQ_SUCCESS_AUTH, vm=vm_lit,
+            ip=value(kql.ip, source_ip))
 
     # ── Privilege escalation → what ran as root after? disk writes?
     if "USER=root" in syslog_msg and "COMMAND=" in syslog_msg:
-        run("root_commands", _IQ_ROOT_COMMANDS.format(vm=vm))
-        run("disk_write_after_escalation", _IQ_DISK_AFTER_ESC.format(vm=vm))
+        run("root_commands", _IQ_ROOT_COMMANDS, vm=vm_lit)
+        run("disk_write_after_escalation", _IQ_DISK_AFTER_ESC, vm=vm_lit)
 
     if not ctx:
         return state
 
+    if refused:
+        _console.print(
+            "  [yellow]investigate: valeur refusée, requête(s) non lancée(s) — "
+            + "; ".join(_esc_markup(why) for why in refused.values())
+            + " — aucune action disruptive autonome sur ce cycle[/yellow]"
+        )
     if gaps:
         _console.print(
-            f"  [yellow]investigate: {len(gaps)} requête(s) en échec pour '{vm}' "
+            f"  [yellow]investigate: {len(gaps)} requête(s) en échec pour '{_esc_markup(vm)}' "
             f"({', '.join(gaps)}) — télémétrie incomplète, aucune action disruptive "
             f"autonome sur ce cycle[/yellow]"
         )
@@ -675,12 +705,12 @@ def investigate(state: GlorfindelState) -> GlorfindelState:
     if all(len(v) == 0 for v in ctx.values()):
         if using_arm_fallback:
             _console.print(
-                f"  [yellow]investigate: all queries empty for '{vm}' (ARM fallback) "
+                f"  [yellow]investigate: all queries empty for '{_esc_markup(vm)}' (ARM fallback) "
                 f"— likely hostname mismatch, check OS hostname vs ARM name[/yellow]"
             )
         else:
             _console.print(
-                f"  [dim]investigate: all queries empty for '{vm}' "
+                f"  [dim]investigate: all queries empty for '{_esc_markup(vm)}' "
                 f"— data not yet ingested (LAW latency ~60s, normal)[/dim]"
             )
 
@@ -1158,6 +1188,19 @@ def _uncontained_floor(d: dict, signal: dict) -> str:
     )
 
 
+def _isolation_incomplete(iso: dict) -> str:
+    """What leaves an isolation in place partial for the floor, or "" when it holds: not
+    every NIC covered, a release under way, a release that failed halfway (SEC4c) — the VM
+    may be reachable again."""
+    if iso.get("partial"):
+        return "isolation partielle"
+    if iso.get("release_failed"):
+        return "levée de l'isolation en échec : une partie des règles est déjà retirée"
+    if iso.get("releasing_at"):
+        return f"levée de l'isolation en cours depuis {str(iso['releasing_at'])[:25]}"
+    return ""
+
+
 def _contained_now(signal: dict) -> tuple[bool, str]:
     """(contained, note) from the state files: the VM isolated, or the detection's source
     already blocked on it → contained. Otherwise the note says what is blocked, or that the
@@ -1166,10 +1209,11 @@ def _contained_now(signal: dict) -> tuple[bool, str]:
     rid = signal.get("resource_id") or ""
     try:
         iso = _load_isolation_state(rid)
-        if iso is not None and not iso.get("partial"):
+        incomplete = _isolation_incomplete(iso) if iso is not None else ""
+        if iso is not None and not incomplete:
             return True, ""
         if iso is not None:
-            return False, " entièrement (isolation partielle)"
+            return False, f" entièrement ({incomplete})"
         blocked = [str(e.get("ip") or "") for e in _load_block_entries(rid)]
     except Exception as exc:
         return False, f" (état d'isolation illisible : {_first_line(exc)[:120]})"

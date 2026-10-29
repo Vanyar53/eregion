@@ -985,6 +985,40 @@ def rulepoller_recently_matched(ttp: str, within_s: float) -> bool:
 # ── RulePoller ────────────────────────────────────────────────────────────────
 
 _IP_OWNERS_TTL_S = 300.0
+
+
+class IpOwners:
+    """Private IP → VM resource id (lowercase), read from Azure at most once per
+    _IP_OWNERS_TTL_S, for whoever reads it: the RulePoller and the watch's attack_started
+    lines share one (SEC4c) — each line used to list every VM's interfaces again. An
+    unreadable listing keeps the last one. Callable, like the source it wraps."""
+
+    def __init__(self, source: Callable[[], dict]) -> None:
+        self._source = source
+        self._lock = threading.Lock()
+        self._cache: tuple[float, dict] = (0.0, {})
+
+    def __call__(self) -> dict:
+        with self._lock:
+            at, cached = self._cache
+            if at and time.time() - at < _IP_OWNERS_TTL_S:
+                return cached
+            try:
+                owners = {ip: str(rid).lower() for ip, rid in (self._source() or {}).items()}
+            except Exception as exc:
+                logger.warning("private IP map unreadable (%s) — keeping the last one", exc)
+                owners = cached
+            self._cache = (time.time(), owners)
+            return owners
+
+
+def shared_ip_owners(source: Callable[[], dict] | None) -> IpOwners | None:
+    """`source` behind one IpOwners (itself when it is one already); None stays None."""
+    if source is None or isinstance(source, IpOwners):
+        return source
+    return IpOwners(source)
+
+
 # Columns naming the VM that MADE a call (not an attacker's address): a storage call's
 # caller is the VM itself (T1041 exfiltration via its managed identity).
 _VM_IP_COLUMNS = ("CallerIpAddress",)
@@ -1087,9 +1121,9 @@ class RulePoller:
         self._lock = threading.Lock()
         self._registry = None
         self._cfg = None
-        # private IP → VM resource id (lowercase), read from Azure, cached.
-        self._ip_owners = ip_owners
-        self._ip_cache: tuple[float, dict] = (0.0, {})
+        # private IP → VM resource id (lowercase), read from Azure, cached — the watch
+        # hands the IpOwners its attack_started lines read too (SEC4c).
+        self._ip_owners = shared_ip_owners(ip_owners)
         self._detectors: dict[str, object] = {}
         # Dedup state: self._status[rule]["dispatched"][target] = {row identity: epoch}
         # — persisted, so a restart doesn't dispatch (and act on) a detection still
@@ -1174,18 +1208,7 @@ class RulePoller:
         return out
 
     def _owners(self) -> dict:
-        if self._ip_owners is None:
-            return {}
-        at, cached = self._ip_cache
-        if time.time() - at < _IP_OWNERS_TTL_S:
-            return cached
-        try:
-            owners = {ip: rid.lower() for ip, rid in (self._ip_owners() or {}).items()}
-        except Exception as exc:
-            logger.warning("rule poller: private IP map unreadable (%s) — keeping the last one", exc)
-            owners = cached
-        self._ip_cache = (time.time(), owners)
-        return owners
+        return {} if self._ip_owners is None else self._ip_owners()
 
     def _route(self, rule: DetectionRule, rows: list[dict],
                targets: list[tuple[str, str]]) -> dict[str, tuple]:

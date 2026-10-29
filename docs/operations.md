@@ -82,7 +82,8 @@ glorfindel pending --watch                   # alerting temps réel
 #   les deux → glorfindel reset (reset complet)
 #
 # Console :   ↩️ Release (isolated) | ↩️ Unblock (blocked IP) | ⟳ Reset (les deux)
-# TUI :       x:release  u:unblock  v:reset  r:restore
+# TUI :       x:release  u:unblock  v:reset  r:restore (demande le moment, pré-rempli ; Entrée :
+#             les points d'avant, y : --before ; le refus reste à l'écran — SEC4c)
 #
 glorfindel release <resource_id> --yes       # lever isolation NSG (post-restore, VM de retour)
 glorfindel unblock <ip> <resource_id> --yes  # supprimer une règle block IP
@@ -92,7 +93,14 @@ glorfindel reset <resource_id> --from-azure  # source de vérité = Azure (sans 
                                              # segment IP qui ancre la correspondance) ; garde les blocages
                                              # de périmètre ; aperçu + confirmation ; --dry-run pour lister
 glorfindel snapshot <resource_id> --yes      # backup on-demand RSV (setup scénario, ~5-20min)
-glorfindel restore <resource_id> --yes       # Azure Backup fire-and-forget (--before auto-détecté)
+glorfindel restore <resource_id> --yes       # Azure Backup fire-and-forget ; point = le plus récent AVANT
+                                             # le début de l'attaque sur CETTE VM : --before <ISO8601>
+                                             # (UTC sans décalage), sinon le premier attack_started de
+                                             # cette VM admis dans runs/ (≤ 2 h avant son isolation) ;
+                                             # inconnu → refusé, --before demandé (SEC4c). Nom court :
+                                             # deux VMs de ce nom (état ou découverte) → refusé ;
+                                             # un autre restore de la VM en cours → refusé ; un moment
+                                             # futur ou hors calendrier → refusé ; après l'isolation → dit
 glorfindel restore <resource_id> --yes --wait  # workflow complet : attend recovery_complete → release_isolation auto
 glorfindel jobs <vm-name> [--refresh]        # état du job snapshot/restore en cours
 glorfindel ack <escalation_id>               # acquitter escalade
@@ -155,8 +163,15 @@ glorfindel --version                         # 0.2.0
 #   se reprend que de la même façon ; elle n'a pas de rapport d'analyse (IA0), ni sur Orodruin ni sur H0,
 #   n'entre pas dans l'index ni dans les comparaisons (D-2), et c'est dit : « campaign without Glorfindel: no
 #   detection report, by choice ». Le --dry-run n'exige rien.
-#   Exception assumée : `annatar clean` (annatar/runner/initializer.py) arme le contrat et écrit sur la cible
-#   (le disque de test de T1486) sans lire la watch — c'est de la préparation, pas une attaque.
+#   SEC5 (#276) : le battement porte le périmètre de la watch — un condensé de l'abonnement qu'elle lit
+#   (AZURE_SUBSCRIPTION_ID), jamais l'abonnement lui-même ; l'injecteur le compare au sien. Une watch vivante
+#   d'un autre abonnement, ou un battement sans périmètre (une watch plus ancienne : mettre Glorfindel à
+#   jour), est refusé. Le garde est relu avant chaque action d'un run (chaque étape, la commande de l'atomic,
+#   le démarrage de la panne) : une watch qui meurt en cours de run l'arrête là (« glorfindel: lost during
+#   the run »), et la campagne avec lui. `annatar clean` passe par le garde comme `run` (--without-glorfindel
+#   aussi). --without-glorfindel est refusé en zone production, et inscrit au journal d'Orodruin
+#   (outcome « declared ») en plus du rapport. Ce que le garde prouve et ce qu'il ne prouve pas :
+#   docs/design/orodruin-contract.md, « SEC5 ».
 
 # Annatar
 annatar run annatar/scenarios/azure/<scenario>.yaml  # --dry-run disponible, --skip-preflight pour bypasser le check VM
@@ -458,7 +473,167 @@ décisions doivent rester celles d'avant ; puis `make glorfindel-host-start REF=
 (`infra/glorfindel-host/README.md`). Un test (`tests/unit/test_dependency_lock.py`) échoue si une
 dépendance de `pyproject.toml` manque au verrou ou n'y satisfait plus sa plage : `make lock`.
 
-L'image d'Annatar (Orodruin) s'installe encore depuis `pyproject.toml`, sans verrou.
+Les deux images sont construites et éprouvées en CI à chaque PR qui touche le verrou (CI1,
+ci-dessous) : un verrou cassé échoue dans la PR.
+
+---
+
+## La CI des images (CI1, #267, 29/10)
+
+Avant CI1, la CI ne construisait aucune image : compose était seulement rendu (`make
+profiles-check`). L'image de Glorfindel n'était construite que sur H0, par le CD. Un Dockerfile ou
+un verrou cassé n'apparaissait qu'à son préflight : la release était refusée, sans dégât, mais
+brûlée. L'image des injecteurs n'était construite que sur le poste de l'opérateur (`make
+orodruin-push`).
+
+**Le workflow** `.github/workflows/images.yml` a deux jobs, `image (glorfindel)` et `image
+(annatar)`. Il tourne sur chaque PR et chaque push sur `main`, sans filtre `paths` : c'est son
+premier step qui décide (`python3 scripts/image_check.py touched`).
+- Une PR dont le diff (son commit de fusion contre la base, renommages vus comme un retrait et un
+  ajout) ne touche rien de ce qui entre dans une image saute la construction et passe au vert. Une
+  PR de docs ou de tests seuls est dans ce cas.
+- Ce qui entre dans une image est la liste `IMAGE_PATHS` du script : les Dockerfiles,
+  `.dockerignore`, `requirements/`, `pyproject.toml`, la config d'exemple, `docker-compose.yml` (il
+  dit où la config est montée), et les paquets et fichiers copiés (`glorfindel/`, `annatar/`,
+  `gothmog/`, `eregion_core/`, `eregion_console/`, `analysis/`, `scripts/`,
+  `technique_catalog.yaml`). `tests/unit/test_image_check.py` lit les `COPY` de chaque Dockerfile
+  (lignes continuées jointes, casse ignorée) et échoue si un chemin copié manque à la liste.
+- Un push sur `main` construit toujours, sans lire le diff. Un diff illisible construit aussi : la
+  décision échoue fermée.
+
+La CI des images ne rend pas compose : chaque profil est rendu par `make profiles-check`
+(`components.yml`, `tests/unit/test_profiles.py`).
+
+1. **La construction** : `docker/build-push-action`, épinglée par commit, comme
+   `docker/setup-buildx-action`. Elle prend le Dockerfile de l'image, le dépôt pour contexte, aucun
+   build-arg : l'UID/GID par défaut de l'image, rien n'est monté. Le cache de GitHub Actions a
+   une portée par image. Il est lu partout et écrit seulement par les pushes sur `main` : une PR ne
+   peut pas évincer le cache de `main`. L'image est chargée dans le docker du runner
+   (`eregion-<image>:ci`), **jamais poussée** : aucun registre, aucune connexion, aucun secret,
+   `contents: read`.
+2. **Dans l'image**, `python3 scripts/image_check.py <image>`. Chaque vérification est un `docker run
+   --rm --network none` qui ne prend rien de l'environnement de l'hôte : aucun secret, aucun réseau
+   Azure. Elle lance une commande, jamais le `CMD` de l'image : rien ne démarre.
+   - Glorfindel : `glorfindel --version` est la version de `pyproject.toml`. La watch, le bot et
+     la console importent. Ce sont les mêmes imports que le préflight du CD (`eregion_cd.py`,
+     étape 5). Un test lit chaque `docker run` de ce préflight et exige sa vérification ici ; le
+     rendu de compose avec le `.env` de H0 est la seule exception, écrite. `glorfindel-config.yaml.example` passe la lecture stricte
+     d'A3 : il est monté en lecture seule là où compose monte la config, puis ouvert avant d'être
+     lu, car un fichier absent se lirait comme une config vide. L'image ne tourne pas en root.
+   - Annatar (l'image des injecteurs) : `annatar --version` est la version de `pyproject.toml`.
+     Annatar et Gothmog importent. Ni Glorfindel, ni la console, ni leurs dépendances (la liste de
+     D1, `scripts/component_check.py`) ne sont dans l'image. Elle ne tourne pas en root.
+
+   Toutes les vérifications tournent, même après un échec : le journal dit tout ce qui ne va pas
+   d'un coup. Le script sort en 0 si tout passe, en 1 sinon, en 2 si docker manque.
+
+**En local, la même chose** : `make images-check` construit les deux images comme le job, sans le
+cache de GitHub (`python3 scripts/image_check.py <image> --build`), puis les éprouve. Les tags
+`eregion-glorfindel:ci` et `eregion-annatar:ci` ne touchent pas les images de `make build`
+(`:latest`, à l'UID/GID de l'opérateur). `python3 scripts/image_check.py glorfindel --image <nom>`
+éprouve une image déjà construite.
+
+**Ce qu'il attrape** (démontré le 29/10 sur des copies cassées exprès, rien de poussé) :
+
+| Copie cassée | Où le job échoue |
+|---|---|
+| `requirements/glorfindel.txt` : litellm épinglée à une version dont le verrou n'a pas les empreintes | la construction : pip refuse (« THESE PACKAGES DO NOT MATCH THE HASHES ») |
+| `requirements/annatar.txt` : une dépendance (click) retirée du verrou | la construction : pip refuse (« all requirements must have their versions pinned ») |
+| `annatar/Dockerfile` : un `COPY` d'un fichier qui n'existe pas | la construction (« not found ») |
+| `glorfindel/Dockerfile` sans `COPY eregion_console/` : l'image se construit | la vérification : « la watch, le bot et la console importent », code 1 (`No module named 'eregion_console'`) |
+
+**Durées mesurées** (29/10, poste de l'opérateur, WSL2, image de base déjà tirée, sans le cache de
+GitHub) :
+
+| | Glorfindel | Annatar |
+|---|---|---|
+| sans cache (`--no-cache`) | 72 s | 34 s |
+| avec cache, rien de changé | 6 s | 6 s |
+| avec cache, du code changé (`eregion_core/`) : la couche des dépendances reste | 8 s | 5 s |
+| les vérifications dans l'image | 4 s | 2 s |
+
+Sur un runner de GitHub, il faut ajouter le tirage de `python:3.12-slim`, le téléchargement depuis
+PyPI et, sur `main`, l'écriture du cache (`mode=max`, la couche des dépendances de Glorfindel pèse
+environ 1 Go). La durée réelle se lit au premier run sur la PR. Elle est bornée à 30 min par job.
+Une PR qui ne touche aucune image ne coûte que le checkout et la décision : quelques secondes.
+
+**Rendre le job requis** est la décision de Jonathan (protection de `main`). Les checks à exiger
+sont `image (glorfindel)` et `image (annatar)`. Le workflow n'a pas de filtre `paths`, pour cette
+raison : un workflow filtré ne tourne pas sur une PR qui ne touche aucun de ses chemins, et son check
+requis y resterait « attendu », la fusion bloquée. Un job compagnon du même nom, qui passerait quand
+les chemins ne sont pas touchés, serait fragile : sur une PR qui touche à la fois une image et autre
+chose, les deux tourneraient, et le vert de l'un pourrait masquer le rouge de l'autre. Ici, un seul
+job par image décide lui-même, dans son premier step, de construire ou de passer.
+
+**Un run rouge est annoncé dans `#ci`** : « Images » est dans la liste `workflow_run` de
+`notify.yml`. `tests/unit/test_workflows.py` exige que chaque workflow lancé par un push, une PR ou
+la nuit y figure, sauf ses exceptions écrites (Notify lui-même, Roadmap, vert par conception).
+
+**Et le CD de H0** : il exige que tous les checks du commit d'une release soient verts. Un job
+`image` rouge sur `main` fait donc refuser la release, avant même son préflight. L'étape 2 de #267
+(publier l'image éprouvée sur GHCR avec sa provenance, et la faire tirer par son digest par H0 et
+Orodruin) se décide avec Jonathan.
+
+### Les avis de vulnérabilité des verrous (CI2)
+
+CI2 (#268) surveille les trois verrous. Les constats du contre-audit étaient P-03 (aucun scanner) et N-16 (un
+rafraîchissement du verrou sans contrôle).
+
+- **Le workflow** `.github/workflows/pip-audit.yml` tourne chaque mardi et à la demande
+  (`workflow_dispatch`). Il passe `pip-audit` sur `requirements/dev.txt`, `glorfindel.txt` et
+  `annatar.txt`, et sur `audit.txt`, le verrou de pip-audit lui-même : il tourne dans un job qui
+  écrit des issues. Chaque verrou est lu tel quel : `--require-hashes --disable-pip`. Rien n'est
+  résolu : les versions sont celles du verrou, et seul le service des avis (pypi.org) est
+  interrogé. Les marqueurs sont évalués pour le Python du runner, épinglé (`ubuntu-24.04` :
+  Python 3.12, Linux, celui de l'image) pour que ce qui est lu ne dérive pas sans bruit. Une
+  broche propre à 3.11 (numpy) n'est donc pas lue (#298).
+- **pip-audit a son propre verrou**, `requirements/audit.txt` (issu de `requirements/audit.in`,
+  version épinglée), avec empreintes. Il s'installe dans un venv à part, jamais dans l'image ni
+  dans `dev.txt`. Le workflow utilise le Python du runner, sans action tierce. Son seul secret est
+  le jeton du dépôt, avec les droits `contents: read` et `issues: write`.
+- **Une issue par avis**, label `security` (`scripts/pip_audit_issues.py`). Elle donne le paquet,
+  la version de chaque verrou touché, les versions corrigées, et les identifiants (GHSA, CVE,
+  PYSEC) avec leurs liens.
+  - **Le même avis ne donne jamais deux issues.** Le corps de l'issue garde une clé : le paquet,
+    tous les identifiants vus, les verrous. Une issue ouverte par le workflow
+    (`github-actions[bot]`) dont la clé nomme le paquet et partage un identifiant est celle de
+    cet avis, ouverte ou fermée, quels que soient son titre et ses labels. Toutes les pages sont
+    lues ; une PR ne compte pas. Les doublons de pip-audit et un même avis dans plusieurs verrous
+    sont fusionnés.
+  - **Seules les issues du workflow sont lues.** N'importe qui peut ouvrir une issue qui porte
+    une clé. Celle d'un autre auteur ne fait taire aucun avis et n'est jamais modifiée ; ses
+    identifiants n'entrent jamais dans une issue du bot. Une clé relue est vérifiée champ par
+    champ (paquet, identifiants, verrous) : une clé dont un champ n'a pas sa forme est ignorée.
+  - **Une issue ouverte** est réécrite quand ce qu'elle dit change : un verrou, une version, un
+    correctif, un alias.
+  - **Une issue fermée comme faite** alors que l'avis est toujours là est rouverte, avec un
+    commentaire. Une issue fermée comme « non prévue », ou comme doublon, est une décision
+    humaine : elle est laissée.
+  - **Un avis qui n'est plus trouvé** reçoit un seul commentaire (« la montée est faite ? »). Le
+    workflow ne ferme jamais l'issue : un humain la ferme. Cela ne vaut que si tous les verrous de
+    l'issue ont été lus ce passage-là. Un audit en échec ne dit rien d'un avis.
+  - Le texte venu du dehors (identifiants, nom, version) est vérifié sur sa forme. La description
+    d'un avis n'est jamais écrite.
+- **Jamais une PR de montée.** La montée passe par la procédure plus haut : `make lock`, une PR,
+  puis le harnais (`make llm-compare … ATTEST=1`, Jonathan). Une montée de LiteLLM est le lot
+  DEP1 (#282).
+- **Le run est rouge** quand un humain a du neuf à voir : une issue ouverte ou rouverte, ou un avis
+  revenu. Il l'est aussi quand un audit a échoué. `notify.yml` annonce ce run rouge dans `#ci`, avec
+  une mention, parce qu'une issue ouverte par le jeton du workflow ne déclenche aucun workflow.
+  Une erreur de GitHub sur un avis ou une issue n'arrête pas les autres : le run se finit, dit
+  chaque erreur, et sort en 2. Dans les autres cas, le run est vert.
+- **`make lock` dit les avis du verrou qu'il vient d'écrire** (`make audit`, N-16), sans jamais
+  échouer : c'est une information pour la PR de montée. `make audit` seul fait la même chose à
+  tout moment. La première fois, il crée `.venv-audit/` depuis `requirements/audit.txt`.
+
+```bash
+make audit                              # les avis connus des verrous, celui de pip-audit compris (lecture seule)
+```
+
+**Les alertes Dependabot** de GitHub, sans les PR automatiques, sont une décision de Jonathan. Au
+29/10, elles ne sont pas activées. Pour les activer :
+`gh api -X PUT repos/Vanyar53/eregion/vulnerability-alerts`. Les PR automatiques (« Dependabot
+security updates », `automated-security-fixes`) restent désactivées : on ne les active pas.
 
 ---
 
@@ -470,10 +645,56 @@ entrypoints : annatar, glorfindel, gothmog, eregion (la console)
 installation : depuis le dépôt (make install, ou pip install -e '.[console]')
 ```
 
-**La PR de version** (`chore(release): X.Y.Z — …`) change ensemble la version de `pyproject.toml`, le
-`CHANGELOG.md` (`[Unreleased]` → `[X.Y.Z]`) et la ligne « **Status — vX.Y.Z.** » du README :
-`tests/unit/test_readme.py` échoue tant que le README n'a pas suivi (SEC6). Puis la release en brouillon
-(`gh release create --draft`), que Jonathan publie (CD de H0).
+**Une seule source de version** : `pyproject.toml`. `annatar.__version__` la lit (REL1) — le
+`pyproject.toml` de l'arbre d'abord (une installation éditable garde la version de son installation :
+mesuré le 29/10, un `.venv` installé à 0.3.0 la disait encore), sinon les métadonnées du paquet
+installé, sinon `0+unknown`. `glorfindel --version` et la console lisent les métadonnées.
+
+**Une release en deux commandes** (REL1, `scripts/release.py`, bibliothèque standard) :
+
+```bash
+make release VERSION=0.4.4 TITLE="…" DRY_RUN=1   # à blanc : les vérifications, la coupe, les commandes
+make release VERSION=0.4.4 TITLE="…"             # la PR de version
+make release-draft VERSION=0.4.4 [NOTES=notes.md] [DRY_RUN=1]   # après sa fusion : le brouillon
+```
+
+- **`make release`**, depuis `origin/main` à jour (`git switch --detach origin/main`), l'arbre propre.
+  `[Unreleased]` devient `[X.Y.Z] — <date> — "<titre>"`, un `[Unreleased]` vide au-dessus. La version de
+  `pyproject.toml` et la ligne « **Status — vX.Y.Z.** » du README suivent : `tests/unit/test_readme.py`
+  échoue sinon (SEC6). Puis la branche `chore/release-X.Y.Z`, le commit
+  `chore(release): X.Y.Z — CHANGELOG [X.Y.Z] « <titre> », version du paquet`, le push et la PR
+  (`gh pr create`). Refusé, sans rien écrire :
+  - un arbre modifié, ou un HEAD qui n'est pas `origin/main` ;
+  - une version qui n'est pas X.Y.Z, ou pas plus grande que la courante ;
+  - un `[Unreleased]` vide ou qui n'a que des titres, ou une section `[X.Y.Z]` déjà là ;
+  - la branche ou le tag `vX.Y.Z` qui existe déjà ;
+  - un titre vide, sur deux lignes, ou avec un guillemet droit.
+
+  **Un échec en route n'est pas un refus.** Si le commit, le push ou la PR échoue après la création de la
+  branche, la commande s'arrête en code 2. Elle dit ce qui reste, comment reprendre
+  (`gh pr create --base main --head chore/release-X.Y.Z`…) et comment revenir en arrière :
+  `git reset -q --hard && git checkout -q - && git branch -D chore/release-X.Y.Z`, plus
+  `&& git push origin --delete chore/release-X.Y.Z` si la branche a été poussée. `reset --hard` retire
+  aussi ce qui était déjà indexé ; `checkout -` ramène à un HEAD détaché (le départ conseillé, où
+  `switch -` échoue). Les tests exécutent ce retour depuis un départ détaché : arbre propre, HEAD sur
+  `origin/main`, la branche partie en local et sur l'origine.
+- **`make release-draft`**, après la fusion : le **brouillon** `vX.Y.Z — <titre>`, sur le sha complet
+  d'`origin/main`. Celui-ci doit tenir la version : son `pyproject.toml` et la section `[X.Y.Z]` de son
+  CHANGELOG. Les notes : `NOTES=fichier`, sinon cette section, avec au moins une ligne qui n'est pas un
+  titre. Refusé si le tag ou une release `vX.Y.Z` existe déjà, brouillon compris. Le brouillon est posé sur le tableau de `#agents`, avec un ping
+  (`docs/atelier-discord.md`) ; sans configuration Discord, rien n'est envoyé et la commande réussit.
+- **Aucun chemin ne publie** : rien ne fait d'un brouillon une release. `tests/unit/test_release.py`
+  lit le code sur une liste blanche : quatre commandes `gh` seulement (`pr create`, `release list`,
+  `release create` avec `--draft`, `release edit` des seules notes), jamais `gh api`. Une commande ne
+  part que par `run()`, avec une liste littérale qui commence par `git` ou `gh` ; ni shell, ni
+  `os.system`. Aucun texte ne dit
+  `draft`, sauf ce `--draft`. Une URL de `releases` n'est jamais appelée qu'en lecture. Publier déploie H0 (son CD, H1) : **Jonathan publie**, sur GitHub.
+- `DRY_RUN=1` : tout est montré, rien n'est écrit, poussé, créé ni envoyé.
+- `VERSION`, `TITLE` et `NOTES` se donnent sur la ligne de commande. Venus de l'environnement, ils sont
+  refusés, comme `REF` : le script les lit dans son environnement, make ne les développe pas.
+
+Tests : `tests/unit/test_release.py`, sur un dépôt git jetable (un `origin` nu dans `tmp_path`) avec un
+faux `gh` et le faux Discord. Mutants M1160–M1169, M1430–M1439, M1470.
 
 ---
 

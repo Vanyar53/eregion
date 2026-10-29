@@ -23,22 +23,37 @@ console = Console()
 
 # A watch file last written this long before the attack is not read (_check_watch_files).
 _MTIME_SLACK_S = 60.0
+# SEC5 (N-04): what Orodruin's journal says of a run --without-glorfindel, and its refusal in
+# production.
+WITHOUT_GLORFINDEL = "without_glorfindel"
+NO_WITHOUT_IN_PRODUCTION = f"{watch_gate.FLAG} never runs in zone production"
 
 
-def scenario_destructive(scenario) -> bool | None:
-    """Does this scenario destroy or alter data? ``None`` when nobody says.
+def scenario_destructive(scenario) -> tuple[bool, str]:
+    """Does this scenario destroy or alter data — and, if it lies about it, why it is refused.
 
-    The scenario's own ``destructive`` field first, then its technique in the shared
-    catalog. Unknown is refused in production (inscription), never assumed safe.
+    The catalog decides (SEC5, V-19): the technique's entry, and its pinned source for an
+    atomic (annatar/campaign/catalog.py ``catalog_destructive``). Unknown is destructive. The
+    scenario's own ``destructive`` field may only make it stricter: a scenario that calls
+    itself non-destructive for a technique the catalog says is destructive — or does not
+    vouch for — is refused (``(True, why)``). Returns ``(destructive, "")`` otherwise.
     """
-    own = scenario.raw.get("destructive")
-    if isinstance(own, bool):
-        return own
-    from annatar.campaign.catalog import load_catalog
+    from annatar.campaign.catalog import catalog_destructive
 
-    entry = load_catalog().get(scenario.mitre) or {}
-    flag = entry.get("destructive")
-    return flag if isinstance(flag, bool) else None
+    scripts = [a.get("script") for a in [*(getattr(scenario, "setup", None) or []),
+                                          *(getattr(scenario, "steps", None) or [])]
+               if isinstance(a, dict) and a.get("script")]
+    said = catalog_destructive(scenario.mitre, engine=getattr(scenario, "engine", "") or "",
+                               engine_ref=getattr(scenario, "engine_ref", "") or "",
+                               scripts=scripts)
+    own = scenario.raw.get("destructive")
+    destructive = said is not False or own is True
+    if own is False and destructive:
+        what = ("says it is destructive" if said else
+                "does not vouch for this source (unknown is destructive)")
+        return True, (f"the scenario says destructive: false, the catalog {what} for "
+                      f"{scenario.mitre} — the catalog decides")
+    return destructive, ""
 
 
 @dataclass
@@ -57,6 +72,10 @@ class RunOutcome:
     detection: str = "unknown"
     detection_latency_s: float | None = None
     error: str | None = None
+    # SEC5 (V-18): the run was refused before anything touched its target (the watch, the
+    # contract, the target's inscription or zone, the scenario, the cap, the preflight). A
+    # campaign then resets nothing on that target — the run never acted there.
+    refused: bool = False
 
 
 class Engine:
@@ -85,7 +104,7 @@ class Engine:
             scenario = self.parser.load(scenario_path)
         except ValueError as e:
             console.print(f"[red]Invalid scenario:[/red] {e}")
-            return RunOutcome(run_id, "unknown", error=f"scenario: {e}")
+            return RunOutcome(run_id, "unknown", error=f"scenario: {e}", refused=True)
 
         console.rule(f"[bold cyan]Annatar — {scenario.name}[/bold cyan]")
         console.print(f"  MITRE   : {scenario.mitre}")
@@ -107,7 +126,7 @@ class Engine:
             no_watch = watch_gate.refusal()
             if no_watch:
                 console.print(f"[red]Refused — no live Glorfindel watch:[/red] {no_watch}")
-                return RunOutcome(run_id, "unknown", error=f"glorfindel: {no_watch}")
+                return RunOutcome(run_id, "unknown", error=f"glorfindel: {no_watch}", refused=True)
 
         if not skip_confirm:
             if not Confirm.ask("[yellow]Execute this scenario?[/yellow]"):
@@ -125,18 +144,21 @@ class Engine:
                 resolved = resolve_ref(scenario.engine_ref)
             except AtomicError as e:
                 console.print(f"[red]Atomic unresolved:[/red] {e}")
-                return RunOutcome(run_id, "unknown", error=f"atomic: {e}")
+                return RunOutcome(run_id, "unknown", error=f"atomic: {e}", refused=True)
             probe_error = self._atomic_probe_error(scenario)
             if probe_error:
                 console.print(f"[red]Refused:[/red] {probe_error}")
-                return RunOutcome(run_id, "unknown", error=f"atomic: {probe_error}")
+                return RunOutcome(run_id, "unknown", error=f"atomic: {probe_error}", refused=True)
 
         # Orodruin (eregion_core/orodruin.py): the contract before the target is even read.
         # Passive → the run touches nothing and says why.
         verdict, session = arm(run_id, "annatar")
         if session is None:
             console.print(f"[red]Orodruin passive — nothing touched:[/red] {verdict.reasons()}")
-            return RunOutcome(run_id, "unknown", error=f"passive: {verdict.reasons()}")
+            return RunOutcome(run_id, "unknown", error=f"passive: {verdict.reasons()}", refused=True)
+        if self.without_glorfindel:
+            # SEC5 (N-04): in Orodruin's journal too, not only in the run's report.
+            session.declare(WITHOUT_GLORFINDEL, watch_gate.NOT_MEASURED)
 
         # The cap is a pure check too — comparing what this run needs to what the contract
         # still allows (max_injections minus the calls already journaled). It runs right
@@ -152,20 +174,30 @@ class Engine:
                     "before, right after the command, and after cleanup)"
                 )
                 console.print(f"[red]Refused:[/red] {reason}")
-                return RunOutcome(run_id, "unknown", error=f"cap: {reason}")
+                return RunOutcome(run_id, "unknown", error=f"cap: {reason}", refused=True)
 
         executor, collector = self._get_executor_collector(scenario, session)
 
         # Inscription (eregion_core/inscription.py): the target inside the bench, it AND
-        # its resource group enrolled, its zone allowing this technique.
+        # its resource group enrolled, its zone allowing this technique — destructive as the
+        # catalog says, never as the scenario says (SEC5, V-19).
+        destructive, lie = scenario_destructive(scenario)
+        if lie:
+            console.print(f"[red]Safety check failed:[/red] {lie}")
+            return RunOutcome(run_id, "unknown", error=f"safety: {lie}", refused=True)
         rg_tags = executor.get_resource_group_tags(scenario.target["resource_group"])
         guard = check_target(
             executor.resource_id, rg_tags, executor.get_vm_tags(),
-            kind="technique", destructive=scenario_destructive(scenario),
+            kind="technique", destructive=destructive,
         )
         if not guard.allowed:
             console.print(f"[red]Safety check failed:[/red] {guard.reason}")
-            return RunOutcome(run_id, "unknown", error=f"safety: {guard.reason}")
+            return RunOutcome(run_id, "unknown", error=f"safety: {guard.reason}", refused=True)
+        if self.without_glorfindel and guard.zone == "production":
+            # SEC5 (N-04): a development run has no business in production.
+            console.print(f"[red]Safety check failed:[/red] {NO_WITHOUT_IN_PRODUCTION}")
+            return RunOutcome(run_id, "unknown", error=f"safety: {NO_WITHOUT_IN_PRODUCTION}",
+                              refused=True)
         if guard.legacy:
             console.print(
                 "[yellow]Target enrolled by the old 'annatar-test' tag (migration) — "
@@ -183,14 +215,14 @@ class Engine:
                     "\n[red]Pre-flight check failed — fix the above before running.[/red]\n"
                     "[dim]Use --skip-preflight to bypass.[/dim]"
                 )
-                return RunOutcome(run_id, "unknown", error="preflight failed")
+                return RunOutcome(run_id, "unknown", error="preflight failed", refused=True)
 
         # B2: an exercise window before the first touch of the target (setup included),
         # closed whatever happens — what Glorfindel sees on this VM meanwhile is labelled
         # `exercise` (eregion_core/exercise.py).
         open_window(run_id, injector="annatar", kind="technique",
                     experiment=f"{scenario.mitre} {scenario.name}",
-                    targets=[executor.resource_id])
+                    targets=[executor.resource_id], destructive=destructive)
         try:
             if scenario.engine == "atomic":
                 return self._run_atomic_enrolled(scenario, executor, run_id, session, resolved)
@@ -203,6 +235,16 @@ class Engine:
             close_window(run_id)
             if self.publish_report:  # its last save is done, the atomic's that raised too
                 carry_run(run_id, RUNS_DIR)
+
+    def _watch_lost(self) -> str:
+        """Why the watch no longer stands behind this run — "" when it does, or when the run
+        goes without it. Read before each action, not only at the start (SEC5, N-03)."""
+        return "" if self.without_glorfindel else watch_gate.refusal()
+
+    @staticmethod
+    def _lost(run_id: str, why: str) -> RunOutcome:
+        console.print(f"[red]Stopped — the Glorfindel watch is gone:[/red] {why}")
+        return RunOutcome(run_id, "unknown", error=f"glorfindel: lost during the run — {why}")
 
     @staticmethod
     def _atomic_calls_needed(n_probes: int) -> int:
@@ -240,8 +282,12 @@ class Engine:
         metrics = watch_gate.without_metrics(self.without_glorfindel)
         checks = {}
 
-        # Setup runs first — cleans residuals from previous attack before we check state
+        # Setup runs first — cleans residuals from previous attack before we check state. The
+        # watch is read again before each action (SEC5, N-03): one that died stops the run.
         for action in scenario.setup:
+            lost = self._watch_lost()
+            if lost:
+                return self._lost(run_id, lost)
             self._execute_action(executor, action)
 
         # Integrity check — only for scenarios with setup (e.g. T1486 ransomware testdata disk)
@@ -267,6 +313,9 @@ class Engine:
             console.print(f"[cyan]->[/cyan] {step.get('name', step.get('action'))}")
             if step.get("record") == "T0":
                 T0 = time.time()
+            lost = self._watch_lost()
+            if lost:
+                return self._lost(run_id, lost)
             self._execute_action(executor, step)
 
         checks["attack"] = "PASS"
@@ -375,6 +424,12 @@ class Engine:
                 run_id, "unknown", error="initial state not clean before the atomic"
             )
         checks["initial_state_before"] = "PASS"
+
+        # The watch read again before the atomic's command (SEC5, N-03): nothing run yet, so
+        # nothing to clean up.
+        lost = self._watch_lost()
+        if lost:
+            return self._lost(run_id, lost)
 
         T0 = time.time()
         detection_timeout_s = 0.0

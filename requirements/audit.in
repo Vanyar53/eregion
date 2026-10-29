@@ -1,0 +1,4 @@
+# CI2 (#268): the tool that reads the three locks, in a lock of its own — never in the image's,
+# never in dev.txt. Installed with its hashes in its own venv (.github/workflows/pip-audit.yml,
+# make audit). A new version: change it here, then make lock, in a PR like the other locks.
+pip-audit==2.10.1

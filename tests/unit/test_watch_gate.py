@@ -39,6 +39,12 @@ from tests.unit.fake_container import CRED, URL, FakeContainer
 from tests.unit.test_annatar_run_exit import ATOMIC_YAML, EXFIL_YAML, _executor
 
 ROOT = Path(__file__).resolve().parents[2]
+SUB = "00000000-0000-0000-0000-00000000aaaa"   # a placeholder, never a real subscription
+
+
+def _beat(at: datetime, subscription: str | None = None) -> str:
+    """The heartbeat a watch of this subscription writes for the injectors (SEC5, N-03)."""
+    return json.dumps(gate.beat_body(at, subscription))
 WATCH = "https://storodruin.blob.core.windows.net/watch"
 NOW = datetime(2026, 10, 27, 9, 0, tzinfo=timezone.utc)
 
@@ -46,9 +52,11 @@ NOW = datetime(2026, 10, 27, 9, 0, tzinfo=timezone.utc)
 @pytest.fixture
 def real_gate(tmp_path, monkeypatch):
     """The gate's real readers (conftest sees a live watch everywhere else), a throwaway
-    HOME, no channel; returns the local heartbeat file to write."""
-    monkeypatch.setattr(gate, "READERS", {"channel": gate.channel_beat, "local": gate.local_beat})
+    HOME, no channel, a placeholder subscription; returns the local heartbeat file to write."""
+    monkeypatch.setattr(gate, "READERS", {"channel": gate.channel_beat, "local": gate.local_beat,
+                                          "own": gate.perimeter})
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv(gate.SUBSCRIPTION_ENV, SUB)
     monkeypatch.delenv(wc.CHANNEL_ENV, raising=False)
     hb = tmp_path / "home" / ".glorfindel" / "watch_heartbeat"
     hb.parent.mkdir(parents=True)
@@ -103,7 +111,7 @@ def test_a_stale_local_heartbeat_says_how_old_it_is(real_gate):
 
 
 def test_a_fresh_local_heartbeat_is_a_live_watch(real_gate):
-    real_gate.write_text((NOW - timedelta(seconds=30)).isoformat())
+    real_gate.write_text(_beat(NOW - timedelta(seconds=30)))
     assert gate.refusal(NOW) == ""
 
 
@@ -129,7 +137,7 @@ def _channel(monkeypatch, beat):
 
 def test_the_hosted_watch_through_the_channel_is_a_live_watch(real_gate, monkeypatch):
     """M732: on Orodruin, no local file — the channel's heartbeat is the watch."""
-    _channel(monkeypatch, {"at": (NOW - timedelta(seconds=40)).isoformat()})
+    _channel(monkeypatch, json.loads(_beat(NOW - timedelta(seconds=40))))
     assert gate.refusal(NOW) == ""
 
 
@@ -166,12 +174,12 @@ def test_a_heartbeat_dated_in_the_future_is_fresh_only_within_the_clocks_skew(
     """M756: a heartbeat dated an hour ahead would stay « fresh » for ever. A few seconds
     ahead is two hosts' clocks (H0, Orodruin); beyond CLOCK_SKEW_S, no watch — and said."""
     at = NOW + timedelta(seconds=ahead_s)
-    real_gate.write_text(at.isoformat())
+    real_gate.write_text(_beat(at))
     why = gate.refusal(NOW)
     assert (why == "") is fresh
     if not fresh:
         assert "in the future" in why and "a clock is wrong" in why
-    _channel(monkeypatch, {"at": at.isoformat()})
+    _channel(monkeypatch, json.loads(_beat(at)))
     assert (gate.refusal(NOW) == "") is fresh
     assert wc.alive({"at": at.isoformat()}, now=NOW) is fresh   # the wait's test too (#159)
 
@@ -387,7 +395,7 @@ def test_a_campaign_records_how_it_started_and_resumes_only_the_same_way(real_ga
     m.set_state("running")
     m.scenarios[1].status = "pending"
     m.save(cdir)
-    real_gate.write_text(datetime.now(timezone.utc).isoformat())   # a live watch, even
+    real_gate.write_text(_beat(datetime.now(timezone.utc)))   # a live watch, even
     with pytest.raises(CampaignRefused, match="started without Glorfindel — resume it the same way"):
         CampaignRunner(cdir, reset_fn=lambda x: None, engine_factory=lambda: engine).run()
     assert CampaignManifest.load(cdir).state == "running" and len(engine.calls) == 2

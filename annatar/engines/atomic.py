@@ -21,6 +21,12 @@ faithfully (fail closed), so a run never half-executes a test it could not prepa
   - a command/cleanup referring to ``PathToAtomicsFolder`` (only the YAML is vendored — the
     upstream atomics tree is not on the VM, so the path does not exist there).
 
+The file is checked against its sha256 in ``annatar/atomics/PIN`` before it is read, at every
+run (SEC5, V-30) — not only in CI: a vendored atomic edited alone, or a file the PIN does not
+list, is refused before anything touches the target. The PIN lives beside the YAML, in the
+same image: an edit that changes both together is not seen — this catches a drifted or
+half-edited file, not a hostile image (that is the image's provenance, M-3).
+
 The command and cleanup we hand the runner carry an explicit ``#!/bin/<executor>`` shebang:
 Run Command's default interpreter is not guaranteed to be the test's executor (``bash`` vs
 ``sh``/dash), so a bash-only test would otherwise run under the wrong shell. This is the
@@ -28,6 +34,7 @@ adapter's equivalent of invoke-atomicredteam's ``bash -c``.
 """
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -41,6 +48,8 @@ _PLACEHOLDER = re.compile(r"#\{([a-zA-Z0-9_]+)\}")
 # The upstream tree is not on the VM — only the YAML is vendored — so a command that points
 # into it would run against a path that does not exist (bare or with a leading '$').
 _NO_ATOMICS_FOLDER = "PathToAtomicsFolder"
+# A PIN line: "#   <sha256>  <path relative to the atomics directory>".
+_PIN_LINE = re.compile(r"^#\s+([0-9a-f]{64})\s+(\S+)\s*$")
 
 
 class AtomicError(ValueError):
@@ -75,13 +84,33 @@ def parse_ref(engine_ref: str) -> tuple[str, str]:
     return parts[0].strip(), parts[1].strip()
 
 
+def pinned_digests(atomics_dir: Path) -> dict[str, str]:
+    """``{relative path: sha256}`` as ``PIN`` records them — {} when there is no PIN."""
+    try:
+        text = (atomics_dir / "PIN").read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    return {m.group(2): m.group(1) for m in map(_PIN_LINE.match, text.splitlines()) if m}
+
+
 def _load_technique(technique: str, atomics_dir: Path) -> dict:
     path = atomics_dir / technique / f"{technique}.yaml"
     if not path.is_file():
         raise AtomicError(
             f"no vendored atomic for {technique!r} at {path} — vendor it (annatar/atomics/PIN)"
         )
-    doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+    # SEC5 (V-30): the bytes we read are the bytes the PIN vouches for, checked at run time.
+    raw = path.read_bytes()
+    rel = f"{technique}/{technique}.yaml"
+    pinned = pinned_digests(atomics_dir).get(rel)
+    if pinned is None:
+        raise AtomicError(f"{rel} has no sha256 in annatar/atomics/PIN — not run")
+    if hashlib.sha256(raw).hexdigest() != pinned:
+        raise AtomicError(
+            f"{rel} does not match its sha256 in annatar/atomics/PIN — the vendored atomic "
+            "was changed; not run"
+        )
+    doc = yaml.safe_load(raw.decode("utf-8"))
     if not isinstance(doc, dict) or not isinstance(doc.get("atomic_tests"), list):
         raise AtomicError(f"{path}: not an Atomic Red Team technique file")
     return doc

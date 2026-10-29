@@ -64,7 +64,7 @@ COMPONENTS: dict[str, Component] = {
         own=("eregion_core",),
         absent_deps=GLORFINDEL_ONLY_DEPS + ("litellm",),
         tests=(
-            "test_exercise_channel.py", "test_llm_call.py", "test_models.py",
+            "test_exercise_channel.py", "test_injector_channels.py", "test_llm_call.py", "test_models.py",
         ),
     ),
     # Glorfindel — the watch, the graph, the response, its providers. The console
@@ -75,11 +75,12 @@ COMPONENTS: dict[str, Component] = {
         tests=(
             "test_actions_split.py", "test_agent_nodes.py", "test_audit.py", "test_aws_adapter.py",
             "test_bot.py", "test_chat_escaping.py", "test_cli.py", "test_config.py", "test_detection_authoring.py",
-            "test_detection_rules.py", "test_detectors.py", "test_discovery.py", "test_forged_logs.py",
+            "test_detection_rules.py", "test_detectors.py", "test_discovery.py", "test_entries_calls.py",
+            "test_forged_logs.py",
             "test_glorfindel.py",
             "test_invariant_regressions.py", "test_invariants.py", "test_invariants_aws.py",
             "test_jobs.py", "test_llm_smoke.py", "test_locks.py", "test_orphan_sweep.py", "test_posture.py", "test_proposed_rules.py", "test_readiness.py",
-            "test_reassert.py", "test_rule_layers.py", "test_unexpected_decision.py",
+            "test_reassert.py", "test_rule_layers.py", "test_tui_actions.py", "test_unexpected_decision.py",
         ),
     ),
     # Annatar — its executors, engines (Atomic Red Team), campaigns, signals.
@@ -90,7 +91,7 @@ COMPONENTS: dict[str, Component] = {
             "test_annatar_atomic.py", "test_annatar_cli.py", "test_annatar_detection.py",
             "test_annatar_run_exit.py", "test_campaign_channel.py", "test_campaign_manifest.py",
             "test_campaign_planner.py", "test_campaign_runner.py", "test_campaign_synthesizer.py",
-            "test_engine.py", "test_inscription.py", "test_orodruin.py", "test_parser.py",
+            "test_engine.py", "test_injector_guards.py", "test_inscription.py", "test_orodruin.py", "test_parser.py",
             "test_signals.py",
         ),
     ),
@@ -109,6 +110,7 @@ TOGETHER = (
     "test_activity_logs.py", "test_agents_discord.py", "test_analysis_rules_parity.py", "test_entra_detection.py", "test_analysis_separation.py",
     "test_analysis_triage.py", "test_api.py", "test_campaign_changes.py", "test_campaign_replay.py", "test_campaign_report.py",
     "test_components.py", "test_console.py", "test_console_escaping.py", "test_console_exercises.py", "test_profiles.py",
+    "test_restore_moment.py",
     "test_signal_origin.py",
     "test_decision_stability.py", "test_dependency_failures.py", "test_dependency_lock.py",
     "test_docs_budget.py", "test_exercise.py", "test_githooks.py", "test_exercise_guard.py",
@@ -116,10 +118,11 @@ TOGETHER = (
     "test_host_cd.py", "test_host_deploy.py", "test_hosted_report.py", "test_indicators.py",
     "test_makefile_bench.py", "test_makefile_campaign.py", "test_makefile_secrets.py",
     "test_notify_discord.py", "test_observation.py", "test_orodruin_kill.py", "test_palantir.py",
+    "test_pip_audit_issues.py",
     "test_provider_boundary.py", "test_roadmap_discord.py",
     "test_repo_hermetic.py",
     "test_run_channel.py", "test_watch_channel.py", "test_watch_gate.py",
-    "test_workflows.py", "test_readme.py",
+    "test_workflows.py", "test_readme.py", "test_image_check.py", "test_release.py",
 )
 
 # Modules of a component that exist to meet another one: each is imported only by a command

@@ -69,8 +69,11 @@ def _cli_command(esc: dict) -> str:
     if esc.get("escalation_type") in _ANCHORED_TYPES:
         return f"glorfindel ack {esc_id}"
     if action == "restore_from_backup":
+        # The moment is asked (SEC4c): the card's first detection — the attack began before.
+        before = esc.get("first_seen") or esc.get("timestamp") or "<ISO8601>"
         return (
-            f"glorfindel restore {rid} --yes\n"
+            "# --before : un instant avant le début de l'attaque (ici la 1re détection de la carte)\n"
+            f"glorfindel restore {rid} --yes --before {before}\n"
             f"glorfindel ack {esc_id}"
         )
     if esc["escalation_type"] == "verification_failed":
@@ -359,45 +362,215 @@ class _ExecuteButton(discord.ui.Button):
             f"⚡ **{discord_text(interaction.user.display_name)}** → {discord_code(cmd_display)}"
         )
 
-        # Auto-ack before executing so the escalation closes right away
-        esc_module.resolve(self.esc["id"])
-
         channel = interaction.channel
-        asyncio.create_task(self._execute_and_report(channel))
+        asyncio.create_task(_execute_and_report(self.esc, self.cli_args, channel, self._run,
+                                                interaction.message, self.view))
 
-    async def _execute_and_report(
-        self, channel: discord.abc.Messageable
-    ) -> None:
+    def _run(self) -> tuple[int, str]:
+        return _run_cli(self.cli_args)
+
+
+def _run_cli(cli_args: list[str]) -> tuple[int, str]:
+    """(return code, output) of a glorfindel command."""
+    import subprocess
+    result = subprocess.run(
+        [_glorfindel_bin()] + cli_args,
+        capture_output=True,
+        text=True,
+        timeout=1800,  # 30 min max (restore ~20 min)
+    )
+    return result.returncode, (result.stdout + result.stderr).strip()
+
+
+async def _execute_and_report(esc: dict, cli_args: list[str], channel, run, card_message=None,
+                              card_view=None, on_done=None) -> None:
+    """Run the command, say its output in the thread; the card is acknowledged only once it
+    succeeded (SEC4c) — a refusal or a failure is said, the card stays open and its buttons
+    come back."""
+    try:
+        loop = asyncio.get_running_loop()
+        code, output = await loop.run_in_executor(None, run)
+        # The CLI's output (names from Azure in it): no ``` of its own closes the block.
+        short = output.strip()[:1800].replace("`", "ˋ") or "(pas de sortie)"
+        await channel.send(f"```\n{short}\n```")
+        if code != 0:
+            await channel.send(f"✗ Refusé ou en échec (code {code}) : la carte reste ouverte.")
+            if card_message is not None and card_view is not None:
+                for item in card_view.children:
+                    item.disabled = False  # type: ignore[attr-defined]
+                await card_message.edit(view=card_view)
+            return
+        esc_module.resolve(esc["id"])
+        # Archive thread if no more pending escalations for this resource
+        remaining = [
+            e for e in esc_module.pending()
+            if e["resource_id"] == esc["resource_id"]
+        ]
+        if not remaining and isinstance(channel, discord.Thread):
+            await channel.edit(
+                archived=True, reason="All escalations acknowledged"
+            )
+    except Exception as exc:
+        await channel.send(f"✗ Erreur lors de l'exécution : {discord_text(exc)} — la carte reste ouverte.")
+    finally:
+        if on_done is not None:
+            on_done()
+
+
+# The cards whose restore this bot is running (SEC4c): a second confirmation — a second form,
+# a double click — is refused and says so, until the first one ends.
+_RESTORING: set[str] = set()
+
+
+async def _allowed(interaction: discord.Interaction, esc_id: str) -> bool:
+    """The clicker is allowed by the bot's ButtonPolicy (M-3), or refused and told."""
+    policy = getattr(interaction.client, "button_policy", None)
+    if isinstance(policy, ButtonPolicy) and policy.allows(interaction.user):
+        return True
+    await _refuse(interaction, esc_id, policy)
+    return False
+
+
+# The field's label, by where its moment comes from (a Discord label: 45 characters at most).
+_MOMENT_LABELS = {"exercise": "Point d'avant… (début de l'exercice, UTC)",
+                  "card": "Point d'avant… (1re détection, UTC)",
+                  "": "Point d'avant… (début de l'attaque, UTC)"}
+
+
+class _RestoreButton(discord.ui.Button):
+    """A restore asks for its moment (SEC4c): a form, filled with the moment the runs/ channel
+    gives for this VM (an exercise), else the card's first detection."""
+
+    def __init__(self, esc: dict) -> None:
+        super().__init__(label="🔄 Restore", style=discord.ButtonStyle.primary,
+                         custom_id=f"glorfindel_exec_{esc['id'][:8]}", row=1)
+        self.esc = esc
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        from glorfindel import restore_plan
+        # Discord wants the form within 3 s: runs/ is read off the event loop, and given up
+        # past 2 s (the card's own moment then).
+        rid = self.esc["resource_id"]
+        loop = asyncio.get_running_loop()
         try:
-            loop = asyncio.get_running_loop()
-            output = await loop.run_in_executor(None, self._run)
-            # The CLI's output (names from Azure in it): no ``` of its own closes the block.
-            short = output.strip()[:1800].replace("`", "ˋ") or "(pas de sortie)"
-            await channel.send(f"```\n{short}\n```")
-            # Archive thread if no more pending escalations for this resource
-            remaining = [
-                e for e in esc_module.pending()
-                if e["resource_id"] == self.esc["resource_id"]
-            ]
-            if not remaining and isinstance(channel, discord.Thread):
-                await channel.edit(
-                    archived=True, reason="All escalations acknowledged"
-                )
-        except Exception as exc:
-            await channel.send(f"✗ Erreur lors de l'exécution : {discord_text(exc)}")
-
-    def _run(self) -> str:
-        import subprocess
-        result = subprocess.run(
-            [_glorfindel_bin()] + self.cli_args,
-            capture_output=True,
-            text=True,
-            timeout=1800,  # 30 min max (restore ~20 min)
-        )
-        return (result.stdout + result.stderr).strip()
+            plan = await asyncio.wait_for(
+                loop.run_in_executor(None, lambda: restore_plan.proposed_moment(rid, self.esc)), timeout=2.0)
+        except Exception:
+            plan = restore_plan.proposed_moment(rid, self.esc, read_runs=False)
+        await interaction.response.send_modal(
+            _RestoreModal(self.esc, plan, interaction.message, self.view))
 
 
-def _make_action_button(esc: dict) -> _ExecuteButton | None:
+class _RestoreModal(discord.ui.Modal):
+    def __init__(self, esc: dict, plan: dict, card_message=None, card_view=None) -> None:
+        super().__init__(title="Restaurer depuis la sauvegarde", timeout=600)
+        self.esc, self.plan = esc, plan
+        self.card_message, self.card_view = card_message, card_view
+        text = _MOMENT_LABELS.get(plan.get("source", ""), _MOMENT_LABELS[""])
+        if hasattr(discord.ui, "Label"):     # discord.py ≥ 2.6 (the lock: 2.7)
+            self.moment = discord.ui.TextInput(
+                default=plan.get("before") or None, placeholder="2026-10-29T08:00:00+00:00",
+                required=True, max_length=40)
+            # Where the moment comes from, under the field (a description: 100 characters).
+            self.field = discord.ui.Label(
+                text=text, description=(str(plan.get("why") or "")[:100] or None),
+                component=self.moment)
+        else:
+            self.moment = self.field = discord.ui.TextInput(
+                label=text, default=plan.get("before") or None,
+                placeholder="2026-10-29T08:00:00+00:00", required=True, max_length=40)
+        self.add_item(self.field)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return await _allowed(interaction, self.esc["id"])
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        from glorfindel import restore_plan
+        try:
+            before = restore_plan.parse_moment(self.moment.value)
+        except ValueError as exc:
+            await interaction.response.send_message(f"✗ {discord_text(exc)}", ephemeral=True)
+            return
+        await interaction.response.defer()
+        loop = asyncio.get_running_loop()
+        try:
+            points = await loop.run_in_executor(
+                None, lambda: restore_plan.points_before(self.esc["resource_id"], before))
+            unread = ""
+        except Exception as exc:  # unreadable vault: said, the restore stays possible
+            points, unread = [], f"{type(exc).__name__}: {exc}"
+        await interaction.channel.send(  # type: ignore[union-attr]
+            _points_text(self.esc, before, self.plan, points, unread),
+            view=_RestoreConfirmView(self.esc, before, self.card_message, self.card_view))
+
+
+def _points_text(esc: dict, before: str, plan: dict, points: list[dict], unread: str) -> str:
+    """What the confirmation shows: the moment, where it came from, the points before it."""
+    vm = str(esc.get("resource_id") or "?").rstrip("/").split("/")[-1]
+    lines = [f"🔄 Restaurer **{discord_text(vm)}** au point le plus récent d'avant "
+             f"{discord_code(before)}"]
+    if plan.get("why") and plan.get("before") == before:
+        lines.append(f"Moment proposé : {discord_text(plan['why'])}")
+    from glorfindel.restore_plan import moment_warning
+    warning = moment_warning(str(esc.get("resource_id") or ""), before)
+    if warning:
+        lines.append(f"⚠ {discord_text(warning)}")
+    if unread:
+        lines.append(f"Points de restauration illisibles : {discord_text(unread[:300])}")
+    elif not points:
+        lines.append("Aucun point de restauration avant ce moment : le restore sera refusé.")
+    else:
+        lines.append("Points avant ce moment (lecture seule) :")
+        for i, p in enumerate(points[:8]):
+            tier = " · niveau coffre" if p.get("vault_tier") else ""
+            during = " · **pris pendant l'incident**" if p.get("during_incident") else ""
+            lines.append(f"• {discord_code(str(p.get('time')))}{tier}{during}" + (" ← restauré" if i == 0 else ""))
+    return "\n".join(lines)
+
+
+class _RestoreConfirmView(discord.ui.View):
+    """Confirm, and the restore runs with --before; the card is acknowledged once it started."""
+
+    def __init__(self, esc: dict, before: str, card_message=None, card_view=None) -> None:
+        super().__init__(timeout=900)
+        self.esc, self.before = esc, before
+        self.card_message, self.card_view = card_message, card_view
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return await _allowed(interaction, self.esc["id"])
+
+    @discord.ui.button(label="🔄 Confirmer le restore", style=discord.ButtonStyle.primary)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        from glorfindel import restore_plan
+        esc_id = self.esc["id"]
+        if esc_id in _RESTORING:
+            await interaction.response.send_message(
+                "✗ Un restore de cette carte est déjà en cours : attendre sa fin (son résultat est dans le fil).",
+                ephemeral=True)
+            return
+        _RESTORING.add(esc_id)
+        for item in self.children:
+            item.disabled = True  # type: ignore[attr-defined]
+        await interaction.response.edit_message(view=self)
+        if self.card_view is not None and self.card_message is not None:
+            for item in self.card_view.children:
+                item.disabled = True  # type: ignore[attr-defined]
+            await self.card_message.edit(view=self.card_view)
+        args = restore_plan.restore_args(self.esc["resource_id"], self.before)
+        await interaction.channel.send(  # type: ignore[union-attr]
+            f"⚡ **{discord_text(interaction.user.display_name)}** → {discord_code('glorfindel ' + ' '.join(args))}")
+        asyncio.create_task(_execute_and_report(self.esc, args, interaction.channel,
+                                                lambda: _run_cli(args), self.card_message,
+                                                self.card_view, on_done=lambda: _RESTORING.discard(esc_id)))
+
+    @discord.ui.button(label="Annuler", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        for item in self.children:
+            item.disabled = True  # type: ignore[attr-defined]
+        await interaction.response.edit_message(content="Restore annulé.", view=self)
+
+
+def _make_action_button(esc: dict) -> discord.ui.Button | None:
     """Return an execute button for this escalation, or None."""
     action = esc["action"]
     esc_type = esc["escalation_type"]
@@ -409,11 +582,7 @@ def _make_action_button(esc: dict) -> _ExecuteButton | None:
     if esc_type in _ANCHORED_TYPES:
         return None
     if action == "restore_from_backup":
-        return _ExecuteButton(
-            esc, "🔄 Restore",
-            discord.ButtonStyle.primary,
-            ["restore", rid, "--yes"],
-        )
+        return _RestoreButton(esc)
     if esc_type == "verification_failed":
         return _ExecuteButton(
             esc, "↩️ Revert",

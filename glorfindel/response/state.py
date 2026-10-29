@@ -292,9 +292,9 @@ def _load_isolation_state(vm_ref: str) -> dict | None:
         return data
     except (OSError, ValueError) as e:
         _console.print(
-            f"[yellow]État d'isolation illisible pour {_vm_ref(vm_ref)[0]} ({e}) — les règles sont "
-            "retrouvées par leur nom sur chaque NIC ; une carte en quarantaine attend qu'il soit "
-            "réparé ou retiré.[/yellow]"
+            f"[yellow]État d'isolation illisible pour {_vm_ref(vm_ref)[0]} ({e}) — règles cherchées par leur "
+            "nom sur chaque carte de la VM ; une carte en quarantaine, ou la VM supprimée (ses cartes "
+            "inconnues), attend qu'il soit réparé ou retiré.[/yellow]"
         )
         return None
 

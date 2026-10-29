@@ -1523,7 +1523,7 @@ def test_a_deleted_vm_leaves_no_isolation_on_a_shared_nsg(monkeypatch):
          ("address_reused", WEB1, WEB1, ("nsg.get", "always-429"), True, False, "rg-app1", "web", False))
 
 
-@pytest.mark.parametrize("known_by", ["state", "block"])
+@pytest.mark.parametrize("known_by", ["state", "block", "unreadable state", "unreadable block"])
 @pytest.mark.parametrize("listing", ["readable", "throttled"])
 def test_a_deleted_vms_rules_go_with_its_release_or_are_said(monkeypatch, listing, known_by):
     """The same, said (I7S): web isolated by rules on the tier NSG, its state lost; then
@@ -1532,7 +1532,11 @@ def test_a_deleted_vms_rules_go_with_its_release_or_are_said(monkeypatch, listin
     its address behind the tier NSG — cut off, and said (the orphan's card). The release
     of web looks for the rules named for its NIC on every NSG and takes them off; when
     the NSGs can't be listed, it says so and keeps a state — never `released` — and the
-    retry finishes. The new VM is back to its design."""
+    retry finishes. The new VM is back to its design.
+    A state of web's that can't be read (its isolation's, or its block's, which named
+    the NIC) may name NICs nothing else does: `released` used to clear that file, the
+    rules left (review). Now `release_partial`, the file kept as it is; repaired, the
+    release finishes."""
     import copy
     import shutil
 
@@ -1546,17 +1550,24 @@ def test_a_deleted_vms_rules_go_with_its_release_or_are_said(monkeypatch, listin
         m.build(_net(web_nic={"own": "tier"}, subnet_nsg=[]))
         f, c, nic = m.fake, m.connector, _nic("rg-app1", "web-nic")
         tier, ip, subnet = f.nics[nic]["nsg"], f.nics[nic]["ips"][0], f.nics[nic]["subnet"]
-        if known_by == "block":
+        if known_by in ("block", "unreadable block"):
             assert c.block_suspicious_ip(ATTACKER, WEB1, scope="vm", threat_port=22)["status"] == "blocked"
         assert c.isolate_vm(WEB1)["status"] == "isolated"                 # by rules, on the tier NSG
         ours = sorted(n for n in f.nsgs[key(tier)]["rules"] if n.startswith("glorfindel-iso-"))
         assert len(ours) == 2, ours
-        for p in actions._ISOLATION_STATE_DIR.glob("*.json"):
-            p.unlink()                                                    # the state lost
+        if known_by != "unreadable state":
+            for p in actions._ISOLATION_STATE_DIR.glob("*.json"):
+                p.unlink()                                                # the state lost
         if known_by == "state":
             f.nics[nic]["nsg"] = None                                     # the NIC left bare
             out = c.isolate_vm(WEB1)
             assert out["status"] == "isolated" and "nsg-subnet" in out["nsg"], out
+        where = {"unreadable state": actions._ISOLATION_STATE_DIR,
+                 "unreadable block": actions._BLOCK_STATE_DIR}.get(known_by)
+        kept = {p: p.read_text() for p in where.glob("*.json")} if where else {}
+        assert kept or not where
+        for p in kept:
+            p.write_text("{not json")                                     # can't be read
         m._delete_vm(WEB1)
         new = f.add_vm("rg-new", "web", [{"rg": "rg-new", "name": "web-nic-9", "ips": [ip], "subnet": subnet,
                                           "nsg": tier, "policy": False, "location": "westeurope"}])
@@ -1566,6 +1577,14 @@ def test_a_deleted_vms_rules_go_with_its_release_or_are_said(monkeypatch, listin
         assert not m._back_to_design(new)                                 # cut off by web's rules
         said = {o["rule"].lower() for o in c.find_orphan_rules()}
         assert set(ours) <= said, said                                    # never in silence
+        if kept:
+            out = c.release_isolation(WEB1)
+            assert out["status"] == "release_partial", out
+            assert any("supprimée, état illisible" in e and "non vérifiée" in e for e in out["failed"]), out
+            assert all(p.read_text() == "{not json" for p in kept), "the unreadable file was not kept as it was"
+            assert set(ours) <= set(f.nsgs[key(tier)]["rules"]), "rules gone though the state was unknown"
+            for p, text in kept.items():
+                p.write_text(text)                                        # repaired
         if listing == "throttled":
             m.chaos.arm(("nsg.list", "always-429"))
             try:
@@ -1575,11 +1594,74 @@ def test_a_deleted_vms_rules_go_with_its_release_or_are_said(monkeypatch, listin
             assert out["status"] == "release_partial", out
             assert any("supprimée" in e and "non vérifiée" in e for e in out["failed"]), out
             assert actions._load_isolation_state(WEB1), "the state of what is left was cleared"
-            assert set(ours) <= set(f.nsgs[key(tier)]["rules"]), "rules gone though the listing failed"
+            if known_by != "unreadable state":                            # there, undone by its placements
+                assert set(ours) <= set(f.nsgs[key(tier)]["rules"]), "rules gone though the listing failed"
         out = c.release_isolation(WEB1)
         assert out["status"] == "released", out
         assert not [n for n in f.nsgs[key(tier)]["rules"] if n in ours], f.nsgs[key(tier)]["rules"]
         assert m._back_to_design(new), "the VM given web's address is still cut off"
         assert actions._load_isolation_state(WEB1) is None
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)
+
+
+@pytest.mark.parametrize("nic_is", ["detached", "on another name", "on a namesake", "unreadable"])
+def test_a_deleted_vms_nic_that_azure_kept_is_read_first(monkeypatch, nic_is):
+    """The review's probe (I7S): `az vm delete` and Terraform keep a VM's NIC by default,
+    detached. web, isolated by rules on the tier NSG, is deleted, its NIC kept; its state
+    names only the NIC. Detached, or attached since to a VM of another name (our names
+    carry `web`): its rules go. Attached to another `web` (another group) that Glorfindel
+    isolates: that isolation has the same names — the release took them, the other web
+    open again until the next pass. Now they stay and the release says so; the other
+    web's own release takes them. A NIC that can't be read: never `released`."""
+    import shutil
+
+    from glorfindel import actions
+
+    from .fake_azure import vm_id
+
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_net(web_nic={"own": "tier"}, subnet_nsg=[]))
+        f, c, nic = m.fake, m.connector, _nic("rg-app1", "web-nic")
+        tier = f.nics[nic]["nsg"]
+        assert c.isolate_vm(WEB1)["status"] == "isolated"
+        ours = sorted(n for n in f.nsgs[key(tier)]["rules"] if n.startswith("glorfindel-iso-"))
+        assert len(ours) == 2, ours
+        for p in actions._ISOLATION_STATE_DIR.glob("*.json"):
+            p.unlink()
+        actions._save_isolation_state(WEB1, {"resource_id": WEB1, "placements": [],
+                                             "known_nics": [f.nics[nic]["id"]]})
+        vm = f.vms.pop(key(WEB1))                                         # deleted, its NIC kept
+        other = None
+        if nic_is in ("on another name", "on a namesake"):
+            other = vm_id("rg-other", "web") if nic_is == "on a namesake" else vm_id("rg-app1", "batch")
+            f.vms[key(other)] = {**vm, "id": other}
+        if nic_is == "on a namesake":
+            assert c.isolate_vm(other)["status"] == "isolated"            # the same names
+        if nic_is == "unreadable":
+            m.chaos.arm(("nic.get", "always-429"))
+        try:
+            out = c.release_isolation(WEB1)
+        finally:
+            m.chaos.plan = None
+        left = sorted(n for n in f.nsgs[key(tier)]["rules"] if n.startswith("glorfindel-iso-"))
+        if nic_is in ("detached", "on another name"):
+            assert out["status"] == "released", out
+            assert not left, left
+            return
+        assert out["status"] == "release_partial", out
+        assert left == ours, left
+        assert actions._load_isolation_state(WEB1), "the state that named the NIC was cleared"
+        if nic_is == "unreadable":
+            assert any("web-nic illisible" in e and "non vérifiée" in e for e in out["failed"]), out
+            assert c.release_isolation(WEB1)["status"] == "released"       # readable again
+            assert not [n for n in f.nsgs[key(tier)]["rules"] if n.startswith("glorfindel-iso-")]
+            return
+        assert any("rg-other/web" in e and "laissés" in e for e in out["failed"]), out
+        assert c.verify_isolation(other)["verified"] is True              # the other web still cut off
+        assert c.release_isolation(other)["status"] == "released"         # its own release takes them
+        assert not [n for n in f.nsgs[key(tier)]["rules"] if n.startswith("glorfindel-iso-")]
     finally:
         shutil.rmtree(m.home, ignore_errors=True)

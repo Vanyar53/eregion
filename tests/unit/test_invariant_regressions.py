@@ -1839,7 +1839,8 @@ def test_an_unblock_of_a_deleted_vm_says_the_block_nothing_names(monkeypatch):
 
 def test_an_unblock_of_a_deleted_vm_leaves_its_old_nic_on_another_vm(monkeypatch):
     """Its NIC given to another VM named web, blocked there under the same names: that
-    block is the other VM's — the unblock of the deleted one leaves it."""
+    block is the other VM's — the unblock of the deleted one leaves it, and says so
+    (I7S's `_gone_nic_check`: they may be the deleted VM's, if the other isn't blocked)."""
     import shutil
 
     m = _gone_world(monkeypatch, isolated=True, nic_to_web1=True)
@@ -1847,7 +1848,8 @@ def test_an_unblock_of_a_deleted_vm_leaves_its_old_nic_on_another_vm(monkeypatch
         left = _block_rules(m)
         assert left
         out = m.connector.unblock_ip(ATTACKER, WEB2)
-        assert out["status"] == "not_found", out
+        assert out["status"] == "unblock_partial", out
+        assert any("rg-app1/web" in f and "le blocage porte les mêmes noms" in f for f in out["failed"]), out
         assert _block_rules(m) == left
     finally:
         shutil.rmtree(m.home, ignore_errors=True)

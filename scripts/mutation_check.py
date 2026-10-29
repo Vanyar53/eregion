@@ -4174,8 +4174,8 @@ MUTANTS += [
      "                        + [])\n"),
     ("M1551", "the NSGs that can't be listed: a deleted VM's release says `released` (I7S)", REL,
      '            return failed + [f"{vm_name} supprimée : les règles de ses cartes n\'ont pas été cherchées sur les "\n'
-     '                             f"NSG de l\'abonnement (liste illisible : {_first_line(exc)[:_ERR_MAX]}), levée non '
-     'vérifiée"]\n',
+     '                             f"NSG de l\'abonnement (liste illisible : {_first_line(exc)[:_ERR_MAX]}), "\n'
+     '                             f"{_GONE_WORDS[act][0]} non vérifiée"]\n',
      "            return failed\n"),
     ("M1552", "a failed release of a deleted VM forgets its NICs: the retry looks for nothing (I7S)", REL,
      '                **({"known_nics": known} if known else {}),\n', ""),
@@ -4293,18 +4293,19 @@ MUTANTS += [
      "        priority = _pair_priorities(existing, *own, self.ISOLATION_PRIORITY, 1, assigned.get(nsg_key, set()))\n",
      '        priority = _pair_priorities(existing, "", "", self.ISOLATION_PRIORITY, 1, assigned.get(nsg_key, set()))\n'),
     ("M1595", "the unblock of a deleted VM looks nowhere: `not_found`, the block left (I5R, I7S's cause)", UNB,
-     "                return self._gone_vm_blocks(resource_id, vm_name, ip, entry)\n",
+     "                return self._gone_vm_blocks(resource_id, vm_name, ip)\n",
      "                return [], []\n"),
     ("M1596", "the unblock of a deleted VM forgets the NICs its isolation's state names (I5R)", UNB,
-     "        for record in (entry or {}, _load_isolation_state(resource_id) or {}):\n",
-     "        for record in (entry or {},):\n"),
-    ("M1597", "the unblock of a deleted VM takes the block of its old NIC, now on another VM (I5R)", UNB,
-     "                continue                          # on another VM now: its rules are its own\n",
-     "                pass\n"),
+     "        known = self._known_nics(resource_id, _load_isolation_state(resource_id) or {})\n",
+     "        known = self._known_nics(resource_id, {})\n"),
+    ("M1597", "the unblock of a deleted VM looks for its isolation's names: the isolation off, the block left (I5R)",
+     UNB, "                                      self._block_rule_prefix(ip), deleted)\n",
+     '                                      "glorfindel-iso", deleted)\n'),
     ("M1598", "the unblock of a deleted VM reads an unreadable state as nothing (I5R, SEC4b)", UNB,
-     "        bad = set(_state.unreadable_states())\n", "        bad = set()\n"),
+     '        failed = self._gone_vm_unknown(resource_id or vm_name, vm_name, "block")\n',
+     "        failed = []\n"),
     ("M1599", "the unblock of a deleted VM leaves in silence the rules nothing names (I5R)", UNB,
-     "                elif name == mine or (name.startswith(", "                elif False and (name.startswith("),
+     "        failed += self._unnamed_blocks(vm_name, ip, known)\n", ""),
 ]
 TESTS.update({mid: f"{_I5R_KEEP} {INVARIANTS}" for mid in ("M1590", "M1591", "M1592", "M1593", "M1594")})
 TESTS.update({f"M{n}": "tests/unit/test_invariant_regressions.py -k deleted_vm" for n in range(1595, 1600)})

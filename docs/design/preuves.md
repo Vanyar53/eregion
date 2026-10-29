@@ -1456,20 +1456,30 @@ paire séparée à la main (la règle sortante déplacée, son numéro pris par 
 réaffirmation ne remet pas (la règle de la VM retournée), elle le dit : la carte de dérive, puis
 « disparu une deuxième fois ». Séquences figées (`test_a_perimeter_block_put_back_keeps_its_place`,
 `test_the_sequence_the_machine_found_on_i5`, `test_a_block_written_again_never_moves_down`,
-`test_an_isolation_written_again_never_moves_down`) ; M1590–M1594 attrapés.
+`test_an_isolation_written_again_never_moves_down`) ; M1590–M1594 attrapés. Tirées une à une,
+les étapes ne se rencontraient presque jamais : la machine seule laissait M1590 et M1591 à 0/2 à
+500 séquences. Une règle composée (`block_turned_then_reasserted` : bloquer sur le subnet, pour
+la VM ou les deux, passer un de nos deny en allow — celui de la VM une fois sur deux —, puis
+réaffirmer hors faute, hors `human_only` plus souvent) les rend courantes : M1591 et M1592
+attrapés 2/3 à 500 séquences par la machine seule. M1590 (une paire séparée dont le numéro est
+pris par une autre règle), M1593 et M1594 restent aux séquences figées : il y faut une règle
+d'autorisation posée entre nos deux numéros, que la machine ne pose pas.
 
 **Le déblocage d'une VM supprimée (I5R).** Le défaut qu'I7S corrige pour la levée, côté
 déblocage : `_sweep_block` répondait `[], []` sur une VM absente, et un blocage dont l'entrée
 était perdue (un crash avant qu'elle soit écrite, ou réécrite depuis) restait sur un NSG
 partagé, `not_found` annoncé — l'IP de l'attaquant coupée pour la VM suivante à cette adresse.
-Correctif (`unblock.py`, `_gone_vm_blocks`, sur le modèle de `_gone_vm_rules` et `_known_nics`
-d'I7S) : les règles nommées pour une carte que l'état nomme (les placements du blocage, de
-l'isolation) sont cherchées sur tous les NSG de l'abonnement et retirées ; une carte passée à une
-autre VM (du même nom : les noms seraient les siens) n'est pas touchée ; une règle nommée pour la
-VM dont rien ne nomme plus la carte, et qu'aucune carte vivante ne porte, ne se distingue pas de
-celle d'un homonyme supprimé : laissée et dite (`unblock_partial`) ; un état illisible, ou une
-liste refusée, aussi. La machine ne débloque pas une VM supprimée : tests figés
-(`test_an_unblock_of_a_deleted_vm_*`), M1595–M1599 attrapés.
+Correctif (`unblock.py`, `_gone_vm_blocks`) sur les aides de la levée d'I7S (`release.py`,
+dites maintenant pour l'acte qu'elles servent) : les cartes que l'état nomme (`_known_nics` : les
+placements du blocage, de l'isolation), leurs règles de blocage cherchées sur tous les NSG de
+l'abonnement et retirées (`_gone_vm_rules`) ; une carte gardée et rattachée depuis à une autre
+VM du même nom n'est pas touchée, et c'est dit (`_gone_nic_check`) ; un état illisible est dit
+(`_gone_vm_unknown`). En plus de la levée : une règle nommée pour la VM dont rien ne nomme plus
+la carte, et qu'aucune carte vivante ne porte, ne se distingue pas de celle d'un homonyme
+supprimé — laissée et dite (`unblock_partial`, `_unnamed_blocks`) ; une liste refusée aussi. La
+machine ne débloque pas une VM supprimée : tests figés (`test_an_unblock_of_a_deleted_vm_*`),
+M1595–M1599 attrapés ; ces tests mesurent aussi les mutants d'I7S (`-k deleted_vm`), 12/12
+attrapés.
 
 **I11 sous charge (29/10).** Le délai d'un tour (20 s) n'a pas été dépassé : 26 runs de la
 machine à 500 séquences en même temps sur 16 cœurs (312 à 647 s chacun, contre une centaine

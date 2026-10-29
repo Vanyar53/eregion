@@ -281,7 +281,7 @@ class UnblockMixin:
         # rules no entry knows — and the legacy lookup (primary NIC, old names) counted
         # a delete of a rule that wasn't there as done, so `unblocked` was said while
         # the rules stayed (L24, blocks in the invariant machine).
-        s_deleted, s_failed = self._sweep_block(rg, vm_name, ip, resource_id, entry)
+        s_deleted, s_failed = self._sweep_block(rg, vm_name, ip, resource_id)
         deleted += [d for d in s_deleted if d not in deleted]
         failed += s_failed
 
@@ -313,8 +313,7 @@ class UnblockMixin:
             bases.append(prefix)
         return {n.lower() for b in bases for n in (b, f"{b}-out")}
 
-    def _sweep_block(self, rg: str, vm_name: str, ip: str, resource_id: str = "",
-                     entry: dict | None = None) -> tuple[list[str], list[str]]:
+    def _sweep_block(self, rg: str, vm_name: str, ip: str, resource_id: str = "") -> tuple[list[str], list[str]]:
         """(deleted, failed): the block rules of `ip` still on any NSG of this VM's NICs —
         named for it and applying to the NIC's addresses. Only rules that existed are
         counted as deleted; an unreadable NIC or rule list is a failure. The VM gone:
@@ -323,7 +322,7 @@ class UnblockMixin:
             targets = self._get_vm_nic_targets(rg, vm_name, allow_no_nsg=True)
         except Exception as exc:
             if _is_not_found(exc):
-                return self._gone_vm_blocks(resource_id, vm_name, ip, entry)
+                return self._gone_vm_blocks(resource_id, vm_name, ip)
             return [], [f"cartes de {vm_name} illisibles, déblocage non vérifié : {_first_line(exc)[:_ERR_MAX]}"]
         deleted: list[str] = []
         failed: list[str] = []
@@ -356,61 +355,48 @@ class UnblockMixin:
                 failed += self._unattributable_plain_block(ip, t, rules)
         return deleted, failed
 
-    def _gone_vm_blocks(self, resource_id: str, vm_name: str, ip: str,
-                        entry: dict | None) -> tuple[list[str], list[str]]:
+    def _gone_vm_blocks(self, resource_id: str, vm_name: str, ip: str) -> tuple[list[str], list[str]]:
         """(deleted, failed) for a VM gone, its NICs with it: nothing to sweep NIC by NIC.
         It answered `not_found` without looking (`return [], []`), while a block whose
         entry was lost — a crash before it was written, or written over since — stayed on
         a shared NSG, aimed at an address Azure hands to the next VM (I5R, the unblock's
-        side of I7S). Now, on every NSG of the subscription: the rules named for a NIC the
-        local records name (the block's placements, the isolation's) go — not those of a
-        NIC now on another VM (one of the same name: the names would be its own). A rule
-        named for this VM whose NIC nothing names, and no live NIC either, can't be told
-        from a deleted homonym's: left, and said. A state that can't be read, or a
-        listing that fails, is said: nothing found is not nothing there."""
-        from glorfindel.response import state as _state
-        bad = set(_state.unreadable_states())
-        failed = [f"{vm_name} supprimée : état local {d.name}/{f.name} illisible, ses cartes "
-                  "inconnues, déblocage non vérifié"
-                  for d in (_state._ISOLATION_STATE_DIR, _state._BLOCK_STATE_DIR)
-                  for f in [_state._state_file(d, resource_id)] if f and f"{d.name}/{f.name}" in bad]
-        known = {}
-        for record in (entry or {}, _load_isolation_state(resource_id) or {}):
-            for p in record.get("placements") or []:
-                nid = p.get("nic_id") if isinstance(p, dict) else None
-                if isinstance(nid, str) and nid:
-                    known.setdefault(nid.rstrip("/").lower(), nid.rstrip("/"))
+        side of I7S). The release's way (release.py): the NICs the local records name
+        (`_known_nics`: the block's placements, the isolation's), their block rules looked
+        for on every NSG of the subscription and taken off (`_gone_vm_rules`) — a NIC kept
+        and attached since to another VM of that name is left, and said
+        (`_gone_nic_check`); a state that can't be read is said (`_gone_vm_unknown`). Then
+        what those don't see: _unnamed_blocks."""
+        known = self._known_nics(resource_id, _load_isolation_state(resource_id) or {})
+        deleted: list[str] = []
+        failed = self._gone_vm_unknown(resource_id or vm_name, vm_name, "block")
+        failed += self._gone_vm_rules(resource_id, vm_name, known, set(), "block",
+                                      self._block_rule_prefix(ip), deleted)
+        failed += self._unnamed_blocks(vm_name, ip, known)
+        return deleted, failed
+
+    def _unnamed_blocks(self, vm_name: str, ip: str, known: list[str]) -> list[str]:
+        """A rule of the block named for this gone VM, whose NIC no record names (the entry
+        lost, no isolation) and no NIC on Azure carries: it can't be told from a deleted
+        homonym's — left, and said; never `not_found` (I5R). A listing that fails is said."""
+        mine = f"{self._block_rule_prefix(ip)}-{vm_name}".lower()
         try:
             nsgs = list(self._network.network_security_groups.list_all())
             nics = list(self._network.network_interfaces.list_all())
         except Exception as exc:
-            return [], failed + [f"{vm_name} supprimée : NSG ou cartes de l'abonnement illisibles "
-                                 f"({_first_line(exc)[:_ERR_MAX]}), déblocage non vérifié"]
-        vm_of = {n.id.rstrip("/").lower(): (getattr(getattr(n, "virtual_machine", None), "id", None) or "")
-                 for n in nics if getattr(n, "id", None)}
-        live = {_nic_hash(n, size) for n in vm_of for size in (6, 8)}
-        prefix = self._block_rule_prefix(ip)
-        hashed: set[str] = set()
-        for low, nid in known.items():
-            elsewhere = vm_of.get(low)
-            if elsewhere and elsewhere.rstrip("/").lower() != resource_id.rstrip("/").lower():
-                continue                          # on another VM now: its rules are its own
-            base = self._placement_rule_base(prefix, vm_name, nid.rsplit("/", 1)[-1], nid)
-            hashed |= {base, f"{base}-out"}
-        mine = f"{prefix}-{vm_name}".lower()
-        deleted: list[str] = []
+            return [f"{vm_name} supprimée : NSG ou cartes de l'abonnement illisibles "
+                    f"({_first_line(exc)[:_ERR_MAX]}), déblocage non vérifié"]
+        marks = {_nic_hash(n, size) for n in [*known, *(getattr(c, "id", None) or "" for c in nics)] if n
+                 for size in (6, 8)}
+        said: list[str] = []
         for nsg in nsgs:
-            n_rg, n_name = _parse_nsg_resource_id(nsg.id)
+            n_name = nsg.id.rstrip("/").rsplit("/", 1)[-1]
             for r in getattr(nsg, "security_rules", None) or []:
                 name = _rule_name(r).lower()
-                if name in hashed:
-                    err = self._delete_rule(n_rg, n_name, _rule_name(r))
-                    (failed if err else deleted).append(err or _rule_name(r))
-                elif name == mine or (name.startswith(f"{mine}-") and name.removesuffix("-out")
-                                      .rsplit("-", 1)[-1] not in live):
-                    failed.append(f"{n_name}:{_rule_name(r)} (nommée pour une VM {vm_name} supprimée, "
-                                  "carte que rien ne nomme plus) : laissée")
-        return deleted, failed
+                if name == mine or (name.startswith(f"{mine}-")
+                                    and name.removesuffix("-out").rsplit("-", 1)[-1] not in marks):
+                    said.append(f"{n_name}:{_rule_name(r)} (nommée pour une VM {vm_name} supprimée, "
+                                "carte que rien ne nomme plus) : laissée")
+        return said
 
     def _original_away(self, t0: dict, vm_rg: str) -> str | None:
         """The NIC's own NSG when it is off the NIC — where a block lies, out of sight

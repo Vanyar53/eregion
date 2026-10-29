@@ -1,0 +1,18 @@
+{
+  "Name": "Eregion Glorfindel Restore",
+  "IsCustom": true,
+  "Description": "V-17 (SEC7): what a restore from Azure Backup that a human approved needs (the console, the bot) - the Run Command neutralised, the VM deallocated, its disks restored in place from the vault through the staging storage account, then started. Never given to the watch: Glorfindel never restores on its own. Assigned on the VM's resource group, the vault's and the staging account's. Reads come from Reader.",
+  "Actions": [
+    "Microsoft.Compute/virtualMachines/runCommand/action",
+    "Microsoft.Compute/virtualMachines/deallocate/action",
+    "Microsoft.Compute/virtualMachines/start/action",
+    "Microsoft.Compute/virtualMachines/write",
+    "Microsoft.Compute/disks/write",
+    "Microsoft.RecoveryServices/Vaults/backupFabrics/protectionContainers/protectedItems/recoveryPoints/restore/action",
+    "Microsoft.Storage/storageAccounts/write"
+  ],
+  "NotActions": [],
+  "DataActions": [],
+  "NotDataActions": [],
+  "AssignableScopes": ["/subscriptions/<SUBSCRIPTION_ID>"]
+}

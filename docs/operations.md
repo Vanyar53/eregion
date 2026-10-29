@@ -318,6 +318,10 @@ EREGION_DISCORD_ROADMAP_CHANNEL=...         # id du salon #roadmap : le message 
 EREGION_DISCORD_WEBHOOK_DEPLOY=...          # webhook de #deploy : copié sur H0 par make glorfindel-host-cd-install (~/.eregion-cd/discord.env, H1)
 EREGION_DISCORD_MENTION=...                 # id de l'utilisateur que mentionnent les pings de #agents
                                     # sur le poste : ~/.config/eregion/discord.env (600) si l'environnement ne les a pas
+GLORFINDEL_AZURE_CLIENT_ID=…        # V-17 : le principal de la watch (et …_SECRET) ; EREGION_CONSOLE_AZURE_CLIENT_* la console,
+                                    # GLORFINDEL_BOT_AZURE_CLIENT_* le bot ; vides → AZURE_CLIENT_* (« Identités Azure », plus bas)
+HOST_SSH_FINGERPRINT=SHA256:…       # V-32 : l'empreinte de la clé d'hôte de H0, relevée sur la VM ; sans elle, accept-new et c'est dit
+                                    # (infra/glorfindel-host/README.md, « SSH ») ; HOST_KNOWN_HOSTS : son fichier (~/.eregion/h0_known_hosts)
 GLORFINDEL_KEEP_ISOLATED=1          # mode forensique
 GLORFINDEL_ISOLATION_TTL_H=4        # TTL isolation (défaut 4h) : au-delà, une carte ttl_exceeded — jamais de levée automatique
 EREGION_CONSOLE_HOSTS=nom,nom       # SEC1 : noms (sans port) sous lesquels la console répond, en plus de localhost / 127.0.0.1 / [::1] ; une
@@ -341,8 +345,9 @@ Chaque conteneur ne reçoit que ses variables (M-3, `docker-compose.yml`) : les 
 `EREGION_CONSOLE_TOKEN` (et son ancien nom, `GLORFINDEL_WARROOM_TOKEN` ; un nouveau `host.env`
 reçoit le nouveau, celui de H0 garde l'ancien) à la console seule ;
 `GLORFINDEL_WEBHOOK_URL` à la watch et à la console, avec `GLORFINDEL_DISCORD_BOT` (« 1 » si `DISCORD_BOT_TOKEN` est posé, vide sinon,
-jamais sa valeur : avec `DISCORD_CHANNEL_ID`, leur webhook se tait) ; le principal de service
-Azure aux trois (la watch, « Approve & execute », les boutons Restore / Revert du bot) ; les
+jamais sa valeur : avec `DISCORD_CHANNEL_ID`, leur webhook se tait) ; à chacun des trois son
+principal de service Azure (la watch, « Approve & execute », les boutons Restore / Revert du bot :
+« Identités Azure », plus bas ; vides, le principal unique `AZURE_CLIENT_*`) ; les
 réglages sans secret aux trois. Une variable nouvelle s'ajoute
 dans le bloc de son conteneur, et dans `SECRETS` de `tests/unit/test_glorfindel_host.py` si elle
 porte un secret.
@@ -394,6 +399,121 @@ conteneurs lancées contre un faux `docker` (le bon principal dans son environne
 ses arguments). Une valeur que le shell développe (`-e NOM="$NOM"`) n'apparaît pas dans
 `make -n`, mais bien dans `ps` : le texte rendu refuse aussi `-e NOM=`, `--env NOM=` et, sur une
 ligne qui lance ssh, `export NOM=`, pour tout nom de secret. Une cible nouvelle qui passe un secret fait de même.
+
+---
+
+## Identités Azure — un principal par service, au moindre droit (V-17, SEC7)
+
+Plus jamais `Contributor` sur l'abonnement (`tests/unit/test_azure_roles.py` refuse un
+`--role Contributor` ou `Owner` à la portée d'un abonnement dans la doc et les scripts). Trois
+services de Glorfindel, trois principaux, chacun avec ce que son code appelle vraiment :
+
+| Service | Ce qu'il appelle sur Azure | Rôles, portée : les groupes inscrits |
+|---|---|---|
+| la watch | lit (journaux, NSG, NIC, coffre) ; isole, lève, bloque, débloque, instantané — seule, dans son mode | `Reader`, `Log Analytics Reader` (le workspace), **Eregion Glorfindel Response** |
+| la console | lit (audit, préparation, jobs) ; ce qu'un humain approuve : isoler, bloquer, instantané (dans son processus), lever, reset, restore (par la CLI qu'elle lance) | `Reader`, `Log Analytics Reader`, **Response**, **Eregion Glorfindel Restore** |
+| le bot | lit les points de restauration ; ses boutons lancent la CLI : Restore, Revert (levée et déblocage) | `Reader`, **Response**, **Restore** |
+
+- **Eregion Glorfindel Response** (`infra/identities/glorfindel-response.json`) : les écritures
+  de la réponse, rien d'autre — les droits que l'adaptateur déclare
+  (`glorfindel/providers/azure/capabilities.py`, testé contre le fichier), les contrôles liés
+  d'une écriture de NIC (IP publique, ASG, équilibreur : à mesurer sur le banc, ci-dessous) et
+  le déclenchement d'un instantané du coffre. Jamais un restore, une suppression, une identité,
+  un rôle.
+- **Eregion Glorfindel Restore** (`infra/identities/glorfindel-restore.json`) : un restore en
+  place depuis le coffre — Run Command neutralisée, VM désallouée, disques restaurés par le
+  compte de transit, VM redémarrée. **Jamais à la watch** : Glorfindel ne restaure jamais seul,
+  et même un bogue ou une décision détournée ne le pourrait pas.
+- Les **lectures** : `Reader` sur chaque groupe qui tient une VM inscrite, ses NIC, NSG et
+  VNet, et sur celui du coffre ; `Log Analytics Reader` sur le workspace. À mesurer sur une
+  portée de groupe (ci-dessous) : ce que rendent les listes à l'échelle de l'abonnement
+  (`list_all` des NSG et des NIC, le balayage, les adresses privées), et le contexte « qui a
+  changé ce NSG » (le journal d'activité de l'abonnement, lu en REST) — l'un ou l'autre peut
+  demander `Reader` sur l'abonnement, jamais plus.
+- **Les variables** : `GLORFINDEL_AZURE_CLIENT_ID` / `…_SECRET` (la watch),
+  `EREGION_CONSOLE_AZURE_CLIENT_ID` / `…_SECRET` (la console), `GLORFINDEL_BOT_AZURE_CLIENT_ID` /
+  `…_SECRET` (le bot) ; vides, chacun prend `AZURE_CLIENT_ID` / `…_SECRET`, le principal unique
+  d'avant (rien ne casse). `GLORFINDEL_OWN_CALLERS` (la watch) : les `appId` de la console et du
+  bot, pour que leurs écritures approuvées se lisent dans le journal d'activité comme celles de
+  Glorfindel (AL1), pas comme celles d'un autre.
+- **La frontière qui reste** : la console et le bot écrivent sur Azure avec leur propre
+  identité (la CLI qu'ils lancent tourne dans leur conteneur). Les rendre lecteurs seuls, c'est
+  confier l'action approuvée à la watch (une file sous `~/.glorfindel`, signée par la console),
+  qui l'exécute — planifié.
+- **H0** : rien ne change. Ses conteneurs partagent l'identité managée de la VM, lectrice
+  (`Reader` sur le banc, `Log Analytics Reader` sur son workspace) : une identité par conteneur
+  ne s'y sépare pas (le point de jeton de la VM répond à chacun d'eux), et il n'écrit rien.
+
+**Créer** (une fois par abonnement pour les rôles ; `<…>` à remplacer, rien de réel ici) :
+
+```bash
+SUB=<SUBSCRIPTION_ID>; RG=<groupe des VM inscrites>; VAULT_RG=<groupe du coffre>
+LAW=<id de ressource du workspace>
+for r in response restore; do
+  sed "s|<SUBSCRIPTION_ID>|$SUB|" infra/identities/glorfindel-$r.json > /tmp/eregion-role-$r.json
+  az role definition create --role-definition @/tmp/eregion-role-$r.json
+done
+# Un principal par service, sans rôle à sa création (appId → …_CLIENT_ID, password → …_SECRET).
+for s in watch console bot; do az ad sp create-for-rbac --name "eregion-glorfindel-$s"; done
+```
+
+**Attribuer** (`<appId-…>` : ce que la création a rendu) :
+
+```bash
+for scope in /subscriptions/$SUB/resourceGroups/$RG /subscriptions/$SUB/resourceGroups/$VAULT_RG; do
+  for a in <appId-watch> <appId-console> <appId-bot>; do
+    az role assignment create --assignee $a --role Reader --scope $scope
+    az role assignment create --assignee $a --role "Eregion Glorfindel Response" --scope $scope
+  done
+  for a in <appId-console> <appId-bot>; do
+    az role assignment create --assignee $a --role "Eregion Glorfindel Restore" --scope $scope
+  done
+done
+for a in <appId-watch> <appId-console>; do
+  az role assignment create --assignee $a --role "Log Analytics Reader" --scope $LAW
+done
+# Le compte de transit du restore (restore_staging_storage), s'il est dans un autre groupe :
+#   az role assignment create --assignee <appId-console> --role "Eregion Glorfindel Restore" --scope <son groupe>
+```
+
+Puis dans `.envrc` les trois paires `…_CLIENT_ID` / `…_SECRET`, et
+`GLORFINDEL_OWN_CALLERS=<appId-console>,<appId-bot>` ; `make glorfindel-restart` ; et, par
+conteneur, `docker exec eregion-watch glorfindel audit <resource_id>` (la console : sa page
+Audit) — un droit manquant y est nommé.
+
+**À mesurer sur le banc** avant de retirer l'ancien principal : une isolation et sa levée sur
+une VM du banc qui porte une IP publique (les contrôles liés d'une écriture de NIC), un
+instantané, un restore depuis la console ; un 403 nomme l'action qui manque, à ajouter au
+fichier du rôle (`az role definition update --role-definition @…`).
+
+**Faire tourner un secret** (un an par défaut) : `az ad sp credential reset --id <appId>` rend
+un nouveau `password` ; le poser dans `.envrc`, `make glorfindel-restart`. L'ancien cesse à la
+réinitialisation : un service à la fois.
+
+**Retirer l'ancien principal partagé** (`Contributor` sur l'abonnement, l'option A d'avant) :
+
+```bash
+az role assignment list --assignee <appId-ancien> --all -o table
+az role assignment delete --assignee <appId-ancien> --role Contributor --scope /subscriptions/$SUB
+az ad sp delete --id <appId-ancien>
+```
+
+Le principal `annatar` d'avant (`Contributor` sur l'abonnement) se retire de même : sur un
+poste, un injecteur reste passif ; il agit depuis Orodruin, avec l'identité managée qu'y crée
+`make orodruin-up` (ses droits par VM inscrite, SEC5).
+
+## Les conteneurs durcis (V-34, SEC7)
+
+Chaque service du compose tourne sans capacité (`cap_drop: [ALL]`), sans gain de privilège
+(`no-new-privileges:true`), la racine en lecture seule (`read_only: true`, `/tmp` en tmpfs) :
+il n'écrit que dans ses montages (`runs/`, `~/.glorfindel`, `~/.cache/chroma`,
+`~/.eregion/analysis` pour la watch ; `~/.annatar` pour Annatar), et la config que la console
+réécrit l'est sur place, sous verrou (`glorfindel/config.py`). `tests/unit/test_profiles.py`
+exige les quatre clés sur chaque service. Mesuré le 29/10 sur Docker (compose 5.5) : les
+écritures de chaque service (escalades, état, découverte, ChromaDB, l'index d'analyse, la
+config, `/tmp`) passent, l'image et `/root` refusent, `CapEff` à zéro, `NoNewPrivs` à 1. Les
+`docker run` de `make glorfindel-shell` / `annatar-shell` et du préflight du CD ne passent pas par
+le compose.
 
 ---
 

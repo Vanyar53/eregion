@@ -686,3 +686,38 @@ def test_a_card_whose_vm_left_the_discovery_has_no_live_button(monkeypatch):
     click = _press(_stored(esc_id), _User(ALLOWED), policy, _revert)
     assert ran == [] and "n'est plus dans la découverte" in click.ephemeral[0][0]
     assert all(i.disabled for i in bot._build_view(_stored(esc_id), bot._known_vms()).children)
+
+
+def test_a_message_not_re_armed_after_a_restart_answers_settled(monkeypatch):
+    """V-08, after its review: a posted card that waits for nothing any more (acknowledged and
+    judged, expired, its VM gone) is not re-armed — and its message, whose buttons may still
+    show live (never synced since), answers « carte réglée » instead of « l'interaction a
+    échoué », running nothing."""
+    from datetime import datetime, timedelta, timezone
+    ran = []
+    monkeypatch.setattr(bot, "_run_cli", lambda args: ran.append(args) or (0, "ok"))
+    settled = _revert_card()
+    escalations.set_verdict(settled, "right", "")
+    escalations.resolve(settled)
+    live = _revert_card()
+    b = bot.GlorfindelBot(channel_id=1, ping_role=None)
+    b._messages = {settled: 11, live: 12, "gone-from-the-store": 13}
+    added = []
+    b.add_view = lambda view, message_id=None: added.append((view, message_id))
+    assert b._restore_views() == 1
+    kinds = {mid: type(v).__name__ for v, mid in added}
+    assert kinds == {11: "_SettledView", 12: "EscalationView", 13: "_SettledView"}
+    view = next(v for v, mid in added if mid == 11)
+    ids = {getattr(i, "custom_id", "") for i in view.children}
+    assert f"glorfindel_exec_{settled[:8]}" in ids and "glorfindel_ack" in ids
+    assert f"glorfindel_verdict_right_{settled[:8]}" in ids
+
+    async def click():
+        item = next(i for i in view.children if i.custom_id == f"glorfindel_exec_{settled[:8]}")
+        c = _Click(_User(ALLOWED), bot.ButtonPolicy(users=frozenset({ALLOWED})), item.custom_id)
+        await view._scheduled_task(item, c)
+        return c
+    c = asyncio.run(click())
+    assert ran == [] and "Carte réglée" in c.ephemeral[0][0] and c.ephemeral[0][1] is True
+    old = (datetime.now(timezone.utc) - timedelta(days=bot._RESTORE_DAYS + 1)).isoformat()
+    assert bot._views_to_restore([{"id": "x", "first_seen": old, "status": "pending"}], {"x": 1}) == []

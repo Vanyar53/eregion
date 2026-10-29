@@ -792,6 +792,25 @@ def _build_embed(esc: dict) -> discord.Embed:
     return embed
 
 
+class _SettledView(discord.ui.View):
+    """The buttons of a posted card that waits for nothing any more (V-08): every custom id a
+    card's message can carry, none of them doing anything — a click says « carte réglée »."""
+
+    def __init__(self, esc_id: str) -> None:
+        super().__init__(timeout=None)
+        self.esc_id = esc_id
+        short = str(esc_id)[:8]
+        ids = ["glorfindel_ack", "glorfindel_cmd", f"glorfindel_exec_{short}",
+               *(f"{_JUDGE_PREFIX}{v}_{short}" for v in _VERDICT_WORDS)]
+        for cid in ids:
+            self.add_item(discord.ui.Button(label=cid, custom_id=cid, disabled=True))
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        await interaction.response.send_message(
+            "✓ Carte réglée : ce bouton ne lance plus rien.", ephemeral=True)
+        return False
+
+
 def _build_view(esc: dict, known_vms: set[str] | None = None) -> EscalationView:
     """A button that no longer does anything is greyed (V-08, the rule of the click,
     `_stale_reason`): an acknowledged card's action, ack and command; a judged card's verdict;
@@ -851,17 +870,25 @@ class GlorfindelBot(discord.Client):
         self._restore_views()
 
     def _restore_views(self) -> int:
-        """Give the messages posted before this start their buttons back."""
-        restored = 0
-        for esc, message_id in _views_to_restore(esc_module.all_escalations(), self._messages,
-                                                 known_vms=_known_vms()):
+        """Give the messages posted before this start their buttons back: the cards that still
+        wait their own view; every other posted message a settled one (V-08), whose click
+        answers « carte réglée » — never « l'interaction a échoué », never an action, even when
+        its message still shows live buttons (a card expired, its VM gone, never synced)."""
+        restored = settled = 0
+        escs = esc_module.all_escalations()
+        waiting = {e.get("id"): e for e, _ in _views_to_restore(escs, self._messages, known_vms=_known_vms())}
+        for esc_id, message_id in self._messages.items():
             try:
-                self.add_view(EscalationView(esc), message_id=message_id)
-                restored += 1
+                if esc_id in waiting:
+                    self.add_view(EscalationView(waiting[esc_id]), message_id=message_id)
+                    restored += 1
+                else:
+                    self.add_view(_SettledView(esc_id), message_id=message_id)
+                    settled += 1
             except Exception as exc:  # one bad card must not stop the bot
-                _console.print(f"[yellow]View not restored for {esc.get('id', '')[:8]}: {exc}[/yellow]")
-        if restored:
-            _console.print(f"[dim]  → {restored} message(s) given their buttons back[/dim]")
+                _console.print(f"[yellow]View not restored for {str(esc_id)[:8]}: {exc}[/yellow]")
+        if restored or settled:
+            _console.print(f"[dim]  → {restored} message(s) given their buttons back, {settled} settled[/dim]")
         return restored
 
     async def on_ready(self) -> None:

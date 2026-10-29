@@ -1288,3 +1288,221 @@ def test_a_race_whose_two_operations_rewrite_the_escalations_store(monkeypatch):
             assert all(exc is None for _, exc in out.values()), out
     finally:
         _CURRENT.scheduler = None
+
+
+@pytest.mark.parametrize("k", [7, 8])
+def test_an_unblock_looks_behind_a_quarantine_taken_off(monkeypatch, k):
+    """Seed 210 at 500 sequences, shrunk by hand (U3F, #293): api blocked, the block cut
+    off before its state (after its inbound rule, or after both), then isolated by
+    quarantine, and someone takes our NSG off the NIC, left bare. The block lies on the
+    NIC's own NSG, away from it; the unblock looked behind a quarantine only — `not_found`
+    while the rules stayed, and the release then put the NSG back with the IP blocked."""
+    _run(monkeypatch, _net(quarantine=True, api_nic={"own": "dedicated"}),
+         ("block", API, API, (k, "before-crash"), 22),
+         ("isolate", API, API, None),
+         ("someone_detaches_the_quarantine", _nic("rg-edge", "api-nic")),
+         ("unblock", API, API, None),
+         ("release", API, API, None))
+
+
+@pytest.mark.parametrize("known_by", ["state", "tag", "nothing"])
+def test_an_unblock_of_a_bare_nic_takes_the_block_or_says_it(monkeypatch, known_by):
+    """The same, said (U3F): the NIC's own NSG known by the state, or by our tag (the
+    state lost), the block on it goes — `unblocked`. Known by nothing (state and tags
+    lost before a re-isolation, Q7), the NSG the block may lie on can't be named: never
+    `not_found` — `unblock_partial`, the NIC named, the rules as they were."""
+    import shutil
+
+    from glorfindel import actions
+
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_net(quarantine=True, api_nic={"own": "dedicated"}))
+        f, c, nic = m.fake, m.connector, _nic("rg-edge", "api-nic")
+        own = key(f.nics[nic]["nsg"])
+        assert c.block_suspicious_ip(ATTACKER, API, scope="vm", threat_port=22)["status"] == "blocked"
+        for p in actions._BLOCK_STATE_DIR.glob("*.json"):
+            p.unlink()                                            # the block's state never written
+        ours = {n for n in f.nsgs[own]["rules"] if n.startswith("glorfindel-block-")}
+        assert len(ours) == 2, ours
+        assert c.isolate_vm(API)["status"] == "isolated"
+        q = key(f.nics[nic]["nsg"])
+        if known_by != "state":
+            for p in actions._ISOLATION_STATE_DIR.glob("*.json"):
+                p.unlink()
+        if known_by == "nothing":
+            f.nsgs[q]["tags"].pop(actions.AzureConnector._orig_tag(f.nics[nic]["id"]))
+            assert c.isolate_vm(API)["status"] == "isolated"       # its original unknown now
+        f.nics[nic]["nsg"] = None                                  # ours taken off by hand
+        out = c.unblock_ip(ATTACKER, API)
+        left = {n for n in f.nsgs[own]["rules"] if n.startswith("glorfindel-block-")}
+        if known_by == "nothing":
+            assert out["status"] == "unblock_partial", out
+            assert any(e.startswith("api-nic") and "inconnu" in e for e in out["failed"]), out
+            assert left == ours
+        else:
+            assert out["status"] == "unblocked" and {r.lower() for r in out["deleted_rules"]} == ours, out
+            assert not left
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)
+
+
+def test_a_stuck_race_fails_and_lets_the_teardown_through(monkeypatch):
+    """A race that blocks on purpose: op-1 holds the VM's lock and waits for its turn;
+    op-2 waits, out of the scheduler's sight, for op-1 to be gone — and never comes back.
+    I11 failed, but op-1 stayed in its wait, the lock held, and the teardown that takes
+    it next waited forever: the job hung instead of failing (I3F's review). Now the
+    waiting thread unwinds, its lock goes with it, and the failure is what is seen."""
+    import threading
+    from glorfindel import actions
+    from .test_invariants import _CURRENT, _Abandoned, _Chaos, _Scheduler
+    invariant_env(monkeypatch)
+    monkeypatch.setattr(_CURRENT, "chaos", _Chaos())
+    gone = threading.Event()
+
+    def holder():
+        ev = gone
+        try:
+            with actions._vm_lock("u3f-vm"):              # the scheduler's: turns inside
+                for _ in range(4):
+                    _CURRENT.scheduler.point()
+        finally:
+            ev.set()
+
+    def outside():
+        ev = gone
+        _CURRENT.scheduler.point()
+        ev.wait(30)                                       # out of the scheduler's sight
+
+    stuck = 0
+    try:
+        for seed in range(8):
+            gone = threading.Event()
+            _CURRENT.scheduler = sched = _Scheduler(seed, timeout=0.3)
+            try:
+                out = sched.run([("op-1", holder), ("op-2", outside)])
+            except AssertionError as exc:
+                assert "I11" in str(exc), exc
+                stuck += 1
+            else:
+                assert all(exc is None for _, exc in out.values()), out
+            _CURRENT.scheduler = None
+            with actions._vm_lock("u3f-vm", timeout=3):   # the teardown's turn
+                pass
+            gone.set()                                    # a thread still out of sight goes
+    finally:
+        _CURRENT.scheduler = None
+    assert stuck, "no seed made the race stick: the test proves nothing"
+    assert issubclass(_Abandoned, BaseException) and not issubclass(_Abandoned, Exception)
+
+
+def test_two_driven_locks_taken_in_reverse_order_fail_fast(monkeypatch):
+    """A deadlock between two driven locks: op-1 holds A and wants B, op-2 holds B and
+    wants A. Each gives its turn away at every try, so every turn comes back in time and
+    I11 never fell — the race ran forever (U3F review). Turns that only find taken locks
+    are counted: past the limit, the race fails as a livelock, its threads unwound, and
+    the locks are free for whoever comes next."""
+    import threading
+    import time
+    from glorfindel import actions
+    from .test_invariants import _CURRENT, _Chaos, _Scheduler
+    invariant_env(monkeypatch)
+    monkeypatch.setattr(_CURRENT, "chaos", _Chaos())
+
+    def one_then_other(first, second):
+        def op():
+            with actions._vm_lock(first):
+                with actions._vm_lock(second):
+                    pass
+        return op
+
+    locked = 0
+    try:
+        for seed in range(8):
+            _CURRENT.scheduler = sched = _Scheduler(seed, timeout=5)
+            t0, got = time.monotonic(), {}
+
+            def race():
+                try:
+                    got["out"] = sched.run([("op-1", one_then_other("u3f-a", "u3f-b")),
+                                            ("op-2", one_then_other("u3f-b", "u3f-a"))])
+                except AssertionError as exc:
+                    got["exc"] = exc
+            th = threading.Thread(target=race, daemon=True)
+            th.start()
+            th.join(15)
+            if th.is_alive():                              # the race never ends: free it, then fail
+                with sched.cv:
+                    sched.abandoned = True
+                    sched.cv.notify_all()
+                th.join(10)
+                pytest.fail("two driven locks taken crosswise: the race never ended")
+            if "exc" in got:
+                assert "I11: livelock" in str(got["exc"]), got["exc"]
+                assert time.monotonic() - t0 < 5, "a livelock must fail before a turn's timeout"
+                assert not sched.hung, sched.hung
+                locked += 1
+            else:
+                assert all(exc is None for _, exc in got["out"].values()), got
+            _CURRENT.scheduler = None
+            for name in ("u3f-a", "u3f-b"):
+                with actions._vm_lock(name, timeout=3):    # the teardown's turn
+                    pass
+    finally:
+        _CURRENT.scheduler = None
+    assert locked, "no seed took the locks crosswise: the test proves nothing"
+
+
+def test_a_thread_out_of_sight_holding_a_lock_does_not_hang_the_teardown(monkeypatch):
+    """A race whose thread blocks out of the scheduler's sight while it holds a driven
+    lock — web's: it never unwinds. I11 fails, and the teardown's recovery, which takes
+    web's lock, used to wait behind it forever. The failure names the thread, and the
+    teardown skips the recovery behind it (I11 has failed already). The next example —
+    Hypothesis replays one while shrinking — then wrote on web behind the same lock, a
+    process-wide object: it gets registries of its own now, and the thread's name is
+    never one of a later race's."""
+    import functools
+    import threading
+    from glorfindel import actions
+    from . import test_invariants
+    invariant_env(monkeypatch)
+    monkeypatch.setattr(test_invariants, "_Scheduler", functools.partial(test_invariants._Scheduler, timeout=0.5))
+    gone = threading.Event()
+
+    def holder():
+        with actions._vm_lock("web"):
+            gone.wait(60)                                   # out of the scheduler's sight
+
+    m = IsolationMachine()
+    done = threading.Event()
+    try:
+        m.build(_net())
+        with pytest.raises(AssertionError, match="never unwound"):
+            m._race(Script(0), (WEB1, "hold", holder), (WEB1, "hold", lambda: None))
+        assert m.hung == ["op-1"], m.hung
+        th = threading.Thread(target=lambda: (m.teardown(), done.set()), daemon=True)
+        th.start()
+        th.join(10)
+        assert done.is_set(), "the teardown waited behind the thread that never unwound"
+        # The next example: a new machine, a write on web, one call after the other.
+        m2, out = IsolationMachine(), {}
+        m2.build(_net(quarantine=True))
+        def write():
+            try:
+                out["isolate"] = m2.connector.isolate_vm(WEB1)
+            except BaseException as exc:
+                out["isolate"] = {"status": repr(exc)}
+        th = threading.Thread(target=write, daemon=True)
+        th.start()
+        th.join(10)
+        assert not th.is_alive(), "the next example's write on web waited behind the thread that never unwound"
+        assert out["isolate"]["status"] == "isolated", out
+        m2.teardown()
+        sched = test_invariants._Scheduler(0, timeout=0.5)
+        sched.run([("op-1", lambda: None)])
+        assert set(sched.state) != {"op-1"} and set(sched._seen()) == {"op-1"}, sched.state
+    finally:
+        gone.set()
+        if not done.is_set():
+            done.wait(30)

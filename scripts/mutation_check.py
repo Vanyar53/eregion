@@ -181,8 +181,9 @@ MUTANTS = [
      '        elif "placements" not in state and state.get("nsg_name") and not _is_quarantine_nsg(state["nsg_name"]):',
      '        elif state.get("nsg_name"):'),
     ("M23", "an unblock doesn't look behind the quarantine (L27)", UNB,
-     "            views = self._nic_nsg_views(t0)\n            if t0.get(\"quarantine\"):",
-     "            views = self._nic_nsg_views(t0)\n            if False:"),
+     # Followed into _original_away (U3F), which looks behind a bare NIC too.
+     '        if not q and t0.get("own_nsg_id"):\n            return None',
+     '        if q or t0.get("own_nsg_id"):\n            return None'),
     ("M24", "reset --from-azure reads the original from the tag only (L27)", SWP,
      # The state skipped: the tag decides (the code moved, I8S review — same bug).
      "                original = _recorded_original(t0[\"nic_id\"])\n                if original is _UNKNOWN:\n"
@@ -2519,14 +2520,18 @@ TESTS.update({f"M{n}": "tests/unit/test_reassert.py" for n in (1022, 1024, 1025)
 MUTANTS += [
     ("M1100", "the unblock behind the quarantine follows the state's 'none' over a tag naming X: "
               "`not_found`, the IP still blocked on X (ISU)", UNB,
-     "                    elif original is None:\n", "                    elif False:\n"),
+     "            return self._original_from_tags(q, nic_id) if original is _UNKNOWN else self._tag_over_none(q, nic_id)\n",
+     "            return self._original_from_tags(q, nic_id) if original is _UNKNOWN else None\n"),
     ("M1101", "a tag that can't be read behind the state's 'none' reads as 'none' at the unblock: "
               "`not_found` on a guess (ISU)", UNB,
-     '                        original = self._tag_over_none(t0["quarantine"], t0["nic_id"])\n',
-     "                        try:\n"
-     '                            original = self._tag_over_none(t0["quarantine"], t0["nic_id"])\n'
-     "                        except Exception:\n"
-     "                            original = None\n"),
+     # Since U3F the unblock reads it in _original_away.
+     "            return self._original_from_tags(q, nic_id) if original is _UNKNOWN else self._tag_over_none(q, nic_id)\n",
+     "            if original is _UNKNOWN:\n"
+     "                return self._original_from_tags(q, nic_id)\n"
+     "            try:\n"
+     "                return self._tag_over_none(q, nic_id)\n"
+     "            except Exception:\n"
+     "                return None\n"),
     ("M1102", "an original gone says only that it wasn't found: no way out (ISU)", REL,
      "        if not original:\n            return exc\n", "        return exc\n"),
     ("M1103", "the tag set to 'none' offered while the state names the original: a way out that "
@@ -3322,6 +3327,52 @@ MUTANTS += [
      "        raise TimeoutError(f\"{path.name} busy (another write in progress)\")\n"),
 ]
 TESTS.update({"M1395": "tests/unit/test_invariant_regressions.py -k escalations_store"})
+# U3F (#293): the unblock looks for the block on a NIC's own NSG when it is off the NIC — behind
+# our quarantine, or the NIC left bare; never `not_found` on a NIC whose original is unknown.
+_U3F = "tests/unit/test_invariant_regressions.py -k an_unblock"
+MUTANTS += [
+    ("M1343", "the unblock looks behind a quarantine only: a bare NIC's own NSG unread (U3F)", UNB,
+     '        if not q and t0.get("own_nsg_id"):\n            return None', "        if not q:\n            return None"),
+    ("M1344", "a bare NIC held in quarantine, its original unknown: nothing away, `not_found` (U3F)",
+     UNB, "        if original is _UNKNOWN and _held_in_quarantine(nic_id):\n", "        if False:\n"),
+    ("M1345", "a bare NIC's own NSG read from the state only: our tag ignored, the state lost (U3F)",
+     UNB, "        if q_bare is not None:\n            return tagged\n", ""),
+]
+TESTS.update({"M1343": f"{_U3F} {INVARIANTS}", "M1344": _U3F, "M1345": _U3F})
+# U3F: a race that never comes back fails, its waiting threads unwound — the job no longer
+# hangs; the jobs that run the invariants are bounded.
+MUTANTS += [
+    ("M1346", "a stuck race: the threads waiting for a turn stay there, their locks held (U3F)",
+     INVARIANTS, "                self.abandoned = True\n", "                pass\n"),
+    ("M1347", "the CI's Linux tests unbounded again (U3F)", ".github/workflows/ci.yml",
+     "    timeout-minutes: 30\n", ""),
+    ("M1348", "the nightly invariants unbounded again (U3F)", ".github/workflows/invariants.yml",
+     "    timeout-minutes: 150\n", ""),
+]
+TESTS.update({"M1346": "tests/unit/test_invariant_regressions.py -k stuck_race",
+              "M1347": "tests/unit/test_workflows.py -k bounded", "M1348": "tests/unit/test_workflows.py -k bounded"})
+# U3F, after its review: a deadlock between driven locks fails as a livelock (each thread gave
+# its turn away at every try, no turn ever timed out); a thread that never unwound doesn't hang
+# the teardown; the Linux tests write their threads' stacks on a hang, as macOS.
+MUTANTS += [
+    ("M1349", "two driven locks taken crosswise: the race runs forever, no turn times out (U3F)",
+     INVARIANTS, "                    if idle > self.idle_turns:\n", "                    if False:\n"),
+    ("M1440", "a race thread that never unwound holds web's lock: the teardown waits behind it (U3F)",
+     INVARIANTS, '            if getattr(self, "hung", None):\n', "            if False:\n"),
+    ("M1441", "the CI's Linux tests hang without saying where (U3F)", ".github/workflows/ci.yml",
+     "        run: python -m pytest tests/ -q -o faulthandler_timeout=480\n",
+     "        run: python -m pytest tests/ -q\n"),
+]
+TESTS.update({"M1349": "tests/unit/test_invariant_regressions.py -k reverse_order",
+              "M1440": "tests/unit/test_invariant_regressions.py -k out_of_sight_holding",
+              "M1441": "tests/unit/test_workflows.py -k hang"})
+# U3F, second review: a thread that never unwound holds objects of the process-wide lock
+# registries — the next example (a replay while shrinking) waited behind them.
+MUTANTS += [
+    ("M1442", "a thread that never unwound keeps its locks for the next example: registries shared (U3F)",
+     INVARIANTS, "            _fresh_lock_registries()\n", "            pass\n"),
+]
+TESTS.update({"M1442": "tests/unit/test_invariant_regressions.py -k out_of_sight_holding"})
 # SEC6 (#277): the security process — the CI's actions and inputs, the lot threads against a fork
 # or an outsider, text from outside made inert in the chats, the bench's apply confirmed.
 NDS = "scripts/notify_discord.py"

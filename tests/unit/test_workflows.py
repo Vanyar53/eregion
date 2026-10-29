@@ -171,6 +171,24 @@ def test_what_counts_as_a_chosen_value(run, chosen):
     assert _chosen(run) is chosen
 
 
+@pytest.mark.parametrize("workflow,job", [("ci.yml", "test"), ("ci.yml", "test-macos"),
+                                          ("invariants.yml", "invariants")])
+def test_the_jobs_that_run_the_invariants_are_bounded(workflow, job):
+    """A job without a bound runs six hours: a race of the invariant machine that hung its
+    teardown did so on macOS (I3F); each job that runs them is bounded (U3F)."""
+    bound = _load(ROOT / ".github" / "workflows" / workflow)["jobs"][job].get("timeout-minutes")
+    assert isinstance(bound, int) and 0 < bound <= 180, bound
+
+
+@pytest.mark.parametrize("job", ["test", "test-macos"])
+def test_a_hang_of_the_ci_tests_says_where_it_waits(job):
+    """The CI's test steps write every thread's stack when a test outlasts 8 min: a hang is
+    seen where it waits, before the job's bound cancels it (U3F review)."""
+    steps = _load(ROOT / ".github" / "workflows" / "ci.yml")["jobs"][job]["steps"]
+    runs = [s["run"] for s in steps if "pytest tests/" in (s.get("run") or "") and "boundary" not in s["run"]]
+    assert runs and all("-o faulthandler_timeout=480" in r for r in runs), runs
+
+
 # Workflows whose red run is not announced in #ci, with their reason. Notify itself; Roadmap is a
 # Discord job that stays green by design (N2: a Discord or GitHub error is one line in its log).
 NOT_ANNOUNCED = {"notify.yml": "the announcer itself", "roadmap.yml": "green by design, Discord's own job (N2)"}

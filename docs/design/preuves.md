@@ -144,6 +144,40 @@ Le `flock` qui sépare les processus est testé à part, sur de vrais processus
 l'ID canonique et l'ID en minuscules prennent le même verrou, une tâche de fond renonce au
 bout de son délai. Sans `flock`, ces tests échouent.
 
+**Une course qui ne revient pas échoue, elle ne fige pas le job (U3F).** Un tour qui dure plus
+de 20 s (temps réel) fait échouer I11 : « operations stuck » ou « … never came back ». Le fil qui
+attendait son tour y restait, ses verrous pris, et le teardown qui les prend ensuite attendait
+sans fin. L'ordonnanceur abandonne maintenant la course avant de lever l'échec : chaque fil en
+attente lève `_Abandoned`, qui ne dérive pas d'`Exception` (aucun `except Exception` du code ne
+l'avale), et relâche ses verrous en se déroulant (`test_a_stuck_race_fails_and_lets_the_teardown_through`,
+M1346). Le délai d'un tour reste 20 s.
+
+Ce délai ne voyait pas tout interblocage (relecture d'U3F). Un verrou piloté pris est réessayé à
+chaque tour, sans fin quand l'appelant ne donne pas de délai (les verrous de VM des écritures) :
+si op-1 tient A et veut B pendant qu'op-2 tient B et veut A, chacun rend son tour à chaque essai,
+chaque tour revient à temps, et I11 ne tombait jamais — la course tournait sans fin. L'ordonnanceur
+compte maintenant les tours d'affilée passés seulement sur des verrous trouvés pris : au-delà de
+2 000, I11 tombe, « livelock (deadlock between driven locks?) », par le même chemin d'abandon
+(`test_two_driven_locks_taken_in_reverse_order_fail_fast`, M1349 ; une seconde environ). Mesuré à
+500 séquences, le plus long de ces passages dans une vraie course est de 10 à 16 tours selon les
+graines, pour une limite de 2 000. Ce qui est tenu : un interblocage entre verrous pilotés échoue en bien moins d'un
+tour de délai ; un fil bloqué hors de la vue de l'ordonnanceur (un verrou non piloté, une attente
+quelconque) échoue au bout d'un tour, 20 s. Un tel fil ne se déroule pas : l'échec le nomme
+(« still running, never unwound »), et le teardown de la machine saute alors la remise à plat qui
+attendrait derrière ses verrous — I11 a déjà échoué (M1440). Ce qu'il tient reste tenu : les
+registres de verrous du processus (`locks._VM_LOCKS`, `_QUARANTINE_LOCKS`, `_FILE_LOCKS`) ne sont
+jamais remis à zéro entre deux exemples, et l'exemple suivant — Hypothesis en rejoue pendant la
+réduction — attendait derrière lui à sa première écriture sur la même VM. Les courses suivantes
+reçoivent des registres neufs (le `flock` ne gêne pas : un nouvel exemple a un nouveau HOME, donc de
+nouveaux fichiers), et chaque fil d'une course a un nom à elle (`op-1#7`, les messages d'I11 disent
+`op-1`) : réveillé plus tard, un tel fil n'entre jamais dans une course suivante
+(`test_a_thread_out_of_sight_holding_a_lock_does_not_hang_the_teardown`, M1442). Ce qui ne l'est
+pas : un fil qui boucle sans jamais rendre son tour ni prendre de verrou piloté, et un fil qui
+boucle **en rendant son tour** — des appels Azure sans fin, chaque tour productif — ne sont vus que
+par la borne du job. Les jobs qui lancent la machine sont bornés : CI Linux 30 min, macOS 25 min, nuit
+150 min (M1347, M1348) ; sur Linux comme sur macOS, un test qui dure plus de 8 min écrit la pile de
+ses fils (M1441).
+
 ## La mesure par mutation
 
 Un test qui passe ne dit rien de sa force. `scripts/mutation_check.py` réinjecte, un par un,
@@ -1070,6 +1104,7 @@ Aucun de ces défauts n'avait été vu en revue. Chacun a son test et sa séquen
 | I8F | même carte nue, `reset --from-azure` | carte sautée : `swept`, état effacé, même reste |
 | I8F | même carte nue, un 429 à la lecture de notre tag (relecture) | l'erreur lue « aucun NSG » et écrite : même reste |
 | I3F | original inconnu (état et tags perdus), carte réisolée puis laissée nue | `verify_release` : `verified: True`, carte sans son NSG, une ancienne isolation restée sur ce NSG ; `glorfindel release`, qui le consulte d'abord, effaçait l'état |
+| U3F | blocage coupé avant son état, VM isolée par quarantaine, notre NSG retiré de la carte laissée nue | `unblock` : `not_found`, la règle de blocage restée sur le NSG propre de la carte ; la levée remettait ce NSG, l'IP de nouveau bloquée |
 | I8S | deux hôtes aux états séparés : « aucun » de l'hôte 1, tag X de l'hôte 2 (la carte a reçu X entre-temps) | la levée suivait l'« aucun » périmé : `released`, carte sans NSG, tag X effacé (trouvé en relecture, hors de la machine) |
 | I8S | même scénario, reset ; deux groupes de quarantaine (relecture 5.5) | un 429 sur le tag : carte remise nue, X effacé ; le « aucun » trouvé dans un groupe l'emportait sur X dans l'autre |
 | I4F | NSG d'origine d'une carte en quarantaine (ou nue) jugé sans elle | le reset de la nouvelle VM prenait l'ancienne isolation d'une autre VM pour la sienne : **l'autre VM rouverte** |
@@ -1296,6 +1331,42 @@ tout verrou réel qu'une course peut prendre doit être celui de l'ordonnanceur 
 régression `test_a_race_whose_two_operations_rewrite_the_escalations_store` rejoue la course, et le
 mutant M1395 (le verrou qui ignore son délai) y est attrapé. Le job macOS est borné (25 min) et un
 test qui dure plus de 8 min y écrit la pile de ses fils.
+
+**U3F (29/10, #293) : « introuvable » sur une règle laissée.** À 500 séquences, la graine 210
+faisait tomber I3 de façon déterministe, sur `main` aussi : « unblock said not_found, rules left
+for …/api: ['glorfindel-block-…-api-api-nic-…'] ». Hypothesis s'est arrêté de réduire au bout de
+cinq minutes ; réduite à la main, la séquence tient en quatre étapes : `block` sur `api`, coupé
+par un crash avant son état (après la règle entrante, ou après les deux), `isolate` (quarantaine),
+`someone_detaches_the_quarantine` (la carte laissée sans NSG), puis `unblock`. **Cause**
+(`providers/azure/unblock.py`, `_sweep_block`) : sans entrée d'état, le déblocage balaie les NSG
+des cartes, et le NSG propre d'une carte, hors d'elle, n'y était cherché que derrière une
+quarantaine. Une carte nue ne montrait que le NSG de son subnet : `not_found`, la règle restée,
+et la levée qui suit remettait ce NSG — l'IP de nouveau bloquée. Correctif (`_original_away`) :
+l'original d'une carte nue se lit comme à la levée — l'état, sinon notre tag sur le NSG de
+quarantaine de la région, l'« aucun » de l'état cédant au tag qui nomme un NSG. Une carte que
+l'état tient en quarantaine sans original, qu'aucun tag ne nomme (Q7), donne `unblock_partial`
+qui la nomme (A0 : jamais « rien » sur un inconnu). Séquences figées
+(`test_an_unblock_looks_behind_a_quarantine_taken_off`, `test_an_unblock_of_a_bare_nic_takes_the_block_or_says_it`) ;
+M1343–M1345 attrapés ; M23 suit le code déplacé (attrapé par ses séquences figées). Invariants :
+500 séquences sur 38 graines (dont 210 et 203 ; 26 lancées ensemble sur 16 cœurs, 3 à 6 fois plus
+lentes), et 2 000 sur 210 et 203, vertes — sauf la graine 322, qui tombe aussi sur `main` (I7,
+ci-dessous). Au même budget (60 séquences, deux tours), les 71 mutants mesurables par la machine
+de `providers/azure/` (blocage, déblocage, levée, vérification, quarantaine, reset, réseau, NSG),
+de l'état et de la réaffirmation : 42 attrapés à chaque tour avant, 38 après, mais les graines
+changent à chaque tour ; aucun perdu — tout mutant attrapé avant l'est après, par la machine ou
+par ses séquences figées, et seul M36 survit après (M10 et M36 avant). Remesurés sur quatre
+tours, les sept qui avaient bougé donnent 5/7 attrapés à chaque tour après, 4/7 avant.
+
+**Graine 322 (29/10, ouverte).** Trouvée pendant U3F, présente sur `main` (3da56f7), déterministe
+et sans lien avec la charge : « I7: rules of the deleted …/web left: ['nsg-tier/glorfindel-iso-web-web-nic-…', …-out] »,
+au `recover` qui suit un `address_reused` (`web` isolée par règles sur `nsg-tier` pendant que
+`nsg.get` répond 429 à chaque appel, supprimée, une autre `web` créée), après
+`bare_with_an_unknown_original` sur `web-nic`. Non réduite ; à traiter dans un lot à part.
+
+**I11 sous charge (29/10).** Le délai d'un tour (20 s) n'a pas été dépassé : 26 runs de la
+machine à 500 séquences en même temps sur 16 cœurs (312 à 647 s chacun, contre une centaine
+seul), puis deux harnais à `--jobs 4` en même temps. Rien n'a été relâché : aucune variable
+ajoutée, la sévérité de la CI et de la nuit inchangée.
 
 Le plus grave : après une levée qui échoue en partie, une seconde levée lisait les champs de
 rétro-compatibilité de l'état comme un ancien format, et supprimait les deny du NSG de

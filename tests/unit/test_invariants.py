@@ -244,74 +244,149 @@ class _Chaos:
 _CURRENT = SimpleNamespace(chaos=None, fake=None, mode="human_only", scheduler=None, clock=0)
 
 
+class _Abandoned(BaseException):
+    """The race failed (I11): a thread waiting for its turn unwinds — not an Exception,
+    so no `except Exception` of the code under test swallows it — and its locks go with
+    it. It used to wait there forever, holding them, and the teardown behind it: the job
+    hung instead of failing (I3F's review, U3F)."""
+
+
+# Turns in a row where every thread only tried a driven lock and found it taken: a
+# deadlock between driven locks (op-1 holds A and wants B, op-2 holds B and wants A) —
+# each thread gives its turn away at every try, and no turn ever times out (U3F review).
+# A real race's longest such run is 10 to 16 turns depending on the seed (measured at 500
+# sequences, docs/design/preuves.md); the limit is far above it, reached in under a second.
+_IDLE_TURNS = 2000
+_RACES_RUN = [0]                   # numbers each race's threads: a name is never reused
+_LONGEST_IDLE = [0]                # the longest run of idle turns seen (STATS)
+
+
 class _Scheduler:
     """Glorfindel operations at once, one Azure call (or state write) at a time, in an
     order drawn from a seed (L27). A thread waits for its turn before each call; a lock
-    that is taken costs it a turn (see _scheduled) — the real locks decide."""
+    that is taken costs it a turn (see _scheduled) — the real locks decide.
+    `timeout`: the seconds a turn may take (real time) before the race is called stuck;
+    `idle_turns`: the turns in a row spent only on taken locks before it is called a
+    livelock."""
 
-    def __init__(self, seed: int):
+    def __init__(self, seed: int, timeout: float = 20, idle_turns: int = _IDLE_TURNS):
         import random
         self.cv = threading.Condition()
         self.rng = random.Random(seed)
         self.state: dict[str, str] = {}
         self.turn = None
+        self.timeout = timeout
+        self.idle_turns = idle_turns
+        self.abandoned = False
+        self.retried: dict[str, bool] = {}
+        self.hung: list[str] = []        # threads still running once abandoned
 
     def _me(self):
         name = threading.current_thread().name
         return name if name in self.state else None
 
-    def point(self):
+    def point(self, retry: bool = False):
+        """Wait for a turn. `retry`: the turn that ends here was spent only on a driven
+        lock found taken (no progress)."""
         with self.cv:
             me = self._me()
             if me is None:
                 return
             if self.turn == me:
                 self.turn = None
+            if self.abandoned:
+                raise _Abandoned(me)
+            self.retried[me] = retry
             self.state[me] = "wait"
             self.cv.notify_all()
-            self.cv.wait_for(lambda: self.turn == me)
+            self.cv.wait_for(lambda: self.turn == me or self.abandoned)
+            if self.abandoned:
+                raise _Abandoned(me)
             self.state[me] = "run"
+
+    def _seen(self) -> dict:
+        """The state by the operations' own names (op-1, op-2), for the messages."""
+        return {self.short.get(n, n): s for n, s in self.state.items()}
 
     def run(self, ops: list) -> dict:
         results: dict = {}
+        # Each thread's name is unique to this race (op-1#7): a thread of an earlier race
+        # that never unwound, woken later, is never taken for one of this race's (_me).
+        _RACES_RUN[0] += 1
+        self.short = {f"{name}#{_RACES_RUN[0]}": name for name, _ in ops}
+        ops = [(f"{name}#{_RACES_RUN[0]}", name, fn) for name, fn in ops]
 
-        def body(name, fn):
-            self.point()
+        def body(uid, name, fn):
             try:
+                self.point()
                 results[name] = (fn(), None)
             except BaseException as exc:            # a Crash ends this thread only
                 results[name] = (None, exc)
             finally:
                 with self.cv:
-                    self.state[name] = "done"
-                    if self.turn == name:
+                    self.state[uid] = "done"
+                    if self.turn == uid:
                         self.turn = None
                     self.cv.notify_all()
 
         with self.cv:
-            self.state.update({name: "start" for name, _ in ops})
+            self.state.update({uid: "start" for uid, _, _ in ops})
         threads = [threading.Thread(target=body, args=op, name=op[0], daemon=True) for op in ops]
         for th in threads:
             th.start()
         settled = ("wait", "blocked", "done")
+        stuck = None
+        idle = 0
         with self.cv:
             while True:
                 ok = self.cv.wait_for(
                     lambda: all(s in settled for s in self.state.values())
                     and (any(s == "wait" for s in self.state.values())
-                         or all(s == "done" for s in self.state.values())), timeout=20)
-                assert ok, f"I11: operations stuck (deadlock?): {self.state}"
+                         or all(s == "done" for s in self.state.values())), timeout=self.timeout)
+                if not ok:
+                    stuck = f"I11: operations stuck (deadlock?): {self._seen()}"
+                    break
                 ready = sorted(n for n, s in self.state.items() if s == "wait")
                 if not ready:
                     break
                 pick = ready[self.rng.randrange(len(ready))]
                 self.turn, self.state[pick] = pick, "go"
                 self.cv.notify_all()
-                assert self.cv.wait_for(lambda: self.state[pick] in settled, timeout=20), (
-                    f"I11: {pick} never came back: {self.state}")
+                if not self.cv.wait_for(lambda: self.state[pick] in settled, timeout=self.timeout):
+                    stuck = f"I11: {self.short[pick]} never came back: {self._seen()}"
+                    break
+                if self.state[pick] == "wait" and self.retried.get(pick):
+                    idle += 1
+                    _LONGEST_IDLE[0] = max(_LONGEST_IDLE[0], idle)
+                    if idle > self.idle_turns:
+                        stuck = (f"I11: livelock (deadlock between driven locks?): {idle} turns "
+                                 f"in a row only found taken locks: {self._seen()}")
+                        break
+                else:
+                    idle = 0
+            if stuck:
+                # Every thread waiting for a turn unwinds, its locks released, before the
+                # failure is raised: the teardown takes them next (_Abandoned).
+                self.abandoned = True
+                self.cv.notify_all()
         for th in threads:
-            th.join(timeout=5)
+            th.join(timeout=min(5, self.timeout))
+        # A thread blocked out of the scheduler's sight doesn't unwind: whatever it holds
+        # stays held, and whoever runs next must not wait behind it (the teardown, _race).
+        self.hung = [self.short[th.name] for th in threads if th.is_alive()]
+        if self.hung:
+            # It holds the real locks it took — objects of the process-wide registries, never
+            # reset between examples: Hypothesis replays one while shrinking, and its first
+            # write on that VM waited forever. Those that come next get registries of their
+            # own (the flock is no matter: a new example has a new home, new lock files).
+            _fresh_lock_registries()
+        assert stuck is None, stuck + (f" — still running, never unwound: {self.hung}" if self.hung else "")
         return results
+
+
+def _fresh_lock_registries() -> None:
+    """New registries of in-process locks: nothing shared with a thread that never unwound."""
+    locks._VM_LOCKS, locks._QUARANTINE_LOCKS, locks._FILE_LOCKS = {}, {}, {}
 
 
 def _scheduled(real):
@@ -336,7 +411,7 @@ def _scheduled(real):
                 tries += 1
                 if kwargs.get("timeout") is not None and tries > 40:
                     raise
-                sched.point()
+                sched.point(retry=True)
         try:
             sched.point()
             yield
@@ -490,6 +565,11 @@ class IsolationMachine(RuleBasedStateMachine):
 
     def teardown(self):
         try:
+            if getattr(self, "hung", None):
+                # A race failed with a thread blocked out of the scheduler's sight, its
+                # locks held: the recovery would wait behind them forever. I11 has failed
+                # already; that failure is the one to see (U3F review).
+                return
             if getattr(self, "connector", None) is not None:
                 # I7, with the local state as it is, then without it.
                 self._recover_everything(lose_state=False)
@@ -1262,11 +1342,12 @@ class IsolationMachine(RuleBasedStateMachine):
         for vm, kind, _ in (first, second):
             if kind in ("release", "reset"):
                 self.releasing.add(vm)
-        _CURRENT.scheduler = _Scheduler(order)
+        sched = _CURRENT.scheduler = _Scheduler(order)
         try:
-            results = _CURRENT.scheduler.run([("op-1", first[2]), ("op-2", second[2])])
+            results = sched.run([("op-1", first[2]), ("op-2", second[2])])
         finally:
             _CURRENT.scheduler = None
+            self.hung = sched.hung
         # The journal: a release that ended released, or an isolation that ended
         # isolated (the operator's call — its order against the release is unknown).
         for name, (vm, kind, _) in (("op-1", first), ("op-2", second)):
@@ -2260,3 +2341,4 @@ def test_isolation_invariants(monkeypatch):
     if os.environ.get("GLORFINDEL_INVARIANT_STATS"):
         for what, n in sorted(_SEEN.items()):
             print(f"{n:7d}  {what}")
+        print(f"{_LONGEST_IDLE[0]:7d}  longest run of turns only on taken locks (limit {_IDLE_TURNS})")

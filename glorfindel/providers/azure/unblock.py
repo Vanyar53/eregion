@@ -11,11 +11,13 @@ from glorfindel.providers.azure.nsg import (
     _nic_owns,
     _rule_name,
 )
+from glorfindel.providers.azure.quarantine import OriginalUnknown
 from glorfindel.providers.azure.sdk import _is_not_found
 from glorfindel.response.ids import _parse_nsg_resource_id, _parse_vm_resource_id
 from glorfindel.response.policy import _ERR_MAX, _first_line
 from glorfindel.response.state import (
     _clear_block_state,
+    _held_in_quarantine,
     _load_block_entries,
     _recorded_original,
     _UNKNOWN,
@@ -326,27 +328,15 @@ class UnblockMixin:
             if t0.get("subnet_unreadable"):
                 failed.append(f'{t0["nic_short"]} : NSG du subnet illisible, déblocage non vérifié')
             views = self._nic_nsg_views(t0)
-            if t0.get("quarantine"):
-                # In quarantine, the NIC's own NSG — where a block lies — is off it, out
-                # of sight until the release puts it back. Unblocked meanwhile, `not_found`
-                # was answered and the IP was blocked again at the release (L27).
-                original = _recorded_original(t0["nic_id"])
-                try:
-                    if original is _UNKNOWN:
-                        original = self._original_from_tags(t0["quarantine"], t0["nic_id"])
-                    elif original is None:
-                        # The state's "none" yields to our tag when it names an NSG, as at
-                        # the release: another host's isolation wrote X there, the block
-                        # lies on X, and `not_found` was answered (I8S, ISU #264). A tag
-                        # that can't be read fails the unblock — never "none" on a guess.
-                        original = self._tag_over_none(t0["quarantine"], t0["nic_id"])
-                except Exception as exc:
-                    failed.append(f'{t0["nic_short"]} : NSG d\'origine inconnu, déblocage non vérifié '
-                                  f"({_first_line(exc)[:_ERR_MAX]})")
-                    original = None
-                if original:
-                    o_rg, o_name = _parse_nsg_resource_id(original)
-                    views = views + [{**t0, "nsg_rg": o_rg, "nsg_name": o_name, "scope": "nic", "ip_scoped": True}]
+            try:
+                original = self._original_away(t0, rg)
+            except Exception as exc:
+                failed.append(f'{t0["nic_short"]} : NSG d\'origine inconnu, déblocage non vérifié '
+                              f"({_first_line(exc)[:_ERR_MAX]})")
+                original = None
+            if original:
+                o_rg, o_name = _parse_nsg_resource_id(original)
+                views = views + [{**t0, "nsg_rg": o_rg, "nsg_name": o_name, "scope": "nic", "ip_scoped": True}]
             for t in views:
                 rules = self._list_rules(cache, t["nsg_rg"], t["nsg_name"])
                 if rules is None:
@@ -361,6 +351,32 @@ class UnblockMixin:
                         (failed if err else deleted).append(err or name)
                 failed += self._unattributable_plain_block(ip, t, rules)
         return deleted, failed
+
+    def _original_away(self, t0: dict, vm_rg: str) -> str | None:
+        """The NIC's own NSG when it is off the NIC — where a block lies, out of sight
+        until the release puts it back: unblocked meanwhile, `not_found` was answered and
+        the IP was blocked again at the release. In our quarantine (L27), or left with no
+        NSG at all, our quarantine taken off by hand (U3F, #293: a block cut off before
+        its state, then isolated and left bare — the sweep only looked behind a
+        quarantine). None: nothing away. Unknown RAISES — never "none" on a guess."""
+        nic_id, q = t0["nic_id"], t0.get("quarantine")
+        if not q and t0.get("own_nsg_id"):
+            return None                          # its own NSG is on it: in its views
+        original = _recorded_original(nic_id)
+        if isinstance(original, str):
+            return original                      # the state's NSG wins over the tag
+        if q:
+            # The state's "none" yields to our tag when it names an NSG, as at the
+            # release: another host's isolation wrote X there, the block lies on X, and
+            # `not_found` was answered (I8S, ISU #264).
+            return self._original_from_tags(q, nic_id) if original is _UNKNOWN else self._tag_over_none(q, nic_id)
+        # Bare: our tag on the region's quarantine NSG, as the release reads it (U2).
+        tagged, q_bare = self._bare_nic_original(t0, vm_rg)
+        if q_bare is not None:
+            return tagged
+        if original is _UNKNOWN and _held_in_quarantine(nic_id):
+            raise OriginalUnknown("carte sans NSG, ni l'état local ni le tag ne le disent")
+        return None
 
     def _unattributable_plain_block(self, ip: str, t: dict, rules: list) -> list[str]:
         """An older version's block under the IP's name alone, cutting this NIC off, on

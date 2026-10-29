@@ -11,7 +11,9 @@ on:
   workflow_dispatch:
     inputs:
       examples:
-        description: "Number of random sequences"
+        # The job is bounded to 150 min whatever this asks (timeout-minutes): about 20 000
+        # sequences on Linux, 30 000 on macOS. More is cancelled at the bound, unreported.
+        description: "Number of random sequences (the job stops at 150 min: about 20000 on Linux)"
         default: "10000"
 
 permissions:
@@ -21,6 +23,11 @@ jobs:
   invariants:
     name: invariants (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    # Bounded (U3F): ten thousand sequences take about an hour on Linux (52-63 min, 14-26/10)
+    # and 33-41 min on macOS; a failure adds its shrinking (Hypothesis gives up on it after
+    # about 300 s, the whole phase). A job without a bound runs six hours. A manual run asks
+    # for its own number of sequences: the bound stays, see `examples` below.
+    timeout-minutes: 150
     strategy:
       fail-fast: false
       matrix:

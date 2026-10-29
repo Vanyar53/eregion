@@ -3042,8 +3042,8 @@ MUTANTS += [
     ("M1011", "an attestation for another model accepted: H0's own is never checked (H1, H3)", CD,
      '    entry = next((m for m in side.get("models") or [] if m.get("model") == model), None)',
      '    entry = next(iter(side.get("models") or []), None)'),
-    ("M1012", "overconfident on every draw where the reference never was: accepted, the gate no longer stops them (H1, H3)",
-     CD, "    if every:\n", "    if False:\n"),
+    ("M1012", "a case gaining 2 overconfident draws over the reference accepted: the gate no longer stops them (H1, H3)",
+     CD, "    if gained:\n", "    if False:\n"),
     ("M1013", "H0's config refused by A3 and the release switched to anyway: the watch exits 2 (H1)", CD,
      '        if res.returncode != 0:\n            raise Refused("préflight : la config de H0',
      '        if False:\n            raise Refused("préflight : la config de H0'),
@@ -4041,8 +4041,8 @@ MUTANTS += [
      "    if lost_case:\n", "    if False:\n"),
     ("M1704", "a case that acts must lose all 3 draws: 2/3 lost deployed (H3, review)", CD,
      "CASE_LOST_DRAWS = 2\n", "CASE_LOST_DRAWS = 3\n"),
-    ("M1705", "a case that does not act losing 2 draws where the reference varied refused (H3, review)", CD,
-     "    lost_case = [lb for lb in c if c[lb][0] in ACTS and ", "    lost_case = [lb for lb in c if "),
+    ("M1705", "the loss of 2 draws counted on act and paired only: a cautious case isolating twice deployed (H3, 30/10)",
+     CD, "    lost_case = [lb for lb in c if right(", '    lost_case = [lb for lb in c if c[lb][0] in ("act", "paired") and right('),
     ("M1706", "a wrong draw at exactly the gate (0.7) not overconfident: the gate lets it through (H3, review)", CD,
      "    return not good and conf is not None and float(conf) >= GATE\n",
      "    return not good and conf is not None and float(conf) > GATE\n"),
@@ -4081,6 +4081,17 @@ MUTANTS += [
 ]
 TESTS.update({f"M{n}": "tests/unit/test_host_cd.py" for n in range(1700, 1712)})
 TESTS.update({f"M{n}": _SMOKE_T for n in range(1712, 1718)})
+# H3, Jonathan 30/10 (M1718–M1729): the loss of 2 draws on every kind, the gain of overconfidence.
+MUTANTS += [
+    ("M1718", "a case gaining 2 overconfident draws tolerated: the threshold one too far (H3, 30/10)", CD,
+     "OVERCONFIDENT_GAIN = 2\n", "OVERCONFIDENT_GAIN = 3\n"),
+    ("M1719", "the overconfident draws counted without the reference's: noise on both sides refused (H3, 30/10)", CD,
+     "    gained = [lb for lb in c if over(c[lb][1]) - over(r[lb][1]) >= OVERCONFIDENT_GAIN]\n",
+     "    gained = [lb for lb in c if over(c[lb][1]) >= OVERCONFIDENT_GAIN]\n"),
+    ("M1720", "one draw lost refused: the noise of 29/10 taken for a regression (H3, 30/10)", CD,
+     "CASE_LOST_DRAWS = 2\n", "CASE_LOST_DRAWS = 1\n"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_host_cd.py" for n in range(1718, 1721)})
 TESTS.update({mid: _SMOKE_T for mid in ("M1671", "M1677", "M1683", "M1687", "M1688", "M1689")})
 
 # CI3 (#267, step 2): the images published, signed, pulled by their digest — the reader and

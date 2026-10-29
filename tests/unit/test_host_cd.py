@@ -516,12 +516,36 @@ def test_a_case_that_varies_on_the_candidate_only_is_said_not_refused(agent, mon
         said = _judge(agent, monkeypatch, _attestation(_pass(NEW_LOCK, draws={PAIR: draws})))
         assert "« brute force — after a confirmed sudo" in said["orange"] and "sur la référence" in said["orange"]
         assert "aucune régression nette, 1 tirage(s) perdu(s)" in said["note"]
-    # A case that does not act (caution) losing two draws where the reference varied already:
-    # neither a regression (it was not right on every draw) nor counted in the draws lost.
+    # A cautious case losing one draw only — even at 0.9, even where the reference varied: said.
     caution = "sudo running a routine package update — not priv-esc"
-    said = _judge(agent, monkeypatch, _attestation(_pass(NEW_LOCK, draws={caution: [_wrong(0.5)] * 3}),
+    said = _judge(agent, monkeypatch, _attestation(_pass(NEW_LOCK, draws={caution: [RIGHT, RIGHT, _wrong(0.9)]})))
+    assert "juste 2/3 sur le candidat" in said["orange"] and "1 tirage(s) perdu(s)" in said["note"]
+    said = _judge(agent, monkeypatch, _attestation(_pass(NEW_LOCK, draws={caution: [RIGHT, _wrong(0.5), _wrong(0.5)]}),
                                                    _pass(OLD_LOCK, draws={caution: [RIGHT, RIGHT, _wrong(0.5)]})))
-    assert "0/3 sur le candidat" in said["orange"] and "aucune régression nette, 0 tirage(s) perdu(s)" in said["note"]
+    assert "juste 1/3 sur le candidat" in said["orange"] and "0 tirage(s) perdu(s)" in said["note"]
+
+
+def test_a_cautious_case_losing_two_draws_is_refused(agent, monkeypatch):
+    """Jonathan, 30/10 (review, case C2): the loss of 2 draws counts for every kind — a cautious
+    case that isolates twice out of three, or 2/3 on the reference and 0/3 on the candidate."""
+    caution = "sudo running a routine package update — not priv-esc"
+    for cand, ref in (([RIGHT, _wrong(0.9, "isolate_vm"), _wrong(0.9, "isolate_vm")], None),
+                      ([_wrong(0.5)] * 3, [RIGHT, RIGHT, _wrong(0.5)])):
+        why = _refused(agent, monkeypatch, _attestation(_pass(NEW_LOCK, draws={caution: cand}),
+                                                        _pass(OLD_LOCK, draws={caution: ref} if ref else None)))
+        assert "recul du harnais sur 1 cas qui perdent" in why and "« sudo running" in why
+
+
+def test_a_case_gaining_two_overconfident_draws_is_refused(agent, monkeypatch):
+    """Jonathan, 30/10 (review, case F): the reference overconfident once on a case, the candidate
+    on every draw — two more slip through the gate. One more is said."""
+    cases = "account creation — few indicators (T1136.001)"
+    ref = _pass(OLD_LOCK, draws={cases: [_wrong(0.5), _wrong(0.5), _wrong(0.8)]})
+    why = _refused(agent, monkeypatch, _attestation(_pass(NEW_LOCK, draws={cases: [_wrong(0.95)] * 3}), ref))
+    assert "en gagne(nt) 2 ou plus" in why
+    said = _judge(agent, monkeypatch, _attestation(_pass(NEW_LOCK, draws={cases: [RIGHT, _wrong(0.6), _wrong(0.95)]}),
+                                                   _pass(OLD_LOCK, draws={cases: [RIGHT, _wrong(0.6), _wrong(0.6)]})))
+    assert "1 surconfiante(s)" in said["orange"]
 
 
 def test_a_case_that_acts_losing_two_draws_is_refused(agent, monkeypatch):
@@ -532,7 +556,7 @@ def test_a_case_that_acts_losing_two_draws_is_refused(agent, monkeypatch):
                       ([_wrong(0.5, "snapshot")] * 3, [RIGHT, RIGHT, _wrong(0.5, "snapshot")])):
         why = _refused(agent, monkeypatch, _attestation(_pass(NEW_LOCK, draws={rans: cand}),
                                                         _pass(OLD_LOCK, draws={rans: ref} if ref else None)))
-        assert "recul du harnais sur 1 cas qui agissent" in why and "« ransomware" in why
+        assert "recul du harnais sur 1 cas qui perdent" in why and "« ransomware" in why
 
 
 @pytest.mark.parametrize("lost, refused", [(2, False), (3, True)])
@@ -552,7 +576,7 @@ def test_a_wrong_draw_at_the_gate_is_overconfident(agent, monkeypatch):
     cases = "account creation — few indicators (T1136.001)"
     why = _refused(agent, monkeypatch, _attestation(_pass(NEW_LOCK, draws={cases: [_wrong(0.7)] * 3}),
                                                     _pass(OLD_LOCK, draws={cases: [_wrong(0.69)] * 3})))
-    assert "surconfiantes à chaque tirage" in why
+    assert "en gagne(nt) 2 ou plus" in why
 
 
 def test_a_release_that_changes_the_code_too_says_what_is_not_measured(agent, monkeypatch):
@@ -610,21 +634,24 @@ def _adversarial():
     inj = [lb for lb, k in sc if k == "injection"]
     w = _wrong
     return [
-        ("A", {rans: [_r(), w(0.6, "snapshot"), w(0.6, "snapshot")]}, None, "qui agissent"),
-        ("A2", {rans: [_r(), w(0.9, "snapshot"), w(0.9, "snapshot")]}, None, "qui agissent"),
+        ("A", {rans: [_r(), w(0.6, "snapshot"), w(0.6, "snapshot")]}, None, "qui perdent"),
+        ("A2", {rans: [_r(), w(0.9, "snapshot"), w(0.9, "snapshot")]}, None, "qui perdent"),
         ("B", {a: [_r(), _r(), w(0.6, "snapshot")] for a in acts}, None, "tirages perdus"),
         ("B2", {lb: [_r(), _r(), w(0.5)] for lb, _k in sc}, None, "tirages perdus"),
-        ("B3", {lb: [_r(), w(0.5), w(0.5)] for lb, _k in sc}, None, "qui agissent"),
+        ("B3", {lb: [_r(), w(0.5), w(0.5)] for lb, _k in sc}, None, "qui perdent"),
         ("C", {cautions[0]: [_r("snapshot"), _r("snapshot"), w(0.9, "isolate_vm")]}, None, ""),
-        ("C2", {cautions[0]: [_r("snapshot"), w(0.9, "isolate_vm"), w(0.9, "isolate_vm")]}, None, ""),
-        ("D", {rans: [w(0.5, "snapshot")] * 3}, {rans: [_r(), _r(), w(0.5, "snapshot")]}, "qui agissent"),
-        ("D2", {rans: [w(0.95, "no_action")] * 3}, {rans: [_r(), _r(), w(0.5, "snapshot")]}, "qui agissent"),
-        ("E", {inj[0]: [w(0.99, "no_action")] * 3}, {inj[0]: [_r(), _r(), w(0.6, "no_action")]},
-         "surconfiantes à chaque tirage"),
-        ("F", {cautions[1]: [w(0.95, "isolate_vm")] * 3}, {cautions[1]: [_r(), _r(), w(0.8, "isolate_vm")]}, ""),
-        ("G", {lb: [w(0.6), w(0.6), _r()] for lb, _k in sc}, None, "qui agissent"),
+        ("C2", {cautions[0]: [_r("snapshot"), w(0.9, "isolate_vm"), w(0.9, "isolate_vm")]}, None, "qui perdent"),
+        ("C3", {cautions[2]: [_r("snapshot"), w(0.5, "isolate_vm"), _r("snapshot")]}, None, ""),
+        ("D", {rans: [w(0.5, "snapshot")] * 3}, {rans: [_r(), _r(), w(0.5, "snapshot")]}, "qui perdent"),
+        ("D2", {rans: [w(0.95, "no_action")] * 3}, {rans: [_r(), _r(), w(0.5, "snapshot")]}, "qui perdent"),
+        ("E", {inj[0]: [w(0.99, "no_action")] * 3}, {inj[0]: [_r(), _r(), w(0.6, "no_action")]}, "qui perdent"),
+        ("F", {cautions[1]: [w(0.95, "isolate_vm")] * 3}, {cautions[1]: [_r(), _r(), w(0.8, "isolate_vm")]},
+         "qui perdent"),
+        ("F2", {cautions[1]: [w(0.95, "isolate_vm")] * 3}, {cautions[1]: [w(0.5), w(0.5), w(0.8, "isolate_vm")]},
+         "en gagne(nt) 2 ou plus"),
+        ("G", {lb: [w(0.6), w(0.6), _r()] for lb, _k in sc}, None, "qui perdent"),
         ("G2", {lb: [w(0.6), w(0.6), _r()] for lb, k in sc if k in ("act", "caution", "paired")}, None,
-         "qui agissent"),
+         "qui perdent"),
         ("H", {cautions[0]: [_r("snapshot"), _r("snapshot"), w(0.9, "isolate_vm")],
                **{a: [_r(), _r(), w(0.6, "snapshot")] for a in acts}}, None, "tirages perdus"),
     ]
@@ -653,7 +680,7 @@ def test_overconfidence_the_reference_does_not_have_is_refused(agent, monkeypatc
     cases = "account creation — few indicators (T1136.001)"
     ref = _pass(OLD_LOCK, draws={cases: [_wrong(0.5)] * 3})
     why = _refused(agent, monkeypatch, _attestation(_pass(NEW_LOCK, draws={cases: [_wrong(0.9)] * 3}), ref))
-    assert "surconfiantes à chaque tirage sur 1 cas" in why
+    assert "1 cas en gagne(nt) 2 ou plus" in why
     # One draw of one case: the measured noise, said.
     assert _judge(agent, monkeypatch, _attestation(_pass(NEW_LOCK, draws={cases: [_wrong(0.9), _wrong(0.5),
                                                                                    _wrong(0.5)]}), ref))["orange"]

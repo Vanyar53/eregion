@@ -3462,6 +3462,59 @@ TESTS.update({mid: "tests/unit/test_unexpected_decision.py"
               + [f"M{n}" for n in range(1360, 1365)]})
 TESTS["M1361"] = "tests/unit/test_dependency_failures.py"
 
+# SEC4b (#275): a local state that can't be read is an unknown for every reader that
+# concludes from an absence, and the reassertion says it; a bypass by someone else's allow
+# said once per change, never fixed (V-16); the proposed rules' store locked and rewritten
+# whole. The invariant machine never makes a state unreadable: measured by
+# tests/unit/test_unreadable_state.py, test_reassert.py, test_proposed_rules.py and
+# test_locks.py. Ranges M1250–M1259, M1390–M1394.
+RCA = "glorfindel/reassert_cards.py"
+PRO = "glorfindel/proposed_rules.py"
+MUTANTS += [
+    ("M1250", "an unreadable state read as « not in quarantine »: verify_release says released (SEC4b)", STA,
+     "    _raise_if_unreadable(f\"{nic_id.rstrip('/').rsplit('/', 1)[-1]} y est peut-être en quarantaine\")\n",
+     ""),
+    ("M1251", "an unreadable state read as « no original recorded »: our tag undoes it (SEC4b)", STA,
+     "    _raise_if_unreadable(f\"le NSG d'origine de {nic_id.rstrip('/').rsplit('/', 1)[-1]} y est peut-être\")\n",
+     ""),
+    ("M1252", "the fixed names of an NSG nobody's while a state can't be read (SEC4b)", NET,
+     "        if _unreadable_isolations():\n            return None", "        if False:\n            return None"),
+    ("M1253", "a failed release writes over the unreadable state it could not read (SEC4b)", REL,
+     "        if failed and _isolation_unreadable(resource_id):\n", "        if False:\n"),
+    ("M1254", "the release's sweep reads a bare NIC as bare by design beside an unreadable state (SEC4b)", REL,
+     "                    if q_bare is None:\n                        # Bare by design, or in our quarantine for a state that can't be\n"
+     "                        # read: unknown, never released on a guess (SEC4b).\n"
+     "                        _held_in_quarantine(t0[\"nic_id\"])\n", ""),
+    ("M1255", "reset puts a bare NIC's original back from our tag beside an unreadable state (SEC4b)", SWP,
+     "                failed_early.append(f'{t0[\"nic_short\"]}: carte sans NSG, {_first_line(exc)[:_ERR_MAX]}')\n"
+     "                continue\n",
+     "                recorded = _UNKNOWN\n"),
+    ("M1256", "an unreadable state never said by the reassertion (SEC4b)", RCA,
+     "    files = unreadable_states()\n", "    files = []\n"),
+    ("M1257", "an unreadable state said again at every pass, its acknowledgement undone (SEC4b)", RCA,
+     '    if alerts.get("unreadable_states") == sid:\n        return\n', ""),
+    ("M1258", "a bypassed isolation never said by the reassertion (SEC4b, V-16)", R,
+     "    say_bypass(vm, rid, verification, report, ref=ref)\n", ""),
+    ("M1259", "a bypass said again at every pass, its acknowledgement undone (SEC4b, V-16)", RCA,
+     "    if mark == sid:\n        return", "    if False:\n        return"),
+    ("M1390", "a bypassed block never said by the reassertion (SEC4b, V-16)", R,
+     "    say_bypass(vm, rid, verification, report, ip=ip, ref=ref)\n", ""),
+    ("M1391", "a bypass card closed on a precedence that could not be read (SEC4b, V-16)", RCA,
+     "    if found is None:\n        return\n", "    if found is None:\n        found = []\n"),
+    ("M1392", "a proposal recorded without the store's lock: one recorded meanwhile is lost (SEC4b)", PRO,
+     "    with _locked():\n        _write(_lines() + [json.dumps(proposal)])", "    if True:\n        _write(_lines() + [json.dumps(proposal)])"),
+    ("M1393", "approve and reject rewrite the store without its lock (SEC4b)", PRO,
+     ("    with _locked():\n        return _approve(", "    with _locked():\n        lines = _lines()"),
+     ("    if True:\n        return _approve(", "    if True:\n        lines = _lines()")),
+    ("M1394", "a state of another shape read as readable: its placements read as « nothing » (SEC4b)", STA,
+     '    placements = data.get("placements") if isinstance(data, dict) else None\n', "    placements = None\n"),
+]
+TESTS.update({mid: "tests/unit/test_unreadable_state.py" for mid in
+              ("M1250", "M1251", "M1252", "M1253", "M1254", "M1255", "M1394")})
+TESTS.update({mid: "tests/unit/test_reassert.py tests/unit/test_unreadable_state.py" for mid in
+              ("M1256", "M1257", "M1258", "M1259", "M1390", "M1391")})
+TESTS.update({mid: "tests/unit/test_proposed_rules.py" for mid in ("M1392", "M1393")})
+
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a

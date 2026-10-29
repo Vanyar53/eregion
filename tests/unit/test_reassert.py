@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from glorfindel import escalations, readiness
+from glorfindel import escalations, readiness, reassert_quarantine
 from glorfindel.actions import (
     _load_block_entries, _load_isolation_state, _save_block_state, _save_isolation_state,
 )
@@ -617,13 +617,13 @@ def test_a_card_stays_while_its_nsg_is_out_of_the_listing(how):
     for _ in range(2):
         reassert.reassert_pass(c, None)
     assert [e["id"] for e in _cards("pending")] == [card["id"]] and len(_cards()) == 1
-    assert q in reassert._load_quarantine_alerts()
+    assert q in reassert_quarantine._load_quarantine_alerts()
     f.unreadable.discard(q)
     f.nsgs[q]["rules"]["glorfindel-quarantine-deny-in"] = dict(
         f.nsgs[q]["rules"]["glorfindel-quarantine-deny-out"], name="glorfindel-quarantine-deny-in",
         direction="Inbound")
     reassert.reassert_pass(c, None)
-    assert not _cards("pending") and q not in reassert._load_quarantine_alerts()
+    assert not _cards("pending") and q not in reassert_quarantine._load_quarantine_alerts()
 
 
 def test_a_card_whose_nsg_cannot_be_read_again_stays():
@@ -648,7 +648,7 @@ def test_a_card_whose_nsg_is_gone_closes():
     f.nics[next(iter(f.nics))]["nsg"] = None
     assert f.delete_nsg(f.nsgs[q]["id"])
     reassert.reassert_pass(c, None)
-    assert not _cards("pending") and not reassert._load_quarantine_alerts()
+    assert not _cards("pending") and not reassert_quarantine._load_quarantine_alerts()
 
 
 @pytest.mark.parametrize("homonym", [False, True])
@@ -664,7 +664,7 @@ def test_a_card_of_another_subscription_stays(homonym):
     else:
         f.nics[next(iter(f.nics))]["nsg"] = None
         f.delete_nsg(f.nsgs[q]["id"])
-    escalations.record(signal_id=f"{reassert._QUARANTINE_PREFIX}other-1", resource_id=other,
+    escalations.record(signal_id=f"{reassert_quarantine._QUARANTINE_PREFIX}other-1", resource_id=other,
                        action="restore_quarantine_nsg", escalation_type="quarantine_altered",
                        reason="altered", severity="high")
     calls.clear()
@@ -686,16 +686,16 @@ def test_a_card_of_another_subscription_is_said_once_never_read(monkeypatch, cap
     Its name as Azure wrote it, not the lowercase key of the acknowledgement."""
     import logging
     from glorfindel import reassert
-    monkeypatch.setattr(reassert, "_SAID_ELSEWHERE", set())
+    monkeypatch.setattr(reassert_quarantine, "_SAID_ELSEWHERE", set())
     f, c, q, calls = _quarantined_world()
     other = ("/subscriptions/other/resourceGroups/RG-Sec/providers/Microsoft.Network/networkSecurityGroups/"
              "NSG-Glorfindel-Quarantine-WestEurope")
-    e = escalations.record(signal_id=f"{reassert._QUARANTINE_PREFIX}other-1", resource_id=other,
+    e = escalations.record(signal_id=f"{reassert_quarantine._QUARANTINE_PREFIX}other-1", resource_id=other,
                            action="restore_quarantine_nsg", escalation_type="quarantine_altered",
                            reason="altered", severity="high")
     if acknowledged:
         escalations.resolve(e)
-        reassert._save_quarantine_alerts({other.lower(): f"{reassert._QUARANTINE_PREFIX}other-1"})
+        reassert_quarantine._save_quarantine_alerts({other.lower(): f"{reassert_quarantine._QUARANTINE_PREFIX}other-1"})
     read = MagicMock(side_effect=c.read_quarantine)
     monkeypatch.setattr(c, "read_quarantine", read)
     caplog.set_level(logging.WARNING, logger="glorfindel.reassert")
@@ -706,12 +706,12 @@ def test_a_card_of_another_subscription_is_said_once_never_read(monkeypatch, cap
     assert len(said) == 1 and "other" in said[0], [r.getMessage() for r in caplog.records]
     assert not _warnings(caplog, "nsg-glorfindel-quarantine-westeurope is in")
     if acknowledged:
-        assert other.lower() in reassert._load_quarantine_alerts()      # kept, not forgotten
+        assert other.lower() in reassert_quarantine._load_quarantine_alerts()      # kept, not forgotten
         return
     assert other in [x["resource_id"] for x in _cards("pending")]        # kept
     escalations.resolve(e)                                              # closed by the operator:
     reassert.reassert_pass(c, None)                                     # nothing left to say,
-    escalations.record(signal_id=f"{reassert._QUARANTINE_PREFIX}other-2", resource_id=other,
+    escalations.record(signal_id=f"{reassert_quarantine._QUARANTINE_PREFIX}other-2", resource_id=other,
                        action="restore_quarantine_nsg", escalation_type="quarantine_altered",
                        reason="altered", severity="high")
     reassert.reassert_pass(c, None)                                     # a new card: said again
@@ -724,7 +724,7 @@ def test_a_card_whose_nsg_is_refused_warns_at_every_pass_in_its_case(monkeypatch
     wrote it, not by the lowercase key it is acknowledged under."""
     import logging
     from glorfindel import reassert
-    monkeypatch.setattr(reassert, "_SAID_ELSEWHERE", set())
+    monkeypatch.setattr(reassert_quarantine, "_SAID_ELSEWHERE", set())
     f, c, q, _ = _quarantined_world()
     cased = "NSG-Glorfindel-Quarantine-WestEurope"
     nsg = f.nsgs.pop(q)
@@ -732,13 +732,13 @@ def test_a_card_whose_nsg_is_refused_warns_at_every_pass_in_its_case(monkeypatch
     f.nsgs[q] = nsg
     f.nics[next(iter(f.nics))]["nsg"] = nsg["id"]
     escalations.resolve(_said_once(c)["id"])                             # acknowledged
-    assert q in reassert._load_quarantine_alerts()
+    assert q in reassert_quarantine._load_quarantine_alerts()
     f.unreadable.add(q)
     caplog.set_level(logging.WARNING, logger="glorfindel.reassert")
     for _ in range(3):
         reassert.reassert_pass(c, None)
     assert len(_warnings(caplog, f"{cased} not read again")) == 3, [r.getMessage() for r in caplog.records]
-    assert q in reassert._load_quarantine_alerts()
+    assert q in reassert_quarantine._load_quarantine_alerts()
 
 
 def test_only_a_missing_card_nsg_is_read_again():
@@ -766,7 +766,7 @@ def test_an_acknowledged_change_is_forgotten_once_its_nsg_is_gone():
     f.nics[next(iter(f.nics))]["nsg"] = None
     assert f.delete_nsg(f.nsgs[q]["id"])
     reassert.reassert_pass(c, None)
-    assert not reassert._load_quarantine_alerts()
+    assert not reassert_quarantine._load_quarantine_alerts()
     rid = c._ensure_quarantine_nsg("westeurope", "rg-sec")["nsg_id"]
     f.nics[next(iter(f.nics))]["nsg"] = rid
     f.nsgs[q]["rules"].pop("glorfindel-quarantine-deny-in")

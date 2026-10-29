@@ -131,6 +131,9 @@ glorfindel/
   reassert_cards.py     → SEC4b : ce que la réaffirmation dit sans agir — say_bypass (V-16 : une allow d'un tiers
                           avant nos refus, carte `bypassed` une fois par changement, jamais retirée) et
                           say_unreadable_states (carte `state_unreadable`, state_alerts.json)
+  reassert_quarantine.py → I1F, I1S, ISU : les NSG de quarantaine modifiés, lus à chaque passe quel que soit
+                          l'état local — _report_altered_quarantines, quarantine_alerts.json (sorti de
+                          reassert.py par RB1, sans changement de comportement)
   rule_layers.py        → P1 : la couche du client — write_client_rule (atomique, verrou, refuse d'écrire sur une
                           couche illisible), migrate (règles approuvées dans la base avant P1 → couche ; une
                           règle au workspace en ligne liée à son backend). P1 n'exporte pas : l'export d'une règle généralisée, sans identifiant, est reporté à un lot rattaché à P2 (relu par un humain avant tout envoi)

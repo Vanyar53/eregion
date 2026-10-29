@@ -44,6 +44,7 @@ SDK = "glorfindel/providers/azure/sdk.py"
 FAC = "glorfindel/actions.py"                 # the façade (A1)
 PIF = "glorfindel/providers/interface.py"
 R = "glorfindel/reassert.py"
+RQ = "glorfindel/reassert_quarantine.py"       # split out of reassert.py (RB1)
 C = "glorfindel/config.py"
 INS = "eregion_core/inscription.py"
 ENG = "annatar/runner/engine.py"
@@ -1635,7 +1636,7 @@ MUTANTS += [
              "in quarantine (I1F)", QUA,
      '                protocol="*", source_address_prefix="*", destination_address_prefix="*",\n',
      '                protocol="Udp", source_address_prefix="*", destination_address_prefix="*",\n'),
-    ("M833", "the altered quarantine's card is closed at the next pass, its change standing (I1F)", R,
+    ("M833", "the altered quarantine's card is closed at the next pass, its change standing (I1F)", RQ,
      "        if k in altered and altered[k][0] == sid:\n            said.add(sid)\n"
      "        elif k in altered or settled(k):\n",
      "        if k in altered or settled(k):\n"),
@@ -1643,10 +1644,10 @@ MUTANTS += [
     ("M834", "nothing recorded: the pass reads no quarantine NSG (I1F, review)", R,
      "    report: list[dict] = []\n    _whatever_the_state(connector, autonomy, report)\n    return report\n",
      "    return []\n"),
-    ("M836", "an acknowledged quarantine card comes back at every pass (I1F, review)", R,
+    ("M836", "an acknowledged quarantine card comes back at every pass (I1F, review)", RQ,
      "        if signal_id in said or alerts.get(k) == signal_id:\n",
      "        if signal_id in said:\n"),
-    ("M837", "a quarantine card closed on an NSG read as unknown (I1F, review)", R,
+    ("M837", "a quarantine card closed on an NSG read as unknown (I1F, review)", RQ,
      '            return seen[k].get("status") != "unknown" and k not in altered\n',
      "            return k not in altered\n"),
     ("M835", "the watch's thread hands over only when something is recorded (I1F, review)", GCLI,
@@ -1675,7 +1676,7 @@ MUTANTS += [
      "        if time.time() - _last_reassert[0] < _reassert_every_s:\n            return\n"
      "        from glorfindel.actions import active_blocks, active_isolations\n        if not active_isolations() and not active_blocks():\n"
      "            return\n"),
-    ("M897", "a listing that fails reads as empty: every quarantine card closed (I1F, second review)", R,
+    ("M897", "a listing that fails reads as empty: every quarantine card closed (I1F, second review)", RQ,
      '        log.warning("reassert: quarantine NSGs not checked (%s)", exc)\n        return\n',
      '        log.warning("reassert: quarantine NSGs not checked (%s)", exc)\n        listing = []\n'),
     ("M898", "an unreadable configuration said at every pass (I1F, second review)", GCLI,
@@ -2487,7 +2488,7 @@ TESTS.update({f"M{n}": "tests/unit/test_invariant_regressions.py -k two_hosts" f
 # another subscription.
 MUTANTS += [
     ("M1020", "a quarantine card closed on the mere absence of its NSG from the listing: the role "
-              "removed, our tag taken off, another subscription (I1S)", R,
+              "removed, our tag taken off, another subscription (I1S)", RQ,
      "        return k in gone\n", "        return True\n"),
     ("M1021", "a quarantine NSG read again without our tag reads as not ours: its card closed (I1S)", SWP,
      "        return self._quarantine_as_read(nsg)\n",
@@ -2497,14 +2498,14 @@ MUTANTS += [
               "closes its card (I1S)", SWP,
      '        if not target or target.lower() != (self._subscription_id or "").lower():\n',
      "        if False:\n"),
-    ("M1023", "a quarantine NSG that can't be read again (403, 429) reads as gone: its card closed (I1S)", R,
+    ("M1023", "a quarantine NSG that can't be read again (403, 429) reads as gone: its card closed (I1S)", RQ,
      "exc)\n            continue\n        if q is None:\n",
      "exc)\n            gone.add(k)\n            continue\n        if q is None:\n"),
     ("M1024", "every quarantine card's NSG read again at every pass, listed or not: a get per card "
-              "per minute (I1S)", R,
+              "per minute (I1S)", RQ,
      "        if _key(rid) and _key(rid) not in seen:\n", "        if _key(rid):\n"),
     ("M1025", "an acknowledged change is not read again: its NSG deleted, the acknowledgement silences "
-              "the next one (I1S)", R,
+              "the next one (I1S)", RQ,
      '    for rid in [e.get("resource_id") or "" for e in cards] + list(alerts):\n',
      '    for rid in [e.get("resource_id") or "" for e in cards]:\n'),
     ("M1026", "a refusal (403) read again reads as not found: the card closed (I1S)", SWP,
@@ -2555,12 +2556,12 @@ MUTANTS += [
     ("M1108", "a NIC in quarantine whose original is gone: release and reset say only 'not found' (ISU)",
      QUA, "            raise self._original_gone(q, nic_id, original, exc)\n", "            raise\n"),
     ("M1109", "a card of another subscription handed to the reader: refused there, a warning at every "
-              "pass without end (ISU)", R,
+              "pass without end (ISU)", RQ,
      "    elsewhere = {k: w for k, rid in missing.items() if outside and isinstance(w := outside(rid), str) "
      "and w}\n", "    elsewhere = {}\n"),
-    ("M1110", "a card of another subscription said at every pass (ISU)", R,
+    ("M1110", "a card of another subscription said at every pass (ISU)", RQ,
      "    for k in elsewhere.keys() - _SAID_ELSEWHERE:\n", "    for k in elsewhere:\n"),
-    ("M1111", "an acknowledged change alone named by its lowercase key, not as Azure wrote it (ISU)", R,
+    ("M1111", "an acknowledged change alone named by its lowercase key, not as Azure wrote it (ISU)", RQ,
      "    missing = {k: cased.get(k) or rid for k, rid in missing.items()}\n", ""),
     ("M1112", "the connector never says an NSG is of another subscription: every pass, a warning (ISU)",
      SWP, '        return None if target and target.lower() == (self._subscription_id or "").lower() '
@@ -2572,7 +2573,7 @@ MUTANTS += [
      '**({"subnet_nsg_too": True} if own_id and subnet_nsg and tuple(',
      '**({"subnet_nsg_too": True} if False and subnet_nsg and tuple('),
     ("M1115", "a card of another subscription said once for ever: closed, then a new card on its NSG "
-              "unsaid (ISU)", R,
+              "unsaid (ISU)", RQ,
      "    _SAID_ELSEWHERE.intersection_update(elsewhere)\n", ""),
 ]
 TESTS.update({f"M{n}": "tests/unit/test_invariant_regressions.py -k two_hosts_an_unblock" for n in (1100, 1101)})

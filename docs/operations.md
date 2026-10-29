@@ -155,8 +155,15 @@ glorfindel --version                         # 0.2.0
 #   se reprend que de la même façon ; elle n'a pas de rapport d'analyse (IA0), ni sur Orodruin ni sur H0,
 #   n'entre pas dans l'index ni dans les comparaisons (D-2), et c'est dit : « campaign without Glorfindel: no
 #   detection report, by choice ». Le --dry-run n'exige rien.
-#   Exception assumée : `annatar clean` (annatar/runner/initializer.py) arme le contrat et écrit sur la cible
-#   (le disque de test de T1486) sans lire la watch — c'est de la préparation, pas une attaque.
+#   SEC5 (#276) : le battement porte le périmètre de la watch — un condensé de l'abonnement qu'elle lit
+#   (AZURE_SUBSCRIPTION_ID), jamais l'abonnement lui-même ; l'injecteur le compare au sien. Une watch vivante
+#   d'un autre abonnement, ou un battement sans périmètre (une watch plus ancienne : mettre Glorfindel à
+#   jour), est refusé. Le garde est relu avant chaque action d'un run (chaque étape, la commande de l'atomic,
+#   le démarrage de la panne) : une watch qui meurt en cours de run l'arrête là (« glorfindel: lost during
+#   the run »), et la campagne avec lui. `annatar clean` passe par le garde comme `run` (--without-glorfindel
+#   aussi). --without-glorfindel est refusé en zone production, et inscrit au journal d'Orodruin
+#   (outcome « declared ») en plus du rapport. Ce que le garde prouve et ce qu'il ne prouve pas :
+#   docs/design/orodruin-contract.md, « SEC5 ».
 
 # Annatar
 annatar run annatar/scenarios/azure/<scenario>.yaml  # --dry-run disponible, --skip-preflight pour bypasser le check VM

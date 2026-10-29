@@ -1193,3 +1193,98 @@ def test_an_unblock_says_a_plain_block_may_be_a_perimeter_one(monkeypatch, subne
             assert ("ou de périmètre" in s) == subnet_too, s
         assert _plain_on(m) == {_PLAIN, f"{_PLAIN}-out"}
     _plain_block_world(monkeypatch, check=check)
+
+
+_API_OWN = _NSG.format(rg="rg-edge", name="nsg-api-nic")
+_API_LOW = key(API)
+_NEW_API = "/subscriptions/s/resourcegroups/rg-app1/providers/microsoft.compute/virtualmachines/api"
+
+
+def test_a_bare_nic_held_in_quarantine_with_an_unknown_original_is_not_released(monkeypatch):
+    """SEC3's harness, frozen (I3F, #287): an older version's isolation on api's own NSG;
+    api isolated by quarantine, the tags lost, left bare; a new VM on that NSG reset.
+    The quarantine group then turns into the VM's own: api, re-isolated into a second
+    quarantine NSG (its original read from the state), loses its state and that NSG's
+    tags, is isolated again — its original unknown now (Q7) — and is left bare. Until
+    then verify_release said "api-nic : sans NSG, nsg-api-nic non remis"; from there it
+    said verified, the NIC without its NSG and the old isolation still on it."""
+    _run(monkeypatch, _net(quarantine=True, quarantine_rg="rg-sec", legacy=("api-nic", True),
+                           api_nic={"own": "dedicated"}),
+         ("an_old_isolations_vm_goes_away", (_API_OWN, API), True, True, "rg-app1", "api", "Linux", True,
+          _NEW_API),
+         ("config_changes", {"quarantine": True, "rg": "", "readable": True, "forensic": []}, True),
+         ("bare_with_an_unknown_original", API, _API_LOW, None, _nic("rg-edge", "api-nic"), "isolate+release",
+          (4, "before-429")))
+
+
+@pytest.mark.parametrize("way_out", ["nsg", "tag"])
+def test_a_bare_nic_whose_original_is_unknown_is_said_bare(monkeypatch, way_out):
+    """The same, said (I3F, #287): web isolated by quarantine, its state and our tag lost,
+    isolated again — its original unknown (Q7) — then left bare by hand. verify_release
+    says the original is unknown, never released; the release keeps the placement and
+    says the NIC carries no NSG — it said "La carte reste en quarantaine" and "NSG de
+    quarantaine non détaché", of a NIC with no NSG at all. Each way out it names (the
+    NSG put back on the NIC, or our tag) lets the retry finish."""
+    import shutil
+
+    from glorfindel import actions
+
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_net(quarantine=True, web_nic={"own": "dedicated"}))
+        f, c, nic = m.fake, m.connector, _nic("rg-app1", "web-nic")
+        own = f.nics[nic]["nsg"]
+        assert c.isolate_vm(WEB1)["status"] == "isolated"
+        q = f.nics[nic]["nsg"]
+        for p in actions._ISOLATION_STATE_DIR.glob("*.json"):
+            p.unlink()                                                    # the state lost
+        tag = actions.AzureConnector._orig_tag(f.nics[nic]["id"])
+        f.nsgs[key(q)]["tags"].pop(tag)                                   # and our tag
+        assert c.isolate_vm(WEB1)["status"] == "isolated"                 # original unknown now
+        f.nics[nic]["nsg"] = None                                         # ours taken off by hand
+        check = c.verify_release(WEB1)
+        assert check["verified"] is False, check
+        assert any("web-nic" in u and "inconnu" in u for u in check["original_unknown"]), check
+        out = c.release_isolation(WEB1)
+        assert out["status"] == "release_partial", out
+        said = [e for e in out["failed"] if e.startswith("web-nic")]
+        assert said and "carte sans NSG" in said[0] and "inconnu" in said[0], out
+        assert "reste en quarantaine" not in said[0] and "non détaché" not in said[0], said
+        assert tag in said[0] and "poser sur la carte" in said[0].lower(), said
+        assert f.nics[nic]["nsg"] is None and actions._load_isolation_state(WEB1), out   # kept as it was
+        if way_out == "tag":
+            f.nsgs[key(q)]["tags"][tag] = own                              # the tag, by hand
+        else:
+            f.nics[nic]["nsg"] = own                                       # the NSG, by hand
+        assert c.release_isolation(WEB1)["status"] == "released"
+        assert key(f.nics[nic]["nsg"] or "") == key(own)
+        assert c.verify_release(WEB1)["verified"] is True
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)
+
+
+def test_a_race_whose_two_operations_rewrite_the_escalations_store(monkeypatch):
+    """Two operations of a race that each rewrite the escalations store (two reassertions
+    whose sweeps both leave a card). The store's lock (SEC3) was not the scheduler's: one
+    operation stopped at its write, inside that lock, left the other blocked in it out of
+    the scheduler's sight — I11 « op-2 never came back » ({'op-1': 'wait', 'op-2': 'run'},
+    #292), then the teardown's sweep waiting behind it forever (the macOS job of I3F, 29/10).
+    Each lock the code takes in a race is the scheduler's (_scheduled)."""
+    import json
+    from glorfindel import escalations
+    from .test_invariants import _CURRENT, _Chaos, _Scheduler
+    invariant_env(monkeypatch)
+    monkeypatch.setattr(_CURRENT, "chaos", _Chaos())
+
+    @escalations._locked
+    def rewrite(n):
+        escalations._write_lines([json.dumps({"n": n})])
+
+    try:
+        for seed in range(8):           # each order of the two: one stopped inside, then the other
+            _CURRENT.scheduler = _Scheduler(seed)
+            out = _CURRENT.scheduler.run([("op-1", lambda: rewrite(1)), ("op-2", lambda: rewrite(2))])
+            assert all(exc is None for _, exc in out.values()), out
+    finally:
+        _CURRENT.scheduler = None

@@ -278,7 +278,10 @@ def test_the_report_goes_to_h0_with_its_window(bench, tmp_path, monkeypatch):
     clock, world, engine = bench
     world()
     out = engine().run("vm-shutdown", skip_confirm=True)
-    assert container.puts == [f"{out.run_id}.json", f"{out.run_id}.json", f"runs/{out.run_id}.json"]
+    # Orodruin's journal goes to the channel too (SEC5, V-29), under audit/.
+    assert [p for p in container.puts if not p.startswith("audit/")] == [
+        f"{out.run_id}.json", f"{out.run_id}.json", f"runs/{out.run_id}.json"]
+    assert f"audit/{out.run_id}.jsonl" in container.puts
     published = json.loads(container.body(f"runs/{out.run_id}.json"))
     assert published == json.loads((tmp_path / "runs" / f"{out.run_id}.json").read_text())
     assert published["checks"]["revert_verified"] == "PASS" and published["metrics"]["before"]
@@ -661,3 +664,37 @@ def test_gothmog_cli_passes_without_glorfindel(monkeypatch):
     assert CliRunner().invoke(cli, ["run", "x", "--yes", "--without-glorfindel"]).exit_code == 0
     assert CliRunner().invoke(cli, ["preflight", "x", "--without-glorfindel"]).exit_code == 0
     assert seen == {"run": True, "preflight": True}
+
+
+# ── SEC5: the watch read again before the fault, the dev run in Orodruin's journal ──────
+
+def test_a_watch_gone_before_the_start_stops_the_fault(bench, monkeypatch):
+    """SEC5 (N-03): the watch is read before the run and again right before the fault starts
+    — the targets and the steady state took minutes. Gone by then: nothing is started."""
+    import eregion_core.watch_gate as gate
+    clock, world, engine = bench
+    w = world()
+    reads = []
+    live = gate.READERS["local"]
+
+    def local():
+        reads.append(1)
+        return live() if len(reads) == 1 else gate.Beat(gate.LOCAL, None, "the watch stopped")
+    monkeypatch.setitem(gate.READERS, "local", local)
+    out = engine().run("vm-shutdown", skip_confirm=True)
+    assert out.result == "REFUSED" and out.error.startswith("glorfindel: lost before the fault")
+    assert [x for x, _ in w.writes] == [] and len(reads) == 2
+    assert not [r for r in _audit() if r.get("action") == "chaos_start"]
+
+
+def test_a_fault_without_glorfindel_is_written_to_orodruins_journal(bench, no_watch):
+    """SEC5 (N-04): not only in the run's report — in Orodruin's journal too, before the
+    first call."""
+    clock, world, engine = bench
+    world()
+    out = engine().run("vm-shutdown", skip_confirm=True, without_glorfindel=True)
+    records = _audit()
+    declared = [r for r in records if r["outcome"] == "declared"]
+    assert [(r["run_id"], r["action"]) for r in declared] == [(out.run_id, "without_glorfindel")]
+    assert records.index(declared[0]) < next(i for i, r in enumerate(records)
+                                             if r["outcome"] == "about_to_call")

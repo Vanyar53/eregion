@@ -241,6 +241,8 @@ class Engine:
         if session is None:
             console.print(f"[red]Orodruin passive — nothing touched:[/red] {verdict.reasons()}")
             return RunOutcome(run_id, "PASSIVE", error=verdict.reasons())
+        if without_glorfindel:  # SEC5 (N-04): in Orodruin's journal too
+            session.declare("without_glorfindel", watch_gate.NOT_MEASURED)
         if session.max_injections < MIN_CALLS:
             reason = f"cap of {session.max_injections} calls: a run needs {MIN_CALLS} to cancel and revert"
             console.print(f"[red]Refused:[/red] {reason}")
@@ -274,7 +276,15 @@ class Engine:
         emitter = SignalEmitter(run_id, fault.get("id") or fault["name"], vms, self.runs_dir)
         checks = {"targets": "PASS", "steady_state_before": "PASS"}
 
-        # 4. Inject.
+        # 4. Inject — the watch read again first (SEC5, N-03): the targets and the steady
+        # state took minutes; a watch gone since stops the fault before it starts.
+        if not self._without:
+            lost = watch_gate.refusal()
+            if lost:
+                console.print(f"[red]Stopped — the Glorfindel watch is gone:[/red] {lost}")
+                checks["fault_started"] = "FAIL (no live Glorfindel watch)"
+                return self._record(fault, run_id, "REFUSED", seen, checks,
+                                    error=f"glorfindel: lost before the fault — {lost}")
         t0 = self._now()
         try:
             bench.start(name)

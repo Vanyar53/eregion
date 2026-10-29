@@ -75,6 +75,9 @@ resource "azurerm_subnet" "host" {
   resource_group_name  = azurerm_resource_group.host.name
   virtual_network_name = azurerm_virtual_network.host.name
   address_prefixes     = ["10.30.0.0/26"]
+  # SEC5 (V-31) : le pare-feu du compte du canal n'admet ce sous-réseau que par un point de
+  # terminaison de service (gratuit). Une règle d'IP ne joue pas depuis la même région.
+  service_endpoints = ["Microsoft.Storage"]
 
   lifecycle {
     replace_triggered_by = [azurerm_virtual_network.host.id]
@@ -241,26 +244,27 @@ resource "azurerm_linux_virtual_machine" "host" {
   )
 }
 
-# ── Droits : agir sur le banc, rien d'autre ───────────────────────────────────────────────
-# Les actions exactes que demandent les injecteurs, pas un rôle intégré plus large. La liste
-# est celle d'eregion_core/orodruin.py (REQUIRED_ACTIONS) — un test vérifie qu'elles
-# restent identiques. Gothmog (G0) démarre, suit et annule une expérience Chaos Studio du
-# banc ; c'est l'identité de l'expérience, limitée à sa VM, qui agit sur la VM.
-resource "azurerm_role_definition" "injector" {
-  name        = "eregion-orodruin-injector-${data.azurerm_resource_group.bench.name}"
+# ── Droits : lire le banc, n'agir que sur ce qui est inscrit (SEC5, V-29, #182) ───────────
+# Les actions exactes que demandent les injecteurs, pas un rôle intégré plus large. Les listes
+# sont celles d'eregion_core/orodruin.py (READ_ACTIONS, VM_ACTIONS, CHAOS_ACTIONS) — un test
+# vérifie qu'elles restent identiques. La lecture porte sur le groupe ; l'écriture (Run
+# Command, démarrage, expérience de chaos) seulement sur chaque VM inscrite et chaque
+# expérience, une attribution à la portée de la ressource : une VM du groupe qui n'est pas
+# inscrite (bree, la pré-observation) reste hors d'atteinte. Le contrat refuse une écriture
+# sur le groupe entier (identity_group_wide → passive). Gothmog (G0) démarre, suit et annule
+# une expérience Chaos Studio du banc ; c'est l'identité de l'expérience, limitée à sa VM,
+# qui agit sur la VM.
+resource "azurerm_role_definition" "injector_read" {
+  name        = "eregion-orodruin-read-${data.azurerm_resource_group.bench.name}"
   scope       = data.azurerm_resource_group.bench.id
-  description = "Orodruin (Eregion O1) : ce que les injecteurs demandent sur le banc, rien de plus."
+  description = "Orodruin (Eregion SEC5) : ce que les injecteurs lisent sur le banc."
 
   permissions {
     actions = [
       "Microsoft.Resources/subscriptions/resourceGroups/read",
       "Microsoft.Compute/virtualMachines/read",
-      "Microsoft.Compute/virtualMachines/start/action",
-      "Microsoft.Compute/virtualMachines/runCommand/action",
       "Microsoft.Network/networkSecurityGroups/read",
       "Microsoft.Chaos/experiments/read",
-      "Microsoft.Chaos/experiments/start/action",
-      "Microsoft.Chaos/experiments/cancel/action",
       "Microsoft.Chaos/experiments/executions/read",
     ]
     not_actions = []
@@ -269,9 +273,76 @@ resource "azurerm_role_definition" "injector" {
   assignable_scopes = [data.azurerm_resource_group.bench.id]
 }
 
-resource "azurerm_role_assignment" "bench_injector" {
+resource "azurerm_role_definition" "injector_vm" {
+  name        = "eregion-orodruin-vm-${data.azurerm_resource_group.bench.name}"
+  scope       = data.azurerm_resource_group.bench.id
+  description = "Orodruin (Eregion SEC5) : agir sur une VM inscrite, attribué VM par VM."
+
+  permissions {
+    actions = [
+      "Microsoft.Compute/virtualMachines/start/action",
+      "Microsoft.Compute/virtualMachines/runCommand/action",
+    ]
+    not_actions = []
+  }
+
+  # Assignable sous le groupe (une VM en est une portée enfant), jamais attribué au groupe.
+  assignable_scopes = [data.azurerm_resource_group.bench.id]
+}
+
+resource "azurerm_role_definition" "injector_chaos" {
+  name        = "eregion-orodruin-chaos-${data.azurerm_resource_group.bench.name}"
+  scope       = data.azurerm_resource_group.bench.id
+  description = "Orodruin (Eregion SEC5) : démarrer et annuler une expérience, attribué expérience par expérience."
+
+  permissions {
+    actions = [
+      "Microsoft.Chaos/experiments/start/action",
+      "Microsoft.Chaos/experiments/cancel/action",
+    ]
+    not_actions = []
+  }
+
+  assignable_scopes = [data.azurerm_resource_group.bench.id]
+}
+
+# Les VM inscrites : le tag que Celebrimbor pose à la construction (O0) — `celebrimbor` pour le
+# banc canonique (rg-celebrimbor), `celebrimbor-<instance>` pour une instance nommée
+# (rg-celebrimbor-<instance>) : tiré du nom du groupe, sauf bench_id donné. Une VM inscrite (ou
+# un Celebrimbor reconstruit) après cet apply n'a pas de droit tant que
+# `make orodruin-lock YES=1` ne l'a pas relue : les attributions portent l'id de la VM.
+locals {
+  bench_id = var.bench_id != "" ? var.bench_id : trimprefix(var.bench_resource_group, "rg-")
+}
+
+data "azurerm_resources" "enrolled_vms" {
+  resource_group_name = data.azurerm_resource_group.bench.name
+  type                = "Microsoft.Compute/virtualMachines"
+  required_tags       = { "eregion-target" = local.bench_id }
+}
+
+data "azurerm_resources" "experiments" {
+  resource_group_name = data.azurerm_resource_group.bench.name
+  type                = "Microsoft.Chaos/experiments"
+}
+
+resource "azurerm_role_assignment" "bench_reader" {
   scope              = data.azurerm_resource_group.bench.id
-  role_definition_id = azurerm_role_definition.injector.role_definition_resource_id
+  role_definition_id = azurerm_role_definition.injector_read.role_definition_resource_id
+  principal_id       = azurerm_linux_virtual_machine.host.identity[0].principal_id
+}
+
+resource "azurerm_role_assignment" "vm_injector" {
+  for_each           = { for r in data.azurerm_resources.enrolled_vms.resources : lower(r.name) => r.id }
+  scope              = each.value
+  role_definition_id = azurerm_role_definition.injector_vm.role_definition_resource_id
+  principal_id       = azurerm_linux_virtual_machine.host.identity[0].principal_id
+}
+
+resource "azurerm_role_assignment" "experiment_injector" {
+  for_each           = { for r in data.azurerm_resources.experiments.resources : lower(r.name) => r.id }
+  scope              = each.value
+  role_definition_id = azurerm_role_definition.injector_chaos.role_definition_resource_id
   principal_id       = azurerm_linux_virtual_machine.host.identity[0].principal_id
 }
 
@@ -314,6 +385,20 @@ resource "azurerm_role_assignment" "contract_reader" {
 # Un conteneur à Orodruin : son identité y écrit les fenêtres (open_window, close_window),
 # celle de Glorfindel (H0) les lit. Entra ID seulement, pas de clé partagée. Détruit avec
 # Orodruin : la watch garde ses copies locales, et sans fenêtre un cycle reste « real ».
+#
+# SEC5 (V-31) : le point de terminaison public reste, mais fermé par le pare-feu du compte :
+# n'entrent que les sous-réseaux d'Orodruin et de H0 (points de terminaison de service,
+# gratuits — une règle d'IP n'a pas d'effet depuis la même région que le compte), et les IP
+# publiques d'Orodruin, de H0 et de l'opérateur (si l'un d'eux change de région ; l'opérateur :
+# l'arrêt d'urgence ferme les fenêtres depuis son poste). Un point de terminaison privé n'est
+# pas gratuit (0,0088 €/h l'un, ~6,4 €/mois, plus le trafic ; il en faudrait deux, les VNet
+# n'étant pas appairés). Le fournisseur ne touche que l'API de contrôle (data_plane_available
+# = false) : le pare-feu ne gêne pas l'apply.
+locals {
+  # Une règle d'IP du stockage ne prend pas de /32 : l'adresse seule.
+  operator_ip = endswith(var.operator_cidr, "/32") ? split("/", var.operator_cidr)[0] : var.operator_cidr
+}
+
 resource "azurerm_storage_account" "channel" {
   name                            = "storodruin${substr(md5(data.azurerm_subscription.current.subscription_id), 0, 10)}"
   resource_group_name             = azurerm_resource_group.host.name
@@ -325,6 +410,62 @@ resource "azurerm_storage_account" "channel" {
   default_to_oauth_authentication = true
   allow_nested_items_to_be_public = false
   tags                            = local.tags
+
+  network_rules {
+    default_action             = "Deny"
+    bypass                     = ["None"]
+    virtual_network_subnet_ids = compact([azurerm_subnet.host.id, var.watch_subnet_id])
+    ip_rules                   = compact([azurerm_public_ip.host.ip_address, var.watch_public_ip, local.operator_ip])
+  }
+
+  lifecycle {
+    # Une watch hébergée déclarée sans son sous-réseau : le pare-feu lui couperait le canal sans
+    # rien dire (ses runs finiraient en `unknown`). Refusé au plan.
+    precondition {
+      condition     = var.watch_principal_id == "" || var.watch_subnet_id != ""
+      error_message = "watch_principal_id est donné mais watch_subnet_id est vide : appliquer d'abord infra/glorfindel-host (output subnet_id), puis make orodruin-lock."
+    }
+  }
+}
+
+# SEC5 (V-21) : une rétention, sans quoi la liste — alphabétique, des run_id horodatés — finirait
+# par dépasser MAX_BLOBS et laisser au-delà les fenêtres les plus récentes. Les blobs de bloc
+# (fenêtres à la racine, campaigns/, runs/, et du côté de `watch` les détections) partent
+# 9 jours après leur dernière écriture : la watch purge une fenêtre 7 jours après son dernier
+# moment (PURGE_AFTER_S), le dernier moment suit la dernière écriture de 2 h 15 au plus, d'où
+# 2 jours de marge. heartbeat.json, réécrit chaque minute, ne vieillit jamais. Le journal
+# d'Orodruin (blobs d'ajout, audit/) reste 90 jours : le temps de revenir sur un incident d'un
+# trimestre, pour quelques Ko par run. La politique est gratuite ; seules les opérations de
+# suppression qu'elle fait sont des opérations de stockage ordinaires (négligeables ici).
+resource "azurerm_storage_management_policy" "channel" {
+  storage_account_id = azurerm_storage_account.channel.id
+
+  rule {
+    name    = "channel-blobs"
+    enabled = true
+    filters {
+      blob_types = ["blockBlob"]
+    }
+    actions {
+      base_blob {
+        delete_after_days_since_modification_greater_than = var.channel_retention_days
+      }
+    }
+  }
+
+  rule {
+    name    = "orodruin-journal"
+    enabled = true
+    filters {
+      blob_types   = ["appendBlob"]
+      prefix_match = ["exercises/audit/"]
+    }
+    actions {
+      base_blob {
+        delete_after_days_since_modification_greater_than = var.journal_retention_days
+      }
+    }
+  }
 }
 
 resource "azurerm_storage_container" "exercises" {

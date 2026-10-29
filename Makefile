@@ -705,6 +705,13 @@ ORO_USER      ?= orodruin
 # watch_principal_id : l'identité du Glorfindel hébergé, lectrice du canal des fenêtres (partie C).
 ORO_WATCH_ID   = $(shell $(HOST_TF) output -no-color -raw principal_id 2>/dev/null | grep -E '^[0-9a-f-]{36}$$')
 ORO_VARS       = -var-file=../terraform/terraform.tfvars -var="operator_cidr=$(OPERATOR_CIDR)" -var="watch_principal_id=$(ORO_WATCH_ID)"
+# SEC5 (V-31) : le sous-réseau et l'IP de H0, admis par le pare-feu du compte du canal — dans
+# l'environnement de terraform, jamais sur la ligne affichée (l'id du sous-réseau nomme
+# l'abonnement, M124).
+ORO_WATCH_SUBNET = $(shell $(HOST_TF) output -no-color -raw subnet_id 2>/dev/null | grep -E '^/subscriptions/')
+ORO_WATCH_IP   = $(shell $(HOST_TF) output -no-color -raw public_ip 2>/dev/null | grep -E '^[0-9.]+$$')
+orodruin-plan orodruin-up orodruin-lock orodruin-down: export TF_VAR_watch_subnet_id = $(ORO_WATCH_SUBNET)
+orodruin-plan orodruin-up orodruin-lock orodruin-down: export TF_VAR_watch_public_ip = $(ORO_WATCH_IP)
 ORO_IP         = $(shell $(ORO_TF) output -no-color -raw public_ip 2>/dev/null | grep -E '^[0-9.]+$$')
 ORO_SSH        = ssh $(SSH_OPTS) $(ORO_USER)@$(ORO_IP)
 ORO_IMAGE     := eregion-annatar:orodruin

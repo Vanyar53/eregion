@@ -12,10 +12,16 @@ Contrat (garanties, vérifications, kill, mutants) :
 
 - **État Terraform séparé** (ici, local) : un apply ou un down de Celebrimbor ou de Glorfindel
   ne touche jamais Orodruin, et inversement.
-- **Identité managée** de la VM, sans secret. Un rôle personnalisé sur `rg-celebrimbor` avec
-  les seules actions que demandent les injecteurs (lire les groupes et les VMs, démarrer une
-  VM, Run Command, lire les NSG) — la liste est celle d'`eregion_core/orodruin.py`, un test les
-  garde identiques — plus `Log Analytics Reader` sur l'espace de logs du banc.
+- **Identité managée** de la VM, sans secret. Trois rôles personnalisés, les seules actions que
+  demandent les injecteurs — les listes sont celles d'`eregion_core/orodruin.py`, un test les
+  garde identiques : lire le groupe, les VM, les NSG et les expériences, sur `rg-celebrimbor` ;
+  démarrer une VM et Run Command, **sur chaque VM inscrite** (tag `eregion-target`) ; démarrer et
+  annuler une expérience, sur chaque expérience (SEC5, #182). Jamais d'écriture sur le groupe
+  entier : bree, jamais inscrite, reste hors d'atteinte. Plus `Log Analytics Reader` sur l'espace
+  de logs du banc. Une VM inscrite plus tard : `make orodruin-lock YES=1` lui donne ses droits.
+- **Le compte du canal derrière son pare-feu** (SEC5) : seuls les sous-réseaux d'Orodruin et de
+  H0 (points de terminaison de service) et les IP d'Orodruin, de H0 et de l'opérateur y entrent.
+  Appliquer `infra/glorfindel-host` d'abord (le point de terminaison de H0), puis ce module.
 - **Sortie fermée** hors périmètre : API de contrôle d'Azure, Entra ID, API du modèle
   (`160.79.104.0/23`), DNS et IMDS ; le reste d'Internet refusé. Pas de peering avec le banc :
   Run Command passe par l'API de contrôle.

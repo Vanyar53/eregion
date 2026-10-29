@@ -36,14 +36,22 @@ class InitRunner:
                 " to take a clean backup.[/yellow]"
             )
 
-    def clean(self, scenario_path: str) -> None:
+    def clean(self, scenario_path: str, *, without_glorfindel: bool = False) -> None:
         """Reset the VM disk to a clean state before a scenario run."""
         from annatar.runner.parser import ScenarioParser
         from annatar.executors.azure_vm import AzureVMExecutor
+        from eregion_core import watch_gate
 
         scenario = ScenarioParser().load(scenario_path)
         target = scenario.target
         vm_name = target["vm_name"]
+
+        # V1 (SEC5, N-03): `clean` rewrites a disk — the same gate as `run`, before anything
+        # reaches the cloud: no live Glorfindel watch, no clean.
+        if not without_glorfindel:
+            no_watch = watch_gate.refusal()
+            if no_watch:
+                raise RuntimeError(f"Refused — no live Glorfindel watch: {no_watch}")
 
         # Orodruin (eregion_core/orodruin.py): `clean` writes on the target — an armed
         # contract first, its calls journaled before they run.
@@ -53,6 +61,8 @@ class InitRunner:
             "clean-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"), "annatar")
         if session is None:
             raise RuntimeError(f"Orodruin passive — nothing touched: {verdict.reasons()}")
+        if without_glorfindel:
+            session.declare("without_glorfindel", watch_gate.NOT_MEASURED)
 
         executor = AzureVMExecutor(target, session)
 
@@ -69,6 +79,10 @@ class InitRunner:
             raise RuntimeError(f"Safety check failed: {guard.reason}")
 
         console.print(f"[cyan]->[/cyan] Preparing VM disk ({vm_name})...")
+        if not without_glorfindel:  # read again right before the write (SEC5, N-03)
+            no_watch = watch_gate.refusal()
+            if no_watch:
+                raise RuntimeError(f"Refused — the Glorfindel watch is gone: {no_watch}")
         executor.run_script("scripts/vm/setup_testdata.sh")
 
         console.print("[cyan]->[/cyan] Verifying disk state...")

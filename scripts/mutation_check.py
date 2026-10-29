@@ -1706,10 +1706,8 @@ MUTANTS += [
      '                elif unread and recorded is _UNKNOWN and _held_in_quarantine(t["nic_id"]):\n'),
     ("M865", "a stateless release ignores the tag of a bare NIC: left without its NSG, an old isolation "
              "there (I8F, second relecture)", REL,
-     "                    original, q_bare = self._bare_nic_original(t0, rg)\n"
-     "                    if q_bare is not None:\n",
-     "                    original, q_bare = self._bare_nic_original(t0, rg)\n"
-     "                    if False:\n"),
+     "                    if q_bare is not None:\n                        if original:\n",
+     "                    if False:\n                        if original:\n"),
 ]
 
 # I8S (#245): two hosts, separate states — the state's "none" never wins over a tag that names
@@ -2589,7 +2587,7 @@ MUTANTS += [
      "        unread = self._unreadable_reason()\n        if unread:\n            return {\"removed\": False, "
      "\"why\": unread}\n", ""),
     ("M1212", "a state of the wrong shape reads as readable (SEC3, N-06)", STA,
-     "            if not isinstance(data, shape) or (shape is list and not all(isinstance(e, dict) for e in data)):\n",
+     "            if not _readable_shape(data, shape):\n",
      "            if data is None:\n"),
     ("M1213", "remove_orphan_rule writes an NSG of another subscription (SEC3, N-07)", AZC,
      "        if target and mine and target.lower() != mine.lower():\n            raise WrongSubscriptionError(\n"
@@ -3287,8 +3285,8 @@ TESTS.update({f"M{n}": "tests/unit/test_forged_logs.py" for n in range(1320, 132
 MUTANTS += [
     ("M1340", "verify_release reads a bare NIC held in quarantine, its original unknown, as released "
               "(I3F)", VER,
-     '            if original is _UNKNOWN and _held_in_quarantine(t0["nic_id"]):\n',
-     "            if False:\n"),
+     '                held = original is _UNKNOWN and _held_in_quarantine(t0["nic_id"])\n',
+     "                held = False\n"),
     ("M1341", "the release of a bare NIC whose original is unknown says it stays in quarantine (I3F)", REL,
      "                            if not bare:\n                                raise\n",
      "                            raise\n"),

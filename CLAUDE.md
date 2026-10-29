@@ -35,6 +35,7 @@ L'atelier autour : **Celebrimbor** (`infra/terraform/`) construit et inscrit le 
 | Priorités, jalons, lots | [ROADMAP.md](ROADMAP.md) |
 | Architecture en schémas, vocabulaire commun, zones | [docs/architecture.md](docs/architecture.md) |
 | Preuves : invariants, mutation | [docs/design/preuves.md](docs/design/preuves.md) |
+| Modèle de menace : une page par frontière, ce qui la tient, ce qui reste ouvert ; signaler une faille (`SECURITY.md`) | [docs/design/modele-de-menace.md](docs/design/modele-de-menace.md) |
 | Isolation compatible IaC | [docs/design/module-isolation-iac.md](docs/design/module-isolation-iac.md) |
 | Contrat d'Orodruin | [docs/design/orodruin-contract.md](docs/design/orodruin-contract.md) |
 | Console Eregion : sections, Glorfindel toujours présent, plan UI | [docs/design/console.md](docs/design/console.md) |

@@ -129,7 +129,7 @@ glorfindel migrate-rules --from <modifié> --base <livré> [--dry-run]  # règle
 glorfindel memory-stats                      # ChromaDB cycle count
 glorfindel bot                               # démarrer le bot Discord interactif
 glorfindel dashboard                         # TUI full-screen : resources + feed + escalations
-eregion console [--sections annatar,gothmog] # la console web sur http://localhost:7007 (pip install eregion[console]) ;
+eregion console [--sections annatar,gothmog] # la console web sur http://localhost:7007 (pip install -e '.[console]' depuis le clone) ;
                                              # Glorfindel toujours, Annatar et Gothmog s'ils ont des runs sur l'hôte
                                              # (ou --sections) ; `glorfindel war-room` reste un alias caché
                                              # toujours un jeton : EREGION_CONSOLE_TOKEN, sinon tiré au premier démarrage
@@ -462,18 +462,23 @@ L'image d'Annatar (Orodruin) s'installe encore depuis `pyproject.toml`, sans ver
 
 ---
 
-## Packaging
+## Packaging et version
 
 ```
-name = "eregion", version = "0.2.0", Apache 2.0 ✓
-entrypoints : annatar + glorfindel + gothmog CLIs
-wheel : eregion-0.2.0-py3-none-any.whl ✓
+name = "eregion", version dans pyproject.toml, Apache 2.0
+entrypoints : annatar, glorfindel, gothmog, eregion (la console)
+installation : depuis le dépôt (make install, ou pip install -e '.[console]')
 ```
+
+**La PR de version** (`chore(release): X.Y.Z — …`) change ensemble la version de `pyproject.toml`, le
+`CHANGELOG.md` (`[Unreleased]` → `[X.Y.Z]`) et la ligne « **Status — vX.Y.Z.** » du README :
+`tests/unit/test_readme.py` échoue tant que le README n'a pas suivi (SEC6). Puis la release en brouillon
+(`gh release create --draft`), que Jonathan publie (CD de H0).
 
 ---
 
 ## Coûts réels (West Europe)
 
 - **Infra existante** : LLM API uniquement (Anthropic défaut), <$2/mois (~$0.05–0.10 par run)
-- **Infra Celebrimbor (Terraform)** : ~$25–35/mois (VM ~6h/jour + disques + IP + backup + LAW). Jetable — `make celebrimbor-stop` pour pauser sans détruire. ⚠️ **`celebrimbor-down` est GARDÉ** (suite incident 2026-06-25 où un `down` non scopé a emporté tout le baseline) : il est **symétrique de `up`** et **protège le baseline**. `make celebrimbor-down TOPO=multinic` → destruction **scopée** d'une topo (via `-target` sur son RG), baseline intact. `make celebrimbor-down` **sans arg refuse** et exige `CONFIRM=<instance>` pour un teardown total (baseline inclus). Retirer une topo proprement = `enabled: false` dans `config.yaml` + `make celebrimbor-up`. Convention : chaque topo définit `azurerm_resource_group.<topo>` (count) = la cible `-target`.
+- **Infra Celebrimbor (Terraform)** : ~$25–35/mois (VM ~6h/jour + disques + IP + backup + LAW). Jetable — `make celebrimbor-stop` pour pauser sans détruire. `make celebrimbor-up` montre le plan et demande « yes » ; `YES=1` l'applique sans le relire (SEC6, comme les autres cibles Terraform). ⚠️ **`celebrimbor-down` est GARDÉ** (suite incident 2026-06-25 où un `down` non scopé a emporté tout le baseline) : il est **symétrique de `up`** et **protège le baseline**. `make celebrimbor-down TOPO=multinic` → destruction **scopée** d'une topo (via `-target` sur son RG), baseline intact. `make celebrimbor-down` **sans arg refuse** et exige `CONFIRM=<instance>` pour un teardown total (baseline inclus). Retirer une topo proprement = `enabled: false` dans `config.yaml` + `make celebrimbor-up`. Convention : chaque topo définit `azurerm_resource_group.<topo>` (count) = la cible `-target`.
 - **Chaos Studio (G0)** : facturé à l'usage des expériences (une panne de 5 min sur une VM). Feu vert du 15/10 sur une estimation de 11 à 42 € par mois pour 2 à 4 campagnes (ROADMAP) ; le coût réel est à relever sur la facture après le premier run.

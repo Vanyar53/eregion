@@ -26,6 +26,15 @@ PAGES = ("/", "/glorfindel", "/annatar", "/gothmog", "/config")
 NOW = datetime.now(timezone.utc)
 
 
+@pytest.fixture(autouse=True)
+def _now_when_the_test_starts():
+    """NOW is the clock when each test starts, not when this file was imported: a long suite
+    (the CI's) no longer ages it past the windows and heartbeats the code under test compares
+    with its own clock (SEC6, P-08)."""
+    global NOW
+    NOW = datetime.now(timezone.utc)
+
+
 @pytest.fixture()
 def runs(tmp_path, monkeypatch):
     """runs/ in tmp, the console's working directory; the windows where the conftest puts them."""

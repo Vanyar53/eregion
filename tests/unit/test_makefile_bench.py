@@ -101,3 +101,20 @@ def test_nothing_found_is_said_and_nothing_acts(tmp_path, target):
     assert code == 0, out
     assert "Aucune VM celebrimbor" in out and "VM 'nowhere'" in out
     assert all(c.startswith("vm list") for c in calls)
+
+
+# ── celebrimbor-up: the plan shown and confirmed, unless YES=1 (SEC6, P-10) ─────────────
+
+@pytest.mark.parametrize("args", [(), ("TOPO=multinic",)])
+@pytest.mark.parametrize("yes", [False, True])
+def test_up_applies_without_confirmation_only_with_yes(yes, args):
+    """Like the other Terraform targets: `make celebrimbor-up` shows the plan and asks; only
+    YES=1 passes -auto-approve. Read with `make -n`: nothing runs, no Terraform called."""
+    env = {k: v for k, v in os.environ.items() if k not in ("YES", "TOPO", "INSTANCE")}
+    res = subprocess.run(["make", "-n", "-s", "--no-print-directory", "-C", str(ROOT), "celebrimbor-up",
+                          *args, *(["YES=1"] if yes else [])], env=env, capture_output=True, text=True,
+                         timeout=60)
+    assert res.returncode == 0, res.stderr
+    applies = [line for line in res.stdout.splitlines() if " apply" in line]
+    assert len(applies) == 2                       # the TOPO branch and the other
+    assert all(("auto-approve" in line) is yes for line in applies)

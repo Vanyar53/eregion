@@ -45,9 +45,10 @@ def test_the_body_carries_the_evidence_then_why_nothing_ran():
     assert description.startswith("13 failed SSH logins")
     assert names["Cible"] == "`198.51.100.7:22`"
     assert names["Règle"] == "`ssh-brute-force`" and names["Confiance"] == "95 %"
-    assert names["Pourquoi rien n'est exécuté"] == "Mode human_only — action retenue"
+    # escaped for Discord (SEC6: tests/unit/test_chat_escaping.py): it shows « human_only »
+    assert names["Pourquoi rien n'est exécuté"] == "Mode human\\_only — action retenue"
     # an older card without an explanation falls back on its reason
-    assert bot._embed_body(_held_block(explanation=""))[0] == "Mode human_only — action retenue"
+    assert bot._embed_body(_held_block(explanation=""))[0] == "Mode human\\_only — action retenue"
 
 
 def _verdict_buttons(esc):

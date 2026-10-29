@@ -7,7 +7,8 @@ les trois zones, l'arborescence). Les schémas sont en Mermaid (rendus par GitHu
 commun : rouge = attaque (Annatar), bleu = Glorfindel, ambre = garde ou vérification, vert = humain ou succès,
 violet = Azure, rose = escalade ou échec, gris = données.
 Pour **comment on prouve** que tout cela tient, voir [`design/preuves.md`](design/preuves.md) ;
-pour l'isolation compatible avec l'infrastructure as code, [`design/module-isolation-iac.md`](design/module-isolation-iac.md).
+pour l'isolation compatible avec l'infrastructure as code, [`design/module-isolation-iac.md`](design/module-isolation-iac.md) ;
+pour les frontières, qui y est de confiance et ce qui les tient, le [modèle de menace](design/modele-de-menace.md).
 
 ## La boucle complète
 

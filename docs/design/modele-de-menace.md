@@ -152,14 +152,16 @@ Trois canaux, à ne pas confondre :
 | R | Une release sans histoire | `CHANGELOG.md`, une issue par lot ; les sessions préparent une release en brouillon, le mainteneur la publie |
 | I | Un secret exposé au code d'une PR | `pull_request_target` et `workflow_run` ne récupèrent ni n'exécutent jamais le code d'une PR (récupération partielle du seul script, sans identifiants persistés) ; des permissions en lecture seulement, partout |
 | D | Une CI rouge passée inaperçue | Annoncée dans `#ci`, avec mention ; le CD de H0 attend une CI verte |
+| D | Un Dockerfile ou un verrou cassé vu seulement au préflight de H0 : la release brûlée | Les deux images construites et éprouvées dans la PR et sur `main` (CI1, `images.yml`) : `--version`, les imports du préflight du CD, la config d'exemple sous A3, pas root, rien de Glorfindel dans l'image des injecteurs. Construites sans push, sans registre, sans secret, actions épinglées par commit ; chaque vérification est un `docker run --network none` (`scripts/image_check.py`, testé) |
 | E | Une release piégée déployée sur H0 | Le CD exige un tag sur `origin/main`, jamais réécrit, tous les checks verts, un préflight dans la candidate, et revient en arrière si la santé échoue (H1) |
 
-**Où c'est** : `.github/workflows/`, `.github/CODEOWNERS`, `scripts/notify_discord.py`, `infra/glorfindel-host/` (le CD) ; tests `tests/unit/test_workflows.py`, `tests/unit/test_notify_discord.py`, `tests/unit/test_host_cd.py`, `tests/unit/test_dependency_lock.py`.
+**Où c'est** : `.github/workflows/`, `.github/CODEOWNERS`, `scripts/notify_discord.py`, `scripts/image_check.py`, `infra/glorfindel-host/` (le CD) ; tests `tests/unit/test_workflows.py`, `tests/unit/test_notify_discord.py`, `tests/unit/test_host_cd.py`, `tests/unit/test_dependency_lock.py`, `tests/unit/test_image_check.py`.
 
 **Ouvert** :
 - un secret Azure de longue durée pour le canari — planifié ;
 - quelques actions sans secret encore nommées par leur tag — planifié ;
-- la publication du paquet — planifié.
+- la publication du paquet — planifié ;
+- les images déployées ne sont pas encore celles que la CI éprouve — planifié : #267.
 
 ---
 

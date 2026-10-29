@@ -458,7 +458,86 @@ décisions doivent rester celles d'avant ; puis `make glorfindel-host-start REF=
 (`infra/glorfindel-host/README.md`). Un test (`tests/unit/test_dependency_lock.py`) échoue si une
 dépendance de `pyproject.toml` manque au verrou ou n'y satisfait plus sa plage : `make lock`.
 
-L'image d'Annatar (Orodruin) s'installe encore depuis `pyproject.toml`, sans verrou.
+Les deux images sont construites et éprouvées en CI à chaque PR qui touche le verrou (CI1,
+ci-dessous) : un verrou cassé échoue dans la PR.
+
+---
+
+## La CI des images (CI1, #267, 29/10)
+
+Avant CI1, la CI ne construisait aucune image : compose était seulement rendu (`make
+profiles-check`). L'image de Glorfindel n'était construite que sur H0, par le CD. Un Dockerfile ou
+un verrou cassé n'apparaissait qu'à son préflight : la release était refusée, sans dégât, mais
+brûlée. L'image des injecteurs n'était construite que sur le poste de l'opérateur (`make
+orodruin-push`).
+
+**Le workflow** `.github/workflows/images.yml` (job `image (glorfindel)` et `image (annatar)`)
+tourne sur les PR et sur `main` quand ce qui entre dans une image change : un Dockerfile,
+`.dockerignore`, `requirements/`, `pyproject.toml`, `docker-compose.yml`, la config d'exemple, les
+paquets et fichiers copiés (`glorfindel/`, `annatar/`, `gothmog/`, `eregion_core/`,
+`eregion_console/`, `analysis/`, `scripts/`, `technique_catalog.yaml`). Une PR de docs ou de tests
+seuls ne le lance pas. `tests/unit/test_image_check.py` lit les `COPY` de chaque Dockerfile et
+échoue si un chemin copié manque à la liste.
+
+1. **La construction** : `docker/build-push-action`, épinglée par commit, comme
+   `docker/setup-buildx-action`. Elle prend le Dockerfile de l'image, le dépôt pour contexte, aucun
+   build-arg : l'UID/GID par défaut de l'image, rien n'est monté. Le cache de GitHub Actions est
+   pris, avec une portée par image. L'image est chargée dans le docker du runner (`eregion-<image>:ci`),
+   **jamais poussée** : aucun registre, aucune connexion, aucun secret, `contents: read`.
+2. **Dans l'image**, `python3 scripts/image_check.py <image>`. Chaque vérification est un `docker run
+   --rm --network none` qui ne prend rien de l'environnement de l'hôte : aucun secret, aucun réseau
+   Azure. Elle lance une commande, jamais le `CMD` de l'image : rien ne démarre.
+   - Glorfindel : `glorfindel --version` est la version de `pyproject.toml`. La watch, le bot et
+     la console importent : les mêmes imports que le préflight du CD (`eregion_cd.py`, étape 5),
+     et un test garde les deux alignés. `glorfindel-config.yaml.example` passe la lecture stricte
+     d'A3 : il est monté en lecture seule là où compose monte la config, puis ouvert avant d'être
+     lu, car un fichier absent se lirait comme une config vide. L'image ne tourne pas en root.
+   - Annatar (l'image des injecteurs) : `annatar --version` est la version de `pyproject.toml`.
+     Annatar et Gothmog importent. Ni Glorfindel, ni la console, ni leurs dépendances (la liste de
+     D1, `scripts/component_check.py`) ne sont dans l'image. Elle ne tourne pas en root.
+
+   Toutes les vérifications tournent, même après un échec : le journal dit tout ce qui ne va pas
+   d'un coup. Le script sort en 0 si tout passe, en 1 sinon, en 2 si docker manque.
+
+**En local, la même chose** : `make images-check` construit les deux images comme le job, sans le
+cache de GitHub (`python3 scripts/image_check.py <image> --build`), puis les éprouve. Les tags
+`eregion-glorfindel:ci` et `eregion-annatar:ci` ne touchent pas les images de `make build`
+(`:latest`, à l'UID/GID de l'opérateur). `python3 scripts/image_check.py glorfindel --image <nom>`
+éprouve une image déjà construite.
+
+**Ce qu'il attrape** (démontré le 29/10 sur des copies cassées exprès, rien de poussé) :
+
+| Copie cassée | Où le job échoue |
+|---|---|
+| `requirements/glorfindel.txt` : litellm épinglée à une version dont le verrou n'a pas les empreintes | la construction : pip refuse (« THESE PACKAGES DO NOT MATCH THE HASHES ») |
+| `requirements/annatar.txt` : une dépendance (click) retirée du verrou | la construction : pip refuse (« all requirements must have their versions pinned ») |
+| `annatar/Dockerfile` : un `COPY` d'un fichier qui n'existe pas | la construction (« not found ») |
+| `glorfindel/Dockerfile` sans `COPY eregion_console/` : l'image se construit | la vérification : « la watch, le bot et la console importent », code 1 (`No module named 'eregion_console'`) |
+
+**Durées mesurées** (29/10, poste de l'opérateur, WSL2, image de base déjà tirée, sans le cache de
+GitHub) :
+
+| | Glorfindel | Annatar |
+|---|---|---|
+| sans cache (`--no-cache`) | 72 s | 34 s |
+| avec cache, rien de changé | 6 s | 6 s |
+| avec cache, du code changé (`eregion_core/`) : la couche des dépendances reste | 8 s | 5 s |
+| les vérifications dans l'image | 4 s | 2 s |
+
+Sur un runner de GitHub, il faut ajouter le tirage de `python:3.12-slim`, le téléchargement depuis
+PyPI et l'écriture du cache (`mode=max`, la couche des dépendances de Glorfindel pèse environ 1 Go).
+La durée réelle se lit au premier run sur la PR. Elle est bornée à 30 min par job.
+
+**Le job requis ?** C'est la décision de Jonathan (protection de `main`). Attention : un workflow
+filtré par chemins ne tourne pas sur une PR qui ne touche aucun de ses chemins. Son check, s'il est
+requis, y resterait alors « attendu » et bloquerait la fusion. Pour le rendre requis, il faut soit
+retirer le filtre (le job tourne à chaque PR ; avec le cache, c'est surtout l'écriture du cache qui
+coûte), soit ajouter un job compagnon du même nom qui passe quand les chemins ne sont pas touchés.
+
+**Et le CD de H0** : il exige que tous les checks du commit d'une release soient verts. Un job
+`image` rouge sur `main` fait donc refuser la release, avant même son préflight. L'étape 2 de #267
+(publier l'image éprouvée sur GHCR avec sa provenance, et la faire tirer par son digest par H0 et
+Orodruin) se décide avec Jonathan.
 
 ---
 

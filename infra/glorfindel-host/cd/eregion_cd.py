@@ -3,10 +3,10 @@
 infra/glorfindel-host/README.md, « Le CD de H0 »).
 
   eregion_cd.py run      the timer's pass (systemd, every 5 min): the latest release, if new,
-                         verified, built aside, preflighted, switched to, kept if healthy —
-                         else H0 goes back to what ran
+                         verified, its published image pulled by digest and proven,
+                         preflighted, switched to, kept if healthy — else H0 goes back to what ran
   eregion_cd.py check    the same pass up to the preflight, never switching (the first
-                         installation, by hand): verified, built, preflighted, said
+                         installation, by hand): verified, pulled, proven, preflighted, said
   eregion_cd.py retry    forget that the latest release failed or was refused, then run
   eregion_cd.py status   what runs, the latest release, the outcomes
   eregion_cd.py export-discord-env   on the operator's machine: #deploy's webhook and the
@@ -19,12 +19,16 @@ The trigger is Jonathan publishing a release (sessions prepare drafts). A pass:
      not in it); nothing to do when it runs already (the three containers), or failed or was
      refused before; a tag seen before on another commit is refused (a moved tag);
   2. its tag on origin/main, never older than what runs; every check run of its commit
-     completed, none red, the main one (lint + tests) among them (still running: wait for
-     the next pass, said once);
+     completed, none red, the main one (lint + tests) and the image's (publish (glorfindel))
+     among them (still running: wait for the next pass, said once; absent an hour: refused);
   3. requirements/glorfindel.txt changed since what runs: requirements/harness.json must match
      the lock (its sha256), H0's model, a complete judgment and no overconfident error;
-  4. the candidate eregion-glorfindel:<tag> built in a worktree of its own: the running image
-     and the checkout of ~/eregion do not move;
+  4. the candidate eregion-glorfindel:<tag>, never built here (CI3): the image the CI published
+     for the commit (ghcr.io/vanyar53/eregion-glorfindel:sha-<commit>, a hint), its signature
+     and its provenance proven by cosign — the publishing workflow of this repository, on main,
+     at this commit — then pulled by its digest; its labels are the tag and the commit, it runs as
+     H0's user; a digest that moved since the release was first seen is refused. The release's
+     files in a worktree of their own: the running image and the checkout of ~/eregion do not move;
   5. preflight in the candidate: `glorfindel --version` is the tag, the watch, the bot and the
      console import, H0's glorfindel-config.yaml passes A3's strict reading, compose renders;
   6. the image running now tagged by its reference (refused when there is none: no switch
@@ -44,8 +48,8 @@ The trigger is Jonathan publishing a release (sessions prepare drafts). A pass:
      refusal, a rollback, a failed rollback with Jonathan's mention. A refusal's detail (A3's
      words, compose's) stays in the journal: it may name the infrastructure.
 
-Installed in ~/.eregion-cd/ with deploy.sh, notify_discord.py and chat_text.py (SEC6: what a rule
-says, escaped for #deploy), never run from the checkout it
+Installed in ~/.eregion-cd/ with deploy.sh, notify_discord.py, chat_text.py (SEC6: what a rule
+says, escaped for #deploy), published_image.py and cosign (CI3, pinned), never run from the checkout it
 deploys, and never replaced by a deployment: after one, a release newer than the agent (the
 commit it was installed from, ~/.eregion-cd/installed-from) whose agent differs is said (make
 glorfindel-host-cd-install); an older release, never — installing from it would break the CD. One pass at a time, and none while a deployment by hand runs
@@ -71,6 +75,7 @@ HERE = Path(__file__).resolve().parent
 sys.path[:0] = [str(HERE), str(HERE.parents[2] / "scripts")]
 sys.path.append(str(HERE.parents[2] / "glorfindel"))
 import notify_discord as nd  # noqa: E402
+import published_image as pim  # noqa: E402  (CI3: the published image, found and verified)
 
 try:
     from chat_text import discord_text  # noqa: E402
@@ -121,14 +126,18 @@ VERSION = '{{index .Config.Labels "org.opencontainers.image.version"}}'
 LABELS = VERSION + ' {{index .Config.Labels "org.opencontainers.image.revision"}}'
 RED = {"failure", "timed_out", "cancelled", "action_required", "startup_failure", "stale"}
 MAIN_CHECK = "lint + tests"   # the CI's own job (ci.yml): a commit without it is not verified
-MAIN_CHECK_PASSES = 12        # an hour of passes before its absence is a refusal
+# CI3: the job that publishes the commit's image (publish.yml) — waited for like the CI's own.
+PUBLISH_CHECK = "publish (glorfindel)"
+MAIN_CHECK_PASSES = 12        # an hour of passes before a missing check is a refusal
+COSIGN = CD_HOME / "cosign"   # pinned (published_image.COSIGN_SHA256), checked before each use
 TAG_RE = r"[A-Za-z0-9][A-Za-z0-9._-]*"
 LOCK = "requirements/glorfindel.txt"
 ATTESTATION = "requirements/harness.json"
 AGENT_FILES = {"eregion_cd.py": "infra/glorfindel-host/cd/eregion_cd.py",
                "deploy.sh": "infra/glorfindel-host/deploy.sh",
                "notify_discord.py": "scripts/notify_discord.py",
-               "chat_text.py": "glorfindel/chat_text.py"}
+               "chat_text.py": "glorfindel/chat_text.py",
+               "published_image.py": "scripts/published_image.py"}
 
 
 class Quiet(Exception):
@@ -269,15 +278,23 @@ def verify(tag: str, commit: str, dep_commit: str, state: dict) -> None:
         say_once(state, tag, "ci", f"⏳ {tag} attend sa CI", f"commit {commit[:12]} : pas encore verte, "
                  "le CD repasse toutes les 5 minutes", color=nd.BLUE)
         raise Quiet(f"{tag} : CI en cours")
-    if not any(str(r.get("name", "")).startswith(MAIN_CHECK) for r in runs):
-        # Another workflow may finish before the CI's job is even created: waited for, an hour.
+    # Another workflow may finish before the CI's job is even created: waited for, an hour. The
+    # job that publishes the image too (CI3): a release from before it has none — refused then.
+    # Each check has its own count: an hour for the CI's job, then an hour for the image's.
+    for name, what, kind in ((MAIN_CHECK, "sa CI principale", "ci-main"), (PUBLISH_CHECK, "son image publiée", "ci-image")):
+        if any(str(r.get("name", "")).startswith(name) for r in runs):
+            continue
         waits = state.setdefault("waits", {})
-        waits[tag] = waits.get(tag, 0) + 1
-        if waits[tag] <= MAIN_CHECK_PASSES:
-            say_once(state, tag, "ci-main", f"⏳ {tag} attend sa CI principale", f"pas encore de « {MAIN_CHECK} » "
+        key = tag if name == MAIN_CHECK else f"{tag} {name}"
+        waits[key] = waits.get(key, 0) + 1
+        if waits[key] <= MAIN_CHECK_PASSES:
+            say_once(state, tag, kind, f"⏳ {tag} attend {what}", f"pas encore de « {name} » "
                      f"sur {commit[:12]}", color=nd.BLUE)
-            raise Quiet(f"{tag} : CI principale absente ({waits[tag]}/{MAIN_CHECK_PASSES})")
-        raise Refused(f"la CI principale ({MAIN_CHECK}) n'a pas tourné sur {commit[:12]}, en une heure")
+            raise Quiet(f"{tag} : « {name} » absent ({waits[key]}/{MAIN_CHECK_PASSES})")
+        if name == MAIN_CHECK:
+            raise Refused(f"la CI principale ({MAIN_CHECK}) n'a pas tourné sur {commit[:12]}, en une heure")
+        raise Refused(f"aucune image publiée pour {commit[:12]} (« {PUBLISH_CHECK} » absent en une heure : une "
+                      "release d'avant CI3 ?) — H0 ne construit plus : publier une release de main d'après CI3")
 
 
 def check_runs(commit: str) -> list[dict]:
@@ -350,19 +367,73 @@ def attested(att: dict, tag: str, commit: str, model: str, hint: str) -> None:
         raise Refused(f"le harnais compte {entry.get('overconfident_errors')} erreur(s) surconfiante(s) pour {model}")
 
 
-def build(tag: str, commit: str, name: str = "") -> None:
-    """The candidate, from a worktree of its own: nothing that runs moves."""
+def aside(commit: str) -> None:
+    """The release's files in a worktree of their own (its compose, for the preflight): the
+    checkout of ~/eregion does not move."""
     work = CD_HOME / "build"
     git("worktree", "remove", "--force", str(work), check=False)
     git("worktree", "prune", check=False)
     made = git("worktree", "add", "-q", "--detach", str(work), commit, check=False)
     if made.returncode != 0:
-        raise Refused("le worktree de construction n'a pas pu être fait", tail(made))
-    res = sh("bash", str(CD_HOME / "deploy.sh"), "--build-only", tag, *([name] if name else []), cwd=work,
-             check=False, env={"EREGION_DEPLOY_LOCKED": "1"})
-    if res.returncode != 0:
-        raise Refused(f"la construction de {IMAGE}:{name or tag} a échoué (détail : make glorfindel-host-cd-status)",
-                      tail(res))
+        raise Refused("le worktree de la release n'a pas pu être fait", tail(made))
+
+
+def _run(argv: list) -> subprocess.CompletedProcess:
+    """docker and cosign, bounded (SEC4c): cut at its bound, code 124 — nothing proven."""
+    return pim.run(argv)
+
+
+# A registry or sigstore that does not answer: waited for an hour (12 passes), then refused, said.
+UNAVAILABLE_PASSES = 12
+
+
+def fetch(tag: str, commit: str, state: dict, name: str = "") -> str:
+    """The candidate, never built here (CI3): the image the CI published for the commit, its
+    digest read on the registry (a hint), proven by its signature and its provenance — the
+    publishing workflow of this repository, on main, at this commit — then pulled by that digest
+    and tagged eregion-glorfindel:<tag>. A digest that moved since this release was first seen
+    is refused (a published image is a promise, as its tag). Returns the digest."""
+    local = f"{IMAGE}:{name or tag}"
+    seen = state.setdefault("digests", {})
+    try:
+        digest = pim.resolve("glorfindel", commit)
+        if seen.get(tag, digest) != digest:
+            raise Refused(f"son image a bougé : {seen[tag][:19]}… → {digest[:19]}… ; une image publiée ne se "
+                          "remplace pas — publier une nouvelle release")
+        pim.verify("glorfindel", digest, commit, COSIGN, slug=SLUG, runner=_run)
+        pim.pull("glorfindel", digest, local, commit, version=tag, runner=_run)
+    except pim.Unverified as e:
+        # What a tool said stays in the detail (the journal); the reason, escaped (SEC6).
+        raise Refused(f"image de {tag} refusée : {discord_text(str(e))} — H0 ne construit pas d'image",
+                      e.detail) from None
+    except pim.Unavailable as e:
+        if e.detail:
+            print(e.detail)
+        tries = state.setdefault("unavailable", {})
+        tries[tag] = tries.get(tag, 0) + 1
+        if tries[tag] > UNAVAILABLE_PASSES:
+            raise Refused(f"image de {tag} illisible ou non prouvée depuis une heure : {discord_text(str(e))} — le "
+                          "détail : make glorfindel-host-cd-status", e.detail) from None
+        say_once(state, tag, "registry", f"⏳ {tag} : son image ne se lit pas encore", f"{discord_text(str(e))} — "
+                 "le CD repasse toutes les 5 minutes", color=nd.BLUE)
+        raise Quiet(f"{tag} : {e} ({tries[tag]}/{UNAVAILABLE_PASSES})") from None
+    state.get("unavailable", {}).pop(tag, None)
+    seen.setdefault(tag, digest)
+    fits(local)
+    print(f"{local} : {pim.reference('glorfindel')}@{digest}, signée et attestée ({pim.WORKFLOW}, {commit[:12]})")
+    return digest
+
+
+def fits(img: str) -> None:
+    """The published image runs as H0's user (published_image.UID): else it could write neither
+    ~/.glorfindel nor runs/ — refused before anything moves."""
+    res = pim.run(["docker", "run", "--rm", "--network", "none", img, "python", "-c",
+                   "import os; print(os.getuid(), os.getgid())"], timeout=120)
+    said, mine = " ".join(res.stdout.split()), f"{os.getuid()} {os.getgid()}"
+    if res.returncode != 0 or said != mine:
+        sh("docker", "image", "rm", img, check=False)
+        raise Refused(f"l'image tourne en {said or '?'} (uid gid), H0 en {mine} : elle ne pourrait pas écrire son "
+                      "état", tail(res))
 
 
 def preflight(tag: str, name: str = "") -> None:
@@ -797,11 +868,13 @@ def resume(state: dict, tag: str, cut: dict) -> int:
     return conclude(state, tag, dep_ref, why, url, "passage repris après une interruption ; santé verte", proof)
 
 
-def check_running(tag: str, commit: str, url: str) -> int:
-    """The dry run when the release runs already: rebuilt aside and preflighted, nothing moves."""
+def check_running(tag: str, commit: str, url: str, state: dict) -> int:
+    """The dry run when the release runs already: its published image found, verified, pulled
+    aside and preflighted, nothing moves — the path the next release takes, proven on H0."""
     name = f"check-{tag}"
     try:
-        build(tag, commit, name)
+        aside(commit)
+        digest = fetch(tag, commit, state, name)
         preflight(tag, name)
     except Refused as e:
         if e.detail:
@@ -810,8 +883,10 @@ def check_running(tag: str, commit: str, url: str) -> int:
         return 1
     finally:
         sh("docker", "image", "rm", f"{IMAGE}:{name}", check=False)
-    say(f"✅ À blanc : {tag}, en service, reconstruite et préflightée", "rien n'a bougé ; "
-        "make glorfindel-host-cd-enable pour que le CD déploie la prochaine release", color=nd.GREEN, url=url)
+        save_state(state)
+    say(f"✅ À blanc : {tag}, en service, tirée par son digest, vérifiée et préflightée",
+        f"{digest[:19]}… signée et attestée ; rien n'a bougé ; make glorfindel-host-cd-enable pour que le CD "
+        "déploie la prochaine release", color=nd.GREEN, url=url)
     return 0
 
 
@@ -866,14 +941,16 @@ def run_pass(check: bool = False) -> int:
             save_state(state)
             raise Quiet(f"{tag} : conteneurs dépareillés ({', '.join(lagging)})")
         if check:
-            return check_running(tag, commit, url)
+            return check_running(tag, commit, url, state)
         raise Quiet(f"{tag} tourne déjà")
     try:
         verify(tag, commit, dep_commit, state)
         lock_guard(tag, commit, dep_commit)
+        aside(commit)
+        digest = fetch(tag, commit, state)
         if not check:
-            say(f"🚀 H0 : déploiement de {tag}", f"{dep_ref or 'inconnu'} → {tag} ({commit[:12]})", color=nd.BLUE, url=url)
-        build(tag, commit)
+            say(f"🚀 H0 : déploiement de {tag}", f"{dep_ref or 'inconnu'} → {tag} ({commit[:12]}, image "
+                f"{digest[:19]}…)", color=nd.BLUE, url=url)
         preflight(tag)
         keep_the_way_back(dep_ref, dry=check)
     except Refused as e:
@@ -888,7 +965,7 @@ def run_pass(check: bool = False) -> int:
     finally:
         save_state(state)
     if check:
-        say(f"✅ À blanc : {tag} est prête", f"vérifiée, construite, préflight passé ; H0 reste sur {dep_ref}. "
+        say(f"✅ À blanc : {tag} est prête", f"vérifiée, son image publiée tirée par son digest et prouvée, préflight passé ; H0 reste sur {dep_ref}. "
             "make glorfindel-host-cd-enable pour que le CD la déploie.", color=nd.GREEN, url=url)
         return 0
     started = time.monotonic()
@@ -935,7 +1012,9 @@ def locked(fn):
 def status() -> int:
     state = load_state()
     ref, commit = deployed()
-    print(f"  tourne : {ref or 'inconnu'} ({commit[:12]})")
+    digest = state.get("digests", {}).get(ref, "")
+    print(f"  tourne : {ref or 'inconnu'} ({commit[:12]})" + (f", image {digest}" if digest else ""))
+    print(f"  cosign : {'✓ ' + pim.COSIGN_VERSION if pim.cosign_ok(COSIGN) else '✗ absent ou altéré'} ({COSIGN})")
     try:
         release = github("/releases/latest") or {}
         print(f"  dernière release : {release.get('tag_name', 'aucune')}")
@@ -978,6 +1057,7 @@ def main(argv: list[str]) -> int:
             state["said"].clear()
             state.pop("waits", None)
             state.pop("interrupts", None)
+            state.pop("unavailable", None)
             save_state(state)
         try:
             return run_pass(check=mode == "check")

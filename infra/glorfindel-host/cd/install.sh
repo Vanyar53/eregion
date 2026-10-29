@@ -25,9 +25,13 @@ if [ "${1:-}" = "--remove" ]; then
   exit 0
 fi
 
-for f in eregion_cd.py deploy.sh notify_discord.py chat_text.py eregion-cd.service eregion-cd.timer; do
+for f in eregion_cd.py deploy.sh notify_discord.py chat_text.py published_image.py cosign \
+         eregion-cd.service eregion-cd.timer; do
   [ -f "$SRC/$f" ] || die "$SRC/$f manque : make glorfindel-host-cd-install le copie"
 done
+# CI3: the CD verifies each release's image with this cosign, pinned by its sha256.
+sudo -u "$USER_NAME" python3 "$SRC/published_image.py" install-cosign "$SRC/cosign" >/dev/null \
+  || die "$SRC/cosign n'est pas le cosign épinglé (published_image.py, COSIGN_SHA256)"
 command -v python3 >/dev/null || die "python3 manque"
 id -nG "$USER_NAME" | grep -qw docker || die "$USER_NAME n'est pas dans le groupe docker"
 sed -e "s|@USER@|$USER_NAME|g" -e "s|@HOME@|$USER_HOME|g" "$SRC/eregion-cd.service" > "$UNITS/eregion-cd.service"

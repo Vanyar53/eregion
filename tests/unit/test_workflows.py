@@ -237,3 +237,76 @@ def test_only_the_dependency_audit_may_write_issues():
 ])
 def test_what_counts_as_writing_issues(perms, writes):
     assert _writes_issues(perms) is writes
+
+
+# ── CI3 (#267): publishing, minting an OIDC token, attesting — publish.yml's alone ────────────
+# A token that writes packages, an OIDC token sigstore certifies, the attestation store: what
+# makes an image H0 deploys (its CD trusts the signature of publish.yml on main). Only that
+# workflow holds them, at a job's level, and only on a push to this repository's main.
+PUBLISHING = ("packages", "id-token", "attestations")
+PUBLISH = ROOT / ".github" / "workflows" / "publish.yml"
+
+
+def _publishes(perms) -> bool:
+    if isinstance(perms, str):
+        return perms.strip() == "write-all"
+    return isinstance(perms, dict) and any(str(perms.get(p, "")).strip() == "write" for p in PUBLISHING)
+
+
+def test_only_the_publishing_workflow_may_write_packages_mint_tokens_or_attest():
+    docs = {p.name: _load(p) for p in WORKFLOWS}
+    writers = {name for name, doc in docs.items() if any(_publishes(p) for p in _permission_sets(doc))}
+    assert writers == {"publish.yml"}
+    doc = docs["publish.yml"]
+    assert doc["permissions"] == {"contents": "read"}               # the workflow's level: nothing more
+    (job,) = doc["jobs"].values()
+    assert job["permissions"] == {"contents": "read", "packages": "write", "id-token": "write",
+                                  "attestations": "write"}
+
+
+def test_the_publishing_workflow_runs_only_on_a_push_to_this_repositorys_main():
+    """Never a pull request (a fork's included), never a workflow_run or a dispatch: the job is
+    guarded by its repository, its ref and its event."""
+    doc = _load(PUBLISH)
+    assert doc["on"] == {"push": {"branches": ["main"]}}
+    (job,) = doc["jobs"].values()
+    guard = job["if"].replace(" ", "")
+    for part in ("github.repository=='Vanyar53/eregion'", "github.ref=='refs/heads/main'",
+                 "github.event_name=='push'"):
+        assert part in guard
+    assert "||" not in guard
+
+
+def test_the_publishing_workflow_proves_its_image_before_it_pushes_and_verifies_it_as_h0_does():
+    steps = _load(PUBLISH)["jobs"]["publish"]["steps"]
+    names = [s.get("name") or s["uses"].split("@")[0] for s in steps]
+    build = next(s for s in steps if str(s.get("uses", "")).startswith("docker/build-push-action"))
+    assert build["with"]["push"] is False and build["with"]["load"] is True
+    assert build["with"]["provenance"] is False and "cache-to" not in build["with"]   # main's cache: images.yml's
+    order = [names.index(n) for n in ("In the image (nothing started, no network, no secret)", "Push",
+                                      "actions/attest-build-provenance", "actions/attest-sbom", "Sign (keyless)",
+                                      "Verified as H0 verifies it")]
+    assert order == sorted(order)
+    runs = {s.get("name"): s.get("run", "") for s in steps}
+    assert runs["In the image (nothing started, no network, no secret)"].startswith("python3 scripts/image_check.py")
+    assert "published_image.py install-cosign" in runs["cosign"]          # the pinned cosign, as on H0
+    assert runs["Verified as H0 verifies it"].startswith("python3 scripts/published_image.py verify")
+    attest = next(s for s in steps if str(s.get("uses", "")).startswith("actions/attest-build-provenance"))
+    assert attest["with"]["push-to-registry"] is True and attest["with"]["subject-digest"] == \
+        "${{ steps.push.outputs.digest }}"
+    assert "UID=${{ steps.meta.outputs.uid }}" in build["with"]["build-args"]
+
+
+def test_the_publishing_workflow_is_the_identity_h0_trusts():
+    """The path the CD asks cosign for is this file (published_image.WORKFLOW), on main."""
+    text = (ROOT / "scripts" / "published_image.py").read_text(encoding="utf-8")
+    assert 'WORKFLOW = ".github/workflows/publish.yml"' in text and 'BRANCH_REF = "refs/heads/main"' in text
+    assert 'TRIGGER = "push"' in text and PUBLISH.exists()
+
+
+@pytest.mark.parametrize("perms, publishes", [
+    ({"packages": "write"}, True), ({"id-token": "write"}, True), ({"attestations": "write"}, True),
+    ("write-all", True), ({"packages": "read"}, False), ({"contents": "write"}, False), ("read-all", False),
+])
+def test_what_counts_as_publishing(perms, publishes):
+    assert _publishes(perms) is publishes

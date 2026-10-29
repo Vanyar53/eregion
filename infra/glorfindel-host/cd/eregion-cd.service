@@ -1,4 +1,5 @@
-# The CD of H0 (H1, #244): one pass — the latest release, verified, built aside, preflighted,
+# The CD of H0 (H1, #244): one pass — the latest release, verified, its published image pulled by
+# digest and proven (CI3: never built on H0), preflighted,
 # switched to, kept if healthy. Installed by `make glorfindel-host-cd-install` (install.sh);
 # @USER@ and @HOME@ are filled in then. The timer runs it every 5 minutes, once enabled.
 [Unit]
@@ -12,5 +13,6 @@ User=@USER@
 WorkingDirectory=@HOME@
 ExecStart=/usr/bin/python3 @HOME@/.eregion-cd/eregion_cd.py run
 Nice=10
-# A build and the health watch take minutes; a stuck pass ends, the next one starts over.
+# A pull (bounded, 10 min), the rules and the health watch take minutes; a stuck pass ends, the
+# next one starts over.
 TimeoutStartSec=45min

@@ -648,11 +648,53 @@ make install && pytest                  # la suite sur le nouveau verrou
 ```
 
 La PR dit ce qui change (le diff du verrou : LiteLLM, anthropic, langgraph, chromadb surtout).
-Avant de la fusionner, puis de redéployer H0, **Jonathan relance le harnais** (appels payants) :
-`make llm-compare MODELS=<modèle en service> RUNS=3` (ou `python scripts/llm_smoke.py`) — les
-décisions doivent rester celles d'avant ; puis `make glorfindel-host-start REF=<tag>`
+Avant de la fusionner, **Jonathan relance le harnais** (appels payants), qui écrit l'attestation
+que le CD de H0 exige (H1, H3) :
+
+```bash
+make install                            # le .venv suit le nouveau verrou (sinon : rien n'est lancé)
+make llm-compare MODELS=<modèle de H0> RUNS=3 ATTEST=1             # référence = le dernier tag v*
+make llm-compare MODELS=<modèle de H0> RUNS=3 ATTEST=1 BASE=v0.4.6 # H0 tourne sur une autre release
+git add requirements/harness.json       # dans la PR du verrou
+```
+
+**Deux passages** (H3, #324, `scripts/harness_attest.py`). Le harnais tourne d'abord sur la
+référence : le verrou de la release en service, installé avec `--require-hashes` dans un venv
+jetable, `~/.cache/eregion/harness-reference/<sha256>/`. Ce venv est gardé pour la fois suivante
+et ne va jamais dans le dépôt. Puis il tourne sur le candidat, le `.venv` du checkout. Le code et
+les cas sont les mêmes, seules les dépendances changent. `requirements/harness.json` garde les
+deux passages, et par cas chaque tirage (juste ou non, l'action, la confiance) : le CD juge cas
+par cas contre ce qui tourne (`infra/glorfindel-host/README.md`, « L'attestation du harnais »).
+Il refuse une régression, jamais une variation : le modèle par défaut refuse une température
+fixée, et le même verrou a donné 51/51, puis 50/51 (29/10).
+
+**Le coût : deux fois celui d'un passage.** Un passage, c'est 17 cas × 3 runs = 51 décisions.
+Une action disruptive est tirée 3 fois (`GLORFINDEL_DECISION_DRAWS`, D-1), une décision prudente
+une fois. Cela fait environ 130 appels au modèle par passage, 153 au plus, et environ 260 pour
+les deux, 306 au plus. La première fois, l'installation du venv de référence prend en plus
+quelques minutes (un `pip install` du verrou).
+
+**Une PR de verrou ne porte pas de code qui exige ses nouvelles dépendances.** La référence fait
+tourner le code du checkout sur l'ancien verrou : un code qui importe une dépendance que ce verrou
+n'a pas échoue à l'import, et rien n'est attesté (`harness_attest.py` le dit). Il faut séparer
+les PR : le verrou d'abord, attesté et déployé, puis le code qui s'en sert. Le harnais mesure le
+verrou, pas le code : un recul dû au code d'une release qui change aussi le verrou paraît des
+deux côtés (« faux des deux côtés »), dit, jamais refusé.
+
+Rien n'est lancé, donc rien n'est payé, dans quatre cas :
+- `RUNS` est sous 3, ou `--kinds` est passé avec `--attest` ou `--pass-out` ;
+- le `.venv` ne suit pas le verrou ;
+- le verrou du checkout est celui de la référence (« ce verrou est déjà celui de <tag> : donne
+  BASE=<la release d'avant> ») ;
+- `--attest` est passé sans référence, ou avec une référence qui ne correspond pas (runs,
+  modèles).
+
+Sans `ATTEST`, `make llm-compare` reste la comparaison d'un seul passage. Ensuite,
+`make glorfindel-host-start REF=<tag>`, ou la release publiée que le CD déploie
 (`infra/glorfindel-host/README.md`). Un test (`tests/unit/test_dependency_lock.py`) échoue si une
-dépendance de `pyproject.toml` manque au verrou ou n'y satisfait plus sa plage : `make lock`.
+dépendance de `pyproject.toml` manque au verrou ou n'y satisfait plus sa plage : `make lock`. Un
+autre (`tests/unit/test_llm_smoke.py`) échoue en CI si l'attestation commitée n'est plus celle du
+verrou, ne couvre pas le modèle par défaut, n'a pas de référence, ou est à l'ancien format.
 
 Les deux images sont construites et éprouvées en CI à chaque PR qui touche le verrou (CI1,
 ci-dessous) : un verrou cassé échoue dans la PR.

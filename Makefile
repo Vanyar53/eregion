@@ -309,8 +309,12 @@ campaign-report:
 report-eval:
 	$(PYTHON) scripts/report_eval.py --runs $(or $(RUNS),3)
 
+# H3: ATTEST=1 writes requirements/harness.json for H0's CD — two passes, paid twice: the lock
+# of the release in service (the latest v* tag, or BASE=<tag>) in a throwaway venv under
+# ~/.cache/eregion/, then this checkout's .venv (scripts/harness_attest.py, docs/operations.md).
+#   make llm-compare MODELS=<modèle de H0> RUNS=3 ATTEST=1 [BASE=v0.4.5]
 llm-compare:
-	$(PYTHON) scripts/llm_smoke.py --models $(MODELS) --runs $(or $(RUNS),3)$(if $(ATTEST), --attest requirements/harness.json)
+	$(if $(ATTEST),$(PYTHON) scripts/harness_attest.py --models $(MODELS) --runs $(or $(RUNS),3)$(if $(BASE), --base $(BASE)) --out requirements/harness.json,$(PYTHON) scripts/llm_smoke.py --models $(MODELS) --runs $(or $(RUNS),3))
 
 # ── Glorfindel ────────────────────────────────────────────────────────────
 

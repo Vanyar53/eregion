@@ -3966,6 +3966,60 @@ MUTANTS += [
 TESTS.update({f"M{n}": "tests/unit/test_image_check.py" for n in range(1480, 1490)})
 TESTS["M1486"] = "tests/unit/test_workflows.py"
 
+# CI3 (#267, step 2): the images published, signed, pulled by their digest — the reader and
+# verifier (scripts/published_image.py, a fake registry and a fake cosign), H0's CD (a fake
+# docker, GitHub, registry and cosign), the publishing workflow. M1650–M1669.
+PIM = "scripts/published_image.py"
+PUB = ".github/workflows/publish.yml"
+MUTANTS += [
+    ("M1650", "the registry's digest header believed over the bytes read: a lying registry unseen (CI3)", PIM,
+     "    if said and said != digest:\n", "    if False:\n"),
+    ("M1651", "a manifest read by a digest it is not passes (CI3)", PIM,
+     '    if ref.startswith("sha256:") and ref != digest:\n', "    if False:\n"),
+    ("M1652", "cosign not asked for the commit: an image signed for another commit deployed (CI3)", PIM,
+     '"--certificate-github-workflow-sha", commit]', "]"),
+    ("M1653", "cosign not asked for the trigger: an image of a dispatched run deployed (CI3)", PIM,
+     '"--certificate-github-workflow-trigger", TRIGGER, ', ""),
+    ("M1654", "cosign not asked for the repository: a fork's image deployed (CI3)", PIM,
+     '"--certificate-github-workflow-repository", slug, ', ""),
+    ("M1655", "a refused signature let through to the provenance (CI3)", PIM,
+     '        raise Unverified("signature absente, ou d\'un autre workflow, dépôt, branche ou commit", _last(res))\n',
+     "        pass\n"),
+    ("M1656", "a signature over another digest accepted (CI3)", PIM,
+     "    if not signed or any(s != digest for s in signed):\n", "    if not signed:\n"),
+    ("M1657", "a provenance of two commits accepted when one of them is asked (CI3)", PIM,
+     "    if commits != {commit}:\n", "    if commit not in commits:\n"),
+    ("M1658", "the runner not read: an image built on a self-hosted runner accepted (CI3)", PIM,
+     ',\n            "runner": (gh.get("runner_environment"), "github-hosted")}', "}"),
+    ("M1659", "the provenance's subject name not read: another image's provenance accepted (CI3)", PIM,
+     's.get("name") == reference(image) and ', ""),
+    ("M1660", "cosign run without its pinned sha256 checked: an altered verifier trusted (CI3)", PIM,
+     "    if not cosign_ok(cosign):\n", "    if False:\n"),
+    ("M1661", "a downloaded cosign kept whatever its sha256 (CI3)", PIM,
+     "    if hashlib.sha256(body).hexdigest() != COSIGN_SHA256:\n", "    if False:\n"),
+    ("M1662", "the pulled image's commit label not read: another commit's image tagged as the release (CI3)", PIM,
+     "    if rev != commit or (version and ver != version):\n", "    if version and ver != version:\n"),
+    ("M1663", "a reference off main sent to Orodruin (CI3)", PIM,
+     "    if on_main.returncode != 0:\n", "    if False:\n"),
+    ("M1664", "any image id accepted on Orodruin after the load (CI3)", PIM,
+     "            if a.id.strip() not in ids(a.image, a.digest):\n", "            if False:\n"),
+    ("M1665", "a digest that moved since the release was first seen deployed (V-22, CI3)", CD,
+     "        if seen.get(tag, digest) != digest:\n", "        if False:\n"),
+    ("M1666", "the publishing job not waited for: a release from before CI3 refused at once, or deployed "
+              "before its image is attested (CI3)", CD,
+     ', (PUBLISH_CHECK, "son image publiée", "ci-image")):', "):"),
+    ("M1667", "the image's user not compared with H0's: a release that cannot write its state deployed (CI3)", CD,
+     "    if res.returncode != 0 or said != mine:\n", "    if res.returncode != 0:\n"),
+    ("M1668", "an unverified image made a silent wait instead of a refusal said with the mention (CI3)", CD,
+     '        raise Refused(f"image de {tag} refusée : {e} — H0 ne construit pas d\'image", e.detail) from None\n',
+     '        raise Quiet(f"{tag} : {e}") from None\n'),
+    ("M1669", "the publishing workflow run on pull requests too (a fork's included) (CI3)", PUB,
+     "on:\n  push:\n    branches: [main]\n", "on:\n  push:\n    branches: [main]\n  pull_request:\n"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_published_image.py" for n in range(1650, 1665)})
+TESTS.update({f"M{n}": "tests/unit/test_host_cd.py" for n in range(1665, 1669)})
+TESTS["M1669"] = "tests/unit/test_workflows.py"
+
 
 # SEC4c (#275, M1370–M1389): the entries and the calls — the restore's moment, the values
 # in a query, the timeouts, the short names, the floor, the T1136 rule, the private IPs.

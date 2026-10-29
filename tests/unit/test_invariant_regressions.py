@@ -1611,3 +1611,107 @@ def test_an_isolation_written_again_never_moves_down(monkeypatch):
         assert now[next(n for n in ours if not n.endswith("-out"))] == p, now
     finally:
         shutil.rmtree(m.home, ignore_errors=True)       # the allows aren't the machine's
+
+
+def _gone_world(monkeypatch, *, isolated: bool, nic_to_web1: bool = False):
+    """web2 (maybe isolated by rules, no quarantine) blocked, its block's entry lost — a
+    crash before it was written, or written over —, then web2 deleted. `nic_to_web1`: its
+    NIC kept and given to web1 (another VM named web), which blocks the attacker too —
+    under the same names, the NIC's and the VM's name being the same."""
+    from glorfindel import actions
+
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    m.build(_net(subnet_nsg=[]))
+    c = m.connector
+    if isolated:
+        assert c.isolate_vm(WEB2)["status"] == "isolated"
+    assert c.block_suspicious_ip(ATTACKER, WEB2, scope="vm", threat_port=22)["status"] == "blocked"
+    for f in actions._BLOCK_STATE_DIR.glob("*.json"):
+        f.unlink()
+    web2 = m.fake.vms.pop(key(WEB2))
+    if nic_to_web1:
+        m.fake.vms[key(WEB1)]["nics"] += web2["nics"]
+        assert c.block_suspicious_ip(ATTACKER, WEB1, scope="vm", threat_port=22)["status"] == "blocked"
+    else:
+        for n in web2["nics"]:
+            m.fake.nics.pop(key(n))
+    return m
+
+
+def _block_rules(m) -> set:
+    return {n for n in m.fake.nsgs[key(_SUBNET)]["rules"] if n.startswith(_WEB2_BLOCK)}
+
+
+def test_an_unblock_of_a_deleted_vm_takes_the_block_its_records_name(monkeypatch):
+    """I7S's cause on the unblock's side (I5R): the VM gone, the unblock answered
+    `not_found` without looking (`return [], []`), the block left on the subnet's NSG for
+    whoever gets the address. The NIC its isolation's state still names: the block goes,
+    the isolation's rules stay."""
+    import shutil
+
+    m = _gone_world(monkeypatch, isolated=True)
+    try:
+        iso = {n for n in m.fake.nsgs[key(_SUBNET)]["rules"] if n.startswith("glorfindel-iso")}
+        assert _block_rules(m) and iso
+        out = m.connector.unblock_ip(ATTACKER, WEB2)
+        assert out["status"] == "unblocked", out
+        assert not _block_rules(m)
+        assert {n for n in m.fake.nsgs[key(_SUBNET)]["rules"] if n.startswith("glorfindel-iso")} == iso
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)
+
+
+def test_an_unblock_of_a_deleted_vm_says_the_block_nothing_names(monkeypatch):
+    """Nothing names its NIC any more: the rules can't be told from a deleted homonym's —
+    left, and said; never `not_found`."""
+    import shutil
+
+    m = _gone_world(monkeypatch, isolated=False)
+    try:
+        left = _block_rules(m)
+        out = m.connector.unblock_ip(ATTACKER, WEB2)
+        assert out["status"] == "unblock_partial", out
+        assert all(any(r in f for f in out["failed"]) for r in left), out
+        assert _block_rules(m) == left
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)
+
+
+def test_an_unblock_of_a_deleted_vm_leaves_its_old_nic_on_another_vm(monkeypatch):
+    """Its NIC given to another VM named web, blocked there under the same names: that
+    block is the other VM's — the unblock of the deleted one leaves it."""
+    import shutil
+
+    m = _gone_world(monkeypatch, isolated=True, nic_to_web1=True)
+    try:
+        left = _block_rules(m)
+        assert left
+        out = m.connector.unblock_ip(ATTACKER, WEB2)
+        assert out["status"] == "not_found", out
+        assert _block_rules(m) == left
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)
+
+
+@pytest.mark.parametrize("which", ["blocks", "isolation"])
+def test_an_unblock_of_a_deleted_vm_with_a_state_unreadable_says_it(monkeypatch, which):
+    """Its block or isolation state can't be read: the NICs it may name are unknown —
+    `unblock_partial`, the file named."""
+    import shutil
+
+    from glorfindel import actions
+
+    m = _gone_world(monkeypatch, isolated=True)
+    try:
+        d = actions._BLOCK_STATE_DIR if which == "blocks" else actions._ISOLATION_STATE_DIR
+        if which == "blocks":
+            d.mkdir(parents=True, exist_ok=True)
+            (d / f"web--{actions._rid_hash(WEB2)}.json").write_text("{not json")
+        else:
+            next(d.glob("*.json")).write_text("{not json")
+        out = m.connector.unblock_ip(ATTACKER, WEB2)
+        assert out["status"] == "unblock_partial", out
+        assert any(f"{d.name}/" in f and "illisible" in f for f in out["failed"]), out
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)

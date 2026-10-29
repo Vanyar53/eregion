@@ -460,6 +460,57 @@ dépendance de `pyproject.toml` manque au verrou ou n'y satisfait plus sa plage 
 
 L'image d'Annatar (Orodruin) s'installe encore depuis `pyproject.toml`, sans verrou.
 
+### Les avis de vulnérabilité des verrous (CI2)
+
+CI2 (#268) surveille les trois verrous. Les constats du contre-audit étaient P-03 (aucun scanner) et N-16 (un
+rafraîchissement du verrou sans contrôle).
+
+- **Le workflow** `.github/workflows/pip-audit.yml` tourne chaque mardi et à la demande
+  (`workflow_dispatch`). Il passe `pip-audit` sur `requirements/dev.txt`, `glorfindel.txt` et
+  `annatar.txt`, chacun lu tel quel : `--require-hashes --disable-pip`. Rien n'est résolu : les
+  versions sont celles du verrou, et seul le service des avis (pypi.org) est interrogé. Les
+  marqueurs sont évalués pour le Python du runner (3.12, Linux, celui de l'image). Une broche
+  propre à 3.11 (numpy) n'est donc pas lue.
+- **pip-audit a son propre verrou**, `requirements/audit.txt` (issu de `requirements/audit.in`,
+  version épinglée), avec empreintes. Il s'installe dans un venv à part, jamais dans l'image ni
+  dans `dev.txt`. Le workflow utilise le Python du runner, sans action tierce. Son seul secret est
+  le jeton du dépôt, avec les droits `contents: read` et `issues: write`.
+- **Une issue par avis**, label `security` (`scripts/pip_audit_issues.py`). Elle donne le paquet,
+  la version de chaque verrou touché, les versions corrigées, et les identifiants (GHSA, CVE,
+  PYSEC) avec leurs liens.
+  - **Le même avis ne donne jamais deux issues.** Le corps de l'issue garde une clé : le paquet,
+    tous les identifiants vus, les verrous. Une issue dont la clé nomme le paquet et partage un
+    identifiant est celle de cet avis, ouverte ou fermée, quels que soient son titre et ses
+    labels. Les doublons de pip-audit et un même avis dans plusieurs verrous sont fusionnés.
+  - **Une issue ouverte** est réécrite quand ce qu'elle dit change : un verrou, une version, un
+    correctif, un alias.
+  - **Une issue fermée comme faite** alors que l'avis est toujours là est rouverte, avec un
+    commentaire. Une issue fermée comme « non prévue » est une décision humaine : elle est laissée.
+  - **Un avis qui n'est plus trouvé** reçoit un seul commentaire (« la montée est faite ? »). Le
+    workflow ne ferme jamais l'issue : un humain la ferme. Cela ne vaut que si tous les verrous de
+    l'issue ont été lus ce passage-là. Un audit en échec ne dit rien d'un avis.
+  - Le texte venu du dehors (identifiants, nom, version) est vérifié sur sa forme. La description
+    d'un avis n'est jamais écrite.
+- **Jamais une PR de montée.** La montée passe par la procédure plus haut : `make lock`, une PR,
+  puis le harnais (`make llm-compare … ATTEST=1`, Jonathan). Une montée de LiteLLM est le lot
+  DEP1 (#282).
+- **Le run est rouge** quand un humain a du neuf à voir : une issue ouverte ou rouverte, ou un avis
+  revenu. Il l'est aussi quand un audit a échoué. `notify.yml` annonce ce run rouge dans `#ci`, avec
+  une mention, parce qu'une issue ouverte par le jeton du workflow ne déclenche aucun workflow.
+  Dans les autres cas, le run est vert.
+- **`make lock` dit les avis du verrou qu'il vient d'écrire** (`make audit`, N-16), sans jamais
+  échouer : c'est une information pour la PR de montée. `make audit` seul fait la même chose à
+  tout moment. La première fois, il crée `.venv-audit/` depuis `requirements/audit.txt`.
+
+```bash
+make audit                              # les avis connus des trois verrous (lecture seule)
+```
+
+**Les alertes Dependabot** de GitHub, sans les PR automatiques, sont une décision de Jonathan. Au
+29/10, elles ne sont pas activées. Pour les activer :
+`gh api -X PUT repos/Vanyar53/eregion/vulnerability-alerts`. Les PR automatiques (« Dependabot
+security updates », `automated-security-fixes`) restent désactivées : on ne les active pas.
+
 ---
 
 ## Packaging et version

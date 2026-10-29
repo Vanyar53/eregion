@@ -5,6 +5,18 @@ Notable changes to Eregion. The format follows [Keep a Changelog](https://keepac
 ## [Unreleased]
 
 ### Security
+- **The advisories of the locked dependencies, one issue per advisory** (CI2, #268, 29/10; `docs/operations.md`, « Les avis de vulnérabilité des verrous »). Findings P-03 (no scanner) and N-16 (a lock refreshed unchecked).
+  - **A weekly workflow, also run by hand** (`.github/workflows/pip-audit.yml`). It runs `pip-audit` on `requirements/dev.txt`, `glorfindel.txt` and `annatar.txt`, each read as locked (`--require-hashes --disable-pip`): nothing is resolved, and only the advisory service is asked. pip-audit has its own pinned and hashed lock (`requirements/audit.txt`) and runs in a venv of its own. The workflow uses no third-party action and no secret but the repository's token (`contents: read`, `issues: write`).
+  - **One issue per advisory, label `security`** (`scripts/pip_audit_issues.py`, standard library). It gives the package, the version in each lock it touches, the fixed versions and the identifiers.
+    - The same advisory never opens two issues. A key kept in the issue's body (the package, every identifier seen, its locks) finds the issue, open or closed, whatever its title or labels became. pip-audit's duplicates and an advisory found in several locks are merged.
+    - An open issue is rewritten when what it says changes. An issue closed as done while the advisory is still there is reopened. An issue closed as not planned is left alone.
+    - An advisory no longer found gets one comment, only if every lock of its issue was read in that run. The workflow never closes the issue.
+    - The text of an advisory is checked against its shape, and its description is never written.
+  - **Never a pull request.** A bump goes through `make lock`, then the harness.
+  - **The run goes red when there is something new**: an issue opened or reopened, an advisory back, or an audit that failed. `notify.yml` announces it in `#ci`, because an issue opened by the workflow's token triggers no workflow.
+  - **`make lock` reports the advisories of the locks it just wrote** (`make audit`), and never fails on them.
+  - Tests `tests/unit/test_pip_audit_issues.py` (fake `pip-audit` and `gh`, a test lock with `requests==2.19.1`, CVE-2018-18074); mutants M1150–M1159.
+  - The first audit (29/10, run locally, no issue created) finds 6 advisories. Four are for chromadb 1.5.9 (`dev.txt`, `glorfindel.txt`), with no fixed version yet. Two are for litellm 1.86.1 (all three locks); 1.95.1 is the first version that fixes both (DEP1, #282).
 - **The decision facing a model, a memory or a line it did not expect** (SEC4a, #275, 28/10; `docs/glorfindel.md`, « gardes de `decide` », « Source d'un cycle », « Le canal runs/ »).
   - **The model's answer is read field by field, for its type.** An action that is not text, a confidence that is not a number of [0, 1] (a boolean, NaN, an infinity, 5.0: unknown, held by the confidence gate — no longer brought back into the range), steps that are not a list: the field is unreadable and the cycle escalates — it no longer raises. Only the decision schema's fields are kept from the answer. A property test over arbitrary JSON keeps it so.
   - **Every signal, an exercise too, is given real past cycles only**: an exercise's cycles, or cycles of unknown source, are no longer retrieved — so what the model is shown never tells it whether the current signal is an exercise. A cycle's identifier in the memory is drawn by the memory: a cycle is added, never overwritten; a replayed `respond` is retrieved once.

@@ -41,7 +41,7 @@ In particular, a way around a guard is a vulnerability: an action that runs wher
 
 **Out of scope**:
 - the maintainer's own bench, hosted instance, injectors' host, Azure subscription and Discord server — please do not test them;
-- a flaw in a dependency (report it upstream; tell us if the way Eregion uses it makes it worse);
+- a flaw in a dependency (report it upstream; tell us if the way Eregion uses it makes it worse). A published advisory on a locked version is already tracked: a weekly audit opens an issue labelled `security` for it (CI2);
 - what needs the operator's own rights already: root on the host, the console's token, the cloud credentials Eregion runs with.
 
 ## What is not a vulnerability

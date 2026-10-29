@@ -149,16 +149,18 @@ Trois canaux, à ne pas confondre :
 | T | Une action tierce déplacée sous son tag, dans un job qui tient un secret | Tout workflow qui tient un secret, ou tourne sur un événement qu'un fork déclenche, épingle ses actions par commit ; le canari installe Terraform depuis le dépôt signé de HashiCorp, sa clé vérifiée par son empreinte, sans action tierce (SEC6, `tests/unit/test_workflows.py`) |
 | T | Une valeur choisie (entrée d'un `workflow_dispatch`, titre d'une PR) exécutée comme du shell | Aucun `run:` ne prend `inputs.*`, `github.event.*` ni `github.head_ref` dans son texte : ces valeurs passent par `env:` (SEC6, testé) |
 | T | Une dépendance changée sous son numéro, ou prise sous un autre nom | Dépendances verrouillées, chaque fichier vérifié par son empreinte (M-3, `requirements/`) ; Eregion s'installe depuis le dépôt (README) |
+| T | Une dépendance verrouillée qui a un avis de vulnérabilité, et que personne ne voit | Chaque semaine, `pip-audit` lit les trois verrous tels quels (empreintes, rien de résolu). Il ouvre une issue par avis, label `security`, jamais deux pour le même avis. Le run est rouge dans `#ci` quand il y a du neuf. `make lock` dit les avis du verrou qu'il écrit. Jamais de PR de montée automatique : la montée passe par le harnais (CI2, `scripts/pip_audit_issues.py`) |
 | R | Une release sans histoire | `CHANGELOG.md`, une issue par lot ; les sessions préparent une release en brouillon, le mainteneur la publie |
 | I | Un secret exposé au code d'une PR | `pull_request_target` et `workflow_run` ne récupèrent ni n'exécutent jamais le code d'une PR (récupération partielle du seul script, sans identifiants persistés) ; des permissions en lecture seulement, partout |
 | D | Une CI rouge passée inaperçue | Annoncée dans `#ci`, avec mention ; le CD de H0 attend une CI verte |
 | E | Une release piégée déployée sur H0 | Le CD exige un tag sur `origin/main`, jamais réécrit, tous les checks verts, un préflight dans la candidate, et revient en arrière si la santé échoue (H1) |
 
-**Où c'est** : `.github/workflows/`, `.github/CODEOWNERS`, `scripts/notify_discord.py`, `infra/glorfindel-host/` (le CD) ; tests `tests/unit/test_workflows.py`, `tests/unit/test_notify_discord.py`, `tests/unit/test_host_cd.py`, `tests/unit/test_dependency_lock.py`.
+**Où c'est** : `.github/workflows/`, `.github/CODEOWNERS`, `scripts/notify_discord.py`, `scripts/pip_audit_issues.py`, `infra/glorfindel-host/` (le CD) ; tests `tests/unit/test_workflows.py`, `tests/unit/test_notify_discord.py`, `tests/unit/test_host_cd.py`, `tests/unit/test_dependency_lock.py`, `tests/unit/test_pip_audit_issues.py`.
 
 **Ouvert** :
 - un secret Azure de longue durée pour le canari — planifié ;
 - quelques actions sans secret encore nommées par leur tag — planifié ;
+- les versions propres à Python 3.11, hors de l'audit des verrous — planifié ;
 - la publication du paquet — planifié.
 
 ---

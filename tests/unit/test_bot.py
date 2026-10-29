@@ -379,7 +379,10 @@ def test_a_card_resolved_while_discord_archived_its_thread_is_still_greyed(monke
     assert thread.refused == 1 and len(thread.edits) == 1   # reopened, then edited once
     embed, view = thread.edits[0]
     assert next(f.value for f in embed.fields if f.name == "État") == "acquittée"
-    assert view.children and all(item.disabled for item in view.children)
+    # Acknowledged: its action, ack and command greyed; its verdict still to give (V-08).
+    acts = [i for i in view.children if not isinstance(i, bot._VerdictButton)]
+    assert acts and all(item.disabled for item in acts)
+    assert not any(i.disabled for i in view.children if isinstance(i, bot._VerdictButton))
     assert thread.calls == [False, True] and thread.archived  # reopened, then closed again
     assert "Sync" not in log.getvalue() and "50083" not in log.getvalue()
     assert asyncio.run(b._sync_messages()) == 0             # synced: no second attempt
@@ -574,3 +577,112 @@ def test_the_allowed_ids_come_from_the_environment(monkeypatch):
         bot.run()
         assert said in log.getvalue()
         assert started[0].users == ({111} if env else frozenset())
+
+
+# ── V-08 : un bouton périmé ne lance rien ────────────────────────────────────────────────
+# After a restart, only a card that still waits gets its buttons back — pending, or a decision
+# still to judge. At the click the card is read again: settled since (acknowledged, judged),
+# expired, or its VM gone from the discovery, the button answers « carte réglée » and runs
+# nothing.
+
+def _card(**kw):
+    from datetime import datetime, timezone
+    e = {**_held_block(), "id": kw.pop("id"), "status": "pending",
+         "first_seen": datetime.now(timezone.utc).isoformat()}
+    e.update(kw)
+    return e
+
+
+def test_only_a_card_that_still_waits_gets_its_buttons_back_after_a_restart():
+    from datetime import datetime, timedelta, timezone
+    old = (datetime.now(timezone.utc) - timedelta(days=bot._RESTORE_DAYS + 1)).isoformat()
+    gone = VM.replace("bree", "razed")
+    cards = [
+        _card(id="pending"),
+        _card(id="to-judge", status="resolved"),                       # acked, verdict to give
+        _card(id="settled", status="resolved", verdict="right"),       # acked and judged
+        _card(id="posture", status="resolved", escalation_type="posture_gap", action="posture_gap",
+              signal_id="posture-x"),                                    # acked, nothing to judge
+        _card(id="expired", first_seen=old),
+        _card(id="vm-gone", resource_id=gone),
+    ]
+    messages = {c["id"]: i + 1 for i, c in enumerate(cards)}
+    restored = [e["id"] for e, _ in bot._views_to_restore(cards, messages, known_vms={VM.lower()})]
+    assert restored == ["pending", "to-judge"]
+    # The discovery knows no VM (empty or unreadable): a VM is never said gone.
+    assert "vm-gone" in [e["id"] for e, _ in bot._views_to_restore(cards, messages, known_vms=None)]
+    # The sync still keeps every posted card in line (to grey the settled ones), expired aside.
+    assert "settled" in [e["id"] for e, _ in bot._posted_within(cards, messages)]
+
+
+def _revert_card():
+    return escalations.record("verify-0123abcd", VM, "isolate_vm", "verification_failed",
+                              "isolation not verified", confidence=0.9)
+
+
+def _revert(view):
+    return next(i for i in view.children if getattr(i, "custom_id", "").startswith("glorfindel_exec_"))
+
+
+def _ack(view):
+    return next(i for i in view.children if getattr(i, "custom_id", "") == "glorfindel_ack")
+
+
+def test_a_button_of_a_card_settled_since_its_view_was_built_runs_nothing(monkeypatch):
+    ran = []
+    monkeypatch.setattr(bot, "_run_cli", lambda args: ran.append(args) or (0, "ok"))
+    policy = bot.ButtonPolicy(users=frozenset({ALLOWED}))
+    esc_id = _revert_card()
+    built = _stored(esc_id)                          # the view as it was posted: pending
+    escalations.resolve(esc_id)                      # acknowledged in the console since
+
+    click = _press(built, _User(ALLOWED), policy, _revert)
+    assert ran == [] and click.posted == [] and click.card_edits == []
+    assert len(click.ephemeral) == 1 and "Carte réglée" in click.ephemeral[0][0]
+    assert "acquittée" in click.ephemeral[0][0] and click.ephemeral[0][1] is True
+    click = _press(built, _User(ALLOWED), policy, _ack)
+    assert click.sent == [] and "Carte réglée" in click.ephemeral[0][0]
+
+    # A restore's form opened before the card was settled: its confirmation runs nothing either.
+    rid = escalations.record("rule-ransomware-0123abcd", VM, "restore_from_backup",
+                             "destructive_action", "restore needs a human")
+    card = _stored(rid)
+    escalations.resolve(rid)
+
+    async def confirm():
+        view = bot._RestoreConfirmView(card, "2026-10-29T07:30:00+00:00")
+        click = _Click(_User(ALLOWED), policy, "confirm")
+        assert await view.interaction_check(click) is False
+        return click
+    click = asyncio.run(confirm())
+    assert ran == [] and "Carte réglée" in click.ephemeral[0][0]
+
+    # The witness: the same click on a card still pending runs the command.
+    live = _revert_card()
+    click = _press(_stored(live), _User(ALLOWED), policy, _revert)
+    assert ran == [["revert", VM, "--yes"]] and click.ephemeral == []
+
+
+def test_a_verdict_given_already_is_not_given_again():
+    policy = bot.ButtonPolicy(users=frozenset({ALLOWED}))
+    esc_id = escalations.record("rule-ssh-brute-force-0123abcd", VM, "block_suspicious_ip", "mode_hold", "held")
+    built = _stored(esc_id)
+    escalations.set_verdict(esc_id, "wrong", "")     # judged in the console since
+    click = _press(built, _User(ALLOWED), policy, _verdict_right)
+    assert _stored(esc_id)["verdict"] == "wrong" and "déjà jugée (wrong)" in click.ephemeral[0][0]
+
+
+def test_a_card_whose_vm_left_the_discovery_has_no_live_button(monkeypatch):
+    from datetime import datetime, timezone
+
+    from glorfindel.discovery import AssetRegistry, DiscoveredAsset
+    ran = []
+    monkeypatch.setattr(bot, "_run_cli", lambda args: ran.append(args) or (0, "ok"))
+    policy = bot.ButtonPolicy(users=frozenset({ALLOWED}))
+    other = VM.replace("bree", "gondolin")
+    AssetRegistry().update([DiscoveredAsset("vm-celebrimbor-gondolin", other, "law",
+                                            datetime.now(timezone.utc).isoformat())])
+    esc_id = _revert_card()
+    click = _press(_stored(esc_id), _User(ALLOWED), policy, _revert)
+    assert ran == [] and "n'est plus dans la découverte" in click.ephemeral[0][0]
+    assert all(i.disabled for i in bot._build_view(_stored(esc_id), bot._known_vms()).children)

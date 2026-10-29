@@ -170,6 +170,11 @@ def test_a_bare_nic_isolates_beside_another_vms_unreadable_state(world, subnet_n
     _other_broken()
     out = m.connector.isolate_vm(WEB1)
     assert out["status"] == "isolated" and not out.get("quarantine_refused"), out
+    # Said now, not first at the release (second review): the result, the state, the card.
+    assert out["original_unknown"] == ["web-nic"] and "glorfindel-orig-" in out["original_note"], out
+    assert actions._load_isolation_state(WEB1)["original_unknown"] == ["web-nic"]
+    from eregion_console import api
+    assert api._original_unknown_nics(actions._load_isolation_state(WEB1)["placements"]) == ["web-nic"]
     q = m.fake.nics[nic]["nsg"]
     assert q and "quarantine" in q
     tag = actions.AzureConnector._orig_tag(m.fake.nics[nic]["id"])
@@ -193,15 +198,48 @@ def test_a_reisolation_beside_its_own_unreadable_state_sets_it_aside(world):
     nic = _nic("rg-app1", "web-nic")
     own, q = _quarantined(m, nic)
     (f,) = _break_state()
-    assert m.connector.isolate_vm(WEB1)["status"] == "isolated"
-    aside = f.with_name(f"{f.stem}.unreadable.json")
+    out = m.connector.isolate_vm(WEB1)
+    assert out["status"] == "isolated" and "original_unknown" not in out    # our tag said it
+    aside = actions._ISOLATION_STATE_DIR / "aside" / f.name
     assert aside.read_text() == _BROKEN
     from glorfindel.response.state import unreadable_states
-    assert unreadable_states() == [f"isolation/{aside.name}"]
+    assert unreadable_states() == [f"isolation/aside/{aside.name}"]
     assert actions._load_isolation_state(WEB1)["resource_id"]            # the new state, readable
     aside.unlink()
     assert m.connector.release_isolation(WEB1)["status"] == "released"
     assert key(m.fake.nics[nic]["nsg"]) == key(own)
+
+
+def test_a_file_set_aside_then_repaired_is_never_a_state_again(world):
+    """Second review of SEC4b: set aside as `<file>.unreadable.json`, the file stayed in the
+    states' `*.json`. Repaired, as the card asked, it was a second active isolation of
+    the VM (two reassertions, two TTL cards), it left the unreadable list, and the start-up
+    migration put the old state back over the current one. In `isolation/aside/` now: never
+    read as a state, listed while it exists, untouched by the migration; the card asks to
+    report what it holds into the current state, then to remove it."""
+    from glorfindel.response.state import migrate_state_files, unreadable_states
+    m = world(_net(quarantine=True, web_nic={"own": "dedicated"}))
+    _quarantined(m, _nic("rg-app1", "web-nic"))
+    (f,) = _break_state()
+    assert m.connector.isolate_vm(WEB1)["status"] == "isolated"
+    current = json.loads(f.read_text())
+    aside = actions._ISOLATION_STATE_DIR / "aside" / f.name
+    good = {**current, "marker": "repaired-old"}
+    aside.write_text(json.dumps(good))                                    # the operator repairs it
+    assert [i["state_key"] for i in actions.active_isolations()] == [f.stem]
+    assert "marker" not in actions._load_isolation_state(WEB1)
+    assert unreadable_states() == [f"isolation/aside/{f.name}"]
+    assert migrate_state_files() == 0
+    assert json.loads(aside.read_text())["marker"] == "repaired-old"
+    assert json.loads(f.read_text()) == current
+    reassert.reassert_pass(m.connector, None)
+    (card,) = _state_cards("pending")
+    steps = " ".join(card["suggested_steps"])
+    assert "reporter à la main" in steps and "le retirer" in steps and "les réparer" not in steps, steps
+    assert "glorfindel-orig-" in steps
+    aside.unlink()
+    reassert.reassert_pass(m.connector, None)
+    assert not _state_cards("pending")
 
 
 def test_an_unblock_behind_the_quarantine_says_an_unreadable_state(world):

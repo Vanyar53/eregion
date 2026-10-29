@@ -171,11 +171,22 @@ def say_unreadable_states(report: list[dict]) -> None:
                            "sans NSG s'arrêtent : rien n'est retiré ni dit levé sur une inconnue. "
                            "Une isolation se fait quand même (son original inconnu n'est pas écrit)"
                            if isolations else "") + ".")
-    steps = ["Lire ces fichiers sous ~/.glorfindel/ : les réparer s'ils sont récupérables "
-             "(la forme qu'écrit Glorfindel).",
-             "Sinon les retirer à la main, puis relancer ce qui attendait ; `glorfindel reset "
-             "--from-azure` relit Azure pour une VM dont l'état est perdu.",
-             "La carte se ferme d'elle-même quand tout se lit de nouveau."]
+    aside = [f for f in files if f.startswith(f"{actions._ISOLATION_STATE_DIR.name}/{actions.ASIDE_DIR}/")]
+    steps = (["Lire ces fichiers sous ~/.glorfindel/ : les réparer s'ils sont récupérables "
+              "(la forme qu'écrit Glorfindel).",
+              "Sinon les retirer à la main, puis relancer ce qui attendait ; `glorfindel reset "
+              "--from-azure` relit Azure pour une VM dont l'état est perdu."]
+             if len(aside) < len(files) else [])
+    if aside:
+        # Set aside when its VM's state was written since: never a state again, repaired or not.
+        steps.append(f"Mis de côté ({', '.join(aside[:5])}) : un nouvel état de la VM a été écrit "
+                     "depuis. Le lire, reporter à la main dans l'état courant ce qui y manque (un NSG "
+                     "d'origine, un placement), puis le retirer — le réparer ne le remet pas en service.")
+    if isolations:
+        steps.append("Les VM isolées pendant ce temps dont une carte était sans NSG demanderont, à leur "
+                     "levée, le tag glorfindel-orig-<hash> sur le NSG de quarantaine (« original "
+                     "unknown » sur leur carte).")
+    steps.append("La carte se ferme d'elle-même quand tout se lit de nouveau et que rien n'est mis de côté.")
     if not any(e.get("signal_id") == sid for e in cards):
         escalations.record(signal_id=sid, resource_id=_STATE_RESOURCE, action=_STATE_ACTION,
                            escalation_type=STATE_TYPE, reason=reason, severity="high", suggested_steps=steps)

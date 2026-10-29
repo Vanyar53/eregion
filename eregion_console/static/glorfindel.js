@@ -206,6 +206,15 @@ function _healthNote(s) {
       + '\nA DNS tunnel or a managed-identity token remains possible. The quarantine NSG closes both.';
     out += ` <span style="${warn}" title="${_attr(why)}">⚠ DNS/IMDS</span>`;
   }
+  // In our quarantine, its original NSG unknown (SEC4b): the release, autonomous too,
+  // stops until the operator sets our tag — said on the card now, not first at the release.
+  if (Array.isArray(s.original_unknown) && s.original_unknown.length) {
+    const warn = 'font-size:8px;font-weight:700;padding:0 4px;border-radius:3px;flex-shrink:0;color:var(--orange);border:1px solid color-mix(in srgb,var(--orange) 45%,transparent);background:color-mix(in srgb,var(--orange) 10%,transparent)';
+    const why = 'Original NSG unknown for ' + s.original_unknown.join(', ')
+      + ':\nthe release will ask for the tag glorfindel-orig-<hash> on the quarantine NSG'
+      + ' (=<NSG id>, or =none).';
+    out += ` <span style="${warn}" title="${_attr(why)}">⚠ original unknown</span>`;
+  }
   return out;
 }
 

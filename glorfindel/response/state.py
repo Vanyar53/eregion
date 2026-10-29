@@ -19,8 +19,7 @@ _UNKNOWN = object()
 
 
 class StateUnreadable(RuntimeError):
-    """An isolation state file can't be read: what it holds is unknown — never "nothing"
-    (SEC4b). Raised by a reader that would otherwise answer "no state records it"."""
+    """An isolation state can't be read: what it holds is unknown, never "nothing" (SEC4b)."""
 
 
 def _unreadable_isolations() -> list[str]:
@@ -66,9 +65,8 @@ def _held_in_quarantine(nic_id: str) -> bool:
 
 
 def _recorded_or_unknown(nic_id: str):
-    """For an isolation: what a state records for this NIC, unknown while a state can't
-    be read — an unreadable state never stops an isolation (SEC4b); the unknown is left
-    unwritten, and the release keeps the NIC in quarantine until it is known."""
+    """For an isolation: unknown while a state can't be read — it never stops one (SEC4b);
+    left unwritten, the release keeps the NIC in quarantine until it is known."""
     try:
         return _recorded_original(nic_id)
     except StateUnreadable:
@@ -76,8 +74,7 @@ def _recorded_or_unknown(nic_id: str):
 
 
 def _held_or_unreadable(nic_id: str) -> bool:
-    """For an isolation: held in quarantine by a state — or a state can't be read, which
-    may hold it (SEC4b)."""
+    """For an isolation: held in quarantine by a state, or a state can't be read (SEC4b)."""
     try:
         return _held_in_quarantine(nic_id)
     except StateUnreadable:
@@ -259,18 +256,21 @@ def _save_isolation_state(vm_ref: str, state: dict) -> None:
     _write_state(_ISOLATION_STATE_DIR, vm_ref, rid, state)
 
 
+ASIDE_DIR = "aside"
+
+
 def _set_aside_unreadable(vm_ref: str) -> None:
-    """This VM's state file, unreadable, moved aside before a new state is written for it
-    (`<file>.unreadable.json`; SEC4b): an isolation is never stopped by it, and what it
-    holds is never written over — it stays unreadable (`unreadable_states`, its card)
-    until the operator repairs or removes it. Read by no lookup of a VM's state."""
+    """This VM's unreadable state moved to `isolation/aside/` before a new one is written
+    (SEC4b): never written over, never a state again (out of the states' `*.json`), listed
+    by `unreadable_states` until the operator removes it."""
     if not _isolation_unreadable(vm_ref):
         return
     f = _state_file(_ISOLATION_STATE_DIR, vm_ref)
-    n, aside = 1, f.with_name(f"{f.stem}.unreadable.json")
+    (_ISOLATION_STATE_DIR / ASIDE_DIR).mkdir(mode=0o700, exist_ok=True)
+    n, aside = 1, _ISOLATION_STATE_DIR / ASIDE_DIR / f.name
     while aside.exists():
         n += 1
-        aside = f.with_name(f"{f.stem}.unreadable-{n}.json")
+        aside = _ISOLATION_STATE_DIR / ASIDE_DIR / f"{f.stem}-{n}.json"
     os.replace(f, aside)
 
 
@@ -300,8 +300,7 @@ def _load_isolation_state(vm_ref: str) -> dict | None:
 
 
 def _isolation_unreadable(vm_ref: str) -> bool:
-    """This VM's isolation state file is there and can't be read (SEC4b): a write over it
-    would lose what it holds — left as it is, for the operator."""
+    """This VM's isolation state file is there and can't be read (SEC4b)."""
     f = _state_file(_ISOLATION_STATE_DIR, vm_ref)
     return f is not None and f"{_ISOLATION_STATE_DIR.name}/{f.name}" in unreadable_states()
 
@@ -347,6 +346,11 @@ def unreadable_states() -> list[str]:
                 data = None
             if not _readable_shape(data, shape):
                 out.append(f"{directory.name}/{f.name}")
+    # Set aside (SEC4b): listed while it exists, readable or not — to report by hand into
+    # the current state, never a state of its own again.
+    aside = _ISOLATION_STATE_DIR / ASIDE_DIR
+    if aside.is_dir():
+        out += [f"{_ISOLATION_STATE_DIR.name}/{ASIDE_DIR}/{f.name}" for f in aside.iterdir() if f.is_file()]
     return sorted(out)
 
 
@@ -367,9 +371,8 @@ def _readable_shape(data, shape) -> bool:
 
 
 def active_isolations() -> list[dict]:
-    """Return all active isolation state files (VMs that Glorfindel has isolated), of the
-    shape Glorfindel writes. An unreadable file is left out here — `unreadable_states`
-    lists it: a reader that would conclude from its absence asks that too (SEC4b)."""
+    """Return all active isolation state files (VMs that Glorfindel has isolated). An
+    unreadable one is left out — `unreadable_states` lists it, for the readers (SEC4b)."""
     result = []
     for f in _ISOLATION_STATE_DIR.glob("*.json"):
         try:

@@ -173,6 +173,19 @@ def platform_open_nics(placements) -> list[str]:
     return out
 
 
+def original_unknown_nics(placements) -> list[str]:
+    """The NICs (short names) in our quarantine whose original NSG nothing recorded — not
+    the state, and so not our tag either (Q7; or isolated beside a state that couldn't be
+    read, SEC4b): their release, autonomous or not, stops until the operator sets the tag.
+    Said at the isolation, not first at the release (SEC4b, second review)."""
+    out: list[str] = []
+    for p in placements or []:
+        short = str(p.get("nic_id", "")).rstrip("/").rsplit("/", 1)[-1]
+        if p.get("kind") == "quarantine" and "original_nsg_id" not in p and short and short not in out:
+            out.append(short)
+    return out
+
+
 class WrongSubscriptionError(RuntimeError):
     """The target lives in another subscription than the one Glorfindel acts in."""
 

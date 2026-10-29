@@ -10,7 +10,7 @@ from glorfindel.providers.azure.nsg import _describe_shadowing, _rule_name, _sco
 from glorfindel.providers.azure.quarantine import _remember_quarantine_outcome, PLATFORM_OPEN_NOTE
 from glorfindel.providers.azure.sdk import _enum_text
 from glorfindel.response.ids import _parse_vm_resource_id
-from glorfindel.response.policy import _ERR_MAX, _first_line, PartialActionError
+from glorfindel.response.policy import _ERR_MAX, _first_line, original_unknown_nics, PartialActionError
 from glorfindel.response.state import (
     _load_isolation_state,
     _merge_isolation_placements,
@@ -140,13 +140,18 @@ class IsolationMixin:
         # the flat nsg/nsg_scope/rule_names fields keep /api/state + legacy paths working.
         from datetime import datetime, timezone
         first = placements[0]
+        merged = _merge_isolation_placements(_previous_placements(resource_id), placements)
+        # In our quarantine, its original unknown (Q7, or beside a state that can't be
+        # read): its release will ask for the tag — said now, not first then (SEC4b).
+        unknown = original_unknown_nics(merged)
         _save_isolation_state(resource_id, {
             "resource_id": resource_id,
             "isolated_at": datetime.now(timezone.utc).isoformat(),
             "scoped": True,
-            "placements": _merge_isolation_placements(_previous_placements(resource_id), placements),
+            "placements": merged,
             "nsg_rg": first["nsg_rg"], "nsg_name": first["nsg_name"], "nsg_scope": first["scope"],
             "rule_names": [p["rule_in"] for p in placements] + [p["rule_out"] for p in placements],
+            **({"original_unknown": unknown} if unknown else {}),
         })
 
         out = {
@@ -163,6 +168,10 @@ class IsolationMixin:
             "nsg": f'{first["nsg_rg"]}/{first["nsg_name"]}',
             "nsg_scope": first["scope"],
             "rule": first["rule_in"],
+            **({"original_unknown": unknown,
+                "original_note": "NSG d'origine inconnu pour " + ", ".join(unknown) + " : la levée "
+                "demandera le tag glorfindel-orig-<hash> sur le NSG de quarantaine (=<id du NSG> ou "
+                "=none)"} if unknown else {}),
         }
         if any(p["scope"] == "subnet" for p in placements):
             out["note"] = (

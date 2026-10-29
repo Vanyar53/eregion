@@ -32,8 +32,10 @@ The trigger is Jonathan publishing a release (sessions prepare drafts). A pass:
      minutes: three containers running, never restarted, built from the tag; the watch's
      heartbeat written after the switch; the console answering; and, once they are, every
      rule the release loads run once on its backend, read-only, in the watch's container
-     (`glorfindel rules check --live`, H2): a rule in error is a red health; no row is not
-     an error; a rule without an answer in its time is said, never a rollback;
+     (`glorfindel rules check --live`, H2) — the same check run in what ran, before the
+     switch: only a regression rolls back (a rule in a lasting error that was ok, or absent,
+     before); a rule broken before as after, a check that proves nothing (429, 5xx, network,
+     a timeout), a reference without the command: said, in orange, never a rollback;
   7. unhealthy: deploy.sh --activate on what ran (its image is kept: a retag) and its health;
      the release is marked failed, never tried again on its own (a new release, or `retry`);
      healthy: the old images pruned, the new and the one before kept;
@@ -84,11 +86,32 @@ CONSOLE = (os.environ.get("EREGION_CD_CONSOLE") or "http://127.0.0.1:7007").rstr
 HEARTBEAT = Path(os.environ.get("EREGION_CD_HEARTBEAT") or HOME / ".glorfindel" / "watch_heartbeat")
 HEALTH_S = float(os.environ.get("EREGION_CD_HEALTH_S") or 180)
 STEP_S = float(os.environ.get("EREGION_CD_STEP_S") or 10)
-# H2: the rules, run once in the health — the whole check, and each query, bounded; the
-# command's start (its config, its rules) gets RULES_MARGIN_S of the health's budget.
-RULES_S = float(os.environ.get("EREGION_CD_RULES_S") or 90)
-RULE_QUERY_S = float(os.environ.get("EREGION_CD_RULE_QUERY_S") or 20)
-RULES_MARGIN_S = float(os.environ.get("EREGION_CD_RULES_MARGIN_S") or 15)
+
+
+def bounded(name: str, default: float, lo: float, hi: float) -> float:
+    """A setting from the environment, within [lo, hi] (the command refuses what is outside:
+    click's code 2); unreadable or not finite, the default."""
+    try:
+        value = float(os.environ.get(name) or default)
+    except ValueError:
+        value = default
+    return min(hi, max(lo, value)) if value == value and value not in (float("inf"), float("-inf")) else default
+
+
+# H2: the rules, run once before the switch (in what runs) and once in the health (in the
+# candidate) — the whole check, and each query, bounded within what `glorfindel rules check`
+# accepts; the command's start (its config, its rules) gets RULES_MARGIN_S.
+RULES_S = bounded("EREGION_CD_RULES_S", 90, 1, 3600)
+RULE_QUERY_S = bounded("EREGION_CD_RULE_QUERY_S", 20, 1, 600)
+RULES_MARGIN_S = bounded("EREGION_CD_RULES_MARGIN_S", 15, 0.1, 600)
+# Only these kinds of error last (the command's DURABLE): anything else may pass — never a rollback.
+DURABLE = frozenset({"backend", "syntax", "table", "access", "workspace"})
+KIND_SAID = {"backend": "backend non lié", "syntax": "requête invalide", "table": "table ou colonne absente",
+             "access": "accès refusé", "workspace": "workspace introuvable", "throttled": "limité (429)",
+             "service": "service indisponible", "auth": "identité indisponible", "network": "réseau",
+             "partial": "résultat partiel", "timeout": "délai dépassé", "budget": "non lancée"}
+# What click says when a CLI has no `rules check` (a release from before H2).
+NO_COMMAND = ("No such command", "No such option", "Got unexpected extra argument")
 RULES_SCHEMA = "eregion.rules-check/1"
 RULES_SAID = 5          # rules named in #deploy; the others counted
 IMAGE = "eregion-glorfindel"
@@ -446,8 +469,9 @@ _SCRUB = [(re.compile(r"/subscriptions/[^\s'\"),;]*", re.I), "<ressource>"),
           (re.compile(r"\b[\w.+-]+@[\w-]+(?:\.[\w-]+)+\b"), "<adresse>"),
           (re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", re.I), "<id>"),
           (re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?\b"), "<ip>"),
-          (re.compile(r"\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?!(?:ya?ml|jsonl?|py|md|txt|log)\b)"
-                      r"[a-z]{2,}\b", re.I), "<hôte>")]
+          (re.compile(r"\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.){2,}[a-z]{2,}\b"
+                      r"|\b[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.(?:com|net|org|io|internal|local|lan|corp|cloud"
+                      r"|azure|windows)\b", re.I), "<hôte>")]
 
 
 def scrubbed(text, n: int = 160) -> str:
@@ -459,76 +483,153 @@ def scrubbed(text, n: int = 160) -> str:
     return discord_text(s)
 
 
-def read_rules_check(code: int, stdout: str) -> tuple[str, str]:
-    """(why, note) from what `glorfindel rules check --live --json` said: why is '' unless a
-    rule (or the loading) is in error — then H0 goes back; note is said either way."""
+def read_rules_check(code: int, stdout: str, stderr: str = "") -> dict:
+    """What `glorfindel rules check --live --json` said, as a state:
+    - ok: its rules ({name, status, kind, code}); load: it could not load them (its error);
+    - absent: the CLI has no such command (click's code 2 and words: a release from before H2);
+    - usage: code 2 otherwise (an option refused); unreadable: anything else."""
     try:
         out = json.loads(stdout.strip().splitlines()[-1]) if stdout.strip() else None
     except ValueError:
         out = None
     if not isinstance(out, dict) or out.get("schema") != RULES_SCHEMA:
-        if code == 2:       # click's usage error: a release from before H2 has no such command
-            return "", "règles non vérifiées : cette release n'a pas `glorfindel rules check`"
-        return (f"la vérification des règles n'a rien dit de lisible (code {code}) — le détail : "
-                "make glorfindel-host-cd-status"), ""
-    rules = [r for r in out.get("rules") or [] if isinstance(r, dict)]
+        if code == 2:
+            said = f"{stderr}\n{stdout}"
+            return {"state": "absent" if any(w in said for w in NO_COMMAND) else "usage", "code": code}
+        return {"state": "unreadable", "code": code}
     if out.get("error"):
-        return f"règles : {scrubbed(out['error'])}", ""
-
-    def named(items: list[dict]) -> str:
-        said = [f"« {scrubbed(r.get('name'), 80)} » : {scrubbed(r.get('error'))}" for r in items[:RULES_SAID]]
-        more = f" ; et {len(items) - RULES_SAID} autre(s)" if len(items) > RULES_SAID else ""
-        return " ; ".join(said) + more
-
-    red = [r for r in rules if r.get("status") == "error"]
-    slow = [r for r in rules if r.get("status") == "timeout"]
-    ok = [r for r in rules if r.get("status") == "ok"]
-    if red:
-        return f"{len(red)} règle(s) en erreur après la bascule — {named(red)}", ""
+        return {"state": "load", "code": code, "error": str(out["error"])}
+    rules = [{"name": str(r.get("name") or "?"), "status": str(r.get("status") or ""),
+              "kind": str(r.get("kind") or ""), "code": str(r.get("code") or "")}
+             for r in out.get("rules") or [] if isinstance(r, dict)]
     if not rules:
-        return "aucune règle chargée : la watch ne détecterait rien", ""
-    if code not in (0, 3):
-        return f"la vérification des règles a échoué (code {code}) — le détail : make glorfindel-host-cd-status", ""
+        return {"state": "load", "code": code, "error": "aucune règle chargée"}
+    return {"state": "ok", "code": code, "rules": rules}
+
+
+def lasting(rule: dict) -> bool:
+    return rule.get("status") == "error" and rule.get("kind") in DURABLE
+
+
+def _code(value) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]", "", str(value or ""))[:40]
+
+
+def said_rules(items: list[dict]) -> str:
+    """Each rule by its name, its kind, its code (`SEM0100`, `429`): never the error's words —
+    those go to the journal. Scrubbed and escaped (SEC6)."""
+    said = [f"« {scrubbed(r.get('name'), 80)} » : {KIND_SAID.get(r.get('kind'), 'erreur')}"
+            + (f" ({discord_text(_code(r.get('code')))})" if _code(r.get("code")) else "")
+            for r in items[:RULES_SAID]]
+    more = f" ; et {len(items) - RULES_SAID} autre(s)" if len(items) > RULES_SAID else ""
+    return " ; ".join(said) + more
+
+
+def verdict(cand: dict, base: dict | None) -> dict:
+    """The candidate's rules against what ran (`base`, checked before the switch):
+    {why: a regression (H0 goes back), note: with the success, orange: said apart, alert: with
+    the mention}. Only a regression rolls back: a rule in a lasting error that was ok, or
+    absent, before — a fault this release brought. A reference that could not be read (no
+    command, an error that may pass, unreadable): nothing to compare to, no rollback."""
+    comparable = bool(base) and base.get("state") == "ok"
+    before = {r["name"]: r for r in base.get("rules", [])} if comparable else {}
+    no_ref = "" if comparable else (
+        "non comparé : la version d'avant n'a pas `glorfindel rules check`" if base and base.get("state") == "absent"
+        else "non comparé : la version d'avant n'a pas pu être vérifiée")
+    state = cand.get("state")
+    if state == "absent":
+        return {"why": "", "note": "règles non vérifiées : cette release n'a pas `glorfindel rules check`",
+                "orange": "", "alert": False}
+    if state == "timeout":
+        return {"why": "", "note": "", "alert": False,
+                "orange": f"règles non prouvées : la vérification n'a pas fini en {cand.get('wait', 0):g} s"}
+    if state == "usage":
+        return {"why": "", "note": "", "alert": False, "orange": "la vérification des règles a refusé ses "
+                "options (code 2) — le détail : make glorfindel-host-cd-status"}
+    if state in ("unreadable", "load"):
+        what = (f"règles : {scrubbed(cand.get('error'))}" if state == "load" else
+                f"la vérification des règles n'a rien dit de lisible (code {cand.get('code')}) — le détail : "
+                "make glorfindel-host-cd-status")
+        if comparable:      # what ran had its rules checked: this release broke the check itself
+            return {"why": what, "note": "", "orange": "", "alert": False}
+        return {"why": "", "note": "", "orange": f"{what} ; {no_ref}", "alert": True}
+    rules = cand["rules"]
+    hard = [r for r in rules if lasting(r)]
+    broke = [r for r in hard if comparable and before.get(r["name"], {"status": "ok"})["status"] == "ok"]
+    known = [r for r in hard if r not in broke]
+    unproven = [r for r in rules if r["status"] != "ok" and not lasting(r)]
+    ok = [r for r in rules if r["status"] == "ok"]
+    orange = []
+    if known:
+        orange.append(f"{len(known)} règle(s) en erreur, " + ("déjà en erreur, ou non prouvée(s), avant la bascule" if comparable
+                                                             else no_ref)
+                      + f" — {said_rules(known)}")
+    if unproven:
+        orange.append(f"{len(unproven)} règle(s) non prouvée(s) (rien n'en dit qu'elles soient cassées) — "
+                      f"{said_rules(unproven)}")
     note = f"règles : {len(ok)} sur {len(rules)} ont répondu, une fois chacune, en lecture seule"
-    if slow:
-        note += f" ; sans réponse dans le délai : {named(slow)}"
-    return "", note
+    if not comparable and not known:     # nothing broken: nothing to compare — said with the success
+        note += f" ({no_ref})"
+    if broke:
+        return {"why": f"{len(broke)} règle(s) cassée(s) par cette release (ok avant la bascule) — "
+                       f"{said_rules(broke)}", "note": note, "orange": "\n".join(orange), "alert": True}
+    return {"why": "", "note": note, "orange": "\n".join(orange), "alert": bool(known)}
 
 
-def rules_check(budget_s: float) -> tuple[str, str]:
-    """Every rule the release loads, run once in the watch's container, read-only, with the
-    watch's identity (H2). Bounded by what is left of the health (`budget_s`), and by RULES_S:
-    the command's own budget leaves it RULES_MARGIN_S to start (its config, its rules); past
-    the whole, it is cut and its rules said unproven — never a rollback, never again."""
+def run_rules_check(budget_s: float, label: str) -> dict:
+    """`glorfindel rules check --live --json` in the watch's container, once, read-only, with its
+    identity (H2), cut at `budget_s` (RULES_S + RULES_MARGIN_S at most): the command's own
+    budget leaves it RULES_MARGIN_S to start. Its stderr (the full words, which may name the
+    infrastructure) goes to the journal only."""
     wait = max(1.0, min(RULES_S + RULES_MARGIN_S, budget_s))
     total = max(0.1, wait - RULES_MARGIN_S)
     query = min(RULE_QUERY_S, total)
+    started = time.monotonic()
     try:
         res = subprocess.run(["docker", "exec", CONTAINERS[0], "glorfindel", "rules", "check", "--live", "--json",
                               "--query-timeout", f"{query:g}", "--total", f"{total:g}"],
                              capture_output=True, text=True, timeout=wait)
     except subprocess.TimeoutExpired:
-        return "", f"règles : la vérification n'a pas fini en {wait:g} s (non prouvées)"
-    if res.returncode not in (0, 3) and (res.stderr or "").strip():
-        print(f"glorfindel rules check :\n{tail(res)}")
-    return read_rules_check(res.returncode, res.stdout)
+        print(f"règles ({label}) : coupées à {wait:g} s")
+        return {"state": "timeout", "wait": wait, "seconds": round(time.monotonic() - started)}
+    if (res.stderr or "").strip():
+        print(f"glorfindel rules check ({label}, code {res.returncode}) :\n{res.stderr.strip()[-4000:]}")
+    out = read_rules_check(res.returncode, res.stdout, res.stderr or "")
+    out["seconds"] = round(time.monotonic() - started)
+    return out
 
 
-def health(ref: str, since: float, rules: bool = False) -> tuple[str, str]:
-    """Watched for HEALTH_S: ('', note) when healthy at the end, else (the last reason, note).
+def reference_check() -> dict:
+    """What runs now, checked the same way before the switch — outside the candidate's health:
+    the old release still serves meanwhile, and the candidate keeps its whole health budget.
+    At most RULES_S + RULES_MARGIN_S (105 s by default) before the switch."""
+    base = run_rules_check(RULES_S + RULES_MARGIN_S, "avant la bascule")
+    if base.get("state") == "ok":
+        n = {s: sum(1 for r in base["rules"] if r["status"] == s) for s in ("ok", "error")}
+        print(f"règles avant la bascule : {n['ok']} ok, {n['error']} en erreur, en {base['seconds']} s")
+    else:
+        print(f"règles avant la bascule : {base.get('state')} (en {base.get('seconds', 0)} s)")
+    return {"state": base.get("state"), "rules": [{"name": r["name"], "status": r["status"]}
+                                                  for r in base.get("rules", [])]}
+
+
+def health(ref: str, since: float, rules: bool = False, base: dict | None = None) -> tuple[str, dict]:
+    """Watched for HEALTH_S: ('', proof) when healthy at the end, else (the last reason, proof).
     With `rules` (the release switched to, not the one gone back to): once the containers are
-    healthy, every rule run once (H2), with what is left of the health (healthy only at its
-    last look: one second, then said unproven) — one in error ends the health, red."""
+    healthy, every rule run once (H2) with what is left of the health (healthy only at its last
+    look: one second, then said unproven) and read against `base` — a regression ends the
+    health, red; the containers are looked at once more after the check."""
     deadline = time.monotonic() + HEALTH_S
-    proof: tuple[str, str] | None = None
+    proof: dict | None = None
     while True:
         why = health_once(ref, since)
         if rules and proof is None and not why:
-            proof = rules_check(deadline - time.monotonic())
-            if proof[0]:
-                return proof
+            proof = verdict(run_rules_check(deadline - time.monotonic(), "après la bascule"), base)
+            if proof["why"]:
+                return proof["why"], proof
+            continue        # the last look is never one from before the check
         if time.monotonic() >= deadline:
-            return why, proof[1] if proof else ""
+            return why, proof or {}
         time.sleep(STEP_S)
 
 
@@ -565,17 +666,21 @@ def agent_drift(tag: str) -> tuple[list[str], str, bool]:
     return out, "", False
 
 
-def conclude(state: dict, tag: str, dep_ref: str, why: str, url: str, how: str, note: str = "") -> int:
+def conclude(state: dict, tag: str, dep_ref: str, why: str, url: str, how: str, proof: dict | None = None) -> int:
     """After the switch: kept when healthy (the old images pruned, the one before kept), else
-    back to what ran. `note`: what the rules said (H2) — with the success; a rule that did not
-    answer in its time is said on its own, in orange, never a rollback."""
+    back to what ran. `proof`: what the rules said (H2) — its note with the success; what is to
+    look at (a rule broken before as after, rules unproven, nothing to compare to) said apart,
+    in orange, the mention when a rule is in a lasting error; never a rollback."""
+    proof = proof or {}
     if not why:
         state["outcomes"][tag] = {"result": "deployed", "why": "", "at": int(time.time())}
         save_state(state)
         prune(tag, dep_ref)
+        note = proof.get("note") or ""
         say(f"✅ H0 tourne sur {tag}", how + (f"\n{note}" if note else ""), color=nd.GREEN, url=url)
-        if "sans réponse" in note or "non prouvées" in note:
-            say(f"⏱️ {tag} : des règles n'ont pas répondu dans le délai", note, color=nd.ORANGE, url=url)
+        if proof.get("orange"):
+            say(f"⚠️ {tag} : des règles à regarder", proof["orange"], color=nd.ORANGE,
+                alert=bool(proof.get("alert")), url=url)
         drift, note, lost = agent_drift(tag)
         if drift:
             say(f"🔧 Agent de CD à mettre à jour ({tag})", f"diffèrent de la release, plus récente que l'agent : "
@@ -595,7 +700,8 @@ def conclude(state: dict, tag: str, dep_ref: str, why: str, url: str, how: str, 
         say(f"🔥 {tag} malade, et le retour à {dep_ref or '?'} aussi", f"{why}\nretour : {back}\n"
             "H0 est à regarder : make glorfindel-host-status", color=nd.RED, alert=True, url=url)
     else:
-        say(f"↩️ {tag} malade : H0 est revenu sur {dep_ref}", why, color=nd.ORANGE, alert=True, url=url)
+        more = f"\n{proof['orange']}" if proof.get("orange") else ""
+        say(f"↩️ {tag} malade : H0 est revenu sur {dep_ref}", why + more, color=nd.ORANGE, alert=True, url=url)
     return 1
 
 
@@ -637,8 +743,9 @@ def resume(state: dict, tag: str, cut: dict) -> int:
         say(f"⏸️ Bascule vers {tag} interrompue avant d'avoir eu lieu", f"H0 est sur {dep_ref} ; le CD la "
             "reprend au prochain passage", color=nd.BLUE, url=url)
         return 0
-    why, note = health(tag, float(cut.get("at") or 0), rules=True)
-    return conclude(state, tag, dep_ref, why, url, "passage repris après une interruption ; santé verte", note)
+    # What ran was checked before the switch, and written down with it: a cut pass reads it back.
+    why, proof = health(tag, float(cut.get("at") or 0), rules=True, base=cut.get("base"))
+    return conclude(state, tag, dep_ref, why, url, "passage repris après une interruption ; santé verte", proof)
 
 
 def check_running(tag: str, commit: str, url: str) -> int:
@@ -735,18 +842,22 @@ def run_pass(check: bool = False) -> int:
         say(f"✅ À blanc : {tag} est prête", f"vérifiée, construite, préflight passé ; H0 reste sur {dep_ref}. "
             "make glorfindel-host-cd-enable pour que le CD la déploie.", color=nd.GREEN, url=url)
         return 0
-    started, since = time.monotonic(), time.time()
+    started = time.monotonic()
+    base = reference_check()           # what runs, before it moves: the rules it detects with
+    since = time.time()
     # Written before it happens: a pass cut from here on is taken up by the next one.
-    state["outcomes"][tag] = {"result": "switching", "from": dep_ref, "url": url, "why": "", "at": since}
+    state["outcomes"][tag] = {"result": "switching", "from": dep_ref, "url": url, "why": "", "at": since,
+                              "base": base}
     save_state(state)
-    note = ""
+    proof: dict = {}
     try:
         activate(tag)
-        why, note = health(tag, since, rules=True)
+        why, proof = health(tag, since, rules=True, base=base)
     except Unhealthy as e:
         why = str(e)
     return conclude(state, tag, dep_ref, why, url,
-                    f"{commit[:12]} · {int(time.monotonic() - started)} s, santé verte pendant {int(HEALTH_S)} s", note)
+                    f"{commit[:12]} · {int(time.monotonic() - started)} s, santé verte pendant {int(HEALTH_S)} s",
+                    proof)
 
 
 def rollback(ref: str) -> str:

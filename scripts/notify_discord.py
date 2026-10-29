@@ -465,7 +465,13 @@ def _chat_text():
                 return mod.discord_text
             except Exception:
                 break
-    return lambda text: re.sub(r"[^\w .,:;!?'’«»/=+-]", "·", "" if text is None else str(text))
+    return _strict
+
+
+def _strict(text) -> str:
+    """chat_text missing: letters, digits, spaces and plain punctuation kept, every other mark
+    — `_ * ~ | [ ] ( ) < > @ # \\` and backticks — shown as « · »: no Markdown, link nor mention."""
+    return re.sub(r"[^\w .,:;!?'’«»/=+-]|_", "·", "" if text is None else str(text))
 
 
 _INERT = []
@@ -554,7 +560,8 @@ def release_ready(tag: str, heading: str, url: str, notes: str, cfg: Config | No
     if not cfg.releases:
         return ""
     title = f"📦 {inert(tag)} en brouillon" + (f" — {inert(heading)}" if heading else "")
-    said = "\n".join(x for x in (notes_summary(notes), "En tête des releases du dépôt, pour ses membres.") if x)
+    find = f"Cherche {inert(tag)} en tête des releases du dépôt (visible de ses membres seulement)."
+    said = "\n".join(x for x in (notes_summary(notes), find) if x)
     return post_releases(cfg, embed(title, said, ORANGE, _https(url)),
                          link_button("Ouvrir les releases (le brouillon en tête)", url))
 

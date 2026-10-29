@@ -472,15 +472,21 @@ def test_check_names_the_releases_webhook(fake, monkeypatch, capsys):
 
 
 def test_the_releases_webhook_is_given_to_a_release_s_events_only():
-    """The release, and the version's pull request (pull_request_target); never a run nor an
-    issue. And chat_text comes with the sparse checkout: the notes are made inert (SEC6)."""
+    """The release, and the version's pull request: pull_request_target whose head is this
+    repository's chore/release-… branch — never a fork's pull request, never a run (a red run on
+    chore/release-* stays in #ci, with its ping), never an issue. version_pull checks it again.
+    And chat_text comes with the sparse checkout: the notes are made inert (SEC6)."""
     import yaml
     doc = yaml.safe_load((ROOT / ".github" / "workflows" / "notify.yml").read_text(encoding="utf-8"))
     steps = doc["jobs"]["notify"]["steps"]
     (step,) = [s for s in steps if s.get("name") == "Discord"]
-    assert step["env"]["EREGION_DISCORD_WEBHOOK_RELEASES"] == (
-        "${{ (github.event_name == 'release' || github.event_name == 'pull_request_target') "
+    given = step["env"]["EREGION_DISCORD_WEBHOOK_RELEASES"]
+    assert given == (
+        "${{ (github.event_name == 'release' || (github.event_name == 'pull_request_target' "
+        "&& github.event.pull_request.head.repo.full_name == github.repository "
+        "&& startsWith(github.event.pull_request.head.ref, 'chore/release-'))) "
         "&& secrets.EREGION_DISCORD_WEBHOOK_RELEASES || '' }}")
+    assert "workflow_run" not in given and "issues" not in given
     (checkout,) = [s for s in steps if str(s.get("uses", "")).startswith("actions/checkout@")]
     assert "glorfindel/chat_text.py" in checkout["with"]["sparse-checkout"].split()
 
@@ -492,6 +498,28 @@ def test_the_notes_are_made_inert_by_chat_text_itself():
     spec.loader.exec_module(ref)
     text = "@here [a](https://b) **c** <@1> # d"
     assert nd.inert(text) == ref.discord_text(text) != text
+
+
+def test_without_chat_text_the_strict_filter_keeps_nothing_that_formats(monkeypatch, tmp_path):
+    """chat_text missing (a copy without glorfindel/, an unreadable file): the fallback shows
+    every mark Discord reads as « · » — `_` and `*` too (__underline__ _italic_)."""
+    monkeypatch.setattr(nd, "ROOT", tmp_path)        # no glorfindel/ there, none beside the script
+    monkeypatch.setattr(nd, "_INERT", [])
+    text = "@everyone [x](https://evil.example) <@&1> __souligné__ _it_ **gras** ~~b~~ `c` # t"
+    out = nd.inert(text)
+    assert nd._INERT == [nd._strict]
+    for mark in ("@", "[", "]", "(", ")", "<", ">", "_", "*", "~", "`", "#"):
+        assert mark not in out, mark
+    assert "everyone" in out and "souligné" in out and "https:/" in out   # the words still read
+
+
+def test_the_version_s_pull_request_title_is_inert(fake, monkeypatch, tmp_path):
+    configure(monkeypatch, fake, releases=True)
+    run_github(monkeypatch, tmp_path, "pull_request_target",
+               version_pr(title="chore(release): 0.4.5 @here [x](https://evil.example) <@&1>"))
+    title = releases_posts(fake)[0]["body"]["embeds"][0]["title"]
+    assert f"@{ZWSP}here" in title and "@here" not in title
+    assert "[x](" not in title and r"\[x\]\(" in title and r"\<@&1\>" in title
 
 
 def test_the_notes_in_short():

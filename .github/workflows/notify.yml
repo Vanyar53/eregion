@@ -62,9 +62,12 @@ jobs:
           # webhook: it edits and deletes only its own messages). Given to release events only.
           EREGION_DISCORD_WEBHOOK_AGENTS: ${{ github.event_name == 'release' && secrets.EREGION_DISCORD_WEBHOOK_AGENTS || '' }}
           # REL2: #releases, a release's story. Given to the events that tell it only: the
-          # release, and the version's pull request (pull_request_target; a fork's stays in #ci).
-          # glorfindel/chat_text.py (sparse checkout above) makes its notes and titles inert (SEC6).
-          EREGION_DISCORD_WEBHOOK_RELEASES: ${{ (github.event_name == 'release' || github.event_name == 'pull_request_target') && secrets.EREGION_DISCORD_WEBHOOK_RELEASES || '' }}
+          # release, and the version's pull request — pull_request_target whose head is this
+          # repository's chore/release-… branch; never a fork's pull request, never a run (a red
+          # run on chore/release-* stays in #ci). scripts/notify_discord.py checks it again
+          # (version_pull: the whole semver, the head's repository). glorfindel/chat_text.py
+          # (sparse checkout above) makes its notes and titles inert (SEC6).
+          EREGION_DISCORD_WEBHOOK_RELEASES: ${{ (github.event_name == 'release' || (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.event.pull_request.head.ref, 'chore/release-'))) && secrets.EREGION_DISCORD_WEBHOOK_RELEASES || '' }}
           EREGION_DISCORD_BOT_TOKEN: ${{ secrets.EREGION_DISCORD_BOT_TOKEN }}
           EREGION_DISCORD_LOTS_FORUM: ${{ secrets.EREGION_DISCORD_LOTS_FORUM }}
           GITHUB_TOKEN: ${{ github.token }}

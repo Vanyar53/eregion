@@ -4171,7 +4171,9 @@ MUTANTS += [
      "            post_releases(cfg, n.card, n.button)\n        elif n.ci and cfg.ci:\n",
      "            post_releases(cfg, n.card, n.button)\n        if n.ci and cfg.ci:\n"),
     ("M1541", "#releases' webhook given to notify.yml on every event (REL2)", ".github/workflows/notify.yml",
-     "${{ (github.event_name == 'release' || github.event_name == 'pull_request_target') "
+     "${{ (github.event_name == 'release' || (github.event_name == 'pull_request_target' "
+     "&& github.event.pull_request.head.repo.full_name == github.repository "
+     "&& startsWith(github.event.pull_request.head.ref, 'chore/release-'))) "
      "&& secrets.EREGION_DISCORD_WEBHOOK_RELEASES || '' }}",
      "${{ secrets.EREGION_DISCORD_WEBHOOK_RELEASES }}"),
     ("M1542", "a release's notes reach #releases raw: a masked link, a mention (REL2, SEC6)", NDS,
@@ -4197,6 +4199,25 @@ TESTS.update({mid: "tests/unit/test_notify_discord.py tests/unit/test_release.py
               for mid in ("M1540", "M1542", "M1543", "M1545", "M1546", "M1547", "M1548")})
 TESTS.update({"M1541": "tests/unit/test_notify_discord.py", "M1544": "tests/unit/test_release.py",
               "M1549": "tests/unit/test_release.py"})
+# REL2 after its 5.5 review: M1580–M1584.
+MUTANTS += [
+    ("M1580", "#releases' webhook given to every pull_request_target, a fork's included (REL2, review)",
+     ".github/workflows/notify.yml",
+     "(github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name == "
+     "github.repository && startsWith(github.event.pull_request.head.ref, 'chore/release-'))",
+     "github.event_name == 'pull_request_target'"),
+    ("M1581", "chat_text missing: its fallback lets everything through (REL2, review)", NDS,
+     "    return _strict\n", "    return lambda t: t\n"),
+    ("M1582", "chat_text missing: its fallback keeps `_` (__underline__ _italic_) (REL2, review)", NDS,
+     '''    return re.sub(r"[^\\w .,:;!?'’«»/=+-]|_", "·",''', '''    return re.sub(r"[^\\w .,:;!?'’«»/=+-]", "·",'''),
+    ("M1583", "the version's pull request's title reaches #releases raw (REL2, review)", NDS,
+     "    head = f\"#{pr.get('number')} {inert(pr.get('title') or '')}\"\n",
+     "    head = f\"#{pr.get('number')} {pr.get('title') or ''}\"\n"),
+    ("M1584", "the draft's heading reaches #releases' card title raw (REL2, review)", NDS,
+     '(f" — {inert(heading)}" if heading else "")', '(f" — {heading}" if heading else "")'),
+]
+TESTS.update({mid: "tests/unit/test_notify_discord.py tests/unit/test_release.py"
+              for mid in ("M1580", "M1581", "M1582", "M1583", "M1584")})
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

@@ -623,6 +623,24 @@ def test_no_path_publishes_in_the_code():
     assert DRAFT_WORD.findall(make) == [] and "gh " not in make and "curl" not in make
 
 
+def test_the_releases_label_is_a_label_and_nothing_else():
+    """RELEASES_HOOK is passed by name, past publishes_http's literal reading: it is only ever
+    fetch()'s third argument, the label a failure prints — never a method nor a URL."""
+    assert nd.RELEASES_HOOK == "webhook #releases"
+    tree = ast.parse((ROOT / "scripts" / "notify_discord.py").read_text(encoding="utf-8"))
+    parents = _parents(tree)
+    uses = [n for n in ast.walk(tree) if isinstance(n, ast.Name) and n.id == "RELEASES_HOOK"]
+    stores = [n for n in uses if isinstance(n.ctx, ast.Store)]
+    loads = [n for n in uses if isinstance(n.ctx, ast.Load)]
+    assert len(stores) == 1 and loads
+    for n in loads:
+        call = parents.get(id(n))
+        assert isinstance(call, ast.Call) and getattr(call.func, "id", None) == "fetch", ast.dump(call)
+        assert len(call.args) >= 3 and call.args[2] is n and not call.keywords
+    literal = [n for n in ast.walk(tree) if _const(n) == "webhook #releases"]
+    assert len(literal) == 1 and isinstance(parents[id(literal[0])], ast.Assign)
+
+
 @pytest.mark.parametrize("snippet", [
     '["gh", "release", "edit", tag, "--draft=f"]',
     'x = ["gh", "release", "edit", tag, "--notes-file", "--draft=F"]',
@@ -867,7 +885,8 @@ def test_a_release_s_story_on_releases_the_draft_then_the_publication(repo, tmp_
     ((card, body),) = _releases_cards(releases)
     assert card["title"] == "📦 v0.4.4 en brouillon — two commands" and card["url"] == url
     assert card["description"] == ("Added · Fixed\n• A release in two commands \\(REL1\\).\n"
-                                   "• Something that was wrong.\nEn tête des releases du dépôt, pour ses membres.")
+                                   "• Something that was wrong.\n"
+                                   "Cherche v0.4.4 en tête des releases du dépôt (visible de ses membres seulement).")
     assert body["components"] == [{"type": 1, "components": [
         {"type": 2, "style": 5, "label": "Ouvrir les releases (le brouillon en tête)", "url": url}]}]
     assert "content" not in body and body["allowed_mentions"] == {"parse": []} and body["flags"] == nd.SILENT

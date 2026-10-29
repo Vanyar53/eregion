@@ -297,11 +297,15 @@ class ReleaseMixin:
         """The VM gone, a state of its that can't be read (isolation or block) may name
         NICs the release can't look for: never `released`, the file kept (I7S, review —
         the release cleared the only file that named the NIC, its rules left)."""
-        from glorfindel.response.state import _BLOCK_STATE_DIR, _state_file, unreadable_states
+        from glorfindel.response.state import (_BLOCK_STATE_DIR, _ISOLATION_STATE_DIR, _state_file,
+                                               unreadable_states)
         block = _state_file(_BLOCK_STATE_DIR, vm_ref)
         if _isolation_unreadable(vm_ref) or (
                 block is not None and f"{_BLOCK_STATE_DIR.name}/{block.name}" in unreadable_states()):
-            return [f"{vm_name} supprimée, état illisible : ses cartes inconnues, levée non vérifiée"]
+            named = ", ".join(f"{d.name}/{f.name}" for d, f in (
+                (_ISOLATION_STATE_DIR, _state_file(_ISOLATION_STATE_DIR, vm_ref)), (_BLOCK_STATE_DIR, block))
+                if f is not None and f"{d.name}/{f.name}" in unreadable_states())
+            return [f"{vm_name} supprimée, état illisible ({named}) : ses cartes inconnues, levée non vérifiée"]
         return []
 
     def _gone_nic_check(self, resource_id: str, vm_name: str, nid: str) -> str | None:
@@ -324,8 +328,9 @@ class ReleaseMixin:
                 or (resource_id and _same_id(holder, resource_id))):
             return None
         return (f"{vm_name} supprimée : sa carte {short} est maintenant celle de {holder.split('/')[4]}/"
-                f"{vm_name}, dont l'isolation porte les mêmes noms — laissés ; la levée de cette VM les "
-                "retire s'ils ne sont pas les siens")
+                f"{vm_name}, dont l'isolation porte les mêmes noms — laissés ; si elle n'est pas isolée "
+                "(glorfindel status), ce sont ceux de la VM supprimée : à retirer à la main "
+                "(az network nsg rule delete)")
 
     def _gone_vm_rules(self, resource_id: str, vm_name: str, nic_ids: list[str], stuck: set) -> list[str]:
         """The VM is gone, and the NSGs its NICs carried with it out of sight: the rules

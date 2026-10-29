@@ -44,6 +44,24 @@ variable "bench_resource_group" {
   default     = "rg-celebrimbor"
 }
 
+variable "bench_id" {
+  description = "La valeur du tag eregion-target des VM inscrites (O0) : seules elles reçoivent le droit d'agir d'Orodruin (SEC5)."
+  type        = string
+  default     = "celebrimbor"
+}
+
+variable "watch_subnet_id" {
+  description = "Sous-réseau du Glorfindel hébergé (H0), admis par le pare-feu du compte du canal (SEC5, V-31). Le Makefile le lit dans l'état de infra/glorfindel-host ; vide → H0 n'atteint plus le canal."
+  type        = string
+  default     = ""
+}
+
+variable "watch_public_ip" {
+  description = "IP publique de H0, admise par le pare-feu du compte du canal si H0 n'est pas dans sa région (SEC5, V-31). Le Makefile la lit dans l'état de infra/glorfindel-host."
+  type        = string
+  default     = ""
+}
+
 variable "bench_workspace" {
   description = "Log Analytics du banc (le collecteur d'Annatar y lit le Heartbeat)."
   type        = string

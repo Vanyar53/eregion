@@ -157,7 +157,10 @@ SUB = "sub-123"
 BENCH = f"/subscriptions/{SUB}/resourceGroups/rg-celebrimbor"
 CONTAINER = (f"/subscriptions/{SUB}/resourceGroups/rg-orodruin/providers/Microsoft.Storage"
              "/storageAccounts/storodruin/blobServices/default/containers/exercises")
-RIGHTS = [{"actions": list(orodruin.REQUIRED_ACTIONS)}]
+# SEC5 (V-29): reads on the group, writes on an enrolled VM and an experiment.
+RIGHTS = [{"actions": list(orodruin.READ_ACTIONS)}]
+ENROLLED = (f"{BENCH}/providers/Microsoft.Compute/virtualMachines/vm-1",
+            f"{BENCH}/providers/Microsoft.Chaos/experiments/exp-1")
 
 
 def _assignment(scope):
@@ -165,8 +168,9 @@ def _assignment(scope):
 
 
 def _assess(scope, channel_scope):
-    return orodruin.assess_identity([_assignment(BENCH), _assignment(scope)], lambda _: ["*"],
-                                    RIGHTS, BENCH, sees_subscription=True, channel=channel_scope)
+    return orodruin.assess_identity([*map(_assignment, ENROLLED), _assignment(scope)],
+                                    lambda _: ["*"], RIGHTS, BENCH, sees_subscription=True,
+                                    channel=channel_scope)
 
 
 def test_the_channel_container_is_the_one_assignment_allowed_outside_the_bench():

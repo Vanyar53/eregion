@@ -22,6 +22,22 @@ verdict is seen on H0 too: ``runs/<run_id>.json``, under the same container and 
 assignment — a prefix again, which neither ``pull`` nor ``pull_campaigns`` takes. H0 pulls
 it into its own ``runs/<run_id>.json`` (``pull_runs``), where the console of the atelier
 reads it, once it has the shape H0 accepts (H-1), and never over a file it did not pull.
+
+SEC5 holds the channel at its edges:
+- a storage bearer token goes only to an Azure Storage blob endpoint — ``https://<account>``
+  and one of ``BLOB_SUFFIXES`` (the public cloud, then the sovereign ones), port 443, no user
+  in the URL; any other URL is refused before a token is asked for (N-15, ``url_refusal``);
+- a pull reads what it is given within bounds (V-21): a blob at most ``MAX_BLOB_BYTES``, a
+  listing page at most ``MAX_LISTING_BYTES``, at most ``MAX_BLOBS`` names listed and
+  ``MAX_DOWNLOADS`` blobs downloaded per pull — read as a stream cut past the bound, never
+  read whole and then checked; what goes past one is said, and left for the next pull or
+  skipped, never written;
+- a window pulled from the channel carries when its blob was created, as the listing says
+  (``CREATED``, written over anything the window said of it, and kept from its first pull):
+  the watch bounds the window by it, not by what the window declares (V-20,
+  eregion_core/exercise.py);
+- Orodruin's journal goes here too, under ``audit/`` (V-29, eregion_core/orodruin.py): an
+  append blob per run, a prefix no pull takes.
 """
 from __future__ import annotations
 
@@ -30,9 +46,10 @@ import re
 import threading
 import time
 import xml.etree.ElementTree as ET
-from datetime import datetime
+from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
+from urllib.parse import urlsplit
 
 CHANNEL_ENV = "EREGION_EXERCISE_CHANNEL"
 STORAGE = "https://storage.azure.com/.default"
@@ -60,18 +77,118 @@ _RUN_BLOB = re.compile(r"^runs/(?P<rid>[A-Za-z0-9][A-Za-z0-9_.-]*)\.json$")
 # again only those, never the report of a run of its own.
 PULLED_RUNS = ".pulled-runs"
 
+# SEC5 (N-15): the only hosts a storage bearer token is sent to — Azure Storage's blob
+# endpoints: the public cloud, Azure China, Azure US Government.
+BLOB_SUFFIXES = (".blob.core.windows.net", ".blob.core.chinacloudapi.cn",
+                 ".blob.core.usgovcloudapi.net")
+_ACCOUNT = re.compile(r"^[a-z0-9]{3,24}$")
+# SEC5 (V-21): what one pull reads at most. A window, a run's report, a campaign's manifest
+# are a few KiB; a listing page of Azure's 5 000 names, about 2 MiB.
+MAX_BLOB_BYTES = 1024 * 1024
+MAX_LISTING_BYTES = 8 * 1024 * 1024
+MAX_BLOBS = 2000
+MAX_DOWNLOADS = 200
+_CHUNK = 64 * 1024
+# SEC5 (V-20): in a window pulled from the channel, when its blob was created — the
+# listing's word, never the window's (eregion_core/exercise.py reads it).
+CREATED = "channel_created"
+# SEC5 (V-29): Orodruin's journal, one append blob per run.
+AUDIT = "audit"
+
 _last_pull = 0.0
 _pull_lock = threading.Lock()
 _credential = None
+
+
+class ChannelRefused(ValueError):
+    """A channel URL a storage token must never be sent to (N-15)."""
+
+
+class TooLarge(RuntimeError):
+    """A blob or a listing past its bound (V-21): the rest of it is never read."""
 
 
 def channel_url() -> str:
     return (os.environ.get(CHANNEL_ENV) or "").strip().rstrip("/")
 
 
-def auth_headers(credential) -> dict:
-    """Storage, by managed identity — shared with the return channel (watch_channel.py)."""
+def url_refusal(url: str) -> str:
+    """Why a storage token must not go to ``url`` — "" when it is an Azure Storage blob
+    endpoint: https, ``<account>`` then one of BLOB_SUFFIXES, port 443, no user (N-15)."""
+    try:
+        parts = urlsplit(url or "")
+        port = parts.port
+    except ValueError:
+        return "not a URL"
+    if parts.scheme != "https":
+        return "not https"
+    if parts.username is not None or parts.password is not None:
+        return "a user in the URL"
+    if port not in (None, 443):
+        return f"port {port}, not 443"
+    host = (parts.hostname or "").lower()
+    for suffix in BLOB_SUFFIXES:
+        if host.endswith(suffix) and _ACCOUNT.match(host[:-len(suffix)]):
+            return ""
+    return "not an Azure Storage blob endpoint (https://<account>.blob.core.windows.net)"
+
+
+def check_url(url: str) -> str:
+    """``url``, or ChannelRefused — before any token is asked for."""
+    why = url_refusal(url)
+    if why:
+        host = urlsplit(url or "").hostname or "?"
+        raise ChannelRefused(f"channel {host!r} refused, no token sent: {why}")
+    return url
+
+
+def _read(r, limit: int, what: str) -> bytes:
+    """The body of ``r``, at most ``limit`` bytes. A real response is read as a stream and
+    cut past the bound — never read whole, then checked (V-21); its Content-Length, when it
+    says more, refuses it before a byte is read. A client passed in (a fake) gives its body."""
+    import requests
+
+    if isinstance(r, requests.Response):
+        try:
+            declared = int(r.headers.get("Content-Length") or -1)
+        except ValueError:
+            declared = -1
+        if declared > limit:
+            r.close()
+            raise TooLarge(f"{what}: {declared} bytes, more than {limit}")
+        out = bytearray()
+        for chunk in r.iter_content(_CHUNK):
+            out += chunk
+            if len(out) > limit:
+                r.close()
+                raise TooLarge(f"{what}: more than {limit} bytes")
+        return bytes(out)
+    body = r.content
+    if len(body) > limit:
+        raise TooLarge(f"{what}: more than {limit} bytes")
+    return body
+
+
+def fetch(get, url: str, headers: dict, *, limit: int = MAX_BLOB_BYTES, params=None,
+          what: str = "") -> tuple[object, bytes]:
+    """GET ``url``: (the response, its body read within ``limit``) — b"" when it is not ok.
+    Without a client passed in, requests streams it (``stream=True``)."""
+    import requests
+
+    if get is None:
+        r = requests.get(url, headers=headers, params=params, timeout=15, stream=True)
+    else:
+        r = get(url, headers=headers, params=params, timeout=15)
+    if not r.ok:
+        return r, b""
+    return r, _read(r, limit, what or url.rsplit("/", 1)[-1])
+
+
+def auth_headers(credential, url: str) -> dict:
+    """Storage, by managed identity — shared with the return channel (watch_channel.py). The
+    token is asked for only once ``url`` is an Azure Storage blob endpoint (N-15)."""
     global _credential
+    check_url(url)
     if credential is None:
         if _credential is None:
             from azure.identity import DefaultAzureCredential
@@ -92,7 +209,7 @@ def publish(window: dict, *, channel: str | None = None, credential=None, put=No
     name = f"{window['run_id']}.json"
     if not _SAFE_NAME.match(name):
         raise ValueError(f"unsafe window name: {name!r}")
-    headers = {**auth_headers(credential), "x-ms-blob-type": "BlockBlob",
+    headers = {**auth_headers(credential, url), "x-ms-blob-type": "BlockBlob",
                "Content-Type": "application/json"}
     r = (put or requests.put)(f"{url}/{name}", headers=headers,
                               data=json.dumps(window, indent=2).encode(), timeout=15)
@@ -101,19 +218,53 @@ def publish(window: dict, *, channel: str | None = None, credential=None, put=No
     return True
 
 
-def pull(directory: Path, *, channel: str | None = None, credential=None, get=None) -> int:
-    """Copy into ``directory`` every window of the channel that is new or changed since the
-    local copy, page after page of the listing. Returns how many were written."""
-    import requests
+def _created(blob) -> str:
+    """When the blob was created, as the listing says (``Creation-Time``) — else its
+    ``Last-Modified``, never earlier — else now: the bound is only ever stricter (V-20)."""
+    for field in ("Properties/Creation-Time", "Properties/Last-Modified"):
+        value = blob.findtext(field)
+        if value:
+            try:
+                return parsedate_to_datetime(value).astimezone(timezone.utc).isoformat()
+            except (TypeError, ValueError):
+                continue
+    return datetime.now(timezone.utc).isoformat()
 
+
+def _stamped(body: bytes, blob, local: Path) -> bytes:
+    """The window as pulled, with ``CREATED`` set to when its blob was created — the value of
+    its first pull, kept when the window comes again (closed), else the listing's (V-20). A
+    body that is no JSON object is written as it came: the watch refuses it anyway."""
+    import json
+
+    try:
+        window = json.loads(body)
+    except ValueError:
+        return body
+    if not isinstance(window, dict):
+        return body
+    first = ""
+    try:
+        first = str(json.loads(local.read_text(encoding="utf-8")).get(CREATED) or "")
+    except (OSError, ValueError, AttributeError):
+        pass
+    window[CREATED] = first or _created(blob)
+    return json.dumps(window, indent=2).encode()
+
+
+def pull(directory: Path, *, channel: str | None = None, credential=None, get=None,
+         say=print) -> int:
+    """Copy into ``directory`` every window of the channel that is new or changed since the
+    local copy, page after page of the listing — the container's root only (the windows; the
+    prefixes are other pulls'), within the bounds of V-21. Each window carries when its blob
+    was created (``CREATED``, V-20). Returns how many were written."""
     url = channel if channel is not None else channel_url()
     if not url:
         return 0
-    get = get or requests.get
-    headers = auth_headers(credential)
+    headers = auth_headers(credential, url)
     directory.mkdir(parents=True, exist_ok=True)
-    written = 0
-    for blob in _blobs(get, url, headers):
+    written = downloads = 0
+    for blob in _blobs(get, url, headers, delimiter="/", say=say):
         name = blob.findtext("Name") or ""
         if not _SAFE_NAME.match(name):  # a campaign's blob (a ``/``) or a path: never a window
             continue
@@ -123,11 +274,20 @@ def pull(directory: Path, *, channel: str | None = None, credential=None, get=No
             remote_ts = parsedate_to_datetime(modified).timestamp()
             if remote_ts <= local.stat().st_mtime:
                 continue
-        body = get(f"{url}/{name}", headers=headers, timeout=15)
-        if not body.ok:
+        if downloads >= MAX_DOWNLOADS:
+            say(f"[exercise-channel] {MAX_DOWNLOADS} windows downloaded: the rest waits for "
+                "the next pull")
+            break
+        downloads += 1
+        try:
+            r, body = fetch(get, f"{url}/{name}", headers, what=f"window {name}")
+        except TooLarge as e:
+            say(f"[exercise-channel] {e} — not pulled")
+            continue
+        if not r.ok:
             continue
         tmp = local.with_suffix(".json.tmp")
-        tmp.write_bytes(body.content)
+        tmp.write_bytes(_stamped(body, blob, local))
         tmp.replace(local)  # atomic: the watch never reads half a window
         written += 1
     return written
@@ -235,7 +395,7 @@ def publish_campaign(campaign_dir: Path, runs_dir: Path | None = None, *,
         return "", []
     blobs = campaign_blobs(campaign_dir, runs_dir)
     cid = blobs[-1][0].split("/")[1]  # campaigns/<cid>/manifest.json, always the last
-    headers = {**auth_headers(credential), "x-ms-blob-type": "BlockBlob",
+    headers = {**auth_headers(credential, url), "x-ms-blob-type": "BlockBlob",
                "Content-Type": "application/json"}
     written = []
     for name, path in blobs:
@@ -265,7 +425,7 @@ def publish_run(run_id: str, runs_dir: Path | str = "runs", *, channel: str | No
     if not path.is_file():
         return ""
     name = f"{RUNS}/{run_id}.json"
-    headers = {**auth_headers(credential), "x-ms-blob-type": "BlockBlob",
+    headers = {**auth_headers(credential, url), "x-ms-blob-type": "BlockBlob",
                "Content-Type": "application/json"}
     r = (put or requests.put)(f"{url}/{name}", headers=headers, data=path.read_bytes(),
                               timeout=15)
@@ -288,20 +448,32 @@ def carry_run(run_id: str, runs_dir: Path | str = "runs") -> bool:
     return bool(name)
 
 
-def _blobs(get, url: str, headers: dict, prefix: str = ""):
-    """Every blob of the channel (under ``prefix``, when one is given), page after page."""
-    marker = ""
+def _blobs(get, url: str, headers: dict, prefix: str = "", *, delimiter: str = "",
+           say=print):
+    """Every blob of the channel (under ``prefix``, when one is given; not below a
+    ``delimiter``), page after page — each page read within MAX_LISTING_BYTES, at most
+    MAX_BLOBS names in all: past them, the listing stops and says so (V-21)."""
+    marker, seen = "", 0
     while True:
         params = {"restype": "container", "comp": "list"}
         if prefix:
             params["prefix"] = prefix
+        if delimiter:
+            params["delimiter"] = delimiter
         if marker:
             params["marker"] = marker
-        r = get(url, headers=headers, params=params, timeout=15)
+        r, body = fetch(get, url, headers, limit=MAX_LISTING_BYTES, params=params,
+                        what="a listing page of the channel")
         if not r.ok:
             raise RuntimeError(f"HTTP {r.status_code} listing the channel")
-        root = ET.fromstring(r.content)
-        yield from root.iter("Blob")
+        root = ET.fromstring(body)
+        for blob in root.iter("Blob"):
+            if seen >= MAX_BLOBS:
+                say(f"[exercise-channel] listing stopped at {MAX_BLOBS} blobs"
+                    f"{' under ' + prefix if prefix else ''}: the rest is not pulled")
+                return
+            seen += 1
+            yield blob
         marker = (root.findtext("NextMarker") or "").strip()
         if not marker:
             return
@@ -320,13 +492,11 @@ def pull_campaigns(directory: Path, *, channel: str | None = None, credential=No
     the hosted report writes only the campaigns that came this way, never one of a local run
     on the same runs directory. Returns how many files were written, and the campaigns whose
     pull failed (a run or the manifest refused) — not due at this pull."""
-    import requests
 
     url = channel if channel is not None else channel_url()
     if not url:
         return 0, set()
-    get = get or requests.get
-    headers = auth_headers(credential)
+    headers = auth_headers(credential, url)
     directory = Path(directory)
     runs, manifests = [], []
     for blob in _blobs(get, url, headers, f"{CAMPAIGNS}/"):
@@ -335,7 +505,7 @@ def pull_campaigns(directory: Path, *, channel: str | None = None, credential=No
         if not m or not _safe_part(m["cid"]) or (m["rid"] is not None and not _safe_part(m["rid"])):
             continue
         (manifests if m["rid"] is None else runs).append((blob, name, m))
-    written, failed = 0, set()
+    written, failed, downloads = 0, set(), 0
     for blob, name, m in runs + manifests:
         if m["rid"] is None and m["cid"] in failed:
             continue  # a run of it did not come: its manifest waits for the next pull
@@ -347,13 +517,22 @@ def pull_campaigns(directory: Path, *, channel: str | None = None, credential=No
                 if m["rid"] is None:
                     (local.parent / PULLED).touch()
                 continue
-        body = get(f"{url}/{name}", headers=headers, timeout=15)
-        if not body.ok:
+        if downloads >= MAX_DOWNLOADS:  # V-21: the rest waits; its manifest with it
+            failed.add(m["cid"])
+            continue
+        downloads += 1
+        try:
+            r, body = fetch(get, f"{url}/{name}", headers, what=name)
+        except TooLarge as e:
+            print(f"[exercise-channel] {e} — not pulled")
+            failed.add(m["cid"])
+            continue
+        if not r.ok:
             failed.add(m["cid"])
             continue
         local.parent.mkdir(parents=True, exist_ok=True)
         tmp = local.with_suffix(".json.tmp")
-        tmp.write_bytes(body.content)
+        tmp.write_bytes(body)
         tmp.replace(local)  # atomic: the report never reads half a manifest
         if m["rid"] is None:  # this campaign came from the channel: its report is H0's
             (local.parent / PULLED).touch()
@@ -373,16 +552,13 @@ def pull_runs(directory: Path, *, refusal, channel: str | None = None, credentia
     are never touched."""
     import json
 
-    import requests
-
     url = channel if channel is not None else channel_url()
     if not url:
         return 0, {}
-    get = get or requests.get
-    headers = auth_headers(credential)
+    headers = auth_headers(credential, url)
     directory = Path(directory)
     marks = directory / PULLED_RUNS
-    written, skipped = 0, {}
+    written, skipped, downloads = 0, {}, 0
     for blob in _blobs(get, url, headers, f"{RUNS}/"):
         name = blob.findtext("Name") or ""
         m = _RUN_BLOB.match(name)
@@ -397,12 +573,20 @@ def pull_runs(directory: Path, *, refusal, channel: str | None = None, credentia
             modified = blob.findtext("Properties/Last-Modified")
             if modified and parsedate_to_datetime(modified).timestamp() <= local.stat().st_mtime:
                 continue
-        body = get(f"{url}/{name}", headers=headers, timeout=15)
-        if not body.ok:
-            skipped[rid] = f"HTTP {body.status_code} downloading it"
+        if downloads >= MAX_DOWNLOADS:
+            skipped[rid] = f"not pulled yet: {MAX_DOWNLOADS} reports downloaded by this pull"
+            continue
+        downloads += 1
+        try:
+            r, content = fetch(get, f"{url}/{name}", headers, what=name)
+        except TooLarge as e:
+            skipped[rid] = f"refused: {e}"
+            continue
+        if not r.ok:
+            skipped[rid] = f"HTTP {r.status_code} downloading it"
             continue
         try:
-            report = json.loads(body.content)
+            report = json.loads(content)
         except ValueError:
             skipped[rid] = "refused: not JSON"
             continue
@@ -414,7 +598,7 @@ def pull_runs(directory: Path, *, refusal, channel: str | None = None, credentia
         mark.touch()  # the marker first: cut before the file, the next pull still writes it
         directory.mkdir(parents=True, exist_ok=True)
         tmp = local.with_suffix(".json.tmp")
-        tmp.write_bytes(body.content)
+        tmp.write_bytes(content)
         tmp.replace(local)  # atomic: the console never reads half a report
         written += 1
     return written, skipped

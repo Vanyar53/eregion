@@ -84,7 +84,8 @@ def test_a_detection_in_a_window_is_delivered_before_the_heartbeat():
     beat = store.blobs["heartbeat.json"]
     assert beat == {"at": (T0 + timedelta(minutes=3)).isoformat(),
                     "since": (T0 - timedelta(hours=1)).isoformat(),
-                    "windows": [w["run_id"]]}
+                    "windows": [w["run_id"]],
+                    "perimeter": ""}   # SEC5 (N-03): no AZURE_SUBSCRIPTION_ID in the tests
 
 
 def test_the_rest_of_the_fleet_is_never_published():
@@ -255,7 +256,12 @@ BENCH = f"/subscriptions/{SUB}/resourceGroups/rg-celebrimbor"
 ACCOUNT = (f"/subscriptions/{SUB}/resourceGroups/rg-orodruin/providers/Microsoft.Storage"
            "/storageAccounts/storodruin/blobServices/default/containers")
 EXERCISES, WATCH = f"{ACCOUNT}/exercises", f"{ACCOUNT}/watch"
-RIGHTS = [{"actions": list(orodruin.REQUIRED_ACTIONS)}]
+RIGHTS = [{"actions": list(orodruin.READ_ACTIONS)}]
+# SEC5 (V-29): reads on the group, the writes on each enrolled VM and experiment.
+BENCH_READ = list(orodruin.READ_ACTIONS)
+ENROLLED = [(f"{BENCH}/providers/Microsoft.Compute/virtualMachines/vm-1", "vm-act"),
+            (f"{BENCH}/providers/Microsoft.Chaos/experiments/exp-1", "chaos-act")]
+ACT = {"vm-act": list(orodruin.VM_ACTIONS), "chaos-act": list(orodruin.CHAOS_ACTIONS)}
 # The built-in roles' definitions, as role_actions reads them (data actions marked).
 READER = ["Microsoft.Storage/storageAccounts/blobServices/containers/read",
           "Microsoft.Storage/storageAccounts/blobServices/generateUserDelegationKey/action",
@@ -265,19 +271,20 @@ CONTRIBUTOR = READER + ["data:Microsoft.Storage/storageAccounts/blobServices/con
 
 
 def _assess(assignments, roles, *, channel=EXERCISES, watch=WATCH):
-    listed = [{"properties": {"scope": s, "roleDefinitionId": r}} for s, r in assignments]
+    listed = [{"properties": {"scope": s, "roleDefinitionId": r}} for s, r in [*assignments, *ENROLLED]]
+    roles = {**ACT, **roles}
     return orodruin.assess_identity(listed, lambda r: roles[r], RIGHTS, BENCH,
                                     sees_subscription=True, channel=channel, watch=watch)
 
 
 def test_a_read_on_the_return_channel_is_allowed_outside_the_bench():
-    roles = {"bench": ["*"], "contributor": CONTRIBUTOR, "reader": READER}
+    roles = {"bench": BENCH_READ, "contributor": CONTRIBUTOR, "reader": READER}
     assert _assess([(BENCH, "bench"), (EXERCISES, "contributor"), (WATCH, "reader")], roles) == []
 
 
 def test_a_write_on_the_return_channel_leaves_orodruin_passive():
     """M113: the injector must never be able to write what the watch says."""
-    roles = {"bench": ["*"], "contributor": CONTRIBUTOR, "wild": ["data:Microsoft.Storage/*"]}
+    roles = {"bench": BENCH_READ, "contributor": CONTRIBUTOR, "wild": ["data:Microsoft.Storage/*"]}
     for role in ("contributor", "wild"):
         missing = _assess([(BENCH, "bench"), (WATCH, role)], roles)
         assert [m["code"] for m in missing] == ["identity_outside_bench"]
@@ -285,13 +292,13 @@ def test_a_write_on_the_return_channel_leaves_orodruin_passive():
 
 
 def test_a_return_channel_declared_on_the_exercise_container_still_refuses_a_writer():
-    roles = {"bench": ["*"], "contributor": CONTRIBUTOR}
+    roles = {"bench": BENCH_READ, "contributor": CONTRIBUTOR}
     missing = _assess([(BENCH, "bench"), (EXERCISES, "contributor")], roles, watch=EXERCISES)
     assert [m["code"] for m in missing] == ["identity_outside_bench"]
 
 
 def test_a_read_elsewhere_than_the_declared_container_is_outside():
-    roles = {"bench": ["*"], "reader": READER}
+    roles = {"bench": BENCH_READ, "reader": READER}
     other = f"{ACCOUNT}/other"
     assert _assess([(BENCH, "bench"), (other, "reader")], roles)
     assert orodruin.watch_scope({"EREGION_WATCH_CHANNEL_SCOPE": f"/subscriptions/{SUB}"}) == ""
@@ -321,11 +328,14 @@ def test_read_identity_reads_the_data_actions_of_the_role(monkeypatch, data_acti
         if url.endswith("/roleAssignments"):
             r.json.return_value = {"value": [
                 {"properties": {"scope": BENCH, "roleDefinitionId": "/defs/injector"}},
-                {"properties": {"scope": WATCH, "roleDefinitionId": "/defs/blob"}}]}
+                {"properties": {"scope": WATCH, "roleDefinitionId": "/defs/blob"}},
+                *({"properties": {"scope": s, "roleDefinitionId": f"/defs/{r}"}} for s, r in ENROLLED)]}
         elif url.endswith(f"/subscriptions/{SUB}/providers/Microsoft.Authorization/permissions"):
             r.json.return_value = {"value": [{"actions": ["Microsoft.Authorization/roleAssignments/read"]}]}
         elif url.endswith("/permissions"):
             r.json.return_value = {"value": RIGHTS}
+        elif url.endswith(("/defs/vm-act", "/defs/chaos-act")):
+            r.json.return_value = {"properties": {"permissions": [{"actions": ACT[url.rsplit("/", 1)[1]]}]}}
         else:
             r.json.return_value = {"properties": {"permissions": [{
                 "actions": READER[:2], "dataActions": data_actions}]}}

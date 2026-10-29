@@ -64,7 +64,7 @@ COMPONENTS: dict[str, Component] = {
         own=("eregion_core",),
         absent_deps=GLORFINDEL_ONLY_DEPS + ("litellm",),
         tests=(
-            "test_exercise_channel.py", "test_llm_call.py", "test_models.py",
+            "test_exercise_channel.py", "test_injector_channels.py", "test_llm_call.py", "test_models.py",
         ),
     ),
     # Glorfindel — the watch, the graph, the response, its providers. The console
@@ -90,7 +90,7 @@ COMPONENTS: dict[str, Component] = {
             "test_annatar_atomic.py", "test_annatar_cli.py", "test_annatar_detection.py",
             "test_annatar_run_exit.py", "test_campaign_channel.py", "test_campaign_manifest.py",
             "test_campaign_planner.py", "test_campaign_runner.py", "test_campaign_synthesizer.py",
-            "test_engine.py", "test_inscription.py", "test_orodruin.py", "test_parser.py",
+            "test_engine.py", "test_injector_guards.py", "test_inscription.py", "test_orodruin.py", "test_parser.py",
             "test_signals.py",
         ),
     ),

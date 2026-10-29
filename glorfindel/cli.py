@@ -745,11 +745,15 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
 
     def _write_heartbeat() -> None:
         _HEARTBEAT.parent.mkdir(parents=True, exist_ok=True)
-        now = datetime.now(timezone.utc).isoformat()
-        _HEARTBEAT.write_text(now)
+        at = datetime.now(timezone.utc)
+        _HEARTBEAT.write_text(at.isoformat())
         try:
+            from eregion_core.watch_gate import beat_body
             from glorfindel.response.state import _atomic_write_text
-            _atomic_write_text(_INJECTOR_BEAT, now, mode=0o644)   # for them to read: nothing secret
+            # SEC5 (N-03): with the perimeter it watches (a digest of its subscription), which
+            # the injectors compare with their own (eregion_core/watch_gate.py). For them to
+            # read: nothing secret.
+            _atomic_write_text(_INJECTOR_BEAT, json.dumps(beat_body(at)), mode=0o644)
         except OSError as exc:          # a directory docker made as root: the watch goes on
             console.print(f"[yellow]Battement pour les injecteurs non écrit ({exc}) — "
                           "`make glorfindel-start` crée ~/.glorfindel/injectors[/yellow]")

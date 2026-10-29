@@ -323,13 +323,22 @@ def test_clean_refuses_a_production_target(monkeypatch):
     executor.run_script.assert_not_called()
 
 
-def test_scenario_destructive_reads_the_scenario_then_the_catalog():
+def test_scenario_destructive_is_the_catalog_s_word():
+    """SEC5 (V-19): the catalog decides, unknown is destructive, and a scenario may only make
+    itself stricter — saying « not destructive » against the catalog is refused."""
     from types import SimpleNamespace
 
     from annatar.runner.engine import scenario_destructive
 
-    assert scenario_destructive(SimpleNamespace(raw={"destructive": False}, mitre="T1486")) is False
-    assert scenario_destructive(SimpleNamespace(raw={}, mitre="T1486")) is True
-    assert scenario_destructive(SimpleNamespace(raw={}, mitre="T1041")) is False
-    assert scenario_destructive(SimpleNamespace(raw={}, mitre="T9999")) is None
-    assert scenario_destructive(SimpleNamespace(raw={"destructive": "no"}, mitre="T9999")) is None
+    def sc(raw, mitre):
+        return SimpleNamespace(raw=raw, mitre=mitre)
+
+    destructive, lie = scenario_destructive(sc({"destructive": False}, "T1486"))
+    assert destructive is True and "the catalog decides" in lie
+    assert scenario_destructive(sc({}, "T1486")) == (True, "")
+    assert scenario_destructive(sc({}, "T1041")) == (False, "")
+    assert scenario_destructive(sc({"destructive": True}, "T1041")) == (True, "")
+    assert scenario_destructive(sc({}, "T9999")) == (True, "")
+    assert scenario_destructive(sc({"destructive": "no"}, "T9999")) == (True, "")
+    destructive, lie = scenario_destructive(sc({"destructive": False}, "T9999"))
+    assert destructive is True and "unknown is destructive" in lie

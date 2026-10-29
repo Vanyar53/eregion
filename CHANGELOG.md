@@ -4,6 +4,13 @@ Notable changes to Eregion. The format follows [Keep a Changelog](https://keepac
 
 ## [Unreleased]
 
+### Added
+- **A `#releases` channel: a release's story in one place** (REL2, #309, 29/10; `docs/atelier-discord.md`, « `#releases` »). A new webhook, `EREGION_DISCORD_WEBHOOK_RELEASES`, gets one card per step, silent, never deleted, each with a link button: the version's pull request (`chore/release-X.Y.Z`, from this repository: a fork's branch of that name stays in `#ci`) opened and merged; the draft ready, posted by `make release-draft` with its notes in short (section titles, first entries); the release published, with « le CD de H0 la déploie : voir #deploy ». The published card and the version's pull request leave `#ci`, which keeps the other pull requests, red runs and closed issues. `#agents` keeps the draft's line and ping (REL1), unchanged; the CD of H0 stays in `#deploy`.
+  - **A draft's link that survives an edit.** Measured on the 0.4.4: GitHub gives a draft a new `…/releases/tag/untagged-<hash>` URL at each edit, and `make release-draft` edits it right after posting it (#agents' ids in its notes), so the link on `#agents` led nowhere. The link posted, on `#agents` and `#releases`, is now the repository's list of releases, where the draft comes first for its members.
+  - **Text from outside stays inert** (SEC6): a release's notes and name and a pull request's title go through `glorfindel/chat_text.py`, brought by `notify.yml`'s sparse checkout; no mention allowed, a button only to an `https://` link. A card refused with its button (400) is sent again without it. The secret is given to `release` events and to the repository's own version pull request only (`pull_request_target` whose head is this repository's `chore/release-…`, checked in `notify.yml`, then again by the script); never to a fork's pull request nor to a run — a red run on `chore/release-*` stays in `#ci`, with its ping. Without `chat_text`, a strict filter shows every mark as « · », `_` included.
+  - **Without the webhook, nothing changes**: the pull request and the publication stay in `#ci`, the draft has no card; a Discord error is one line, and the command or the job succeeds. `notify_discord.py check` names the new key.
+  - Tests `tests/unit/test_notify_discord.py`, `tests/unit/test_release.py` (the fake `gh` moves a draft's URL at each edit), mutants M1540–M1549, M1580–M1584.
+
 ## [0.4.4] — 2026-10-29 — "held at the core"
 
 ### Security

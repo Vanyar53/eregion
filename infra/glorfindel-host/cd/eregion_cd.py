@@ -30,7 +30,10 @@ The trigger is Jonathan publishing a release (sessions prepare drafts). A pass:
   6. the image running now tagged by its reference (refused when there is none: no switch
      without a way back); the switch (deploy.sh --activate), then the health for a few
      minutes: three containers running, never restarted, built from the tag; the watch's
-     heartbeat written after the switch; the console answering;
+     heartbeat written after the switch; the console answering; and, once they are, every
+     rule the release loads run once on its backend, read-only, in the watch's container
+     (`glorfindel rules check --live`, H2): a rule in error is a red health; no row is not
+     an error; a rule without an answer in its time is said, never a rollback;
   7. unhealthy: deploy.sh --activate on what ran (its image is kept: a retag) and its health;
      the release is marked failed, never tried again on its own (a new release, or `retry`);
      healthy: the old images pruned, the new and the one before kept;
@@ -38,7 +41,8 @@ The trigger is Jonathan publishing a release (sessions prepare drafts). A pass:
      refusal, a rollback, a failed rollback with Jonathan's mention. A refusal's detail (A3's
      words, compose's) stays in the journal: it may name the infrastructure.
 
-Installed in ~/.eregion-cd/ with deploy.sh and notify_discord.py, never run from the checkout it
+Installed in ~/.eregion-cd/ with deploy.sh, notify_discord.py and chat_text.py (SEC6: what a rule
+says, escaped for #deploy), never run from the checkout it
 deploys, and never replaced by a deployment: after one, a release newer than the agent (the
 commit it was installed from, ~/.eregion-cd/installed-from) whose agent differs is said (make
 glorfindel-host-cd-install); an older release, never — installing from it would break the CD. One pass at a time, and none while a deployment by hand runs
@@ -59,9 +63,17 @@ import urllib.request
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-# Installed next to this file on H0; in the repository (export-discord-env), in scripts/.
+# Installed next to this file on H0; in the repository (export-discord-env), in scripts/ — and
+# chat_text in glorfindel/ (appended: never before the standard library).
 sys.path[:0] = [str(HERE), str(HERE.parents[2] / "scripts")]
+sys.path.append(str(HERE.parents[2] / "glorfindel"))
 import notify_discord as nd  # noqa: E402
+
+try:
+    from chat_text import discord_text  # noqa: E402
+except ImportError:   # an agent copied without it: what a rule says still never formats
+    def discord_text(text) -> str:
+        return re.sub(r"[^\w .,:;!?'’«»()/=+-]", "·", "" if text is None else str(text))
 
 HOME = Path.home()
 CD_HOME = Path(os.environ.get("EREGION_CD_HOME") or HOME / ".eregion-cd")
@@ -72,6 +84,13 @@ CONSOLE = (os.environ.get("EREGION_CD_CONSOLE") or "http://127.0.0.1:7007").rstr
 HEARTBEAT = Path(os.environ.get("EREGION_CD_HEARTBEAT") or HOME / ".glorfindel" / "watch_heartbeat")
 HEALTH_S = float(os.environ.get("EREGION_CD_HEALTH_S") or 180)
 STEP_S = float(os.environ.get("EREGION_CD_STEP_S") or 10)
+# H2: the rules, run once in the health — the whole check, and each query, bounded; the
+# command's start (its config, its rules) gets RULES_MARGIN_S of the health's budget.
+RULES_S = float(os.environ.get("EREGION_CD_RULES_S") or 90)
+RULE_QUERY_S = float(os.environ.get("EREGION_CD_RULE_QUERY_S") or 20)
+RULES_MARGIN_S = float(os.environ.get("EREGION_CD_RULES_MARGIN_S") or 15)
+RULES_SCHEMA = "eregion.rules-check/1"
+RULES_SAID = 5          # rules named in #deploy; the others counted
 IMAGE = "eregion-glorfindel"
 CONTAINERS = ("eregion-watch", "eregion-war-room", "eregion-bot")
 VERSION = '{{index .Config.Labels "org.opencontainers.image.version"}}'
@@ -84,7 +103,8 @@ LOCK = "requirements/glorfindel.txt"
 ATTESTATION = "requirements/harness.json"
 AGENT_FILES = {"eregion_cd.py": "infra/glorfindel-host/cd/eregion_cd.py",
                "deploy.sh": "infra/glorfindel-host/deploy.sh",
-               "notify_discord.py": "scripts/notify_discord.py"}
+               "notify_discord.py": "scripts/notify_discord.py",
+               "chat_text.py": "glorfindel/chat_text.py"}
 
 
 class Quiet(Exception):
@@ -418,14 +438,98 @@ def health_once(ref: str, since: float) -> str:
     return ""
 
 
-def health(ref: str, since: float) -> str:
-    """Watched for HEALTH_S: '' when healthy at the end, else the last reason."""
+# What names the infrastructure, out of what #deploy says of a rule (the command reduces its
+# errors already; the candidate's words are read as anyone's): ids, resource paths, URLs,
+# addresses, host names.
+_SCRUB = [(re.compile(r"/subscriptions/[^\s'\"),;]*", re.I), "<ressource>"),
+          (re.compile(r"\b[a-z][a-z0-9+.-]*://\S*", re.I), "<url>"),
+          (re.compile(r"\b[\w.+-]+@[\w-]+(?:\.[\w-]+)+\b"), "<adresse>"),
+          (re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", re.I), "<id>"),
+          (re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?\b"), "<ip>"),
+          (re.compile(r"\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?!(?:ya?ml|jsonl?|py|md|txt|log)\b)"
+                      r"[a-z]{2,}\b", re.I), "<hôte>")]
+
+
+def scrubbed(text, n: int = 160) -> str:
+    """One line, short, nothing that names the infrastructure, escaped for Discord (SEC6)."""
+    s = " ".join(str(text if text is not None else "").split())
+    for pattern, mark in _SCRUB:
+        s = pattern.sub(mark, s)
+    s = s if len(s) <= n else s[: n - 1] + "…"
+    return discord_text(s)
+
+
+def read_rules_check(code: int, stdout: str) -> tuple[str, str]:
+    """(why, note) from what `glorfindel rules check --live --json` said: why is '' unless a
+    rule (or the loading) is in error — then H0 goes back; note is said either way."""
+    try:
+        out = json.loads(stdout.strip().splitlines()[-1]) if stdout.strip() else None
+    except ValueError:
+        out = None
+    if not isinstance(out, dict) or out.get("schema") != RULES_SCHEMA:
+        if code == 2:       # click's usage error: a release from before H2 has no such command
+            return "", "règles non vérifiées : cette release n'a pas `glorfindel rules check`"
+        return (f"la vérification des règles n'a rien dit de lisible (code {code}) — le détail : "
+                "make glorfindel-host-cd-status"), ""
+    rules = [r for r in out.get("rules") or [] if isinstance(r, dict)]
+    if out.get("error"):
+        return f"règles : {scrubbed(out['error'])}", ""
+
+    def named(items: list[dict]) -> str:
+        said = [f"« {scrubbed(r.get('name'), 80)} » : {scrubbed(r.get('error'))}" for r in items[:RULES_SAID]]
+        more = f" ; et {len(items) - RULES_SAID} autre(s)" if len(items) > RULES_SAID else ""
+        return " ; ".join(said) + more
+
+    red = [r for r in rules if r.get("status") == "error"]
+    slow = [r for r in rules if r.get("status") == "timeout"]
+    ok = [r for r in rules if r.get("status") == "ok"]
+    if red:
+        return f"{len(red)} règle(s) en erreur après la bascule — {named(red)}", ""
+    if not rules:
+        return "aucune règle chargée : la watch ne détecterait rien", ""
+    if code not in (0, 3):
+        return f"la vérification des règles a échoué (code {code}) — le détail : make glorfindel-host-cd-status", ""
+    note = f"règles : {len(ok)} sur {len(rules)} ont répondu, une fois chacune, en lecture seule"
+    if slow:
+        note += f" ; sans réponse dans le délai : {named(slow)}"
+    return "", note
+
+
+def rules_check(budget_s: float) -> tuple[str, str]:
+    """Every rule the release loads, run once in the watch's container, read-only, with the
+    watch's identity (H2). Bounded by what is left of the health (`budget_s`), and by RULES_S:
+    the command's own budget leaves it RULES_MARGIN_S to start (its config, its rules); past
+    the whole, it is cut and its rules said unproven — never a rollback, never again."""
+    wait = max(1.0, min(RULES_S + RULES_MARGIN_S, budget_s))
+    total = max(0.1, wait - RULES_MARGIN_S)
+    query = min(RULE_QUERY_S, total)
+    try:
+        res = subprocess.run(["docker", "exec", CONTAINERS[0], "glorfindel", "rules", "check", "--live", "--json",
+                              "--query-timeout", f"{query:g}", "--total", f"{total:g}"],
+                             capture_output=True, text=True, timeout=wait)
+    except subprocess.TimeoutExpired:
+        return "", f"règles : la vérification n'a pas fini en {wait:g} s (non prouvées)"
+    if res.returncode not in (0, 3) and (res.stderr or "").strip():
+        print(f"glorfindel rules check :\n{tail(res)}")
+    return read_rules_check(res.returncode, res.stdout)
+
+
+def health(ref: str, since: float, rules: bool = False) -> tuple[str, str]:
+    """Watched for HEALTH_S: ('', note) when healthy at the end, else (the last reason, note).
+    With `rules` (the release switched to, not the one gone back to): once the containers are
+    healthy, every rule run once (H2), with what is left of the health (healthy only at its
+    last look: one second, then said unproven) — one in error ends the health, red."""
     deadline = time.monotonic() + HEALTH_S
-    why = health_once(ref, since)
-    while time.monotonic() < deadline:
-        time.sleep(STEP_S)
+    proof: tuple[str, str] | None = None
+    while True:
         why = health_once(ref, since)
-    return why
+        if rules and proof is None and not why:
+            proof = rules_check(deadline - time.monotonic())
+            if proof[0]:
+                return proof
+        if time.monotonic() >= deadline:
+            return why, proof[1] if proof else ""
+        time.sleep(STEP_S)
 
 
 def agent_drift(tag: str) -> tuple[list[str], str, bool]:
@@ -461,14 +565,17 @@ def agent_drift(tag: str) -> tuple[list[str], str, bool]:
     return out, "", False
 
 
-def conclude(state: dict, tag: str, dep_ref: str, why: str, url: str, how: str) -> int:
+def conclude(state: dict, tag: str, dep_ref: str, why: str, url: str, how: str, note: str = "") -> int:
     """After the switch: kept when healthy (the old images pruned, the one before kept), else
-    back to what ran."""
+    back to what ran. `note`: what the rules said (H2) — with the success; a rule that did not
+    answer in its time is said on its own, in orange, never a rollback."""
     if not why:
         state["outcomes"][tag] = {"result": "deployed", "why": "", "at": int(time.time())}
         save_state(state)
         prune(tag, dep_ref)
-        say(f"✅ H0 tourne sur {tag}", how, color=nd.GREEN, url=url)
+        say(f"✅ H0 tourne sur {tag}", how + (f"\n{note}" if note else ""), color=nd.GREEN, url=url)
+        if "sans réponse" in note or "non prouvées" in note:
+            say(f"⏱️ {tag} : des règles n'ont pas répondu dans le délai", note, color=nd.ORANGE, url=url)
         drift, note, lost = agent_drift(tag)
         if drift:
             say(f"🔧 Agent de CD à mettre à jour ({tag})", f"diffèrent de la release, plus récente que l'agent : "
@@ -530,8 +637,8 @@ def resume(state: dict, tag: str, cut: dict) -> int:
         say(f"⏸️ Bascule vers {tag} interrompue avant d'avoir eu lieu", f"H0 est sur {dep_ref} ; le CD la "
             "reprend au prochain passage", color=nd.BLUE, url=url)
         return 0
-    why = health(tag, float(cut.get("at") or 0))
-    return conclude(state, tag, dep_ref, why, url, "passage repris après une interruption ; santé verte")
+    why, note = health(tag, float(cut.get("at") or 0), rules=True)
+    return conclude(state, tag, dep_ref, why, url, "passage repris après une interruption ; santé verte", note)
 
 
 def check_running(tag: str, commit: str, url: str) -> int:
@@ -632,13 +739,14 @@ def run_pass(check: bool = False) -> int:
     # Written before it happens: a pass cut from here on is taken up by the next one.
     state["outcomes"][tag] = {"result": "switching", "from": dep_ref, "url": url, "why": "", "at": since}
     save_state(state)
+    note = ""
     try:
         activate(tag)
-        why = health(tag, since)
+        why, note = health(tag, since, rules=True)
     except Unhealthy as e:
         why = str(e)
     return conclude(state, tag, dep_ref, why, url,
-                    f"{commit[:12]} · {int(time.monotonic() - started)} s, santé verte pendant {int(HEALTH_S)} s")
+                    f"{commit[:12]} · {int(time.monotonic() - started)} s, santé verte pendant {int(HEALTH_S)} s", note)
 
 
 def rollback(ref: str) -> str:
@@ -650,7 +758,7 @@ def rollback(ref: str) -> str:
         activate(ref)
     except Unhealthy as e:
         return str(e)
-    return health(ref, since)
+    return health(ref, since)[0]
 
 
 def locked(fn):

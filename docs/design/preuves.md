@@ -150,8 +150,26 @@ attendait son tour y restait, ses verrous pris, et le teardown qui les prend ens
 sans fin. L'ordonnanceur abandonne maintenant la course avant de lever l'échec : chaque fil en
 attente lève `_Abandoned`, qui ne dérive pas d'`Exception` (aucun `except Exception` du code ne
 l'avale), et relâche ses verrous en se déroulant (`test_a_stuck_race_fails_and_lets_the_teardown_through`,
-M1346). Le délai d'un tour reste 20 s : un vrai interblocage échoue toujours, et vite. Les jobs
-qui lancent la machine sont bornés : CI Linux 30 min, macOS 25 min, nuit 150 min (M1347, M1348).
+M1346). Le délai d'un tour reste 20 s.
+
+Ce délai ne voyait pas tout interblocage (relecture d'U3F). Un verrou piloté pris est réessayé à
+chaque tour, sans fin quand l'appelant ne donne pas de délai (les verrous de VM des écritures) :
+si op-1 tient A et veut B pendant qu'op-2 tient B et veut A, chacun rend son tour à chaque essai,
+chaque tour revient à temps, et I11 ne tombait jamais — la course tournait sans fin. L'ordonnanceur
+compte maintenant les tours d'affilée passés seulement sur des verrous trouvés pris : au-delà de
+2 000, I11 tombe, « livelock (deadlock between driven locks?) », par le même chemin d'abandon
+(`test_two_driven_locks_taken_in_reverse_order_fail_fast`, M1349 ; une seconde environ). Mesuré sur
+les graines 210, 203, 1 et 2 à 500 séquences, le plus long de ces passages dans une vraie course
+est de 10 tours. Ce qui est tenu : un interblocage entre verrous pilotés échoue en bien moins d'un
+tour de délai ; un fil bloqué hors de la vue de l'ordonnanceur (un verrou non piloté, une attente
+quelconque) échoue au bout d'un tour, 20 s. Un tel fil ne se déroule pas : l'échec le nomme
+(« still running, never unwound »), et le teardown de la machine saute alors la remise à plat qui
+attendrait derrière ses verrous — I11 a déjà échoué
+(`test_a_thread_out_of_sight_holding_a_lock_does_not_hang_the_teardown`, M1440). Ce qui ne l'est
+pas : un fil qui boucle sans jamais rendre son tour ni prendre de verrou piloté n'est vu que par
+la borne du job. Les jobs qui lancent la machine sont bornés : CI Linux 30 min, macOS 25 min, nuit
+150 min (M1347, M1348) ; sur Linux comme sur macOS, un test qui dure plus de 8 min écrit la pile de
+ses fils (M1441).
 
 ## La mesure par mutation
 

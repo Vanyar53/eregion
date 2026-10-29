@@ -251,26 +251,42 @@ class _Abandoned(BaseException):
     hung instead of failing (I3F's review, U3F)."""
 
 
+# Turns in a row where every thread only tried a driven lock and found it taken: a
+# deadlock between driven locks (op-1 holds A and wants B, op-2 holds B and wants A) —
+# each thread gives its turn away at every try, and no turn ever times out (U3F review).
+# A real race's longest such run, over seeds 210 and 203 at 500 sequences, is measured in
+# docs/design/preuves.md; the limit is far above it, and is reached in well under a second.
+_IDLE_TURNS = 2000
+_LONGEST_IDLE = [0]                # the longest run of idle turns seen (STATS)
+
+
 class _Scheduler:
     """Glorfindel operations at once, one Azure call (or state write) at a time, in an
     order drawn from a seed (L27). A thread waits for its turn before each call; a lock
     that is taken costs it a turn (see _scheduled) — the real locks decide.
-    `timeout`: the seconds a turn may take (real time) before the race is called stuck."""
+    `timeout`: the seconds a turn may take (real time) before the race is called stuck;
+    `idle_turns`: the turns in a row spent only on taken locks before it is called a
+    livelock."""
 
-    def __init__(self, seed: int, timeout: float = 20):
+    def __init__(self, seed: int, timeout: float = 20, idle_turns: int = _IDLE_TURNS):
         import random
         self.cv = threading.Condition()
         self.rng = random.Random(seed)
         self.state: dict[str, str] = {}
         self.turn = None
         self.timeout = timeout
+        self.idle_turns = idle_turns
         self.abandoned = False
+        self.retried: dict[str, bool] = {}
+        self.hung: list[str] = []        # threads still running once abandoned
 
     def _me(self):
         name = threading.current_thread().name
         return name if name in self.state else None
 
-    def point(self):
+    def point(self, retry: bool = False):
+        """Wait for a turn. `retry`: the turn that ends here was spent only on a driven
+        lock found taken (no progress)."""
         with self.cv:
             me = self._me()
             if me is None:
@@ -279,6 +295,7 @@ class _Scheduler:
                 self.turn = None
             if self.abandoned:
                 raise _Abandoned(me)
+            self.retried[me] = retry
             self.state[me] = "wait"
             self.cv.notify_all()
             self.cv.wait_for(lambda: self.turn == me or self.abandoned)
@@ -309,6 +326,7 @@ class _Scheduler:
             th.start()
         settled = ("wait", "blocked", "done")
         stuck = None
+        idle = 0
         with self.cv:
             while True:
                 ok = self.cv.wait_for(
@@ -327,6 +345,15 @@ class _Scheduler:
                 if not self.cv.wait_for(lambda: self.state[pick] in settled, timeout=self.timeout):
                     stuck = f"I11: {pick} never came back: {self.state}"
                     break
+                if self.state[pick] == "wait" and self.retried.get(pick):
+                    idle += 1
+                    _LONGEST_IDLE[0] = max(_LONGEST_IDLE[0], idle)
+                    if idle > self.idle_turns:
+                        stuck = (f"I11: livelock (deadlock between driven locks?): {idle} turns "
+                                 f"in a row only found taken locks: {self.state}")
+                        break
+                else:
+                    idle = 0
             if stuck:
                 # Every thread waiting for a turn unwinds, its locks released, before the
                 # failure is raised: the teardown takes them next (_Abandoned).
@@ -334,7 +361,10 @@ class _Scheduler:
                 self.cv.notify_all()
         for th in threads:
             th.join(timeout=min(5, self.timeout))
-        assert stuck is None, stuck
+        # A thread blocked out of the scheduler's sight doesn't unwind: whatever it holds
+        # stays held, and whoever runs next must not wait behind it (the teardown, _race).
+        self.hung = [th.name for th in threads if th.is_alive()]
+        assert stuck is None, stuck + (f" — still running, never unwound: {self.hung}" if self.hung else "")
         return results
 
 
@@ -360,7 +390,7 @@ def _scheduled(real):
                 tries += 1
                 if kwargs.get("timeout") is not None and tries > 40:
                     raise
-                sched.point()
+                sched.point(retry=True)
         try:
             sched.point()
             yield
@@ -514,6 +544,11 @@ class IsolationMachine(RuleBasedStateMachine):
 
     def teardown(self):
         try:
+            if getattr(self, "hung", None):
+                # A race failed with a thread blocked out of the scheduler's sight, its
+                # locks held: the recovery would wait behind them forever. I11 has failed
+                # already; that failure is the one to see (U3F review).
+                return
             if getattr(self, "connector", None) is not None:
                 # I7, with the local state as it is, then without it.
                 self._recover_everything(lose_state=False)
@@ -1286,11 +1321,12 @@ class IsolationMachine(RuleBasedStateMachine):
         for vm, kind, _ in (first, second):
             if kind in ("release", "reset"):
                 self.releasing.add(vm)
-        _CURRENT.scheduler = _Scheduler(order)
+        sched = _CURRENT.scheduler = _Scheduler(order)
         try:
-            results = _CURRENT.scheduler.run([("op-1", first[2]), ("op-2", second[2])])
+            results = sched.run([("op-1", first[2]), ("op-2", second[2])])
         finally:
             _CURRENT.scheduler = None
+            self.hung = sched.hung
         # The journal: a release that ended released, or an isolation that ended
         # isolated (the operator's call — its order against the release is unknown).
         for name, (vm, kind, _) in (("op-1", first), ("op-2", second)):
@@ -2284,3 +2320,4 @@ def test_isolation_invariants(monkeypatch):
     if os.environ.get("GLORFINDEL_INVARIANT_STATS"):
         for what, n in sorted(_SEEN.items()):
             print(f"{n:7d}  {what}")
+        print(f"{_LONGEST_IDLE[0]:7d}  longest run of turns only on taken locks (limit {_IDLE_TURNS})")

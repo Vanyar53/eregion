@@ -3336,6 +3336,21 @@ MUTANTS += [
 ]
 TESTS.update({"M1346": "tests/unit/test_invariant_regressions.py -k stuck_race",
               "M1347": "tests/unit/test_workflows.py -k bounded", "M1348": "tests/unit/test_workflows.py -k bounded"})
+# U3F, after its review: a deadlock between driven locks fails as a livelock (each thread gave
+# its turn away at every try, no turn ever timed out); a thread that never unwound doesn't hang
+# the teardown; the Linux tests write their threads' stacks on a hang, as macOS.
+MUTANTS += [
+    ("M1349", "two driven locks taken crosswise: the race runs forever, no turn times out (U3F)",
+     INVARIANTS, "                    if idle > self.idle_turns:\n", "                    if False:\n"),
+    ("M1440", "a race thread that never unwound holds web's lock: the teardown waits behind it (U3F)",
+     INVARIANTS, '            if getattr(self, "hung", None):\n', "            if False:\n"),
+    ("M1441", "the CI's Linux tests hang without saying where (U3F)", ".github/workflows/ci.yml",
+     "        run: python -m pytest tests/ -q -o faulthandler_timeout=480\n",
+     "        run: python -m pytest tests/ -q\n"),
+]
+TESTS.update({"M1349": "tests/unit/test_invariant_regressions.py -k reverse_order",
+              "M1440": "tests/unit/test_invariant_regressions.py -k out_of_sight_holding",
+              "M1441": "tests/unit/test_workflows.py -k hang"})
 # SEC6 (#277): the security process — the CI's actions and inputs, the lot threads against a fork
 # or an outsider, text from outside made inert in the chats, the bench's apply confirmed.
 NDS = "scripts/notify_discord.py"

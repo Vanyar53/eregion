@@ -1395,3 +1395,94 @@ def test_a_stuck_race_fails_and_lets_the_teardown_through(monkeypatch):
         _CURRENT.scheduler = None
     assert stuck, "no seed made the race stick: the test proves nothing"
     assert issubclass(_Abandoned, BaseException) and not issubclass(_Abandoned, Exception)
+
+
+def test_two_driven_locks_taken_in_reverse_order_fail_fast(monkeypatch):
+    """A deadlock between two driven locks: op-1 holds A and wants B, op-2 holds B and
+    wants A. Each gives its turn away at every try, so every turn comes back in time and
+    I11 never fell — the race ran forever (U3F review). Turns that only find taken locks
+    are counted: past the limit, the race fails as a livelock, its threads unwound, and
+    the locks are free for whoever comes next."""
+    import threading
+    import time
+    from glorfindel import actions
+    from .test_invariants import _CURRENT, _Chaos, _Scheduler
+    invariant_env(monkeypatch)
+    monkeypatch.setattr(_CURRENT, "chaos", _Chaos())
+
+    def one_then_other(first, second):
+        def op():
+            with actions._vm_lock(first):
+                with actions._vm_lock(second):
+                    pass
+        return op
+
+    locked = 0
+    try:
+        for seed in range(8):
+            _CURRENT.scheduler = sched = _Scheduler(seed, timeout=5)
+            t0, got = time.monotonic(), {}
+
+            def race():
+                try:
+                    got["out"] = sched.run([("op-1", one_then_other("u3f-a", "u3f-b")),
+                                            ("op-2", one_then_other("u3f-b", "u3f-a"))])
+                except AssertionError as exc:
+                    got["exc"] = exc
+            th = threading.Thread(target=race, daemon=True)
+            th.start()
+            th.join(15)
+            if th.is_alive():                              # the race never ends: free it, then fail
+                with sched.cv:
+                    sched.abandoned = True
+                    sched.cv.notify_all()
+                th.join(10)
+                pytest.fail("two driven locks taken crosswise: the race never ended")
+            if "exc" in got:
+                assert "I11: livelock" in str(got["exc"]), got["exc"]
+                assert time.monotonic() - t0 < 5, "a livelock must fail before a turn's timeout"
+                assert not sched.hung, sched.hung
+                locked += 1
+            else:
+                assert all(exc is None for _, exc in got["out"].values()), got
+            _CURRENT.scheduler = None
+            for name in ("u3f-a", "u3f-b"):
+                with actions._vm_lock(name, timeout=3):    # the teardown's turn
+                    pass
+    finally:
+        _CURRENT.scheduler = None
+    assert locked, "no seed took the locks crosswise: the test proves nothing"
+
+
+def test_a_thread_out_of_sight_holding_a_lock_does_not_hang_the_teardown(monkeypatch):
+    """A race whose thread blocks out of the scheduler's sight while it holds a driven
+    lock — web's: it never unwinds. I11 fails, and the teardown's recovery, which takes
+    web's lock, used to wait behind it forever. The failure names the thread, and the
+    teardown skips the recovery behind it (I11 has failed already)."""
+    import functools
+    import threading
+    from glorfindel import actions
+    from . import test_invariants
+    invariant_env(monkeypatch)
+    monkeypatch.setattr(test_invariants, "_Scheduler", functools.partial(test_invariants._Scheduler, timeout=0.5))
+    gone = threading.Event()
+
+    def holder():
+        with actions._vm_lock("web"):
+            gone.wait(60)                                   # out of the scheduler's sight
+
+    m = IsolationMachine()
+    done = threading.Event()
+    try:
+        m.build(_net())
+        with pytest.raises(AssertionError, match="never unwound"):
+            m._race(Script(0), (WEB1, "hold", holder), (WEB1, "hold", lambda: None))
+        assert m.hung == ["op-1"], m.hung
+        th = threading.Thread(target=lambda: (m.teardown(), done.set()), daemon=True)
+        th.start()
+        th.join(10)
+        assert done.is_set(), "the teardown waited behind the thread that never unwound"
+    finally:
+        gone.set()
+        if not done.is_set():
+            done.wait(30)

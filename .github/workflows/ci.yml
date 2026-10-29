@@ -63,7 +63,9 @@ jobs:
         env:
           GLORFINDEL_INVARIANT_EXAMPLES: "500"
           GLORFINDEL_INVARIANT_DB: .hypothesis-invariants
-        run: python -m pytest tests/ -q
+        # As on macOS: a test still running after 8 min (the step takes 4-9) writes every
+        # thread's stack to the log — a hang says where it waits before the job's bound.
+        run: python -m pytest tests/ -q -o faulthandler_timeout=480
 
   # The state files are keyed by name; macOS (APFS, case-insensitive by default) is
   # where a VM name with an upper-case letter deleted its own state (fifth review, C1).

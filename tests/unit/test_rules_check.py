@@ -50,8 +50,34 @@ rules:
 """
 
 
-class Hang(Exception):
+# What the SDK raises, by its names and its `status_code` only (the CLI never imports it, MC0).
+class HttpResponseError(Exception):
+    def __init__(self, message, status_code):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+class ServiceRequestError(Exception):
     pass
+
+
+class ClientAuthenticationError(Exception):
+    pass
+
+
+# The marker a query holds → what the fake backend raises.
+TRANSIENT = {
+    "THROTTLED": lambda: HttpResponseError("(TooManyRequests) Too Many Requests", 429),
+    "UNAVAILABLE": lambda: HttpResponseError("(ServiceUnavailable) The service is unavailable", 503),
+    "NETWORK": lambda: ServiceRequestError("Failed to resolve 'api.loganalytics.example.net'"),
+    "CREDENTIAL": lambda: ClientAuthenticationError("ManagedIdentityCredential: IMDS endpoint unavailable"),
+    "PARTIAL": lambda: RuntimeError("workspace query not successful: LogsQueryStatus.PARTIAL"),
+    "UNAUTHORIZED": lambda: HttpResponseError("(InvalidAuthenticationToken) expired", 401),
+}
+LASTING = {
+    "FORBIDDEN": lambda: HttpResponseError("(InsufficientAccessError) The user doesn't have access", 403),
+    "NOTFOUND": lambda: HttpResponseError(f"(WorkspaceNotFound) workspace {WS} could not be found", 404),
+}
 
 
 class FakeBackend:
@@ -66,6 +92,9 @@ class FakeBackend:
             raise Exception(AZURE_SYNTAX)
         if "NoSuchTable" in query:
             raise Exception(AZURE_TABLE)
+        for marker, error in {**TRANSIENT, **LASTING}.items():
+            if marker in query:
+                raise error()
         if "SLOW" in query:
             self.release.wait(30)       # longer than any test's budget
             return []
@@ -121,7 +150,7 @@ def _check(*args):
 
 
 def _json(res) -> dict:
-    return json.loads(res.output.strip().splitlines()[-1])
+    return json.loads(res.stdout.strip().splitlines()[-1])
 
 
 def _by_name(out: dict) -> dict:
@@ -135,7 +164,7 @@ def test_a_valid_rule_without_rows_is_ok(tmp_path, backend, config):
     assert res.exit_code == 0, res.output
     out = _json(res)
     assert out["schema"] == rule_check.SCHEMA and out["live"] is True
-    assert out["counts"] == {"ok": 2, "error": 0, "timeout": 0}
+    assert out["counts"] == {"ok": 2, "error": 0, "unproven": 0, "timeout": 0}
     assert {r["status"] for r in out["rules"]} == {"ok"} and {r["rows"] for r in out["rules"]} == {0}
 
 
@@ -303,7 +332,8 @@ def test_a_config_refused_by_a3_is_an_error_its_words_in_the_terminal_only(tmp_p
     res = _check("--rules", _base(tmp_path), "--live", "--json")
     assert res.exit_code == 1
     out = _json(res)
-    assert "A3" in out["error"] and "quarantaine_nsg" not in res.output and WS not in res.output
+    assert "A3" in out["error"] and "quarantaine_nsg" not in res.stdout and WS not in res.stdout
+    assert "quarantaine_nsg" in res.stderr                  # the full words: stderr, the CD's journal
     human = _check("--rules", _base(tmp_path), "--live")
     assert human.exit_code == 1 and "quarantaine_nsg" in human.output
 
@@ -318,7 +348,7 @@ def test_the_terminal_says_each_rule(tmp_path, backend, config):
     res = _check("--rules", _base(tmp_path, base), "--live")
     assert res.exit_code == 1
     assert "ssh-brute-force" in res.output and "sudo-root" in res.output
-    assert "1 ok, 1 en erreur, 0 sans réponse" in " ".join(res.output.split())
+    assert "1 ok, 1 en erreur, 0 non prouvée(s), 0 sans réponse" in " ".join(res.output.split())
 
 
 def test_glorfindel_rules_still_lists(tmp_path, config):
@@ -346,16 +376,63 @@ def test_scrub_keeps_the_kind_never_where():
     assert len(rule_check.scrub("x" * 1000)) <= 200 and "\n" not in rule_check.scrub("a\nb")
 
 
-def test_reduce_error_takes_the_innermost_message():
-    kind, line, full = rule_check.reduce_error(Exception(AZURE_TABLE))
-    assert kind == "table" and line.startswith("'where' operator: Failed to resolve table") and "SEM0100" in full
+def test_reduce_error_takes_the_innermost_message_and_code():
+    kind, code, line, full = rule_check.reduce_error(Exception(AZURE_TABLE))
+    assert (kind, code) == ("table", "SEM0100")
+    assert line.startswith("'where' operator: Failed to resolve table") and "SEM0100" in full
 
 
-@pytest.mark.parametrize("text, kind", [
-    ("(AuthorizationFailed) The client does not have authorization", "access"),
-    ("(WorkspaceNotFound) The workspace could not be found", "workspace"),
-    ("(BadArgumentError) Query could not be parsed", "syntax"),
-    ("ServiceRequestError: connection reset", "other"),
+@pytest.mark.parametrize("exc, kind", [
+    (HttpResponseError("(AuthorizationFailed) no authorization", 403), "access"),
+    (HttpResponseError("(WorkspaceNotFound) not found", 404), "workspace"),
+    (HttpResponseError("(BadArgumentError) Query could not be parsed", 400), "syntax"),
+    (HttpResponseError("(BadArgumentError) Failed to resolve table 'X'", 400), "table"),
+    (Exception('(BadArgumentError) {"code": "SYN0002"}'), "syntax"),
+    (HttpResponseError("(TooManyRequests)", 429), "throttled"),
+    (HttpResponseError("(InternalServerError)", 500), "service"),
+    (HttpResponseError("(GatewayTimeout)", 504), "service"),
+    (HttpResponseError("(InvalidAuthenticationToken)", 401), "auth"),
+    (ClientAuthenticationError("IMDS"), "auth"),
+    (ServiceRequestError("Failed to resolve 'host'"), "network"),     # DNS: not a table absent
+    (ConnectionResetError("reset"), "network"),
+    (RuntimeError("workspace query not successful: LogsQueryStatus.PARTIAL"), "partial"),
+    (Exception("(AuthorizationFailed) The client does not have authorization"), "other"),   # no 403: may pass
+    (Exception("something else"), "other"),
 ])
-def test_errors_are_classified(text, kind):
-    assert rule_check.classify(text) == kind
+def test_errors_are_classified_lasting_on_explicit_evidence_only(exc, kind):
+    assert rule_check.classify(exc) == kind
+    assert (kind in rule_check.DURABLE) == (kind in ("access", "workspace", "syntax", "table"))
+
+
+@pytest.mark.parametrize("marker", sorted(TRANSIENT))
+def test_an_error_that_may_pass_is_unproven_never_an_error(tmp_path, backend, config, marker):
+    """A 429, a 503, the network, a credential not available, a partial result, a 401: the next
+    query may well answer — code 3, never 1 (the CD would roll a good release back)."""
+    base = BASE.replace('Syslog | where SyslogMessage has "USER=root"', f"Syslog // {marker}")
+    res = _check("--rules", _base(tmp_path, base), "--live", "--json")
+    assert res.exit_code == rule_check.EXIT_TIMEOUT, res.output
+    out = _by_name(_json(res))["sudo-root"]
+    assert out["status"] == "unproven" and out["kind"] not in rule_check.DURABLE
+    assert "api.loganalytics.example.net" not in res.stdout
+
+
+@pytest.mark.parametrize("marker, kind, code", [("FORBIDDEN", "access", "403"), ("NOTFOUND", "workspace", "404")])
+def test_an_explicit_403_or_404_lasts(tmp_path, backend, config, marker, kind, code):
+    base = BASE.replace('Syslog | where SyslogMessage has "USER=root"', f"Syslog // {marker}")
+    res = _check("--rules", _base(tmp_path, base), "--live", "--json")
+    assert res.exit_code == 1
+    out = _by_name(_json(res))["sudo-root"]
+    assert (out["status"], out["kind"], out["code"]) == ("error", kind, code)
+
+
+def test_with_json_the_full_words_go_to_stderr(tmp_path, backend, config):
+    base = BASE.replace('Syslog | where SyslogMessage has "USER=root"', "BROKEN( | take 1")
+    res = _check("--rules", _base(tmp_path, base), "--live", "--json")
+    assert WS in res.stderr and "sudo-root [error/syntax]" in res.stderr      # the CD's journal keeps them
+    assert WS not in res.stdout and _by_name(_json(res))["sudo-root"]["code"] == "SYN0002"
+
+
+def test_scrub_spares_what_is_no_host():
+    s = rule_check.scrub("LogsQueryStatus.PARTIAL in rule ssh.v2, at vm-a.internal.example.net or example.com")
+    assert "LogsQueryStatus.PARTIAL" in s and "ssh.v2" in s
+    assert "internal.example.net" not in s and "example.com" not in s

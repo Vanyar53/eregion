@@ -8,19 +8,23 @@ client's layer over it, the rules approved into that layer (P1) — and says, ru
   a source no detector reads — the silent defaults P1 put into words, here an error;
 - with `--live`, **its query, once**, on its backend, as the rule poller sends it (the same
   detector, the same window): `ok` (zero rows included — no row is not an error), `error`
-  (syntax, a table or a column absent, access refused, a workspace not found), `timeout`.
+  only for what lasts (an invalid query, a table or a column absent, a 403, a 404),
+  `unproven` for what may pass (a 429, a 5xx, a 401 or a credential not available, the
+  network, a partial result, anything else), `timeout`.
 
 Read-only by construction: the detector's `run_query` and nothing else — no rule poller (it
 writes `rule_status.json` and dispatches), no model, no action, nothing written. Each query
 is bounded (`query_timeout_s`, in a thread of its own), and so is the whole (`total_s`): past
 it, the rules left are « not run », said as timeouts. Never a retry, never a loop.
 
-The JSON (`--json`) is what H0's CD reads after a switch (`infra/glorfindel-host/cd/
-eregion_cd.py`): an error there is a red health and a rollback. Its errors are **reduced** —
-a kind, a short line, no workspace, subscription, resource path, host name, address — since
-the CD says them in `#deploy`. The full detail stays in the terminal (without `--json`).
+The JSON (`--json`) is what H0's CD reads before and after a switch (`infra/glorfindel-host/
+cd/eregion_cd.py`): a rule in a lasting error after the switch that was ok before is a
+rollback. Its errors are **reduced** — a kind, a code (`SEM0100`, `429`), a short line, no
+workspace, subscription, resource path, host name, address. The full detail goes to stderr
+(with `--json`: the CD's journal, private) or the terminal.
 
-Exit code: 0 every rule ok, 1 an error (a rule, or the loading itself), 3 timeouts only.
+Exit code: 0 every rule ok, 1 a lasting error (a rule, or the loading itself), 3 unproven or
+timeouts only.
 """
 from __future__ import annotations
 
@@ -33,20 +37,28 @@ from datetime import datetime, timedelta, timezone
 from typing import Callable
 
 SCHEMA = "eregion.rules-check/1"
-OK, ERROR, TIMEOUT = "ok", "error", "timeout"
+OK, ERROR, TIMEOUT, UNPROVEN = "ok", "error", "timeout", "unproven"
 EXIT_OK, EXIT_ERROR, EXIT_TIMEOUT = 0, 1, 3
+# What lasts: an error the next query would meet again. Everything else may pass — never
+# called an error (the CD would roll a release back for a throttled workspace).
+DURABLE = frozenset({"backend", "syntax", "table", "access", "workspace"})
 
 # What each kind of error is called, in the words #deploy uses.
 KINDS = {
     "backend": "backend non lié",
     "syntax": "requête invalide",
     "table": "table ou colonne absente",
-    "access": "accès refusé",
-    "workspace": "workspace introuvable",
+    "access": "accès refusé (403)",
+    "workspace": "workspace introuvable (404)",
+    "throttled": "limité (429)",
+    "service": "service indisponible (5xx)",
+    "auth": "identité indisponible",
+    "network": "réseau",
+    "partial": "résultat partiel",
     "timeout": "délai dépassé",
     "budget": "non lancée",
     "load": "chargement",
-    "other": "erreur",
+    "other": "erreur inconnue",
 }
 
 _MAX_ERROR = 200
@@ -55,10 +67,11 @@ _MAX_ERROR = 200
 @dataclass
 class RuleOutcome:
     name: str
-    status: str                 # ok | error | timeout
+    status: str                 # ok | error | unproven | timeout
     layer: str = "base"
     source: str = ""
     kind: str = ""              # a key of KINDS, for an error or a timeout
+    code: str = ""              # KQL's own (SEM0100, SYN0002), else the HTTP status, else the type
     error: str = ""             # reduced: no identifier of the infrastructure
     rows: int | None = None     # with --live, for a query that answered
     seconds: float = 0.0
@@ -77,9 +90,11 @@ _ARM = re.compile(r"/subscriptions/[^\s'\"),;]*", re.IGNORECASE)
 _URL = re.compile(r"\b[a-z][a-z0-9+.-]*://[^\s'\"),;]*", re.IGNORECASE)
 _EMAIL = re.compile(r"\b[\w.+-]+@[\w-]+(?:\.[\w-]+)+\b")
 _IPV4 = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?\b")
-# A host name (`vm-x.internal.cloudapp.net`), not a file the message names (`client_rules.yaml`).
-_FQDN = re.compile(r"\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?!(?:ya?ml|jsonl?|py|md|txt|log)\b)[a-z]{2,}\b",
-                   re.IGNORECASE)
+# A host name: three labels at least (`vm-x.internal.example.net`), or two ending in a known
+# top-level name (`example.com`). Not `LogsQueryStatus.PARTIAL`, a rule named `ssh.v2`, a file.
+_LABEL = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+_FQDN = re.compile(rf"\b(?:{_LABEL}\.){{2,}}[a-z]{{2,}}\b"
+                   rf"|\b{_LABEL}\.(?:com|net|org|io|internal|local|lan|corp|cloud|azure|windows)\b", re.IGNORECASE)
 # A quoted word is kept when it can only be a KQL name (`'Perf'`, `'MaxWrite'`, `'_ResourceId'`):
 # letters and underscores. Anything else in quotes (`'vm-prod-01'`, a resource group) goes.
 _QUOTED = re.compile(r"'([^']*)'|\"([^\"]*)\"")
@@ -107,24 +122,62 @@ def scrub(text) -> str:
     return s if len(s) <= _MAX_ERROR else s[: _MAX_ERROR - 1] + "…"
 
 
-def classify(text: str) -> str:
+_KQL_CODE = re.compile(r'"code"\s*:\s*"([A-Za-z][A-Za-z0-9_.-]{1,39})"')
+# What Log Analytics says of a query it cannot read (a 400's words, its inner codes).
+_QUERY_MARKS = ("badargumenterror", "semanticerror", "syntaxerror", "syntax error", "could not be parsed",
+                "failed to resolve")
+_QUERY_CODE = re.compile(r'"(?:SEM|SYN)\d{4}"')
+
+
+def status_of(exc) -> int | None:
+    """The HTTP status an error carries (azure-core's HttpResponseError: `status_code`, or its
+    response's) — read by attribute, never by importing the SDK (MC0)."""
+    for value in (getattr(exc, "status_code", None), getattr(getattr(exc, "response", None), "status_code", None)):
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+    return None
+
+
+def classify(exc) -> str:
+    """The kind of an error. Lasting (DURABLE) only on explicit evidence: a 403, a 404, a 400
+    or Log Analytics' own words for a query it cannot read. Everything else may pass."""
+    status = status_of(exc)
+    text = str(exc)
     low = text.lower()
-    if "failed to resolve" in low or "could not find table" in low or "unknown table" in low:
-        return "table"
-    if any(k in low for k in ("authorizationfailed", "forbidden", "insufficientaccess", "unauthorized",
-                              " 403", "(403", " 401", "(401", "credential", "authentication")):
+    name = type(exc).__name__.lower() if isinstance(exc, BaseException) else ""
+    if status == 403:
         return "access"
-    if any(k in low for k in ("workspacenotfound", "workspace not found", "resourcenotfound",
-                              "pathnotfound", "not found", " 404", "(404")):
+    if status == 404:
         return "workspace"
-    if any(k in low for k in ("syntax", "semanticerror", "semantic error", "badargument", "parse",
-                              "invalid query", "query could not be parsed")):
-        return "syntax"
+    if status == 429:
+        return "throttled"
+    if status == 401 or "credential" in name or "authentication" in name:
+        return "auth"
+    if status is not None and status >= 500:
+        return "service"
+    if isinstance(exc, (OSError, TimeoutError)) or any(k in name for k in ("servicerequest", "serviceresponse",
+                                                                             "connection", "timeout")):
+        return "network"
+    if "not successful" in low:          # run_query: a PARTIAL (or FAILURE) status, not raised by the SDK
+        return "partial"
+    if status == 400 or any(k in low for k in _QUERY_MARKS) or _QUERY_CODE.search(text):
+        return "table" if "failed to resolve" in low or "could not find table" in low else "syntax"
     return "other"
 
 
-def reduce_error(exc) -> tuple[str, str, str]:
-    """(kind, reduced line, full text). The line is the most specific message the error
+def code_of(exc) -> str:
+    """KQL's innermost code (`SEM0100`), else the HTTP status, else the error's type."""
+    codes = _KQL_CODE.findall(str(exc))
+    if codes:
+        return codes[-1]
+    status = status_of(exc)
+    if status is not None:
+        return str(status)
+    return type(exc).__name__ if isinstance(exc, BaseException) else ""
+
+
+def reduce_error(exc) -> tuple[str, str, str, str]:
+    """(kind, code, reduced line, full text). The line is the most specific message the error
     holds — Log Analytics nests it (`"message": "'where' operator: Failed to resolve…"`) —
     else its first line, scrubbed."""
     full = f"{type(exc).__name__}: {exc}" if isinstance(exc, BaseException) else str(exc)
@@ -132,7 +185,7 @@ def reduce_error(exc) -> tuple[str, str, str]:
     messages = [m.replace('\\"', '"').replace("\\n", " ") for m in _MESSAGE.findall(raw)]
     first = next((line.strip() for line in raw.splitlines() if line.strip()), type(exc).__name__)
     line = messages[-1] if messages else first
-    return classify(raw), scrub(line), full[:2000]
+    return classify(exc), scrub(code_of(exc))[:40], scrub(line), full[:2000]
 
 
 # ── one rule ────────────────────────────────────────────────────────────────────────
@@ -188,8 +241,8 @@ def run_once(rule, timeout_s: float, detector: Callable, clock: Callable[[], flo
         base.error = f"pas de réponse en {timeout_s:g} s"
         return base
     if "exc" in box:
-        base.status = ERROR
-        base.kind, base.error, base.detail = reduce_error(box["exc"])
+        base.kind, base.code, base.error, base.detail = reduce_error(box["exc"])
+        base.status = ERROR if base.kind in DURABLE else UNPROVEN
         return base
     rows = box.get("rows")
     base.rows = len(rows) if isinstance(rows, list) else 0
@@ -232,14 +285,14 @@ def check_rules(rules, *, live: bool, query_timeout_s: float, total_s: float,
 def exit_code(outcomes: list[RuleOutcome], load_error: str = "") -> int:
     if load_error or any(o.status == ERROR for o in outcomes):
         return EXIT_ERROR
-    if any(o.status == TIMEOUT for o in outcomes):
+    if any(o.status in (TIMEOUT, UNPROVEN) for o in outcomes):
         return EXIT_TIMEOUT
     return EXIT_OK
 
 
 def report(outcomes: list[RuleOutcome], *, live: bool, query_timeout_s: float, total_s: float,
            load_error: str = "") -> dict:
-    counts = {s: sum(1 for o in outcomes if o.status == s) for s in (OK, ERROR, TIMEOUT)}
+    counts = {s: sum(1 for o in outcomes if o.status == s) for s in (OK, ERROR, UNPROVEN, TIMEOUT)}
     return {"schema": SCHEMA, "live": live, "query_timeout_s": query_timeout_s, "total_s": total_s,
             "error": scrub(load_error) if load_error else "", "counts": counts,
             "rules": [o.public() for o in outcomes]}
@@ -270,7 +323,8 @@ def load_rules(rules_file: str):
 
 
 def main(rules_file: str | None, *, live: bool, as_json: bool, query_timeout_s: float, total_s: float,
-         echo: Callable[[str], None], console=None) -> int:
+         echo: Callable[[str], None], console=None, echo_err: Callable[[str], None] | None = None) -> int:
+    echo_err = echo_err or (lambda line: None)
     if not rules_file:
         rules, notes, load_error, detail = [], [], "detection_rules.yaml introuvable (--rules PATH)", ""
     else:
@@ -278,6 +332,13 @@ def main(rules_file: str | None, *, live: bool, as_json: bool, query_timeout_s: 
     outcomes = check_rules(rules, live=live, query_timeout_s=query_timeout_s, total_s=total_s) if rules else []
     code = exit_code(outcomes, load_error)
     if as_json:
+        # The full words (Azure's, A3's: they may name the infrastructure) to stderr: the CD's
+        # journal, private, keeps them; the JSON on stdout has the reduced line only.
+        for o in outcomes:
+            if o.detail:
+                echo_err(f"{o.name} [{o.status}/{o.kind}] : {o.detail}")
+        if detail:
+            echo_err(f"{load_error} : {detail}")
         echo(json.dumps(report(outcomes, live=live, query_timeout_s=query_timeout_s, total_s=total_s,
                                load_error=load_error), ensure_ascii=False))
         return code
@@ -299,14 +360,17 @@ def _print(console, outcomes, notes, load_error, live, code) -> None:
             result = f"[green]✓ {o.rows} ligne(s), {o.seconds:g} s[/green]" if live else "[green]✓ liée[/green]"
         elif o.status == TIMEOUT:
             result = f"[yellow]⏱ {KINDS[o.kind]} : {escape(o.error)}[/yellow]"
+        elif o.status == UNPROVEN:
+            result = f"[yellow]? non prouvée, {KINDS.get(o.kind, o.kind)} ({escape(o.code)}) : " \
+                     f"{escape(o.detail or o.error)}[/yellow]"
         else:
-            result = f"[red]✗ {KINDS.get(o.kind, o.kind)} : {escape(o.detail or o.error)}[/red]"
+            result = f"[red]✗ {KINDS.get(o.kind, o.kind)} ({escape(o.code)}) : {escape(o.detail or o.error)}[/red]"
         table.add_row(escape(o.name), o.layer, result)
     if outcomes:
         console.print(table)
     for note in notes:
         console.print(f"  [yellow]·[/yellow] {escape(note)}")
-    n = {s: sum(1 for o in outcomes if o.status == s) for s in (OK, ERROR, TIMEOUT)}
+    n = {s: sum(1 for o in outcomes if o.status == s) for s in (OK, ERROR, UNPROVEN, TIMEOUT)}
     what = "requête lancée une fois, en lecture seule" if live else "liaison seule (--live : chaque requête une fois)"
     colour = "green" if code == EXIT_OK else ("yellow" if code == EXIT_TIMEOUT else "red")
-    console.print(f"[{colour}]{n[OK]} ok, {n[ERROR]} en erreur, {n[TIMEOUT]} sans réponse[/{colour}] — {what}")
+    console.print(f"[{colour}]{n[OK]} ok, {n[ERROR]} en erreur, {n[UNPROVEN]} non prouvée(s), {n[TIMEOUT]} sans réponse[/{colour}] — {what}")

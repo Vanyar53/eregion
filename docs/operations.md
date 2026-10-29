@@ -125,15 +125,18 @@ glorfindel rules                             # règles chargées : la base livr�
 glorfindel rules check [--live] [--json]     # H2 : chaque règle chargée (base, couche du client, approuvées), comme
                                              # la watch la charge : liée à son backend ? Avec --live, sa requête lancée
                                              # UNE fois, en lecture seule, sur son backend (même détecteur, même fenêtre
-                                             # que le RulePoller) : ok (zéro ligne compris), erreur (syntaxe, table ou
-                                             # colonne absente, accès refusé, workspace introuvable, backend non lié,
-                                             # source inconnue), délai dépassé. --query-timeout (30 s) par requête,
-                                             # --total (120 s) pour le tout : au-delà, les règles restantes ne partent
-                                             # pas, et c'est dit. Jamais de nouvel essai. Aucun appel au modèle, aucune
-                                             # écriture, aucune action. Sortie : 0 tout ok, 1 une erreur, 3 des délais
-                                             # seulement. --json : ce que lit le CD de H0 (erreurs réduites, sans
-                                             # workspace, abonnement, chemin de ressource, hôte ni adresse) ; le détail
-                                             # complet reste au terminal. Utile après un glorfindel-host-push :
+                                             # que le RulePoller) : ok (zéro ligne compris) ; erreur seulement pour ce
+                                             # qui dure (requête invalide, table ou colonne absente, 403, 404, backend
+                                             # non lié, source inconnue) ; non prouvée pour ce qui peut passer (429,
+                                             # 5xx, 401 ou identité indisponible, réseau, résultat partiel, inconnu) ;
+                                             # délai dépassé. --query-timeout (30 s) par requête, --total (120 s) pour
+                                             # le tout : au-delà, les règles restantes ne partent pas, et c'est dit.
+                                             # Jamais de nouvel essai. Aucun appel au modèle, aucune écriture, aucune
+                                             # action. Sortie : 0 tout ok, 1 une erreur durable, 3 des non prouvées ou
+                                             # des délais seulement. --json : ce que lit le CD de H0, avant et après une
+                                             # bascule (genre, code KQL ou HTTP, ligne réduite sans workspace,
+                                             # abonnement, chemin de ressource, hôte ni adresse) ; les mots complets
+                                             # sur stderr. Utile après un glorfindel-host-push :
                                              # docker exec eregion-watch glorfindel rules check --live
 glorfindel migrate-rules --from <modifié> --base <livré> [--dry-run]  # règles approuvées DANS la base avant P1
                                              # → couche du client, une règle au workspace en ligne liée à son

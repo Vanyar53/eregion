@@ -2071,7 +2071,7 @@ def rules_check_cmd(ctx: click.Context, rules_file: str | None, live: bool, as_j
     from glorfindel.rule_check import main as _check
     target = rules_file or ctx.parent.params.get("rules_file") or _find_rules_file()
     ctx.exit(_check(target, live=live, as_json=as_json, query_timeout_s=query_timeout_s, total_s=total_s,
-                    echo=click.echo, console=console))
+                    echo=click.echo, console=console, echo_err=lambda line: click.echo(line, err=True)))
 
 
 @cli.command("migrate-rules")

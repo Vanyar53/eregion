@@ -1159,8 +1159,8 @@ MUTANTS = [
     # default), each container gets only its secrets, H0 deploys a named reference whose
     # image carries it, and the image installs from the lock.
     ("M280", "a Discord button runs for whoever clicks it (M-3)", "glorfindel/bot.py",
-     "        if isinstance(policy, ButtonPolicy) and policy.allows(interaction.user):\n",
-     "        if True:\n"),
+     "        if not (isinstance(policy, ButtonPolicy) and policy.allows(interaction.user)):\n",
+     "        if False:\n"),
     ("M281", "with no allowed users nor roles, every click passes (M-3)", "glorfindel/bot.py",
      '        if getattr(user, "id", None) in self.users:\n',
      '        if not self.configured or getattr(user, "id", None) in self.users:\n'),
@@ -1173,7 +1173,7 @@ MUTANTS = [
      "  DISCORD_CHANNEL_ID: ${DISCORD_CHANNEL_ID:-}\n",
      "  DISCORD_CHANNEL_ID: ${DISCORD_CHANNEL_ID:-}\n  DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}\n"),
     ("M285", "the War Room receives the models' keys (M-3)", "docker-compose.yml",
-     "      <<: [*env, *azure, *webhook]\n", "      <<: [*env, *azure, *models, *webhook]\n"),
+     "      <<: [*env, *console-azure, *webhook]\n", "      <<: [*env, *console-azure, *models, *webhook]\n"),
     ("M286", "the watch knows the bot only by its token: every card also goes to the webhook (M-3)",
      "glorfindel/escalations.py",
      '    token = env.get("GLORFINDEL_DISCORD_BOT") or env.get("DISCORD_BOT_TOKEN")\n',
@@ -1192,8 +1192,8 @@ MUTANTS = [
     # token is set; REF is a tag or a commit given on make's command line; a rules file that
     # both the VM and the reference change stops the deployment with what to do.
     ("M520", "a refused click is said, then let through to its callback (M-3, review)", "glorfindel/bot.py",
-     "        await _refuse(interaction, self.esc_id, policy)\n        return False\n",
-     "        await _refuse(interaction, self.esc_id, policy)\n        return True\n"),
+     "            await _refuse(interaction, self.esc_id, policy)\n            return False\n",
+     "            await _refuse(interaction, self.esc_id, policy)\n            return True\n"),
     ("M521", "a Discord channel alone silences the webhook, no bot running (M-3, review)",
      "glorfindel/escalations.py",
      '    return bool(token and env.get("DISCORD_CHANNEL_ID"))\n',
@@ -2132,7 +2132,8 @@ MUTANTS += [
      ACT, "    return (f\"{sub}/{rg}/{nsg}/{rule}\" if sub else f\"{rg}/{nsg}/{rule}\").lower()",
      "    return f\"{rg}/{nsg}/{rule}\".lower()"),
     ("M893", "an AzureActivity row read by another source goes to the model: a snapshot runs alone (AL1)", AGT,
-     "    return (any(isinstance(r, dict) and r.get(\"OperationNameValue\") for r in rows)\n"
+     "    return (any(r.get(\"OperationNameValue\") for r in rows)\n"
+     "            or any(str(r.get(\"Type\") or \"\").lower() == \"azureactivity\" for r in rows)\n"
      "            or (raw.get(\"normalized_signal\") or {}).get(\"indicator_key\") == \"control_plane_operation\")",
      "    return False"),
     ("M894", "a control-plane rule without CorrelationId loads in silence: two operations fold into one (AL1)",
@@ -3525,7 +3526,7 @@ MUTANTS += [
     ("M1450", "a campaign resets the target of an engine that raised (SEC5, V-18)", CRUN,
      '            if (entry.error or "").startswith(ENGINE_RAISED):\n', "            if False:\n"),
     ("M1451", "a window pulled again replaces its copy whatever changed (SEC5, V-20)", XCH,
-     "            why = rewrite_refusal(old, new)\n", '            why = ""\n'),
+     "                   else rewrite_refusal(old, new))\n", '                   else "")\n'),
     ("M1452", "the chaos rights asked with no experiment in the group: Orodruin passive for all (SEC5, V-29)",
      "eregion_core/orodruin.py",
      "        if not scopes and (experiments or action not in CHAOS_ACTIONS):", "        if not scopes:"),
@@ -3956,7 +3957,7 @@ MUTANTS += [
      "          cache-to: ${{ github.event_name == 'push' && format('type=gha,mode=max,scope={0}', matrix.image) || '' }}\n",
      "          cache-to: type=gha,mode=max,scope=${{ matrix.image }}\n"),
     ("M1488", "the check step no longer waits on the decision: a docs pull request red, its image never built (CI1)", IMW,
-     "      - name: In the image (nothing started, no network, no secret)\n        if: steps.touched.outputs.build == 'true'\n",
+     "      - name: In the image (nothing started, no network, no secret)\n        if: steps.touched.outputs.build != 'false'\n",
      "      - name: In the image (nothing started, no network, no secret)\n"),
     ("M1489", "the diff read with renames: a file moved out of an image is not seen leaving it (CI1)", IMC,
      '["git", "diff", "--no-renames", "--name-only", "-z", "HEAD^1", "HEAD"]',
@@ -4054,8 +4055,10 @@ MUTANTS += [
      '        args = restore_plan.restore_args(self.esc["resource_id"], self.before)\n',
      '        args = ["restore", self.esc["resource_id"], "--yes"]\n'),
     ("M1407", "the bot's restore form takes anyone's moment (SEC4c)", BOT,
-     '        return await _allowed(interaction, self.esc["id"])\n\n    async def on_submit',
-     "        return True\n\n    async def on_submit"),
+     '        return (await _allowed(interaction, self.esc["id"])\n'
+     '                and await _still_waits(interaction, self.esc["id"], "act"))\n\n    async def on_submit',
+     '        return (True\n'
+     '                and await _still_waits(interaction, self.esc["id"], "act"))\n\n    async def on_submit'),
     ("M1408", "the TUI runs the restore without --before (SEC4c)", TUI,
      "        return [restore_plan.restore_args(rid, before)] if _can_restore(esc) and before else []\n",
      '        return [["restore", rid, "--yes"]] if _can_restore(esc) else []\n'),
@@ -4309,6 +4312,157 @@ MUTANTS += [
 ]
 TESTS.update({mid: f"{_I5R_KEEP} {INVARIANTS}" for mid in ("M1590", "M1591", "M1592", "M1593", "M1594")})
 TESTS.update({f"M{n}": "tests/unit/test_invariant_regressions.py -k deleted_vm" for n in range(1595, 1600)})
+
+
+# SEC7 (#296): identities and hardening — the bot's stale buttons (V-08), the control plane read
+# from the query (N-10), H0's host key pinned (V-32), the containers hardened (V-34), one principal
+# per service (V-17), and the follow-ups of SEC5, SEC4c, CI1, REL1, CI2. M1410–M1429, M1560–M1568.
+DR = "glorfindel/detection_rules.py"
+KH = "infra/glorfindel-host/known_host.sh"
+MUTANTS += [
+    ("M1410", "every card posted in the window gets its buttons back, settled ones too (SEC7, V-08)", BOT,
+     "    return [(e, mid) for e, mid in _posted_within(escs, messages, now) if _waits(e, now, known_vms)]\n",
+     "    return _posted_within(escs, messages, now)\n"),
+    ("M1411", "a click runs on the card as its view was built, never read again (SEC7, V-08)", BOT,
+     "        return await _still_waits(interaction, self.esc_id, _button_kind(custom_id))\n",
+     "        return True\n"),
+    ("M1412", "a card whose VM left the discovery keeps live buttons (SEC7, V-08)", BOT,
+     '            and "/virtualmachines/" in rid and rid.rstrip("/") not in known_vms):\n',
+     "            and False):\n"),
+    ("M1413", "a restore's confirmation runs on a card settled since its form (SEC7, V-08)", BOT,
+     '                and await _still_waits(interaction, self.esc["id"], "act"))\n\n'
+     '    @discord.ui.button(label="🔄 Confirmer le restore"',
+     '                and True)\n\n    @discord.ui.button(label="🔄 Confirmer le restore"'),
+    ("M1414", "a verdict given in the console given again from Discord (SEC7, V-08)", BOT,
+     '        if esc.get("verdict"):\n            return f"déjà jugée', '        if False:\n            return f"déjà jugée'),
+    ("M1415", "a rule of another source on AzureActivity, no OperationNameValue: the data plane (SEC7, N-10)", DR,
+     '        elif plane == "data" and _reads_activity_table(rule.query):\n            plane = "control"\n', ""),
+    ("M1416", "respond on an AzureActivity query of another source: the data plane (SEC7, N-10)", AGT,
+     '        elif activity_query:\n            context["plane"] = "control"\n', ""),
+    ("M1417", "a table named in a comment classes the query (SEC7, N-10)", DR,
+     '    return "\\n".join(line.split("//", 1)[0] for line in (query or "").splitlines())\n',
+     '    return query or ""\n'),
+    ("M1418", "a recorded host key of another fingerprint accepted (SEC7, V-32)", KH,
+     """    if printf '%s\\n' "$known" | fingerprints | grep -qxF -- "$want"; then\n""", "    if true; then\n"),
+    ("M1419", "the key H0 presents written without its fingerprint checked (SEC7, V-32)", KH,
+     """  if [ "$(printf '%s\\n' "$line" | fingerprints)" = "$want" ]; then\n""", "  if true; then\n"),
+    ("M1420", "ssh to H0 accepts a new key beside the pinned file (SEC7, V-32)", MAKE,
+     "-o StrictHostKeyChecking=yes -o UserKnownHostsFile=$(HOST_KNOWN_HOSTS)",
+     "-o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=$(HOST_KNOWN_HOSTS)"),
+    ("M1421", "the tunnel to H0 opened without the host key checked (SEC7, V-32)", MAKE,
+     "glorfindel-host-tunnel: glorfindel-host-known\n", "glorfindel-host-tunnel:\n"),
+    ("M1422", "Gothmog's container writes its image (SEC7, V-34)", "docker-compose.yml",
+     "    # n'écrit que dans runs/ et /tmp.\n    read_only: true\n",
+     "    # n'écrit que dans runs/ et /tmp.\n    read_only: false\n"),
+    ("M1423", "the watch takes the console's secret (SEC7, V-17)", "docker-compose.yml",
+     "  AZURE_CLIENT_SECRET: ${GLORFINDEL_AZURE_CLIENT_SECRET:-${AZURE_CLIENT_SECRET:-}}\n",
+     "  AZURE_CLIENT_SECRET: ${EREGION_CONSOLE_AZURE_CLIENT_SECRET:-${AZURE_CLIENT_SECRET:-}}\n"),
+    ("M1424", "the README grants Contributor on the subscription again (SEC7, V-17)", "README.md",
+     'az ad sp create-for-rbac --name "eregion-glorfindel-watch"     #',
+     'az ad sp create-for-rbac --name "eregion-glorfindel-watch" --role Contributor --scopes /subscriptions/$SUB #'),
+    ("M1425", "a subscription without Chaos Studio answering 409: Orodruin passive (SEC7)", "eregion_core/orodruin.py",
+     "    if r.status_code == 404 or (not r.ok and _error_code(r) in UNREGISTERED_PROVIDER):\n",
+     "    if r.status_code == 404 or (r.status_code == 400 and _error_code(r) in UNREGISTERED_PROVIDER):\n"),
+    ("M1426", "Orodruin planned without glorfindel-host's state: the watch's access taken away (SEC7)", MAKE,
+     "orodruin-plan: orodruin-init orodruin-watch-guard\n", "orodruin-plan: orodruin-init\n"),
+    ("M1427", "a window whose copy no longer reads is rewritten (SEC7)", XCH,
+     '            why = ("the copy pulled before cannot be read here" if not isinstance(old, dict)\n',
+     '            why = ("the copy pulled before cannot be read here" if False\n'),
+    ("M1428", "a live restore's claim lapses at 2 h: a second restore let through (SEC7)", "glorfindel/jobs.py",
+     '    if held:\n        return f"un restore', '    if False:\n        return f"un restore'),
+    ("M1429", "a restore leaving removes another's claim (SEC7)", "glorfindel/jobs.py",
+     "            if self._read_token() == self._token:\n                self.path.unlink()",
+     "            if True:\n                self.path.unlink()"),
+    ("M1560", "a pull request diffed from a HEAD that is no merge commit (SEC7, CI1)", IMC,
+     '    if runner(["git", "rev-parse", "--verify", "-q", "HEAD^2"]).returncode != 0:\n', "    if False:\n"),
+    ("M1561", "the decision lost in the CI without its output, exit 0 (SEC7, CI1)", IMC,
+     '    elif os.environ.get("GITHUB_ACTIONS"):\n', "    elif False:\n"),
+    ("M1562", "a missing decision skips the build: the job green on nothing built (SEC7, CI1)", IMW,
+     "      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069   # v4.4.1\n"
+     "        if: steps.touched.outputs.build != 'false'\n",
+     "      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069   # v4.4.1\n"
+     "        if: steps.touched.outputs.build == 'true'\n"),
+    ("M1563", "no image check in a merge queue: its required checks stall (SEC7, CI1)", IMW, "  merge_group:\n", ""),
+    ("M1564", "an os or subprocess renamed on import escapes the release's allow-list (SEC7, REL1)",
+     "tests/unit/test_release.py",
+     '        if isinstance(n, ast.Import) and any(a.name.split(".")[0] in ("os", "subprocess") and a.asname\n',
+     '        if False and any(a.name.split(".")[0] in ("os", "subprocess") and a.asname\n'),
+    ("M1565", "importlib lets the release load a module by a computed name (SEC7, REL1)",
+     "tests/unit/test_release.py", '            bad.append("importlib")\n', "            pass\n"),
+    ("M1566", "a write method in one word (--method=PATCH, -XPATCH) unseen (SEC7, REL1)",
+     "tests/unit/test_release.py", "    return m.group(1).upper() if m else text.strip().upper()\n",
+     "    return text.strip().upper()\n"),
+    ("M1567", "another workflow may write issues: the audit's key forged under its author (SEC7, CI2)",
+     ".github/workflows/roadmap.yml", "  issues: read\n", "  issues: write\n"),
+    ("M1568", "the response role restores: the watch could restore on its own (SEC7, V-17)",
+     "infra/identities/glorfindel-response.json",
+     '    "Microsoft.RecoveryServices/Vaults/backupFabrics/protectionContainers/protectedItems/backup/action"\n',
+     '    "Microsoft.RecoveryServices/Vaults/backupFabrics/protectionContainers/protectedItems/backup/action",\n'
+     '    "Microsoft.RecoveryServices/Vaults/backupFabrics/protectionContainers/protectedItems/recoveryPoints/restore/action"\n'),
+    ("M1569", "a right the adapter declares left out of the response role (SEC7, V-17)",
+     "infra/identities/glorfindel-response.json", '    "Microsoft.Network/networkInterfaces/write",\n', ""),
+]
+TESTS.update({mid: "tests/unit/test_bot.py" for mid in ("M1410", "M1411", "M1412", "M1413", "M1414")})
+TESTS.update({mid: "tests/unit/test_activity_logs.py" for mid in ("M1415", "M1416", "M1417")})
+TESTS.update({mid: "tests/unit/test_host_ssh.py" for mid in ("M1418", "M1419", "M1420", "M1421")})
+TESTS["M1422"] = "tests/unit/test_profiles.py"
+TESTS.update({mid: "tests/unit/test_azure_roles.py" for mid in ("M1423", "M1424", "M1568", "M1569")})
+TESTS["M1425"] = "tests/unit/test_injector_channels.py"
+TESTS["M1426"] = "tests/unit/test_makefile_bench.py"
+TESTS["M1427"] = "tests/unit/test_exercise_channel.py"
+TESTS.update({mid: "tests/unit/test_entries_calls.py" for mid in ("M1428", "M1429")})
+TESTS.update({mid: "tests/unit/test_image_check.py" for mid in ("M1560", "M1561", "M1562", "M1563")})
+TESTS.update({mid: "tests/unit/test_release.py" for mid in ("M1564", "M1565", "M1566")})
+TESTS["M1567"] = "tests/unit/test_workflows.py"
+
+
+# SEC7, after its 5.5 review: the red container without the shared principal, settled messages
+# answered, H0's CD reading the read-only errors, the watch's broad rights said, the pairs, the
+# console's and the bot's ids in OWN_CALLERS, NO_WATCH=1 only, the audit's roles. M1570–M1579.
+MUTANTS += [
+    ("M1570", "the red container takes the shared principal again: it could isolate and restore (SEC7, V-17)", MAKE,
+     '\tAZURE_CLIENT_ID="$${ANNATAR_AZURE_CLIENT_ID:-}" \\\n',
+     '\tAZURE_CLIENT_ID="$${ANNATAR_AZURE_CLIENT_ID:-$${AZURE_CLIENT_ID:-}}" \\\n'),
+    ("M1571", "a message not re-armed answers « interaction failed » (SEC7, V-08)", BOT,
+     "                    self.add_view(_SettledView(esc_id), message_id=message_id)\n                    settled += 1\n",
+     "                    pass\n"),
+    ("M1572", "a settled message's click answers nothing (SEC7, V-08)", BOT,
+     '        await interaction.response.send_message(\n'
+     '            "✓ Carte réglée : ce bouton ne lance plus rien.", ephemeral=True)\n        return False',
+     "        return False"),
+    ("M1573", "a release whose writes the read-only root refuses kept on H0 (SEC7, V-34)",
+     "infra/glorfindel-host/cd/eregion_cd.py",
+     "            if ro:\n                return (f\"{', '.join(ro)} : « {READ_ONLY_FS} »",
+     "            if False:\n                return (f\"{', '.join(ro)} : « {READ_ONLY_FS} »"),
+    ("M1574", "a read-only error that ran before rolls H0 back: no regression (SEC7, V-34, H2)",
+     "infra/glorfindel-host/cd/eregion_cd.py",
+     "            ro = [n for n in found if n not in known_ro]\n",
+     "            ro = found\n"),
+    ("M1575", "the watch's principal holding the restore's rights never said (SEC7, V-17)",
+     "glorfindel/providers/azure/readers.py",
+     "                    beyond = [a for a in self.BEYOND_RESPONSE if allowed(a)]\n",
+     "                    beyond = []\n"),
+    ("M1576", "a principal's id without its secret said nothing: two principals mixed (SEC7, V-17)", MAKE,
+     '\t  [ "$$id" = "$$se" ] || echo', "\t  true || echo"),
+    ("M1577", "the console's and the bot's ids out of OWN_CALLERS: each approved write a card (SEC7, V-17)",
+     "docker-compose.yml",
+     "  GLORFINDEL_OWN_CALLERS: ${GLORFINDEL_OWN_CALLERS:-},${EREGION_CONSOLE_AZURE_CLIENT_ID:-},"
+     "${GLORFINDEL_BOT_AZURE_CLIENT_ID:-}\n",
+     "  GLORFINDEL_OWN_CALLERS: ${GLORFINDEL_OWN_CALLERS:-}\n"),
+    ("M1578", "NO_WATCH=0 bypasses Orodruin's guard (SEC7)", MAKE,
+     '\t@if [ "$(NO_WATCH)" != 1 ] &&', '\t@if [ -z "$(NO_WATCH)" ] &&'),
+    ("M1579", "the audit run in the watch advises it the restore's role (SEC7, V-17)", "glorfindel/audit.py",
+     '                f"--role Reader "\n'
+     '                f"--scope /subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/{vrg} "',
+     '                f"--role \'Eregion Glorfindel Restore\' "\n'
+     '                f"--scope /subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/{vrg} "'),
+]
+TESTS["M1570"] = "tests/unit/test_makefile_secrets.py"
+TESTS.update({mid: "tests/unit/test_bot.py" for mid in ("M1571", "M1572")})
+TESTS.update({mid: "tests/unit/test_host_cd.py" for mid in ("M1573", "M1574")})
+TESTS["M1575"] = "tests/unit/test_glorfindel.py"
+TESTS.update({mid: "tests/unit/test_azure_roles.py" for mid in ("M1576", "M1577", "M1579")})
+TESTS["M1578"] = "tests/unit/test_makefile_bench.py"
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

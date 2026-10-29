@@ -219,7 +219,7 @@ glorfindel watch runs/ --rules glorfindel/rules/azure/detection_rules.yaml
 
 ## Try it in a sandbox — full attack/defense loop (optional)
 
-Want to watch the **red→blue loop** end to end (Annatar attacks, Glorfindel responds and recovers)? The Terraform sandbox below provisions a disposable target for exactly that. **Not needed to evaluate on your own infra** — that's the read-only path above. This track uses a **Contributor** service principal because Annatar needs to launch real attacks.
+Want to watch the **red→blue loop** end to end (Annatar attacks, Glorfindel responds and recovers)? The Terraform sandbox below provisions a disposable target for exactly that. **Not needed to evaluate on your own infra** — that's the read-only path above. Glorfindel gets one service principal per service, each with only the rights its code uses, on the bench's resource groups — never Contributor on the subscription; Annatar attacks from Orodruin, with the managed identity `make orodruin-up` gives it, per enrolled VM.
 
 ### 1. Deploy the test infrastructure
 
@@ -290,15 +290,22 @@ That sounds alarming but its blast radius is bounded **by design, not by trustin
 
 **Option A — local (dev)**
 
-Base install is the same `make install` as the eval section above. The difference for the sandbox: Annatar launches real attacks via Azure Run Command, so it needs a **Contributor** service principal (Reader isn't enough):
+Base install is the same `make install` as the eval section above. The difference for the sandbox: Glorfindel acts (isolates, blocks, snapshots, restores once you approve), so it needs write rights — only those, on the bench's resource groups. Two custom roles (`infra/identities/`) and one principal per service: the watch gets Reader + Log Analytics Reader + **Eregion Glorfindel Response**; the console and the bot also get **Eregion Glorfindel Restore** (a restore is always a human's) — the full commands, the rotation of the secrets and how to retire a former shared principal: [`docs/operations.md`](docs/operations.md), « Identités Azure ».
 
 ```bash
 git clone https://github.com/Vanyar53/eregion && cd eregion && make install
 cp .envrc.example .envrc   # fill in ANTHROPIC_API_KEY + Azure creds
 
-az ad sp create-for-rbac --name "eregion" --role Contributor \
-  --scopes /subscriptions/$(az account show --query id -o tsv)
-# → appId = AZURE_CLIENT_ID, password = AZURE_CLIENT_SECRET, tenant = AZURE_TENANT_ID
+SUB=<SUBSCRIPTION_ID>; RG=rg-celebrimbor
+for r in response restore; do
+  sed "s|<SUBSCRIPTION_ID>|$SUB|" infra/identities/glorfindel-$r.json > /tmp/eregion-role-$r.json
+  az role definition create --role-definition @/tmp/eregion-role-$r.json
+done
+az ad sp create-for-rbac --name "eregion-glorfindel-watch"     # → GLORFINDEL_AZURE_CLIENT_ID / _SECRET
+az role assignment create --assignee <appId> --role Reader --scope /subscriptions/$SUB/resourceGroups/$RG
+az role assignment create --assignee <appId> --role "Eregion Glorfindel Response" \
+  --scope /subscriptions/$SUB/resourceGroups/$RG
+# … the console and the bot the same way, plus "Eregion Glorfindel Restore" (docs/operations.md)
 ```
 
 **Option B — Docker**
@@ -431,7 +438,7 @@ export GLORFINDEL_READ_ONLY=1   # Azure Reader + Log Analytics Reader SP
 glorfindel watch runs/           # detects, investigates, recommends — never writes
 ```
 
-The console and Discord bot still work — every escalation includes the recommended action and suggested forensic steps. No write risk for a first evaluation: give a peer read-only access to your LAW and let them observe a week of Glorfindel decisions before granting Contributor (what still leaves the machine: [above](#evaluate-on-your-infrastructure--read-only-on-azure)).
+The console and Discord bot still work — every escalation includes the recommended action and suggested forensic steps. No write risk for a first evaluation: give a peer read-only access to your LAW and let them observe a week of Glorfindel decisions before granting the response role, on the groups it defends (what still leaves the machine: [above](#evaluate-on-your-infrastructure--read-only-on-azure)).
 
 The full read-only evaluation walkthrough (Reader SP → workspace config → observe) is the **Evaluate on your infrastructure** section near the top of this README.
 
@@ -537,9 +544,11 @@ ANTHROPIC_API_KEY=...               # required for default Anthropic provider
 # GLORFINDEL_LLM_MODEL=ollama/command-r7b          # local / air-gapped — must be tool-capable
 # GLORFINDEL_LLM_BASE_URL=http://localhost:11434    # self-hosted / Ollama endpoint
 
-# Azure
-AZURE_CLIENT_ID=...
-AZURE_CLIENT_SECRET=...
+# Azure — one principal per service (V-17, docs/operations.md « Identités Azure »);
+# empty, each one takes AZURE_CLIENT_ID / AZURE_CLIENT_SECRET
+GLORFINDEL_AZURE_CLIENT_ID=...          # the watch (+ _SECRET)
+EREGION_CONSOLE_AZURE_CLIENT_ID=...     # the console (+ _SECRET)
+GLORFINDEL_BOT_AZURE_CLIENT_ID=...      # the Discord bot (+ _SECRET)
 AZURE_TENANT_ID=...
 AZURE_SUBSCRIPTION_ID=...
 
@@ -560,7 +569,7 @@ GLORFINDEL_INCIDENT_TTL_S=300       # incident grouping window in seconds (defau
 GLORFINDEL_CONFIDENCE_THRESHOLD=0.7 # min LLM confidence for autonomous action (default: 0.7 — below this, escalate; unreadable or outside [0, 1]: every autonomous action is held)
 GLORFINDEL_LLM_TIMEOUT_S=120        # bound on one model call, per attempt (default: 120 s; a hung provider ends as a cycle_failed card)
 GLORFINDEL_DECISION_DRAWS=3         # draws that must agree before a disruptive autonomous action (default: 3, 2 to 10; unreadable, 1 or above 10: every disruptive autonomous action is held)
-GLORFINDEL_OWN_CALLERS=<id>,<id>    # Glorfindel's identities on Azure, besides its token and AZURE_CLIENT_ID: its own writes in the Activity Log are not escalated (AL1); in Entra ID's logs nothing is left out under them, they are marked critical (C2)
+GLORFINDEL_OWN_CALLERS=<id>,<id>    # Glorfindel's identities on Azure (the console's and the bot's appIds, V-17), besides its token and AZURE_CLIENT_ID: its own writes in the Activity Log are not escalated (AL1); in Entra ID's logs nothing is left out under them, they are marked critical (C2)
 ```
 
 See [.envrc.example](.envrc.example) for a ready-to-fill template with provider examples.
@@ -835,7 +844,7 @@ Nothing of Eregion stays behind once these are gone. **First, nothing isolated o
 
 - **Containers and images**: `make glorfindel-stop`, then `docker rmi eregion-glorfindel eregion-annatar`.
 - **Local state**, on each host that ran it: `~/.glorfindel/` (isolation and block state, escalations, the console's token, the approved rules, the discovered assets, and the memory of past decisions, `~/.glorfindel/cycles/`), `~/.annatar/`, `~/.eregion/` (the campaign reports' index), `~/.cache/chroma/` (the embedding model) and `runs/` in the clone.
-- **On Azure**: the quarantine NSGs Glorfindel created (`nsg-glorfindel-quarantine-<region>`, tagged `managed-by=glorfindel`), once no NIC carries one; the service principals and their role assignments (`az ad sp delete --id <appId>` — Reader, Log Analytics Reader, and Contributor if you granted it); a diagnostic setting you added for Glorfindel (Activity Log, Entra ID). The bench and Orodruin, if you built them: `make celebrimbor-down CONFIRM=<instance>`, `make orodruin-down`.
+- **On Azure**: the quarantine NSGs Glorfindel created (`nsg-glorfindel-quarantine-<region>`, tagged `managed-by=glorfindel`), once no NIC carries one; the service principals — one per service, and a former shared one if you had it — with their role assignments (`az role assignment list --assignee <appId> --all`, then `az ad sp delete --id <appId>` and `az ad app delete --id <appId>`), then the two custom roles once nothing holds them (`az role definition delete --name "Eregion Glorfindel Response"`, the same for `"Eregion Glorfindel Restore"`); a diagnostic setting you added for Glorfindel (Activity Log, Entra ID). The bench and Orodruin, if you built them: `make celebrimbor-down CONFIRM=<instance>`, `make orodruin-down`.
 - **Elsewhere**: the Discord bot and webhooks you created for it; your provider's API key.
 
 ## Security

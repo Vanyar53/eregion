@@ -502,7 +502,13 @@ def _arm_get(experiments_answer):
 @pytest.mark.parametrize("answer, armed", [
     (SimpleNamespace(ok=True, status_code=200, text="", json=lambda: {"value": []}), True),
     (SimpleNamespace(ok=False, status_code=404, text=""), True),
-    (SimpleNamespace(ok=False, status_code=400, text='{"error":{"code":"NoRegisteredProviderFound"}}'), True),
+    (SimpleNamespace(ok=False, status_code=400, text="", json=lambda: {"error": {"code": "NoRegisteredProviderFound"}}),
+     True),
+    # SEC7: ARM's documented answer for a provider never registered — a 409; any status.
+    (SimpleNamespace(ok=False, status_code=409, text="", json=lambda: {"error": {"code": "MissingSubscriptionRegistration",
+                                                                                 "message": "not registered"}}), True),
+    (SimpleNamespace(ok=False, status_code=400, text="", json=lambda: {"error": {"code": "MissingSubscriptionRegistration"}}),
+     True),
     (SimpleNamespace(ok=True, status_code=200, text="", json=lambda: {"value": [{"id": "e"}]}), False),
 ])
 def test_without_an_experiment_the_chaos_rights_are_not_asked(monkeypatch, answer, armed):
@@ -514,9 +520,16 @@ def test_without_an_experiment_the_chaos_rights_are_not_asked(monkeypatch, answe
     assert (missing == []) is armed, missing
 
 
-def test_an_unreadable_list_of_experiments_is_no_contract(monkeypatch):
+@pytest.mark.parametrize("answer", [
+    SimpleNamespace(ok=False, status_code=403, text="", json=lambda: {}),
+    # A refusal that only names the provider in its message is no unregistered provider.
+    SimpleNamespace(ok=False, status_code=403, text="", json=lambda: {"error": {
+        "code": "AuthorizationFailed", "message": "MissingSubscriptionRegistration"}}),
+    SimpleNamespace(ok=False, status_code=409, text="", json=lambda: (_ for _ in ()).throw(ValueError("html"))),
+])
+def test_an_unreadable_list_of_experiments_is_no_contract(monkeypatch, answer):
     monkeypatch.setenv("AZURE_SUBSCRIPTION_ID", "s")
-    get, cred = _arm_get(SimpleNamespace(ok=False, status_code=403, text=""))
+    get, cred = _arm_get(answer)
     with pytest.raises(RuntimeError, match="listing the bench's experiments"):
         orodruin.read_identity(credential=cred, get=get)
 

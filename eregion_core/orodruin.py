@@ -259,13 +259,29 @@ def assess_identity(assignments: list[dict], role_actions: Callable[[str], list[
 CHAOS_API = "2024-01-01"
 
 
+# The codes ARM answers for a resource provider the subscription never registered: Chaos Studio
+# off on a subscription is no experiment, whatever the status (SEC7: ARM's documented answer is
+# MissingSubscriptionRegistration, a 409; NoRegisteredProviderFound, a 400 — to measure).
+UNREGISTERED_PROVIDER = ("MissingSubscriptionRegistration", "NoRegisteredProviderFound")
+
+
+def _error_code(r) -> str:
+    try:
+        body = r.json()
+    except Exception:
+        return ""
+    err = body.get("error") if isinstance(body, dict) else None
+    return str(err.get("code") or "") if isinstance(err, dict) else ""
+
+
 def _has_experiments(get, headers: dict, bench: str) -> bool:
     """Does the bench's group hold a Chaos Studio experiment? A provider not registered in the
-    subscription (400 NoRegisteredProviderFound) or no such collection (404): none. Any other
-    failure raises — the contract is then unreadable, passive."""
+    subscription (UNREGISTERED_PROVIDER, read in the error's code, whatever the status) or no
+    such collection (404): none. Any other failure raises — the contract is then unreadable,
+    passive."""
     r = get(f"{ARM}{bench}/providers/Microsoft.Chaos/experiments", headers=headers,
             params={"api-version": CHAOS_API}, timeout=20)
-    if r.status_code == 404 or (r.status_code == 400 and "NoRegisteredProvider" in (r.text or "")):
+    if r.status_code == 404 or (not r.ok and _error_code(r) in UNREGISTERED_PROVIDER):
         return False
     if not r.ok:
         raise RuntimeError(f"HTTP {r.status_code} listing the bench's experiments")

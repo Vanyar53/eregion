@@ -153,7 +153,7 @@ def assess(resource_id: str, connector, quarantine_nsg: bool = True) -> dict:
             "cannot_isolate", "not_ready",
             "Ni l'isolation par NSG de quarantaine ni les règles de repli ne sont possibles : "
             "droits manquants (" + ", ".join(sorted(missing & (iso_rights | rule_rights))) + ").",
-            "Network Contributor sur le resource group de la VM, ou un rôle personnalisé avec ces actions."))
+            "Le rôle « Eregion Glorfindel Response » (infra/identities/) sur le resource group de la VM."))
     elif quarantine_nsg and not jit_ok:
         reasons.append(_reason(
             "rules_fallback", "reserve",
@@ -186,7 +186,7 @@ def assess(resource_id: str, connector, quarantine_nsg: bool = True) -> dict:
             "no_drain", "reserve",
             "Les sessions déjà ouvertes ne seront pas coupées à l'isolation (droit Run Command "
             "manquant) : un attaquant connecté garde la main.",
-            f"Ajouter {', '.join(sorted(caps.rights(SESSION_DRAIN)))} (Virtual Machine Contributor)."))
+            f"Ajouter {', '.join(sorted(caps.rights(SESSION_DRAIN)))} (le rôle « Eregion Glorfindel Response »)."))
 
     # Windows: no session drain (Linux `ss -K` only).
     try:
@@ -246,6 +246,16 @@ def assess(resource_id: str, connector, quarantine_nsg: bool = True) -> dict:
             "Sources forensiques ignorées : " + " ; ".join(f"{v} ({why})" for v, why in rejected) + ".",
             "Une adresse ou un préfixe d'au plus 256 adresses (Bastion, rebond d'investigation)."))
 
+    # SEC7 (V-17): more than the response needs, on the VM's group — said, never held for it.
+    beyond = (perms.get("beyond") or []) if isinstance(perms, dict) and perms.get("ok") else []
+    if beyond:
+        reasons.append(_reason(
+            "identity_beyond_response", "info",
+            "L'identité qui lit ces droits tient aussi " + ", ".join(sorted(beyond)) + " sur le groupe "
+            "de la VM : plus que la réponse n'en demande. La watch ne restaure jamais seule — son "
+            "principal n'a besoin que du rôle « Eregion Glorfindel Response ».",
+            "Ne laisser à la watch que « Eregion Glorfindel Response » et ses lectures : "
+            "docs/operations.md, « Identités Azure »."))
     reasons.append(_reason(
         "unverified_layers", "info",
         "Non vérifié : règles d'admin AVNM (« Always Allow ») ; Azure Policy qui refuserait "
@@ -555,10 +565,23 @@ class ReadinessTracker:
                     log.warning("readiness: %s not checked (%s)", vm, exc)
                     continue
                 self._store(assessment, rid, rec)
+                self._say_beyond(assessment)
             ev = self._transition(vm, rid, configured)
             if ev:
                 events.append(ev)
         return events
+
+    _beyond_said = False
+
+    def _say_beyond(self, assessment: dict) -> None:
+        """Once per watch (SEC7, V-17): its principal holds what only a restore needs."""
+        if ReadinessTracker._beyond_said:
+            return
+        for r in assessment.get("reasons") or []:
+            if r.get("code") == "identity_beyond_response":
+                ReadinessTracker._beyond_said = True
+                log.warning("identity: the watch's principal holds more than its response — %s", r["message"])
+                return
 
     def _store(self, assessment: dict, rid: str, prev: dict) -> None:
         new = set(assessment["reserve_codes"]) - set(prev.get("acknowledged") or [])

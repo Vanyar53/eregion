@@ -31,7 +31,7 @@ Six garanties. Chacune a un mécanisme, et une vérification qui ne demande **au
 | Garantie | Mécanisme | Vérifiée par |
 |---|---|---|
 | Périmètre réseau | sortie limitée au banc, aux API de contrôle du cloud et à l'API du modèle | une connexion hors périmètre échoue |
-| Identité limitée | identité d'exécution qui lit le groupe du banc et n'écrit que sur chaque VM inscrite et chaque expérience (SEC5) | lecture de ses attributions de rôle, à toutes les portées, et de ses droits effectifs sur le banc ; une écriture sur le groupe entier = manque |
+| Identité limitée | identité d'exécution qui lit le groupe du banc et n'écrit que sur chaque VM inscrite et chaque expérience (SEC5) | lecture de ses attributions de rôle, à toutes les portées, et de ses droits effectifs sur le banc ; une écriture sur le groupe entier = manque ; sans expérience dans le groupe (Chaos Studio non enregistré sur l'abonnement : `MissingSubscriptionRegistration` ou `NoRegisteredProviderFound`, quel que soit le statut — SEC7, à mesurer), les droits du chaos ne sont pas demandés |
 | Cibles inscrites | l'inscription est revérifiée à chaque injection | refus sans inscription (O0, déjà en place) |
 | Plafond | limite de l'orchestrateur, ou quota | configuration effective lue |
 | Arrêt d'urgence | révoquer l'identité, tout arrêter | essai à blanc en CI |
@@ -428,7 +428,7 @@ l'injecteur écrit d'après le catalogue). Une fenêtre déjà tirée ne peut re
 ses champs tels qu'ils étaient, `end` qui passe de null à une date pas antérieure à son début
 (`closed_by` à côté, celui du kill) ; toute autre réécriture (une cible ajoutée, un début déplacé,
 une expiration repoussée, `end` retiré ou déplacé) est refusée, la copie tirée d'abord gardée, et
-c'est dit une fois. À mesurer : qu'Azure garde la date de création d'un blob réécrit (sinon, une
+c'est dit une fois ; une copie locale qui ne se lit plus (corrompue, pas une fenêtre) n'est jamais remplacée (SEC7) — une copie effacée sur l'hôte revient comme neuve, bornée par la création de son blob. À mesurer : qu'Azure garde la date de création d'un blob réécrit (sinon, une
 fenêtre vue pour la première fois déjà fermée serait refusée : ses cycles restent « real », le
 sens sûr).
 

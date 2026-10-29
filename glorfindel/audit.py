@@ -387,8 +387,8 @@ def _check_permissions(resource_id: str, connector) -> AuditCheck | list:
     return AuditCheck(
         action, name, "fail",
         f"Droits manquants — {detail}",
-        fix=("Rôles intégrés suffisants : Network Contributor + Virtual Machine Contributor "
-             "sur le resource group (ou un rôle personnalisé avec ces seules actions)."),
+        fix=("Le rôle « Eregion Glorfindel Response » (infra/identities/glorfindel-response.json) "
+             "sur le resource group — docs/operations.md, « Identités Azure »."),
         data={"missing_permissions": missing},
     )
 
@@ -507,9 +507,11 @@ def _check_nsg(resource_id: str, connector) -> AuditCheck:
             name="NSG access",
             status="fail",
             message=f"IAM: no permission on NSG — {err}",
+            # A read failed: Reader is what it lacks (SEC7) — the response's writes are
+            # checked apart (_check_permissions).
             fix=(
                 f"az role assignment create --assignee $AZURE_CLIENT_ID "
-                f"--role 'Network Contributor' "
+                f"--role Reader "
                 f"--scope /subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/{rg}"
             ),
         )
@@ -571,10 +573,15 @@ def _check_backup(resource_id: str, connector, vault: str, vault_rg: str = "") -
             name="Backup vault",
             status="fail",
             message=f"IAM: no access to vault '{vault}' — {err}",
+            # A read failed: Reader on the vault's group. The restore itself is never this
+            # identity's to take (the audit runs in the watch): « Eregion Glorfindel Restore »
+            # goes to the console's and the bot's principals only (SEC7).
             fix=(
                 f"az role assignment create --assignee $AZURE_CLIENT_ID "
-                f"--role 'Backup Contributor' "
-                f"--scope /subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/{vrg}"
+                f"--role Reader "
+                f"--scope /subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/{vrg} "
+                f"— le restore : « Eregion Glorfindel Restore » à la console et au bot seulement "
+                f"(docs/operations.md, « Identités Azure »)"
             ),
         )
     if _is_transient_error(err):
@@ -632,7 +639,7 @@ def _check_compute(resource_id: str, connector) -> AuditCheck:
             message=f"IAM: no access to VM {vm} — {err}",
             fix=(
                 f"az role assignment create --assignee $AZURE_CLIENT_ID "
-                f"--role 'Virtual Machine Contributor' "
+                f"--role Reader "
                 f"--scope /subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/{rg}"
             ),
         )

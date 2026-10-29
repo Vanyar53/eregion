@@ -285,8 +285,11 @@ def test_what_the_preflight_reader_reads():
 
 # ── The decision: does the change go into an image ────────────────────────────────────────────
 
-def _diff(*files, code=0):
+def _diff(*files, code=0, merge=True):
     def runner(argv):
+        if argv[:2] == ["git", "rev-parse"]:
+            assert argv == ["git", "rev-parse", "--verify", "-q", "HEAD^2"]
+            return _done(argv, 0 if merge else 1, "")
         assert argv == ["git", "diff", "--no-renames", "--name-only", "-z", "HEAD^1", "HEAD"]
         return _done(argv, code, "".join(f + "\0" for f in files))
     return runner
@@ -315,6 +318,22 @@ def test_a_push_always_builds_without_reading_the_diff():
 
 def test_an_unreadable_diff_builds():
     assert ic.touched("pull_request", _diff(code=128))[0] is True
+
+
+def test_a_head_that_is_not_the_merge_commit_builds():
+    """SEC7: the diff HEAD^1..HEAD is the pull request's only on its merge commit; on another
+    HEAD (a checkout of the PR's head), HEAD^1 is no base — built, the diff never read."""
+    assert ic.touched("pull_request", _diff("docs/x.md", merge=False)) == (
+        True, "HEAD n'est pas le commit de fusion de la PR : construit")
+
+
+def test_in_the_ci_without_its_output_the_decision_fails(monkeypatch, capsys):
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    assert ic.main(["touched", "--event", "pull_request"], runner=_diff("docs/x.md")) == 1
+    assert "GITHUB_OUTPUT" in capsys.readouterr().out
+    monkeypatch.delenv("GITHUB_ACTIONS")
+    assert ic.main(["touched", "--event", "pull_request"], runner=_diff("docs/x.md")) == 0   # make images-check
 
 
 def test_the_decision_goes_to_githubs_output(tmp_path, monkeypatch, capsys):
@@ -375,9 +394,9 @@ def test_the_workflow_runs_on_every_pull_request_and_main_unfiltered():
     """No `paths`: a filtered workflow leaves a required check « expected » on a pull request it
     skips. The first step decides instead (touched)."""
     on = _wf()["on"]
-    assert set(on) == {"push", "pull_request"}
+    assert set(on) == {"push", "pull_request", "merge_group"}
     assert on["push"] == {"branches": ["main"]}
-    assert on["pull_request"] is None
+    assert on["pull_request"] is None and on["merge_group"] is None
     assert "paths" not in WORKFLOW.read_text(encoding="utf-8").split("\njobs:")[0].replace("`paths`", "")
 
 
@@ -389,7 +408,8 @@ def test_the_first_step_decides_and_every_later_step_obeys():
     assert first["id"] == "touched"
     assert first["run"].strip() == 'python3 scripts/image_check.py touched --event "$EVENT"'
     assert first["env"] == {"EVENT": "${{ github.event_name }}"}
-    assert all(s.get("if") == "steps.touched.outputs.build == 'true'" for s in steps[2:])
+    # A missing output builds (SEC7): the steps skip only on an explicit false.
+    assert all(s.get("if") == "steps.touched.outputs.build != 'false'" for s in steps[2:])
     assert len(steps) == 5
 
 

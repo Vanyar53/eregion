@@ -30,7 +30,8 @@ The trigger is Jonathan publishing a release (sessions prepare drafts). A pass:
   6. the image running now tagged by its reference (refused when there is none: no switch
      without a way back); the switch (deploy.sh --activate), then the health for a few
      minutes: three containers running, never restarted, built from the tag; the watch's
-     heartbeat written after the switch; the console answering; and, once they are, every
+     heartbeat written after the switch; the console answering; no « Read-only file system » in
+     their journals since the switch that the release before did not show (V-34); and, once they are, every
      rule the release loads run once on its backend, read-only, in the watch's container
      (`glorfindel rules check --live`, H2) — the same check run in what ran, before the
      switch: only a regression rolls back (a rule in a lasting error that was ok, or absent,
@@ -433,6 +434,36 @@ def activate(ref: str) -> None:
         raise Unhealthy(f"deploy.sh --activate {ref} a échoué :\n{tail(res)}")
 
 
+# V-34 (SEC7): the containers run with a read-only root filesystem; a write the release makes
+# outside its mounts fails there, and says so in its journal.
+READ_ONLY_FS = "Read-only file system"
+
+
+def read_only_errors(since: float) -> tuple[list[str], list[str]]:
+    """(the containers whose journal says « Read-only file system » since `since`, a Unix time;
+    those whose journal could not be read — nothing proven there, said in orange, never a
+    rollback: H2's rule for a check that proves nothing)."""
+    found, unread = [], []
+    for name in CONTAINERS:
+        res = sh("docker", "logs", "--since", str(int(since)), name, check=False)
+        if READ_ONLY_FS in (res.stdout or "") + (res.stderr or ""):
+            found.append(name)
+        elif res.returncode != 0:
+            unread.append(name)
+    return found, unread
+
+
+def _with_unread(proof: dict, unread: set) -> dict:
+    """The health's proof, with the journals the last look could not read said in orange."""
+    if not unread:
+        return proof
+    out = dict(proof)
+    line = (f"journaux illisibles ({', '.join(sorted(unread))}) : l'absence de « {READ_ONLY_FS} » "
+            "non prouvée (V-34)")
+    out["orange"] = f"{out['orange']}\n{line}" if out.get("orange") else line
+    return out
+
+
 def health_once(ref: str, since: float) -> str:
     """'' when healthy, else why not."""
     for name in CONTAINERS:
@@ -609,8 +640,14 @@ def reference_check() -> dict:
         print(f"règles avant la bascule : {n['ok']} ok, {n['error']} en erreur, en {base['seconds']} s")
     else:
         print(f"règles avant la bascule : {base.get('state')} (en {base.get('seconds', 0)} s)")
+    # V-34: what ran already writing outside its mounts, in its last hour — the same after the
+    # switch is no regression (H2's rule).
+    read_only, _ = read_only_errors(time.time() - 3600)
+    if read_only:
+        print(f"avant la bascule : « {READ_ONLY_FS} » dans le journal de {', '.join(read_only)}")
     return {"state": base.get("state"), "rules": [{"name": r["name"], "status": r["status"]}
-                                                  for r in base.get("rules", [])]}
+                                                  for r in base.get("rules", [])],
+            "read_only": read_only}
 
 
 def health(ref: str, since: float, rules: bool = False, base: dict | None = None) -> tuple[str, dict]:
@@ -621,15 +658,27 @@ def health(ref: str, since: float, rules: bool = False, base: dict | None = None
     health, red; the containers are looked at once more after the check."""
     deadline = time.monotonic() + HEALTH_S
     proof: dict | None = None
+    known_ro = set((base or {}).get("read_only") or [])
+    unread: set = set()
     while True:
         why = health_once(ref, since)
+        if rules and not why:
+            # V-34 (SEC7): a write the read-only root refuses, since the switch, in a container whose
+            # journal said nothing of it before — a regression, H0 goes back. The way back
+            # (rules=False) is never judged on it; a journal that cannot be read, said (the last look).
+            found, missed = read_only_errors(since)
+            unread = set(missed)
+            ro = [n for n in found if n not in known_ro]
+            if ro:
+                return (f"{', '.join(ro)} : « {READ_ONLY_FS} » dans le journal depuis la bascule — une "
+                        "écriture hors des montages, que la racine en lecture seule refuse (V-34)"), proof or {}
         if rules and proof is None and not why:
             proof = verdict(run_rules_check(deadline - time.monotonic(), "après la bascule"), base)
             if proof["why"]:
                 return proof["why"], proof
             continue        # the last look is never one from before the check
         if time.monotonic() >= deadline:
-            return why, proof or {}
+            return why, _with_unread(proof or {}, unread)
         time.sleep(STEP_S)
 
 

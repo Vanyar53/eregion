@@ -2791,7 +2791,7 @@ MUTANTS += [
      'RUN pip install --no-cache-dir -e ".[annatar]"\n'),
     ("M917", "Annatar's extra without litellm: the planner fails in the image (HY1)", "pyproject.toml",
      "    # The campaign planner (`annatar campaign plan --llm`) — the same pin as Glorfindel's (HY1).\n"
-     '    "litellm==1.95.1",\n',
+     '    "litellm==1.100.4",\n',
      ""),
     ("M918", "Annatar's targets pass the client secret by value again (L23)", MAKE,
      "\t-e AZURE_CLIENT_ID -e AZURE_CLIENT_SECRET -e AZURE_TENANT_ID -e AZURE_SUBSCRIPTION_ID \\\n\t-e ANTHROPIC_API_KEY",

@@ -632,12 +632,20 @@ verrou, chaque reconstruction de l'image prenait la dernière version de tout.
   la même commande donne le même verrou ; la date est dans l'en-tête du fichier.
 - Le premier verrou (26/10) fige la résolution de ce jour-là : celle qu'une reconstruction de
   l'image aurait prise ; la suite de tests passe dessus en 3.11 et en 3.12, et l'image se
-  construit. LiteLLM reste épinglée dans `pyproject.toml` (`==1.86.1` alors, `==1.95.1` depuis
+  construit. LiteLLM reste épinglée dans `pyproject.toml` (`==1.86.1` alors, `==1.100.4` depuis
   DEP1, ci-dessous). Il monte nettement de
   versions par rapport aux postes et à la CI d'avant (anthropic 0.104 → 2.3, fastapi 0.136 →
   0.162, langgraph 1.2.1 → 1.2.17) : **le harnais avant le premier redéploiement de H0 sur ce
   verrou n'est pas facultatif** (`infra/glorfindel-host/README.md`, « Redéployer H0 après M-3 »,
   étape 4).
+- DEP1 (#282, 29/10) : litellm 1.86.1 → 1.100.4, à la même date de résolution (`LOCK_DATE`
+  2026-10-26). 1.100.4 déclare en plus `boto3` et `pydantic-settings`. Entrent dans les trois
+  verrous boto3, botocore, s3transfer et jmespath. Dans celui des injecteurs entrent aussi
+  pydantic-settings, python-dateutil et six : chromadb les apportait déjà aux deux autres.
+  python-dateutil redescend de 3.0.0 à 2.9.0.post0 dans `dev.txt` et `glorfindel.txt`, car
+  botocore exige `<3.0.0`, et tzdata, que seule la 3.0.0 tirait, en sort. Le SDK d'AWS est
+  installé par litellm, jamais importé hors d'un adaptateur de fournisseur
+  (`tests/unit/test_provider_boundary.py`, aussi une étape de la CI).
 
 **Mettre à jour** (une PR, jamais directement sur H0) :
 
@@ -735,7 +743,7 @@ cache de GitHub (`python3 scripts/image_check.py <image> --build`), puis les ép
 | `requirements/annatar.txt` : une dépendance (click) retirée du verrou | la construction : pip refuse (« all requirements must have their versions pinned ») |
 | `annatar/Dockerfile` : un `COPY` d'un fichier qui n'existe pas | la construction (« not found ») |
 | `glorfindel/Dockerfile` sans `COPY eregion_console/` : l'image se construit | la vérification : « la watch, le bot et la console importent », code 1 (`No module named 'eregion_console'`) |
-| litellm 1.106.0 à la place de 1.95.1 (DEP1, mesuré le 29/10 dans un venv jetable, sans réseau) : `import litellm` passe | la vérification : « un appel d'outil par litellm », code 1 (`No module named 'mcp'`) |
+| litellm 1.106.0 à la place de 1.100.4 (DEP1, mesuré le 29/10 dans un venv jetable, sans réseau) : `import litellm` passe | la vérification : « un appel d'outil par litellm », code 1 (`No module named 'mcp'`) |
 
 **Durées mesurées** (29/10, poste de l'opérateur, WSL2, image de base déjà tirée, sans le cache de
 GitHub) :

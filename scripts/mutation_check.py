@@ -44,6 +44,7 @@ SDK = "glorfindel/providers/azure/sdk.py"
 FAC = "glorfindel/actions.py"                 # the façade (A1)
 PIF = "glorfindel/providers/interface.py"
 R = "glorfindel/reassert.py"
+RQ = "glorfindel/reassert_quarantine.py"       # split out of reassert.py (RB1)
 C = "glorfindel/config.py"
 INS = "eregion_core/inscription.py"
 ENG = "annatar/runner/engine.py"
@@ -1637,7 +1638,7 @@ MUTANTS += [
              "in quarantine (I1F)", QUA,
      '                protocol="*", source_address_prefix="*", destination_address_prefix="*",\n',
      '                protocol="Udp", source_address_prefix="*", destination_address_prefix="*",\n'),
-    ("M833", "the altered quarantine's card is closed at the next pass, its change standing (I1F)", R,
+    ("M833", "the altered quarantine's card is closed at the next pass, its change standing (I1F)", RQ,
      "        if k in altered and altered[k][0] == sid:\n            said.add(sid)\n"
      "        elif k in altered or settled(k):\n",
      "        if k in altered or settled(k):\n"),
@@ -1645,10 +1646,10 @@ MUTANTS += [
     ("M834", "nothing recorded: the pass reads no quarantine NSG (I1F, review)", R,
      "    report: list[dict] = []\n    _whatever_the_state(connector, autonomy, report)\n    return report\n",
      "    return []\n"),
-    ("M836", "an acknowledged quarantine card comes back at every pass (I1F, review)", R,
+    ("M836", "an acknowledged quarantine card comes back at every pass (I1F, review)", RQ,
      "        if signal_id in said or alerts.get(k) == signal_id:\n",
      "        if signal_id in said:\n"),
-    ("M837", "a quarantine card closed on an NSG read as unknown (I1F, review)", R,
+    ("M837", "a quarantine card closed on an NSG read as unknown (I1F, review)", RQ,
      '            return seen[k].get("status") != "unknown" and k not in altered\n',
      "            return k not in altered\n"),
     ("M835", "the watch's thread hands over only when something is recorded (I1F, review)", GCLI,
@@ -1677,7 +1678,7 @@ MUTANTS += [
      "        if time.time() - _last_reassert[0] < _reassert_every_s:\n            return\n"
      "        from glorfindel.actions import active_blocks, active_isolations\n        if not active_isolations() and not active_blocks():\n"
      "            return\n"),
-    ("M897", "a listing that fails reads as empty: every quarantine card closed (I1F, second review)", R,
+    ("M897", "a listing that fails reads as empty: every quarantine card closed (I1F, second review)", RQ,
      '        log.warning("reassert: quarantine NSGs not checked (%s)", exc)\n        return\n',
      '        log.warning("reassert: quarantine NSGs not checked (%s)", exc)\n        listing = []\n'),
     ("M898", "an unreadable configuration said at every pass (I1F, second review)", GCLI,
@@ -2015,8 +2016,8 @@ MUTANTS += [
 MUTANTS += [
     ("M900", "a block that could not be put back marked alerted before its card (L1F, L1)", R,
      ('        outcome = "failed"\n    _alert(_alert_id(vm, rid, ip),',
-      "        # silence (L1F, invariant machine).\n        _update_block_entry(ref or vm, ip, drift_alerted_at=now)\n"),
-     ('        outcome = "failed"\n        _update_block_entry(ref or vm, ip, drift_alerted_at=now)\n'
+      "        # silence (L1F, invariant machine).\n        _update_block_entry(ref or vm, ip, drift_alerted_at=now, drift_said=_situation(said))\n"),
+     ('        outcome = "failed"\n        _update_block_entry(ref or vm, ip, drift_alerted_at=now, drift_said=_situation(said))\n'
       "    _alert(_alert_id(vm, rid, ip),",
       "        # silence (L1F, invariant machine).\n        pass\n")),
     ("M901", "an isolation that could not be put back marked alerted before its card (L1F)", R,
@@ -2028,8 +2029,8 @@ MUTANTS += [
     ("M902", "a block gone in human_only marked alerted before its card (L1F, L1)", R,
      ('        _alert(_alert_id(vm, rid, ip), resource_id=rid, action="block_suspicious_ip",\n'
       '               reason=reason, action_params={"ip": ip})\n'
-      "        _update_block_entry(ref or vm, ip, drift_alerted_at=now)\n        report.append(",),
-     ("        _update_block_entry(ref or vm, ip, drift_alerted_at=now)\n"
+      "        _update_block_entry(ref or vm, ip, drift_alerted_at=now, drift_said=_situation(said))\n        report.append(",),
+     ("        _update_block_entry(ref or vm, ip, drift_alerted_at=now, drift_said=_situation(said))\n"
       '        _alert(_alert_id(vm, rid, ip), resource_id=rid, action="block_suspicious_ip",\n'
       '               reason=reason, action_params={"ip": ip})\n        report.append(',)),
 ]
@@ -2489,7 +2490,7 @@ TESTS.update({f"M{n}": "tests/unit/test_invariant_regressions.py -k two_hosts" f
 # another subscription.
 MUTANTS += [
     ("M1020", "a quarantine card closed on the mere absence of its NSG from the listing: the role "
-              "removed, our tag taken off, another subscription (I1S)", R,
+              "removed, our tag taken off, another subscription (I1S)", RQ,
      "        return k in gone\n", "        return True\n"),
     ("M1021", "a quarantine NSG read again without our tag reads as not ours: its card closed (I1S)", SWP,
      "        return self._quarantine_as_read(nsg)\n",
@@ -2499,14 +2500,14 @@ MUTANTS += [
               "closes its card (I1S)", SWP,
      '        if not target or target.lower() != (self._subscription_id or "").lower():\n',
      "        if False:\n"),
-    ("M1023", "a quarantine NSG that can't be read again (403, 429) reads as gone: its card closed (I1S)", R,
+    ("M1023", "a quarantine NSG that can't be read again (403, 429) reads as gone: its card closed (I1S)", RQ,
      "exc)\n            continue\n        if q is None:\n",
      "exc)\n            gone.add(k)\n            continue\n        if q is None:\n"),
     ("M1024", "every quarantine card's NSG read again at every pass, listed or not: a get per card "
-              "per minute (I1S)", R,
+              "per minute (I1S)", RQ,
      "        if _key(rid) and _key(rid) not in seen:\n", "        if _key(rid):\n"),
     ("M1025", "an acknowledged change is not read again: its NSG deleted, the acknowledgement silences "
-              "the next one (I1S)", R,
+              "the next one (I1S)", RQ,
      '    for rid in [e.get("resource_id") or "" for e in cards] + list(alerts):\n',
      '    for rid in [e.get("resource_id") or "" for e in cards]:\n'),
     ("M1026", "a refusal (403) read again reads as not found: the card closed (I1S)", SWP,
@@ -2557,12 +2558,12 @@ MUTANTS += [
     ("M1108", "a NIC in quarantine whose original is gone: release and reset say only 'not found' (ISU)",
      QUA, "            raise self._original_gone(q, nic_id, original, exc)\n", "            raise\n"),
     ("M1109", "a card of another subscription handed to the reader: refused there, a warning at every "
-              "pass without end (ISU)", R,
+              "pass without end (ISU)", RQ,
      "    elsewhere = {k: w for k, rid in missing.items() if outside and isinstance(w := outside(rid), str) "
      "and w}\n", "    elsewhere = {}\n"),
-    ("M1110", "a card of another subscription said at every pass (ISU)", R,
+    ("M1110", "a card of another subscription said at every pass (ISU)", RQ,
      "    for k in elsewhere.keys() - _SAID_ELSEWHERE:\n", "    for k in elsewhere:\n"),
-    ("M1111", "an acknowledged change alone named by its lowercase key, not as Azure wrote it (ISU)", R,
+    ("M1111", "an acknowledged change alone named by its lowercase key, not as Azure wrote it (ISU)", RQ,
      "    missing = {k: cased.get(k) or rid for k, rid in missing.items()}\n", ""),
     ("M1112", "the connector never says an NSG is of another subscription: every pass, a warning (ISU)",
      SWP, '        return None if target and target.lower() == (self._subscription_id or "").lower() '
@@ -2574,7 +2575,7 @@ MUTANTS += [
      '**({"subnet_nsg_too": True} if own_id and subnet_nsg and tuple(',
      '**({"subnet_nsg_too": True} if False and subnet_nsg and tuple('),
     ("M1115", "a card of another subscription said once for ever: closed, then a new card on its NSG "
-              "unsaid (ISU)", R,
+              "unsaid (ISU)", RQ,
      "    _SAID_ELSEWHERE.intersection_update(elsewhere)\n", ""),
 ]
 TESTS.update({f"M{n}": "tests/unit/test_invariant_regressions.py -k two_hosts_an_unblock" for n in (1100, 1101)})
@@ -4532,10 +4533,151 @@ MUTANTS += [
      '        failed = self._gone_vm_unknown(resource_id or vm_name, vm_name, "block")\n',
      "        failed = []\n"),
     ("M1599", "the unblock of a deleted VM leaves in silence the rules nothing names (I5R)", UNB,
-     "        failed += self._unnamed_blocks(vm_name, ip, known)\n", ""),
+     "        failed += self._unnamed_blocks(vm_name, ip, known, resource_id if lost else None)\n", ""),
 ]
 TESTS.update({mid: f"{_I5R_KEEP} {INVARIANTS}" for mid in ("M1590", "M1591", "M1592", "M1593", "M1594")})
 TESTS.update({f"M{n}": "tests/unit/test_invariant_regressions.py -k deleted_vm" for n in range(1595, 1600)})
+
+# RB1 (#321): a merged block — a perimeter and the VM's own, one entry — put back whole, and
+# its card says exactly what is back and what still holds; the unblock of a deleted VM says
+# how to take what it leaves, its perimeter block too; our `-out` rule turned Inbound frees
+# no number. Measured by the sequences frozen in test_invariant_regressions.py (and
+# test_reassert.py), then by the machine alone (its card oracle, the second subnet). M1620–M1634.
+PER = "glorfindel/providers/azure/perimeter.py"
+_RB1 = " ".join([f"{_I5R}{t}" for t in (
+    "a_merged_block_never_says_the_ip_unblocked_while_the_perimeter_holds",
+    "a_merged_block_puts_back_the_vms_rules_on_every_subnet",
+    "a_merged_block_card_says_what_is_back_and_what_still_holds",
+    "a_merged_blocks_perimeter_gone_is_put_back_or_said",
+    "a_merged_block_whose_perimeter_cant_be_read_is_never_said_held",
+    "a_merged_block_whose_perimeter_is_bypassed_is_never_said_held",
+    "an_unblock_of_a_deleted_vm_says_how_to_take_what_it_leaves",
+    "an_unblock_of_a_deleted_vm_says_a_perimeter_block_nothing_ties_elsewhere",
+    "our_outbound_rule_turned_inbound_never_collides_with_the_rewrite",
+    "a_vm_block_never_says_the_ip_unblocked_while_another_vms_perimeter_holds",
+    "a_perimeter_block_never_says_blocked_with_a_nic_left_open",
+    "a_promotion_keeps_the_block_of_a_nic_the_perimeter_doesnt_cover",
+    "a_perimeter_block_alone_is_verified_on_every_nic",
+    "a_perimeter_block_whose_nics_cant_be_read_takes_no_block_off",
+    "a_write_that_failed_is_never_said_put_back",
+    "a_perimeter_block_reads_the_other_nics_own_block_on_azure",
+    "a_promotion_is_no_drift_for_the_next_pass",
+    "a_promotion_leaves_the_next_pass_silent_and_writes_nothing",
+    "a_nic_left_to_a_perimeter_someone_turned_is_open",
+    "a_perimeter_gone_after_its_uncovered_card_is_acknowledged_is_put_back_or_said",
+    "an_uncovered_card_is_said_again_when_the_uncovered_nics_change",
+    "a_drift_card_acknowledged_is_said_again_only_when_it_worsens",
+    "the_machine_finds_a_perimeter_deleted_after_its_card_is_acknowledged",
+    "the_same_perimeter_gone_twice_is_said_twice")] + ["tests/unit/test_reassert.py"])
+MUTANTS += [
+    ("M1620", "a merged block put back on its perimeter alone: the VM's rule left turned (RB1)", R,
+     '    scopes = (["subnet", "vm"] if b.get("placements") else ["subnet"]) if b.get("scoped") is False else ["vm"]\n',
+     '    scopes = ["subnet"] if b.get("scoped") is False else ["vm"]\n'),
+    ("M1621", "« reposé » said from the writes alone, Azure not read again (RB1, A0)", R,
+     "            after = connector.verify_block_ip(ip, rid)\n",
+     '            after = {"verified": True}\n'),
+    ("M1622", "only the entry's own perimeter counted: another VM's on the subnet still blocks (RB1)", UNB,
+     "                holds = self._perimeter_holds(cache, t0, ip, port)\n",
+     '                holds = self._perimeter_holds(cache, t0, ip, port) if perimeter else "no"\n'),
+    ("M1623", "a perimeter that can't be read counted as holding (RB1, A0)", UNB,
+     '                if holds == "holds":\n', '                if holds in ("holds", "unknown"):\n'),
+    ("M1624", "a merged entry's own perimeter pair not checked: gone in silence (RB1)", UNB,
+     '                if st in ("absent", "altered"):\n                    (missing if missing else held_missing)',
+     '                if False:\n                    (missing if missing else held_missing)'),
+    ("M1625", "rules gone while the IP stays blocked said « n'est plus bloquée » (RB1)", R,
+     '    if v.get("verified") is True:\n        where =', '    if False:\n        where ='),
+    ("M1626", "the NICs the perimeter still holds left out of the card (RB1)", UNB,
+     "                    held_by.append(short)\n", ""),
+    ("M1627", "a block put back that still doesn't hold said again at every pass (RB1)", R,
+     '    if outcome != "reapplied":\n', '    if outcome == "failed":\n'),
+    ("M1628", "our rule turned to the other direction frees its number: the rewrite collides (RB1)", NSG,
+     '            if own.get(_rule_name(r).lower()) != _enum_text(getattr(r, "direction", ""))} | set(taken)\n',
+     '            if _rule_name(r).lower() not in own} | set(taken)\n'),
+    ("M1629", "the unblock of a deleted VM leaves a rule without saying how to take it off (RB1)", UNB,
+     '                                "rien ne nomme plus)" + how.format(" si aucune VM vivante de ce nom ne bloque "\n'
+     '                                                                   f"{ip} (glorfindel status)"))\n',
+     '                                "rien ne nomme plus) : laissée")\n'),
+    ("M1630", "the unblock of a deleted VM, its entry lost, never looks for its perimeter block (RB1)", UNB,
+     '                elif lost and name.removesuffix("-out") == prefix', '                elif False and name.removesuffix("-out") == prefix'),
+    ("M1631", "another VM's recorded perimeter said as the deleted VM's (RB1)", UNB,
+     '        tied = self._perimeters_recorded(ip, lost) if lost else set()\n', "        tied = set()\n"),
+    ("M1632", "a perimeter block said for a deleted VM whose entry is kept (RB1)", UNB,
+     "        failed += self._unnamed_blocks(vm_name, ip, known, resource_id if lost else None)\n",
+     "        failed += self._unnamed_blocks(vm_name, ip, known, resource_id)\n"),
+    ("M1633", "a merged entry read as a VM block: its own perimeter never recognised, nor checked (RB1)", PER,
+     '        if entry.get("scoped") is not False or not entry.get("nsg")',
+     '        if True or not entry.get("nsg")'),
+    ("M1634", "a perimeter an allow lets the threat through counted as holding (RB1)", PER,
+     "                if found is not None and not self._threat_open(found):\n",
+     "                if found is not None:\n"),
+]
+TESTS.update({f"M{n}": _RB1 for n in range(1620, 1635)})
+# RB1, review (5.5): a perimeter block covers the primary NIC's subnet only — named, kept,
+# verified; a write that failed is never « reposé ». M1635–M1640.
+BLK = "glorfindel/providers/azure/blocks.py"
+MUTANTS += [
+    ("M1635", "a promotion takes the block off every NIC, the ones off the perimeter's subnet too (RB1, review)",
+     BLK, "                if off_ids is None or (pl.get(\"nic_id\") or \"\").rstrip(\"/\").lower() in off_ids:\n",
+     "                if False:\n"),
+    ("M1636", "a perimeter block never names the NICs it doesn't cover: `blocked` said (RB1, review)", BLK,
+     '        uncovered = [t["nic_short"] for t in off]\n', "        uncovered = []\n"),
+    ("M1641", "a NIC off the perimeter's subnet read as blocked from the state: its rules gone, `blocked` (RB1, review)",
+     BLK, "                check = self.verify_block_ip(ip, resource_id)\n", '                check = {"verified": True}\n'),
+    ("M1637", "a perimeter block alone verified on its pair only: a NIC off its subnet open, true said (RB1, review)",
+     UNB, "                if entry.get(\"scoped\") is False:     # the VM's NICs it doesn't cover (RB1, review)\n",
+     "                if False:\n"),
+    ("M1638", "a write that failed said « reposé » when the reading holds (RB1, review, A0)", R,
+     '        if after.get("verified") is True and not after.get("held_missing") and not errors:\n',
+     '        if after.get("verified") is True and not after.get("held_missing"):\n'),
+    ("M1639", "a merged entry's perimeter pair unread counted as nothing (RB1, review, A0)", UNB,
+     '                elif st == "unknown":            # never read as there (RB1, review)\n',
+     "                elif False:\n"),
+    ("M1640", "NICs unreadable read as all behind the perimeter: their blocks taken off, `blocked` (RB1, review)",
+     BLK, "            off, off_ids, unread = [], None, _first_line(exc)\n", '            off, off_ids, unread = [], set(), ""\n'),
+]
+TESTS.update({f"M{n}": _RB1 for n in range(1635, 1642)})
+# RB1, second review: a NIC a promotion left to the perimeter is no drift; a NIC the
+# perimeter never covered is no disappearance. M1642–M1644.
+MUTANTS += [
+    ("M1642", "a NIC a promotion left to the perimeter read as added since, its rules gone: a drift said, "
+              "the promotion undone (RB1, second review)", UNB,
+     "                    if not self._left_to_perimeter(cache, perimeter, targets.get(n), ip, port):\n",
+     "                    if True:\n"),
+    ("M1643", "a NIC left to the perimeter covered whether the perimeter holds or not (RB1, second review)", PER,
+     '        return governs and self._perimeter_holds(cache, t0, ip, port) == "holds"\n',
+     "        return governs\n"),
+    ("M1644", "a NIC the perimeter never covered said vanished, the perimeter written again (RB1, second review)",
+     R, '    if verification.get("uncovered_nics") and not verification.get("missing_rules"):\n',
+     "    if False:\n"),
+]
+TESTS.update({f"M{n}": _RB1 for n in range(1642, 1645)})
+# RB1, third review: the card « ne couvre pas » has its own mark. M1645–M1647.
+MUTANTS += [
+    ("M1645", "the uncovered card marked with the drift marker: acknowledged, the perimeter's later "
+              "disappearance neither put back nor said (RB1, third review)", R,
+     "            _update_block_entry(ref or vm, ip, uncovered_said=nics, drift_alerted_at=None)\n",
+     "            _update_block_entry(ref or vm, ip, uncovered_said=nics, drift_alerted_at=now)\n"),
+    ("M1646", "the uncovered card checked after the drift marker: an episode before it silences it, and the "
+              "next disappearance (RB1, third review)", R,
+     '        if b.get("uncovered_said") != nics or b.get("drift_alerted_at"):\n',
+     '        if b.get("uncovered_said") != nics:\n'),
+    ("M1647", "the uncovered card said once for ever, whatever the NICs it doesn't cover become (RB1, third review)",
+     R, '        if b.get("uncovered_said") != nics:\n            reason =',
+     '        if not b.get("uncovered_said"):\n            reason ='),
+]
+TESTS.update({f"M{n}": _RB1 for n in range(1645, 1648)})
+# RB1, fourth review: a drift card said again when it worsens, never when it doesn't. M1648–M1649.
+MUTANTS += [
+    ("M1648", "a drift worse than its card never said again: acknowledged, a perimeter deleted after it "
+              "opened the VM in silence (RB1, 4th review)", R,
+     "    if not isinstance(said, dict):\n        return False\n    return bool(",
+     "    return False\n    return bool("),
+    ("M1649", "a drift card said again at every pass, the same or better: one card per disappearance no more "
+              "(RB1, 4th review)", R,
+     '    return bool((said.get("blocked") and not now["blocked"])\n',
+     '    return bool(True or (said.get("blocked") and not now["blocked"])\n'),
+]
+TESTS.update({f"M{n}": _RB1 for n in range(1648, 1650)})
 
 
 # SEC7 (#296): identities and hardening — the bot's stale buttons (V-08), the control plane read

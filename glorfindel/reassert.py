@@ -21,6 +21,7 @@ import logging
 from datetime import datetime, timezone
 
 from glorfindel.reassert_cards import say_bypass, say_unreadable_states
+from glorfindel.reassert_quarantine import _report_altered_quarantines
 
 log = logging.getLogger(__name__)
 
@@ -154,147 +155,6 @@ def _whatever_the_state(connector, autonomy, report: list[dict]) -> None:
     sweep_orphan_rules(connector, autonomy, report, nsgs)
 
 
-_QUARANTINE_PREFIX = "reassert-quarantine-"
-_SAID_ELSEWHERE: set[str] = set()     # cards' NSGs of another subscription, said (ISU, #264)
-
-
-def _quarantine_alerts_path():
-    """~/.glorfindel/quarantine_alerts.json: the change said — the `drift_alerted_at` of an NSG no state names."""
-    from glorfindel import actions
-    return actions._ISOLATION_STATE_DIR.parent / "quarantine_alerts.json"
-
-
-def _load_quarantine_alerts() -> dict:
-    import json
-    try:
-        data = json.loads(_quarantine_alerts_path().read_text())
-        return data if isinstance(data, dict) else {}
-    except (OSError, ValueError):
-        return {}
-
-
-def _save_quarantine_alerts(alerts: dict) -> None:
-    import json
-    from glorfindel import actions
-    try:
-        actions._atomic_write_text(_quarantine_alerts_path(), json.dumps(alerts, sort_keys=True))
-    except Exception as exc:                  # said again at the next pass: noisier, not silent
-        log.warning("reassert: quarantine alerts not recorded (%s)", exc)
-
-
-def _report_altered_quarantines(connector, report: list[dict], nsgs: list | None = None) -> None:
-    """Our quarantine NSG changed by someone, still holding NICs (I1F): said, one card
-    per NSG and per change. The isolations are read from their state; a NIC whose state
-    was lost (and its NSG's tags) sits in a quarantine nobody checked — a deny turned to
-    Udp by hand opened it in silence. Not put back: without a state, nothing says which
-    VM, nor its mode (I5). Run after the isolations, which may have put it back.
-
-    A change said is not said again while it stands: the card stays, and once the
-    operator acknowledges it, no new one comes (quarantine_alerts.json) — a new change
-    of that NSG is a new card. A card closes, and its change is forgotten, once the NSG
-    reads whole, holds nothing, or is gone from the subscription — read again by its id
-    and not found, never only absent from the listing (I1S); never on an NSG read as
-    unknown (configuration unreadable), unread, of another subscription, nor when the
-    listing fails. Read again, our NSG is judged by its content, its tag or not."""
-    find = getattr(connector, "find_altered_quarantines", None)
-    if find is None:
-        return                                  # a provider without a quarantine NSG
-    try:
-        listing = find(nsgs=nsgs) if nsgs is not None else find()
-    except Exception as exc:                # unread: every card stays as it is
-        log.warning("reassert: quarantine NSGs not checked (%s)", exc)
-        return
-    if not isinstance(listing, list):
-        return
-    import hashlib
-    from glorfindel import escalations
-    from glorfindel.actions import _rid_hash
-
-    def _key(rid) -> str:
-        return (rid or "").rstrip("/").lower()
-
-    seen = {_key(q.get("nsg_id")): q for q in listing}
-    alerts = _load_quarantine_alerts()
-    cards = [e for e in escalations.pending() if (e.get("signal_id") or "").startswith(_QUARANTINE_PREFIX)]
-    # Absent from the listing is not gone (I1S, #231): a role removed on its group (a listing
-    # that omits it without an error — a hypothesis, to measure on the bench), our tag taken
-    # off. The NSG of a card (or of a change acknowledged) not listed is read again by its id,
-    # before any card is touched: gone on a 404 only, anything else keeps the card. Of another
-    # subscription: never read here, kept, said once (ISU, #264); a 403, at every pass.
-    gone: set[str] = set()
-    missing: dict[str, str] = {}
-    for rid in [e.get("resource_id") or "" for e in cards] + list(alerts):
-        if _key(rid) and _key(rid) not in seen:
-            missing.setdefault(_key(rid), rid)
-    cased = {_key(e.get("resource_id")): e.get("resource_id") for e in escalations.all_escalations()} \
-        if any(rid == k for k, rid in missing.items()) else {}       # acknowledged alone: its name's case
-    missing = {k: cased.get(k) or rid for k, rid in missing.items()}
-    reread, outside = getattr(connector, "read_quarantine", None), getattr(connector, "outside_subscription", None)
-    elsewhere = {k: w for k, rid in missing.items() if outside and isinstance(w := outside(rid), str) and w}
-    for k in elsewhere.keys() - _SAID_ELSEWHERE:
-        log.warning("reassert: quarantine NSG %s is in subscription %s, not the one Glorfindel reads: its "
-                    "card kept, never read here (said once)", missing[k].rsplit("/", 1)[-1], elsewhere[k])
-    _SAID_ELSEWHERE.intersection_update(elsewhere)
-    _SAID_ELSEWHERE.update(elsewhere)
-    for k, rid in ([(k, r) for k, r in missing.items() if k not in elsewhere] if reread is not None else ()):
-        try:
-            q = reread(rid)
-        except Exception as exc:
-            log.warning("reassert: quarantine NSG %s not read again (%s)", rid.rsplit("/", 1)[-1], exc)
-            continue
-        if q is None:
-            gone.add(k)
-        elif isinstance(q, dict):
-            seen[k] = q
-    altered: dict[str, tuple[str, dict]] = {}          # NSG → (signal id, as it reads)
-    for k, q in seen.items():
-        if q.get("status") == "altered" and q.get("nics"):
-            change = hashlib.sha1("|".join(sorted(q.get("diff") or [])).lower().encode()).hexdigest()[:8]
-            altered[k] = (f"{_QUARANTINE_PREFIX}{_rid_hash(q['nsg_id'])}-{change}", q)
-
-    def settled(k: str) -> bool:
-        """Read, and nothing to say: whole, holding nothing — or gone: read again by its
-        id, not found. Unread is not settled."""
-        if k in seen:
-            return seen[k].get("status") != "unknown" and k not in altered
-        return k in gone
-
-    before = dict(alerts)
-    said = set()
-    for e in cards:
-        sid = e.get("signal_id") or ""
-        k = _key(e.get("resource_id"))
-        if k in altered and altered[k][0] == sid:
-            said.add(sid)
-        elif k in altered or settled(k):
-            escalations.resolve(e["id"])        # changed, whole again, holds nothing, gone
-    for k in [k for k in alerts if settled(k)]:
-        del alerts[k]
-    for k, (signal_id, q) in altered.items():
-        if signal_id in said or alerts.get(k) == signal_id:
-            continue                            # said: still pending, or acknowledged
-        nsg_id = q.get("nsg_id") or ""
-        name = nsg_id.rstrip("/").rsplit("/", 1)[-1]
-        nics = ", ".join(n.rstrip("/").rsplit("/", 1)[-1] for n in q.get("nics") or [])
-        reason = (f"Le NSG de quarantaine {name} ne porte plus les règles de Glorfindel "
-                  f"({', '.join(q.get('diff') or [])}) — modifié hors Glorfindel, ou accès "
-                  f"forensique changé dans la configuration : les cartes qu'il porte ({nics}) "
-                  "peuvent ne plus être coupées de tout. Glorfindel ne le repose pas seul pour "
-                  "des cartes dont il n'a pas l'état.")
-        steps = [f"Vérifier les règles de {name} (glorfindel-quarantine-*) et qui les a changées "
-                 "(journal d'activité).",
-                 "Toute isolation dans la région les remet ; sinon les remettre à la main.",
-                 f"Si l'incident est clos : lever les cartes qu'il porte ({nics}) — "
-                 "`glorfindel release <vm> --yes`."]
-        escalations.record(signal_id=signal_id, resource_id=nsg_id, action="restore_quarantine_nsg",
-                           escalation_type="quarantine_altered", reason=reason, severity="high",
-                           suggested_steps=steps)
-        alerts[k] = signal_id
-        report.append({"kind": "quarantine", "vm": name, "outcome": "escalated", "detail": reason})
-    if alerts != before:
-        _save_quarantine_alerts(alerts)
-
-
 _LOCK_WAIT_S = 30
 _STALE_MARKER_S = 1800
 
@@ -416,42 +276,141 @@ def _reassert_block(connector, autonomy, vm: str, ip: str, report: list[dict], r
         return
     say_bypass(vm, rid, verification, report, ip=ip, ref=ref)
     if verification.get("verified") is True and not verification.get("held_missing"):
-        _update_block_entry(ref or vm, ip, verified_at=now, drift_alerted_at=None)
+        _update_block_entry(ref or vm, ip, verified_at=now, drift_alerted_at=None, uncovered_said=None)
+        return
+    if verification.get("uncovered_nics") and not verification.get("missing_rules"):
+        # Never covered, not gone: a perimeter block alone on a VM with a NIC on another
+        # subnet. Said once per set of NICs, nothing written — putting the perimeter back
+        # covers nothing more (RB1, second review). Its own mark, never `drift_alerted_at`:
+        # acknowledged, the card silenced the pair's later disappearance for ever (RB1,
+        # third review). The pair whole again, a drift episode before is over.
+        nics = sorted(verification["uncovered_nics"])
+        if b.get("uncovered_said") != nics:
+            reason = (f"Le blocage de périmètre de {ip} ne couvre pas {', '.join(nics)} de {vm} : non couverte(s) "
+                      f"depuis le blocage (autre subnet), l'IP les atteint. Bloquer aussi la VM (scope vm) : "
+                      f"`glorfindel block {ip} {rid}`.")
+            _alert(_alert_id(vm, rid, ip), resource_id=rid, action="block_suspicious_ip",
+                   reason=reason, action_params={"ip": ip})
+            report.append({"kind": "block", "vm": vm, "ip": ip, "outcome": "escalated", "detail": reason})
+        if b.get("uncovered_said") != nics or b.get("drift_alerted_at"):
+            _update_block_entry(ref or vm, ip, uncovered_said=nics, drift_alerted_at=None)
         return
     if not _missing(verification):
         return
-    if b.get("drift_alerted_at"):
-        return                      # one alert per disappearance (see isolations)
+    said = verification
+    if b.get("drift_alerted_at") and not _worse(b.get("drift_said"), _situation(verification)):
+        # One alert per disappearance (see isolations) — but said again when it worsens: a
+        # NIC held turned open or unknown, a rule more gone. Acknowledged, a card « reste
+        # bloquée » silenced the perimeter's deletion that opened the VM (RB1, 4th review).
+        return
     if b.get("reasserted_at") or _mode(autonomy, vm, ref) == "human_only":
-        reason = (f"Le blocage de {ip} sur {vm} a disparu d'Azure"
-                  + (" une deuxième fois" if b.get("reasserted_at") else "")
-                  + " — l'IP n'est plus bloquée. Glorfindel ne le repose pas : "
-                  f"`glorfindel unblock {ip} {rid} --yes` si c'est voulu, sinon re-bloquer.")
+        reason = (_block_drift(ip, vm, verification, again=bool(b.get("reasserted_at")))
+                  + f" Glorfindel ne le repose pas : `glorfindel unblock {ip} {rid} --yes` si c'est voulu, "
+                  "sinon re-bloquer.")
         _alert(_alert_id(vm, rid, ip), resource_id=rid, action="block_suspicious_ip",
                reason=reason, action_params={"ip": ip})
-        _update_block_entry(ref or vm, ip, drift_alerted_at=now)
+        _update_block_entry(ref or vm, ip, drift_alerted_at=now, drift_said=_situation(said))
         report.append({"kind": "block", "vm": vm, "ip": ip, "outcome": "escalated", "detail": reason})
         return
-    try:
-        connector.block_suspicious_ip(
-            ip, rid, scope="vm" if b.get("scoped", True) else "subnet",
-            threat_port=b.get("threat_port"))
+    # A merged entry (RB1): its perimeter AND its VM's placements, each put back — the
+    # perimeter alone left a VM rule turned into an allow as it was.
+    scopes = (["subnet", "vm"] if b.get("placements") else ["subnet"]) if b.get("scoped") is False else ["vm"]
+    errors: list[str] = []
+    for scope in scopes:
+        try:
+            connector.block_suspicious_ip(ip, rid, scope=scope, threat_port=b.get("threat_port"))
+        except Exception as exc:
+            errors.append(f"{exc}" if len(scopes) == 1 else f"{_SCOPE_WORDS[scope]} : {exc}")
+    if len(errors) < len(scopes):
         _update_block_entry(ref or vm, ip, reasserted_at=now)
-        reason = (f"Le blocage de {ip} sur {vm} avait disparu d'Azure : reposé une fois. "
-                  "S'il disparaît encore, Glorfindel alertera sans le reposer.")
-        outcome = "reapplied"
-    except Exception as exc:
-        reason = f"Le blocage de {ip} sur {vm} a disparu d'Azure ; le reposer a échoué : {exc}"
+        # Said from Azure read again, never from the writes alone (A0): « reposé » only
+        # for a block that holds whole.
+        try:
+            after = connector.verify_block_ip(ip, rid)
+        except Exception as exc:
+            after = {"verified": None, "error": f"relecture impossible : {exc}"}
+        # A write that failed is never « reposé », whatever the reading says: an unreadable
+        # perimeter read as whole, and the error was swallowed (RB1, review).
+        if after.get("verified") is True and not after.get("held_missing") and not errors:
+            reason = (f"Le blocage de {ip} sur {vm} avait disparu d'Azure : reposé une fois. "
+                      "S'il disparaît encore, Glorfindel alertera sans le reposer.")
+            outcome = "reapplied"
+        else:
+            say_bypass(vm, rid, after, report, ip=ip, ref=ref)
+            said = after
+            reason = (f"Le blocage de {ip} sur {vm} avait disparu d'Azure ; ses règles réécrites une fois"
+                      + (f" (échec : {' ; '.join(errors)})" if errors else "")
+                      + ", il ne tient pas en entier — " + _block_drift(ip, vm, after, said=True)
+                      + f" Glorfindel ne les réécrit pas de nouveau : `glorfindel unblock {ip} {rid} --yes` si "
+                      "c'est voulu, sinon re-bloquer.")
+            outcome = "partial"
+    else:
+        reason = f"Le blocage de {ip} sur {vm} a disparu d'Azure ; le reposer a échoué : {' ; '.join(errors)}"
         outcome = "failed"
     _alert(_alert_id(vm, rid, ip), resource_id=rid, action="block_suspicious_ip",
            reason=reason, action_params={"ip": ip})
-    if outcome == "failed":
+    if outcome != "reapplied":
         # "Already alerted" is written only once the card exists. Written before it, a
         # crash in between (or a full disk on the card) left the marker without the
         # card: every later pass returned on the marker, and the block stayed gone in
         # silence (L1F, invariant machine).
-        _update_block_entry(ref or vm, ip, drift_alerted_at=now)
+        _update_block_entry(ref or vm, ip, drift_alerted_at=now, drift_said=_situation(said))
     report.append({"kind": "block", "vm": vm, "ip": ip, "outcome": outcome, "detail": reason})
+
+
+_SCOPE_WORDS = {"subnet": "règle de périmètre", "vm": "règles de la VM"}
+
+
+def _situation(v: dict) -> dict:
+    """What a block card said (RB1, 4th review): the rules gone, the NICs still held, open,
+    unknown, whether the IP stayed blocked — kept in the entry to tell a worse one."""
+    return {"gone": sorted({str(n) for n in (v.get("missing_rules") or []) + (v.get("held_missing") or [])}),
+            "held": sorted(v.get("held_by_perimeter") or []), "open": sorted(v.get("open_nics") or []),
+            "unsure": sorted(v.get("perimeter_unread") or []), "blocked": v.get("verified") is True}
+
+
+def _worse(said, now: dict) -> bool:
+    """Worse than what the card said: blocked no more, a rule more gone, a NIC more open or
+    unknown. Better or the same: nothing said again. No record (an older entry): as before."""
+    if not isinstance(said, dict):
+        return False
+    return bool((said.get("blocked") and not now["blocked"])
+                or set(now["gone"]) - set(said.get("gone") or [])
+                or set(now["open"]) - set(said.get("open") or [])
+                or set(now["unsure"]) - set(said.get("unsure") or []) - set(said.get("open") or []))
+
+
+def _block_drift(ip: str, vm: str, v: dict, again: bool = False, said: bool = False) -> str:
+    """What a block's verification says is gone, and what still holds (RB1). Never « n'est
+    plus bloquée » of an IP our perimeter (or the quarantine) still cuts off, nor of a NIC
+    whose perimeter couldn't be read: that is said as unknown. `said`: the tail of a card
+    whose head is already written (after a re-application)."""
+    gone = [str(n) for n in (v.get("missing_rules") or v.get("held_missing") or [])]
+    names = f" ({', '.join(gone)})" if gone else ""
+    held, open_, unsure = (v.get("held_by_perimeter") or [], v.get("open_nics") or [],
+                           v.get("perimeter_unread") or [])
+    by = f" par la règle de périmètre {v.get('perimeter_rule')}" if held else ""
+    twice = " une deuxième fois" if again else ""
+    if v.get("verified") is True:
+        where = f" sur {', '.join(held)}{by}" if held else ""
+        if said:
+            return (f"l'IP reste bloquée{where}, mais il manque toujours{names}." if gone else
+                    "Azure le relit entier, mais une écriture a échoué : à vérifier.")
+        return f"Le blocage de {ip} sur {vm} a disparu d'Azure en partie{twice}{names} — l'IP reste bloquée{where}."
+    if v.get("verified") is None or (v.get("shadowed_by") and not gone):
+        what = ("contourné : une règle d'autorisation d'un tiers passe avant (carte à part)"
+                if v.get("shadowed_by") else f"non vérifiable ({v.get('error') or 'illisible'})")
+        return (what + ".") if said else f"Le blocage de {ip} sur {vm} a disparu d'Azure{twice} — {what}."
+    head = "" if said else f"Le blocage de {ip} sur {vm} a disparu d'Azure{twice}{names} — "
+    if open_ or not unsure:
+        tail = "l'IP n'est plus bloquée" + (f" sur {', '.join(open_)}" if open_ else "")
+    else:
+        tail = f"on ne sait pas si l'IP est encore bloquée sur {', '.join(unsure)}"
+        unsure = []
+    tail += f" ; elle l'est encore sur {', '.join(held)}{by}" if held else ""
+    tail += (f" ; sur {', '.join(unsure)}, ses règles ont disparu et la règle de périmètre n'a pas pu être lue"
+             if unsure else "")
+    return head + tail + (f"{names}." if said else ".")
 
 
 def ttl_alerts(ttl_h: float, now: datetime | None = None) -> list[dict]:

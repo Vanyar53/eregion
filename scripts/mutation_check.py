@@ -3462,6 +3462,60 @@ TESTS.update({mid: "tests/unit/test_unexpected_decision.py"
               + [f"M{n}" for n in range(1360, 1365)]})
 TESTS["M1361"] = "tests/unit/test_dependency_failures.py"
 
+# H2 (#266) — the CD proves that Glorfindel detects: every loaded rule run once, read-only,
+# after the switch (`glorfindel rules check --live`). Range M1120–M1139, given by the session.
+RCK = "glorfindel/rule_check.py"
+MUTANTS += [
+    ("M1120", "a rule with no workspace resolved said ok: detection off, the check green (H2)", RCK,
+     "    if not rule.enabled or not rule.workspace_id:\n", "    if False:\n"),
+    ("M1121", "an approved rule on no backend said ok: P1's silent default back (H2)", RCK,
+     "    if rule.auto_apply and not rule.monitoring_backend_name:\n", "    if False:\n"),
+    ("M1122", "a static rule on no resource said ok: it applies to no VM (H2)", RCK,
+     "    if not rule.auto_apply and not rule.resource_id:\n", "    if False:\n"),
+    ("M1123", "a source no detector reads said ok (H2)", RCK,
+     "    if detector_class(rule.source) is None:\n", "    if False:\n"),
+    ("M1124", "zero rows taken for an error: a quiet rule rolls H0 back (H2)", RCK,
+     "    base.rows = len(rows) if isinstance(rows, list) else 0\n",
+     "    base.rows = len(rows) if isinstance(rows, list) else 0\n    base.status = OK if rows else ERROR\n"),
+    ("M1125", "a query that failed taken for zero rows: an invalid KQL passes (H2)", RCK,
+     '    if "exc" in box:\n', "    if False:\n"),
+    ("M1126", "a query without an answer taken for zero rows (H2)", RCK,
+     "    if t.is_alive():\n", "    if False:\n"),
+    ("M1127", "each query sent twice: not once (H2)", RCK,
+     "        out.append(run_once(rule, min(query_timeout_s, left), shared, clock))\n",
+     "        run_once(rule, min(query_timeout_s, left), shared, clock)\n"
+     "        out.append(run_once(rule, min(query_timeout_s, left), shared, clock))\n"),
+    ("M1128", "the whole check unbounded: every rule sent past the total (H2)", RCK,
+     "        if left <= 0:\n", "        if False:\n"),
+    ("M1129", "the last query waited for its full time, past the total (H2)", RCK,
+     "        out.append(run_once(rule, min(query_timeout_s, left), shared, clock))\n",
+     "        out.append(run_once(rule, query_timeout_s, shared, clock))\n"),
+    ("M1130", "an error not reduced: Azure's words, workspace and host, in the JSON #deploy says (H2)", RCK,
+     "    return classify(raw), scrub(line), full[:2000]\n", "    return classify(raw), line, full[:2000]\n"),
+    ("M1131", "A3's words (the config's values) in the JSON #deploy says (H2)", RCK,
+     '        return [], [], "glorfindel-config.yaml refusé par la lecture stricte (A3)", str(exc)\n',
+     '        return [], [], f"glorfindel-config.yaml refusé par la lecture stricte (A3) : {exc}", ""\n'),
+    ("M1132", "timeouts only exit 0: nothing tells them from a proof (H2)", RCK,
+     "        return EXIT_TIMEOUT\n", "        return EXIT_OK\n"),
+    ("M1133", "--live ignored: the queries always sent (H2)", GCLI,
+     "    ctx.exit(_check(target, live=live, as_json=as_json,", "    ctx.exit(_check(target, live=True, as_json=as_json,"),
+    ("M1134", "the CD's health never runs the rules: a broken rule deployed in silence (H2)", CD,
+     "        if rules and proof is None and not why:\n", "        if False:\n"),
+    ("M1135", "a rule in error not red: H0 kept on a release that detects less (H2)", CD,
+     '    red = [r for r in rules if r.get("status") == "error"]\n', "    red = []\n"),
+    ("M1136", "a rule without an answer rolls H0 back: a slow workspace undoes a release (H2)", CD,
+     '    red = [r for r in rules if r.get("status") == "error"]\n',
+     '    red = [r for r in rules if r.get("status") in ("error", "timeout")]\n'),
+    ("M1137", "what the candidate says of a rule posted unscrubbed: workspace, subscription, host in #deploy (H2)", CD,
+     "    for pattern, mark in _SCRUB:\n        s = pattern.sub(mark, s)\n", ""),
+    ("M1138", "a rule's name posted raw: a masked link, a mention in #deploy (H2, SEC6)", CD,
+     "    return discord_text(s)\n", "    return s\n"),
+    ("M1139", "the rules check outside the health's budget (H2)", CD,
+     "    wait = max(1.0, min(RULES_S + RULES_MARGIN_S, budget_s))\n", "    wait = RULES_S + RULES_MARGIN_S\n"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_rules_check.py" for n in range(1120, 1134)})
+TESTS.update({f"M{n}": "tests/unit/test_host_cd.py" for n in range(1134, 1140)})
+
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a

@@ -1,12 +1,15 @@
 """H1 (#244) — the CD of H0: the release Jonathan publishes reaches H0 on its own.
 
 The agent (infra/glorfindel-host/cd/eregion_cd.py) runs as on H0, installed in its own
-~/.eregion-cd/ with deploy.sh and notify_discord.py, against:
+~/.eregion-cd/ with deploy.sh, notify_discord.py, chat_text.py and published_image.py, against:
 - real git: an `origin` and the VM's clone in a tmp dir, deployed on v0.3.1;
-- a fake `docker` first on the PATH, keeping its images and containers in a file — it builds,
-  tags, runs the preflight's commands, starts the services and writes the watch's heartbeat;
-- the fake server (tests/unit/fake_discord.py): GitHub's latest release and check runs,
-  H0's console, and #deploy's webhook.
+- a fake `docker` first on the PATH, keeping its images and containers in a file — it pulls (CI3:
+  never builds), tags, runs the preflight's commands, starts the services and writes the watch's
+  heartbeat;
+- the fake server (tests/unit/fake_discord.py): GitHub's latest release and check runs, the
+  registry (GHCR, read anonymously), H0's console, and #deploy's webhook;
+- a fake cosign (tests/unit/fake_sigstore.py) as ~/.eregion-cd/cosign, the installed
+  published_image.py pinned to its sha256 (the test's copy only).
 No network, no VM, no Docker.
 """
 import fcntl
@@ -21,9 +24,13 @@ from pathlib import Path
 import pytest
 
 from .fake_discord import FakeDiscord
+from .fake_sigstore import Sigstore
 
 ROOT = Path(__file__).resolve().parents[2]
 AGENT = ROOT / "infra" / "glorfindel-host" / "cd" / "eregion_cd.py"
+PUBLISHED = ROOT / "scripts" / "published_image.py"
+COSIGN_SHA = "4629c757b7618056f8ddd7e2625ae9fdd94c0372a65049520bc7d9df9efc7f71"   # published_image.COSIGN_SHA256
+GHCR_REPO = "vanyar53/eregion-glorfindel"
 MODEL = "anthropic/claude-sonnet-5-5"
 SECRET = "DEPLOY-SECRET-xyz"
 
@@ -42,7 +49,15 @@ with open(os.environ["FAKE_DOCKER_LOG"], "a") as f:
 def save():
     state_p.write_text(json.dumps(st))
 cmd = args[0]
-if cmd == "build":
+if cmd == "pull":
+    # CI3: by digest, from what the registry holds ($FAKE_REGISTRY_IMAGES: reference → labels).
+    reg = json.loads(Path(os.environ["FAKE_REGISTRY_IMAGES"]).read_text())
+    ref = args[-1]
+    if os.environ.get("FAKE_PULL_FAIL") or ref not in reg:
+        sys.exit("pull failed")
+    st["images"][ref] = dict(reg[ref], n=len(st["images"]))
+    save()
+elif cmd == "build":
     if os.environ.get("FAKE_BUILD_FAIL"):
         sys.exit("build failed")
     labels = dict(args[i + 1].split("=", 1) for i, a in enumerate(args) if a == "--label")
@@ -57,7 +72,11 @@ elif cmd == "image":
     if args[1] == "inspect" and args[2] == "-f":
         if args[4] not in st["images"]:
             sys.exit(1)
-        print(st["images"][args[4]]["revision" if "revision" in args[3] else "version"])
+        img = st["images"][args[4]]
+        if "revision" in args[3] and "version" in args[3]:
+            print(img["version"], img["revision"])
+        else:
+            print(img["revision" if "revision" in args[3] else "version"])
     elif args[1] == "inspect":
         sys.exit(0 if args[2] in st["images"] else 1)
     if args[1] == "ls":
@@ -83,7 +102,9 @@ elif cmd == "inspect":
 elif cmd == "run":
     img = next(a for a in args if a.startswith("eregion-glorfindel:"))
     rest = " ".join(args[args.index(img) + 1:])
-    if "--version" in rest:
+    if "getuid" in rest:
+        print(os.environ.get("FAKE_IMAGE_IDS") or f"{os.getuid()} {os.getgid()}")
+    elif "--version" in rest:
         print("glorfindel, version", os.environ.get("FAKE_PKG_VERSION") or st["images"][img]["version"].lstrip("v"))
     elif "load_glorfindel_config" in rest and os.environ.get("FAKE_CONFIG_FAIL"):
         sys.exit("glorfindel-config.yaml refusé — clé inconnue : quarantaine_nsg")
@@ -178,6 +199,10 @@ class H0:
         for src in (AGENT, ROOT / "infra" / "glorfindel-host" / "deploy.sh", ROOT / "scripts" / "notify_discord.py",
                     ROOT / "glorfindel" / "chat_text.py"):
             shutil.copy(src, self.cd / src.name)
+        # CI3: the fake cosign as the installed one, published_image.py pinned to it (this copy only).
+        self.sig = Sigstore(self.cd / "cosign", tmp_path / "cosign.json", tmp_path / "cosign.log")
+        self.pinned = PUBLISHED.read_text().replace(COSIGN_SHA, self.sig.sha256)
+        (self.cd / "published_image.py").write_text(self.pinned)
         (self.cd / "discord.env").write_text(
             f"EREGION_DISCORD_WEBHOOK_DEPLOY={fake.base}/api/webhooks/9/{SECRET}\nEREGION_DISCORD_MENTION=42\n")
         (self.cd / "installed-from").write_text(self.commits["c1"] + "\n")   # installed while v0.3.1 ran
@@ -187,6 +212,8 @@ class H0:
         (bin_dir / "docker").write_text(FAKE_DOCKER.replace("#!PYTHON", f"#!{sys.executable}"))
         (bin_dir / "docker").chmod(0o755)
         self.state, self.log = tmp_path / "docker.json", tmp_path / "docker.log"
+        self.registry = tmp_path / "registry.json"
+        self.registry.write_text("{}")
         c1 = self.commits["c1"]
         running = {"status": "running", "restarts": 0, "version": "v0.3.1", "revision": c1}
         self.state.write_text(json.dumps({
@@ -201,9 +228,26 @@ class H0:
             "EREGION_CD_HOME": str(self.cd), "EREGION_CD_REPO": str(self.vm), "EREGION_CD_GITHUB_REPO": "o/r",
             "EREGION_CD_GITHUB_API": f"{fake.base}/gh", "EREGION_CD_CONSOLE": f"{fake.base}/console",
             "EREGION_CD_HEARTBEAT": str(self.heartbeat), "EREGION_CD_HEALTH_S": "0.2", "EREGION_CD_STEP_S": "0.05",
-            "EREGION_DISCORD_ENV": os.devnull})
+            "EREGION_DISCORD_ENV": os.devnull, "EREGION_REGISTRY_API": f"{fake.base}/registry",
+            "FAKE_REGISTRY_IMAGES": str(self.registry), **self.sig.env()})
         fake.console_token = "tok"
+        self.digest = self.image("c2", "v0.4.0")
         self.publish("v0.4.0")
+
+    def image(self, commit, version, *, sign=True, **over):
+        """The image publish.yml would push for a commit: in the registry under sha-<commit>, its
+        labels for docker pull, signed and attested (`over`: another signer, or another commit)."""
+        commit = self.commits.get(commit, commit)
+        n = len(json.loads(self.registry.read_text()))
+        digest = self.fake.image(GHCR_REPO, f"sha-{commit}", {"schemaVersion": 2, "n": n, "commit": commit,
+                                                              "config": {"digest": "sha256:" + "c" * 64}})
+        reg = json.loads(self.registry.read_text())
+        reg[f"ghcr.io/{GHCR_REPO}@{digest}"] = {"version": over.pop("label_version", version),
+                                                "revision": over.pop("label_revision", commit)}
+        self.registry.write_text(json.dumps(reg))
+        if sign:
+            self.sig.publish(f"ghcr.io/{GHCR_REPO}", digest, "o/r", commit, **over)
+        return digest
 
     def publish(self, tag):
         self.fake.gh["release"] = {"tag_name": tag, "html_url": f"https://example.invalid/releases/{tag}"}
@@ -256,17 +300,22 @@ def _alerts(h0):
 
 # ── the published release reaches H0 ──────────────────────────────────────────────
 
-def test_a_published_release_is_verified_built_aside_switched_and_said(h0):
+def test_a_published_release_is_verified_pulled_by_its_digest_switched_and_said(h0):
+    """CI3: never built on H0 — the image the CI published, proven, pulled by its digest."""
     res = h0.run()
     assert res.returncode == 0, res.stdout + res.stderr
     c2 = h0.commits["c2"]
     assert h0.running() == {"v0.4.0"} and h0.head() == c2
     calls = h0.calls()
-    build = next(i for i, c in enumerate(calls) if c.startswith("build "))
-    assert calls[build].endswith("-t eregion-glorfindel:v0.4.0 .")      # the candidate only
+    assert not any(c.startswith("build") for c in calls)
+    ref = f"ghcr.io/{GHCR_REPO}@{h0.digest}"
+    pull = calls.index(f"pull -q {ref}")
+    assert calls[pull + 1] == f"tag {ref} eregion-glorfindel:v0.4.0"         # the candidate only
+    assert [c["args"][0] for c in [{"args": a} for a in h0.sig.calls()]] == ["verify", "verify-attestation"]
     preflight = [i for i, c in enumerate(calls) if c.startswith(("run --rm", "compose -f"))]
     switch = calls.index("tag eregion-glorfindel:v0.4.0 eregion-glorfindel")
-    assert build < min(preflight) and max(preflight) < switch
+    assert pull < min(preflight) and max(preflight) < switch
+    assert json.loads((h0.cd / "state.json").read_text())["digests"] == {"v0.4.0": h0.digest}
     assert any("load_glorfindel_config" in c and "glorfindel-config.yaml:/app/glorfindel-config.yaml:ro" in c
                for c in calls)                                         # H0's config, under A3
     assert [t.split(" ")[0] for t in _titles(h0)] == ["🚀", "✅"] and not _alerts(h0)
@@ -318,7 +367,8 @@ def test_a_ci_still_running_waits_said_once_then_deploys(h0):
     assert h0.run().returncode == 0 and h0.run().returncode == 0
     assert h0.running() == {"v0.3.1"} and [t.split(" ")[0] for t in _titles(h0)] == ["⏳"]
     assert h0.outcome("v0.4.0") is None
-    h0.fake.gh["checks"][c2] = [{"name": "lint + tests (py3.12)", "status": "completed", "conclusion": "success"}]
+    h0.fake.gh["checks"][c2] = [{"name": n, "status": "completed", "conclusion": "success"}
+                                for n in ("lint + tests (py3.12)", "publish (glorfindel)")]
     assert h0.run().returncode == 0 and h0.running() == {"v0.4.0"}
 
 
@@ -340,7 +390,7 @@ def _wrong(conf=0.80, action="block_suspicious_ip"):
     return {"good": False, "action": action, "confidence": conf}
 
 
-def _sha(text):
+def _lock_sha(text):
     return hashlib.sha256(text.encode()).hexdigest()
 
 
@@ -349,7 +399,7 @@ def _pass(lock, *, runs=3, model=MODEL, kinds="all", draws=None, drop=(), ref=""
     cases = [{"label": lb, "kind": k, "draws": draws.get(lb, [RIGHT] * runs)} for lb, k in CASES if lb not in drop]
     every = [d for c in cases for d in c["draws"]]
     return {"schema": "eregion.harness-pass/2", "ref": ref, "lock": "requirements/glorfindel.txt",
-            "lock_sha256": _sha(lock), "date": "2026-10-29", "runs": runs, "draws": "3", "gate": 0.7, "kinds": kinds,
+            "lock_sha256": _lock_sha(lock), "date": "2026-10-29", "runs": runs, "draws": "3", "gate": 0.7, "kinds": kinds,
             "models": [{"model": model, "integration": sum(not d["action"].startswith("<") for d in every),
                         "judgment": sum(d["good"] is True for d in every), "slots": len(every),
                         "overconfident_errors": sum(d["good"] is False and (d["confidence"] or 0) >= 0.7 for d in every),
@@ -368,7 +418,7 @@ def _attestation(cand=None, ref=_SAME, **top):
 
 
 # The format of before H3: one pass, totals only — what DEP1's first run wrote (29/10).
-OLD_FORMAT = json.dumps({"lock": "requirements/glorfindel.txt", "lock_sha256": _sha(NEW_LOCK), "date": "2026-10-29",
+OLD_FORMAT = json.dumps({"lock": "requirements/glorfindel.txt", "lock_sha256": _lock_sha(NEW_LOCK), "date": "2026-10-29",
                          "runs": 3, "draws": "3", "models": [{"model": MODEL, "integration": 51, "judgment": 51,
                                                               "slots": 51, "overconfident_errors": 0}]})
 
@@ -548,7 +598,7 @@ def _real(lock, draws=None):
     draws = draws or {}
     cases = [{"label": lb, "kind": k, "draws": draws.get(lb, [_r()] * 3)} for lb, k in _scenarios()]
     every = [d for c in cases for d in c["draws"]]
-    return {"schema": "eregion.harness-pass/2", "ref": "", "lock_sha256": _sha(lock), "runs": 3, "kinds": "all",
+    return {"schema": "eregion.harness-pass/2", "ref": "", "lock_sha256": _lock_sha(lock), "runs": 3, "kinds": "all",
             "models": [{"model": MODEL, "integration": len(every), "slots": len(every), "cases": cases}]}
 
 
@@ -689,14 +739,15 @@ def test_h0s_own_model_is_the_one_attested(tmp_path, fake):
     ({"FAKE_CONFIG_FAIL": "1"}, "lecture stricte d'A3"),
     ({"FAKE_PKG_VERSION": "0.3.1"}, "glorfindel --version"),
     ({"FAKE_COMPOSE_FAIL": "1"}, "docker compose refuse"),
-    ({"FAKE_BUILD_FAIL": "1"}, "construction"),
+    ({"FAKE_IMAGE_IDS": "4242 4242"}, "ne pourrait pas écrire"),   # CI3: not H0's user
 ])
 def test_a_failed_preflight_leaves_what_runs_untouched(h0, env, said):
     assert h0.run(**env).returncode == 1
     images = h0.docker()["images"]
     assert h0.running() == {"v0.3.1"} and h0.head() == h0.commits["c1"]
     assert images["eregion-glorfindel"]["version"] == "v0.3.1"             # the candidate never replaced it
-    assert not any(c.startswith(("tag ", "compose --profile")) for c in h0.calls())
+    assert "tag eregion-glorfindel:v0.4.0 eregion-glorfindel" not in h0.calls()
+    assert not any(c.startswith("compose --profile") for c in h0.calls())
     assert said in _alerts(h0)[0]["embeds"][0]["description"]
     assert h0.outcome("v0.4.0") == "refused"
 
@@ -890,7 +941,7 @@ def test_two_refused_candidates_then_a_sick_release_still_go_back(h0):
     _images(h0, **{"v0.3.5": ("v0.3.5", 1), "v0.3.6": ("v0.3.6", 2)})
     assert h0.run(FAKE_SICK="v0.4.0").returncode == 1
     assert h0.running() == {"v0.3.1"} and h0.outcome("v0.4.0") == "rolled back"
-    assert not any(c.startswith("image rm") for c in h0.calls())
+    assert not any(c.startswith("image rm eregion-glorfindel") for c in h0.calls())
 
 
 def test_after_a_green_health_the_old_images_go_and_the_one_before_stays(h0):
@@ -1004,16 +1055,19 @@ def test_an_unexpected_error_is_said_once(h0, tmp_path):
     assert alert["embeds"][0]["title"] == "⚠️ Le CD de H0 a échoué"
 
 
-def test_check_rebuilds_and_preflights_the_release_running_already(h0):
-    """6: v0.4.0 runs; the dry run still checks it on the real Docker — aside, then gone."""
+def test_check_pulls_verifies_and_preflights_the_release_running_already(h0):
+    """6: v0.4.0 runs; the dry run still checks it on the real Docker — aside, then gone. CI3:
+    its published image, pulled by digest and proven — the path the next release takes."""
     assert h0.run().returncode == 0
     h0.fake.requests.clear()
+    h0.log.write_text("")
     res = h0.run("check")
     assert res.returncode == 0, res.stdout + res.stderr
-    assert any(c.endswith("-t eregion-glorfindel:check-v0.4.0 .") for c in h0.calls())
+    assert f"tag ghcr.io/{GHCR_REPO}@{h0.digest} eregion-glorfindel:check-v0.4.0" in h0.calls()
+    assert not any(c.startswith("build") for c in h0.calls())
     assert "eregion-glorfindel:check-v0.4.0" not in h0.docker()["images"]
     assert h0.running() == {"v0.4.0"}
-    assert h0.posts()[0]["embeds"][0]["title"] == "✅ À blanc : v0.4.0, en service, reconstruite et préflightée"
+    assert h0.posts()[0]["embeds"][0]["title"] == "✅ À blanc : v0.4.0, en service, tirée par son digest, vérifiée et préflightée"
 
 
 # ── after the second review of 28/10 ───────────────────────────────────────────────
@@ -1502,3 +1556,192 @@ def test_the_installation_carries_chat_text():
     res = subprocess.run(["make", "-n", "--no-print-directory", "-C", str(ROOT), "glorfindel-host-cd-install",
                           "HOST_IP=203.0.113.9"], capture_output=True, text=True, timeout=60)
     assert res.returncode == 0 and "glorfindel/chat_text.py" in res.stdout
+
+
+# ── CI3 (#267): the image the CI published, proven, pulled by its digest — never built ──────────
+
+def _refusal(h0):
+    (alert,) = _alerts(h0)
+    return alert["embeds"][0]["title"], _desc(alert)
+
+
+def _nothing_moved(h0):
+    assert h0.running() == {"v0.3.1"} and h0.head() == h0.commits["c1"]
+    assert "tag eregion-glorfindel:v0.4.0 eregion-glorfindel" not in h0.calls()
+    assert not any(c.startswith(("build", "compose --profile")) for c in h0.calls())
+
+
+def _sha(h0, over):
+    return {k: h0.commits.get(v, v) if k == "sha" else v for k, v in over.items()}
+
+
+@pytest.mark.parametrize("over, said", [
+    ({"sign": False}, "signature absente"),
+    ({"workflow": ".github/workflows/images.yml"}, "d'un autre workflow"),
+    ({"ref": "refs/heads/side"}, "d'un autre workflow"),
+    ({"trigger": "workflow_dispatch"}, "d'un autre workflow"),
+    ({"sha": "c1"}, "d'un autre workflow"),
+])
+def test_an_image_not_signed_by_the_publishing_workflow_at_its_commit_is_refused(tmp_path, fake, over, said):
+    """Unsigned, or signed by another workflow, branch, trigger, or for another commit: refused,
+    said with the mention, never built instead."""
+    h0 = H0(tmp_path, fake)
+    h0.digest = h0.image("c2", "v0.4.0", **_sha(h0, over))
+    assert h0.run().returncode == 1
+    _nothing_moved(h0)
+    title, desc = _refusal(h0)
+    assert title.startswith("⛔ v0.4.0 refusée") and said in desc and "ne construit pas" in desc
+    assert h0.outcome("v0.4.0") == "refused"
+    assert f"ghcr.io/{GHCR_REPO}@{h0.digest}" not in h0.docker()["images"]
+
+
+def test_an_image_signed_for_another_repository_is_refused(h0):
+    h0.digest = h0.image("c2", "v0.4.0", sign=False)
+    h0.sig.publish(f"ghcr.io/{GHCR_REPO}", h0.digest, "x/y", h0.commits["c2"])
+    assert h0.run().returncode == 1
+    _nothing_moved(h0)
+    assert "d'un autre workflow, dépôt" in _refusal(h0)[1]
+
+
+def test_a_signed_image_without_its_provenance_is_refused(h0):
+    from .fake_sigstore import claims
+    h0.digest = h0.image("c2", "v0.4.0", sign=False)
+    h0.sig.sign(h0.digest, claims("o/r", h0.commits["c2"]))
+    assert h0.run().returncode == 1
+    _nothing_moved(h0)
+    assert "provenance absente" in _refusal(h0)[1]
+
+
+@pytest.mark.parametrize("change, said", [
+    ({"commit": "c1"}, "provenance d'un autre commit"),
+    ({"name": "ghcr.io/vanyar53/eregion-annatar"}, "ne porte pas sur"),
+    ({"workflow": ".github/workflows/images.yml"}, "provenance d'ailleurs"),
+    ({"runner": "self-hosted"}, "provenance d'ailleurs"),
+])
+def test_a_provenance_that_says_otherwise_is_refused_though_its_certificate_matches(h0, change, said):
+    """What cosign verified is read again: its subject, its workflow, its source commit, its runner."""
+    from .fake_sigstore import claims, statement
+    c2 = h0.commits["c2"]
+    h0.digest = h0.image("c2", "v0.4.0", sign=False)
+    h0.sig.sign(h0.digest, claims("o/r", c2))
+    st = statement(change.get("name", f"ghcr.io/{GHCR_REPO}"), h0.digest, "o/r",
+                   h0.commits.get(change.get("commit"), c2),
+                   **{k: v for k, v in change.items() if k in ("workflow", "runner")})
+    h0.sig.attest(h0.digest, claims("o/r", c2), st)
+    assert h0.run().returncode == 1
+    _nothing_moved(h0)
+    assert said in _refusal(h0)[1]
+
+
+@pytest.mark.parametrize("setup, said", [
+    (lambda h0: h0.fake.registry[GHCR_REPO]["tags"].clear(), "aucune image"),
+    (lambda h0: h0.fake.registry_private.add(GHCR_REPO), "doit être public"),
+    (lambda h0: h0.fake.registry_lie.update({h0.digest: "sha256:" + "0" * 64}), "pour un manifeste de"),
+])
+def test_an_image_the_registry_does_not_give_as_published_is_refused(h0, setup, said):
+    setup(h0)
+    assert h0.run().returncode == 1
+    _nothing_moved(h0)
+    assert said in _refusal(h0)[1]
+
+
+def test_an_image_whose_labels_name_another_commit_is_refused_and_removed(h0):
+    h0.digest = h0.image("c2", "v0.4.0", label_revision=h0.commits["c1"])
+    assert h0.run().returncode == 1
+    _nothing_moved(h0)
+    assert "l'image dit" in _refusal(h0)[1] and "eregion-glorfindel:v0.4.0" not in h0.docker()["images"]
+
+
+def test_a_digest_that_moved_since_the_release_was_first_seen_is_refused(h0):
+    """The dry run saw v0.4.0's image; then the tag sha-<c2> names another one, even signed: refused."""
+    assert h0.run("check").returncode == 0
+    first = h0.digest
+    h0.digest = h0.image("c2", "v0.4.0")
+    assert h0.digest != first
+    h0.fake.requests.clear()
+    assert h0.run().returncode == 1
+    _nothing_moved(h0)
+    assert "a bougé" in _refusal(h0)[1]
+    assert json.loads((h0.cd / "state.json").read_text())["digests"]["v0.4.0"] == first
+    h0.run("retry")                                    # retry forgets outcomes, never a digest seen
+    assert json.loads((h0.cd / "state.json").read_text())["digests"]["v0.4.0"] == first
+
+
+def test_a_cosign_that_is_not_the_pinned_one_is_never_run(h0):
+    (h0.cd / "cosign").write_text("#!/bin/sh\nexit 0\n")
+    assert h0.run().returncode == 1
+    _nothing_moved(h0)
+    assert "cosign absent ou altéré" in _refusal(h0)[1] and h0.sig.calls() == []
+
+
+@pytest.mark.parametrize("env", [{"EREGION_REGISTRY_API": "http://127.0.0.1:9/registry"}, {"FAKE_PULL_FAIL": "1"},
+                                 {"FAKE_COSIGN_NETWORK": "1"}])
+def test_a_registry_that_does_not_answer_is_waited_for_said_once_never_a_refusal(h0, env):
+    assert h0.run(**env).returncode == 0 and h0.run(**env).returncode == 0
+    _nothing_moved(h0)
+    assert h0.outcome("v0.4.0") is None and not _alerts(h0)
+    assert [t.split(" ")[0] for t in _titles(h0)] == ["⏳"]
+    assert h0.run().returncode == 0 and h0.running() == {"v0.4.0"}
+
+
+def test_a_release_without_the_publishing_job_waits_an_hour_then_is_refused_never_built(h0):
+    """A release from before CI3: no « publish (glorfindel) » on its commit."""
+    h0.fake.gh["checks"][h0.commits["c2"]] = [{"name": "lint + tests (py3.12)", "status": "completed",
+                                                "conclusion": "success"}]
+    assert h0.run().returncode == 0
+    assert _titles(h0) == ["⏳ v0.4.0 attend son image publiée"]
+    state = json.loads((h0.cd / "state.json").read_text())
+    assert state["waits"] == {"v0.4.0 publish (glorfindel)": 1}        # its own count, not the CI's
+    state["waits"]["v0.4.0 publish (glorfindel)"] = 12
+    (h0.cd / "state.json").write_text(json.dumps(state))
+    assert h0.run().returncode == 1
+    _nothing_moved(h0)
+    assert "aucune image publiée" in _refusal(h0)[1] and h0.sig.calls() == []
+
+
+def test_cosign_is_asked_for_every_claim_of_the_publishing_workflow(h0):
+    """Each certificate flag cosign checks — one left out lets an image of that kind through."""
+    assert h0.run().returncode == 0
+    c2 = h0.commits["c2"]
+    want = {"--certificate-identity": "https://github.com/o/r/.github/workflows/publish.yml@refs/heads/main",
+            "--certificate-oidc-issuer": "https://token.actions.githubusercontent.com",
+            "--certificate-github-workflow-repository": "o/r", "--certificate-github-workflow-ref": "refs/heads/main",
+            "--certificate-github-workflow-trigger": "push", "--certificate-github-workflow-sha": c2}
+    sig, att = h0.sig.calls()
+    for call in (sig, att):
+        assert {k: call[call.index(k) + 1] for k in want} == want
+        assert call[-1] == f"ghcr.io/{GHCR_REPO}@{h0.digest}"
+    assert att[:3] == ["verify-attestation", "--type", "https://slsa.dev/provenance/v1"]
+
+
+def test_a_registry_or_sigstore_out_of_reach_an_hour_long_is_refused_and_said(h0):
+    """Review of CI3: a wait is bounded — 12 passes, then a refusal with the mention."""
+    assert h0.run(FAKE_COSIGN_NETWORK="1").returncode == 0 and h0.outcome("v0.4.0") is None
+    state = json.loads((h0.cd / "state.json").read_text())
+    assert state["unavailable"] == {"v0.4.0": 1}
+    state["unavailable"]["v0.4.0"] = 12
+    (h0.cd / "state.json").write_text(json.dumps(state))
+    res = h0.run(FAKE_COSIGN_NETWORK="1")
+    assert res.returncode == 1 and h0.outcome("v0.4.0") == "refused"
+    _nothing_moved(h0)
+    _, desc = _refusal(h0)
+    assert "depuis une heure" in desc and "TUF" not in desc and "TUF" in res.stdout   # cosign's words: the journal
+
+
+def test_a_private_package_is_refused_at_once_never_waited_for(h0):
+    """GHCR's 403 at the anonymous token (measured): refused on the first pass, with the mention."""
+    h0.fake.registry_private.add(GHCR_REPO)
+    assert h0.run().returncode == 1 and h0.outcome("v0.4.0") == "refused"
+    assert "doit être public" in _refusal(h0)[1]
+
+
+def test_the_installation_carries_the_verifier():
+    """published_image.py and cosign go to H0 with the agent: install.sh refuses an agent without them."""
+    install = (ROOT / "infra" / "glorfindel-host" / "cd" / "install.sh").read_text()
+    assert "published_image.py cosign" in install and "install-cosign" in install
+    if shutil.which("make") is None:
+        pytest.skip("make not installed")
+    res = subprocess.run(["make", "-n", "--no-print-directory", "-C", str(ROOT), "glorfindel-host-cd-install",
+                          "HOST_IP=203.0.113.9"], capture_output=True, text=True, timeout=60)
+    assert res.returncode == 0 and "scripts/published_image.py" in res.stdout
+    assert "published_image.py install-cosign .eregion-cd/cosign" in res.stdout

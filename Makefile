@@ -114,7 +114,7 @@ DOCKER_GLORFINDEL = $(GLORFINDEL_AZURE_PICK) docker run --rm $(GLORFINDEL_AZURE_
 	glorfindel-host-cd-status glorfindel-host-cd-retry glorfindel-host-cd-uninstall \
 	glorfindel-host-env glorfindel-host-report glorfindel-host-url glorfindel-host-status glorfindel-host-pull \
 	glorfindel-host-model glorfindel-host-campaign-report glorfindel-host-known celebrimbor-workload \
-	orodruin-init orodruin-watch-guard orodruin-plan orodruin-up orodruin-lock orodruin-push orodruin-check \
+	orodruin-init orodruin-watch-guard orodruin-plan orodruin-up orodruin-lock orodruin-push orodruin-push-dev orodruin-check \
 	orodruin-stop orodruin-start orodruin-kill orodruin-down orodruin-ssh \
 	gothmog-preflight gothmog-run \
 	orodruin-campaign-plan orodruin-campaign-run \
@@ -207,7 +207,8 @@ help:
 	@echo "  make orodruin-plan [OPERATOR_CIDR=]          Plan (lecture seule)"
 	@echo "  make orodruin-up   [YES=1]                   1er apply, sortie ouverte (installe Docker)"
 	@echo "  make orodruin-lock [YES=1]                   Referme la sortie (apply) ; YES=1 = sans confirmation"
-	@echo "  make orodruin-push                           Image d'Annatar + orodruin.env sur la VM"
+	@echo "  make orodruin-push [REF=<tag|commit>]        Image d'Annatar publiée (digest vérifié ici) + orodruin.env"
+	@echo "  make orodruin-push-dev                       Développement : l'image construite ici, non vérifiée"
 	@echo "  make orodruin-check                          Le contrat, lu depuis la VM : armed ou passive"
 	@echo "  make orodruin-stop / orodruin-start          Désalloue / rallume la VM (entre les sessions)"
 	@echo "  make orodruin-kill [DRY_RUN=1]               URGENCE : révoque l'identité, annule le chaos, désalloue, ferme les fenêtres"
@@ -694,14 +695,18 @@ glorfindel-host-ssh: glorfindel-host-known
 # de ton environnement ou de ~/.config/eregion/discord.env, par stdin — jamais le jeton du bot.
 HOST_CD_FILES = infra/glorfindel-host/cd/eregion_cd.py infra/glorfindel-host/cd/install.sh \
                 infra/glorfindel-host/cd/eregion-cd.service infra/glorfindel-host/cd/eregion-cd.timer \
-                infra/glorfindel-host/deploy.sh scripts/notify_discord.py glorfindel/chat_text.py
+                infra/glorfindel-host/deploy.sh scripts/notify_discord.py glorfindel/chat_text.py \
+                scripts/published_image.py
 HOST_SSH_TTY   = ssh -t $(HOST_SSH_OPTS) $(HOST_USER)@$(HOST_IP)
 
+# CI3 : cosign (published_image.py, version et sha256 épinglés) téléchargé par la VM elle-même,
+# depuis la release de sigstore sur GitHub, et gardé seulement si son sha256 est l'épinglé.
 glorfindel-host-cd-install: glorfindel-host-known
 	@test -n "$(HOST_IP)" || { echo "Pas de VM : make glorfindel-host-up d'abord"; exit 1; }
 	@lines=$$(python3 infra/glorfindel-host/cd/eregion_cd.py export-discord-env) || exit 1; \
 	 $(HOST_SSH) 'mkdir -p .eregion-cd && chmod 700 .eregion-cd' && \
 	 scp -q $(HOST_SSH_OPTS) $(HOST_CD_FILES) $(HOST_USER)@$(HOST_IP):.eregion-cd/ && \
+	 $(HOST_SSH) 'python3 .eregion-cd/published_image.py install-cosign .eregion-cd/cosign' && \
 	 printf '%s\n' "$$lines" | $(HOST_SSH) 'umask 077 && cat > .eregion-cd/discord.env' && \
 	 git rev-parse HEAD | $(HOST_SSH) 'cat > .eregion-cd/installed-from'
 	$(HOST_SSH_TTY) 'sudo bash .eregion-cd/install.sh'
@@ -782,11 +787,47 @@ orodruin-up: orodruin-init orodruin-watch-guard
 orodruin-lock: orodruin-init orodruin-watch-guard
 	$(ORO_TF) apply $(ORO_VARS)$(if $(YES), -auto-approve)
 
-# L'image arrive par SSH : la sortie de la VM reste fermée. UID 1000 = l'utilisateur de la VM.
+# CI3 : l'image d'Annatar que la CI a publiée (publish.yml), jamais construite ici. Sur ce poste :
+# son digest lu sur GHCR pour le commit de REF (un tag, ou un commit de main ; sans REF, le dernier
+# tag v*), sa signature et sa provenance vérifiées par cosign (le workflow de publication, sur
+# main, à ce commit), tirée par ce digest. Puis chargée par SSH : la sortie d'Orodruin reste
+# fermée (son contrat). Les identifiants attendus sont calculés avant l'envoi ; l'image arrive sous
+# un tag d'attente (eregion-annatar:incoming) et ne devient eregion-annatar:orodruin que si son
+# identifiant relu sur Orodruin est l'un d'eux — sinon elle est retirée, rien n'a changé.
+# ~/.eregion-image est effacé avant, et n'est écrit (« commit digest ») qu'au succès. REF se donne
+# sur la ligne de commande, comme pour glorfindel-host-start. UID 1000 = l'utilisateur de la VM.
+ORO_INCOMING  := eregion-annatar:incoming
+orodruin-push: export EREGION_DEPLOY_REF = $(value REF)
 orodruin-push:
 	@test -f infra/orodruin/orodruin.env || { echo "!! infra/orodruin/orodruin.env manquant (copier orodruin.env.example)"; exit 1; }
+	@case "$(origin REF)" in environment*) echo "REF vient de l'environnement (« $$EREGION_DEPLOY_REF ») : rien n'est envoyé. La donner sur la ligne de commande : make orodruin-push REF=<tag ou commit> (REF= : le dernier tag v*)." >&2; exit 1;; esac
+	@case "$$EREGION_DEPLOY_REF" in -*|*[!A-Za-z0-9._-]*) echo "REF invalide : « $$EREGION_DEPLOY_REF » (un tag ou un commit)" >&2; exit 1;; esac
+	@git fetch -q --tags origin
+	@python3 scripts/published_image.py install-cosign
+	@out=$$(python3 scripts/published_image.py fetch annatar --ref "$$EREGION_DEPLOY_REF" --tag $(ORO_IMAGE)) || exit 1; \
+	 echo "$$out"; digest=$$(echo "$$out" | sed -n 's/^digest=//p'); commit=$$(echo "$$out" | sed -n 's/^commit=//p'); \
+	 ids=$$(python3 scripts/published_image.py ids annatar --digest "$$digest") || exit 1; \
+	 $(ORO_SSH) 'rm -f .eregion-image' || exit 1; \
+	 docker tag $(ORO_IMAGE) $(ORO_INCOMING) || exit 1; \
+	 if docker save $(ORO_INCOMING) | gzip | $(ORO_SSH) 'gunzip | docker load' \
+	    && id=$$($(ORO_SSH) 'docker image inspect -f "{{.Id}}" $(ORO_INCOMING)') \
+	    && python3 scripts/published_image.py loaded annatar --digest "$$digest" --expect "$$ids" --id "$$id"; then \
+	   docker image rm $(ORO_INCOMING) >/dev/null; \
+	   $(ORO_SSH) 'docker tag $(ORO_INCOMING) $(ORO_IMAGE) && docker image rm $(ORO_INCOMING) >/dev/null' \
+	   && echo "$$commit $$digest" | $(ORO_SSH) 'cat > .eregion-image'; \
+	 else docker image rm $(ORO_INCOMING) >/dev/null 2>&1; $(ORO_SSH) 'docker image rm $(ORO_INCOMING) >/dev/null 2>&1'; \
+	   echo "✗ l'image arrivée sur Orodruin n'est pas celle vérifiée : retirée, eregion-annatar:orodruin n'a pas changé" >&2; \
+	   exit 1; fi
+	scp $(SSH_OPTS) infra/orodruin/orodruin.env $(ORO_USER)@$(ORO_IP):orodruin.env
+
+# Le chemin de développement, dit comme tel : l'image construite sur ce poste, jamais vérifiée —
+# pour essayer une branche sur Orodruin avant sa fusion. ~/.eregion-image le dit (« dev »).
+orodruin-push-dev:
+	@test -f infra/orodruin/orodruin.env || { echo "!! infra/orodruin/orodruin.env manquant (copier orodruin.env.example)"; exit 1; }
+	@echo "  ⚠ image construite ici, NON vérifiée (développement) — make orodruin-push pour l'image publiée"
 	docker build -f annatar/Dockerfile --build-arg UID=1000 --build-arg GID=1000 -t $(ORO_IMAGE) .
 	docker save $(ORO_IMAGE) | gzip | $(ORO_SSH) 'gunzip | docker load'
+	echo "dev $$(git rev-parse HEAD)" | $(ORO_SSH) 'cat > .eregion-image'
 	scp $(SSH_OPTS) infra/orodruin/orodruin.env $(ORO_USER)@$(ORO_IP):orodruin.env
 
 orodruin-check:

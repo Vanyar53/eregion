@@ -1691,10 +1691,10 @@ MUTANTS += [
      "                if False:\n                    # In quarantine for our state"),
     ("M862", "a release drops the placement whose original is unknown: the next says released, "
              "an old isolation left without state (I8F, relecture)", REL,
-     '                                          f"non détaché : {_first_line(exc)[:_ERR_MAX]}")\n'
+     '                                          f"{_first_line(exc)[:_ERR_MAX]}")\n'
      "                            remaining.append(p)\n",
-     '                                          f"non détaché : {_first_line(exc)[:_ERR_MAX]}")\n'
-     '                            if type(exc).__name__ != "OriginalUnknown":\n'
+     '                                          f"{_first_line(exc)[:_ERR_MAX]}")\n'
+     '                            if type(exc).__name__ != "OriginalUnknown" and not bare:\n'
      "                                remaining.append(p)\n"),
     ("M863", "an unreadable tag on a bare NIC reads as 'none': a 429 writes it over an unknown "
              "original (I8F, relecture)", QUA,
@@ -3282,6 +3282,35 @@ MUTANTS += [
 ]
 TESTS.update({f"M{n}": "tests/unit/test_forged_logs.py" for n in range(1320, 1325)})
 
+# I3F (#287): a bare NIC our state holds in quarantine, its original unknown — verify_release
+# never says released there (A0), and the release says the NIC is bare, not "in quarantine".
+MUTANTS += [
+    ("M1340", "verify_release reads a bare NIC held in quarantine, its original unknown, as released "
+              "(I3F)", VER,
+     '            if original is _UNKNOWN and _held_in_quarantine(t0["nic_id"]):\n',
+     "            if False:\n"),
+    ("M1341", "the release of a bare NIC whose original is unknown says it stays in quarantine (I3F)", REL,
+     "                            if not bare:\n                                raise\n",
+     "                            raise\n"),
+    ("M1342", "the release's error on a bare NIC says the quarantine NSG wasn't detached (I3F)", REL,
+     """                            what = ("carte sans NSG, NSG d'origine non remis" if bare\n""",
+     """                            what = ("carte sans NSG, NSG d'origine non remis" if False\n"""),
+]
+# M1340 by the machine too: the oracle no longer exempts a bare NIC that a state held in
+# quarantine with no original since the test last lost it (_held_unknown).
+TESTS.update({"M1340": f"tests/unit/test_invariant_regressions.py {INVARIANTS}"})
+TESTS.update({f"M{n}": "tests/unit/test_invariant_regressions.py -k said_bare" for n in (1341, 1342)})
+# The escalations store's lock (SEC3) gives up within its timeout: the machine's scheduler
+# tries it without blocking, so a race never leaves a thread blocked out of its sight (#292).
+MUTANTS += [
+    ("M1395", "the store's file lock ignores its timeout: a race's thread blocks in it out of the "
+              "scheduler's sight (I3F, #292)", LCK,
+     "    if not lock.acquire(timeout=-1 if timeout is None else timeout):\n"
+     "        raise TimeoutError(f\"{path.name} busy (another write in progress)\")\n",
+     "    if not lock.acquire():\n"
+     "        raise TimeoutError(f\"{path.name} busy (another write in progress)\")\n"),
+]
+TESTS.update({"M1395": "tests/unit/test_invariant_regressions.py -k escalations_store"})
 # SEC6 (#277): the security process — the CI's actions and inputs, the lot threads against a fork
 # or an outsider, text from outside made inert in the chats, the bench's apply confirmed.
 NDS = "scripts/notify_discord.py"

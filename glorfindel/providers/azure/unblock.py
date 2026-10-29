@@ -70,9 +70,28 @@ class UnblockMixin:
                 groups.setdefault(nic or tuple(p.get("ips") or []), []).append(p)
             missing, unread, bypass, exposure, unknown = [], [], [], [], []
             held_missing: list[str] = []
-            if current is not None and any(p.get("nic_id") for p in entry["placements"]):
-                missing += [n.rsplit("/", 1)[-1] for n in current if n not in groups]   # a NIC added since
             cache: dict = {}
+            # A perimeter block (RB1) — in the same entry, or another VM's on the subnet: a
+            # NIC whose own rules are gone is still blocked where it covers it — "no longer
+            # blocked" was said of an IP it still cut off. `open_nics`: what nothing of ours
+            # blocks any more.
+            perimeter = self._merged_perimeter(entry)
+            held_by, open_nics, unsure = [], [], []
+
+            def _lost(t0, names: list[str]) -> None:
+                short = t0["nic_short"] if t0 else ""
+                holds = self._perimeter_holds(cache, t0, ip, port)
+                if holds == "holds":
+                    held_missing.extend(names)
+                    held_by.append(short)
+                    return
+                missing.extend(names)
+                if short:
+                    (unsure if holds == "unknown" else open_nics).append(short)
+            if current is not None and any(p.get("nic_id") for p in entry["placements"]):
+                for n in [n for n in current if n not in groups]:       # a NIC added since
+                    if not self._left_to_perimeter(cache, perimeter, targets.get(n), ip, port):
+                        _lost(targets.get(n), [n.rsplit("/", 1)[-1]])
             for nic, ps in groups.items():
                 # Only an NSG that governs the NIC NOW blocks anything: in quarantine, the
                 # NIC's own NSG — where the block lies — is off it until the release. The
@@ -100,7 +119,7 @@ class UnblockMixin:
                             unread.append(f'{t0["nic_short"]}: {t0["quarantine"]["nsg_name"]}')
                             continue
                     if not ps:
-                        missing += [f'{p["rule"]} ({p["nsg_name"]} ne gouverne plus {t0["nic_short"]})' for p in off]
+                        _lost(t0, [f'{p["rule"]} ({p["nsg_name"]} ne gouverne plus {t0["nic_short"]})' for p in off])
                         continue
                 now = current.get(nic) if current is not None and isinstance(nic, str) else None
                 ips_of = {id(p): now if now is not None else (p.get("ips") or None) for p in ps}
@@ -132,10 +151,18 @@ class UnblockMixin:
                         unread += nic_unread
                         unknown += [u for u in nic_unknown if u not in unknown]
                     else:
-                        missing += nic_missing
+                        _lost(t0, nic_missing)
+            if perimeter:                   # its own pair: gone, put back like the VM's rules
+                st, names = self._block_pair_state(cache, *perimeter, ip, None)
+                if st in ("absent", "altered"):
+                    (missing if missing else held_missing).extend(names)
+                elif st == "unknown":            # never read as there (RB1, review)
+                    unread += [f"{n} ({perimeter[1]})" for n in names]
+            said = {**({"held_by_perimeter": held_by, "perimeter_rule": self._block_rule_prefix(ip)} if held_by else {}),
+                    **({"perimeter_unread": unsure} if unsure else {})}
             if missing:
                 return {"verified": False, "method": "nsg_check", "missing_rules": missing,
-                        "error": f"rules missing: {', '.join(missing)}"}
+                        "open_nics": open_nics, **said, "error": f"rules missing: {', '.join(missing)}"}
             if bypass:
                 return self._block_bypassed(ip, bypass)
             if unread:
@@ -149,7 +176,7 @@ class UnblockMixin:
             # Threat port blocked; other ports the attacker still reaches are reported.
             return {"verified": True, "method": "nsg_check", "nics_covered": len(groups),
                     **({"exposure": exposure} if exposure else {}),
-                    **({"held_missing": held_missing} if held_missing else {})}
+                    **({"held_missing": held_missing} if held_missing else {}), **said}
 
         # Perimeter (subnet) block, or legacy single-rule entry: check the recorded pair.
         if entry and entry.get("nsg") and entry.get("rule"):
@@ -170,6 +197,15 @@ class UnblockMixin:
                     return self._block_bypassed(ip, shadowed)
                 if unknown:
                     return self._precedence_unknown(unknown, rule=entry["rule"])
+                if entry.get("scoped") is False:     # the VM's NICs it doesn't cover (RB1, review)
+                    try:
+                        off = [t["nic_short"] for t in self._off_perimeter(rg, vm_name, nsg_rg, nsg_name)]
+                    except Exception as exc:
+                        return {"verified": None, "method": "nsg_check",
+                                "error": f"blocage non vérifiable : cartes illisibles ({_first_line(exc)[:_ERR_MAX]})"}
+                    if off:
+                        return {"verified": False, "method": "nsg_check", "uncovered_nics": off, "open_nics": off,
+                                "error": f"le périmètre ne couvre pas {', '.join(off)} (autre subnet)"}
                 return {"verified": True, "method": "nsg_check", "rule": entry["rule"],
                         **({"exposure": shadowed} if shadowed else {})}
             return {"verified": False, "method": "nsg_check", "missing_rules": missing,
@@ -367,18 +403,24 @@ class UnblockMixin:
         (`_gone_nic_check`); a state that can't be read is said (`_gone_vm_unknown`). Then
         what those don't see: _unnamed_blocks."""
         known = self._known_nics(resource_id, _load_isolation_state(resource_id) or {})
+        lost = not any(e.get("ip") == ip for e in _load_block_entries(resource_id))
         deleted: list[str] = []
         failed = self._gone_vm_unknown(resource_id or vm_name, vm_name, "block")
         failed += self._gone_vm_rules(resource_id, vm_name, known, set(), "block",
                                       self._block_rule_prefix(ip), deleted)
-        failed += self._unnamed_blocks(vm_name, ip, known)
+        failed += self._unnamed_blocks(vm_name, ip, known, resource_id if lost else None)
         return deleted, failed
 
-    def _unnamed_blocks(self, vm_name: str, ip: str, known: list[str]) -> list[str]:
+    def _unnamed_blocks(self, vm_name: str, ip: str, known: list[str], lost: str | None = None) -> list[str]:
         """A rule of the block named for this gone VM, whose NIC no record names (the entry
         lost, no isolation) and no NIC on Azure carries: it can't be told from a deleted
-        homonym's — left, and said; never `not_found` (I5R). A listing that fails is said."""
-        mine = f"{self._block_rule_prefix(ip)}-{vm_name}".lower()
+        homonym's — left, and said; never `not_found` (I5R). A listing that fails is said.
+        `lost`: the VM's id when its entry is lost too — then a perimeter block of the IP
+        (its plain name) that no other VM's entry records may have been its own: left (it
+        covers a whole subnet), and said (RB1). Each says how to take it off, and that the
+        unblock says it again while it stays: taken off, the next unblock is done."""
+        prefix = self._block_rule_prefix(ip).lower()
+        mine = f"{prefix}-{vm_name}".lower()
         try:
             nsgs = list(self._network.network_security_groups.list_all())
             nics = list(self._network.network_interfaces.list_all())
@@ -387,15 +429,24 @@ class UnblockMixin:
                     f"({_first_line(exc)[:_ERR_MAX]}), déblocage non vérifié"]
         marks = {_nic_hash(n, size) for n in [*known, *(getattr(c, "id", None) or "" for c in nics)] if n
                  for size in (6, 8)}
+        tied = self._perimeters_recorded(ip, lost) if lost else set()
         said: list[str] = []
         for nsg in nsgs:
-            n_name = nsg.id.rstrip("/").rsplit("/", 1)[-1]
+            n_rg, n_name = _parse_nsg_resource_id(nsg.id)
             for r in getattr(nsg, "security_rules", None) or []:
                 name = _rule_name(r).lower()
+                how = (f" : laissée — à retirer à la main{{}} : az network nsg rule delete -g {n_rg} "
+                       f"--nsg-name {n_name} -n {_rule_name(r)} ; le déblocage la redira tant qu'elle reste")
                 if name == mine or (name.startswith(f"{mine}-")
                                     and name.removesuffix("-out").rsplit("-", 1)[-1] not in marks):
-                    said.append(f"{n_name}:{_rule_name(r)} (nommée pour une VM {vm_name} supprimée, "
-                                "carte que rien ne nomme plus) : laissée")
+                    said.append(f"{n_name}:{_rule_name(r)} (nommée pour une VM {vm_name} supprimée, carte que "
+                                "rien ne nomme plus)" + how.format(" si aucune VM vivante de ce nom ne bloque "
+                                                                   f"{ip} (glorfindel status)"))
+                elif lost and name.removesuffix("-out") == prefix and (n_rg.lower(), n_name.lower()) not in tied:
+                    said.append(f"{n_name}:{_rule_name(r)} (règle de périmètre, ou d'une ancienne version : bloque "
+                                f"{ip} pour tout un subnet ou une carte ; "
+                                f"l'entrée de {vm_name} perdue, elle peut avoir été la sienne)"
+                                + how.format(" si ce blocage n'est plus voulu"))
         return said
 
     def _original_away(self, t0: dict, vm_rg: str) -> str | None:

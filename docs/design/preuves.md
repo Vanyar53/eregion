@@ -1106,6 +1106,8 @@ Aucun de ces défauts n'avait été vu en revue. Chacun a son test et sa séquen
 | I3F | original inconnu (état et tags perdus), carte réisolée puis laissée nue | `verify_release` : `verified: True`, carte sans son NSG, une ancienne isolation restée sur ce NSG ; `glorfindel release`, qui le consulte d'abord, effaçait l'état |
 | U3F | blocage coupé avant son état, VM isolée par quarantaine, notre NSG retiré de la carte laissée nue | `unblock` : `not_found`, la règle de blocage restée sur le NSG propre de la carte ; la levée remettait ce NSG, l'IP de nouveau bloquée |
 | I5R | blocage de périmètre (200) puis de la VM (210), la règle de la VM passée en allow par un tiers, réaffirmation | la règle de périmètre réécrite au premier numéro libre (220), sous cet allow : **l'attaquant atteignait la VM sur tous ses ports** |
+| RB1 | blocage de périmètre puis de la VM (une entrée), la règle de la VM passée en allow par un tiers, deux réaffirmations (ou une en `human_only`) | seul le périmètre réécrit ; « l'IP n'est plus bloquée » alors que le périmètre la coupait encore (faux, du côté prudent) |
+| RB1 | même chose, la seconde carte de Db--01 sur un autre subnet (tirage ajouté) | « reposé une fois » alors que la seconde carte restait ouverte à l'attaquant |
 | I5R | VM supprimée, l'entrée de son blocage perdue | `unblock` : `not_found` sans avoir cherché, le blocage resté sur le NSG partagé pour la VM suivante à cette adresse (trouvé en relecture d'I7S, hors de la machine) |
 | I8S | deux hôtes aux états séparés : « aucun » de l'hôte 1, tag X de l'hôte 2 (la carte a reçu X entre-temps) | la levée suivait l'« aucun » périmé : `released`, carte sans NSG, tag X effacé (trouvé en relecture, hors de la machine) |
 | I8S | même scénario, reset ; deux groupes de quarantaine (relecture 5.5) | un 429 sur le tag : carte remise nue, X effacé ; le « aucun » trouvé dans un groupe l'emportait sur X dans l'autre |
@@ -1493,6 +1495,198 @@ après ; remesuré sur six tours, 5/6 avant, 2/6 après, 5/6 après sans la règ
 séquences, 3/3 avant comme après. M831 (`nsg.py`, relevé à la relecture) : 3/3 puis 5/6 avant,
 0/1, 1/3 puis 1/6 après à 60 séquences ; à 500, 3/3 après (graines 11, 99, 1234). Aucun mutant
 n'est perdu au budget de la CI (500).
+
+**RB1 (29/10, #321) : ce que dit la carte d'un blocage fusionné.** Trouvé à la relecture d'I5R,
+présent sur `main` ; rien ne s'ouvrait par Glorfindel, les cartes se trompaient. Un
+`block_perimeter` et un `block` de la même VM partagent une entrée (`scoped: false`). La règle de
+la VM passée en allow par un tiers, la réaffirmation ne reposait que le périmètre (l'entrée dit
+« sous-réseau »). **Cause** : `verify_block_ip` ne lisait, pour une entrée à placements, que les
+règles de la VM — le périmètre ni compté là où il tient une carte, ni vérifié lui-même — et
+`_reassert_block` reposait le blocage dans la portée de l'entrée, puis disait « reposé » sur la foi
+de l'écriture. Sur un seul subnet, le périmètre coupait encore l'attaquant, et la passe suivante
+(ou la première en `human_only`) disait « l'IP n'est plus bloquée » ; sur une VM dont la seconde
+carte est sur un autre subnet (le périmètre couvre celui de la carte primaire), « reposé une fois »
+avec cette carte ouverte. **Correctif** : la vérification compte, carte par carte, un blocage de
+périmètre de l'IP sur un NSG qui gouverne la carte — celui de l'entrée, ou celui d'une autre VM du
+subnet : la machine l'a trouvé sur le premier correctif, graines 1 et 203 à 500 séquences
+(`held_by_perimeter`, `open_nics`, `perimeter_unread` : illisible n'est ni tenu ni ouvert), et
+vérifie la paire de périmètre de l'entrée (supprimée, elle disparaissait en silence pour les autres
+VM du subnet) ; la réaffirmation repose le périmètre **puis** les placements de la VM, relit Azure,
+et ne dit « reposé une fois » que d'un blocage entier — sinon `partial`, dit une fois par épisode ;
+sa carte ne dit plus « n'est plus bloquée » d'une IP que le périmètre ou la quarantaine coupe
+encore (`reassert.py::_block_drift`, `providers/azure/perimeter.py`). **La machine** gagne un tirage
+(la seconde carte de Db--01 sur un subnet à elle, `data_subnet`, tiré en dernier) et un oracle sur
+ce que disent les cartes de blocage d'une passe (`_block_cards_true`, jugé sur le monde et le
+journal du faux Azure), carte réseau par carte réseau, sur celles que la carte nomme (toutes celles
+de la VM si elle n'en nomme aucune) : « reposé une fois » ou « reste bloquée » → l'attaquant
+n'atteint pas ces cartes ; « n'est plus bloquée » → jamais d'une carte que notre périmètre, intact
+sur son subnet, coupe seul — le NSG du subnet seul, sans nos autres deny, les règles qu'un tiers a
+retournées gardées (une isolation, ou le NSG propre d'une carte qui ferme aussi le port, ne comptent
+pas pour le périmètre : le modèle de préséance du code, un NSG à la fois ; trouvé par la machine,
+graine 42 à 2 000) ; seule exemption, une carte d'escalade quand la même passe a écrit ce périmètre
+(le journal le dit) pour l'entrée d'une autre VM — dite avant l'écriture, elle était vraie (graine
+322 à 2 000) ; une carte de repose, écrite après sa propre relecture, n'en a pas. Sur `main`, la
+machine seule fait tomber l'oracle aux graines 1, 322 et 1234 (500 séquences), sur les deux formes
+du constat. **Le tirage `data_subnet`** fait passer les mondes où les deux cartes de Db--01 partagent
+un subnet d'environ 100 % à environ 50 % (`st.one_of(st.none(), …)`), et, tiré en dernier mais
+ajouté au flux d'octets, il décale les exemples que `GLORFINDEL_INVARIANT_DB` rejoue : une séquence
+mémorisée avant RB1 rejoue une autre séquence.
+
+**La relecture 5.5 de RB1 : I3 de `block_perimeter`, et une écriture échouée.** Le premier correctif
+avait borné le contrôle de préséance d'un blocage de périmètre (I3 de `block_perimeter`) aux cartes
+du subnet du périmètre, pour toutes les VM. La relecture l'a défait sur une copie : la machine
+échoue en 5 min (graine 1, 300 séquences), réduite à `build(subnet_nsg=[], data_subnet=[])` puis
+`block_perimeter(Db--01)` — « perimeter block said blocked, … reaches Db--01 ». Le borner cachait un
+vrai défaut, qui ouvrait une carte : `block` de Db--01 sur ses deux subnets, puis
+`block_perimeter(replace=True)` — la promotion retirait les placements des **deux** cartes, alors
+que le périmètre ne couvre que le subnet de la carte primaire ; db-nic-1 ouverte, `blocked` dit,
+`verify_block_ip` vrai (une entrée de périmètre seul ne lisait que sa paire), aucune carte. Sans
+promotion, `blocked` aussi, la seconde carte ouverte. **Correctif** (`blocks.py`, `perimeter.py`,
+`unblock.py`) : la promotion garde les placements des cartes hors du subnet du périmètre (et de
+toutes, si les cartes ne se lisent pas) ; un blocage de périmètre nomme les cartes qu'il ne couvre
+et que rien ne bloque (`uncovered_nics`, statut `blocked_partial`, ou `nics_unread`) ; la
+vérification d'une entrée de périmètre seul lit ces cartes — fausse, la réaffirmation le dit sur sa
+carte (« n'est plus bloquée sur db-nic-1 »). **Le test** : pour la VM visée, I3 garde toutes ses
+cartes — sauf celles qu'elle nomme non couvertes, que le test vérifie hors du subnet (sa propre
+connaissance) ; pour les autres VM du subnet, leurs cartes derrière le périmètre ; I3 sur
+`verify_block_ip` couvre toute entrée, de périmètre seul comprise. Second cas de la relecture : une
+entrée fusionnée sur web2, sa règle propre retournée, le NSG du subnet illisible (403), en
+`non_disruptive` — la repose du périmètre échoue, celle de la VM réussit, et la relecture disait
+vrai, l'état `unknown` de la paire de périmètre compté nulle part : « reposé une fois », l'erreur
+avalée. Maintenant une écriture échouée n'est jamais « reposé » (`partial`, l'erreur dans la carte),
+et une paire de périmètre illisible rend la vérification inconnue. Séquences figées
+`test_a_perimeter_block_never_says_blocked_with_a_nic_left_open` (celle de la relecture),
+`test_a_promotion_keeps_the_block_of_a_nic_the_perimeter_doesnt_cover`,
+`test_a_perimeter_block_alone_is_verified_on_every_nic`,
+`test_a_perimeter_block_whose_nics_cant_be_read_takes_no_block_off`,
+`test_a_write_that_failed_is_never_said_put_back` (toutes échouent sur `main`) et un test de
+`test_reassert.py` ; mutants M1635–M1640. Sur ce correctif, la machine a encore trouvé (graine 777
+à 500) une carte hors du périmètre jugée bloquée sur la foi de l'état : son blocage enregistré,
+ses règles retirées depuis (un `terraform apply`), `blocked` dit. Ce qui la bloque est relu sur
+Azure (`verify_block_ip`) ; séquence `test_a_perimeter_block_reads_the_other_nics_own_block_on_azure`,
+mutant M1641.
+
+**Seconde relecture : une dérive qui n'existait pas.** Introduite par la reprise : après
+`block(Db--01)` puis `block_perimeter(Db--01, replace=True)` sur deux subnets, l'entrée ne garde
+que le placement de db-nic-1 ; la vérification lisait db-nic-0, absente des placements, comme une
+carte ajoutée depuis aux règles manquantes (`held_missing`). En `human_only`, « a disparu d'Azure
+en partie (db-nic-0) » — c'est la promotion qui l'avait retirée ; ailleurs, les règles de la VM
+réécrites sur db-nic-0, la promotion défaite, « reposé une fois », et `reasserted_at` posé : la
+vraie dérive suivante escaladée sans être reposée. **Correctif** (`perimeter.py`,
+`_left_to_perimeter`) : une carte d'une entrée fusionnée sans placement, derrière la paire de
+périmètre de l'entrée sur un NSG qui la gouverne, et que cette paire tient, est couverte par
+conception ; le périmètre retourné, elle est ouverte. Et un périmètre seul sur une VM dont une carte
+est sur un autre subnet ne dit plus « a disparu — l'IP n'est plus bloquée sur db-nic-1 » d'une carte
+jamais bloquée, et ne réécrit plus le périmètre pour rien : « ne couvre pas db-nic-1 … non couverte
+depuis le blocage (autre subnet) — bloquer aussi la VM (scope vm) », une fois, sans écriture. **La
+machine** gagne un oracle (aucun retiré ni restreint) : une suite de blocages et de promotions
+réussis, sans faute ni rien d'autre qui touche le monde entre eux (le journal du faux Azure et une
+image du monde à la fin de chacun), puis une passe — une entrée dont toutes les règles nommées avant
+la passe sont des écritures de cette suite n'a aucune carte « disparu »
+(`_no_drift_on_untouched`). Séquences `test_a_promotion_is_no_drift_for_the_next_pass` (les deux
+modes : l'oracle les fait tomber sur le code d'avant), `test_a_promotion_leaves_the_next_pass_silent_and_writes_nothing`,
+`test_a_nic_left_to_a_perimeter_someone_turned_is_open` ; mutants M1642–M1644.
+
+**Troisième relecture : un acquittement qui faisait taire la suite.** La carte « ne couvre pas »
+posait `drift_alerted_at`, que seule une vérification vraie efface — jamais, pour cette entrée.
+Acquittée, puis la paire de périmètre supprimée par un tiers : chaque passe s'arrêtait sur le
+marqueur, le périmètre (l'IP coupée pour tout le subnet) ni reposé ni dit ; une régression de RB1
+(sur la base, ce blocage se vérifiait vrai, sa disparition reposée ou dite). **Correctif** : la
+carte a son propre marqueur, `uncovered_said` (l'ensemble des cartes non couvertes, redite s'il
+change), et la paire lue entière, un épisode de dérive d'avant est clos (`drift_alerted_at`
+effacé) ; une disparition ultérieure suit le chemin normal. **La machine** gagne une règle,
+`operator_acknowledges` : l'opérateur acquitte une carte de blocage en attente de la réaffirmation,
+tirée au hasard — les cartes de blocage seulement : les autres (quarantaine, orphelines,
+contournement) restent dites par conception une fois acquittées, et leurs oracles comptent les
+cartes en attente. L1 tient une carte de dérive acquittée pour dite, pour son épisode (tant que
+Glorfindel n'a réécrit aucune règle du blocage depuis), comme le code le veut. Stable : 500 séquences
+vertes sur huit graines (1, 42, 203, 322, 777, 1234, 2718, 8675), et 2 000 sur 322 ; sur le code
+d'avant, quatre graines à 500 n'atteignent pas la séquence (il y faut un périmètre seul sur Db--01,
+sa carte acquittée, la paire supprimée, une passe) — elle reste aux séquences figées
+`test_a_perimeter_gone_after_its_uncovered_card_is_acknowledged_is_put_back_or_said` (les deux
+modes, et une seconde disparition après la repose) et
+`test_an_uncovered_card_is_said_again_when_the_uncovered_nics_change`, qui échouent sur le code
+d'avant ; mutants M1645–M1647.
+
+**Quatrième relecture : ce qui empire après un acquittement.** L'assouplissement de L1 (une carte
+de dérive acquittée vaut dite tant que Glorfindel n'a réécrit aucune règle du blocage) laissait
+passer un vrai silence, introduit par RB1. Une entrée fusionnée sur web2, ses règles propres
+passées en allow : en `human_only`, « … l'IP reste bloquée sur web-nic par la règle de périmètre »
+— vrai alors ; acquittée, puis la paire de périmètre supprimée par un tiers : `drift_alerted_at`
+encore posé (l'entrée jamais relue entière), chaque passe muette, l'attaquant sur web2. Sur la
+base, la carte disait « n'est plus bloquée », que rien ne contredisait ensuite. **Correctif**
+(`reassert.py`, `_situation`, `_worse`) : l'entrée garde ce que la carte a dit (`drift_said` :
+les règles manquantes, les cartes tenues, ouvertes, inconnues, l'IP bloquée ou non) ; la carte
+est redite quand c'est pire — une carte tenue devenue ouverte ou inconnue, une règle de plus qui
+manque, l'IP plus bloquée ; pareil ou mieux, rien n'est redit (une carte par disparition). Une
+entrée d'une version d'avant, sans ce qui a été dit, se tait comme avant. **L'oracle** : l'exemption
+de L1 ne vaut que tant que les règles de l'entrée sur Azure, paire de périmètre comprise, sont
+identiques à un instantané pris à l'acquittement ; pour une entrée fusionnée, `_block_vanished`
+dit « disparu » quand toutes les règles de ses placements ont disparu (le critère d'avant) **ou**
+quand sa paire de périmètre a disparu — deux conditions alternatives : les exiger toutes les deux,
+comme la quatrième version, affaiblissait L1 (cinquième relecture). La règle `operator_acknowledges` tire son indice avant de lire les cartes
+en attente, avec des bornes fixes : tiré parmi elles, il changeait d'une relecture à l'autre de la
+même séquence (Hypothesis : « FlakyStrategyDefinition », graine 1). Séquences
+`test_a_drift_card_acknowledged_is_said_again_only_when_it_worsens` (la paire supprimée : redite ;
+rien, ou mieux : rien) et `test_the_machine_finds_a_perimeter_deleted_after_its_card_is_acknowledged`
+(par les règles de la machine, L1) ; les deux cas « pire » échouent sur le code d'avant. Mutants
+M1648 (jamais redite) et M1649 (redite à chaque passe) ; M900 et M902 suivent la ligne du marqueur.
+M1646 n'est pas équivalent, contrairement à ce que j'avais écrit : quand les **mêmes** règles
+disparaissent une seconde fois (périmètre seul sur Db--01 : « ne couvre pas », acquittée ; la paire
+supprimée, « disparu », acquittée ; bloqué de nouveau, la paire revenue ; la paire supprimée encore),
+rien ne la dit pire, et seul l'épisode clos la fait redire — avec M1646, le silence, web1 atteinte ;
+séquence `test_the_same_perimeter_gone_twice_is_said_twice`, qui mesure M1646.
+
+**Le déblocage d'une VM supprimée (RB1).** Ce qu'il laisse porte sa commande
+(`az network nsg rule delete -g … --nsg-name … -n …`) et le dit redit tant que la règle reste — la
+retirer met fin à l'`unblock_partial`, le déblocage suivant aboutit. L'entrée perdue, un blocage de
+périmètre de l'IP (nom simple) qu'aucune entrée d'une autre VM n'enregistre n'était ni cherché ni
+dit (`not_found`) : dit et laissé (il couvre tout un subnet). **Notre `-out` retourné en Inbound**
+(`nsg.py`, `_pair_priorities`, d'avant I5R) : son numéro comptait comme libre, la règle entrante y
+entrait en collision, Azure refusait, rien n'était reposé ; seule une règle à nous dans sa propre
+direction libère le sien.
+
+**Séquences figées** (`test_invariant_regressions.py`) : les séquences de RB1, relectures
+comprises ; vingt cas échouent sur `main` pour la raison dite, les autres (un périmètre contourné
+sur le port de la menace, un périmètre d'une autre VM au déblocage, l'entrée gardée) gardent des
+mutants ; tests de `test_reassert.py`. Mutants M1620–M1649 attrapés par elles ; M1599 réaligné. Conséquence
+voulue de la relecture après repose : un blocage tenu par la quarantaine dont les règles, sur le
+NSG propre de la carte (hors de la carte jusqu'à la levée), ont disparu n'est plus dit « reposé » —
+la repose écrit sur le NSG qui gouverne la carte, celles-là manquent toujours : `partial`, dit.
+
+**Mesures de RB1** (code final, relecture comprise). Invariants : 500 séquences sur les graines 1,
+777, 1234 et 2718, puis 2 000 sur 322 et 42, verts (avant la relecture, 500 sur 1, 11, 42, 99, 203,
+322, 777, 1234 et 2 000 sur 42, 322, 1234). Les vingt-deux mutants M1620–M1641 sont attrapés par
+leurs séquences figées (et `test_reassert.py`), M1590–M1599 aussi. Par la machine seule (mesuré
+avant la relecture, 500 séquences, deux tours) : M1621, M1625 et M1634 à chaque tour, M1622 une
+fois sur deux, M1627 jamais (tenu par `test_reassert.py`), les autres par les séquences figées
+seulement — la relecture après repose suffit à rendre vraie la carte d'une repose incomplète
+(M1620), c'est la séquence figée qui voit la règle de la VM restée retournée. Harnais avant/après
+au même budget (60 séquences, deux tours, `--jobs 4`) sur les mutants des modules du chemin
+d'isolation (blocage, déblocage, NSG, réseau, quarantaine, isolation, levée, vérification, état,
+réaffirmation) : 138 avant (`main`), les mêmes et M1620–M1641 après ; attrapés à chaque tour,
+113/138 avant, 112/138 après, 134/160 avec les nouveaux. Aucun perdu : M10 (un subnet illisible lu
+« sans NSG »), 1/2 avant et 0/2 après à ce budget, remesuré — 1/6 avant, 4/6 après à 60 séquences,
+2/2 des deux côtés à 500 ; M36 et M864 survivent des deux côtés. M761 et M831, dilués à 60
+séquences depuis I5R : à 500, 2/2 avant comme après. Après la seconde relecture : M1620–M1644 et
+M1590–M1599, 35/35 par leurs séquences figées ; invariants à 500 sur les graines 1, 777 et 2718,
+puis 2 000 sur 322, verts ; harnais avant/après (60 séquences, deux tours) sur les mutants des
+modules touchés (déblocage, périmètre, réaffirmation et ce qui en est sorti) : 32 attrapés à chaque
+tour avant comme après, aucun perdu (M830, 1/2 avant, ne l'est plus qu'aux séquences figées), et
+les vingt nouveaux à chaque tour. Après la troisième : M1620–M1647 et M1590–M1599, 38/38 par leurs
+séquences figées ; M1645 par la machine seule, 0/2 à 500 (la séquence n'est pas tirée) ; invariants
+à 500 sur huit graines et 2 000 sur 322, verts, la règle d'acquittement comprise ; harnais
+avant/après (60 séquences, deux tours) sur les mutants du déblocage, du périmètre et de la
+réaffirmation : 34 attrapés à chaque tour avant, 35 après, aucun perdu (M13 2/2 → 1/2, M19 et M830
+attrapés à chaque tour après), les vingt-trois nouveaux à chaque tour. Après la quatrième :
+M1620–M1649, M1590–M1599 et M900–M902, 42/42 par leurs séquences figées (M1646 mesuré depuis la cinquième relecture par sa propre séquence) ;
+invariants à 500 sur les graines 1, 42, 777, 2718 verts, 2 000 sur 322 vert ; la graine 8675 à 500
+tombe sur I4, un défaut **hors de RB1**, présent sur `main` (1996a49) : rejoué à l'identique sur la
+base, figé en `xfail` strict (`test_a_block_written_again_after_an_ip_change_leaves_the_new_owner_of_the_old_address` :
+api bloquée, sa règle entrante retournée en allow par un tiers, son IP changée, une nouvelle VM à
+l'ancienne adresse, api bloquée de nouveau — l'opération change les flux de la nouvelle VM ; cause
+supposée, non établie), pour un lot à part. Harnais avant/après (60 séquences, deux tours, mêmes
+modules) : 33 attrapés à chaque tour avant comme après, aucun perdu, les nouveaux à chaque tour.
 
 **I11 sous charge (29/10).** Le délai d'un tour (20 s) n'a pas été dépassé : 26 runs de la
 machine à 500 séquences en même temps sur 16 cœurs (312 à 647 s chacun, contre une centaine

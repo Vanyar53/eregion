@@ -720,7 +720,10 @@ La CI des images ne rend pas compose : chaque profil est rendu par `make profile
      d'A3 : il est monté en lecture seule là où compose monte la config, puis ouvert avant d'être
      lu, car un fichier absent se lirait comme une config vide. Un appel d'outil passe par
      litellm, comme la décision le fait (`eregion_core/llm_call.py`), répondu par le mock de
-     litellm : ni clé, ni modèle, ni réseau (DEP1). L'image ne tourne pas en root.
+     litellm : ni clé, ni modèle, ni réseau (DEP1). La carte des coûts locale est vérifiée par le
+     message de litellm (« Failed to fetch remote model cost map », derrière un proxy fermé, dans
+     `tests/unit/test_image_check.py`). Sous `--network none`, une version qui changerait ce texte
+     coûterait une lenteur, jamais une fausse réussite. L'image ne tourne pas en root.
    - Annatar (l'image des injecteurs) : `annatar --version` est la version de `pyproject.toml`.
      Annatar et Gothmog importent. Ni Glorfindel, ni la console, ni leurs dépendances (la liste de
      D1, `scripts/component_check.py`) ne sont dans l'image. Le même appel d'outil par litellm
